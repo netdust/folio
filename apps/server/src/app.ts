@@ -5,11 +5,12 @@ import { serveStatic } from 'hono/bun';
 import { env } from './env.ts';
 import { registerErrorHandler } from './lib/http.ts';
 import { attachUser, requireUser, type AuthContext } from './middleware/auth.ts';
-import { resolveWorkspace, type ScopeContext } from './middleware/scope.ts';
+import { resolveProject, resolveWorkspace, type ScopeContext } from './middleware/scope.ts';
 import { auth } from './routes/auth.ts';
 import { healthRoute } from './routes/health.ts';
 import { projectsRoute } from './routes/projects.ts';
 import { settingsRoute } from './routes/settings.ts';
+import { statusesRoute } from './routes/statuses.ts';
 import { tokensRoute } from './routes/tokens.ts';
 import { workspacesRoute } from './routes/workspaces.ts';
 
@@ -32,7 +33,13 @@ wScope.use('*', requireUser, resolveWorkspace);
 wScope.route('/settings', settingsRoute);
 wScope.route('/tokens', tokensRoute);
 wScope.route('/projects', projectsRoute);
-// pScope (documents/statuses/fields/views) mounted in later tasks
+
+const pScope = new Hono<AuthContext & ScopeContext>();
+pScope.use('*', resolveProject);
+pScope.route('/statuses', statusesRoute);
+// pScope (documents/fields/views) further routes mounted in later tasks
+
+wScope.route('/p/:pslug', pScope);
 
 v1.route('/w/:wslug', wScope);
 app.route('/api/v1', v1);
