@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
 import { serveStatic } from 'hono/bun';
 import { env } from './env.ts';
@@ -12,6 +13,13 @@ import { workspacesRoute } from './routes/workspaces.ts';
 
 export const app = new Hono<AuthContext>();
 app.onError(onError);
+
+if (env.NODE_ENV !== 'production') {
+  app.use('*', cors({
+    origin: ['http://localhost:5173'],
+    credentials: true,
+  }));
+}
 
 app.use('*', logger());
 app.use('*', attachUser);
