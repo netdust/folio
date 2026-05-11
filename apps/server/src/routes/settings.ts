@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { db } from '../db/client.ts';
 import { aiKeys, memberships } from '../db/schema.ts';
 import { encryptSecret } from '../lib/crypto.ts';
+import { HTTPError, jsonOk } from '../lib/http.ts';
 import { type AuthContext, getUser, requireUser } from '../middleware/auth.ts';
 
 const settingsRoute = new Hono<AuthContext>();
@@ -18,12 +19,12 @@ settingsRoute.get('/:workspaceId/ai-keys', async (c) => {
   const m = await db.query.memberships.findFirst({
     where: and(eq(memberships.workspaceId, workspaceId), eq(memberships.userId, user.id)),
   });
-  if (!m) return c.json({ error: 'not a member' }, 403);
+  if (!m) throw new HTTPError('FORBIDDEN', 'not a member', 403);
 
   const rows = await db.query.aiKeys.findMany({
     where: eq(aiKeys.workspaceId, workspaceId),
   });
-  return c.json({
+  return jsonOk(c, {
     keys: rows.map(({ encryptedKey: _omit, ...k }) => k),
   });
 });
@@ -47,7 +48,7 @@ settingsRoute.post(
       where: and(eq(memberships.workspaceId, workspaceId), eq(memberships.userId, user.id)),
     });
     if (!m || (m.role !== 'owner' && m.role !== 'admin')) {
-      return c.json({ error: 'forbidden' }, 403);
+      throw new HTTPError('FORBIDDEN', 'forbidden', 403);
     }
     const { provider, apiKey, label, baseUrl } = c.req.valid('json');
     const encryptedKey = encryptSecret(apiKey);
@@ -59,7 +60,7 @@ settingsRoute.post(
         target: [aiKeys.workspaceId, aiKeys.provider, aiKeys.label],
         set: { encryptedKey, baseUrl },
       });
-    return c.json({ ok: true });
+    return jsonOk(c, { ok: true });
   },
 );
 
@@ -71,12 +72,12 @@ settingsRoute.delete('/:workspaceId/ai-keys/:keyId', async (c) => {
     where: and(eq(memberships.workspaceId, workspaceId), eq(memberships.userId, user.id)),
   });
   if (!m || (m.role !== 'owner' && m.role !== 'admin')) {
-    return c.json({ error: 'forbidden' }, 403);
+    throw new HTTPError('FORBIDDEN', 'forbidden', 403);
   }
   await db
     .delete(aiKeys)
     .where(and(eq(aiKeys.id, keyId), eq(aiKeys.workspaceId, workspaceId)));
-  return c.json({ ok: true });
+  return jsonOk(c, { ok: true });
 });
 
 export { settingsRoute };

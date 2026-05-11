@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { db } from '../db/client.ts';
 import { apiTokens, memberships } from '../db/schema.ts';
 import { newApiToken } from '../lib/auth.ts';
+import { HTTPError, jsonOk } from '../lib/http.ts';
 import { type AuthContext, getUser, requireUser } from '../middleware/auth.ts';
 
 const tokensRoute = new Hono<AuthContext>();
@@ -17,11 +18,11 @@ tokensRoute.get('/:workspaceId', async (c) => {
   const m = await db.query.memberships.findFirst({
     where: and(eq(memberships.workspaceId, workspaceId), eq(memberships.userId, user.id)),
   });
-  if (!m) return c.json({ error: 'not a member' }, 403);
+  if (!m) throw new HTTPError('FORBIDDEN', 'not a member', 403);
   const rows = await db.query.apiTokens.findMany({
     where: eq(apiTokens.workspaceId, workspaceId),
   });
-  return c.json({
+  return jsonOk(c, {
     tokens: rows.map(({ tokenHash: _omit, ...t }) => t),
   });
 });
@@ -41,7 +42,7 @@ tokensRoute.post(
     const m = await db.query.memberships.findFirst({
       where: and(eq(memberships.workspaceId, workspaceId), eq(memberships.userId, user.id)),
     });
-    if (!m) return c.json({ error: 'not a member' }, 403);
+    if (!m) throw new HTTPError('FORBIDDEN', 'not a member', 403);
 
     const { name, scopes } = c.req.valid('json');
     const { token, hash } = newApiToken();
@@ -55,7 +56,7 @@ tokensRoute.post(
       createdBy: user.id,
     });
     // Return the plaintext token EXACTLY ONCE.
-    return c.json({ id, name, token, scopes });
+    return jsonOk(c, { id, name, token, scopes }, 201);
   },
 );
 
@@ -66,11 +67,11 @@ tokensRoute.delete('/:workspaceId/:tokenId', async (c) => {
   const m = await db.query.memberships.findFirst({
     where: and(eq(memberships.workspaceId, workspaceId), eq(memberships.userId, user.id)),
   });
-  if (!m) return c.json({ error: 'not a member' }, 403);
+  if (!m) throw new HTTPError('FORBIDDEN', 'not a member', 403);
   await db
     .delete(apiTokens)
     .where(and(eq(apiTokens.id, tokenId), eq(apiTokens.workspaceId, workspaceId)));
-  return c.json({ ok: true });
+  return jsonOk(c, { ok: true });
 });
 
 export { tokensRoute };

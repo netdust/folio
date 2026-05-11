@@ -16,6 +16,7 @@ import {
   verifyPassword,
 } from '../lib/auth.ts';
 import { sendMagicLink } from '../lib/email.ts';
+import { HTTPError, jsonOk } from '../lib/http.ts';
 import { type AuthContext, getUser, requireUser } from '../middleware/auth.ts';
 
 const auth = new Hono<AuthContext>();
@@ -43,7 +44,7 @@ auth.post(
   async (c) => {
     const { email, password, name } = c.req.valid('json');
     const existing = await db.query.users.findFirst({ where: eq(users.email, email) });
-    if (existing) return c.json({ error: 'email already registered' }, 400);
+    if (existing) throw new HTTPError('EMAIL_TAKEN', 'email already registered', 400);
 
     const id = nanoid();
     const passwordHash = await hashPassword(password);
@@ -51,7 +52,7 @@ auth.post(
 
     const session = await createSession(id);
     setCookie(c, SESSION_COOKIE, session.id, { ...cookieOpts, expires: session.expiresAt });
-    return c.json({ user: { id, email, name } });
+    return jsonOk(c, { user: { id, email, name } });
   },
 );
 
@@ -64,13 +65,15 @@ auth.post(
   async (c) => {
     const { email, password } = c.req.valid('json');
     const user = await db.query.users.findFirst({ where: eq(users.email, email) });
-    if (!user || !user.passwordHash) return c.json({ error: 'invalid credentials' }, 401);
+    if (!user || !user.passwordHash) {
+      throw new HTTPError('UNAUTHENTICATED', 'invalid credentials', 401);
+    }
     const ok = await verifyPassword(password, user.passwordHash);
-    if (!ok) return c.json({ error: 'invalid credentials' }, 401);
+    if (!ok) throw new HTTPError('UNAUTHENTICATED', 'invalid credentials', 401);
 
     const session = await createSession(user.id);
     setCookie(c, SESSION_COOKIE, session.id, { ...cookieOpts, expires: session.expiresAt });
-    return c.json({ user: { id: user.id, email: user.email, name: user.name } });
+    return jsonOk(c, { user: { id: user.id, email: user.email, name: user.name } });
   },
 );
 
@@ -78,12 +81,12 @@ auth.post('/logout', async (c) => {
   const sessionId = c.req.header('cookie')?.match(/folio_session=([^;]+)/)?.[1];
   if (sessionId) await deleteSession(sessionId);
   deleteCookie(c, SESSION_COOKIE, { path: '/' });
-  return c.json({ ok: true });
+  return jsonOk(c, { ok: true });
 });
 
 auth.get('/me', requireUser, (c) => {
   const u = getUser(c);
-  return c.json({ user: { id: u.id, email: u.email, name: u.name } });
+  return jsonOk(c, { user: { id: u.id, email: u.email, name: u.name } });
 });
 
 // --- Magic link ---
@@ -102,21 +105,23 @@ auth.post(
       expiresAt,
     });
     await sendMagicLink(email, token);
-    return c.json({ ok: true });
+    return jsonOk(c, { ok: true });
   },
 );
 
 auth.get('/magic/verify', async (c) => {
   const token = c.req.query('token');
-  if (!token) return c.json({ error: 'missing token' }, 400);
+  if (!token) throw new HTTPError('INVALID_BODY', 'missing token', 400);
 
   const tokenHash = hashToken(token);
   const link = await db.query.magicLinks.findFirst({
     where: eq(magicLinks.tokenHash, tokenHash),
   });
-  if (!link) return c.json({ error: 'invalid token' }, 400);
-  if (link.usedAt) return c.json({ error: 'token already used' }, 400);
-  if (link.expiresAt.getTime() < Date.now()) return c.json({ error: 'token expired' }, 400);
+  if (!link) throw new HTTPError('INVALID_TOKEN', 'invalid token', 400);
+  if (link.usedAt) throw new HTTPError('INVALID_TOKEN', 'token already used', 400);
+  if (link.expiresAt.getTime() < Date.now()) {
+    throw new HTTPError('INVALID_TOKEN', 'token expired', 400);
+  }
 
   // upsert user
   let user = await db.query.users.findFirst({ where: eq(users.email, link.email) });
@@ -125,7 +130,7 @@ auth.get('/magic/verify', async (c) => {
     await db.insert(users).values({ id, email: link.email, name: link.email.split('@')[0] ?? 'New User' });
     user = await db.query.users.findFirst({ where: eq(users.id, id) });
   }
-  if (!user) return c.json({ error: 'failed to create user' }, 500);
+  if (!user) throw new HTTPError('INTERNAL', 'failed to create user', 500);
 
   await db
     .update(magicLinks)

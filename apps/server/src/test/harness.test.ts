@@ -27,8 +27,8 @@ test('makeTestApp gives isolated DBs across calls', async () => {
     headers: { Cookie: b.seed.sessionCookie },
   });
   expect(resB.status).toBe(200);
-  const bodyB = (await resB.json()) as { user: { id: string } };
-  expect(bodyB.user.id).toBe(b.seed.user.id);
+  const bodyB = (await resB.json()) as { data: { user: { id: string } } };
+  expect(bodyB.data.user.id).toBe(b.seed.user.id);
 
   // And the FIRST app's session cookie must NOT resolve through DB #2 — its
   // session row lives only in DB #1.
