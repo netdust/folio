@@ -4,43 +4,41 @@ import { logger } from 'hono/logger';
 import { serveStatic } from 'hono/bun';
 import { env } from './env.ts';
 import { registerErrorHandler } from './lib/http.ts';
-import { attachUser, type AuthContext } from './middleware/auth.ts';
+import { attachUser, requireUser, type AuthContext } from './middleware/auth.ts';
+import { resolveWorkspace, type ScopeContext } from './middleware/scope.ts';
 import { auth } from './routes/auth.ts';
 import { healthRoute } from './routes/health.ts';
 import { settingsRoute } from './routes/settings.ts';
-import { documentsRoute, mcpRoute, viewsRoute } from './routes/stubs.ts';
 import { tokensRoute } from './routes/tokens.ts';
 import { workspacesRoute } from './routes/workspaces.ts';
 
-export const app = new Hono<AuthContext>();
+export const app = new Hono<AuthContext & ScopeContext>();
 registerErrorHandler(app);
 
 if (env.NODE_ENV !== 'production') {
-  app.use('*', cors({
-    origin: ['http://localhost:5173'],
-    credentials: true,
-  }));
+  app.use('*', cors({ origin: ['http://localhost:5173'], credentials: true }));
 }
-
 app.use('*', logger());
 app.use('*', attachUser);
 
-// --- API ---
-const api = new Hono<AuthContext>();
-api.route('/auth', auth);
-api.route('/workspaces', workspacesRoute);
-api.route('/documents', documentsRoute);
-api.route('/views', viewsRoute);
-api.route('/settings', settingsRoute);
-api.route('/tokens', tokensRoute);
+// --- /api/v1 ---
+const v1 = new Hono<AuthContext & ScopeContext>();
+v1.route('/auth', auth);
+v1.route('/workspaces', workspacesRoute);
 
-app.route('/api', api);
+const wScope = new Hono<AuthContext & ScopeContext>();
+wScope.use('*', requireUser, resolveWorkspace);
+wScope.route('/settings', settingsRoute);
+wScope.route('/tokens', tokensRoute);
+// pScope (documents/statuses/fields/views) mounted in later tasks
 
-// --- MCP (agent-facing surface) ---
-app.route('/mcp', mcpRoute);
+v1.route('/w/:wslug', wScope);
+app.route('/api/v1', v1);
+
+// --- health (unversioned) ---
 app.route('/', healthRoute);
 
-// --- Static SPA ---
+// --- static SPA (prod) ---
 if (env.NODE_ENV === 'production') {
   app.use('/*', serveStatic({ root: '../web/dist' }));
   app.get('/*', serveStatic({ path: '../web/dist/index.html' }));

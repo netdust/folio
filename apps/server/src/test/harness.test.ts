@@ -8,7 +8,7 @@ test('makeTestApp returns a working app + seeded data', async () => {
   expect(seed.project.slug).toBe('web');
   expect(seed.sessionCookie).toMatch(/^folio_session=/);
 
-  const res = await app.request('/api/auth/me', {
+  const res = await app.request('/api/v1/auth/me', {
     headers: { Cookie: seed.sessionCookie },
   });
   expect(res.status).toBe(200);
@@ -21,9 +21,9 @@ test('makeTestApp gives isolated DBs across calls', async () => {
   // Different :memory: DBs → different generated user ids despite same seed email.
   expect(a.seed.user.id).not.toBe(b.seed.user.id);
 
-  // Route handler in `b.app` must use `b.db`, not `a.db`. `/api/auth/me`
+  // Route handler in `b.app` must use `b.db`, not `a.db`. `/api/v1/auth/me`
   // resolves the session via the db proxy and returns the matching user.
-  const resB = await b.app.request('/api/auth/me', {
+  const resB = await b.app.request('/api/v1/auth/me', {
     headers: { Cookie: b.seed.sessionCookie },
   });
   expect(resB.status).toBe(200);
@@ -32,7 +32,7 @@ test('makeTestApp gives isolated DBs across calls', async () => {
 
   // And the FIRST app's session cookie must NOT resolve through DB #2 — its
   // session row lives only in DB #1.
-  const crossA = await b.app.request('/api/auth/me', {
+  const crossA = await b.app.request('/api/v1/auth/me', {
     headers: { Cookie: a.seed.sessionCookie },
   });
   expect(crossA.status).toBe(401);
