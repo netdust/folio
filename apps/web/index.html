@@ -6,6 +6,20 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#0e0d0c" />
     <title>Folio</title>
+    <script>
+      // First-paint theme bootstrap. Reads folio:theme from localStorage and applies
+      // .dark to <html> before React mounts, preventing the light-flash on dark theme.
+      (function () {
+        try {
+          var s = localStorage.getItem('folio:theme');
+          var resolved =
+            s === 'light' ? 'light'
+            : s === 'dark' ? 'dark'
+            : (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+          if (resolved === 'dark') document.documentElement.classList.add('dark');
+        } catch (e) { /* localStorage unavailable; default light */ }
+      })();
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
