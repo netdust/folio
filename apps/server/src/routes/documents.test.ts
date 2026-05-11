@@ -117,3 +117,101 @@ test('POST duplicate title gets unique slug suffix', async () => {
   });
   expect((await res.json()).data.document.slug).toBe('same-2');
 });
+
+test('POST text/markdown creates from raw MD with H1 title', async () => {
+  const { app, seed } = await makeTestApp();
+  const res = await app.request(path, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'text/markdown' },
+    body: `---
+type: work_item
+priority: high
+---
+
+# Markdown Title
+
+Body here.
+`,
+  });
+  expect(res.status).toBe(201);
+  const body = await res.json();
+  expect(body.data.document.title).toBe('Markdown Title');
+  expect(body.data.document.frontmatter.priority).toBe('high');
+});
+
+test('POST text/markdown without H1 falls back to frontmatter.title', async () => {
+  const { app, seed } = await makeTestApp();
+  const res = await app.request(path, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'text/markdown' },
+    body: `---
+title: From Frontmatter
+type: page
+---
+
+Body
+`,
+  });
+  expect(res.status).toBe(201);
+  expect((await res.json()).data.document.title).toBe('From Frontmatter');
+});
+
+test('POST text/markdown with no title at all gets "Untitled"', async () => {
+  const { app, seed } = await makeTestApp();
+  const res = await app.request(path, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'text/markdown' },
+    body: `body only`,
+  });
+  expect(res.status).toBe(201);
+  expect((await res.json()).data.document.title).toBe('Untitled');
+});
+
+test('PATCH text/markdown replaces whole document', async () => {
+  const { app, seed } = await makeTestApp();
+  await app.request(path, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      type: 'work_item', title: 'Original', frontmatter: { keep: 'me' },
+    }),
+  });
+  const res = await app.request(`${path}/original`, {
+    method: 'PATCH',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'text/markdown' },
+    body: `---
+type: work_item
+priority: critical
+---
+
+# Renamed
+
+New body.
+`,
+  });
+  expect(res.status).toBe(200);
+  const body = await res.json();
+  expect(body.data.document.title).toBe('Renamed');
+  expect(body.data.document.frontmatter.priority).toBe('critical');
+  expect(body.data.document.frontmatter.keep).toBeUndefined(); // replaced, not merged
+});
+
+test('PATCH text/markdown changing type is rejected', async () => {
+  const { app, seed } = await makeTestApp();
+  await app.request(path, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: 'work_item', title: 'Stay' }),
+  });
+  const res = await app.request(`${path}/stay`, {
+    method: 'PATCH',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'text/markdown' },
+    body: `---
+type: page
+---
+# Stay
+`,
+  });
+  expect(res.status).toBe(422);
+  expect((await res.json()).error.code).toBe('INVALID_BODY');
+});
