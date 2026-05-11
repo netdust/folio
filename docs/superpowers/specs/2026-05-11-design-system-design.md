@@ -313,16 +313,23 @@ Contents top to bottom:
 
 **Nav item rows** in expanded mode are 36px tall, `rounded-md`, padding `8px 12px`. Structure: `[icon 18×18] [label 13px/500]` (and optionally a keyboard hint on the right for search and similar). Icon size is 18×18 in expanded mode for legibility next to the 13px label.
 
-**Icon button** in collapsed (64px) mode: 40×40, `rounded-md`. Icon 16×16 inside.
+**Icon button** in collapsed (64px) mode: 40×40 cell with the icon centered. **No background, ever** — not on hover, not on active. The cell is invisible; only the glyph is rendered.
 
-States (both modes):
+States in collapsed mode:
+- Default: icon `color: rgba(0,0,0,0.32)` (light) / `rgba(255,255,255,0.32)` (dark).
+- Hover: `color: var(--color-fg-2)`.
+- Active: `color: var(--color-fg)` plus a 4×4 dot below the icon (`bottom: 4px`, centered, `bg: var(--color-fg)`, `border-radius: 50%`).
+
+States in expanded mode (nav-item rows):
 - Default: `color: var(--color-fg-3)`, transparent bg.
 - Hover: `bg: var(--color-card)`, `color: var(--color-fg-2)`.
-- Active: `bg: rgba(0,0,0,0.06)` (light) / `rgba(255,255,255,0.08)` (dark), `color: var(--color-fg)`. Background is subtle — a wash, not a chunky pill.
+- Active: `bg: rgba(0,0,0,0.06)` (light) / `rgba(255,255,255,0.08)` (dark), `color: var(--color-fg)`. Background is a subtle wash — never a chunky pill.
+
+**Critical implementation note.** Icon buttons MUST receive a hard `<button>` reset to suppress user-agent and framework styles that can sneak in a 1px square outline. Specifically: `background: none; border: 0; outline: 0; box-shadow: none; appearance: none;` on every native `<button>` element. Focus-visible ring (per §5.9) is the only outline allowed. This applies globally, not just to the rail.
 
 Tooltip on hover only in collapsed mode (`Popover` from shadcn, ~120ms delay), showing the label and any keyboard shortcut. No tooltips in expanded mode — labels are already visible.
 
-Icon set: Lucide SVG, inline. **Stroke 1.5** (slightly lighter than Lucide default 2 — keeps icons feeling minimal alongside thin Geist letterforms), `linecap: round`, `linejoin: round`. Icon size: 18×18 in expanded mode, 16×16 in collapsed.
+Icon set: Lucide SVG, inline. **Stroke 1.5** (slightly lighter than Lucide default 2 — keeps icons feeling minimal alongside thin Geist letterforms), `linecap: round`, `linejoin: round`. Icon size: 18×18 in expanded mode, 18×18 in collapsed.
 
 ### 7.2 Main frame
 
