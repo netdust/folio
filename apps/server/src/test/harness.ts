@@ -6,10 +6,11 @@
  *
  * IMPORTANT: This sets `globalThis.__folioTestDb` BEFORE importing `app.ts` so
  * that `db/client.ts` (and every route that imports `db`) sees the test DB
- * instead of the file-backed one. Inside a single test file, `app.ts` is only
- * imported once — multiple `makeTestApp()` calls in the same file share the DB
- * resolved on the first call. Bun runs each *file* in its own process, so
- * per-file isolation works as expected.
+ * instead of the file-backed one. `__resetDbForTests()` is called on every
+ * invocation so successive `makeTestApp()` calls within one test file each get
+ * a fresh, isolated DB (the route-level `db` proxy re-resolves to the new
+ * override). Bun caches `app.ts` after the first dynamic import; the proxy
+ * indirection is what gives us per-call isolation.
  */
 
 // Must come first: populates env vars before downstream modules read them.
@@ -21,6 +22,7 @@ import { eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/bun-sqlite';
 import { migrate } from 'drizzle-orm/bun-sqlite/migrator';
 import { nanoid } from 'nanoid';
+import { __resetDbForTests } from '../db/client.ts';
 import * as schema from '../db/schema.ts';
 import { createSession, hashPassword } from '../lib/auth.ts';
 
@@ -47,8 +49,11 @@ export async function makeTestApp(): Promise<{
   const db = drizzle(sqlite, { schema });
   migrate(db, { migrationsFolder: MIGRATIONS_DIR });
 
-  // Install before importing app.ts so db/client.ts picks it up.
-  (globalThis as Record<string, unknown>).__folioTestDb = db;
+  // Install the fresh DB and reset the proxy's resolution cache so route
+  // handlers that hold a reference to the `db` proxy will see THIS db, not the
+  // one resolved on a previous `makeTestApp()` call in the same file.
+  globalThis.__folioTestDb = db;
+  __resetDbForTests();
 
   const { app } = await import('../app.ts');
 

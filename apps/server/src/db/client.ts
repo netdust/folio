@@ -5,6 +5,11 @@ import * as schema from './schema.ts';
 
 type DrizzleDb = ReturnType<typeof drizzle<typeof schema>>;
 
+declare global {
+  // eslint-disable-next-line no-var
+  var __folioTestDb: DrizzleDb | undefined;
+}
+
 function realDb(): DrizzleDb {
   const sqlitePath = env.DATABASE_URL.replace(/^file:/, '');
   const sqlite = new Database(sqlitePath);
@@ -24,9 +29,7 @@ let _resolved: DrizzleDb | undefined;
  */
 function resolve(): DrizzleDb {
   if (_resolved) return _resolved;
-  const override = (globalThis as Record<string, unknown>).__folioTestDb as
-    | DrizzleDb
-    | undefined;
+  const override = globalThis.__folioTestDb;
   _resolved = override ?? realDb();
   return _resolved;
 }
@@ -40,6 +43,18 @@ export const db = new Proxy({} as DrizzleDb, {
     return typeof value === 'function' ? (value as (...a: unknown[]) => unknown).bind(target) : value;
   },
 }) as DrizzleDb;
+
+/**
+ * Test-only: clears the cached resolution so the next `db` access re-reads
+ * `globalThis.__folioTestDb` (or falls back to `realDb()`).
+ *
+ * Required because `makeTestApp()` may be called multiple times within a
+ * single test file. The module-level `_resolved` cache would otherwise pin
+ * routes to the DB from the first call.
+ */
+export function __resetDbForTests(): void {
+  _resolved = undefined;
+}
 
 export { schema };
 export type DB = DrizzleDb;
