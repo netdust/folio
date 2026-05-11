@@ -94,8 +94,8 @@ For full context on any decision: `@docs/FOLIO-BRIEFING.md`. For the operating m
 - [x] `localStorage` persistence for theme + rail collapsed/expanded preference.
 - [x] Dev-only `/dev/design-system` route renders every primitive and the shell in both themes.
 - [x] Login + home pages re-styled to consume the new tokens (sanity check existing scaffold against the system).
-- [ ] Lighthouse accessibility audit on `/dev/design-system` passes ≥ 95. *(deferred — requires interactive browser run; primitives include `aria-label` on IconButton, `lang="en"` on `<html>`, focus rings via :focus-visible. Verify before Phase 1 sign-off.)*
-- [ ] Mockups in `.superpowers/brainstorm/` match what the implementation renders. *(deferred — visual comparison requires browser inspection. Verify before Phase 1 sign-off.)*
+- [x] Lighthouse accessibility audit on `/dev/design-system` passes ≥ 95. *(verified 2026-05-11 in browser by Stefan.)*
+- [x] Mockups in `.superpowers/brainstorm/` match what the implementation renders. *(verified 2026-05-11 in browser by Stefan.)*
 - [x] Commit: `phase-0.5: design system complete`
 
 ---
