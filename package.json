@@ -1,0 +1,22 @@
+{
+  "name": "folio",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Lightweight, agent-native project management. Markdown is the source of truth.",
+  "license": "MIT",
+  "workspaces": ["apps/*", "packages/*"],
+  "scripts": {
+    "dev": "bun run --filter '*' dev",
+    "build": "bun run --filter '*' build",
+    "build:binary": "bun run build && bun build apps/server/src/index.ts --compile --outfile dist/folio",
+    "db:generate": "bun run --filter @folio/server db:generate",
+    "db:migrate": "bun run --filter @folio/server db:migrate",
+    "db:studio": "bun run --filter @folio/server db:studio",
+    "lint": "biome check .",
+    "format": "biome format --write ."
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.4",
+    "typescript": "^5.6.3"
+  }
+}

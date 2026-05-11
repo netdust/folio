@@ -1,0 +1,53 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --bg: 251 250 247; /* paper-50 */
+    --fg: 36 30 21; /* paper-800 */
+    --muted: 87 78 61; /* paper-600 */
+    --border: 232 226 212; /* paper-200 */
+    --accent: 27 58 92; /* ink-700 */
+    --accent-fg: 255 255 255;
+  }
+
+  .dark {
+    --bg: 10 8 7; /* paper-950 */
+    --fg: 245 242 235; /* paper-100 */
+    --muted: 168 158 133; /* paper-400 */
+    --border: 36 30 21; /* paper-800 */
+    --accent: 122 158 198; /* ink-300 */
+    --accent-fg: 12 27 44;
+  }
+
+  html {
+    @apply font-sans antialiased;
+    color: rgb(var(--fg));
+    background: rgb(var(--bg));
+  }
+
+  body {
+    @apply min-h-screen;
+  }
+
+  /* Display type uses Fraunces - book serif with opsz */
+  h1, h2, h3, .display {
+    @apply font-display tracking-tight;
+    font-optical-sizing: auto;
+  }
+
+  /* IDs, slugs, anything machine-flavored */
+  code, .mono, [data-slug] {
+    @apply font-mono;
+  }
+}
+
+@layer utilities {
+  .text-muted {
+    color: rgb(var(--muted));
+  }
+  .border-default {
+    border-color: rgb(var(--border));
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "name": "@folio/server",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun run --hot src/index.ts",
+    "build": "bun build src/index.ts --target=bun --outdir=dist",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "bun run src/db/migrate.ts",
+    "db:studio": "drizzle-kit studio"
+  },
+  "dependencies": {
+    "@folio/shared": "workspace:*",
+    "@hono/zod-validator": "^0.4.1",
+    "@noble/ciphers": "^1.1.1",
+    "@noble/hashes": "^1.5.0",
+    "better-sqlite3": "^11.5.0",
+    "drizzle-orm": "^0.36.4",
+    "hono": "^4.6.12",
+    "nanoid": "^5.0.9",
+    "nodemailer": "^6.9.16",
+    "yaml": "^2.6.1",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/nodemailer": "^6.4.17",
+    "drizzle-kit": "^0.28.1"
+  }
+}
