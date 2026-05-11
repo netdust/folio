@@ -1,0 +1,89 @@
+:root {
+  --color-shell:        #E3E3E5;
+  --color-content:      #FCFCFC;
+  --color-brand-2:      #F6F5F3;
+  --color-card:         #F4F3F1;
+  --color-border-light: #EAEAEA;
+  --color-border-row:   #F4F3F1;
+
+  --color-fg:            #000000;
+  --color-fg-2:          rgba(0, 0, 0, 0.66);
+  --color-fg-3:          rgba(0, 0, 0, 0.33);
+  --color-fg-on-primary: #FFFFFF;
+
+  --color-primary:    #000000;
+  --color-primary-fg: #FFFFFF;
+
+  --color-success: #589F72;
+  --color-danger:  #EA6B6B;
+  --color-warning: #F0A442;
+  --color-info:    #6EAFFF;
+
+  --color-bg-success: #DEFBE6;
+  --color-bg-danger:  #FCF1F1;
+  --color-bg-warning: #FDF4E7;
+  --color-bg-info:    #F0F7FF;
+
+  --font-sans: 'Geist', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
+
+  --space-xs:  4px;
+  --space-sm:  8px;
+  --space-md:  16px;
+  --space-lg:  24px;
+  --space-xl:  32px;
+  --space-xxl: 40px;
+  --space-row: 10px;
+
+  --radius-sm:   4px;
+  --radius-md:   6px;
+  --radius-lg:  10px;
+  --radius-xl:  16px;
+  --radius-pill: 999px;
+
+  --shadow-surface: 0 0 1px rgba(0, 0, 0, 0.25);
+  --shadow-card:    0 0 1px rgba(0, 0, 0, 0.20);
+  --shadow-popover: 0 8px 24px rgba(0, 0, 0, 0.12), 0 0 1px rgba(0, 0, 0, 0.18);
+
+  --duration-fast:    120ms;
+  --duration-default: 200ms;
+  --duration-slow:    280ms;
+  --ease-default:     cubic-bezier(0.16, 1, 0.3, 1);
+
+  --ring: 0 0 0 2px var(--color-content), 0 0 0 4px var(--color-primary);
+}
+
+.dark {
+  --color-shell:        #0a0a0b;
+  --color-content:      #161618;
+  --color-brand-2:      #1a1a1d;
+  --color-card:         #1f1f22;
+  --color-border-light: #26262a;
+  --color-border-row:   #1f1f22;
+
+  --color-fg:            #f0f0f0;
+  --color-fg-2:          rgba(240, 240, 240, 0.66);
+  --color-fg-3:          rgba(240, 240, 240, 0.33);
+  --color-fg-on-primary: #0a0a0b;
+
+  --color-primary:    #f0f0f0;
+  --color-primary-fg: #0a0a0b;
+
+  --color-bg-success: #1d2e26;
+  --color-bg-danger:  #2e1d1d;
+  --color-bg-warning: #2e2519;
+  --color-bg-info:    #1a2434;
+
+  --shadow-surface: 0 0 1px rgba(255, 255, 255, 0.10);
+  --shadow-card:    0 0 1px rgba(255, 255, 255, 0.08);
+  --shadow-popover: 0 8px 24px rgba(0, 0, 0, 0.4), 0 0 1px rgba(255, 255, 255, 0.15);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 80ms !important;
+    transition-property: opacity !important;
+  }
+}
