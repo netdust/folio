@@ -215,3 +215,80 @@ type: page
   expect(res.status).toBe(422);
   expect((await res.json()).error.code).toBe('INVALID_BODY');
 });
+
+test('GET /documents lists with no filter', async () => {
+  const { app, seed } = await makeTestApp();
+  for (const t of ['A', 'B', 'C']) {
+    await app.request(path, {
+      method: 'POST',
+      headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'work_item', title: t }),
+    });
+  }
+  const res = await app.request(path, { headers: { Cookie: seed.sessionCookie } });
+  expect(res.status).toBe(200);
+  const body = await res.json();
+  expect(body.data).toHaveLength(3);
+});
+
+test('GET filters by type', async () => {
+  const { app, seed } = await makeTestApp();
+  await app.request(path, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: 'work_item', title: 'W' }),
+  });
+  await app.request(path, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: 'page', title: 'P' }),
+  });
+  const res = await app.request(`${path}?type=page`, { headers: { Cookie: seed.sessionCookie } });
+  expect((await res.json()).data).toHaveLength(1);
+});
+
+test('GET applies a filter AST via ?filter=', async () => {
+  const { app, seed } = await makeTestApp();
+  await app.request(path, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: 'work_item', title: 'X', frontmatter: { priority: 'high' } }),
+  });
+  await app.request(path, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: 'work_item', title: 'Y', frontmatter: { priority: 'low' } }),
+  });
+  const filter = encodeURIComponent(JSON.stringify({ priority: 'high' }));
+  const res = await app.request(`${path}?filter=${filter}`, {
+    headers: { Cookie: seed.sessionCookie },
+  });
+  const body = await res.json();
+  expect(body.data).toHaveLength(1);
+  expect(body.data[0].title).toBe('X');
+});
+
+test('GET 422 INVALID_FILTER on bad operator', async () => {
+  const { app, seed } = await makeTestApp();
+  const filter = encodeURIComponent(JSON.stringify({ x: { $bogus: 1 } }));
+  const res = await app.request(`${path}?filter=${filter}`, {
+    headers: { Cookie: seed.sessionCookie },
+  });
+  expect(res.status).toBe(422);
+  expect((await res.json()).error.code).toBe('INVALID_FILTER');
+});
+
+test('GET respects limit and returns nextCursor', async () => {
+  const { app, seed } = await makeTestApp();
+  for (let i = 0; i < 5; i++) {
+    await app.request(path, {
+      method: 'POST',
+      headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'work_item', title: `T${i}` }),
+    });
+  }
+  const res = await app.request(`${path}?limit=2`, { headers: { Cookie: seed.sessionCookie } });
+  const body = await res.json();
+  expect(body.data).toHaveLength(2);
+  expect(typeof body.nextCursor).toBe('string');
+});

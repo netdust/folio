@@ -1,12 +1,19 @@
-import { and, eq } from 'drizzle-orm';
+import { and, desc, eq, lt, or } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { nanoid } from 'nanoid';
-import { slugify, documentCreateSchema, documentPatchSchema } from '@folio/shared';
+import {
+  slugify,
+  documentCreateSchema,
+  documentPatchSchema,
+  filterCompile,
+  FilterCompileError,
+} from '@folio/shared';
 import { db } from '../db/client.ts';
 import { documents, statuses } from '../db/schema.ts';
 import { jsonOk, HTTPError } from '../lib/http.ts';
 import { emitEvent } from '../lib/events.ts';
 import { parseMarkdown } from '../lib/frontmatter.ts';
+import { compileFilterToWhere } from '../lib/filter-to-drizzle.ts';
 import { slugUniqueInDocuments } from '../lib/slug-unique.ts';
 import { type AuthContext, getUser } from '../middleware/auth.ts';
 import { getProject, getWorkspace, type ScopeContext } from '../middleware/scope.ts';
@@ -103,6 +110,78 @@ documentsRoute.post('/', async (c) => {
   });
 
   return jsonOk(c, { document: row }, 201);
+});
+
+function encodeCursor(updatedAt: number, id: string): string {
+  return Buffer.from(`${updatedAt}:${id}`).toString('base64');
+}
+
+function decodeCursor(s: string): { updatedAt: number; id: string } | null {
+  try {
+    const raw = Buffer.from(s, 'base64').toString('utf8');
+    const [t, id] = raw.split(':');
+    const updatedAt = Number(t);
+    if (!Number.isFinite(updatedAt) || !id) return null;
+    return { updatedAt, id };
+  } catch {
+    return null;
+  }
+}
+
+documentsRoute.get('/', async (c) => {
+  const p = getProject(c);
+  const type = c.req.query('type');
+  const limit = Math.max(1, Math.min(200, Number(c.req.query('limit') ?? 50)));
+  const cursorRaw = c.req.query('cursor');
+  const filterRaw = c.req.query('filter');
+
+  const cursor = cursorRaw ? decodeCursor(cursorRaw) : null;
+
+  let filterWhere: ReturnType<typeof compileFilterToWhere> = undefined;
+  if (filterRaw) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(filterRaw);
+    } catch {
+      throw new HTTPError('INVALID_FILTER', 'filter must be valid JSON', 422);
+    }
+    try {
+      const ast = filterCompile(parsed as Parameters<typeof filterCompile>[0]);
+      filterWhere = compileFilterToWhere(ast, documents);
+    } catch (e) {
+      if (e instanceof FilterCompileError) throw new HTTPError('INVALID_FILTER', e.message, 422);
+      throw e;
+    }
+  }
+
+  const whereClauses = [eq(documents.projectId, p.id)];
+  if (type === 'work_item' || type === 'page') {
+    whereClauses.push(eq(documents.type, type));
+  }
+  if (filterWhere) whereClauses.push(filterWhere);
+  if (cursor) {
+    const ts = new Date(cursor.updatedAt);
+    whereClauses.push(
+      or(
+        lt(documents.updatedAt, ts),
+        and(eq(documents.updatedAt, ts), lt(documents.id, cursor.id)) as never,
+      ) as never,
+    );
+  }
+
+  const rows = await db
+    .select()
+    .from(documents)
+    .where(and(...whereClauses))
+    .orderBy(desc(documents.updatedAt), desc(documents.id))
+    .limit(limit + 1);
+
+  const hasMore = rows.length > limit;
+  const page = hasMore ? rows.slice(0, limit) : rows;
+  const last = page[page.length - 1];
+  const nextCursor = hasMore && last ? encodeCursor(last.updatedAt.getTime(), last.id) : null;
+
+  return c.json({ data: page, nextCursor });
 });
 
 documentsRoute.get('/:slug', async (c) => {
