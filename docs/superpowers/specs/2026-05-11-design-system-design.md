@@ -433,7 +433,7 @@ At any moment, **exactly one** surface holds the user's primary attention:
 | Surface | Width | Blocks input? | Closes via | Use |
 |---|---|---|---|---|
 | Right panel | 320px | No | Toggle button, `Cmd-\` | Context for selection. Lives inside shell. |
-| Document slideover | 600px (mobile: full) | No, but hides right panel | Esc, click-outside, X, `Cmd-\` | The selected document opened for editing. URL-driven. |
+| Document slideover | 800px (mobile: full) | No, but hides right panel | Esc, click-outside, X, `Cmd-\` | The selected document opened for editing. URL-driven. Body content max-width 640px inside it (line-length cap for readability); side margin absorbs the extra width. |
 | Action dialog | 440px (mobile: ~92vw) | Yes — dims everything behind | Esc, click-outside, X | Create, confirm, AI-output preview. Stacks above slideover if needed. |
 
 Constraints derived from this:
@@ -542,7 +542,7 @@ Inline keyboard hint. `bg-card rounded-sm` padding 1px 5px, font-mono-10, color 
 ### 8.8 shadcn primitives (themed via Tailwind tokens)
 
 - **Dialog** — action dialog. 440px, centered, dims background. `Cmd+Enter` triggers primary action.
-- **Sheet** — slideover. 600px wide. Right side only.
+- **Sheet** — slideover. 800px wide (document edit). Right side only.
 - **Popover** — workspace switcher, filter editor, tooltips.
 - **Command** — Cmd-K palette. Themed to match the popover style.
 - **Toast** — toaster region + Toast component.
