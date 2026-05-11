@@ -64,6 +64,9 @@
     "packages/shared": {
       "name": "@folio/shared",
       "version": "0.0.1",
+      "dependencies": {
+        "zod": "^3.23.8",
+      },
     },
   },
   "packages": {

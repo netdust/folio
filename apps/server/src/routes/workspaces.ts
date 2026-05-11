@@ -5,7 +5,7 @@ import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import { db } from '../db/client.ts';
 import { memberships, projects, workspaces } from '../db/schema.ts';
-import { slugify } from '../lib/slugify.ts';
+import { slugify } from '@folio/shared';
 import { type AuthContext, getUser, requireUser } from '../middleware/auth.ts';
 
 const workspacesRoute = new Hono<AuthContext>();
