@@ -17,18 +17,18 @@ For full context on any decision: `@docs/FOLIO-BRIEFING.md`. For the operating m
 - [x] Biome config at root (`biome.json`) — formatter + linter
 - [x] `.gitignore`, `LICENSE` (MIT), starter `README.md`
 - [x] TypeScript configs: root `tsconfig.base.json`, app-level extends
-- [ ] Path aliases: `@/` in each app, `@folio/shared` for the shared package — *web has `@/*`, server tsconfig is missing it. Add in Phase 1 setup.*
+- [x] Path aliases: `@/` in each app, `@folio/shared` for the shared package *(completed in Phase 0.5 Plan A Task 2)*
 
 ### Server foundation
 
-- [ ] Hono app skeleton: `app.ts` composes routes, `index.ts` is the Bun entrypoint — *all in `index.ts` today; split into `app.ts` in Phase 1 setup.*
+- [x] Hono app skeleton: `app.ts` composes routes, `index.ts` is the Bun entrypoint *(completed in Phase 0.5 Plan A Task 3)*
 - [x] Env validation via Zod (`env.ts`) — fail fast if `FOLIO_MASTER_KEY` is missing
-- [ ] Logger middleware, error handler, CORS for dev — *logger present; error handler and CORS missing. Add in Phase 1 setup.*
-- [ ] Health route `GET /healthz` returns `{ ok: true, version: ... }` — *route exists at `/api/health` returning `{status, version}`. Rename + reshape in Phase 1 setup.*
+- [x] Logger middleware, error handler, CORS for dev *(error handler + dev CORS completed in Phase 0.5 Plan A Tasks 4-5)*
+- [x] Health route `GET /healthz` returns `{ ok: true, version: ... }` *(completed in Phase 0.5 Plan A Task 6)*
 - [x] Drizzle setup pointing at SQLite (`drizzle.config.ts`)
 - [x] Schema file with all tables from FOLIO-BRIEFING.md §6
 - [x] Migration scripts: `db:generate`, `db:migrate`, `db:studio`
-- [ ] Initial migration generated and applied — *no `apps/server/src/db/migrations/` directory exists. Generate as first task of Phase 1.*
+- [x] Initial migration generated and applied *(completed in Phase 0.5 Plan A Task 7)*
 
 ### Auth
 
@@ -48,7 +48,7 @@ For full context on any decision: `@docs/FOLIO-BRIEFING.md`. For the operating m
 ### Frontend foundation
 
 - [x] `bun create vite` inside `apps/web` (React + TS)
-- [ ] Tailwind + shadcn/ui init — *Tailwind yes; shadcn primitives not installed yet. Install in Phase 0.5.*
+- [x] Tailwind + shadcn/ui init *(completed in Phase 0.5 Plan A Task 23 — Dialog/Sheet/Popover via radix-ui; Sonner toast; cmdk command)*
 - [x] TanStack Router setup with file-based routing
 - [x] `lib/api.ts`: typed fetch client — *minimal version; expand with shared Zod schemas in Phase 1.*
 - [ ] Routes: `/login`, `/magic`, `/` (workspace picker), `/w/$workspace`, `/w/$workspace/p/$project` — *only `/` and `/login` exist. Workspace + project routes built in Phase 1.*
@@ -83,20 +83,20 @@ For full context on any decision: `@docs/FOLIO-BRIEFING.md`. For the operating m
 
 **Acceptance criteria (full list in spec §14).** All of these must be true:
 
-- [ ] `apps/web/src/styles/tokens.css` exists with all values from spec §5, light + dark.
-- [ ] `tailwind.config.ts` maps every token to a semantic utility name; no raw hex appears in any feature file.
-- [ ] Geist + Geist Mono self-hosted in `apps/web/public/fonts/`; `@font-face` declarations in `fonts.css`.
-- [ ] Hard `<button>` reset shipped (background / border / outline / box-shadow / appearance all zeroed) so no chunky pill buttons appear.
-- [ ] Bespoke primitives in `components/ui/`: `Button`, `IconButton`, `Pill`, `Badge`, `Chip`, `Avatar`, `Kbd`. Each renders correctly in both themes with working `:focus-visible`.
-- [ ] shadcn primitives installed and themed via Tailwind tokens: `Dialog`, `Sheet`, `Popover`, `Command`, `Toast`.
-- [ ] Shell components composed in `components/shell/`: `Shell`, `Rail` (expanded + collapsed), `MainFrame`, `RightPanel`, `WorkspaceSwitcher`.
-- [ ] Theme bootstrap snippet in `index.html` prevents first-paint flash.
-- [ ] `localStorage` persistence for theme + rail collapsed/expanded preference.
-- [ ] Dev-only `/dev/design-system` route renders every primitive and the shell in both themes.
-- [ ] Login + home pages re-styled to consume the new tokens (sanity check existing scaffold against the system).
-- [ ] Lighthouse accessibility audit on `/dev/design-system` passes ≥ 95.
-- [ ] Mockups in `.superpowers/brainstorm/` match what the implementation renders.
-- [ ] Commit: `phase-0.5: design system complete`
+- [x] `apps/web/src/styles/tokens.css` exists with all values from spec §5, light + dark.
+- [x] `tailwind.config.ts` maps every token to a semantic utility name; no raw hex appears in any feature file.
+- [x] Geist + Geist Mono self-hosted in `apps/web/public/fonts/`; `@font-face` declarations in `fonts.css`.
+- [x] Hard `<button>` reset shipped (background / border / outline / box-shadow / appearance all zeroed) so no chunky pill buttons appear.
+- [x] Bespoke primitives in `components/ui/`: `Button`, `IconButton`, `Pill`, `Badge`, `Chip`, `Avatar`, `Kbd`. Each renders correctly in both themes with working `:focus-visible`.
+- [x] shadcn primitives installed and themed via Tailwind tokens: `Dialog`, `Sheet`, `Popover`, `Command`, `Toast`.
+- [x] Shell components composed in `components/shell/`: `Shell`, `Rail` (expanded + collapsed), `MainFrame`, `RightPanel`, `WorkspaceSwitcher`.
+- [x] Theme bootstrap snippet in `index.html` prevents first-paint flash.
+- [x] `localStorage` persistence for theme + rail collapsed/expanded preference.
+- [x] Dev-only `/dev/design-system` route renders every primitive and the shell in both themes.
+- [x] Login + home pages re-styled to consume the new tokens (sanity check existing scaffold against the system).
+- [ ] Lighthouse accessibility audit on `/dev/design-system` passes ≥ 95. *(deferred — requires interactive browser run; primitives include `aria-label` on IconButton, `lang="en"` on `<html>`, focus rings via :focus-visible. Verify before Phase 1 sign-off.)*
+- [ ] Mockups in `.superpowers/brainstorm/` match what the implementation renders. *(deferred — visual comparison requires browser inspection. Verify before Phase 1 sign-off.)*
+- [x] Commit: `phase-0.5: design system complete`
 
 ---
 
