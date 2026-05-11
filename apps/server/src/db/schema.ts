@@ -152,7 +152,10 @@ export const fields = sqliteTable(
       .references(() => projects.id, { onDelete: 'cascade' }),
     key: text('key').notNull(), // frontmatter key name
     type: text('type', {
-      enum: ['text', 'number', 'date', 'select', 'multi_select', 'user_ref', 'boolean', 'url'],
+      enum: [
+        'string', 'text', 'number', 'boolean', 'date', 'datetime',
+        'select', 'multi_select', 'user_ref', 'url', 'document_ref',
+      ],
     }).notNull(),
     label: text('label'),
     options: text('options', { mode: 'json' }).$type<string[] | null>(), // for select types
@@ -212,6 +215,8 @@ export const views = sqliteTable('views', {
   sort: text('sort', { mode: 'json' }).$type<unknown>().notNull().default([]),
   groupBy: text('group_by'), // field key for kanban grouping; defaults to status
   visibleFields: text('visible_fields', { mode: 'json' }).$type<string[]>().notNull().default([]),
+  order: integer('order').notNull().default(0),
+  isDefault: integer('is_default', { mode: 'boolean' }).notNull().default(false),
   createdAt: integer('created_at', { mode: 'timestamp_ms' })
     .notNull()
     .default(sql`(unixepoch() * 1000)`),
