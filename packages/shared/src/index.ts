@@ -29,3 +29,4 @@ export interface DocumentSummary {
 export { slugify } from './slug.ts';
 export { ErrorCode, type ErrorCode as ErrorCodeType } from './error-codes.ts';
 export * from './document-schema.ts';
+export { inferFieldType, type InferContext } from './field-infer.ts';
