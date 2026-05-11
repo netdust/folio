@@ -22,7 +22,7 @@ import { eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/bun-sqlite';
 import { migrate } from 'drizzle-orm/bun-sqlite/migrator';
 import { nanoid } from 'nanoid';
-import { __resetDbForTests } from '../db/client.ts';
+import { __resetDbForTests, type DB } from '../db/client.ts';
 import * as schema from '../db/schema.ts';
 import { createSession, hashPassword } from '../lib/auth.ts';
 
@@ -41,7 +41,7 @@ type ServerApp = typeof import('../app.ts')['app'];
 
 export async function makeTestApp(): Promise<{
   app: ServerApp;
-  db: ReturnType<typeof drizzle>;
+  db: DB;
   seed: TestSeed;
 }> {
   const sqlite = new Database(':memory:');
