@@ -1,14 +1,14 @@
-import Database from 'better-sqlite3';
-import { drizzle } from 'drizzle-orm/better-sqlite3';
+import { Database } from 'bun:sqlite';
+import { drizzle } from 'drizzle-orm/bun-sqlite';
 import { env } from '../env.ts';
 import * as schema from './schema.ts';
 
 const sqlitePath = env.DATABASE_URL.replace(/^file:/, '');
 
 const sqlite = new Database(sqlitePath);
-sqlite.pragma('journal_mode = WAL');
-sqlite.pragma('foreign_keys = ON');
-sqlite.pragma('synchronous = NORMAL');
+sqlite.exec('PRAGMA journal_mode = WAL');
+sqlite.exec('PRAGMA foreign_keys = ON');
+sqlite.exec('PRAGMA synchronous = NORMAL');
 
 export const db = drizzle(sqlite, { schema });
 export { schema };
