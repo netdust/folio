@@ -1,0 +1,106 @@
+/**
+ * Test harness for Phase 1 backend tests.
+ *
+ * Spins up an in-memory SQLite, runs all migrations, seeds one
+ * user/workspace/project, and returns the Hono app plus a session cookie.
+ *
+ * IMPORTANT: This sets `globalThis.__folioTestDb` BEFORE importing `app.ts` so
+ * that `db/client.ts` (and every route that imports `db`) sees the test DB
+ * instead of the file-backed one. Inside a single test file, `app.ts` is only
+ * imported once — multiple `makeTestApp()` calls in the same file share the DB
+ * resolved on the first call. Bun runs each *file* in its own process, so
+ * per-file isolation works as expected.
+ */
+
+// Must come first: populates env vars before downstream modules read them.
+import './env-setup.ts';
+
+import { Database } from 'bun:sqlite';
+import { resolve as pathResolve } from 'node:path';
+import { eq } from 'drizzle-orm';
+import { drizzle } from 'drizzle-orm/bun-sqlite';
+import { migrate } from 'drizzle-orm/bun-sqlite/migrator';
+import { nanoid } from 'nanoid';
+import * as schema from '../db/schema.ts';
+import { createSession, hashPassword } from '../lib/auth.ts';
+
+// Resolve migrations relative to *this file*, not the caller's CWD, so the
+// harness works whether `bun test` is run from the repo root or apps/server.
+const MIGRATIONS_DIR = pathResolve(import.meta.dir, '../db/migrations');
+
+export interface TestSeed {
+  user: schema.User;
+  workspace: schema.Workspace;
+  project: schema.Project;
+  sessionCookie: string;
+}
+
+type ServerApp = typeof import('../app.ts')['app'];
+
+export async function makeTestApp(): Promise<{
+  app: ServerApp;
+  db: ReturnType<typeof drizzle>;
+  seed: TestSeed;
+}> {
+  const sqlite = new Database(':memory:');
+  sqlite.exec('PRAGMA foreign_keys = ON');
+  const db = drizzle(sqlite, { schema });
+  migrate(db, { migrationsFolder: MIGRATIONS_DIR });
+
+  // Install before importing app.ts so db/client.ts picks it up.
+  (globalThis as Record<string, unknown>).__folioTestDb = db;
+
+  const { app } = await import('../app.ts');
+
+  const userId = nanoid();
+  const passwordHash = await hashPassword('password123');
+  await db.insert(schema.users).values({
+    id: userId,
+    email: 'alice@test.local',
+    name: 'Alice',
+    passwordHash,
+  });
+
+  const workspaceId = nanoid();
+  await db.insert(schema.workspaces).values({
+    id: workspaceId,
+    slug: 'acme',
+    name: 'Acme',
+  });
+  await db.insert(schema.memberships).values({
+    workspaceId,
+    userId,
+    role: 'owner',
+  });
+
+  const projectId = nanoid();
+  await db.insert(schema.projects).values({
+    id: projectId,
+    workspaceId,
+    slug: 'web',
+    name: 'Web',
+  });
+
+  const session = await createSession(userId);
+
+  const [user] = await db.select().from(schema.users).where(eq(schema.users.id, userId));
+  const [workspace] = await db
+    .select()
+    .from(schema.workspaces)
+    .where(eq(schema.workspaces.id, workspaceId));
+  const [project] = await db
+    .select()
+    .from(schema.projects)
+    .where(eq(schema.projects.id, projectId));
+
+  return {
+    app,
+    db,
+    seed: {
+      user: user!,
+      workspace: workspace!,
+      project: project!,
+      sessionCookie: `folio_session=${session.id}`,
+    },
+  };
+}
