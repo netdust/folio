@@ -8,6 +8,7 @@ import { db } from '../db/client.ts';
 import { projects } from '../db/schema.ts';
 import { emitEvent } from '../lib/events.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
+import { seedProjectDefaults } from '../lib/seed-project-defaults.ts';
 import { slugUniqueInProjects } from '../lib/slug-unique.ts';
 import { type AuthContext, getUser } from '../middleware/auth.ts';
 import {
@@ -64,6 +65,7 @@ projectsRoute.post(
 
     await db.transaction(async (tx) => {
       await tx.insert(projects).values({ id, workspaceId: ws.id, slug, name, icon: icon ?? null });
+      await seedProjectDefaults(tx, id);
       await emitEvent(tx, {
         workspaceId: ws.id,
         projectId: id,

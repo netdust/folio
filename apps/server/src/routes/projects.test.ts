@@ -81,3 +81,19 @@ test('GET unknown project → 404 PROJECT_NOT_FOUND', async () => {
   expect(res.status).toBe(404);
   expect((await res.json()).error.code).toBe('PROJECT_NOT_FOUND');
 });
+
+test('POST seeds 4 statuses and 2 views', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const { statuses, views } = await import('../db/schema.ts');
+  const { eq } = await import('drizzle-orm');
+  const create = await app.request('/api/v1/w/acme/projects', {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Mobile' }),
+  });
+  const { data: { project } } = await create.json();
+  const s = await db.select().from(statuses).where(eq(statuses.projectId, project.id));
+  const v = await db.select().from(views).where(eq(views.projectId, project.id));
+  expect(s).toHaveLength(4);
+  expect(v).toHaveLength(2);
+});

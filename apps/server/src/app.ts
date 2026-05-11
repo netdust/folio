@@ -13,6 +13,7 @@ import { projectsRoute } from './routes/projects.ts';
 import { settingsRoute } from './routes/settings.ts';
 import { statusesRoute } from './routes/statuses.ts';
 import { tokensRoute } from './routes/tokens.ts';
+import { viewsRoute } from './routes/views.ts';
 import { workspacesRoute } from './routes/workspaces.ts';
 
 export const app = new Hono<AuthContext & ScopeContext>();
@@ -39,7 +40,8 @@ const pScope = new Hono<AuthContext & ScopeContext>();
 pScope.use('*', resolveProject);
 pScope.route('/statuses', statusesRoute);
 pScope.route('/fields', fieldsRoute);
-// pScope (documents/views) further routes mounted in later tasks
+pScope.route('/views', viewsRoute);
+// pScope (documents) further routes mounted in later tasks
 
 wScope.route('/p/:pslug', pScope);
 
