@@ -1,7 +1,7 @@
 import { test, expect } from 'bun:test';
 import { nanoid } from 'nanoid';
 import { makeTestApp } from '../test/harness.ts';
-import { documents } from '../db/schema.ts';
+import { documents, projects } from '../db/schema.ts';
 import { slugUniqueInDocuments, slugUniqueInProjects, slugUniqueInWorkspaces } from './slug-unique.ts';
 
 test('returns base when free', async () => {
@@ -31,11 +31,15 @@ test('returns base-3 when base and base-2 taken', async () => {
   expect(await slugUniqueInDocuments(db, seed.project.id, 'hello-world')).toBe('hello-world-3');
 });
 
-test('scoped to project', async () => {
+test('scoped to project — slug taken in A is free in B', async () => {
   const { db, seed } = await makeTestApp();
+  const projectBId = nanoid();
+  await db.insert(projects).values({
+    id: projectBId, workspaceId: seed.workspace.id, slug: 'other', name: 'Other',
+  });
   await db.insert(documents).values({
     id: nanoid(), projectId: seed.project.id, type: 'work_item', slug: 'foo', title: 'x',
   });
-  // A different project; same slug should still be free if we passed a different projectId.
-  expect(await slugUniqueInDocuments(db, 'different-project-id', 'foo')).toBe('foo');
+  expect(await slugUniqueInDocuments(db, projectBId, 'foo')).toBe('foo');
+  expect(await slugUniqueInDocuments(db, seed.project.id, 'foo')).toBe('foo-2');
 });
