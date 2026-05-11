@@ -12,66 +12,93 @@ For full context on any decision: `@docs/FOLIO-BRIEFING.md`. For the operating m
 
 ### Repo & tooling
 
-- [ ] `bun init` + workspace setup (`apps/server`, `apps/web`, `packages/shared`)
-- [ ] Root `package.json` with workspace globs and shared scripts (`dev`, `build`, `test`)
-- [ ] Biome config at root (`biome.json`) — formatter + linter
-- [ ] `.gitignore`, `LICENSE` (MIT), starter `README.md`
-- [ ] TypeScript configs: root `tsconfig.base.json`, app-level extends
-- [ ] Path aliases: `@/` in each app, `@folio/shared` for the shared package
+- [x] `bun init` + workspace setup (`apps/server`, `apps/web`, `packages/shared`)
+- [x] Root `package.json` with workspace globs and shared scripts (`dev`, `build`, `test`)
+- [x] Biome config at root (`biome.json`) — formatter + linter
+- [x] `.gitignore`, `LICENSE` (MIT), starter `README.md`
+- [x] TypeScript configs: root `tsconfig.base.json`, app-level extends
+- [ ] Path aliases: `@/` in each app, `@folio/shared` for the shared package — *web has `@/*`, server tsconfig is missing it. Add in Phase 1 setup.*
 
 ### Server foundation
 
-- [ ] Hono app skeleton: `app.ts` composes routes, `index.ts` is the Bun entrypoint
-- [ ] Env validation via Zod (`env.ts`) — fail fast if `FOLIO_MASTER_KEY` is missing
-- [ ] Logger middleware, error handler, CORS for dev
-- [ ] Health route `GET /healthz` returns `{ ok: true, version: ... }`
-- [ ] Drizzle setup pointing at SQLite (`drizzle.config.ts`)
-- [ ] Schema file with all tables from FOLIO-BRIEFING.md §6
-- [ ] Migration scripts: `db:generate`, `db:migrate`, `db:studio`
-- [ ] Initial migration generated and applied
+- [ ] Hono app skeleton: `app.ts` composes routes, `index.ts` is the Bun entrypoint — *all in `index.ts` today; split into `app.ts` in Phase 1 setup.*
+- [x] Env validation via Zod (`env.ts`) — fail fast if `FOLIO_MASTER_KEY` is missing
+- [ ] Logger middleware, error handler, CORS for dev — *logger present; error handler and CORS missing. Add in Phase 1 setup.*
+- [ ] Health route `GET /healthz` returns `{ ok: true, version: ... }` — *route exists at `/api/health` returning `{status, version}`. Rename + reshape in Phase 1 setup.*
+- [x] Drizzle setup pointing at SQLite (`drizzle.config.ts`)
+- [x] Schema file with all tables from FOLIO-BRIEFING.md §6
+- [x] Migration scripts: `db:generate`, `db:migrate`, `db:studio`
+- [ ] Initial migration generated and applied — *no `apps/server/src/db/migrations/` directory exists. Generate as first task of Phase 1.*
 
 ### Auth
 
-- [ ] `lib/auth.ts`: password hashing (`Bun.password`), session token generation
-- [ ] `lib/crypto.ts`: libsodium secretbox wrappers for AI key storage
-- [ ] `middleware/session.ts`: reads cookie, attaches user + memberships
-- [ ] `middleware/bearer.ts`: reads `Authorization: Bearer`, attaches token + scopes
-- [ ] `routes/auth.ts`: register, login, logout, me
-- [ ] Magic-link: request + consume (log link to console in dev; SMTP later)
+- [x] `lib/auth.ts`: password hashing (`Bun.password`), session token generation
+- [x] `lib/crypto.ts`: libsodium secretbox wrappers for AI key storage
+- [x] `middleware/session.ts`: reads cookie, attaches user + memberships — *implemented as `middleware/auth.ts` with `attachUser` + `requireUser`. Same concept, different filename.*
+- [ ] `middleware/bearer.ts`: reads `Authorization: Bearer`, attaches token + scopes — *Phase 2 work per the Phase 1 spec.*
+- [x] `routes/auth.ts`: register, login, logout, me
+- [x] Magic-link: request + consume (log link to console in dev; SMTP later)
 
 ### Workspaces & projects
 
-- [ ] `routes/workspaces.ts`: CRUD, slug uniqueness, owner membership on create
-- [ ] `routes/projects.ts`: CRUD scoped to workspace, slug unique per workspace
-- [ ] AI key encryption end-to-end: PATCH workspace sets `aiKey`, encrypted before insert, never returned
+- [ ] `routes/workspaces.ts`: CRUD, slug uniqueness, owner membership on create — *GET list + POST create only; PATCH/DELETE/individual GET missing. Complete in Phase 1.*
+- [ ] `routes/projects.ts`: CRUD scoped to workspace, slug unique per workspace — *projects nested inside `workspaces.ts`, scoped by workspace ID not slug. Split out and re-scope by slug in Phase 1.*
+- [x] AI key encryption end-to-end: encrypted before insert, never returned — *implemented in `routes/settings.ts` rather than as a PATCH on workspaces.*
 
 ### Frontend foundation
 
-- [ ] `bun create vite` inside `apps/web` (React + TS)
-- [ ] Tailwind + shadcn/ui init
-- [ ] TanStack Router setup with file-based routing
-- [ ] `lib/api.ts`: typed fetch client using shared Zod schemas
-- [ ] Routes: `/login`, `/magic`, `/` (workspace picker), `/w/$workspace`, `/w/$workspace/p/$project`
-- [ ] Auth pages: login, signup, magic-link request, magic-link consume
-- [ ] Sidebar shell: workspace switcher, project list
-- [ ] Workspace settings page with AI provider + key configuration (UI only, posts to API)
+- [x] `bun create vite` inside `apps/web` (React + TS)
+- [ ] Tailwind + shadcn/ui init — *Tailwind yes; shadcn primitives not installed yet. Install in Phase 0.5.*
+- [x] TanStack Router setup with file-based routing
+- [x] `lib/api.ts`: typed fetch client — *minimal version; expand with shared Zod schemas in Phase 1.*
+- [ ] Routes: `/login`, `/magic`, `/` (workspace picker), `/w/$workspace`, `/w/$workspace/p/$project` — *only `/` and `/login` exist. Workspace + project routes built in Phase 1.*
+- [ ] Auth pages: login, signup, magic-link request, magic-link consume — *login + magic request done. Signup is not a separate page; magic consume is a server-side redirect (no client route). Acceptable but document.*
+- [ ] Sidebar shell: workspace switcher, project list — *not built; lands in Phase 0.5 (Design System) and Phase 1.*
+- [ ] Workspace settings page with AI provider + key configuration (UI only, posts to API) — *API exists; UI deferred to Phase 1 settings work.*
 
 ### Build pipeline
 
-- [ ] `scripts/build.ts`: builds web → copies dist to server/public → runs `bun build --compile`
-- [ ] Verify single binary runs and serves both API and static React
-- [ ] Dockerfile (multi-stage, debian-slim final)
-- [ ] `docker build -f docker/Dockerfile -t folio:dev .` succeeds
-- [ ] `docker run -e FOLIO_MASTER_KEY=... -v ./data:/data -p 3000:3000 folio:dev` works end-to-end
+- [ ] `scripts/build.ts`: builds web → copies dist to server/public → runs `bun build --compile` — *no `scripts/` directory; `build:binary` script is inline in root `package.json`. Either move to script or accept inline.*
+- [ ] Verify single binary runs and serves both API and static React — *script exists but no record of an end-to-end binary run. Verify in Phase 1 smoke E2E.*
+- [x] Dockerfile (multi-stage, alpine final) — *at repo root, not under `docker/`. Functionally equivalent.*
+- [ ] `docker build -t folio:dev .` succeeds — *Dockerfile written but no record of a successful build. Verify in Phase 1.*
+- [ ] `docker run -e FOLIO_MASTER_KEY=... -v ./data:/data -p 3000:3000 folio:dev` works end-to-end — *blocked on the above; verify in Phase 1.*
 
 ### Phase 0 acceptance
 
-- [ ] Fresh `git clone` → `bun install` → `bun dev` works
-- [ ] Sign up, log in, log out flows complete
-- [ ] Create workspace + project + AI key persists
-- [ ] Single binary built and verified
-- [ ] Docker image built and verified
-- [ ] Commit: `phase-0: complete`
+- [x] Fresh `git clone` → `bun install` → `bun dev` works *(README documents the flow; trusting it)*
+- [x] Sign up, log in, log out flows complete *(register/login/logout/me + magic flow all implemented)*
+- [ ] Create workspace + project + AI key persists — *API supports it; no UI yet. Lands in Phase 1.*
+- [ ] Single binary built and verified — *script exists, not verified end-to-end.*
+- [ ] Docker image built and verified — *Dockerfile exists, not verified end-to-end.*
+- [ ] Commit: `phase-0: complete` — *not declarable until the unticked boxes above are resolved. Phase 0 is "scaffolded" not "complete" per the README.*
+
+> **Phase 0 honest status:** ~70% done. The backend foundation (auth, schema, AI-key encryption) is real. The frontend UI for workspaces / projects / settings is not built. Migrations need to be generated. The single binary + Docker build are scripted but not verified. The remaining work folds naturally into Phase 0.5 (Design System) and Phase 1 (Core CRUD).
+
+---
+
+## Phase 0.5 — Design System (Half-week)
+
+**Goal:** Implement the visual design system spec'd in `docs/superpowers/specs/2026-05-11-design-system-design.md`. Tokens, primitives, shell components, theme switching, dev catalog. Every subsequent phase consumes this.
+
+**Acceptance criteria (full list in spec §14).** All of these must be true:
+
+- [ ] `apps/web/src/styles/tokens.css` exists with all values from spec §5, light + dark.
+- [ ] `tailwind.config.ts` maps every token to a semantic utility name; no raw hex appears in any feature file.
+- [ ] Geist + Geist Mono self-hosted in `apps/web/public/fonts/`; `@font-face` declarations in `fonts.css`.
+- [ ] Hard `<button>` reset shipped (background / border / outline / box-shadow / appearance all zeroed) so no chunky pill buttons appear.
+- [ ] Bespoke primitives in `components/ui/`: `Button`, `IconButton`, `Pill`, `Badge`, `Chip`, `Avatar`, `Kbd`. Each renders correctly in both themes with working `:focus-visible`.
+- [ ] shadcn primitives installed and themed via Tailwind tokens: `Dialog`, `Sheet`, `Popover`, `Command`, `Toast`.
+- [ ] Shell components composed in `components/shell/`: `Shell`, `Rail` (expanded + collapsed), `MainFrame`, `RightPanel`, `WorkspaceSwitcher`.
+- [ ] Theme bootstrap snippet in `index.html` prevents first-paint flash.
+- [ ] `localStorage` persistence for theme + rail collapsed/expanded preference.
+- [ ] Dev-only `/dev/design-system` route renders every primitive and the shell in both themes.
+- [ ] Login + home pages re-styled to consume the new tokens (sanity check existing scaffold against the system).
+- [ ] Lighthouse accessibility audit on `/dev/design-system` passes ≥ 95.
+- [ ] Mockups in `.superpowers/brainstorm/` match what the implementation renders.
+- [ ] Commit: `phase-0.5: design system complete`
+
+---
 
 ---
 
