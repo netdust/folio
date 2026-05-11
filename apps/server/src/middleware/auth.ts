@@ -2,6 +2,7 @@ import type { Context, MiddlewareHandler } from 'hono';
 import { getCookie } from 'hono/cookie';
 import { readSession } from '../lib/auth.ts';
 import type { User } from '../db/schema.ts';
+import { HTTPError } from '../lib/http.ts';
 
 export interface AuthContext {
   Variables: {
@@ -23,7 +24,7 @@ export const attachUser: MiddlewareHandler<AuthContext> = async (c, next) => {
 export const requireUser: MiddlewareHandler<AuthContext> = async (c, next) => {
   const user = c.get('user');
   if (!user) {
-    return c.json({ error: 'unauthenticated' }, 401);
+    throw new HTTPError('UNAUTHENTICATED', 'login required', 401);
   }
   return next();
 };

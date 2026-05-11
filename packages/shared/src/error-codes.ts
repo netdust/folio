@@ -12,6 +12,9 @@ export const ErrorCode = {
   INVALID_BODY: 'INVALID_BODY',
   INVALID_FILTER: 'INVALID_FILTER',
   INVALID_STATUS: 'INVALID_STATUS',
+  INVALID_TOKEN: 'INVALID_TOKEN',
+  EMAIL_TAKEN: 'EMAIL_TAKEN',
+  INTERNAL: 'INTERNAL',
 } as const;
 
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];
