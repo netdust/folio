@@ -292,3 +292,24 @@ test('GET respects limit and returns nextCursor', async () => {
   expect(body.data).toHaveLength(2);
   expect(typeof body.nextCursor).toBe('string');
 });
+
+test('GET /documents/:slug.md returns raw markdown with frontmatter', async () => {
+  const { app, seed } = await makeTestApp();
+  await app.request(path, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      type: 'work_item', title: 'Round Trip',
+      frontmatter: { priority: 'high', tag: 'a' },
+    }),
+  });
+  const res = await app.request(`${path}/round-trip.md`, {
+    headers: { Cookie: seed.sessionCookie },
+  });
+  expect(res.status).toBe(200);
+  expect(res.headers.get('content-type')).toMatch(/text\/markdown/);
+  const text = await res.text();
+  expect(text).toMatch(/^---\n/);
+  expect(text).toMatch(/title: Round Trip/);
+  expect(text).toMatch(/priority: high/);
+});

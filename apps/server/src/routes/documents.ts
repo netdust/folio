@@ -12,7 +12,7 @@ import { db } from '../db/client.ts';
 import { documents, statuses } from '../db/schema.ts';
 import { jsonOk, HTTPError } from '../lib/http.ts';
 import { emitEvent } from '../lib/events.ts';
-import { parseMarkdown } from '../lib/frontmatter.ts';
+import { parseMarkdown, serializeMarkdown } from '../lib/frontmatter.ts';
 import { compileFilterToWhere } from '../lib/filter-to-drizzle.ts';
 import { slugUniqueInDocuments } from '../lib/slug-unique.ts';
 import { type AuthContext, getUser } from '../middleware/auth.ts';
@@ -182,6 +182,27 @@ documentsRoute.get('/', async (c) => {
   const nextCursor = hasMore && last ? encodeCursor(last.updatedAt.getTime(), last.id) : null;
 
   return c.json({ data: page, nextCursor });
+});
+
+documentsRoute.get('/:slugMd{[^/]+\\.md}', async (c) => {
+  const p = getProject(c);
+  const slugMd = c.req.param('slugMd');
+  const slug = slugMd.slice(0, -3);
+  const row = await db.query.documents.findFirst({
+    where: and(eq(documents.projectId, p.id), eq(documents.slug, slug)),
+  });
+  if (!row) throw new HTTPError('DOCUMENT_NOT_FOUND', `document "${slug}" not found`, 404);
+
+  const fm: Record<string, unknown> = {
+    type: row.type,
+    title: row.title,
+    ...(row.status ? { status: row.status } : {}),
+    ...row.frontmatter,
+  };
+  const md = serializeMarkdown({ frontmatter: fm, body: row.body });
+  c.header('Content-Type', 'text/markdown; charset=utf-8');
+  c.header('Content-Disposition', `inline; filename="${slug}.md"`);
+  return c.body(md);
 });
 
 documentsRoute.get('/:slug', async (c) => {
