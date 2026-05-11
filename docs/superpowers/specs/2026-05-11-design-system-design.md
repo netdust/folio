@@ -79,7 +79,7 @@ apps/web/src/
 │   │   └── toast.tsx         # shadcn (toaster + Toast primitive)
 │   └── shell/
 │       ├── shell.tsx         # Three-zone layout container
-│       ├── rail.tsx          # Left icon rail (64px / 200px expanded)
+│       ├── rail.tsx          # Left nav rail (200px default / 64px collapsed)
 │       ├── main-frame.tsx    # Header + tabs + toolbar + content slot
 │       ├── right-panel.tsx   # 320px collapsible panel + tabs (Context/Events/AI)
 │       └── workspace-switcher.tsx
@@ -299,26 +299,30 @@ All three children: `bg-content`, `rounded-xl`, `shadow-surface`. No borders.
 
 ### 7.1 Rail
 
-Default 64px collapsed icon rail. User preference toggles to 200px expanded (icon + label, persisted to localStorage).
+**Default 200px expanded rail (icon + label).** User preference toggles to 64px collapsed (icons only), persisted to localStorage. The expanded default is intentional: labels make the rail self-teaching, and 200px is still narrow enough that the main work area dominates.
 
 Contents top to bottom:
-1. **F logo mark** — 30×30, `bg-primary`, `text-primary-fg`, `rounded-md`, weight 600 -02em tracking.
-2. **Workspace shortcut** — W avatar (24×24, `rounded-md`, `bg-primary`). Click → workspace switcher popover (see §7.4). The avatar shows the first letter of the active workspace's name.
-3. **Divider** — hairline 28px wide centered.
+1. **F logo mark** — 30×30, `bg-primary`, `text-primary-fg`, `rounded-md`, weight 600 -0.02em tracking. In expanded mode: "Folio" wordmark sits next to the mark in `text-fg` 13px/500.
+2. **Workspace shortcut** — W avatar (24×24, `rounded-md`, `bg-primary`). In expanded mode: workspace name (13px/500) next to the avatar. Click → workspace switcher popover (see §7.4).
+3. **Divider** — hairline, full-width in expanded mode (28px centered in collapsed).
 4. **Views section** — `[Home, Work items, Board, Wiki, Activity]`. Phase 1 lights up Work items + Board + Wiki. Home + Activity are placeholders until later phases.
 5. **Divider**
-6. **Tools section** — `[⌘K search]`.
+6. **Tools section** — `[⌘K Search]`. In expanded mode: keyboard hint `⌘K` shows on the right side of the row.
 7. **Spacer** — `flex: 1`.
 8. **Account section** — `[Settings, User avatar]`.
 
-Each icon button: 34×34, `rounded-md`. States:
+**Nav item rows** in expanded mode are 36px tall, `rounded-md`, padding `8px 12px`. Structure: `[icon 18×18] [label 13px/500]` (and optionally a keyboard hint on the right for search and similar). Icon size is 18×18 in expanded mode for legibility next to the 13px label.
+
+**Icon button** in collapsed (64px) mode: 40×40, `rounded-md`. Icon 16×16 inside.
+
+States (both modes):
 - Default: `color: var(--color-fg-3)`, transparent bg.
 - Hover: `bg: var(--color-card)`, `color: var(--color-fg-2)`.
-- Active: `bg: rgba(0,0,0,0.10)` (light) / `rgba(255,255,255,0.10)` (dark), `color: var(--color-fg)`.
+- Active: `bg: rgba(0,0,0,0.06)` (light) / `rgba(255,255,255,0.08)` (dark), `color: var(--color-fg)`. Background is subtle — a wash, not a chunky pill.
 
-Tooltip on hover (`Popover` from shadcn, ~120ms delay), showing the label and Cmd-K shortcut where applicable. Tooltip suppressed when the rail is expanded.
+Tooltip on hover only in collapsed mode (`Popover` from shadcn, ~120ms delay), showing the label and any keyboard shortcut. No tooltips in expanded mode — labels are already visible.
 
-Icon set: Lucide SVG, inline. 16×16 stroke 1.75, `linecap: round`, `linejoin: round`. No icon library installed beyond pulling the SVGs we use.
+Icon set: Lucide SVG, inline. **Stroke 1.5** (slightly lighter than Lucide default 2 — keeps icons feeling minimal alongside thin Geist letterforms), `linecap: round`, `linejoin: round`. Icon size: 18×18 in expanded mode, 16×16 in collapsed.
 
 ### 7.2 Main frame
 
@@ -450,7 +454,7 @@ Toasts overlay the shell including dialogs. They are for acknowledging actions t
 
 | Breakpoint | Behavior |
 |---|---|
-| ≥1280px | Full shell. Rail collapsed default. Right panel honors per-view default. |
+| ≥1280px | Full shell. Rail expanded (200px) default. Right panel honors per-view default. |
 | 1024–1279px | Full shell. Right panel forces closed; toggle still works. |
 | 768–1023px | Rail collapses to a top bar (64px). Right panel becomes a slideover-over-content (Sheet from the right). |
 | <768px | Single column. Rail → bottom tab bar (5 primary destinations). Right panel → full-screen Sheet. |
@@ -461,7 +465,7 @@ Mobile is "passable, not optimized" — v1 ships the desktop and tablet layouts 
 
 These are intentional v1.0 limits, not bugs:
 
-1. **No drag-to-resize panels.** Rail is 64px or 200px; right panel is 320px; main takes the rest. To widen the main area, collapse the right panel. Resize handles are ~150 lines + a settings store + breakpoint edge cases. Revisit in v1.1 if real users ask.
+1. **No drag-to-resize panels.** Rail is 200px (default) or 64px (collapsed); right panel is 320px; main takes the rest. To widen the main area, collapse the rail and/or the right panel. Resize handles are ~150 lines + a settings store + breakpoint edge cases. Revisit in v1.1 if real users ask.
 2. **No multi-document tab bar.** Each click on a document replaces whatever was open in the slideover. Cmd-K + browser history (Esc to close, ← to go back) is the navigation pattern. Matches Linear.
 3. **Workspace switcher requires learning the W avatar is clickable.** It is not labeled in collapsed-rail mode. Tooltip and Cmd-K reinforce. The expanded 200px rail makes it explicit. Accepted: Linear teaches this in five minutes.
 
