@@ -8,6 +8,7 @@ import { attachUser, requireUser, type AuthContext } from './middleware/auth.ts'
 import { resolveWorkspace, type ScopeContext } from './middleware/scope.ts';
 import { auth } from './routes/auth.ts';
 import { healthRoute } from './routes/health.ts';
+import { projectsRoute } from './routes/projects.ts';
 import { settingsRoute } from './routes/settings.ts';
 import { tokensRoute } from './routes/tokens.ts';
 import { workspacesRoute } from './routes/workspaces.ts';
@@ -30,6 +31,7 @@ const wScope = new Hono<AuthContext & ScopeContext>();
 wScope.use('*', requireUser, resolveWorkspace);
 wScope.route('/settings', settingsRoute);
 wScope.route('/tokens', tokensRoute);
+wScope.route('/projects', projectsRoute);
 // pScope (documents/statuses/fields/views) mounted in later tasks
 
 v1.route('/w/:wslug', wScope);
