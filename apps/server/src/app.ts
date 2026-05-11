@@ -7,6 +7,7 @@ import { registerErrorHandler } from './lib/http.ts';
 import { attachUser, requireUser, type AuthContext } from './middleware/auth.ts';
 import { resolveProject, resolveWorkspace, type ScopeContext } from './middleware/scope.ts';
 import { auth } from './routes/auth.ts';
+import { fieldsRoute } from './routes/fields.ts';
 import { healthRoute } from './routes/health.ts';
 import { projectsRoute } from './routes/projects.ts';
 import { settingsRoute } from './routes/settings.ts';
@@ -37,7 +38,8 @@ wScope.route('/projects', projectsRoute);
 const pScope = new Hono<AuthContext & ScopeContext>();
 pScope.use('*', resolveProject);
 pScope.route('/statuses', statusesRoute);
-// pScope (documents/fields/views) further routes mounted in later tasks
+pScope.route('/fields', fieldsRoute);
+// pScope (documents/views) further routes mounted in later tasks
 
 wScope.route('/p/:pslug', pScope);
 
