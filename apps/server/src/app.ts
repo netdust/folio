@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { logger } from 'hono/logger';
 import { serveStatic } from 'hono/bun';
 import { env } from './env.ts';
+import { onError } from './middleware/error.ts';
 import { attachUser, type AuthContext } from './middleware/auth.ts';
 import { auth } from './routes/auth.ts';
 import { settingsRoute } from './routes/settings.ts';
@@ -10,6 +11,7 @@ import { tokensRoute } from './routes/tokens.ts';
 import { workspacesRoute } from './routes/workspaces.ts';
 
 export const app = new Hono<AuthContext>();
+app.onError(onError);
 
 app.use('*', logger());
 app.use('*', attachUser);
