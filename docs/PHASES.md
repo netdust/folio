@@ -41,8 +41,8 @@ For full context on any decision: `@docs/FOLIO-BRIEFING.md`. For the operating m
 
 ### Workspaces & projects
 
-- [ ] `routes/workspaces.ts`: CRUD, slug uniqueness, owner membership on create — *GET list + POST create only; PATCH/DELETE/individual GET missing. Complete in Phase 1.*
-- [ ] `routes/projects.ts`: CRUD scoped to workspace, slug unique per workspace — *projects nested inside `workspaces.ts`, scoped by workspace ID not slug. Split out and re-scope by slug in Phase 1.*
+- [x] `routes/workspaces.ts`: CRUD, slug uniqueness, owner membership on create *(slug-scoped CRUD landed in Phase 1 backend; GET/POST collection + GET/PATCH/DELETE :wslug)*
+- [x] `routes/projects.ts`: CRUD scoped to workspace, slug unique per workspace *(split out of workspaces.ts; slug-scoped via `/w/:wslug/projects/:pslug` in Phase 1 backend)*
 - [x] AI key encryption end-to-end: encrypted before insert, never returned — *implemented in `routes/settings.ts` rather than as a PATCH on workspaces.*
 
 ### Frontend foundation
@@ -108,20 +108,20 @@ For full context on any decision: `@docs/FOLIO-BRIEFING.md`. For the operating m
 
 ### Documents API
 
-- [ ] `routes/documents.ts`: list (with filters), get, create, patch, delete
-- [ ] Accept both JSON body and `Content-Type: text/markdown` for create/patch
-- [ ] `lib/md.ts`: parse/serialize markdown ↔ `{ frontmatter, body }` via gray-matter
-- [ ] `lib/slug.ts`: title → slug with per-project dedup
-- [ ] `GET /api/v1/.../documents/:slug.md` returns raw MD with frontmatter
-- [ ] Validate `status` against project statuses table for work items
+- [x] `routes/documents.ts`: list (with filters), get, create, patch, delete
+- [x] Accept both JSON body and `Content-Type: text/markdown` for create/patch
+- [x] `lib/md.ts`: parse/serialize markdown ↔ `{ frontmatter, body }` *(lives at `apps/server/src/lib/frontmatter.ts`, uses `yaml` not gray-matter)*
+- [x] `lib/slug.ts`: title → slug with per-project dedup *(pure slugify in `packages/shared/src/slug.ts`; dedup in `apps/server/src/lib/slug-unique.ts`)*
+- [x] `GET /api/v1/.../documents/:slug.md` returns raw MD with frontmatter
+- [x] Validate `status` against project statuses table for work items
 
 ### Statuses, fields, views
 
-- [ ] `routes/statuses.ts`: CRUD; auto-seed 4 defaults on project create (`Backlog`, `Todo`, `In Progress`, `Done`)
-- [ ] `routes/fields.ts`: CRUD for type-pinned frontmatter fields
-- [ ] `lib/field-infer.ts`: inference rules from FOLIO-BRIEFING.md §7
-- [ ] `routes/views.ts`: CRUD; auto-seed two defaults per project (All work items, Board)
-- [ ] `lib/filter-compile.ts`: ViewConfig → Drizzle where()
+- [x] `routes/statuses.ts`: CRUD; auto-seed 4 defaults on project create (`Backlog`, `Todo`, `In Progress`, `Done`)
+- [x] `routes/fields.ts`: CRUD for type-pinned frontmatter fields
+- [x] `lib/field-infer.ts`: inference rules from FOLIO-BRIEFING.md §7 *(in `packages/shared/src/field-infer.ts`)*
+- [x] `routes/views.ts`: CRUD; auto-seed two defaults per project (All work items, Board)
+- [x] `lib/filter-compile.ts`: ViewConfig → Drizzle where() *(AST in `packages/shared/src/filter-compile.ts`; adapter in `apps/server/src/lib/filter-to-drizzle.ts`)*
 
 ### Frontend — list view
 
@@ -195,11 +195,37 @@ For full context on any decision: `@docs/FOLIO-BRIEFING.md`. For the operating m
 - [ ] Implement v1 tool set from FOLIO-BRIEFING.md §9
 - [ ] Token auth via the same `Bearer` scheme as REST
 - [ ] Tool output includes both structured JSON and a `markdown` field for convenience
+- [ ] Tool: `get_folio_workflow(section?: 'task-pickup' | 'task-execution' | 'task-finalization' | 'delegation')` returns markdown guidance — agents call this once at session start instead of being pre-loaded with workflow rules (borrowed from Backlog.md's `get_backlog_instructions`)
+
+### Agents-as-documents (surface only — no runner yet)
+
+Agents are first-class entities inside Folio, modelled as documents. No new tables — `type: 'agent'` reuses the documents table; one API token is auto-minted per agent and stored in frontmatter. The runner that actually executes agent tasks lands in Phase 3 (it depends on the AI provider abstraction).
+
+- [ ] `documents.type` accepts `'agent'` alongside `'work_item'` and `'page'`
+- [ ] Agent frontmatter shape (validated by Zod):
+  - `system_prompt: string` (also lives in body if author prefers — body wins)
+  - `model: string` (e.g. `claude-sonnet-4-6`)
+  - `provider: 'anthropic'|'openai'|'openrouter'|'ollama'`
+  - `tools: string[]` (MCP tool names the agent is allowed to call; subset of v1 tool set)
+  - `max_delegation_depth: number` (default `2`, hard cap `5`)
+  - `max_tokens_per_run: number` (default `10000`, hard cap `100000`) — runner aborts with `## Error: budget_exceeded` if exceeded mid-run; protects BYOK customers from runaway spend
+  - `requires_approval: boolean` (default `false`) — if true, the agent runs in two phases: writes `## Plan` and stops, then resumes only when a human writes `## Approved` (any value) in the body. Use for high-stakes agents.
+  - `api_token_id: string` (server-managed; never editable by user)
+  - `parent_agent: string | null` (slug of the agent that spawned this one, if any)
+- [ ] On agent create: auto-mint an API token scoped to the agent's `tools`, store `api_token_id` in frontmatter; never expose the raw token in API responses after creation
+- [ ] On agent delete or archive: revoke the linked token in the same transaction
+- [ ] Assignment convention: `frontmatter.assignee` of the form `agent:<slug>` means "this work item is assigned to an agent in the same project"
+- [ ] New event kind `agent.task.assigned` emitted when a work item's `assignee` transitions to an `agent:*` value (covers create-with-assignee and update-to-assignee)
+- [ ] Delegation guard: when an agent (actor_type `agent`) creates a work item with `assignee: agent:*`, server rejects if `parent_agent` chain would exceed the parent's `max_delegation_depth`
+- [ ] UI: "Agents" tab in project nav — a default view filtered to `type: 'agent'`
+- [ ] UI: agent slideover renders `system_prompt` in the body editor (same Milkdown surface as any other document — editing the agent = writing markdown)
+- [ ] UI: inline assignee picker on work items lists both humans (memberships) and agents (documents with `type: 'agent'` in the same project)
 
 ### Documentation
 
 - [ ] `docs/API.md`: REST reference, generated from route + JSDoc or hand-written
 - [ ] `docs/MCP.md`: tool reference with example invocations
+- [ ] `docs/AGENTS.md`: how the agent-document model works — schema, token minting, delegation rules, the `agent.task.assigned` event contract (the runner that consumes it ships in Phase 3)
 - [ ] Update root `README.md` with the agent integration story
 
 ### Phase 2 acceptance
@@ -208,13 +234,16 @@ For full context on any decision: `@docs/FOLIO-BRIEFING.md`. For the operating m
 - [ ] Connect with an MCP client (Claude Desktop, Paperclip), list workspaces, create a document
 - [ ] Open SSE stream, edit a document in the UI, see the event arrive
 - [ ] Revoking a token immediately blocks subsequent requests
+- [ ] Create an agent document via UI; its API token is auto-minted and the agent appears in the work-item assignee picker
+- [ ] Assigning a work item to `agent:<slug>` emits one `agent.task.assigned` event visible on the SSE stream
+- [ ] Deleting an agent revokes its token immediately (subsequent requests with that token fail)
 - [ ] Commit: `phase-2: complete`
 
 ---
 
-## Phase 3 — AI in UI (Week 4)
+## Phase 3 — AI in UI + Agent runner (Week 4)
 
-**Goal:** Slash commands work in the body editor. AI settings UI lets the user configure a provider and validate the key. Streaming responses feel snappy.
+**Goal:** Slash commands work in the body editor. AI settings UI lets the user configure a provider and validate the key. Streaming responses feel snappy. The Phase 2 agent-document surface gains a runner that actually executes assigned tasks.
 
 ### Provider abstraction
 
@@ -238,6 +267,22 @@ For full context on any decision: `@docs/FOLIO-BRIEFING.md`. For the operating m
 - [ ] `/link <query>` — fuzzy search documents by title, inserts `[[slug]]` on select
 - [ ] `/ai <prompt>` — open-ended completion with current body as context
 
+### Agent runner
+
+Consumes the Phase 2 surface (`type: 'agent'` documents, auto-minted tokens, `agent.task.assigned` events) and the provider abstraction above. Runs in-process — no sidecar.
+
+- [ ] `lib/agent-runner.ts`: subscribes to `agent.task.assigned` via the SSE pub/sub
+- [ ] On event: load the agent document, build the system prompt from frontmatter + body, call the workspace AI with the agent's allowed MCP tools as function calls
+- [ ] Tool gating: runner exposes only the subset of MCP tools listed in the agent document's `tools` frontmatter — not the full v1 tool set (per-agent surface, not per-token)
+- [ ] Tool calls dispatch back into Folio via the agent's own API token (same auth path as an external agent — no privileged shortcut)
+- [ ] Result-reporting convention: runner patches the work item body under named sections — `## Plan` (intent), `## Notes` (append-only progress), `## Result` (final summary), `## Error` (failure reason). Writing `## Error` flips `status` to `failed`. No comments table, no updates table — the body is the ledger.
+- [ ] Token budget enforcement: runner tracks cumulative input + output tokens against the agent's `max_tokens_per_run`. On overrun, the runner stops mid-call, writes `## Error: budget_exceeded` with the actual token count, and emits `agent.task.failed` with reason `budget_exceeded`.
+- [ ] Approval gate: if the agent's `requires_approval` is true, the runner stops after writing `## Plan` and emits `agent.task.awaiting_approval`. On the next `document.updated` event for that work item, the runner checks for an `## Approved` section in the body — if present, resumes; if absent, stays paused. Rejection = human deletes the work item or reassigns away from the agent.
+- [ ] On completion: patch the work item's body per the convention above, optionally transition `status` if the agent emits one in its final message
+- [ ] Delegation: if the agent creates a child work item with `assignee: agent:*`, the child fires a fresh `agent.task.assigned` and the runner re-enters; depth enforced at write time per the Phase 2 guard
+- [ ] No AI key configured → assigning a work item to an agent stays in the assigned state but emits an `agent.task.failed` event with reason `no_ai_key`; UI shows a banner on the work item
+- [ ] Every agent invocation emits an `ai.action` event tagged with `actor_type: 'agent'` and `actor_id: <agent_document_id>`
+
 ### Audit
 
 - [ ] Every AI call emits an `ai.action` event with input/output token counts (no content stored)
@@ -248,6 +293,9 @@ For full context on any decision: `@docs/FOLIO-BRIEFING.md`. For the operating m
 - [ ] `/decompose` creates linked child documents
 - [ ] `/link` inserts wiki-links correctly
 - [ ] Removing the key disables all slash commands gracefully
+- [ ] Create an agent with `tools: ['create_document', 'update_document']`, assign a work item to it, see the body patched by the agent within a few seconds
+- [ ] Agent A creates a child work item assigned to agent B; B runs and patches its own work item (one level of delegation works end-to-end)
+- [ ] An agent attempting to delegate past `max_delegation_depth` gets rejected and emits `agent.task.failed` with reason `depth_exceeded`
 - [ ] Commit: `phase-3: complete`
 
 ---
