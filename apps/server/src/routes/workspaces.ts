@@ -1,18 +1,23 @@
+import { slugify } from '@folio/shared';
 import { zValidator } from '@hono/zod-validator';
-import { and, eq } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import { db } from '../db/client.ts';
-import { memberships, projects, workspaces } from '../db/schema.ts';
-import { slugify } from '@folio/shared';
+import { memberships, workspaces } from '../db/schema.ts';
+import { emitEvent } from '../lib/events.ts';
+import { HTTPError, jsonOk } from '../lib/http.ts';
+import { slugUniqueInWorkspaces } from '../lib/slug-unique.ts';
 import { type AuthContext, getUser, requireUser } from '../middleware/auth.ts';
+import { type ScopeContext, getRole, getWorkspace, resolveWorkspace } from '../middleware/scope.ts';
 
-const workspacesRoute = new Hono<AuthContext>();
+const workspacesRoute = new Hono<AuthContext & ScopeContext>();
 
 workspacesRoute.use('*', requireUser);
 
-// List workspaces the user belongs to
+// --- collection ---
+
 workspacesRoute.get('/', async (c) => {
   const user = getUser(c);
   const rows = await db
@@ -20,61 +25,85 @@ workspacesRoute.get('/', async (c) => {
     .from(memberships)
     .innerJoin(workspaces, eq(workspaces.id, memberships.workspaceId))
     .where(eq(memberships.userId, user.id));
-  return c.json({ workspaces: rows });
+  return jsonOk(c, rows);
 });
 
-// Create a workspace (creator becomes owner)
 workspacesRoute.post(
   '/',
-  zValidator('json', z.object({ name: z.string().min(1).max(80) })),
-  async (c) => {
-    const user = getUser(c);
-    const { name } = c.req.valid('json');
-    const id = nanoid();
-    const slug = `${slugify(name)}-${id.slice(0, 6)}`;
-    await db.insert(workspaces).values({ id, slug, name });
-    await db.insert(memberships).values({ workspaceId: id, userId: user.id, role: 'owner' });
-    return c.json({ workspace: { id, slug, name } });
-  },
-);
-
-// List projects in a workspace
-workspacesRoute.get('/:workspaceId/projects', async (c) => {
-  const user = getUser(c);
-  const workspaceId = c.req.param('workspaceId');
-  // membership check
-  const m = await db.query.memberships.findFirst({
-    where: and(eq(memberships.workspaceId, workspaceId), eq(memberships.userId, user.id)),
-  });
-  if (!m) return c.json({ error: 'not a member' }, 403);
-
-  const rows = await db.query.projects.findMany({
-    where: eq(projects.workspaceId, workspaceId),
-  });
-  return c.json({ projects: rows });
-});
-
-// Create a project
-workspacesRoute.post(
-  '/:workspaceId/projects',
   zValidator(
     'json',
-    z.object({ name: z.string().min(1).max(80), icon: z.string().optional() }),
+    z.object({
+      name: z.string().min(1).max(80),
+      slug: z
+        .string()
+        .min(1)
+        .max(64)
+        .regex(/^[a-z0-9-]+$/)
+        .optional(),
+    }),
   ),
   async (c) => {
     const user = getUser(c);
-    const workspaceId = c.req.param('workspaceId');
-    const m = await db.query.memberships.findFirst({
-      where: and(eq(memberships.workspaceId, workspaceId), eq(memberships.userId, user.id)),
-    });
-    if (!m) return c.json({ error: 'not a member' }, 403);
-
-    const { name, icon } = c.req.valid('json');
+    const { name, slug: explicit } = c.req.valid('json');
     const id = nanoid();
-    const slug = slugify(name);
-    await db.insert(projects).values({ id, workspaceId, slug, name, icon });
-    return c.json({ project: { id, workspaceId, slug, name, icon } });
+
+    const baseSlug = explicit ?? slugify(name);
+    let slug = baseSlug;
+    if (explicit) {
+      const existing = await db.query.workspaces.findFirst({
+        where: eq(workspaces.slug, explicit),
+      });
+      if (existing) throw new HTTPError('SLUG_CONFLICT', `slug "${explicit}" is taken`, 409);
+    } else {
+      slug = await slugUniqueInWorkspaces(db, baseSlug || 'workspace');
+    }
+
+    await db.transaction(async (tx) => {
+      await tx.insert(workspaces).values({ id, slug, name });
+      await tx.insert(memberships).values({ workspaceId: id, userId: user.id, role: 'owner' });
+      await emitEvent(tx, {
+        workspaceId: id,
+        kind: 'workspace.created',
+        actor: user.id,
+        payload: { slug, name },
+      });
+    });
+
+    return jsonOk(c, { workspace: { id, slug, name } }, 201);
   },
 );
+
+// --- item (slug-scoped via resolveWorkspace) ---
+
+const item = new Hono<AuthContext & ScopeContext>();
+item.use('*', resolveWorkspace);
+
+item.get('/', (c) => jsonOk(c, { workspace: getWorkspace(c), role: getRole(c) }));
+
+item.patch('/', zValidator('json', z.object({ name: z.string().min(1).max(80) })), async (c) => {
+  if (getRole(c) !== 'owner') throw new HTTPError('FORBIDDEN', 'owner only', 403);
+  const ws = getWorkspace(c);
+  const { name } = c.req.valid('json');
+  const user = getUser(c);
+  await db.transaction(async (tx) => {
+    await tx.update(workspaces).set({ name }).where(eq(workspaces.id, ws.id));
+    await emitEvent(tx, {
+      workspaceId: ws.id,
+      kind: 'workspace.updated',
+      actor: user.id,
+      payload: { changes: ['name'] },
+    });
+  });
+  return jsonOk(c, { workspace: { ...ws, name } });
+});
+
+item.delete('/', async (c) => {
+  if (getRole(c) !== 'owner') throw new HTTPError('FORBIDDEN', 'owner only', 403);
+  const ws = getWorkspace(c);
+  await db.delete(workspaces).where(eq(workspaces.id, ws.id));
+  return c.body(null, 204);
+});
+
+workspacesRoute.route('/:wslug', item);
 
 export { workspacesRoute };
