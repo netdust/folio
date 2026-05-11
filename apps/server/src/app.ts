@@ -6,6 +6,7 @@ import { env } from './env.ts';
 import { onError } from './middleware/error.ts';
 import { attachUser, type AuthContext } from './middleware/auth.ts';
 import { auth } from './routes/auth.ts';
+import { healthRoute } from './routes/health.ts';
 import { settingsRoute } from './routes/settings.ts';
 import { documentsRoute, mcpRoute, viewsRoute } from './routes/stubs.ts';
 import { tokensRoute } from './routes/tokens.ts';
@@ -32,12 +33,12 @@ api.route('/documents', documentsRoute);
 api.route('/views', viewsRoute);
 api.route('/settings', settingsRoute);
 api.route('/tokens', tokensRoute);
-api.get('/health', (c) => c.json({ status: 'ok', version: '0.0.1' }));
 
 app.route('/api', api);
 
 // --- MCP (agent-facing surface) ---
 app.route('/mcp', mcpRoute);
+app.route('/', healthRoute);
 
 // --- Static SPA ---
 if (env.NODE_ENV === 'production') {
