@@ -1,6 +1,7 @@
 import type { QueryClient } from '@tanstack/react-query';
 import { Outlet, createRootRouteWithContext } from '@tanstack/react-router';
 import { TanStackRouterDevtools } from '@tanstack/router-devtools';
+import { Toaster } from '../components/ui/toast.tsx';
 
 interface RouterContext {
   queryClient: QueryClient;
@@ -16,6 +17,7 @@ function RootLayout() {
       <main className="mx-auto max-w-5xl px-8 py-12">
         <Outlet />
       </main>
+      <Toaster />
       {import.meta.env.DEV ? <TanStackRouterDevtools /> : null}
     </div>
   );
