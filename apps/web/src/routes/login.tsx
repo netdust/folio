@@ -11,13 +11,13 @@ function LoginPage() {
   const [mode, setMode] = useState<'password' | 'magic'>('password');
   return (
     <section className="mx-auto max-w-md">
-      <h1 className="font-display text-4xl tracking-tight">Sign in</h1>
+      <h1 className="text-3xl font-medium tracking-tight">Sign in</h1>
       <div className="mt-8 flex gap-2 text-sm">
         <button
           type="button"
           onClick={() => setMode('password')}
-          className={`rounded px-3 py-1.5 ${
-            mode === 'password' ? 'bg-paper-200 dark:bg-paper-800' : 'text-muted'
+          className={`rounded-sm px-3 py-1.5 ${
+            mode === 'password' ? 'bg-card text-fg' : 'text-fg-2 hover:bg-card'
           }`}
         >
           Password
@@ -25,8 +25,8 @@ function LoginPage() {
         <button
           type="button"
           onClick={() => setMode('magic')}
-          className={`rounded px-3 py-1.5 ${
-            mode === 'magic' ? 'bg-paper-200 dark:bg-paper-800' : 'text-muted'
+          className={`rounded-sm px-3 py-1.5 ${
+            mode === 'magic' ? 'bg-card text-fg' : 'text-fg-2 hover:bg-card'
           }`}
         >
           Magic link
@@ -45,7 +45,6 @@ function PasswordForm() {
     mutationFn: () => api.post('/api/auth/login', { email, password }),
     onSuccess: () => navigate({ to: '/' }),
   });
-
   return (
     <div className="space-y-4">
       <Field label="Email" type="email" value={email} onChange={setEmail} />
@@ -54,12 +53,12 @@ function PasswordForm() {
         type="button"
         onClick={() => m.mutate()}
         disabled={m.isPending}
-        className="w-full rounded bg-paper-900 px-4 py-2.5 text-sm text-paper-50 dark:bg-paper-100 dark:text-paper-900"
+        className="w-full rounded-pill bg-primary px-4 py-2.5 text-sm font-medium text-primary-fg hover:opacity-90 transition-opacity duration-fast disabled:opacity-50"
       >
         {m.isPending ? 'Signing in…' : 'Sign in'}
       </button>
       {m.error ? (
-        <p className="text-sm text-red-600">
+        <p className="text-sm text-danger">
           {m.error instanceof ApiError ? 'Invalid credentials.' : 'Something went wrong.'}
         </p>
       ) : null}
@@ -72,7 +71,6 @@ function MagicForm() {
   const m = useMutation({
     mutationFn: () => api.post('/api/auth/magic/request', { email }),
   });
-
   return (
     <div className="space-y-4">
       <Field label="Email" type="email" value={email} onChange={setEmail} />
@@ -80,12 +78,12 @@ function MagicForm() {
         type="button"
         onClick={() => m.mutate()}
         disabled={m.isPending}
-        className="w-full rounded bg-paper-900 px-4 py-2.5 text-sm text-paper-50 dark:bg-paper-100 dark:text-paper-900"
+        className="w-full rounded-pill bg-primary px-4 py-2.5 text-sm font-medium text-primary-fg hover:opacity-90 transition-opacity duration-fast disabled:opacity-50"
       >
         {m.isPending ? 'Sending…' : 'Email me a link'}
       </button>
       {m.isSuccess ? (
-        <p className="text-sm text-muted">
+        <p className="text-sm text-fg-2">
           Check your inbox. In dev, the link is printed to the server console.
         </p>
       ) : null}
@@ -101,12 +99,14 @@ function Field(props: {
 }) {
   return (
     <label className="block">
-      <span className="block text-xs uppercase tracking-wide text-muted">{props.label}</span>
+      <span className="block text-xs font-semibold uppercase tracking-wide text-fg-3">
+        {props.label}
+      </span>
       <input
         type={props.type}
         value={props.value}
         onChange={(e) => props.onChange(e.target.value)}
-        className="mt-1 w-full rounded border border-default bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-current"
+        className="mt-1 w-full rounded-sm border border-border-light bg-transparent px-3 py-2 text-sm"
       />
     </label>
   );
