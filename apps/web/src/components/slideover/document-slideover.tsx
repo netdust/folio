@@ -89,9 +89,9 @@ function SlideoverBody({ wslug, pslug, slug }: { wslug: string; pslug: string; s
       <FrontmatterForm
         type={doc.type}
         status={doc.status}
-        statuses={Array.isArray(statuses) ? statuses : []}
+        statuses={statuses ?? []}
         frontmatter={doc.frontmatter}
-        pinnedFields={Array.isArray(fields) ? fields : []}
+        pinnedFields={fields ?? []}
         onStatusCommit={(next) => void onPatch({ status: next }, ['status'])}
         onFrontmatterCommit={(p) => void onPatch({ frontmatter: p }, Object.keys(p))}
         pendingKeys={pendingKeys}

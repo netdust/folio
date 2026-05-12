@@ -266,6 +266,7 @@ function UrlField({
         target="_blank"
         rel="noreferrer"
         onClick={(e) => {
+          if (e.metaKey || e.ctrlKey) return;
           e.preventDefault();
           setEditing(true);
         }}

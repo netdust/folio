@@ -29,8 +29,9 @@ export function FrontmatterForm({
 
   // Sort keys: pinned (by `order`) first, then inferred (alphabetical).
   const inferredKeys = Object.keys(frontmatter).filter((k) => !pinnedByKey.has(k)).sort();
+  const sortedPinned = [...pinnedFields].sort((a, b) => a.order - b.order);
   const orderedKeys = [
-    ...pinnedFields.map((f) => f.key),
+    ...sortedPinned.map((f) => f.key),
     ...inferredKeys.filter((k) => k in frontmatter),
   ];
 
