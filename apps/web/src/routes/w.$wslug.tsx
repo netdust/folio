@@ -1,5 +1,10 @@
-import { createFileRoute, Outlet, useNavigate } from '@tanstack/react-router';
-import { useWorkspace } from '../lib/api/workspaces.ts';
+import { createFileRoute, Outlet, useNavigate, useRouterState } from '@tanstack/react-router';
+import { useMemo } from 'react';
+import { useMe } from '../lib/api/auth.ts';
+import { useProjects } from '../lib/api/projects.ts';
+import { useWorkspace, useWorkspaces } from '../lib/api/workspaces.ts';
+import { Shell } from '../components/shell/shell.tsx';
+import { Rail, type NavItem } from '../components/shell/rail.tsx';
 
 export const Route = createFileRoute('/w/$wslug')({
   component: WorkspaceLayout,
@@ -7,51 +12,56 @@ export const Route = createFileRoute('/w/$wslug')({
 
 function WorkspaceLayout() {
   const { wslug } = Route.useParams();
-  const { data: workspace, isPending, isError } = useWorkspace(wslug);
   const navigate = useNavigate();
+  const routerState = useRouterState();
+  const { data: me } = useMe();
+  const { data: workspace, isLoading } = useWorkspace(wslug);
+  const { data: workspaces } = useWorkspaces();
+  const { data: projects } = useProjects(wslug);
 
-  if (isPending) {
-    return (
-      <div className="flex h-screen items-center justify-center bg-shell">
-        <p className="text-fg-3">Loading…</p>
-      </div>
-    );
-  }
+  const currentPath = routerState.location.pathname;
 
-  if (isError || !workspace) {
-    return (
-      <div className="flex h-screen items-center justify-center bg-shell">
-        <p className="text-danger">Workspace not found.</p>
-      </div>
-    );
-  }
+  const primary: NavItem[] = useMemo(() => {
+    if (!projects) return [];
+    return projects.map((p) => ({
+      id: p.id,
+      label: p.name,
+      icon: <span className="font-mono text-[11px]">{p.icon ?? '·'}</span>,
+      active: currentPath.startsWith(`/w/${wslug}/p/${p.slug}`),
+      onClick: () =>
+        navigate({
+          to: '/w/$wslug/p/$pslug/work-items',
+          params: { wslug, pslug: p.slug },
+        }),
+    }));
+  }, [projects, currentPath, wslug, navigate]);
+
+  if (isLoading) return <div className="p-8 text-fg-3">Loading workspace…</div>;
+  if (!workspace) return <div className="p-8 text-danger">Workspace not found.</div>;
+
+  // Brand mark = first character of the instance name; workspace mark = first char of workspace name.
+  const brandMark = 'F';
+  const workspaceMark = workspace.name.charAt(0).toUpperCase() || 'W';
+  const userName = me?.user.name ?? 'You';
+
+  const onSwitchWorkspace = () => {
+    // Phase 1: just go to / so the workspace picker is visible.
+    // Cmd-K "Switch workspace" (Task 28) is the real surface.
+    if (!workspaces || workspaces.length <= 1) return;
+    void navigate({ to: '/' });
+  };
 
   return (
-    <div className="flex h-screen bg-shell">
-      {/* Rail placeholder — wired in Task 8 */}
-      <aside className="flex w-[200px] flex-col rounded-xl bg-content shadow-surface px-3 py-3.5 m-1.5">
-        <div className="flex items-center gap-2.5 px-2 mb-2">
-          <span className="inline-grid h-7 w-7 place-items-center rounded bg-primary text-primary-fg text-sm font-semibold tracking-tight">
-            F
-          </span>
-          <span className="text-sm font-medium tracking-tight">Folio</span>
-        </div>
-        <button
-          type="button"
-          onClick={() => void navigate({ to: '/' })}
-          className="flex items-center gap-2.5 rounded-md px-2 py-1.5 mb-2 hover:bg-card transition-colors duration-fast"
-        >
-          <span className="inline-grid h-[22px] w-[22px] place-items-center rounded bg-primary text-primary-fg text-[11px] font-semibold">
-            {workspace.name.slice(0, 2).toUpperCase()}
-          </span>
-          <span className="text-sm font-medium flex-1 text-left truncate">{workspace.name}</span>
-          <span className="text-fg-3 text-[11px]">▾</span>
-        </button>
-      </aside>
-      {/* Main content */}
-      <div className="flex-1 min-w-0 overflow-auto">
-        <Outlet />
-      </div>
-    </div>
+    <Shell
+      rail={
+        <Rail
+          brand={{ mark: brandMark, label: 'Folio' }}
+          workspace={{ mark: workspaceMark, name: workspace.name, onSwitch: onSwitchWorkspace }}
+          primary={primary}
+          user={{ name: userName }}
+        />
+      }
+      main={<Outlet />}
+    />
   );
 }

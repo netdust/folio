@@ -14,6 +14,11 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as WWslugRouteImport } from './routes/w.$wslug'
 import { Route as DevDesignSystemRouteImport } from './routes/dev.design-system'
 import { Route as WWslugIndexRouteImport } from './routes/w.$wslug.index'
+import { Route as WWslugPPslugRouteImport } from './routes/w.$wslug.p.$pslug'
+import { Route as WWslugPPslugIndexRouteImport } from './routes/w.$wslug.p.$pslug.index'
+import { Route as WWslugPPslugWorkItemsRouteImport } from './routes/w.$wslug.p.$pslug.work-items'
+import { Route as WWslugPPslugWikiRouteImport } from './routes/w.$wslug.p.$pslug.wiki'
+import { Route as WWslugPPslugBoardRouteImport } from './routes/w.$wslug.p.$pslug.board'
 
 const LoginRoute = LoginRouteImport.update({
   id: '/login',
@@ -40,6 +45,31 @@ const WWslugIndexRoute = WWslugIndexRouteImport.update({
   path: '/',
   getParentRoute: () => WWslugRoute,
 } as any)
+const WWslugPPslugRoute = WWslugPPslugRouteImport.update({
+  id: '/p/$pslug',
+  path: '/p/$pslug',
+  getParentRoute: () => WWslugRoute,
+} as any)
+const WWslugPPslugIndexRoute = WWslugPPslugIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => WWslugPPslugRoute,
+} as any)
+const WWslugPPslugWorkItemsRoute = WWslugPPslugWorkItemsRouteImport.update({
+  id: '/work-items',
+  path: '/work-items',
+  getParentRoute: () => WWslugPPslugRoute,
+} as any)
+const WWslugPPslugWikiRoute = WWslugPPslugWikiRouteImport.update({
+  id: '/wiki',
+  path: '/wiki',
+  getParentRoute: () => WWslugPPslugRoute,
+} as any)
+const WWslugPPslugBoardRoute = WWslugPPslugBoardRouteImport.update({
+  id: '/board',
+  path: '/board',
+  getParentRoute: () => WWslugPPslugRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -47,12 +77,21 @@ export interface FileRoutesByFullPath {
   '/dev/design-system': typeof DevDesignSystemRoute
   '/w/$wslug': typeof WWslugRouteWithChildren
   '/w/$wslug/': typeof WWslugIndexRoute
+  '/w/$wslug/p/$pslug': typeof WWslugPPslugRouteWithChildren
+  '/w/$wslug/p/$pslug/board': typeof WWslugPPslugBoardRoute
+  '/w/$wslug/p/$pslug/wiki': typeof WWslugPPslugWikiRoute
+  '/w/$wslug/p/$pslug/work-items': typeof WWslugPPslugWorkItemsRoute
+  '/w/$wslug/p/$pslug/': typeof WWslugPPslugIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
   '/dev/design-system': typeof DevDesignSystemRoute
   '/w/$wslug': typeof WWslugIndexRoute
+  '/w/$wslug/p/$pslug/board': typeof WWslugPPslugBoardRoute
+  '/w/$wslug/p/$pslug/wiki': typeof WWslugPPslugWikiRoute
+  '/w/$wslug/p/$pslug/work-items': typeof WWslugPPslugWorkItemsRoute
+  '/w/$wslug/p/$pslug': typeof WWslugPPslugIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -61,12 +100,35 @@ export interface FileRoutesById {
   '/dev/design-system': typeof DevDesignSystemRoute
   '/w/$wslug': typeof WWslugRouteWithChildren
   '/w/$wslug/': typeof WWslugIndexRoute
+  '/w/$wslug/p/$pslug': typeof WWslugPPslugRouteWithChildren
+  '/w/$wslug/p/$pslug/board': typeof WWslugPPslugBoardRoute
+  '/w/$wslug/p/$pslug/wiki': typeof WWslugPPslugWikiRoute
+  '/w/$wslug/p/$pslug/work-items': typeof WWslugPPslugWorkItemsRoute
+  '/w/$wslug/p/$pslug/': typeof WWslugPPslugIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/login' | '/dev/design-system' | '/w/$wslug' | '/w/$wslug/'
+  fullPaths:
+    | '/'
+    | '/login'
+    | '/dev/design-system'
+    | '/w/$wslug'
+    | '/w/$wslug/'
+    | '/w/$wslug/p/$pslug'
+    | '/w/$wslug/p/$pslug/board'
+    | '/w/$wslug/p/$pslug/wiki'
+    | '/w/$wslug/p/$pslug/work-items'
+    | '/w/$wslug/p/$pslug/'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/login' | '/dev/design-system' | '/w/$wslug'
+  to:
+    | '/'
+    | '/login'
+    | '/dev/design-system'
+    | '/w/$wslug'
+    | '/w/$wslug/p/$pslug/board'
+    | '/w/$wslug/p/$pslug/wiki'
+    | '/w/$wslug/p/$pslug/work-items'
+    | '/w/$wslug/p/$pslug'
   id:
     | '__root__'
     | '/'
@@ -74,6 +136,11 @@ export interface FileRouteTypes {
     | '/dev/design-system'
     | '/w/$wslug'
     | '/w/$wslug/'
+    | '/w/$wslug/p/$pslug'
+    | '/w/$wslug/p/$pslug/board'
+    | '/w/$wslug/p/$pslug/wiki'
+    | '/w/$wslug/p/$pslug/work-items'
+    | '/w/$wslug/p/$pslug/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -120,15 +187,70 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof WWslugIndexRouteImport
       parentRoute: typeof WWslugRoute
     }
+    '/w/$wslug/p/$pslug': {
+      id: '/w/$wslug/p/$pslug'
+      path: '/p/$pslug'
+      fullPath: '/w/$wslug/p/$pslug'
+      preLoaderRoute: typeof WWslugPPslugRouteImport
+      parentRoute: typeof WWslugRoute
+    }
+    '/w/$wslug/p/$pslug/': {
+      id: '/w/$wslug/p/$pslug/'
+      path: '/'
+      fullPath: '/w/$wslug/p/$pslug/'
+      preLoaderRoute: typeof WWslugPPslugIndexRouteImport
+      parentRoute: typeof WWslugPPslugRoute
+    }
+    '/w/$wslug/p/$pslug/work-items': {
+      id: '/w/$wslug/p/$pslug/work-items'
+      path: '/work-items'
+      fullPath: '/w/$wslug/p/$pslug/work-items'
+      preLoaderRoute: typeof WWslugPPslugWorkItemsRouteImport
+      parentRoute: typeof WWslugPPslugRoute
+    }
+    '/w/$wslug/p/$pslug/wiki': {
+      id: '/w/$wslug/p/$pslug/wiki'
+      path: '/wiki'
+      fullPath: '/w/$wslug/p/$pslug/wiki'
+      preLoaderRoute: typeof WWslugPPslugWikiRouteImport
+      parentRoute: typeof WWslugPPslugRoute
+    }
+    '/w/$wslug/p/$pslug/board': {
+      id: '/w/$wslug/p/$pslug/board'
+      path: '/board'
+      fullPath: '/w/$wslug/p/$pslug/board'
+      preLoaderRoute: typeof WWslugPPslugBoardRouteImport
+      parentRoute: typeof WWslugPPslugRoute
+    }
   }
 }
 
+interface WWslugPPslugRouteChildren {
+  WWslugPPslugBoardRoute: typeof WWslugPPslugBoardRoute
+  WWslugPPslugWikiRoute: typeof WWslugPPslugWikiRoute
+  WWslugPPslugWorkItemsRoute: typeof WWslugPPslugWorkItemsRoute
+  WWslugPPslugIndexRoute: typeof WWslugPPslugIndexRoute
+}
+
+const WWslugPPslugRouteChildren: WWslugPPslugRouteChildren = {
+  WWslugPPslugBoardRoute: WWslugPPslugBoardRoute,
+  WWslugPPslugWikiRoute: WWslugPPslugWikiRoute,
+  WWslugPPslugWorkItemsRoute: WWslugPPslugWorkItemsRoute,
+  WWslugPPslugIndexRoute: WWslugPPslugIndexRoute,
+}
+
+const WWslugPPslugRouteWithChildren = WWslugPPslugRoute._addFileChildren(
+  WWslugPPslugRouteChildren,
+)
+
 interface WWslugRouteChildren {
   WWslugIndexRoute: typeof WWslugIndexRoute
+  WWslugPPslugRoute: typeof WWslugPPslugRouteWithChildren
 }
 
 const WWslugRouteChildren: WWslugRouteChildren = {
   WWslugIndexRoute: WWslugIndexRoute,
+  WWslugPPslugRoute: WWslugPPslugRouteWithChildren,
 }
 
 const WWslugRouteWithChildren =

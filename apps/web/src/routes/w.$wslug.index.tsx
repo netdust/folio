@@ -1,14 +1,19 @@
 import { createFileRoute } from '@tanstack/react-router';
+import { useState } from 'react';
+import { ProjectPicker } from '../components/project-picker.tsx';
+import { ProjectCreate } from '../components/onboarding/project-create.tsx';
 
 export const Route = createFileRoute('/w/$wslug/')({
-  component: WorkspaceIndexPage,
+  component: WorkspaceIndex,
 });
 
-function WorkspaceIndexPage() {
-  // Project picker — implemented in Task 8.
+function WorkspaceIndex() {
+  const { wslug } = Route.useParams();
+  const [createOpen, setCreateOpen] = useState(false);
   return (
-    <div className="flex h-full items-center justify-center">
-      <p className="text-fg-3">Select or create a project.</p>
-    </div>
+    <>
+      <ProjectPicker wslug={wslug} onCreate={() => setCreateOpen(true)} />
+      <ProjectCreate wslug={wslug} open={createOpen} onOpenChange={setCreateOpen} />
+    </>
   );
 }
