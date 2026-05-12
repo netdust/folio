@@ -5,6 +5,7 @@ type Category = 'backlog' | 'unstarted' | 'started' | 'completed' | 'cancelled';
 interface PillProps {
   category: Category;
   label: string;
+  variant?: 'dot' | 'solid';
   className?: string;
 }
 
@@ -24,7 +25,29 @@ const textColor: Record<Category, string> = {
   cancelled: 'text-fg-3 line-through',
 };
 
-export function Pill({ category, label, className }: PillProps) {
+const solidBg: Record<Category, string> = {
+  backlog:   'bg-card',
+  unstarted: 'bg-bg-info',
+  started:   'bg-bg-warning',
+  completed: 'bg-bg-success',
+  cancelled: 'bg-card',
+};
+
+export function Pill({ category, label, variant = 'dot', className }: PillProps) {
+  if (variant === 'solid') {
+    return (
+      <span
+        className={cn(
+          'inline-flex items-center rounded-pill px-2 py-0.5 text-xs',
+          solidBg[category],
+          textColor[category],
+          className,
+        )}
+      >
+        {label}
+      </span>
+    );
+  }
   return (
     <span className={cn('inline-flex items-center gap-1.5 text-xs', textColor[category], className)}>
       <span className={cn('h-[7px] w-[7px] rounded-full', dotColor[category])} />
