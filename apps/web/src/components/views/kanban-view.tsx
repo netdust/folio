@@ -1,13 +1,16 @@
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { useMemo, useState } from 'react';
 import { DndContext, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
+import { Plus } from 'lucide-react';
 import { toast } from 'sonner';
-import { useDocuments, useUpdateDocument, type DocumentSummary } from '../../lib/api/documents.ts';
+import { useCreateDocument, useDocuments, useUpdateDocument, type DocumentSummary } from '../../lib/api/documents.ts';
 import { useStatuses } from '../../lib/api/statuses.ts';
 import { formatApiError } from '../../lib/api/index.ts';
 import { KanbanColumn } from '../kanban/kanban-column.tsx';
 import { KanbanCard } from '../kanban/kanban-card.tsx';
+import { Icon } from '../ui/icon.tsx';
 import { EmptyState } from './empty-state.tsx';
+import { KanbanSkeleton } from './kanban-skeleton.tsx';
 
 interface Props {
   wslug: string;
@@ -24,11 +27,22 @@ export function KanbanView({ wslug, pslug }: Props) {
   const { data: page, isLoading, error } = useDocuments(wslug, pslug, listParams);
   const { data: statuses } = useStatuses(wslug, pslug);
   const update = useUpdateDocument(wslug, pslug, listParams);
+  const create = useCreateDocument(wslug, pslug);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
   const [pendingSlugs, setPendingSlugs] = useState<Set<string>>(new Set());
 
   const openDoc = (slug: string) => {
     void navigate({ to: '.', search: { ...search, doc: slug }, replace: false });
+  };
+
+  const onCreateInColumn = async (statusKey: string) => {
+    try {
+      const created = await create.mutateAsync({ type: 'work_item', title: 'Untitled' });
+      await update.mutateAsync({ slug: created.slug, patch: { status: statusKey } });
+      void navigate({ to: '.', search: { ...search, doc: created.slug }, replace: false });
+    } catch (err) {
+      toast.error(formatApiError(err));
+    }
   };
 
   const onDragEnd = async (event: DragEndEvent) => {
@@ -64,7 +78,7 @@ export function KanbanView({ wslug, pslug }: Props) {
     return m;
   }, [statuses, page]);
 
-  if (isLoading) return <div className="p-4 text-fg-3">Loading…</div>;
+  if (isLoading) return <KanbanSkeleton />;
   if (error) return <div className="p-4 text-danger">Failed to load board.</div>;
   if (!statuses || statuses.length === 0) {
     return (
@@ -78,11 +92,23 @@ export function KanbanView({ wslug, pslug }: Props) {
   return (
     <DndContext sensors={sensors} onDragEnd={onDragEnd}>
       <div className="flex h-full gap-3 overflow-x-auto px-[22px] py-2">
-        {statuses.map((s) => (
+        {statuses.map((s, idx) => (
           <KanbanColumn key={s.key} status={s} count={grouped.get(s.key)?.length ?? 0}>
             {(grouped.get(s.key) ?? []).map((doc) => (
               <KanbanCard key={doc.id} doc={doc} onOpen={openDoc} isPending={pendingSlugs.has(doc.slug)} />
             ))}
+            {idx === 0 ? (
+              <button
+                type="button"
+                aria-label={`New work item in ${s.name}`}
+                onClick={() => onCreateInColumn(s.key)}
+                disabled={create.isPending}
+                className="flex items-center justify-center gap-1.5 rounded-md border border-dashed border-border-light bg-shell px-3 py-2 text-xs text-fg-3 hover:bg-card disabled:opacity-50"
+              >
+                <Icon icon={Plus} size={14} />
+                New work item
+              </button>
+            ) : null}
           </KanbanColumn>
         ))}
         {/* Cards without a status get rendered in a parking lot — Phase 1 keeps them visible. */}

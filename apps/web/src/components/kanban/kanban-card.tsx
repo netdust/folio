@@ -1,5 +1,7 @@
 import { useDraggable } from '@dnd-kit/core';
+import { Flag, Calendar } from 'lucide-react';
 import { cn } from '../ui/cn.ts';
+import { Icon } from '../ui/icon.tsx';
 import type { DocumentSummary } from '../../lib/api/documents.ts';
 
 interface Props {
@@ -43,10 +45,20 @@ export function KanbanCard({ doc, onOpen, isPending }: Props) {
       )}
     >
       <div className="font-medium">{doc.title}</div>
-      {priority || due ? (
+      {(priority || due) ? (
         <div className="mt-1 flex items-center gap-2 text-[11px] text-fg-3">
-          {priority ? <span className="rounded-sm bg-card px-1 py-0.5">{priority}</span> : null}
-          {due ? <span className="font-mono">{due}</span> : null}
+          {priority ? (
+            <span className="inline-flex items-center gap-1 rounded-sm bg-card px-1 py-0.5">
+              <Icon icon={Flag} size={14} />
+              {priority}
+            </span>
+          ) : null}
+          {due ? (
+            <span className="inline-flex items-center gap-1 font-mono">
+              <Icon icon={Calendar} size={14} />
+              {due}
+            </span>
+          ) : null}
         </div>
       ) : null}
     </div>
