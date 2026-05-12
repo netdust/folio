@@ -19,7 +19,16 @@ describe('useWorkspaces', () => {
       new Response(
         JSON.stringify({
           data: [
-            { id: 'w1', slug: 'main', name: 'Main', aiProvider: null, aiModel: null, keyConfigured: false, createdAt: '2026-01-01', updatedAt: '2026-01-01' },
+            {
+              workspace: {
+                id: 'w1',
+                slug: 'main',
+                name: 'Main',
+                createdAt: '2026-01-01',
+                updatedAt: '2026-01-01',
+              },
+              role: 'owner',
+            },
           ],
         }),
         { status: 200, headers: { 'content-type': 'application/json' } },
@@ -31,11 +40,12 @@ describe('useWorkspaces', () => {
     vi.restoreAllMocks();
   });
 
-  it('fetches and unwraps the data envelope', async () => {
+  it('fetches and unwraps the data envelope as membership rows', async () => {
     const { result } = renderHook(() => useWorkspaces(), { wrapper: wrap(qc) });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(result.current.data).toHaveLength(1);
-    expect(result.current.data?.[0]?.slug).toBe('main');
+    expect(result.current.data?.[0]?.workspace.slug).toBe('main');
+    expect(result.current.data?.[0]?.role).toBe('owner');
   });
 
   it('uses the expected query key', () => {

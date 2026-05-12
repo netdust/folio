@@ -8,3 +8,4 @@ export * from './documents.ts';
 export * from './statuses.ts';
 export * from './fields.ts';
 export * from './views.ts';
+export * from './settings.ts';
