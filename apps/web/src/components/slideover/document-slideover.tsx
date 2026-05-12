@@ -9,6 +9,8 @@ import { useFields } from '../../lib/api/fields.ts';
 import { formatApiError } from '../../lib/api/index.ts';
 import { FrontmatterForm } from './frontmatter-form.tsx';
 import { BodyEditor } from './body-editor.tsx';
+import { ModeToggle, type EditorMode } from './mode-toggle.tsx';
+import { RawMdEditor } from './raw-md-editor.tsx';
 
 interface Props {
   wslug: string;
@@ -61,6 +63,7 @@ function SlideoverBody({ wslug, pslug, slug }: { wslug: string; pslug: string; s
   );
   const update = useUpdateDocument(wslug, pslug, listParams);
   const [pendingKeys, setPendingKeys] = useState<Set<string>>(new Set());
+  const [mode, setMode] = useState<EditorMode>('rich');
 
   if (isLoading) return <div className="text-fg-3">Loading document…</div>;
   if (error || !doc) return <div className="text-danger">Failed to load document.</div>;
@@ -86,8 +89,11 @@ function SlideoverBody({ wslug, pslug, slug }: { wslug: string; pslug: string; s
 
   return (
     <article className="flex h-full flex-col">
-      <header className="flex-shrink-0 space-y-4 pb-4">
-        <div className="font-mono text-[11px] text-fg-3">/{doc.slug}</div>
+      <header className="flex-shrink-0 space-y-3 pb-4">
+        <div className="flex items-center justify-between">
+          <div className="font-mono text-[11px] text-fg-3">/{doc.slug}</div>
+          <ModeToggle mode={mode} onChange={setMode} />
+        </div>
         <FrontmatterForm
           type={doc.type}
           status={doc.status}
@@ -99,12 +105,20 @@ function SlideoverBody({ wslug, pslug, slug }: { wslug: string; pslug: string; s
           pendingKeys={pendingKeys}
         />
       </header>
-      <div className="flex-1 min-h-0 overflow-auto border-t border-border-light pt-4">
-        <BodyEditor
-          key={doc.slug}
-          value={doc.body}
-          onChange={(body) => onPatch({ body }, ['body'])}
-        />
+      <div className="flex-1 min-h-0 overflow-hidden border-t border-border-light pt-4">
+        {mode === 'rich' ? (
+          <BodyEditor
+            key={`rich-${doc.slug}`}
+            value={doc.body}
+            onChange={(body) => onPatch({ body }, ['body'])}
+          />
+        ) : (
+          <RawMdEditor
+            key={`raw-${doc.slug}`}
+            value={doc.body}
+            onChange={(body) => onPatch({ body }, ['body'])}
+          />
+        )}
       </div>
     </article>
   );
