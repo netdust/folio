@@ -1,13 +1,32 @@
 import type { QueryClient } from '@tanstack/react-query';
-import { Outlet, createRootRouteWithContext } from '@tanstack/react-router';
+import { Outlet, createRootRouteWithContext, redirect } from '@tanstack/react-router';
 import { TanStackRouterDevtools } from '@tanstack/router-devtools';
 import { Toaster } from '../components/ui/toast.tsx';
+import { ApiError, client } from '../lib/api/client.ts';
+import { authKeys, type SessionUser } from '../lib/api/auth.ts';
 
 interface RouterContext {
   queryClient: QueryClient;
 }
 
+const PUBLIC_PATHS = new Set(['/login', '/magic']);
+
 export const Route = createRootRouteWithContext<RouterContext>()({
+  beforeLoad: async ({ context, location }) => {
+    if (PUBLIC_PATHS.has(location.pathname)) return;
+    try {
+      await context.queryClient.fetchQuery({
+        queryKey: authKeys.me,
+        queryFn: () => client.get<{ user: SessionUser }>('/api/v1/auth/me'),
+        staleTime: 60_000,
+      });
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        throw redirect({ to: '/login', search: { redirect: location.href } });
+      }
+      throw err;
+    }
+  },
   component: RootLayout,
 });
 
