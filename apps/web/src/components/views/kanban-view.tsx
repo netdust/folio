@@ -1,7 +1,10 @@
 import { useNavigate, useSearch } from '@tanstack/react-router';
-import { useMemo } from 'react';
-import { useDocuments, type DocumentSummary } from '../../lib/api/documents.ts';
+import { useMemo, useState } from 'react';
+import { DndContext, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
+import { toast } from 'sonner';
+import { useDocuments, useUpdateDocument, type DocumentSummary } from '../../lib/api/documents.ts';
 import { useStatuses } from '../../lib/api/statuses.ts';
+import { formatApiError } from '../../lib/api/index.ts';
 import { KanbanColumn } from '../kanban/kanban-column.tsx';
 import { KanbanCard } from '../kanban/kanban-card.tsx';
 import { EmptyState } from './empty-state.tsx';
@@ -20,9 +23,33 @@ export function KanbanView({ wslug, pslug }: Props) {
   );
   const { data: page, isLoading, error } = useDocuments(wslug, pslug, listParams);
   const { data: statuses } = useStatuses(wslug, pslug);
+  const update = useUpdateDocument(wslug, pslug, listParams);
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
+  const [pendingSlugs, setPendingSlugs] = useState<Set<string>>(new Set());
 
   const openDoc = (slug: string) => {
     void navigate({ to: '.', search: { ...search, doc: slug }, replace: false });
+  };
+
+  const onDragEnd = async (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over) return;
+    const overId = String(over.id);
+    if (!overId.startsWith('col-')) return;
+    const newStatus = overId.slice('col-'.length);
+    const data = active.data.current as { slug?: string; currentStatus?: string | null } | undefined;
+    const slug = data?.slug;
+    const currentStatus = data?.currentStatus;
+    if (!slug) return;
+    if (currentStatus === newStatus) return;
+    setPendingSlugs((p) => new Set(p).add(slug));
+    try {
+      await update.mutateAsync({ slug, patch: { status: newStatus } });
+    } catch (err) {
+      toast.error(formatApiError(err));
+    } finally {
+      setPendingSlugs((p) => { const n = new Set(p); n.delete(slug); return n; });
+    }
   };
 
   const grouped = useMemo(() => {
@@ -49,27 +76,29 @@ export function KanbanView({ wslug, pslug }: Props) {
   }
 
   return (
-    <div className="flex h-full gap-3 overflow-x-auto px-[22px] py-2">
-      {statuses.map((s) => (
-        <KanbanColumn key={s.key} status={s} count={grouped.get(s.key)?.length ?? 0}>
-          {(grouped.get(s.key) ?? []).map((doc) => (
-            <KanbanCard key={doc.id} doc={doc} onOpen={openDoc} />
-          ))}
-        </KanbanColumn>
-      ))}
-      {/* Cards without a status get rendered in a parking lot — Phase 1 keeps them visible. */}
-      {(grouped.get('__no_status__')?.length ?? 0) > 0 ? (
-        <div className="flex w-[280px] shrink-0 flex-col">
-          <div className="mb-2 flex items-center gap-2 px-1 text-sm font-medium text-fg-3">
-            No status
-          </div>
-          <div className="flex min-h-[200px] flex-col gap-2 rounded-md p-1">
-            {grouped.get('__no_status__')!.map((doc) => (
-              <KanbanCard key={doc.id} doc={doc} onOpen={openDoc} />
+    <DndContext sensors={sensors} onDragEnd={onDragEnd}>
+      <div className="flex h-full gap-3 overflow-x-auto px-[22px] py-2">
+        {statuses.map((s) => (
+          <KanbanColumn key={s.key} status={s} count={grouped.get(s.key)?.length ?? 0}>
+            {(grouped.get(s.key) ?? []).map((doc) => (
+              <KanbanCard key={doc.id} doc={doc} onOpen={openDoc} isPending={pendingSlugs.has(doc.slug)} />
             ))}
+          </KanbanColumn>
+        ))}
+        {/* Cards without a status get rendered in a parking lot — Phase 1 keeps them visible. */}
+        {(grouped.get('__no_status__')?.length ?? 0) > 0 ? (
+          <div className="flex w-[280px] shrink-0 flex-col">
+            <div className="mb-2 flex items-center gap-2 px-1 text-sm font-medium text-fg-3">
+              No status
+            </div>
+            <div className="flex min-h-[200px] flex-col gap-2 rounded-md p-1">
+              {grouped.get('__no_status__')!.map((doc) => (
+                <KanbanCard key={doc.id} doc={doc} onOpen={openDoc} isPending={pendingSlugs.has(doc.slug)} />
+              ))}
+            </div>
           </div>
-        </div>
-      ) : null}
-    </div>
+        ) : null}
+      </div>
+    </DndContext>
   );
 }
