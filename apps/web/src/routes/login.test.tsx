@@ -66,4 +66,78 @@ describe('LoginPage (password mode)', () => {
       expect(postCall).toBeDefined();
     });
   });
+
+  it('Magic mode: Enter on email submits the magic-link request', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (url, init) => {
+      const u = String(url);
+      if (u.endsWith('/api/v1/auth/magic-link/request') && init?.method === 'POST') {
+        return new Response(JSON.stringify({ data: { ok: true } }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { queryClient, router } = setup();
+    render(<QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider>);
+
+    await userEvent.click(await screen.findByRole('button', { name: /Magic link/i }));
+    await userEvent.type(screen.getByLabelText(/Email/i), 'a@b.c{Enter}');
+
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find(
+        ([url, init]) => String(url).endsWith('/api/v1/auth/magic-link/request') && init?.method === 'POST',
+      );
+      expect(call).toBeDefined();
+    });
+  });
+
+  it('Sign up mode: Enter submits, creates user, navigates to /', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (url, init) => {
+      const u = String(url);
+      if (u.endsWith('/api/v1/auth/register') && init?.method === 'POST') {
+        return new Response(
+          JSON.stringify({ data: { user: { id: 'u1', email: 'new@x.y', name: 'New' } } }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { queryClient, router } = setup();
+    render(<QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider>);
+
+    await userEvent.click(await screen.findByRole('button', { name: /Sign up/i }));
+    await userEvent.type(screen.getByLabelText(/Name/i), 'New');
+    await userEvent.type(screen.getByLabelText(/Email/i), 'new@x.y');
+    await userEvent.type(screen.getByLabelText(/Password/i), 'pw12345678{Enter}');
+
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find(
+        ([url, init]) => String(url).endsWith('/api/v1/auth/register') && init?.method === 'POST',
+      );
+      expect(call).toBeDefined();
+      const body = JSON.parse(String(call![1]!.body));
+      expect(body).toEqual({ name: 'New', email: 'new@x.y', password: 'pw12345678' });
+    });
+
+    await waitFor(() => expect(screen.getByText('home')).toBeInTheDocument());
+  });
+
+  it('switching modes preserves typed email', async () => {
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () =>
+      new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } }),
+    ));
+
+    const { queryClient, router } = setup();
+    render(<QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider>);
+
+    const emailInput = await screen.findByLabelText(/Email/i);
+    await userEvent.type(emailInput, 'persist@me.io');
+    await userEvent.click(screen.getByRole('button', { name: /Magic link/i }));
+    const magicEmail = screen.getByLabelText(/Email/i) as HTMLInputElement;
+    expect(magicEmail.value).toBe('persist@me.io');
+  });
 });
