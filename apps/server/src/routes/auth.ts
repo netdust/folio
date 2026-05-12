@@ -92,7 +92,7 @@ auth.get('/me', requireUser, (c) => {
 // --- Magic link ---
 
 auth.post(
-  '/magic/request',
+  '/magic-link/request',
   zValidator('json', z.object({ email: z.string().email() })),
   async (c) => {
     const { email } = c.req.valid('json');
@@ -109,7 +109,7 @@ auth.post(
   },
 );
 
-auth.get('/magic/verify', async (c) => {
+auth.get('/magic-link/consume', async (c) => {
   const token = c.req.query('token');
   if (!token) throw new HTTPError('INVALID_BODY', 'missing token', 400);
 

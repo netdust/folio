@@ -19,7 +19,7 @@ function getTransporter(): nodemailer.Transporter | null {
 }
 
 export async function sendMagicLink(email: string, token: string): Promise<void> {
-  const url = `${env.PUBLIC_URL}/auth/magic/verify?token=${token}`;
+  const url = `${env.PUBLIC_URL}/auth/magic-link/consume?token=${token}`;
   const subject = 'Sign in to Folio';
   const text = `Click to sign in to Folio: ${url}\n\nThis link expires in 15 minutes.`;
 
