@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { LucideIcon } from 'lucide-react';
+import { PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { Icon } from '../ui/icon.tsx';
 import { Kbd } from '../ui/kbd.tsx';
 import { cn } from '../ui/cn.ts';
@@ -39,13 +40,13 @@ export function useRailCollapsed(): [boolean, (v: boolean) => void] {
 }
 
 export function Rail({ brand, workspace, primary, tools, account, user }: RailProps) {
-  const [collapsed] = useRailCollapsed();
+  const [collapsed, setCollapsed] = useRailCollapsed();
   return collapsed
-    ? <RailCollapsed brand={brand} workspace={workspace} primary={primary} tools={tools} account={account} user={user} />
-    : <RailExpanded brand={brand} workspace={workspace} primary={primary} tools={tools} account={account} user={user} />;
+    ? <RailCollapsed brand={brand} workspace={workspace} primary={primary} tools={tools} account={account} user={user} onToggle={() => setCollapsed(false)} />
+    : <RailExpanded brand={brand} workspace={workspace} primary={primary} tools={tools} account={account} user={user} onToggle={() => setCollapsed(true)} />;
 }
 
-function RailExpanded({ brand, workspace, primary, tools, account, user }: RailProps) {
+function RailExpanded({ brand, workspace, primary, tools, account, user, onToggle }: RailProps & { onToggle: () => void }) {
   return (
     <aside className="flex w-[200px] flex-col rounded-xl bg-content shadow-surface px-3 py-3.5">
       <div className="flex items-center gap-2.5 px-2 mb-2">
@@ -79,6 +80,18 @@ function RailExpanded({ brand, workspace, primary, tools, account, user }: RailP
 
       {account && account.length > 0 ? <NavList items={account} expanded /> : null}
 
+      <div className="px-2 pb-1.5">
+        <button
+          type="button"
+          aria-label="Collapse rail"
+          onClick={onToggle}
+          className="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-sm text-fg-3 hover:bg-card hover:text-fg-2 transition-colors duration-fast"
+        >
+          <Icon icon={PanelLeftClose} size={16} />
+          <span className="flex-1 text-left">Collapse</span>
+        </button>
+      </div>
+
       <div className="flex items-center gap-2 px-2 pt-1.5">
         <span className="inline-grid h-7 w-7 place-items-center rounded-full bg-primary text-primary-fg text-[11px] font-medium">
           {initials(user.name)}
@@ -89,7 +102,7 @@ function RailExpanded({ brand, workspace, primary, tools, account, user }: RailP
   );
 }
 
-function RailCollapsed({ brand, workspace, primary, tools, account, user }: RailProps) {
+function RailCollapsed({ brand, workspace, primary, tools, account, user, onToggle }: RailProps & { onToggle: () => void }) {
   return (
     <aside className="flex w-16 flex-col items-center rounded-xl bg-content shadow-surface py-3.5">
       <BrandMark>{brand.mark}</BrandMark>
@@ -111,6 +124,15 @@ function RailCollapsed({ brand, workspace, primary, tools, account, user }: Rail
       ) : null}
       <div className="flex-1" />
       {account && account.length > 0 ? <NavList items={account} expanded={false} /> : null}
+      <button
+        type="button"
+        aria-label="Expand rail"
+        onClick={onToggle}
+        title="Expand"
+        className="mt-2 inline-grid h-9 w-9 place-items-center rounded-md text-fg-3 hover:bg-card hover:text-fg-2 transition-colors duration-fast"
+      >
+        <Icon icon={PanelLeftOpen} size={16} />
+      </button>
       <span
         title={user.name}
         className="mt-1.5 inline-grid h-[30px] w-[30px] place-items-center rounded-full bg-primary text-primary-fg text-[11px] font-medium"

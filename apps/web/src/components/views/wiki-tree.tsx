@@ -1,12 +1,11 @@
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { useMemo, useState } from 'react';
 import { DndContext, PointerSensor, useDraggable, useDroppable, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
-import { ChevronDown, ChevronRight, FolderTree, Plus, Loader2 } from 'lucide-react';
+import { ChevronDown, ChevronRight, FolderTree } from 'lucide-react';
 import { toast } from 'sonner';
 import { useDocuments, useCreateDocument, useUpdateDocument } from '../../lib/api/documents.ts';
 import { formatApiError } from '../../lib/api/index.ts';
 import { copyDocumentAsMarkdown } from '../../lib/copy-as-md.ts';
-import { Button } from '../ui/button.tsx';
 import { Icon } from '../ui/icon.tsx';
 import { EmptyState } from './empty-state.tsx';
 import { RowContextMenu } from './row-context-menu.tsx';
@@ -93,13 +92,6 @@ export function WikiTree({ wslug, pslug }: Props) {
 
   return (
     <div className="flex h-full flex-col gap-2 px-[22px] py-2">
-      <div className="flex items-center justify-between">
-        <span className="text-sm text-fg-3">Wiki</span>
-        <Button variant="secondary" onClick={onNewPage} disabled={create.isPending} className="inline-flex items-center gap-1.5">
-          <Icon icon={create.isPending ? Loader2 : Plus} size={14} className={create.isPending ? 'animate-spin' : ''} />
-          {create.isPending ? 'Creating…' : 'New page'}
-        </Button>
-      </div>
       <DndContext sensors={sensors} onDragEnd={onDragEnd}>
         <ul className="flex flex-col">
           {tree.map((node) => (

@@ -1,6 +1,6 @@
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { useMemo, useState } from 'react';
-import { Inbox, Loader2, Plus } from 'lucide-react';
+import { Inbox } from 'lucide-react';
 import { toast } from 'sonner';
 import {
   useDocuments,
@@ -15,7 +15,6 @@ import {
 import { useStatuses } from '../../lib/api/statuses.ts';
 import { useFields } from '../../lib/api/fields.ts';
 import { formatApiError } from '../../lib/api/index.ts';
-import { Button } from '../ui/button.tsx';
 import { Icon } from '../ui/icon.tsx';
 import { FilterBar } from '../filter/filter-bar.tsx';
 import { EmptyState } from './empty-state.tsx';
@@ -115,26 +114,13 @@ export function ListView({ wslug, pslug }: Props) {
 
   return (
     <>
-      <div className="flex items-center justify-between gap-2 px-[22px] py-2">
+      <div className="px-[22px] py-2">
         <FilterBar
           clauses={clauses}
           statuses={statuses ?? []}
           pinnedFields={fields ?? []}
           onChange={onClauseChange}
         />
-        <Button
-          variant="primary"
-          onClick={onCreate}
-          disabled={create.isPending}
-          className="whitespace-nowrap"
-        >
-          <Icon
-            icon={create.isPending ? Loader2 : Plus}
-            size={14}
-            className={create.isPending ? 'animate-spin' : ''}
-          />
-          New work item
-        </Button>
       </div>
       <ListHeader sort={sort} onSort={onSortChange} />
       {isLoading ? <ListSkeleton rows={6} /> : null}
