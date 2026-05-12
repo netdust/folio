@@ -1,5 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { z } from 'zod';
+import { WikiTree } from '../components/views/wiki-tree.tsx';
 
 export const Route = createFileRoute('/w/$wslug/p/$pslug/wiki')({
   validateSearch: z.object({ doc: z.string().optional() }),
@@ -7,5 +8,6 @@ export const Route = createFileRoute('/w/$wslug/p/$pslug/wiki')({
 });
 
 function WikiRoute() {
-  return <div className="p-4 text-fg-3">Wiki tree — built in Task 25.</div>;
+  const { wslug, pslug } = Route.useParams();
+  return <WikiTree wslug={wslug} pslug={pslug} />;
 }
