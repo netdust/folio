@@ -2,7 +2,7 @@
 
 interface WorkspaceCreateProps {
   open: boolean;
-  onClose: () => void;
+  onOpenChange: (open: boolean) => void;
 }
 
 export function WorkspaceCreate(_props: WorkspaceCreateProps) {

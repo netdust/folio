@@ -16,6 +16,7 @@ export function WorkspacePicker({ onCreate }: WorkspacePickerProps) {
       void navigate({
         to: '/w/$wslug',
         params: { wslug: memberships[0]!.workspace.slug },
+        replace: true,
       });
     }
   }, [memberships, navigate]);
@@ -30,9 +31,12 @@ export function WorkspacePicker({ onCreate }: WorkspacePickerProps) {
 
   if (memberships.length === 0) {
     return (
-      <div className="flex flex-col items-center gap-4 py-16 text-center">
-        <p className="text-fg-3">No workspaces yet.</p>
-        <Button variant="primary" size="lg" onClick={onCreate}>
+      <div className="flex flex-col items-center py-16 text-center">
+        <h1 className="text-2xl font-semibold text-fg">Welcome to Folio</h1>
+        <p className="mt-2 text-fg-3">
+          Create your first workspace to start managing work.
+        </p>
+        <Button className="mt-6" variant="primary" size="lg" onClick={onCreate}>
           Create workspace
         </Button>
       </div>

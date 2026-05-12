@@ -12,7 +12,7 @@ function IndexPage() {
   return (
     <>
       <WorkspacePicker onCreate={() => setCreating(true)} />
-      <WorkspaceCreate open={creating} onClose={() => setCreating(false)} />
+      <WorkspaceCreate open={creating} onOpenChange={setCreating} />
     </>
   );
 }
