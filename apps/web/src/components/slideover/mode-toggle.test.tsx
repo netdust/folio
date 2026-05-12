@@ -23,10 +23,6 @@ describe('ModeToggle', () => {
     const onChange = vi.fn();
     render(<ModeToggle mode="rich" onChange={onChange} />);
     await userEvent.click(screen.getByRole('button', { name: /^Edit$/ }));
-    // The component re-fires onChange on every click; assert it's idempotent against the parent.
-    // (Our impl always calls onChange — verify the value matches current mode.)
-    if (onChange.mock.calls.length > 0) {
-      expect(onChange).toHaveBeenCalledWith('rich');
-    }
+    expect(onChange).not.toHaveBeenCalled();
   });
 });

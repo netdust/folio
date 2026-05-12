@@ -13,7 +13,8 @@ export function ModeToggle({ mode, onChange }: Props) {
     <div className="inline-flex items-center gap-0.5 rounded-md border border-border-light bg-shell p-0.5 text-xs">
       <button
         type="button"
-        onClick={() => onChange('rich')}
+        aria-pressed={mode === 'rich'}
+        onClick={() => { if (mode !== 'rich') onChange('rich'); }}
         className={cn(
           'rounded-sm px-2 py-1',
           mode === 'rich' ? 'bg-primary text-primary-fg' : 'text-fg-2 hover:bg-card',
@@ -23,7 +24,8 @@ export function ModeToggle({ mode, onChange }: Props) {
       </button>
       <button
         type="button"
-        onClick={() => onChange('raw')}
+        aria-pressed={mode === 'raw'}
+        onClick={() => { if (mode !== 'raw') onChange('raw'); }}
         className={cn(
           'rounded-sm px-2 py-1',
           mode === 'raw' ? 'bg-primary text-primary-fg' : 'text-fg-2 hover:bg-card',
