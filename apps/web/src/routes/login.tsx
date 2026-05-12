@@ -1,8 +1,7 @@
-import { useMutation } from '@tanstack/react-query';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import { useState } from 'react';
-import { client, ApiError } from '../lib/api/client.ts';
-import { useMagicLinkRequest } from '../lib/api/auth.ts';
+import { ApiError } from '../lib/api/client.ts';
+import { useLogin, useMagicLinkRequest } from '../lib/api/auth.ts';
 
 export const Route = createFileRoute('/login')({
   component: LoginPage,
@@ -42,17 +41,14 @@ function PasswordForm() {
   const navigate = useNavigate();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const m = useMutation({
-    mutationFn: () => client.post<{ user: { id: string; email: string; name: string } }>('/api/auth/login', { email, password }),
-    onSuccess: () => navigate({ to: '/' }),
-  });
+  const m = useLogin();
   return (
     <div className="space-y-4">
       <Field label="Email" type="email" value={email} onChange={setEmail} />
       <Field label="Password" type="password" value={password} onChange={setPassword} />
       <button
         type="button"
-        onClick={() => m.mutate()}
+        onClick={() => m.mutate({ email, password }, { onSuccess: () => navigate({ to: '/' }) })}
         disabled={m.isPending}
         className="w-full rounded-pill bg-primary px-4 py-2.5 text-sm font-medium text-primary-fg hover:opacity-90 transition-opacity duration-fast disabled:opacity-50"
       >
