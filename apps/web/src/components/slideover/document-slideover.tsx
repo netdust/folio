@@ -43,7 +43,7 @@ export function DocumentSlideover({ wslug, pslug }: Props) {
             <span className="font-mono text-sm">×</span>
           </IconButton>
         </SheetHeader>
-        <div className="flex-1 overflow-auto px-6 py-4">
+        <div className="flex-1 min-h-0 overflow-hidden px-6 py-4">
           {slug ? <SlideoverBody wslug={wslug} pslug={pslug} slug={slug} /> : null}
         </div>
       </SheetContent>
@@ -85,19 +85,21 @@ function SlideoverBody({ wslug, pslug, slug }: { wslug: string; pslug: string; s
   };
 
   return (
-    <article className="space-y-4">
-      <div className="font-mono text-[11px] text-fg-3">/{doc.slug}</div>
-      <FrontmatterForm
-        type={doc.type}
-        status={doc.status}
-        statuses={statuses ?? []}
-        frontmatter={doc.frontmatter}
-        pinnedFields={fields ?? []}
-        onStatusCommit={(next) => void onPatch({ status: next }, ['status'])}
-        onFrontmatterCommit={(p) => void onPatch({ frontmatter: p }, Object.keys(p))}
-        pendingKeys={pendingKeys}
-      />
-      <div className="border-t border-border-light pt-4">
+    <article className="flex h-full flex-col">
+      <header className="flex-shrink-0 space-y-4 pb-4">
+        <div className="font-mono text-[11px] text-fg-3">/{doc.slug}</div>
+        <FrontmatterForm
+          type={doc.type}
+          status={doc.status}
+          statuses={statuses ?? []}
+          frontmatter={doc.frontmatter}
+          pinnedFields={fields ?? []}
+          onStatusCommit={(next) => void onPatch({ status: next }, ['status'])}
+          onFrontmatterCommit={(p) => void onPatch({ frontmatter: p }, Object.keys(p))}
+          pendingKeys={pendingKeys}
+        />
+      </header>
+      <div className="flex-1 min-h-0 overflow-auto border-t border-border-light pt-4">
         <BodyEditor
           key={doc.slug}
           value={doc.body}
