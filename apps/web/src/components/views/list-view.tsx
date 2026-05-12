@@ -1,7 +1,10 @@
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { useMemo, useState } from 'react';
+import { Inbox, Loader2, Plus } from 'lucide-react';
+import { toast } from 'sonner';
 import {
   useDocuments,
+  useCreateDocument,
   useUpdateDocument,
   parseFilters,
   clausesToListParams,
@@ -11,10 +14,14 @@ import {
 } from '../../lib/api/documents.ts';
 import { useStatuses } from '../../lib/api/statuses.ts';
 import { useFields } from '../../lib/api/fields.ts';
+import { formatApiError } from '../../lib/api/index.ts';
+import { Button } from '../ui/button.tsx';
+import { Icon } from '../ui/icon.tsx';
 import { FilterBar } from '../filter/filter-bar.tsx';
 import { EmptyState } from './empty-state.tsx';
 import { ListRow } from './list-row.tsx';
 import { ListHeader, type SortState } from './list-header.tsx';
+import { ListSkeleton } from './list-skeleton.tsx';
 
 interface Props {
   wslug: string;
@@ -44,10 +51,20 @@ export function ListView({ wslug, pslug }: Props) {
   const { data: statuses } = useStatuses(wslug, pslug);
   const { data: fields } = useFields(wslug, pslug);
   const update = useUpdateDocument(wslug, pslug, listParams);
+  const create = useCreateDocument(wslug, pslug);
   const [pendingSlugs, setPendingSlugs] = useState<Set<string>>(new Set());
 
   const openDoc = (slug: string) => {
     void navigate({ to: '.', search: { ...search, doc: slug }, replace: false });
+  };
+
+  const onCreate = async () => {
+    try {
+      const created = await create.mutateAsync({ type: 'work_item', title: 'Untitled' });
+      void navigate({ to: '.', search: { ...search, doc: created.slug }, replace: false });
+    } catch (err) {
+      toast.error(formatApiError(err));
+    }
   };
 
   const onClauseChange = (next: FilterClauseUrl[]) => {
@@ -98,23 +115,40 @@ export function ListView({ wslug, pslug }: Props) {
 
   return (
     <>
-      <FilterBar
-        clauses={clauses}
-        statuses={statuses ?? []}
-        pinnedFields={fields ?? []}
-        onChange={onClauseChange}
-      />
+      <div className="flex items-center justify-between gap-2 px-[22px] py-2">
+        <FilterBar
+          clauses={clauses}
+          statuses={statuses ?? []}
+          pinnedFields={fields ?? []}
+          onChange={onClauseChange}
+        />
+        <Button
+          variant="primary"
+          onClick={onCreate}
+          disabled={create.isPending}
+          className="inline-flex items-center gap-1.5 whitespace-nowrap"
+        >
+          <Icon
+            icon={create.isPending ? Loader2 : Plus}
+            size={14}
+            className={create.isPending ? 'animate-spin' : ''}
+          />
+          New work item
+        </Button>
+      </div>
       <ListHeader sort={sort} onSort={onSortChange} />
-      {isLoading ? <div className="p-4 text-fg-3">Loading…</div> : null}
+      {isLoading ? <ListSkeleton rows={6} /> : null}
       {error ? <div className="p-4 text-danger">Failed to load documents.</div> : null}
       {!isLoading && !error && filteredDocs.length === 0 ? (
         <EmptyState
-          title={clauses.length > 0 ? 'No matching documents' : 'No work items'}
+          icon={clauses.length === 0 ? <Icon icon={Inbox} size={20} /> : undefined}
+          title={clauses.length > 0 ? 'No matching documents' : 'No work items yet'}
           description={
             clauses.length > 0
               ? 'Try removing a filter chip above.'
-              : 'Use Cmd-K → New work item to create one.'
+              : 'Create your first work item to get started.'
           }
+          action={clauses.length === 0 ? { label: 'New work item', onClick: onCreate } : undefined}
         />
       ) : null}
       <div role="list" className="flex flex-col">

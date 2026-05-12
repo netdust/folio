@@ -1,6 +1,9 @@
+import { ArrowUpRight } from 'lucide-react';
 import { toast } from 'sonner';
 import { InlineEdit } from '../inline/inline-edit.tsx';
 import { InlineSelect } from '../inline/inline-select.tsx';
+import { Icon } from '../ui/icon.tsx';
+import { Pill } from '../ui/pill.tsx';
 import type { DocumentSummary, DocumentPatch } from '../../lib/api/documents.ts';
 import type { Status } from '../../lib/api/statuses.ts';
 import { formatApiError } from '../../lib/api/index.ts';
@@ -68,7 +71,7 @@ export function ListRow({ doc, statuses, wslug, pslug, onOpen, onUpdate, pending
             onClick={() => onOpen(doc.slug)}
             className="text-fg-3 hover:text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
           >
-            <span className="font-mono text-[11px]">↗</span>
+            <Icon icon={ArrowUpRight} size={14} />
           </button>
           <div className="min-w-0 flex-1">
             <InlineEdit
@@ -87,13 +90,8 @@ export function ListRow({ doc, statuses, wslug, pslug, onOpen, onUpdate, pending
           isPending={isPending}
           placeholder="no status"
           renderDisplay={(opt) =>
-            opt ? (
-              <span
-                className="inline-flex items-center gap-1 rounded-sm px-1.5 py-0.5"
-                style={{ backgroundColor: `${opt.color}22`, color: opt.color }}
-              >
-                <span>{opt.label}</span>
-              </span>
+            opt && status ? (
+              <Pill category={status.category} label={opt.label} />
             ) : (
               <span className="text-xs text-fg-3">no status</span>
             )
