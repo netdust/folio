@@ -39,14 +39,11 @@ function WorkspaceLayout() {
   if (isLoading) return <div className="p-8 text-fg-3">Loading workspace…</div>;
   if (!workspace) return <div className="p-8 text-danger">Workspace not found.</div>;
 
-  // Brand mark = first character of the instance name; workspace mark = first char of workspace name.
   const brandMark = 'F';
   const workspaceMark = workspace.name.charAt(0).toUpperCase() || 'W';
   const userName = me?.user.name ?? 'You';
 
   const onSwitchWorkspace = () => {
-    // Phase 1: just go to / so the workspace picker is visible.
-    // Cmd-K "Switch workspace" (Task 28) is the real surface.
     if (!workspaces || workspaces.length <= 1) return;
     void navigate({ to: '/' });
   };
