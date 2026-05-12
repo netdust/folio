@@ -24,7 +24,7 @@
     "react-dom": "^18.3.1",
     "sonner": "^2.0.7",
     "tailwind-merge": "^2.5.4",
-    "zod": "^4.4.3"
+    "zod": "^3.23.8"
   },
   "devDependencies": {
     "@tanstack/router-devtools": "^1.83.4",
