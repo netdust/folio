@@ -71,6 +71,62 @@ They share the `documents` table and the editor component, but each has its own 
 
 All endpoints scoped to workspace + project. Auth via session cookie (browser) or `Authorization: Bearer <token>` (later — Phase 2 introduces tokens; Phase 1 uses session cookies only). Zod-validated at the boundary. Shared schemas in `packages/shared`.
 
+### 4.0 Workspaces, Projects, Auth
+
+```
+GET    /api/v1/workspaces
+       Response: { data: [{ workspace: Workspace, role: 'owner'|'admin'|'member' }] }
+       Note: kept wrapped (membership-row shape) so role travels with the list without
+       a second round-trip. Detail endpoints return the bare workspace.
+
+POST   /api/v1/workspaces
+       Body: { name, slug? }
+       Response: { data: Workspace }, status 201
+       Side effect: caller becomes 'owner' via memberships insert.
+
+GET    /api/v1/w/:wslug
+       Response: { data: Workspace & { role } }   (role flattened onto the row)
+
+PATCH  /api/v1/w/:wslug
+       Body: { name }
+       Response: { data: Workspace }    (updatedAt advances)
+       Auth: owner only.
+
+DELETE /api/v1/w/:wslug
+       Status 204. Auth: owner only.
+
+GET    /api/v1/w/:wslug/projects
+       Response: { data: Project[] }
+
+POST   /api/v1/w/:wslug/projects
+       Body: { name, slug?, icon? }
+       Response: { data: Project }, status 201
+       Side effect: seedProjectDefaults inserts 4 statuses + 2 views.
+
+GET    /api/v1/w/:wslug/projects/:pslug
+       Response: { data: Project }
+
+PATCH  /api/v1/w/:wslug/projects/:pslug
+       Body: partial { name?, icon? }
+       Response: { data: Project }    (updatedAt advances)
+
+DELETE /api/v1/w/:wslug/projects/:pslug
+       Status 204. Auth: owner only.
+```
+
+**Auth surface.**
+
+```
+POST   /api/v1/auth/register           Body { email, password, name } → { data: { user } }
+POST   /api/v1/auth/login              Body { email, password }        → { data: { user } }
+POST   /api/v1/auth/logout                                              → { data: { ok: true } }
+GET    /api/v1/auth/me                                                  → { data: { user } }
+POST   /api/v1/auth/magic-link/request Body { email }                   → { data: { ok: true } }
+GET    /api/v1/auth/magic-link/consume Query ?token=...                 → 302 redirect to /
+```
+
+The magic-link routes use the long-form names per `docs/FOLIO-BRIEFING.md` §8. Earlier server code shipped a shortened `/magic/*` form; renamed during Phase 1 normalization.
+
 ### 4.1 Documents
 
 ```
@@ -191,7 +247,9 @@ type FilterConfig = FilterClause[]; // AND-combined at top level. No nested grou
 
 ### 4.6 Response envelope and errors
 
-Every response wraps in `{ data }` or `{ error }`. Errors:
+Every response wraps in `{ data }` or `{ error }`. Detail endpoints place the bare resource under `data` (e.g. `{ data: Workspace }`). Collection endpoints place the array under `data` (e.g. `{ data: Project[] }`). The documents list endpoint additionally carries a `nextCursor` sibling key alongside `data` — the cursor envelope IS the resource shape, not a second wrap.
+
+Errors:
 
 ```json
 {
