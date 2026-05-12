@@ -66,6 +66,12 @@ describe('ListView inline-edit', () => {
           { status: 200, headers: { 'content-type': 'application/json' } },
         );
       }
+      if (u.includes('/fields')) {
+        return new Response(
+          JSON.stringify({ data: [] }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
       if (u.includes('/documents') && method === 'GET') {
         return new Response(
           JSON.stringify({ data: { data: [docRow], nextCursor: null } }),
@@ -116,6 +122,12 @@ describe('ListView inline-edit', () => {
               { id: 's1', key: 'todo', name: 'Todo', color: '#6EAFFF', category: 'unstarted', order: 1 },
             ],
           }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      if (u.includes('/fields')) {
+        return new Response(
+          JSON.stringify({ data: [] }),
           { status: 200, headers: { 'content-type': 'application/json' } },
         );
       }

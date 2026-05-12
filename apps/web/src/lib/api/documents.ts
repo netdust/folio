@@ -159,3 +159,67 @@ export function useDeleteDocument(wslug: string, pslug: string) {
 export function useDocumentMarkdown(wslug: string, pslug: string, slug: string) {
   return client.getRaw(`/api/v1/w/${wslug}/p/${pslug}/documents/${slug}.md`);
 }
+
+// ---------------------------------------------------------------------------
+// Filter URL helpers
+// ---------------------------------------------------------------------------
+
+export type FilterClauseUrl =
+  | { kind: 'status'; values: string[] }
+  | { kind: 'priority'; value: string }
+  | { kind: 'labels'; values: string[] }
+  | { kind: 'assignee'; value: string }
+  | { kind: 'updated_since'; value: string };
+
+export function parseFilters(search: Record<string, unknown>): FilterClauseUrl[] {
+  const out: FilterClauseUrl[] = [];
+  const status = arr(search['status']);
+  if (status.length) out.push({ kind: 'status', values: status });
+  const priority = str(search['priority']);
+  if (priority) out.push({ kind: 'priority', value: priority });
+  const labels = arr(search['labels']);
+  if (labels.length) out.push({ kind: 'labels', values: labels });
+  const assignee = str(search['assignee']);
+  if (assignee) out.push({ kind: 'assignee', value: assignee });
+  const us = str(search['updated_since']);
+  if (us) out.push({ kind: 'updated_since', value: us });
+  return out;
+}
+
+export function clausesToListParams(clauses: FilterClauseUrl[]): DocumentListParams {
+  const p: DocumentListParams = { type: 'work_item', sort: 'updated_at', dir: 'desc' };
+  for (const c of clauses) {
+    if (c.kind === 'status') p.status = c.values;
+    if (c.kind === 'updated_since') p.updatedSince = c.value;
+    if (c.kind === 'assignee') p.assignee = c.value;
+  }
+  return p;
+}
+
+/** Frontmatter-side post-filter; applied to the fetched page client-side until the server exposes a generic frontmatter query (Phase 4). */
+export function applyFrontmatterClauses(docs: DocumentSummary[], clauses: FilterClauseUrl[]): DocumentSummary[] {
+  let out = docs;
+  for (const c of clauses) {
+    if (c.kind === 'priority') {
+      out = out.filter((d) => d.frontmatter?.['priority'] === c.value);
+    } else if (c.kind === 'labels') {
+      out = out.filter((d) => {
+        const labels = d.frontmatter?.['labels'];
+        if (!Array.isArray(labels)) return false;
+        return c.values.every((v) => (labels as unknown[]).includes(v));
+      });
+    }
+    // 'assignee' is sent to server; nothing to do client-side.
+  }
+  return out;
+}
+
+function str(v: unknown): string | undefined {
+  return typeof v === 'string' && v.length > 0 ? v : undefined;
+}
+
+function arr(v: unknown): string[] {
+  if (Array.isArray(v)) return v.filter((x): x is string => typeof x === 'string');
+  if (typeof v === 'string' && v.length > 0) return [v];
+  return [];
+}

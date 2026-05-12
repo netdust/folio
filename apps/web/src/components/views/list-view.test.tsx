@@ -66,6 +66,12 @@ function mockResponse(url: string) {
       { status: 200, headers: { 'content-type': 'application/json' } },
     );
   }
+  if (url.includes('/fields')) {
+    return new Response(
+      JSON.stringify({ data: [] }),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    );
+  }
   return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
 }
 
