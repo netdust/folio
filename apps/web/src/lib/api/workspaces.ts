@@ -43,11 +43,13 @@ export function useWorkspace(wslug: string) {
   });
 }
 
+export type CreatedWorkspace = Pick<Workspace, 'id' | 'slug' | 'name'>;
+
 export function useCreateWorkspace() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (vars: { name: string; slug?: string }) =>
-      client.post<Workspace>('/api/v1/workspaces', vars),
+      client.post<CreatedWorkspace>('/api/v1/workspaces', vars),
     onSuccess: () => qc.invalidateQueries({ queryKey: workspacesKeys.list() }),
   });
 }
