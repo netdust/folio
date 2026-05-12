@@ -1,10 +1,15 @@
 import { createFileRoute } from '@tanstack/react-router';
+import { z } from 'zod';
+import { ListView } from '../components/views/list-view.tsx';
+
+const search = z.object({ doc: z.string().optional() });
 
 export const Route = createFileRoute('/w/$wslug/p/$pslug/work-items')({
+  validateSearch: search,
   component: WorkItemsRoute,
 });
 
 function WorkItemsRoute() {
-  // Real list view lands in Task 10.
-  return <div className="p-4 text-fg-3">Work items list — built in Task 10.</div>;
+  const { wslug, pslug } = Route.useParams();
+  return <ListView wslug={wslug} pslug={pslug} />;
 }

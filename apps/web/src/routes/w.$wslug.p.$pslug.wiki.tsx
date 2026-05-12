@@ -1,6 +1,8 @@
 import { createFileRoute } from '@tanstack/react-router';
+import { z } from 'zod';
 
 export const Route = createFileRoute('/w/$wslug/p/$pslug/wiki')({
+  validateSearch: z.object({ doc: z.string().optional() }),
   component: WikiRoute,
 });
 
