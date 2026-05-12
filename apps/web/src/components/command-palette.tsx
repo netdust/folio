@@ -14,6 +14,7 @@ import { useProjects } from '../lib/api/projects.ts';
 import { useWorkspaces } from '../lib/api/workspaces.ts';
 import { matches } from '../lib/command-registry.ts';
 import { getResolvedTheme, setTheme } from '../lib/theme.ts';
+import { subscribeOpenEvent } from '../lib/command-palette-bus.ts';
 
 function getKeyMod(): 'metaKey' | 'ctrlKey' {
   if (typeof navigator === 'undefined') return 'ctrlKey';
@@ -61,6 +62,11 @@ export function CommandPalette() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  // Bus event subscription — allows programmatic open via openCommandPalette()
+  useEffect(() => {
+    return subscribeOpenEvent(() => setOpen(true));
   }, []);
 
   // Reset query when palette closes

@@ -1,10 +1,12 @@
 import { createFileRoute, Outlet, useNavigate, useRouterState } from '@tanstack/react-router';
 import { useMemo } from 'react';
+import { FolderOpen, Search } from 'lucide-react';
 import { useMe } from '../lib/api/auth.ts';
 import { useProjects } from '../lib/api/projects.ts';
 import { useWorkspace, useWorkspaces } from '../lib/api/workspaces.ts';
 import { Shell } from '../components/shell/shell.tsx';
 import { Rail, type NavItem } from '../components/shell/rail.tsx';
+import { openCommandPalette } from '../lib/command-palette-bus.ts';
 
 export const Route = createFileRoute('/w/$wslug')({
   component: WorkspaceLayout,
@@ -26,7 +28,8 @@ function WorkspaceLayout() {
     return projects.map((p) => ({
       id: p.id,
       label: p.name,
-      icon: <span className="font-mono text-[11px]">{p.icon ?? '·'}</span>,
+      icon: null,
+      lucideIcon: FolderOpen,
       active: currentPath.startsWith(`/w/${wslug}/p/${p.slug}`),
       onClick: () =>
         navigate({
@@ -48,6 +51,15 @@ function WorkspaceLayout() {
     void navigate({ to: '/' });
   };
 
+  const tools: NavItem[] = [{
+    id: 'search',
+    label: 'Search',
+    icon: null,
+    lucideIcon: Search,
+    kbd: '⌘K',
+    onClick: openCommandPalette,
+  }];
+
   return (
     <Shell
       rail={
@@ -55,6 +67,7 @@ function WorkspaceLayout() {
           brand={{ mark: brandMark, label: 'Folio' }}
           workspace={{ mark: workspaceMark, name: workspace.name, onSwitch: onSwitchWorkspace }}
           primary={primary}
+          tools={tools}
           user={{ name: userName }}
         />
       }

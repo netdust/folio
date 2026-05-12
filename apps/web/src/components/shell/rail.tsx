@@ -1,5 +1,8 @@
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
+import type { LucideIcon } from 'lucide-react';
+import { Icon } from '../ui/icon.tsx';
+import { Kbd } from '../ui/kbd.tsx';
 import { cn } from '../ui/cn.ts';
 
 const STORAGE_KEY = 'folio:rail-collapsed';
@@ -8,6 +11,7 @@ export interface NavItem {
   id: string;
   label: string;
   icon: ReactNode;
+  lucideIcon?: LucideIcon;
   href?: string;
   kbd?: string;
   active?: boolean;
@@ -45,7 +49,7 @@ function RailExpanded({ brand, workspace, primary, tools, account, user }: RailP
   return (
     <aside className="flex w-[200px] flex-col rounded-xl bg-content shadow-surface px-3 py-3.5">
       <div className="flex items-center gap-2.5 px-2 mb-2">
-        <Mark>{brand.mark}</Mark>
+        <BrandMark>{brand.mark}</BrandMark>
         <span className="text-sm font-medium tracking-tight">{brand.label}</span>
       </div>
 
@@ -88,7 +92,7 @@ function RailExpanded({ brand, workspace, primary, tools, account, user }: RailP
 function RailCollapsed({ brand, workspace, primary, tools, account, user }: RailProps) {
   return (
     <aside className="flex w-16 flex-col items-center rounded-xl bg-content shadow-surface py-3.5">
-      <Mark>{brand.mark}</Mark>
+      <BrandMark>{brand.mark}</BrandMark>
       <button
         type="button"
         onClick={workspace.onSwitch}
@@ -118,47 +122,52 @@ function RailCollapsed({ brand, workspace, primary, tools, account, user }: Rail
 }
 
 function NavList({ items, expanded }: { items: NavItem[]; expanded: boolean }) {
-  return (
-    <div className={expanded ? 'flex flex-col' : 'flex flex-col items-center'}>
-      {items.map((item) => (expanded
-        ? (
+  if (!expanded) {
+    return (
+      <div className="flex w-full flex-col items-center gap-0.5">
+        {items.map((item) => (
           <button
-            type="button"
             key={item.id}
-            onClick={item.onClick}
-            className={cn(
-              'flex items-center gap-2.5 rounded-md px-2 py-2 mb-0.5 transition-colors duration-fast',
-              item.active ? 'bg-black/[0.06] dark:bg-white/[0.08] text-fg' : 'text-fg-3 hover:text-fg-2 hover:bg-card',
-            )}
-          >
-            <span className="inline-grid h-[18px] w-[18px] place-items-center">{item.icon}</span>
-            <span className="text-sm font-medium flex-1 text-left">{item.label}</span>
-            {item.kbd ? <span className="text-[10px] font-mono text-fg-3 bg-card rounded-sm px-1.5 py-0.5">{item.kbd}</span> : null}
-          </button>
-        )
-        : (
-          <button
             type="button"
-            key={item.id}
             onClick={item.onClick}
             title={item.label}
+            aria-label={item.label}
             className={cn(
-              'relative inline-grid h-10 w-10 place-items-center transition-colors duration-fast',
-              item.active ? 'text-fg' : 'text-fg-3 hover:text-fg-2',
+              'relative inline-grid h-9 w-9 place-items-center rounded-md transition-colors duration-fast',
+              item.active ? 'bg-card text-fg' : 'text-fg-3 hover:bg-card hover:text-fg-2',
             )}
           >
-            <span className="inline-grid h-[18px] w-[18px] place-items-center">{item.icon}</span>
+            {item.lucideIcon ? <Icon icon={item.lucideIcon} size={16} /> : <span className="inline-grid h-[18px] w-[18px] place-items-center">{item.icon}</span>}
             {item.active ? <span className="absolute bottom-1 left-1/2 -translate-x-1/2 h-1 w-1 rounded-full bg-fg" /> : null}
           </button>
-        )
+        ))}
+      </div>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-0.5">
+      {items.map((item) => (
+        <button
+          key={item.id}
+          type="button"
+          onClick={item.onClick}
+          className={cn(
+            'flex items-center gap-2.5 rounded-md px-2 py-1.5 text-sm transition-colors duration-fast',
+            item.active ? 'bg-card text-fg' : 'text-fg-2 hover:bg-card hover:text-fg',
+          )}
+        >
+          {item.lucideIcon ? <Icon icon={item.lucideIcon} size={16} /> : <span className="inline-grid h-[18px] w-[18px] place-items-center">{item.icon}</span>}
+          <span className="flex-1 text-left truncate">{item.label}</span>
+          {item.kbd ? <Kbd>{item.kbd}</Kbd> : null}
+        </button>
       ))}
     </div>
   );
 }
 
-function Mark({ children }: { children: ReactNode }) {
+function BrandMark({ children }: { children: ReactNode }) {
   return (
-    <span className="inline-grid h-7 w-7 place-items-center rounded bg-primary text-primary-fg text-sm font-semibold tracking-tight">
+    <span className="inline-grid h-7 w-7 place-items-center rounded-md bg-primary text-primary-fg text-sm font-semibold tracking-tight">
       {children}
     </span>
   );
