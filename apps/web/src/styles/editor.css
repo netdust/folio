@@ -1,0 +1,101 @@
+/* Milkdown overrides — drives all editor styling via design-system tokens.
+   The .folio-milkdown wrapper scopes these so they don't leak. */
+
+.folio-milkdown .milkdown {
+  background: transparent;
+  color: var(--color-fg);
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.65;
+}
+
+.folio-milkdown .milkdown .ProseMirror {
+  outline: none;
+  min-height: 200px;
+  padding: 0;
+}
+
+.folio-milkdown .milkdown .ProseMirror h1 {
+  font-size: 22px;
+  font-weight: 600;
+  margin: 1.2em 0 0.4em;
+  letter-spacing: -0.01em;
+}
+.folio-milkdown .milkdown .ProseMirror h2 {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 1em 0 0.3em;
+}
+.folio-milkdown .milkdown .ProseMirror h3 {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0.9em 0 0.25em;
+  color: var(--color-fg-2);
+}
+
+.folio-milkdown .milkdown .ProseMirror p {
+  margin: 0.5em 0;
+}
+
+.folio-milkdown .milkdown .ProseMirror a {
+  color: var(--color-primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.folio-milkdown .milkdown .ProseMirror code {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  background: var(--color-card);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+.folio-milkdown .milkdown .ProseMirror pre {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  background: var(--color-card);
+  padding: 12px 14px;
+  border-radius: 6px;
+  overflow-x: auto;
+}
+.folio-milkdown .milkdown .ProseMirror pre code {
+  background: transparent;
+  padding: 0;
+}
+
+.folio-milkdown .milkdown .ProseMirror blockquote {
+  border-left: 2px solid var(--color-border-light);
+  padding-left: 12px;
+  color: var(--color-fg-2);
+  margin: 0.5em 0;
+}
+
+.folio-milkdown .milkdown .ProseMirror ul,
+.folio-milkdown .milkdown .ProseMirror ol {
+  padding-left: 24px;
+}
+
+.folio-milkdown .milkdown .ProseMirror li {
+  margin: 0.2em 0;
+}
+
+.folio-milkdown .milkdown .ProseMirror table {
+  border-collapse: collapse;
+  margin: 0.5em 0;
+}
+.folio-milkdown .milkdown .ProseMirror th,
+.folio-milkdown .milkdown .ProseMirror td {
+  border: 1px solid var(--color-border-light);
+  padding: 6px 8px;
+  font-size: 14px;
+}
+.folio-milkdown .milkdown .ProseMirror th {
+  background: var(--color-card);
+  font-weight: 600;
+}
+
+.folio-milkdown .milkdown .ProseMirror ::selection {
+  background: var(--color-primary);
+  color: var(--color-primary-fg);
+}

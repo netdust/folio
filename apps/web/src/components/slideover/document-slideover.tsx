@@ -8,6 +8,7 @@ import { useStatuses } from '../../lib/api/statuses.ts';
 import { useFields } from '../../lib/api/fields.ts';
 import { formatApiError } from '../../lib/api/index.ts';
 import { FrontmatterForm } from './frontmatter-form.tsx';
+import { BodyEditor } from './body-editor.tsx';
 
 interface Props {
   wslug: string;
@@ -97,10 +98,11 @@ function SlideoverBody({ wslug, pslug, slug }: { wslug: string; pslug: string; s
         pendingKeys={pendingKeys}
       />
       <div className="border-t border-border-light pt-4">
-        {/* Body editor lands in Task 16. Placeholder pre block for now. */}
-        <pre className="whitespace-pre-wrap font-mono text-sm text-fg">
-          {doc.body || '(empty body)'}
-        </pre>
+        <BodyEditor
+          key={doc.slug}
+          value={doc.body}
+          onChange={(body) => onPatch({ body }, ['body'])}
+        />
       </div>
     </article>
   );
