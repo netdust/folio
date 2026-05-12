@@ -16,9 +16,8 @@ export function DocumentSlideover({ wslug, pslug }: Props) {
   const { data: doc, isLoading, error } = useDocument(wslug, pslug, slug);
 
   const close = () => {
-    const next = { ...search } as Record<string, unknown>;
-    delete next.doc;
-    void navigate({ to: '.', search: next, replace: false });
+    const { doc: _doc, ...next } = search;
+    void navigate({ to: '.', search: next });
   };
 
   return (
