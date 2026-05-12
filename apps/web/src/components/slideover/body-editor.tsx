@@ -5,7 +5,7 @@ import { gfm } from '@milkdown/preset-gfm';
 import { history } from '@milkdown/plugin-history';
 import { listener, listenerCtx } from '@milkdown/plugin-listener';
 import { clipboard } from '@milkdown/plugin-clipboard';
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { debounce } from '../../lib/debounce.ts';
 
 interface Props {
@@ -18,10 +18,10 @@ function MilkdownEditor({ value, onChange, readOnly }: Props) {
   const valueRef = useRef(value);
   valueRef.current = value;
 
-  const debouncedOnChange = useMemo(
-    () => debounce((md: string) => onChange(md), 400),
-    [onChange],
-  );
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+
+  const debouncedOnChange = useRef(debounce((md: string) => onChangeRef.current(md), 400)).current;
 
   useEffect(() => () => debouncedOnChange.cancel(), [debouncedOnChange]);
 
