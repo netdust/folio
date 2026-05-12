@@ -37,7 +37,10 @@ async function request<T>(
   const json = await res.json().catch(() => null);
   if (!res.ok) throw new ApiError(res.status, json);
   if (json && typeof json === 'object' && 'data' in json) {
-    return (json as EnvelopeOk<T>).data;
+    const keys = Object.keys(json);
+    if (keys.length === 1) {
+      return (json as EnvelopeOk<T>).data;
+    }
   }
   return json as T;
 }
