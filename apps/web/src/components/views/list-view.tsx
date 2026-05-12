@@ -123,6 +123,8 @@ export function ListView({ wslug, pslug }: Props) {
             key={doc.id}
             doc={doc}
             statuses={statuses ?? []}
+            wslug={wslug}
+            pslug={pslug}
             onOpen={openDoc}
             onUpdate={onUpdate}
             pendingSlugs={pendingSlugs}

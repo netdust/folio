@@ -3,12 +3,14 @@ import { useNavigate, useSearch } from '@tanstack/react-router';
 import { toast } from 'sonner';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '../ui/sheet.tsx';
 import { IconButton } from '../ui/icon-button.tsx';
+import { Button } from '../ui/button.tsx';
 import { useDocument, useDocuments, useUpdateDocument } from '../../lib/api/documents.ts';
 import { useStatuses } from '../../lib/api/statuses.ts';
 import { useFields } from '../../lib/api/fields.ts';
 import { formatApiError } from '../../lib/api/index.ts';
 import { useWorkspace } from '../../lib/api/workspaces.ts';
 import { useWorkspaceAiKeys } from '../../lib/api/settings.ts';
+import { copyDocumentAsMarkdown } from '../../lib/copy-as-md.ts';
 import { FrontmatterForm } from './frontmatter-form.tsx';
 import { BodyEditor } from './body-editor.tsx';
 import { ModeToggle, type EditorMode } from './mode-toggle.tsx';
@@ -31,6 +33,16 @@ export function DocumentSlideover({ wslug, pslug }: Props) {
     void navigate({ to: '.', search: next });
   };
 
+  const onCopyMd = async () => {
+    if (!slug) return;
+    try {
+      await copyDocumentAsMarkdown(wslug, pslug, slug);
+      toast.success('Copied as Markdown');
+    } catch (err) {
+      toast.error(formatApiError(err));
+    }
+  };
+
   return (
     <Sheet
       open={open}
@@ -43,9 +55,16 @@ export function DocumentSlideover({ wslug, pslug }: Props) {
           <SheetTitle>
             {isLoading ? 'Loading…' : error ? 'Failed to load' : doc?.title ?? '—'}
           </SheetTitle>
-          <IconButton label="Close document" onClick={close}>
-            <span className="font-mono text-sm">×</span>
-          </IconButton>
+          <div className="flex items-center gap-2">
+            {doc ? (
+              <Button variant="secondary" size="sm" onClick={onCopyMd}>
+                Copy MD
+              </Button>
+            ) : null}
+            <IconButton label="Close document" onClick={close}>
+              <span className="font-mono text-sm">×</span>
+            </IconButton>
+          </div>
         </SheetHeader>
         <div className="flex-1 min-h-0 overflow-hidden px-6 py-4">
           {slug ? <SlideoverBody wslug={wslug} pslug={pslug} slug={slug} /> : null}

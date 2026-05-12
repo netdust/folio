@@ -4,8 +4,10 @@ import { DndContext, PointerSensor, useDraggable, useDroppable, useSensor, useSe
 import { toast } from 'sonner';
 import { useDocuments, useCreateDocument, useUpdateDocument } from '../../lib/api/documents.ts';
 import { formatApiError } from '../../lib/api/index.ts';
+import { copyDocumentAsMarkdown } from '../../lib/copy-as-md.ts';
 import { Button } from '../ui/button.tsx';
 import { EmptyState } from './empty-state.tsx';
+import { RowContextMenu } from './row-context-menu.tsx';
 import { buildTree, descendantIds, type TreeNode } from '../../lib/wiki-tree.ts';
 import { cn } from '../ui/cn.ts';
 
@@ -108,6 +110,8 @@ export function WikiTree({ wslug, pslug }: Props) {
               })}
               onOpen={openDoc}
               pendingId={pendingId}
+              wslug={wslug}
+              pslug={pslug}
             />
           ))}
         </ul>
@@ -123,9 +127,11 @@ interface RowProps {
   onToggle: (id: string) => void;
   onOpen: (slug: string) => void;
   pendingId: string | null;
+  wslug: string;
+  pslug: string;
 }
 
-export function TreeRow({ node, depth, expanded, onToggle, onOpen, pendingId }: RowProps) {
+export function TreeRow({ node, depth, expanded, onToggle, onOpen, pendingId, wslug, pslug }: RowProps) {
   const isExpanded = expanded.has(node.doc.id);
   const hasChildren = node.children.length > 0;
   const isPending = pendingId === node.doc.id;
@@ -141,6 +147,15 @@ export function TreeRow({ node, depth, expanded, onToggle, onOpen, pendingId }: 
     droppable.setNodeRef(el);
   };
 
+  const onCopy = async () => {
+    try {
+      await copyDocumentAsMarkdown(wslug, pslug, node.doc.slug);
+      toast.success('Copied as Markdown');
+    } catch (err) {
+      toast.error(formatApiError(err));
+    }
+  };
+
   return (
     <li
       ref={setRef}
@@ -152,29 +167,31 @@ export function TreeRow({ node, depth, expanded, onToggle, onOpen, pendingId }: 
         isPending && 'opacity-60',
       )}
     >
-      <div
-        className="grid grid-cols-[24px_1fr] items-center gap-1 rounded-sm py-1 pr-2 hover:bg-card"
-        style={{ paddingLeft: `${depth * 16}px` }}
-      >
-        <button
-          type="button"
-          aria-label={hasChildren ? (isExpanded ? `Collapse ${node.doc.title}` : `Expand ${node.doc.title}`) : undefined}
-          onClick={() => hasChildren && onToggle(node.doc.id)}
-          onPointerDown={(e) => e.stopPropagation()}
-          className={`inline-grid h-6 w-6 place-items-center text-fg-3 ${hasChildren ? 'cursor-pointer hover:text-fg' : 'cursor-default opacity-0'}`}
-          tabIndex={hasChildren ? 0 : -1}
+      <RowContextMenu items={[{ label: 'Copy as Markdown', onSelect: onCopy, hint: '⌘⇧C' }]}>
+        <div
+          className="grid grid-cols-[24px_1fr] items-center gap-1 rounded-sm py-1 pr-2 hover:bg-card"
+          style={{ paddingLeft: `${depth * 16}px` }}
         >
-          <span className="font-mono text-[10px]">{isExpanded ? '▾' : '▸'}</span>
-        </button>
-        <button
-          type="button"
-          onClick={() => onOpen(node.doc.slug)}
-          onPointerDown={(e) => e.stopPropagation()}
-          className="truncate text-left text-sm text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-        >
-          {node.doc.title}
-        </button>
-      </div>
+          <button
+            type="button"
+            aria-label={hasChildren ? (isExpanded ? `Collapse ${node.doc.title}` : `Expand ${node.doc.title}`) : undefined}
+            onClick={() => hasChildren && onToggle(node.doc.id)}
+            onPointerDown={(e) => e.stopPropagation()}
+            className={`inline-grid h-6 w-6 place-items-center text-fg-3 ${hasChildren ? 'cursor-pointer hover:text-fg' : 'cursor-default opacity-0'}`}
+            tabIndex={hasChildren ? 0 : -1}
+          >
+            <span className="font-mono text-[10px]">{isExpanded ? '▾' : '▸'}</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => onOpen(node.doc.slug)}
+            onPointerDown={(e) => e.stopPropagation()}
+            className="truncate text-left text-sm text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+          >
+            {node.doc.title}
+          </button>
+        </div>
+      </RowContextMenu>
       {isExpanded && hasChildren ? (
         <ul className="flex flex-col">
           {node.children.map((c) => (
@@ -186,6 +203,8 @@ export function TreeRow({ node, depth, expanded, onToggle, onOpen, pendingId }: 
               onToggle={onToggle}
               onOpen={onOpen}
               pendingId={pendingId}
+              wslug={wslug}
+              pslug={pslug}
             />
           ))}
         </ul>
