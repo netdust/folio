@@ -1,5 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { z } from 'zod';
+import { KanbanView } from '../components/views/kanban-view.tsx';
 
 export const Route = createFileRoute('/w/$wslug/p/$pslug/board')({
   validateSearch: z.object({ doc: z.string().optional() }),
@@ -7,5 +8,6 @@ export const Route = createFileRoute('/w/$wslug/p/$pslug/board')({
 });
 
 function BoardRoute() {
-  return <div className="p-4 text-fg-3">Kanban board — built in Task 23.</div>;
+  const { wslug, pslug } = Route.useParams();
+  return <KanbanView wslug={wslug} pslug={pslug} />;
 }
