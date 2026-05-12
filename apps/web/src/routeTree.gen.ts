@@ -11,7 +11,9 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as WWslugRouteImport } from './routes/w.$wslug'
 import { Route as DevDesignSystemRouteImport } from './routes/dev.design-system'
+import { Route as WWslugIndexRouteImport } from './routes/w.$wslug.index'
 
 const LoginRoute = LoginRouteImport.update({
   id: '/login',
@@ -23,40 +25,62 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const WWslugRoute = WWslugRouteImport.update({
+  id: '/w/$wslug',
+  path: '/w/$wslug',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const DevDesignSystemRoute = DevDesignSystemRouteImport.update({
   id: '/dev/design-system',
   path: '/dev/design-system',
   getParentRoute: () => rootRouteImport,
+} as any)
+const WWslugIndexRoute = WWslugIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => WWslugRoute,
 } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
   '/dev/design-system': typeof DevDesignSystemRoute
+  '/w/$wslug': typeof WWslugRouteWithChildren
+  '/w/$wslug/': typeof WWslugIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
   '/dev/design-system': typeof DevDesignSystemRoute
+  '/w/$wslug': typeof WWslugIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
   '/dev/design-system': typeof DevDesignSystemRoute
+  '/w/$wslug': typeof WWslugRouteWithChildren
+  '/w/$wslug/': typeof WWslugIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/login' | '/dev/design-system'
+  fullPaths: '/' | '/login' | '/dev/design-system' | '/w/$wslug' | '/w/$wslug/'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/login' | '/dev/design-system'
-  id: '__root__' | '/' | '/login' | '/dev/design-system'
+  to: '/' | '/login' | '/dev/design-system' | '/w/$wslug'
+  id:
+    | '__root__'
+    | '/'
+    | '/login'
+    | '/dev/design-system'
+    | '/w/$wslug'
+    | '/w/$wslug/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   LoginRoute: typeof LoginRoute
   DevDesignSystemRoute: typeof DevDesignSystemRoute
+  WWslugRoute: typeof WWslugRouteWithChildren
 }
 
 declare module '@tanstack/react-router' {
@@ -75,6 +99,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/w/$wslug': {
+      id: '/w/$wslug'
+      path: '/w/$wslug'
+      fullPath: '/w/$wslug'
+      preLoaderRoute: typeof WWslugRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/dev/design-system': {
       id: '/dev/design-system'
       path: '/dev/design-system'
@@ -82,13 +113,32 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DevDesignSystemRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/w/$wslug/': {
+      id: '/w/$wslug/'
+      path: '/'
+      fullPath: '/w/$wslug/'
+      preLoaderRoute: typeof WWslugIndexRouteImport
+      parentRoute: typeof WWslugRoute
+    }
   }
 }
+
+interface WWslugRouteChildren {
+  WWslugIndexRoute: typeof WWslugIndexRoute
+}
+
+const WWslugRouteChildren: WWslugRouteChildren = {
+  WWslugIndexRoute: WWslugIndexRoute,
+}
+
+const WWslugRouteWithChildren =
+  WWslugRoute._addFileChildren(WWslugRouteChildren)
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   LoginRoute: LoginRoute,
   DevDesignSystemRoute: DevDesignSystemRoute,
+  WWslugRoute: WWslugRouteWithChildren,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
