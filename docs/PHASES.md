@@ -106,6 +106,8 @@ For full context on any decision: `@docs/FOLIO-BRIEFING.md`. For the operating m
 
 **Goal:** Create, read, update, delete documents (work items + pages). List view with filters and kanban view with drag-drop work. Inline editing functions. Body editor (Milkdown) and raw-MD toggle (CodeMirror) both work.
 
+> **Status (2026-05-12):** Backend shipped 2026-05-11. Frontend in progress under `docs/superpowers/plans/2026-05-11-phase-1-frontend.md`; foundational tasks 1-4 (vitest + testing-library, API client envelope unwrap, `useOptimisticPatch`, per-resource API modules) are committed. Server normalization shipped 2026-05-12 under `docs/superpowers/plans/2026-05-12-phase-1-server-normalization.md` — reconciled response shapes, item-route paths, and magic-link routes with the spec. Frontend resumes at Task 5 (root auth gate + Toaster).
+
 ### Documents API
 
 - [x] `routes/documents.ts`: list (with filters), get, create, patch, delete
