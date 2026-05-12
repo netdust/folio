@@ -1,7 +1,8 @@
 import type { QueryClient } from '@tanstack/react-query';
-import { Outlet, createRootRouteWithContext, redirect } from '@tanstack/react-router';
+import { Outlet, createRootRouteWithContext, redirect, useRouterState } from '@tanstack/react-router';
 import { TanStackRouterDevtools } from '@tanstack/router-devtools';
 import { Toaster } from '../components/ui/toast.tsx';
+import { CommandPalette } from '../components/command-palette.tsx';
 import { ApiError, client } from '../lib/api/client.ts';
 import { authKeys, type SessionUser } from '../lib/api/auth.ts';
 
@@ -31,12 +32,16 @@ export const Route = createRootRouteWithContext<RouterContext>()({
 });
 
 function RootLayout() {
+  const routerState = useRouterState();
+  const path = routerState.location.pathname;
+  const isAuthRoute = path === '/login' || path === '/magic';
   return (
     <div className="min-h-screen bg-shell text-fg">
       <main className="mx-auto max-w-5xl px-8 py-12">
         <Outlet />
       </main>
       <Toaster />
+      {!isAuthRoute ? <CommandPalette /> : null}
       {import.meta.env.DEV ? <TanStackRouterDevtools /> : null}
     </div>
   );
