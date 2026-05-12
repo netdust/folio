@@ -126,7 +126,7 @@ export function ListView({ wslug, pslug }: Props) {
           variant="primary"
           onClick={onCreate}
           disabled={create.isPending}
-          className="inline-flex items-center gap-1.5 whitespace-nowrap"
+          className="whitespace-nowrap"
         >
           <Icon
             icon={create.isPending ? Loader2 : Plus}
