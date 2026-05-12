@@ -17,7 +17,7 @@ test('Phase 1 happy path: workspace → project → MD document → patch → :s
   expect(proj.status).toBe(201);
 
   // Verify 4 default statuses + 2 default views were seeded.
-  const projData = (await proj.json()).data.project;
+  const projData = (await proj.json()).data;
   const { statuses, views } = await import('../db/schema.ts');
   const seededStatuses = await db.select().from(statuses).where(eq(statuses.projectId, projData.id));
   const seededViews = await db.select().from(views).where(eq(views.projectId, projData.id));
@@ -41,7 +41,7 @@ Body content.
     body: md,
   });
   expect(create.status).toBe(201);
-  const doc = (await create.json()).data.document;
+  const doc = (await create.json()).data;
   expect(doc.status).toBe('in_progress');
   expect(doc.title).toBe('Phase One Document');
 
@@ -52,7 +52,7 @@ Body content.
     body: JSON.stringify({ frontmatter: { priority: 'urgent' } }),
   });
   expect(patch.status).toBe(200);
-  expect((await patch.json()).data.document.frontmatter.priority).toBe('urgent');
+  expect((await patch.json()).data.frontmatter.priority).toBe('urgent');
 
   // 4. GET :slug.md and assert round-trip
   const rt = await app.request(`/api/v1/w/acme/p/p1/documents/${doc.slug}.md`, { headers: H });

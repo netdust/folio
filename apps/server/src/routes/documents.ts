@@ -109,7 +109,7 @@ documentsRoute.post('/', async (c) => {
     });
   });
 
-  return jsonOk(c, { document: row }, 201);
+  return jsonOk(c, row, 201);
 });
 
 function encodeCursor(updatedAt: number, id: string): string {
@@ -212,7 +212,7 @@ documentsRoute.get('/:slug', async (c) => {
     where: and(eq(documents.projectId, p.id), eq(documents.slug, slug)),
   });
   if (!row) throw new HTTPError('DOCUMENT_NOT_FOUND', `document "${slug}" not found`, 404);
-  return jsonOk(c, { document: row });
+  return jsonOk(c, row);
 });
 
 documentsRoute.patch('/:slug', async (c) => {
@@ -249,7 +249,7 @@ documentsRoute.patch('/:slug', async (c) => {
         payload: { changes: ['title', 'body', 'frontmatter', 'status'] },
       });
     });
-    return jsonOk(c, { document: updated });
+    return jsonOk(c, updated);
   }
 
   // JSON branch
@@ -292,7 +292,7 @@ documentsRoute.patch('/:slug', async (c) => {
     });
   });
 
-  return jsonOk(c, { document: updated });
+  return jsonOk(c, updated);
 });
 
 documentsRoute.delete('/:slug', async (c) => {
