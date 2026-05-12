@@ -1,8 +1,9 @@
 import { useNavigate } from '@tanstack/react-router';
 import { Loader2, Mail, Lock, User } from 'lucide-react';
+import type { FormEvent } from 'react';
 import { useState } from 'react';
-import { ApiError } from '../../lib/api/client.ts';
-import { apiErrorCode, formatApiError } from '../../lib/api/errors.ts';
+import { ErrorCode } from '@folio/shared';
+import { ApiError, apiErrorCode, formatApiError } from '../../lib/api/index.ts';
 import { useRegister } from '../../lib/api/auth.ts';
 import { Icon } from '../ui/icon.tsx';
 
@@ -18,7 +19,7 @@ export function SignupForm({ initialEmail, onEmailChange }: Props) {
   const [password, setPassword] = useState('');
   const m = useRegister();
 
-  const onSubmit = (e: React.FormEvent) => {
+  const onSubmit = (e: FormEvent) => {
     e.preventDefault();
     m.mutate(
       { name, email, password },
@@ -33,7 +34,7 @@ export function SignupForm({ initialEmail, onEmailChange }: Props) {
 
   const errorMessage = (() => {
     if (!m.error) return null;
-    if (m.error instanceof ApiError && apiErrorCode(m.error) === 'EMAIL_TAKEN') {
+    if (m.error instanceof ApiError && apiErrorCode(m.error) === ErrorCode.EMAIL_TAKEN) {
       return 'An account with this email exists, try signing in.';
     }
     return formatApiError(m.error);

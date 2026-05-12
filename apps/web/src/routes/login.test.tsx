@@ -90,6 +90,8 @@ describe('LoginPage (password mode)', () => {
         ([url, init]) => String(url).endsWith('/api/v1/auth/magic-link/request') && init?.method === 'POST',
       );
       expect(call).toBeDefined();
+      const body = JSON.parse(String(call![1]!.body));
+      expect(body).toEqual({ email: 'a@b.c' });
     });
   });
 

@@ -1,5 +1,6 @@
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import { Loader2, Mail, Lock } from 'lucide-react';
+import type { FormEvent } from 'react';
 import { useState } from 'react';
 import { ApiError } from '../lib/api/client.ts';
 import { useLogin, useMagicLinkRequest } from '../lib/api/auth.ts';
@@ -44,7 +45,7 @@ function PasswordForm({ initialEmail, onEmailChange }: { initialEmail: string; o
   const [email, setEmail] = useState(initialEmail);
   const [password, setPassword] = useState('');
   const m = useLogin();
-  const onSubmit = (e: React.FormEvent) => {
+  const onSubmit = (e: FormEvent) => {
     e.preventDefault();
     m.mutate({ email, password }, { onSuccess: () => navigate({ to: '/' }) });
   };
@@ -72,7 +73,7 @@ function PasswordForm({ initialEmail, onEmailChange }: { initialEmail: string; o
 function MagicForm({ initialEmail, onEmailChange }: { initialEmail: string; onEmailChange: (v: string) => void }) {
   const [email, setEmail] = useState(initialEmail);
   const m = useMagicLinkRequest();
-  const onSubmit = (e: React.FormEvent) => {
+  const onSubmit = (e: FormEvent) => {
     e.preventDefault();
     m.mutate({ email });
   };
