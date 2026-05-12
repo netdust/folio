@@ -59,7 +59,6 @@ export function InlineSelect({
                 type="button"
                 role="option"
                 aria-selected={opt.value === value}
-                aria-label={opt.label}
                 onClick={() => {
                   setOpen(false);
                   if (opt.value !== value) onCommit(opt.value);
