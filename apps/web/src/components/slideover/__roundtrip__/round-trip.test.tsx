@@ -139,13 +139,17 @@ describe('Slideover round-trip', () => {
     vi.stubGlobal('fetch', fetchMock);
   });
 
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+    vi.useRealTimers();
   });
 
   it('toggling rich → raw → rich does not corrupt the body string', async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
     const { queryClient, router } = setup();
     render(
       <QueryClientProvider client={queryClient}>
@@ -167,12 +171,9 @@ describe('Slideover round-trip', () => {
 
     // No PATCH should have fired — the user only toggled modes, never edited.
     expect(patches.length).toBe(0);
-
-    vi.useRealTimers();
   });
 
   it('editing in raw mode patches the exact byte-for-byte body the user sees', async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
     const { queryClient, router } = setup();
     render(
       <QueryClientProvider client={queryClient}>
@@ -199,21 +200,15 @@ describe('Slideover round-trip', () => {
     // Let the 400 ms debounce (plus a buffer) drain
     vi.advanceTimersByTime(600);
 
+    // If jsdom dispatched the keystroke into CodeMirror, verify the PATCH carries
+    // the original code-fence + table verbatim, with our edit appended.
+    // (Definitive coverage is Manual QA scenario #8 — jsdom historically cannot
+    // drive CodeMirror's input pipeline, so this branch may not execute in CI.)
     if (patches.length > 0) {
-      // A PATCH fired — verify the body is not corrupted:
-      // 1. The code-fence block with inner frontmatter-like content is verbatim.
-      // 2. The table with raw HTML (<kbd>, <abbr>) is verbatim.
-      // 3. The user's append is present.
       const lastBody = String(patches[patches.length - 1]?.body ?? '');
       expect(lastBody).toContain('---\nthis: looks like frontmatter\nbut: is inside a code fence\n---');
       expect(lastBody).toContain('| Artist | Status | Notes |');
       expect(lastBody).toMatch(/appended\.\s*$/);
-    } else {
-      // jsdom did not dispatch the keystroke into CodeMirror's state — no PATCH fired.
-      // This is acceptable here; the manual QA scenario covers byte-level round-trip.
-      expect(patches.length).toBe(0);
     }
-
-    vi.useRealTimers();
   });
 });
