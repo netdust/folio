@@ -23,6 +23,7 @@ export function ListRow({ doc, statuses, onOpen }: Props) {
   const status = doc.status ? statuses.find((s) => s.key === doc.status) : null;
   return (
     <button
+      role="listitem"
       type="button"
       onClick={() => onOpen(doc.slug)}
       className="grid w-full grid-cols-[1fr_auto_auto] items-center gap-3 border-b border-border-light px-4 py-2 text-left transition-colors duration-fast hover:bg-card focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"

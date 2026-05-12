@@ -35,7 +35,7 @@ export function ListView({ wslug, pslug }: Props) {
     return (
       <EmptyState
         title="No work items"
-        description="Create one with the New work item button (Cmd-K → New work item, available after Task 28)."
+        description="Use Cmd-K → New work item to create one."
       />
     );
   }
@@ -43,9 +43,7 @@ export function ListView({ wslug, pslug }: Props) {
   return (
     <div role="list" className="flex flex-col">
       {page.data.map((doc) => (
-        <div role="listitem" key={doc.id}>
-          <ListRow doc={doc} statuses={statuses ?? []} onOpen={openDoc} />
-        </div>
+        <ListRow key={doc.id} doc={doc} statuses={statuses ?? []} onOpen={openDoc} />
       ))}
     </div>
   );
