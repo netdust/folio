@@ -56,7 +56,10 @@ function makeRouter(initialPath: string) {
 }
 
 describe('root auth gate', () => {
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
 
   it('allows public paths without /me check', async () => {
     const fetchSpy = vi.spyOn(global, 'fetch');
@@ -73,12 +76,15 @@ describe('root auth gate', () => {
   });
 
   it('redirects to /login when /me returns 401', async () => {
-    global.fetch = vi.fn(async () =>
-      new Response(
-        JSON.stringify({ error: { code: 'UNAUTHORIZED', message: 'no session' } }),
-        { status: 401, headers: { 'content-type': 'application/json' } },
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        new Response(
+          JSON.stringify({ error: { code: 'UNAUTHORIZED', message: 'no session' } }),
+          { status: 401, headers: { 'content-type': 'application/json' } },
+        ),
       ),
-    ) as unknown as typeof fetch;
+    );
 
     const { router, queryClient } = makeRouter('/');
 
@@ -89,15 +95,19 @@ describe('root auth gate', () => {
     );
 
     await waitFor(() => expect(screen.getByText('login page')).toBeInTheDocument());
+    expect(router.state.location.searchStr).toContain('redirect');
   });
 
   it('renders the home outlet when /me returns 200', async () => {
-    global.fetch = vi.fn(async () =>
-      new Response(
-        JSON.stringify({ data: { user: { id: 'u1', email: 'a@b.c', name: 'A' } } }),
-        { status: 200, headers: { 'content-type': 'application/json' } },
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        new Response(
+          JSON.stringify({ data: { user: { id: 'u1', email: 'a@b.c', name: 'A' } } }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        ),
       ),
-    ) as unknown as typeof fetch;
+    );
 
     const { router, queryClient } = makeRouter('/');
 
