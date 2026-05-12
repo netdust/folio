@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { createFileRoute, Link } from '@tanstack/react-router';
-import { api } from '../lib/api.ts';
+import { client } from '../lib/api/client.ts';
 
 export const Route = createFileRoute('/')({
   component: HomePage,
@@ -13,7 +13,7 @@ interface Me {
 function HomePage() {
   const me = useQuery({
     queryKey: ['me'],
-    queryFn: () => api.get<Me>('/api/auth/me').catch(() => null),
+    queryFn: () => client.get<Me>('/api/auth/me').catch(() => null),
     retry: false,
   });
 

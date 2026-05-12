@@ -1,7 +1,7 @@
 import { useMutation } from '@tanstack/react-query';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import { useState } from 'react';
-import { api, ApiError } from '../lib/api.ts';
+import { client, ApiError } from '../lib/api/client.ts';
 
 export const Route = createFileRoute('/login')({
   component: LoginPage,
@@ -42,7 +42,7 @@ function PasswordForm() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const m = useMutation({
-    mutationFn: () => api.post('/api/auth/login', { email, password }),
+    mutationFn: () => client.post<{ user: { id: string; email: string; name: string } }>('/api/auth/login', { email, password }),
     onSuccess: () => navigate({ to: '/' }),
   });
   return (
@@ -69,7 +69,7 @@ function PasswordForm() {
 function MagicForm() {
   const [email, setEmail] = useState('');
   const m = useMutation({
-    mutationFn: () => api.post('/api/auth/magic/request', { email }),
+    mutationFn: () => client.post<{ ok: true }>('/api/auth/magic/request', { email }),
   });
   return (
     <div className="space-y-4">
