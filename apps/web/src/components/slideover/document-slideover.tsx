@@ -3,10 +3,12 @@ import { useNavigate, useSearch } from '@tanstack/react-router';
 import { toast } from 'sonner';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '../ui/sheet.tsx';
 import { IconButton } from '../ui/icon-button.tsx';
-import { useDocument, useUpdateDocument } from '../../lib/api/documents.ts';
+import { useDocument, useDocuments, useUpdateDocument } from '../../lib/api/documents.ts';
 import { useStatuses } from '../../lib/api/statuses.ts';
 import { useFields } from '../../lib/api/fields.ts';
 import { formatApiError } from '../../lib/api/index.ts';
+import { useWorkspace } from '../../lib/api/workspaces.ts';
+import { useWorkspaceAiKeys } from '../../lib/api/settings.ts';
 import { FrontmatterForm } from './frontmatter-form.tsx';
 import { BodyEditor } from './body-editor.tsx';
 import { ModeToggle, type EditorMode } from './mode-toggle.tsx';
@@ -62,6 +64,12 @@ function SlideoverBody({ wslug, pslug, slug }: { wslug: string; pslug: string; s
     [],
   );
   const update = useUpdateDocument(wslug, pslug, listParams);
+  // Documents list — same listParams as useUpdateDocument so React Query dedupes the key
+  const { data: docPage } = useDocuments(wslug, pslug, listParams);
+  // AI key presence — drives the slash menu's aiConfigured flag
+  const { data: workspace } = useWorkspace(wslug);
+  const { data: aiKeysData } = useWorkspaceAiKeys(workspace?.id ?? '');
+  const aiConfigured = (aiKeysData?.keys ?? []).length > 0;
   const [pendingKeys, setPendingKeys] = useState<Set<string>>(new Set());
   const [mode, setMode] = useState<EditorMode>('rich');
 
@@ -111,6 +119,8 @@ function SlideoverBody({ wslug, pslug, slug }: { wslug: string; pslug: string; s
             key={`rich-${doc.slug}`}
             value={doc.body}
             onChange={(body) => onPatch({ body }, ['body'])}
+            documents={docPage?.data ?? []}
+            aiConfigured={aiConfigured}
           />
         ) : (
           <RawMdEditor
