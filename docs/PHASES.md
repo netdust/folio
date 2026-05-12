@@ -167,6 +167,38 @@ For full context on any decision: `@docs/FOLIO-BRIEFING.md`. For the operating m
 
 ---
 
+## Phase 1.5 — Time-aware views (Half-week)
+
+**Goal:** Folio becomes a tool you check on Monday morning. Add a timeline view as a third view type and a "This Week" dashboard surface. Read-only against existing data — no new tables.
+
+### Timeline view
+
+- [ ] Extend `views.type` to accept `'timeline'` alongside `'list'` and `'kanban'`
+- [ ] `components/views/timeline-view.tsx`: horizontal lanes, configurable day/week/month zoom
+- [ ] Items render from `frontmatter.due_date` (primary) or `frontmatter.start_date`/`end_date` range when both present
+- [ ] Items without a date appear in a collapsible "Unscheduled" tray below the timeline (drag-to-schedule sets `due_date`)
+- [ ] Drag an item horizontally → optimistic `PATCH frontmatter.due_date`; rollback on failure
+- [ ] Group lanes by status (default), assignee, or any frontmatter key — same `groupBy` mechanism as kanban
+- [ ] Auto-seed a third default view per project: **Schedule** — `type: timeline`, filter `type = work_item`, `groupBy: status`
+
+### This Week dashboard
+
+- [ ] New route: `/w/$workspace/this-week` — workspace-scoped, aggregates across all projects in the workspace
+- [ ] Server endpoint: `GET /api/v1/w/:wslug/this-week` returns three buckets — `due_this_week` (due_date within next 7 days), `overdue` (due_date in past, status not done/cancelled), `stale` (no update in 14+ days, status not done/cancelled)
+- [ ] Renders as three stacked sections; each row links to the document slideover
+- [ ] Items show their project icon + name so cross-project context is visible
+- [ ] Empty state per bucket — "Nothing due this week" is a feature, not a void
+
+### Phase 1.5 acceptance
+
+- [ ] Timeline view renders work items by `due_date` and lets you drag-reschedule
+- [ ] Items without dates land in the Unscheduled tray and can be dragged onto the timeline
+- [ ] `/w/$workspace/this-week` shows due, overdue, and stale buckets across all projects
+- [ ] Default `Schedule` view is auto-created with each new project
+- [ ] Commit: `phase-1.5: complete`
+
+---
+
 ## Phase 2 — Agents (Week 3)
 
 **Goal:** Folio is usable by AI agents. REST + MCP both work. Tokens have scoped permissions. Every write emits an event on SSE. Documentation lets a new agent integrate in 15 minutes.
@@ -221,11 +253,33 @@ Agents are first-class entities inside Folio, modelled as documents. No new tabl
 - [ ] UI: agent slideover renders `system_prompt` in the body editor (same Milkdown surface as any other document — editing the agent = writing markdown)
 - [ ] UI: inline assignee picker on work items lists both humans (memberships) and agents (documents with `type: 'agent'` in the same project)
 
+### Triggers-as-documents (surface only — scheduler/matcher in Phase 3)
+
+Triggers are documents with `type: 'trigger'`. Same documents table, same export-as-MD story. A trigger points at an agent slug and fires either on a schedule, an event pattern, or both. N triggers per agent. The scheduler that actually fires them lands in Phase 3 with the agent runner.
+
+- [ ] `documents.type` accepts `'trigger'` alongside `'work_item'`, `'page'`, `'agent'`
+- [ ] Trigger frontmatter shape (validated by Zod):
+  - `agent: string` (slug of the agent document this trigger invokes; must exist in the same project)
+  - `schedule: string | null` (cron expression, e.g. `"0 9 * * 1"` for Mondays 9am; null if event-only)
+  - `on_event: string | null` (event kind, e.g. `"document.updated"`; null if schedule-only)
+  - `event_filter: object | null` (mongo-ish filter against the event payload, e.g. `{ "document.status": "Done" }`; only consulted when `on_event` is set)
+  - `payload: object | null` (free-form JSON passed to the agent as input context — agent decides what to do with it)
+  - `enabled: boolean` (default `true`)
+  - `last_fired_at: string | null` (server-managed ISO datetime; never user-editable)
+  - `last_status: 'ok' | 'failed' | null` (server-managed)
+- [ ] At least one of `schedule` or `on_event` must be set — Zod rejects triggers with neither
+- [ ] On trigger create/update: validate `agent` slug exists in project; validate cron expression parses; validate `on_event` is a known event kind
+- [ ] Trigger CRUD uses the same documents endpoints — no new routes
+- [ ] UI: "Triggers" tab in project nav — default view filtered to `type: 'trigger'`, columns show `agent`, `schedule`, `on_event`, `last_fired_at`, `last_status`
+- [ ] UI: trigger slideover renders frontmatter as a form (cron picker, event-kind dropdown, JSON payload editor) above the body — body is a free-form description of what the trigger is for
+- [ ] Exported MD includes triggers under `projects/<pslug>/trigger/<slug>.md` — round-trip preserved
+
 ### Documentation
 
 - [ ] `docs/API.md`: REST reference, generated from route + JSDoc or hand-written
 - [ ] `docs/MCP.md`: tool reference with example invocations
 - [ ] `docs/AGENTS.md`: how the agent-document model works — schema, token minting, delegation rules, the `agent.task.assigned` event contract (the runner that consumes it ships in Phase 3)
+- [ ] `docs/TRIGGERS.md`: how the trigger-document model works — schema, cron + event-pattern semantics, payload contract (the scheduler/matcher that fires them ships in Phase 3)
 - [ ] Update root `README.md` with the agent integration story
 
 ### Phase 2 acceptance
@@ -237,6 +291,8 @@ Agents are first-class entities inside Folio, modelled as documents. No new tabl
 - [ ] Create an agent document via UI; its API token is auto-minted and the agent appears in the work-item assignee picker
 - [ ] Assigning a work item to `agent:<slug>` emits one `agent.task.assigned` event visible on the SSE stream
 - [ ] Deleting an agent revokes its token immediately (subsequent requests with that token fail)
+- [ ] Create a trigger document with a cron schedule pointing at an existing agent; trigger persists and round-trips as MD (scheduler fires in Phase 3)
+- [ ] Create a trigger with an `on_event` pattern + `event_filter`; validation accepts known event kinds and rejects unknown ones
 - [ ] Commit: `phase-2: complete`
 
 ---
@@ -283,6 +339,19 @@ Consumes the Phase 2 surface (`type: 'agent'` documents, auto-minted tokens, `ag
 - [ ] No AI key configured → assigning a work item to an agent stays in the assigned state but emits an `agent.task.failed` event with reason `no_ai_key`; UI shows a banner on the work item
 - [ ] Every agent invocation emits an `ai.action` event tagged with `actor_type: 'agent'` and `actor_id: <agent_document_id>`
 
+### Trigger scheduler + event-pattern matcher
+
+Fires the Phase 2 trigger documents. Two firing paths: a cron-driven scheduler for `schedule` triggers, and an event subscriber for `on_event` triggers. Both create a work item assigned to the trigger's `agent`, which then flows through the standard agent-runner path.
+
+- [ ] `lib/trigger-scheduler.ts`: on server boot, load all enabled triggers with non-null `schedule`; run a single in-process cron loop (1-minute tick, SQLite-backed — no Redis)
+- [ ] On schedule fire: create a work item in the trigger's project with `assignee: agent:<trigger.agent>`, title `"Triggered run: <trigger.slug>"`, body containing the trigger's `payload` JSON as a `## Input` section
+- [ ] `lib/trigger-matcher.ts`: subscribes to the events pub/sub; on each event, scan triggers with matching `on_event` kind in the same workspace; apply `event_filter` (same mongo-ish dialect as view filters); fire matching ones
+- [ ] Fired triggers patch their own frontmatter: `last_fired_at = now`, `last_status = 'ok'|'failed'` based on whether the work item was created successfully
+- [ ] Loop prevention: trigger-created work items carry `frontmatter.fired_by: <trigger_slug>`; the event-matcher skips events whose source document already has `fired_by` set (prevents trigger A firing trigger B firing trigger A)
+- [ ] Disabled triggers (`enabled: false`) are loaded but never fire — toggling `enabled` is the off switch
+- [ ] On trigger document delete: removed from the in-memory schedule + subscriber lists in the same transaction
+- [ ] New event kinds: `trigger.fired` (success), `trigger.failed` (e.g. agent doesn't exist, payload invalid)
+
 ### Audit
 
 - [ ] Every AI call emits an `ai.action` event with input/output token counts (no content stored)
@@ -296,6 +365,9 @@ Consumes the Phase 2 surface (`type: 'agent'` documents, auto-minted tokens, `ag
 - [ ] Create an agent with `tools: ['create_document', 'update_document']`, assign a work item to it, see the body patched by the agent within a few seconds
 - [ ] Agent A creates a child work item assigned to agent B; B runs and patches its own work item (one level of delegation works end-to-end)
 - [ ] An agent attempting to delegate past `max_delegation_depth` gets rejected and emits `agent.task.failed` with reason `depth_exceeded`
+- [ ] Create a cron trigger set to `* * * * *`; within ~60 seconds a work item is created and the assigned agent patches its body
+- [ ] Create an event trigger on `document.updated` with filter `{ "document.status": "Done" }`; flipping a work item to Done fires the trigger exactly once
+- [ ] A trigger created by an agent's output does not re-fire indefinitely (loop prevention via `fired_by` works)
 - [ ] Commit: `phase-3: complete`
 
 ---

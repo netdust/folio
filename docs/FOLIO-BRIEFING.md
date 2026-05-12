@@ -245,7 +245,7 @@ export const fields = sqliteTable('fields', {
 export const documents = sqliteTable('documents', {
   id: text('id').primaryKey(),
   projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
-  type: text('type').notNull(),               // 'work_item' | 'page'
+  type: text('type').notNull(),               // 'work_item' | 'page' | 'agent' | 'trigger'
   slug: text('slug').notNull(),               // URL-friendly, unique within project
   title: text('title').notNull(),
   status: text('status'),                     // status name; validated against statuses table for work_items
@@ -975,9 +975,11 @@ These are explicitly *not* in v1. Don't build them. Note them so they're visible
 |------|---------|
 | **Workspace** | The top-level container inside an instance. A customer might have one workspace ("Main") or several ("Galleries", "Stride", "Operations"). |
 | **Project** | A folder inside a workspace. Holds work items, pages, and configuration (statuses, fields, views). |
-| **Document** | The unified term for both work items and pages. Same table, different `type`. |
+| **Document** | The unified term for work items, pages, agents, and triggers. Same table, different `type`. |
 | **Work item** | A document with `type = 'work_item'`. Shows up on boards. Has a status. |
 | **Page** | A document with `type = 'page'`. Wiki-style long form. Nested via `parent_id`. |
+| **Agent** | A document with `type = 'agent'`. Frontmatter defines model, prompt, allowed MCP tools. The body is its system prompt. Auto-minted API token. |
+| **Trigger** | A document with `type = 'trigger'`. Frontmatter defines a cron schedule and/or event pattern that fires an agent. N triggers per agent. |
 | **Field** | A frontmatter key. Inferred-typed unless pinned in the project's `fields` table. |
 | **View** | A saved filter + sort + group-by + display config, scoped to a project. List or kanban in v1. |
 | **Event** | A row in the `events` table emitted on every CRUD. Streamed via SSE. Agents subscribe. |
