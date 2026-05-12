@@ -1,7 +1,7 @@
 import { toast } from 'sonner';
 import { InlineEdit } from '../inline/inline-edit.tsx';
 import { InlineSelect } from '../inline/inline-select.tsx';
-import type { DocumentSummary } from '../../lib/api/documents.ts';
+import type { DocumentSummary, DocumentPatch } from '../../lib/api/documents.ts';
 import type { Status } from '../../lib/api/statuses.ts';
 import { formatApiError } from '../../lib/api/index.ts';
 
@@ -9,7 +9,7 @@ interface Props {
   doc: DocumentSummary;
   statuses: Status[];
   onOpen: (slug: string) => void;
-  onUpdate: (vars: { slug: string; patch: { title?: string; status?: string | null } }) => Promise<unknown>;
+  onUpdate: (vars: { slug: string; patch: Pick<DocumentPatch, 'title' | 'status'> }) => Promise<unknown>;
   pendingSlugs: Set<string>;
 }
 

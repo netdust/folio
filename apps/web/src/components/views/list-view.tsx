@@ -1,6 +1,6 @@
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { useMemo, useState } from 'react';
-import { useDocuments, useUpdateDocument } from '../../lib/api/documents.ts';
+import { useDocuments, useUpdateDocument, type DocumentPatch } from '../../lib/api/documents.ts';
 import { useStatuses } from '../../lib/api/statuses.ts';
 import { EmptyState } from './empty-state.tsx';
 import { ListRow } from './list-row.tsx';
@@ -26,7 +26,7 @@ export function ListView({ wslug, pslug }: Props) {
     void navigate({ to: '.', search: { ...search, doc: slug }, replace: false });
   };
 
-  const onUpdate = async (vars: { slug: string; patch: { title?: string; status?: string | null } }) => {
+  const onUpdate = async (vars: { slug: string; patch: Pick<DocumentPatch, 'title' | 'status'> }) => {
     setPendingSlugs((prev) => new Set(prev).add(vars.slug));
     try {
       await update.mutateAsync(vars);
