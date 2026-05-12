@@ -75,6 +75,9 @@ export const workspaces = sqliteTable('workspaces', {
   createdAt: integer('created_at', { mode: 'timestamp_ms' })
     .notNull()
     .default(sql`(unixepoch() * 1000)`),
+  updatedAt: integer('updated_at', { mode: 'timestamp_ms' })
+    .notNull()
+    .default(sql`(unixepoch() * 1000)`),
 });
 
 export const memberships = sqliteTable(
@@ -108,7 +111,12 @@ export const projects = sqliteTable(
     slug: text('slug').notNull(),
     name: text('name').notNull(),
     icon: text('icon'), // emoji or short string
+    description: text('description'),
+    archivedAt: integer('archived_at', { mode: 'timestamp_ms' }),
     createdAt: integer('created_at', { mode: 'timestamp_ms' })
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' })
       .notNull()
       .default(sql`(unixepoch() * 1000)`),
   },

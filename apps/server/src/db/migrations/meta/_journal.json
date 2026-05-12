@@ -15,6 +15,13 @@
       "when": 1778529373369,
       "tag": "0001_illegal_lilith",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1778581814102,
+      "tag": "0002_fluffy_stephen_strange",
+      "breakpoints": true
     }
   ]
 }
