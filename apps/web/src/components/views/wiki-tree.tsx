@@ -1,13 +1,16 @@
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { useMemo, useState } from 'react';
 import { DndContext, PointerSensor, useDraggable, useDroppable, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
+import { ChevronDown, ChevronRight, FolderTree, Plus, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useDocuments, useCreateDocument, useUpdateDocument } from '../../lib/api/documents.ts';
 import { formatApiError } from '../../lib/api/index.ts';
 import { copyDocumentAsMarkdown } from '../../lib/copy-as-md.ts';
 import { Button } from '../ui/button.tsx';
+import { Icon } from '../ui/icon.tsx';
 import { EmptyState } from './empty-state.tsx';
 import { RowContextMenu } from './row-context-menu.tsx';
+import { WikiSkeleton } from './wiki-skeleton.tsx';
 import { buildTree, descendantIds, type TreeNode } from '../../lib/wiki-tree.ts';
 import { cn } from '../ui/cn.ts';
 
@@ -75,11 +78,12 @@ export function WikiTree({ wslug, pslug }: Props) {
     }
   };
 
-  if (isLoading) return <div className="p-4 text-fg-3">Loading…</div>;
+  if (isLoading) return <WikiSkeleton />;
   if (error) return <div className="p-4 text-danger">Failed to load wiki.</div>;
   if (tree.length === 0) {
     return (
       <EmptyState
+        icon={<Icon icon={FolderTree} size={20} />}
         title="No pages yet"
         description="Create your first wiki page."
         action={{ label: 'New page', onClick: onNewPage }}
@@ -91,7 +95,8 @@ export function WikiTree({ wslug, pslug }: Props) {
     <div className="flex h-full flex-col gap-2 px-[22px] py-2">
       <div className="flex items-center justify-between">
         <span className="text-sm text-fg-3">Wiki</span>
-        <Button variant="secondary" onClick={onNewPage} disabled={create.isPending}>
+        <Button variant="secondary" onClick={onNewPage} disabled={create.isPending} className="inline-flex items-center gap-1.5">
+          <Icon icon={create.isPending ? Loader2 : Plus} size={14} className={create.isPending ? 'animate-spin' : ''} />
           {create.isPending ? 'Creating…' : 'New page'}
         </Button>
       </div>
@@ -180,7 +185,7 @@ export function TreeRow({ node, depth, expanded, onToggle, onOpen, pendingId, ws
             className={`inline-grid h-6 w-6 place-items-center text-fg-3 ${hasChildren ? 'cursor-pointer hover:text-fg' : 'cursor-default opacity-0'}`}
             tabIndex={hasChildren ? 0 : -1}
           >
-            <span className="font-mono text-[10px]">{isExpanded ? '▾' : '▸'}</span>
+            <Icon icon={isExpanded ? ChevronDown : ChevronRight} size={14} />
           </button>
           <button
             type="button"
