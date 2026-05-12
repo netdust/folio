@@ -14,6 +14,7 @@ import { useFields } from '../../lib/api/fields.ts';
 import { FilterBar } from '../filter/filter-bar.tsx';
 import { EmptyState } from './empty-state.tsx';
 import { ListRow } from './list-row.tsx';
+import { ListHeader, type SortState } from './list-header.tsx';
 
 interface Props {
   wslug: string;
@@ -24,7 +25,21 @@ export function ListView({ wslug, pslug }: Props) {
   const navigate = useNavigate();
   const search = useSearch({ strict: false }) as Record<string, unknown>;
   const clauses = useMemo(() => parseFilters(search), [search]);
-  const listParams = useMemo(() => clausesToListParams(clauses), [clauses]);
+
+  const sort: SortState | null = useMemo(() => {
+    const k = typeof search.sort === 'string' ? search.sort : null;
+    const d = typeof search.dir === 'string' ? search.dir : null;
+    if (!k) return null;
+    return { key: k as SortState['key'], dir: (d as SortState['dir']) ?? 'asc' };
+  }, [search.sort, search.dir]);
+
+  const listParams = useMemo(() => {
+    const base = clausesToListParams(clauses);
+    if (sort) {
+      return { ...base, sort: sort.key, dir: sort.dir };
+    }
+    return base;     // server default = updated_at desc
+  }, [clauses, sort]);
   const { data: page, isLoading, error } = useDocuments(wslug, pslug, listParams);
   const { data: statuses } = useStatuses(wslug, pslug);
   const { data: fields } = useFields(wslug, pslug);
@@ -47,6 +62,18 @@ export function ListView({ wslug, pslug }: Props) {
       if (c.kind === 'labels') nextSearch['labels'] = c.values;
       if (c.kind === 'assignee') nextSearch['assignee'] = c.value;
       if (c.kind === 'updated_since') nextSearch['updated_since'] = c.value;
+    }
+    void navigate({ to: '.', search: nextSearch, replace: false });
+  };
+
+  const onSortChange = (next: SortState | null) => {
+    const nextSearch: Record<string, unknown> = { ...search };
+    if (next) {
+      nextSearch.sort = next.key;
+      nextSearch.dir = next.dir;
+    } else {
+      delete nextSearch.sort;
+      delete nextSearch.dir;
     }
     void navigate({ to: '.', search: nextSearch, replace: false });
   };
@@ -77,6 +104,7 @@ export function ListView({ wslug, pslug }: Props) {
         pinnedFields={fields ?? []}
         onChange={onClauseChange}
       />
+      <ListHeader sort={sort} onSort={onSortChange} />
       {isLoading ? <div className="p-4 text-fg-3">Loading…</div> : null}
       {error ? <div className="p-4 text-danger">Failed to load documents.</div> : null}
       {!isLoading && !error && filteredDocs.length === 0 ? (
