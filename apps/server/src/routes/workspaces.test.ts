@@ -49,7 +49,7 @@ test('POST with explicit slug; second use is 409', async () => {
 
 test('GET /api/v1/workspaces/:wslug returns workspace + role', async () => {
   const { app, seed } = await makeTestApp();
-  const res = await app.request('/api/v1/workspaces/acme', {
+  const res = await app.request('/api/v1/w/acme', {
     headers: { Cookie: seed.sessionCookie },
   });
   expect(res.status).toBe(200);
@@ -60,7 +60,7 @@ test('GET /api/v1/workspaces/:wslug returns workspace + role', async () => {
 
 test('PATCH /api/v1/workspaces/:wslug renames (owner)', async () => {
   const { app, seed } = await makeTestApp();
-  const res = await app.request('/api/v1/workspaces/acme', {
+  const res = await app.request('/api/v1/w/acme', {
     method: 'PATCH',
     headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
     body: JSON.stringify({ name: 'Acme Inc' }),
@@ -71,7 +71,7 @@ test('PATCH /api/v1/workspaces/:wslug renames (owner)', async () => {
 
 test('DELETE /api/v1/workspaces/:wslug 204 (owner)', async () => {
   const { app, seed } = await makeTestApp();
-  const res = await app.request('/api/v1/workspaces/acme', {
+  const res = await app.request('/api/v1/w/acme', {
     method: 'DELETE',
     headers: { Cookie: seed.sessionCookie },
   });

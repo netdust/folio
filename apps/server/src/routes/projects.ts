@@ -16,7 +16,6 @@ import {
   getProject,
   getRole,
   getWorkspace,
-  resolveProject,
 } from '../middleware/scope.ts';
 
 const projectsRoute = new Hono<AuthContext & ScopeContext>();
@@ -79,12 +78,13 @@ projectsRoute.post(
   },
 );
 
-const item = new Hono<AuthContext & ScopeContext>();
-item.use('*', resolveProject);
+// --- item (mounted under `/api/v1/w/:wslug/p/:pslug`; pScope already runs resolveProject) ---
 
-item.get('/', (c) => jsonOk(c, getProject(c)));
+const projectItemRoute = new Hono<AuthContext & ScopeContext>();
 
-item.patch(
+projectItemRoute.get('/', (c) => jsonOk(c, getProject(c)));
+
+projectItemRoute.patch(
   '/',
   zValidator(
     'json',
@@ -113,13 +113,11 @@ item.patch(
   },
 );
 
-item.delete('/', async (c) => {
+projectItemRoute.delete('/', async (c) => {
   if (getRole(c) !== 'owner') throw new HTTPError('FORBIDDEN', 'owner only', 403);
   const p = getProject(c);
   await db.delete(projects).where(eq(projects.id, p.id));
   return c.body(null, 204);
 });
 
-projectsRoute.route('/:pslug', item);
-
-export { projectsRoute };
+export { projectsRoute, projectItemRoute };

@@ -10,12 +10,12 @@ import { auth } from './routes/auth.ts';
 import { documentsRoute } from './routes/documents.ts';
 import { fieldsRoute } from './routes/fields.ts';
 import { healthRoute } from './routes/health.ts';
-import { projectsRoute } from './routes/projects.ts';
+import { projectItemRoute, projectsRoute } from './routes/projects.ts';
 import { settingsRoute } from './routes/settings.ts';
 import { statusesRoute } from './routes/statuses.ts';
 import { tokensRoute } from './routes/tokens.ts';
 import { viewsRoute } from './routes/views.ts';
-import { workspacesRoute } from './routes/workspaces.ts';
+import { workspaceItemRoute, workspacesRoute } from './routes/workspaces.ts';
 
 export const app = new Hono<AuthContext & ScopeContext>();
 registerErrorHandler(app);
@@ -43,8 +43,10 @@ pScope.route('/statuses', statusesRoute);
 pScope.route('/fields', fieldsRoute);
 pScope.route('/views', viewsRoute);
 pScope.route('/documents', documentsRoute);
+pScope.route('/', projectItemRoute);
 
 wScope.route('/p/:pslug', pScope);
+wScope.route('/', workspaceItemRoute);
 
 v1.route('/w/:wslug', wScope);
 app.route('/api/v1', v1);

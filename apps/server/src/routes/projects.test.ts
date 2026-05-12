@@ -46,7 +46,7 @@ test('POST derives unique slug when omitted', async () => {
 
 test('GET /w/:wslug/projects/:pslug returns the project', async () => {
   const { app, seed } = await makeTestApp();
-  const res = await app.request('/api/v1/w/acme/projects/web', {
+  const res = await app.request('/api/v1/w/acme/p/web', {
     headers: { Cookie: seed.sessionCookie },
   });
   expect(res.status).toBe(200);
@@ -55,7 +55,7 @@ test('GET /w/:wslug/projects/:pslug returns the project', async () => {
 
 test('PATCH /w/:wslug/projects/:pslug renames', async () => {
   const { app, seed } = await makeTestApp();
-  const res = await app.request('/api/v1/w/acme/projects/web', {
+  const res = await app.request('/api/v1/w/acme/p/web', {
     method: 'PATCH',
     headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
     body: JSON.stringify({ name: 'Webapp' }),
@@ -66,7 +66,7 @@ test('PATCH /w/:wslug/projects/:pslug renames', async () => {
 
 test('DELETE /w/:wslug/projects/:pslug (owner) returns 204', async () => {
   const { app, seed } = await makeTestApp();
-  const res = await app.request('/api/v1/w/acme/projects/web', {
+  const res = await app.request('/api/v1/w/acme/p/web', {
     method: 'DELETE',
     headers: { Cookie: seed.sessionCookie },
   });
@@ -75,7 +75,7 @@ test('DELETE /w/:wslug/projects/:pslug (owner) returns 204', async () => {
 
 test('GET unknown project → 404 PROJECT_NOT_FOUND', async () => {
   const { app, seed } = await makeTestApp();
-  const res = await app.request('/api/v1/w/acme/projects/nope', {
+  const res = await app.request('/api/v1/w/acme/p/nope', {
     headers: { Cookie: seed.sessionCookie },
   });
   expect(res.status).toBe(404);
