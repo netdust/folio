@@ -626,6 +626,8 @@ Each module is the only place that knows its URL shape. Components import hooks,
 
 The server wraps every success in `{ data: ... }`. The Task 2 client unwraps it, so hooks receive the inner value directly. Key endpoints (from `apps/server/src/routes/`):
 
+> **Note (2026-05-12 normalization):** This table was corrected after `docs/superpowers/plans/2026-05-12-phase-1-server-normalization.md` shipped. The original Task 4 hooks declared a flatter `Workspace[]` shape and included AI fields on `Workspace`; both were wrong. The realignment is captured in Task 9 of the normalization plan. Tasks 1-4 commits remain on the branch; only the AI-field type and the workspaces list type need post-normalization adjustment.
+
 | Route | Returns (unwrapped) |
 |---|---|
 | `GET /api/v1/auth/me` | `{ user: { id, email, name } }` |
@@ -633,13 +635,15 @@ The server wraps every success in `{ data: ... }`. The Task 2 client unwraps it,
 | `POST /api/v1/auth/login` | `{ user: { id, email, name } }` |
 | `POST /api/v1/auth/logout` | `{ ok: true }` |
 | `POST /api/v1/auth/magic-link/request` | `{ ok: true }` |
-| `GET /api/v1/workspaces` | `Workspace[]` |
-| `POST /api/v1/workspaces` | `Workspace` (201) |
-| `GET /api/v1/w/:wslug` | `Workspace` |
+| `GET /api/v1/workspaces` | `{ workspace: Workspace, role: 'owner' \| 'admin' \| 'member' }[]` — kept-wrapped membership shape |
+| `POST /api/v1/workspaces` | `Workspace` (201) — no AI fields; AI config lives on /settings/:workspaceId/ai-keys |
+| `GET /api/v1/w/:wslug` | `Workspace & { role }` |
 | `PATCH /api/v1/w/:wslug` | `Workspace` |
 | `DELETE /api/v1/w/:wslug` | `void` (204) |
 | `GET /api/v1/w/:wslug/projects` | `Project[]` |
 | `POST /api/v1/w/:wslug/projects` | `Project` (201) |
+| `GET /api/v1/w/:wslug/p/:pslug` | `Project` |
+| `PATCH /api/v1/w/:wslug/p/:pslug` | `Project` |
 | `GET /api/v1/w/:wslug/p/:pslug/documents` | `{ data: DocumentSummary[], nextCursor: string \| null }` — **list endpoint is the one exception**, server returns the cursor envelope itself, so the unwrap pulls out `{ data: [...], nextCursor }` |
 | `GET /api/v1/w/:wslug/p/:pslug/documents/:slug` | `Document` |
 | `POST /api/v1/w/:wslug/p/:pslug/documents` | `Document` (201) |
