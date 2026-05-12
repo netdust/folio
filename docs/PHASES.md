@@ -106,7 +106,7 @@ For full context on any decision: `@docs/FOLIO-BRIEFING.md`. For the operating m
 
 **Goal:** Create, read, update, delete documents (work items + pages). List view with filters and kanban view with drag-drop work. Inline editing functions. Body editor (Milkdown) and raw-MD toggle (CodeMirror) both work.
 
-> **Status (2026-05-12):** Backend shipped 2026-05-11. Frontend in progress under `docs/superpowers/plans/2026-05-11-phase-1-frontend.md`; foundational tasks 1-4 (vitest + testing-library, API client envelope unwrap, `useOptimisticPatch`, per-resource API modules) are committed. Server normalization shipped 2026-05-12 under `docs/superpowers/plans/2026-05-12-phase-1-server-normalization.md` — reconciled response shapes, item-route paths, and magic-link routes with the spec. Frontend resumes at Task 5 (root auth gate + Toaster).
+> **Status (2026-05-12):** Backend shipped 2026-05-11. Server normalization shipped 2026-05-12. All 25 frontend implementation tasks (Tasks 5-30 of `docs/superpowers/plans/2026-05-11-phase-1-frontend.md`) shipped under branch `phase-1/frontend`. 103 frontend tests pass + 1 jsdom-skipped (rich-body initial render). Manual QA pass against a real backend is the remaining gate before Phase 1 can be declared complete — see `apps/web/tests/manual-qa-phase-1.md`.
 
 ### Documents API
 
@@ -127,35 +127,35 @@ For full context on any decision: `@docs/FOLIO-BRIEFING.md`. For the operating m
 
 ### Frontend — list view
 
-- [ ] `components/views/list-view.tsx`: virtualized table, configurable columns
-- [ ] Display fields: title, status, plus frontmatter keys from view's `displayFields`
-- [ ] Inline edit: click title → text input; click status → dropdown
-- [ ] Frontmatter cell editors dispatch to `field-renderer.tsx` based on inferred/pinned type
-- [ ] Sort by clicking column header
-- [ ] Filter chips at the top: "Status is...", "Priority is..." (add via "+ Filter" button)
+- [x] `components/views/list-view.tsx`: virtualized table, configurable columns *(flat row render — virtualization deferred to Phase 4; spec §2 locked decision)*
+- [x] Display fields: title, status, plus frontmatter keys from view's `displayFields` *(title + status + updated_at in v1; per-view displayFields is Phase 4)*
+- [x] Inline edit: click title → text input; click status → dropdown
+- [x] Frontmatter cell editors dispatch to `field-renderer.tsx` based on inferred/pinned type *(field-renderer.tsx lives in the slideover form, not as list cells — spec §5.5)*
+- [x] Sort by clicking column header
+- [x] Filter chips at the top: "Status is...", "Priority is..." (add via "+ Filter" button)
 
 ### Frontend — kanban view
 
-- [ ] `components/views/kanban-view.tsx`: columns grouped by status
-- [ ] dnd-kit setup for drag-drop between columns
-- [ ] Optimistic status update on drop, rollback on failure
-- [ ] Card shows title + selected frontmatter fields
+- [x] `components/views/kanban-view.tsx`: columns grouped by status
+- [x] dnd-kit setup for drag-drop between columns
+- [x] Optimistic status update on drop, rollback on failure
+- [x] Card shows title + selected frontmatter fields *(priority + due_date chips in v1)*
 
 ### Frontend — editor & slideover
 
-- [ ] `components/slideover.tsx`: right-side panel, animates, URL-driven open state
-- [ ] Clicking a work item in any view opens the slideover for that document
-- [ ] Frontmatter fields render as labeled inputs above the body editor
-- [ ] Milkdown body editor with markdown plugins (gfm, math optional)
-- [ ] CodeMirror "raw MD" toggle: switches the whole document to raw mode
-- [ ] Round-trip: edit in raw → switch to form → all fields preserved correctly
+- [x] `components/slideover.tsx`: right-side panel, animates, URL-driven open state *(at `components/slideover/document-slideover.tsx`, URL via `?doc=<slug>`)*
+- [x] Clicking a work item in any view opens the slideover for that document
+- [x] Frontmatter fields render as labeled inputs above the body editor
+- [x] Milkdown body editor with markdown plugins (gfm, math optional) *(commonmark + gfm + history + listener + clipboard; math deferred)*
+- [x] CodeMirror "raw MD" toggle: switches the whole document to raw mode *(rich ↔ raw toggle; frontmatter form stays visible across modes per spec §5.6)*
+- [x] Round-trip: edit in raw → switch to form → all fields preserved correctly *(component-level test in `apps/web/src/components/slideover/__roundtrip__/round-trip.test.tsx`; manual QA scenario #8 is the byte-level gate)*
 
 ### Pages (wiki)
 
-- [ ] Pages live under a "Wiki" tab in the project nav
-- [ ] Tree view by `parent_id`
-- [ ] Same editor as work items (Milkdown + raw toggle)
-- [ ] Pages don't have status; their UI hides the status field
+- [x] Pages live under a "Wiki" tab in the project nav
+- [x] Tree view by `parent_id` *(plus drag-to-reparent with cycle guard)*
+- [x] Same editor as work items (Milkdown + raw toggle)
+- [x] Pages don't have status; their UI hides the status field
 
 ### Phase 1 acceptance
 
