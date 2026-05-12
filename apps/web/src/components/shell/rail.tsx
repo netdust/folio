@@ -134,7 +134,9 @@ function NavList({ items, expanded }: { items: NavItem[]; expanded: boolean }) {
             aria-label={item.label}
             className={cn(
               'relative inline-grid h-9 w-9 place-items-center rounded-md transition-colors duration-fast',
-              item.active ? 'bg-card text-fg' : 'text-fg-3 hover:bg-card hover:text-fg-2',
+              item.active
+                ? 'bg-[rgb(0_0_0_/_0.06)] dark:bg-[rgb(255_255_255_/_0.10)] text-fg'
+                : 'text-fg-3 hover:bg-card hover:text-fg-2',
             )}
           >
             {item.lucideIcon ? <Icon icon={item.lucideIcon} size={16} /> : <span className="inline-grid h-[18px] w-[18px] place-items-center">{item.icon}</span>}
@@ -153,7 +155,9 @@ function NavList({ items, expanded }: { items: NavItem[]; expanded: boolean }) {
           onClick={item.onClick}
           className={cn(
             'flex items-center gap-2.5 rounded-md px-2 py-1.5 text-sm transition-colors duration-fast',
-            item.active ? 'bg-card text-fg' : 'text-fg-2 hover:bg-card hover:text-fg',
+            item.active
+              ? 'bg-[rgb(0_0_0_/_0.06)] dark:bg-[rgb(255_255_255_/_0.10)] text-fg'
+              : 'text-fg-3 hover:bg-card hover:text-fg-2',
           )}
         >
           {item.lucideIcon ? <Icon icon={item.lucideIcon} size={16} /> : <span className="inline-grid h-[18px] w-[18px] place-items-center">{item.icon}</span>}
