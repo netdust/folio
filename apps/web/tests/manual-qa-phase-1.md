@@ -45,6 +45,7 @@ Run on a fresh install in a real browser. Tick each box only after observing the
 - [ ] Press Escape. Slideover closes. URL clears.
 - [ ] Open it again. Click the X button in the header. Same effect.
 - [ ] Click outside the slideover (on the list area). Slideover closes. URL clears.
+- [ ] Verify the toolbar shows Lucide icons (Clipboard for Copy MD, X for close); skeleton flashes briefly during the initial fetch.
 
 ### 6. Slideover — frontmatter + body edits
 
@@ -86,6 +87,8 @@ curl -b cookies.txt -X POST \
 - [ ] Drag a card from "Todo" into "In progress". Move 6px to activate drag. Drop. Card moves optimistically. Network shows PATCH 200.
 - [ ] Reload. Card stays in "In progress".
 - [ ] With DevTools → Network → Throttling: Offline, drag a card to another column. Card moves optimistically, then rolls back after the request fails. Toast appears.
+- [ ] Click the "+ New work item" button in the leftmost (lowest-order) column. New doc opens in slideover with the column's status preset.
+- [ ] Confirm the per-column "+" button does NOT initiate a drag when held briefly within 5px movement (drag activation distance gates this).
 
 ### 10. Wiki — create + reparent
 
@@ -128,6 +131,14 @@ curl -b cookies.txt -X POST \
 - [ ] Click title → inline edit → type something → Enter. Title updates optimistically.
 - [ ] After ~5s the request fails. Title rolls back to original. Toast appears with error message.
 - [ ] Back online. Re-edit. Saves cleanly.
+
+### 15. Sign up flow
+
+- [ ] Open an incognito window and visit `/login`. Click the "Sign up" tab. Form shows Name + Email + Password fields with Lucide icons (User / Mail / Lock).
+- [ ] Type a fresh email + name + password (≥8 chars). Press Enter in the password field.
+- [ ] Form submits via the wrapped `<form onSubmit>`. Land on `/`. See the workspace picker with "Welcome to Folio" empty state.
+- [ ] The session cookie is set; reloading stays on `/`.
+- [ ] In a second tab (still incognito), visit `/login` and try to sign up again with the same email. See "An account with this email exists, try signing in." inline.
 
 ---
 

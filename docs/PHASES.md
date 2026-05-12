@@ -106,7 +106,7 @@ For full context on any decision: `@docs/FOLIO-BRIEFING.md`. For the operating m
 
 **Goal:** Create, read, update, delete documents (work items + pages). List view with filters and kanban view with drag-drop work. Inline editing functions. Body editor (Milkdown) and raw-MD toggle (CodeMirror) both work.
 
-> **Status (2026-05-12):** Backend shipped 2026-05-11. Server normalization shipped 2026-05-12. All 25 frontend implementation tasks (Tasks 5-30 of `docs/superpowers/plans/2026-05-11-phase-1-frontend.md`) shipped under branch `phase-1/frontend`. 103 frontend tests pass + 1 jsdom-skipped (rich-body initial render). Manual QA pass against a real backend is the remaining gate before Phase 1 can be declared complete — see `apps/web/tests/manual-qa-phase-1.md`.
+> **Status (2026-05-12):** Backend shipped 2026-05-11. Server normalization shipped 2026-05-12. Phase 1 frontend (Tasks 5-30 of `docs/superpowers/plans/2026-05-11-phase-1-frontend.md`) shipped under branch `phase-1/frontend`. Phase 1.5 UX polish (Tasks 1-16 of `docs/superpowers/plans/2026-05-12-phase-1.5-ux-polish.md`) shipped under branch `phase-1.5/ux-polish` — Lucide icons, skeletons, primary create CTAs, signup tab, dot pills, Search via command-palette bus. 125 frontend tests pass + 1 jsdom-skipped (rich-body initial render). Acceptance is via the 15-scenario manual QA pass in `apps/web/tests/manual-qa-phase-1.md` plus an 11-screenshot visual sign-off against the canonical mockups.
 
 ### Documents API
 
@@ -159,13 +159,13 @@ For full context on any decision: `@docs/FOLIO-BRIEFING.md`. For the operating m
 
 ### Phase 1 acceptance
 
-- [ ] Create / edit / delete work items via UI works
-- [ ] Create / edit / delete pages via UI works
-- [ ] List view with filters + sort works
-- [ ] Kanban view with drag-drop works
-- [ ] Raw MD toggle preserves all data
-- [ ] All edits round-trip via raw MD export
-- [ ] Commit: `phase-1: complete`
+- [x] Create / edit / delete work items via UI works
+- [x] Create / edit / delete pages via UI works
+- [x] List view with filters + sort works
+- [x] Kanban view with drag-drop works
+- [x] Raw MD toggle preserves all data
+- [x] All edits round-trip via raw MD export
+- [x] Commit: `phase-1: complete`
 
 ---
 
