@@ -1,5 +1,6 @@
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import { useState } from 'react';
+import type React from 'react';
 import { ApiError } from '../lib/api/client.ts';
 import { useLogin, useMagicLinkRequest } from '../lib/api/auth.ts';
 
@@ -42,14 +43,17 @@ function PasswordForm() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const m = useLogin();
+  const onSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    m.mutate({ email, password }, { onSuccess: () => navigate({ to: '/' }) });
+  };
   return (
-    <div className="space-y-4">
+    <form className="space-y-4" onSubmit={onSubmit}>
       <Field label="Email" type="email" value={email} onChange={setEmail} />
       <Field label="Password" type="password" value={password} onChange={setPassword} />
       <button
-        type="button"
-        onClick={() => m.mutate({ email, password }, { onSuccess: () => navigate({ to: '/' }) })}
-        disabled={m.isPending}
+        type="submit"
+        disabled={m.isPending || !email || !password}
         className="w-full rounded-pill bg-primary px-4 py-2.5 text-sm font-medium text-primary-fg hover:opacity-90 transition-opacity duration-fast disabled:opacity-50"
       >
         {m.isPending ? 'Signing in…' : 'Sign in'}
@@ -59,20 +63,23 @@ function PasswordForm() {
           {m.error instanceof ApiError ? 'Invalid credentials.' : 'Something went wrong.'}
         </p>
       ) : null}
-    </div>
+    </form>
   );
 }
 
 function MagicForm() {
   const [email, setEmail] = useState('');
   const m = useMagicLinkRequest();
+  const onSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    m.mutate({ email });
+  };
   return (
-    <div className="space-y-4">
+    <form className="space-y-4" onSubmit={onSubmit}>
       <Field label="Email" type="email" value={email} onChange={setEmail} />
       <button
-        type="button"
-        onClick={() => m.mutate({ email })}
-        disabled={m.isPending}
+        type="submit"
+        disabled={m.isPending || !email}
         className="w-full rounded-pill bg-primary px-4 py-2.5 text-sm font-medium text-primary-fg hover:opacity-90 transition-opacity duration-fast disabled:opacity-50"
       >
         {m.isPending ? 'Sending…' : 'Email me a link'}
@@ -82,7 +89,7 @@ function MagicForm() {
           Check your inbox. In dev, the link is printed to the server console.
         </p>
       ) : null}
-    </div>
+    </form>
   );
 }
 
