@@ -31,7 +31,7 @@ export function useProjects(wslug: string) {
 export function useProject(wslug: string, pslug: string) {
   return useQuery({
     queryKey: projectsKeys.detail(wslug, pslug),
-    queryFn: () => client.get<Project>(`/api/v1/w/${wslug}/projects/${pslug}`),
+    queryFn: () => client.get<Project>(`/api/v1/w/${wslug}/p/${pslug}`),
     staleTime: 30_000,
     enabled: !!wslug && !!pslug,
   });
