@@ -12,6 +12,14 @@ export const Route = createFileRoute('/w/$wslug')({
   component: WorkspaceLayout,
 });
 
+const TOOLS: NavItem[] = [{
+  id: 'search',
+  label: 'Search',
+  lucideIcon: Search,
+  kbd: '⌘K',
+  onClick: openCommandPalette,
+}];
+
 function WorkspaceLayout() {
   const { wslug } = Route.useParams();
   const navigate = useNavigate();
@@ -28,7 +36,6 @@ function WorkspaceLayout() {
     return projects.map((p) => ({
       id: p.id,
       label: p.name,
-      icon: null,
       lucideIcon: FolderOpen,
       active: currentPath.startsWith(`/w/${wslug}/p/${p.slug}`),
       onClick: () =>
@@ -51,15 +58,6 @@ function WorkspaceLayout() {
     void navigate({ to: '/' });
   };
 
-  const tools: NavItem[] = [{
-    id: 'search',
-    label: 'Search',
-    icon: null,
-    lucideIcon: Search,
-    kbd: '⌘K',
-    onClick: openCommandPalette,
-  }];
-
   return (
     <Shell
       rail={
@@ -67,7 +65,7 @@ function WorkspaceLayout() {
           brand={{ mark: brandMark, label: 'Folio' }}
           workspace={{ mark: workspaceMark, name: workspace.name, onSwitch: onSwitchWorkspace }}
           primary={primary}
-          tools={tools}
+          tools={TOOLS}
           user={{ name: userName }}
         />
       }

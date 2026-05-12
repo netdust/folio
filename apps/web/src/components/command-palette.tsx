@@ -64,7 +64,6 @@ export function CommandPalette() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  // Bus event subscription — allows programmatic open via openCommandPalette()
   useEffect(() => {
     return subscribeOpenEvent(() => setOpen(true));
   }, []);

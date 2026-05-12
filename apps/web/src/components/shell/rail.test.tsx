@@ -13,12 +13,11 @@ describe('Rail', () => {
       <Rail
         brand={{ mark: 'F', label: 'Folio' }}
         workspace={{ mark: 'B', name: 'BAVI' }}
-        primary={[{ id: 'a', label: 'Web', lucideIcon: Home, icon: null }]}
+        primary={[{ id: 'a', label: 'Web', lucideIcon: Home }]}
         user={{ name: 'Stefan' }}
       />,
     );
     expect(screen.getByText('Web')).toBeInTheDocument();
-    // Lucide icons render as <svg>; the Icon wrapper sets stroke-width=1.5
     const svgs = container.querySelectorAll('svg[stroke-width="1.5"]');
     expect(svgs.length).toBeGreaterThan(0);
   });
@@ -32,7 +31,7 @@ describe('Rail', () => {
           brand={{ mark: 'F', label: 'Folio' }}
           workspace={{ mark: 'B', name: 'BAVI' }}
           primary={[]}
-          tools={[{ id: 'search', label: 'Search', lucideIcon: Search, kbd: '⌘K', icon: null, onClick: openCommandPalette }]}
+          tools={[{ id: 'search', label: 'Search', lucideIcon: Search, kbd: '⌘K', onClick: openCommandPalette }]}
           user={{ name: 'Stefan' }}
         />,
       );

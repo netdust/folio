@@ -10,7 +10,7 @@ const STORAGE_KEY = 'folio:rail-collapsed';
 export interface NavItem {
   id: string;
   label: string;
-  icon: ReactNode;
+  icon?: ReactNode;
   lucideIcon?: LucideIcon;
   href?: string;
   kbd?: string;
