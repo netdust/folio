@@ -36,10 +36,14 @@ function RootLayout() {
   const path = routerState.location.pathname;
   const isAuthRoute = path === '/login' || path === '/magic';
   return (
-    <div className="min-h-screen bg-shell text-fg">
-      <main className="mx-auto max-w-5xl px-8 py-12">
+    <div className="h-screen bg-shell text-fg">
+      {isAuthRoute ? (
+        <main className="mx-auto max-w-5xl px-8 py-12">
+          <Outlet />
+        </main>
+      ) : (
         <Outlet />
-      </main>
+      )}
       <Toaster />
       {!isAuthRoute ? <CommandPalette /> : null}
       {import.meta.env.DEV ? <TanStackRouterDevtools /> : null}
