@@ -38,3 +38,27 @@ export function SheetContent({ children, className, width = 800 }: SheetContentP
     </DialogPrimitive.Portal>
   );
 }
+
+export function SheetHeader({ children, className }: { children: ReactNode; className?: string }) {
+  return (
+    <div className={cn('flex items-center justify-between border-b border-border-light px-6 py-4', className)}>
+      {children}
+    </div>
+  );
+}
+
+export function SheetTitle({ children, className }: { children: ReactNode; className?: string }) {
+  return (
+    <DialogPrimitive.Title className={cn('text-base font-medium text-fg', className)}>
+      {children}
+    </DialogPrimitive.Title>
+  );
+}
+
+export function SheetFooter({ children, className }: { children: ReactNode; className?: string }) {
+  return (
+    <div className={cn('mt-auto flex items-center justify-end gap-2 border-t border-border-light px-6 py-4', className)}>
+      {children}
+    </div>
+  );
+}
