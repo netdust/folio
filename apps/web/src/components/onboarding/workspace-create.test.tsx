@@ -41,20 +41,18 @@ describe('WorkspaceCreate', () => {
   });
 
   it('auto-derives slug from name and submits to create the workspace', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (url: string | URL, init?: RequestInit) => {
-        if (String(url).endsWith('/api/v1/workspaces') && init?.method === 'POST') {
-          return new Response(
-            JSON.stringify({
-              data: { id: 'w1', slug: 'spring-show', name: 'Spring Show' },
-            }),
-            { status: 201, headers: { 'content-type': 'application/json' } },
-          );
-        }
-        return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
-      }),
-    );
+    const fetchMock = vi.fn<typeof fetch>(async (url, init) => {
+      if (String(url).endsWith('/api/v1/workspaces') && init?.method === 'POST') {
+        return new Response(
+          JSON.stringify({
+            data: { id: 'w1', slug: 'spring-show', name: 'Spring Show' },
+          }),
+          { status: 201, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
 
     const { queryClient, router } = setup();
     render(
@@ -71,9 +69,16 @@ describe('WorkspaceCreate', () => {
     });
     await userEvent.click(screen.getByRole('button', { name: /Create workspace/ }));
     await waitFor(() => expect(screen.getByText('navigated to workspace')).toBeInTheDocument());
+
+    const postCall = fetchMock.mock.calls.find(
+      ([url, init]) => String(url).endsWith('/api/v1/workspaces') && init?.method === 'POST',
+    );
+    expect(postCall).toBeDefined();
+    const body = JSON.parse(postCall![1]!.body as string) as unknown;
+    expect(body).toEqual({ name: 'Spring Show', slug: 'spring-show' });
   });
 
-  it('surfaces SLUG_TAKEN as an inline field error, not a toast', async () => {
+  it('surfaces SLUG_CONFLICT as an inline field error, not a toast', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () =>
@@ -97,5 +102,8 @@ describe('WorkspaceCreate', () => {
     await waitFor(() =>
       expect(screen.getByText(/already in use|already taken|Slug already/i)).toBeInTheDocument(),
     );
+    const slugInput = screen.getByLabelText(/Slug/i);
+    const errorEl = await screen.findByRole('alert');
+    expect(slugInput.parentElement).toContainElement(errorEl);
   });
 });
