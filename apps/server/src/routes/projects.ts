@@ -75,14 +75,14 @@ projectsRoute.post(
       });
     });
 
-    return jsonOk(c, { project: { id, workspaceId: ws.id, slug, name, icon: icon ?? null } }, 201);
+    return jsonOk(c, { id, workspaceId: ws.id, slug, name, icon: icon ?? null }, 201);
   },
 );
 
 const item = new Hono<AuthContext & ScopeContext>();
 item.use('*', resolveProject);
 
-item.get('/', (c) => jsonOk(c, { project: getProject(c) }));
+item.get('/', (c) => jsonOk(c, getProject(c)));
 
 item.patch(
   '/',
@@ -98,8 +98,9 @@ item.patch(
     const ws = getWorkspace(c);
     const user = getUser(c);
     const patch = c.req.valid('json');
+    const now = new Date();
     await db.transaction(async (tx) => {
-      await tx.update(projects).set(patch).where(eq(projects.id, p.id));
+      await tx.update(projects).set({ ...patch, updatedAt: now }).where(eq(projects.id, p.id));
       await emitEvent(tx, {
         workspaceId: ws.id,
         projectId: p.id,
@@ -108,7 +109,7 @@ item.patch(
         payload: { changes: Object.keys(patch) },
       });
     });
-    return jsonOk(c, { project: { ...p, ...patch } });
+    return jsonOk(c, { ...p, ...patch, updatedAt: now });
   },
 );
 

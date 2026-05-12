@@ -19,7 +19,7 @@ test('POST /w/:wslug/projects with explicit slug', async () => {
     body: JSON.stringify({ name: 'Mobile', slug: 'mobile' }),
   });
   expect(res.status).toBe(201);
-  expect((await res.json()).data.project.slug).toBe('mobile');
+  expect((await res.json()).data.slug).toBe('mobile');
 });
 
 test('POST 409 on duplicate slug', async () => {
@@ -41,7 +41,7 @@ test('POST derives unique slug when omitted', async () => {
     body: JSON.stringify({ name: 'Web' }),
   });
   expect(res.status).toBe(201);
-  expect((await res.json()).data.project.slug).toBe('web-2');
+  expect((await res.json()).data.slug).toBe('web-2');
 });
 
 test('GET /w/:wslug/projects/:pslug returns the project', async () => {
@@ -50,7 +50,7 @@ test('GET /w/:wslug/projects/:pslug returns the project', async () => {
     headers: { Cookie: seed.sessionCookie },
   });
   expect(res.status).toBe(200);
-  expect((await res.json()).data.project.slug).toBe('web');
+  expect((await res.json()).data.slug).toBe('web');
 });
 
 test('PATCH /w/:wslug/projects/:pslug renames', async () => {
@@ -61,7 +61,7 @@ test('PATCH /w/:wslug/projects/:pslug renames', async () => {
     body: JSON.stringify({ name: 'Webapp' }),
   });
   expect(res.status).toBe(200);
-  expect((await res.json()).data.project.name).toBe('Webapp');
+  expect((await res.json()).data.name).toBe('Webapp');
 });
 
 test('DELETE /w/:wslug/projects/:pslug (owner) returns 204', async () => {
@@ -91,7 +91,7 @@ test('POST seeds 4 statuses and 2 views', async () => {
     headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
     body: JSON.stringify({ name: 'Mobile' }),
   });
-  const { data: { project } } = await create.json();
+  const { data: project } = await create.json();
   const s = await db.select().from(statuses).where(eq(statuses.projectId, project.id));
   const v = await db.select().from(views).where(eq(views.projectId, project.id));
   expect(s).toHaveLength(4);
