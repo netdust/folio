@@ -44,7 +44,7 @@ export function RawMdEditor({ value, onChange, readOnly }: Props) {
           '.cm-scroller': { fontFamily: 'var(--font-mono)', overflow: 'auto' },
           '.cm-gutters': {
             backgroundColor: 'transparent',
-            borderRight: '1px solid var(--color-border-light)',
+            border: 'none',
             color: 'var(--color-fg-3)',
           },
           '&.cm-focused': { outline: 'none' },

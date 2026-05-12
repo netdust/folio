@@ -7,13 +7,14 @@ import { IconButton } from '../ui/icon-button.tsx';
 import { Button } from '../ui/button.tsx';
 import { Icon } from '../ui/icon.tsx';
 import { Skeleton } from '../ui/skeleton.tsx';
-import { useDocument, useDocuments, useUpdateDocument } from '../../lib/api/documents.ts';
+import { type Document, useDocument, useDocuments, useUpdateDocument } from '../../lib/api/documents.ts';
 import { useStatuses } from '../../lib/api/statuses.ts';
 import { useFields } from '../../lib/api/fields.ts';
 import { formatApiError } from '../../lib/api/index.ts';
 import { useWorkspace } from '../../lib/api/workspaces.ts';
 import { useWorkspaceAiKeys } from '../../lib/api/settings.ts';
 import { copyDocumentAsMarkdown } from '../../lib/copy-as-md.ts';
+import { InlineEdit } from '../inline/inline-edit.tsx';
 import { FrontmatterForm } from './frontmatter-form.tsx';
 import { BodyEditor } from './body-editor.tsx';
 import { ModeToggle, type EditorMode } from './mode-toggle.tsx';
@@ -56,7 +57,15 @@ export function DocumentSlideover({ wslug, pslug }: Props) {
       <SheetContent width={800} className="h-screen">
         <SheetHeader>
           <SheetTitle>
-            {isLoading ? <Skeleton width={200} height={20} /> : error ? 'Failed to load' : doc?.title ?? '—'}
+            {isLoading ? (
+              <Skeleton width={200} height={20} />
+            ) : error ? (
+              'Failed to load'
+            ) : doc ? (
+              <SlideoverTitleEditor doc={doc} wslug={wslug} pslug={pslug} />
+            ) : (
+              '—'
+            )}
           </SheetTitle>
           <div className="flex items-center gap-2">
             {doc ? (
@@ -75,6 +84,30 @@ export function DocumentSlideover({ wslug, pslug }: Props) {
         </div>
       </SheetContent>
     </Sheet>
+  );
+}
+
+function SlideoverTitleEditor({ doc, wslug, pslug }: { doc: Document; wslug: string; pslug: string }) {
+  const listParams = useMemo(
+    () => ({ type: doc.type as 'work_item' | 'page', sort: 'updated_at' as const, dir: 'desc' as const }),
+    [doc.type],
+  );
+  const update = useUpdateDocument(wslug, pslug, listParams);
+  const onCommit = async (next: string) => {
+    try {
+      await update.mutateAsync({ slug: doc.slug, patch: { title: next } });
+    } catch (err) {
+      toast.error(formatApiError(err));
+    }
+  };
+  return (
+    <InlineEdit
+      value={doc.title}
+      onCommit={onCommit}
+      ariaLabel="Document title"
+      autoEditWhenValue="Untitled"
+      className="text-base font-medium"
+    />
   );
 }
 
