@@ -1,8 +1,12 @@
+import { useState } from 'react';
+import { Plus } from 'lucide-react';
 import { inferFieldType } from '@folio/shared';
 import type { Status } from '../../lib/api/statuses.ts';
 import type { Field, FieldType } from '../../lib/api/fields.ts';
 import { InlineSelect } from '../inline/inline-select.tsx';
 import { FieldRenderer } from './field-renderer.tsx';
+import { Icon } from '../ui/icon.tsx';
+import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
 
 interface Props {
   type: 'work_item' | 'page';
@@ -87,6 +91,83 @@ export function FrontmatterForm({
           </div>
         );
       })}
+
+      <dt className="self-center font-mono text-[11px] text-fg-3" />
+      <dd>
+        <AddField
+          existingKeys={new Set([...Object.keys(frontmatter), ...pinnedFields.map((f) => f.key)])}
+          onAdd={(key) => onFrontmatterCommit({ [key]: '' })}
+        />
+      </dd>
     </dl>
+  );
+}
+
+function AddField({
+  existingKeys,
+  onAdd,
+}: {
+  existingKeys: Set<string>;
+  onAdd: (key: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState('');
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = () => {
+    const v = name.trim();
+    if (!v) return;
+    if (existingKeys.has(v)) {
+      setError('Field already exists');
+      return;
+    }
+    onAdd(v);
+    setName('');
+    setError(null);
+    setOpen(false);
+  };
+
+  const onChange = (next: string) => {
+    setName(next);
+    if (error) setError(null);
+  };
+
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(o) => {
+        setOpen(o);
+        if (!o) {
+          setName('');
+          setError(null);
+        }
+      }}
+    >
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className="inline-flex items-center gap-1 rounded-sm px-1.5 py-0.5 text-xs text-fg-3 hover:bg-card hover:text-fg-2"
+        >
+          <Icon icon={Plus} size={14} />
+          Add field
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-[240px] p-2">
+        <input
+          autoFocus
+          placeholder="Field name"
+          value={name}
+          onChange={(e) => onChange(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              submit();
+            }
+          }}
+          className="block w-full rounded-sm border border-border-light bg-shell px-2 py-1 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+        />
+        {error ? <p className="mt-1 text-xs text-danger">{error}</p> : null}
+      </PopoverContent>
+    </Popover>
   );
 }

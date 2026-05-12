@@ -1,9 +1,12 @@
 import { useState, useMemo } from 'react';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { toast } from 'sonner';
+import { Clipboard, X } from 'lucide-react';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '../ui/sheet.tsx';
 import { IconButton } from '../ui/icon-button.tsx';
 import { Button } from '../ui/button.tsx';
+import { Icon } from '../ui/icon.tsx';
+import { Skeleton } from '../ui/skeleton.tsx';
 import { useDocument, useDocuments, useUpdateDocument } from '../../lib/api/documents.ts';
 import { useStatuses } from '../../lib/api/statuses.ts';
 import { useFields } from '../../lib/api/fields.ts';
@@ -53,16 +56,17 @@ export function DocumentSlideover({ wslug, pslug }: Props) {
       <SheetContent width={800} className="h-screen">
         <SheetHeader>
           <SheetTitle>
-            {isLoading ? 'Loading…' : error ? 'Failed to load' : doc?.title ?? '—'}
+            {isLoading ? <Skeleton width={200} height={20} /> : error ? 'Failed to load' : doc?.title ?? '—'}
           </SheetTitle>
           <div className="flex items-center gap-2">
             {doc ? (
-              <Button variant="secondary" size="sm" onClick={onCopyMd}>
+              <Button variant="secondary" size="sm" onClick={onCopyMd} className="inline-flex items-center gap-1.5">
+                <Icon icon={Clipboard} size={14} />
                 Copy MD
               </Button>
             ) : null}
             <IconButton label="Close document" onClick={close}>
-              <span className="font-mono text-sm">×</span>
+              <Icon icon={X} size={16} />
             </IconButton>
           </div>
         </SheetHeader>
