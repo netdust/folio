@@ -1,6 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { client } from './client.ts';
-import { useOptimisticPatch } from './optimistic.ts';
 
 export type DocumentType = 'work_item' | 'page';
 
@@ -101,21 +100,49 @@ export type DocumentPatch = Partial<{
 }>;
 
 export function useUpdateDocument(wslug: string, pslug: string, listParams: DocumentListParams = {}) {
-  return useOptimisticPatch<Document, { slug: string; patch: DocumentPatch }>({
-    detailKey: ({ slug }) => documentsKeys.detail(wslug, pslug, slug),
-    listKey: documentsKeys.list(wslug, pslug, listParams),
-    mutationFn: ({ slug, patch }) =>
+  const qc = useQueryClient();
+  const listKey = documentsKeys.list(wslug, pslug, listParams);
+  return useMutation({
+    mutationFn: ({ slug, patch }: { slug: string; patch: DocumentPatch }) =>
       client.patch<Document>(`/api/v1/w/${wslug}/p/${pslug}/documents/${slug}`, patch),
-    applyToDetail: (prev, { patch }) => ({
-      ...prev,
-      ...patch,
-      frontmatter: { ...prev.frontmatter, ...(patch.frontmatter ?? {}) },
-    }),
-    // applyToList omitted intentionally — the list query returns DocumentListPage
-    // (not a flat array), so the generic optimistic helper's TData[] shape doesn't fit.
-    // Task 13 upgrades this hook to patch the list page directly.
-    // For Task 4, only the detail cache is patched optimistically; the list re-fetches
-    // via onSettled.invalidate.
+    onMutate: async ({ slug, patch }) => {
+      const detailKey = documentsKeys.detail(wslug, pslug, slug);
+      await qc.cancelQueries({ queryKey: detailKey });
+      await qc.cancelQueries({ queryKey: listKey });
+      const prevDetail = qc.getQueryData<Document>(detailKey);
+      const prevList = qc.getQueryData<DocumentListPage>(listKey);
+      if (prevDetail) {
+        qc.setQueryData<Document>(detailKey, {
+          ...prevDetail,
+          ...patch,
+          frontmatter: { ...prevDetail.frontmatter, ...(patch.frontmatter ?? {}) },
+        });
+      }
+      if (prevList) {
+        qc.setQueryData<DocumentListPage>(listKey, {
+          ...prevList,
+          data: prevList.data.map((d) =>
+            d.slug === slug
+              ? {
+                  ...d,
+                  ...patch,
+                  frontmatter: { ...d.frontmatter, ...(patch.frontmatter ?? {}) },
+                }
+              : d,
+          ),
+        });
+      }
+      return { prevDetail, prevList, detailKey };
+    },
+    onError: (_err, _vars, ctx) => {
+      if (!ctx) return;
+      if (ctx.prevDetail) qc.setQueryData(ctx.detailKey, ctx.prevDetail);
+      if (ctx.prevList) qc.setQueryData(listKey, ctx.prevList);
+    },
+    onSettled: (_data, _err, { slug }) => {
+      qc.invalidateQueries({ queryKey: documentsKeys.detail(wslug, pslug, slug) });
+      qc.invalidateQueries({ queryKey: listKey });
+    },
   });
 }
 

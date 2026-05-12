@@ -108,7 +108,7 @@ describe('ListView', () => {
     await waitFor(() => expect(screen.getByText(/No work items/)).toBeInTheDocument());
   });
 
-  it('clicking a row updates the URL with ?doc=', async () => {
+  it('clicking the open icon updates the URL with ?doc=', async () => {
     const fetchMock = vi.fn<typeof fetch>(async (url) => mockResponse(String(url)));
     vi.stubGlobal('fetch', fetchMock);
     const { queryClient, router } = setup();
@@ -117,7 +117,8 @@ describe('ListView', () => {
         <RouterProvider router={router} />
       </QueryClientProvider>,
     );
-    await userEvent.click(await screen.findByText('Fix login bug'));
+    await screen.findByText('Fix login bug');
+    await userEvent.click(screen.getByRole('button', { name: 'Open document' }));
     await waitFor(() => expect(router.state.location.search).toEqual({ doc: 'fix-login' }));
   });
 });
