@@ -1,8 +1,11 @@
 import { createFileRoute, Outlet, useNavigate, useRouterState } from '@tanstack/react-router';
+import { z } from 'zod';
 import { useProject } from '../lib/api/projects.ts';
 import { MainFrame, FrameTab } from '../components/shell/main-frame.tsx';
+import { DocumentSlideover } from '../components/slideover/document-slideover.tsx';
 
 export const Route = createFileRoute('/w/$wslug/p/$pslug')({
+  validateSearch: z.object({ doc: z.string().optional() }),
   component: ProjectLayout,
 });
 
@@ -25,29 +28,33 @@ function ProjectLayout() {
   const activeTab = TABS.find((t) => path.endsWith(`/${t.path}`))?.id ?? 'work-items';
 
   return (
-    <MainFrame
-      title={project.name}
-      subMeta={`/${wslug}/p/${project.slug}`}
-      tabs={
-        <>
-          {TABS.map((t) => (
-            <FrameTab
-              key={t.id}
-              active={activeTab === t.id}
-              onClick={() =>
-                navigate({
-                  to: `/w/$wslug/p/$pslug/${t.path}`,
-                  params: { wslug, pslug },
-                })
-              }
-            >
-              {t.label}
-            </FrameTab>
-          ))}
-        </>
-      }
-    >
-      <Outlet />
-    </MainFrame>
+    <>
+      <MainFrame
+        title={project.name}
+        subMeta={`/${wslug}/p/${project.slug}`}
+        tabs={
+          <>
+            {TABS.map((t) => (
+              <FrameTab
+                key={t.id}
+                active={activeTab === t.id}
+                onClick={() =>
+                  navigate({
+                    to: `/w/$wslug/p/$pslug/${t.path}`,
+                    params: { wslug, pslug },
+                    search: (s) => s,
+                  })
+                }
+              >
+                {t.label}
+              </FrameTab>
+            ))}
+          </>
+        }
+      >
+        <Outlet />
+      </MainFrame>
+      <DocumentSlideover wslug={wslug} pslug={pslug} />
+    </>
   );
 }
