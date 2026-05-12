@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { cn } from '../ui/cn.ts';
 import {
   filterSlash,
@@ -20,27 +20,6 @@ export function SlashMenu({ ctx, query, rect, onClose }: Props) {
 
   useEffect(() => setActive(0), [query]);
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'ArrowDown') {
-        e.preventDefault();
-        setActive((a) => Math.min(items.length - 1, a + 1));
-      } else if (e.key === 'ArrowUp') {
-        e.preventDefault();
-        setActive((a) => Math.max(0, a - 1));
-      } else if (e.key === 'Enter') {
-        e.preventDefault();
-        const it = items[active];
-        if (it) selectItem(it);
-      } else if (e.key === 'Escape') {
-        e.preventDefault();
-        onClose();
-      }
-    };
-    window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
-  });
-
   const selectItem = (item: SlashItem) => {
     const enabled = item.isEnabled ? item.isEnabled(ctx) : true;
     if (enabled) {
@@ -51,13 +30,44 @@ export function SlashMenu({ ctx, query, rect, onClose }: Props) {
     onClose();
   };
 
+  // Stable refs so the keydown handler is attached once (not re-added on every render)
+  const activeRef = useRef(active);
+  activeRef.current = active;
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
+  const selectRef = useRef(selectItem);
+  selectRef.current = selectItem;
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setActive((a) => Math.min(itemsRef.current.length - 1, a + 1));
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setActive((a) => Math.max(0, a - 1));
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        const it = itemsRef.current[activeRef.current];
+        if (it) selectRef.current(it);
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        onCloseRef.current();
+      }
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, []);
+
   if (items.length === 0) return null;
 
   return (
     <div
       role="listbox"
       aria-label="Slash commands"
-      className="fixed z-50 max-w-[320px] rounded-md bg-content shadow-popover"
+      className="fixed z-[60] max-w-[320px] rounded-md bg-content shadow-popover"
       style={{ top: rect.top, left: rect.left }}
     >
       <ul className="flex max-h-72 flex-col overflow-auto p-1">

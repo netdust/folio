@@ -103,17 +103,18 @@ function MilkdownEditor({
       return () => dom.removeEventListener('input', onInput);
     };
 
-    // Defer once to let Milkdown finish mounting the ProseMirror DOM
+    // Defer once to let Milkdown finish mounting the ProseMirror DOM.
+    // Capture the listener cleanup so it runs on unmount even if the timer already fired.
+    let listenerCleanup: (() => void) | undefined;
     const timer = setTimeout(() => {
-      const cleanup = attach();
-      if (typeof cleanup === 'function') {
-        // Store cleanup for the outer useEffect return — we can't return it from inside
-        // setTimeout, so we track it via a ref-like approach using a local flag.
-        // Instead, we re-attach on next render if DOM wasn't ready.
-      }
+      const result = attach();
+      if (typeof result === 'function') listenerCleanup = result;
     }, 0);
 
-    return () => clearTimeout(timer);
+    return () => {
+      clearTimeout(timer);
+      listenerCleanup?.();
+    };
   }, [wrapperRef]);
 
   // Build SlashContext using wrapperRef-scoped DOM queries
