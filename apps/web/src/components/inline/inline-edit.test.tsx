@@ -66,4 +66,27 @@ describe('InlineEdit', () => {
     render(<InlineEdit value="Hello" onCommit={() => {}} isPending />);
     expect(screen.getByText('Hello').className).toMatch(/opacity/);
   });
+
+  it('defaultEditing treats value as placeholder so typing replaces, not appends', async () => {
+    const onCommit = vi.fn();
+    render(<InlineEdit value="Untitled" onCommit={onCommit} defaultEditing />);
+    const input = screen.getByRole('textbox') as HTMLInputElement;
+    expect(input.value).toBe('');
+    expect(input.placeholder).toBe('Untitled');
+    await userEvent.type(input, 'My first task{Enter}');
+    expect(onCommit).toHaveBeenCalledWith('My first task');
+  });
+
+  it('defaultEditing: blurring with empty draft reverts instead of committing empty', async () => {
+    const onCommit = vi.fn();
+    render(
+      <>
+        <InlineEdit value="Untitled" onCommit={onCommit} defaultEditing />
+        <button type="button">elsewhere</button>
+      </>,
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'elsewhere' }));
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(screen.getByText('Untitled')).toBeInTheDocument();
+  });
 });

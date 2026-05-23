@@ -72,3 +72,17 @@ Self-improvement log per global CLAUDE.md workflow. After any user correction, a
 **Why:** `tail -N` (without `-f`) waits for EOF before printing the last N lines. With a 5-minute Playwright run in front of it, the file looks dead until the very end.
 **Rule:** Capture full output (`bun run e2e 2>&1`), then read the file's tail with `tail -N` *after* it's done. Or pipe through `tee` to keep the file growing live. Never `cmd | tail -N` for a long-running task you want to poll.
 **Trigger:** Any long-running background command whose output you plan to poll.
+
+## 2026-05-23 — InlineEdit must treat the initial value as a placeholder, not as a draft, when defaultEditing is true
+
+**Mistake:** When a doc is created from the kanban "+ New work item in X" affordance, it lands with `title='Untitled'`. The slideover opens with `<InlineEdit value="Untitled" defaultEditing />`. The InlineEdit pre-filled `draft = value` (`'Untitled'`) and relied on `input.select()` running in a `useEffect` to highlight the text so typing would replace it. But this is timing-dependent: if any keystroke arrives before the select() effect lands (Chrome MCP `type`, fast users on slow renders, paste from clipboard, programmatic events), the typed text gets *appended* to "Untitled". Persisted DB title became literally `"UntitledFirst task"`.
+**Why:** Pre-selecting text via a useEffect to drive replace-behavior is a presentation hack, not a semantic guarantee. Anything that can race the effect breaks it. Worse: it doesn't even show up in unit tests because RTL's `userEvent.type` first clears via select-all internally — masking the bug.
+**Rule:** When `defaultEditing` is true on an InlineEdit (or any auto-focusing input), pre-fill the *internal draft* with `''` and render the *original value* as the input's `placeholder` attribute. Typing then accumulates into a fresh draft. On commit, treat empty draft as no-op (revert silently) instead of writing empty over the placeholder.
+**Trigger:** Any InlineEdit-style component where the input is auto-focused on mount AND the displayed value is a placeholder the user is meant to overwrite. Don't rely on `input.select()` for replace-semantics.
+
+## 2026-05-23 — Two buttons with the same accessible name in the same view is a UX + selector smell
+
+**Mistake:** The `/` empty state had a "Create workspace" button that opened a sheet, and the sheet's submit button was also named "Create workspace". Same DOM, same accessible name. Selectors had to disambiguate with `.last()` / `.first()` / `[role="dialog"]` scoping. Real users would also be vulnerable: rapid double-click on the empty-state button could in principle hit the submit button mid-transition.
+**Why:** Buttons inside containers (sheets, popovers) often duplicate the trigger's label out of mirror-thinking. It's tempting because "tell me what this does" reads naturally — but `New workspace` (sheet title) + `Create` (sheet submit) is just as clear and removes the collision.
+**Rule:** Inside a sheet/dialog/popover whose heading already names the entity ("New workspace", "New project"), label the submit button with the verb only (`Create`, `Save`, `Continue`). Don't repeat the entity name. If `getByRole('button', { name: X })` matches more than one element in a single rendered page, rename one.
+**Trigger:** Any new sheet/dialog/popover with a submit. Audit existing surfaces when you add a CTA that opens that surface.

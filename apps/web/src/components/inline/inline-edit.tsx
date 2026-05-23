@@ -23,7 +23,10 @@ export function InlineEdit({
   defaultEditing = false,
 }: Props) {
   const [editing, setEditing] = useState(defaultEditing);
-  const [draft, setDraft] = useState(value);
+  // When defaultEditing is true, treat the initial value as a placeholder to
+  // overwrite (e.g. "Untitled" from a freshly created doc), so typing replaces
+  // it rather than appending — independent of input.select() timing.
+  const [draft, setDraft] = useState(defaultEditing ? '' : value);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
@@ -39,6 +42,13 @@ export function InlineEdit({
 
   const commit = () => {
     setEditing(false);
+    // Don't commit an empty draft over a non-empty value — happens when
+    // defaultEditing pre-fills the draft empty and the user blurs without
+    // typing. Revert silently instead.
+    if (draft === '' && value !== '') {
+      setDraft(value);
+      return;
+    }
     if (draft !== value) onCommit(draft);
   };
   const revert = () => {
@@ -57,7 +67,7 @@ export function InlineEdit({
           inputClassName,
         )}
         value={draft}
-        placeholder={placeholder}
+        placeholder={value || placeholder}
         onChange={(e) => setDraft(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === 'Enter') {

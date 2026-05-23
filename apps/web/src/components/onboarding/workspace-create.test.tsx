@@ -67,7 +67,7 @@ describe('WorkspaceCreate', () => {
     await waitFor(() => {
       expect(screen.getByLabelText(/Slug/)).toHaveValue('spring-show');
     });
-    await userEvent.click(screen.getByRole('button', { name: /Create workspace/ }));
+    await userEvent.click(screen.getByRole('button', { name: 'Create', exact: true }));
     await waitFor(() => expect(screen.getByText('navigated to workspace')).toBeInTheDocument());
 
     const postCall = fetchMock.mock.calls.find(
@@ -98,7 +98,7 @@ describe('WorkspaceCreate', () => {
 
     const nameInput = await screen.findByLabelText(/Name/);
     await userEvent.type(nameInput, 'Spring');
-    await userEvent.click(screen.getByRole('button', { name: /Create workspace/ }));
+    await userEvent.click(screen.getByRole('button', { name: 'Create', exact: true }));
     await waitFor(() =>
       expect(screen.getByText(/already in use|already taken|Slug already/i)).toBeInTheDocument(),
     );

@@ -43,7 +43,9 @@ test('scenario 1 — onboarding: workspace create lands you in the workspace', a
   await page.getByRole('button', { name: /Create workspace/i }).click();
   const wsName = `Spring ${Date.now()}`;
   await page.getByRole('textbox', { name: 'Name', exact: true }).fill(wsName);
-  await page.getByRole('button', { name: 'Create workspace', exact: true }).click();
+  // Submit button inside the sheet is now just "Create" (was "Create workspace"
+  // before — collided with the empty-state CTA's name).
+  await page.locator('[role="dialog"]').getByRole('button', { name: 'Create', exact: true }).click();
   await expect(page).toHaveURL(/\/w\/spring-/);
 });
 
@@ -54,7 +56,7 @@ test('scenario 2 — onboarding: project create lands on work-items list', async
   await page.goto(`/w/${wslug}`);
   await page.getByRole('button', { name: /Create project/i }).click();
   await page.getByRole('textbox', { name: 'Name', exact: true }).fill('Gallery Ops');
-  await page.getByRole('button', { name: 'Create project', exact: true }).click();
+  await page.locator('[role="dialog"]').getByRole('button', { name: 'Create', exact: true }).click();
   await expect(page).toHaveURL(new RegExp(`/w/${wslug}/p/gallery-ops/work-items`));
 });
 

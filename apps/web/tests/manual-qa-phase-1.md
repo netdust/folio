@@ -18,7 +18,7 @@ Run on a fresh install in a real browser. Tick each box only after observing the
 - [ ] Visit `/`. Redirect to `/login?redirect=/`.
 - [ ] Sign up with a fresh email + password. Land on `/`. See "Welcome to Folio" + "Create workspace" button.
 - [ ] Click "Create workspace". Sheet opens. Type "Spring 26 Show" → slug auto-derives to `spring-26-show`.
-- [ ] Click "Create workspace" in the form. Sheet closes. URL becomes `/w/spring-26-show`. Empty state visible.
+- [ ] Click the **Create** button in the sheet (was "Create workspace" — renamed to avoid colliding with the empty-state CTA). Sheet closes. URL becomes `/w/spring-26-show`. Empty state visible.
 
 ### 2. Onboarding — project
 

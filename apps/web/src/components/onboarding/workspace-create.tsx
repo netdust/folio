@@ -120,7 +120,7 @@ export function WorkspaceCreate({ open, onOpenChange }: Props) {
               Cancel
             </Button>
             <Button type="submit" disabled={create.isPending || !name.trim() || !slug}>
-              {create.isPending ? 'Creating…' : 'Create workspace'}
+              {create.isPending ? 'Creating…' : 'Create'}
             </Button>
           </SheetFooter>
         </form>

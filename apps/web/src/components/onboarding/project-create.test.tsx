@@ -77,7 +77,7 @@ describe('ProjectCreate', () => {
     await waitFor(() => {
       expect(screen.getByLabelText(/Slug/)).toHaveValue('spring');
     });
-    await userEvent.click(screen.getByRole('button', { name: /Create project/ }));
+    await userEvent.click(screen.getByRole('button', { name: 'Create', exact: true }));
     await waitFor(() => expect(screen.getByText('navigated to work-items')).toBeInTheDocument());
 
     const postCall = fetchMock.mock.calls.find(
@@ -108,7 +108,7 @@ describe('ProjectCreate', () => {
 
     const nameInput = await screen.findByLabelText(/Name/);
     await userEvent.type(nameInput, 'Spring');
-    await userEvent.click(screen.getByRole('button', { name: /Create project/ }));
+    await userEvent.click(screen.getByRole('button', { name: 'Create', exact: true }));
     await waitFor(() =>
       expect(screen.getByText(/already in use|already taken|Slug already/i)).toBeInTheDocument(),
     );
