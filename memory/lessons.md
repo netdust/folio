@@ -101,6 +101,13 @@ Self-improvement log per global CLAUDE.md workflow. After any user correction, a
 **Rule:** Whenever using a headless editor (Milkdown, ProseMirror, TipTap), grep the rendered DOM for nodes with semantic data attributes (`data-item-type`, `data-checked`, `data-language`) and verify every one has corresponding CSS. For Folio specifically: any new GFM node type added in a future Milkdown version (footnote, callout) needs CSS in `apps/web/src/styles/editor.css`.
 **Trigger:** Bumping Milkdown / its presets. Adding new content types to the body editor.
 
+## 2026-05-24 — Children of `<PopoverTrigger asChild>` must be forwardRef components
+
+**Mistake:** `ChipAdd` (and `Chip`) were plain function components. Inside `<PopoverTrigger asChild>`, Radix uses `Slot` to clone the child and attach its own ref/handlers. Without `forwardRef` the ref doesn't reach the DOM node → Floating UI never measures the trigger → the popover content gets rendered into the DOM but stays at the default offscreen position `transform: translate(0, -200%)`. The user clicks the button, `data-state` flips to `"open"`, but they see nothing. Console shows: `Warning: Function components cannot be given refs. ... Check the render method of Primitive.button.SlotClone.`
+**Why:** A function component renders fine on its own and tests programmatically (`btn.click()` flips state); the visual breakage only manifests when the popover is actually shown. Easy to miss without a click-through test that asserts the popover *content* is visible, not just that the state changed.
+**Rule:** Any reusable button/control that might be passed to a Radix `asChild` slot — `Chip`, `ChipAdd`, `Button`, `IconButton`, `Pill` — MUST be `forwardRef<HTMLButtonElement, Props>`. Inline `<button>` JSX as a direct child works without this because Radix's cloneElement attaches the ref to the native element directly.
+**Trigger:** Adding a new reusable button-like primitive in `components/ui/`. Bumping Radix major versions. Any `Warning: Function components cannot be given refs` in the console — never ignore.
+
 ## 2026-05-24 — Filter UI shipped without server enforcement
 
 **Mistake:** Phase 1 shipped a +Filter popover that wrote `?status=…&assignee=…&updated_since=…` to the URL, but the server's documents list handler only consumed `?type=`, `?cursor=`, `?limit=`, and the JSON-AST `?filter=`. Other params were silently dropped. The UI had a fully working chip flow that produced no visible effect on the result set — a high-trust-cost bug.

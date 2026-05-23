@@ -202,6 +202,29 @@ test('slideover: task list checkbox renders for [ ] and [x] items', async ({ pag
   await expect(items.nth(1)).toHaveAttribute('data-checked', 'true');
 });
 
+test('filter: + Filter button opens the popover on a real click (regression)', async ({ page }) => {
+  // Bug fixed 2026-05-24: ChipAdd was a plain function component, not a
+  // forwardRef. Radix's <PopoverTrigger asChild> couldn't attach its ref →
+  // Floating UI never measured the trigger → popover stayed at the offscreen
+  // default `transform: translate(0, -200%)`. The click handler fired
+  // (data-state went to "open") but the user saw nothing. This regression
+  // would have passed before the fix because we were using programmatic
+  // clicks. Now we use page.getByRole().click() AND assert the popover is
+  // visibly rendered and one of its menu items can be clicked.
+  await signUpThroughUI(page, 'FilterClick User');
+  await page.getByRole('button', { name: 'Create workspace', exact: true }).click();
+  await createWorkspaceViaSheet(page, `FilterClick WS ${Date.now()}`);
+  await createProjectViaSheet(page, `FilterClick Proj ${Date.now()}`);
+
+  await page.getByRole('button', { name: '+ Filter', exact: true }).click();
+  // The popover must actually be visible — not just open in state. Scope to
+  // the Radix popper wrapper so we don't collide with the column-header
+  // "Status" sort button or other page chrome.
+  const popover = page.locator('[data-radix-popper-content-wrapper]');
+  await expect(popover.getByRole('button', { name: /Status/ })).toBeVisible();
+  await expect(popover.getByRole('button', { name: /Assignee/ })).toBeVisible();
+});
+
 test('filter: status chip actually narrows the list (regression)', async ({ page }) => {
   await signUpThroughUI(page, 'Filter User');
   await page.getByRole('button', { name: 'Create workspace', exact: true }).click();
