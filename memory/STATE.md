@@ -63,3 +63,4 @@ Living snapshot of where the project actually is. Read at session start. Update 
 - API has no `/` or `/health` route → expect 404 on root; the auth probe at `/api/v1/auth/me` is the right liveness signal.
 [2026-05-23] — session ended (no significant changes captured)
 [2026-05-23] — session ended (no significant changes captured)
+[2026-05-23] — session ended (no significant changes captured)
