@@ -38,6 +38,8 @@ For phase-level checkboxes that survive across branches, see `docs/PHASES.md`. T
 
 - [ ] Decide what to do with `.zed/` and `labeled-actual.png` at repo root (commit, .gitignore, or leave)
 - [ ] Lift `.skip` on the 10 scaffolded manual-qa e2e tests once a selector strategy is settled (add `data-testid` on critical row/cell components, or rely on aria-labels after auditing).
+- [ ] **List column-header sort is wired only on the client** — clicking Title/Status/Updated writes `?sort=…&dir=…` to the URL but the server's documents list handler ignores those params. Either implement server-side sort (matching the filter wiring pattern) or remove the sortable visual affordance.
+- [ ] **Milkdown task checkbox toggle** — the checkbox visually reflects `data-checked` but clicking doesn't toggle. Requires ProseMirror transaction-level access; defer to Phase 3 where slash commands + AI need the same surface.
 
 ---
 
