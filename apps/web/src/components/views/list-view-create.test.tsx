@@ -72,7 +72,7 @@ describe('ListView New work item action', () => {
     const { queryClient, router } = setup();
     render(<QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider>);
 
-    await userEvent.click(await screen.findByRole('button', { name: /New work item/i }));
+    await userEvent.click(await screen.findByRole('button', { name: /Create your first work item/i }));
 
     await waitFor(() => {
       const post = fetchMock.mock.calls.find(([url, init]) => String(url).includes('/documents') && init?.method === 'POST');

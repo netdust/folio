@@ -101,7 +101,7 @@ describe('WikiTree', () => {
     const { queryClient, router } = setup();
     render(<QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider>);
     await waitFor(() => expect(screen.getByText('No pages yet')).toBeInTheDocument());
-    await userEvent.click(screen.getByRole('button', { name: 'New page' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Create your first page' }));
     await waitFor(() => expect(router.state.location.search).toEqual({ doc: 'untitled' }));
   });
 });

@@ -62,7 +62,7 @@ function ProjectLayout() {
     <>
       <MainFrame
         title={project.name}
-        subMeta={`/${wslug}/p/${project.slug} · ${workCount} work items · ${pageCount} pages`}
+        subMeta={`/${wslug}/p/${project.slug} · ${workCount} ${workCount === 1 ? 'work item' : 'work items'} · ${pageCount} ${pageCount === 1 ? 'page' : 'pages'}`}
         actions={actions}
         tabs={
           <>

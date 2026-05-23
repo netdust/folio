@@ -80,6 +80,20 @@ Self-improvement log per global CLAUDE.md workflow. After any user correction, a
 **Rule:** When `defaultEditing` is true on an InlineEdit (or any auto-focusing input), pre-fill the *internal draft* with `''` and render the *original value* as the input's `placeholder` attribute. Typing then accumulates into a fresh draft. On commit, treat empty draft as no-op (revert silently) instead of writing empty over the placeholder.
 **Trigger:** Any InlineEdit-style component where the input is auto-focused on mount AND the displayed value is a placeholder the user is meant to overwrite. Don't rely on `input.select()` for replace-semantics.
 
+## 2026-05-24 — react-query list invalidation must be coarse-grained when surfaces use different listParams
+
+**Mistake:** `useUpdateDocument`'s `onSettled` invalidated only `documentsKeys.list(wslug, pslug, listParams)` — a 5-element key including the *specific* params object. When the slideover's title-PATCH used `{ type, sort:'updated_at', dir:'desc' }` but the wiki tree's list query used `{ type, sort:'title', dir:'asc', limit:200 }`, the invalidation didn't reach the wiki tree because React Query's prefix match requires element-by-element equality, and the two params objects are different. Result: edit a page title in the slideover → wiki tree shows the OLD title until reload.
+**Why:** Specific-key invalidation looks safe (less network) but breaks the moment two screens of the same data use different list params. The mental model "I'm patching THIS doc, so only refresh queries with the exact same shape" is wrong — the doc lives in multiple lists.
+**Rule:** For `useUpdateDocument` (and any mutation that changes a row visible in lists), invalidate the *broad* key `[...documentsKeys.all, wslug, pslug, 'list']` (4 elements, no params). React Query's prefix match then covers every variant. Trade some over-fetching for cross-surface correctness.
+**Trigger:** Any react-query mutation onSuccess/onSettled. If invalidation uses a key with params at the tail, check that all consumers of the same resource use compatible params.
+
+## 2026-05-24 — Kbd hint glyphs must be platform-aware
+
+**Mistake:** Rail's Search nav and other Cmd-K hints hardcoded `'⌘K'` as the kbd badge string. Folio's keyboard listener checks `metaKey` on Mac and `ctrlKey` elsewhere (correct), but the *displayed* hint lied to Linux/Windows users — they'd press ⌘K and nothing would happen.
+**Why:** Tempting to copy Linear/Notion's ⌘ glyph as a stylistic flourish. It's accurate on Mac and aesthetic everywhere, but factually wrong on non-Mac.
+**Rule:** Use a `modKeyGlyph()` / `modKeyHint(suffix)` helper at every kbd display callsite. The helper mirrors the same `navigator.platform.includes('mac')` check the keyboard listener uses, so display and binding stay in lockstep. Static reference pages (`dev/design-system`) can hardcode ⌘ — it's a Mac-style showcase.
+**Trigger:** Any new `<Kbd>` or `kbd:` field. Same applies to `⌥` (Alt/Option) and `⇧` (Shift) if those ever diverge.
+
 ## 2026-05-23 — Two buttons with the same accessible name in the same view is a UX + selector smell
 
 **Mistake:** The `/` empty state had a "Create workspace" button that opened a sheet, and the sheet's submit button was also named "Create workspace". Same DOM, same accessible name. Selectors had to disambiguate with `.last()` / `.first()` / `[role="dialog"]` scoping. Real users would also be vulnerable: rapid double-click on the empty-state button could in principle hit the submit button mid-transition.

@@ -134,7 +134,7 @@ export function ListView({ wslug, pslug }: Props) {
               ? 'Try removing a filter chip above.'
               : 'Create your first work item to get started.'
           }
-          action={clauses.length === 0 ? { label: 'New work item', onClick: onCreate } : undefined}
+          action={clauses.length === 0 ? { label: 'Create your first work item', onClick: onCreate } : undefined}
         />
       ) : null}
       <div role="list" className="flex flex-col">

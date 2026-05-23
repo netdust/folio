@@ -141,7 +141,10 @@ export function useUpdateDocument(wslug: string, pslug: string, listParams: Docu
     },
     onSettled: (_data, _err, { slug }) => {
       qc.invalidateQueries({ queryKey: documentsKeys.detail(wslug, pslug, slug) });
-      qc.invalidateQueries({ queryKey: listKey });
+      // Invalidate every list query under this wslug/pslug — different
+      // surfaces (list view, kanban, wiki tree) use different list params,
+      // and a title/status patch in one view should refresh them all.
+      qc.invalidateQueries({ queryKey: [...documentsKeys.all, wslug, pslug, 'list'] });
     },
   });
 }

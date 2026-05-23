@@ -119,3 +119,23 @@ test('create second workspace via user menu from inside a workspace', async ({ p
   await createWorkspaceViaSheet(page, `Second WS ${Date.now()}`);
   await expect(page).toHaveURL(/\/w\/second-ws-/);
 });
+
+test('wiki: new page + title edit shows in tree without a reload (regression)', async ({ page }) => {
+  await signUpThroughUI(page, 'Wiki User');
+  await page.getByRole('button', { name: 'Create workspace', exact: true }).click();
+  await createWorkspaceViaSheet(page, `Wiki WS ${Date.now()}`);
+  await createProjectViaSheet(page, `Wiki Proj ${Date.now()}`);
+
+  await page.getByRole('button', { name: 'Wiki', exact: true }).click();
+  // Empty state CTA name was renamed to disambiguate from the MainFrame
+  // action button (both used to be "New page" — collision).
+  await page.getByRole('button', { name: /Create your first page/ }).click();
+  await page.locator('[role="dialog"] input[type="text"]').first().fill('Hello Wiki');
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('Escape');
+
+  // The wiki tree must reflect the new page title without a page reload.
+  // Bug A (2026-05-23): patch invalidations only matched the slideover's
+  // listParams shape, leaving the wiki tree's different-params query stale.
+  await expect(page.getByText('Hello Wiki')).toBeVisible();
+});

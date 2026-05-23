@@ -12,6 +12,7 @@ import { WorkspaceSwitcher } from '../components/shell/workspace-switcher.tsx';
 import { UserMenu } from '../components/shell/user-menu.tsx';
 import { WorkspaceCreate } from '../components/onboarding/workspace-create.tsx';
 import { openCommandPalette } from '../lib/command-palette-bus.ts';
+import { modKeyHint } from '../lib/platform.ts';
 
 export const Route = createFileRoute('/w/$wslug')({
   component: WorkspaceLayout,
@@ -21,7 +22,7 @@ const TOOLS: NavItem[] = [{
   id: 'search',
   label: 'Search',
   lucideIcon: Search,
-  kbd: '⌘K',
+  kbd: modKeyHint('K'),
   onClick: openCommandPalette,
 }];
 

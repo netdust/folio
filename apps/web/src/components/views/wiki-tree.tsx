@@ -85,7 +85,7 @@ export function WikiTree({ wslug, pslug }: Props) {
         icon={<Icon icon={FolderTree} size={20} />}
         title="No pages yet"
         description="Create your first wiki page."
-        action={{ label: 'New page', onClick: onNewPage }}
+        action={{ label: 'Create your first page', onClick: onNewPage }}
       />
     );
   }
