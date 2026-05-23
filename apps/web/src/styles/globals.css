@@ -24,7 +24,6 @@
   *:focus-visible {
     outline: none;
     box-shadow: var(--ring);
-    border-radius: var(--radius-sm);
   }
 
   html {
@@ -42,5 +41,13 @@
 
   code, .mono, [data-slug] {
     font-family: var(--font-mono);
+  }
+}
+
+@layer components {
+  .input-focus:focus-visible {
+    box-shadow: none;
+    border-color: var(--color-fg-3);
+    background-color: var(--color-card);
   }
 }

@@ -50,10 +50,9 @@
   --duration-slow:    280ms;
   --ease-default:     cubic-bezier(0.16, 1, 0.3, 1);
 
-  --ring-color: rgba(0, 0, 0, 0.32);
-  --ring: 0 0 0 1.5px var(--ring-color);
+  --ring: 0 0 0 1.5px rgba(0, 0, 0, 0.32);
 
-  --color-board-col: rgba(0, 0, 0, 0.025);
+  --color-nav-active: rgba(0, 0, 0, 0.06);
 }
 
 .dark {
@@ -81,9 +80,9 @@
   --shadow-card:    0 0 1px rgba(255, 255, 255, 0.08);
   --shadow-popover: 0 8px 24px rgba(0, 0, 0, 0.4), 0 0 1px rgba(255, 255, 255, 0.15);
 
-  --ring-color: rgba(240, 240, 240, 0.28);
+  --ring: 0 0 0 1.5px rgba(240, 240, 240, 0.28);
 
-  --color-board-col: rgba(255, 255, 255, 0.03);
+  --color-nav-active: rgba(255, 255, 255, 0.10);
 }
 
 @media (prefers-reduced-motion: reduce) {

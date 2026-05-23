@@ -121,7 +121,7 @@ function TextArea({
       }}
       rows={3}
       className={cn(
-        'block w-full rounded-sm border border-border-light bg-shell px-2 py-1.5 text-sm text-fg focus:outline-none focus-visible:border-fg-3 focus-visible:bg-card',
+        'block w-full rounded-sm border border-border-light bg-shell px-2 py-1.5 text-sm text-fg input-focus',
         isPending && 'opacity-60',
       )}
     />
@@ -151,7 +151,7 @@ function NumberInput({
         if (Number.isFinite(n) && n !== value) onCommit(n);
       }}
       className={cn(
-        'block w-32 rounded-sm border border-border-light bg-shell px-2 py-1 text-sm text-fg focus:outline-none focus-visible:border-fg-3 focus-visible:bg-card',
+        'block w-32 rounded-sm border border-border-light bg-shell px-2 py-1 text-sm text-fg input-focus',
         isPending && 'opacity-60',
       )}
     />
@@ -180,7 +180,7 @@ function DateInput({
         if (draft !== value && draft) onCommit(draft);
       }}
       className={cn(
-        'block w-44 rounded-sm border border-border-light bg-shell px-2 py-1 text-sm text-fg focus:outline-none focus-visible:border-fg-3 focus-visible:bg-card',
+        'block w-44 rounded-sm border border-border-light bg-shell px-2 py-1 text-sm text-fg input-focus',
         isPending && 'opacity-60',
       )}
     />
@@ -298,7 +298,7 @@ function UrlField({
         }
       }}
       className={cn(
-        'block w-full rounded-sm border border-border-light bg-shell px-2 py-1 text-sm text-fg focus:outline-none focus-visible:border-fg-3 focus-visible:bg-card',
+        'block w-full rounded-sm border border-border-light bg-shell px-2 py-1 text-sm text-fg input-focus',
         isPending && 'opacity-60',
       )}
     />

@@ -179,7 +179,7 @@ function FreeInput({
         value={v}
         onChange={(e) => setV(e.target.value)}
         placeholder={placeholder}
-        className="block w-full rounded-sm border border-border-light bg-shell px-2 py-1 text-sm text-fg focus:outline-none focus-visible:border-fg-3 focus-visible:bg-card"
+        className="block w-full rounded-sm border border-border-light bg-shell px-2 py-1 text-sm text-fg input-focus"
         autoFocus
       />
     </form>

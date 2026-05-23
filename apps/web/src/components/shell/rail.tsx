@@ -102,7 +102,7 @@ function RailExpanded({ brand, workspace, primary, tools, account, user, onToggl
           type="button"
           aria-label="Collapse rail"
           onClick={onToggle}
-          className="grid h-6 w-6 place-items-center rounded text-fg-3 hover:bg-card hover:text-fg-2 focus:outline-none focus-visible:[box-shadow:var(--ring)]"
+          className="grid h-6 w-6 place-items-center rounded text-fg-3 hover:bg-card hover:text-fg-2"
         >
           <Icon icon={PanelLeftClose} size={13} />
         </button>
@@ -117,14 +117,7 @@ function RailCollapsed({ brand, workspace, primary, tools, account, user, onTogg
       <span className="text-[9px] font-medium tracking-wide text-fg-3 uppercase" aria-hidden>
         {brand.mark}
       </span>
-      <button
-        type="button"
-        onClick={workspace.onSwitch}
-        title={workspace.name}
-        className="mt-3 mb-2 inline-grid h-[30px] w-[30px] place-items-center rounded bg-primary text-primary-fg text-xs font-semibold"
-      >
-        {workspace.mark}
-      </button>
+      <WorkspaceMark workspace={workspace} />
       <Divider tiny />
       <NavList items={primary} expanded={false} />
       <div className="flex-1" />
@@ -146,12 +139,26 @@ function RailCollapsed({ brand, workspace, primary, tools, account, user, onTogg
         aria-label="Expand rail"
         onClick={onToggle}
         title="Expand"
-        className="mt-1.5 grid h-6 w-6 place-items-center rounded text-fg-3 hover:bg-card hover:text-fg-2 focus:outline-none focus-visible:[box-shadow:var(--ring)]"
+        className="mt-1.5 grid h-6 w-6 place-items-center rounded text-fg-3 hover:bg-card hover:text-fg-2"
       >
         <Icon icon={PanelLeftOpen} size={13} />
       </button>
     </aside>
   );
+}
+
+function WorkspaceMark({ workspace }: { workspace: WorkspaceConfig }) {
+  const trigger = (
+    <button
+      type="button"
+      onClick={workspace.switcher ? undefined : workspace.onSwitch}
+      title={workspace.name}
+      className="mt-3 mb-2 inline-grid h-[30px] w-[30px] place-items-center rounded bg-primary text-primary-fg text-xs font-semibold"
+    >
+      {workspace.mark}
+    </button>
+  );
+  return workspace.switcher ? <>{workspace.switcher(trigger)}</> : trigger;
 }
 
 function NavList({ items, expanded }: { items: NavItem[]; expanded: boolean }) {
@@ -168,7 +175,7 @@ function NavList({ items, expanded }: { items: NavItem[]; expanded: boolean }) {
             className={cn(
               'relative inline-grid h-9 w-9 place-items-center rounded-md transition-colors duration-fast',
               item.active
-                ? 'bg-[rgb(0_0_0_/_0.06)] dark:bg-[rgb(255_255_255_/_0.10)] text-fg'
+                ? 'bg-nav-active text-fg'
                 : 'text-fg-3 hover:bg-card hover:text-fg-2',
             )}
           >
@@ -189,7 +196,7 @@ function NavList({ items, expanded }: { items: NavItem[]; expanded: boolean }) {
           className={cn(
             'flex items-center gap-2.5 rounded-md px-2 py-1.5 text-sm transition-colors duration-fast',
             item.active
-              ? 'bg-[rgb(0_0_0_/_0.06)] dark:bg-[rgb(255_255_255_/_0.10)] text-fg'
+              ? 'bg-nav-active text-fg'
               : 'text-fg-3 hover:bg-card hover:text-fg-2',
           )}
         >

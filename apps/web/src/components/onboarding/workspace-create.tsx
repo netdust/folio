@@ -68,7 +68,7 @@ export function WorkspaceCreate({ open, onOpenChange }: Props) {
               </label>
               <input
                 id="ws-name"
-                className="mt-1 block w-full rounded-md border border-border-light bg-shell px-3 py-2 text-fg focus:outline-none focus-visible:border-fg-3 focus-visible:bg-card"
+                className="mt-1 block w-full rounded-md border border-border-light bg-shell px-3 py-2 text-fg input-focus"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 required
@@ -81,7 +81,7 @@ export function WorkspaceCreate({ open, onOpenChange }: Props) {
               </label>
               <input
                 id="ws-slug"
-                className="mt-1 block w-full rounded-md border border-border-light bg-shell px-3 py-2 font-mono text-sm text-fg focus:outline-none focus-visible:border-fg-3 focus-visible:bg-card"
+                className="mt-1 block w-full rounded-md border border-border-light bg-shell px-3 py-2 font-mono text-sm text-fg input-focus"
                 value={slug}
                 onChange={(e) => {
                   setSlug(slugify(e.target.value));
@@ -102,7 +102,7 @@ export function WorkspaceCreate({ open, onOpenChange }: Props) {
               </label>
               <select
                 id="ws-provider"
-                className="mt-1 block w-full rounded-md border border-border-light bg-shell px-3 py-2 text-fg focus:outline-none focus-visible:border-fg-3 focus-visible:bg-card"
+                className="mt-1 block w-full rounded-md border border-border-light bg-shell px-3 py-2 text-fg input-focus"
                 value={provider}
                 onChange={(e) => setProvider(e.target.value as Provider)}
               >

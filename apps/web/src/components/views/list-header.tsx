@@ -20,7 +20,7 @@ export function ListHeader({ sort, onSort }: Props) {
         <button
           key={c.key}
           type="button"
-          className="inline-flex items-center gap-1 text-left hover:text-fg-2 focus:outline-none focus-visible:[box-shadow:var(--ring)]"
+          className="inline-flex items-center gap-1 text-left hover:text-fg-2"
           onClick={() => {
             const isActive = sort?.key === c.key;
             if (!isActive) onSort({ key: c.key, dir: 'asc' });

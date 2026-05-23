@@ -27,7 +27,7 @@ export function KanbanColumn({ status, count, onAdd, isAddPending, children }: P
             onClick={onAdd}
             disabled={isAddPending}
             aria-label={`New work item in ${status.name}`}
-            className="ml-auto grid h-[22px] w-[22px] place-items-center rounded-sm text-fg-3 hover:bg-card hover:text-fg-2 focus:outline-none focus-visible:[box-shadow:var(--ring)] disabled:opacity-50"
+            className="ml-auto grid h-[22px] w-[22px] place-items-center rounded-sm text-fg-3 hover:bg-card hover:text-fg-2 disabled:opacity-50"
           >
             <Icon icon={Plus} size={14} />
           </button>
@@ -37,7 +37,7 @@ export function KanbanColumn({ status, count, onAdd, isAddPending, children }: P
         ref={setNodeRef}
         className={cn(
           'flex min-h-[200px] flex-1 flex-col gap-1.5 rounded-lg p-1 transition-colors',
-          isOver ? 'bg-card' : 'bg-board-col',
+          isOver ? 'bg-card' : 'bg-[rgb(0_0_0_/_0.025)] dark:bg-[rgb(255_255_255_/_0.03)]',
         )}
       >
         {children}

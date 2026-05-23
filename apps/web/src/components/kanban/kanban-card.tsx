@@ -64,7 +64,7 @@ export function KanbanCard({ doc, onOpen, isPending }: Props) {
         'cursor-grab rounded-md border border-border-light bg-shell px-3 py-2 text-sm text-fg shadow-sm transition-shadow',
         isDragging && 'cursor-grabbing shadow-popover',
         isPending && 'opacity-60',
-        'hover:bg-card focus:outline-none focus-visible:[box-shadow:var(--ring)]',
+        'hover:bg-card',
       )}
     >
       <div className="font-medium">{doc.title}</div>

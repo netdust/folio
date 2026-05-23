@@ -105,7 +105,7 @@ function SlideoverTitleEditor({ doc, wslug, pslug }: { doc: Document; wslug: str
       value={doc.title}
       onCommit={onCommit}
       ariaLabel="Document title"
-      autoEditWhenValue="Untitled"
+      defaultEditing={doc.title === 'Untitled'}
       className="text-base font-medium"
     />
   );

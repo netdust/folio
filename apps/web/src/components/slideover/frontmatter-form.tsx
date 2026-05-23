@@ -164,7 +164,7 @@ function AddField({
               submit();
             }
           }}
-          className="block w-full rounded-sm border border-border-light bg-shell px-2 py-1 text-sm focus:outline-none focus-visible:border-fg-3 focus-visible:bg-card"
+          className="block w-full rounded-sm border border-border-light bg-shell px-2 py-1 text-sm input-focus"
         />
         {error ? <p className="mt-1 text-xs text-danger">{error}</p> : null}
       </PopoverContent>

@@ -9,7 +9,7 @@ interface Props {
   className?: string;
   inputClassName?: string;
   ariaLabel?: string;
-  autoEditWhenValue?: string;
+  defaultEditing?: boolean;
 }
 
 export function InlineEdit({
@@ -20,12 +20,11 @@ export function InlineEdit({
   className,
   inputClassName,
   ariaLabel,
-  autoEditWhenValue,
+  defaultEditing = false,
 }: Props) {
-  const [editing, setEditing] = useState(false);
+  const [editing, setEditing] = useState(defaultEditing);
   const [draft, setDraft] = useState(value);
   const inputRef = useRef<HTMLInputElement | null>(null);
-  const autoEditFiredRef = useRef(false);
 
   useEffect(() => {
     if (!editing) setDraft(value);
@@ -37,14 +36,6 @@ export function InlineEdit({
       inputRef.current.select();
     }
   }, [editing]);
-
-  useEffect(() => {
-    if (autoEditFiredRef.current) return;
-    if (autoEditWhenValue !== undefined && value === autoEditWhenValue) {
-      autoEditFiredRef.current = true;
-      setEditing(true);
-    }
-  }, [autoEditWhenValue, value]);
 
   const commit = () => {
     setEditing(false);
@@ -62,7 +53,7 @@ export function InlineEdit({
         type="text"
         aria-label={ariaLabel}
         className={cn(
-          'block w-full rounded-sm border border-transparent bg-card px-1 py-0.5 text-sm text-fg focus:outline-none focus-visible:border-fg-3',
+          'block w-full rounded-sm border border-transparent bg-card px-1 py-0.5 text-sm text-fg input-focus',
           inputClassName,
         )}
         value={draft}
