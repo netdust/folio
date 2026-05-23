@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { toast } from 'sonner';
 import { Clipboard, X } from 'lucide-react';
@@ -128,6 +128,18 @@ function SlideoverBody({ wslug, pslug, slug }: { wslug: string; pslug: string; s
   const aiConfigured = (aiKeysData?.keys ?? []).length > 0;
   const [pendingKeys, setPendingKeys] = useState<Set<string>>(new Set());
   const [mode, setMode] = useState<EditorMode>('rich');
+
+  // Alt+M toggles raw ↔ rich. Matches the kbd hint on the ModeToggle button.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.altKey && (e.key === 'm' || e.key === 'M')) {
+        e.preventDefault();
+        setMode((m) => (m === 'rich' ? 'raw' : 'rich'));
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   if (isLoading) return <div className="text-fg-3">Loading document…</div>;
   if (error || !doc) return <div className="text-danger">Failed to load document.</div>;

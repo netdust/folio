@@ -12,3 +12,14 @@ export function modKeyGlyph(): string {
 export function modKeyHint(suffix: string): string {
   return `${modKeyGlyph()}${suffix}`;
 }
+
+/** Alt/Option key glyph — `⌥` on Mac, `Alt` elsewhere. */
+export function altKeyGlyph(): string {
+  if (typeof navigator === 'undefined') return 'Alt';
+  return navigator.platform.toLowerCase().includes('mac') ? '⌥' : 'Alt';
+}
+
+/** `${alt}${suffix}` — e.g. `⌥M` on Mac, `AltM` elsewhere. */
+export function altKeyHint(suffix: string): string {
+  return `${altKeyGlyph()}${suffix}`;
+}

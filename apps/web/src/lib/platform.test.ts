@@ -29,3 +29,23 @@ describe('platform', () => {
     expect(withPlatform('Linux x86_64', () => modKeyHint('K'))).toBe('CtrlK');
   });
 });
+
+// Re-import to avoid forward-reference issues
+import { altKeyGlyph, altKeyHint } from './platform.ts';
+
+describe('platform — Alt key glyph', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('altKeyGlyph returns ⌥ on Mac', () => {
+    expect(withPlatform('MacIntel', () => altKeyGlyph())).toBe('⌥');
+  });
+
+  it('altKeyGlyph returns Alt on Linux', () => {
+    expect(withPlatform('Linux x86_64', () => altKeyGlyph())).toBe('Alt');
+  });
+
+  it('altKeyHint composes glyph + suffix', () => {
+    expect(withPlatform('Linux x86_64', () => altKeyHint('M'))).toBe('AltM');
+    expect(withPlatform('MacIntel', () => altKeyHint('M'))).toBe('⌥M');
+  });
+});

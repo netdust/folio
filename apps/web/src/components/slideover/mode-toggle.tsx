@@ -1,5 +1,6 @@
 import { Kbd } from '../ui/kbd.tsx';
 import { cn } from '../ui/cn.ts';
+import { altKeyHint } from '../../lib/platform.ts';
 
 export type EditorMode = 'rich' | 'raw';
 
@@ -31,7 +32,7 @@ export function ModeToggle({ mode, onChange }: Props) {
           mode === 'raw' ? 'bg-primary text-primary-fg' : 'text-fg-2 hover:bg-card',
         )}
       >
-        Raw MD <Kbd>⌥M</Kbd>
+        Raw MD <Kbd>{altKeyHint('M')}</Kbd>
       </button>
     </div>
   );

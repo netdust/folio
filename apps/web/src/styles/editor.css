@@ -100,6 +100,49 @@
   color: var(--color-primary-fg);
 }
 
+/* Task list items — Milkdown emits <li data-item-type="task" data-checked="…">
+   with no built-in checkbox UI. Render a checkbox via ::before/::after that
+   reflects data-checked. Clicking the checkbox is NOT yet wired to toggle
+   the underlying markdown — users toggle via Raw MD until Phase 3 lands
+   editor-level interactivity. Cursor stays text so the row is editable. */
+.folio-milkdown .milkdown .ProseMirror li[data-item-type="task"] {
+  list-style: none;
+  position: relative;
+  padding-left: 1.5em;
+}
+.folio-milkdown .milkdown .ProseMirror li[data-item-type="task"]::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0.45em;
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid var(--color-fg-3);
+  border-radius: 3px;
+  background: var(--color-shell);
+  transition: background var(--duration-fast) var(--ease-default),
+              border-color var(--duration-fast) var(--ease-default);
+}
+.folio-milkdown .milkdown .ProseMirror li[data-item-type="task"][data-checked="true"]::before {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+}
+.folio-milkdown .milkdown .ProseMirror li[data-item-type="task"][data-checked="true"]::after {
+  content: '';
+  position: absolute;
+  left: 3px;
+  top: 0.7em;
+  width: 8px;
+  height: 4px;
+  border-left: 1.5px solid var(--color-primary-fg);
+  border-bottom: 1.5px solid var(--color-primary-fg);
+  transform: rotate(-45deg);
+}
+.folio-milkdown .milkdown .ProseMirror li[data-item-type="task"][data-checked="true"] > p {
+  color: var(--color-fg-3);
+  text-decoration: line-through;
+}
+
 .folio-milkdown .milkdown .ProseMirror:focus-visible {
   outline: none;
   box-shadow: var(--ring);

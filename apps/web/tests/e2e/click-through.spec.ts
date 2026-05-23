@@ -144,6 +144,64 @@ test('list rows have unique accessible names per doc (regression: a11y duplicate
   await expect(page.getByRole('button', { name: 'Open Beta task' })).toBeVisible();
 });
 
+test('slideover: Alt+M toggles between Edit and Raw MD mode (regression)', async ({ page }) => {
+  await signUpThroughUI(page, 'AltM User');
+  await page.getByRole('button', { name: 'Create workspace', exact: true }).click();
+  await createWorkspaceViaSheet(page, `AltM WS ${Date.now()}`);
+  await createProjectViaSheet(page, `AltM Proj ${Date.now()}`);
+
+  await page.getByRole('button', { name: 'Board', exact: true }).click();
+  await page.getByRole('button', { name: 'New work item in Backlog' }).click();
+  await page.locator('[role="dialog"] input[type="text"]').first().fill('Alt M test');
+  await page.keyboard.press('Enter');
+
+  // Default mode = Edit (ProseMirror).
+  await expect(page.locator('[role="dialog"] .ProseMirror')).toBeVisible();
+  await expect(page.locator('[role="dialog"] .cm-editor')).toHaveCount(0);
+
+  // Alt+M switches to Raw MD.
+  await page.keyboard.press('Alt+M');
+  await expect(page.locator('[role="dialog"] .cm-editor')).toBeVisible();
+  await expect(page.locator('[role="dialog"] .ProseMirror')).toHaveCount(0);
+
+  // Alt+M toggles back to Edit.
+  await page.keyboard.press('Alt+M');
+  await expect(page.locator('[role="dialog"] .ProseMirror')).toBeVisible();
+});
+
+test('slideover: task list checkbox renders for [ ] and [x] items', async ({ page }) => {
+  await signUpThroughUI(page, 'Task User');
+  await page.getByRole('button', { name: 'Create workspace', exact: true }).click();
+  await createWorkspaceViaSheet(page, `Task WS ${Date.now()}`);
+  await createProjectViaSheet(page, `Task Proj ${Date.now()}`);
+
+  // Wait for the work-items URL to settle before we parse it.
+  await page.waitForURL(/\/w\/[^/]+\/p\/[^/]+\/work-items/);
+  const m = page.url().match(/\/w\/([^/]+)\/p\/([^/]+)\//);
+  if (!m) throw new Error(`Unexpected URL: ${page.url()}`);
+  const [, wslug, pslug] = m;
+
+  // Seed a doc with task items via API (the API roundtrips clean MD reliably;
+  // we're testing the render here, not the editor's input behavior).
+  const md = '- [ ] unchecked task\n- [x] checked task\n';
+  const create = await page.request.post(
+    `/api/v1/w/${wslug}/p/${pslug}/documents`,
+    { data: { type: 'work_item', title: 'Has tasks', body: md } },
+  );
+  expect(create.ok(), `seed ${create.status()}: ${await create.text()}`).toBe(true);
+  const created = await create.json();
+  const slug = created.data.slug;
+
+  await page.goto(`/w/${wslug}/p/${pslug}/work-items?doc=${slug}`);
+
+  // Two task items render with data-checked attributes; CSS gives each a
+  // visible checkbox via ::before (Folio doesn't yet wire click-to-toggle).
+  const items = page.locator('.ProseMirror li[data-item-type="task"]');
+  await expect(items).toHaveCount(2);
+  await expect(items.nth(0)).toHaveAttribute('data-checked', 'false');
+  await expect(items.nth(1)).toHaveAttribute('data-checked', 'true');
+});
+
 test('wiki: new page + title edit shows in tree without a reload (regression)', async ({ page }) => {
   await signUpThroughUI(page, 'Wiki User');
   await page.getByRole('button', { name: 'Create workspace', exact: true }).click();

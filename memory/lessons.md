@@ -87,6 +87,20 @@ Self-improvement log per global CLAUDE.md workflow. After any user correction, a
 **Rule:** For `useUpdateDocument` (and any mutation that changes a row visible in lists), invalidate the *broad* key `[...documentsKeys.all, wslug, pslug, 'list']` (4 elements, no params). React Query's prefix match then covers every variant. Trade some over-fetching for cross-surface correctness.
 **Trigger:** Any react-query mutation onSuccess/onSettled. If invalidation uses a key with params at the tail, check that all consumers of the same resource use compatible params.
 
+## 2026-05-24 — Don't advertise a keyboard shortcut you haven't bound
+
+**Mistake:** The slideover's ModeToggle button rendered "Raw MD ⌥M" as a `<Kbd>` hint, advertising Alt+M as a shortcut — but no `keydown` listener was registered anywhere. Pressing Alt+M did nothing. Users saw the hint, tried it, and assumed the button was broken.
+**Why:** A `<Kbd>` next to an action *is* a promise. Adding it as visual polish without the listener is worse than no hint at all — it teaches users the app's shortcuts are unreliable. Also, the glyph was hardcoded Mac (`⌥`) like the earlier `⌘K` problem.
+**Rule:** Every `<Kbd>` next to a control must have a corresponding registered listener. When you add the hint, immediately wire the listener (or add `// TODO: wire Alt+M` and pull the Kbd until then). For the glyph, use `altKeyHint()` / `modKeyHint()` from `lib/platform.ts` — never hardcode `⌥` or `⌘`.
+**Trigger:** Adding a `<Kbd>` element. Adding a `kbd:` field on a NavItem. Documenting a shortcut in MD/copy.
+
+## 2026-05-24 — Milkdown task items have no built-in checkbox UI — Folio must style + (eventually) wire toggling
+
+**Mistake:** Milkdown's GFM preset parses `- [x]` / `- [ ]` into `<li data-item-type="task" data-checked>` nodes but ships with NO CSS to render a visible checkbox AND no built-in click-to-toggle. The body editor rendered "todo unchecked" and "todo checked" as identical bullet items — visually the user couldn't tell tasks from regular bullets.
+**Why:** Headless editor library + assumption that consumers provide the chrome. Easy to miss until you actually look at a doc with task items.
+**Rule:** Whenever using a headless editor (Milkdown, ProseMirror, TipTap), grep the rendered DOM for nodes with semantic data attributes (`data-item-type`, `data-checked`, `data-language`) and verify every one has corresponding CSS. For Folio specifically: any new GFM node type added in a future Milkdown version (footnote, callout) needs CSS in `apps/web/src/styles/editor.css`.
+**Trigger:** Bumping Milkdown / its presets. Adding new content types to the body editor.
+
 ## 2026-05-24 — Repeated list-row aria-labels need to interpolate the row's data
 
 **Mistake:** `ListRow` rendered a static `aria-label="Open document"` on every row's open icon and a static `aria-label="Document title"` on every inline-edit. With N rows in the list, screen readers heard "Open document, Open document, Open document…" and selector tools (incl. Playwright's strict mode) couldn't disambiguate.
