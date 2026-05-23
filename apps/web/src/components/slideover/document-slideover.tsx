@@ -104,7 +104,7 @@ function SlideoverTitleEditor({ doc, wslug, pslug }: { doc: Document; wslug: str
     <InlineEdit
       value={doc.title}
       onCommit={onCommit}
-      ariaLabel="Document title"
+      ariaLabel={`Edit title: ${doc.title}`}
       defaultEditing={doc.title === 'Untitled'}
       className="text-base font-medium"
     />

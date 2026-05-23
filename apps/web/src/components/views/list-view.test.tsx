@@ -124,7 +124,7 @@ describe('ListView', () => {
       </QueryClientProvider>,
     );
     await screen.findByText('Fix login bug');
-    await userEvent.click(screen.getByRole('button', { name: 'Open document' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Open Fix login bug' }));
     await waitFor(() => expect(router.state.location.search).toEqual({ doc: 'fix-login' }));
   });
 });

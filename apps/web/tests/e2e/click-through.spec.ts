@@ -120,6 +120,30 @@ test('create second workspace via user menu from inside a workspace', async ({ p
   await expect(page).toHaveURL(/\/w\/second-ws-/);
 });
 
+test('list rows have unique accessible names per doc (regression: a11y duplicates)', async ({ page }) => {
+  await signUpThroughUI(page, 'A11y User');
+  await page.getByRole('button', { name: 'Create workspace', exact: true }).click();
+  await createWorkspaceViaSheet(page, `A11y WS ${Date.now()}`);
+  await createProjectViaSheet(page, `A11y Proj ${Date.now()}`);
+
+  // Create two docs from the board so the list has multiple rows.
+  await page.getByRole('button', { name: 'Board', exact: true }).click();
+  for (const t of ['Alpha task', 'Beta task']) {
+    await page.getByRole('button', { name: 'New work item in Backlog' }).click();
+    await page.locator('[role="dialog"] input[type="text"]').first().fill(t);
+    await page.keyboard.press('Enter');
+    await page.keyboard.press('Escape');
+  }
+
+  await page.getByRole('button', { name: 'Work items', exact: true }).click();
+
+  // Each row's "Open …" button interpolates the doc title; same for the
+  // inline-edit title input's aria-label. Before the fix every row carried
+  // the generic name "Open document" / "Document title".
+  await expect(page.getByRole('button', { name: 'Open Alpha task' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Open Beta task' })).toBeVisible();
+});
+
 test('wiki: new page + title edit shows in tree without a reload (regression)', async ({ page }) => {
   await signUpThroughUI(page, 'Wiki User');
   await page.getByRole('button', { name: 'Create workspace', exact: true }).click();

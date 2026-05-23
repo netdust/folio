@@ -56,7 +56,7 @@ Living snapshot of where the project actually is. Read at session start. Update 
 
 - `bun run test` in `apps/web/` → Vitest. 131 / 131 pass + 1 skipped (jsdom limitation on Milkdown initial render).
 - `bun test` from the repo root invokes Bun's runner, not Vitest — do NOT use it for web tests. Use `bun run --filter @folio/web test` or `cd apps/web && bun run test`.
-- `bun run e2e` in `apps/web/` → Playwright. 11 passing (3 smoke + 5 click-through + scenarios 1, 2, 15), 10 skipped (scenarios 3, 4, 5, 6, 8, 9, 10, 11, 12, 13 — each scaffolded with a per-test TODO about which selector still needs work).
+- `bun run e2e` in `apps/web/` → Playwright. 12 passing (3 smoke + 6 click-through + scenarios 1, 2, 15), 10 skipped (scenarios 3, 4, 5, 6, 8, 9, 10, 11, 12, 13 — each scaffolded with a per-test TODO about which selector still needs work).
 - Click-through journeys (no API shortcuts — discover bugs the way users do): `apps/web/tests/e2e/click-through.spec.ts`. Add new regressions HERE when bugs are found via manual exploration.
 - API-shortcut smoke: `apps/web/tests/e2e/smoke.spec.ts`. Manual-qa map: `apps/web/tests/e2e/manual-qa.spec.ts`. Config + helpers: `apps/web/playwright.config.ts`, `apps/web/tests/e2e/global-setup.ts`, `apps/web/tests/e2e/fixtures.ts`.
 - Boots its own dev stack on ports 5174 (web) / 3002 (api), isolated SQLite at `apps/server/folio-e2e.db` (gitignored, wiped on every run via `global-setup.ts`). Cold-start is ~4.5 minutes mostly Vite warmup; individual tests are 1–3s.

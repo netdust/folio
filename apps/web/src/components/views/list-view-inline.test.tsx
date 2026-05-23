@@ -95,7 +95,7 @@ describe('ListView inline-edit', () => {
       </QueryClientProvider>,
     );
     await userEvent.click(await screen.findByText('Fix login bug'));
-    const input = await screen.findByRole('textbox', { name: 'Document title' });
+    const input = await screen.findByRole('textbox', { name: 'Edit title: Fix login bug' });
     await userEvent.clear(input);
     await userEvent.type(input, 'Fix login (revised){Enter}');
 
@@ -155,7 +155,7 @@ describe('ListView inline-edit', () => {
       </QueryClientProvider>,
     );
     await userEvent.click(await screen.findByText('Fix login bug'));
-    const input = await screen.findByRole('textbox', { name: 'Document title' });
+    const input = await screen.findByRole('textbox', { name: 'Edit title: Fix login bug' });
     await userEvent.clear(input);
     await userEvent.type(input, 'broken{Enter}');
 

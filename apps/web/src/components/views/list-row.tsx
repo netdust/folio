@@ -67,7 +67,7 @@ export function ListRow({ doc, statuses, wslug, pslug, onOpen, onUpdate, pending
         <div className="min-w-0 flex items-center gap-2">
           <button
             type="button"
-            aria-label="Open document"
+            aria-label={`Open ${doc.title}`}
             onClick={() => onOpen(doc.slug)}
             className="text-fg-3 hover:text-fg"
           >
@@ -78,7 +78,7 @@ export function ListRow({ doc, statuses, wslug, pslug, onOpen, onUpdate, pending
               value={doc.title}
               onCommit={onCommitTitle}
               isPending={isPending}
-              ariaLabel="Document title"
+              ariaLabel={`Edit title: ${doc.title}`}
             />
           </div>
         </div>

@@ -87,6 +87,13 @@ Self-improvement log per global CLAUDE.md workflow. After any user correction, a
 **Rule:** For `useUpdateDocument` (and any mutation that changes a row visible in lists), invalidate the *broad* key `[...documentsKeys.all, wslug, pslug, 'list']` (4 elements, no params). React Query's prefix match then covers every variant. Trade some over-fetching for cross-surface correctness.
 **Trigger:** Any react-query mutation onSuccess/onSettled. If invalidation uses a key with params at the tail, check that all consumers of the same resource use compatible params.
 
+## 2026-05-24 — Repeated list-row aria-labels need to interpolate the row's data
+
+**Mistake:** `ListRow` rendered a static `aria-label="Open document"` on every row's open icon and a static `aria-label="Document title"` on every inline-edit. With N rows in the list, screen readers heard "Open document, Open document, Open document…" and selector tools (incl. Playwright's strict mode) couldn't disambiguate.
+**Why:** Aria-labels are usually written in the abstract ("Open document" describes the button's role), but inside a list of similar items the *role* is the same for every row — what disambiguates them is the data. Generic labels become indistinguishable-from-each-other for the user.
+**Rule:** When the same button/control is repeated per row in a list, table, or tree, interpolate at least one row-identifying value into the aria-label (`Open ${title}`, `Edit title: ${title}`). Static labels are fine for singletons; never for repeats.
+**Trigger:** Any new `aria-label=` or `ariaLabel=` inside a `.map()` / `for` rendering rows. Cross-check by querying `[...document.querySelectorAll('button[aria-label]')]` in DevTools — count unique aria-label values.
+
 ## 2026-05-24 — Kbd hint glyphs must be platform-aware
 
 **Mistake:** Rail's Search nav and other Cmd-K hints hardcoded `'⌘K'` as the kbd badge string. Folio's keyboard listener checks `metaKey` on Mac and `ctrlKey` elsewhere (correct), but the *displayed* hint lied to Linux/Windows users — they'd press ⌘K and nothing would happen.
