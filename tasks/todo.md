@@ -10,13 +10,34 @@ For phase-level checkboxes that survive across branches, see `docs/PHASES.md`. T
 
 ### Gates before merging to main
 
-- [ ] Visual sign-off against canonical mockups in `.superpowers/brainstorm/94899-1778514720/content/`
+- [x] Visual sign-off against canonical mockups (Stefan signed off on 2026-05-23 — "app looks good")
 - [ ] Manual QA pass: `apps/web/tests/manual-qa-phase-1.md` (15 scenarios)
+  - [x] Scenario 1 (e2e: passing)
+  - [x] Scenario 2 (e2e: passing)
+  - [ ] Scenario 3 — list view inline title edit (e2e scaffolded, selector TODO)
+  - [ ] Scenario 4 — list view inline status edit (e2e scaffolded, selector TODO)
+  - [ ] Scenario 5 — slideover open/close (e2e scaffolded, selector TODO)
+  - [ ] Scenario 6 — slideover frontmatter+body (e2e scaffolded, selector TODO)
+  - [ ] Scenario 7 — mode toggle rich↔raw (covered by unit `round-trip.test.tsx`)
+  - [ ] Scenario 8 — round-trip the wedge (e2e scaffolded, selector TODO)
+  - [ ] Scenario 9 — kanban drag-drop (e2e scaffolded, selector TODO)
+  - [ ] Scenario 10 — wiki create+reparent (e2e scaffolded, selector TODO)
+  - [ ] Scenario 11 — copy-as-MD (e2e scaffolded — Playwright contextmenu is tricky)
+  - [ ] Scenario 12 — filter chip (e2e scaffolded, selector TODO)
+  - [ ] Scenario 13 — Cmd-K palette (e2e scaffolded, selector TODO)
+  - [ ] Scenario 14 — offline rollback (covered by optimistic-mutation unit tests; e2e too flaky)
+  - [x] Scenario 15 — sign-up duplicate email (e2e: passing)
 - [ ] Merge to `main`
+
+### Bugs found this session — both fixed in commit (to be made)
+
+- [x] **Bug 1:** Can't open account / sign out → Added `UserMenu` popover in the rail user row.
+- [x] **Bug 2:** "Create workspace" from inside a workspace dead-ended → Now opens the `WorkspaceCreate` sheet over the current layout.
 
 ### Other open threads (low priority — don't block merge)
 
 - [ ] Decide what to do with `.zed/` and `labeled-actual.png` at repo root (commit, .gitignore, or leave)
+- [ ] Lift `.skip` on the 10 scaffolded manual-qa e2e tests once a selector strategy is settled (add `data-testid` on critical row/cell components, or rely on aria-labels after auditing).
 
 ---
 

@@ -25,6 +25,8 @@ Living snapshot of where the project actually is. Read at session start. Update 
 - Slideover with Milkdown + CodeMirror raw-MD toggle; round-trips byte-for-byte per the round-trip test.
 - Cmd-K palette (open via top-right Search nav OR `⌘K`).
 - Theme toggle, rail collapse persistence in localStorage.
+- Rail user menu: avatar/name → popover with `+ Create workspace` + `Sign out`.
+- Workspace switcher: workspace tile → popover with full workspace list + `+ Create workspace`. Creating a workspace from inside another no longer dead-ends.
 
 ## What's not built yet
 
@@ -54,6 +56,8 @@ Living snapshot of where the project actually is. Read at session start. Update 
 
 - `bun run test` in `apps/web/` → Vitest. 125 / 125 pass + 1 skipped (jsdom limitation on Milkdown initial render).
 - `bun test` from the repo root invokes Bun's runner, not Vitest — do NOT use it for web tests. Use `bun run --filter @folio/web test` or `cd apps/web && bun run test`.
+- `bun run e2e` in `apps/web/` → Playwright. 6 passing (3 smoke + scenarios 1, 2, 15), 10 skipped (scenarios 3, 4, 5, 6, 8, 9, 10, 11, 12, 13 — each scaffolded with a per-test TODO about which selector still needs work). Boots its own dev stack on ports 5174 (web) / 3002 (api), isolated SQLite at `apps/server/folio-e2e.db` (gitignored, wiped on every run via `global-setup.ts`). Cold-start is ~4.5 minutes mostly Vite warmup; individual tests are 1–3s.
+- Playwright config + helpers: `apps/web/playwright.config.ts`, `apps/web/tests/e2e/global-setup.ts`, `apps/web/tests/e2e/fixtures.ts`.
 
 ## Servers
 

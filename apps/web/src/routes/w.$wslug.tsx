@@ -1,12 +1,16 @@
 import { createFileRoute, Outlet, useNavigate, useRouterState } from '@tanstack/react-router';
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { FolderOpen, Search } from 'lucide-react';
-import { useMe } from '../lib/api/auth.ts';
+import { toast } from 'sonner';
+import { useLogout, useMe } from '../lib/api/auth.ts';
 import { useProjects } from '../lib/api/projects.ts';
 import { useWorkspace, useWorkspaces } from '../lib/api/workspaces.ts';
+import { formatApiError } from '../lib/api/index.ts';
 import { Shell } from '../components/shell/shell.tsx';
 import { Rail, type NavItem } from '../components/shell/rail.tsx';
 import { WorkspaceSwitcher } from '../components/shell/workspace-switcher.tsx';
+import { UserMenu } from '../components/shell/user-menu.tsx';
+import { WorkspaceCreate } from '../components/onboarding/workspace-create.tsx';
 import { openCommandPalette } from '../lib/command-palette-bus.ts';
 
 export const Route = createFileRoute('/w/$wslug')({
@@ -29,6 +33,8 @@ function WorkspaceLayout() {
   const { data: workspace, isLoading } = useWorkspace(wslug);
   const { data: workspaces } = useWorkspaces();
   const { data: projects } = useProjects(wslug);
+  const logout = useLogout();
+  const [creatingWorkspace, setCreatingWorkspace] = useState(false);
 
   const currentPath = routerState.location.pathname;
 
@@ -73,32 +79,54 @@ function WorkspaceLayout() {
   };
 
   const onCreateWorkspace = () => {
-    void navigate({ to: '/' });
+    setCreatingWorkspace(true);
+  };
+
+  const onSignOut = async () => {
+    try {
+      await logout.mutateAsync();
+      void navigate({ to: '/login' });
+    } catch (err) {
+      toast.error(formatApiError(err));
+    }
   };
 
   return (
-    <Shell
-      rail={
-        <Rail
-          brand={{ mark: brandMark, label: 'Folio' }}
-          workspace={{
-            mark: workspaceMark,
-            name: workspace.name,
-            switcher: (trigger) => (
-              <WorkspaceSwitcher
-                trigger={trigger}
-                workspaces={switcherEntries}
-                onSelectWorkspace={onSelectWorkspace}
-                onCreateWorkspace={onCreateWorkspace}
-              />
-            ),
-          }}
-          primary={primary}
-          tools={TOOLS}
-          user={{ name: userName }}
-        />
-      }
-      main={<Outlet />}
-    />
+    <>
+      <Shell
+        rail={
+          <Rail
+            brand={{ mark: brandMark, label: 'Folio' }}
+            workspace={{
+              mark: workspaceMark,
+              name: workspace.name,
+              switcher: (trigger) => (
+                <WorkspaceSwitcher
+                  trigger={trigger}
+                  workspaces={switcherEntries}
+                  onSelectWorkspace={onSelectWorkspace}
+                  onCreateWorkspace={onCreateWorkspace}
+                />
+              ),
+            }}
+            primary={primary}
+            tools={TOOLS}
+            user={{
+              name: userName,
+              menu: (trigger) => (
+                <UserMenu
+                  trigger={trigger}
+                  email={me?.user.email}
+                  onSignOut={onSignOut}
+                  onCreateWorkspace={onCreateWorkspace}
+                />
+              ),
+            }}
+          />
+        }
+        main={<Outlet />}
+      />
+      <WorkspaceCreate open={creatingWorkspace} onOpenChange={setCreatingWorkspace} />
+    </>
   );
 }

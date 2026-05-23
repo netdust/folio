@@ -26,13 +26,18 @@ export interface WorkspaceConfig {
   switcher?: (trigger: ReactNode) => ReactNode;
 }
 
+export interface UserConfig {
+  name: string;
+  menu?: (trigger: ReactNode) => ReactNode;
+}
+
 interface RailProps {
   brand: { mark: string; label: string };
   workspace: WorkspaceConfig;
   primary: NavItem[];
   tools?: NavItem[];
   account?: NavItem[];
-  user: { name: string };
+  user: UserConfig;
 }
 
 export function useRailCollapsed(): [boolean, (v: boolean) => void] {
@@ -94,10 +99,7 @@ function RailExpanded({ brand, workspace, primary, tools, account, user, onToggl
       {account && account.length > 0 ? <NavList items={account} expanded /> : null}
 
       <div className="flex items-center gap-2 px-2 pt-1.5">
-        <span className="inline-grid h-7 w-7 place-items-center rounded-full bg-primary text-primary-fg text-[11px] font-medium">
-          {initials(user.name)}
-        </span>
-        <span className="text-xs font-medium truncate flex-1">{user.name}</span>
+        <UserChip user={user} />
         <button
           type="button"
           aria-label="Collapse rail"
@@ -128,12 +130,8 @@ function RailCollapsed({ brand, workspace, primary, tools, account, user, onTogg
         </>
       ) : null}
       {account && account.length > 0 ? <NavList items={account} expanded={false} /> : null}
-      <span
-        title={user.name}
-        className="mt-1.5 inline-grid h-[30px] w-[30px] place-items-center rounded-full bg-primary text-primary-fg text-[11px] font-medium"
-      >
-        {initials(user.name)}
-      </span>
+      <UserChip user={user} compact />
+
       <button
         type="button"
         aria-label="Expand rail"
@@ -145,6 +143,29 @@ function RailCollapsed({ brand, workspace, primary, tools, account, user, onTogg
       </button>
     </aside>
   );
+}
+
+function UserChip({ user, compact = false }: { user: UserConfig; compact?: boolean }) {
+  const trigger = compact ? (
+    <button
+      type="button"
+      title={user.name}
+      className="mt-1.5 inline-grid h-[30px] w-[30px] place-items-center rounded-full bg-primary text-primary-fg text-[11px] font-medium"
+    >
+      {initials(user.name)}
+    </button>
+  ) : (
+    <button
+      type="button"
+      className="flex items-center gap-2 flex-1 min-w-0 rounded-md px-1 -mx-1 py-0.5 hover:bg-card transition-colors duration-fast"
+    >
+      <span className="inline-grid h-7 w-7 place-items-center rounded-full bg-primary text-primary-fg text-[11px] font-medium">
+        {initials(user.name)}
+      </span>
+      <span className="text-xs font-medium truncate text-left">{user.name}</span>
+    </button>
+  );
+  return user.menu ? <>{user.menu(trigger)}</> : trigger;
 }
 
 function WorkspaceMark({ workspace }: { workspace: WorkspaceConfig }) {
