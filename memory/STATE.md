@@ -1,6 +1,6 @@
 # Folio — STATE
 
-_Last updated: 2026-05-23_
+_Last updated: 2026-05-24_
 
 Living snapshot of where the project actually is. Read at session start. Update at session end if anything below changed.
 
@@ -13,7 +13,7 @@ Living snapshot of where the project actually is. Read at session start. Update 
 
 ## Current branch
 
-`phase-1.5/ux-polish`. Tip is the review-cleanup commit (post-`7c306d7`). 125 / 125 web tests pass.
+`phase-1.5/ux-polish`. Tip is the `+ Filter forwardRef` fix at `c241407` (+ memory bump `60729ed` + auto-capture). 134 / 134 web unit + 81 / 81 server + 16 / 16 active e2e pass.
 
 ## What's working in the UI
 
