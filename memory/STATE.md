@@ -61,3 +61,4 @@ Living snapshot of where the project actually is. Read at session start. Update 
 - API dev: `http://localhost:3001/` (Hono via Bun, `--hot`).
 - `bun dev` from repo root starts both via workspace filter.
 - API has no `/` or `/health` route → expect 404 on root; the auth probe at `/api/v1/auth/me` is the right liveness signal.
+[2026-05-23] — session ended (no significant changes captured)
