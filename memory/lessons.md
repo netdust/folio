@@ -101,7 +101,21 @@ Self-improvement log per global CLAUDE.md workflow. After any user correction, a
 **Rule:** Whenever using a headless editor (Milkdown, ProseMirror, TipTap), grep the rendered DOM for nodes with semantic data attributes (`data-item-type`, `data-checked`, `data-language`) and verify every one has corresponding CSS. For Folio specifically: any new GFM node type added in a future Milkdown version (footnote, callout) needs CSS in `apps/web/src/styles/editor.css`.
 **Trigger:** Bumping Milkdown / its presets. Adding new content types to the body editor.
 
-## 2026-05-24 — Repeated list-row aria-labels need to interpolate the row's data
+## 2026-05-24 — Filter UI shipped without server enforcement
+
+**Mistake:** Phase 1 shipped a +Filter popover that wrote `?status=…&assignee=…&updated_since=…` to the URL, but the server's documents list handler only consumed `?type=`, `?cursor=`, `?limit=`, and the JSON-AST `?filter=`. Other params were silently dropped. The UI had a fully working chip flow that produced no visible effect on the result set — a high-trust-cost bug.
+**Why:** Two implementations diverged. The richer `?filter=` AST was built for the agent/MCP path; the toolbar shipped its own flat query shape without anyone validating it round-trips to the server.
+**Rule:** When two URL conventions exist for the same intent (flat chips vs structured AST), the server MUST accept both. Add an explicit server-test per flat param at the same time as wiring the UI. Don't assume "the AST handles it" without checking which call sites actually emit the AST.
+**Trigger:** Any UI that writes a URL query param and expects the server to filter on it. Cross-check with `grep -n 'c.req.query'` on the matching route.
+
+## 2026-05-24 — Test harness "minimal project" vs "real project" — make it opt-in
+
+**Mistake:** Adding `seedProjectDefaults` to `makeTestApp` to fix new filter tests broke 6 existing tests that asserted the project started with no statuses/views. Tests had silently coupled to the harness's behavior of NOT seeding.
+**Why:** Test harnesses fall into two camps — minimal (every fact you assert is something the test set up) and realistic (production-like state). Both are valid, but switching from one to the other affects every test that ever ran on the old contract.
+**Rule:** When the harness has a behavior gap from production, expose the gap via an option (`makeTestApp({ seedProjectDefaults: true })`) rather than flipping the default. Document the option in the harness's TSDoc so future test authors know which mode they're in.
+**Trigger:** Touching `apps/server/src/test/harness.ts`. Or any test helper named `*makeApp*` / `*makeTestX*`.
+
+## 2026-05-24 — Don't advertise a keyboard shortcut you haven't bound
 
 **Mistake:** `ListRow` rendered a static `aria-label="Open document"` on every row's open icon and a static `aria-label="Document title"` on every inline-edit. With N rows in the list, screen readers heard "Open document, Open document, Open document…" and selector tools (incl. Playwright's strict mode) couldn't disambiguate.
 **Why:** Aria-labels are usually written in the abstract ("Open document" describes the button's role), but inside a list of similar items the *role* is the same for every row — what disambiguates them is the data. Generic labels become indistinguishable-from-each-other for the user.

@@ -268,6 +268,72 @@ test('GET applies a filter AST via ?filter=', async () => {
   expect(body.data[0].title).toBe('X');
 });
 
+test('GET filters by ?status= (single value)', async () => {
+  const { app, seed } = await makeTestApp({ seedProjectDefaults: true });
+  // Status is set via frontmatter.status on create, then promoted to a column.
+  await app.request(path, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: 'work_item', title: 'TodoDoc', frontmatter: { status: 'todo' } }),
+  });
+  await app.request(path, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: 'work_item', title: 'BacklogDoc', frontmatter: { status: 'backlog' } }),
+  });
+  const res = await app.request(`${path}?status=todo`, { headers: { Cookie: seed.sessionCookie } });
+  const body = await res.json();
+  expect(body.data).toHaveLength(1);
+  expect(body.data[0].title).toBe('TodoDoc');
+});
+
+test('GET filters by ?status= (multiple values via repeat)', async () => {
+  const { app, seed } = await makeTestApp({ seedProjectDefaults: true });
+  for (const [t, s] of [['T', 'todo'], ['B', 'backlog'], ['D', 'done']] as const) {
+    await app.request(path, {
+      method: 'POST',
+      headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'work_item', title: t, frontmatter: { status: s } }),
+    });
+  }
+  const res = await app.request(`${path}?status=todo&status=done`, { headers: { Cookie: seed.sessionCookie } });
+  const body = await res.json();
+  expect(body.data).toHaveLength(2);
+  const titles = body.data.map((d: { title: string }) => d.title).sort();
+  expect(titles).toEqual(['D', 'T']);
+});
+
+test('GET filters by ?updated_since=', async () => {
+  const { app, seed } = await makeTestApp();
+  await app.request(path, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: 'work_item', title: 'Old' }),
+  });
+  // Future timestamp filters everything out
+  const future = new Date(Date.now() + 60_000).toISOString();
+  const res = await app.request(`${path}?updated_since=${future}`, { headers: { Cookie: seed.sessionCookie } });
+  expect((await res.json()).data).toHaveLength(0);
+});
+
+test('GET filters by ?assignee= against frontmatter', async () => {
+  const { app, seed } = await makeTestApp();
+  await app.request(path, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: 'work_item', title: 'Mine', frontmatter: { assignee: 'me' } }),
+  });
+  await app.request(path, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: 'work_item', title: 'Theirs', frontmatter: { assignee: 'them' } }),
+  });
+  const res = await app.request(`${path}?assignee=me`, { headers: { Cookie: seed.sessionCookie } });
+  const body = await res.json();
+  expect(body.data).toHaveLength(1);
+  expect(body.data[0].title).toBe('Mine');
+});
+
 test('GET 422 INVALID_FILTER on bad operator', async () => {
   const { app, seed } = await makeTestApp();
   const filter = encodeURIComponent(JSON.stringify({ x: { $bogus: 1 } }));

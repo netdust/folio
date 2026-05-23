@@ -25,6 +25,7 @@ import { nanoid } from 'nanoid';
 import { __resetDbForTests, type DB } from '../db/client.ts';
 import * as schema from '../db/schema.ts';
 import { createSession, hashPassword } from '../lib/auth.ts';
+import { seedProjectDefaults } from '../lib/seed-project-defaults.ts';
 
 // Resolve migrations relative to *this file*, not the caller's CWD, so the
 // harness works whether `bun test` is run from the repo root or apps/server.
@@ -39,7 +40,16 @@ export interface TestSeed {
 
 type ServerApp = typeof import('../app.ts')['app'];
 
-export async function makeTestApp(): Promise<{
+export interface HarnessOptions {
+  /**
+   * When true, seed the auto-created project with its default statuses + views
+   * (mirrors what POST /projects does in production). Default: false, so tests
+   * that exercise the empty-statuses code path keep their original behavior.
+   */
+  seedProjectDefaults?: boolean;
+}
+
+export async function makeTestApp(opts: HarnessOptions = {}): Promise<{
   app: ServerApp;
   db: DB;
   seed: TestSeed;
@@ -85,6 +95,11 @@ export async function makeTestApp(): Promise<{
     slug: 'web',
     name: 'Web',
   });
+  // Mirror what POST /projects does — seed default statuses + views — but only
+  // when the test opts in. Most existing tests assume an empty project.
+  if (opts.seedProjectDefaults) {
+    await seedProjectDefaults(db, projectId);
+  }
 
   const session = await createSession(userId);
 

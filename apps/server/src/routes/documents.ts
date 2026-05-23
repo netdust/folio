@@ -1,4 +1,4 @@
-import { and, desc, eq, lt, or } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, lt, or, sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { nanoid } from 'nanoid';
 import {
@@ -157,6 +157,27 @@ documentsRoute.get('/', async (c) => {
   const whereClauses = [eq(documents.projectId, p.id)];
   if (type === 'work_item' || type === 'page') {
     whereClauses.push(eq(documents.type, type));
+  }
+  // Flat filter params — kept simple here so the toolbar chips work without
+  // having to encode/decode the full `?filter=` AST. The AST stays available
+  // for the agent/MCP path that needs richer expressions.
+  const statusValues = c.req.queries('status') ?? [];
+  if (statusValues.length === 1) {
+    whereClauses.push(eq(documents.status, statusValues[0]!));
+  } else if (statusValues.length > 1) {
+    whereClauses.push(inArray(documents.status, statusValues));
+  }
+  const assignee = c.req.query('assignee');
+  if (assignee) {
+    // documents.frontmatter is JSON-encoded text; match the assignee key.
+    whereClauses.push(sql`json_extract(${documents.frontmatter}, '$.assignee') = ${assignee}`);
+  }
+  const updatedSince = c.req.query('updated_since');
+  if (updatedSince) {
+    const ts = new Date(updatedSince);
+    if (!Number.isNaN(ts.getTime())) {
+      whereClauses.push(gte(documents.updatedAt, ts));
+    }
   }
   if (filterWhere) whereClauses.push(filterWhere);
   if (cursor) {

@@ -202,6 +202,40 @@ test('slideover: task list checkbox renders for [ ] and [x] items', async ({ pag
   await expect(items.nth(1)).toHaveAttribute('data-checked', 'true');
 });
 
+test('filter: status chip actually narrows the list (regression)', async ({ page }) => {
+  await signUpThroughUI(page, 'Filter User');
+  await page.getByRole('button', { name: 'Create workspace', exact: true }).click();
+  await createWorkspaceViaSheet(page, `Filter WS ${Date.now()}`);
+  await createProjectViaSheet(page, `Filter Proj ${Date.now()}`);
+
+  // Seed two work items with different statuses.
+  await page.waitForURL(/\/w\/[^/]+\/p\/[^/]+\/work-items/);
+  const m = page.url().match(/\/w\/([^/]+)\/p\/([^/]+)\//);
+  if (!m) throw new Error(`Unexpected URL: ${page.url()}`);
+  const [, wslug, pslug] = m;
+  // Status flows in via frontmatter.status (it's promoted to a column server-side).
+  await page.request.post(
+    `/api/v1/w/${wslug}/p/${pslug}/documents`,
+    { data: { type: 'work_item', title: 'A todo doc', frontmatter: { status: 'todo' } } },
+  );
+  await page.request.post(
+    `/api/v1/w/${wslug}/p/${pslug}/documents`,
+    { data: { type: 'work_item', title: 'A backlog doc', frontmatter: { status: 'backlog' } } },
+  );
+
+  // Without filter, both rows visible.
+  await page.reload();
+  await expect(page.getByText('A todo doc')).toBeVisible();
+  await expect(page.getByText('A backlog doc')).toBeVisible();
+
+  // Apply ?status=todo via the URL (the chip popover requires Radix focus
+  // handling that's flaky in headless mode; we trust the chip writes the
+  // URL and assert the server-side filter holds).
+  await page.goto(`/w/${wslug}/p/${pslug}/work-items?status=%5B%22todo%22%5D`);
+  await expect(page.getByText('A todo doc')).toBeVisible();
+  await expect(page.getByText('A backlog doc')).toHaveCount(0);
+});
+
 test('wiki: new page + title edit shows in tree without a reload (regression)', async ({ page }) => {
   await signUpThroughUI(page, 'Wiki User');
   await page.getByRole('button', { name: 'Create workspace', exact: true }).click();
