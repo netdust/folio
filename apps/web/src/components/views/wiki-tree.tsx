@@ -183,7 +183,7 @@ export function TreeRow({ node, depth, expanded, onToggle, onOpen, pendingId, ws
             type="button"
             onClick={() => onOpen(node.doc.slug)}
             onPointerDown={(e) => e.stopPropagation()}
-            className="truncate text-left text-sm text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+            className="truncate text-left text-sm text-fg focus:outline-none focus-visible:[box-shadow:var(--ring)]"
           >
             {node.doc.title}
           </button>

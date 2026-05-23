@@ -37,7 +37,7 @@ export function InlineSelect({
         <button
           type="button"
           className={cn(
-            'inline-flex cursor-pointer items-center rounded-sm px-1.5 py-0.5 text-xs hover:bg-card focus:outline-none focus-visible:ring-2 focus-visible:ring-primary',
+            'inline-flex cursor-pointer items-center rounded-sm px-1.5 py-0.5 text-xs hover:bg-card focus:outline-none focus-visible:[box-shadow:var(--ring)]',
             isPending && 'opacity-60',
             className,
           )}

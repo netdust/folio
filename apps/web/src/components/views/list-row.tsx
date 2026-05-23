@@ -69,7 +69,7 @@ export function ListRow({ doc, statuses, wslug, pslug, onOpen, onUpdate, pending
             type="button"
             aria-label="Open document"
             onClick={() => onOpen(doc.slug)}
-            className="text-fg-3 hover:text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+            className="text-fg-3 hover:text-fg focus:outline-none focus-visible:[box-shadow:var(--ring)]"
           >
             <Icon icon={ArrowUpRight} size={14} />
           </button>

@@ -62,7 +62,7 @@ export function InlineEdit({
         type="text"
         aria-label={ariaLabel}
         className={cn(
-          'block w-full rounded-sm bg-card px-1 py-0.5 text-sm text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-primary',
+          'block w-full rounded-sm border border-transparent bg-card px-1 py-0.5 text-sm text-fg focus:outline-none focus-visible:border-fg-3',
           inputClassName,
         )}
         value={draft}
@@ -95,7 +95,7 @@ export function InlineEdit({
         }
       }}
       className={cn(
-        'inline-block cursor-text rounded-sm px-1 py-0.5 hover:bg-card focus:outline-none focus-visible:ring-2 focus-visible:ring-primary',
+        'inline-block cursor-text rounded-sm px-1 py-0.5 hover:bg-card focus:outline-none focus-visible:bg-card',
         isPending && 'opacity-60',
         className,
       )}

@@ -17,6 +17,7 @@ export default {
         card:       'var(--color-card)',
         'border-light': 'var(--color-border-light)',
         'border-row':   'var(--color-border-row)',
+        'board-col':    'var(--color-board-col)',
 
         fg:    'var(--color-fg)',
         'fg-2':'var(--color-fg-2)',

@@ -68,7 +68,7 @@ export function ProjectCreate({ wslug, open, onOpenChange }: Props) {
               </label>
               <input
                 id="proj-name"
-                className="mt-1 block w-full rounded-md border border-border-light bg-shell px-3 py-2 text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                className="mt-1 block w-full rounded-md border border-border-light bg-shell px-3 py-2 text-fg focus:outline-none focus-visible:border-fg-3 focus-visible:bg-card"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 required
@@ -81,7 +81,7 @@ export function ProjectCreate({ wslug, open, onOpenChange }: Props) {
               </label>
               <input
                 id="proj-slug"
-                className="mt-1 block w-full rounded-md border border-border-light bg-shell px-3 py-2 font-mono text-sm text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                className="mt-1 block w-full rounded-md border border-border-light bg-shell px-3 py-2 font-mono text-sm text-fg focus:outline-none focus-visible:border-fg-3 focus-visible:bg-card"
                 value={slug}
                 onChange={(e) => {
                   setSlug(slugify(e.target.value));

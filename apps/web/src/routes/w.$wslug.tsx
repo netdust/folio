@@ -6,6 +6,7 @@ import { useProjects } from '../lib/api/projects.ts';
 import { useWorkspace, useWorkspaces } from '../lib/api/workspaces.ts';
 import { Shell } from '../components/shell/shell.tsx';
 import { Rail, type NavItem } from '../components/shell/rail.tsx';
+import { WorkspaceSwitcher } from '../components/shell/workspace-switcher.tsx';
 import { openCommandPalette } from '../lib/command-palette-bus.ts';
 
 export const Route = createFileRoute('/w/$wslug')({
@@ -46,6 +47,18 @@ function WorkspaceLayout() {
     }));
   }, [projects, currentPath, wslug, navigate]);
 
+  const switcherEntries = useMemo(
+    () =>
+      (workspaces ?? []).map(({ workspace: w }) => ({
+        id: w.id,
+        slug: w.slug,
+        name: w.name,
+        mark: w.name.charAt(0).toUpperCase() || 'W',
+        active: w.slug === wslug,
+      })),
+    [workspaces, wslug],
+  );
+
   if (isLoading) return <div className="p-8 text-fg-3">Loading workspace…</div>;
   if (!workspace) return <div className="p-8 text-danger">Workspace not found.</div>;
 
@@ -53,8 +66,13 @@ function WorkspaceLayout() {
   const workspaceMark = workspace.name.charAt(0).toUpperCase() || 'W';
   const userName = me?.user.name ?? 'You';
 
-  const onSwitchWorkspace = () => {
-    if (!workspaces || workspaces.length <= 1) return;
+  const onSelectWorkspace = (workspaceId: string) => {
+    const target = switcherEntries.find((w) => w.id === workspaceId);
+    if (!target || target.slug === wslug) return;
+    void navigate({ to: '/w/$wslug', params: { wslug: target.slug } });
+  };
+
+  const onCreateWorkspace = () => {
     void navigate({ to: '/' });
   };
 
@@ -63,7 +81,18 @@ function WorkspaceLayout() {
       rail={
         <Rail
           brand={{ mark: brandMark, label: 'Folio' }}
-          workspace={{ mark: workspaceMark, name: workspace.name, onSwitch: onSwitchWorkspace }}
+          workspace={{
+            mark: workspaceMark,
+            name: workspace.name,
+            switcher: (trigger) => (
+              <WorkspaceSwitcher
+                trigger={trigger}
+                workspaces={switcherEntries}
+                onSelectWorkspace={onSelectWorkspace}
+                onCreateWorkspace={onCreateWorkspace}
+              />
+            ),
+          }}
           primary={primary}
           tools={TOOLS}
           user={{ name: userName }}

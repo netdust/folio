@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { LucideIcon } from 'lucide-react';
-import { PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { ChevronsUpDown, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { Icon } from '../ui/icon.tsx';
 import { Kbd } from '../ui/kbd.tsx';
 import { cn } from '../ui/cn.ts';
@@ -19,9 +19,16 @@ export interface NavItem {
   onClick?: () => void;
 }
 
+export interface WorkspaceConfig {
+  mark: string;
+  name: string;
+  onSwitch?: () => void;
+  switcher?: (trigger: ReactNode) => ReactNode;
+}
+
 interface RailProps {
   brand: { mark: string; label: string };
-  workspace: { mark: string; name: string; onSwitch?: () => void };
+  workspace: WorkspaceConfig;
   primary: NavItem[];
   tools?: NavItem[];
   account?: NavItem[];
@@ -46,57 +53,59 @@ export function Rail({ brand, workspace, primary, tools, account, user }: RailPr
     : <RailExpanded brand={brand} workspace={workspace} primary={primary} tools={tools} account={account} user={user} onToggle={() => setCollapsed(true)} />;
 }
 
+function WorkspaceButton({ workspace }: { workspace: WorkspaceConfig }) {
+  const trigger = (
+    <button
+      type="button"
+      onClick={workspace.switcher ? undefined : workspace.onSwitch}
+      className="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 hover:bg-card transition-colors duration-fast"
+    >
+      <span className="inline-grid h-[22px] w-[22px] place-items-center rounded bg-primary text-primary-fg text-[11px] font-semibold">
+        {workspace.mark}
+      </span>
+      <span className="text-sm font-medium flex-1 text-left truncate">{workspace.name}</span>
+      <Icon icon={ChevronsUpDown} size={14} className="text-fg-3" />
+    </button>
+  );
+  return workspace.switcher ? <>{workspace.switcher(trigger)}</> : trigger;
+}
+
 function RailExpanded({ brand, workspace, primary, tools, account, user, onToggle }: RailProps & { onToggle: () => void }) {
   return (
     <aside className="flex w-[200px] flex-col rounded-xl bg-content shadow-surface px-3 py-3.5">
-      <div className="flex items-center gap-2.5 px-2 mb-2">
-        <BrandMark>{brand.mark}</BrandMark>
-        <span className="text-sm font-medium tracking-tight">{brand.label}</span>
+      <div className="px-2 mb-3 text-[11px] font-medium tracking-wide text-fg-3 uppercase">
+        {brand.label}
       </div>
 
-      <button
-        type="button"
-        onClick={workspace.onSwitch}
-        className="flex items-center gap-2.5 rounded-md px-2 py-1.5 mb-2 hover:bg-card transition-colors duration-fast"
-      >
-        <span className="inline-grid h-[22px] w-[22px] place-items-center rounded bg-primary text-primary-fg text-[11px] font-semibold">
-          {workspace.mark}
-        </span>
-        <span className="text-sm font-medium flex-1 text-left truncate">{workspace.name}</span>
-        <span className="text-fg-3 text-[11px]">▾</span>
-      </button>
+      <WorkspaceButton workspace={workspace} />
 
       <Divider />
       <NavList items={primary} expanded />
 
+      <div className="flex-1" />
+
       {tools && tools.length > 0 ? (
         <>
-          <Divider />
           <NavList items={tools} expanded />
+          <Divider />
         </>
       ) : null}
 
-      <div className="flex-1" />
-
       {account && account.length > 0 ? <NavList items={account} expanded /> : null}
-
-      <div className="px-2 pb-1.5">
-        <button
-          type="button"
-          aria-label="Collapse rail"
-          onClick={onToggle}
-          className="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-sm text-fg-3 hover:bg-card hover:text-fg-2 transition-colors duration-fast"
-        >
-          <Icon icon={PanelLeftClose} size={16} />
-          <span className="flex-1 text-left">Collapse</span>
-        </button>
-      </div>
 
       <div className="flex items-center gap-2 px-2 pt-1.5">
         <span className="inline-grid h-7 w-7 place-items-center rounded-full bg-primary text-primary-fg text-[11px] font-medium">
           {initials(user.name)}
         </span>
-        <span className="text-xs font-medium truncate">{user.name}</span>
+        <span className="text-xs font-medium truncate flex-1">{user.name}</span>
+        <button
+          type="button"
+          aria-label="Collapse rail"
+          onClick={onToggle}
+          className="grid h-6 w-6 place-items-center rounded text-fg-3 hover:bg-card hover:text-fg-2 focus:outline-none focus-visible:[box-shadow:var(--ring)]"
+        >
+          <Icon icon={PanelLeftClose} size={13} />
+        </button>
       </div>
     </aside>
   );
@@ -105,40 +114,42 @@ function RailExpanded({ brand, workspace, primary, tools, account, user, onToggl
 function RailCollapsed({ brand, workspace, primary, tools, account, user, onToggle }: RailProps & { onToggle: () => void }) {
   return (
     <aside className="flex w-16 flex-col items-center rounded-xl bg-content shadow-surface py-3.5">
-      <BrandMark>{brand.mark}</BrandMark>
+      <span className="text-[9px] font-medium tracking-wide text-fg-3 uppercase" aria-hidden>
+        {brand.mark}
+      </span>
       <button
         type="button"
         onClick={workspace.onSwitch}
         title={workspace.name}
-        className="mt-3.5 mb-2 inline-grid h-[30px] w-[30px] place-items-center rounded bg-primary text-primary-fg text-xs font-semibold"
+        className="mt-3 mb-2 inline-grid h-[30px] w-[30px] place-items-center rounded bg-primary text-primary-fg text-xs font-semibold"
       >
         {workspace.mark}
       </button>
       <Divider tiny />
       <NavList items={primary} expanded={false} />
+      <div className="flex-1" />
       {tools && tools.length > 0 ? (
         <>
-          <Divider tiny />
           <NavList items={tools} expanded={false} />
+          <Divider tiny />
         </>
       ) : null}
-      <div className="flex-1" />
       {account && account.length > 0 ? <NavList items={account} expanded={false} /> : null}
-      <button
-        type="button"
-        aria-label="Expand rail"
-        onClick={onToggle}
-        title="Expand"
-        className="mt-2 inline-grid h-9 w-9 place-items-center rounded-md text-fg-3 hover:bg-card hover:text-fg-2 transition-colors duration-fast"
-      >
-        <Icon icon={PanelLeftOpen} size={16} />
-      </button>
       <span
         title={user.name}
         className="mt-1.5 inline-grid h-[30px] w-[30px] place-items-center rounded-full bg-primary text-primary-fg text-[11px] font-medium"
       >
         {initials(user.name)}
       </span>
+      <button
+        type="button"
+        aria-label="Expand rail"
+        onClick={onToggle}
+        title="Expand"
+        className="mt-1.5 grid h-6 w-6 place-items-center rounded text-fg-3 hover:bg-card hover:text-fg-2 focus:outline-none focus-visible:[box-shadow:var(--ring)]"
+      >
+        <Icon icon={PanelLeftOpen} size={13} />
+      </button>
     </aside>
   );
 }
@@ -188,14 +199,6 @@ function NavList({ items, expanded }: { items: NavItem[]; expanded: boolean }) {
         </button>
       ))}
     </div>
-  );
-}
-
-function BrandMark({ children }: { children: ReactNode }) {
-  return (
-    <span className="inline-grid h-7 w-7 place-items-center rounded-md bg-primary text-primary-fg text-sm font-semibold tracking-tight">
-      {children}
-    </span>
   );
 }
 

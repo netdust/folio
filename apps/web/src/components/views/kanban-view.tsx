@@ -1,14 +1,12 @@
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { useMemo, useState } from 'react';
 import { DndContext, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
-import { Plus } from 'lucide-react';
 import { toast } from 'sonner';
 import { useCreateDocument, useDocuments, useUpdateDocument, type DocumentSummary } from '../../lib/api/documents.ts';
 import { useStatuses } from '../../lib/api/statuses.ts';
 import { formatApiError } from '../../lib/api/index.ts';
 import { KanbanColumn } from '../kanban/kanban-column.tsx';
 import { KanbanCard } from '../kanban/kanban-card.tsx';
-import { Icon } from '../ui/icon.tsx';
 import { EmptyState } from './empty-state.tsx';
 import { KanbanSkeleton } from './kanban-skeleton.tsx';
 
@@ -92,23 +90,17 @@ export function KanbanView({ wslug, pslug }: Props) {
   return (
     <DndContext sensors={sensors} onDragEnd={onDragEnd}>
       <div className="flex h-full gap-3 overflow-x-auto px-[22px] py-2">
-        {statuses.map((s, idx) => (
-          <KanbanColumn key={s.key} status={s} count={grouped.get(s.key)?.length ?? 0}>
+        {statuses.map((s) => (
+          <KanbanColumn
+            key={s.key}
+            status={s}
+            count={grouped.get(s.key)?.length ?? 0}
+            onAdd={() => onCreateInColumn(s.key)}
+            isAddPending={create.isPending}
+          >
             {(grouped.get(s.key) ?? []).map((doc) => (
               <KanbanCard key={doc.id} doc={doc} onOpen={openDoc} isPending={pendingSlugs.has(doc.slug)} />
             ))}
-            {idx === 0 ? (
-              <button
-                type="button"
-                aria-label={`New work item in ${s.name}`}
-                onClick={() => onCreateInColumn(s.key)}
-                disabled={create.isPending}
-                className="flex items-center justify-center gap-1.5 rounded-md border border-dashed border-border-light bg-shell px-3 py-2 text-xs text-fg-3 hover:bg-card disabled:opacity-50"
-              >
-                <Icon icon={Plus} size={14} />
-                New work item
-              </button>
-            ) : null}
           </KanbanColumn>
         ))}
         {/* Cards without a status get rendered in a parking lot — Phase 1 keeps them visible. */}
