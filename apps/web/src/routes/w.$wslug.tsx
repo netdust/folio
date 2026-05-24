@@ -15,6 +15,7 @@ import { Rail, type NavItem } from '../components/shell/rail.tsx';
 import { WorkspaceSwitcher } from '../components/shell/workspace-switcher.tsx';
 import { UserMenu } from '../components/shell/user-menu.tsx';
 import { WorkspaceCreate } from '../components/onboarding/workspace-create.tsx';
+import { NewViewSheet } from '../components/views/new-view-sheet.tsx';
 import { openCommandPalette } from '../lib/command-palette-bus.ts';
 import { modKeyHint } from '../lib/platform.ts';
 import { buildRailTree, type RailTreeHandlers } from '../lib/rail-tree.ts';
@@ -41,6 +42,7 @@ function WorkspaceLayout() {
   const { data: projects } = useProjects(wslug);
   const logout = useLogout();
   const [creatingWorkspace, setCreatingWorkspace] = useState(false);
+  const [newViewSheet, setNewViewSheet] = useState<{ pslug: string } | null>(null);
 
   const currentPath = routerState.location.pathname;
 
@@ -109,9 +111,8 @@ function WorkspaceLayout() {
           search: { view: viewId } as unknown as Record<string, never>,
         });
       },
-      onNewView: (pslug: string, tslug: string) => {
-        // TODO Task 6: open the New View sheet wired to (pslug, tslug).
-        console.log('TODO: open New View sheet', pslug, tslug);
+      onNewView: (pslug: string, _tslug: string) => {
+        setNewViewSheet({ pslug });
       },
     }),
     [navigate, wslug],
@@ -208,6 +209,16 @@ function WorkspaceLayout() {
         main={<Outlet />}
       />
       <WorkspaceCreate open={creatingWorkspace} onOpenChange={setCreatingWorkspace} />
+      {newViewSheet && (
+        <NewViewSheet
+          open={newViewSheet !== null}
+          onOpenChange={(open) => {
+            if (!open) setNewViewSheet(null);
+          }}
+          wslug={wslug}
+          pslug={newViewSheet.pslug}
+        />
+      )}
     </>
   );
 }
