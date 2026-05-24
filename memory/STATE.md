@@ -11,7 +11,7 @@ Phase numbering aligned with `docs/PHASES.md` (canonical) as of 2026-05-24 reorg
 - **Phase 0–0.5 (Foundation + Design system):** shipped.
 - **Phase 1 (Core CRUD):** shipped — backend + frontend + slideover + raw-MD round-trip.
 - **Phase 1.5 (Tables + Spreadsheet UI):** shipped + merged to main at `af3c0f1` on 2026-05-24. 21 subagent-driven tasks across 1.5a (tables foundation) and 1.5b (spreadsheet UI). Plans: `docs/superpowers/plans/2026-05-24-phase-2a-tables-foundation.md` (now Phase 1.5a) + `2026-05-24-phase-2b-spreadsheet-table-ui.md` (now Phase 1.5b).
-- **Phase 1.6 (Saved views in rail):** shipped on `phase-1.6/saved-views` 2026-05-24. 9 implementation tasks (Task 10 Playwright descoped — coverage via 21 new unit/RTL tests). Plan: `docs/superpowers/plans/2026-05-24-phase-1-6-saved-views-in-rail.md`. 113 server / 175 web (+21) / 28 shared. Awaiting manual QA + merge.
+- **Phase 1.6 (Saved views in rail):** shipped on `phase-1.6/saved-views` 2026-05-24. 9 implementation tasks + manual-QA polish pass that dropped the explicit Save Filters action and the New View "use current" checkbox in favor of filter-changes auto-saving to the active view (parity with sort/columnOrder/visibleFields). Plan: `docs/superpowers/plans/2026-05-24-phase-1-6-saved-views-in-rail.md`. 113 server / 169 web / 28 shared. Awaiting final manual QA + merge.
 - **Phase 1.7 (Lightweight CRM polish):** queued — `next_action` first-class fields, `last_touched_at`, activity log panel, playbook linking.
 - **Phase 1.8 (Time-aware views):** queued — timeline view + This Week dashboard.
 - **Phase 2 (Agents):** queued — spine of v1. Tokens, SSE, MCP server, agents-as-documents, triggers-as-documents (surface only).
@@ -24,7 +24,7 @@ Phase numbering aligned with `docs/PHASES.md` (canonical) as of 2026-05-24 reorg
 
 ## Current branch
 
-`phase-1.6/saved-views` — 10 commits ahead of main (`af3c0f1`). Phase 1.6 build complete; awaiting manual QA + merge. 113 / 113 server unit + 175 / 175 web unit + 1 skipped + 28 / 28 shared.
+`phase-1.6/saved-views` — 11 commits ahead of main (`af3c0f1`). Phase 1.6 build complete after a UX polish pass (icons in rail, auto-save filters, dropped Save Filters action). 113 / 113 server unit + 169 / 169 web unit + 1 skipped + 28 / 28 shared.
 
 ## What's working in the UI
 

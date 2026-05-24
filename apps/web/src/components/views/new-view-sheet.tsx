@@ -20,20 +20,13 @@ export function NewViewSheet({ open, onOpenChange, wslug, pslug, currentSearch }
   const navigate = useNavigate();
   const create = useCreateView(wslug, pslug);
   const [name, setName] = useState('');
-  const [useCurrent, setUseCurrent] = useState(true);
 
   useEffect(() => {
-    if (!open) {
-      setName('');
-      setUseCurrent(true);
-    }
+    if (!open) setName('');
   }, [open]);
 
   function buildPayload(): ViewCreate {
     const trimmed = name.trim();
-    if (!useCurrent) {
-      return { name: trimmed, type: 'list', filters: {}, sort: [] };
-    }
     const src = currentSearch ?? {};
     const filters: Record<string, unknown> = {};
     for (const key of FILTER_KEYS) {
@@ -88,15 +81,10 @@ export function NewViewSheet({ open, onOpenChange, wslug, pslug, currentSearch }
                 required
                 autoFocus
               />
+              <p className="mt-1.5 text-xs text-fg-3">
+                Captures the current filters, sort, and columns. Future changes auto-save.
+              </p>
             </div>
-            <label className="flex items-center gap-2 text-sm text-fg">
-              <input
-                type="checkbox"
-                checked={useCurrent}
-                onChange={(e) => setUseCurrent(e.target.checked)}
-              />
-              Use current filters, sort, and columns
-            </label>
           </div>
           <SheetFooter>
             <Button type="button" variant="secondary" onClick={() => onOpenChange(false)}>

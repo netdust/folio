@@ -1,7 +1,7 @@
 import { createFileRoute, Outlet, useNavigate, useRouterState } from '@tanstack/react-router';
 import { useMemo, useState } from 'react';
 import { useQueries } from '@tanstack/react-query';
-import { Search } from 'lucide-react';
+import { Plus, Search } from 'lucide-react';
 import { toast } from 'sonner';
 import { useLogout, useMe } from '../lib/api/auth.ts';
 import { useProjects } from '../lib/api/projects.ts';
@@ -113,6 +113,20 @@ function WorkspaceLayout() {
       onNewView: (pslug: string, _tslug: string) => {
         setNewViewSheet({ pslug });
       },
+      renderNewViewTrailing: (pslug, _tslug) => (
+        <button
+          type="button"
+          aria-label="New view"
+          data-testid="rail-new-view"
+          onClick={(e) => {
+            e.stopPropagation();
+            setNewViewSheet({ pslug });
+          }}
+          className="grid h-4 w-4 place-items-center rounded text-fg-2 hover:bg-card hover:text-fg"
+        >
+          <Plus size={12} />
+        </button>
+      ),
     }),
     [navigate, wslug],
   );

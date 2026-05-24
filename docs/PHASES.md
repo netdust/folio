@@ -221,27 +221,27 @@ For full context on any decision: `@docs/FOLIO-BRIEFING.md`. For the operating m
 
 **Goal:** Saved views surface as nested children under their table in the left rail (Linear / NocoDB style). Clicking a view navigates to `/w/.../work-items?view=<id>` and applies the view's filter + visibleFields + columnOrder. A `+` action saves the current filter / column state as a new view.
 
-> **Status (2026-05-24):** Shipped on `phase-1.6/saved-views` branch via 10-task subagent-driven build. Plan: `docs/superpowers/plans/2026-05-24-phase-1-6-saved-views-in-rail.md`. Suite: 113 server (+1), 175 web (+21 new tests), 28 shared. Playwright spec for the journey was descoped — coverage is via RTL component tests; manual QA gates the merge.
+> **Status (2026-05-24):** Shipped on `phase-1.6/saved-views`. Plan: `docs/superpowers/plans/2026-05-24-phase-1-6-saved-views-in-rail.md`. Final pass dropped the explicit Save Filters action in favor of full auto-save: filter changes PATCH the active view immediately, matching the existing sort/columnOrder/visibleFields behavior. Suite: 113 server (+1), 169 web (+15 net), 28 shared. Playwright spec descoped — manual QA gates the merge.
 
 ### Rail
 
 - [x] Rail shows `Project → ⚏ Work Items → views[]` with expandable tree (per-item localStorage expand state under `folio:rail-expanded:<id>`)
-- [ ] Each view row has the view's name + a subtle icon hinting at render mode (list = lines, kanban = columns) — *kanban filtered out per Phase 6 deferral; icons deferred to Phase 7 polish*
-- [x] `+` button under each table opens "New view" sheet: pick a name, the view captures the current URL filter/sort/columns
+- [x] Each row carries an icon: folder for projects, table for tables, list for views (kanban filtered out per Phase 6 deferral)
+- [x] `+` button under each table opens "New view" sheet (name only — current URL state always captured)
 - [x] Click view → navigate to `/w/.../work-items?view=<id>` (preserves any open `doc=` param)
 
 ### TableView wiring
 
 - [x] `TableView` reads `?view=` from URL, resolves via `useViews` *(no per-view hook needed — list query + find by id)*
-- [x] Active view's `filters` translate into the URL filter params on first navigation (so a user can edit + save back) — ref-guarded hydration effect, fires once per view id
-- [x] "Save filters to view" affordance — explicit Save button + confirm dialog. Filter editing stays URL-only otherwise; sort + columnOrder + visibleFields auto-save to active view.
+- [x] Active view's `filters` translate into the URL filter params on first navigation — ref-guarded hydration effect, fires once per view id
+- [x] **Filter changes auto-save to active view** (no explicit Save button — same behavior as sort/columnOrder/visibleFields)
 - [x] Default view is auto-selected when no `?view=` is in URL — preserves Phase 1.5 behavior
 
 ### Phase 1.6 acceptance
 
 - [x] Three views can coexist on one table; switching between them updates the spreadsheet without page reload
-- [x] Creating a view from "current state" captures filters + sort accurately *(columns/visibleFields auto-save on the active view, not at creation time)*
-- [x] Editing a view's filter via "Save filters" round-trips through the URL params correctly
+- [x] Creating a view captures the current URL filters + sort accurately
+- [x] Editing a view's filter via inline chip changes round-trips through the URL params correctly (auto-saves to view)
 - [x] Existing single-view tests still green
 - [x] Commit: `phase-1.6: complete`
 

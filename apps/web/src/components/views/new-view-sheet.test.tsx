@@ -86,8 +86,9 @@ describe('NewViewSheet', () => {
     vi.unstubAllGlobals();
   });
 
-  it('renders with "use current" checkbox checked by default', async () => {
-    vi.stubGlobal('fetch', mockFetch());
+  it('submits an empty-shape payload when no URL filters are set', async () => {
+    const fetchMock = mockFetch();
+    vi.stubGlobal('fetch', fetchMock);
 
     const { queryClient, router } = setup();
     render(
@@ -96,27 +97,7 @@ describe('NewViewSheet', () => {
       </QueryClientProvider>,
     );
 
-    const checkbox = await screen.findByRole('checkbox', {
-      name: /use current filters, sort, and columns/i,
-    });
-    expect(checkbox).toBeChecked();
-  });
-
-  it('submits an empty-shape payload when "use current" is unchecked', async () => {
-    const fetchMock = mockFetch();
-    vi.stubGlobal('fetch', fetchMock);
-
-    const { queryClient, router } = setup({ currentSearch: { status: 'Done' } });
-    render(
-      <QueryClientProvider client={queryClient}>
-        <RouterProvider router={router} />
-      </QueryClientProvider>,
-    );
-
     await userEvent.type(await screen.findByLabelText(/Name/), 'X');
-    await userEvent.click(
-      screen.getByRole('checkbox', { name: /use current filters, sort, and columns/i }),
-    );
     await userEvent.click(screen.getByRole('button', { name: /Create view/i }));
 
     await waitFor(() => expect(screen.getByText('navigated to work-items')).toBeInTheDocument());
@@ -125,7 +106,7 @@ describe('NewViewSheet', () => {
     expect(body).toEqual({ name: 'X', type: 'list', filters: {}, sort: [] });
   });
 
-  it('includes URL filters and sort in the payload when "use current" is checked', async () => {
+  it('always captures current URL filters and sort in the payload', async () => {
     const fetchMock = mockFetch();
     vi.stubGlobal('fetch', fetchMock);
 

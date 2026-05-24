@@ -20,7 +20,6 @@ import { Icon } from '../ui/icon.tsx';
 import { FilterBar } from '../filter/filter-bar.tsx';
 import { EmptyState } from '../views/empty-state.tsx';
 import { ListSkeleton } from '../views/list-skeleton.tsx';
-import { SaveFiltersAction } from '../views/save-filters-action.tsx';
 import { TableHeader, type SortState } from './table-header.tsx';
 import { TableRow } from './table-row.tsx';
 import {
@@ -158,17 +157,24 @@ export function TableView({ wslug, pslug }: Props) {
 
   const onClauseChange = (next: FilterClauseUrl[]) => {
     const nextSearch: Record<string, unknown> = { ...search };
+    const flatFilters: Record<string, unknown> = {};
     for (const k of ['status', 'priority', 'labels', 'assignee', 'updated_since']) {
       delete nextSearch[k];
     }
     for (const c of next) {
-      if (c.kind === 'status') nextSearch['status'] = c.values;
-      if (c.kind === 'priority') nextSearch['priority'] = c.value;
-      if (c.kind === 'labels') nextSearch['labels'] = c.values;
-      if (c.kind === 'assignee') nextSearch['assignee'] = c.value;
-      if (c.kind === 'updated_since') nextSearch['updated_since'] = c.value;
+      if (c.kind === 'status') { nextSearch['status'] = c.values; flatFilters['status'] = c.values; }
+      if (c.kind === 'priority') { nextSearch['priority'] = c.value; flatFilters['priority'] = c.value; }
+      if (c.kind === 'labels') { nextSearch['labels'] = c.values; flatFilters['labels'] = c.values; }
+      if (c.kind === 'assignee') { nextSearch['assignee'] = c.value; flatFilters['assignee'] = c.value; }
+      if (c.kind === 'updated_since') { nextSearch['updated_since'] = c.value; flatFilters['updated_since'] = c.value; }
     }
     void navigate({ to: '.', search: nextSearch, replace: false });
+    if (activeView) {
+      updateView.mutate(
+        { id: activeView.id, patch: { filters: flatFilters } },
+        { onError: (err) => toast.error(formatApiError(err)) },
+      );
+    }
   };
 
   const onSortChange = (next: SortState | null) => {
@@ -235,22 +241,12 @@ export function TableView({ wslug, pslug }: Props) {
 
   return (
     <>
-      <div className="flex flex-wrap items-center gap-2">
-        <FilterBar
-          clauses={clauses}
-          statuses={statuses ?? []}
-          pinnedFields={fields ?? []}
-          onChange={onClauseChange}
-        />
-        {activeView && (
-          <SaveFiltersAction
-            wslug={wslug}
-            pslug={pslug}
-            view={activeView}
-            clauses={clauses}
-          />
-        )}
-      </div>
+      <FilterBar
+        clauses={clauses}
+        statuses={statuses ?? []}
+        pinnedFields={fields ?? []}
+        onChange={onClauseChange}
+      />
       <div className="folio-scroll -mx-[22px] overflow-x-auto">
         <div className="min-w-max px-[22px]">
           <TableHeader

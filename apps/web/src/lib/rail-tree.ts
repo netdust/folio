@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { FolderOpen, Table2, List, Columns3 } from 'lucide-react';
 import type { NavItem } from '../components/shell/rail.tsx';
 
 export interface RailTreeProject {
@@ -63,6 +64,7 @@ export function buildRailTree(input: RailTreeInput): NavItem[] {
       const viewNavItems: NavItem[] = sortedViews.map((view): NavItem => ({
         id: `view:${table.id}:${view.id}`,
         label: view.name,
+        lucideIcon: view.type === 'kanban' ? Columns3 : List,
         active: currentRoute.viewId === view.id && currentRoute.pslug === project.slug,
         onClick: () => handlers.onViewClick(project.slug, table.slug, view.id),
       }));
@@ -70,6 +72,7 @@ export function buildRailTree(input: RailTreeInput): NavItem[] {
       return {
         id: `table:${project.slug}:${table.slug}`,
         label: table.name,
+        lucideIcon: Table2,
         onClick: handlers.onTableClick
           ? () => handlers.onTableClick!(project.slug, table.slug)
           : undefined,
@@ -83,6 +86,7 @@ export function buildRailTree(input: RailTreeInput): NavItem[] {
     return {
       id: `project:${project.slug}`,
       label: project.name,
+      lucideIcon: FolderOpen,
       onClick: handlers.onProjectClick
         ? () => handlers.onProjectClick!(project.slug)
         : undefined,

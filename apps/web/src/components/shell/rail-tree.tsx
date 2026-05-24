@@ -48,7 +48,7 @@ function RailTreeNode({ item, depth }: { item: NavItem; depth: number }) {
             aria-expanded={expanded}
             data-testid="rail-tree-chevron"
             onClick={() => setExpanded(!expanded)}
-            className="grid h-4 w-4 place-items-center rounded text-fg-3 hover:text-fg-2"
+            className="grid h-4 w-4 place-items-center rounded text-fg-2 hover:text-fg"
           >
             <Icon
               icon={ChevronRight}
@@ -60,6 +60,12 @@ function RailTreeNode({ item, depth }: { item: NavItem; depth: number }) {
           <span className="inline-block h-4 w-4" aria-hidden />
         )}
 
+        {item.lucideIcon ? (
+          <Icon icon={item.lucideIcon} size={14} className="text-fg-3 shrink-0" />
+        ) : item.icon ? (
+          <span className="inline-grid h-[14px] w-[14px] place-items-center text-fg-3 shrink-0">{item.icon}</span>
+        ) : null}
+
         <button
           type="button"
           onClick={item.onClick}
@@ -69,7 +75,7 @@ function RailTreeNode({ item, depth }: { item: NavItem; depth: number }) {
           {item.label}
         </button>
 
-        {item.trailing ? <span className="ml-auto">{item.trailing}</span> : null}
+        {item.trailing ? <span className="ml-auto opacity-60 hover:opacity-100 transition-opacity duration-fast">{item.trailing}</span> : null}
       </div>
 
       {hasChildren && expanded ? <RailTree items={item.children ?? []} depth={depth + 1} /> : null}
