@@ -116,6 +116,25 @@ async function createPage(wslug: string, pslug: string, page: Page, slugToId: Ma
 
 const WSLUG = 'netdust';
 
+const STANDARD_FIELDS: Array<{
+  key: string;
+  type: string;
+  label: string;
+  options?: string[];
+  order: number;
+}> = [
+  { key: 'priority',  type: 'select',       label: 'Priority', options: ['low', 'medium', 'high'], order: 10 },
+  { key: 'assignee',  type: 'string',       label: 'Assignee', order: 20 },
+  { key: 'labels',    type: 'multi_select', label: 'Labels',   options: [
+    'security', 'phase-2', 'phase-1.5', 'phase-1', 'phase-1.1',
+    'agents', 'ux', 'design', 'bugfix', 'testing', 'docs', 'auth',
+    'lms', 'crm', 'integration', 'caching', 'billing', 'ops',
+    'internal-tool', 'feature', 'kickoff', 'scaffolding', 'blocked',
+    'frontend', 'content', 'form', 'i18n', 'combell', 'seo', 'launch', 'search',
+  ], order: 30 },
+  { key: 'due_date',  type: 'date',         label: 'Due',      order: 40 },
+];
+
 const PROJECTS = [
   {
     name: 'Folio',
@@ -204,6 +223,11 @@ async function main() {
       throw new Error(`Project ${p.slug}: no default table was created. seedProjectDefaults must have failed.`);
     }
     console.log(`      • default table: ${defaultTable.slug}`);
+
+    for (const f of STANDARD_FIELDS) {
+      await api('POST', `/api/v1/w/${WSLUG}/p/${p.slug}/fields`, f);
+    }
+    console.log(`      • ${STANDARD_FIELDS.length} fields registered`);
 
     for (const item of p.workItems) {
       await createWorkItem(WSLUG, p.slug, item);
