@@ -1,6 +1,6 @@
 # Folio — Decisions
 
-_Last updated: 2026-05-24_
+_Last updated: 2026-05-24 (post Phase 2B)_
 
 Architectural and product decisions that are locked. Re-litigating any of these requires explicit "I want to revisit X" from Stefan. CLAUDE.md has the briefer "Decisions Already Made" list; this file is the longer-form record with reasoning.
 
@@ -83,3 +83,17 @@ For the originating PRD: `docs/FOLIO-BRIEFING.md`. For phase-level commitments: 
 - **Validation** via Zod schemas at API boundaries, shared in `packages/shared/`.
 - **Imports** use `@/` aliases per app; no deep relative paths.
 - **Commits** `phase-N: <what>` for phase work; `fix:` / `chore:` / `docs:` otherwise. Atomic per task.
+
+## Phase 2B — Spreadsheet table UI (2026-05-24)
+
+- **Column model is derived, not stored.** Built-in columns (`title`, `status`, `updated_at`) plus one column per pinned `fields` row. No `columns` table — fields ARE the schema.
+- **View owns visibility + order**, not the table or the user. `views.visibleFields` (string[]) + `views.columnOrder` (string[] | null). Width is per-user only (localStorage, not in DB) — width is a UI preference, not a data property.
+- **Empty / null `visibleFields` falls back to built-ins** (`['title', 'status', 'updated_at']`). A view with `columnOrder = null` uses default order (built-ins first, then fields by `fields.order` asc).
+- **Currency field type**: stored as a plain number in frontmatter; `fields.options` carries a single ISO-4217 code (e.g. `["EUR"]`); rendered right-aligned via `Intl.NumberFormat`. Formatter cached per-code at module level for table-row perf.
+- **Drag-reorder columns** via `@dnd-kit/sortable` + `horizontalListSortingStrategy`. Whole header is the drag handle (no separate grip icon for v1); PointerSensor `distance: 5` distinguishes click from drag.
+- **Sortable columns**: only built-ins (`title`, `status`, `updated_at`) get a click-to-sort UI for v1. Sorting on frontmatter fields is a server-side concern deferred to Phase 2C+.
+- **The shared `TABLE_GRID_TEMPLATE` const** in `columns.ts` keeps TableHeader and TableRow grid columns aligned. Don't inline the template; always import.
+- **TableRow sends minimal frontmatter patches** (`{ frontmatter: { [key]: next } }` — server merges per-key at `documents.ts:308`). Don't spread `doc.frontmatter` — race against concurrent sibling edits.
+- **DB-level CHECK constraint on `fields.type`** (added in migration 0004): when adding a new field type in the future, BOTH the Drizzle TS enum AND the SQL CHECK clause must be updated — Drizzle's enum is TS-only otherwise. Sets a precedent for other type-like fields (`statuses.category`, `views.type`) that are TS-only today.
+- **Default seeded view** (`seed-project-defaults.ts`): `visibleFields: ['title', 'status', 'priority', 'assignee', 'due_date', 'updated_at']`. Built-ins always shown by default; the rest are the standard "agency" fields. User can hide any via the column picker.
+- **`relativeTime` extracted to `apps/web/src/lib/relative-time.ts`** so TableCell and list-row share one implementation while both exist (list-row + kanban will eventually consume TableView render-mode in Phase 2D).
