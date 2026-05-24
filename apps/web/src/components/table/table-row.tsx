@@ -70,7 +70,7 @@ export function TableRow({
                     onFieldCommit={onFieldCommit}
                   />
                 ))}
-                {columns.length > 1 ? <span aria-hidden /> : null}
+                {columns.length > 1 ? <div aria-hidden /> : null}
                 {last ? (
                   <TableCell
                     key={last.key}

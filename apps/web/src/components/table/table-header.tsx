@@ -55,7 +55,7 @@ export function TableHeader({
                   {columns.slice(0, -1).map((c, i) => (
                     <SortableHeaderCell key={c.key} column={c} sort={sort} onSort={onSort} isSticky={i === 0} />
                   ))}
-                  {columns.length > 1 ? <span aria-hidden /> : null}
+                  {columns.length > 1 ? <div aria-hidden /> : null}
                   {last ? (
                     <SortableHeaderCell
                       key={last.key}

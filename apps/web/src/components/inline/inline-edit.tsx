@@ -96,7 +96,7 @@ export function InlineEdit({
         }
       }}
       className={cn(
-        'inline-block cursor-text rounded-sm px-1 py-0.5 hover:bg-card focus:outline-none focus-visible:bg-card',
+        'inline-block cursor-text rounded-sm px-1 py-0.5 focus:outline-none focus-visible:bg-card',
         isPending && 'opacity-60',
         className,
       )}
