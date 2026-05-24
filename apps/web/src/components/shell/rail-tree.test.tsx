@@ -8,14 +8,13 @@ describe('RailTree', () => {
     localStorage.clear();
   });
 
-  it('renders a flat item without a chevron', () => {
+  it('renders a flat item as a single row', () => {
     render(<RailTree items={[{ id: 'a', label: 'Hello' }]} />);
 
     expect(screen.getByText('Hello')).toBeInTheDocument();
-    expect(screen.queryByTestId('rail-tree-chevron')).not.toBeInTheDocument();
   });
 
-  it('toggles expansion on chevron click and persists state to localStorage', async () => {
+  it('toggles expansion on label click and persists state to localStorage', async () => {
     render(
       <RailTree
         items={[
@@ -31,11 +30,16 @@ describe('RailTree', () => {
     // Top-level (depth=0) defaults to expanded — child visible.
     expect(screen.getByText('Child')).toBeInTheDocument();
 
-    await userEvent.click(screen.getByTestId('rail-tree-chevron'));
+    const parentLabel = screen
+      .getAllByTestId('rail-tree-item')
+      .find((el) => el.textContent === 'Parent');
+    expect(parentLabel).toBeDefined();
+
+    await userEvent.click(parentLabel!);
     expect(screen.queryByText('Child')).not.toBeInTheDocument();
     expect(localStorage.getItem('folio:rail-expanded:parent')).toBe('0');
 
-    await userEvent.click(screen.getByTestId('rail-tree-chevron'));
+    await userEvent.click(parentLabel!);
     expect(screen.getByText('Child')).toBeInTheDocument();
     expect(localStorage.getItem('folio:rail-expanded:parent')).toBe('1');
   });

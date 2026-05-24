@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import { ChevronRight, MoreHorizontal, Plus } from 'lucide-react';
+import { MoreHorizontal, Plus } from 'lucide-react';
 import { Icon } from '../ui/icon.tsx';
 import { cn } from '../ui/cn.ts';
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
@@ -33,34 +33,20 @@ function RailTreeNode({ item, depth }: { item: NavItem; depth: number }) {
   const [expanded, setExpanded] = useExpanded(item.id, depth === 0);
   const [renaming, setRenaming] = useState(false);
 
+  const onLabelClick = () => {
+    if (hasChildren) setExpanded(!expanded);
+    item.onClick?.();
+  };
+
   return (
     <li>
       <div
         className={cn(
-          'group/row flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors duration-fast',
+          'group/row flex items-center gap-1.5 rounded-md px-2 py-1 text-xs transition-colors duration-fast',
           item.active ? 'bg-nav-active text-fg' : 'text-fg-3 hover:bg-card hover:text-fg-2',
         )}
-        style={{ paddingLeft: `${8 + depth * 12}px` }}
+        style={{ paddingLeft: `${8 + depth * 10}px` }}
       >
-        {hasChildren ? (
-          <button
-            type="button"
-            aria-label={expanded ? 'Collapse' : 'Expand'}
-            aria-expanded={expanded}
-            data-testid="rail-tree-chevron"
-            onClick={() => setExpanded(!expanded)}
-            className="grid h-4 w-4 place-items-center rounded text-fg-2 hover:text-fg"
-          >
-            <Icon
-              icon={ChevronRight}
-              size={14}
-              className={cn('transition-transform duration-fast', expanded ? 'rotate-90' : '')}
-            />
-          </button>
-        ) : (
-          <span className="inline-block h-4 w-4" aria-hidden />
-        )}
-
         {item.lucideIcon ? (
           <Icon icon={item.lucideIcon} size={14} className="text-fg-3 shrink-0" />
         ) : item.icon ? (
@@ -72,9 +58,10 @@ function RailTreeNode({ item, depth }: { item: NavItem; depth: number }) {
         ) : (
           <button
             type="button"
-            onClick={item.onClick}
+            onClick={onLabelClick}
             onDoubleClick={item.onRename ? () => setRenaming(true) : undefined}
             data-testid="rail-tree-item"
+            aria-expanded={hasChildren ? expanded : undefined}
             className="flex-1 truncate text-left"
           >
             {item.label}
