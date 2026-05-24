@@ -1,7 +1,7 @@
 import { toast } from 'sonner';
 import { TableCell } from './table-cell.tsx';
 import { RowContextMenu } from '../views/row-context-menu.tsx';
-import { TABLE_GRID_TEMPLATE, type Column } from './columns.ts';
+import { gridTemplate, type Column } from './columns.ts';
 import { copyDocumentAsMarkdown } from '../../lib/copy-as-md.ts';
 import { formatApiError } from '../../lib/api/index.ts';
 import type { DocumentSummary, DocumentPatch } from '../../lib/api/documents.ts';
@@ -48,14 +48,18 @@ export function TableRow({
         role="listitem"
         className="flex w-full items-center gap-2 border-b border-border-light py-2 hover:bg-card"
       >
-        <div className={`grid flex-1 ${TABLE_GRID_TEMPLATE} items-center gap-3`}>
-          {columns.map((c) => (
+        <div
+          className="grid flex-1 items-center gap-3"
+          style={{ gridTemplateColumns: gridTemplate(columns) }}
+        >
+          {columns.map((c, i) => (
             <TableCell
               key={c.key}
               column={c}
               doc={doc}
               statuses={statuses}
               isPending={isPending}
+              isSticky={i === 0}
               onOpen={onOpen}
               onTitleCommit={onTitleCommit}
               onStatusCommit={onStatusCommit}

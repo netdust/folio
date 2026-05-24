@@ -42,7 +42,7 @@ export function MainFrame({
           {toolbar}
         </div>
       ) : null}
-      <div className="flex-1 min-h-0 overflow-auto px-[22px] py-2">{children}</div>
+      <div className="folio-scroll flex-1 min-h-0 overflow-auto px-[22px] py-2">{children}</div>
     </section>
   );
 }

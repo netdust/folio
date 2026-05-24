@@ -171,47 +171,51 @@ export function TableView({ wslug, pslug }: Props) {
         pinnedFields={fields ?? []}
         onChange={onClauseChange}
       />
-      <TableHeader
-        columns={visibleColumns}
-        allColumns={allColumns}
-        visibleKeys={visibleKeys}
-        sort={sort}
-        onSort={onSortChange}
-        onVisibilityChange={onVisibilityChange}
-        onReorder={onReorder}
-      />
-      {isLoading ? <ListSkeleton rows={6} /> : null}
-      {error ? <div className="p-4 text-danger">Failed to load documents.</div> : null}
-      {!isLoading && !error && filteredDocs.length === 0 ? (
-        <EmptyState
-          icon={clauses.length === 0 ? <Icon icon={Inbox} size={20} /> : undefined}
-          title={clauses.length > 0 ? 'No matching documents' : 'No work items yet'}
-          description={
-            clauses.length > 0
-              ? 'Try removing a filter chip above.'
-              : 'Create your first work item to get started.'
-          }
-          action={
-            clauses.length === 0
-              ? { label: 'Create your first work item', onClick: onCreate }
-              : undefined
-          }
-        />
-      ) : null}
-      <div role="list" className="flex flex-col">
-        {filteredDocs.map((doc) => (
-          <TableRow
-            key={doc.id}
-            doc={doc}
+      <div className="folio-scroll -mx-[22px] overflow-x-auto">
+        <div className="min-w-max px-[22px]">
+          <TableHeader
             columns={visibleColumns}
-            statuses={statuses ?? []}
-            wslug={wslug}
-            pslug={pslug}
-            isPending={pendingSlugs.has(doc.slug)}
-            onOpen={openDoc}
-            onUpdate={onUpdate}
+            allColumns={allColumns}
+            visibleKeys={visibleKeys}
+            sort={sort}
+            onSort={onSortChange}
+            onVisibilityChange={onVisibilityChange}
+            onReorder={onReorder}
           />
-        ))}
+          {isLoading ? <ListSkeleton rows={6} /> : null}
+          {error ? <div className="p-4 text-danger">Failed to load documents.</div> : null}
+          {!isLoading && !error && filteredDocs.length === 0 ? (
+            <EmptyState
+              icon={clauses.length === 0 ? <Icon icon={Inbox} size={20} /> : undefined}
+              title={clauses.length > 0 ? 'No matching documents' : 'No work items yet'}
+              description={
+                clauses.length > 0
+                  ? 'Try removing a filter chip above.'
+                  : 'Create your first work item to get started.'
+              }
+              action={
+                clauses.length === 0
+                  ? { label: 'Create your first work item', onClick: onCreate }
+                  : undefined
+              }
+            />
+          ) : null}
+          <div role="list" className="flex flex-col">
+            {filteredDocs.map((doc) => (
+              <TableRow
+                key={doc.id}
+                doc={doc}
+                columns={visibleColumns}
+                statuses={statuses ?? []}
+                wslug={wslug}
+                pslug={pslug}
+                isPending={pendingSlugs.has(doc.slug)}
+                onOpen={openDoc}
+                onUpdate={onUpdate}
+              />
+            ))}
+          </div>
+        </div>
       </div>
     </>
   );

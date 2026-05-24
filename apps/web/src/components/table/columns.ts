@@ -54,5 +54,35 @@ export function effectiveVisibleKeys(cols: Column[], view: View | null): string[
   return view.visibleFields.filter((k) => valid.has(k));
 }
 
-/** Tailwind grid template shared between TableHeader and TableRow. Keep them in sync. */
-export const TABLE_GRID_TEMPLATE = 'grid-cols-[repeat(auto-fit,minmax(140px,1fr))]';
+/** Per-column fixed widths so header and body align on horizontal scroll. */
+const BUILTIN_WIDTHS: Record<string, number> = {
+  title: 280,
+  status: 140,
+  updated_at: 100,
+};
+
+const FIELD_WIDTHS: Partial<Record<FieldType, number>> = {
+  string: 200,
+  text: 240,
+  number: 120,
+  currency: 120,
+  boolean: 80,
+  date: 140,
+  datetime: 160,
+  select: 160,
+  multi_select: 220,
+  user_ref: 200,
+  url: 240,
+  document_ref: 200,
+};
+
+export function columnWidth(col: Column): number {
+  if (col.source === 'builtin') return BUILTIN_WIDTHS[col.key] ?? 160;
+  if (col.fieldType) return FIELD_WIDTHS[col.fieldType] ?? 160;
+  return 160;
+}
+
+/** Build a grid-template-columns string from the visible columns. */
+export function gridTemplate(columns: Column[]): string {
+  return columns.map((c) => `${columnWidth(c)}px`).join(' ');
+}
