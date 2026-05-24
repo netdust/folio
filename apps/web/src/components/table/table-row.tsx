@@ -52,20 +52,42 @@ export function TableRow({
           className="grid flex-1 items-center gap-3"
           style={{ gridTemplateColumns: gridTemplate(columns) }}
         >
-          {columns.map((c, i) => (
-            <TableCell
-              key={c.key}
-              column={c}
-              doc={doc}
-              statuses={statuses}
-              isPending={isPending}
-              isSticky={i === 0}
-              onOpen={onOpen}
-              onTitleCommit={onTitleCommit}
-              onStatusCommit={onStatusCommit}
-              onFieldCommit={onFieldCommit}
-            />
-          ))}
+          {(() => {
+            const last = columns[columns.length - 1];
+            return (
+              <>
+                {columns.slice(0, -1).map((c, i) => (
+                  <TableCell
+                    key={c.key}
+                    column={c}
+                    doc={doc}
+                    statuses={statuses}
+                    isPending={isPending}
+                    isSticky={i === 0}
+                    onOpen={onOpen}
+                    onTitleCommit={onTitleCommit}
+                    onStatusCommit={onStatusCommit}
+                    onFieldCommit={onFieldCommit}
+                  />
+                ))}
+                {columns.length > 1 ? <span aria-hidden /> : null}
+                {last ? (
+                  <TableCell
+                    key={last.key}
+                    column={last}
+                    doc={doc}
+                    statuses={statuses}
+                    isPending={isPending}
+                    isSticky={columns.length === 1}
+                    onOpen={onOpen}
+                    onTitleCommit={onTitleCommit}
+                    onStatusCommit={onStatusCommit}
+                    onFieldCommit={onFieldCommit}
+                  />
+                ) : null}
+              </>
+            );
+          })()}
         </div>
         {/* Spacer matching the column-picker IconButton on the header for grid alignment. */}
         <div aria-hidden className="h-8 w-8 shrink-0" />

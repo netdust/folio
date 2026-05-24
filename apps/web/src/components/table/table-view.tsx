@@ -248,7 +248,7 @@ export function TableView({ wslug, pslug }: Props) {
         onChange={onClauseChange}
       />
       <div className="folio-scroll -mx-[22px] overflow-x-auto">
-        <div className="min-w-max px-[22px]">
+        <div className="px-[22px]">
           <TableHeader
             columns={visibleColumns}
             allColumns={allColumns}
