@@ -247,6 +247,43 @@ For full context on any decision: `@docs/FOLIO-BRIEFING.md`. For the operating m
 
 ---
 
+## Phase 1.6.1 — Rail siblings under project (Half-day polish)
+
+**Goal:** The rail's project node currently expands to a single `Work Items` table + its views, which makes the table layer look like dead weight. Surface the actual sibling-concept structure: tables (multiple per project, today only Work Items is auto-created), Wiki, and the `+ New table` affordance. Phase 2's Agents + Triggers slot in here naturally.
+
+Target UX:
+
+```
+▾ Acme Sales
+  ▾ ⚏ Work Items
+      • All work items
+      • In progress
+      + New view
+  ▸ ⚏ Leads             ← additional tables, when created
+  📖 Wiki
+  + New table
+```
+
+### Rail
+
+- [ ] Wiki renders as a leaf NavItem under each project (BookOpen / FileText icon). Clicking navigates to `/w/:wslug/p/:pslug/wiki`. No nesting underneath — wiki has its own internal tree, not exposed in the rail.
+- [ ] `+ New table` trailing affordance on the project row opens a "New table" sheet (name + slug + icon picker). Mirrors the New View sheet's shape.
+- [ ] `New table` flow uses the existing `POST /api/v1/w/:wslug/p/:pslug/tables` backend (slug immutable post-create per Phase 1.5a).
+- [ ] When a project has 2+ tables, each gets its own expandable row with its own views. The rail tree builder already supports this — just unblock it.
+
+### Backend
+
+- No changes — `tables` CRUD is already shipped (Phase 1.5a).
+
+### Phase 1.6.1 acceptance
+
+- [ ] Wiki appears as a sibling row to tables under the project node
+- [ ] `+ New table` creates a table and the rail refreshes to show it
+- [ ] Existing single-table projects look identical except for the new Wiki row
+- [ ] Commit: `phase-1.6.1: complete`
+
+---
+
 ## Phase 1.7 — Lightweight CRM polish (Half-week)
 
 **Goal:** Folio becomes usable as a follow-up CRM without adding automation. Three frontmatter fields are surfaced as first-class spreadsheet + slideover affordances; an activity log panel renders inside the slideover from the existing `events` table; playbook pages can be linked from a stage. Use case: agency follow-up workflow — "where are we / what's next / when's it due / what's the playbook for this stage."
