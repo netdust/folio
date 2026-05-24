@@ -12,7 +12,8 @@ export type FieldType =
   | 'multi_select'
   | 'user_ref'
   | 'url'
-  | 'document_ref';
+  | 'document_ref'
+  | 'currency';
 
 export interface Field {
   id: string;
