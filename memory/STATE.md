@@ -25,7 +25,34 @@ Phase numbering aligned with `docs/PHASES.md` (canonical) as of 2026-05-24 reorg
 
 ## Current branch
 
-`main` at `cfe4ed6` (Phase 1.6 + 1.6.1 merged 2026-05-24 with `--no-ff`, pushed to `origin/main`). `phase-1.6/saved-views` branch retained for reference; can be deleted after the next phase branches off. 113 / 113 server unit + 169 / 169 web unit + 1 skipped + 28 / 28 shared on the merge commit.
+`phase-1.7/crm-polish` — 6 phase commits + 6 auto-memory commits ahead of main (`cfe4ed6`). NOT merged; Stefan is doing a manual QA pass on 1.6 + 1.7 + the post-1.7 fixes before deciding what to merge / revert.
+
+Tests on branch tip: 116 server (was 113, +3 activity endpoint tests) / 173 web (+4 due-urgency) / 28 shared. All green. TS clean.
+
+### Open UX issue at session end (DO NOT touch without re-reading)
+
+After Phase 1.7's ColumnPicker hoist (`3614ed4`), a follow-up issue remains:
+- The picker icon now sits in the FilterBar row, right-aligned to the whole viewport.
+- Stefan reports it "floats above the table in empty space" — visually disconnected from the columns.
+- He also still sees a horizontal scrollbar even when the table content fits the viewport.
+- His ask: picker should be "right aligned in the last column" — i.e. visually inside the table header, top-right of the columns area, not floating above.
+
+I attempted an `absolute right-0` overlay approach in a non-committed edit and reverted it on Stefan's request. **Next session: investigate via Chrome DevTools FIRST**, don't guess. The scroll trigger needs measurement; the visual disconnect needs a different layout strategy than "separate row above table."
+
+### Phase commit list on this branch (newest first)
+
+- `94ac10f` memory: auto-capture session end
+- `3614ed4` fix: hoist ColumnPicker out of the table's horizontal scroll area (the "floats above" change)
+- `527263b` memory: auto-capture
+- `4bf5ff4` fix: auto-migrate dev DB on server boot
+- `6bd9a47` memory: auto-capture
+- `9fbe81d` fix: row height + sticky-cell hover mismatch (verified in Chrome — row 50→34px, sticky cell tracks row hover via group/row)
+- `3599fb1` memory: auto-capture
+- `acc535a` fix: table row height + InlineEdit hover-bg regressions from phase 1.6 (partial — these were guesses, the real fix was 9fbe81d)
+- `c19763d` memory: auto-capture
+- `a6f8a60` phase-1.7: fix table row height regression from urgency wrapper
+- `34ed292` memory: auto-capture
+- `3b334be` phase-1.7: complete — last_touched_at, activity log, due-urgency
 
 ## What's working in the UI
 
