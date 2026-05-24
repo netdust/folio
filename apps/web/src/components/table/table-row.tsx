@@ -46,7 +46,7 @@ export function TableRow({
     <RowContextMenu items={[{ label: 'Copy as Markdown', onSelect: onCopy, hint: '⌘⇧C' }]}>
       <div
         role="listitem"
-        className="flex w-full items-center gap-2 border-b border-border-light py-2 hover:bg-card"
+        className="group/row flex w-full items-center gap-2 border-b border-border-light py-1 hover:bg-card"
       >
         <div
           className="grid flex-1 items-center gap-3"
@@ -90,7 +90,7 @@ export function TableRow({
           })()}
         </div>
         {/* Spacer matching the column-picker IconButton on the header for grid alignment. */}
-        <div aria-hidden className="h-8 w-8 shrink-0" />
+        <div aria-hidden className="h-6 w-6 shrink-0" />
       </div>
     </RowContextMenu>
   );

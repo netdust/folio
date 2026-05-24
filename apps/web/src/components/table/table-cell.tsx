@@ -36,7 +36,7 @@ export function TableCell({
   const content = renderContent();
   if (!isSticky) return content;
   return (
-    <div className="sticky left-0 z-[1] flex items-center bg-content">{content}</div>
+    <div className="sticky left-0 z-[1] flex items-center bg-content group-hover/row:bg-card">{content}</div>
   );
 
   function renderContent() {

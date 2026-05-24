@@ -21,7 +21,7 @@ export function ColumnPicker({ columns, visibleKeys, onChange }: Props) {
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <IconButton label="Columns">
+        <IconButton label="Columns" size="sm">
           <Icon icon={Settings2} size={14} />
         </IconButton>
       </PopoverTrigger>
