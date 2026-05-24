@@ -165,14 +165,12 @@ export function TableView({ wslug, pslug }: Props) {
 
   return (
     <>
-      <div className="px-[22px] py-2">
-        <FilterBar
-          clauses={clauses}
-          statuses={statuses ?? []}
-          pinnedFields={fields ?? []}
-          onChange={onClauseChange}
-        />
-      </div>
+      <FilterBar
+        clauses={clauses}
+        statuses={statuses ?? []}
+        pinnedFields={fields ?? []}
+        onChange={onClauseChange}
+      />
       <TableHeader
         columns={visibleColumns}
         allColumns={allColumns}

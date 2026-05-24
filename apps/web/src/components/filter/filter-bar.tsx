@@ -32,7 +32,7 @@ export function FilterBar({ clauses, statuses, pinnedFields, onChange }: Props) 
   };
 
   return (
-    <div className="flex flex-wrap items-center gap-1.5 px-[22px] py-2">
+    <div className="flex flex-wrap items-center gap-1.5 py-2">
       {clauses.map((c) => (
         <FilterChip
           key={c.kind}

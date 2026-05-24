@@ -46,7 +46,7 @@ export function TableRow({
     <RowContextMenu items={[{ label: 'Copy as Markdown', onSelect: onCopy, hint: '⌘⇧C' }]}>
       <div
         role="listitem"
-        className={`grid w-full ${TABLE_GRID_TEMPLATE} items-center gap-3 border-b border-border-light px-4 py-2 hover:bg-card`}
+        className={`grid w-full ${TABLE_GRID_TEMPLATE} items-center gap-3 border-b border-border-light py-2 hover:bg-card`}
       >
         {columns.map((c) => (
           <TableCell

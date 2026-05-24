@@ -41,7 +41,7 @@ export function TableHeader({
   };
 
   return (
-    <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-border-light bg-content px-4 py-1.5">
+    <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-border-light bg-content py-1.5">
       <DndContext sensors={sensors} onDragEnd={onDragEnd}>
         <SortableContext items={ids} strategy={horizontalListSortingStrategy}>
           <div className={`grid flex-1 ${TABLE_GRID_TEMPLATE} gap-3`}>
