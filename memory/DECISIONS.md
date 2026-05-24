@@ -1,6 +1,6 @@
 # Folio — Decisions
 
-_Last updated: 2026-05-23_
+_Last updated: 2026-05-24_
 
 Architectural and product decisions that are locked. Re-litigating any of these requires explicit "I want to revisit X" from Stefan. CLAUDE.md has the briefer "Decisions Already Made" list; this file is the longer-form record with reasoning.
 
@@ -38,9 +38,22 @@ For the originating PRD: `docs/FOLIO-BRIEFING.md`. For phase-level commitments: 
 
 - **In:** Phase 1.5 (timeline view + This Week dashboard) added 2026-05-12.
 - **In:** Trigger-documents (cron + event automation) added 2026-05-12.
+- **In:** Phase 2A-D — tables-and-views (NocoDB-style) added 2026-05-24. Project owns multiple **tables**; each table owns its own statuses/fields/views/work-items; views are saved filter + columns + sort + render mode bound to a table.
 - **Out for v1:** Full-text search (sqlite-fts5 → v1.1), vector search, Postgres, email notifications, per-project ACLs, calendar/gantt, public sharing, plugin API, webhooks, mobile PWA.
 - **Out for v1:** Real-time collab on a single document. Last-write-wins with `updated_at` check is the v1 model.
 - **Out for v1:** Comments, attachments.
+
+## Phase 2A — Tables as first-class concept (2026-05-24)
+
+- Projects own one or more **tables**. Statuses, fields, views, and `work_item` documents belong to a table, not directly to a project.
+- Wiki pages stay project-scoped (`documents.table_id IS NULL` for `type = 'page'`). Pages are NOT inside any table.
+- Routes nested as `/api/v1/w/:ws/p/:p/t/:tslug/{documents,statuses,fields,views}`. Legacy `/p/:pslug/{...}` routes still work — `resolveProject` attaches the project's default `work-items` table when no `:tslug` is in the path (unconditional lookup; `resolveTable` overwrites on explicit-table mounts).
+- One default table per project: slug `work-items`, name `Work Items`, icon null. Auto-created on project creation by `seedProjectDefaults` (which returns `{ tableId }`).
+- FK cascades: `statuses/fields/views.tableId → tables.id ON DELETE CASCADE` (config is meaningless without its table). `documents.tableId → tables.id ON DELETE SET NULL` (markdown documents are source of truth — orphan them, don't delete).
+- Table slug is **immutable** after creation (PATCH /tables/:tslug strips `slug` from the body via Zod). Renaming would silently invalidate every URL pointing at the table's children.
+- Migration `0003_phase_2a_tables.sql` handles populated DBs via: (1) create `tables`; (2) ADD nullable `table_id` columns; (3) INSERT a default `Work Items` table per project; (4) backfill all FKs; (5) rebuild statuses/fields/views with NOT NULL `table_id` via SQLite's CREATE+COPY+DROP+RENAME idiom. Documents stays nullable.
+- Row type for `tables` is exported as `TableEntity` (not `Table` — collides with DOM `HTMLTableElement` and any future shadcn `<Table>`).
+- Test harness `makeTestApp({ seedProjectDefaults: true })` is the **default** as of Phase 2A — every test gets a default table unless it opts out with `seedProjectDefaults: false`. This matches production behavior (POST /projects always creates one).
 
 ## UI / UX
 
