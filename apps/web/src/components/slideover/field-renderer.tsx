@@ -317,6 +317,15 @@ function UrlField({
   );
 }
 
+const formatterCache = new Map<string, Intl.NumberFormat>();
+function getCurrencyFormatter(currency: string): Intl.NumberFormat {
+  const cached = formatterCache.get(currency);
+  if (cached) return cached;
+  const f = new Intl.NumberFormat(undefined, { style: 'currency', currency, maximumFractionDigits: 0 });
+  formatterCache.set(currency, f);
+  return f;
+}
+
 function CurrencyInput({
   value,
   currency,
@@ -332,11 +341,7 @@ function CurrencyInput({
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value == null ? '' : String(value));
-  const formatter = new Intl.NumberFormat(undefined, {
-    style: 'currency',
-    currency,
-    maximumFractionDigits: 0,
-  });
+  const formatter = getCurrencyFormatter(currency);
   if (!editing) {
     return (
       <span
@@ -349,7 +354,7 @@ function CurrencyInput({
           isPending && 'opacity-60',
         )}
       >
-        {value == null ? '' : formatter.format(value)}
+        {value == null ? ' ' : formatter.format(value)}
       </span>
     );
   }
