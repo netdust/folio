@@ -94,6 +94,18 @@ export function FieldRenderer({ fieldKey, type, value, options, onCommit, isPend
         <UrlField value={url} onCommit={onCommit} isPending={isPending} ariaLabel={fieldKey} />
       );
     }
+    case 'currency': {
+      const code = (options?.[0] ?? 'EUR') as string;
+      return (
+        <CurrencyInput
+          value={typeof value === 'number' ? value : null}
+          currency={code}
+          onCommit={onCommit as (v: number) => void}
+          ariaLabel={fieldKey}
+          isPending={isPending}
+        />
+      );
+    }
     default:
       return <span className="text-fg-3 italic">unsupported type: {type}</span>;
   }
@@ -299,6 +311,66 @@ function UrlField({
       }}
       className={cn(
         'block w-full rounded-sm border border-border-light bg-shell px-2 py-1 text-sm text-fg input-focus',
+        isPending && 'opacity-60',
+      )}
+    />
+  );
+}
+
+function CurrencyInput({
+  value,
+  currency,
+  onCommit,
+  ariaLabel,
+  isPending,
+}: {
+  value: number | null;
+  currency: string;
+  onCommit: (v: number) => void;
+  ariaLabel: string;
+  isPending?: boolean;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value == null ? '' : String(value));
+  const formatter = new Intl.NumberFormat(undefined, {
+    style: 'currency',
+    currency,
+    maximumFractionDigits: 0,
+  });
+  if (!editing) {
+    return (
+      <span
+        role="button"
+        tabIndex={0}
+        onClick={() => setEditing(true)}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setEditing(true); }}
+        className={cn(
+          'inline-block w-full cursor-text rounded-sm px-1 py-0.5 text-right text-sm font-mono hover:bg-card',
+          isPending && 'opacity-60',
+        )}
+      >
+        {value == null ? '' : formatter.format(value)}
+      </span>
+    );
+  }
+  return (
+    <input
+      type="number"
+      aria-label={ariaLabel}
+      autoFocus
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={() => {
+        setEditing(false);
+        const n = Number(draft);
+        if (Number.isFinite(n) && n !== value) onCommit(n);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+        if (e.key === 'Escape') { setDraft(value == null ? '' : String(value)); setEditing(false); }
+      }}
+      className={cn(
+        'block w-32 rounded-sm border border-border-light bg-shell px-2 py-1 text-right text-sm font-mono text-fg input-focus',
         isPending && 'opacity-60',
       )}
     />
