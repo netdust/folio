@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
   createMemoryHistory,
@@ -196,6 +196,95 @@ describe('TableView', () => {
       const s = router.state.location.search as Record<string, unknown>;
       expect(s.view).toBe('v-triage');
       expect(s.status).toBe('In Progress');
+    });
+  });
+
+  it('clicking a sortable column header writes URL AND patches view.sort', async () => {
+    const mockView = {
+      ...viewRow,
+      id: 'v1',
+      slug: 'default',
+      name: 'All',
+      isDefault: true,
+      filters: {},
+      sort: [],
+      columnOrder: null,
+      visibleFields: ['title', 'status', 'updated_at'],
+    };
+
+    const navigateCalls: Array<{ search: Record<string, unknown> }> = [];
+    const updateViewCalls: Array<{ id: string; patch: Record<string, unknown> }> = [];
+
+    const fetchMock = vi.fn<typeof fetch>(async (url, init) => {
+      const u = String(url);
+      const method = init?.method ?? 'GET';
+      if (u.includes('/statuses') && method === 'GET') {
+        return new Response(JSON.stringify({ data: [statusRow] }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (u.includes('/fields') && method === 'GET') {
+        return new Response(JSON.stringify({ data: [fieldRow] }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (u.includes('/views') && method === 'GET') {
+        return new Response(JSON.stringify({ data: [mockView] }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (u.includes('/views/v1') && method === 'PATCH') {
+        const body = await (init?.body instanceof ReadableStream
+          ? new Response(init.body).text()
+          : Promise.resolve(String(init?.body ?? '{}')));
+        updateViewCalls.push({ id: 'v1', patch: JSON.parse(body) });
+        return new Response(JSON.stringify(mockView), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (u.includes('/documents') && method === 'GET') {
+        return new Response(JSON.stringify({ data: { data: [docRow], nextCursor: null } }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { queryClient, router } = setup();
+    const originalNavigate = router.navigate;
+    router.navigate = vi.fn(async (opts: any) => {
+      if (opts.search) {
+        navigateCalls.push({ search: opts.search });
+      }
+      return originalNavigate.call(router, opts);
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByText('First task')).toBeInTheDocument());
+
+    // Find and click the "Title" column header to trigger sort
+    const titleHeader = screen.getByRole('button', { name: /Title/ });
+    fireEvent.click(titleHeader);
+
+    // Assert: navigate was called with sort in search
+    await waitFor(() => {
+      expect(navigateCalls.some((call) => call.search.sort === 'title')).toBe(true);
+    });
+
+    // Assert: updateView mutation was called with sort array
+    await waitFor(() => {
+      expect(updateViewCalls.some((call) =>
+        Array.isArray(call.patch.sort) &&
+        call.patch.sort.length === 1 &&
+        call.patch.sort[0].key === 'title' &&
+        call.patch.sort[0].dir === 'asc'
+      )).toBe(true);
     });
   });
 });

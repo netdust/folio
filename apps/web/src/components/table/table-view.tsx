@@ -172,6 +172,7 @@ export function TableView({ wslug, pslug }: Props) {
   };
 
   const onSortChange = (next: SortState | null) => {
+    // 1) Update URL (existing behavior, unchanged)
     const nextSearch: Record<string, unknown> = { ...search };
     if (next) {
       nextSearch.sort = next.key;
@@ -181,6 +182,16 @@ export function TableView({ wslug, pslug }: Props) {
       delete nextSearch.dir;
     }
     void navigate({ to: '.', search: nextSearch, replace: false });
+
+    // 2) Auto-save to active view (parity with columnOrder + visibleFields).
+    if (!activeView) return;
+    const patchSort = next ? [{ key: next.key, dir: next.dir }] : [];
+    updateView.mutate(
+      { id: activeView.id, patch: { sort: patchSort } },
+      {
+        onError: (err) => toast.error(formatApiError(err)),
+      },
+    );
   };
 
   const onUpdate = useCallback(
