@@ -1,7 +1,10 @@
 import { useState } from 'react';
+import { Plus } from 'lucide-react';
 import type { FieldType } from '../../lib/api/fields.ts';
 import { InlineEdit } from '../inline/inline-edit.tsx';
 import { InlineSelect } from '../inline/inline-select.tsx';
+import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
+import { Icon } from '../ui/icon.tsx';
 import { cn } from '../ui/cn.ts';
 
 interface Props {
@@ -265,25 +268,56 @@ function MultiSelect({
         </span>
       ))}
       {remaining.length > 0 ? (
-        <select
-          aria-label={`Add ${ariaLabel}`}
-          value=""
-          onChange={(e) => {
-            if (e.target.value) onCommit([...current, e.target.value]);
-          }}
-          className="rounded-sm border border-border-light bg-shell px-1 py-0.5 text-xs text-fg-3"
-        >
-          <option value="" disabled>
-            + add…
-          </option>
-          {remaining.map((o) => (
-            <option key={o} value={o}>
-              {o}
-            </option>
-          ))}
-        </select>
+        <MultiSelectAdd
+          remaining={remaining}
+          ariaLabel={ariaLabel}
+          onAdd={(v) => onCommit([...current, v])}
+        />
       ) : null}
     </div>
+  );
+}
+
+function MultiSelectAdd({
+  remaining,
+  ariaLabel,
+  onAdd,
+}: {
+  remaining: string[];
+  ariaLabel: string;
+  onAdd: (value: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          aria-label={`Add ${ariaLabel}`}
+          className="inline-grid h-5 w-5 place-items-center rounded-sm text-fg-3 hover:bg-card hover:text-fg-2"
+        >
+          <Icon icon={Plus} size={14} />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-[180px] p-1">
+        <ul className="flex flex-col">
+          {remaining.map((opt) => (
+            <li key={opt}>
+              <button
+                type="button"
+                onClick={() => {
+                  onAdd(opt);
+                  setOpen(false);
+                }}
+                className="block w-full rounded-sm px-2 py-1 text-left text-sm hover:bg-card"
+              >
+                {opt}
+              </button>
+            </li>
+          ))}
+        </ul>
+      </PopoverContent>
+    </Popover>
   );
 }
 
