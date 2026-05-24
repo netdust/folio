@@ -49,7 +49,7 @@ export function applyColumnOrder(cols: Column[], order: string[] | null): Column
 }
 
 export function effectiveVisibleKeys(cols: Column[], view: View | null): string[] {
-  if (!view?.visibleFields || view.visibleFields.length === 0) return DEFAULT_VISIBLE_KEYS;
+  if (!view?.visibleFields || view.visibleFields.length === 0) return [...DEFAULT_VISIBLE_KEYS];
   const valid = new Set(cols.map((c) => c.key));
   return view.visibleFields.filter((k) => valid.has(k));
 }
