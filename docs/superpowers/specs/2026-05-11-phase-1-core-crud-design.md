@@ -1,8 +1,13 @@
 # Folio Phase 1 — Core CRUD Spec
 
-**Date:** 2026-05-11
+**Date:** 2026-05-11 (frontend sections revised 2026-05-11 after backend carve-out shipped)
 **Scope:** Phase 1 of the Folio v1 roadmap: documents API, list/kanban/wiki views, document slideover with Milkdown editor, statuses + fields + views CRUD, event emission to the durable log.
 **Audience:** Anyone building Folio's Phase 1 feature surface. Consumes the design system spec at `docs/superpowers/specs/2026-05-11-design-system-design.md`.
+
+**Status (2026-05-11):**
+
+- **Backend (§3-§4, §7 server, §8 steps 1-4) — shipped.** Executed via the carve-out spec `docs/superpowers/specs/2026-05-11-phase-1-backend-design.md`. Code on `main` at `18bab77`. 111 tests passing. Kept here as authoritative reference for the API surface that the frontend consumes.
+- **Frontend (§5-§6, §7 web, §8 steps 5-14) — revised, not yet implemented.** Sections below this status block were rewritten on 2026-05-11 against the post-backend reality: design system shipped, onboarding gap surfaced, settings UI deferred, virtualization dropped, Playwright postponed to Phase 4. Old wording lives in git history if needed.
 
 ---
 
@@ -27,6 +32,11 @@ The spec **does not** redefine visual decisions. Those live in the design system
 | Inline edit | Save immediately on change, optimistic. Typing fields debounce ~400ms | "Keyboard-fast" commitment. |
 | Events | Write to `events` table inside the mutation tx. No SSE in Phase 1 | Clean phase boundary; durable log exists for Phase 2 to consume. |
 | Round-trip tests | Golden-file fixtures, `parse → serialize → parse → AST equality` | Cheap to add fixtures when bugs surface. |
+| List rendering | Flat DOM render, no virtualization in v1 | YAGNI for v1 project sizes (~200 docs). Add `@tanstack/react-virtual` when a real install hits a wall — measure first. |
+| Slideover URL state | Search param `?doc=<slug>` (not a nested route) | Clean URLs, back-button closes, composes trivially with other view params. |
+| Onboarding | Build real workspace/project create UI in Phase 1 | Phase 0 left a gap: API works, no UI. Without this, Phase 1 has nothing to render. |
+| Phase 1 gate | Manual browser checklist + Vitest component tests | Playwright stays Phase 4 per `docs/FOLIO-BRIEFING.md`. Per-component unit tests + a human-driven QA pass is the contract. |
+| Settings UI | Deferred to Phase 4 | Status/field/view settings UI is out of Phase 1 frontend scope. Default-seeded statuses (`Backlog`/`Todo`/`In Progress`/`Done`) + inferred field types carry v1. Custom statuses or field pins go via API/curl until Phase 4. |
 
 ## 3. Architecture
 
@@ -52,7 +62,7 @@ Rules:
 **Three subsystems** with clear boundaries inside Phase 1:
 
 1. **Documents** — REST + list view + kanban + slideover with editor.
-2. **Configuration** — statuses, fields, views CRUD + per-project settings pages.
+2. **Configuration** — statuses, fields, views CRUD (server only — frontend reads defaults; settings UI deferred to Phase 4 per §2).
 3. **Wiki** — pages as documents with `type='page'`, hierarchical tree, drag-to-reparent.
 
 They share the `documents` table and the editor component, but each has its own routes, views, and UI surface.
@@ -60,6 +70,62 @@ They share the `documents` table and the editor component, but each has its own 
 ## 4. API surface
 
 All endpoints scoped to workspace + project. Auth via session cookie (browser) or `Authorization: Bearer <token>` (later — Phase 2 introduces tokens; Phase 1 uses session cookies only). Zod-validated at the boundary. Shared schemas in `packages/shared`.
+
+### 4.0 Workspaces, Projects, Auth
+
+```
+GET    /api/v1/workspaces
+       Response: { data: [{ workspace: Workspace, role: 'owner'|'admin'|'member' }] }
+       Note: kept wrapped (membership-row shape) so role travels with the list without
+       a second round-trip. Detail endpoints return the bare workspace.
+
+POST   /api/v1/workspaces
+       Body: { name, slug? }
+       Response: { data: Workspace }, status 201
+       Side effect: caller becomes 'owner' via memberships insert.
+
+GET    /api/v1/w/:wslug
+       Response: { data: Workspace & { role } }   (role flattened onto the row)
+
+PATCH  /api/v1/w/:wslug
+       Body: { name }
+       Response: { data: Workspace }    (updatedAt advances)
+       Auth: owner only.
+
+DELETE /api/v1/w/:wslug
+       Status 204. Auth: owner only.
+
+GET    /api/v1/w/:wslug/projects
+       Response: { data: Project[] }
+
+POST   /api/v1/w/:wslug/projects
+       Body: { name, slug?, icon? }
+       Response: { data: Project }, status 201
+       Side effect: seedProjectDefaults inserts 4 statuses + 2 views.
+
+GET    /api/v1/w/:wslug/projects/:pslug
+       Response: { data: Project }
+
+PATCH  /api/v1/w/:wslug/projects/:pslug
+       Body: partial { name?, icon? }
+       Response: { data: Project }    (updatedAt advances)
+
+DELETE /api/v1/w/:wslug/projects/:pslug
+       Status 204. Auth: owner only.
+```
+
+**Auth surface.**
+
+```
+POST   /api/v1/auth/register           Body { email, password, name } → { data: { user } }
+POST   /api/v1/auth/login              Body { email, password }        → { data: { user } }
+POST   /api/v1/auth/logout                                              → { data: { ok: true } }
+GET    /api/v1/auth/me                                                  → { data: { user } }
+POST   /api/v1/auth/magic-link/request Body { email }                   → { data: { ok: true } }
+GET    /api/v1/auth/magic-link/consume Query ?token=...                 → 302 redirect to /
+```
+
+The magic-link routes use the long-form names per `docs/FOLIO-BRIEFING.md` §8. Earlier server code shipped a shortened `/magic/*` form; renamed during Phase 1 normalization.
 
 ### 4.1 Documents
 
@@ -181,7 +247,9 @@ type FilterConfig = FilterClause[]; // AND-combined at top level. No nested grou
 
 ### 4.6 Response envelope and errors
 
-Every response wraps in `{ data }` or `{ error }`. Errors:
+Every response wraps in `{ data }` or `{ error }`. Detail endpoints place the bare resource under `data` (e.g. `{ data: Workspace }`). Collection endpoints place the array under `data` (e.g. `{ data: Project[] }`). The documents list endpoint additionally carries a `nextCursor` sibling key alongside `data` — the cursor envelope IS the resource shape, not a second wrap.
+
+Errors:
 
 ```json
 {
@@ -212,354 +280,370 @@ If the transaction rolls back, the event row rolls back with it. Phase 1 does no
 TanStack Router file-based routes:
 
 ```
-/                                          → workspace picker (existing)
-/login                                     → login form (existing)
-/magic                                     → magic-link consume (existing)
-/w/$wslug                                  → workspace home, project picker
-/w/$wslug/p/$pslug                         → redirect to default view
-/w/$wslug/p/$pslug/work-items              → list view of work items
-/w/$wslug/p/$pslug/board                   → kanban view of work items
-/w/$wslug/p/$pslug/wiki                    → wiki tree
-/w/$wslug/p/$pslug/settings/statuses       → status registry editor
-/w/$wslug/p/$pslug/settings/fields         → field pin editor
-/w/$wslug/p/$pslug/settings/views          → view list
+/                              → workspace picker (replaces current welcome page)
+/login                         → existing
+/magic                         → existing (server redirect)
+/w/$wslug                      → workspace layout — rail with project list, outlet
+/w/$wslug/index                → workspace landing — project picker / empty state
+/w/$wslug/p/$pslug             → project layout — frame tabs (Work items / Board / Wiki)
+/w/$wslug/p/$pslug/index       → redirect to /work-items
+/w/$wslug/p/$pslug/work-items  → list view
+/w/$wslug/p/$pslug/board       → kanban view
+/w/$wslug/p/$pslug/wiki        → wiki tree
 ```
 
-**Slideover routing.** The document slideover is summoned by a search param: `?doc=<slug>`. Visiting `/w/.../work-items?doc=spring-26-artists` opens the slideover on top of the list view. `Esc` clears the param. `Cmd-\` toggles. The slideover component reads the param and queries the doc.
+**No settings routes in Phase 1.** Status/field/view editing is deferred to Phase 4 (see §2 locked decisions). Default-seeded statuses + inferred field types carry v1.
+
+**Slideover routing.** The document slideover is summoned by a search param: `?doc=<slug>`. Visiting `/w/.../work-items?doc=spring-26-artists` opens the slideover on top of the list view. Escape clears the param. Slideover state survives view-tab switches (list → board → wiki with the same `?doc=...` open). Implemented as a sibling component to each view, **not** a parallel route, so all three views share one instance.
+
+**Auth gate.** `__root.tsx`'s `beforeLoad` queries `/api/auth/me`. On 401, redirect to `/login`. Login page reads `redirect` search param and bounces back post-auth.
 
 ### 5.2 Data layer — TanStack Query
 
-One file `apps/web/src/lib/queries.ts` exports typed query+mutation hooks per resource. Pattern:
+Per-resource modules under `apps/web/src/lib/api/`, one file per resource. Each exports typed query and mutation hooks. Pattern:
 
 ```typescript
 // Read
-export function useDocuments(wslug: string, pslug: string, filters: FilterConfig) {
+export function useDocuments(wslug: string, pslug: string, viewId: string | null) {
   return useQuery({
-    queryKey: ['documents', wslug, pslug, filters],
-    queryFn: () => api.listDocuments(wslug, pslug, filters),
+    queryKey: documentsKeys.list(wslug, pslug, viewId),
+    queryFn: () => api.documents.list(wslug, pslug, viewId),
     staleTime: 30_000,
   });
 }
 
-// Write — optimistic
+// Write — optimistic, via a useOptimisticPatch helper
 export function useUpdateDocument(wslug: string, pslug: string) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({ slug, patch }: { slug: string; patch: DocumentPatch }) =>
-      api.patchDocument(wslug, pslug, slug, patch),
-    onMutate: async ({ slug, patch }) => {
-      await qc.cancelQueries({ queryKey: ['documents', wslug, pslug] });
-      const previous = qc.getQueryData(['documents', wslug, pslug]);
-      qc.setQueryData(['documents', wslug, pslug], (old) =>
-        applyOptimistic(old, slug, patch),
-      );
-      return { previous };
-    },
-    onError: (_err, _vars, ctx) => {
-      qc.setQueryData(['documents', wslug, pslug], ctx?.previous);
-      toast.error('Failed to update — rolled back.');
-    },
-    onSettled: () => qc.invalidateQueries({ queryKey: ['documents', wslug, pslug] }),
+  return useOptimisticPatch({
+    detailKey: (slug: string) => documentsKeys.detail(wslug, pslug, slug),
+    listKey: documentsKeys.list(wslug, pslug, null),
+    mutationFn: ({ slug, patch }) => api.documents.patch(wslug, pslug, slug, patch),
+    applyToDetail: (prev, { patch }) => ({ ...prev, ...patch }),
+    applyToList: (prev, { slug, patch }) =>
+      prev.map((d) => (d.slug === slug ? { ...d, ...patch } : d)),
   });
 }
 ```
 
-Mutations to implement: `useCreateDocument`, `useUpdateDocument`, `useDeleteDocument`, `useReparentPage`, `useCreateStatus`, `useUpdateStatus`, `useDeleteStatus`, `useCreateField`, `useUpdateField`, `useDeleteField`, `useCreateView`, `useUpdateView`, `useDeleteView`. Each follows the same shape.
+`useOptimisticPatch` (lives in `apps/web/src/lib/api/optimistic.ts`) is the canonical optimistic-mutation shape. Every mutation in the app uses it, so onMutate / onError / onSettled boilerplate is written once. The list-cache patch is opt-in (some mutations only touch the detail).
+
+Each resource module exports its own query-key factory (`documentsKeys`, `projectsKeys`, etc.) colocated with the hooks — cache invalidation is explicit and grep-able. Each module is the only place that knows the URL shape; components import hooks, never URLs.
 
 For typing-heavy fields (title, body), the editor debounces ~400ms before firing the mutation. The cache update happens on every keystroke locally so the UI feels instant; the network call is throttled.
 
-`applyOptimistic` is a pure function that merges a patch into the cached list. Lives in `apps/web/src/lib/optimistic.ts`.
-
 ### 5.3 API client
 
-`apps/web/src/lib/api.ts` exports a typed fetch wrapper:
+`apps/web/src/lib/api/client.ts` is the existing minimal `fetch` wrapper (4 verbs, cookie credentials). Each per-resource module (`workspaces.ts`, `projects.ts`, `documents.ts`, …) builds typed methods on top of it using shared Zod schemas from `packages/shared`:
 
 ```typescript
-interface ApiClient {
-  listDocuments(wslug: string, pslug: string, query: ListQuery): Promise<DocumentList>;
-  getDocument(wslug: string, pslug: string, slug: string): Promise<Document>;
-  createDocument(wslug: string, pslug: string, body: CreateDocumentBody): Promise<Document>;
-  patchDocument(wslug: string, pslug: string, slug: string, patch: DocumentPatch): Promise<Document>;
-  deleteDocument(wslug: string, pslug: string, slug: string): Promise<void>;
-  // ... statuses, fields, views (same shape)
-}
+// apps/web/src/lib/api/documents.ts
+export const documents = {
+  list: (wslug, pslug, viewId) => client.get<DocumentList>(...),
+  get:  (wslug, pslug, slug)   => client.get<Document>(...),
+  create: (wslug, pslug, body) => client.post<Document>(..., body),
+  patch:  (wslug, pslug, slug, patch) => client.patch<Document>(..., patch),
+  patchMd: (wslug, pslug, slug, md) => client.patch<Document>(..., md, 'text/markdown'),
+  delete: (wslug, pslug, slug) => client.delete<void>(...),
+};
 ```
 
-Built from Zod schemas in `packages/shared`. Same types used server-side. One source of truth.
+The `patchMd` form is reserved for "Copy-as-MD → paste back" round-trip workflows. The slideover editor uses `patch` (JSON) because it tracks frontmatter + body separately.
 
-### 5.4 Component map
+### 5.4 Error envelope handling
+
+`apps/web/src/lib/api/errors.ts` exports:
+
+- `formatApiError(err: unknown): string` — toast-ready message; falls back to `"Something went wrong"` for non-API errors
+- `apiErrorCode(err: unknown): ErrorCode | null` — for branching (e.g., 409 `SLUG_TAKEN` → inline form error instead of toast)
+- 401 handling is global: a `QueryClient.setDefaultOptions` `onError` redirects to `/login?redirect=<current>` once and bounces back post-auth (the auth gate from §5.1 then permits the route)
+
+### 5.5 Component map
 
 ```
 apps/web/src/components/
+├── shell/                       (existing — Shell, Rail, MainFrame, RightPanel, …)
+├── ui/                          (existing — Button, Pill, Badge, Chip, Sheet, Dialog, …)
+├── workspace-picker.tsx         # rendered at `/`
 ├── views/
-│   ├── list-view.tsx          # rows + col-header, virtualized via @tanstack/react-virtual
-│   ├── kanban-view.tsx        # columns from statuses/groupBy, dnd-kit
-│   ├── wiki-tree.tsx          # nested page tree, dnd-kit sortable+droppable
-│   └── view-frame.tsx         # shared header+tabs+toolbar wrapper
-├── fields/
-│   ├── field-renderer.tsx     # dispatches by inferred/pinned type (matches schema enum)
-│   ├── field-text.tsx         # type='text' — single line OR multi-line based on value length / explicit hint
-│   ├── field-number.tsx
-│   ├── field-date.tsx
-│   ├── field-boolean.tsx
-│   ├── field-select.tsx
-│   ├── field-multi-select.tsx
-│   ├── field-user-ref.tsx
-│   └── field-url.tsx
-├── filters/
-│   ├── filter-bar.tsx
-│   ├── filter-editor.tsx
-│   └── sort-menu.tsx
-├── editor/
-│   ├── document-slideover.tsx
-│   ├── doc-header.tsx
-│   ├── doc-title.tsx
-│   ├── doc-frontmatter.tsx
-│   ├── milkdown-body.tsx
-│   ├── codemirror-raw.tsx
-│   ├── editor-toolbar.tsx
-│   ├── slash-menu.tsx
-│   └── doc-footer.tsx
-└── kanban/
-    ├── kanban-card.tsx
-    └── kanban-column.tsx
+│   ├── list-view.tsx            # flat row render (no virtualization in v1)
+│   ├── kanban-view.tsx          # columns grouped by status; dnd-kit
+│   ├── wiki-tree.tsx            # tree by parent_id
+│   └── empty-state.tsx          # shared empty state
+├── slideover/
+│   ├── document-slideover.tsx   # opens on ?doc=…; fetches; renders editor
+│   ├── frontmatter-form.tsx     # labeled inputs above body editor
+│   ├── field-renderer.tsx       # dispatches by inferred/pinned type
+│   ├── body-editor.tsx          # Milkdown wrapper
+│   ├── raw-md-editor.tsx        # CodeMirror wrapper
+│   └── mode-toggle.tsx          # rich ⇌ raw switch
+├── inline/
+│   ├── inline-edit.tsx          # display ↔ input (used by title cells, frontmatter)
+│   └── inline-select.tsx        # display ↔ popover (used for status cells)
+├── filter/
+│   ├── filter-bar.tsx           # chip row above list
+│   ├── filter-chip.tsx          # consumes existing Chip primitive
+│   └── filter-add.tsx           # "+ Filter" popover
+├── kanban/
+│   ├── kanban-card.tsx
+│   └── kanban-column.tsx
+└── onboarding/
+    ├── workspace-create.tsx     # Sheet-hosted form (name + slug + AI provider stub)
+    └── project-create.tsx       # Sheet-hosted form (name + slug)
 ```
 
-Each file ≤200 lines. Each component has one responsibility.
+Each file aims for ≤200 lines and one responsibility. Settings pages (statuses/fields/views editors) are **not built in Phase 1** — see §2 locked decisions.
 
-### 5.5 Editor
+### 5.6 Editor
 
 Two modes, single source of truth for the body string.
 
 ```
 [Edit | Raw MD] toggle in the toolbar drives a `mode` state.
 
-Edit mode:  <MilkdownBody value={body} onChange={setBody} />
-Raw mode:   <CodeMirrorRaw value={body} onChange={setBody} />
+Edit mode:  <BodyEditor value={body} onChange={setBody} />     (Milkdown)
+Raw mode:   <RawMdEditor value={body} onChange={setBody} />    (CodeMirror)
 ```
 
-Both components accept and emit the same markdown string. `onChange` debounces ~400ms then fires `useUpdateDocument`. Switching modes is free — same string, different presentation.
+Both components accept and emit the same markdown string. `onChange` debounces ~400ms then fires `useUpdateDocument`. Switching modes is free — same string, different presentation; the underlying source-of-truth string is never re-parsed on switch.
+
+**Frontmatter is separate.** The slideover keeps `body` and `frontmatter` as two pieces of state. Saves send JSON: `{ frontmatter, body }`. The text/markdown form is only used by external agents — the UI doesn't round-trip through serialized MD on every save (wasteful, and risks data loss on parser bugs).
 
 **Milkdown setup.** Packages: `@milkdown/core`, `@milkdown/preset-commonmark`, `@milkdown/preset-gfm`, `@milkdown/plugin-listener`, `@milkdown/plugin-history`, `@milkdown/plugin-clipboard`, `@milkdown/plugin-slash`. Themed via `apps/web/src/styles/editor.css` that overrides Milkdown's default class names with our design tokens.
 
 **CodeMirror setup.** Packages: `@codemirror/state`, `@codemirror/view`, `@codemirror/language`, `@codemirror/lang-markdown`. Plain markdown syntax highlighting, no live preview. Fixed-width 14px Geist Mono.
 
 **Slash menu.** Wraps Milkdown's `plugin-slash`. Items defined as a registry (id, label, group, icon, action). Phase 1 items:
-- `link to document` — fuzzy search over the project's documents, inserts `[[<slug>]]` on select.
+- `link to document` — fuzzy search over the project's documents (client-side over the cached list), inserts `[[<slug>]]` on select.
 - `draft`, `decompose`, `summarize` — registered but show a "Configure AI to enable" hint when clicked. Phase 3 wires them up.
 
-### 5.6 Inline edit primitive
+### 5.7 Inline edit primitive
 
-A single `<InlineEdit>` component used by every cell in the list view and the frontmatter form. Three modes:
+A single `<InlineEdit>` for text fields and `<InlineSelect>` for dropdowns. Both used everywhere — list-view cells, kanban card details, slideover frontmatter form. Behavior is identical across surfaces per CLAUDE.md commitment #2.
 
-- **Display** — read-only content. Click triggers display→edit.
-- **Edit** — renders the right input via `field-renderer.tsx`. On Enter/blur → fire mutation, return to display.
-- **Loading** — brief ~200ms subtle desaturation between optimistic update and server response. Not a spinner.
+`<InlineEdit>` modes:
+- **Display** — read-only content. Click → edit.
+- **Edit** — input autofocuses, text pre-selected. Enter or blur → commit + return to display. Escape → revert + return to display.
+- **Loading** — brief ~200ms subtle desaturation between optimistic update and server confirmation. Not a spinner.
 
-`Escape` cancels (returns to display without firing). `Enter` commits.
+`<InlineSelect>` opens a popover (existing `popover.tsx`) listing options. Click any option → mutation fires, popover closes.
 
-For dropdowns (status, priority, select), clicking opens a popover, selecting any option fires the mutation and closes.
-
-### 5.7 Drag-drop
+### 5.8 Drag-drop
 
 Two distinct uses, both via dnd-kit:
 
-**Kanban (between columns):** Each card has `useDraggable`. Each column has `useDroppable`. On drop, fire `useUpdateDocument({ slug, patch: { status: newStatus } })`. Optimistic. Threshold 5px to disambiguate click-vs-drag.
+**Kanban (between columns):** Each card has `useDraggable`. Each column has `useDroppable`. On drop, fire `useUpdateDocument({ slug, patch: { status: newStatus } })`. Optimistic. 5px activation threshold so click-to-open-slideover still works.
 
-**Wiki tree (reparent):** Each tree node is both draggable and droppable. Drop indicators show *between* nodes (sibling drop) and *on* nodes (child drop). On drop, fire `useUpdateDocument({ slug, patch: { parentId: newParent } })`. Cyclic check is server-side — making a node its own ancestor returns 422.
+**Wiki tree (reparent):** Each tree node is both draggable and droppable. Drop indicators show *between* nodes (sibling drop) and *on* nodes (child drop). On drop, fire `useUpdateDocument({ slug, patch: { parentId: newParent } })`. Cyclic check is server-side — making a node its own ancestor returns 422 and the optimistic UI rolls back.
 
-### 5.8 Toast feedback
+### 5.9 Onboarding flow
 
-Single toaster region from `components/ui/toast.tsx`. Triggered selectively:
-- Errors: always toast with the error message.
-- Success: silent by default. Toast only for explicit user actions ("Copied to clipboard", "View saved").
+Phase 0 left a gap: the API supports workspaces/projects but there's no UI for creating them. Phase 1 frontend closes it:
 
-### 5.9 Settings UI
+- **`/` (workspace picker).** Replaces the current welcome page. Lists workspaces from `useWorkspaces`. If empty → renders an empty state with a "Create workspace" button that opens `WorkspaceCreate`. If one workspace → auto-redirect to `/w/<slug>`. If multiple → card grid.
+- **`WorkspaceCreate`** (Sheet) — fields: name (auto-derives slug; editable), AI provider stub (select: none / anthropic / openai / openrouter / ollama — key entry deferred to Phase 3). Submit → POST `/api/v1/workspaces` → navigate to `/w/<slug>`.
+- **`/w/$wslug` (project picker).** Lists projects from `useProjects(wslug)`. Empty state → "Create project" button. One project → auto-redirect to `/w/$wslug/p/$pslug/work-items`. Multiple → grid.
+- **`ProjectCreate`** (Sheet) — fields: name (auto-derives slug; editable). Submit → POST `/api/v1/w/$wslug/projects` → project gets auto-seeded statuses + default views server-side → navigate to its list view.
 
-Three pages under `/w/$wslug/p/$pslug/settings/`:
-- `statuses` — sortable list, inline-editable rows, color swatches, "+ Add status" at the bottom. Drag-to-reorder via dnd-kit.
-- `fields` — same shape. Each row: key (mono), type (dropdown), label, options (only visible for select/multi_select).
-- `views` — list of saved views. Editing a view's filters happens in the view itself (filter bar); the settings page just manages metadata (rename, set default, delete).
+Both Sheet forms surface 409 (slug taken) inline next to the slug field, not via toast.
 
-All three follow the same pattern: read via Query, write via optimistic mutations, same `<InlineEdit>` primitive.
+### 5.10 Toast feedback
+
+Single sonner toaster region in `__root.tsx`. Triggered selectively:
+- Errors: always toast with `formatApiError(err)`.
+- Success: silent by default. Toast only for explicit user actions ("Copied to clipboard", "View saved", "Workspace created").
+
+### 5.11 Copy-as-MD
+
+Right-click any document row (list view) or page (wiki) → context menu with "Copy as Markdown". Calls `GET /api/v1/w/$wslug/p/$pslug/documents/$slug.md`, copies the response body to clipboard, fires a "Copied to clipboard" toast. Implements CLAUDE.md commitment #6.
+
+Right-clicking the body editor inside the slideover gets the browser default menu — the editor doesn't override it. The toolbar's overflow menu has an explicit "Copy as Markdown" action for the open document.
+
+### 5.12 Cmd-K palette (minimal)
+
+A minimal Cmd-K palette ships in Phase 1 using the existing `cmdk` + `command.tsx` primitive. v1 actions:
+
+- "Switch project" (lists projects in current workspace)
+- "Switch workspace" (lists workspaces)
+- "Open document" (fuzzy search the current project's documents — same source as `/link`)
+- "New work item" / "New page" (opens the slideover in create mode)
+- "Toggle theme"
+
+This is the **minimal version** — the polished palette with action history, scoped contexts, and global search lands in Phase 4 per `docs/PHASES.md`.
 
 ## 6. Testing & acceptance
 
-### 6.1 Test layers
+### 6.1 Backend tests (already shipped)
 
-**Unit tests** (Bun test, next to source files):
+Inherits the 111 tests from the backend carve-out (`bun test`). These continue to gate every commit on the Phase 1 frontend branch. Notably:
 
-- `apps/server/src/lib/frontmatter.test.ts` — empty body, frontmatter-only, body-only, malformed YAML, arrays/dates/booleans/nested objects. Round-trip invariant.
-- `apps/server/src/lib/slug.test.ts` — ASCII slugs, accented chars, spaces, hyphen collapse, dedup logic.
-- `apps/server/src/lib/filter-compile.test.ts` — every `FilterClause` op produces the expected Drizzle condition. Frontmatter clauses produce `json_extract`. Reserved-key and unknown-key rejection.
-- `packages/shared/src/field-types.test.ts` — every inference rule from FOLIO-BRIEFING.md §7. Order-sensitivity.
-- **Route handler tests** — for each route module under `apps/server/src/routes/`, test happy path + each documented error case. Use a test SQLite DB seeded with one workspace, one user, one project.
+- `apps/server/src/lib/frontmatter.test.ts` — parse/serialize round-trip across empty body, frontmatter-only, body-only, malformed YAML, arrays/dates/booleans/nested objects.
+- `apps/server/src/__e2e__/phase-1-roundtrip.test.ts` — end-to-end MD round-trip + events log assertion.
+- Route handler tests for every route in `apps/server/src/routes/`.
 
-**Golden-file round-trip tests** under `apps/server/tests/round-trip/`:
+Golden-file round-trip fixtures are deferred from Phase 1's earlier draft because the existing tests already cover the matrix. If a real-world round-trip bug surfaces during the frontend build, drop a fixture into `apps/server/src/__e2e__/fixtures/` and have the test runner replay it.
 
-```
-fixtures/
-├── 01-heading-paragraph.md
-├── 02-bulleted-list.md
-├── 03-task-list.md
-├── 04-gfm-table.md
-├── 05-code-block.md
-├── 06-blockquote.md
-├── 07-nested-lists.md
-├── 08-inline-formatting.md
-├── 09-link.md
-├── 10-frontmatter-types.md
-├── 11-empty-frontmatter.md
-├── 12-no-frontmatter.md
-└── 13-special-chars.md
-```
+### 6.2 Frontend tests (new, this phase)
 
-For each: `parseMarkdown → serializeMarkdown → parseMarkdown → assert AST equality`. Whitespace normalization tolerated; structural AST equality is the contract. When a round-trip bug is found in real use, add a new fixture file.
+**Vitest + @testing-library/react + jsdom** for component tests, colocated next to source. Bun's test runner drives Vitest via interop. New test files target ~25-40 tests total — the surface that's most likely to regress, not coverage theatre.
 
-**Component tests** — none in Phase 1.
+- `components/inline/inline-edit.test.tsx` — display ↔ edit transitions, Enter commits, Escape reverts, blur commits, mutation rolls back on failure.
+- `components/inline/inline-select.test.tsx` — popover open/close, selection fires mutation, optimistic update visible before settle.
+- `components/slideover/document-slideover.test.tsx` — opens when `?doc=` set, closes when cleared, Escape closes (via Sheet), URL state survives view tab switches.
+- `components/slideover/mode-toggle.test.tsx` — switching rich ↔ raw preserves the underlying body string exactly.
+- `components/slideover/field-renderer.test.tsx` — dispatch by type (text → input, number → number input, date → date picker, select → popover, multi-select → chip list, bool → toggle).
+- `components/slideover/frontmatter-form.test.tsx` — serialization round-trip (read existing frontmatter, edit one field, save, fetch, confirm only that field changed).
+- `lib/api/optimistic.test.ts` — happy path, error rolls back detail + list, settled refetches.
+- `lib/api/errors.test.ts` — `formatApiError` for ApiError vs unknown error vs string.
+- `components/onboarding/workspace-create.test.tsx` — submit success navigates, 409 surfaces inline next to slug field.
+- `components/views/list-view.test.tsx` — renders documents from query, inline-edit cells wired correctly.
 
-**Smoke E2E** — one Playwright test that runs against the built binary:
-1. Sign up
-2. Create workspace + project
-3. Create a work item via the list view
-4. Drag it to "Done" on the board
-5. Open the wiki, create a page
-6. Open the page in the slideover, type body, switch to Raw MD, verify content matches
-7. Logout
+**No tests** for: Milkdown's ProseMirror internals (trust the library); dnd-kit drag mechanics (trust the library); Tailwind class output; visual styling.
 
-Runs locally only — no CI integration in Phase 1.
+### 6.3 Manual QA gate
 
-### 6.2 Manual QA scenarios
+Test plan saved as `apps/web/tests/manual-qa-phase-1.md`. The full checklist must pass on a real browser run before the `phase-1: complete` commit lands. Each item maps to a Phase 1 acceptance criterion in `docs/PHASES.md`.
 
-Test plan saved as `apps/web/tests/manual-qa-phase-1.md`. Each scenario walks through one workflow on a real instance.
+1. Sign up → land on `/` empty state → "Create workspace" → workspace appears → auto-redirect to it.
+2. Empty workspace → "Create project" → project appears with default views and statuses → auto-redirect to list view.
+3. List view: click row title → inline-edit → Enter saves → reload, change persists.
+4. List view: click status pill → popover → select different status → optimistic UI updates instantly → reload, change persists.
+5. List view: click row (not title/status) → slideover opens, URL gains `?doc=…` → click outside → slideover closes, URL clears.
+6. Slideover: edit title inline → edit frontmatter field (e.g., priority) → edit body in Milkdown → blur → all three persist.
+7. Slideover: toggle Edit → Raw MD → body shows raw markdown with frontmatter → edit something → toggle back to Edit → Milkdown reflects the edit.
+8. Slideover: round-trip — paste a markdown blob with custom HTML, a table, a code fence containing frontmatter-looking text, and a non-trivial frontmatter shape. Save. Toggle Raw → confirm exact byte-equality. Reload page. Confirm exact byte-equality. (The Phase 1 wedge.)
+9. Switch to Board tab → drag a card between two columns → status updates optimistically → reload, change persists.
+10. Switch to Wiki tab → create a page → create a second page → drag the second under the first → tree shows nested.
+11. Right-click any row → "Copy as Markdown" → paste somewhere → confirm clean markdown with frontmatter.
+12. Filter the list by "Status is not Done" → only matching rows appear → clear filter → all rows return.
+13. Open Cmd-K → "Switch project" → another project → land on its list view. Cmd-K → "Open document" → fuzzy-search → enter → slideover opens for it.
+14. Network failure scenario: throttle DevTools to offline → try to inline-edit a title → optimistic update happens, then rolls back → toast appears.
 
-1. Create work item via API (raw MD with frontmatter), confirm it appears in list view with all fields rendered.
-2. Inline-edit title, status, priority; confirm optimistic UI feels instant.
-3. Open document in slideover, edit body, toggle to Raw MD, confirm content matches; switch back, confirm Milkdown re-renders.
-4. Drag a card between three different kanban columns; confirm status updates and the card visually moves first.
-5. Switch board groupBy from status to assignee, then to priority; confirm columns change.
-6. Create a page, then a child page (drag to nest in tree); confirm wiki tree reflects hierarchy.
-7. Create a custom status, reassign a doc to it, then delete the status with `reassignTo`; confirm doc gets the reassigned status.
-8. Filter the list by `priority is High AND status is not Done`; confirm only matching rows appear.
-9. Save the filtered list as a new view; reload the page; confirm view persists and renders correctly.
-10. Hit the API with `curl` using a session cookie; confirm `.md` export endpoint returns valid markdown that round-trips.
+### 6.4 Performance floor
 
-### 6.3 Performance floor
+Not a v1 priority but a sanity floor (no automated perf tests):
 
-Not a v1 priority but a sanity floor:
-- List view renders 500 documents at 60fps scroll (virtualization required).
+- List view renders the seeded test set (~50 docs) without scroll jank. Re-evaluate the 500-doc target if/when a real install gets there — that's when virtualization gets pulled in.
 - Inline edit → optimistic UI update <16ms.
 - Document slideover open → first paint <100ms.
-- Kanban drag-drop must not stutter on a board with 100 cards.
+- Kanban drag-drop is smooth on a board with ~50 cards. Same re-evaluation point as the list.
 
-Measured manually with Chrome devtools during the smoke E2E. No automated perf tests in Phase 1.
-
-### 6.4 Acceptance criteria
+### 6.5 Acceptance criteria
 
 Phase 1 is done when **all of these are true**:
 
-1. Every endpoint in §4 is implemented, Zod-validated, and returns the documented response.
-2. Every Phase 1 task in `docs/PHASES.md` has its checkbox ticked.
-3. All unit tests pass (`bun test`).
-4. All round-trip fixture tests pass.
-5. The Playwright smoke E2E passes against the built binary.
-6. All 10 manual QA scenarios pass on a fresh install.
-7. Performance floor (§6.3) is met for the smoke scenario.
-8. A new user can sign up, create a workspace + project, and run through a realistic work session (10 work items, kanban moves, wiki page, doc edit) without hitting a blocking bug.
-9. `bun run build:binary` produces a single binary that passes #5 and #6.
-10. Phase 1 spec has an "open questions deferred to later phases" section written from anything surfaced during implementation.
+1. Every Phase 1 task in `docs/PHASES.md` has its checkbox ticked.
+2. `bun test` passes (backend + new frontend Vitest suites).
+3. All 14 manual QA scenarios in §6.3 pass on a fresh install run by Stefan in a real browser.
+4. `bun run build` produces a working web bundle, and `bun run build:binary` produces a single binary that serves it.
+5. A new user can sign up, create a workspace + project, and run through a realistic work session (10 work items, kanban moves, wiki page, doc edit, copy-as-MD) without hitting a blocking bug.
+6. This spec's §10 ("Open questions deferred to later phases") is updated with anything surfaced during implementation.
+
+Playwright e2e is **not** required — gated to Phase 4 per `docs/FOLIO-BRIEFING.md` and `docs/PHASES.md`.
 
 ## 7. File structure
 
-Files Phase 1 creates or substantially modifies:
+### apps/server/ — shipped
 
-### apps/server/
+All server files described in earlier drafts of this spec landed via the backend carve-out (`2026-05-11-phase-1-backend-design.md`). Current state on `main`:
 
-```
-src/
-├── index.ts                  # MODIFY — restructure route mounts to nested `/api/v1/w/:wslug/p/:pslug/...` per §4
-├── routes/
-│   ├── documents.ts          # NEW — full CRUD per §4.1
-│   ├── statuses.ts           # NEW — §4.2
-│   ├── fields.ts             # NEW — §4.3
-│   ├── views.ts              # NEW — §4.4
-│   ├── stubs.ts              # MODIFY — remove documentsRoute and viewsRoute (replaced by the above). Keep mcpRoute stub for Phase 2.
-│   └── projects.ts           # NEW — workspace-scoped project CRUD (split from workspaces.ts)
-├── lib/
-│   ├── frontmatter.ts        # MODIFY — add `body` extraction edge cases
-│   ├── slug.ts               # NEW — title → slug + project-scoped dedup
-│   ├── filter-compile.ts     # NEW — FilterConfig → Drizzle SQL conditions
-│   ├── events.ts             # NEW — emit() helper that inserts inside a transaction
-│   └── project-defaults.ts   # NEW — seed default statuses + views on project create
-└── tests/
-    └── round-trip/
-        ├── round-trip.test.ts
-        └── fixtures/*.md     # 13 fixture files per §6.1
-```
+- `apps/server/src/routes/{auth,workspaces,projects,documents,statuses,fields,views,tokens,settings,health}.ts`
+- `apps/server/src/lib/{frontmatter,slug-unique,filter-to-drizzle,events,seed-project-defaults,http}.ts`
+- `apps/server/src/middleware/{auth,scope,error}.ts`
+- `packages/shared/src/{slug,field-infer,filter-compile,document-schema,error-codes}.ts`
 
-### packages/shared/
+The frontend phase modifies the server only if a gap surfaces during build (e.g., a missing response field on the existing endpoints). Server changes must come with a route handler test.
 
-```
-src/
-├── types.ts                  # NEW — Document, Status, Field, View shared types
-├── schemas.ts                # NEW — Zod schemas (request/response shapes)
-├── filter-grammar.ts         # NEW — FilterClause / FilterConfig types
-├── field-types.ts            # MODIFY — inference rules
-└── field-types.test.ts       # NEW — inference unit tests
-```
-
-### apps/web/
+### apps/web/ — Phase 1 frontend scope
 
 ```
 src/
 ├── routes/
-│   ├── w.$wslug.tsx                                       # NEW — workspace home (existing index.tsx is the picker)
-│   ├── w.$wslug.p.$pslug.tsx                              # NEW — project layout (sidebar + frame)
-│   ├── w.$wslug.p.$pslug.work-items.tsx                   # NEW — list view route
-│   ├── w.$wslug.p.$pslug.board.tsx                        # NEW — kanban route
-│   ├── w.$wslug.p.$pslug.wiki.tsx                         # NEW — wiki tree route
-│   ├── w.$wslug.p.$pslug.settings.statuses.tsx            # NEW
-│   ├── w.$wslug.p.$pslug.settings.fields.tsx              # NEW
-│   └── w.$wslug.p.$pslug.settings.views.tsx               # NEW
+│   ├── __root.tsx                              # MODIFY — auth gate (beforeLoad → /me → redirect)
+│   ├── index.tsx                               # MODIFY — becomes the workspace picker
+│   ├── w.$wslug.tsx                            # NEW — workspace layout (rail + outlet)
+│   ├── w.$wslug.index.tsx                      # NEW — project picker / empty state
+│   ├── w.$wslug.p.$pslug.tsx                   # NEW — project layout (frame + tabs + slideover host)
+│   ├── w.$wslug.p.$pslug.index.tsx             # NEW — redirect to /work-items
+│   ├── w.$wslug.p.$pslug.work-items.tsx        # NEW — list view route
+│   ├── w.$wslug.p.$pslug.board.tsx             # NEW — kanban route
+│   └── w.$wslug.p.$pslug.wiki.tsx              # NEW — wiki tree route
 ├── lib/
-│   ├── api.ts                # MODIFY — full typed client per §5.3
-│   ├── queries.ts            # NEW — TanStack Query hooks per §5.2
-│   ├── optimistic.ts         # NEW — applyOptimistic + helpers
-│   └── debounce.ts           # NEW — small debounce util for body edits
-├── components/               # see §5.4 for the full map
+│   ├── api/
+│   │   ├── client.ts                           # MOVE — current api.ts moves here
+│   │   ├── workspaces.ts                       # NEW
+│   │   ├── projects.ts                         # NEW
+│   │   ├── documents.ts                        # NEW
+│   │   ├── statuses.ts                         # NEW (read-only in Phase 1 UI)
+│   │   ├── fields.ts                           # NEW (read-only in Phase 1 UI)
+│   │   ├── views.ts                            # NEW (read-only in Phase 1 UI)
+│   │   ├── auth.ts                             # NEW (consolidates /me, login, logout, magic)
+│   │   ├── optimistic.ts                       # NEW — useOptimisticPatch helper
+│   │   └── errors.ts                           # NEW — formatApiError / apiErrorCode
+│   ├── command-registry.ts                     # NEW — Cmd-K action registry
+│   └── debounce.ts                             # NEW — small debounce util for body edits
+├── components/
+│   ├── workspace-picker.tsx                    # NEW (rendered at /)
+│   ├── command-palette.tsx                     # NEW — Cmd-K root
+│   ├── onboarding/{workspace-create,project-create}.tsx
+│   ├── views/{list-view,kanban-view,wiki-tree,empty-state}.tsx
+│   ├── slideover/{document-slideover,frontmatter-form,field-renderer,body-editor,raw-md-editor,mode-toggle}.tsx
+│   ├── inline/{inline-edit,inline-select}.tsx
+│   ├── filter/{filter-bar,filter-chip,filter-add}.tsx
+│   └── kanban/{kanban-card,kanban-column}.tsx
 └── styles/
-    └── editor.css            # NEW — Milkdown class overrides
+    └── editor.css                              # NEW — Milkdown class overrides
 ```
+
+Settings routes (`settings.statuses`, `settings.fields`, `settings.views`) are **not** in this spec — see §2 locked decisions.
 
 ## 8. Implementation order
 
-Suggested order for implementation, dependency-driven. The plan generated from this spec follows the same order.
+Steps 1-4 already shipped in the backend carve-out (`main` at `18bab77`). Frontend build order, Approach A skeleton-first:
 
-1. Shared types + Zod schemas (`packages/shared`).
-2. `lib/slug.ts`, `lib/filter-compile.ts`, `lib/events.ts`, `lib/project-defaults.ts` with unit tests.
-3. Round-trip fixtures + test runner.
-4. Server routes — `statuses` first (simplest), then `fields`, then `views`, then `documents` (depends on statuses).
-5. Frontend: API client + Query hooks + optimistic helper.
-6. List view (the simplest — no drag-drop, no editor).
-7. Slideover + inline edit + frontmatter form.
-8. Milkdown body + editor toolbar + raw-MD toggle.
-9. Slash menu + `link to document` action.
-10. Kanban view with dnd-kit.
-11. Wiki tree with dnd-kit.
-12. Settings pages (statuses, fields, views).
-13. Smoke E2E + manual QA pass.
-14. Tick Phase 1 checkboxes in `docs/PHASES.md`. Commit `phase-1: complete`.
+**Shipped:**
+
+1. ✅ Shared types + Zod schemas (`packages/shared`)
+2. ✅ Server libs (`slug-unique`, `filter-compile`, `filter-to-drizzle`, `events`, `seed-project-defaults`, `http`)
+3. ✅ Server route tests with seeded test DB
+4. ✅ Server routes (`workspaces`, `projects`, `documents`, `statuses`, `fields`, `views` + the carry-over auth/tokens/settings)
+
+**This phase — frontend, in order:**
+
+5. **API client layer.** `lib/api/{client,workspaces,projects,documents,statuses,fields,views,auth,optimistic,errors}.ts` + `useOptimisticPatch` tests.
+6. **Workspace + project routing skeleton.** `w.$wslug.tsx` layout, `w.$wslug.p.$pslug.tsx` layout, auth gate, redirect routes. Existing rail/frame primitives wired to real workspace/project data.
+7. **Onboarding.** Workspace picker at `/`; `WorkspaceCreate` + `ProjectCreate` Sheet forms. End-to-end: sign up → create workspace → create project → land on (empty) list view.
+8. **List view — read-only.** Renders documents from the default view. No inline edit yet. Click row → slideover opens with read-only document body. Tests: `list-view.test.tsx` rendering + click-to-open behavior.
+9. **Inline edit primitives.** `<InlineEdit>` + `<InlineSelect>`. List view: title becomes click-to-edit, status becomes click-to-select. Optimistic write via `useUpdateDocument`. Tests: `inline-edit.test.tsx`, `inline-select.test.tsx`.
+10. **Slideover orchestrator + frontmatter form.** `document-slideover.tsx` reads `?doc=…`. `frontmatter-form.tsx` + `field-renderer.tsx`. Editing frontmatter from the slideover writes optimistically. Body still read-only as plain text. Tests: slideover open/close, frontmatter form serialization, field-renderer dispatch.
+11. **Body editor — Milkdown rich mode.** `body-editor.tsx` Milkdown wrapper. Editor lives inside the slideover. Debounced optimistic write on change. Slash menu registry (UI only; `/link` works; AI actions show "Configure AI" hint).
+12. **Raw MD toggle.** `raw-md-editor.tsx` CodeMirror wrapper, `mode-toggle.tsx`. Round-trip test: synthetic document with custom HTML + frontmatter + table survives rich → raw → rich → save → reload byte-for-byte. (Manual QA scenario #8.)
+13. **Filter chips + sort.** `filter-bar.tsx`, `filter-chip.tsx`, `filter-add.tsx`. Column-header click → sort cycle (asc → desc → off). View config not persisted in v1 — local URL-state only.
+14. **Kanban view.** `kanban-view.tsx` + `kanban-card.tsx` + `kanban-column.tsx`. dnd-kit columns. 5px activation threshold. Optimistic status update on drop.
+15. **Wiki tree.** `wiki-tree.tsx`. dnd-kit nested-tree drag-to-reparent. Pages share the slideover/editor from step 11; the slideover suppresses the status field when `document.type === 'page'`.
+16. **Copy-as-MD.** Right-click context menu on rows + wiki nodes; toolbar action in slideover. Fires `GET /…/:slug.md` and copies to clipboard.
+17. **Minimal Cmd-K palette.** `command-palette.tsx` + `command-registry.ts`. v1 actions per §5.12.
+18. **Manual QA pass.** Run all 14 scenarios. File bugs found, fix, repeat until clean.
+19. **Tick Phase 1 checkboxes** in `docs/PHASES.md`. Commit `phase-1: complete`.
+
+Steps 8-15 can be developed on a feature branch and shipped behind a single PR; steps 5-7 are scaffolding that gates everything else.
 
 ## 9. Non-goals (out of scope for Phase 1)
 
 - SSE channel or any agent-facing live stream (Phase 2).
 - MCP server (Phase 2).
-- AI slash commands (Phase 3). The slash menu UI ships; `/draft`, `/decompose`, `/summarize` show a "Configure AI to enable" hint when clicked. `/link` works (no AI required).
-- Cmd-K palette beyond a minimal version (full version in Phase 4).
-- Comments, attachments, real-time collab, search.
+- AI slash commands wired to a provider (Phase 3). The slash menu UI ships; `/draft`, `/decompose`, `/summarize` show a "Configure AI to enable" hint when clicked. `/link` works (no AI required).
+- Cmd-K palette beyond the minimal version in §5.12 (full version Phase 4).
+- Settings UI for statuses, fields, or views (Phase 4). Defaults carry v1; custom config goes via API/curl until then.
+- View persistence: saving a filter/sort combination as a named view from the UI. View CRUD endpoints exist server-side; v1 UI uses URL state only.
+- Real-time collab on a single document. Last-write-wins per CLAUDE.md.
+- Cross-tab sync (no BroadcastChannel; users with two tabs see stale data until refocus).
+- Offline writes beyond the optimistic-rollback-on-failure path. Full offline mode is Phase 4+.
+- Comments, attachments, search.
 - Mobile polish — responsive layout works but isn't tested deeply.
 - API tokens UI (the table exists; UI lands in Phase 2).
-- The right panel's Events tab content (events emit but nothing reads them in v1 of Phase 1).
+- The right panel's Events tab content (events emit but nothing reads them in v1).
+- Virtualization (`@tanstack/react-virtual`). Re-evaluate once a real install needs it.
+- Playwright e2e (Phase 4).
 
 ## 10. Open questions deferred to later phases
 
@@ -567,12 +651,15 @@ These are explicitly NOT decided in Phase 1; the implementation may surface them
 
 - How does the document slideover behave when an SSE event for the same document arrives mid-edit? (Phase 2 answers; for now last-write-wins via `If-Match` is sufficient.)
 - Performance ceiling for the `events` table — at what row count does pagination/archival become necessary? (Phase 2 or later.)
-- Whether to add a project-creation wizard or accept the bare "create project" form. (Polish in Phase 4 if needed.)
-- The exact `category` taxonomy on statuses — `backlog`/`unstarted`/`started`/`completed`/`cancelled` may need to grow for status types we haven't anticipated.
+- The exact `category` taxonomy on statuses (`backlog`/`unstarted`/`started`/`completed`/`cancelled`) — may need to grow for status types we haven't anticipated.
+- Does the slideover need a "fullscreen" mode for long body editing? (User feedback dependent.)
+- Document slideover collision when two users have it open with `?doc=...` — last-write-wins is fine for v1 but the UX of a stale slideover may need a "doc has changed, reload?" prompt in Phase 4.
+- Whether Milkdown's plugin churn justifies pinning specific versions in `package.json` rather than caret ranges. (Decide if Milkdown breaks during implementation.)
 
 ## 11. References
 
+- Backend carve-out (executed): `docs/superpowers/specs/2026-05-11-phase-1-backend-design.md`
 - Design system spec: `docs/superpowers/specs/2026-05-11-design-system-design.md`
 - Full PRD: `docs/FOLIO-BRIEFING.md`
 - Phase tracker: `docs/PHASES.md`
-- Mockups: `.superpowers/brainstorm/94899-1778514720/content/` (list-view-v1, kanban, document-slideover, rail-expanded, rail-collapsed-truly-borderless)
+- Mockups: `.superpowers/brainstorm/53908-1778511064/content/` (list-view-v1, folio-coreoss-shell, final-design-language, palette-options, type-options) and `.superpowers/brainstorm/94899-1778514720/content/` (kanban, document-slideover, rail-expanded, rail-collapsed-truly-borderless)

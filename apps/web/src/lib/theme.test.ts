@@ -1,4 +1,4 @@
-import { describe, expect, test, beforeEach, afterEach } from 'bun:test';
+import { describe, expect, test, beforeEach, afterEach } from 'vitest';
 import { getResolvedTheme, setTheme, type Theme } from './theme.ts';
 
 const STORAGE_KEY = 'folio:theme';

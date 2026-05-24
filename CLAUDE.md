@@ -133,6 +133,17 @@ docker build -f docker/Dockerfile -t folio:dev .
 - Not a duplicate of the PRD. The PRD lives in `@docs/FOLIO-BRIEFING.md`.
 - Not a task tracker. Tasks live in `@docs/PHASES.md` with `[ ]` checkboxes.
 
+## Project memory
+
+Three in-repo files curate state across sessions:
+
+- `@memory/STATE.md` — living snapshot of where the project is (current branch, what's working, open threads). Read at session start. Update at session end if anything changed.
+- `@memory/DECISIONS.md` — locked architectural + product decisions with reasoning. Don't re-litigate without explicit "I want to revisit X."
+- `@memory/lessons.md` — self-improvement log. After any user correction, append a rule that prevents the same mistake.
+- `@tasks/todo.md` — active task list for the current branch / session.
+
+`@memory/README.md` explains the convention. Auto-memory at `~/.claude/projects/-home-ntdst-Projects-folio/memory/` complements these (tacit context, project deltas) but does not replace them.
+
 ---
 
-**Next step:** open `@docs/PHASES.md`, find the current phase, and pick the next unchecked task.
+**Next step:** open `@memory/STATE.md` to see where we left off, then `@docs/PHASES.md` for the current phase and the next unchecked task.

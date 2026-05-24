@@ -7,6 +7,7 @@ export type EventKind =
   | 'status.created'   | 'status.updated'   | 'status.deleted'
   | 'field.created'    | 'field.updated'    | 'field.deleted'
   | 'view.created'     | 'view.updated'     | 'view.deleted'
+  | 'table.created'    | 'table.updated'    | 'table.deleted'
   | 'project.created'  | 'project.updated'  | 'project.deleted'
   | 'workspace.created' | 'workspace.updated';
 

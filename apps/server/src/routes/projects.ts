@@ -16,7 +16,6 @@ import {
   getProject,
   getRole,
   getWorkspace,
-  resolveProject,
 } from '../middleware/scope.ts';
 
 const projectsRoute = new Hono<AuthContext & ScopeContext>();
@@ -75,16 +74,17 @@ projectsRoute.post(
       });
     });
 
-    return jsonOk(c, { project: { id, workspaceId: ws.id, slug, name, icon: icon ?? null } }, 201);
+    return jsonOk(c, { id, workspaceId: ws.id, slug, name, icon: icon ?? null }, 201);
   },
 );
 
-const item = new Hono<AuthContext & ScopeContext>();
-item.use('*', resolveProject);
+// --- item (mounted under `/api/v1/w/:wslug/p/:pslug`; pScope already runs resolveProject) ---
 
-item.get('/', (c) => jsonOk(c, { project: getProject(c) }));
+const projectItemRoute = new Hono<AuthContext & ScopeContext>();
 
-item.patch(
+projectItemRoute.get('/', (c) => jsonOk(c, getProject(c)));
+
+projectItemRoute.patch(
   '/',
   zValidator(
     'json',
@@ -98,8 +98,9 @@ item.patch(
     const ws = getWorkspace(c);
     const user = getUser(c);
     const patch = c.req.valid('json');
+    const now = new Date();
     await db.transaction(async (tx) => {
-      await tx.update(projects).set(patch).where(eq(projects.id, p.id));
+      await tx.update(projects).set({ ...patch, updatedAt: now }).where(eq(projects.id, p.id));
       await emitEvent(tx, {
         workspaceId: ws.id,
         projectId: p.id,
@@ -108,17 +109,15 @@ item.patch(
         payload: { changes: Object.keys(patch) },
       });
     });
-    return jsonOk(c, { project: { ...p, ...patch } });
+    return jsonOk(c, { ...p, ...patch, updatedAt: now });
   },
 );
 
-item.delete('/', async (c) => {
+projectItemRoute.delete('/', async (c) => {
   if (getRole(c) !== 'owner') throw new HTTPError('FORBIDDEN', 'owner only', 403);
   const p = getProject(c);
   await db.delete(projects).where(eq(projects.id, p.id));
   return c.body(null, 204);
 });
 
-projectsRoute.route('/:pslug', item);
-
-export { projectsRoute };
+export { projectsRoute, projectItemRoute };

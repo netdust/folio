@@ -1,0 +1,95 @@
+import { ArrowUpRight } from 'lucide-react';
+import { toast } from 'sonner';
+import { InlineEdit } from '../inline/inline-edit.tsx';
+import { InlineSelect } from '../inline/inline-select.tsx';
+import { Icon } from '../ui/icon.tsx';
+import { Pill } from '../ui/pill.tsx';
+import type { DocumentSummary, DocumentPatch } from '../../lib/api/documents.ts';
+import type { Status } from '../../lib/api/statuses.ts';
+import { formatApiError } from '../../lib/api/index.ts';
+import { copyDocumentAsMarkdown } from '../../lib/copy-as-md.ts';
+import { relativeTime } from '../../lib/relative-time.ts';
+import { RowContextMenu } from './row-context-menu.tsx';
+
+interface Props {
+  doc: DocumentSummary;
+  statuses: Status[];
+  wslug: string;
+  pslug: string;
+  onOpen: (slug: string) => void;
+  onUpdate: (vars: { slug: string; patch: Pick<DocumentPatch, 'title' | 'status'> }) => Promise<unknown>;
+  pendingSlugs: Set<string>;
+}
+
+export function ListRow({ doc, statuses, wslug, pslug, onOpen, onUpdate, pendingSlugs }: Props) {
+  const status = doc.status ? statuses.find((s) => s.key === doc.status) : null;
+  const isPending = pendingSlugs.has(doc.slug);
+
+  const onCommitTitle = async (next: string) => {
+    try {
+      await onUpdate({ slug: doc.slug, patch: { title: next } });
+    } catch (err) {
+      toast.error(formatApiError(err));
+    }
+  };
+  const onCommitStatus = async (next: string) => {
+    try {
+      await onUpdate({ slug: doc.slug, patch: { status: next } });
+    } catch (err) {
+      toast.error(formatApiError(err));
+    }
+  };
+  const onCopy = async () => {
+    try {
+      await copyDocumentAsMarkdown(wslug, pslug, doc.slug);
+      toast.success('Copied as Markdown');
+    } catch (err) {
+      toast.error(formatApiError(err));
+    }
+  };
+
+  return (
+    <RowContextMenu items={[{ label: 'Copy as Markdown', onSelect: onCopy, hint: '⌘⇧C' }]}>
+      <div
+        role="listitem"
+        className="grid w-full grid-cols-[1fr_auto_auto] items-center gap-3 border-b border-border-light px-4 py-2 hover:bg-card"
+      >
+        <div className="min-w-0 flex items-center gap-2">
+          <button
+            type="button"
+            aria-label={`Open ${doc.title}`}
+            onClick={() => onOpen(doc.slug)}
+            className="text-fg-3 hover:text-fg"
+          >
+            <Icon icon={ArrowUpRight} size={14} />
+          </button>
+          <div className="min-w-0 flex-1">
+            <InlineEdit
+              value={doc.title}
+              onCommit={onCommitTitle}
+              isPending={isPending}
+              ariaLabel={`Edit title: ${doc.title}`}
+            />
+          </div>
+        </div>
+
+        <InlineSelect
+          value={doc.status}
+          options={statuses.map((s) => ({ value: s.key, label: s.name, color: s.color }))}
+          onCommit={onCommitStatus}
+          isPending={isPending}
+          placeholder="no status"
+          renderDisplay={(opt) =>
+            opt && status ? (
+              <Pill category={status.category} label={opt.label} />
+            ) : (
+              <span className="text-xs text-fg-3">no status</span>
+            )
+          }
+        />
+
+        <span className="font-mono text-[11px] text-fg-3">{relativeTime(doc.updatedAt)}</span>
+      </div>
+    </RowContextMenu>
+  );
+}

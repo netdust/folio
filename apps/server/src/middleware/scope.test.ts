@@ -6,9 +6,11 @@ import { requireUser, attachUser, type AuthContext } from './auth.ts';
 import {
   resolveWorkspace,
   resolveProject,
+  resolveTable,
   getWorkspace,
   getProject,
   getRole,
+  getTable,
   type ScopeContext,
 } from './scope.ts';
 
@@ -55,4 +57,49 @@ test('resolveProject loads project scoped to workspace', async () => {
   const res = await app.request('/acme/p/web', { headers: { Cookie: seed.sessionCookie } });
   expect(res.status).toBe(200);
   expect(await res.json()).toEqual({ slug: 'web' });
+});
+
+test('resolveTable attaches table to context when slug exists in project', async () => {
+  const { seed } = await makeTestApp({ seedProjectDefaults: true });
+  const app = new Hono<AuthContext & ScopeContext>();
+  registerErrorHandler(app);
+  app.use('/:wslug/p/:pslug/t/:tslug/*', attachUser, requireUser, resolveWorkspace, resolveProject, resolveTable);
+  app.get('/:wslug/p/:pslug/t/:tslug', (c) => c.json({ tableName: getTable(c).name, tableSlug: getTable(c).slug }));
+  const res = await app.request('/acme/p/web/t/work-items', { headers: { Cookie: seed.sessionCookie } });
+  expect(res.status).toBe(200);
+  expect(await res.json()).toEqual({ tableName: 'Work Items', tableSlug: 'work-items' });
+});
+
+test('resolveTable 404 on unknown slug', async () => {
+  const { seed } = await makeTestApp();
+  const app = new Hono<AuthContext & ScopeContext>();
+  registerErrorHandler(app);
+  app.use('/:wslug/p/:pslug/t/:tslug/*', attachUser, requireUser, resolveWorkspace, resolveProject, resolveTable);
+  app.get('/:wslug/p/:pslug/t/:tslug', (c) => c.json({ ok: true }));
+  const res = await app.request('/acme/p/web/t/nope', { headers: { Cookie: seed.sessionCookie } });
+  expect(res.status).toBe(404);
+  const body = await res.json();
+  expect(body.error.code).toBe('TABLE_NOT_FOUND');
+});
+
+test('resolveProject auto-attaches the default Work Items table for legacy paths', async () => {
+  const { seed } = await makeTestApp({ seedProjectDefaults: true });
+  const app = new Hono<AuthContext & ScopeContext>();
+  registerErrorHandler(app);
+  app.use('/:wslug/p/:pslug/*', attachUser, requireUser, resolveWorkspace, resolveProject);
+  app.get('/:wslug/p/:pslug/probe', (c) => c.json({ tableSlug: getTable(c).slug }));
+  const res = await app.request('/acme/p/web/probe', { headers: { Cookie: seed.sessionCookie } });
+  expect(res.status).toBe(200);
+  expect((await res.json()).tableSlug).toBe('work-items');
+});
+
+test('resolveProject does not attach a table for projects without one', async () => {
+  const { seed } = await makeTestApp({ seedProjectDefaults: false });
+  const app = new Hono<AuthContext & ScopeContext>();
+  registerErrorHandler(app);
+  app.use('/:wslug/p/:pslug/*', attachUser, requireUser, resolveWorkspace, resolveProject);
+  app.get('/:wslug/p/:pslug/probe', (c) => c.json({ hasTable: c.get('table') != null }));
+  const res = await app.request('/acme/p/web/probe', { headers: { Cookie: seed.sessionCookie } });
+  expect(res.status).toBe(200);
+  expect((await res.json()).hasTable).toBe(false);
 });

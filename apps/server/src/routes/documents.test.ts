@@ -20,8 +20,8 @@ test('POST /documents JSON creates work_item with derived slug', async () => {
   });
   expect(res.status).toBe(201);
   const body = await res.json();
-  expect(body.data.document.slug).toBe('fix-the-bug');
-  expect(body.data.document.type).toBe('work_item');
+  expect(body.data.slug).toBe('fix-the-bug');
+  expect(body.data.type).toBe('work_item');
 });
 
 test('POST 422 INVALID_STATUS when status not in registry', async () => {
@@ -47,7 +47,7 @@ test('POST with valid status persists status column', async () => {
     body: JSON.stringify({ type: 'work_item', title: 'Y', frontmatter: { status: 'todo' } }),
   });
   expect(res.status).toBe(201);
-  expect((await res.json()).data.document.status).toBe('todo');
+  expect((await res.json()).data.status).toBe('todo');
 });
 
 test('GET /documents/:slug returns the doc', async () => {
@@ -59,7 +59,7 @@ test('GET /documents/:slug returns the doc', async () => {
   });
   const res = await app.request(`${path}/a-doc`, { headers: { Cookie: seed.sessionCookie } });
   expect(res.status).toBe(200);
-  expect((await res.json()).data.document.title).toBe('A doc');
+  expect((await res.json()).data.title).toBe('A doc');
 });
 
 test('GET unknown slug 404 DOCUMENT_NOT_FOUND', async () => {
@@ -86,8 +86,8 @@ test('PATCH JSON merges frontmatter', async () => {
   });
   expect(patch.status).toBe(200);
   const body = await patch.json();
-  expect(body.data.document.frontmatter.priority).toBe('urgent');
-  expect(body.data.document.frontmatter.tag).toBeUndefined();
+  expect(body.data.frontmatter.priority).toBe('urgent');
+  expect(body.data.frontmatter.tag).toBeUndefined();
 });
 
 test('DELETE returns 204', async () => {
@@ -115,7 +115,7 @@ test('POST duplicate title gets unique slug suffix', async () => {
     headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
     body: JSON.stringify({ type: 'work_item', title: 'Same' }),
   });
-  expect((await res.json()).data.document.slug).toBe('same-2');
+  expect((await res.json()).data.slug).toBe('same-2');
 });
 
 test('POST text/markdown creates from raw MD with H1 title', async () => {
@@ -135,8 +135,8 @@ Body here.
   });
   expect(res.status).toBe(201);
   const body = await res.json();
-  expect(body.data.document.title).toBe('Markdown Title');
-  expect(body.data.document.frontmatter.priority).toBe('high');
+  expect(body.data.title).toBe('Markdown Title');
+  expect(body.data.frontmatter.priority).toBe('high');
 });
 
 test('POST text/markdown without H1 falls back to frontmatter.title', async () => {
@@ -153,7 +153,7 @@ Body
 `,
   });
   expect(res.status).toBe(201);
-  expect((await res.json()).data.document.title).toBe('From Frontmatter');
+  expect((await res.json()).data.title).toBe('From Frontmatter');
 });
 
 test('POST text/markdown with no title at all gets "Untitled"', async () => {
@@ -164,7 +164,7 @@ test('POST text/markdown with no title at all gets "Untitled"', async () => {
     body: `body only`,
   });
   expect(res.status).toBe(201);
-  expect((await res.json()).data.document.title).toBe('Untitled');
+  expect((await res.json()).data.title).toBe('Untitled');
 });
 
 test('PATCH text/markdown replaces whole document', async () => {
@@ -191,9 +191,9 @@ New body.
   });
   expect(res.status).toBe(200);
   const body = await res.json();
-  expect(body.data.document.title).toBe('Renamed');
-  expect(body.data.document.frontmatter.priority).toBe('critical');
-  expect(body.data.document.frontmatter.keep).toBeUndefined(); // replaced, not merged
+  expect(body.data.title).toBe('Renamed');
+  expect(body.data.frontmatter.priority).toBe('critical');
+  expect(body.data.frontmatter.keep).toBeUndefined(); // replaced, not merged
 });
 
 test('PATCH text/markdown changing type is rejected', async () => {
@@ -266,6 +266,72 @@ test('GET applies a filter AST via ?filter=', async () => {
   const body = await res.json();
   expect(body.data).toHaveLength(1);
   expect(body.data[0].title).toBe('X');
+});
+
+test('GET filters by ?status= (single value)', async () => {
+  const { app, seed } = await makeTestApp({ seedProjectDefaults: true });
+  // Status is set via frontmatter.status on create, then promoted to a column.
+  await app.request(path, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: 'work_item', title: 'TodoDoc', frontmatter: { status: 'todo' } }),
+  });
+  await app.request(path, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: 'work_item', title: 'BacklogDoc', frontmatter: { status: 'backlog' } }),
+  });
+  const res = await app.request(`${path}?status=todo`, { headers: { Cookie: seed.sessionCookie } });
+  const body = await res.json();
+  expect(body.data).toHaveLength(1);
+  expect(body.data[0].title).toBe('TodoDoc');
+});
+
+test('GET filters by ?status= (multiple values via repeat)', async () => {
+  const { app, seed } = await makeTestApp({ seedProjectDefaults: true });
+  for (const [t, s] of [['T', 'todo'], ['B', 'backlog'], ['D', 'done']] as const) {
+    await app.request(path, {
+      method: 'POST',
+      headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'work_item', title: t, frontmatter: { status: s } }),
+    });
+  }
+  const res = await app.request(`${path}?status=todo&status=done`, { headers: { Cookie: seed.sessionCookie } });
+  const body = await res.json();
+  expect(body.data).toHaveLength(2);
+  const titles = body.data.map((d: { title: string }) => d.title).sort();
+  expect(titles).toEqual(['D', 'T']);
+});
+
+test('GET filters by ?updated_since=', async () => {
+  const { app, seed } = await makeTestApp();
+  await app.request(path, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: 'work_item', title: 'Old' }),
+  });
+  // Future timestamp filters everything out
+  const future = new Date(Date.now() + 60_000).toISOString();
+  const res = await app.request(`${path}?updated_since=${future}`, { headers: { Cookie: seed.sessionCookie } });
+  expect((await res.json()).data).toHaveLength(0);
+});
+
+test('GET filters by ?assignee= against frontmatter', async () => {
+  const { app, seed } = await makeTestApp();
+  await app.request(path, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: 'work_item', title: 'Mine', frontmatter: { assignee: 'me' } }),
+  });
+  await app.request(path, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: 'work_item', title: 'Theirs', frontmatter: { assignee: 'them' } }),
+  });
+  const res = await app.request(`${path}?assignee=me`, { headers: { Cookie: seed.sessionCookie } });
+  const body = await res.json();
+  expect(body.data).toHaveLength(1);
+  expect(body.data[0].title).toBe('Mine');
 });
 
 test('GET 422 INVALID_FILTER on bad operator', async () => {

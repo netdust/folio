@@ -12,3 +12,8 @@ dist
 coverage
 .superpowers/
 folio.tar.gz
+
+# Playwright
+playwright-report/
+test-results/
+.playwright/

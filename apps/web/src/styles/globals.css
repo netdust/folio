@@ -1,5 +1,6 @@
 @import './fonts.css';
 @import './tokens.css';
+@import './editor.css';
 
 @tailwind base;
 @tailwind components;
@@ -23,7 +24,6 @@
   *:focus-visible {
     outline: none;
     box-shadow: var(--ring);
-    border-radius: var(--radius-sm);
   }
 
   html {
@@ -41,5 +41,37 @@
 
   code, .mono, [data-slug] {
     font-family: var(--font-mono);
+  }
+}
+
+@layer components {
+  .input-focus:focus-visible {
+    box-shadow: none;
+    border-color: var(--color-fg-3);
+    background-color: var(--color-card);
+  }
+
+  /* Subtle scrollbars that blend with the content surface.
+     Applied via the .folio-scroll utility on any scrollable container. */
+  .folio-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-border-light) transparent;
+  }
+  .folio-scroll::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  .folio-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .folio-scroll::-webkit-scrollbar-thumb {
+    background: var(--color-border-light);
+    border-radius: 4px;
+  }
+  .folio-scroll::-webkit-scrollbar-thumb:hover {
+    background: var(--color-fg-3);
+  }
+  .folio-scroll::-webkit-scrollbar-corner {
+    background: transparent;
   }
 }

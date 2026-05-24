@@ -15,6 +15,27 @@
       "when": 1778529373369,
       "tag": "0001_illegal_lilith",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1778581814102,
+      "tag": "0002_fluffy_stephen_strange",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1779619427009,
+      "tag": "0003_phase_2a_tables",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1779628426835,
+      "tag": "0004_phase_2b_column_state",
+      "breakpoints": true
     }
   ]
 }

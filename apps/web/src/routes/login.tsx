@@ -1,60 +1,64 @@
-import { useMutation } from '@tanstack/react-query';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
+import { Loader2, Mail, Lock } from 'lucide-react';
+import type { FormEvent } from 'react';
 import { useState } from 'react';
-import { api, ApiError } from '../lib/api.ts';
+import { ApiError } from '../lib/api/client.ts';
+import { useLogin, useMagicLinkRequest } from '../lib/api/auth.ts';
+import { Icon } from '../components/ui/icon.tsx';
+import { Tabs } from '../components/ui/tabs.tsx';
+import { SignupForm } from '../components/onboarding/signup-form.tsx';
+
+type Mode = 'password' | 'magic' | 'signup';
 
 export const Route = createFileRoute('/login')({
   component: LoginPage,
 });
 
 function LoginPage() {
-  const [mode, setMode] = useState<'password' | 'magic'>('password');
+  const [mode, setMode] = useState<Mode>('password');
+  const [sharedEmail, setSharedEmail] = useState('');
   return (
     <section className="mx-auto max-w-md">
       <h1 className="text-3xl font-medium tracking-tight">Sign in</h1>
-      <div className="mt-8 flex gap-2 text-sm">
-        <button
-          type="button"
-          onClick={() => setMode('password')}
-          className={`rounded-sm px-3 py-1.5 ${
-            mode === 'password' ? 'bg-card text-fg' : 'text-fg-2 hover:bg-card'
-          }`}
-        >
-          Password
-        </button>
-        <button
-          type="button"
-          onClick={() => setMode('magic')}
-          className={`rounded-sm px-3 py-1.5 ${
-            mode === 'magic' ? 'bg-card text-fg' : 'text-fg-2 hover:bg-card'
-          }`}
-        >
-          Magic link
-        </button>
+      <div className="mt-8">
+        <Tabs
+          value={mode}
+          onChange={setMode}
+          items={[
+            { value: 'password', label: 'Password' },
+            { value: 'magic', label: 'Magic link' },
+            { value: 'signup', label: 'Sign up' },
+          ]}
+        />
       </div>
-      <div className="mt-6">{mode === 'password' ? <PasswordForm /> : <MagicForm />}</div>
+      <div className="mt-6">
+        {mode === 'password' ? <PasswordForm initialEmail={sharedEmail} onEmailChange={setSharedEmail} /> : null}
+        {mode === 'magic' ? <MagicForm initialEmail={sharedEmail} onEmailChange={setSharedEmail} /> : null}
+        {mode === 'signup' ? <SignupForm initialEmail={sharedEmail} onEmailChange={setSharedEmail} /> : null}
+      </div>
     </section>
   );
 }
 
-function PasswordForm() {
+function PasswordForm({ initialEmail, onEmailChange }: { initialEmail: string; onEmailChange: (v: string) => void }) {
   const navigate = useNavigate();
-  const [email, setEmail] = useState('');
+  const [email, setEmail] = useState(initialEmail);
   const [password, setPassword] = useState('');
-  const m = useMutation({
-    mutationFn: () => api.post('/api/auth/login', { email, password }),
-    onSuccess: () => navigate({ to: '/' }),
-  });
+  const m = useLogin();
+  const onSubmit = (e: FormEvent) => {
+    e.preventDefault();
+    m.mutate({ email, password }, { onSuccess: () => navigate({ to: '/' }) });
+  };
   return (
-    <div className="space-y-4">
-      <Field label="Email" type="email" value={email} onChange={setEmail} />
-      <Field label="Password" type="password" value={password} onChange={setPassword} />
+    <form className="space-y-4" onSubmit={onSubmit}>
+      <FieldWithIcon icon={Mail} label="Email" type="email" value={email} onChange={(v) => { setEmail(v); onEmailChange(v); }} />
+      <FieldWithIcon icon={Lock} label="Password" type="password" value={password} onChange={setPassword} />
       <button
-        type="button"
-        onClick={() => m.mutate()}
-        disabled={m.isPending}
-        className="w-full rounded-pill bg-primary px-4 py-2.5 text-sm font-medium text-primary-fg hover:opacity-90 transition-opacity duration-fast disabled:opacity-50"
+        type="submit"
+        disabled={m.isPending || !email || !password}
+        className="inline-flex w-full items-center justify-center gap-2 rounded-pill bg-primary px-4 py-2.5 text-sm font-medium text-primary-fg hover:opacity-90 transition-opacity duration-fast disabled:opacity-50"
       >
+        {m.isPending ? <Icon icon={Loader2} size={14} className="animate-spin" /> : null}
         {m.isPending ? 'Signing in…' : 'Sign in'}
       </button>
       {m.error ? (
@@ -62,24 +66,26 @@ function PasswordForm() {
           {m.error instanceof ApiError ? 'Invalid credentials.' : 'Something went wrong.'}
         </p>
       ) : null}
-    </div>
+    </form>
   );
 }
 
-function MagicForm() {
-  const [email, setEmail] = useState('');
-  const m = useMutation({
-    mutationFn: () => api.post('/api/auth/magic/request', { email }),
-  });
+function MagicForm({ initialEmail, onEmailChange }: { initialEmail: string; onEmailChange: (v: string) => void }) {
+  const [email, setEmail] = useState(initialEmail);
+  const m = useMagicLinkRequest();
+  const onSubmit = (e: FormEvent) => {
+    e.preventDefault();
+    m.mutate({ email });
+  };
   return (
-    <div className="space-y-4">
-      <Field label="Email" type="email" value={email} onChange={setEmail} />
+    <form className="space-y-4" onSubmit={onSubmit}>
+      <FieldWithIcon icon={Mail} label="Email" type="email" value={email} onChange={(v) => { setEmail(v); onEmailChange(v); }} />
       <button
-        type="button"
-        onClick={() => m.mutate()}
-        disabled={m.isPending}
-        className="w-full rounded-pill bg-primary px-4 py-2.5 text-sm font-medium text-primary-fg hover:opacity-90 transition-opacity duration-fast disabled:opacity-50"
+        type="submit"
+        disabled={m.isPending || !email}
+        className="inline-flex w-full items-center justify-center gap-2 rounded-pill bg-primary px-4 py-2.5 text-sm font-medium text-primary-fg hover:opacity-90 transition-opacity duration-fast disabled:opacity-50"
       >
+        {m.isPending ? <Icon icon={Loader2} size={14} className="animate-spin" /> : null}
         {m.isPending ? 'Sending…' : 'Email me a link'}
       </button>
       {m.isSuccess ? (
@@ -87,11 +93,12 @@ function MagicForm() {
           Check your inbox. In dev, the link is printed to the server console.
         </p>
       ) : null}
-    </div>
+    </form>
   );
 }
 
-function Field(props: {
+function FieldWithIcon(props: {
+  icon: typeof Mail;
   label: string;
   type: string;
   value: string;
@@ -99,7 +106,8 @@ function Field(props: {
 }) {
   return (
     <label className="block">
-      <span className="block text-xs font-semibold uppercase tracking-wide text-fg-3">
+      <span className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-fg-3">
+        <Icon icon={props.icon} size={14} />
         {props.label}
       </span>
       <input

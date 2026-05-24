@@ -1,0 +1,151 @@
+/* Milkdown overrides — drives all editor styling via design-system tokens.
+   The .folio-milkdown wrapper scopes these so they don't leak. */
+
+.folio-milkdown .milkdown {
+  background: transparent;
+  color: var(--color-fg);
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.65;
+}
+
+.folio-milkdown .milkdown .ProseMirror {
+  outline: none;
+  min-height: 200px;
+  padding: 0;
+}
+
+.folio-milkdown .milkdown .ProseMirror h1 {
+  font-size: 22px;
+  font-weight: 600;
+  margin: 1.2em 0 0.4em;
+  letter-spacing: -0.01em;
+}
+.folio-milkdown .milkdown .ProseMirror h2 {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 1em 0 0.3em;
+}
+.folio-milkdown .milkdown .ProseMirror h3 {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0.9em 0 0.25em;
+  color: var(--color-fg-2);
+}
+
+.folio-milkdown .milkdown .ProseMirror p {
+  margin: 0.5em 0;
+}
+
+.folio-milkdown .milkdown .ProseMirror a {
+  color: var(--color-primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.folio-milkdown .milkdown .ProseMirror code {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  background: var(--color-card);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+.folio-milkdown .milkdown .ProseMirror pre {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  background: var(--color-card);
+  padding: 12px 14px;
+  border-radius: 6px;
+  overflow-x: auto;
+}
+.folio-milkdown .milkdown .ProseMirror pre code {
+  background: transparent;
+  padding: 0;
+}
+
+.folio-milkdown .milkdown .ProseMirror blockquote {
+  border-left: 2px solid var(--color-border-light);
+  padding-left: 12px;
+  color: var(--color-fg-2);
+  margin: 0.5em 0;
+}
+
+.folio-milkdown .milkdown .ProseMirror ul,
+.folio-milkdown .milkdown .ProseMirror ol {
+  padding-left: 24px;
+}
+
+.folio-milkdown .milkdown .ProseMirror li {
+  margin: 0.2em 0;
+}
+
+.folio-milkdown .milkdown .ProseMirror table {
+  border-collapse: collapse;
+  margin: 0.5em 0;
+}
+.folio-milkdown .milkdown .ProseMirror th,
+.folio-milkdown .milkdown .ProseMirror td {
+  border: 1px solid var(--color-border-light);
+  padding: 6px 8px;
+  font-size: 14px;
+}
+.folio-milkdown .milkdown .ProseMirror th {
+  background: var(--color-card);
+  font-weight: 600;
+}
+
+.folio-milkdown .milkdown .ProseMirror ::selection {
+  background: var(--color-primary);
+  color: var(--color-primary-fg);
+}
+
+/* Task list items — Milkdown emits <li data-item-type="task" data-checked="…">
+   with no built-in checkbox UI. Render a checkbox via ::before/::after that
+   reflects data-checked. Clicking the checkbox is NOT yet wired to toggle
+   the underlying markdown — users toggle via Raw MD until Phase 3 lands
+   editor-level interactivity. Cursor stays text so the row is editable. */
+.folio-milkdown .milkdown .ProseMirror li[data-item-type="task"] {
+  list-style: none;
+  position: relative;
+  padding-left: 1.5em;
+}
+.folio-milkdown .milkdown .ProseMirror li[data-item-type="task"]::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0.45em;
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid var(--color-fg-3);
+  border-radius: 3px;
+  background: var(--color-shell);
+  transition: background var(--duration-fast) var(--ease-default),
+              border-color var(--duration-fast) var(--ease-default);
+}
+.folio-milkdown .milkdown .ProseMirror li[data-item-type="task"][data-checked="true"]::before {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+}
+.folio-milkdown .milkdown .ProseMirror li[data-item-type="task"][data-checked="true"]::after {
+  content: '';
+  position: absolute;
+  left: 3px;
+  top: 0.7em;
+  width: 8px;
+  height: 4px;
+  border-left: 1.5px solid var(--color-primary-fg);
+  border-bottom: 1.5px solid var(--color-primary-fg);
+  transform: rotate(-45deg);
+}
+.folio-milkdown .milkdown .ProseMirror li[data-item-type="task"][data-checked="true"] > p {
+  color: var(--color-fg-3);
+  text-decoration: line-through;
+}
+
+/* Body editor focus: just a hairline top border, no rounded corners. */
+.folio-milkdown .milkdown .ProseMirror:focus-visible {
+  outline: none;
+  box-shadow: inset 0 1px 0 0 var(--color-fg-3);
+  border-radius: 0;
+}

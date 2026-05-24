@@ -1,4 +1,4 @@
-import type { ButtonHTMLAttributes, ReactNode } from 'react';
+import { forwardRef, type ButtonHTMLAttributes, type ReactNode } from 'react';
 import { cn } from './cn.ts';
 
 type Size = 'sm' | 'md' | 'lg';
@@ -16,16 +16,16 @@ const sizeClasses: Record<Size, string> = {
   lg: 'h-10 w-10 rounded-md',
 };
 
-export function IconButton({
-  size = 'md',
-  active = false,
-  label,
-  className,
-  children,
-  ...rest
-}: IconButtonProps) {
+// forwardRef is required so Radix `<PopoverTrigger asChild>` can attach its
+// internal ref. Without it, Floating UI never measures the trigger and the
+// popover stays at its offscreen default position even though it's "open".
+export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(function IconButton(
+  { size = 'md', active = false, label, className, children, ...rest },
+  ref,
+) {
   return (
     <button
+      ref={ref}
       {...rest}
       aria-label={label}
       title={label}
@@ -41,4 +41,4 @@ export function IconButton({
       {children}
     </button>
   );
-}
+});

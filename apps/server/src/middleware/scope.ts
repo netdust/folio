@@ -1,8 +1,8 @@
 import type { Context, MiddlewareHandler } from 'hono';
 import { and, eq } from 'drizzle-orm';
 import { db } from '../db/client.ts';
-import { memberships, projects, workspaces } from '../db/schema.ts';
-import type { Workspace, Project } from '../db/schema.ts';
+import { memberships, projects, tables, workspaces } from '../db/schema.ts';
+import type { Project, TableEntity, Workspace } from '../db/schema.ts';
 import type { AuthContext } from './auth.ts';
 import { HTTPError } from '../lib/http.ts';
 
@@ -12,6 +12,7 @@ export interface ScopeContext {
   Variables: {
     workspace?: Workspace;
     project?: Project;
+    table?: TableEntity;
     role?: Role;
   };
 }
@@ -46,6 +47,34 @@ export const resolveProject: MiddlewareHandler<AuthContext & ScopeContext> = asy
   });
   if (!p) throw new HTTPError('PROJECT_NOT_FOUND', `project "${pslug}" not found`, 404);
   c.set('project', p);
+
+  // Always look up the project's default "Work Items" table and attach it.
+  // On /p/:pslug/* legacy routes, this is the only table the handlers can see.
+  // On /p/:pslug/t/:tslug/* explicit routes, resolveTable runs next and
+  // overwrites this with the explicit table. (Parent middleware in Hono does
+  // not see child-router URL params, so we can't conditionally skip based on
+  // :tslug — the query runs every request either way.)
+  // Soft-fail: a project that pre-dates the default-table backfill (or had its
+  // only table deleted) simply has no table attached; routes that require one
+  // will throw at getTable(c).
+  const defaultTable = await db.query.tables.findFirst({
+    where: and(eq(tables.projectId, p.id), eq(tables.slug, 'work-items')),
+  });
+  if (defaultTable) c.set('table', defaultTable);
+
+  return next();
+};
+
+export const resolveTable: MiddlewareHandler<AuthContext & ScopeContext> = async (c, next) => {
+  const p = c.get('project');
+  if (!p) throw new HTTPError('PROJECT_NOT_FOUND', 'resolveProject must run first', 500);
+  const tslug = c.req.param('tslug');
+  if (!tslug) throw new HTTPError('TABLE_NOT_FOUND', 'missing :tslug', 404);
+  const t = await db.query.tables.findFirst({
+    where: and(eq(tables.projectId, p.id), eq(tables.slug, tslug)),
+  });
+  if (!t) throw new HTTPError('TABLE_NOT_FOUND', `table "${tslug}" not found`, 404);
+  c.set('table', t);
   return next();
 };
 
@@ -59,6 +88,12 @@ export function getProject(c: Context<AuthContext & ScopeContext>): Project {
   const p = c.get('project');
   if (!p) throw new Error('project not attached');
   return p;
+}
+
+export function getTable(c: Context<AuthContext & ScopeContext>): TableEntity {
+  const t = c.get('table');
+  if (!t) throw new Error('table not attached');
+  return t;
 }
 
 export function getRole(c: Context<AuthContext & ScopeContext>): Role {

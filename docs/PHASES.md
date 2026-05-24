@@ -1,8 +1,10 @@
 # Folio — Phases
 
-Six phases to v1. Each is a focused chunk. Check tasks off as you complete them. When a phase is done, commit `phase-N: complete` and move on.
+Eight phases to v1. Each is a focused chunk. Check tasks off as you complete them. When a phase is done, commit `phase-N: complete` and move on.
 
 For full context on any decision: `@docs/FOLIO-BRIEFING.md`. For the operating manual: `@../CLAUDE.md`.
+
+> **Reading guide (2026-05-24 revision).** This doc was reorganized so the originally-locked **Phase 2 (Agents)** and **Phase 3 (AI in UI + Agent runner)** stay the spine of v1 — those are Folio's moat and shipping them unchanged is the goal. New phases (1.5/1.6/1.7/1.8/4/5/6) fit *around* the spine, not in place of it. The 0/0.5/1 foundation is shipped; 1.5/1.6/1.7/1.8 polish the operational UI to "good enough to use"; 2/3 deliver the agent platform; 4/5 close the loop with the customer's website; 6/7 polish; 8 ships.
 
 ---
 
@@ -100,11 +102,11 @@ For full context on any decision: `@docs/FOLIO-BRIEFING.md`. For the operating m
 
 ---
 
----
-
 ## Phase 1 — Core CRUD (Week 2)
 
 **Goal:** Create, read, update, delete documents (work items + pages). List view with filters and kanban view with drag-drop work. Inline editing functions. Body editor (Milkdown) and raw-MD toggle (CodeMirror) both work.
+
+> **Status (2026-05-12):** Backend shipped 2026-05-11. Server normalization shipped 2026-05-12. Phase 1 frontend (Tasks 5-30 of `docs/superpowers/plans/2026-05-11-phase-1-frontend.md`) shipped under branch `phase-1/frontend`. UX polish (the original "Phase 1.5 UX polish" thread — separate from the Time-aware views thread, now Phase 1.8 below) shipped under branch `phase-1.5/ux-polish` — Lucide icons, skeletons, primary create CTAs, signup tab, dot pills, Search via command-palette bus. 125 frontend tests pass + 1 jsdom-skipped (rich-body initial render). Acceptance is via the 15-scenario manual QA pass in `apps/web/tests/manual-qa-phase-1.md` plus an 11-screenshot visual sign-off against the canonical mockups.
 
 ### Documents API
 
@@ -125,51 +127,203 @@ For full context on any decision: `@docs/FOLIO-BRIEFING.md`. For the operating m
 
 ### Frontend — list view
 
-- [ ] `components/views/list-view.tsx`: virtualized table, configurable columns
-- [ ] Display fields: title, status, plus frontmatter keys from view's `displayFields`
-- [ ] Inline edit: click title → text input; click status → dropdown
-- [ ] Frontmatter cell editors dispatch to `field-renderer.tsx` based on inferred/pinned type
-- [ ] Sort by clicking column header
-- [ ] Filter chips at the top: "Status is...", "Priority is..." (add via "+ Filter" button)
+- [x] `components/views/list-view.tsx`: virtualized table, configurable columns *(flat row render — virtualization deferred to Phase 7; spec §2 locked decision)*
+- [x] Display fields: title, status, plus frontmatter keys from view's `displayFields` *(title + status + updated_at in v1; full per-view column model lands in Phase 1.5)*
+- [x] Inline edit: click title → text input; click status → dropdown
+- [x] Frontmatter cell editors dispatch to `field-renderer.tsx` based on inferred/pinned type *(field-renderer.tsx lives in the slideover form in v1; lifted into spreadsheet cells in Phase 1.5)*
+- [x] Sort by clicking column header
+- [x] Filter chips at the top: "Status is...", "Priority is..." (add via "+ Filter" button)
 
 ### Frontend — kanban view
 
-- [ ] `components/views/kanban-view.tsx`: columns grouped by status
-- [ ] dnd-kit setup for drag-drop between columns
-- [ ] Optimistic status update on drop, rollback on failure
-- [ ] Card shows title + selected frontmatter fields
+- [x] `components/views/kanban-view.tsx`: columns grouped by status
+- [x] dnd-kit setup for drag-drop between columns
+- [x] Optimistic status update on drop, rollback on failure
+- [x] Card shows title + selected frontmatter fields *(priority + due_date chips in v1)*
 
 ### Frontend — editor & slideover
 
-- [ ] `components/slideover.tsx`: right-side panel, animates, URL-driven open state
-- [ ] Clicking a work item in any view opens the slideover for that document
-- [ ] Frontmatter fields render as labeled inputs above the body editor
-- [ ] Milkdown body editor with markdown plugins (gfm, math optional)
-- [ ] CodeMirror "raw MD" toggle: switches the whole document to raw mode
-- [ ] Round-trip: edit in raw → switch to form → all fields preserved correctly
+- [x] `components/slideover.tsx`: right-side panel, animates, URL-driven open state *(at `components/slideover/document-slideover.tsx`, URL via `?doc=<slug>`)*
+- [x] Clicking a work item in any view opens the slideover for that document
+- [x] Frontmatter fields render as labeled inputs above the body editor
+- [x] Milkdown body editor with markdown plugins (gfm, math optional) *(commonmark + gfm + history + listener + clipboard; math deferred)*
+- [x] CodeMirror "raw MD" toggle: switches the whole document to raw mode *(rich ↔ raw toggle; frontmatter form stays visible across modes per spec §5.6)*
+- [x] Round-trip: edit in raw → switch to form → all fields preserved correctly *(component-level test in `apps/web/src/components/slideover/__roundtrip__/round-trip.test.tsx`; manual QA scenario #8 is the byte-level gate)*
 
 ### Pages (wiki)
 
-- [ ] Pages live under a "Wiki" tab in the project nav
-- [ ] Tree view by `parent_id`
-- [ ] Same editor as work items (Milkdown + raw toggle)
-- [ ] Pages don't have status; their UI hides the status field
+- [x] Pages live under a "Wiki" tab in the project nav
+- [x] Tree view by `parent_id` *(plus drag-to-reparent with cycle guard)*
+- [x] Same editor as work items (Milkdown + raw toggle)
+- [x] Pages don't have status; their UI hides the status field
 
 ### Phase 1 acceptance
 
-- [ ] Create / edit / delete work items via UI works
-- [ ] Create / edit / delete pages via UI works
-- [ ] List view with filters + sort works
-- [ ] Kanban view with drag-drop works
-- [ ] Raw MD toggle preserves all data
-- [ ] All edits round-trip via raw MD export
-- [ ] Commit: `phase-1: complete`
+- [x] Create / edit / delete work items via UI works
+- [x] Create / edit / delete pages via UI works
+- [x] List view with filters + sort works
+- [x] Kanban view with drag-drop works
+- [x] Raw MD toggle preserves all data
+- [x] All edits round-trip via raw MD export
+- [x] Commit: `phase-1: complete`
 
 ---
 
-## Phase 2 — Agents (Week 3)
+## Phase 1.5 — Tables + Spreadsheet UI (Week 3) — SHIPPED 2026-05-24
+
+**Goal:** Promote tables from "implicit single bucket per project" to a first-class concept. Replace the 3-column list with a real columnar spreadsheet — per-table fields render as columns, every cell is the right editor for its field type, columns are reorder/show/hide-able and their state persists per view. Foundation for Phase 1.6 (saved-views nesting) and Phase 1.7 (CRM polish).
+
+> **Status (2026-05-24):** Shipped on `phase-1.5/ux-polish` branch. 21 subagent-driven tasks across two sub-phases (originally branded "Phase 2A / 2B" before the 2026-05-24 reorg that put Agents back at Phase 2 and renamed this slot to 1.5). Plans:
+> - `docs/superpowers/plans/2026-05-24-phase-2a-tables-foundation.md` (now Phase 1.5a)
+> - `docs/superpowers/plans/2026-05-24-phase-2b-spreadsheet-table-ui.md` (now Phase 1.5b)
+>
+> Server: 81 → 112 tests. Web: 134 → 154 tests. Both suites green.
+
+### Tables foundation (Phase 1.5a)
+
+- [x] New `tables` table: every project owns ≥1 table; auto-created `work-items` default per project
+- [x] `tableId` FKs on `statuses`, `fields`, `views`, `documents` (nullable on documents — pages have null)
+- [x] Migration `0003_phase_2a_tables.sql` backfills existing data via SQLite table-rebuild idiom
+- [x] `resolveTable` middleware reads `:tslug` from URL; `resolveProject` auto-attaches the default `work-items` table when no `:tslug` is present (backward-compat for legacy `/p/:pslug/...` routes)
+- [x] New mounts: `/api/v1/w/:ws/p/:p/t/:tslug/{documents,statuses,fields,views}`
+- [x] `tables` CRUD route at `/api/v1/w/:ws/p/:p/tables` — slug immutable after create
+
+### Spreadsheet table UI (Phase 1.5b)
+
+- [x] New `currency` field type — schema enum + SQL CHECK constraint + ISO-4217 code in `options[0]`
+- [x] `views.columnOrder` JSON column (`string[] | null`) — per-view column ordering
+- [x] Pure column helpers: `mergeColumns(fields, view)`, `applyColumnOrder(cols, order)`, `effectiveVisibleKeys(cols, view)`
+- [x] Built-in columns (title, status, updated_at) + one column per pinned `fields` row
+- [x] `TableView` replaces `ListView` on the work-items route
+- [x] `TableHeader` with sort (built-ins only) + column-visibility picker + drag-reorder via `@dnd-kit/sortable`
+- [x] `TableRow` matches header grid via shared per-column-type fixed widths (Title 280, Status 140, currency/number 120, date 140, etc.)
+- [x] Horizontal scroll with sticky first column when columns overflow viewport
+- [x] Subtle scrollbar styling (`.folio-scroll` utility) on both vertical (MainFrame) and horizontal (table) scrollers
+- [x] Currency cell renderer via `Intl.NumberFormat` — right-aligned, formatter cached per ISO code
+- [x] Click-to-edit date cells (no permanent dark border)
+- [x] Multi-select "add" affordance is a `+` icon popover, not a bordered native `<select>`
+- [x] Slug regenerates from new title when slug looks auto-derived from old title (`untitled` → `fix-login-bug`)
+- [x] Demo seed registers 4 standard fields per project (priority/assignee/labels/due_date) + widens the default view's `visibleFields`
+- [x] Commit: `phase-1.5: complete` *(tip is `4a7942d` + subsequent polish commits; the explicit "complete" marker hasn't been written, but the phase's acceptance is met)*
+
+### Phase 1.5 acceptance
+
+- [x] Documents create / edit / delete still work end-to-end (no Phase 1 regression)
+- [x] Tables can be created beyond the default `work-items` per project
+- [x] Per-table fields render as spreadsheet columns; currency/date/select/multi-select all editable inline
+- [x] Column visibility + order persist to the active view via PATCH
+- [x] Manual-qa Playwright e2e: 13 / 13 green; click-through: 11 / 11 green
+- [x] Server suite: 112 / 112; web suite: 154 / 154
+
+---
+
+## Phase 1.6 — Saved views in rail (Week 3, second half) — NEXT
+
+**Goal:** Saved views surface as nested children under their table in the left rail (Linear / NocoDB style). Clicking a view navigates to `/w/.../t/:tslug?view=:vslug` and applies the view's filter + visibleFields + columnOrder. A `+` action saves the current filter / column state as a new view.
+
+### Rail
+
+- [ ] Rail shows `Project → ⚏ Work Items → views[]` with expandable tree (uses existing TanStack Router + the persisted-expand-state pattern from the wiki tree)
+- [ ] Each view row has the view's name + a subtle icon hinting at render mode (list = lines, kanban = columns)
+- [ ] `+` button under each table opens "New view" sheet: pick a name, the view captures the current URL filter/sort/columns
+- [ ] Click view → navigate to `/w/.../t/:tslug?view=:vslug` (preserve any open `doc=` param)
+
+### TableView wiring
+
+- [ ] `TableView` reads `?view=` from URL, calls `useView(wslug, pslug, vslug)` (new hook on `lib/api/views.ts`)
+- [ ] Active view's `filters` translate into the URL filter params on first navigation (so a user can edit + save back)
+- [ ] "Edit this view" affordance in the header opens a sheet to PATCH name / filters / visibleFields / columnOrder
+- [ ] Default view is auto-selected when no `?view=` is in URL — preserves Phase 1.5 behavior
+
+### Phase 1.6 acceptance
+
+- [ ] Three views can coexist on one table; switching between them updates the spreadsheet without page reload
+- [ ] Creating a view from "current state" captures filters + columns + sort accurately
+- [ ] Editing a view's filter via the sheet round-trips through the URL params correctly
+- [ ] Existing single-view tests still green
+- [ ] Commit: `phase-1.6: complete`
+
+---
+
+## Phase 1.7 — Lightweight CRM polish (Half-week)
+
+**Goal:** Folio becomes usable as a follow-up CRM without adding automation. Three frontmatter fields are surfaced as first-class spreadsheet + slideover affordances; an activity log panel renders inside the slideover from the existing `events` table; playbook pages can be linked from a stage. Use case: agency follow-up workflow — "where are we / what's next / when's it due / what's the playbook for this stage."
+
+### First-class follow-up fields
+
+- [ ] `next_action: string` — surfaced as a column on work-item tables, editable inline (click-to-edit InlineEdit)
+- [ ] `next_action_due: date` — date cell type already exists; treated specially as "due soon / overdue" via the same engine that powers Phase 1.8's "This Week" dashboard
+- [ ] `next_action_owner: string | user_ref` — same renderer as `assignee`
+- [ ] Slideover header shows these three above the standard frontmatter form when present
+- [ ] No new field types — these are conventional keys with built-in UI affordances
+
+### `last_touched_at` distinct from `updated_at`
+
+- [ ] New `documents.last_touched_at` column (nullable, timestamp_ms)
+- [ ] Bumped only by an explicit "Log activity" action (Phase 1.7 ships a button in the slideover that does this + adds an entry to the activity log section)
+- [ ] `updated_at` continues to fire on every edit
+- [ ] Filterable in the URL via `?stale_for=14d` — server-side WHERE clause on `last_touched_at`
+
+### Activity log panel
+
+- [ ] Slideover gets a new collapsible "Activity" section below the body editor
+- [ ] Renders rows from `events` table filtered to `documentId = current.id`, newest first
+- [ ] Each row shows actor + kind + relative time; clickable to expand JSON payload
+- [ ] "Log activity" button appends an `activity.logged` event with a free-text note + bumps `last_touched_at`
+
+### Playbook linking
+
+- [ ] Convention: a wiki page whose frontmatter contains `playbook_for: <status_key>` is auto-linked from that status's slideover view
+- [ ] When a work item is at status `proposal_sent` and a page in the same project has `playbook_for: proposal_sent`, the slideover header shows a "Playbook: <page title>" link
+
+### Phase 1.7 acceptance
+
+- [ ] Setting `next_action_due` on three work items shows them sorted in a "due soon" view I can save
+- [ ] Logging an activity bumps `last_touched_at` AND appends an event row
+- [ ] A page with `playbook_for: proposal_sent` shows in the slideover for any work item at that status
+- [ ] Commit: `phase-1.7: complete`
+
+---
+
+## Phase 1.8 — Time-aware views (Half-week)
+
+**Goal:** Folio becomes a tool you check on Monday morning. Add a timeline view as a third view type and a "This Week" dashboard surface. Read-only against existing data — no new tables.
+
+> Originally drafted as "Phase 1.5 — Time-aware views"; renamed to 1.8 in the 2026-05-24 reorg so the timeline work doesn't collide with the (separately-shipped) UX-polish + spreadsheet work that ended up at 1.5.
+
+### Timeline view
+
+- [ ] Extend `views.type` to accept `'timeline'` alongside `'list'` and `'kanban'`
+- [ ] `components/views/timeline-view.tsx`: horizontal lanes, configurable day/week/month zoom
+- [ ] Items render from `frontmatter.due_date` (primary) or `frontmatter.start_date`/`end_date` range when both present
+- [ ] Items without a date appear in a collapsible "Unscheduled" tray below the timeline (drag-to-schedule sets `due_date`)
+- [ ] Drag an item horizontally → optimistic `PATCH frontmatter.due_date`; rollback on failure
+- [ ] Group lanes by status (default), assignee, or any frontmatter key — same `groupBy` mechanism as kanban
+- [ ] Auto-seed a third default view per project: **Schedule** — `type: timeline`, filter `type = work_item`, `groupBy: status`
+
+### This Week dashboard
+
+- [ ] New route: `/w/$workspace/this-week` — workspace-scoped, aggregates across all projects in the workspace
+- [ ] Server endpoint: `GET /api/v1/w/:wslug/this-week` returns three buckets — `due_this_week` (due_date within next 7 days), `overdue` (due_date in past, status not done/cancelled), `stale` (no `last_touched_at` update in 14+ days, status not done/cancelled — uses the Phase 1.7 column)
+- [ ] Renders as three stacked sections; each row links to the document slideover
+- [ ] Items show their project icon + name so cross-project context is visible
+- [ ] Empty state per bucket — "Nothing due this week" is a feature, not a void
+
+### Phase 1.8 acceptance
+
+- [ ] Timeline view renders work items by `due_date` and lets you drag-reschedule
+- [ ] Items without dates land in the Unscheduled tray and can be dragged onto the timeline
+- [ ] `/w/$workspace/this-week` shows due, overdue, and stale buckets across all projects
+- [ ] Default `Schedule` view is auto-created with each new project
+- [ ] Commit: `phase-1.8: complete`
+
+---
+
+## Phase 2 — Agents (Week 4)
 
 **Goal:** Folio is usable by AI agents. REST + MCP both work. Tokens have scoped permissions. Every write emits an event on SSE. Documentation lets a new agent integrate in 15 minutes.
+
+> **This is the spine of v1.** The agent-first wedge is what makes Folio defensible. The phases around this one (1.5–1.8, 4–5) all build the surfaces that agents read and write through. Phase 2 turns Folio from "nice markdown PM tool" into "the agent-friendly back-office layer."
 
 ### Tokens
 
@@ -221,11 +375,33 @@ Agents are first-class entities inside Folio, modelled as documents. No new tabl
 - [ ] UI: agent slideover renders `system_prompt` in the body editor (same Milkdown surface as any other document — editing the agent = writing markdown)
 - [ ] UI: inline assignee picker on work items lists both humans (memberships) and agents (documents with `type: 'agent'` in the same project)
 
+### Triggers-as-documents (surface only — scheduler/matcher in Phase 3)
+
+Triggers are documents with `type: 'trigger'`. Same documents table, same export-as-MD story. A trigger points at an agent slug and fires either on a schedule, an event pattern, or both. N triggers per agent. The scheduler that actually fires them lands in Phase 3 with the agent runner.
+
+- [ ] `documents.type` accepts `'trigger'` alongside `'work_item'`, `'page'`, `'agent'`
+- [ ] Trigger frontmatter shape (validated by Zod):
+  - `agent: string` (slug of the agent document this trigger invokes; must exist in the same project)
+  - `schedule: string | null` (cron expression, e.g. `"0 9 * * 1"` for Mondays 9am; null if event-only)
+  - `on_event: string | null` (event kind, e.g. `"document.updated"`; null if schedule-only)
+  - `event_filter: object | null` (mongo-ish filter against the event payload, e.g. `{ "document.status": "Done" }`; only consulted when `on_event` is set)
+  - `payload: object | null` (free-form JSON passed to the agent as input context — agent decides what to do with it)
+  - `enabled: boolean` (default `true`)
+  - `last_fired_at: string | null` (server-managed ISO datetime; never user-editable)
+  - `last_status: 'ok' | 'failed' | null` (server-managed)
+- [ ] At least one of `schedule` or `on_event` must be set — Zod rejects triggers with neither
+- [ ] On trigger create/update: validate `agent` slug exists in project; validate cron expression parses; validate `on_event` is a known event kind
+- [ ] Trigger CRUD uses the same documents endpoints — no new routes
+- [ ] UI: "Triggers" tab in project nav — default view filtered to `type: 'trigger'`, columns show `agent`, `schedule`, `on_event`, `last_fired_at`, `last_status`
+- [ ] UI: trigger slideover renders frontmatter as a form (cron picker, event-kind dropdown, JSON payload editor) above the body — body is a free-form description of what the trigger is for
+- [ ] Exported MD includes triggers under `projects/<pslug>/trigger/<slug>.md` — round-trip preserved
+
 ### Documentation
 
 - [ ] `docs/API.md`: REST reference, generated from route + JSDoc or hand-written
 - [ ] `docs/MCP.md`: tool reference with example invocations
 - [ ] `docs/AGENTS.md`: how the agent-document model works — schema, token minting, delegation rules, the `agent.task.assigned` event contract (the runner that consumes it ships in Phase 3)
+- [ ] `docs/TRIGGERS.md`: how the trigger-document model works — schema, cron + event-pattern semantics, payload contract (the scheduler/matcher that fires them ships in Phase 3)
 - [ ] Update root `README.md` with the agent integration story
 
 ### Phase 2 acceptance
@@ -237,13 +413,17 @@ Agents are first-class entities inside Folio, modelled as documents. No new tabl
 - [ ] Create an agent document via UI; its API token is auto-minted and the agent appears in the work-item assignee picker
 - [ ] Assigning a work item to `agent:<slug>` emits one `agent.task.assigned` event visible on the SSE stream
 - [ ] Deleting an agent revokes its token immediately (subsequent requests with that token fail)
+- [ ] Create a trigger document with a cron schedule pointing at an existing agent; trigger persists and round-trips as MD (scheduler fires in Phase 3)
+- [ ] Create a trigger with an `on_event` pattern + `event_filter`; validation accepts known event kinds and rejects unknown ones
 - [ ] Commit: `phase-2: complete`
 
 ---
 
-## Phase 3 — AI in UI + Agent runner (Week 4)
+## Phase 3 — AI in UI + Agent runner (Week 5)
 
 **Goal:** Slash commands work in the body editor. AI settings UI lets the user configure a provider and validate the key. Streaming responses feel snappy. The Phase 2 agent-document surface gains a runner that actually executes assigned tasks.
+
+> **This is the second spine phase.** Phase 2 builds the surface; Phase 3 makes the surface come to life. Together they are the agent-platform half of Folio's v1.
 
 ### Provider abstraction
 
@@ -283,6 +463,19 @@ Consumes the Phase 2 surface (`type: 'agent'` documents, auto-minted tokens, `ag
 - [ ] No AI key configured → assigning a work item to an agent stays in the assigned state but emits an `agent.task.failed` event with reason `no_ai_key`; UI shows a banner on the work item
 - [ ] Every agent invocation emits an `ai.action` event tagged with `actor_type: 'agent'` and `actor_id: <agent_document_id>`
 
+### Trigger scheduler + event-pattern matcher
+
+Fires the Phase 2 trigger documents. Two firing paths: a cron-driven scheduler for `schedule` triggers, and an event subscriber for `on_event` triggers. Both create a work item assigned to the trigger's `agent`, which then flows through the standard agent-runner path.
+
+- [ ] `lib/trigger-scheduler.ts`: on server boot, load all enabled triggers with non-null `schedule`; run a single in-process cron loop (1-minute tick, SQLite-backed — no Redis)
+- [ ] On schedule fire: create a work item in the trigger's project with `assignee: agent:<trigger.agent>`, title `"Triggered run: <trigger.slug>"`, body containing the trigger's `payload` JSON as a `## Input` section
+- [ ] `lib/trigger-matcher.ts`: subscribes to the events pub/sub; on each event, scan triggers with matching `on_event` kind in the same workspace; apply `event_filter` (same mongo-ish dialect as view filters); fire matching ones
+- [ ] Fired triggers patch their own frontmatter: `last_fired_at = now`, `last_status = 'ok'|'failed'` based on whether the work item was created successfully
+- [ ] Loop prevention: trigger-created work items carry `frontmatter.fired_by: <trigger_slug>`; the event-matcher skips events whose source document already has `fired_by` set (prevents trigger A firing trigger B firing trigger A)
+- [ ] Disabled triggers (`enabled: false`) are loaded but never fire — toggling `enabled` is the off switch
+- [ ] On trigger document delete: removed from the in-memory schedule + subscriber lists in the same transaction
+- [ ] New event kinds: `trigger.fired` (success), `trigger.failed` (e.g. agent doesn't exist, payload invalid)
+
 ### Audit
 
 - [ ] Every AI call emits an `ai.action` event with input/output token counts (no content stored)
@@ -296,17 +489,160 @@ Consumes the Phase 2 surface (`type: 'agent'` documents, auto-minted tokens, `ag
 - [ ] Create an agent with `tools: ['create_document', 'update_document']`, assign a work item to it, see the body patched by the agent within a few seconds
 - [ ] Agent A creates a child work item assigned to agent B; B runs and patches its own work item (one level of delegation works end-to-end)
 - [ ] An agent attempting to delegate past `max_delegation_depth` gets rejected and emits `agent.task.failed` with reason `depth_exceeded`
+- [ ] Create a cron trigger set to `* * * * *`; within ~60 seconds a work item is created and the assigned agent patches its body
+- [ ] Create an event trigger on `document.updated` with filter `{ "document.status": "Done" }`; flipping a work item to Done fires the trigger exactly once
+- [ ] A trigger created by an agent's output does not re-fire indefinitely (loop prevention via `fired_by` works)
 - [ ] Commit: `phase-3: complete`
 
 ---
 
-## Phase 4 — UX Polish (Week 5)
+## Phase 4 — Inbound webhooks (Half-week)
+
+**Goal:** External systems (Statamic contact forms, WordPress FluentForms, webshop checkouts, Stripe/Mollie) POST to a Folio webhook URL and a markdown document is created in the configured table with payload fields mapped to frontmatter. This is the inbound half of the agency back-office loop.
+
+> Plan ready at `docs/superpowers/plans/2026-05-24-phase-4-inbound-webhooks.md`. 7 tasks. Backend only — admin UI for managing webhooks lands in Phase 7.
+
+### Schema + auth
+
+- [ ] New `webhooks` table: `(id, workspace_id, table_id, name, secret, mapping JSON, active, last_fired_at, created_by, created_at)`
+- [ ] Secret-in-URL auth: `POST /api/v1/webhooks/:secret` — the secret IS the auth (no session, no bearer)
+- [ ] `webhooks_secret_idx` unique index
+- [ ] Migration `0005_phase_4_webhooks.sql`
+
+### Mapping engine
+
+- [ ] `lib/payload-mapping.ts`: pure helper resolves `$payload.key.nested` references against the JSON body
+- [ ] Reference syntax: `$payload` = whole payload JSON, `$payload.key.nested` = path walk, literal strings pass through unchanged
+- [ ] Missing paths resolve to empty string; non-string values coerced via `String()`
+- [ ] Shared type `WebhookMapping` in `@folio/shared/webhook-mapping.ts`
+
+### Inbound POST
+
+- [ ] `POST /api/v1/webhooks/:secret` looks up webhook by secret, validates active, parses JSON, resolves mapping
+- [ ] Creates a `work_item` document via the same code path as authenticated POST (slug uniqueness, event emission)
+- [ ] Bumps `webhooks.last_fired_at`
+- [ ] Emits `webhook.fired` event for observability
+- [ ] Returns `202 Accepted` with `{ data: { slug, title } }`
+
+### Authenticated CRUD
+
+- [ ] `GET /api/v1/w/:wslug/webhooks` — list (secret redacted)
+- [ ] `POST /api/v1/w/:wslug/webhooks` — create; returns secret + full URL ONCE
+- [ ] `PATCH /api/v1/w/:wslug/webhooks/:id` — rename / toggle active / edit mapping
+- [ ] `DELETE /api/v1/w/:wslug/webhooks/:id`
+- [ ] Cross-tenant guard: `tableId` must belong to a project in the request workspace
+
+### Phase 4 acceptance
+
+- [ ] Statamic FluentForms POSTs a contact-form submission → Folio creates a `work_item` in the configured "Leads" table with the form fields as frontmatter
+- [ ] Deactivating a webhook makes subsequent POSTs return 403
+- [ ] Rotating a secret = delete + recreate the webhook (no in-place rotation in v1)
+- [ ] Commit: `phase-4: complete`
+
+> **Out of scope for Phase 4:** HMAC signature verification, retry queue, per-webhook rate limiting, admin UI (covered in Phase 7 UX Polish).
+
+---
+
+## Phase 5 — CMS bridge: Statamic (Week 6)
+
+**Goal:** Folio documents publish to a Statamic site. A document with `status: 'published'` in a configured source table syncs to a Statamic collection entry; subsequent edits replicate; unpublishing deletes the remote entry. This is the outbound half of the agency back-office loop.
+
+> Plan ready at `docs/superpowers/plans/2026-05-24-phase-5-statamic-cms-bridge.md`. 10 tasks. WordPress adapter is Phase 5.1 (same architecture, different adapter class) — explicitly out of scope here so we ship one solid adapter end-to-end.
+
+### Schema
+
+- [ ] `sync_targets` table: `(workspace_id, source_table_id, adapter='statamic', base_url, collection_handle, token_encrypted, publish_on_status, mapping JSON, active)`
+- [ ] `sync_log` append-only table for visibility + future retry — `(sync_target_id, document_id, remote_id, operation, status, error)`
+- [ ] Migration `0006_phase_5_sync_targets.sql`
+- [ ] Token libsodium-encrypted at rest (reuse the BYOK crypto helpers)
+
+### Adapter interface + Statamic implementation
+
+- [ ] `lib/adapters/interface.ts`: `CmsAdapter` interface with `createEntry / updateEntry / deleteEntry` — forward-compatible with WP in 5.1
+- [ ] `lib/adapters/statamic.ts`: REST + bearer-token implementation
+  - POST `/api/collections/{handle}/entries`
+  - PATCH `/api/collections/{handle}/entries/{id}`
+  - DELETE same path
+  - Trims trailing slash from baseUrl; throws on non-2xx with body excerpt
+
+### Mapping + sync engine
+
+- [ ] `lib/sync-mapping.ts`: pure helper — `(doc, mapping, publishOnStatus) → AdapterEntry`
+- [ ] Reference syntax: `$title`, `$body`, `$slug`, `$frontmatter.key` — literals pass through
+- [ ] `lib/sync-engine.ts`: per-document, finds matching sync_targets, decides create/update/delete based on prior `sync_log`, calls adapter, writes log row
+- [ ] Sync runs synchronously AFTER the document write transaction commits (failure doesn't roll back the local doc)
+- [ ] Errors recorded in `sync_log.status='error'` — surfaced via UI in Phase 7
+- [ ] Pages (`tableId IS NULL`) are skipped — sync is table-scoped
+
+### Hooks into document writes
+
+- [ ] POST `/documents` calls `syncDocument(db, newDocId)` after commit
+- [ ] PATCH `/documents/:slug` calls `syncDocument(db, existing.id)` after commit (both markdown and JSON branches)
+- [ ] DELETE `/documents/:slug` issues remote delete via the adapter directly (no syncDocument because the local doc is already gone)
+
+### Workspace-scoped CRUD
+
+- [ ] `GET /api/v1/w/:wslug/sync-targets` (token redacted)
+- [ ] `POST /api/v1/w/:wslug/sync-targets` (token encrypted on insert)
+- [ ] `PATCH /api/v1/w/:wslug/sync-targets/:id`
+- [ ] `DELETE /api/v1/w/:wslug/sync-targets/:id`
+- [ ] Adapter enum restricted to `['statamic']` in 5.0 (5.1 adds `'wordpress'`)
+
+### Phase 5 acceptance
+
+- [ ] Configure a sync target pointing at a Statamic site, create a Folio doc with status='published' → Statamic shows the entry within seconds
+- [ ] Edit the doc's title in Folio → Statamic entry updates via PATCH on the same `remote_id`
+- [ ] Change the status to 'draft' → Statamic entry is deleted
+- [ ] Delete the Folio doc → Statamic entry is also deleted (with a `sync_log` row for the delete)
+- [ ] Sync failures (e.g. wrong token) land as `sync_log.status='error'` rows with the response body excerpt
+- [ ] Commit: `phase-5: complete`
+
+> **Phase 5.1 (deferred):** WordPress adapter via REST API (`/wp-json/wp/v2/posts`). Same architecture, different adapter class. Defer until Phase 5.0 has run against a real client site for at least 4 weeks.
+
+---
+
+## Phase 6 — Per-view render modes (Half-week)
+
+**Goal:** Views become first-class render-mode containers. A view stores `renderAs: 'list' | 'kanban' | 'calendar'`; picking a view switches the active render mode for its table. Kanban is no longer a separate sibling tab — it's a render mode like any other. Calendar is a new render mode that consumes `frontmatter.due_date` (same data Phase 1.8 uses).
+
+> Originally branded "Phase 2D" in the May 24 brainstorm; renumbered to Phase 6 so it sits after Agents + integrations as a v1 polish item.
+
+### Schema
+
+- [ ] Extend `views.type` enum to `['list', 'kanban', 'calendar', 'timeline']` (timeline already added in Phase 1.8; kanban moves from being a tab to being a view type)
+- [ ] Migration `0007_phase_6_view_render_modes.sql`
+
+### Routing
+
+- [ ] Remove `/work-items` and `/board` as separate route segments; the project route becomes `/w/:ws/p/:p/t/:tslug?view=:vslug` and the view's `type` decides the renderer
+- [ ] Backward-compat redirect: old `/work-items` and `/board` URLs redirect to the corresponding default view
+- [ ] Wiki stays at `/w/:ws/p/:p/wiki` (pages have no `tableId` and don't participate in render modes)
+
+### Renderers
+
+- [ ] `<ViewRouter>` component picks the renderer based on `view.type`
+- [ ] List → `TableView` (Phase 1.5)
+- [ ] Kanban → `KanbanView` (existing — lifted from `/board` route)
+- [ ] Calendar → new `CalendarView` (month grid; items render on `frontmatter.due_date`)
+- [ ] Timeline → `TimelineView` (Phase 1.8)
+- [ ] Each renderer reads visibleFields / columnOrder / sort from the active view
+
+### Phase 6 acceptance
+
+- [ ] Switching from a list view to a kanban view of the same table preserves filters but changes the layout
+- [ ] Creating a new "Calendar" view via the rail's `+` action lets the user pick which date field drives the calendar
+- [ ] No `/board` route exists anymore (old links redirect); `/work-items` is also gone (redirects to default view)
+- [ ] Commit: `phase-6: complete`
+
+---
+
+## Phase 7 — UX Polish (Week 7)
 
 **Goal:** Hit every UX commitment from FOLIO-BRIEFING.md §11. Playwright covers them end-to-end.
 
 ### Cmd-K palette
 
-- [ ] `components/palette.tsx`: global Cmd-K opens a fuzzy-search palette
+- [ ] `components/palette.tsx`: global Cmd-K opens a fuzzy-search palette *(initial version shipped in Phase 1.5; Phase 7 deepens it)*
 - [ ] `usePaletteCommands()` hook: components register commands
 - [ ] Default registry: workspaces, projects, documents (by title), actions (new work item, switch theme, copy as MD, ...)
 - [ ] Recent surfaces first when query is empty
@@ -334,33 +670,42 @@ Consumes the Phase 2 surface (`type: 'agent'` documents, auto-minted tokens, `ag
 
 ### Copy-as-MD
 
-- [ ] Right-click any row → context menu with "Copy as Markdown"
+- [ ] Right-click any row → context menu with "Copy as Markdown" *(shipped in Phase 1)*
 - [ ] Right-click in a document view → same
 - [ ] `Cmd-Shift-C` on focused row triggers it
 - [ ] Output matches the export format exactly (frontmatter + body)
 
+### Admin UI for integrations
+
+> The Phase 4 (webhooks) + Phase 5 (sync targets) CRUD shipped as API only; Phase 7 wraps them in usable admin screens.
+
+- [ ] `/w/:wslug/settings/webhooks` — list webhooks, create-with-secret-reveal flow, edit mapping
+- [ ] `/w/:wslug/settings/sync` — list sync targets, create flow with adapter dropdown + token field, test-connection button
+- [ ] Both surfaces show `last_fired_at` / `sync_log` excerpt + retry-failed-sync button
+
 ### Theme & polish
 
-- [ ] Dark mode (default) and light mode toggle
+- [ ] Dark mode (default) and light mode toggle *(shipped in 1.5)*
 - [ ] Empty states with helpful copy
 - [ ] Loading skeletons (not spinners) on initial loads
 - [ ] Error boundaries on each route with retry
 
 ### Playwright
 
-- [ ] Install Playwright in `apps/web/tests/e2e/`
+- [ ] Install Playwright in `apps/web/tests/e2e/` *(shipped in Phase 1)*
 - [ ] One e2e test per UX commitment
 - [ ] CI runs Playwright headlessly (later — local for now)
 
-### Phase 4 acceptance
+### Phase 7 acceptance
 
 - [ ] All six UX commitments pass Playwright
 - [ ] Dark mode looks good on every screen
-- [ ] Commit: `phase-4: complete`
+- [ ] Webhook + sync admin screens shipped and tested
+- [ ] Commit: `phase-7: complete`
 
 ---
 
-## Phase 5 — Ship (Week 6)
+## Phase 8 — Ship (Week 8)
 
 **Goal:** Public release. Docs, landing page, one paying customer.
 
@@ -368,8 +713,10 @@ Consumes the Phase 2 surface (`type: 'agent'` documents, auto-minted tokens, `ag
 
 - [ ] `README.md` — what Folio is, install in 60 seconds, screenshot, link to docs
 - [ ] `docs/INSTALL.md` — Docker + binary + Ploi recipes
-- [ ] `docs/API.md` — finalize REST reference
-- [ ] `docs/MCP.md` — finalize MCP reference
+- [ ] `docs/API.md` — finalize REST reference (started in Phase 2)
+- [ ] `docs/MCP.md` — finalize MCP reference (started in Phase 2)
+- [ ] `docs/WEBHOOKS.md` — inbound webhook recipes (Statamic, FluentForms, Stripe)
+- [ ] `docs/CMS-BRIDGE.md` — Statamic adapter recipes; WordPress preview
 - [ ] `docs/CUSTOMIZE.md` — themes, field types, view configs
 
 ### Release pipeline
@@ -388,23 +735,25 @@ Consumes the Phase 2 surface (`type: 'agent'` documents, auto-minted tokens, `ag
 
 - [ ] Simple Statamic or static page at `folio.netdust.be` or similar
 - [ ] Three sections: what it is, who it's for, how to install
-- [ ] Embed a short Loom demo
+- [ ] Position as "the agent-driven back-office for small business websites" — orders + leads + content pipeline + SEO tasks in one self-hostable markdown surface that closes the loop with the customer's website via webhooks + Statamic sync
+- [ ] Embed a short Loom demo showing the website → Folio → AI agent → published-back-to-website loop
 - [ ] Link to GitHub + docs
 
 ### First customer
 
-- [ ] Pick one friendly Netdust client (small team, low risk)
+- [ ] Pick one friendly Netdust client (small team, low risk, already on Statamic)
 - [ ] Free pilot install on their existing Hetzner instance
 - [ ] Onboarding session with them — capture every friction point
+- [ ] Wire up at least one inbound webhook (contact form) and one outbound sync target (blog) to close the loop end-to-end
 - [ ] Address blockers; ship `0.1.1`
 - [ ] Decide pricing for paid installs based on what they were willing to pay
 
-### Phase 5 acceptance
+### Phase 8 acceptance
 
 - [ ] Tagged `0.1.0` release on GitHub
 - [ ] Stefan is using Folio daily for his own work
-- [ ] One non-Stefan user is using Folio in production
-- [ ] Commit: `phase-5: complete`. Ship it.
+- [ ] One non-Stefan user is using Folio in production with at least one webhook + one sync target configured
+- [ ] Commit: `phase-8: complete`. Ship it.
 
 ---
 
@@ -412,14 +761,17 @@ Consumes the Phase 2 surface (`type: 'agent'` documents, auto-minted tokens, `ag
 
 Things to consider for v1.1 onward — *do not build in v1*:
 
+- WordPress CMS bridge adapter (Phase 5.1)
+- Webflow / Sanity / Ghost adapters (Phase 5.2+)
+- HMAC signature verification on webhooks (Phase 4.1)
+- Background queue for sync retries
+- Bidirectional sync (Statamic → Folio)
+- Asset / image upload through the sync bridge
 - Full-text search via sqlite-fts5
 - Vector search via sqlite-vec
 - Postgres adapter
 - Email notifications
 - Per-project ACLs
-- Calendar view
-- Timeline / Gantt view
 - Public document sharing (read-only links)
 - Plugins / extensions API
-- Webhooks (in addition to SSE)
 - Mobile-optimized PWA

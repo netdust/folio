@@ -50,7 +50,9 @@
   --duration-slow:    280ms;
   --ease-default:     cubic-bezier(0.16, 1, 0.3, 1);
 
-  --ring: 0 0 0 2px var(--color-content), 0 0 0 4px var(--color-primary);
+  --ring: 0 0 0 1.5px rgba(0, 0, 0, 0.32);
+
+  --color-nav-active: rgba(0, 0, 0, 0.06);
 }
 
 .dark {
@@ -77,6 +79,10 @@
   --shadow-surface: 0 0 1px rgba(255, 255, 255, 0.10);
   --shadow-card:    0 0 1px rgba(255, 255, 255, 0.08);
   --shadow-popover: 0 8px 24px rgba(0, 0, 0, 0.4), 0 0 1px rgba(255, 255, 255, 0.15);
+
+  --ring: 0 0 0 1.5px rgba(240, 240, 240, 0.28);
+
+  --color-nav-active: rgba(255, 255, 255, 0.10);
 }
 
 @media (prefers-reduced-motion: reduce) {
