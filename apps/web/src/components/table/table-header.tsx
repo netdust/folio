@@ -2,7 +2,7 @@ import { DndContext, PointerSensor, useSensor, useSensors, type DragEndEvent } f
 import { useSortable, SortableContext, horizontalListSortingStrategy, arrayMove } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { ColumnPicker } from './column-picker.tsx';
-import type { Column } from './columns.ts';
+import { TABLE_GRID_TEMPLATE, type Column } from './columns.ts';
 
 export type SortKey = 'title' | 'status' | 'updated_at';
 export type SortDir = 'asc' | 'desc';
@@ -44,7 +44,7 @@ export function TableHeader({
     <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-border-light bg-content px-4 py-1.5">
       <DndContext sensors={sensors} onDragEnd={onDragEnd}>
         <SortableContext items={ids} strategy={horizontalListSortingStrategy}>
-          <div className="grid flex-1 grid-cols-[repeat(auto-fit,minmax(140px,1fr))] gap-3">
+          <div className={`grid flex-1 ${TABLE_GRID_TEMPLATE} gap-3`}>
             {columns.map((c) => (
               <SortableHeaderCell key={c.key} column={c} sort={sort} onSort={onSort} />
             ))}
@@ -92,7 +92,8 @@ function SortableHeaderCell({
       {...attributes}
       {...listeners}
       onClick={onClick}
-      className="inline-flex items-center gap-1 text-left text-[11px] uppercase tracking-wide text-fg-3 hover:text-fg-2"
+      title={sortable ? `Sort by ${column.label} (drag to reorder)` : `Drag to reorder ${column.label}`}
+      className="inline-flex cursor-grab items-center gap-1 text-left text-[11px] uppercase tracking-wide text-fg-3 hover:text-fg-2 active:cursor-grabbing"
     >
       {column.label}
       {sort?.key === column.key ? (

@@ -53,3 +53,6 @@ export function effectiveVisibleKeys(cols: Column[], view: View | null): string[
   const valid = new Set(cols.map((c) => c.key));
   return view.visibleFields.filter((k) => valid.has(k));
 }
+
+/** Tailwind grid template shared between TableHeader and TableRow. Keep them in sync. */
+export const TABLE_GRID_TEMPLATE = 'grid-cols-[repeat(auto-fit,minmax(140px,1fr))]';
