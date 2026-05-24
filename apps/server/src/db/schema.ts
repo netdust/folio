@@ -191,6 +191,7 @@ export const fields = sqliteTable(
       enum: [
         'string', 'text', 'number', 'boolean', 'date', 'datetime',
         'select', 'multi_select', 'user_ref', 'url', 'document_ref',
+        'currency',
       ],
     }).notNull(),
     label: text('label'),
@@ -256,6 +257,7 @@ export const views = sqliteTable('views', {
   sort: text('sort', { mode: 'json' }).$type<unknown>().notNull().default([]),
   groupBy: text('group_by'), // field key for kanban grouping; defaults to status
   visibleFields: text('visible_fields', { mode: 'json' }).$type<string[]>().notNull().default([]),
+  columnOrder: text('column_order', { mode: 'json' }).$type<string[] | null>(),
   order: integer('order').notNull().default(0),
   isDefault: integer('is_default', { mode: 'boolean' }).notNull().default(false),
   createdAt: integer('created_at', { mode: 'timestamp_ms' })

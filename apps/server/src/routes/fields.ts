@@ -15,6 +15,7 @@ const fieldsRoute = new Hono<AuthContext & ScopeContext>();
 const FIELD_TYPES = [
   'string', 'text', 'number', 'boolean', 'date', 'datetime',
   'select', 'multi_select', 'user_ref', 'url', 'document_ref',
+  'currency',
 ] as const;
 
 const baseSchema = z.object({
@@ -26,11 +27,19 @@ const baseSchema = z.object({
 });
 
 function validateOptions(type: string, options: string[] | undefined): void {
-  const needs = type === 'select' || type === 'multi_select';
-  if (needs && (!options || options.length === 0)) {
-    throw new HTTPError('INVALID_BODY', `field type "${type}" requires non-empty options`, 422);
+  if (type === 'select' || type === 'multi_select') {
+    if (!options || options.length === 0) {
+      throw new HTTPError('INVALID_BODY', `field type "${type}" requires non-empty options`, 422);
+    }
+    return;
   }
-  if (!needs && options !== undefined) {
+  if (type === 'currency') {
+    if (!options || options.length !== 1 || !/^[A-Z]{3}$/.test(options[0] ?? '')) {
+      throw new HTTPError('INVALID_BODY', `field type "currency" requires options to be a single ISO-4217 code (e.g. ["EUR"])`, 422);
+    }
+    return;
+  }
+  if (options !== undefined) {
     throw new HTTPError('INVALID_BODY', `field type "${type}" does not allow options`, 422);
   }
 }

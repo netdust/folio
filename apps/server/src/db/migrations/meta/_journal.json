@@ -29,6 +29,13 @@
       "when": 1779619427009,
       "tag": "0003_phase_2a_tables",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1779628426835,
+      "tag": "0004_phase_2b_column_state",
+      "breakpoints": true
     }
   ]
 }

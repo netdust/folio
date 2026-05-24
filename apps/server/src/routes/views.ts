@@ -20,6 +20,7 @@ const baseSchema = z.object({
   sort: z.array(z.object({ key: z.string(), dir: z.enum(['asc', 'desc']) })).optional(),
   groupBy: z.string().nullable().optional(),
   visibleFields: z.array(z.string()).optional(),
+  columnOrder: z.array(z.string()).nullable().optional(),
   order: z.number().int().optional(),
   isDefault: z.boolean().optional(),
 });
@@ -64,6 +65,7 @@ viewsRoute.post('/', zValidator('json', baseSchema), async (c) => {
     sort: (input.sort ?? []) as unknown,
     groupBy: input.groupBy ?? null,
     visibleFields: input.visibleFields ?? [],
+    columnOrder: input.columnOrder ?? null,
     order: input.order ?? 0,
     isDefault: input.isDefault ?? false,
   };
