@@ -6,7 +6,12 @@ const apiPort = process.env.VITE_API_PORT ?? '3001';
 const apiTarget = `http://localhost:${apiPort}`;
 
 export default defineConfig({
-  plugins: [TanStackRouterVite(), react()],
+  plugins: [
+    TanStackRouterVite({
+      routeFileIgnorePattern: '\\.test\\.tsx?$',
+    }),
+    react(),
+  ],
   server: {
     port: 5173,
     proxy: {
