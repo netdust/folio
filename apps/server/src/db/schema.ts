@@ -136,7 +136,7 @@ export const tables = sqliteTable(
       .references(() => projects.id, { onDelete: 'cascade' }),
     slug: text('slug').notNull(),
     name: text('name').notNull(),
-    icon: text('icon'), // optional lucide icon name; null = default
+    icon: text('icon'), // emoji or short string
     order: integer('order').notNull().default(0),
     createdAt: integer('created_at', { mode: 'timestamp_ms' })
       .notNull()
@@ -211,7 +211,7 @@ export const documents = sqliteTable(
     projectId: text('project_id')
       .notNull()
       .references(() => projects.id, { onDelete: 'cascade' }),
-    tableId: text('table_id').references(() => tables.id, { onDelete: 'cascade' }),
+    tableId: text('table_id').references(() => tables.id, { onDelete: 'set null' }),
     type: text('type', { enum: ['work_item', 'page'] }).notNull(),
     slug: text('slug').notNull(),
     title: text('title').notNull(),
@@ -342,7 +342,7 @@ export const events = sqliteTable(
 export type User = typeof users.$inferSelect;
 export type Workspace = typeof workspaces.$inferSelect;
 export type Project = typeof projects.$inferSelect;
-export type Table = typeof tables.$inferSelect;
+export type TableEntity = typeof tables.$inferSelect;
 export type Document = typeof documents.$inferSelect;
 export type Status = typeof statuses.$inferSelect;
 export type Field = typeof fields.$inferSelect;

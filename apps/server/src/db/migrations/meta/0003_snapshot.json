@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "6e029d08-3eb4-4712-bd77-7f817f07edc9",
+  "id": "afab197f-528f-401c-bb60-51216e1e6695",
   "prevId": "4b67dc3e-a83f-49a8-92fb-de632190874d",
   "tables": {
     "ai_keys": {
@@ -422,7 +422,7 @@
           "columnsTo": [
             "id"
           ],
-          "onDelete": "cascade",
+          "onDelete": "set null",
           "onUpdate": "no action"
         },
         "documents_created_by_users_id_fk": {
