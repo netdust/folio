@@ -4,7 +4,7 @@
 
 **Goal:** Promote views from "URL query string state" to first-class objects with their own rail navigation. The left rail nests `Project → Table → Views`; clicking a view navigates to a URL that selects it and applies its filters + columnOrder + sort + visibleFields. Column/sort changes auto-save back to the active view (extending Phase 1.5b's `columnOrder` auto-save behavior). Filters stay URL-only with an explicit "Save filters to this view" action. A `+ New view` action under each table captures the current URL state as a new view.
 
-**Architecture:** Views remain table-scoped (`/api/v1/w/:ws/p/:p/views` with `tableId` already on each row). Views are addressed in the URL by their **UUIDv7 id** (`?view=<uuid>`), NOT by slug — the `views` table has no slug column and we are not adding one in this phase (decision 2026-05-24). The frontend `View.slug` field is removed because it has been a lie since Phase 1. Rail gets a nested `NavItem.children` extension plus per-item expand state in localStorage. The TableView reads `?view=` from URL, calls `useViews`, picks the matching view (or default), and applies its `filters / sort / visibleFields / columnOrder` to the current URL on first navigation.
+**Architecture:** Views remain table-scoped (`/api/v1/w/:ws/p/:p/views` with `tableId` already on each row). Views are addressed in the URL by their **`id`** (`?view=<id>`), NOT by slug — the `views` table has no slug column and we are not adding one in this phase (decision 2026-05-24). IDs are `nanoid()` strings (~21 alphanumeric chars) — every server route uses `nanoid`, not UUIDv7 (CLAUDE.md's UUIDv7 line is aspirational, not implemented). The frontend `View.slug` field is removed because it has been a lie since Phase 1. Rail gets a nested `NavItem.children` extension plus per-item expand state in localStorage. The TableView reads `?view=` from URL, calls `useViews`, picks the matching view (or default), and applies its `filters / sort / visibleFields / columnOrder` to the current URL on first navigation.
 
 **Tech Stack:** Existing — React + TanStack Router + Tailwind + shadcn/ui + dnd-kit + react-query + Vitest + Playwright. No new dependencies. No new server columns. CLAUDE.md rules hold: no `any`, kebab files, no default exports except routers + route components, Biome.
 
@@ -58,24 +58,26 @@ If the baseline isn't green, STOP and fix before continuing. Don't pile new work
 
 ---
 
-## Task 1: Backend — confirm views POST returns id-on-create + write regression test
+## Task 1: Backend — lock the POST id contract (regression test)
 
 **Files:**
 - Modify: `apps/server/src/routes/views.test.ts`
 
-**Why:** The frontend will route on `view.id`. Phase 1.5b's tests assert POST creates a view and PATCH round-trips `columnOrder` — but no test asserts the POST response shape contains `id` and that the id is a parseable UUIDv7 string. Lock the contract.
+**Why:** The frontend will route on `view.id`. Phase 1.5b's tests assert POST creates a view and PATCH round-trips `columnOrder` — but no test asserts the POST response shape contains `id` as a non-empty string and that two sequential creates produce distinct ids. Lock the contract before the frontend depends on it.
 
-- [ ] **Step 1: Read the existing views POST test** in `apps/server/src/routes/views.test.ts`. Find the closest analogue (likely a "creates a view with all fields" test).
+Note: IDs are `nanoid()` strings, not UUIDv7. Existing POST tests assert `res.status === 201` but never reach into `data.view.id`. The actual response envelope is `{ data: { view } }` (see the existing PATCH and columnOrder tests in the same file — they extract via `data.view.id` or `data?.view ?? data ?? created.view`).
+
+- [ ] **Step 1: Read the existing views POST tests** in `apps/server/src/routes/views.test.ts`. Note the response envelope shape from the PATCH test (`{ data: { view } }`) and the columnOrder test (`created.data?.view ?? created.data ?? created.view`).
 
 - [ ] **Step 2: Add a regression test** asserting:
-  - POST `/api/v1/w/:ws/p/:p/views` with `{ name: 'My view', type: 'list', filters: {}, sort: [], visibleFields: ['title', 'status'], columnOrder: ['title', 'status'] }`
+  - POST `/api/v1/w/acme/p/web/views` with `{ name: 'Id contract A', type: 'list', filters: {}, sort: [], visibleFields: ['title', 'status'], columnOrder: ['title', 'status'] }`
   - Response is `201`
-  - Response body has `id: string` matching `/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-/i` (UUIDv7 has `7` at position 13)
-  - `id` is unique across two sequential creates
+  - Response body has `data.view.id` as a non-empty string (`typeof id === 'string' && id.length > 0`)
+  - A second POST with `name: 'Id contract B'` returns a different `data.view.id`
 
 - [ ] **Step 3: Run tests** — `cd apps/server && bun test`. Expect: 113 / 113 pass (was 112). Report pass count.
 
-**Quality gate:** If the POST response doesn't include `id`, fix `apps/server/src/routes/views.ts` to include it. Do NOT proceed to Task 2 until this test passes.
+**Quality gate:** If the POST response doesn't include `data.view.id`, fix `apps/server/src/routes/views.ts` to include it. Do NOT proceed to Task 2 until this test passes.
 
 ---
 
@@ -351,12 +353,12 @@ Then pass `primary={tree}` to `<Rail>`.
 - Modify: `apps/web/src/routes/w.$wslug.p.$pslug.work-items.tsx` — extend `validateSearch`.
 - Modify: `apps/web/src/components/table/table-view.tsx`.
 
-- [ ] **Step 1: Extend the route's `validateSearch`** to accept `view?: string` (UUIDv7 — Zod `string().uuid()` is fine; we don't enforce the `7` variant since the server is the source of truth):
+- [ ] **Step 1: Extend the route's `validateSearch`** to accept `view?: string` (server-side IDs are nanoid — short alphanumeric, not UUID. Validate as a non-empty string; the server is the source of truth for whether the id exists):
 
 ```ts
 validateSearch: z.object({
   // ...existing...
-  view: z.string().uuid().optional(),
+  view: z.string().min(1).optional(),
 }),
 ```
 
