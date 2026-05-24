@@ -33,6 +33,28 @@ function isMarkdownRequest(req: Request): boolean {
   return ct.startsWith('text/markdown') || ct.startsWith('text/plain');
 }
 
+// "Auto-derived" = the slug was generated from the previous title at create
+// time (or auto-disambiguated with `-N`). Strip a trailing `-<digits>` and
+// compare to slugify(oldTitle). The `untitled` special case covers fresh docs
+// where the create-time slug is literally `untitled`.
+function isSlugAutoDerived(slug: string, oldTitle: string): boolean {
+  if (slug === 'untitled') return true;
+  const base = slug.replace(/-\d+$/, '');
+  return base === slugify(oldTitle);
+}
+
+async function maybeRegenerateSlug(
+  projectId: string,
+  existing: { slug: string; title: string },
+  nextTitle: string,
+): Promise<string | null> {
+  if (nextTitle === existing.title) return null;
+  if (!isSlugAutoDerived(existing.slug, existing.title)) return null;
+  const baseSlug = slugify(nextTitle) || 'doc';
+  if (baseSlug === existing.slug.replace(/-\d+$/, '')) return null;
+  return slugUniqueInDocuments(db, projectId, baseSlug);
+}
+
 function deriveTitleFromBody(body: string): string | null {
   const m = body.match(/^#\s+(.+)$/m);
   return m ? m[1]!.trim() : null;
@@ -271,9 +293,11 @@ documentsRoute.patch('/:slug', async (c) => {
       const tId = existing.tableId ?? getTable(c).id;
       await validateStatus(tId, parsed.status);
     }
+    const nextSlug = await maybeRegenerateSlug(p.id, existing, parsed.title);
     const updated = {
       ...existing,
       title: parsed.title,
+      ...(nextSlug ? { slug: nextSlug } : {}),
       body: parsed.body,
       frontmatter: parsed.frontmatter,
       status: parsed.status,
@@ -285,7 +309,7 @@ documentsRoute.patch('/:slug', async (c) => {
       await emitEvent(tx, {
         workspaceId: ws.id, projectId: p.id, documentId: existing.id,
         kind: 'document.updated', actor: user.id,
-        payload: { changes: ['title', 'body', 'frontmatter', 'status'] },
+        payload: { changes: ['title', 'body', 'frontmatter', 'status', ...(nextSlug ? ['slug'] : [])] },
       });
     });
     return jsonOk(c, updated);
@@ -315,9 +339,12 @@ documentsRoute.patch('/:slug', async (c) => {
     return merged;
   })();
 
+  const nextSlug =
+    patch.title !== undefined ? await maybeRegenerateSlug(p.id, existing, patch.title) : null;
   const updated = {
     ...existing,
     ...(patch.title !== undefined ? { title: patch.title } : {}),
+    ...(nextSlug ? { slug: nextSlug } : {}),
     ...(patch.status !== undefined ? { status: patch.status } : {}),
     ...(patch.body !== undefined ? { body: patch.body } : {}),
     frontmatter: mergedFrontmatter,
@@ -331,7 +358,7 @@ documentsRoute.patch('/:slug', async (c) => {
     await emitEvent(tx, {
       workspaceId: ws.id, projectId: p.id, documentId: existing.id,
       kind: 'document.updated', actor: user.id,
-      payload: { changes: Object.keys(patch) },
+      payload: { changes: [...Object.keys(patch), ...(nextSlug ? ['slug'] : [])] },
     });
   });
 

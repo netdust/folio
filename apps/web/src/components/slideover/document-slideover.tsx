@@ -88,6 +88,8 @@ export function DocumentSlideover({ wslug, pslug }: Props) {
 }
 
 function SlideoverTitleEditor({ doc, wslug, pslug }: { doc: Document; wslug: string; pslug: string }) {
+  const navigate = useNavigate();
+  const search = useSearch({ strict: false }) as Record<string, unknown>;
   const listParams = useMemo(
     () => ({ type: doc.type as 'work_item' | 'page', sort: 'updated_at' as const, dir: 'desc' as const }),
     [doc.type],
@@ -95,7 +97,12 @@ function SlideoverTitleEditor({ doc, wslug, pslug }: { doc: Document; wslug: str
   const update = useUpdateDocument(wslug, pslug, listParams);
   const onCommit = async (next: string) => {
     try {
-      await update.mutateAsync({ slug: doc.slug, patch: { title: next } });
+      const updated = await update.mutateAsync({ slug: doc.slug, patch: { title: next } });
+      // Server may have regenerated the slug from the new title. Sync the
+      // slideover's ?doc= param so closing+reopening points at the real doc.
+      if (updated?.slug && updated.slug !== doc.slug) {
+        void navigate({ to: '.', search: { ...search, doc: updated.slug }, replace: true });
+      }
     } catch (err) {
       toast.error(formatApiError(err));
     }
