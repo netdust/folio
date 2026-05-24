@@ -1,9 +1,13 @@
 import { createFileRoute, Outlet, useNavigate, useRouterState } from '@tanstack/react-router';
 import { useMemo, useState } from 'react';
-import { FolderOpen, Search } from 'lucide-react';
+import { useQueries } from '@tanstack/react-query';
+import { Search } from 'lucide-react';
 import { toast } from 'sonner';
 import { useLogout, useMe } from '../lib/api/auth.ts';
 import { useProjects } from '../lib/api/projects.ts';
+import { type Table, tablesKeys } from '../lib/api/tables.ts';
+import { type View, viewsKeys } from '../lib/api/views.ts';
+import { client } from '../lib/api/client.ts';
 import { useWorkspace, useWorkspaces } from '../lib/api/workspaces.ts';
 import { formatApiError } from '../lib/api/index.ts';
 import { Shell } from '../components/shell/shell.tsx';
@@ -13,6 +17,7 @@ import { UserMenu } from '../components/shell/user-menu.tsx';
 import { WorkspaceCreate } from '../components/onboarding/workspace-create.tsx';
 import { openCommandPalette } from '../lib/command-palette-bus.ts';
 import { modKeyHint } from '../lib/platform.ts';
+import { buildRailTree, type RailTreeHandlers } from '../lib/rail-tree.ts';
 
 export const Route = createFileRoute('/w/$wslug')({
   component: WorkspaceLayout,
@@ -39,20 +44,95 @@ function WorkspaceLayout() {
 
   const currentPath = routerState.location.pathname;
 
-  const primary: NavItem[] = useMemo(() => {
-    if (!projects) return [];
-    return projects.map((p) => ({
-      id: p.id,
-      label: p.name,
-      lucideIcon: FolderOpen,
-      active: currentPath.startsWith(`/w/${wslug}/p/${p.slug}`),
-      onClick: () =>
-        navigate({
+  // Per-project tables + views fetched in batch. `useQueries` is a single hook
+  // call, so it's legal in render even though the inner array varies in length.
+  const projectList = useMemo(() => projects ?? [], [projects]);
+
+  const tableQueries = useQueries({
+    queries: projectList.map((p) => ({
+      queryKey: tablesKeys.list(wslug, p.slug),
+      queryFn: () => client.get<Table[]>(`/api/v1/w/${wslug}/p/${p.slug}/tables`),
+      staleTime: 5 * 60_000,
+    })),
+  });
+
+  const viewQueries = useQueries({
+    queries: projectList.map((p) => ({
+      queryKey: viewsKeys.list(wslug, p.slug),
+      queryFn: () => client.get<View[]>(`/api/v1/w/${wslug}/p/${p.slug}/views`),
+      staleTime: 5 * 60_000,
+    })),
+  });
+
+  const tablesByProject = useMemo(() => {
+    const map: Record<string, Table[]> = {};
+    projectList.forEach((p, i) => {
+      map[p.slug] = tableQueries[i]?.data ?? [];
+    });
+    return map;
+  }, [projectList, tableQueries]);
+
+  // v1 SIMPLIFICATION: the GET /views endpoint returns ALL views for a project
+  // (across tables), and the frontend `View` type does not yet expose `tableId`.
+  // Since seed-project-defaults.ts creates exactly one default table per project
+  // (`work-items`), we group every project's views under that single first table.
+  // TODO: when projects support multiple tables, expose `tableId` on the View
+  // serializer (apps/server/src/routes/views.ts) and key viewsByTable by it.
+  const viewsByTable = useMemo(() => {
+    const map: Record<string, View[]> = {};
+    projectList.forEach((p, i) => {
+      const tables = tablesByProject[p.slug] ?? [];
+      const firstTable = tables[0];
+      if (!firstTable) return;
+      map[firstTable.id] = viewQueries[i]?.data ?? [];
+    });
+    return map;
+  }, [projectList, tablesByProject, viewQueries]);
+
+  const activePslug = currentPath.match(/\/p\/([^/]+)/)?.[1];
+
+  const handlers = useMemo<RailTreeHandlers>(
+    () => ({
+      onProjectClick: (pslug: string) => {
+        void navigate({
           to: '/w/$wslug/p/$pslug/work-items',
-          params: { wslug, pslug: p.slug },
-        }),
-    }));
-  }, [projects, currentPath, wslug, navigate]);
+          params: { wslug, pslug },
+        });
+      },
+      onViewClick: (pslug: string, _tslug: string, viewId: string) => {
+        void navigate({
+          to: '/w/$wslug/p/$pslug/work-items',
+          params: { wslug, pslug },
+          // TODO Task 7: declare `view?: string` on the work-items route's
+          // validateSearch schema, then drop this cast. The route schema
+          // currently rejects unknown keys, so we widen `search` locally.
+          search: { view: viewId } as unknown as Record<string, never>,
+        });
+      },
+      onNewView: (pslug: string, tslug: string) => {
+        // TODO Task 6: open the New View sheet wired to (pslug, tslug).
+        console.log('TODO: open New View sheet', pslug, tslug);
+      },
+    }),
+    [navigate, wslug],
+  );
+
+  const primary: NavItem[] = useMemo(
+    () =>
+      buildRailTree({
+        projects: projectList.map((p) => ({ slug: p.slug, name: p.name, icon: p.icon })),
+        tablesByProject,
+        viewsByTable,
+        currentRoute: {
+          wslug,
+          pslug: activePslug,
+          // TODO Task 7: read the active view id from `?view=` URL search.
+          viewId: undefined,
+        },
+        handlers,
+      }),
+    [projectList, tablesByProject, viewsByTable, wslug, activePslug, handlers],
+  );
 
   const switcherEntries = useMemo(
     () =>
