@@ -11,8 +11,11 @@ async function createStatus(app: Awaited<ReturnType<typeof makeTestApp>>['app'],
   });
 }
 
-test('GET / returns empty list initially', async () => {
-  const { app, seed } = await makeTestApp();
+test('GET / returns empty list when project has no statuses', async () => {
+  const { app, db, seed } = await makeTestApp();
+  // Default-table is seeded with 4 statuses; clear them so this test exercises
+  // the empty-list branch against the Work Items table.
+  await db.delete(statuses);
   const res = await app.request('/api/v1/w/acme/p/web/statuses', {
     headers: { Cookie: seed.sessionCookie },
   });
@@ -20,8 +23,19 @@ test('GET / returns empty list initially', async () => {
   expect((await res.json()).data).toEqual([]);
 });
 
-test('POST / creates a status', async () => {
+test('GET / returns the 4 default statuses on a freshly-seeded project', async () => {
   const { app, seed } = await makeTestApp();
+  const res = await app.request('/api/v1/w/acme/p/web/statuses', {
+    headers: { Cookie: seed.sessionCookie },
+  });
+  expect(res.status).toBe(200);
+  const keys = (await res.json()).data.map((s: { key: string }) => s.key).sort();
+  expect(keys).toEqual(['backlog', 'done', 'in_progress', 'todo']);
+});
+
+test('POST / creates a status', async () => {
+  const { app, db, seed } = await makeTestApp();
+  await db.delete(statuses); // start clean so 'todo' is free
   const res = await createStatus(app, seed.sessionCookie, {
     key: 'todo', name: 'Todo', category: 'unstarted', order: 10,
   });
@@ -30,19 +44,21 @@ test('POST / creates a status', async () => {
 });
 
 test('POST duplicate key → 409 SLUG_CONFLICT', async () => {
-  const { app, seed } = await makeTestApp();
+  const { app, db, seed } = await makeTestApp();
+  await db.delete(statuses);
   await createStatus(app, seed.sessionCookie, { key: 'todo', name: 'Todo' });
   const dupe = await createStatus(app, seed.sessionCookie, { key: 'todo', name: 'Todo 2' });
   expect(dupe.status).toBe(409);
   expect((await dupe.json()).error.code).toBe('SLUG_CONFLICT');
 });
 
-test('PATCH /:id renames key + cascades to documents', async () => {
+test('PATCH /:id renames key + cascades to documents in the table', async () => {
   const { app, db, seed } = await makeTestApp();
+  await db.delete(statuses);
   const create = await createStatus(app, seed.sessionCookie, { key: 'todo', name: 'Todo' });
   const { data: { status } } = await create.json();
   await db.insert(documents).values({
-    id: nanoid(), projectId: seed.project.id, type: 'work_item',
+    id: nanoid(), projectId: seed.project.id, tableId: status.tableId, type: 'work_item',
     slug: 'a', title: 'A', status: 'todo',
   });
   const res = await app.request(`/api/v1/w/acme/p/web/statuses/${status.id}`, {
@@ -57,10 +73,11 @@ test('PATCH /:id renames key + cascades to documents', async () => {
 
 test('DELETE /:id 409 when status in use', async () => {
   const { app, db, seed } = await makeTestApp();
+  await db.delete(statuses);
   const create = await createStatus(app, seed.sessionCookie, { key: 'todo', name: 'Todo' });
   const { data: { status } } = await create.json();
   await db.insert(documents).values({
-    id: nanoid(), projectId: seed.project.id, type: 'work_item',
+    id: nanoid(), projectId: seed.project.id, tableId: status.tableId, type: 'work_item',
     slug: 'a', title: 'A', status: 'todo',
   });
   const res = await app.request(`/api/v1/w/acme/p/web/statuses/${status.id}`, {
@@ -71,7 +88,8 @@ test('DELETE /:id 409 when status in use', async () => {
 });
 
 test('DELETE /:id 204 when unused', async () => {
-  const { app, seed } = await makeTestApp();
+  const { app, db, seed } = await makeTestApp();
+  await db.delete(statuses);
   const create = await createStatus(app, seed.sessionCookie, { key: 'todo', name: 'Todo' });
   const { data: { status } } = await create.json();
   const res = await app.request(`/api/v1/w/acme/p/web/statuses/${status.id}`, {

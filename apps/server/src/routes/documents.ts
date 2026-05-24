@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, inArray, lt, or, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { nanoid } from 'nanoid';
 import {
@@ -16,14 +16,14 @@ import { parseMarkdown, serializeMarkdown } from '../lib/frontmatter.ts';
 import { compileFilterToWhere } from '../lib/filter-to-drizzle.ts';
 import { slugUniqueInDocuments } from '../lib/slug-unique.ts';
 import { type AuthContext, getUser } from '../middleware/auth.ts';
-import { getProject, getWorkspace, type ScopeContext } from '../middleware/scope.ts';
+import { getProject, getTable, getWorkspace, type ScopeContext } from '../middleware/scope.ts';
 
 const documentsRoute = new Hono<AuthContext & ScopeContext>();
 
-async function validateStatus(projectId: string, status: string | null | undefined) {
+async function validateStatus(tableId: string, status: string | null | undefined) {
   if (status == null) return;
   const row = await db.query.statuses.findFirst({
-    where: and(eq(statuses.projectId, projectId), eq(statuses.key, status)),
+    where: and(eq(statuses.tableId, tableId), eq(statuses.key, status)),
   });
   if (!row) throw new HTTPError('INVALID_STATUS', `status "${status}" not in registry`, 422);
 }
@@ -81,7 +81,9 @@ documentsRoute.post('/', async (c) => {
     input = { type: v.type, title: v.title, body: v.body, frontmatter: fmRest, status: fmStatus };
   }
 
-  if (input.type === 'work_item') await validateStatus(p.id, input.status);
+  // work_items live inside a table; pages are project-scoped with tableId=null.
+  const tableId = input.type === 'work_item' ? getTable(c).id : null;
+  if (input.type === 'work_item') await validateStatus(tableId!, input.status);
 
   const id = nanoid();
   const baseSlug = slugify(input.title) || 'doc';
@@ -90,6 +92,7 @@ documentsRoute.post('/', async (c) => {
   const row = {
     id,
     projectId: p.id,
+    tableId,
     type: input.type,
     slug,
     title: input.title,
@@ -157,6 +160,14 @@ documentsRoute.get('/', async (c) => {
   const whereClauses = [eq(documents.projectId, p.id)];
   if (type === 'work_item' || type === 'page') {
     whereClauses.push(eq(documents.type, type));
+  }
+  // Scope work_item listings to the active table (default or explicit /t/:tslug).
+  // Pages stay project-scoped with NULL tableId. With no type filter we don't
+  // further constrain so callers can list everything in the project.
+  if (type === 'work_item') {
+    whereClauses.push(eq(documents.tableId, getTable(c).id));
+  } else if (type === 'page') {
+    whereClauses.push(isNull(documents.tableId));
   }
   // Flat filter params — kept simple here so the toolbar chips work without
   // having to encode/decode the full `?filter=` AST. The AST stays available
@@ -252,7 +263,12 @@ documentsRoute.patch('/:slug', async (c) => {
     if (parsed.type !== existing.type) {
       throw new HTTPError('INVALID_BODY', 'document type cannot change', 422);
     }
-    if (existing.type === 'work_item') await validateStatus(p.id, parsed.status);
+    if (existing.type === 'work_item') {
+      // existing.tableId is non-null for work_items (DB invariant once Phase 2A
+      // backfill ran). Fall back to getTable(c) for safety.
+      const tId = existing.tableId ?? getTable(c).id;
+      await validateStatus(tId, parsed.status);
+    }
     const updated = {
       ...existing,
       title: parsed.title,
@@ -280,7 +296,8 @@ documentsRoute.patch('/:slug', async (c) => {
   const patch = parsed.data;
 
   if (patch.status !== undefined && existing.type === 'work_item') {
-    await validateStatus(p.id, patch.status);
+    const tId = existing.tableId ?? getTable(c).id;
+    await validateStatus(tId, patch.status);
   }
 
   const mergedFrontmatter = (() => {

@@ -5,7 +5,12 @@ import { serveStatic } from 'hono/bun';
 import { env } from './env.ts';
 import { registerErrorHandler } from './lib/http.ts';
 import { attachUser, requireUser, type AuthContext } from './middleware/auth.ts';
-import { resolveProject, resolveWorkspace, type ScopeContext } from './middleware/scope.ts';
+import {
+  resolveProject,
+  resolveTable,
+  resolveWorkspace,
+  type ScopeContext,
+} from './middleware/scope.ts';
 import { auth } from './routes/auth.ts';
 import { documentsRoute } from './routes/documents.ts';
 import { fieldsRoute } from './routes/fields.ts';
@@ -41,6 +46,17 @@ wScope.route('/projects', projectsRoute);
 const pScope = new Hono<AuthContext & ScopeContext>();
 pScope.use('*', resolveProject);
 pScope.route('/tables', tablesRoute);
+
+// Explicit-table mount: same handlers, but resolveTable attaches the table
+// chosen via :tslug instead of relying on resolveProject's default-attach.
+const tScope = new Hono<AuthContext & ScopeContext>();
+tScope.use('*', resolveTable);
+tScope.route('/statuses', statusesRoute);
+tScope.route('/fields', fieldsRoute);
+tScope.route('/views', viewsRoute);
+tScope.route('/documents', documentsRoute);
+pScope.route('/t/:tslug', tScope);
+
 pScope.route('/statuses', statusesRoute);
 pScope.route('/fields', fieldsRoute);
 pScope.route('/views', viewsRoute);

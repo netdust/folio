@@ -13,7 +13,8 @@ test('GET /tables returns the default Work Items table when project is seeded', 
 });
 
 test('GET /tables returns empty array when project has no tables', async () => {
-  const { app, seed } = await makeTestApp(); // no defaults
+  // Opt out of the harness default seed so this test exercises the empty-list branch.
+  const { app, seed } = await makeTestApp({ seedProjectDefaults: false });
   const res = await app.request(base, { headers: { Cookie: seed.sessionCookie } });
   expect(res.status).toBe(200);
   const body = await res.json();

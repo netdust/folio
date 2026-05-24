@@ -9,7 +9,7 @@ import { views } from '../db/schema.ts';
 import { jsonOk, HTTPError } from '../lib/http.ts';
 import { emitEvent } from '../lib/events.ts';
 import { type AuthContext, getUser } from '../middleware/auth.ts';
-import { getProject, getWorkspace, type ScopeContext } from '../middleware/scope.ts';
+import { getProject, getTable, getWorkspace, type ScopeContext } from '../middleware/scope.ts';
 
 const viewsRoute = new Hono<AuthContext & ScopeContext>();
 
@@ -37,9 +37,9 @@ function validateFilters(input: unknown): void {
 }
 
 viewsRoute.get('/', async (c) => {
-  const p = getProject(c);
+  const t = getTable(c);
   const rows = await db.query.views.findMany({
-    where: eq(views.projectId, p.id),
+    where: eq(views.tableId, t.id),
     orderBy: (t, { asc }) => [asc(t.order)],
   });
   return jsonOk(c, rows);
@@ -48,6 +48,7 @@ viewsRoute.get('/', async (c) => {
 viewsRoute.post('/', zValidator('json', baseSchema), async (c) => {
   const user = getUser(c);
   const p = getProject(c);
+  const t = getTable(c);
   const ws = getWorkspace(c);
   const input = c.req.valid('json');
   validateFilters(input.filters);
@@ -56,6 +57,7 @@ viewsRoute.post('/', zValidator('json', baseSchema), async (c) => {
   const row = {
     id,
     projectId: p.id,
+    tableId: t.id,
     name: input.name,
     type: input.type,
     filters: (input.filters ?? {}) as unknown,
@@ -78,10 +80,11 @@ viewsRoute.post('/', zValidator('json', baseSchema), async (c) => {
 viewsRoute.patch('/:id', zValidator('json', baseSchema.partial()), async (c) => {
   const user = getUser(c);
   const p = getProject(c);
+  const t = getTable(c);
   const ws = getWorkspace(c);
   const id = c.req.param('id');
   const row = await db.query.views.findFirst({
-    where: and(eq(views.projectId, p.id), eq(views.id, id)),
+    where: and(eq(views.tableId, t.id), eq(views.id, id)),
   });
   if (!row) throw new HTTPError('VIEW_NOT_FOUND', `view "${id}" not found`, 404);
   const patch = c.req.valid('json');
@@ -100,10 +103,11 @@ viewsRoute.patch('/:id', zValidator('json', baseSchema.partial()), async (c) => 
 viewsRoute.delete('/:id', async (c) => {
   const user = getUser(c);
   const p = getProject(c);
+  const t = getTable(c);
   const ws = getWorkspace(c);
   const id = c.req.param('id');
   const row = await db.query.views.findFirst({
-    where: and(eq(views.projectId, p.id), eq(views.id, id)),
+    where: and(eq(views.tableId, t.id), eq(views.id, id)),
   });
   if (!row) throw new HTTPError('VIEW_NOT_FOUND', `view "${id}" not found`, 404);
   await db.transaction(async (tx) => {

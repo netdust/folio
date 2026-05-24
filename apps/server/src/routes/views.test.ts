@@ -1,13 +1,25 @@
 import { test, expect } from 'bun:test';
 import { makeTestApp } from '../test/harness.ts';
+import { views } from '../db/schema.ts';
 
 const path = '/api/v1/w/acme/p/web/views';
 
-test('GET / returns empty initially (harness-seeded project has none)', async () => {
-  const { app, seed } = await makeTestApp();
+test('GET / returns empty when the table has no views', async () => {
+  const { app, db, seed } = await makeTestApp();
+  // The default Work Items table seeds 2 views ("All work items", "Board").
+  // Drop them so this test asserts the empty-list branch.
+  await db.delete(views);
   const res = await app.request(path, { headers: { Cookie: seed.sessionCookie } });
   expect(res.status).toBe(200);
   expect((await res.json()).data).toEqual([]);
+});
+
+test('GET / returns the 2 default views on a freshly-seeded project', async () => {
+  const { app, seed } = await makeTestApp();
+  const res = await app.request(path, { headers: { Cookie: seed.sessionCookie } });
+  expect(res.status).toBe(200);
+  const names = (await res.json()).data.map((v: { name: string }) => v.name).sort();
+  expect(names).toEqual(['All work items', 'Board']);
 });
 
 test('POST creates a list view with filters', async () => {

@@ -8,7 +8,7 @@ import { fields } from '../db/schema.ts';
 import { jsonOk, HTTPError } from '../lib/http.ts';
 import { emitEvent } from '../lib/events.ts';
 import { type AuthContext, getUser } from '../middleware/auth.ts';
-import { getProject, getWorkspace, type ScopeContext } from '../middleware/scope.ts';
+import { getProject, getTable, getWorkspace, type ScopeContext } from '../middleware/scope.ts';
 
 const fieldsRoute = new Hono<AuthContext & ScopeContext>();
 
@@ -36,9 +36,9 @@ function validateOptions(type: string, options: string[] | undefined): void {
 }
 
 fieldsRoute.get('/', async (c) => {
-  const p = getProject(c);
+  const t = getTable(c);
   const rows = await db.query.fields.findMany({
-    where: eq(fields.projectId, p.id),
+    where: eq(fields.tableId, t.id),
     orderBy: (t, { asc }) => [asc(t.order)],
   });
   return jsonOk(c, rows);
@@ -47,12 +47,13 @@ fieldsRoute.get('/', async (c) => {
 fieldsRoute.post('/', zValidator('json', baseSchema), async (c) => {
   const user = getUser(c);
   const p = getProject(c);
+  const t = getTable(c);
   const ws = getWorkspace(c);
   const input = c.req.valid('json');
   validateOptions(input.type, input.options);
 
   const existing = await db.query.fields.findFirst({
-    where: and(eq(fields.projectId, p.id), eq(fields.key, input.key)),
+    where: and(eq(fields.tableId, t.id), eq(fields.key, input.key)),
   });
   if (existing) throw new HTTPError('SLUG_CONFLICT', `field "${input.key}" exists`, 409);
 
@@ -60,6 +61,7 @@ fieldsRoute.post('/', zValidator('json', baseSchema), async (c) => {
   const row = {
     id,
     projectId: p.id,
+    tableId: t.id,
     key: input.key,
     type: input.type,
     label: input.label ?? null,
@@ -82,10 +84,11 @@ fieldsRoute.patch(
   async (c) => {
     const user = getUser(c);
     const p = getProject(c);
+    const t = getTable(c);
     const ws = getWorkspace(c);
     const id = c.req.param('id');
     const row = await db.query.fields.findFirst({
-      where: and(eq(fields.projectId, p.id), eq(fields.id, id)),
+      where: and(eq(fields.tableId, t.id), eq(fields.id, id)),
     });
     if (!row) throw new HTTPError('FIELD_NOT_FOUND', `field "${id}" not found`, 404);
     const patch = c.req.valid('json');
@@ -108,10 +111,11 @@ fieldsRoute.patch(
 fieldsRoute.delete('/:id', async (c) => {
   const user = getUser(c);
   const p = getProject(c);
+  const t = getTable(c);
   const ws = getWorkspace(c);
   const id = c.req.param('id');
   const row = await db.query.fields.findFirst({
-    where: and(eq(fields.projectId, p.id), eq(fields.id, id)),
+    where: and(eq(fields.tableId, t.id), eq(fields.id, id)),
   });
   if (!row) throw new HTTPError('FIELD_NOT_FOUND', `field "${id}" not found`, 404);
   await db.transaction(async (tx) => {

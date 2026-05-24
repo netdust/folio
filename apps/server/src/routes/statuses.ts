@@ -8,16 +8,16 @@ import { documents, statuses } from '../db/schema.ts';
 import { jsonOk, HTTPError } from '../lib/http.ts';
 import { emitEvent } from '../lib/events.ts';
 import { type AuthContext, getUser } from '../middleware/auth.ts';
-import { getProject, getWorkspace, type ScopeContext } from '../middleware/scope.ts';
+import { getProject, getTable, getWorkspace, type ScopeContext } from '../middleware/scope.ts';
 
 const statusesRoute = new Hono<AuthContext & ScopeContext>();
 
 const CATEGORIES = ['backlog', 'unstarted', 'started', 'completed', 'cancelled'] as const;
 
 statusesRoute.get('/', async (c) => {
-  const p = getProject(c);
+  const t = getTable(c);
   const rows = await db.query.statuses.findMany({
-    where: eq(statuses.projectId, p.id),
+    where: eq(statuses.tableId, t.id),
     orderBy: (t, { asc }) => [asc(t.order)],
   });
   return jsonOk(c, rows);
@@ -38,10 +38,11 @@ statusesRoute.post(
   async (c) => {
     const user = getUser(c);
     const p = getProject(c);
+    const t = getTable(c);
     const ws = getWorkspace(c);
     const input = c.req.valid('json');
     const existing = await db.query.statuses.findFirst({
-      where: and(eq(statuses.projectId, p.id), eq(statuses.key, input.key)),
+      where: and(eq(statuses.tableId, t.id), eq(statuses.key, input.key)),
     });
     if (existing) throw new HTTPError('SLUG_CONFLICT', `status "${input.key}" exists`, 409);
 
@@ -49,6 +50,7 @@ statusesRoute.post(
     const row = {
       id,
       projectId: p.id,
+      tableId: t.id,
       key: input.key,
       name: input.name,
       color: input.color ?? '#9ca3af',
@@ -81,10 +83,11 @@ statusesRoute.patch(
   async (c) => {
     const user = getUser(c);
     const p = getProject(c);
+    const t = getTable(c);
     const ws = getWorkspace(c);
     const id = c.req.param('id');
     const row = await db.query.statuses.findFirst({
-      where: and(eq(statuses.projectId, p.id), eq(statuses.id, id)),
+      where: and(eq(statuses.tableId, t.id), eq(statuses.id, id)),
     });
     if (!row) throw new HTTPError('STATUS_NOT_FOUND', `status "${id}" not found`, 404);
     const patch = c.req.valid('json');
@@ -93,7 +96,7 @@ statusesRoute.patch(
       if (patch.key && patch.key !== row.key) {
         await tx.update(documents)
           .set({ status: patch.key })
-          .where(and(eq(documents.projectId, p.id), eq(documents.status, row.key)));
+          .where(and(eq(documents.tableId, t.id), eq(documents.status, row.key)));
       }
       await tx.update(statuses).set(patch).where(eq(statuses.id, id));
       await emitEvent(tx, {
@@ -109,17 +112,18 @@ statusesRoute.patch(
 statusesRoute.delete('/:id', async (c) => {
   const user = getUser(c);
   const p = getProject(c);
+  const t = getTable(c);
   const ws = getWorkspace(c);
   const id = c.req.param('id');
   const row = await db.query.statuses.findFirst({
-    where: and(eq(statuses.projectId, p.id), eq(statuses.id, id)),
+    where: and(eq(statuses.tableId, t.id), eq(statuses.id, id)),
   });
   if (!row) throw new HTTPError('STATUS_NOT_FOUND', `status "${id}" not found`, 404);
 
   const [usage] = await db
     .select({ n: count() })
     .from(documents)
-    .where(and(eq(documents.projectId, p.id), eq(documents.status, row.key)));
+    .where(and(eq(documents.tableId, t.id), eq(documents.status, row.key)));
   if ((usage?.n ?? 0) > 0) {
     throw new HTTPError('STATUS_IN_USE', `status "${row.key}" is used by ${usage!.n} document(s)`, 409);
   }

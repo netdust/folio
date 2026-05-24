@@ -47,6 +47,20 @@ export const resolveProject: MiddlewareHandler<AuthContext & ScopeContext> = asy
   });
   if (!p) throw new HTTPError('PROJECT_NOT_FOUND', `project "${pslug}" not found`, 404);
   c.set('project', p);
+
+  // Auto-attach the default "Work Items" table for legacy /p/:pslug/* routes
+  // that don't carry a :tslug param. Routes that DO have :tslug skip this
+  // attach — resolveTable will run next in the chain and supply the explicit
+  // table. Soft-fail: a project that pre-dates the default-table backfill (or
+  // had its only table deleted) simply has no table attached; routes that
+  // require one will throw at getTable(c).
+  if (!c.req.param('tslug')) {
+    const defaultTable = await db.query.tables.findFirst({
+      where: and(eq(tables.projectId, p.id), eq(tables.slug, 'work-items')),
+    });
+    if (defaultTable) c.set('table', defaultTable);
+  }
+
   return next();
 };
 
