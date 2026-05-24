@@ -1,10 +1,10 @@
 import { createFileRoute, Outlet, useNavigate, useRouterState } from '@tanstack/react-router';
 import { useMemo, useState } from 'react';
-import { useQueries } from '@tanstack/react-query';
-import { Plus, Search } from 'lucide-react';
+import { useQueries, useQueryClient } from '@tanstack/react-query';
+import { Search } from 'lucide-react';
 import { toast } from 'sonner';
 import { useLogout, useMe } from '../lib/api/auth.ts';
-import { useProjects } from '../lib/api/projects.ts';
+import { useProjects, useUpdateProject, useDeleteProject, projectsKeys } from '../lib/api/projects.ts';
 import { type Table, tablesKeys } from '../lib/api/tables.ts';
 import { type View, viewsKeys } from '../lib/api/views.ts';
 import { client } from '../lib/api/client.ts';
@@ -12,9 +12,13 @@ import { useWorkspace, useWorkspaces } from '../lib/api/workspaces.ts';
 import { formatApiError } from '../lib/api/index.ts';
 import { Shell } from '../components/shell/shell.tsx';
 import { Rail, type NavItem } from '../components/shell/rail.tsx';
+import { Dialog, DialogContent, DialogTitle, DialogDescription } from '../components/ui/dialog.tsx';
+import { Button } from '../components/ui/button.tsx';
 import { WorkspaceSwitcher } from '../components/shell/workspace-switcher.tsx';
 import { UserMenu } from '../components/shell/user-menu.tsx';
 import { WorkspaceCreate } from '../components/onboarding/workspace-create.tsx';
+import { ProjectCreate } from '../components/onboarding/project-create.tsx';
+import { TableCreate } from '../components/onboarding/table-create.tsx';
 import { NewViewSheet } from '../components/views/new-view-sheet.tsx';
 import { openCommandPalette } from '../lib/command-palette-bus.ts';
 import { modKeyHint } from '../lib/platform.ts';
@@ -42,7 +46,19 @@ function WorkspaceLayout() {
   const { data: projects } = useProjects(wslug);
   const logout = useLogout();
   const [creatingWorkspace, setCreatingWorkspace] = useState(false);
+  const [creatingProject, setCreatingProject] = useState(false);
+  const [creatingTable, setCreatingTable] = useState<{ pslug: string } | null>(null);
   const [newViewSheet, setNewViewSheet] = useState<{ pslug: string } | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<
+    | { kind: 'project'; pslug: string; name: string }
+    | { kind: 'table'; pslug: string; tslug: string; name: string }
+    | { kind: 'view'; pslug: string; tslug: string; viewId: string; name: string }
+    | null
+  >(null);
+
+  const qc = useQueryClient();
+  const updateProject = useUpdateProject(wslug);
+  const deleteProject = useDeleteProject(wslug);
 
   const currentPath = routerState.location.pathname;
   const currentSearch = routerState.location.search as Record<string, unknown>;
@@ -110,25 +126,36 @@ function WorkspaceLayout() {
           search: { view: viewId },
         });
       },
+      onWikiClick: (pslug: string) => {
+        void navigate({ to: '/w/$wslug/p/$pslug/wiki', params: { wslug, pslug } });
+      },
       onNewView: (pslug: string, _tslug: string) => {
         setNewViewSheet({ pslug });
       },
-      renderNewViewTrailing: (pslug, _tslug) => (
-        <button
-          type="button"
-          aria-label="New view"
-          data-testid="rail-new-view"
-          onClick={(e) => {
-            e.stopPropagation();
-            setNewViewSheet({ pslug });
-          }}
-          className="grid h-4 w-4 place-items-center rounded text-fg-2 hover:bg-card hover:text-fg"
-        >
-          <Plus size={12} />
-        </button>
-      ),
+      onNewProject: () => setCreatingProject(true),
+      onNewTable: (pslug: string) => setCreatingTable({ pslug }),
+      onRenameProject: async (pslug, next) => {
+        try {
+          await updateProject.mutateAsync({ pslug, patch: { name: next } });
+        } catch (err) { toast.error(formatApiError(err)); }
+      },
+      onDeleteProject: (pslug, name) => setConfirmDelete({ kind: 'project', pslug, name }),
+      onRenameTable: async (pslug, tslug, next) => {
+        try {
+          await client.patch(`/api/v1/w/${wslug}/p/${pslug}/tables/${tslug}`, { name: next });
+          await qc.invalidateQueries({ queryKey: tablesKeys.list(wslug, pslug) });
+        } catch (err) { toast.error(formatApiError(err)); }
+      },
+      onDeleteTable: (pslug, tslug, name) => setConfirmDelete({ kind: 'table', pslug, tslug, name }),
+      onRenameView: async (pslug, _tslug, viewId, next) => {
+        try {
+          await client.patch(`/api/v1/w/${wslug}/p/${pslug}/views/${viewId}`, { name: next });
+          await qc.invalidateQueries({ queryKey: viewsKeys.list(wslug, pslug) });
+        } catch (err) { toast.error(formatApiError(err)); }
+      },
+      onDeleteView: (pslug, tslug, viewId, name) => setConfirmDelete({ kind: 'view', pslug, tslug, viewId, name }),
     }),
-    [navigate, wslug],
+    [navigate, wslug, qc, updateProject],
   );
 
   const primary: NavItem[] = useMemo(
@@ -185,6 +212,31 @@ function WorkspaceLayout() {
     }
   };
 
+  const executeDelete = async () => {
+    if (!confirmDelete) return;
+    try {
+      if (confirmDelete.kind === 'project') {
+        await deleteProject.mutateAsync(confirmDelete.pslug);
+        toast.success(`Deleted project "${confirmDelete.name}"`);
+        if (activePslug === confirmDelete.pslug) {
+          void navigate({ to: '/w/$wslug', params: { wslug } });
+        }
+      } else if (confirmDelete.kind === 'table') {
+        await client.delete(`/api/v1/w/${wslug}/p/${confirmDelete.pslug}/tables/${confirmDelete.tslug}`);
+        await qc.invalidateQueries({ queryKey: tablesKeys.list(wslug, confirmDelete.pslug) });
+        toast.success(`Deleted table "${confirmDelete.name}"`);
+      } else if (confirmDelete.kind === 'view') {
+        await client.delete(`/api/v1/w/${wslug}/p/${confirmDelete.pslug}/views/${confirmDelete.viewId}`);
+        await qc.invalidateQueries({ queryKey: viewsKeys.list(wslug, confirmDelete.pslug) });
+        toast.success(`Deleted view "${confirmDelete.name}"`);
+      }
+    } catch (err) {
+      toast.error(formatApiError(err));
+    } finally {
+      setConfirmDelete(null);
+    }
+  };
+
   return (
     <>
       <Shell
@@ -200,6 +252,7 @@ function WorkspaceLayout() {
                   workspaces={switcherEntries}
                   onSelectWorkspace={onSelectWorkspace}
                   onCreateWorkspace={onCreateWorkspace}
+                  onCreateProject={() => setCreatingProject(true)}
                 />
               ),
             }}
@@ -221,6 +274,15 @@ function WorkspaceLayout() {
         main={<Outlet />}
       />
       <WorkspaceCreate open={creatingWorkspace} onOpenChange={setCreatingWorkspace} />
+      <ProjectCreate wslug={wslug} open={creatingProject} onOpenChange={setCreatingProject} />
+      {creatingTable && (
+        <TableCreate
+          wslug={wslug}
+          pslug={creatingTable.pslug}
+          open={creatingTable !== null}
+          onOpenChange={(open) => { if (!open) setCreatingTable(null); }}
+        />
+      )}
       {newViewSheet && (
         <NewViewSheet
           open={newViewSheet !== null}
@@ -231,6 +293,30 @@ function WorkspaceLayout() {
           pslug={newViewSheet.pslug}
         />
       )}
+      <Dialog open={!!confirmDelete} onOpenChange={(open) => { if (!open) setConfirmDelete(null); }}>
+        <DialogContent>
+          {confirmDelete && (
+            <>
+              <DialogTitle>Delete {confirmDelete.kind} "{confirmDelete.name}"?</DialogTitle>
+              <DialogDescription>
+                {confirmDelete.kind === 'project'
+                  ? 'All tables, views, and documents in this project will be permanently removed.'
+                  : confirmDelete.kind === 'table'
+                  ? 'All views and documents in this table will be permanently removed.'
+                  : 'This view will be removed. Documents are not affected.'}
+              </DialogDescription>
+              <div className="mt-6 flex justify-end gap-2">
+                <Button type="button" variant="secondary" onClick={() => setConfirmDelete(null)}>
+                  Cancel
+                </Button>
+                <Button type="button" onClick={executeDelete}>
+                  Delete
+                </Button>
+              </div>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

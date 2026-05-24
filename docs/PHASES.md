@@ -247,9 +247,11 @@ For full context on any decision: `@docs/FOLIO-BRIEFING.md`. For the operating m
 
 ---
 
-## Phase 1.6.1 — Rail completeness (Half-day polish)
+## Phase 1.6.1 — Rail completeness (Half-day polish) — SHIPPED 2026-05-24
 
-**Goal:** Close the dead-end UX gaps Stefan hit on the post-1.6 walkthrough. Today: workspace creation works everywhere, but **creating a project from inside a workspace requires going back to the project picker**; tables can't be **renamed / created / deleted** from the UI at all (every project's table is just stuck called "Work Items"); views can't be **renamed / deleted** either. Backend supports all of these — only UI is missing. Also: surface Wiki + multi-table structure in the rail so the table layer earns its keep.
+**Goal:** Close the dead-end UX gaps Stefan hit on the post-1.6 walkthrough.
+
+> **Status:** Absorbed into `phase-1.6/saved-views` branch. Hover-reveal `+`/`⋯` pattern (NocoDB-style) on every rail row, double-click rename, confirm dialog for deletes. `+ New project` lives in the workspace switcher popover footer. No new tests added — manual QA gates this. Today: workspace creation works everywhere, but **creating a project from inside a workspace requires going back to the project picker**; tables can't be **renamed / created / deleted** from the UI at all (every project's table is just stuck called "Work Items"); views can't be **renamed / deleted** either. Backend supports all of these — only UI is missing. Also: surface Wiki + multi-table structure in the rail so the table layer earns its keep.
 
 Target UX:
 
@@ -296,13 +298,13 @@ Target UX:
 
 ### Phase 1.6.1 acceptance
 
-- [ ] Create a project from inside another project — works via rail.
-- [ ] Rename the default table from "Work Items" to "Tasks" — works.
-- [ ] Create a second table "Bugs" — appears in the rail under the same project.
-- [ ] Delete a non-default view — disappears from the rail, server confirms.
-- [ ] Rename a view via the rail — propagates to the rail label.
-- [ ] Wiki appears as a sibling row to tables under each project.
-- [ ] Commit: `phase-1.6.1: complete`
+- [x] Create a project from inside another project — `+ New project` lives in the workspace switcher popover footer.
+- [x] Rename the default table from "Work Items" to "Tasks" — double-click table row label.
+- [x] Create a second table "Bugs" — `+` button on project row's hover affordances opens TableCreate sheet.
+- [x] Delete a non-default view — `⋯ → Delete` on view row, confirm dialog.
+- [x] Rename a view via the rail — double-click view row label.
+- [x] Wiki appears as a sibling row to tables under each project.
+- [x] Commit: `phase-1.6.1: absorbed into phase-1.6`
 
 ---
 

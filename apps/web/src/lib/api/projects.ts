@@ -45,3 +45,27 @@ export function useCreateProject(wslug: string) {
     onSuccess: () => qc.invalidateQueries({ queryKey: projectsKeys.list(wslug) }),
   });
 }
+
+export interface ProjectPatch {
+  name?: string;
+  icon?: string | null;
+  description?: string | null;
+}
+
+export function useUpdateProject(wslug: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ pslug, patch }: { pslug: string; patch: ProjectPatch }) =>
+      client.patch<Project>(`/api/v1/w/${wslug}/p/${pslug}`, patch),
+    onSuccess: () => qc.invalidateQueries({ queryKey: projectsKeys.list(wslug) }),
+  });
+}
+
+export function useDeleteProject(wslug: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (pslug: string) =>
+      client.delete(`/api/v1/w/${wslug}/p/${pslug}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: projectsKeys.list(wslug) }),
+  });
+}

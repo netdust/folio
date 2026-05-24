@@ -20,8 +20,19 @@ export interface NavItem {
   onClick?: () => void;
   /** When set, the item is expandable and renders its children indented below. */
   children?: NavItem[];
-  /** Optional trailing slot shown to the right of the label when expanded. */
-  trailing?: ReactNode;
+  /** Hover-reveal "+" button next to row. */
+  onPlus?: () => void;
+  plusLabel?: string;
+  /** Hover-reveal "⋯" menu next to row. */
+  menuItems?: RowMenuItem[];
+  /** Double-click the label to inline-edit. Called with the trimmed new name. */
+  onRename?: (next: string) => void;
+}
+
+export interface RowMenuItem {
+  label: string;
+  onSelect: () => void;
+  destructive?: boolean;
 }
 
 export interface WorkspaceConfig {
