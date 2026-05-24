@@ -79,3 +79,4 @@ Living snapshot of where the project actually is. Read at session start. Update 
 - [2026-05-24] Earlier: wired all 10 skipped manual-qa Playwright scenarios (`55cb795`), silenced TanStack Router warnings via `routeFileIgnorePattern`, seeded demo data via `scripts/seed-demo.ts` for stefan@netdust.be.
 [2026-05-24] — session ended (no significant changes captured)
 [2026-05-24] — session ended (no significant changes captured)
+[2026-05-24] — session ended (no significant changes captured)
