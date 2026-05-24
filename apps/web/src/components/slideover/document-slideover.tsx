@@ -19,6 +19,8 @@ import { FrontmatterForm } from './frontmatter-form.tsx';
 import { BodyEditor } from './body-editor.tsx';
 import { ModeToggle, type EditorMode } from './mode-toggle.tsx';
 import { RawMdEditor } from './raw-md-editor.tsx';
+import { LogActivityButton } from './log-activity-button.tsx';
+import { ActivityPanel } from './activity-panel.tsx';
 
 interface Props {
   wslug: string;
@@ -175,7 +177,10 @@ function SlideoverBody({ wslug, pslug, slug }: { wslug: string; pslug: string; s
       <header className="flex-shrink-0 space-y-3 pb-4">
         <div className="flex items-center justify-between">
           <div className="font-mono text-[11px] text-fg-3">/{doc.slug}</div>
-          <ModeToggle mode={mode} onChange={setMode} />
+          <div className="flex items-center gap-2">
+            <LogActivityButton wslug={wslug} pslug={pslug} slug={doc.slug} />
+            <ModeToggle mode={mode} onChange={setMode} />
+          </div>
         </div>
         <FrontmatterForm
           type={doc.type}
@@ -188,22 +193,25 @@ function SlideoverBody({ wslug, pslug, slug }: { wslug: string; pslug: string; s
           pendingKeys={pendingKeys}
         />
       </header>
-      <div className="flex-1 min-h-0 overflow-hidden border-t border-border-light pt-4">
-        {mode === 'rich' ? (
-          <BodyEditor
-            key={`rich-${doc.slug}`}
-            value={doc.body}
-            onChange={(body) => onPatch({ body }, ['body'])}
-            documents={docPage?.data ?? []}
-            aiConfigured={aiConfigured}
-          />
-        ) : (
-          <RawMdEditor
-            key={`raw-${doc.slug}`}
-            value={doc.body}
-            onChange={(body) => onPatch({ body }, ['body'])}
-          />
-        )}
+      <div className="flex-1 min-h-0 overflow-y-auto border-t border-border-light pt-4">
+        <div className="min-h-[200px]">
+          {mode === 'rich' ? (
+            <BodyEditor
+              key={`rich-${doc.slug}`}
+              value={doc.body}
+              onChange={(body) => onPatch({ body }, ['body'])}
+              documents={docPage?.data ?? []}
+              aiConfigured={aiConfigured}
+            />
+          ) : (
+            <RawMdEditor
+              key={`raw-${doc.slug}`}
+              value={doc.body}
+              onChange={(body) => onPatch({ body }, ['body'])}
+            />
+          )}
+        </div>
+        <ActivityPanel wslug={wslug} pslug={pslug} slug={doc.slug} />
       </div>
     </article>
   );

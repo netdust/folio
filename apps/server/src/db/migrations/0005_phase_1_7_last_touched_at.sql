@@ -1,0 +1,1 @@
+ALTER TABLE `documents` ADD `last_touched_at` integer;

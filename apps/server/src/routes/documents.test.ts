@@ -379,3 +379,71 @@ test('GET /documents/:slug.md returns raw markdown with frontmatter', async () =
   expect(text).toMatch(/title: Round Trip/);
   expect(text).toMatch(/priority: high/);
 });
+
+test('POST /:slug/activity bumps last_touched_at and emits activity.logged', async () => {
+  const { app, seed } = await makeTestApp();
+  await app.request(path, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: 'work_item', title: 'Lead Foo' }),
+  });
+
+  const before = await app.request(`${path}/lead-foo`, { headers: { Cookie: seed.sessionCookie } });
+  expect((await before.json()).data.lastTouchedAt).toBeNull();
+
+  const res = await app.request(`${path}/lead-foo/activity`, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ note: 'Called, will follow up Tuesday' }),
+  });
+  expect(res.status).toBe(201);
+
+  const after = await app.request(`${path}/lead-foo`, { headers: { Cookie: seed.sessionCookie } });
+  const afterDoc = (await after.json()).data;
+  expect(afterDoc.lastTouchedAt).not.toBeNull();
+
+  const events = await app.request(`${path}/lead-foo/events`, { headers: { Cookie: seed.sessionCookie } });
+  const list = (await events.json()).data;
+  const activityEvents = list.filter((e: { kind: string }) => e.kind === 'activity.logged');
+  expect(activityEvents).toHaveLength(1);
+  expect(activityEvents[0].payload).toEqual({ note: 'Called, will follow up Tuesday' });
+});
+
+test('POST /:slug/activity 422 on empty note', async () => {
+  const { app, seed } = await makeTestApp();
+  await app.request(path, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: 'work_item', title: 'X' }),
+  });
+  const res = await app.request(`${path}/x/activity`, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ note: '' }),
+  });
+  expect(res.status).toBe(422);
+});
+
+test('GET /?stale_for=Nd filters by last_touched_at', async () => {
+  const { app, seed } = await makeTestApp();
+  // Create 2 work items
+  for (const title of ['Fresh', 'Stale']) {
+    await app.request(path, {
+      method: 'POST',
+      headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'work_item', title }),
+    });
+  }
+  // Touch only Fresh.
+  await app.request(`${path}/fresh/activity`, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ note: 'Touched' }),
+  });
+  // Stale-for filter with 7 days — Fresh has lastTouchedAt=now (NOT stale),
+  // Stale has lastTouchedAt=null (stale by convention).
+  const res = await app.request(`${path}?type=work_item&stale_for=7d`, { headers: { Cookie: seed.sessionCookie } });
+  const titles = (await res.json()).data.map((d: { title: string }) => d.title);
+  expect(titles).toContain('Stale');
+  expect(titles).not.toContain('Fresh');
+});

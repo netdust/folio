@@ -8,6 +8,7 @@ import type { Column } from './columns.ts';
 import type { DocumentSummary } from '../../lib/api/documents.ts';
 import type { Status } from '../../lib/api/statuses.ts';
 import { relativeTime } from '../../lib/relative-time.ts';
+import { dueUrgency, urgencyClasses } from '../../lib/due-urgency.ts';
 
 interface Props {
   column: Column;
@@ -88,15 +89,19 @@ export function TableCell({
     }
     if (!column.fieldType) return null;
     const value = doc.frontmatter?.[column.key];
+    const isDueField = column.fieldType === 'date' && column.key === 'next_action_due';
+    const urgencyClass = isDueField ? urgencyClasses(dueUrgency(value)) : '';
     return (
-      <FieldRenderer
-        fieldKey={column.key}
-        type={column.fieldType}
-        value={value}
-        options={column.fieldOptions ?? undefined}
-        onCommit={(next) => onFieldCommit(doc.slug, column.key, next)}
-        isPending={isPending}
-      />
+      <span className={urgencyClass || undefined}>
+        <FieldRenderer
+          fieldKey={column.key}
+          type={column.fieldType}
+          value={value}
+          options={column.fieldOptions ?? undefined}
+          onCommit={(next) => onFieldCommit(doc.slug, column.key, next)}
+          isPending={isPending}
+        />
+      </span>
     );
   }
 }

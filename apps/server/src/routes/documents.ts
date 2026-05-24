@@ -9,7 +9,7 @@ import {
   FilterCompileError,
 } from '@folio/shared';
 import { db } from '../db/client.ts';
-import { documents, statuses } from '../db/schema.ts';
+import { documents, events, statuses } from '../db/schema.ts';
 import { jsonOk, HTTPError } from '../lib/http.ts';
 import { emitEvent } from '../lib/events.ts';
 import { parseMarkdown, serializeMarkdown } from '../lib/frontmatter.ts';
@@ -212,6 +212,16 @@ documentsRoute.get('/', async (c) => {
       whereClauses.push(gte(documents.updatedAt, ts));
     }
   }
+  // ?stale_for=14d → documents whose last_touched_at is NULL or older than N days ago.
+  const staleFor = c.req.query('stale_for');
+  if (staleFor) {
+    const m = staleFor.match(/^(\d+)d$/);
+    if (m) {
+      const days = Number(m[1]);
+      const cutoff = new Date(Date.now() - days * 86_400_000);
+      whereClauses.push(or(isNull(documents.lastTouchedAt), lt(documents.lastTouchedAt, cutoff)) as never);
+    }
+  }
   if (filterWhere) whereClauses.push(filterWhere);
   if (cursor) {
     const ts = new Date(cursor.updatedAt);
@@ -383,6 +393,56 @@ documentsRoute.delete('/:slug', async (c) => {
     });
   });
   return c.body(null, 204);
+});
+
+// POST /:slug/activity { note } — emits activity.logged + bumps lastTouchedAt.
+documentsRoute.post('/:slug/activity', async (c) => {
+  const user = getUser(c);
+  const p = getProject(c);
+  const ws = getWorkspace(c);
+  const slug = c.req.param('slug');
+  let body: { note?: unknown };
+  try { body = (await c.req.json()) as { note?: unknown }; }
+  catch { throw new HTTPError('INVALID_BODY', 'JSON body required', 400); }
+  const note = typeof body.note === 'string' ? body.note.trim() : '';
+  if (!note) throw new HTTPError('INVALID_NOTE', 'note is required', 422);
+
+  const existing = await db.query.documents.findFirst({
+    where: and(eq(documents.projectId, p.id), eq(documents.slug, slug)),
+  });
+  if (!existing) throw new HTTPError('DOCUMENT_NOT_FOUND', `document "${slug}" not found`, 404);
+
+  const now = new Date();
+  await db.transaction(async (tx) => {
+    await tx.update(documents).set({ lastTouchedAt: now }).where(eq(documents.id, existing.id));
+    await emitEvent(tx, {
+      workspaceId: ws.id, projectId: p.id, documentId: existing.id,
+      kind: 'activity.logged', actor: user.id, payload: { note },
+    });
+  });
+
+  return c.json({ data: { lastTouchedAt: now.toISOString() } }, 201);
+});
+
+// GET /:slug/events — newest-first events for the given document.
+documentsRoute.get('/:slug/events', async (c) => {
+  const p = getProject(c);
+  const slug = c.req.param('slug');
+  const limit = Math.max(1, Math.min(200, Number(c.req.query('limit') ?? 50)));
+
+  const doc = await db.query.documents.findFirst({
+    where: and(eq(documents.projectId, p.id), eq(documents.slug, slug)),
+  });
+  if (!doc) throw new HTTPError('DOCUMENT_NOT_FOUND', `document "${slug}" not found`, 404);
+
+  const rows = await db
+    .select()
+    .from(events)
+    .where(eq(events.documentId, doc.id))
+    .orderBy(desc(events.createdAt), desc(events.id))
+    .limit(limit);
+
+  return c.json({ data: rows });
 });
 
 export { documentsRoute };
