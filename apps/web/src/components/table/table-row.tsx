@@ -46,21 +46,25 @@ export function TableRow({
     <RowContextMenu items={[{ label: 'Copy as Markdown', onSelect: onCopy, hint: '⌘⇧C' }]}>
       <div
         role="listitem"
-        className={`grid w-full ${TABLE_GRID_TEMPLATE} items-center gap-3 border-b border-border-light py-2 hover:bg-card`}
+        className="flex w-full items-center gap-2 border-b border-border-light py-2 hover:bg-card"
       >
-        {columns.map((c) => (
-          <TableCell
-            key={c.key}
-            column={c}
-            doc={doc}
-            statuses={statuses}
-            isPending={isPending}
-            onOpen={onOpen}
-            onTitleCommit={onTitleCommit}
-            onStatusCommit={onStatusCommit}
-            onFieldCommit={onFieldCommit}
-          />
-        ))}
+        <div className={`grid flex-1 ${TABLE_GRID_TEMPLATE} items-center gap-3`}>
+          {columns.map((c) => (
+            <TableCell
+              key={c.key}
+              column={c}
+              doc={doc}
+              statuses={statuses}
+              isPending={isPending}
+              onOpen={onOpen}
+              onTitleCommit={onTitleCommit}
+              onStatusCommit={onStatusCommit}
+              onFieldCommit={onFieldCommit}
+            />
+          ))}
+        </div>
+        {/* Spacer matching the column-picker IconButton on the header for grid alignment. */}
+        <div aria-hidden className="h-8 w-8 shrink-0" />
       </div>
     </RowContextMenu>
   );
