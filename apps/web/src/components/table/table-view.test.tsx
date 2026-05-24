@@ -12,7 +12,7 @@ import {
 import { z } from 'zod';
 import { TableView } from './table-view.tsx';
 
-function setup() {
+function setup(initialEntry = '/w/acme/p/web/work-items') {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
@@ -20,7 +20,14 @@ function setup() {
   const work = createRoute({
     getParentRoute: () => rootRoute,
     path: '/w/$wslug/p/$pslug/work-items',
-    validateSearch: z.object({ doc: z.string().optional() }),
+    validateSearch: z.object({
+      doc: z.string().optional(),
+      view: z.string().optional(),
+      status: z.union([z.string(), z.array(z.string())]).optional(),
+      priority: z.string().optional(),
+      sort: z.string().optional(),
+      dir: z.string().optional(),
+    }),
     component: () => {
       const { wslug, pslug } = work.useParams();
       return <TableView wslug={wslug} pslug={pslug} />;
@@ -28,7 +35,7 @@ function setup() {
   });
   const router = createRouter({
     routeTree: rootRoute.addChildren([work]),
-    history: createMemoryHistory({ initialEntries: ['/w/acme/p/web/work-items'] }),
+    history: createMemoryHistory({ initialEntries: [initialEntry] }),
   });
   return { queryClient, router };
 }
@@ -129,5 +136,66 @@ describe('TableView', () => {
     // Intl.NumberFormat output depends on the test env's default locale.
     const currencyCell = screen.getByText((content) => /€/.test(content) && /1[\.,]250/.test(content));
     expect(currencyCell).toBeInTheDocument();
+  });
+
+  it('hydrates URL filters from the active view when ?view= matches a non-default view', async () => {
+    const defaultView = {
+      ...viewRow,
+      id: 'v-default',
+      slug: 'all',
+      name: 'All',
+      isDefault: true,
+      filters: {},
+    };
+    const triageView = {
+      ...viewRow,
+      id: 'v-triage',
+      slug: 'triage',
+      name: 'Triage',
+      isDefault: false,
+      filters: { status: { $eq: 'In Progress' } },
+    };
+
+    const fetchMock = vi.fn<typeof fetch>(async (url, init) => {
+      const u = String(url);
+      const method = init?.method ?? 'GET';
+      if (u.includes('/statuses') && method === 'GET') {
+        return new Response(JSON.stringify({ data: [statusRow] }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (u.includes('/fields') && method === 'GET') {
+        return new Response(JSON.stringify({ data: [fieldRow] }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (u.includes('/views') && method === 'GET') {
+        return new Response(JSON.stringify({ data: [defaultView, triageView] }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (u.includes('/documents') && method === 'GET') {
+        return new Response(JSON.stringify({ data: { data: [docRow], nextCursor: null } }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { queryClient, router } = setup('/w/acme/p/web/work-items?view=v-triage');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByText('First task')).toBeInTheDocument());
+
+    await waitFor(() => {
+      const s = router.state.location.search as Record<string, unknown>;
+      expect(s.view).toBe('v-triage');
+      expect(s.status).toBe('In Progress');
+    });
   });
 });

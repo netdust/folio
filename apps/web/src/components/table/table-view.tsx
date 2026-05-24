@@ -1,5 +1,5 @@
 import { useNavigate, useSearch } from '@tanstack/react-router';
-import { useMemo, useState, useCallback } from 'react';
+import { useMemo, useState, useCallback, useEffect, useRef } from 'react';
 import { Inbox } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -60,12 +60,70 @@ export function TableView({ wslug, pslug }: Props) {
   const updateView = useUpdateView(wslug, pslug);
   const [pendingSlugs, setPendingSlugs] = useState<Set<string>>(new Set());
 
-  // For Phase 2B: use the default view if any, else the first; null if neither.
-  // Phase 2C will read the active view from ?view=:slug in the URL.
+  const urlViewId = typeof search.view === 'string' ? search.view : undefined;
+
   const activeView = useMemo(() => {
     const list = viewsData ?? [];
+    if (urlViewId) {
+      const found = list.find((v) => v.id === urlViewId);
+      if (found) return found;
+    }
     return list.find((v) => v.isDefault) ?? list[0] ?? null;
-  }, [viewsData]);
+  }, [urlViewId, viewsData]);
+
+  // Hydrate URL filters/sort from the active view ONCE per view. The ref guard
+  // prevents the effect from re-firing when `search` updates as a result of
+  // hydration. User changes to the URL after hydration always win until they
+  // explicitly save filters back to the view (Task 8).
+  const hydratedViewId = useRef<string | null>(null);
+  useEffect(() => {
+    if (!activeView) return;
+    if (hydratedViewId.current === activeView.id) return;
+    hydratedViewId.current = activeView.id;
+
+    const viewFilters = (activeView.filters ?? {}) as Record<string, unknown>;
+    const nextSearch: Record<string, unknown> = {};
+
+    if (search.doc) nextSearch.doc = search.doc;
+    if (urlViewId) nextSearch.view = urlViewId;
+
+    // The compiler accepts both flat (`{status: 'In Progress'}`) and AST
+    // (`{status: {$eq: 'In Progress'}}`); honor both at read time.
+    for (const key of ['status', 'priority', 'assignee', 'labels', 'updated_since'] as const) {
+      const raw = viewFilters[key];
+      if (raw === undefined || raw === null || raw === '') continue;
+      if (typeof raw === 'string' || typeof raw === 'number' || Array.isArray(raw)) {
+        nextSearch[key] = raw;
+        continue;
+      }
+      if (typeof raw === 'object') {
+        const op = raw as Record<string, unknown>;
+        if ('$eq' in op && op['$eq'] !== undefined) nextSearch[key] = op['$eq'];
+        else if ('$in' in op && Array.isArray(op['$in'])) nextSearch[key] = op['$in'] as unknown[];
+      }
+    }
+
+    const viewSort = activeView.sort;
+    if (Array.isArray(viewSort) && viewSort.length > 0) {
+      const first = viewSort[0];
+      if (first && typeof first === 'object' && 'key' in first) {
+        const k = (first as { key: unknown }).key;
+        if (typeof k === 'string') {
+          nextSearch.sort = k;
+          const d = (first as { dir?: unknown }).dir;
+          nextSearch.dir = d === 'desc' ? 'desc' : 'asc';
+        }
+      }
+    }
+
+    const searchObj = search as Record<string, unknown>;
+    const same =
+      Object.keys(searchObj).length === Object.keys(nextSearch).length &&
+      Object.keys(nextSearch).every((k) => nextSearch[k] === searchObj[k]);
+    if (same) return;
+
+    void navigate({ to: '.', search: nextSearch, replace: true });
+  }, [activeView, urlViewId, navigate, search]);
 
   const allColumns: Column[] = useMemo(
     () => mergeColumns(fields ?? [], activeView),

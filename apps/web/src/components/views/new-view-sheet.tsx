@@ -60,9 +60,7 @@ export function NewViewSheet({ open, onOpenChange, wslug, pslug, currentSearch }
       void navigate({
         to: '/w/$wslug/p/$pslug/work-items',
         params: { wslug, pslug },
-        // TODO Task 7: declare `view?: string` on the work-items route's
-        // validateSearch schema, then drop this cast.
-        search: { view: view.id } as unknown as Record<string, never>,
+        search: { view: view.id },
       });
     } catch (err) {
       toast.error(formatApiError(err));

@@ -6,6 +6,7 @@ const stringOrArray = z.union([z.string(), z.array(z.string())]).optional();
 
 const search = z.object({
   doc: z.string().optional(),
+  view: z.string().min(1).optional(),
   status: stringOrArray,
   priority: z.string().optional(),
   labels: stringOrArray,

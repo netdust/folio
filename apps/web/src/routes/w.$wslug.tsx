@@ -45,6 +45,8 @@ function WorkspaceLayout() {
   const [newViewSheet, setNewViewSheet] = useState<{ pslug: string } | null>(null);
 
   const currentPath = routerState.location.pathname;
+  const currentSearch = routerState.location.search as Record<string, unknown>;
+  const activeViewId = typeof currentSearch.view === 'string' ? currentSearch.view : undefined;
 
   // Per-project tables + views fetched in batch. `useQueries` is a single hook
   // call, so it's legal in render even though the inner array varies in length.
@@ -105,10 +107,7 @@ function WorkspaceLayout() {
         void navigate({
           to: '/w/$wslug/p/$pslug/work-items',
           params: { wslug, pslug },
-          // TODO Task 7: declare `view?: string` on the work-items route's
-          // validateSearch schema, then drop this cast. The route schema
-          // currently rejects unknown keys, so we widen `search` locally.
-          search: { view: viewId } as unknown as Record<string, never>,
+          search: { view: viewId },
         });
       },
       onNewView: (pslug: string, _tslug: string) => {
@@ -127,12 +126,11 @@ function WorkspaceLayout() {
         currentRoute: {
           wslug,
           pslug: activePslug,
-          // TODO Task 7: read the active view id from `?view=` URL search.
-          viewId: undefined,
+          viewId: activeViewId,
         },
         handlers,
       }),
-    [projectList, tablesByProject, viewsByTable, wslug, activePslug, handlers],
+    [projectList, tablesByProject, viewsByTable, wslug, activePslug, activeViewId, handlers],
   );
 
   const switcherEntries = useMemo(
