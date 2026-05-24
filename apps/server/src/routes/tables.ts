@@ -26,6 +26,15 @@ const baseSchema = z.object({
   order: z.number().int().optional(),
 });
 
+// PATCH intentionally excludes `slug`: renaming a table's slug would silently
+// invalidate every URL pointing at that table's children (statuses, fields,
+// views, documents). Slug is immutable in v1.
+const patchSchema = z.object({
+  name: z.string().min(1).max(80).optional(),
+  icon: z.string().nullable().optional(),
+  order: z.number().int().optional(),
+});
+
 tablesRoute.get('/', async (c) => {
   const p = getProject(c);
   const rows = await db.query.tables.findMany({
@@ -77,7 +86,7 @@ tablesRoute.post('/', zValidator('json', baseSchema), async (c) => {
   return jsonOk(c, row, 201);
 });
 
-tablesRoute.patch('/:tslug', zValidator('json', baseSchema.partial()), async (c) => {
+tablesRoute.patch('/:tslug', zValidator('json', patchSchema), async (c) => {
   const user = getUser(c);
   const p = getProject(c);
   const ws = getWorkspace(c);
@@ -89,20 +98,10 @@ tablesRoute.patch('/:tslug', zValidator('json', baseSchema.partial()), async (c)
 
   const patch = c.req.valid('json');
 
-  // If renaming the slug explicitly, ensure no collision.
-  if (patch.slug && patch.slug !== row.slug) {
-    const existing = await db.query.tables.findFirst({
-      where: and(eq(tables.projectId, p.id), eq(tables.slug, patch.slug)),
-    });
-    if (existing) {
-      throw new HTTPError('SLUG_TAKEN', `table "${patch.slug}" already exists`, 409);
-    }
-  }
-
-  // Only persist columns we actually allow patching.
+  // Only persist columns we actually allow patching. `slug` is intentionally
+  // excluded — see patchSchema above.
   const updates: Partial<typeof tables.$inferInsert> = {};
   if (patch.name !== undefined) updates.name = patch.name;
-  if (patch.slug !== undefined) updates.slug = patch.slug;
   if (patch.icon !== undefined) updates.icon = patch.icon;
   if (patch.order !== undefined) updates.order = patch.order;
 

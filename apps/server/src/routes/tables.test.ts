@@ -86,6 +86,21 @@ test('PATCH /tables/:tslug renames the table', async () => {
   expect((await res.json()).data.name).toBe('Tickets');
 });
 
+test('PATCH /tables/:tslug ignores slug field (immutable)', async () => {
+  const { app, seed } = await makeTestApp({ seedProjectDefaults: true });
+  const res = await app.request(`${base}/work-items`, {
+    method: 'PATCH',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ slug: 'renamed' }),
+  });
+  // Zod strict schema accepts unknown keys by stripping them, so the request succeeds
+  // but the slug stays unchanged. Use the GET to confirm.
+  expect(res.status).toBe(200);
+  const list = await app.request(base, { headers: { Cookie: seed.sessionCookie } });
+  const data = (await list.json()).data;
+  expect(data[0].slug).toBe('work-items');
+});
+
 test('PATCH /tables/:tslug 404 on unknown slug', async () => {
   const { app, seed } = await makeTestApp();
   const res = await app.request(`${base}/nope`, {
