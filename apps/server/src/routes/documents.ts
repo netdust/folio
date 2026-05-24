@@ -264,8 +264,10 @@ documentsRoute.patch('/:slug', async (c) => {
       throw new HTTPError('INVALID_BODY', 'document type cannot change', 422);
     }
     if (existing.type === 'work_item') {
-      // existing.tableId is non-null for work_items (DB invariant once Phase 2A
-      // backfill ran). Fall back to getTable(c) for safety.
+      // existing.tableId is NULL only for pages; this branch is gated on
+      // work_item, which in practice always has a tableId. The fallback to
+      // getTable(c) guards against accidental misuse from a table-scoped mount
+      // where the row's stored tableId is somehow absent.
       const tId = existing.tableId ?? getTable(c).id;
       await validateStatus(tId, parsed.status);
     }
@@ -296,6 +298,9 @@ documentsRoute.patch('/:slug', async (c) => {
   const patch = parsed.data;
 
   if (patch.status !== undefined && existing.type === 'work_item') {
+    // Same shape as the markdown branch above: existing.tableId is NULL only
+    // for pages, and this is gated on work_item. The fallback to getTable(c)
+    // guards the table-scoped mount in case the stored tableId is absent.
     const tId = existing.tableId ?? getTable(c).id;
     await validateStatus(tId, patch.status);
   }
