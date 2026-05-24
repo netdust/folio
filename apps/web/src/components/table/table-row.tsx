@@ -89,8 +89,6 @@ export function TableRow({
             );
           })()}
         </div>
-        {/* Spacer matching the column-picker IconButton on the header for grid alignment. */}
-        <div aria-hidden className="h-6 w-6 shrink-0" />
       </div>
     </RowContextMenu>
   );

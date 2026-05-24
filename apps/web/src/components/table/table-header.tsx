@@ -1,7 +1,6 @@
 import { DndContext, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
 import { useSortable, SortableContext, horizontalListSortingStrategy, arrayMove } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { ColumnPicker } from './column-picker.tsx';
 import { gridTemplate, type Column } from './columns.ts';
 
 export type SortKey = 'title' | 'status' | 'updated_at';
@@ -12,21 +11,15 @@ const SORTABLE_BUILTIN_KEYS: SortKey[] = ['title', 'status', 'updated_at'];
 
 interface Props {
   columns: Column[];         // visible columns, already ordered
-  allColumns: Column[];      // every column (for the picker)
-  visibleKeys: string[];
   sort: SortState | null;
   onSort: (next: SortState | null) => void;
-  onVisibilityChange: (next: string[]) => void;
   onReorder: (nextOrder: string[]) => void;
 }
 
 export function TableHeader({
   columns,
-  allColumns,
-  visibleKeys,
   sort,
   onSort,
-  onVisibilityChange,
   onReorder,
 }: Props) {
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
@@ -71,7 +64,6 @@ export function TableHeader({
           </div>
         </SortableContext>
       </DndContext>
-      <ColumnPicker columns={allColumns} visibleKeys={visibleKeys} onChange={onVisibilityChange} />
     </div>
   );
 }

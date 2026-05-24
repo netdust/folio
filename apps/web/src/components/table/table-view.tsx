@@ -21,6 +21,7 @@ import { FilterBar } from '../filter/filter-bar.tsx';
 import { EmptyState } from '../views/empty-state.tsx';
 import { ListSkeleton } from '../views/list-skeleton.tsx';
 import { TableHeader, type SortState } from './table-header.tsx';
+import { ColumnPicker } from './column-picker.tsx';
 import { TableRow } from './table-row.tsx';
 import {
   mergeColumns,
@@ -241,21 +242,25 @@ export function TableView({ wslug, pslug }: Props) {
 
   return (
     <>
-      <FilterBar
-        clauses={clauses}
-        statuses={statuses ?? []}
-        pinnedFields={fields ?? []}
-        onChange={onClauseChange}
-      />
+      <div className="flex items-center justify-between gap-2">
+        <FilterBar
+          clauses={clauses}
+          statuses={statuses ?? []}
+          pinnedFields={fields ?? []}
+          onChange={onClauseChange}
+        />
+        <ColumnPicker
+          columns={allColumns}
+          visibleKeys={visibleKeys}
+          onChange={onVisibilityChange}
+        />
+      </div>
       <div className="folio-scroll -mx-[22px] overflow-x-auto">
         <div className="px-[22px]">
           <TableHeader
             columns={visibleColumns}
-            allColumns={allColumns}
-            visibleKeys={visibleKeys}
             sort={sort}
             onSort={onSortChange}
-            onVisibilityChange={onVisibilityChange}
             onReorder={onReorder}
           />
           {isLoading ? <ListSkeleton rows={6} /> : null}
