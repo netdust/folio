@@ -35,8 +35,9 @@ Living snapshot of where the project actually is. Read at session start. Update 
 - Single-binary build verification (`bun build --compile`).
 - Docker image verification end-to-end.
 - Timeline view, This Week dashboard (Phase 1.5 time-aware bundle).
-- **Phase 2B — spreadsheet table UI**: per-table columns picker, currency/date/select cell types, drag-reorder. Backend (`tables` + `views` + per-table `statuses/fields/views`) is ready and tested.
+- **Phase 2B — spreadsheet table UI**: per-table columns picker, currency/date/select cell types, drag-reorder. Backend (`tables` + `views` + per-table `statuses/fields/views`) is ready and tested. **Plan written**: `docs/superpowers/plans/2026-05-24-phase-2b-spreadsheet-table-ui.md`.
 - **Phase 2C — saved views in rail (Linear-style)**: nest tables under projects, views under tables. Click a view = filter applied, render mode applied.
+- **Phase 2C.5 — Lightweight CRM polish** (added 2026-05-24): first-class `next_action` / `next_action_due` / `next_action_owner` frontmatter surfaced in spreadsheet + slideover; `last_touched_at` distinct from `updated_at` (touched only by explicit activity log); per-record activity log panel in slideover reading from the existing `events` table; playbook linking from a stage to a wiki page. Use case: agency follow-up CRM, no automation — "where are we / what's next / when's it due / what's the playbook for this stage." Designed to be agent-readable (markdown source-of-truth).
 - **Phase 2D — per-view render mode**: views store `renderAs: 'list' | 'kanban' | 'calendar'`. Frontend renders accordingly.
 - Tokens / SSE / MCP server (Phase 3).
 - Slash commands in body editor (Phase 4).
