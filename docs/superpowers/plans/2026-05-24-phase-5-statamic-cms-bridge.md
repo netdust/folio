@@ -1,14 +1,14 @@
-# Phase 3 — Statamic CMS Bridge Implementation Plan
+# Phase 5 — Statamic CMS Bridge Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Folio documents can be published to a Statamic site. A document with status `published` in a "Content pipeline" table syncs to a Statamic collection entry; subsequent edits replicate; unpublishing deletes the entry. The user configures one or more "sync targets" per workspace pointing at a Statamic instance.
 
-**Architecture:** New `sync_targets` table holds connection config (base URL, API token, collection slug, table_id source, status field mapping). A small `StatamicAdapter` class wraps Statamic's REST API (auth header, collection POST/PATCH/DELETE). A "sync engine" subscribes to `document.updated`/`document.created`/`document.deleted` events for documents in a sync-target's source table, computes the desired state, and pushes to Statamic. Sync runs synchronously inside the same request transaction for v1 — failures surface as toasts; in v3.1 we'll move to a queue. New `sync_log` table records every attempt for visibility + retry.
+**Architecture:** New `sync_targets` table holds connection config (base URL, API token, collection slug, table_id source, status field mapping). A small `StatamicAdapter` class wraps Statamic's REST API (auth header, collection POST/PATCH/DELETE). A "sync engine" subscribes to `document.updated`/`document.created`/`document.deleted` events for documents in a sync-target's source table, computes the desired state, and pushes to Statamic. Sync runs synchronously inside the same request transaction for v1 — failures surface as toasts; in v5.1 we'll move to a queue. New `sync_log` table records every attempt for visibility + retry.
 
 **Tech Stack:** Existing — Bun + Hono + Drizzle + bun:sqlite. New: native `fetch` against Statamic's REST API; no SDK dep. Auth: Statamic API tokens (bearer header). Folio stores the token libsodium-encrypted in `ai_keys`-style fashion (reuse existing crypto helpers).
 
-**Scope explicitly excluded:** WordPress adapter (Phase 3.1 follow-up; same architecture, different adapter class), bidirectional sync (Statamic → Folio), asset/image upload (v1 publishes text-only entries; clients add images directly in Statamic), conflict resolution beyond last-write-wins, scheduled publish (Statamic handles that; Folio just sets the `published_at` field), multi-site Statamic targets per workspace (v1 supports one target per source table — add multiple in 3.1).
+**Scope explicitly excluded:** WordPress adapter (Phase 5.1 follow-up; same architecture, different adapter class), bidirectional sync (Statamic → Folio), asset/image upload (v1 publishes text-only entries; clients add images directly in Statamic), conflict resolution beyond last-write-wins, scheduled publish (Statamic handles that; Folio just sets the `published_at` field), multi-site Statamic targets per workspace (v1 supports one target per source table — add multiple in 5.1).
 
 **Reference:** [Statamic REST API docs](https://statamic.dev/rest-api). Auth via `Authorization: Bearer <token>`; collection entries at `POST /api/collections/{handle}/entries`; PATCH at `/api/collections/{handle}/entries/{id}`; DELETE at the same path. Statamic returns the created/updated entry with its assigned `id` — we store that mapping so updates know which entry to patch.
 
@@ -18,7 +18,7 @@
 
 **Create (backend):**
 - `apps/server/src/db/schema.ts` — *extend* with `sync_targets` and `sync_log` tables
-- `apps/server/src/db/migrations/0006_phase_3_sync_targets.sql` — generated migration
+- `apps/server/src/db/migrations/0006_phase_5_sync_targets.sql` — generated migration
 - `apps/server/src/lib/adapters/statamic.ts` — `StatamicAdapter` class
 - `apps/server/src/lib/adapters/statamic.test.ts` — unit tests using stubbed `fetch`
 - `apps/server/src/lib/adapters/interface.ts` — `CmsAdapter` interface (forward-compatible with future WordPress adapter)
@@ -33,7 +33,7 @@
 - `packages/shared/src/sync-target.ts` — shared types
 
 **Frontend:**
-- Out of scope for THIS plan. A management UI (`/w/:wslug/settings/sync`) lands in 3.0.1 — for v1, configure sync targets via the seed script or curl.
+- Out of scope for THIS plan. A management UI (`/w/:wslug/settings/sync`) lands in 5.0.1 — for v1, configure sync targets via the seed script or curl.
 
 **Untouched:**
 - All Phase 2 code
@@ -45,14 +45,14 @@
 
 **Files:**
 - Modify: `apps/server/src/db/schema.ts`
-- Generate: `apps/server/src/db/migrations/0006_phase_3_sync_targets.sql`
+- Generate: `apps/server/src/db/migrations/0006_phase_5_sync_targets.sql`
 
 - [ ] **Step 1: Add the two tables to `schema.ts`**
 
-After the `webhooks` table block (from Phase 2.6), append:
+After the `webhooks` table block (from Phase 4), append:
 
 ```ts
-// --- CMS sync targets (Phase 3) ---
+// --- CMS sync targets (Phase 5) ---
 
 export const syncTargets = sqliteTable(
   'sync_targets',
@@ -65,7 +65,7 @@ export const syncTargets = sqliteTable(
       .notNull()
       .references(() => tables.id, { onDelete: 'cascade' }),
     name: text('name').notNull(),
-    /** 'statamic' (3.0). 'wordpress' lands in 3.1. */
+    /** 'statamic' (5.0). 'wordpress' lands in 5.1. */
     adapter: text('adapter', { enum: ['statamic'] }).notNull(),
     /** Statamic base URL, e.g. https://example.com */
     baseUrl: text('base_url').notNull(),
@@ -137,7 +137,7 @@ export interface SyncMapping {
 }
 ```
 
-Note the `SyncMapping` interface — same pattern as Phase 2.6's `WebhookMapping`. Re-export from `@folio/shared` in Task 2.
+Note the `SyncMapping` interface — same pattern as Phase 4's `WebhookMapping`. Re-export from `@folio/shared` in Task 2.
 
 - [ ] **Step 2: Generate the migration**
 
@@ -145,12 +145,12 @@ Note the `SyncMapping` interface — same pattern as Phase 2.6's `WebhookMapping
 bun --filter @folio/server db:generate
 ```
 
-Rename the generated `0006_<random>.sql` to `0006_phase_3_sync_targets.sql` and update `meta/_journal.json`.
+Rename the generated `0006_<random>.sql` to `0006_phase_5_sync_targets.sql` and update `meta/_journal.json`.
 
 - [ ] **Step 3: Inspect + verify the migration on empty DB**
 
 ```bash
-cat apps/server/src/db/migrations/0006_phase_3_sync_targets.sql
+cat apps/server/src/db/migrations/0006_phase_5_sync_targets.sql
 rm -f apps/server/folio.db apps/server/folio.db-shm apps/server/folio.db-wal
 cd apps/server && bun run src/db/migrate.ts
 ```
@@ -174,7 +174,7 @@ Expected: both tables present with the columns from Step 1.
 
 ```bash
 git add apps/server/src/db/schema.ts apps/server/src/db/migrations/
-git commit -m "phase-3: add sync_targets + sync_log schema"
+git commit -m "phase-5: add sync_targets + sync_log schema"
 ```
 
 ---
@@ -186,7 +186,7 @@ git commit -m "phase-3: add sync_targets + sync_log schema"
 - Modify: `packages/shared/src/index.ts`
 - Modify: `apps/server/src/db/schema.ts` — import `SyncMapping` from `@folio/shared`
 
-Mirror what Phase 2.6 did with `WebhookMapping`.
+Mirror what Phase 4 did with `WebhookMapping`.
 
 - [ ] **Step 1: Create the shared types module**
 
@@ -222,13 +222,13 @@ import type { SyncMapping } from '@folio/shared';
 cd apps/server && bun test
 ```
 
-Expected: 132 / 0 (Phase 2.6 baseline unchanged).
+Expected: 132 / 0 (Phase 4 baseline unchanged).
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add packages/shared apps/server/src/db/schema.ts
-git commit -m "phase-3: SyncMapping + AdapterKind in @folio/shared"
+git commit -m "phase-5: SyncMapping + AdapterKind in @folio/shared"
 ```
 
 ---
@@ -238,7 +238,7 @@ git commit -m "phase-3: SyncMapping + AdapterKind in @folio/shared"
 **Files:**
 - Create: `apps/server/src/lib/adapters/interface.ts`
 
-A contract that the Statamic adapter implements today and the WordPress adapter will implement in 3.1. Keeps the sync engine adapter-agnostic.
+A contract that the Statamic adapter implements today and the WordPress adapter will implement in 5.1. Keeps the sync engine adapter-agnostic.
 
 - [ ] **Step 1: Create the interface**
 
@@ -275,7 +275,7 @@ No tests for this file — it's a pure interface. Concrete adapters get their ow
 
 ```bash
 git add apps/server/src/lib/adapters/interface.ts
-git commit -m "phase-3: CmsAdapter interface (forward-compatible for WP in 3.1)"
+git commit -m "phase-5: CmsAdapter interface (forward-compatible for WP in 5.1)"
 ```
 
 ---
@@ -494,7 +494,7 @@ Expected: 137 / 0 (132 + 5).
 
 ```bash
 git add apps/server/src/lib/adapters/statamic.ts apps/server/src/lib/adapters/statamic.test.ts
-git commit -m "phase-3: StatamicAdapter (create/update/delete via REST API + bearer token)"
+git commit -m "phase-5: StatamicAdapter (create/update/delete via REST API + bearer token)"
 ```
 
 ---
@@ -505,7 +505,7 @@ git commit -m "phase-3: StatamicAdapter (create/update/delete via REST API + bea
 - Create: `apps/server/src/lib/sync-mapping.ts`
 - Create: `apps/server/src/lib/sync-mapping.test.ts`
 
-Pure: takes a `Document` row + a `SyncMapping` config + the publish-on-status setting and computes the `AdapterEntry` to send. Mirror of Phase 2.6's payload-mapping helper (different direction).
+Pure: takes a `Document` row + a `SyncMapping` config + the publish-on-status setting and computes the `AdapterEntry` to send. Mirror of Phase 4's payload-mapping helper (different direction).
 
 - [ ] **Step 1: Write the failing tests first**
 
@@ -651,7 +651,7 @@ Expected: 142 / 0 (137 + 5).
 
 ```bash
 git add apps/server/src/lib/sync-mapping.ts apps/server/src/lib/sync-mapping.test.ts
-git commit -m "phase-3: sync-mapping helper (doc → AdapterEntry)"
+git commit -m "phase-5: sync-mapping helper (doc → AdapterEntry)"
 ```
 
 ---
@@ -831,7 +831,7 @@ test('syncDocument: respects target.active=false', async () => {
 });
 ```
 
-`seed.project.id` may not be on the existing harness — verify and extend if needed (Phase 2.6's Task 4 step 5 had the same kind of harness audit). If only `seed.project.slug` is exposed, add `seed.project = { id, slug, ... }` to the harness.
+`seed.project.id` may not be on the existing harness — verify and extend if needed (Phase 4's Task 4 step 5 had the same kind of harness audit). If only `seed.project.slug` is exposed, add `seed.project = { id, slug, ... }` to the harness.
 
 - [ ] **Step 2: Run, verify failing**
 
@@ -987,7 +987,7 @@ Expected: 148 / 0 (142 + 6).
 
 ```bash
 git add apps/server/src/lib/sync-engine.ts apps/server/src/lib/sync-engine.test.ts apps/server/src/test/harness.ts
-git commit -m "phase-3: sync-engine (orchestrates adapter, computes op, writes sync_log)"
+git commit -m "phase-5: sync-engine (orchestrates adapter, computes op, writes sync_log)"
 ```
 
 ---
@@ -997,7 +997,7 @@ git commit -m "phase-3: sync-engine (orchestrates adapter, computes op, writes s
 **Files:**
 - Modify: `apps/server/src/routes/documents.ts` — call `syncDocument` AFTER commit in POST + PATCH
 
-The sync engine should run AFTER the document write transaction commits, not inside it — if Statamic is slow or fails, we don't want to roll back the local insert. v1 runs sync inline (the user's POST/PATCH waits); v3.1 will move it to a background queue.
+The sync engine should run AFTER the document write transaction commits, not inside it — if Statamic is slow or fails, we don't want to roll back the local insert. v1 runs sync inline (the user's POST/PATCH waits); v5.1 will move it to a background queue.
 
 - [ ] **Step 1: Audit the existing POST + PATCH structure**
 
@@ -1012,7 +1012,7 @@ Identify where the `await db.transaction(...)` block ends in each handler. The s
 Find the POST handler in `documents.ts`. Just before `return jsonOk(c, row, 201);`:
 
 ```ts
-// Phase 3: push to any configured CMS sync targets. Runs AFTER the transaction
+// Phase 5: push to any configured CMS sync targets. Runs AFTER the transaction
 // so a sync failure doesn't roll back the local write. Failures are recorded
 // in sync_log and surfaced to the client via... [not implemented in v1; check sync_log UI later].
 await syncDocument(db, id);
@@ -1123,7 +1123,7 @@ Expected: 148 / 0 (no new tests, no regressions).
 
 ```bash
 git add apps/server/src/routes/documents.ts apps/server/src/lib/sync-engine.ts
-git commit -m "phase-3: invoke syncDocument after POST/PATCH/DELETE on /documents"
+git commit -m "phase-5: invoke syncDocument after POST/PATCH/DELETE on /documents"
 ```
 
 ---
@@ -1135,7 +1135,7 @@ git commit -m "phase-3: invoke syncDocument after POST/PATCH/DELETE on /document
 - Create: `apps/server/src/routes/sync-targets.test.ts`
 - Modify: `apps/server/src/app.ts` (mount)
 
-Mirror of Phase 2.6 Task 5 — workspace owners/admins create/update/delete sync targets. Token is libsodium-encrypted on create; never returned in list/get responses.
+Mirror of Phase 4 Task 5 — workspace owners/admins create/update/delete sync targets. Token is libsodium-encrypted on create; never returned in list/get responses.
 
 - [ ] **Step 1: Write failing tests**
 
@@ -1192,7 +1192,7 @@ test('POST /sync-targets 422 on unsupported adapter', async () => {
 });
 
 test('POST /sync-targets 404 when sourceTableId is in another workspace', async () => {
-  // Same pattern as Phase 2.6 cross-tenant test — create a second workspace,
+  // Same pattern as Phase 4 cross-tenant test — create a second workspace,
   // try to attach a sync target in workspace A to a table in workspace B.
   // ... (full setup as in webhooks.test.ts)
 });
@@ -1246,7 +1246,7 @@ test('DELETE /sync-targets/:id returns 204', async () => {
 });
 ```
 
-Fill in the cross-tenant test (3rd test) following the pattern in `webhooks.test.ts` from Phase 2.6 Task 5.
+Fill in the cross-tenant test (3rd test) following the pattern in `webhooks.test.ts` from Phase 4 Task 5.
 
 - [ ] **Step 2: Run, verify failing**
 
@@ -1438,7 +1438,7 @@ Expected: 153 / 0 (148 + 5).
 
 ```bash
 git add apps/server/src/routes/sync-targets.ts apps/server/src/routes/sync-targets.test.ts apps/server/src/app.ts apps/server/src/lib/events.ts
-git commit -m "phase-3: workspace-scoped CRUD for /sync-targets (token encrypted at rest)"
+git commit -m "phase-5: workspace-scoped CRUD for /sync-targets (token encrypted at rest)"
 ```
 
 ---
@@ -1536,7 +1536,7 @@ curl -sb /tmp/folio-cookies.txt -X POST http://localhost:3001/api/v1/w/netdust/s
 ```bash
 curl -sb /tmp/folio-cookies.txt -X POST http://localhost:3001/api/v1/w/netdust/p/folio/documents \
   -H 'Content-Type: application/json' \
-  -d '{ "type": "work_item", "title": "Phase 3 smoke test", "body": "Body here.", "frontmatter": { "status": "published" } }'
+  -d '{ "type": "work_item", "title": "Phase 5 smoke test", "body": "Body here.", "frontmatter": { "status": "published" } }'
 ```
 
 Check the mock server's terminal output: should show `POST /api/collections/blog/entries`.
@@ -1546,7 +1546,7 @@ Check the mock server's terminal output: should show `POST /api/collections/blog
 ```bash
 curl -sb /tmp/folio-cookies.txt -X PATCH http://localhost:3001/api/v1/w/netdust/p/folio/documents/phase-3-smoke-test \
   -H 'Content-Type: application/json' \
-  -d '{ "title": "Phase 3 smoke test (revised)" }'
+  -d '{ "title": "Phase 5 smoke test (revised)" }'
 ```
 
 Mock should show `PATCH /api/collections/blog/entries/mock-1` (or whatever id the mock returned).
@@ -1596,30 +1596,30 @@ If anything fails, STOP and report BLOCKED with the specific HTTP response.
 
 - [ ] **Step 1: Update STATE.md**
 
-Mark Phase 3 as shipped. Add to "What's working in the UI": "Configurable Statamic sync target per workspace — documents in a source table publish to a Statamic collection on status change." Bump test counts (~153 server).
+Mark Phase 5 as shipped. Add to "What's working in the UI": "Configurable Statamic sync target per workspace — documents in a source table publish to a Statamic collection on status change." Bump test counts (~153 server).
 
 - [ ] **Step 2: Update DECISIONS.md**
 
-Add a Phase 3 section:
+Add a Phase 5 section:
 
 ```markdown
-## Phase 3 — Statamic CMS bridge (2026-XX-XX)
+## Phase 5 — Statamic CMS bridge (2026-XX-XX)
 
 - One sync target = (workspace, source_table) → Statamic collection. Token libsodium-encrypted at rest (reuse the BYOK crypto helpers).
-- Adapter is pluggable via `CmsAdapter` interface; only `statamic` ships in 3.0. WordPress is 3.1.
+- Adapter is pluggable via `CmsAdapter` interface; only `statamic` ships in 3.0. WordPress is 5.1.
 - Publishability is determined by `doc.status === target.publish_on_status` (default `'published'`). Other statuses delete the remote entry if one exists.
-- Mapping uses `$title`, `$body`, `$slug`, `$frontmatter.key` references; literals pass through. Same dialect as Phase 2.6's webhook mapping.
-- Sync runs SYNCHRONOUSLY inside the API request (after the document write transaction commits). Failures don't roll back the local write; they're recorded in `sync_log` with status='error'. v3.1 moves to a background queue.
+- Mapping uses `$title`, `$body`, `$slug`, `$frontmatter.key` references; literals pass through. Same dialect as Phase 4's webhook mapping.
+- Sync runs SYNCHRONOUSLY inside the API request (after the document write transaction commits). Failures don't roll back the local write; they're recorded in `sync_log` with status='error'. v5.1 moves to a background queue.
 - DELETE on a document with a `remote_id` in sync_log issues a remote DELETE before returning 204. v1 swallows remote-delete errors and logs them.
 - Out of scope for 3.0: bidirectional sync, asset/image upload, conflict resolution, scheduled publish (Statamic handles this), multiple targets per source table.
-- `sync_log` is append-only. Phase 3.2 should add a UI to view it + retry failed syncs.
+- `sync_log` is append-only. Phase 5.2 should add a UI to view it + retry failed syncs.
 ```
 
 - [ ] **Step 3: Commit**
 
 ```bash
 git add memory/STATE.md memory/DECISIONS.md
-git commit -m "memory(folio): close out Phase 3 Statamic CMS bridge"
+git commit -m "memory(folio): close out Phase 5 Statamic CMS bridge"
 ```
 
 ---
@@ -1639,18 +1639,18 @@ git commit -m "memory(folio): close out Phase 3 Statamic CMS bridge"
 - ✅ Memory close-out — Task 10
 
 **Out of scope and deferred:**
-- WordPress adapter (3.1)
-- Sync UI in the web app (3.0.1)
-- Background queue / retry (3.1)
-- Bidirectional sync (3.2+)
-- Asset upload (3.2+)
-- Multiple sync targets per source table (3.1)
+- WordPress adapter (5.1)
+- Sync UI in the web app (5.0.1)
+- Background queue / retry (5.1)
+- Bidirectional sync (5.2+)
+- Asset upload (5.2+)
+- Multiple sync targets per source table (5.1)
 
 **Risk areas:**
 - Inline sync means slow Statamic = slow Folio writes. For v1 acceptable; a real client's first deploy will tell us if it's a problem.
 - `decrypt(token)` happens on every sync — if FOLIO_MASTER_KEY rotates, existing targets break. Document this in DECISIONS.md.
-- Sync runs OUTSIDE the doc write transaction. If the server crashes between the doc commit and the sync call, the doc exists locally but isn't on Statamic. Phase 3.1's queue fixes this with at-least-once delivery.
-- The CMS adapter interface is currently shaped around Statamic's REST API. WordPress has a richer JSON shape (post_meta, terms, featured_media). The interface may need extension when 3.1 lands — be willing to revise.
+- Sync runs OUTSIDE the doc write transaction. If the server crashes between the doc commit and the sync call, the doc exists locally but isn't on Statamic. Phase 5.1's queue fixes this with at-least-once delivery.
+- The CMS adapter interface is currently shaped around Statamic's REST API. WordPress has a richer JSON shape (post_meta, terms, featured_media). The interface may need extension when 5.1 lands — be willing to revise.
 
 **Type consistency check:**
 - `SyncMapping` is defined in `@folio/shared/sync-target.ts` — used in schema.ts, sync-mapping.ts, sync-targets.ts.

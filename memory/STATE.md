@@ -6,11 +6,21 @@ Living snapshot of where the project actually is. Read at session start. Update 
 
 ## Phase
 
-- **Phase 1 (Core CRUD): shipped.** Backend + frontend + slideover + raw-MD round-trip + acceptance ticks done.
-- **Phase 1.5 (UX polish): shipped on `phase-1.5/ux-polish`.** Two waves of polish + a review-driven cleanup commit + 10 wired e2e scenarios landed; awaiting visual sign-off + merge to main.
-- **Phase 1.5 (Time-aware views): not started.** Timeline view + This Week dashboard still on the docket per `docs/PHASES.md`.
-- **Phase 2A (Tables foundation): shipped on `phase-1.5/ux-polish`.** 9 subagent-driven tasks, schema rework, NocoDB-style table-then-views model. Backend only — UI lands in Phase 2B.
-- **Phase 2B (Spreadsheet table UI): shipped on `phase-1.5/ux-polish`.** 12 subagent-driven tasks. Real columnar table with built-ins (title/status/updated_at) + one column per pinned field, drag-to-reorder columns, show/hide picker, currency cell type with Intl.NumberFormat, plus all existing field types (date/select/multi-select/etc) rendered inline. View state (visibleFields + columnOrder) persists to the active view via PATCH.
+Phase numbering aligned with `docs/PHASES.md` (canonical) as of 2026-05-24 reorg. Original Phase 2 (Agents) and Phase 3 (AI/runner) stayed as the v1 spine; new phases slotted around them.
+
+- **Phase 0–0.5 (Foundation + Design system):** shipped.
+- **Phase 1 (Core CRUD):** shipped — backend + frontend + slideover + raw-MD round-trip.
+- **Phase 1.5 (Tables + Spreadsheet UI):** shipped on `phase-1.5/ux-polish`. 21 subagent-driven tasks across 1.5a (tables foundation) and 1.5b (spreadsheet UI). Plans: `docs/superpowers/plans/2026-05-24-phase-2a-tables-foundation.md` (now Phase 1.5a) + `2026-05-24-phase-2b-spreadsheet-table-ui.md` (now Phase 1.5b). Awaiting merge to main.
+- **Phase 1.6 (Saved views in rail):** NEXT — plan to write, then execute.
+- **Phase 1.7 (Lightweight CRM polish):** queued — `next_action` first-class fields, `last_touched_at`, activity log panel, playbook linking.
+- **Phase 1.8 (Time-aware views):** queued — timeline view + This Week dashboard.
+- **Phase 2 (Agents):** queued — spine of v1. Tokens, SSE, MCP server, agents-as-documents, triggers-as-documents (surface only).
+- **Phase 3 (AI in UI + Agent runner):** queued — second spine. Slash commands, provider abstraction, agent runner, trigger scheduler/matcher.
+- **Phase 4 (Inbound webhooks):** queued — plan ready at `docs/superpowers/plans/2026-05-24-phase-4-inbound-webhooks.md`. 7 tasks.
+- **Phase 5 (CMS bridge — Statamic):** queued — plan ready at `docs/superpowers/plans/2026-05-24-phase-5-statamic-cms-bridge.md`. 10 tasks. WordPress is Phase 5.1.
+- **Phase 6 (Per-view render modes):** queued — kanban becomes a render mode; calendar added.
+- **Phase 7 (UX polish + admin UIs):** queued — Cmd-K depth, keyboard shortcuts, admin screens for webhooks + sync targets.
+- **Phase 8 (Ship):** queued — release pipeline, landing page, first paying customer.
 
 ## Current branch
 
@@ -31,15 +41,11 @@ Living snapshot of where the project actually is. Read at session start. Update 
 
 ## What's not built yet
 
-- Workspace AI-key UI (backend exists, no settings page).
+See `docs/PHASES.md` for the canonical phase list (above-section mirrors it). Loose items not phase-tracked:
+
+- Workspace AI-key UI (backend exists; lives in Phase 3 settings work).
 - Single-binary build verification (`bun build --compile`).
 - Docker image verification end-to-end.
-- Timeline view, This Week dashboard (Phase 1.5 time-aware bundle).
-- **Phase 2C — saved views in rail (Linear-style)**: nest tables under projects, views under tables. Click a view = filter applied, render mode applied. Picking active view by URL (?view=:slug) — TableView currently picks default-or-first.
-- **Phase 2C.5 — Lightweight CRM polish** (added 2026-05-24): first-class `next_action` / `next_action_due` / `next_action_owner` frontmatter surfaced in spreadsheet + slideover; `last_touched_at` distinct from `updated_at` (touched only by explicit activity log); per-record activity log panel in slideover reading from the existing `events` table; playbook linking from a stage to a wiki page. Use case: agency follow-up CRM, no automation — "where are we / what's next / when's it due / what's the playbook for this stage." Designed to be agent-readable (markdown source-of-truth).
-- **Phase 2D — per-view render mode**: views store `renderAs: 'list' | 'kanban' | 'calendar'`. Frontend renders accordingly.
-- Tokens / SSE / MCP server (Phase 3).
-- Slash commands in body editor (Phase 4).
 
 ## Open Threads
 
@@ -78,29 +84,4 @@ Living snapshot of where the project actually is. Read at session start. Update 
 - [2026-05-24] Phase 2B "Spreadsheet table UI" shipped via subagent-driven development. 12 tasks, all spec+quality reviewed. Backend: currency type + views.columnOrder + migration 0004. Frontend: pure column helpers, TableHeader (sort+picker+drag-reorder), TableRow, TableView replaces ListView on work-items route. Seed widened default view's visibleFields + registers 4 standard fields (priority/assignee/labels/due_date) per project. Suite: 107→112 server, 134→154 web. Plan: `docs/superpowers/plans/2026-05-24-phase-2b-spreadsheet-table-ui.md`.
 - [2026-05-24] Phase 2A "Tables Foundation" shipped via subagent-driven development. 9 tasks (1 → 2+3 merged → 4 → 5 → 6 → 7 → 8 → 9), all spec+quality reviewed. Schema + migration + middleware + 4 route files + tests + seed verification. Suite: 81→107 server tests, all green. Plan: `docs/superpowers/plans/2026-05-24-phase-2a-tables-foundation.md`.
 - [2026-05-24] Earlier: wired all 10 skipped manual-qa Playwright scenarios (`55cb795`), silenced TanStack Router warnings via `routeFileIgnorePattern`, seeded demo data via `scripts/seed-demo.ts` for stefan@netdust.be.
-[2026-05-24] — session ended (no significant changes captured)
-[2026-05-24] — session ended (no significant changes captured)
-[2026-05-24] — session ended (no significant changes captured)
-[2026-05-24] — session ended (no significant changes captured)
-[2026-05-24] — session ended (no significant changes captured)
-[2026-05-24] — session ended (no significant changes captured)
-[2026-05-24] — session ended (no significant changes captured)
-[2026-05-24] — session ended (no significant changes captured)
-[2026-05-24] — session ended (no significant changes captured)
-[2026-05-24] — session ended (no significant changes captured)
-[2026-05-24] — session ended (no significant changes captured)
-[2026-05-24] — session ended (no significant changes captured)
-[2026-05-24] — session ended (no significant changes captured)
-[2026-05-24] — session ended (no significant changes captured)
-[2026-05-24] — session ended (no significant changes captured)
-[2026-05-24] — session ended (no significant changes captured)
-[2026-05-24] — session ended (no significant changes captured)
-[2026-05-24] — session ended (no significant changes captured)
-[2026-05-24] — session ended (no significant changes captured)
-[2026-05-24] — session ended (no significant changes captured)
-[2026-05-24] — session ended (no significant changes captured)
-[2026-05-24] — session ended (no significant changes captured)
-[2026-05-24] — session ended (no significant changes captured)
-[2026-05-24] — session ended (no significant changes captured)
-[2026-05-24] — session ended (no significant changes captured)
-[2026-05-24] — session ended (no significant changes captured)
+- [2026-05-24 evening] Reorg of `docs/PHASES.md` after audit revealed I'd been drifting off the canonical phase plan. Original Phase 2 (Agents) + Phase 3 (AI/runner) stay as v1 spine. What I'd been calling "Phase 2A/2B" → Phase 1.5; "Phase 2C" → 1.6; "Phase 2C.5" → 1.7; original "Phase 1.5 time-aware" → 1.8; webhooks → Phase 4; CMS bridge → Phase 5; "Phase 2D" → Phase 6. Renamed the two queued plans (`phase-2-6-inbound-webhooks.md` → `phase-4-inbound-webhooks.md`; `phase-3-statamic-cms-bridge.md` → `phase-5-statamic-cms-bridge.md`) + updated cross-references inside them.

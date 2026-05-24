@@ -1,4 +1,4 @@
-# Phase 2.6 — Inbound Webhooks Implementation Plan
+# Phase 4 — Inbound Webhooks Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -8,7 +8,7 @@
 
 **Tech Stack:** Existing — Bun + Hono + Drizzle + bun:sqlite + Zod. New: a tiny JSONPath-lite resolver for `$payload.<key>` references (no library — 30 lines of code). No new deps.
 
-**Scope explicitly excluded:** HMAC signature verification (covered in a 2.6.1 follow-up if needed), retry/dead-letter queue, rate limiting per webhook, outbound webhooks (Folio → external), webhook frontend admin UI beyond a basic table (full UI lands in a separate small phase). The first iteration is API + CLI-driven webhook creation; the UI for managing webhooks is a 2.6.1 sub-phase.
+**Scope explicitly excluded:** HMAC signature verification (covered in a 4.1 follow-up if needed), retry/dead-letter queue, rate limiting per webhook, outbound webhooks (Folio → external), webhook frontend admin UI beyond a basic table (full UI lands in a separate small phase). The first iteration is API + CLI-driven webhook creation; the UI for managing webhooks is a 4.1 sub-phase.
 
 ---
 
@@ -16,7 +16,7 @@
 
 **Create (backend):**
 - `apps/server/src/db/schema.ts` — *extend* with `webhooks` table
-- `apps/server/src/db/migrations/0005_phase_2_6_webhooks.sql` — generated migration
+- `apps/server/src/db/migrations/0005_phase_4_webhooks.sql` — generated migration
 - `apps/server/src/routes/webhooks.ts` — public POST `/api/v1/webhooks/:secret` + authenticated CRUD `/api/v1/w/:wslug/webhooks`
 - `apps/server/src/routes/webhooks.test.ts` — integration tests
 - `apps/server/src/lib/payload-mapping.ts` — pure helper: resolve `$payload.key.nested` references against a JSON payload; return `{ title, body, frontmatter }`
@@ -24,8 +24,8 @@
 - `apps/server/src/app.ts` — *mount* the new routes
 - `packages/shared/src/webhook-mapping.ts` — shared types for `WebhookMapping`
 
-**Frontend (admin only — Phase 2.6.1):**
-- Out of scope for THIS plan. Webhook creation in 2.6 is via raw API call from the seed script or curl. Phase 2.6.1 adds the React admin UI.
+**Frontend (admin only — Phase 4.1):**
+- Out of scope for THIS plan. Webhook creation in 2.6 is via raw API call from the seed script or curl. Phase 4.1 adds the React admin UI.
 
 **Untouched:**
 - `documents.ts` route — webhook reuses its insert code path via a shared helper
@@ -37,7 +37,7 @@
 
 **Files:**
 - Modify: `apps/server/src/db/schema.ts`
-- Generate: `apps/server/src/db/migrations/0005_phase_2_6_webhooks.sql`
+- Generate: `apps/server/src/db/migrations/0005_phase_4_webhooks.sql`
 
 - [ ] **Step 1: Add the `webhooks` table to schema.ts**
 
@@ -97,12 +97,12 @@ From repo root:
 bun --filter @folio/server db:generate
 ```
 
-Drizzle emits `0005_<random>.sql`. Rename it to `0005_phase_2_6_webhooks.sql` and update the latest entry in `apps/server/src/db/migrations/meta/_journal.json` so its `tag` matches.
+Drizzle emits `0005_<random>.sql`. Rename it to `0005_phase_4_webhooks.sql` and update the latest entry in `apps/server/src/db/migrations/meta/_journal.json` so its `tag` matches.
 
 - [ ] **Step 3: Inspect the generated SQL**
 
 ```bash
-cat apps/server/src/db/migrations/0005_phase_2_6_webhooks.sql
+cat apps/server/src/db/migrations/0005_phase_4_webhooks.sql
 ```
 
 Expected:
@@ -136,7 +136,7 @@ Expected: `id, workspace_id, table_id, name, secret, mapping, active, last_fired
 
 ```bash
 git add apps/server/src/db/schema.ts apps/server/src/db/migrations/
-git commit -m "phase-2.6: add webhooks schema + migration"
+git commit -m "phase-4: add webhooks schema + migration"
 ```
 
 ---
@@ -192,7 +192,7 @@ Expected: 112 / 0 (baseline unchanged — no behavior change in this task).
 
 ```bash
 git add packages/shared apps/server/src/db/schema.ts
-git commit -m "phase-2.6: WebhookMapping type in @folio/shared"
+git commit -m "phase-4: WebhookMapping type in @folio/shared"
 ```
 
 ---
@@ -389,7 +389,7 @@ Expected: 119 / 0 (112 baseline + 7 new).
 
 ```bash
 git add apps/server/src/lib/payload-mapping.ts apps/server/src/lib/payload-mapping.test.ts
-git commit -m "phase-2.6: payload-mapping helper (resolves \$payload.key refs)"
+git commit -m "phase-4: payload-mapping helper (resolves \$payload.key refs)"
 ```
 
 ---
@@ -688,7 +688,7 @@ Expected: 125 / 0 (119 + 6 new).
 
 ```bash
 git add apps/server/src/routes/webhooks.ts apps/server/src/routes/webhooks.test.ts apps/server/src/app.ts apps/server/src/test/harness.ts
-git commit -m "phase-2.6: public POST /api/v1/webhooks/:secret creates doc from payload"
+git commit -m "phase-4: public POST /api/v1/webhooks/:secret creates doc from payload"
 ```
 
 ---
@@ -999,7 +999,7 @@ Expected: 132 / 0 (125 + 7 new). If any pre-existing tests regress, fix before c
 
 ```bash
 git add apps/server/src/routes/webhooks.ts apps/server/src/routes/webhooks.test.ts apps/server/src/app.ts apps/server/src/lib/events.ts
-git commit -m "phase-2.6: authenticated CRUD for /webhooks (workspace-scoped, secret returned once)"
+git commit -m "phase-4: authenticated CRUD for /webhooks (workspace-scoped, secret returned once)"
 ```
 
 ---
@@ -1076,7 +1076,7 @@ kill $SERVER_PID 2>/dev/null || true
 
 ```bash
 git add scripts/seed-demo.ts
-git commit -m "phase-2.6: seed-demo creates a demo webhook per project"
+git commit -m "phase-4: seed-demo creates a demo webhook per project"
 ```
 
 ---
@@ -1089,14 +1089,14 @@ git commit -m "phase-2.6: seed-demo creates a demo webhook per project"
 
 - [ ] **Step 1: Update STATE.md**
 
-Mark Phase 2.6 as shipped, list the new capability, bump test counts (~132 server).
+Mark Phase 4 as shipped, list the new capability, bump test counts (~132 server).
 
 - [ ] **Step 2: Update DECISIONS.md**
 
-Add a Phase 2.6 section:
+Add a Phase 4 section:
 
 ```markdown
-## Phase 2.6 — Inbound webhooks (2026-XX-XX)
+## Phase 4 — Inbound webhooks (2026-XX-XX)
 
 - Public POST `/api/v1/webhooks/:secret` creates a `work_item` document in the configured table from the JSON payload via stored mapping.
 - The :secret IS the auth. Rotate by deleting + recreating the webhook (no in-place secret rotation in v1).
@@ -1104,14 +1104,14 @@ Add a Phase 2.6 section:
 - `webhooks.last_fired_at` is bumped on every successful POST.
 - Events: `webhook.created`, `webhook.updated`, `webhook.deleted`, `webhook.fired`.
 - Authenticated CRUD lives at `/api/v1/w/:wslug/webhooks` (owners + admins). Secret returned ONCE on creation; list responses redact it.
-- Out of scope for 2.6: HMAC verification, retries, frontend admin UI (2.6.1 follow-up).
+- Out of scope for 2.6: HMAC verification, retries, frontend admin UI (4.1 follow-up).
 ```
 
 - [ ] **Step 3: Commit**
 
 ```bash
 git add memory/STATE.md memory/DECISIONS.md
-git commit -m "memory(folio): close out Phase 2.6 inbound webhooks"
+git commit -m "memory(folio): close out Phase 4 inbound webhooks"
 ```
 
 ---
@@ -1127,7 +1127,7 @@ git commit -m "memory(folio): close out Phase 2.6 inbound webhooks"
 - ✅ Smoke verification — Task 6
 - ✅ Memory close-out — Task 7
 
-**Out of scope and deferred to 2.6.1:**
+**Out of scope and deferred to 4.1:**
 - Frontend admin UI for managing webhooks
 - HMAC signature verification (alternative auth)
 - Per-webhook rate limiting
@@ -1135,6 +1135,6 @@ git commit -m "memory(folio): close out Phase 2.6 inbound webhooks"
 - Outbound webhook deliveries (Folio → external) — fundamentally different feature, deferred
 
 **Risk areas:**
-- The secret in the URL appears in server logs by default. Recommend customer's reverse proxy redacts these or doesn't log webhook URLs. Document in Phase 2.6.1.
+- The secret in the URL appears in server logs by default. Recommend customer's reverse proxy redacts these or doesn't log webhook URLs. Document in Phase 4.1.
 - A high-volume sender could fill `events` with `webhook.fired` rows. Phase 3+ should consider archiving / compaction.
 - `slugUniqueInDocuments` does a `LIKE` query per insert — for 10k+ docs in a single project this gets slow. v1 fine; Phase 3+ should add an index or switch to ID-based slugs.
