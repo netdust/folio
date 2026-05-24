@@ -34,6 +34,7 @@ describe('FieldRenderer', () => {
   it('renders a date input for date type', async () => {
     const onCommit = vi.fn();
     render(<FieldRenderer fieldKey="due" type="date" value="2026-06-01" onCommit={onCommit} />);
+    await userEvent.click(screen.getByText('2026-06-01'));
     const input = screen.getByDisplayValue('2026-06-01');
     await userEvent.clear(input);
     await userEvent.type(input, '2026-07-15');

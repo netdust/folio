@@ -181,18 +181,47 @@ function DateInput({
   ariaLabel: string;
   isPending?: boolean;
 }) {
+  const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
+  if (!editing) {
+    return (
+      <span
+        role="button"
+        tabIndex={0}
+        aria-label={ariaLabel}
+        onClick={() => setEditing(true)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') setEditing(true);
+        }}
+        className={cn(
+          'inline-block cursor-text rounded-sm px-1 py-0.5 text-sm hover:bg-card',
+          isPending && 'opacity-60',
+        )}
+      >
+        {value || <span className="text-fg-3"> </span>}
+      </span>
+    );
+  }
   return (
     <input
       type="date"
       aria-label={ariaLabel}
+      autoFocus
       value={draft}
       onChange={(e) => setDraft(e.target.value)}
       onBlur={() => {
+        setEditing(false);
         if (draft !== value && draft) onCommit(draft);
       }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+        if (e.key === 'Escape') {
+          setDraft(value);
+          setEditing(false);
+        }
+      }}
       className={cn(
-        'block w-44 rounded-sm border border-border-light bg-shell px-2 py-1 text-sm text-fg input-focus',
+        'block w-44 rounded-sm border border-transparent bg-card px-1 py-0.5 text-sm text-fg input-focus',
         isPending && 'opacity-60',
       )}
     />
