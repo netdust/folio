@@ -1,6 +1,6 @@
 # Folio — STATE
 
-_Last updated: 2026-05-24_
+_Last updated: 2026-05-24 (post phase-1.5 merge)_
 
 Living snapshot of where the project actually is. Read at session start. Update at session end if anything below changed.
 
@@ -10,7 +10,7 @@ Phase numbering aligned with `docs/PHASES.md` (canonical) as of 2026-05-24 reorg
 
 - **Phase 0–0.5 (Foundation + Design system):** shipped.
 - **Phase 1 (Core CRUD):** shipped — backend + frontend + slideover + raw-MD round-trip.
-- **Phase 1.5 (Tables + Spreadsheet UI):** shipped on `phase-1.5/ux-polish`. 21 subagent-driven tasks across 1.5a (tables foundation) and 1.5b (spreadsheet UI). Plans: `docs/superpowers/plans/2026-05-24-phase-2a-tables-foundation.md` (now Phase 1.5a) + `2026-05-24-phase-2b-spreadsheet-table-ui.md` (now Phase 1.5b). Awaiting merge to main.
+- **Phase 1.5 (Tables + Spreadsheet UI):** shipped + merged to main at `af3c0f1` on 2026-05-24. 21 subagent-driven tasks across 1.5a (tables foundation) and 1.5b (spreadsheet UI). Plans: `docs/superpowers/plans/2026-05-24-phase-2a-tables-foundation.md` (now Phase 1.5a) + `2026-05-24-phase-2b-spreadsheet-table-ui.md` (now Phase 1.5b).
 - **Phase 1.6 (Saved views in rail):** NEXT — plan to write, then execute.
 - **Phase 1.7 (Lightweight CRM polish):** queued — `next_action` first-class fields, `last_touched_at`, activity log panel, playbook linking.
 - **Phase 1.8 (Time-aware views):** queued — timeline view + This Week dashboard.
@@ -24,7 +24,7 @@ Phase numbering aligned with `docs/PHASES.md` (canonical) as of 2026-05-24 reorg
 
 ## Current branch
 
-`phase-1.5/ux-polish`. Tip is the Phase 2A close-out (`35f5c8b` seed-demo verify) on top of the resolveProject + comment cleanups (`a9fd601`). 107 / 107 server unit + 134 / 134 web unit + 28 / 28 shared + 13 / 13 manual-qa e2e + 11 / 11 click-through e2e pass.
+`main` at `af3c0f1` (Phase 1.5 merged 2026-05-24 with `--no-ff`, pushed to `origin/main`). `phase-1.5/ux-polish` branch retained for reference; can be deleted after the next phase branches off. 112 / 112 server unit + 154 / 154 web unit + 28 / 28 shared pass on the merge commit.
 
 ## What's working in the UI
 
@@ -81,9 +81,11 @@ See `docs/PHASES.md` for the canonical phase list (above-section mirrors it). Lo
 - API has no `/` or `/health` route → expect 404 on root; the auth probe at `/api/v1/auth/me` is the right liveness signal.
 ## Session log
 
+- [2026-05-24 night] Merged `phase-1.5/ux-polish` → `main` with `--no-ff` (merge commit `af3c0f1`). 201 commits behind on main fast-forwarded into a single visible merge. Pushed to `origin/main`. All 294 unit tests green pre-merge (154 web + 112 server + 28 shared). Branch kept for reference; next phase will branch from `main`.
 - [2026-05-24] Phase 2B "Spreadsheet table UI" shipped via subagent-driven development. 12 tasks, all spec+quality reviewed. Backend: currency type + views.columnOrder + migration 0004. Frontend: pure column helpers, TableHeader (sort+picker+drag-reorder), TableRow, TableView replaces ListView on work-items route. Seed widened default view's visibleFields + registers 4 standard fields (priority/assignee/labels/due_date) per project. Suite: 107→112 server, 134→154 web. Plan: `docs/superpowers/plans/2026-05-24-phase-2b-spreadsheet-table-ui.md`.
 - [2026-05-24] Phase 2A "Tables Foundation" shipped via subagent-driven development. 9 tasks (1 → 2+3 merged → 4 → 5 → 6 → 7 → 8 → 9), all spec+quality reviewed. Schema + migration + middleware + 4 route files + tests + seed verification. Suite: 81→107 server tests, all green. Plan: `docs/superpowers/plans/2026-05-24-phase-2a-tables-foundation.md`.
 - [2026-05-24] Earlier: wired all 10 skipped manual-qa Playwright scenarios (`55cb795`), silenced TanStack Router warnings via `routeFileIgnorePattern`, seeded demo data via `scripts/seed-demo.ts` for stefan@netdust.be.
 - [2026-05-24 evening] Reorg of `docs/PHASES.md` after audit revealed I'd been drifting off the canonical phase plan. Original Phase 2 (Agents) + Phase 3 (AI/runner) stay as v1 spine. What I'd been calling "Phase 2A/2B" → Phase 1.5; "Phase 2C" → 1.6; "Phase 2C.5" → 1.7; original "Phase 1.5 time-aware" → 1.8; webhooks → Phase 4; CMS bridge → Phase 5; "Phase 2D" → Phase 6. Renamed the two queued plans (`phase-2-6-inbound-webhooks.md` → `phase-4-inbound-webhooks.md`; `phase-3-statamic-cms-bridge.md` → `phase-5-statamic-cms-bridge.md`) + updated cross-references inside them.
+[2026-05-24] — session ended (no significant changes captured)
 [2026-05-24] — session ended (no significant changes captured)
 [2026-05-24] — session ended (no significant changes captured)

@@ -27,7 +27,7 @@ For phase-level checkboxes that survive across branches, see `docs/PHASES.md`. T
   - [ ] Scenario 13 — Cmd-K palette (e2e scaffolded, selector TODO)
   - [ ] Scenario 14 — offline rollback (covered by optimistic-mutation unit tests; e2e too flaky)
   - [x] Scenario 15 — sign-up duplicate email (e2e: passing)
-- [ ] Merge to `main`
+- [x] Merge to `main` — done 2026-05-24, `--no-ff` merge at `af3c0f1`, pushed to `origin/main`.
 
 ### Bugs found this session — all fixed
 
