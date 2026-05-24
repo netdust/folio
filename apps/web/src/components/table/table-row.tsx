@@ -15,10 +15,7 @@ interface Props {
   pslug: string;
   isPending: boolean;
   onOpen: (slug: string) => void;
-  onUpdate: (
-    slug: string,
-    patch: Partial<DocumentPatch> & { frontmatter?: Record<string, unknown> },
-  ) => void;
+  onUpdate: (slug: string, patch: DocumentPatch) => void;
 }
 
 export function TableRow({
@@ -34,9 +31,7 @@ export function TableRow({
   const onTitleCommit = (slug: string, next: string) => onUpdate(slug, { title: next });
   const onStatusCommit = (slug: string, next: string) => onUpdate(slug, { status: next });
   const onFieldCommit = (slug: string, key: string, next: unknown) =>
-    onUpdate(slug, {
-      frontmatter: { ...(doc.frontmatter ?? {}), [key]: next },
-    });
+    onUpdate(slug, { frontmatter: { [key]: next } });
 
   const onCopy = async () => {
     try {
