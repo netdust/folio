@@ -125,6 +125,28 @@ export const projects = sqliteTable(
   }),
 );
 
+// --- Tables (logical grouping of work_item documents within a project) ---
+
+export const tables = sqliteTable(
+  'tables',
+  {
+    id: text('id').primaryKey(),
+    projectId: text('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    slug: text('slug').notNull(),
+    name: text('name').notNull(),
+    icon: text('icon'), // optional lucide icon name; null = default
+    order: integer('order').notNull().default(0),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' })
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+  },
+  (t) => ({
+    slugIdx: uniqueIndex('tables_project_slug_idx').on(t.projectId, t.slug),
+  }),
+);
+
 // --- Per-project configuration ---
 
 /** Configurable status states per project. */
@@ -135,6 +157,9 @@ export const statuses = sqliteTable(
     projectId: text('project_id')
       .notNull()
       .references(() => projects.id, { onDelete: 'cascade' }),
+    tableId: text('table_id')
+      .notNull()
+      .references(() => tables.id, { onDelete: 'cascade' }),
     key: text('key').notNull(), // stable key written into documents.status
     name: text('name').notNull(), // display name
     color: text('color').notNull().default('#9ca3af'),
@@ -146,7 +171,7 @@ export const statuses = sqliteTable(
     order: integer('order').notNull().default(0),
   },
   (t) => ({
-    keyIdx: uniqueIndex('statuses_project_key_idx').on(t.projectId, t.key),
+    keyIdx: uniqueIndex('statuses_table_key_idx').on(t.tableId, t.key),
   }),
 );
 
@@ -158,6 +183,9 @@ export const fields = sqliteTable(
     projectId: text('project_id')
       .notNull()
       .references(() => projects.id, { onDelete: 'cascade' }),
+    tableId: text('table_id')
+      .notNull()
+      .references(() => tables.id, { onDelete: 'cascade' }),
     key: text('key').notNull(), // frontmatter key name
     type: text('type', {
       enum: [
@@ -170,7 +198,7 @@ export const fields = sqliteTable(
     order: integer('order').notNull().default(0),
   },
   (t) => ({
-    keyIdx: uniqueIndex('fields_project_key_idx').on(t.projectId, t.key),
+    keyIdx: uniqueIndex('fields_table_key_idx').on(t.tableId, t.key),
   }),
 );
 
@@ -183,6 +211,7 @@ export const documents = sqliteTable(
     projectId: text('project_id')
       .notNull()
       .references(() => projects.id, { onDelete: 'cascade' }),
+    tableId: text('table_id').references(() => tables.id, { onDelete: 'cascade' }),
     type: text('type', { enum: ['work_item', 'page'] }).notNull(),
     slug: text('slug').notNull(),
     title: text('title').notNull(),
@@ -207,6 +236,7 @@ export const documents = sqliteTable(
     slugIdx: uniqueIndex('documents_project_slug_idx').on(t.projectId, t.slug),
     typeIdx: index('documents_project_type_idx').on(t.projectId, t.type),
     parentIdx: index('documents_parent_idx').on(t.parentId),
+    tableIdx: index('documents_table_idx').on(t.tableId),
   }),
 );
 
@@ -217,6 +247,9 @@ export const views = sqliteTable('views', {
   projectId: text('project_id')
     .notNull()
     .references(() => projects.id, { onDelete: 'cascade' }),
+  tableId: text('table_id')
+    .notNull()
+    .references(() => tables.id, { onDelete: 'cascade' }),
   name: text('name').notNull(),
   type: text('type', { enum: ['list', 'kanban'] }).notNull(),
   filters: text('filters', { mode: 'json' }).$type<unknown>().notNull().default({}),
@@ -309,6 +342,7 @@ export const events = sqliteTable(
 export type User = typeof users.$inferSelect;
 export type Workspace = typeof workspaces.$inferSelect;
 export type Project = typeof projects.$inferSelect;
+export type Table = typeof tables.$inferSelect;
 export type Document = typeof documents.$inferSelect;
 export type Status = typeof statuses.$inferSelect;
 export type Field = typeof fields.$inferSelect;
