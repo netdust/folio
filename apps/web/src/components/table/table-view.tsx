@@ -140,14 +140,22 @@ export function TableView({ wslug, pslug }: Props) {
     [update],
   );
 
-  const onVisibilityChange = (next: string[]) => {
+  const onVisibilityChange = async (next: string[]) => {
     if (!activeView) return;
-    updateView.mutate({ id: activeView.id, patch: { visibleFields: next } });
+    try {
+      await updateView.mutateAsync({ id: activeView.id, patch: { visibleFields: next } });
+    } catch (err) {
+      toast.error(formatApiError(err));
+    }
   };
 
-  const onReorder = (next: string[]) => {
+  const onReorder = async (next: string[]) => {
     if (!activeView) return;
-    updateView.mutate({ id: activeView.id, patch: { columnOrder: next } });
+    try {
+      await updateView.mutateAsync({ id: activeView.id, patch: { columnOrder: next } });
+    } catch (err) {
+      toast.error(formatApiError(err));
+    }
   };
 
   const filteredDocs = useMemo(
