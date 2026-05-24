@@ -91,17 +91,19 @@ export function TableCell({
     const value = doc.frontmatter?.[column.key];
     const isDueField = column.fieldType === 'date' && column.key === 'next_action_due';
     const urgencyClass = isDueField ? urgencyClasses(dueUrgency(value)) : '';
-    return (
-      <span className={urgencyClass || undefined}>
-        <FieldRenderer
-          fieldKey={column.key}
-          type={column.fieldType}
-          value={value}
-          options={column.fieldOptions ?? undefined}
-          onCommit={(next) => onFieldCommit(doc.slug, column.key, next)}
-          isPending={isPending}
-        />
-      </span>
+    const rendered = (
+      <FieldRenderer
+        fieldKey={column.key}
+        type={column.fieldType}
+        value={value}
+        options={column.fieldOptions ?? undefined}
+        onCommit={(next) => onFieldCommit(doc.slug, column.key, next)}
+        isPending={isPending}
+      />
     );
+    if (!urgencyClass) return rendered;
+    // display:contents wrapper — color cascades to descendants without
+    // introducing a box that disrupts the grid cell's height/baseline.
+    return <span className={urgencyClass} style={{ display: 'contents' }}>{rendered}</span>;
   }
 }
