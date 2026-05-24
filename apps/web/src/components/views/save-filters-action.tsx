@@ -19,6 +19,9 @@ export interface SaveFiltersActionProps {
   onSaved?: () => void;
 }
 
+const URL_FILTER_KEYS = ['status', 'priority', 'labels', 'assignee', 'updated_since'] as const;
+const ARRAY_KEYS = new Set(['status', 'labels']);
+
 // Build the flat-shape filter object from URL clauses — matches what the New
 // View sheet writes, so saved filters stay consistent across both entry points.
 function clausesToFlatFilters(clauses: FilterClauseUrl[]): Record<string, unknown> {
@@ -37,19 +40,30 @@ function clausesToFlatFilters(clauses: FilterClauseUrl[]): Record<string, unknow
 // TableView accepts both flat (`{status: 'X'}`) and AST (`{status: {$eq: 'X'}}`)
 // shapes; the seeded defaults use AST. We collapse both into the same flat
 // representation so equality holds whichever way the view was created.
+// Only extracts keys that can appear in the URL (status, priority, labels, assignee, updated_since).
 function normalizeViewFilters(raw: unknown): Record<string, unknown> {
   if (!raw || typeof raw !== 'object') return {};
   const out: Record<string, unknown> = {};
-  for (const [key, val] of Object.entries(raw as Record<string, unknown>)) {
+  for (const key of URL_FILTER_KEYS) {
+    const val = (raw as Record<string, unknown>)[key];
     if (val === null || val === undefined || val === '') continue;
-    if (typeof val === 'string' || typeof val === 'number' || Array.isArray(val)) {
-      out[key] = val;
+    // Flat shape: string / number / array
+    if (typeof val === 'string' || typeof val === 'number') {
+      out[key] = ARRAY_KEYS.has(key) ? [String(val)] : val;
+      continue;
+    }
+    if (Array.isArray(val)) {
+      out[key] = ARRAY_KEYS.has(key) ? val : val[0];
       continue;
     }
     if (typeof val === 'object') {
       const op = val as Record<string, unknown>;
-      if ('$eq' in op && op['$eq'] !== undefined) out[key] = op['$eq'];
-      else if ('$in' in op && Array.isArray(op['$in'])) out[key] = op['$in'];
+      if ('$eq' in op && op['$eq'] !== undefined) {
+        const v = op['$eq'];
+        out[key] = ARRAY_KEYS.has(key) ? [String(v)] : v;
+      } else if ('$in' in op && Array.isArray(op['$in'])) {
+        out[key] = ARRAY_KEYS.has(key) ? op['$in'] : op['$in'][0];
+      }
     }
   }
   return out;

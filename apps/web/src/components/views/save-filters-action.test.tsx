@@ -120,15 +120,41 @@ describe('SaveFiltersAction', () => {
   it('treats AST-shape view filters as equal to flat URL clauses', () => {
     // Seeded default views store `{status: {$eq: 'X'}}`. The action must hide
     // for users on those views when the URL holds the same constraint flat.
-    const astView = makeView({ filters: { status: { $eq: 'In Progress' } } });
+    // View has both `type` (view-only key, dropped) and `status` (user filter, coerced to array).
+    const astView = makeView({
+      filters: { type: { $eq: 'work_item' }, status: { $eq: 'In Progress' } },
+    });
     const flatClauses: FilterClauseUrl[] = [{ kind: 'status', values: ['In Progress'] }];
 
     // Pure function asserts the equality contract.
-    expect(filtersEqual(flatClauses, astView.filters)).toBe(false);
+    // The view's `status` scalar `$eq: 'In Progress'` becomes array `['In Progress']`;
+    // the `type` key is dropped. Result equals URL clauses.
+    expect(filtersEqual(flatClauses, astView.filters)).toBe(true);
 
     // Today's UI emits `values: [...]` for status — so the equivalent AST is
     // `$in`. Verify that path equates too.
-    const astInView = makeView({ filters: { status: { $in: ['In Progress'] } } });
-    expect(filtersEqual(flatClauses, astInView.filters)).toBe(true);
+    const astInView = makeView({ filters: { status: { $in: ['In Progress', 'Done'] } } });
+    const inClauses: FilterClauseUrl[] = [
+      { kind: 'status', values: ['In Progress', 'Done'] },
+    ];
+    expect(filtersEqual(inClauses, astInView.filters)).toBe(true);
+
+    // Scalar flat shape should also work.
+    const scalarFlatView = makeView({ filters: { status: 'In Progress' } });
+    expect(filtersEqual(flatClauses, scalarFlatView.filters)).toBe(true);
+
+    // Unequal: different status value.
+    const differentView = makeView({ filters: { status: 'In Progress' } });
+    const differentClauses: FilterClauseUrl[] = [{ kind: 'status', values: ['Done'] }];
+    expect(filtersEqual(differentClauses, differentView.filters)).toBe(false);
+  });
+
+  it('hides the save action on a seeded default view with only type key', () => {
+    // Seeded default views store `{type: {$eq: 'work_item'}}`. No user filters.
+    // When URL has no clauses, they must be equal (button must not appear).
+    const seededDefault = makeView({ filters: { type: { $eq: 'work_item' } } });
+    const emptyClauses: FilterClauseUrl[] = [];
+
+    expect(filtersEqual(emptyClauses, seededDefault.filters)).toBe(true);
   });
 });
