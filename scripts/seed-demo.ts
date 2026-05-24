@@ -131,6 +131,7 @@ const STANDARD_FIELDS: Array<{
     'lms', 'crm', 'integration', 'caching', 'billing', 'ops',
     'internal-tool', 'feature', 'kickoff', 'scaffolding', 'blocked',
     'frontend', 'content', 'form', 'i18n', 'combell', 'seo', 'launch', 'search',
+    'migration',
   ], order: 30 },
   { key: 'due_date',  type: 'date',         label: 'Due',      order: 40 },
 ];
