@@ -13,6 +13,7 @@ import { healthRoute } from './routes/health.ts';
 import { projectItemRoute, projectsRoute } from './routes/projects.ts';
 import { settingsRoute } from './routes/settings.ts';
 import { statusesRoute } from './routes/statuses.ts';
+import { tablesRoute } from './routes/tables.ts';
 import { tokensRoute } from './routes/tokens.ts';
 import { viewsRoute } from './routes/views.ts';
 import { workspaceItemRoute, workspacesRoute } from './routes/workspaces.ts';
@@ -39,6 +40,7 @@ wScope.route('/projects', projectsRoute);
 
 const pScope = new Hono<AuthContext & ScopeContext>();
 pScope.use('*', resolveProject);
+pScope.route('/tables', tablesRoute);
 pScope.route('/statuses', statusesRoute);
 pScope.route('/fields', fieldsRoute);
 pScope.route('/views', viewsRoute);
