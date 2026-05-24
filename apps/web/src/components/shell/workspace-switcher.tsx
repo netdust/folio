@@ -15,6 +15,7 @@ interface WorkspaceSwitcherProps {
   workspaces: Workspace[];
   onSelectWorkspace: (workspaceId: string) => void;
   onCreateWorkspace?: () => void;
+  onCreateProject?: () => void;
   onOpenSettings?: () => void;
 }
 
@@ -23,6 +24,7 @@ export function WorkspaceSwitcher({
   workspaces,
   onSelectWorkspace,
   onCreateWorkspace,
+  onCreateProject,
   onOpenSettings,
 }: WorkspaceSwitcherProps) {
   return (
@@ -53,6 +55,15 @@ export function WorkspaceSwitcher({
           ))}
         </div>
         <div className="border-t border-border-light p-1">
+          {onCreateProject ? (
+            <button
+              type="button"
+              onClick={onCreateProject}
+              className="block w-full rounded-md px-2 py-1.5 text-left text-sm text-fg-2 hover:bg-card hover:text-fg"
+            >
+              + New project
+            </button>
+          ) : null}
           {onCreateWorkspace ? (
             <button
               type="button"

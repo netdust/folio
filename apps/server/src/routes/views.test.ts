@@ -116,3 +116,36 @@ test('PATCH /views/:id accepts columnOrder updates', async () => {
   });
   expect(res.status).toBe(200);
 });
+
+test('POST returns data.view.id as a unique non-empty string', async () => {
+  const { app, seed } = await makeTestApp();
+  // First create
+  const a = await app.request(path, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name: 'Id contract A',
+      type: 'list',
+      filters: {},
+      sort: [],
+      visibleFields: ['title', 'status'],
+      columnOrder: ['title', 'status'],
+    }),
+  });
+  expect(a.status).toBe(201);
+  const aId = (await a.json()).data.view.id;
+  expect(typeof aId).toBe('string');
+  expect(aId.length).toBeGreaterThan(0);
+
+  // Second create — must produce a different id
+  const b = await app.request(path, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Id contract B', type: 'list' }),
+  });
+  expect(b.status).toBe(201);
+  const bId = (await b.json()).data.view.id;
+  expect(typeof bId).toBe('string');
+  expect(bId.length).toBeGreaterThan(0);
+  expect(bId).not.toBe(aId);
+});

@@ -48,9 +48,26 @@ export function TableHeader({
             className="grid flex-1 gap-3"
             style={{ gridTemplateColumns: gridTemplate(columns) }}
           >
-            {columns.map((c, i) => (
-              <SortableHeaderCell key={c.key} column={c} sort={sort} onSort={onSort} isSticky={i === 0} />
-            ))}
+            {(() => {
+              const last = columns[columns.length - 1];
+              return (
+                <>
+                  {columns.slice(0, -1).map((c, i) => (
+                    <SortableHeaderCell key={c.key} column={c} sort={sort} onSort={onSort} isSticky={i === 0} />
+                  ))}
+                  {columns.length > 1 ? <span aria-hidden /> : null}
+                  {last ? (
+                    <SortableHeaderCell
+                      key={last.key}
+                      column={last}
+                      sort={sort}
+                      onSort={onSort}
+                      isSticky={columns.length === 1}
+                    />
+                  ) : null}
+                </>
+              );
+            })()}
           </div>
         </SortableContext>
       </DndContext>

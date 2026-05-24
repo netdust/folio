@@ -1,5 +1,5 @@
 import { useNavigate, useSearch } from '@tanstack/react-router';
-import { useMemo, useState, useCallback } from 'react';
+import { useMemo, useState, useCallback, useEffect, useRef } from 'react';
 import { Inbox } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -60,12 +60,70 @@ export function TableView({ wslug, pslug }: Props) {
   const updateView = useUpdateView(wslug, pslug);
   const [pendingSlugs, setPendingSlugs] = useState<Set<string>>(new Set());
 
-  // For Phase 2B: use the default view if any, else the first; null if neither.
-  // Phase 2C will read the active view from ?view=:slug in the URL.
+  const urlViewId = typeof search.view === 'string' ? search.view : undefined;
+
   const activeView = useMemo(() => {
     const list = viewsData ?? [];
+    if (urlViewId) {
+      const found = list.find((v) => v.id === urlViewId);
+      if (found) return found;
+    }
     return list.find((v) => v.isDefault) ?? list[0] ?? null;
-  }, [viewsData]);
+  }, [urlViewId, viewsData]);
+
+  // Hydrate URL filters/sort from the active view ONCE per view. The ref guard
+  // prevents the effect from re-firing when `search` updates as a result of
+  // hydration. User changes to the URL after hydration always win until they
+  // explicitly save filters back to the view (Task 8).
+  const hydratedViewId = useRef<string | null>(null);
+  useEffect(() => {
+    if (!activeView) return;
+    if (hydratedViewId.current === activeView.id) return;
+    hydratedViewId.current = activeView.id;
+
+    const viewFilters = (activeView.filters ?? {}) as Record<string, unknown>;
+    const nextSearch: Record<string, unknown> = {};
+
+    if (search.doc) nextSearch.doc = search.doc;
+    if (urlViewId) nextSearch.view = urlViewId;
+
+    // The compiler accepts both flat (`{status: 'In Progress'}`) and AST
+    // (`{status: {$eq: 'In Progress'}}`); honor both at read time.
+    for (const key of ['status', 'priority', 'assignee', 'labels', 'updated_since'] as const) {
+      const raw = viewFilters[key];
+      if (raw === undefined || raw === null || raw === '') continue;
+      if (typeof raw === 'string' || typeof raw === 'number' || Array.isArray(raw)) {
+        nextSearch[key] = raw;
+        continue;
+      }
+      if (typeof raw === 'object') {
+        const op = raw as Record<string, unknown>;
+        if ('$eq' in op && op['$eq'] !== undefined) nextSearch[key] = op['$eq'];
+        else if ('$in' in op && Array.isArray(op['$in'])) nextSearch[key] = op['$in'] as unknown[];
+      }
+    }
+
+    const viewSort = activeView.sort;
+    if (Array.isArray(viewSort) && viewSort.length > 0) {
+      const first = viewSort[0];
+      if (first && typeof first === 'object' && 'key' in first) {
+        const k = (first as { key: unknown }).key;
+        if (typeof k === 'string') {
+          nextSearch.sort = k;
+          const d = (first as { dir?: unknown }).dir;
+          nextSearch.dir = d === 'desc' ? 'desc' : 'asc';
+        }
+      }
+    }
+
+    const searchObj = search as Record<string, unknown>;
+    const same =
+      Object.keys(searchObj).length === Object.keys(nextSearch).length &&
+      Object.keys(nextSearch).every((k) => nextSearch[k] === searchObj[k]);
+    if (same) return;
+
+    void navigate({ to: '.', search: nextSearch, replace: true });
+  }, [activeView, urlViewId, navigate, search]);
 
   const allColumns: Column[] = useMemo(
     () => mergeColumns(fields ?? [], activeView),
@@ -99,20 +157,28 @@ export function TableView({ wslug, pslug }: Props) {
 
   const onClauseChange = (next: FilterClauseUrl[]) => {
     const nextSearch: Record<string, unknown> = { ...search };
+    const flatFilters: Record<string, unknown> = {};
     for (const k of ['status', 'priority', 'labels', 'assignee', 'updated_since']) {
       delete nextSearch[k];
     }
     for (const c of next) {
-      if (c.kind === 'status') nextSearch['status'] = c.values;
-      if (c.kind === 'priority') nextSearch['priority'] = c.value;
-      if (c.kind === 'labels') nextSearch['labels'] = c.values;
-      if (c.kind === 'assignee') nextSearch['assignee'] = c.value;
-      if (c.kind === 'updated_since') nextSearch['updated_since'] = c.value;
+      if (c.kind === 'status') { nextSearch['status'] = c.values; flatFilters['status'] = c.values; }
+      if (c.kind === 'priority') { nextSearch['priority'] = c.value; flatFilters['priority'] = c.value; }
+      if (c.kind === 'labels') { nextSearch['labels'] = c.values; flatFilters['labels'] = c.values; }
+      if (c.kind === 'assignee') { nextSearch['assignee'] = c.value; flatFilters['assignee'] = c.value; }
+      if (c.kind === 'updated_since') { nextSearch['updated_since'] = c.value; flatFilters['updated_since'] = c.value; }
     }
     void navigate({ to: '.', search: nextSearch, replace: false });
+    if (activeView) {
+      updateView.mutate(
+        { id: activeView.id, patch: { filters: flatFilters } },
+        { onError: (err) => toast.error(formatApiError(err)) },
+      );
+    }
   };
 
   const onSortChange = (next: SortState | null) => {
+    // 1) Update URL (existing behavior, unchanged)
     const nextSearch: Record<string, unknown> = { ...search };
     if (next) {
       nextSearch.sort = next.key;
@@ -122,6 +188,16 @@ export function TableView({ wslug, pslug }: Props) {
       delete nextSearch.dir;
     }
     void navigate({ to: '.', search: nextSearch, replace: false });
+
+    // 2) Auto-save to active view (parity with columnOrder + visibleFields).
+    if (!activeView) return;
+    const patchSort = next ? [{ key: next.key, dir: next.dir }] : [];
+    updateView.mutate(
+      { id: activeView.id, patch: { sort: patchSort } },
+      {
+        onError: (err) => toast.error(formatApiError(err)),
+      },
+    );
   };
 
   const onUpdate = useCallback(
@@ -172,7 +248,7 @@ export function TableView({ wslug, pslug }: Props) {
         onChange={onClauseChange}
       />
       <div className="folio-scroll -mx-[22px] overflow-x-auto">
-        <div className="min-w-max px-[22px]">
+        <div className="px-[22px]">
           <TableHeader
             columns={visibleColumns}
             allColumns={allColumns}

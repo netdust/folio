@@ -5,6 +5,7 @@ import { ChevronsUpDown, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { Icon } from '../ui/icon.tsx';
 import { Kbd } from '../ui/kbd.tsx';
 import { cn } from '../ui/cn.ts';
+import { RailTree } from './rail-tree.tsx';
 
 const STORAGE_KEY = 'folio:rail-collapsed';
 
@@ -17,6 +18,21 @@ export interface NavItem {
   kbd?: string;
   active?: boolean;
   onClick?: () => void;
+  /** When set, the item is expandable and renders its children indented below. */
+  children?: NavItem[];
+  /** Hover-reveal "+" button next to row. */
+  onPlus?: () => void;
+  plusLabel?: string;
+  /** Hover-reveal "⋯" menu next to row. */
+  menuItems?: RowMenuItem[];
+  /** Double-click the label to inline-edit. Called with the trimmed new name. */
+  onRename?: (next: string) => void;
+}
+
+export interface RowMenuItem {
+  label: string;
+  onSelect: () => void;
+  destructive?: boolean;
 }
 
 export interface WorkspaceConfig {
@@ -106,7 +122,7 @@ function RailExpanded({ brand, workspace, primary, tools, account, user, onToggl
           onClick={onToggle}
           className="grid h-6 w-6 place-items-center rounded text-fg-3 hover:bg-card hover:text-fg-2"
         >
-          <Icon icon={PanelLeftClose} size={13} />
+          <Icon icon={PanelLeftClose} size={14} />
         </button>
       </div>
     </aside>
@@ -139,7 +155,7 @@ function RailCollapsed({ brand, workspace, primary, tools, account, user, onTogg
         title="Expand"
         className="mt-1.5 grid h-6 w-6 place-items-center rounded text-fg-3 hover:bg-card hover:text-fg-2"
       >
-        <Icon icon={PanelLeftOpen} size={13} />
+        <Icon icon={PanelLeftOpen} size={14} />
       </button>
     </aside>
   );
@@ -209,23 +225,28 @@ function NavList({ items, expanded }: { items: NavItem[]; expanded: boolean }) {
   }
   return (
     <div className="flex flex-col gap-0.5">
-      {items.map((item) => (
-        <button
-          key={item.id}
-          type="button"
-          onClick={item.onClick}
-          className={cn(
-            'flex items-center gap-2.5 rounded-md px-2 py-1.5 text-sm transition-colors duration-fast',
-            item.active
-              ? 'bg-nav-active text-fg'
-              : 'text-fg-3 hover:bg-card hover:text-fg-2',
-          )}
-        >
-          {item.lucideIcon ? <Icon icon={item.lucideIcon} size={16} /> : <span className="inline-grid h-[18px] w-[18px] place-items-center">{item.icon}</span>}
-          <span className="flex-1 text-left truncate">{item.label}</span>
-          {item.kbd ? <Kbd>{item.kbd}</Kbd> : null}
-        </button>
-      ))}
+      {items.map((item) => {
+        if (item.children && item.children.length > 0) {
+          return <RailTree key={item.id} items={[item]} />;
+        }
+        return (
+          <button
+            key={item.id}
+            type="button"
+            onClick={item.onClick}
+            className={cn(
+              'flex items-center gap-2.5 rounded-md px-2 py-1.5 text-sm transition-colors duration-fast',
+              item.active
+                ? 'bg-nav-active text-fg'
+                : 'text-fg-3 hover:bg-card hover:text-fg-2',
+            )}
+          >
+            {item.lucideIcon ? <Icon icon={item.lucideIcon} size={16} /> : <span className="inline-grid h-[18px] w-[18px] place-items-center">{item.icon}</span>}
+            <span className="flex-1 text-left truncate">{item.label}</span>
+            {item.kbd ? <Kbd>{item.kbd}</Kbd> : null}
+          </button>
+        );
+      })}
     </div>
   );
 }

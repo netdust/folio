@@ -82,7 +82,12 @@ export function columnWidth(col: Column): number {
   return 160;
 }
 
-/** Build a grid-template-columns string from the visible columns. */
+/** Build a grid-template-columns string from the visible columns.
+ *  All columns keep their fixed widths. When there's only one column, that's
+ *  the whole template. With two or more, a `1fr` spacer is inserted before
+ *  the last column so it sticks to the right edge of the pane. */
 export function gridTemplate(columns: Column[]): string {
-  return columns.map((c) => `${columnWidth(c)}px`).join(' ');
+  const widths = columns.map((c) => `${columnWidth(c)}px`);
+  if (widths.length <= 1) return widths.join(' ');
+  return [...widths.slice(0, -1), '1fr', widths[widths.length - 1]].join(' ');
 }

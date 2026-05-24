@@ -217,31 +217,94 @@ For full context on any decision: `@docs/FOLIO-BRIEFING.md`. For the operating m
 
 ---
 
-## Phase 1.6 — Saved views in rail (Week 3, second half) — NEXT
+## Phase 1.6 — Saved views in rail (Week 3, second half) — SHIPPED 2026-05-24
 
-**Goal:** Saved views surface as nested children under their table in the left rail (Linear / NocoDB style). Clicking a view navigates to `/w/.../t/:tslug?view=:vslug` and applies the view's filter + visibleFields + columnOrder. A `+` action saves the current filter / column state as a new view.
+**Goal:** Saved views surface as nested children under their table in the left rail (Linear / NocoDB style). Clicking a view navigates to `/w/.../work-items?view=<id>` and applies the view's filter + visibleFields + columnOrder. A `+` action saves the current filter / column state as a new view.
+
+> **Status (2026-05-24):** Shipped on `phase-1.6/saved-views`. Plan: `docs/superpowers/plans/2026-05-24-phase-1-6-saved-views-in-rail.md`. Final pass dropped the explicit Save Filters action in favor of full auto-save: filter changes PATCH the active view immediately, matching the existing sort/columnOrder/visibleFields behavior. Suite: 113 server (+1), 169 web (+15 net), 28 shared. Playwright spec descoped — manual QA gates the merge.
 
 ### Rail
 
-- [ ] Rail shows `Project → ⚏ Work Items → views[]` with expandable tree (uses existing TanStack Router + the persisted-expand-state pattern from the wiki tree)
-- [ ] Each view row has the view's name + a subtle icon hinting at render mode (list = lines, kanban = columns)
-- [ ] `+` button under each table opens "New view" sheet: pick a name, the view captures the current URL filter/sort/columns
-- [ ] Click view → navigate to `/w/.../t/:tslug?view=:vslug` (preserve any open `doc=` param)
+- [x] Rail shows `Project → ⚏ Work Items → views[]` with expandable tree (per-item localStorage expand state under `folio:rail-expanded:<id>`)
+- [x] Each row carries an icon: folder for projects, table for tables, list for views (kanban filtered out per Phase 6 deferral)
+- [x] `+` button under each table opens "New view" sheet (name only — current URL state always captured)
+- [x] Click view → navigate to `/w/.../work-items?view=<id>` (preserves any open `doc=` param)
 
 ### TableView wiring
 
-- [ ] `TableView` reads `?view=` from URL, calls `useView(wslug, pslug, vslug)` (new hook on `lib/api/views.ts`)
-- [ ] Active view's `filters` translate into the URL filter params on first navigation (so a user can edit + save back)
-- [ ] "Edit this view" affordance in the header opens a sheet to PATCH name / filters / visibleFields / columnOrder
-- [ ] Default view is auto-selected when no `?view=` is in URL — preserves Phase 1.5 behavior
+- [x] `TableView` reads `?view=` from URL, resolves via `useViews` *(no per-view hook needed — list query + find by id)*
+- [x] Active view's `filters` translate into the URL filter params on first navigation — ref-guarded hydration effect, fires once per view id
+- [x] **Filter changes auto-save to active view** (no explicit Save button — same behavior as sort/columnOrder/visibleFields)
+- [x] Default view is auto-selected when no `?view=` is in URL — preserves Phase 1.5 behavior
 
 ### Phase 1.6 acceptance
 
-- [ ] Three views can coexist on one table; switching between them updates the spreadsheet without page reload
-- [ ] Creating a view from "current state" captures filters + columns + sort accurately
-- [ ] Editing a view's filter via the sheet round-trips through the URL params correctly
-- [ ] Existing single-view tests still green
-- [ ] Commit: `phase-1.6: complete`
+- [x] Three views can coexist on one table; switching between them updates the spreadsheet without page reload
+- [x] Creating a view captures the current URL filters + sort accurately
+- [x] Editing a view's filter via inline chip changes round-trips through the URL params correctly (auto-saves to view)
+- [x] Existing single-view tests still green
+- [x] Commit: `phase-1.6: complete`
+
+---
+
+## Phase 1.6.1 — Rail completeness (Half-day polish) — SHIPPED 2026-05-24
+
+**Goal:** Close the dead-end UX gaps Stefan hit on the post-1.6 walkthrough.
+
+> **Status:** Absorbed into `phase-1.6/saved-views` branch. Hover-reveal `+`/`⋯` pattern (NocoDB-style) on every rail row, double-click rename, confirm dialog for deletes. `+ New project` lives in the workspace switcher popover footer. No new tests added — manual QA gates this. Today: workspace creation works everywhere, but **creating a project from inside a workspace requires going back to the project picker**; tables can't be **renamed / created / deleted** from the UI at all (every project's table is just stuck called "Work Items"); views can't be **renamed / deleted** either. Backend supports all of these — only UI is missing. Also: surface Wiki + multi-table structure in the rail so the table layer earns its keep.
+
+Target UX:
+
+```
+▾ Netdust
+  ▾ 📁 Folio
+      ▾ ⚏ Tasks                ← table, renameable
+          • All tasks
+          • In progress         ← view, renameable
+          + New view
+      ▸ ⚏ Bugs                  ← additional tables, when created
+      📖 Wiki
+      + New table
+  ▸ 📁 Client website
+  + New project                  ← from rail, not only from picker page
+```
+
+### Project creation from the rail
+
+- [ ] `+ New project` action lives in the rail at the workspace level (trailing slot on the workspace row, or as a sibling row below all projects). Opens the existing `<ProjectCreate>` sheet — same flow as `/w/:wslug/` index. No new backend.
+- [ ] After create, the rail refreshes and the new project's row is visible. Optional: auto-navigate into the new project.
+
+### Tables: create / rename / delete
+
+- [ ] `+ New table` trailing on each project row opens a "New table" sheet (name input; slug auto-derived from name, editable before submit; optional icon). Uses existing `POST /api/v1/w/:wslug/p/:pslug/tables`.
+- [ ] Right-click (or `⋯` button on hover) on a table row → context menu with `Rename` / `Delete`. Rename opens an inline edit (or a small sheet) that PATCHes `name` only (slug is immutable per Phase 1.5a — confirm via a note in the rename UI: "URL slug stays the same").
+- [ ] Delete shows a confirm dialog with the count of documents that will be cascaded. Calls `DELETE /api/v1/w/:wslug/p/:pslug/tables/:tslug` — verify the cascade behavior on documents + views before shipping.
+- [ ] Cannot delete a project's last table (server should enforce or UI should disable).
+
+### Views: rename / delete
+
+- [ ] Right-click (or `⋯` on hover) on a view row → `Rename` / `Delete`.
+- [ ] Rename: inline edit or small sheet, PATCH `name`.
+- [ ] Delete: confirm dialog; if it's the default view, server should auto-promote another (verify) or UI should block.
+- [ ] Cannot delete the last view of a table (server or UI).
+
+### Wiki in the rail
+
+- [ ] Wiki renders as a leaf NavItem under each project (FileText icon). Clicking navigates to `/w/:wslug/p/:pslug/wiki`. No nesting underneath — wiki has its own internal tree, not exposed in the rail.
+
+### Backend
+
+- No new endpoints. Tables CRUD shipped in Phase 1.5a; Views CRUD shipped in Phase 1. Verify each PATCH/DELETE path is wired before building the UI; add a regression test if anything is shaky.
+
+### Phase 1.6.1 acceptance
+
+- [x] Create a project from inside another project — `+ New project` lives in the workspace switcher popover footer.
+- [x] Rename the default table from "Work Items" to "Tasks" — double-click table row label.
+- [x] Create a second table "Bugs" — `+` button on project row's hover affordances opens TableCreate sheet.
+- [x] Delete a non-default view — `⋯ → Delete` on view row, confirm dialog.
+- [x] Rename a view via the rail — double-click view row label.
+- [x] Wiki appears as a sibling row to tables under each project.
+- [x] Commit: `phase-1.6.1: absorbed into phase-1.6`
 
 ---
 
