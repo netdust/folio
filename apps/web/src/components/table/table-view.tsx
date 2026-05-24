@@ -20,6 +20,7 @@ import { Icon } from '../ui/icon.tsx';
 import { FilterBar } from '../filter/filter-bar.tsx';
 import { EmptyState } from '../views/empty-state.tsx';
 import { ListSkeleton } from '../views/list-skeleton.tsx';
+import { SaveFiltersAction } from '../views/save-filters-action.tsx';
 import { TableHeader, type SortState } from './table-header.tsx';
 import { TableRow } from './table-row.tsx';
 import {
@@ -223,12 +224,22 @@ export function TableView({ wslug, pslug }: Props) {
 
   return (
     <>
-      <FilterBar
-        clauses={clauses}
-        statuses={statuses ?? []}
-        pinnedFields={fields ?? []}
-        onChange={onClauseChange}
-      />
+      <div className="flex flex-wrap items-center gap-2">
+        <FilterBar
+          clauses={clauses}
+          statuses={statuses ?? []}
+          pinnedFields={fields ?? []}
+          onChange={onClauseChange}
+        />
+        {activeView && (
+          <SaveFiltersAction
+            wslug={wslug}
+            pslug={pslug}
+            view={activeView}
+            clauses={clauses}
+          />
+        )}
+      </div>
       <div className="folio-scroll -mx-[22px] overflow-x-auto">
         <div className="min-w-max px-[22px]">
           <TableHeader
