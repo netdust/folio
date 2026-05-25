@@ -177,3 +177,23 @@ test('PATCH number→currency auto-injects [EUR] when no options supplied', asyn
   expect(body.data.field.type).toBe('currency');
   expect(body.data.field.options).toEqual(['EUR']);
 });
+
+test('PATCH currency→number clears options when client sends options: null', async () => {
+  const { app, seed } = await makeTestApp();
+  const create = await app.request(path, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ key: 'amount', type: 'currency', options: ['EUR'] }),
+  });
+  const { data: { field } } = await create.json();
+
+  const patch = await app.request(`${path}/${field.id}`, {
+    method: 'PATCH',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: 'number', options: null }),
+  });
+  expect(patch.status).toBe(200);
+  const body = await patch.json();
+  expect(body.data.field.type).toBe('number');
+  expect(body.data.field.options).toBeNull();
+});

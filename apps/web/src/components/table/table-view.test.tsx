@@ -1289,4 +1289,172 @@ describe('TableView', () => {
     });
     expect(created[0].body).toMatchObject({ key: 'owner', type: 'string' });
   });
+
+  it('⋯ → Change type → Apply PATCHes /fields/:id with the new type and options', async () => {
+    // Phase 1.9.1 Task 4: the per-column ⋯ menu now has a "Change type"
+    // entry that opens ColumnTypeChange. Submitting the dialog PATCHes the
+    // field's type (and for currency→non-currency, drops options to null).
+    //
+    // The field under test is currency 'amount'. We change it to 'number',
+    // which per the dialog's compatibility matrix is a valid transition and
+    // should send `options: null` to drop the ISO code.
+    const numberField = {
+      id: 'f1', key: 'amount', type: 'number' as const, label: 'Amount',
+      options: null, required: false, order: 0,
+    };
+    const currencyField = {
+      id: 'f1', key: 'amount', type: 'currency' as const, label: 'Amount',
+      options: ['EUR'], required: false, order: 0,
+    };
+    // Start in 'number' so the dialog's compatibility matrix offers
+    // 'currency' as a target. The flow we exercise is number → currency,
+    // which is load-bearing because it has to send the [iso] options array.
+    const patchCalls: { id: string; body: Record<string, unknown> }[] = [];
+
+    const fetchMock = vi.fn<typeof fetch>(async (url, init) => {
+      const u = String(url);
+      const method = init?.method ?? 'GET';
+      if (u.includes('/statuses') && method === 'GET') {
+        return new Response(JSON.stringify({ data: [statusRow] }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (u.includes('/fields') && method === 'GET') {
+        return new Response(JSON.stringify({ data: [numberField] }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (u.match(/\/fields\/f1$/) && method === 'PATCH') {
+        const body = init?.body instanceof ReadableStream
+          ? await new Response(init.body).text()
+          : String(init?.body ?? '{}');
+        patchCalls.push({ id: 'f1', body: JSON.parse(body) });
+        return new Response(
+          JSON.stringify({ data: { field: currencyField } }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      if (u.includes('/views') && method === 'GET') {
+        return new Response(JSON.stringify({ data: [viewRow] }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (u.includes('/documents') && method === 'GET') {
+        return new Response(JSON.stringify({ data: { data: [docRow], nextCursor: null } }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { queryClient, router } = setup();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByText('First task')).toBeInTheDocument());
+
+    // Open the ⋯ menu on the pinned Amount column, click Change type.
+    const menuButtons = screen.getAllByRole('button', { name: /column actions/i });
+    await act(async () => { fireEvent.click(menuButtons[0]); });
+    const changeTypeItem = await screen.findByRole('menuitem', { name: /change type/i });
+    await act(async () => { fireEvent.click(changeTypeItem); });
+
+    // Dialog renders the type select. Pick 'currency'.
+    const typeSelect = await screen.findByLabelText(/new type/i);
+    await act(async () => { fireEvent.change(typeSelect, { target: { value: 'currency' } }); });
+
+    // ISO input appears for number → currency. Default 'EUR' is fine.
+    const isoInput = await screen.findByLabelText(/iso code/i);
+    expect((isoInput as HTMLInputElement).value).toBe('EUR');
+
+    const applyBtn = screen.getByRole('button', { name: /^apply$/i });
+    await act(async () => { fireEvent.click(applyBtn); });
+
+    await waitFor(() => expect(patchCalls.length).toBe(1));
+    expect(patchCalls[0].id).toBe('f1');
+    expect(patchCalls[0].body).toMatchObject({ type: 'currency', options: ['EUR'] });
+  });
+
+  it('⋯ → Change type currency→number sends options: null and PATCHes /fields/:id', async () => {
+    // Phase 1.9.1 Task 4 follow-up: regression guard for the currency→non-currency
+    // path. The client must send `options: null` so the server's PATCH handler
+    // drops the ISO code. Before the Zod fix on the server, this round-trip was
+    // rejected with HTTP 400 ("Expected array, received null").
+    const currencyField = {
+      id: 'f1', key: 'amount', type: 'currency' as const, label: 'Amount',
+      options: ['EUR'], required: false, order: 0,
+    };
+    const numberField = {
+      id: 'f1', key: 'amount', type: 'number' as const, label: 'Amount',
+      options: null, required: false, order: 0,
+    };
+    const patchCalls: { id: string; body: Record<string, unknown> }[] = [];
+
+    const fetchMock = vi.fn<typeof fetch>(async (url, init) => {
+      const u = String(url);
+      const method = init?.method ?? 'GET';
+      if (u.includes('/statuses') && method === 'GET') {
+        return new Response(JSON.stringify({ data: [statusRow] }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (u.includes('/fields') && method === 'GET') {
+        return new Response(JSON.stringify({ data: [currencyField] }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (u.match(/\/fields\/f1$/) && method === 'PATCH') {
+        const body = init?.body instanceof ReadableStream
+          ? await new Response(init.body).text()
+          : String(init?.body ?? '{}');
+        patchCalls.push({ id: 'f1', body: JSON.parse(body) });
+        return new Response(
+          JSON.stringify({ data: { field: numberField } }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      if (u.includes('/views') && method === 'GET') {
+        return new Response(JSON.stringify({ data: [viewRow] }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (u.includes('/documents') && method === 'GET') {
+        return new Response(JSON.stringify({ data: { data: [docRow], nextCursor: null } }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { queryClient, router } = setup();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByText('First task')).toBeInTheDocument());
+
+    // Open the ⋯ menu on the pinned Amount column, click Change type.
+    const menuButtons = screen.getAllByRole('button', { name: /column actions/i });
+    await act(async () => { fireEvent.click(menuButtons[0]); });
+    const changeTypeItem = await screen.findByRole('menuitem', { name: /change type/i });
+    await act(async () => { fireEvent.click(changeTypeItem); });
+
+    // Dialog renders the type select. Pick 'number'.
+    const typeSelect = await screen.findByLabelText(/new type/i);
+    await act(async () => { fireEvent.change(typeSelect, { target: { value: 'number' } }); });
+
+    const applyBtn = screen.getByRole('button', { name: /^apply$/i });
+    await act(async () => { fireEvent.click(applyBtn); });
+
+    await waitFor(() => expect(patchCalls.length).toBe(1));
+    expect(patchCalls[0].id).toBe('f1');
+    expect(patchCalls[0].body).toMatchObject({ type: 'number', options: null });
+  });
 });

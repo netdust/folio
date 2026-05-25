@@ -17,7 +17,7 @@ const baseSchema = z.object({
   key: z.string().min(1).max(64).regex(/^[a-z][a-z0-9_]*$/),
   type: z.enum(FIELD_TYPES),
   label: z.string().max(80).optional(),
-  options: z.array(z.string()).optional(),
+  options: z.array(z.string()).nullable().optional(),
   order: z.number().int().optional(),
 });
 
@@ -54,7 +54,9 @@ fieldsRoute.post('/', zValidator('json', baseSchema), async (c) => {
   const t = getTable(c);
   const ws = getWorkspace(c);
   const input = c.req.valid('json');
-  validateOptions(input.type, input.options);
+  // Normalize null → undefined for POST: callers may send options: null to
+  // explicitly say "no options", which is equivalent to omitting the field.
+  validateOptions(input.type, input.options ?? undefined);
 
   const existing = await db.query.fields.findFirst({
     where: and(eq(fields.tableId, t.id), eq(fields.key, input.key)),
@@ -106,8 +108,14 @@ fieldsRoute.patch(
     }
 
     // Build the effective options for validation + persistence.
+    // Treat `options: null` from the client the same as `options: undefined`
+    // for the "carry existing" branch — null means "no replacement provided,
+    // clear if appropriate". This also makes the dropping-currency branch
+    // reachable for both null and undefined.
     let finalOptions: string[] | undefined =
-      patch.options !== undefined ? patch.options : (row.options ?? undefined);
+      patch.options !== undefined && patch.options !== null
+        ? patch.options
+        : (row.options ?? undefined);
 
     // * → currency: inject default ['EUR'] when no options supplied.
     if (
@@ -118,12 +126,13 @@ fieldsRoute.patch(
       finalOptions = ['EUR'];
     }
 
-    // currency → *: drop options when no replacement supplied.
+    // currency → *: drop options when no replacement supplied OR client
+    // explicitly cleared with options: null.
     const droppingCurrencyOptions =
       row.type === 'currency' &&
       patch.type !== undefined &&
       patch.type !== 'currency' &&
-      patch.options === undefined;
+      (patch.options === undefined || patch.options === null);
     if (droppingCurrencyOptions) {
       finalOptions = undefined;
     }

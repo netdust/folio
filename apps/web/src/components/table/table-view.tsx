@@ -31,6 +31,7 @@ import { TableRow } from './table-row.tsx';
 import { TableAddRow } from './table-add-row.tsx';
 import { TableAddColumn, type AddColumnPayload } from './table-add-column.tsx';
 import { ColumnMenu } from './column-menu.tsx';
+import { ColumnTypeChange } from './column-type-change.tsx';
 import { columnSuggestions } from './column-suggestions.ts';
 import type { FieldType } from '../../lib/api/fields.ts';
 import {
@@ -90,6 +91,7 @@ export function TableView({ wslug, pslug, tslug }: Props) {
   const deleteField = useDeleteField(wslug, pslug, tslug);
   const [pendingSlugs, setPendingSlugs] = useState<Set<string>>(new Set());
   const [renamingKey, setRenamingKey] = useState<string | null>(null);
+  const [changingTypeKey, setChangingTypeKey] = useState<string | null>(null);
 
   const urlViewId = typeof search.view === 'string' ? search.view : undefined;
 
@@ -348,6 +350,7 @@ export function TableView({ wslug, pslug, tslug }: Props) {
           columnLabel={column.label}
           affectedDocCount={affected}
           onRename={() => setRenamingKey(column.key)}
+          onChangeType={() => setChangingTypeKey(column.key)}
           onHide={() => {
             if (!activeView) return;
             const nextVisible = visibleKeys.filter((k) => k !== column.key);
@@ -467,6 +470,27 @@ export function TableView({ wslug, pslug, tslug }: Props) {
           </div>
         </div>
       </div>
+      {changingTypeKey ? (() => {
+        const field = (fields ?? []).find((f) => f.key === changingTypeKey);
+        if (!field) return null;
+        return (
+          <ColumnTypeChange
+            currentType={field.type}
+            currentOptions={field.options}
+            open={!!changingTypeKey}
+            onClose={() => setChangingTypeKey(null)}
+            onSubmit={async ({ type, options }) => {
+              // Translate the dialog's payload into a server PATCH:
+              //   options === undefined → omit options key
+              //   options === null      → send options: null (server drops to null)
+              //   options is string[]   → send options: [...iso]
+              const patch: { type: FieldType; options?: string[] | null } = { type };
+              if (options !== undefined) patch.options = options;
+              await updateField.mutateAsync({ id: field.id, patch });
+            }}
+          />
+        );
+      })() : null}
     </div>
   );
 }

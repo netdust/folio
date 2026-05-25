@@ -52,7 +52,9 @@ export interface FieldPatch {
   key?: string;
   type?: FieldType;
   label?: string;
-  options?: string[];
+  // `null` explicitly drops the column to null on the server (used when
+  // changing the type away from currency); omit the key to leave it unchanged.
+  options?: string[] | null;
   order?: number;
 }
 
