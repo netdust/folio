@@ -618,3 +618,43 @@ test('POST creates a document with type=trigger', async () => {
   const body = await res.json();
   expect(body.data.type).toBe('trigger');
 });
+
+test('POST agent rejects missing required fields', async () => {
+  const { app, seed } = await makeTestApp();
+  const res = await app.request('/api/v1/w/acme/p/web/documents', {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: 'agent', title: 'Broken', frontmatter: {} }),
+  });
+  expect(res.status).toBe(422);
+});
+
+test('POST trigger rejects when both schedule and on_event are null', async () => {
+  const { app, seed } = await makeTestApp();
+  const res = await app.request('/api/v1/w/acme/p/web/documents', {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      type: 'trigger',
+      title: 'Empty',
+      frontmatter: { agent: 'x', schedule: null, on_event: null },
+    }),
+  });
+  expect(res.status).toBe(422);
+});
+
+test('POST agent on a table-scoped URL is rejected', async () => {
+  const { app, seed } = await makeTestApp();
+  const res = await app.request('/api/v1/w/acme/p/web/t/work-items/documents', {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      type: 'agent',
+      title: 'No table allowed',
+      frontmatter: {
+        system_prompt: 'x', model: 'x', provider: 'anthropic', tools: [],
+      },
+    }),
+  });
+  expect(res.status).toBe(422);
+});

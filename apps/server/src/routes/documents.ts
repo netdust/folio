@@ -12,6 +12,8 @@ import { db } from '../db/client.ts';
 import { documents, events, statuses } from '../db/schema.ts';
 import { jsonOk, HTTPError } from '../lib/http.ts';
 import { emitEvent } from '../lib/events.ts';
+import { agentFrontmatterSchema } from '../lib/agent-schema.ts';
+import { triggerFrontmatterSchema } from '../lib/trigger-schema.ts';
 import { parseMarkdown, serializeMarkdown } from '../lib/frontmatter.ts';
 import { compileFilterToWhere } from '../lib/filter-to-drizzle.ts';
 import { slugUniqueInDocuments } from '../lib/slug-unique.ts';
@@ -121,6 +123,28 @@ documentsRoute.post('/', requireScope('documents:write'), async (c) => {
     const fmStatus = typeof v.frontmatter?.status === 'string' ? v.frontmatter.status : null;
     const fmRest = stripReservedFrontmatter((v.frontmatter ?? {}) as Record<string, unknown>);
     input = { type: v.type, title: v.title, body: v.body, frontmatter: fmRest, status: fmStatus };
+  }
+
+  // Agents and triggers are project-scoped — they live alongside pages with
+  // tableId=null. A table-scoped URL implies a table-bound resource, so reject
+  // here before getTable(c) ever runs for these types.
+  if (input.type === 'agent' || input.type === 'trigger') {
+    if (c.req.param('tslug')) {
+      throw new HTTPError(
+        'INVALID_BODY',
+        `${input.type} documents cannot be created on a table-scoped URL`,
+        422,
+      );
+    }
+    const schema = input.type === 'agent' ? agentFrontmatterSchema : triggerFrontmatterSchema;
+    const r = schema.safeParse(input.frontmatter ?? {});
+    if (!r.success) {
+      const code = input.type === 'agent' ? 'INVALID_AGENT_FRONTMATTER' : 'INVALID_TRIGGER_FRONTMATTER';
+      throw new HTTPError(code, r.error.message, 422);
+    }
+    // Replace with the parsed, default-applied version. Task 9 relies on this
+    // so the auto-minted token's scopes can be derived from validated tools.
+    input.frontmatter = r.data as Record<string, unknown>;
   }
 
   // work_items live inside a table; pages are project-scoped with tableId=null.
@@ -387,6 +411,27 @@ documentsRoute.patch('/:slug', requireScope('documents:write'), async (c) => {
     // guards the table-scoped mount in case the stored tableId is absent.
     const tId = existing.tableId ?? getTable(c).id;
     await validateStatus(tId, patch.status);
+  }
+
+  // For agents/triggers, validate the PATCH payload itself (not the merged
+  // result). Why: server-managed fields like api_token_id and last_fired_at
+  // are stored in frontmatter and would fail .strict() if merged-validated.
+  // The trigger schema is a ZodEffects (has .refine), so unwrap via
+  // innerType() before .partial() — and skip the refine for partial patches.
+  if (
+    patch.frontmatter !== undefined &&
+    (existing.type === 'agent' || existing.type === 'trigger')
+  ) {
+    const schema =
+      existing.type === 'agent'
+        ? agentFrontmatterSchema.partial()
+        : triggerFrontmatterSchema.innerType().partial();
+    const r = schema.safeParse(patch.frontmatter);
+    if (!r.success) {
+      const code =
+        existing.type === 'agent' ? 'INVALID_AGENT_FRONTMATTER' : 'INVALID_TRIGGER_FRONTMATTER';
+      throw new HTTPError(code, r.error.message, 422);
+    }
   }
 
   const mergedFrontmatter = (() => {
