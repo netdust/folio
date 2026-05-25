@@ -286,8 +286,8 @@ function SlideoverBody({
   const { data: docPage } = useDocuments(wslug, pslug, listParams, { enabled: !!doc });
   // AI key presence — drives the slash menu's aiConfigured flag
   const { data: workspace } = useWorkspace(wslug);
-  const { data: aiKeysData } = useWorkspaceAiKeys(workspace?.id ?? '');
-  const aiConfigured = (aiKeysData?.keys ?? []).length > 0;
+  const { data: aiKeys } = useWorkspaceAiKeys(wslug, workspace?.id ?? '');
+  const aiConfigured = (aiKeys ?? []).length > 0;
   const [pendingKeys, setPendingKeys] = useState<Set<string>>(new Set());
 
   if (isLoading) return <div className="text-fg-3">Loading document…</div>;

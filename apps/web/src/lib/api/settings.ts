@@ -14,20 +14,25 @@ export interface AiKey {
 
 export const settingsKeys = {
   all: ['settings'] as const,
-  aiKeys: (workspaceId: string) => [...settingsKeys.all, 'ai-keys', workspaceId] as const,
+  aiKeys: (wslug: string, workspaceId: string) =>
+    [...settingsKeys.all, 'ai-keys', wslug, workspaceId] as const,
 };
 
-export function useWorkspaceAiKeys(workspaceId: string) {
+export function useWorkspaceAiKeys(wslug: string, workspaceId: string) {
   return useQuery({
-    queryKey: settingsKeys.aiKeys(workspaceId),
-    queryFn: () =>
-      client.get<{ keys: AiKey[] }>(`/api/v1/settings/${workspaceId}/ai-keys`),
+    queryKey: settingsKeys.aiKeys(wslug, workspaceId),
+    queryFn: async () => {
+      const wrapped = await client.get<{ keys: AiKey[] }>(
+        `/api/v1/w/${wslug}/settings/${workspaceId}/ai-keys`,
+      );
+      return wrapped.keys;
+    },
     staleTime: 60_000,
-    enabled: !!workspaceId,
+    enabled: !!wslug && !!workspaceId,
   });
 }
 
-export function useUpsertAiKey(workspaceId: string) {
+export function useUpsertAiKey(wslug: string, workspaceId: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (vars: {
@@ -37,18 +42,20 @@ export function useUpsertAiKey(workspaceId: string) {
       baseUrl?: string;
     }) =>
       client.post<{ ok: true }>(
-        `/api/v1/settings/${workspaceId}/ai-keys`,
+        `/api/v1/w/${wslug}/settings/${workspaceId}/ai-keys`,
         vars,
       ),
-    onSuccess: () => qc.invalidateQueries({ queryKey: settingsKeys.aiKeys(workspaceId) }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: settingsKeys.aiKeys(wslug, workspaceId) }),
   });
 }
 
-export function useDeleteAiKey(workspaceId: string) {
+export function useDeleteAiKey(wslug: string, workspaceId: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (keyId: string) =>
-      client.delete<{ ok: true }>(`/api/v1/settings/${workspaceId}/ai-keys/${keyId}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: settingsKeys.aiKeys(workspaceId) }),
+      client.delete<{ ok: true }>(
+        `/api/v1/w/${wslug}/settings/${workspaceId}/ai-keys/${keyId}`,
+      ),
+    onSuccess: () => qc.invalidateQueries({ queryKey: settingsKeys.aiKeys(wslug, workspaceId) }),
   });
 }
