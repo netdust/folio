@@ -68,6 +68,15 @@ Environment: dev stack running on :3001 (api) + :5173 (web), DB `apps/server/fol
 - **Three visible symptoms, one fix.** Don't treat as separate bugs in Phase 3.
 - **Fix shape:** `if (opts.type && (DOCUMENT_TYPES as readonly string[]).includes(opts.type)) { whereClauses.push(eq(documents.type, opts.type as DocumentType)); }` — plus extend the existing list-filter tests to cover type=agent and type=trigger so this can't regress silently again. Per superpowers:systematic-debugging in Phase 3.
 
+### Bug D — IMPORTANT — `useWorkspaceAiKeys` hits a 404 URL on every slideover mount
+
+- **Where:** `apps/web/src/lib/api/settings.ts:24` (and `:40`, `:51`) — client uses `/api/v1/settings/:workspaceId/ai-keys`
+- **Real URL:** `/api/v1/w/:wslug/settings/:workspaceId/ai-keys` (server `app.ts` mounts `settingsRoute` under `wScope`, which lives at `/api/v1/w/:wslug/`).
+- **Symptom (caught by Stefan in DevTools console):** 4 × 404 on `/api/v1/settings/IAUDyq1y30WAnIOk8z1Az/ai-keys` on the settings page; same call repeats from `document-slideover.tsx:289` every time a slideover mounts on any page — work-items, wiki, agents, triggers. With react-query's default retry, that's typically 4 requests per failed mount.
+- **Pre-existing, surfaced now:** The bad URL was wrong since `settings.ts` + `useWorkspaceAiKeys` were first written (long before this branch). Slideover started calling it on every mount in a separate change. Phase 2's new /settings route is what made Stefan notice — but no Phase 2 commit introduced this bug.
+- **Browser-extension noise:** the "A listener indicated an asynchronous response..." messages in the same console are from a browser extension (e.g. password manager or React DevTools), not our code. Ignore.
+- **Fix shape:** change the three URLs in `lib/api/settings.ts` to use `/api/v1/w/${wslug}/settings/${workspaceId}/ai-keys` — which means the hook signature must take `wslug` too. Update `document-slideover.tsx:289` to pass `wslug`. Update `document-slideover.test.tsx` matchers (lines 314-321, 386). Per superpowers:systematic-debugging in Phase 3.
+
 ### No other bugs surfaced in Track A.
 
 ---
