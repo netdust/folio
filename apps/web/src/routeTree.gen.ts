@@ -19,7 +19,9 @@ import { Route as WWslugPPslugRouteImport } from './routes/w.$wslug.p.$pslug'
 import { Route as WWslugPPslugIndexRouteImport } from './routes/w.$wslug.p.$pslug.index'
 import { Route as WWslugPPslugWorkItemsRouteImport } from './routes/w.$wslug.p.$pslug.work-items'
 import { Route as WWslugPPslugWikiRouteImport } from './routes/w.$wslug.p.$pslug.wiki'
+import { Route as WWslugPPslugTriggersRouteImport } from './routes/w.$wslug.p.$pslug.triggers'
 import { Route as WWslugPPslugBoardRouteImport } from './routes/w.$wslug.p.$pslug.board'
+import { Route as WWslugPPslugAgentsRouteImport } from './routes/w.$wslug.p.$pslug.agents'
 
 const LoginRoute = LoginRouteImport.update({
   id: '/login',
@@ -71,9 +73,19 @@ const WWslugPPslugWikiRoute = WWslugPPslugWikiRouteImport.update({
   path: '/wiki',
   getParentRoute: () => WWslugPPslugRoute,
 } as any)
+const WWslugPPslugTriggersRoute = WWslugPPslugTriggersRouteImport.update({
+  id: '/triggers',
+  path: '/triggers',
+  getParentRoute: () => WWslugPPslugRoute,
+} as any)
 const WWslugPPslugBoardRoute = WWslugPPslugBoardRouteImport.update({
   id: '/board',
   path: '/board',
+  getParentRoute: () => WWslugPPslugRoute,
+} as any)
+const WWslugPPslugAgentsRoute = WWslugPPslugAgentsRouteImport.update({
+  id: '/agents',
+  path: '/agents',
   getParentRoute: () => WWslugPPslugRoute,
 } as any)
 
@@ -85,7 +97,9 @@ export interface FileRoutesByFullPath {
   '/w/$wslug/settings': typeof WWslugSettingsRoute
   '/w/$wslug/': typeof WWslugIndexRoute
   '/w/$wslug/p/$pslug': typeof WWslugPPslugRouteWithChildren
+  '/w/$wslug/p/$pslug/agents': typeof WWslugPPslugAgentsRoute
   '/w/$wslug/p/$pslug/board': typeof WWslugPPslugBoardRoute
+  '/w/$wslug/p/$pslug/triggers': typeof WWslugPPslugTriggersRoute
   '/w/$wslug/p/$pslug/wiki': typeof WWslugPPslugWikiRoute
   '/w/$wslug/p/$pslug/work-items': typeof WWslugPPslugWorkItemsRoute
   '/w/$wslug/p/$pslug/': typeof WWslugPPslugIndexRoute
@@ -96,7 +110,9 @@ export interface FileRoutesByTo {
   '/dev/design-system': typeof DevDesignSystemRoute
   '/w/$wslug/settings': typeof WWslugSettingsRoute
   '/w/$wslug': typeof WWslugIndexRoute
+  '/w/$wslug/p/$pslug/agents': typeof WWslugPPslugAgentsRoute
   '/w/$wslug/p/$pslug/board': typeof WWslugPPslugBoardRoute
+  '/w/$wslug/p/$pslug/triggers': typeof WWslugPPslugTriggersRoute
   '/w/$wslug/p/$pslug/wiki': typeof WWslugPPslugWikiRoute
   '/w/$wslug/p/$pslug/work-items': typeof WWslugPPslugWorkItemsRoute
   '/w/$wslug/p/$pslug': typeof WWslugPPslugIndexRoute
@@ -110,7 +126,9 @@ export interface FileRoutesById {
   '/w/$wslug/settings': typeof WWslugSettingsRoute
   '/w/$wslug/': typeof WWslugIndexRoute
   '/w/$wslug/p/$pslug': typeof WWslugPPslugRouteWithChildren
+  '/w/$wslug/p/$pslug/agents': typeof WWslugPPslugAgentsRoute
   '/w/$wslug/p/$pslug/board': typeof WWslugPPslugBoardRoute
+  '/w/$wslug/p/$pslug/triggers': typeof WWslugPPslugTriggersRoute
   '/w/$wslug/p/$pslug/wiki': typeof WWslugPPslugWikiRoute
   '/w/$wslug/p/$pslug/work-items': typeof WWslugPPslugWorkItemsRoute
   '/w/$wslug/p/$pslug/': typeof WWslugPPslugIndexRoute
@@ -125,7 +143,9 @@ export interface FileRouteTypes {
     | '/w/$wslug/settings'
     | '/w/$wslug/'
     | '/w/$wslug/p/$pslug'
+    | '/w/$wslug/p/$pslug/agents'
     | '/w/$wslug/p/$pslug/board'
+    | '/w/$wslug/p/$pslug/triggers'
     | '/w/$wslug/p/$pslug/wiki'
     | '/w/$wslug/p/$pslug/work-items'
     | '/w/$wslug/p/$pslug/'
@@ -136,7 +156,9 @@ export interface FileRouteTypes {
     | '/dev/design-system'
     | '/w/$wslug/settings'
     | '/w/$wslug'
+    | '/w/$wslug/p/$pslug/agents'
     | '/w/$wslug/p/$pslug/board'
+    | '/w/$wslug/p/$pslug/triggers'
     | '/w/$wslug/p/$pslug/wiki'
     | '/w/$wslug/p/$pslug/work-items'
     | '/w/$wslug/p/$pslug'
@@ -149,7 +171,9 @@ export interface FileRouteTypes {
     | '/w/$wslug/settings'
     | '/w/$wslug/'
     | '/w/$wslug/p/$pslug'
+    | '/w/$wslug/p/$pslug/agents'
     | '/w/$wslug/p/$pslug/board'
+    | '/w/$wslug/p/$pslug/triggers'
     | '/w/$wslug/p/$pslug/wiki'
     | '/w/$wslug/p/$pslug/work-items'
     | '/w/$wslug/p/$pslug/'
@@ -234,6 +258,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof WWslugPPslugWikiRouteImport
       parentRoute: typeof WWslugPPslugRoute
     }
+    '/w/$wslug/p/$pslug/triggers': {
+      id: '/w/$wslug/p/$pslug/triggers'
+      path: '/triggers'
+      fullPath: '/w/$wslug/p/$pslug/triggers'
+      preLoaderRoute: typeof WWslugPPslugTriggersRouteImport
+      parentRoute: typeof WWslugPPslugRoute
+    }
     '/w/$wslug/p/$pslug/board': {
       id: '/w/$wslug/p/$pslug/board'
       path: '/board'
@@ -241,18 +272,29 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof WWslugPPslugBoardRouteImport
       parentRoute: typeof WWslugPPslugRoute
     }
+    '/w/$wslug/p/$pslug/agents': {
+      id: '/w/$wslug/p/$pslug/agents'
+      path: '/agents'
+      fullPath: '/w/$wslug/p/$pslug/agents'
+      preLoaderRoute: typeof WWslugPPslugAgentsRouteImport
+      parentRoute: typeof WWslugPPslugRoute
+    }
   }
 }
 
 interface WWslugPPslugRouteChildren {
+  WWslugPPslugAgentsRoute: typeof WWslugPPslugAgentsRoute
   WWslugPPslugBoardRoute: typeof WWslugPPslugBoardRoute
+  WWslugPPslugTriggersRoute: typeof WWslugPPslugTriggersRoute
   WWslugPPslugWikiRoute: typeof WWslugPPslugWikiRoute
   WWslugPPslugWorkItemsRoute: typeof WWslugPPslugWorkItemsRoute
   WWslugPPslugIndexRoute: typeof WWslugPPslugIndexRoute
 }
 
 const WWslugPPslugRouteChildren: WWslugPPslugRouteChildren = {
+  WWslugPPslugAgentsRoute: WWslugPPslugAgentsRoute,
   WWslugPPslugBoardRoute: WWslugPPslugBoardRoute,
+  WWslugPPslugTriggersRoute: WWslugPPslugTriggersRoute,
   WWslugPPslugWikiRoute: WWslugPPslugWikiRoute,
   WWslugPPslugWorkItemsRoute: WWslugPPslugWorkItemsRoute,
   WWslugPPslugIndexRoute: WWslugPPslugIndexRoute,
