@@ -76,6 +76,58 @@ describe('KanbanView', () => {
     expect(screen.getByText('high')).toBeInTheDocument();
   });
 
+  // Bug F (2026-05-26): the parking-lot "No status" column header used to use
+  // a different className from the status-column header (mb-2 px-1 vs the
+  // status column's mb-1 px-2 py-1), so its text sat ~4-6px higher than the
+  // status columns. The fix is to mirror the layout — including a count
+  // badge so the rendered height matches the other headers.
+  it('No-status header has the same vertical layout as status-column headers (count + matching padding)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>(async (url) => {
+        const u = String(url);
+        if (u.includes('/statuses')) {
+          return new Response(
+            JSON.stringify({
+              data: [
+                { id: 's1', key: 'todo', name: 'Todo', color: '#6EAFFF', category: 'unstarted', order: 1 },
+              ],
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        if (u.includes('/documents')) {
+          return new Response(
+            JSON.stringify({
+              data: {
+                data: [
+                  // Two docs without a status — these land in the no-status parking lot.
+                  { id: 'd1', slug: 'a', type: 'work_item', title: 'Card A', status: null, parentId: null, frontmatter: {}, createdAt: '', updatedAt: new Date().toISOString() },
+                  { id: 'd2', slug: 'b', type: 'work_item', title: 'Card B', status: null, parentId: null, frontmatter: {}, createdAt: '', updatedAt: new Date().toISOString() },
+                ],
+                nextCursor: null,
+              },
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+      }),
+    );
+
+    const { queryClient, router } = setup();
+    render(<QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider>);
+    const noStatusHeader = await screen.findByText('No status');
+    // Header padding + bottom margin must match status-column headers exactly.
+    const wrapper = noStatusHeader.parentElement!;
+    expect(wrapper.className).toContain('mb-1');
+    expect(wrapper.className).toContain('px-2');
+    expect(wrapper.className).toContain('py-1');
+    // Count of cards in the parking lot is rendered alongside the title so
+    // the header height matches columns that have a count.
+    expect(wrapper.textContent).toMatch(/No status\s*2/);
+  });
+
   it('clicking a card opens the slideover via ?doc=', async () => {
     vi.stubGlobal('fetch', vi.fn<typeof fetch>(async (url) => {
       const u = String(url);

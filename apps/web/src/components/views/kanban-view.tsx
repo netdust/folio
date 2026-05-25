@@ -104,13 +104,21 @@ export function KanbanView({ wslug, pslug }: Props) {
             ))}
           </KanbanColumn>
         ))}
-        {/* Cards without a status get rendered in a parking lot — Phase 1 keeps them visible. */}
+        {/* Cards without a status get rendered in a parking lot — Phase 1 keeps them visible.
+            Header mirrors KanbanColumn's structure (dot placeholder + name + count) so the
+            vertical alignment matches the status columns. Bug F (2026-05-26). */}
         {(grouped.get('__no_status__')?.length ?? 0) > 0 ? (
           <div className="flex w-[280px] shrink-0 flex-col">
-            <div className="mb-2 flex items-center gap-2 px-1 text-sm font-medium text-fg-3">
-              No status
+            <div className="mb-1 flex items-center gap-2 px-2 py-1">
+              {/* Transparent placeholder matches the colored dot's footprint so the
+                  text + count baseline aligns with status-column headers. */}
+              <span className="h-2 w-2 rounded-full" aria-hidden />
+              <span className="text-sm font-medium text-fg-3">No status</span>
+              <span className="font-mono text-[11px] text-fg-3">
+                {grouped.get('__no_status__')!.length}
+              </span>
             </div>
-            <div className="flex min-h-[200px] flex-col gap-2 rounded-md p-1">
+            <div className="flex min-h-[200px] flex-1 flex-col gap-1.5 rounded-lg p-1">
               {grouped.get('__no_status__')!.map((doc) => (
                 <KanbanCard key={doc.id} doc={doc} onOpen={openDoc} isPending={pendingSlugs.has(doc.slug)} />
               ))}
