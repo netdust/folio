@@ -46,7 +46,7 @@ export function TableRow({
     <RowContextMenu items={[{ label: 'Copy as Markdown', onSelect: onCopy, hint: '⌘⇧C' }]}>
       <div
         role="listitem"
-        className="group/row flex w-full items-center gap-2 border-b border-border-light py-1 hover:bg-card"
+        className="group/row flex min-h-[35px] w-full items-center gap-2 border-b border-border-light py-1 hover:bg-card"
       >
         <div
           className="grid flex-1 items-center gap-3"

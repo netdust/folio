@@ -3,6 +3,7 @@ import { ChevronRight, History } from 'lucide-react';
 import { useDocumentEvents, type DocumentEvent } from '../../lib/api/events.ts';
 import { Icon } from '../ui/icon.tsx';
 import { cn } from '../ui/cn.ts';
+import { relativeTime } from '../../lib/relative-time.ts';
 
 interface Props {
   wslug: string;
@@ -16,14 +17,26 @@ export function ActivityPanel({ wslug, pslug, slug }: Props) {
   const rows = Array.isArray(events) ? events : [];
 
   return (
-    <section className="border-t border-border-light pt-4 mt-4">
+    <section className="pt-4">
       <button
         type="button"
         onClick={() => setExpanded(!expanded)}
-        className="flex items-center gap-1.5 text-xs font-medium text-fg-2 hover:text-fg"
+        className="group/activity flex items-center gap-1.5 text-xs font-medium text-fg-2 hover:text-fg"
       >
-        <Icon icon={ChevronRight} size={14} className={cn('transition-transform duration-fast', expanded ? 'rotate-90' : '')} />
-        <Icon icon={History} size={14} />
+        {/* Single-slot icon → chevron swap on hover, same pattern as the
+            rail tree. History shows at rest; on hover it's replaced by a
+            chevron that rotates 90° when the panel is expanded. */}
+        <span className="relative inline-grid h-3.5 w-3.5 place-items-center">
+          <Icon icon={History} size={14} className="group-hover/activity:hidden" />
+          <Icon
+            icon={ChevronRight}
+            size={14}
+            className={cn(
+              'hidden transition-transform duration-fast group-hover/activity:inline-block',
+              expanded ? 'rotate-90' : '',
+            )}
+          />
+        </span>
         <span>Activity</span>
         {rows.length > 0 ? <span className="text-fg-3">({rows.length})</span> : null}
       </button>
@@ -81,12 +94,3 @@ function labelForKind(kind: string): string {
   }
 }
 
-function relativeTime(iso: string): string {
-  const ts = new Date(iso).getTime();
-  const diff = (Date.now() - ts) / 1000;
-  if (diff < 60) return 'just now';
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-  if (diff < 86400 * 7) return `${Math.floor(diff / 86400)}d ago`;
-  return new Date(iso).toLocaleDateString();
-}

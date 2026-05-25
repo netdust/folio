@@ -57,6 +57,8 @@ export function FrameTab({ active = false, onClick, children }: TabProps) {
   return (
     <button
       type="button"
+      role="tab"
+      aria-selected={active}
       onClick={onClick}
       className={cn(
         'rounded-sm px-2.5 py-1 text-[11px] transition-colors duration-fast',

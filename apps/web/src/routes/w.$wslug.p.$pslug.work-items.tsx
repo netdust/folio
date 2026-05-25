@@ -12,7 +12,10 @@ const search = z.object({
   labels: stringOrArray,
   assignee: z.string().optional(),
   updated_since: z.string().optional(),
-  sort: z.enum(['updated_at', 'title', 'priority', 'status']).optional(),
+  // Widened from a fixed enum so views can persist sort by any column key,
+  // including custom frontmatter field keys. The TableHeader is the source of
+  // truth for which keys are actually sortable; the URL just carries intent.
+  sort: z.string().min(1).optional(),
   dir: z.enum(['asc', 'desc']).optional(),
 });
 

@@ -1,5 +1,5 @@
 import { EditorState } from '@codemirror/state';
-import { EditorView, keymap, lineNumbers } from '@codemirror/view';
+import { EditorView, keymap } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import { markdown } from '@codemirror/lang-markdown';
 import { useEffect, useRef } from 'react';
@@ -28,7 +28,6 @@ export function RawMdEditor({ value, onChange, readOnly }: Props) {
     const state = EditorState.create({
       doc: valueRef.current,
       extensions: [
-        lineNumbers(),
         history(),
         keymap.of([...defaultKeymap, ...historyKeymap]),
         markdown(),
@@ -41,14 +40,38 @@ export function RawMdEditor({ value, onChange, readOnly }: Props) {
         }),
         EditorView.theme({
           '&': { fontSize: '13px', fontFamily: 'var(--font-mono)', height: '100%' },
-          '.cm-scroller': { fontFamily: 'var(--font-mono)', overflow: 'auto' },
-          '.cm-gutters': {
+          '.cm-scroller': {
+            fontFamily: 'var(--font-mono)',
+            overflow: 'auto',
+            scrollbarWidth: 'thin',
+            scrollbarColor: 'var(--color-border-light) transparent',
+          },
+          '.cm-scroller::-webkit-scrollbar': { width: '8px', height: '8px' },
+          '.cm-scroller::-webkit-scrollbar-track': { background: 'transparent' },
+          '.cm-scroller::-webkit-scrollbar-thumb': {
+            background: 'var(--color-border-light)',
+            borderRadius: '4px',
+          },
+          '.cm-scroller::-webkit-scrollbar-thumb:hover': { background: 'var(--color-fg-3)' },
+          '.cm-gutters, .cm-gutters.cm-gutters-before, .cm-gutters.cm-gutters-after': {
             backgroundColor: 'transparent',
-            border: 'none',
+            border: 'none !important',
+            borderRight: '0 !important',
+            borderLeft: '0 !important',
+            borderRightWidth: '0 !important',
+            borderLeftWidth: '0 !important',
             color: 'var(--color-fg-3)',
           },
+          '.cm-gutter': { border: 'none !important' },
+          '.cm-activeLineGutter': { backgroundColor: 'transparent' },
           '&.cm-focused': { outline: 'none' },
-          '.cm-content': { padding: '8px 0' },
+          '.cm-content': { padding: '8px 0', caretColor: 'var(--color-fg)' },
+          '.cm-cursor, .cm-cursor-primary, .cm-dropCursor': {
+            borderLeft: '1.5px solid var(--color-fg) !important',
+          },
+          '&.cm-focused .cm-cursor, &.cm-focused .cm-cursor-primary': {
+            borderLeftColor: 'var(--color-fg) !important',
+          },
         }),
       ],
     });

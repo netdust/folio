@@ -30,7 +30,7 @@ function setup({ currentSearch }: SetupOpts = {}) {
         onOpenChange={() => {}}
         wslug="main"
         pslug="acme"
-        currentSearch={currentSearch}
+        currentSearch={currentSearch ?? {}}
       />
     ),
   });
@@ -46,22 +46,29 @@ function setup({ currentSearch }: SetupOpts = {}) {
   return { queryClient, router };
 }
 
+// Mirrors the real server's POST /views response shape (see
+// apps/server/src/routes/views.ts: `return jsonOk(c, { view: row }, 201)`).
+// The shape locked by apps/server/src/routes/views.test.ts "POST returns
+// data.view.id as a unique non-empty string" must match here, or this
+// suite stops protecting the production code path.
 function mockFetch(viewId = 'v-new') {
   return vi.fn<typeof fetch>(async (url, init) => {
     if (String(url).endsWith('/api/v1/w/main/p/acme/views') && init?.method === 'POST') {
       return new Response(
         JSON.stringify({
           data: {
-            id: viewId,
-            name: 'X',
-            type: 'list',
-            filters: {},
-            sort: [],
-            groupBy: null,
-            visibleFields: null,
-            columnOrder: null,
-            isDefault: false,
-            order: 0,
+            view: {
+              id: viewId,
+              name: 'X',
+              type: 'list',
+              filters: {},
+              sort: [],
+              groupBy: null,
+              visibleFields: null,
+              columnOrder: null,
+              isDefault: false,
+              order: 0,
+            },
           },
         }),
         { status: 201, headers: { 'content-type': 'application/json' } },

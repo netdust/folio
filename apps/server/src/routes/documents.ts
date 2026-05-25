@@ -213,14 +213,25 @@ documentsRoute.get('/', async (c) => {
     }
   }
   // ?stale_for=14d → documents whose last_touched_at is NULL or older than N days ago.
+  // Reject 0d (matches every touched row, hides bugs) and any non-Nd format
+  // (silently ignoring "garbage" returns the unfiltered list).
   const staleFor = c.req.query('stale_for');
   if (staleFor) {
     const m = staleFor.match(/^(\d+)d$/);
-    if (m) {
-      const days = Number(m[1]);
-      const cutoff = new Date(Date.now() - days * 86_400_000);
-      whereClauses.push(or(isNull(documents.lastTouchedAt), lt(documents.lastTouchedAt, cutoff)) as never);
+    const days = m ? Number(m[1]) : NaN;
+    if (!m || !Number.isFinite(days) || days < 1) {
+      throw new HTTPError(
+        'INVALID_STALE_FOR',
+        'stale_for must be a positive integer followed by "d" (e.g. "7d")',
+        422,
+      );
     }
+    const cutoff = new Date(Date.now() - days * 86_400_000);
+    const staleClause = or(
+      isNull(documents.lastTouchedAt),
+      lt(documents.lastTouchedAt, cutoff),
+    );
+    if (staleClause) whereClauses.push(staleClause);
   }
   if (filterWhere) whereClauses.push(filterWhere);
   if (cursor) {
@@ -261,6 +272,10 @@ documentsRoute.get('/:slugMd{[^/]+\\.md}', async (c) => {
     type: row.type,
     title: row.title,
     ...(row.status ? { status: row.status } : {}),
+    // First-class columns ride along in the frontmatter so the .md export is
+    // a complete round-trip. Spread frontmatter LAST so user-defined keys
+    // can override built-ins if they ever conflict.
+    ...(row.lastTouchedAt ? { last_touched_at: row.lastTouchedAt.toISOString() } : {}),
     ...row.frontmatter,
   };
   const md = serializeMarkdown({ frontmatter: fm, body: row.body });
@@ -396,6 +411,11 @@ documentsRoute.delete('/:slug', async (c) => {
 });
 
 // POST /:slug/activity { note } — emits activity.logged + bumps lastTouchedAt.
+// Note cap is 2000 chars: enough for a few paragraphs of operational context
+// ("called the client, follow up Tue"), small enough that an agent loop can't
+// balloon events.payload and saturate GET /events.
+const ACTIVITY_NOTE_MAX = 2000;
+
 documentsRoute.post('/:slug/activity', async (c) => {
   const user = getUser(c);
   const p = getProject(c);
@@ -406,6 +426,13 @@ documentsRoute.post('/:slug/activity', async (c) => {
   catch { throw new HTTPError('INVALID_BODY', 'JSON body required', 400); }
   const note = typeof body.note === 'string' ? body.note.trim() : '';
   if (!note) throw new HTTPError('INVALID_NOTE', 'note is required', 422);
+  if (note.length > ACTIVITY_NOTE_MAX) {
+    throw new HTTPError(
+      'NOTE_TOO_LONG',
+      `note must be ${ACTIVITY_NOTE_MAX} characters or fewer`,
+      422,
+    );
+  }
 
   const existing = await db.query.documents.findFirst({
     where: and(eq(documents.projectId, p.id), eq(documents.slug, slug)),
@@ -414,7 +441,13 @@ documentsRoute.post('/:slug/activity', async (c) => {
 
   const now = new Date();
   await db.transaction(async (tx) => {
-    await tx.update(documents).set({ lastTouchedAt: now }).where(eq(documents.id, existing.id));
+    // Bump updatedAt as well as lastTouchedAt so the doc surfaces in the
+    // list's `updated_at desc` sort — that's the user's mental model when
+    // they log activity: "I just worked on this, it should be at the top."
+    await tx
+      .update(documents)
+      .set({ lastTouchedAt: now, updatedAt: now })
+      .where(eq(documents.id, existing.id));
     await emitEvent(tx, {
       workspaceId: ws.id, projectId: p.id, documentId: existing.id,
       kind: 'activity.logged', actor: user.id, payload: { note },
@@ -442,7 +475,16 @@ documentsRoute.get('/:slug/events', async (c) => {
     .orderBy(desc(events.createdAt), desc(events.id))
     .limit(limit);
 
-  return c.json({ data: rows });
+  // Public shape only — internal columns (workspaceId, projectId, documentId)
+  // are not part of the API contract and shouldn't leak to agent tokens.
+  const data = rows.map((r) => ({
+    id: r.id,
+    kind: r.kind,
+    actor: r.actor,
+    payload: r.payload,
+    createdAt: r.createdAt,
+  }));
+  return c.json({ data });
 });
 
 export { documentsRoute };

@@ -27,12 +27,24 @@ export interface RailTreeRoute {
   pslug?: string;
   tslug?: string;
   viewId?: string;
+  // True when the user is on the project's /wiki tab. The rail can't infer
+  // this from pslug + viewId alone — /work-items and /wiki both have
+  // undefined viewId on a fresh load.
+  isWiki?: boolean;
 }
 
 export interface RailTreeHandlers {
   onProjectClick?: (pslug: string) => void;
   onTableClick?: (pslug: string, tslug: string) => void;
-  onViewClick: (pslug: string, tslug: string, viewId: string) => void;
+  // List views land on /work-items; kanban views land on /board. The rail
+  // signals which via `view.type` so the workspace route can navigate
+  // accordingly without re-deriving the type at click time.
+  onViewClick: (
+    pslug: string,
+    tslug: string,
+    viewId: string,
+    type: 'list' | 'kanban',
+  ) => void;
   onWikiClick?: (pslug: string) => void;
   onNewProject?: () => void;
   onNewTable?: (pslug: string) => void;
@@ -60,9 +72,9 @@ export function buildRailTree(input: RailTreeInput): NavItem[] {
     const tables = tablesByProject[project.slug] ?? [];
 
     const tableNavItems: NavItem[] = tables.map((table): NavItem => {
-      const rawViews = viewsByTable[table.id] ?? [];
-      const listViews = rawViews.filter((v) => v.type !== 'kanban');
-      const sortedViews = [...listViews].sort((a, b) => {
+      // Both list AND kanban views are surfaced — symmetry with the table's
+      // saved-views axis. Click routes to /work-items or /board respectively.
+      const sortedViews = [...(viewsByTable[table.id] ?? [])].sort((a, b) => {
         if (a.order !== b.order) return a.order - b.order;
         return Number(b.isDefault) - Number(a.isDefault);
       });
@@ -72,7 +84,7 @@ export function buildRailTree(input: RailTreeInput): NavItem[] {
         label: view.name,
         lucideIcon: view.type === 'kanban' ? Columns3 : List,
         active: currentRoute.viewId === view.id && currentRoute.pslug === project.slug,
-        onClick: () => handlers.onViewClick(project.slug, table.slug, view.id),
+        onClick: () => handlers.onViewClick(project.slug, table.slug, view.id, view.type),
         onRename: handlers.onRenameView
           ? (next) => handlers.onRenameView!(project.slug, table.slug, view.id, next)
           : undefined,
@@ -101,7 +113,7 @@ export function buildRailTree(input: RailTreeInput): NavItem[] {
           id: `wiki:${project.slug}`,
           label: 'Wiki',
           lucideIcon: FileText,
-          active: currentRoute.pslug === project.slug && currentRoute.tslug === undefined && currentRoute.viewId === undefined && false,
+          active: currentRoute.pslug === project.slug && currentRoute.isWiki === true,
           onClick: () => handlers.onWikiClick!(project.slug),
         }
       : null;
@@ -112,6 +124,7 @@ export function buildRailTree(input: RailTreeInput): NavItem[] {
       id: `project:${project.slug}`,
       label: project.name,
       lucideIcon: FolderOpen,
+      active: currentRoute.pslug === project.slug,
       onClick: handlers.onProjectClick
         ? () => handlers.onProjectClick!(project.slug)
         : undefined,

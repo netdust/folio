@@ -67,6 +67,15 @@ describe('InlineEdit', () => {
     expect(screen.getByText('Hello').className).toMatch(/opacity/);
   });
 
+  it('display element carries a hover background class so non-table callers get the click-to-edit cue', () => {
+    // Slideover title, frontmatter form fields, list-view rows all rely on
+    // this class to surface that text is editable. The previous fix to a
+    // table-row hover mismatch incidentally stripped this — restore it.
+    render(<InlineEdit value="Hello" onCommit={() => {}} />);
+    const display = screen.getByText('Hello');
+    expect(display.className).toMatch(/hover:bg-card/);
+  });
+
   it('defaultEditing treats value as placeholder so typing replaces, not appends', async () => {
     const onCommit = vi.fn();
     render(<InlineEdit value="Untitled" onCommit={onCommit} defaultEditing />);

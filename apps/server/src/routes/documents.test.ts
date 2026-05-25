@@ -380,6 +380,29 @@ test('GET /documents/:slug.md returns raw markdown with frontmatter', async () =
   expect(text).toMatch(/priority: high/);
 });
 
+test('GET /documents/:slug.md includes last_touched_at in frontmatter after activity is logged', async () => {
+  const { app, seed } = await makeTestApp();
+  await app.request(path, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: 'work_item', title: 'Stamped' }),
+  });
+  await app.request(`${path}/stamped/activity`, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ note: 'Pinged' }),
+  });
+
+  const res = await app.request(`${path}/stamped.md`, {
+    headers: { Cookie: seed.sessionCookie },
+  });
+  expect(res.status).toBe(200);
+  const text = await res.text();
+  // "markdown is the source-of-truth surface" wedge — every first-class
+  // column must round-trip via the .md export. lastTouchedAt is now one.
+  expect(text).toMatch(/last_touched_at:/);
+});
+
 test('POST /:slug/activity bumps last_touched_at and emits activity.logged', async () => {
   const { app, seed } = await makeTestApp();
   await app.request(path, {
@@ -409,6 +432,32 @@ test('POST /:slug/activity bumps last_touched_at and emits activity.logged', asy
   expect(activityEvents[0].payload).toEqual({ note: 'Called, will follow up Tuesday' });
 });
 
+test('POST /:slug/activity bumps documents.updatedAt so the doc surfaces in updated-at sort', async () => {
+  const { app, seed } = await makeTestApp();
+  await app.request(path, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: 'work_item', title: 'Touch Me' }),
+  });
+
+  const before = await app.request(`${path}/touch-me`, { headers: { Cookie: seed.sessionCookie } });
+  const beforeUpdatedAt = (await before.json()).data.updatedAt;
+
+  // Sleep > 1ms to dodge same-millisecond inserts.
+  await new Promise((r) => setTimeout(r, 5));
+
+  const res = await app.request(`${path}/touch-me/activity`, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ note: 'Pinged' }),
+  });
+  expect(res.status).toBe(201);
+
+  const after = await app.request(`${path}/touch-me`, { headers: { Cookie: seed.sessionCookie } });
+  const afterUpdatedAt = (await after.json()).data.updatedAt;
+  expect(new Date(afterUpdatedAt).getTime()).toBeGreaterThan(new Date(beforeUpdatedAt).getTime());
+});
+
 test('POST /:slug/activity 422 on empty note', async () => {
   const { app, seed } = await makeTestApp();
   await app.request(path, {
@@ -422,6 +471,87 @@ test('POST /:slug/activity 422 on empty note', async () => {
     body: JSON.stringify({ note: '' }),
   });
   expect(res.status).toBe(422);
+});
+
+test('POST /:slug/activity 422 when note exceeds the 2000-char cap', async () => {
+  const { app, seed } = await makeTestApp();
+  await app.request(path, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: 'work_item', title: 'Big' }),
+  });
+  const note = 'a'.repeat(2001);
+  const res = await app.request(`${path}/big/activity`, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ note }),
+  });
+  expect(res.status).toBe(422);
+  expect((await res.json()).error.code).toBe('NOTE_TOO_LONG');
+});
+
+test('POST /:slug/activity 201 when note is exactly at the 2000-char cap', async () => {
+  const { app, seed } = await makeTestApp();
+  await app.request(path, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: 'work_item', title: 'Edge' }),
+  });
+  const note = 'a'.repeat(2000);
+  const res = await app.request(`${path}/edge/activity`, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ note }),
+  });
+  expect(res.status).toBe(201);
+});
+
+test('GET /:slug/events returns a public event shape — no internal columns', async () => {
+  const { app, seed } = await makeTestApp();
+  await app.request(path, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: 'work_item', title: 'Sensitive' }),
+  });
+  await app.request(`${path}/sensitive/activity`, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ note: 'Internal note' }),
+  });
+
+  const res = await app.request(`${path}/sensitive/events`, {
+    headers: { Cookie: seed.sessionCookie },
+  });
+  expect(res.status).toBe(200);
+  const events = (await res.json()).data;
+  expect(events.length).toBeGreaterThan(0);
+
+  for (const e of events) {
+    // Public shape only: id, kind, createdAt, payload, actor (user id is OK).
+    expect(Object.keys(e).sort()).toEqual(['actor', 'createdAt', 'id', 'kind', 'payload'].sort());
+    // Internal fields must NOT leak.
+    expect(e.workspaceId).toBeUndefined();
+    expect(e.projectId).toBeUndefined();
+    expect(e.documentId).toBeUndefined();
+  }
+});
+
+test('GET /?stale_for=0d 422 — zero-day window is not a valid filter', async () => {
+  const { app, seed } = await makeTestApp();
+  const res = await app.request(`${path}?type=work_item&stale_for=0d`, {
+    headers: { Cookie: seed.sessionCookie },
+  });
+  expect(res.status).toBe(422);
+  expect((await res.json()).error.code).toBe('INVALID_STALE_FOR');
+});
+
+test('GET /?stale_for=bogus 422 — non-Nd format is rejected', async () => {
+  const { app, seed } = await makeTestApp();
+  const res = await app.request(`${path}?type=work_item&stale_for=garbage`, {
+    headers: { Cookie: seed.sessionCookie },
+  });
+  expect(res.status).toBe(422);
+  expect((await res.json()).error.code).toBe('INVALID_STALE_FOR');
 });
 
 test('GET /?stale_for=Nd filters by last_touched_at', async () => {

@@ -67,9 +67,9 @@ test('sign up → create workspace → create project → land on work-items', a
   await createProjectViaSheet(page, `Click Proj ${Date.now()}`);
   await expect(page).toHaveURL(/\/w\/click-ws-[^/]+\/p\/click-proj-[^/]+\/work-items/);
   // Three frame tabs visible.
-  await expect(page.getByRole('button', { name: 'Work items', exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Board', exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Wiki', exact: true })).toBeVisible();
+  await expect(page.getByRole('tab', { name: 'Work items', exact: true })).toBeVisible();
+  await expect(page.getByRole('tab', { name: 'Board', exact: true })).toBeVisible();
+  await expect(page.getByRole('tab', { name: 'Wiki', exact: true })).toBeVisible();
 });
 
 test('kanban + per-column create + inline title edit persists (regression: no UntitledX corruption)', async ({ page }) => {
@@ -79,7 +79,7 @@ test('kanban + per-column create + inline title edit persists (regression: no Un
   await createProjectViaSheet(page, `Kanban Proj ${Date.now()}`);
 
   // Switch to Board tab and create a card under Todo.
-  await page.getByRole('button', { name: 'Board', exact: true }).click();
+  await page.getByRole('tab', { name: 'Board', exact: true }).click();
   await page.getByRole('button', { name: 'New work item in Todo' }).click();
   // Slideover opens with the title input focused and the doc title set to
   // 'Untitled' in the DB. The InlineEdit MUST render the input empty (with
@@ -127,15 +127,31 @@ test('list rows have unique accessible names per doc (regression: a11y duplicate
   await createProjectViaSheet(page, `A11y Proj ${Date.now()}`);
 
   // Create two docs from the board so the list has multiple rows.
-  await page.getByRole('button', { name: 'Board', exact: true }).click();
+  await page.getByRole('tab', { name: 'Board', exact: true }).click();
   for (const t of ['Alpha task', 'Beta task']) {
     await page.getByRole('button', { name: 'New work item in Backlog' }).click();
-    await page.locator('[role="dialog"] input[type="text"]').first().fill(t);
+    const dialog = page.locator('[role="dialog"]');
+    await expect(dialog).toBeVisible();
+    // InlineEdit auto-enters edit mode for 'Untitled' docs via `defaultEditing`,
+    // but in headless Chromium ambient focus events sometimes dismiss it
+    // before the input is interactable. Fall back to clicking the title
+    // button to re-enter edit mode in that case.
+    const titleInput = dialog.locator('input[type="text"]').first();
+    if (!(await titleInput.isVisible().catch(() => false))) {
+      await dialog.getByRole('button', { name: /Edit title: Untitled/ }).click();
+    }
+    await titleInput.fill(t);
     await page.keyboard.press('Enter');
-    await page.keyboard.press('Escape');
+    // Close via dedicated Close button — pressing Escape can miss if focus
+    // dropped to document.body after the inline-edit commit.
+    await page.getByRole('button', { name: 'Close document' }).click();
+    // Wait for the dialog to actually unmount before the next iteration —
+    // Radix Sheet's slide-out animation runs ~250ms; clicking the per-column
+    // "+" while the overlay is still painted intercepts the click.
+    await expect(dialog).toBeHidden();
   }
 
-  await page.getByRole('button', { name: 'Work items', exact: true }).click();
+  await page.getByRole('tab', { name: 'Work items', exact: true }).click();
 
   // Each row's "Open …" button interpolates the doc title; same for the
   // inline-edit title input's aria-label. Before the fix every row carried
@@ -150,7 +166,7 @@ test('slideover: Alt+M toggles between Edit and Raw MD mode (regression)', async
   await createWorkspaceViaSheet(page, `AltM WS ${Date.now()}`);
   await createProjectViaSheet(page, `AltM Proj ${Date.now()}`);
 
-  await page.getByRole('button', { name: 'Board', exact: true }).click();
+  await page.getByRole('tab', { name: 'Board', exact: true }).click();
   await page.getByRole('button', { name: 'New work item in Backlog' }).click();
   await page.locator('[role="dialog"] input[type="text"]').first().fill('Alt M test');
   await page.keyboard.press('Enter');
@@ -265,16 +281,23 @@ test('wiki: new page + title edit shows in tree without a reload (regression)', 
   await createWorkspaceViaSheet(page, `Wiki WS ${Date.now()}`);
   await createProjectViaSheet(page, `Wiki Proj ${Date.now()}`);
 
-  await page.getByRole('button', { name: 'Wiki', exact: true }).click();
+  await page.getByRole('tab', { name: 'Wiki', exact: true }).click();
   // Empty state CTA name was renamed to disambiguate from the MainFrame
   // action button (both used to be "New page" — collision).
   await page.getByRole('button', { name: /Create your first page/ }).click();
   await page.locator('[role="dialog"] input[type="text"]').first().fill('Hello Wiki');
   await page.keyboard.press('Enter');
-  await page.keyboard.press('Escape');
+  // Close via the slideover's Close button — Escape can miss when focus
+  // has dropped to document.body after the inline-edit Enter commit.
+  await page.getByRole('button', { name: 'Close document' }).click();
 
   // The wiki tree must reflect the new page title without a page reload.
   // Bug A (2026-05-23): patch invalidations only matched the slideover's
   // listParams shape, leaving the wiki tree's different-params query stale.
-  await expect(page.getByText('Hello Wiki')).toBeVisible();
+  // The wiki tree row's outer <li> is also exposed as role="button" by
+  // dnd-kit's draggable attributes, alongside the inner label button — scope
+  // by tagName so we hit only the label.
+  await expect(
+    page.locator('button', { hasText: 'Hello Wiki' }).first(),
+  ).toBeVisible();
 });

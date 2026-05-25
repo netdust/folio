@@ -96,7 +96,11 @@ export function InlineEdit({
         }
       }}
       className={cn(
-        'inline-block cursor-text rounded-sm px-1 py-0.5 focus:outline-none focus-visible:bg-card',
+        // hover:bg-card surfaces the click-to-edit affordance for non-table
+        // callers (slideover title, frontmatter form fields). Table rows
+        // override this via their `group-hover:bg-card` so the whole-row
+        // tint still wins via cascade order.
+        'inline-block cursor-text rounded-sm px-1 py-0.5 hover:bg-card focus:outline-none focus-visible:bg-card',
         isPending && 'opacity-60',
         className,
       )}

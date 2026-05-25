@@ -5,6 +5,7 @@ import { ChevronsUpDown, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { Icon } from '../ui/icon.tsx';
 import { Kbd } from '../ui/kbd.tsx';
 import { cn } from '../ui/cn.ts';
+import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
 import { RailTree } from './rail-tree.tsx';
 
 const STORAGE_KEY = 'folio:rail-collapsed';
@@ -198,27 +199,89 @@ function WorkspaceMark({ workspace }: { workspace: WorkspaceConfig }) {
   return workspace.switcher ? <>{workspace.switcher(trigger)}</> : trigger;
 }
 
+function CollapsedNavButton({ item }: { item: NavItem }) {
+  const className = cn(
+    'relative inline-grid h-9 w-9 place-items-center rounded-md transition-colors duration-fast',
+    item.active ? 'bg-nav-active text-fg' : 'text-fg-3 hover:bg-card hover:text-fg-2',
+  );
+  const visual = (
+    <>
+      {item.lucideIcon ? (
+        <Icon icon={item.lucideIcon} size={16} />
+      ) : (
+        <span className="inline-grid h-[18px] w-[18px] place-items-center">{item.icon}</span>
+      )}
+      {item.active ? (
+        <span className="absolute bottom-1 left-1/2 -translate-x-1/2 h-1 w-1 rounded-full bg-fg" />
+      ) : null}
+    </>
+  );
+
+  const hasChildren = !!item.children && item.children.length > 0;
+  if (!hasChildren) {
+    return (
+      <button
+        type="button"
+        onClick={item.onClick}
+        title={item.label}
+        aria-label={item.label}
+        className={className}
+      >
+        {visual}
+      </button>
+    );
+  }
+
+  // Collapsed rail can't show inline children — surface them via a popover so
+  // the user can still jump to a table/view without expanding the rail.
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button type="button" title={item.label} aria-label={item.label} className={className}>
+          {visual}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent side="right" align="start" sideOffset={6} className="min-w-[180px] p-1">
+        <div className="flex flex-col gap-0.5">
+          {item.onClick ? (
+            <button
+              type="button"
+              onClick={item.onClick}
+              className={cn(
+                'flex items-center gap-2 rounded-sm px-2 py-1.5 text-xs transition-colors duration-fast',
+                'text-fg hover:bg-card',
+              )}
+            >
+              {item.lucideIcon ? <Icon icon={item.lucideIcon} size={14} /> : null}
+              <span className="truncate">{item.label}</span>
+            </button>
+          ) : null}
+          {item.children!.map((child) => (
+            <button
+              key={child.id}
+              type="button"
+              onClick={child.onClick}
+              className={cn(
+                'flex items-center gap-2 rounded-sm px-2 py-1.5 text-xs transition-colors duration-fast',
+                child.active ? 'bg-nav-active text-fg' : 'text-fg-2 hover:bg-card hover:text-fg',
+              )}
+            >
+              {child.lucideIcon ? <Icon icon={child.lucideIcon} size={14} /> : null}
+              <span className="truncate">{child.label}</span>
+            </button>
+          ))}
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 function NavList({ items, expanded }: { items: NavItem[]; expanded: boolean }) {
   if (!expanded) {
     return (
       <div className="flex w-full flex-col items-center gap-0.5">
         {items.map((item) => (
-          <button
-            key={item.id}
-            type="button"
-            onClick={item.onClick}
-            title={item.label}
-            aria-label={item.label}
-            className={cn(
-              'relative inline-grid h-9 w-9 place-items-center rounded-md transition-colors duration-fast',
-              item.active
-                ? 'bg-nav-active text-fg'
-                : 'text-fg-3 hover:bg-card hover:text-fg-2',
-            )}
-          >
-            {item.lucideIcon ? <Icon icon={item.lucideIcon} size={16} /> : <span className="inline-grid h-[18px] w-[18px] place-items-center">{item.icon}</span>}
-            {item.active ? <span className="absolute bottom-1 left-1/2 -translate-x-1/2 h-1 w-1 rounded-full bg-fg" /> : null}
-          </button>
+          <CollapsedNavButton key={item.id} item={item} />
         ))}
       </div>
     );

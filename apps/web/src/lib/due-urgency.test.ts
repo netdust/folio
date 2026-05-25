@@ -26,4 +26,17 @@ describe('dueUrgency', () => {
     expect(dueUrgency('2026-06-01', now)).toBe('later');
     expect(dueUrgency('2027-01-01', now)).toBe('later');
   });
+
+  it('treats a date-only string ("YYYY-MM-DD") as local midnight, not UTC midnight', () => {
+    // Anchor `now` to local 2026-05-25 noon (constructed via local Date() to
+    // sidestep runner TZ). Same-day due returns 'overdue'; next-day returns
+    // 'soon'. The pre-fix code used `new Date('YYYY-MM-DD')` which is UTC
+    // midnight — in west-of-UTC timezones that resolves to the *previous*
+    // day in local time and misclassifies tomorrow as today.
+    const now = new Date(2026, 4, 25, 12, 0, 0); // May 25 noon local
+
+    expect(dueUrgency('2026-05-25', now)).toBe('overdue'); // today
+    expect(dueUrgency('2026-05-26', now)).toBe('soon');    // tomorrow
+    expect(dueUrgency('2026-05-24', now)).toBe('overdue'); // yesterday
+  });
 });

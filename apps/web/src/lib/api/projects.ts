@@ -1,5 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { client } from './client.ts';
+import { tablesKeys } from './tables.ts';
+import { viewsKeys } from './views.ts';
 
 export interface Project {
   id: string;
@@ -66,6 +68,14 @@ export function useDeleteProject(wslug: string) {
   return useMutation({
     mutationFn: (pslug: string) =>
       client.delete(`/api/v1/w/${wslug}/p/${pslug}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: projectsKeys.list(wslug) }),
+    onSuccess: (_data, pslug) => {
+      // Cascade-invalidate everything that was scoped to this project.
+      // Without this, useQueries in the workspace layout keeps serving stale
+      // tables/views for the deleted project until staleTime expires.
+      qc.invalidateQueries({ queryKey: projectsKeys.list(wslug) });
+      qc.invalidateQueries({ queryKey: tablesKeys.list(wslug, pslug) });
+      qc.invalidateQueries({ queryKey: viewsKeys.list(wslug, pslug) });
+      qc.invalidateQueries({ queryKey: ['documents', wslug, pslug, 'list'] });
+    },
   });
 }

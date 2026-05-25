@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { client } from './client.ts';
+import { documentsKeys } from './documents.ts';
 
 export interface DocumentEvent {
   id: string;
@@ -36,9 +37,12 @@ export function useLogActivity(wslug: string, pslug: string) {
         { note },
       ),
     onSuccess: (_data, vars) => {
+      // Scoped invalidation only — a workspace-wide ['documents'] prefix
+      // would also bust every other workspace/project's document caches in
+      // every open tab.
       qc.invalidateQueries({ queryKey: documentEventsKeys.list(wslug, pslug, vars.slug) });
-      // Also bust the document itself since lastTouchedAt changed.
-      qc.invalidateQueries({ queryKey: ['documents'] });
+      qc.invalidateQueries({ queryKey: documentsKeys.detail(wslug, pslug, vars.slug) });
+      qc.invalidateQueries({ queryKey: [...documentsKeys.all, wslug, pslug, 'list'] });
     },
   });
 }

@@ -13,6 +13,9 @@ export interface DocumentSummary {
   frontmatter: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
+  // ISO timestamp; null until activity is first logged. Phase 1.7 column —
+  // surfaces in /stale_for filters and the planned "stale dashboard" bucket.
+  lastTouchedAt: string | null;
 }
 
 export interface Document extends DocumentSummary {
@@ -29,7 +32,8 @@ export interface DocumentListParams {
   status?: string[];
   assignee?: string;
   updatedSince?: string;
-  sort?: 'updated_at' | 'title' | 'priority' | 'status';
+  // Any column key — the server reads sort verbatim and falls back if unknown.
+  sort?: string;
   dir?: 'asc' | 'desc';
   limit?: number;
   cursor?: string;
@@ -145,6 +149,10 @@ export function useUpdateDocument(wslug: string, pslug: string, listParams: Docu
       // surfaces (list view, kanban, wiki tree) use different list params,
       // and a title/status patch in one view should refresh them all.
       qc.invalidateQueries({ queryKey: [...documentsKeys.all, wslug, pslug, 'list'] });
+      // Server emits a `document.updated` event on every PATCH; refresh the
+      // ActivityPanel's events list so the slideover stays live. Key shape
+      // mirrors apps/web/src/lib/api/events.ts:documentEventsKeys.list().
+      qc.invalidateQueries({ queryKey: ['document-events', wslug, pslug, slug] });
     },
   });
 }

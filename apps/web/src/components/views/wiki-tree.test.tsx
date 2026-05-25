@@ -83,6 +83,47 @@ describe('WikiTree', () => {
     await waitFor(() => expect(router.state.location.search).toEqual({ doc: 'a' }));
   });
 
+  it('hover-reveal + on a row creates a child page with parentId set, then opens the slideover', async () => {
+    // Capture the POST body so we can assert parentId was set to the row's
+    // doc id. The hover-reveal `+` is the wiki's analogue of the rail's
+    // hover `+`, and its job is to wire up the parent/child relationship
+    // at create time.
+    const createCalls: Array<Record<string, unknown>> = [];
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async (url, init) => {
+      const u = String(url);
+      const method = init?.method ?? 'GET';
+      if (u.includes('/documents') && method === 'POST') {
+        const body = init?.body instanceof ReadableStream
+          ? await new Response(init.body).text()
+          : String(init?.body ?? '{}');
+        const parsed = JSON.parse(body);
+        createCalls.push(parsed);
+        return new Response(
+          JSON.stringify({
+            data: {
+              id: 'child-new', slug: 'child-new', type: 'page',
+              title: 'Untitled', status: null, parentId: parsed.parentId ?? null,
+              frontmatter: {}, body: '', createdAt: '', updatedAt: '',
+            },
+          }),
+          { status: 201, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      return pagesResponse([{ id: 'a', slug: 'a', title: 'Parent' }]);
+    }));
+
+    const { queryClient, router } = setup();
+    render(<QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider>);
+    await waitFor(() => expect(screen.getByText('Parent')).toBeInTheDocument());
+
+    const addBtn = await screen.findByTestId('wiki-add-child-a');
+    await userEvent.click(addBtn);
+
+    await waitFor(() => expect(createCalls.length).toBe(1));
+    expect(createCalls[0]).toEqual({ type: 'page', title: 'Untitled', parentId: 'a' });
+    await waitFor(() => expect(router.state.location.search).toEqual({ doc: 'child-new' }));
+  });
+
   it('empty state offers New page', async () => {
     vi.stubGlobal('fetch', vi.fn<typeof fetch>(async (url, init) => {
       const u = String(url);

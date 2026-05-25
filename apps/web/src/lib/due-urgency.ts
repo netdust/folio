@@ -9,10 +9,19 @@ export type DueUrgency = 'overdue' | 'soon' | 'later' | 'none';
 export function dueUrgency(value: unknown, now: Date = new Date()): DueUrgency {
   if (value === null || value === undefined || value === '') return 'none';
   const s = typeof value === 'string' ? value : String(value);
-  const ts = new Date(s).getTime();
-  if (Number.isNaN(ts)) return 'none';
+
+  // Date-only strings ("YYYY-MM-DD") get parsed by `new Date()` as UTC
+  // midnight, then getFullYear/Month/Date reads them back in local time —
+  // in west-of-UTC zones that shifts to the previous day. Parse them as
+  // local midnight directly so urgency tracks the user's local calendar.
+  const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+  const due = dateOnly
+    ? new Date(Number(dateOnly[1]), Number(dateOnly[2]) - 1, Number(dateOnly[3]))
+    : new Date(s);
+  const dueTs = due.getTime();
+  if (Number.isNaN(dueTs)) return 'none';
+
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-  const due = new Date(s);
   const dueDay = new Date(due.getFullYear(), due.getMonth(), due.getDate()).getTime();
   const diffDays = Math.round((dueDay - today) / 86_400_000);
   if (diffDays <= 0) return 'overdue';

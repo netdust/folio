@@ -3,6 +3,7 @@ import { InlineEdit } from '../inline/inline-edit.tsx';
 import { InlineSelect } from '../inline/inline-select.tsx';
 import { Icon } from '../ui/icon.tsx';
 import { Pill } from '../ui/pill.tsx';
+import { cn } from '../ui/cn.ts';
 import { FieldRenderer } from '../slideover/field-renderer.tsx';
 import type { Column } from './columns.ts';
 import type { DocumentSummary } from '../../lib/api/documents.ts';
@@ -36,19 +37,19 @@ export function TableCell({
   const content = renderContent();
   if (!isSticky) return content;
   return (
-    <div className="sticky left-0 z-[1] flex items-center bg-content group-hover/row:bg-card">{content}</div>
+    <div className="sticky left-0 z-[1] flex items-center border-r border-border-light bg-content pl-[22px] pr-3 group-hover/row:bg-card">{content}</div>
   );
 
   function renderContent() {
     if (column.source === 'builtin') {
       if (column.key === 'title') {
         return (
-          <div className="flex min-w-0 items-center gap-2">
+          <div className="flex min-w-0 items-center gap-2" title={doc.title}>
             <button
               type="button"
               aria-label={`Open ${doc.title}`}
               onClick={() => onOpen(doc.slug)}
-              className="text-fg-3 hover:text-fg"
+              className="shrink-0 text-fg-3 hover:text-fg"
             >
               <Icon icon={ArrowUpRight} size={14} />
             </button>
@@ -58,6 +59,7 @@ export function TableCell({
                 onCommit={(v) => onTitleCommit(doc.slug, v)}
                 isPending={isPending}
                 ariaLabel={`Edit title: ${doc.title}`}
+                className="block w-full truncate"
               />
             </div>
           </div>
@@ -89,8 +91,10 @@ export function TableCell({
     }
     if (!column.fieldType) return null;
     const value = doc.frontmatter?.[column.key];
-    const isDueField = column.fieldType === 'date' && column.key === 'next_action_due';
-    const urgencyClass = isDueField ? urgencyClasses(dueUrgency(value)) : '';
+    // Generic across any date column — the "frontmatter is the schema" rule
+    // means urgency must follow the type, not a hardcoded key like
+    // `next_action_due`.
+    const urgencyClass = column.fieldType === 'date' ? urgencyClasses(dueUrgency(value)) : '';
     const rendered = (
       <FieldRenderer
         fieldKey={column.key}
@@ -102,8 +106,10 @@ export function TableCell({
       />
     );
     if (!urgencyClass) return rendered;
-    // display:contents wrapper — color cascades to descendants without
-    // introducing a box that disrupts the grid cell's height/baseline.
-    return <span className={urgencyClass} style={{ display: 'contents' }}>{rendered}</span>;
+    // A normal block wrapper — color cascades into the date pill below it.
+    // Previously this was `display: contents` to avoid an extra box, but
+    // that element is stripped from the accessibility tree in Safari <17
+    // and breaks grid layout if FieldRenderer ever returns a fragment.
+    return <span className={cn('block', urgencyClass)}>{rendered}</span>;
   }
 }

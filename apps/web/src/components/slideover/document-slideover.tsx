@@ -1,13 +1,29 @@
 import { useEffect, useState, useMemo } from 'react';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { toast } from 'sonner';
-import { Clipboard, X } from 'lucide-react';
+import { Clipboard, MoreHorizontal, Trash2, X } from 'lucide-react';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '../ui/sheet.tsx';
 import { IconButton } from '../ui/icon-button.tsx';
 import { Button } from '../ui/button.tsx';
 import { Icon } from '../ui/icon.tsx';
 import { Skeleton } from '../ui/skeleton.tsx';
-import { type Document, useDocument, useDocuments, useUpdateDocument } from '../../lib/api/documents.ts';
+import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from '../ui/dialog.tsx';
+import {
+  type Document,
+  type DocumentListParams,
+  clausesToListParams,
+  parseFilters,
+  useDocument,
+  useDocuments,
+  useUpdateDocument,
+  useDeleteDocument,
+} from '../../lib/api/documents.ts';
 import { useStatuses } from '../../lib/api/statuses.ts';
 import { useFields } from '../../lib/api/fields.ts';
 import { formatApiError } from '../../lib/api/index.ts';
@@ -33,6 +49,24 @@ export function DocumentSlideover({ wslug, pslug }: Props) {
   const open = !!search.doc;
   const slug = search.doc ?? null;
   const { data: doc, isLoading, error } = useDocument(wslug, pslug, slug);
+  const [mode, setMode] = useState<EditorMode>('rich');
+  const [moreOpen, setMoreOpen] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const del = useDeleteDocument(wslug, pslug);
+
+  // Alt+M toggles raw ↔ rich. Window listener stays at this level so the
+  // shortcut works regardless of where focus lives inside the slideover.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.altKey && (e.key === 'm' || e.key === 'M')) {
+        e.preventDefault();
+        setMode((m) => (m === 'rich' ? 'raw' : 'rich'));
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open]);
 
   const close = () => {
     const { doc: _doc, ...next } = search;
@@ -44,6 +78,18 @@ export function DocumentSlideover({ wslug, pslug }: Props) {
     try {
       await copyDocumentAsMarkdown(wslug, pslug, slug);
       toast.success('Copied as Markdown');
+    } catch (err) {
+      toast.error(formatApiError(err));
+    }
+  };
+
+  const onDelete = async () => {
+    if (!doc) return;
+    try {
+      await del.mutateAsync(doc.slug);
+      toast.success('Deleted');
+      setConfirmDelete(false);
+      close();
     } catch (err) {
       toast.error(formatApiError(err));
     }
@@ -69,12 +115,50 @@ export function DocumentSlideover({ wslug, pslug }: Props) {
               '—'
             )}
           </SheetTitle>
-          <div className="flex items-center gap-2">
+          <div data-testid="slideover-toolbar" className="flex items-center gap-1.5">
             {doc ? (
-              <Button variant="secondary" size="sm" onClick={onCopyMd} className="inline-flex items-center gap-1.5">
-                <Icon icon={Clipboard} size={14} />
-                Copy MD
-              </Button>
+              <>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={onCopyMd}
+                  className="inline-flex items-center gap-1.5"
+                >
+                  <Icon icon={Clipboard} size={14} />
+                  Copy MD
+                </Button>
+                <ModeToggle mode={mode} onChange={setMode} />
+                <LogActivityButton wslug={wslug} pslug={pslug} slug={doc.slug} />
+                <div aria-hidden className="mx-0.5 h-4 w-px bg-border-light" />
+                <Popover open={moreOpen} onOpenChange={setMoreOpen}>
+                  <PopoverTrigger asChild>
+                    <button
+                      type="button"
+                      aria-label="More actions"
+                      data-testid="slideover-more-actions"
+                      className="grid h-6 w-6 place-items-center rounded text-fg-2 hover:bg-card hover:text-fg"
+                    >
+                      <Icon icon={MoreHorizontal} size={16} />
+                    </button>
+                  </PopoverTrigger>
+                  <PopoverContent align="end" className="min-w-[160px] py-1">
+                    <div role="menu" className="flex flex-col">
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setMoreOpen(false);
+                          setConfirmDelete(true);
+                        }}
+                        className="inline-flex items-center gap-2 px-3 py-1.5 text-left text-sm text-danger transition-colors duration-fast hover:bg-card"
+                      >
+                        <Icon icon={Trash2} size={14} />
+                        Delete
+                      </button>
+                    </div>
+                  </PopoverContent>
+                </Popover>
+              </>
             ) : null}
             <IconButton label="Close document" onClick={close}>
               <Icon icon={X} size={16} />
@@ -82,20 +166,75 @@ export function DocumentSlideover({ wslug, pslug }: Props) {
           </div>
         </SheetHeader>
         <div className="flex-1 min-h-0 overflow-hidden px-6 py-4">
-          {slug ? <SlideoverBody wslug={wslug} pslug={pslug} slug={slug} /> : null}
+          {slug ? (
+            <SlideoverBody
+              wslug={wslug}
+              pslug={pslug}
+              slug={slug}
+              mode={mode}
+            />
+          ) : null}
         </div>
       </SheetContent>
+      <Dialog
+        open={confirmDelete}
+        onOpenChange={(o) => {
+          if (!del.isPending) setConfirmDelete(o);
+        }}
+      >
+        <DialogContent>
+          <DialogTitle>Delete this document?</DialogTitle>
+          <DialogDescription>
+            {doc ? <>Delete &ldquo;{doc.title}&rdquo;? This cannot be undone.</> : null}
+          </DialogDescription>
+          <div className="mt-5 flex items-center justify-end gap-2">
+            <Button
+              variant="secondary"
+              onClick={() => setConfirmDelete(false)}
+              disabled={del.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="danger"
+              onClick={() => void onDelete()}
+              disabled={del.isPending}
+            >
+              {del.isPending ? 'Deleting…' : 'Delete'}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </Sheet>
   );
+}
+
+// Match the open table's cache key so optimistic title/status updates land in
+// the same listParams bucket the user is looking at. TableView builds its key
+// from the same URL search params (status, sort, dir, etc.).
+function useUrlDerivedListParams(docType: Document['type']): DocumentListParams {
+  const search = useSearch({ strict: false }) as Record<string, unknown>;
+  return useMemo(() => {
+    const clauses = parseFilters(search);
+    const base = clausesToListParams(clauses);
+    base.type = docType;
+    const sortKey = typeof search.sort === 'string' ? search.sort : null;
+    const sortDir = typeof search.dir === 'string' ? search.dir : null;
+    if (sortKey) {
+      base.sort = sortKey;
+      base.dir = sortDir === 'desc' ? 'desc' : 'asc';
+    } else {
+      base.sort = 'updated_at';
+      base.dir = 'desc';
+    }
+    return base;
+  }, [search, docType]);
 }
 
 function SlideoverTitleEditor({ doc, wslug, pslug }: { doc: Document; wslug: string; pslug: string }) {
   const navigate = useNavigate();
   const search = useSearch({ strict: false }) as Record<string, unknown>;
-  const listParams = useMemo(
-    () => ({ type: doc.type as 'work_item' | 'page', sort: 'updated_at' as const, dir: 'desc' as const }),
-    [doc.type],
-  );
+  const listParams = useUrlDerivedListParams(doc.type);
   const update = useUpdateDocument(wslug, pslug, listParams);
   const onCommit = async (next: string) => {
     try {
@@ -120,14 +259,21 @@ function SlideoverTitleEditor({ doc, wslug, pslug }: { doc: Document; wslug: str
   );
 }
 
-function SlideoverBody({ wslug, pslug, slug }: { wslug: string; pslug: string; slug: string }) {
+function SlideoverBody({
+  wslug,
+  pslug,
+  slug,
+  mode,
+}: {
+  wslug: string;
+  pslug: string;
+  slug: string;
+  mode: EditorMode;
+}) {
   const { data: doc, isLoading, error } = useDocument(wslug, pslug, slug);
   const { data: statuses } = useStatuses(wslug, pslug);
   const { data: fields } = useFields(wslug, pslug);
-  const listParams = useMemo(
-    () => ({ type: 'work_item' as const, sort: 'updated_at' as const, dir: 'desc' as const }),
-    [],
-  );
+  const listParams = useUrlDerivedListParams(doc?.type ?? 'work_item');
   const update = useUpdateDocument(wslug, pslug, listParams);
   // Documents list — same listParams as useUpdateDocument so React Query dedupes the key
   const { data: docPage } = useDocuments(wslug, pslug, listParams);
@@ -136,19 +282,6 @@ function SlideoverBody({ wslug, pslug, slug }: { wslug: string; pslug: string; s
   const { data: aiKeysData } = useWorkspaceAiKeys(workspace?.id ?? '');
   const aiConfigured = (aiKeysData?.keys ?? []).length > 0;
   const [pendingKeys, setPendingKeys] = useState<Set<string>>(new Set());
-  const [mode, setMode] = useState<EditorMode>('rich');
-
-  // Alt+M toggles raw ↔ rich. Matches the kbd hint on the ModeToggle button.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.altKey && (e.key === 'm' || e.key === 'M')) {
-        e.preventDefault();
-        setMode((m) => (m === 'rich' ? 'raw' : 'rich'));
-      }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, []);
 
   if (isLoading) return <div className="text-fg-3">Loading document…</div>;
   if (error || !doc) return <div className="text-danger">Failed to load document.</div>;
@@ -172,45 +305,57 @@ function SlideoverBody({ wslug, pslug, slug }: { wslug: string; pslug: string; s
     }
   };
 
+  // Wiki pages are "just a markdown file" — no status, no pinned fields,
+  // no inferred frontmatter, no slug pill. Work items keep the full
+  // frontmatter form. Body editor + activity render for both.
+  const isPage = doc.type === 'page';
+
   return (
     <article className="flex h-full flex-col">
-      <header className="flex-shrink-0 space-y-3 pb-4">
-        <div className="flex items-center justify-between">
+      {!isPage ? (
+        <header className="flex-shrink-0 space-y-3 pb-4">
           <div className="font-mono text-[11px] text-fg-3">/{doc.slug}</div>
-          <div className="flex items-center gap-2">
-            <LogActivityButton wslug={wslug} pslug={pslug} slug={doc.slug} />
-            <ModeToggle mode={mode} onChange={setMode} />
-          </div>
-        </div>
-        <FrontmatterForm
-          type={doc.type}
-          status={doc.status}
-          statuses={statuses ?? []}
-          frontmatter={doc.frontmatter}
-          pinnedFields={fields ?? []}
-          onStatusCommit={(next) => void onPatch({ status: next }, ['status'])}
-          onFrontmatterCommit={(p) => void onPatch({ frontmatter: p }, Object.keys(p))}
-          pendingKeys={pendingKeys}
-        />
-      </header>
-      <div className="flex-1 min-h-0 overflow-y-auto border-t border-border-light pt-4">
-        <div className="min-h-[200px]">
-          {mode === 'rich' ? (
-            <BodyEditor
-              key={`rich-${doc.slug}`}
-              value={doc.body}
-              onChange={(body) => onPatch({ body }, ['body'])}
-              documents={docPage?.data ?? []}
-              aiConfigured={aiConfigured}
-            />
-          ) : (
-            <RawMdEditor
-              key={`raw-${doc.slug}`}
-              value={doc.body}
-              onChange={(body) => onPatch({ body }, ['body'])}
-            />
-          )}
-        </div>
+          <FrontmatterForm
+            type={doc.type}
+            status={doc.status}
+            statuses={statuses ?? []}
+            frontmatter={doc.frontmatter}
+            pinnedFields={fields ?? []}
+            onStatusCommit={(next) => void onPatch({ status: next }, ['status'])}
+            onFrontmatterCommit={(p) => void onPatch({ frontmatter: p }, Object.keys(p))}
+            pendingKeys={pendingKeys}
+          />
+        </header>
+      ) : null}
+      <div
+        data-testid="slideover-editor"
+        className={
+          isPage
+            ? 'folio-scroll flex-1 min-h-0 overflow-y-auto'
+            : 'folio-scroll flex-1 min-h-0 overflow-y-auto border-t border-border-light pt-4 focus-within:border-fg-3'
+        }
+      >
+        {mode === 'rich' ? (
+          <BodyEditor
+            key={`rich-${doc.slug}`}
+            value={doc.body}
+            onChange={(body) => onPatch({ body }, ['body'])}
+            documents={docPage?.data ?? []}
+            aiConfigured={aiConfigured}
+            showToolbar={isPage}
+          />
+        ) : (
+          <RawMdEditor
+            key={`raw-${doc.slug}`}
+            value={doc.body}
+            onChange={(body) => onPatch({ body }, ['body'])}
+          />
+        )}
+      </div>
+      <div
+        data-testid="slideover-activity"
+        className="folio-scroll shrink-0 max-h-[40vh] overflow-y-auto border-t border-border-light"
+      >
         <ActivityPanel wslug={wslug} pslug={pslug} slug={doc.slug} />
       </div>
     </article>

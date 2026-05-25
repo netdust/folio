@@ -1,4 +1,8 @@
 :root {
+  /* Hint to the UA that this is a light surface — flips native widgets
+     (date picker icon, autofill, scrollbar fallbacks) to the light palette. */
+  color-scheme: light;
+
   --color-shell:        #E3E3E5;
   --color-content:      #FCFCFC;
   --color-brand-2:      #F6F5F3;
@@ -56,6 +60,10 @@
 }
 
 .dark {
+  /* Flip native widgets (date picker icon, autofill, scrollbar fallbacks)
+     to the dark UA palette so they stay readable. */
+  color-scheme: dark;
+
   --color-shell:        #0a0a0b;
   --color-content:      #161618;
   --color-brand-2:      #1a1a1d;
