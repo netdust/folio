@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { client } from './client.ts';
 
-export type DocumentType = 'work_item' | 'page';
+export type DocumentType = 'work_item' | 'page' | 'agent' | 'trigger';
 
 export interface DocumentSummary {
   id: string;

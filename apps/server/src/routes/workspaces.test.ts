@@ -77,3 +77,26 @@ test('DELETE /api/v1/workspaces/:wslug 204 (owner)', async () => {
   });
   expect(res.status).toBe(204);
 });
+
+test('GET /api/v1/w/:wslug/members returns id/name/email/role for each membership', async () => {
+  const { app, seed } = await makeTestApp();
+  const res = await app.request('/api/v1/w/acme/members', {
+    headers: { Cookie: seed.sessionCookie },
+  });
+  expect(res.status).toBe(200);
+  const body = (await res.json()) as {
+    data: { members: { id: string; email: string; name: string; role: string }[] };
+  };
+  expect(Array.isArray(body.data.members)).toBe(true);
+  expect(body.data.members.length).toBe(1);
+  const m = body.data.members[0]!;
+  expect(m.id).toBe(seed.user.id);
+  expect(m.email).toBe('alice@test.local');
+  expect(m.role).toBe('owner');
+});
+
+test('GET /api/v1/w/:wslug/members 401 without auth', async () => {
+  const { app } = await makeTestApp();
+  const res = await app.request('/api/v1/w/acme/members');
+  expect(res.status).toBe(401);
+});

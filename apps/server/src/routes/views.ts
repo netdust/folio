@@ -8,7 +8,9 @@ import { db } from '../db/client.ts';
 import { views } from '../db/schema.ts';
 import { jsonOk, HTTPError } from '../lib/http.ts';
 import { emitEvent } from '../lib/events.ts';
+import { listViews } from '../services/views.ts';
 import { type AuthContext, getUser } from '../middleware/auth.ts';
+import { requireScope } from '../middleware/bearer.ts';
 import { getProject, getTable, getWorkspace, type ScopeContext } from '../middleware/scope.ts';
 
 const viewsRoute = new Hono<AuthContext & ScopeContext>();
@@ -39,14 +41,10 @@ function validateFilters(input: unknown): void {
 
 viewsRoute.get('/', async (c) => {
   const t = getTable(c);
-  const rows = await db.query.views.findMany({
-    where: eq(views.tableId, t.id),
-    orderBy: (t, { asc }) => [asc(t.order)],
-  });
-  return jsonOk(c, rows);
+  return jsonOk(c, await listViews(t.id));
 });
 
-viewsRoute.post('/', zValidator('json', baseSchema), async (c) => {
+viewsRoute.post('/', requireScope('views:write'), zValidator('json', baseSchema), async (c) => {
   const user = getUser(c);
   const p = getProject(c);
   const t = getTable(c);
@@ -79,7 +77,7 @@ viewsRoute.post('/', zValidator('json', baseSchema), async (c) => {
   return jsonOk(c, { view: row }, 201);
 });
 
-viewsRoute.patch('/:id', zValidator('json', baseSchema.partial()), async (c) => {
+viewsRoute.patch('/:id', requireScope('views:write'), zValidator('json', baseSchema.partial()), async (c) => {
   const user = getUser(c);
   const p = getProject(c);
   const t = getTable(c);
@@ -102,7 +100,7 @@ viewsRoute.patch('/:id', zValidator('json', baseSchema.partial()), async (c) => 
   return jsonOk(c, { view: { ...row, ...patch } });
 });
 
-viewsRoute.delete('/:id', async (c) => {
+viewsRoute.delete('/:id', requireScope('views:write'), async (c) => {
   const user = getUser(c);
   const p = getProject(c);
   const t = getTable(c);

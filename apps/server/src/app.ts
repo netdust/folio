@@ -4,7 +4,8 @@ import { logger } from 'hono/logger';
 import { serveStatic } from 'hono/bun';
 import { env } from './env.ts';
 import { registerErrorHandler } from './lib/http.ts';
-import { attachUser, requireUser, type AuthContext } from './middleware/auth.ts';
+import { attachUser, type AuthContext } from './middleware/auth.ts';
+import { attachToken, requireUserOrToken } from './middleware/bearer.ts';
 import {
   resolveProject,
   resolveTable,
@@ -13,8 +14,10 @@ import {
 } from './middleware/scope.ts';
 import { auth } from './routes/auth.ts';
 import { documentsRoute } from './routes/documents.ts';
+import { eventsRoute } from './routes/events.ts';
 import { fieldsRoute } from './routes/fields.ts';
 import { healthRoute } from './routes/health.ts';
+import { mcpRoute } from './routes/mcp.ts';
 import { projectItemRoute, projectsRoute } from './routes/projects.ts';
 import { settingsRoute } from './routes/settings.ts';
 import { statusesRoute } from './routes/statuses.ts';
@@ -38,9 +41,10 @@ v1.route('/auth', auth);
 v1.route('/workspaces', workspacesRoute);
 
 const wScope = new Hono<AuthContext & ScopeContext>();
-wScope.use('*', requireUser, resolveWorkspace);
+wScope.use('*', attachToken, requireUserOrToken, resolveWorkspace);
 wScope.route('/settings', settingsRoute);
 wScope.route('/tokens', tokensRoute);
+wScope.route('/events', eventsRoute);
 wScope.route('/projects', projectsRoute);
 
 const pScope = new Hono<AuthContext & ScopeContext>();
@@ -68,6 +72,9 @@ wScope.route('/', workspaceItemRoute);
 
 v1.route('/w/:wslug', wScope);
 app.route('/api/v1', v1);
+
+// --- /mcp (root-level JSON-RPC endpoint, not under /api/v1) ---
+app.route('/mcp', mcpRoute);
 
 // --- health (unversioned) ---
 app.route('/', healthRoute);

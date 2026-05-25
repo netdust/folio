@@ -247,6 +247,66 @@ test('GET filters by type', async () => {
   expect((await res.json()).data).toHaveLength(1);
 });
 
+test('GET filters by type=agent (returns ONLY agents, not pages or work_items)', async () => {
+  const { app, seed } = await makeTestApp();
+  // Seed one of each non-agent type plus one agent
+  await app.request(path, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: 'work_item', title: 'noise-W' }),
+  });
+  await app.request(path, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: 'page', title: 'noise-P' }),
+  });
+  await app.request(path, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      type: 'agent',
+      title: 'A',
+      frontmatter: {
+        system_prompt: 'x',
+        model: 'claude-sonnet-4-6',
+        provider: 'anthropic',
+        tools: [],
+      },
+    }),
+  });
+  const res = await app.request(`${path}?type=agent`, {
+    headers: { Cookie: seed.sessionCookie },
+  });
+  const body = (await res.json()) as { data: { type: string; title: string }[] };
+  expect(body.data).toHaveLength(1);
+  expect(body.data[0]!.type).toBe('agent');
+  expect(body.data[0]!.title).toBe('A');
+});
+
+test('GET filters by type=trigger (returns ONLY triggers)', async () => {
+  const { app, seed } = await makeTestApp();
+  await app.request(path, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: 'work_item', title: 'noise-W' }),
+  });
+  await app.request(path, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      type: 'trigger',
+      title: 'T',
+      frontmatter: { agent: 'a', schedule: '0 9 * * *', on_event: null },
+    }),
+  });
+  const res = await app.request(`${path}?type=trigger`, {
+    headers: { Cookie: seed.sessionCookie },
+  });
+  const body = (await res.json()) as { data: { type: string; title: string }[] };
+  expect(body.data).toHaveLength(1);
+  expect(body.data[0]!.type).toBe('trigger');
+});
+
 test('GET applies a filter AST via ?filter=', async () => {
   const { app, seed } = await makeTestApp();
   await app.request(path, {
@@ -576,4 +636,276 @@ test('GET /?stale_for=Nd filters by last_touched_at', async () => {
   const titles = (await res.json()).data.map((d: { title: string }) => d.title);
   expect(titles).toContain('Stale');
   expect(titles).not.toContain('Fresh');
+});
+
+test('POST creates a document with type=agent', async () => {
+  const { app, seed } = await makeTestApp();
+  const res = await app.request('/api/v1/w/acme/p/web/documents', {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      type: 'agent',
+      title: 'Triage bot',
+      frontmatter: {
+        system_prompt: 'Help triage incoming bugs.',
+        model: 'claude-sonnet-4-6',
+        provider: 'anthropic',
+        tools: ['list_documents', 'get_document'],
+      },
+    }),
+  });
+  expect(res.status).toBe(201);
+  const body = await res.json();
+  expect(body.data.type).toBe('agent');
+});
+
+test('POST creates a document with type=trigger', async () => {
+  const { app, seed } = await makeTestApp();
+  const res = await app.request('/api/v1/w/acme/p/web/documents', {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      type: 'trigger',
+      title: 'Monday morning standup',
+      frontmatter: {
+        agent: 'triage-bot',
+        schedule: '0 9 * * 1',
+        on_event: null,
+      },
+    }),
+  });
+  expect(res.status).toBe(201);
+  const body = await res.json();
+  expect(body.data.type).toBe('trigger');
+});
+
+test('POST agent rejects missing required fields', async () => {
+  const { app, seed } = await makeTestApp();
+  const res = await app.request('/api/v1/w/acme/p/web/documents', {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: 'agent', title: 'Broken', frontmatter: {} }),
+  });
+  expect(res.status).toBe(422);
+});
+
+test('POST trigger rejects when both schedule and on_event are null', async () => {
+  const { app, seed } = await makeTestApp();
+  const res = await app.request('/api/v1/w/acme/p/web/documents', {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      type: 'trigger',
+      title: 'Empty',
+      frontmatter: { agent: 'x', schedule: null, on_event: null },
+    }),
+  });
+  expect(res.status).toBe(422);
+});
+
+test('POST agent on a table-scoped URL is rejected', async () => {
+  const { app, seed } = await makeTestApp();
+  const res = await app.request('/api/v1/w/acme/p/web/t/work-items/documents', {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      type: 'agent',
+      title: 'No table allowed',
+      frontmatter: {
+        system_prompt: 'x', model: 'x', provider: 'anthropic', tools: [],
+      },
+    }),
+  });
+  expect(res.status).toBe(422);
+});
+
+test('agent create auto-mints an API token with toolsToScopes scopes', async () => {
+  const { app, seed } = await makeTestApp();
+  const res = await app.request('/api/v1/w/acme/p/web/documents', {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      type: 'agent', title: 'Bot',
+      frontmatter: {
+        system_prompt: 'x', model: 'x', provider: 'anthropic',
+        tools: ['create_document', 'list_documents'],
+      },
+    }),
+  });
+  expect(res.status).toBe(201);
+  const body = await res.json();
+  expect(body.data.frontmatter.api_token_id).toBeTruthy();
+  // The plaintext token is returned ONCE alongside the document.
+  expect(body.data.agent_token).toMatch(/^folio_pat_/);
+});
+
+test('agent delete revokes the linked token', async () => {
+  const { app, seed } = await makeTestApp();
+  const create = await app.request('/api/v1/w/acme/p/web/documents', {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      type: 'agent', title: 'Bot',
+      frontmatter: { system_prompt: 'x', model: 'x', provider: 'anthropic', tools: ['list_documents'] },
+    }),
+  });
+  const { data: { slug, agent_token } } = await create.json();
+
+  // Confirm the token works.
+  const tokenWorks = await app.request('/api/v1/w/acme/p/web/documents', {
+    headers: { Authorization: `Bearer ${agent_token}` },
+  });
+  expect(tokenWorks.status).toBe(200);
+
+  // Delete the agent.
+  const del = await app.request(`/api/v1/w/acme/p/web/documents/${slug}`, {
+    method: 'DELETE',
+    headers: { Cookie: seed.sessionCookie },
+  });
+  expect(del.status).toBe(204);
+
+  // Token should be revoked.
+  const tokenBlocked = await app.request('/api/v1/w/acme/p/web/documents', {
+    headers: { Authorization: `Bearer ${agent_token}` },
+  });
+  expect(tokenBlocked.status).toBe(401);
+});
+
+test('agent.created event emitted on agent create', async () => {
+  const { app, seed } = await makeTestApp();
+  await app.request('/api/v1/w/acme/p/web/documents', {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      type: 'agent', title: 'Bot',
+      frontmatter: { system_prompt: 'x', model: 'x', provider: 'anthropic', tools: [] },
+    }),
+  });
+  // Verify the events table has the row.
+  const { db } = await import('../db/client.ts');
+  const { events } = await import('../db/schema.ts');
+  const { eq } = await import('drizzle-orm');
+  const rows = await db.query.events.findMany({ where: eq(events.kind, 'agent.created') });
+  expect(rows.length).toBeGreaterThan(0);
+});
+
+test('work item POST with assignee=agent:slug emits agent.task.assigned', async () => {
+  const { app, seed } = await makeTestApp();
+  // First create the agent so the slug exists.
+  await app.request('/api/v1/w/acme/p/web/documents', {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      type: 'agent', title: 'Bot',
+      frontmatter: { system_prompt: 'x', model: 'x', provider: 'anthropic', tools: ['list_documents'] },
+    }),
+  });
+
+  await app.request('/api/v1/w/acme/p/web/documents', {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      type: 'work_item', title: 'Triage me',
+      frontmatter: { assignee: 'agent:bot' },
+    }),
+  });
+
+  const { db } = await import('../db/client.ts');
+  const { events } = await import('../db/schema.ts');
+  const { eq } = await import('drizzle-orm');
+  const rows = await db.query.events.findMany({ where: eq(events.kind, 'agent.task.assigned') });
+  expect(rows.length).toBe(1);
+});
+
+test('work item PATCH that adds assignee=agent:slug emits agent.task.assigned', async () => {
+  const { app, seed } = await makeTestApp();
+  await app.request('/api/v1/w/acme/p/web/documents', {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      type: 'agent', title: 'Bot',
+      frontmatter: { system_prompt: 'x', model: 'x', provider: 'anthropic', tools: [] },
+    }),
+  });
+  const create = await app.request('/api/v1/w/acme/p/web/documents', {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: 'work_item', title: 'No assignee yet' }),
+  });
+  const { data: { slug } } = await create.json();
+
+  await app.request(`/api/v1/w/acme/p/web/documents/${slug}`, {
+    method: 'PATCH',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ frontmatter: { assignee: 'agent:bot' } }),
+  });
+
+  const { db } = await import('../db/client.ts');
+  const { events } = await import('../db/schema.ts');
+  const { eq } = await import('drizzle-orm');
+  const rows = await db.query.events.findMany({ where: eq(events.kind, 'agent.task.assigned') });
+  expect(rows.length).toBe(1);
+});
+
+test('PATCH that keeps the same agent assignee does NOT re-emit', async () => {
+  const { app, seed } = await makeTestApp();
+  await app.request('/api/v1/w/acme/p/web/documents', {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      type: 'agent', title: 'Bot',
+      frontmatter: { system_prompt: 'x', model: 'x', provider: 'anthropic', tools: [] },
+    }),
+  });
+  const create = await app.request('/api/v1/w/acme/p/web/documents', {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      type: 'work_item', title: 'Triage',
+      frontmatter: { assignee: 'agent:bot' },
+    }),
+  });
+  const { data: { slug } } = await create.json();
+
+  // PATCH that doesn't change the assignee — emits nothing.
+  await app.request(`/api/v1/w/acme/p/web/documents/${slug}`, {
+    method: 'PATCH',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ frontmatter: { assignee: 'agent:bot', priority: 'high' } }),
+  });
+
+  const { db } = await import('../db/client.ts');
+  const { events } = await import('../db/schema.ts');
+  const { eq } = await import('drizzle-orm');
+  const rows = await db.query.events.findMany({ where: eq(events.kind, 'agent.task.assigned') });
+  expect(rows.length).toBe(1);  // still just the create
+});
+
+test('an agent token cannot delegate past its max_delegation_depth', async () => {
+  const { app, seed } = await makeTestApp();
+  // Create an agent with max_delegation_depth: 0 (cannot delegate at all).
+  const create = await app.request('/api/v1/w/acme/p/web/documents', {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      type: 'agent', title: 'Bot',
+      frontmatter: {
+        system_prompt: 'x', model: 'x', provider: 'anthropic',
+        tools: ['create_document'], max_delegation_depth: 0,
+      },
+    }),
+  });
+  const { data: { agent_token } } = await create.json();
+
+  const childCreate = await app.request('/api/v1/w/acme/p/web/documents', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${agent_token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      type: 'work_item', title: 'I am trying to assign',
+      frontmatter: { assignee: 'agent:bot' },  // assigning to itself, depth 1 > max 0
+    }),
+  });
+  expect(childCreate.status).toBe(403);
+  const body = await childCreate.json();
+  expect(body.error.code).toBe('DELEGATION_DEPTH_EXCEEDED');
 });

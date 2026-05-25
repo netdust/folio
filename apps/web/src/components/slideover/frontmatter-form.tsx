@@ -3,13 +3,17 @@ import { Plus } from 'lucide-react';
 import { inferFieldType } from '@folio/shared';
 import type { Status } from '../../lib/api/statuses.ts';
 import type { Field, FieldType } from '../../lib/api/fields.ts';
+import type { DocumentType } from '../../lib/api/documents.ts';
 import { InlineSelect } from '../inline/inline-select.tsx';
 import { FieldRenderer } from './field-renderer.tsx';
+import { AssigneePicker } from '../assignee/assignee-picker.tsx';
 import { Icon } from '../ui/icon.tsx';
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
 
 interface Props {
-  type: 'work_item' | 'page';
+  wslug: string;
+  pslug: string;
+  type: DocumentType;
   status: string | null;
   statuses: Status[];
   frontmatter: Record<string, unknown>;
@@ -20,6 +24,8 @@ interface Props {
 }
 
 export function FrontmatterForm({
+  wslug,
+  pslug,
   type,
   status,
   statuses,
@@ -73,20 +79,30 @@ export function FrontmatterForm({
         const fieldType: FieldType = pinned?.type ?? inferFieldType(value);
         const label = pinned?.label ?? key;
         const options = pinned?.options ?? undefined;
+        const isAssignee = key === 'assignee';
         return (
           <div key={key} className="contents">
             <dt className="self-center font-mono text-[11px] text-fg-3" title={key}>
               {label}
             </dt>
             <dd>
-              <FieldRenderer
-                fieldKey={key}
-                type={fieldType}
-                value={value}
-                options={options ?? undefined}
-                onCommit={(next) => onFrontmatterCommit({ [key]: next })}
-                isPending={pendingKeys?.has(key)}
-              />
+              {isAssignee ? (
+                <AssigneePicker
+                  wslug={wslug}
+                  pslug={pslug}
+                  value={typeof value === 'string' ? value : ''}
+                  onChange={(next) => onFrontmatterCommit({ [key]: next })}
+                />
+              ) : (
+                <FieldRenderer
+                  fieldKey={key}
+                  type={fieldType}
+                  value={value}
+                  options={options ?? undefined}
+                  onCommit={(next) => onFrontmatterCommit({ [key]: next })}
+                  isPending={pendingKeys?.has(key)}
+                />
+              )}
             </dd>
           </div>
         );

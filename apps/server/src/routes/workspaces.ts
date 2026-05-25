@@ -9,6 +9,7 @@ import { memberships, workspaces } from '../db/schema.ts';
 import { emitEvent } from '../lib/events.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
 import { slugUniqueInWorkspaces } from '../lib/slug-unique.ts';
+import { listWorkspaces } from '../services/workspaces.ts';
 import { type AuthContext, getUser, requireUser } from '../middleware/auth.ts';
 import { type ScopeContext, getRole, getWorkspace } from '../middleware/scope.ts';
 
@@ -20,12 +21,7 @@ workspacesRoute.use('*', requireUser);
 
 workspacesRoute.get('/', async (c) => {
   const user = getUser(c);
-  const rows = await db
-    .select({ workspace: workspaces, role: memberships.role })
-    .from(memberships)
-    .innerJoin(workspaces, eq(workspaces.id, memberships.workspaceId))
-    .where(eq(memberships.userId, user.id));
-  return jsonOk(c, rows);
+  return jsonOk(c, await listWorkspaces(user.id));
 });
 
 workspacesRoute.post(
@@ -106,6 +102,32 @@ workspaceItemRoute.delete('/', async (c) => {
   const ws = getWorkspace(c);
   await db.delete(workspaces).where(eq(workspaces.id, ws.id));
   return c.body(null, 204);
+});
+
+workspaceItemRoute.get('/members', async (c) => {
+  const ws = getWorkspace(c);
+  const rows = await db
+    .select({
+      userId: memberships.userId,
+      role: memberships.role,
+    })
+    .from(memberships)
+    .where(eq(memberships.workspaceId, ws.id));
+  const ids = rows.map((r) => r.userId);
+  const userRows = ids.length
+    ? await db.query.users.findMany({
+        where: (u, { inArray }) => inArray(u.id, ids),
+      })
+    : [];
+  const byId = new Map(userRows.map((u) => [u.id, u]));
+  const members = rows
+    .map((r) => {
+      const u = byId.get(r.userId);
+      if (!u) return null;
+      return { id: u.id, email: u.email, name: u.name, role: r.role };
+    })
+    .filter((m): m is { id: string; email: string; name: string; role: string } => m !== null);
+  return jsonOk(c, { members });
 });
 
 export { workspacesRoute, workspaceItemRoute };

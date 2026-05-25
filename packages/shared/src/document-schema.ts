@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const documentTypeEnum = z.enum(['work_item', 'page']);
+export const documentTypeEnum = z.enum(['work_item', 'page', 'agent', 'trigger']);
 
 export const documentCreateSchema = z.object({
   type: documentTypeEnum,

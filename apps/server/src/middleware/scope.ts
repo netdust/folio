@@ -25,6 +25,15 @@ export const resolveWorkspace: MiddlewareHandler<AuthContext & ScopeContext> = a
   if (!ws) throw new HTTPError('WORKSPACE_NOT_FOUND', `workspace "${wslug}" not found`, 404);
 
   const user = c.get('user');
+  const token = c.get('token');
+
+  // Bearer tokens are pinned to a single workspace at mint time. Reject the
+  // request early if the URL workspace doesn't match the token's workspace,
+  // even if the token's creator happens to be a member of the URL workspace.
+  if (token && token.workspaceId !== ws.id) {
+    throw new HTTPError('FORBIDDEN', 'token does not belong to this workspace', 403);
+  }
+
   if (!user) throw new HTTPError('UNAUTHENTICATED', 'login required', 401);
 
   const m = await db.query.memberships.findFirst({

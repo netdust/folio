@@ -282,6 +282,15 @@ test('table: sticky first column has a 1px right border in header AND data rows 
   // a global `button { border: 0 }` reset in globals.css set border-style: none,
   // which makes Tailwind's `.border-r { border-right-width: 1px }` invisible
   // because computed border-right-width collapses to 0 when style is none.
+  //
+  // 2026-05-25 (phase-2 shake-out): header's sticky styling moved from the
+  // inner button to the outer wrapper div, so `button.sticky` no longer
+  // matches anything (selector timeout). The visual contract still holds —
+  // the sticky wrapper carries `border-r border-border-light` — so the
+  // selector now uses bare `.sticky` instead of `button.sticky`. Original
+  // regression guard against the global button reset is moot now (the sticky
+  // element is no longer a button), but the border-width assertion still
+  // catches accidental utility-class drops.
   await signUpThroughUI(page, 'Border User');
   await page.getByRole('button', { name: 'Create workspace', exact: true }).click();
   await createWorkspaceViaSheet(page, `Border WS ${Date.now()}`);
@@ -296,14 +305,16 @@ test('table: sticky first column has a 1px right border in header AND data rows 
   await page.reload();
   await expect(page.getByText('Border probe')).toBeVisible();
 
+  // Target the sticky-LEFT cell specifically — `.sticky.left-0` filters out
+  // the sticky-TOP filter bar which also has class "sticky" but no border-r.
   const headerBorder = await page
-    .locator('[data-testid="table-scroll"] button.sticky')
+    .locator('[data-testid="table-scroll"] .sticky.left-0')
     .first()
     .evaluate((el) => getComputedStyle(el).borderRightWidth);
   expect(headerBorder, 'sticky header cell must have a 1px right border').toBe('1px');
 
   const rowBorder = await page
-    .locator('[role="list"] [role="listitem"] .sticky')
+    .locator('[role="list"] [role="listitem"] .sticky.left-0')
     .first()
     .evaluate((el) => getComputedStyle(el).borderRightWidth);
   expect(rowBorder, 'sticky data cell must have a 1px right border').toBe('1px');

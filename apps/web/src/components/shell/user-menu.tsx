@@ -6,9 +6,16 @@ interface UserMenuProps {
   email?: string;
   onSignOut: () => void;
   onCreateWorkspace?: () => void;
+  onOpenSettings?: () => void;
 }
 
-export function UserMenu({ trigger, email, onSignOut, onCreateWorkspace }: UserMenuProps) {
+export function UserMenu({
+  trigger,
+  email,
+  onSignOut,
+  onCreateWorkspace,
+  onOpenSettings,
+}: UserMenuProps) {
   return (
     <Popover>
       <PopoverTrigger asChild>{trigger}</PopoverTrigger>
@@ -25,6 +32,15 @@ export function UserMenu({ trigger, email, onSignOut, onCreateWorkspace }: UserM
             className="block w-full rounded-md px-2 py-1.5 text-left text-sm text-fg-2 hover:bg-card hover:text-fg"
           >
             + Create workspace
+          </button>
+        ) : null}
+        {onOpenSettings ? (
+          <button
+            type="button"
+            onClick={onOpenSettings}
+            className="block w-full rounded-md px-2 py-1.5 text-left text-sm text-fg-2 hover:bg-card hover:text-fg"
+          >
+            Settings
           </button>
         ) : null}
         <div className="my-1 h-px bg-border-light" />

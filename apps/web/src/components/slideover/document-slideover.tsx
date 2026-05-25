@@ -286,8 +286,8 @@ function SlideoverBody({
   const { data: docPage } = useDocuments(wslug, pslug, listParams, { enabled: !!doc });
   // AI key presence — drives the slash menu's aiConfigured flag
   const { data: workspace } = useWorkspace(wslug);
-  const { data: aiKeysData } = useWorkspaceAiKeys(workspace?.id ?? '');
-  const aiConfigured = (aiKeysData?.keys ?? []).length > 0;
+  const { data: aiKeys } = useWorkspaceAiKeys(wslug, workspace?.id ?? '');
+  const aiConfigured = (aiKeys ?? []).length > 0;
   const [pendingKeys, setPendingKeys] = useState<Set<string>>(new Set());
 
   if (isLoading) return <div className="text-fg-3">Loading document…</div>;
@@ -323,6 +323,8 @@ function SlideoverBody({
         <header className="flex-shrink-0 space-y-3 pb-4">
           <div className="font-mono text-[11px] text-fg-3">/{doc.slug}</div>
           <FrontmatterForm
+            wslug={wslug}
+            pslug={pslug}
             type={doc.type}
             status={doc.status}
             statuses={statuses ?? []}
