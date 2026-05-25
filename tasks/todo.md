@@ -20,24 +20,24 @@ Five independent UX cleanups discovered during Stefan's manual QA pass. All clie
 
 ### Tasks
 
-- [ ] **Task 1 — Rail tree: chevron on hover, replacing leading icon**
+- [x] **Task 1 — Rail tree: chevron on hover, replacing leading icon**
   - `apps/web/src/components/shell/rail-tree.tsx:46-92`
   - For expandable items, render the leading icon slot with two siblings: icon (default) + chevron (`hidden group-hover/row:inline-grid`). The icon gets `group-hover/row:hidden`. The wrapping element is a button when expandable, otherwise a non-interactive span. Keep `aria-expanded`, `aria-label`, `data-testid="rail-tree-chevron-${item.id}"` on the button.
   - Drop the old standalone chevron column (lines 55-69) and the empty placeholder span (lines 70-72) when there are no children — the icon itself takes the slot now.
   - **Unit test:** extend `rail-tree.test.tsx` — `expandable` node: chevron testid exists, clicking it flips `aria-expanded`. `non-expandable` node: no chevron testid.
 
-- [ ] **Task 2 — Table: sticky horizontal scrollbar pinned to viewport bottom**
+- [x] **Task 2 — Table: sticky horizontal scrollbar pinned to viewport bottom**
   - `apps/web/src/components/table/table-view.tsx:297-339`
   - Refactor the scroll container so the `overflow-x-auto` div wraps both header + rows AND is `sticky bottom-0` within MainFrame's vertical scroller. The visible result: when the rows extend beyond the viewport vertically, you can still see + drag the horizontal scrollbar at the bottom of the visible area.
   - The MainFrame's vertical scroller (`main-frame.tsx:45`) is left alone — TableView simply pins its own horizontal-scroll wrapper to the bottom of its bounding box. Use `sticky bottom-0 bg-content` on the inner scroll strip to glue the scrollbar to the viewport edge.
   - **Unit test:** in `table-view.test.tsx`, assert the scroll wrapper has the `sticky` + `bottom-0` + `overflow-x-auto` classes.
 
-- [ ] **Task 3 — Table: thin right border on sticky first column**
+- [x] **Task 3 — Table: thin right border on sticky first column**
   - `apps/web/src/components/table/table-cell.tsx:40`, `apps/web/src/components/table/table-header.tsx:113`
   - Append `border-r border-border-light` to the sticky wrapper in both files.
   - **Unit test:** `table-cell.test.tsx` — sticky cell has `border-r` className, non-sticky cell does not.
 
-- [ ] **Task 4 — Table: add-row at bottom**
+- [x] **Task 4 — Table: add-row at bottom**
   - New file: `apps/web/src/components/table/table-add-row.tsx`. Site of call: `table-view.tsx:323-337`.
   - Render after the data rows, only when `filteredDocs.length > 0`. Same grid template as TableRow so columns align. First column = `+` icon + clickable area that activates the inline title input. On commit:
     1. `createDocument({ type: 'work_item', title })`.
@@ -45,7 +45,7 @@ Five independent UX cleanups discovered during Stefan's manual QA pass. All clie
   - Use the existing `useCreateDocument` hook + `formatApiError` for the error path. Reuse `InlineEdit` with `defaultEditing` semantics — on click of the row, mount an `InlineEdit` with `defaultEditing` (the existing primitive). For empty commit / blur: revert to the static `+ Add work item` placeholder.
   - **Unit test:** `table-view.test.tsx` (or a dedicated `table-add-row.test.tsx`): render TableView with mocked API, find the add-row, simulate typing + Enter, assert `createDocument` called with the typed title and `navigate` called with `search.doc = <created slug>`.
 
-- [ ] **Task 5 — Slideover: action toolbar + ⋯ menu with Delete**
+- [x] **Task 5 — Slideover: action toolbar + ⋯ menu with Delete**
   - `apps/web/src/components/slideover/document-slideover.tsx:60-98, 200-208, 240-246` + lift `mode` state up.
   - Header right-side: Copy MD button → ModeToggle → LogActivityButton → vertical divider → ⋯ Popover (RowMenu-style — destructive `Delete` item) → Close.
   - Article body header: drop LogActivityButton + ModeToggle. Keep slug pill left.
@@ -55,12 +55,12 @@ Five independent UX cleanups discovered during Stefan's manual QA pass. All clie
 
 ### Phase complete checklist (testing-workflow gate)
 
-- [ ] All 5 task-level unit tests green
-- [ ] `cd apps/web && bun run test` full suite green
-- [ ] `cd apps/server && bun test` still 116 / 116 (no backend changes)
-- [ ] `cd packages/shared && bun test` still 28 / 28
-- [ ] TS clean across all three apps
-- [ ] `bun dev` boots clean; no console errors on the work-items page
+- [x] All 5 task-level unit tests green (9 new tests across rail-tree, table-cell, table-view, document-slideover)
+- [x] `cd apps/web && bun run test` full suite green — **214 / 215** (was 173 + 1 skipped; 1 known jsdom skip preserved)
+- [x] `cd apps/server && bun test` — **123 / 123** (was 116; jumped to 123 from the rest of Phase 1.7 work on this branch, no regressions)
+- [x] `cd packages/shared && bun test` — **28 / 28**
+- [x] TS clean for all touched files (`apps/web/` `bunx tsc --noEmit` is clean). Pre-existing TS errors in `apps/server/src/index.ts` and `packages/shared/src/{filter-compile,slug}.test.ts` are not regressions — confirmed unchanged by the work in this session.
+- [ ] `bun dev` boots clean; no console errors on the work-items page — **manual smoke pending**
 
 ### Smoke test (manual, after green)
 
@@ -87,4 +87,28 @@ Per auto-memory `project_main-tip-and-pre-phase-2-cleanups` — three items queu
 
 ## Review
 
-(Add a review block here when this batch wraps.)
+### 2026-05-25 — UX cleanup batch on `phase-1.7/crm-polish`
+
+5 independent UX cleanups shipped end-to-end via `netdust-core:ntdst-execute-with-tests` + `testing-workflow` gates. 9 new unit tests across rail-tree, table-cell, table-view (3), document-slideover (3). All suites green: web 214 / 215, server 123 / 123, shared 28 / 28. TS clean for touched files.
+
+**Files touched:**
+- `apps/web/src/components/shell/rail-tree.tsx` + test — icon→chevron hover swap
+- `apps/web/src/components/table/table-view.tsx` + test — sticky scroll wrapper + add-row wiring
+- `apps/web/src/components/table/table-add-row.tsx` + test — new file (add-row component)
+- `apps/web/src/components/table/table-cell.tsx` + new test file — sticky right border
+- `apps/web/src/components/table/table-header.tsx` — sticky right border
+- `apps/web/src/components/slideover/document-slideover.tsx` + test — toolbar + ⋯ menu + delete + dialog + mode state lift
+
+**Decisions locked via AskUserQuestion this session** (also persisted to `memory/STATE.md`):
+- Rail: icon→chevron on row hover (same slot).
+- Delete: confirm dialog (existing `ui/dialog.tsx`), no toast-undo.
+- Add-row: inline title in row, on commit → create + open slideover for the rest.
+- Scrollbar: sticky inside main scroll area (TableView owns scroll context).
+- Toolbar: visible Copy MD + Edit/Raw + Activity; ⋯ houses Delete (+ room to grow).
+
+**Lesson captured** (`memory/lessons.md`): no bare `git stash` to A/B-test pre-existing TS errors — global rule 0a bans the pattern. Use `git status` + read-the-error reasoning instead.
+
+**Open after this batch:**
+- Manual smoke pass (5 items in the smoke checklist above).
+- Stefan to call merge timing for the `phase-1.7/crm-polish` branch (1.6 + 1.7 + this batch).
+- The pre-existing TS errors in `apps/server/src/index.ts` and `packages/shared/src/{filter-compile,slug}.test.ts` are independent of this work but worth a sweep before the merge.

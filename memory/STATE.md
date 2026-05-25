@@ -1,6 +1,6 @@
 # Folio — STATE
 
-_Last updated: 2026-05-24 (post phase-1.6 build)_
+_Last updated: 2026-05-25 (post UX cleanup batch on phase-1.7/crm-polish)_
 
 Living snapshot of where the project actually is. Read at session start. Update at session end if anything below changed.
 
@@ -28,6 +28,23 @@ Phase numbering aligned with `docs/PHASES.md` (canonical) as of 2026-05-24 reorg
 `phase-1.7/crm-polish` — 6 phase commits + 6 auto-memory commits ahead of main (`cfe4ed6`). NOT merged; Stefan is doing a manual QA pass on 1.6 + 1.7 + the post-1.7 fixes before deciding what to merge / revert.
 
 Tests on branch tip: 116 server (was 113, +3 activity endpoint tests) / 173 web (+4 due-urgency) / 28 shared. All green. TS clean.
+
+### 2026-05-25 UX cleanup batch (5 items, all green)
+
+Shipped on `phase-1.7/crm-polish` (uncommitted as of this snapshot). 9 new unit tests added; full unit suite at 214 / 215 web (was 173), 123 / 123 server, 28 / 28 shared. TS clean for the touched files; pre-existing TS errors in `apps/server/src/index.ts` and `packages/shared/src/filter-compile.test.ts` are unrelated.
+
+1. **Rail tree chevron on hover.** `apps/web/src/components/shell/rail-tree.tsx` — leading folder/doc icon swaps to chevron on row hover (single slot). Non-expandable rows keep their icon always. Tests in `rail-tree.test.tsx`.
+2. **Sticky horizontal scrollbar at viewport bottom.** `apps/web/src/components/table/table-view.tsx` — TableView now owns its scroll context with `flex h-full min-h-0 flex-col` outer + `flex-1 min-h-0 overflow-auto` scroll wrapper. The horizontal scrollbar sits at the bottom of that flex item, which is the viewport bottom inside MainFrame's content area. MainFrame itself is left alone.
+3. **Sticky first-column right border.** `table-cell.tsx:40` + `table-header.tsx:113` — `border-r border-border-light pr-3` on the sticky branch. Test in new `table-cell.test.tsx`.
+4. **Add-row at table bottom.** New `apps/web/src/components/table/table-add-row.tsx`. Renders only when there are existing docs (EmptyState already CTAs for the zero state). Click → inline title edit → on commit, `createDocument` then navigate to `?doc=<slug>` to open the slideover for the rest of the frontmatter. Three tests in `table-view.test.tsx` (renders, happy path, empty cancel).
+5. **Slideover toolbar.** `document-slideover.tsx` — header right-side now Copy MD + Edit/Raw + Activity + vertical divider + ⋯ (Popover) + Close. ⋯ menu houses Delete (destructive). Delete fires a Dialog (existing `ui/dialog.tsx` primitive) with title quote + Cancel + danger Delete; on confirm, calls `useDeleteDocument` then closes the slideover. `mode` state + Alt+M listener lifted to `DocumentSlideover`. Body header simplified to just the slug pill. Three tests in `document-slideover.test.tsx`.
+
+Decisions, locked via AskUserQuestion this session:
+- Rail: icon→chevron swap on row hover (single slot).
+- Delete: confirm dialog (no toast-undo / soft-delete).
+- Add-row: inline title in row → open slideover for rest. NOT optimistic-create with default 'Untitled'.
+- Scrollbar: sticky inside main scroll area, NOT fixed overlay.
+- Toolbar: visible Copy MD + Edit/Raw + Activity; ⋯ menu houses Delete and is room to grow.
 
 ### Open UX issue at session end (DO NOT touch without re-reading)
 
@@ -135,6 +152,7 @@ See `docs/PHASES.md` for the canonical phase list (above-section mirrors it). Lo
 [2026-05-24] — session ended (no significant changes captured)
 [2026-05-24] — session ended (no significant changes captured)
 [2026-05-24] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
 [2026-05-25] — session ended (no significant changes captured)
 [2026-05-25] — session ended (no significant changes captured)
 [2026-05-25] — session ended (no significant changes captured)

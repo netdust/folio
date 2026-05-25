@@ -181,3 +181,13 @@ A 2-minute DevTools read beats 3 commits of guessing.
 **Rule:** For any project with on-disk SQLite + a long-lived dev DB, run migrations at server bootstrap. Tests don't catch this because they always start from zero.
 
 **Trigger:** Adding a new migration file. Verify the dev server's bootstrap path includes the migrator, not just the migrate script.
+
+## 2026-05-25 — Don't `git stash` to A/B-test pre-existing TS errors
+
+**Mistake:** While verifying whether a `tsc` error in `apps/server` came from my session's edits or was pre-existing on the branch, I ran `git stash && tsc && git stash pop`. The global CLAUDE.md rule 0a explicitly bans `git stash` as a routine session tool — there's a documented history of lost work from that exact pattern.
+
+**Why:** The same outcome is available without stash: `git diff` to identify changed files, then check whether the failing TS error is in a file I touched. Or `git stash push -m "..." -- <specific-paths>` with named, scoped retrieval, which the rule does permit.
+
+**Rule:** No bare `git stash`. To verify whether an error pre-dates the session, list `git status --short`, cross-reference with the file in the error, and reason from there. Stash only with `push -m "<reason>" -- <paths>` and a clear retrieval plan.
+
+**Trigger:** Any thought that begins "let me temporarily set my changes aside to check…". That's the smell — find a non-stash route.
