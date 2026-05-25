@@ -222,7 +222,7 @@ export function TableAddColumn({ onSubmit }: Props) {
             </button>
             <button
               type="submit"
-              disabled={submitting}
+              disabled={!key || submitting}
               className="rounded-sm bg-fg-1 px-2 py-1 text-sm text-content disabled:opacity-50"
             >
               Create

@@ -20,6 +20,20 @@ describe('TableAddColumn', () => {
     });
   });
 
+  it('disables Create until a key is entered', () => {
+    render(<TableAddColumn onSubmit={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: /add column/i }));
+
+    const createBtn = screen.getByRole('button', { name: /^create$/i });
+    expect(createBtn).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText(/^key$/i), { target: { value: 'owner' } });
+    expect(createBtn).not.toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText(/^key$/i), { target: { value: '' } });
+    expect(createBtn).toBeDisabled();
+  });
+
   it('rejects invalid keys (uppercase, leading number, special chars)', async () => {
     const onSubmit = vi.fn();
     render(<TableAddColumn onSubmit={onSubmit} />);
