@@ -31,6 +31,8 @@ import { TableRow } from './table-row.tsx';
 import { TableAddRow } from './table-add-row.tsx';
 import { TableAddColumn, type AddColumnPayload } from './table-add-column.tsx';
 import { ColumnMenu } from './column-menu.tsx';
+import { columnSuggestions } from './column-suggestions.ts';
+import type { FieldType } from '../../lib/api/fields.ts';
 import {
   mergeColumns,
   applyColumnOrder,
@@ -305,12 +307,29 @@ export function TableView({ wslug, pslug, tslug }: Props) {
     [createField, activeView, allColumns, updateView],
   );
 
+  // Pin handler for the ColumnPicker's "Suggested from your data" rows. We
+  // reuse `onAddColumn` so the POST + visible-fields update path is identical
+  // to the manual `+ Add column` flow. Suggestions never carry options
+  // (select/currency can't be inferred from a single sample), so the
+  // AddColumnPayload's `options` field is naturally omitted.
+  const onPinSuggestion = useCallback(
+    async (payload: { key: string; type: FieldType; label: string }) => {
+      await onAddColumn(payload);
+    },
+    [onAddColumn],
+  );
+
   const filteredDocs = useMemo(
     () => applyFrontmatterClauses(page?.data ?? [], clauses),
     [page, clauses],
   );
 
   const docs = useMemo(() => page?.data ?? [], [page]);
+
+  const suggestions = useMemo(
+    () => columnSuggestions(docs, fields ?? []),
+    [docs, fields],
+  );
 
   // Build the per-column menu. Builtins (title/status/updated_at) intentionally
   // skip the menu — they're not deletable. For pinned fields we surface the
@@ -383,6 +402,8 @@ export function TableView({ wslug, pslug, tslug }: Props) {
           columns={allColumns}
           visibleKeys={visibleKeys}
           onChange={onVisibilityChange}
+          suggestions={suggestions}
+          onPinSuggestion={onPinSuggestion}
         />
       </div>
       <div

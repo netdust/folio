@@ -1133,4 +1133,160 @@ describe('TableView', () => {
     expect(created[0].url).toContain('/p/sales/t/work-items/fields');
     expect(created[0].body).toMatchObject({ key: 'owner', type: 'string' });
   });
+
+  it('column picker lists orphan frontmatter keys under Suggested', async () => {
+    // Phase 1.9 Task 8: ColumnPicker should surface unpinned frontmatter keys
+    // (owner, extra_note) as suggestions when no Field row exists for them yet.
+    const docWithExtras = {
+      id: 'd2',
+      slug: 'second',
+      type: 'work_item' as const,
+      title: 'Second task',
+      status: 'todo' as string | null,
+      parentId: null,
+      frontmatter: { owner: 'Alice', extra_note: 'x' },
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedAt: new Date().toISOString(),
+    };
+
+    const fetchMock = vi.fn<typeof fetch>(async (url, init) => {
+      const u = String(url);
+      const method = init?.method ?? 'GET';
+      if (u.includes('/statuses') && method === 'GET') {
+        return new Response(JSON.stringify({ data: [statusRow] }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (u.includes('/views') && method === 'GET') {
+        return new Response(JSON.stringify({ data: [viewRow] }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (u.includes('/fields') && method === 'GET') {
+        return new Response(JSON.stringify({ data: [] }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (u.includes('/documents') && method === 'GET') {
+        return new Response(
+          JSON.stringify({ data: { data: [docWithExtras], nextCursor: null } }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { queryClient, router } = setup('/w/acme/p/sales/work-items');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByText('Second task')).toBeInTheDocument());
+
+    const columnsBtn = await screen.findByRole('button', { name: /columns/i });
+    await act(async () => { fireEvent.click(columnsBtn); });
+
+    expect(await screen.findByText(/suggested from your data/i)).toBeInTheDocument();
+    expect(screen.getByText('owner')).toBeInTheDocument();
+    expect(screen.getByText('extra_note')).toBeInTheDocument();
+  });
+
+  it('clicking + Pin on a suggestion posts a field with the inferred type', async () => {
+    // Phase 1.9 Task 8: clicking the +Pin IconButton on a suggested key should
+    // POST a Field with the inferred type derived from the sample value.
+    let pinned = false;
+    const created: { url: string; body: unknown }[] = [];
+
+    const docWithExtras = {
+      id: 'd3',
+      slug: 'third',
+      type: 'work_item' as const,
+      title: 'Third task',
+      status: 'todo' as string | null,
+      parentId: null,
+      frontmatter: { owner: 'Alice' },
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedAt: new Date().toISOString(),
+    };
+
+    const fetchMock = vi.fn<typeof fetch>(async (url, init) => {
+      const u = String(url);
+      const method = init?.method ?? 'GET';
+      if (u.includes('/statuses') && method === 'GET') {
+        return new Response(JSON.stringify({ data: [statusRow] }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (u.includes('/views') && method === 'GET') {
+        return new Response(JSON.stringify({ data: [viewRow] }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (u.includes('/fields') && method === 'POST') {
+        const body = init?.body instanceof ReadableStream
+          ? await new Response(init.body).text()
+          : String(init?.body ?? '{}');
+        const parsed = JSON.parse(body);
+        created.push({ url: u, body: parsed });
+        pinned = true;
+        return new Response(
+          JSON.stringify({
+            data: {
+              field: {
+                id: 'fnew',
+                key: parsed.key,
+                type: parsed.type,
+                label: parsed.label,
+                options: null,
+                required: false,
+                order: 0,
+              },
+            },
+          }),
+          { status: 201, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      if (u.includes('/fields') && method === 'GET') {
+        return new Response(
+          JSON.stringify({
+            data: pinned
+              ? [{ id: 'fnew', key: 'owner', type: 'string', label: 'Owner', options: null, required: false, order: 0 }]
+              : [],
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      if (u.includes('/documents') && method === 'GET') {
+        return new Response(
+          JSON.stringify({ data: { data: [docWithExtras], nextCursor: null } }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { queryClient, router } = setup('/w/acme/p/sales/work-items');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByText('Third task')).toBeInTheDocument());
+
+    const columnsBtn = await screen.findByRole('button', { name: /columns/i });
+    await act(async () => { fireEvent.click(columnsBtn); });
+
+    const pinBtn = await screen.findByRole('button', { name: /pin owner/i });
+    await act(async () => { fireEvent.click(pinBtn); });
+
+    await waitFor(() => {
+      expect(created.length).toBe(1);
+    });
+    expect(created[0].body).toMatchObject({ key: 'owner', type: 'string' });
+  });
 });
