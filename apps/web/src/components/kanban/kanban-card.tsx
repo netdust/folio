@@ -61,10 +61,14 @@ export function KanbanCard({ doc, onOpen, isPending }: Props) {
         if (e.key === 'Enter') onOpen(doc.slug);
       }}
       className={cn(
-        'cursor-grab rounded-md border border-border-light bg-shell px-3 py-2 text-sm text-fg shadow-sm transition-shadow',
+        // Base bg lifted from `bg-shell` to `bg-content` so the card stands
+        // out from the kanban column's tinted body. Hover adds a clear bg +
+        // border step so the hover state is visible against the elevated
+        // base. Bug G (2026-05-26).
+        'cursor-grab rounded-md border border-border-light bg-content px-3 py-2 text-sm text-fg shadow-sm transition-colors',
         isDragging && 'cursor-grabbing shadow-popover',
         isPending && 'opacity-60',
-        'hover:bg-card',
+        'hover:border-fg-3 hover:bg-card',
       )}
     >
       <div className="font-medium">{doc.title}</div>
