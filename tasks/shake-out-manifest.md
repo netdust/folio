@@ -101,7 +101,27 @@ Report what you see (or screenshots). I'll fold anything broken into the manifes
 
 ## Status
 
-- Track A: complete (20 checks, 1 bug)
-- Track B: **waiting on human**
-- Phase 2 (manifest review): blocked on Track B
-- Phase 3 (fix loop): blocked on Phase 2 sign-off
+- Track A: complete (20 checks, 1 bug found → 4 after Track B)
+- Track B: complete — Stefan ran 7 checks. Items 1-3 ✅. Items 5+6 surfaced Bug C (picker + rail routes showing all doc types). Item 7 surfaced Bug D (ai-keys 404 spam). Item 4 not separately confirmed; covered by general flow check.
+- Phase 2: manifest reviewed by Stefan ("fix all bugs first A, B, C and D")
+- Phase 3: **complete** — all 4 bugs fixed, 4 atomic commits on phase-2/agents-surface
+
+## Resolutions
+
+| Bug | Commit | Fix |
+|---|---|---|
+| A | `76cdca3` | E2e selector switched from `button.sticky` to `.sticky.left-0` (sticky styling had moved from inner button to outer div in an earlier refactor; pre-existing test went stale). Single test re-run: 1 passed in 4.2s. |
+| B | `9164e5d` | Added `statuses:write` checkbox + 3 preset buttons (Read-only / Read+write / Full access). 3 new modal tests. |
+| C | `ca7fb81` | `listDocuments` type filter widened from hard-coded `'work_item'|'page'` to set-membership against full `DocumentType` union. 2 new list-filter tests (type=agent, type=trigger). Live-verified: `?type=agent` now returns only `{agent}`. |
+| D | `3292e01` | Threaded `wslug` through 3 ai-keys hooks; URLs corrected to `/api/v1/w/${wslug}/settings/...`. Slideover caller updated. New `settings.test.tsx` pins all 3 URL contracts. Live-verified: endpoint returns 200. |
+
+## Tests after Phase 3
+
+- Server: 216 / 1-skip (was 214 + 2 type-filter regression tests for Bug C).
+- Web: 292 / 1-skip (was 285 + 3 modal tests + 4 settings tests — net delta accounts for refactoring within existing suites).
+- Playwright single sticky test: passing in 4.2s.
+- TypeScript: clean (web).
+
+## Final sweep
+
+- Full Playwright e2e re-run scheduled after Phase 3 commits (background task `b7tm41fr4`). All other suites green pre-final-sweep.
