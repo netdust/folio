@@ -13,7 +13,12 @@ import {
   type FilterClauseUrl,
 } from '../../lib/api/documents.ts';
 import { useStatuses } from '../../lib/api/statuses.ts';
-import { useFields, useCreateField } from '../../lib/api/fields.ts';
+import {
+  useFields,
+  useCreateField,
+  useUpdateField,
+  useDeleteField,
+} from '../../lib/api/fields.ts';
 import { useViews, useUpdateView } from '../../lib/api/views.ts';
 import { formatApiError } from '../../lib/api/index.ts';
 import { Icon } from '../ui/icon.tsx';
@@ -25,6 +30,7 @@ import { ColumnPicker } from './column-picker.tsx';
 import { TableRow } from './table-row.tsx';
 import { TableAddRow } from './table-add-row.tsx';
 import { TableAddColumn, type AddColumnPayload } from './table-add-column.tsx';
+import { ColumnMenu } from './column-menu.tsx';
 import {
   mergeColumns,
   applyColumnOrder,
@@ -78,7 +84,10 @@ export function TableView({ wslug, pslug, tslug }: Props) {
   const create = useCreateDocument(wslug, pslug);
   const updateView = useUpdateView(wslug, pslug);
   const createField = useCreateField(wslug, pslug, tslug);
+  const updateField = useUpdateField(wslug, pslug, tslug);
+  const deleteField = useDeleteField(wslug, pslug, tslug);
   const [pendingSlugs, setPendingSlugs] = useState<Set<string>>(new Set());
+  const [renamingKey, setRenamingKey] = useState<string | null>(null);
 
   const urlViewId = typeof search.view === 'string' ? search.view : undefined;
 
@@ -301,6 +310,66 @@ export function TableView({ wslug, pslug, tslug }: Props) {
     [page, clauses],
   );
 
+  const docs = useMemo(() => page?.data ?? [], [page]);
+
+  // Build the per-column menu. Builtins (title/status/updated_at) intentionally
+  // skip the menu — they're not deletable. For pinned fields we surface the
+  // affected-doc count so the delete confirmation can warn the user.
+  const renderColumnMenu = useCallback(
+    (column: Column) => {
+      if (column.source !== 'field') return null;
+      const field = (fields ?? []).find((f) => f.key === column.key);
+      if (!field) return null;
+      const affected = docs.filter(
+        (d) => d.frontmatter && (d.frontmatter as Record<string, unknown>)[column.key] != null,
+      ).length;
+      return (
+        <ColumnMenu
+          columnKey={column.key}
+          columnLabel={column.label}
+          affectedDocCount={affected}
+          onRename={() => setRenamingKey(column.key)}
+          onHide={() => {
+            if (!activeView) return;
+            const nextVisible = visibleKeys.filter((k) => k !== column.key);
+            updateView.mutate(
+              { id: activeView.id, patch: { visibleFields: nextVisible } },
+              { onError: (err) => toast.error(formatApiError(err)) },
+            );
+          }}
+          onDelete={async () => {
+            try {
+              await deleteField.mutateAsync(field.id);
+            } catch (err) {
+              toast.error(formatApiError(err));
+              throw err;
+            }
+          }}
+        />
+      );
+    },
+    [fields, docs, deleteField, activeView, visibleKeys, updateView],
+  );
+
+  // Commit handler for the inline-rename. Looks up the field by key inside the
+  // callback (rather than capturing `field` per-render) so we always see the
+  // freshest `fields` list. Empty / unchanged inputs are no-ops and just clear
+  // the renaming state.
+  const onRenameCommit = useCallback(
+    (key: string, next: string) => {
+      setRenamingKey(null);
+      const trimmed = next.trim();
+      const field = (fields ?? []).find((f) => f.key === key);
+      if (!field) return;
+      if (!trimmed || trimmed === field.label) return;
+      updateField.mutate(
+        { id: field.id, patch: { label: trimmed } },
+        { onError: (err) => toast.error(formatApiError(err)) },
+      );
+    },
+    [fields, updateField],
+  );
+
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex flex-shrink-0 items-center justify-between gap-2">
@@ -331,6 +400,9 @@ export function TableView({ wslug, pslug, tslug }: Props) {
             onSort={onSortChange}
             onReorder={onReorder}
             trailing={<TableAddColumn onSubmit={onAddColumn} />}
+            renderColumnMenu={renderColumnMenu}
+            renamingKey={renamingKey}
+            onRenameCommit={onRenameCommit}
           />
           {isLoading ? <ListSkeleton rows={6} /> : null}
           {error ? <div className="p-4 text-danger">Failed to load documents.</div> : null}

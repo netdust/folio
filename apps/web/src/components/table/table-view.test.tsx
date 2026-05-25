@@ -833,6 +833,200 @@ describe('TableView', () => {
     });
   });
 
+  it('clicking ⋯ → Rename swaps the column header for an inline input and PATCHes /fields/:id on Enter', async () => {
+    // Phase 1.9 Task 6: the per-column ⋯ menu opens a popover; clicking
+    // Rename swaps the static header label for an InlineEdit input. Pressing
+    // Enter commits and PATCHes the field's label to the new value.
+    const patchCalls: { id: string; body: Record<string, unknown> }[] = [];
+
+    const fetchMock = vi.fn<typeof fetch>(async (url, init) => {
+      const u = String(url);
+      const method = init?.method ?? 'GET';
+      if (u.includes('/statuses') && method === 'GET') {
+        return new Response(JSON.stringify({ data: [statusRow] }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (u.includes('/fields') && method === 'GET') {
+        return new Response(JSON.stringify({ data: [fieldRow] }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (u.match(/\/fields\/f1$/) && method === 'PATCH') {
+        const body = init?.body instanceof ReadableStream
+          ? await new Response(init.body).text()
+          : String(init?.body ?? '{}');
+        patchCalls.push({ id: 'f1', body: JSON.parse(body) });
+        return new Response(
+          JSON.stringify({ data: { field: { ...fieldRow, label: 'Total' } } }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      if (u.includes('/views') && method === 'GET') {
+        return new Response(JSON.stringify({ data: [viewRow] }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (u.includes('/documents') && method === 'GET') {
+        return new Response(JSON.stringify({ data: { data: [docRow], nextCursor: null } }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { queryClient, router } = setup();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByText('First task')).toBeInTheDocument());
+
+    // The pinned Amount column owns a ⋯ trigger (built-ins like Title don't).
+    // Open the menu, click Rename, then commit a new label.
+    const menuButtons = screen.getAllByRole('button', { name: /column actions/i });
+    await act(async () => { fireEvent.click(menuButtons[0]); });
+    const renameItem = await screen.findByRole('menuitem', { name: /^rename$/i });
+    await act(async () => { fireEvent.click(renameItem); });
+
+    const input = await screen.findByRole('textbox', { name: /rename column amount/i });
+    await act(async () => {
+      fireEvent.change(input, { target: { value: 'Total' } });
+      fireEvent.keyDown(input, { key: 'Enter' });
+    });
+
+    await waitFor(() => expect(patchCalls.length).toBe(1));
+    expect(patchCalls[0].id).toBe('f1');
+    expect(patchCalls[0].body).toMatchObject({ label: 'Total' });
+  });
+
+  it('clicking ⋯ → Hide column patches the active view to drop the key from visibleFields', async () => {
+    // Phase 1.9 Task 6: Hide removes the field's key from active view's
+    // visibleFields and PATCHes the view. The pinned Amount column starts
+    // visible; after Hide we expect the PATCH body to omit "amount".
+    const viewPatchCalls: { id: string; body: Record<string, unknown> }[] = [];
+
+    const fetchMock = vi.fn<typeof fetch>(async (url, init) => {
+      const u = String(url);
+      const method = init?.method ?? 'GET';
+      if (u.includes('/statuses') && method === 'GET') {
+        return new Response(JSON.stringify({ data: [statusRow] }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (u.includes('/fields') && method === 'GET') {
+        return new Response(JSON.stringify({ data: [fieldRow] }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (u.includes('/views') && method === 'GET') {
+        return new Response(JSON.stringify({ data: [viewRow] }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (u.match(/\/views\/v1$/) && method === 'PATCH') {
+        const body = init?.body instanceof ReadableStream
+          ? await new Response(init.body).text()
+          : String(init?.body ?? '{}');
+        viewPatchCalls.push({ id: 'v1', body: JSON.parse(body) });
+        return new Response(JSON.stringify(viewRow), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (u.includes('/documents') && method === 'GET') {
+        return new Response(JSON.stringify({ data: { data: [docRow], nextCursor: null } }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { queryClient, router } = setup();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByText('First task')).toBeInTheDocument());
+
+    const menuButtons = screen.getAllByRole('button', { name: /column actions/i });
+    await act(async () => { fireEvent.click(menuButtons[0]); });
+    const hideItem = await screen.findByRole('menuitem', { name: /hide column/i });
+    await act(async () => { fireEvent.click(hideItem); });
+
+    await waitFor(() => expect(viewPatchCalls.length).toBeGreaterThan(0));
+    const last = viewPatchCalls[viewPatchCalls.length - 1];
+    expect(Array.isArray(last.body.visibleFields)).toBe(true);
+    expect((last.body.visibleFields as string[]).includes('amount')).toBe(false);
+  });
+
+  it('clicking ⋯ → Delete column opens confirm dialog and DELETEs /fields/:id only after confirm', async () => {
+    // Phase 1.9 Task 6: Delete opens a confirm dialog (so accidental clicks
+    // can't drop a column). The DELETE request only fires after the user
+    // clicks the destructive "Delete" button in the dialog.
+    const deleteCalls: string[] = [];
+
+    const fetchMock = vi.fn<typeof fetch>(async (url, init) => {
+      const u = String(url);
+      const method = init?.method ?? 'GET';
+      if (u.includes('/statuses') && method === 'GET') {
+        return new Response(JSON.stringify({ data: [statusRow] }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (u.includes('/fields') && method === 'GET') {
+        return new Response(JSON.stringify({ data: [fieldRow] }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (u.match(/\/fields\/f1$/) && method === 'DELETE') {
+        deleteCalls.push(u);
+        return new Response(null, { status: 204 });
+      }
+      if (u.includes('/views') && method === 'GET') {
+        return new Response(JSON.stringify({ data: [viewRow] }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (u.includes('/documents') && method === 'GET') {
+        return new Response(JSON.stringify({ data: { data: [docRow], nextCursor: null } }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { queryClient, router } = setup();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByText('First task')).toBeInTheDocument());
+
+    const menuButtons = screen.getAllByRole('button', { name: /column actions/i });
+    await act(async () => { fireEvent.click(menuButtons[0]); });
+    const deleteItem = await screen.findByRole('menuitem', { name: /delete column/i });
+    await act(async () => { fireEvent.click(deleteItem); });
+
+    // Confirm dialog opens — no DELETE has fired yet.
+    expect(await screen.findByText(/delete column .amount./i)).toBeInTheDocument();
+    expect(deleteCalls).toEqual([]);
+
+    const confirm = screen.getByRole('button', { name: /^delete$/i });
+    await act(async () => { fireEvent.click(confirm); });
+
+    await waitFor(() => expect(deleteCalls.length).toBe(1));
+    expect(deleteCalls[0]).toContain('/fields/f1');
+  });
+
   it('clicking + Add column posts to /fields and re-fetches', async () => {
     // Phase 1.9 Task 5: TableAddColumn must mount in the header, submit to
     // the table-scoped /fields endpoint, and trigger a refetch so the new
