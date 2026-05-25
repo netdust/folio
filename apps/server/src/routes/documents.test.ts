@@ -247,6 +247,66 @@ test('GET filters by type', async () => {
   expect((await res.json()).data).toHaveLength(1);
 });
 
+test('GET filters by type=agent (returns ONLY agents, not pages or work_items)', async () => {
+  const { app, seed } = await makeTestApp();
+  // Seed one of each non-agent type plus one agent
+  await app.request(path, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: 'work_item', title: 'noise-W' }),
+  });
+  await app.request(path, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: 'page', title: 'noise-P' }),
+  });
+  await app.request(path, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      type: 'agent',
+      title: 'A',
+      frontmatter: {
+        system_prompt: 'x',
+        model: 'claude-sonnet-4-6',
+        provider: 'anthropic',
+        tools: [],
+      },
+    }),
+  });
+  const res = await app.request(`${path}?type=agent`, {
+    headers: { Cookie: seed.sessionCookie },
+  });
+  const body = (await res.json()) as { data: { type: string; title: string }[] };
+  expect(body.data).toHaveLength(1);
+  expect(body.data[0]!.type).toBe('agent');
+  expect(body.data[0]!.title).toBe('A');
+});
+
+test('GET filters by type=trigger (returns ONLY triggers)', async () => {
+  const { app, seed } = await makeTestApp();
+  await app.request(path, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: 'work_item', title: 'noise-W' }),
+  });
+  await app.request(path, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      type: 'trigger',
+      title: 'T',
+      frontmatter: { agent: 'a', schedule: '0 9 * * *', on_event: null },
+    }),
+  });
+  const res = await app.request(`${path}?type=trigger`, {
+    headers: { Cookie: seed.sessionCookie },
+  });
+  const body = (await res.json()) as { data: { type: string; title: string }[] };
+  expect(body.data).toHaveLength(1);
+  expect(body.data[0]!.type).toBe('trigger');
+});
+
 test('GET applies a filter AST via ?filter=', async () => {
   const { app, seed } = await makeTestApp();
   await app.request(path, {

@@ -129,9 +129,22 @@ export async function listDocuments(
   const cursor = opts.cursor ? decodeCursor(opts.cursor) : null;
 
   const whereClauses = [eq(documents.projectId, opts.projectId)];
-  if (opts.type === 'work_item' || opts.type === 'page') {
-    whereClauses.push(eq(documents.type, opts.type));
+  // Apply the type filter for every known DocumentType. Previously this
+  // branch was hard-coded to work_item/page, so when documents.type was
+  // widened in Phase 2 to include agent + trigger, ?type=agent / ?type=trigger
+  // silently degraded to "no type filter" and returned every doc on the
+  // project. The set membership keeps the fix tight to the union members.
+  const KNOWN_TYPES: ReadonlySet<DocumentType> = new Set([
+    'work_item',
+    'page',
+    'agent',
+    'trigger',
+  ]);
+  if (opts.type && KNOWN_TYPES.has(opts.type as DocumentType)) {
+    whereClauses.push(eq(documents.type, opts.type as DocumentType));
   }
+  // Table-scoping rules: work_items use the active table; pages, agents, and
+  // triggers are project-scoped (tableId IS NULL is enforced at write time).
   if (opts.type === 'work_item') {
     if (opts.activeTableId) {
       whereClauses.push(eq(documents.tableId, opts.activeTableId));
