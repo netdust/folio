@@ -15,6 +15,7 @@ import { emitEvent } from '../lib/events.ts';
 import { agentFrontmatterSchema, toolsToScopes } from '../lib/agent-schema.ts';
 import { triggerFrontmatterSchema } from '../lib/trigger-schema.ts';
 import { newApiToken } from '../lib/auth.ts';
+import { walkParentChain } from '../lib/delegation-guard.ts';
 import { parseMarkdown, serializeMarkdown } from '../lib/frontmatter.ts';
 import { compileFilterToWhere } from '../lib/filter-to-drizzle.ts';
 import { slugUniqueInDocuments } from '../lib/slug-unique.ts';
@@ -190,6 +191,58 @@ documentsRoute.post('/', requireScope('documents:write'), async (c) => {
     createdBy: user.id,
     updatedBy: user.id,
   };
+
+  // Delegation guard: when a bearer-auth'd agent creates a work_item assigning
+  // it to another agent, walk its parent_agent chain. Reject if depth+1 would
+  // exceed the actor agent's max_delegation_depth. The actor is the agent
+  // whose frontmatter.api_token_id matches the request's token; we scan all
+  // project-scoped agents in JS because SQLite can't index JSON natively.
+  const token = c.get('token');
+  if (token && input.type === 'work_item') {
+    const childAssignee = getAssignee(input.frontmatter);
+    if (childAssignee?.startsWith('agent:')) {
+      const allAgents = await db.query.documents.findMany({
+        where: and(eq(documents.projectId, p.id), eq(documents.type, 'agent')),
+      });
+      const ownerAgent = allAgents.find(
+        (a) => (a.frontmatter as Record<string, unknown>)['api_token_id'] === token.id,
+      );
+      if (ownerAgent) {
+        const ownerFm = ownerAgent.frontmatter as Record<string, unknown>;
+        const maxDepth = (ownerFm['max_delegation_depth'] as number | undefined) ?? 2;
+        const lookup = {
+          findAgentBySlug: async (slug: string) => {
+            const r = await db.query.documents.findFirst({
+              where: and(
+                eq(documents.projectId, p.id),
+                eq(documents.type, 'agent'),
+                eq(documents.slug, slug),
+              ),
+            });
+            if (!r) return null;
+            const fm = r.frontmatter as Record<string, unknown>;
+            return {
+              parent: (fm['parent_agent'] as string | null | undefined) ?? null,
+              max_delegation_depth: (fm['max_delegation_depth'] as number | undefined) ?? 2,
+            };
+          },
+        };
+        try {
+          const ownerDepth = await walkParentChain(ownerAgent.slug, lookup);
+          if (ownerDepth + 1 > maxDepth) {
+            throw new HTTPError(
+              'DELEGATION_DEPTH_EXCEEDED',
+              `agent ${ownerAgent.slug} cannot delegate past max_delegation_depth ${maxDepth} (current ${ownerDepth + 1})`,
+              403,
+            );
+          }
+        } catch (err) {
+          if (err instanceof HTTPError) throw err;
+          throw new HTTPError('DELEGATION_GUARD_FAILED', String(err), 500);
+        }
+      }
+    }
+  }
 
   await db.transaction(async (tx) => {
     await tx.insert(documents).values(row);

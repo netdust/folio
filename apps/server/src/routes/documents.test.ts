@@ -820,3 +820,32 @@ test('PATCH that keeps the same agent assignee does NOT re-emit', async () => {
   const rows = await db.query.events.findMany({ where: eq(events.kind, 'agent.task.assigned') });
   expect(rows.length).toBe(1);  // still just the create
 });
+
+test('an agent token cannot delegate past its max_delegation_depth', async () => {
+  const { app, seed } = await makeTestApp();
+  // Create an agent with max_delegation_depth: 0 (cannot delegate at all).
+  const create = await app.request('/api/v1/w/acme/p/web/documents', {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      type: 'agent', title: 'Bot',
+      frontmatter: {
+        system_prompt: 'x', model: 'x', provider: 'anthropic',
+        tools: ['create_document'], max_delegation_depth: 0,
+      },
+    }),
+  });
+  const { data: { agent_token } } = await create.json();
+
+  const childCreate = await app.request('/api/v1/w/acme/p/web/documents', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${agent_token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      type: 'work_item', title: 'I am trying to assign',
+      frontmatter: { assignee: 'agent:bot' },  // assigning to itself, depth 1 > max 0
+    }),
+  });
+  expect(childCreate.status).toBe(403);
+  const body = await childCreate.json();
+  expect(body.error.code).toBe('DELEGATION_DEPTH_EXCEEDED');
+});
