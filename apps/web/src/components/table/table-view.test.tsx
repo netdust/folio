@@ -832,4 +832,111 @@ describe('TableView', () => {
       )).toBe(true);
     });
   });
+
+  it('clicking + Add column posts to /fields and re-fetches', async () => {
+    // Phase 1.9 Task 5: TableAddColumn must mount in the header, submit to
+    // the table-scoped /fields endpoint, and trigger a refetch so the new
+    // column appears immediately.
+    const created: { url: string; body: unknown }[] = [];
+    let createPosted = false;
+
+    const fetchMock = vi.fn<typeof fetch>(async (url, init) => {
+      const u = String(url);
+      const method = init?.method ?? 'GET';
+
+      if (u.includes('/statuses') && method === 'GET') {
+        return new Response(JSON.stringify({ data: [statusRow] }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (u.includes('/views') && method === 'GET') {
+        return new Response(JSON.stringify({ data: [viewRow] }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (u.match(/\/views\/v1/) && method === 'PATCH') {
+        return new Response(JSON.stringify(viewRow), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (u.includes('/fields') && method === 'POST') {
+        const body = init?.body instanceof ReadableStream
+          ? await new Response(init.body).text()
+          : String(init?.body ?? '{}');
+        const parsed = JSON.parse(body);
+        created.push({ url: u, body: parsed });
+        createPosted = true;
+        return new Response(
+          JSON.stringify({
+            data: {
+              field: {
+                id: 'fnew',
+                key: 'owner',
+                type: 'string',
+                label: 'Owner',
+                options: null,
+                required: false,
+                order: 0,
+              },
+            },
+          }),
+          { status: 201, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      if (u.includes('/fields') && method === 'GET') {
+        return new Response(
+          JSON.stringify({
+            data: createPosted
+              ? [
+                  fieldRow,
+                  {
+                    id: 'fnew',
+                    key: 'owner',
+                    type: 'string',
+                    label: 'Owner',
+                    options: null,
+                    required: false,
+                    order: 0,
+                  },
+                ]
+              : [fieldRow],
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      if (u.includes('/documents') && method === 'GET') {
+        return new Response(
+          JSON.stringify({ data: { data: [docRow], nextCursor: null } }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { queryClient, router } = setup('/w/acme/p/sales/work-items');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByText('First task')).toBeInTheDocument());
+
+    const addBtn = await screen.findByRole('button', { name: /add column/i });
+    await act(async () => { fireEvent.click(addBtn); });
+
+    const keyInput = await screen.findByLabelText(/^key$/i);
+    await act(async () => {
+      fireEvent.change(keyInput, { target: { value: 'owner' } });
+    });
+    const createBtn = screen.getByRole('button', { name: /^create$/i });
+    await act(async () => { fireEvent.click(createBtn); });
+
+    await waitFor(() => {
+      expect(created.length).toBe(1);
+    });
+    expect(created[0].url).toContain('/p/sales/t/work-items/fields');
+    expect(created[0].body).toMatchObject({ key: 'owner', type: 'string' });
+  });
 });

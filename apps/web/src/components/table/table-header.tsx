@@ -1,6 +1,7 @@
 import { DndContext, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
 import { useSortable, SortableContext, horizontalListSortingStrategy, arrayMove } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
+import type { ReactNode } from 'react';
 import { gridTemplate, type Column } from './columns.ts';
 
 // SortKey is `string` because saved views can persist a sort by any column
@@ -17,6 +18,7 @@ interface Props {
   sort: SortState | null;
   onSort: (next: SortState | null) => void;
   onReorder: (nextOrder: string[]) => void;
+  trailing?: ReactNode;
 }
 
 export function TableHeader({
@@ -24,6 +26,7 @@ export function TableHeader({
   sort,
   onSort,
   onReorder,
+  trailing,
 }: Props) {
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
   const ids = columns.map((c) => c.key);
@@ -67,6 +70,7 @@ export function TableHeader({
           </div>
         </SortableContext>
       </DndContext>
+      {trailing ? <div className="flex-shrink-0">{trailing}</div> : null}
     </div>
   );
 }

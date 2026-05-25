@@ -13,7 +13,7 @@ import {
   type FilterClauseUrl,
 } from '../../lib/api/documents.ts';
 import { useStatuses } from '../../lib/api/statuses.ts';
-import { useFields } from '../../lib/api/fields.ts';
+import { useFields, useCreateField } from '../../lib/api/fields.ts';
 import { useViews, useUpdateView } from '../../lib/api/views.ts';
 import { formatApiError } from '../../lib/api/index.ts';
 import { Icon } from '../ui/icon.tsx';
@@ -24,6 +24,7 @@ import { TableHeader, type SortState } from './table-header.tsx';
 import { ColumnPicker } from './column-picker.tsx';
 import { TableRow } from './table-row.tsx';
 import { TableAddRow } from './table-add-row.tsx';
+import { TableAddColumn, type AddColumnPayload } from './table-add-column.tsx';
 import {
   mergeColumns,
   applyColumnOrder,
@@ -76,6 +77,7 @@ export function TableView({ wslug, pslug, tslug }: Props) {
   const update = useUpdateDocument(wslug, pslug, listParams);
   const create = useCreateDocument(wslug, pslug);
   const updateView = useUpdateView(wslug, pslug);
+  const createField = useCreateField(wslug, pslug, tslug);
   const [pendingSlugs, setPendingSlugs] = useState<Set<string>>(new Set());
 
   const urlViewId = typeof search.view === 'string' ? search.view : undefined;
@@ -276,6 +278,24 @@ export function TableView({ wslug, pslug, tslug }: Props) {
     }
   };
 
+  const onAddColumn = useCallback(
+    async (payload: AddColumnPayload) => {
+      const created = await createField.mutateAsync(payload);
+      if (activeView) {
+        const nextVisible = [
+          ...(activeView.visibleFields ?? effectiveVisibleKeys(allColumns, activeView)),
+          created.key,
+        ];
+        try {
+          await updateView.mutateAsync({ id: activeView.id, patch: { visibleFields: nextVisible } });
+        } catch (err) {
+          toast.error(formatApiError(err));
+        }
+      }
+    },
+    [createField, activeView, allColumns, updateView],
+  );
+
   const filteredDocs = useMemo(
     () => applyFrontmatterClauses(page?.data ?? [], clauses),
     [page, clauses],
@@ -310,6 +330,7 @@ export function TableView({ wslug, pslug, tslug }: Props) {
             sort={sort}
             onSort={onSortChange}
             onReorder={onReorder}
+            trailing={<TableAddColumn onSubmit={onAddColumn} />}
           />
           {isLoading ? <ListSkeleton rows={6} /> : null}
           {error ? <div className="p-4 text-danger">Failed to load documents.</div> : null}
