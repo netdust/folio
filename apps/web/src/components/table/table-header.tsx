@@ -1,7 +1,9 @@
 import { DndContext, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
 import { useSortable, SortableContext, horizontalListSortingStrategy, arrayMove } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
+import type { ReactNode } from 'react';
 import { gridTemplate, type Column } from './columns.ts';
+import { InlineEdit } from '../inline/inline-edit.tsx';
 
 // SortKey is `string` because saved views can persist a sort by any column
 // key (built-in or custom field). Only `SORTABLE_BUILTIN_KEYS` are clickable
@@ -17,6 +19,13 @@ interface Props {
   sort: SortState | null;
   onSort: (next: SortState | null) => void;
   onReorder: (nextOrder: string[]) => void;
+  trailing?: ReactNode;
+  renderColumnMenu?: (column: Column) => ReactNode;
+  // When set, the matching column header swaps its label for an InlineEdit
+  // input. Commit fires onRenameCommit(key, nextLabel); the parent clears
+  // renamingKey on commit or Escape.
+  renamingKey?: string | null;
+  onRenameCommit?: (key: string, nextLabel: string) => void;
 }
 
 export function TableHeader({
@@ -24,6 +33,10 @@ export function TableHeader({
   sort,
   onSort,
   onReorder,
+  trailing,
+  renderColumnMenu,
+  renamingKey,
+  onRenameCommit,
 }: Props) {
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
   const ids = columns.map((c) => c.key);
@@ -49,7 +62,16 @@ export function TableHeader({
               return (
                 <>
                   {columns.slice(0, -1).map((c, i) => (
-                    <SortableHeaderCell key={c.key} column={c} sort={sort} onSort={onSort} isSticky={i === 0} />
+                    <SortableHeaderCell
+                      key={c.key}
+                      column={c}
+                      sort={sort}
+                      onSort={onSort}
+                      isSticky={i === 0}
+                      renderColumnMenu={renderColumnMenu}
+                      isRenaming={renamingKey === c.key}
+                      onRenameCommit={onRenameCommit}
+                    />
                   ))}
                   {columns.length > 1 ? <div aria-hidden /> : null}
                   {last ? (
@@ -59,6 +81,9 @@ export function TableHeader({
                       sort={sort}
                       onSort={onSort}
                       isSticky={columns.length === 1}
+                      renderColumnMenu={renderColumnMenu}
+                      isRenaming={renamingKey === last.key}
+                      onRenameCommit={onRenameCommit}
                     />
                   ) : null}
                 </>
@@ -67,6 +92,7 @@ export function TableHeader({
           </div>
         </SortableContext>
       </DndContext>
+      {trailing ? <div className="flex-shrink-0">{trailing}</div> : null}
     </div>
   );
 }
@@ -76,11 +102,17 @@ function SortableHeaderCell({
   sort,
   onSort,
   isSticky = false,
+  renderColumnMenu,
+  isRenaming = false,
+  onRenameCommit,
 }: {
   column: Column;
   sort: SortState | null;
   onSort: (next: SortState | null) => void;
   isSticky?: boolean;
+  renderColumnMenu?: (column: Column) => ReactNode;
+  isRenaming?: boolean;
+  onRenameCommit?: (key: string, nextLabel: string) => void;
 }) {
   const { setNodeRef, attributes, listeners, transform, transition, isDragging } = useSortable({
     id: column.key,
@@ -101,21 +133,44 @@ function SortableHeaderCell({
       }
     : undefined;
 
+  // Sticky-first-column whitespace moves to the OUTER wrapper so the menu
+  // button still sits inside the sticky cell on horizontal scroll. The
+  // group/header named-group reveals the menu on header-cell hover, not row
+  // hover.
+  const wrapperClass = `group/header relative inline-flex items-center gap-1${
+    isSticky ? ' sticky left-0 z-[1] border-r border-border-light bg-content pl-[22px] pr-3' : ''
+  }`;
+
   return (
-    <button
-      ref={setNodeRef}
-      style={style}
-      type="button"
-      {...attributes}
-      {...listeners}
-      onClick={onClick}
-      title={sortable ? `Sort by ${column.label} (drag to reorder)` : `Drag to reorder ${column.label}`}
-      className={`inline-flex cursor-grab items-center gap-1 text-left text-[11px] uppercase tracking-wide text-fg-3 hover:text-fg-2 active:cursor-grabbing${isSticky ? ' sticky left-0 z-[1] border-r border-border-light bg-content pl-[22px] pr-3' : ''}`}
-    >
-      {column.label}
-      {sort?.key === column.key ? (
-        <span className="font-mono text-[10px]">{sort.dir === 'asc' ? '↑' : '↓'}</span>
+    <div ref={setNodeRef} style={style} className={wrapperClass}>
+      {isRenaming && onRenameCommit ? (
+        <InlineEdit
+          value={column.label}
+          onCommit={(next) => onRenameCommit(column.key, next)}
+          defaultEditing
+          ariaLabel={`Rename column ${column.label}`}
+          inputClassName="text-[11px] uppercase tracking-wide"
+        />
+      ) : (
+        <button
+          type="button"
+          {...attributes}
+          {...listeners}
+          onClick={onClick}
+          title={sortable ? `Sort by ${column.label} (drag to reorder)` : `Drag to reorder ${column.label}`}
+          className="flex flex-1 cursor-grab items-center gap-1 text-left text-[11px] uppercase tracking-wide text-fg-3 hover:text-fg-2 active:cursor-grabbing"
+        >
+          {column.label}
+          {sort?.key === column.key ? (
+            <span className="font-mono text-[10px]">{sort.dir === 'asc' ? '↑' : '↓'}</span>
+          ) : null}
+        </button>
+      )}
+      {column.source === 'field' && renderColumnMenu ? (
+        <span className="opacity-0 transition-opacity group-hover/header:opacity-100">
+          {renderColumnMenu(column)}
+        </span>
       ) : null}
-    </button>
+    </div>
   );
 }

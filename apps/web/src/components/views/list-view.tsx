@@ -48,7 +48,7 @@ export function ListView({ wslug, pslug }: Props) {
   }, [clauses, sort]);
   const { data: page, isLoading, error } = useDocuments(wslug, pslug, listParams);
   const { data: statuses } = useStatuses(wslug, pslug);
-  const { data: fields } = useFields(wslug, pslug);
+  const { data: fields } = useFields(wslug, pslug, 'work-items');
   const update = useUpdateDocument(wslug, pslug, listParams);
   const create = useCreateDocument(wslug, pslug);
   const [pendingSlugs, setPendingSlugs] = useState<Set<string>>(new Set());

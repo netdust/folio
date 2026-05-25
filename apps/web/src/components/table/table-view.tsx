@@ -13,7 +13,12 @@ import {
   type FilterClauseUrl,
 } from '../../lib/api/documents.ts';
 import { useStatuses } from '../../lib/api/statuses.ts';
-import { useFields } from '../../lib/api/fields.ts';
+import {
+  useFields,
+  useCreateField,
+  useUpdateField,
+  useDeleteField,
+} from '../../lib/api/fields.ts';
 import { useViews, useUpdateView } from '../../lib/api/views.ts';
 import { formatApiError } from '../../lib/api/index.ts';
 import { Icon } from '../ui/icon.tsx';
@@ -24,6 +29,10 @@ import { TableHeader, type SortState } from './table-header.tsx';
 import { ColumnPicker } from './column-picker.tsx';
 import { TableRow } from './table-row.tsx';
 import { TableAddRow } from './table-add-row.tsx';
+import { TableAddColumn, type AddColumnPayload } from './table-add-column.tsx';
+import { ColumnMenu } from './column-menu.tsx';
+import { columnSuggestions } from './column-suggestions.ts';
+import type { FieldType } from '../../lib/api/fields.ts';
 import {
   mergeColumns,
   applyColumnOrder,
@@ -34,6 +43,7 @@ import {
 interface Props {
   wslug: string;
   pslug: string;
+  tslug: string;
 }
 
 /**
@@ -51,7 +61,7 @@ export function sameSearchValue(a: unknown, b: unknown): boolean {
   return false;
 }
 
-export function TableView({ wslug, pslug }: Props) {
+export function TableView({ wslug, pslug, tslug }: Props) {
   const navigate = useNavigate();
   const search = useSearch({ strict: false }) as Record<string, unknown>;
   const clauses = useMemo(() => parseFilters(search), [search]);
@@ -70,12 +80,16 @@ export function TableView({ wslug, pslug }: Props) {
 
   const { data: page, isLoading, error } = useDocuments(wslug, pslug, listParams);
   const { data: statuses } = useStatuses(wslug, pslug);
-  const { data: fields } = useFields(wslug, pslug);
+  const { data: fields } = useFields(wslug, pslug, tslug);
   const { data: viewsData } = useViews(wslug, pslug);
   const update = useUpdateDocument(wslug, pslug, listParams);
   const create = useCreateDocument(wslug, pslug);
   const updateView = useUpdateView(wslug, pslug);
+  const createField = useCreateField(wslug, pslug, tslug);
+  const updateField = useUpdateField(wslug, pslug, tslug);
+  const deleteField = useDeleteField(wslug, pslug, tslug);
   const [pendingSlugs, setPendingSlugs] = useState<Set<string>>(new Set());
+  const [renamingKey, setRenamingKey] = useState<string | null>(null);
 
   const urlViewId = typeof search.view === 'string' ? search.view : undefined;
 
@@ -275,9 +289,104 @@ export function TableView({ wslug, pslug }: Props) {
     }
   };
 
+  const onAddColumn = useCallback(
+    async (payload: AddColumnPayload) => {
+      const created = await createField.mutateAsync(payload);
+      if (activeView) {
+        const nextVisible = [
+          ...(activeView.visibleFields ?? effectiveVisibleKeys(allColumns, activeView)),
+          created.key,
+        ];
+        try {
+          await updateView.mutateAsync({ id: activeView.id, patch: { visibleFields: nextVisible } });
+        } catch (err) {
+          toast.error(formatApiError(err));
+        }
+      }
+    },
+    [createField, activeView, allColumns, updateView],
+  );
+
+  // Pin handler for the ColumnPicker's "Suggested from your data" rows. We
+  // reuse `onAddColumn` so the POST + visible-fields update path is identical
+  // to the manual `+ Add column` flow. Suggestions never carry options
+  // (select/currency can't be inferred from a single sample), so the
+  // AddColumnPayload's `options` field is naturally omitted.
+  const onPinSuggestion = useCallback(
+    async (payload: { key: string; type: FieldType; label: string }) => {
+      await onAddColumn(payload);
+    },
+    [onAddColumn],
+  );
+
   const filteredDocs = useMemo(
     () => applyFrontmatterClauses(page?.data ?? [], clauses),
     [page, clauses],
+  );
+
+  const docs = useMemo(() => page?.data ?? [], [page]);
+
+  const suggestions = useMemo(
+    () => columnSuggestions(docs, fields ?? []),
+    [docs, fields],
+  );
+
+  // Build the per-column menu. Builtins (title/status/updated_at) intentionally
+  // skip the menu — they're not deletable. For pinned fields we surface the
+  // affected-doc count so the delete confirmation can warn the user.
+  const renderColumnMenu = useCallback(
+    (column: Column) => {
+      if (column.source !== 'field') return null;
+      const field = (fields ?? []).find((f) => f.key === column.key);
+      if (!field) return null;
+      const affected = docs.filter(
+        (d) => d.frontmatter && (d.frontmatter as Record<string, unknown>)[column.key] != null,
+      ).length;
+      return (
+        <ColumnMenu
+          columnKey={column.key}
+          columnLabel={column.label}
+          affectedDocCount={affected}
+          onRename={() => setRenamingKey(column.key)}
+          onHide={() => {
+            if (!activeView) return;
+            const nextVisible = visibleKeys.filter((k) => k !== column.key);
+            updateView.mutate(
+              { id: activeView.id, patch: { visibleFields: nextVisible } },
+              { onError: (err) => toast.error(formatApiError(err)) },
+            );
+          }}
+          onDelete={async () => {
+            try {
+              await deleteField.mutateAsync(field.id);
+            } catch (err) {
+              toast.error(formatApiError(err));
+              throw err;
+            }
+          }}
+        />
+      );
+    },
+    [fields, docs, deleteField, activeView, visibleKeys, updateView],
+  );
+
+  // Commit handler for the inline-rename. Looks up the field by key inside the
+  // callback (rather than capturing `field` per-render) so we always see the
+  // freshest `fields` list. Empty / unchanged inputs are no-ops and just clear
+  // the renaming state.
+  const onRenameCommit = useCallback(
+    (key: string, next: string) => {
+      setRenamingKey(null);
+      const trimmed = next.trim();
+      const field = (fields ?? []).find((f) => f.key === key);
+      if (!field) return;
+      if (!trimmed || trimmed === field.label) return;
+      updateField.mutate(
+        { id: field.id, patch: { label: trimmed } },
+        { onError: (err) => toast.error(formatApiError(err)) },
+      );
+    },
+    [fields, updateField],
   );
 
   return (
@@ -293,6 +402,8 @@ export function TableView({ wslug, pslug }: Props) {
           columns={allColumns}
           visibleKeys={visibleKeys}
           onChange={onVisibilityChange}
+          suggestions={suggestions}
+          onPinSuggestion={onPinSuggestion}
         />
       </div>
       <div
@@ -309,6 +420,10 @@ export function TableView({ wslug, pslug }: Props) {
             sort={sort}
             onSort={onSortChange}
             onReorder={onReorder}
+            trailing={<TableAddColumn onSubmit={onAddColumn} />}
+            renderColumnMenu={renderColumnMenu}
+            renamingKey={renamingKey}
+            onRenameCommit={onRenameCommit}
           />
           {isLoading ? <ListSkeleton rows={6} /> : null}
           {error ? <div className="p-4 text-danger">Failed to load documents.</div> : null}

@@ -434,14 +434,20 @@ This must land BEFORE Phase 2 (Agents). Agents will write new frontmatter keys; 
 
 ### Phase 1.9 acceptance
 
-- [ ] `+ Add column` at end of header row creates a field, adds it to the visible set, and the new column renders with the right cell editor type immediately
-- [ ] Column header `⋯` menu rename, hide, and delete all work; delete confirms with doc count
-- [ ] ColumnPicker shows "Suggested columns" for any frontmatter key in existing docs that isn't a pinned field; clicking `+ Pin` creates and reveals the column
-- [ ] `useFields` now table-scoped — switching tables shows only that table's pinned fields
-- [ ] Type change to a compatible type works without warnings; incompatible change shows the migration warning UI
-- [ ] Web unit suite covers: `TableAddColumn` form validation + submit, `⋯` menu rename + delete confirm, ColumnPicker suggestion list extraction logic
-- [ ] Playwright covers: full add-column → see new cell in row → rename column → delete column flow
-- [ ] Commit: `phase-1.9: complete`
+- [x] `+ Add column` at end of header row creates a field, adds it to the visible set, and the new column renders with the right cell editor type immediately
+- [x] Column header `⋯` menu rename, hide, and delete all work; delete confirms with doc count (rename uses `InlineEdit`, not `window.prompt`)
+- [x] ColumnPicker shows "Suggested columns" for any frontmatter key in existing docs that isn't a pinned field; clicking `+ Pin` creates and reveals the column
+- [x] `useFields` now table-scoped — switching tables shows only that table's pinned fields
+- [ ] Type change to a compatible type works without warnings; incompatible change shows the migration warning UI — **deferred to Phase 1.9.1**
+- [x] Web unit suite covers: `useFields` mutations, `TableAddColumn` form validation + submit, `⋯` menu rename + delete confirm, ColumnPicker suggestion list, `columnSuggestions` helper
+- [ ] Playwright covers: full add-column → see new cell in row → rename column → delete column flow — **deferred; manual smoke is the acceptance gate for this branch**
+- [x] Commit: `phase-1.9: complete`
+
+### Phase 1.9.1 — deferred follow-ups
+
+- Type-change in `⋯` menu (compatible matrix + value-remap migration UI for incompatible types)
+- Optional Playwright e2e journey for the full add → rename → delete flow
+- Latent bug noted: `useUpdateView` in `apps/web/src/lib/api/views.ts:75-77` has the same envelope-unwrap pattern Task 3 fixed in `useUpdateField`. Silent today (no caller reads the resolved fields) but worth a parity fix.
 
 ---
 
