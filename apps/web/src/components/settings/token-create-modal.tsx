@@ -18,9 +18,40 @@ const ALL_SCOPES = [
   'fields:write',
   'views:write',
   'tables:write',
+  'statuses:write',
 ] as const;
 
 type Scope = (typeof ALL_SCOPES)[number];
+
+// Presets mirror the conceptual groups used by agent-schema's toolsToScopes
+// (read tools → documents:read; write tools → write + read; delete → +read).
+// Full access also adds the destructive admin ops (delete + tables:write,
+// which cascade-deletes documents).
+const PRESETS: { label: string; scopes: Scope[] }[] = [
+  { label: 'Read-only', scopes: ['documents:read'] },
+  {
+    label: 'Read + write',
+    scopes: [
+      'documents:read',
+      'documents:write',
+      'fields:write',
+      'views:write',
+      'statuses:write',
+    ],
+  },
+  {
+    label: 'Full access',
+    scopes: [
+      'documents:read',
+      'documents:write',
+      'documents:delete',
+      'fields:write',
+      'views:write',
+      'statuses:write',
+      'tables:write',
+    ],
+  },
+];
 
 interface Props {
   wslug: string;
@@ -96,7 +127,19 @@ export function TokenCreateModal({ wslug, workspaceId, open, onOpenChange }: Pro
 
               <fieldset>
                 <legend className="text-xs font-medium text-fg-2">Scopes</legend>
-                <div className="mt-1 grid grid-cols-2 gap-x-3 gap-y-1.5">
+                <div className="mt-1 mb-2 flex flex-wrap gap-1.5">
+                  {PRESETS.map((preset) => (
+                    <button
+                      key={preset.label}
+                      type="button"
+                      onClick={() => setScopes(new Set(preset.scopes))}
+                      className="rounded-sm bg-card px-2 py-0.5 text-[11px] text-fg-2 hover:bg-shell hover:text-fg"
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
+                <div className="grid grid-cols-2 gap-x-3 gap-y-1.5">
                   {ALL_SCOPES.map((scope) => (
                     <label key={scope} className="flex items-center gap-2 text-sm">
                       <input

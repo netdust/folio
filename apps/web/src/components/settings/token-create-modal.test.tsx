@@ -22,6 +22,7 @@ const SCOPES = [
   'fields:write',
   'views:write',
   'tables:write',
+  'statuses:write',
 ] as const;
 
 describe('TokenCreateModal', () => {
@@ -49,6 +50,47 @@ describe('TokenCreateModal', () => {
     expect(button).toBeDisabled(); // no scope yet
     await user.click(screen.getByLabelText('documents:read'));
     expect(button).not.toBeDisabled();
+  });
+
+  it('exposes Read-only / Read + write / Full access preset buttons', () => {
+    const qc = new QueryClient();
+    render(
+      <TokenCreateModal wslug="acme" workspaceId="ws-1" open onOpenChange={() => {}} />,
+      { wrapper: wrap(qc) },
+    );
+    expect(screen.getByRole('button', { name: /read-only/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /read \+ write/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /full access/i })).toBeInTheDocument();
+  });
+
+  it('clicking "Read + write" checks the right subset (no delete, no tables:write)', async () => {
+    const qc = new QueryClient();
+    const user = userEvent.setup();
+    render(
+      <TokenCreateModal wslug="acme" workspaceId="ws-1" open onOpenChange={() => {}} />,
+      { wrapper: wrap(qc) },
+    );
+    await user.click(screen.getByRole('button', { name: /read \+ write/i }));
+    expect((screen.getByLabelText('documents:read') as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByLabelText('documents:write') as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByLabelText('fields:write') as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByLabelText('views:write') as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByLabelText('statuses:write') as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByLabelText('documents:delete') as HTMLInputElement).checked).toBe(false);
+    expect((screen.getByLabelText('tables:write') as HTMLInputElement).checked).toBe(false);
+  });
+
+  it('clicking "Full access" checks every scope', async () => {
+    const qc = new QueryClient();
+    const user = userEvent.setup();
+    render(
+      <TokenCreateModal wslug="acme" workspaceId="ws-1" open onOpenChange={() => {}} />,
+      { wrapper: wrap(qc) },
+    );
+    await user.click(screen.getByRole('button', { name: /full access/i }));
+    for (const scope of SCOPES) {
+      expect((screen.getByLabelText(scope) as HTMLInputElement).checked).toBe(true);
+    }
   });
 
   it('on submit, calls POST and reveals the plaintext token with a copy button', async () => {
