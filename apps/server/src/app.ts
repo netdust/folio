@@ -14,6 +14,7 @@ import {
 } from './middleware/scope.ts';
 import { auth } from './routes/auth.ts';
 import { documentsRoute } from './routes/documents.ts';
+import { eventsRoute } from './routes/events.ts';
 import { fieldsRoute } from './routes/fields.ts';
 import { healthRoute } from './routes/health.ts';
 import { projectItemRoute, projectsRoute } from './routes/projects.ts';
@@ -42,6 +43,7 @@ const wScope = new Hono<AuthContext & ScopeContext>();
 wScope.use('*', attachToken, requireUserOrToken, resolveWorkspace);
 wScope.route('/settings', settingsRoute);
 wScope.route('/tokens', tokensRoute);
+wScope.route('/events', eventsRoute);
 wScope.route('/projects', projectsRoute);
 
 const pScope = new Hono<AuthContext & ScopeContext>();
