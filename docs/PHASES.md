@@ -380,6 +380,71 @@ Deferred. Convention is solid but use isn't proven yet; ship after Phase 1.8 das
 
 ---
 
+## Phase 1.9 — Field management UI (Half-week)
+
+**Goal:** Close the last missing surface in the spreadsheet feature: managing columns inline. Today, pinned fields can only be created via the API or the demo seed; renaming, type changes, reordering, and deletion all require API calls. Phase 1.9 makes the table itself the management surface — `⋯` on a column header, `+ Add column` at the end, and a "Suggested columns" section in the column picker that surfaces unpinned frontmatter keys found in existing docs.
+
+This must land BEFORE Phase 2 (Agents). Agents will write new frontmatter keys; users need a frictionless way to promote those keys to columns without editing JSON.
+
+### Why the priority
+
+- The `fields` table + REST endpoints (GET/POST/PATCH/DELETE on `/api/v1/w/:ws/p/:p/t/:t/fields`) shipped in Phase 1.5. The UI surface didn't.
+- Spreadsheet feels complete to a user only when they can shape it. Today, hidden/visible + reorder works (per-view); add/rename/type-change/delete does not.
+- Agents are about to start creating frontmatter keys (Phase 2-3). Without a column-pin surface, users will see `frontmatter.foo_bar = "value"` in the raw editor and have no way to make it a first-class column.
+
+### `useFields` rescoped to the active table
+
+- [ ] `useFields(wslug, pslug, tslug)` — current hook hits `/p/:pslug/fields` (project-scoped, returns all fields across all tables); switch to `/p/:pslug/t/:tslug/fields` so the field set is the active table's only
+- [ ] Audit existing callers: `TableView`, `DocumentSlideover`, `FrontmatterForm`, anywhere else that reads `useFields` — pass the active `tslug` from the route
+- [ ] Server route already exists at the table-scoped path (Phase 1.5a); just point the hook at it
+- [ ] Update test fixtures + Vitest mocks for the new query key shape
+
+### `+ Add column` at the end of the table header row
+
+- [ ] New `TableAddColumn` component renders after the last header cell (mirrors `TableAddRow`'s placement at the bottom of the data rows)
+- [ ] Trigger: `+` icon button at right end of header row. Click opens an inline popover anchored to the button
+- [ ] Popover form: `Key` (lowercase + underscore validation matching `^[a-z][a-z0-9_]*$`), `Label` (display name, defaults to titleized key), `Type` (dropdown of `FIELD_TYPES`)
+- [ ] Conditional options field: select/multi_select shows comma-separated options input; currency shows a single ISO-4217 code input with a default of `EUR`
+- [ ] On commit: `POST /fields` → on success, refetch fields + auto-add the new key to the active view's `visibleFields`
+- [ ] Form validation matches server's `validateOptions` so users see errors before the request fires
+- [ ] Cancel: Escape or click-outside closes without persisting
+
+### Column header `⋯` menu
+
+- [ ] Each non-builtin column header gets a hover-revealed `⋯` button (same affordance pattern as rail rows: opacity-0 → group-hover/header:opacity-100)
+- [ ] Menu items:
+  - **Rename** → inline edit on the label (reuse `InlineEdit`)
+  - **Change type** → opens the same form used by `+ Add column`, pre-filled; PATCH on commit. Disabled (with tooltip) if the type change is destructive (e.g. `select` → `number` when docs have non-numeric values); see Type migration below
+  - **Hide column** → removes from active view's `visibleFields` (already works via column picker; this is a shortcut)
+  - **Delete column** → confirm dialog (reuse `ui/dialog.tsx` pattern from slideover delete) listing how many docs have a non-null value for this key; on confirm DELETE + toast
+- [ ] Built-in columns (`title`, `status`, `updated_at`) get NO `⋯` menu — they're not in the `fields` table
+
+### "Suggested columns" in the column picker
+
+- [ ] ColumnPicker scans `documents.frontmatter` for keys not in `fields`. Builds the suggestion list from `useDocuments(...)`'s `data.data[].frontmatter` Object.keys (dedupe).
+- [ ] Renders below the existing visible/hidden checkbox list under a `SUGGESTED FROM YOUR DATA` divider
+- [ ] Each suggestion shows: `key` · sample value preview (first non-null) · inferred type (use existing `inferType` helper from FrontmatterForm)
+- [ ] `+ Pin` button on each row → opens the same add-column form pre-filled with key + inferred type, user confirms or edits, POST creates the field row and the suggestion disappears
+
+### Type migration (the hairy part)
+
+- [ ] PATCH `type` is allowed for COMPATIBLE changes only. Define compatibility matrix server-side: `string ↔ text`, `string → url`, `number → currency` (with default `EUR`), anything → `text` (always safe). Cross-family changes (`number → select`, `boolean → date`) return 422 with a clear message.
+- [ ] No automatic value coercion — incompatible values stay as-is in frontmatter; the UI just renders the new type's input. Edge: a `select` field with options `[low, medium, high]` keeps "high" in storage even after switching to a select with options `[red, green, blue]`. UI surfaces this as a warning ("3 documents have values not in the new options") with a "Migrate values" link → table-row preview where the user clears or remaps each.
+- [ ] For incompatible changes the UI offers: "Delete column and recreate" with explicit confirmation, or "Keep as-is and create a new column with the new type".
+
+### Phase 1.9 acceptance
+
+- [ ] `+ Add column` at end of header row creates a field, adds it to the visible set, and the new column renders with the right cell editor type immediately
+- [ ] Column header `⋯` menu rename, hide, and delete all work; delete confirms with doc count
+- [ ] ColumnPicker shows "Suggested columns" for any frontmatter key in existing docs that isn't a pinned field; clicking `+ Pin` creates and reveals the column
+- [ ] `useFields` now table-scoped — switching tables shows only that table's pinned fields
+- [ ] Type change to a compatible type works without warnings; incompatible change shows the migration warning UI
+- [ ] Web unit suite covers: `TableAddColumn` form validation + submit, `⋯` menu rename + delete confirm, ColumnPicker suggestion list extraction logic
+- [ ] Playwright covers: full add-column → see new cell in row → rename column → delete column flow
+- [ ] Commit: `phase-1.9: complete`
+
+---
+
 ## Phase 2 — Agents (Week 4)
 
 **Goal:** Folio is usable by AI agents. REST + MCP both work. Tokens have scoped permissions. Every write emits an event on SSE. Documentation lets a new agent integrate in 15 minutes.
