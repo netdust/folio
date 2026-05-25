@@ -320,6 +320,9 @@ function WorkspaceLayout() {
                   email={me?.user.email}
                   onSignOut={onSignOut}
                   onCreateWorkspace={onCreateWorkspace}
+                  onOpenSettings={() =>
+                    void navigate({ to: '/w/$wslug/settings', params: { wslug } })
+                  }
                 />
               ),
             }}
