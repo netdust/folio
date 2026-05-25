@@ -15,7 +15,7 @@ Phase numbering aligned with `docs/PHASES.md` (canonical) as of 2026-05-24 reorg
 - **Phase 1.6.1 (Rail completeness):** shipped 2026-05-24, absorbed into `phase-1.6/saved-views` branch. NocoDB-style hover-reveal `+`/`⋯` affordances on every rail row (workspace, project, table, view), double-click rename, confirm-delete dialog. `+ New project` in workspace switcher popover. Wiki as a rail leaf under each project. Per `[[rail-ux-pattern]]` auto-memory.
 - **Phase 1.7 (Lightweight CRM polish):** shipped on `phase-1.7/crm-polish` 2026-05-24. 3 of 4 sections shipped (Playbook linking deferred): `last_touched_at` column + Log Activity endpoint + ?stale_for=Nd filter, Activity panel in slideover, color-coded `next_action_due`. 116 server / 173 web / 28 shared. Awaiting manual QA + merge.
 - **Phase 1.8 (Time-aware views):** queued — timeline view + This Week dashboard.
-- **Phase 1.9 (Field management UI):** queued (added 2026-05-25) — inline `+ Add column`, column header `⋯` menu (rename/change-type/delete), "Suggested columns" in picker from orphan frontmatter keys, `useFields` rescoped to active table. Must land before Phase 2 — agents will create frontmatter keys and users need a column-pin surface.
+- **Phase 1.9 (Field management UI):** shipped 2026-05-25 on `phase-1.9/field-management-ui` (10 commits, tip `bed090d`). Inline `+ Add column`, column header `⋯` menu (Rename via InlineEdit + Hide + Delete with confirm dialog), "Suggested columns" in picker (deduped + type-inferred), `useFields` table-scoped. **Type-change deferred to Phase 1.9.1.** Web suite 245 / 1-skip, server 123 / 123, shared 28 / 28, TS clean. PR pending.
 - **Phase 2 (Agents):** queued — spine of v1. Tokens, SSE, MCP server, agents-as-documents, triggers-as-documents (surface only).
 - **Phase 3 (AI in UI + Agent runner):** queued — second spine. Slash commands, provider abstraction, agent runner, trigger scheduler/matcher.
 - **Phase 4 (Inbound webhooks):** queued — plan ready at `docs/superpowers/plans/2026-05-24-phase-4-inbound-webhooks.md`. 7 tasks.
@@ -26,9 +26,26 @@ Phase numbering aligned with `docs/PHASES.md` (canonical) as of 2026-05-24 reorg
 
 ## Current branch
 
-`phase-1.7/crm-polish` — 6 phase commits + 6 auto-memory commits ahead of main (`cfe4ed6`). NOT merged; Stefan is doing a manual QA pass on 1.6 + 1.7 + the post-1.7 fixes before deciding what to merge / revert.
+`phase-1.9/field-management-ui` — 10 phase commits ahead of main (`7b49fdb`). Awaiting Stefan's manual QA + PR open.
 
-Tests on branch tip: 116 server (was 113, +3 activity endpoint tests) / 173 web (+4 due-urgency) / 28 shared. All green. TS clean.
+Tests on branch tip: 123 server / 245 web (+1 skipped) / 28 shared. All green. TS clean (`apps/web` only — pre-existing server / shared TS errors out of scope).
+
+### Phase 1.9 commit list (newest first)
+
+- `bed090d` phase-1.9: clarify delete-column copy is page-scoped
+- `47f2263` phase-1.9: polish add-column Create button disabled state
+- `9c86918` phase-1.9: Suggested columns section in ColumnPicker
+- `9961ae2` phase-1.9: columnSuggestions helper
+- `0e336fe` phase-1.9: column header ⋯ menu (rename / hide / delete)
+- `cfed068` phase-1.9: mount TableAddColumn at the right end of the header
+- `bd5e96e` phase-1.9: add TableAddColumn popover form
+- `85d42d0` phase-1.9: add useCreateField/useUpdateField/useDeleteField
+- `99f0c30` phase-1.9: thread tslug through TableView and its callers
+- `b9acb0a` phase-1.9: rescope useFields query key to (wslug, pslug, tslug)
+
+### Latent bug surfaced
+
+`useUpdateView` in `apps/web/src/lib/api/views.ts:75-77` has the same envelope-unwrap pattern Task 3 fixed in `useUpdateField`. Server returns `{ data: { view: row } }`; the hook is typed `View` but resolves with `{ view: View }` at runtime. Silent today because callers don't read return-value fields. **Fix in Phase 1.9.1 or alongside next views.ts change.**
 
 ### 2026-05-25 UX cleanup batch (5 items, all green)
 
@@ -84,6 +101,9 @@ I attempted an `absolute right-0` overlay approach in a non-committed edit and r
 - Theme toggle, rail collapse persistence in localStorage.
 - Rail user menu: avatar/name → popover with `+ Create workspace` + `Sign out`.
 - Workspace switcher: workspace tile → popover with full workspace list + `+ Create workspace`. Creating a workspace from inside another no longer dead-ends.
+- Inline `+ Add column` at the right end of the spreadsheet header — popover form (key + label + type + per-type options).
+- Column header `⋯` menu (hover-reveal on non-builtin columns): Rename (InlineEdit on the label), Hide column, Delete column (confirm dialog with affected-doc count).
+- "Suggested columns" section in the column picker — surfaces orphan frontmatter keys with inferred type; one-click `+ Pin`.
 
 ## What's not built yet
 
