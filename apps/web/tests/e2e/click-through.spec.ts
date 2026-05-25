@@ -275,6 +275,40 @@ test('filter: status chip actually narrows the list (regression)', async ({ page
   await expect(page.getByText('A backlog doc')).toHaveCount(0);
 });
 
+test('table: sticky first column has a 1px right border in header AND data rows (regression)', async ({ page }) => {
+  // Bug found in shake-out of phase-1.7/crm-polish (2026-05-25): the data row's
+  // sticky cell (a <div>) rendered the `border-r border-border-light` utility as
+  // 1px, but the header's sticky cell (a <button>) rendered 0px. Root cause:
+  // a global `button { border: 0 }` reset in globals.css set border-style: none,
+  // which makes Tailwind's `.border-r { border-right-width: 1px }` invisible
+  // because computed border-right-width collapses to 0 when style is none.
+  await signUpThroughUI(page, 'Border User');
+  await page.getByRole('button', { name: 'Create workspace', exact: true }).click();
+  await createWorkspaceViaSheet(page, `Border WS ${Date.now()}`);
+  await createProjectViaSheet(page, `Border Proj ${Date.now()}`);
+  const url = page.url();
+  const match = url.match(/\/w\/([^/]+)\/p\/([^/]+)\/work-items/);
+  expect(match, `expected to land on work-items URL, got ${url}`).not.toBeNull();
+  const [, wslug, pslug] = match!;
+  await page.request.post(`/api/v1/w/${wslug}/p/${pslug}/documents`, {
+    data: { type: 'work_item', title: 'Border probe', frontmatter: { status: 'todo' } },
+  });
+  await page.reload();
+  await expect(page.getByText('Border probe')).toBeVisible();
+
+  const headerBorder = await page
+    .locator('[data-testid="table-scroll"] button.sticky')
+    .first()
+    .evaluate((el) => getComputedStyle(el).borderRightWidth);
+  expect(headerBorder, 'sticky header cell must have a 1px right border').toBe('1px');
+
+  const rowBorder = await page
+    .locator('[role="list"] [role="listitem"] .sticky')
+    .first()
+    .evaluate((el) => getComputedStyle(el).borderRightWidth);
+  expect(rowBorder, 'sticky data cell must have a 1px right border').toBe('1px');
+});
+
 test('wiki: new page + title edit shows in tree without a reload (regression)', async ({ page }) => {
   await signUpThroughUI(page, 'Wiki User');
   await page.getByRole('button', { name: 'Create workspace', exact: true }).click();

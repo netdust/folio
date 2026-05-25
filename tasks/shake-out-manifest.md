@@ -38,11 +38,13 @@ The Playwright suite has 1-4 intermittent failures per run depending on test ord
 
 ### MINOR
 
-- [x] **Bug #3 — Two a11y warnings about missing `Description` / `aria-describedby` on `DialogContent`.**
-  - Repro: open a doc slideover → check the browser console.
-  - Expected: zero a11y warnings.
-  - Severity: **MINOR** — cosmetic console noise, not blocking. Pre-existing or introduced by this batch unclear.
-  - Resolution: ☐ pending (likely defer)
+- [x] **Bug #3 — Two a11y warnings about missing `Description` / `aria-describedby` on `DialogContent`.** ✅ FIXED
+  - Repro: open a doc slideover → check the browser console. Two `Warning: Missing Description or aria-describedby={undefined} for {DialogContent}.` warnings fire at the same millisecond (React StrictMode double-mount).
+  - Root cause: `SheetContent` (sheet.tsx) wraps `DialogPrimitive.Content` without ever passing `aria-describedby`. Radix requires either a rendered `Description` child OR an explicit `aria-describedby={undefined}` opt-out. None of the project's Sheets (slideover, workspace-create, project-create, table-create, new-view-sheet) have a Description — the `SheetTitle` alone identifies them — so every Sheet open in the app fires this warning.
+  - Fix: added `aria-describedby={undefined}` prop on the `DialogPrimitive.Content` inside `SheetContent` (sheet.tsx). One-line opt-out. Acknowledges "Title is sufficient identification" pattern.
+  - The Delete-confirm `DialogContent` does NOT need this — it renders a `DialogDescription` child which Radix auto-links.
+  - Verification: re-opened the slideover with `enable_console_logging` after Vite HMR'd the change. Console messages buffer is empty → zero warnings fired during slideover open + ⋯ → Delete menuitem → confirm Dialog. Also confirmed Delete-confirm Dialog doesn't fire warnings either (its rendered Description satisfies Radix).
+  - Resolution: ✅ shipped
 
 ## Confirmed working (no bugs found in sweep)
 

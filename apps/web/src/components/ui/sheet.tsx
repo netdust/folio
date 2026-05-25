@@ -23,6 +23,7 @@ export function SheetContent({ children, className, width = 800 }: SheetContentP
         )}
       />
       <DialogPrimitive.Content
+        aria-describedby={undefined}
         style={{ width: `min(${width}px, 100vw)` }}
         className={cn(
           'fixed right-0 top-0 z-50 h-screen bg-content shadow-popover',
