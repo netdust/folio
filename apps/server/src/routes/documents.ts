@@ -9,11 +9,12 @@ import {
   FilterCompileError,
 } from '@folio/shared';
 import { db } from '../db/client.ts';
-import { documents, events, statuses } from '../db/schema.ts';
+import { apiTokens, documents, events, statuses } from '../db/schema.ts';
 import { jsonOk, HTTPError } from '../lib/http.ts';
 import { emitEvent } from '../lib/events.ts';
-import { agentFrontmatterSchema } from '../lib/agent-schema.ts';
+import { agentFrontmatterSchema, toolsToScopes } from '../lib/agent-schema.ts';
 import { triggerFrontmatterSchema } from '../lib/trigger-schema.ts';
+import { newApiToken } from '../lib/auth.ts';
 import { parseMarkdown, serializeMarkdown } from '../lib/frontmatter.ts';
 import { compileFilterToWhere } from '../lib/filter-to-drizzle.ts';
 import { slugUniqueInDocuments } from '../lib/slug-unique.ts';
@@ -155,6 +156,20 @@ documentsRoute.post('/', requireScope('documents:write'), async (c) => {
   const baseSlug = slugify(input.title) || 'doc';
   const slug = await slugUniqueInDocuments(db, p.id, baseSlug);
 
+  // For agents: mint a bearer token now so its id can be patched into the
+  // frontmatter BEFORE the document insert. The plaintext is returned ONCE
+  // in the response; only the hash hits the apiTokens row.
+  let agentTokenPlaintext: string | undefined;
+  let agentTokenHash: string | undefined;
+  let agentApiTokenId: string | undefined;
+  if (input.type === 'agent') {
+    const { token, hash } = newApiToken();
+    agentTokenPlaintext = token;
+    agentTokenHash = hash;
+    agentApiTokenId = nanoid();
+    input.frontmatter = { ...input.frontmatter, api_token_id: agentApiTokenId };
+  }
+
   const row = {
     id,
     projectId: p.id,
@@ -172,13 +187,32 @@ documentsRoute.post('/', requireScope('documents:write'), async (c) => {
 
   await db.transaction(async (tx) => {
     await tx.insert(documents).values(row);
+    if (input.type === 'agent' && agentApiTokenId && agentTokenHash) {
+      const tools = (input.frontmatter as { tools: string[] }).tools;
+      await tx.insert(apiTokens).values({
+        id: agentApiTokenId,
+        workspaceId: ws.id,
+        name: `agent:${slug}`,
+        tokenHash: agentTokenHash,
+        scopes: toolsToScopes(tools),
+        createdBy: user.id,
+      });
+      await emitEvent(tx, {
+        workspaceId: ws.id, projectId: p.id, documentId: id,
+        kind: 'agent.created', actor: user.id,
+        payload: { slug, api_token_id: agentApiTokenId },
+      });
+    }
     await emitEvent(tx, {
       workspaceId: ws.id, projectId: p.id, documentId: id, kind: 'document.created', actor: user.id,
       payload: { slug, type: input.type },
     });
   });
 
-  return jsonOk(c, row, 201);
+  const responseData = agentTokenPlaintext
+    ? { ...row, agent_token: agentTokenPlaintext }
+    : row;
+  return jsonOk(c, responseData, 201);
 });
 
 function encodeCursor(updatedAt: number, id: string): string {
@@ -482,6 +516,17 @@ documentsRoute.delete('/:slug', requireScope('documents:delete'), async (c) => {
   if (!existing) throw new HTTPError('DOCUMENT_NOT_FOUND', `document "${slug}" not found`, 404);
   await db.transaction(async (tx) => {
     await tx.delete(documents).where(eq(documents.id, existing.id));
+    if (existing.type === 'agent') {
+      const apiTokenId = (existing.frontmatter as Record<string, unknown>)['api_token_id'];
+      if (typeof apiTokenId === 'string') {
+        await tx.delete(apiTokens).where(eq(apiTokens.id, apiTokenId));
+      }
+      await emitEvent(tx, {
+        workspaceId: ws.id, projectId: p.id, documentId: existing.id,
+        kind: 'agent.deleted', actor: user.id,
+        payload: { slug: existing.slug },
+      });
+    }
     await emitEvent(tx, {
       workspaceId: ws.id, projectId: p.id, documentId: existing.id,
       kind: 'document.deleted', actor: user.id,

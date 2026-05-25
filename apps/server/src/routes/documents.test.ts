@@ -658,3 +658,73 @@ test('POST agent on a table-scoped URL is rejected', async () => {
   });
   expect(res.status).toBe(422);
 });
+
+test('agent create auto-mints an API token with toolsToScopes scopes', async () => {
+  const { app, seed } = await makeTestApp();
+  const res = await app.request('/api/v1/w/acme/p/web/documents', {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      type: 'agent', title: 'Bot',
+      frontmatter: {
+        system_prompt: 'x', model: 'x', provider: 'anthropic',
+        tools: ['create_document', 'list_documents'],
+      },
+    }),
+  });
+  expect(res.status).toBe(201);
+  const body = await res.json();
+  expect(body.data.frontmatter.api_token_id).toBeTruthy();
+  // The plaintext token is returned ONCE alongside the document.
+  expect(body.data.agent_token).toMatch(/^folio_pat_/);
+});
+
+test('agent delete revokes the linked token', async () => {
+  const { app, seed } = await makeTestApp();
+  const create = await app.request('/api/v1/w/acme/p/web/documents', {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      type: 'agent', title: 'Bot',
+      frontmatter: { system_prompt: 'x', model: 'x', provider: 'anthropic', tools: ['list_documents'] },
+    }),
+  });
+  const { data: { slug, agent_token } } = await create.json();
+
+  // Confirm the token works.
+  const tokenWorks = await app.request('/api/v1/w/acme/p/web/documents', {
+    headers: { Authorization: `Bearer ${agent_token}` },
+  });
+  expect(tokenWorks.status).toBe(200);
+
+  // Delete the agent.
+  const del = await app.request(`/api/v1/w/acme/p/web/documents/${slug}`, {
+    method: 'DELETE',
+    headers: { Cookie: seed.sessionCookie },
+  });
+  expect(del.status).toBe(204);
+
+  // Token should be revoked.
+  const tokenBlocked = await app.request('/api/v1/w/acme/p/web/documents', {
+    headers: { Authorization: `Bearer ${agent_token}` },
+  });
+  expect(tokenBlocked.status).toBe(401);
+});
+
+test('agent.created event emitted on agent create', async () => {
+  const { app, seed } = await makeTestApp();
+  await app.request('/api/v1/w/acme/p/web/documents', {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      type: 'agent', title: 'Bot',
+      frontmatter: { system_prompt: 'x', model: 'x', provider: 'anthropic', tools: [] },
+    }),
+  });
+  // Verify the events table has the row.
+  const { db } = await import('../db/client.ts');
+  const { events } = await import('../db/schema.ts');
+  const { eq } = await import('drizzle-orm');
+  const rows = await db.query.events.findMany({ where: eq(events.kind, 'agent.created') });
+  expect(rows.length).toBeGreaterThan(0);
+});

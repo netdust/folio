@@ -11,7 +11,8 @@ export type EventKind =
   | 'table.created'    | 'table.updated'    | 'table.deleted'
   | 'project.created'  | 'project.updated'  | 'project.deleted'
   | 'workspace.created' | 'workspace.updated'
-  | 'activity.logged';
+  | 'activity.logged'
+  | 'agent.created'    | 'agent.deleted'   | 'agent.task.assigned';
 
 export interface EmitArgs {
   workspaceId: string;
