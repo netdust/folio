@@ -110,7 +110,11 @@ export function DocumentSlideover({ wslug, pslug }: Props) {
             ) : error ? (
               'Failed to load'
             ) : doc ? (
-              <SlideoverTitleEditor doc={doc} wslug={wslug} pslug={pslug} />
+              // key={doc.id} forces a remount when the user opens a different
+              // doc without closing the slideover (e.g., create A → Cmd-K → create
+              // B). InlineEdit reads `defaultEditing` once at mount, so without
+              // the key the second freshly-created "Untitled" wouldn't auto-edit.
+              <SlideoverTitleEditor key={doc.id} doc={doc} wslug={wslug} pslug={pslug} />
             ) : (
               '—'
             )}
@@ -275,8 +279,11 @@ function SlideoverBody({
   const { data: fields } = useFields(wslug, pslug);
   const listParams = useUrlDerivedListParams(doc?.type ?? 'work_item');
   const update = useUpdateDocument(wslug, pslug, listParams);
-  // Documents list — same listParams as useUpdateDocument so React Query dedupes the key
-  const { data: docPage } = useDocuments(wslug, pslug, listParams);
+  // Documents list — same listParams as useUpdateDocument so React Query
+  // dedupes the key. Gated on `doc` so we don't fire the request with the
+  // default 'work_item' type before the real doc.type is known (would cause
+  // a wrong-type slash-menu flash for page docs + a redundant roundtrip).
+  const { data: docPage } = useDocuments(wslug, pslug, listParams, { enabled: !!doc });
   // AI key presence — drives the slash menu's aiConfigured flag
   const { data: workspace } = useWorkspace(wslug);
   const { data: aiKeysData } = useWorkspaceAiKeys(workspace?.id ?? '');

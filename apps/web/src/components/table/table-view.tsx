@@ -323,7 +323,7 @@ export function TableView({ wslug, pslug }: Props) {
               }
               action={
                 clauses.length === 0
-                  ? { label: 'Create your first work item', onClick: onCreate }
+                  ? { label: 'Create your first work item', onClick: () => void onCreate() }
                   : undefined
               }
             />

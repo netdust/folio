@@ -1,5 +1,5 @@
 import { createFileRoute, Outlet, useNavigate, useParams, useRouterState } from '@tanstack/react-router';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQueries, useQueryClient } from '@tanstack/react-query';
 import { Search } from 'lucide-react';
 import { toast } from 'sonner';
@@ -75,6 +75,14 @@ function WorkspaceLayout() {
   const currentPath = routerState.location.pathname;
   const currentSearch = routerState.location.search as Record<string, unknown>;
   const activeViewId = typeof currentSearch.view === 'string' ? currentSearch.view : undefined;
+  // `currentSearch` changes on every navigation. The rail handlers only need
+  // its current value at click time (to preserve `doc=` when switching views),
+  // so route it through a ref to keep the `handlers` memo stable across
+  // navigations — otherwise the whole rail tree rebuilds on every ?doc=.
+  const searchRef = useRef(currentSearch);
+  useEffect(() => {
+    searchRef.current = currentSearch;
+  }, [currentSearch]);
 
   // Per-project tables + views fetched in batch. `useQueries` is a single hook
   // call, so it's legal in render even though the inner array varies in length.
@@ -147,12 +155,17 @@ function WorkspaceLayout() {
       },
       onViewClick: (pslug: string, _tslug: string, viewId: string, type: 'list' | 'kanban') => {
         const to = type === 'kanban' ? '/w/$wslug/p/$pslug/board' : '/w/$wslug/p/$pslug/work-items';
+        // Preserve ?doc= (open slideover) but drop the previous view's filter
+        // and sort params — TableView's hydration treats URL params as winners
+        // over view.filters, so carrying ?status= across a view switch would
+        // silently mask the new view's stored filters.
+        const prev = searchRef.current;
+        const next: Record<string, unknown> = { view: viewId };
+        if (typeof prev.doc === 'string') next.doc = prev.doc;
         void navigate({
           to,
           params: { wslug, pslug },
-          // Preserve ?doc= (open slideover) and any in-flight URL filters —
-          // changing views shouldn't blow up the user's other context.
-          search: { ...currentSearch, view: viewId },
+          search: next,
         });
       },
       onWikiClick: (pslug: string) => {
@@ -184,7 +197,7 @@ function WorkspaceLayout() {
       },
       onDeleteView: (pslug, tslug, viewId, name) => setConfirmDelete({ kind: 'view', pslug, tslug, viewId, name }),
     }),
-    [navigate, wslug, qc, updateProject, currentSearch],
+    [navigate, wslug, qc, updateProject],
   );
 
   const primary: NavItem[] = useMemo(

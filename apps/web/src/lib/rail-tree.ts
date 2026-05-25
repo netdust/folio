@@ -120,11 +120,19 @@ export function buildRailTree(input: RailTreeInput): NavItem[] {
 
     const projectChildren = wikiLeaf ? [...tableNavItems, wikiLeaf] : tableNavItems;
 
+    // The project row is the "active tip" only when the user is on the
+    // project but no specific child (view or wiki) owns the highlight.
+    // Otherwise we'd render two `bg-nav-active` rows simultaneously and lose
+    // the single-row "where am I" signal.
+    const projectMatches = currentRoute.pslug === project.slug;
+    const childOwnsActive =
+      projectMatches && (currentRoute.viewId !== undefined || currentRoute.isWiki === true);
+
     return {
       id: `project:${project.slug}`,
       label: project.name,
       lucideIcon: FolderOpen,
-      active: currentRoute.pslug === project.slug,
+      active: projectMatches && !childOwnsActive,
       onClick: handlers.onProjectClick
         ? () => handlers.onProjectClick!(project.slug)
         : undefined,
