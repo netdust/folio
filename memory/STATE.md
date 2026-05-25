@@ -1,6 +1,6 @@
 # Folio — STATE
 
-_Last updated: 2026-05-26 (Phase 2 — Agents surface — shipped on phase-2/agents-surface, awaiting PR)_
+_Last updated: 2026-05-26 (Phase 2 — Agents surface — merged to main via PR #4 at `3431301`)_
 
 Living snapshot of where the project actually is. Read at session start. Update at session end if anything below changed.
 
@@ -17,7 +17,7 @@ Phase numbering aligned with `docs/PHASES.md` (canonical) as of 2026-05-24 reorg
 - **Phase 1.8 (Time-aware views):** queued — timeline view + This Week dashboard.
 - **Phase 1.9 (Field management UI):** shipped + merged to main at `a73b7da` on 2026-05-25 (PR #2). Inline `+ Add column`, column header `⋯` menu (Rename via InlineEdit + Hide + Delete with confirm dialog), "Suggested columns" in picker (deduped + type-inferred), `useFields` table-scoped.
 - **Phase 1.9.1 (Type-change UI + useUpdateView fix):** shipped + merged to main at `d12c598` on 2026-05-25 (PR #3). Compatible-only type-change in column `⋯` menu (`string ↔ text`, `number ↔ currency`, `* → text`); 422 with `INVALID_TYPE_CHANGE` for anything else. Default ISO `EUR` auto-injected on `* → currency`; options auto-cleared on `currency → *`. `useUpdateView` envelope unwrap fixed. Web 254 / 1-skip, server 135 / 135, shared 28 / 28, web TS clean.
-- **Phase 2 (Agents):** **shipped** on `phase-2/agents-surface` 2026-05-25/26, awaiting PR. Bearer auth + scope middleware, in-memory event bus + SSE endpoint with Last-Event-Id replay, migration 0006 widens documents.type to agent + trigger, agent/trigger frontmatter Zod schemas + auto-token-mint + revoke + delegation guard, hand-rolled JSON-RPC MCP server at /mcp with 12 v1 tools, web tokens settings tab + assignee picker + Agents/Triggers rail leaves + DocumentTypeList, 4 reference doc files (API/MCP/AGENTS/TRIGGERS), README walkthrough. Shake-out caught 4 bugs (A/B/C/D), all fixed and committed.
+- **Phase 2 (Agents):** **shipped + merged to main** at `3431301` on 2026-05-26 (PR #4). Bearer auth + scope middleware, in-memory event bus + SSE endpoint with Last-Event-Id replay, migration 0006 widens documents.type to agent + trigger, agent/trigger frontmatter Zod schemas + auto-token-mint + revoke + delegation guard, hand-rolled JSON-RPC MCP server at /mcp with 12 v1 tools, web tokens settings tab + assignee picker + Agents/Triggers rail leaves + DocumentTypeList, 4 reference doc files (API/MCP/AGENTS/TRIGGERS), README walkthrough. Shake-out caught 4 bugs (A/B/C/D), all fixed and committed before merge.
 - **Phase 3 (AI in UI + Agent runner):** queued — second spine. Slash commands, provider abstraction, agent runner, trigger scheduler/matcher.
 - **Phase 4 (Inbound webhooks):** queued — plan ready at `docs/superpowers/plans/2026-05-24-phase-4-inbound-webhooks.md`. 7 tasks.
 - **Phase 5 (CMS bridge — Statamic):** queued — plan ready at `docs/superpowers/plans/2026-05-24-phase-5-statamic-cms-bridge.md`. 10 tasks. WordPress is Phase 5.1.
@@ -27,7 +27,7 @@ Phase numbering aligned with `docs/PHASES.md` (canonical) as of 2026-05-24 reorg
 
 ## Current branch
 
-`phase-2/agents-surface` (uncommitted PR). 17 phase-2 commits ahead of `main` (`d12c598`).
+`main` at `3431301` (merge of PR #4). Phase 2 complete. Next phase to start: Phase 3 (AI in UI + Agent runner). The `phase-2/agents-surface` branch is preserved for reference (not deleted).
 
 Tests on this branch: 216 / 1-skip server, 292 / 1-skip web, 28 / 28 shared. Web TS clean. Server TS has pre-existing `app.ts` complaint (out of scope per plan). Playwright e2e: 26 / 27 (1 known flake on manual-qa scenario 11 — `navigator.clipboard.readText()` in headless Chromium, not Phase 2 regression).
 
