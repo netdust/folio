@@ -323,6 +323,8 @@ function SlideoverBody({
         <header className="flex-shrink-0 space-y-3 pb-4">
           <div className="font-mono text-[11px] text-fg-3">/{doc.slug}</div>
           <FrontmatterForm
+            wslug={wslug}
+            pslug={pslug}
             type={doc.type}
             status={doc.status}
             statuses={statuses ?? []}

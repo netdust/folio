@@ -104,4 +104,30 @@ workspaceItemRoute.delete('/', async (c) => {
   return c.body(null, 204);
 });
 
+workspaceItemRoute.get('/members', async (c) => {
+  const ws = getWorkspace(c);
+  const rows = await db
+    .select({
+      userId: memberships.userId,
+      role: memberships.role,
+    })
+    .from(memberships)
+    .where(eq(memberships.workspaceId, ws.id));
+  const ids = rows.map((r) => r.userId);
+  const userRows = ids.length
+    ? await db.query.users.findMany({
+        where: (u, { inArray }) => inArray(u.id, ids),
+      })
+    : [];
+  const byId = new Map(userRows.map((u) => [u.id, u]));
+  const members = rows
+    .map((r) => {
+      const u = byId.get(r.userId);
+      if (!u) return null;
+      return { id: u.id, email: u.email, name: u.name, role: r.role };
+    })
+    .filter((m): m is { id: string; email: string; name: string; role: string } => m !== null);
+  return jsonOk(c, { members });
+});
+
 export { workspacesRoute, workspaceItemRoute };
