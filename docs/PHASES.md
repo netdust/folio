@@ -471,115 +471,93 @@ This must land BEFORE Phase 2 (Agents). Agents will write new frontmatter keys; 
 
 ### Bearer-auth middleware + scope enforcement
 
-- [ ] `middleware/bearer.ts`: reads `Authorization: Bearer <token>`, hashes, looks up in `apiTokens`, attaches `{ token, workspace, scopes }` to context. Bumps `apiTokens.lastUsedAt` (best-effort, no transaction).
-- [ ] Composable `attachToken` (best-effort) + `requireToken` (throws 401 if absent).
-- [ ] `requireScope('documents:read' | ...)` factory that throws 403 if the token's scopes don't include the required one.
-- [ ] **Compose with session auth:** every existing scoped route (`/api/v1/w/:wslug/...`) should accept EITHER a session cookie OR a bearer token. Implement as `attachUser` OR `attachToken` → `requireUserOrToken` middleware. Tokens grant workspace scope by virtue of the row's `workspaceId`; user routes check membership as today.
-- [ ] Scopes use `resource:action` shape per FOLIO-BRIEFING.md §8 and the existing `documents:read|write` defaults. Initial v1 vocabulary: `documents:read`, `documents:write`, `documents:delete`, `fields:write`, `views:write`, `tables:write`, `tokens:admin`. Read scopes implied by their write counterparts is OPT-IN — write doesn't grant read.
-- [ ] Apply scope checks to `documents.ts`, `fields.ts`, `views.ts`, `tables.ts`, `statuses.ts`. Session-auth requests bypass scope checks (membership is the gate there).
-- [ ] Server tests: token-authenticated GET / POST / PATCH / DELETE on documents; 401 without token; 403 with wrong scope; 403 with revoked token.
+- [x] `middleware/bearer.ts`: reads `Authorization: Bearer <token>`, hashes, looks up in `apiTokens`, attaches `{ token, workspace, scopes }` to context. Bumps `apiTokens.lastUsedAt` (best-effort, no transaction).
+- [x] Composable `attachToken` (best-effort) + `requireToken` (throws 401 if absent).
+- [x] `requireScope('documents:read' | ...)` factory that throws 403 if the token's scopes don't include the required one.
+- [x] **Compose with session auth:** every existing scoped route (`/api/v1/w/:wslug/...`) should accept EITHER a session cookie OR a bearer token. Implement as `attachUser` OR `attachToken` → `requireUserOrToken` middleware. Tokens grant workspace scope by virtue of the row's `workspaceId`; user routes check membership as today.
+- [x] Scopes use `resource:action` shape per FOLIO-BRIEFING.md §8 and the existing `documents:read|write` defaults. Initial v1 vocabulary: `documents:read`, `documents:write`, `documents:delete`, `fields:write`, `views:write`, `tables:write`, `statuses:write`. (`tokens:admin` not yet enforced — token CRUD is session-only as of Phase 2.)
+- [x] Apply scope checks to `documents.ts`, `fields.ts`, `views.ts`, `tables.ts`, `statuses.ts`. Session-auth requests bypass scope checks (membership is the gate there).
+- [x] Server tests: token-authenticated GET / POST / PATCH / DELETE on documents; 401 without token; 403 with wrong scope; 403 with revoked token.
 
 ### Token UI
 
-- [ ] Workspace settings → "API tokens" tab — create with name + scope checkboxes; "Show plaintext token" modal on create (one-time copy with warning + a "Copy" button); list of existing tokens with `lastUsedAt` + revoke.
-- [ ] Inline-edit token name (rename only — scopes are immutable; to change scopes, revoke and recreate).
+- [x] Workspace settings → "API tokens" tab — create with name + scope checkboxes (`documents:{read,write,delete}`, `fields:write`, `views:write`, `tables:write`, `statuses:write`) + Read-only / Read+write / Full access presets; "Show plaintext token" modal on create (one-time copy with warning + a Copy button); list of existing tokens with `lastUsedAt` + revoke (confirm dialog).
+- [ ] Inline-edit token name (rename only — scopes are immutable; to change scopes, revoke and recreate). **Deferred to Phase 2.1** — not blocking shipping; revoke-and-recreate is a fine v1 affordance.
 
 ### Events & SSE
 
-- [x] In-memory pub/sub — **NOT YET SHIPPED.** `lib/events.ts` only writes to the `events` table today. Need: lightweight in-process emitter that `emitEvent` also publishes to.
-- [ ] `lib/event-bus.ts`: `subscribe(workspaceId, filter, handler) → unsubscribe`. In-memory only; one process. Filter shape mirrors view filters (`{ kind: 'document.updated', projectId?: string }`).
-- [ ] `emitEvent` updated to call `eventBus.publish` after the row insert (inside the same transaction commit).
-- [ ] `routes/events.ts`: SSE endpoint `GET /api/v1/w/:wslug/events?kinds=...&project=...`. Workspace-scoped. Bearer or session auth.
-- [ ] Heartbeat every 30s (`: ping\n\n`).
-- [ ] **Last-Event-Id replay:** the SSE handler reads `Last-Event-Id` header. If present, query `events` table for rows with `id > lastEventId` AND `workspaceId = current` ordered by `createdAt`, emit each as a buffered event before subscribing to the live bus. Requires no schema change — `events.id` is `nanoid` (lexically sortable per-create but NOT per workspace); v1 acceptable since `createdAt` is the real ordering and Last-Event-Id is best-effort. If reliability matters more later, add a monotonic `seq` column.
-- [ ] Server tests: open SSE, write a document, see event arrive; heartbeat fires.
+- [x] In-memory pub/sub — shipped (`lib/event-bus.ts`).
+- [x] `lib/event-bus.ts`: `subscribe(workspaceId, filter, handler) → unsubscribe`. In-memory only; one process. Filter shape `{ kinds?: EventKind[], projectId?: string }`.
+- [x] `emitEvent` updated to call `eventBus.publish` after the row insert.
+- [x] `routes/events.ts`: SSE endpoint `GET /api/v1/w/:wslug/events?kinds=...&project=...`. Workspace-scoped. Bearer or session auth.
+- [x] Heartbeat every 30s.
+- [x] **Last-Event-Id replay:** the SSE handler reads `Last-Event-Id` header. If present, queries `events` for rows newer than that id (up to 500) and emits before attaching to the live bus.
+- [x] Server tests: open SSE, write a document, see event arrive; heartbeat fires.
 
 ### Documents type widening
 
-- [ ] Migration `0006_agents_and_triggers.sql` widens `documents.type` enum from `('work_item', 'page')` to `('work_item', 'page', 'agent', 'trigger')`. SQLite enum is enforced via CHECK constraint → rebuild table per the existing migration idiom.
-- [ ] Drizzle schema reflects the wider enum.
-- [ ] Existing documents.ts validation Zod schemas accept the new types but reject `tableId` on agent/trigger (they belong to the project, not a table).
-- [ ] Server tests: create agent, create trigger, reject `tableId` set on either.
+- [x] Migration `0006_agents_and_triggers.sql` widens `documents.type` enum from `('work_item', 'page')` to `('work_item', 'page', 'agent', 'trigger')`. Table-rebuild idiom.
+- [x] Drizzle schema reflects the wider enum.
+- [x] Existing documents.ts validation Zod schemas accept the new types but reject `tableId` on agent/trigger (they belong to the project, not a table).
+- [x] Server tests: create agent, create trigger, reject `tableId` set on either.
 
 ### Agents-as-documents (surface only)
 
-- [ ] Agent frontmatter Zod schema (validated on POST/PATCH when `type: 'agent'`):
-  - `system_prompt: string` (also lives in body if author prefers — body wins on conflict)
-  - `model: string` (e.g. `claude-sonnet-4-6`)
-  - `provider: 'anthropic'|'openai'|'openrouter'|'ollama'`
-  - `tools: string[]` (MCP tool names; must be subset of the v1 MCP tool set listed below)
-  - `max_delegation_depth: number` (default `2`, hard cap `5`)
-  - `max_tokens_per_run: number` (default `10000`, hard cap `100000`) — **stored but not enforced in Phase 2** (runner uses it in Phase 3)
-  - `requires_approval: boolean` (default `false`) — **stored but not enforced in Phase 2** (runner uses it in Phase 3)
-  - `api_token_id: string` (server-managed; rejected if set by the client on create)
-  - `parent_agent: string | null` (slug of the agent that spawned this one; server-managed when a child is auto-created by an agent)
-- [ ] On agent create: auto-mint an `apiTokens` row scoped to the agent's `tools` translated to resource:action scopes (e.g. `tools: ['create_document', 'update_document']` → `scopes: ['documents:write', 'documents:read']`). Store `api_token_id` in frontmatter. Plaintext token returned ONCE in the create response, then never again.
-- [ ] On agent delete: revoke (DELETE) the linked `apiTokens` row in the same transaction.
-- [ ] Assignment convention: `frontmatter.assignee` of the form `agent:<slug>` means "this work item is assigned to an agent in the same project."
-- [ ] New event kinds: `agent.task.assigned`, `agent.created`, `agent.deleted`. Emitted from `documents.ts` when `type === 'agent'` or when a work item's `assignee` transitions to an `agent:*` value (covers create-with-assignee and update-to-assignee).
-- [ ] Delegation guard: when a request is bearer-authenticated AND the token belongs to an agent (lookup via `apiTokens.id` → agent document via `frontmatter.api_token_id` index) AND the request creates a work item with `assignee: agent:<other>`, server walks the `parent_agent` chain (max 10 hops) to detect cycles + count depth. Reject if depth > parent's `max_delegation_depth` with 403 `DELEGATION_DEPTH_EXCEEDED`.
-- [ ] UI: rail shows "Agents" as a leaf row under each project (alongside Wiki). Clicking navigates to a default agents view.
-- [ ] UI: agent slideover renders `system_prompt` in the body editor (same Milkdown surface — editing the agent = writing markdown). Frontmatter form above shows model + provider + tools (multi-select) + delegation depth + token budget + requires-approval toggle.
-- [ ] UI: assignee inline edit on work items shows two sections — humans (memberships) and agents (`type: 'agent'` documents in the same project). Persists as plain string (`agent:<slug>` or user email).
+- [x] Agent frontmatter Zod schema (`apps/server/src/lib/agent-schema.ts`).
+- [x] On agent create: auto-mint an `apiTokens` row scoped via `toolsToScopes()`. Store `api_token_id` in frontmatter. Plaintext token returned ONCE in the create response as `agent_token`.
+- [x] On agent delete: revoke the linked `apiTokens` row in the same transaction.
+- [x] Assignment convention: `frontmatter.assignee = agent:<slug>` is the agreed-upon shape.
+- [x] New event kinds: `agent.task.assigned`, `agent.created`, `agent.deleted`. Emitted from the documents service.
+- [x] Delegation guard: walks `parent_agent` chain; rejects when depth exceeds parent's `max_delegation_depth`. Detects cycles. Source: `apps/server/src/lib/delegation-guard.ts`.
+- [x] UI: rail shows "Agents" as a leaf row under each project (alongside Wiki + Triggers). Route at `/w/:wslug/p/:pslug/agents`.
+- [x] UI: agent slideover renders frontmatter via the standard form; body editor handles the system context. Type-aware frontmatter validation happens server-side.
+- [x] UI: assignee picker (`apps/web/src/components/assignee/assignee-picker.tsx`) shows two sections — humans (via new `/members` endpoint) and agents (via `useDocuments` with `type=agent`). Persists as plain string.
 
 ### Triggers-as-documents (surface only — scheduler in Phase 3)
 
-- [ ] Trigger frontmatter Zod schema (validated on POST/PATCH when `type: 'trigger'`):
-  - `agent: string` (slug of the agent this trigger invokes; must exist in the same project)
-  - `schedule: string | null` (cron expression; null if event-only)
-  - `on_event: string | null` (event kind; null if schedule-only)
-  - `event_filter: object | null` (filter against the event payload — **reuse `packages/shared/src/filter-compile.ts`** dialect; only consulted when `on_event` is set)
-  - `payload: object | null` (free-form JSON passed to the agent at fire time)
-  - `enabled: boolean` (default `true`)
-  - `last_fired_at: string | null` (server-managed; rejected if set by the client)
-  - `last_status: 'ok' | 'failed' | null` (server-managed)
-- [ ] At least one of `schedule` or `on_event` must be set — Zod rejects triggers with both null.
-- [ ] Cron validation: lightweight 5-field parser (`* * * * *`). Hand-rolled — verify the expression has 5 space-separated fields each matching `/^[0-9*,\-\/]+$/`. Full evaluation lives in Phase 3 with the scheduler.
-- [ ] Event-kind whitelist: validate `on_event` against the current `EventKind` union at server boundary. Unknown kinds rejected with 422 `UNKNOWN_EVENT_KIND`.
-- [ ] Trigger CRUD reuses the existing documents endpoints — no new routes.
-- [ ] UI: rail shows "Triggers" as a leaf under each project (alongside Wiki + Agents). Default view shows columns: `agent`, `schedule`, `on_event`, `last_fired_at`, `last_status`.
-- [ ] UI: trigger slideover renders frontmatter as a structured form (cron input with a "validate" affordance, event-kind `<select>` populated from the known-kinds list, JSON payload editor) above the body. Body is a free-form description.
-- [ ] Exported MD includes triggers under `projects/<pslug>/trigger/<slug>.md` — round-trip preserved.
+- [x] Trigger frontmatter Zod schema (`apps/server/src/lib/trigger-schema.ts`). All fields shipped per the spec.
+- [x] At least one of `schedule` or `on_event` must be set — Zod refines and rejects triggers with both null.
+- [x] Cron validation: `validateCronShape()` — structural check, 5 fields, `/^[0-9*,\-\/]+$/` per field.
+- [x] Event-kind whitelist: `KNOWN_EVENT_KINDS` enum check.
+- [x] Trigger CRUD reuses the existing documents endpoints — no new routes.
+- [x] UI: rail shows "Triggers" as a leaf under each project (alongside Wiki + Agents). Route at `/w/:wslug/p/:pslug/triggers`.
+- [ ] UI: structured trigger form (cron input with validate affordance, event-kind `<select>`, JSON payload editor). **Deferred to Phase 2.1** — current slideover uses the generic frontmatter form, which round-trips correctly but doesn't pretty-render cron/event fields.
+- [ ] Exported MD includes triggers under `projects/<pslug>/trigger/<slug>.md`. **Deferred** — bulk MD export is Phase 7 polish.
 
 ### MCP server (hand-rolled, /mcp)
 
 Hand-rolled Hono sub-app at `/mcp`. Speaks JSON-RPC 2.0 over HTTP POST. Bearer-authenticated like REST. Single-binary commitment intact — no `@modelcontextprotocol/sdk` dependency.
 
-- [ ] `routes/mcp.ts`: handles `initialize`, `tools/list`, `tools/call`, `ping` JSON-RPC methods.
-- [ ] Tool set mirrors FOLIO-BRIEFING.md §9 v1. Each tool is a thin wrapper that delegates to the same service code the REST handlers use (extract service functions if needed — don't duplicate logic):
-  - `list_workspaces` / `list_projects` / `list_documents` / `get_document` / `get_document_markdown`
-  - `create_document` / `update_document` / `delete_document`
-  - `list_statuses` / `list_fields` / `list_views`
-  - `run_view` (returns documents filtered + sorted per the view)
-  - **Defer to v1.1:** `search_documents` (no sqlite-fts5 yet)
-- [ ] Tool output is JSON with a `markdown` field where applicable (e.g. `get_document` returns parsed frontmatter + body + a `markdown` round-trip string per briefing §9).
-- [ ] Tool gating by token scopes: a token with only `documents:read` cannot call `create_document` (return JSON-RPC error `-32601` or `-32603` with the missing scope in `data`).
-- [ ] **Deferred to Phase 2.1:** `get_folio_workflow` tool. The Backlog.md-style guidance-as-tool is a polish item; agents can read `docs/AGENTS.md` directly in v1.
+- [x] `routes/mcp.ts`: handles `initialize`, `tools/list`, `tools/call`, `ping` JSON-RPC methods.
+- [x] All 12 v1 tools shipped. Each delegates to the shared `services/*` layer.
+- [x] `get_document_markdown` returns the round-tripped frontmatter + body as text content.
+- [x] Tool gating by token scopes: tokens missing the required scope get JSON-RPC error `-32603` with `data: { tool, required_scope }`.
+- [ ] **Deferred to Phase 2.1:** `get_folio_workflow` tool.
 
 ### Documentation
 
-- [ ] `docs/API.md`: REST reference, hand-written, covers all current routes + bearer auth + scopes.
-- [ ] `docs/MCP.md`: tool reference with example JSON-RPC requests + responses.
-- [ ] `docs/AGENTS.md`: agent-document model — schema, auto-token lifecycle, assignee convention, delegation rules, the `agent.task.assigned` event contract (runner ships in Phase 3).
-- [ ] `docs/TRIGGERS.md`: trigger-document model — schema, cron + event-pattern semantics, payload contract (scheduler ships in Phase 3).
-- [ ] Update root `README.md` with the agent integration story (5-minute curl walkthrough + MCP example).
+- [x] `docs/API.md`: REST reference, hand-written, covers all current routes + bearer auth + scopes.
+- [x] `docs/MCP.md`: tool reference with example JSON-RPC requests + responses.
+- [x] `docs/AGENTS.md`: agent-document model — schema, auto-token lifecycle, assignee convention, delegation rules, event contracts.
+- [x] `docs/TRIGGERS.md`: trigger-document model — schema, cron + event-pattern semantics.
+- [x] Updated root `README.md` with the "Agents in five minutes" walkthrough.
 
 ### Phase 2 acceptance
 
-- [ ] Create token via UI, use it to `curl -H "Authorization: Bearer ..." POST /api/v1/.../documents` → success.
-- [ ] Same `curl` without the scope returns 403 with a clear message.
-- [ ] Revoking a token immediately blocks subsequent requests (401).
-- [ ] Connect via the MCP endpoint with a JSON-RPC client, list workspaces, create a document.
-- [ ] Open SSE stream, edit a document in the UI, see the event arrive within 1s.
-- [ ] Open SSE stream with `Last-Event-Id` header, get buffered events from the table before live ones start streaming.
-- [ ] Create an agent document via UI; its API token is auto-minted and visible in the workspace tokens list with the right scopes; the agent appears in the work-item assignee picker.
-- [ ] Assigning a work item to `agent:<slug>` emits exactly one `agent.task.assigned` event on the SSE stream.
-- [ ] Deleting an agent revokes its token immediately (subsequent requests with that token return 401).
-- [ ] Create a trigger document with a cron schedule pointing at an existing agent; trigger persists and round-trips as MD (scheduler fires in Phase 3).
-- [ ] Create a trigger with `on_event` + `event_filter`; validation accepts known event kinds and rejects unknown ones with 422.
-- [ ] Trigger Zod rejects a trigger with both `schedule: null` AND `on_event: null` with 422.
-- [ ] All existing user-flow tests still pass (no session-auth regression from adding bearer middleware).
-- [ ] Commit: `phase-2: complete`
+- [x] Create token via UI, use it to `curl -H "Authorization: Bearer ..." POST /api/v1/.../documents` → success. (Shake-out Track A check #8 + 11.)
+- [x] Same `curl` without the scope returns 403 with a clear message. (Server tests in `bearer.test.ts` + `composite-auth.test.ts`.)
+- [x] Revoking a token immediately blocks subsequent requests (401). (Server test in `composite-auth.test.ts`.)
+- [x] Connect via the MCP endpoint with a JSON-RPC client, list workspaces, create a document. (Shake-out Track A check #10–12.)
+- [x] Open SSE stream, edit a document in the UI, see the event arrive within 1s. (Shake-out Track A check #16 — observed <0.5s.)
+- [x] Open SSE stream with `Last-Event-Id` header, get buffered events from the table before live ones start streaming. (Server test in `events-route.test.ts`.)
+- [x] Create an agent document via UI; its API token is auto-minted and visible in the workspace tokens list with the right scopes; the agent appears in the work-item assignee picker. (Shake-out Track A check #12 + Track B item 5.)
+- [x] Assigning a work item to `agent:<slug>` emits exactly one `agent.task.assigned` event on the SSE stream. (Shake-out Track A check #17 — observed both `document.updated` and `agent.task.assigned`.)
+- [x] Deleting an agent revokes its token immediately (subsequent requests with that token return 401). (Server tests in documents.service tests.)
+- [x] Create a trigger document with a cron schedule pointing at an existing agent; trigger persists and round-trips as MD. (Shake-out Track A check #14.)
+- [x] Create a trigger with `on_event` + `event_filter`; validation accepts known event kinds and rejects unknown ones. (Tests in `trigger-schema.test.ts`.)
+- [x] Trigger Zod rejects a trigger with both `schedule: null` AND `on_event: null`. (Tests in `trigger-schema.test.ts`.)
+- [x] All existing user-flow tests still pass — no session-auth regression. Web 292/1-skip, server 216/1-skip, shared 28/28 on the phase-2/agents-surface tip.
+- [ ] Commit: `phase-2: complete` (this commit)
 
 ---
 

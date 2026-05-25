@@ -1,6 +1,6 @@
 # Folio — STATE
 
-_Last updated: 2026-05-25 (post UX cleanup batch on phase-1.7/crm-polish)_
+_Last updated: 2026-05-26 (Phase 2 — Agents surface — shipped on phase-2/agents-surface, awaiting PR)_
 
 Living snapshot of where the project actually is. Read at session start. Update at session end if anything below changed.
 
@@ -17,7 +17,7 @@ Phase numbering aligned with `docs/PHASES.md` (canonical) as of 2026-05-24 reorg
 - **Phase 1.8 (Time-aware views):** queued — timeline view + This Week dashboard.
 - **Phase 1.9 (Field management UI):** shipped + merged to main at `a73b7da` on 2026-05-25 (PR #2). Inline `+ Add column`, column header `⋯` menu (Rename via InlineEdit + Hide + Delete with confirm dialog), "Suggested columns" in picker (deduped + type-inferred), `useFields` table-scoped.
 - **Phase 1.9.1 (Type-change UI + useUpdateView fix):** shipped + merged to main at `d12c598` on 2026-05-25 (PR #3). Compatible-only type-change in column `⋯` menu (`string ↔ text`, `number ↔ currency`, `* → text`); 422 with `INVALID_TYPE_CHANGE` for anything else. Default ISO `EUR` auto-injected on `* → currency`; options auto-cleared on `currency → *`. `useUpdateView` envelope unwrap fixed. Web 254 / 1-skip, server 135 / 135, shared 28 / 28, web TS clean.
-- **Phase 2 (Agents):** queued — spine of v1. Tokens, SSE, MCP server, agents-as-documents, triggers-as-documents (surface only).
+- **Phase 2 (Agents):** **shipped** on `phase-2/agents-surface` 2026-05-25/26, awaiting PR. Bearer auth + scope middleware, in-memory event bus + SSE endpoint with Last-Event-Id replay, migration 0006 widens documents.type to agent + trigger, agent/trigger frontmatter Zod schemas + auto-token-mint + revoke + delegation guard, hand-rolled JSON-RPC MCP server at /mcp with 12 v1 tools, web tokens settings tab + assignee picker + Agents/Triggers rail leaves + DocumentTypeList, 4 reference doc files (API/MCP/AGENTS/TRIGGERS), README walkthrough. Shake-out caught 4 bugs (A/B/C/D), all fixed and committed.
 - **Phase 3 (AI in UI + Agent runner):** queued — second spine. Slash commands, provider abstraction, agent runner, trigger scheduler/matcher.
 - **Phase 4 (Inbound webhooks):** queued — plan ready at `docs/superpowers/plans/2026-05-24-phase-4-inbound-webhooks.md`. 7 tasks.
 - **Phase 5 (CMS bridge — Statamic):** queued — plan ready at `docs/superpowers/plans/2026-05-24-phase-5-statamic-cms-bridge.md`. 10 tasks. WordPress is Phase 5.1.
@@ -27,9 +27,45 @@ Phase numbering aligned with `docs/PHASES.md` (canonical) as of 2026-05-24 reorg
 
 ## Current branch
 
-`main` at `d12c598` (merge of PR #3). Phase 1.9 + 1.9.1 both shipped. Next phase to start: Phase 2 (Agents).
+`phase-2/agents-surface` (uncommitted PR). 17 phase-2 commits ahead of `main` (`d12c598`).
 
-Tests on main: 135 server / 254 web (+1 skipped) / 28 shared. All green. Web TS clean.
+Tests on this branch: 216 / 1-skip server, 292 / 1-skip web, 28 / 28 shared. Web TS clean. Server TS has pre-existing `app.ts` complaint (out of scope per plan). Playwright e2e: 26 / 27 (1 known flake on manual-qa scenario 11 — `navigator.clipboard.readText()` in headless Chromium, not Phase 2 regression).
+
+### Phase 2 commit list (newest first, top of `phase-2/agents-surface`)
+
+- Docs commit (this session): docs/API.md + docs/MCP.md + docs/AGENTS.md + docs/TRIGGERS.md + README walkthrough
+- `3292e01` phase-2: ai-keys hooks — fix 404 URL + thread wslug (Bug D)
+- `ca7fb81` phase-2: documents list — apply type filter for agent + trigger (Bug C)
+- `9164e5d` phase-2: token modal — add statuses:write + Read-only/Read+write/Full presets (Bug B)
+- `76cdca3` phase-2: fix sticky-column e2e selector after header refactor (Bug A)
+- `2e046ae` phase-2: rail — Agents + Triggers leaves under each project (Task 16)
+- `a9cba37` phase-2: assignee picker — humans + agents (Task 15 + new /members endpoint)
+- `18fa174` phase-2: workspace settings — API tokens tab (Task 14, new /w/:wslug/settings route)
+- `d3ef26f` phase-2: useTokens / useCreateToken / useDeleteToken hooks (Task 13)
+- `386a1db` phase-2: cover update/delete/list_statuses/run_view in MCP tests
+- `4fc7e2a` phase-2: hand-rolled JSON-RPC MCP at /mcp with v1 tool set (Task 12)
+- `95f41ca` phase-2: extract MCP-relevant logic into services/* (Task 12 precursor)
+- `0d9b1d1` phase-2: delegation guard with parent-chain depth enforcement (Task 11)
+- `97d3d47` phase-2: emit agent.task.assigned on assignee transition (Task 10)
+- `3d9dbc9` phase-2: auto-mint agent token on create; revoke on delete (Task 9)
+- `b7620d2` phase-2: validate agent/trigger frontmatter on documents POST/PATCH (Task 8)
+- `80b1f7d` phase-2: trigger frontmatter Zod schema + cron-shape validator (Task 7)
+- `3b74d76` phase-2: agent frontmatter Zod schema + toolsToScopes (Task 6)
+- `d68f4eb` phase-2: widen documents.type to include agent + trigger (Task 5)
+- `ab05622` phase-2: SSE endpoint with Last-Event-Id replay (Task 4)
+- `fe5db61` phase-2: in-memory event bus + publish on emitEvent (Task 3)
+- `fa8f292` phase-2: route mutations through requireScope for bearer requests (Task 2)
+- `ee9548d` phase-2: add bearer auth middleware with scope enforcement (Task 1)
+
+### Phase 2 deferrals (intentional, not blocking PR)
+
+- Inline-rename of token name in tokens tab (Phase 2.1).
+- Structured trigger form (cron input with validate affordance + event-kind select). Current slideover uses generic frontmatter form — round-trips correctly but doesn't pretty-render cron.
+- Bulk MD export including triggers under `projects/<pslug>/trigger/<slug>.md` (Phase 7 polish).
+- `get_folio_workflow` MCP tool (Phase 2.1).
+- `requires_approval` + `max_tokens_per_run` enforcement (Phase 3 runner-side).
+- The `## Approved` body convention (Phase 3 — human-in-the-loop).
+- `search_documents` MCP tool (v1.1 — needs sqlite-fts5).
 
 ### Phase 1.9.1 commit list (newest first)
 
@@ -104,20 +140,25 @@ I attempted an `absolute right-0` overlay approach in a non-committed edit and r
 - Slideover with Milkdown + CodeMirror raw-MD toggle; round-trips byte-for-byte per the round-trip test.
 - Cmd-K palette (open via top-right Search nav OR `⌘K`).
 - Theme toggle, rail collapse persistence in localStorage.
-- Rail user menu: avatar/name → popover with `+ Create workspace` + `Sign out`.
+- Rail user menu: avatar/name → popover with `+ Create workspace` + **Settings** (new in Phase 2 — opens `/w/:wslug/settings`) + `Sign out`.
 - Workspace switcher: workspace tile → popover with full workspace list + `+ Create workspace`. Creating a workspace from inside another no longer dead-ends.
 - Inline `+ Add column` at the right end of the spreadsheet header — popover form (key + label + type + per-type options).
 - Column header `⋯` menu (hover-reveal on non-builtin columns): Rename (InlineEdit on the label), Hide column, Delete column (confirm dialog with affected-doc count).
 - "Suggested columns" section in the column picker — surfaces orphan frontmatter keys with inferred type; one-click `+ Pin`.
 - Column `⋯ → Change type` (Phase 1.9.1) — compatible-only transitions (`string ↔ text`, `number ↔ currency`, `* → text`); server returns 422 with a clear allowed-transitions message for anything else. Default ISO `EUR` injected on `* → currency`; options cleared on `currency → *`.
+- **Workspace settings page (Phase 2)** — `/w/:wslug/settings` with Tabs scaffold. Today: "API tokens" tab only.
+- **API tokens tab (Phase 2)** — list/create/revoke tokens; `+ Create token` modal with name + 7 scope checkboxes (`documents:{read,write,delete}`, `fields:write`, `views:write`, `tables:write`, `statuses:write`) + Read-only/Read+write/Full access preset buttons; one-time plaintext reveal with Copy; revoke confirm dialog.
+- **Assignee picker (Phase 2)** — `frontmatter.assignee` of any work item opens a Popover with Members (via `/api/v1/w/:wslug/members`) and Agents (via `useDocuments` `type=agent`) sections. Members write the email; agents write `agent:<slug>`. Picker is auto-wired by `FrontmatterForm` whenever `key === 'assignee'`.
+- **Agents + Triggers rail leaves (Phase 2)** — each project shows `Agents` and `Triggers` leaves alongside `Wiki`. Routes at `/w/:wslug/p/:pslug/agents` and `/triggers` render a `DocumentTypeList` filtered by type; click → slideover.
 
 ## What's not built yet
 
 See `docs/PHASES.md` for the canonical phase list (above-section mirrors it). Loose items not phase-tracked:
 
-- Workspace AI-key UI (backend exists; lives in Phase 3 settings work).
+- Workspace AI-key UI in the new settings page (backend hooks now point at the correct URL after Bug D; UI lives in Phase 3 settings work).
 - Single-binary build verification (`bun build --compile`).
 - Docker image verification end-to-end.
+- Structured trigger form (cron input with validate affordance + event-kind select). Slideover currently uses generic frontmatter form — round-trips correctly but doesn't pretty-render cron.
 
 ## Open Threads
 
