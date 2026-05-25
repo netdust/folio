@@ -1,69 +1,34 @@
-import { and, desc, eq, gte, inArray, isNull, lt, or, sql } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import { Hono } from 'hono';
-import { nanoid } from 'nanoid';
 import {
-  slugify,
   documentCreateSchema,
   documentPatchSchema,
-  filterCompile,
-  FilterCompileError,
 } from '@folio/shared';
 import { db } from '../db/client.ts';
-import { apiTokens, documents, events, statuses } from '../db/schema.ts';
+import { documents, events, statuses } from '../db/schema.ts';
 import { jsonOk, HTTPError } from '../lib/http.ts';
 import { emitEvent } from '../lib/events.ts';
-import { agentFrontmatterSchema, toolsToScopes } from '../lib/agent-schema.ts';
-import { triggerFrontmatterSchema } from '../lib/trigger-schema.ts';
-import { newApiToken } from '../lib/auth.ts';
-import { walkParentChain } from '../lib/delegation-guard.ts';
 import { parseMarkdown, serializeMarkdown } from '../lib/frontmatter.ts';
-import { compileFilterToWhere } from '../lib/filter-to-drizzle.ts';
-import { slugUniqueInDocuments } from '../lib/slug-unique.ts';
 import { type AuthContext, getUser } from '../middleware/auth.ts';
 import { requireScope } from '../middleware/bearer.ts';
 import { getProject, getTable, getWorkspace, type ScopeContext } from '../middleware/scope.ts';
+import {
+  createDocument,
+  deleteDocument,
+  getDocument,
+  getAssignee,
+  listDocuments,
+  maybeRegenerateSlug,
+  updateDocument,
+  stripReservedFrontmatter,
+  type DocumentType,
+} from '../services/documents.ts';
 
 const documentsRoute = new Hono<AuthContext & ScopeContext>();
-
-function getAssignee(fm: unknown): string | null {
-  if (typeof fm !== 'object' || fm === null) return null;
-  const v = (fm as Record<string, unknown>)['assignee'];
-  return typeof v === 'string' ? v : null;
-}
-
-async function validateStatus(tableId: string, status: string | null | undefined) {
-  if (status == null) return;
-  const row = await db.query.statuses.findFirst({
-    where: and(eq(statuses.tableId, tableId), eq(statuses.key, status)),
-  });
-  if (!row) throw new HTTPError('INVALID_STATUS', `status "${status}" not in registry`, 422);
-}
 
 function isMarkdownRequest(req: Request): boolean {
   const ct = req.headers.get('content-type') ?? '';
   return ct.startsWith('text/markdown') || ct.startsWith('text/plain');
-}
-
-// "Auto-derived" = the slug was generated from the previous title at create
-// time (or auto-disambiguated with `-N`). Strip a trailing `-<digits>` and
-// compare to slugify(oldTitle). The `untitled` special case covers fresh docs
-// where the create-time slug is literally `untitled`.
-function isSlugAutoDerived(slug: string, oldTitle: string): boolean {
-  if (slug === 'untitled') return true;
-  const base = slug.replace(/-\d+$/, '');
-  return base === slugify(oldTitle);
-}
-
-async function maybeRegenerateSlug(
-  projectId: string,
-  existing: { slug: string; title: string },
-  nextTitle: string,
-): Promise<string | null> {
-  if (nextTitle === existing.title) return null;
-  if (!isSlugAutoDerived(existing.slug, existing.title)) return null;
-  const baseSlug = slugify(nextTitle) || 'doc';
-  if (baseSlug === existing.slug.replace(/-\d+$/, '')) return null;
-  return slugUniqueInDocuments(db, projectId, baseSlug);
 }
 
 function deriveTitleFromBody(body: string): string | null {
@@ -71,28 +36,12 @@ function deriveTitleFromBody(body: string): string | null {
   return m ? m[1]!.trim() : null;
 }
 
-type DocumentType = 'work_item' | 'page' | 'agent' | 'trigger';
-
 interface ParsedMdInput {
   type: DocumentType;
   title: string;
   body: string;
   frontmatter: Record<string, unknown>;
   status: string | null;
-}
-
-// Keys promoted to first-class columns. Stripped from user-supplied
-// frontmatter on every write path so the JSON column never holds a stale
-// shadow that would override the column on the next .md export.
-const RESERVED_FRONTMATTER_KEYS = ['type', 'title', 'status', 'last_touched_at'] as const;
-
-function stripReservedFrontmatter(fm: Record<string, unknown>): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(fm)) {
-    if ((RESERVED_FRONTMATTER_KEYS as readonly string[]).includes(k)) continue;
-    out[k] = v;
-  }
-  return out;
 }
 
 const DOCUMENT_TYPES: readonly DocumentType[] = ['work_item', 'page', 'agent', 'trigger'];
@@ -133,298 +82,78 @@ documentsRoute.post('/', requireScope('documents:write'), async (c) => {
     input = { type: v.type, title: v.title, body: v.body, frontmatter: fmRest, status: fmStatus };
   }
 
-  // Agents and triggers are project-scoped — they live alongside pages with
-  // tableId=null. A table-scoped URL implies a table-bound resource, so reject
-  // here before getTable(c) ever runs for these types.
-  if (input.type === 'agent' || input.type === 'trigger') {
-    if (c.req.param('tslug')) {
-      throw new HTTPError(
-        'INVALID_BODY',
-        `${input.type} documents cannot be created on a table-scoped URL`,
-        422,
-      );
-    }
-    const schema = input.type === 'agent' ? agentFrontmatterSchema : triggerFrontmatterSchema;
-    const r = schema.safeParse(input.frontmatter ?? {});
-    if (!r.success) {
-      const code = input.type === 'agent' ? 'INVALID_AGENT_FRONTMATTER' : 'INVALID_TRIGGER_FRONTMATTER';
-      throw new HTTPError(code, r.error.message, 422);
-    }
-    // Replace with the parsed, default-applied version. Task 9 relies on this
-    // so the auto-minted token's scopes can be derived from validated tools.
-    input.frontmatter = r.data as Record<string, unknown>;
-  }
+  // Only resolve the table when we're creating a work_item — agents/triggers
+  // are project-scoped and rejecting a table-scoped URL is the service's job.
+  const table = input.type === 'work_item' ? getTable(c) : null;
 
-  // work_items live inside a table; pages are project-scoped with tableId=null.
-  const tableId = input.type === 'work_item' ? getTable(c).id : null;
-  if (input.type === 'work_item') await validateStatus(tableId!, input.status);
-
-  const id = nanoid();
-  const baseSlug = slugify(input.title) || 'doc';
-  const slug = await slugUniqueInDocuments(db, p.id, baseSlug);
-
-  // For agents: mint a bearer token now so its id can be patched into the
-  // frontmatter BEFORE the document insert. The plaintext is returned ONCE
-  // in the response; only the hash hits the apiTokens row.
-  let agentTokenPlaintext: string | undefined;
-  let agentTokenHash: string | undefined;
-  let agentApiTokenId: string | undefined;
-  if (input.type === 'agent') {
-    const { token, hash } = newApiToken();
-    agentTokenPlaintext = token;
-    agentTokenHash = hash;
-    agentApiTokenId = nanoid();
-    input.frontmatter = { ...input.frontmatter, api_token_id: agentApiTokenId };
-  }
-
-  const row = {
-    id,
-    projectId: p.id,
-    tableId,
-    type: input.type,
-    slug,
-    title: input.title,
-    status: input.status,
-    body: input.body,
-    frontmatter: input.frontmatter,
-    parentId: null as string | null,
-    createdBy: user.id,
-    updatedBy: user.id,
-  };
-
-  // Delegation guard: when a bearer-auth'd agent creates a work_item assigning
-  // it to another agent, walk its parent_agent chain. Reject if depth+1 would
-  // exceed the actor agent's max_delegation_depth. The actor is the agent
-  // whose frontmatter.api_token_id matches the request's token; we scan all
-  // project-scoped agents in JS because SQLite can't index JSON natively.
-  const token = c.get('token');
-  if (token && input.type === 'work_item') {
-    const childAssignee = getAssignee(input.frontmatter);
-    if (childAssignee?.startsWith('agent:')) {
-      const allAgents = await db.query.documents.findMany({
-        where: and(eq(documents.projectId, p.id), eq(documents.type, 'agent')),
-      });
-      const ownerAgent = allAgents.find(
-        (a) => (a.frontmatter as Record<string, unknown>)['api_token_id'] === token.id,
-      );
-      if (ownerAgent) {
-        const ownerFm = ownerAgent.frontmatter as Record<string, unknown>;
-        const maxDepth = (ownerFm['max_delegation_depth'] as number | undefined) ?? 2;
-        const lookup = {
-          findAgentBySlug: async (slug: string) => {
-            const r = await db.query.documents.findFirst({
-              where: and(
-                eq(documents.projectId, p.id),
-                eq(documents.type, 'agent'),
-                eq(documents.slug, slug),
-              ),
-            });
-            if (!r) return null;
-            const fm = r.frontmatter as Record<string, unknown>;
-            return {
-              parent: (fm['parent_agent'] as string | null | undefined) ?? null,
-              max_delegation_depth: (fm['max_delegation_depth'] as number | undefined) ?? 2,
-            };
-          },
-        };
-        try {
-          const ownerDepth = await walkParentChain(ownerAgent.slug, lookup);
-          if (ownerDepth + 1 > maxDepth) {
-            throw new HTTPError(
-              'DELEGATION_DEPTH_EXCEEDED',
-              `agent ${ownerAgent.slug} cannot delegate past max_delegation_depth ${maxDepth} (current ${ownerDepth + 1})`,
-              403,
-            );
-          }
-        } catch (err) {
-          if (err instanceof HTTPError) throw err;
-          throw new HTTPError('DELEGATION_GUARD_FAILED', String(err), 500);
-        }
-      }
-    }
-  }
-
-  await db.transaction(async (tx) => {
-    await tx.insert(documents).values(row);
-    if (input.type === 'agent' && agentApiTokenId && agentTokenHash) {
-      const tools = (input.frontmatter as { tools: string[] }).tools;
-      await tx.insert(apiTokens).values({
-        id: agentApiTokenId,
-        workspaceId: ws.id,
-        name: `agent:${slug}`,
-        tokenHash: agentTokenHash,
-        scopes: toolsToScopes(tools),
-        createdBy: user.id,
-      });
-      await emitEvent(tx, {
-        workspaceId: ws.id, projectId: p.id, documentId: id,
-        kind: 'agent.created', actor: user.id,
-        payload: { slug, api_token_id: agentApiTokenId },
-      });
-    }
-    await emitEvent(tx, {
-      workspaceId: ws.id, projectId: p.id, documentId: id, kind: 'document.created', actor: user.id,
-      payload: { slug, type: input.type },
-    });
-    if (input.type === 'work_item') {
-      const assignee = getAssignee(input.frontmatter);
-      if (assignee && assignee.startsWith('agent:')) {
-        await emitEvent(tx, {
-          workspaceId: ws.id, projectId: p.id, documentId: id,
-          kind: 'agent.task.assigned', actor: user.id,
-          payload: { slug, agent: assignee.slice('agent:'.length) },
-        });
-      }
-    }
+  const { document, agentTokenPlaintext } = await createDocument({
+    workspace: ws,
+    project: p,
+    table,
+    actor: user,
+    token: c.get('token'),
+    isTableScopedUrl: Boolean(c.req.param('tslug')),
+    input,
   });
 
   const responseData = agentTokenPlaintext
-    ? { ...row, agent_token: agentTokenPlaintext }
-    : row;
+    ? { ...document, agent_token: agentTokenPlaintext }
+    : document;
   return jsonOk(c, responseData, 201);
 });
-
-function encodeCursor(updatedAt: number, id: string): string {
-  return Buffer.from(`${updatedAt}:${id}`).toString('base64');
-}
-
-function decodeCursor(s: string): { updatedAt: number; id: string } | null {
-  try {
-    const raw = Buffer.from(s, 'base64').toString('utf8');
-    const [t, id] = raw.split(':');
-    const updatedAt = Number(t);
-    if (!Number.isFinite(updatedAt) || !id) return null;
-    return { updatedAt, id };
-  } catch {
-    return null;
-  }
-}
-
-function parseLimit(raw: string | undefined, fallback: number): number {
-  if (raw === undefined) return fallback;
-  const n = Number(raw);
-  if (!Number.isFinite(n) || !Number.isInteger(n) || n < 1) {
-    throw new HTTPError('INVALID_LIMIT', 'limit must be a positive integer ≤ 200', 422);
-  }
-  return Math.min(200, n);
-}
 
 documentsRoute.get('/', async (c) => {
   const p = getProject(c);
   const type = c.req.query('type');
-  const limit = parseLimit(c.req.query('limit'), 50);
+  const limitRaw = c.req.query('limit');
   const cursorRaw = c.req.query('cursor');
   const filterRaw = c.req.query('filter');
 
-  const cursor = cursorRaw ? decodeCursor(cursorRaw) : null;
+  if (limitRaw !== undefined) {
+    const n = Number(limitRaw);
+    if (!Number.isFinite(n) || !Number.isInteger(n) || n < 1) {
+      throw new HTTPError('INVALID_LIMIT', 'limit must be a positive integer ≤ 200', 422);
+    }
+  }
 
-  let filterWhere: ReturnType<typeof compileFilterToWhere> = undefined;
+  let filter: unknown = undefined;
   if (filterRaw) {
-    let parsed: unknown;
     try {
-      parsed = JSON.parse(filterRaw);
+      filter = JSON.parse(filterRaw);
     } catch {
       throw new HTTPError('INVALID_FILTER', 'filter must be valid JSON', 422);
     }
-    try {
-      const ast = filterCompile(parsed as Parameters<typeof filterCompile>[0]);
-      filterWhere = compileFilterToWhere(ast, documents);
-    } catch (e) {
-      if (e instanceof FilterCompileError) throw new HTTPError('INVALID_FILTER', e.message, 422);
-      throw e;
-    }
   }
 
-  const whereClauses = [eq(documents.projectId, p.id)];
-  if (type === 'work_item' || type === 'page') {
-    whereClauses.push(eq(documents.type, type));
-  }
-  // Scope work_item listings to the active table (default or explicit /t/:tslug).
-  // Pages stay project-scoped with NULL tableId. With no type filter we don't
-  // further constrain so callers can list everything in the project.
+  // The route owns the table-scoping decision: when a table-scoped URL is in
+  // play the service must constrain to that table for work_items. Pages and
+  // type-less listings stay project-scoped.
+  let activeTableId: string | null = null;
   if (type === 'work_item') {
-    whereClauses.push(eq(documents.tableId, getTable(c).id));
-  } else if (type === 'page') {
-    whereClauses.push(isNull(documents.tableId));
-  }
-  // Flat filter params — kept simple here so the toolbar chips work without
-  // having to encode/decode the full `?filter=` AST. The AST stays available
-  // for the agent/MCP path that needs richer expressions.
-  // Drop empty-string entries — chip-removal navigation can leave a stray
-  // `?status=` in the URL and `status IN ('todo','')` would leak docs with an
-  // empty status. Defensive filter at the entry point keeps both branches honest.
-  const statusValues = (c.req.queries('status') ?? []).filter((s) => s.length > 0);
-  if (statusValues.length === 1) {
-    whereClauses.push(eq(documents.status, statusValues[0]!));
-  } else if (statusValues.length > 1) {
-    whereClauses.push(inArray(documents.status, statusValues));
-  }
-  const assignee = c.req.query('assignee');
-  if (assignee) {
-    // documents.frontmatter is JSON-encoded text; match the assignee key.
-    whereClauses.push(sql`json_extract(${documents.frontmatter}, '$.assignee') = ${assignee}`);
-  }
-  const updatedSince = c.req.query('updated_since');
-  if (updatedSince) {
-    const ts = new Date(updatedSince);
-    if (!Number.isNaN(ts.getTime())) {
-      whereClauses.push(gte(documents.updatedAt, ts));
-    }
-  }
-  // ?stale_for=14d → documents whose last_touched_at is NULL or older than N days ago.
-  // Reject 0d (matches every touched row, hides bugs) and any non-Nd format
-  // (silently ignoring "garbage" returns the unfiltered list).
-  const staleFor = c.req.query('stale_for');
-  if (staleFor) {
-    const m = staleFor.match(/^(\d+)d$/);
-    const days = m ? Number(m[1]) : NaN;
-    if (!m || !Number.isFinite(days) || days < 1) {
-      throw new HTTPError(
-        'INVALID_STALE_FOR',
-        'stale_for must be a positive integer followed by "d" (e.g. "7d")',
-        422,
-      );
-    }
-    const cutoff = new Date(Date.now() - days * 86_400_000);
-    const staleClause = or(
-      isNull(documents.lastTouchedAt),
-      lt(documents.lastTouchedAt, cutoff),
-    );
-    if (staleClause) whereClauses.push(staleClause);
-  }
-  if (filterWhere) whereClauses.push(filterWhere);
-  if (cursor) {
-    const ts = new Date(cursor.updatedAt);
-    whereClauses.push(
-      or(
-        lt(documents.updatedAt, ts),
-        and(eq(documents.updatedAt, ts), lt(documents.id, cursor.id)) as never,
-      ) as never,
-    );
+    activeTableId = getTable(c).id;
   }
 
-  const rows = await db
-    .select()
-    .from(documents)
-    .where(and(...whereClauses))
-    .orderBy(desc(documents.updatedAt), desc(documents.id))
-    .limit(limit + 1);
+  const result = await listDocuments({
+    projectId: p.id,
+    activeTableId,
+    type,
+    limit: limitRaw !== undefined ? Math.min(200, Number(limitRaw)) : 50,
+    cursor: cursorRaw,
+    filter,
+    statusValues: c.req.queries('status') ?? [],
+    assignee: c.req.query('assignee') ?? undefined,
+    updatedSince: c.req.query('updated_since') ?? undefined,
+    staleFor: c.req.query('stale_for') ?? undefined,
+  });
 
-  const hasMore = rows.length > limit;
-  const page = hasMore ? rows.slice(0, limit) : rows;
-  const last = page[page.length - 1];
-  const nextCursor = hasMore && last ? encodeCursor(last.updatedAt.getTime(), last.id) : null;
-
-  return c.json({ data: page, nextCursor });
+  return c.json({ data: result.data, nextCursor: result.nextCursor });
 });
 
 documentsRoute.get('/:slugMd{[^/]+\\.md}', async (c) => {
   const p = getProject(c);
   const slugMd = c.req.param('slugMd');
   const slug = slugMd.slice(0, -3);
-  const row = await db.query.documents.findFirst({
-    where: and(eq(documents.projectId, p.id), eq(documents.slug, slug)),
-  });
+  const row = await getDocument(p.id, slug);
   if (!row) throw new HTTPError('DOCUMENT_NOT_FOUND', `document "${slug}" not found`, 404);
 
   // Strip reserved keys from frontmatter at read time too, as defense in
@@ -449,9 +178,7 @@ documentsRoute.get('/:slugMd{[^/]+\\.md}', async (c) => {
 documentsRoute.get('/:slug', async (c) => {
   const p = getProject(c);
   const slug = c.req.param('slug');
-  const row = await db.query.documents.findFirst({
-    where: and(eq(documents.projectId, p.id), eq(documents.slug, slug)),
-  });
+  const row = await getDocument(p.id, slug);
   if (!row) throw new HTTPError('DOCUMENT_NOT_FOUND', `document "${slug}" not found`, 404);
   return jsonOk(c, row);
 });
@@ -461,24 +188,33 @@ documentsRoute.patch('/:slug', requireScope('documents:write'), async (c) => {
   const p = getProject(c);
   const ws = getWorkspace(c);
   const slug = c.req.param('slug');
-  const existing = await db.query.documents.findFirst({
-    where: and(eq(documents.projectId, p.id), eq(documents.slug, slug)),
-  });
+  const existing = await getDocument(p.id, slug);
   if (!existing) throw new HTTPError('DOCUMENT_NOT_FOUND', `document "${slug}" not found`, 404);
 
+  // Resolve a fallback table only when needed (work_item update where the
+  // stored tableId might be absent on legacy rows). c.get('table') is null
+  // when this route runs in a /p/:pslug context without a default table seed.
+  const fallbackTable = c.get('table') ?? null;
+
   if (isMarkdownRequest(c.req.raw)) {
+    // The markdown branch is NOT MCP-relevant: it does a WHOLESALE frontmatter
+    // replacement (the JSON PATCH path merges). Keeping it inline avoids
+    // bifurcating the service signature; the route owns this semantic.
     const raw = await c.req.text();
     const parsed = parseMarkdownInput(raw, { type: existing.type as DocumentType });
     if (parsed.type !== existing.type) {
       throw new HTTPError('INVALID_BODY', 'document type cannot change', 422);
     }
     if (existing.type === 'work_item') {
-      // existing.tableId is NULL only for pages; this branch is gated on
-      // work_item, which in practice always has a tableId. The fallback to
-      // getTable(c) guards against accidental misuse from a table-scoped mount
-      // where the row's stored tableId is somehow absent.
-      const tId = existing.tableId ?? getTable(c).id;
-      await validateStatus(tId, parsed.status);
+      const tId = existing.tableId ?? fallbackTable?.id;
+      if (tId && parsed.status != null) {
+        const sRow = await db.query.statuses.findFirst({
+          where: and(eq(statuses.tableId, tId), eq(statuses.key, parsed.status)),
+        });
+        if (!sRow) {
+          throw new HTTPError('INVALID_STATUS', `status "${parsed.status}" not in registry`, 422);
+        }
+      }
     }
     const nextSlug = await maybeRegenerateSlug(p.id, existing, parsed.title);
     const updated = {
@@ -501,11 +237,7 @@ documentsRoute.patch('/:slug', requireScope('documents:write'), async (c) => {
       if (existing.type === 'work_item') {
         const prevAssignee = getAssignee(existing.frontmatter);
         const nextAssignee = getAssignee(updated.frontmatter);
-        if (
-          nextAssignee &&
-          nextAssignee.startsWith('agent:') &&
-          prevAssignee !== nextAssignee
-        ) {
+        if (nextAssignee && nextAssignee.startsWith('agent:') && prevAssignee !== nextAssignee) {
           await emitEvent(tx, {
             workspaceId: ws.id, projectId: p.id, documentId: existing.id,
             kind: 'agent.task.assigned', actor: user.id,
@@ -517,90 +249,17 @@ documentsRoute.patch('/:slug', requireScope('documents:write'), async (c) => {
     return jsonOk(c, updated);
   }
 
-  // JSON branch
   const json = await c.req.json();
   const parsed = documentPatchSchema.safeParse(json);
   if (!parsed.success) throw new HTTPError('INVALID_BODY', parsed.error.message, 422);
-  const patch = parsed.data;
-
-  if (patch.status !== undefined && existing.type === 'work_item') {
-    // Same shape as the markdown branch above: existing.tableId is NULL only
-    // for pages, and this is gated on work_item. The fallback to getTable(c)
-    // guards the table-scoped mount in case the stored tableId is absent.
-    const tId = existing.tableId ?? getTable(c).id;
-    await validateStatus(tId, patch.status);
-  }
-
-  // For agents/triggers, validate the PATCH payload itself (not the merged
-  // result). Why: server-managed fields like api_token_id and last_fired_at
-  // are stored in frontmatter and would fail .strict() if merged-validated.
-  // The trigger schema is a ZodEffects (has .refine), so unwrap via
-  // innerType() before .partial() — and skip the refine for partial patches.
-  if (
-    patch.frontmatter !== undefined &&
-    (existing.type === 'agent' || existing.type === 'trigger')
-  ) {
-    const schema =
-      existing.type === 'agent'
-        ? agentFrontmatterSchema.partial()
-        : triggerFrontmatterSchema.innerType().partial();
-    const r = schema.safeParse(patch.frontmatter);
-    if (!r.success) {
-      const code =
-        existing.type === 'agent' ? 'INVALID_AGENT_FRONTMATTER' : 'INVALID_TRIGGER_FRONTMATTER';
-      throw new HTTPError(code, r.error.message, 422);
-    }
-  }
-
-  const mergedFrontmatter = (() => {
-    if (patch.frontmatter === undefined) return existing.frontmatter;
-    const merged: Record<string, unknown> = { ...existing.frontmatter };
-    for (const [k, v] of Object.entries(patch.frontmatter)) {
-      if ((RESERVED_FRONTMATTER_KEYS as readonly string[]).includes(k)) continue;
-      if (v === null) delete merged[k];
-      else merged[k] = v;
-    }
-    return merged;
-  })();
-
-  const nextSlug =
-    patch.title !== undefined ? await maybeRegenerateSlug(p.id, existing, patch.title) : null;
-  const updated = {
-    ...existing,
-    ...(patch.title !== undefined ? { title: patch.title } : {}),
-    ...(nextSlug ? { slug: nextSlug } : {}),
-    ...(patch.status !== undefined ? { status: patch.status } : {}),
-    ...(patch.body !== undefined ? { body: patch.body } : {}),
-    frontmatter: mergedFrontmatter,
-    ...(patch.parentId !== undefined ? { parentId: patch.parentId } : {}),
-    updatedBy: user.id,
-    updatedAt: new Date(),
-  };
-
-  await db.transaction(async (tx) => {
-    await tx.update(documents).set(updated).where(eq(documents.id, existing.id));
-    await emitEvent(tx, {
-      workspaceId: ws.id, projectId: p.id, documentId: existing.id,
-      kind: 'document.updated', actor: user.id,
-      payload: { changes: [...Object.keys(patch), ...(nextSlug ? ['slug'] : [])] },
-    });
-    if (existing.type === 'work_item') {
-      const prevAssignee = getAssignee(existing.frontmatter);
-      const nextAssignee = getAssignee(updated.frontmatter);
-      if (
-        nextAssignee &&
-        nextAssignee.startsWith('agent:') &&
-        prevAssignee !== nextAssignee
-      ) {
-        await emitEvent(tx, {
-          workspaceId: ws.id, projectId: p.id, documentId: existing.id,
-          kind: 'agent.task.assigned', actor: user.id,
-          payload: { slug: updated.slug, agent: nextAssignee.slice('agent:'.length) },
-        });
-      }
-    }
+  const updated = await updateDocument({
+    workspace: ws,
+    project: p,
+    fallbackTable,
+    actor: user,
+    existing,
+    patch: parsed.data,
   });
-
   return jsonOk(c, updated);
 });
 
@@ -609,29 +268,9 @@ documentsRoute.delete('/:slug', requireScope('documents:delete'), async (c) => {
   const p = getProject(c);
   const ws = getWorkspace(c);
   const slug = c.req.param('slug');
-  const existing = await db.query.documents.findFirst({
-    where: and(eq(documents.projectId, p.id), eq(documents.slug, slug)),
-  });
+  const existing = await getDocument(p.id, slug);
   if (!existing) throw new HTTPError('DOCUMENT_NOT_FOUND', `document "${slug}" not found`, 404);
-  await db.transaction(async (tx) => {
-    await tx.delete(documents).where(eq(documents.id, existing.id));
-    if (existing.type === 'agent') {
-      const apiTokenId = (existing.frontmatter as Record<string, unknown>)['api_token_id'];
-      if (typeof apiTokenId === 'string') {
-        await tx.delete(apiTokens).where(eq(apiTokens.id, apiTokenId));
-      }
-      await emitEvent(tx, {
-        workspaceId: ws.id, projectId: p.id, documentId: existing.id,
-        kind: 'agent.deleted', actor: user.id,
-        payload: { slug: existing.slug },
-      });
-    }
-    await emitEvent(tx, {
-      workspaceId: ws.id, projectId: p.id, documentId: existing.id,
-      kind: 'document.deleted', actor: user.id,
-      payload: { id: existing.id, slug: existing.slug, type: existing.type, title: existing.title },
-    });
-  });
+  await deleteDocument({ workspace: ws, project: p, actor: user, existing });
   return c.body(null, 204);
 });
 
@@ -659,9 +298,7 @@ documentsRoute.post('/:slug/activity', requireScope('documents:write'), async (c
     );
   }
 
-  const existing = await db.query.documents.findFirst({
-    where: and(eq(documents.projectId, p.id), eq(documents.slug, slug)),
-  });
+  const existing = await getDocument(p.id, slug);
   if (!existing) throw new HTTPError('DOCUMENT_NOT_FOUND', `document "${slug}" not found`, 404);
 
   const now = new Date();
@@ -686,7 +323,15 @@ documentsRoute.post('/:slug/activity', requireScope('documents:write'), async (c
 documentsRoute.get('/:slug/events', async (c) => {
   const p = getProject(c);
   const slug = c.req.param('slug');
-  const limit = parseLimit(c.req.query('limit'), 50);
+  const limitRaw = c.req.query('limit');
+  let limit = 50;
+  if (limitRaw !== undefined) {
+    const n = Number(limitRaw);
+    if (!Number.isFinite(n) || !Number.isInteger(n) || n < 1) {
+      throw new HTTPError('INVALID_LIMIT', 'limit must be a positive integer ≤ 200', 422);
+    }
+    limit = Math.min(200, n);
+  }
 
   const doc = await db.query.documents.findFirst({
     where: and(eq(documents.projectId, p.id), eq(documents.slug, slug)),

@@ -7,6 +7,7 @@ import { db } from '../db/client.ts';
 import { documents, statuses } from '../db/schema.ts';
 import { jsonOk, HTTPError } from '../lib/http.ts';
 import { emitEvent } from '../lib/events.ts';
+import { listStatuses } from '../services/statuses.ts';
 import { type AuthContext, getUser } from '../middleware/auth.ts';
 import { requireScope } from '../middleware/bearer.ts';
 import { getProject, getTable, getWorkspace, type ScopeContext } from '../middleware/scope.ts';
@@ -17,11 +18,7 @@ const CATEGORIES = ['backlog', 'unstarted', 'started', 'completed', 'cancelled']
 
 statusesRoute.get('/', async (c) => {
   const t = getTable(c);
-  const rows = await db.query.statuses.findMany({
-    where: eq(statuses.tableId, t.id),
-    orderBy: (t, { asc }) => [asc(t.order)],
-  });
-  return jsonOk(c, rows);
+  return jsonOk(c, await listStatuses(t.id));
 });
 
 statusesRoute.post(

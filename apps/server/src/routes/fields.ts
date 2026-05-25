@@ -8,6 +8,7 @@ import { fields } from '../db/schema.ts';
 import { jsonOk, HTTPError } from '../lib/http.ts';
 import { emitEvent } from '../lib/events.ts';
 import { FIELD_TYPES, type FieldType, validateTypeChange } from '../lib/field-type-change.ts';
+import { listFields } from '../services/fields.ts';
 import { type AuthContext, getUser } from '../middleware/auth.ts';
 import { requireScope } from '../middleware/bearer.ts';
 import { getProject, getTable, getWorkspace, type ScopeContext } from '../middleware/scope.ts';
@@ -42,11 +43,7 @@ function validateOptions(type: string, options: string[] | undefined): void {
 
 fieldsRoute.get('/', async (c) => {
   const t = getTable(c);
-  const rows = await db.query.fields.findMany({
-    where: eq(fields.tableId, t.id),
-    orderBy: (t, { asc }) => [asc(t.order)],
-  });
-  return jsonOk(c, rows);
+  return jsonOk(c, await listFields(t.id));
 });
 
 fieldsRoute.post('/', requireScope('fields:write'), zValidator('json', baseSchema), async (c) => {

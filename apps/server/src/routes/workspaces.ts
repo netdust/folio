@@ -9,6 +9,7 @@ import { memberships, workspaces } from '../db/schema.ts';
 import { emitEvent } from '../lib/events.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
 import { slugUniqueInWorkspaces } from '../lib/slug-unique.ts';
+import { listWorkspaces } from '../services/workspaces.ts';
 import { type AuthContext, getUser, requireUser } from '../middleware/auth.ts';
 import { type ScopeContext, getRole, getWorkspace } from '../middleware/scope.ts';
 
@@ -20,12 +21,7 @@ workspacesRoute.use('*', requireUser);
 
 workspacesRoute.get('/', async (c) => {
   const user = getUser(c);
-  const rows = await db
-    .select({ workspace: workspaces, role: memberships.role })
-    .from(memberships)
-    .innerJoin(workspaces, eq(workspaces.id, memberships.workspaceId))
-    .where(eq(memberships.userId, user.id));
-  return jsonOk(c, rows);
+  return jsonOk(c, await listWorkspaces(user.id));
 });
 
 workspacesRoute.post(

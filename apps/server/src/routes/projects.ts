@@ -10,6 +10,7 @@ import { emitEvent } from '../lib/events.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
 import { seedProjectDefaults } from '../lib/seed-project-defaults.ts';
 import { slugUniqueInProjects } from '../lib/slug-unique.ts';
+import { listProjects } from '../services/projects.ts';
 import { type AuthContext, getUser } from '../middleware/auth.ts';
 import {
   type ScopeContext,
@@ -24,10 +25,7 @@ const projectsRoute = new Hono<AuthContext & ScopeContext>();
 
 projectsRoute.get('/', async (c) => {
   const ws = getWorkspace(c);
-  const rows = await db.query.projects.findMany({
-    where: eq(projects.workspaceId, ws.id),
-  });
-  return jsonOk(c, rows);
+  return jsonOk(c, await listProjects(ws.id));
 });
 
 projectsRoute.post(

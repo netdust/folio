@@ -8,6 +8,7 @@ import { db } from '../db/client.ts';
 import { views } from '../db/schema.ts';
 import { jsonOk, HTTPError } from '../lib/http.ts';
 import { emitEvent } from '../lib/events.ts';
+import { listViews } from '../services/views.ts';
 import { type AuthContext, getUser } from '../middleware/auth.ts';
 import { requireScope } from '../middleware/bearer.ts';
 import { getProject, getTable, getWorkspace, type ScopeContext } from '../middleware/scope.ts';
@@ -40,11 +41,7 @@ function validateFilters(input: unknown): void {
 
 viewsRoute.get('/', async (c) => {
   const t = getTable(c);
-  const rows = await db.query.views.findMany({
-    where: eq(views.tableId, t.id),
-    orderBy: (t, { asc }) => [asc(t.order)],
-  });
-  return jsonOk(c, rows);
+  return jsonOk(c, await listViews(t.id));
 });
 
 viewsRoute.post('/', requireScope('views:write'), zValidator('json', baseSchema), async (c) => {
