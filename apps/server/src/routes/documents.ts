@@ -61,8 +61,10 @@ function deriveTitleFromBody(body: string): string | null {
   return m ? m[1]!.trim() : null;
 }
 
+type DocumentType = 'work_item' | 'page' | 'agent' | 'trigger';
+
 interface ParsedMdInput {
-  type: 'work_item' | 'page';
+  type: DocumentType;
   title: string;
   body: string;
   frontmatter: Record<string, unknown>;
@@ -83,11 +85,15 @@ function stripReservedFrontmatter(fm: Record<string, unknown>): Record<string, u
   return out;
 }
 
-function parseMarkdownInput(raw: string, defaults?: { type?: 'work_item' | 'page' }): ParsedMdInput {
+const DOCUMENT_TYPES: readonly DocumentType[] = ['work_item', 'page', 'agent', 'trigger'];
+
+function parseMarkdownInput(raw: string, defaults?: { type?: DocumentType }): ParsedMdInput {
   const { frontmatter, body } = parseMarkdown(raw);
   const fmType = frontmatter.type;
-  const type: 'work_item' | 'page' =
-    fmType === 'work_item' || fmType === 'page' ? fmType : (defaults?.type ?? 'work_item');
+  const type: DocumentType =
+    typeof fmType === 'string' && (DOCUMENT_TYPES as readonly string[]).includes(fmType)
+      ? (fmType as DocumentType)
+      : (defaults?.type ?? 'work_item');
   const title =
     deriveTitleFromBody(body) ??
     (typeof frontmatter.title === 'string' ? frontmatter.title : null) ??
@@ -335,7 +341,7 @@ documentsRoute.patch('/:slug', requireScope('documents:write'), async (c) => {
 
   if (isMarkdownRequest(c.req.raw)) {
     const raw = await c.req.text();
-    const parsed = parseMarkdownInput(raw, { type: existing.type as 'work_item' | 'page' });
+    const parsed = parseMarkdownInput(raw, { type: existing.type as DocumentType });
     if (parsed.type !== existing.type) {
       throw new HTTPError('INVALID_BODY', 'document type cannot change', 422);
     }

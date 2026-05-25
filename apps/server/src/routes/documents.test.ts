@@ -577,3 +577,44 @@ test('GET /?stale_for=Nd filters by last_touched_at', async () => {
   expect(titles).toContain('Stale');
   expect(titles).not.toContain('Fresh');
 });
+
+test('POST creates a document with type=agent', async () => {
+  const { app, seed } = await makeTestApp();
+  const res = await app.request('/api/v1/w/acme/p/web/documents', {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      type: 'agent',
+      title: 'Triage bot',
+      frontmatter: {
+        system_prompt: 'Help triage incoming bugs.',
+        model: 'claude-sonnet-4-6',
+        provider: 'anthropic',
+        tools: ['list_documents', 'get_document'],
+      },
+    }),
+  });
+  expect(res.status).toBe(201);
+  const body = await res.json();
+  expect(body.data.type).toBe('agent');
+});
+
+test('POST creates a document with type=trigger', async () => {
+  const { app, seed } = await makeTestApp();
+  const res = await app.request('/api/v1/w/acme/p/web/documents', {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      type: 'trigger',
+      title: 'Monday morning standup',
+      frontmatter: {
+        agent: 'triage-bot',
+        schedule: '0 9 * * 1',
+        on_event: null,
+      },
+    }),
+  });
+  expect(res.status).toBe(201);
+  const body = await res.json();
+  expect(body.data.type).toBe('trigger');
+});
