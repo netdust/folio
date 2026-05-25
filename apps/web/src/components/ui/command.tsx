@@ -25,7 +25,12 @@ export function CommandInput({ className, ...props }: ComponentProps<typeof Comm
 }
 
 export function CommandList({ className, ...props }: ComponentProps<typeof CommandPrimitive.List>) {
-  return <CommandPrimitive.List className={cn('max-h-[320px] overflow-auto p-1.5', className)} {...props} />;
+  return (
+    <CommandPrimitive.List
+      className={cn('folio-scroll max-h-[320px] overflow-auto p-1.5', className)}
+      {...props}
+    />
+  );
 }
 
 export function CommandEmpty(props: ComponentProps<typeof CommandPrimitive.Empty>) {

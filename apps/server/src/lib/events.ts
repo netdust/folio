@@ -9,7 +9,8 @@ export type EventKind =
   | 'view.created'     | 'view.updated'     | 'view.deleted'
   | 'table.created'    | 'table.updated'    | 'table.deleted'
   | 'project.created'  | 'project.updated'  | 'project.deleted'
-  | 'workspace.created' | 'workspace.updated';
+  | 'workspace.created' | 'workspace.updated'
+  | 'activity.logged';
 
 export interface EmitArgs {
   workspaceId: string;

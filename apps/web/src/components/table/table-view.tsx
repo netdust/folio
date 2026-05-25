@@ -21,7 +21,9 @@ import { FilterBar } from '../filter/filter-bar.tsx';
 import { EmptyState } from '../views/empty-state.tsx';
 import { ListSkeleton } from '../views/list-skeleton.tsx';
 import { TableHeader, type SortState } from './table-header.tsx';
+import { ColumnPicker } from './column-picker.tsx';
 import { TableRow } from './table-row.tsx';
+import { TableAddRow } from './table-add-row.tsx';
 import {
   mergeColumns,
   applyColumnOrder,
@@ -32,6 +34,21 @@ import {
 interface Props {
   wslug: string;
   pslug: string;
+}
+
+/**
+ * One-level structural equality for URL search values. `===` is wrong here:
+ * filter arrays (status/labels) are fresh references each render even when
+ * their contents match, which would force `same` to false on every hydration
+ * pass. Exported for direct unit tests.
+ */
+export function sameSearchValue(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (Array.isArray(a) && Array.isArray(b)) {
+    if (a.length !== b.length) return false;
+    return a.every((v, i) => v === b[i]);
+  }
+  return false;
 }
 
 export function TableView({ wslug, pslug }: Props) {
@@ -83,13 +100,25 @@ export function TableView({ wslug, pslug }: Props) {
 
     const viewFilters = (activeView.filters ?? {}) as Record<string, unknown>;
     const nextSearch: Record<string, unknown> = {};
+    const FILTER_KEYS = ['status', 'priority', 'assignee', 'labels', 'updated_since'] as const;
 
     if (search.doc) nextSearch.doc = search.doc;
     if (urlViewId) nextSearch.view = urlViewId;
 
+    // URL filter params win — a user who deep-links with ?view=v1&status=todo
+    // explicitly chose that override; the view's stored value only fills
+    // missing keys.
+    for (const key of FILTER_KEYS) {
+      const urlValue = search[key];
+      if (urlValue !== undefined && urlValue !== null && urlValue !== '') {
+        nextSearch[key] = urlValue;
+      }
+    }
+
     // The compiler accepts both flat (`{status: 'In Progress'}`) and AST
     // (`{status: {$eq: 'In Progress'}}`); honor both at read time.
-    for (const key of ['status', 'priority', 'assignee', 'labels', 'updated_since'] as const) {
+    for (const key of FILTER_KEYS) {
+      if (key in nextSearch) continue; // URL already supplied this key.
       const raw = viewFilters[key];
       if (raw === undefined || raw === null || raw === '') continue;
       if (typeof raw === 'string' || typeof raw === 'number' || Array.isArray(raw)) {
@@ -103,15 +132,23 @@ export function TableView({ wslug, pslug }: Props) {
       }
     }
 
-    const viewSort = activeView.sort;
-    if (Array.isArray(viewSort) && viewSort.length > 0) {
-      const first = viewSort[0];
-      if (first && typeof first === 'object' && 'key' in first) {
-        const k = (first as { key: unknown }).key;
-        if (typeof k === 'string') {
-          nextSearch.sort = k;
-          const d = (first as { dir?: unknown }).dir;
-          nextSearch.dir = d === 'desc' ? 'desc' : 'asc';
+    // Sort: URL wins for the same reason.
+    const urlSort = search.sort;
+    if (typeof urlSort === 'string' && urlSort) {
+      nextSearch.sort = urlSort;
+      const urlDir = search.dir;
+      nextSearch.dir = urlDir === 'desc' ? 'desc' : 'asc';
+    } else {
+      const viewSort = activeView.sort;
+      if (Array.isArray(viewSort) && viewSort.length > 0) {
+        const first = viewSort[0];
+        if (first && typeof first === 'object' && 'key' in first) {
+          const k = (first as { key: unknown }).key;
+          if (typeof k === 'string') {
+            nextSearch.sort = k;
+            const d = (first as { dir?: unknown }).dir;
+            nextSearch.dir = d === 'desc' ? 'desc' : 'asc';
+          }
         }
       }
     }
@@ -119,7 +156,7 @@ export function TableView({ wslug, pslug }: Props) {
     const searchObj = search as Record<string, unknown>;
     const same =
       Object.keys(searchObj).length === Object.keys(nextSearch).length &&
-      Object.keys(nextSearch).every((k) => nextSearch[k] === searchObj[k]);
+      Object.keys(nextSearch).every((k) => sameSearchValue(nextSearch[k], searchObj[k]));
     if (same) return;
 
     void navigate({ to: '.', search: nextSearch, replace: true });
@@ -146,9 +183,9 @@ export function TableView({ wslug, pslug }: Props) {
     void navigate({ to: '.', search: { ...search, doc: slug }, replace: false });
   };
 
-  const onCreate = async () => {
+  const onCreate = async (title: string = 'Untitled') => {
     try {
-      const created = await create.mutateAsync({ type: 'work_item', title: 'Untitled' });
+      const created = await create.mutateAsync({ type: 'work_item', title });
       void navigate({ to: '.', search: { ...search, doc: created.slug }, replace: false });
     } catch (err) {
       toast.error(formatApiError(err));
@@ -169,7 +206,9 @@ export function TableView({ wslug, pslug }: Props) {
       if (c.kind === 'updated_since') { nextSearch['updated_since'] = c.value; flatFilters['updated_since'] = c.value; }
     }
     void navigate({ to: '.', search: nextSearch, replace: false });
-    if (activeView) {
+    // Only autosave when the user has explicitly opened this view (?view=<id>).
+    // Without ?view=, activeView is a fallback — filter changes are ad-hoc.
+    if (urlViewId && activeView && activeView.id === urlViewId) {
       updateView.mutate(
         { id: activeView.id, patch: { filters: flatFilters } },
         { onError: (err) => toast.error(formatApiError(err)) },
@@ -190,7 +229,9 @@ export function TableView({ wslug, pslug }: Props) {
     void navigate({ to: '.', search: nextSearch, replace: false });
 
     // 2) Auto-save to active view (parity with columnOrder + visibleFields).
-    if (!activeView) return;
+    // Same consent gate as onClauseChange — only mutate when the user
+    // explicitly opened this view via ?view=<id>.
+    if (!urlViewId || !activeView || activeView.id !== urlViewId) return;
     const patchSort = next ? [{ key: next.key, dir: next.dir }] : [];
     updateView.mutate(
       { id: activeView.id, patch: { sort: patchSort } },
@@ -240,22 +281,33 @@ export function TableView({ wslug, pslug }: Props) {
   );
 
   return (
-    <>
-      <FilterBar
-        clauses={clauses}
-        statuses={statuses ?? []}
-        pinnedFields={fields ?? []}
-        onChange={onClauseChange}
-      />
-      <div className="folio-scroll -mx-[22px] overflow-x-auto">
-        <div className="px-[22px]">
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex flex-shrink-0 items-center justify-between gap-2">
+        <FilterBar
+          clauses={clauses}
+          statuses={statuses ?? []}
+          pinnedFields={fields ?? []}
+          onChange={onClauseChange}
+        />
+        <ColumnPicker
+          columns={allColumns}
+          visibleKeys={visibleKeys}
+          onChange={onVisibilityChange}
+        />
+      </div>
+      <div
+        data-testid="table-scroll"
+        className="folio-scroll -mx-[22px] flex-1 min-h-0 overflow-auto"
+      >
+        {/* No left padding here: the sticky first column owns its own 22px
+            of left whitespace via `pl-[22px]` so the whitespace stays put
+            from the first pixel of horizontal scroll (instead of collapsing
+            as the row slides left until the cell hits left:0). */}
+        <div className="pr-[22px]">
           <TableHeader
             columns={visibleColumns}
-            allColumns={allColumns}
-            visibleKeys={visibleKeys}
             sort={sort}
             onSort={onSortChange}
-            onVisibilityChange={onVisibilityChange}
             onReorder={onReorder}
           />
           {isLoading ? <ListSkeleton rows={6} /> : null}
@@ -271,7 +323,7 @@ export function TableView({ wslug, pslug }: Props) {
               }
               action={
                 clauses.length === 0
-                  ? { label: 'Create your first work item', onClick: onCreate }
+                  ? { label: 'Create your first work item', onClick: () => void onCreate() }
                   : undefined
               }
             />
@@ -290,9 +342,16 @@ export function TableView({ wslug, pslug }: Props) {
                 onUpdate={onUpdate}
               />
             ))}
+            {!isLoading && !error && filteredDocs.length > 0 ? (
+              <TableAddRow
+                columns={visibleColumns}
+                isPending={create.isPending}
+                onCreate={(title) => void onCreate(title)}
+              />
+            ) : null}
           </div>
         </div>
       </div>
-    </>
+    </div>
   );
 }

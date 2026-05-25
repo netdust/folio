@@ -1,7 +1,7 @@
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { useMemo, useState } from 'react';
 import { DndContext, PointerSensor, useDraggable, useDroppable, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
-import { ChevronDown, ChevronRight, FolderTree } from 'lucide-react';
+import { ChevronDown, ChevronRight, FolderTree, Plus } from 'lucide-react';
 import { toast } from 'sonner';
 import { useDocuments, useCreateDocument, useUpdateDocument } from '../../lib/api/documents.ts';
 import { formatApiError } from '../../lib/api/index.ts';
@@ -39,6 +39,18 @@ export function WikiTree({ wslug, pslug }: Props) {
   const onNewPage = async () => {
     try {
       const p = await create.mutateAsync({ type: 'page', title: 'Untitled' });
+      openDoc(p.slug);
+    } catch (err) {
+      toast.error(formatApiError(err));
+    }
+  };
+
+  const onAddChild = async (parentId: string) => {
+    try {
+      const p = await create.mutateAsync({ type: 'page', title: 'Untitled', parentId });
+      // Auto-expand the parent so the new child is visible on return from
+      // the slideover.
+      setExpanded((prev) => new Set(prev).add(parentId));
       openDoc(p.slug);
     } catch (err) {
       toast.error(formatApiError(err));
@@ -90,8 +102,10 @@ export function WikiTree({ wslug, pslug }: Props) {
     );
   }
 
+  // MainFrame's children container already supplies px-[22px] py-2 — don't
+  // double it up here.
   return (
-    <div className="flex h-full flex-col gap-2 px-[22px] py-2">
+    <div className="flex h-full flex-col gap-2">
       <DndContext sensors={sensors} onDragEnd={onDragEnd}>
         <ul className="flex flex-col">
           {tree.map((node) => (
@@ -106,6 +120,7 @@ export function WikiTree({ wslug, pslug }: Props) {
                 return n;
               })}
               onOpen={openDoc}
+              onAddChild={onAddChild}
               pendingId={pendingId}
               wslug={wslug}
               pslug={pslug}
@@ -123,12 +138,13 @@ interface RowProps {
   expanded: Set<string>;
   onToggle: (id: string) => void;
   onOpen: (slug: string) => void;
+  onAddChild: (parentId: string) => void;
   pendingId: string | null;
   wslug: string;
   pslug: string;
 }
 
-export function TreeRow({ node, depth, expanded, onToggle, onOpen, pendingId, wslug, pslug }: RowProps) {
+export function TreeRow({ node, depth, expanded, onToggle, onOpen, onAddChild, pendingId, wslug, pslug }: RowProps) {
   const isExpanded = expanded.has(node.doc.id);
   const hasChildren = node.children.length > 0;
   const isPending = pendingId === node.doc.id;
@@ -166,7 +182,7 @@ export function TreeRow({ node, depth, expanded, onToggle, onOpen, pendingId, ws
     >
       <RowContextMenu items={[{ label: 'Copy as Markdown', onSelect: onCopy, hint: '⌘⇧C' }]}>
         <div
-          className="grid grid-cols-[24px_1fr] items-center gap-1 rounded-sm py-1 pr-2 hover:bg-card"
+          className="group/row grid grid-cols-[24px_1fr_auto] items-center gap-1 rounded-sm py-1 pr-2 hover:bg-card"
           style={{ paddingLeft: `${depth * 16}px` }}
         >
           <button
@@ -187,6 +203,17 @@ export function TreeRow({ node, depth, expanded, onToggle, onOpen, pendingId, ws
           >
             {node.doc.title}
           </button>
+          <button
+            type="button"
+            aria-label={`Add child page under ${node.doc.title}`}
+            title="Add child page"
+            data-testid={`wiki-add-child-${node.doc.slug}`}
+            onClick={(e) => { e.stopPropagation(); onAddChild(node.doc.id); }}
+            onPointerDown={(e) => e.stopPropagation()}
+            className="grid h-6 w-6 place-items-center rounded text-fg-3 opacity-0 transition-opacity duration-fast hover:bg-card hover:text-fg group-hover/row:opacity-100"
+          >
+            <Icon icon={Plus} size={14} />
+          </button>
         </div>
       </RowContextMenu>
       {isExpanded && hasChildren ? (
@@ -199,6 +226,7 @@ export function TreeRow({ node, depth, expanded, onToggle, onOpen, pendingId, ws
               expanded={expanded}
               onToggle={onToggle}
               onOpen={onOpen}
+              onAddChild={onAddChild}
               pendingId={pendingId}
               wslug={wslug}
               pslug={pslug}

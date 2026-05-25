@@ -40,7 +40,7 @@ export function FrontmatterForm({
   ];
 
   return (
-    <dl className="grid grid-cols-[140px_1fr] gap-x-4 gap-y-2 text-sm">
+    <dl className="grid grid-cols-[140px_1fr] gap-x-4 gap-y-2">
       {type === 'work_item' ? (
         <>
           <dt className="self-center font-mono text-[11px] text-fg-3">status</dt>

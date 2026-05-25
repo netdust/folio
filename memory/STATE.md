@@ -1,6 +1,6 @@
 # Folio — STATE
 
-_Last updated: 2026-05-24 (post phase-1.6 build)_
+_Last updated: 2026-05-25 (post UX cleanup batch on phase-1.7/crm-polish)_
 
 Living snapshot of where the project actually is. Read at session start. Update at session end if anything below changed.
 
@@ -13,7 +13,7 @@ Phase numbering aligned with `docs/PHASES.md` (canonical) as of 2026-05-24 reorg
 - **Phase 1.5 (Tables + Spreadsheet UI):** shipped + merged to main at `af3c0f1` on 2026-05-24. 21 subagent-driven tasks across 1.5a (tables foundation) and 1.5b (spreadsheet UI). Plans: `docs/superpowers/plans/2026-05-24-phase-2a-tables-foundation.md` (now Phase 1.5a) + `2026-05-24-phase-2b-spreadsheet-table-ui.md` (now Phase 1.5b).
 - **Phase 1.6 (Saved views in rail):** shipped + merged to main at `cfe4ed6` on 2026-05-24. Saved views nest in rail with `?view=<id>` URL contract, filter/sort/columnOrder/visibleFields auto-save to active view, table last column hugs right edge. Plan: `docs/superpowers/plans/2026-05-24-phase-1-6-saved-views-in-rail.md`. Merge bundled Phase 1.6.1 (see below).
 - **Phase 1.6.1 (Rail completeness):** shipped 2026-05-24, absorbed into `phase-1.6/saved-views` branch. NocoDB-style hover-reveal `+`/`⋯` affordances on every rail row (workspace, project, table, view), double-click rename, confirm-delete dialog. `+ New project` in workspace switcher popover. Wiki as a rail leaf under each project. Per `[[rail-ux-pattern]]` auto-memory.
-- **Phase 1.7 (Lightweight CRM polish):** queued — `next_action` first-class fields, `last_touched_at`, activity log panel, playbook linking.
+- **Phase 1.7 (Lightweight CRM polish):** shipped on `phase-1.7/crm-polish` 2026-05-24. 3 of 4 sections shipped (Playbook linking deferred): `last_touched_at` column + Log Activity endpoint + ?stale_for=Nd filter, Activity panel in slideover, color-coded `next_action_due`. 116 server / 173 web / 28 shared. Awaiting manual QA + merge.
 - **Phase 1.8 (Time-aware views):** queued — timeline view + This Week dashboard.
 - **Phase 2 (Agents):** queued — spine of v1. Tokens, SSE, MCP server, agents-as-documents, triggers-as-documents (surface only).
 - **Phase 3 (AI in UI + Agent runner):** queued — second spine. Slash commands, provider abstraction, agent runner, trigger scheduler/matcher.
@@ -25,7 +25,51 @@ Phase numbering aligned with `docs/PHASES.md` (canonical) as of 2026-05-24 reorg
 
 ## Current branch
 
-`main` at `cfe4ed6` (Phase 1.6 + 1.6.1 merged 2026-05-24 with `--no-ff`, pushed to `origin/main`). `phase-1.6/saved-views` branch retained for reference; can be deleted after the next phase branches off. 113 / 113 server unit + 169 / 169 web unit + 1 skipped + 28 / 28 shared on the merge commit.
+`phase-1.7/crm-polish` — 6 phase commits + 6 auto-memory commits ahead of main (`cfe4ed6`). NOT merged; Stefan is doing a manual QA pass on 1.6 + 1.7 + the post-1.7 fixes before deciding what to merge / revert.
+
+Tests on branch tip: 116 server (was 113, +3 activity endpoint tests) / 173 web (+4 due-urgency) / 28 shared. All green. TS clean.
+
+### 2026-05-25 UX cleanup batch (5 items, all green)
+
+Shipped on `phase-1.7/crm-polish` (uncommitted as of this snapshot). 9 new unit tests added; full unit suite at 214 / 215 web (was 173), 123 / 123 server, 28 / 28 shared. TS clean for the touched files; pre-existing TS errors in `apps/server/src/index.ts` and `packages/shared/src/filter-compile.test.ts` are unrelated.
+
+1. **Rail tree chevron on hover.** `apps/web/src/components/shell/rail-tree.tsx` — leading folder/doc icon swaps to chevron on row hover (single slot). Non-expandable rows keep their icon always. Tests in `rail-tree.test.tsx`.
+2. **Sticky horizontal scrollbar at viewport bottom.** `apps/web/src/components/table/table-view.tsx` — TableView now owns its scroll context with `flex h-full min-h-0 flex-col` outer + `flex-1 min-h-0 overflow-auto` scroll wrapper. The horizontal scrollbar sits at the bottom of that flex item, which is the viewport bottom inside MainFrame's content area. MainFrame itself is left alone.
+3. **Sticky first-column right border.** `table-cell.tsx:40` + `table-header.tsx:113` — `border-r border-border-light pr-3` on the sticky branch. Test in new `table-cell.test.tsx`.
+4. **Add-row at table bottom.** New `apps/web/src/components/table/table-add-row.tsx`. Renders only when there are existing docs (EmptyState already CTAs for the zero state). Click → inline title edit → on commit, `createDocument` then navigate to `?doc=<slug>` to open the slideover for the rest of the frontmatter. Three tests in `table-view.test.tsx` (renders, happy path, empty cancel).
+5. **Slideover toolbar.** `document-slideover.tsx` — header right-side now Copy MD + Edit/Raw + Activity + vertical divider + ⋯ (Popover) + Close. ⋯ menu houses Delete (destructive). Delete fires a Dialog (existing `ui/dialog.tsx` primitive) with title quote + Cancel + danger Delete; on confirm, calls `useDeleteDocument` then closes the slideover. `mode` state + Alt+M listener lifted to `DocumentSlideover`. Body header simplified to just the slug pill. Three tests in `document-slideover.test.tsx`.
+
+Decisions, locked via AskUserQuestion this session:
+- Rail: icon→chevron swap on row hover (single slot).
+- Delete: confirm dialog (no toast-undo / soft-delete).
+- Add-row: inline title in row → open slideover for rest. NOT optimistic-create with default 'Untitled'.
+- Scrollbar: sticky inside main scroll area, NOT fixed overlay.
+- Toolbar: visible Copy MD + Edit/Raw + Activity; ⋯ menu houses Delete and is room to grow.
+
+### Open UX issue at session end (DO NOT touch without re-reading)
+
+After Phase 1.7's ColumnPicker hoist (`3614ed4`), a follow-up issue remains:
+- The picker icon now sits in the FilterBar row, right-aligned to the whole viewport.
+- Stefan reports it "floats above the table in empty space" — visually disconnected from the columns.
+- He also still sees a horizontal scrollbar even when the table content fits the viewport.
+- His ask: picker should be "right aligned in the last column" — i.e. visually inside the table header, top-right of the columns area, not floating above.
+
+I attempted an `absolute right-0` overlay approach in a non-committed edit and reverted it on Stefan's request. **Next session: investigate via Chrome DevTools FIRST**, don't guess. The scroll trigger needs measurement; the visual disconnect needs a different layout strategy than "separate row above table."
+
+### Phase commit list on this branch (newest first)
+
+- `94ac10f` memory: auto-capture session end
+- `3614ed4` fix: hoist ColumnPicker out of the table's horizontal scroll area (the "floats above" change)
+- `527263b` memory: auto-capture
+- `4bf5ff4` fix: auto-migrate dev DB on server boot
+- `6bd9a47` memory: auto-capture
+- `9fbe81d` fix: row height + sticky-cell hover mismatch (verified in Chrome — row 50→34px, sticky cell tracks row hover via group/row)
+- `3599fb1` memory: auto-capture
+- `acc535a` fix: table row height + InlineEdit hover-bg regressions from phase 1.6 (partial — these were guesses, the real fix was 9fbe81d)
+- `c19763d` memory: auto-capture
+- `a6f8a60` phase-1.7: fix table row height regression from urgency wrapper
+- `34ed292` memory: auto-capture
+- `3b334be` phase-1.7: complete — last_touched_at, activity log, due-urgency
 
 ## What's working in the UI
 
@@ -103,3 +147,155 @@ See `docs/PHASES.md` for the canonical phase list (above-section mirrors it). Lo
 [2026-05-24] — session ended (no significant changes captured)
 [2026-05-24] — session ended (no significant changes captured)
 [2026-05-24] — session ended (no significant changes captured)
+[2026-05-24] — session ended (no significant changes captured)
+[2026-05-24] — session ended (no significant changes captured)
+[2026-05-24] — session ended (no significant changes captured)
+[2026-05-24] — session ended (no significant changes captured)
+[2026-05-24] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
+
+---
+### 2026-05-25 — tagged capture
+
+**Risks**
+- some `<button>` somewhere is *relying* on `border-style: none` to be set globally. That would be odd (border-width: 0 is invisible regardless of style) but possible if any button uses `border-color: red` without setting `border-style`. Let me grep.
+
+---
+### 2026-05-25 — tagged capture
+
+**Risks**
+- some `<button>` somewhere is *relying* on `border-style: none` to be set globally. That would be odd (border-width: 0 is invisible regardless of style) but possible if any button uses `border-color: red` without setting `border-style`. Let me grep.
+
+---
+### 2026-05-25 — tagged capture
+
+**Risks**
+- some `<button>` somewhere is *relying* on `border-style: none` to be set globally. That would be odd (border-width: 0 is invisible regardless of style) but possible if any button uses `border-color: red` without setting `border-style`. Let me grep.
+
+---
+### 2026-05-25 — tagged capture
+
+**Risks**
+- some `<button>` somewhere is *relying* on `border-style: none` to be set globally. That would be odd (border-width: 0 is invisible regardless of style) but possible if any button uses `border-color: red` without setting `border-style`. Let me grep.
+
+---
+### 2026-05-25 — tagged capture
+
+**Risks**
+- some `<button>` somewhere is *relying* on `border-style: none` to be set globally. That would be odd (border-width: 0 is invisible regardless of style) but possible if any button uses `border-color: red` without setting `border-style`. Let me grep.
+
+---
+### 2026-05-25 — tagged capture
+
+**Risks**
+- some `<button>` somewhere is *relying* on `border-style: none` to be set globally. That would be odd (border-width: 0 is invisible regardless of style) but possible if any button uses `border-color: red` without setting `border-style`. Let me grep.
+
+---
+### 2026-05-25 — tagged capture
+
+**Risks**
+- some `<button>` somewhere is *relying* on `border-style: none` to be set globally. That would be odd (border-width: 0 is invisible regardless of style) but possible if any button uses `border-color: red` without setting `border-style`. Let me grep.
+
+---
+### 2026-05-25 — tagged capture
+
+**Risks**
+- some `<button>` somewhere is *relying* on `border-style: none` to be set globally. That would be odd (border-width: 0 is invisible regardless of style) but possible if any button uses `border-color: red` without setting `border-style`. Let me grep.
+
+---
+### 2026-05-25 — tagged capture
+
+**Risks**
+- some `<button>` somewhere is *relying* on `border-style: none` to be set globally. That would be odd (border-width: 0 is invisible regardless of style) but possible if any button uses `border-color: red` without setting `border-style`. Let me grep.
+
+---
+### 2026-05-25 — tagged capture
+
+**Risks**
+- some `<button>` somewhere is *relying* on `border-style: none` to be set globally. That would be odd (border-width: 0 is invisible regardless of style) but possible if any button uses `border-color: red` without setting `border-style`. Let me grep.
+
+---
+### 2026-05-25 — tagged capture
+
+**Risks**
+- some `<button>` somewhere is *relying* on `border-style: none` to be set globally. That would be odd (border-width: 0 is invisible regardless of style) but possible if any button uses `border-color: red` without setting `border-style`. Let me grep.
+
+---
+### 2026-05-25 — tagged capture
+
+**Risks**
+- some `<button>` somewhere is *relying* on `border-style: none` to be set globally. That would be odd (border-width: 0 is invisible regardless of style) but possible if any button uses `border-color: red` without setting `border-style`. Let me grep.

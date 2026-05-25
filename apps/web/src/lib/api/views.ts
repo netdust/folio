@@ -42,8 +42,15 @@ export interface ViewCreate {
 export function useCreateView(wslug: string, pslug: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (payload: ViewCreate) =>
-      client.post<View>(`/api/v1/w/${wslug}/p/${pslug}/views`, payload),
+    // Server returns `{ data: { view: row } }`; the `data` envelope is stripped
+    // by client.post but the inner `{ view: row }` is not — unwrap explicitly.
+    mutationFn: async (payload: ViewCreate): Promise<View> => {
+      const wrapped = await client.post<{ view: View }>(
+        `/api/v1/w/${wslug}/p/${pslug}/views`,
+        payload,
+      );
+      return wrapped.view;
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: viewsKeys.list(wslug, pslug) });
     },

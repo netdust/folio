@@ -9,7 +9,7 @@
 @layer base {
   button {
     background: none;
-    border: 0;
+    border-width: 0;
     outline: 0;
     box-shadow: none;
     -webkit-appearance: none;

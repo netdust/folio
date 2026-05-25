@@ -69,7 +69,8 @@ describe('buildRailTree', () => {
     expect(views.map((v) => v.label)).toEqual(['Default', 'Custom']);
   });
 
-  it('kanban views are filtered out', () => {
+  it('renders both list AND kanban views in the rail (kanban click routes to /board)', () => {
+    const onViewClick = vi.fn();
     const tree = buildRailTree({
       projects: [{ slug: 'sales', name: 'Acme Sales' }],
       tablesByProject: { sales: [{ id: 't1', slug: 'work-items', name: 'Work Items' }] },
@@ -81,10 +82,15 @@ describe('buildRailTree', () => {
         ],
       },
       currentRoute: { wslug: 'acme' },
-      handlers: noopHandlers,
+      handlers: { ...noopHandlers, onViewClick },
     });
     const views = tree[0].children![0].children!;
-    expect(views.map((v) => v.label)).toEqual(['List A', 'List B']);
+    expect(views.map((v) => v.label)).toEqual(['List A', 'Board', 'List B']);
+
+    // Clicking the kanban view passes its `type` to onViewClick so the
+    // workspace route can decide whether to navigate to /work-items or /board.
+    views.find((v) => v.label === 'Board')!.onClick!();
+    expect(onViewClick).toHaveBeenCalledWith('sales', 'work-items', 'v2', 'kanban');
   });
 
   it('active flag set on the matching view when currentRoute.viewId matches AND pslug matches', () => {
@@ -105,6 +111,48 @@ describe('buildRailTree', () => {
     expect(views.find((v) => v.label === 'Not match')!.active).toBe(false);
   });
 
+  it('wiki leaf is active when the current route is the project wiki', () => {
+    const onWikiClick = () => {};
+    const tree = buildRailTree({
+      projects: [{ slug: 'sales', name: 'Acme Sales' }],
+      tablesByProject: { sales: [] },
+      viewsByTable: {},
+      currentRoute: { wslug: 'acme', pslug: 'sales', isWiki: true },
+      handlers: { ...noopHandlers, onWikiClick },
+    });
+    const wiki = tree[0].children!.find((c) => c.label === 'Wiki');
+    expect(wiki).toBeDefined();
+    expect(wiki!.active).toBe(true);
+  });
+
+  it('wiki leaf is NOT active when current route is work-items on the same project', () => {
+    const onWikiClick = () => {};
+    const tree = buildRailTree({
+      projects: [{ slug: 'sales', name: 'Acme Sales' }],
+      tablesByProject: { sales: [] },
+      viewsByTable: {},
+      currentRoute: { wslug: 'acme', pslug: 'sales', isWiki: false },
+      handlers: { ...noopHandlers, onWikiClick },
+    });
+    const wiki = tree[0].children!.find((c) => c.label === 'Wiki');
+    expect(wiki!.active).toBe(false);
+  });
+
+  it('project NavItem is active when currentRoute.pslug matches', () => {
+    const tree = buildRailTree({
+      projects: [
+        { slug: 'sales', name: 'Sales' },
+        { slug: 'ops', name: 'Ops' },
+      ],
+      tablesByProject: { sales: [], ops: [] },
+      viewsByTable: {},
+      currentRoute: { wslug: 'acme', pslug: 'sales' },
+      handlers: noopHandlers,
+    });
+    expect(tree.find((p) => p.label === 'Sales')!.active).toBe(true);
+    expect(tree.find((p) => p.label === 'Ops')!.active).toBe(false);
+  });
+
   it('clicking a leaf calls handlers.onViewClick with (pslug, tslug, viewId)', () => {
     const onViewClick = vi.fn();
     const tree = buildRailTree({
@@ -115,6 +163,35 @@ describe('buildRailTree', () => {
       handlers: { onViewClick, onNewView: () => {} },
     });
     tree[0].children![0].children![0].onClick!();
-    expect(onViewClick).toHaveBeenCalledWith('sales', 'work-items', 'v1');
+    expect(onViewClick).toHaveBeenCalledWith('sales', 'work-items', 'v1', 'list');
+  });
+
+  it('tables carry an onClick when handlers.onTableClick is supplied', () => {
+    // The collapsed-rail popover renders tables as direct child buttons with
+    // no chevron — so they're only useful if onClick is wired. Without it the
+    // button renders but does nothing on click.
+    const onTableClick = vi.fn();
+    const tree = buildRailTree({
+      projects: [{ slug: 'sales', name: 'Acme Sales' }],
+      tablesByProject: { sales: [{ id: 't1', slug: 'work-items', name: 'Work Items' }] },
+      viewsByTable: { t1: [] },
+      currentRoute: { wslug: 'acme' },
+      handlers: { onViewClick: () => {}, onNewView: () => {}, onTableClick },
+    });
+    const table = tree[0].children![0];
+    expect(table.onClick).toBeDefined();
+    table.onClick!();
+    expect(onTableClick).toHaveBeenCalledWith('sales', 'work-items');
+  });
+
+  it('tables have NO onClick when handlers.onTableClick is omitted', () => {
+    const tree = buildRailTree({
+      projects: [{ slug: 'sales', name: 'Acme Sales' }],
+      tablesByProject: { sales: [{ id: 't1', slug: 'work-items', name: 'Work Items' }] },
+      viewsByTable: { t1: [] },
+      currentRoute: { wslug: 'acme' },
+      handlers: noopHandlers,
+    });
+    expect(tree[0].children![0].onClick).toBeUndefined();
   });
 });

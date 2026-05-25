@@ -6,50 +6,76 @@ For phase-level checkboxes that survive across branches, see `docs/PHASES.md`. T
 
 ---
 
-## Current branch: `phase-1.5/ux-polish`
+## Current branch: `phase-1.7/crm-polish` — UX cleanup batch (2026-05-25)
 
-### Gates before merging to main
+Five independent UX cleanups discovered during Stefan's manual QA pass. All client-side except (5), which uses the existing backend DELETE.
 
-- [x] Visual sign-off against canonical mockups (Stefan signed off on 2026-05-23 — "app looks good")
-- [ ] Manual QA pass: `apps/web/tests/manual-qa-phase-1.md` (15 scenarios)
-  - [x] Scenario 1 (e2e: passing)
-  - [x] Scenario 2 (e2e: passing)
-  - [ ] Scenario 3 — list view inline title edit (e2e scaffolded, selector TODO)
-  - [ ] Scenario 4 — list view inline status edit (e2e scaffolded, selector TODO)
-  - [ ] Scenario 5 — slideover open/close (e2e scaffolded, selector TODO)
-  - [ ] Scenario 6 — slideover frontmatter+body (e2e scaffolded, selector TODO)
-  - [ ] Scenario 7 — mode toggle rich↔raw (covered by unit `round-trip.test.tsx`)
-  - [ ] Scenario 8 — round-trip the wedge (e2e scaffolded, selector TODO)
-  - [ ] Scenario 9 — kanban drag-drop (e2e scaffolded, selector TODO)
-  - [ ] Scenario 10 — wiki create+reparent (e2e scaffolded, selector TODO)
-  - [ ] Scenario 11 — copy-as-MD (e2e scaffolded — Playwright contextmenu is tricky)
-  - [ ] Scenario 12 — filter chip (e2e scaffolded, selector TODO)
-  - [ ] Scenario 13 — Cmd-K palette (e2e scaffolded, selector TODO)
-  - [ ] Scenario 14 — offline rollback (covered by optimistic-mutation unit tests; e2e too flaky)
-  - [x] Scenario 15 — sign-up duplicate email (e2e: passing)
-- [x] Merge to `main` — done 2026-05-24, `--no-ff` merge at `af3c0f1`, pushed to `origin/main`.
+### Decisions locked
 
-### Bugs found this session — all fixed
+- **Rail chevron:** Swap leading icon → chevron on hover. Non-expandable rows keep their icon always.
+- **Delete:** Confirm dialog (existing `dialog.tsx`) before delete.
+- **Add row:** Empty + row at the bottom → inline-editable title in the row → on commit, create the doc + open slideover for the rest.
+- **Horizontal scrollbar:** Sticky inside the main scroll area, not a fixed overlay.
+- **Slideover toolbar:** Visible = Copy MD + Edit/Raw + Activity. ⋯ menu = Delete (+ room to grow). Body header loses LogActivityButton + ModeToggle.
 
-- [x] **Sign-out missing** → `UserMenu` popover in the rail user row.
-- [x] **"Create workspace" dead-end inside a workspace** → Sheet renders from the workspace layout.
-- [x] **InlineEdit title corruption ("UntitledFirst task")** → `defaultEditing` now treats value as placeholder; empty commit reverts.
-- [x] **Duplicate "Create workspace" / "New page" button names** → Sheet submits renamed to "Create"; empty-state CTAs renamed to "Create your first …".
-- [x] **Wiki tree stale after title patch** → `useUpdateDocument` invalidates the broad list prefix, not just the slideover's listParams.
-- [x] **Kbd hint hardcoded `⌘K` / `⌥M` on Linux** → `modKeyHint()` + `altKeyHint()` in `lib/platform.ts`.
-- [x] **"1 pages" pluralization** → singular/plural switch in sub-meta.
-- [x] **Duplicate `aria-label="Open document"` / `"Document title"`** → Interpolated with `doc.title`.
-- [x] **Alt+M kbd hint not bound** → Window-level listener in DocumentSlideover.
-- [x] **Task list items had no checkbox** → Editor CSS draws checkbox via ::before/::after (toggle interactivity deferred to Phase 3).
-- [x] **Filter chips ignored server-side** → Server list handler reads flat `?status=&assignee=&updated_since=` params.
-- [x] **+ Filter button "did nothing"** → Chip/ChipAdd now `forwardRef` so Radix `asChild` can attach its ref.
+### Tasks
 
-### Other open threads (low priority — don't block merge)
+- [x] **Task 1 — Rail tree: chevron on hover, replacing leading icon**
+  - `apps/web/src/components/shell/rail-tree.tsx:46-92`
+  - For expandable items, render the leading icon slot with two siblings: icon (default) + chevron (`hidden group-hover/row:inline-grid`). The icon gets `group-hover/row:hidden`. The wrapping element is a button when expandable, otherwise a non-interactive span. Keep `aria-expanded`, `aria-label`, `data-testid="rail-tree-chevron-${item.id}"` on the button.
+  - Drop the old standalone chevron column (lines 55-69) and the empty placeholder span (lines 70-72) when there are no children — the icon itself takes the slot now.
+  - **Unit test:** extend `rail-tree.test.tsx` — `expandable` node: chevron testid exists, clicking it flips `aria-expanded`. `non-expandable` node: no chevron testid.
 
-- [ ] Decide what to do with `.zed/` and `labeled-actual.png` at repo root (commit, .gitignore, or leave)
-- [ ] Lift `.skip` on the 10 scaffolded manual-qa e2e tests once a selector strategy is settled (add `data-testid` on critical row/cell components, or rely on aria-labels after auditing).
-- [ ] **List column-header sort is wired only on the client** — clicking Title/Status/Updated writes `?sort=…&dir=…` to the URL but the server's documents list handler ignores those params. Either implement server-side sort (matching the filter wiring pattern) or remove the sortable visual affordance.
-- [ ] **Milkdown task checkbox toggle** — the checkbox visually reflects `data-checked` but clicking doesn't toggle. Requires ProseMirror transaction-level access; defer to Phase 3 where slash commands + AI need the same surface.
+- [x] **Task 2 — Table: sticky horizontal scrollbar pinned to viewport bottom**
+  - `apps/web/src/components/table/table-view.tsx:297-339`
+  - Refactor the scroll container so the `overflow-x-auto` div wraps both header + rows AND is `sticky bottom-0` within MainFrame's vertical scroller. The visible result: when the rows extend beyond the viewport vertically, you can still see + drag the horizontal scrollbar at the bottom of the visible area.
+  - The MainFrame's vertical scroller (`main-frame.tsx:45`) is left alone — TableView simply pins its own horizontal-scroll wrapper to the bottom of its bounding box. Use `sticky bottom-0 bg-content` on the inner scroll strip to glue the scrollbar to the viewport edge.
+  - **Unit test:** in `table-view.test.tsx`, assert the scroll wrapper has the `sticky` + `bottom-0` + `overflow-x-auto` classes.
+
+- [x] **Task 3 — Table: thin right border on sticky first column**
+  - `apps/web/src/components/table/table-cell.tsx:40`, `apps/web/src/components/table/table-header.tsx:113`
+  - Append `border-r border-border-light` to the sticky wrapper in both files.
+  - **Unit test:** `table-cell.test.tsx` — sticky cell has `border-r` className, non-sticky cell does not.
+
+- [x] **Task 4 — Table: add-row at bottom**
+  - New file: `apps/web/src/components/table/table-add-row.tsx`. Site of call: `table-view.tsx:323-337`.
+  - Render after the data rows, only when `filteredDocs.length > 0`. Same grid template as TableRow so columns align. First column = `+` icon + clickable area that activates the inline title input. On commit:
+    1. `createDocument({ type: 'work_item', title })`.
+    2. Navigate to `?doc=<slug>`.
+  - Use the existing `useCreateDocument` hook + `formatApiError` for the error path. Reuse `InlineEdit` with `defaultEditing` semantics — on click of the row, mount an `InlineEdit` with `defaultEditing` (the existing primitive). For empty commit / blur: revert to the static `+ Add work item` placeholder.
+  - **Unit test:** `table-view.test.tsx` (or a dedicated `table-add-row.test.tsx`): render TableView with mocked API, find the add-row, simulate typing + Enter, assert `createDocument` called with the typed title and `navigate` called with `search.doc = <created slug>`.
+
+- [x] **Task 5 — Slideover: action toolbar + ⋯ menu with Delete**
+  - `apps/web/src/components/slideover/document-slideover.tsx:60-98, 200-208, 240-246` + lift `mode` state up.
+  - Header right-side: Copy MD button → ModeToggle → LogActivityButton → vertical divider → ⋯ Popover (RowMenu-style — destructive `Delete` item) → Close.
+  - Article body header: drop LogActivityButton + ModeToggle. Keep slug pill left.
+  - Lift `mode` state and the `Alt+M` window listener from `SlideoverBody` (lines 163-175) up to `DocumentSlideover`. Pass `mode` + `setMode` down to `SlideoverBody`.
+  - Delete flow: `Delete` menu item → `<Dialog>` (existing `ui/dialog.tsx`) with title "Delete this document?" + body `Delete "{title}"? This cannot be undone.` + Cancel + danger Delete button. On confirm: `useDeleteDocument(wslug, pslug).mutateAsync(doc.slug)` → toast + close slideover.
+  - **Unit test:** extend `document-slideover.test.tsx` — assert toolbar shape (Copy MD + ModeToggle + LogActivityButton + ⋯). Open ⋯, click Delete: dialog opens. Cancel: dialog closes, no mutation. Confirm: `useDeleteDocument` mutation called with the doc's slug, slideover closes.
+
+### Phase complete checklist (testing-workflow gate)
+
+- [x] All 5 task-level unit tests green (9 new tests across rail-tree, table-cell, table-view, document-slideover)
+- [x] `cd apps/web && bun run test` full suite green — **214 / 215** (was 173 + 1 skipped; 1 known jsdom skip preserved)
+- [x] `cd apps/server && bun test` — **123 / 123** (was 116; jumped to 123 from the rest of Phase 1.7 work on this branch, no regressions)
+- [x] `cd packages/shared && bun test` — **28 / 28**
+- [x] TS clean for all touched files (`apps/web/` `bunx tsc --noEmit` is clean). Pre-existing TS errors in `apps/server/src/index.ts` and `packages/shared/src/{filter-compile,slug}.test.ts` are not regressions — confirmed unchanged by the work in this session.
+- [ ] `bun dev` boots clean; no console errors on the work-items page — **manual smoke pending**
+
+### Smoke test (manual, after green)
+
+- [ ] Rail: hover a workspace row → leading icon swaps to chevron, click expands. Wiki leaf keeps its icon, no chevron on hover.
+- [ ] Table: scroll horizontally — scrollbar stays at viewport bottom while vertically scrolling rows.
+- [ ] Table: sticky first column has thin right border against the scrolling columns.
+- [ ] Table: bottom row = empty + row. Click → type "New" → Enter → slideover opens for the new doc. After closing, the new row appears in the list.
+- [ ] Slideover: header has Copy MD + Edit/Raw + Activity + ⋯ + ✕. ⋯ → Delete → confirm dialog → Delete → toast + slideover closes + row gone from table.
+
+---
+
+## Gates before merging to main (Phase 1.7 batch — carried over)
+
+- [ ] Manual QA pass on Phase 1.7 + the UX cleanups in this todo
+- [ ] Merge `phase-1.7/crm-polish` → `main`
 
 ---
 
@@ -61,23 +87,28 @@ Per auto-memory `project_main-tip-and-pre-phase-2-cleanups` — three items queu
 
 ## Review
 
-### 2026-05-24 — exploratory + bug-fix batch (sessions of 2026-05-23 → 2026-05-24)
+### 2026-05-25 — UX cleanup batch on `phase-1.7/crm-polish`
 
-**Branch:** `phase-1.5/ux-polish`. Final tip after this batch: see `git log -1`.
+5 independent UX cleanups shipped end-to-end via `netdust-core:ntdst-execute-with-tests` + `testing-workflow` gates. 9 new unit tests across rail-tree, table-cell, table-view (3), document-slideover (3). All suites green: web 214 / 215, server 123 / 123, shared 28 / 28. TS clean for touched files.
 
-**Work done this batch:**
-- 4 exploratory click-through passes (slideover · wiki · Cmd-K · editor · filter) driving the app via Chrome DevTools MCP as a real user, not API shortcuts.
-- 12 distinct bugs fixed (see checklist above) — all with click-through e2e regression coverage.
-- Playwright scaffold added: `apps/web/playwright.config.ts`, `apps/web/tests/e2e/{global-setup,fixtures,smoke,manual-qa,click-through}.{ts,spec.ts}`. Isolated DB + alt-port stack at `apps/server/folio-e2e.db`.
-- Server-side filter wiring (`?status=`, `?assignee=`, `?updated_since=`) + 4 new server tests + `seedProjectDefaults` opt-in on the test harness.
-- Token cleanup from review pass: dropped `--color-board-col` / `--ring-color`, promoted `--color-nav-active`, named `.input-focus` utility, single subtle `--ring`.
-- 9 lessons captured in `memory/lessons.md`.
+**Files touched:**
+- `apps/web/src/components/shell/rail-tree.tsx` + test — icon→chevron hover swap
+- `apps/web/src/components/table/table-view.tsx` + test — sticky scroll wrapper + add-row wiring
+- `apps/web/src/components/table/table-add-row.tsx` + test — new file (add-row component)
+- `apps/web/src/components/table/table-cell.tsx` + new test file — sticky right border
+- `apps/web/src/components/table/table-header.tsx` — sticky right border
+- `apps/web/src/components/slideover/document-slideover.tsx` + test — toolbar + ⋯ menu + delete + dialog + mode state lift
 
-**Tests at batch end:** 134 web unit · 81 server unit · 16 active e2e · 10 e2e skipped (selector work).
+**Decisions locked via AskUserQuestion this session** (also persisted to `memory/STATE.md`):
+- Rail: icon→chevron on row hover (same slot).
+- Delete: confirm dialog (existing `ui/dialog.tsx`), no toast-undo.
+- Add-row: inline title in row, on commit → create + open slideover for the rest.
+- Scrollbar: sticky inside main scroll area (TableView owns scroll context).
+- Toolbar: visible Copy MD + Edit/Raw + Activity; ⋯ houses Delete (+ room to grow).
 
-**Open gates before merging to main:**
-- 12 of 15 manual-qa scenarios still pending (3 active in e2e + the editor/wiki/filter regressions cover much of 6, 8, 9, 10, 12 indirectly — but the original spec scenarios are still `[ ]`).
-- Visual sign-off: ✅ given on 2026-05-23.
-- Merge to main: pending.
+**Lesson captured** (`memory/lessons.md`): no bare `git stash` to A/B-test pre-existing TS errors — global rule 0a bans the pattern. Use `git status` + read-the-error reasoning instead.
 
-**Recommended next session:** either (a) finish lifting the 10 `.skip`s in manual-qa.spec.ts (add `data-testid` on rows + selectors), or (b) tackle Phase 1.5 time-aware views (timeline + This Week dashboard) since the polish branch is now in good shape and the unticked manual-qa boxes have e2e proxies.
+**Open after this batch:**
+- Manual smoke pass (5 items in the smoke checklist above).
+- Stefan to call merge timing for the `phase-1.7/crm-polish` branch (1.6 + 1.7 + this batch).
+- The pre-existing TS errors in `apps/server/src/index.ts` and `packages/shared/src/{filter-compile,slug}.test.ts` are independent of this work but worth a sweep before the merge.

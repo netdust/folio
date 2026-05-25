@@ -197,7 +197,7 @@ function DateInput({
           if (e.key === 'Enter' || e.key === ' ') setEditing(true);
         }}
         className={cn(
-          'inline-block cursor-text rounded-sm px-1 py-0.5 text-sm hover:bg-card',
+          'inline-block cursor-text rounded-sm px-1 py-0.5 hover:bg-card',
           isPending && 'opacity-60',
         )}
       >
@@ -224,7 +224,7 @@ function DateInput({
         }
       }}
       className={cn(
-        'block w-44 rounded-sm border border-transparent bg-card px-1 py-0.5 text-sm text-fg input-focus',
+        'block w-44 rounded-sm border border-transparent bg-card px-1 py-0.5 text-fg input-focus',
         isPending && 'opacity-60',
       )}
     />
@@ -346,7 +346,7 @@ function UrlField({
           setEditing(true);
         }}
         className={cn(
-          'truncate text-sm text-primary underline-offset-2 hover:underline',
+          'truncate text-primary underline-offset-2 hover:underline',
           isPending && 'opacity-60',
         )}
       >
@@ -413,7 +413,7 @@ function CurrencyInput({
         onClick={() => setEditing(true)}
         onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setEditing(true); }}
         className={cn(
-          'inline-block w-full cursor-text rounded-sm px-1 py-0.5 text-right text-sm font-mono hover:bg-card',
+          'inline-block w-full cursor-text rounded-sm px-1 py-0.5 text-right font-mono hover:bg-card',
           isPending && 'opacity-60',
         )}
       >

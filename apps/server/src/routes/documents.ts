@@ -9,7 +9,7 @@ import {
   FilterCompileError,
 } from '@folio/shared';
 import { db } from '../db/client.ts';
-import { documents, statuses } from '../db/schema.ts';
+import { documents, events, statuses } from '../db/schema.ts';
 import { jsonOk, HTTPError } from '../lib/http.ts';
 import { emitEvent } from '../lib/events.ts';
 import { parseMarkdown, serializeMarkdown } from '../lib/frontmatter.ts';
@@ -68,6 +68,20 @@ interface ParsedMdInput {
   status: string | null;
 }
 
+// Keys promoted to first-class columns. Stripped from user-supplied
+// frontmatter on every write path so the JSON column never holds a stale
+// shadow that would override the column on the next .md export.
+const RESERVED_FRONTMATTER_KEYS = ['type', 'title', 'status', 'last_touched_at'] as const;
+
+function stripReservedFrontmatter(fm: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(fm)) {
+    if ((RESERVED_FRONTMATTER_KEYS as readonly string[]).includes(k)) continue;
+    out[k] = v;
+  }
+  return out;
+}
+
 function parseMarkdownInput(raw: string, defaults?: { type?: 'work_item' | 'page' }): ParsedMdInput {
   const { frontmatter, body } = parseMarkdown(raw);
   const fmType = frontmatter.type;
@@ -78,8 +92,7 @@ function parseMarkdownInput(raw: string, defaults?: { type?: 'work_item' | 'page
     (typeof frontmatter.title === 'string' ? frontmatter.title : null) ??
     'Untitled';
   const status = typeof frontmatter.status === 'string' ? frontmatter.status : null;
-  const { type: _t, title: _ti, status: _s, ...rest } = frontmatter;
-  return { type, title, body, frontmatter: rest, status };
+  return { type, title, body, frontmatter: stripReservedFrontmatter(frontmatter), status };
 }
 
 documentsRoute.post('/', async (c) => {
@@ -99,7 +112,7 @@ documentsRoute.post('/', async (c) => {
     }
     const v = parsed.data;
     const fmStatus = typeof v.frontmatter?.status === 'string' ? v.frontmatter.status : null;
-    const { status: _, ...fmRest } = (v.frontmatter ?? {}) as Record<string, unknown>;
+    const fmRest = stripReservedFrontmatter((v.frontmatter ?? {}) as Record<string, unknown>);
     input = { type: v.type, title: v.title, body: v.body, frontmatter: fmRest, status: fmStatus };
   }
 
@@ -153,10 +166,19 @@ function decodeCursor(s: string): { updatedAt: number; id: string } | null {
   }
 }
 
+function parseLimit(raw: string | undefined, fallback: number): number {
+  if (raw === undefined) return fallback;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n < 1) {
+    throw new HTTPError('INVALID_LIMIT', 'limit must be a positive integer ≤ 200', 422);
+  }
+  return Math.min(200, n);
+}
+
 documentsRoute.get('/', async (c) => {
   const p = getProject(c);
   const type = c.req.query('type');
-  const limit = Math.max(1, Math.min(200, Number(c.req.query('limit') ?? 50)));
+  const limit = parseLimit(c.req.query('limit'), 50);
   const cursorRaw = c.req.query('cursor');
   const filterRaw = c.req.query('filter');
 
@@ -194,7 +216,10 @@ documentsRoute.get('/', async (c) => {
   // Flat filter params — kept simple here so the toolbar chips work without
   // having to encode/decode the full `?filter=` AST. The AST stays available
   // for the agent/MCP path that needs richer expressions.
-  const statusValues = c.req.queries('status') ?? [];
+  // Drop empty-string entries — chip-removal navigation can leave a stray
+  // `?status=` in the URL and `status IN ('todo','')` would leak docs with an
+  // empty status. Defensive filter at the entry point keeps both branches honest.
+  const statusValues = (c.req.queries('status') ?? []).filter((s) => s.length > 0);
   if (statusValues.length === 1) {
     whereClauses.push(eq(documents.status, statusValues[0]!));
   } else if (statusValues.length > 1) {
@@ -211,6 +236,27 @@ documentsRoute.get('/', async (c) => {
     if (!Number.isNaN(ts.getTime())) {
       whereClauses.push(gte(documents.updatedAt, ts));
     }
+  }
+  // ?stale_for=14d → documents whose last_touched_at is NULL or older than N days ago.
+  // Reject 0d (matches every touched row, hides bugs) and any non-Nd format
+  // (silently ignoring "garbage" returns the unfiltered list).
+  const staleFor = c.req.query('stale_for');
+  if (staleFor) {
+    const m = staleFor.match(/^(\d+)d$/);
+    const days = m ? Number(m[1]) : NaN;
+    if (!m || !Number.isFinite(days) || days < 1) {
+      throw new HTTPError(
+        'INVALID_STALE_FOR',
+        'stale_for must be a positive integer followed by "d" (e.g. "7d")',
+        422,
+      );
+    }
+    const cutoff = new Date(Date.now() - days * 86_400_000);
+    const staleClause = or(
+      isNull(documents.lastTouchedAt),
+      lt(documents.lastTouchedAt, cutoff),
+    );
+    if (staleClause) whereClauses.push(staleClause);
   }
   if (filterWhere) whereClauses.push(filterWhere);
   if (cursor) {
@@ -247,11 +293,18 @@ documentsRoute.get('/:slugMd{[^/]+\\.md}', async (c) => {
   });
   if (!row) throw new HTTPError('DOCUMENT_NOT_FOUND', `document "${slug}" not found`, 404);
 
+  // Strip reserved keys from frontmatter at read time too, as defense in
+  // depth: older rows written before stripReservedFrontmatter shipped may
+  // carry shadow `type` / `title` / `status` / `last_touched_at` keys that
+  // would otherwise override the canonical column values.
+  const userFm = stripReservedFrontmatter(row.frontmatter ?? {});
   const fm: Record<string, unknown> = {
+    ...userFm,
+    // Columns (canonical source of truth) spread LAST so they win.
     type: row.type,
     title: row.title,
     ...(row.status ? { status: row.status } : {}),
-    ...row.frontmatter,
+    ...(row.lastTouchedAt ? { last_touched_at: row.lastTouchedAt.toISOString() } : {}),
   };
   const md = serializeMarkdown({ frontmatter: fm, body: row.body });
   c.header('Content-Type', 'text/markdown; charset=utf-8');
@@ -333,6 +386,7 @@ documentsRoute.patch('/:slug', async (c) => {
     if (patch.frontmatter === undefined) return existing.frontmatter;
     const merged: Record<string, unknown> = { ...existing.frontmatter };
     for (const [k, v] of Object.entries(patch.frontmatter)) {
+      if ((RESERVED_FRONTMATTER_KEYS as readonly string[]).includes(k)) continue;
       if (v === null) delete merged[k];
       else merged[k] = v;
     }
@@ -383,6 +437,83 @@ documentsRoute.delete('/:slug', async (c) => {
     });
   });
   return c.body(null, 204);
+});
+
+// POST /:slug/activity { note } — emits activity.logged + bumps lastTouchedAt.
+// Note cap is 2000 chars: enough for a few paragraphs of operational context
+// ("called the client, follow up Tue"), small enough that an agent loop can't
+// balloon events.payload and saturate GET /events.
+const ACTIVITY_NOTE_MAX = 2000;
+
+documentsRoute.post('/:slug/activity', async (c) => {
+  const user = getUser(c);
+  const p = getProject(c);
+  const ws = getWorkspace(c);
+  const slug = c.req.param('slug');
+  let body: { note?: unknown };
+  try { body = (await c.req.json()) as { note?: unknown }; }
+  catch { throw new HTTPError('INVALID_BODY', 'JSON body required', 400); }
+  const note = typeof body.note === 'string' ? body.note.trim() : '';
+  if (!note) throw new HTTPError('INVALID_NOTE', 'note is required', 422);
+  if (note.length > ACTIVITY_NOTE_MAX) {
+    throw new HTTPError(
+      'NOTE_TOO_LONG',
+      `note must be ${ACTIVITY_NOTE_MAX} characters or fewer`,
+      422,
+    );
+  }
+
+  const existing = await db.query.documents.findFirst({
+    where: and(eq(documents.projectId, p.id), eq(documents.slug, slug)),
+  });
+  if (!existing) throw new HTTPError('DOCUMENT_NOT_FOUND', `document "${slug}" not found`, 404);
+
+  const now = new Date();
+  await db.transaction(async (tx) => {
+    // Bump updatedAt as well as lastTouchedAt so the doc surfaces in the
+    // list's `updated_at desc` sort — that's the user's mental model when
+    // they log activity: "I just worked on this, it should be at the top."
+    await tx
+      .update(documents)
+      .set({ lastTouchedAt: now, updatedAt: now })
+      .where(eq(documents.id, existing.id));
+    await emitEvent(tx, {
+      workspaceId: ws.id, projectId: p.id, documentId: existing.id,
+      kind: 'activity.logged', actor: user.id, payload: { note },
+    });
+  });
+
+  return c.json({ data: { lastTouchedAt: now.toISOString() } }, 201);
+});
+
+// GET /:slug/events — newest-first events for the given document.
+documentsRoute.get('/:slug/events', async (c) => {
+  const p = getProject(c);
+  const slug = c.req.param('slug');
+  const limit = parseLimit(c.req.query('limit'), 50);
+
+  const doc = await db.query.documents.findFirst({
+    where: and(eq(documents.projectId, p.id), eq(documents.slug, slug)),
+  });
+  if (!doc) throw new HTTPError('DOCUMENT_NOT_FOUND', `document "${slug}" not found`, 404);
+
+  const rows = await db
+    .select()
+    .from(events)
+    .where(eq(events.documentId, doc.id))
+    .orderBy(desc(events.createdAt), desc(events.id))
+    .limit(limit);
+
+  // Public shape only — internal columns (workspaceId, projectId, documentId)
+  // are not part of the API contract and shouldn't leak to agent tokens.
+  const data = rows.map((r) => ({
+    id: r.id,
+    kind: r.kind,
+    actor: r.actor,
+    payload: r.payload,
+    createdAt: r.createdAt,
+  }));
+  return c.json({ data });
 });
 
 export { documentsRoute };

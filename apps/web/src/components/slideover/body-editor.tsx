@@ -9,6 +9,7 @@ import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { debounce } from '../../lib/debounce.ts';
 import { SlashMenu } from './slash-menu.tsx';
+import { BodyToolbar } from './body-toolbar.tsx';
 import type { DocumentSummary } from '../../lib/api/documents.ts';
 import type { SlashContext } from '../../lib/slash-registry.ts';
 
@@ -18,6 +19,9 @@ interface Props {
   readOnly?: boolean;
   documents?: DocumentSummary[];
   aiConfigured?: boolean;
+  /** When true, render the formatting toolbar above the editor. Used for
+   *  wiki pages where the slideover doesn't carry a frontmatter form. */
+  showToolbar?: boolean;
 }
 
 interface SlashState {
@@ -177,10 +181,12 @@ function MilkdownEditor({
 
 export function BodyEditor(props: Props) {
   const wrapperRef = useRef<HTMLDivElement | null>(null);
+  const { showToolbar, ...editorProps } = props;
   return (
     <MilkdownProvider>
+      {showToolbar ? <BodyToolbar /> : null}
       <div className="folio-milkdown" ref={wrapperRef}>
-        <MilkdownEditor {...props} wrapperRef={wrapperRef} />
+        <MilkdownEditor {...editorProps} wrapperRef={wrapperRef} />
       </div>
     </MilkdownProvider>
   );

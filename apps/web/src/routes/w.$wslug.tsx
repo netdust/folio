@@ -1,5 +1,5 @@
-import { createFileRoute, Outlet, useNavigate, useRouterState } from '@tanstack/react-router';
-import { useMemo, useState } from 'react';
+import { createFileRoute, Outlet, useNavigate, useParams, useRouterState } from '@tanstack/react-router';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQueries, useQueryClient } from '@tanstack/react-query';
 import { Search } from 'lucide-react';
 import { toast } from 'sonner';
@@ -28,6 +28,9 @@ export const Route = createFileRoute('/w/$wslug')({
   component: WorkspaceLayout,
 });
 
+// Exported for tests. Production callers go through the file route.
+export { WorkspaceLayout };
+
 const TOOLS: NavItem[] = [{
   id: 'search',
   label: 'Search',
@@ -37,7 +40,10 @@ const TOOLS: NavItem[] = [{
 }];
 
 function WorkspaceLayout() {
-  const { wslug } = Route.useParams();
+  // Use generic useParams so the component is mountable in tests without the
+  // file-route plumbing. `strict: false` lets it match wherever the route
+  // exposes :wslug.
+  const { wslug } = useParams({ strict: false }) as { wslug: string };
   const navigate = useNavigate();
   const routerState = useRouterState();
   const { data: me } = useMe();
@@ -59,10 +65,24 @@ function WorkspaceLayout() {
   const qc = useQueryClient();
   const updateProject = useUpdateProject(wslug);
   const deleteProject = useDeleteProject(wslug);
+  // Rail rename for tables/views uses raw client.patch + invalidateQueries
+  // because the canonical `useUpdateTable(wslug, pslug)` / `useUpdateView`
+  // hooks bind pslug at render time, and the rail rename callback receives
+  // any pslug at call time. Restructuring those hooks to take pslug per-mutate
+  // would unify the patterns but breaks an existing TableView consumer; defer
+  // until that consumer is restructured (Phase 2+).
 
   const currentPath = routerState.location.pathname;
   const currentSearch = routerState.location.search as Record<string, unknown>;
   const activeViewId = typeof currentSearch.view === 'string' ? currentSearch.view : undefined;
+  // `currentSearch` changes on every navigation. The rail handlers only need
+  // its current value at click time (to preserve `doc=` when switching views),
+  // so route it through a ref to keep the `handlers` memo stable across
+  // navigations — otherwise the whole rail tree rebuilds on every ?doc=.
+  const searchRef = useRef(currentSearch);
+  useEffect(() => {
+    searchRef.current = currentSearch;
+  }, [currentSearch]);
 
   // Per-project tables + views fetched in batch. `useQueries` is a single hook
   // call, so it's legal in render even though the inner array varies in length.
@@ -119,11 +139,33 @@ function WorkspaceLayout() {
           params: { wslug, pslug },
         });
       },
-      onViewClick: (pslug: string, _tslug: string, viewId: string) => {
+      // Clicking a table in the rail (most visible in the collapsed-rail
+      // popover, where there are no children to expand into) lands on its
+      // work-items page on the default view. No ?view= → TableView's
+      // activeView fallback picks the default. Today there's one table per
+      // project, so this is functionally the same as onProjectClick, but
+      // keeping a dedicated handler avoids a "click does nothing" footgun and
+      // gives us a place to route by tslug once multiple tables per project
+      // ship.
+      onTableClick: (pslug: string, _tslug: string) => {
         void navigate({
           to: '/w/$wslug/p/$pslug/work-items',
           params: { wslug, pslug },
-          search: { view: viewId },
+        });
+      },
+      onViewClick: (pslug: string, _tslug: string, viewId: string, type: 'list' | 'kanban') => {
+        const to = type === 'kanban' ? '/w/$wslug/p/$pslug/board' : '/w/$wslug/p/$pslug/work-items';
+        // Preserve ?doc= (open slideover) but drop the previous view's filter
+        // and sort params — TableView's hydration treats URL params as winners
+        // over view.filters, so carrying ?status= across a view switch would
+        // silently mask the new view's stored filters.
+        const prev = searchRef.current;
+        const next: Record<string, unknown> = { view: viewId };
+        if (typeof prev.doc === 'string') next.doc = prev.doc;
+        void navigate({
+          to,
+          params: { wslug, pslug },
+          search: next,
         });
       },
       onWikiClick: (pslug: string) => {
@@ -168,10 +210,11 @@ function WorkspaceLayout() {
           wslug,
           pslug: activePslug,
           viewId: activeViewId,
+          isWiki: currentPath.endsWith('/wiki'),
         },
         handlers,
       }),
-    [projectList, tablesByProject, viewsByTable, wslug, activePslug, activeViewId, handlers],
+    [projectList, tablesByProject, viewsByTable, wslug, activePslug, activeViewId, currentPath, handlers],
   );
 
   const switcherEntries = useMemo(
@@ -224,11 +267,22 @@ function WorkspaceLayout() {
       } else if (confirmDelete.kind === 'table') {
         await client.delete(`/api/v1/w/${wslug}/p/${confirmDelete.pslug}/tables/${confirmDelete.tslug}`);
         await qc.invalidateQueries({ queryKey: tablesKeys.list(wslug, confirmDelete.pslug) });
+        // Views and documents cascade-delete in the DB; the FE caches won't
+        // notice without explicit invalidation, leaving ghost rows in the rail
+        // and stale doc list responses.
+        await qc.invalidateQueries({ queryKey: viewsKeys.list(wslug, confirmDelete.pslug) });
+        await qc.invalidateQueries({ queryKey: ['documents', wslug, confirmDelete.pslug, 'list'] });
         toast.success(`Deleted table "${confirmDelete.name}"`);
       } else if (confirmDelete.kind === 'view') {
         await client.delete(`/api/v1/w/${wslug}/p/${confirmDelete.pslug}/views/${confirmDelete.viewId}`);
         await qc.invalidateQueries({ queryKey: viewsKeys.list(wslug, confirmDelete.pslug) });
         toast.success(`Deleted view "${confirmDelete.name}"`);
+        // If the user was viewing the now-deleted view, drop the dead
+        // ?view=<id> param so the table falls back cleanly to its default.
+        if (activeViewId === confirmDelete.viewId) {
+          const { view: _view, ...rest } = currentSearch;
+          void navigate({ to: '.', search: rest, replace: true });
+        }
       }
     } catch (err) {
       toast.error(formatApiError(err));
@@ -291,6 +345,7 @@ function WorkspaceLayout() {
           }}
           wslug={wslug}
           pslug={newViewSheet.pslug}
+          currentSearch={currentSearch}
         />
       )}
       <Dialog open={!!confirmDelete} onOpenChange={(open) => { if (!open) setConfirmDelete(null); }}>

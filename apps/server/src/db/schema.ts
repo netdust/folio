@@ -232,6 +232,9 @@ export const documents = sqliteTable(
     updatedAt: integer('updated_at', { mode: 'timestamp_ms' })
       .notNull()
       .default(sql`(unixepoch() * 1000)`),
+    // Distinct from updated_at: bumped only by explicit "Log activity" action.
+    // Powers the ?stale_for=Nd filter + Phase 1.8's "stale" dashboard bucket.
+    lastTouchedAt: integer('last_touched_at', { mode: 'timestamp_ms' }),
   },
   (t) => ({
     slugIdx: uniqueIndex('documents_project_slug_idx').on(t.projectId, t.slug),

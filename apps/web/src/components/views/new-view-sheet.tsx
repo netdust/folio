@@ -11,7 +11,11 @@ export interface NewViewSheetProps {
   onOpenChange: (open: boolean) => void;
   wslug: string;
   pslug: string;
-  currentSearch?: Record<string, unknown>;
+  // Required: the sheet copy ("Captures the current filters, sort, and
+  // columns.") makes this a contract. If the caller has no filter context to
+  // capture, pass `{}` explicitly rather than letting it default — that
+  // intentionality prevents silent loss of URL state at the call site.
+  currentSearch: Record<string, unknown>;
 }
 
 const FILTER_KEYS = ['status', 'priority', 'assignee', 'labels', 'updated_since'] as const;
@@ -27,7 +31,7 @@ export function NewViewSheet({ open, onOpenChange, wslug, pslug, currentSearch }
 
   function buildPayload(): ViewCreate {
     const trimmed = name.trim();
-    const src = currentSearch ?? {};
+    const src = currentSearch;
     const filters: Record<string, unknown> = {};
     for (const key of FILTER_KEYS) {
       const v = src[key];

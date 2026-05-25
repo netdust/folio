@@ -13,6 +13,9 @@ export interface DocumentSummary {
   frontmatter: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
+  // ISO timestamp; null until activity is first logged. Phase 1.7 column —
+  // surfaces in /stale_for filters and the planned "stale dashboard" bucket.
+  lastTouchedAt: string | null;
 }
 
 export interface Document extends DocumentSummary {
@@ -29,7 +32,8 @@ export interface DocumentListParams {
   status?: string[];
   assignee?: string;
   updatedSince?: string;
-  sort?: 'updated_at' | 'title' | 'priority' | 'status';
+  // Any column key — the server reads sort verbatim and falls back if unknown.
+  sort?: string;
   dir?: 'asc' | 'desc';
   limit?: number;
   cursor?: string;
@@ -57,13 +61,18 @@ export const documentsKeys = {
     [...documentsKeys.all, wslug, pslug, 'detail', slug] as const,
 };
 
-export function useDocuments(wslug: string, pslug: string, params: DocumentListParams = {}) {
+export function useDocuments(
+  wslug: string,
+  pslug: string,
+  params: DocumentListParams = {},
+  options: { enabled?: boolean } = {},
+) {
   return useQuery({
     queryKey: documentsKeys.list(wslug, pslug, params),
     queryFn: () =>
       client.get<DocumentListPage>(`/api/v1/w/${wslug}/p/${pslug}/documents${toSearch(params)}`),
     staleTime: 30_000,
-    enabled: !!wslug && !!pslug,
+    enabled: !!wslug && !!pslug && (options.enabled ?? true),
   });
 }
 
@@ -99,6 +108,22 @@ export type DocumentPatch = Partial<{
   parentId: string | null;
 }>;
 
+// Merge a frontmatter patch the same way the server does: undefined/null
+// values DELETE the key (not "store null"). Optimistic UI must mirror this or
+// the cleared field briefly renders as a ghost null before onSettled refetch.
+function mergeFrontmatter(
+  prev: Record<string, unknown>,
+  patch: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  if (!patch) return prev;
+  const out: Record<string, unknown> = { ...prev };
+  for (const [k, v] of Object.entries(patch)) {
+    if (v === null || v === undefined) delete out[k];
+    else out[k] = v;
+  }
+  return out;
+}
+
 export function useUpdateDocument(wslug: string, pslug: string, listParams: DocumentListParams = {}) {
   const qc = useQueryClient();
   const listKey = documentsKeys.list(wslug, pslug, listParams);
@@ -115,7 +140,7 @@ export function useUpdateDocument(wslug: string, pslug: string, listParams: Docu
         qc.setQueryData<Document>(detailKey, {
           ...prevDetail,
           ...patch,
-          frontmatter: { ...prevDetail.frontmatter, ...(patch.frontmatter ?? {}) },
+          frontmatter: mergeFrontmatter(prevDetail.frontmatter, patch.frontmatter),
         });
       }
       if (prevList) {
@@ -126,7 +151,7 @@ export function useUpdateDocument(wslug: string, pslug: string, listParams: Docu
               ? {
                   ...d,
                   ...patch,
-                  frontmatter: { ...d.frontmatter, ...(patch.frontmatter ?? {}) },
+                  frontmatter: mergeFrontmatter(d.frontmatter, patch.frontmatter),
                 }
               : d,
           ),
@@ -139,12 +164,21 @@ export function useUpdateDocument(wslug: string, pslug: string, listParams: Docu
       if (ctx.prevDetail) qc.setQueryData(ctx.detailKey, ctx.prevDetail);
       if (ctx.prevList) qc.setQueryData(listKey, ctx.prevList);
     },
-    onSettled: (_data, _err, { slug }) => {
+    onSettled: (data, _err, { slug }) => {
       qc.invalidateQueries({ queryKey: documentsKeys.detail(wslug, pslug, slug) });
       // Invalidate every list query under this wslug/pslug — different
       // surfaces (list view, kanban, wiki tree) use different list params,
       // and a title/status patch in one view should refresh them all.
       qc.invalidateQueries({ queryKey: [...documentsKeys.all, wslug, pslug, 'list'] });
+      // Server emits a `document.updated` event on every PATCH; refresh the
+      // ActivityPanel's events list so the slideover stays live. A title
+      // patch may regenerate the slug — in that case ActivityPanel under the
+      // new slug observes a different cache key, so invalidate both. Key
+      // shape mirrors lib/api/events.ts:documentEventsKeys.list().
+      qc.invalidateQueries({ queryKey: ['document-events', wslug, pslug, slug] });
+      if (data?.slug && data.slug !== slug) {
+        qc.invalidateQueries({ queryKey: ['document-events', wslug, pslug, data.slug] });
+      }
     },
   });
 }

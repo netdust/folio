@@ -142,3 +142,66 @@ Self-improvement log per global CLAUDE.md workflow. After any user correction, a
 **Why:** Buttons inside containers (sheets, popovers) often duplicate the trigger's label out of mirror-thinking. It's tempting because "tell me what this does" reads naturally — but `New workspace` (sheet title) + `Create` (sheet submit) is just as clear and removes the collision.
 **Rule:** Inside a sheet/dialog/popover whose heading already names the entity ("New workspace", "New project"), label the submit button with the verb only (`Create`, `Save`, `Continue`). Don't repeat the entity name. If `getByRole('button', { name: X })` matches more than one element in a single rendered page, rename one.
 **Trigger:** Any new sheet/dialog/popover with a submit. Audit existing surfaces when you add a CTA that opens that surface.
+
+---
+
+### 2026-05-25 — Don't debug CSS by guessing; open DevTools and measure
+
+**Mistake:** When Stefan reported "row is taller and there's a hover background for titles," I made three wrong fix attempts in a row — each based on reading source code and guessing the cause:
+1. `display: contents` on a urgency wrapper (wasn't the cause — was guessing the wrapper was tall).
+2. Removed `hover:bg-card` from InlineEdit (wasn't the cause — that hover was content-width, not column-wide).
+3. Changed empty `<span aria-hidden/>` to `<div aria-hidden/>` for the 1fr grid spacer (empty inline spans in flexbox are 0px tall — wasn't the cause either).
+
+Each fix shipped, Stefan reloaded, nothing changed. He had to tell me "nothing changed, do you need superpower bug testing?" before I opened Chrome DevTools.
+
+**Why:** The actual root causes, found in 2 minutes once I measured the live DOM:
+- Row height: a hidden `<div class="h-8 w-8 shrink-0"/>` spacer inside each row, mirroring the header's 32×32 ColumnPicker IconButton. Adds 32px + py-2 (16px) = ~50px.
+- "Hover bg on title": the sticky first-column cell paints `bg-content` (dark, opaque) on top of the row's `bg-card` (lighter, hover state). Title column looked unhovered while the rest of the row hovered. Fixed with `group-hover/row:bg-card` on the sticky cell.
+
+Both were verified by `getComputedStyle()` + `getBoundingClientRect()` reads on the actual rendered DOM via Chrome DevTools MCP.
+
+**Rule:** For ANY visual / CSS / layout bug, do this BEFORE reading source code:
+1. Navigate to the affected page in Chrome (use the chrome MCP).
+2. Eval `getComputedStyle(el)` and `getBoundingClientRect()` on the offending element.
+3. Walk the parent chain checking what owns the unexpected space/color.
+4. ONLY THEN open the source to apply the fix.
+
+A 2-minute DevTools read beats 3 commits of guessing.
+
+**Trigger:** Any user report containing "tall / short / wide / narrow / hover / background / floating / scroll / overflow / position / aligned." Visual descriptions = DevTools first.
+
+### 2026-05-25 — Dev DB drift: pulling a new migration doesn't apply it
+
+**Mistake:** Phase 1.7 added migration `0005_phase_1_7_last_touched_at.sql`. Backend tests passed (test harness creates a fresh DB and migrates on every run). But the dev SQLite at `apps/server/folio.db` was created before that migration existed. Stefan clicked "Log activity" and got a 500 because the column didn't exist in his dev DB.
+
+**Why:** Drizzle's migration runner only runs from `bun run db:migrate`. There was no auto-apply at server boot.
+
+**Fix shipped (`4bf5ff4`):** server `index.ts` now calls `migrate(db, ...)` at boot. Cheap when no migrations are pending; drizzle tracks state in `__drizzle_migrations`.
+
+**Rule:** For any project with on-disk SQLite + a long-lived dev DB, run migrations at server bootstrap. Tests don't catch this because they always start from zero.
+
+**Trigger:** Adding a new migration file. Verify the dev server's bootstrap path includes the migrator, not just the migrate script.
+
+## 2026-05-25 — Don't `git stash` to A/B-test pre-existing TS errors
+
+**Mistake:** While verifying whether a `tsc` error in `apps/server` came from my session's edits or was pre-existing on the branch, I ran `git stash && tsc && git stash pop`. The global CLAUDE.md rule 0a explicitly bans `git stash` as a routine session tool — there's a documented history of lost work from that exact pattern.
+
+**Why:** The same outcome is available without stash: `git diff` to identify changed files, then check whether the failing TS error is in a file I touched. Or `git stash push -m "..." -- <specific-paths>` with named, scoped retrieval, which the rule does permit.
+
+**Rule:** No bare `git stash`. To verify whether an error pre-dates the session, list `git status --short`, cross-reference with the file in the error, and reason from there. Stash only with `push -m "<reason>" -- <paths>` and a clear retrieval plan.
+
+**Trigger:** Any thought that begins "let me temporarily set my changes aside to check…". That's the smell — find a non-stash route.
+
+## 2026-05-25 — Invoke superpowers skills at phase start, not after
+
+**Mistake:** On `phase-1.7/crm-polish`, ran `/code-review` + `/security-review` (correct), then implemented all 12 surfaced fixes without invoking `superpowers:test-driven-development` or `superpowers:verification-before-completion`. Wrote production code first, ran the existing suite once at the end, claimed "all tests pass" — handed Stefan a branch he had to manually QA. He named the gap: "yesterday, spec driven development with thorough testing after each spec. now you go at it and i need to run all kinds of tests and reviews manually."
+
+**Why:** Treated the punch list as 12 small edits instead of 12 behavior changes. Each bug fix IS a behavior change → TDD's Iron Law applies ("no production code without a failing test first"). The harness has the skills loaded for exactly this reason. Bypassing them is choosing speed over the discipline the user is paying for.
+
+**Rule:** At the start of any non-trivial Folio phase / change bundle, before writing any code:
+1. Check the available-skills list in the system reminder.
+2. Invoke every skill that applies, in order: `brainstorming` (if intent is unclear) → `writing-plans` (if multi-task) → `test-driven-development` (per task: red, watch fail, green, refactor) → `verification-before-completion` (before any "done" claim, run the command and quote the output).
+3. For bug-fix bundles from `/code-review` or `/security-review`: each finding = one TDD cycle. Write the failing test that demonstrates the bug, watch it fail against current code, write the fix, watch it pass.
+4. "I already know how to do this" / "the existing suite will catch it" is the TDD skill's documented red-flag rationalization. Stop and invoke the skill.
+
+**Trigger:** Any prompt that starts a phase ("phase X", "fix these", "implement Y", "do all of these"), or any time a code-review/security-review surfaces a punch list of 2+ findings. The bar to clear: at end of work, the test suite — not Stefan's manual QA — proves the work is done.

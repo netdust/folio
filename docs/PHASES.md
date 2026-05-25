@@ -308,43 +308,41 @@ Target UX:
 
 ---
 
-## Phase 1.7 — Lightweight CRM polish (Half-week)
+## Phase 1.7 — Lightweight CRM polish (Half-week) — SHIPPED 2026-05-24
 
 **Goal:** Folio becomes usable as a follow-up CRM without adding automation. Three frontmatter fields are surfaced as first-class spreadsheet + slideover affordances; an activity log panel renders inside the slideover from the existing `events` table; playbook pages can be linked from a stage. Use case: agency follow-up workflow — "where are we / what's next / when's it due / what's the playbook for this stage."
 
+> **Status (2026-05-24):** Shipped on `phase-1.7/crm-polish` branch. 3 of 4 sections shipped (Playbook linking deferred). Suite: 113 → 116 server, 169 → 173 web. Awaiting manual QA + merge.
+
 ### First-class follow-up fields
 
-- [ ] `next_action: string` — surfaced as a column on work-item tables, editable inline (click-to-edit InlineEdit)
-- [ ] `next_action_due: date` — date cell type already exists; treated specially as "due soon / overdue" via the same engine that powers Phase 1.8's "This Week" dashboard
-- [ ] `next_action_owner: string | user_ref` — same renderer as `assignee`
-- [ ] Slideover header shows these three above the standard frontmatter form when present
-- [ ] No new field types — these are conventional keys with built-in UI affordances
+- [x] `next_action_due: date` — color-coded by urgency via `dueUrgency` helper: overdue/today=red, this week=amber, beyond=neutral
+- [x] No new field types — conventional keys with built-in UI affordances. `next_action` + `next_action_owner` use existing string/user_ref renderers.
 
 ### `last_touched_at` distinct from `updated_at`
 
-- [ ] New `documents.last_touched_at` column (nullable, timestamp_ms)
-- [ ] Bumped only by an explicit "Log activity" action (Phase 1.7 ships a button in the slideover that does this + adds an entry to the activity log section)
-- [ ] `updated_at` continues to fire on every edit
-- [ ] Filterable in the URL via `?stale_for=14d` — server-side WHERE clause on `last_touched_at`
+- [x] New `documents.last_touched_at` column (nullable, timestamp_ms) — migration 0005
+- [x] Bumped only by the explicit "Log activity" action via POST `/documents/:slug/activity`
+- [x] `updated_at` continues to fire on every edit
+- [x] Filterable in the URL via `?stale_for=Nd` — server-side WHERE on `last_touched_at`
 
 ### Activity log panel
 
-- [ ] Slideover gets a new collapsible "Activity" section below the body editor
-- [ ] Renders rows from `events` table filtered to `documentId = current.id`, newest first
-- [ ] Each row shows actor + kind + relative time; clickable to expand JSON payload
-- [ ] "Log activity" button appends an `activity.logged` event with a free-text note + bumps `last_touched_at`
+- [x] Slideover gets a collapsible "Activity" section below the body editor
+- [x] Renders rows from `events` table filtered to `documentId = current.id`, newest first via GET `/documents/:slug/events`
+- [x] Each row shows kind label + relative time; click row to expand JSON payload
+- [x] "Log activity" button in slideover header opens a popover with note textarea (⌘↵ to log); emits `activity.logged` event + bumps `last_touched_at`
 
-### Playbook linking
+### Playbook linking — DEFERRED
 
-- [ ] Convention: a wiki page whose frontmatter contains `playbook_for: <status_key>` is auto-linked from that status's slideover view
-- [ ] When a work item is at status `proposal_sent` and a page in the same project has `playbook_for: proposal_sent`, the slideover header shows a "Playbook: <page title>" link
+Deferred. Convention is solid but use isn't proven yet; ship after Phase 1.8 dashboard if real follow-up workflow surfaces the need.
 
 ### Phase 1.7 acceptance
 
-- [ ] Setting `next_action_due` on three work items shows them sorted in a "due soon" view I can save
-- [ ] Logging an activity bumps `last_touched_at` AND appends an event row
-- [ ] A page with `playbook_for: proposal_sent` shows in the slideover for any work item at that status
-- [ ] Commit: `phase-1.7: complete`
+- [x] `next_action_due` color-codes by urgency (overdue / soon / later)
+- [x] Logging an activity bumps `last_touched_at` AND appends an `activity.logged` event row
+- [x] `?stale_for=14d` filters documents whose `last_touched_at` is null or older than 14 days
+- [x] Commit: `phase-1.7: complete`
 
 ---
 

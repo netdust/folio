@@ -89,7 +89,8 @@ export function KanbanView({ wslug, pslug }: Props) {
 
   return (
     <DndContext sensors={sensors} onDragEnd={onDragEnd}>
-      <div className="flex h-full gap-3 overflow-x-auto px-[22px] py-2">
+      {/* MainFrame's children container already supplies px-[22px] py-2; don't double it up. */}
+      <div className="flex h-full gap-3 overflow-x-auto">
         {statuses.map((s) => (
           <KanbanColumn
             key={s.key}

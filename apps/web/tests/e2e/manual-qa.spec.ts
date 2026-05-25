@@ -134,11 +134,13 @@ test('scenario 5 — slideover opens via row icon and closes on Escape', async (
   // Slideover (Sheet) is role=dialog. Doc opens via ?doc= query string.
   const sheet = page.locator('[role="dialog"]').filter({ has: page.getByRole('button', { name: 'Close document' }) });
   await expect(sheet).toBeVisible();
-  await expect(page).toHaveURL(/\?doc=open-me/);
+  // Match `doc=open-me` anywhere in the query string — the URL may carry
+  // additional params (sort, dir, view) preserved by hydration.
+  await expect(page).toHaveURL(/[?&]doc=open-me/);
 
   await page.keyboard.press('Escape');
   await expect(sheet).toBeHidden();
-  await expect(page).not.toHaveURL(/\?doc=/);
+  await expect(page).not.toHaveURL(/[?&]doc=/);
 });
 
 test('scenario 6 — slideover renders frontmatter form and body editor', async ({ page }) => {
@@ -233,7 +235,7 @@ test('scenario 9 — kanban: per-column + creates a doc with that status', async
   await createProject(page, wslug, `Proj ${testSeq}`, pslug);
 
   await page.goto(`/w/${wslug}/p/${pslug}/work-items`);
-  await page.getByRole('button', { name: 'Board', exact: true }).click();
+  await page.getByRole('tab', { name: 'Board', exact: true }).click();
 
   // Per-column "+" button has aria-label "New work item in <Status name>".
   await page.getByRole('button', { name: 'New work item in Todo' }).click();
@@ -278,8 +280,16 @@ test('scenario 10 — wiki: create a page from empty state', async ({ page }) =>
   await titleInput.press('Enter');
 
   // Wiki tree refreshes inline and shows the new page.
-  await page.keyboard.press('Escape');
-  await expect(page.getByText('My first wiki page')).toBeVisible();
+  // Close the slideover via its dedicated Close button — pressing Escape
+  // alone is fragile because focus may have left the dialog after the
+  // inline-edit's Enter commit moved focus to document.body.
+  await page.getByRole('button', { name: 'Close document' }).click();
+  // The wiki tree row's outer <li> picks up role="button" via dnd-kit's
+  // draggable attributes, so it collides with the inner label button on
+  // strict-mode lookups. Match by tagName + .first() instead.
+  await expect(
+    page.locator('button', { hasText: 'My first wiki page' }).first(),
+  ).toBeVisible();
 
   // Confirm persisted via API.
   const list = await page.request.get(`/api/v1/w/${wslug}/p/${pslug}/documents?type=page`);

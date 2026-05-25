@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import { MoreHorizontal, Plus } from 'lucide-react';
+import { ChevronRight, MoreHorizontal, Plus } from 'lucide-react';
 import { Icon } from '../ui/icon.tsx';
 import { cn } from '../ui/cn.ts';
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
@@ -33,9 +33,14 @@ function RailTreeNode({ item, depth }: { item: NavItem; depth: number }) {
   const [expanded, setExpanded] = useExpanded(item.id, depth === 0);
   const [renaming, setRenaming] = useState(false);
 
+  // Label click only navigates. Toggling children is the chevron's job —
+  // mixing the two made "collapse without navigating" impossible.
   const onLabelClick = () => {
-    if (hasChildren) setExpanded(!expanded);
     item.onClick?.();
+  };
+  const onChevronClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setExpanded(!expanded);
   };
 
   return (
@@ -47,11 +52,41 @@ function RailTreeNode({ item, depth }: { item: NavItem; depth: number }) {
         )}
         style={{ paddingLeft: `${8 + depth * 10}px` }}
       >
-        {item.lucideIcon ? (
+        {hasChildren ? (
+          <button
+            type="button"
+            aria-label={expanded ? 'Collapse' : 'Expand'}
+            aria-expanded={expanded}
+            data-testid={`rail-tree-chevron-${item.id}`}
+            onClick={onChevronClick}
+            className="grid h-4 w-4 shrink-0 place-items-center rounded text-fg-3 hover:text-fg-2"
+          >
+            {item.lucideIcon ? (
+              <Icon
+                icon={item.lucideIcon}
+                size={14}
+                className="text-fg-3 group-hover/row:hidden"
+              />
+            ) : item.icon ? (
+              <span className="inline-grid h-[14px] w-[14px] place-items-center text-fg-3 group-hover/row:hidden">{item.icon}</span>
+            ) : null}
+            <Icon
+              icon={ChevronRight}
+              size={14}
+              className={cn(
+                'transition-transform duration-fast',
+                (item.lucideIcon || item.icon) ? 'hidden group-hover/row:inline-block' : '',
+                expanded ? 'rotate-90' : '',
+              )}
+            />
+          </button>
+        ) : item.lucideIcon ? (
           <Icon icon={item.lucideIcon} size={14} className="text-fg-3 shrink-0" />
         ) : item.icon ? (
           <span className="inline-grid h-[14px] w-[14px] place-items-center text-fg-3 shrink-0">{item.icon}</span>
-        ) : null}
+        ) : (
+          <span className="inline-block h-4 w-4 shrink-0" />
+        )}
 
         {renaming && item.onRename ? (
           <RenameInput initial={item.label} onCommit={(next) => { item.onRename!(next); setRenaming(false); }} onCancel={() => setRenaming(false)} />

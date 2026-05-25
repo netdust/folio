@@ -1,32 +1,28 @@
 import { DndContext, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
 import { useSortable, SortableContext, horizontalListSortingStrategy, arrayMove } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { ColumnPicker } from './column-picker.tsx';
 import { gridTemplate, type Column } from './columns.ts';
 
-export type SortKey = 'title' | 'status' | 'updated_at';
+// SortKey is `string` because saved views can persist a sort by any column
+// key (built-in or custom field). Only `SORTABLE_BUILTIN_KEYS` are clickable
+// from the header today; custom keys can still arrive via URL/view hydration.
+export type SortKey = string;
 export type SortDir = 'asc' | 'desc';
 export interface SortState { key: SortKey; dir: SortDir; }
 
-const SORTABLE_BUILTIN_KEYS: SortKey[] = ['title', 'status', 'updated_at'];
+const SORTABLE_BUILTIN_KEYS: readonly string[] = ['title', 'status', 'updated_at'];
 
 interface Props {
   columns: Column[];         // visible columns, already ordered
-  allColumns: Column[];      // every column (for the picker)
-  visibleKeys: string[];
   sort: SortState | null;
   onSort: (next: SortState | null) => void;
-  onVisibilityChange: (next: string[]) => void;
   onReorder: (nextOrder: string[]) => void;
 }
 
 export function TableHeader({
   columns,
-  allColumns,
-  visibleKeys,
   sort,
   onSort,
-  onVisibilityChange,
   onReorder,
 }: Props) {
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
@@ -55,7 +51,7 @@ export function TableHeader({
                   {columns.slice(0, -1).map((c, i) => (
                     <SortableHeaderCell key={c.key} column={c} sort={sort} onSort={onSort} isSticky={i === 0} />
                   ))}
-                  {columns.length > 1 ? <span aria-hidden /> : null}
+                  {columns.length > 1 ? <div aria-hidden /> : null}
                   {last ? (
                     <SortableHeaderCell
                       key={last.key}
@@ -71,7 +67,6 @@ export function TableHeader({
           </div>
         </SortableContext>
       </DndContext>
-      <ColumnPicker columns={allColumns} visibleKeys={visibleKeys} onChange={onVisibilityChange} />
     </div>
   );
 }
@@ -115,7 +110,7 @@ function SortableHeaderCell({
       {...listeners}
       onClick={onClick}
       title={sortable ? `Sort by ${column.label} (drag to reorder)` : `Drag to reorder ${column.label}`}
-      className={`inline-flex cursor-grab items-center gap-1 text-left text-[11px] uppercase tracking-wide text-fg-3 hover:text-fg-2 active:cursor-grabbing${isSticky ? ' sticky left-0 z-[1] bg-content' : ''}`}
+      className={`inline-flex cursor-grab items-center gap-1 text-left text-[11px] uppercase tracking-wide text-fg-3 hover:text-fg-2 active:cursor-grabbing${isSticky ? ' sticky left-0 z-[1] border-r border-border-light bg-content pl-[22px] pr-3' : ''}`}
     >
       {column.label}
       {sort?.key === column.key ? (
