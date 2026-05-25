@@ -10,6 +10,7 @@ import { emitEvent } from '../lib/events.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
 import { slugUniqueInTables } from '../lib/slug-unique.ts';
 import { type AuthContext, getUser } from '../middleware/auth.ts';
+import { requireScope } from '../middleware/bearer.ts';
 import { type ScopeContext, getProject, getWorkspace } from '../middleware/scope.ts';
 
 const tablesRoute = new Hono<AuthContext & ScopeContext>();
@@ -44,7 +45,7 @@ tablesRoute.get('/', async (c) => {
   return jsonOk(c, rows);
 });
 
-tablesRoute.post('/', zValidator('json', baseSchema), async (c) => {
+tablesRoute.post('/', requireScope('tables:write'), zValidator('json', baseSchema), async (c) => {
   const user = getUser(c);
   const p = getProject(c);
   const ws = getWorkspace(c);
@@ -86,7 +87,7 @@ tablesRoute.post('/', zValidator('json', baseSchema), async (c) => {
   return jsonOk(c, row, 201);
 });
 
-tablesRoute.patch('/:tslug', zValidator('json', patchSchema), async (c) => {
+tablesRoute.patch('/:tslug', requireScope('tables:write'), zValidator('json', patchSchema), async (c) => {
   const user = getUser(c);
   const p = getProject(c);
   const ws = getWorkspace(c);
@@ -120,7 +121,7 @@ tablesRoute.patch('/:tslug', zValidator('json', patchSchema), async (c) => {
   return jsonOk(c, { ...row, ...updates });
 });
 
-tablesRoute.delete('/:tslug', async (c) => {
+tablesRoute.delete('/:tslug', requireScope('tables:write'), async (c) => {
   const user = getUser(c);
   const p = getProject(c);
   const ws = getWorkspace(c);

@@ -9,6 +9,7 @@ import { views } from '../db/schema.ts';
 import { jsonOk, HTTPError } from '../lib/http.ts';
 import { emitEvent } from '../lib/events.ts';
 import { type AuthContext, getUser } from '../middleware/auth.ts';
+import { requireScope } from '../middleware/bearer.ts';
 import { getProject, getTable, getWorkspace, type ScopeContext } from '../middleware/scope.ts';
 
 const viewsRoute = new Hono<AuthContext & ScopeContext>();
@@ -46,7 +47,7 @@ viewsRoute.get('/', async (c) => {
   return jsonOk(c, rows);
 });
 
-viewsRoute.post('/', zValidator('json', baseSchema), async (c) => {
+viewsRoute.post('/', requireScope('views:write'), zValidator('json', baseSchema), async (c) => {
   const user = getUser(c);
   const p = getProject(c);
   const t = getTable(c);
@@ -79,7 +80,7 @@ viewsRoute.post('/', zValidator('json', baseSchema), async (c) => {
   return jsonOk(c, { view: row }, 201);
 });
 
-viewsRoute.patch('/:id', zValidator('json', baseSchema.partial()), async (c) => {
+viewsRoute.patch('/:id', requireScope('views:write'), zValidator('json', baseSchema.partial()), async (c) => {
   const user = getUser(c);
   const p = getProject(c);
   const t = getTable(c);
@@ -102,7 +103,7 @@ viewsRoute.patch('/:id', zValidator('json', baseSchema.partial()), async (c) => 
   return jsonOk(c, { view: { ...row, ...patch } });
 });
 
-viewsRoute.delete('/:id', async (c) => {
+viewsRoute.delete('/:id', requireScope('views:write'), async (c) => {
   const user = getUser(c);
   const p = getProject(c);
   const t = getTable(c);

@@ -4,7 +4,8 @@ import { logger } from 'hono/logger';
 import { serveStatic } from 'hono/bun';
 import { env } from './env.ts';
 import { registerErrorHandler } from './lib/http.ts';
-import { attachUser, requireUser, type AuthContext } from './middleware/auth.ts';
+import { attachUser, type AuthContext } from './middleware/auth.ts';
+import { attachToken, requireUserOrToken } from './middleware/bearer.ts';
 import {
   resolveProject,
   resolveTable,
@@ -38,7 +39,7 @@ v1.route('/auth', auth);
 v1.route('/workspaces', workspacesRoute);
 
 const wScope = new Hono<AuthContext & ScopeContext>();
-wScope.use('*', requireUser, resolveWorkspace);
+wScope.use('*', attachToken, requireUserOrToken, resolveWorkspace);
 wScope.route('/settings', settingsRoute);
 wScope.route('/tokens', tokensRoute);
 wScope.route('/projects', projectsRoute);

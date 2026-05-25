@@ -9,6 +9,7 @@ import { jsonOk, HTTPError } from '../lib/http.ts';
 import { emitEvent } from '../lib/events.ts';
 import { FIELD_TYPES, type FieldType, validateTypeChange } from '../lib/field-type-change.ts';
 import { type AuthContext, getUser } from '../middleware/auth.ts';
+import { requireScope } from '../middleware/bearer.ts';
 import { getProject, getTable, getWorkspace, type ScopeContext } from '../middleware/scope.ts';
 
 const fieldsRoute = new Hono<AuthContext & ScopeContext>();
@@ -48,7 +49,7 @@ fieldsRoute.get('/', async (c) => {
   return jsonOk(c, rows);
 });
 
-fieldsRoute.post('/', zValidator('json', baseSchema), async (c) => {
+fieldsRoute.post('/', requireScope('fields:write'), zValidator('json', baseSchema), async (c) => {
   const user = getUser(c);
   const p = getProject(c);
   const t = getTable(c);
@@ -86,6 +87,7 @@ fieldsRoute.post('/', zValidator('json', baseSchema), async (c) => {
 
 fieldsRoute.patch(
   '/:id',
+  requireScope('fields:write'),
   zValidator('json', baseSchema.partial()),
   async (c) => {
     const user = getUser(c);
@@ -163,7 +165,7 @@ fieldsRoute.patch(
   },
 );
 
-fieldsRoute.delete('/:id', async (c) => {
+fieldsRoute.delete('/:id', requireScope('fields:write'), async (c) => {
   const user = getUser(c);
   const p = getProject(c);
   const t = getTable(c);

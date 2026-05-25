@@ -16,6 +16,7 @@ import { parseMarkdown, serializeMarkdown } from '../lib/frontmatter.ts';
 import { compileFilterToWhere } from '../lib/filter-to-drizzle.ts';
 import { slugUniqueInDocuments } from '../lib/slug-unique.ts';
 import { type AuthContext, getUser } from '../middleware/auth.ts';
+import { requireScope } from '../middleware/bearer.ts';
 import { getProject, getTable, getWorkspace, type ScopeContext } from '../middleware/scope.ts';
 
 const documentsRoute = new Hono<AuthContext & ScopeContext>();
@@ -95,7 +96,7 @@ function parseMarkdownInput(raw: string, defaults?: { type?: 'work_item' | 'page
   return { type, title, body, frontmatter: stripReservedFrontmatter(frontmatter), status };
 }
 
-documentsRoute.post('/', async (c) => {
+documentsRoute.post('/', requireScope('documents:write'), async (c) => {
   const user = getUser(c);
   const p = getProject(c);
   const ws = getWorkspace(c);
@@ -322,7 +323,7 @@ documentsRoute.get('/:slug', async (c) => {
   return jsonOk(c, row);
 });
 
-documentsRoute.patch('/:slug', async (c) => {
+documentsRoute.patch('/:slug', requireScope('documents:write'), async (c) => {
   const user = getUser(c);
   const p = getProject(c);
   const ws = getWorkspace(c);
@@ -419,7 +420,7 @@ documentsRoute.patch('/:slug', async (c) => {
   return jsonOk(c, updated);
 });
 
-documentsRoute.delete('/:slug', async (c) => {
+documentsRoute.delete('/:slug', requireScope('documents:delete'), async (c) => {
   const user = getUser(c);
   const p = getProject(c);
   const ws = getWorkspace(c);
@@ -445,7 +446,7 @@ documentsRoute.delete('/:slug', async (c) => {
 // balloon events.payload and saturate GET /events.
 const ACTIVITY_NOTE_MAX = 2000;
 
-documentsRoute.post('/:slug/activity', async (c) => {
+documentsRoute.post('/:slug/activity', requireScope('documents:write'), async (c) => {
   const user = getUser(c);
   const p = getProject(c);
   const ws = getWorkspace(c);

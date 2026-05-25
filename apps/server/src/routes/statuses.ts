@@ -8,6 +8,7 @@ import { documents, statuses } from '../db/schema.ts';
 import { jsonOk, HTTPError } from '../lib/http.ts';
 import { emitEvent } from '../lib/events.ts';
 import { type AuthContext, getUser } from '../middleware/auth.ts';
+import { requireScope } from '../middleware/bearer.ts';
 import { getProject, getTable, getWorkspace, type ScopeContext } from '../middleware/scope.ts';
 
 const statusesRoute = new Hono<AuthContext & ScopeContext>();
@@ -25,6 +26,7 @@ statusesRoute.get('/', async (c) => {
 
 statusesRoute.post(
   '/',
+  requireScope('statuses:write'),
   zValidator(
     'json',
     z.object({
@@ -70,6 +72,7 @@ statusesRoute.post(
 
 statusesRoute.patch(
   '/:id',
+  requireScope('statuses:write'),
   zValidator(
     'json',
     z.object({
@@ -109,7 +112,7 @@ statusesRoute.patch(
   },
 );
 
-statusesRoute.delete('/:id', async (c) => {
+statusesRoute.delete('/:id', requireScope('statuses:write'), async (c) => {
   const user = getUser(c);
   const p = getProject(c);
   const t = getTable(c);
