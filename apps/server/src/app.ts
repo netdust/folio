@@ -17,6 +17,7 @@ import { documentsRoute } from './routes/documents.ts';
 import { eventsRoute } from './routes/events.ts';
 import { fieldsRoute } from './routes/fields.ts';
 import { healthRoute } from './routes/health.ts';
+import { mcpRoute } from './routes/mcp.ts';
 import { projectItemRoute, projectsRoute } from './routes/projects.ts';
 import { settingsRoute } from './routes/settings.ts';
 import { statusesRoute } from './routes/statuses.ts';
@@ -71,6 +72,9 @@ wScope.route('/', workspaceItemRoute);
 
 v1.route('/w/:wslug', wScope);
 app.route('/api/v1', v1);
+
+// --- /mcp (root-level JSON-RPC endpoint, not under /api/v1) ---
+app.route('/mcp', mcpRoute);
 
 // --- health (unversioned) ---
 app.route('/', healthRoute);
