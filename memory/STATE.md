@@ -358,3 +358,4 @@ See `docs/PHASES.md` for the canonical phase list (above-section mirrors it). Lo
 - some `<button>` somewhere is *relying* on `border-style: none` to be set globally. That would be odd (border-width: 0 is invisible regardless of style) but possible if any button uses `border-color: red` without setting `border-style`. Let me grep.
 [2026-05-25] — session ended (no significant changes captured)
 [2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
