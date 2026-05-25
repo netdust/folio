@@ -7,16 +7,11 @@ import { db } from '../db/client.ts';
 import { fields } from '../db/schema.ts';
 import { jsonOk, HTTPError } from '../lib/http.ts';
 import { emitEvent } from '../lib/events.ts';
+import { FIELD_TYPES, type FieldType, validateTypeChange } from '../lib/field-type-change.ts';
 import { type AuthContext, getUser } from '../middleware/auth.ts';
 import { getProject, getTable, getWorkspace, type ScopeContext } from '../middleware/scope.ts';
 
 const fieldsRoute = new Hono<AuthContext & ScopeContext>();
-
-const FIELD_TYPES = [
-  'string', 'text', 'number', 'boolean', 'date', 'datetime',
-  'select', 'multi_select', 'user_ref', 'url', 'document_ref',
-  'currency',
-] as const;
 
 const baseSchema = z.object({
   key: z.string().min(1).max(64).regex(/^[a-z][a-z0-9_]*$/),
@@ -102,18 +97,60 @@ fieldsRoute.patch(
     if (!row) throw new HTTPError('FIELD_NOT_FOUND', `field "${id}" not found`, 404);
     const patch = c.req.valid('json');
     const finalType = patch.type ?? row.type;
-    const finalOptions =
+
+    if (patch.type && patch.type !== row.type) {
+      const check = validateTypeChange(row.type, patch.type);
+      if (!check.ok) {
+        throw new HTTPError('INVALID_TYPE_CHANGE', check.reason, 422);
+      }
+    }
+
+    // Build the effective options for validation + persistence.
+    let finalOptions: string[] | undefined =
       patch.options !== undefined ? patch.options : (row.options ?? undefined);
+
+    // * → currency: inject default ['EUR'] when no options supplied.
+    if (
+      patch.type === 'currency' &&
+      row.type !== 'currency' &&
+      (!finalOptions || finalOptions.length === 0)
+    ) {
+      finalOptions = ['EUR'];
+    }
+
+    // currency → *: drop options when no replacement supplied.
+    const droppingCurrencyOptions =
+      row.type === 'currency' &&
+      patch.type !== undefined &&
+      patch.type !== 'currency' &&
+      patch.options === undefined;
+    if (droppingCurrencyOptions) {
+      finalOptions = undefined;
+    }
+
     validateOptions(finalType, finalOptions ?? undefined);
 
+    // Persist the (possibly mutated) options.
+    const updatePatch: { type?: FieldType; key?: string; label?: string; options?: string[] | null; order?: number } = { ...patch };
+    if (
+      patch.type === 'currency' &&
+      row.type !== 'currency' &&
+      (!patch.options || patch.options.length === 0)
+    ) {
+      updatePatch.options = ['EUR'];
+    }
+    if (droppingCurrencyOptions) {
+      updatePatch.options = null;
+    }
+
     await db.transaction(async (tx) => {
-      await tx.update(fields).set(patch).where(eq(fields.id, id));
+      await tx.update(fields).set(updatePatch).where(eq(fields.id, id));
       await emitEvent(tx, {
         workspaceId: ws.id, projectId: p.id, kind: 'field.updated', actor: user.id,
-        payload: { id, changes: Object.keys(patch) },
+        payload: { id, changes: Object.keys(updatePatch) },
       });
     });
-    return jsonOk(c, { field: { ...row, ...patch } });
+    return jsonOk(c, { field: { ...row, ...updatePatch } });
   },
 );
 

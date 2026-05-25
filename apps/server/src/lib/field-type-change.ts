@@ -1,4 +1,4 @@
-const FIELD_TYPES = [
+export const FIELD_TYPES = [
   'string', 'text', 'number', 'boolean', 'date', 'datetime',
   'select', 'multi_select', 'user_ref', 'url', 'document_ref',
   'currency',
