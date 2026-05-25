@@ -8,12 +8,11 @@ Automated regression status going in: web 220/221 unit, server 123/123, shared 2
 
 ### CRITICAL
 
-- [x] **Bug #1 — Slideover's ⋯ "More actions" button closes the slideover instead of opening the Popover menu.**
-  - Repro: open any doc → click the ⋯ button in the slideover header → slideover closes, no menu appears. URL goes from `?doc=<slug>` back to the base URL. DOM has 0 dialogs, 0 `[data-radix-popper-content-wrapper]`. Reproduced twice across two page loads on ports 5173 and 5175.
-  - Expected (per Task 5 in `tasks/todo.md`): ⋯ opens a Popover with a destructive `Delete` menu item. Clicking Delete opens a confirm Dialog. Confirm calls `useDeleteDocument` and closes the slideover.
-  - Severity: **CRITICAL** — Delete is reachable ONLY via this menu, so the entire delete-document flow is broken in the UI. Backend DELETE endpoint is untouched, so API/agents still work; this is a UI regression only.
-  - Suspected root cause (do NOT fix yet — log only): the slideover Sheet treats clicks "outside" its container as a close trigger. The Radix Popover renders to a portal at the document root, so the ⋯ click lands outside the Sheet's containment and triggers `onOpenChange(false)`. The rail uses the same Popover pattern AND works (verified in sweep) — so the breakage is specific to the Sheet→Popover interaction, likely Radix's `Dialog`/`Sheet` `pointerDownOutside`/`interactOutside` handling.
-  - Resolution: ☐ pending
+- [x] ~~**Bug #1 — Slideover's ⋯ "More actions" closes the slideover instead of opening the Popover menu.**~~ **RETRACTED — investigation error.**
+  - Root cause of the false alarm: my `button[aria-label="More actions"]` selector matched the **rail's** ⋯ button (first in DOM order) instead of the slideover's. The rail click legitimately closes the slideover via Sheet's `onPointerDownOutside` — that's correct behavior, not a bug.
+  - Verified working end-to-end via `[data-testid="slideover-more-actions"]`: ⋯ → Popover opens → "Delete" menuitem → confirm Dialog → danger Delete → toast "Deleted" → row removed → URL drops `?doc=`. 2 dialogs visible during confirm, 1 popper, exactly as expected.
+  - Lesson logged: `aria-label="More actions"` is now overloaded across rail + slideover; use testids in future sweeps.
+  - Resolution: ✅ not a bug
 
 ### IMPORTANT
 

@@ -191,3 +191,17 @@ A 2-minute DevTools read beats 3 commits of guessing.
 **Rule:** No bare `git stash`. To verify whether an error pre-dates the session, list `git status --short`, cross-reference with the file in the error, and reason from there. Stash only with `push -m "<reason>" -- <paths>` and a clear retrieval plan.
 
 **Trigger:** Any thought that begins "let me temporarily set my changes aside to check…". That's the smell — find a non-stash route.
+
+## 2026-05-25 — Invoke superpowers skills at phase start, not after
+
+**Mistake:** On `phase-1.7/crm-polish`, ran `/code-review` + `/security-review` (correct), then implemented all 12 surfaced fixes without invoking `superpowers:test-driven-development` or `superpowers:verification-before-completion`. Wrote production code first, ran the existing suite once at the end, claimed "all tests pass" — handed Stefan a branch he had to manually QA. He named the gap: "yesterday, spec driven development with thorough testing after each spec. now you go at it and i need to run all kinds of tests and reviews manually."
+
+**Why:** Treated the punch list as 12 small edits instead of 12 behavior changes. Each bug fix IS a behavior change → TDD's Iron Law applies ("no production code without a failing test first"). The harness has the skills loaded for exactly this reason. Bypassing them is choosing speed over the discipline the user is paying for.
+
+**Rule:** At the start of any non-trivial Folio phase / change bundle, before writing any code:
+1. Check the available-skills list in the system reminder.
+2. Invoke every skill that applies, in order: `brainstorming` (if intent is unclear) → `writing-plans` (if multi-task) → `test-driven-development` (per task: red, watch fail, green, refactor) → `verification-before-completion` (before any "done" claim, run the command and quote the output).
+3. For bug-fix bundles from `/code-review` or `/security-review`: each finding = one TDD cycle. Write the failing test that demonstrates the bug, watch it fail against current code, write the fix, watch it pass.
+4. "I already know how to do this" / "the existing suite will catch it" is the TDD skill's documented red-flag rationalization. Stop and invoke the skill.
+
+**Trigger:** Any prompt that starts a phase ("phase X", "fix these", "implement Y", "do all of these"), or any time a code-review/security-review surfaces a punch list of 2+ findings. The bar to clear: at end of work, the test suite — not Stefan's manual QA — proves the work is done.
