@@ -128,4 +128,48 @@ describe('TokenCreateModal', () => {
     // Warning that this is the only time
     expect(screen.getByText(/only time|won't be shown again|copy it now/i)).toBeInTheDocument();
   });
+
+  // Bug H (2026-05-26): "Full access" looked like just another grey preset.
+  // It now reads as the dangerous option — distinct styling + a warning line
+  // when every scope is selected.
+  it('renders "Full access" preset with a destructive accent (data-tone="danger")', () => {
+    const qc = new QueryClient();
+    render(
+      <TokenCreateModal wslug="acme" workspaceId="ws-1" open onOpenChange={() => {}} />,
+      { wrapper: wrap(qc) },
+    );
+    const fullAccess = screen.getByRole('button', { name: /full access/i });
+    expect(fullAccess.getAttribute('data-tone')).toBe('danger');
+    // Other presets are not danger-toned.
+    expect(screen.getByRole('button', { name: /^read-only$/i }).getAttribute('data-tone')).not.toBe('danger');
+    expect(screen.getByRole('button', { name: /read \+ write/i }).getAttribute('data-tone')).not.toBe('danger');
+  });
+
+  it('shows a warning alert when every scope is selected (Full access state)', async () => {
+    const qc = new QueryClient();
+    const user = userEvent.setup();
+    render(
+      <TokenCreateModal wslug="acme" workspaceId="ws-1" open onOpenChange={() => {}} />,
+      { wrapper: wrap(qc) },
+    );
+    // No warning before Full access is clicked.
+    expect(screen.queryByRole('alert')).toBeNull();
+    await user.click(screen.getByRole('button', { name: /full access/i }));
+    const alert = screen.getByRole('alert');
+    expect(alert.textContent).toMatch(/every scope|root-level|trusted/i);
+  });
+
+  it('hides the warning when any scope is unchecked from Full access', async () => {
+    const qc = new QueryClient();
+    const user = userEvent.setup();
+    render(
+      <TokenCreateModal wslug="acme" workspaceId="ws-1" open onOpenChange={() => {}} />,
+      { wrapper: wrap(qc) },
+    );
+    await user.click(screen.getByRole('button', { name: /full access/i }));
+    expect(screen.getByRole('alert')).toBeInTheDocument();
+    // Uncheck one scope — warning should disappear because it's no longer "every scope".
+    await user.click(screen.getByLabelText('tables:write'));
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
 });

@@ -27,7 +27,8 @@ type Scope = (typeof ALL_SCOPES)[number];
 // (read tools → documents:read; write tools → write + read; delete → +read).
 // Full access also adds the destructive admin ops (delete + tables:write,
 // which cascade-deletes documents).
-const PRESETS: { label: string; scopes: Scope[] }[] = [
+type PresetTone = 'default' | 'danger';
+const PRESETS: { label: string; scopes: Scope[]; tone?: PresetTone }[] = [
   { label: 'Read-only', scopes: ['documents:read'] },
   {
     label: 'Read + write',
@@ -41,6 +42,7 @@ const PRESETS: { label: string; scopes: Scope[] }[] = [
   },
   {
     label: 'Full access',
+    tone: 'danger',
     scopes: [
       'documents:read',
       'documents:write',
@@ -128,17 +130,35 @@ export function TokenCreateModal({ wslug, workspaceId, open, onOpenChange }: Pro
               <fieldset>
                 <legend className="text-xs font-medium text-fg-2">Scopes</legend>
                 <div className="mt-1 mb-2 flex flex-wrap gap-1.5">
-                  {PRESETS.map((preset) => (
-                    <button
-                      key={preset.label}
-                      type="button"
-                      onClick={() => setScopes(new Set(preset.scopes))}
-                      className="rounded-sm bg-card px-2 py-0.5 text-[11px] text-fg-2 hover:bg-shell hover:text-fg"
-                    >
-                      {preset.label}
-                    </button>
-                  ))}
+                  {PRESETS.map((preset) => {
+                    const isDanger = preset.tone === 'danger';
+                    return (
+                      <button
+                        key={preset.label}
+                        type="button"
+                        data-tone={preset.tone ?? 'default'}
+                        onClick={() => setScopes(new Set(preset.scopes))}
+                        className={
+                          isDanger
+                            ? 'rounded-sm border border-danger/40 bg-bg-danger px-2 py-0.5 text-[11px] text-danger hover:bg-danger hover:text-fg-on-primary'
+                            : 'rounded-sm bg-card px-2 py-0.5 text-[11px] text-fg-2 hover:bg-shell hover:text-fg'
+                        }
+                      >
+                        {preset.label}
+                      </button>
+                    );
+                  })}
                 </div>
+                {scopes.size === ALL_SCOPES.length ? (
+                  <div
+                    role="alert"
+                    className="mb-2 rounded-sm border border-danger/40 bg-bg-danger px-2 py-1.5 text-[11px] text-danger"
+                  >
+                    This token will have <strong>every scope</strong> on this workspace —
+                    root-level access including destructive operations. Use for trusted
+                    agents only.
+                  </div>
+                ) : null}
                 <div className="grid grid-cols-2 gap-x-3 gap-y-1.5">
                   {ALL_SCOPES.map((scope) => (
                     <label key={scope} className="flex items-center gap-2 text-sm">
