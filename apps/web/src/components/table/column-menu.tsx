@@ -10,6 +10,7 @@ interface Props {
   columnKey: string;
   columnLabel: string;
   onRename: () => void;
+  onChangeType: () => void;
   onHide: () => void;
   onDelete: () => Promise<void>;
   affectedDocCount?: number;
@@ -19,6 +20,7 @@ export function ColumnMenu({
   columnKey,
   columnLabel,
   onRename,
+  onChangeType,
   onHide,
   onDelete,
   affectedDocCount,
@@ -57,6 +59,17 @@ export function ColumnMenu({
               }}
             >
               Rename
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className="flex w-full items-center rounded-sm px-2 py-1 text-left text-sm hover:bg-card"
+              onClick={() => {
+                setMenuOpen(false);
+                onChangeType();
+              }}
+            >
+              Change type
             </button>
             <button
               type="button"

@@ -72,8 +72,15 @@ export interface ViewPatch {
 export function useUpdateView(wslug: string, pslug: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async ({ id, patch }: { id: string; patch: ViewPatch }) => {
-      return client.patch<View>(`/api/v1/w/${wslug}/p/${pslug}/views/${id}`, patch);
+    // Server PATCH returns `{ data: { view: row } }`; client.patch strips the
+    // outer `data` envelope but not the inner `view` key. Mirror the
+    // unwrap pattern in useCreateView and useUpdateField.
+    mutationFn: async ({ id, patch }: { id: string; patch: ViewPatch }): Promise<View> => {
+      const wrapped = await client.patch<{ view: View }>(
+        `/api/v1/w/${wslug}/p/${pslug}/views/${id}`,
+        patch,
+      );
+      return wrapped.view;
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: viewsKeys.list(wslug, pslug) }),
   });

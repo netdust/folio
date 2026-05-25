@@ -15,7 +15,8 @@ Phase numbering aligned with `docs/PHASES.md` (canonical) as of 2026-05-24 reorg
 - **Phase 1.6.1 (Rail completeness):** shipped 2026-05-24, absorbed into `phase-1.6/saved-views` branch. NocoDB-style hover-reveal `+`/`⋯` affordances on every rail row (workspace, project, table, view), double-click rename, confirm-delete dialog. `+ New project` in workspace switcher popover. Wiki as a rail leaf under each project. Per `[[rail-ux-pattern]]` auto-memory.
 - **Phase 1.7 (Lightweight CRM polish):** shipped on `phase-1.7/crm-polish` 2026-05-24. 3 of 4 sections shipped (Playbook linking deferred): `last_touched_at` column + Log Activity endpoint + ?stale_for=Nd filter, Activity panel in slideover, color-coded `next_action_due`. 116 server / 173 web / 28 shared. Awaiting manual QA + merge.
 - **Phase 1.8 (Time-aware views):** queued — timeline view + This Week dashboard.
-- **Phase 1.9 (Field management UI):** shipped 2026-05-25 on `phase-1.9/field-management-ui` (10 commits, tip `bed090d`). Inline `+ Add column`, column header `⋯` menu (Rename via InlineEdit + Hide + Delete with confirm dialog), "Suggested columns" in picker (deduped + type-inferred), `useFields` table-scoped. **Type-change deferred to Phase 1.9.1.** Web suite 245 / 1-skip, server 123 / 123, shared 28 / 28, TS clean. PR pending.
+- **Phase 1.9 (Field management UI):** shipped 2026-05-25, PR #2 open. 10 commits on `phase-1.9/field-management-ui` (tip `bed090d`). Inline `+ Add column`, column header `⋯` menu (Rename via InlineEdit + Hide + Delete with confirm dialog), "Suggested columns" in picker (deduped + type-inferred), `useFields` table-scoped.
+- **Phase 1.9.1 (Type-change UI + useUpdateView fix):** shipped 2026-05-25 on `phase-1.9.1/type-change-and-views-fix`. 5 phase commits ahead of 1.9. Compatible-only type-change in column `⋯` menu (`string ↔ text`, `number ↔ currency`, `* → text`); 422 with `INVALID_TYPE_CHANGE` for anything else. Default ISO `EUR` auto-injected on `* → currency`; options auto-cleared on `currency → *`. `useUpdateView` envelope unwrap fixed. Web 254 / 1-skip, server 135 / 135, shared 28 / 28, web TS clean. PR pending — must merge AFTER PR #2 lands.
 - **Phase 2 (Agents):** queued — spine of v1. Tokens, SSE, MCP server, agents-as-documents, triggers-as-documents (surface only).
 - **Phase 3 (AI in UI + Agent runner):** queued — second spine. Slash commands, provider abstraction, agent runner, trigger scheduler/matcher.
 - **Phase 4 (Inbound webhooks):** queued — plan ready at `docs/superpowers/plans/2026-05-24-phase-4-inbound-webhooks.md`. 7 tasks.
@@ -26,9 +27,17 @@ Phase numbering aligned with `docs/PHASES.md` (canonical) as of 2026-05-24 reorg
 
 ## Current branch
 
-`phase-1.9/field-management-ui` — 10 phase commits ahead of main (`7b49fdb`). Awaiting Stefan's manual QA + PR open.
+`phase-1.9.1/type-change-and-views-fix` — 5 phase commits ahead of `phase-1.9/field-management-ui` (which is itself 10 commits ahead of main). Awaiting Stefan's manual QA + PR open.
 
-Tests on branch tip: 123 server / 245 web (+1 skipped) / 28 shared. All green. TS clean (`apps/web` only — pre-existing server / shared TS errors out of scope).
+Tests on branch tip: 135 server / 254 web (+1 skipped) / 28 shared. All green. Web TS clean.
+
+### Phase 1.9.1 commit list (newest first)
+
+- `1e9548f` phase-1.9.1: fix useUpdateView envelope unwrap
+- `a0bccf2` phase-1.9.1: wire Change type into ColumnMenu and TableView
+- `a4f84d0` phase-1.9.1: add ColumnTypeChange dialog
+- `4153af4` phase-1.9.1: enforce type-change compatibility on field PATCH
+- `8707020` phase-1.9.1: add validateTypeChange compatibility helper
 
 ### Phase 1.9 commit list (newest first)
 
@@ -42,10 +51,6 @@ Tests on branch tip: 123 server / 245 web (+1 skipped) / 28 shared. All green. T
 - `85d42d0` phase-1.9: add useCreateField/useUpdateField/useDeleteField
 - `99f0c30` phase-1.9: thread tslug through TableView and its callers
 - `b9acb0a` phase-1.9: rescope useFields query key to (wslug, pslug, tslug)
-
-### Latent bug surfaced
-
-`useUpdateView` in `apps/web/src/lib/api/views.ts:75-77` has the same envelope-unwrap pattern Task 3 fixed in `useUpdateField`. Server returns `{ data: { view: row } }`; the hook is typed `View` but resolves with `{ view: View }` at runtime. Silent today because callers don't read return-value fields. **Fix in Phase 1.9.1 or alongside next views.ts change.**
 
 ### 2026-05-25 UX cleanup batch (5 items, all green)
 
@@ -104,6 +109,7 @@ I attempted an `absolute right-0` overlay approach in a non-committed edit and r
 - Inline `+ Add column` at the right end of the spreadsheet header — popover form (key + label + type + per-type options).
 - Column header `⋯` menu (hover-reveal on non-builtin columns): Rename (InlineEdit on the label), Hide column, Delete column (confirm dialog with affected-doc count).
 - "Suggested columns" section in the column picker — surfaces orphan frontmatter keys with inferred type; one-click `+ Pin`.
+- Column `⋯ → Change type` (Phase 1.9.1) — compatible-only transitions (`string ↔ text`, `number ↔ currency`, `* → text`); server returns 422 with a clear allowed-transitions message for anything else. Default ISO `EUR` injected on `* → currency`; options cleared on `currency → *`.
 
 ## What's not built yet
 
@@ -356,5 +362,7 @@ See `docs/PHASES.md` for the canonical phase list (above-section mirrors it). Lo
 
 **Risks**
 - some `<button>` somewhere is *relying* on `border-style: none` to be set globally. That would be odd (border-width: 0 is invisible regardless of style) but possible if any button uses `border-color: red` without setting `border-style`. Let me grep.
+[2026-05-25] — session ended (no significant changes captured)
+[2026-05-25] — session ended (no significant changes captured)
 [2026-05-25] — session ended (no significant changes captured)
 [2026-05-25] — session ended (no significant changes captured)

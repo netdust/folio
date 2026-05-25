@@ -105,3 +105,95 @@ test('POST /fields 422 on currency with non-ISO code', async () => {
   });
   expect(res.status).toBe(422);
 });
+
+test('PATCH allows compatible string→text', async () => {
+  const { app, seed } = await makeTestApp();
+  const create = await app.request(path, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ key: 'note', type: 'string' }),
+  });
+  const { data: { field } } = await create.json();
+  const patch = await app.request(`${path}/${field.id}`, {
+    method: 'PATCH',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: 'text' }),
+  });
+  expect(patch.status).toBe(200);
+  expect((await patch.json()).data.field.type).toBe('text');
+});
+
+test('PATCH rejects incompatible number→select with 422 INVALID_TYPE_CHANGE', async () => {
+  const { app, seed } = await makeTestApp();
+  const create = await app.request(path, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ key: 'qty', type: 'number' }),
+  });
+  const { data: { field } } = await create.json();
+  const patch = await app.request(`${path}/${field.id}`, {
+    method: 'PATCH',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: 'select', options: ['a', 'b'] }),
+  });
+  expect(patch.status).toBe(422);
+  const body = await patch.json();
+  expect(body.error.code).toBe('INVALID_TYPE_CHANGE');
+  expect(body.error.message).toContain('number → select');
+});
+
+test('PATCH any→text always allowed (date→text)', async () => {
+  const { app, seed } = await makeTestApp();
+  const create = await app.request(path, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ key: 'due', type: 'date' }),
+  });
+  const { data: { field } } = await create.json();
+  const patch = await app.request(`${path}/${field.id}`, {
+    method: 'PATCH',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: 'text' }),
+  });
+  expect(patch.status).toBe(200);
+  expect((await patch.json()).data.field.type).toBe('text');
+});
+
+test('PATCH number→currency auto-injects [EUR] when no options supplied', async () => {
+  const { app, seed } = await makeTestApp();
+  const create = await app.request(path, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ key: 'amount', type: 'number' }),
+  });
+  const { data: { field } } = await create.json();
+  const patch = await app.request(`${path}/${field.id}`, {
+    method: 'PATCH',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: 'currency' }),
+  });
+  expect(patch.status).toBe(200);
+  const body = await patch.json();
+  expect(body.data.field.type).toBe('currency');
+  expect(body.data.field.options).toEqual(['EUR']);
+});
+
+test('PATCH currency→number clears options when client sends options: null', async () => {
+  const { app, seed } = await makeTestApp();
+  const create = await app.request(path, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ key: 'amount', type: 'currency', options: ['EUR'] }),
+  });
+  const { data: { field } } = await create.json();
+
+  const patch = await app.request(`${path}/${field.id}`, {
+    method: 'PATCH',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: 'number', options: null }),
+  });
+  expect(patch.status).toBe(200);
+  const body = await patch.json();
+  expect(body.data.field.type).toBe('number');
+  expect(body.data.field.options).toBeNull();
+});

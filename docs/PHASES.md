@@ -443,11 +443,13 @@ This must land BEFORE Phase 2 (Agents). Agents will write new frontmatter keys; 
 - [ ] Playwright covers: full add-column → see new cell in row → rename column → delete column flow — **deferred; manual smoke is the acceptance gate for this branch**
 - [x] Commit: `phase-1.9: complete`
 
-### Phase 1.9.1 — deferred follow-ups
+### Phase 1.9.1 — shipped 2026-05-25
 
-- Type-change in `⋯` menu (compatible matrix + value-remap migration UI for incompatible types)
-- Optional Playwright e2e journey for the full add → rename → delete flow
-- Latent bug noted: `useUpdateView` in `apps/web/src/lib/api/views.ts:75-77` has the same envelope-unwrap pattern Task 3 fixed in `useUpdateField`. Silent today (no caller reads the resolved fields) but worth a parity fix.
+- [x] Compatible-only type-change in `⋯` menu (`string ↔ text`, `number ↔ currency`, `* → text`). Incompatible changes return 422 `INVALID_TYPE_CHANGE` with a clear allowed-transitions message.
+- [x] `useUpdateView` envelope-unwrap fix (parity with Task 3's `useUpdateField` fix from Phase 1.9).
+- [ ] Value-remap migration UI for incompatible type changes — **deferred further; "Delete column and recreate" is the v1 path.**
+- [ ] Optional Playwright e2e journey for the full add → rename → type-change → delete flow — **deferred to Phase 7.**
+- [x] Commit: `phase-1.9.1: complete`
 
 ---
 
