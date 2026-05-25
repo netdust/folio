@@ -95,9 +95,7 @@ export function ColumnMenu({
           <DialogDescription>
             The pinned field <code>{columnKey}</code> will be removed from this table.
             {typeof affectedDocCount === 'number' && affectedDocCount > 0
-              ? ` ${affectedDocCount} document${affectedDocCount === 1 ? '' : 's'} ${
-                  affectedDocCount === 1 ? 'has' : 'have'
-                } a value for this key — the values remain in raw frontmatter but lose their column.`
+              ? ` At least ${affectedDocCount} document${affectedDocCount === 1 ? '' : 's'} on this page ${affectedDocCount === 1 ? 'has' : 'have'} a value for this key — the values remain in raw frontmatter but lose their column.`
               : ''}
           </DialogDescription>
           <div className="mt-5 flex items-center justify-end gap-2">
