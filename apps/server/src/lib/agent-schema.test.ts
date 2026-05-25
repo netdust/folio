@@ -1,0 +1,117 @@
+import { describe, test, expect } from 'bun:test';
+import { agentFrontmatterSchema, toolsToScopes, V1_MCP_TOOLS } from './agent-schema.ts';
+
+describe('agentFrontmatterSchema', () => {
+  test('accepts a complete valid agent frontmatter', () => {
+    const r = agentFrontmatterSchema.safeParse({
+      system_prompt: 'do the thing',
+      model: 'claude-sonnet-4-6',
+      provider: 'anthropic',
+      tools: ['list_documents', 'get_document'],
+      max_delegation_depth: 2,
+      max_tokens_per_run: 10000,
+      requires_approval: false,
+    });
+    expect(r.success).toBe(true);
+  });
+
+  test('applies defaults for max_delegation_depth, max_tokens_per_run, requires_approval', () => {
+    const r = agentFrontmatterSchema.safeParse({
+      system_prompt: 'x',
+      model: 'gpt-4o',
+      provider: 'openai',
+      tools: [],
+    });
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.data.max_delegation_depth).toBe(2);
+      expect(r.data.max_tokens_per_run).toBe(10000);
+      expect(r.data.requires_approval).toBe(false);
+    }
+  });
+
+  test('rejects max_delegation_depth > 5', () => {
+    const r = agentFrontmatterSchema.safeParse({
+      system_prompt: 'x', model: 'x', provider: 'anthropic', tools: [], max_delegation_depth: 6,
+    });
+    expect(r.success).toBe(false);
+  });
+
+  test('rejects max_tokens_per_run > 100000', () => {
+    const r = agentFrontmatterSchema.safeParse({
+      system_prompt: 'x', model: 'x', provider: 'anthropic', tools: [], max_tokens_per_run: 100001,
+    });
+    expect(r.success).toBe(false);
+  });
+
+  test('rejects unknown provider', () => {
+    const r = agentFrontmatterSchema.safeParse({
+      system_prompt: 'x', model: 'x', provider: 'magic', tools: [],
+    });
+    expect(r.success).toBe(false);
+  });
+
+  test('rejects tools not in the v1 MCP set', () => {
+    const r = agentFrontmatterSchema.safeParse({
+      system_prompt: 'x', model: 'x', provider: 'anthropic', tools: ['list_documents', 'invent_thing'],
+    });
+    expect(r.success).toBe(false);
+  });
+
+  test('rejects api_token_id when set by the client on input', () => {
+    const r = agentFrontmatterSchema.safeParse({
+      system_prompt: 'x', model: 'x', provider: 'anthropic', tools: [], api_token_id: 'tok_x',
+    });
+    expect(r.success).toBe(false);
+  });
+
+  test('rejects parent_agent when set by the client on input', () => {
+    const r = agentFrontmatterSchema.safeParse({
+      system_prompt: 'x', model: 'x', provider: 'anthropic', tools: [], parent_agent: 'agent-foo',
+    });
+    expect(r.success).toBe(false);
+  });
+});
+
+describe('toolsToScopes', () => {
+  test('list/get tools require documents:read', () => {
+    expect(toolsToScopes(['list_documents'])).toContain('documents:read');
+    expect(toolsToScopes(['get_document', 'get_document_markdown'])).toContain('documents:read');
+  });
+
+  test('create/update tools require documents:write', () => {
+    expect(toolsToScopes(['create_document'])).toContain('documents:write');
+    expect(toolsToScopes(['update_document'])).toContain('documents:write');
+  });
+
+  test('delete_document requires documents:delete', () => {
+    expect(toolsToScopes(['delete_document'])).toContain('documents:delete');
+  });
+
+  test('write tools always also include read', () => {
+    expect(toolsToScopes(['create_document'])).toContain('documents:read');
+  });
+
+  test('empty tools returns no scopes', () => {
+    expect(toolsToScopes([])).toEqual([]);
+  });
+
+  test('scopes are deduped', () => {
+    const out = toolsToScopes(['list_documents', 'get_document', 'create_document', 'update_document']);
+    const reads = out.filter((s) => s === 'documents:read');
+    expect(reads.length).toBe(1);
+  });
+});
+
+describe('V1_MCP_TOOLS', () => {
+  test('contains the 12 v1 tools', () => {
+    expect(V1_MCP_TOOLS).toEqual([
+      'list_workspaces', 'list_projects', 'list_documents',
+      'get_document', 'get_document_markdown',
+      'create_document', 'update_document', 'delete_document',
+      'list_statuses', 'list_fields', 'list_views',
+      'run_view',
+      // search_documents deferred to v1.1
+    ] as const);
+  });
+});
