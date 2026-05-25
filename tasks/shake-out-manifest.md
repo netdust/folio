@@ -55,6 +55,17 @@ Environment: dev stack running on :3001 (api) + :5173 (web), DB `apps/server/fol
 - **Root cause:** Plan §Task 14 step 4 spec'd exactly the 6 scopes I shipped; nobody cross-referenced against `grep "requireScope" routes/`. Plan-vs-API source-of-truth rule from auto-memory was violated.
 - **Fix shape (Stefan approved):** add `statuses:write` + a preset strip ("Read-only" / "Read + write" / "Full access") above the checkboxes. Per superpowers:systematic-debugging in Phase 3.
 
+### Bug C — CRITICAL — `GET /documents?type=agent|trigger` returns ALL document types
+
+- **Where:** `apps/server/src/services/documents.ts:132`
+- **Symptom (caught manually by Stefan in the assignee picker):** Opening the Agents popover lists wiki pages and work items, not agents. AssigneePicker calls `useDocuments(..., {type: 'agent'})` → `GET /documents?type=agent` → server returns the unfiltered project doc list (20 docs of all types).
+- **Root cause:** `listDocuments` only emits a `WHERE type = ?` clause when the query value is `'work_item'` or `'page'` — the literal pre-Phase-2 enum. When we widened `documents.type` in Task 5 to include `agent` + `trigger`, the list-filter switch was never updated, so anything outside the original 2-value enum becomes a no-op filter.
+- **Cascading impact:**
+  - AssigneePicker shows pages + work items in the "Agents" section. ← Stefan's report.
+  - The new /agents and /triggers rail routes (Task 16, `DocumentTypeList`) show *every* document on the project, not the filtered subset they advertise.
+  - Any caller passing `type=agent` or `type=trigger` to the REST API gets bogus data.
+- **Fix shape:** `if (opts.type && (DOCUMENT_TYPES as readonly string[]).includes(opts.type)) { whereClauses.push(eq(documents.type, opts.type as DocumentType)); }` — plus extend the existing list-filter tests to cover type=agent and type=trigger so this can't regress silently again. Per superpowers:systematic-debugging in Phase 3.
+
 ### No other bugs surfaced in Track A.
 
 ---
