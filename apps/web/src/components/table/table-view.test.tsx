@@ -743,6 +743,54 @@ describe('TableView', () => {
     expect(scroll.className).toContain('min-h-0');
   });
 
+  // Bug E (2026-05-26): when visible columns total wider than the viewport,
+  // the rows' bottom border stopped at viewport width instead of extending
+  // across the grid. Root cause was the inner table-scroll wrapper sizing to
+  // its layout width (which the rows' `w-full` then inherited). Wrapper must
+  // size to its content so rows + header span the full grid width even on
+  // horizontal scroll.
+  it('table-scroll inner wrapper is content-width so row borders span full grid', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (url, init) => {
+      const u = String(url);
+      const method = init?.method ?? 'GET';
+      if (u.includes('/statuses') && method === 'GET') {
+        return new Response(JSON.stringify({ data: [statusRow] }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (u.includes('/fields') && method === 'GET') {
+        return new Response(JSON.stringify({ data: [fieldRow] }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (u.includes('/views') && method === 'GET') {
+        return new Response(JSON.stringify({ data: [viewRow] }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (u.includes('/documents') && method === 'GET') {
+        return new Response(JSON.stringify({ data: { data: [docRow], nextCursor: null } }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { queryClient, router } = setup();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(screen.getByText('First task')).toBeInTheDocument());
+
+    const scroll = screen.getByTestId('table-scroll');
+    const innerWrapper = scroll.firstElementChild as HTMLElement;
+    expect(innerWrapper).toBeTruthy();
+    expect(innerWrapper.className).toContain('w-max');
+  });
+
   it('clicking a sortable column header writes URL AND patches view.sort', async () => {
     const mockView = {
       ...viewRow,

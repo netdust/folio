@@ -30,52 +30,37 @@ export function TableAddRow({ columns, isPending, onCreate }: Props) {
         className="grid flex-1 items-center gap-3"
         style={{ gridTemplateColumns: gridTemplate(columns) }}
       >
-        {(() => {
-          const cells: React.ReactNode[] = [];
-          const titleCell = (
-            <div key="title-add" className="sticky left-0 z-[1] flex items-center border-r border-border-light bg-content pl-[22px] pr-3 group-hover/row:bg-card">
-              <div className="flex min-w-0 items-center gap-2">
-                <Icon icon={Plus} size={14} />
-                {editing ? (
-                  <InlineEdit
-                    value=""
-                    onCommit={onCommit}
-                    defaultEditing
-                    isPending={isPending}
-                    placeholder="New work item…"
-                    ariaLabel="New work item title"
-                  />
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => setEditing(true)}
-                    aria-label="Add work item"
-                    className="rounded-sm px-1 py-0.5 text-left"
-                  >
-                    Add work item
-                  </button>
-                )}
-              </div>
-            </div>
-          );
-          cells.push(titleCell);
-          // Fill the remaining columns with empty placeholders so the grid
-          // keeps a consistent shape. Slice off the title column we already
-          // rendered, then handle the 1fr spacer + last column the same way
-          // TableRow does.
-          const rest = columns.slice(1);
-          if (rest.length === 0) return cells;
-          for (let i = 0; i < rest.length - 1; i++) {
-            const col = rest[i];
-            if (!col) continue;
-            cells.push(<div key={`spacer-${col.key}`} aria-hidden />);
-          }
-          // 1fr spacer matches gridTemplate()'s injected fr slot.
-          cells.push(<div key="fr-spacer" aria-hidden />);
-          const last = rest[rest.length - 1];
-          if (last) cells.push(<div key={`last-${last.key}`} aria-hidden />);
-          return cells;
-        })()}
+        <div key="title-add" className="sticky left-0 z-[1] flex items-center border-r border-border-light bg-content pl-[22px] pr-3 group-hover/row:bg-card">
+          <div className="flex min-w-0 items-center gap-2">
+            <Icon icon={Plus} size={14} />
+            {editing ? (
+              <InlineEdit
+                value=""
+                onCommit={onCommit}
+                defaultEditing
+                isPending={isPending}
+                placeholder="New work item…"
+                ariaLabel="New work item title"
+              />
+            ) : (
+              <button
+                type="button"
+                onClick={() => setEditing(true)}
+                aria-label="Add work item"
+                className="rounded-sm px-1 py-0.5 text-left"
+              >
+                Add work item
+              </button>
+            )}
+          </div>
+        </div>
+        {/* One empty placeholder per non-title column keeps the grid shape
+            consistent with TableRow / TableHeader so widths align. The
+            1fr spacer that used to live before the last column was dropped
+            with Bug E's fix. */}
+        {columns.slice(1).map((c) => (
+          <div key={`placeholder-${c.key}`} aria-hidden />
+        ))}
       </div>
     </div>
   );

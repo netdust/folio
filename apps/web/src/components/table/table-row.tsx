@@ -52,42 +52,20 @@ export function TableRow({
           className="grid flex-1 items-center gap-3"
           style={{ gridTemplateColumns: gridTemplate(columns) }}
         >
-          {(() => {
-            const last = columns[columns.length - 1];
-            return (
-              <>
-                {columns.slice(0, -1).map((c, i) => (
-                  <TableCell
-                    key={c.key}
-                    column={c}
-                    doc={doc}
-                    statuses={statuses}
-                    isPending={isPending}
-                    isSticky={i === 0}
-                    onOpen={onOpen}
-                    onTitleCommit={onTitleCommit}
-                    onStatusCommit={onStatusCommit}
-                    onFieldCommit={onFieldCommit}
-                  />
-                ))}
-                {columns.length > 1 ? <div aria-hidden /> : null}
-                {last ? (
-                  <TableCell
-                    key={last.key}
-                    column={last}
-                    doc={doc}
-                    statuses={statuses}
-                    isPending={isPending}
-                    isSticky={columns.length === 1}
-                    onOpen={onOpen}
-                    onTitleCommit={onTitleCommit}
-                    onStatusCommit={onStatusCommit}
-                    onFieldCommit={onFieldCommit}
-                  />
-                ) : null}
-              </>
-            );
-          })()}
+          {columns.map((c, i) => (
+            <TableCell
+              key={c.key}
+              column={c}
+              doc={doc}
+              statuses={statuses}
+              isPending={isPending}
+              isSticky={i === 0}
+              onOpen={onOpen}
+              onTitleCommit={onTitleCommit}
+              onStatusCommit={onStatusCommit}
+              onFieldCommit={onFieldCommit}
+            />
+          ))}
         </div>
       </div>
     </RowContextMenu>

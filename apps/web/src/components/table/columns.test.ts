@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { Field } from '../../lib/api/fields.ts';
 import type { View } from '../../lib/api/views.ts';
-import { mergeColumns, applyColumnOrder, effectiveVisibleKeys } from './columns.ts';
+import { mergeColumns, applyColumnOrder, effectiveVisibleKeys, gridTemplate, type Column } from './columns.ts';
 
 const fields: Field[] = [
   { id: 'f1', key: 'amount',   type: 'currency',     label: 'Amount',   options: ['EUR'],       required: false, order: 0 },
@@ -108,5 +108,28 @@ describe('effectiveVisibleKeys', () => {
   it('drops any visible keys that no longer exist as columns', () => {
     const view = { visibleFields: ['title', 'GONE', 'amount'] } as unknown as View;
     expect(effectiveVisibleKeys(mergeColumns(fields, null), view)).toEqual(['title', 'amount']);
+  });
+});
+
+describe('gridTemplate', () => {
+  const titleCol: Column = { key: 'title', label: 'Title', source: 'builtin' };
+  const statusCol: Column = { key: 'status', label: 'Status', source: 'builtin' };
+  const tagsCol: Column = { key: 'tags', label: 'Tags', source: 'field', fieldType: 'multi_select' };
+
+  it('returns a single track when given one column', () => {
+    expect(gridTemplate([titleCol])).toBe('280px');
+  });
+
+  it('emits one track per column with NO 1fr spacer (columns sit flush)', () => {
+    // Phase 2 / Bug E fix: the 1fr spacer that used to sit between the
+    // second-to-last and last columns is gone. Last column now sits flush
+    // against the rest; trailing whitespace goes to the right of the table.
+    const tpl = gridTemplate([titleCol, statusCol, tagsCol]);
+    expect(tpl).toBe('280px 140px 220px');
+    expect(tpl).not.toContain('1fr');
+  });
+
+  it('returns empty string when given no columns', () => {
+    expect(gridTemplate([])).toBe('');
   });
 });

@@ -83,11 +83,12 @@ export function columnWidth(col: Column): number {
 }
 
 /** Build a grid-template-columns string from the visible columns.
- *  All columns keep their fixed widths. When there's only one column, that's
- *  the whole template. With two or more, a `1fr` spacer is inserted before
- *  the last column so it sticks to the right edge of the pane. */
+ *  All columns keep their fixed widths and sit flush against each other.
+ *  Trailing whitespace lives to the right of the last column (in the
+ *  scroll container). The earlier `1fr` spacer that pushed the last
+ *  column to the right edge was removed because it left a visual gap
+ *  between the last column header label and the cells in the last
+ *  column — Bug E (2026-05-26). */
 export function gridTemplate(columns: Column[]): string {
-  const widths = columns.map((c) => `${columnWidth(c)}px`);
-  if (widths.length <= 1) return widths.join(' ');
-  return [...widths.slice(0, -1), '1fr', widths[widths.length - 1]].join(' ');
+  return columns.map((c) => `${columnWidth(c)}px`).join(' ');
 }

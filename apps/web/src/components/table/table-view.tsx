@@ -416,8 +416,15 @@ export function TableView({ wslug, pslug, tslug }: Props) {
         {/* No left padding here: the sticky first column owns its own 22px
             of left whitespace via `pl-[22px]` so the whitespace stays put
             from the first pixel of horizontal scroll (instead of collapsing
-            as the row slides left until the cell hits left:0). */}
-        <div className="pr-[22px]">
+            as the row slides left until the cell hits left:0).
+
+            `w-max` sizes this wrapper to its content (the grid's intrinsic
+            width). Without it, each row's `w-full` resolved to the parent's
+            layout width — which equals the viewport on overflow — so the
+            row's bottom border stopped where the viewport ended, leaving
+            the rightmost columns visually unbordered when you horizontally
+            scrolled. Bug E (2026-05-26). */}
+        <div className="w-max pr-[22px]">
           <TableHeader
             columns={visibleColumns}
             sort={sort}
