@@ -24,6 +24,12 @@ import { getProject, getTable, getWorkspace, type ScopeContext } from '../middle
 
 const documentsRoute = new Hono<AuthContext & ScopeContext>();
 
+function getAssignee(fm: unknown): string | null {
+  if (typeof fm !== 'object' || fm === null) return null;
+  const v = (fm as Record<string, unknown>)['assignee'];
+  return typeof v === 'string' ? v : null;
+}
+
 async function validateStatus(tableId: string, status: string | null | undefined) {
   if (status == null) return;
   const row = await db.query.statuses.findFirst({
@@ -207,6 +213,16 @@ documentsRoute.post('/', requireScope('documents:write'), async (c) => {
       workspaceId: ws.id, projectId: p.id, documentId: id, kind: 'document.created', actor: user.id,
       payload: { slug, type: input.type },
     });
+    if (input.type === 'work_item') {
+      const assignee = getAssignee(input.frontmatter);
+      if (assignee && assignee.startsWith('agent:')) {
+        await emitEvent(tx, {
+          workspaceId: ws.id, projectId: p.id, documentId: id,
+          kind: 'agent.task.assigned', actor: user.id,
+          payload: { slug, agent: assignee.slice('agent:'.length) },
+        });
+      }
+    }
   });
 
   const responseData = agentTokenPlaintext
@@ -429,6 +445,21 @@ documentsRoute.patch('/:slug', requireScope('documents:write'), async (c) => {
         kind: 'document.updated', actor: user.id,
         payload: { changes: ['title', 'body', 'frontmatter', 'status', ...(nextSlug ? ['slug'] : [])] },
       });
+      if (existing.type === 'work_item') {
+        const prevAssignee = getAssignee(existing.frontmatter);
+        const nextAssignee = getAssignee(updated.frontmatter);
+        if (
+          nextAssignee &&
+          nextAssignee.startsWith('agent:') &&
+          prevAssignee !== nextAssignee
+        ) {
+          await emitEvent(tx, {
+            workspaceId: ws.id, projectId: p.id, documentId: existing.id,
+            kind: 'agent.task.assigned', actor: user.id,
+            payload: { slug: updated.slug, agent: nextAssignee.slice('agent:'.length) },
+          });
+        }
+      }
     });
     return jsonOk(c, updated);
   }
@@ -500,6 +531,21 @@ documentsRoute.patch('/:slug', requireScope('documents:write'), async (c) => {
       kind: 'document.updated', actor: user.id,
       payload: { changes: [...Object.keys(patch), ...(nextSlug ? ['slug'] : [])] },
     });
+    if (existing.type === 'work_item') {
+      const prevAssignee = getAssignee(existing.frontmatter);
+      const nextAssignee = getAssignee(updated.frontmatter);
+      if (
+        nextAssignee &&
+        nextAssignee.startsWith('agent:') &&
+        prevAssignee !== nextAssignee
+      ) {
+        await emitEvent(tx, {
+          workspaceId: ws.id, projectId: p.id, documentId: existing.id,
+          kind: 'agent.task.assigned', actor: user.id,
+          payload: { slug: updated.slug, agent: nextAssignee.slice('agent:'.length) },
+        });
+      }
+    }
   });
 
   return jsonOk(c, updated);

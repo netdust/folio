@@ -728,3 +728,95 @@ test('agent.created event emitted on agent create', async () => {
   const rows = await db.query.events.findMany({ where: eq(events.kind, 'agent.created') });
   expect(rows.length).toBeGreaterThan(0);
 });
+
+test('work item POST with assignee=agent:slug emits agent.task.assigned', async () => {
+  const { app, seed } = await makeTestApp();
+  // First create the agent so the slug exists.
+  await app.request('/api/v1/w/acme/p/web/documents', {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      type: 'agent', title: 'Bot',
+      frontmatter: { system_prompt: 'x', model: 'x', provider: 'anthropic', tools: ['list_documents'] },
+    }),
+  });
+
+  await app.request('/api/v1/w/acme/p/web/documents', {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      type: 'work_item', title: 'Triage me',
+      frontmatter: { assignee: 'agent:bot' },
+    }),
+  });
+
+  const { db } = await import('../db/client.ts');
+  const { events } = await import('../db/schema.ts');
+  const { eq } = await import('drizzle-orm');
+  const rows = await db.query.events.findMany({ where: eq(events.kind, 'agent.task.assigned') });
+  expect(rows.length).toBe(1);
+});
+
+test('work item PATCH that adds assignee=agent:slug emits agent.task.assigned', async () => {
+  const { app, seed } = await makeTestApp();
+  await app.request('/api/v1/w/acme/p/web/documents', {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      type: 'agent', title: 'Bot',
+      frontmatter: { system_prompt: 'x', model: 'x', provider: 'anthropic', tools: [] },
+    }),
+  });
+  const create = await app.request('/api/v1/w/acme/p/web/documents', {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: 'work_item', title: 'No assignee yet' }),
+  });
+  const { data: { slug } } = await create.json();
+
+  await app.request(`/api/v1/w/acme/p/web/documents/${slug}`, {
+    method: 'PATCH',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ frontmatter: { assignee: 'agent:bot' } }),
+  });
+
+  const { db } = await import('../db/client.ts');
+  const { events } = await import('../db/schema.ts');
+  const { eq } = await import('drizzle-orm');
+  const rows = await db.query.events.findMany({ where: eq(events.kind, 'agent.task.assigned') });
+  expect(rows.length).toBe(1);
+});
+
+test('PATCH that keeps the same agent assignee does NOT re-emit', async () => {
+  const { app, seed } = await makeTestApp();
+  await app.request('/api/v1/w/acme/p/web/documents', {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      type: 'agent', title: 'Bot',
+      frontmatter: { system_prompt: 'x', model: 'x', provider: 'anthropic', tools: [] },
+    }),
+  });
+  const create = await app.request('/api/v1/w/acme/p/web/documents', {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      type: 'work_item', title: 'Triage',
+      frontmatter: { assignee: 'agent:bot' },
+    }),
+  });
+  const { data: { slug } } = await create.json();
+
+  // PATCH that doesn't change the assignee — emits nothing.
+  await app.request(`/api/v1/w/acme/p/web/documents/${slug}`, {
+    method: 'PATCH',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ frontmatter: { assignee: 'agent:bot', priority: 'high' } }),
+  });
+
+  const { db } = await import('../db/client.ts');
+  const { events } = await import('../db/schema.ts');
+  const { eq } = await import('drizzle-orm');
+  const rows = await db.query.events.findMany({ where: eq(events.kind, 'agent.task.assigned') });
+  expect(rows.length).toBe(1);  // still just the create
+});
