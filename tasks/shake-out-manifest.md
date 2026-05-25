@@ -48,6 +48,13 @@ Environment: dev stack running on :3001 (api) + :5173 (web), DB `apps/server/fol
 - **Suspicion (not investigation — that's Phase 3's job):** something between `main` and this branch removed or renamed the sticky button — could be the type-widening, the rail-tree changes, or completely unrelated drift. Existing unit `table-cell.test.tsx` still passes the className assertion, so the regression is likely in the DOM tree shape, not the classname.
 - **All 26 other e2e tests pass.** Limited blast radius.
 
+### Bug B — IMPORTANT — Create-token modal omits `statuses:write` and has no scope presets
+
+- **Where:** `apps/web/src/components/settings/token-create-modal.tsx` `ALL_SCOPES`
+- **Symptom:** Modal offers 6 scopes (documents:{read,write,delete}, fields:write, views:write, tables:write). Server actually enforces 6 + `statuses:write` (used by the statuses route). A token created via the UI cannot manage statuses, so the UI cannot mint a token equivalent to an "agent token with full project authority."
+- **Root cause:** Plan §Task 14 step 4 spec'd exactly the 6 scopes I shipped; nobody cross-referenced against `grep "requireScope" routes/`. Plan-vs-API source-of-truth rule from auto-memory was violated.
+- **Fix shape (Stefan approved):** add `statuses:write` + a preset strip ("Read-only" / "Read + write" / "Full access") above the checkboxes. Per superpowers:systematic-debugging in Phase 3.
+
 ### No other bugs surfaced in Track A.
 
 ---
