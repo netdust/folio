@@ -34,6 +34,7 @@ import {
 interface Props {
   wslug: string;
   pslug: string;
+  tslug: string;
 }
 
 /**
@@ -51,7 +52,7 @@ export function sameSearchValue(a: unknown, b: unknown): boolean {
   return false;
 }
 
-export function TableView({ wslug, pslug }: Props) {
+export function TableView({ wslug, pslug, tslug }: Props) {
   const navigate = useNavigate();
   const search = useSearch({ strict: false }) as Record<string, unknown>;
   const clauses = useMemo(() => parseFilters(search), [search]);
@@ -70,7 +71,7 @@ export function TableView({ wslug, pslug }: Props) {
 
   const { data: page, isLoading, error } = useDocuments(wslug, pslug, listParams);
   const { data: statuses } = useStatuses(wslug, pslug);
-  const { data: fields } = useFields(wslug, pslug);
+  const { data: fields } = useFields(wslug, pslug, tslug);
   const { data: viewsData } = useViews(wslug, pslug);
   const update = useUpdateDocument(wslug, pslug, listParams);
   const create = useCreateDocument(wslug, pslug);

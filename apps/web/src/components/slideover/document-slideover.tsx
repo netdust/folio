@@ -276,7 +276,7 @@ function SlideoverBody({
 }) {
   const { data: doc, isLoading, error } = useDocument(wslug, pslug, slug);
   const { data: statuses } = useStatuses(wslug, pslug);
-  const { data: fields } = useFields(wslug, pslug);
+  const { data: fields } = useFields(wslug, pslug, 'work-items');
   const listParams = useUrlDerivedListParams(doc?.type ?? 'work_item');
   const update = useUpdateDocument(wslug, pslug, listParams);
   // Documents list — same listParams as useUpdateDocument so React Query

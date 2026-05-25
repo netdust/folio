@@ -27,7 +27,7 @@ function setup(initialEntry = '/w/acme/p/web/work-items') {
     validateSearch: WorkItemsRoute.options.validateSearch,
     component: () => {
       const { wslug, pslug } = work.useParams();
-      return <TableView wslug={wslug} pslug={pslug} />;
+      return <TableView wslug={wslug} pslug={pslug} tslug="work-items" />;
     },
   });
   const router = createRouter({
@@ -98,6 +98,52 @@ describe('TableView', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+  });
+
+  it('fetches fields from the table-scoped endpoint (/p/<pslug>/t/work-items/fields)', async () => {
+    // Phase 1.9 Task 2: TableView must thread tslug into useFields so the
+    // request goes to the table-scoped fields URL, not the project-scoped one.
+    // The test passes any project slug; the assertion is on the URL substring
+    // including "/t/work-items/fields".
+    const fetchCalls: string[] = [];
+    const fetchMock = vi.fn<typeof fetch>(async (url, init) => {
+      const u = String(url);
+      fetchCalls.push(u);
+      const method = init?.method ?? 'GET';
+      if (u.includes('/statuses') && method === 'GET') {
+        return new Response(JSON.stringify({ data: [statusRow] }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (u.includes('/fields') && method === 'GET') {
+        return new Response(JSON.stringify({ data: [fieldRow] }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (u.includes('/views') && method === 'GET') {
+        return new Response(JSON.stringify({ data: [viewRow] }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (u.includes('/documents') && method === 'GET') {
+        return new Response(JSON.stringify({ data: { data: [docRow], nextCursor: null } }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { queryClient, router } = setup('/w/acme/p/sales/work-items');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByText('First task')).toBeInTheDocument());
+
+    expect(fetchCalls.some((u) => u.includes('/p/sales/t/work-items/fields'))).toBe(true);
   });
 
   it('renders columns from the active view including a currency cell', async () => {

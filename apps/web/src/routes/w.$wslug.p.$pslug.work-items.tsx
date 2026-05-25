@@ -26,5 +26,5 @@ export const Route = createFileRoute('/w/$wslug/p/$pslug/work-items')({
 
 function WorkItemsRoute() {
   const { wslug, pslug } = Route.useParams();
-  return <TableView wslug={wslug} pslug={pslug} />;
+  return <TableView wslug={wslug} pslug={pslug} tslug="work-items" />;
 }
