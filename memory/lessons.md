@@ -205,3 +205,43 @@ A 2-minute DevTools read beats 3 commits of guessing.
 4. "I already know how to do this" / "the existing suite will catch it" is the TDD skill's documented red-flag rationalization. Stop and invoke the skill.
 
 **Trigger:** Any prompt that starts a phase ("phase X", "fix these", "implement Y", "do all of these"), or any time a code-review/security-review surfaces a punch list of 2+ findings. The bar to clear: at end of work, the test suite — not Stefan's manual QA — proves the work is done.
+
+## 2026-05-26 — Audit `components/ui/` before claiming a primitive doesn't exist
+
+**Mistake:** Started writing a `<Chip>` primitive for Phase 2.5 BUG-010 after telling the user "no other generic chip exists" — `grep -rln "rounded-pill"` would have shown me `apps/web/src/components/ui/chip.tsx` already existed. Caught it 30 seconds into Phase 1 of systematic-debugging by reading the audit grep output I'd just run. Would have shipped a second `Chip` next to the first if I hadn't caught it; that's exactly the design-system drift the user was complaining about.
+
+**Why:** I framed the "audit" as a grep for chip-like CSS patterns and skimmed the results. The pre-existing `ui/chip.tsx` was in the grep output but I parsed it as "a Tailwind token reference" because I was looking for `rounded-full + bg-primary` shapes, not for an actual `Chip` export. Confirmation bias against the result.
+
+**Rule:** Before writing ANY new primitive in `apps/web/src/components/ui/`, run TWO checks: (1) `ls apps/web/src/components/ui/` to see file names, and (2) `grep "export.*<Name>" apps/web/src/components/ui/*.tsx`. If a file with that name exists OR a matching export exists, READ THE FILE before deciding it doesn't fit — don't assume from the filename or a partial grep. If it doesn't fit cleanly, the right move is usually to rename/refactor the existing one, not to add a sibling with a similar name.
+
+**Trigger:** Any sentence like "no other generic X exists in the codebase" or "I'll add a new primitive for X". Stop, run the two checks, READ the matches in full, then proceed.
+
+## 2026-05-26 — Verify the test scenario, not the test data state
+
+**Mistake:** During Phase 2.5 verification-before-completion, ran a live curl on the BUG-001 fix and saw HTTP 200 instead of the expected 403. Almost claimed "fix regressed." The fix was fine — the agent's `frontmatter.projects` had drifted during the shake-out (an earlier PATCH I'd run added the disallowed project to the allow-list). Iron Law'd correctly enough to investigate first, but only by luck did I check the agent's current state before re-debugging the middleware.
+
+**Why:** Verification uses the CURRENT system state, not the state at the time of the original bug repro. Test data can drift between repros (manual PATCHes during sweep, prior test runs, schema migrations, hot-reload state). I assumed the curl call was running against the "as filed" scenario; it wasn't.
+
+**Rule:** When a live curl re-sweep contradicts an existing test that's green, check the test data state BEFORE re-investigating the code. For Folio specifically: any verification curl that involves an agent's `frontmatter.projects` allow-list must first `GET /api/v1/w/<ws>/documents/<agent-slug>` and confirm the current allow-list matches the scenario the test asserts. If it drifted, either re-PATCH or create a fresh agent — never debug against drifted data.
+
+**Trigger:** Any verification curl that returns the OPPOSITE of what the unit/integration suite asserts. The unit suite controls its own data via the test harness; live curls use whatever is in the dev DB. Drift is the most likely explanation, not a regression.
+
+## 2026-05-26 — Design-system primitives: build when the third copy appears, not after
+
+**Mistake:** Phase 2.5 second-sweep polish added THREE near-duplicate `Chip` definitions (`ProjectChip` in workspace-agents-page, `Chip` in projects-field, `Chip` in tools-field) over three commits across three sessions. Each was a 10-line component, justified locally ("this caller needs a tweak"). The user flagged it on the fourth-sweep manual review: "please make sure that we have a solid set of components that we reuse. no messy design system." Refactoring it out after the fact cost more than building the primitive on the first or second copy would have.
+
+**Why:** Pattern-matching from individual call sites. Each chip felt like a "small local thing" because each call site had a slightly different visual requirement (one neutral, one primary-tinted, one monospaced). The fact that I was repeatedly writing `'rounded-full px-2 py-0.5 text-[11px]' +` should have triggered a "third copy = primitive" reflex.
+
+**Rule:** When writing a component, ask: "have I written this shape (props + JSX) in the last 5 commits in this branch?" If yes → that's the primitive. If no → fine, ship the local version. If unsure → grep the codebase for the at-rest CSS triple I'm about to type (`rounded-`, `px-`, `text-[1`). Three matches with similar surrounding markup = build the primitive NOW, don't defer it. Acceptable to defer ONLY if the third call site is in a planning doc, not in code.
+
+**Trigger:** Any `<span className={`rounded-* px-* …`}>` or `function NamedChip / NamedBadge / NamedTag` written from scratch inside a feature component. Compare against `components/ui/` first. If absent, build the primitive instead of yet another inline.
+
+## 2026-05-26 — Phase shake-out: budget per-bug verification, not just per-suite
+
+**Mistake:** During Phase 2.5 shake-out, the 4-minute Playwright cold-start dominated my verification cadence. I kept marking tasks "RESOLVED — re-sweep pending" and only ran the e2e at the end of multiple polish bundles (BUG-009/010/011/012 shared one e2e run). When BUG-002 itself failed on first re-run despite my fix, I had to wait another 4.5 minutes to verify the second attempt. Compressed by clustering, but inefficient and risky — if a polish bundle had broken the e2e, I'd have to bisect.
+
+**Why:** Treated the e2e as "one regression check at the end" rather than "the test that proves the bug is dead." The shake-out skill's per-bug fix cadence is right: fix → re-sweep that bug → next. I bundled to save time and ended up with a longer feedback loop.
+
+**Rule:** For Folio shake-outs, when a bug's verification needs Playwright (cold-start ~4.5 min), invoke `run_in_background: true` immediately after the fix lands, then continue working on the NEXT bug while the e2e runs. The bg notification fires when it completes; I switch back, check, then move on. Don't batch e2e runs to save cold-start cost — the cost is still paid once per session, batching just delays which bug's signal you get back. Unit tests still run synchronously between fixes (they're fast).
+
+**Trigger:** Any "fix → e2e → next fix" sequence in shake-out. After the first commit, switch to "fix → bg-launch e2e → start next investigation → bg notification → check → next bg-launch."
