@@ -1,14 +1,16 @@
 # Folio — STATE
 
-_Last updated: 2026-05-26 night (Phase 2.5 spec shipped — plan written in separate session)_
+_Last updated: 2026-05-26 afternoon (Phase 2.5 shipped + merged to main at `7d73124` + pushed)_
 
 Living snapshot of where the project actually is. Read at session start. Update at session end if anything below changed.
 
-## Next up — Phase 2.5
+## Next up — Phase 2.6 + Phase 3
 
-**Workspace-scoped agents + `projects:` allow-list, surfaced via workspace popover.** Spec at `docs/superpowers/specs/2026-05-26-phase-2.5-workspace-scoped-agents-design.md` (commits `0fc10b8` + `92c20bf`). Plan written in a separate session — check `docs/superpowers/plans/` for the most recent Phase 2.5 file before resuming. Locked decisions in `memory/DECISIONS.md` under "Phase 2.5 — Agent scope model (2026-05-26)". Templates + agent-lifecycle MCP tools deferred to Phase 2.6 (with `create_agent` / `update_agent` / `delete_agent` / `get_agent_self` flagged as v1-blockers in the spec's deferrals section).
+**Phase 2.6 — Templates + agent-lifecycle MCP tools.** The deferrals from Phase 2.5 are v1-blockers per the spec: `create_agent` / `update_agent` / `delete_agent` / `get_agent_self` MCP tools (agents can't yet create or edit other agents through MCP — HTTP-only as of 2.5), plus instance-level Settings page for templates with pinned-version sync. Also: background allow-list reconciler (insurance against bugs in the transactional cascade hook + restore-from-backup scenarios).
 
-Spec absorbed six stress-test catches at review time: transactional cascade hook (project-delete → agent allow-list rewrite in same tx), UI-side prevention of invalid Zod shapes (no transient `['*', ...ids]`), `intersect()` test enumeration including the load-bearing `null` (inherit) vs `[]` (revoked) distinction, MCP rejection logging contract (INFO with structured fields), wildcard-chip click semantics (clear filter, don't filter on `'*'`), assignee picker `keepPreviousData` for no-flash dropdown.
+**Phase 3 — AI in UI + Agent runner** (second v1 spine). Slash commands, provider abstraction, agent runner that fires triggers + executes agents, `requires_approval` + `max_tokens_per_run` enforcement (deferred from Phase 2 — runner-side).
+
+Pick whichever lands first based on customer pull. Both branches start from current `main` at `7d73124`.
 
 
 ## Phase
@@ -25,6 +27,7 @@ Phase numbering aligned with `docs/PHASES.md` (canonical) as of 2026-05-24 reorg
 - **Phase 1.9 (Field management UI):** shipped + merged to main at `a73b7da` on 2026-05-25 (PR #2). Inline `+ Add column`, column header `⋯` menu (Rename via InlineEdit + Hide + Delete with confirm dialog), "Suggested columns" in picker (deduped + type-inferred), `useFields` table-scoped.
 - **Phase 1.9.1 (Type-change UI + useUpdateView fix):** shipped + merged to main at `d12c598` on 2026-05-25 (PR #3). Compatible-only type-change in column `⋯` menu (`string ↔ text`, `number ↔ currency`, `* → text`); 422 with `INVALID_TYPE_CHANGE` for anything else. Default ISO `EUR` auto-injected on `* → currency`; options auto-cleared on `currency → *`. `useUpdateView` envelope unwrap fixed. Web 254 / 1-skip, server 135 / 135, shared 28 / 28, web TS clean.
 - **Phase 2 (Agents):** **shipped + merged to main** at `3431301` on 2026-05-26 (PR #4). Bearer auth + scope middleware, in-memory event bus + SSE endpoint with Last-Event-Id replay, migration 0006 widens documents.type to agent + trigger, agent/trigger frontmatter Zod schemas + auto-token-mint + revoke + delegation guard, hand-rolled JSON-RPC MCP server at /mcp with 12 v1 tools, web tokens settings tab + assignee picker + Agents/Triggers rail leaves + DocumentTypeList, 4 reference doc files (API/MCP/AGENTS/TRIGGERS), README walkthrough. Shake-out caught 4 bugs (A/B/C/D), all fixed and committed before merge.
+- **Phase 2.5 (Workspace-scoped agents):** **shipped + merged to main + pushed** at `7d73124` on 2026-05-26. 45 commits (18 plan-execution + 12 shake-out fixes + 14 memory/auto-capture + the merge commit + the Phase 3.5 doc draft). `documents.workspace_id NOT NULL` + nullable `project_id` + CHECK constraint; agent + trigger Zod gain `projects: string[]` (default `['*']`); new `requireResource` middleware mounted on `pScope` blocks cross-allow-list bearer access; `/api/v1/w/:wslug/documents` endpoints for agent + trigger CRUD; project-level POST/GET reject those types; MCP `list_projects` filters by allow-list, project-scoped tools return `-32602 agent_not_in_allow_list` on disallowed projects, agent-lifecycle tools rejected (HTTP-only in 2.5). Project-delete cascades through workspace agents' frontmatter.projects transactionally. UI: rail leaves removed, workspace popover gains Agents/Triggers entries, new `/w/:wslug/agents` + `/triggers` pages with full slideover CRUD, new design-system `<Chip>` primitive (BUG-010), ProjectsField + ToolsField + ProviderModelField multi-selects, per-agent-field help text. Shake-out caught 12 bugs, 11 fixed, 1 deferred as pre-existing (table-cell assignee picker — never wired pre-2.5). Suite at merge: server 259 / 1-skip / 0-fail, web 339 / 1-skip / 0-fail, shared 28 / 0-fail, Web TS clean. Phase 2.5 Playwright e2e: 1/1.
 - **Phase 3 (AI in UI + Agent runner):** queued — second spine. Slash commands, provider abstraction, agent runner, trigger scheduler/matcher.
 - **Phase 4 (Inbound webhooks):** queued — plan ready at `docs/superpowers/plans/2026-05-24-phase-4-inbound-webhooks.md`. 7 tasks.
 - **Phase 5 (CMS bridge — Statamic):** queued — plan ready at `docs/superpowers/plans/2026-05-24-phase-5-statamic-cms-bridge.md`. 10 tasks. WordPress is Phase 5.1.
@@ -34,9 +37,9 @@ Phase numbering aligned with `docs/PHASES.md` (canonical) as of 2026-05-24 reorg
 
 ## Current branch
 
-`main` at `3431301` (merge of PR #4). Phase 2 complete. Next phase to start: Phase 3 (AI in UI + Agent runner). The `phase-2/agents-surface` branch is preserved for reference (not deleted).
+`main` at `7d73124` (merge of `phase-2.5/workspace-agents`; pushed to `origin/main`). Phase 2.5 complete. Next phase to start: Phase 2.6 (templates + agent-lifecycle MCP) OR Phase 3 (AI in UI + Agent runner). The `phase-2.5/workspace-agents` branch was deleted after merge — commits remain in main's history via the `--no-ff` merge commit.
 
-Tests on this branch: 216 / 1-skip server, 292 / 1-skip web, 28 / 28 shared. Web TS clean. Server TS has pre-existing `app.ts` complaint (out of scope per plan). Playwright e2e: 26 / 27 (1 known flake on manual-qa scenario 11 — `navigator.clipboard.readText()` in headless Chromium, not Phase 2 regression).
+Tests on this branch: **259 / 1-skip server, 339 / 1-skip web, 28 / 0-fail shared**. Web TS clean. Server TS unchanged from pre-2.5 (only the pre-existing `app.ts`/`bearer.test.ts`/`scope.test.ts`/`workspaces.ts` errors). Playwright: Phase 2.5 e2e 1/1 + 26/27 on the existing regression spine (1 pre-existing flake on click-through a11y, not Phase 2.5-introduced).
 
 ### Phase 2 commit list (newest first, top of `phase-2/agents-surface`)
 
@@ -73,6 +76,49 @@ Tests on this branch: 216 / 1-skip server, 292 / 1-skip web, 28 / 28 shared. Web
 - `requires_approval` + `max_tokens_per_run` enforcement (Phase 3 runner-side).
 - The `## Approved` body convention (Phase 3 — human-in-the-loop).
 - `search_documents` MCP tool (v1.1 — needs sqlite-fts5).
+
+### Phase 2.5 commit list (newest first, merged into main at `7d73124`)
+
+- `7d73124` phase-2.5: workspace-scoped agents (merge — `--no-ff`)
+- `fd0cfbd` shake-out: e2e re-verified green post-BUG-012
+- `7fa3d8b` docs: draft Phase 3.5 — script & webhook trigger actions (folded into this merge)
+- `d43b3c1` shake-out: final status — 11 resolved, 1 deferred, ready for branch close
+- `be319c4` phase-2.5: BUG-012 — soften Chip at-rest weight (rounded-md + border-border-light)
+- `ebb20f5` phase-2.5: BUG-009 — field-help text on agent slideover
+- `fc74886` phase-2.5: BUG-010 + BUG-011 — single `<Chip>` primitive, migrate 3 ad-hoc chips
+- `bd9d492` phase-2.5: BUG-006 — paired provider/model field with AI-key annotation
+- `a3a3902` phase-2.5: BUG-007 — ToolsField multi-select from V1_MCP_TOOLS
+- `d805503` phase-2.5: BUG-008 — chip visible at rest on agents page (superseded by BUG-010)
+- `0a3dbc3` phase-2.5: BUG-002 — Phase 2.5 e2e spec passes
+- `397d224` phase-2.5: BUG-003 — icons on workspace popover Agents/Triggers
+- `f94ebc5` phase-2.5: BUG-004 — workspace agents/triggers slideover + create/delete UI
+- `174c3d9` phase-2.5: BUG-001 — mount requireResource on project-scoped routes
+- `a10a2fa` phase-2.5: ProjectsField + assignee picker rewire + e2e spec
+- `137bba9` phase-2.5: UI rail subtraction + workspace agents/triggers pages
+- `7cedf08` phase-2.5: fix TS narrow on slugUniqueInWorkspaceDocuments call
+- `032621c` phase-2.5: project-delete cascade — scrub id from workspace agent allow-lists
+- `4663f62` phase-2.5: MCP — allow-list enforcement + list_projects filter + agent-lifecycle rejection
+- `11f22e0` phase-2.5: workspace-scoped document routes — reject agent/trigger at project level
+- `29bf253` phase-2.5: requireResource middleware + intersect() — bearer allow-list enforcement
+- `e463c31` phase-2.5: agent frontmatter — projects allow-list with wildcard exclusivity
+- `93511c1` phase-2.5: task 1 cleanup — wire workspace_id + skip Phase-2-only agent tests
+- `af93935` phase-2.5: schema + migration — workspace-scoped documents + token allow-list
+- `19f02b8` phase-2.5: plan — 9 tasks with testing-workflow gates
+- `92c20bf` phase-2.5: spec — absorb stress-test feedback (pre-branch)
+- `0fc10b8` phase-2.5: design — workspace-scoped agents (pre-branch)
+
+### Phase 2.5 deferrals (Phase 2.6 + Phase 3)
+
+- `create_agent` / `update_agent` / `delete_agent` / `get_agent_self` MCP tools — Phase 2.6 (agents can't create/edit other agents via MCP yet; HTTP-only in Phase 2.5).
+- Single-project `project_slug` arg inference (when an agent's allow-list has exactly one id) — Phase 2.6 polish.
+- Templates as a whole (instance-level Settings page, inert markdown, `template:` + `template_version:` references on instances, sync UI) — Phase 2.6.
+- Background allow-list reconciler (periodic sweep that removes orphan project ids from agent `frontmatter.projects`; insurance against bugs in the cascade hook + hand-edited MD + partial restore-from-backup) — Phase 2.6.
+- Human PAT `project_ids` enforcement (schema column exists from Phase 2.5; enforcement waits until human PATs get a UI for narrowing) — Phase 3+.
+- Per-project action-scope overrides (read on A, write on B) — only if a real use case shows up.
+- Caching the agent's `projects:` allow-list in `requireResource` — measure perf first.
+- Workspace-scoped `.md` export endpoint (so the workspace slideover can offer Copy-as-MD and the bulk-export folder can include agents/triggers under `agents/<slug>.md`) — Phase 2.6 polish.
+- ActivityPanel + LogActivity on workspace agent slideover (project-scoped only today) — Phase 2.6 polish.
+- BUG-005 from shake-out: table-cell assignee picker (was never wired pre-2.5 either). Phase 7 UX polish.
 
 ### Phase 1.9.1 commit list (newest first)
 
