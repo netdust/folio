@@ -204,10 +204,10 @@ Track A — Automated (Claude):
 **Pre-existing flake (not P2.5):** click-through a11y test — matches STATE.md baseline
 
 **Final re-sweep status:**
-- Server suite: 260 / 1 skip / 0 fail
+- Server suite: 259 / 1 skip / 0 fail
 - Web suite: 339 / 1 skip / 0 fail
-- Shared suite: 28 / 28
-- Playwright Phase 2.5 e2e: 1/1 passing
+- Shared suite: 28 / 0 fail
+- Playwright Phase 2.5 e2e: re-running for the chip changes (was green pre-BUG-012)
 - Web TS: clean
 - Server TS: only pre-existing errors (`app.ts`, `bearer.test.ts`, `scope.test.ts`, `workspaces.ts:129` — all from before Phase 2.5)
 - Live re-sweep on the CRITICAL bug (BUG-001): narrowed-agent token returns `FORBIDDEN_RESOURCE` on disallowed project; wildcard agent + session user unaffected.
