@@ -207,7 +207,7 @@ Track A — Automated (Claude):
 - Server suite: 259 / 1 skip / 0 fail
 - Web suite: 339 / 1 skip / 0 fail
 - Shared suite: 28 / 0 fail
-- Playwright Phase 2.5 e2e: re-running for the chip changes (was green pre-BUG-012)
+- Playwright Phase 2.5 e2e: 1/1 passed (4.9s test runtime; verified post-BUG-012)
 - Web TS: clean
 - Server TS: only pre-existing errors (`app.ts`, `bearer.test.ts`, `scope.test.ts`, `workspaces.ts:129` — all from before Phase 2.5)
 - Live re-sweep on the CRITICAL bug (BUG-001): narrowed-agent token returns `FORBIDDEN_RESOURCE` on disallowed project; wildcard agent + session user unaffected.
