@@ -14,7 +14,7 @@ Implementing Phase 2.5 per `docs/superpowers/specs/2026-05-26-phase-2.5-workspac
 
 - [x] **Task 1 — Schema + migration** (`documents.workspace_id` NOT NULL, `project_id` nullable, CHECK constraint, `api_tokens.agent_id` + `project_ids`; migration `0006_phase_2_5_workspace_agents.sql` + test) — `af93935`. 7 migration tests pass; 58 server-suite failures are expected and traced to Task 4 work (createDocument doesn't write workspace_id yet).
 - [x] **Task 2 — Agent frontmatter Zod** (`projects: string[]` defaulting to `['*']`, wildcard exclusivity refine) — 5 new tests cover default, explicit list, wildcard mix-rejection, empty array.
-- [ ] **Task 3 — `requireResource` middleware** + `intersect()` helper (6 algebra tests + integration tests against project A vs B with a narrowed agent token)
+- [x] **Task 3 — `requireResource` middleware** + `intersect()` helper (6 algebra tests + 5 integration tests: deny/allow per allow-list, wildcard agent, token narrowing, session bypass)
 - [ ] **Task 4 — Workspace-level document routes** (`/api/v1/w/:wslug/documents` POST/GET/PATCH/DELETE; project-level POST/GET reject agent+trigger with `INVALID_DOCUMENT_SCOPE`/`UNSUPPORTED_TYPE_FILTER`)
 - [ ] **Task 5 — MCP resolver allow-list** (resolveProjectInWorkspace enforces; `list_projects` filters; `create/update/delete_document` rejects agent/trigger with `-32602`; structured server log on rejection)
 - [ ] **Task 6 — Project-delete cascade hook** (transaction wraps project delete + scan of workspace agents' `frontmatter.projects` to remove the deleted id)

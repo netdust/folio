@@ -1,11 +1,12 @@
 import type { Context, MiddlewareHandler } from 'hono';
 import { eq } from 'drizzle-orm';
 import { db } from '../db/client.ts';
-import { apiTokens, users } from '../db/schema.ts';
+import { apiTokens, documents, users } from '../db/schema.ts';
 import type { ApiToken } from '../db/schema.ts';
 import { hashToken } from '../lib/auth.ts';
 import { HTTPError } from '../lib/http.ts';
 import type { AuthContext } from './auth.ts';
+import type { ScopeContext } from './scope.ts';
 
 /** Read Bearer token from Authorization header, look up by hash, attach to context. */
 export const attachToken: MiddlewareHandler<AuthContext> = async (c, next) => {
@@ -83,4 +84,60 @@ export function getToken(c: Context<AuthContext>): ApiToken {
   const t = c.get('token');
   if (!t) throw new Error('token not attached - requireToken missing?');
   return t;
+}
+
+/**
+ * Intersect an agent's allow-list with an optional token-level narrowing.
+ *
+ * - `null` on the token side means "inherit from agent" — distinct from `[]`
+ *   (no projects). Confusing the two is the most likely bug in this helper.
+ * - `'*'` on the agent side means "all workspace projects"; intersecting with
+ *   a concrete token list returns that concrete list.
+ * - The token can only narrow, never broaden. Tokens listing project ids the
+ *   agent doesn't have are silently dropped — the broadening attempt fails
+ *   closed at the intersection step.
+ */
+export function intersect(
+  agentList: string[],
+  tokenList: string[] | null,
+): string[] {
+  if (tokenList === null) return agentList;
+  if (agentList.includes('*')) return tokenList;
+  return agentList.filter((id) => tokenList.includes(id));
+}
+
+/**
+ * Resource-scope check for bearer requests. Composes after `requireScope`.
+ *
+ * Bypasses when:
+ *  - the request is session-authenticated (no token) — membership is the gate;
+ *  - the request is not project-scoped (no `:pslug` resolved into context);
+ *  - the token is a human PAT (no agent_id) — Phase 3+ adds human PAT
+ *    enforcement once a UI for narrowing exists.
+ */
+export function requireResource(): MiddlewareHandler<AuthContext & ScopeContext> {
+  return async (c, next) => {
+    const token = c.get('token');
+    const project = c.get('project');
+    if (!token) return next();
+    if (!project) return next();
+    if (!token.agentId) return next();
+
+    const agent = await db.query.documents.findFirst({
+      where: eq(documents.id, token.agentId),
+    });
+    if (!agent || agent.type !== 'agent') {
+      throw new HTTPError('FORBIDDEN_RESOURCE', 'agent for this token no longer exists', 403);
+    }
+    const agentProjects = ((agent.frontmatter as { projects?: string[] }).projects) ?? ['*'];
+    const effective = intersect(agentProjects, token.projectIds ?? null);
+    if (!effective.includes('*') && !effective.includes(project.id)) {
+      throw new HTTPError(
+        'FORBIDDEN_RESOURCE',
+        `agent not allow-listed for project ${project.slug}`,
+        403,
+      );
+    }
+    return next();
+  };
 }
