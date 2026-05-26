@@ -16,6 +16,7 @@ import { Button } from '../ui/button.tsx';
 import { Icon } from '../ui/icon.tsx';
 import { Skeleton } from '../ui/skeleton.tsx';
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
+import { TabStrip, type TabItem } from '../ui/tab-strip.tsx';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '../ui/dialog.tsx';
 import {
   useWorkspaceDocument,
@@ -29,6 +30,8 @@ import { FrontmatterForm } from './frontmatter-form.tsx';
 import { BodyEditor } from './body-editor.tsx';
 import { ModeToggle, type EditorMode } from './mode-toggle.tsx';
 import { RawMdEditor } from './raw-md-editor.tsx';
+
+type WorkspaceDocTabValue = 'fields' | 'activity' | 'runs';
 
 interface Props {
   wslug: string;
@@ -195,6 +198,13 @@ function SlideoverBody({
   const update = useUpdateWorkspaceDocument(wslug);
   const [pendingKeys, setPendingKeys] = useState<Set<string>>(new Set());
 
+  // Tab state — per-slideover-open. Defaults to Fields on each fresh open
+  // and resets to Fields whenever the user navigates to a different doc.
+  const [tab, setTab] = useState<WorkspaceDocTabValue>('fields');
+  useEffect(() => {
+    setTab('fields');
+  }, [doc?.id]);
+
   if (isLoading) return <div className="text-fg-3">Loading document…</div>;
   if (error || !doc) return <div className="text-danger">Failed to load document.</div>;
 
@@ -217,26 +227,52 @@ function SlideoverBody({
     }
   };
 
+  const tabItems: TabItem<WorkspaceDocTabValue>[] = [
+    { value: 'fields', label: 'Fields', icon: '📋' },
+    { value: 'activity', label: 'Activity', icon: '📜' },
+    { value: 'runs', label: 'Runs', icon: '🤖' },
+  ];
+
   return (
     <article className="flex h-full flex-col">
-      <header className="flex-shrink-0 space-y-3 pb-4">
+      <header className="flex-shrink-0 pb-2">
         <div className="font-mono text-[11px] text-fg-3">/{doc.slug}</div>
-        <FrontmatterForm
-          wslug={wslug}
-          // FrontmatterForm requires a pslug for the AssigneePicker branch; agents
-          // and triggers don't carry an `assignee` field so the AssigneePicker
-          // is never rendered. Empty string is safe.
-          pslug=""
-          type={doc.type}
-          status={null}
-          statuses={[]}
-          frontmatter={doc.frontmatter}
-          pinnedFields={[]}
-          onStatusCommit={() => { /* no-op: agents/triggers have no status */ }}
-          onFrontmatterCommit={(p) => void onPatch({ frontmatter: p }, Object.keys(p))}
-          pendingKeys={pendingKeys}
-        />
       </header>
+      <TabStrip value={tab} items={tabItems} onChange={setTab} />
+      <div
+        data-testid="workspace-slideover-tab-content"
+        className="folio-scroll shrink-0 max-h-[40vh] overflow-y-auto pb-3 pt-3"
+      >
+        {tab === 'fields' ? (
+          <FrontmatterForm
+            wslug={wslug}
+            // FrontmatterForm requires a pslug for the AssigneePicker branch;
+            // agents and triggers don't carry an `assignee` field so the
+            // AssigneePicker is never rendered. Empty string is safe.
+            pslug=""
+            type={doc.type}
+            status={null}
+            statuses={[]}
+            frontmatter={doc.frontmatter}
+            pinnedFields={[]}
+            onStatusCommit={() => {
+              /* no-op: agents/triggers have no status */
+            }}
+            onFrontmatterCommit={(p) => void onPatch({ frontmatter: p }, Object.keys(p))}
+            pendingKeys={pendingKeys}
+          />
+        ) : null}
+        {tab === 'activity' ? (
+          <div className="text-fg-3 text-sm py-8 text-center">
+            Activity tab — wired in C10.
+          </div>
+        ) : null}
+        {tab === 'runs' ? (
+          <div className="text-fg-3 text-sm py-8 text-center">
+            No runs yet — Phase 3 wires the runner.
+          </div>
+        ) : null}
+      </div>
       <div
         data-testid="workspace-slideover-editor"
         className="folio-scroll flex-1 min-h-0 overflow-y-auto border-t border-border-light pt-4 focus-within:border-fg-3"
