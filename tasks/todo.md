@@ -30,10 +30,11 @@ Implementing Phase 2.5 per `docs/superpowers/specs/2026-05-26-phase-2.5-workspac
 - [x] **Task 9 — `ProjectsField` + assignee picker rewire + E2E** — new `ProjectsField` chip editor with wildcard semantics (`['*']` ↔ explicit list, atomic collapse); `assignee-picker.tsx` swapped to `useWorkspaceAgents(wslug, { project })` with `keepPreviousData` for no-skeleton re-open. FrontmatterForm auto-wires `projects` key for agent docs via `ProjectsFieldWithProjects` subcomponent (keeps `useProjects` out of the non-agent render path). Playwright spec at `tests/e2e/phase-2-5-workspace-agents.spec.ts` — to run during shake-out.
 
 #### Phase 2.5 phase gate
-- [ ] Web suite, server suite, shared suite, both type-checks all green
-- [ ] Playwright e2e (existing 26 + new phase-2.5 spec)
-- [ ] Smoke checklist walked (8 items in plan)
-- [ ] `testing-workflow:phase-complete` invoked
+- [x] Web suite, server suite, shared suite all green — server 258/1/0, web 316/1/0, shared 28/0
+- [x] Web TS clean (0 errors); server TS clean for touched files (only pre-existing errors remain — `app.ts:31`, `bearer.test.ts:14`, `scope.test.ts` middleware-app composition, `workspaces.ts:129`)
+- [ ] Playwright e2e (run during shake-out — cold-start ~4.5 min)
+- [ ] Smoke checklist walked (in shake-out)
+- [ ] `testing-workflow:phase-complete` invoked (this step — see message below)
 
 #### Hand-off
 - [ ] `netdust-core:shake-out` for real-environment QA
