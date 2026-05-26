@@ -12,7 +12,7 @@ Implementing Phase 2.5 per `docs/superpowers/specs/2026-05-26-phase-2.5-workspac
 
 ### Tasks (mirror the plan)
 
-- [ ] **Task 1 — Schema + migration** (`documents.workspace_id` NOT NULL, `project_id` nullable, CHECK constraint, `api_tokens.agent_id` + `project_ids`; migration `0006_phase_2_5_workspace_agents.sql` + test)
+- [x] **Task 1 — Schema + migration** (`documents.workspace_id` NOT NULL, `project_id` nullable, CHECK constraint, `api_tokens.agent_id` + `project_ids`; migration `0006_phase_2_5_workspace_agents.sql` + test) — `af93935`. 7 migration tests pass; 58 server-suite failures are expected and traced to Task 4 work (createDocument doesn't write workspace_id yet).
 - [ ] **Task 2 — Agent frontmatter Zod** (`projects: string[]` defaulting to `['*']`, wildcard exclusivity refine)
 - [ ] **Task 3 — `requireResource` middleware** + `intersect()` helper (6 algebra tests + integration tests against project A vs B with a narrowed agent token)
 - [ ] **Task 4 — Workspace-level document routes** (`/api/v1/w/:wslug/documents` POST/GET/PATCH/DELETE; project-level POST/GET reject agent+trigger with `INVALID_DOCUMENT_SCOPE`/`UNSUPPORTED_TYPE_FILTER`)

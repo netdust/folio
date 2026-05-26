@@ -340,6 +340,7 @@ export async function createDocument(
   const row = {
     id,
     projectId: p.id,
+    workspaceId: ws.id,
     tableId,
     type: input.type,
     slug,

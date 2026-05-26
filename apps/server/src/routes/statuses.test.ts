@@ -58,7 +58,7 @@ test('PATCH /:id renames key + cascades to documents in the table', async () => 
   const create = await createStatus(app, seed.sessionCookie, { key: 'todo', name: 'Todo' });
   const { data: { status } } = await create.json();
   await db.insert(documents).values({
-    id: nanoid(), projectId: seed.project.id, tableId: status.tableId, type: 'work_item',
+    id: nanoid(), projectId: seed.project.id, workspaceId: seed.workspace.id, tableId: status.tableId, type: 'work_item',
     slug: 'a', title: 'A', status: 'todo',
   });
   const res = await app.request(`/api/v1/w/acme/p/web/statuses/${status.id}`, {
@@ -77,7 +77,7 @@ test('DELETE /:id 409 when status in use', async () => {
   const create = await createStatus(app, seed.sessionCookie, { key: 'todo', name: 'Todo' });
   const { data: { status } } = await create.json();
   await db.insert(documents).values({
-    id: nanoid(), projectId: seed.project.id, tableId: status.tableId, type: 'work_item',
+    id: nanoid(), projectId: seed.project.id, workspaceId: seed.workspace.id, tableId: status.tableId, type: 'work_item',
     slug: 'a', title: 'A', status: 'todo',
   });
   const res = await app.request(`/api/v1/w/acme/p/web/statuses/${status.id}`, {
