@@ -28,6 +28,22 @@ Bearer tokens carry an array of `resource:action` scopes. The mapping is enforce
 
 **Session-authenticated requests bypass scope checks** — membership is the gate. Scope checks only fire when a Bearer token is attached.
 
+### Resource-scope (Phase 2.5)
+
+Action-scope (`requireScope`) and resource-scope (`requireResource`) are **orthogonal** — both must pass. Resource-scope only applies to agent-bound Bearer tokens on project-scoped routes (anything under `/api/v1/w/:wslug/p/:pslug/*`):
+
+1. The agent is loaded; its `frontmatter.projects` allow-list is read (default `['*']`).
+2. The token's optional `project_ids` column narrows that list (`intersect()`).
+3. If the URL's `:pslug` doesn't resolve to a project in the result, the request is rejected with `403 FORBIDDEN_RESOURCE` and message `agent not allow-listed for project <pslug>`.
+
+Session-auth and human PATs (Bearer tokens without `agent_id`) bypass this check. Source: `apps/server/src/middleware/bearer.ts` (`requireResource`, `intersect`).
+
+### Workspace-scoped vs project-scoped documents (Phase 2.5)
+
+- `work_item` and `page` are **project-scoped**: created/listed/edited under `/api/v1/w/:wslug/p/:pslug/documents`. `project_id` is required; `workspace_id` is auto-derived.
+- `agent` and `trigger` are **workspace-scoped**: created/listed/edited under `/api/v1/w/:wslug/documents` (NO `/p/:pslug`). `project_id` is null; `workspace_id` is required. The database CHECK constraint enforces the invariant.
+- Project-level POST or GET with `type=agent|trigger` is rejected — see error codes in the Documents section below.
+
 ## Auth endpoints (`/api/v1/auth/*`)
 
 Source: `apps/server/src/routes/auth.ts`
@@ -88,6 +104,8 @@ Source: `apps/server/src/routes/projects.ts`
 | PATCH | `/p/:pslug` | session, member | partial | updated project |
 | DELETE | `/p/:pslug` | session, owner | — | 204 |
 
+**Project-delete cascade (Phase 2.5):** DELETE `/p/:pslug` runs inside a single transaction that (a) scans every workspace agent + trigger whose `frontmatter.projects` array contains the deleted project's id, (b) rewrites each match's frontmatter with the id filtered out, (c) deletes the project row (which cascades to its work_items, pages, tables, views, statuses via existing FK relations). Wildcard `['*']` agents are untouched. If the cascade fails mid-transaction, the project delete rolls back — no half-state. Source: `apps/server/src/routes/projects.ts`.
+
 ## Tables (`/api/v1/w/:wslug/p/:pslug/tables`)
 
 Source: `apps/server/src/routes/tables.ts`
@@ -136,9 +154,11 @@ Source: `apps/server/src/routes/views.ts`
 
 `type` is `list | kanban`. `filters` is a Mongo-ish JSON AST (compiled by `packages/shared/src/filter-compile.ts`).
 
-## Documents (`/p/:pslug/documents`, `/p/:pslug/t/:tslug/documents`)
+## Documents — project-scoped (`/p/:pslug/documents`, `/p/:pslug/t/:tslug/documents`)
 
 Source: `apps/server/src/routes/documents.ts` (HTTP) + `apps/server/src/services/documents.ts` (service layer shared with MCP).
+
+These endpoints handle `work_item` and `page` documents only. `agent` and `trigger` documents are workspace-scoped — see the next section. Agent-bound bearer tokens are gated by `requireResource` here (see Auth § Resource-scope above).
 
 | Method | Path | Scope | Notes |
 |---|---|---|---|
@@ -147,7 +167,7 @@ Source: `apps/server/src/routes/documents.ts` (HTTP) + `apps/server/src/services
 | GET | `/documents/:slug.md` | session OR token | Raw markdown (YAML frontmatter + body), `text/markdown`. Round-trips with the storage representation. |
 | POST | `/documents` | `documents:write` | Create. Body shape below. |
 | PATCH | `/documents/:slug` | `documents:write` | Patch. Frontmatter shallow-merge; `null` deletes keys. |
-| DELETE | `/documents/:slug` | `documents:delete` | Hard delete. Side effect on agents → revokes the auto-token. |
+| DELETE | `/documents/:slug` | `documents:delete` | Hard delete. |
 | POST | `/documents/:slug/activity` | `documents:write` | Logs an activity entry; bumps `last_touched_at`. |
 | GET | `/documents/:slug/events` | session OR token | Per-document event log. |
 
@@ -155,7 +175,7 @@ Source: `apps/server/src/routes/documents.ts` (HTTP) + `apps/server/src/services
 
 | Param | Example | Meaning |
 |---|---|---|
-| `type` | `work_item \| page \| agent \| trigger` | Filter by document type. |
+| `type` | `work_item \| page` | Filter by document type. `agent` and `trigger` are rejected with `400 UNSUPPORTED_TYPE_FILTER` — use the workspace endpoint. |
 | `status` | `?status=todo&status=in_progress` | One-or-more status keys. |
 | `assignee` | `agent:triage-bot` or `user@example.com` | Filter on `frontmatter.assignee`. |
 | `updated_since` | ISO8601 | `updated_at >= ts` |
@@ -167,7 +187,7 @@ Source: `apps/server/src/routes/documents.ts` (HTTP) + `apps/server/src/services
 
 ```jsonc
 {
-  "type": "work_item",          // or "page" | "agent" | "trigger"
+  "type": "work_item",          // or "page"
   "title": "Required",
   "body": "Optional",
   "frontmatter": { "priority": "high" }
@@ -176,10 +196,60 @@ Source: `apps/server/src/routes/documents.ts` (HTTP) + `apps/server/src/services
 
 Type-specific rules:
 
-- **`agent`** — frontmatter must match `agentFrontmatterSchema` (`apps/server/src/lib/agent-schema.ts`). On create, an `apiTokens` row is auto-minted with scopes derived from `tools[]` via `toolsToScopes()`. The plaintext token is returned in the response as `agent_token` exactly once.
-- **`trigger`** — frontmatter must match `triggerFrontmatterSchema` (`apps/server/src/lib/trigger-schema.ts`). Cron-shape validated; at least one of `schedule` or `on_event` required.
+- **`agent`** / **`trigger`** — rejected with `422 INVALID_DOCUMENT_SCOPE`. Message includes a pointer to `POST /api/v1/w/:wslug/documents`. Workspace-scoped from Phase 2.5; see next section.
 - **`work_item`** — must be created on a table-scoped URL (or default-table fallback applies).
 - **`page`** — project-scoped; never has `tableId`.
+
+### Errors specific to this surface
+
+| Code | Status | When |
+|---|---|---|
+| `INVALID_DOCUMENT_SCOPE` | 422 | POST with `type=agent` or `type=trigger`. |
+| `UNSUPPORTED_TYPE_FILTER` | 400 | GET with `?type=agent` or `?type=trigger`. |
+| `FORBIDDEN_RESOURCE` | 403 | Agent-bound bearer token whose effective allow-list (`intersect(agent.projects, token.project_ids)`) doesn't include the requested `:pslug`. |
+
+## Documents — workspace-scoped (`/api/v1/w/:wslug/documents`) — Phase 2.5
+
+Source: `apps/server/src/routes/workspace-documents.ts` (HTTP) + `apps/server/src/services/documents.ts` (shared service layer).
+
+Handles `agent` and `trigger` documents only. `project_id` is always null; uniqueness is `(workspace_id, type, slug)`.
+
+| Method | Path | Scope | Notes |
+|---|---|---|---|
+| GET | `/documents?type=agent\|trigger` | session OR token | List workspace agents or triggers. |
+| GET | `/documents?type=agent&project=<id>` | session OR token | Filter agents to those allow-listed for the given project id (wildcard `['*']` agents always included). |
+| GET | `/documents/:slug` | session OR token | Single workspace doc by slug. |
+| POST | `/documents` | `documents:write` | Create agent or trigger. `type` must be `agent` or `trigger`. |
+| PATCH | `/documents/:slug` | `documents:write` | Patch. Frontmatter shallow-merge; `null` deletes keys. |
+| DELETE | `/documents/:slug` | `documents:delete` | Hard delete. For agents, the cascade FK on `api_tokens.agent_id` revokes the bound token in the same transaction. |
+
+### Create body
+
+```jsonc
+{
+  "type": "agent",                       // or "trigger"
+  "title": "Triage Bot",
+  "body": "Optional system context",
+  "frontmatter": {
+    "system_prompt": "Triage incoming bugs.",
+    "provider": "anthropic",
+    "model": "claude-sonnet-4-6",
+    "tools": ["list_documents", "get_document", "update_document"],
+    "projects": ["8VTeiptMzXIccnoH6V5cd"]   // optional; default ['*']
+  }
+}
+```
+
+For `type=agent`, the response includes `agent_token` (plaintext, ONCE). See `docs/AGENTS.md`.
+
+### Errors specific to this surface
+
+| Code | Status | When |
+|---|---|---|
+| `INVALID_DOCUMENT_SCOPE` | 422 | POST with type other than `agent` or `trigger`. |
+| `UNSUPPORTED_TYPE_FILTER` | 400 | GET without `?type=agent` or `?type=trigger`, or with an unknown type. |
+| `INVALID_AGENT_FRONTMATTER` | 422 | Agent frontmatter fails Zod (includes wildcard-exclusivity violation `'*' cannot be combined with explicit project ids`). |
+| `INVALID_TRIGGER_FRONTMATTER` | 422 | Trigger frontmatter fails Zod (cron shape, both schedule + on_event null, etc). |
 
 ## Events — SSE (`/api/v1/w/:wslug/events`)
 
