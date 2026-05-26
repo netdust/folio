@@ -216,7 +216,7 @@ export const documents = sqliteTable(
       .notNull()
       .references(() => workspaces.id, { onDelete: 'cascade' }),
     tableId: text('table_id').references(() => tables.id, { onDelete: 'set null' }),
-    type: text('type', { enum: ['work_item', 'page', 'agent', 'trigger'] }).notNull(),
+    type: text('type', { enum: ['work_item', 'page', 'agent', 'trigger', 'comment'] }).notNull(),
     slug: text('slug').notNull(),
     title: text('title').notNull(),
     status: text('status'), // matches a statuses.key for work_items; null for pages
