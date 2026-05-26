@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Chip } from '../ui/chip.tsx';
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
 
 interface Project {
@@ -48,16 +49,14 @@ export function ProjectsField({ value, projects, onChange }: Props) {
   }
 
   const trigger = (() => {
-    if (isWildcard) return [<Chip key="all" label="All projects" muted />];
-    if (value.length === 0) return [<Chip key="empty" label="No projects" muted />];
+    if (isWildcard) return [<Chip key="all" muted>All projects</Chip>];
+    if (value.length === 0) return [<Chip key="empty" muted>No projects</Chip>];
     return value.map((id) => {
       const proj = projects.find((p) => p.id === id);
       return (
-        <Chip
-          key={id}
-          label={proj?.name ?? `${id.slice(0, 6)}·removed`}
-          muted={!proj}
-        />
+        <Chip key={id} muted={!proj}>
+          {proj?.name ?? `${id.slice(0, 6)}·removed`}
+        </Chip>
       );
     });
   })();
@@ -102,15 +101,3 @@ export function ProjectsField({ value, projects, onChange }: Props) {
   );
 }
 
-function Chip({ label, muted }: { label: string; muted?: boolean }) {
-  return (
-    <span
-      className={
-        'rounded-full px-2 py-0.5 text-[11px] ' +
-        (muted ? 'bg-card text-fg-3' : 'bg-primary/10 text-primary')
-      }
-    >
-      {label}
-    </span>
-  );
-}

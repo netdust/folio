@@ -3,7 +3,7 @@ import { Button } from '../components/ui/button.tsx';
 import { IconButton } from '../components/ui/icon-button.tsx';
 import { Pill } from '../components/ui/pill.tsx';
 import { Badge, labelTone } from '../components/ui/badge.tsx';
-import { Chip, ChipAdd } from '../components/ui/chip.tsx';
+import { Chip, ChipAdd, FilterChipValue } from '../components/ui/chip.tsx';
 import { Avatar } from '../components/ui/avatar.tsx';
 import { Kbd } from '../components/ui/kbd.tsx';
 import { ThemeToggle } from '../components/ui/theme-toggle.tsx';
@@ -84,8 +84,15 @@ function DesignSystem() {
 
       <Section title="Chips">
         <Row>
-          <Chip filterKey="status" value="is not Done" />
-          <Chip filterKey="assignee" value="anyone" />
+          <Chip>project-a</Chip>
+          <Chip muted>removed</Chip>
+          <Chip onClick={() => {}}>clickable</Chip>
+          <Chip mono>list_documents</Chip>
+          <Chip muted mono>deadbeef·removed</Chip>
+        </Row>
+        <Row>
+          <FilterChipValue filterKey="status" value="is not Done" />
+          <FilterChipValue filterKey="assignee" value="anyone" />
           <ChipAdd />
         </Row>
       </Section>
@@ -199,7 +206,7 @@ function ShellPreview() {
             }
             toolbar={
               <>
-                <Chip filterKey="status" value="is not Done" />
+                <FilterChipValue filterKey="status" value="is not Done" />
                 <ChipAdd />
                 <div className="flex-1" />
                 <span className="font-mono text-[11px] text-fg-3">sorted by updated_at ↓</span>

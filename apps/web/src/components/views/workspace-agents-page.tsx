@@ -8,6 +8,7 @@ import {
   useWorkspaceAgents,
 } from '../../lib/api/workspace-documents.ts';
 import { Button } from '../ui/button.tsx';
+import { Chip } from '../ui/chip.tsx';
 import { Icon } from '../ui/icon.tsx';
 import { WorkspaceDocumentSlideover } from '../slideover/workspace-document-slideover.tsx';
 
@@ -130,17 +131,16 @@ export function WorkspaceAgentsPage({ wslug, projectFilter }: Props) {
                 </button>
                 <div className="flex flex-wrap gap-1.5">
                   {projs.includes('*') ? (
-                    <ProjectChip label="All projects" muted />
+                    <Chip muted>All projects</Chip>
                   ) : (
                     projs.map((id) => {
                       const proj = projectsById.get(id);
                       if (!proj) {
-                        return <ProjectChip key={id} label={`${id.slice(0, 6)}·removed`} muted />;
+                        return <Chip key={id} muted>{`${id.slice(0, 6)}·removed`}</Chip>;
                       }
                       return (
-                        <ProjectChip
+                        <Chip
                           key={id}
-                          label={proj.name}
                           onClick={() =>
                             void navigate({
                               to: '/w/$wslug/agents',
@@ -148,7 +148,9 @@ export function WorkspaceAgentsPage({ wslug, projectFilter }: Props) {
                               search: { project: id },
                             })
                           }
-                        />
+                        >
+                          {proj.name}
+                        </Chip>
                       );
                     })
                   )}
@@ -164,34 +166,3 @@ export function WorkspaceAgentsPage({ wslug, projectFilter }: Props) {
   );
 }
 
-function ProjectChip({
-  label,
-  muted,
-  onClick,
-}: {
-  label: string;
-  muted?: boolean;
-  onClick?: () => void;
-}) {
-  const base = 'rounded-full border px-2 py-0.5 text-[11px] transition-colors duration-fast';
-  if (!onClick) {
-    return (
-      <span
-        className={`${base} ${muted ? 'border-border-light bg-card text-fg-3' : 'border-border bg-card text-fg-2'}`}
-      >
-        {label}
-      </span>
-    );
-  }
-  // Visible at rest with a neutral chip + clear border; the primary tint
-  // appears on hover to telegraph the filter action.
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`${base} border-border bg-card text-fg-2 hover:border-primary/30 hover:bg-primary/10 hover:text-primary`}
-    >
-      {label}
-    </button>
-  );
-}
