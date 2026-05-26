@@ -9,8 +9,30 @@ import { InlineSelect } from '../inline/inline-select.tsx';
 import { FieldRenderer } from './field-renderer.tsx';
 import { AssigneePicker } from '../assignee/assignee-picker.tsx';
 import { ProjectsField } from '../inline/projects-field.tsx';
+import { ToolsField } from '../inline/tools-field.tsx';
+import { ProviderModelField } from '../inline/provider-model-field.tsx';
 import { Icon } from '../ui/icon.tsx';
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
+
+// Phase 2.5: agents have a canonical field order so the slideover reads top-
+// down (purpose → which LLM → what it can do → where it can act → guardrails).
+// Anything not in this list falls back to inferred-alphabetical placement.
+const AGENT_KEY_ORDER = [
+  'system_prompt',
+  'provider',
+  'model',
+  'tools',
+  'projects',
+  'max_delegation_depth',
+  'max_tokens_per_run',
+  'requires_approval',
+];
+
+function orderKeysForAgent(keys: string[]): string[] {
+  const known = AGENT_KEY_ORDER.filter((k) => keys.includes(k));
+  const unknown = keys.filter((k) => !AGENT_KEY_ORDER.includes(k));
+  return [...known, ...unknown];
+}
 
 interface Props {
   wslug: string;
@@ -40,12 +62,21 @@ export function FrontmatterForm({
   const pinnedByKey = new Map(pinnedFields.map((f) => [f.key, f]));
 
   // Sort keys: pinned (by `order`) first, then inferred (alphabetical).
-  const inferredKeys = Object.keys(frontmatter).filter((k) => !pinnedByKey.has(k)).sort();
+  // Agents get a canonical field order on top of that (system_prompt first,
+  // provider+model adjacent, etc.) so the slideover reads top-down.
+  const inferredKeysRaw = Object.keys(frontmatter).filter((k) => !pinnedByKey.has(k));
+  const inferredKeys =
+    type === 'agent' ? orderKeysForAgent(inferredKeysRaw) : inferredKeysRaw.sort();
   const sortedPinned = [...pinnedFields].sort((a, b) => a.order - b.order);
-  const orderedKeys = [
+  let orderedKeys = [
     ...sortedPinned.map((f) => f.key),
     ...inferredKeys.filter((k) => k in frontmatter),
   ];
+  // The paired ProviderModelField renders `provider` + `model` in one row;
+  // skip `model` here so it doesn't also get a standalone row.
+  if (type === 'agent' && orderedKeys.includes('provider')) {
+    orderedKeys = orderedKeys.filter((k) => k !== 'model');
+  }
 
   return (
     <dl className="grid grid-cols-[140px_1fr] gap-x-4 gap-y-2">
@@ -82,23 +113,45 @@ export function FrontmatterForm({
         const label = pinned?.label ?? key;
         const options = pinned?.options ?? undefined;
         const isAssignee = key === 'assignee';
-        // Phase 2.5: the `projects` key on agent frontmatter renders as a
-        // multi-select chip editor with wildcard semantics. Auto-wired by key
-        // name, same pattern as `assignee`.
+        // Phase 2.5: the `projects` and `tools` keys on agent frontmatter render
+        // as multi-select chip editors. Auto-wired by key name (same pattern as
+        // `assignee`). `tools` is sourced from V1_MCP_TOOLS in @folio/shared.
         const isProjects = key === 'projects' && type === 'agent';
+        const isTools = key === 'tools' && type === 'agent';
+        // The `provider` key on agents renders a paired editor that owns both
+        // `provider` and `model` (model has been filtered out of orderedKeys).
+        const isProvider = key === 'provider' && type === 'agent';
         return (
           <div key={key} className="contents">
             <dt className="self-center font-mono text-[11px] text-fg-3" title={key}>
-              {label}
+              {isProvider ? 'provider · model' : label}
             </dt>
             <dd>
-              {isProjects ? (
+              {isProvider ? (
+                <ProviderModelField
+                  wslug={wslug}
+                  provider={typeof value === 'string' ? value : 'anthropic'}
+                  model={
+                    typeof frontmatter['model'] === 'string'
+                      ? (frontmatter['model'] as string)
+                      : ''
+                  }
+                  onChange={(next) =>
+                    onFrontmatterCommit({ provider: next.provider, model: next.model })
+                  }
+                />
+              ) : isProjects ? (
                 // Wrapped so useProjects only mounts when the agent's projects
                 // field is actually being rendered — keeps non-agent tests from
                 // needing a QueryClientProvider.
                 <ProjectsFieldWithProjects
                   wslug={wslug}
                   value={Array.isArray(value) ? (value as string[]) : ['*']}
+                  onChange={(next) => onFrontmatterCommit({ [key]: next })}
+                />
+              ) : isTools ? (
+                <ToolsField
+                  value={Array.isArray(value) ? (value as string[]) : []}
                   onChange={(next) => onFrontmatterCommit({ [key]: next })}
                 />
               ) : isAssignee ? (

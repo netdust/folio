@@ -1,14 +1,7 @@
 import { z } from 'zod';
-
-export const V1_MCP_TOOLS = [
-  'list_workspaces', 'list_projects', 'list_documents',
-  'get_document', 'get_document_markdown',
-  'create_document', 'update_document', 'delete_document',
-  'list_statuses', 'list_fields', 'list_views',
-  'run_view',
-] as const;
-
-export type McpTool = (typeof V1_MCP_TOOLS)[number];
+// Single source of truth — both server Zod and the web ToolsField consume this.
+import { V1_MCP_TOOLS, type McpTool } from '@folio/shared';
+export { V1_MCP_TOOLS, type McpTool };
 
 export const agentFrontmatterSchema = z.object({
   system_prompt: z.string().min(1),
