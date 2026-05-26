@@ -44,7 +44,18 @@ Errors use standard JSON-RPC error codes:
 | Code | Meaning |
 |---|---|
 | `-32601` | Unknown method or unknown tool name. |
+| `-32602` | Invalid params. Phase 2.5 uses this for allow-list rejections and for the agent-lifecycle-via-HTTP-only rejections. See `data.reason` to discriminate. |
 | `-32603` | Tool execution error. Scope-denied calls also report `-32603` with `message: "tool <name> requires scope: <scope>"` and `data: { tool, required_scope }`. |
+
+### `-32602` reasons (Phase 2.5)
+
+| `data.reason` | When | Additional `data` fields |
+|---|---|---|
+| `agent_not_in_allow_list` | Agent-bound token called a project-scoped tool with a `project_slug` that's not in `intersect(agent.frontmatter.projects, token.project_ids ?? null)` | `project_slug`, `agent_slug` |
+| `agent_lifecycle_via_http_only` | `create_document` with `type=agent\|trigger`, OR `update_document` / `delete_document` on a doc whose type is `agent` or `trigger` | (none — message includes the pointer to the HTTP endpoint) |
+| `agent_missing` | The agent referenced by `token.agent_id` no longer exists (race between MCP call and agent deletion) | (none) |
+
+Server-side logging contract: every allow-list rejection logs at INFO with structured fields `{ agent_slug, agent_id, requested_project_slug, requested_project_id, allowed_projects, tool }`. The MCP response keeps the minimal `data` shape above (operator-friendly, not leaky); the server log carries the full reasoning trail.
 
 HTTP-level: requests without a valid bearer token return **401 UNAUTHENTICATED** (handled by `attachToken` + `requireToken` middleware in `apps/server/src/middleware/bearer.ts`).
 
@@ -90,16 +101,18 @@ Lists workspaces visible to the token. Today this is exactly the workspace the t
 
 - **Scope:** `documents:read`
 - **Returns:** `{ projects: [{ id, slug, name }] }`
+- **Allow-list filtering (Phase 2.5):** when the calling token is bound to an agent, the result is filtered to projects the agent is allow-listed for (`intersect(agent.frontmatter.projects, token.project_ids ?? null)`). Wildcard `['*']` agents and human PATs see every project in the workspace.
 
 ### list_documents
 
 ```jsonc
-{ "workspace_slug": "netdust", "project_slug": "folio", "type": "agent" }
+{ "workspace_slug": "netdust", "project_slug": "folio", "type": "work_item" }
 ```
 
 - **Scope:** `documents:read`
-- **Optional:** `type` — one of `work_item | page | agent | trigger`. Omit to list all types.
+- **Optional:** `type` — one of `work_item | page` (project-scoped types). Omit to list all project-scoped types.
 - **Returns:** `{ documents: [{ id, slug, title, type, status }] }`
+- **Allow-list enforcement (Phase 2.5):** if the calling token is bound to an agent and `project_slug` resolves to a project NOT in the agent's allow-list, returns `-32602` with `data: { reason: 'agent_not_in_allow_list', project_slug, agent_slug }`. Listing agent/trigger documents via MCP is HTTP-only in Phase 2.5 — use the workspace-scoped REST endpoint `GET /api/v1/w/:wslug/documents?type=agent` instead.
 
 ### get_document
 
@@ -129,9 +142,9 @@ Same arguments as `get_document`. Returns the raw markdown (YAML frontmatter + b
 
 - **Scope:** `documents:write`
 - **Returns:** the created document.
-- **`type: 'agent'`** triggers `agentFrontmatterSchema` validation + auto-token minting (the `api_token_id` field is auto-populated; clients must NOT pass it).
-- **`type: 'trigger'`** triggers `triggerFrontmatterSchema` validation including cron-shape checks.
-- **Delegation guard:** if the calling token belongs to an agent and you create a new agent, the parent-chain depth is enforced against the parent's `max_delegation_depth` (`apps/server/src/lib/delegation-guard.ts`).
+- **Allow-list enforcement:** same as `list_documents` — `-32602 agent_not_in_allow_list` when the project isn't in the agent's effective allow-list.
+- **`type: 'agent'` and `type: 'trigger'` are rejected (Phase 2.5).** Returns `-32602` with `data: { reason: 'agent_lifecycle_via_http_only' }` and a message pointing at the workspace-scoped HTTP endpoint `POST /api/v1/w/:wslug/documents`. The convenience MCP tools (`create_agent` / `update_agent` / `delete_agent` / `get_agent_self`) ship in Phase 2.6.
+- **Delegation guard (for project-doc creation by an agent token):** when an agent creates a `work_item` assigning it to another agent via `frontmatter.assignee = agent:<slug>`, the delegation guard walks the parent chain and rejects if the calling agent's `max_delegation_depth` is exceeded (`apps/server/src/lib/delegation-guard.ts`).
 
 ### update_document
 
@@ -150,6 +163,8 @@ Same arguments as `get_document`. Returns the raw markdown (YAML frontmatter + b
 - **Scope:** `documents:write`
 - **Frontmatter merge:** shallow merge; `null` values DELETE keys. Reserved keys (`type`, `title`, `status`, `last_touched_at`) are columns and are ignored if present in `frontmatter`.
 - **Assignee transition** (`null` → `agent:<slug>` or different agent) additionally emits an `agent.task.assigned` event over SSE.
+- **Allow-list enforcement:** same as above.
+- **Mutating an agent or trigger document is rejected (Phase 2.5):** `-32602 agent_lifecycle_via_http_only`. Use the workspace-scoped HTTP `PATCH /api/v1/w/:wslug/documents/:slug` instead.
 
 ### delete_document
 
@@ -159,7 +174,8 @@ Same arguments as `get_document`. Returns the raw markdown (YAML frontmatter + b
 
 - **Scope:** `documents:delete`
 - **Returns:** `{ ok: true, slug }`
-- **Side effect on agent documents:** the auto-minted token is revoked. Any clients still using that token immediately get 401.
+- **Allow-list enforcement:** same as above.
+- **Deleting an agent or trigger document is rejected (Phase 2.5):** `-32602 agent_lifecycle_via_http_only`. Use the workspace-scoped HTTP `DELETE /api/v1/w/:wslug/documents/:slug` instead. (When the HTTP delete IS used: the bound API token is revoked via the cascade FK on `api_tokens.agent_id`.)
 
 ### list_statuses / list_fields / list_views
 
