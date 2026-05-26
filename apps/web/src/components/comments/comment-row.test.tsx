@@ -41,6 +41,7 @@ const members: Member[] = [
 
 beforeEach(() => {
   // Freeze time so relativeTime returns predictable "just now"
+  vi.useFakeTimers();
   vi.setSystemTime(new Date(NOW));
   Object.defineProperty(navigator, 'clipboard', {
     value: { writeText: vi.fn().mockResolvedValue(undefined) },

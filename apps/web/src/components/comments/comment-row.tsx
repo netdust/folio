@@ -284,6 +284,7 @@ export function CommentRow({
             <button
               type="button"
               disabled
+              aria-label="Retry"
               title="Phase 3 wires this to the agent runner"
               className="rounded px-1.5 py-0.5 text-xs text-fg-3 opacity-40 cursor-not-allowed"
             >
