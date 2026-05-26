@@ -561,6 +561,94 @@ Hand-rolled Hono sub-app at `/mcp`. Speaks JSON-RPC 2.0 over HTTP POST. Bearer-a
 
 ---
 
+## Phase 2.5 — Workspace-scoped agents (Half-week)
+
+**Goal:** Move agent + trigger identity from per-project to workspace-level so a single "Triage Bot" can act across multiple projects without per-project duplication. Add a `projects:` allow-list in frontmatter for explicit narrowing. Surface agents + triggers from the workspace popover instead of under each project rail.
+
+> **Why:** Operational reality from one user × three workspaces — agents kept being copy-pasted between projects in the same workspace, and each copy needed its own token. Workspace-scoped agents with a frontmatter allow-list collapse the duplication.
+
+**Shipped + merged to main + pushed** at `7d73124` on 2026-05-26. 45 commits. Spec: `docs/superpowers/specs/2026-05-26-phase-2.5-workspace-scoped-agents-design.md`. Plan: `docs/superpowers/plans/2026-05-26-phase-2.5-workspace-scoped-agents.md`. Locked decisions: `memory/DECISIONS.md` → "Phase 2.5 — Agent scope model (2026-05-26)".
+
+### Data model
+
+- [x] Migration `0006_phase_2_5_workspace_agents.sql`: `documents.workspace_id NOT NULL` (backfilled from `project_id`), `project_id` relaxed to nullable, CHECK enforces the type ↔ scope invariant (`agent`/`trigger` ⇒ `project_id IS NULL`; `work_item`/`page` ⇒ `project_id IS NOT NULL`). New indexes on `(workspace_id, type, slug)` UNIQUE and `(workspace_id, type)`.
+- [x] `api_tokens` gain `agent_id` (FK → `documents.id` ON DELETE CASCADE — revoking an agent deletes its token) + `project_ids` (JSON, nullable; `null` = inherit from agent, `[]` = explicitly no projects, an array = narrow to subset of agent's allow-list).
+- [x] Agent frontmatter Zod gains `projects: string[]` default `['*']`. Refine rejects `['*', ...ids]` (wildcard exclusivity). Project ids are uuids (survives project renames without rename-time fixup).
+- [x] Trigger frontmatter is unchanged. Triggers inherit their project allow-list from the referenced agent — no per-trigger `projects:` field.
+- [x] Pre-existing agent/trigger rows from Phase 2 (seeded as project-scoped) are dropped by the migration since they violate the new CHECK. Their auto-minted tokens (`name LIKE 'agent:%'`) drop with them. Phase 2 was a fresh deploy; nothing was lost.
+
+### Middleware
+
+- [x] New `requireResource()` middleware in `apps/server/src/middleware/bearer.ts`. Bypasses session-auth (membership is the gate) and human PATs (Phase 3+ enforcement). For agent-bound bearer tokens: loads the agent, intersects `frontmatter.projects` with `token.projectIds` (the helper is the exported `intersect(agentList, tokenList)`), throws `FORBIDDEN_RESOURCE` 403 when the requested `:pslug` isn't in the result.
+- [x] Mounted on `pScope.use('*', resolveProject, requireResource())` in `apps/server/src/app.ts`. **BUG-001 from shake-out:** middleware was exported + unit-tested but the integration wire was missed; a token narrowed to `[folio, stride]` could read `/p/client-website/documents` (200 instead of 403). Live re-sweep verified the fix.
+- [x] `intersect()` semantics tested for all algebra cases: `(['*'], null) → ['*']`, `(['*'], ['a','b']) → ['a','b']`, `(['a','b','c'], ['b','c','d']) → ['b','c']` (drops broadening), `(['a'], []) → []` (token revoked at resource layer).
+
+### Routes
+
+- [x] New `routes/workspace-documents.ts` mounted on `wScope.route('/documents', …)`. Exposes `POST /api/v1/w/:wslug/documents` (agent + trigger only), `GET ?type=agent|trigger&project=<id>` (server-side allow-list filter), `GET /:slug`, `PATCH /:slug`, `DELETE /:slug`.
+- [x] `POST /api/v1/w/:wslug/p/:pslug/documents` with `type: 'agent'|'trigger'` returns `422 INVALID_DOCUMENT_SCOPE` with a pointer to the workspace URL.
+- [x] `GET /api/v1/w/:wslug/p/:pslug/documents?type=agent|trigger` returns `400 UNSUPPORTED_TYPE_FILTER` with the same pointer.
+- [x] `services/documents.ts` `createDocument` writes `workspace_id` for all rows; agents/triggers get `project_id: null`. Auto-minted token rows now carry `agent_id` so the cascade FK can revoke on delete (the old by-frontmatter-`api_token_id` cleanup is now a redundant safety net).
+- [x] `services/documents.ts` `updateDocument` + `deleteDocument` accept `project: Project | null` so workspace-scoped CRUD shares the service layer with project docs.
+- [x] Project-delete (`DELETE /api/v1/w/:wslug/p/:pslug`) transactionally scrubs the deleted project id from every workspace agent's `frontmatter.projects` array. Wildcard agents untouched; explicit allow-lists lose only the deleted id. SQLite can't enforce FK across JSON columns; this is the enforcement point.
+
+### MCP
+
+- [x] `resolveProjectInWorkspace()` now takes the token, intersects the agent's allow-list with `token.project_ids`, returns `-32602` with `data: { reason: 'agent_not_in_allow_list', project_slug, agent_slug }` on miss. Structured server log on every rejection (operators can debug "my agent is silently ignoring this project").
+- [x] `list_projects` filters its output by the same intersection (Notion-style default-deny). Human PATs (no `agent_id`) and wildcard agents see everything.
+- [x] `create_document` with `type=agent|trigger` returns `-32602` with `data: { reason: 'agent_lifecycle_via_http_only' }`. `update_document` + `delete_document` reject the same way when the target doc is an agent or trigger.
+- [x] MCP error response builder propagates `err.code` + `err.data` (was hardcoding `-32603`).
+
+### UI
+
+- [x] Rail: `Agents` and `Triggers` leaves removed from every project node in `apps/web/src/lib/rail-tree.ts`. Project rail is now content-only: Tables · Views · Wiki.
+- [x] Workspace popover (`components/shell/workspace-switcher.tsx`) gains `Agents` (Bot icon) + `Triggers` (Zap icon) menu items above the existing footer.
+- [x] New `/w/:wslug/agents` route. New `WorkspaceAgentsPage` lists workspace agents with project chips (id → current slug via `useProjects` cache; orphans render as `<prefix>·removed` muted chips; wildcard renders a single "All projects" chip). Chip click filters via `?project=<id>`. `+ New agent` button in header + on empty state.
+- [x] New `/w/:wslug/triggers` route + `WorkspaceTriggersPage` (analogous list; trigger create needs at least one workspace agent to satisfy the Zod `agent` field).
+- [x] New `WorkspaceDocumentSlideover` (workspace-scoped analog of `DocumentSlideover`). Reads `?doc=<slug>`, hydrates via `useWorkspaceDocument`, renders title editor + FrontmatterForm + Body editor (rich/raw toggle) + Delete via ⋯ menu. Skips project-only surface (no status field, no pinned fields, no ActivityPanel, no LogActivity, no Copy-as-MD — those deferred to Phase 2.6 polish).
+- [x] New mutation hooks `useCreateWorkspaceDocument` / `useUpdateWorkspaceDocument` / `useDeleteWorkspaceDocument` in `lib/api/workspace-documents.ts`.
+- [x] `AssigneePicker` swapped from `useDocuments(wslug, pslug, {type:'agent'})` to `useWorkspaceAgents(wslug, {project: projectId})` (resolves `pslug → projectId` via `useProjects`). `keepPreviousData` avoids skeleton flash on re-open.
+- [x] `FrontmatterForm` for agents auto-renders three custom multi-select editors by key dispatch (same pattern as `assignee`): `projects` → `ProjectsField` (wildcard collapse semantics, never produces invalid `['*', ...ids]` even transiently), `tools` → `ToolsField` (sourced from `V1_MCP_TOOLS` in `@folio/shared`; grouped Read/Write/Delete), `provider` → `ProviderModelField` (one row owns both `provider` + `model` keys; provider select annotated with "no key" badge per `useWorkspaceAiKeys`; model select hardcodes the Anthropic/OpenAI catalogue, free-text input for OpenRouter/Ollama).
+- [x] Agent form has a canonical field order (system_prompt → provider/model → tools → projects → max_delegation_depth → max_tokens_per_run → requires_approval) + plain-English help text per field.
+
+### Design system
+
+- [x] New `<Chip>` primitive in `components/ui/chip.tsx`. API: `<Chip>label</Chip>`, `<Chip muted>label</Chip>`, `<Chip onClick={fn}>label</Chip>`, `<Chip mono>label</Chip>` (compose freely). Default: `border border-border-light bg-card text-fg-2` at rest (visible without floating), primary tint on hover when clickable. Renders `<span>` when no `onClick`, `<button>` (with `forwardRef`) when present.
+- [x] Three ad-hoc chips migrated to the primitive: `ProjectChip` in `workspace-agents-page.tsx`, local `Chip` in `projects-field.tsx`, local `Chip` in `tools-field.tsx`. All three local definitions deleted.
+- [x] Pre-existing `Chip` (filter-bar key+value) renamed to `FilterChipValue`. Sole consumer (`dev.design-system.tsx`) updated.
+- [x] Design system page shows the new Chip variants in a canonical row.
+
+### Tests
+
+- [x] Server: 259 / 1-skip / 0-fail on the merge tip (was 216 / 1-skip pre-Phase-2.5). New: migration tests, `requireResource` algebra + integration tests, workspace-documents route tests, MCP allow-list tests, project-delete cascade tests.
+- [x] Web: 339 / 1-skip / 0-fail (was 292 / 1-skip). New: `WorkspaceAgentsPage` page tests, `ProjectsField`, `ToolsField`, `ProviderModelField`, `Chip` primitive tests.
+- [x] Shared: 28 / 0-fail. New `MCP_TOOL_GROUPS` + `V1_MCP_TOOLS` export.
+- [x] Phase 2.5 Playwright e2e: `phase-2-5-workspace-agents.spec.ts` — create narrowed agent, verify the assignee picker shows it in the allow-listed project and NOT in the other. 1/1.
+
+### Phase 2.5 acceptance
+
+- [x] All 9 plan tasks merged.
+- [x] Project rail has zero Agents/Triggers leaves. Workspace popover has both (with icons).
+- [x] Workspace agent with `projects: [<inboxId>]` shows in `/p/inbox` assignee picker, not in `/p/website`. (E2E.)
+- [x] MCP `list_projects` filters by allow-list. (Test in `mcp.test.ts`.)
+- [x] MCP project-scoped tools reject cross-allow-list with `-32602 agent_not_in_allow_list`. (Test in `mcp.test.ts` + live curl re-sweep.)
+- [x] `bun --filter=server tsc --noEmit` unchanged from pre-2.5 baseline. `bun --filter=web tsc --noEmit` clean.
+- [x] Commit: `phase-2.5: workspace-scoped agents (merge)` — `7d73124` on main.
+
+### Phase 2.5 deferrals (Phase 2.6 + Phase 3)
+
+- [ ] `create_agent` / `update_agent` / `delete_agent` / `get_agent_self` MCP tools. **Phase 2.6 — v1 blocker** per spec.
+- [ ] Templates (instance-level Settings page, inert markdown, `template:` + `template_version:` references on instances, sync UI). **Phase 2.6.**
+- [ ] Background allow-list reconciler (periodic sweep removing orphan project ids; insurance against bugs in the cascade hook + hand-edited MD + partial restore-from-backup). **Phase 2.6.**
+- [ ] Workspace-scoped `.md` export endpoint + Copy-as-MD on workspace slideover + bulk MD export of agents/triggers. **Phase 2.6 polish.**
+- [ ] ActivityPanel + LogActivity on workspace agent slideover. **Phase 2.6 polish.**
+- [ ] Human PAT `project_ids` enforcement (column exists; needs UI). **Phase 3+.**
+- [ ] Per-project action-scope overrides. **Only if a real use case appears.**
+- [ ] Cache the agent's `projects:` allow-list in `requireResource`. **Measure perf first.**
+- [ ] Table-cell `AssigneePicker` (was never wired pre-2.5 either). **Phase 7 UX polish.**
+
+---
+
 ## Phase 3 — AI in UI + Agent runner (Week 5)
 
 **Goal:** Slash commands work in the body editor. AI settings UI lets the user configure a provider and validate the key. Streaming responses feel snappy. The Phase 2 agent-document surface gains a runner that actually executes assigned tasks.
