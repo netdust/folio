@@ -12,6 +12,8 @@ export const KNOWN_EVENT_KINDS: readonly EventKind[] = [
   'workspace.created','workspace.updated',
   'activity.logged',
   'agent.created',    'agent.deleted',   'agent.task.assigned',
+  'comment.created',  'comment.mentioned', 'comment.deleted',
+  'agent.allow_list.reconciled',
 ];
 
 export interface CronShapeResult {

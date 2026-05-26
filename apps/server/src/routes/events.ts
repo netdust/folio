@@ -22,6 +22,10 @@ eventsRoute.get('/', async (c) => {
   const kinds = kindsParam
     ? (kindsParam.split(',').map((k) => k.trim()).filter(Boolean) as EventKind[])
     : undefined;
+  const parentParam = c.req.query('parent');
+  const parentId = parentParam && parentParam.trim() ? parentParam.trim() : undefined;
+  const runParam = c.req.query('run');
+  const runId = runParam && runParam.trim() ? runParam.trim() : undefined;
   const lastEventId = c.req.header('Last-Event-Id');
 
   return streamSSE(c, async (stream) => {
@@ -46,6 +50,14 @@ eventsRoute.get('/', async (c) => {
         for (const row of rows) {
           if (projectId && row.projectId !== projectId) continue;
           if (kinds && !kinds.includes(row.kind as EventKind)) continue;
+          if (parentId !== undefined) {
+            const p = (row.payload as Record<string, unknown> | null)?.parent_id;
+            if (p !== parentId) continue;
+          }
+          if (runId !== undefined) {
+            const r = (row.payload as Record<string, unknown> | null)?.run_id;
+            if (r !== runId) continue;
+          }
           if (stream.aborted) return;
           await stream.writeSSE({
             id: row.id,
@@ -75,6 +87,8 @@ eventsRoute.get('/', async (c) => {
       {
         kinds: kinds as EventKind[] | undefined,
         projectId,
+        parentId,
+        runId,
       },
       (e) => {
         queue.push(e);

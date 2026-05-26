@@ -107,4 +107,22 @@ describe('KNOWN_EVENT_KINDS', () => {
     expect(KNOWN_EVENT_KINDS).toContain('workspace.created');
     expect(KNOWN_EVENT_KINDS).toContain('activity.logged');
   });
+
+  test('includes the 4 new Phase-2.6 event kinds', () => {
+    expect(KNOWN_EVENT_KINDS).toContain('comment.created');
+    expect(KNOWN_EVENT_KINDS).toContain('comment.mentioned');
+    expect(KNOWN_EVENT_KINDS).toContain('comment.deleted');
+    expect(KNOWN_EVENT_KINDS).toContain('agent.allow_list.reconciled');
+  });
+
+  test('triggerFrontmatterSchema accepts the new comment and agent kinds as on_event', () => {
+    for (const kind of ['comment.created', 'comment.mentioned', 'comment.deleted', 'agent.allow_list.reconciled'] as const) {
+      const r = triggerFrontmatterSchema.safeParse({
+        agent: 'x',
+        schedule: null,
+        on_event: kind,
+      });
+      expect(r.success).toBe(true);
+    }
+  });
 });

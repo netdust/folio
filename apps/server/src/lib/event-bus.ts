@@ -14,6 +14,10 @@ export interface BusEvent {
 export interface SubFilter {
   kinds?: EventKind[];
   projectId?: string;
+  /** Filter to events whose payload.parent_id equals this value. */
+  parentId?: string;
+  /** Filter to events whose payload.run_id equals this value. */
+  runId?: string;
 }
 
 type Handler = (e: BusEvent) => void;
@@ -38,6 +42,14 @@ class EventBus {
       if (sub.workspaceId !== e.workspaceId) continue;
       if (sub.filter?.kinds && !sub.filter.kinds.includes(e.kind)) continue;
       if (sub.filter?.projectId !== undefined && sub.filter.projectId !== e.projectId) continue;
+      if (sub.filter?.parentId !== undefined) {
+        const p = (e.payload as Record<string, unknown> | undefined)?.parent_id;
+        if (p !== sub.filter.parentId) continue;
+      }
+      if (sub.filter?.runId !== undefined) {
+        const r = (e.payload as Record<string, unknown> | undefined)?.run_id;
+        if (r !== sub.filter.runId) continue;
+      }
       try {
         sub.handler(e);
       } catch {
