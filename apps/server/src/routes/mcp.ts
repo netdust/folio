@@ -54,6 +54,20 @@ import {
 import { listStatuses } from '../services/statuses.ts';
 import { listFields } from '../services/fields.ts';
 import { listViews, runView } from '../services/views.ts';
+import {
+  type AuthorContext,
+  createComment,
+  deleteComment,
+  getComment,
+  listComments,
+  updateComment,
+} from '../services/comments.ts';
+import {
+  type CommentKind,
+  type CommentVisibility,
+  commentKindSchema,
+  commentVisibilitySchema,
+} from '../lib/comment-schema.ts';
 
 // --- JSON-RPC types ---
 
@@ -179,6 +193,53 @@ async function resolveProjectInWorkspace(
     }
   }
   return p;
+}
+
+/**
+ * Resolve the comment author context for a bearer token.
+ *
+ * - Agent-bound token (`token.agentId` set) → `{ type: 'agent', agentSlug, agentId }`.
+ *   The slug is looked up from the agent doc; clients never supply it.
+ * - Otherwise → `{ type: 'user', userId: token.userId }` (human PAT / session bearer).
+ *
+ * Mirrors `resolveAuthorContext` in routes/comments.ts but takes a token directly
+ * because MCP has no session/user context plumbing.
+ */
+async function resolveAuthorContextForToken(token: ApiToken): Promise<AuthorContext> {
+  if (token.agentId) {
+    const agent = await db.query.documents.findFirst({
+      where: and(eq(documents.id, token.agentId), eq(documents.type, 'agent')),
+    });
+    if (!agent) {
+      throw mcpInvalidParams('agent for this token no longer exists', {
+        reason: 'agent_missing',
+      });
+    }
+    return { type: 'agent', agentSlug: agent.slug, agentId: token.agentId };
+  }
+  // Human PAT: attribute the comment to the token's owner (createdBy). A
+  // workspace-scoped token without a creator (legacy/system) cannot author a
+  // comment — surface this as an MCP error rather than silently mis-attributing.
+  if (!token.createdBy) {
+    throw mcpInvalidParams('token has no owner; cannot resolve comment author', {
+      reason: 'unknown_author',
+    });
+  }
+  return { type: 'user', userId: token.createdBy };
+}
+
+/** Parse a possibly-CSV string MCP arg into a typed list (or undefined). */
+function parseCsvArg<T extends string>(
+  args: Record<string, unknown>,
+  key: string,
+): T[] | undefined {
+  const raw = args[key];
+  if (typeof raw !== 'string' || raw.length === 0) return undefined;
+  const parts = raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean) as T[];
+  return parts.length > 0 ? parts : undefined;
 }
 
 /**
@@ -654,6 +715,231 @@ const TOOLS: ToolDef[] = [
         view: { id: view.id, name: view.name },
         documents: docs,
       });
+    },
+  },
+
+  // ---------------------------------------------------------------------------
+  // Phase 2.6 — comment tools (delegate to services/comments.ts).
+  //
+  // Author resolution: agent-bound tokens always post as `agent:<slug>`; clients
+  // do NOT supply `author`. Human PATs post as `user:<creator>`. The service
+  // handles mention parsing + approval-keyword detection. Update/delete enforce
+  // author-only at the service layer; this route catches COMMENT_AUTHOR_ONLY
+  // and re-throws as a structured JSON-RPC error so agents can branch on
+  // `data.reason`.
+  // ---------------------------------------------------------------------------
+  {
+    name: 'create_comment',
+    description:
+      'Post a comment on a work_item or page. Mention parsing + approval-keyword detection happen server-side; the author is resolved from the bearer token.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace_slug: { type: 'string' },
+        project_slug: { type: 'string' },
+        parent_slug: { type: 'string' },
+        body: { type: 'string' },
+        kind: {
+          type: 'string',
+          enum: ['comment', 'plan', 'result', 'error', 'approval', 'rejection', 'reply'],
+        },
+        target_agent: { type: 'string' },
+        visibility: { type: 'string', enum: ['normal', 'internal'] },
+      },
+      required: ['workspace_slug', 'project_slug', 'parent_slug', 'body'],
+    },
+    requiredScope: 'documents:write',
+    handler: async ({ token }, args) => {
+      const ws = await resolveWorkspaceForToken(token, args);
+      const project = await resolveProjectInWorkspace(ws, token, args);
+      const parentSlug = requireString(args, 'parent_slug');
+      const parent = await db.query.documents.findFirst({
+        where: and(eq(documents.projectId, project.id), eq(documents.slug, parentSlug)),
+      });
+      if (!parent) throw new Error(`parent ${parentSlug} not found`);
+
+      const authorContext = await resolveAuthorContextForToken(token);
+      const body = requireString(args, 'body');
+
+      // Narrow the enum-typed args through the same Zod parsers the route uses,
+      // so an invalid value surfaces a clean JSON-RPC error instead of leaking
+      // into the service.
+      const kindArg = optionalString(args, 'kind');
+      const kind = kindArg !== undefined ? commentKindSchema.parse(kindArg) : undefined;
+      const visibilityArg = optionalString(args, 'visibility');
+      const visibility =
+        visibilityArg !== undefined ? commentVisibilitySchema.parse(visibilityArg) : undefined;
+      const targetAgent = optionalString(args, 'target_agent');
+
+      const doc = await createComment({
+        workspace: ws,
+        project,
+        parent,
+        authorContext,
+        actor: token.id,
+        body,
+        kind,
+        targetAgent,
+        visibility,
+      });
+      const fm = doc.frontmatter as Record<string, unknown>;
+      return textResult({
+        slug: doc.slug,
+        kind: fm.kind,
+        ...(fm.target_agent !== undefined ? { target_agent: fm.target_agent } : {}),
+      });
+    },
+  },
+  {
+    name: 'list_comments',
+    description:
+      'List comments on a work_item or page. Newest-first. Optional kind / since / visibility filters. Default visibility is "normal" (internal rows excluded unless explicitly requested).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace_slug: { type: 'string' },
+        project_slug: { type: 'string' },
+        parent_slug: { type: 'string' },
+        kind: { type: 'string' },
+        since: { type: 'string' },
+        visibility: { type: 'string' },
+      },
+      required: ['workspace_slug', 'project_slug', 'parent_slug'],
+    },
+    requiredScope: 'documents:read',
+    handler: async ({ token }, args) => {
+      const ws = await resolveWorkspaceForToken(token, args);
+      const project = await resolveProjectInWorkspace(ws, token, args);
+      const parentSlug = requireString(args, 'parent_slug');
+      const parent = await db.query.documents.findFirst({
+        where: and(eq(documents.projectId, project.id), eq(documents.slug, parentSlug)),
+      });
+      if (!parent) throw new Error(`parent ${parentSlug} not found`);
+
+      // `kind` and `visibility` accept a single value or a comma-separated list,
+      // matching the REST query convention (?kind=plan,result).
+      const kinds = parseCsvArg<string>(args, 'kind');
+      const visibility = parseCsvArg<string>(args, 'visibility');
+      const since = optionalString(args, 'since');
+
+      const kindParsed: CommentKind[] | undefined = kinds
+        ? kinds.map((k) => commentKindSchema.parse(k))
+        : undefined;
+      const visibilityParsed: CommentVisibility[] | undefined = visibility
+        ? visibility.map((v) => commentVisibilitySchema.parse(v))
+        : undefined;
+
+      const rows = await listComments({
+        parentId: parent.id,
+        kind: kindParsed,
+        since,
+        visibility: visibilityParsed,
+      });
+      return textResult(rows);
+    },
+  },
+  {
+    name: 'update_comment',
+    description:
+      'Edit a comment body or visibility. Author-only — `kind` is immutable after creation; supplying it is rejected by the service.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace_slug: { type: 'string' },
+        project_slug: { type: 'string' },
+        slug: { type: 'string' },
+        body: { type: 'string' },
+      },
+      required: ['workspace_slug', 'project_slug', 'slug', 'body'],
+    },
+    requiredScope: 'documents:write',
+    handler: async ({ token }, args) => {
+      const ws = await resolveWorkspaceForToken(token, args);
+      const project = await resolveProjectInWorkspace(ws, token, args);
+      const slug = requireString(args, 'slug');
+      const existing = await getComment(ws.id, slug);
+      if (!existing) throw new Error('comment not found');
+      // Defense-in-depth: comments live under a project; verify the slug the
+      // caller passed belongs to THIS project. (resolveProjectInWorkspace already
+      // applied the agent allow-list check.)
+      if (existing.projectId !== project.id) {
+        throw new Error('comment not found');
+      }
+
+      const authorContext = await resolveAuthorContextForToken(token);
+      const body = requireString(args, 'body');
+
+      try {
+        const updated = await updateComment({
+          workspace: ws,
+          project,
+          existing,
+          authorContext,
+          actor: token.id,
+          body,
+        });
+        const fm = updated.frontmatter as Record<string, unknown>;
+        return textResult({
+          slug: updated.slug,
+          edited_at: fm.edited_at,
+        });
+      } catch (err) {
+        if (err instanceof HTTPError && err.code === 'COMMENT_AUTHOR_ONLY') {
+          throw mcpInvalidParams('only the comment author can edit', {
+            reason: 'comment_author_only',
+          });
+        }
+        throw err;
+      }
+    },
+  },
+  {
+    name: 'delete_comment',
+    description:
+      'Soft-delete a comment. Author-only. The row stays in the database with `deleted_at` set; downstream UIs mute it.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace_slug: { type: 'string' },
+        project_slug: { type: 'string' },
+        slug: { type: 'string' },
+      },
+      required: ['workspace_slug', 'project_slug', 'slug'],
+    },
+    requiredScope: 'documents:delete',
+    handler: async ({ token }, args) => {
+      const ws = await resolveWorkspaceForToken(token, args);
+      const project = await resolveProjectInWorkspace(ws, token, args);
+      const slug = requireString(args, 'slug');
+      const existing = await getComment(ws.id, slug);
+      if (!existing) throw new Error('comment not found');
+      if (existing.projectId !== project.id) {
+        throw new Error('comment not found');
+      }
+
+      const authorContext = await resolveAuthorContextForToken(token);
+
+      try {
+        const updated = await deleteComment({
+          workspace: ws,
+          project,
+          existing,
+          authorContext,
+          actor: token.id,
+        });
+        const fm = updated.frontmatter as Record<string, unknown>;
+        return textResult({
+          slug: updated.slug,
+          deleted_at: fm.deleted_at,
+        });
+      } catch (err) {
+        if (err instanceof HTTPError && err.code === 'COMMENT_AUTHOR_ONLY') {
+          throw mcpInvalidParams('only the comment author can delete', {
+            reason: 'comment_author_only',
+          });
+        }
+        throw err;
+      }
     },
   },
 ];

@@ -55,7 +55,7 @@ test('MCP initialize returns serverInfo + protocolVersion', async () => {
   expect(body.result.protocolVersion).toBeTruthy();
 });
 
-test('MCP tools/list returns the 12 v1 tools', async () => {
+test('MCP tools/list returns the v1 tools including the Phase 2.6 comment tools', async () => {
   const { app, seed } = await makeTestApp();
   const token = await setupToken(seed.workspace.id, seed.user.id, ['documents:read']);
   const res = await app.request('/mcp', {
@@ -64,7 +64,13 @@ test('MCP tools/list returns the 12 v1 tools', async () => {
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
   });
   const body = (await res.json()) as { result: { tools: { name: string }[] } };
-  expect(body.result.tools.length).toBe(12);
+  // 12 original + 4 comment tools (create/list/update/delete_comment).
+  expect(body.result.tools.length).toBe(16);
+  const names = body.result.tools.map((t) => t.name);
+  expect(names).toContain('create_comment');
+  expect(names).toContain('list_comments');
+  expect(names).toContain('update_comment');
+  expect(names).toContain('delete_comment');
 });
 
 test('MCP tools/call list_workspaces returns the workspaces visible to the token', async () => {
@@ -452,4 +458,458 @@ test('human PAT (no agent_id) is not subject to allow-list checks', async () => 
     projects: { slug: string }[];
   };
   expect(parsed.projects.map((p) => p.slug)).toEqual(['inbox', 'web'].sort());
+});
+
+// ---------------------------------------------------------------------------
+// Phase 2.6 — comment tools
+//
+// These exercise the 4 new MCP tools (create/list/update/delete_comment).
+// Author resolution: agent-bound tokens post as `agent:<slug>`, human PATs as
+// `user:<id>`. Author-only enforcement on update/delete surfaces as
+// JSON-RPC -32602 with data.reason='comment_author_only'.
+// ---------------------------------------------------------------------------
+
+/** Create a project-scoped work_item via the create_document tool; returns its slug. */
+async function createWorkItem(
+  app: Awaited<ReturnType<typeof makeTestApp>>['app'],
+  token: string,
+  title: string,
+): Promise<string> {
+  const res = await callTool(app, token, 'create_document', {
+    workspace_slug: 'acme',
+    project_slug: 'web',
+    type: 'work_item',
+    title,
+  });
+  const body = (await res.json()) as { result: { content: { text: string }[] } };
+  const doc = JSON.parse(body.result.content[0]!.text) as { slug: string };
+  return doc.slug;
+}
+
+test('create_comment via agent token resolves author=agent:<slug> and emits comment.created', async () => {
+  const { app, seed } = await makeTestApp();
+  const { agentToken, agentSlug } = await setupAgentBoundToken(
+    seed.workspace.id,
+    seed.user.id,
+    { projects: ['*'] },
+  );
+  // Use the human session to create the parent — agents can create too, but
+  // this isolates the parent-creation from the comment-creation.
+  const human = await setupToken(seed.workspace.id, seed.user.id, [
+    'documents:write',
+    'documents:read',
+  ]);
+  const parentSlug = await createWorkItem(app, human, 'parent A');
+
+  const res = await callTool(app, agentToken, 'create_comment', {
+    workspace_slug: 'acme',
+    project_slug: 'web',
+    parent_slug: parentSlug,
+    body: 'hello from the agent',
+  });
+  const body = (await res.json()) as {
+    result?: { content: { text: string }[] };
+    error?: unknown;
+  };
+  expect(body.error).toBeUndefined();
+  const parsed = JSON.parse(body.result!.content[0]!.text) as {
+    slug: string;
+    kind: string;
+  };
+  expect(parsed.slug).toMatch(/^c-/);
+  expect(parsed.kind).toBe('comment');
+
+  // Verify the persisted row + emitted event.
+  const { db } = await import('../db/client.ts');
+  const { documents, events } = await import('../db/schema.ts');
+  const { eq } = await import('drizzle-orm');
+  const row = await db.query.documents.findFirst({
+    where: eq(documents.slug, parsed.slug),
+  });
+  expect(row).toBeTruthy();
+  const fm = row!.frontmatter as Record<string, unknown>;
+  expect(fm.author).toBe(`agent:${agentSlug}`);
+  const evRows = await db.query.events.findMany({ where: eq(events.kind, 'comment.created') });
+  expect(evRows.length).toBe(1);
+  expect((evRows[0]!.payload as Record<string, unknown>).author).toBe(`agent:${agentSlug}`);
+});
+
+test('create_comment via human PAT resolves author=user:<id>', async () => {
+  const { app, seed } = await makeTestApp();
+  const token = await setupToken(seed.workspace.id, seed.user.id, [
+    'documents:write',
+    'documents:read',
+  ]);
+  const parentSlug = await createWorkItem(app, token, 'parent B');
+
+  const res = await callTool(app, token, 'create_comment', {
+    workspace_slug: 'acme',
+    project_slug: 'web',
+    parent_slug: parentSlug,
+    body: 'from the human',
+  });
+  const body = (await res.json()) as { result?: { content: { text: string }[] }; error?: unknown };
+  expect(body.error).toBeUndefined();
+  const parsed = JSON.parse(body.result!.content[0]!.text) as { slug: string };
+
+  const { db } = await import('../db/client.ts');
+  const { documents } = await import('../db/schema.ts');
+  const { eq } = await import('drizzle-orm');
+  const row = await db.query.documents.findFirst({ where: eq(documents.slug, parsed.slug) });
+  const fm = row!.frontmatter as Record<string, unknown>;
+  expect(fm.author).toBe(`user:${seed.user.id}`);
+});
+
+test('create_comment without documents:write returns -32603 with required_scope', async () => {
+  const { app, seed } = await makeTestApp();
+  const readOnly = await setupToken(seed.workspace.id, seed.user.id, ['documents:read']);
+  // Build a parent via a separate write-capable token so we have something to point at.
+  const writer = await setupToken(seed.workspace.id, seed.user.id, [
+    'documents:write',
+    'documents:read',
+  ]);
+  const parentSlug = await createWorkItem(app, writer, 'parent C');
+
+  const res = await callTool(app, readOnly, 'create_comment', {
+    workspace_slug: 'acme',
+    project_slug: 'web',
+    parent_slug: parentSlug,
+    body: 'should be blocked',
+  });
+  const body = (await res.json()) as {
+    error: { code: number; message: string; data?: { required_scope: string } };
+  };
+  expect(body.error.code).toBe(-32603);
+  expect(body.error.data?.required_scope).toBe('documents:write');
+});
+
+test('create_comment on a project outside the agent allow-list → -32602 agent_not_in_allow_list', async () => {
+  const { app, db: testDb, seed } = await makeTestApp();
+  // Second project the agent can NOT see.
+  const otherProjectId = nanoid();
+  await testDb.insert(projectsTbl).values({
+    id: otherProjectId,
+    workspaceId: seed.workspace.id,
+    slug: 'inbox',
+    name: 'Inbox',
+  });
+  // Agent allowed only on the original "web" project.
+  const { agentToken } = await setupAgentBoundToken(seed.workspace.id, seed.user.id, {
+    projects: [seed.project.id],
+  });
+
+  // The parent must exist in `inbox` for resolveProjectInWorkspace to evaluate;
+  // we don't actually need to seed defaults there because the allow-list check
+  // happens before parent lookup.
+  const res = await callTool(app, agentToken, 'create_comment', {
+    workspace_slug: 'acme',
+    project_slug: 'inbox',
+    parent_slug: 'whatever',
+    body: 'should be rejected',
+  });
+  const body = (await res.json()) as {
+    error: { code: number; data?: { reason: string } };
+  };
+  expect(body.error.code).toBe(-32602);
+  expect(body.error.data?.reason).toBe('agent_not_in_allow_list');
+});
+
+test('create_comment with a non-existent parent slug → error propagates', async () => {
+  const { app, seed } = await makeTestApp();
+  const token = await setupToken(seed.workspace.id, seed.user.id, [
+    'documents:write',
+    'documents:read',
+  ]);
+  const res = await callTool(app, token, 'create_comment', {
+    workspace_slug: 'acme',
+    project_slug: 'web',
+    parent_slug: 'does-not-exist',
+    body: 'orphan',
+  });
+  const body = (await res.json()) as { error: { code: number; message: string } };
+  expect(body.error).toBeDefined();
+  expect(body.error.message).toMatch(/parent.*not found/);
+});
+
+test('list_comments returns newest-first list', async () => {
+  const { app, seed } = await makeTestApp();
+  const token = await setupToken(seed.workspace.id, seed.user.id, [
+    'documents:write',
+    'documents:read',
+  ]);
+  const parentSlug = await createWorkItem(app, token, 'parent L');
+  await callTool(app, token, 'create_comment', {
+    workspace_slug: 'acme',
+    project_slug: 'web',
+    parent_slug: parentSlug,
+    body: 'first',
+  });
+  // Tiny gap to make the createdAt ordering deterministic.
+  await new Promise((r) => setTimeout(r, 5));
+  await callTool(app, token, 'create_comment', {
+    workspace_slug: 'acme',
+    project_slug: 'web',
+    parent_slug: parentSlug,
+    body: 'second',
+  });
+
+  const res = await callTool(app, token, 'list_comments', {
+    workspace_slug: 'acme',
+    project_slug: 'web',
+    parent_slug: parentSlug,
+  });
+  const body = (await res.json()) as { result: { content: { text: string }[] }; error?: unknown };
+  expect(body.error).toBeUndefined();
+  const rows = JSON.parse(body.result.content[0]!.text) as { body: string }[];
+  expect(rows.length).toBe(2);
+  expect(rows[0]!.body).toBe('second'); // newest first
+  expect(rows[1]!.body).toBe('first');
+});
+
+test('list_comments filters by kind=plan', async () => {
+  const { app, seed } = await makeTestApp();
+  const token = await setupToken(seed.workspace.id, seed.user.id, [
+    'documents:write',
+    'documents:read',
+  ]);
+  const parentSlug = await createWorkItem(app, token, 'parent K');
+  await callTool(app, token, 'create_comment', {
+    workspace_slug: 'acme',
+    project_slug: 'web',
+    parent_slug: parentSlug,
+    body: 'regular note',
+  });
+  await callTool(app, token, 'create_comment', {
+    workspace_slug: 'acme',
+    project_slug: 'web',
+    parent_slug: parentSlug,
+    body: 'the plan',
+    kind: 'plan',
+  });
+
+  const res = await callTool(app, token, 'list_comments', {
+    workspace_slug: 'acme',
+    project_slug: 'web',
+    parent_slug: parentSlug,
+    kind: 'plan',
+  });
+  const body = (await res.json()) as { result: { content: { text: string }[] } };
+  const rows = JSON.parse(body.result.content[0]!.text) as {
+    body: string;
+    frontmatter: { kind: string };
+  }[];
+  expect(rows.length).toBe(1);
+  expect(rows[0]!.frontmatter.kind).toBe('plan');
+});
+
+test('list_comments default visibility excludes internal rows', async () => {
+  const { app, seed } = await makeTestApp();
+  const token = await setupToken(seed.workspace.id, seed.user.id, [
+    'documents:write',
+    'documents:read',
+  ]);
+  const parentSlug = await createWorkItem(app, token, 'parent V');
+  await callTool(app, token, 'create_comment', {
+    workspace_slug: 'acme',
+    project_slug: 'web',
+    parent_slug: parentSlug,
+    body: 'public',
+  });
+  await callTool(app, token, 'create_comment', {
+    workspace_slug: 'acme',
+    project_slug: 'web',
+    parent_slug: parentSlug,
+    body: 'secret',
+    visibility: 'internal',
+  });
+
+  // Default — internal hidden.
+  const def = await callTool(app, token, 'list_comments', {
+    workspace_slug: 'acme',
+    project_slug: 'web',
+    parent_slug: parentSlug,
+  });
+  const defRows = JSON.parse(
+    ((await def.json()) as { result: { content: { text: string }[] } }).result.content[0]!.text,
+  ) as { body: string }[];
+  expect(defRows.length).toBe(1);
+  expect(defRows[0]!.body).toBe('public');
+
+  // Explicit override — both visible.
+  const both = await callTool(app, token, 'list_comments', {
+    workspace_slug: 'acme',
+    project_slug: 'web',
+    parent_slug: parentSlug,
+    visibility: 'normal,internal',
+  });
+  const bothRows = JSON.parse(
+    ((await both.json()) as { result: { content: { text: string }[] } }).result.content[0]!.text,
+  ) as { body: string }[];
+  expect(bothRows.length).toBe(2);
+});
+
+test('update_comment by the author succeeds and stamps edited_at', async () => {
+  const { app, seed } = await makeTestApp();
+  const { agentToken } = await setupAgentBoundToken(seed.workspace.id, seed.user.id, {
+    projects: ['*'],
+  });
+  const human = await setupToken(seed.workspace.id, seed.user.id, [
+    'documents:write',
+    'documents:read',
+  ]);
+  const parentSlug = await createWorkItem(app, human, 'parent U');
+
+  const created = await callTool(app, agentToken, 'create_comment', {
+    workspace_slug: 'acme',
+    project_slug: 'web',
+    parent_slug: parentSlug,
+    body: 'v1',
+  });
+  const createdParsed = JSON.parse(
+    ((await created.json()) as { result: { content: { text: string }[] } }).result.content[0]!.text,
+  ) as { slug: string };
+
+  const res = await callTool(app, agentToken, 'update_comment', {
+    workspace_slug: 'acme',
+    project_slug: 'web',
+    slug: createdParsed.slug,
+    body: 'v2 updated',
+  });
+  const body = (await res.json()) as { result?: { content: { text: string }[] }; error?: unknown };
+  expect(body.error).toBeUndefined();
+  const parsed = JSON.parse(body.result!.content[0]!.text) as {
+    slug: string;
+    edited_at: string;
+  };
+  expect(parsed.slug).toBe(createdParsed.slug);
+  expect(typeof parsed.edited_at).toBe('string');
+  expect(parsed.edited_at.length).toBeGreaterThan(0);
+});
+
+test('update_comment by a non-author agent → -32602 comment_author_only', async () => {
+  const { app, seed } = await makeTestApp();
+  const { agentToken: authorToken } = await setupAgentBoundToken(
+    seed.workspace.id,
+    seed.user.id,
+    { projects: ['*'], agentSlug: 'author-bot' },
+  );
+  const { agentToken: otherToken } = await setupAgentBoundToken(
+    seed.workspace.id,
+    seed.user.id,
+    { projects: ['*'], agentSlug: 'other-bot' },
+  );
+  const human = await setupToken(seed.workspace.id, seed.user.id, [
+    'documents:write',
+    'documents:read',
+  ]);
+  const parentSlug = await createWorkItem(app, human, 'parent AO');
+
+  const created = await callTool(app, authorToken, 'create_comment', {
+    workspace_slug: 'acme',
+    project_slug: 'web',
+    parent_slug: parentSlug,
+    body: 'mine',
+  });
+  const createdParsed = JSON.parse(
+    ((await created.json()) as { result: { content: { text: string }[] } }).result.content[0]!.text,
+  ) as { slug: string };
+
+  const res = await callTool(app, otherToken, 'update_comment', {
+    workspace_slug: 'acme',
+    project_slug: 'web',
+    slug: createdParsed.slug,
+    body: 'hijacked',
+  });
+  const body = (await res.json()) as {
+    error: { code: number; data?: { reason: string } };
+  };
+  expect(body.error.code).toBe(-32602);
+  expect(body.error.data?.reason).toBe('comment_author_only');
+});
+
+test('delete_comment by the author soft-deletes the row', async () => {
+  const { app, seed } = await makeTestApp();
+  const { agentToken } = await setupAgentBoundToken(seed.workspace.id, seed.user.id, {
+    projects: ['*'],
+  });
+  const human = await setupToken(seed.workspace.id, seed.user.id, [
+    'documents:write',
+    'documents:read',
+  ]);
+  const parentSlug = await createWorkItem(app, human, 'parent D');
+
+  const created = await callTool(app, agentToken, 'create_comment', {
+    workspace_slug: 'acme',
+    project_slug: 'web',
+    parent_slug: parentSlug,
+    body: 'will be removed',
+  });
+  const createdParsed = JSON.parse(
+    ((await created.json()) as { result: { content: { text: string }[] } }).result.content[0]!.text,
+  ) as { slug: string };
+
+  const res = await callTool(app, agentToken, 'delete_comment', {
+    workspace_slug: 'acme',
+    project_slug: 'web',
+    slug: createdParsed.slug,
+  });
+  const body = (await res.json()) as { result?: { content: { text: string }[] }; error?: unknown };
+  expect(body.error).toBeUndefined();
+  const parsed = JSON.parse(body.result!.content[0]!.text) as {
+    slug: string;
+    deleted_at: string;
+  };
+  expect(parsed.slug).toBe(createdParsed.slug);
+  expect(typeof parsed.deleted_at).toBe('string');
+
+  // Verify soft-delete: body cleared, deleted_at present, row still in DB.
+  const { db } = await import('../db/client.ts');
+  const { documents: docsTbl } = await import('../db/schema.ts');
+  const { eq } = await import('drizzle-orm');
+  const row = await db.query.documents.findFirst({
+    where: eq(docsTbl.slug, createdParsed.slug),
+  });
+  expect(row).toBeTruthy();
+  expect(row!.body).toBe('');
+  expect((row!.frontmatter as Record<string, unknown>).deleted_at).toBeTruthy();
+});
+
+test('delete_comment by a non-author agent → -32602 comment_author_only', async () => {
+  const { app, seed } = await makeTestApp();
+  const { agentToken: authorToken } = await setupAgentBoundToken(
+    seed.workspace.id,
+    seed.user.id,
+    { projects: ['*'], agentSlug: 'd-author' },
+  );
+  const { agentToken: otherToken } = await setupAgentBoundToken(
+    seed.workspace.id,
+    seed.user.id,
+    { projects: ['*'], agentSlug: 'd-other' },
+  );
+  const human = await setupToken(seed.workspace.id, seed.user.id, [
+    'documents:write',
+    'documents:read',
+  ]);
+  const parentSlug = await createWorkItem(app, human, 'parent DOA');
+
+  const created = await callTool(app, authorToken, 'create_comment', {
+    workspace_slug: 'acme',
+    project_slug: 'web',
+    parent_slug: parentSlug,
+    body: 'mine — do not touch',
+  });
+  const createdParsed = JSON.parse(
+    ((await created.json()) as { result: { content: { text: string }[] } }).result.content[0]!.text,
+  ) as { slug: string };
+
+  const res = await callTool(app, otherToken, 'delete_comment', {
+    workspace_slug: 'acme',
+    project_slug: 'web',
+    slug: createdParsed.slug,
+  });
+  const body = (await res.json()) as {
+    error: { code: number; data?: { reason: string } };
+  };
+  expect(body.error.code).toBe(-32602);
+  expect(body.error.data?.reason).toBe('comment_author_only');
 });
