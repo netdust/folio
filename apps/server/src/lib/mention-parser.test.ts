@@ -143,6 +143,26 @@ describe('parseMentions', () => {
     expect(r.approvalIntent?.kind).toBe('approval');
   });
 
+  it('matches when position-1 has trailing punctuation', () => {
+    const r = parseMentions({
+      body: '@drafter is: approved',
+      workspaceAgents: agents,
+      workspaceMembers: members,
+      currentProjectId: 'pr-a',
+    });
+    expect(r.approvalIntent?.kind).toBe('approval');
+  });
+
+  it('matches when position-1 has trailing comma', () => {
+    const r = parseMentions({
+      body: '@drafter has, approved',
+      workspaceAgents: agents,
+      workspaceMembers: members,
+      currentProjectId: 'pr-a',
+    });
+    expect(r.approvalIntent?.kind).toBe('approval');
+  });
+
   it('deduplicates mentions by target', () => {
     const r = parseMentions({
       body: '@drafter please @drafter again',

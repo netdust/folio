@@ -142,7 +142,8 @@ export function parseMentions(input: ParseMentionsInput): ParseMentionsResult {
     // from "@agent looks approved" (no match).
     if (!approvalIntent && nextTokens.length === 2) {
       const pos2 = nextTokens[1];
-      if (POS1_ADJACENCY_ALLOW.has(nextTokens[0].toLowerCase())) {
+      const pos1Clean = nextTokens[0].replace(/[.,!;:?]+$/, '').toLowerCase();
+      if (POS1_ADJACENCY_ALLOW.has(pos1Clean)) {
         const m = pos2.match(KEYWORD_RE);
         if (m) {
           const kind = m[1].toLowerCase() === 'approved' ? 'approval' : 'rejection';
