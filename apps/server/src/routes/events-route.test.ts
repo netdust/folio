@@ -1,10 +1,10 @@
-import { test, expect, mock, beforeEach } from 'bun:test';
+import { expect, test } from 'bun:test';
 import { nanoid } from 'nanoid';
 import { db } from '../db/client.ts';
 import { apiTokens } from '../db/schema.ts';
 import { newApiToken } from '../lib/auth.ts';
-import { makeTestApp } from '../test/harness.ts';
 import { eventBus } from '../lib/event-bus.ts';
+import { makeTestApp } from '../test/harness.ts';
 
 test('SSE endpoint requires auth', async () => {
   const { app } = await makeTestApp();
@@ -39,6 +39,25 @@ test('SSE endpoint returns text/event-stream Content-Type for authenticated requ
 // them through to the bus subscription. We capture the SubFilter by spying on
 // eventBus.subscribe before the request is made.
 
+/** Spy on eventBus.subscribe, run body, then unconditionally restore. */
+async function withSubscribeSpy<T>(
+  body: (captured: { filter: unknown }) => Promise<T>,
+): Promise<T> {
+  const origSubscribe = eventBus.subscribe.bind(eventBus);
+  const captured = { filter: undefined as unknown };
+  // @ts-expect-error — spy: capture filter arg then delegate to real impl
+  eventBus.subscribe = (wsId: string, filter: unknown, handler: unknown) => {
+    captured.filter = filter;
+    // @ts-expect-error
+    return origSubscribe(wsId, filter, handler);
+  };
+  try {
+    return await body(captured);
+  } finally {
+    eventBus.subscribe = origSubscribe;
+  }
+}
+
 test('SSE endpoint passes ?parent= to eventBus.subscribe as parentId', async () => {
   const { app, seed } = await makeTestApp();
   const { token, hash } = newApiToken();
@@ -51,25 +70,14 @@ test('SSE endpoint passes ?parent= to eventBus.subscribe as parentId', async () 
     createdBy: seed.user.id,
   });
 
-  let capturedFilter: unknown;
-  const origSubscribe = eventBus.subscribe.bind(eventBus);
-  // @ts-expect-error — spy: capture args then delegate
-  eventBus.subscribe = (wsId: string, filter: unknown, handler: unknown) => {
-    capturedFilter = filter;
-    // @ts-expect-error
-    return origSubscribe(wsId, filter, handler);
-  };
-
-  const res = await app.request('/api/v1/w/acme/events?parent=doc-42', {
-    headers: { Authorization: `Bearer ${token}` },
+  await withSubscribeSpy(async (captured) => {
+    const res = await app.request('/api/v1/w/acme/events?parent=doc-42', {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    await res.body?.cancel();
+    expect(res.status).toBe(200);
+    expect((captured.filter as { parentId?: string })?.parentId).toBe('doc-42');
   });
-  await res.body?.cancel();
-
-  // Restore
-  eventBus.subscribe = origSubscribe;
-
-  expect(res.status).toBe(200);
-  expect((capturedFilter as { parentId?: string })?.parentId).toBe('doc-42');
 });
 
 test('SSE endpoint passes ?run= to eventBus.subscribe as runId', async () => {
@@ -84,25 +92,14 @@ test('SSE endpoint passes ?run= to eventBus.subscribe as runId', async () => {
     createdBy: seed.user.id,
   });
 
-  let capturedFilter: unknown;
-  const origSubscribe = eventBus.subscribe.bind(eventBus);
-  // @ts-expect-error — spy: capture args then delegate
-  eventBus.subscribe = (wsId: string, filter: unknown, handler: unknown) => {
-    capturedFilter = filter;
-    // @ts-expect-error
-    return origSubscribe(wsId, filter, handler);
-  };
-
-  const res = await app.request('/api/v1/w/acme/events?run=run-xyz', {
-    headers: { Authorization: `Bearer ${token}` },
+  await withSubscribeSpy(async (captured) => {
+    const res = await app.request('/api/v1/w/acme/events?run=run-xyz', {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    await res.body?.cancel();
+    expect(res.status).toBe(200);
+    expect((captured.filter as { runId?: string })?.runId).toBe('run-xyz');
   });
-  await res.body?.cancel();
-
-  // Restore
-  eventBus.subscribe = origSubscribe;
-
-  expect(res.status).toBe(200);
-  expect((capturedFilter as { runId?: string })?.runId).toBe('run-xyz');
 });
 
 test('SSE endpoint does not set parentId for empty ?parent= value', async () => {
@@ -117,24 +114,14 @@ test('SSE endpoint does not set parentId for empty ?parent= value', async () => 
     createdBy: seed.user.id,
   });
 
-  let capturedFilter: unknown;
-  const origSubscribe = eventBus.subscribe.bind(eventBus);
-  // @ts-expect-error — spy
-  eventBus.subscribe = (wsId: string, filter: unknown, handler: unknown) => {
-    capturedFilter = filter;
-    // @ts-expect-error
-    return origSubscribe(wsId, filter, handler);
-  };
-
-  const res = await app.request('/api/v1/w/acme/events?parent=', {
-    headers: { Authorization: `Bearer ${token}` },
+  await withSubscribeSpy(async (captured) => {
+    const res = await app.request('/api/v1/w/acme/events?parent=', {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    await res.body?.cancel();
+    expect(res.status).toBe(200);
+    expect((captured.filter as { parentId?: string })?.parentId).toBeUndefined();
   });
-  await res.body?.cancel();
-
-  eventBus.subscribe = origSubscribe;
-
-  expect(res.status).toBe(200);
-  expect((capturedFilter as { parentId?: string })?.parentId).toBeUndefined();
 });
 
 // The Last-Event-Id test is intentionally lenient — Bun's test harness for
