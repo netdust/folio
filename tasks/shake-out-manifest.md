@@ -199,4 +199,18 @@ Track A — Automated (Claude):
 
 ## Final Status
 
-(Filled at the end.)
+**Resolved:** 11 (BUG-001 / 002 / 003 / 004 / 006 / 007 / 008 / 009 / 010 / 011 / 012)
+**Deferred:** 1 (BUG-005 — pre-existing table-cell assignee picker; never wired pre-2.5)
+**Pre-existing flake (not P2.5):** click-through a11y test — matches STATE.md baseline
+
+**Final re-sweep status:**
+- Server suite: 260 / 1 skip / 0 fail
+- Web suite: 339 / 1 skip / 0 fail
+- Shared suite: 28 / 28
+- Playwright Phase 2.5 e2e: 1/1 passing
+- Web TS: clean
+- Server TS: only pre-existing errors (`app.ts`, `bearer.test.ts`, `scope.test.ts`, `workspaces.ts:129` — all from before Phase 2.5)
+- Live re-sweep on the CRITICAL bug (BUG-001): narrowed-agent token returns `FORBIDDEN_RESOURCE` on disallowed project; wildcard agent + session user unaffected.
+- User-confirmed visual sign-off on the polish iteration (chip primitive softened per BUG-012).
+
+**Sign-off:** Branch ready for verification-before-completion + finishing-a-development-branch.
