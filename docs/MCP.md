@@ -54,6 +54,7 @@ Errors use standard JSON-RPC error codes:
 | `agent_not_in_allow_list` | Agent-bound token called a project-scoped tool with a `project_slug` that's not in `intersect(agent.frontmatter.projects, token.project_ids ?? null)` | `project_slug`, `agent_slug` |
 | `agent_lifecycle_via_http_only` | `create_document` with `type=agent\|trigger`, OR `update_document` / `delete_document` on a doc whose type is `agent` or `trigger` | (none — message includes the pointer to the HTTP endpoint) |
 | `agent_missing` | The agent referenced by `token.agent_id` no longer exists (race between MCP call and agent deletion) | (none) |
+| `comment_author_only` | `update_comment` or `delete_comment` called by a token whose resolved actor doesn't match `frontmatter.author` on the target comment | (none) |
 
 Server-side logging contract: every allow-list rejection logs at INFO with structured fields `{ agent_slug, agent_id, requested_project_slug, requested_project_id, allowed_projects, tool }`. The MCP response keeps the minimal `data` shape above (operator-friendly, not leaky); the server log carries the full reasoning trail.
 
@@ -202,6 +203,91 @@ Same arguments as `get_document`. Returns the raw markdown (YAML frontmatter + b
 - **One of `view_slug` or `view_id` is recommended.** When neither is provided, the default view is used.
 - **Returns:** `{ view: { id, name }, documents: [...] }` — documents are filtered by the view's stored filter AST and sort.
 - **Note:** `view_slug` matches the view's **name** case-insensitively (views have no slug column in v1). Prefer `view_id` when known.
+
+## Comment tools (Phase 2.6)
+
+Four tools for reading and writing comments on `work_item` and `page` documents. Comments are stored as rows in the `comments` table and reference their parent document via `parent_slug`. All four tools enforce the same allow-list rules as the document tools.
+
+### create_comment
+
+Post a comment on a `work_item` or `page`. Mention parsing and approval-keyword detection happen server-side; author is resolved from the bearer token.
+
+```jsonc
+{
+  "workspace_slug": "netdust",
+  "project_slug": "folio",
+  "parent_slug": "task-1",
+  "body": "I'll draft this @drafter approved",
+  "visibility": "normal"
+}
+```
+
+- **Scope:** `documents:write`
+- **Returns:** `{ slug, kind, target_agent? }`
+- **Author resolution:** agent-bound bearer → `frontmatter.author = 'agent:<slug>'` (resolved from `token.agent_id`). Human PAT → `'user:<id>'` (resolved from `token.created_by`).
+- **Allow-list enforcement:** standard `-32602 agent_not_in_allow_list` when the agent's `frontmatter.projects` excludes the project.
+- **Approval keyword detection:** if the body contains `@<agent> approved` (or `rejected`) in the first 1–2 tokens after the mention, the server overrides `kind` to `'approval'`/`'rejection'` and sets `target_agent` automatically.
+- **Optional args:** `kind` (defaults to `comment`), `target_agent` (only valid with `kind=approval|rejection`), `visibility` (`normal` | `internal`, defaults to `normal`).
+- **Parent type:** must be `work_item` or `page`. Other types return `-32603 INVALID_COMMENT_PARENT`.
+- **Body limits:** non-empty after trim, ≤ 64 KB UTF-8.
+
+### list_comments
+
+List comments on a `work_item` or `page`.
+
+```jsonc
+{
+  "workspace_slug": "netdust",
+  "project_slug": "folio",
+  "parent_slug": "task-1",
+  "kind": "plan,approval",
+  "visibility": "normal,internal"
+}
+```
+
+- **Scope:** `documents:read`
+- **Returns:** `Comment[]` — newest first. Soft-deleted rows are included (UI/agent decides how to render).
+- **Filters:** `kind` (comma-separated list of CommentKind), `since` (ISO datetime), `visibility` (comma-separated; defaults to `normal` only).
+- **Allow-list enforcement:** standard cross-project block.
+
+### update_comment
+
+Edit a comment's body or visibility. Author-only.
+
+```jsonc
+{
+  "workspace_slug": "netdust",
+  "project_slug": "folio",
+  "slug": "c-abcd1234",
+  "body": "Updated thought",
+  "visibility": "internal"
+}
+```
+
+- **Scope:** `documents:write`
+- **Returns:** `{ slug, edited_at }`
+- **Author-only:** if `frontmatter.author` doesn't match the calling token's resolved actor, returns `-32602` with `data: { reason: 'comment_author_only' }`.
+- **Body change re-parses mentions** and emits fresh `comment.mentioned` events only for net-new resolved agents.
+- **`kind` is immutable.** Trying to PATCH it returns `KIND_IMMUTABLE` (422 mapped to JSON-RPC `-32603`).
+- **`body` and `visibility` are both optional;** call with neither for a no-op.
+
+### delete_comment
+
+Soft-delete a comment. Author-only.
+
+```jsonc
+{
+  "workspace_slug": "netdust",
+  "project_slug": "folio",
+  "slug": "c-abcd1234"
+}
+```
+
+- **Scope:** `documents:delete`
+- **Returns:** `{ slug, deleted_at }`
+- **Soft delete:** row stays in DB; `body` is blanked to `''`; `frontmatter.deleted_at` is set to ISO datetime.
+- **Idempotent:** calling on an already-deleted comment returns the existing row without re-bumping `deleted_at` or re-firing events.
+- **Author-only:** same `-32602` with `data: { reason: 'comment_author_only' }` as `update_comment`.
 
 ## Mounting in an MCP client
 
