@@ -347,7 +347,7 @@ export async function createDocument(
   // Agents/triggers dedupe slugs at workspace level (unique on workspace_id+type+slug);
   // work_items/pages stay project-scoped (unique on project_id+slug).
   const slug = isWorkspaceScoped
-    ? await slugUniqueInWorkspaceDocuments(db, ws.id, input.type, baseSlug)
+    ? await slugUniqueInWorkspaceDocuments(db, ws.id, input.type as 'agent' | 'trigger', baseSlug)
     : await slugUniqueInDocuments(db, p!.id, baseSlug);
 
   // For agents: mint a bearer token now so its id can be patched into the
