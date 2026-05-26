@@ -4,11 +4,13 @@ import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 
-// Stub TanStack Router's useNavigate — we only need to assert that the click
-// invokes it with the right URL, not exercise actual routing.
+// Stub TanStack Router's useNavigate + useSearch. The slideover mounts on this
+// page and reads ?doc=<slug>; stub useSearch to return empty so the slideover
+// stays closed during the listing-focused tests.
 const navigateMock = vi.fn();
 vi.mock('@tanstack/react-router', () => ({
   useNavigate: () => navigateMock,
+  useSearch: () => ({}),
 }));
 
 import { WorkspaceAgentsPage } from './workspace-agents-page.tsx';
@@ -162,5 +164,78 @@ describe('WorkspaceAgentsPage', () => {
     stubFetch({ agentsForFilter: () => [] });
     render(<WorkspaceAgentsPage wslug="ws" />, { wrapper: wrap(newQc()) });
     expect(await screen.findByText('No agents yet.')).toBeInTheDocument();
+  });
+});
+
+// --- BUG-004 regression: page exposes create + slideover affordances ---
+
+describe('WorkspaceAgentsPage — create + open affordances', () => {
+  it('renders a "+ New agent" button in the header', async () => {
+    stubFetch();
+    render(<WorkspaceAgentsPage wslug="ws" />, { wrapper: wrap(newQc()) });
+    await screen.findByText('Triage Bot'); // wait for the list
+    expect(screen.getByRole('button', { name: /new agent/i })).toBeInTheDocument();
+  });
+
+  it('"+ New agent" POSTs to /api/v1/w/:wslug/documents and navigates with ?doc=', async () => {
+    let postBody: Record<string, unknown> | null = null;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo, init?: RequestInit) => {
+        const url = new URL(String(input), 'http://x');
+        if (init?.method === 'POST' && url.pathname === '/api/v1/w/ws/documents') {
+          postBody = JSON.parse(init.body as string);
+          return new Response(
+            JSON.stringify({
+              data: {
+                id: 'new-agent-id',
+                slug: 'untitled',
+                type: 'agent',
+                title: 'Untitled',
+                frontmatter: { projects: ['*'] },
+              },
+            }),
+            { status: 201, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        if (url.pathname === '/api/v1/w/ws/projects') {
+          return new Response(JSON.stringify({ data: projects }), { status: 200, headers: { 'content-type': 'application/json' } });
+        }
+        if (url.pathname === '/api/v1/w/ws/documents' && url.searchParams.get('type') === 'agent') {
+          return new Response(JSON.stringify({ data: agents }), { status: 200, headers: { 'content-type': 'application/json' } });
+        }
+        return new Response('{}', { status: 404, headers: { 'content-type': 'application/json' } });
+      }),
+    );
+    render(<WorkspaceAgentsPage wslug="ws" />, { wrapper: wrap(newQc()) });
+    await screen.findByText('Triage Bot');
+    await userEvent.click(screen.getByRole('button', { name: /new agent/i }));
+
+    await waitFor(() => expect(navigateMock).toHaveBeenCalled());
+
+    expect(postBody).not.toBeNull();
+    expect((postBody as Record<string, unknown>).type).toBe('agent');
+    expect((postBody as Record<string, unknown>).title).toBe('Untitled');
+
+    const lastCall = navigateMock.mock.calls[navigateMock.mock.calls.length - 1]![0] as {
+      search: (prev: unknown) => unknown;
+    };
+    const search = lastCall.search({});
+    expect(search).toEqual({ doc: 'untitled' });
+  });
+
+  it('empty state surfaces a "+ New agent" CTA (when no filter is active)', async () => {
+    stubFetch({ agentsForFilter: () => [] });
+    render(<WorkspaceAgentsPage wslug="ws" />, { wrapper: wrap(newQc()) });
+    await screen.findByText('No agents yet.');
+    const buttons = screen.getAllByRole('button', { name: /new agent/i });
+    expect(buttons.length).toBeGreaterThanOrEqual(2); // header + empty state
+  });
+
+  it('mounts the WorkspaceDocumentSlideover (Sheet stays closed when ?doc is absent)', async () => {
+    stubFetch();
+    const { container } = render(<WorkspaceAgentsPage wslug="ws" />, { wrapper: wrap(newQc()) });
+    await screen.findByText('Triage Bot');
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
   });
 });

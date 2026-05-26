@@ -6,7 +6,7 @@
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { client } from './client.ts';
-import type { Document, DocumentSummary } from './documents.ts';
+import type { Document, DocumentSummary, DocumentPatch } from './documents.ts';
 
 export interface WorkspaceDocumentsListParams {
   type: 'agent' | 'trigger';
@@ -73,5 +73,45 @@ export function useWorkspaceDocument(
     queryFn: () => client.get<Document>(`/api/v1/w/${wslug}/documents/${slug}`),
     staleTime: 30_000,
     enabled: !!wslug && !!slug && (options.enabled ?? true),
+  });
+}
+
+/**
+ * Create an agent or trigger at workspace scope. Server auto-mints a token for
+ * agents and returns its plaintext as `agent_token` on the response.
+ */
+export function useCreateWorkspaceDocument(wslug: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: {
+      type: 'agent' | 'trigger';
+      title: string;
+      body?: string;
+      frontmatter?: Record<string, unknown>;
+    }) => client.post<Document & { agent_token?: string }>(`/api/v1/w/${wslug}/documents`, vars),
+    onSuccess: () =>
+      qc.invalidateQueries({ queryKey: [...workspaceDocumentsKeys.all, wslug, 'list'] }),
+  });
+}
+
+export function useUpdateWorkspaceDocument(wslug: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ slug, patch }: { slug: string; patch: DocumentPatch }) =>
+      client.patch<Document>(`/api/v1/w/${wslug}/documents/${slug}`, patch),
+    onSettled: (_data, _err, { slug }) => {
+      qc.invalidateQueries({ queryKey: workspaceDocumentsKeys.detail(wslug, slug) });
+      qc.invalidateQueries({ queryKey: [...workspaceDocumentsKeys.all, wslug, 'list'] });
+    },
+  });
+}
+
+export function useDeleteWorkspaceDocument(wslug: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (slug: string) =>
+      client.delete<void>(`/api/v1/w/${wslug}/documents/${slug}`),
+    onSuccess: () =>
+      qc.invalidateQueries({ queryKey: [...workspaceDocumentsKeys.all, wslug, 'list'] }),
   });
 }

@@ -1,6 +1,15 @@
+import { Plus, Loader2 } from 'lucide-react';
 import { useNavigate } from '@tanstack/react-router';
+import { toast } from 'sonner';
+import { formatApiError } from '../../lib/api/index.ts';
 import { useProjects } from '../../lib/api/projects.ts';
-import { useWorkspaceAgents } from '../../lib/api/workspace-documents.ts';
+import {
+  useCreateWorkspaceDocument,
+  useWorkspaceAgents,
+} from '../../lib/api/workspace-documents.ts';
+import { Button } from '../ui/button.tsx';
+import { Icon } from '../ui/icon.tsx';
+import { WorkspaceDocumentSlideover } from '../slideover/workspace-document-slideover.tsx';
 
 interface Props {
   wslug: string;
@@ -17,13 +26,49 @@ export function WorkspaceAgentsPage({ wslug, projectFilter }: Props) {
   const navigate = useNavigate();
   const agentsQ = useWorkspaceAgents(wslug, { project: projectFilter });
   const projectsQ = useProjects(wslug);
+  const create = useCreateWorkspaceDocument(wslug);
   const projectsById = new Map((projectsQ.data ?? []).map((p) => [p.id, p]));
+
+  // Minimal-viable agent: required Zod fields filled with placeholders. User
+  // refines them in the slideover. Defaults projects to ['*'] (Zod default).
+  const onCreate = async () => {
+    try {
+      const created = await create.mutateAsync({
+        type: 'agent',
+        title: 'Untitled',
+        frontmatter: {
+          system_prompt: 'Describe what this agent does.',
+          model: 'claude-haiku-4-5',
+          provider: 'anthropic',
+          tools: [],
+        },
+      });
+      void navigate({
+        to: '/w/$wslug/agents',
+        params: { wslug },
+        search: (prev) => ({ ...(prev as Record<string, unknown>), doc: created.slug }),
+      });
+    } catch (err) {
+      toast.error(formatApiError(err));
+    }
+  };
 
   if (agentsQ.isLoading) {
     return <div className="mx-auto max-w-3xl px-6 py-8 text-sm text-fg-2">Loading…</div>;
   }
   const agents = agentsQ.data ?? [];
   const filterName = projectFilter ? projectsById.get(projectFilter)?.name ?? projectFilter : null;
+
+  const createButton = (
+    <Button variant="primary" onClick={onCreate} disabled={create.isPending} className="whitespace-nowrap">
+      <Icon
+        icon={create.isPending ? Loader2 : Plus}
+        size={14}
+        className={create.isPending ? 'animate-spin' : ''}
+      />
+      New agent
+    </Button>
+  );
 
   return (
     <div className="mx-auto max-w-3xl px-6 py-8">
@@ -34,6 +79,7 @@ export function WorkspaceAgentsPage({ wslug, projectFilter }: Props) {
             AI agents in this workspace. Each agent is a markdown document with a project allow-list.
           </p>
         </div>
+        {createButton}
       </header>
 
       {filterName && (
@@ -57,7 +103,10 @@ export function WorkspaceAgentsPage({ wslug, projectFilter }: Props) {
 
       {agents.length === 0 ? (
         <div className="rounded-md border border-border-light bg-shell p-6 text-center text-sm text-fg-2">
-          {filterName ? `No agents allow-listed for ${filterName}.` : 'No agents yet.'}
+          <p>{filterName ? `No agents allow-listed for ${filterName}.` : 'No agents yet.'}</p>
+          {!filterName && (
+            <div className="mt-3 inline-block">{createButton}</div>
+          )}
         </div>
       ) : (
         <ul className="divide-y divide-border-light rounded-md border border-border-light bg-shell">
@@ -109,6 +158,8 @@ export function WorkspaceAgentsPage({ wslug, projectFilter }: Props) {
           })}
         </ul>
       )}
+
+      <WorkspaceDocumentSlideover wslug={wslug} />
     </div>
   );
 }

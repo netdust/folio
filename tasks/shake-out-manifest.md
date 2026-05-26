@@ -96,18 +96,19 @@ Track A — Automated (Claude):
 - **Cluster:** Standalone polish.
 - **Status:** OPEN
 
-### BUG-004 [CRITICAL] — Workspace agents + triggers pages have no create / edit / delete affordances
+### BUG-004 [CRITICAL] — Workspace agents + triggers pages have no create / edit / delete affordances — RESOLVED
 
 - **Found by:** Manual (Track B)
-- **What happened:** `/w/:wslug/agents` lists the three workspace agents but offers no way to add, open, edit, or delete one. Clicking a row does nothing visible (the slideover doesn't open). The triggers page has the same gap. The plan called for: (1) a "+ New agent" CTA in the page header AND on the empty state, (2) row-click → slideover opens for the agent's frontmatter form. Plan §"Workspace agents page" lines 234-238.
-- **Expected:** Header has `+ New agent` button → slideover opens in create mode. Row click → `?doc=<slug>` set → slideover opens for editing. Slideover supports save + delete.
-- **Where:**
-  - `apps/web/src/components/views/workspace-agents-page.tsx` — header is missing the `+ New agent` button; row click navigates `?doc=<slug>` but no slideover is rendered on this route.
-  - `apps/web/src/components/views/workspace-triggers-page.tsx` — same shape, same gap.
-  - `apps/web/src/routes/w.$wslug.agents.tsx` + `triggers.tsx` — neither route mounts a `DocumentSlideover`. The project-scoped routes render the slideover from the workspace's `Outlet`; the new workspace routes need their own integration since the project-slideover at `w.$wslug.p.$pslug.tsx` is for project docs (work_items/pages) and resolves docs via `useDocument(wslug, pslug, slug)` which is project-scoped.
-- **Cluster:** Standalone — this is the "page integration" that should have been part of Task 8 but only the list-rendering shipped.
-- **Severity rationale:** Without create/edit, agents can ONLY be created via curl/API. The whole UI workflow is dead. This is a Phase 2.5 ship-blocker.
-- **Status:** OPEN
+- **Root cause:** Task 8 shipped the list-rendering pages but stopped short of the full UI integration the plan called for. The project flow uses a layout route (`w.$wslug.p.$pslug.tsx`) that mounts `<DocumentSlideover>` once and renders `<Outlet />`; the new workspace routes are leaf routes with no layout, so the slideover was never mounted. `useCreate/Update/DeleteDocument` are project-scoped; workspace-scoped mutation hooks didn't exist.
+- **Fix:** Commit `<pending>`. Built the missing pieces:
+  1. New mutation hooks in `lib/api/workspace-documents.ts`: `useCreateWorkspaceDocument`, `useUpdateWorkspaceDocument`, `useDeleteWorkspaceDocument`. They hit `/api/v1/w/:wslug/documents[/...]` and invalidate the workspace-documents query keys.
+  2. New `WorkspaceDocumentSlideover` (slideover/workspace-document-slideover.tsx) — mirrors `DocumentSlideover` but uses workspace-scoped hooks and skips project-only surface (no status field, no pinned fields, no ActivityPanel, no LogActivity, no Copy-as-MD). Reads `?doc=<slug>` from URL search params; opens automatically. Title editor + Mode toggle + Delete via ⋯ menu + confirm dialog + Body editor (rich/raw). FrontmatterForm renders ProjectsField for the `projects` key (already auto-wired in Task 9).
+  3. `WorkspaceAgentsPage`: added `+ New agent` button in header AND on the empty state. POSTs an Untitled agent with placeholder Zod-valid frontmatter, then `navigate({ search.doc = created.slug })` to open the slideover. Mounted `<WorkspaceDocumentSlideover wslug={wslug} />` at the page footer.
+  4. `WorkspaceTriggersPage`: same shape. New trigger needs at least one agent to exist (Zod refine: `schedule` or `on_event` required + valid `agent` slug); button shows a toast if no agents exist yet.
+  5. Slideover wired so row click (already setting `?doc=<slug>` from Task 8) now actually opens the editor.
+- **Tests:** 4 new tests in `workspace-agents-page.test.tsx`: header CTA exists, click POSTs + navigates with `?doc=`, empty state surfaces CTA, slideover mounted (closed when `?doc` is absent).
+- **Re-sweep:** Web suite 320/1-skip/0-fail (+4 new). Web TS clean. Live dev server still serves the page.
+- **Status:** RESOLVED
 
 ### BUG-005 [DEFERRED — pre-existing, not Phase 2.5] — Table-row assignee field renders as text input
 

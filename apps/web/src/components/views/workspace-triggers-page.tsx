@@ -1,5 +1,15 @@
+import { Plus, Loader2 } from 'lucide-react';
 import { useNavigate } from '@tanstack/react-router';
-import { useWorkspaceAgents, useWorkspaceTriggers } from '../../lib/api/workspace-documents.ts';
+import { toast } from 'sonner';
+import { formatApiError } from '../../lib/api/index.ts';
+import {
+  useCreateWorkspaceDocument,
+  useWorkspaceAgents,
+  useWorkspaceTriggers,
+} from '../../lib/api/workspace-documents.ts';
+import { Button } from '../ui/button.tsx';
+import { Icon } from '../ui/icon.tsx';
+import { WorkspaceDocumentSlideover } from '../slideover/workspace-document-slideover.tsx';
 
 interface Props {
   wslug: string;
@@ -17,25 +27,71 @@ export function WorkspaceTriggersPage({ wslug }: Props) {
   // Loaded so we can show the agent's title alongside the agent slug. Cheap
   // because the agents query is cached at the picker level too.
   const agentsQ = useWorkspaceAgents(wslug);
+  const create = useCreateWorkspaceDocument(wslug);
   const agentBySlug = new Map((agentsQ.data ?? []).map((a) => [a.slug, a]));
+
+  // Minimal-viable trigger: required Zod fields filled with placeholders.
+  // The user picks a real agent + schedule/event in the slideover. Daily 9am
+  // is an unambiguous default that satisfies the schema's
+  // "at least one of schedule or on_event" refine.
+  const onCreate = async () => {
+    const firstAgent = agentsQ.data?.[0];
+    if (!firstAgent) {
+      toast.error('Create an agent first — triggers reference an agent by slug.');
+      return;
+    }
+    try {
+      const created = await create.mutateAsync({
+        type: 'trigger',
+        title: 'Untitled trigger',
+        frontmatter: {
+          agent: firstAgent.slug,
+          schedule: '0 9 * * *',
+          on_event: null,
+        },
+      });
+      void navigate({
+        to: '/w/$wslug/triggers',
+        params: { wslug },
+        search: (prev) => ({ ...(prev as Record<string, unknown>), doc: created.slug }),
+      });
+    } catch (err) {
+      toast.error(formatApiError(err));
+    }
+  };
 
   if (triggersQ.isLoading) {
     return <div className="mx-auto max-w-3xl px-6 py-8 text-sm text-fg-2">Loading…</div>;
   }
   const triggers = triggersQ.data ?? [];
 
+  const createButton = (
+    <Button variant="primary" onClick={onCreate} disabled={create.isPending} className="whitespace-nowrap">
+      <Icon
+        icon={create.isPending ? Loader2 : Plus}
+        size={14}
+        className={create.isPending ? 'animate-spin' : ''}
+      />
+      New trigger
+    </Button>
+  );
+
   return (
     <div className="mx-auto max-w-3xl px-6 py-8">
-      <header className="mb-6">
-        <h1 className="text-lg font-medium tracking-tight">Triggers</h1>
-        <p className="mt-0.5 text-xs text-fg-2">
-          Cron- and event-driven triggers that fire workspace agents.
-        </p>
+      <header className="mb-6 flex items-center justify-between">
+        <div>
+          <h1 className="text-lg font-medium tracking-tight">Triggers</h1>
+          <p className="mt-0.5 text-xs text-fg-2">
+            Cron- and event-driven triggers that fire workspace agents.
+          </p>
+        </div>
+        {createButton}
       </header>
 
       {triggers.length === 0 ? (
         <div className="rounded-md border border-border-light bg-shell p-6 text-center text-sm text-fg-2">
-          No triggers yet.
+          <p>No triggers yet.</p>
+          <div className="mt-3 inline-block">{createButton}</div>
         </div>
       ) : (
         <ul className="divide-y divide-border-light rounded-md border border-border-light bg-shell">
@@ -80,6 +136,8 @@ export function WorkspaceTriggersPage({ wslug }: Props) {
           })}
         </ul>
       )}
+
+      <WorkspaceDocumentSlideover wslug={wslug} />
     </div>
   );
 }
