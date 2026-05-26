@@ -4,7 +4,7 @@ Eight phases to v1. Each is a focused chunk. Check tasks off as you complete the
 
 For full context on any decision: `@docs/FOLIO-BRIEFING.md`. For the operating manual: `@../CLAUDE.md`.
 
-> **Reading guide (2026-05-24 revision).** This doc was reorganized so the originally-locked **Phase 2 (Agents)** and **Phase 3 (AI in UI + Agent runner)** stay the spine of v1 — those are Folio's moat and shipping them unchanged is the goal. New phases (1.5/1.6/1.7/1.8/4/5/6) fit *around* the spine, not in place of it. The 0/0.5/1 foundation is shipped; 1.5/1.6/1.7/1.8 polish the operational UI to "good enough to use"; 2/3 deliver the agent platform; 4/5 close the loop with the customer's website; 6/7 polish; 8 ships.
+> **Reading guide (2026-05-26 revision).** This doc carves the agent platform into four sequenced phases on top of the shipped Phase 2 / 2.5 surface: **Phase 2.6 (Comments + tabbed slideover)**, **Phase 2.7 (Templates — optional ordering)**, **Phase 3 (Agent runner + runs as documents)**, **Phase 3.5 (Script & webhook trigger actions)**. The May 24 reorg established the surrounding phases (1.5/1.6/1.7/1.8/4/5/6) around the agent spine; the May 26 revision restructured the spine itself — runner output is now child `comment` documents (not body-ledger sections), the approval gate is a `kind=approval` comment (not a body marker), runs are first-class documents in a per-project runs table, slash commands were dropped in favor of the `@`-mention surface. The 0/0.5/1 foundation is shipped; 1.5/1.6/1.7/1.8 polish the operational UI to "good enough to use"; 2/2.5 deliver the declarative agent surface; **2.6/2.7/3 deliver the live agent platform**; 4/5 close the loop with the customer's website; 6/7 polish; 8 ships.
 
 ---
 
@@ -649,79 +649,315 @@ Hand-rolled Hono sub-app at `/mcp`. Speaks JSON-RPC 2.0 over HTTP POST. Bearer-a
 
 ---
 
-## Phase 3 — AI in UI + Agent runner (Week 5)
+## Phase 2.6 — Comments primitive + tabbed slideover (Week 5a)
 
-**Goal:** Slash commands work in the body editor. AI settings UI lets the user configure a provider and validate the key. Streaming responses feel snappy. The Phase 2 agent-document surface gains a runner that actually executes assigned tasks.
+**Goal:** Land the data + UX foundation that does NOT need an AI key. New `comment` document type, tabbed slideover (Fields · Comments · Activity, plus Runs for agent/trigger types), mention parser with `@`-mention picker, structured trigger form, ActivityPanel on workspace agent slideover, four built-in triggers auto-seeded per workspace, agent-lifecycle MCP tools, allow-list reconciler. The comments thread renders end-to-end on work_items and pages; the runner that fills it with agent output ships in Phase 3.
 
-> **This is the second spine phase.** Phase 2 builds the surface; Phase 3 makes the surface come to life. Together they are the agent-platform half of Folio's v1.
+> **Why this carve:** comments are a pure data + UX feature with no provider dependency. Shipping them first unlocks the manual callcenter workflow (humans threading on work items), gives Phase 3 a working substrate to write into, and is independently testable.
 
-### Provider abstraction
+> Spec: `docs/superpowers/specs/2026-05-26-phase-2.6-comments-and-tabbed-slideover-design.md`.
 
-- [ ] `lib/ai/provider.ts`: `AIProvider` interface, factory
-- [ ] `lib/ai/anthropic.ts`, `openai.ts`, `openrouter.ts`, `ollama.ts`
-- [ ] All providers support streaming (return an `AsyncIterable<string>`)
-- [ ] `routes/ai.ts`: `POST /api/v1/w/:wslug/ai/complete` reads workspace key, dispatches to provider
-- [ ] `POST /api/v1/w/:wslug/ai/test-key` validates a key with a cheap call without storing
+### Data model
+
+- [ ] Migration `0007_phase_2_6_comments.sql`: widen `documents.type` enum to include `comment`. CHECK constraint: `type='comment' ⇒ parent_id IS NOT NULL AND parent.type IN ('work_item','page') AND table_id IS NULL`. Index `documents_comments_idx` on `(parent_id, created_at DESC)`.
+- [ ] Comment frontmatter Zod (`apps/server/src/lib/comment-schema.ts`): `author`, `kind` (`comment|plan|result|error|approval|rejection|reply`, default `comment`), `visibility` (`normal|internal`, default `normal`), `mentions` (array of resolved targets carrying `target` + `resolved` + `resolvedId` + `resolvedType`), `edited_at`, `target_agent` (required+exclusive on `kind in {approval,rejection}`), `run_id`.
+
+### Services + routes
+
+- [ ] `services/comments.ts` — create / list / get / patch / delete. Soft delete (row stays, body blanked, `deleted_at` in frontmatter). All mutations transactional via `emitEvent`.
+- [ ] `lib/mention-parser.ts` — token regex `/(?:^|\s)@([a-z][a-z0-9-]+)/g`. Resolves agents (allow-list-filtered for current project) + members (email localpart, ambiguous → unresolved). Returns `ResolvedMention[]` carrying `target` + `resolved` + `resolvedId` + `resolvedType` so the Phase 3 runner can look up the agent/user by id directly. Approval-keyword detection: `approved|rejected` in positions 1 or 2 immediately after the mention.
+- [ ] `routes/comments.ts` — 4 REST verbs mounted at `/api/v1/w/:ws/p/:p/documents/:parentSlug/comments` + `/api/v1/w/:ws/p/:p/comments/:slug`. Bearer-token scopes: `documents:read` for GETs, `documents:write` for mutations. `requireResource()` enforces project allow-list for bearer tokens.
+- [ ] Edit + delete restricted to comment's author (user-id or agent-slug match).
+
+### Events + SSE
+
+- [ ] New event kinds added to `KNOWN_EVENT_KINDS`: `comment.created`, `comment.mentioned`.
+- [ ] `comment.created` fires once per new comment row. `comment.mentioned` fires once per resolved agent mention (so a single comment with 3 agent mentions emits 3 events).
+- [ ] SSE filter params added to `/api/v1/w/:wslug/events`: `?parent=<doc_id>`, `?run=<run_id>`. AND-combined with existing `?kinds=` + `?project=`.
+
+### MCP tools (8 new)
+
+- [ ] `create_comment` (`documents:write`): post a comment on a work_item or page. Server resolves `author=agent:<slug>` from the bearer's `agent_id`. Parent must be in caller's allow-list.
+- [ ] `list_comments` (`documents:read`): list a parent's comments; filterable by `kind`.
+- [ ] `update_comment` / `delete_comment` (`documents:write` / `documents:delete`): author-only; soft delete.
+- [ ] `create_agent` / `update_agent` / `delete_agent` (new scope: `agents:write`): workspace-scoped agent CRUD via MCP. Token auto-minted on create; revoked on delete (existing Phase 2.5 cascade).
+- [ ] `get_agent_self` (no scope required): returns the calling agent's own document. Resolves via bearer's `agent_id`.
+- [ ] New scope `agents:write` added to `apiTokens.scopes` vocabulary. Workspace settings UI scope-checkbox + Read+write/Full presets updated.
+
+### UI — tabbed slideover
+
+- [ ] `components/slideover/tab-strip.tsx`: icon-tab strip between title row and body editor. Tab state per-slideover-open (no URL persistence). Counts render where meaningful (`💬 Comments · 4`).
+- [ ] Per-type tab sets: work_item / page → `Fields · Comments · Activity`. agent → `Fields · Activity · Runs`. trigger → `Fields · Activity · Runs`.
+
+### UI — Comments tab
+
+- [ ] `components/comments/comments-tab.tsx`: newest-first list, composer pinned at top. Subscribes to `comment.created` + `comment.mentioned` via SSE filtered by `?parent=`. "Show internal" toggle above the list controls whether `visibility: internal` rows render (default hidden); state persists to `localStorage`.
+- [ ] `components/comments/comment-composer.tsx`: Milkdown-lite (no `/` slash menu). `Cmd/Ctrl+Enter` posts. `localStorage` draft persistence keyed by parent_id. Escape closes the tab when composer is empty + focused.
+- [ ] `components/comments/mention-picker.tsx`: `@` opens popover. Two sections — AGENTS (allow-list-filtered via `useWorkspaceAgents`) and MEMBERS (via existing `/api/v1/w/:wslug/members`). Leading 🤖 / 👤 icons. Arrow / Enter / Escape.
+- [ ] `components/comments/wiki-link-picker.tsx`: `[[` opens popover. Fuzzy by title across workspace docs. Selection inserts `[[<slug>]]`. Shared component — body editor consumes the same picker.
+- [ ] `components/comments/comment-row.tsx`: author chip · timestamp · kind chip (hidden on `kind=comment`) · run-id badge link. Hover-revealed Edit / Delete / Copy-as-MD. Soft-deleted rows render as muted single-line. Stale mentions render strikethrough. Internal-visibility rows render with a muted "internal" pill.
+- [ ] `components/comments/approval-buttons.tsx`: render only on `kind=plan` comments. Approve → POSTs `kind=approval` with `target_agent` resolved. Reject → opens popover for optional reason, POSTs `kind=rejection`. Resolved state shows muted "Approved/Rejected by @X · Nm later". In Phase 2.6 the buttons post comments correctly but no run lifecycle exists yet — wiring to runner state ships in Phase 3.
+
+### UI — Activity tab on workspace agent slideover (Phase 2.5 carry-over)
+
+- [ ] ActivityPanel + LogActivity components from Phase 1.7 wire into the workspace agent slideover. Reads events where `documentId = agent.id`. Posts via the existing Phase 1.7 endpoint.
+- [ ] Endpoint widening: the existing `POST /api/v1/w/:wslug/documents/:slug/activity` accepts `documents.type IN ('work_item','page','agent')`. Triggers remain excluded (their event stream is on the Runs tab in Phase 3).
+
+### Structured trigger form
+
+- [ ] `components/triggers/trigger-form.tsx` replaces the generic FrontmatterForm in the trigger slideover's Fields tab.
+- [ ] Schedule vs event mode toggle. Cron input with live `validateCronShape()` + "next 3 fires" preview. Event-kind dropdown sourced from `KNOWN_EVENT_KINDS`. Filter rows reuse the views filter primitive.
+- [ ] JSON payload editor (CodeMirror JSON mode with live validation).
+- [ ] Builtin triggers render the form read-only with a banner; only `Enabled` toggle is interactive.
+
+### Built-in triggers (4 per workspace, auto-seeded)
+
+- [ ] On workspace create: seed `builtin-on-assignment`, `builtin-on-mention`, `builtin-on-approval`, `builtin-on-rejection` as workspace-scoped trigger documents. `frontmatter.builtin: true`. The `agent:` field uses `$event.<key>` dynamic resolution syntax.
+- [ ] Trigger schema accepts `$event.<key>` syntax. Trigger-fire path resolves the reference at fire time.
+- [ ] PATCH on `builtin: true` triggers: only `enabled` mutable; everything else 422 `BUILTIN_TRIGGER_LOCKED`. DELETE: 422.
+- [ ] Enable-default policy: `builtin-on-assignment` and `builtin-on-mention` ship with `enabled: false` in Phase 2.6 (no runner exists to consume their fires). Their slideover shows a muted "(activates in Phase 3 — agent runner)" banner. Phase 3 migration auto-flips them to `enabled: true`.
+- [ ] `builtin-on-approval` and `builtin-on-rejection` ship with `enabled: true` (the comment-posting UI surface exists in 2.6; only the runner-resume internal action is stubbed).
+
+### Allow-list reconciler (Phase 2.5 deferral)
+
+- [ ] Background job that periodically sweeps workspace agents' `frontmatter.projects` allow-lists and removes orphan project ids (ids that no longer correspond to a project row).
+- [ ] Cron interval set via env `FOLIO_RECONCILER_INTERVAL_MS` (default 1h). In-process timer, no sidecar.
+- [ ] Emits `agent.allow_list.reconciled` event when it scrubs any agent. No event on no-op runs.
+
+### Phase 2.6 acceptance
+
+- [ ] Comments primitive: create / list / get / patch / delete via REST + MCP work end-to-end. Soft delete preserves row.
+- [ ] Tabbed slideover renders on every existing slideover type with the right tab set.
+- [ ] Mention picker filters agents by project allow-list; member list correct.
+- [ ] Mention parser detects approval keywords correctly; non-keyword mentions remain `kind=comment`.
+- [ ] Workspace agent slideover gets Activity tab with LogActivity wired (Phase 2.5 deferral resolved).
+- [ ] Structured trigger form replaces the generic FrontmatterForm on triggers; builtin triggers read-only.
+- [ ] Four builtin triggers auto-seed on workspace create; PATCH/DELETE blocked.
+- [ ] Allow-list reconciler scrubs orphan ids on schedule.
+- [ ] Agent-lifecycle MCP tools (`create_agent` / `update_agent` / `delete_agent` / `get_agent_self`) work end-to-end with `agents:write` scope enforcement.
+- [ ] All existing user-flow tests still pass — no Phase 2 / 2.5 regression.
+- [ ] Commit: `phase-2.6: complete`
+
+---
+
+## Phase 2.7 — Templates (Half-week, optional ordering)
+
+**Goal:** Instance-level Settings page for agent + trigger templates. Workspaces install templates and stay pinned to a specific version; publishing a new template version surfaces an "Update available" banner in the workspace, where the user can review the diff and opt in. **Full MCP exposure** via a new `templates:admin` instance-level scope — meta-agents bootstrap customer instances with the same surface humans use.
+
+> **Why a separate phase:** templates are a distribution mechanism, not a runtime feature. They have their own tables, their own routes, their own UI, their own scope. Carving them out lets the runner (Phase 3) ship without waiting on the templates story, and lets the templates story ship when there's a real "agent worth templating" in production. Either ordering (before or after Phase 3) works.
+
+> **Principle:** everything humans do via UI, agents do via MCP. Templates aren't a walled garden — they're scope-gated like every other resource.
+
+> Spec: `docs/superpowers/specs/2026-05-26-phase-2.7-templates-design.md`.
+
+### Schema
+
+- [ ] Migration `0008_phase_2_7_templates.sql`: three new tables (`template_groups`, `templates`, `template_versions`). Templates are NOT workspace-scoped (instance-level catalog). `templates.template_group_id` is nullable FK → forward-compat for Pack installs (Phase 7+). `template_versions.frontmatter_schema` is optional JSON Schema. New `users.instance_admin` boolean column (default 0; Stefan flips his row via SQL on initial deploy).
+- [ ] Optional `template: { id, version }` frontmatter on workspace agent + trigger documents — added to agent + trigger Zod (not enforced; opt-in).
+- [ ] New scope `templates:admin` added to `apps/server/src/lib/scopes.ts` (first instance-level scope; workspace tokens cannot have it).
+- [ ] New MCP tool group `MCP_TOOL_GROUPS.INSTANCE_ADMIN` in `packages/shared/src/mcp-tool-groups.ts` — filtered out of the default agent-editor tools picker unless editing context has `templates:admin`.
+
+### Routes + middleware
+
+- [ ] `middleware/instance-admin.ts`: `requireInstanceAdmin()` (session must have `users.instance_admin = 1`) + `requireTemplatesAdmin()` (bearer must carry `templates:admin`). Composed for template routes.
+- [ ] `routes/templates.ts`: 10 verbs covering list / get / create / patch / delete templates + list / get versions + publish new version + install + promote workspace doc to template. Session auth OR bearer with `templates:admin`.
+- [ ] `routes/template-groups.ts`: 4 verbs (list / create / patch / delete) for template groups.
+- [ ] `routes/workspace-docs-sync.ts`: `POST /api/v1/workspace-docs/:docId/sync-to-template-version` (admin API for scripted updates; accepts conflict_resolutions) + `POST /api/v1/workspace-docs/:docId/promote-to-template` (extract a workspace doc to a new template + link back).
+- [ ] Template versions are immutable once published.
+
+### Schema validation (optional per template)
+
+- [ ] `lib/templates/schema-validate.ts` — JSON Schema (draft 2020-12) validator (ajv-based or equivalent).
+- [ ] `lib/templates/schema-derive.ts` — derives starter JSON Schema from a frontmatter snapshot (used by promote-with-lock).
+- [ ] `services/documents.ts::updateDocument` branches: if target has `template: { id, version }` AND that version's `frontmatter_schema` is non-null, validate post-patch frontmatter; reject 422 `TEMPLATE_SCHEMA_VIOLATION` with validation errors.
+
+### MCP tools (13 new)
+
+- [ ] `list_templates` / `get_template` (read with `templates:admin`).
+- [ ] `create_template` / `update_template` / `publish_template_version` / `delete_template` (mutate with `templates:admin`).
+- [ ] `install_template_to_workspace` (creates workspace agent or trigger doc; same path as HTTP install).
+- [ ] `update_workspace_doc_to_template_version` (returns `{ document, conflicts }`; caller passes conflict resolutions back on retry).
+- [ ] `promote_doc_to_template` (extract a workspace doc to a new template + atomic link back; preserves agent API token).
+- [ ] `list_template_groups` / `create_template_group` / `update_template_group` / `delete_template_group` (group CRUD; delete sets group_id to NULL on member templates via FK).
+- [ ] All 13 delegate to `services/templates.ts` or `services/template-groups.ts` — same service layer humans hit via HTTP.
+
+### Install + update + events
+
+- [ ] `lib/templates/install.ts` — install a template into a workspace creates a workspace-scoped agent or trigger doc with `template` frontmatter pointing at `{ id, version }`. Agents auto-mint API token (Phase 2.5 cascade).
+- [ ] `lib/templates/diff.ts` — pure function: three-way merge between installed-version / current-workspace-doc / target-version. Returns per-key actions (`unchanged | apply_target | preserve_local | conflict`) for frontmatter + body.
+- [ ] "Update available" banner in workspace agent + trigger slideovers when their pinned version is < the template's current_version.
+- [ ] Update flow: banner → `VersionDiffDialog` shows diff → confirm (with per-conflict resolutions) → workspace doc patched to target version. Returns 409 with conflict list when called without resolutions.
+- [ ] Delete-cascade: deleting a template clears `template` frontmatter on every workspace doc carrying that template.id (transactional); emits `template.workspace_doc_orphaned` per affected doc. Workspace docs remain functional.
+
+### Events + SSE
+
+- [ ] New event kinds in `KNOWN_EVENT_KINDS`: `template.created`, `template.updated`, `template.published`, `template.deleted`, `template.installed_to_workspace` (with `source: 'install' | 'promote'`), `template.workspace_doc_updated`, `template.workspace_doc_orphaned`, `template_group.created`, `template_group.updated`, `template_group.deleted`.
+- [ ] New instance-scoped SSE endpoint `GET /api/v1/events` — admin-only auth (session OR bearer with `templates:admin`). Workspace tokens reject with 403.
+- [ ] Cross-channel emission: workspace-affecting template events (`installed_to_workspace`, `workspace_doc_updated`, `workspace_doc_orphaned`) flow to both the instance SSE and the affected workspace's SSE. Non-workspace events flow only to instance.
 
 ### UI
 
-- [ ] AI settings panel in workspace settings: provider select, model select, key input, "Test" button
-- [ ] On save: encrypt key, store, never return; show `keyConfigured: true` flag
-- [ ] When no key is configured: slash commands show disabled state with "Configure AI" link
+- [ ] `pages/settings-templates.tsx` at `/settings/templates` (no `/w/:wslug/` prefix — instance-level admin route).
+- [ ] Two top tabs: Agents · Triggers. Filterable by group. Each row shows template name, group label (if any), current version, workspace-count badge, last-updated, Edit / New version actions.
+- [ ] Template editor slideover: Fields · Versions · Activity · Workspaces tabs (no Comments, no Runs — templates don't run, their instances do). Group assignment dropdown in Fields tab.
+- [ ] `components/templates/version-diff-dialog.tsx` — markdown body diff + JSON frontmatter diff side-by-side; conflict rows render Keep-yours / Apply-new picker.
+- [ ] `components/templates/promote-dialog.tsx` — "Promote to template" dialog accessible from agent + trigger slideover ⋯ menu (visible only with `templates:admin`). Optional "Lock frontmatter shape" toggle adds a starter JSON Schema derived from the doc's current frontmatter.
+- [ ] `components/templates/template-groups-section.tsx` — group CRUD on the catalog page.
+- [ ] `components/agents/tools-field.tsx` (modified from Phase 2.5) — filter `MCP_TOOL_GROUPS.INSTANCE_ADMIN` based on editing context's scope.
+- [ ] `components/frontmatter/frontmatter-form.tsx` (modified) — inline JSON Schema validation when target doc has template + schema; disable save on validation error.
 
-### Slash commands
+### Phase 2.7 acceptance
 
-- [ ] `/draft` — uses title as prompt, streams body into editor
-- [ ] `/decompose` — sends current body, returns list of subtask titles; accept → creates child documents with `parent_id`
-- [ ] `/summarize` — one-paragraph summary, inserted at top or copied to clipboard
-- [ ] `/link <query>` — fuzzy search documents by title, inserts `[[slug]]` on select
-- [ ] `/ai <prompt>` — open-ended completion with current body as context
+- [ ] Create a template via `/settings/templates` → appears in catalog with version 1.
+- [ ] Install template into a workspace → workspace agent doc has `template: { id, version: 1 }`; agent token auto-minted.
+- [ ] Publish v2 → workspace agent surfaces "Update available" banner.
+- [ ] Update workspace agent → diff dialog → confirm → frontmatter + body sync to v2.
+- [ ] Workspace-local edits without conflict preserved on update.
+- [ ] Conflicting local edits surface diff for manual resolve; nothing overwritten without confirmation.
+- [ ] Delete a template with workspace installs → all affected workspace docs orphaned (template frontmatter cleared); workspace docs remain functional; `template.workspace_doc_orphaned` fires per doc.
+- [ ] **Promote workspace doc to template** via the ⋯ menu → new template + v1 created → doc linked back → API token preserved → 3 events emit in order.
+- [ ] **Schema-validated template** rejects invalid frontmatter PATCH with 422 `TEMPLATE_SCHEMA_VIOLATION`; templates without schema have no validation.
+- [ ] **Template groups** CRUD works; templates assignable to groups; deleting a group sets member templates' `template_group_id` to NULL.
+- [ ] Full MCP lifecycle reproducible via JSON-RPC: bearer with `templates:admin` creates / publishes / installs / updates / promotes / groups templates end-to-end. Bearer without scope → -32602 on every tool.
+- [ ] **`MCP_TOOL_GROUPS.INSTANCE_ADMIN`** filtered out of agent-editor tools picker for non-admin authors; visible to instance-admin sessions / `templates:admin` bearers.
+- [ ] Instance SSE endpoint streams `template.*` and `template_group.*` events; cross-channel events flow to affected workspace SSE.
+- [ ] Admin-only auth enforced: non-admin session → 403 on template routes; workspace-scoped bearer tokens → 403.
+- [ ] Commit: `phase-2.7: complete`
 
-### Agent runner
+---
 
-Consumes the Phase 2 surface (`type: 'agent'` documents, auto-minted tokens, `agent.task.assigned` events) and the provider abstraction above. Runs in-process — no sidecar.
+## Phase 3 — Agent runner + provider abstraction + runs as documents (Week 5b)
 
-- [ ] `lib/agent-runner.ts`: subscribes to `agent.task.assigned` via the SSE pub/sub
-- [ ] On event: load the agent document, build the system prompt from frontmatter + body, call the workspace AI with the agent's allowed MCP tools as function calls
-- [ ] Tool gating: runner exposes only the subset of MCP tools listed in the agent document's `tools` frontmatter — not the full v1 tool set (per-agent surface, not per-token)
-- [ ] Tool calls dispatch back into Folio via the agent's own API token (same auth path as an external agent — no privileged shortcut)
-- [ ] Result-reporting convention: runner patches the work item body under named sections — `## Plan` (intent), `## Notes` (append-only progress), `## Result` (final summary), `## Error` (failure reason). Writing `## Error` flips `status` to `failed`. No comments table, no updates table — the body is the ledger.
-- [ ] Token budget enforcement: runner tracks cumulative input + output tokens against the agent's `max_tokens_per_run`. On overrun, the runner stops mid-call, writes `## Error: budget_exceeded` with the actual token count, and emits `agent.task.failed` with reason `budget_exceeded`.
-- [ ] Approval gate: if the agent's `requires_approval` is true, the runner stops after writing `## Plan` and emits `agent.task.awaiting_approval`. On the next `document.updated` event for that work item, the runner checks for an `## Approved` section in the body — if present, resumes; if absent, stays paused. Rejection = human deletes the work item or reassigns away from the agent.
-- [ ] On completion: patch the work item's body per the convention above, optionally transition `status` if the agent emits one in its final message
-- [ ] Delegation: if the agent creates a child work item with `assignee: agent:*`, the child fires a fresh `agent.task.assigned` and the runner re-enters; depth enforced at write time per the Phase 2 guard
-- [ ] No AI key configured → assigning a work item to an agent stays in the assigned state but emits an `agent.task.failed` event with reason `no_ai_key`; UI shows a banner on the work item
-- [ ] Every agent invocation emits an `ai.action` event tagged with `actor_type: 'agent'` and `actor_id: <agent_document_id>`
+**Goal:** Agents become alive. Provider abstraction with 4 BYOK providers. Runner subscribes (via builtin triggers seeded in Phase 2.6) to assignment + mention + run-document creation; executes against the workspace's configured provider; writes its progress as child comments under the parent doc; transitions runs through the lifecycle state machine; enforces approval gates via the comments thread. Runs are first-class documents (`type: agent_run`) living in a per-project, lazy-seeded runs table — sortable, filterable, savable-as-views like any other table.
+
+> **This is the second v1 spine phase.** Phase 2 built the agent surface; Phase 2.6 built the conversation surface; Phase 3 makes the agents alive.
+
+> Spec: `docs/superpowers/specs/2026-05-26-phase-3-agent-runner-design.md`.
+
+### Data model
+
+- [ ] Migration `0009_phase_3_agent_runs.sql`: widen `documents.type` enum to include `agent_run`. CHECK constraint: `type='agent_run' ⇒ workspace_id IS NOT NULL AND project_id IS NOT NULL AND table_id IS NOT NULL AND parent_id IS NOT NULL`. Indexes: `documents_runs_by_parent_idx` (parent_id), `documents_runs_by_status_idx` (table_id, status), `documents_runs_pending_idx` (partial on status='planning' — the poller's claim index), `documents_runs_by_chain_idx` (expression index on json_extract chain_id — for fanout/duration/token aggregation).
+- [ ] `agent_run` frontmatter Zod: `agent_slug` (required), `provider`, `model`, `tokens_in`, `tokens_out`, `max_tokens`, `trigger_id` (nullable), `chain_id` (uuid; root mints, descendants inherit), `fired_by` (string — chain_id-prefixed trigger chain), `system_prompt` (snapshot), `worker_started_at` (set when poller claims; cleared on terminal), `error_reason` (nullable), `started_at`, `completed_at`.
+- [ ] Status state machine: `planning → awaiting_approval → running → completed | failed | rejected`. Transitions enforced in service layer.
+
+### Provider abstraction
+
+- [ ] `lib/ai/provider.ts`: `AIProvider` interface (streams `text | tool_call | tokens | done` events) + factory.
+- [ ] `lib/ai/anthropic.ts`, `openai.ts`, `openrouter.ts`, `ollama.ts` — all support streaming.
+- [ ] `routes/ai.ts`: `POST /api/v1/w/:wslug/ai/test-key` — validates a key with a cheap call without storing.
+- [ ] Workspace AI-key UI in `/w/:wslug/settings` — new "AI" tab with provider/model selectors + key input + Test button. Hooks into existing `aiKeys` storage (Phase 0).
+
+### Runner (polling-worker model)
+
+- [ ] `services/agent-runs.ts`: `createRun`, `transitionRun`, `incrementTokens`, `getActiveRun`, `claimNextPlanningRun` (atomic UPDATE-based claim), `recoverOrphanRuns` (boot-time crash recovery), `checkRunRateLimits` (workspace + agent caps), `checkChainGuards` (fanout + duration + tokens by chain_id), `countPendingPlanning` (backpressure visibility). All transactional, all emit events.
+- [ ] `lib/poller.ts::startRunnerPoller(db)`: long-lived async loop started in `apps/server/src/index.ts`. Calls `claimNextPlanningRun` every ~1s (configurable via `FOLIO_POLLER_INTERVAL_MS`). Dispatches claimed rows to `runAgent` fire-and-forget. Concurrency capped at `FOLIO_POLLER_CONCURRENCY` (default 5). On boot, calls `recoverOrphanRuns` to flip stale `running` rows to `failed (worker_crash)`.
+- [ ] `lib/runner.ts::runAgent(agentRunId)`: called by the poller with a pre-claimed row at `status=running`. Runs pre-flight checks (six guards: depth, fired_by, workspace rate, agent rate, fanout, chain duration+tokens), executes provider call loop, posts comments, transitions to terminal status.
+- [ ] `lib/runner.ts::runAgentResume({ runId })`: invoked when a planning row with `frontmatter.resume_of` is claimed. Reads both the original (awaiting_approval) and the new (resuming) rows. Runs with prior plan + approval as message history.
+- [ ] `lib/runner.ts::rejectRun({ runId })`: invoked synchronously by the trigger-matcher when `kind=rejection` lands. Transitions the matching awaiting_approval run to `rejected`, posts closing kind=comment from the agent.
+- [ ] Runner posts `kind=plan / comment / result / error` comments on the parent doc. Every agent-written comment carries `run_id` in frontmatter.
+- [ ] **Six layered recursion guards** enforced as pre-flight checks before the provider call:
+  - max_delegation_depth (existing) — linear chain depth.
+  - fired_by same-slug rejection (existing) — direct A→A cycles.
+  - **Per-workspace run rate cap** — `FOLIO_MAX_RUNS_PER_HOUR_PER_WORKSPACE` (default 200). Error: `rate_limited`.
+  - **Per-agent run rate cap** — `agent.frontmatter.max_runs_per_hour` (default 60). Error: `rate_limited`.
+  - **Fanout cap per chain** — `FOLIO_MAX_FANOUT_PER_CHAIN` (default 25). Counts agent_run rows sharing `chain_id`. Error: `fanout_exceeded`.
+  - **Chain duration + token caps** — `FOLIO_MAX_CHAIN_DURATION_MS` (default 30 min) + `FOLIO_MAX_CHAIN_TOKENS` (default 1M). Aggregates over chain_id. Errors: `chain_duration_exceeded`, `chain_tokens_exceeded`.
+- [ ] Token budget per-run enforcement: `incrementTokens` checks against `max_tokens` snapshot; over-budget → posts `kind=error budget_exceeded`, transitions to `failed`.
+- [ ] No-AI-key path: missing workspace key → run fails with `no_ai_key`, kind=error posted.
+- [ ] Cancel via `POST /runs/:id/cancel`: transitions row; next runner iteration detects flip, exits cleanly.
+- [ ] Retry via `POST /runs/:id/retry`: inserts a new agent_run row at `status=planning` with original args + `firedBy: retry-of:<old_id>`. Original row preserved. Poller picks up.
+- [ ] **Crash recovery.** Server killed mid-run → next boot finds orphan running rows (older than `FOLIO_WORKER_STALE_MS`, default 5 min) via `recoverOrphanRuns`, transitions them to `failed (worker_crash)`, emits `agent.run.failed`.
+- [ ] **Backpressure stats** at `GET /api/v1/admin/runner-stats` (admin-only) — pending count, active count, recovered count. Log line emitted when pending > threshold.
+
+### Built-in triggers — wiring (defined in Phase 2.6, activated here)
+
+- [ ] Migration `0009a_flip_runner_builtins_to_enabled.sql`: flips `builtin-on-assignment` and `builtin-on-mention` from `enabled: false` to `enabled: true` for every workspace. Idempotent (no-op if already enabled).
+- [ ] `builtin-on-assignment` (`on_event: agent.task.assigned`): trigger handler calls `runAgent` with the assignee.
+- [ ] `builtin-on-mention` (`on_event: comment.mentioned`): trigger handler calls `runAgent` with the mentioned agent.
+- [ ] `builtin-on-approval` (`on_event: comment.created`, filter `kind=approval`): trigger handler invokes `runAgentResume` for the matching `awaiting_approval` run on `(parent_id, target_agent)`.
+- [ ] `builtin-on-rejection` (`on_event: comment.created`, filter `kind=rejection`): trigger handler transitions the matching run to `rejected`, posts a closing `kind=comment` from the agent.
+
+### Approval gate — three channels (consolidated)
+
+- [ ] **Inline button** (UI sugar): `kind=plan` comment renders Approve / Reject. Approve POSTs `kind=approval` with resolved `target_agent`. Reject opens popover with optional reason, POSTs `kind=rejection`. Phase 2.6 buttons now have runner state to act on.
+- [ ] **`@`-mention keyword**: typing `@<agent> approved` in a comment → server detects keyword, persists comment as `kind=approval` with `target_agent` resolved. Same flow as button.
+- [ ] **MCP**: `create_comment { kind: approval, target_agent }` → same flow.
+
+### Runs as documents — lazy-seeded per-project runs table
+
+- [ ] Runner creates the project's `runs` table on first run (lazy seed). Table comes with default status set + 3 auto-seeded saved views: `All runs` (no filter), `Failures` (`status in {failed, rejected}`), `Awaiting approval` (`status = awaiting_approval`).
+- [ ] Runs table renders via the existing spreadsheet UI — columns for status / duration / tokens_in / tokens_out / agent_slug / trigger_id / created_at. Sort, filter, save view all work via Phase 1.5 / 1.6 mechanisms.
+- [ ] Manually creating an `agent_run` row in the table via `+ New row` → assignee picker → select agent → save with `status=planning` → builtin-on-assignment fires → runner adopts the row.
+- [ ] Drag-to-status from `failed` back to `planning` re-fires the run (effective retry gesture).
+
+### Routes
+
+- [ ] `routes/runs.ts`: `GET /runs/:id`, `POST /runs` (Cmd-K + MCP entry point; creates an `agent_run` doc with `status=planning`), `POST /runs/:id/cancel`, `POST /runs/:id/retry`.
+- [ ] New MCP tool `run_agent` (`agents:write`): thin sugar over `POST /runs`. Resolves slugs, validates allow-list, returns `{ run_id, status }`. Idempotency check preserved.
+
+### Events + SSE
+
+- [ ] New event kinds: `agent.run.started`, `agent.run.awaiting_approval`, `agent.run.running`, `agent.run.completed`, `agent.run.failed`, `agent.run.rejected`, `ai.action`, `runs_table.lazy_seeded`. Added to `KNOWN_EVENT_KINDS`.
+- [ ] `ai.action` audit event emitted per provider call with `actor_type: 'agent'`, `actor_id: <agent_id>`, `provider`, `model`, `tokens_in`, `tokens_out`. No content stored.
+- [ ] New SSE filter params: `?agent=<doc_id>`, `?table=<table_id>`. AND-combined with existing filters.
+
+### Shared MCP/HTTP dispatcher
+
+- [ ] `lib/mcp-dispatch.ts::executeMcpTool(name, args, authContext)` — single dispatcher shared by `routes/mcp.ts` (HTTP JSON-RPC) and `lib/runner.ts` (runner tool calls). Validates args via Zod, checks scopes, applies `requireResource` allow-list intersection, dispatches to the right service.
+- [ ] All existing MCP tool dispatchers (Phase 2 + 2.5 + 2.6 + 2.7) refactored to route through `executeMcpTool` (consistency cleanup landing with this phase).
+- [ ] Locked project rule going forward: every new resource operation ships on BOTH HTTP and MCP, sharing a service layer and `executeMcpTool`. Appendix B of the Phase 3 spec maintains the parity table.
+
+### UI — link tiles + Cmd-K
+
+- [ ] Agent slideover's Runs tab is a link tile: `12 runs · view all →` navigates to `/w/:wslug/p/:pslug/t/runs?filter.assignee=agent:<this>`. Per-agent run history through the runs table, not a tab list.
+- [ ] Trigger slideover's Runs tab same pattern, filtered by `trigger_id`.
+- [ ] Cmd-K palette adds: `Run agent...` (two-step picker: agent → parent → optional input; POSTs new `agent_run` doc), `Approve pending plan` (lists workspace-wide `awaiting_approval` runs, navigates to plan comment).
+
+### Slash commands — DROPPED
+
+- [ ] PHASES.md update: the previous slash-command set (`/draft`, `/decompose`, `/summarize`, `/link`, `/ai`) is dropped. Comment composer's `@`-mention surface is the universal "ask an agent" affordance; agents have richer context and persisted runs.
+- [ ] **Kept** as non-AI helper: `[[` wiki-link autocomplete (lands in Phase 2.6 with the comment composer; same picker is wired into the body editor).
 
 ### Trigger scheduler + event-pattern matcher
 
-Fires the Phase 2 trigger documents. Two firing paths: a cron-driven scheduler for `schedule` triggers, and an event subscriber for `on_event` triggers. Both create a work item assigned to the trigger's `agent`, which then flows through the standard agent-runner path.
-
-- [ ] `lib/trigger-scheduler.ts`: on server boot, load all enabled triggers with non-null `schedule`; run a single in-process cron loop (1-minute tick, SQLite-backed — no Redis)
-- [ ] On schedule fire: create a work item in the trigger's project with `assignee: agent:<trigger.agent>`, title `"Triggered run: <trigger.slug>"`, body containing the trigger's `payload` JSON as a `## Input` section
-- [ ] `lib/trigger-matcher.ts`: subscribes to the events pub/sub; on each event, scan triggers with matching `on_event` kind in the same workspace; apply `event_filter` (same mongo-ish dialect as view filters); fire matching ones
-- [ ] Fired triggers patch their own frontmatter: `last_fired_at = now`, `last_status = 'ok'|'failed'` based on whether the work item was created successfully
-- [ ] Loop prevention: trigger-created work items carry `frontmatter.fired_by: <trigger_slug>`; the event-matcher skips events whose source document already has `fired_by` set (prevents trigger A firing trigger B firing trigger A)
-- [ ] Disabled triggers (`enabled: false`) are loaded but never fire — toggling `enabled` is the off switch
-- [ ] On trigger document delete: removed from the in-memory schedule + subscriber lists in the same transaction
-- [ ] New event kinds: `trigger.fired` (success), `trigger.failed` (e.g. agent doesn't exist, payload invalid)
-
-### Audit
-
-- [ ] Every AI call emits an `ai.action` event with input/output token counts (no content stored)
+- [ ] `lib/trigger-scheduler.ts`: on server boot, load all enabled triggers with non-null `schedule`. Single in-process cron loop (1-minute tick, SQLite-backed).
+- [ ] On schedule fire: create a new `agent_run` row in the trigger's project's runs table with `assignee: agent:<trigger.agent>`, `parent_id` from `trigger.payload.parent_slug` or unset. The on-assignment builtin picks it up.
+- [ ] `lib/trigger-matcher.ts` (extended for new event kinds): subscribes to the event bus; on each event scans triggers in the same workspace, applies `event_filter`, fires matches.
+- [ ] Fired triggers patch their own frontmatter: `last_fired_at`, `last_status`.
+- [ ] Disabled triggers loaded but never fire.
+- [ ] On trigger delete: removed from in-memory schedule + subscriber lists in the same transaction.
+- [ ] New event kinds: `trigger.fired`, `trigger.failed`.
 
 ### Phase 3 acceptance
 
-- [ ] Configure Anthropic key, run `/draft` on a new work item, body streams in
-- [ ] `/decompose` creates linked child documents
-- [ ] `/link` inserts wiki-links correctly
-- [ ] Removing the key disables all slash commands gracefully
-- [ ] Create an agent with `tools: ['create_document', 'update_document']`, assign a work item to it, see the body patched by the agent within a few seconds
-- [ ] Agent A creates a child work item assigned to agent B; B runs and patches its own work item (one level of delegation works end-to-end)
-- [ ] An agent attempting to delegate past `max_delegation_depth` gets rejected and emits `agent.task.failed` with reason `depth_exceeded`
-- [ ] Create a cron trigger set to `* * * * *`; within ~60 seconds a work item is created and the assigned agent patches its body
-- [ ] Create an event trigger on `document.updated` with filter `{ "document.status": "Done" }`; flipping a work item to Done fires the trigger exactly once
-- [ ] A trigger created by an agent's output does not re-fire indefinitely (loop prevention via `fired_by` works)
+- [ ] **Polling worker.** Trigger handlers return immediately (no LLM blocking). Poller picks up `planning` rows within ~1s.
+- [ ] **Crash recovery.** Killing the server mid-run → next boot recovers orphan runs as `failed (worker_crash)`; agent.run.failed emitted.
+- [ ] **Concurrency.** Up to `FOLIO_POLLER_CONCURRENCY` (default 5) runs simultaneously; race-safe atomic claim.
+- [ ] Configure Anthropic key → assign a work item to an agent → runner runs → kind=comment + kind=result comments appear on the work item within seconds.
+- [ ] `@`-mention an agent in a comment → run fires → comments appear under the parent.
+- [ ] Create an `agent_run` row directly in the runs table with `status=planning` and `assignee=agent:<slug>` → runner adopts → run completes.
+- [ ] Agent with `requires_approval: true` → kind=plan comment posted, run at `awaiting_approval`. Approve via button → poller picks up new resuming planning row → completes. Reject → original run transitions to `rejected`, agent posts closing note.
+- [ ] Approve via `@drafter approved` in a comment → same flow.
+- [ ] Approve via MCP `create_comment` → same.
+- [ ] **All six recursion guards** enforced:
+  - max_delegation_depth violation → `depth_exceeded`.
+  - Same-slug `fired_by` cycle → `depth_exceeded` (caught by trigger matcher).
+  - Workspace run-rate cap exceeded → `rate_limited`.
+  - Per-agent run-rate cap exceeded → `rate_limited`.
+  - Fanout > 25 in chain → `fanout_exceeded`.
+  - Chain duration > 30 min OR tokens > 1M → `chain_duration_exceeded` / `chain_tokens_exceeded`.
+- [ ] Token budget per-run exceeded → `budget_exceeded`.
+- [ ] No AI key → `no_ai_key`.
+- [ ] Cron trigger set to `* * * * *` → within ~60 seconds an `agent_run` row appears, poller picks up, run completes.
+- [ ] Event trigger with filter → fires exactly once per matching event; loop prevention works.
+- [ ] Cancel mid-flight run → runner exits within ~1 iteration, no further comments.
+- [ ] Retry failed run → new run row at planning, original preserved, completes.
+- [ ] Lazy-seed: first run in a fresh project creates the runs table with 3 default saved views.
+- [ ] Runs table spreadsheet UI fully functional — sort, filter, column reorder, save view.
+- [ ] **Chain_id tracking.** Every agent_run row has chain_id. Root mints fresh uuid. Descendants inherit.
+- [ ] MCP `run_agent` returns `run_id`, SSE stream shows transitions.
+- [ ] **Backpressure visible.** `GET /api/v1/admin/runner-stats` returns stats; log line on high pending count.
+- [ ] All existing user-flow tests still pass — no Phase 2 / 2.5 / 2.6 regression.
 - [ ] Commit: `phase-3: complete`
 
 ---
