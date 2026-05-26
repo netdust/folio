@@ -77,6 +77,45 @@ describe('0007_phase_2_6_comments migration', () => {
     ).toThrow();
   });
 
+  test('CHECK constraint rejects a comment row with table_id set (table_id IS NULL branch)', () => {
+    const db = new Database(':memory:');
+    setupBaseline(db, TARGET);
+    seedWorkspaceAndProject(db);
+    // Seed a tables row so table_id='tbl1' satisfies the FK — we want the CHECK to fire,
+    // not the FK. Without this row the FK would reject first and we wouldn't know which
+    // constraint triggered.
+    db.run(`INSERT INTO tables (id, project_id, slug, name) VALUES ('tbl1', 'p1', 't1', 'T')`);
+    applyMigration(db, TARGET);
+
+    db.run(
+      `INSERT INTO documents (id, workspace_id, project_id, type, slug, title)
+       VALUES ('parent1', 'w1', 'p1', 'work_item', 'parent-wi', 'Parent WI')`,
+    );
+
+    // A comment with table_id set violates the CHECK: comment requires table_id IS NULL
+    expect(() =>
+      db.run(
+        `INSERT INTO documents (id, workspace_id, project_id, type, slug, title, parent_id, table_id)
+         VALUES ('bad', 'w1', 'p1', 'comment', 'bad-comment', 'Bad Comment', 'parent1', 'tbl1')`,
+      ),
+    ).toThrow();
+  });
+
+  test('CHECK constraint still accepts work_item rows under the new CHECK', () => {
+    const db = new Database(':memory:');
+    setupBaseline(db, TARGET);
+    seedWorkspaceAndProject(db);
+    applyMigration(db, TARGET);
+
+    // work_item only requires project_id IS NOT NULL — regression guard for the rewritten CHECK
+    expect(() =>
+      db.run(
+        `INSERT INTO documents (id, workspace_id, project_id, type, slug, title)
+         VALUES ('w1d1', 'w1', 'p1', 'work_item', 'task-1', 'Task 1')`,
+      ),
+    ).not.toThrow();
+  });
+
   test('index documents_comments_idx exists after migration', () => {
     const db = new Database(':memory:');
     setupBaseline(db, TARGET);
