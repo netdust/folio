@@ -59,17 +59,21 @@ Track A — Automated (Claude):
 
 ## Bug List
 
-### BUG-001 [CRITICAL] — `requireResource` middleware never runs
+### BUG-001 [CRITICAL] — `requireResource` middleware never runs — RESOLVED
 
 - **Found by:** Automated (A11)
 - **What happened:** An agent-bound bearer token narrowed to projects `[folio, stride]` was able to GET `/api/v1/w/netdust/p/client-website/documents?type=work_item` and received HTTP 200 + work items. The CHECK should have been a 403 `FORBIDDEN_RESOURCE`.
 - **Expected:** 403 with `FORBIDDEN_RESOURCE` per `requireResource()` (Task 3 middleware).
-- **Where:** `apps/server/src/app.ts` — `requireResource()` is exported from `middleware/bearer.ts` but never mounted on any route. The middleware sits dead code while the project-documents route relies on `requireScope` alone for action-scope and has no resource-scope check.
-- **Cluster:** Standalone (the middleware itself works — the unit tests at `middleware/resource.test.ts` prove it). The bug is integration: nothing wires it into the route chain.
-- **Severity rationale:** This is the entire point of Phase 2.5. Without `requireResource` mounted, a workspace agent narrowed to one project can act on *every* project in the workspace via the REST API. MCP path is correct (separate enforcement in the resolver), so the leak is REST-only — but REST is what the assignee picker and every web feature go through.
-- **Status:** OPEN
-- **Root cause:**
-- **Fix:**
+- **Where:** `apps/server/src/app.ts` — `requireResource()` was exported from `middleware/bearer.ts` and unit-tested in `middleware/resource.test.ts` but never mounted on any route. Plan §"Middleware composition" specified the chain `… → requireScope → requireResource → handler`; Task 3 added the middleware, Task 4 added the workspace endpoints, but neither task mounted the gate on `pScope`. The Vitest unit suite proved the middleware works in isolation; no full-stack test exercised it via the real `app.ts` chain.
+- **Cluster:** Standalone.
+- **Root cause:** Missing integration wire. The middleware was a sound piece but it wasn't installed.
+- **Fix:** Commit `<pending>`. Mounted `requireResource()` on `pScope` immediately after `resolveProject`, matching the plan's middleware order. The middleware's existing early-returns (`!token`, `!project`, `!token.agentId`) keep session users and human PATs unaffected — confirmed via live re-sweep: session user 200, wildcard agent 200, narrowed agent 403 with `FORBIDDEN_RESOURCE`. Added a full-stack regression test at `apps/server/src/routes/documents.test.ts` that:
+  1. Mints an agent narrowed to a second project `other`.
+  2. Asserts GET `/p/other/documents` → 200 (allowed),
+  3. GET `/p/web/documents` → 403 `FORBIDDEN_RESOURCE` (denied),
+  4. A wildcard agent → 200 on `/p/web/documents` (regression on the bypass path).
+- **Re-sweep:** Live curl reproduces the fix. Server suite 259/1-skip/0-fail (+1 new test).
+- **Status:** RESOLVED
 
 ### BUG-002 [MINOR] — Phase 2.5 e2e spec times out opening assignee picker
 

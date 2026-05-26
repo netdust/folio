@@ -910,3 +910,63 @@ test('an agent token cannot delegate past its max_delegation_depth', async () =>
   const body = await childCreate.json();
   expect(body.error.code).toBe('DELEGATION_DEPTH_EXCEEDED');
 });
+
+// --- Phase 2.5 BUG-001 regression: requireResource is wired on project routes ---
+
+test('agent bearer narrowed to other projects is denied at project scope (FORBIDDEN_RESOURCE)', async () => {
+  const { app, seed } = await makeTestApp();
+
+  // Create a second project via the API so defaults (work-items table, statuses,
+  // views) get seeded — needed because GET ?type=work_item resolves the table.
+  const createProj = await app.request('/api/v1/w/acme/projects', {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Other', slug: 'other' }),
+  });
+  expect(createProj.status).toBe(201);
+  const otherProjectId = (await createProj.json()).data.id as string;
+
+  // Mint an agent narrowed to `other` only — the default seeded project `web`
+  // is explicitly NOT in the allow-list. Use the read-only `list_documents`
+  // tool so we exercise the GET path.
+  const { data: agent } = await createAgentAtWorkspace(app, seed.sessionCookie, {
+    type: 'agent', title: 'Other Only',
+    frontmatter: {
+      system_prompt: 'x', model: 'm', provider: 'anthropic',
+      tools: ['list_documents'],
+      projects: [otherProjectId],
+    },
+  });
+  const agentToken = (agent as { agent_token: string }).agent_token;
+
+  // Allowed: hitting the `other` project (in allow-list) → 200.
+  const okRes = await app.request('/api/v1/w/acme/p/other/documents?type=work_item', {
+    headers: { Authorization: `Bearer ${agentToken}` },
+  });
+  expect(okRes.status).toBe(200);
+
+  // Denied: hitting `web` (NOT in allow-list) → 403 FORBIDDEN_RESOURCE.
+  const denyRes = await app.request('/api/v1/w/acme/p/web/documents?type=work_item', {
+    headers: { Authorization: `Bearer ${agentToken}` },
+  });
+  expect(denyRes.status).toBe(403);
+  const body = await denyRes.json();
+  expect(body.error.code).toBe('FORBIDDEN_RESOURCE');
+  expect(body.error.message).toMatch(/agent not allow-listed for project web/);
+
+  // Wildcard agent must continue to pass on any project — sanity check that
+  // the gate doesn't fire when intersect() returns ['*'].
+  const { data: wildAgent } = await createAgentAtWorkspace(app, seed.sessionCookie, {
+    type: 'agent', title: 'Wild',
+    frontmatter: {
+      system_prompt: 'x', model: 'm', provider: 'anthropic',
+      tools: ['list_documents'],
+      // projects defaults to ['*']
+    },
+  });
+  const wildToken = (wildAgent as { agent_token: string }).agent_token;
+  const wildRes = await app.request('/api/v1/w/acme/p/web/documents?type=work_item', {
+    headers: { Authorization: `Bearer ${wildToken}` },
+  });
+  expect(wildRes.status).toBe(200);
+});
