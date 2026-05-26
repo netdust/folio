@@ -14,19 +14,51 @@ import { ProviderModelField } from '../inline/provider-model-field.tsx';
 import { Icon } from '../ui/icon.tsx';
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
 
-// Phase 2.5: agents have a canonical field order so the slideover reads top-
-// down (purpose → which LLM → what it can do → where it can act → guardrails).
-// Anything not in this list falls back to inferred-alphabetical placement.
-const AGENT_KEY_ORDER = [
-  'system_prompt',
-  'provider',
-  'model',
-  'tools',
-  'projects',
-  'max_delegation_depth',
-  'max_tokens_per_run',
-  'requires_approval',
+// Phase 2.5: agents have a canonical field order + per-field help text so the
+// slideover reads top-down (purpose → which LLM → what it can do → where it
+// can act → guardrails). Anything not in this list falls back to inferred-
+// alphabetical placement with no description.
+interface AgentFieldMeta {
+  key: string;
+  description: string;
+}
+
+const AGENT_FIELDS: AgentFieldMeta[] = [
+  {
+    key: 'system_prompt',
+    description: 'Instructions the agent receives on every run. Describe its role and what it should do.',
+  },
+  {
+    key: 'provider',
+    description: 'AI provider + model. Needs a configured API key in workspace settings.',
+  },
+  // `model` is rendered inside the paired provider row — no standalone entry.
+  {
+    key: 'tools',
+    description: 'MCP tools this agent can call. Read tools list/get; write tools create/update; delete removes documents.',
+  },
+  {
+    key: 'projects',
+    description: 'Projects this agent can act on. "Select all" = every workspace project, current and future.',
+  },
+  {
+    key: 'max_delegation_depth',
+    description: 'How many levels of agent-to-agent assignment this agent can trigger. 0 = cannot delegate.',
+  },
+  {
+    key: 'max_tokens_per_run',
+    description: 'Hard cap on token spend per agent run. Prevents runaway loops.',
+  },
+  {
+    key: 'requires_approval',
+    description: 'When true, the agent\'s writes wait for a human "## Approved" line in the work item body.',
+  },
 ];
+
+const AGENT_KEY_ORDER = AGENT_FIELDS.map((f) => f.key);
+const AGENT_FIELD_DESC: Record<string, string> = Object.fromEntries(
+  AGENT_FIELDS.map((f) => [f.key, f.description]),
+);
 
 function orderKeysForAgent(keys: string[]): string[] {
   const known = AGENT_KEY_ORDER.filter((k) => keys.includes(k));
@@ -121,9 +153,12 @@ export function FrontmatterForm({
         // The `provider` key on agents renders a paired editor that owns both
         // `provider` and `model` (model has been filtered out of orderedKeys).
         const isProvider = key === 'provider' && type === 'agent';
+        // Phase 2.5: short field-help text for non-obvious agent keys. Renders
+        // below the input so it doesn't crowd the label column.
+        const description = type === 'agent' ? AGENT_FIELD_DESC[key] : undefined;
         return (
           <div key={key} className="contents">
-            <dt className="self-center font-mono text-[11px] text-fg-3" title={key}>
+            <dt className="self-start pt-1 font-mono text-[11px] text-fg-3" title={key}>
               {isProvider ? 'provider · model' : label}
             </dt>
             <dd>
@@ -171,6 +206,9 @@ export function FrontmatterForm({
                   isPending={pendingKeys?.has(key)}
                 />
               )}
+              {description ? (
+                <p className="mt-1 text-[11px] leading-snug text-fg-3">{description}</p>
+              ) : null}
             </dd>
           </div>
         );
