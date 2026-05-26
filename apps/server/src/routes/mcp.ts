@@ -200,7 +200,7 @@ async function resolveProjectInWorkspace(
  *
  * - Agent-bound token (`token.agentId` set) → `{ type: 'agent', agentSlug, agentId }`.
  *   The slug is looked up from the agent doc; clients never supply it.
- * - Otherwise → `{ type: 'user', userId: token.userId }` (human PAT / session bearer).
+ * - Otherwise → `{ type: 'user', userId: token.createdBy }` (human PAT / session bearer).
  *
  * Mirrors `resolveAuthorContext` in routes/comments.ts but takes a token directly
  * because MCP has no session/user context plumbing.
@@ -849,8 +849,9 @@ const TOOLS: ToolDef[] = [
         project_slug: { type: 'string' },
         slug: { type: 'string' },
         body: { type: 'string' },
+        visibility: { type: 'string', enum: ['normal', 'internal'] },
       },
-      required: ['workspace_slug', 'project_slug', 'slug', 'body'],
+      required: ['workspace_slug', 'project_slug', 'slug'],
     },
     requiredScope: 'documents:write',
     handler: async ({ token }, args) => {
@@ -867,7 +868,8 @@ const TOOLS: ToolDef[] = [
       }
 
       const authorContext = await resolveAuthorContextForToken(token);
-      const body = requireString(args, 'body');
+      const visibilityRaw = optionalString(args, 'visibility');
+      const visibility = visibilityRaw ? commentVisibilitySchema.parse(visibilityRaw) : undefined;
 
       try {
         const updated = await updateComment({
@@ -875,8 +877,9 @@ const TOOLS: ToolDef[] = [
           project,
           existing,
           authorContext,
+          body: optionalString(args, 'body'),
+          visibility,
           actor: token.id,
-          body,
         });
         const fm = updated.frontmatter as Record<string, unknown>;
         return textResult({

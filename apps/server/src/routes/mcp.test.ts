@@ -786,6 +786,49 @@ test('update_comment by the author succeeds and stamps edited_at', async () => {
   expect(parsed.edited_at.length).toBeGreaterThan(0);
 });
 
+test('update_comment changes visibility from normal to internal', async () => {
+  const { app, seed } = await makeTestApp();
+  const { agentToken } = await setupAgentBoundToken(seed.workspace.id, seed.user.id, {
+    projects: ['*'],
+  });
+  const human = await setupToken(seed.workspace.id, seed.user.id, [
+    'documents:write',
+    'documents:read',
+  ]);
+  const parentSlug = await createWorkItem(app, human, 'parent VIS');
+
+  // Create a comment with default (normal) visibility.
+  const created = await callTool(app, agentToken, 'create_comment', {
+    workspace_slug: 'acme',
+    project_slug: 'web',
+    parent_slug: parentSlug,
+    body: 'initially normal',
+  });
+  const createdParsed = JSON.parse(
+    ((await created.json()) as { result: { content: { text: string }[] } }).result.content[0]!.text,
+  ) as { slug: string };
+
+  // Update visibility to internal (no body change).
+  const res = await callTool(app, agentToken, 'update_comment', {
+    workspace_slug: 'acme',
+    project_slug: 'web',
+    slug: createdParsed.slug,
+    visibility: 'internal',
+  });
+  const body = (await res.json()) as { result?: { content: { text: string }[] }; error?: unknown };
+  expect(body.error).toBeUndefined();
+
+  // Verify the DB row reflects the new visibility.
+  const { db } = await import('../db/client.ts');
+  const { documents: docsTbl } = await import('../db/schema.ts');
+  const { eq } = await import('drizzle-orm');
+  const row = await db.query.documents.findFirst({
+    where: eq(docsTbl.slug, createdParsed.slug),
+  });
+  expect(row).toBeTruthy();
+  expect((row!.frontmatter as Record<string, unknown>).visibility).toBe('internal');
+});
+
 test('update_comment by a non-author agent → -32602 comment_author_only', async () => {
   const { app, seed } = await makeTestApp();
   const { agentToken: authorToken } = await setupAgentBoundToken(
