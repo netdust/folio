@@ -1,0 +1,77 @@
+/**
+ * Phase 2.5: workspace-scoped document hooks (agents + triggers).
+ *
+ * The project-scoped useDocuments hook in documents.ts no longer surfaces
+ * agents/triggers — they live at /api/v1/w/:wslug/documents now.
+ */
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { client } from './client.ts';
+import type { Document, DocumentSummary } from './documents.ts';
+
+export interface WorkspaceDocumentsListParams {
+  type: 'agent' | 'trigger';
+  /** Narrow to docs whose frontmatter.projects includes '*' or this project id. */
+  project?: string;
+}
+
+export const workspaceDocumentsKeys = {
+  all: ['workspace-documents'] as const,
+  list: (wslug: string, params: WorkspaceDocumentsListParams) =>
+    [...workspaceDocumentsKeys.all, wslug, 'list', params] as const,
+  detail: (wslug: string, slug: string) =>
+    [...workspaceDocumentsKeys.all, wslug, 'detail', slug] as const,
+};
+
+function toSearch(params: WorkspaceDocumentsListParams): string {
+  const sp = new URLSearchParams({ type: params.type });
+  if (params.project) sp.set('project', params.project);
+  return `?${sp.toString()}`;
+}
+
+export function useWorkspaceDocuments(
+  wslug: string,
+  params: WorkspaceDocumentsListParams,
+  options: { enabled?: boolean; keepPrevious?: boolean } = {},
+) {
+  return useQuery({
+    queryKey: workspaceDocumentsKeys.list(wslug, params),
+    // client.get auto-unwraps single-key { data } envelopes — payload is the array.
+    queryFn: () =>
+      client.get<DocumentSummary[]>(`/api/v1/w/${wslug}/documents${toSearch(params)}`),
+    staleTime: 30_000,
+    enabled: !!wslug && (options.enabled ?? true),
+    // keepPrevious avoids a skeleton flash in the assignee picker when the
+    // user opens it a second time — first open does fresh fetch, subsequent
+    // opens show the cached list immediately while a background refresh runs.
+    placeholderData: options.keepPrevious ? (prev) => prev : undefined,
+  });
+}
+
+/** Convenience: workspace agents, optionally filtered to those allow-listed for a project. */
+export function useWorkspaceAgents(
+  wslug: string,
+  opts: { project?: string; enabled?: boolean } = {},
+) {
+  return useWorkspaceDocuments(
+    wslug,
+    { type: 'agent', project: opts.project },
+    { keepPrevious: true, enabled: opts.enabled },
+  );
+}
+
+export function useWorkspaceTriggers(wslug: string, opts: { enabled?: boolean } = {}) {
+  return useWorkspaceDocuments(wslug, { type: 'trigger' }, { enabled: opts.enabled });
+}
+
+export function useWorkspaceDocument(
+  wslug: string,
+  slug: string | null,
+  options: { enabled?: boolean } = {},
+) {
+  return useQuery({
+    queryKey: slug ? workspaceDocumentsKeys.detail(wslug, slug) : ['workspace-documents', 'noop'],
+    queryFn: () => client.get<Document>(`/api/v1/w/${wslug}/documents/${slug}`),
+    staleTime: 30_000,
+    enabled: !!wslug && !!slug && (options.enabled ?? true),
+  });
+}

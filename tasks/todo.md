@@ -20,13 +20,13 @@ Implementing Phase 2.5 per `docs/superpowers/specs/2026-05-26-phase-2.5-workspac
 - [x] **Task 6 — Project-delete cascade hook** (transaction wraps project delete + scan of workspace agents' `frontmatter.projects` to remove the deleted id). 2 tests: scrub semantics (explicit + wildcard both correct) + non-owner 403 leaves frontmatter untouched.
 
 #### Server phase gate
-- [ ] Full server suite green
-- [ ] Server type-check clean (excluding pre-existing `index.ts`)
-- [ ] Manual API smoke (curl POST/GET against workspace + project endpoints)
-- [ ] `testing-workflow:phase-complete` invoked
+- [x] Full server suite green (258 / 1 skip / 0 fail; +45 new tests over Phase 2 baseline)
+- [x] Server type-check clean (excluding pre-existing pattern errors in `app.ts`, `bearer.test.ts`, `scope.test.ts`, `workspaces.ts:129` — all unchanged by Phase 2.5)
+- [ ] Manual API smoke (curl POST/GET against workspace + project endpoints) — pending
+- [ ] `testing-workflow:phase-complete` invoked — pending
 
-- [ ] **Task 7 — UI rail subtraction + workspace popover** (remove project Agents/Triggers leaves; add Agents+Triggers menu items to `workspace-switcher.tsx`)
-- [ ] **Task 8 — Workspace agents+triggers pages + `useWorkspaceAgents`** (new routes `/w/:wslug/agents` and `/triggers`; new `workspace-agents-page.tsx`; delete old project-scoped route files)
+- [x] **Task 7 — UI rail subtraction + workspace popover** (removed Agents/Triggers leaves + onAgentsClick/onTriggersClick/isAgents/isTriggers from RailTree; added Agents+Triggers menu items to `workspace-switcher.tsx`; rewired w.$wslug.tsx)
+- [x] **Task 8 — Workspace agents+triggers pages + `useWorkspaceAgents`** (new `lib/api/workspace-documents.ts` with `useWorkspaceAgents` + `useWorkspaceTriggers` + `useWorkspaceDocument`; new `workspace-agents-page.tsx` with project chip rendering + filter; `workspace-triggers-page.tsx`; new routes `/w/:wslug/agents` and `/triggers` with `?doc=`/`?project=` search params; deleted old project-scoped route files + `document-type-list.tsx`)
 - [ ] **Task 9 — `ProjectsField` + assignee picker rewire + E2E** (multi-select with Select-all collapse semantics; assignee picker uses `useWorkspaceAgents` with `keepPreviousData`; Playwright spec `phase-2-5-workspace-agents.spec.ts`)
 
 #### Phase 2.5 phase gate

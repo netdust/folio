@@ -17,6 +17,10 @@ interface WorkspaceSwitcherProps {
   onCreateWorkspace?: () => void;
   onCreateProject?: () => void;
   onOpenSettings?: () => void;
+  // Phase 2.5: agents + triggers are workspace-scoped, surfaced here instead of
+  // under each project in the rail.
+  onOpenAgents?: () => void;
+  onOpenTriggers?: () => void;
 }
 
 export function WorkspaceSwitcher({
@@ -26,6 +30,8 @@ export function WorkspaceSwitcher({
   onCreateWorkspace,
   onCreateProject,
   onOpenSettings,
+  onOpenAgents,
+  onOpenTriggers,
 }: WorkspaceSwitcherProps) {
   return (
     <Popover>
@@ -54,6 +60,28 @@ export function WorkspaceSwitcher({
             </button>
           ))}
         </div>
+        {(onOpenAgents || onOpenTriggers) && (
+          <div className="border-t border-border-light p-1">
+            {onOpenAgents ? (
+              <button
+                type="button"
+                onClick={onOpenAgents}
+                className="block w-full rounded-md px-2 py-1.5 text-left text-sm text-fg-2 hover:bg-card hover:text-fg"
+              >
+                Agents
+              </button>
+            ) : null}
+            {onOpenTriggers ? (
+              <button
+                type="button"
+                onClick={onOpenTriggers}
+                className="block w-full rounded-md px-2 py-1.5 text-left text-sm text-fg-2 hover:bg-card hover:text-fg"
+              >
+                Triggers
+              </button>
+            ) : null}
+          </div>
+        )}
         <div className="border-t border-border-light p-1">
           {onCreateProject ? (
             <button
