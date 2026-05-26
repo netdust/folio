@@ -4,9 +4,11 @@ import { inferFieldType } from '@folio/shared';
 import type { Status } from '../../lib/api/statuses.ts';
 import type { Field, FieldType } from '../../lib/api/fields.ts';
 import type { DocumentType } from '../../lib/api/documents.ts';
+import { useProjects } from '../../lib/api/projects.ts';
 import { InlineSelect } from '../inline/inline-select.tsx';
 import { FieldRenderer } from './field-renderer.tsx';
 import { AssigneePicker } from '../assignee/assignee-picker.tsx';
+import { ProjectsField } from '../inline/projects-field.tsx';
 import { Icon } from '../ui/icon.tsx';
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
 
@@ -80,13 +82,26 @@ export function FrontmatterForm({
         const label = pinned?.label ?? key;
         const options = pinned?.options ?? undefined;
         const isAssignee = key === 'assignee';
+        // Phase 2.5: the `projects` key on agent frontmatter renders as a
+        // multi-select chip editor with wildcard semantics. Auto-wired by key
+        // name, same pattern as `assignee`.
+        const isProjects = key === 'projects' && type === 'agent';
         return (
           <div key={key} className="contents">
             <dt className="self-center font-mono text-[11px] text-fg-3" title={key}>
               {label}
             </dt>
             <dd>
-              {isAssignee ? (
+              {isProjects ? (
+                // Wrapped so useProjects only mounts when the agent's projects
+                // field is actually being rendered — keeps non-agent tests from
+                // needing a QueryClientProvider.
+                <ProjectsFieldWithProjects
+                  wslug={wslug}
+                  value={Array.isArray(value) ? (value as string[]) : ['*']}
+                  onChange={(next) => onFrontmatterCommit({ [key]: next })}
+                />
+              ) : isAssignee ? (
                 <AssigneePicker
                   wslug={wslug}
                   pslug={pslug}
@@ -185,5 +200,30 @@ function AddField({
         {error ? <p className="mt-1 text-xs text-danger">{error}</p> : null}
       </PopoverContent>
     </Popover>
+  );
+}
+
+/**
+ * Phase 2.5: localized subcomponent so the useProjects query only mounts when
+ * the agent's `projects` field is actually rendered. Keeps the FrontmatterForm
+ * tests (which mount the form for work_item/page docs) from needing to wrap a
+ * QueryClientProvider.
+ */
+function ProjectsFieldWithProjects({
+  wslug,
+  value,
+  onChange,
+}: {
+  wslug: string;
+  value: string[];
+  onChange: (next: string[]) => void;
+}) {
+  const projectsQ = useProjects(wslug);
+  return (
+    <ProjectsField
+      value={value}
+      projects={projectsQ.data ?? []}
+      onChange={onChange}
+    />
   );
 }

@@ -1,0 +1,78 @@
+/**
+ * Phase 2.5: workspace agents end-to-end.
+ *
+ * Verifies the full vertical: workspace popover → Agents page → create agent
+ * with a narrowed allow-list → confirm the assignee picker honors the
+ * allow-list across two projects.
+ */
+import { test, expect, signUpFresh, createWorkspace, createProject } from './fixtures.ts';
+
+test('workspace agents flow: create narrowed agent, assignee picker filters by project', async ({ page }) => {
+  await signUpFresh(page);
+  await createWorkspace(page, 'Phase 2.5 WS', 'p25');
+  // Two projects so we can prove the filter actually narrows.
+  await createProject(page, 'p25', 'Inbox', 'inbox');
+  await createProject(page, 'p25', 'Website', 'website');
+
+  // Resolve project ids — needed for the agent's `projects:` allow-list.
+  const projectsRes = await page.request.get('/api/v1/w/p25/projects');
+  expect(projectsRes.ok()).toBe(true);
+  const projectsBody = await projectsRes.json();
+  const projects = projectsBody.data as { id: string; slug: string }[];
+  const inboxId = projects.find((p) => p.slug === 'inbox')!.id;
+
+  // Create a workspace agent allow-listed for Inbox only.
+  const createRes = await page.request.post('/api/v1/w/p25/documents', {
+    data: {
+      type: 'agent',
+      title: 'Inbox Triager',
+      frontmatter: {
+        system_prompt: 'Triage incoming items.',
+        model: 'claude-haiku-4-5',
+        provider: 'anthropic',
+        tools: ['list_documents'],
+        projects: [inboxId],
+      },
+    },
+  });
+  expect(createRes.ok(), `create agent → ${createRes.status()}`).toBe(true);
+  const agentDoc = (await createRes.json()).data;
+  expect(agentDoc.frontmatter.projects).toEqual([inboxId]);
+  expect(agentDoc.projectId).toBeNull();
+
+  // Workspace agents page lists it.
+  await page.goto('/w/p25/agents');
+  await expect(page.getByText('Inbox Triager')).toBeVisible({ timeout: 10_000 });
+  // The "Inbox" chip should be visible alongside (or just below) the agent row.
+  await expect(page.getByText('Inbox').first()).toBeVisible();
+
+  // Project A (Inbox): the assignee picker should surface this agent.
+  // Create a work item first so we have a row to open.
+  const wiInbox = await page.request.post('/api/v1/w/p25/p/inbox/documents', {
+    data: { type: 'work_item', title: 'Sample inbox item' },
+  });
+  expect(wiInbox.ok()).toBe(true);
+
+  // Navigate via the workspace popover wouldn't add coverage here — just go
+  // directly to the project's work-items view and open the slideover.
+  await page.goto('/w/p25/p/inbox');
+  await page.getByText('Sample inbox item').first().click();
+  // The slideover's assignee row opens a Popover containing Members + Agents.
+  // The button labels itself "Unassigned" before a value is chosen.
+  const assigneeOpener = page.getByRole('button', { name: /unassigned/i }).first();
+  await assigneeOpener.click();
+  // Agent IS allow-listed for inbox → it should appear in the Agents section.
+  await expect(page.getByText('Inbox Triager').last()).toBeVisible({ timeout: 5_000 });
+
+  // Project B (Website): the agent must NOT appear.
+  await page.goto('/w/p25/p/website');
+  const wiWebsite = await page.request.post('/api/v1/w/p25/p/website/documents', {
+    data: { type: 'work_item', title: 'Sample website item' },
+  });
+  expect(wiWebsite.ok()).toBe(true);
+  await page.reload();
+  await page.getByText('Sample website item').first().click();
+  await page.getByRole('button', { name: /unassigned/i }).first().click();
+  // The agent should not be in the picker for website.
+  await expect(page.getByText('Inbox Triager')).toHaveCount(0);
+});

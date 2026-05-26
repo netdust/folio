@@ -27,7 +27,7 @@ Implementing Phase 2.5 per `docs/superpowers/specs/2026-05-26-phase-2.5-workspac
 
 - [x] **Task 7 — UI rail subtraction + workspace popover** (removed Agents/Triggers leaves + onAgentsClick/onTriggersClick/isAgents/isTriggers from RailTree; added Agents+Triggers menu items to `workspace-switcher.tsx`; rewired w.$wslug.tsx)
 - [x] **Task 8 — Workspace agents+triggers pages + `useWorkspaceAgents`** (new `lib/api/workspace-documents.ts` with `useWorkspaceAgents` + `useWorkspaceTriggers` + `useWorkspaceDocument`; new `workspace-agents-page.tsx` with project chip rendering + filter; `workspace-triggers-page.tsx`; new routes `/w/:wslug/agents` and `/triggers` with `?doc=`/`?project=` search params; deleted old project-scoped route files + `document-type-list.tsx`)
-- [ ] **Task 9 — `ProjectsField` + assignee picker rewire + E2E** (multi-select with Select-all collapse semantics; assignee picker uses `useWorkspaceAgents` with `keepPreviousData`; Playwright spec `phase-2-5-workspace-agents.spec.ts`)
+- [x] **Task 9 — `ProjectsField` + assignee picker rewire + E2E** — new `ProjectsField` chip editor with wildcard semantics (`['*']` ↔ explicit list, atomic collapse); `assignee-picker.tsx` swapped to `useWorkspaceAgents(wslug, { project })` with `keepPreviousData` for no-skeleton re-open. FrontmatterForm auto-wires `projects` key for agent docs via `ProjectsFieldWithProjects` subcomponent (keeps `useProjects` out of the non-agent render path). Playwright spec at `tests/e2e/phase-2-5-workspace-agents.spec.ts` — to run during shake-out.
 
 #### Phase 2.5 phase gate
 - [ ] Web suite, server suite, shared suite, both type-checks all green

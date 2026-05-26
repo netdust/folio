@@ -1,7 +1,8 @@
 import { useMemo } from 'react';
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
 import { useMembers } from '../../lib/api/members.ts';
-import { useDocuments } from '../../lib/api/documents.ts';
+import { useProjects } from '../../lib/api/projects.ts';
+import { useWorkspaceAgents } from '../../lib/api/workspace-documents.ts';
 
 interface Props {
   wslug: string;
@@ -12,10 +13,14 @@ interface Props {
 
 export function AssigneePicker({ wslug, pslug, value, onChange }: Props) {
   const members = useMembers(wslug);
-  const agents = useDocuments(wslug, pslug, { type: 'agent' });
+  // Phase 2.5: agents live at workspace level; the picker filters server-side
+  // to those allow-listed for this project. id is resolved from the URL pslug.
+  const projectsQ = useProjects(wslug);
+  const projectId = projectsQ.data?.find((p) => p.slug === pslug)?.id;
+  const agents = useWorkspaceAgents(wslug, { project: projectId, enabled: !!projectId });
 
   const memberList = members.data ?? [];
-  const agentList = agents.data?.data ?? [];
+  const agentList = agents.data ?? [];
 
   const label = useMemo(() => {
     if (!value) return 'Unassigned';
