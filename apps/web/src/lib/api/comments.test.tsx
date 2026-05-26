@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, afterEach } from 'vitest';
+import { describe, expect, it, test, vi, afterEach } from 'vitest';
 import { renderHook, waitFor, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
@@ -9,6 +9,7 @@ import {
   useUpdateComment,
   useDeleteComment,
   type Comment,
+  type CommentKind,
 } from './comments.ts';
 
 afterEach(() => {
@@ -181,6 +182,29 @@ describe('useComments', () => {
     expect(url).toContain('kind=plan%2Capproval');
     expect(url).toContain('visibility=normal%2Cinternal');
   });
+
+  // Fix 3: empty-string kind must NOT produce ?kind= in the URL
+  test('useComments with kind="" does NOT add ?kind= to URL', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const calls: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo) => {
+        calls.push(String(input));
+        return new Response(JSON.stringify({ data: [] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }),
+    );
+
+    const { result } = renderHook(
+      () => useComments('acme', 'web', 'parent-1', { kind: '' as CommentKind }),
+      { wrapper: wrap(qc) },
+    );
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(calls[0]).not.toContain('kind=');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -233,6 +257,52 @@ describe('useCreateComment', () => {
     // We verify the mutation was successful and the key exists.
     expect(result.current.data?.slug).toBe('comment-new');
     void listKey; // used above to prime — ensure variable used
+  });
+
+  // Fix 2: lock the optimistic prepend BEFORE the server responds
+  test('useCreateComment optimistically prepends BEFORE server resolves', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+    // Seed the cache with a known existing comment
+    const listKey = commentsKeys.list('acme', 'web', 'parent-1');
+    qc.setQueryData(listKey, [makeComment({ slug: 'existing', body: 'existing' })]);
+
+    // Fetch mock that NEVER resolves during the assertion window
+    let resolveFetch!: (r: Response) => void;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        () =>
+          new Promise<Response>((r) => {
+            resolveFetch = r;
+          }),
+      ),
+    );
+
+    const { result } = renderHook(
+      () => useCreateComment('acme', 'web', 'parent-1'),
+      { wrapper: wrap(qc) },
+    );
+
+    act(() => {
+      result.current.mutate({ body: 'new comment' });
+    });
+
+    // Flush microtasks so onMutate runs, then assert optimistic prepend
+    await waitFor(() => {
+      const cached = qc.getQueryData<Comment[]>(listKey);
+      expect(cached?.length).toBe(2);
+      expect(cached?.[0]?.body).toBe('new comment');  // optimistic at the head
+      expect(cached?.[1]?.body).toBe('existing');     // existing pushed down
+    });
+
+    // Resolve the fetch to clean up
+    resolveFetch(
+      new Response(
+        JSON.stringify({ data: makeComment({ slug: 'new-comment', body: 'new comment' }) }),
+        { status: 201, headers: { 'content-type': 'application/json' } },
+      ),
+    );
   });
 });
 

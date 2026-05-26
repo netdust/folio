@@ -90,11 +90,12 @@ export const commentsKeys = {
 function toSearch(params: ListCommentsParams): string {
   const sp = new URLSearchParams();
   if (params.kind !== undefined) {
-    const kinds = Array.isArray(params.kind) ? params.kind : [params.kind];
+    const kinds = (Array.isArray(params.kind) ? params.kind : [params.kind]).filter(Boolean);
     if (kinds.length > 0) sp.set('kind', kinds.join(','));
   }
-  if (params.visibility !== undefined && params.visibility.length > 0) {
-    sp.set('visibility', params.visibility.join(','));
+  if (params.visibility !== undefined) {
+    const visibilities = params.visibility.filter(Boolean);
+    if (visibilities.length > 0) sp.set('visibility', visibilities.join(','));
   }
   if (params.since) sp.set('since', params.since);
   const s = sp.toString();
