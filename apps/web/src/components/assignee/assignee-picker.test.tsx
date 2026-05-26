@@ -44,26 +44,35 @@ const memberResponse = () =>
     { status: 200, headers: { 'content-type': 'application/json' } },
   );
 
+// Phase 2.5: workspace-scoped agent list — single { data: [] } envelope.
 const agentsResponse = () =>
   new Response(
     JSON.stringify({
-      data: {
-        data: [
-          {
-            id: 'd1',
-            slug: 'triage-bot',
-            type: 'agent',
-            title: 'Triage Bot',
-            status: null,
-            parentId: null,
-            frontmatter: {},
-            createdAt: '2026-05-25T00:00:00.000Z',
-            updatedAt: '2026-05-25T00:00:00.000Z',
-            lastTouchedAt: null,
-          },
-        ],
-        nextCursor: null,
-      },
+      data: [
+        {
+          id: 'd1',
+          slug: 'triage-bot',
+          type: 'agent',
+          title: 'Triage Bot',
+          status: null,
+          parentId: null,
+          frontmatter: { projects: ['*'] },
+          createdAt: '2026-05-25T00:00:00.000Z',
+          updatedAt: '2026-05-25T00:00:00.000Z',
+          lastTouchedAt: null,
+        },
+      ],
+    }),
+    { status: 200, headers: { 'content-type': 'application/json' } },
+  );
+
+// useProjects(wslug) — needed so the picker can resolve pslug → project id.
+const projectsResponse = () =>
+  new Response(
+    JSON.stringify({
+      data: [
+        { id: 'pid-web', workspaceId: 'w1', slug: 'web', name: 'Web', icon: null, description: null },
+      ],
     }),
     { status: 200, headers: { 'content-type': 'application/json' } },
   );
@@ -72,8 +81,9 @@ describe('AssigneePicker', () => {
   it('renders sections for Members and Agents and lists each', async () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     stubFetch({
+      '/documents?type=agent': agentsResponse, // workspace-scoped agents list
+      '/projects': projectsResponse,            // useProjects lookup for pslug → id
       '/members': memberResponse,
-      '/documents?type=agent': agentsResponse,
     });
     render(
       <AssigneePicker wslug="acme" pslug="web" value="" onChange={() => {}} />,
@@ -91,8 +101,9 @@ describe('AssigneePicker', () => {
   it('clicking a member calls onChange with the email', async () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     stubFetch({
+      '/documents?type=agent': agentsResponse, // workspace-scoped agents list
+      '/projects': projectsResponse,            // useProjects lookup for pslug → id
       '/members': memberResponse,
-      '/documents?type=agent': agentsResponse,
     });
     const onChange = vi.fn();
     render(
@@ -107,8 +118,9 @@ describe('AssigneePicker', () => {
   it('clicking an agent calls onChange with agent:<slug>', async () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     stubFetch({
+      '/documents?type=agent': agentsResponse, // workspace-scoped agents list
+      '/projects': projectsResponse,            // useProjects lookup for pslug → id
       '/members': memberResponse,
-      '/documents?type=agent': agentsResponse,
     });
     const onChange = vi.fn();
     render(
@@ -123,8 +135,9 @@ describe('AssigneePicker', () => {
   it('shows the current value in the trigger label', async () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     stubFetch({
+      '/documents?type=agent': agentsResponse, // workspace-scoped agents list
+      '/projects': projectsResponse,            // useProjects lookup for pslug → id
       '/members': memberResponse,
-      '/documents?type=agent': agentsResponse,
     });
     render(
       <AssigneePicker
@@ -144,8 +157,9 @@ describe('AssigneePicker', () => {
   it('Unassign option clears the value to empty string', async () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     stubFetch({
+      '/documents?type=agent': agentsResponse, // workspace-scoped agents list
+      '/projects': projectsResponse,            // useProjects lookup for pslug → id
       '/members': memberResponse,
-      '/documents?type=agent': agentsResponse,
     });
     const onChange = vi.fn();
     render(

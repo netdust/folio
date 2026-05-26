@@ -5,7 +5,7 @@ import { serveStatic } from 'hono/bun';
 import { env } from './env.ts';
 import { registerErrorHandler } from './lib/http.ts';
 import { attachUser, type AuthContext } from './middleware/auth.ts';
-import { attachToken, requireUserOrToken } from './middleware/bearer.ts';
+import { attachToken, requireResource, requireUserOrToken } from './middleware/bearer.ts';
 import {
   resolveProject,
   resolveTable,
@@ -24,6 +24,7 @@ import { statusesRoute } from './routes/statuses.ts';
 import { tablesRoute } from './routes/tables.ts';
 import { tokensRoute } from './routes/tokens.ts';
 import { viewsRoute } from './routes/views.ts';
+import { workspaceDocumentsRoute } from './routes/workspace-documents.ts';
 import { workspaceItemRoute, workspacesRoute } from './routes/workspaces.ts';
 
 export const app = new Hono<AuthContext & ScopeContext>();
@@ -45,10 +46,14 @@ wScope.use('*', attachToken, requireUserOrToken, resolveWorkspace);
 wScope.route('/settings', settingsRoute);
 wScope.route('/tokens', tokensRoute);
 wScope.route('/events', eventsRoute);
+wScope.route('/documents', workspaceDocumentsRoute);
 wScope.route('/projects', projectsRoute);
 
 const pScope = new Hono<AuthContext & ScopeContext>();
-pScope.use('*', resolveProject);
+// Phase 2.5: resolveProject must run before requireResource (the gate reads
+// c.get('project')). requireResource bypasses session requests and human PATs;
+// only agent-bound bearers are checked against frontmatter.projects.
+pScope.use('*', resolveProject, requireResource());
 pScope.route('/tables', tablesRoute);
 
 // Explicit-table mount: same handlers, but resolveTable attaches the table

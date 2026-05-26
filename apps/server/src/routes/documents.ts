@@ -82,6 +82,17 @@ documentsRoute.post('/', requireScope('documents:write'), async (c) => {
     input = { type: v.type, title: v.title, body: v.body, frontmatter: fmRest, status: fmStatus };
   }
 
+  // Phase 2.5: agents and triggers are workspace-scoped. The project-level
+  // endpoint rejects them with a pointer to the right URL.
+  if (input.type === 'agent' || input.type === 'trigger') {
+    const wslug = c.req.param('wslug');
+    throw new HTTPError(
+      'INVALID_DOCUMENT_SCOPE',
+      `${input.type} documents are workspace-scoped; use POST /api/v1/w/${wslug}/documents`,
+      422,
+    );
+  }
+
   // Only resolve the table when we're creating a work_item — agents/triggers
   // are project-scoped and rejecting a table-scoped URL is the service's job.
   const table = input.type === 'work_item' ? getTable(c) : null;
@@ -108,6 +119,16 @@ documentsRoute.get('/', async (c) => {
   const limitRaw = c.req.query('limit');
   const cursorRaw = c.req.query('cursor');
   const filterRaw = c.req.query('filter');
+
+  // Phase 2.5: agent/trigger listing is workspace-level.
+  if (type === 'agent' || type === 'trigger') {
+    const wslug = c.req.param('wslug');
+    throw new HTTPError(
+      'UNSUPPORTED_TYPE_FILTER',
+      `${type} is workspace-scoped; use GET /api/v1/w/${wslug}/documents?type=${type}`,
+      400,
+    );
+  }
 
   if (limitRaw !== undefined) {
     const n = Number(limitRaw);

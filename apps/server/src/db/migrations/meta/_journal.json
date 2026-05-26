@@ -43,6 +43,13 @@
       "when": 1779658152239,
       "tag": "0005_phase_1_7_last_touched_at",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1779782964435,
+      "tag": "0006_phase_2_5_workspace_agents",
+      "breakpoints": true
     }
   ]
 }

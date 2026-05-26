@@ -171,12 +171,7 @@ function WorkspaceLayout() {
       onWikiClick: (pslug: string) => {
         void navigate({ to: '/w/$wslug/p/$pslug/wiki', params: { wslug, pslug } });
       },
-      onAgentsClick: (pslug: string) => {
-        void navigate({ to: '/w/$wslug/p/$pslug/agents', params: { wslug, pslug } });
-      },
-      onTriggersClick: (pslug: string) => {
-        void navigate({ to: '/w/$wslug/p/$pslug/triggers', params: { wslug, pslug } });
-      },
+      // Phase 2.5: agents + triggers moved to workspace popover; no project-level handlers here.
       onNewView: (pslug: string, _tslug: string) => {
         setNewViewSheet({ pslug });
       },
@@ -217,8 +212,6 @@ function WorkspaceLayout() {
           pslug: activePslug,
           viewId: activeViewId,
           isWiki: currentPath.endsWith('/wiki'),
-          isAgents: currentPath.endsWith('/agents'),
-          isTriggers: currentPath.endsWith('/triggers'),
         },
         handlers,
       }),
@@ -315,6 +308,12 @@ function WorkspaceLayout() {
                   onSelectWorkspace={onSelectWorkspace}
                   onCreateWorkspace={onCreateWorkspace}
                   onCreateProject={() => setCreatingProject(true)}
+                  onOpenAgents={() =>
+                    void navigate({ to: '/w/$wslug/agents', params: { wslug } })
+                  }
+                  onOpenTriggers={() =>
+                    void navigate({ to: '/w/$wslug/triggers', params: { wslug } })
+                  }
                 />
               ),
             }}

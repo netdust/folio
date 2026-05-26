@@ -1,20 +1,19 @@
 import { z } from 'zod';
-
-export const V1_MCP_TOOLS = [
-  'list_workspaces', 'list_projects', 'list_documents',
-  'get_document', 'get_document_markdown',
-  'create_document', 'update_document', 'delete_document',
-  'list_statuses', 'list_fields', 'list_views',
-  'run_view',
-] as const;
-
-export type McpTool = (typeof V1_MCP_TOOLS)[number];
+// Single source of truth — both server Zod and the web ToolsField consume this.
+import { V1_MCP_TOOLS, type McpTool } from '@folio/shared';
+export { V1_MCP_TOOLS, type McpTool };
 
 export const agentFrontmatterSchema = z.object({
   system_prompt: z.string().min(1),
   model: z.string().min(1),
   provider: z.enum(['anthropic', 'openai', 'openrouter', 'ollama']),
   tools: z.array(z.enum([...V1_MCP_TOOLS] as [string, ...string[]])),
+  // Phase 2.5: project allow-list. `['*']` (default) = all workspace projects.
+  // Explicit ids are project uuids (survives rename). Wildcard cannot mix with ids.
+  projects: z.array(z.string()).default(['*']).refine(
+    (arr) => !(arr.includes('*') && arr.length > 1),
+    { message: "'*' cannot be combined with explicit project ids" },
+  ),
   max_delegation_depth: z.number().int().min(0).max(5).default(2),
   max_tokens_per_run: z.number().int().min(1).max(100_000).default(10_000),
   requires_approval: z.boolean().default(false),

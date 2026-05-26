@@ -60,11 +60,11 @@ test('getDocument returns null for unknown slug', async () => {
   expect(row).toBeNull();
 });
 
-test('createDocument mints + persists an agent token', async () => {
+test('createDocument (workspace-scoped) mints + persists an agent token bound to the agent', async () => {
   const { db, seed } = await makeTestApp();
   const { document, agentTokenPlaintext } = await createDocument({
     workspace: seed.workspace,
-    project: seed.project,
+    project: null,
     table: null,
     actor: seed.user,
     token: null,
@@ -90,13 +90,15 @@ test('createDocument mints + persists an agent token', async () => {
   });
   expect(row).toBeTruthy();
   expect(row!.workspaceId).toBe(seed.workspace.id);
+  // Phase 2.5: agent_id is set so the cascade FK can revoke on delete.
+  expect(row!.agentId).toBe(document.id);
 });
 
-test('deleteDocument on agent revokes its api token', async () => {
+test('deleteDocument (workspace-scoped) on agent revokes its api token via cascade', async () => {
   const { db, seed } = await makeTestApp();
   const { document } = await createDocument({
     workspace: seed.workspace,
-    project: seed.project,
+    project: null,
     table: null,
     actor: seed.user,
     token: null,
@@ -116,7 +118,6 @@ test('deleteDocument on agent revokes its api token', async () => {
   const apiTokenId = (document.frontmatter as Record<string, unknown>)[
     'api_token_id'
   ] as string;
-  // sanity: token exists
   const before = await db.query.apiTokens.findFirst({
     where: eq(apiTokens.id, apiTokenId),
   });
@@ -124,7 +125,7 @@ test('deleteDocument on agent revokes its api token', async () => {
 
   await deleteDocument({
     workspace: seed.workspace,
-    project: seed.project,
+    project: null,
     actor: seed.user,
     existing: document,
   });

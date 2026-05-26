@@ -39,7 +39,7 @@ import { triggerFrontmatterSchema } from '../lib/trigger-schema.ts';
 import { newApiToken } from '../lib/auth.ts';
 import { walkParentChain } from '../lib/delegation-guard.ts';
 import { compileFilterToWhere } from '../lib/filter-to-drizzle.ts';
-import { slugUniqueInDocuments } from '../lib/slug-unique.ts';
+import { slugUniqueInDocuments, slugUniqueInWorkspaceDocuments } from '../lib/slug-unique.ts';
 
 // ----- shared types & helpers (kept service-private; routes don't import) -----
 
@@ -251,8 +251,14 @@ export interface CreateDocumentInput {
 
 export interface CreateDocumentArgs {
   workspace: Workspace;
-  project: Project;
-  /** Required when input.type === 'work_item'. Null for project-scoped types. */
+  /**
+   * Required for work_item / page (project-scoped types).
+   * Must be null for agent / trigger (workspace-scoped — Phase 2.5).
+   * The CHECK constraint on documents enforces the invariant at the DB layer;
+   * the service asserts it up front for a clean error message.
+   */
+  project: Project | null;
+  /** Required when input.type === 'work_item'. Null for non-table types. */
   table: TableEntity | null;
   actor: User;
   /** The bearer token for the request, or null for session-auth. Used by delegation guard. */
@@ -281,10 +287,27 @@ export async function createDocument(
     frontmatter: stripReservedFrontmatter(args.input.frontmatter ?? {}),
   };
 
-  // Agents and triggers are project-scoped — they live alongside pages with
-  // tableId=null. A table-scoped URL implies a table-bound resource, so
-  // reject here before we resolve the table.
-  if (input.type === 'agent' || input.type === 'trigger') {
+  // Phase 2.5 invariant: agent/trigger ⇒ project=null; work_item/page ⇒ project required.
+  // The CHECK constraint also enforces this at the DB layer; the service-level guard
+  // gives a clean error message instead of "SQLITE_CONSTRAINT_CHECK".
+  const isWorkspaceScoped = input.type === 'agent' || input.type === 'trigger';
+  if (isWorkspaceScoped && p !== null) {
+    throw new HTTPError(
+      'INVALID_DOCUMENT_SCOPE',
+      `${input.type} documents are workspace-scoped; project must be null`,
+      422,
+    );
+  }
+  if (!isWorkspaceScoped && p === null) {
+    throw new HTTPError(
+      'INVALID_DOCUMENT_SCOPE',
+      `${input.type} documents are project-scoped; project is required`,
+      422,
+    );
+  }
+
+  // Agents and triggers cannot be created on a table-scoped URL.
+  if (isWorkspaceScoped) {
     if (args.isTableScopedUrl) {
       throw new HTTPError(
         'INVALID_BODY',
@@ -305,8 +328,7 @@ export async function createDocument(
     input.frontmatter = r.data as Record<string, unknown>;
   }
 
-  // work_items live inside a table; pages and agents/triggers are
-  // project-scoped with tableId=null.
+  // work_items live inside a table; pages have tableId=null.
   let tableId: string | null = null;
   if (input.type === 'work_item') {
     if (!args.table) {
@@ -322,7 +344,11 @@ export async function createDocument(
 
   const id = nanoid();
   const baseSlug = slugify(input.title) || 'doc';
-  const slug = await slugUniqueInDocuments(db, p.id, baseSlug);
+  // Agents/triggers dedupe slugs at workspace level (unique on workspace_id+type+slug);
+  // work_items/pages stay project-scoped (unique on project_id+slug).
+  const slug = isWorkspaceScoped
+    ? await slugUniqueInWorkspaceDocuments(db, ws.id, input.type as 'agent' | 'trigger', baseSlug)
+    : await slugUniqueInDocuments(db, p!.id, baseSlug);
 
   // For agents: mint a bearer token now so its id can be patched into the
   // frontmatter BEFORE the document insert. Plaintext is returned ONCE.
@@ -339,7 +365,8 @@ export async function createDocument(
 
   const row = {
     id,
-    projectId: p.id,
+    projectId: p?.id ?? null,
+    workspaceId: ws.id,
     tableId,
     type: input.type,
     slug,
@@ -354,13 +381,14 @@ export async function createDocument(
 
   // Delegation guard: when a bearer-auth'd agent creates a work_item
   // assigning it to another agent, enforce the actor agent's
-  // max_delegation_depth.
+  // max_delegation_depth. Agents live at workspace scope (Phase 2.5), so look
+  // them up by workspaceId + type, not by project.
   if (token && input.type === 'work_item') {
     const childAssignee = getAssignee(input.frontmatter);
     if (childAssignee?.startsWith('agent:')) {
       const allAgents = await db.query.documents.findMany({
         where: and(
-          eq(documents.projectId, p.id),
+          eq(documents.workspaceId, ws.id),
           eq(documents.type, 'agent'),
         ),
       });
@@ -377,7 +405,7 @@ export async function createDocument(
           findAgentBySlug: async (slugIn: string) => {
             const r = await db.query.documents.findFirst({
               where: and(
-                eq(documents.projectId, p.id),
+                eq(documents.workspaceId, ws.id),
                 eq(documents.type, 'agent'),
                 eq(documents.slug, slugIn),
               ),
@@ -418,11 +446,12 @@ export async function createDocument(
         name: `agent:${slug}`,
         tokenHash: agentTokenHash,
         scopes: toolsToScopes(tools),
+        agentId: id,
         createdBy: user.id,
       });
       await emitEvent(tx, {
         workspaceId: ws.id,
-        projectId: p.id,
+        projectId: p?.id ?? null,
         documentId: id,
         kind: 'agent.created',
         actor: user.id,
@@ -431,13 +460,13 @@ export async function createDocument(
     }
     await emitEvent(tx, {
       workspaceId: ws.id,
-      projectId: p.id,
+      projectId: p?.id ?? null,
       documentId: id,
       kind: 'document.created',
       actor: user.id,
       payload: { slug, type: input.type },
     });
-    if (input.type === 'work_item') {
+    if (input.type === 'work_item' && p) {
       const assignee = getAssignee(input.frontmatter);
       if (assignee && assignee.startsWith('agent:')) {
         await emitEvent(tx, {
@@ -467,7 +496,8 @@ export interface DocumentPatch {
 
 export interface UpdateDocumentArgs {
   workspace: Workspace;
-  project: Project;
+  /** Null for agent/trigger (workspace-scoped) — Phase 2.5. */
+  project: Project | null;
   /** Required when existing.type === 'work_item' and existing.tableId is null. */
   fallbackTable: TableEntity | null;
   actor: User;
@@ -545,8 +575,10 @@ export async function updateDocument(
     return merged;
   })();
 
+  // Agents/triggers don't rename their slug on title change (URLs are sticky
+  // and frontmatter references would break). Only project-scoped docs do.
   const nextSlug =
-    patch.title !== undefined
+    patch.title !== undefined && p
       ? await maybeRegenerateSlug(p.id, existing, patch.title)
       : null;
 
@@ -566,7 +598,7 @@ export async function updateDocument(
     await tx.update(documents).set(updated).where(eq(documents.id, existing.id));
     await emitEvent(tx, {
       workspaceId: ws.id,
-      projectId: p.id,
+      projectId: p?.id ?? null,
       documentId: existing.id,
       kind: 'document.updated',
       actor: user.id,
@@ -577,7 +609,7 @@ export async function updateDocument(
         ],
       },
     });
-    if (existing.type === 'work_item') {
+    if (existing.type === 'work_item' && p) {
       const prevAssignee = getAssignee(existing.frontmatter);
       const nextAssignee = getAssignee(updated.frontmatter);
       if (
@@ -607,7 +639,8 @@ export async function updateDocument(
 
 export interface DeleteDocumentArgs {
   workspace: Workspace;
-  project: Project;
+  /** Null for agent/trigger (workspace-scoped) — Phase 2.5. */
+  project: Project | null;
   actor: User;
   existing: Document;
 }
@@ -615,6 +648,9 @@ export interface DeleteDocumentArgs {
 export async function deleteDocument(args: DeleteDocumentArgs): Promise<void> {
   const { workspace: ws, project: p, actor: user, existing } = args;
   await db.transaction(async (tx) => {
+    // Agents: api_tokens.agent_id ON DELETE CASCADE handles token revocation.
+    // The explicit Phase 2 cleanup (delete by api_token_id from frontmatter)
+    // is now redundant but harmless if any rows pre-date the cascade FK.
     await tx.delete(documents).where(eq(documents.id, existing.id));
     if (existing.type === 'agent') {
       const apiTokenId = (existing.frontmatter as Record<string, unknown>)[
@@ -625,7 +661,7 @@ export async function deleteDocument(args: DeleteDocumentArgs): Promise<void> {
       }
       await emitEvent(tx, {
         workspaceId: ws.id,
-        projectId: p.id,
+        projectId: p?.id ?? null,
         documentId: existing.id,
         kind: 'agent.deleted',
         actor: user.id,
@@ -634,7 +670,7 @@ export async function deleteDocument(args: DeleteDocumentArgs): Promise<void> {
     }
     await emitEvent(tx, {
       workspaceId: ws.id,
-      projectId: p.id,
+      projectId: p?.id ?? null,
       documentId: existing.id,
       kind: 'document.deleted',
       actor: user.id,
@@ -645,6 +681,45 @@ export async function deleteDocument(args: DeleteDocumentArgs): Promise<void> {
         title: existing.title,
       },
     });
+  });
+}
+
+// ----- workspace-scoped readers (Phase 2.5) -----
+
+/** Workspace-scoped variant for agent/trigger lookup by slug. */
+export async function getWorkspaceDocument(
+  workspaceId: string,
+  type: 'agent' | 'trigger',
+  slug: string,
+): Promise<Document | null> {
+  const row = await db.query.documents.findFirst({
+    where: and(
+      eq(documents.workspaceId, workspaceId),
+      eq(documents.type, type),
+      eq(documents.slug, slug),
+    ),
+  });
+  return row ?? null;
+}
+
+/** List workspace-scoped agents/triggers, optionally narrowed to those allow-listed for a project. */
+export async function listWorkspaceDocuments(opts: {
+  workspaceId: string;
+  type: 'agent' | 'trigger';
+  /** When set, filter to docs whose frontmatter.projects includes '*' or this id. */
+  projectFilter?: string | null;
+}): Promise<Document[]> {
+  const rows = await db.query.documents.findMany({
+    where: and(
+      eq(documents.workspaceId, opts.workspaceId),
+      eq(documents.type, opts.type),
+    ),
+  });
+  if (!opts.projectFilter) return rows;
+  return rows.filter((d) => {
+    const projs = (d.frontmatter as { projects?: unknown }).projects;
+    if (!Array.isArray(projs)) return false;
+    return projs.includes('*') || projs.includes(opts.projectFilter!);
   });
 }
 

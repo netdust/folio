@@ -138,51 +138,9 @@ describe('buildRailTree', () => {
     expect(wiki!.active).toBe(false);
   });
 
-  it('agents leaf renders when onAgentsClick is provided; clicking calls the handler', () => {
-    const onAgentsClick = vi.fn();
-    const tree = buildRailTree({
-      projects: [{ slug: 'sales', name: 'Acme Sales' }],
-      tablesByProject: { sales: [] },
-      viewsByTable: {},
-      currentRoute: { wslug: 'acme' },
-      handlers: { ...noopHandlers, onAgentsClick },
-    });
-    const agents = tree[0].children!.find((c) => c.label === 'Agents');
-    expect(agents).toBeDefined();
-    agents!.onClick!();
-    expect(onAgentsClick).toHaveBeenCalledWith('sales');
-  });
-
-  it('triggers leaf renders when onTriggersClick is provided; clicking calls the handler', () => {
-    const onTriggersClick = vi.fn();
-    const tree = buildRailTree({
-      projects: [{ slug: 'sales', name: 'Acme Sales' }],
-      tablesByProject: { sales: [] },
-      viewsByTable: {},
-      currentRoute: { wslug: 'acme' },
-      handlers: { ...noopHandlers, onTriggersClick },
-    });
-    const triggers = tree[0].children!.find((c) => c.label === 'Triggers');
-    expect(triggers).toBeDefined();
-    triggers!.onClick!();
-    expect(onTriggersClick).toHaveBeenCalledWith('sales');
-  });
-
-  it('agents leaf is active when currentRoute.isAgents AND pslug matches', () => {
-    const tree = buildRailTree({
-      projects: [{ slug: 'sales', name: 'Acme Sales' }],
-      tablesByProject: { sales: [] },
-      viewsByTable: {},
-      currentRoute: { wslug: 'acme', pslug: 'sales', isAgents: true },
-      handlers: { ...noopHandlers, onAgentsClick: () => {}, onTriggersClick: () => {} },
-    });
-    const agents = tree[0].children!.find((c) => c.label === 'Agents');
-    const triggers = tree[0].children!.find((c) => c.label === 'Triggers');
-    expect(agents!.active).toBe(true);
-    expect(triggers!.active).toBe(false);
-  });
-
-  it('agents/triggers leaves are absent when their handlers are not provided', () => {
+  it('Phase 2.5: agents + triggers leaves are NEVER rendered under a project', () => {
+    // Per Phase 2.5: agents/triggers are workspace-scoped infrastructure
+    // surfaced from the workspace popover, not from the project rail.
     const tree = buildRailTree({
       projects: [{ slug: 'sales', name: 'Acme Sales' }],
       tablesByProject: { sales: [] },

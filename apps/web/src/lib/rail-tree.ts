@@ -4,8 +4,6 @@ import {
   List,
   Columns3,
   FileText,
-  Bot,
-  Zap,
 } from 'lucide-react';
 import type { NavItem, RowMenuItem } from '../components/shell/rail.tsx';
 
@@ -39,8 +37,6 @@ export interface RailTreeRoute {
   // this from pslug + viewId alone — /work-items and /wiki both have
   // undefined viewId on a fresh load.
   isWiki?: boolean;
-  isAgents?: boolean;
-  isTriggers?: boolean;
 }
 
 export interface RailTreeHandlers {
@@ -56,8 +52,6 @@ export interface RailTreeHandlers {
     type: 'list' | 'kanban',
   ) => void;
   onWikiClick?: (pslug: string) => void;
-  onAgentsClick?: (pslug: string) => void;
-  onTriggersClick?: (pslug: string) => void;
   onNewProject?: () => void;
   onNewTable?: (pslug: string) => void;
   onNewView: (pslug: string, tslug: string) => void;
@@ -130,44 +124,22 @@ export function buildRailTree(input: RailTreeInput): NavItem[] {
         }
       : null;
 
-    const agentsLeaf: NavItem | null = handlers.onAgentsClick
-      ? {
-          id: `agents:${project.slug}`,
-          label: 'Agents',
-          lucideIcon: Bot,
-          active: currentRoute.pslug === project.slug && currentRoute.isAgents === true,
-          onClick: () => handlers.onAgentsClick!(project.slug),
-        }
-      : null;
-
-    const triggersLeaf: NavItem | null = handlers.onTriggersClick
-      ? {
-          id: `triggers:${project.slug}`,
-          label: 'Triggers',
-          lucideIcon: Zap,
-          active: currentRoute.pslug === project.slug && currentRoute.isTriggers === true,
-          onClick: () => handlers.onTriggersClick!(project.slug),
-        }
-      : null;
-
+    // Phase 2.5: rail = content only (workspaces, projects, tables, views, wiki).
+    // Agents + triggers are workspace-level infrastructure, surfaced from the
+    // workspace popover (apps/web/src/components/shell/workspace-switcher.tsx).
     const projectChildren = [
       ...tableNavItems,
       ...(wikiLeaf ? [wikiLeaf] : []),
-      ...(agentsLeaf ? [agentsLeaf] : []),
-      ...(triggersLeaf ? [triggersLeaf] : []),
     ];
 
     // The project row is the "active tip" only when the user is on the
-    // project but no specific child (view, wiki, agents, triggers) owns the
-    // highlight. Otherwise we'd render two `bg-nav-active` rows simultaneously
-    // and lose the single-row "where am I" signal.
+    // project but no specific child (view, wiki) owns the highlight.
+    // Otherwise we'd render two `bg-nav-active` rows simultaneously and lose
+    // the single-row "where am I" signal.
     const projectMatches = currentRoute.pslug === project.slug;
     const childOwnsActive =
       projectMatches &&
-      (currentRoute.viewId !== undefined ||
-        currentRoute.isWiki === true ||
-        currentRoute.isAgents === true ||
-        currentRoute.isTriggers === true);
+      (currentRoute.viewId !== undefined || currentRoute.isWiki === true);
 
     return {
       id: `project:${project.slug}`,
