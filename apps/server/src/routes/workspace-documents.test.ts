@@ -1,7 +1,8 @@
 import { test, expect } from 'bun:test';
 import { nanoid } from 'nanoid';
 import { makeTestApp } from '../test/harness.ts';
-import { projects } from '../db/schema.ts';
+import { projects, events } from '../db/schema.ts';
+import { eq } from 'drizzle-orm';
 
 const WS_PATH = '/api/v1/w/acme/documents';
 
@@ -213,4 +214,127 @@ test('two agents in the same workspace can share a base slug only after disambig
   });
   expect((await first.json()).data.slug).toBe('bot');
   expect((await second.json()).data.slug).toBe('bot-2');
+});
+
+// ---------------------------------------------------------------------------
+// POST /:slug/activity — workspace-level activity endpoint (Phase 2.6 A7)
+// ---------------------------------------------------------------------------
+
+async function createAgent(
+  app: Awaited<ReturnType<typeof makeTestApp>>['app'],
+  cookie: string,
+  title = 'Activity Bot',
+) {
+  const res = await postWorkspaceDoc(app, cookie, {
+    type: 'agent',
+    title,
+    frontmatter: { system_prompt: 'x', model: 'm', provider: 'anthropic', tools: [] },
+  });
+  return (await res.json()).data as { id: string; slug: string };
+}
+
+test('POST /:slug/activity — 201 happy path on agent', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const agent = await createAgent(app, seed.sessionCookie);
+
+  const res = await app.request(`${WS_PATH}/${agent.slug}/activity`, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ note: 'Agent ran successfully' }),
+  });
+  expect(res.status).toBe(201);
+  const body = await res.json();
+  // Response shape.
+  expect(body.data.lastTouchedAt).toBeString();
+  expect(() => new Date(body.data.lastTouchedAt)).not.toThrow();
+
+  // Agent row bumped.
+  const { documents } = await import('../db/schema.ts');
+  const row = await db.query.documents.findFirst({ where: eq(documents.id, agent.id) });
+  expect(row?.lastTouchedAt).not.toBeNull();
+
+  // activity.logged event inserted with projectId null.
+  const { and } = await import('drizzle-orm');
+  const eventRow = await db.query.events.findFirst({
+    where: and(eq(events.documentId, agent.id), eq(events.kind, 'activity.logged')),
+  });
+  expect(eventRow?.kind).toBe('activity.logged');
+  expect(eventRow?.projectId).toBeNull();
+  expect((eventRow?.payload as { note: string }).note).toBe('Agent ran successfully');
+});
+
+test('POST /:slug/activity — 404 when agent slug does not exist', async () => {
+  const { app, seed } = await makeTestApp();
+  const res = await app.request(`${WS_PATH}/nonexistent-slug/activity`, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ note: 'Hello' }),
+  });
+  expect(res.status).toBe(404);
+  const body = await res.json();
+  expect(body.error.code).toBe('DOCUMENT_NOT_FOUND');
+});
+
+test('POST /:slug/activity — 422 INVALID_NOTE when note is empty', async () => {
+  const { app, seed } = await makeTestApp();
+  const agent = await createAgent(app, seed.sessionCookie);
+
+  const res = await app.request(`${WS_PATH}/${agent.slug}/activity`, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ note: '   ' }),
+  });
+  expect(res.status).toBe(422);
+  const body = await res.json();
+  expect(body.error.code).toBe('INVALID_NOTE');
+});
+
+test('POST /:slug/activity — 422 NOTE_TOO_LONG when note exceeds 2000 chars', async () => {
+  const { app, seed } = await makeTestApp();
+  const agent = await createAgent(app, seed.sessionCookie);
+
+  const res = await app.request(`${WS_PATH}/${agent.slug}/activity`, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ note: 'a'.repeat(2001) }),
+  });
+  expect(res.status).toBe(422);
+  const body = await res.json();
+  expect(body.error.code).toBe('NOTE_TOO_LONG');
+});
+
+test('POST /:slug/activity — 201 at exactly 2000 chars (boundary)', async () => {
+  const { app, seed } = await makeTestApp();
+  const agent = await createAgent(app, seed.sessionCookie);
+
+  const res = await app.request(`${WS_PATH}/${agent.slug}/activity`, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ note: 'b'.repeat(2000) }),
+  });
+  expect(res.status).toBe(201);
+});
+
+test('POST /:slug/activity — 422 INVALID_ACTIVITY_TARGET when doc is a trigger', async () => {
+  const { app, seed } = await makeTestApp();
+  // Create a trigger doc at workspace level (must satisfy triggerFrontmatterSchema).
+  const triggerRes = await postWorkspaceDoc(app, seed.sessionCookie, {
+    type: 'trigger',
+    title: 'Webhook Trigger',
+    frontmatter: {
+      agent: 'some-agent',
+      schedule: '* * * * *',
+      on_event: null,
+    },
+  });
+  const trigger = (await triggerRes.json()).data as { slug: string };
+
+  const res = await app.request(`${WS_PATH}/${trigger.slug}/activity`, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ note: 'Should be rejected' }),
+  });
+  expect(res.status).toBe(422);
+  const body = await res.json();
+  expect(body.error.code).toBe('INVALID_ACTIVITY_TARGET');
 });
