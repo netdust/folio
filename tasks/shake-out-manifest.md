@@ -10,14 +10,17 @@
 
 ## Summary
 
-**4 Phase 2.5 bugs to fix, 1 deferred (pre-existing), 1 known flake (pre-existing).**
+**4 originals + 3 polish bugs found in second sweep, 1 deferred (pre-existing), 1 known flake (pre-existing).**
 
-- **CRITICAL** (security): bearer enforcement gap on project documents endpoint (BUG-001)
-- **CRITICAL** (feature missing): workspace agents/triggers pages have no create or edit affordances (BUG-004)
-- **MINOR** (polish): workspace popover Agents/Triggers items need leading icons (BUG-003)
-- **MINOR** (test infra): Phase 2.5 e2e spec times out at picker open (BUG-002)
-- **DEFERRED** (pre-existing, not P2.5): table-cell assignee field is plain text — picker was always slideover-only (BUG-005)
-- **DEFERRED** (pre-existing flake): click-through a11y test (matches STATE.md baseline)
+- **CRITICAL** (security): BUG-001 RESOLVED — `requireResource` now mounted (commit `174c3d9`).
+- **CRITICAL** (feature missing): BUG-004 RESOLVED — workspace slideover + create/delete UI (commit `f94ebc5`).
+- **MINOR** (polish): BUG-003 RESOLVED — icons on workspace popover (commit `397d224`).
+- **MINOR** (test infra): BUG-002 RESOLVED — Phase 2.5 e2e spec selector + missing `assignee` key fix; spec passes 1/1.
+- **IMPORTANT** (UX): BUG-006 RESOLVED — paired provider/model field with AI-key annotation.
+- **IMPORTANT** (UX): BUG-007 RESOLVED — `ToolsField` multi-select from `V1_MCP_TOOLS` (shared).
+- **MINOR** (UX): BUG-008 RESOLVED — chip neutral at rest, primary on hover.
+- **DEFERRED** (pre-existing, not P2.5): BUG-005 — table-cell assignee field; picker was always slideover-only.
+- **DEFERRED** (pre-existing flake): click-through a11y test, matches STATE.md baseline.
 
 ---
 
@@ -75,17 +78,15 @@ Track A — Automated (Claude):
 - **Re-sweep:** Live curl reproduces the fix. Server suite 259/1-skip/0-fail (+1 new test).
 - **Status:** RESOLVED
 
-### BUG-002 [MINOR] — Phase 2.5 e2e spec times out opening assignee picker
+### BUG-002 [MINOR] — Phase 2.5 e2e spec times out opening assignee picker — RESOLVED
 
 - **Found by:** Automated (E1)
-- **What happened:** `tests/e2e/phase-2-5-workspace-agents.spec.ts` reaches the project page, clicks `'Sample inbox item'` text to open the slideover, then `getByRole('button', { name: /unassigned/i }).first().click()` — locator never resolves; test times out at 30s. Page snapshot shows the work-items list still on screen, not the slideover.
-- **Expected:** Slideover opens and exposes an "Unassigned" button to click.
-- **Where:** `apps/web/tests/e2e/phase-2-5-workspace-agents.spec.ts:59-63`. The test selector strategy doesn't account for the row click going to inline-edit instead of slideover-open (Folio's table-row title is InlineEdit-able, so a text click triggers edit, not navigation).
-- **Cluster:** Standalone (test infra; product behavior unverified by this test as written).
-- **Severity rationale:** The spec covers a workflow that's already verified by curl (assignee picker now queries the workspace agents endpoint with `?project=:pid`; we saw it return the right shape live). The vertical slice will be verifiable via the manual checklist (Track B). Fixing the spec is small.
-- **Status:** OPEN
-- **Root cause:**
-- **Fix:**
+- **Root cause:** Two issues in the test:
+  1. `page.getByText('Sample inbox item').first().click()` triggered InlineEdit on the row title instead of opening the slideover. Canonical pattern is `getByRole('button', { name: 'Open <title>' })` (each row has an accessible Open button).
+  2. The assignee picker only renders when `frontmatter.assignee` key exists (FrontmatterForm is key-driven). A freshly-created work item has empty frontmatter — no picker. Test had to seed the key.
+- **Fix:** Commit `<pending>`. Updated the spec to (a) use the canonical Open button selector, (b) PATCH the work item with `frontmatter: { assignee: '' }` BEFORE first navigation so the picker row is rendered on the first slideover open.
+- **Re-sweep:** `bun run e2e phase-2-5-workspace-agents.spec.ts` → 1 passed (5.0s test + 4.6m cold start).
+- **Status:** RESOLVED
 
 ### BUG-003 [MINOR] — Workspace popover "Agents" / "Triggers" items need icons — RESOLVED
 
@@ -116,6 +117,35 @@ Track A — Automated (Claude):
 - **Where the assumption came from:** STATE.md line 158 says "Picker is **auto-wired by `FrontmatterForm`** whenever `key === 'assignee'`" — that explicitly scopes it to the form, not the cell. Phase 2 commit `a9cba37 phase-2: assignee picker — humans + agents` shipped the slideover wiring; a table-cell wiring was never built.
 - **Action:** Not in Phase 2.5 scope. Worth a follow-up issue ("polish: wire AssigneePicker into TableCell for the assignee column"), but not a Phase 2.5 ship-blocker.
 - **Status:** DEFERRED
+
+### BUG-006 [IMPORTANT — UX] — Agent slideover: model/provider paired dropdowns sourced from configured AI keys — RESOLVED
+
+- **Found by:** Manual (Track B, second sweep)
+- **Fix:** Commit `<pending>`. New `ProviderModelField` in `apps/web/src/components/inline/`:
+  - Provider select: all 4 supported providers (anthropic / openai / openrouter / ollama). Annotates each with "no key" badge when the workspace has no AI key configured for that provider (queried via `useWorkspaceAiKeys`).
+  - Model select / input: hardcoded model lists for anthropic + openai (per the user's shake-out call). openrouter + ollama fall back to a free-text input (their model namespace is open-ended).
+  - Provider switch resets model to the first model of the new provider unless the current model is in the new provider's list (preserves valid pairings).
+  - Wired into FrontmatterForm by key dispatch (`key === 'provider' && type === 'agent'`) — renders ONE row that owns both `provider` and `model` keys. The standalone `model` row is filtered out of orderedKeys.
+- Also added `AGENT_KEY_ORDER` in FrontmatterForm (system_prompt → provider/model → tools → projects → max_delegation_depth → max_tokens_per_run → requires_approval). Reads top-down instead of alphabetical mess.
+- **Tests:** 4 new tests for `ProviderModelField` (renders provider + model, no-key badge, model reset on provider switch, openrouter free-text).
+- **Status:** RESOLVED
+
+### BUG-007 [IMPORTANT — UX] — Agent slideover: `tools` should be a multi-select of `V1_MCP_TOOLS` — RESOLVED
+
+- **Found by:** Manual (Track B, second sweep)
+- **Fix:** Commit `<pending>`. Three pieces:
+  1. Extracted `V1_MCP_TOOLS` + `McpTool` + new `MCP_TOOL_GROUPS` (read / write / delete grouping) into `packages/shared/src/mcp-tools.ts`. Server's `agent-schema.ts` now re-exports from `@folio/shared` — single source of truth.
+  2. New `ToolsField` chip-editor in `apps/web/src/components/inline/tools-field.tsx`. Mirrors ProjectsField pattern: trigger renders chips, popover holds grouped checkboxes. Persisted array always in MCP_TOOL_GROUPS order so MD round-trips are stable.
+  3. Wired into `FrontmatterForm` via key dispatch (`key === 'tools' && type === 'agent'`).
+- **Tests:** 6 new tests for `ToolsField` (empty state, chip rendering, check/uncheck, ordering, group rendering).
+- **Status:** RESOLVED
+
+### BUG-008 [MINOR — UX] — Project chips on agents page invisible at rest — RESOLVED
+
+- **Found by:** Manual (Track B, second sweep)
+- **What happened:** Clickable project chips rendered with `bg-primary/10` which blended into the page background; only visible on hover.
+- **Fix:** Commit `<pending>`. Moved to a neutral chip at rest (`border-border bg-card text-fg-2`) that gains the primary tint on hover. The "All projects" muted variant kept its existing style. 10/10 page tests still pass.
+- **Status:** RESOLVED
 
 ### Pre-existing, not Phase 2.5 — deferred for separate sweep
 
