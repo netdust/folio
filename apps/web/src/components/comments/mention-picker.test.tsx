@@ -422,7 +422,7 @@ describe('MentionPicker', () => {
     expect(await screen.findByText('No agents yet')).toBeInTheDocument();
   });
 
-  it('empty members workspace shows "No members"', async () => {
+  it('empty members workspace shows "No members yet"', async () => {
     const qc = makeQC();
     stubFetch({
       '/documents?type=agent': makeAgentsResponse(defaultAgents),
@@ -440,7 +440,7 @@ describe('MentionPicker', () => {
       { wrapper: wrap(qc) },
     );
 
-    expect(await screen.findByText('No members')).toBeInTheDocument();
+    expect(await screen.findByText('No members yet')).toBeInTheDocument();
   });
 
   it('clicking an agent row calls onSelect with type=agent', async () => {

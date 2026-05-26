@@ -118,7 +118,7 @@ export function MentionPicker({
         <div className="px-2 py-1 text-[10px] uppercase tracking-wide text-fg-3">MEMBERS</div>
 
         {allMembers.length === 0 ? (
-          <div className="px-2 py-1 text-xs text-fg-3">No members</div>
+          <div className="px-2 py-1 text-xs text-fg-3">No members yet</div>
         ) : filteredMembers.length === 0 ? (
           <div className="px-2 py-1 text-xs text-fg-3">No matching members</div>
         ) : (
@@ -139,9 +139,9 @@ export function MentionPicker({
                 )}
               >
                 <div className="font-medium">
-                <span aria-hidden="true">👤 </span>
-                {m.name}
-              </div>
+                  <span aria-hidden="true">👤 </span>
+                  {m.name}
+                </div>
                 <div className="text-[10px] text-fg-3">{m.email}</div>
               </button>
             );
