@@ -25,6 +25,29 @@ export async function slugUniqueInDocuments(
   return pickFree(new Set(rows.map((r) => r.slug)), base);
 }
 
+/**
+ * Phase 2.5: agents and triggers are workspace-scoped, and uniqueness on those
+ * rows is enforced by the (workspace_id, type, slug) UNIQUE index. Scope this
+ * helper accordingly so two different agents and a trigger can each own the
+ * same base slug.
+ */
+export async function slugUniqueInWorkspaceDocuments(
+  tx: DBOrTx,
+  workspaceId: string,
+  type: 'agent' | 'trigger',
+  base: string,
+): Promise<string> {
+  const rows = await tx
+    .select({ slug: documents.slug })
+    .from(documents)
+    .where(and(
+      eq(documents.workspaceId, workspaceId),
+      eq(documents.type, type),
+      like(documents.slug, `${base}%`),
+    ));
+  return pickFree(new Set(rows.map((r) => r.slug)), base);
+}
+
 export async function slugUniqueInProjects(
   tx: DBOrTx,
   workspaceId: string,

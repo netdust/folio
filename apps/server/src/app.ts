@@ -24,6 +24,7 @@ import { statusesRoute } from './routes/statuses.ts';
 import { tablesRoute } from './routes/tables.ts';
 import { tokensRoute } from './routes/tokens.ts';
 import { viewsRoute } from './routes/views.ts';
+import { workspaceDocumentsRoute } from './routes/workspace-documents.ts';
 import { workspaceItemRoute, workspacesRoute } from './routes/workspaces.ts';
 
 export const app = new Hono<AuthContext & ScopeContext>();
@@ -45,6 +46,7 @@ wScope.use('*', attachToken, requireUserOrToken, resolveWorkspace);
 wScope.route('/settings', settingsRoute);
 wScope.route('/tokens', tokensRoute);
 wScope.route('/events', eventsRoute);
+wScope.route('/documents', workspaceDocumentsRoute);
 wScope.route('/projects', projectsRoute);
 
 const pScope = new Hono<AuthContext & ScopeContext>();

@@ -16,7 +16,8 @@ export type EventKind =
 
 export interface EmitArgs {
   workspaceId: string;
-  projectId?: string;
+  /** null for workspace-scoped resources (agent/trigger); a project id otherwise. */
+  projectId?: string | null;
   documentId?: string;
   kind: EventKind;
   actor: string;
