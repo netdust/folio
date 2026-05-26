@@ -1,13 +1,13 @@
 import { cn } from './cn.ts';
 
-interface TabItem<T extends string> {
+export interface TabItem<T extends string> {
   value: T;
   label: string;
   icon?: string;
   count?: number;
 }
 
-interface TabStripProps<T extends string> {
+export interface TabStripProps<T extends string> {
   value: T;
   items: TabItem<T>[];
   onChange: (next: T) => void;
