@@ -167,6 +167,7 @@ export function CommentComposer({
   const wrapperRef = useRef<HTMLDivElement | null>(null);
   const pickerRef = useRef<HTMLDivElement | null>(null);
   const bodyRef = useRef(body);
+  const prevPickerRef = useRef<PickerState | null>(null);
   bodyRef.current = body;
 
   // Debounced draft writer. Cancel on unmount.
@@ -184,12 +185,26 @@ export function CommentComposer({
   );
 
   // Picker open: focus the picker root so its keydown handler receives Arrow/Enter/Escape.
+  // Picker close: return focus to the editor so the user can keep typing without a re-click.
   useEffect(() => {
+    const prev = prevPickerRef.current;
+    prevPickerRef.current = picker;
+
     if (picker) {
-      // Defer focus to after the picker DOM mounts.
+      // Transition: closed → open. Defer focus to after the picker DOM mounts.
       const t = setTimeout(() => pickerRef.current?.focus(), 0);
       return () => clearTimeout(t);
     }
+
+    if (prev && !picker) {
+      // Transition: open → closed. Return focus to the ProseMirror editor.
+      const t = setTimeout(() => {
+        const dom = wrapperRef.current?.querySelector('.ProseMirror') as HTMLElement | null;
+        dom?.focus();
+      }, 0);
+      return () => clearTimeout(t);
+    }
+
     return undefined;
   }, [picker]);
 

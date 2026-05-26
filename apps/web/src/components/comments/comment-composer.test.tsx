@@ -249,4 +249,14 @@ describe('CommentComposer', () => {
   it.skip('TODO C11 Playwright: debounced draft save fires 300ms after editor change', () => {
     // Requires real Milkdown markdownUpdated event to fire on input.
   });
+
+  it.skip('TODO C11 Playwright: focus returns to editor on picker close (after onSelect)', () => {
+    // jsdom does not propagate focus between elements via setTimeout/element.focus()
+    // reliably enough to test. Verifying focus-return requires real browser focus
+    // handling — defer to C11 Playwright spec.
+  });
+
+  it.skip('TODO C11 Playwright: focus returns to editor on picker close (after onClose via Escape)', () => {
+    // Same reason — defer to Playwright.
+  });
 });
