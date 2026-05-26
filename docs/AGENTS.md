@@ -129,6 +129,15 @@ priority: high
 
 The web `AssigneePicker` (`apps/web/src/components/assignee/assignee-picker.tsx`) groups members and agents in the same Popover and writes the value in this format.
 
+## Approval and rejection via comments
+
+Mentioning an agent in a comment with an approval or rejection keyword triggers an `approvalIntent`. The detection rule is intentionally narrow to minimise false positives:
+
+- `@<agent> approved` / `@<agent> rejected` at **position 1** always matches (case-insensitive; optional trailing `.,!;` is stripped).
+- At **position 2**, the keyword matches only when position 1 is one of: `is, was, are, were, been, be, has, have, had, got, gets, just` — covering common constructions like `@drafter has approved`, `@drafter got approved`, `@drafter just approved the plan`.
+- **Position 3+ never matches** (`@drafter looks approved to me` — no match).
+- The **verb form** does not match (`@drafter please approve` — `approve` is not in the keyword set; only the past participle triggers intent).
+
 ## Delegation
 
 In Phase 2.5, agent creation via MCP is REJECTED (`-32602 agent_lifecycle_via_http_only`). Agents can still create OTHER agents through the workspace-scoped HTTP endpoint when their token has `documents:write`, but the convenience MCP tools (`create_agent` / `update_agent` / `delete_agent` / `get_agent_self`) ship in Phase 2.6.

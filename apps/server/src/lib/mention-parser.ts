@@ -14,11 +14,21 @@ const TOKEN_RE = /(?:^|\s)@([a-z][a-z0-9-]+)/g;
 const KEYWORD_RE = /^(approved|rejected)[.,!;]?$/i;
 
 /**
- * Linking verbs ("to be") that are transparent at position 1: they allow an
- * approval keyword at position 2 to still be considered "near" the mention.
- * Non-copular verbs like "looks", "seems", "please" do NOT qualify.
+ * Position-1 words that are transparent: when position 1 is one of these, an
+ * approval keyword at position 2 is still considered "near" the mention.
+ * Core: "to be" forms (is, was, are, were, been, be).
+ * Extended: perfect-tense auxiliaries (has, have, had), colloquial passives
+ * (got, gets), and the temporal adverb "just" — all common in natural approval
+ * phrases like "@drafter has approved", "@drafter got approved", "@drafter just
+ * approved the plan". Non-qualifying verbs like "looks", "seems", "please" are
+ * intentionally excluded to minimise false positives.
  */
-const LINKING_VERBS = new Set(['is', 'was', 'are', 'were', 'been', 'be']);
+const POS1_ADJACENCY_ALLOW = new Set([
+  'is', 'was', 'are', 'were', 'been', 'be',
+  'has', 'have', 'had',
+  'got', 'gets',
+  'just',
+]);
 
 export interface ParseMentionsInput {
   body: string;
@@ -127,11 +137,12 @@ export function parseMentions(input: ParseMentionsInput): ParseMentionsResult {
       }
     }
 
-    // Position 2: keyword only if position 1 is a linking verb ("is", "was", etc.).
-    // This distinguishes "@agent is approved" (matches) from "@agent looks approved" (no match).
+    // Position 2: keyword only if position 1 is in POS1_ADJACENCY_ALLOW ("is", "has", "got", "just", etc.).
+    // This distinguishes "@agent is approved" / "@agent has approved" (matches)
+    // from "@agent looks approved" (no match).
     if (!approvalIntent && nextTokens.length === 2) {
       const pos2 = nextTokens[1];
-      if (LINKING_VERBS.has(nextTokens[0].toLowerCase())) {
+      if (POS1_ADJACENCY_ALLOW.has(nextTokens[0].toLowerCase())) {
         const m = pos2.match(KEYWORD_RE);
         if (m) {
           const kind = m[1].toLowerCase() === 'approved' ? 'approval' : 'rejection';
