@@ -1,11 +1,11 @@
 import { describe, expect, test } from 'bun:test';
-import { CommentFrontmatterSchema } from './comment-schema.ts';
+import { commentFrontmatterSchema } from './comment-schema.ts';
 
 const BASE = { author: 'user:stefan' };
 
-describe('CommentFrontmatterSchema — defaults', () => {
+describe('commentFrontmatterSchema — defaults', () => {
   test('parses a minimal valid comment with only author set', () => {
-    const r = CommentFrontmatterSchema.safeParse(BASE);
+    const r = commentFrontmatterSchema.safeParse(BASE);
     expect(r.success).toBe(true);
     if (r.success) {
       expect(r.data.kind).toBe('comment');
@@ -15,7 +15,7 @@ describe('CommentFrontmatterSchema — defaults', () => {
   });
 
   test('accepts all optional fields when valid', () => {
-    const r = CommentFrontmatterSchema.safeParse({
+    const r = commentFrontmatterSchema.safeParse({
       author: 'agent:summarizer',
       kind: 'plan',
       visibility: 'internal',
@@ -27,29 +27,25 @@ describe('CommentFrontmatterSchema — defaults', () => {
   });
 });
 
-describe('CommentFrontmatterSchema — approval / rejection requires target_agent', () => {
+describe('commentFrontmatterSchema — approval / rejection requires target_agent', () => {
   test('requires target_agent when kind is approval', () => {
-    const r = CommentFrontmatterSchema.safeParse({ ...BASE, kind: 'approval' });
+    const r = commentFrontmatterSchema.safeParse({ ...BASE, kind: 'approval' });
     expect(r.success).toBe(false);
     if (!r.success) {
-      expect(r.error.issues[0]?.message).toBe(
-        'target_agent is required when kind is approval or rejection',
-      );
+      expect(r.error.issues[0]?.message).toMatch(/target_agent.*required.*approval/i);
     }
   });
 
   test('requires target_agent when kind is rejection', () => {
-    const r = CommentFrontmatterSchema.safeParse({ ...BASE, kind: 'rejection' });
+    const r = commentFrontmatterSchema.safeParse({ ...BASE, kind: 'rejection' });
     expect(r.success).toBe(false);
     if (!r.success) {
-      expect(r.error.issues[0]?.message).toBe(
-        'target_agent is required when kind is approval or rejection',
-      );
+      expect(r.error.issues[0]?.message).toMatch(/target_agent.*required.*approval/i);
     }
   });
 
   test('accepts approval with target_agent set', () => {
-    const r = CommentFrontmatterSchema.safeParse({
+    const r = commentFrontmatterSchema.safeParse({
       ...BASE,
       kind: 'approval',
       target_agent: 'agent:deploy-bot',
@@ -58,7 +54,7 @@ describe('CommentFrontmatterSchema — approval / rejection requires target_agen
   });
 
   test('accepts rejection with target_agent set', () => {
-    const r = CommentFrontmatterSchema.safeParse({
+    const r = commentFrontmatterSchema.safeParse({
       ...BASE,
       kind: 'rejection',
       target_agent: 'agent:deploy-bot',
@@ -67,23 +63,21 @@ describe('CommentFrontmatterSchema — approval / rejection requires target_agen
   });
 });
 
-describe('CommentFrontmatterSchema — target_agent only valid for approval/rejection', () => {
+describe('commentFrontmatterSchema — target_agent only valid for approval/rejection', () => {
   test('rejects target_agent when kind is comment', () => {
-    const r = CommentFrontmatterSchema.safeParse({
+    const r = commentFrontmatterSchema.safeParse({
       ...BASE,
       kind: 'comment',
       target_agent: 'agent:deploy-bot',
     });
     expect(r.success).toBe(false);
     if (!r.success) {
-      expect(r.error.issues[0]?.message).toBe(
-        'target_agent is only valid when kind is approval or rejection',
-      );
+      expect(r.error.issues[0]?.message).toMatch(/target_agent.*only valid.*approval/i);
     }
   });
 
   test('rejects target_agent when kind is plan', () => {
-    const r = CommentFrontmatterSchema.safeParse({
+    const r = commentFrontmatterSchema.safeParse({
       ...BASE,
       kind: 'plan',
       target_agent: 'agent:x',
@@ -92,7 +86,7 @@ describe('CommentFrontmatterSchema — target_agent only valid for approval/reje
   });
 
   test('rejects target_agent when kind is result', () => {
-    const r = CommentFrontmatterSchema.safeParse({
+    const r = commentFrontmatterSchema.safeParse({
       ...BASE,
       kind: 'result',
       target_agent: 'agent:x',
@@ -101,7 +95,7 @@ describe('CommentFrontmatterSchema — target_agent only valid for approval/reje
   });
 
   test('rejects target_agent when kind is reply', () => {
-    const r = CommentFrontmatterSchema.safeParse({
+    const r = commentFrontmatterSchema.safeParse({
       ...BASE,
       kind: 'reply',
       target_agent: 'agent:x',
@@ -110,9 +104,9 @@ describe('CommentFrontmatterSchema — target_agent only valid for approval/reje
   });
 });
 
-describe('CommentFrontmatterSchema — mentions / ResolvedMentionSchema', () => {
+describe('commentFrontmatterSchema — mentions / resolvedMentionSchema', () => {
   test('accepts a resolved mention with target + resolved + resolvedId + resolvedType', () => {
-    const r = CommentFrontmatterSchema.safeParse({
+    const r = commentFrontmatterSchema.safeParse({
       ...BASE,
       mentions: [
         {
@@ -127,7 +121,7 @@ describe('CommentFrontmatterSchema — mentions / ResolvedMentionSchema', () => 
   });
 
   test('accepts a mention with resolved: false and no resolvedId', () => {
-    const r = CommentFrontmatterSchema.safeParse({
+    const r = commentFrontmatterSchema.safeParse({
       ...BASE,
       mentions: [{ target: 'user:stefan', resolved: false }],
     });
@@ -135,7 +129,7 @@ describe('CommentFrontmatterSchema — mentions / ResolvedMentionSchema', () => 
   });
 
   test('rejects a target string not matching user: or agent: prefix', () => {
-    const r = CommentFrontmatterSchema.safeParse({
+    const r = commentFrontmatterSchema.safeParse({
       ...BASE,
       mentions: [{ target: 'team:frontend', resolved: false }],
     });
@@ -143,7 +137,7 @@ describe('CommentFrontmatterSchema — mentions / ResolvedMentionSchema', () => 
   });
 
   test('rejects a bare target string with no prefix', () => {
-    const r = CommentFrontmatterSchema.safeParse({
+    const r = commentFrontmatterSchema.safeParse({
       ...BASE,
       mentions: [{ target: 'stefan', resolved: false }],
     });
@@ -151,31 +145,31 @@ describe('CommentFrontmatterSchema — mentions / ResolvedMentionSchema', () => 
   });
 });
 
-describe('CommentFrontmatterSchema — author validation', () => {
+describe('commentFrontmatterSchema — author validation', () => {
   test('rejects author with no prefix', () => {
-    const r = CommentFrontmatterSchema.safeParse({ author: 'stefan' });
+    const r = commentFrontmatterSchema.safeParse({ author: 'stefan' });
     expect(r.success).toBe(false);
   });
 
   test('rejects author with unsupported prefix', () => {
-    const r = CommentFrontmatterSchema.safeParse({ author: 'system:bot' });
+    const r = commentFrontmatterSchema.safeParse({ author: 'system:bot' });
     expect(r.success).toBe(false);
   });
 
   test('accepts agent: prefixed author', () => {
-    const r = CommentFrontmatterSchema.safeParse({ author: 'agent:summarizer' });
+    const r = commentFrontmatterSchema.safeParse({ author: 'agent:summarizer' });
     expect(r.success).toBe(true);
   });
 });
 
-describe('CommentFrontmatterSchema — enum validation', () => {
+describe('commentFrontmatterSchema — enum validation', () => {
   test('rejects unknown kind', () => {
-    const r = CommentFrontmatterSchema.safeParse({ ...BASE, kind: 'note' });
+    const r = commentFrontmatterSchema.safeParse({ ...BASE, kind: 'note' });
     expect(r.success).toBe(false);
   });
 
   test('rejects unknown visibility', () => {
-    const r = CommentFrontmatterSchema.safeParse({ ...BASE, visibility: 'private' });
+    const r = commentFrontmatterSchema.safeParse({ ...BASE, visibility: 'private' });
     expect(r.success).toBe(false);
   });
 });

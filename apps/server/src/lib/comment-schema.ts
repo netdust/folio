@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const CommentKindSchema = z.enum([
+export const commentKindSchema = z.enum([
   'comment',
   'plan',
   'result',
@@ -9,34 +9,41 @@ export const CommentKindSchema = z.enum([
   'rejection',
   'reply',
 ]);
-export type CommentKind = z.infer<typeof CommentKindSchema>;
+export type CommentKind = z.infer<typeof commentKindSchema>;
 
-export const CommentVisibilitySchema = z.enum(['normal', 'internal']);
-export type CommentVisibility = z.infer<typeof CommentVisibilitySchema>;
+export const commentVisibilitySchema = z.enum(['normal', 'internal']);
+export type CommentVisibility = z.infer<typeof commentVisibilitySchema>;
 
-export const ResolvedMentionSchema = z.object({
+export const resolvedMentionSchema = z.object({
   target: z.string().regex(/^(user|agent):.+$/),
   resolved: z.boolean(),
   resolvedId: z.string().optional(),
   resolvedType: z.enum(['agent', 'user']).optional(),
 });
-export type ResolvedMention = z.infer<typeof ResolvedMentionSchema>;
+export type ResolvedMention = z.infer<typeof resolvedMentionSchema>;
 
-export const CommentFrontmatterSchema = z
+/**
+ * Storage shape for comment frontmatter. The schema declares ALL persisted
+ * fields including server-managed ones (`mentions`, `edited_at`, `deleted_at`).
+ * Route handlers must whitelist client-writable input separately (see services/routes
+ * in later Phase 2.6 tasks).
+ */
+export const commentFrontmatterSchema = z
   .object({
     author: z.string().regex(/^(user|agent):.+$/),
-    kind: CommentKindSchema.default('comment'),
-    visibility: CommentVisibilitySchema.default('normal'),
-    mentions: z.array(ResolvedMentionSchema).default([]),
+    kind: commentKindSchema.default('comment'),
+    visibility: commentVisibilitySchema.default('normal'),
+    mentions: z.array(resolvedMentionSchema).default([]),
     edited_at: z.string().datetime().optional(),
     target_agent: z.string().optional(),
     run_id: z.string().uuid().optional(),
     deleted_at: z.string().datetime().optional(),
   })
+  .strict()
   .refine((d) => !(d.kind === 'approval' || d.kind === 'rejection') || !!d.target_agent, {
     message: 'target_agent is required when kind is approval or rejection',
   })
   .refine((d) => !d.target_agent || d.kind === 'approval' || d.kind === 'rejection', {
     message: 'target_agent is only valid when kind is approval or rejection',
   });
-export type CommentFrontmatter = z.infer<typeof CommentFrontmatterSchema>;
+export type CommentFrontmatter = z.infer<typeof commentFrontmatterSchema>;
