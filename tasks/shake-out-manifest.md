@@ -18,10 +18,10 @@
 - **MINOR** (test infra): BUG-002 RESOLVED — Phase 2.5 e2e spec selector + missing `assignee` key fix; spec passes 1/1.
 - **IMPORTANT** (UX): BUG-006 RESOLVED — paired provider/model field with AI-key annotation.
 - **IMPORTANT** (UX): BUG-007 RESOLVED — `ToolsField` multi-select from `V1_MCP_TOOLS` (shared).
-- **MINOR** (UX): BUG-008 RESOLVED — chip neutral at rest, primary on hover (agents-page only — see BUG-011).
-- **MINOR** (UX): BUG-009 — field-help text for non-obvious agent keys (system_prompt, etc).
-- **IMPORTANT** (design system): BUG-010 — chip drift; need a single `<Chip>` primitive used everywhere.
-- **MINOR** (UX): BUG-011 — ProjectsField chips inside the slideover form still float (same root as BUG-010).
+- **MINOR** (UX): BUG-008 RESOLVED — chip neutral at rest, primary on hover (superseded by BUG-010's primitive).
+- **MINOR** (UX): BUG-009 RESOLVED — field-help text for non-obvious agent keys.
+- **IMPORTANT** (design system): BUG-010 RESOLVED — single `<Chip>` primitive; three ad-hoc chips migrated; old filter-bar chip renamed to FilterChipValue.
+- **MINOR** (UX): BUG-011 RESOLVED — folded into BUG-010 fix.
 - **DEFERRED** (pre-existing, not P2.5): BUG-005 — table-cell assignee field; picker was always slideover-only.
 - **DEFERRED** (pre-existing flake): click-through a11y test, matches STATE.md baseline.
 
@@ -150,37 +150,27 @@ Track A — Automated (Claude):
 - **Fix:** Commit `<pending>`. Moved to a neutral chip at rest (`border-border bg-card text-fg-2`) that gains the primary tint on hover. The "All projects" muted variant kept its existing style. 10/10 page tests still pass.
 - **Status:** RESOLVED
 
-### BUG-009 [MINOR — UX] — Frontmatter rows need field-help text for non-obvious keys
+### BUG-009 [MINOR — UX] — Frontmatter rows need field-help text for non-obvious keys — RESOLVED
 
 - **Found by:** Manual (Track B, third sweep)
-- **What happened:** The agent slideover shows raw key names (`system_prompt`, `max_delegation_depth`, `max_tokens_per_run`, `requires_approval`, `tools`) with no inline explanation. Users who haven't read the spec can't tell what `system_prompt` does or why `max_delegation_depth: 2` matters.
-- **Expected:** A short one-line description next to each agent field. Two reasonable patterns:
-  1. Helper text below or to the right of the input (e.g. "What this agent should do" under `system_prompt`).
-  2. `title` attribute on the key term — already exists for the `dt` element (line 91 of frontmatter-form.tsx: `<dt … title={key}>`) but only shows the raw key on hover; replace with a real description.
-- **Where:** `apps/web/src/components/slideover/frontmatter-form.tsx` — extend `AGENT_KEY_ORDER` into a `AGENT_FIELD_META = { key, label, description }[]` so render can show the description inline.
-- **Severity rationale:** Discoverability. The user just shipped the feature and can't tell which field does what without re-reading the spec — first-time users will hit the same wall.
-- **Status:** OPEN
+- **Fix:** Commit `<pending>`. Extended `AGENT_KEY_ORDER` into `AGENT_FIELDS = [{key, description}]` + a `AGENT_FIELD_DESC` lookup. FrontmatterForm renders a `<p className="mt-1 text-[11px] text-fg-3">` below each agent input when a description exists. Plain-English copy that doesn't assume spec knowledge: e.g. system_prompt → "Instructions the agent receives on every run. Describe its role and what it should do." Also flipped `dt` from `self-center` to `self-start pt-1` so the label aligns with the top of the input + description block.
+- **Status:** RESOLVED
 
-### BUG-010 [IMPORTANT — Design system] — Chip styles drifting; need a single Chip primitive
+### BUG-010 [IMPORTANT — Design system] — Chip styles drifting; need a single Chip primitive — RESOLVED
 
 - **Found by:** Manual (Track B, third sweep)
-- **What happened:** During the second-sweep polish I introduced THREE chip variants without a shared component:
-  1. `ProjectChip` in `workspace-agents-page.tsx` (now: `border-border bg-card text-fg-2 hover:border-primary/30 …`) — neutral at rest, primary on hover.
-  2. `Chip` inside `projects-field.tsx` (`bg-card text-fg-3` muted vs `bg-primary/10 text-primary` non-muted) — different at-rest semantics.
-  3. `Chip` inside `tools-field.tsx` (`bg-card text-fg-2 border border-border`) — yet another permutation, and the user noticed the visible border specifically because no other chip in the app uses one ("never used but here").
-  - Same shape, three definitions, three styles. Each tweak to one drifts further from the others.
-- **Expected:** A single `<Chip>` primitive in `components/ui/` with variants: `default`, `muted`, `interactive` (clickable). Every chip in the app uses it. Variants ARE the only knobs.
-- **Where:** New `apps/web/src/components/ui/chip.tsx`. Migrate `ProjectChip`, both inline `Chip`s, and any other ad-hoc chip (audit needed: the assignee picker label, the agents-page project chips, the trigger schedule pill in `workspace-triggers-page.tsx`).
-- **Severity rationale:** Design-system entropy. The user explicitly flagged this as the wedge: "please make sure we have a solid set of components that we reuse. no messy design system." This is exactly the kind of "many small definitions" that becomes hard to clean up later.
-- **Status:** OPEN
+- **Root cause discovery:** During investigation, found a pre-existing `Chip` already in `components/ui/chip.tsx` — but it's a filter-bar chip with `filterKey` + `value` semantics, used only by the design system docs page. My initial "no other generic chip exists" claim was wrong (audit caught it before writing code).
+- **Fix:** Commit `<pending>`. Rewrote `apps/web/src/components/ui/chip.tsx`:
+  - **New generic `<Chip>` primitive** for content tags. API: `<Chip>label</Chip>`, `<Chip muted>label</Chip>`, `<Chip onClick={fn}>label</Chip>`, `<Chip mono>label</Chip>` (compose freely). Defaults to `border border-border bg-card text-fg-2` (visible at rest — BUG-008/011 fix baked in); muted drops the border + uses fg-3; interactive default gains a primary hover tint; mono adds font-mono for code-like values. forwardRef so Radix can attach refs.
+  - **Renamed the pre-existing filter-bar chip** from `Chip` to `FilterChipValue` to reclaim the name. Updated the sole consumer (`dev.design-system.tsx`) to import + use the new name.
+  - **Migrated all three ad-hoc chips** to the new primitive: `ProjectChip` in `workspace-agents-page.tsx`, `Chip` in `projects-field.tsx`, `Chip` in `tools-field.tsx`. All three local definitions deleted.
+  - **Design system page** now shows the new Chip variants in a row so future contributors can copy from the canonical example.
+- **Tests:** 9 new tests for `Chip` (render as span/button, default + muted + mono variants, interactive hover, forwardRef, attr forwarding). Existing 30+ tests across affected files still green.
+- **Status:** RESOLVED
 
-### BUG-011 [MINOR — UX] — ProjectsField chips float without visible background
+### BUG-011 [MINOR — UX] — ProjectsField chips float without visible background — RESOLVED (folded into BUG-010)
 
-- **Found by:** Manual (Track B, third sweep, repeat of BUG-008 location)
-- **What happened:** I fixed `ProjectChip` (workspace-agents-page) in BUG-008, but the chips INSIDE the ProjectsField slideover editor (used for the `projects` row in the agent's frontmatter form) still use `bg-primary/10` for non-muted and `bg-card text-fg-3` for muted. With theme/background colors close to the chip tint, the chip body disappears and only the text floats. Same symptom as BUG-008, different file.
-- **Expected:** Same fix as BUG-008 — neutral chip at rest with a visible border. Best done as part of BUG-010 (use the shared Chip primitive).
-- **Where:** `apps/web/src/components/inline/projects-field.tsx` — `Chip` component at the bottom.
-- **Status:** OPEN — fold into BUG-010 fix.
+- **Fix:** Resolved as a side effect of the BUG-010 chip-primitive migration. ProjectsField's chips now use the same `<Chip>` primitive as the agents page; the default variant's `border border-border bg-card` makes the chip body visible at rest regardless of theme.
 
 ### Pre-existing, not Phase 2.5 — deferred for separate sweep
 
