@@ -5,11 +5,11 @@
  * upstream via wScope; this router only accepts type=agent or type=trigger
  * (the project-scoped router rejects those types with INVALID_DOCUMENT_SCOPE).
  */
-import { eq } from 'drizzle-orm';
+import { desc, eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { documentCreateSchema, documentPatchSchema } from '@folio/shared';
 import { db } from '../db/client.ts';
-import { documents } from '../db/schema.ts';
+import { documents, events } from '../db/schema.ts';
 import { emitEvent } from '../lib/events.ts';
 import { type AuthContext, getUser } from '../middleware/auth.ts';
 import { requireScope } from '../middleware/bearer.ts';
@@ -185,4 +185,45 @@ workspaceDocumentsRoute.post('/:slug/activity', requireScope('documents:write'),
   });
 
   return c.json({ data: { lastTouchedAt: now.toISOString() } }, 201);
+});
+
+// GET /:slug/events — newest-first events for a workspace-scoped doc (agent or trigger).
+// Mirrors the project-scoped handler in routes/documents.ts: same auth chain,
+// same error codes, same public event shape (no internal columns leaked).
+workspaceDocumentsRoute.get('/:slug/events', async (c) => {
+  const ws = getWorkspace(c);
+  const slug = c.req.param('slug');
+
+  const limitRaw = c.req.query('limit');
+  let limit = 50;
+  if (limitRaw !== undefined) {
+    const n = Number(limitRaw);
+    if (!Number.isFinite(n) || !Number.isInteger(n) || n < 1) {
+      throw new HTTPError('INVALID_LIMIT', 'limit must be a positive integer ≤ 200', 422);
+    }
+    limit = Math.min(200, n);
+  }
+
+  const doc =
+    (await getWorkspaceDocument(ws.id, 'agent', slug)) ??
+    (await getWorkspaceDocument(ws.id, 'trigger', slug));
+  if (!doc) throw new HTTPError('DOCUMENT_NOT_FOUND', `document "${slug}" not found`, 404);
+
+  const rows = await db
+    .select()
+    .from(events)
+    .where(eq(events.documentId, doc.id))
+    .orderBy(desc(events.createdAt), desc(events.id))
+    .limit(limit);
+
+  // Public shape only — match the project-scoped handler exactly so agents
+  // can't fingerprint internal columns (workspaceId, projectId, documentId).
+  const data = rows.map((r) => ({
+    id: r.id,
+    kind: r.kind,
+    actor: r.actor,
+    payload: r.payload,
+    createdAt: r.createdAt,
+  }));
+  return c.json({ data });
 });

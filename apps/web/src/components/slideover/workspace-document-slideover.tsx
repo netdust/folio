@@ -30,6 +30,8 @@ import { FrontmatterForm } from './frontmatter-form.tsx';
 import { BodyEditor } from './body-editor.tsx';
 import { ModeToggle, type EditorMode } from './mode-toggle.tsx';
 import { RawMdEditor } from './raw-md-editor.tsx';
+import { WorkspaceActivityPanel } from './workspace-activity-panel.tsx';
+import { WorkspaceLogActivityButton } from './workspace-log-activity-button.tsx';
 
 type WorkspaceDocTabValue = 'fields' | 'activity' | 'runs';
 
@@ -263,8 +265,15 @@ function SlideoverBody({
           />
         ) : null}
         {tab === 'activity' ? (
-          <div className="text-fg-3 text-sm py-8 text-center">
-            Activity tab — wired in C10.
+          <div className="flex flex-col gap-2">
+            {/* Log button only on agents — A7 rejects type=trigger with
+                INVALID_ACTIVITY_TARGET, so triggers stay read-only here. */}
+            {doc.type === 'agent' ? (
+              <div className="flex justify-end">
+                <WorkspaceLogActivityButton wslug={wslug} slug={doc.slug} />
+              </div>
+            ) : null}
+            <WorkspaceActivityPanel wslug={wslug} slug={doc.slug} />
           </div>
         ) : null}
         {tab === 'runs' ? (

@@ -338,3 +338,127 @@ test('POST /:slug/activity — 422 INVALID_ACTIVITY_TARGET when doc is a trigger
   const body = await res.json();
   expect(body.error.code).toBe('INVALID_ACTIVITY_TARGET');
 });
+
+// ---------------------------------------------------------------------------
+// GET /:slug/events — workspace-level events read (Phase 2.6 C10)
+// ---------------------------------------------------------------------------
+
+test('GET /:slug/events — happy path returns events for an agent', async () => {
+  const { app, seed } = await makeTestApp();
+  const agent = await createAgent(app, seed.sessionCookie);
+  // Generate two events via the activity endpoint.
+  await app.request(`${WS_PATH}/${agent.slug}/activity`, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ note: 'first' }),
+  });
+  await app.request(`${WS_PATH}/${agent.slug}/activity`, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ note: 'second' }),
+  });
+
+  const res = await app.request(`${WS_PATH}/${agent.slug}/events`, {
+    headers: { Cookie: seed.sessionCookie },
+  });
+  expect(res.status).toBe(200);
+  const body = await res.json();
+  // Activity events + the agent.created event from the create flow.
+  expect(body.data.length).toBeGreaterThanOrEqual(2);
+
+  // Public shape only — internal columns must not leak (matches the
+  // project-scoped handler's contract).
+  for (const e of body.data) {
+    expect(Object.keys(e).sort()).toEqual(['actor', 'createdAt', 'id', 'kind', 'payload'].sort());
+    expect(e.workspaceId).toBeUndefined();
+    expect(e.projectId).toBeUndefined();
+    expect(e.documentId).toBeUndefined();
+  }
+});
+
+test('GET /:slug/events — works on a trigger doc (empty if no events yet)', async () => {
+  const { app, seed } = await makeTestApp();
+  const triggerRes = await postWorkspaceDoc(app, seed.sessionCookie, {
+    type: 'trigger',
+    title: 'My Trigger',
+    frontmatter: { agent: 'x', schedule: '* * * * *', on_event: null },
+  });
+  const trigger = (await triggerRes.json()).data as { slug: string };
+
+  const res = await app.request(`${WS_PATH}/${trigger.slug}/events`, {
+    headers: { Cookie: seed.sessionCookie },
+  });
+  expect(res.status).toBe(200);
+  const body = await res.json();
+  // Trigger create may emit document.created — endpoint just shouldn't 404 or
+  // 422. We assert it returns an array regardless of contents.
+  expect(Array.isArray(body.data)).toBe(true);
+});
+
+test('GET /:slug/events — 404 when slug does not exist', async () => {
+  const { app, seed } = await makeTestApp();
+  const res = await app.request(`${WS_PATH}/nope/events`, {
+    headers: { Cookie: seed.sessionCookie },
+  });
+  expect(res.status).toBe(404);
+  const body = await res.json();
+  expect(body.error.code).toBe('DOCUMENT_NOT_FOUND');
+});
+
+test('GET /:slug/events — newest-first ordering', async () => {
+  const { app, seed } = await makeTestApp();
+  const agent = await createAgent(app, seed.sessionCookie);
+  await app.request(`${WS_PATH}/${agent.slug}/activity`, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ note: 'first-note' }),
+  });
+  await app.request(`${WS_PATH}/${agent.slug}/activity`, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ note: 'second-note' }),
+  });
+
+  const res = await app.request(`${WS_PATH}/${agent.slug}/events`, {
+    headers: { Cookie: seed.sessionCookie },
+  });
+  expect(res.status).toBe(200);
+  const body = await res.json();
+  const activityRows = body.data.filter(
+    (e: { kind: string }) => e.kind === 'activity.logged',
+  ) as { payload: { note: string } }[];
+  expect(activityRows).toHaveLength(2);
+  // Newest first → second-note comes before first-note.
+  expect(activityRows[0]?.payload.note).toBe('second-note');
+  expect(activityRows[1]?.payload.note).toBe('first-note');
+});
+
+test('GET /:slug/events — 422 INVALID_LIMIT when limit is 0', async () => {
+  const { app, seed } = await makeTestApp();
+  const agent = await createAgent(app, seed.sessionCookie);
+  const res = await app.request(`${WS_PATH}/${agent.slug}/events?limit=0`, {
+    headers: { Cookie: seed.sessionCookie },
+  });
+  expect(res.status).toBe(422);
+  expect((await res.json()).error.code).toBe('INVALID_LIMIT');
+});
+
+test('GET /:slug/events — 422 INVALID_LIMIT when limit is negative', async () => {
+  const { app, seed } = await makeTestApp();
+  const agent = await createAgent(app, seed.sessionCookie);
+  const res = await app.request(`${WS_PATH}/${agent.slug}/events?limit=-3`, {
+    headers: { Cookie: seed.sessionCookie },
+  });
+  expect(res.status).toBe(422);
+  expect((await res.json()).error.code).toBe('INVALID_LIMIT');
+});
+
+test('GET /:slug/events — 422 INVALID_LIMIT when limit is non-integer', async () => {
+  const { app, seed } = await makeTestApp();
+  const agent = await createAgent(app, seed.sessionCookie);
+  const res = await app.request(`${WS_PATH}/${agent.slug}/events?limit=abc`, {
+    headers: { Cookie: seed.sessionCookie },
+  });
+  expect(res.status).toBe(422);
+  expect((await res.json()).error.code).toBe('INVALID_LIMIT');
+});

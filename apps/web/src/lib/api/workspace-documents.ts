@@ -7,6 +7,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { client } from './client.ts';
 import type { Document, DocumentSummary, DocumentPatch } from './documents.ts';
+import type { DocumentEvent } from './events.ts';
 
 export interface WorkspaceDocumentsListParams {
   type: 'agent' | 'trigger';
@@ -113,5 +114,54 @@ export function useDeleteWorkspaceDocument(wslug: string) {
       client.delete<void>(`/api/v1/w/${wslug}/documents/${slug}`),
     onSuccess: () =>
       qc.invalidateQueries({ queryKey: [...workspaceDocumentsKeys.all, wslug, 'list'] }),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2.6 C10: workspace-scoped events + activity hooks.
+//
+// Sibling pattern to lib/api/events.ts but scoped to workspace docs (no pslug).
+// The cache keys deliberately use a 'workspace-document-events' prefix to keep
+// them disjoint from the project-scoped ['document-events'] keys — the two
+// endpoints can never overlap on the same doc.
+// ---------------------------------------------------------------------------
+
+export const workspaceDocumentEventsKeys = {
+  list: (wslug: string, slug: string) =>
+    ['workspace-document-events', wslug, slug] as const,
+};
+
+export function useWorkspaceDocumentEvents(wslug: string, slug: string | undefined) {
+  return useQuery({
+    queryKey: workspaceDocumentEventsKeys.list(wslug, slug ?? ''),
+    queryFn: () =>
+      client.get<DocumentEvent[]>(`/api/v1/w/${wslug}/documents/${slug}/events`),
+    enabled: !!wslug && !!slug,
+    staleTime: 30_000,
+  });
+}
+
+export function useWorkspaceLogActivity(wslug: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ slug, note }: { slug: string; note: string }) =>
+      client.post<{ lastTouchedAt: string }>(
+        `/api/v1/w/${wslug}/documents/${slug}/activity`,
+        { note },
+      ),
+    onSuccess: (_data, vars) => {
+      // Scope to workspace — no pslug in any key. A broad
+      // ['workspace-documents'] invalidation would also bust every other
+      // workspace's caches in every open tab.
+      qc.invalidateQueries({
+        queryKey: workspaceDocumentEventsKeys.list(wslug, vars.slug),
+      });
+      qc.invalidateQueries({
+        queryKey: workspaceDocumentsKeys.detail(wslug, vars.slug),
+      });
+      qc.invalidateQueries({
+        queryKey: [...workspaceDocumentsKeys.all, wslug, 'list'],
+      });
+    },
   });
 }

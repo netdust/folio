@@ -44,6 +44,14 @@ function mockWorkspaceDoc(slug: string, type: 'agent' | 'trigger' = 'agent') {
     'fetch',
     vi.fn<typeof fetch>(async (url) => {
       const u = String(url);
+      // The events endpoint is a suffix-match so it must be checked BEFORE
+      // the generic doc-detail match (which also covers /events).
+      if (u.endsWith(`/w/main/documents/${slug}/events`)) {
+        return new Response(JSON.stringify({ data: [] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
       if (u.includes(`/w/main/documents/${slug}`)) {
         return new Response(
           JSON.stringify({
@@ -159,7 +167,7 @@ describe('WorkspaceDocumentSlideover', () => {
     expect(fieldsBtn!.getAttribute('aria-pressed')).toBe('true');
   });
 
-  it('switching to Activity renders the C10 placeholder; body editor still visible', async () => {
+  it('switching to Activity renders the workspace Activity panel + Log button (agent); body editor still visible', async () => {
     mockWorkspaceDoc('triage', 'agent');
     const { queryClient, router } = setup('?doc=triage');
     render(
@@ -169,6 +177,7 @@ describe('WorkspaceDocumentSlideover', () => {
     );
     await screen.findByText('Triage Agent');
 
+    // The C9 placeholder is gone.
     expect(screen.queryByText(/Activity tab — wired in C10/)).toBeNull();
 
     const tablist = document.querySelector('[role="tablist"]')!;
@@ -177,10 +186,37 @@ describe('WorkspaceDocumentSlideover', () => {
     ) as HTMLElement;
     await userEvent.click(activityBtn);
 
+    // Real Activity panel renders ("No activity yet." for the empty-events mock).
     await waitFor(() => {
-      expect(screen.getByText(/Activity tab — wired in C10/)).toBeInTheDocument();
+      expect(screen.getByText('No activity yet.')).toBeInTheDocument();
     });
+    // Log Activity button is shown for agent docs.
+    expect(screen.getByRole('button', { name: /Log activity/ })).toBeInTheDocument();
     expect(document.querySelector('[data-testid="workspace-slideover-editor"]')).not.toBeNull();
+  });
+
+  it('Activity tab on a trigger renders the panel WITHOUT the Log button', async () => {
+    mockWorkspaceDoc('webhook', 'trigger');
+    const { queryClient, router } = setup('?doc=webhook');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText('Triage Agent');
+
+    const tablist = document.querySelector('[role="tablist"]')!;
+    const activityBtn = Array.from(tablist.querySelectorAll('[role="tab"]')).find(
+      (t) => (t.textContent ?? '').includes('Activity'),
+    ) as HTMLElement;
+    await userEvent.click(activityBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText('No activity yet.')).toBeInTheDocument();
+    });
+    // A7 rejects activity-logging for triggers — the button must be HIDDEN
+    // (not just disabled). Triggers' runs surface on the Runs tab in Phase 3.
+    expect(screen.queryByRole('button', { name: /Log activity/ })).toBeNull();
   });
 
   it('switching to Runs renders the Phase 3 placeholder; body editor still visible', async () => {
