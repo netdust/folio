@@ -53,26 +53,35 @@ test('workspace agents flow: create narrowed agent, assignee picker filters by p
   });
   expect(wiInbox.ok()).toBe(true);
 
-  // Navigate via the workspace popover wouldn't add coverage here — just go
-  // directly to the project's work-items view and open the slideover.
-  await page.goto('/w/p25/p/inbox');
-  await page.getByText('Sample inbox item').first().click();
+  // Seed the work item with an empty assignee so FrontmatterForm renders the
+  // AssigneePicker row (the form is key-driven — no key, no picker). PATCH
+  // BEFORE the first navigation so we don't have to reload + reopen.
+  const wiInboxDoc = await wiInbox.json();
+  const inboxSlug = wiInboxDoc.data.slug as string;
+  await page.request.patch(`/api/v1/w/p25/p/inbox/documents/${inboxSlug}`, {
+    data: { frontmatter: { assignee: '' } },
+  });
+
+  // Open the slideover via the row's accessible "Open <title>" button —
+  // clicking the row's title text would trigger InlineEdit instead.
+  await page.goto('/w/p25/p/inbox/work-items');
+  await page.getByRole('button', { name: 'Open Sample inbox item' }).click();
+
   // The slideover's assignee row opens a Popover containing Members + Agents.
   // The button labels itself "Unassigned" before a value is chosen.
-  const assigneeOpener = page.getByRole('button', { name: /unassigned/i }).first();
-  await assigneeOpener.click();
+  const dialog = page.locator('[role="dialog"]');
+  await dialog.getByRole('button', { name: /unassigned/i }).click();
   // Agent IS allow-listed for inbox → it should appear in the Agents section.
   await expect(page.getByText('Inbox Triager').last()).toBeVisible({ timeout: 5_000 });
 
   // Project B (Website): the agent must NOT appear.
-  await page.goto('/w/p25/p/website');
   const wiWebsite = await page.request.post('/api/v1/w/p25/p/website/documents', {
-    data: { type: 'work_item', title: 'Sample website item' },
+    data: { type: 'work_item', title: 'Sample website item', frontmatter: { assignee: '' } },
   });
   expect(wiWebsite.ok()).toBe(true);
-  await page.reload();
-  await page.getByText('Sample website item').first().click();
-  await page.getByRole('button', { name: /unassigned/i }).first().click();
+  await page.goto('/w/p25/p/website/work-items');
+  await page.getByRole('button', { name: 'Open Sample website item' }).click();
+  await page.locator('[role="dialog"]').getByRole('button', { name: /unassigned/i }).click();
   // The agent should not be in the picker for website.
   await expect(page.getByText('Inbox Triager')).toHaveCount(0);
 });
