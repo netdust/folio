@@ -209,9 +209,12 @@ export const documents = sqliteTable(
   'documents',
   {
     id: text('id').primaryKey(),
-    projectId: text('project_id')
+    // Phase 2.5: project_id is nullable for agent/trigger (workspace-scoped).
+    // CHECK constraint at the SQL level enforces the type ↔ scope invariant.
+    projectId: text('project_id').references(() => projects.id, { onDelete: 'cascade' }),
+    workspaceId: text('workspace_id')
       .notNull()
-      .references(() => projects.id, { onDelete: 'cascade' }),
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
     tableId: text('table_id').references(() => tables.id, { onDelete: 'set null' }),
     type: text('type', { enum: ['work_item', 'page', 'agent', 'trigger'] }).notNull(),
     slug: text('slug').notNull(),
@@ -239,6 +242,12 @@ export const documents = sqliteTable(
   (t) => ({
     slugIdx: uniqueIndex('documents_project_slug_idx').on(t.projectId, t.slug),
     typeIdx: index('documents_project_type_idx').on(t.projectId, t.type),
+    workspaceSlugIdx: uniqueIndex('documents_workspace_type_slug_idx').on(
+      t.workspaceId,
+      t.type,
+      t.slug,
+    ),
+    workspaceTypeIdx: index('documents_workspace_type_idx').on(t.workspaceId, t.type),
     parentIdx: index('documents_parent_idx').on(t.parentId),
     tableIdx: index('documents_table_idx').on(t.tableId),
   }),
@@ -280,6 +289,12 @@ export const apiTokens = sqliteTable(
     name: text('name').notNull(),
     tokenHash: text('token_hash').notNull(), // sha256 of the bearer token
     scopes: text('scopes', { mode: 'json' }).$type<string[]>().notNull().default([]),
+    // Phase 2.5: agent-bound tokens carry the agent's document id; cascade-delete
+    // means revoking the agent revokes its token. Human PATs have agentId NULL.
+    agentId: text('agent_id').references(() => documents.id, { onDelete: 'cascade' }),
+    // Optional project narrowing — must be subset of agent.frontmatter.projects.
+    // null = inherit from agent (distinct from [] which = no projects).
+    projectIds: text('project_ids', { mode: 'json' }).$type<string[] | null>(),
     createdBy: text('created_by').references(() => users.id),
     lastUsedAt: integer('last_used_at', { mode: 'timestamp_ms' }),
     createdAt: integer('created_at', { mode: 'timestamp_ms' })
