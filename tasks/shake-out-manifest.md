@@ -18,7 +18,10 @@
 - **MINOR** (test infra): BUG-002 RESOLVED — Phase 2.5 e2e spec selector + missing `assignee` key fix; spec passes 1/1.
 - **IMPORTANT** (UX): BUG-006 RESOLVED — paired provider/model field with AI-key annotation.
 - **IMPORTANT** (UX): BUG-007 RESOLVED — `ToolsField` multi-select from `V1_MCP_TOOLS` (shared).
-- **MINOR** (UX): BUG-008 RESOLVED — chip neutral at rest, primary on hover.
+- **MINOR** (UX): BUG-008 RESOLVED — chip neutral at rest, primary on hover (agents-page only — see BUG-011).
+- **MINOR** (UX): BUG-009 — field-help text for non-obvious agent keys (system_prompt, etc).
+- **IMPORTANT** (design system): BUG-010 — chip drift; need a single `<Chip>` primitive used everywhere.
+- **MINOR** (UX): BUG-011 — ProjectsField chips inside the slideover form still float (same root as BUG-010).
 - **DEFERRED** (pre-existing, not P2.5): BUG-005 — table-cell assignee field; picker was always slideover-only.
 - **DEFERRED** (pre-existing flake): click-through a11y test, matches STATE.md baseline.
 
@@ -146,6 +149,38 @@ Track A — Automated (Claude):
 - **What happened:** Clickable project chips rendered with `bg-primary/10` which blended into the page background; only visible on hover.
 - **Fix:** Commit `<pending>`. Moved to a neutral chip at rest (`border-border bg-card text-fg-2`) that gains the primary tint on hover. The "All projects" muted variant kept its existing style. 10/10 page tests still pass.
 - **Status:** RESOLVED
+
+### BUG-009 [MINOR — UX] — Frontmatter rows need field-help text for non-obvious keys
+
+- **Found by:** Manual (Track B, third sweep)
+- **What happened:** The agent slideover shows raw key names (`system_prompt`, `max_delegation_depth`, `max_tokens_per_run`, `requires_approval`, `tools`) with no inline explanation. Users who haven't read the spec can't tell what `system_prompt` does or why `max_delegation_depth: 2` matters.
+- **Expected:** A short one-line description next to each agent field. Two reasonable patterns:
+  1. Helper text below or to the right of the input (e.g. "What this agent should do" under `system_prompt`).
+  2. `title` attribute on the key term — already exists for the `dt` element (line 91 of frontmatter-form.tsx: `<dt … title={key}>`) but only shows the raw key on hover; replace with a real description.
+- **Where:** `apps/web/src/components/slideover/frontmatter-form.tsx` — extend `AGENT_KEY_ORDER` into a `AGENT_FIELD_META = { key, label, description }[]` so render can show the description inline.
+- **Severity rationale:** Discoverability. The user just shipped the feature and can't tell which field does what without re-reading the spec — first-time users will hit the same wall.
+- **Status:** OPEN
+
+### BUG-010 [IMPORTANT — Design system] — Chip styles drifting; need a single Chip primitive
+
+- **Found by:** Manual (Track B, third sweep)
+- **What happened:** During the second-sweep polish I introduced THREE chip variants without a shared component:
+  1. `ProjectChip` in `workspace-agents-page.tsx` (now: `border-border bg-card text-fg-2 hover:border-primary/30 …`) — neutral at rest, primary on hover.
+  2. `Chip` inside `projects-field.tsx` (`bg-card text-fg-3` muted vs `bg-primary/10 text-primary` non-muted) — different at-rest semantics.
+  3. `Chip` inside `tools-field.tsx` (`bg-card text-fg-2 border border-border`) — yet another permutation, and the user noticed the visible border specifically because no other chip in the app uses one ("never used but here").
+  - Same shape, three definitions, three styles. Each tweak to one drifts further from the others.
+- **Expected:** A single `<Chip>` primitive in `components/ui/` with variants: `default`, `muted`, `interactive` (clickable). Every chip in the app uses it. Variants ARE the only knobs.
+- **Where:** New `apps/web/src/components/ui/chip.tsx`. Migrate `ProjectChip`, both inline `Chip`s, and any other ad-hoc chip (audit needed: the assignee picker label, the agents-page project chips, the trigger schedule pill in `workspace-triggers-page.tsx`).
+- **Severity rationale:** Design-system entropy. The user explicitly flagged this as the wedge: "please make sure we have a solid set of components that we reuse. no messy design system." This is exactly the kind of "many small definitions" that becomes hard to clean up later.
+- **Status:** OPEN
+
+### BUG-011 [MINOR — UX] — ProjectsField chips float without visible background
+
+- **Found by:** Manual (Track B, third sweep, repeat of BUG-008 location)
+- **What happened:** I fixed `ProjectChip` (workspace-agents-page) in BUG-008, but the chips INSIDE the ProjectsField slideover editor (used for the `projects` row in the agent's frontmatter form) still use `bg-primary/10` for non-muted and `bg-card text-fg-3` for muted. With theme/background colors close to the chip tint, the chip body disappears and only the text floats. Same symptom as BUG-008, different file.
+- **Expected:** Same fix as BUG-008 — neutral chip at rest with a visible border. Best done as part of BUG-010 (use the shared Chip primitive).
+- **Where:** `apps/web/src/components/inline/projects-field.tsx` — `Chip` component at the bottom.
+- **Status:** OPEN — fold into BUG-010 fix.
 
 ### Pre-existing, not Phase 2.5 — deferred for separate sweep
 
