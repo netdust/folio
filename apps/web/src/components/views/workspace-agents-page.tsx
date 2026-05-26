@@ -177,17 +177,19 @@ function ProjectChip({
   if (!onClick) {
     return (
       <span
-        className={`${base} ${muted ? 'border-border-light bg-card text-fg-3' : 'border-primary/30 bg-primary/10 text-primary'}`}
+        className={`${base} ${muted ? 'border-border-light bg-card text-fg-3' : 'border-border bg-card text-fg-2'}`}
       >
         {label}
       </span>
     );
   }
+  // Visible at rest with a neutral chip + clear border; the primary tint
+  // appears on hover to telegraph the filter action.
   return (
     <button
       type="button"
       onClick={onClick}
-      className={`${base} border-primary/30 bg-primary/10 text-primary hover:bg-primary/20`}
+      className={`${base} border-border bg-card text-fg-2 hover:border-primary/30 hover:bg-primary/10 hover:text-primary`}
     >
       {label}
     </button>
