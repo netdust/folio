@@ -73,6 +73,47 @@ describe('agentFrontmatterSchema', () => {
   });
 });
 
+describe('agentFrontmatterSchema.projects', () => {
+  const base = {
+    system_prompt: 'p',
+    model: 'claude-opus-4-7',
+    provider: 'anthropic' as const,
+    tools: ['list_documents'],
+  };
+
+  test('defaults projects to ["*"]', () => {
+    const r = agentFrontmatterSchema.safeParse(base);
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.projects).toEqual(['*']);
+  });
+
+  test('accepts explicit ["*"]', () => {
+    const r = agentFrontmatterSchema.safeParse({ ...base, projects: ['*'] });
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.projects).toEqual(['*']);
+  });
+
+  test('accepts an explicit list of project ids', () => {
+    const r = agentFrontmatterSchema.safeParse({ ...base, projects: ['proj-a', 'proj-b'] });
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.projects).toEqual(['proj-a', 'proj-b']);
+  });
+
+  test('rejects ["*", "proj-a"] — wildcard cannot mix with explicit ids', () => {
+    const r = agentFrontmatterSchema.safeParse({ ...base, projects: ['*', 'proj-a'] });
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      expect(r.error.issues[0]!.message).toMatch(/cannot be combined/i);
+    }
+  });
+
+  test('accepts an empty array (explicitly no projects)', () => {
+    const r = agentFrontmatterSchema.safeParse({ ...base, projects: [] });
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.projects).toEqual([]);
+  });
+});
+
 describe('toolsToScopes', () => {
   test('list/get tools require documents:read', () => {
     expect(toolsToScopes(['list_documents'])).toContain('documents:read');
