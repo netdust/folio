@@ -157,6 +157,13 @@ async function loadWorkspaceAgents(workspaceId: string): Promise<AgentForParser[
   return rows.map((r) => {
     const fm = r.frontmatter as Record<string, unknown>;
     const projs = fm.projects;
+    // Default missing/malformed `projects` to ['*']. Phase 2.5 agent schema
+    // requires `projects` as a string array, so this branch only triggers
+    // for pre-2.5 rows or hand-edited frontmatter. Treating them as wildcard
+    // matches the legacy Phase 2 behavior (agents were workspace-wide before
+    // 2.5 introduced the allow-list). If a row reaches here with a malformed
+    // `projects` field it is almost certainly a pre-2.5 agent, not a security
+    // threat, so full access is the correct backward-compatible default.
     const allowed = Array.isArray(projs)
       ? (projs as unknown[]).filter((x) => typeof x === 'string') as string[]
       : ['*'];
@@ -378,6 +385,12 @@ export async function updateComment(input: UpdateCommentInput): Promise<Document
       loadWorkspaceAgents(ws.id),
       loadWorkspaceMembers(ws.id),
     ]);
+    // Re-parse mentions for the diff below. We deliberately do NOT recompute
+    // kind/target_agent on update: kind is immutable (enforced at the top of
+    // this function) and target_agent is bound to creation-time intent.
+    // Spec §3c's nuance about "editing an approval recomputes target_agent" is
+    // intentionally deferred — the body-change branch here is where that logic
+    // would go once confirmed.
     const parsed = parseMentions({
       body: input.body,
       workspaceAgents,
@@ -386,6 +399,11 @@ export async function updateComment(input: UpdateCommentInput): Promise<Document
     });
     nextMentions = parsed.mentions;
 
+    // Diff new mentions vs old to fire comment.mentioned only for net-new
+    // resolved agents. Note: this diff runs inside the transaction but the
+    // mention list itself was computed from a snapshot of the prior frontmatter;
+    // two concurrent updates could each see the same "old" list and double-fire
+    // for the same agent. Accepted: consumers (agent runner) must be idempotent.
     const oldAgentTargets = new Set(
       existingMentions
         .filter((m) => m.resolved && m.resolvedType === 'agent')
@@ -459,6 +477,13 @@ export async function deleteComment(input: DeleteCommentInput): Promise<Document
   assertAuthor(existing, authorContext);
 
   const existingFm = existing.frontmatter as Record<string, unknown>;
+
+  // Idempotency guard: if already soft-deleted, return the row as-is without
+  // re-bumping deleted_at or re-firing comment.deleted. The route layer may
+  // already 404 on a second call, but the service should be safe on its own.
+  if (existingFm.deleted_at) {
+    return existing as Document;
+  }
   const author = (existingFm.author as string) ?? authorString(authorContext);
 
   const mergedRaw: Record<string, unknown> = {

@@ -678,6 +678,49 @@ test('deleteComment soft-deletes: row stays, body blanked, deleted_at set, comme
   expect(payload.author).toBe(`user:${seed.user.id}`);
 });
 
+test('deleteComment is idempotent on already-soft-deleted rows', async () => {
+  const { db, seed } = await makeTestApp();
+  const table = await getWorkItemsTable(db, seed.project.id);
+  const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+  const comment = await createComment({
+    workspace: seed.workspace,
+    project: seed.project,
+    parent,
+    authorContext: userContext(seed.user),
+    actor: seed.user.id,
+    body: 'once is enough',
+  });
+
+  // First delete.
+  const first = await deleteComment({
+    workspace: seed.workspace,
+    project: seed.project,
+    existing: comment,
+    authorContext: userContext(seed.user),
+    actor: seed.user.id,
+  });
+  const firstDeletedAt = (first.frontmatter as Record<string, unknown>).deleted_at as string;
+
+  // Second delete — must be idempotent.
+  const second = await deleteComment({
+    workspace: seed.workspace,
+    project: seed.project,
+    existing: first,
+    authorContext: userContext(seed.user),
+    actor: seed.user.id,
+  });
+
+  // deleted_at must not have moved.
+  expect((second.frontmatter as Record<string, unknown>).deleted_at).toBe(firstDeletedAt);
+  // Body still blank.
+  expect(second.body).toBe('');
+  // Only ONE comment.deleted event should exist.
+  const deletedEvents = await db.query.events.findMany({
+    where: and(eq(events.documentId, comment.id), eq(events.kind, 'comment.deleted')),
+  });
+  expect(deletedEvents.length).toBe(1);
+});
+
 // -----------------------------------------------------------------------------
 // getComment
 // -----------------------------------------------------------------------------
