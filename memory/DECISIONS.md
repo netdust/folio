@@ -97,3 +97,27 @@ For the originating PRD: `docs/FOLIO-BRIEFING.md`. For phase-level commitments: 
 - **DB-level CHECK constraint on `fields.type`** (added in migration 0004): when adding a new field type in the future, BOTH the Drizzle TS enum AND the SQL CHECK clause must be updated — Drizzle's enum is TS-only otherwise. Sets a precedent for other type-like fields (`statuses.category`, `views.type`) that are TS-only today.
 - **Default seeded view** (`seed-project-defaults.ts`): `visibleFields: ['title', 'status', 'priority', 'assignee', 'due_date', 'updated_at']`. Built-ins always shown by default; the rest are the standard "agency" fields. User can hide any via the column picker.
 - **`relativeTime` extracted to `apps/web/src/lib/relative-time.ts`** so TableCell and list-row share one implementation while both exist (list-row + kanban will eventually consume TableView render-mode in Phase 2D).
+
+## Phase 2.5 — Agent scope model (2026-05-26)
+
+Locked after a research round across GitHub Apps, Slack, Linear, Notion, MCP spec, Cloudflare/AWS/Vercel tokens, macaroons/biscuits, and ReBAC systems. Decisions are durable; UI is allowed to evolve.
+
+- **Agents live at workspace level. Period.** No project-scoped agent variant. `documents.workspace_id` is the home; `documents.project_id` is `NULL` for `type IN ('agent','trigger')`. Existing Phase 2 agents migrate to workspace-scoped with their old project's slug captured in `frontmatter.projects`.
+- **Project binding is frontmatter, not schema.** Agent + trigger frontmatter gains `projects: string[]` — either `['*']` (all projects in workspace) or an explicit allow-list of project slugs. Notion-style default-deny philosophy: `[]` means zero, only `['*']` opts into all.
+- **Principal vs credential are separated** (GitHub Apps three-layer model). The agent document is the durable identity. The `api_tokens` row is a short-livable credential that references the agent and inherits its grant. Tokens may narrow but never broaden the agent's bounds.
+- **Action-scope and resource-scope are orthogonal in middleware.** Existing `requireScope('documents:write')` checks the verb. New `requireResource(req → {workspace_id, project_id})` check intersects the URL's project against the agent's `projects:` allow-list on every request. Never merge into a single `documents:write:project:abc`-style string.
+- **Live re-eval per request, not stateless JWT.** Token stays opaque, hashed in DB. Auth lookup pulls the agent row and computes effective bounds. Revocation = flip `revoked_at`, next request dies. Cheap because the auth DB IS the data DB.
+- **Tokens carry `agent_id` + optional `project_ids` (narrowing only).** On request, effective allow-list = `intersect(agent.frontmatter.projects, token.project_ids ?? '*')`. Token can be down-scoped for a specific deployment without modifying the agent.
+- **Agent templates live at instance level**, in `Settings → Agent Templates`. Inert markdown files (no token, no permissions, no events). Instances reference a template via `frontmatter.template: <slug>` and `frontmatter.template_version: N` (pinned). Sync is explicit — instance shows "Update available" when template advances; user opts in per instance.
+- **Template body is read-only on instances. Only `frontmatter.additional_instructions` is editable on the instance.** Effective prompt at runtime = `template.system_prompt + "\n\n" + additional_instructions`. Keeps sync trivial and the markdown-as-truth wedge intact.
+- **Templates can be MCP-created.** `create_template`, `update_template`, `delete_template`, `list_templates`, `get_template` are first-class MCP tools alongside `create_agent`, `update_agent`. Agent-first means agents can author templates that bootstrap more agents.
+- **Templates are NOT a foreign-key dependency.** Deleting a template detaches its instances (their last-synced prompt body inlines into their own frontmatter as `system_prompt`). The `template:` reference is metadata, not a constraint. Markdown-as-truth survives template deletion.
+- **One-off agents are still legitimate** — just create an agent without `frontmatter.template`. Workspace-scoped with `projects: ['<one>']` is identical in capability to a project-scoped agent. No UI variant needed.
+- **UI surface moves out of the project rail.** Agents + Triggers leaves are removed from each project. Workspace header gains `Agents · Triggers · Settings · ⌘K`. Workspace agents page (`/w/:wslug/agents`) lists all agents with `projects:` shown as chips; filter by project chip to see "agents that touch project X."
+- **Assignee picker queries workspace agents filtered by the URL's project.** Picker shows only agents whose `projects:` allow-list includes the current project (or `'*'`).
+- **What we explicitly rejected:**
+  - Macaroons / Biscuit (Fly.io's "users don't attenuate in practice" finding kills the win on a single-binary deploy).
+  - SpiceDB / OpenFGA / ReBAC (violates "no sidecar services"; Folio's permission shape is a flat allow-list, not a graph).
+  - Cross-workspace agent identity (workspace-as-tenant invariant cracks; templates cover the "edit once" workflow without breaking it).
+  - Project-scoped agent variant living alongside workspace-scoped (two mental models; nothing project-scoped does that workspace-scoped-with-allow-list doesn't do identically).
+  - Merging action + resource into one scope string (combinatorial blow-up; AWS/Cloudflare/GCP independently converged on keeping them orthogonal).

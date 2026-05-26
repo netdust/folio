@@ -1,8 +1,15 @@
 # Folio — STATE
 
-_Last updated: 2026-05-26 (Phase 2 — Agents surface — merged to main via PR #4 at `3431301`)_
+_Last updated: 2026-05-26 evening (Phase 2.5 scope model locked — brainstorming pending)_
 
 Living snapshot of where the project actually is. Read at session start. Update at session end if anything below changed.
+
+## Next up — Phase 2.5
+
+**Workspace-scoped agents + `projects:` allow-list, header UX, templates at instance Settings.** Locked decisions in `memory/DECISIONS.md` under "Phase 2.5 — Agent scope model (2026-05-26)". Next step: open `superpowers:brainstorming` to pressure-test before writing the plan. Templates ship as separate Phase 2.6 (additive on top, no migration).
+
+Likely scope (8–9 tasks): schema migration (workspace_id NOT NULL for agent/trigger; project_id nullable for those), frontmatter Zod updates (`projects: ['*']` default), middleware `requireResource` orthogonal to `requireScope`, routes move to `/w/:wslug/agents`, MCP project resolution update (token's agent allow-list ∩ request URL pslug), UI move from project rail to workspace header, assignee picker filters workspace agents by URL pslug, migrate existing Phase 2 agents, tests.
+
 
 ## Phase
 
@@ -420,6 +427,7 @@ See `docs/PHASES.md` for the canonical phase list (above-section mirrors it). Lo
 [2026-05-25] — session ended (no significant changes captured)
 [2026-05-25] — session ended (no significant changes captured)
 [2026-05-25] — session ended (no significant changes captured)
+[2026-05-26] — session ended (no significant changes captured)
 [2026-05-26] — session ended (no significant changes captured)
 [2026-05-26] — session ended (no significant changes captured)
 [2026-05-26] — session ended (no significant changes captured)
