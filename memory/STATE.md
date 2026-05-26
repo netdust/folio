@@ -1,14 +1,14 @@
 # Folio — STATE
 
-_Last updated: 2026-05-26 evening (Phase 2.5 scope model locked — brainstorming pending)_
+_Last updated: 2026-05-26 night (Phase 2.5 spec shipped — plan written in separate session)_
 
 Living snapshot of where the project actually is. Read at session start. Update at session end if anything below changed.
 
 ## Next up — Phase 2.5
 
-**Workspace-scoped agents + `projects:` allow-list, header UX, templates at instance Settings.** Locked decisions in `memory/DECISIONS.md` under "Phase 2.5 — Agent scope model (2026-05-26)". Next step: open `superpowers:brainstorming` to pressure-test before writing the plan. Templates ship as separate Phase 2.6 (additive on top, no migration).
+**Workspace-scoped agents + `projects:` allow-list, surfaced via workspace popover.** Spec at `docs/superpowers/specs/2026-05-26-phase-2.5-workspace-scoped-agents-design.md` (commits `0fc10b8` + `92c20bf`). Plan written in a separate session — check `docs/superpowers/plans/` for the most recent Phase 2.5 file before resuming. Locked decisions in `memory/DECISIONS.md` under "Phase 2.5 — Agent scope model (2026-05-26)". Templates + agent-lifecycle MCP tools deferred to Phase 2.6 (with `create_agent` / `update_agent` / `delete_agent` / `get_agent_self` flagged as v1-blockers in the spec's deferrals section).
 
-Likely scope (8–9 tasks): schema migration (workspace_id NOT NULL for agent/trigger; project_id nullable for those), frontmatter Zod updates (`projects: ['*']` default), middleware `requireResource` orthogonal to `requireScope`, routes move to `/w/:wslug/agents`, MCP project resolution update (token's agent allow-list ∩ request URL pslug), UI move from project rail to workspace header, assignee picker filters workspace agents by URL pslug, migrate existing Phase 2 agents, tests.
+Spec absorbed six stress-test catches at review time: transactional cascade hook (project-delete → agent allow-list rewrite in same tx), UI-side prevention of invalid Zod shapes (no transient `['*', ...ids]`), `intersect()` test enumeration including the load-bearing `null` (inherit) vs `[]` (revoked) distinction, MCP rejection logging contract (INFO with structured fields), wildcard-chip click semantics (clear filter, don't filter on `'*'`), assignee picker `keepPreviousData` for no-flash dropdown.
 
 
 ## Phase
