@@ -87,14 +87,13 @@ Track A — Automated (Claude):
 - **Root cause:**
 - **Fix:**
 
-### BUG-003 [MINOR] — Workspace popover "Agents" / "Triggers" items need icons
+### BUG-003 [MINOR] — Workspace popover "Agents" / "Triggers" items need icons — RESOLVED
 
 - **Found by:** Manual (Track B)
-- **What happened:** The new popover entries render as plain text. Every other rail/popover entry in Folio has a leading icon (workspace tile, project, table, view, wiki all carry icons).
-- **Expected:** Leading icons for visual consistency. The codebase already uses `Bot` (lucide-react) for agents and `Zap` for triggers — those icons existed before I removed them from `rail-tree.ts` in Task 7. Reuse them.
-- **Where:** `apps/web/src/components/shell/workspace-switcher.tsx:65-86` (the Agents + Triggers button blocks).
-- **Cluster:** Standalone polish.
-- **Status:** OPEN
+- **What happened:** The new popover entries rendered as plain text without the leading icons every other rail/popover entry in Folio carries.
+- **Fix:** Commit `<pending>`. Added `Bot` (agents) and `Zap` (triggers) lucide-react icons via the existing `<Icon>` wrapper. Same icons that were used in the project-rail leaves pre-Phase-2.5 (Task 7 removed those leaves; the icons live on in lucide-react and now resurface in the workspace popover).
+- **Re-sweep:** Switcher tests still 4/4 green; web TS clean.
+- **Status:** RESOLVED
 
 ### BUG-004 [CRITICAL] — Workspace agents + triggers pages have no create / edit / delete affordances — RESOLVED
 

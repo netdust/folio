@@ -1,5 +1,7 @@
 import type { ReactNode } from 'react';
+import { Bot, Zap } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
+import { Icon } from '../ui/icon.tsx';
 import { cn } from '../ui/cn.ts';
 
 interface Workspace {
@@ -66,8 +68,9 @@ export function WorkspaceSwitcher({
               <button
                 type="button"
                 onClick={onOpenAgents}
-                className="block w-full rounded-md px-2 py-1.5 text-left text-sm text-fg-2 hover:bg-card hover:text-fg"
+                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-fg-2 hover:bg-card hover:text-fg"
               >
+                <Icon icon={Bot} size={14} />
                 Agents
               </button>
             ) : null}
@@ -75,8 +78,9 @@ export function WorkspaceSwitcher({
               <button
                 type="button"
                 onClick={onOpenTriggers}
-                className="block w-full rounded-md px-2 py-1.5 text-left text-sm text-fg-2 hover:bg-card hover:text-fg"
+                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-fg-2 hover:bg-card hover:text-fg"
               >
+                <Icon icon={Zap} size={14} />
                 Triggers
               </button>
             ) : null}
