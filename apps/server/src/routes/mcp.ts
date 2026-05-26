@@ -40,6 +40,7 @@ import {
 import {
   attachToken,
   getToken,
+  intersect,
   requireToken,
 } from '../middleware/bearer.ts';
 import {
@@ -121,8 +122,21 @@ async function resolveWorkspaceForToken(
   return ws;
 }
 
+/**
+ * MCP JSON-RPC "invalid params" error (-32602). Carries structured `data` so the
+ * agent can branch on `reason` programmatically; the human-readable `message`
+ * stays brief.
+ */
+function mcpInvalidParams(message: string, data: Record<string, unknown>): Error {
+  const err = new Error(message) as Error & { code: number; data: Record<string, unknown> };
+  err.code = -32602;
+  err.data = data;
+  return err;
+}
+
 async function resolveProjectInWorkspace(
   ws: Workspace,
+  token: ApiToken,
   args: Record<string, unknown>,
 ): Promise<Project> {
   const slug = requireString(args, 'project_slug');
@@ -130,6 +144,40 @@ async function resolveProjectInWorkspace(
     where: and(eq(projects.workspaceId, ws.id), eq(projects.slug, slug)),
   });
   if (!p) throw new Error('project not found');
+
+  // Phase 2.5: when the request comes through an agent-bound token, intersect
+  // the agent's frontmatter.projects with the token's optional projectIds
+  // narrowing and reject if the requested project isn't in the result.
+  if (token.agentId) {
+    const agent = await db.query.documents.findFirst({
+      where: and(eq(documents.id, token.agentId), eq(documents.type, 'agent')),
+    });
+    if (!agent) {
+      throw mcpInvalidParams('agent for this token no longer exists', {
+        reason: 'agent_missing',
+      });
+    }
+    const agentProjects =
+      ((agent.frontmatter as { projects?: string[] }).projects) ?? ['*'];
+    const effective = intersect(agentProjects, token.projectIds ?? null);
+    if (!effective.includes('*') && !effective.includes(p.id)) {
+      // Structured server log — needed for operators debugging "my agent is
+      // silently ignoring this project". The MCP response keeps minimal data
+      // (not leaky); the log carries the full reasoning trail.
+      console.info('[mcp] allow-list rejection', {
+        agent_slug: agent.slug,
+        agent_id: agent.id,
+        requested_project_slug: slug,
+        requested_project_id: p.id,
+        allowed_projects: agentProjects,
+      });
+      throw mcpInvalidParams(`agent not allow-listed for project ${slug}`, {
+        reason: 'agent_not_in_allow_list',
+        project_slug: slug,
+        agent_slug: agent.slug,
+      });
+    }
+  }
   return p;
 }
 
@@ -174,7 +222,8 @@ const TOOLS: ToolDef[] = [
   },
   {
     name: 'list_projects',
-    description: 'List projects in a workspace.',
+    description:
+      'List projects in the bound workspace. For agent-bound tokens, filtered to the agent\'s allow-list.',
     inputSchema: {
       type: 'object',
       properties: { workspace_slug: { type: 'string' } },
@@ -183,11 +232,26 @@ const TOOLS: ToolDef[] = [
     requiredScope: 'documents:read',
     handler: async ({ token }, args) => {
       const ws = await resolveWorkspaceForToken(token, args);
-      const list = await db.query.projects.findMany({
+      const all = await db.query.projects.findMany({
         where: eq(projects.workspaceId, ws.id),
       });
+      // Human PAT or no agent binding — return all.
+      if (!token.agentId) {
+        return textResult({
+          projects: all.map((p) => ({ id: p.id, slug: p.slug, name: p.name })),
+        });
+      }
+      const agent = await db.query.documents.findFirst({
+        where: and(eq(documents.id, token.agentId), eq(documents.type, 'agent')),
+      });
+      const agentProjects =
+        ((agent?.frontmatter as { projects?: string[] })?.projects) ?? ['*'];
+      const effective = intersect(agentProjects, token.projectIds ?? null);
+      const filtered = effective.includes('*')
+        ? all
+        : all.filter((p) => effective.includes(p.id));
       return textResult({
-        projects: list.map((p) => ({ id: p.id, slug: p.slug, name: p.name })),
+        projects: filtered.map((p) => ({ id: p.id, slug: p.slug, name: p.name })),
       });
     },
   },
@@ -209,7 +273,7 @@ const TOOLS: ToolDef[] = [
     requiredScope: 'documents:read',
     handler: async ({ token }, args) => {
       const ws = await resolveWorkspaceForToken(token, args);
-      const p = await resolveProjectInWorkspace(ws, args);
+      const p = await resolveProjectInWorkspace(ws, token, args);
       const type = optionalString(args, 'type');
       // For work_item lists, default to the project's first table unless
       // table_slug is given. For all other type filters, leave activeTableId
@@ -256,7 +320,7 @@ const TOOLS: ToolDef[] = [
     requiredScope: 'documents:read',
     handler: async ({ token }, args) => {
       const ws = await resolveWorkspaceForToken(token, args);
-      const p = await resolveProjectInWorkspace(ws, args);
+      const p = await resolveProjectInWorkspace(ws, token, args);
       const slug = requireString(args, 'slug');
       const doc = await getDocument(p.id, slug);
       if (!doc) throw new Error('document not found');
@@ -278,7 +342,7 @@ const TOOLS: ToolDef[] = [
     requiredScope: 'documents:read',
     handler: async ({ token }, args) => {
       const ws = await resolveWorkspaceForToken(token, args);
-      const p = await resolveProjectInWorkspace(ws, args);
+      const p = await resolveProjectInWorkspace(ws, token, args);
       const slug = requireString(args, 'slug');
       const doc = await getDocument(p.id, slug);
       if (!doc) throw new Error('document not found');
@@ -321,8 +385,16 @@ const TOOLS: ToolDef[] = [
     requiredScope: 'documents:write',
     handler: async ({ token, actor }, args) => {
       const ws = await resolveWorkspaceForToken(token, args);
-      const p = await resolveProjectInWorkspace(ws, args);
       const type = requireString(args, 'type') as DocumentType;
+      // Phase 2.5: agent/trigger lifecycle is HTTP-only in this phase.
+      // create_agent / create_trigger MCP tools ship in Phase 2.6.
+      if (type === 'agent' || type === 'trigger') {
+        throw mcpInvalidParams(
+          `${type} documents must be created via the workspace-scoped HTTP endpoint (POST /api/v1/w/:wslug/documents); not available via MCP in Phase 2.5`,
+          { reason: 'agent_lifecycle_via_http_only' },
+        );
+      }
+      const p = await resolveProjectInWorkspace(ws, token, args);
       const title = requireString(args, 'title');
       const body = optionalString(args, 'body') ?? '';
       const fmArg = args['frontmatter'];
@@ -374,10 +446,17 @@ const TOOLS: ToolDef[] = [
     requiredScope: 'documents:write',
     handler: async ({ token, actor }, args) => {
       const ws = await resolveWorkspaceForToken(token, args);
-      const p = await resolveProjectInWorkspace(ws, args);
+      const p = await resolveProjectInWorkspace(ws, token, args);
       const slug = requireString(args, 'slug');
       const existing = await getDocument(p.id, slug);
       if (!existing) throw new Error('document not found');
+      // Phase 2.5: agent/trigger mutation is HTTP-only in this phase.
+      if (existing.type === 'agent' || existing.type === 'trigger') {
+        throw mcpInvalidParams(
+          `${existing.type} documents cannot be mutated via MCP in Phase 2.5; use PATCH /api/v1/w/:wslug/documents/${slug}`,
+          { reason: 'agent_lifecycle_via_http_only' },
+        );
+      }
 
       // For work_item patches, surface a fallback table only if the doc has
       // none (legacy rows). The service tolerates `null` here for non-work_item
@@ -434,10 +513,16 @@ const TOOLS: ToolDef[] = [
     requiredScope: 'documents:delete',
     handler: async ({ token, actor }, args) => {
       const ws = await resolveWorkspaceForToken(token, args);
-      const p = await resolveProjectInWorkspace(ws, args);
+      const p = await resolveProjectInWorkspace(ws, token, args);
       const slug = requireString(args, 'slug');
       const existing = await getDocument(p.id, slug);
       if (!existing) throw new Error('document not found');
+      if (existing.type === 'agent' || existing.type === 'trigger') {
+        throw mcpInvalidParams(
+          `${existing.type} documents cannot be deleted via MCP in Phase 2.5; use DELETE /api/v1/w/:wslug/documents/${slug}`,
+          { reason: 'agent_lifecycle_via_http_only' },
+        );
+      }
       await deleteDocument({
         workspace: ws,
         project: p,
@@ -462,7 +547,7 @@ const TOOLS: ToolDef[] = [
     requiredScope: 'documents:read',
     handler: async ({ token }, args) => {
       const ws = await resolveWorkspaceForToken(token, args);
-      const p = await resolveProjectInWorkspace(ws, args);
+      const p = await resolveProjectInWorkspace(ws, token, args);
       const t = await resolveTableForArgs(p, args);
       const list = await listStatuses(t.id);
       return textResult({ table: { id: t.id, slug: t.slug }, statuses: list });
@@ -483,7 +568,7 @@ const TOOLS: ToolDef[] = [
     requiredScope: 'documents:read',
     handler: async ({ token }, args) => {
       const ws = await resolveWorkspaceForToken(token, args);
-      const p = await resolveProjectInWorkspace(ws, args);
+      const p = await resolveProjectInWorkspace(ws, token, args);
       const t = await resolveTableForArgs(p, args);
       const list = await listFields(t.id);
       return textResult({ table: { id: t.id, slug: t.slug }, fields: list });
@@ -504,7 +589,7 @@ const TOOLS: ToolDef[] = [
     requiredScope: 'documents:read',
     handler: async ({ token }, args) => {
       const ws = await resolveWorkspaceForToken(token, args);
-      const p = await resolveProjectInWorkspace(ws, args);
+      const p = await resolveProjectInWorkspace(ws, token, args);
       const t = await resolveTableForArgs(p, args);
       const list = await listViews(t.id);
       return textResult({ table: { id: t.id, slug: t.slug }, views: list });
@@ -529,7 +614,7 @@ const TOOLS: ToolDef[] = [
     requiredScope: 'documents:read',
     handler: async ({ token }, args) => {
       const ws = await resolveWorkspaceForToken(token, args);
-      const p = await resolveProjectInWorkspace(ws, args);
+      const p = await resolveProjectInWorkspace(ws, token, args);
       const t = await resolveTableForArgs(p, args);
       // Views don't have a slug column in v1, so accept either view_id or
       // view name match via view_slug (slugified name match would be brittle
@@ -664,10 +749,14 @@ mcpRoute.post('/', async (c) => {
           : err instanceof Error
             ? err.message
             : String(err);
+      // Errors thrown via mcpInvalidParams() carry their own `code` and `data`.
+      const e = err as { code?: number; data?: unknown };
+      const code = typeof e.code === 'number' ? e.code : -32603;
+      const data = e.data;
       return c.json<JsonRpcResponse>({
         jsonrpc: '2.0',
         id,
-        error: { code: -32603, message },
+        error: data !== undefined ? { code, message, data } : { code, message },
       });
     }
   }

@@ -16,7 +16,7 @@ Implementing Phase 2.5 per `docs/superpowers/specs/2026-05-26-phase-2.5-workspac
 - [x] **Task 2 — Agent frontmatter Zod** (`projects: string[]` defaulting to `['*']`, wildcard exclusivity refine) — 5 new tests cover default, explicit list, wildcard mix-rejection, empty array.
 - [x] **Task 3 — `requireResource` middleware** + `intersect()` helper (6 algebra tests + 5 integration tests: deny/allow per allow-list, wildcard agent, token narrowing, session bypass)
 - [x] **Task 4 — Workspace-level document routes** (`/api/v1/w/:wslug/documents` POST/GET/PATCH/DELETE; project-level POST/GET reject agent+trigger with `INVALID_DOCUMENT_SCOPE`/`UNSUPPORTED_TYPE_FILTER`). 9 new tests in `workspace-documents.test.ts`; un-skipped + ported all 10 Phase-2-marker tests to the workspace endpoint via a shared `createAgentAtWorkspace` helper. Service signatures updated: `project: Project | null` in CreateDocumentArgs / UpdateDocumentArgs / DeleteDocumentArgs.
-- [ ] **Task 5 — MCP resolver allow-list** (resolveProjectInWorkspace enforces; `list_projects` filters; `create/update/delete_document` rejects agent/trigger with `-32602`; structured server log on rejection)
+- [x] **Task 5 — MCP resolver allow-list** (resolveProjectInWorkspace enforces; `list_projects` filters; `create/update/delete_document` rejects agent/trigger with `-32602`; structured server log on rejection). 6 new tests covering filter behavior, rejection, and human-PAT bypass.
 - [ ] **Task 6 — Project-delete cascade hook** (transaction wraps project delete + scan of workspace agents' `frontmatter.projects` to remove the deleted id)
 
 #### Server phase gate
