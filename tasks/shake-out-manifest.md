@@ -22,6 +22,7 @@
 - **MINOR** (UX): BUG-009 RESOLVED — field-help text for non-obvious agent keys.
 - **IMPORTANT** (design system): BUG-010 RESOLVED — single `<Chip>` primitive; three ad-hoc chips migrated; old filter-bar chip renamed to FilterChipValue.
 - **MINOR** (UX): BUG-011 RESOLVED — folded into BUG-010 fix.
+- **MINOR** (UX): BUG-012 RESOLVED — chip styling softened: rounded-md + border-border-light.
 - **DEFERRED** (pre-existing, not P2.5): BUG-005 — table-cell assignee field; picker was always slideover-only.
 - **DEFERRED** (pre-existing flake): click-through a11y test, matches STATE.md baseline.
 
@@ -172,7 +173,17 @@ Track A — Automated (Claude):
 
 - **Fix:** Resolved as a side effect of the BUG-010 chip-primitive migration. ProjectsField's chips now use the same `<Chip>` primitive as the agents page; the default variant's `border border-border bg-card` makes the chip body visible at rest regardless of theme.
 
-### Pre-existing, not Phase 2.5 — deferred for separate sweep
+### BUG-012 [MINOR — UX] — Chip styling too prominent; slideover is visually busy — RESOLVED
+
+- **Found by:** Manual (Track B, fourth sweep)
+- **Fix:** Commit `<pending>`. Single change point in `chipClasses` (the BUG-010 primitive paid off):
+  - `rounded-full` → `rounded-md` (gentler corners; reads as inline tag, not badge).
+  - `border-border` → `border-border-light` (matches the slideover's divider weight).
+  - Muted variant unchanged (still borderless, fg-3).
+  - Hover state still adds the primary tint when interactive.
+- **Test contract tightened:** chip.test.tsx assertions now do word-boundary class checks (`classes.includes(...)`) instead of substring matches, so a future drift back to `border-border` or `rounded-full` fails the test instead of silently passing.
+- **Re-sweep:** Web 339/1-skip/0-fail. Web TS clean.
+- **Status:** RESOLVED
 
 **[FLAKE] click-through.spec.ts:123 — "list rows have unique accessible names per doc"**
 - Times out on `getByRole('button', { name: /Edit title: Untitled/ })` inside the slideover dialog. The test itself notes "in headless Chromium ambient focus events sometimes dismiss it before the input is interactable" (line 137 comment). Matches the STATE.md baseline of "26/27 playwright pass; 1 known flake." Not a Phase 2.5 change.

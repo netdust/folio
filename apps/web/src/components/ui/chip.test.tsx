@@ -20,10 +20,14 @@ describe('Chip primitive', () => {
     expect(onClick).toHaveBeenCalledTimes(1);
   });
 
-  it('default variant has a visible border at rest (border-border class)', () => {
+  it('default variant has a visible border at rest (border-border-light class)', () => {
     const { container } = render(<Chip>project-a</Chip>);
     const chip = container.firstElementChild as HTMLElement;
-    expect(chip.className).toContain('border-border');
+    const classes = chip.className.split(/\s+/);
+    // Use word-boundary class checks so a future drift (border-border vs
+    // border-border-light, rounded-md vs rounded-full) doesn't silently pass.
+    expect(classes).toContain('border-border-light'); // BUG-012: lighter than border-border
+    expect(classes).toContain('rounded-md');          // BUG-012: not rounded-full
     // Must NOT carry a primary tint at rest — that's the BUG-008/011 regression
     // we explicitly do not want.
     expect(chip.className).not.toContain('bg-primary/10');
@@ -32,8 +36,10 @@ describe('Chip primitive', () => {
   it('muted variant has no border and uses fg-3 text color', () => {
     const { container } = render(<Chip muted>removed</Chip>);
     const chip = container.firstElementChild as HTMLElement;
-    expect(chip.className).toContain('text-fg-3');
-    expect(chip.className).not.toContain('border-border');
+    const classes = chip.className.split(/\s+/);
+    expect(classes).toContain('text-fg-3');
+    expect(classes).not.toContain('border-border-light');
+    expect(classes).not.toContain('border-border');
   });
 
   it('mono variant adds font-mono', () => {

@@ -40,13 +40,16 @@ type ChipProps = StaticChipProps | InteractiveChipProps;
 
 function chipClasses(opts: { muted?: boolean; mono?: boolean; interactive: boolean }): string {
   return cn(
-    'inline-flex items-center rounded-full px-2 py-0.5 text-[11px] transition-colors duration-fast',
+    // rounded-md (not rounded-full) + border-border-light (not border-border)
+    // — softer at-rest weight so a row of chips next to long-form text doesn't
+    // visually dominate the surface. BUG-012.
+    'inline-flex items-center rounded-md px-2 py-0.5 text-[11px] transition-colors duration-fast',
     opts.mono && 'font-mono',
     opts.muted
       ? 'bg-card text-fg-3'
-      : // Default — visible at rest with a real border so the chip body never
-        // disappears against the page background (the BUG-008/011 fix).
-        'border border-border bg-card text-fg-2',
+      : // Default — visible at rest with a lighter border (matches the slideover
+        // divider weight) so the chip body never disappears but doesn't shout.
+        'border border-border-light bg-card text-fg-2',
     // Interactive default gets a primary hover tint to telegraph the action.
     // Interactive muted gets a subtle hover but no tint — staying out of the
     // way is the variant's whole point.
