@@ -638,6 +638,43 @@ Fires the Phase 2 trigger documents. Two firing paths: a cron-driven scheduler f
 
 ---
 
+## Phase 3.5 — Script & webhook trigger actions (Half-week)
+
+**Goal:** A trigger today must fire an agent (`agent` is a required field in `apps/server/src/lib/trigger-schema.ts`). Open the action surface so triggers can also POST to a webhook URL or run a script, for cases where the user wants automation without an LLM in the loop.
+
+> **Why:** cron-style "POST this URL every Monday" or "run this shell snippet when a doc flips to Done" is operational glue most teams want before they're ready to trust an agent. Webhooks are cheap, sandbox-free, and stay inside Folio's existing event model. Scripts are powerful but security-loaded — gated behind an env flag, off by default.
+
+### Schema
+
+- [ ] In `apps/server/src/lib/trigger-schema.ts`, replace the required `agent` field with a discriminated `action` union: `{ type: 'agent', agent: slug }` | `{ type: 'webhook', url, method?, headers?, body? }` | `{ type: 'script', command, cwd?, env?, timeout_ms? }`
+- [ ] Keep the existing `agent: <slug>` shorthand parsing for back-compat — normalize it to `action: { type: 'agent', agent: <slug> }` on read
+- [ ] Add a Zod validator per action type; reject mixed/legacy shapes with `code: invalid_form_input`
+- [ ] Migration is in-place (frontmatter only — no schema change)
+
+### Runner
+
+- [ ] Extend the Phase 3 trigger firing loop in `apps/server/src/services/trigger-runner.ts` (or wherever it lands) with a per-type dispatcher
+- [ ] `webhook` dispatcher: outbound POST via `fetch`, 10s default timeout, retries piggyback on the existing webhook retry queue, emit `trigger.fired` + `trigger.failed`
+- [ ] `script` dispatcher: `Bun.spawn`, capture stdout/stderr (cap at 64 KB), enforce `timeout_ms` (default 30s, max 5 min), kill on overflow
+- [ ] Script execution is OFF unless `FOLIO_ALLOW_SCRIPT_TRIGGERS=1` is set in the server env — when off, validation accepts the doc but the runner emits `trigger.skipped` with reason `scripts_disabled`
+- [ ] Audit log entry per fire in `trigger_runs` (existing table)
+
+### UI
+
+- [ ] Trigger slideover gets an "Action" segmented control (Agent / Webhook / Script) — the right-hand panel swaps between agent picker, URL+headers editor, and command editor
+- [ ] Script action shows a warning banner + a link to the env flag docs when scripts are disabled server-side
+- [ ] Run history panel renders webhook response code + script exit code
+
+### Phase 3.5 acceptance
+
+- [ ] Existing `agent:`-only triggers still fire after the schema change (back-compat regression test)
+- [ ] Create a cron trigger with `action.type = webhook` pointing at a local echo endpoint; within ~60s the endpoint is hit and `trigger.fired` is emitted
+- [ ] Create a cron trigger with `action.type = script` while `FOLIO_ALLOW_SCRIPT_TRIGGERS` is unset → runner emits `trigger.skipped` (`scripts_disabled`); set the flag and re-run → the script executes and stdout is captured
+- [ ] Script that exceeds `timeout_ms` is killed and reports `trigger.failed` with reason `timeout`
+- [ ] Commit: `phase-3.5: complete`
+
+---
+
 ## Phase 4 — Inbound webhooks (Half-week)
 
 **Goal:** External systems (Statamic contact forms, WordPress FluentForms, webshop checkouts, Stripe/Mollie) POST to a Folio webhook URL and a markdown document is created in the configured table with payload fields mapped to frontmatter. This is the inbound half of the agency back-office loop.
@@ -832,6 +869,16 @@ Fires the Phase 2 trigger documents. Two firing paths: a cron-driven scheduler f
 - [ ] Loading skeletons (not spinners) on initial loads
 - [ ] Error boundaries on each route with retry
 
+### Performance polish
+
+> Server pagination + indexes already scale to 10k+ rows; the table UI is the bottleneck. Goal: a single table with 10k rows scrolls smoothly and filters/sorts return in < 100ms.
+
+- [ ] Row virtualization in `apps/web/src/components/table-view.tsx` (~line 457 — replace `filteredDocs.map(...)` with `@tanstack/react-virtual`'s `useVirtualizer`, ~15 visible + overscan)
+- [ ] Push `priority` + `labels` filtering server-side in `apps/server/src/routes/documents.ts` (today they filter client-side on the fetched page only — see `apps/web/src/lib/api/documents.ts:237` and `apps/server/src/routes/documents.ts:226`)
+- [ ] Infinite scroll / "load more" wired through TanStack Query's `useInfiniteQuery` so the table can grow past one page without re-fetching from scratch
+- [ ] Add covering index on `(table_id, status)` if status filtering stays the dominant filter after 1.5/1.7 usage
+- [ ] Smoke test: seed 10k documents into one table, assert initial paint < 500ms and scroll stays at 60fps
+
 ### Playwright
 
 - [ ] Install Playwright in `apps/web/tests/e2e/` *(shipped in Phase 1)*
@@ -843,6 +890,7 @@ Fires the Phase 2 trigger documents. Two firing paths: a cron-driven scheduler f
 - [ ] All six UX commitments pass Playwright
 - [ ] Dark mode looks good on every screen
 - [ ] Webhook + sync admin screens shipped and tested
+- [ ] 10k-row table scrolls smoothly; server-side filtering covers every visible filter chip
 - [ ] Commit: `phase-7: complete`
 
 ---
