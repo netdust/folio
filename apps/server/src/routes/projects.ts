@@ -1,11 +1,11 @@
 import { zValidator } from '@hono/zod-validator';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import { slugify } from '@folio/shared';
 import { db } from '../db/client.ts';
-import { projects } from '../db/schema.ts';
+import { documents, projects } from '../db/schema.ts';
 import { emitEvent } from '../lib/events.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
 import { seedProjectDefaults } from '../lib/seed-project-defaults.ts';
@@ -114,7 +114,35 @@ projectItemRoute.patch(
 projectItemRoute.delete('/', async (c) => {
   if (getRole(c) !== 'owner') throw new HTTPError('FORBIDDEN', 'owner only', 403);
   const p = getProject(c);
-  await db.delete(projects).where(eq(projects.id, p.id));
+  const ws = getWorkspace(c);
+
+  // Phase 2.5: application-level cascade. frontmatter.projects lives inside a
+  // JSON column, so SQLite's FK system cannot scrub references when a project
+  // is deleted. Do it transactionally so either (a) both the project delete
+  // and every frontmatter scrub commit, or (b) neither does — no half-state.
+  await db.transaction(async (tx) => {
+    const wsAgents = await tx.query.documents.findMany({
+      where: and(
+        eq(documents.workspaceId, ws.id),
+        inArray(documents.type, ['agent', 'trigger']),
+      ),
+    });
+    const stale = wsAgents.filter((d) => {
+      const projs = (d.frontmatter as { projects?: unknown }).projects;
+      return Array.isArray(projs) && projs.includes(p.id);
+    });
+    for (const doc of stale) {
+      const fm = doc.frontmatter as Record<string, unknown>;
+      const projs = (fm.projects as string[]).filter((id) => id !== p.id);
+      await tx
+        .update(documents)
+        .set({ frontmatter: { ...fm, projects: projs }, updatedAt: new Date() })
+        .where(eq(documents.id, doc.id));
+    }
+
+    await tx.delete(projects).where(eq(projects.id, p.id));
+  });
+
   return c.body(null, 204);
 });
 
