@@ -6,11 +6,17 @@
 -- replay — the very divergence G14 was meant to fix.
 --
 -- Fix: a per-row monotonic `seq` integer. emitEvent (in lib/events.ts)
--- computes the next seq inside the same tx as the insert; an AFTER INSERT
--- trigger backstops any direct-insert path (tests, future bulk imports)
--- that doesn't go through emitEvent. SQLite's writer lock serializes the
--- max() lookup, so the values are unique and monotonic per insertion
--- order.
+-- computes the next seq inside the same tx as the insert. SQLite's writer
+-- lock serializes the max() lookup, so the values are unique and monotonic
+-- per insertion order.
+--
+-- BUG-015 — direct inserts that bypass emitEvent and omit seq will collide
+-- on the events_seq_idx UNIQUE constraint after the first such row
+-- (DEFAULT 0 + second 0 = duplicate). No AFTER INSERT trigger exists to
+-- backstop this (an earlier version of this comment promised one — that
+-- promise was never delivered and is removed here). Treat direct inserts
+-- into the events table as UNSUPPORTED. Use emitEvent (lib/events.ts) or
+-- txWithEvents wrappers; both compute seq atomically with the row insert.
 
 ALTER TABLE events ADD COLUMN seq INTEGER NOT NULL DEFAULT 0;
 --> statement-breakpoint
