@@ -46,6 +46,13 @@ export const commentFrontmatterSchema = z
     // frontmatter. We bound the length to prevent obvious abuse (DoS-via-fm
     // bloat) but leave the form loose.
     target_agent: z.string().min(1).max(200).optional(),
+    // BUG-013 — immutable handle to the target agent. The slug-form
+    // `target_agent` is preserved for human readability + back-compat with
+    // existing rows; `target_agent_id` is what every server-side resolver
+    // SHOULD prefer (Phase 3 dispatcher, approval-buttons UI). Same kind
+    // gating as `target_agent`. Mirrors the F11/S2 immutable-handle pattern
+    // already established for `author` and `payload.agent_id`.
+    target_agent_id: z.string().min(1).max(200).optional(),
     run_id: z.string().uuid().optional(),
     deleted_at: z.string().datetime().optional(),
   })
@@ -63,5 +70,9 @@ export const commentFrontmatterSchema = z
   })
   .refine((d) => !d.target_agent || d.kind === 'approval' || d.kind === 'rejection', {
     message: 'target_agent is only valid when kind is approval or rejection',
+  })
+  // BUG-013: target_agent_id follows the same kind-gating as target_agent.
+  .refine((d) => !d.target_agent_id || d.kind === 'approval' || d.kind === 'rejection', {
+    message: 'target_agent_id is only valid when kind is approval or rejection',
   });
 export type CommentFrontmatter = z.infer<typeof commentFrontmatterSchema>;

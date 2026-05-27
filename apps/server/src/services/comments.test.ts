@@ -363,6 +363,81 @@ test('createComment approval keyword overrides client kind=comment to approval a
   expect(fm.target_agent).toBe('drafter');
 });
 
+// BUG-013 — persist target_agent_id alongside target_agent so Phase 3
+// dispatcher + ApprovalButtons survive renames. Keyword path: parseMentions
+// already resolved the agent's id; service writes both fields.
+test('BUG-013: keyword-path approval persists both target_agent (slug) and target_agent_id (id)', async () => {
+  const { db, seed } = await makeTestApp();
+  const table = await getWorkItemsTable(db, seed.project.id);
+  const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+  const agent = await seedAgent(db, seed.workspace, seed.user, 'drafter');
+
+  const comment = await createComment({
+    workspace: seed.workspace,
+    project: seed.project,
+    parent,
+    authorContext: userContext(seed.user),
+    actor: seed.user.id,
+    body: '@drafter approved',
+  });
+
+  const fm = comment.frontmatter as Record<string, unknown>;
+  expect(fm.kind).toBe('approval');
+  expect(fm.target_agent).toBe('drafter');
+  expect(fm.target_agent_id).toBe(agent.id);
+});
+
+// BUG-013 — client-path approval: client passes target_agent as slug or
+// `agent:<slug>`; service looks up the agent and writes target_agent_id.
+test('BUG-013: client-path approval looks up agent id from slug and persists both fields', async () => {
+  const { db, seed } = await makeTestApp();
+  const table = await getWorkItemsTable(db, seed.project.id);
+  const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+  const agent = await seedAgent(db, seed.workspace, seed.user, 'drafter');
+
+  const comment = await createComment({
+    workspace: seed.workspace,
+    project: seed.project,
+    parent,
+    authorContext: userContext(seed.user),
+    actor: seed.user.id,
+    body: 'lgtm',
+    kind: 'approval',
+    targetAgent: 'agent:drafter',
+  });
+
+  const fm = comment.frontmatter as Record<string, unknown>;
+  expect(fm.target_agent).toBe('agent:drafter');
+  expect(fm.target_agent_id).toBe(agent.id);
+});
+
+// BUG-013 — comment.created event payload carries target_agent_id too so
+// Phase 3 subscribers can resolve by id off the event without re-reading
+// the row.
+test('BUG-013: comment.created event payload includes target_agent_id when present', async () => {
+  const { db, seed } = await makeTestApp();
+  const table = await getWorkItemsTable(db, seed.project.id);
+  const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+  const agent = await seedAgent(db, seed.workspace, seed.user, 'drafter');
+
+  const comment = await createComment({
+    workspace: seed.workspace,
+    project: seed.project,
+    parent,
+    authorContext: userContext(seed.user),
+    actor: seed.user.id,
+    body: '@drafter approved',
+  });
+
+  const createdEvents = await db.query.events.findMany({
+    where: and(eq(events.documentId, comment.id), eq(events.kind, 'comment.created')),
+  });
+  expect(createdEvents.length).toBe(1);
+  const payload = createdEvents[0]!.payload as Record<string, unknown>;
+  expect(payload.target_agent).toBe('drafter');
+  expect(payload.target_agent_id).toBe(agent.id);
+});
+
 // -----------------------------------------------------------------------------
 // createComment — event emission
 // -----------------------------------------------------------------------------

@@ -227,17 +227,36 @@ async function loadWorkspaceMembers(workspaceId: string): Promise<MemberForParse
   return rows;
 }
 
-/** Resolve the kind/target_agent pair per the priority rules in the file header. */
+/**
+ * Resolve the kind/target_agent/target_agent_id triple per the priority rules
+ * in the file header.
+ *
+ * BUG-013 — target_agent has been slug-form forever; the agent id was
+ * discarded. After a rename the persisted slug no longer resolves. Now we
+ * also return `targetAgentId` (the immutable handle) so the caller can
+ * persist both. Lookup strategy:
+ *   - keyword path: parseMentions already resolved the agent → use its id.
+ *   - client path: client may pass `agent:<slug>` or `<slug>` or `agent:<id>`.
+ *     Try to match against workspaceAgents by id then by slug. If neither
+ *     matches, leave targetAgentId undefined (back-compat with rows that
+ *     name an agent the service can't see, e.g. an ambient/cross-workspace
+ *     reference). The slug-form `target_agent` is still persisted regardless.
+ */
 function resolveKindAndTarget(args: {
   approvalIntent: ReturnType<typeof parseMentions>['approvalIntent'];
   clientKind: CommentKind | undefined;
   clientTargetAgent: string | undefined;
-}): { kind: CommentKind; targetAgent: string | undefined } {
-  const { approvalIntent, clientKind, clientTargetAgent } = args;
+  workspaceAgents: AgentForParser[];
+}): { kind: CommentKind; targetAgent: string | undefined; targetAgentId: string | undefined } {
+  const { approvalIntent, clientKind, clientTargetAgent, workspaceAgents } = args;
 
   // 1. Keyword wins.
   if (approvalIntent !== null) {
-    return { kind: approvalIntent.kind, targetAgent: approvalIntent.targetAgent };
+    return {
+      kind: approvalIntent.kind,
+      targetAgent: approvalIntent.targetAgent,
+      targetAgentId: approvalIntent.targetAgentId,
+    };
   }
 
   const kind: CommentKind = clientKind ?? 'comment';
@@ -261,7 +280,17 @@ function resolveKindAndTarget(args: {
     );
   }
 
-  return { kind, targetAgent: isApprovalish ? clientTargetAgent : undefined };
+  if (!isApprovalish) {
+    return { kind, targetAgent: undefined, targetAgentId: undefined };
+  }
+
+  // Resolve clientTargetAgent → agent id when possible.
+  const raw = clientTargetAgent!; // ensured by guard above
+  // Strip optional `agent:` prefix per S10 (target_agent stores one of three forms).
+  const bare = raw.startsWith('agent:') ? raw.slice('agent:'.length) : raw;
+  const match = workspaceAgents.find((a) => a.id === bare || a.slug === bare);
+
+  return { kind, targetAgent: raw, targetAgentId: match?.id };
 }
 
 // -----------------------------------------------------------------------------
@@ -318,11 +347,14 @@ export async function createComment(input: CreateCommentInput): Promise<Document
       currentProjectId: p.id,
     });
 
-    // Resolve final kind + target_agent (keyword-wins; otherwise enforce client rules).
-    const { kind, targetAgent } = resolveKindAndTarget({
+    // Resolve final kind + target_agent + target_agent_id (keyword-wins;
+    // otherwise enforce client rules). BUG-013: persist both fields so
+    // downstream resolvers can prefer the immutable id and fall back to slug.
+    const { kind, targetAgent, targetAgentId } = resolveKindAndTarget({
       approvalIntent: parsed.approvalIntent,
       clientKind: input.kind,
       clientTargetAgent: input.targetAgent,
+      workspaceAgents,
     });
 
     // Build + validate frontmatter through the Zod schema so the persisted shape
@@ -334,6 +366,7 @@ export async function createComment(input: CreateCommentInput): Promise<Document
       mentions: parsed.mentions,
     };
     if (targetAgent !== undefined) frontmatterRaw.target_agent = targetAgent;
+    if (targetAgentId !== undefined) frontmatterRaw.target_agent_id = targetAgentId;
     const frontmatter = commentFrontmatterSchema.parse(frontmatterRaw);
 
     const inserted = {
@@ -368,6 +401,9 @@ export async function createComment(input: CreateCommentInput): Promise<Document
         author,
         kind,
         ...(targetAgent !== undefined ? { target_agent: targetAgent } : {}),
+        // BUG-013 — emit the immutable handle too so Phase 3 subscribers
+        // can resolve target by id and survive renames.
+        ...(targetAgentId !== undefined ? { target_agent_id: targetAgentId } : {}),
       },
     });
 
@@ -494,6 +530,7 @@ export async function updateComment(input: UpdateCommentInput): Promise<Document
 
     // Build merged frontmatter via the Zod schema so we get the same guarantees as create.
     const targetAgent = existingFm.target_agent as string | undefined;
+    const targetAgentId = existingFm.target_agent_id as string | undefined;
     const kindFromExisting = (existingFm.kind as CommentKind) ?? 'comment';
     const mergedRaw: Record<string, unknown> = {
       author: existingFm.author,
@@ -502,6 +539,7 @@ export async function updateComment(input: UpdateCommentInput): Promise<Document
       mentions: nextMentions,
       ...(editedAt !== undefined ? { edited_at: editedAt } : existingFm.edited_at !== undefined ? { edited_at: existingFm.edited_at } : {}),
       ...(targetAgent !== undefined ? { target_agent: targetAgent } : {}),
+      ...(targetAgentId !== undefined ? { target_agent_id: targetAgentId } : {}),
       ...(existingFm.run_id !== undefined ? { run_id: existingFm.run_id } : {}),
       ...(existingFm.deleted_at !== undefined ? { deleted_at: existingFm.deleted_at } : {}),
     };
