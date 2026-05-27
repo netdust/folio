@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { streamSSE } from 'hono/streaming';
-import { and, eq, gt, or } from 'drizzle-orm';
+import { and, eq, gt } from 'drizzle-orm';
 import { db } from '../db/client.ts';
 import { documents, events } from '../db/schema.ts';
 import type { AuthContext } from '../middleware/auth.ts';
@@ -9,6 +9,7 @@ import { getWorkspace, type ScopeContext } from '../middleware/scope.ts';
 import { eventBus, type BusEvent } from '../lib/event-bus.ts';
 import type { EventKind } from '../lib/events.ts';
 import { HTTPError } from '../lib/http.ts';
+import { isAgentEventVisible, type AgentEventContext } from '../lib/agent-event-visibility.ts';
 
 const eventsRoute = new Hono<AuthContext & ScopeContext>();
 
@@ -37,7 +38,7 @@ eventsRoute.get('/', async (c) => {
   // narrowing once a UI exists for it.
   const token = c.get('token') ?? null;
   let agentAllowList: string[] | null = null; // null === unrestricted
-  let agentTokenAgentId: string | null = null; // agent's own document id; non-null for agent-bound tokens
+  let agentEventCtx: AgentEventContext = { agentId: null, agentSlug: null };
   if (token?.agentId) {
     const agent = await db.query.documents.findFirst({
       where: eq(documents.id, token.agentId),
@@ -45,7 +46,7 @@ eventsRoute.get('/', async (c) => {
     if (!agent || agent.type !== 'agent') {
       throw new HTTPError('FORBIDDEN_RESOURCE', 'agent for this token no longer exists', 403);
     }
-    agentTokenAgentId = agent.id;
+    agentEventCtx = { agentId: agent.id, agentSlug: agent.slug };
     const agentProjects = ((agent.frontmatter as { projects?: string[] }).projects) ?? ['*'];
     const effective = intersect(agentProjects, token.projectIds ?? null);
     if (!effective.includes('*')) {
@@ -61,25 +62,6 @@ eventsRoute.get('/', async (c) => {
     }
   }
 
-  /**
-   * G9 — workspace-level events (projectId=null) leak information ACROSS
-   * agents otherwise. agent.created carries the new agent's api_token_id;
-   * agent.allow_list.reconciled carries other agents' removed_project_ids;
-   * agent.deleted exposes which agent went away. For an agent-bound token
-   * with a restricted allow-list, only events whose documentId is the
-   * agent's OWN id (i.e., events ABOUT this agent) should flow through.
-   * Workspace.* and other agent-unrelated kinds (workspace.created, etc.)
-   * remain visible.
-   */
-  function isCrossAgentLeak(
-    kind: EventKind,
-    documentId: string | null,
-  ): boolean {
-    if (!agentTokenAgentId) return false;
-    if (!kind.startsWith('agent.')) return false;
-    return documentId !== agentTokenAgentId;
-  }
-
   return streamSSE(c, async (stream) => {
     // Replay from the durable event log when Last-Event-Id is present.
     // nanoid is NOT time-sortable, so we look up the anchor row and use its
@@ -91,58 +73,85 @@ eventsRoute.get('/', async (c) => {
         where: eq(events.id, lastEventId),
       });
       if (anchor) {
-        // G14: same-millisecond ties used to be dropped by the strict
-        // `gt(createdAt)` filter even though orderBy carried `asc(e.id)` as
-        // a tiebreaker — sequential awaits in one txWithEvents can produce
-        // events that share createdAt on warm code paths. Composite cursor:
-        // any event strictly later in time, OR same time but with a later
-        // id (lex compare; nanoid is content-stable per row).
-        const rows = await db.query.events.findMany({
-          where: and(
-            eq(events.workspaceId, ws.id),
-            or(
-              gt(events.createdAt, anchor.createdAt),
-              and(eq(events.createdAt, anchor.createdAt), gt(events.id, anchor.id)),
+        // H3: seq is the canonical replay cursor. nanoid ids aren't
+        // insertion-sortable (random URL-safe charset), so the prior
+        // composite (createdAt, id) cursor dropped same-ms events whose
+        // id lex-sorted BEFORE the anchor. seq is monotonic per insert,
+        // so `seq > anchor.seq` orders the tail correctly with no ties.
+        //
+        // H4: replay PAGINATES with a continuation cursor instead of a
+        // single 500-row pre-filter. Narrowed agents on busy workspaces
+        // would otherwise silently miss events further down the log when
+        // the first batch is dominated by rows outside their visibility.
+        let cursorSeq = anchor.seq;
+        const PAGE_SIZE = 500;
+        // Generous upper bound to avoid pathological infinite-fetch on a
+        // broken filter or runaway emit storm. Replay deliberately caps
+        // at this many DELIVERED rows; remaining tail is the client's
+        // problem (reconcile via REST).
+        const MAX_DELIVERED = 2000;
+        let delivered = 0;
+
+        outer: while (delivered < MAX_DELIVERED) {
+          const rows = await db.query.events.findMany({
+            where: and(
+              eq(events.workspaceId, ws.id),
+              gt(events.seq, cursorSeq),
             ),
-          ),
-          orderBy: (e, { asc }) => [asc(e.createdAt), asc(e.id)],
-          limit: 500,
-        });
-        for (const row of rows) {
-          if (projectId && row.projectId !== projectId) continue;
-          // F3: agent allow-list narrows project-scoped rows.
-          if (agentAllowList && row.projectId !== null && !agentAllowList.includes(row.projectId)) {
-            continue;
-          }
-          // G9: workspace-level agent.* events about OTHER agents are not
-          // visible to a narrowed agent token.
-          if (isCrossAgentLeak(row.kind as EventKind, row.documentId ?? null)) continue;
-          if (kinds && !kinds.includes(row.kind as EventKind)) continue;
-          if (parentId !== undefined) {
-            const p = (row.payload as Record<string, unknown> | null)?.parent_id;
-            if (p !== parentId) continue;
-          }
-          if (runId !== undefined) {
-            const r = (row.payload as Record<string, unknown> | null)?.run_id;
-            if (r !== runId) continue;
-          }
-          if (stream.aborted) return;
-          await stream.writeSSE({
-            id: row.id,
-            event: row.kind,
-            data: JSON.stringify({
-              id: row.id,
-              workspaceId: row.workspaceId,
-              projectId: row.projectId,
-              documentId: row.documentId,
-              kind: row.kind,
-              actor: row.actor,
-              payload: row.payload,
-              createdAt: row.createdAt instanceof Date
-                ? row.createdAt.getTime()
-                : row.createdAt,
-            }),
+            orderBy: (e, { asc }) => [asc(e.seq)],
+            limit: PAGE_SIZE,
           });
+          if (rows.length === 0) break;
+
+          for (const row of rows) {
+            cursorSeq = row.seq;
+            if (projectId && row.projectId !== projectId) continue;
+            // F3: agent allow-list narrows project-scoped rows.
+            if (agentAllowList && row.projectId !== null && !agentAllowList.includes(row.projectId)) {
+              continue;
+            }
+            // H1/H2: workspace-level (projectId=null) events filtered through
+            // the subject-based visibility predicate.
+            if (
+              !isAgentEventVisible(agentEventCtx, {
+                kind: row.kind as EventKind,
+                projectId: row.projectId,
+                documentId: row.documentId,
+                payload: row.payload,
+              })
+            ) {
+              continue;
+            }
+            if (kinds && !kinds.includes(row.kind as EventKind)) continue;
+            if (parentId !== undefined) {
+              const p = (row.payload as Record<string, unknown> | null)?.parent_id;
+              if (p !== parentId) continue;
+            }
+            if (runId !== undefined) {
+              const r = (row.payload as Record<string, unknown> | null)?.run_id;
+              if (r !== runId) continue;
+            }
+            if (stream.aborted) break outer;
+            await stream.writeSSE({
+              id: row.id,
+              event: row.kind,
+              data: JSON.stringify({
+                id: row.id,
+                workspaceId: row.workspaceId,
+                projectId: row.projectId,
+                documentId: row.documentId,
+                kind: row.kind,
+                actor: row.actor,
+                payload: row.payload,
+                createdAt: row.createdAt instanceof Date
+                  ? row.createdAt.getTime()
+                  : row.createdAt,
+              }),
+            });
+            delivered += 1;
+            if (delivered >= MAX_DELIVERED) break outer;
+          }
+          if (rows.length < PAGE_SIZE) break;
         }
       }
     }
@@ -167,8 +176,17 @@ eventsRoute.get('/', async (c) => {
         ) {
           return;
         }
-        // G9: drop workspace-level agent.* events about OTHER agents.
-        if (isCrossAgentLeak(e.kind, e.documentId ?? null)) return;
+        // H1/H2: subject-based visibility (see replay loop above).
+        if (
+          !isAgentEventVisible(agentEventCtx, {
+            kind: e.kind,
+            projectId: e.projectId ?? null,
+            documentId: e.documentId ?? null,
+            payload: e.payload,
+          })
+        ) {
+          return;
+        }
         queue.push(e);
       },
     );

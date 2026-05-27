@@ -350,10 +350,17 @@ export const events = sqliteTable(
     createdAt: integer('created_at', { mode: 'timestamp_ms' })
       .notNull()
       .default(sql`(unixepoch() * 1000)`),
+    // H3 — monotonic per-row sequence used as the canonical replay cursor.
+    // emitEvent computes `MAX(seq) + 1` inside the same tx as the insert;
+    // SQLite's writer lock serializes max() + insert so the value is
+    // unique + monotonic. Migration 0009 added the column + backfilled
+    // existing rows from rowid (also monotonic per insertion).
+    seq: integer('seq').notNull().default(0),
   },
   (t) => ({
     workspaceIdx: index('events_workspace_idx').on(t.workspaceId, t.createdAt),
     documentIdx: index('events_document_idx').on(t.documentId),
+    seqIdx: uniqueIndex('events_seq_idx').on(t.seq),
   }),
 );
 

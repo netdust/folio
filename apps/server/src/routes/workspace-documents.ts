@@ -244,6 +244,15 @@ workspaceDocumentsRoute.get('/:slug/events', async (c) => {
     (await getWorkspaceDocument(ws.id, 'trigger', slug));
   if (!doc) throw new HTTPError('DOCUMENT_NOT_FOUND', `document "${slug}" not found`, 404);
 
+  // H7: an agent-bound token must NOT be able to read another agent's
+  // event history via this REST endpoint. The SSE route applies the same
+  // visibility predicate; mirror it here. Non-agent tokens (session,
+  // human PAT) bypass.
+  const token = c.get('token') ?? null;
+  if (token?.agentId && doc.type === 'agent' && doc.id !== token.agentId) {
+    throw new HTTPError('DOCUMENT_NOT_FOUND', `document "${slug}" not found`, 404);
+  }
+
   const rows = await db
     .select()
     .from(events)

@@ -1,4 +1,4 @@
-import { inArray } from 'drizzle-orm';
+import { inArray, sql } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import type { EventKind } from '@folio/shared';
 import { events } from '../db/schema.ts';
@@ -47,6 +47,16 @@ const pendingByTx = new WeakMap<object, BusEvent[]>();
 export async function emitEvent(tx: DBOrTx, args: EmitArgs): Promise<void> {
   const id = nanoid();
   const createdAt = Date.now();
+  // H3: allocate the next monotonic seq inside the writer's tx. SQLite's
+  // exclusive write lock serializes MAX(seq) + insert, so two concurrent
+  // emitEvent calls in separate transactions get distinct, monotonic seq
+  // values. Inside one tx, sequential emits also see each other's max.
+  // The events_seq_idx UNIQUE index protects against any regression that
+  // ever forgets to set seq — the insert would fail loudly.
+  const [{ max: maxSeq } = { max: 0 }] = await tx
+    .select({ max: sql<number>`COALESCE(MAX(${events.seq}), 0)` })
+    .from(events);
+  const seq = (maxSeq ?? 0) + 1;
   await tx.insert(events).values({
     id,
     workspaceId: args.workspaceId,
@@ -60,6 +70,7 @@ export async function emitEvent(tx: DBOrTx, args: EmitArgs): Promise<void> {
     // which could put Task 4's Last-Event-Id replay out of order with live
     // events on a busy server.
     createdAt: new Date(createdAt),
+    seq,
   });
 
   const busEvent: BusEvent = {

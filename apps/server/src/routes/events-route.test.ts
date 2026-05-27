@@ -277,6 +277,223 @@ test('F3: agent token without ?project= can still subscribe (workspace events al
   await res.body?.cancel();
 });
 
+// ---------------------------------------------------------------------------
+// H1 — `agent.task.assigned` MUST reach the assignee even though the event's
+// documentId is the work_item, not the agent. The prior G9 kind-prefix
+// filter dropped these silently.
+// ---------------------------------------------------------------------------
+
+test('H1: agent.task.assigned reaches the assignee agent via SSE replay', async () => {
+  const { app, db: testDb, seed } = await makeTestApp();
+
+  const { token, agentId } = await setupAgentToken({
+    workspaceId: seed.workspace.id,
+    userId: seed.user.id,
+    agentSlug: 'task-bot',
+    projectAllowList: [seed.project.id],
+  });
+
+  // Seed an agent.task.assigned event addressed to this agent (slug match)
+  // with documentId = a work_item (not the agent).
+  const { events } = await import('../db/schema.ts');
+  await testDb.insert(events).values([
+    {
+      id: 'evt-anchor',
+      workspaceId: seed.workspace.id,
+      projectId: null,
+      documentId: null,
+      kind: 'workspace.created',
+      actor: seed.user.id,
+      payload: {},
+      createdAt: new Date(Date.now() - 90_000),
+      seq: 1000,
+    },
+    {
+      id: 'evt-my-assignment',
+      workspaceId: seed.workspace.id,
+      projectId: seed.project.id,
+      documentId: 'work-item-xyz',
+      kind: 'agent.task.assigned',
+      actor: seed.user.id,
+      payload: { slug: 'work-item-xyz', agent: 'task-bot' },
+      createdAt: new Date(Date.now() - 60_000),
+      seq: 1001,
+    },
+    {
+      id: 'evt-other-assignment',
+      workspaceId: seed.workspace.id,
+      projectId: seed.project.id,
+      documentId: 'work-item-other',
+      kind: 'agent.task.assigned',
+      actor: seed.user.id,
+      payload: { slug: 'work-item-other', agent: 'other-bot' },
+      createdAt: new Date(Date.now() - 30_000),
+      seq: 1002,
+    },
+  ]);
+
+  const res = await app.request('/api/v1/w/acme/events', {
+    headers: { Authorization: `Bearer ${token}`, 'Last-Event-Id': 'evt-anchor' },
+  });
+  expect(res.status).toBe(200);
+  const reader = res.body?.getReader();
+  if (!reader) throw new Error('no body');
+  const decoder = new TextDecoder();
+  let text = '';
+  const start = Date.now();
+  while (Date.now() - start < 300) {
+    const { value, done } = await Promise.race([
+      reader.read(),
+      new Promise<{ value?: Uint8Array; done: boolean }>((resolve) =>
+        setTimeout(() => resolve({ done: false }), 100),
+      ),
+    ]);
+    if (done) break;
+    if (value) text += decoder.decode(value);
+  }
+  await reader.cancel();
+
+  // My assignment MUST be visible (this is the wedge).
+  expect(text).toContain('evt-my-assignment');
+  // The OTHER agent's assignment in the SAME project is project-metadata
+  // that agents in the project can see (no payload leak — assignee slug
+  // is the only sensitive bit and they need it to know it wasn't them).
+  // BUT a stricter policy would hide it; document the intent here.
+  expect(text).toContain('evt-other-assignment');
+  // sanity: agentId unused, but referenced for traceability
+  expect(agentId).toBeTruthy();
+});
+
+test('H2: workspace-level document.created for another agent is HIDDEN', async () => {
+  const { app, db: testDb, seed } = await makeTestApp();
+
+  const { token } = await setupAgentToken({
+    workspaceId: seed.workspace.id,
+    userId: seed.user.id,
+    agentSlug: 'agent-a',
+    projectAllowList: [seed.project.id],
+  });
+  const { agentId: agentBId } = await setupAgentToken({
+    workspaceId: seed.workspace.id,
+    userId: seed.user.id,
+    agentSlug: 'agent-b',
+    projectAllowList: [seed.project.id],
+  });
+
+  const { events } = await import('../db/schema.ts');
+  await testDb.insert(events).values([
+    {
+      id: 'evt-anchor-h2',
+      workspaceId: seed.workspace.id,
+      projectId: null,
+      documentId: null,
+      kind: 'workspace.created',
+      actor: seed.user.id,
+      payload: {},
+      createdAt: new Date(Date.now() - 90_000),
+      seq: 2000,
+    },
+    {
+      id: 'evt-leaked-document-created',
+      workspaceId: seed.workspace.id,
+      projectId: null,
+      documentId: agentBId,
+      kind: 'document.created',
+      actor: seed.user.id,
+      payload: { slug: 'agent-b', type: 'agent' },
+      createdAt: new Date(Date.now() - 60_000),
+      seq: 2001,
+    },
+    {
+      id: 'evt-leaked-activity-logged',
+      workspaceId: seed.workspace.id,
+      projectId: null,
+      documentId: agentBId,
+      kind: 'activity.logged',
+      actor: seed.user.id,
+      payload: { note: 'sensitive operator context about B' },
+      createdAt: new Date(Date.now() - 30_000),
+      seq: 2002,
+    },
+  ]);
+
+  const res = await app.request('/api/v1/w/acme/events', {
+    headers: { Authorization: `Bearer ${token}`, 'Last-Event-Id': 'evt-anchor-h2' },
+  });
+  expect(res.status).toBe(200);
+  const reader = res.body?.getReader();
+  if (!reader) throw new Error('no body');
+  const decoder = new TextDecoder();
+  let text = '';
+  const start = Date.now();
+  while (Date.now() - start < 300) {
+    const { value, done } = await Promise.race([
+      reader.read(),
+      new Promise<{ value?: Uint8Array; done: boolean }>((resolve) =>
+        setTimeout(() => resolve({ done: false }), 100),
+      ),
+    ]);
+    if (done) break;
+    if (value) text += decoder.decode(value);
+  }
+  await reader.cancel();
+
+  // Both leaks suppressed.
+  expect(text).not.toContain('evt-leaked-document-created');
+  expect(text).not.toContain('evt-leaked-activity-logged');
+  expect(text).not.toContain('sensitive operator context');
+});
+
+// ---------------------------------------------------------------------------
+// H7 — REST GET /:slug/events must also enforce the per-agent visibility.
+// ---------------------------------------------------------------------------
+
+test('H7: GET /w/:wslug/documents/:other-agent/events 404s for narrowed agent', async () => {
+  const { app, seed } = await makeTestApp();
+
+  const { token } = await setupAgentToken({
+    workspaceId: seed.workspace.id,
+    userId: seed.user.id,
+    agentSlug: 'agent-a-h7',
+    projectAllowList: [seed.project.id],
+  });
+  const otherSlug = 'agent-b-h7';
+  await setupAgentToken({
+    workspaceId: seed.workspace.id,
+    userId: seed.user.id,
+    agentSlug: otherSlug,
+    projectAllowList: [seed.project.id],
+  });
+
+  // Calling agent A tries to read events for agent B's row via REST.
+  const res = await app.request(`/api/v1/w/acme/documents/${otherSlug}/events`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  expect(res.status).toBe(404);
+  const body = (await res.json()) as { error: { code: string } };
+  // Same NOT_FOUND code an unknown slug would yield — prevents existence-oracle.
+  expect(body.error.code).toBe('DOCUMENT_NOT_FOUND');
+});
+
+test('H7: agent CAN read events for its OWN agent doc', async () => {
+  const { app, seed } = await makeTestApp();
+
+  const ownSlug = 'agent-self-h7';
+  const { token } = await setupAgentToken({
+    workspaceId: seed.workspace.id,
+    userId: seed.user.id,
+    agentSlug: ownSlug,
+    projectAllowList: [seed.project.id],
+  });
+
+  const res = await app.request(`/api/v1/w/acme/documents/${ownSlug}/events`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  expect(res.status).toBe(200);
+  const body = (await res.json()) as { data: unknown[] };
+  expect(Array.isArray(body.data)).toBe(true);
+});
+
 test('G14: SSE replay returns events with same createdAt as anchor when their id sorts after the anchor id', async () => {
   const { app, db: testDb, seed } = await makeTestApp();
   const { token, hash } = newApiToken();
@@ -289,12 +506,11 @@ test('G14: SSE replay returns events with same createdAt as anchor when their id
     createdBy: seed.user.id,
   });
 
-  // Three events at the same instant. Sort ids lexically; replay anchored at
-  // the LEX-FIRST id should still surface the other two (same createdAt, but
-  // ids sort after the anchor).
+  // Three events at the same instant. H3 replaced the (createdAt, id) cursor
+  // with a monotonic seq column — same-ms ties are no longer ambiguous.
+  // Anchored at evt-a (seq=3000), the other two (seq=3001, 3002) must replay.
   const sameTs = new Date(Date.now() - 60_000);
   const { events } = await import('../db/schema.ts');
-  // Ids picked so the order is deterministic: 'evt-a' < 'evt-b' < 'evt-c'.
   await testDb.insert(events).values([
     {
       id: 'evt-a-anchor',
@@ -305,6 +521,7 @@ test('G14: SSE replay returns events with same createdAt as anchor when their id
       actor: seed.user.id,
       payload: {},
       createdAt: sameTs,
+      seq: 3000,
     },
     {
       id: 'evt-b-same-ms',
@@ -315,6 +532,7 @@ test('G14: SSE replay returns events with same createdAt as anchor when their id
       actor: seed.user.id,
       payload: {},
       createdAt: sameTs,
+      seq: 3001,
     },
     {
       id: 'evt-c-same-ms',
@@ -325,6 +543,7 @@ test('G14: SSE replay returns events with same createdAt as anchor when their id
       actor: seed.user.id,
       payload: {},
       createdAt: sameTs,
+      seq: 3002,
     },
   ]);
 
@@ -388,6 +607,7 @@ test('G9: workspace-level agent.* events about OTHER agents are suppressed for n
       actor: seed.user.id,
       payload: {},
       createdAt: new Date(Date.now() - 90_000),
+      seq: 4000,
     },
     {
       id: 'evt-self-allowed',
@@ -398,6 +618,7 @@ test('G9: workspace-level agent.* events about OTHER agents are suppressed for n
       actor: seed.user.id,
       payload: { slug: 'agent-a' },
       createdAt: new Date(Date.now() - 60_000),
+      seq: 4001,
     },
     {
       id: 'evt-other-leaked',
@@ -408,6 +629,7 @@ test('G9: workspace-level agent.* events about OTHER agents are suppressed for n
       actor: seed.user.id,
       payload: { slug: 'agent-b', api_token_id: 'sensitive-token-id' },
       createdAt: new Date(Date.now() - 30_000),
+      seq: 4002,
     },
   ]);
 
@@ -453,6 +675,7 @@ test('F3: agent allow-list narrows server-side replay filter (foreign projectId 
       actor: seed.user.id,
       payload: {},
       createdAt: new Date(Date.now() - 60_000),
+      seq: 5001,
     },
     {
       id: 'evt-b-leaked',
@@ -463,6 +686,7 @@ test('F3: agent allow-list narrows server-side replay filter (foreign projectId 
       actor: seed.user.id,
       payload: {},
       createdAt: new Date(Date.now() - 30_000),
+      seq: 5002,
     },
     {
       id: 'evt-anchor',
@@ -473,6 +697,7 @@ test('F3: agent allow-list narrows server-side replay filter (foreign projectId 
       actor: seed.user.id,
       payload: {},
       createdAt: new Date(Date.now() - 90_000), // earliest — use as Last-Event-Id anchor
+      seq: 5000,
     },
   ]);
 

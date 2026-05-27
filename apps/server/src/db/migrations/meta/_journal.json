@@ -64,6 +64,13 @@
       "when": 1780249800000,
       "tag": "0008_phase_2_6_author_id_backfill",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1780253400000,
+      "tag": "0009_phase_2_6_events_seq",
+      "breakpoints": true
     }
   ]
 }
