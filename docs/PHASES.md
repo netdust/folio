@@ -897,9 +897,20 @@ Hand-rolled Hono sub-app at `/mcp`. Speaks JSON-RPC 2.0 over HTTP POST. Bearer-a
 
 ### Events + SSE
 
-- [ ] New event kinds: `agent.run.started`, `agent.run.awaiting_approval`, `agent.run.running`, `agent.run.completed`, `agent.run.failed`, `agent.run.rejected`, `ai.action`, `runs_table.lazy_seeded`. Added to `KNOWN_EVENT_KINDS`.
+- [ ] New event kinds: `agent.run.started`, `agent.run.awaiting_approval`, `agent.run.running`, `agent.run.completed`, `agent.run.failed`, `agent.run.rejected`, `ai.action`, `runs_table.lazy_seeded`, `workspace.provider.degraded`, `workspace.provider.recovered`. Added to `KNOWN_EVENT_KINDS`.
 - [ ] `ai.action` audit event emitted per provider call with `actor_type: 'agent'`, `actor_id: <agent_id>`, `provider`, `model`, `tokens_in`, `tokens_out`. No content stored.
 - [ ] New SSE filter params: `?agent=<doc_id>`, `?table=<table_id>`. AND-combined with existing filters.
+
+### Provider-down "Agent Offline" surface
+
+- [ ] `services/agent-runs.ts::checkProviderHealth(workspaceId, provider)` — derived from event history; returns `{ status: 'healthy' | 'degraded', consecutiveFailures }`. Tipping edge emits `workspace.provider.degraded`; first `completed` run after that emits `workspace.provider.recovered`. Cancelled runs excluded from the window. Per `(workspace, provider)`. Threshold via env `FOLIO_PROVIDER_DEGRADE_THRESHOLD` (default 3).
+- [ ] `services/agent-runs.ts::getProviderHealth(workspaceId)` — snapshot of all four providers; used by the workspace shell on mount before SSE takes over.
+- [ ] `GET /api/v1/w/:wslug/provider-health` — exposes the snapshot. Session auth. No MCP twin (UI-only surface).
+- [ ] `transitionRun` calls `checkProviderHealth` on terminal transitions inside the same transaction; emits the degraded/recovered events idempotently (no banner thrash on repeated failures).
+- [ ] `components/shell/provider-health-banner.tsx` — workspace-level banner; renders "⚠ Anthropic is unreachable — last N agent runs failed. Agents using Anthropic are paused until it recovers." Provides "Check key" link → `/w/:wslug/settings?tab=ai&provider=<provider>`. Clears on SSE `workspace.provider.recovered`.
+- [ ] `components/slideover/agent-slideover.tsx` — when opening an agent whose provider is currently degraded, render inline "Provider currently offline" notice above body.
+- [ ] `lib/api/provider-health.ts` — `useProviderHealth(wslug)` hook (one-shot GET + SSE subscription for `workspace.provider.degraded` / `workspace.provider.recovered`).
+- [ ] **NOT shipped:** no circuit breaker (runner keeps trying on each new assignment so transient recovery is detected). No retry queue (failed runs do not auto-retry on recovery — user uses existing retry gesture). No per-agent surface (unit is workspace+provider).
 
 ### Shared MCP/HTTP dispatcher
 
@@ -957,6 +968,7 @@ Hand-rolled Hono sub-app at `/mcp`. Speaks JSON-RPC 2.0 over HTTP POST. Bearer-a
 - [ ] **Chain_id tracking.** Every agent_run row has chain_id. Root mints fresh uuid. Descendants inherit.
 - [ ] MCP `run_agent` returns `run_id`, SSE stream shows transitions.
 - [ ] **Backpressure visible.** `GET /api/v1/admin/runner-stats` returns stats; log line on high pending count.
+- [ ] **Agent Offline banner.** With provider stubbed to always fail, the workspace banner appears after N consecutive `provider_error` failures (default 3); one successful run clears it. Per provider (Anthropic degraded ≠ OpenAI degraded). Cancelled runs excluded from the window.
 - [ ] All existing user-flow tests still pass — no Phase 2 / 2.5 / 2.6 regression.
 - [ ] Commit: `phase-3: complete`
 
