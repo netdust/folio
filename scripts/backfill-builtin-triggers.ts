@@ -21,7 +21,7 @@ import { and, eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import type { DB } from '../apps/server/src/db/client.ts';
 import { documents, workspaces } from '../apps/server/src/db/schema.ts';
-import { emitEvent } from '../apps/server/src/lib/events.ts';
+import { emitEvent, txWithEvents } from '../apps/server/src/lib/events.ts';
 import { BUILTIN_TRIGGER_DEFS } from '../apps/server/src/lib/builtin-triggers.ts';
 
 export interface BackfillResult {
@@ -67,7 +67,15 @@ export async function backfillBuiltinTriggers(
     if (missing.length === 0) continue;
 
     const insertedSlugs: string[] = [];
-    await db.transaction(async (tx) => {
+    // BUG-008 — use txWithEvents so emitEvent queues bus publishes on the
+    // pendingByTx WeakMap and only drains them after the tx commits. Raw
+    // `db.transaction` triggered emitEvent's fallback branch, publishing
+    // each event to the live bus BEFORE the tx committed. A mid-loop
+    // throw then rolled back the rows but the publishes had already
+    // reached subscribers, leaving the durable + live views permanently
+    // divergent (Last-Event-Id replay finds nothing because the row was
+    // scrubbed by the G10 rollback-scrub).
+    await txWithEvents(db, async (tx) => {
       for (const def of missing) {
         const id = nanoid();
         await tx.insert(documents).values({

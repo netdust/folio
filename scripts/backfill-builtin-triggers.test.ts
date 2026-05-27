@@ -15,6 +15,8 @@ import { documents, events } from '../apps/server/src/db/schema.ts';
 import { makeTestApp } from '../apps/server/src/test/harness.ts';
 import { backfillBuiltinTriggers } from './backfill-builtin-triggers.ts';
 import { BUILTIN_TRIGGER_DEFS, seedBuiltinTriggers } from '../apps/server/src/lib/builtin-triggers.ts';
+import { eventBus } from '../apps/server/src/lib/event-bus.ts';
+import type { DB } from '../apps/server/src/db/client.ts';
 
 describe('backfillBuiltinTriggers', () => {
   it('no-ops when a workspace already has all 4 builtins', async () => {
@@ -134,5 +136,69 @@ describe('backfillBuiltinTriggers', () => {
     for (const ev of last4) {
       expect(ev.actor).toBe('cli:stefan');
     }
+  });
+
+  // BUG-008 — the loop must run inside txWithEvents so a mid-loop throw
+  // suppresses ALL bus publishes for the rolled-back inserts. With the old
+  // raw `db.transaction`, emitEvent's fallback fires eventBus.publish
+  // immediately and ghost trigger events reach live subscribers even though
+  // the rows never persist.
+  it('publishes zero bus events when the loop throws mid-flight (BUG-008)', async () => {
+    const { db, seed } = await makeTestApp();
+
+    const published: Array<{ kind: string; documentId?: string | null }> = [];
+    const unsub = eventBus.subscribe(seed.workspace.id, undefined, (e) => {
+      published.push({ kind: e.kind, documentId: e.documentId });
+    });
+
+    // Wrap db so its tx.insert(documents) throws on the 3rd call. The first
+    // two inserts would (before the fix) publish their events immediately;
+    // the throw rolls back the SQL rows but live subscribers still saw them.
+    let insertCount = 0;
+    const wrappedDb = new Proxy(db, {
+      get(target, prop, receiver) {
+        if (prop === 'transaction') {
+          return async (
+            fn: (tx: Parameters<Parameters<DB['transaction']>[0]>[0]) => Promise<unknown>,
+          ) => {
+            return target.transaction(async (tx) => {
+              const wrappedTx = new Proxy(tx, {
+                get(t, p, r) {
+                  if (p === 'insert') {
+                    return (table: unknown) => {
+                      insertCount += 1;
+                      if (insertCount === 3) {
+                        throw new Error('synthetic mid-loop failure');
+                      }
+                      return (t as { insert: (x: unknown) => unknown }).insert(table);
+                    };
+                  }
+                  return Reflect.get(t, p, r);
+                },
+              });
+              return fn(wrappedTx);
+            });
+          };
+        }
+        return Reflect.get(target, prop, receiver);
+      },
+    }) as DB;
+
+    let threw = false;
+    try {
+      await backfillBuiltinTriggers(wrappedDb);
+    } catch {
+      threw = true;
+    }
+    unsub();
+
+    expect(threw).toBe(true);
+    // The fix: bus publishes only happen after a successful tx commit.
+    // No commit means no publishes. The 1st and 2nd document.created events
+    // (which the old code already published before the 3rd insert threw)
+    // must not have reached the bus.
+    expect(published.filter((e) => e.kind === 'document.created')).toEqual([]);
+    // Sanity: nothing else slipped through either.
+    expect(published).toEqual([]);
   });
 });
