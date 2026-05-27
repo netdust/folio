@@ -1065,6 +1065,85 @@ test('MCP update_agent patches title + frontmatter', async () => {
   expect(parsed.frontmatter['system_prompt']).toBe('two');
 });
 
+test('F2: MCP create_agent rejects allow-list widening beyond calling agent\'s own', async () => {
+  const { app, db: testDb, seed } = await makeTestApp();
+  const projectBId = nanoid();
+  await testDb.insert(projectsTbl).values({
+    id: projectBId,
+    workspaceId: seed.workspace.id,
+    slug: 'inbox',
+    name: 'Inbox',
+  });
+
+  // Calling agent has only seed.project.id.
+  const { agentToken: callerToken } = await setupAgentBoundToken(
+    seed.workspace.id,
+    seed.user.id,
+    {
+      projects: [seed.project.id],
+      scopes: ['agents:write', 'documents:read'],
+      agentSlug: 'caller-create',
+    },
+  );
+
+  // Try to mint a CHILD agent with projects=['*'] (wider than caller's list).
+  const res = await callTool(app, callerToken, 'create_agent', {
+    workspace_slug: 'acme',
+    title: 'Wider Child',
+    frontmatter: {
+      system_prompt: 'x',
+      model: 'm',
+      provider: 'anthropic',
+      tools: [],
+      projects: ['*'],
+    },
+  });
+  const body = (await res.json()) as {
+    error?: { code: number; data?: { reason: string } };
+  };
+  expect(body.error).toBeDefined();
+  expect(body.error?.code).toBe(-32602);
+  expect(body.error?.data?.reason).toBe('allow_list_widening_forbidden');
+});
+
+test('F2: MCP create_agent rejects widening to specific outside-list project ids', async () => {
+  const { app, db: testDb, seed } = await makeTestApp();
+  const projectBId = nanoid();
+  await testDb.insert(projectsTbl).values({
+    id: projectBId,
+    workspaceId: seed.workspace.id,
+    slug: 'inbox',
+    name: 'Inbox',
+  });
+
+  const { agentToken: callerToken } = await setupAgentBoundToken(
+    seed.workspace.id,
+    seed.user.id,
+    {
+      projects: [seed.project.id],
+      scopes: ['agents:write', 'documents:read'],
+      agentSlug: 'caller-create-2',
+    },
+  );
+
+  // projectBId is not in caller's allow-list — must reject.
+  const res = await callTool(app, callerToken, 'create_agent', {
+    workspace_slug: 'acme',
+    title: 'Child With Foreign Project',
+    frontmatter: {
+      system_prompt: 'x',
+      model: 'm',
+      provider: 'anthropic',
+      tools: [],
+      projects: [seed.project.id, projectBId],
+    },
+  });
+  const body = (await res.json()) as {
+    error?: { code: number; data?: { reason: string } };
+  };
+  expect(body.error?.data?.reason).toBe('allow_list_widening_forbidden');
+});
+
 test('MCP update_agent rejects allow-list widening beyond calling agent\'s own', async () => {
   const { app, db: testDb, seed } = await makeTestApp();
   // Add a second project the calling agent does NOT have access to.

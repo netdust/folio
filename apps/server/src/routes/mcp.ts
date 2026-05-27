@@ -31,6 +31,9 @@ import type {
   Workspace,
 } from '../db/schema.ts';
 import { HTTPError } from '../lib/http.ts';
+import {
+  assertAgentAllowListWidening,
+} from '../lib/agent-guards.ts';
 import { serializeMarkdown } from '../lib/frontmatter.ts';
 import { stripReservedFrontmatter } from '../services/documents.ts';
 import {
@@ -147,6 +150,23 @@ function mcpInvalidParams(message: string, data: Record<string, unknown>): Error
   err.code = -32602;
   err.data = data;
   return err;
+}
+
+/**
+ * Translate an HTTPError thrown by `lib/agent-guards.ts` into the MCP-shaped
+ * error so create_agent / update_agent / delete_agent all surface the same
+ * `error.data.reason` strings the protocol promises.
+ */
+function rethrowAgentGuardAsMcp(err: unknown): never {
+  if (err instanceof HTTPError) {
+    if (err.code === 'ALLOW_LIST_WIDENING_FORBIDDEN') {
+      throw mcpInvalidParams(err.message, { reason: 'allow_list_widening_forbidden' });
+    }
+    if (err.code === 'CANNOT_DELETE_SELF') {
+      throw mcpInvalidParams(err.message, { reason: 'cannot_delete_self' });
+    }
+  }
+  throw err as Error;
 }
 
 async function resolveProjectInWorkspace(
@@ -989,6 +1009,11 @@ const TOOLS: ToolDef[] = [
       }
       const frontmatter = fmArg as Record<string, unknown>;
 
+      // Reject child agents whose allow-list widens past the calling agent's
+      // own. update_agent has had this guard since Phase 2.6 D8; create_agent
+      // was missing it (Phase 2.6 review finding F2).
+      await assertAgentAllowListWidening(token, frontmatter).catch(rethrowAgentGuardAsMcp);
+
       const { document, agentTokenPlaintext } = await createDocument({
         workspace: ws,
         project: null,
@@ -1044,41 +1069,9 @@ const TOOLS: ToolDef[] = [
         }
         patch.frontmatter = fmArg as Record<string, unknown>;
 
-        // Allow-list widening guard: an agent-bound token cannot patch the
-        // target agent's frontmatter.projects to include project ids outside
-        // its own allow-list. Human PAT (token.agentId === null) is
-        // unrestricted — Phase 3+ adds human PAT enforcement when we have UI
-        // for narrowing.
-        if (token.agentId && 'projects' in patch.frontmatter) {
-          const nextProjects = patch.frontmatter['projects'];
-          if (Array.isArray(nextProjects)) {
-            const callingAgent = await db.query.documents.findFirst({
-              where: and(eq(documents.id, token.agentId), eq(documents.type, 'agent')),
-            });
-            const callingAllowList =
-              ((callingAgent?.frontmatter as { projects?: string[] })?.projects) ?? ['*'];
-            // If the caller has '*', everything is allowed.
-            if (!callingAllowList.includes('*')) {
-              // Reject any wildcard in the patch — that'd widen beyond the
-              // caller's concrete list.
-              if ((nextProjects as unknown[]).includes('*')) {
-                throw mcpInvalidParams(
-                  "cannot widen target agent's allow-list beyond calling agent's own",
-                  { reason: 'allow_list_widening_forbidden' },
-                );
-              }
-              for (const pid of nextProjects as unknown[]) {
-                if (typeof pid !== 'string') continue;
-                if (!callingAllowList.includes(pid)) {
-                  throw mcpInvalidParams(
-                    "cannot widen target agent's allow-list beyond calling agent's own",
-                    { reason: 'allow_list_widening_forbidden' },
-                  );
-                }
-              }
-            }
-          }
-        }
+        // Allow-list widening guard — shared with create_agent and the HTTP
+        // workspace-documents routes via lib/agent-guards.ts.
+        await assertAgentAllowListWidening(token, patch.frontmatter).catch(rethrowAgentGuardAsMcp);
       }
 
       const updated = await updateDocument({

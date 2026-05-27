@@ -462,3 +462,214 @@ test('GET /:slug/events — 422 INVALID_LIMIT when limit is non-integer', async 
   expect(res.status).toBe(422);
   expect((await res.json()).error.code).toBe('INVALID_LIMIT');
 });
+
+// ---------------------------------------------------------------------------
+// F1 — agents:write scope + widening + self-delete guards (Phase 2.6 review)
+//
+// Before the fix, the HTTP path enforced only documents:write/documents:delete,
+// so any PAT with documents:write could mint, widen, or delete an agent —
+// bypassing the agents:write scope and the allow-list widening + self-delete
+// guards that mcp.ts already enforces.
+// ---------------------------------------------------------------------------
+
+import { newApiToken } from '../lib/auth.ts';
+import { apiTokens, documents as documentsTable } from '../db/schema.ts';
+import { db as realDb } from '../db/client.ts';
+
+async function mintPAT(workspaceId: string, userId: string, scopes: string[]): Promise<string> {
+  const { token, hash } = newApiToken();
+  await realDb.insert(apiTokens).values({
+    id: nanoid(),
+    workspaceId,
+    name: 'test-pat',
+    tokenHash: hash,
+    scopes,
+    createdBy: userId,
+  });
+  return token;
+}
+
+test('F1: POST type=agent rejects PAT with documents:write but no agents:write', async () => {
+  const { app, seed } = await makeTestApp();
+  const pat = await mintPAT(seed.workspace.id, seed.user.id, ['documents:write', 'documents:read']);
+
+  const res = await app.request(WS_PATH, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${pat}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      type: 'agent',
+      title: 'Sneaky',
+      frontmatter: { system_prompt: 'x', model: 'm', provider: 'anthropic', tools: [] },
+    }),
+  });
+  expect(res.status).toBe(403);
+  expect((await res.json()).error.code).toBe('FORBIDDEN_SCOPE');
+});
+
+test('F1: POST type=trigger still works with documents:write alone (agents:write only gates agents)', async () => {
+  const { app, seed } = await makeTestApp();
+  const pat = await mintPAT(seed.workspace.id, seed.user.id, ['documents:write', 'documents:read']);
+
+  const res = await app.request(WS_PATH, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${pat}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      type: 'trigger',
+      title: 'Daily',
+      frontmatter: { agent: 'x', schedule: '0 9 * * *', on_event: null },
+    }),
+  });
+  expect(res.status).toBe(201);
+});
+
+test('F1: POST type=agent allowed for PAT carrying agents:write', async () => {
+  const { app, seed } = await makeTestApp();
+  const pat = await mintPAT(seed.workspace.id, seed.user.id, [
+    'documents:write', 'documents:read', 'agents:write',
+  ]);
+
+  const res = await app.request(WS_PATH, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${pat}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      type: 'agent',
+      title: 'Allowed',
+      frontmatter: { system_prompt: 'x', model: 'm', provider: 'anthropic', tools: [] },
+    }),
+  });
+  expect(res.status).toBe(201);
+});
+
+test('F1: PATCH type=agent rejects PAT with documents:write but no agents:write', async () => {
+  const { app, seed } = await makeTestApp();
+  const agent = await createAgent(app, seed.sessionCookie);
+  const pat = await mintPAT(seed.workspace.id, seed.user.id, ['documents:write', 'documents:read']);
+
+  const res = await app.request(`${WS_PATH}/${agent.slug}`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${pat}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: 'Renamed' }),
+  });
+  expect(res.status).toBe(403);
+  expect((await res.json()).error.code).toBe('FORBIDDEN_SCOPE');
+});
+
+test('F1: DELETE type=agent rejects PAT with documents:delete but no agents:write', async () => {
+  const { app, seed } = await makeTestApp();
+  const agent = await createAgent(app, seed.sessionCookie);
+  const pat = await mintPAT(seed.workspace.id, seed.user.id, ['documents:delete', 'documents:read']);
+
+  const res = await app.request(`${WS_PATH}/${agent.slug}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${pat}` },
+  });
+  expect(res.status).toBe(403);
+  expect((await res.json()).error.code).toBe('FORBIDDEN_SCOPE');
+});
+
+test('F1: POST blocks an agent-bound caller from minting a child with wider projects', async () => {
+  const { app, seed } = await makeTestApp();
+  // Create the calling agent with a narrow allow-list. Seeded project id is `seed.project.id`.
+  const parentRes = await postWorkspaceDoc(app, seed.sessionCookie, {
+    type: 'agent', title: 'Parent',
+    frontmatter: {
+      system_prompt: 'x', model: 'm', provider: 'anthropic', tools: ['create_agent'],
+      projects: [seed.project.id],
+    },
+  });
+  expect(parentRes.status).toBe(201);
+  const parent = (await parentRes.json()).data as { id: string };
+
+  // Mint a token bound to that agent, carrying agents:write.
+  const { token, hash } = newApiToken();
+  await realDb.insert(apiTokens).values({
+    id: nanoid(),
+    workspaceId: seed.workspace.id,
+    name: 'parent-bound',
+    tokenHash: hash,
+    scopes: ['agents:write', 'documents:write', 'documents:read'],
+    createdBy: seed.user.id,
+    agentId: parent.id,
+  });
+
+  const res = await app.request(WS_PATH, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      type: 'agent',
+      title: 'Wider Child',
+      frontmatter: {
+        system_prompt: 'x', model: 'm', provider: 'anthropic', tools: [],
+        projects: ['*'],
+      },
+    }),
+  });
+  expect(res.status).toBe(403);
+  expect((await res.json()).error.code).toBe('ALLOW_LIST_WIDENING_FORBIDDEN');
+});
+
+test('F1: PATCH blocks an agent-bound caller from widening a target agent past its own list', async () => {
+  const { app, seed } = await makeTestApp();
+  const parentRes = await postWorkspaceDoc(app, seed.sessionCookie, {
+    type: 'agent', title: 'Parent',
+    frontmatter: {
+      system_prompt: 'x', model: 'm', provider: 'anthropic', tools: ['update_agent'],
+      projects: [seed.project.id],
+    },
+  });
+  const parent = (await parentRes.json()).data as { id: string };
+  const targetRes = await postWorkspaceDoc(app, seed.sessionCookie, {
+    type: 'agent', title: 'Target',
+    frontmatter: {
+      system_prompt: 'x', model: 'm', provider: 'anthropic', tools: [],
+      projects: [seed.project.id],
+    },
+  });
+  const target = (await targetRes.json()).data as { slug: string };
+
+  const { token, hash } = newApiToken();
+  await realDb.insert(apiTokens).values({
+    id: nanoid(),
+    workspaceId: seed.workspace.id,
+    name: 'parent-bound',
+    tokenHash: hash,
+    scopes: ['agents:write', 'documents:write', 'documents:read'],
+    createdBy: seed.user.id,
+    agentId: parent.id,
+  });
+
+  const res = await app.request(`${WS_PATH}/${target.slug}`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ frontmatter: { projects: ['*'] } }),
+  });
+  expect(res.status).toBe(403);
+  expect((await res.json()).error.code).toBe('ALLOW_LIST_WIDENING_FORBIDDEN');
+});
+
+test('F1: DELETE blocks an agent-bound caller from deleting itself', async () => {
+  const { app, seed } = await makeTestApp();
+  const selfRes = await postWorkspaceDoc(app, seed.sessionCookie, {
+    type: 'agent', title: 'Self',
+    frontmatter: { system_prompt: 'x', model: 'm', provider: 'anthropic', tools: ['delete_agent'] },
+  });
+  const self = (await selfRes.json()).data as { id: string; slug: string };
+
+  const { token, hash } = newApiToken();
+  await realDb.insert(apiTokens).values({
+    id: nanoid(),
+    workspaceId: seed.workspace.id,
+    name: 'self-bound',
+    tokenHash: hash,
+    scopes: ['agents:write', 'documents:delete', 'documents:read'],
+    createdBy: seed.user.id,
+    agentId: self.id,
+  });
+
+  const res = await app.request(`${WS_PATH}/${self.slug}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  expect(res.status).toBe(403);
+  expect((await res.json()).error.code).toBe('CANNOT_DELETE_SELF');
+});

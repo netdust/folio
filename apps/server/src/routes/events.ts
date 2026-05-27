@@ -2,12 +2,13 @@ import { Hono } from 'hono';
 import { streamSSE } from 'hono/streaming';
 import { and, eq, gt } from 'drizzle-orm';
 import { db } from '../db/client.ts';
-import { events } from '../db/schema.ts';
+import { documents, events } from '../db/schema.ts';
 import type { AuthContext } from '../middleware/auth.ts';
-import { requireUserOrToken } from '../middleware/bearer.ts';
+import { intersect, requireUserOrToken } from '../middleware/bearer.ts';
 import { getWorkspace, type ScopeContext } from '../middleware/scope.ts';
 import { eventBus, type BusEvent } from '../lib/event-bus.ts';
 import type { EventKind } from '../lib/events.ts';
+import { HTTPError } from '../lib/http.ts';
 
 const eventsRoute = new Hono<AuthContext & ScopeContext>();
 
@@ -27,6 +28,36 @@ eventsRoute.get('/', async (c) => {
   const runParam = c.req.query('run');
   const runId = runParam && runParam.trim() ? runParam.trim() : undefined;
   const lastEventId = c.req.header('Last-Event-Id');
+
+  // F3 — agent allow-list enforcement. SSE mounts under wScope only (no
+  // pScope), so resolveProject + requireResource never run. We resolve the
+  // calling agent's effective allow-list here and narrow both the ?project=
+  // gate AND the replay/live filter accordingly. Human PATs and session auth
+  // bypass (token === null OR token.agentId === null). Phase 3+ adds per-PAT
+  // narrowing once a UI exists for it.
+  const token = c.get('token') ?? null;
+  let agentAllowList: string[] | null = null; // null === unrestricted
+  if (token?.agentId) {
+    const agent = await db.query.documents.findFirst({
+      where: eq(documents.id, token.agentId),
+    });
+    if (!agent || agent.type !== 'agent') {
+      throw new HTTPError('FORBIDDEN_RESOURCE', 'agent for this token no longer exists', 403);
+    }
+    const agentProjects = ((agent.frontmatter as { projects?: string[] }).projects) ?? ['*'];
+    const effective = intersect(agentProjects, token.projectIds ?? null);
+    if (!effective.includes('*')) {
+      agentAllowList = effective;
+      // Explicit ?project= must be in the allow-list — fail closed.
+      if (projectId !== undefined && !effective.includes(projectId)) {
+        throw new HTTPError(
+          'FORBIDDEN_RESOURCE',
+          'agent not allow-listed for that project',
+          403,
+        );
+      }
+    }
+  }
 
   return streamSSE(c, async (stream) => {
     // Replay from the durable event log when Last-Event-Id is present.
@@ -49,6 +80,13 @@ eventsRoute.get('/', async (c) => {
         });
         for (const row of rows) {
           if (projectId && row.projectId !== projectId) continue;
+          // F3: agent allow-list narrows project-scoped rows. Workspace-level
+          // rows (projectId === null) remain visible — they carry no
+          // project-private data and agents legitimately observe agent.* and
+          // workspace.* events about themselves.
+          if (agentAllowList && row.projectId !== null && !agentAllowList.includes(row.projectId)) {
+            continue;
+          }
           if (kinds && !kinds.includes(row.kind as EventKind)) continue;
           if (parentId !== undefined) {
             const p = (row.payload as Record<string, unknown> | null)?.parent_id;
@@ -91,6 +129,15 @@ eventsRoute.get('/', async (c) => {
         runId,
       },
       (e) => {
+        // F3: drop project-scoped events outside the agent's allow-list.
+        // Workspace-level (projectId === null) events flow through.
+        if (
+          agentAllowList &&
+          e.projectId != null &&
+          !agentAllowList.includes(e.projectId)
+        ) {
+          return;
+        }
         queue.push(e);
       },
     );

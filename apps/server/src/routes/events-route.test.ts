@@ -162,3 +162,190 @@ test.skip('Last-Event-Id replay: events from the table flow before live events',
     expect(text).toMatch(/^id:|^event:|^data:/m);
   }
 });
+
+// ---------------------------------------------------------------------------
+// F3 — SSE /events must respect agent allow-list (Phase 2.6 review)
+//
+// Before the fix, an agent-bound token with frontmatter.projects=['projA']
+// could subscribe to /events?project=<projB-id> and receive every projB event.
+// The route only ran wScope, never resolveProject + requireResource, so the
+// allow-list narrowing never fired.
+// ---------------------------------------------------------------------------
+
+import { documents, projects } from '../db/schema.ts';
+
+async function seedSecondProject(seedWorkspaceId: string): Promise<string> {
+  const id = nanoid();
+  await db.insert(projects).values({
+    id, workspaceId: seedWorkspaceId, slug: 'projb', name: 'Project B',
+  });
+  return id;
+}
+
+async function setupAgentToken(opts: {
+  workspaceId: string;
+  userId: string;
+  agentSlug: string;
+  projectAllowList: string[];
+  scopes?: string[];
+}): Promise<{ token: string; agentId: string }> {
+  const agentId = nanoid();
+  await db.insert(documents).values({
+    id: agentId,
+    projectId: null,
+    workspaceId: opts.workspaceId,
+    tableId: null,
+    type: 'agent',
+    slug: opts.agentSlug,
+    title: 'Test Agent',
+    status: null,
+    body: '',
+    frontmatter: {
+      system_prompt: 'help',
+      model: 'm',
+      provider: 'anthropic',
+      tools: ['list_documents'],
+      projects: opts.projectAllowList,
+    },
+    createdBy: opts.userId,
+    updatedBy: opts.userId,
+  });
+  const { token, hash } = newApiToken();
+  await db.insert(apiTokens).values({
+    id: nanoid(),
+    workspaceId: opts.workspaceId,
+    name: `agent:${opts.agentSlug}`,
+    tokenHash: hash,
+    scopes: opts.scopes ?? ['documents:read'],
+    createdBy: opts.userId,
+    agentId,
+  });
+  return { token, agentId };
+}
+
+test('F3: agent token cannot request ?project= outside its allow-list', async () => {
+  const { app, seed } = await makeTestApp();
+  const projectBId = await seedSecondProject(seed.workspace.id);
+  const { token } = await setupAgentToken({
+    workspaceId: seed.workspace.id,
+    userId: seed.user.id,
+    agentSlug: 'narrow-agent',
+    projectAllowList: [seed.project.id], // only project A
+  });
+
+  const res = await app.request(`/api/v1/w/acme/events?project=${projectBId}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  await res.body?.cancel();
+  expect(res.status).toBe(403);
+  const body = await res.json().catch(() => ({}));
+  // Body may be empty if streamed; if present, code should be FORBIDDEN_RESOURCE.
+  if (body?.error) expect(body.error.code).toBe('FORBIDDEN_RESOURCE');
+});
+
+test('F3: agent token with [*] allow-list can request any ?project=', async () => {
+  const { app, seed } = await makeTestApp();
+  const projectBId = await seedSecondProject(seed.workspace.id);
+  const { token } = await setupAgentToken({
+    workspaceId: seed.workspace.id,
+    userId: seed.user.id,
+    agentSlug: 'wide-agent',
+    projectAllowList: ['*'],
+  });
+
+  const res = await app.request(`/api/v1/w/acme/events?project=${projectBId}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  expect(res.status).toBe(200);
+  await res.body?.cancel();
+});
+
+test('F3: agent token without ?project= can still subscribe (workspace events allowed)', async () => {
+  const { app, seed } = await makeTestApp();
+  await seedSecondProject(seed.workspace.id);
+  const { token } = await setupAgentToken({
+    workspaceId: seed.workspace.id,
+    userId: seed.user.id,
+    agentSlug: 'no-project-agent',
+    projectAllowList: [seed.project.id],
+  });
+
+  const res = await app.request('/api/v1/w/acme/events', {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  expect(res.status).toBe(200);
+  await res.body?.cancel();
+});
+
+test('F3: agent allow-list narrows server-side replay filter (foreign projectId rows skipped)', async () => {
+  const { app, db: testDb, seed } = await makeTestApp();
+  const projectBId = await seedSecondProject(seed.workspace.id);
+
+  // Insert two events directly: one in seed.project (allowed), one in projectB.
+  const { events } = await import('../db/schema.ts');
+  await testDb.insert(events).values([
+    {
+      id: 'evt-a-allowed',
+      workspaceId: seed.workspace.id,
+      projectId: seed.project.id,
+      documentId: null,
+      kind: 'document.created',
+      actor: seed.user.id,
+      payload: {},
+      createdAt: new Date(Date.now() - 60_000),
+    },
+    {
+      id: 'evt-b-leaked',
+      workspaceId: seed.workspace.id,
+      projectId: projectBId,
+      documentId: null,
+      kind: 'document.created',
+      actor: seed.user.id,
+      payload: {},
+      createdAt: new Date(Date.now() - 30_000),
+    },
+    {
+      id: 'evt-anchor',
+      workspaceId: seed.workspace.id,
+      projectId: null,
+      documentId: null,
+      kind: 'workspace.created',
+      actor: seed.user.id,
+      payload: {},
+      createdAt: new Date(Date.now() - 90_000), // earliest — use as Last-Event-Id anchor
+    },
+  ]);
+
+  const { token } = await setupAgentToken({
+    workspaceId: seed.workspace.id,
+    userId: seed.user.id,
+    agentSlug: 'replay-narrow-agent',
+    projectAllowList: [seed.project.id], // not projectB
+  });
+
+  const res = await app.request('/api/v1/w/acme/events', {
+    headers: { Authorization: `Bearer ${token}`, 'Last-Event-Id': 'evt-anchor' },
+  });
+  expect(res.status).toBe(200);
+  const reader = res.body?.getReader();
+  if (!reader) throw new Error('no body');
+
+  // Read replay frames within 300ms then cancel.
+  const decoder = new TextDecoder();
+  let text = '';
+  const start = Date.now();
+  while (Date.now() - start < 300) {
+    const { value, done } = await Promise.race([
+      reader.read(),
+      new Promise<{ value?: Uint8Array; done: boolean }>((resolve) =>
+        setTimeout(() => resolve({ done: false }), 100),
+      ),
+    ]);
+    if (done) break;
+    if (value) text += decoder.decode(value);
+  }
+  await reader.cancel();
+
+  expect(text).toContain('evt-a-allowed');
+  expect(text).not.toContain('evt-b-leaked');
+});

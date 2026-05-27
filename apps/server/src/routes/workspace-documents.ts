@@ -11,6 +11,11 @@ import { documentCreateSchema, documentPatchSchema } from '@folio/shared';
 import { db } from '../db/client.ts';
 import { documents, events } from '../db/schema.ts';
 import { emitEvent } from '../lib/events.ts';
+import {
+  assertAgentAllowListWidening,
+  assertAgentScope,
+  assertNotSelfDelete,
+} from '../lib/agent-guards.ts';
 import { type AuthContext, getUser } from '../middleware/auth.ts';
 import { requireScope } from '../middleware/bearer.ts';
 import { getWorkspace, type ScopeContext } from '../middleware/scope.ts';
@@ -51,6 +56,14 @@ workspaceDocumentsRoute.post('/', requireScope('documents:write'), async (c) => 
   }
   const v = parsed.data;
   assertWorkspaceType(v.type);
+
+  // Agent-CRUD guards — same invariants the MCP create_agent tool enforces.
+  // Centralised in lib/agent-guards.ts so HTTP and MCP can't drift.
+  const token = c.get('token') ?? null;
+  assertAgentScope(v.type, token, 'write');
+  if (v.type === 'agent') {
+    await assertAgentAllowListWidening(token, v.frontmatter as Record<string, unknown> | undefined);
+  }
 
   const fmStatus = typeof v.frontmatter?.status === 'string' ? v.frontmatter.status : null;
   const fmRest = stripReservedFrontmatter((v.frontmatter ?? {}) as Record<string, unknown>);
@@ -105,9 +118,19 @@ workspaceDocumentsRoute.patch('/:slug', requireScope('documents:write'), async (
     (await getWorkspaceDocument(ws.id, 'trigger', slug));
   if (!existing) throw new HTTPError('DOCUMENT_NOT_FOUND', `document "${slug}" not found`, 404);
 
+  const token = c.get('token') ?? null;
+  assertAgentScope(existing.type as 'agent' | 'trigger', token, 'write');
+
   const json = await c.req.json();
   const parsed = documentPatchSchema.safeParse(json);
   if (!parsed.success) throw new HTTPError('INVALID_BODY', parsed.error.message, 422);
+
+  if (existing.type === 'agent') {
+    await assertAgentAllowListWidening(
+      token,
+      parsed.data.frontmatter as Record<string, unknown> | undefined,
+    );
+  }
 
   const updated = await updateDocument({
     workspace: ws,
@@ -128,6 +151,13 @@ workspaceDocumentsRoute.delete('/:slug', requireScope('documents:delete'), async
     (await getWorkspaceDocument(ws.id, 'agent', slug)) ??
     (await getWorkspaceDocument(ws.id, 'trigger', slug));
   if (!existing) throw new HTTPError('DOCUMENT_NOT_FOUND', `document "${slug}" not found`, 404);
+
+  const token = c.get('token') ?? null;
+  assertAgentScope(existing.type as 'agent' | 'trigger', token, 'delete');
+  if (existing.type === 'agent') {
+    assertNotSelfDelete(token, existing.id);
+  }
+
   await deleteDocument({ workspace: ws, project: null, actor: user, existing });
   return c.body(null, 204);
 });
