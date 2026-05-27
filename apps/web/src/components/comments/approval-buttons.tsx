@@ -96,6 +96,11 @@ function findResolution(
     const fm = c.frontmatter;
     if (fm.kind !== 'approval' && fm.kind !== 'rejection') return false;
     if (fm.target_agent !== agentSlug) return false;
+    // F9: soft-deleted approvals/rejections do not resolve the plan. The
+    // server keeps the row visible in listComments by design (UI mutes it);
+    // resolution detection must explicitly skip them, otherwise a retracted
+    // approval locks the plan into "Approved by …" forever.
+    if (fm.deleted_at != null && fm.deleted_at !== '') return false;
     const cTime = new Date(c.createdAt).getTime();
     if (Number.isNaN(cTime) || cTime < planTime) return false;
     return true;

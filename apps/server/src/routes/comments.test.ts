@@ -402,7 +402,7 @@ test('DELETE 403 COMMENT_AUTHOR_ONLY when non-author tries to delete', async () 
 // 14. Bearer agent token POST — author is agent:<slug>
 // -----------------------------------------------------------------------------
 
-test('Bearer agent token POSTs a comment with author=agent:<slug>', async () => {
+test('Bearer agent token POSTs a comment with author=agent:<id> (F11: id, not slug)', async () => {
   const { app, seed } = await makeTestApp();
   // Mint an agent with create_document → derives documents:write scope.
   const { data: agent } = await createAgentAtWorkspace(app, seed.sessionCookie, {
@@ -415,7 +415,7 @@ test('Bearer agent token POSTs a comment with author=agent:<slug>', async () => 
       tools: ['create_document', 'list_documents'],
     },
   });
-  const agentSlug = agent.slug as string;
+  const agentId = agent.id as string;
   const agentToken = (agent as { agent_token: string }).agent_token;
 
   const parent = await createParent(app, seed.sessionCookie, 'Bot Target');
@@ -426,7 +426,8 @@ test('Bearer agent token POSTs a comment with author=agent:<slug>', async () => 
   });
   expect(res.status).toBe(201);
   const j = await res.json();
-  expect(j.data.frontmatter.author).toBe(`agent:${agentSlug}`);
+  // F11: canonical form is `agent:<id>`. Slugs are mutable; ids aren't.
+  expect(j.data.frontmatter.author).toBe(`agent:${agentId}`);
 });
 
 // -----------------------------------------------------------------------------
@@ -577,6 +578,120 @@ test('F4: DELETE /comments/:slug 404s when slug belongs to a different project',
   });
   expect(res.status).toBe(404);
   expect((await res.json()).error.code).toBe('NOT_FOUND');
+});
+
+// ---------------------------------------------------------------------------
+// F11 — assertAuthor must NOT depend on the agent's mutable slug.
+//
+// Author strings are stored as 'agent:<slug>' historically; renaming an
+// agent then breaks the author-only guard because resolveAuthorContext
+// returns the CURRENT slug for the same agentId. Fix: store canonical
+// 'agent:<id>' on new comments, accept either shape on the guard.
+// ---------------------------------------------------------------------------
+
+test('F11: agent author can edit own comment after its slug is renamed', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const { nanoid } = await import('nanoid');
+  const { apiTokens, documents } = await import('../db/schema.ts');
+  const { newApiToken } = await import('../lib/auth.ts');
+  const { eq } = await import('drizzle-orm');
+
+  // 1. Create an agent document.
+  const agentId = nanoid();
+  await db.insert(documents).values({
+    id: agentId,
+    projectId: null,
+    workspaceId: seed.workspace.id,
+    tableId: null,
+    type: 'agent',
+    slug: 'original-name',
+    title: 'Renameable Agent',
+    status: null,
+    body: '',
+    frontmatter: {
+      system_prompt: 'x', model: 'm', provider: 'anthropic',
+      tools: ['create_document', 'create_comment', 'update_comment'],
+      projects: ['*'],
+    },
+    createdBy: seed.user.id,
+    updatedBy: seed.user.id,
+  });
+  const { token, hash } = newApiToken();
+  await db.insert(apiTokens).values({
+    id: nanoid(),
+    workspaceId: seed.workspace.id,
+    name: 'agent-token',
+    tokenHash: hash,
+    scopes: ['documents:read', 'documents:write'],
+    createdBy: seed.user.id,
+    agentId,
+  });
+
+  // 2. Agent posts a comment.
+  const parent = await createParent(app, seed.sessionCookie, 'P');
+  const postRes = await app.request(parentPath(parent), {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ body: 'mine' }),
+  });
+  expect(postRes.status).toBe(201);
+  const created = (await postRes.json()).data as { slug: string };
+
+  // 3. Rename the agent's slug (mutating column directly mirrors update_agent).
+  await db.update(documents).set({ slug: 'renamed' }).where(eq(documents.id, agentId));
+
+  // 4. Same token (still bound by agentId) tries to edit its own comment.
+  const patchRes = await app.request(itemPath(created.slug), {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ body: 'updated by same agent after rename' }),
+  });
+  expect(patchRes.status).toBe(200);
+});
+
+// ---------------------------------------------------------------------------
+// F7 — updateComment must NOT operate on soft-deleted rows.
+//
+// Without this guard an author could DELETE a comment (body→'',
+// deleted_at→ISO) then PATCH it back with new body. UI hides via
+// deleted_at, but raw export / GET / SSE consumers see the resurrected
+// body — soft-delete contract broken.
+// ---------------------------------------------------------------------------
+
+test('F7: PATCH on a soft-deleted comment returns 422 COMMENT_DELETED (no body resurrection)', async () => {
+  const { app, seed } = await makeTestApp();
+  const parent = await createParent(app, seed.sessionCookie, 'P');
+  const createRes = await app.request(parentPath(parent), {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ body: 'will be deleted' }),
+  });
+  const created = (await createRes.json()).data as { slug: string };
+
+  // Soft-delete.
+  const delRes = await app.request(itemPath(created.slug), {
+    method: 'DELETE',
+    headers: { Cookie: seed.sessionCookie },
+  });
+  expect(delRes.status).toBe(200);
+
+  // Try to PATCH it back.
+  const patchRes = await app.request(itemPath(created.slug), {
+    method: 'PATCH',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ body: 'resurrected' }),
+  });
+  expect(patchRes.status).toBe(422);
+  expect((await patchRes.json()).error.code).toBe('COMMENT_DELETED');
+
+  // GET still shows the deleted state with empty body.
+  const getRes = await app.request(itemPath(created.slug), {
+    headers: { Cookie: seed.sessionCookie },
+  });
+  expect(getRes.status).toBe(200);
+  const got = (await getRes.json()).data as { body: string; frontmatter: Record<string, unknown> };
+  expect(got.body).toBe('');
+  expect(got.frontmatter.deleted_at).toBeString();
 });
 
 test('F4: GET /comments/:slug still works when slug belongs to the URL project', async () => {

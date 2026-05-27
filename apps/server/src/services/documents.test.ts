@@ -287,3 +287,121 @@ test('deleteDocument allows delete on non-builtin trigger', async () => {
   });
   expect(gone).toBeUndefined();
 });
+
+// ---------------------------------------------------------------------------
+// F8 — deleting a work_item/page must cascade to its comments.
+//
+// documents.parent_id has no SQL foreign key, so app-layer deleteDocument is
+// responsible for purging child comment rows. Without this, comment rows
+// survive their parent, surface in markdown exports, and accumulate forever.
+// ---------------------------------------------------------------------------
+
+test('F8: deleteDocument(work_item) cascades to remove its comment children', async () => {
+  const { db, seed } = await makeTestApp();
+  const table = await getWorkItemsTable(db, seed.project.id);
+
+  // Create the parent + 3 comments via the service layer.
+  const parent = await createDocument({
+    workspace: seed.workspace,
+    project: seed.project,
+    table,
+    actor: seed.user,
+    token: null,
+    isTableScopedUrl: false,
+    input: { type: 'work_item', title: 'Parent', body: '', frontmatter: {}, status: null },
+  });
+
+  const commentIds: string[] = [];
+  for (let i = 0; i < 3; i++) {
+    const id = nanoid();
+    await db.insert(documents).values({
+      id,
+      workspaceId: seed.workspace.id,
+      projectId: seed.project.id,
+      tableId: null,
+      type: 'comment',
+      slug: `c-${id}`,
+      title: `Comment ${i}`,
+      status: null,
+      body: `comment body ${i}`,
+      parentId: parent.document.id,
+      frontmatter: { author: `user:${seed.user.id}`, kind: 'comment', visibility: 'normal', mentions: [] },
+      createdBy: seed.user.id,
+      updatedBy: seed.user.id,
+    });
+    commentIds.push(id);
+  }
+
+  // Sanity: 3 comments exist with parent_id matching.
+  const before = await db.query.documents.findMany({
+    where: and(eq(documents.parentId, parent.document.id), eq(documents.type, 'comment')),
+  });
+  expect(before).toHaveLength(3);
+
+  // Delete the parent.
+  await deleteDocument({
+    workspace: seed.workspace,
+    project: seed.project,
+    actor: seed.user,
+    existing: parent.document,
+  });
+
+  // Parent gone.
+  const parentGone = await db.query.documents.findFirst({
+    where: eq(documents.id, parent.document.id),
+  });
+  expect(parentGone).toBeUndefined();
+
+  // Children gone too — no orphans.
+  const after = await db.query.documents.findMany({
+    where: and(eq(documents.parentId, parent.document.id), eq(documents.type, 'comment')),
+  });
+  expect(after).toHaveLength(0);
+
+  // Lookup each child by id — all gone.
+  for (const id of commentIds) {
+    const found = await db.query.documents.findFirst({ where: eq(documents.id, id) });
+    expect(found).toBeUndefined();
+  }
+});
+
+test('F8: deleting a non-parent doc does not collateral-delete unrelated comments', async () => {
+  const { db, seed } = await makeTestApp();
+  const table = await getWorkItemsTable(db, seed.project.id);
+
+  // Two unrelated parents, each with its own comment.
+  const parentA = await createDocument({
+    workspace: seed.workspace, project: seed.project, table, actor: seed.user, token: null,
+    isTableScopedUrl: false,
+    input: { type: 'work_item', title: 'A', body: '', frontmatter: {}, status: null },
+  });
+  const parentB = await createDocument({
+    workspace: seed.workspace, project: seed.project, table, actor: seed.user, token: null,
+    isTableScopedUrl: false,
+    input: { type: 'work_item', title: 'B', body: '', frontmatter: {}, status: null },
+  });
+  const commentB = nanoid();
+  await db.insert(documents).values({
+    id: commentB,
+    workspaceId: seed.workspace.id,
+    projectId: seed.project.id,
+    tableId: null,
+    type: 'comment',
+    slug: `c-${commentB}`,
+    title: 'Comment B',
+    status: null,
+    body: 'belongs to B',
+    parentId: parentB.document.id,
+    frontmatter: { author: `user:${seed.user.id}`, kind: 'comment', visibility: 'normal', mentions: [] },
+    createdBy: seed.user.id,
+    updatedBy: seed.user.id,
+  });
+
+  // Delete A. B's comment must survive.
+  await deleteDocument({
+    workspace: seed.workspace, project: seed.project, actor: seed.user,
+    existing: parentA.document,
+  });
+  const stillThere = await db.query.documents.findFirst({ where: eq(documents.id, commentB) });
+  expect(stillThere).toBeTruthy();
+});

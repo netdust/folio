@@ -54,9 +54,21 @@ export type AuthorContext =
   | { type: 'user'; userId: string }
   | { type: 'agent'; agentSlug: string; agentId?: string };
 
-/** Returns "user:<id>" or "agent:<slug>" — the canonical author string for frontmatter. */
+/**
+ * Returns the canonical author string for frontmatter.
+ *
+ * - Session/PAT user → "user:<id>"
+ * - Agent → "agent:<id>" if id is known, else legacy "agent:<slug>"
+ *
+ * F11: switched from agent slug to agent id so a slug rename doesn't break
+ * the author-only guard. Legacy rows authored as "agent:<slug>" still pass
+ * assertAuthor (see below) for back-compat — the canonical form for NEW
+ * comments is always id-based.
+ */
 function authorString(ctx: AuthorContext): string {
-  return ctx.type === 'user' ? `user:${ctx.userId}` : `agent:${ctx.agentSlug}`;
+  if (ctx.type === 'user') return `user:${ctx.userId}`;
+  if (ctx.agentId) return `agent:${ctx.agentId}`;
+  return `agent:${ctx.agentSlug}`;
 }
 
 export interface CreateCommentInput {
@@ -124,18 +136,34 @@ function validateBody(body: string): void {
   }
 }
 
-/** Author-only guard for update/delete. Returns the canonical author string. */
+/**
+ * Author-only guard for update/delete.
+ *
+ * F11: accepts BOTH the id-based canonical form ("agent:<id>") and the
+ * legacy slug-based form ("agent:<slug>") so that comments authored before
+ * the F11 fix still pass when the same agent (bound by token.agentId) edits
+ * them. New rows are always written id-based by authorString().
+ */
 function assertAuthor(existing: Document, ctx: AuthorContext): void {
   const fm = existing.frontmatter as Record<string, unknown>;
   const author = typeof fm.author === 'string' ? fm.author : '';
+
+  // Fast path: exact canonical match.
   const expected = authorString(ctx);
-  if (author !== expected) {
-    throw new HTTPError(
-      'COMMENT_AUTHOR_ONLY',
-      'only the comment author can modify this comment',
-      403,
-    );
-  }
+  if (author === expected) return;
+
+  // Back-compat: legacy 'agent:<slug>' rows must still match the same
+  // agent-bound token. Match by current slug; if the slug hasn't been
+  // renamed since the comment was authored, this still works. If it has,
+  // the comment was authored before F11 and will need a one-time backfill
+  // — flagged separately.
+  if (ctx.type === 'agent' && author === `agent:${ctx.agentSlug}`) return;
+
+  throw new HTTPError(
+    'COMMENT_AUTHOR_ONLY',
+    'only the comment author can modify this comment',
+    403,
+  );
 }
 
 interface AgentForParser {
@@ -365,6 +393,14 @@ export async function updateComment(input: UpdateCommentInput): Promise<Document
   }
 
   const existingFm = existing.frontmatter as Record<string, unknown>;
+
+  // F7 — soft-deleted comments are read-only. Without this guard an author
+  // could DELETE then PATCH the body back: deleted_at stays set, but body
+  // becomes the new content. UI hides via deleted_at; raw export / GET / SSE
+  // consumers see the resurrected body. Soft-delete contract broken.
+  if (existingFm.deleted_at != null && existingFm.deleted_at !== '') {
+    throw new HTTPError('COMMENT_DELETED', 'cannot edit a deleted comment', 422);
+  }
   const existingMentions = Array.isArray(existingFm.mentions)
     ? (existingFm.mentions as ResolvedMention[])
     : [];
@@ -481,7 +517,10 @@ export async function deleteComment(input: DeleteCommentInput): Promise<Document
   // Idempotency guard: if already soft-deleted, return the row as-is without
   // re-bumping deleted_at or re-firing comment.deleted. The route layer may
   // already 404 on a second call, but the service should be safe on its own.
-  if (existingFm.deleted_at) {
+  // F7-companion: tighten from truthy to "is a non-empty string" so malformed
+  // imports (deleted_at='') don't trigger a phantom re-delete + duplicate
+  // comment.deleted event.
+  if (typeof existingFm.deleted_at === 'string' && existingFm.deleted_at.length > 0) {
     return existing as Document;
   }
   const author = (existingFm.author as string) ?? authorString(authorContext);

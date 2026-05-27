@@ -33,9 +33,17 @@ type BodyRun =
   | { type: 'wiki'; slug: string };
 
 function parseBody(body: string, mentions: ResolvedMention[]): BodyRun[] {
-  // Build a lookup: target → resolved
+  // F10 — server stores mentions.target as 'user:<id>' or 'agent:<slug>'
+  // (server schema: comment-schema.ts:18, regex /^(user|agent):.+$/). The
+  // @-regex below captures the BARE slug into match[2]. Without stripping
+  // the prefix here, staleSet.has(match[2]) would always be false and
+  // stale mentions would never render with strikethrough.
+  const stripPrefix = (target: string): string => {
+    const colon = target.indexOf(':');
+    return colon === -1 ? target : target.slice(colon + 1);
+  };
   const staleSet = new Set(
-    mentions.filter((m) => !m.resolved).map((m) => m.target),
+    mentions.filter((m) => !m.resolved).map((m) => stripPrefix(m.target)),
   );
 
   const runs: BodyRun[] = [];

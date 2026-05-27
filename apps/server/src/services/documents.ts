@@ -687,6 +687,19 @@ export async function deleteDocument(args: DeleteDocumentArgs): Promise<void> {
   }
 
   await txWithEvents(db, async (tx) => {
+    // F8 — cascade child comments. documents.parent_id has no SQL foreign key
+    // (Phase 2.6 migration 0007 omitted it deliberately to keep the table
+    // self-referential and SQLite-portable), so the app layer must purge
+    // orphan comment rows. We hard-delete here rather than soft-delete: the
+    // parent is gone, so a tombstone comment row pointing at a non-existent
+    // id is just noise. The single document.deleted event below carries the
+    // parent's identity; downstream consumers know comments cascade.
+    if (existing.type === 'work_item' || existing.type === 'page') {
+      await tx
+        .delete(documents)
+        .where(and(eq(documents.parentId, existing.id), eq(documents.type, 'comment')));
+    }
+
     // Agents: api_tokens.agent_id ON DELETE CASCADE handles token revocation.
     // The explicit Phase 2 cleanup (delete by api_token_id from frontmatter)
     // is now redundant but harmless if any rows pre-date the cascade FK.

@@ -319,4 +319,47 @@ describe('ApprovalButtons', () => {
     // Should still show buttons
     expect(screen.getByRole('button', { name: /approve/i })).toBeInTheDocument();
   });
+
+  // F9 — a soft-deleted approval/rejection must NOT lock the plan into
+  // resolved state. Before this fix, listComments returns deleted rows by
+  // design (UI mutes them), but findResolution didn't exclude them, so
+  // ApprovalButtons would render "Approved by …" forever even after the user
+  // retracted the approval.
+  it('F9: ignores soft-deleted approval (does not render resolved state)', () => {
+    const deletedApproval: Comment = {
+      ...approvalComment,
+      frontmatter: {
+        ...approvalComment.frontmatter,
+        deleted_at: '2026-05-26T10:04:00.000Z',
+      },
+      body: '', // soft-delete blanks the body
+    };
+    renderButtons({ threadComments: [deletedApproval] });
+    // Should still show Approve/Reject buttons, not the resolved banner.
+    expect(screen.getByRole('button', { name: /approve/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /reject/i })).toBeInTheDocument();
+    expect(screen.queryByText(/approved by/i)).not.toBeInTheDocument();
+  });
+
+  it('F9: a deleted approval followed by a fresh approval still resolves on the fresh one', () => {
+    const deletedApproval: Comment = {
+      ...approvalComment,
+      id: 'c-deleted-approval',
+      slug: 'comment-deleted-approval',
+      frontmatter: {
+        ...approvalComment.frontmatter,
+        deleted_at: '2026-05-26T10:04:00.000Z',
+      },
+      body: '',
+      createdAt: '2026-05-26T10:02:00.000Z', // earlier
+    };
+    const freshApproval: Comment = {
+      ...approvalComment,
+      id: 'c-fresh-approval',
+      slug: 'comment-fresh-approval',
+      createdAt: '2026-05-26T10:04:30.000Z', // later than deleted
+    };
+    renderButtons({ threadComments: [deletedApproval, freshApproval] });
+    expect(screen.getByText(/approved by/i)).toBeInTheDocument();
+  });
 });

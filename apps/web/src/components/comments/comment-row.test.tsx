@@ -232,7 +232,10 @@ describe('CommentRow', () => {
       body: 'Ping @old-agent on this',
       frontmatter: {
         ...baseComment.frontmatter,
-        mentions: [{ target: 'old-agent', resolved: false }],
+        // F10 — server stores targets as 'agent:<slug>' (comment-schema.ts).
+        // Earlier the test used 'old-agent' (unprefixed) which mirrored the
+        // buggy lookup shape and passed without exercising the real path.
+        mentions: [{ target: 'agent:old-agent', resolved: false }],
       },
     };
     render(
@@ -243,6 +246,26 @@ describe('CommentRow', () => {
       />,
     );
     const mentionEl = screen.getByText('@old-agent');
+    expect(mentionEl).toHaveClass('line-through');
+  });
+
+  it('F10: stale mention with prefixed user:<id> target renders with strikethrough', () => {
+    const staleComment: Comment = {
+      ...baseComment,
+      body: 'Hey @ghost are you here?',
+      frontmatter: {
+        ...baseComment.frontmatter,
+        mentions: [{ target: 'user:ghost', resolved: false }],
+      },
+    };
+    render(
+      <CommentRow
+        comment={staleComment}
+        currentUserId="u-1"
+        workspaceMembers={members}
+      />,
+    );
+    const mentionEl = screen.getByText('@ghost');
     expect(mentionEl).toHaveClass('line-through');
   });
 

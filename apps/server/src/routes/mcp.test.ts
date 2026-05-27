@@ -490,9 +490,9 @@ async function createWorkItem(
   return doc.slug;
 }
 
-test('create_comment via agent token resolves author=agent:<slug> and emits comment.created', async () => {
+test('create_comment via agent token resolves author=agent:<id> and emits comment.created', async () => {
   const { app, seed } = await makeTestApp();
-  const { agentToken, agentSlug } = await setupAgentBoundToken(
+  const { agentToken, agentId } = await setupAgentBoundToken(
     seed.workspace.id,
     seed.user.id,
     { projects: ['*'] },
@@ -532,10 +532,12 @@ test('create_comment via agent token resolves author=agent:<slug> and emits comm
   });
   expect(row).toBeTruthy();
   const fm = row!.frontmatter as Record<string, unknown>;
-  expect(fm.author).toBe(`agent:${agentSlug}`);
+  // F11 — canonical author for new comments is `agent:<id>`, not `agent:<slug>`.
+  // Slug-based authoring broke after rename; id-based survives renames.
+  expect(fm.author).toBe(`agent:${agentId}`);
   const evRows = await db.query.events.findMany({ where: eq(events.kind, 'comment.created') });
   expect(evRows.length).toBe(1);
-  expect((evRows[0]!.payload as Record<string, unknown>).author).toBe(`agent:${agentSlug}`);
+  expect((evRows[0]!.payload as Record<string, unknown>).author).toBe(`agent:${agentId}`);
 });
 
 test('create_comment via human PAT resolves author=user:<id>', async () => {
