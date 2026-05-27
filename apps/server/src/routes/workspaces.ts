@@ -6,6 +6,7 @@ import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import { db } from '../db/client.ts';
 import { memberships, workspaces } from '../db/schema.ts';
+import { seedBuiltinTriggers } from '../lib/builtin-triggers.ts';
 import { emitEvent } from '../lib/events.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
 import { slugUniqueInWorkspaces } from '../lib/slug-unique.ts';
@@ -57,6 +58,10 @@ workspacesRoute.post(
     await db.transaction(async (tx) => {
       await tx.insert(workspaces).values({ id, slug, name });
       await tx.insert(memberships).values({ workspaceId: id, userId: user.id, role: 'owner' });
+      // Phase 2.6 sub-phase D — seed the 4 builtin triggers transactionally
+      // with the workspace itself. Future refactor may move workspace create
+      // into services/workspaces.ts::createWorkspace.
+      await seedBuiltinTriggers(tx, id);
       await emitEvent(tx, {
         workspaceId: id,
         kind: 'workspace.created',
