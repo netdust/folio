@@ -38,6 +38,36 @@ test('subscribe with a projectId filter only receives events for that project', 
   unsub();
 });
 
+// BUG-021 — `?project=X` subscribers must ALSO see workspace-level events
+// (projectId=null). The previous filter dropped them: an agent SSEing to
+// `/events?project=proj-1` for sensible defaults missed
+// agent.allow_list.reconciled (workspace-level, projectId=null), so the
+// agent never learned its allow-list was scrubbed.
+test('BUG-021: projectId filter still admits workspace-level events (projectId=null)', () => {
+  const received: BusEvent[] = [];
+  const unsub = eventBus.subscribe('ws-1', { projectId: 'p1' }, (e) => received.push(e));
+
+  // Workspace-level event (no project scope). Should pass.
+  eventBus.publish({
+    workspaceId: 'ws-1',
+    projectId: null,
+    kind: 'agent.allow_list.reconciled',
+    payload: { agent_slug: 'drafter' },
+  });
+  // Other-project event. Should NOT pass.
+  eventBus.publish({
+    workspaceId: 'ws-1',
+    projectId: 'p2',
+    kind: 'document.created',
+    payload: {},
+  });
+
+  expect(received.length).toBe(1);
+  expect(received[0]!.kind).toBe('agent.allow_list.reconciled');
+  expect(received[0]!.projectId).toBeNull();
+  unsub();
+});
+
 test('unsubscribe stops receiving events', () => {
   const received: BusEvent[] = [];
   const unsub = eventBus.subscribe('ws-1', undefined, (e) => received.push(e));

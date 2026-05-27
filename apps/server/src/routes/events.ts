@@ -121,7 +121,10 @@ eventsRoute.get('/', async (c) => {
 
           for (const row of rows) {
             cursorSeq = row.seq;
-            if (projectId && row.projectId !== projectId) continue;
+            // BUG-021 — workspace-level rows (projectId=null) transcend
+            // project scope. Mirror the live-bus loosening so Last-Event-Id
+            // replay delivers the same set of events the live stream would.
+            if (projectId && row.projectId !== null && row.projectId !== projectId) continue;
             // F3: agent allow-list narrows project-scoped rows.
             if (agentAllowList && row.projectId !== null && !agentAllowList.includes(row.projectId)) {
               continue;
