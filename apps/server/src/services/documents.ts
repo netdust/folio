@@ -658,6 +658,28 @@ export async function updateDocument(
     return merged;
   })();
 
+  // BUG-016 — re-validate the cross-field refine on triggers after the merge.
+  // The PATCH-payload validation above uses `triggerFrontmatterSchema.innerType().partial()`
+  // (refine stripped, server-managed fields like last_fired_at exempt from
+  // .strict()). A PATCH that clears the only timing field is valid against
+  // partial() but the resulting document would be rejected by the create-time
+  // schema — dispatch then never fires. Assert the refine here on the merged
+  // shape and reject with INVALID_PATCH so the operator sees the error
+  // instead of a silently broken trigger.
+  if (existing.type === 'trigger') {
+    const scheduleVal = (mergedFrontmatter as Record<string, unknown>).schedule;
+    const onEventVal = (mergedFrontmatter as Record<string, unknown>).on_event;
+    const hasSchedule = scheduleVal !== null && scheduleVal !== undefined;
+    const hasOnEvent = onEventVal !== null && onEventVal !== undefined;
+    if (!hasSchedule && !hasOnEvent) {
+      throw new HTTPError(
+        'INVALID_PATCH',
+        'trigger must have at least one of schedule or on_event after the patch',
+        422,
+      );
+    }
+  }
+
   // Agents/triggers don't rename their slug on title change (URLs are sticky
   // and frontmatter references would break). Only project-scoped docs do.
   const nextSlug =

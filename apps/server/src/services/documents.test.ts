@@ -276,6 +276,124 @@ test('updateDocument allows full patch on non-builtin trigger', async () => {
   ).toMatchObject({ kind: 'foo' });
 });
 
+// BUG-016 — trigger PATCH validates the PATCH PAYLOAD against the partial
+// schema (so server-managed fields don't trip .strict()), but skips the
+// cross-field refine `schedule!==null || on_event!==null`. A PATCH that
+// clears the only timing field leaves the doc in a state the create schema
+// would have rejected. Dispatch then never fires; the operator sees a
+// trigger row with zero runs and no error feedback. Re-validate the merged
+// frontmatter against the full schema and reject with INVALID_PATCH.
+test('BUG-016: PATCH that clears schedule on schedule-only trigger rejects with INVALID_PATCH', async () => {
+  const { db, seed } = await makeTestApp();
+  // Seed a non-builtin schedule-only trigger.
+  const id = nanoid();
+  await db.insert(documents).values({
+    id,
+    workspaceId: seed.workspace.id,
+    projectId: null,
+    type: 'trigger',
+    slug: 'cron-only',
+    title: 'Cron only trigger',
+    body: '',
+    frontmatter: {
+      on_event: null,
+      schedule: '0 * * * *',
+      agent: 'drafter',
+      enabled: true,
+      builtin: false,
+    },
+  });
+  const trig = (await db.query.documents.findFirst({
+    where: eq(documents.id, id),
+  }))!;
+
+  // Cleared schedule, on_event still null → merged trigger has neither.
+  await expect(
+    updateDocument({
+      workspace: seed.workspace,
+      project: null,
+      fallbackTable: null,
+      actor: seed.user,
+      existing: trig,
+      patch: { frontmatter: { schedule: null } },
+    }),
+  ).rejects.toMatchObject({ code: 'INVALID_PATCH', status: 422 });
+});
+
+test('BUG-016: PATCH that clears on_event on event-only trigger rejects with INVALID_PATCH', async () => {
+  const { db, seed } = await makeTestApp();
+  const id = nanoid();
+  await db.insert(documents).values({
+    id,
+    workspaceId: seed.workspace.id,
+    projectId: null,
+    type: 'trigger',
+    slug: 'event-only',
+    title: 'Event only trigger',
+    body: '',
+    frontmatter: {
+      on_event: 'comment.created',
+      schedule: null,
+      agent: 'drafter',
+      enabled: true,
+      builtin: false,
+    },
+  });
+  const trig = (await db.query.documents.findFirst({
+    where: eq(documents.id, id),
+  }))!;
+
+  await expect(
+    updateDocument({
+      workspace: seed.workspace,
+      project: null,
+      fallbackTable: null,
+      actor: seed.user,
+      existing: trig,
+      patch: { frontmatter: { on_event: null } },
+    }),
+  ).rejects.toMatchObject({ code: 'INVALID_PATCH', status: 422 });
+});
+
+test('BUG-016: switching from schedule-only to event-only (one valid → another valid) succeeds', async () => {
+  const { db, seed } = await makeTestApp();
+  const id = nanoid();
+  await db.insert(documents).values({
+    id,
+    workspaceId: seed.workspace.id,
+    projectId: null,
+    type: 'trigger',
+    slug: 'switching',
+    title: 'Switching trigger',
+    body: '',
+    frontmatter: {
+      on_event: null,
+      schedule: '0 * * * *',
+      agent: 'drafter',
+      enabled: true,
+      builtin: false,
+    },
+  });
+  const trig = (await db.query.documents.findFirst({
+    where: eq(documents.id, id),
+  }))!;
+
+  // Clear schedule AND set on_event in the same PATCH — merged is valid
+  // (Folio's PATCH convention: `null` value DELETES the key from frontmatter,
+  // so after the merge `schedule` is absent and on_event is present).
+  const updated = await updateDocument({
+    workspace: seed.workspace,
+    project: null,
+    fallbackTable: null,
+    actor: seed.user,
+    existing: trig,
+    patch: { frontmatter: { schedule: null, on_event: 'comment.created' } },
+  });
+  const fm = updated.frontmatter as Record<string, unknown>;
+  expect(fm.schedule).toBeUndefined();
+  expect(fm.on_event).toBe('comment.created');
+});
+
 test('deleteDocument blocks delete on builtin trigger', async () => {
   const { db, seed } = await makeTestApp();
   const trig = await seedTrigger(db, seed.workspace.id, { builtin: true });
