@@ -96,6 +96,91 @@ describe('triggerFrontmatterSchema', () => {
   });
 });
 
+describe('triggerFrontmatterSchema — Phase 2.6 sub-phase D extensions', () => {
+  test('accepts $event.<key> in the agent field', () => {
+    const out = triggerFrontmatterSchema.parse({
+      on_event: 'agent.task.assigned',
+      schedule: null,
+      agent: '$event.assignee_slug',
+      enabled: false,
+    });
+    expect(out.agent).toBe('$event.assignee_slug');
+  });
+
+  test('accepts internal_action enum', () => {
+    const out = triggerFrontmatterSchema.parse({
+      on_event: 'comment.created',
+      schedule: null,
+      agent: null,
+      internal_action: 'resume_run',
+      enabled: true,
+    });
+    expect(out.internal_action).toBe('resume_run');
+  });
+
+  test('accepts builtin: true flag', () => {
+    const out = triggerFrontmatterSchema.parse({
+      on_event: 'comment.mentioned',
+      schedule: null,
+      agent: null,
+      builtin: true,
+      enabled: false,
+    });
+    expect(out.builtin).toBe(true);
+  });
+
+  test('defaults builtin to false when absent', () => {
+    const out = triggerFrontmatterSchema.parse({
+      on_event: 'comment.created',
+      schedule: null,
+      agent: 'drafter',
+    });
+    expect(out.builtin).toBe(false);
+  });
+
+  test('accepts malformed $event.<key> as a plain string fallback', () => {
+    // The regex variant exists for clarity / documentation, not exclusion. A
+    // string like "$event.BAD-KEY" fails the regex variant but is still a
+    // non-empty string, so the plain-string union member accepts it. This is
+    // intentional — the schema doesn't gate slug shape, only emptiness.
+    const r = triggerFrontmatterSchema.safeParse({
+      on_event: 'agent.task.assigned',
+      schedule: null,
+      agent: '$event.BAD-KEY',
+      enabled: false,
+    });
+    expect(r.success).toBe(true);
+  });
+
+  test('rejects unknown internal_action value', () => {
+    const r = triggerFrontmatterSchema.safeParse({
+      on_event: 'comment.created',
+      schedule: null,
+      agent: null,
+      internal_action: 'unknown_action',
+    });
+    expect(r.success).toBe(false);
+  });
+
+  test('accepts null agent', () => {
+    const r = triggerFrontmatterSchema.safeParse({
+      on_event: 'comment.created',
+      schedule: null,
+      agent: null,
+      enabled: true,
+    });
+    expect(r.success).toBe(true);
+  });
+
+  test('accepts omitted agent field', () => {
+    const r = triggerFrontmatterSchema.safeParse({
+      on_event: 'comment.created',
+      schedule: null,
+    });
+    expect(r.success).toBe(true);
+  });
+});
+
 describe('KNOWN_EVENT_KINDS', () => {
   test('includes the document, field, view, table, project, workspace kinds', () => {
     expect(KNOWN_EVENT_KINDS).toContain('document.created');

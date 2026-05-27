@@ -8,13 +8,17 @@
 
 import { test, expect } from 'bun:test';
 import { and, eq } from 'drizzle-orm';
+import { nanoid } from 'nanoid';
 import { makeTestApp } from '../test/harness.ts';
-import { apiTokens, tables } from '../db/schema.ts';
+import { apiTokens, documents, tables } from '../db/schema.ts';
+import type { Document } from '../db/schema.ts';
+import { HTTPError } from '../lib/http.ts';
 import {
   createDocument,
   deleteDocument,
   getDocument,
   listDocuments,
+  updateDocument,
 } from './documents.ts';
 
 async function getWorkItemsTable(
@@ -134,4 +138,152 @@ test('deleteDocument (workspace-scoped) on agent revokes its api token via casca
     where: eq(apiTokens.id, apiTokenId),
   });
   expect(after).toBeUndefined();
+});
+
+// ----- Phase 2.6 sub-phase D: builtin trigger lock -----
+
+async function seedTrigger(
+  db: Awaited<ReturnType<typeof makeTestApp>>['db'],
+  workspaceId: string,
+  opts: { builtin: boolean; slug?: string },
+): Promise<Document> {
+  const id = nanoid();
+  const slug = opts.slug ?? (opts.builtin ? 'builtin-on-foo' : 'custom-on-foo');
+  await db.insert(documents).values({
+    id,
+    workspaceId,
+    projectId: null,
+    type: 'trigger',
+    slug,
+    title: 'Test trigger',
+    body: '',
+    frontmatter: {
+      on_event: 'comment.created',
+      schedule: null,
+      agent: null,
+      enabled: true,
+      builtin: opts.builtin,
+    },
+  });
+  const row = await db.query.documents.findFirst({
+    where: eq(documents.id, id),
+  });
+  if (!row) throw new Error('seedTrigger: insert failed');
+  return row;
+}
+
+test('updateDocument blocks PATCH on builtin trigger fields other than enabled', async () => {
+  const { db, seed } = await makeTestApp();
+  const trig = await seedTrigger(db, seed.workspace.id, { builtin: true });
+  await expect(
+    updateDocument({
+      workspace: seed.workspace,
+      project: null,
+      fallbackTable: null,
+      actor: seed.user,
+      existing: trig,
+      patch: { frontmatter: { event_filter: { kind: 'foo' } } },
+    }),
+  ).rejects.toMatchObject({ code: 'BUILTIN_TRIGGER_LOCKED', status: 422 });
+});
+
+test('updateDocument allows PATCH on enabled for builtin trigger', async () => {
+  const { db, seed } = await makeTestApp();
+  const trig = await seedTrigger(db, seed.workspace.id, { builtin: true });
+  const updated = await updateDocument({
+    workspace: seed.workspace,
+    project: null,
+    fallbackTable: null,
+    actor: seed.user,
+    existing: trig,
+    patch: { frontmatter: { enabled: false } },
+  });
+  expect((updated.frontmatter as Record<string, unknown>).enabled).toBe(false);
+  // Builtin flag is preserved.
+  expect((updated.frontmatter as Record<string, unknown>).builtin).toBe(true);
+});
+
+test('updateDocument blocks PATCH on builtin trigger title change', async () => {
+  const { db, seed } = await makeTestApp();
+  const trig = await seedTrigger(db, seed.workspace.id, { builtin: true });
+  await expect(
+    updateDocument({
+      workspace: seed.workspace,
+      project: null,
+      fallbackTable: null,
+      actor: seed.user,
+      existing: trig,
+      patch: { title: 'Renamed' },
+    }),
+  ).rejects.toMatchObject({ code: 'BUILTIN_TRIGGER_LOCKED', status: 422 });
+});
+
+test('updateDocument blocks PATCH on builtin trigger body change', async () => {
+  const { db, seed } = await makeTestApp();
+  const trig = await seedTrigger(db, seed.workspace.id, { builtin: true });
+  await expect(
+    updateDocument({
+      workspace: seed.workspace,
+      project: null,
+      fallbackTable: null,
+      actor: seed.user,
+      existing: trig,
+      patch: { body: 'New body' },
+    }),
+  ).rejects.toMatchObject({ code: 'BUILTIN_TRIGGER_LOCKED', status: 422 });
+});
+
+test('updateDocument allows full patch on non-builtin trigger', async () => {
+  const { db, seed } = await makeTestApp();
+  const trig = await seedTrigger(db, seed.workspace.id, { builtin: false });
+  const updated = await updateDocument({
+    workspace: seed.workspace,
+    project: null,
+    fallbackTable: null,
+    actor: seed.user,
+    existing: trig,
+    patch: { frontmatter: { event_filter: { kind: 'foo' } } },
+  });
+  expect(
+    (updated.frontmatter as Record<string, unknown>).event_filter,
+  ).toMatchObject({ kind: 'foo' });
+});
+
+test('deleteDocument blocks delete on builtin trigger', async () => {
+  const { db, seed } = await makeTestApp();
+  const trig = await seedTrigger(db, seed.workspace.id, { builtin: true });
+  let caught: unknown;
+  try {
+    await deleteDocument({
+      workspace: seed.workspace,
+      project: null,
+      actor: seed.user,
+      existing: trig,
+    });
+  } catch (err) {
+    caught = err;
+  }
+  expect(caught).toBeInstanceOf(HTTPError);
+  expect((caught as HTTPError).code).toBe('BUILTIN_TRIGGER_LOCKED');
+  expect((caught as HTTPError).status).toBe(422);
+  // Row still exists.
+  const still = await db.query.documents.findFirst({
+    where: eq(documents.id, trig.id),
+  });
+  expect(still).toBeTruthy();
+});
+
+test('deleteDocument allows delete on non-builtin trigger', async () => {
+  const { db, seed } = await makeTestApp();
+  const trig = await seedTrigger(db, seed.workspace.id, { builtin: false });
+  await deleteDocument({
+    workspace: seed.workspace,
+    project: null,
+    actor: seed.user,
+    existing: trig,
+  });
+  const gone = await db.query.documents.findFirst({
+    where: eq(documents.id, trig.id),
+  });
+  expect(gone).toBeUndefined();
 });

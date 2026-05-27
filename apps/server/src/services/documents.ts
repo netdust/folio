@@ -540,6 +540,32 @@ export async function updateDocument(
     await validateStatusForTable(tId, patch.status);
   }
 
+  // Phase 2.6 sub-phase D — builtin trigger lock. Only frontmatter.enabled is
+  // mutable. Title, body, status, parent, and any other frontmatter key are
+  // server-controlled. This check runs BEFORE strict schema validation so the
+  // lock error fires first.
+  if (
+    existing.type === 'trigger' &&
+    (existing.frontmatter as Record<string, unknown>).builtin === true
+  ) {
+    const fmPatch = patch.frontmatter ?? {};
+    const fmKeysOtherThanEnabled = Object.keys(fmPatch).filter(
+      (k) => k !== 'enabled',
+    );
+    const touchesProtectedTop =
+      patch.title !== undefined ||
+      patch.body !== undefined ||
+      patch.status !== undefined ||
+      patch.parentId !== undefined;
+    if (touchesProtectedTop || fmKeysOtherThanEnabled.length > 0) {
+      throw new HTTPError(
+        'BUILTIN_TRIGGER_LOCKED',
+        'only frontmatter.enabled is mutable on builtin triggers',
+        422,
+      );
+    }
+  }
+
   // For agents/triggers, validate the PATCH payload itself (not the merged
   // result). Server-managed fields like api_token_id and last_fired_at would
   // fail .strict() if merged-validated. The trigger schema is a ZodEffects;
@@ -647,6 +673,19 @@ export interface DeleteDocumentArgs {
 
 export async function deleteDocument(args: DeleteDocumentArgs): Promise<void> {
   const { workspace: ws, project: p, actor: user, existing } = args;
+
+  // Phase 2.6 sub-phase D — builtin triggers are not deletable.
+  if (
+    existing.type === 'trigger' &&
+    (existing.frontmatter as Record<string, unknown>).builtin === true
+  ) {
+    throw new HTTPError(
+      'BUILTIN_TRIGGER_LOCKED',
+      'builtin triggers cannot be deleted',
+      422,
+    );
+  }
+
   await db.transaction(async (tx) => {
     // Agents: api_tokens.agent_id ON DELETE CASCADE handles token revocation.
     // The explicit Phase 2 cleanup (delete by api_token_id from frontmatter)
