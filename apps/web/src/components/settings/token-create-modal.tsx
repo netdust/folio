@@ -30,6 +30,12 @@ type Scope = (typeof ALL_SCOPES)[number];
 // (read tools → documents:read; write tools → write + read; delete → +read).
 // Full access also adds the destructive admin ops (delete + tables:write,
 // which cascade-deletes documents).
+//
+// BUG-007: agents:write is deliberately NOT in ANY preset. Human PATs bypass
+// assertAgentAllowListWidening / assertAgentToolsWidening, so bundling
+// agents:write into a "Read + write" preset silently grants workspace-wide
+// agent-management capability (mint, widen, delete). Users who actually
+// need it tick the box explicitly.
 type PresetTone = 'default' | 'danger';
 const PRESETS: { label: string; scopes: Scope[]; tone?: PresetTone }[] = [
   { label: 'Read-only', scopes: ['documents:read'] },
@@ -41,7 +47,6 @@ const PRESETS: { label: string; scopes: Scope[]; tone?: PresetTone }[] = [
       'fields:write',
       'views:write',
       'statuses:write',
-      'agents:write',
     ],
   },
   {
@@ -55,7 +60,6 @@ const PRESETS: { label: string; scopes: Scope[]; tone?: PresetTone }[] = [
       'views:write',
       'statuses:write',
       'tables:write',
-      'agents:write',
     ],
   },
 ];

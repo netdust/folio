@@ -65,7 +65,7 @@ describe('TokenCreateModal', () => {
     expect(screen.getByRole('button', { name: /full access/i })).toBeInTheDocument();
   });
 
-  it('clicking "Read + write" checks the right subset (no delete, no tables:write; includes agents:write)', async () => {
+  it('clicking "Read + write" checks the right subset (no delete, no tables:write, no agents:write)', async () => {
     const qc = new QueryClient();
     const user = userEvent.setup();
     render(
@@ -78,14 +78,17 @@ describe('TokenCreateModal', () => {
     expect((screen.getByLabelText('fields:write') as HTMLInputElement).checked).toBe(true);
     expect((screen.getByLabelText('views:write') as HTMLInputElement).checked).toBe(true);
     expect((screen.getByLabelText('statuses:write') as HTMLInputElement).checked).toBe(true);
-    expect((screen.getByLabelText('agents:write') as HTMLInputElement).checked).toBe(true);
     expect((screen.getByLabelText('documents:delete') as HTMLInputElement).checked).toBe(false);
     expect((screen.getByLabelText('tables:write') as HTMLInputElement).checked).toBe(false);
+    // BUG-007 — agents:write is too privileged to bundle in a "Read + write"
+    // preset; human PATs bypass the widening guards so the preset would
+    // silently grant whole-instance agent-management capability.
+    expect((screen.getByLabelText('agents:write') as HTMLInputElement).checked).toBe(false);
   });
 
-  // Phase 2.6 sub-phase D — agents:write powers create_agent / update_agent /
-  // delete_agent in the MCP surface. Read-only stays untouched; Read+write and
-  // Full access now include it so agent-managing tokens are easy to mint.
+  // BUG-007 — neither preset bundles agents:write. Users who genuinely need
+  // it tick the box manually (and see the warning that agents:write paired
+  // with documents:* is workspace-admin capability).
   it('"Read-only" preset does NOT include agents:write', async () => {
     const qc = new QueryClient();
     const user = userEvent.setup();
@@ -97,7 +100,18 @@ describe('TokenCreateModal', () => {
     expect((screen.getByLabelText('agents:write') as HTMLInputElement).checked).toBe(false);
   });
 
-  it('clicking "Full access" checks every scope', async () => {
+  it('"Full access" preset does NOT include agents:write (BUG-007)', async () => {
+    const qc = new QueryClient();
+    const user = userEvent.setup();
+    render(
+      <TokenCreateModal wslug="acme" workspaceId="ws-1" open onOpenChange={() => {}} />,
+      { wrapper: wrap(qc) },
+    );
+    await user.click(screen.getByRole('button', { name: /full access/i }));
+    expect((screen.getByLabelText('agents:write') as HTMLInputElement).checked).toBe(false);
+  });
+
+  it('clicking "Full access" checks every scope except agents:write', async () => {
     const qc = new QueryClient();
     const user = userEvent.setup();
     render(
@@ -106,7 +120,8 @@ describe('TokenCreateModal', () => {
     );
     await user.click(screen.getByRole('button', { name: /full access/i }));
     for (const scope of SCOPES) {
-      expect((screen.getByLabelText(scope) as HTMLInputElement).checked).toBe(true);
+      const expected = scope !== 'agents:write';
+      expect((screen.getByLabelText(scope) as HTMLInputElement).checked).toBe(expected);
     }
   });
 
@@ -162,21 +177,26 @@ describe('TokenCreateModal', () => {
     expect(screen.getByRole('button', { name: /read \+ write/i }).getAttribute('data-tone')).not.toBe('danger');
   });
 
-  it('shows a warning alert when every scope is selected (Full access state)', async () => {
+  it('shows a warning alert only when EVERY scope (including manually-ticked agents:write) is selected', async () => {
     const qc = new QueryClient();
     const user = userEvent.setup();
     render(
       <TokenCreateModal wslug="acme" workspaceId="ws-1" open onOpenChange={() => {}} />,
       { wrapper: wrap(qc) },
     );
-    // No warning before Full access is clicked.
+    // No warning before any preset is clicked.
     expect(screen.queryByRole('alert')).toBeNull();
+    // Full access alone is not enough — BUG-007 drops agents:write from
+    // the preset, so the user-visible state is "every scope except agents:write".
     await user.click(screen.getByRole('button', { name: /full access/i }));
+    expect(screen.queryByRole('alert')).toBeNull();
+    // Manually ticking agents:write tips it into "every scope" → warning.
+    await user.click(screen.getByLabelText('agents:write'));
     const alert = screen.getByRole('alert');
     expect(alert.textContent).toMatch(/every scope|root-level|trusted/i);
   });
 
-  it('hides the warning when any scope is unchecked from Full access', async () => {
+  it('hides the warning when any scope is unchecked from the full set', async () => {
     const qc = new QueryClient();
     const user = userEvent.setup();
     render(
@@ -184,6 +204,7 @@ describe('TokenCreateModal', () => {
       { wrapper: wrap(qc) },
     );
     await user.click(screen.getByRole('button', { name: /full access/i }));
+    await user.click(screen.getByLabelText('agents:write'));
     expect(screen.getByRole('alert')).toBeInTheDocument();
     // Uncheck one scope — warning should disappear because it's no longer "every scope".
     await user.click(screen.getByLabelText('tables:write'));
