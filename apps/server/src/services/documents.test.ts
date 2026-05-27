@@ -20,6 +20,7 @@ import {
   listDocuments,
   updateDocument,
 } from './documents.ts';
+import { eventBus } from '../lib/event-bus.ts';
 
 async function getWorkItemsTable(
   db: Awaited<ReturnType<typeof makeTestApp>>['db'],
@@ -479,6 +480,102 @@ test('G8: deleteDocument(page) cascades nested page children too', async () => {
   expect(parentGone).toBeUndefined();
   const childGone = await db.query.documents.findFirst({ where: eq(documents.id, childId) });
   expect(childGone).toBeUndefined();
+});
+
+// BUG-010 — the recursive cascade hard-DELETEd descendants in one SQL
+// statement and emitted only the top-level document.deleted event. Comment
+// rows by other authors vanished with no `comment.deleted` signal; UIs
+// caching the thread stale-display indefinitely, and Phase 3 audit-log
+// records mis-count the deletion scope. Cascade now walks descendants in
+// TS first and emits per-row events inside the same tx (transactional with
+// the parent delete).
+test('BUG-010: cascade emits per-descendant events (comment.deleted + document.deleted)', async () => {
+  const { db, seed } = await makeTestApp();
+  const table = await getWorkItemsTable(db, seed.project.id);
+
+  // Two distinct comment authors so we can assert author signal is preserved
+  // on cascade. user2 is just a synthetic id stamped into frontmatter.author.
+  const otherAuthor = 'user:u-other';
+
+  const parent = await createDocument({
+    workspace: seed.workspace, project: seed.project, table, actor: seed.user, token: null,
+    isTableScopedUrl: false,
+    input: { type: 'work_item', title: 'Parent', body: '', frontmatter: {}, status: null },
+  });
+
+  // 2 comments by different authors + 1 nested page (with its own comment).
+  const cmt1Id = nanoid();
+  await db.insert(documents).values({
+    id: cmt1Id,
+    workspaceId: seed.workspace.id, projectId: seed.project.id, tableId: null,
+    type: 'comment', slug: `c1-${cmt1Id}`, title: '', status: null, body: 'first',
+    parentId: parent.document.id,
+    frontmatter: { author: `user:${seed.user.id}`, kind: 'comment', visibility: 'normal', mentions: [] },
+    createdBy: seed.user.id, updatedBy: seed.user.id,
+  });
+  const cmt2Id = nanoid();
+  await db.insert(documents).values({
+    id: cmt2Id,
+    workspaceId: seed.workspace.id, projectId: seed.project.id, tableId: null,
+    type: 'comment', slug: `c2-${cmt2Id}`, title: '', status: null, body: 'second',
+    parentId: parent.document.id,
+    frontmatter: { author: otherAuthor, kind: 'comment', visibility: 'normal', mentions: [] },
+    createdBy: seed.user.id, updatedBy: seed.user.id,
+  });
+  const nestedPageId = nanoid();
+  await db.insert(documents).values({
+    id: nestedPageId,
+    workspaceId: seed.workspace.id, projectId: seed.project.id, tableId: null,
+    type: 'page', slug: `p-${nestedPageId}`, title: 'Nested', status: null, body: '',
+    parentId: parent.document.id, frontmatter: {},
+    createdBy: seed.user.id, updatedBy: seed.user.id,
+  });
+  const nestedCmtId = nanoid();
+  await db.insert(documents).values({
+    id: nestedCmtId,
+    workspaceId: seed.workspace.id, projectId: seed.project.id, tableId: null,
+    type: 'comment', slug: `nc-${nestedCmtId}`, title: '', status: null, body: 'nested cmt',
+    parentId: nestedPageId,
+    frontmatter: { author: `user:${seed.user.id}`, kind: 'comment', visibility: 'normal', mentions: [] },
+    createdBy: seed.user.id, updatedBy: seed.user.id,
+  });
+
+  // Subscribe to the bus and capture every event in the workspace.
+  type Captured = { kind: string; documentId?: string | null; payload?: unknown };
+  const captured: Captured[] = [];
+  const unsub = eventBus.subscribe(seed.workspace.id, undefined, (e) => {
+    captured.push({ kind: e.kind, documentId: e.documentId, payload: e.payload });
+  });
+
+  await deleteDocument({
+    workspace: seed.workspace, project: seed.project, actor: seed.user,
+    existing: parent.document,
+  });
+  unsub();
+
+  // All 4 descendant rows + the parent itself must have emitted a delete event.
+  const commentEvents = captured.filter((e) => e.kind === 'comment.deleted');
+  const docEvents = captured.filter((e) => e.kind === 'document.deleted');
+
+  // Both top-level comments + the nested-page comment → 3 comment.deleted.
+  expect(commentEvents).toHaveLength(3);
+  // The nested page + the parent itself → 2 document.deleted.
+  expect(docEvents).toHaveLength(2);
+
+  const commentIds = new Set(commentEvents.map((e) => e.documentId));
+  expect(commentIds.has(cmt1Id)).toBe(true);
+  expect(commentIds.has(cmt2Id)).toBe(true);
+  expect(commentIds.has(nestedCmtId)).toBe(true);
+
+  const docIds = new Set(docEvents.map((e) => e.documentId));
+  expect(docIds.has(nestedPageId)).toBe(true);
+  expect(docIds.has(parent.document.id)).toBe(true);
+
+  // Author payload is preserved on cascaded comment events (so a Phase-3
+  // audit-log subscriber gets the same shape as direct-delete).
+  const cmt2Event = commentEvents.find((e) => e.documentId === cmt2Id);
+  const cmt2Payload = cmt2Event!.payload as { author?: string };
+  expect(cmt2Payload.author).toBe(otherAuthor);
 });
 
 test('F8: deleting a non-parent doc does not collateral-delete unrelated comments', async () => {

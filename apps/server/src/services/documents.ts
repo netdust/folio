@@ -769,26 +769,72 @@ export async function deleteDocument(args: DeleteDocumentArgs): Promise<void> {
     // omitted it deliberately to keep the table self-referential and
     // SQLite-portable), so the app layer must purge orphan rows itself.
     //
-    // H8: walk the descendant tree recursively. Pages can nest arbitrarily
-    // (schema.ts:229 comment "for nested pages"; wiki-tree.tsx exercises
-    // drag-reparent). A single-level cascade (G8's prior shape) would
-    // orphan grandchild rows pointing at a deleted middle parent. SQLite's
-    // recursive CTE gathers every descendant id in one query; the DELETE
-    // then runs in a single statement.
-    //
-    // We deliberately don't emit per-child delete events — a parent's
-    // single document.deleted event below carries the lifecycle signal.
-    // Downstream consumers must walk parent_id to detect cascade scope.
+    // BUG-010 — the prior shape was a single recursive-CTE DELETE that
+    // emitted no per-row events. UIs caching comment threads stale-displayed
+    // indefinitely; Phase 3 audit logs mis-counted cascade scope; the
+    // author-only invariant on `comment.deleted` was dead-letter for
+    // cascaded comments. Walk the descendants in TS instead and fan out
+    // one `comment.deleted` per cascaded comment + one `document.deleted`
+    // per cascaded page/work_item. All inside the same tx via emitEvent,
+    // so subscribers either see EVERY cascade event or none (rollback).
     if (existing.type === 'work_item' || existing.type === 'page') {
-      await tx.run(sql`
-        WITH RECURSIVE descendants(id) AS (
-          SELECT id FROM documents WHERE parent_id = ${existing.id}
+      const descendantRows = await tx.all<{
+        id: string;
+        type: string;
+        slug: string;
+        title: string;
+        parent_id: string | null;
+        frontmatter: string;
+      }>(sql`
+        WITH RECURSIVE descendants(id, type, slug, title, parent_id, frontmatter) AS (
+          SELECT id, type, slug, title, parent_id, frontmatter
+            FROM documents
+            WHERE parent_id = ${existing.id}
           UNION ALL
-          SELECT documents.id FROM documents
+          SELECT documents.id, documents.type, documents.slug, documents.title,
+                 documents.parent_id, documents.frontmatter
+            FROM documents
             INNER JOIN descendants ON documents.parent_id = descendants.id
         )
-        DELETE FROM documents WHERE id IN (SELECT id FROM descendants)
+        SELECT id, type, slug, title, parent_id, frontmatter FROM descendants
       `);
+
+      if (descendantRows.length > 0) {
+        const ids = descendantRows.map((r) => r.id);
+        await tx.delete(documents).where(inArray(documents.id, ids));
+
+        for (const d of descendantRows) {
+          if (d.type === 'comment') {
+            // Parse frontmatter to recover author for the event payload —
+            // mirrors deleteComment's `comment.deleted` shape so any
+            // subscriber that handles direct deletes also handles cascade.
+            let author: string | undefined;
+            try {
+              const fm = JSON.parse(d.frontmatter) as { author?: string };
+              author = typeof fm.author === 'string' ? fm.author : undefined;
+            } catch {
+              // ignore — payload's `author` will be undefined.
+            }
+            await emitEvent(tx, {
+              workspaceId: ws.id,
+              projectId: p?.id ?? null,
+              documentId: d.id,
+              kind: 'comment.deleted',
+              actor: user.id,
+              payload: { document_id: d.id, parent_id: d.parent_id, author },
+            });
+          } else {
+            await emitEvent(tx, {
+              workspaceId: ws.id,
+              projectId: p?.id ?? null,
+              documentId: d.id,
+              kind: 'document.deleted',
+              actor: user.id,
+              payload: { id: d.id, slug: d.slug, type: d.type, title: d.title },
+            });
+          }
+        }
+      }
     }
 
     // Agents: api_tokens.agent_id ON DELETE CASCADE handles token revocation.
