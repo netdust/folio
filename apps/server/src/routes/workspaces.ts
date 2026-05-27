@@ -61,7 +61,7 @@ workspacesRoute.post(
       // Phase 2.6 sub-phase D — seed the 4 builtin triggers transactionally
       // with the workspace itself. Future refactor may move workspace create
       // into services/workspaces.ts::createWorkspace.
-      await seedBuiltinTriggers(tx, id);
+      await seedBuiltinTriggers(tx, id, user.id);
       await emitEvent(tx, {
         workspaceId: id,
         kind: 'workspace.created',

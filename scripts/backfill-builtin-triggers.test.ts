@@ -21,7 +21,7 @@ describe('backfillBuiltinTriggers', () => {
     const { db, seed } = await makeTestApp();
     // Seed the 4 builtins manually so this test exercises the no-op path.
     await db.transaction(async (tx) => {
-      await seedBuiltinTriggers(tx, seed.workspace.id);
+      await seedBuiltinTriggers(tx, seed.workspace.id, seed.user.id);
     });
 
     const result = await backfillBuiltinTriggers(db);

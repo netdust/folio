@@ -30,7 +30,13 @@ SET frontmatter = json_set(
       AND a.type = 'agent'
       AND a.slug = substr(json_extract(c.frontmatter, '$.author'), 7)
       AND a.created_at <= c.created_at
-    ORDER BY a.created_at ASC
+    -- S5: ORDER BY DESC picks the LATEST eligible agent (the one that
+    -- most-recently held this slug at or before the comment's write time).
+    -- The (workspace_id, type, slug) unique index guarantees at most one
+    -- live match at any moment, so in practice this returns the same row as
+    -- ASC. The DESC ordering is the defensible semantic if the index were
+    -- ever weakened to include a tombstone column.
+    ORDER BY a.created_at DESC
     LIMIT 1
   )
 )

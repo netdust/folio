@@ -382,8 +382,10 @@ describe('CommentRow', () => {
     fireEvent.click(copyBtn);
     // Wait a tick for the async clipboard call
     await vi.waitFor(() => {
+      // B1: CommentRow forwards agents + members so the clipboard payload
+      // includes `author_display` for resolved canonical authors.
       expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
-        commentToMarkdown(baseComment),
+        commentToMarkdown(baseComment, [], members),
       );
     });
   });
@@ -471,5 +473,44 @@ describe('commentToMarkdown', () => {
     // Body section exists but is empty
     const parts = md.split('---\n\n');
     expect(parts[1]).toBe('');
+  });
+
+  // B1: markdown surface should be human-readable. When agents/members are
+  // provided and the canonical id resolves, emit `author_display:` alongside
+  // the raw id. Without the lookups, we round-trip the id only.
+  it('emits author_display when agent lookup resolves user:<id>', () => {
+    const members = [{ id: 'u-1', name: 'Stefan' }];
+    const md = commentToMarkdown(baseComment, [], members);
+    expect(md).toContain('author: user:u-1');
+    expect(md).toContain('author_display: Stefan');
+  });
+
+  it('emits author_display when agent lookup resolves agent:<id>', () => {
+    const agentComment: Comment = {
+      ...baseComment,
+      frontmatter: { ...baseComment.frontmatter, author: 'agent:ag-uuid-1' },
+    };
+    const agents = [{ id: 'ag-uuid-1', slug: 'drafter' }];
+    const md = commentToMarkdown(agentComment, agents, []);
+    expect(md).toContain('author: agent:ag-uuid-1');
+    expect(md).toContain('author_display: drafter');
+  });
+
+  it('omits author_display when lookup returns the raw id (unresolved)', () => {
+    // No agents/members → authorDisplayName returns the bare id, which equals
+    // ref.value, so we suppress the line for byte-stable legacy exports.
+    const md = commentToMarkdown(baseComment, [], []);
+    expect(md).toContain('author: user:u-1');
+    expect(md).not.toContain('author_display:');
+  });
+
+  it('omits author_display for legacy agent:<slug> rows when no lookups', () => {
+    const legacyComment: Comment = {
+      ...baseComment,
+      frontmatter: { ...baseComment.frontmatter, author: 'agent:drafter' },
+    };
+    const md = commentToMarkdown(legacyComment, [], []);
+    expect(md).toContain('author: agent:drafter');
+    expect(md).not.toContain('author_display:');
   });
 });

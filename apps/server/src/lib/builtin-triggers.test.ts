@@ -7,11 +7,12 @@
  * undefined and the trigger silently never fires.
  */
 import { test, expect } from 'bun:test';
-import { eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import { makeTestApp } from '../test/harness.ts';
-import { events } from '../db/schema.ts';
-import { emitEvent } from './events.ts';
-import { BUILTIN_TRIGGER_DEFS } from './builtin-triggers.ts';
+import { events, workspaces, memberships } from '../db/schema.ts';
+import { emitEvent, txWithEvents } from './events.ts';
+import { BUILTIN_TRIGGER_DEFS, seedBuiltinTriggers } from './builtin-triggers.ts';
+import { nanoid } from 'nanoid';
 
 /** Extract the payload key referenced by a `$event.<key>` placeholder. */
 function placeholderKey(value: unknown): string | null {
@@ -46,6 +47,31 @@ test('F12: builtin-on-assignment $event.agent placeholder matches actual agent.t
   // The key referenced by the placeholder MUST exist on the payload.
   expect(payload).toHaveProperty(key as string);
   expect(payload[key as string]).toBe('drafter');
+});
+
+test('B2: seedBuiltinTriggers emits a document.created event per inserted row', async () => {
+  // Bypass makeTestApp's pre-seeded workspace so we can seed cleanly.
+  const { db, seed } = await makeTestApp();
+  const wsId = nanoid();
+  await db.insert(workspaces).values({ id: wsId, slug: `ws-b2-${wsId.slice(0, 6)}`, name: 'ws-b2' });
+  await db.insert(memberships).values({ workspaceId: wsId, userId: seed.user.id, role: 'owner' });
+
+  await txWithEvents(db, async (tx) => {
+    await seedBuiltinTriggers(tx, wsId, seed.user.id);
+  });
+
+  const seededSlugs = BUILTIN_TRIGGER_DEFS.map((d) => d.slug);
+  const rows = await db
+    .select()
+    .from(events)
+    .where(and(eq(events.workspaceId, wsId), eq(events.kind, 'document.created')));
+  expect(rows.length).toBe(seededSlugs.length);
+  for (const r of rows) {
+    const payload = r.payload as Record<string, unknown>;
+    expect(seededSlugs).toContain(payload['slug'] as string);
+    expect(payload['type']).toBe('trigger');
+    expect(payload['builtin']).toBe(true);
+  }
 });
 
 test('F12: builtin-on-mention $event.agent_slug placeholder matches actual comment.mentioned payload', async () => {

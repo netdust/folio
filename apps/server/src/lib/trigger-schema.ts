@@ -15,13 +15,13 @@ const onEventOrNull = z.union([
 ]);
 
 export const triggerFrontmatterSchema = z.object({
-  // Phase 2.6 sub-phase D: agent is optional + nullable, and can also be a
-  // `$event.<key>` dynamic-resolution string. The regex variant lives first
-  // for clarity / error messages; the plain-string variant catches direct
-  // slugs like 'drafter' or 'agent:drafter' (and intentionally accepts
-  // arbitrary non-empty strings — slug shape isn't gated here).
+  // Phase 2.6 sub-phase D: agent is optional + nullable. Accepts a direct
+  // slug ('drafter'), the `agent:<slug>` form, or a `$event.<key>` dynamic
+  // placeholder. S19: the previous schema also listed a regex-constrained
+  // `$event.<key>` variant FIRST; the second `z.string().min(1)` matched
+  // everything the regex matched, so the regex was a dead branch. Slug
+  // shape and `$event` validity are checked at dispatch time, not here.
   agent: z.union([
-    z.string().min(1).regex(/^\$event\.[a-z_]+$/),
     z.string().min(1),
     z.null(),
   ]).optional(),

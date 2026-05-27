@@ -47,6 +47,8 @@ import {
   type ResolvedMention,
 } from '../lib/comment-schema.ts';
 import { parseMentions } from '../lib/mention-parser.ts';
+import { authorString as sharedAuthorString } from '@folio/shared';
+import { resolveAgentProjects } from '../lib/agent-projects.ts';
 
 const MAX_BODY_BYTES = 64 * 1024;
 
@@ -73,7 +75,7 @@ export type AuthorContext =
  * silently writing a slug.
  */
 function authorString(ctx: AuthorContext): string {
-  if (ctx.type === 'user') return `user:${ctx.userId}`;
+  if (ctx.type === 'user') return sharedAuthorString({ type: 'user', userId: ctx.userId });
   if (!ctx.agentId) {
     throw new HTTPError(
       'INTERNAL',
@@ -81,7 +83,7 @@ function authorString(ctx: AuthorContext): string {
       500,
     );
   }
-  return `agent:${ctx.agentId}`;
+  return sharedAuthorString({ type: 'agent', agentId: ctx.agentId });
 }
 
 export interface CreateCommentInput {
@@ -194,34 +196,25 @@ async function loadWorkspaceAgents(
   workspaceId: string,
   tx: DBOrTx = db,
 ): Promise<AgentForParser[]> {
-  const rows = await tx.query.documents.findMany({
-    where: and(eq(documents.workspaceId, workspaceId), eq(documents.type, 'agent')),
-  });
-  return rows.map((r) => {
-    const fm = r.frontmatter as Record<string, unknown>;
-    const projs = fm.projects;
-    // Default missing/malformed `projects` to ['*']. Phase 2.5 agent schema
-    // requires `projects` as a string array, so this branch only triggers
-    // for pre-2.5 rows or hand-edited frontmatter. Treating them as wildcard
-    // matches the legacy Phase 2 behavior (agents were workspace-wide before
-    // 2.5 introduced the allow-list). If a row reaches here with a malformed
-    // `projects` field it is almost certainly a pre-2.5 agent, not a security
-    // threat, so full access is the correct backward-compatible default.
-    const allowed = Array.isArray(projs)
-      ? (projs as unknown[]).filter((x) => typeof x === 'string') as string[]
-      : ['*'];
-    // G11: wildcard must be honored regardless of position. The previous
-    // `allowed[0] === '*' ? ['*'] : allowed` only collapsed when '*' was at
-    // index 0, so a hand-edited frontmatter like `['proj-1', '*']` (which
-    // bypasses the API-layer Zod refine) silently treated the wildcard as a
-    // literal project id. Other consumers (agent-guards.ts, events.ts) use
-    // `.includes('*')` — bring this one in line.
-    return {
-      id: r.id,
-      slug: r.slug,
-      allowedProjectIds: allowed.includes('*') ? ['*'] : allowed,
-    };
-  });
+  // S4: narrow projection — pull only the columns the parser needs (id, slug,
+  // frontmatter for resolveAgentProjects). The previous findMany loaded the
+  // full row including the agent body (potentially many KB of markdown
+  // instructions per agent). Mention parsing runs on every comment write;
+  // dragging multi-KB bodies through the parser path was wasted I/O + JSON
+  // (de)serialization at scale.
+  const rows = await tx
+    .select({ id: documents.id, slug: documents.slug, frontmatter: documents.frontmatter })
+    .from(documents)
+    .where(and(eq(documents.workspaceId, workspaceId), eq(documents.type, 'agent')));
+  // S1: resolveAgentProjects centralizes the fail-closed wildcard collapse
+  // and the missing/malformed → ['*'] back-compat default. Three call sites
+  // (this loader, SSE replay, bearer middleware) previously each parsed
+  // `agent.frontmatter.projects` by hand and drifted (G11).
+  return rows.map((r) => ({
+    id: r.id,
+    slug: r.slug,
+    allowedProjectIds: resolveAgentProjects(r),
+  }));
 }
 
 /** Load workspace members (id + email) for parseMentions's member resolution. */
@@ -310,12 +303,9 @@ export async function createComment(input: CreateCommentInput): Promise<Document
   const createdAt = new Date();
   const title = `Comment by ${author} at ${createdAt.toISOString()}`;
 
-  // Captured inside the tx for the return value below. The type is the
-  // documents-table insert shape; we narrow at the use-site rather than
-  // declaring it explicitly to avoid drift.
-  let row: typeof documents.$inferInsert | null = null;
-
-  await txWithEvents(db, async (tx) => {
+  // S14: txWithEvents is generic over T; return the row directly instead
+  // of the `let row | null` workaround.
+  const row = await txWithEvents(db, async (tx) => {
     // H9: load workspace agents INSIDE the tx and re-resolve mentions
     // against the tx-scoped snapshot. SQLite's writer lock + the rest of
     // the comment-insert in the same tx means an agent deleted between
@@ -346,7 +336,7 @@ export async function createComment(input: CreateCommentInput): Promise<Document
     if (targetAgent !== undefined) frontmatterRaw.target_agent = targetAgent;
     const frontmatter = commentFrontmatterSchema.parse(frontmatterRaw);
 
-    row = {
+    const inserted = {
       id,
       workspaceId: ws.id,
       projectId: p.id,
@@ -363,7 +353,7 @@ export async function createComment(input: CreateCommentInput): Promise<Document
       createdAt,
       updatedAt: createdAt,
     };
-    await tx.insert(documents).values(row);
+    await tx.insert(documents).values(inserted);
 
     // comment.created — always.
     await emitEvent(tx, {
@@ -382,8 +372,14 @@ export async function createComment(input: CreateCommentInput): Promise<Document
     });
 
     // comment.mentioned — once per resolved-agent mention.
+    //
+    // S2: include `agent_id` alongside `agent_slug`. Subscribers (dispatcher,
+    // trigger fan-out) need an immutable handle: if the agent gets renamed
+    // between event emit and consumption, slug-only payloads orphan the
+    // dispatch. Keep the slug for human-readable trigger placeholders
+    // (`$event.agent_slug`); the id is the canonical key.
     for (const m of parsed.mentions) {
-      if (m.resolved && m.resolvedType === 'agent') {
+      if (m.resolved && m.resolvedType === 'agent' && m.resolvedId) {
         const agentSlug = m.target.startsWith('agent:')
           ? m.target.slice('agent:'.length)
           : m.target;
@@ -396,17 +392,16 @@ export async function createComment(input: CreateCommentInput): Promise<Document
           payload: {
             comment_id: id,
             parent_id: parent.id,
+            agent_id: m.resolvedId,
             agent_slug: agentSlug,
           },
         });
       }
     }
+
+    return inserted;
   });
 
-  if (!row) {
-    // Unreachable — txWithEvents resolves successfully or throws.
-    throw new HTTPError('INTERNAL', 'comment row not captured', 500);
-  }
   return row as unknown as Document;
 }
 
@@ -442,7 +437,7 @@ export async function updateComment(input: UpdateCommentInput): Promise<Document
   let nextMentions = existingMentions;
   let nextVisibility = (existingFm.visibility as CommentVisibility) ?? 'normal';
   let editedAt: string | undefined;
-  let newlyMentionedAgents: { slug: string }[] = [];
+  let newlyMentionedAgents: { id: string; slug: string }[] = [];
 
   // Members are pre-fetched outside the tx — not a TOCTOU concern.
   const workspaceMembersOuter =
@@ -456,9 +451,8 @@ export async function updateComment(input: UpdateCommentInput): Promise<Document
     nextVisibility = input.visibility;
   }
 
-  let updatedRow: typeof documents.$inferInsert | null = null;
-
-  await txWithEvents(db, async (tx) => {
+// S14: see createComment for the txWithEvents-return-value rationale.
+  const updatedRow = await txWithEvents(db, async (tx) => {
     // H9: mention parsing must happen inside the tx so an agent deleted
     // between resolution and insert can't leave a phantom-resolved
     // mention in frontmatter or emit comment.mentioned for a dead agent.
@@ -486,8 +480,14 @@ export async function updateComment(input: UpdateCommentInput): Promise<Document
           .map((m) => m.target),
       );
       newlyMentionedAgents = parsed.mentions
-        .filter((m) => m.resolved && m.resolvedType === 'agent' && !oldAgentTargets.has(m.target))
+        .filter((m): m is ResolvedMention & { resolvedId: string } =>
+          m.resolved &&
+          m.resolvedType === 'agent' &&
+          !!m.resolvedId &&
+          !oldAgentTargets.has(m.target),
+        )
         .map((m) => ({
+          id: m.resolvedId,
           slug: m.target.startsWith('agent:') ? m.target.slice('agent:'.length) : m.target,
         }));
     }
@@ -507,17 +507,20 @@ export async function updateComment(input: UpdateCommentInput): Promise<Document
     };
     const mergedFrontmatter = commentFrontmatterSchema.parse(mergedRaw);
 
-    updatedRow = {
+    const next = {
       ...existing,
       body: nextBody,
       frontmatter: mergedFrontmatter as unknown as Record<string, unknown>,
       updatedBy: authorContext.type === 'user' ? authorContext.userId : existing.updatedBy,
       updatedAt: new Date(),
     };
-    await tx.update(documents).set(updatedRow).where(eq(documents.id, existing.id));
+    await tx.update(documents).set(next).where(eq(documents.id, existing.id));
 
     // No comment.updated event per spec. Only fresh comment.mentioned for newly
     // resolved agents.
+    // S2: same payload shape as createComment — agent_id is the canonical
+    // immutable handle for downstream dispatchers; agent_slug stays for
+    // human-readable trigger placeholders.
     for (const a of newlyMentionedAgents) {
       await emitEvent(tx, {
         workspaceId: ws.id,
@@ -528,15 +531,15 @@ export async function updateComment(input: UpdateCommentInput): Promise<Document
         payload: {
           comment_id: existing.id,
           parent_id: existing.parentId,
+          agent_id: a.id,
           agent_slug: a.slug,
         },
       });
     }
+
+    return next;
   });
 
-  if (!updatedRow) {
-    throw new HTTPError('INTERNAL', 'updated row not captured', 500);
-  }
   return updatedRow as unknown as Document;
 }
 
@@ -618,6 +621,27 @@ export async function getComment(
     ),
   });
   return row ?? null;
+}
+
+/**
+ * S13: project-scoped variant. Replaces the F4 inline pattern
+ *
+ *   const row = await getComment(ws.id, slug);
+ *   if (!row || row.projectId !== project.id) throw 404;
+ *
+ * which had drifted across three route handlers and one MCP handler.
+ * Returns null on miss OR cross-project mismatch — callers throw 404 once.
+ * The cross-project case MUST become a 404 (not a 403): leaking existence
+ * lets a hostile narrowed agent enumerate other projects' comment slugs.
+ */
+export async function getCommentScoped(
+  workspaceId: string,
+  projectId: string,
+  slug: string,
+): Promise<Document | null> {
+  const row = await getComment(workspaceId, slug);
+  if (!row || row.projectId !== projectId) return null;
+  return row;
 }
 
 // -----------------------------------------------------------------------------

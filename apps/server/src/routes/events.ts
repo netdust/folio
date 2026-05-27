@@ -4,7 +4,8 @@ import { and, eq, gt } from 'drizzle-orm';
 import { db } from '../db/client.ts';
 import { documents, events } from '../db/schema.ts';
 import type { AuthContext } from '../middleware/auth.ts';
-import { intersect, requireUserOrToken } from '../middleware/bearer.ts';
+import { requireUserOrToken } from '../middleware/bearer.ts';
+import { intersectAgentProjects, resolveAgentProjects } from '../lib/agent-projects.ts';
 import { getWorkspace, type ScopeContext } from '../middleware/scope.ts';
 import { eventBus, type BusEvent } from '../lib/event-bus.ts';
 import type { EventKind } from '../lib/events.ts';
@@ -27,8 +28,17 @@ eventsRoute.get('/', async (c) => {
   const projectParam = c.req.query('project');
   const projectId = projectParam && projectParam.trim() ? projectParam.trim() : undefined;
   const kindsParam = c.req.query('kinds');
+  // S20: cap to 64 to bound the per-event filter cost. KNOWN_EVENT_KINDS
+  // currently lists ~20 values; 64 is a generous ceiling that still rejects
+  // a hostile caller sending `?kinds=` with thousands of comma-separated
+  // entries to amplify per-event predicate work.
+  const KINDS_MAX = 64;
   const kinds = kindsParam
-    ? (kindsParam.split(',').map((k) => k.trim()).filter(Boolean) as EventKind[])
+    ? (kindsParam
+        .split(',')
+        .map((k) => k.trim())
+        .filter(Boolean)
+        .slice(0, KINDS_MAX) as EventKind[])
     : undefined;
   const parentParam = c.req.query('parent');
   const parentId = parentParam && parentParam.trim() ? parentParam.trim() : undefined;
@@ -53,8 +63,8 @@ eventsRoute.get('/', async (c) => {
       throw new HTTPError('FORBIDDEN_RESOURCE', 'agent for this token no longer exists', 403);
     }
     agentEventCtx = { agentId: agent.id, agentSlug: agent.slug };
-    const agentProjects = ((agent.frontmatter as { projects?: string[] }).projects) ?? ['*'];
-    const effective = intersect(agentProjects, token.projectIds ?? null);
+    const agentProjects = resolveAgentProjects(agent);
+    const effective = intersectAgentProjects(agentProjects, token.projectIds ?? null);
     if (!effective.includes('*')) {
       agentAllowList = effective;
       // Explicit ?project= must be in the allow-list — fail closed.
@@ -164,7 +174,22 @@ eventsRoute.get('/', async (c) => {
 
     // Subscribe to live events. The bus filter mirrors the replay filter so
     // both paths honor `kinds` and `project` query params identically.
+    //
+    // BUG-006 (shake-out): the consumer awaits a `waiter` promise that the
+    // bus handler resolves on push and the abort handler resolves on abort.
+    // The previous 100ms-poll wasted ~10 wakeups/sec per open connection on
+    // an idle workspace; this gives event-driven latency with zero idle work.
     const queue: BusEvent[] = [];
+    let wake!: () => void;
+    let waiter = new Promise<void>((r) => {
+      wake = r;
+    });
+    const renewWaiter = () => {
+      waiter = new Promise<void>((r) => {
+        wake = r;
+      });
+    };
+
     const unsub = eventBus.subscribe(
       ws.id,
       {
@@ -194,12 +219,14 @@ eventsRoute.get('/', async (c) => {
           return;
         }
         queue.push(e);
+        wake();
       },
     );
 
     let aborted = false;
     stream.onAbort(() => {
       aborted = true;
+      wake();
     });
 
     // Heartbeat every 30s. Uses the `ping` event name so clients can ignore
@@ -210,16 +237,18 @@ eventsRoute.get('/', async (c) => {
 
     try {
       while (!aborted && !stream.aborted) {
-        if (queue.length > 0) {
+        while (queue.length > 0) {
           const e = queue.shift()!;
           await stream.writeSSE({
             id: e.id,
             event: e.kind,
             data: JSON.stringify(e),
           });
-        } else {
-          await new Promise((r) => setTimeout(r, 100));
+          if (stream.aborted) break;
         }
+        if (aborted || stream.aborted) break;
+        await waiter;
+        renewWaiter();
       }
     } finally {
       clearInterval(heartbeat);

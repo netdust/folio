@@ -11,9 +11,12 @@ import { documentCreateSchema, documentPatchSchema } from '@folio/shared';
 import { db } from '../db/client.ts';
 import { documents, events } from '../db/schema.ts';
 import { emitEvent, txWithEvents } from '../lib/events.ts';
+// S8: shared with the project-scoped activity endpoint via lib/activity-limits.
+import { ACTIVITY_NOTE_MAX } from '../lib/activity-limits.ts';
 import {
   assertAgentAllowListWidening,
   assertAgentScope,
+  assertAgentToolsWidening,
   assertNotSelfDelete,
 } from '../lib/agent-guards.ts';
 import { type AuthContext, getUser } from '../middleware/auth.ts';
@@ -29,10 +32,6 @@ import {
   updateDocument,
   type DocumentType,
 } from '../services/documents.ts';
-
-// Mirrors ACTIVITY_NOTE_MAX in routes/documents.ts. If you change one, change
-// both. Kept local to avoid a cross-route import coupling.
-const ACTIVITY_NOTE_MAX = 2000;
 
 export const workspaceDocumentsRoute = new Hono<AuthContext & ScopeContext>();
 
@@ -63,6 +62,11 @@ workspaceDocumentsRoute.post('/', requireScope('documents:write'), async (c) => 
   assertAgentScope(v.type, token, 'write');
   if (v.type === 'agent') {
     await assertAgentAllowListWidening(
+      token,
+      v.frontmatter as Record<string, unknown> | undefined,
+      'create',
+    );
+    await assertAgentToolsWidening(
       token,
       v.frontmatter as Record<string, unknown> | undefined,
       'create',
@@ -131,6 +135,11 @@ workspaceDocumentsRoute.patch('/:slug', requireScope('documents:write'), async (
 
   if (existing.type === 'agent') {
     await assertAgentAllowListWidening(
+      token,
+      parsed.data.frontmatter as Record<string, unknown> | undefined,
+      'patch',
+    );
+    await assertAgentToolsWidening(
       token,
       parsed.data.frontmatter as Record<string, unknown> | undefined,
       'patch',
@@ -248,9 +257,23 @@ workspaceDocumentsRoute.get('/:slug/events', async (c) => {
   // event history via this REST endpoint. The SSE route applies the same
   // visibility predicate; mirror it here. Non-agent tokens (session,
   // human PAT) bypass.
+  //
+  // S3: extended to trigger documents. Triggers are workspace-scoped and
+  // their event history (document.created / document.updated /
+  // document.deleted on the trigger row, plus any `agent.allow_list.*`
+  // events the cascade emits) is not addressed to a specific agent.
+  // Agents narrowed to a project allow-list have no legitimate reason to
+  // enumerate trigger histories — the dispatcher consumes events
+  // directly, not via this endpoint. Hide the whole trigger record from
+  // narrowed agents to avoid leaking workspace-wide operations metadata.
   const token = c.get('token') ?? null;
-  if (token?.agentId && doc.type === 'agent' && doc.id !== token.agentId) {
-    throw new HTTPError('DOCUMENT_NOT_FOUND', `document "${slug}" not found`, 404);
+  if (token?.agentId) {
+    if (doc.type === 'agent' && doc.id !== token.agentId) {
+      throw new HTTPError('DOCUMENT_NOT_FOUND', `document "${slug}" not found`, 404);
+    }
+    if (doc.type === 'trigger') {
+      throw new HTTPError('DOCUMENT_NOT_FOUND', `document "${slug}" not found`, 404);
+    }
   }
 
   const rows = await db

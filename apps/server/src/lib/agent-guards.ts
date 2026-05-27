@@ -125,6 +125,67 @@ export async function assertAgentAllowListWidening(
 }
 
 /**
+ * For agent-bound tokens, ensure the proposed `frontmatter.tools` is a subset
+ * of the calling agent's own tools. Closes a scope-escalation hole: without
+ * this check, an agent-bound token with `agents:write` + a narrow toolset
+ * could mint a child with broader tools, and the child token (whose scopes
+ * are derived from tools via `toolsToScopes`) would inherit powers the parent
+ * never had. (Found by Phase 2.6 shake-out.)
+ *
+ * Symmetry with `assertAgentAllowListWidening`:
+ *   - Sessions + human PATs bypass (no agentId).
+ *   - On PATCH, missing `tools` means "no change" — no-op.
+ *   - On CREATE, missing `tools` is a Zod schema error upstream — no-op here.
+ *   - Calling-agent malformed/missing `tools` field → fail closed (treat as []).
+ */
+export async function assertAgentToolsWidening(
+  token: ApiToken | null,
+  nextFrontmatter: Record<string, unknown> | undefined,
+  op: 'create' | 'patch',
+): Promise<void> {
+  if (!token || !token.agentId) return;
+
+  const hasToolsKey =
+    nextFrontmatter !== undefined && 'tools' in nextFrontmatter;
+  if (!hasToolsKey) return; // create: Zod rejects; patch: no-op
+
+  const nextTools = (nextFrontmatter as Record<string, unknown>)['tools'];
+  if (!Array.isArray(nextTools)) return; // let Zod surface the type error
+
+  const callingAgent = await db.query.documents.findFirst({
+    where: and(eq(documents.id, token.agentId), eq(documents.type, 'agent')),
+  });
+  const callingToolsRaw = (callingAgent?.frontmatter as { tools?: unknown } | undefined)
+    ?.tools;
+
+  if (callingToolsRaw !== undefined && !Array.isArray(callingToolsRaw)) {
+    throw new HTTPError(
+      'CALLING_AGENT_INVALID_TOOLS',
+      "calling agent's frontmatter.tools is malformed (not an array); fix the agent row before retrying",
+      500,
+    );
+  }
+  const callingTools: string[] = Array.isArray(callingToolsRaw)
+    ? (callingToolsRaw.filter((t) => typeof t === 'string') as string[])
+    : [];
+
+  // Empty caller toolset → child can only be empty too. Subset of [] is [].
+  for (const tool of nextTools as unknown[]) {
+    if (typeof tool !== 'string') continue;
+    if (!callingTools.includes(tool)) {
+      throw new HTTPError(
+        'TOOLS_WIDENING_FORBIDDEN',
+        "cannot grant target agent tools beyond calling agent's own",
+        403,
+      );
+    }
+  }
+  // `op` is unused for tools — kept for signature symmetry with the projects
+  // guard so all four call sites use the same shape.
+  void op;
+}
+
+/**
  * Reject self-delete from an agent-bound token. No-op for human PATs and
  * session auth.
  */

@@ -203,6 +203,32 @@ test('updateDocument allows PATCH on enabled for builtin trigger', async () => {
   expect((updated.frontmatter as Record<string, unknown>).builtin).toBe(true);
 });
 
+// Regression: the UI's slideover diffs frontmatter as a whole object and sends
+// the entire frontmatter shape on every save. Toggling Enabled on a builtin
+// must succeed even when the PATCH body echoes back all other (unchanged) keys.
+test('updateDocument allows full-frontmatter PATCH on builtin trigger if only enabled differs in value', async () => {
+  const { db, seed } = await makeTestApp();
+  const trig = await seedTrigger(db, seed.workspace.id, { builtin: true });
+  const fm = trig.frontmatter as Record<string, unknown>;
+  const updated = await updateDocument({
+    workspace: seed.workspace,
+    project: null,
+    fallbackTable: null,
+    actor: seed.user,
+    existing: trig,
+    patch: {
+      frontmatter: {
+        on_event: fm.on_event,
+        schedule: fm.schedule,
+        agent: fm.agent,
+        builtin: fm.builtin,
+        enabled: false,
+      },
+    },
+  });
+  expect((updated.frontmatter as Record<string, unknown>).enabled).toBe(false);
+});
+
 test('updateDocument blocks PATCH on builtin trigger title change', async () => {
   const { db, seed } = await makeTestApp();
   const trig = await seedTrigger(db, seed.workspace.id, { builtin: true });

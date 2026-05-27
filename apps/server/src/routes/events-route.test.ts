@@ -493,6 +493,48 @@ test('H7: GET /w/:wslug/documents/:other-agent/events 404s for narrowed agent', 
   expect(body.error.code).toBe('DOCUMENT_NOT_FOUND');
 });
 
+test('S3: GET /w/:wslug/documents/<trigger-slug>/events 404s for narrowed agent', async () => {
+  const { app, seed } = await makeTestApp();
+
+  const { token } = await setupAgentToken({
+    workspaceId: seed.workspace.id,
+    userId: seed.user.id,
+    agentSlug: 'agent-s3',
+    projectAllowList: [seed.project.id],
+  });
+
+  // makeTestApp seeds 4 builtins via seedBuiltinTriggers in workspaces.ts,
+  // but the test harness bypasses that route. Insert a trigger doc manually
+  // so the route has a row to find by slug.
+  const triggerSlug = 'builtin-on-mention';
+  await db.insert(documents).values({
+    id: 'tr-' + nanoid(),
+    workspaceId: seed.workspace.id,
+    projectId: null,
+    type: 'trigger',
+    slug: triggerSlug,
+    title: 'Run agent on @mention',
+    body: '',
+    frontmatter: {
+      on_event: 'comment.mentioned',
+      schedule: null,
+      agent: '$event.agent_slug',
+      enabled: false,
+      builtin: true,
+      payload: null,
+    },
+  });
+
+  // Narrowed agent attempts to read a trigger's event history.
+  const res = await app.request(`/api/v1/w/acme/documents/${triggerSlug}/events`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  expect(res.status).toBe(404);
+  const body = (await res.json()) as { error: { code: string } };
+  // Same NOT_FOUND code an unknown slug would yield — prevents existence-oracle.
+  expect(body.error.code).toBe('DOCUMENT_NOT_FOUND');
+});
+
 test('H7: agent CAN read events for its OWN agent doc', async () => {
   const { app, seed } = await makeTestApp();
 

@@ -361,6 +361,9 @@ export const events = sqliteTable(
     workspaceIdx: index('events_workspace_idx').on(t.workspaceId, t.createdAt),
     documentIdx: index('events_document_idx').on(t.documentId),
     seqIdx: uniqueIndex('events_seq_idx').on(t.seq),
+    // B3: composite for SSE replay paginated cursor — covers both the WHERE
+    // (workspace_id + seq > ?) and the ORDER BY (seq ASC) in one index seek.
+    workspaceSeqIdx: index('events_workspace_seq_idx').on(t.workspaceId, t.seq),
   }),
 );
 

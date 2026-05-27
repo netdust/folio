@@ -684,6 +684,155 @@ test('F1: PATCH blocks an agent-bound caller from widening a target agent past i
   expect((await res.json()).error.code).toBe('ALLOW_LIST_WIDENING_FORBIDDEN');
 });
 
+// BUG-005 (shake-out): tools-widening / scope escalation
+//
+// An agent-bound token with a narrow toolset must not be able to create or
+// patch a child agent with tools the caller doesn't have — otherwise the child
+// token (whose scopes are derived from tools via toolsToScopes) inherits powers
+// the caller never had. This is a one-call instance-wide privilege escalation
+// before the fix.
+
+test('BUG-005: POST blocks an agent-bound caller from minting a child with wider tools', async () => {
+  const { app, seed } = await makeTestApp();
+  // Caller has only read-only tools.
+  const parentRes = await postWorkspaceDoc(app, seed.sessionCookie, {
+    type: 'agent', title: 'Read-only Parent',
+    frontmatter: {
+      system_prompt: 'x', model: 'm', provider: 'anthropic',
+      tools: ['create_agent', 'list_documents'],
+      projects: ['*'],
+    },
+  });
+  const parent = (await parentRes.json()).data as { id: string };
+  const { token, hash } = newApiToken();
+  await realDb.insert(apiTokens).values({
+    id: nanoid(),
+    workspaceId: seed.workspace.id,
+    name: 'narrow-bound',
+    tokenHash: hash,
+    scopes: ['agents:write', 'documents:write', 'documents:read'],
+    createdBy: seed.user.id,
+    agentId: parent.id,
+  });
+
+  // Child wants delete_document — caller doesn't have it.
+  const res = await app.request(WS_PATH, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      type: 'agent',
+      title: 'Escalating Child',
+      frontmatter: {
+        system_prompt: 'x', model: 'm', provider: 'anthropic',
+        tools: ['delete_document', 'create_agent'],
+        projects: ['*'],
+      },
+    }),
+  });
+  expect(res.status).toBe(403);
+  expect((await res.json()).error.code).toBe('TOOLS_WIDENING_FORBIDDEN');
+});
+
+test('BUG-005: POST allows a child whose tools are a subset of the calling agent', async () => {
+  const { app, seed } = await makeTestApp();
+  const parentRes = await postWorkspaceDoc(app, seed.sessionCookie, {
+    type: 'agent', title: 'Parent',
+    frontmatter: {
+      system_prompt: 'x', model: 'm', provider: 'anthropic',
+      tools: ['create_agent', 'list_documents', 'get_document'],
+      projects: ['*'],
+    },
+  });
+  const parent = (await parentRes.json()).data as { id: string };
+  const { token, hash } = newApiToken();
+  await realDb.insert(apiTokens).values({
+    id: nanoid(),
+    workspaceId: seed.workspace.id,
+    name: 'parent-bound',
+    tokenHash: hash,
+    scopes: ['agents:write', 'documents:write', 'documents:read'],
+    createdBy: seed.user.id,
+    agentId: parent.id,
+  });
+
+  const res = await app.request(WS_PATH, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      type: 'agent',
+      title: 'Subset Child',
+      frontmatter: {
+        system_prompt: 'x', model: 'm', provider: 'anthropic',
+        tools: ['list_documents'],
+        projects: ['*'],
+      },
+    }),
+  });
+  expect(res.status).toBe(201);
+});
+
+test('BUG-005: PATCH blocks an agent-bound caller from widening a target agent past its own tools', async () => {
+  const { app, seed } = await makeTestApp();
+  const parentRes = await postWorkspaceDoc(app, seed.sessionCookie, {
+    type: 'agent', title: 'Parent',
+    frontmatter: {
+      system_prompt: 'x', model: 'm', provider: 'anthropic',
+      tools: ['update_agent', 'list_documents'],
+      projects: ['*'],
+    },
+  });
+  const parent = (await parentRes.json()).data as { id: string };
+  const targetRes = await postWorkspaceDoc(app, seed.sessionCookie, {
+    type: 'agent', title: 'Target',
+    frontmatter: {
+      system_prompt: 'x', model: 'm', provider: 'anthropic',
+      tools: ['list_documents'],
+      projects: ['*'],
+    },
+  });
+  const target = (await targetRes.json()).data as { slug: string };
+  const { token, hash } = newApiToken();
+  await realDb.insert(apiTokens).values({
+    id: nanoid(),
+    workspaceId: seed.workspace.id,
+    name: 'parent-bound',
+    tokenHash: hash,
+    scopes: ['agents:write', 'documents:write', 'documents:read'],
+    createdBy: seed.user.id,
+    agentId: parent.id,
+  });
+
+  const res = await app.request(`${WS_PATH}/${target.slug}`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ frontmatter: { tools: ['delete_document'] } }),
+  });
+  expect(res.status).toBe(403);
+  expect((await res.json()).error.code).toBe('TOOLS_WIDENING_FORBIDDEN');
+});
+
+test('BUG-005: human PATs bypass the tools-widening guard (no agentId)', async () => {
+  const { app, seed } = await makeTestApp();
+  // Human PAT — not agent-bound. Should be able to mint any tools in v1.
+  const pat = await mintPAT(seed.workspace.id, seed.user.id, [
+    'agents:write', 'documents:write', 'documents:read',
+  ]);
+  const res = await app.request(WS_PATH, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${pat}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      type: 'agent',
+      title: 'Human-minted',
+      frontmatter: {
+        system_prompt: 'x', model: 'm', provider: 'anthropic',
+        tools: ['delete_document', 'create_agent'],
+        projects: ['*'],
+      },
+    }),
+  });
+  expect(res.status).toBe(201);
+});
+
 test('F1: DELETE blocks an agent-bound caller from deleting itself', async () => {
   const { app, seed } = await makeTestApp();
   const selfRes = await postWorkspaceDoc(app, seed.sessionCookie, {

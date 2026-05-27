@@ -20,6 +20,7 @@
 import { nanoid } from 'nanoid';
 import type { DB } from '../db/client.ts';
 import { documents } from '../db/schema.ts';
+import { emitEvent } from './events.ts';
 
 type DBOrTx = DB | Parameters<Parameters<DB['transaction']>[0]>[0];
 
@@ -94,18 +95,22 @@ export const BUILTIN_TRIGGER_DEFS: ReadonlyArray<BuiltinTriggerDef> = [
  * only calling this when not already seeded. D4's backfill script guards
  * against re-seeding by checking existing builtin slugs first.
  *
- * Emits NO events on its own — when called from workspace create, the
- * `workspace.created` event covers the workspace's birth state including its
- * seeded triggers. D4's backfill emits its own `document.created` events to
- * mark the restoration.
+ * B2: emits one `document.created` event per inserted row. The wedge says
+ * "every write emits an event" — agents subscribing to `document.created`
+ * with type=trigger SHOULD see the four builtins arrive at workspace birth.
+ * The previous "workspace.created covers it" rationale was wrong: subscribers
+ * filter by event kind, and the workspace.created event doesn't carry the
+ * trigger metadata an agent needs to react.
  */
 export async function seedBuiltinTriggers(
   tx: DBOrTx,
   workspaceId: string,
+  actor: string,
 ): Promise<void> {
   for (const def of BUILTIN_TRIGGER_DEFS) {
+    const id = nanoid();
     await tx.insert(documents).values({
-      id: nanoid(),
+      id,
       workspaceId,
       projectId: null,
       type: 'trigger',
@@ -113,6 +118,14 @@ export async function seedBuiltinTriggers(
       title: def.title,
       body: '',
       frontmatter: def.frontmatter,
+    });
+    await emitEvent(tx, {
+      workspaceId,
+      projectId: null,
+      documentId: id,
+      kind: 'document.created',
+      actor,
+      payload: { slug: def.slug, type: 'trigger', builtin: true },
     });
   }
 }

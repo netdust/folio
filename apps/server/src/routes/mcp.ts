@@ -33,6 +33,7 @@ import type {
 import { HTTPError } from '../lib/http.ts';
 import {
   assertAgentAllowListWidening,
+  assertAgentToolsWidening,
 } from '../lib/agent-guards.ts';
 import { serializeMarkdown } from '../lib/frontmatter.ts';
 import { stripReservedFrontmatter } from '../services/documents.ts';
@@ -43,9 +44,9 @@ import {
 import {
   attachToken,
   getToken,
-  intersect,
   requireToken,
 } from '../middleware/bearer.ts';
+import { intersectAgentProjects, resolveAgentProjects } from '../lib/agent-projects.ts';
 import {
   createDocument,
   deleteDocument,
@@ -62,7 +63,7 @@ import {
   type AuthorContext,
   createComment,
   deleteComment,
-  getComment,
+  getCommentScoped,
   listComments,
   updateComment,
 } from '../services/comments.ts';
@@ -162,6 +163,9 @@ function rethrowAgentGuardAsMcp(err: unknown): never {
     if (err.code === 'ALLOW_LIST_WIDENING_FORBIDDEN') {
       throw mcpInvalidParams(err.message, { reason: 'allow_list_widening_forbidden' });
     }
+    if (err.code === 'TOOLS_WIDENING_FORBIDDEN') {
+      throw mcpInvalidParams(err.message, { reason: 'tools_widening_forbidden' });
+    }
     if (err.code === 'CANNOT_DELETE_SELF') {
       throw mcpInvalidParams(err.message, { reason: 'cannot_delete_self' });
     }
@@ -192,9 +196,8 @@ async function resolveProjectInWorkspace(
         reason: 'agent_missing',
       });
     }
-    const agentProjects =
-      ((agent.frontmatter as { projects?: string[] }).projects) ?? ['*'];
-    const effective = intersect(agentProjects, token.projectIds ?? null);
+    const agentProjects = resolveAgentProjects(agent);
+    const effective = intersectAgentProjects(agentProjects, token.projectIds ?? null);
     if (!effective.includes('*') && !effective.includes(p.id)) {
       // Structured server log — needed for operators debugging "my agent is
       // silently ignoring this project". The MCP response keeps minimal data
@@ -326,9 +329,8 @@ const TOOLS: ToolDef[] = [
       const agent = await db.query.documents.findFirst({
         where: and(eq(documents.id, token.agentId), eq(documents.type, 'agent')),
       });
-      const agentProjects =
-        ((agent?.frontmatter as { projects?: string[] })?.projects) ?? ['*'];
-      const effective = intersect(agentProjects, token.projectIds ?? null);
+      const agentProjects = agent ? resolveAgentProjects(agent) : ['*'];
+      const effective = intersectAgentProjects(agentProjects, token.projectIds ?? null);
       const filtered = effective.includes('*')
         ? all
         : all.filter((p) => effective.includes(p.id));
@@ -894,14 +896,9 @@ const TOOLS: ToolDef[] = [
       const ws = await resolveWorkspaceForToken(token, args);
       const project = await resolveProjectInWorkspace(ws, token, args);
       const slug = requireString(args, 'slug');
-      const existing = await getComment(ws.id, slug);
+      // S13: getCommentScoped folds the project-membership check.
+      const existing = await getCommentScoped(ws.id, project.id, slug);
       if (!existing) throw new Error('comment not found');
-      // Defense-in-depth: comments live under a project; verify the slug the
-      // caller passed belongs to THIS project. (resolveProjectInWorkspace already
-      // applied the agent allow-list check.)
-      if (existing.projectId !== project.id) {
-        throw new Error('comment not found');
-      }
 
       const authorContext = await resolveAuthorContextForToken(token);
       const visibilityRaw = optionalString(args, 'visibility');
@@ -950,11 +947,9 @@ const TOOLS: ToolDef[] = [
       const ws = await resolveWorkspaceForToken(token, args);
       const project = await resolveProjectInWorkspace(ws, token, args);
       const slug = requireString(args, 'slug');
-      const existing = await getComment(ws.id, slug);
+      // S13: getCommentScoped folds the project-membership check.
+      const existing = await getCommentScoped(ws.id, project.id, slug);
       if (!existing) throw new Error('comment not found');
-      if (existing.projectId !== project.id) {
-        throw new Error('comment not found');
-      }
 
       const authorContext = await resolveAuthorContextForToken(token);
 
@@ -1028,6 +1023,9 @@ const TOOLS: ToolDef[] = [
       // own. update_agent has had this guard since Phase 2.6 D8; create_agent
       // was missing it (Phase 2.6 review finding F2).
       await assertAgentAllowListWidening(token, frontmatter, 'create').catch(rethrowAgentGuardAsMcp);
+      // BUG-005: same shape for tools — otherwise an agent-bound token can
+      // mint a child with broader tools and inherit scopes via toolsToScopes.
+      await assertAgentToolsWidening(token, frontmatter, 'create').catch(rethrowAgentGuardAsMcp);
 
       const { document, agentTokenPlaintext } = await createDocument({
         workspace: ws,
@@ -1087,6 +1085,8 @@ const TOOLS: ToolDef[] = [
         // Allow-list widening guard — shared with create_agent and the HTTP
         // workspace-documents routes via lib/agent-guards.ts.
         await assertAgentAllowListWidening(token, patch.frontmatter, 'patch').catch(rethrowAgentGuardAsMcp);
+        // BUG-005: tools-widening guard.
+        await assertAgentToolsWidening(token, patch.frontmatter, 'patch').catch(rethrowAgentGuardAsMcp);
       }
 
       const updated = await updateDocument({
@@ -1124,7 +1124,9 @@ const TOOLS: ToolDef[] = [
         });
       }
       // Self-delete guard: only meaningful when the call comes from an
-      // agent-bound token.
+      // agent-bound token. Kept inline (not `assertNotSelfDelete`) because
+      // the HTTP and MCP layers throw different error shapes — HTTPError vs
+      // mcpInvalidParams — and the helper hardcodes HTTPError.
       if (token.agentId && existing.id === token.agentId) {
         throw mcpInvalidParams('agent cannot delete itself via MCP', {
           reason: 'cannot_delete_self',

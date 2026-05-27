@@ -42,7 +42,37 @@ type DBOrTx = DB | Parameters<Parameters<DB['transaction']>[0]>[0];
  * code in events.test.ts does this) keep the legacy behavior: publish
  * inline. That path can't roll back, so it stays safe.
  */
+/**
+ * S16: rollback scrub observability hook. Operators wiring up alerting
+ * (Sentry/PagerDuty/etc.) can register a listener here and get notified
+ * when the bun-sqlite phantom-rollback safety net fails — meaning the
+ * durable event log and the live SSE bus have diverged on a real workspace.
+ *
+ * The hook is best-effort: a thrown listener is swallowed (logging is not
+ * itself the place to crash the process). Tests use this to assert the
+ * scrub failure signaled, instead of relying on console.error capture.
+ */
+export type ScrubFailure = {
+  originalError: string;
+  scrubError: string;
+  affectedIdsBatch: readonly string[];
+};
+type ScrubListener = (failure: ScrubFailure) => void;
+const scrubListeners = new Set<ScrubListener>();
+export function onRollbackScrubFailure(listener: ScrubListener): () => void {
+  scrubListeners.add(listener);
+  return () => scrubListeners.delete(listener);
+}
+
 const pendingByTx = new WeakMap<object, BusEvent[]>();
+
+// S15: per-tx seq counter. The previous `MAX(seq)+1` SELECT per emit was
+// O(N) round-trips for a tx that fires N events (e.g. seedBuiltinTriggers
+// emits 4 in one go). The first emit primes the counter from MAX(seq);
+// subsequent emits in the SAME tx increment in-memory. The
+// events_seq_idx UNIQUE index still guards against any caller that
+// forgets to use the helper.
+const seqCounterByTx = new WeakMap<object, number>();
 
 export async function emitEvent(tx: DBOrTx, args: EmitArgs): Promise<void> {
   const id = nanoid();
@@ -50,13 +80,20 @@ export async function emitEvent(tx: DBOrTx, args: EmitArgs): Promise<void> {
   // H3: allocate the next monotonic seq inside the writer's tx. SQLite's
   // exclusive write lock serializes MAX(seq) + insert, so two concurrent
   // emitEvent calls in separate transactions get distinct, monotonic seq
-  // values. Inside one tx, sequential emits also see each other's max.
-  // The events_seq_idx UNIQUE index protects against any regression that
-  // ever forgets to set seq — the insert would fail loudly.
-  const [{ max: maxSeq } = { max: 0 }] = await tx
-    .select({ max: sql<number>`COALESCE(MAX(${events.seq}), 0)` })
-    .from(events);
-  const seq = (maxSeq ?? 0) + 1;
+  // values. The events_seq_idx UNIQUE index protects against any regression
+  // that ever forgets to set seq — the insert would fail loudly.
+  const txKey = tx as object;
+  let seq: number;
+  const cached = seqCounterByTx.get(txKey);
+  if (cached !== undefined) {
+    seq = cached + 1;
+  } else {
+    const [{ max: maxSeq } = { max: 0 }] = await tx
+      .select({ max: sql<number>`COALESCE(MAX(${events.seq}), 0)` })
+      .from(events);
+    seq = (maxSeq ?? 0) + 1;
+  }
+  seqCounterByTx.set(txKey, seq);
   await tx.insert(events).values({
     id,
     workspaceId: args.workspaceId,
@@ -143,14 +180,21 @@ export async function txWithEvents<T>(
         } catch (scrubErr) {
           // Original error always re-thrown below. Log the scrub failure
           // so the resulting durable-vs-bus divergence is detectable.
+          const failure: ScrubFailure = {
+            originalError: err instanceof Error ? err.message : String(err),
+            scrubError: scrubErr instanceof Error ? scrubErr.message : String(scrubErr),
+            affectedIdsBatch: batch,
+          };
           console.error(
             '[events] rollback-scrub failed; events row(s) may persist without matching bus publish',
-            {
-              originalError: err instanceof Error ? err.message : String(err),
-              scrubError: scrubErr instanceof Error ? scrubErr.message : String(scrubErr),
-              affectedIdsBatch: batch,
-            },
+            failure,
           );
+          // S16: notify operator-registered listeners. Best-effort: a
+          // throwing listener can't be allowed to suppress the original
+          // `throw err` below.
+          for (const listener of scrubListeners) {
+            try { listener(failure); } catch { /* listener swallowed */ }
+          }
         }
       }
     }

@@ -234,7 +234,7 @@ export function CommentRow({
 
   async function handleCopyMd() {
     try {
-      await navigator.clipboard.writeText(commentToMarkdown(comment));
+      await navigator.clipboard.writeText(commentToMarkdown(comment, agents, workspaceMembers));
     } catch {
       setCopyError('Clipboard unavailable');
     }

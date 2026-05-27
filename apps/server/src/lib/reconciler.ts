@@ -24,6 +24,7 @@ import { and, eq, inArray } from 'drizzle-orm';
 import type { DB } from '../db/client.ts';
 import { documents, projects } from '../db/schema.ts';
 import { emitEvent, txWithEvents } from './events.ts';
+import { resolveAgentProjects } from './agent-projects.ts';
 
 export interface ReconcileOptions {
   onEvent?: (event: {
@@ -56,14 +57,14 @@ export async function reconcileAllowLists(
 
   for (const agent of agents) {
     const fm = (agent.frontmatter ?? {}) as Record<string, unknown>;
-    const ids = fm.projects;
-    if (!Array.isArray(ids) || ids.length === 0) continue;
-    // Wildcard short-circuit. ['*'] means "all projects", nothing to scrub.
-    if (ids[0] === '*') continue;
-    // Defensive: malformed frontmatter shouldn't crash the reconciler. Skip
-    // any agent whose projects array isn't all strings.
-    if (!ids.every((x) => typeof x === 'string')) continue;
-    const idStrs = ids as string[];
+    // S1 + S9: use the centralized resolver. It collapses any `'*'` (even
+    // mid-list, post hand-edit) to `['*']` and applies the missing →
+    // wildcard default. The previous `ids[0] === '*'` check was positional:
+    // a hand-edited `['proj-1', '*']` would have been scrubbed as if the
+    // wildcard were a literal project id.
+    const idStrs = resolveAgentProjects(agent);
+    if (idStrs.length === 0) continue;
+    if (idStrs.includes('*')) continue;
 
     // Which of these ids still resolve in this workspace? Workspace-scoping
     // matters: project ids are workspace-unique so a stray id from another

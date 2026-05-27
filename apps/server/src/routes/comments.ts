@@ -37,7 +37,7 @@ import {
   type AuthorContext,
   createComment,
   deleteComment,
-  getComment,
+  getCommentScoped,
   listComments,
   updateComment,
 } from '../services/comments.ts';
@@ -207,11 +207,9 @@ commentsRoute.get('/comments/:slug', requireScope('documents:read'), async (c) =
   const ws = getWorkspace(c);
   const project = getProject(c);
   const slug = c.req.param('slug');
-  const row = await getComment(ws.id, slug);
-  // F4: defense-in-depth — getComment is workspace-scoped only. Verify the
-  // resolved row belongs to THIS project (matches mcp.ts:887). Treat
-  // cross-project as 404 rather than 403 so we don't leak existence.
-  if (!row || row.projectId !== project.id) {
+  // S13: getCommentScoped folds the F4 project-membership check.
+  const row = await getCommentScoped(ws.id, project.id, slug);
+  if (!row) {
     throw new HTTPError('NOT_FOUND', `comment "${slug}" not found`, 404);
   }
   return jsonOk(c, row);
@@ -226,9 +224,9 @@ commentsRoute.patch('/comments/:slug', requireScope('documents:write'), async (c
   const project = getProject(c);
   const slug = c.req.param('slug');
 
-  const existing = await getComment(ws.id, slug);
-  // F4: defense-in-depth — comment must belong to the :pslug from the URL.
-  if (!existing || existing.projectId !== project.id) {
+  // S13: see services/comments.ts::getCommentScoped for the F4 rationale.
+  const existing = await getCommentScoped(ws.id, project.id, slug);
+  if (!existing) {
     throw new HTTPError('NOT_FOUND', `comment "${slug}" not found`, 404);
   }
 
@@ -268,9 +266,9 @@ commentsRoute.delete('/comments/:slug', requireScope('documents:delete'), async 
   const project = getProject(c);
   const slug = c.req.param('slug');
 
-  const existing = await getComment(ws.id, slug);
-  // F4: defense-in-depth — comment must belong to the :pslug from the URL.
-  if (!existing || existing.projectId !== project.id) {
+  // S13: see services/comments.ts::getCommentScoped for the F4 rationale.
+  const existing = await getCommentScoped(ws.id, project.id, slug);
+  if (!existing) {
     throw new HTTPError('NOT_FOUND', `comment "${slug}" not found`, 404);
   }
 

@@ -8,6 +8,7 @@ import { db } from '../db/client.ts';
 import { documents, events, statuses } from '../db/schema.ts';
 import { jsonOk, HTTPError } from '../lib/http.ts';
 import { emitEvent, txWithEvents } from '../lib/events.ts';
+import { ACTIVITY_NOTE_MAX } from '../lib/activity-limits.ts';
 import { parseMarkdown, serializeMarkdown } from '../lib/frontmatter.ts';
 import { type AuthContext, getUser } from '../middleware/auth.ts';
 import { requireScope } from '../middleware/bearer.ts';
@@ -285,10 +286,20 @@ documentsRoute.patch('/:slug', requireScope('documents:write'), async (c) => {
         const prevAssignee = getAssignee(existing.frontmatter);
         const nextAssignee = getAssignee(updated.frontmatter);
         if (nextAssignee && nextAssignee.startsWith('agent:') && prevAssignee !== nextAssignee) {
+          const agentSlug = nextAssignee.slice('agent:'.length);
+          // S2: include agent_id as the immutable handle. See
+          // services/documents.ts for full rationale.
+          const agentRow = await tx.query.documents.findFirst({
+            where: and(
+              eq(documents.workspaceId, ws.id),
+              eq(documents.type, 'agent'),
+              eq(documents.slug, agentSlug),
+            ),
+          });
           await emitEvent(tx, {
             workspaceId: ws.id, projectId: p.id, documentId: existing.id,
             kind: 'agent.task.assigned', actor: user.id,
-            payload: { slug: updated.slug, agent: nextAssignee.slice('agent:'.length) },
+            payload: { slug: updated.slug, agent: agentSlug, agent_id: agentRow?.id ?? null },
           });
         }
       }
@@ -322,10 +333,6 @@ documentsRoute.delete('/:slug', requireScope('documents:delete'), async (c) => {
 });
 
 // POST /:slug/activity { note } — emits activity.logged + bumps lastTouchedAt.
-// Note cap is 2000 chars: enough for a few paragraphs of operational context
-// ("called the client, follow up Tue"), small enough that an agent loop can't
-// balloon events.payload and saturate GET /events.
-const ACTIVITY_NOTE_MAX = 2000;
 
 documentsRoute.post('/:slug/activity', requireScope('documents:write'), async (c) => {
   const user = getUser(c);

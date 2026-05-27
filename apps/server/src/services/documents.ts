@@ -291,13 +291,14 @@ export async function createDocument(
   // which resolves the author context and parses mentions. The generic doc
   // path can't do either — the DB CHECK constraint blocks the actual insert
   // (comments require parent_id; this path hard-codes it to null) but the
-  // resulting SQLITE_CONSTRAINT_CHECK error is opaque. Throw a clean
-  // typed error instead — F5 already does this for update/delete; this
-  // closes the symmetric gap on the create side.
+  // resulting SQLITE_CONSTRAINT_CHECK error is opaque.
   //
-  // Cast to string: the service-layer DocumentType union deliberately
-  // excludes 'comment' to keep the doc-create API surface narrow, but the DB
-  // type enum and any pass-through from MCP/HTTP layers can carry the value.
+  // The cast-to-string is intentional: the service-layer DocumentType union
+  // excludes 'comment', but MCP coerces raw client strings via
+  // `as DocumentType` (routes/mcp.ts createDocument), so a hostile/buggy
+  // MCP caller can still drive this path with type='comment' at runtime.
+  // The mcp.test.ts G15 test exercises that path — restoring this guard
+  // (which appeared dead to TS-only analysis) is a real defense.
   if ((input.type as string) === 'comment') {
     throw new HTTPError(
       'COMMENT_REQUIRES_COMMENT_TOOL',
@@ -488,13 +489,32 @@ export async function createDocument(
     if (input.type === 'work_item' && p) {
       const assignee = getAssignee(input.frontmatter);
       if (assignee && assignee.startsWith('agent:')) {
+        const agentSlug = assignee.slice('agent:'.length);
+        // S2: enrich agent.task.assigned with agent_id. Slugs are mutable;
+        // dispatchers consuming this event need an immutable handle so an
+        // agent renamed between emit and consumption still resolves.
+        // agent_id may be null when the slug doesn't (yet) resolve to a
+        // workspace agent — assignment of an unknown slug is still a
+        // legitimate UX (user types speculatively), so we emit anyway and
+        // dispatchers must handle the unresolved case.
+        const agentRow = await tx.query.documents.findFirst({
+          where: and(
+            eq(documents.workspaceId, ws.id),
+            eq(documents.type, 'agent'),
+            eq(documents.slug, agentSlug),
+          ),
+        });
         await emitEvent(tx, {
           workspaceId: ws.id,
           projectId: p.id,
           documentId: id,
           kind: 'agent.task.assigned',
           actor: user.id,
-          payload: { slug, agent: assignee.slice('agent:'.length) },
+          payload: {
+            slug,
+            agent: agentSlug,
+            agent_id: agentRow?.id ?? null,
+          },
         });
       }
     }
@@ -575,22 +595,26 @@ export async function updateDocument(
 
   // Phase 2.6 sub-phase D — builtin trigger lock. Only frontmatter.enabled is
   // mutable. Title, body, status, parent, and any other frontmatter key are
-  // server-controlled. This check runs BEFORE strict schema validation so the
-  // lock error fires first.
+  // server-controlled. The check compares each frontmatter key against the
+  // existing row's value (not just key presence) so a client echoing back
+  // the full frontmatter shape — as the slideover does — succeeds as long
+  // as only `enabled` actually differs.
   if (
     existing.type === 'trigger' &&
     (existing.frontmatter as Record<string, unknown>).builtin === true
   ) {
     const fmPatch = patch.frontmatter ?? {};
-    const fmKeysOtherThanEnabled = Object.keys(fmPatch).filter(
-      (k) => k !== 'enabled',
-    );
+    const existingFm = existing.frontmatter as Record<string, unknown>;
+    const protectedKeyDiffers = Object.keys(fmPatch).some((k) => {
+      if (k === 'enabled') return false;
+      return JSON.stringify(fmPatch[k]) !== JSON.stringify(existingFm[k]);
+    });
     const touchesProtectedTop =
       patch.title !== undefined ||
       patch.body !== undefined ||
       patch.status !== undefined ||
       patch.parentId !== undefined;
-    if (touchesProtectedTop || fmKeysOtherThanEnabled.length > 0) {
+    if (touchesProtectedTop || protectedKeyDiffers) {
       throw new HTTPError(
         'BUILTIN_TRIGGER_LOCKED',
         'only frontmatter.enabled is mutable on builtin triggers',
@@ -676,6 +700,14 @@ export async function updateDocument(
         nextAssignee.startsWith('agent:') &&
         prevAssignee !== nextAssignee
       ) {
+        const agentSlug = nextAssignee.slice('agent:'.length);
+        const agentRow = await tx.query.documents.findFirst({
+          where: and(
+            eq(documents.workspaceId, ws.id),
+            eq(documents.type, 'agent'),
+            eq(documents.slug, agentSlug),
+          ),
+        });
         await emitEvent(tx, {
           workspaceId: ws.id,
           projectId: p.id,
@@ -684,7 +716,9 @@ export async function updateDocument(
           actor: user.id,
           payload: {
             slug: updated.slug,
-            agent: nextAssignee.slice('agent:'.length),
+            agent: agentSlug,
+            // S2: see createDocument for the immutable-handle rationale.
+            agent_id: agentRow?.id ?? null,
           },
         });
       }
