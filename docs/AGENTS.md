@@ -56,7 +56,20 @@ list_workspaces  list_projects  list_documents
 get_document     get_document_markdown
 create_document  update_document  delete_document
 list_statuses    list_fields    list_views    run_view
+
+# Comments (Phase 2.6)
+create_comment   list_comments   update_comment   delete_comment
+
+# Agent lifecycle (Phase 2.6 sub-phase D)
+create_agent     update_agent    delete_agent     get_agent_self
 ```
+
+### Tool groups (relevant for scope derivation)
+
+- **Read** (`documents:read`) — `list_*`, `get_*`, `run_view`, `get_agent_self` (read-only metadata-on-self).
+- **Write** (`documents:write`) — `create_document`, `update_document`, `create_comment`, `update_comment`.
+- **Delete** (`documents:delete`) — `delete_document`, `delete_comment`.
+- **Agent lifecycle** (`agents:write`) — `create_agent`, `update_agent`, `delete_agent`. Manage other agents (peer or sub-agent). `get_agent_self` is NOT in this group — it's a read-only `documents:read` tool.
 
 ## Creating an agent
 
@@ -94,9 +107,25 @@ When an agent is created, the server mints an `apiTokens` row bound to the agent
 
 | If `tools[]` includes any of... | Scope granted |
 |---|---|
-| `list_*`, `get_*`, `run_view` | `documents:read` |
+| `list_*`, `get_*`, `run_view`, `get_agent_self` | `documents:read` |
 | `create_document`, `update_document` | `documents:write` (+ implicit `documents:read`) |
 | `delete_document` | `documents:delete` (+ implicit `documents:read`) |
+| `create_agent`, `update_agent`, `delete_agent` | `agents:write` (+ implicit `documents:read`) |
+
+**On `agents:write`:** granting an agent the `agents:write` scope lets it spawn or mutate other agents in the workspace. Treat with the same caution as `documents:delete`. The MCP layer additionally enforces an *allow-list propagation* rule (see below) to prevent a narrowly-scoped agent from creating or patching a broader-scoped peer.
+
+### Allow-list propagation (Phase 2.6 sub-phase D)
+
+When an agent calls `create_agent` or `update_agent` via MCP, the new (or patched) agent's `frontmatter.projects` allow-list **cannot exceed the calling agent's own**. Specifically:
+
+- The calling agent's allow-list is read from its own `frontmatter.projects` (resolved via `token.agent_id`).
+- If the caller's allow-list is `['*']`, anything goes.
+- Otherwise, the patch's `projects` array must be a subset of the caller's. Widening to `'*'` is rejected. Adding a project id the caller doesn't have is rejected.
+- Violations surface as MCP `-32602` with `data: { reason: 'allow_list_widening_forbidden' }`.
+
+User-minted PATs (no `agent_id` on the token) are unrestricted today — Phase 3+ adds human-PAT enforcement when human PATs get a UI for narrowing.
+
+`delete_agent` additionally rejects self-delete from an agent-bound token (`-32602` with `data: { reason: 'cannot_delete_self' }`). User-minted PATs can delete any agent in their workspace.
 
 The token's `name` mirrors the agent's slug prefixed with `agent:`. Its `workspaceId` is the agent's workspace. `agent_id` is set to the agent's document id; `project_ids` is null by default (the agent's `frontmatter.projects` is the source of truth).
 
@@ -140,9 +169,9 @@ Mentioning an agent in a comment with an approval or rejection keyword triggers 
 
 ## Delegation
 
-In Phase 2.5, agent creation via MCP is REJECTED (`-32602 agent_lifecycle_via_http_only`). Agents can still create OTHER agents through the workspace-scoped HTTP endpoint when their token has `documents:write`, but the convenience MCP tools (`create_agent` / `update_agent` / `delete_agent` / `get_agent_self`) ship in Phase 2.6.
+Agents can create other agents either via the workspace-scoped HTTP endpoint (`POST /api/v1/w/:wslug/documents` with `type=agent`) or — as of Phase 2.6 sub-phase D — via the dedicated `create_agent` MCP tool. The generic `create_document` MCP tool still rejects `type=agent` with `-32602 agent_lifecycle_via_http_only`; use `create_agent` instead.
 
-When an agent IS created (via HTTP or, post-Phase-2.6, via MCP), the delegation guard enforces:
+When an agent IS created, the delegation guard enforces:
 
 - **Maximum chain depth = parent's `max_delegation_depth`**. The guard walks the `parent_agent` chain from the proposed child upward and refuses creation if the chain would exceed the parent's allowance.
 - **No cycles.** A cycle in the parent chain throws.
@@ -183,13 +212,19 @@ Source: `apps/web/src/components/views/workspace-agents-page.tsx`, `apps/web/src
 
 ## What's NOT here yet
 
-**Phase 2.6 (next):**
-- **Agent-lifecycle MCP tools.** `create_agent` / `update_agent` / `delete_agent` / `get_agent_self`. Agents can't yet create or edit other agents through MCP — HTTP-only as of 2.5.
-- **Templates.** Instance-level Settings page for inert markdown templates with pinned-version sync (`template:` + `template_version:` references on instances).
-- **Background allow-list reconciler.** Periodic sweep that removes orphan project ids from `frontmatter.projects` arrays. Insurance against bugs in the transactional cascade hook + hand-edited MD + partial restore-from-backup.
+**Phase 2.6 (in progress):**
+- **Background allow-list reconciler.** Periodic sweep that removes orphan project ids from `frontmatter.projects` arrays. Insurance against bugs in the transactional cascade hook + hand-edited MD + partial restore-from-backup. (Sub-phase E.)
 - **Single-project `project_slug` arg inference.** Agents whose `projects:` has exactly one id can omit `project_slug` on MCP calls.
 - **Workspace-scoped `.md` export.** Today the project slideover has Copy-as-MD; the workspace slideover doesn't (no `/api/v1/w/:wslug/documents/:slug.md` endpoint).
-- **ActivityPanel + LogActivity on the workspace agent slideover.** Project-scoped only today.
+
+**Phase 2.6 shipped (Sub-phases A–D):**
+- ActivityPanel + LogActivity on the workspace agent slideover (deferred Phase 2.5 ask, sub-phase A).
+- Comments primitive (`comment` document type) + tabbed slideover + mention parser + `@`-picker (sub-phases A–C).
+- Agent-lifecycle MCP tools (`create_agent` / `update_agent` / `delete_agent` / `get_agent_self`) with `agents:write` scope (sub-phase D).
+- Built-in triggers auto-seeded per workspace (sub-phase D); structured trigger form in the UI (sub-phase D).
+
+**Phase 2.7:**
+- **Templates.** Instance-level Settings page for inert markdown templates with pinned-version sync (`template:` + `template_version:` references on instances).
 
 **Phase 3:**
 - **The runner.** Folio currently stores and authenticates agents but does not execute them. Phase 3 ships the runner that subscribes to `agent.task.assigned`, loads the agent's system prompt + tools, invokes the LLM, and writes results back.
