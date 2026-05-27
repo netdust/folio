@@ -61,6 +61,26 @@ function clearDraft(parentId: string) {
   }
 }
 
+/**
+ * BUG-014 — replace the ProseMirror DOM with a single `<p>` containing
+ * `text` as a text node (not HTML). The prior shape used `innerHTML` with
+ * only `<` escaped, which let HTML entities (`&amp;`, `&#62;`, named entities,
+ * numeric entities) decode on parse. Typed source then diverged from stored
+ * source — wedge violation on a markdown-as-truth product.
+ *
+ * Exported so the helper can be unit-tested directly without driving the
+ * full picker → reset round-trip in jsdom.
+ */
+export function resetEditorContent(dom: HTMLElement, text: string): void {
+  // Clear existing children, then append <p>{text}</p> built via DOM APIs so
+  // every character in `text` is a literal text-node value, no parsing.
+  while (dom.firstChild) dom.removeChild(dom.firstChild);
+  const p = dom.ownerDocument.createElement('p');
+  p.appendChild(dom.ownerDocument.createTextNode(text));
+  dom.appendChild(p);
+  dom.dispatchEvent(new InputEvent('input', { bubbles: true }));
+}
+
 interface InnerEditorProps {
   initialValue: string;
   onChange: (next: string) => void;
@@ -117,10 +137,7 @@ function MilkdownCommentEditor({
     if (resetSignal === 0) return;
     const dom = wrapperRef.current?.querySelector('.ProseMirror') as HTMLElement | null;
     if (!dom) return;
-    // Replace the DOM with a paragraph containing the desired text and fire input.
-    // This is a pragmatic v1 approach — Milkdown will re-parse on its next round-trip.
-    dom.innerHTML = `<p>${resetTo.replace(/</g, '&lt;')}</p>`;
-    dom.dispatchEvent(new InputEvent('input', { bubbles: true }));
+    resetEditorContent(dom, resetTo);
     // Update the ref so the listener guard accepts subsequent edits.
     initialValueRef.current = resetTo;
     // Notify outer state immediately (the listener may or may not fire reliably).

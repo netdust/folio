@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
-import { CommentComposer } from './comment-composer.tsx';
+import { CommentComposer, resetEditorContent } from './comment-composer.tsx';
 
 afterEach(() => {
   vi.useRealTimers();
@@ -258,5 +258,63 @@ describe('CommentComposer', () => {
 
   it.skip('TODO C11 Playwright: focus returns to editor on picker close (after onClose via Escape)', () => {
     // Same reason — defer to Playwright.
+  });
+
+  // BUG-014 — the prior shape escaped only `<` in resetTo via innerHTML
+  // assignment. Other HTML entities (`&amp;`, `&#62;`, `&lt;`, named, numeric)
+  // decoded on parse; typed source diverged from stored source on every
+  // trigger replacement. Round-trip MD wedge violation.
+  describe('BUG-014 — safe text reset (no HTML entity decoding)', () => {
+    function makeDom() {
+      const dom = document.createElement('div');
+      dom.className = 'ProseMirror';
+      dom.appendChild(document.createTextNode('initial junk'));
+      return dom;
+    }
+
+    it('preserves `&amp;` literally (no entity decoding)', () => {
+      const dom = makeDom();
+      resetEditorContent(dom, 'check &amp; this');
+      expect(dom.textContent).toBe('check &amp; this');
+      expect(dom.textContent).not.toBe('check & this');
+    });
+
+    it('preserves `&#62;` literally', () => {
+      const dom = makeDom();
+      resetEditorContent(dom, 'compare 1 &#62; 0');
+      expect(dom.textContent).toBe('compare 1 &#62; 0');
+    });
+
+    it('preserves named entities (`&copy;`, `&trade;`)', () => {
+      const dom = makeDom();
+      resetEditorContent(dom, '&copy; 2026 &trade;');
+      expect(dom.textContent).toBe('&copy; 2026 &trade;');
+    });
+
+    it('preserves quote and ampersand chars in raw form', () => {
+      const dom = makeDom();
+      const tricky = `& > " ' < & combined`;
+      resetEditorContent(dom, tricky);
+      expect(dom.textContent).toBe(tricky);
+    });
+
+    it('preserves a literal `<` character (no element parsing)', () => {
+      const dom = makeDom();
+      resetEditorContent(dom, 'less-than: <');
+      expect(dom.textContent).toBe('less-than: <');
+      // Critically: the `<` did NOT spawn a new element node.
+      const children = dom.childNodes;
+      expect(children.length).toBe(1);
+      expect(children[0]!.nodeName).toBe('P');
+      expect((children[0] as HTMLElement).children.length).toBe(0); // no nested elements
+    });
+
+    it('fires an input event so Milkdown re-reads the content', () => {
+      const dom = makeDom();
+      const spy = vi.fn();
+      dom.addEventListener('input', spy);
+      resetEditorContent(dom, 'anything');
+      expect(spy).toHaveBeenCalledTimes(1);
+    });
   });
 });
