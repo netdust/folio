@@ -14,6 +14,10 @@ const envSchema = z.object({
   SMTP_USER: z.string().optional(),
   SMTP_PASS: z.string().optional(),
   SMTP_FROM: z.string().default('Folio <no-reply@example.com>'),
+  // Allow-list reconciler poll interval. Floor at 60s to prevent accidental
+  // DoS via a mis-set env var. Default 1h is fine — the project-delete cascade
+  // is the primary cleanup, this is the safety net.
+  FOLIO_RECONCILER_INTERVAL_MS: z.coerce.number().int().min(60_000).default(3_600_000),
 });
 
 export const env = envSchema.parse(process.env);
