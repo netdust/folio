@@ -1,23 +1,29 @@
 # Folio — STATE
 
-_Last updated: 2026-05-27 (Phase 2.6 sub-phases D + E1 shipped — entire automated build of Phase 2.6 complete on `phase-2.6/comments-and-slideover` branch; manual QA + shake-out + merge are user-side)_
+_Last updated: 2026-05-27 PM (Phase 2.6 shake-out + code-review pass complete; 3 BLOCKERs fixed and committed; 15 code-review findings folded into manifest awaiting next-session fix work)_
 
 Living snapshot of where the project actually is. Read at session start. Update at session end if anything below changed.
 
-## Next up — Phase 2.6 hand-off to user for manual QA + merge
+## Next up — work the code-review findings in tier order
 
-**Phase 2.6 automated build is COMPLETE on `phase-2.6/comments-and-slideover` at `d305810`.** All 30 plan tasks across sub-phases A-E1 shipped + E2 in-session bits (manual-QA scenarios written, DECISIONS appended). Tests across all suites green. What remains is user-side:
+**Phase 2.6 is now at `977c364` on `phase-2.6/comments-and-slideover` (commit on top of d305810 from prior automated build).** Shake-out + 4 reviewer agents + `/code-review --base=main --effort=high` all done in this session. **3 BLOCKERs already fixed and shipped in 977c364** (builtin-trigger Enabled lock UI mismatch / tools-widening escalation / SSE hot-spin polling). All test suites green.
 
-1. **Manual QA sweep** — walk `apps/web/tests/manual-qa-phase-2.6.md` (40 scenarios). Mark anomalies as shake-out bugs and fix them in-place with `phase-2.6: BUG-NNN — <fix>` commits.
-2. **Playwright suite** — `cd apps/web && bun run e2e`. Known flake on `click-through "wiki: new page"` is fine.
-3. **`netdust-core:shake-out` skill invocation** — the post-build QA layer. Will catch what unit tests + manual QA didn't.
-4. **Merge call** — once shake-out is clean, invoke `superpowers:finishing-a-development-branch` to `--no-ff` merge into `main` + push.
+**Open work, in priority order — see `tasks/shake-out-manifest-phase-2.6.md` for full reproduction + suggested fix + tests for each:**
 
-**Test baseline at hand-off:**
-- Server **418 / 1-skip / 0-fail** (was 259 at branch start; +159 tests across all 5 sub-phases).
-- Web **504 / 8-skip / 0-fail** (was 339; +165 unit, +8 Playwright TODOs).
-- Shared **37 / 0-fail** (was 28; +9 cron tests in D1).
-- Scripts (backfill) **6 / 0-fail** (new in D4).
+1. **TIER 1 (must-fix before merge — security / data integrity exploits)** — BUG-007 (PAT presets bundle agents:write), BUG-008 (backfill bypasses txWithEvents), BUG-009 (mention parser code/blockquote-blind), BUG-010 (recursive cascade no comment.deleted + bypasses author guard), BUG-011 (deleteComment author-fingerprinting oracle), BUG-014 (innerHTML escape miss).
+2. **TIER 2 (correctness)** — BUG-012 (visibility ignores agent_id), BUG-013 (target_agent slug-only), BUG-015 (migration 0009 promised trigger missing), BUG-016 (trigger PATCH skips refine), BUG-017 (handleSaveEdit closes editor on failure), BUG-021 (bus filter drops workspace events for ?project= subs).
+3. **TIER 3 (cleanup)** — BUG-018 (listWorkspaceDocuments bypasses resolveAgentProjects), BUG-019 (bare c.req.json → 500), BUG-020 (optimistic comment id collision).
+4. **Once TIER 1 + 2 land:** open a PR (or use existing branch), re-run `/code-review --base=main --effort=high --comment` for inline pass. Then `superpowers:finishing-a-development-branch` to merge `--no-ff` into main.
+
+**Recommended workflow per BUG:** invoke `superpowers:systematic-debugging`, write a failing test first (the manifest entry names the test that should pin it), apply the smallest possible fix, re-run that test + the full server/web/Playwright suites, commit atomically with message shape `phase-2.6: BUG-NNN — <short description>`. Pattern proven on BUG-001/005/006.
+
+**Test baseline at end of shake-out session (current):**
+- Server **495 / 1-skip / 0-fail** (was 488 pre-shake-out; +7 from BUG-001/005 regression tests).
+- Web **537 / 8-skip / 0-fail** (was 533; +4 from in-flight 2.6 work).
+- Shared **46 / 0-fail** (was 37; +9 cron tests in D1, already accounted for).
+- Scripts (backfill) **6 / 0-fail**.
+- Playwright **28 / 0-fail** (5.7m).
+- Server + web `tsc --noEmit` clean.
 
 **Phase 3 — AI in UI + Agent runner** still queued. Branches from main when 2.6 merges.
 
