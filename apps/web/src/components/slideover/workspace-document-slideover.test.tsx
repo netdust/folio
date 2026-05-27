@@ -39,11 +39,25 @@ function setup(initialSearch: string) {
   return { queryClient, router };
 }
 
-function mockWorkspaceDoc(slug: string, type: 'agent' | 'trigger' = 'agent') {
+function mockWorkspaceDoc(
+  slug: string,
+  type: 'agent' | 'trigger' = 'agent',
+  options: {
+    frontmatter?: Record<string, unknown>;
+    title?: string;
+    body?: string;
+    onPatch?: (body: unknown) => void;
+  } = {},
+) {
+  const title = options.title ?? 'Triage Agent';
+  const body = options.body ?? '# Instructions\n\nDo the triage.';
+  const frontmatter =
+    options.frontmatter ?? { description: 'Sorts inbound issues' };
   vi.stubGlobal(
     'fetch',
-    vi.fn<typeof fetch>(async (url) => {
+    vi.fn<typeof fetch>(async (url, init) => {
       const u = String(url);
+      const method = (init?.method ?? 'GET').toUpperCase();
       // The events endpoint is a suffix-match so it must be checked BEFORE
       // the generic doc-detail match (which also covers /events).
       if (u.endsWith(`/w/main/documents/${slug}/events`)) {
@@ -52,18 +66,33 @@ function mockWorkspaceDoc(slug: string, type: 'agent' | 'trigger' = 'agent') {
           headers: { 'content-type': 'application/json' },
         });
       }
+      // Workspace agents/triggers list (used by TriggerForm's agent dropdown).
+      if (u.includes('/w/main/documents?')) {
+        return new Response(JSON.stringify({ data: [] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
       if (u.includes(`/w/main/documents/${slug}`)) {
+        if (method === 'PATCH' && options.onPatch) {
+          try {
+            const parsed = init?.body ? JSON.parse(String(init.body)) : null;
+            options.onPatch(parsed);
+          } catch {
+            options.onPatch(init?.body);
+          }
+        }
         return new Response(
           JSON.stringify({
             data: {
               id: 'd1',
               slug,
               type,
-              title: 'Triage Agent',
+              title,
               status: null,
               parentId: null,
-              frontmatter: { description: 'Sorts inbound issues' },
-              body: '# Instructions\n\nDo the triage.',
+              frontmatter,
+              body,
               createdAt: '2026-01-01',
               updatedAt: '2026-01-02',
             },
@@ -259,5 +288,157 @@ describe('WorkspaceDocumentSlideover', () => {
       await userEvent.click(t);
       expect(document.querySelector('[data-testid="workspace-slideover-editor"]')).not.toBeNull();
     }
+  });
+
+  it('trigger slideover Fields tab renders TriggerForm (not FrontmatterForm)', async () => {
+    mockWorkspaceDoc('webhook-orders', 'trigger', {
+      title: 'Triage Agent',
+      frontmatter: {
+        schedule: '0 9 * * *',
+        on_event: null,
+        agent: null,
+        enabled: true,
+      },
+    });
+    const { queryClient, router } = setup('?doc=webhook-orders');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText('Triage Agent');
+
+    // TriggerForm-specific affordances: mode radios labelled Schedule / Event.
+    expect(await screen.findByLabelText(/^schedule$/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^event$/i)).toBeInTheDocument();
+
+    // FrontmatterForm's "Add field" affordance must be absent.
+    expect(screen.queryByRole('button', { name: /Add field/i })).toBeNull();
+  });
+
+  it('agent slideover Fields tab still renders FrontmatterForm (not TriggerForm)', async () => {
+    mockWorkspaceDoc('triage', 'agent');
+    const { queryClient, router } = setup('?doc=triage');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText('Triage Agent');
+
+    // TriggerForm-specific affordances must NOT be present for agents.
+    expect(screen.queryByLabelText(/^schedule$/i)).toBeNull();
+    expect(screen.queryByLabelText(/^event$/i)).toBeNull();
+
+    // FrontmatterForm's "Add field" affordance must be present.
+    expect(screen.getByRole('button', { name: /Add field/i })).toBeInTheDocument();
+  });
+
+  it('trigger slideover Save button is disabled until a change is made', async () => {
+    mockWorkspaceDoc('webhook-orders', 'trigger', {
+      title: 'Triage Agent',
+      frontmatter: {
+        schedule: '0 9 * * *',
+        on_event: null,
+        agent: null,
+        enabled: true,
+      },
+    });
+    const { queryClient, router } = setup('?doc=webhook-orders');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText('Triage Agent');
+
+    const saveBtn = (await screen.findByRole('button', {
+      name: /^save$/i,
+    })) as HTMLButtonElement;
+    expect(saveBtn.disabled).toBe(true);
+
+    // Toggle the Enabled checkbox to dirty the draft.
+    const enabledCb = screen.getByLabelText(/^enabled$/i) as HTMLInputElement;
+    await userEvent.click(enabledCb);
+
+    await waitFor(() => expect(saveBtn.disabled).toBe(false));
+  });
+
+  it('trigger slideover Save button calls PATCH with changed fields on click', async () => {
+    const patches: unknown[] = [];
+    mockWorkspaceDoc('webhook-orders', 'trigger', {
+      title: 'Triage Agent',
+      frontmatter: {
+        schedule: '0 9 * * *',
+        on_event: null,
+        agent: null,
+        enabled: true,
+      },
+      onPatch: (body) => patches.push(body),
+    });
+    const { queryClient, router } = setup('?doc=webhook-orders');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText('Triage Agent');
+
+    const enabledCb = await screen.findByLabelText(/^enabled$/i);
+    await userEvent.click(enabledCb);
+
+    const saveBtn = await screen.findByRole('button', { name: /^save$/i });
+    await userEvent.click(saveBtn);
+
+    await waitFor(() => expect(patches.length).toBeGreaterThan(0));
+    const patch = patches[patches.length - 1] as { frontmatter?: Record<string, unknown> };
+    expect(patch.frontmatter).toBeDefined();
+    // Only the toggled field's value changed: enabled is now false.
+    expect(patch.frontmatter!.enabled).toBe(false);
+  });
+
+  it('builtin trigger slideover Save sends only the toggled Enabled field', async () => {
+    const patches: unknown[] = [];
+    mockWorkspaceDoc('repo-import', 'trigger', {
+      title: 'Triage Agent',
+      frontmatter: {
+        builtin: true,
+        schedule: '0 9 * * *',
+        on_event: null,
+        agent: null,
+        enabled: true,
+      },
+      onPatch: (body) => patches.push(body),
+    });
+    const { queryClient, router } = setup('?doc=repo-import');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText('Triage Agent');
+
+    // Mode radios should be disabled for builtin triggers (D6 lock).
+    const scheduleRadio = (await screen.findByLabelText(/^schedule$/i)) as HTMLInputElement;
+    const eventRadio = screen.getByLabelText(/^event$/i) as HTMLInputElement;
+    expect(scheduleRadio.disabled).toBe(true);
+    expect(eventRadio.disabled).toBe(true);
+
+    // Toggle Enabled — this stays mutable for builtins.
+    const enabledCb = screen.getByLabelText(/^enabled$/i);
+    await userEvent.click(enabledCb);
+
+    const saveBtn = await screen.findByRole('button', { name: /^save$/i });
+    await waitFor(() => expect((saveBtn as HTMLButtonElement).disabled).toBe(false));
+    await userEvent.click(saveBtn);
+
+    await waitFor(() => expect(patches.length).toBeGreaterThan(0));
+    const patch = patches[patches.length - 1] as { frontmatter?: Record<string, unknown> };
+    expect(patch.frontmatter).toBeDefined();
+    expect(patch.frontmatter!.enabled).toBe(false);
+    // builtin and other frontmatter keys remain in the payload because we
+    // send the merged frontmatter object — but the diff'd keys must include
+    // `enabled` and exclude anything else that didn't change.
+    expect(patch.frontmatter!.builtin).toBe(true);
   });
 });

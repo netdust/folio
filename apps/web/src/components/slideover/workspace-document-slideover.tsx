@@ -6,7 +6,7 @@
  * field, no pinned fields, no activity panel, no log-activity, no copy-as-MD
  * (agents don't have a workspace-scoped .md endpoint yet).
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { toast } from 'sonner';
 import { MoreHorizontal, Trash2, X } from 'lucide-react';
@@ -32,6 +32,7 @@ import { ModeToggle, type EditorMode } from './mode-toggle.tsx';
 import { RawMdEditor } from './raw-md-editor.tsx';
 import { WorkspaceActivityPanel } from './workspace-activity-panel.tsx';
 import { WorkspaceLogActivityButton } from './workspace-log-activity-button.tsx';
+import { TriggerForm } from '../triggers/trigger-form.tsx';
 
 type WorkspaceDocTabValue = 'fields' | 'activity' | 'runs';
 
@@ -246,23 +247,31 @@ function SlideoverBody({
         className="folio-scroll shrink-0 max-h-[40vh] overflow-y-auto pb-3 pt-3"
       >
         {tab === 'fields' ? (
-          <FrontmatterForm
-            wslug={wslug}
-            // FrontmatterForm requires a pslug for the AssigneePicker branch;
-            // agents and triggers don't carry an `assignee` field so the
-            // AssigneePicker is never rendered. Empty string is safe.
-            pslug=""
-            type={doc.type}
-            status={null}
-            statuses={[]}
-            frontmatter={doc.frontmatter}
-            pinnedFields={[]}
-            onStatusCommit={() => {
-              /* no-op: agents/triggers have no status */
-            }}
-            onFrontmatterCommit={(p) => void onPatch({ frontmatter: p }, Object.keys(p))}
-            pendingKeys={pendingKeys}
-          />
+          doc.type === 'trigger' ? (
+            <TriggerFieldsTabPane
+              doc={doc}
+              wslug={wslug}
+              onPatch={onPatch}
+            />
+          ) : (
+            <FrontmatterForm
+              wslug={wslug}
+              // FrontmatterForm requires a pslug for the AssigneePicker branch;
+              // agents and triggers don't carry an `assignee` field so the
+              // AssigneePicker is never rendered. Empty string is safe.
+              pslug=""
+              type={doc.type}
+              status={null}
+              statuses={[]}
+              frontmatter={doc.frontmatter}
+              pinnedFields={[]}
+              onStatusCommit={() => {
+                /* no-op: agents/triggers have no status */
+              }}
+              onFrontmatterCommit={(p) => void onPatch({ frontmatter: p }, Object.keys(p))}
+              pendingKeys={pendingKeys}
+            />
+          )
         ) : null}
         {tab === 'activity' ? (
           <div className="flex flex-col gap-2">
@@ -304,5 +313,95 @@ function SlideoverBody({
         )}
       </div>
     </article>
+  );
+}
+
+/**
+ * D7: Fields tab pane for triggers. Wraps `<TriggerForm />` in a local draft
+ * + Save button. TriggerForm fires onChange on every keystroke; we don't want
+ * to PATCH on each — too many interlocked fields, and the JSON-payload editor
+ * would spam the server with intermediate states. Instead, drafts accumulate
+ * locally and Save diffs against the doc to send only changed top-level fields
+ * (title / body / frontmatter).
+ *
+ * Builtin-trigger read-only semantics cascade from D6 — TriggerForm disables
+ * everything except the Enabled checkbox. The wrapping Save button enables
+ * once any field differs from the loaded doc.
+ */
+function TriggerFieldsTabPane({
+  doc,
+  wslug,
+  onPatch,
+}: {
+  doc: Document;
+  wslug: string;
+  onPatch: (patch: Record<string, unknown>, keys: string[]) => void;
+}) {
+  const initial = useMemo(
+    () => ({
+      title: doc.title,
+      body: doc.body,
+      frontmatter: doc.frontmatter,
+    }),
+    [doc.title, doc.body, doc.frontmatter],
+  );
+
+  const [draft, setDraft] = useState(initial);
+
+  // Reset draft when the loaded doc changes (e.g. user navigates to a
+  // different trigger without closing the slideover).
+  useEffect(() => {
+    setDraft(initial);
+  }, [initial]);
+
+  const isDirty = useMemo(() => {
+    return (
+      draft.title !== initial.title ||
+      draft.body !== initial.body ||
+      JSON.stringify(draft.frontmatter) !== JSON.stringify(initial.frontmatter)
+    );
+  }, [draft, initial]);
+
+  const onSave = () => {
+    const patch: Record<string, unknown> = {};
+    const keys: string[] = [];
+    if (draft.title !== initial.title) {
+      patch.title = draft.title;
+      keys.push('title');
+    }
+    if (draft.body !== initial.body) {
+      patch.body = draft.body;
+      keys.push('body');
+    }
+    if (JSON.stringify(draft.frontmatter) !== JSON.stringify(initial.frontmatter)) {
+      patch.frontmatter = draft.frontmatter;
+      // Diff frontmatter keys so the slideover's pending-UI state tracks only
+      // what actually changed (a bulk frontmatter PATCH would otherwise pulse
+      // every key).
+      const oldFm = initial.frontmatter as Record<string, unknown>;
+      const newFm = draft.frontmatter as Record<string, unknown>;
+      const allKeys = new Set([...Object.keys(oldFm), ...Object.keys(newFm)]);
+      for (const k of allKeys) {
+        if (JSON.stringify(oldFm[k]) !== JSON.stringify(newFm[k])) keys.push(k);
+      }
+    }
+    if (keys.length === 0) return;
+    onPatch(patch, keys);
+  };
+
+  return (
+    <div className="flex flex-col gap-3">
+      <TriggerForm value={draft} onChange={setDraft} workspaceSlug={wslug} />
+      <div className="flex justify-end">
+        <button
+          type="button"
+          onClick={onSave}
+          disabled={!isDirty}
+          className="rounded-md bg-fg text-bg px-3 py-1.5 text-sm disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          Save
+        </button>
+      </div>
+    </div>
   );
 }
