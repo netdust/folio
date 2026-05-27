@@ -133,9 +133,11 @@ function AuthorDisplay({
   members: Member[];
   agents: AgentRef[];
 }) {
-  // G2: author is now `agent:<id>` for new agent comments (post-F11). The
-  // helper resolves either id or legacy slug back to a human-readable
-  // agent.slug or member.name.
+  // G2/H15: route BOTH branches through authorDisplayName so the
+  // colon-split rule lives in exactly one place. The helper handles agent
+  // (id or legacy slug) and user equally; the only branch-specific work
+  // left here is the icon + the "unresolved member" tone (a member
+  // lookup miss means we render the raw value, dimmed).
   if (author.startsWith('agent:')) {
     const display = authorDisplayName(author, agents, members);
     return (
@@ -145,13 +147,13 @@ function AuthorDisplay({
     );
   }
   if (author.startsWith('user:')) {
+    const display = authorDisplayName(author, agents, members);
     const id = author.slice('user:'.length);
-    const member = members.find((m) => m.id === id);
-    const display = member ? member.name : author;
+    const memberFound = members.some((m) => m.id === id);
     return (
       <span className="font-medium text-sm text-fg">
         <span aria-hidden="true">👤</span>{' '}
-        <span className={member ? undefined : 'text-fg-3'}>{display}</span>
+        <span className={memberFound ? undefined : 'text-fg-3'}>{display}</span>
       </span>
     );
   }

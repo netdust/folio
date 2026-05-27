@@ -8,10 +8,16 @@
 --
 -- The migration walks every comment whose author starts with `agent:` and
 -- whose suffix matches a CURRENTLY-LIVE agent's slug in the same workspace,
--- then rewrites the suffix to that agent's id. Comments whose suffix doesn't
--- resolve (deleted agent, mid-rename) are left alone — they keep the
--- back-compat semantics until a future operator decides what to do with
--- truly-orphan author strings.
+-- then rewrites the suffix to that agent's id.
+--
+-- H5 — TEMPORAL CONSTRAINT: only rewrite when the matched agent was
+-- created BEFORE OR AT the comment's createdAt. If the agent is NEWER
+-- than the comment, the slug was reused (original agent deleted, new
+-- agent created with the same slug) and rewriting would BAKE IN the very
+-- hijack the back-compat removal was meant to prevent. Comments that
+-- can't backfill stay in slug form and become permanently uneditable
+-- (assertAuthor's slug branch was removed) — that's the security
+-- property, not a UX regression.
 
 UPDATE documents AS c
 SET frontmatter = json_set(
@@ -23,6 +29,8 @@ SET frontmatter = json_set(
     WHERE a.workspace_id = c.workspace_id
       AND a.type = 'agent'
       AND a.slug = substr(json_extract(c.frontmatter, '$.author'), 7)
+      AND a.created_at <= c.created_at
+    ORDER BY a.created_at ASC
     LIMIT 1
   )
 )
@@ -34,4 +42,5 @@ WHERE c.type = 'comment'
     WHERE a.workspace_id = c.workspace_id
       AND a.type = 'agent'
       AND a.slug = substr(json_extract(c.frontmatter, '$.author'), 7)
+      AND a.created_at <= c.created_at
   );

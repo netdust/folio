@@ -157,6 +157,45 @@ test('F6: txWithEvents discards pending publishes when the tx body throws', asyn
   }
 });
 
+test('H10: rollback-scrub chunks at 500 ids per DELETE (safe vs SQLite variable-cap)', async () => {
+  // Confirm the chunking logic doesn't break for a small batch. A
+  // 1000+ event tx is impractical to seed in a unit test, but the
+  // batch-loop is exercised in any path that emits ≥1 event and
+  // throws — this test just verifies the path runs cleanly.
+  const { db, seed } = await makeTestApp();
+  const spy = spyPublish();
+  try {
+    let thrown: Error | null = null;
+    try {
+      await txWithEvents(db, async (tx) => {
+        // Emit a few events, then throw.
+        for (let i = 0; i < 5; i++) {
+          await emitEvent(tx, {
+            workspaceId: seed.workspace.id,
+            kind: 'workspace.updated',
+            actor: seed.user.id,
+            payload: { i },
+          });
+        }
+        throw new Error('forced rollback for H10');
+      });
+    } catch (err) {
+      thrown = err as Error;
+    }
+    expect(thrown?.message).toBe('forced rollback for H10');
+    // No publishes leaked.
+    expect(spy.events).toHaveLength(0);
+    // No orphan rows.
+    const rows = await db
+      .select()
+      .from(events)
+      .where(eq(events.workspaceId, seed.workspace.id));
+    expect(rows).toHaveLength(0);
+  } finally {
+    spy.restore();
+  }
+});
+
 test('F6: emitEvent(db, ...) outside a transaction still publishes inline (legacy)', async () => {
   // Used by events.test.ts itself + any one-shot emit without a tx.
   const { db, seed } = await makeTestApp();

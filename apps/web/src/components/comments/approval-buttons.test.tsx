@@ -346,6 +346,30 @@ describe('ApprovalButtons', () => {
     expect(screen.queryByText(/approved by/i)).not.toBeInTheDocument();
   });
 
+  // H11 — REST/MCP clients can persist target_agent as an ID (the schema
+  // is bare `z.string()`). findResolution must resolve target_agent
+  // through workspaceAgents the same way it resolves the plan author.
+  // Before H11: id-form target_agent never matched slug-form agentSlug,
+  // leaving plans stuck in unresolved state.
+  it('H11: resolves a plan when target_agent is the agent ID (not slug)', () => {
+    const idCanonicalPlan: Comment = {
+      ...planComment,
+      frontmatter: { ...planComment.frontmatter, author: 'agent:ag-drafter-id' },
+    };
+    const approvalWithIdTarget: Comment = {
+      ...approvalComment,
+      frontmatter: {
+        ...approvalComment.frontmatter,
+        target_agent: 'ag-drafter-id', // id instead of slug
+      },
+    };
+    renderButtons({
+      planComment: idCanonicalPlan,
+      threadComments: [approvalWithIdTarget],
+    });
+    expect(screen.getByText(/approved by/i)).toBeInTheDocument();
+  });
+
   // G1 — plan author stored as `agent:<id>` (post-F11 canonical form). The
   // server still writes target_agent as the SLUG, so findResolution must
   // resolve id→slug via the workspaceAgents list. Before this fix, the

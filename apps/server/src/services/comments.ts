@@ -24,6 +24,10 @@
 import { and, desc, eq, gt, sql } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { db } from '../db/client.ts';
+import type { DB } from '../db/client.ts';
+
+// Drizzle tx and DB share the same query API.
+type DBOrTx = DB | Parameters<Parameters<DB['transaction']>[0]>[0];
 import {
   documents,
   memberships,
@@ -179,9 +183,18 @@ interface MemberForParser {
   email: string;
 }
 
-/** Load workspace agents (with allow-list) in the shape parseMentions expects. */
-async function loadWorkspaceAgents(workspaceId: string): Promise<AgentForParser[]> {
-  const rows = await db.query.documents.findMany({
+/**
+ * Load workspace agents (with allow-list) in the shape parseMentions expects.
+ *
+ * Accepts an optional tx handle so callers can re-resolve mentions INSIDE
+ * the same transaction that persists the comment row — closing the TOCTOU
+ * window where an agent could be deleted between snapshot and insert (H9).
+ */
+async function loadWorkspaceAgents(
+  workspaceId: string,
+  tx: DBOrTx = db,
+): Promise<AgentForParser[]> {
+  const rows = await tx.query.documents.findMany({
     where: and(eq(documents.workspaceId, workspaceId), eq(documents.type, 'agent')),
   });
   return rows.map((r) => {
@@ -285,63 +298,71 @@ export async function createComment(input: CreateCommentInput): Promise<Document
   // Body validation (trim then size — order matters; per spec).
   validateBody(body);
 
-  // Mention parsing requires workspace agents + members + the current project id.
-  const [workspaceAgents, workspaceMembers] = await Promise.all([
-    loadWorkspaceAgents(ws.id),
-    loadWorkspaceMembers(ws.id),
-  ]);
-  const parsed = parseMentions({
-    body,
-    workspaceAgents,
-    workspaceMembers,
-    currentProjectId: p.id,
-  });
-
-  // Resolve final kind + target_agent (keyword-wins; otherwise enforce client rules).
-  const { kind, targetAgent } = resolveKindAndTarget({
-    approvalIntent: parsed.approvalIntent,
-    clientKind: input.kind,
-    clientTargetAgent: input.targetAgent,
-  });
+  // Pre-fetch members outside the tx — they don't change often and aren't a
+  // TOCTOU concern (member removal doesn't poison a comment in flight).
+  const workspaceMembers = await loadWorkspaceMembers(ws.id);
 
   const author = authorString(authorContext);
   const visibility: CommentVisibility = input.visibility ?? 'normal';
-
-  // Build + validate frontmatter through the Zod schema so the persisted shape
-  // is guaranteed to match what reads/round-trip code expects.
-  const frontmatterRaw: Record<string, unknown> = {
-    author,
-    kind,
-    visibility,
-    mentions: parsed.mentions,
-  };
-  if (targetAgent !== undefined) frontmatterRaw.target_agent = targetAgent;
-  const frontmatter = commentFrontmatterSchema.parse(frontmatterRaw);
 
   const id = nanoid();
   const slug = `c-${nanoid(8)}`;
   const createdAt = new Date();
   const title = `Comment by ${author} at ${createdAt.toISOString()}`;
 
-  const row = {
-    id,
-    workspaceId: ws.id,
-    projectId: p.id,
-    tableId: null as string | null,
-    type: 'comment' as const,
-    slug,
-    title,
-    status: null,
-    body,
-    frontmatter: frontmatter as unknown as Record<string, unknown>,
-    parentId: parent.id,
-    createdBy: authorContext.type === 'user' ? authorContext.userId : null,
-    updatedBy: authorContext.type === 'user' ? authorContext.userId : null,
-    createdAt,
-    updatedAt: createdAt,
-  };
+  // Captured inside the tx for the return value below. The type is the
+  // documents-table insert shape; we narrow at the use-site rather than
+  // declaring it explicitly to avoid drift.
+  let row: typeof documents.$inferInsert | null = null;
 
   await txWithEvents(db, async (tx) => {
+    // H9: load workspace agents INSIDE the tx and re-resolve mentions
+    // against the tx-scoped snapshot. SQLite's writer lock + the rest of
+    // the comment-insert in the same tx means an agent deleted between
+    // resolution and insert cannot create a phantom-resolved mention.
+    const workspaceAgents = await loadWorkspaceAgents(ws.id, tx);
+    const parsed = parseMentions({
+      body,
+      workspaceAgents,
+      workspaceMembers,
+      currentProjectId: p.id,
+    });
+
+    // Resolve final kind + target_agent (keyword-wins; otherwise enforce client rules).
+    const { kind, targetAgent } = resolveKindAndTarget({
+      approvalIntent: parsed.approvalIntent,
+      clientKind: input.kind,
+      clientTargetAgent: input.targetAgent,
+    });
+
+    // Build + validate frontmatter through the Zod schema so the persisted shape
+    // is guaranteed to match what reads/round-trip code expects.
+    const frontmatterRaw: Record<string, unknown> = {
+      author,
+      kind,
+      visibility,
+      mentions: parsed.mentions,
+    };
+    if (targetAgent !== undefined) frontmatterRaw.target_agent = targetAgent;
+    const frontmatter = commentFrontmatterSchema.parse(frontmatterRaw);
+
+    row = {
+      id,
+      workspaceId: ws.id,
+      projectId: p.id,
+      tableId: null as string | null,
+      type: 'comment' as const,
+      slug,
+      title,
+      status: null,
+      body,
+      frontmatter: frontmatter as unknown as Record<string, unknown>,
+      parentId: parent.id,
+      createdBy: authorContext.type === 'user' ? authorContext.userId : null,
+      updatedBy: authorContext.type === 'user' ? authorContext.userId : null,
+      createdAt,
+      updatedAt: createdAt,
+    };
     await tx.insert(documents).values(row);
 
     // comment.created — always.
@@ -382,6 +403,10 @@ export async function createComment(input: CreateCommentInput): Promise<Document
     }
   });
 
+  if (!row) {
+    // Unreachable — txWithEvents resolves successfully or throws.
+    throw new HTTPError('INTERNAL', 'comment row not captured', 500);
+  }
   return row as unknown as Document;
 }
 
@@ -419,76 +444,77 @@ export async function updateComment(input: UpdateCommentInput): Promise<Document
   let editedAt: string | undefined;
   let newlyMentionedAgents: { slug: string }[] = [];
 
+  // Members are pre-fetched outside the tx — not a TOCTOU concern.
+  const workspaceMembersOuter =
+    input.body !== undefined ? await loadWorkspaceMembers(ws.id) : null;
   if (input.body !== undefined) {
     validateBody(input.body);
     nextBody = input.body;
     editedAt = new Date().toISOString();
-
-    // Re-parse mentions; diff for newly resolved agents.
-    const [workspaceAgents, workspaceMembers] = await Promise.all([
-      loadWorkspaceAgents(ws.id),
-      loadWorkspaceMembers(ws.id),
-    ]);
-    // Re-parse mentions for the diff below. We deliberately do NOT recompute
-    // kind/target_agent on update: kind is immutable (enforced at the top of
-    // this function) and target_agent is bound to creation-time intent.
-    // Spec §3c's nuance about "editing an approval recomputes target_agent" is
-    // intentionally deferred — the body-change branch here is where that logic
-    // would go once confirmed.
-    const parsed = parseMentions({
-      body: input.body,
-      workspaceAgents,
-      workspaceMembers,
-      currentProjectId: p.id,
-    });
-    nextMentions = parsed.mentions;
-
-    // Diff new mentions vs old to fire comment.mentioned only for net-new
-    // resolved agents. Note: this diff runs inside the transaction but the
-    // mention list itself was computed from a snapshot of the prior frontmatter;
-    // two concurrent updates could each see the same "old" list and double-fire
-    // for the same agent. Accepted: consumers (agent runner) must be idempotent.
-    const oldAgentTargets = new Set(
-      existingMentions
-        .filter((m) => m.resolved && m.resolvedType === 'agent')
-        .map((m) => m.target),
-    );
-    newlyMentionedAgents = parsed.mentions
-      .filter((m) => m.resolved && m.resolvedType === 'agent' && !oldAgentTargets.has(m.target))
-      .map((m) => ({
-        slug: m.target.startsWith('agent:') ? m.target.slice('agent:'.length) : m.target,
-      }));
   }
-
   if (input.visibility !== undefined) {
     nextVisibility = input.visibility;
   }
 
-  // Build merged frontmatter via the Zod schema so we get the same guarantees as create.
-  const targetAgent = existingFm.target_agent as string | undefined;
-  const kindFromExisting = (existingFm.kind as CommentKind) ?? 'comment';
-  const mergedRaw: Record<string, unknown> = {
-    author: existingFm.author,
-    kind: kindFromExisting,
-    visibility: nextVisibility,
-    mentions: nextMentions,
-    ...(editedAt !== undefined ? { edited_at: editedAt } : existingFm.edited_at !== undefined ? { edited_at: existingFm.edited_at } : {}),
-    ...(targetAgent !== undefined ? { target_agent: targetAgent } : {}),
-    ...(existingFm.run_id !== undefined ? { run_id: existingFm.run_id } : {}),
-    ...(existingFm.deleted_at !== undefined ? { deleted_at: existingFm.deleted_at } : {}),
-  };
-  const mergedFrontmatter = commentFrontmatterSchema.parse(mergedRaw);
-
-  const updated = {
-    ...existing,
-    body: nextBody,
-    frontmatter: mergedFrontmatter as unknown as Record<string, unknown>,
-    updatedBy: authorContext.type === 'user' ? authorContext.userId : existing.updatedBy,
-    updatedAt: new Date(),
-  };
+  let updatedRow: typeof documents.$inferInsert | null = null;
 
   await txWithEvents(db, async (tx) => {
-    await tx.update(documents).set(updated).where(eq(documents.id, existing.id));
+    // H9: mention parsing must happen inside the tx so an agent deleted
+    // between resolution and insert can't leave a phantom-resolved
+    // mention in frontmatter or emit comment.mentioned for a dead agent.
+    if (input.body !== undefined) {
+      const workspaceAgents = await loadWorkspaceAgents(ws.id, tx);
+      // Re-parse mentions for the diff below. We deliberately do NOT recompute
+      // kind/target_agent on update: kind is immutable (enforced at the top of
+      // this function) and target_agent is bound to creation-time intent.
+      // Spec §3c's nuance about "editing an approval recomputes target_agent" is
+      // intentionally deferred — the body-change branch here is where that logic
+      // would go once confirmed.
+      const parsed = parseMentions({
+        body: input.body,
+        workspaceAgents,
+        workspaceMembers: workspaceMembersOuter!,
+        currentProjectId: p.id,
+      });
+      nextMentions = parsed.mentions;
+
+      // Diff new mentions vs old to fire comment.mentioned only for net-new
+      // resolved agents.
+      const oldAgentTargets = new Set(
+        existingMentions
+          .filter((m) => m.resolved && m.resolvedType === 'agent')
+          .map((m) => m.target),
+      );
+      newlyMentionedAgents = parsed.mentions
+        .filter((m) => m.resolved && m.resolvedType === 'agent' && !oldAgentTargets.has(m.target))
+        .map((m) => ({
+          slug: m.target.startsWith('agent:') ? m.target.slice('agent:'.length) : m.target,
+        }));
+    }
+
+    // Build merged frontmatter via the Zod schema so we get the same guarantees as create.
+    const targetAgent = existingFm.target_agent as string | undefined;
+    const kindFromExisting = (existingFm.kind as CommentKind) ?? 'comment';
+    const mergedRaw: Record<string, unknown> = {
+      author: existingFm.author,
+      kind: kindFromExisting,
+      visibility: nextVisibility,
+      mentions: nextMentions,
+      ...(editedAt !== undefined ? { edited_at: editedAt } : existingFm.edited_at !== undefined ? { edited_at: existingFm.edited_at } : {}),
+      ...(targetAgent !== undefined ? { target_agent: targetAgent } : {}),
+      ...(existingFm.run_id !== undefined ? { run_id: existingFm.run_id } : {}),
+      ...(existingFm.deleted_at !== undefined ? { deleted_at: existingFm.deleted_at } : {}),
+    };
+    const mergedFrontmatter = commentFrontmatterSchema.parse(mergedRaw);
+
+    updatedRow = {
+      ...existing,
+      body: nextBody,
+      frontmatter: mergedFrontmatter as unknown as Record<string, unknown>,
+      updatedBy: authorContext.type === 'user' ? authorContext.userId : existing.updatedBy,
+      updatedAt: new Date(),
+    };
+    await tx.update(documents).set(updatedRow).where(eq(documents.id, existing.id));
 
     // No comment.updated event per spec. Only fresh comment.mentioned for newly
     // resolved agents.
@@ -508,7 +534,10 @@ export async function updateComment(input: UpdateCommentInput): Promise<Document
     }
   });
 
-  return updated as Document;
+  if (!updatedRow) {
+    throw new HTTPError('INTERNAL', 'updated row not captured', 500);
+  }
+  return updatedRow as unknown as Document;
 }
 
 // -----------------------------------------------------------------------------

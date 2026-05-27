@@ -730,21 +730,31 @@ export async function deleteDocument(args: DeleteDocumentArgs): Promise<void> {
   }
 
   await txWithEvents(db, async (tx) => {
-    // F8/G8 — cascade ALL child rows (comments AND nested pages).
+    // F8/G8/H8 — cascade ALL descendant rows (comments AND nested pages).
     // documents.parent_id has no SQL foreign key (Phase 2.6 migration 0007
     // omitted it deliberately to keep the table self-referential and
     // SQLite-portable), so the app layer must purge orphan rows itself.
     //
-    // F8 initially only cascaded comments; G8 broadens it because the schema
-    // explicitly supports nested pages (see schema.ts:229 comment "for nested
-    // pages" and the wiki-tree component which lets users drag-reparent
-    // pages). We don't recurse for grand-children — that's a separate
-    // depth-traversal concern. Phase 3 will likely promote this to an SQL
-    // FK with ON DELETE CASCADE which handles arbitrary depth.
+    // H8: walk the descendant tree recursively. Pages can nest arbitrarily
+    // (schema.ts:229 comment "for nested pages"; wiki-tree.tsx exercises
+    // drag-reparent). A single-level cascade (G8's prior shape) would
+    // orphan grandchild rows pointing at a deleted middle parent. SQLite's
+    // recursive CTE gathers every descendant id in one query; the DELETE
+    // then runs in a single statement.
+    //
+    // We deliberately don't emit per-child delete events — a parent's
+    // single document.deleted event below carries the lifecycle signal.
+    // Downstream consumers must walk parent_id to detect cascade scope.
     if (existing.type === 'work_item' || existing.type === 'page') {
-      await tx
-        .delete(documents)
-        .where(eq(documents.parentId, existing.id));
+      await tx.run(sql`
+        WITH RECURSIVE descendants(id) AS (
+          SELECT id FROM documents WHERE parent_id = ${existing.id}
+          UNION ALL
+          SELECT documents.id FROM documents
+            INNER JOIN descendants ON documents.parent_id = descendants.id
+        )
+        DELETE FROM documents WHERE id IN (SELECT id FROM descendants)
+      `);
     }
 
     // Agents: api_tokens.agent_id ON DELETE CASCADE handles token revocation.

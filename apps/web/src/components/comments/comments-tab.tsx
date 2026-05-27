@@ -208,17 +208,34 @@ export function CommentsTab({
     { visibility },
   );
 
-  // G1-G3: workspace agent list lets CommentRow + ApprovalButtons resolve
-  // id-canonical author strings (post-F11) back to a human-readable slug.
-  const agentsQuery = useWorkspaceAgents(workspaceSlug);
+  // H18: only fetch the workspace agent list when the thread actually has
+  // agent-authored content OR a plan that needs the list to resolve its
+  // author. Threads with zero agent activity (the common case) skip the
+  // extra round trip entirely. The hook still mounts every render — React
+  // Query handles the enabled toggle and re-fires when it flips true.
+  const needsAgentList = useMemo(
+    () => comments.some(
+      (c) => c.frontmatter.author.startsWith('agent:') || c.frontmatter.kind === 'plan',
+    ),
+    [comments],
+  );
+  const agentsQuery = useWorkspaceAgents(workspaceSlug, { enabled: needsAgentList });
   const workspaceAgents: AgentRef[] = useMemo(
     () => (agentsQuery.data ?? []).map((a) => ({ id: a.id, slug: a.slug })),
     [agentsQuery.data],
   );
 
-  // Newest-first sort (server may return any order).
-  const sorted = [...comments].sort(
-    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+  // H19: memoize the newest-first sort so unrelated re-renders (visibility
+  // toggle, inline-edit keystrokes, delete-dialog open/close) don't re-clone
+  // and re-sort. react-query gives stable refs via structural sharing, so
+  // `[comments]` is the right key — the array changes identity only when
+  // the comments list actually changes.
+  const sorted = useMemo(
+    () =>
+      [...comments].sort(
+        (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+      ),
+    [comments],
   );
 
   // ---------- Mutations -------------------------------------------------

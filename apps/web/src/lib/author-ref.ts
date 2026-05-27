@@ -65,25 +65,20 @@ export function authorDisplayName(
  *
  * - `agent:<id>` with id present in agents → that agent's slug.
  * - `agent:<slug>` with slug present in agents → that slug (back-compat).
- * - `agent:<unknown>` → returns the raw suffix as a best-effort slug. This
- *    matters when the workspace agent list is unloaded (e.g. ApprovalButtons
- *    rendering against a stale slug after the agent was deleted) — the UI
- *    should still surface approve/reject affordances against the captured
- *    target_agent, not silently disappear.
+ * - `agent:<unknown>` → null. Callers (ApprovalButtons, comment-row) MUST
+ *    handle the null case explicitly: agents that vanished get an
+ *    "original agent removed" affordance, not a phantom @<id> button.
+ *    H17 dropped a prior heuristic that returned the raw suffix when it
+ *    "looked slug-shaped" — that produced approve/reject buttons targeting
+ *    non-existent agents AND inconsistently rejected long/digit-leading
+ *    slugs.
  * - non-agent author → null.
  */
 export function authorAgentSlug(author: string, agents: AgentRef[]): string | null {
   const ref = parseAuthorRef(author);
   if (!ref || ref.kind !== 'agent') return null;
   const a = agents.find((a) => a.id === ref.value || a.slug === ref.value);
-  if (a) return a.slug;
-  // Best-effort fallback: if the suffix LOOKS like a slug (no UUID-y pattern),
-  // return it; otherwise null. We don't want to render `agent:<uuid>` as a
-  // pseudo-slug — that'd produce '@<uuid>' in the buttons.
-  // Heuristic: nanoid uses URL-safe charset with mixed-case + digits AND is
-  // typically 20+ chars. Slugs are lowercase + hyphens + 1-30 chars.
-  const looksLikeSlug = /^[a-z][a-z0-9-]{0,30}$/.test(ref.value);
-  return looksLikeSlug ? ref.value : null;
+  return a ? a.slug : null;
 }
 
 /**

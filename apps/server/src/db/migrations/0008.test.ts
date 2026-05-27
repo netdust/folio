@@ -43,27 +43,29 @@ function seed(db: Database): void {
   );
 }
 
-function insertAgent(db: Database, id: string, slug: string): void {
+function insertAgent(db: Database, id: string, slug: string, createdAt?: number): void {
+  const ts = createdAt ?? Date.now();
   db.run(
-    `INSERT INTO documents (id, workspace_id, project_id, table_id, type, slug, title, body, frontmatter, created_by, updated_by, parent_id)
+    `INSERT INTO documents (id, workspace_id, project_id, table_id, type, slug, title, body, frontmatter, created_by, updated_by, parent_id, created_at, updated_at)
      VALUES ('${id}', 'w1', NULL, NULL, 'agent', '${slug}', 'Agent', '',
        '{"system_prompt":"x","model":"m","provider":"anthropic","tools":[]}',
-       'u1', 'u1', NULL)`,
+       'u1', 'u1', NULL, ${ts}, ${ts})`,
   );
 }
 
-function insertComment(db: Database, id: string, slug: string, author: string): void {
+function insertComment(db: Database, id: string, slug: string, author: string, createdAt?: number): void {
   const fm = JSON.stringify({
     author,
     kind: 'comment',
     visibility: 'normal',
     mentions: [],
   });
+  const ts = createdAt ?? Date.now();
   db.run(
-    `INSERT INTO documents (id, workspace_id, project_id, table_id, type, slug, title, body, frontmatter, created_by, updated_by, parent_id)
+    `INSERT INTO documents (id, workspace_id, project_id, table_id, type, slug, title, body, frontmatter, created_by, updated_by, parent_id, created_at, updated_at)
      VALUES ('${id}', 'w1', 'p1', NULL, 'comment', '${slug}', '', 'hi',
        json('${fm}'),
-       'u1', 'u1', 'parent')`,
+       'u1', 'u1', 'parent', ${ts}, ${ts})`,
   );
 }
 
@@ -148,5 +150,76 @@ describe('0008 author-id backfill migration', () => {
     applyMigration(db, TARGET);
 
     expect(getAuthor(db, 'c1')).toBe('agent:drafter');
+  });
+
+  // H5 — temporal constraint. If the slug was DELETED then REUSED before
+  // the migration ran, the new agent's id must NOT be backfilled into the
+  // OLD comment. That'd bake in the very hijack the migration was meant
+  // to prevent. Pre-upgrade timeline:
+  //   - 2026-01-01: agent A (id=aaa, slug=drafter) writes comment c1
+  //   - 2026-02-01: agent A is hard-deleted
+  //   - 2026-03-01: agent B (id=bbb, slug=drafter) is created
+  //   - 2026-04-01: migration 0008 runs
+  // Before H5: c1's author rewritten to 'agent:bbb' — B can edit A's comment.
+  // After H5: c1's author stays 'agent:drafter' — uneditable (B's createdAt
+  // is LATER than c1's, so no temporal match exists).
+  test('H5: leaves slug-form author untouched when the matching agent was created AFTER the comment (slug reuse)', () => {
+    const db = new Database(':memory:');
+    setupBaseline(db, TARGET);
+    seed(db);
+
+    // Comment created Jan 1.
+    insertComment(db, 'c1', 'comment-1', 'agent:drafter', new Date('2026-01-01').getTime());
+
+    // Agent B (with same slug) created Mar 1 — AFTER the comment.
+    // No agent existed before c1's createdAt with this slug; the original
+    // agent A was hard-deleted and isn't in the table anymore.
+    insertAgent(db, 'agent-bbb', 'drafter', new Date('2026-03-01').getTime());
+
+    applyMigration(db, TARGET);
+
+    // Must stay slug-form — uneditable by anyone, that's the security
+    // property after assertAuthor dropped its back-compat path.
+    expect(getAuthor(db, 'c1')).toBe('agent:drafter');
+  });
+
+  test('H5: rewrites correctly when the matching agent IS older than the comment', () => {
+    const db = new Database(':memory:');
+    setupBaseline(db, TARGET);
+    seed(db);
+
+    // Agent created Jan 1.
+    insertAgent(db, 'agent-ok', 'drafter', new Date('2026-01-01').getTime());
+    // Comment created Feb 1 — AFTER the agent.
+    insertComment(db, 'c1', 'comment-1', 'agent:drafter', new Date('2026-02-01').getTime());
+
+    applyMigration(db, TARGET);
+
+    expect(getAuthor(db, 'c1')).toBe('agent:agent-ok');
+  });
+
+  // H20 — non-comment rows must NOT be touched. work_item / page frontmatter
+  // is free-form; an operator might legitimately store `author: agent:foo`
+  // for unrelated reasons. The migration scopes `c.type = 'comment'` and
+  // this test pins the scope so a future loosening regression fails CI.
+  test('H20: leaves work_item rows with agent:<slug> in frontmatter untouched', () => {
+    const db = new Database(':memory:');
+    setupBaseline(db, TARGET);
+    seed(db);
+    insertAgent(db, 'agent-x', 'drafter');
+
+    // Work_item with author='agent:drafter' in its free-form frontmatter.
+    const fm = JSON.stringify({ author: 'agent:drafter', priority: 'high' });
+    db.run(
+      `INSERT INTO documents (id, workspace_id, project_id, table_id, type, slug, title, body, frontmatter, created_by, updated_by, parent_id)
+       VALUES ('wi-1', 'w1', 'p1', 't1', 'work_item', 'wi-1', 'Task', '', json('${fm}'), 'u1', 'u1', NULL)`,
+    );
+
+    applyMigration(db, TARGET);
+
+    const row = db
+      .query(`SELECT json_extract(frontmatter, '$.author') AS a FROM documents WHERE id = 'wi-1'`)
+      .get() as { a: string };
+    expect(row.a).toBe('agent:drafter');
   });
 });

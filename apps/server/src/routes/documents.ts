@@ -221,6 +221,32 @@ documentsRoute.patch('/:slug', requireScope('documents:write'), async (c) => {
     // The markdown branch is NOT MCP-relevant: it does a WHOLESALE frontmatter
     // replacement (the JSON PATCH path merges). Keeping it inline avoids
     // bifurcating the service signature; the route owns this semantic.
+    //
+    // H6: comments must go through PATCH /comments/:slug (which enforces
+    // author-only, kind-immutable, edited_at, and soft-delete semantics).
+    // The service-layer guard in updateDocument blocks the JSON path; this
+    // markdown path bypasses updateDocument entirely, so it needs the same
+    // rejection inline.
+    //
+    // H22: defense-in-depth — agents/triggers must not be reachable through
+    // the project-scoped markdown PATCH either. Phase 2.5 enforces
+    // projectId=null on agent/trigger inserts, so getDocument(p.id, slug)
+    // shouldn't find them today — but a future schema drift or hand-edit
+    // could re-expose this path. Cheap to guard.
+    if (existing.type === 'comment') {
+      throw new HTTPError(
+        'COMMENT_REQUIRES_COMMENT_TOOL',
+        "comment documents must be updated via PATCH /comments/:slug (or MCP update_comment), not the generic document endpoint",
+        422,
+      );
+    }
+    if (existing.type === 'agent' || existing.type === 'trigger') {
+      throw new HTTPError(
+        'INVALID_DOCUMENT_SCOPE',
+        `${existing.type} documents must be mutated through /api/v1/w/:wslug/documents (workspace-scoped), not the project-scoped markdown PATCH`,
+        422,
+      );
+    }
     const raw = await c.req.text();
     const parsed = parseMarkdownInput(raw, { type: existing.type as DocumentType });
     if (parsed.type !== existing.type) {

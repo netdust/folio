@@ -83,8 +83,22 @@ export async function assertAgentAllowListWidening(
   });
   const callingProjectsRaw = (callingAgent?.frontmatter as { projects?: unknown } | undefined)
     ?.projects;
-  // Fail closed: if the calling agent row is gone or malformed, treat as
-  // zero allow-list. The pre-fix default-to-wildcard was a security smell.
+
+  // H16: distinguish "calling agent has malformed/missing projects" from
+  // "calling agent legitimately has a narrow allow-list." The pre-G13
+  // behavior defaulted malformed to ['*'] (fail-open — security smell).
+  // G13 corrected to [] (fail-closed) — correct, but the
+  // ALLOW_LIST_WIDENING_FORBIDDEN error code misleads an operator
+  // debugging a corrupted-row case. Surface a distinct error so the
+  // remediation path (re-import / hand-edit the agent's frontmatter) is
+  // obvious.
+  if (callingProjectsRaw !== undefined && !Array.isArray(callingProjectsRaw)) {
+    throw new HTTPError(
+      'CALLING_AGENT_INVALID_PROJECTS',
+      "calling agent's frontmatter.projects is malformed (not an array); fix the agent row before retrying",
+      500,
+    );
+  }
   const callingAllowList: string[] = Array.isArray(callingProjectsRaw)
     ? (callingProjectsRaw.filter((p) => typeof p === 'string') as string[])
     : [];

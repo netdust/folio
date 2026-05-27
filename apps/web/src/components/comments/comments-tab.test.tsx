@@ -73,11 +73,29 @@ function stubFetchList(comments: Comment[]) {
       const method = init?.method?.toUpperCase() ?? 'GET';
       if (method === 'GET') {
         // G1/G2: CommentsTab fetches workspace agents to resolve id-canonical
-        // author strings. Return an empty agent list — tests don't exercise
-        // agent-authored comments directly.
+        // author strings. Return a baseline 'drafter' agent so plan rows
+        // (`author: 'agent:drafter'`) resolve through authorAgentSlug post-H17
+        // (the heuristic phantom-slug fallback was removed).
         if (url.includes('?type=agent') || url.includes('&type=agent')) {
           return new Response(
-            JSON.stringify({ data: [] }),
+            JSON.stringify({
+              data: [
+                {
+                  id: 'agent-drafter-id',
+                  slug: 'drafter',
+                  type: 'agent',
+                  title: 'Drafter',
+                  parentId: null,
+                  projectId: null,
+                  workspaceId: 'ws-1',
+                  frontmatter: {},
+                  body: '',
+                  status: null,
+                  createdAt: NOW,
+                  updatedAt: NOW,
+                },
+              ],
+            }),
             { status: 200, headers: { 'content-type': 'application/json' } },
           );
         }
@@ -379,14 +397,19 @@ describe('CommentsTab', () => {
   // disabled.
   it('F15: composer remounts when parentId changes, reloading the correct draft', async () => {
     localStorage.setItem('folio:comment-draft:doc-B', 'leftover for B');
-    const { rerender } = renderTab({ parentId: 'doc-A' });
+    // H21: drive BOTH parentId AND parentSlug to fresh values, mirroring
+    // real document navigation. The previous version held parentSlug
+    // constant and only swapped parentId — a regression that switched
+    // `key={parentId}` to `key={parentSlug}` would still have passed,
+    // masking the bug F15 closed.
+    const { rerender } = renderTab({ parentId: 'doc-A', parentSlug: 'a' });
     // doc-A has no draft → submit disabled.
     const submitA = screen.getByTestId('comment-composer-submit') as HTMLButtonElement;
     expect(submitA.disabled).toBe(true);
 
     // Switch to doc-B without unmounting the slideover. The composer must
-    // remount and read doc-B's draft.
-    rerender(<CommentsTab {...defaultProps} parentId="doc-B" />);
+    // remount (keyed on parentId) and read doc-B's draft.
+    rerender(<CommentsTab {...defaultProps} parentId="doc-B" parentSlug="b" />);
     const submitB = screen.getByTestId('comment-composer-submit') as HTMLButtonElement;
     expect(submitB.disabled).toBe(false);
   });

@@ -365,6 +365,55 @@ test('F8: deleteDocument(work_item) cascades to remove its comment children', as
   }
 });
 
+test('H8: deleteDocument(page) cascades GRANDCHILDREN recursively (3 levels deep)', async () => {
+  const { db, seed } = await makeTestApp();
+  const table = await getWorkItemsTable(db, seed.project.id);
+
+  // Build A → B → C
+  const a = await createDocument({
+    workspace: seed.workspace, project: seed.project, table, actor: seed.user, token: null,
+    isTableScopedUrl: false,
+    input: { type: 'page', title: 'A', body: '', frontmatter: {}, status: null },
+  });
+  const bId = nanoid();
+  await db.insert(documents).values({
+    id: bId,
+    workspaceId: seed.workspace.id, projectId: seed.project.id, tableId: null,
+    type: 'page', slug: `b-${bId}`, title: 'B', status: null, body: '',
+    parentId: a.document.id, frontmatter: {},
+    createdBy: seed.user.id, updatedBy: seed.user.id,
+  });
+  const cId = nanoid();
+  await db.insert(documents).values({
+    id: cId,
+    workspaceId: seed.workspace.id, projectId: seed.project.id, tableId: null,
+    type: 'page', slug: `c-${cId}`, title: 'C', status: null, body: '',
+    parentId: bId, frontmatter: {},
+    createdBy: seed.user.id, updatedBy: seed.user.id,
+  });
+  // Also add a comment grandchild of B (mixed types).
+  const cmtId = nanoid();
+  await db.insert(documents).values({
+    id: cmtId,
+    workspaceId: seed.workspace.id, projectId: seed.project.id, tableId: null,
+    type: 'comment', slug: `cmt-${cmtId}`, title: '', status: null, body: 'on B',
+    parentId: bId,
+    frontmatter: { author: `user:${seed.user.id}`, kind: 'comment', visibility: 'normal', mentions: [] },
+    createdBy: seed.user.id, updatedBy: seed.user.id,
+  });
+
+  // Delete A. Recursive cascade should remove B, C, and the comment.
+  await deleteDocument({
+    workspace: seed.workspace, project: seed.project, actor: seed.user,
+    existing: a.document,
+  });
+
+  for (const id of [a.document.id, bId, cId, cmtId]) {
+    const found = await db.query.documents.findFirst({ where: eq(documents.id, id) });
+    expect(found).toBeUndefined();
+  }
+});
+
 test('G8: deleteDocument(page) cascades nested page children too', async () => {
   const { db, seed } = await makeTestApp();
   const table = await getWorkItemsTable(db, seed.project.id);

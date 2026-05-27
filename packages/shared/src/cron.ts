@@ -139,8 +139,11 @@ function parseField(field: string, domain: FieldDomain): Set<number> | null {
       const v = Number(rangePart);
       if (!Number.isInteger(v)) return null;
       start = v;
-      // For single value with step (e.g. "5/10"), iterate from 5 to max.
-      end = slashIdx !== -1 ? domain.max : v;
+      // For single value with step (e.g. "5/10"), iterate from start to max.
+      // H12: use effectiveMax (which is 7 for dow) so `7/2` doesn't bail with
+      // start=7 > end=domain.max=6. Without this, any step pattern starting
+      // at 7 in the dow field was a hard parse failure.
+      end = slashIdx !== -1 ? effectiveMax : v;
     }
 
     if (start < domain.min || end > effectiveMax || start > end) return null;

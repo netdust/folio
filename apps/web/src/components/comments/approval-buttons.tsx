@@ -76,7 +76,18 @@ function findResolution(
   const matches = threadComments.filter((c) => {
     const fm = c.frontmatter;
     if (fm.kind !== 'approval' && fm.kind !== 'rejection') return false;
-    if (fm.target_agent !== agentSlug) return false;
+    // H11: comment-schema declares target_agent as `z.string()` (no shape
+    // refinement), so REST/MCP clients can post EITHER `<slug>` or `<id>`.
+    // findResolution's agentSlug is always slug-form (resolved from the
+    // plan's author through the workspaceAgents list). Resolve target_agent
+    // through the same helper so id-form and slug-form both match.
+    const targetAgent =
+      typeof fm.target_agent === 'string' ? fm.target_agent : null;
+    if (!targetAgent) return false;
+    const targetAsSlug =
+      agents.find((a) => a.id === targetAgent || a.slug === targetAgent)?.slug ??
+      targetAgent;
+    if (targetAsSlug !== agentSlug) return false;
     // F9: soft-deleted approvals/rejections do not resolve the plan. The
     // server keeps the row visible in listComments by design (UI mutes it);
     // resolution detection must explicitly skip them, otherwise a retracted

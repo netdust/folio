@@ -19,7 +19,13 @@ const eventsRoute = new Hono<AuthContext & ScopeContext>();
 eventsRoute.get('/', async (c) => {
   const ws = getWorkspace(c);
 
-  const projectId = c.req.query('project');
+  // H14: normalize empty `?project=` to undefined the same way parent/run are
+  // normalized below. Without this, an agent-bound token sending `?project=`
+  // (empty string, common when a client toggles a filter off) hit the
+  // allow-list gate with projectId='' and got a confusing 403 — while empty
+  // ?parent= / ?run= were silently ignored.
+  const projectParam = c.req.query('project');
+  const projectId = projectParam && projectParam.trim() ? projectParam.trim() : undefined;
   const kindsParam = c.req.query('kinds');
   const kinds = kindsParam
     ? (kindsParam.split(',').map((k) => k.trim()).filter(Boolean) as EventKind[])

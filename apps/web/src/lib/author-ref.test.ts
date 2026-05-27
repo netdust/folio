@@ -54,11 +54,20 @@ describe('authorAgentSlug', () => {
   it('returns null for a user author', () => {
     expect(authorAgentSlug('user:u-1', [AGENT])).toBeNull();
   });
-  it('falls back to the raw suffix when the agent is gone but suffix looks like a slug', () => {
-    expect(authorAgentSlug('agent:ghost', [AGENT])).toBe('ghost');
+  it('H17: returns null when the agent is gone (no phantom-slug fallback)', () => {
+    expect(authorAgentSlug('agent:ghost', [AGENT])).toBeNull();
   });
-  it('returns null when the suffix looks like a uuid (no agent match + not slug-shaped)', () => {
+  it('H17: returns null for nanoid-shaped suffix when no agent matches', () => {
     expect(authorAgentSlug('agent:Vh5KqzAbCd_-XYZ', [AGENT])).toBeNull();
+  });
+  it('H13: long slugs (>30 chars) resolve normally when the agent is in the list', () => {
+    const longSlugAgent = { id: 'long-id', slug: 'foo-bar-baz-aaa-bbb-ccc-ddd-eee-fff-ggg' };
+    expect(authorAgentSlug(`agent:${longSlugAgent.slug}`, [longSlugAgent])).toBe(longSlugAgent.slug);
+    expect(authorAgentSlug('agent:long-id', [longSlugAgent])).toBe(longSlugAgent.slug);
+  });
+  it('H13: digit-leading slugs resolve normally when the agent is in the list', () => {
+    const digitAgent = { id: 'digit-id', slug: '2024-bot' };
+    expect(authorAgentSlug('agent:2024-bot', [digitAgent])).toBe('2024-bot');
   });
 });
 

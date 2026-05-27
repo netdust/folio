@@ -94,6 +94,20 @@ describe('F13: cron parser edge cases', () => {
     expect(out[6]).toBe('2026-06-05T09:00:00.000Z'); // Fri
   });
 
+  it('H12: dow step `7/N` parses without crashing (and collapses 7→0 = Sunday only)', () => {
+    // Cron `0 9 * * 7/2` was a hard parse failure pre-H12 because
+    // `end = domain.max = 6` made `start(7) > end(6)` true. With H12
+    // `end = effectiveMax = 7`, parseField returns the set {7→0}
+    // (since 7 is the only value in [7..7] step 2). Effectively `7/2`
+    // degenerates to "Sunday only" — semantically the same as `7` or
+    // `0`. The fix is about not REJECTING valid-shape input, not about
+    // expanding the semantics of `7/N`.
+    // 2026-05-31 is a Sunday.
+    const out = nextFires('0 9 * * 7/2', 1, new Date('2026-05-30T08:00:00Z'));
+    expect(out).toHaveLength(1);
+    expect(out[0]).toBe('2026-05-31T09:00:00.000Z');
+  });
+
   it('G7: dow range 1-7 fires Mon..Sun (every day)', () => {
     // Sun 2026-05-24 → 7 daily fires through Sat 2026-05-30. (7 normalizes
     // to 0/Sun, so range 1-7 covers all 7 days of the week.)

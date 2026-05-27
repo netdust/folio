@@ -121,21 +121,37 @@ export async function txWithEvents<T>(
     // Tx rolled back — bus publish suppressed.
     //
     // G10: bun-sqlite + drizzle has a documented quirk where async throws
-    // inside db.transaction don't actually roll back the SQL row (see
-    // events.test.ts rollback assertion). That leaves an `events` row in
-    // the durable log without a matching live bus publish — live SSE
-    // subscribers miss it, but Last-Event-Id replay later delivers it,
-    // making the two paths disagree. Defensively scrub the rows we
-    // intended to roll back.
+    // inside db.transaction don't actually roll back the SQL row. That
+    // leaves an `events` row in the durable log without a matching live
+    // bus publish — live SSE subscribers miss it, but Last-Event-Id replay
+    // later delivers it, making the two paths disagree. Defensively scrub
+    // the rows we intended to roll back.
+    //
+    // H10: chunk the DELETE to stay under SQLite's max-variable cap.
+    // bun-sqlite ships SQLite ≥ 3.42 with default 32766, but a fixed
+    // batch size keeps us robust against older builds AND any future
+    // bulk-emit path (Phase 3 reconciler at scale, mass import). Also:
+    // surface scrub failures to console so the divergence between the
+    // durable log and the live bus is OPERATOR-visible instead of silent.
     if (pending.length > 0) {
-      try {
-        const ids = pending.map((e) => e.id).filter((id): id is string => typeof id === 'string');
-        if (ids.length > 0) {
-          await db.delete(events).where(inArray(events.id, ids));
+      const ids = pending.map((e) => e.id).filter((id): id is string => typeof id === 'string');
+      const CHUNK = 500;
+      for (let i = 0; i < ids.length; i += CHUNK) {
+        const batch = ids.slice(i, i + CHUNK);
+        try {
+          await db.delete(events).where(inArray(events.id, batch));
+        } catch (scrubErr) {
+          // Original error always re-thrown below. Log the scrub failure
+          // so the resulting durable-vs-bus divergence is detectable.
+          console.error(
+            '[events] rollback-scrub failed; events row(s) may persist without matching bus publish',
+            {
+              originalError: err instanceof Error ? err.message : String(err),
+              scrubError: scrubErr instanceof Error ? scrubErr.message : String(scrubErr),
+              affectedIdsBatch: batch,
+            },
+          );
         }
-      } catch {
-        // If the scrub itself fails (DB unreachable, etc.), swallow — the
-        // ORIGINAL error is the one the caller cares about.
       }
     }
     throw err;

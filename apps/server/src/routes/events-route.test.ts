@@ -223,6 +223,24 @@ async function setupAgentToken(opts: {
   return { token, agentId };
 }
 
+test('H14: empty ?project= is normalized to no-filter (does NOT 403 for narrowed agent)', async () => {
+  const { app, seed } = await makeTestApp();
+  const { token } = await setupAgentToken({
+    workspaceId: seed.workspace.id,
+    userId: seed.user.id,
+    agentSlug: 'h14-agent',
+    projectAllowList: [seed.project.id],
+  });
+
+  // `?project=` (empty value) used to produce projectId='' → 403. With H14
+  // it's normalized to undefined like empty ?parent=/?run= already were.
+  const res = await app.request('/api/v1/w/acme/events?project=', {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  expect(res.status).toBe(200);
+  await res.body?.cancel();
+});
+
 test('F3: agent token cannot request ?project= outside its allow-list', async () => {
   const { app, seed } = await makeTestApp();
   const projectBId = await seedSecondProject(seed.workspace.id);
