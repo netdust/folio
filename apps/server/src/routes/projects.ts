@@ -8,6 +8,7 @@ import { db } from '../db/client.ts';
 import { documents, projects } from '../db/schema.ts';
 import { emitEvent, txWithEvents } from '../lib/events.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
+import { resolveAgentProjects } from '../lib/agent-projects.ts';
 import { seedProjectDefaults } from '../lib/seed-project-defaults.ts';
 import { slugUniqueInProjects } from '../lib/slug-unique.ts';
 import { listProjects } from '../services/projects.ts';
@@ -127,9 +128,13 @@ projectItemRoute.delete('/', async (c) => {
         inArray(documents.type, ['agent', 'trigger']),
       ),
     });
+    // BUG-018 — route through resolveAgentProjects for vocabulary
+    // consistency with bearer / SSE / mention-parser. Behavior is the same:
+    // wildcard agents (`['*']`, including the missing-projects default) don't
+    // need scrubbing; only agents with an explicit project id in their list do.
     const stale = wsAgents.filter((d) => {
-      const projs = (d.frontmatter as { projects?: unknown }).projects;
-      return Array.isArray(projs) && projs.includes(p.id);
+      const projs = resolveAgentProjects(d);
+      return !projs.includes('*') && projs.includes(p.id);
     });
     for (const doc of stale) {
       const fm = doc.frontmatter as Record<string, unknown>;

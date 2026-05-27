@@ -36,6 +36,7 @@ import { HTTPError } from '../lib/http.ts';
 import { emitEvent, txWithEvents } from '../lib/events.ts';
 import { agentFrontmatterSchema, toolsToScopes } from '../lib/agent-schema.ts';
 import { triggerFrontmatterSchema } from '../lib/trigger-schema.ts';
+import { resolveAgentProjects } from '../lib/agent-projects.ts';
 import { newApiToken } from '../lib/auth.ts';
 import { walkParentChain } from '../lib/delegation-guard.ts';
 import { compileFilterToWhere } from '../lib/filter-to-drizzle.ts';
@@ -927,10 +928,14 @@ export async function listWorkspaceDocuments(opts: {
     ),
   });
   if (!opts.projectFilter) return rows;
+  // BUG-018 — route through resolveAgentProjects so legacy / hand-edited
+  // rows missing `frontmatter.projects` fall back to ['*'] (workspace-wide)
+  // instead of being silently dropped. Mirrors the contract that bearer,
+  // SSE, mention-parser, and the reconciler all share.
+  const target = opts.projectFilter;
   return rows.filter((d) => {
-    const projs = (d.frontmatter as { projects?: unknown }).projects;
-    if (!Array.isArray(projs)) return false;
-    return projs.includes('*') || projs.includes(opts.projectFilter!);
+    const projs = resolveAgentProjects(d);
+    return projs.includes('*') || projs.includes(target);
   });
 }
 

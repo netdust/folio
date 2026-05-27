@@ -110,6 +110,60 @@ test('GET ?type=agent returns workspace agents', async () => {
   expect(body.data).toHaveLength(2);
 });
 
+// BUG-018 — `listWorkspaceDocuments` parsed `frontmatter.projects` directly
+// via Array.isArray + includes. Legacy / hand-imported / pre-2.5 agents
+// with missing or non-array `projects` fell through to `false` in the
+// filter — operators saw "agent doesn't show up in this project's
+// assignee dropdown" even though bearer/SSE/mention-parser (which all
+// route through resolveAgentProjects) granted access. Fix: route the
+// filter through resolveAgentProjects so the missing/non-array fallback
+// to ['*'] is honoured consistently.
+test('BUG-018: agent with no frontmatter.projects defaults to wildcard (visible in any project)', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const { documents } = await import('../db/schema.ts');
+  const { nanoid: nano } = await import('nanoid');
+
+  // Insert an agent the legacy way — no `projects` field at all. This
+  // simulates a pre-2.5 row or a hand-edited markdown import.
+  const legacyId = nano();
+  await db.insert(documents).values({
+    id: legacyId,
+    workspaceId: seed.workspace.id,
+    projectId: null,
+    tableId: null,
+    type: 'agent',
+    slug: 'legacy-agent',
+    title: 'Legacy Agent',
+    body: '',
+    frontmatter: {
+      // NB: no `projects` key. resolveAgentProjects fallback should treat as ['*'].
+      system_prompt: 'help',
+      model: 'm',
+      provider: 'anthropic',
+      tools: [],
+    },
+    createdBy: seed.user.id,
+    updatedBy: seed.user.id,
+  });
+
+  // Make a second project to filter by.
+  const projectBId = nanoid();
+  await db.insert(projects).values({
+    id: projectBId,
+    workspaceId: seed.workspace.id,
+    slug: 'inbox',
+    name: 'Inbox',
+  });
+
+  // Filter to project B: the legacy agent SHOULD appear (no projects = wildcard).
+  const res = await app.request(`${WS_PATH}?type=agent&project=${projectBId}`, {
+    headers: { Cookie: seed.sessionCookie },
+  });
+  const body = await res.json();
+  const titles: string[] = body.data.map((d: { title: string }) => d.title);
+  expect(titles).toContain('Legacy Agent');
+});
+
 test('GET ?type=agent&project=:pid filters by allow-list membership', async () => {
   const { app, db, seed } = await makeTestApp();
   const projectBId = nanoid();
