@@ -603,6 +603,43 @@ test('updateComment does not emit a comment.updated event', async () => {
   expect(updateEvents.length).toBe(0);
 });
 
+// Spec §3c deferral pin: editing the body of an approval comment does NOT
+// recompute target_agent. target_agent is bound to creation-time intent and
+// kind is immutable; this guarantees the pair stays consistent across edits.
+// Removing this test means lifting the deferral and implementing the recompute.
+test('updateComment on kind=approval does NOT recompute target_agent on body change', async () => {
+  const { db, seed } = await makeTestApp();
+  const table = await getWorkItemsTable(db, seed.project.id);
+  const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+  await seedAgent(db, seed.workspace, seed.user, 'drafter');
+  await seedAgent(db, seed.workspace, seed.user, 'reviewer');
+
+  const comment = await createComment({
+    workspace: seed.workspace,
+    project: seed.project,
+    parent,
+    authorContext: userContext(seed.user),
+    actor: seed.user.id,
+    body: '@drafter approved — ship it',
+  });
+  const beforeFm = comment.frontmatter as Record<string, unknown>;
+  expect(beforeFm.kind).toBe('approval');
+  expect(beforeFm.target_agent).toBe('drafter');
+
+  const updated = await updateComment({
+    workspace: seed.workspace,
+    project: seed.project,
+    existing: comment,
+    authorContext: userContext(seed.user),
+    actor: seed.user.id,
+    body: '@reviewer approved — actually you should ship it',
+  });
+
+  const afterFm = updated.frontmatter as Record<string, unknown>;
+  expect(afterFm.kind).toBe('approval');
+  expect(afterFm.target_agent).toBe('drafter');
+});
+
 // -----------------------------------------------------------------------------
 // deleteComment — author-only + soft delete + event
 // -----------------------------------------------------------------------------
