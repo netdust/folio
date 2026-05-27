@@ -550,19 +550,26 @@ export async function updateComment(input: UpdateCommentInput): Promise<Document
 export async function deleteComment(input: DeleteCommentInput): Promise<Document> {
   const { workspace: ws, project: p, existing, authorContext, actor } = input;
 
-  assertAuthor(existing, authorContext);
-
   const existingFm = existing.frontmatter as Record<string, unknown>;
 
-  // Idempotency guard: if already soft-deleted, return the row as-is without
-  // re-bumping deleted_at or re-firing comment.deleted. The route layer may
-  // already 404 on a second call, but the service should be safe on its own.
+  // BUG-011 — idempotency guard FIRST, before assertAuthor. The prior order
+  // (assertAuthor → idempotency) leaked authorship: a non-author deleting
+  // an already-soft-deleted comment got 403 (revealing "not the author")
+  // while the original author got 200 (revealing "is the author"). A hostile
+  // narrowed agent could enumerate the workspace and fingerprint historical
+  // authorship one DELETE at a time. Returning the row as-is for any caller
+  // on an already-soft-deleted row closes that channel; assertAuthor only
+  // fires on the live-delete path.
+  //
   // F7-companion: tighten from truthy to "is a non-empty string" so malformed
   // imports (deleted_at='') don't trigger a phantom re-delete + duplicate
   // comment.deleted event.
   if (typeof existingFm.deleted_at === 'string' && existingFm.deleted_at.length > 0) {
     return existing as Document;
   }
+
+  assertAuthor(existing, authorContext);
+
   const author = (existingFm.author as string) ?? authorString(authorContext);
 
   const mergedRaw: Record<string, unknown> = {

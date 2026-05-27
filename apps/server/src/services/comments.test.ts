@@ -758,6 +758,63 @@ test('deleteComment is idempotent on already-soft-deleted rows', async () => {
   expect(deletedEvents.length).toBe(1);
 });
 
+// BUG-011 — authorship oracle: the prior shape ran assertAuthor BEFORE the
+// idempotency guard, so a non-author calling delete on an already-soft-
+// deleted comment got 403 (revealing "agent X is NOT the author"); the
+// original author got 200 (revealing "agent X IS the author"). A hostile
+// narrowed agent could enumerate slug→authorship across the workspace.
+// Fix: idempotency check first, so any caller on an already-soft-deleted
+// row gets a no-op response.
+test('BUG-011: non-author deleting an already-soft-deleted comment is a no-op (no 403)', async () => {
+  const { db, seed } = await makeTestApp();
+  const table = await getWorkItemsTable(db, seed.project.id);
+  const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+
+  // Author A creates + soft-deletes the comment.
+  const comment = await createComment({
+    workspace: seed.workspace,
+    project: seed.project,
+    parent,
+    authorContext: userContext(seed.user),
+    actor: seed.user.id,
+    body: 'mine',
+  });
+  const softDeleted = await deleteComment({
+    workspace: seed.workspace,
+    project: seed.project,
+    existing: comment,
+    authorContext: userContext(seed.user),
+    actor: seed.user.id,
+  });
+
+  // User B (non-author) calls delete on the already-soft-deleted comment.
+  // Must NOT throw COMMENT_AUTHOR_ONLY — that 403 leaks authorship.
+  const bob = await seedMember(db, seed.workspace, 'bob@test.local', 'Bob');
+
+  let thrown: unknown = null;
+  let out: Document | null = null;
+  try {
+    out = await deleteComment({
+      workspace: seed.workspace,
+      project: seed.project,
+      existing: softDeleted,
+      authorContext: userContext(bob),
+      actor: bob.id,
+    });
+  } catch (e) {
+    thrown = e;
+  }
+  expect(thrown).toBeNull();
+  expect(out).not.toBeNull();
+  expect(out!.body).toBe('');
+
+  // Still only ONE comment.deleted event in the durable log.
+  const deletedEvents = await db.query.events.findMany({
+    where: and(eq(events.documentId, comment.id), eq(events.kind, 'comment.deleted')),
+  });
+  expect(deletedEvents.length).toBe(1);
+});
+
 // -----------------------------------------------------------------------------
 // getComment
 // -----------------------------------------------------------------------------
