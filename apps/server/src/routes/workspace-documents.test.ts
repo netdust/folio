@@ -39,6 +39,34 @@ test('POST /api/v1/w/:wslug/documents creates an agent with workspace_id and pro
   expect(body.data.frontmatter.projects).toEqual(['*']);
 });
 
+// BUG-019 — bare `await c.req.json()` threw an unwrapped SyntaxError
+// on empty/malformed bodies, surfacing as 500. The documented contract
+// is 422 INVALID_BODY. Wrap in try/catch + HTTPError. Agents retrying
+// on 5xx but treating 4xx as terminal would otherwise loop forever.
+test('BUG-019: POST with empty body returns 422 INVALID_BODY (not 500)', async () => {
+  const { app, seed } = await makeTestApp();
+  const res = await app.request(WS_PATH, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: '',
+  });
+  expect(res.status).toBe(422);
+  const body = await res.json();
+  expect(body.error.code).toBe('INVALID_BODY');
+});
+
+test('BUG-019: POST with malformed JSON returns 422 INVALID_BODY (not 500)', async () => {
+  const { app, seed } = await makeTestApp();
+  const res = await app.request(WS_PATH, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: '{title:',
+  });
+  expect(res.status).toBe(422);
+  const body = await res.json();
+  expect(body.error.code).toBe('INVALID_BODY');
+});
+
 test('POST rejects non-agent, non-trigger types', async () => {
   const { app, seed } = await makeTestApp();
   const res = await postWorkspaceDoc(app, seed.sessionCookie, {

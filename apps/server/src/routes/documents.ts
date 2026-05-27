@@ -72,7 +72,13 @@ documentsRoute.post('/', requireScope('documents:write'), async (c) => {
     const raw = await c.req.text();
     input = parseMarkdownInput(raw);
   } else {
-    const json = await c.req.json();
+    // BUG-019 — wrap so malformed/empty bodies surface as 422 INVALID_BODY.
+    let json: unknown;
+    try {
+      json = await c.req.json();
+    } catch {
+      throw new HTTPError('INVALID_BODY', 'JSON body required', 422);
+    }
     const parsed = documentCreateSchema.safeParse(json);
     if (!parsed.success) {
       throw new HTTPError('INVALID_BODY', parsed.error.message, 422);
@@ -307,7 +313,13 @@ documentsRoute.patch('/:slug', requireScope('documents:write'), async (c) => {
     return jsonOk(c, updated);
   }
 
-  const json = await c.req.json();
+  // BUG-019 — wrap so malformed/empty bodies surface as 422 INVALID_BODY.
+  let json: unknown;
+  try {
+    json = await c.req.json();
+  } catch {
+    throw new HTTPError('INVALID_BODY', 'JSON body required', 422);
+  }
   const parsed = documentPatchSchema.safeParse(json);
   if (!parsed.success) throw new HTTPError('INVALID_BODY', parsed.error.message, 422);
   const updated = await updateDocument({

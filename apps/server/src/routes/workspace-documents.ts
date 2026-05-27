@@ -48,7 +48,16 @@ function assertWorkspaceType(type: unknown): asserts type is 'agent' | 'trigger'
 workspaceDocumentsRoute.post('/', requireScope('documents:write'), async (c) => {
   const user = getUser(c);
   const ws = getWorkspace(c);
-  const json = await c.req.json();
+  // BUG-019 — wrap c.req.json() so malformed/empty bodies surface as
+  // 422 INVALID_BODY (the documented contract) instead of an unwrapped
+  // 500 with a SyntaxError stack. Agents retrying on 5xx but treating
+  // 4xx as terminal would retry forever otherwise.
+  let json: unknown;
+  try {
+    json = await c.req.json();
+  } catch {
+    throw new HTTPError('INVALID_BODY', 'JSON body required', 422);
+  }
   const parsed = documentCreateSchema.safeParse(json);
   if (!parsed.success) {
     throw new HTTPError('INVALID_BODY', parsed.error.message, 422);
@@ -129,7 +138,13 @@ workspaceDocumentsRoute.patch('/:slug', requireScope('documents:write'), async (
   const token = c.get('token') ?? null;
   assertAgentScope(existing.type as 'agent' | 'trigger', token, 'write');
 
-  const json = await c.req.json();
+  // BUG-019 — wrap so malformed/empty bodies surface as 422 INVALID_BODY.
+  let json: unknown;
+  try {
+    json = await c.req.json();
+  } catch {
+    throw new HTTPError('INVALID_BODY', 'JSON body required', 422);
+  }
   const parsed = documentPatchSchema.safeParse(json);
   if (!parsed.success) throw new HTTPError('INVALID_BODY', parsed.error.message, 422);
 
