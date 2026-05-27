@@ -294,7 +294,11 @@ export async function createDocument(
   // resulting SQLITE_CONSTRAINT_CHECK error is opaque. Throw a clean
   // typed error instead — F5 already does this for update/delete; this
   // closes the symmetric gap on the create side.
-  if (input.type === 'comment') {
+  //
+  // Cast to string: the service-layer DocumentType union deliberately
+  // excludes 'comment' to keep the doc-create API surface narrow, but the DB
+  // type enum and any pass-through from MCP/HTTP layers can carry the value.
+  if ((input.type as string) === 'comment') {
     throw new HTTPError(
       'COMMENT_REQUIRES_COMMENT_TOOL',
       "comment documents must be created via POST /comments (or MCP create_comment), not the generic document endpoint",
