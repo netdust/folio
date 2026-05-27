@@ -1,5 +1,9 @@
 import { z } from 'zod';
+import { validateCronShape, type CronShapeResult } from '@folio/shared';
 import type { EventKind } from './events.ts';
+
+// Re-export so existing server imports (`from './trigger-schema.ts'`) stay stable.
+export { validateCronShape, type CronShapeResult };
 
 /** Source-of-truth list. Keep in sync with EventKind in events.ts. */
 export const KNOWN_EVENT_KINDS: readonly EventKind[] = [
@@ -15,28 +19,6 @@ export const KNOWN_EVENT_KINDS: readonly EventKind[] = [
   'comment.created',  'comment.mentioned', 'comment.deleted',
   'agent.allow_list.reconciled',
 ];
-
-export interface CronShapeResult {
-  ok: boolean;
-  reason?: string;
-}
-
-const FIELD_RE = /^[0-9*,\-/]+$/;
-
-/** Structural validation only — does NOT verify the cron is meaningful.
- *  Phase 3's scheduler does full evaluation when the trigger fires. */
-export function validateCronShape(expr: string): CronShapeResult {
-  const parts = expr.trim().split(/\s+/);
-  if (parts.length !== 5) {
-    return { ok: false, reason: `cron must have 5 fields (got ${parts.length})` };
-  }
-  for (const p of parts) {
-    if (!FIELD_RE.test(p)) {
-      return { ok: false, reason: `cron field "${p}" contains invalid characters` };
-    }
-  }
-  return { ok: true };
-}
 
 const cronOrNull = z.union([
   z.string().refine((s) => validateCronShape(s).ok, { message: 'invalid cron expression' }),

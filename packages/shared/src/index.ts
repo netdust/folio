@@ -38,3 +38,4 @@ export {
   type FilterInput,
   type Operator,
 } from './filter-compile.ts';
+export { nextFires, validateCronShape, type CronShapeResult } from './cron.ts';
