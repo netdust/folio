@@ -435,6 +435,14 @@ describe('DocumentSlideover', () => {
             { status: 200, headers: { 'content-type': 'application/json' } },
           );
         }
+        // G1: workspace documents listing — used by CommentsTab's
+        // useWorkspaceAgents to resolve id-canonical authors. Returns the
+        // FLAT { data: [] } shape useWorkspaceDocuments expects.
+        if (u.match(/\/w\/[^/]+\/documents(\?|$)/)) {
+          return new Response(JSON.stringify({ data: [] }), {
+            status: 200, headers: { 'content-type': 'application/json' },
+          });
+        }
         if (u.includes('/documents')) {
           return new Response(JSON.stringify({ data: { data: [], nextCursor: null } }), {
             status: 200, headers: { 'content-type': 'application/json' },

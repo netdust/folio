@@ -1,3 +1,4 @@
+import { inArray } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import type { EventKind } from '@folio/shared';
 import { events } from '../db/schema.ts';
@@ -96,21 +97,36 @@ export async function txWithEvents<T>(
   db: DB,
   fn: (tx: Parameters<Parameters<DB['transaction']>[0]>[0]) => Promise<T>,
 ): Promise<T> {
-  let pending: BusEvent[] | null = null;
+  const pending: BusEvent[] = [];
   try {
     const result = await db.transaction(async (tx) => {
-      pending = [];
       pendingByTx.set(tx as object, pending);
       return fn(tx);
     });
-    // Tx committed — drain the queue.
-    if (pending) {
-      for (const e of pending as BusEvent[]) eventBus.publish(e);
-    }
+    // Tx committed — drain the queue onto the in-process bus.
+    for (const e of pending) eventBus.publish(e);
     return result;
   } catch (err) {
-    // Tx rolled back — discard the queue.
-    pending = null;
+    // Tx rolled back — bus publish suppressed.
+    //
+    // G10: bun-sqlite + drizzle has a documented quirk where async throws
+    // inside db.transaction don't actually roll back the SQL row (see
+    // events.test.ts rollback assertion). That leaves an `events` row in
+    // the durable log without a matching live bus publish — live SSE
+    // subscribers miss it, but Last-Event-Id replay later delivers it,
+    // making the two paths disagree. Defensively scrub the rows we
+    // intended to roll back.
+    if (pending.length > 0) {
+      try {
+        const ids = pending.map((e) => e.id).filter((id): id is string => typeof id === 'string');
+        if (ids.length > 0) {
+          await db.delete(events).where(inArray(events.id, ids));
+        }
+      } catch {
+        // If the scrub itself fails (DB unreachable, etc.), swallow — the
+        // ORIGINAL error is the one the caller cares about.
+      }
+    }
     throw err;
   }
 }

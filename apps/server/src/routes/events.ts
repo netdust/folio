@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { streamSSE } from 'hono/streaming';
-import { and, eq, gt } from 'drizzle-orm';
+import { and, eq, gt, or } from 'drizzle-orm';
 import { db } from '../db/client.ts';
 import { documents, events } from '../db/schema.ts';
 import type { AuthContext } from '../middleware/auth.ts';
@@ -91,10 +91,19 @@ eventsRoute.get('/', async (c) => {
         where: eq(events.id, lastEventId),
       });
       if (anchor) {
+        // G14: same-millisecond ties used to be dropped by the strict
+        // `gt(createdAt)` filter even though orderBy carried `asc(e.id)` as
+        // a tiebreaker — sequential awaits in one txWithEvents can produce
+        // events that share createdAt on warm code paths. Composite cursor:
+        // any event strictly later in time, OR same time but with a later
+        // id (lex compare; nanoid is content-stable per row).
         const rows = await db.query.events.findMany({
           where: and(
             eq(events.workspaceId, ws.id),
-            gt(events.createdAt, anchor.createdAt),
+            or(
+              gt(events.createdAt, anchor.createdAt),
+              and(eq(events.createdAt, anchor.createdAt), gt(events.id, anchor.id)),
+            ),
           ),
           orderBy: (e, { asc }) => [asc(e.createdAt), asc(e.id)],
           limit: 500,

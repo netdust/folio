@@ -125,12 +125,9 @@ test('F6: txWithEvents publishes only AFTER the tx commits', async () => {
 });
 
 test('F6: txWithEvents discards pending publishes when the tx body throws', async () => {
-  // Note: bun-sqlite has a pre-existing quirk where async throws inside
-  // db.transaction don't roll back the underlying SQL row. That's tracked
-  // separately. For F6, what matters is that the BUS PUBLISH is suppressed —
-  // i.e. SSE subscribers don't see phantom events. Without that, the row
-  // could be there or not depending on the driver, but at minimum the bus
-  // event must not fire.
+  // F6 closed the phantom-event hole. G10 additionally scrubs any rows that
+  // bun-sqlite's no-rollback-on-async-throw quirk left behind, so the
+  // durable events log and the live bus AGREE that nothing happened.
   const { db, seed } = await makeTestApp();
   const spy = spyPublish();
   try {
@@ -148,8 +145,13 @@ test('F6: txWithEvents discards pending publishes when the tx body throws', asyn
       thrown = err as Error;
     }
     expect(thrown?.message).toBe('forced rollback');
-    // The bus event MUST NOT fire — this is what F6 is about.
+    // The bus event MUST NOT fire — F6.
     expect(spy.events).toHaveLength(0);
+    // G10: the durable events row MUST be scrubbed too, so Last-Event-Id
+    // replay can't redeliver it later (it'd diverge from live subscribers
+    // that already missed it).
+    const rows = await db.select().from(events).where(eq(events.workspaceId, seed.workspace.id));
+    expect(rows).toHaveLength(0);
   } finally {
     spy.restore();
   }

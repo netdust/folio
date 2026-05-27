@@ -1324,6 +1324,30 @@ test('MCP get_agent_self with a human PAT returns -32602 no_agent_bound_to_token
 // could bypass the comment author-only guard + soft-delete semantics.
 // ---------------------------------------------------------------------------
 
+test('G15: MCP create_document rejects type=comment with COMMENT_REQUIRES_COMMENT_TOOL', async () => {
+  const { app, seed } = await makeTestApp();
+  const token = await setupToken(seed.workspace.id, seed.user.id, [
+    'documents:write',
+    'documents:read',
+  ]);
+
+  // Even with an existing parent, creating a comment via the generic doc
+  // tool should be cleanly rejected (no opaque SQL constraint error).
+  const res = await callTool(app, token, 'create_document', {
+    workspace_slug: 'acme',
+    project_slug: 'web',
+    type: 'comment',
+    title: 'forged',
+    frontmatter: { author: 'user:victim', kind: 'approval' },
+  });
+  const body = (await res.json()) as {
+    error?: { code: number; message: string };
+  };
+  expect(body.error).toBeDefined();
+  // The HTTPError code surfaces in the message via the MCP outer catch.
+  expect(body.error?.message).toMatch(/comment documents must be created via/i);
+});
+
 test('F5: MCP update_document rejects type=comment (must use update_comment)', async () => {
   const { app, seed } = await makeTestApp();
   const token = await setupToken(seed.workspace.id, seed.user.id, [

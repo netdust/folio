@@ -287,6 +287,21 @@ export async function createDocument(
     frontmatter: stripReservedFrontmatter(args.input.frontmatter ?? {}),
   };
 
+  // G15: comments are created through createComment (services/comments.ts),
+  // which resolves the author context and parses mentions. The generic doc
+  // path can't do either — the DB CHECK constraint blocks the actual insert
+  // (comments require parent_id; this path hard-codes it to null) but the
+  // resulting SQLITE_CONSTRAINT_CHECK error is opaque. Throw a clean
+  // typed error instead — F5 already does this for update/delete; this
+  // closes the symmetric gap on the create side.
+  if (input.type === 'comment') {
+    throw new HTTPError(
+      'COMMENT_REQUIRES_COMMENT_TOOL',
+      "comment documents must be created via POST /comments (or MCP create_comment), not the generic document endpoint",
+      422,
+    );
+  }
+
   // Phase 2.5 invariant: agent/trigger ⇒ project=null; work_item/page ⇒ project required.
   // The CHECK constraint also enforces this at the DB layer; the service-level guard
   // gives a clean error message instead of "SQLITE_CONSTRAINT_CHECK".

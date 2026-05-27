@@ -197,10 +197,16 @@ async function loadWorkspaceAgents(workspaceId: string): Promise<AgentForParser[
     const allowed = Array.isArray(projs)
       ? (projs as unknown[]).filter((x) => typeof x === 'string') as string[]
       : ['*'];
+    // G11: wildcard must be honored regardless of position. The previous
+    // `allowed[0] === '*' ? ['*'] : allowed` only collapsed when '*' was at
+    // index 0, so a hand-edited frontmatter like `['proj-1', '*']` (which
+    // bypasses the API-layer Zod refine) silently treated the wildcard as a
+    // literal project id. Other consumers (agent-guards.ts, events.ts) use
+    // `.includes('*')` — bring this one in line.
     return {
       id: r.id,
       slug: r.slug,
-      allowedProjectIds: (allowed[0] === '*' ? ['*'] : allowed) as string[] | ['*'],
+      allowedProjectIds: (allowed.includes('*') ? ['*'] : allowed) as string[] | ['*'],
     };
   });
 }

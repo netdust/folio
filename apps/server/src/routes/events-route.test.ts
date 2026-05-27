@@ -277,6 +277,85 @@ test('F3: agent token without ?project= can still subscribe (workspace events al
   await res.body?.cancel();
 });
 
+test('G14: SSE replay returns events with same createdAt as anchor when their id sorts after the anchor id', async () => {
+  const { app, db: testDb, seed } = await makeTestApp();
+  const { token, hash } = newApiToken();
+  await testDb.insert(apiTokens).values({
+    id: nanoid(),
+    workspaceId: seed.workspace.id,
+    name: 'g14',
+    tokenHash: hash,
+    scopes: ['documents:read'],
+    createdBy: seed.user.id,
+  });
+
+  // Three events at the same instant. Sort ids lexically; replay anchored at
+  // the LEX-FIRST id should still surface the other two (same createdAt, but
+  // ids sort after the anchor).
+  const sameTs = new Date(Date.now() - 60_000);
+  const { events } = await import('../db/schema.ts');
+  // Ids picked so the order is deterministic: 'evt-a' < 'evt-b' < 'evt-c'.
+  await testDb.insert(events).values([
+    {
+      id: 'evt-a-anchor',
+      workspaceId: seed.workspace.id,
+      projectId: null,
+      documentId: null,
+      kind: 'workspace.created',
+      actor: seed.user.id,
+      payload: {},
+      createdAt: sameTs,
+    },
+    {
+      id: 'evt-b-same-ms',
+      workspaceId: seed.workspace.id,
+      projectId: null,
+      documentId: null,
+      kind: 'workspace.updated',
+      actor: seed.user.id,
+      payload: {},
+      createdAt: sameTs,
+    },
+    {
+      id: 'evt-c-same-ms',
+      workspaceId: seed.workspace.id,
+      projectId: null,
+      documentId: null,
+      kind: 'workspace.updated',
+      actor: seed.user.id,
+      payload: {},
+      createdAt: sameTs,
+    },
+  ]);
+
+  const res = await app.request('/api/v1/w/acme/events', {
+    headers: { Authorization: `Bearer ${token}`, 'Last-Event-Id': 'evt-a-anchor' },
+  });
+  expect(res.status).toBe(200);
+  const reader = res.body?.getReader();
+  if (!reader) throw new Error('no body');
+  const decoder = new TextDecoder();
+  let text = '';
+  const start = Date.now();
+  while (Date.now() - start < 300) {
+    const { value, done } = await Promise.race([
+      reader.read(),
+      new Promise<{ value?: Uint8Array; done: boolean }>((resolve) =>
+        setTimeout(() => resolve({ done: false }), 100),
+      ),
+    ]);
+    if (done) break;
+    if (value) text += decoder.decode(value);
+  }
+  await reader.cancel();
+
+  // The anchor itself should NOT be redelivered.
+  expect(text).not.toContain('evt-a-anchor');
+  // Both same-ms-later-id events SHOULD be redelivered.
+  expect(text).toContain('evt-b-same-ms');
+  expect(text).toContain('evt-c-same-ms');
+});
+
 test('G9: workspace-level agent.* events about OTHER agents are suppressed for narrowed tokens', async () => {
   const { app, db: testDb, seed } = await makeTestApp();
 
