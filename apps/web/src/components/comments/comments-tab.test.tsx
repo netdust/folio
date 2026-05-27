@@ -356,4 +356,28 @@ describe('CommentsTab', () => {
     await waitFor(() => screen.getByText('Hello world'));
     expect(screen.queryByRole('button', { name: /load more/i })).not.toBeInTheDocument();
   });
+
+  // F15 — composer must remount when parentId changes so the debounced
+  // draft writer (built once via useRef in CommentComposer) doesn't keep
+  // writing the new doc's text into the OLD doc's localStorage key.
+  //
+  // We assert via the load-draft side-effect: when parentId changes from
+  // 'doc-A' to 'doc-B' AND localStorage already has a draft for B,
+  // re-rendering with the new parentId must load B's draft (which only
+  // happens on mount). Without key={parentId}, the composer stays mounted
+  // with A's stale `initialDraft` closure and the submit button stays
+  // disabled.
+  it('F15: composer remounts when parentId changes, reloading the correct draft', async () => {
+    localStorage.setItem('folio:comment-draft:doc-B', 'leftover for B');
+    const { rerender } = renderTab({ parentId: 'doc-A' });
+    // doc-A has no draft → submit disabled.
+    const submitA = screen.getByTestId('comment-composer-submit') as HTMLButtonElement;
+    expect(submitA.disabled).toBe(true);
+
+    // Switch to doc-B without unmounting the slideover. The composer must
+    // remount and read doc-B's draft.
+    rerender(<CommentsTab {...defaultProps} parentId="doc-B" />);
+    const submitB = screen.getByTestId('comment-composer-submit') as HTMLButtonElement;
+    expect(submitB.disabled).toBe(false);
+  });
 });

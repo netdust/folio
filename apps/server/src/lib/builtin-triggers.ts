@@ -36,7 +36,11 @@ export const BUILTIN_TRIGGER_DEFS: ReadonlyArray<BuiltinTriggerDef> = [
     frontmatter: {
       on_event: 'agent.task.assigned',
       schedule: null,
-      agent: '$event.assignee_slug',
+      // F12: emitters of agent.task.assigned write payload.agent (the slug),
+      // not payload.assignee_slug. Placeholder must match the actual key —
+      // otherwise the Phase 3 dispatcher will resolve to undefined and the
+      // trigger silently never fires.
+      agent: '$event.agent',
       enabled: false,
       builtin: true,
       payload: null,

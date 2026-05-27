@@ -619,9 +619,18 @@ export async function listComments(input: ListCommentsInput): Promise<Document[]
 
   if (since !== undefined) {
     const ts = new Date(since);
-    if (!Number.isNaN(ts.getTime())) {
-      whereClauses.push(gt(documents.createdAt, ts));
+    if (Number.isNaN(ts.getTime())) {
+      // F14: invalid `since` used to silently fall through (no filter
+      // applied), so polling consumers got the FULL list and treated it as
+      // "new since X" — re-processing every historical row. Surface clearly
+      // so the caller can fix the input.
+      throw new HTTPError(
+        'INVALID_QUERY',
+        `invalid since timestamp: ${since}`,
+        422,
+      );
     }
+    whereClauses.push(gt(documents.createdAt, ts));
   }
 
   // Visibility filter: default = ['normal']. When the caller explicitly opts in

@@ -296,9 +296,17 @@ export function CommentsTab({
   // ---------- Render ---------------------------------------------------
   return (
     <div className="flex flex-col gap-3 py-3">
-      {/* Composer at top */}
+      {/* Composer at top.
+          F15: key={parentId} forces a remount when the parent document
+          changes. CommentComposer captures parentId into a useRef-bound
+          debounced draft writer that's built once on mount; without the
+          key, navigating doc A → doc B without closing the slideover would
+          let the closure persist and write doc B's text into doc A's
+          localStorage draft key. Remount rebuilds the closure with the
+          fresh prop and reloads the correct draft for the new doc. */}
       <div className="px-3">
         <CommentComposer
+          key={parentId}
           workspaceSlug={workspaceSlug}
           projectSlug={projectSlug}
           parentId={parentId}

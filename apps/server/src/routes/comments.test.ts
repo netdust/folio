@@ -581,6 +581,39 @@ test('F4: DELETE /comments/:slug 404s when slug belongs to a different project',
 });
 
 // ---------------------------------------------------------------------------
+// F14 — listComments must reject malformed `since` rather than ignoring it.
+//
+// Before this fix an invalid `since` silently dropped the filter, returning
+// the full list. A polling consumer would treat them all as new.
+// ---------------------------------------------------------------------------
+
+test('F14: GET list ?since=garbage returns 422 INVALID_QUERY', async () => {
+  const { app, seed } = await makeTestApp();
+  const parent = await createParent(app, seed.sessionCookie, 'P');
+  // Seed at least one comment so the route reaches the filter step.
+  await app.request(parentPath(parent), {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ body: 'first' }),
+  });
+
+  const res = await app.request(`${parentPath(parent)}?since=not-a-date`, {
+    headers: { Cookie: seed.sessionCookie },
+  });
+  expect(res.status).toBe(422);
+  expect((await res.json()).error.code).toBe('INVALID_QUERY');
+});
+
+test('F14: GET list with a valid ISO ?since= still works', async () => {
+  const { app, seed } = await makeTestApp();
+  const parent = await createParent(app, seed.sessionCookie, 'P');
+  const res = await app.request(`${parentPath(parent)}?since=2025-01-01T00:00:00Z`, {
+    headers: { Cookie: seed.sessionCookie },
+  });
+  expect(res.status).toBe(200);
+});
+
+// ---------------------------------------------------------------------------
 // F11 — assertAuthor must NOT depend on the agent's mutable slug.
 //
 // Author strings are stored as 'agent:<slug>' historically; renaming an

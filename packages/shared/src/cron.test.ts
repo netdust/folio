@@ -57,3 +57,52 @@ describe('validateCronShape (relocated)', () => {
     expect(validateCronShape('a b c d e').ok).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// F13 — cron correctness fixes (Phase 2.6 review)
+// ---------------------------------------------------------------------------
+
+describe('F13: cron parser edge cases', () => {
+  // F13.1 — dow=7 must be accepted as Sunday (croniter / cron(5) / unix-cron).
+  it('accepts day-of-week 7 as Sunday equivalent to 0', () => {
+    // 2026-05-31 is a Sunday.
+    const out7 = nextFires('0 9 * * 7', 1, new Date('2026-05-30T08:00:00Z'));
+    expect(out7).toHaveLength(1);
+    expect(out7[0]).toBe('2026-05-31T09:00:00.000Z');
+    // And 0 still works the same.
+    const out0 = nextFires('0 9 * * 0', 1, new Date('2026-05-30T08:00:00Z'));
+    expect(out0).toEqual(out7);
+  });
+
+  // F13.2 — leading-dash range `-1-5` must be rejected, not silently coerced
+  // to {0,1}. Without this fix the cron runs at minutes 0 and 1 instead of
+  // erroring at parse time.
+  it('rejects leading-dash ranges in any field', () => {
+    expect(nextFires('-1-5 * * * *', 1)).toEqual([]);
+    expect(validateCronShape('-1-5 * * * *').ok).toBe(false);
+  });
+
+  // F13.3 — Three-part "ranges" like 5-10-15 must be rejected, not silently
+  // truncated to 5-10. The user probably meant a comma list.
+  it('rejects three-part ranges in any field', () => {
+    expect(nextFires('0 9 5-10-15 * *', 1)).toEqual([]);
+    expect(validateCronShape('0 9 5-10-15 * *').ok).toBe(false);
+  });
+
+  // F13.4 — Crons whose next firing is more than 366 days out (Feb 29 leap
+  // day, or impossible like Feb 31) currently return []. At minimum the
+  // parser should report this clearly via validateCronShape when the cron
+  // is mathematically impossible. Feb 29 falls back to extended search now.
+  it('extends search horizon to find Feb 29 within 4 years', () => {
+    // 2025 was not a leap year; 2026 isn't either; 2027 isn't; 2028 is.
+    const out = nextFires('0 0 29 2 *', 1, new Date('2025-03-01T00:00:00Z'));
+    expect(out).toHaveLength(1);
+    expect(out[0]).toBe('2028-02-29T00:00:00.000Z');
+  });
+
+  it('rejects mathematically impossible day-of-month/month combos', () => {
+    // Feb 31 never exists. The parser flags it at shape time so the UI can
+    // surface a clearer error than "no upcoming fires".
+    expect(validateCronShape('0 0 31 2 *').ok).toBe(false);
+  });
+});
