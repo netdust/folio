@@ -8,6 +8,35 @@ import type { ResolvedMention } from './comment-schema.ts';
 const TOKEN_RE = /(?:^|\s)@([a-z][a-z0-9-]+)/g;
 
 /**
+ * BUG-009 — mask markdown code spans + blockquote lines with equal-length
+ * whitespace BEFORE tokenisation. Position-preserving so downstream offset
+ * arithmetic (match.index, body.slice) keeps working.
+ *
+ * Three patterns, applied in order so overlaps resolve correctly:
+ *   1. Fenced code blocks (``` and ~~~)
+ *   2. Inline code (`...`) — backticks balanced, no inner newlines
+ *   3. Blockquote-prefixed lines (`> ` or `>` at line start, optionally
+ *      preceded by up to 3 spaces per CommonMark)
+ *
+ * Replaces the entire span — fences/backticks/prefix included — with spaces.
+ * Newlines inside fenced blocks are preserved so blockquote scanning still
+ * sees line boundaries.
+ */
+const FENCED_CODE_RE = /(^|\n)(```|~~~)[^\n]*\n[\s\S]*?(?:\n\2[^\n]*|$)/g;
+const INLINE_CODE_RE = /`[^`\n]+`/g;
+const BLOCKQUOTE_LINE_RE = /(^|\n) {0,3}>[^\n]*/g;
+
+function maskMarkdownNoise(body: string): string {
+  // Replace `match` with whitespace of equal length, preserving newlines so
+  // line-based regexes downstream still see line breaks correctly.
+  const blank = (match: string) => match.replace(/[^\n]/g, ' ');
+  return body
+    .replace(FENCED_CODE_RE, blank)
+    .replace(INLINE_CODE_RE, blank)
+    .replace(BLOCKQUOTE_LINE_RE, blank);
+}
+
+/**
  * Matches the past-participle approval/rejection keywords exactly.
  * Optional trailing punctuation is stripped to handle "rejected;" "rejected," etc.
  */
@@ -49,7 +78,10 @@ export interface ParseMentionsResult {
 }
 
 export function parseMentions(input: ParseMentionsInput): ParseMentionsResult {
-  const { body, workspaceAgents, workspaceMembers, currentProjectId } = input;
+  const { workspaceAgents, workspaceMembers, currentProjectId } = input;
+  // BUG-009 — mask code/quote spans so tokenisation + keyword scanning skip
+  // them entirely. Equal-length whitespace replacement preserves all offsets.
+  const body = maskMarkdownNoise(input.body);
 
   const seen = new Set<string>();
   const mentions: ResolvedMention[] = [];

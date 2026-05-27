@@ -172,4 +172,78 @@ describe('parseMentions', () => {
     });
     expect(r.mentions.length).toBe(1);
   });
+
+  // BUG-009 — mentions and approval keywords inside markdown code/quote spans
+  // must be ignored. Otherwise a hostile user can quote a past approval
+  // (`> @drafter approved this last week.`) and trigger fresh approval
+  // semantics, or place `@drafter approved` inside backticks and bypass any
+  // policy that gates approvals by sender.
+  describe('BUG-009 — markdown-aware masking', () => {
+    it('ignores mentions inside inline code spans', () => {
+      const r = parseMentions({
+        body: 'see `@drafter approved` for the syntax',
+        workspaceAgents: agents,
+        workspaceMembers: members,
+        currentProjectId: 'pr-a',
+      });
+      expect(r.mentions).toEqual([]);
+      expect(r.approvalIntent).toBeNull();
+    });
+
+    it('ignores mentions inside fenced code blocks', () => {
+      const r = parseMentions({
+        body: 'example:\n```\n@drafter approved\n```\nthat is all',
+        workspaceAgents: agents,
+        workspaceMembers: members,
+        currentProjectId: 'pr-a',
+      });
+      expect(r.mentions).toEqual([]);
+      expect(r.approvalIntent).toBeNull();
+    });
+
+    it('ignores mentions inside tilde-fenced code blocks', () => {
+      const r = parseMentions({
+        body: 'example:\n~~~\n@drafter approved\n~~~',
+        workspaceAgents: agents,
+        workspaceMembers: members,
+        currentProjectId: 'pr-a',
+      });
+      expect(r.mentions).toEqual([]);
+      expect(r.approvalIntent).toBeNull();
+    });
+
+    it('ignores mentions inside blockquote lines', () => {
+      const r = parseMentions({
+        body: '> @drafter approved this last week.\n\nstill thinking.',
+        workspaceAgents: agents,
+        workspaceMembers: members,
+        currentProjectId: 'pr-a',
+      });
+      expect(r.mentions).toEqual([]);
+      expect(r.approvalIntent).toBeNull();
+    });
+
+    it('honors mentions that appear OUTSIDE code/quote spans on the same body', () => {
+      const r = parseMentions({
+        body: '> @drafter approved last week\n\n@drafter approved now',
+        workspaceAgents: agents,
+        workspaceMembers: members,
+        currentProjectId: 'pr-a',
+      });
+      expect(r.mentions.map((m) => m.target)).toEqual(['agent:drafter']);
+      expect(r.approvalIntent?.kind).toBe('approval');
+      expect(r.approvalIntent?.targetAgent).toBe('drafter');
+    });
+
+    it('does not treat lines that merely contain a `>` as blockquotes', () => {
+      const r = parseMentions({
+        body: 'compare a > b and @drafter approved',
+        workspaceAgents: agents,
+        workspaceMembers: members,
+        currentProjectId: 'pr-a',
+      });
+      expect(r.mentions.map((m) => m.target)).toEqual(['agent:drafter']);
+      expect(r.approvalIntent?.kind).toBe('approval');
+    });
+  });
 });
