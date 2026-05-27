@@ -31,6 +31,10 @@ import type {
   Workspace,
 } from '../db/schema.ts';
 import { HTTPError } from '../lib/http.ts';
+import {
+  assertAgentAllowListWidening,
+  assertAgentToolsWidening,
+} from '../lib/agent-guards.ts';
 import { serializeMarkdown } from '../lib/frontmatter.ts';
 import { stripReservedFrontmatter } from '../services/documents.ts';
 import {
@@ -40,13 +44,14 @@ import {
 import {
   attachToken,
   getToken,
-  intersect,
   requireToken,
 } from '../middleware/bearer.ts';
+import { intersectAgentProjects, resolveAgentProjects } from '../lib/agent-projects.ts';
 import {
   createDocument,
   deleteDocument,
   getDocument,
+  getWorkspaceDocument,
   listDocuments,
   updateDocument,
   type DocumentType,
@@ -54,6 +59,20 @@ import {
 import { listStatuses } from '../services/statuses.ts';
 import { listFields } from '../services/fields.ts';
 import { listViews, runView } from '../services/views.ts';
+import {
+  type AuthorContext,
+  createComment,
+  deleteComment,
+  getCommentScoped,
+  listComments,
+  updateComment,
+} from '../services/comments.ts';
+import {
+  type CommentKind,
+  type CommentVisibility,
+  commentKindSchema,
+  commentVisibilitySchema,
+} from '../lib/comment-schema.ts';
 
 // --- JSON-RPC types ---
 
@@ -134,6 +153,26 @@ function mcpInvalidParams(message: string, data: Record<string, unknown>): Error
   return err;
 }
 
+/**
+ * Translate an HTTPError thrown by `lib/agent-guards.ts` into the MCP-shaped
+ * error so create_agent / update_agent / delete_agent all surface the same
+ * `error.data.reason` strings the protocol promises.
+ */
+function rethrowAgentGuardAsMcp(err: unknown): never {
+  if (err instanceof HTTPError) {
+    if (err.code === 'ALLOW_LIST_WIDENING_FORBIDDEN') {
+      throw mcpInvalidParams(err.message, { reason: 'allow_list_widening_forbidden' });
+    }
+    if (err.code === 'TOOLS_WIDENING_FORBIDDEN') {
+      throw mcpInvalidParams(err.message, { reason: 'tools_widening_forbidden' });
+    }
+    if (err.code === 'CANNOT_DELETE_SELF') {
+      throw mcpInvalidParams(err.message, { reason: 'cannot_delete_self' });
+    }
+  }
+  throw err as Error;
+}
+
 async function resolveProjectInWorkspace(
   ws: Workspace,
   token: ApiToken,
@@ -157,9 +196,8 @@ async function resolveProjectInWorkspace(
         reason: 'agent_missing',
       });
     }
-    const agentProjects =
-      ((agent.frontmatter as { projects?: string[] }).projects) ?? ['*'];
-    const effective = intersect(agentProjects, token.projectIds ?? null);
+    const agentProjects = resolveAgentProjects(agent);
+    const effective = intersectAgentProjects(agentProjects, token.projectIds ?? null);
     if (!effective.includes('*') && !effective.includes(p.id)) {
       // Structured server log — needed for operators debugging "my agent is
       // silently ignoring this project". The MCP response keeps minimal data
@@ -179,6 +217,53 @@ async function resolveProjectInWorkspace(
     }
   }
   return p;
+}
+
+/**
+ * Resolve the comment author context for a bearer token.
+ *
+ * - Agent-bound token (`token.agentId` set) → `{ type: 'agent', agentSlug, agentId }`.
+ *   The slug is looked up from the agent doc; clients never supply it.
+ * - Otherwise → `{ type: 'user', userId: token.createdBy }` (human PAT / session bearer).
+ *
+ * Mirrors `resolveAuthorContext` in routes/comments.ts but takes a token directly
+ * because MCP has no session/user context plumbing.
+ */
+async function resolveAuthorContextForToken(token: ApiToken): Promise<AuthorContext> {
+  if (token.agentId) {
+    const agent = await db.query.documents.findFirst({
+      where: and(eq(documents.id, token.agentId), eq(documents.type, 'agent')),
+    });
+    if (!agent) {
+      throw mcpInvalidParams('agent for this token no longer exists', {
+        reason: 'agent_missing',
+      });
+    }
+    return { type: 'agent', agentSlug: agent.slug, agentId: token.agentId };
+  }
+  // Human PAT: attribute the comment to the token's owner (createdBy). A
+  // workspace-scoped token without a creator (legacy/system) cannot author a
+  // comment — surface this as an MCP error rather than silently mis-attributing.
+  if (!token.createdBy) {
+    throw mcpInvalidParams('token has no owner; cannot resolve comment author', {
+      reason: 'unknown_author',
+    });
+  }
+  return { type: 'user', userId: token.createdBy };
+}
+
+/** Parse a possibly-CSV string MCP arg into a typed list (or undefined). */
+function parseCsvArg<T extends string>(
+  args: Record<string, unknown>,
+  key: string,
+): T[] | undefined {
+  const raw = args[key];
+  if (typeof raw !== 'string' || raw.length === 0) return undefined;
+  const parts = raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean) as T[];
+  return parts.length > 0 ? parts : undefined;
 }
 
 /**
@@ -244,9 +329,8 @@ const TOOLS: ToolDef[] = [
       const agent = await db.query.documents.findFirst({
         where: and(eq(documents.id, token.agentId), eq(documents.type, 'agent')),
       });
-      const agentProjects =
-        ((agent?.frontmatter as { projects?: string[] })?.projects) ?? ['*'];
-      const effective = intersect(agentProjects, token.projectIds ?? null);
+      const agentProjects = agent ? resolveAgentProjects(agent) : ['*'];
+      const effective = intersectAgentProjects(agentProjects, token.projectIds ?? null);
       const filtered = effective.includes('*')
         ? all
         : all.filter((p) => effective.includes(p.id));
@@ -457,6 +541,14 @@ const TOOLS: ToolDef[] = [
           { reason: 'agent_lifecycle_via_http_only' },
         );
       }
+      // F5: comments must go through update_comment so the author-only guard
+      // + soft-delete + kind-immutable invariants apply.
+      if (existing.type === 'comment') {
+        throw mcpInvalidParams(
+          'comment documents must be mutated via the update_comment tool',
+          { reason: 'comment_requires_comment_tool' },
+        );
+      }
 
       // For work_item patches, surface a fallback table only if the doc has
       // none (legacy rows). The service tolerates `null` here for non-work_item
@@ -521,6 +613,13 @@ const TOOLS: ToolDef[] = [
         throw mcpInvalidParams(
           `${existing.type} documents cannot be deleted via MCP in Phase 2.5; use DELETE /api/v1/w/:wslug/documents/${slug}`,
           { reason: 'agent_lifecycle_via_http_only' },
+        );
+      }
+      // F5: comments must go through delete_comment (soft-delete + author guard).
+      if (existing.type === 'comment') {
+        throw mcpInvalidParams(
+          'comment documents must be deleted via the delete_comment tool',
+          { reason: 'comment_requires_comment_tool' },
         );
       }
       await deleteDocument({
@@ -654,6 +753,417 @@ const TOOLS: ToolDef[] = [
         view: { id: view.id, name: view.name },
         documents: docs,
       });
+    },
+  },
+
+  // ---------------------------------------------------------------------------
+  // Phase 2.6 — comment tools (delegate to services/comments.ts).
+  //
+  // Author resolution: agent-bound tokens always post as `agent:<slug>`; clients
+  // do NOT supply `author`. Human PATs post as `user:<creator>`. The service
+  // handles mention parsing + approval-keyword detection. Update/delete enforce
+  // author-only at the service layer; this route catches COMMENT_AUTHOR_ONLY
+  // and re-throws as a structured JSON-RPC error so agents can branch on
+  // `data.reason`.
+  // ---------------------------------------------------------------------------
+  {
+    name: 'create_comment',
+    description:
+      'Post a comment on a work_item or page. Mention parsing + approval-keyword detection happen server-side; the author is resolved from the bearer token.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace_slug: { type: 'string' },
+        project_slug: { type: 'string' },
+        parent_slug: { type: 'string' },
+        body: { type: 'string' },
+        kind: {
+          type: 'string',
+          enum: ['comment', 'plan', 'result', 'error', 'approval', 'rejection', 'reply'],
+        },
+        target_agent: { type: 'string' },
+        visibility: { type: 'string', enum: ['normal', 'internal'] },
+      },
+      required: ['workspace_slug', 'project_slug', 'parent_slug', 'body'],
+    },
+    requiredScope: 'documents:write',
+    handler: async ({ token }, args) => {
+      const ws = await resolveWorkspaceForToken(token, args);
+      const project = await resolveProjectInWorkspace(ws, token, args);
+      const parentSlug = requireString(args, 'parent_slug');
+      const parent = await db.query.documents.findFirst({
+        where: and(eq(documents.projectId, project.id), eq(documents.slug, parentSlug)),
+      });
+      if (!parent) throw new Error(`parent ${parentSlug} not found`);
+
+      const authorContext = await resolveAuthorContextForToken(token);
+      const body = requireString(args, 'body');
+
+      // Narrow the enum-typed args through the same Zod parsers the route uses,
+      // so an invalid value surfaces a clean JSON-RPC error instead of leaking
+      // into the service.
+      const kindArg = optionalString(args, 'kind');
+      const kind = kindArg !== undefined ? commentKindSchema.parse(kindArg) : undefined;
+      const visibilityArg = optionalString(args, 'visibility');
+      const visibility =
+        visibilityArg !== undefined ? commentVisibilitySchema.parse(visibilityArg) : undefined;
+      const targetAgent = optionalString(args, 'target_agent');
+
+      const doc = await createComment({
+        workspace: ws,
+        project,
+        parent,
+        authorContext,
+        actor: token.id,
+        body,
+        kind,
+        targetAgent,
+        visibility,
+      });
+      const fm = doc.frontmatter as Record<string, unknown>;
+      return textResult({
+        slug: doc.slug,
+        kind: fm.kind,
+        ...(fm.target_agent !== undefined ? { target_agent: fm.target_agent } : {}),
+      });
+    },
+  },
+  {
+    name: 'list_comments',
+    description:
+      'List comments on a work_item or page. Newest-first. Optional kind / since / visibility filters. Default visibility is "normal" (internal rows excluded unless explicitly requested).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace_slug: { type: 'string' },
+        project_slug: { type: 'string' },
+        parent_slug: { type: 'string' },
+        kind: { type: 'string' },
+        since: { type: 'string' },
+        visibility: { type: 'string' },
+      },
+      required: ['workspace_slug', 'project_slug', 'parent_slug'],
+    },
+    requiredScope: 'documents:read',
+    handler: async ({ token }, args) => {
+      const ws = await resolveWorkspaceForToken(token, args);
+      const project = await resolveProjectInWorkspace(ws, token, args);
+      const parentSlug = requireString(args, 'parent_slug');
+      const parent = await db.query.documents.findFirst({
+        where: and(eq(documents.projectId, project.id), eq(documents.slug, parentSlug)),
+      });
+      if (!parent) throw new Error(`parent ${parentSlug} not found`);
+
+      // `kind` and `visibility` accept a single value or a comma-separated list,
+      // matching the REST query convention (?kind=plan,result).
+      const kinds = parseCsvArg<string>(args, 'kind');
+      const visibility = parseCsvArg<string>(args, 'visibility');
+      const since = optionalString(args, 'since');
+
+      const kindParsed: CommentKind[] | undefined = kinds
+        ? kinds.map((k) => commentKindSchema.parse(k))
+        : undefined;
+      const visibilityParsed: CommentVisibility[] | undefined = visibility
+        ? visibility.map((v) => commentVisibilitySchema.parse(v))
+        : undefined;
+
+      const rows = await listComments({
+        parentId: parent.id,
+        kind: kindParsed,
+        since,
+        visibility: visibilityParsed,
+      });
+      return textResult(rows);
+    },
+  },
+  {
+    name: 'update_comment',
+    description:
+      'Edit a comment body or visibility. Author-only — `kind` is immutable after creation; supplying it is rejected by the service.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace_slug: { type: 'string' },
+        project_slug: { type: 'string' },
+        slug: { type: 'string' },
+        body: { type: 'string' },
+        visibility: { type: 'string', enum: ['normal', 'internal'] },
+      },
+      required: ['workspace_slug', 'project_slug', 'slug'],
+    },
+    requiredScope: 'documents:write',
+    handler: async ({ token }, args) => {
+      const ws = await resolveWorkspaceForToken(token, args);
+      const project = await resolveProjectInWorkspace(ws, token, args);
+      const slug = requireString(args, 'slug');
+      // S13: getCommentScoped folds the project-membership check.
+      const existing = await getCommentScoped(ws.id, project.id, slug);
+      if (!existing) throw new Error('comment not found');
+
+      const authorContext = await resolveAuthorContextForToken(token);
+      const visibilityRaw = optionalString(args, 'visibility');
+      const visibility = visibilityRaw ? commentVisibilitySchema.parse(visibilityRaw) : undefined;
+
+      try {
+        const updated = await updateComment({
+          workspace: ws,
+          project,
+          existing,
+          authorContext,
+          body: optionalString(args, 'body'),
+          visibility,
+          actor: token.id,
+        });
+        const fm = updated.frontmatter as Record<string, unknown>;
+        return textResult({
+          slug: updated.slug,
+          edited_at: fm.edited_at,
+        });
+      } catch (err) {
+        if (err instanceof HTTPError && err.code === 'COMMENT_AUTHOR_ONLY') {
+          throw mcpInvalidParams('only the comment author can edit', {
+            reason: 'comment_author_only',
+          });
+        }
+        throw err;
+      }
+    },
+  },
+  {
+    name: 'delete_comment',
+    description:
+      'Soft-delete a comment. Author-only. The row stays in the database with `deleted_at` set; downstream UIs mute it.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace_slug: { type: 'string' },
+        project_slug: { type: 'string' },
+        slug: { type: 'string' },
+      },
+      required: ['workspace_slug', 'project_slug', 'slug'],
+    },
+    requiredScope: 'documents:delete',
+    handler: async ({ token }, args) => {
+      const ws = await resolveWorkspaceForToken(token, args);
+      const project = await resolveProjectInWorkspace(ws, token, args);
+      const slug = requireString(args, 'slug');
+      // S13: getCommentScoped folds the project-membership check.
+      const existing = await getCommentScoped(ws.id, project.id, slug);
+      if (!existing) throw new Error('comment not found');
+
+      const authorContext = await resolveAuthorContextForToken(token);
+
+      try {
+        const updated = await deleteComment({
+          workspace: ws,
+          project,
+          existing,
+          authorContext,
+          actor: token.id,
+        });
+        const fm = updated.frontmatter as Record<string, unknown>;
+        return textResult({
+          slug: updated.slug,
+          deleted_at: fm.deleted_at,
+        });
+      } catch (err) {
+        if (err instanceof HTTPError && err.code === 'COMMENT_AUTHOR_ONLY') {
+          throw mcpInvalidParams('only the comment author can delete', {
+            reason: 'comment_author_only',
+          });
+        }
+        throw err;
+      }
+    },
+  },
+
+  // ---------------------------------------------------------------------------
+  // Phase 2.6 sub-phase D — agent-lifecycle tools.
+  //
+  // create_agent / update_agent / delete_agent all delegate to the same
+  // service layer the workspace-scoped HTTP routes use (see
+  // routes/workspace-documents.ts). create_agent returns the freshly minted
+  // bearer token as `agent_token` on the response (one-time reveal — same
+  // contract as the HTTP POST). update_agent enforces an allow-list-widening
+  // guard: an agent-bound token cannot patch a target agent's
+  // frontmatter.projects to include project ids it doesn't have itself.
+  // delete_agent rejects self-delete. get_agent_self is read-only and
+  // requires only documents:read but additionally needs the token to be
+  // agent-bound.
+  // ---------------------------------------------------------------------------
+  {
+    name: 'create_agent',
+    description:
+      'Create a workspace-scoped agent document. Mints a bearer token and returns it ONCE in the response as `agent_token`. The token is scoped to the calling token\'s workspace.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace_slug: { type: 'string' },
+        slug: { type: 'string' },
+        title: { type: 'string' },
+        body: { type: 'string' },
+        frontmatter: { type: 'object' },
+      },
+      required: ['workspace_slug', 'title', 'frontmatter'],
+    },
+    requiredScope: 'agents:write',
+    handler: async ({ token, actor }, args) => {
+      const ws = await resolveWorkspaceForToken(token, args);
+      const title = requireString(args, 'title');
+      const body = optionalString(args, 'body') ?? '';
+      const fmArg = args['frontmatter'];
+      if (!fmArg || typeof fmArg !== 'object' || Array.isArray(fmArg)) {
+        throw mcpInvalidParams('frontmatter must be an object', {
+          reason: 'invalid_frontmatter',
+        });
+      }
+      const frontmatter = fmArg as Record<string, unknown>;
+
+      // Reject child agents whose allow-list widens past the calling agent's
+      // own. update_agent has had this guard since Phase 2.6 D8; create_agent
+      // was missing it (Phase 2.6 review finding F2).
+      await assertAgentAllowListWidening(token, frontmatter, 'create').catch(rethrowAgentGuardAsMcp);
+      // BUG-005: same shape for tools — otherwise an agent-bound token can
+      // mint a child with broader tools and inherit scopes via toolsToScopes.
+      await assertAgentToolsWidening(token, frontmatter, 'create').catch(rethrowAgentGuardAsMcp);
+
+      const { document, agentTokenPlaintext } = await createDocument({
+        workspace: ws,
+        project: null,
+        table: null,
+        actor: actor as never,
+        token,
+        isTableScopedUrl: false,
+        input: { type: 'agent', title, body, frontmatter, status: null },
+      });
+
+      return textResult({
+        ...document,
+        ...(agentTokenPlaintext ? { agent_token: agentTokenPlaintext } : {}),
+      });
+    },
+  },
+  {
+    name: 'update_agent',
+    description:
+      'Patch an existing workspace-scoped agent document. Reserved keys are ignored. When called with an agent-bound token, the target\'s frontmatter.projects allow-list cannot be widened beyond the calling agent\'s own allow-list.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace_slug: { type: 'string' },
+        slug: { type: 'string' },
+        title: { type: 'string' },
+        body: { type: 'string' },
+        frontmatter: { type: 'object' },
+      },
+      required: ['workspace_slug', 'slug'],
+    },
+    requiredScope: 'agents:write',
+    handler: async ({ token, actor }, args) => {
+      const ws = await resolveWorkspaceForToken(token, args);
+      const slug = requireString(args, 'slug');
+      const existing = await getWorkspaceDocument(ws.id, 'agent', slug);
+      if (!existing) {
+        throw mcpInvalidParams(`agent ${slug} not found`, {
+          reason: 'agent_not_found',
+          slug,
+        });
+      }
+
+      const patch: Parameters<typeof updateDocument>[0]['patch'] = {};
+      if (typeof args['title'] === 'string') patch.title = args['title'];
+      if (typeof args['body'] === 'string') patch.body = args['body'];
+      const fmArg = args['frontmatter'];
+      if (fmArg !== undefined) {
+        if (!fmArg || typeof fmArg !== 'object' || Array.isArray(fmArg)) {
+          throw mcpInvalidParams('frontmatter must be an object', {
+            reason: 'invalid_frontmatter',
+          });
+        }
+        patch.frontmatter = fmArg as Record<string, unknown>;
+
+        // Allow-list widening guard — shared with create_agent and the HTTP
+        // workspace-documents routes via lib/agent-guards.ts.
+        await assertAgentAllowListWidening(token, patch.frontmatter, 'patch').catch(rethrowAgentGuardAsMcp);
+        // BUG-005: tools-widening guard.
+        await assertAgentToolsWidening(token, patch.frontmatter, 'patch').catch(rethrowAgentGuardAsMcp);
+      }
+
+      const updated = await updateDocument({
+        workspace: ws,
+        project: null,
+        fallbackTable: null,
+        actor: actor as never,
+        existing,
+        patch,
+      });
+      return textResult(updated);
+    },
+  },
+  {
+    name: 'delete_agent',
+    description:
+      'Soft-delete a workspace-scoped agent document. Cascades to revoke the agent\'s bearer token. Rejects self-delete when called with an agent-bound token.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace_slug: { type: 'string' },
+        slug: { type: 'string' },
+      },
+      required: ['workspace_slug', 'slug'],
+    },
+    requiredScope: 'agents:write',
+    handler: async ({ token, actor }, args) => {
+      const ws = await resolveWorkspaceForToken(token, args);
+      const slug = requireString(args, 'slug');
+      const existing = await getWorkspaceDocument(ws.id, 'agent', slug);
+      if (!existing) {
+        throw mcpInvalidParams(`agent ${slug} not found`, {
+          reason: 'agent_not_found',
+          slug,
+        });
+      }
+      // Self-delete guard: only meaningful when the call comes from an
+      // agent-bound token. Kept inline (not `assertNotSelfDelete`) because
+      // the HTTP and MCP layers throw different error shapes — HTTPError vs
+      // mcpInvalidParams — and the helper hardcodes HTTPError.
+      if (token.agentId && existing.id === token.agentId) {
+        throw mcpInvalidParams('agent cannot delete itself via MCP', {
+          reason: 'cannot_delete_self',
+        });
+      }
+
+      await deleteDocument({
+        workspace: ws,
+        project: null,
+        actor: actor as never,
+        existing,
+      });
+      return textResult({ ok: true, slug });
+    },
+  },
+  {
+    name: 'get_agent_self',
+    description:
+      'Return the calling agent\'s own document. Requires an agent-bound bearer token; user-minted (PAT) tokens have no agent identity and receive an error.',
+    inputSchema: { type: 'object', properties: {}, required: [] },
+    requiredScope: 'documents:read',
+    handler: async ({ token }) => {
+      if (!token.agentId) {
+        throw mcpInvalidParams(
+          'get_agent_self requires an agent-bound token',
+          { reason: 'no_agent_bound_to_token' },
+        );
+      }
+      const agent = await db.query.documents.findFirst({
+        where: and(eq(documents.id, token.agentId), eq(documents.type, 'agent')),
+      });
+      if (!agent) {
+        throw mcpInvalidParams('agent for this token no longer exists', {
+          reason: 'agent_missing',
+        });
+      }
+      return textResult(agent);
     },
   },
 ];

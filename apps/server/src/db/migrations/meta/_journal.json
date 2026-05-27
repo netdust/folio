@@ -50,6 +50,41 @@
       "when": 1779782964435,
       "tag": "0006_phase_2_5_workspace_agents",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1780210309000,
+      "tag": "0007_phase_2_6_comments",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1780249800000,
+      "tag": "0008_phase_2_6_author_id_backfill",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1780253400000,
+      "tag": "0009_phase_2_6_events_seq",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1780257000000,
+      "tag": "0010_phase_2_6_events_workspace_seq_idx",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1780780000000,
+      "tag": "0011_phase_2_6_target_agent_id_backfill",
+      "breakpoints": true
     }
   ]
 }

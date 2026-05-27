@@ -142,16 +142,35 @@ describe('toolsToScopes', () => {
     const reads = out.filter((s) => s === 'documents:read');
     expect(reads.length).toBe(1);
   });
+
+  // Phase 2.6 sub-phase D — agent lifecycle tools.
+  test('maps create_agent / update_agent / delete_agent to agents:write', () => {
+    expect(toolsToScopes(['create_agent'])).toContain('agents:write');
+    expect(toolsToScopes(['update_agent'])).toContain('agents:write');
+    expect(toolsToScopes(['delete_agent'])).toContain('agents:write');
+  });
+
+  test('maps get_agent_self to documents:read only (read-only metadata)', () => {
+    const scopes = toolsToScopes(['get_agent_self']);
+    expect(scopes).toContain('documents:read');
+    expect(scopes).not.toContain('agents:write');
+  });
+
+  test('agent-write tools also include documents:read', () => {
+    expect(toolsToScopes(['create_agent'])).toContain('documents:read');
+  });
 });
 
 describe('V1_MCP_TOOLS', () => {
-  test('contains the 12 v1 tools', () => {
+  test('contains the v1 tools including agent-lifecycle tools', () => {
     expect(V1_MCP_TOOLS).toEqual([
       'list_workspaces', 'list_projects', 'list_documents',
       'get_document', 'get_document_markdown',
       'create_document', 'update_document', 'delete_document',
       'list_statuses', 'list_fields', 'list_views',
       'run_view',
+      // Phase 2.6 sub-phase D — agent lifecycle tools.
+      'create_agent', 'update_agent', 'delete_agent', 'get_agent_self',
       // search_documents deferred to v1.1
     ] as const);
   });

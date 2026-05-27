@@ -13,6 +13,7 @@ import {
   type ScopeContext,
 } from './middleware/scope.ts';
 import { auth } from './routes/auth.ts';
+import { commentsRoute } from './routes/comments.ts';
 import { documentsRoute } from './routes/documents.ts';
 import { eventsRoute } from './routes/events.ts';
 import { fieldsRoute } from './routes/fields.ts';
@@ -70,6 +71,10 @@ pScope.route('/statuses', statusesRoute);
 pScope.route('/fields', fieldsRoute);
 pScope.route('/views', viewsRoute);
 pScope.route('/documents', documentsRoute);
+// Comments mount: one router handles both parent-scoped POST/GET-list and
+// item-scoped GET/PATCH/DELETE via full internal paths. Mounted at '/' under
+// pScope so resolveProject + requireResource() apply (Phase 2.5).
+pScope.route('/', commentsRoute);
 pScope.route('/', projectItemRoute);
 
 wScope.route('/p/:pslug', pScope);

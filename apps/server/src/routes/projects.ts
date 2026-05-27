@@ -6,8 +6,9 @@ import { z } from 'zod';
 import { slugify } from '@folio/shared';
 import { db } from '../db/client.ts';
 import { documents, projects } from '../db/schema.ts';
-import { emitEvent } from '../lib/events.ts';
+import { emitEvent, txWithEvents } from '../lib/events.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
+import { resolveAgentProjects } from '../lib/agent-projects.ts';
 import { seedProjectDefaults } from '../lib/seed-project-defaults.ts';
 import { slugUniqueInProjects } from '../lib/slug-unique.ts';
 import { listProjects } from '../services/projects.ts';
@@ -60,7 +61,7 @@ projectsRoute.post(
       slug = await slugUniqueInProjects(db, ws.id, slug || 'project');
     }
 
-    await db.transaction(async (tx) => {
+    await txWithEvents(db, async (tx) => {
       await tx.insert(projects).values({ id, workspaceId: ws.id, slug, name, icon: icon ?? null });
       await seedProjectDefaults(tx, id);
       await emitEvent(tx, {
@@ -97,7 +98,7 @@ projectItemRoute.patch(
     const user = getUser(c);
     const patch = c.req.valid('json');
     const now = new Date();
-    await db.transaction(async (tx) => {
+    await txWithEvents(db, async (tx) => {
       await tx.update(projects).set({ ...patch, updatedAt: now }).where(eq(projects.id, p.id));
       await emitEvent(tx, {
         workspaceId: ws.id,
@@ -120,16 +121,20 @@ projectItemRoute.delete('/', async (c) => {
   // JSON column, so SQLite's FK system cannot scrub references when a project
   // is deleted. Do it transactionally so either (a) both the project delete
   // and every frontmatter scrub commit, or (b) neither does — no half-state.
-  await db.transaction(async (tx) => {
+  await txWithEvents(db, async (tx) => {
     const wsAgents = await tx.query.documents.findMany({
       where: and(
         eq(documents.workspaceId, ws.id),
         inArray(documents.type, ['agent', 'trigger']),
       ),
     });
+    // BUG-018 — route through resolveAgentProjects for vocabulary
+    // consistency with bearer / SSE / mention-parser. Behavior is the same:
+    // wildcard agents (`['*']`, including the missing-projects default) don't
+    // need scrubbing; only agents with an explicit project id in their list do.
     const stale = wsAgents.filter((d) => {
-      const projs = (d.frontmatter as { projects?: unknown }).projects;
-      return Array.isArray(projs) && projs.includes(p.id);
+      const projs = resolveAgentProjects(d);
+      return !projs.includes('*') && projs.includes(p.id);
     });
     for (const doc of stale) {
       const fm = doc.frontmatter as Record<string, unknown>;

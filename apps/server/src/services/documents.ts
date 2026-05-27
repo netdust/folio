@@ -33,9 +33,10 @@ import type {
   Workspace,
 } from '../db/schema.ts';
 import { HTTPError } from '../lib/http.ts';
-import { emitEvent } from '../lib/events.ts';
+import { emitEvent, txWithEvents } from '../lib/events.ts';
 import { agentFrontmatterSchema, toolsToScopes } from '../lib/agent-schema.ts';
 import { triggerFrontmatterSchema } from '../lib/trigger-schema.ts';
+import { resolveAgentProjects } from '../lib/agent-projects.ts';
 import { newApiToken } from '../lib/auth.ts';
 import { walkParentChain } from '../lib/delegation-guard.ts';
 import { compileFilterToWhere } from '../lib/filter-to-drizzle.ts';
@@ -287,6 +288,26 @@ export async function createDocument(
     frontmatter: stripReservedFrontmatter(args.input.frontmatter ?? {}),
   };
 
+  // G15: comments are created through createComment (services/comments.ts),
+  // which resolves the author context and parses mentions. The generic doc
+  // path can't do either — the DB CHECK constraint blocks the actual insert
+  // (comments require parent_id; this path hard-codes it to null) but the
+  // resulting SQLITE_CONSTRAINT_CHECK error is opaque.
+  //
+  // The cast-to-string is intentional: the service-layer DocumentType union
+  // excludes 'comment', but MCP coerces raw client strings via
+  // `as DocumentType` (routes/mcp.ts createDocument), so a hostile/buggy
+  // MCP caller can still drive this path with type='comment' at runtime.
+  // The mcp.test.ts G15 test exercises that path — restoring this guard
+  // (which appeared dead to TS-only analysis) is a real defense.
+  if ((input.type as string) === 'comment') {
+    throw new HTTPError(
+      'COMMENT_REQUIRES_COMMENT_TOOL',
+      "comment documents must be created via POST /comments (or MCP create_comment), not the generic document endpoint",
+      422,
+    );
+  }
+
   // Phase 2.5 invariant: agent/trigger ⇒ project=null; work_item/page ⇒ project required.
   // The CHECK constraint also enforces this at the DB layer; the service-level guard
   // gives a clean error message instead of "SQLITE_CONSTRAINT_CHECK".
@@ -436,7 +457,7 @@ export async function createDocument(
     }
   }
 
-  await db.transaction(async (tx) => {
+  await txWithEvents(db, async (tx) => {
     await tx.insert(documents).values(row);
     if (input.type === 'agent' && agentApiTokenId && agentTokenHash) {
       const tools = (input.frontmatter as { tools: string[] }).tools;
@@ -469,13 +490,32 @@ export async function createDocument(
     if (input.type === 'work_item' && p) {
       const assignee = getAssignee(input.frontmatter);
       if (assignee && assignee.startsWith('agent:')) {
+        const agentSlug = assignee.slice('agent:'.length);
+        // S2: enrich agent.task.assigned with agent_id. Slugs are mutable;
+        // dispatchers consuming this event need an immutable handle so an
+        // agent renamed between emit and consumption still resolves.
+        // agent_id may be null when the slug doesn't (yet) resolve to a
+        // workspace agent — assignment of an unknown slug is still a
+        // legitimate UX (user types speculatively), so we emit anyway and
+        // dispatchers must handle the unresolved case.
+        const agentRow = await tx.query.documents.findFirst({
+          where: and(
+            eq(documents.workspaceId, ws.id),
+            eq(documents.type, 'agent'),
+            eq(documents.slug, agentSlug),
+          ),
+        });
         await emitEvent(tx, {
           workspaceId: ws.id,
           projectId: p.id,
           documentId: id,
           kind: 'agent.task.assigned',
           actor: user.id,
-          payload: { slug, agent: assignee.slice('agent:'.length) },
+          payload: {
+            slug,
+            agent: agentSlug,
+            agent_id: agentRow?.id ?? null,
+          },
         });
       }
     }
@@ -532,12 +572,56 @@ export async function updateDocument(
 ): Promise<Document> {
   const { workspace: ws, project: p, actor: user, existing, patch } = args;
 
+  // G5 — comments must be mutated through update_comment (services/comments.ts),
+  // which enforces author-only, kind-immutable, edited_at, and soft-delete
+  // semantics. The generic update path used to fall through for type='comment'
+  // on the HTTP project-scoped route — bypassing all of that. Reject at the
+  // service layer so EVERY entrypoint inherits the rule (HTTP, MCP, future
+  // CLI/import jobs).
+  if (existing.type === 'comment') {
+    throw new HTTPError(
+      'COMMENT_REQUIRES_COMMENT_TOOL',
+      "comment documents must be updated via PATCH /comments/:slug (or MCP update_comment), not the generic document endpoint",
+      422,
+    );
+  }
+
   if (patch.status !== undefined && existing.type === 'work_item') {
     const tId = existing.tableId ?? args.fallbackTable?.id;
     if (!tId) {
       throw new HTTPError('TABLE_NOT_FOUND', 'work_item requires a table', 404);
     }
     await validateStatusForTable(tId, patch.status);
+  }
+
+  // Phase 2.6 sub-phase D — builtin trigger lock. Only frontmatter.enabled is
+  // mutable. Title, body, status, parent, and any other frontmatter key are
+  // server-controlled. The check compares each frontmatter key against the
+  // existing row's value (not just key presence) so a client echoing back
+  // the full frontmatter shape — as the slideover does — succeeds as long
+  // as only `enabled` actually differs.
+  if (
+    existing.type === 'trigger' &&
+    (existing.frontmatter as Record<string, unknown>).builtin === true
+  ) {
+    const fmPatch = patch.frontmatter ?? {};
+    const existingFm = existing.frontmatter as Record<string, unknown>;
+    const protectedKeyDiffers = Object.keys(fmPatch).some((k) => {
+      if (k === 'enabled') return false;
+      return JSON.stringify(fmPatch[k]) !== JSON.stringify(existingFm[k]);
+    });
+    const touchesProtectedTop =
+      patch.title !== undefined ||
+      patch.body !== undefined ||
+      patch.status !== undefined ||
+      patch.parentId !== undefined;
+    if (touchesProtectedTop || protectedKeyDiffers) {
+      throw new HTTPError(
+        'BUILTIN_TRIGGER_LOCKED',
+        'only frontmatter.enabled is mutable on builtin triggers',
+        422,
+      );
+    }
   }
 
   // For agents/triggers, validate the PATCH payload itself (not the merged
@@ -575,6 +659,28 @@ export async function updateDocument(
     return merged;
   })();
 
+  // BUG-016 — re-validate the cross-field refine on triggers after the merge.
+  // The PATCH-payload validation above uses `triggerFrontmatterSchema.innerType().partial()`
+  // (refine stripped, server-managed fields like last_fired_at exempt from
+  // .strict()). A PATCH that clears the only timing field is valid against
+  // partial() but the resulting document would be rejected by the create-time
+  // schema — dispatch then never fires. Assert the refine here on the merged
+  // shape and reject with INVALID_PATCH so the operator sees the error
+  // instead of a silently broken trigger.
+  if (existing.type === 'trigger') {
+    const scheduleVal = (mergedFrontmatter as Record<string, unknown>).schedule;
+    const onEventVal = (mergedFrontmatter as Record<string, unknown>).on_event;
+    const hasSchedule = scheduleVal !== null && scheduleVal !== undefined;
+    const hasOnEvent = onEventVal !== null && onEventVal !== undefined;
+    if (!hasSchedule && !hasOnEvent) {
+      throw new HTTPError(
+        'INVALID_PATCH',
+        'trigger must have at least one of schedule or on_event after the patch',
+        422,
+      );
+    }
+  }
+
   // Agents/triggers don't rename their slug on title change (URLs are sticky
   // and frontmatter references would break). Only project-scoped docs do.
   const nextSlug =
@@ -594,7 +700,7 @@ export async function updateDocument(
     updatedAt: new Date(),
   };
 
-  await db.transaction(async (tx) => {
+  await txWithEvents(db, async (tx) => {
     await tx.update(documents).set(updated).where(eq(documents.id, existing.id));
     await emitEvent(tx, {
       workspaceId: ws.id,
@@ -617,6 +723,14 @@ export async function updateDocument(
         nextAssignee.startsWith('agent:') &&
         prevAssignee !== nextAssignee
       ) {
+        const agentSlug = nextAssignee.slice('agent:'.length);
+        const agentRow = await tx.query.documents.findFirst({
+          where: and(
+            eq(documents.workspaceId, ws.id),
+            eq(documents.type, 'agent'),
+            eq(documents.slug, agentSlug),
+          ),
+        });
         await emitEvent(tx, {
           workspaceId: ws.id,
           projectId: p.id,
@@ -625,7 +739,9 @@ export async function updateDocument(
           actor: user.id,
           payload: {
             slug: updated.slug,
-            agent: nextAssignee.slice('agent:'.length),
+            agent: agentSlug,
+            // S2: see createDocument for the immutable-handle rationale.
+            agent_id: agentRow?.id ?? null,
           },
         });
       }
@@ -647,7 +763,103 @@ export interface DeleteDocumentArgs {
 
 export async function deleteDocument(args: DeleteDocumentArgs): Promise<void> {
   const { workspace: ws, project: p, actor: user, existing } = args;
-  await db.transaction(async (tx) => {
+
+  // G5 — comments must be deleted through delete_comment for soft-delete +
+  // author-only semantics. Reject at the service layer.
+  if (existing.type === 'comment') {
+    throw new HTTPError(
+      'COMMENT_REQUIRES_COMMENT_TOOL',
+      "comment documents must be deleted via DELETE /comments/:slug (or MCP delete_comment), not the generic document endpoint",
+      422,
+    );
+  }
+
+  // Phase 2.6 sub-phase D — builtin triggers are not deletable.
+  if (
+    existing.type === 'trigger' &&
+    (existing.frontmatter as Record<string, unknown>).builtin === true
+  ) {
+    throw new HTTPError(
+      'BUILTIN_TRIGGER_LOCKED',
+      'builtin triggers cannot be deleted',
+      422,
+    );
+  }
+
+  await txWithEvents(db, async (tx) => {
+    // F8/G8/H8 — cascade ALL descendant rows (comments AND nested pages).
+    // documents.parent_id has no SQL foreign key (Phase 2.6 migration 0007
+    // omitted it deliberately to keep the table self-referential and
+    // SQLite-portable), so the app layer must purge orphan rows itself.
+    //
+    // BUG-010 — the prior shape was a single recursive-CTE DELETE that
+    // emitted no per-row events. UIs caching comment threads stale-displayed
+    // indefinitely; Phase 3 audit logs mis-counted cascade scope; the
+    // author-only invariant on `comment.deleted` was dead-letter for
+    // cascaded comments. Walk the descendants in TS instead and fan out
+    // one `comment.deleted` per cascaded comment + one `document.deleted`
+    // per cascaded page/work_item. All inside the same tx via emitEvent,
+    // so subscribers either see EVERY cascade event or none (rollback).
+    if (existing.type === 'work_item' || existing.type === 'page') {
+      const descendantRows = await tx.all<{
+        id: string;
+        type: string;
+        slug: string;
+        title: string;
+        parent_id: string | null;
+        frontmatter: string;
+      }>(sql`
+        WITH RECURSIVE descendants(id, type, slug, title, parent_id, frontmatter) AS (
+          SELECT id, type, slug, title, parent_id, frontmatter
+            FROM documents
+            WHERE parent_id = ${existing.id}
+          UNION ALL
+          SELECT documents.id, documents.type, documents.slug, documents.title,
+                 documents.parent_id, documents.frontmatter
+            FROM documents
+            INNER JOIN descendants ON documents.parent_id = descendants.id
+        )
+        SELECT id, type, slug, title, parent_id, frontmatter FROM descendants
+      `);
+
+      if (descendantRows.length > 0) {
+        const ids = descendantRows.map((r) => r.id);
+        await tx.delete(documents).where(inArray(documents.id, ids));
+
+        for (const d of descendantRows) {
+          if (d.type === 'comment') {
+            // Parse frontmatter to recover author for the event payload —
+            // mirrors deleteComment's `comment.deleted` shape so any
+            // subscriber that handles direct deletes also handles cascade.
+            let author: string | undefined;
+            try {
+              const fm = JSON.parse(d.frontmatter) as { author?: string };
+              author = typeof fm.author === 'string' ? fm.author : undefined;
+            } catch {
+              // ignore — payload's `author` will be undefined.
+            }
+            await emitEvent(tx, {
+              workspaceId: ws.id,
+              projectId: p?.id ?? null,
+              documentId: d.id,
+              kind: 'comment.deleted',
+              actor: user.id,
+              payload: { document_id: d.id, parent_id: d.parent_id, author },
+            });
+          } else {
+            await emitEvent(tx, {
+              workspaceId: ws.id,
+              projectId: p?.id ?? null,
+              documentId: d.id,
+              kind: 'document.deleted',
+              actor: user.id,
+              payload: { id: d.id, slug: d.slug, type: d.type, title: d.title },
+            });
+          }
+        }
+      }
+    }
+
     // Agents: api_tokens.agent_id ON DELETE CASCADE handles token revocation.
     // The explicit Phase 2 cleanup (delete by api_token_id from frontmatter)
     // is now redundant but harmless if any rows pre-date the cascade FK.
@@ -716,10 +928,14 @@ export async function listWorkspaceDocuments(opts: {
     ),
   });
   if (!opts.projectFilter) return rows;
+  // BUG-018 — route through resolveAgentProjects so legacy / hand-edited
+  // rows missing `frontmatter.projects` fall back to ['*'] (workspace-wide)
+  // instead of being silently dropped. Mirrors the contract that bearer,
+  // SSE, mention-parser, and the reconciler all share.
+  const target = opts.projectFilter;
   return rows.filter((d) => {
-    const projs = (d.frontmatter as { projects?: unknown }).projects;
-    if (!Array.isArray(projs)) return false;
-    return projs.includes('*') || projs.includes(opts.projectFilter!);
+    const projs = resolveAgentProjects(d);
+    return projs.includes('*') || projs.includes(target);
   });
 }
 

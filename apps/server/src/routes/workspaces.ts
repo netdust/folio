@@ -6,7 +6,8 @@ import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import { db } from '../db/client.ts';
 import { memberships, workspaces } from '../db/schema.ts';
-import { emitEvent } from '../lib/events.ts';
+import { seedBuiltinTriggers } from '../lib/builtin-triggers.ts';
+import { emitEvent, txWithEvents } from '../lib/events.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
 import { slugUniqueInWorkspaces } from '../lib/slug-unique.ts';
 import { listWorkspaces } from '../services/workspaces.ts';
@@ -54,9 +55,13 @@ workspacesRoute.post(
       slug = await slugUniqueInWorkspaces(db, baseSlug || 'workspace');
     }
 
-    await db.transaction(async (tx) => {
+    await txWithEvents(db, async (tx) => {
       await tx.insert(workspaces).values({ id, slug, name });
       await tx.insert(memberships).values({ workspaceId: id, userId: user.id, role: 'owner' });
+      // Phase 2.6 sub-phase D — seed the 4 builtin triggers transactionally
+      // with the workspace itself. Future refactor may move workspace create
+      // into services/workspaces.ts::createWorkspace.
+      await seedBuiltinTriggers(tx, id, user.id);
       await emitEvent(tx, {
         workspaceId: id,
         kind: 'workspace.created',
@@ -84,7 +89,7 @@ workspaceItemRoute.patch(
     const { name } = c.req.valid('json');
     const user = getUser(c);
     const now = new Date();
-    await db.transaction(async (tx) => {
+    await txWithEvents(db, async (tx) => {
       await tx.update(workspaces).set({ name, updatedAt: now }).where(eq(workspaces.id, ws.id));
       await emitEvent(tx, {
         workspaceId: ws.id,
@@ -126,7 +131,7 @@ workspaceItemRoute.get('/members', async (c) => {
       if (!u) return null;
       return { id: u.id, email: u.email, name: u.name, role: r.role };
     })
-    .filter((m): m is { id: string; email: string; name: string; role: string } => m !== null);
+    .filter((m): m is NonNullable<typeof m> => m !== null);
   return jsonOk(c, { members });
 });
 

@@ -8,6 +8,7 @@ import { Button } from '../ui/button.tsx';
 import { Icon } from '../ui/icon.tsx';
 import { Skeleton } from '../ui/skeleton.tsx';
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
+import { TabStrip, type TabItem } from '../ui/tab-strip.tsx';
 import {
   Dialog,
   DialogContent,
@@ -28,7 +29,11 @@ import { useStatuses } from '../../lib/api/statuses.ts';
 import { useFields } from '../../lib/api/fields.ts';
 import { formatApiError } from '../../lib/api/index.ts';
 import { useWorkspace } from '../../lib/api/workspaces.ts';
+import { useProject } from '../../lib/api/projects.ts';
 import { useWorkspaceAiKeys } from '../../lib/api/settings.ts';
+import { useComments } from '../../lib/api/comments.ts';
+import { useMembers } from '../../lib/api/members.ts';
+import { useMe } from '../../lib/api/auth.ts';
 import { copyDocumentAsMarkdown } from '../../lib/copy-as-md.ts';
 import { InlineEdit } from '../inline/inline-edit.tsx';
 import { FrontmatterForm } from './frontmatter-form.tsx';
@@ -37,6 +42,9 @@ import { ModeToggle, type EditorMode } from './mode-toggle.tsx';
 import { RawMdEditor } from './raw-md-editor.tsx';
 import { LogActivityButton } from './log-activity-button.tsx';
 import { ActivityPanel } from './activity-panel.tsx';
+import { CommentsTab } from '../comments/comments-tab.tsx';
+
+type DocTabValue = 'fields' | 'comments' | 'activity';
 
 interface Props {
   wslug: string;
@@ -286,9 +294,25 @@ function SlideoverBody({
   const { data: docPage } = useDocuments(wslug, pslug, listParams, { enabled: !!doc });
   // AI key presence — drives the slash menu's aiConfigured flag
   const { data: workspace } = useWorkspace(wslug);
+  const { data: project } = useProject(wslug, pslug);
   const { data: aiKeys } = useWorkspaceAiKeys(wslug, workspace?.id ?? '');
   const aiConfigured = (aiKeys ?? []).length > 0;
   const [pendingKeys, setPendingKeys] = useState<Set<string>>(new Set());
+
+  // Comments + members + current user — for the Comments tab (work_item/page
+  // only). The hook is gated on doc.slug so it idles until the doc resolves.
+  const { data: members } = useMembers(wslug);
+  const { data: me } = useMe();
+  const commentsQ = useComments(wslug, pslug, doc?.slug ?? '');
+  const commentCount = commentsQ.data?.length ?? 0;
+
+  // Tab state — per-slideover-open. Defaults to Fields on each fresh open
+  // and resets to Fields whenever the user navigates to a different doc
+  // without closing the sheet first.
+  const [tab, setTab] = useState<DocTabValue>('fields');
+  useEffect(() => {
+    setTab('fields');
+  }, [doc?.id]);
 
   if (isLoading) return <div className="text-fg-3">Loading document…</div>;
   if (error || !doc) return <div className="text-danger">Failed to load document.</div>;
@@ -314,35 +338,72 @@ function SlideoverBody({
 
   // Wiki pages are "just a markdown file" — no status, no pinned fields,
   // no inferred frontmatter, no slug pill. Work items keep the full
-  // frontmatter form. Body editor + activity render for both.
+  // frontmatter form on the Fields tab. Body editor renders below the tabs
+  // for both.
   const isPage = doc.type === 'page';
+
+  const tabItems: TabItem<DocTabValue>[] = [
+    { value: 'fields', label: 'Fields', icon: '📋' },
+    { value: 'comments', label: 'Comments', icon: '💬', count: commentCount },
+    { value: 'activity', label: 'Activity', icon: '📜' },
+  ];
 
   return (
     <article className="flex h-full flex-col">
+      {/* For work_items we keep a tiny header that only carries the slug
+          pill. Pages don't carry a slug pill (Stefan's "wiki = .md file
+          without frontmatter" rule). */}
       {!isPage ? (
-        <header className="flex-shrink-0 space-y-3 pb-4">
+        <header className="flex-shrink-0 pb-2">
           <div className="font-mono text-[11px] text-fg-3">/{doc.slug}</div>
-          <FrontmatterForm
-            wslug={wslug}
-            pslug={pslug}
-            type={doc.type}
-            status={doc.status}
-            statuses={statuses ?? []}
-            frontmatter={doc.frontmatter}
-            pinnedFields={fields ?? []}
-            onStatusCommit={(next) => void onPatch({ status: next }, ['status'])}
-            onFrontmatterCommit={(p) => void onPatch({ frontmatter: p }, Object.keys(p))}
-            pendingKeys={pendingKeys}
-          />
         </header>
       ) : null}
+      <TabStrip value={tab} items={tabItems} onChange={setTab} />
+      {/* Tab content area — sits ABOVE the body editor. The testid is kept
+          as `slideover-activity` so existing flex/layout assertions keep
+          working (rename is a follow-up — see C9 notes). */}
+      <div
+        data-testid="slideover-activity"
+        className="folio-scroll shrink-0 max-h-[40vh] overflow-y-auto pb-3 pt-3"
+      >
+        {tab === 'fields' ? (
+          isPage ? (
+            <div className="text-xs text-fg-3">No fields for pages.</div>
+          ) : (
+            <FrontmatterForm
+              wslug={wslug}
+              pslug={pslug}
+              type={doc.type}
+              status={doc.status}
+              statuses={statuses ?? []}
+              frontmatter={doc.frontmatter}
+              pinnedFields={fields ?? []}
+              onStatusCommit={(next) => void onPatch({ status: next }, ['status'])}
+              onFrontmatterCommit={(p) => void onPatch({ frontmatter: p }, Object.keys(p))}
+              pendingKeys={pendingKeys}
+            />
+          )
+        ) : null}
+        {tab === 'comments' && workspace && project ? (
+          <CommentsTab
+            workspaceSlug={wslug}
+            workspaceId={workspace.id}
+            projectSlug={pslug}
+            projectId={project.id}
+            parentSlug={doc.slug}
+            parentId={doc.id}
+            currentUserId={me?.user?.id ?? null}
+            currentAgentSlug={null}
+            workspaceMembers={members ?? []}
+          />
+        ) : null}
+        {tab === 'activity' ? (
+          <ActivityPanel wslug={wslug} pslug={pslug} slug={doc.slug} />
+        ) : null}
+      </div>
       <div
         data-testid="slideover-editor"
-        className={
-          isPage
-            ? 'folio-scroll flex-1 min-h-0 overflow-y-auto'
-            : 'folio-scroll flex-1 min-h-0 overflow-y-auto border-t border-border-light pt-4 focus-within:border-fg-3'
-        }
+        className="folio-scroll flex-1 min-h-0 overflow-y-auto border-t border-border-light pt-4 focus-within:border-fg-3"
       >
         {mode === 'rich' ? (
           <BodyEditor
@@ -360,12 +421,6 @@ function SlideoverBody({
             onChange={(body) => onPatch({ body }, ['body'])}
           />
         )}
-      </div>
-      <div
-        data-testid="slideover-activity"
-        className="folio-scroll shrink-0 max-h-[40vh] overflow-y-auto border-t border-border-light"
-      >
-        <ActivityPanel wslug={wslug} pslug={pslug} slug={doc.slug} />
       </div>
     </article>
   );

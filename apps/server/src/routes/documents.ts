@@ -7,7 +7,8 @@ import {
 import { db } from '../db/client.ts';
 import { documents, events, statuses } from '../db/schema.ts';
 import { jsonOk, HTTPError } from '../lib/http.ts';
-import { emitEvent } from '../lib/events.ts';
+import { emitEvent, txWithEvents } from '../lib/events.ts';
+import { ACTIVITY_NOTE_MAX } from '../lib/activity-limits.ts';
 import { parseMarkdown, serializeMarkdown } from '../lib/frontmatter.ts';
 import { type AuthContext, getUser } from '../middleware/auth.ts';
 import { requireScope } from '../middleware/bearer.ts';
@@ -71,7 +72,13 @@ documentsRoute.post('/', requireScope('documents:write'), async (c) => {
     const raw = await c.req.text();
     input = parseMarkdownInput(raw);
   } else {
-    const json = await c.req.json();
+    // BUG-019 — wrap so malformed/empty bodies surface as 422 INVALID_BODY.
+    let json: unknown;
+    try {
+      json = await c.req.json();
+    } catch {
+      throw new HTTPError('INVALID_BODY', 'JSON body required', 422);
+    }
     const parsed = documentCreateSchema.safeParse(json);
     if (!parsed.success) {
       throw new HTTPError('INVALID_BODY', parsed.error.message, 422);
@@ -221,6 +228,32 @@ documentsRoute.patch('/:slug', requireScope('documents:write'), async (c) => {
     // The markdown branch is NOT MCP-relevant: it does a WHOLESALE frontmatter
     // replacement (the JSON PATCH path merges). Keeping it inline avoids
     // bifurcating the service signature; the route owns this semantic.
+    //
+    // H6: comments must go through PATCH /comments/:slug (which enforces
+    // author-only, kind-immutable, edited_at, and soft-delete semantics).
+    // The service-layer guard in updateDocument blocks the JSON path; this
+    // markdown path bypasses updateDocument entirely, so it needs the same
+    // rejection inline.
+    //
+    // H22: defense-in-depth — agents/triggers must not be reachable through
+    // the project-scoped markdown PATCH either. Phase 2.5 enforces
+    // projectId=null on agent/trigger inserts, so getDocument(p.id, slug)
+    // shouldn't find them today — but a future schema drift or hand-edit
+    // could re-expose this path. Cheap to guard.
+    if (existing.type === 'comment') {
+      throw new HTTPError(
+        'COMMENT_REQUIRES_COMMENT_TOOL',
+        "comment documents must be updated via PATCH /comments/:slug (or MCP update_comment), not the generic document endpoint",
+        422,
+      );
+    }
+    if (existing.type === 'agent' || existing.type === 'trigger') {
+      throw new HTTPError(
+        'INVALID_DOCUMENT_SCOPE',
+        `${existing.type} documents must be mutated through /api/v1/w/:wslug/documents (workspace-scoped), not the project-scoped markdown PATCH`,
+        422,
+      );
+    }
     const raw = await c.req.text();
     const parsed = parseMarkdownInput(raw, { type: existing.type as DocumentType });
     if (parsed.type !== existing.type) {
@@ -248,7 +281,7 @@ documentsRoute.patch('/:slug', requireScope('documents:write'), async (c) => {
       updatedBy: user.id,
       updatedAt: new Date(),
     };
-    await db.transaction(async (tx) => {
+    await txWithEvents(db, async (tx) => {
       await tx.update(documents).set(updated).where(eq(documents.id, existing.id));
       await emitEvent(tx, {
         workspaceId: ws.id, projectId: p.id, documentId: existing.id,
@@ -259,10 +292,20 @@ documentsRoute.patch('/:slug', requireScope('documents:write'), async (c) => {
         const prevAssignee = getAssignee(existing.frontmatter);
         const nextAssignee = getAssignee(updated.frontmatter);
         if (nextAssignee && nextAssignee.startsWith('agent:') && prevAssignee !== nextAssignee) {
+          const agentSlug = nextAssignee.slice('agent:'.length);
+          // S2: include agent_id as the immutable handle. See
+          // services/documents.ts for full rationale.
+          const agentRow = await tx.query.documents.findFirst({
+            where: and(
+              eq(documents.workspaceId, ws.id),
+              eq(documents.type, 'agent'),
+              eq(documents.slug, agentSlug),
+            ),
+          });
           await emitEvent(tx, {
             workspaceId: ws.id, projectId: p.id, documentId: existing.id,
             kind: 'agent.task.assigned', actor: user.id,
-            payload: { slug: updated.slug, agent: nextAssignee.slice('agent:'.length) },
+            payload: { slug: updated.slug, agent: agentSlug, agent_id: agentRow?.id ?? null },
           });
         }
       }
@@ -270,7 +313,13 @@ documentsRoute.patch('/:slug', requireScope('documents:write'), async (c) => {
     return jsonOk(c, updated);
   }
 
-  const json = await c.req.json();
+  // BUG-019 — wrap so malformed/empty bodies surface as 422 INVALID_BODY.
+  let json: unknown;
+  try {
+    json = await c.req.json();
+  } catch {
+    throw new HTTPError('INVALID_BODY', 'JSON body required', 422);
+  }
   const parsed = documentPatchSchema.safeParse(json);
   if (!parsed.success) throw new HTTPError('INVALID_BODY', parsed.error.message, 422);
   const updated = await updateDocument({
@@ -296,10 +345,6 @@ documentsRoute.delete('/:slug', requireScope('documents:delete'), async (c) => {
 });
 
 // POST /:slug/activity { note } — emits activity.logged + bumps lastTouchedAt.
-// Note cap is 2000 chars: enough for a few paragraphs of operational context
-// ("called the client, follow up Tue"), small enough that an agent loop can't
-// balloon events.payload and saturate GET /events.
-const ACTIVITY_NOTE_MAX = 2000;
 
 documentsRoute.post('/:slug/activity', requireScope('documents:write'), async (c) => {
   const user = getUser(c);
@@ -323,7 +368,7 @@ documentsRoute.post('/:slug/activity', requireScope('documents:write'), async (c
   if (!existing) throw new HTTPError('DOCUMENT_NOT_FOUND', `document "${slug}" not found`, 404);
 
   const now = new Date();
-  await db.transaction(async (tx) => {
+  await txWithEvents(db, async (tx) => {
     // Bump updatedAt as well as lastTouchedAt so the doc surfaces in the
     // list's `updated_at desc` sort — that's the user's mental model when
     // they log activity: "I just worked on this, it should be at the top."

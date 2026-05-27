@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { db } from '../db/client.ts';
 import { fields } from '../db/schema.ts';
 import { jsonOk, HTTPError } from '../lib/http.ts';
-import { emitEvent } from '../lib/events.ts';
+import { emitEvent, txWithEvents } from '../lib/events.ts';
 import { FIELD_TYPES, type FieldType, validateTypeChange } from '../lib/field-type-change.ts';
 import { listFields } from '../services/fields.ts';
 import { type AuthContext, getUser } from '../middleware/auth.ts';
@@ -72,7 +72,7 @@ fieldsRoute.post('/', requireScope('fields:write'), zValidator('json', baseSchem
     options: input.options ?? null,
     order: input.order ?? 0,
   };
-  await db.transaction(async (tx) => {
+  await txWithEvents(db, async (tx) => {
     await tx.insert(fields).values(row);
     await emitEvent(tx, {
       workspaceId: ws.id, projectId: p.id, kind: 'field.created', actor: user.id,
@@ -151,7 +151,7 @@ fieldsRoute.patch(
       updatePatch.options = null;
     }
 
-    await db.transaction(async (tx) => {
+    await txWithEvents(db, async (tx) => {
       await tx.update(fields).set(updatePatch).where(eq(fields.id, id));
       await emitEvent(tx, {
         workspaceId: ws.id, projectId: p.id, kind: 'field.updated', actor: user.id,
@@ -172,7 +172,7 @@ fieldsRoute.delete('/:id', requireScope('fields:write'), async (c) => {
     where: and(eq(fields.tableId, t.id), eq(fields.id, id)),
   });
   if (!row) throw new HTTPError('FIELD_NOT_FOUND', `field "${id}" not found`, 404);
-  await db.transaction(async (tx) => {
+  await txWithEvents(db, async (tx) => {
     await tx.delete(fields).where(eq(fields.id, id));
     await emitEvent(tx, {
       workspaceId: ws.id, projectId: p.id, kind: 'field.deleted', actor: user.id,

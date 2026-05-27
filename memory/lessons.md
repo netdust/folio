@@ -245,3 +245,63 @@ A 2-minute DevTools read beats 3 commits of guessing.
 **Rule:** For Folio shake-outs, when a bug's verification needs Playwright (cold-start ~4.5 min), invoke `run_in_background: true` immediately after the fix lands, then continue working on the NEXT bug while the e2e runs. The bg notification fires when it completes; I switch back, check, then move on. Don't batch e2e runs to save cold-start cost — the cost is still paid once per session, batching just delays which bug's signal you get back. Unit tests still run synchronously between fixes (they're fast).
 
 **Trigger:** Any "fix → e2e → next fix" sequence in shake-out. After the first commit, switch to "fix → bg-launch e2e → start next investigation → bg notification → check → next bg-launch."
+
+## 2026-05-27 — Changing a server-side canonical form requires sweeping every UI consumer in the SAME commit
+
+**Mistake:** F11 changed comment `frontmatter.author` from `agent:<slug>` to `agent:<id>` server-side. The fix landed with passing tests because (a) the migration was app-layer only — no UI code touched, (b) test fixtures still used the legacy slug form, so vitest stayed green. Three UI surfaces silently broke: `AuthorDisplay` rendered raw nanoids instead of slugs, `resolveIsAuthor` never matched (lost Edit/Delete affordances), and `ApprovalButtons.findResolution` never resolved approvals (because `target_agent` still stored slug while the plan author now stored id). The second code-review caught all three; the first review missed them because no test in CI exercised the new shape.
+
+**Why:** A canonical-form change is a *protocol* change, not a service-layer change. Every consumer that pattern-matches on the prior shape is broken until updated. "I only edited services/comments.ts" was the trap — F11's blast radius was every file that ever called `author.startsWith('agent:')` or `.slice('agent:'.length)`.
+
+**Rule:** Before changing a server-emitted canonical string (author identity, slug shape, id format), grep the WHOLE repo for the prior form's pattern (`'agent:'`, `startsWith('agent:')`, `slice('agent:'.length)`, etc.). Every match is a consumer that must be updated in the same commit. Update test fixtures to the NEW form so CI exercises the post-change reality. If consumers need extra context (workspace agent list), add a shared helper (`lib/author-ref.ts`) and route every site through it — never let two files independently decode the same string.
+
+**Trigger:** Editing any function that returns a string with a `kind:value` shape (`agent:<id>`, `user:<id>`, `event:<key>`, `cache:<bucket>`), or changing what `value` contains. Bonus trigger: any commit message that mentions "canonical" or "migrate to <new form>." Step zero: `git grep -F "'<prefix>:'"` and budget the audit.
+
+## 2026-05-27 — Zod `.default(...)` fills AFTER your route-layer guard runs
+
+**Mistake:** F2's `assertAgentAllowListWidening` short-circuited when the create payload had no `projects` key — reasoning: "no widening requested." But the agent Zod schema declares `projects: z.array(z.string()).default(['*'])`. The default fires during `agentFrontmatterSchema.safeParse(...)` INSIDE `createDocument`, AFTER the guard ran. A restricted parent agent (`projects: ['projA']`) could mint a child by omitting the field — Zod filled `['*']` and the guard never saw it. G4 fixed it with an `op: 'create' | 'patch'` parameter so create treats missing as widening-to-`'*'`.
+
+**Why:** Schema defaults are a SECOND mutation pass that runs at the service boundary, not at the route. Guards installed at the route level see the user's payload; guards installed at the service level see the post-default payload. A guard placed at the route boundary, gating a write that ALSO defaults fields downstream, is incomplete by construction.
+
+**Rule:** When writing a security guard against a write payload, ask: does the receiver of this payload run any `.default(...)`, `.transform(...)`, or `.refine(...)` that could ADD a field this guard would reject? If yes, either: (a) move the guard to AFTER the schema parse (right altitude — guards in the service layer), or (b) make the guard treat "missing key" as the most permissive value the default could fill. Don't trust the input shape to match what hits the DB.
+
+**Trigger:** Any `assert*` or `require*` guard placed in a route handler that calls a service whose input goes through Zod with `.default(...)`. Especially `frontmatter.projects`, `tools`, `requires_approval`, `max_delegation_depth` — anything where `agentFrontmatterSchema` fills a default.
+
+## 2026-05-27 — Cron field normalization belongs to the SET, not the range endpoints
+
+**Mistake:** F13 fixed dow=7 by normalizing the range endpoints in `parseField`: `if (a === 7) a = 0; if (b === 7) b = 0;`. Looked correct for `* * * * 7` (single value). Broke completely for ranges crossing the rollover: `5-7` became `start=5, end=0` → `start > end` → returned null; `0-7` became `start=0, end=0` → set `{0}` only (dropped Mon-Sat); `1-7` became `start=1, end=0` → null. The original code-review caught dow=7 single-value; the follow-up review caught dow=7 inside ranges.
+
+**Why:** Normalizing at the endpoint level treats `7` as "literally 0" — but in cron `7` means "ALSO 0" inside a range, i.e. set-union semantics. The two cases (single value vs range) have different correct behaviors that can't be expressed with the same operation on the endpoint.
+
+**Rule:** When normalizing input for a parser that uses ranges, apply the normalization to the EXPANDED SET, not to the endpoints. For dow=7: widen the domain to accept 7 during expansion, then post-process the result set to remap 7→0. Same pattern applies to any cron-like field with aliases (`SUN`, `MON`, `JAN`, etc.) — the alias substitution must happen per-value after expansion, not on the range bounds.
+
+**Trigger:** Any field-parser that does `for (let i = start; i <= end; i += step)` AND has a value-aliasing rule (`7 → 0`, `JAN → 1`, etc.). Don't translate `start`/`end` — translate inside the loop.
+
+## 2026-05-27 — bun-sqlite + drizzle doesn't roll back async throws — the SQL row persists
+
+**Mistake:** F6 deferred `eventBus.publish` to post-commit via `txWithEvents` + a per-tx WeakMap queue, on the assumption that throwing inside `db.transaction(async tx => …)` would also roll back any `tx.insert()` calls. It doesn't — bun-sqlite + drizzle has a documented quirk where async throws don't propagate to the rollback. F6 ended up with an inverse phantom: the bus publish was suppressed (correct), but the events row PERSISTED (wrong). Two simultaneously-open clients diverged until reload — the live one missed the event, the reconnecting one got it via Last-Event-Id replay. G10 fixed it by having the catch issue a manual `DELETE FROM events WHERE id IN (...)`.
+
+**Why:** "Transaction rollback handles cleanup" is a foundational mental model from every other SQL stack. With bun-sqlite + drizzle, it's not true for async callbacks. Synchronous throws roll back; awaited throws don't. The driver and ORM both look healthy in isolation — the bug is at their seam.
+
+**Rule:** When using `db.transaction(async tx => …)` on bun-sqlite, never rely on rollback to clean up. If you await inside the callback AND any awaited statement can throw, the prior writes will persist. Either: (a) reify the rollback at the app layer (track inserted ids, delete on catch — what `txWithEvents` does now), or (b) use synchronous `db.transaction(tx => …)` with `tx.run()` for everything you care about rolling back. Document this constraint in any helper that wraps `db.transaction`.
+
+**Trigger:** Any new `db.transaction(async (tx) => ...)` block where the inner code can throw after a row insert. Especially in event-emitting services where the inner write is paired with a side effect that callers depend on being all-or-nothing.
+
+## 2026-05-27 — A canonical-form migration must drop the back-compat path, not preserve it
+
+**Mistake:** F11 introduced a slug back-compat path in `assertAuthor` ("if id check fails, also match by current slug") so pre-F11 comments stayed editable. Looked safe. Was a privilege escalation: hard-delete an agent → slug freed → create new agent with same slug → new agent's token now matches OLD agent's pre-F11 comments via the back-compat branch. The second review caught it as G6. Fix was a migration (0008) that backfills every pre-F11 row to id-canonical AND dropping the back-compat path entirely.
+
+**Why:** Back-compat paths for authorization are different from back-compat paths for data shape. A schema migration that preserves both shapes is fine. A guard that accepts both shapes is a permission bug if either shape can be reused/recycled. Slug back-compat seemed bounded by "agent must currently exist with that slug" — but in a hard-delete world that's a recyclable identifier.
+
+**Rule:** When changing the canonical form of an identifier used in authorization (author, owner, parent, assignee), write the migration FIRST. Backfill every row to the new form. Then drop the back-compat path in the SAME commit. Don't ship a guard that accepts both shapes; rows that can't be backfilled (deleted parent agent, mid-rename) should become uneditable on purpose — that's the security property, not a UX regression to soften.
+
+**Trigger:** Any change to an `assertAuthor` / `assertOwner` / `assertAssignee` style guard. Or any change to the canonical form of a string used in such a guard. Step zero: write the migration. Step one: drop back-compat. Step two: tests must use the new form.
+
+## 2026-05-27 — Code-review caps are an output limit, not a defect limit
+
+**Mistake:** Ran `/code-review` with the xhigh-effort prompt that returns ≤ 15 findings. 16 candidates were verified-confirmed; I cut #16 to stay under the cap and reported "15 findings." The user noticed the cap implicitly: "15 again, is that a limit?" The next review found that I had ALSO introduced new bugs in my fixes (F11's UI consumers — 3 of them — would all have been in #16-#18 if the cap allowed). The cap creates a false sense of "we got them all."
+
+**Why:** The review pipeline is calibrated to a fixed output size for readability. The number of real defects in a code change is not fixed. A clean PR fits well under the cap; a PR that touches a canonical form or moves a guard has more.
+
+**Rule:** When a code-review report says "15 findings," ALWAYS report verified-but-cut findings to the user with the verdict and a one-line summary, even if abbreviated. If the cap forced a cut, name that explicitly. The user should know what was deferred. Better: rank by severity, mention the count of verified findings, then truncate displayed detail — don't truncate the count.
+
+**Trigger:** Running `/code-review` or any reviewer pipeline with a fixed output cap. If the verified-confirmed count exceeds the cap, the closing summary must say so (e.g., "18 verified, top 15 below, remainder: …"). Don't let a presentation limit hide a correctness signal.

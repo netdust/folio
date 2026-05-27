@@ -234,6 +234,32 @@ type: page
   expect((await res.json()).error.code).toBe('INVALID_BODY');
 });
 
+test('H6: PATCH text/markdown rejects type=comment (must use update_comment)', async () => {
+  const { app, seed } = await makeTestApp();
+  // Create a parent + comment via the proper REST path.
+  const parentRes = await app.request(path, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: 'work_item', title: 'Parent' }),
+  });
+  const parent = (await parentRes.json()).data as { slug: string };
+  const commentRes = await app.request(`${path}/${parent.slug}/comments`, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ body: 'original' }),
+  });
+  const comment = (await commentRes.json()).data as { slug: string };
+
+  // Markdown PATCH must reject — comment-mutation goes through update_comment.
+  const res = await app.request(`${path}/${comment.slug}`, {
+    method: 'PATCH',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'text/markdown' },
+    body: `# tampered\n\nrewritten body\n`,
+  });
+  expect(res.status).toBe(422);
+  expect((await res.json()).error.code).toBe('COMMENT_REQUIRES_COMMENT_TOOL');
+});
+
 test('GET /documents lists with no filter', async () => {
   const { app, seed } = await makeTestApp();
   for (const t of ['A', 'B', 'C']) {

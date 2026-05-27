@@ -680,9 +680,9 @@ Hand-rolled Hono sub-app at `/mcp`. Speaks JSON-RPC 2.0 over HTTP POST. Bearer-a
 - [ ] `create_comment` (`documents:write`): post a comment on a work_item or page. Server resolves `author=agent:<slug>` from the bearer's `agent_id`. Parent must be in caller's allow-list.
 - [ ] `list_comments` (`documents:read`): list a parent's comments; filterable by `kind`.
 - [ ] `update_comment` / `delete_comment` (`documents:write` / `documents:delete`): author-only; soft delete.
-- [ ] `create_agent` / `update_agent` / `delete_agent` (new scope: `agents:write`): workspace-scoped agent CRUD via MCP. Token auto-minted on create; revoked on delete (existing Phase 2.5 cascade).
-- [ ] `get_agent_self` (no scope required): returns the calling agent's own document. Resolves via bearer's `agent_id`.
-- [ ] New scope `agents:write` added to `apiTokens.scopes` vocabulary. Workspace settings UI scope-checkbox + Read+write/Full presets updated.
+- [x] `create_agent` / `update_agent` / `delete_agent` (new scope: `agents:write`): workspace-scoped agent CRUD via MCP. Token auto-minted on create; revoked on delete (existing Phase 2.5 cascade). *(D8)*
+- [x] `get_agent_self` (no scope required): returns the calling agent's own document. Resolves via bearer's `agent_id`. *(D8 — implemented as `documents:read` since the agent row is a document.)*
+- [x] New scope `agents:write` added to `apiTokens.scopes` vocabulary. Workspace settings UI scope-checkbox + Read+write/Full presets updated. *(D8)*
 
 ### UI — tabbed slideover
 
@@ -705,18 +705,18 @@ Hand-rolled Hono sub-app at `/mcp`. Speaks JSON-RPC 2.0 over HTTP POST. Bearer-a
 
 ### Structured trigger form
 
-- [ ] `components/triggers/trigger-form.tsx` replaces the generic FrontmatterForm in the trigger slideover's Fields tab.
-- [ ] Schedule vs event mode toggle. Cron input with live `validateCronShape()` + "next 3 fires" preview. Event-kind dropdown sourced from `KNOWN_EVENT_KINDS`. Filter rows reuse the views filter primitive.
-- [ ] JSON payload editor (CodeMirror JSON mode with live validation).
-- [ ] Builtin triggers render the form read-only with a banner; only `Enabled` toggle is interactive.
+- [x] `components/triggers/trigger-form.tsx` replaces the generic FrontmatterForm in the trigger slideover's Fields tab. *(D6 + D7)*
+- [x] Schedule vs event mode toggle. Cron input with live `validateCronShape()` + "next 3 fires" preview. Event-kind dropdown sourced from `KNOWN_EVENT_KINDS`. Filter rows reuse the views filter primitive. *(D5 / D6)*
+- [x] JSON payload editor (CodeMirror JSON mode with live validation). *(D6 — implemented as plain textarea with on-change parse + aria-invalid; CodeMirror was not used.)*
+- [x] Builtin triggers render the form read-only with a banner; only `Enabled` toggle is interactive. *(D6)*
 
 ### Built-in triggers (4 per workspace, auto-seeded)
 
-- [ ] On workspace create: seed `builtin-on-assignment`, `builtin-on-mention`, `builtin-on-approval`, `builtin-on-rejection` as workspace-scoped trigger documents. `frontmatter.builtin: true`. The `agent:` field uses `$event.<key>` dynamic resolution syntax.
-- [ ] Trigger schema accepts `$event.<key>` syntax. Trigger-fire path resolves the reference at fire time.
-- [ ] PATCH on `builtin: true` triggers: only `enabled` mutable; everything else 422 `BUILTIN_TRIGGER_LOCKED`. DELETE: 422.
-- [ ] Enable-default policy: `builtin-on-assignment` and `builtin-on-mention` ship with `enabled: false` in Phase 2.6 (no runner exists to consume their fires). Their slideover shows a muted "(activates in Phase 3 — agent runner)" banner. Phase 3 migration auto-flips them to `enabled: true`.
-- [ ] `builtin-on-approval` and `builtin-on-rejection` ship with `enabled: true` (the comment-posting UI surface exists in 2.6; only the runner-resume internal action is stubbed).
+- [x] On workspace create: seed `builtin-on-assignment`, `builtin-on-mention`, `builtin-on-approval`, `builtin-on-rejection` as workspace-scoped trigger documents. `frontmatter.builtin: true`. The `agent:` field uses `$event.<key>` dynamic resolution syntax. *(D3; D4 backfill script for pre-2.6 workspaces.)*
+- [x] Trigger schema accepts `$event.<key>` syntax. Trigger-fire path resolves the reference at fire time. *(D2 — schema-side only; runtime resolution waits on Phase 3 runner.)*
+- [x] PATCH on `builtin: true` triggers: only `enabled` mutable; everything else 422 `BUILTIN_TRIGGER_LOCKED`. DELETE: 422. *(D2)*
+- [x] Enable-default policy: `builtin-on-assignment` and `builtin-on-mention` ship with `enabled: false` in Phase 2.6 (no runner exists to consume their fires). Their slideover shows a muted "(activates in Phase 3 — agent runner)" banner. Phase 3 migration auto-flips them to `enabled: true`. *(D3 — seeded disabled; slideover banner deferred to E2 polish.)*
+- [x] `builtin-on-approval` and `builtin-on-rejection` ship with `enabled: true` (the comment-posting UI surface exists in 2.6; only the runner-resume internal action is stubbed). *(D3)*
 
 ### Allow-list reconciler (Phase 2.5 deferral)
 
@@ -731,10 +731,10 @@ Hand-rolled Hono sub-app at `/mcp`. Speaks JSON-RPC 2.0 over HTTP POST. Bearer-a
 - [ ] Mention picker filters agents by project allow-list; member list correct.
 - [ ] Mention parser detects approval keywords correctly; non-keyword mentions remain `kind=comment`.
 - [ ] Workspace agent slideover gets Activity tab with LogActivity wired (Phase 2.5 deferral resolved).
-- [ ] Structured trigger form replaces the generic FrontmatterForm on triggers; builtin triggers read-only.
-- [ ] Four builtin triggers auto-seed on workspace create; PATCH/DELETE blocked.
-- [ ] Allow-list reconciler scrubs orphan ids on schedule.
-- [ ] Agent-lifecycle MCP tools (`create_agent` / `update_agent` / `delete_agent` / `get_agent_self`) work end-to-end with `agents:write` scope enforcement.
+- [x] Structured trigger form replaces the generic FrontmatterForm on triggers; builtin triggers read-only. *(D5–D7)*
+- [x] Four builtin triggers auto-seed on workspace create; PATCH/DELETE blocked. *(D2 + D3; D4 backfill for pre-2.6.)*
+- [ ] Allow-list reconciler scrubs orphan ids on schedule. *(E1.)*
+- [x] Agent-lifecycle MCP tools (`create_agent` / `update_agent` / `delete_agent` / `get_agent_self`) work end-to-end with `agents:write` scope enforcement. *(D8)*
 - [ ] All existing user-flow tests still pass — no Phase 2 / 2.5 regression.
 - [ ] Commit: `phase-2.6: complete`
 
@@ -897,9 +897,20 @@ Hand-rolled Hono sub-app at `/mcp`. Speaks JSON-RPC 2.0 over HTTP POST. Bearer-a
 
 ### Events + SSE
 
-- [ ] New event kinds: `agent.run.started`, `agent.run.awaiting_approval`, `agent.run.running`, `agent.run.completed`, `agent.run.failed`, `agent.run.rejected`, `ai.action`, `runs_table.lazy_seeded`. Added to `KNOWN_EVENT_KINDS`.
+- [ ] New event kinds: `agent.run.started`, `agent.run.awaiting_approval`, `agent.run.running`, `agent.run.completed`, `agent.run.failed`, `agent.run.rejected`, `ai.action`, `runs_table.lazy_seeded`, `workspace.provider.degraded`, `workspace.provider.recovered`. Added to `KNOWN_EVENT_KINDS`.
 - [ ] `ai.action` audit event emitted per provider call with `actor_type: 'agent'`, `actor_id: <agent_id>`, `provider`, `model`, `tokens_in`, `tokens_out`. No content stored.
 - [ ] New SSE filter params: `?agent=<doc_id>`, `?table=<table_id>`. AND-combined with existing filters.
+
+### Provider-down "Agent Offline" surface
+
+- [ ] `services/agent-runs.ts::checkProviderHealth(workspaceId, provider)` — derived from event history; returns `{ status: 'healthy' | 'degraded', consecutiveFailures }`. Tipping edge emits `workspace.provider.degraded`; first `completed` run after that emits `workspace.provider.recovered`. Cancelled runs excluded from the window. Per `(workspace, provider)`. Threshold via env `FOLIO_PROVIDER_DEGRADE_THRESHOLD` (default 3).
+- [ ] `services/agent-runs.ts::getProviderHealth(workspaceId)` — snapshot of all four providers; used by the workspace shell on mount before SSE takes over.
+- [ ] `GET /api/v1/w/:wslug/provider-health` — exposes the snapshot. Session auth. No MCP twin (UI-only surface).
+- [ ] `transitionRun` calls `checkProviderHealth` on terminal transitions inside the same transaction; emits the degraded/recovered events idempotently (no banner thrash on repeated failures).
+- [ ] `components/shell/provider-health-banner.tsx` — workspace-level banner; renders "⚠ Anthropic is unreachable — last N agent runs failed. Agents using Anthropic are paused until it recovers." Provides "Check key" link → `/w/:wslug/settings?tab=ai&provider=<provider>`. Clears on SSE `workspace.provider.recovered`.
+- [ ] `components/slideover/agent-slideover.tsx` — when opening an agent whose provider is currently degraded, render inline "Provider currently offline" notice above body.
+- [ ] `lib/api/provider-health.ts` — `useProviderHealth(wslug)` hook (one-shot GET + SSE subscription for `workspace.provider.degraded` / `workspace.provider.recovered`).
+- [ ] **NOT shipped:** no circuit breaker (runner keeps trying on each new assignment so transient recovery is detected). No retry queue (failed runs do not auto-retry on recovery — user uses existing retry gesture). No per-agent surface (unit is workspace+provider).
 
 ### Shared MCP/HTTP dispatcher
 
@@ -957,6 +968,7 @@ Hand-rolled Hono sub-app at `/mcp`. Speaks JSON-RPC 2.0 over HTTP POST. Bearer-a
 - [ ] **Chain_id tracking.** Every agent_run row has chain_id. Root mints fresh uuid. Descendants inherit.
 - [ ] MCP `run_agent` returns `run_id`, SSE stream shows transitions.
 - [ ] **Backpressure visible.** `GET /api/v1/admin/runner-stats` returns stats; log line on high pending count.
+- [ ] **Agent Offline banner.** With provider stubbed to always fail, the workspace banner appears after N consecutive `provider_error` failures (default 3); one successful run clears it. Per provider (Anthropic degraded ≠ OpenAI degraded). Cancelled runs excluded from the window.
 - [ ] All existing user-flow tests still pass — no Phase 2 / 2.5 / 2.6 regression.
 - [ ] Commit: `phase-3: complete`
 

@@ -7,7 +7,7 @@ import { filterCompile, FilterCompileError } from '@folio/shared';
 import { db } from '../db/client.ts';
 import { views } from '../db/schema.ts';
 import { jsonOk, HTTPError } from '../lib/http.ts';
-import { emitEvent } from '../lib/events.ts';
+import { emitEvent, txWithEvents } from '../lib/events.ts';
 import { listViews } from '../services/views.ts';
 import { type AuthContext, getUser } from '../middleware/auth.ts';
 import { requireScope } from '../middleware/bearer.ts';
@@ -67,7 +67,7 @@ viewsRoute.post('/', requireScope('views:write'), zValidator('json', baseSchema)
     order: input.order ?? 0,
     isDefault: input.isDefault ?? false,
   };
-  await db.transaction(async (tx) => {
+  await txWithEvents(db, async (tx) => {
     await tx.insert(views).values(row);
     await emitEvent(tx, {
       workspaceId: ws.id, projectId: p.id, kind: 'view.created', actor: user.id,
@@ -90,7 +90,7 @@ viewsRoute.patch('/:id', requireScope('views:write'), zValidator('json', baseSch
   const patch = c.req.valid('json');
   if (patch.filters !== undefined) validateFilters(patch.filters);
 
-  await db.transaction(async (tx) => {
+  await txWithEvents(db, async (tx) => {
     await tx.update(views).set(patch).where(eq(views.id, id));
     await emitEvent(tx, {
       workspaceId: ws.id, projectId: p.id, kind: 'view.updated', actor: user.id,
@@ -110,7 +110,7 @@ viewsRoute.delete('/:id', requireScope('views:write'), async (c) => {
     where: and(eq(views.tableId, t.id), eq(views.id, id)),
   });
   if (!row) throw new HTTPError('VIEW_NOT_FOUND', `view "${id}" not found`, 404);
-  await db.transaction(async (tx) => {
+  await txWithEvents(db, async (tx) => {
     await tx.delete(views).where(eq(views.id, id));
     await emitEvent(tx, {
       workspaceId: ws.id, projectId: p.id, kind: 'view.deleted', actor: user.id,

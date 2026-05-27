@@ -20,6 +20,12 @@ export const V1_MCP_TOOLS = [
   'list_fields',
   'list_views',
   'run_view',
+  // Phase 2.6 sub-phase D — agent lifecycle tools. Write tools require the
+  // agents:write scope; get_agent_self is read-only metadata-on-self.
+  'create_agent',
+  'update_agent',
+  'delete_agent',
+  'get_agent_self',
 ] as const;
 
 export type McpTool = (typeof V1_MCP_TOOLS)[number];
@@ -51,5 +57,9 @@ export const MCP_TOOL_GROUPS: { label: string; tools: McpTool[] }[] = [
   {
     label: 'Delete',
     tools: ['delete_document'],
+  },
+  {
+    label: 'Agent lifecycle',
+    tools: ['create_agent', 'update_agent', 'delete_agent', 'get_agent_self'],
   },
 ];

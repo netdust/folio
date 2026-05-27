@@ -31,7 +31,7 @@ curl -s -X POST -H "Authorization: Bearer $TOK" -H "Content-Type: application/js
 | Method | Behavior |
 |---|---|
 | `initialize` | Returns `serverInfo` (`name: "folio"`, `version: "0.1.0"`) and `protocolVersion: "2024-11-05"`. |
-| `tools/list` | Returns the 12 v1 tools (see below) as `{ name, description, inputSchema }`. |
+| `tools/list` | Returns the 20 v1 tools (12 document + 4 comment + 4 agent-lifecycle) as `{ name, description, inputSchema }`. |
 | `tools/call` | Invokes a tool with `{ name, arguments }`. Returns `{ content: [{ type: 'text', text: <json or markdown> }] }`. |
 | `ping` | Returns `{}`. |
 
@@ -47,13 +47,19 @@ Errors use standard JSON-RPC error codes:
 | `-32602` | Invalid params. Phase 2.5 uses this for allow-list rejections and for the agent-lifecycle-via-HTTP-only rejections. See `data.reason` to discriminate. |
 | `-32603` | Tool execution error. Scope-denied calls also report `-32603` with `message: "tool <name> requires scope: <scope>"` and `data: { tool, required_scope }`. |
 
-### `-32602` reasons (Phase 2.5)
+### `-32602` reasons
 
 | `data.reason` | When | Additional `data` fields |
 |---|---|---|
 | `agent_not_in_allow_list` | Agent-bound token called a project-scoped tool with a `project_slug` that's not in `intersect(agent.frontmatter.projects, token.project_ids ?? null)` | `project_slug`, `agent_slug` |
-| `agent_lifecycle_via_http_only` | `create_document` with `type=agent\|trigger`, OR `update_document` / `delete_document` on a doc whose type is `agent` or `trigger` | (none — message includes the pointer to the HTTP endpoint) |
+| `agent_lifecycle_via_http_only` | `create_document` with `type=agent\|trigger`, OR `update_document` / `delete_document` on a doc whose type is `agent` or `trigger`. Phase 2.6 added dedicated `create_agent` / `update_agent` / `delete_agent` MCP tools — the generic-tool rejection still stands. | (none — message includes the pointer to the HTTP endpoint) |
 | `agent_missing` | The agent referenced by `token.agent_id` no longer exists (race between MCP call and agent deletion) | (none) |
+| `comment_author_only` | `update_comment` or `delete_comment` called by a token whose resolved actor doesn't match `frontmatter.author` on the target comment | (none) |
+| `agent_not_found` | `update_agent` / `delete_agent` referenced a `slug` that doesn't resolve to an agent in this workspace | `slug` |
+| `allow_list_widening_forbidden` | Agent-bound token called `update_agent` with a `frontmatter.projects` patch that would include project ids outside the calling agent's own allow-list (including widening to `'*'`) | (none) |
+| `cannot_delete_self` | Agent-bound token called `delete_agent` targeting its own document | (none) |
+| `no_agent_bound_to_token` | `get_agent_self` called with a token that has no `agent_id` (user-minted PAT or workspace-scoped token without an agent binding) | (none) |
+| `invalid_frontmatter` | `create_agent` / `update_agent` received a `frontmatter` argument that isn't a plain object | (none) |
 
 Server-side logging contract: every allow-list rejection logs at INFO with structured fields `{ agent_slug, agent_id, requested_project_slug, requested_project_id, allowed_projects, tool }`. The MCP response keeps the minimal `data` shape above (operator-friendly, not leaky); the server log carries the full reasoning trail.
 
@@ -66,12 +72,13 @@ Each tool requires one of the resource scopes the bearer token must carry. The m
 - **Read tools** require `documents:read`.
 - **Write tools** require `documents:write`.
 - **`delete_document`** requires `documents:delete`.
+- **`create_agent` / `update_agent` / `delete_agent`** require `agents:write` (Phase 2.6). `get_agent_self` is read-only and requires only `documents:read` (the agent row is a document) plus an agent-bound token.
 
-When you create an **agent** document via the REST API or MCP, the auto-minted token derives its scopes from the agent's `tools[]` whitelist via `toolsToScopes()` in `apps/server/src/lib/agent-schema.ts`. Manually-issued tokens declare their scopes directly.
+When you create an **agent** document via the REST API or MCP, the auto-minted token derives its scopes from the agent's `tools[]` whitelist via `toolsToScopes()` in `apps/server/src/lib/agent-schema.ts`. Manually-issued tokens declare their scopes directly. Granting `agents:write` lets the holder spawn or mutate other agents in the workspace — treat it with the same caution as `documents:delete`.
 
 ## The v1 tools
 
-All 12 tools live in `apps/server/src/routes/mcp.ts`. The handler bodies delegate to the service layer (`apps/server/src/services/*`) — REST routes and MCP share the same service functions, so behavior is identical between the two surfaces.
+All 20 tools live in `apps/server/src/routes/mcp.ts` (12 document tools + 4 comment tools + 4 agent-lifecycle tools). The handler bodies delegate to the service layer (`apps/server/src/services/*`) — REST routes and MCP share the same service functions, so behavior is identical between the two surfaces.
 
 Source-of-truth list (`V1_MCP_TOOLS` in `apps/server/src/lib/agent-schema.ts`):
 
@@ -81,6 +88,12 @@ list_projects             get_document_markdown     list_fields
 list_documents            create_document           list_views
                           update_document           run_view
                           delete_document
+
+# Comments (Phase 2.6)
+create_comment   list_comments   update_comment   delete_comment
+
+# Agent lifecycle (Phase 2.6 sub-phase D)
+create_agent     update_agent    delete_agent     get_agent_self
 ```
 
 `search_documents` is deferred to v1.1 (requires sqlite-fts5).
@@ -202,6 +215,171 @@ Same arguments as `get_document`. Returns the raw markdown (YAML frontmatter + b
 - **One of `view_slug` or `view_id` is recommended.** When neither is provided, the default view is used.
 - **Returns:** `{ view: { id, name }, documents: [...] }` — documents are filtered by the view's stored filter AST and sort.
 - **Note:** `view_slug` matches the view's **name** case-insensitively (views have no slug column in v1). Prefer `view_id` when known.
+
+## Comment tools (Phase 2.6)
+
+Four tools for reading and writing comments on `work_item` and `page` documents. Comments are stored as rows in the `comments` table and reference their parent document via `parent_slug`. All four tools enforce the same allow-list rules as the document tools.
+
+### create_comment
+
+Post a comment on a `work_item` or `page`. Mention parsing and approval-keyword detection happen server-side; author is resolved from the bearer token.
+
+```jsonc
+{
+  "workspace_slug": "netdust",
+  "project_slug": "folio",
+  "parent_slug": "task-1",
+  "body": "I'll draft this @drafter approved",
+  "visibility": "normal"
+}
+```
+
+- **Scope:** `documents:write`
+- **Returns:** `{ slug, kind, target_agent? }`
+- **Author resolution:** agent-bound bearer → `frontmatter.author = 'agent:<slug>'` (resolved from `token.agent_id`). Human PAT → `'user:<id>'` (resolved from `token.created_by`).
+- **Allow-list enforcement:** standard `-32602 agent_not_in_allow_list` when the agent's `frontmatter.projects` excludes the project.
+- **Approval keyword detection:** if the body contains `@<agent> approved` (or `rejected`) in the first 1–2 tokens after the mention, the server overrides `kind` to `'approval'`/`'rejection'` and sets `target_agent` automatically.
+- **Optional args:** `kind` (defaults to `comment`), `target_agent` (only valid with `kind=approval|rejection`), `visibility` (`normal` | `internal`, defaults to `normal`).
+- **Parent type:** must be `work_item` or `page`. Other types return `-32603 INVALID_COMMENT_PARENT`.
+- **Body limits:** non-empty after trim, ≤ 64 KB UTF-8.
+
+### list_comments
+
+List comments on a `work_item` or `page`.
+
+```jsonc
+{
+  "workspace_slug": "netdust",
+  "project_slug": "folio",
+  "parent_slug": "task-1",
+  "kind": "plan,approval",
+  "visibility": "normal,internal"
+}
+```
+
+- **Scope:** `documents:read`
+- **Returns:** `Comment[]` — newest first. Soft-deleted rows are included (UI/agent decides how to render).
+- **Filters:** `kind` (comma-separated list of CommentKind), `since` (ISO datetime), `visibility` (comma-separated; defaults to `normal` only).
+- **Allow-list enforcement:** standard cross-project block.
+
+### update_comment
+
+Edit a comment's body or visibility. Author-only.
+
+```jsonc
+{
+  "workspace_slug": "netdust",
+  "project_slug": "folio",
+  "slug": "c-abcd1234",
+  "body": "Updated thought",
+  "visibility": "internal"
+}
+```
+
+- **Scope:** `documents:write`
+- **Returns:** `{ slug, edited_at }`
+- **Author-only:** if `frontmatter.author` doesn't match the calling token's resolved actor, returns `-32602` with `data: { reason: 'comment_author_only' }`.
+- **Body change re-parses mentions** and emits fresh `comment.mentioned` events only for net-new resolved agents.
+- **`kind` is immutable.** Trying to PATCH it returns `KIND_IMMUTABLE` (422 mapped to JSON-RPC `-32603`).
+- **`body` and `visibility` are both optional;** call with neither for a no-op.
+
+### delete_comment
+
+Soft-delete a comment. Author-only.
+
+```jsonc
+{
+  "workspace_slug": "netdust",
+  "project_slug": "folio",
+  "slug": "c-abcd1234"
+}
+```
+
+- **Scope:** `documents:delete`
+- **Returns:** `{ slug, deleted_at }`
+- **Soft delete:** row stays in DB; `body` is blanked to `''`; `frontmatter.deleted_at` is set to ISO datetime.
+- **Idempotent:** calling on an already-deleted comment returns the existing row without re-bumping `deleted_at` or re-firing events.
+- **Author-only:** same `-32602` with `data: { reason: 'comment_author_only' }` as `update_comment`.
+
+## Agent-lifecycle tools (Phase 2.6 sub-phase D)
+
+Four tools for managing workspace-scoped agent documents from MCP. They delegate to the same `services/documents.ts` layer that the workspace-scoped HTTP routes use (`POST /api/v1/w/:wslug/documents`, etc.), so behavior — including the agent token mint, the delegation guard, and the cascade FK that revokes the bound token on delete — is identical between the surfaces.
+
+All four are scoped at the workspace level: they take `workspace_slug` but no `project_slug`. Agent docs always live with `project_id = NULL`.
+
+### create_agent
+
+Create a workspace-scoped agent document. Mints a bearer token and returns it ONCE in the response as `agent_token`.
+
+```jsonc
+{
+  "workspace_slug": "netdust",
+  "title": "Triage Bot",
+  "frontmatter": {
+    "system_prompt": "Triage incoming bugs.",
+    "provider": "anthropic",
+    "model": "claude-sonnet-4-6",
+    "tools": ["list_documents", "get_document", "update_document"],
+    "projects": ["8VTeiptMzXIccnoH6V5cd"]
+  }
+}
+```
+
+- **Scope:** `agents:write`
+- **Required:** `workspace_slug`, `title`, `frontmatter`
+- **Optional:** `slug` (server derives from title if omitted), `body` (defaults to `''`)
+- **Returns:** the created agent document plus `agent_token: "folio_pat_xxx"` (one-time reveal — store it now or rotate later).
+- **Allow-list propagation:** when called by an agent-bound token, the new agent's `frontmatter.projects` cannot exceed the calling agent's own allow-list. User-minted PATs (no bound agent) can set any allow-list. The same widening guard documented under `update_agent` applies on first set.
+- **Delegation guard:** when called by an agent-bound token, the new agent's `parent_agent` frontmatter is auto-populated with the calling agent's slug, and the delegation chain depth is enforced against the calling agent's `max_delegation_depth` (see `docs/AGENTS.md`).
+- **Errors:** `-32602` `invalid_frontmatter` (frontmatter is not a plain object). 422 mapped to `-32603` for Zod failures in `agentFrontmatterSchema`.
+
+### update_agent
+
+Patch an existing workspace-scoped agent document. Reserved keys (`type`, `title`, `status`, `last_touched_at`) live as columns and are ignored if present in `frontmatter`. Other keys shallow-merge into the existing frontmatter; `null` values DELETE keys.
+
+```jsonc
+{
+  "workspace_slug": "netdust",
+  "slug": "triage-bot",
+  "title": "Optional new title",
+  "body": "Optional new body",
+  "frontmatter": { "max_delegation_depth": 1 }
+}
+```
+
+- **Scope:** `agents:write`
+- **Required:** `workspace_slug`, `slug`
+- **Optional:** `title`, `body`, `frontmatter`
+- **Returns:** the updated agent document.
+- **Allow-list widening guard:** when called by an agent-bound token, the patch's `frontmatter.projects` cannot include project ids outside the calling agent's own allow-list. Widening to `'*'` is also rejected unless the caller has `'*'`. Returns `-32602` with `data: { reason: 'allow_list_widening_forbidden' }`. User-minted PATs (no bound agent) are unrestricted today — human-PAT enforcement waits until human PATs get a UI for narrowing (Phase 3+).
+- **Errors:** `-32602` `agent_not_found` (with `data: { slug }`); `-32602` `invalid_frontmatter`; `-32602` `allow_list_widening_forbidden`.
+
+### delete_agent
+
+Soft-delete a workspace-scoped agent document. The cascade FK on `api_tokens.agent_id` revokes the bound bearer token in the same transaction.
+
+```jsonc
+{ "workspace_slug": "netdust", "slug": "triage-bot" }
+```
+
+- **Scope:** `agents:write`
+- **Required:** `workspace_slug`, `slug`
+- **Returns:** `{ ok: true, slug }`
+- **Self-delete guard:** when called by an agent-bound token, deleting the calling agent's own document is rejected with `-32602` and `data: { reason: 'cannot_delete_self' }`. User-minted PATs can delete any agent in the workspace.
+- **Errors:** `-32602` `agent_not_found` (with `data: { slug }`); `-32602` `cannot_delete_self`.
+
+### get_agent_self
+
+Return the calling agent's own document. Read-only metadata-on-self — useful for an agent that wants to read its own system prompt, tool whitelist, or allow-list at runtime.
+
+```jsonc
+{}
+```
+
+- **Scope:** `documents:read` (the agent row is a document; no `agents:write` needed)
+- **Required:** none — the agent is resolved via the bearer's `agent_id`.
+- **Returns:** the agent's full document row including `frontmatter` and `body`.
+- **Errors:** `-32602` `no_agent_bound_to_token` when the caller is a user-minted PAT (no `agent_id`); `-32602` `agent_missing` when the bound agent has been deleted out from under the token (race).
 
 ## Mounting in an MCP client
 

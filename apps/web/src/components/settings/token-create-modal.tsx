@@ -19,6 +19,9 @@ const ALL_SCOPES = [
   'views:write',
   'tables:write',
   'statuses:write',
+  // Phase 2.6 sub-phase D — required for MCP agent-lifecycle tools
+  // (create_agent / update_agent / delete_agent).
+  'agents:write',
 ] as const;
 
 type Scope = (typeof ALL_SCOPES)[number];
@@ -27,6 +30,12 @@ type Scope = (typeof ALL_SCOPES)[number];
 // (read tools → documents:read; write tools → write + read; delete → +read).
 // Full access also adds the destructive admin ops (delete + tables:write,
 // which cascade-deletes documents).
+//
+// BUG-007: agents:write is deliberately NOT in ANY preset. Human PATs bypass
+// assertAgentAllowListWidening / assertAgentToolsWidening, so bundling
+// agents:write into a "Read + write" preset silently grants workspace-wide
+// agent-management capability (mint, widen, delete). Users who actually
+// need it tick the box explicitly.
 type PresetTone = 'default' | 'danger';
 const PRESETS: { label: string; scopes: Scope[]; tone?: PresetTone }[] = [
   { label: 'Read-only', scopes: ['documents:read'] },

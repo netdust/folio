@@ -216,7 +216,7 @@ export const documents = sqliteTable(
       .notNull()
       .references(() => workspaces.id, { onDelete: 'cascade' }),
     tableId: text('table_id').references(() => tables.id, { onDelete: 'set null' }),
-    type: text('type', { enum: ['work_item', 'page', 'agent', 'trigger'] }).notNull(),
+    type: text('type', { enum: ['work_item', 'page', 'agent', 'trigger', 'comment'] }).notNull(),
     slug: text('slug').notNull(),
     title: text('title').notNull(),
     status: text('status'), // matches a statuses.key for work_items; null for pages
@@ -350,10 +350,20 @@ export const events = sqliteTable(
     createdAt: integer('created_at', { mode: 'timestamp_ms' })
       .notNull()
       .default(sql`(unixepoch() * 1000)`),
+    // H3 — monotonic per-row sequence used as the canonical replay cursor.
+    // emitEvent computes `MAX(seq) + 1` inside the same tx as the insert;
+    // SQLite's writer lock serializes max() + insert so the value is
+    // unique + monotonic. Migration 0009 added the column + backfilled
+    // existing rows from rowid (also monotonic per insertion).
+    seq: integer('seq').notNull().default(0),
   },
   (t) => ({
     workspaceIdx: index('events_workspace_idx').on(t.workspaceId, t.createdAt),
     documentIdx: index('events_document_idx').on(t.documentId),
+    seqIdx: uniqueIndex('events_seq_idx').on(t.seq),
+    // B3: composite for SSE replay paginated cursor — covers both the WHERE
+    // (workspace_id + seq > ?) and the ORDER BY (seq ASC) in one index seek.
+    workspaceSeqIdx: index('events_workspace_seq_idx').on(t.workspaceId, t.seq),
   }),
 );
 

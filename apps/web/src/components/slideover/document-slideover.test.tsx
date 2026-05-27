@@ -356,6 +356,341 @@ describe('DocumentSlideover', () => {
     });
   });
 
+  // ---------------------------------------------------------------------
+  // C9: TabStrip integration
+  // ---------------------------------------------------------------------
+
+  function mockDocWithComments(
+    slug: string,
+    type: 'work_item' | 'page',
+    commentCount: number,
+  ) {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>(async (url) => {
+        const u = String(url);
+        if (u.includes(`/documents/${slug}/comments`)) {
+          const comments = Array.from({ length: commentCount }, (_, i) => ({
+            id: `c-${i}`,
+            slug: `comment-c-${i}`,
+            type: 'comment',
+            title: '',
+            parentId: 'd1',
+            projectId: 'proj-1',
+            workspaceId: 'ws-1',
+            body: `comment ${i}`,
+            frontmatter: { author: 'user:u-1', kind: 'comment', visibility: 'normal', mentions: [] },
+            createdAt: '2026-05-26T10:00:00.000Z',
+            updatedAt: '2026-05-26T10:00:00.000Z',
+          }));
+          return new Response(JSON.stringify({ data: comments }), {
+            status: 200, headers: { 'content-type': 'application/json' },
+          });
+        }
+        if (u.endsWith(`/documents/${slug}`) || u.includes(`/documents/${slug}?`)) {
+          return new Response(
+            JSON.stringify({
+              data: {
+                id: 'd1',
+                slug,
+                type,
+                title: 'Fix login bug',
+                status: 'todo',
+                parentId: null,
+                frontmatter: {},
+                body: '# Steps\n\n1. Reproduce',
+                createdAt: '2026-01-01',
+                updatedAt: '2026-01-02',
+              },
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        if (u.includes('/members')) {
+          return new Response(JSON.stringify({ data: { members: [] } }), {
+            status: 200, headers: { 'content-type': 'application/json' },
+          });
+        }
+        if (u.includes('/auth/me')) {
+          return new Response(JSON.stringify({ data: { user: { id: 'u-1', email: 'a@b', name: 'A' } } }), {
+            status: 200, headers: { 'content-type': 'application/json' },
+          });
+        }
+        if (u.includes('/statuses') || u.includes('/fields') || u.includes('/settings/ai-keys')) {
+          return new Response(JSON.stringify({ data: [] }), {
+            status: 200, headers: { 'content-type': 'application/json' },
+          });
+        }
+        if (u.match(/\/w\/[^/]+\/p\/[^/?]+($|\?)/)) {
+          // useProject endpoint
+          return new Response(
+            JSON.stringify({ data: { id: 'proj-1', workspaceId: 'ws-1', slug: 'web', name: 'Web', icon: null, description: null, archivedAt: null, createdAt: '', updatedAt: '' } }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        if (u.match(/\/w\/[^/?]+($|\?)/)) {
+          // useWorkspace endpoint
+          return new Response(
+            JSON.stringify({ data: { id: 'ws-1', slug: 'main', name: 'Main' } }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        // G1: workspace documents listing — used by CommentsTab's
+        // useWorkspaceAgents to resolve id-canonical authors. Returns the
+        // FLAT { data: [] } shape useWorkspaceDocuments expects.
+        if (u.match(/\/w\/[^/]+\/documents(\?|$)/)) {
+          return new Response(JSON.stringify({ data: [] }), {
+            status: 200, headers: { 'content-type': 'application/json' },
+          });
+        }
+        if (u.includes('/documents')) {
+          return new Response(JSON.stringify({ data: { data: [], nextCursor: null } }), {
+            status: 200, headers: { 'content-type': 'application/json' },
+          });
+        }
+        return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+      }),
+    );
+  }
+
+  it('renders the TabStrip with Fields / Comments / Activity for a work_item', async () => {
+    mockDocWithComments('fix-login', 'work_item', 0);
+    const { queryClient, router } = setup('?doc=fix-login');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText('Fix login bug');
+
+    const tablist = document.querySelector('[role="tablist"]');
+    expect(tablist).not.toBeNull();
+    const tabs = tablist!.querySelectorAll('[role="tab"]');
+    const labels = Array.from(tabs).map((t) => t.textContent ?? '');
+    expect(labels.some((l) => l.includes('Fields'))).toBe(true);
+    expect(labels.some((l) => l.includes('Comments'))).toBe(true);
+    expect(labels.some((l) => l.includes('Activity'))).toBe(true);
+  });
+
+  it('renders the TabStrip with Fields / Comments / Activity for a page', async () => {
+    mockDocWithComments('intro', 'page', 0);
+    const { queryClient, router } = setup('?doc=intro');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText('Fix login bug');
+
+    const tablist = document.querySelector('[role="tablist"]');
+    expect(tablist).not.toBeNull();
+    const labels = Array.from(tablist!.querySelectorAll('[role="tab"]')).map(
+      (t) => t.textContent ?? '',
+    );
+    expect(labels.some((l) => l.includes('Fields'))).toBe(true);
+    expect(labels.some((l) => l.includes('Comments'))).toBe(true);
+    expect(labels.some((l) => l.includes('Activity'))).toBe(true);
+  });
+
+  it('defaults to the Fields tab on open', async () => {
+    mockDocWithComments('fix-login', 'work_item', 0);
+    const { queryClient, router } = setup('?doc=fix-login');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText('Fix login bug');
+
+    const tablist = document.querySelector('[role="tablist"]')!;
+    const fieldsBtn = Array.from(tablist.querySelectorAll('[role="tab"]')).find(
+      (t) => (t.textContent ?? '').includes('Fields'),
+    );
+    expect(fieldsBtn).toBeDefined();
+    expect(fieldsBtn!.getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('shows the comment count badge on the Comments tab', async () => {
+    mockDocWithComments('fix-login', 'work_item', 3);
+    const { queryClient, router } = setup('?doc=fix-login');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText('Fix login bug');
+
+    await waitFor(() => {
+      const tablist = document.querySelector('[role="tablist"]')!;
+      const commentsBtn = Array.from(tablist.querySelectorAll('[role="tab"]')).find(
+        (t) => (t.textContent ?? '').includes('Comments'),
+      );
+      expect(commentsBtn).toBeDefined();
+      // The badge renders the count inside a span.
+      expect(commentsBtn!.textContent).toContain('3');
+    });
+  });
+
+  it('switching to the Activity tab mounts the ActivityPanel; body editor still visible', async () => {
+    mockDocWithComments('fix-login', 'work_item', 0);
+    const { queryClient, router } = setup('?doc=fix-login');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText('Fix login bug');
+
+    // Default tab is Fields — ActivityPanel's "No activity yet." copy not in DOM.
+    expect(screen.queryByText(/No activity yet\./)).toBeNull();
+
+    const tablist = document.querySelector('[role="tablist"]')!;
+    const activityBtn = Array.from(tablist.querySelectorAll('[role="tab"]')).find(
+      (t) => (t.textContent ?? '').includes('Activity'),
+    ) as HTMLElement;
+    await userEvent.click(activityBtn);
+
+    // ActivityPanel renders "No activity yet." for the empty-events case.
+    await waitFor(() => {
+      expect(screen.getByText(/No activity yet\./)).toBeInTheDocument();
+    });
+
+    // Body editor still visible regardless of tab.
+    expect(document.querySelector('[data-testid="slideover-editor"]')).not.toBeNull();
+  });
+
+  it('switching to the Comments tab mounts the CommentsTab; body editor still visible', async () => {
+    mockDocWithComments('fix-login', 'work_item', 0);
+    const { queryClient, router } = setup('?doc=fix-login');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText('Fix login bug');
+
+    const tablist = document.querySelector('[role="tablist"]')!;
+    const commentsBtn = Array.from(tablist.querySelectorAll('[role="tab"]')).find(
+      (t) => (t.textContent ?? '').includes('Comments'),
+    ) as HTMLElement;
+    await userEvent.click(commentsBtn);
+
+    // CommentsTab renders a "0 comments · newest first" row when empty.
+    await waitFor(() => {
+      expect(screen.getByText(/comments · newest first/)).toBeInTheDocument();
+    });
+    // Body editor still in DOM below the tabs.
+    expect(document.querySelector('[data-testid="slideover-editor"]')).not.toBeNull();
+  });
+
+  it('reopening with a different doc resets the tab back to Fields', async () => {
+    // Two different docs the same fetch mock can serve, keyed off the URL.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>(async (url) => {
+        const u = String(url);
+        const m = u.match(/\/documents\/(fix-login|other-doc)(\?|$)/);
+        if (m) {
+          const slug = m[1];
+          return new Response(
+            JSON.stringify({
+              data: {
+                id: slug === 'fix-login' ? 'd1' : 'd2',
+                slug,
+                type: 'work_item',
+                title: slug === 'fix-login' ? 'Fix login bug' : 'Other doc',
+                status: 'todo',
+                parentId: null,
+                frontmatter: {},
+                body: '# Body',
+                createdAt: '2026-01-01',
+                updatedAt: '2026-01-02',
+              },
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        if (u.includes('/comments')) {
+          return new Response(JSON.stringify({ data: [] }), { status: 200, headers: { 'content-type': 'application/json' } });
+        }
+        if (u.includes('/auth/me')) {
+          return new Response(JSON.stringify({ data: { user: { id: 'u-1', email: 'a@b', name: 'A' } } }), {
+            status: 200, headers: { 'content-type': 'application/json' },
+          });
+        }
+        if (u.includes('/statuses') || u.includes('/fields') || u.includes('/settings/ai-keys') || u.includes('/members')) {
+          return new Response(JSON.stringify({ data: [] }), { status: 200, headers: { 'content-type': 'application/json' } });
+        }
+        if (u.match(/\/w\/[^/]+\/p\/[^/?]+($|\?)/)) {
+          return new Response(JSON.stringify({ data: { id: 'proj-1', workspaceId: 'ws-1', slug: 'web', name: 'Web', icon: null, description: null, archivedAt: null, createdAt: '', updatedAt: '' } }), {
+            status: 200, headers: { 'content-type': 'application/json' },
+          });
+        }
+        if (u.match(/\/w\/[^/?]+($|\?)/)) {
+          return new Response(JSON.stringify({ data: { id: 'ws-1', slug: 'main', name: 'Main' } }), {
+            status: 200, headers: { 'content-type': 'application/json' },
+          });
+        }
+        if (u.includes('/documents')) {
+          return new Response(JSON.stringify({ data: { data: [], nextCursor: null } }), {
+            status: 200, headers: { 'content-type': 'application/json' },
+          });
+        }
+        return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+      }),
+    );
+
+    const { queryClient, router } = setup('?doc=fix-login');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText('Fix login bug');
+
+    // Switch to Activity.
+    const tablist = document.querySelector('[role="tablist"]')!;
+    const activityBtn = Array.from(tablist.querySelectorAll('[role="tab"]')).find(
+      (t) => (t.textContent ?? '').includes('Activity'),
+    ) as HTMLElement;
+    await userEvent.click(activityBtn);
+    await waitFor(() => {
+      expect(activityBtn.getAttribute('aria-pressed')).toBe('true');
+    });
+
+    // Navigate to a different doc without closing the sheet.
+    await router.navigate({ to: '.', search: { doc: 'other-doc' } });
+    await screen.findByText('Other doc');
+
+    // Tab strip has reset to Fields.
+    await waitFor(() => {
+      const list = document.querySelector('[role="tablist"]')!;
+      const fieldsBtn = Array.from(list.querySelectorAll('[role="tab"]')).find(
+        (t) => (t.textContent ?? '').includes('Fields'),
+      );
+      expect(fieldsBtn!.getAttribute('aria-pressed')).toBe('true');
+    });
+  });
+
+  it('body editor stays visible across tab switches', async () => {
+    mockDocWithComments('fix-login', 'work_item', 0);
+    const { queryClient, router } = setup('?doc=fix-login');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText('Fix login bug');
+
+    const tablist = document.querySelector('[role="tablist"]')!;
+    const allTabs = Array.from(tablist.querySelectorAll('[role="tab"]')) as HTMLElement[];
+
+    for (const t of allTabs) {
+      await userEvent.click(t);
+      expect(document.querySelector('[data-testid="slideover-editor"]')).not.toBeNull();
+    }
+  });
+
   it('derives listParams from URL search so optimistic writes target the active table cache', async () => {
     // URL carries status=todo and sort=title desc — the slideover's internal
     // documents.list fetch (used for optimistic updates) must mirror those

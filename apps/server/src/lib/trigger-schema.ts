@@ -1,40 +1,8 @@
 import { z } from 'zod';
-import type { EventKind } from './events.ts';
+import { validateCronShape, type CronShapeResult, KNOWN_EVENT_KINDS } from '@folio/shared';
 
-/** Source-of-truth list. Keep in sync with EventKind in events.ts. */
-export const KNOWN_EVENT_KINDS: readonly EventKind[] = [
-  'document.created', 'document.updated', 'document.deleted',
-  'status.created',   'status.updated',   'status.deleted',
-  'field.created',    'field.updated',    'field.deleted',
-  'view.created',     'view.updated',     'view.deleted',
-  'table.created',    'table.updated',    'table.deleted',
-  'project.created',  'project.updated',  'project.deleted',
-  'workspace.created','workspace.updated',
-  'activity.logged',
-  'agent.created',    'agent.deleted',   'agent.task.assigned',
-];
-
-export interface CronShapeResult {
-  ok: boolean;
-  reason?: string;
-}
-
-const FIELD_RE = /^[0-9*,\-/]+$/;
-
-/** Structural validation only — does NOT verify the cron is meaningful.
- *  Phase 3's scheduler does full evaluation when the trigger fires. */
-export function validateCronShape(expr: string): CronShapeResult {
-  const parts = expr.trim().split(/\s+/);
-  if (parts.length !== 5) {
-    return { ok: false, reason: `cron must have 5 fields (got ${parts.length})` };
-  }
-  for (const p of parts) {
-    if (!FIELD_RE.test(p)) {
-      return { ok: false, reason: `cron field "${p}" contains invalid characters` };
-    }
-  }
-  return { ok: true };
-}
+// Re-export so existing server imports (`from './trigger-schema.ts'`) stay stable.
+export { validateCronShape, type CronShapeResult, KNOWN_EVENT_KINDS };
 
 const cronOrNull = z.union([
   z.string().refine((s) => validateCronShape(s).ok, { message: 'invalid cron expression' }),
@@ -47,12 +15,27 @@ const onEventOrNull = z.union([
 ]);
 
 export const triggerFrontmatterSchema = z.object({
-  agent: z.string().min(1),
+  // Phase 2.6 sub-phase D: agent is optional + nullable. Accepts a direct
+  // slug ('drafter'), the `agent:<slug>` form, or a `$event.<key>` dynamic
+  // placeholder. S19: the previous schema also listed a regex-constrained
+  // `$event.<key>` variant FIRST; the second `z.string().min(1)` matched
+  // everything the regex matched, so the regex was a dead branch. Slug
+  // shape and `$event` validity are checked at dispatch time, not here.
+  agent: z.union([
+    z.string().min(1),
+    z.null(),
+  ]).optional(),
   schedule: cronOrNull,
   on_event: onEventOrNull,
   event_filter: z.union([z.record(z.unknown()), z.null()]).default(null),
   payload: z.union([z.record(z.unknown()), z.null()]).default(null),
   enabled: z.boolean().default(true),
+  // Phase 2.6 sub-phase D: marks a trigger as auto-seeded. Server-locked
+  // (only frontmatter.enabled is mutable; document is non-deletable).
+  builtin: z.boolean().default(false),
+  // Phase 2.6 sub-phase D: builtin triggers that resume/reject paused agent
+  // runs instead of invoking an agent.
+  internal_action: z.enum(['resume_run', 'reject_run']).optional(),
   // Server-managed fields rejected on client input.
   last_fired_at: z.undefined(),
   last_status: z.undefined(),

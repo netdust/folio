@@ -1,16 +1,40 @@
 # Folio — STATE
 
-_Last updated: 2026-05-26 afternoon (Phase 2.5 shipped + merged to main at `7d73124` + pushed)_
+_Last updated: 2026-05-27 evening (Phase 2.6 ALL 15 code-review findings RESOLVED across Tier 1 + 2 + 3; manifest updated; only 3 minor/deferred items remain OPEN)_
 
 Living snapshot of where the project actually is. Read at session start. Update at session end if anything below changed.
 
-## Next up — Phase 2.6 + Phase 3
+## Next up — verify e2e + merge
 
-**Phase 2.6 — Templates + agent-lifecycle MCP tools.** The deferrals from Phase 2.5 are v1-blockers per the spec: `create_agent` / `update_agent` / `delete_agent` / `get_agent_self` MCP tools (agents can't yet create or edit other agents through MCP — HTTP-only as of 2.5), plus instance-level Settings page for templates with pinned-version sync. Also: background allow-list reconciler (insurance against bugs in the transactional cascade hook + restore-from-backup scenarios).
+**Phase 2.6 is now at `b0d8c0d` on `phase-2.6/comments-and-slideover`** (15 atomic commits on top of `977c364`'s 3 BLOCKER fixes, on top of `d305810`'s automated build). **All 18 must-fix-before-merge items resolved.** All unit test suites green.
 
-**Phase 3 — AI in UI + Agent runner** (second v1 spine). Slash commands, provider abstraction, agent runner that fires triggers + executes agents, `requires_approval` + `max_tokens_per_run` enforcement (deferred from Phase 2 — runner-side).
+**Done in this session (2026-05-27 evening):** 15 BUGs from the code-review pass, each with failing-test-first → smallest-possible-fix → atomic commit. See `tasks/shake-out-manifest-phase-2.6.md` Fix Log table for the commit → bug → root cause map.
 
-Pick whichever lands first based on customer pull. Both branches start from current `main` at `7d73124`.
+- TIER 1 (6): BUG-007 token presets, BUG-008 backfill txWithEvents, BUG-009 mention parser code/quote masking, BUG-010 cascade per-row events, BUG-011 idempotency before authorship, BUG-014 safe text reset.
+- TIER 2 (6): BUG-012 agent_id visibility, BUG-013 target_agent_id + migration 0011, BUG-015 0009 comment fix, BUG-016 trigger PATCH refine, BUG-017 don't close editor on fail, BUG-021 workspace events to project subs.
+- TIER 3 (3): BUG-018 resolveAgentProjects audit, BUG-019 json parse 422, BUG-020 crypto.randomUUID optimistic id.
+
+**Open work — all non-blocking:**
+1. **Verify Playwright** still green (`bun run e2e` from apps/web) — Tier 1+2+3 changes affect cascade events / visibility / PATCH validation; e2e wasn't re-run in this session. Recommended before merge.
+2. **3 BUGs deferred:** BUG-002 (MCP create_agent slug schema — IMPORTANT, ~30 min fix), BUG-003 (Milkdown teardown intermittent — MINOR), BUG-004 (web bundle size — defer to Phase 7).
+3. **Reviewer backlog:** 23 SHOULD-FIX + 24 NICE-TO-HAVE from the four shake-out reviewer agents, untouched. Most are simplicity/perf wins, not bugs.
+4. **`/code-review --base=main --effort=high --comment`** for a final inline pass on the much larger diff (130 files, +21K LOC).
+5. **`superpowers:finishing-a-development-branch`** to merge `--no-ff` into main.
+
+**Test baseline at end of code-review fix session (current):**
+- Server **524 / 1-skip / 0-fail** (was 495 at start of session; +29: 28 new regression tests + 1 from BUG-008's mid-loop-throw test).
+- Web **547 / 8-skip / 0-fail** (was 537; +10 from new BUG-007/014/017/020 tests).
+- Shared **46 / 0-fail** (unchanged).
+- Scripts (backfill) **7 / 0-fail** (was 6; +1 from BUG-008).
+- Playwright NOT re-run this session.
+- Server + web `tsc --noEmit` still clean per prior session.
+
+**Important per-session lessons reinforced (already in memory):**
+- `bun test` from repo root mixes Vitest into Bun's runner → false fails. Always run server tests from `apps/server`, web tests from `apps/web` (via `bun run test`).
+- Per-bug atomic commits + failing-test-first preserved the pattern from BUG-001/005/006. 15-bug session stayed steady because of it.
+- The drizzle migration journal got updated correctly (idx 11) per `[[feedback_drizzle-migration-journal]]`. Don't skip on future migrations.
+
+**Phase 3 — AI in UI + Agent runner** still queued. Branches from main when 2.6 merges.
 
 
 ## Phase
@@ -28,6 +52,7 @@ Phase numbering aligned with `docs/PHASES.md` (canonical) as of 2026-05-24 reorg
 - **Phase 1.9.1 (Type-change UI + useUpdateView fix):** shipped + merged to main at `d12c598` on 2026-05-25 (PR #3). Compatible-only type-change in column `⋯` menu (`string ↔ text`, `number ↔ currency`, `* → text`); 422 with `INVALID_TYPE_CHANGE` for anything else. Default ISO `EUR` auto-injected on `* → currency`; options auto-cleared on `currency → *`. `useUpdateView` envelope unwrap fixed. Web 254 / 1-skip, server 135 / 135, shared 28 / 28, web TS clean.
 - **Phase 2 (Agents):** **shipped + merged to main** at `3431301` on 2026-05-26 (PR #4). Bearer auth + scope middleware, in-memory event bus + SSE endpoint with Last-Event-Id replay, migration 0006 widens documents.type to agent + trigger, agent/trigger frontmatter Zod schemas + auto-token-mint + revoke + delegation guard, hand-rolled JSON-RPC MCP server at /mcp with 12 v1 tools, web tokens settings tab + assignee picker + Agents/Triggers rail leaves + DocumentTypeList, 4 reference doc files (API/MCP/AGENTS/TRIGGERS), README walkthrough. Shake-out caught 4 bugs (A/B/C/D), all fixed and committed before merge.
 - **Phase 2.5 (Workspace-scoped agents):** **shipped + merged to main + pushed** at `7d73124` on 2026-05-26. 45 commits (18 plan-execution + 12 shake-out fixes + 14 memory/auto-capture + the merge commit + the Phase 3.5 doc draft). `documents.workspace_id NOT NULL` + nullable `project_id` + CHECK constraint; agent + trigger Zod gain `projects: string[]` (default `['*']`); new `requireResource` middleware mounted on `pScope` blocks cross-allow-list bearer access; `/api/v1/w/:wslug/documents` endpoints for agent + trigger CRUD; project-level POST/GET reject those types; MCP `list_projects` filters by allow-list, project-scoped tools return `-32602 agent_not_in_allow_list` on disallowed projects, agent-lifecycle tools rejected (HTTP-only in 2.5). Project-delete cascades through workspace agents' frontmatter.projects transactionally. UI: rail leaves removed, workspace popover gains Agents/Triggers entries, new `/w/:wslug/agents` + `/triggers` pages with full slideover CRUD, new design-system `<Chip>` primitive (BUG-010), ProjectsField + ToolsField + ProviderModelField multi-selects, per-agent-field help text. Shake-out caught 12 bugs, 11 fixed, 1 deferred as pre-existing (table-cell assignee picker — never wired pre-2.5). Suite at merge: server 259 / 1-skip / 0-fail, web 339 / 1-skip / 0-fail, shared 28 / 0-fail, Web TS clean. Phase 2.5 Playwright e2e: 1/1.
+- **Phase 2.6 (Comments + tabbed slideover + trigger form + reconciler):** **automated build complete on `phase-2.6/comments-and-slideover` at `d305810`.** All 5 sub-phases shipped: A (comments core), B (MCP comment tools), C (tabbed slideover + UI), D (cron helper + trigger schema $event/builtin lock + builtin auto-seed + backfill + cron-input + trigger-form + slideover mount + MCP agent-lifecycle + docs), E1 (allow-list reconciler). E2 in-session pieces done: manual-QA scenarios written (`apps/web/tests/manual-qa-phase-2.6.md`), DECISIONS appended. Manual QA + Playwright + shake-out + merge are user-side. Suite: server **418 / 1-skip / 0-fail** (+159 since branch start), web **504 / 8-skip / 0-fail** (+165 unit, +8 Playwright TODOs), shared **37 / 0-fail** (+9), scripts **6 / 0-fail** (new).
 - **Phase 3 (AI in UI + Agent runner):** queued — second spine. Slash commands, provider abstraction, agent runner, trigger scheduler/matcher.
 - **Phase 4 (Inbound webhooks):** queued — plan ready at `docs/superpowers/plans/2026-05-24-phase-4-inbound-webhooks.md`. 7 tasks.
 - **Phase 5 (CMS bridge — Statamic):** queued — plan ready at `docs/superpowers/plans/2026-05-24-phase-5-statamic-cms-bridge.md`. 10 tasks. WordPress is Phase 5.1.
@@ -37,9 +62,49 @@ Phase numbering aligned with `docs/PHASES.md` (canonical) as of 2026-05-24 reorg
 
 ## Current branch
 
-`main` at `7d73124` (merge of `phase-2.5/workspace-agents`; pushed to `origin/main`). Phase 2.5 complete. Next phase to start: Phase 2.6 (templates + agent-lifecycle MCP) OR Phase 3 (AI in UI + Agent runner). The `phase-2.5/workspace-agents` branch was deleted after merge — commits remain in main's history via the `--no-ff` merge commit.
+`phase-2.6/comments-and-slideover` at `d305810` (ahead of `main` by ~50 non-memory commits + auto-memory). NOT pushed. Phase 2.6 sub-phases A + B + C + D + E1 shipped; E2 = user-side (manual QA + Playwright + shake-out + merge).
 
-Tests on this branch: **259 / 1-skip server, 339 / 1-skip web, 28 / 0-fail shared**. Web TS clean. Server TS unchanged from pre-2.5 (only the pre-existing `app.ts`/`bearer.test.ts`/`scope.test.ts`/`workspaces.ts` errors). Playwright: Phase 2.5 e2e 1/1 + 26/27 on the existing regression spine (1 pre-existing flake on click-through a11y, not Phase 2.5-introduced).
+Tests on this branch: **server 418 / 1-skip / 0-fail, web 504 / 8-skip / 0-fail, shared 37 / 0-fail, scripts/backfill 6 / 0-fail**. Web TS clean on all D-touched files. Server TS — pre-existing errors elsewhere not regressed by 2.6.
+
+**Known flake:** `apps/web/src/components/views/list-view-create.test.tsx` intermittently fails in full-suite runs due to high-concurrency jsdom interaction. Passes in isolation. See `~/.claude/projects/-home-ntdst-Projects-folio/memory/project_known-test-flakes.md`.
+
+**Handoff doc:** `docs/superpowers/handoffs/2026-05-27-phase-2.6-handoff.md` — written end of A+B+C; sub-phases D+E1 layered on top in this session. Manual QA scenarios live at `apps/web/tests/manual-qa-phase-2.6.md`.
+
+### Phase 2.6 sub-phases A + B + C — what shipped
+
+**Sub-phase A (Comments core, 8 tasks):** migration 0007 (`comment` type + CHECK + index), `lib/comment-schema.ts` (Zod with strict refines), `lib/mention-parser.ts` (regex + agent/member resolution + approval-keyword grammar w/ pos-1 adjacency whitelist), 4 new event kinds + `?parent` + `?run` SSE filters, `services/comments.ts` (create/update/delete/get/list + transactional events + soft-delete + idempotency), `routes/comments.ts` (5 REST endpoints under `pScope`), workspace-level `/documents/:slug/activity` for agents (Phase 2.5 deferral resolved). A5 caught + fixed a latent bug where A1's migration was missing from `_journal.json`.
+
+**Sub-phase B (MCP comment tools, 2 tasks):** 4 new tools (`create_comment` / `list_comments` / `update_comment` / `delete_comment`) added to the hand-rolled JSON-RPC dispatch in `routes/mcp.ts`. Author resolution from bearer token (agent or human PAT). Author-only enforcement on update/delete. `docs/MCP.md` updated.
+
+**Sub-phase C (Tabbed slideover + Comments UI, 11 tasks):** `TabStrip` primitive, `lib/api/comments` hooks (with optimistic updates locked by mid-flight assertion test), `MentionPicker` (allow-list-filtered agents + members, keyboard nav), `WikiLinkPicker` (project docs by title — current-project scope per user decision), `CommentComposer` (Milkdown-lite + @-mention + [[ -wiki-link + Cmd+Enter + localStorage draft + focus return), `CommentRow` (author/timestamp/kind/body/hover-affordances + soft-delete + plaintext markdown + inline mention/wiki-link chips), `ApprovalButtons` (Approve/Reject on `kind=plan` + resolution detection), `CommentsTab` (composer + list + visibility toggle + inline edit + delete confirm), slideovers rewrapped with TabStrip, workspace ActivityPanel + LogActivityButton (sibling components for workspace docs + new server `GET /:slug/events` endpoint).
+
+### Phase 2.6 sub-phase D — what shipped
+
+**D (9 tasks, all green):** D1 `packages/shared/src/cron.ts` exports `nextFires(cron, n, now?)` + relocated `validateCronShape` from server. D2 `triggerFrontmatterSchema` accepts `agent: $event.<key>|null|optional`, `builtin: bool`, `internal_action: 'resume_run'|'reject_run'`; updateDocument + deleteDocument enforce `BUILTIN_TRIGGER_LOCKED` (422). D3 `apps/server/src/lib/builtin-triggers.ts` defines 4 builtin trigger seeds; `POST /api/v1/workspaces` inserts them inside its existing transaction. D4 `scripts/backfill-builtin-triggers.ts` — idempotent, emits `document.created` per insert (spec §9). D5 `apps/web/src/components/triggers/cron-input.tsx` live ✓/✗ + 3-fire preview. D6 `trigger-form.tsx` schedule/event toggle + cron-input + event-kind dropdown sourced from `KNOWN_EVENT_KINDS` (relocated to shared), filter rows, agent dropdown + custom `$event.<key>` option, JSON payload textarea, enabled toggle, builtin read-only mode. D7 `workspace-document-slideover.tsx` renders TriggerForm for `type='trigger'` inside a `TriggerFieldsTabPane` (local-draft + Save button). D8 4 new MCP tools (`create_agent`, `update_agent`, `delete_agent`, `get_agent_self`) + new `agents:write` scope wired through `toolsToScopes` + tokens-tab UI (checkbox + Read+write/Full presets). D9 docs (MCP/AGENTS/TRIGGERS/PHASES).
+
+### Phase 2.6 sub-phase E — what shipped (E1) / user-side (E2)
+
+**E1:** `apps/server/src/lib/reconciler.ts::reconcileAllowLists(db, opts?)` scrubs orphan project ids from non-wildcard agents' `frontmatter.projects`, emits `agent.allow_list.reconciled` per scrubbed agent. Boot wiring in `index.ts` via `setInterval` gated on `NODE_ENV !== 'test'`. New env `FOLIO_RECONCILER_INTERVAL_MS` (min 60s, default 1h). 6 unit tests cover orphan scrub / wildcard skip / no-op / idempotency / multiple orphans / custom actor.
+
+**E2 (user-side, not in-session):** Manual QA per `apps/web/tests/manual-qa-phase-2.6.md` (40 scenarios) → Playwright e2e → `netdust-core:shake-out` → STATE/DECISIONS final tick → `superpowers:finishing-a-development-branch` to merge `--no-ff` into main.
+
+### Phase 2.6 commit list (newest first, top of `phase-2.6/comments-and-slideover`)
+
+- `d305810` phase-2.6: allow-list reconciler — periodic orphan scrub (E1)
+- `d18440e` phase-2.6: docs — agent-lifecycle MCP tools + builtin triggers + $event syntax + structured trigger form (D9)
+- `151977a` phase-2.6: MCP agent-lifecycle tools + agents:write scope (D8)
+- `f245387` phase-2.6: trigger slideover Fields tab renders TriggerForm (D7)
+- `3428b5b` phase-2.6: trigger-form — schedule/event toggle + cron + filters + JSON payload + builtin read-only (D6)
+- `086fccc` phase-2.6: cron-input — live validation + next-3-fires preview (D5)
+- `72c7c90` phase-2.6: backfill-builtin-triggers script (D4) — idempotent restore
+- `a565fed` phase-2.6: auto-seed 4 builtin triggers on workspace create (D3)
+- `1aa817b` phase-2.6: trigger schema — $event syntax + internal_action + builtin lock (D2)
+- `f3a18e4` phase-2.6: shared/cron — nextFires(cron, n) + relocate validateCronShape (D1)
+- `b5325e7` phase-2.6: pin O3 deferral — updateComment does NOT recompute target_agent
+- `57c9e00` phase-2.6: handoff after sub-phases A+B+C; STATE + plan + spec tracked
+- `139ee5a` phase-2.6: workspace agent slideover Activity tab wires ActivityPanel + LogActivity (Phase 2.5 deferral) — C10
+- `b0a31e6` phase-2.6: wrap slideovers with TabStrip (work_item/page → 3 tabs; agent/trigger → 3 different tabs) — C9
+- (older A+B+C commits omitted — see handoff doc for full list)
 
 ### Phase 2 commit list (newest first, top of `phase-2/agents-surface`)
 
@@ -554,3 +619,121 @@ See `docs/PHASES.md` for the canonical phase list (above-section mirrors it). Lo
 [2026-05-26] — session ended (no significant changes captured)
 [2026-05-26] — session ended (no significant changes captured)
 [2026-05-26] — session ended (no significant changes captured)
+[2026-05-26] — session ended (no significant changes captured)
+[2026-05-26] — session ended (no significant changes captured)
+[2026-05-26] — session ended (no significant changes captured)
+[2026-05-26] — session ended (no significant changes captured)
+[2026-05-26] — session ended (no significant changes captured)
+[2026-05-26] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)
+[2026-05-27] — session ended (no significant changes captured)

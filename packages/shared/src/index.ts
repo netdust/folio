@@ -38,3 +38,18 @@ export {
   type FilterInput,
   type Operator,
 } from './filter-compile.ts';
+export { nextFires, validateCronShape, type CronShapeResult } from './cron.ts';
+export { type EventKind, KNOWN_EVENT_KINDS } from './events.ts';
+export {
+  AUTHOR_KINDS,
+  AUTHOR_REF_RE,
+  type AuthorKind,
+  type AgentRef,
+  type MemberRef,
+  parseAuthorRef,
+  authorDisplayName,
+  authorAgentSlug,
+  authorMatchesCurrent,
+  authorString,
+  stripAuthorPrefix,
+} from './author-ref.ts';

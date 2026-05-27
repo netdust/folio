@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { db } from '../db/client.ts';
 import { documents, statuses } from '../db/schema.ts';
 import { jsonOk, HTTPError } from '../lib/http.ts';
-import { emitEvent } from '../lib/events.ts';
+import { emitEvent, txWithEvents } from '../lib/events.ts';
 import { listStatuses } from '../services/statuses.ts';
 import { type AuthContext, getUser } from '../middleware/auth.ts';
 import { requireScope } from '../middleware/bearer.ts';
@@ -56,7 +56,7 @@ statusesRoute.post(
       category: input.category ?? 'unstarted',
       order: input.order ?? 0,
     };
-    await db.transaction(async (tx) => {
+    await txWithEvents(db, async (tx) => {
       await tx.insert(statuses).values(row);
       await emitEvent(tx, {
         workspaceId: ws.id, projectId: p.id, kind: 'status.created', actor: user.id,
@@ -92,7 +92,7 @@ statusesRoute.patch(
     if (!row) throw new HTTPError('STATUS_NOT_FOUND', `status "${id}" not found`, 404);
     const patch = c.req.valid('json');
 
-    await db.transaction(async (tx) => {
+    await txWithEvents(db, async (tx) => {
       if (patch.key && patch.key !== row.key) {
         await tx.update(documents)
           .set({ status: patch.key })
@@ -128,7 +128,7 @@ statusesRoute.delete('/:id', requireScope('statuses:write'), async (c) => {
     throw new HTTPError('STATUS_IN_USE', `status "${row.key}" is used by ${usage!.n} document(s)`, 409);
   }
 
-  await db.transaction(async (tx) => {
+  await txWithEvents(db, async (tx) => {
     await tx.delete(statuses).where(eq(statuses.id, id));
     await emitEvent(tx, {
       workspaceId: ws.id, projectId: p.id, kind: 'status.deleted', actor: user.id,

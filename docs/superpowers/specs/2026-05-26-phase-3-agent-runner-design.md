@@ -311,6 +311,26 @@ checkChainGuards(tx, { chainId }): Promise<{
 countPendingPlanning(tx): Promise<number>
   // Backpressure visibility: count runs at status='planning'. Logged each poll cycle.
   // Exposed via GET /api/v1/admin/runner-stats.
+
+checkProviderHealth(tx, { workspaceId, provider }): Promise<{
+  status: 'healthy' | 'degraded';
+  consecutiveFailures: number;
+}>
+  // Reads the last FOLIO_PROVIDER_DEGRADE_THRESHOLD (default 3) terminated runs
+  // for (workspaceId, provider) from the events table. If all are
+  // agent.run.failed with error_reason='provider_error', returns 'degraded'.
+  // Called by transitionRun on terminal transitions; emits
+  // workspace.provider.degraded on the tipping edge and
+  // workspace.provider.recovered when the next completed run lands after a
+  // degraded state. See §6g.
+
+getProviderHealth(tx, { workspaceId }): Promise<Record<Provider, {
+  status: 'healthy' | 'degraded';
+  consecutiveFailures: number;
+}>>
+  // One-shot snapshot for all four providers — used by the workspace SSE hook
+  // on mount, before the SSE stream takes over. Exposed via
+  // GET /api/v1/w/:wslug/provider-health.
 ```
 
 State machine validation:
@@ -613,6 +633,7 @@ GET    /api/v1/w/:wslug/runs/:runId
 POST   /api/v1/w/:wslug/runs                    -- body: { agent_slug, parent_slug, input? }
 POST   /api/v1/w/:wslug/runs/:runId/cancel
 POST   /api/v1/w/:wslug/runs/:runId/retry
+GET    /api/v1/w/:wslug/provider-health         -- snapshot of all four providers' degraded state
 ```
 
 | Verb | Behavior |
@@ -622,6 +643,7 @@ POST   /api/v1/w/:wslug/runs/:runId/retry
 | `POST` | Creates a new `agent_run` doc with `status: 'planning'`, `assignee: agent:<slug>`, `parent_id: <resolved>`. The on-assignment builtin then fires and the runner picks up. Returns `{ run_id, status }`. Auth: session or `agents:write` bearer. If `input` provided, server first posts a `kind=comment` from the caller's authContext to the parent with `input` body, then creates the run — so the run has explicit user-provided context. |
 | `POST cancel` | Transitions row to `failed` with `error_reason=cancelled` IF status in `planning|awaiting_approval|running`. No-op on terminal. Auth: session (workspace member) or `agents:write` bearer. |
 | `POST retry` | Loads the original run, calls `runAgent` again with same `agentId`, `parentId`, but `triggerId: null` and `firedBy: 'retry-of:<old_id>'`. Idempotency check still applies: if there's an active run on the parent already, returns 409 `RUN_ALREADY_ACTIVE`. |
+| `GET provider-health` | One-shot per-provider degradation state for the workspace. Returns `{ anthropic, openai, openrouter, ollama }` each with `{ status, consecutiveFailures }`. Used by the shell's `useProviderHealth` hook on mount; live updates flow via SSE thereafter. Auth: session (workspace member). |
 
 ### 4h. New scopes
 
@@ -657,6 +679,8 @@ New event kinds added to `KNOWN_EVENT_KINDS`:
 | `agent.run.rejected` | `{ run_id, agent_id, parent_id }` | Status flips to `rejected` (from kind=rejection comment). |
 | `ai.action` | `{ run_id, actor_type: 'agent', actor_id, provider, model, tokens_in, tokens_out }` | Per individual provider call (a run may have many). Counts only, no content. |
 | `runs_table.lazy_seeded` | `{ project_id, table_id }` | First run in a project triggers table creation. Fires once per project. |
+| `workspace.provider.degraded` | `{ workspace_id, provider, consecutive_failures, last_error_detail? }` | The last N (default 3) runs against this workspace+provider all terminated with `error_reason: provider_error`. Drives the "Agent Offline" banner in §6g. |
+| `workspace.provider.recovered` | `{ workspace_id, provider }` | After a degraded state, the next successful (`completed`) run against this workspace+provider clears the banner. |
 
 All flow through the standard event bus + the workspace-scoped SSE endpoint. New SSE filter params from Phase 2.6 (`?parent=`, `?run=`) work for these events too. Phase 3 adds:
 
@@ -763,6 +787,46 @@ Phase 2.6 ships this in the comment composer. Phase 3 wires the same `WikiLinkPi
 
 This is the only "slash-command-style" UX shipping in Phase 3 — and it's not AI, it's plain search. The dropped slash commands (`/draft`, `/decompose`, `/summarize`, `/ai`) are replaced by the `@`-mention surface in the Comments tab (post a comment mentioning the agent — same outcome with proper attribution + audit trail).
 
+### 6g. Provider-down "Agent Offline" surface
+
+LLM providers fail. Anthropic has hiccups; Ollama-on-localhost dies; an expired API key 401s. Without a surface, every affected agent looks individually broken — the user opens slideover after slideover seeing `error_reason: provider_error` and assumes the agents are misconfigured. The right UX is a workspace-level banner that says *the provider is down*, not that the agents are.
+
+**State model.** No new schema. Degradation is derived from event history per `(workspace_id, provider)`:
+
+- A workspace+provider is **degraded** when the last N (`FOLIO_PROVIDER_DEGRADE_THRESHOLD`, default 3) terminated runs against it all have `error_reason: provider_error`. "Terminated" means runs in a terminal status (`completed`, `failed`, `rejected`) — `cancelled` runs are excluded so a user cancelling an in-flight run doesn't move the needle.
+- A workspace+provider **recovers** the moment the next terminated run completes successfully (`status: completed`) — there's no cool-off window. One green run clears the banner.
+
+The aggregation is a single query against the `events` table (already indexed by workspace + kind): "last N `agent.run.completed | agent.run.failed | agent.run.rejected` events with payload `provider = X` in workspace W." Two cases trigger the new events in §5:
+
+1. **Tipping into degraded:** a fresh `agent.run.failed` (with `error_reason: provider_error`) arrives, and counting back from it, the last N terminated runs for that provider in this workspace are all `provider_error`. Emit `workspace.provider.degraded` exactly once on the tipping edge (compare against the run *before* the tipping one — if it was already degraded, skip).
+2. **Recovering:** a fresh `agent.run.completed` arrives for a workspace+provider that was previously degraded. Emit `workspace.provider.recovered`.
+
+Implementation lives in `services/agent-runs.ts::checkProviderHealth(workspaceId, provider)`, called by `transitionRun` immediately after it emits the run's own `agent.run.{completed|failed|rejected}` event, in the same transaction. The check is cheap — bounded by N (default 3) rows.
+
+**UI placement.** Two surfaces, both passive (no action required from the user — the banner clears itself on recovery):
+
+1. **Workspace-wide banner** in the shell layout (`apps/web/src/components/shell/`) — renders above the main frame when any provider in the current workspace is in the degraded state. Reads via a thin `useProviderHealth(wslug)` hook that subscribes to the workspace SSE for `workspace.provider.degraded` + `workspace.provider.recovered`, and on mount calls a one-shot `GET /api/v1/w/:wslug/provider-health` returning the current state for all providers.
+
+   ```
+   ┌─────────────────────────────────────────────────────────┐
+   │ ⚠ Anthropic is unreachable — last 3 agent runs failed.   │
+   │   Agents using Anthropic are paused until it recovers.  │
+   │   [View runs] [Check key]                                │
+   └─────────────────────────────────────────────────────────┘
+   ```
+
+2. **Agent slideover inline notice** — when opening an agent whose `frontmatter.provider` matches a currently-degraded provider in this workspace, render a small inline notice above the Fields tab body: "Provider currently offline. Runs will queue until it recovers." This is purely informational; the runner does NOT skip the run — pre-flight checks let it through to surface the actual failure if it happens again. We don't want to hide a real outage behind a "wait and see" pause.
+
+The "Check key" link in the workspace banner navigates to `/w/:wslug/settings?tab=ai&provider=<provider>` and focuses the test-key affordance. Cheapest possible self-service path.
+
+**What this is NOT.**
+
+- Not a circuit breaker. The runner keeps trying. We do not skip pre-flight or fast-fail runs just because the banner is up — that would mask transient recovery (provider comes back, but no runs go through to detect it because we're holding them).
+- Not a retry queue. Failed runs do not auto-retry on recovery. The user explicitly drag-drops `failed → planning` (the existing retry gesture in §5 of the runs table) or hits "Retry" in the slideover.
+- Not per-agent. The unit is `(workspace, provider)` because that's the failure boundary — one bad API key breaks every agent using that provider, and per-agent surfacing would be N copies of the same banner.
+
+**Threshold + tuning.** Default `FOLIO_PROVIDER_DEGRADE_THRESHOLD=3`. Env-only for v1 (no UI). If a workspace has zero traffic, no banner ever appears — degradation is derived from actual run history, not from a probe.
+
 ## 7. Testing strategy
 
 ### 7a. Unit tests
@@ -778,6 +842,8 @@ Server (Bun test):
 - `services/agent-runs.ts::checkRunRateLimits` — workspace cap + agent cap; both enforced; reasonable defaults respected; per-agent override via frontmatter.max_runs_per_hour works.
 - `services/agent-runs.ts::checkChainGuards` — fanout count, chain duration aggregation, chain token aggregation; uses documents_runs_by_chain_idx (verify via EXPLAIN); returns first-failing reason if multiple guards fail.
 - `services/agent-runs.ts::countPendingPlanning` — accurate count; only counts status=planning.
+- `services/agent-runs.ts::checkProviderHealth` — fewer than N runs in history → healthy. Last N all failed with `provider_error` → degraded. Mixed (one non-`provider_error` failure or one `completed` in the window) → healthy. Different providers tracked independently. Cancelled runs do NOT count toward the window. Tipping from healthy → degraded emits `workspace.provider.degraded` exactly once. The next completed run emits `workspace.provider.recovered` exactly once.
+- `services/agent-runs.ts::getProviderHealth` — returns all four providers; providers with zero history return healthy.
 - `lib/runner.ts::runAgent` (called with a pre-claimed row at status=running; mocked AIProvider, mocked executeMcpTool):
   - Invariant: row already at running. Runner reads it, executes loop.
   - No AI key: kind=error posted, run failed with no_ai_key, worker_started_at cleared.
@@ -818,6 +884,9 @@ Web (Vitest):
 - `lib/api/runs.ts` hooks — `useRuns`, `useRun`, `useCreateRun`, `useCancelRun`, `useRetryRun`. Optimistic on create/cancel/retry.
 - `components/cmd-k/run-agent.tsx` — two-step picker, optional input, POSTs to `/runs`.
 - `lib/wiki-link-picker.ts` extension wired into the body editor — `[[` opens picker, insertion works.
+- `components/shell/provider-health-banner.tsx` — renders when any provider degraded; cleared on `workspace.provider.recovered` SSE event; "Check key" link navigates to the AI settings tab with the right provider focused.
+- `components/slideover/agent-slideover.tsx` (modified) — when opening an agent whose provider is degraded, renders the inline "Provider currently offline" notice above the body.
+- `lib/api/provider-health.ts` — `useProviderHealth(wslug)` hook: one-shot GET on mount + SSE subscription for the two new event kinds.
 
 ### 7b. Integration tests
 
@@ -853,6 +922,10 @@ On real SQLite + real HTTP + mocked AIProvider (the provider abstraction is the 
 28. **Crash recovery.** Insert agent_run row at status=running with worker_started_at set to 10 minutes ago. Restart the test server (cycle the poller). Assert: recoverOrphanRuns finds the orphan, transitions to failed (worker_crash), emits agent.run.failed. Log line at INFO shows count.
 29. **Poller concurrency.** MAX_CONCURRENT_RUNS=2. Insert 5 planning rows. Assert: at any moment, no more than 2 are at status=running; rows execute FIFO by created_at as workers free up.
 30. **Backpressure stats endpoint.** GET /api/v1/admin/runner-stats → returns { pending_count, active_count, recovered_today }. Admin-only auth.
+31. **Provider degradation tipping edge.** With `FOLIO_PROVIDER_DEGRADE_THRESHOLD=3` and a mocked provider stubbed to always return a network-level error: assign agent to work item three times in succession. Assert: after the 3rd `agent.run.failed` (error_reason=provider_error), exactly one `workspace.provider.degraded` event arrives; SSE stream shows it. A 4th failure does NOT emit a second degraded event (no banner thrash).
+32. **Provider recovery.** Continue from #31. Flip the mock to return success. Assign agent again. Assert: run completes; exactly one `workspace.provider.recovered` event arrives; GET `/api/v1/w/:wslug/provider-health` returns healthy for that provider.
+33. **Provider health is per-provider.** Workspace has two providers configured (Anthropic + OpenAI). Anthropic mock fails 3 times. Assert: `workspace.provider.degraded` with `provider: 'anthropic'` only; OpenAI agents still run unaffected; `/provider-health` shows anthropic degraded + openai healthy.
+34. **Cancelled runs excluded from health window.** Configure provider to fail. Trigger 2 failures, then trigger a run and cancel it before completion (status=failed with `error_reason=cancelled`). Then trigger a 3rd provider-error failure. Assert: this counts as 3 consecutive provider_errors (cancelled excluded) → degraded fires. Without the cancelled-excluded rule the test would only count 2 → not degraded.
 
 ### 7c. Acceptance tests (Playwright)
 
@@ -863,6 +936,7 @@ With a real Anthropic key in the test environment (one Playwright test uses a re
 3. **Cancel mid-run.** Long-running mock. Open runs table view → see row at status=running → click Cancel from the row's ⋯ menu → confirm dialog → status flips to failed within 1s.
 4. **Run agent via Cmd-K.** Cmd+K → "Run agent" → pick agent → pick parent doc → optional input → submit → toast confirms → navigate to runs table view → row visible.
 5. **Wiki link picker in body.** Open work_item slideover, click body editor, type `[[fix-` → picker opens → select a doc → `[[fix-login-bug]]` inserted as markdown. Save → reload → link is clickable.
+6. **Agent Offline banner.** With a mocked Anthropic that always returns 503: assign three work items to an Anthropic agent → wait for the 3rd failure → assert workspace banner appears reading "Anthropic is unreachable — last 3 agent runs failed." Click "Check key" → AI settings tab opens focused on Anthropic. Flip the mock to success → assign a 4th work item → run completes → banner disappears.
 
 ### 7d. Manual QA
 
@@ -927,8 +1001,9 @@ A working Phase 3 is one where:
 23. `ai.action` audit events emit per provider call with token counts (no content).
 24. Wiki-link `[[` picker available in both comment composer and body editor.
 25. **Chain_id tracking** present on every agent_run row; root run mints fresh uuid; descendants inherit. fired_by string format includes chain_id prefix.
-26. All existing user-flow tests still pass — no Phase 2 / 2.5 / 2.6 regression.
-27. Commit: `phase-3: complete`.
+26. **Provider-down banner.** When the last N (`FOLIO_PROVIDER_DEGRADE_THRESHOLD`, default 3) terminated runs for a `(workspace, provider)` all fail with `error_reason: provider_error`, `workspace.provider.degraded` fires exactly once and the workspace shell renders the "Agent Offline" banner. The next successful run fires `workspace.provider.recovered` exactly once and the banner clears. `GET /api/v1/w/:wslug/provider-health` returns the current state for all four providers. Cancelled runs are excluded from the consecutive-failure window. Per-provider tracking is independent (Anthropic degraded doesn't degrade OpenAI).
+27. All existing user-flow tests still pass — no Phase 2 / 2.5 / 2.6 regression.
+28. Commit: `phase-3: complete`.
 
 ---
 
@@ -998,10 +1073,12 @@ Every HTTP route in Folio has an MCP twin (or is documented as not needing one).
 | `POST /api/v1/w/:wslug/runs/:runId/cancel` | `cancel_run` | `agents:write` | 3 |
 | `POST /api/v1/w/:wslug/runs/:runId/retry` | `retry_run` | `agents:write` | 3 |
 | `POST /api/v1/w/:wslug/ai/test-key` | (HTTP-only — provider key testing is admin-only and never agent-driven) | session | 3 |
+| `GET /api/v1/w/:wslug/provider-health` | (HTTP-only — UI surface, derived from event history; agents don't query their own provider's status) | session | 3 |
 
 Where an HTTP route does not have an MCP twin, the spec explicitly documents why. As of Phase 3, the exceptions are:
 - Activity logging (`POST .../activity`) — human "I touched this thing" tracking; agents don't log this way (they emit `ai.action` automatically).
 - AI key testing (`POST .../ai/test-key`) — keys are configured by workspace admins, not agents.
+- Provider-health snapshot (`GET .../provider-health`) — purely a UI surface; agents don't query their own provider's degradation state. If a provider is degraded, runs fail with `provider_error` and the agent's existing `agent.run.failed` path is the agent-facing signal.
 
 ## Appendix C: Component inventory
 
@@ -1011,10 +1088,14 @@ New components (web):
 - `components/cmd-k/run-agent-picker.tsx` — two-step picker for Cmd-K Run agent.
 - `components/cmd-k/approve-pending-plan.tsx` — list of awaiting_approval runs.
 - `lib/api/runs.ts` — `useRuns`, `useRun`, `useCreateRun`, `useCancelRun`, `useRetryRun`.
+- `components/shell/provider-health-banner.tsx` — workspace-level "Agent Offline" banner; renders when any provider degraded.
+- `lib/api/provider-health.ts` — `useProviderHealth(wslug)` hook: one-shot GET + SSE subscription.
 
 Modified components (web):
 - `components/comments/approval-buttons.tsx` — Phase 2.6 stub becomes live; queries the linked run and renders button/muted-line based on status.
 - `components/slideover/document-slideover.tsx` — wires `WikiLinkPicker` (from Phase 2.6's components/comments/wiki-link-picker.tsx) into the body editor.
+- `components/shell/main-frame.tsx` (or wherever the shell renders workspace chrome) — mounts the `<ProviderHealthBanner />` above the main content area.
+- `components/slideover/agent-slideover.tsx` — when the agent's provider matches a currently-degraded one, renders an inline "Provider currently offline" notice above the body.
 
 New backend files:
 - `apps/server/src/lib/agent-run-schema.ts` (Zod).
@@ -1027,7 +1108,7 @@ New backend files:
 - `apps/server/src/lib/ai/openai.ts`.
 - `apps/server/src/lib/ai/openrouter.ts`.
 - `apps/server/src/lib/ai/ollama.ts`.
-- `apps/server/src/routes/runs.ts`.
+- `apps/server/src/routes/runs.ts` — also hosts `GET /api/v1/w/:wslug/provider-health`.
 - `apps/server/src/routes/ai.ts`.
 - `apps/server/src/routes/admin-runner-stats.ts` — backpressure visibility endpoint.
 - `apps/server/drizzle/0009_phase_3_agent_runs.sql` — type enum widening + indexes + `documents_runs_pending_idx` + `documents_runs_by_chain_idx` expression index.
@@ -1035,7 +1116,7 @@ New backend files:
 
 Modified backend files:
 - `apps/server/src/db/schema.ts` — agent_run added to documents.type enum, new indexes.
-- `apps/server/src/lib/trigger-schema.ts` — `agent.run.*` + `ai.action` + `runs_table.lazy_seeded` added to KNOWN_EVENT_KINDS.
+- `apps/server/src/lib/trigger-schema.ts` — `agent.run.*` + `ai.action` + `runs_table.lazy_seeded` + `workspace.provider.degraded` + `workspace.provider.recovered` added to KNOWN_EVENT_KINDS.
 - `apps/server/src/routes/mcp.ts` — 5 new tool dispatchers; ALL existing dispatchers refactored to route through `executeMcpTool` (consistency cleanup that lands with this phase).
 - `apps/server/src/routes/events.ts` — `?agent=`, `?table=` filter params added.
 - `apps/server/src/services/documents.ts` — when `type='agent_run'` with `status='planning'` is inserted (via any path), no synchronous runner invocation. The poller picks it up. The trigger-matcher's job is just to insert the row.

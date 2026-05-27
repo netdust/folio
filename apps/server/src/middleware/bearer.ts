@@ -86,25 +86,11 @@ export function getToken(c: Context<AuthContext>): ApiToken {
   return t;
 }
 
-/**
- * Intersect an agent's allow-list with an optional token-level narrowing.
- *
- * - `null` on the token side means "inherit from agent" — distinct from `[]`
- *   (no projects). Confusing the two is the most likely bug in this helper.
- * - `'*'` on the agent side means "all workspace projects"; intersecting with
- *   a concrete token list returns that concrete list.
- * - The token can only narrow, never broaden. Tokens listing project ids the
- *   agent doesn't have are silently dropped — the broadening attempt fails
- *   closed at the intersection step.
- */
-export function intersect(
-  agentList: string[],
-  tokenList: string[] | null,
-): string[] {
-  if (tokenList === null) return agentList;
-  if (agentList.includes('*')) return tokenList;
-  return agentList.filter((id) => tokenList.includes(id));
-}
+// S1: shared resolution/intersection moved to lib/agent-projects.ts so all
+// three read paths (this middleware, SSE, mention parser) share one
+// fail-closed implementation.
+export { intersectAgentProjects as intersect } from '../lib/agent-projects.ts';
+import { intersectAgentProjects, resolveAgentProjects } from '../lib/agent-projects.ts';
 
 /**
  * Resource-scope check for bearer requests. Composes after `requireScope`.
@@ -129,8 +115,8 @@ export function requireResource(): MiddlewareHandler<AuthContext & ScopeContext>
     if (!agent || agent.type !== 'agent') {
       throw new HTTPError('FORBIDDEN_RESOURCE', 'agent for this token no longer exists', 403);
     }
-    const agentProjects = ((agent.frontmatter as { projects?: string[] }).projects) ?? ['*'];
-    const effective = intersect(agentProjects, token.projectIds ?? null);
+    const agentProjects = resolveAgentProjects(agent);
+    const effective = intersectAgentProjects(agentProjects, token.projectIds ?? null);
     if (!effective.includes('*') && !effective.includes(project.id)) {
       throw new HTTPError(
         'FORBIDDEN_RESOURCE',
