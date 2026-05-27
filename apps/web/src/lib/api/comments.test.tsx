@@ -304,6 +304,50 @@ describe('useCreateComment', () => {
       ),
     );
   });
+
+  // BUG-020 — `optimistic-${Date.now()}` collided when two mutations fired
+  // in the same millisecond (automation, Playwright double-click, agent
+  // batch). React warns on duplicate keys and the second render dropped a
+  // row; cache invalidation reorders so the user's first message can briefly
+  // disappear. Switch to crypto.randomUUID().
+  test('BUG-020: two same-tick optimistic creates have distinct ids (no React key collision)', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const listKey = commentsKeys.list('acme', 'web', 'parent-1');
+    qc.setQueryData(listKey, []);
+
+    // Fetch that NEVER resolves — we want to inspect the optimistic state.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => new Promise<Response>(() => { /* never resolves */ })),
+    );
+
+    const { result } = renderHook(
+      () => useCreateComment('acme', 'web', 'parent-1'),
+      { wrapper: wrap(qc) },
+    );
+
+    // Fire two mutations in the same tick — without a microtask gap they
+    // would (pre-fix) compute the same Date.now() and produce duplicate ids.
+    act(() => {
+      result.current.mutate({ body: 'first' });
+      result.current.mutate({ body: 'second' });
+    });
+
+    await waitFor(() => {
+      const cached = qc.getQueryData<Comment[]>(listKey);
+      expect(cached?.length).toBeGreaterThanOrEqual(2);
+    });
+
+    const cached = qc.getQueryData<Comment[]>(listKey)!;
+    // Distinct ids — no duplicate React keys.
+    const ids = cached.map((c) => c.id);
+    const uniqueIds = new Set(ids);
+    expect(uniqueIds.size).toBe(ids.length);
+    // Distinct slugs as well.
+    const slugs = cached.map((c) => c.slug);
+    const uniqueSlugs = new Set(slugs);
+    expect(uniqueSlugs.size).toBe(slugs.length);
+  });
 });
 
 // ---------------------------------------------------------------------------

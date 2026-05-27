@@ -136,10 +136,16 @@ export function useCreateComment(wslug: string, pslug: string, parentSlug: strin
 
       // Build an optimistic comment with a temporary id/slug/timestamps.
       // The server will replace these on success + invalidation.
+      // BUG-020 — use crypto.randomUUID() so two mutations firing in the
+      // same millisecond (automation, double-click, agent batch) get
+      // distinct ids. The prior `optimistic-${Date.now()}` form collided
+      // and produced duplicate React keys; the second render dropped a
+      // row and the user's first message could briefly disappear.
+      const optimisticId = crypto.randomUUID();
       const now = new Date().toISOString();
       const optimistic: Comment = {
-        id: `optimistic-${Date.now()}`,
-        slug: `optimistic-${Date.now()}`,
+        id: optimisticId,
+        slug: optimisticId,
         type: 'comment',
         title: '',
         parentId: parentSlug,
