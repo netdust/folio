@@ -1,18 +1,23 @@
 # Folio — STATE
 
-_Last updated: 2026-05-27 (end of 2026-05-26 work session — Phase 2.6 sub-phases A + B + C shipped on `phase-2.6/comments-and-slideover` branch; D + E queued)_
+_Last updated: 2026-05-27 (Phase 2.6 sub-phases D + E1 shipped — entire automated build of Phase 2.6 complete on `phase-2.6/comments-and-slideover` branch; manual QA + shake-out + merge are user-side)_
 
 Living snapshot of where the project actually is. Read at session start. Update at session end if anything below changed.
 
-## Next up — resume Phase 2.6 sub-phase D
+## Next up — Phase 2.6 hand-off to user for manual QA + merge
 
-**Phase 2.6 in progress on `phase-2.6/comments-and-slideover` at `139ee5a`.** Sub-phases A (comments core data + service + routes + events), B (MCP comment tools), and C (tabbed slideover + comments tab UI + workspace activity panel) are shipped. Sub-phase D (structured trigger form + builtins + MCP agent-lifecycle) and E (allow-list reconciler + acceptance + shake-out) remain. See `docs/superpowers/handoffs/2026-05-27-phase-2.6-handoff.md` for the full handoff including 10 tracked open issues + deferred features + decisions locked.
+**Phase 2.6 automated build is COMPLETE on `phase-2.6/comments-and-slideover` at `d305810`.** All 30 plan tasks across sub-phases A-E1 shipped + E2 in-session bits (manual-QA scenarios written, DECISIONS appended). Tests across all suites green. What remains is user-side:
 
-**Resume points:**
-1. Verify baseline holds: server 383/1-skip, web 482/8-skip.
-2. Commit the still-untracked plan file at `docs/superpowers/plans/2026-05-26-phase-2.6-comments-and-slideover.md` and the senior-dev-review notes at `docs/superpowers/specs/2026-05-26-senior-dev-review-notes.md`.
-3. Decide on the 8 Playwright TODOs (write spec now OR defer to shake-out).
-4. Start sub-phase D at Task D1 (`packages/shared/src/cron.ts::nextFires`).
+1. **Manual QA sweep** — walk `apps/web/tests/manual-qa-phase-2.6.md` (40 scenarios). Mark anomalies as shake-out bugs and fix them in-place with `phase-2.6: BUG-NNN — <fix>` commits.
+2. **Playwright suite** — `cd apps/web && bun run e2e`. Known flake on `click-through "wiki: new page"` is fine.
+3. **`netdust-core:shake-out` skill invocation** — the post-build QA layer. Will catch what unit tests + manual QA didn't.
+4. **Merge call** — once shake-out is clean, invoke `superpowers:finishing-a-development-branch` to `--no-ff` merge into `main` + push.
+
+**Test baseline at hand-off:**
+- Server **418 / 1-skip / 0-fail** (was 259 at branch start; +159 tests across all 5 sub-phases).
+- Web **504 / 8-skip / 0-fail** (was 339; +165 unit, +8 Playwright TODOs).
+- Shared **37 / 0-fail** (was 28; +9 cron tests in D1).
+- Scripts (backfill) **6 / 0-fail** (new in D4).
 
 **Phase 3 — AI in UI + Agent runner** still queued. Branches from main when 2.6 merges.
 
@@ -32,7 +37,7 @@ Phase numbering aligned with `docs/PHASES.md` (canonical) as of 2026-05-24 reorg
 - **Phase 1.9.1 (Type-change UI + useUpdateView fix):** shipped + merged to main at `d12c598` on 2026-05-25 (PR #3). Compatible-only type-change in column `⋯` menu (`string ↔ text`, `number ↔ currency`, `* → text`); 422 with `INVALID_TYPE_CHANGE` for anything else. Default ISO `EUR` auto-injected on `* → currency`; options auto-cleared on `currency → *`. `useUpdateView` envelope unwrap fixed. Web 254 / 1-skip, server 135 / 135, shared 28 / 28, web TS clean.
 - **Phase 2 (Agents):** **shipped + merged to main** at `3431301` on 2026-05-26 (PR #4). Bearer auth + scope middleware, in-memory event bus + SSE endpoint with Last-Event-Id replay, migration 0006 widens documents.type to agent + trigger, agent/trigger frontmatter Zod schemas + auto-token-mint + revoke + delegation guard, hand-rolled JSON-RPC MCP server at /mcp with 12 v1 tools, web tokens settings tab + assignee picker + Agents/Triggers rail leaves + DocumentTypeList, 4 reference doc files (API/MCP/AGENTS/TRIGGERS), README walkthrough. Shake-out caught 4 bugs (A/B/C/D), all fixed and committed before merge.
 - **Phase 2.5 (Workspace-scoped agents):** **shipped + merged to main + pushed** at `7d73124` on 2026-05-26. 45 commits (18 plan-execution + 12 shake-out fixes + 14 memory/auto-capture + the merge commit + the Phase 3.5 doc draft). `documents.workspace_id NOT NULL` + nullable `project_id` + CHECK constraint; agent + trigger Zod gain `projects: string[]` (default `['*']`); new `requireResource` middleware mounted on `pScope` blocks cross-allow-list bearer access; `/api/v1/w/:wslug/documents` endpoints for agent + trigger CRUD; project-level POST/GET reject those types; MCP `list_projects` filters by allow-list, project-scoped tools return `-32602 agent_not_in_allow_list` on disallowed projects, agent-lifecycle tools rejected (HTTP-only in 2.5). Project-delete cascades through workspace agents' frontmatter.projects transactionally. UI: rail leaves removed, workspace popover gains Agents/Triggers entries, new `/w/:wslug/agents` + `/triggers` pages with full slideover CRUD, new design-system `<Chip>` primitive (BUG-010), ProjectsField + ToolsField + ProviderModelField multi-selects, per-agent-field help text. Shake-out caught 12 bugs, 11 fixed, 1 deferred as pre-existing (table-cell assignee picker — never wired pre-2.5). Suite at merge: server 259 / 1-skip / 0-fail, web 339 / 1-skip / 0-fail, shared 28 / 0-fail, Web TS clean. Phase 2.5 Playwright e2e: 1/1.
-- **Phase 2.6 (Comments + tabbed slideover):** **in progress on `phase-2.6/comments-and-slideover` at `139ee5a`.** Sub-phases A + B + C shipped (21 of 30 tasks). D (trigger form + builtins + agent-lifecycle MCP) + E (reconciler + acceptance) queued. See `docs/superpowers/handoffs/2026-05-27-phase-2.6-handoff.md` for full status, 10 open issues, deferred features, decisions locked. Suite: server **383 / 1-skip / 0-fail** (+124), web **482 / 8-skip / 0-fail** (+143 unit, +8 Playwright TODOs).
+- **Phase 2.6 (Comments + tabbed slideover + trigger form + reconciler):** **automated build complete on `phase-2.6/comments-and-slideover` at `d305810`.** All 5 sub-phases shipped: A (comments core), B (MCP comment tools), C (tabbed slideover + UI), D (cron helper + trigger schema $event/builtin lock + builtin auto-seed + backfill + cron-input + trigger-form + slideover mount + MCP agent-lifecycle + docs), E1 (allow-list reconciler). E2 in-session pieces done: manual-QA scenarios written (`apps/web/tests/manual-qa-phase-2.6.md`), DECISIONS appended. Manual QA + Playwright + shake-out + merge are user-side. Suite: server **418 / 1-skip / 0-fail** (+159 since branch start), web **504 / 8-skip / 0-fail** (+165 unit, +8 Playwright TODOs), shared **37 / 0-fail** (+9), scripts **6 / 0-fail** (new).
 - **Phase 3 (AI in UI + Agent runner):** queued — second spine. Slash commands, provider abstraction, agent runner, trigger scheduler/matcher.
 - **Phase 4 (Inbound webhooks):** queued — plan ready at `docs/superpowers/plans/2026-05-24-phase-4-inbound-webhooks.md`. 7 tasks.
 - **Phase 5 (CMS bridge — Statamic):** queued — plan ready at `docs/superpowers/plans/2026-05-24-phase-5-statamic-cms-bridge.md`. 10 tasks. WordPress is Phase 5.1.
@@ -42,13 +47,13 @@ Phase numbering aligned with `docs/PHASES.md` (canonical) as of 2026-05-24 reorg
 
 ## Current branch
 
-`phase-2.6/comments-and-slideover` at `139ee5a` (ahead of `main` by 32 non-memory commits + auto-memory). NOT pushed. Phase 2.6 sub-phases A + B + C shipped; D + E pending.
+`phase-2.6/comments-and-slideover` at `d305810` (ahead of `main` by ~50 non-memory commits + auto-memory). NOT pushed. Phase 2.6 sub-phases A + B + C + D + E1 shipped; E2 = user-side (manual QA + Playwright + shake-out + merge).
 
-Tests on this branch: **server 383 / 1-skip / 0-fail, web 482 / 8-skip / 0-fail, shared 28 / 0-fail**. Web TS clean on all C-touched files. Server TS unchanged from pre-2.6 baseline (4 pre-existing errors in `app.ts`/`bearer.test.ts`/`scope.test.ts`/`workspaces.ts`).
+Tests on this branch: **server 418 / 1-skip / 0-fail, web 504 / 8-skip / 0-fail, shared 37 / 0-fail, scripts/backfill 6 / 0-fail**. Web TS clean on all D-touched files. Server TS — pre-existing errors elsewhere not regressed by 2.6.
 
 **Known flake:** `apps/web/src/components/views/list-view-create.test.tsx` intermittently fails in full-suite runs due to high-concurrency jsdom interaction. Passes in isolation. See `~/.claude/projects/-home-ntdst-Projects-folio/memory/project_known-test-flakes.md`.
 
-**Handoff doc:** `docs/superpowers/handoffs/2026-05-27-phase-2.6-handoff.md` — read this first when resuming.
+**Handoff doc:** `docs/superpowers/handoffs/2026-05-27-phase-2.6-handoff.md` — written end of A+B+C; sub-phases D+E1 layered on top in this session. Manual QA scenarios live at `apps/web/tests/manual-qa-phase-2.6.md`.
 
 ### Phase 2.6 sub-phases A + B + C — what shipped
 
@@ -58,11 +63,33 @@ Tests on this branch: **server 383 / 1-skip / 0-fail, web 482 / 8-skip / 0-fail,
 
 **Sub-phase C (Tabbed slideover + Comments UI, 11 tasks):** `TabStrip` primitive, `lib/api/comments` hooks (with optimistic updates locked by mid-flight assertion test), `MentionPicker` (allow-list-filtered agents + members, keyboard nav), `WikiLinkPicker` (project docs by title — current-project scope per user decision), `CommentComposer` (Milkdown-lite + @-mention + [[ -wiki-link + Cmd+Enter + localStorage draft + focus return), `CommentRow` (author/timestamp/kind/body/hover-affordances + soft-delete + plaintext markdown + inline mention/wiki-link chips), `ApprovalButtons` (Approve/Reject on `kind=plan` + resolution detection), `CommentsTab` (composer + list + visibility toggle + inline edit + delete confirm), slideovers rewrapped with TabStrip, workspace ActivityPanel + LogActivityButton (sibling components for workspace docs + new server `GET /:slug/events` endpoint).
 
-### Phase 2.6 sub-phase D + E — what's next
+### Phase 2.6 sub-phase D — what shipped
 
-**D (9 tasks):** D1 `packages/shared/src/cron.ts::nextFires`, D2 trigger-schema extensions (`$event.<key>`, `internal_action`, `builtin` + lock enforcement), D3 auto-seed 4 builtin triggers on workspace create, D4 backfill script, D5 `cron-input.tsx`, D6 `trigger-form.tsx`, D7 mount TriggerForm in trigger slideover, D8 4 MCP agent-lifecycle tools + `agents:write` scope, D9 integration gate + docs.
+**D (9 tasks, all green):** D1 `packages/shared/src/cron.ts` exports `nextFires(cron, n, now?)` + relocated `validateCronShape` from server. D2 `triggerFrontmatterSchema` accepts `agent: $event.<key>|null|optional`, `builtin: bool`, `internal_action: 'resume_run'|'reject_run'`; updateDocument + deleteDocument enforce `BUILTIN_TRIGGER_LOCKED` (422). D3 `apps/server/src/lib/builtin-triggers.ts` defines 4 builtin trigger seeds; `POST /api/v1/workspaces` inserts them inside its existing transaction. D4 `scripts/backfill-builtin-triggers.ts` — idempotent, emits `document.created` per insert (spec §9). D5 `apps/web/src/components/triggers/cron-input.tsx` live ✓/✗ + 3-fire preview. D6 `trigger-form.tsx` schedule/event toggle + cron-input + event-kind dropdown sourced from `KNOWN_EVENT_KINDS` (relocated to shared), filter rows, agent dropdown + custom `$event.<key>` option, JSON payload textarea, enabled toggle, builtin read-only mode. D7 `workspace-document-slideover.tsx` renders TriggerForm for `type='trigger'` inside a `TriggerFieldsTabPane` (local-draft + Save button). D8 4 new MCP tools (`create_agent`, `update_agent`, `delete_agent`, `get_agent_self`) + new `agents:write` scope wired through `toolsToScopes` + tokens-tab UI (checkbox + Read+write/Full presets). D9 docs (MCP/AGENTS/TRIGGERS/PHASES).
 
-**E (2 tasks):** allow-list reconciler (background timer) + acceptance gate + shake-out + branch close.
+### Phase 2.6 sub-phase E — what shipped (E1) / user-side (E2)
+
+**E1:** `apps/server/src/lib/reconciler.ts::reconcileAllowLists(db, opts?)` scrubs orphan project ids from non-wildcard agents' `frontmatter.projects`, emits `agent.allow_list.reconciled` per scrubbed agent. Boot wiring in `index.ts` via `setInterval` gated on `NODE_ENV !== 'test'`. New env `FOLIO_RECONCILER_INTERVAL_MS` (min 60s, default 1h). 6 unit tests cover orphan scrub / wildcard skip / no-op / idempotency / multiple orphans / custom actor.
+
+**E2 (user-side, not in-session):** Manual QA per `apps/web/tests/manual-qa-phase-2.6.md` (40 scenarios) → Playwright e2e → `netdust-core:shake-out` → STATE/DECISIONS final tick → `superpowers:finishing-a-development-branch` to merge `--no-ff` into main.
+
+### Phase 2.6 commit list (newest first, top of `phase-2.6/comments-and-slideover`)
+
+- `d305810` phase-2.6: allow-list reconciler — periodic orphan scrub (E1)
+- `d18440e` phase-2.6: docs — agent-lifecycle MCP tools + builtin triggers + $event syntax + structured trigger form (D9)
+- `151977a` phase-2.6: MCP agent-lifecycle tools + agents:write scope (D8)
+- `f245387` phase-2.6: trigger slideover Fields tab renders TriggerForm (D7)
+- `3428b5b` phase-2.6: trigger-form — schedule/event toggle + cron + filters + JSON payload + builtin read-only (D6)
+- `086fccc` phase-2.6: cron-input — live validation + next-3-fires preview (D5)
+- `72c7c90` phase-2.6: backfill-builtin-triggers script (D4) — idempotent restore
+- `a565fed` phase-2.6: auto-seed 4 builtin triggers on workspace create (D3)
+- `1aa817b` phase-2.6: trigger schema — $event syntax + internal_action + builtin lock (D2)
+- `f3a18e4` phase-2.6: shared/cron — nextFires(cron, n) + relocate validateCronShape (D1)
+- `b5325e7` phase-2.6: pin O3 deferral — updateComment does NOT recompute target_agent
+- `57c9e00` phase-2.6: handoff after sub-phases A+B+C; STATE + plan + spec tracked
+- `139ee5a` phase-2.6: workspace agent slideover Activity tab wires ActivityPanel + LogActivity (Phase 2.5 deferral) — C10
+- `b0a31e6` phase-2.6: wrap slideovers with TabStrip (work_item/page → 3 tabs; agent/trigger → 3 different tabs) — C9
+- (older A+B+C commits omitted — see handoff doc for full list)
 
 ### Phase 2 commit list (newest first, top of `phase-2/agents-surface`)
 
