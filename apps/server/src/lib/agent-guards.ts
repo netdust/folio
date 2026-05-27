@@ -45,26 +45,49 @@ export function assertAgentScope(
  * widen the target beyond the caller's own allow-list. Human PATs (no
  * agent_id) are unrestricted in v1 — Phase 3+ adds per-PAT narrowing UI.
  *
- * Called by both create_agent (proposed = create payload) and update_agent
- * (proposed = patch payload). Returns silently when no widening is attempted
- * or when the caller is unrestricted; throws when widening is detected.
+ * G4: the `op` parameter distinguishes create vs patch semantics for the
+ * missing-`projects` case:
+ *   - 'create' → missing means Zod's `.default(['*'])` will fill wildcard
+ *     downstream, which IS widening — fail closed by treating absent as '*'.
+ *   - 'patch'  → missing means "don't touch projects" — true no-op.
+ *
+ * G13: if the calling agent row is missing or malformed, fail closed (treat
+ * as no projects) rather than fail open (the prior `?? ['*']` default).
  */
 export async function assertAgentAllowListWidening(
   token: ApiToken | null,
   nextFrontmatter: Record<string, unknown> | undefined,
+  op: 'create' | 'patch',
 ): Promise<void> {
   if (!token || !token.agentId) return;
-  if (!nextFrontmatter) return;
-  if (!('projects' in nextFrontmatter)) return;
 
-  const nextProjects = nextFrontmatter['projects'];
+  const hasProjectsKey =
+    nextFrontmatter !== undefined && 'projects' in nextFrontmatter;
+
+  // For PATCH: absent projects means no change. Skip.
+  if (!hasProjectsKey && op === 'patch') return;
+
+  // For CREATE: absent projects triggers Zod's `.default(['*'])` downstream.
+  // Treat as a widening request to wildcard.
+  const nextProjects = hasProjectsKey
+    ? (nextFrontmatter as Record<string, unknown>)['projects']
+    : ['*'];
+
+  // If a caller passes projects as something non-array (e.g. null, string),
+  // Zod parse will reject downstream. Skip widening check — let the schema
+  // surface the validation error.
   if (!Array.isArray(nextProjects)) return;
 
   const callingAgent = await db.query.documents.findFirst({
     where: and(eq(documents.id, token.agentId), eq(documents.type, 'agent')),
   });
-  const callingAllowList =
-    (callingAgent?.frontmatter as { projects?: string[] } | undefined)?.projects ?? ['*'];
+  const callingProjectsRaw = (callingAgent?.frontmatter as { projects?: unknown } | undefined)
+    ?.projects;
+  // Fail closed: if the calling agent row is gone or malformed, treat as
+  // zero allow-list. The pre-fix default-to-wildcard was a security smell.
+  const callingAllowList: string[] = Array.isArray(callingProjectsRaw)
+    ? (callingProjectsRaw.filter((p) => typeof p === 'string') as string[])
+    : [];
 
   if (callingAllowList.includes('*')) return; // caller is unrestricted
 

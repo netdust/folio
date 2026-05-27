@@ -277,6 +277,87 @@ test('F3: agent token without ?project= can still subscribe (workspace events al
   await res.body?.cancel();
 });
 
+test('G9: workspace-level agent.* events about OTHER agents are suppressed for narrowed tokens', async () => {
+  const { app, db: testDb, seed } = await makeTestApp();
+
+  // Two agents in the same workspace. Subscriber is agent A (narrowed).
+  const { token: tokenA, agentId: agentAId } = await setupAgentToken({
+    workspaceId: seed.workspace.id,
+    userId: seed.user.id,
+    agentSlug: 'agent-a',
+    projectAllowList: [seed.project.id],
+  });
+  const { agentId: agentBId } = await setupAgentToken({
+    workspaceId: seed.workspace.id,
+    userId: seed.user.id,
+    agentSlug: 'agent-b',
+    projectAllowList: [seed.project.id],
+  });
+
+  // Seed three workspace-level events:
+  //   - agent.created about agent A (visible — it's about A itself)
+  //   - agent.created about agent B (must be suppressed)
+  //   - workspace.created (visible — not agent.*)
+  const { events } = await import('../db/schema.ts');
+  await testDb.insert(events).values([
+    {
+      id: 'evt-anchor',
+      workspaceId: seed.workspace.id,
+      projectId: null,
+      documentId: null,
+      kind: 'workspace.created',
+      actor: seed.user.id,
+      payload: {},
+      createdAt: new Date(Date.now() - 90_000),
+    },
+    {
+      id: 'evt-self-allowed',
+      workspaceId: seed.workspace.id,
+      projectId: null,
+      documentId: agentAId, // about A itself
+      kind: 'agent.created',
+      actor: seed.user.id,
+      payload: { slug: 'agent-a' },
+      createdAt: new Date(Date.now() - 60_000),
+    },
+    {
+      id: 'evt-other-leaked',
+      workspaceId: seed.workspace.id,
+      projectId: null,
+      documentId: agentBId, // about B — must be suppressed
+      kind: 'agent.created',
+      actor: seed.user.id,
+      payload: { slug: 'agent-b', api_token_id: 'sensitive-token-id' },
+      createdAt: new Date(Date.now() - 30_000),
+    },
+  ]);
+
+  const res = await app.request('/api/v1/w/acme/events', {
+    headers: { Authorization: `Bearer ${tokenA}`, 'Last-Event-Id': 'evt-anchor' },
+  });
+  expect(res.status).toBe(200);
+  const reader = res.body?.getReader();
+  if (!reader) throw new Error('no body');
+  const decoder = new TextDecoder();
+  let text = '';
+  const start = Date.now();
+  while (Date.now() - start < 300) {
+    const { value, done } = await Promise.race([
+      reader.read(),
+      new Promise<{ value?: Uint8Array; done: boolean }>((resolve) =>
+        setTimeout(() => resolve({ done: false }), 100),
+      ),
+    ]);
+    if (done) break;
+    if (value) text += decoder.decode(value);
+  }
+  await reader.cancel();
+
+  expect(text).toContain('evt-self-allowed');
+  expect(text).not.toContain('evt-other-leaked');
+  expect(text).not.toContain('sensitive-token-id');
+});
+
 test('F3: agent allow-list narrows server-side replay filter (foreign projectId rows skipped)', async () => {
   const { app, db: testDb, seed } = await makeTestApp();
   const projectBId = await seedSecondProject(seed.workspace.id);

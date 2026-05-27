@@ -57,6 +57,13 @@
       "when": 1780210309000,
       "tag": "0007_phase_2_6_comments",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1780249800000,
+      "tag": "0008_phase_2_6_author_id_backfill",
+      "breakpoints": true
     }
   ]
 }

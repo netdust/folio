@@ -365,6 +365,47 @@ test('F8: deleteDocument(work_item) cascades to remove its comment children', as
   }
 });
 
+test('G8: deleteDocument(page) cascades nested page children too', async () => {
+  const { db, seed } = await makeTestApp();
+  const table = await getWorkItemsTable(db, seed.project.id);
+
+  // Parent page.
+  const parent = await createDocument({
+    workspace: seed.workspace, project: seed.project, table, actor: seed.user, token: null,
+    isTableScopedUrl: false,
+    input: { type: 'page', title: 'Parent Page', body: '', frontmatter: {}, status: null },
+  });
+
+  // Nested page child via direct insert (mirrors what PATCH parentId would do).
+  const childId = nanoid();
+  await db.insert(documents).values({
+    id: childId,
+    workspaceId: seed.workspace.id,
+    projectId: seed.project.id,
+    tableId: null,
+    type: 'page',
+    slug: `child-${childId}`,
+    title: 'Child Page',
+    status: null,
+    body: 'nested content',
+    parentId: parent.document.id,
+    frontmatter: {},
+    createdBy: seed.user.id,
+    updatedBy: seed.user.id,
+  });
+
+  await deleteDocument({
+    workspace: seed.workspace, project: seed.project, actor: seed.user,
+    existing: parent.document,
+  });
+
+  // Both parent and child gone.
+  const parentGone = await db.query.documents.findFirst({ where: eq(documents.id, parent.document.id) });
+  expect(parentGone).toBeUndefined();
+  const childGone = await db.query.documents.findFirst({ where: eq(documents.id, childId) });
+  expect(childGone).toBeUndefined();
+});
+
 test('F8: deleting a non-parent doc does not collateral-delete unrelated comments', async () => {
   const { db, seed } = await makeTestApp();
   const table = await getWorkItemsTable(db, seed.project.id);

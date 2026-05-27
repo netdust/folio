@@ -62,7 +62,11 @@ workspaceDocumentsRoute.post('/', requireScope('documents:write'), async (c) => 
   const token = c.get('token') ?? null;
   assertAgentScope(v.type, token, 'write');
   if (v.type === 'agent') {
-    await assertAgentAllowListWidening(token, v.frontmatter as Record<string, unknown> | undefined);
+    await assertAgentAllowListWidening(
+      token,
+      v.frontmatter as Record<string, unknown> | undefined,
+      'create',
+    );
   }
 
   const fmStatus = typeof v.frontmatter?.status === 'string' ? v.frontmatter.status : null;
@@ -129,6 +133,7 @@ workspaceDocumentsRoute.patch('/:slug', requireScope('documents:write'), async (
     await assertAgentAllowListWidening(
       token,
       parsed.data.frontmatter as Record<string, unknown> | undefined,
+      'patch',
     );
   }
 

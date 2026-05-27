@@ -581,6 +581,52 @@ test('F4: DELETE /comments/:slug 404s when slug belongs to a different project',
 });
 
 // ---------------------------------------------------------------------------
+// G5 — HTTP project-scoped PATCH/DELETE /:slug must reject type='comment'.
+//
+// F5 closed this on the MCP path but the HTTP project-scoped generic doc
+// routes (PATCH/DELETE /api/v1/w/:wslug/p/:pslug/documents/:slug) had no
+// type=comment guard, letting documents:write tokens bypass author-only,
+// kind-immutable, edited_at, and soft-delete invariants.
+// ---------------------------------------------------------------------------
+
+test('G5: PATCH /documents/:slug (generic) rejects type=comment with COMMENT_REQUIRES_COMMENT_TOOL', async () => {
+  const { app, seed } = await makeTestApp();
+  const parent = await createParent(app, seed.sessionCookie, 'P');
+  const createRes = await app.request(parentPath(parent), {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ body: 'original' }),
+  });
+  const comment = (await createRes.json()).data as { slug: string };
+
+  const res = await app.request(`/api/v1/w/acme/p/web/documents/${comment.slug}`, {
+    method: 'PATCH',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ body: 'tampered via generic doc route' }),
+  });
+  expect(res.status).toBe(422);
+  expect((await res.json()).error.code).toBe('COMMENT_REQUIRES_COMMENT_TOOL');
+});
+
+test('G5: DELETE /documents/:slug (generic) rejects type=comment', async () => {
+  const { app, seed } = await makeTestApp();
+  const parent = await createParent(app, seed.sessionCookie, 'P');
+  const createRes = await app.request(parentPath(parent), {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ body: 'original' }),
+  });
+  const comment = (await createRes.json()).data as { slug: string };
+
+  const res = await app.request(`/api/v1/w/acme/p/web/documents/${comment.slug}`, {
+    method: 'DELETE',
+    headers: { Cookie: seed.sessionCookie },
+  });
+  expect(res.status).toBe(422);
+  expect((await res.json()).error.code).toBe('COMMENT_REQUIRES_COMMENT_TOOL');
+});
+
+// ---------------------------------------------------------------------------
 // F14 — listComments must reject malformed `since` rather than ignoring it.
 //
 // Before this fix an invalid `since` silently dropped the filter, returning

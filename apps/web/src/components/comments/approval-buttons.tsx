@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { Comment } from '../../lib/api/comments.ts';
 import type { Member } from '../../lib/api/members.ts';
 import { useCreateComment } from '../../lib/api/comments.ts';
+import { type AgentRef, authorAgentSlug, authorDisplayName } from '../../lib/author-ref.ts';
 import { Button } from '../ui/button.tsx';
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
 
@@ -16,39 +17,18 @@ export interface ApprovalButtonsProps {
   projectSlug: string;
   parentSlug: string;
   workspaceMembers: Member[];
+  /**
+   * Agent refs (id + slug) needed to resolve id-canonical comment authors to
+   * the slug stored in `target_agent` and to render human-readable labels.
+   * Without this we can't distinguish `agent:<id>` from `agent:<slug>` rows
+   * (G1 / F11 follow-up).
+   */
+  workspaceAgents: AgentRef[];
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/**
- * Parse the agent slug from a comment author string like "agent:drafter".
- * Returns null if the author is not an agent.
- */
-function agentSlugFromAuthor(author: string): string | null {
-  if (author.startsWith('agent:')) {
-    return author.slice('agent:'.length);
-  }
-  return null;
-}
-
-/**
- * Resolve an author string to a display label.
- * "user:<id>" → member.name (or fallback to the raw string).
- * "agent:<slug>" → "agent:<slug>".
- */
-function resolveAuthorLabel(author: string, members: Member[]): string {
-  if (author.startsWith('user:')) {
-    const id = author.slice('user:'.length);
-    const member = members.find((m) => m.id === id);
-    return member ? member.name : author;
-  }
-  if (author.startsWith('agent:')) {
-    return author; // keep full "agent:<slug>" as display
-  }
-  return author;
-}
 
 /**
  * Compute a human-readable duration between two ISO timestamps, e.g.
@@ -88,6 +68,7 @@ function findResolution(
   planComment: Comment,
   threadComments: Comment[],
   agentSlug: string,
+  agents: AgentRef[],
   members: Member[],
 ): Resolution | null {
   const planTime = new Date(planComment.createdAt).getTime();
@@ -117,7 +98,7 @@ function findResolution(
 
   return {
     kind: fm.kind as 'approval' | 'rejection',
-    authorLabel: resolveAuthorLabel(fm.author, members),
+    authorLabel: authorDisplayName(fm.author, agents, members),
     duration: formatDurationBetween(planComment.createdAt, earliest.createdAt),
   };
 }
@@ -274,18 +255,22 @@ export function ApprovalButtons({
   projectSlug,
   parentSlug,
   workspaceMembers,
+  workspaceAgents,
 }: ApprovalButtonsProps) {
   // Guard: only render on kind=plan comments
   if (planComment.frontmatter.kind !== 'plan') return null;
 
-  // Guard: only render for agent-authored plans
-  const agentSlug = agentSlugFromAuthor(planComment.frontmatter.author);
+  // Guard: only render for agent-authored plans. G1: server stores author as
+  // `agent:<id>` (post-F11) but mention-parser writes target_agent=<slug>;
+  // the helper resolves both shapes back to a slug for the comparison below.
+  const agentSlug = authorAgentSlug(planComment.frontmatter.author, workspaceAgents);
   if (!agentSlug) return null;
 
   const resolution = findResolution(
     planComment,
     threadComments,
     agentSlug,
+    workspaceAgents,
     workspaceMembers,
   );
 

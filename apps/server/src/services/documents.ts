@@ -532,6 +532,20 @@ export async function updateDocument(
 ): Promise<Document> {
   const { workspace: ws, project: p, actor: user, existing, patch } = args;
 
+  // G5 — comments must be mutated through update_comment (services/comments.ts),
+  // which enforces author-only, kind-immutable, edited_at, and soft-delete
+  // semantics. The generic update path used to fall through for type='comment'
+  // on the HTTP project-scoped route — bypassing all of that. Reject at the
+  // service layer so EVERY entrypoint inherits the rule (HTTP, MCP, future
+  // CLI/import jobs).
+  if (existing.type === 'comment') {
+    throw new HTTPError(
+      'COMMENT_REQUIRES_COMMENT_TOOL',
+      "comment documents must be updated via PATCH /comments/:slug (or MCP update_comment), not the generic document endpoint",
+      422,
+    );
+  }
+
   if (patch.status !== undefined && existing.type === 'work_item') {
     const tId = existing.tableId ?? args.fallbackTable?.id;
     if (!tId) {
@@ -674,6 +688,16 @@ export interface DeleteDocumentArgs {
 export async function deleteDocument(args: DeleteDocumentArgs): Promise<void> {
   const { workspace: ws, project: p, actor: user, existing } = args;
 
+  // G5 — comments must be deleted through delete_comment for soft-delete +
+  // author-only semantics. Reject at the service layer.
+  if (existing.type === 'comment') {
+    throw new HTTPError(
+      'COMMENT_REQUIRES_COMMENT_TOOL',
+      "comment documents must be deleted via DELETE /comments/:slug (or MCP delete_comment), not the generic document endpoint",
+      422,
+    );
+  }
+
   // Phase 2.6 sub-phase D — builtin triggers are not deletable.
   if (
     existing.type === 'trigger' &&
@@ -687,17 +711,21 @@ export async function deleteDocument(args: DeleteDocumentArgs): Promise<void> {
   }
 
   await txWithEvents(db, async (tx) => {
-    // F8 — cascade child comments. documents.parent_id has no SQL foreign key
-    // (Phase 2.6 migration 0007 omitted it deliberately to keep the table
-    // self-referential and SQLite-portable), so the app layer must purge
-    // orphan comment rows. We hard-delete here rather than soft-delete: the
-    // parent is gone, so a tombstone comment row pointing at a non-existent
-    // id is just noise. The single document.deleted event below carries the
-    // parent's identity; downstream consumers know comments cascade.
+    // F8/G8 — cascade ALL child rows (comments AND nested pages).
+    // documents.parent_id has no SQL foreign key (Phase 2.6 migration 0007
+    // omitted it deliberately to keep the table self-referential and
+    // SQLite-portable), so the app layer must purge orphan rows itself.
+    //
+    // F8 initially only cascaded comments; G8 broadens it because the schema
+    // explicitly supports nested pages (see schema.ts:229 comment "for nested
+    // pages" and the wiki-tree component which lets users drag-reparent
+    // pages). We don't recurse for grand-children — that's a separate
+    // depth-traversal concern. Phase 3 will likely promote this to an SQL
+    // FK with ON DELETE CASCADE which handles arbitrary depth.
     if (existing.type === 'work_item' || existing.type === 'page') {
       await tx
         .delete(documents)
-        .where(and(eq(documents.parentId, existing.id), eq(documents.type, 'comment')));
+        .where(eq(documents.parentId, existing.id));
     }
 
     // Agents: api_tokens.agent_id ON DELETE CASCADE handles token revocation.

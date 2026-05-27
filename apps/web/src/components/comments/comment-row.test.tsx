@@ -88,6 +88,51 @@ describe('CommentRow', () => {
     expect(screen.getByText(/drafter/)).toBeInTheDocument();
   });
 
+  // G2/G12 — post-F11 the server stores `agent:<id>`. With a workspace agent
+  // list available, the row must still render the human slug ('drafter'),
+  // not the opaque id.
+  it('G2: id-canonical agent author renders as 🤖 <slug> via workspaceAgents lookup', () => {
+    const agentComment: Comment = {
+      ...baseComment,
+      frontmatter: { ...baseComment.frontmatter, author: 'agent:ag-drafter-id' },
+    };
+    render(
+      <CommentRow
+        comment={agentComment}
+        currentUserId="u-1"
+        workspaceMembers={members}
+        workspaceAgents={[{ id: 'ag-drafter-id', slug: 'drafter' }]}
+      />,
+    );
+    expect(screen.getByText(/🤖/)).toBeInTheDocument();
+    expect(screen.getByText(/drafter/)).toBeInTheDocument();
+    expect(screen.queryByText(/ag-drafter-id/)).not.toBeInTheDocument();
+  });
+
+  // G3 — soft-deleted agent comment with id-canonical author must also
+  // resolve to slug, not show raw id.
+  it('G2: soft-deleted agent comment renders slug, not id', () => {
+    const deleted: Comment = {
+      ...baseComment,
+      frontmatter: {
+        ...baseComment.frontmatter,
+        author: 'agent:ag-drafter-id',
+        deleted_at: NOW,
+      },
+      body: '',
+    };
+    render(
+      <CommentRow
+        comment={deleted}
+        currentUserId="u-1"
+        workspaceMembers={members}
+        workspaceAgents={[{ id: 'ag-drafter-id', slug: 'drafter' }]}
+      />,
+    );
+    expect(screen.getByText(/🤖 drafter/)).toBeInTheDocument();
+    expect(screen.queryByText(/ag-drafter-id/)).not.toBeInTheDocument();
+  });
+
   it('renders relative timestamp with absolute ISO in title attribute', () => {
     render(
       <CommentRow

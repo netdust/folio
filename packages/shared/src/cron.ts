@@ -98,9 +98,13 @@ const DOMAINS: { minute: FieldDomain; hour: FieldDomain; dom: FieldDomain; month
 function parseField(field: string, domain: FieldDomain): Set<number> | null {
   if (!isFieldStructurallyValid(field)) return null;
   const out = new Set<number>();
-  // dow=7 is Sunday equivalent to 0 in cron(5) / unix-cron / croniter; the
-  // domain's max=6 rejects it without this normalization.
+  // dow=7 is Sunday equivalent to 0 in cron(5) / unix-cron / croniter. G7:
+  // the previous fix tried to normalize range endpoints (5-7 → 5-0) which
+  // broke "start > end" for any range that crossed the rollover. The right
+  // approach is to widen the domain during range expansion to admit 7 as a
+  // valid endpoint, then post-process the resulting set to remap 7 → 0.
   const isDow = domain.max === 6 && domain.min === 0;
+  const effectiveMax = isDow ? 7 : domain.max;
   for (const part of field.split(',')) {
     if (part === '') return null;
 
@@ -126,29 +130,23 @@ function parseField(field: string, domain: FieldDomain): Set<number> | null {
       if (range.length !== 2) return null; // 3+ parts: belt-and-braces, also caught upstream
       const [aStr, bStr] = range;
       if (!aStr || !bStr) return null; // leading/trailing dash
-      let a = Number(aStr);
-      let b = Number(bStr);
+      const a = Number(aStr);
+      const b = Number(bStr);
       if (!Number.isInteger(a) || !Number.isInteger(b)) return null;
-      // F13: normalize dow=7 to 0 (Sunday).
-      if (isDow) {
-        if (a === 7) a = 0;
-        if (b === 7) b = 0;
-      }
       start = a;
       end = b;
     } else {
-      let v = Number(rangePart);
+      const v = Number(rangePart);
       if (!Number.isInteger(v)) return null;
-      // F13: normalize dow=7 to 0 (Sunday).
-      if (isDow && v === 7) v = 0;
       start = v;
       // For single value with step (e.g. "5/10"), iterate from 5 to max.
       end = slashIdx !== -1 ? domain.max : v;
     }
 
-    if (start < domain.min || end > domain.max || start > end) return null;
+    if (start < domain.min || end > effectiveMax || start > end) return null;
     for (let i = start; i <= end; i += step) {
-      out.add(i);
+      // Post-process: dow=7 collapses to 0.
+      out.add(isDow && i === 7 ? 0 : i);
     }
   }
   return out;

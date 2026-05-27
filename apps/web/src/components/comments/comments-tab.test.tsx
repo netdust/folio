@@ -68,9 +68,19 @@ function wrap(qc: QueryClient) {
 function stubFetchList(comments: Comment[]) {
   vi.stubGlobal(
     'fetch',
-    vi.fn(async (_url: string, init?: RequestInit) => {
+    vi.fn(async (urlIn: string | URL, init?: RequestInit) => {
+      const url = typeof urlIn === 'string' ? urlIn : urlIn.toString();
       const method = init?.method?.toUpperCase() ?? 'GET';
       if (method === 'GET') {
+        // G1/G2: CommentsTab fetches workspace agents to resolve id-canonical
+        // author strings. Return an empty agent list — tests don't exercise
+        // agent-authored comments directly.
+        if (url.includes('?type=agent') || url.includes('&type=agent')) {
+          return new Response(
+            JSON.stringify({ data: [] }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
         return new Response(
           JSON.stringify({ data: comments }),
           { status: 200, headers: { 'content-type': 'application/json' } },

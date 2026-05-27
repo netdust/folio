@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import type { Member } from '../../lib/api/members.ts';
 import {
   useComments,
@@ -7,6 +7,8 @@ import {
   useDeleteComment,
   type CommentVisibility,
 } from '../../lib/api/comments.ts';
+import { useWorkspaceAgents } from '../../lib/api/workspace-documents.ts';
+import type { AgentRef } from '../../lib/author-ref.ts';
 import { Button } from '../ui/button.tsx';
 import {
   Dialog,
@@ -206,6 +208,14 @@ export function CommentsTab({
     { visibility },
   );
 
+  // G1-G3: workspace agent list lets CommentRow + ApprovalButtons resolve
+  // id-canonical author strings (post-F11) back to a human-readable slug.
+  const agentsQuery = useWorkspaceAgents(workspaceSlug);
+  const workspaceAgents: AgentRef[] = useMemo(
+    () => (agentsQuery.data ?? []).map((a) => ({ id: a.id, slug: a.slug })),
+    [agentsQuery.data],
+  );
+
   // Newest-first sort (server may return any order).
   const sorted = [...comments].sort(
     (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
@@ -354,6 +364,7 @@ export function CommentsTab({
                   currentUserId={currentUserId}
                   currentAgentSlug={currentAgentSlug}
                   workspaceMembers={workspaceMembers}
+                  workspaceAgents={workspaceAgents}
                   onEdit={handleEdit}
                   onDelete={handleDeleteRequest}
                 />
@@ -369,6 +380,7 @@ export function CommentsTab({
                     projectSlug={projectSlug}
                     parentSlug={parentSlug}
                     workspaceMembers={workspaceMembers}
+                    workspaceAgents={workspaceAgents}
                   />
                 </div>
               )}

@@ -1027,7 +1027,7 @@ const TOOLS: ToolDef[] = [
       // Reject child agents whose allow-list widens past the calling agent's
       // own. update_agent has had this guard since Phase 2.6 D8; create_agent
       // was missing it (Phase 2.6 review finding F2).
-      await assertAgentAllowListWidening(token, frontmatter).catch(rethrowAgentGuardAsMcp);
+      await assertAgentAllowListWidening(token, frontmatter, 'create').catch(rethrowAgentGuardAsMcp);
 
       const { document, agentTokenPlaintext } = await createDocument({
         workspace: ws,
@@ -1086,7 +1086,7 @@ const TOOLS: ToolDef[] = [
 
         // Allow-list widening guard — shared with create_agent and the HTTP
         // workspace-documents routes via lib/agent-guards.ts.
-        await assertAgentAllowListWidening(token, patch.frontmatter).catch(rethrowAgentGuardAsMcp);
+        await assertAgentAllowListWidening(token, patch.frontmatter, 'patch').catch(rethrowAgentGuardAsMcp);
       }
 
       const updated = await updateDocument({

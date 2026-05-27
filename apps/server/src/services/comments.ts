@@ -58,17 +58,26 @@ export type AuthorContext =
  * Returns the canonical author string for frontmatter.
  *
  * - Session/PAT user → "user:<id>"
- * - Agent → "agent:<id>" if id is known, else legacy "agent:<slug>"
+ * - Agent → "agent:<id>"
  *
  * F11: switched from agent slug to agent id so a slug rename doesn't break
- * the author-only guard. Legacy rows authored as "agent:<slug>" still pass
- * assertAuthor (see below) for back-compat — the canonical form for NEW
- * comments is always id-based.
+ * the author-only guard. The slug-based fallback used to exist for the
+ * brief window before migration 0008 backfilled all pre-F11 rows; now that
+ * backfill runs at boot, every row in the DB is guaranteed to be id-canonical.
+ * If `agentId` is absent for an 'agent' context, something is wrong upstream
+ * (token resolution should always carry the id) — fail loud rather than
+ * silently writing a slug.
  */
 function authorString(ctx: AuthorContext): string {
   if (ctx.type === 'user') return `user:${ctx.userId}`;
-  if (ctx.agentId) return `agent:${ctx.agentId}`;
-  return `agent:${ctx.agentSlug}`;
+  if (!ctx.agentId) {
+    throw new HTTPError(
+      'INTERNAL',
+      'agent author context is missing agentId — token resolution bug',
+      500,
+    );
+  }
+  return `agent:${ctx.agentId}`;
 }
 
 export interface CreateCommentInput {
@@ -139,31 +148,24 @@ function validateBody(body: string): void {
 /**
  * Author-only guard for update/delete.
  *
- * F11: accepts BOTH the id-based canonical form ("agent:<id>") and the
- * legacy slug-based form ("agent:<slug>") so that comments authored before
- * the F11 fix still pass when the same agent (bound by token.agentId) edits
- * them. New rows are always written id-based by authorString().
+ * After migration 0008, every comment row's author is id-canonical
+ * (`user:<id>` or `agent:<id>`). The slug back-compat path that previously
+ * allowed `agent:<slug>` matches has been removed — it was a hijack vector
+ * (delete agent A, create new agent B with same slug, B inherits A's
+ * comments). A pre-0008 row that the backfill couldn't resolve (the original
+ * agent was already gone at backfill time) intentionally stays unmatchable —
+ * no live token should own it.
  */
 function assertAuthor(existing: Document, ctx: AuthorContext): void {
   const fm = existing.frontmatter as Record<string, unknown>;
   const author = typeof fm.author === 'string' ? fm.author : '';
-
-  // Fast path: exact canonical match.
-  const expected = authorString(ctx);
-  if (author === expected) return;
-
-  // Back-compat: legacy 'agent:<slug>' rows must still match the same
-  // agent-bound token. Match by current slug; if the slug hasn't been
-  // renamed since the comment was authored, this still works. If it has,
-  // the comment was authored before F11 and will need a one-time backfill
-  // — flagged separately.
-  if (ctx.type === 'agent' && author === `agent:${ctx.agentSlug}`) return;
-
-  throw new HTTPError(
-    'COMMENT_AUTHOR_ONLY',
-    'only the comment author can modify this comment',
-    403,
-  );
+  if (author !== authorString(ctx)) {
+    throw new HTTPError(
+      'COMMENT_AUTHOR_ONLY',
+      'only the comment author can modify this comment',
+      403,
+    );
+  }
 }
 
 interface AgentForParser {

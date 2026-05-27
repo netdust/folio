@@ -74,6 +74,35 @@ describe('F13: cron parser edge cases', () => {
     expect(out0).toEqual(out7);
   });
 
+  // G7 — F13's first-pass fix broke ranges containing 7. The post-process
+  // remap (7→0 after expansion) preserves cross-rollover ranges correctly.
+  it('G7: dow range 5-7 (Fri-Sun) fires Fri/Sat/Sun, not silently nothing', () => {
+    // 2026-05-29 is a Friday. Expect three consecutive 09:00 fires.
+    const out = nextFires('0 9 * * 5-7', 3, new Date('2026-05-28T08:00:00Z'));
+    expect(out).toHaveLength(3);
+    expect(out[0]).toBe('2026-05-29T09:00:00.000Z'); // Fri
+    expect(out[1]).toBe('2026-05-30T09:00:00.000Z'); // Sat
+    expect(out[2]).toBe('2026-05-31T09:00:00.000Z'); // Sun
+  });
+
+  it('G7: dow range 0-7 fires every day (Sunday once, not duplicated)', () => {
+    // From Sat 2026-05-30 morning, the cron fires daily for the next week.
+    const out = nextFires('0 9 * * 0-7', 7, new Date('2026-05-30T08:00:00Z'));
+    expect(out).toHaveLength(7);
+    expect(out[0]).toBe('2026-05-30T09:00:00.000Z'); // Sat
+    expect(out[1]).toBe('2026-05-31T09:00:00.000Z'); // Sun
+    expect(out[6]).toBe('2026-06-05T09:00:00.000Z'); // Fri
+  });
+
+  it('G7: dow range 1-7 fires Mon..Sun (every day)', () => {
+    // Sun 2026-05-24 → 7 daily fires through Sat 2026-05-30. (7 normalizes
+    // to 0/Sun, so range 1-7 covers all 7 days of the week.)
+    const out = nextFires('0 9 * * 1-7', 7, new Date('2026-05-24T08:00:00Z'));
+    expect(out).toHaveLength(7);
+    expect(out[0]).toBe('2026-05-24T09:00:00.000Z'); // Sun
+    expect(out[6]).toBe('2026-05-30T09:00:00.000Z'); // Sat
+  });
+
   // F13.2 — leading-dash range `-1-5` must be rejected, not silently coerced
   // to {0,1}. Without this fix the cron runs at minutes 0 and 1 instead of
   // erroring at parse time.

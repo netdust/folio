@@ -1,6 +1,11 @@
 import { useState } from 'react';
 import type { Comment, ResolvedMention } from '../../lib/api/comments.ts';
 import type { Member } from '../../lib/api/members.ts';
+import {
+  type AgentRef,
+  authorDisplayName,
+  authorMatchesCurrent,
+} from '../../lib/author-ref.ts';
 import { relativeTime } from '../../lib/relative-time.ts';
 import { Chip } from '../ui/chip.tsx';
 import { cn } from '../ui/cn.ts';
@@ -19,6 +24,8 @@ export interface CommentRowProps {
   currentUserId: string | null;
   currentAgentSlug?: string | null;
   workspaceMembers: Member[];
+  /** Optional — when omitted, agent authors render as their raw id (post-F11) */
+  workspaceAgents?: AgentRef[];
   onEdit?: (slug: string) => void;
   onDelete?: (slug: string) => void;
 }
@@ -120,15 +127,20 @@ function BodyRenderer({
 function AuthorDisplay({
   author,
   members,
+  agents,
 }: {
   author: string;
   members: Member[];
+  agents: AgentRef[];
 }) {
+  // G2: author is now `agent:<id>` for new agent comments (post-F11). The
+  // helper resolves either id or legacy slug back to a human-readable
+  // agent.slug or member.name.
   if (author.startsWith('agent:')) {
-    const slug = author.slice('agent:'.length);
+    const display = authorDisplayName(author, agents, members);
     return (
       <span className="font-medium text-sm text-fg">
-        <span aria-hidden="true">🤖</span> {slug}
+        <span aria-hidden="true">🤖</span> {display}
       </span>
     );
   }
@@ -170,16 +182,18 @@ function KindChip({ kind }: { kind: Comment['frontmatter']['kind'] }) {
 function resolveIsAuthor(
   comment: Comment,
   currentUserId: string | null,
-  currentAgentSlug?: string | null,
+  currentAgentSlug: string | null | undefined,
+  agents: AgentRef[],
 ): boolean {
-  const { author } = comment.frontmatter;
-  if (author.startsWith('user:') && currentUserId) {
-    return author === `user:${currentUserId}`;
-  }
-  if (author.startsWith('agent:') && currentAgentSlug) {
-    return author === `agent:${currentAgentSlug}`;
-  }
-  return false;
+  // G3: server canonicalised agent authors to `agent:<id>` (post-F11). To
+  // detect "is this me?" we need the current agent's id too — look it up by
+  // slug in the workspace agent list. Pre-F11 rows that survived migration
+  // 0008 in legacy slug form still match via the helper's id-OR-slug check.
+  const currentAgent =
+    currentAgentSlug
+      ? agents.find((a) => a.slug === currentAgentSlug) ?? null
+      : null;
+  return authorMatchesCurrent(comment.frontmatter.author, currentUserId, currentAgent);
 }
 
 // ---------------------------------------------------------------------------
@@ -191,17 +205,20 @@ export function CommentRow({
   currentUserId,
   currentAgentSlug,
   workspaceMembers,
+  workspaceAgents,
   onEdit,
   onDelete,
 }: CommentRowProps) {
   const { frontmatter: fm, body, slug, createdAt } = comment;
   const [copyError, setCopyError] = useState<string | null>(null);
+  const agents = workspaceAgents ?? [];
 
   // ---- Soft-deleted row --------------------------------------------------
   if (fm.deleted_at) {
-    const authorLabel = fm.author.startsWith('agent:')
-      ? `🤖 ${fm.author.slice('agent:'.length)}`
-      : `@${fm.author.slice('user:'.length)}`;
+    // G2: use authorDisplayName so agent authors stored as `agent:<id>`
+    // (post-F11) render as their slug, not the raw id.
+    const display = authorDisplayName(fm.author, agents, workspaceMembers);
+    const authorLabel = fm.author.startsWith('agent:') ? `🤖 ${display}` : `@${display}`;
     return (
       <div className="py-2 px-3 text-xs text-fg-3">
         Comment by {authorLabel} · deleted · {relativeTime(fm.deleted_at)}
@@ -209,7 +226,7 @@ export function CommentRow({
     );
   }
 
-  const isAuthor = resolveIsAuthor(comment, currentUserId, currentAgentSlug);
+  const isAuthor = resolveIsAuthor(comment, currentUserId, currentAgentSlug, agents);
   const isAgent = fm.author.startsWith('agent:');
   const showRunId = isAgent && !!fm.run_id;
 
@@ -225,7 +242,7 @@ export function CommentRow({
     <div className="group relative py-2.5 px-3 rounded-md hover:bg-card transition-colors duration-fast">
       {/* Header row */}
       <div className="flex items-center gap-2 flex-wrap mb-1">
-        <AuthorDisplay author={fm.author} members={workspaceMembers} />
+        <AuthorDisplay author={fm.author} members={workspaceMembers} agents={agents} />
 
         {/* Timestamp */}
         <time

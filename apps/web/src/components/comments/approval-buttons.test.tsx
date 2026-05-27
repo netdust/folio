@@ -87,6 +87,10 @@ const members: Member[] = [
   { id: 'u-2', email: 'jan@example.com', name: 'Jan Doe', role: 'member' },
 ];
 
+// G1/G12 — workspace agent list so the component can resolve agent author
+// strings (in either legacy slug or post-F11 id form) back to a slug.
+const agents = [{ id: 'ag-drafter-id', slug: 'drafter' }];
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -158,6 +162,7 @@ function renderButtons(
       projectSlug="proj"
       parentSlug="doc-1"
       workspaceMembers={members}
+      workspaceAgents={agents}
       {...props}
     />,
     { wrapper: wrap(qc) },
@@ -339,6 +344,19 @@ describe('ApprovalButtons', () => {
     expect(screen.getByRole('button', { name: /approve/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /reject/i })).toBeInTheDocument();
     expect(screen.queryByText(/approved by/i)).not.toBeInTheDocument();
+  });
+
+  // G1 — plan author stored as `agent:<id>` (post-F11 canonical form). The
+  // server still writes target_agent as the SLUG, so findResolution must
+  // resolve id→slug via the workspaceAgents list. Before this fix, the
+  // comparison was id vs slug → never matched → plan never resolved.
+  it('G1: resolves a plan with id-canonical author against a slug target_agent', () => {
+    const idCanonicalPlan: Comment = {
+      ...planComment,
+      frontmatter: { ...planComment.frontmatter, author: 'agent:ag-drafter-id' },
+    };
+    renderButtons({ planComment: idCanonicalPlan, threadComments: [approvalComment] });
+    expect(screen.getByText(/approved by/i)).toBeInTheDocument();
   });
 
   it('F9: a deleted approval followed by a fresh approval still resolves on the fresh one', () => {

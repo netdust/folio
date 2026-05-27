@@ -567,6 +567,43 @@ test('F1: DELETE type=agent rejects PAT with documents:delete but no agents:writ
   expect((await res.json()).error.code).toBe('FORBIDDEN_SCOPE');
 });
 
+test('G4: POST blocks an agent-bound caller from minting a child by OMITTING the projects key (Zod default bypass)', async () => {
+  const { app, seed } = await makeTestApp();
+  // Calling agent restricted to seed.project.id.
+  const parentRes = await postWorkspaceDoc(app, seed.sessionCookie, {
+    type: 'agent', title: 'Parent',
+    frontmatter: {
+      system_prompt: 'x', model: 'm', provider: 'anthropic', tools: ['create_agent'],
+      projects: [seed.project.id],
+    },
+  });
+  const parent = (await parentRes.json()).data as { id: string };
+  const { token, hash } = newApiToken();
+  await realDb.insert(apiTokens).values({
+    id: nanoid(),
+    workspaceId: seed.workspace.id,
+    name: 'parent-bound',
+    tokenHash: hash,
+    scopes: ['agents:write', 'documents:write', 'documents:read'],
+    createdBy: seed.user.id,
+    agentId: parent.id,
+  });
+
+  // OMIT the projects key — pre-G4 the guard short-circuited and Zod's
+  // .default(['*']) widened the child to workspace-wide.
+  const res = await app.request(WS_PATH, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      type: 'agent',
+      title: 'Child No Projects Key',
+      frontmatter: { system_prompt: 'x', model: 'm', provider: 'anthropic', tools: [] },
+    }),
+  });
+  expect(res.status).toBe(403);
+  expect((await res.json()).error.code).toBe('ALLOW_LIST_WIDENING_FORBIDDEN');
+});
+
 test('F1: POST blocks an agent-bound caller from minting a child with wider projects', async () => {
   const { app, seed } = await makeTestApp();
   // Create the calling agent with a narrow allow-list. Seeded project id is `seed.project.id`.

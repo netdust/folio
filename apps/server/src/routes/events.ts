@@ -37,6 +37,7 @@ eventsRoute.get('/', async (c) => {
   // narrowing once a UI exists for it.
   const token = c.get('token') ?? null;
   let agentAllowList: string[] | null = null; // null === unrestricted
+  let agentTokenAgentId: string | null = null; // agent's own document id; non-null for agent-bound tokens
   if (token?.agentId) {
     const agent = await db.query.documents.findFirst({
       where: eq(documents.id, token.agentId),
@@ -44,6 +45,7 @@ eventsRoute.get('/', async (c) => {
     if (!agent || agent.type !== 'agent') {
       throw new HTTPError('FORBIDDEN_RESOURCE', 'agent for this token no longer exists', 403);
     }
+    agentTokenAgentId = agent.id;
     const agentProjects = ((agent.frontmatter as { projects?: string[] }).projects) ?? ['*'];
     const effective = intersect(agentProjects, token.projectIds ?? null);
     if (!effective.includes('*')) {
@@ -57,6 +59,25 @@ eventsRoute.get('/', async (c) => {
         );
       }
     }
+  }
+
+  /**
+   * G9 — workspace-level events (projectId=null) leak information ACROSS
+   * agents otherwise. agent.created carries the new agent's api_token_id;
+   * agent.allow_list.reconciled carries other agents' removed_project_ids;
+   * agent.deleted exposes which agent went away. For an agent-bound token
+   * with a restricted allow-list, only events whose documentId is the
+   * agent's OWN id (i.e., events ABOUT this agent) should flow through.
+   * Workspace.* and other agent-unrelated kinds (workspace.created, etc.)
+   * remain visible.
+   */
+  function isCrossAgentLeak(
+    kind: EventKind,
+    documentId: string | null,
+  ): boolean {
+    if (!agentTokenAgentId) return false;
+    if (!kind.startsWith('agent.')) return false;
+    return documentId !== agentTokenAgentId;
   }
 
   return streamSSE(c, async (stream) => {
@@ -80,13 +101,13 @@ eventsRoute.get('/', async (c) => {
         });
         for (const row of rows) {
           if (projectId && row.projectId !== projectId) continue;
-          // F3: agent allow-list narrows project-scoped rows. Workspace-level
-          // rows (projectId === null) remain visible — they carry no
-          // project-private data and agents legitimately observe agent.* and
-          // workspace.* events about themselves.
+          // F3: agent allow-list narrows project-scoped rows.
           if (agentAllowList && row.projectId !== null && !agentAllowList.includes(row.projectId)) {
             continue;
           }
+          // G9: workspace-level agent.* events about OTHER agents are not
+          // visible to a narrowed agent token.
+          if (isCrossAgentLeak(row.kind as EventKind, row.documentId ?? null)) continue;
           if (kinds && !kinds.includes(row.kind as EventKind)) continue;
           if (parentId !== undefined) {
             const p = (row.payload as Record<string, unknown> | null)?.parent_id;
@@ -130,7 +151,6 @@ eventsRoute.get('/', async (c) => {
       },
       (e) => {
         // F3: drop project-scoped events outside the agent's allow-list.
-        // Workspace-level (projectId === null) events flow through.
         if (
           agentAllowList &&
           e.projectId != null &&
@@ -138,6 +158,8 @@ eventsRoute.get('/', async (c) => {
         ) {
           return;
         }
+        // G9: drop workspace-level agent.* events about OTHER agents.
+        if (isCrossAgentLeak(e.kind, e.documentId ?? null)) return;
         queue.push(e);
       },
     );
