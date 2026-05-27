@@ -260,11 +260,16 @@ export function CommentsTab({
           { onSettled: (_data, err) => (err ? reject(err) : resolve()) },
         );
       });
+      // BUG-017 — close editor on SUCCESS only. The prior shape closed in
+      // `finally`, which on PATCH failure threw away the user's typed
+      // correction (optimistic rollback reset the body; editor was gone;
+      // toast showed an error with no way to recover the typed text).
+      setEditingSlug(null);
     } catch {
       // Mutation hook surfaces error via toast (optimistic rollback handles cache).
+      // Keep the editor open + textarea intact so the user can retry.
     } finally {
       setSavingEdit(false);
-      setEditingSlug(null);
     }
   }
 
@@ -291,11 +296,15 @@ export function CommentsTab({
           { onSettled: (_data, err) => (err ? reject(err) : resolve()) },
         );
       });
+      // BUG-017 — close dialog on SUCCESS only. The prior shape closed in
+      // `finally`, which on DELETE failure left the user wondering whether
+      // the deletion went through (it didn't — optimistic rollback restored
+      // the row). Keep the dialog open so the user can retry or cancel.
+      setDeleteSlug(null);
     } catch {
-      // Error handled by mutation (optimistic rollback).
+      // Error handled by mutation (optimistic rollback). Keep dialog open.
     } finally {
       setDeleting(false);
-      setDeleteSlug(null);
     }
   }
 

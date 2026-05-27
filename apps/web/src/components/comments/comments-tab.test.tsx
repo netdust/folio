@@ -348,6 +348,88 @@ describe('CommentsTab', () => {
     });
   });
 
+  // BUG-017 — handleSaveEdit / handleDeleteConfirm closed the editor/dialog
+  // in `finally`, unconditionally. On PATCH/DELETE failure, the optimistic
+  // rollback restored the original body, the editor was gone, and the user's
+  // typed correction was lost with no way to retry except re-typing.
+  // Fix: close on success only; keep editor/dialog open on error so the user
+  // sees the toast + can retry.
+  describe('BUG-017 — keep editor/dialog open on failed mutation', () => {
+    function stubFetchListWithFailingPatch(comments: Comment[]) {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (urlIn: string | URL, init?: RequestInit) => {
+          const url = typeof urlIn === 'string' ? urlIn : urlIn.toString();
+          const method = init?.method?.toUpperCase() ?? 'GET';
+          if (method === 'GET') {
+            if (url.includes('?type=agent') || url.includes('&type=agent')) {
+              return new Response(
+                JSON.stringify({ data: [] }),
+                { status: 200, headers: { 'content-type': 'application/json' } },
+              );
+            }
+            return new Response(
+              JSON.stringify({ data: comments }),
+              { status: 200, headers: { 'content-type': 'application/json' } },
+            );
+          }
+          // PATCH/DELETE: return a 422 to trigger the mutation's error branch.
+          if (method === 'PATCH' || method === 'DELETE') {
+            return new Response(
+              JSON.stringify({ error: { code: 'BODY_TOO_LARGE', message: 'too big' } }),
+              { status: 422, headers: { 'content-type': 'application/json' } },
+            );
+          }
+          return new Response('{}', { status: 200 });
+        }),
+      );
+    }
+
+    it('saving inline edit keeps the editor open + user text intact when PATCH fails', async () => {
+      const comment = makeComment({ id: 'c-1', slug: 'comment-c-1', body: 'Original body' });
+      stubFetchListWithFailingPatch([comment]);
+      renderTab();
+      await waitFor(() => screen.getByText('Original body'));
+
+      fireEvent.click(screen.getByRole('button', { name: /edit/i }));
+      const textarea = screen.getByTestId('inline-edit-textarea') as HTMLTextAreaElement;
+      fireEvent.change(textarea, { target: { value: 'My long correction' } });
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('inline-edit-save'));
+      });
+
+      // After the failed PATCH, the editor stays open (BUG-017 — was closing
+      // unconditionally in finally) AND retains the user's typed value.
+      await waitFor(() => {
+        expect(screen.getByTestId('inline-edit-textarea')).toBeInTheDocument();
+      });
+      expect(
+        (screen.getByTestId('inline-edit-textarea') as HTMLTextAreaElement).value,
+      ).toBe('My long correction');
+    });
+
+    it('confirming delete keeps the dialog open when DELETE fails', async () => {
+      const comment = makeComment({ id: 'c-1', slug: 'comment-c-1', body: 'To be deleted' });
+      stubFetchListWithFailingPatch([comment]);
+      renderTab();
+      await waitFor(() => screen.getByText('To be deleted'));
+
+      fireEvent.click(screen.getByRole('button', { name: /delete/i }));
+      await waitFor(() => screen.getByRole('dialog'));
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('delete-confirm-btn'));
+      });
+
+      // After the failed DELETE, the dialog stays open so the user can retry.
+      await waitFor(() => {
+        expect(screen.getByRole('dialog')).toBeInTheDocument();
+      });
+      expect(screen.getByTestId('delete-confirm-btn')).toBeInTheDocument();
+    });
+  });
+
   it('canceling delete dialog does not call mutation', async () => {
     const comment = makeComment({ id: 'c-1', slug: 'comment-c-1', body: 'To be deleted' });
     stubFetchList([comment]);
