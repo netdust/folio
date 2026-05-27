@@ -27,9 +27,18 @@ const READ_TOOLS: ReadonlySet<string> = new Set([
   'get_document', 'get_document_markdown',
   'list_statuses', 'list_fields', 'list_views',
   'run_view',
+  // get_agent_self is read-only metadata-on-self; resolved via the bearer's
+  // agent_id, no agents:write needed. Maps to documents:read since the agent
+  // row is a document.
+  'get_agent_self',
 ]);
 const WRITE_TOOLS: ReadonlySet<string> = new Set(['create_document', 'update_document']);
 const DELETE_TOOLS: ReadonlySet<string> = new Set(['delete_document']);
+// Phase 2.6 sub-phase D — agent lifecycle tools require the new agents:write
+// scope. get_agent_self is NOT in this set; it's read-only (see READ_TOOLS).
+const AGENT_WRITE_TOOLS: ReadonlySet<string> = new Set([
+  'create_agent', 'update_agent', 'delete_agent',
+]);
 
 /** Translate the agent's tool whitelist into the matching set of token scopes. */
 export function toolsToScopes(tools: readonly string[]): string[] {
@@ -43,6 +52,10 @@ export function toolsToScopes(tools: readonly string[]): string[] {
     if (DELETE_TOOLS.has(tool)) {
       scopes.add('documents:delete');
       scopes.add('documents:read');
+    }
+    if (AGENT_WRITE_TOOLS.has(tool)) {
+      scopes.add('agents:write');
+      scopes.add('documents:read'); // agent rows are documents
     }
   }
   return Array.from(scopes);

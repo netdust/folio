@@ -55,7 +55,7 @@ test('MCP initialize returns serverInfo + protocolVersion', async () => {
   expect(body.result.protocolVersion).toBeTruthy();
 });
 
-test('MCP tools/list returns the v1 tools including the Phase 2.6 comment tools', async () => {
+test('MCP tools/list returns the v1 tools including comment + agent-lifecycle tools', async () => {
   const { app, seed } = await makeTestApp();
   const token = await setupToken(seed.workspace.id, seed.user.id, ['documents:read']);
   const res = await app.request('/mcp', {
@@ -64,13 +64,17 @@ test('MCP tools/list returns the v1 tools including the Phase 2.6 comment tools'
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
   });
   const body = (await res.json()) as { result: { tools: { name: string }[] } };
-  // 12 original + 4 comment tools (create/list/update/delete_comment).
-  expect(body.result.tools.length).toBe(16);
+  // 12 original + 4 comment tools + 4 agent-lifecycle tools = 20 total.
+  expect(body.result.tools.length).toBe(20);
   const names = body.result.tools.map((t) => t.name);
   expect(names).toContain('create_comment');
   expect(names).toContain('list_comments');
   expect(names).toContain('update_comment');
   expect(names).toContain('delete_comment');
+  expect(names).toContain('create_agent');
+  expect(names).toContain('update_agent');
+  expect(names).toContain('delete_agent');
+  expect(names).toContain('get_agent_self');
 });
 
 test('MCP tools/call list_workspaces returns the workspaces visible to the token', async () => {
@@ -955,4 +959,278 @@ test('delete_comment by a non-author agent → -32602 comment_author_only', asyn
   };
   expect(body.error.code).toBe(-32602);
   expect(body.error.data?.reason).toBe('comment_author_only');
+});
+
+// ---------------------------------------------------------------------------
+// Phase 2.6 sub-phase D — agent-lifecycle tools.
+//
+// Tools: create_agent / update_agent / delete_agent / get_agent_self.
+// Scope: write ops require `agents:write`; get_agent_self only needs
+// documents:read (it's metadata-on-self resolved via the bearer's agent_id).
+// Allow-list widening guard: an agent-bound token cannot patch a target
+// agent's frontmatter.projects to add ids outside its own allow-list.
+// Self-delete guard: an agent-bound token cannot delete its own agent.
+// ---------------------------------------------------------------------------
+
+test('MCP create_agent without agents:write returns -32603 scope rejection', async () => {
+  const { app, seed } = await makeTestApp();
+  const token = await setupToken(seed.workspace.id, seed.user.id, [
+    'documents:read',
+    'documents:write',
+    // intentionally NO agents:write
+  ]);
+  const res = await callTool(app, token, 'create_agent', {
+    workspace_slug: 'acme',
+    title: 'Helper',
+    frontmatter: {
+      system_prompt: 'help',
+      provider: 'anthropic',
+      model: 'claude-sonnet-4-6',
+      tools: ['list_documents'],
+    },
+  });
+  const body = (await res.json()) as { error?: { code: number; message: string } };
+  expect(body.error).toBeDefined();
+  expect(body.error!.code).toBe(-32603);
+  expect(body.error!.message).toMatch(/agents:write/);
+});
+
+test('MCP create_agent mints a token and returns it ONCE in the response', async () => {
+  const { app, seed } = await makeTestApp();
+  const token = await setupToken(seed.workspace.id, seed.user.id, [
+    'agents:write',
+    'documents:read',
+  ]);
+  const res = await callTool(app, token, 'create_agent', {
+    workspace_slug: 'acme',
+    title: 'Helper',
+    frontmatter: {
+      system_prompt: 'help',
+      provider: 'anthropic',
+      model: 'claude-sonnet-4-6',
+      tools: ['list_documents'],
+    },
+  });
+  expect(res.status).toBe(200);
+  const body = (await res.json()) as {
+    result?: { content: { text: string }[] };
+    error?: unknown;
+  };
+  expect(body.error).toBeUndefined();
+  const parsed = JSON.parse(body.result!.content[0]!.text) as {
+    slug: string;
+    type: string;
+    agent_token: string;
+  };
+  expect(parsed.type).toBe('agent');
+  expect(parsed.slug).toBe('helper');
+  expect(typeof parsed.agent_token).toBe('string');
+  expect(parsed.agent_token.length).toBeGreaterThan(10);
+});
+
+test('MCP update_agent patches title + frontmatter', async () => {
+  const { app, seed } = await makeTestApp();
+  const token = await setupToken(seed.workspace.id, seed.user.id, [
+    'agents:write',
+    'documents:read',
+  ]);
+  await callTool(app, token, 'create_agent', {
+    workspace_slug: 'acme',
+    title: 'Target',
+    frontmatter: {
+      system_prompt: 'one',
+      provider: 'anthropic',
+      model: 'claude-sonnet-4-6',
+      tools: ['list_documents'],
+    },
+  });
+
+  const res = await callTool(app, token, 'update_agent', {
+    workspace_slug: 'acme',
+    slug: 'target',
+    title: 'New Title',
+    frontmatter: { system_prompt: 'two' },
+  });
+  expect(res.status).toBe(200);
+  const body = (await res.json()) as {
+    result?: { content: { text: string }[] };
+    error?: unknown;
+  };
+  expect(body.error).toBeUndefined();
+  const parsed = JSON.parse(body.result!.content[0]!.text) as {
+    title: string;
+    frontmatter: Record<string, unknown>;
+  };
+  expect(parsed.title).toBe('New Title');
+  expect(parsed.frontmatter['system_prompt']).toBe('two');
+});
+
+test('MCP update_agent rejects allow-list widening beyond calling agent\'s own', async () => {
+  const { app, db: testDb, seed } = await makeTestApp();
+  // Add a second project the calling agent does NOT have access to.
+  const projectBId = nanoid();
+  await testDb.insert(projectsTbl).values({
+    id: projectBId,
+    workspaceId: seed.workspace.id,
+    slug: 'inbox',
+    name: 'Inbox',
+  });
+
+  // Calling agent has [seed.project.id] only.
+  const { agentToken: callerToken } = await setupAgentBoundToken(
+    seed.workspace.id,
+    seed.user.id,
+    {
+      projects: [seed.project.id],
+      scopes: ['agents:write', 'documents:read'],
+      agentSlug: 'caller',
+    },
+  );
+
+  // Seed a target agent at workspace scope (uses helper that inserts directly
+  // so we don't need agents:write on the human path).
+  const { agentSlug: targetSlug } = await setupAgentBoundToken(
+    seed.workspace.id,
+    seed.user.id,
+    { projects: [seed.project.id], agentSlug: 'target' },
+  );
+
+  // Try to widen the target's projects to include projectBId — caller can't do this.
+  const res = await callTool(app, callerToken, 'update_agent', {
+    workspace_slug: 'acme',
+    slug: targetSlug,
+    frontmatter: { projects: [seed.project.id, projectBId] },
+  });
+  const body = (await res.json()) as {
+    error: { code: number; data?: { reason: string } };
+  };
+  expect(body.error).toBeDefined();
+  expect(body.error.code).toBe(-32602);
+  expect(body.error.data?.reason).toBe('allow_list_widening_forbidden');
+});
+
+test('MCP update_agent allows non-widening patches from an agent-bound token', async () => {
+  const { app, seed } = await makeTestApp();
+  // Caller and target both have [seed.project.id]; renaming target stays within.
+  const { agentToken: callerToken } = await setupAgentBoundToken(
+    seed.workspace.id,
+    seed.user.id,
+    {
+      projects: [seed.project.id],
+      scopes: ['agents:write', 'documents:read'],
+      agentSlug: 'caller-narrow',
+    },
+  );
+  const { agentSlug: targetSlug } = await setupAgentBoundToken(
+    seed.workspace.id,
+    seed.user.id,
+    { projects: [seed.project.id], agentSlug: 'target-narrow' },
+  );
+
+  const res = await callTool(app, callerToken, 'update_agent', {
+    workspace_slug: 'acme',
+    slug: targetSlug,
+    title: 'Narrowed Target',
+  });
+  const body = (await res.json()) as {
+    result?: { content: { text: string }[] };
+    error?: unknown;
+  };
+  expect(body.error).toBeUndefined();
+  const parsed = JSON.parse(body.result!.content[0]!.text) as { title: string };
+  expect(parsed.title).toBe('Narrowed Target');
+});
+
+test('MCP delete_agent removes the agent (human PAT)', async () => {
+  const { app, seed } = await makeTestApp();
+  const token = await setupToken(seed.workspace.id, seed.user.id, [
+    'agents:write',
+    'documents:read',
+  ]);
+  await callTool(app, token, 'create_agent', {
+    workspace_slug: 'acme',
+    title: 'Doomed',
+    frontmatter: {
+      system_prompt: 'p',
+      provider: 'anthropic',
+      model: 'claude-sonnet-4-6',
+      tools: ['list_documents'],
+    },
+  });
+  const res = await callTool(app, token, 'delete_agent', {
+    workspace_slug: 'acme',
+    slug: 'doomed',
+  });
+  expect(res.status).toBe(200);
+  const body = (await res.json()) as {
+    result?: { content: { text: string }[] };
+    error?: unknown;
+  };
+  expect(body.error).toBeUndefined();
+  const parsed = JSON.parse(body.result!.content[0]!.text) as { ok: boolean; slug: string };
+  expect(parsed.ok).toBe(true);
+  expect(parsed.slug).toBe('doomed');
+});
+
+test('MCP delete_agent rejects self-delete from an agent-bound token', async () => {
+  const { app, seed } = await makeTestApp();
+  const { agentToken, agentSlug } = await setupAgentBoundToken(
+    seed.workspace.id,
+    seed.user.id,
+    {
+      projects: ['*'],
+      scopes: ['agents:write', 'documents:read'],
+      agentSlug: 'self-target',
+    },
+  );
+
+  const res = await callTool(app, agentToken, 'delete_agent', {
+    workspace_slug: 'acme',
+    slug: agentSlug,
+  });
+  const body = (await res.json()) as {
+    error: { code: number; data?: { reason: string } };
+  };
+  expect(body.error).toBeDefined();
+  expect(body.error.code).toBe(-32602);
+  expect(body.error.data?.reason).toBe('cannot_delete_self');
+});
+
+test('MCP get_agent_self returns the calling agent document', async () => {
+  const { app, seed } = await makeTestApp();
+  const { agentToken, agentSlug } = await setupAgentBoundToken(
+    seed.workspace.id,
+    seed.user.id,
+    {
+      projects: ['*'],
+      scopes: ['documents:read'],
+      agentSlug: 'self-reader',
+    },
+  );
+
+  const res = await callTool(app, agentToken, 'get_agent_self', {});
+  expect(res.status).toBe(200);
+  const body = (await res.json()) as {
+    result?: { content: { text: string }[] };
+    error?: unknown;
+  };
+  expect(body.error).toBeUndefined();
+  const parsed = JSON.parse(body.result!.content[0]!.text) as {
+    slug: string;
+    type: string;
+  };
+  expect(parsed.slug).toBe(agentSlug);
+  expect(parsed.type).toBe('agent');
+});
+
+test('MCP get_agent_self with a human PAT returns -32602 no_agent_bound_to_token', async () => {
+  const { app, seed } = await makeTestApp();
+  const token = await setupToken(seed.workspace.id, seed.user.id, ['documents:read']);
+  const res = await callTool(app, token, 'get_agent_self', {});
+  const body = (await res.json()) as {
+    error: { code: number; data?: { reason: string } };
+  };
+  expect(body.error).toBeDefined();
+  expect(body.error.code).toBe(-32602);
+  expect(body.error.data?.reason).toBe('no_agent_bound_to_token');
 });

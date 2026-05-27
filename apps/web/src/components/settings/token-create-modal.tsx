@@ -19,6 +19,9 @@ const ALL_SCOPES = [
   'views:write',
   'tables:write',
   'statuses:write',
+  // Phase 2.6 sub-phase D — required for MCP agent-lifecycle tools
+  // (create_agent / update_agent / delete_agent).
+  'agents:write',
 ] as const;
 
 type Scope = (typeof ALL_SCOPES)[number];
@@ -38,6 +41,7 @@ const PRESETS: { label: string; scopes: Scope[]; tone?: PresetTone }[] = [
       'fields:write',
       'views:write',
       'statuses:write',
+      'agents:write',
     ],
   },
   {
@@ -51,6 +55,7 @@ const PRESETS: { label: string; scopes: Scope[]; tone?: PresetTone }[] = [
       'views:write',
       'statuses:write',
       'tables:write',
+      'agents:write',
     ],
   },
 ];

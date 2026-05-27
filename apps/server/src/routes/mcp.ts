@@ -47,6 +47,7 @@ import {
   createDocument,
   deleteDocument,
   getDocument,
+  getWorkspaceDocument,
   listDocuments,
   updateDocument,
   type DocumentType,
@@ -943,6 +944,216 @@ const TOOLS: ToolDef[] = [
         }
         throw err;
       }
+    },
+  },
+
+  // ---------------------------------------------------------------------------
+  // Phase 2.6 sub-phase D — agent-lifecycle tools.
+  //
+  // create_agent / update_agent / delete_agent all delegate to the same
+  // service layer the workspace-scoped HTTP routes use (see
+  // routes/workspace-documents.ts). create_agent returns the freshly minted
+  // bearer token as `agent_token` on the response (one-time reveal — same
+  // contract as the HTTP POST). update_agent enforces an allow-list-widening
+  // guard: an agent-bound token cannot patch a target agent's
+  // frontmatter.projects to include project ids it doesn't have itself.
+  // delete_agent rejects self-delete. get_agent_self is read-only and
+  // requires only documents:read but additionally needs the token to be
+  // agent-bound.
+  // ---------------------------------------------------------------------------
+  {
+    name: 'create_agent',
+    description:
+      'Create a workspace-scoped agent document. Mints a bearer token and returns it ONCE in the response as `agent_token`. The token is scoped to the calling token\'s workspace.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace_slug: { type: 'string' },
+        slug: { type: 'string' },
+        title: { type: 'string' },
+        body: { type: 'string' },
+        frontmatter: { type: 'object' },
+      },
+      required: ['workspace_slug', 'title', 'frontmatter'],
+    },
+    requiredScope: 'agents:write',
+    handler: async ({ token, actor }, args) => {
+      const ws = await resolveWorkspaceForToken(token, args);
+      const title = requireString(args, 'title');
+      const body = optionalString(args, 'body') ?? '';
+      const fmArg = args['frontmatter'];
+      if (!fmArg || typeof fmArg !== 'object' || Array.isArray(fmArg)) {
+        throw mcpInvalidParams('frontmatter must be an object', {
+          reason: 'invalid_frontmatter',
+        });
+      }
+      const frontmatter = fmArg as Record<string, unknown>;
+
+      const { document, agentTokenPlaintext } = await createDocument({
+        workspace: ws,
+        project: null,
+        table: null,
+        actor: actor as never,
+        token,
+        isTableScopedUrl: false,
+        input: { type: 'agent', title, body, frontmatter, status: null },
+      });
+
+      return textResult({
+        ...document,
+        ...(agentTokenPlaintext ? { agent_token: agentTokenPlaintext } : {}),
+      });
+    },
+  },
+  {
+    name: 'update_agent',
+    description:
+      'Patch an existing workspace-scoped agent document. Reserved keys are ignored. When called with an agent-bound token, the target\'s frontmatter.projects allow-list cannot be widened beyond the calling agent\'s own allow-list.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace_slug: { type: 'string' },
+        slug: { type: 'string' },
+        title: { type: 'string' },
+        body: { type: 'string' },
+        frontmatter: { type: 'object' },
+      },
+      required: ['workspace_slug', 'slug'],
+    },
+    requiredScope: 'agents:write',
+    handler: async ({ token, actor }, args) => {
+      const ws = await resolveWorkspaceForToken(token, args);
+      const slug = requireString(args, 'slug');
+      const existing = await getWorkspaceDocument(ws.id, 'agent', slug);
+      if (!existing) {
+        throw mcpInvalidParams(`agent ${slug} not found`, {
+          reason: 'agent_not_found',
+          slug,
+        });
+      }
+
+      const patch: Parameters<typeof updateDocument>[0]['patch'] = {};
+      if (typeof args['title'] === 'string') patch.title = args['title'];
+      if (typeof args['body'] === 'string') patch.body = args['body'];
+      const fmArg = args['frontmatter'];
+      if (fmArg !== undefined) {
+        if (!fmArg || typeof fmArg !== 'object' || Array.isArray(fmArg)) {
+          throw mcpInvalidParams('frontmatter must be an object', {
+            reason: 'invalid_frontmatter',
+          });
+        }
+        patch.frontmatter = fmArg as Record<string, unknown>;
+
+        // Allow-list widening guard: an agent-bound token cannot patch the
+        // target agent's frontmatter.projects to include project ids outside
+        // its own allow-list. Human PAT (token.agentId === null) is
+        // unrestricted — Phase 3+ adds human PAT enforcement when we have UI
+        // for narrowing.
+        if (token.agentId && 'projects' in patch.frontmatter) {
+          const nextProjects = patch.frontmatter['projects'];
+          if (Array.isArray(nextProjects)) {
+            const callingAgent = await db.query.documents.findFirst({
+              where: and(eq(documents.id, token.agentId), eq(documents.type, 'agent')),
+            });
+            const callingAllowList =
+              ((callingAgent?.frontmatter as { projects?: string[] })?.projects) ?? ['*'];
+            // If the caller has '*', everything is allowed.
+            if (!callingAllowList.includes('*')) {
+              // Reject any wildcard in the patch — that'd widen beyond the
+              // caller's concrete list.
+              if ((nextProjects as unknown[]).includes('*')) {
+                throw mcpInvalidParams(
+                  "cannot widen target agent's allow-list beyond calling agent's own",
+                  { reason: 'allow_list_widening_forbidden' },
+                );
+              }
+              for (const pid of nextProjects as unknown[]) {
+                if (typeof pid !== 'string') continue;
+                if (!callingAllowList.includes(pid)) {
+                  throw mcpInvalidParams(
+                    "cannot widen target agent's allow-list beyond calling agent's own",
+                    { reason: 'allow_list_widening_forbidden' },
+                  );
+                }
+              }
+            }
+          }
+        }
+      }
+
+      const updated = await updateDocument({
+        workspace: ws,
+        project: null,
+        fallbackTable: null,
+        actor: actor as never,
+        existing,
+        patch,
+      });
+      return textResult(updated);
+    },
+  },
+  {
+    name: 'delete_agent',
+    description:
+      'Soft-delete a workspace-scoped agent document. Cascades to revoke the agent\'s bearer token. Rejects self-delete when called with an agent-bound token.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace_slug: { type: 'string' },
+        slug: { type: 'string' },
+      },
+      required: ['workspace_slug', 'slug'],
+    },
+    requiredScope: 'agents:write',
+    handler: async ({ token, actor }, args) => {
+      const ws = await resolveWorkspaceForToken(token, args);
+      const slug = requireString(args, 'slug');
+      const existing = await getWorkspaceDocument(ws.id, 'agent', slug);
+      if (!existing) {
+        throw mcpInvalidParams(`agent ${slug} not found`, {
+          reason: 'agent_not_found',
+          slug,
+        });
+      }
+      // Self-delete guard: only meaningful when the call comes from an
+      // agent-bound token.
+      if (token.agentId && existing.id === token.agentId) {
+        throw mcpInvalidParams('agent cannot delete itself via MCP', {
+          reason: 'cannot_delete_self',
+        });
+      }
+
+      await deleteDocument({
+        workspace: ws,
+        project: null,
+        actor: actor as never,
+        existing,
+      });
+      return textResult({ ok: true, slug });
+    },
+  },
+  {
+    name: 'get_agent_self',
+    description:
+      'Return the calling agent\'s own document. Requires an agent-bound bearer token; user-minted (PAT) tokens have no agent identity and receive an error.',
+    inputSchema: { type: 'object', properties: {}, required: [] },
+    requiredScope: 'documents:read',
+    handler: async ({ token }) => {
+      if (!token.agentId) {
+        throw mcpInvalidParams(
+          'get_agent_self requires an agent-bound token',
+          { reason: 'no_agent_bound_to_token' },
+        );
+      }
+      const agent = await db.query.documents.findFirst({
+        where: and(eq(documents.id, token.agentId), eq(documents.type, 'agent')),
+      });
+      if (!agent) {
+        throw mcpInvalidParams('agent for this token no longer exists', {
+          reason: 'agent_missing',
+        });
+      }
+      return textResult(agent);
     },
   },
 ];

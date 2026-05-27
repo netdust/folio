@@ -23,6 +23,8 @@ const SCOPES = [
   'views:write',
   'tables:write',
   'statuses:write',
+  // Phase 2.6 sub-phase D — agents:write scope for MCP agent-lifecycle tools.
+  'agents:write',
 ] as const;
 
 describe('TokenCreateModal', () => {
@@ -63,7 +65,7 @@ describe('TokenCreateModal', () => {
     expect(screen.getByRole('button', { name: /full access/i })).toBeInTheDocument();
   });
 
-  it('clicking "Read + write" checks the right subset (no delete, no tables:write)', async () => {
+  it('clicking "Read + write" checks the right subset (no delete, no tables:write; includes agents:write)', async () => {
     const qc = new QueryClient();
     const user = userEvent.setup();
     render(
@@ -76,8 +78,23 @@ describe('TokenCreateModal', () => {
     expect((screen.getByLabelText('fields:write') as HTMLInputElement).checked).toBe(true);
     expect((screen.getByLabelText('views:write') as HTMLInputElement).checked).toBe(true);
     expect((screen.getByLabelText('statuses:write') as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByLabelText('agents:write') as HTMLInputElement).checked).toBe(true);
     expect((screen.getByLabelText('documents:delete') as HTMLInputElement).checked).toBe(false);
     expect((screen.getByLabelText('tables:write') as HTMLInputElement).checked).toBe(false);
+  });
+
+  // Phase 2.6 sub-phase D — agents:write powers create_agent / update_agent /
+  // delete_agent in the MCP surface. Read-only stays untouched; Read+write and
+  // Full access now include it so agent-managing tokens are easy to mint.
+  it('"Read-only" preset does NOT include agents:write', async () => {
+    const qc = new QueryClient();
+    const user = userEvent.setup();
+    render(
+      <TokenCreateModal wslug="acme" workspaceId="ws-1" open onOpenChange={() => {}} />,
+      { wrapper: wrap(qc) },
+    );
+    await user.click(screen.getByRole('button', { name: /^read-only$/i }));
+    expect((screen.getByLabelText('agents:write') as HTMLInputElement).checked).toBe(false);
   });
 
   it('clicking "Full access" checks every scope', async () => {
