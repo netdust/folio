@@ -172,6 +172,47 @@ describe('isAgentEventVisible — H1: agent.task.assigned reaches the assignee',
       }),
     ).toBe(false);
   });
+
+  // BUG-012 — `payload.agent_id` (added by S2 in services/documents.ts:515)
+  // is the immutable handle that tolerates renames. The visibility predicate
+  // was matching on slug only, so a renamed assignee never saw the event.
+  // Match on id first when present; fall back to slug for legacy payloads.
+  test('BUG-012: matches by payload.agent_id when present (slug stale due to rename)', () => {
+    // Connection captured ctx.agentSlug = "drafter" at SSE-open time.
+    // After connection, owner renamed the agent to "writer"; the new
+    // assignment event ships payload.agent='writer', agent_id=AGENT_A.agentId.
+    // The original subscriber MUST still receive it.
+    expect(
+      isAgentEventVisible(AGENT_A, {
+        kind: 'agent.task.assigned',
+        projectId: null,
+        documentId: 'work-item-id',
+        payload: { slug: 'task-1', agent: 'writer', agent_id: AGENT_A.agentId },
+      }),
+    ).toBe(true);
+  });
+
+  test('BUG-012: id mismatch hides the event (do not leak to a different agent)', () => {
+    expect(
+      isAgentEventVisible(AGENT_A, {
+        kind: 'agent.task.assigned',
+        projectId: null,
+        documentId: 'work-item-id',
+        payload: { slug: 'task-1', agent: 'agent-a', agent_id: AGENT_B.agentId },
+      }),
+    ).toBe(false);
+  });
+
+  test('BUG-012: legacy payload without agent_id still matches by slug', () => {
+    expect(
+      isAgentEventVisible(AGENT_A, {
+        kind: 'agent.task.assigned',
+        projectId: null,
+        documentId: 'work-item-id',
+        payload: { slug: 'task-1', agent: AGENT_A.agentSlug },
+      }),
+    ).toBe(true);
+  });
 });
 
 describe('isAgentEventVisible — workspace.* events about workspace itself', () => {

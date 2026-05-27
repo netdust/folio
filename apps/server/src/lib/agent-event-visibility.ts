@@ -85,11 +85,20 @@ export function isAgentEventVisible(
   // agent doc, and document.created/updated/deleted for type='agent'.
   if (args.documentId !== null && args.documentId === ctx.agentId) return true;
 
-  // Case 2: agent.task.assigned has documentId = work_item but payload.agent
-  // = the assignee slug. Match on slug so the assignee learns of their
-  // assignment.
+  // Case 2: agent.task.assigned has documentId = work_item but payload
+  // identifies the assignee. BUG-012 — prefer the immutable `payload.agent_id`
+  // (added by S2 in services/documents.ts so subscribers tolerate renames)
+  // and only fall back to slug for legacy events that pre-date that field.
+  // The id is authoritative: if id is set and doesn't match, the event is
+  // for a DIFFERENT agent that happens to share the slug we captured at
+  // connect time — hide it.
   if (args.kind === 'agent.task.assigned') {
-    const p = args.payload as { agent?: unknown } | null | undefined;
+    const p = args.payload as { agent?: unknown; agent_id?: unknown } | null | undefined;
+    const payloadAgentId =
+      p && typeof p.agent_id === 'string' && p.agent_id.length > 0 ? p.agent_id : null;
+    if (payloadAgentId !== null) {
+      return payloadAgentId === ctx.agentId;
+    }
     const assigneeSlug = p && typeof p.agent === 'string' ? p.agent : null;
     if (assigneeSlug && ctx.agentSlug && assigneeSlug === ctx.agentSlug) {
       return true;
