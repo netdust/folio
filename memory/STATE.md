@@ -1,29 +1,38 @@
 # Folio — STATE
 
-_Last updated: 2026-05-27 PM (Phase 2.6 shake-out + code-review pass complete; 3 BLOCKERs fixed and committed; 15 code-review findings folded into manifest awaiting next-session fix work)_
+_Last updated: 2026-05-27 evening (Phase 2.6 ALL 15 code-review findings RESOLVED across Tier 1 + 2 + 3; manifest updated; only 3 minor/deferred items remain OPEN)_
 
 Living snapshot of where the project actually is. Read at session start. Update at session end if anything below changed.
 
-## Next up — work the code-review findings in tier order
+## Next up — verify e2e + merge
 
-**Phase 2.6 is now at `977c364` on `phase-2.6/comments-and-slideover` (commit on top of d305810 from prior automated build).** Shake-out + 4 reviewer agents + `/code-review --base=main --effort=high` all done in this session. **3 BLOCKERs already fixed and shipped in 977c364** (builtin-trigger Enabled lock UI mismatch / tools-widening escalation / SSE hot-spin polling). All test suites green.
+**Phase 2.6 is now at `b0d8c0d` on `phase-2.6/comments-and-slideover`** (15 atomic commits on top of `977c364`'s 3 BLOCKER fixes, on top of `d305810`'s automated build). **All 18 must-fix-before-merge items resolved.** All unit test suites green.
 
-**Open work, in priority order — see `tasks/shake-out-manifest-phase-2.6.md` for full reproduction + suggested fix + tests for each:**
+**Done in this session (2026-05-27 evening):** 15 BUGs from the code-review pass, each with failing-test-first → smallest-possible-fix → atomic commit. See `tasks/shake-out-manifest-phase-2.6.md` Fix Log table for the commit → bug → root cause map.
 
-1. **TIER 1 (must-fix before merge — security / data integrity exploits)** — BUG-007 (PAT presets bundle agents:write), BUG-008 (backfill bypasses txWithEvents), BUG-009 (mention parser code/blockquote-blind), BUG-010 (recursive cascade no comment.deleted + bypasses author guard), BUG-011 (deleteComment author-fingerprinting oracle), BUG-014 (innerHTML escape miss).
-2. **TIER 2 (correctness)** — BUG-012 (visibility ignores agent_id), BUG-013 (target_agent slug-only), BUG-015 (migration 0009 promised trigger missing), BUG-016 (trigger PATCH skips refine), BUG-017 (handleSaveEdit closes editor on failure), BUG-021 (bus filter drops workspace events for ?project= subs).
-3. **TIER 3 (cleanup)** — BUG-018 (listWorkspaceDocuments bypasses resolveAgentProjects), BUG-019 (bare c.req.json → 500), BUG-020 (optimistic comment id collision).
-4. **Once TIER 1 + 2 land:** open a PR (or use existing branch), re-run `/code-review --base=main --effort=high --comment` for inline pass. Then `superpowers:finishing-a-development-branch` to merge `--no-ff` into main.
+- TIER 1 (6): BUG-007 token presets, BUG-008 backfill txWithEvents, BUG-009 mention parser code/quote masking, BUG-010 cascade per-row events, BUG-011 idempotency before authorship, BUG-014 safe text reset.
+- TIER 2 (6): BUG-012 agent_id visibility, BUG-013 target_agent_id + migration 0011, BUG-015 0009 comment fix, BUG-016 trigger PATCH refine, BUG-017 don't close editor on fail, BUG-021 workspace events to project subs.
+- TIER 3 (3): BUG-018 resolveAgentProjects audit, BUG-019 json parse 422, BUG-020 crypto.randomUUID optimistic id.
 
-**Recommended workflow per BUG:** invoke `superpowers:systematic-debugging`, write a failing test first (the manifest entry names the test that should pin it), apply the smallest possible fix, re-run that test + the full server/web/Playwright suites, commit atomically with message shape `phase-2.6: BUG-NNN — <short description>`. Pattern proven on BUG-001/005/006.
+**Open work — all non-blocking:**
+1. **Verify Playwright** still green (`bun run e2e` from apps/web) — Tier 1+2+3 changes affect cascade events / visibility / PATCH validation; e2e wasn't re-run in this session. Recommended before merge.
+2. **3 BUGs deferred:** BUG-002 (MCP create_agent slug schema — IMPORTANT, ~30 min fix), BUG-003 (Milkdown teardown intermittent — MINOR), BUG-004 (web bundle size — defer to Phase 7).
+3. **Reviewer backlog:** 23 SHOULD-FIX + 24 NICE-TO-HAVE from the four shake-out reviewer agents, untouched. Most are simplicity/perf wins, not bugs.
+4. **`/code-review --base=main --effort=high --comment`** for a final inline pass on the much larger diff (130 files, +21K LOC).
+5. **`superpowers:finishing-a-development-branch`** to merge `--no-ff` into main.
 
-**Test baseline at end of shake-out session (current):**
-- Server **495 / 1-skip / 0-fail** (was 488 pre-shake-out; +7 from BUG-001/005 regression tests).
-- Web **537 / 8-skip / 0-fail** (was 533; +4 from in-flight 2.6 work).
-- Shared **46 / 0-fail** (was 37; +9 cron tests in D1, already accounted for).
-- Scripts (backfill) **6 / 0-fail**.
-- Playwright **28 / 0-fail** (5.7m).
-- Server + web `tsc --noEmit` clean.
+**Test baseline at end of code-review fix session (current):**
+- Server **524 / 1-skip / 0-fail** (was 495 at start of session; +29: 28 new regression tests + 1 from BUG-008's mid-loop-throw test).
+- Web **547 / 8-skip / 0-fail** (was 537; +10 from new BUG-007/014/017/020 tests).
+- Shared **46 / 0-fail** (unchanged).
+- Scripts (backfill) **7 / 0-fail** (was 6; +1 from BUG-008).
+- Playwright NOT re-run this session.
+- Server + web `tsc --noEmit` still clean per prior session.
+
+**Important per-session lessons reinforced (already in memory):**
+- `bun test` from repo root mixes Vitest into Bun's runner → false fails. Always run server tests from `apps/server`, web tests from `apps/web` (via `bun run test`).
+- Per-bug atomic commits + failing-test-first preserved the pattern from BUG-001/005/006. 15-bug session stayed steady because of it.
+- The drizzle migration journal got updated correctly (idx 11) per `[[feedback_drizzle-migration-journal]]`. Don't skip on future migrations.
 
 **Phase 3 — AI in UI + Agent runner** still queued. Branches from main when 2.6 merges.
 

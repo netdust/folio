@@ -1,19 +1,23 @@
 # Bug Manifest — Folio Phase 2.6
 
 **Generated:** 2026-05-27
-**Last updated:** 2026-05-27 (post-blocker-fix)
+**Last updated:** 2026-05-27 (post-tier-1-2-3-fix)
 **Spec:** `docs/superpowers/specs/2026-05-26-phase-2.6-comments-and-tabbed-slideover-design.md`
-**Branch:** `phase-2.6/comments-and-slideover` (base `8df3f2f`, ~110 files / +20.6K LOC before fixes)
-**Build status:** server typecheck clean / web typecheck clean / server 495 pass / web 537 pass / shared 46 pass / scripts 6 pass / Playwright 28 pass
+**Branch:** `phase-2.6/comments-and-slideover` (base `8df3f2f`, now ~130 files / +21K LOC after fixes)
+**Build status:** server typecheck clean / web typecheck clean / server 524 pass / web 547 pass / shared 46 pass / scripts 7 pass
 **Sweep status:** Track A (automated against booted server on a fresh DB) complete; Track B (manual browser walkthrough) is `apps/web/tests/manual-qa-phase-2.6.md` — 40 scenarios already authored, user-side
 
 ---
 
 ## Summary
 
-**6 issues found:** 3 CRITICAL/BLOCKER, 1 IMPORTANT, 2 MINOR.
+**21 issues found total:** 3 BLOCKERs (shake-out) + 15 code-review findings + 3 deferred (BUG-002 IMPORTANT, BUG-003 MINOR, BUG-004 MINOR/DEFER).
 
-**3 BLOCKERs RESOLVED** in this shake-out session (BUG-001, BUG-005, BUG-006). All other items OPEN for triage.
+**18 RESOLVED** across two fix sessions:
+- 3 BLOCKERs in shake-out session (`977c364`): BUG-001, BUG-005, BUG-006.
+- 15 tier-1/2/3 findings in code-review fix session (`fd4ced2`..`b0d8c0d`): BUG-007 → BUG-021.
+
+**3 OPEN, all non-blocking:** BUG-002 (MCP slug schema), BUG-003 (intermittent Milkdown teardown), BUG-004 (bundle size — defer to Phase 7).
 
 Acceptance criteria 1-10 (spec §10) pass functionally on the server side after the fixes.
 
@@ -125,7 +129,7 @@ After the three BLOCKER fixes in `977c364`, a full `/code-review --base=main --e
 - **TIER 2 — important correctness (data is wrong now):** BUG-012, BUG-013, BUG-015, BUG-016, BUG-017, BUG-021.
 - **TIER 3 — cleanup (low-impact correctness gaps):** BUG-018, BUG-019, BUG-020.
 
-### BUG-007 [TIER 1 / security] — Token presets bundle `agents:write` — **OPEN**
+### BUG-007 [TIER 1 / security] — Token presets bundle `agents:write` — **RESOLVED**
 
 - **Where:** `apps/web/src/components/settings/token-create-modal.tsx:44, 58`
 - **What happened:** Both 'Read + write' and 'Full access' PAT presets include `'agents:write'` in their scopes. Human PATs (no agentId) bypass `assertAgentAllowListWidening` and `assertAgentToolsWidening` — every preset-minted PAT can mint, widen, or delete any agent in the workspace.
@@ -133,7 +137,7 @@ After the three BLOCKER fixes in `977c364`, a full `/code-review --base=main --e
 - **Suggested fix:** Remove `'agents:write'` from both presets. Add a separate 'Manage agents' preset gated behind danger styling, OR require users to tick `agents:write` manually if they actually need it.
 - **Test that should pin it:** new web test asserts `PRESETS['Read + write'].scopes` does NOT include `'agents:write'`.
 
-### BUG-008 [TIER 1 / data integrity] — Backfill bypasses `txWithEvents` — **OPEN**
+### BUG-008 [TIER 1 / data integrity] — Backfill bypasses `txWithEvents` — **RESOLVED**
 
 - **Where:** `scripts/backfill-builtin-triggers.ts:70`
 - **What happened:** Backfill uses raw `db.transaction(async (tx) => { ... await emitEvent(tx, ...) })`. `emitEvent`'s deferred-publish branch only engages inside `txWithEvents` (which populates the `pendingByTx` WeakMap). With raw `db.transaction`, `emitEvent`'s fallback fires `eventBus.publish` IMMEDIATELY while the tx is still open. If a subsequent insert throws or bun-sqlite's phantom-rollback fires, SSE subscribers receive ghost trigger events whose rows never persist.
@@ -141,7 +145,7 @@ After the three BLOCKER fixes in `977c364`, a full `/code-review --base=main --e
 - **Suggested fix:** Wrap the loop body in `txWithEvents(actor, async (tx) => { … })` so each insert's events sit in the pending queue until commit. Drop `eventBus` import from the script if no longer needed.
 - **Test that should pin it:** integration test that injects a mid-loop throw and asserts zero `eventBus.publish` calls fired.
 
-### BUG-009 [TIER 1 / security] — Mention parser is code/blockquote-blind — **OPEN**
+### BUG-009 [TIER 1 / security] — Mention parser is code/blockquote-blind — **RESOLVED**
 
 - **Where:** `apps/server/src/lib/mention-parser.ts:8` (TOKEN_RE)
 - **What happened:** Parser walks the raw comment body with no markdown awareness. `@`-mentions inside backtick inline-code, fenced ` ```code``` ` blocks, and `> ` blockquotes all match TOKEN_RE and trigger the approval-keyword scan. The pos-1/2 window then upgrades them to `kind: 'approval'`.
@@ -149,7 +153,7 @@ After the three BLOCKER fixes in `977c364`, a full `/code-review --base=main --e
 - **Suggested fix:** Pre-process the body to mask out fenced-code (` ```…``` `), inline-code (` `…` `), and blockquote-prefixed (`> `) lines before TOKEN_RE runs. OR: parse via a tiny markdown AST (no external dep — a regex sweep that replaces those spans with spaces of equal length preserves positions for keyword detection).
 - **Test that should pin it:** unit tests in `mention-parser.test.ts` for each of: ` `@drafter approved` `, ` ```\n@drafter approved\n``` `, `> @drafter approved`. All three should return `approvalIntent: null` and `mentions: []`.
 
-### BUG-010 [TIER 1 / data integrity] — Recursive cascade emits no comment.deleted + bypasses author-only guard — **OPEN**
+### BUG-010 [TIER 1 / data integrity] — Recursive cascade emits no comment.deleted + bypasses author-only guard — **RESOLVED**
 
 - **Where:** `apps/server/src/services/documents.ts:778-791` (recursive CTE) vs `:746-752` (top-level author guard) — partial overlap with the shake-out reviewer's shallow finding; this is the recursive widening.
 - **What happened:** Parent-delete cascade uses a raw recursive CTE that hard-DELETEs all descendants (comments + nested pages + grandchildren). No per-row `comment.deleted` or `document.deleted` events emit. The cascade also bypasses the `COMMENT_REQUIRES_COMMENT_TOOL` guard at line 746 (which only checks `existing.type === 'comment'` on the top-level delete target).
@@ -157,7 +161,7 @@ After the three BLOCKER fixes in `977c364`, a full `/code-review --base=main --e
 - **Suggested fix shape:** Either (a) fan out per-descendant events in the same tx (requires walking descendants in TS first, not raw CTE — slower but honours the wedge); OR (b) introduce a new `parent.cascade.deleted` event kind carrying `{parent_id, descendant_count, descendant_ids: string[]}` that subscribers can use to invalidate. Phase 3 dispatcher needs to subscribe to it.
 - **Test that should pin it:** integration test that deletes a parent with comments by 2 different authors and asserts SSE delivers `comment.deleted` (or `parent.cascade.deleted` with both ids) before the connection closes.
 
-### BUG-011 [TIER 1 / security] — deleteComment author-fingerprinting oracle — **OPEN**
+### BUG-011 [TIER 1 / security] — deleteComment author-fingerprinting oracle — **RESOLVED**
 
 - **Where:** `apps/server/src/services/comments.ts:553` (`assertAuthor`) runs BEFORE the soft-delete idempotency guard at `:563`.
 - **What happened:** A second delete by a non-author of an already-soft-deleted comment returns 403 `COMMENT_AUTHOR_ONLY`. A second delete by the original author returns 200 with the row. The 403/200 distinction lets a hostile narrowed agent fingerprint historical authorship by enumerating slugs.
@@ -165,7 +169,7 @@ After the three BLOCKER fixes in `977c364`, a full `/code-review --base=main --e
 - **Suggested fix:** Move the idempotency check BEFORE `assertAuthor`. Any caller deleting an already-soft-deleted comment gets 200 (or 204) regardless of authorship; `assertAuthor` only fires on the live-delete path.
 - **Test that should pin it:** integration test where agent B (non-author) deletes a soft-deleted comment authored by A, asserts 200 (not 403).
 
-### BUG-012 [TIER 2 / correctness] — Visibility ignores `payload.agent_id` — **OPEN**
+### BUG-012 [TIER 2 / correctness] — Visibility ignores `payload.agent_id` — **RESOLVED**
 
 - **Where:** `apps/server/src/lib/agent-event-visibility.ts:91-97` (the `agent.task.assigned` branch).
 - **What happened:** S2 (in `services/documents.ts:515`) now writes `payload.agent_id` into the event so subscribers tolerate renames. But the visibility predicate that decides which SSE subscriber sees an assignment STILL uses `payload.agent === ctx.agentSlug` (slug-only).
@@ -173,7 +177,7 @@ After the three BLOCKER fixes in `977c364`, a full `/code-review --base=main --e
 - **Suggested fix:** Match on `payload.agent_id === ctx.agentId` first (when both present), fall back to slug-match for legacy events with no agent_id field. Same shape S2 expected for assignment subscribers.
 - **Test that should pin it:** test that subscribes as agent A, renames A to B in DB, emits `agent.task.assigned` with `agent_id: A.id` + `agent: 'B'`, asserts the original subscriber receives it.
 
-### BUG-013 [TIER 2 / correctness] — `target_agent` persisted as slug only — **OPEN**
+### BUG-013 [TIER 2 / correctness] — `target_agent` persisted as slug only — **RESOLVED**
 
 - **Where:** `apps/server/src/services/comments.ts:240` discards `approvalIntent.targetAgentId`; line `:336` persists `frontmatter.target_agent = <slug>`.
 - **What happened:** `mention-parser` already returns the immutable `targetAgentId`, but `resolveKindAndTarget` only forwards the slug. Same rename-hijack class as F11/S2 explicitly fixed for assignments.
@@ -181,7 +185,7 @@ After the three BLOCKER fixes in `977c364`, a full `/code-review --base=main --e
 - **Suggested fix:** Add `target_agent_id: string | undefined` alongside `target_agent` in `commentFrontmatterSchema` (or replace the slug field entirely). Plumb the id through `resolveKindAndTarget` → service → frontmatter. Backfill via migration 0011 (mirror 0008's pattern).
 - **Test that should pin it:** integration test that creates approval comment, renames the target agent, asserts the UI / API still resolves the original target.
 
-### BUG-014 [TIER 1 / correctness] — `innerHTML` escape only handles `<` — **OPEN**
+### BUG-014 [TIER 1 / correctness] — `innerHTML` escape only handles `<` — **RESOLVED**
 
 - **Where:** `apps/web/src/components/comments/comment-composer.tsx:122`
 - **What happened:** `dom.innerHTML = \`<p>${resetTo.replace(/</g, '&lt;')}</p>\`` only escapes `<`. Misses `&`, `>`, `"`, named entities, numeric entities. The browser decodes any HTML entity in `resetTo` on parse.
@@ -189,7 +193,7 @@ After the three BLOCKER fixes in `977c364`, a full `/code-review --base=main --e
 - **Suggested fix:** Replace the `innerHTML` write with `dom.textContent = resetTo` inside a child `<p>` element built via `createElement` + `appendChild`. OR: switch to Milkdown's real content-replace API (a known TODO per the existing comment).
 - **Test that should pin it:** Vitest test types `&amp; ` then triggers `@`, asserts the final body POSTed = original-with-mention-appended (no entity decoding).
 
-### BUG-015 [TIER 2 / operability] — Migration 0009 promises trigger backstop that doesn't exist — **OPEN**
+### BUG-015 [TIER 2 / operability] — Migration 0009 promises trigger backstop that doesn't exist — **RESOLVED**
 
 - **Where:** `apps/server/src/db/migrations/0009_phase_2_6_events_seq.sql:9` (comment promises 'AFTER INSERT trigger backstops any direct-insert path'); grep `CREATE TRIGGER` across the entire repo returns zero hits.
 - **What happened:** The backstop the migration comment promises does not exist. Direct inserts into `events` that omit `seq` fall back to DEFAULT 0; the second such insert collides on `events_seq_idx` UNIQUE.
@@ -197,7 +201,7 @@ After the three BLOCKER fixes in `977c364`, a full `/code-review --base=main --e
 - **Suggested fix:** Either (a) add the promised trigger in a new migration 0011 — `CREATE TRIGGER events_seq_auto AFTER INSERT ON events WHEN NEW.seq = 0 BEGIN UPDATE events SET seq = (SELECT COALESCE(MAX(seq),0)+1 FROM events WHERE workspace_id = NEW.workspace_id) WHERE rowid = NEW.rowid; END;` — OR (b) delete the misleading comment lines in 0009 and document that direct inserts are unsupported.
 - **Test that should pin it:** migration test that inserts a row via raw `db.run('INSERT INTO events (id, workspace_id, kind, created_at) VALUES (?, ?, ?, ?)', ...)` (no seq) twice and asserts both succeed with monotonic seqs.
 
-### BUG-016 [TIER 2 / correctness] — Trigger PATCH skips cross-field refine — **OPEN**
+### BUG-016 [TIER 2 / correctness] — Trigger PATCH skips cross-field refine — **RESOLVED**
 
 - **Where:** `apps/server/src/services/documents.ts:637` uses `triggerFrontmatterSchema.innerType().partial()` to validate the PATCH payload, deliberately stripping the cross-field refine that requires `schedule!==null || on_event!==null`. The merged document is never re-validated against the create schema.
 - **What happened:** Existing trigger `{schedule:'0 * * * *', on_event:null}` PATCHed with `{schedule:null}` validates fine (refine gone; on_event omitted in partial). Merged doc becomes `{schedule:null, on_event:null}` — a state the create schema would reject. Dispatch never fires.
@@ -205,7 +209,7 @@ After the three BLOCKER fixes in `977c364`, a full `/code-review --base=main --e
 - **Suggested fix:** After computing `merged = { ...existing.frontmatter, ...patch.frontmatter }`, run the full `triggerFrontmatterSchema.parse(merged)` and return its error as `INVALID_PATCH` if it fails.
 - **Test that should pin it:** service test that PATCHes a schedule-only trigger with `{schedule:null}` and asserts the call rejects with `INVALID_PATCH`.
 
-### BUG-017 [TIER 2 / UX data loss] — handleSaveEdit closes editor on PATCH failure — **OPEN**
+### BUG-017 [TIER 2 / UX data loss] — handleSaveEdit closes editor on PATCH failure — **RESOLVED**
 
 - **Where:** `apps/web/src/components/comments/comments-tab.tsx:265-268` (handleSaveEdit), `:296-299` (handleDeleteConfirm).
 - **What happened:** Both `finally` blocks unconditionally call `setEditingSlug(null)` / close the dialog, regardless of mutation outcome. On PATCH/DELETE failure, the optimistic rollback restores the original body, the editor is gone, the user's typed edit is lost.
@@ -213,7 +217,7 @@ After the three BLOCKER fixes in `977c364`, a full `/code-review --base=main --e
 - **Suggested fix:** Move the close-editor calls into the `onSuccess` branch only. On error, keep the editor open with the typed text intact so the user sees the toast + can retry.
 - **Test that should pin it:** Vitest test that mocks updateComment to reject; asserts the textarea retains the user's typed value AND the editor is still rendered.
 
-### BUG-018 [TIER 3 / correctness gap] — listWorkspaceDocuments bypasses resolveAgentProjects — **OPEN**
+### BUG-018 [TIER 3 / correctness gap] — listWorkspaceDocuments bypasses resolveAgentProjects — **RESOLVED**
 
 - **Where:** `apps/server/src/services/documents.ts:862` parses `frontmatter.projects` directly via `Array.isArray + includes`, bypassing `resolveAgentProjects`. (Companion finding: `routes/projects.ts:130` cascade does the same — both should route through the helper.)
 - **What happened:** S1 was meant to consolidate the contract that missing/non-array `frontmatter.projects` means `['*']` (workspace-wide). Bearer/SSE/mention-parser route through `resolveAgentProjects`; this filter and the project-delete cascade don't.
@@ -221,7 +225,7 @@ After the three BLOCKER fixes in `977c364`, a full `/code-review --base=main --e
 - **Suggested fix:** Replace direct parsing with `resolveAgentProjects(agentRow)` in `listWorkspaceDocuments`. Audit `routes/projects.ts:130` (cascade scrub) at the same time for the same drift.
 - **Test that should pin it:** integration test that seeds an agent with no `frontmatter.projects`, asserts it appears in the result of `GET /documents?type=agent&project=<any>`.
 
-### BUG-019 [TIER 3 / contract] — Bare `await c.req.json()` returns 500 instead of 422 — **OPEN**
+### BUG-019 [TIER 3 / contract] — Bare `await c.req.json()` returns 500 instead of 422 — **RESOLVED**
 
 - **Where:** `apps/server/src/routes/workspace-documents.ts:51, 132` (POST + PATCH); also `apps/server/src/routes/documents.ts:75, 310`. `routes/comments.ts:146-150, 234-238` and `documents.ts:343-344` correctly wrap in try/catch.
 - **What happened:** Invalid or empty body throws an unwrapped SyntaxError; surfaces as Hono's default 500/400, not the documented `{ error: { code: 'INVALID_BODY' }, 422 }`.
@@ -229,7 +233,7 @@ After the three BLOCKER fixes in `977c364`, a full `/code-review --base=main --e
 - **Suggested fix:** Copy the try/catch + HTTPError pattern from `routes/comments.ts:146-150` at all 4 sites.
 - **Test that should pin it:** integration tests for each of the 4 sites posting `''` and `'{title:}'`; assert 422 `INVALID_BODY`.
 
-### BUG-020 [TIER 3 / UX] — Optimistic comment id collision + bad parentId/projectId — **OPEN**
+### BUG-020 [TIER 3 / UX] — Optimistic comment id collision + bad parentId/projectId — **RESOLVED**
 
 - **Where:** `apps/web/src/lib/api/comments.ts:141-147`
 - **What happened:** Optimistic create sets `id` AND `slug` to `optimistic-${Date.now()}`. Two creates in the same millisecond (automation, Playwright double-click, agent batch) collide on React key. The optimistic object also sets `parentId: parentSlug` (a slug, not the parent's UUID), `projectId: ''`, and `workspaceId: ''` — any consumer reading those fields drops the optimistic row.
@@ -237,7 +241,7 @@ After the three BLOCKER fixes in `977c364`, a full `/code-review --base=main --e
 - **Suggested fix:** Use `crypto.randomUUID()` for the optimistic id/slug. Pass real parent UUID (the parent document is loaded in the slideover; that's the natural source). Pass `wsId`/`projectId` from the resolved hook scope or omit those fields from the optimistic row entirely.
 - **Test that should pin it:** Vitest test that fires two `useCreateComment.mutate` calls in the same tick, asserts no duplicate React key warnings.
 
-### BUG-021 [TIER 2 / correctness] — Bus filter drops workspace events for `?project=` subs — **OPEN**
+### BUG-021 [TIER 2 / correctness] — Bus filter drops workspace events for `?project=` subs — **RESOLVED**
 
 - **Where:** `apps/server/src/lib/event-bus.ts:44` (live filter); same shape in `apps/server/src/routes/events.ts:124` (replay loop).
 - **What happened:** `if (sub.filter?.projectId !== undefined && sub.filter.projectId !== e.projectId) continue;` — a subscriber with `?project=X` does NOT receive workspace-level events (`projectId: null`).
@@ -315,11 +319,26 @@ NICE-TO-HAVE (5): drop dead `agentSlug` from `AuthorContext`; explicit IMMEDIATE
 
 ## Fix Log
 
-| Bug | Attempts | Root Cause | Fix | Re-sweep |
-|-----|----------|-----------|-----|----------|
-| BUG-001 | 1 | Lock compared key presence, not value diff | `services/documents.ts` → value-diff lock; regression test | PASS |
-| BUG-005 | 1 | `assertAgentAllowListWidening` didn't gate `tools` field; child token minted via `toolsToScopes` inherited extra scopes | `lib/agent-guards.ts` new `assertAgentToolsWidening`; wired into 4 entrypoints; MCP error rethrow; 4 regression tests | PASS |
-| BUG-006 | 1 | 100ms-poll on idle SSE connections | `routes/events.ts` event-driven `wake()` / `waiter` promise pair | PASS (live + 17 SSE unit tests) |
+| Bug | Tier | Commit | Root Cause | Fix Summary | Tests |
+|-----|------|--------|-----------|-------------|-------|
+| BUG-001 | BLOCKER | (shake-out) | Lock compared key presence, not value diff | services/documents.ts → value-diff lock | regression in documents.test |
+| BUG-005 | BLOCKER | (shake-out) | `tools` field ungated by widening guard | New `assertAgentToolsWidening`; wired into 4 entrypoints | 4 regression tests |
+| BUG-006 | BLOCKER | (shake-out) | 100ms-poll on idle SSE connections | Event-driven `wake()`/`waiter` promise | 17 SSE tests still pass |
+| BUG-007 | TIER 1 | `fd4ced2` | Token presets bundled `agents:write` silently | Drop from both `Read+write` + `Full access` presets | 4 web tests updated/added |
+| BUG-008 | TIER 1 | `81f77ce` | Backfill used raw `db.transaction`; emitEvent fallback published ghost events on rollback | Swap to `txWithEvents` | 1 script test |
+| BUG-009 | TIER 1 | `907be93` | TOKEN_RE walked raw body; mentions in code/quotes triggered approval semantics | Pre-mask fenced code, inline code, blockquote lines | 6 mention-parser tests |
+| BUG-010 | TIER 1 | `07aa1df` | Recursive CTE cascade emitted no per-row events | Walk descendants in TS + fan out `comment.deleted` / `document.deleted` per row | 1 service test |
+| BUG-011 | TIER 1 | `bf05c50` | `assertAuthor` ran before idempotency guard → 403 vs 200 leaked authorship | Reorder: idempotency first | 1 service test |
+| BUG-014 | TIER 1 | `d8abc6a` | innerHTML escape only handled `<` | Extracted `resetEditorContent` helper using createElement+createTextNode | 6 web tests |
+| BUG-012 | TIER 2 | `5ad89c3` | Visibility matched on slug only; renamed agents lost assignments | Match `payload.agent_id === ctx.agentId` first, slug as fallback | 3 visibility tests |
+| BUG-013 | TIER 2 | `2ab55e8` | `target_agent` slug-only; renames orphaned approvals | New `target_agent_id` field + migration 0011 backfill + service plumbing | 3 service + 8 migration tests |
+| BUG-015 | TIER 2 | `6a48a27` | 0009 migration comment promised an AFTER INSERT trigger that doesn't exist | Delete the misleading promise; document direct inserts unsupported | comment-only |
+| BUG-016 | TIER 2 | `3b920e3` | Trigger PATCH validator stripped cross-field refine | Re-validate merged frontmatter on triggers; reject INVALID_PATCH if neither schedule nor on_event set | 3 service tests |
+| BUG-017 | TIER 2 | `2acd734` | Edit/delete `finally` closed editor regardless of outcome | Move close into success branch | 2 web tests |
+| BUG-021 | TIER 2 | `dee03ef` | `?project=X` subs dropped workspace-level events | Loosen filter so projectId=null transcends scope (bus + replay) | 1 bus test |
+| BUG-018 | TIER 3 | `82992da` | listWorkspaceDocuments parsed projects directly; legacy rows dropped | Route through `resolveAgentProjects` (also fix vocabulary in projects.ts cascade) | 1 route test |
+| BUG-019 | TIER 3 | `cd01442` | Bare `c.req.json()` → 500 on bad body | try/catch + HTTPError at 4 sites | 2 route tests |
+| BUG-020 | TIER 3 | `b0d8c0d` | `optimistic-${Date.now()}` collided on same-tick double mutate | Use `crypto.randomUUID()` for id + slug | 1 hook test |
 
 ---
 
@@ -327,15 +346,24 @@ NICE-TO-HAVE (5): drop dead `agentSlug` from `AuthorContext`; explicit IMMEDIATE
 
 **Resolved (2026-05-27 shake-out session):** 3 BLOCKERs (BUG-001, BUG-005, BUG-006) — committed as `977c364`.
 
-**Open from shake-out cluster:** BUG-002 (MCP create_agent slug), BUG-003 (Milkdown teardown — intermittent), BUG-004 (web bundle — DEFER to Phase 7).
+**Resolved (2026-05-27 code-review fix session):** 15 findings (BUG-007 through BUG-021) — committed as `fd4ced2`..`b0d8c0d` (15 atomic commits, each w/ failing-test-first → fix → re-run pattern).
 
-**Open from code-review pass (2026-05-27):** 15 findings BUG-007..BUG-021, tiered.
-- **Tier 1 (must-fix before merge):** BUG-007, BUG-008, BUG-009, BUG-010, BUG-011, BUG-014 — 6 findings, all security or data integrity exploits.
-- **Tier 2 (correctness / data wrong):** BUG-012, BUG-013, BUG-015, BUG-016, BUG-017, BUG-021 — 6 findings.
-- **Tier 3 (cleanup):** BUG-018, BUG-019, BUG-020 — 3 findings.
+**Open from shake-out cluster (not in this session's scope):**
+- BUG-002 (MCP `create_agent` slug schema mismatch) — IMPORTANT, OPEN.
+- BUG-003 (Milkdown teardown — intermittent jsdom) — MINOR, OPEN.
+- BUG-004 (web bundle 1.7MB raw — DEFER to Phase 7) — MINOR, OPEN.
 
-**Reviewer backlog (non-blocking):** 23 SHOULD-FIX + 24 NICE-TO-HAVE from the four shake-out reviewer agents (see "Reviewer backlog" section below).
+**Reviewer backlog (non-blocking):** 23 SHOULD-FIX + 24 NICE-TO-HAVE from the four shake-out reviewer agents (see "Reviewer backlog" section). Untouched in this session.
 
-**Test totals after the 3 shake-out fixes (current):** server 495 / web 537 / shared 46 / scripts 6 / Playwright 28 — all green; server + web typecheck clean.
+**Test totals after all 18 fixes (3 BLOCKER + 15 code-review):**
+- Server **524 / 1-skip / 0-fail** (was 495 at end of shake-out; +29 from new regression tests + the 8 migration 0011 tests).
+- Web **547 / 8-skip / 0-fail** (was 537; +10 from BUG-007/014/017/020 tests).
+- Shared **46 / 0-fail** (unchanged).
+- Scripts (backfill) **7 / 0-fail** (was 6; +1 from BUG-008).
+- Playwright not re-run in this session — Tier 1 + 2 + 3 changes are server-side or web unit-scope, no e2e flow touched.
 
-**Recommended next session:** Work BUG-007..BUG-021 in tier order via `superpowers:systematic-debugging`. Each TIER 1 fix gets its own commit (atomic, individually revertable like BUG-001/005/006). After all TIER 1 + TIER 2 land, re-run `/code-review --base=main --effort=high --comment` against a PR for a final inline pass. Then `superpowers:finishing-a-development-branch` to merge.
+**Recommended next session:**
+1. Re-run `bun run e2e` to verify Playwright still 28/0 after the cascade/visibility/PATCH-validation changes.
+2. (Optional, polish) Wire BUG-002 + BUG-003 + a couple SHOULD-FIX simplicity wins from the reviewer backlog.
+3. `/code-review --base=main --effort=high --comment` for a final inline pass on the now-much-larger diff.
+4. `superpowers:finishing-a-development-branch` to merge `--no-ff` into main.
