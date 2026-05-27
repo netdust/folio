@@ -539,6 +539,14 @@ const TOOLS: ToolDef[] = [
           { reason: 'agent_lifecycle_via_http_only' },
         );
       }
+      // F5: comments must go through update_comment so the author-only guard
+      // + soft-delete + kind-immutable invariants apply.
+      if (existing.type === 'comment') {
+        throw mcpInvalidParams(
+          'comment documents must be mutated via the update_comment tool',
+          { reason: 'comment_requires_comment_tool' },
+        );
+      }
 
       // For work_item patches, surface a fallback table only if the doc has
       // none (legacy rows). The service tolerates `null` here for non-work_item
@@ -603,6 +611,13 @@ const TOOLS: ToolDef[] = [
         throw mcpInvalidParams(
           `${existing.type} documents cannot be deleted via MCP in Phase 2.5; use DELETE /api/v1/w/:wslug/documents/${slug}`,
           { reason: 'agent_lifecycle_via_http_only' },
+        );
+      }
+      // F5: comments must go through delete_comment (soft-delete + author guard).
+      if (existing.type === 'comment') {
+        throw mcpInvalidParams(
+          'comment documents must be deleted via the delete_comment tool',
+          { reason: 'comment_requires_comment_tool' },
         );
       }
       await deleteDocument({

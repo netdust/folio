@@ -35,7 +35,7 @@ import type {
   Workspace,
 } from '../db/schema.ts';
 import { HTTPError } from '../lib/http.ts';
-import { emitEvent } from '../lib/events.ts';
+import { emitEvent, txWithEvents } from '../lib/events.ts';
 import {
   commentFrontmatterSchema,
   type CommentKind,
@@ -305,7 +305,7 @@ export async function createComment(input: CreateCommentInput): Promise<Document
     updatedAt: createdAt,
   };
 
-  await db.transaction(async (tx) => {
+  await txWithEvents(db, async (tx) => {
     await tx.insert(documents).values(row);
 
     // comment.created — always.
@@ -443,7 +443,7 @@ export async function updateComment(input: UpdateCommentInput): Promise<Document
     updatedAt: new Date(),
   };
 
-  await db.transaction(async (tx) => {
+  await txWithEvents(db, async (tx) => {
     await tx.update(documents).set(updated).where(eq(documents.id, existing.id));
 
     // No comment.updated event per spec. Only fresh comment.mentioned for newly
@@ -501,7 +501,7 @@ export async function deleteComment(input: DeleteCommentInput): Promise<Document
     updatedAt: new Date(),
   };
 
-  await db.transaction(async (tx) => {
+  await txWithEvents(db, async (tx) => {
     await tx.update(documents).set(updated).where(eq(documents.id, existing.id));
     await emitEvent(tx, {
       workspaceId: ws.id,

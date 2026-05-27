@@ -496,3 +496,101 @@ test('Bearer narrowed to other project → 403 FORBIDDEN_RESOURCE', async () => 
   expect(res.status).toBe(403);
   expect((await res.json()).error.code).toBe('FORBIDDEN_RESOURCE');
 });
+
+// -----------------------------------------------------------------------------
+// F4 — REST single-comment routes must verify the slug belongs to :pslug.
+//
+// getComment() looks up by (workspace, slug, type='comment') only. Without an
+// extra check, anyone with access to project A can read/edit/delete a comment
+// that actually lives in project B by addressing it through project A's URL.
+// The MCP variants at routes/mcp.ts:887 already do this; the REST handlers
+// did not until this fix.
+// -----------------------------------------------------------------------------
+
+async function seedSecondProject(workspaceId: string): Promise<{ id: string; slug: string }> {
+  const { nanoid } = await import('nanoid');
+  const { db } = await import('../db/client.ts');
+  const { projects } = await import('../db/schema.ts');
+  const id = nanoid();
+  const slug = 'projb';
+  await db.insert(projects).values({ id, workspaceId, slug, name: 'Project B' });
+  return { id, slug };
+}
+
+test('F4: GET /comments/:slug 404s when slug belongs to a different project than the URL', async () => {
+  const { app, seed } = await makeTestApp();
+  await seedSecondProject(seed.workspace.id);
+
+  // Create the comment in project A (the seeded one — slug 'web').
+  const parent = await createParent(app, seed.sessionCookie, 'P-A');
+  const createRes = await app.request(parentPath(parent), {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ body: 'belongs to project A' }),
+  });
+  const created = (await createRes.json()).data as { slug: string };
+
+  // Try to read it through project B's URL.
+  const res = await app.request(`/api/v1/w/acme/p/projb/comments/${created.slug}`, {
+    headers: { Cookie: seed.sessionCookie },
+  });
+  expect(res.status).toBe(404);
+  expect((await res.json()).error.code).toBe('NOT_FOUND');
+});
+
+test('F4: PATCH /comments/:slug 404s when slug belongs to a different project', async () => {
+  const { app, seed } = await makeTestApp();
+  await seedSecondProject(seed.workspace.id);
+
+  const parent = await createParent(app, seed.sessionCookie, 'P-A');
+  const createRes = await app.request(parentPath(parent), {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ body: 'A-only' }),
+  });
+  const created = (await createRes.json()).data as { slug: string };
+
+  const res = await app.request(`/api/v1/w/acme/p/projb/comments/${created.slug}`, {
+    method: 'PATCH',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ body: 'tampered through wrong project' }),
+  });
+  expect(res.status).toBe(404);
+  expect((await res.json()).error.code).toBe('NOT_FOUND');
+});
+
+test('F4: DELETE /comments/:slug 404s when slug belongs to a different project', async () => {
+  const { app, seed } = await makeTestApp();
+  await seedSecondProject(seed.workspace.id);
+
+  const parent = await createParent(app, seed.sessionCookie, 'P-A');
+  const createRes = await app.request(parentPath(parent), {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ body: 'A-only' }),
+  });
+  const created = (await createRes.json()).data as { slug: string };
+
+  const res = await app.request(`/api/v1/w/acme/p/projb/comments/${created.slug}`, {
+    method: 'DELETE',
+    headers: { Cookie: seed.sessionCookie },
+  });
+  expect(res.status).toBe(404);
+  expect((await res.json()).error.code).toBe('NOT_FOUND');
+});
+
+test('F4: GET /comments/:slug still works when slug belongs to the URL project', async () => {
+  const { app, seed } = await makeTestApp();
+  const parent = await createParent(app, seed.sessionCookie, 'P-A');
+  const createRes = await app.request(parentPath(parent), {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ body: 'same-project' }),
+  });
+  const created = (await createRes.json()).data as { slug: string };
+
+  const res = await app.request(itemPath(created.slug), {
+    headers: { Cookie: seed.sessionCookie },
+  });
+  expect(res.status).toBe(200);
+});

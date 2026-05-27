@@ -33,7 +33,7 @@ import type {
   Workspace,
 } from '../db/schema.ts';
 import { HTTPError } from '../lib/http.ts';
-import { emitEvent } from '../lib/events.ts';
+import { emitEvent, txWithEvents } from '../lib/events.ts';
 import { agentFrontmatterSchema, toolsToScopes } from '../lib/agent-schema.ts';
 import { triggerFrontmatterSchema } from '../lib/trigger-schema.ts';
 import { newApiToken } from '../lib/auth.ts';
@@ -436,7 +436,7 @@ export async function createDocument(
     }
   }
 
-  await db.transaction(async (tx) => {
+  await txWithEvents(db, async (tx) => {
     await tx.insert(documents).values(row);
     if (input.type === 'agent' && agentApiTokenId && agentTokenHash) {
       const tools = (input.frontmatter as { tools: string[] }).tools;
@@ -620,7 +620,7 @@ export async function updateDocument(
     updatedAt: new Date(),
   };
 
-  await db.transaction(async (tx) => {
+  await txWithEvents(db, async (tx) => {
     await tx.update(documents).set(updated).where(eq(documents.id, existing.id));
     await emitEvent(tx, {
       workspaceId: ws.id,
@@ -686,7 +686,7 @@ export async function deleteDocument(args: DeleteDocumentArgs): Promise<void> {
     );
   }
 
-  await db.transaction(async (tx) => {
+  await txWithEvents(db, async (tx) => {
     // Agents: api_tokens.agent_id ON DELETE CASCADE handles token revocation.
     // The explicit Phase 2 cleanup (delete by api_token_id from frontmatter)
     // is now redundant but harmless if any rows pre-date the cascade FK.

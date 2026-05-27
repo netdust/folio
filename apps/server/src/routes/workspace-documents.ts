@@ -10,7 +10,7 @@ import { Hono } from 'hono';
 import { documentCreateSchema, documentPatchSchema } from '@folio/shared';
 import { db } from '../db/client.ts';
 import { documents, events } from '../db/schema.ts';
-import { emitEvent } from '../lib/events.ts';
+import { emitEvent, txWithEvents } from '../lib/events.ts';
 import {
   assertAgentAllowListWidening,
   assertAgentScope,
@@ -198,7 +198,7 @@ workspaceDocumentsRoute.post('/:slug/activity', requireScope('documents:write'),
   }
 
   const now = new Date();
-  await db.transaction(async (tx) => {
+  await txWithEvents(db, async (tx) => {
     // Bump updatedAt + lastTouchedAt so the agent surfaces in recency sorts.
     await tx
       .update(documents)

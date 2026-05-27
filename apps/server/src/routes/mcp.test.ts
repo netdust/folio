@@ -1313,3 +1313,78 @@ test('MCP get_agent_self with a human PAT returns -32602 no_agent_bound_to_token
   expect(body.error.code).toBe(-32602);
   expect(body.error.data?.reason).toBe('no_agent_bound_to_token');
 });
+
+// ---------------------------------------------------------------------------
+// F5 — MCP update_document / delete_document must NOT operate on comments.
+//
+// Comments live in `documents` with type='comment'. The generic doc tools
+// previously only blocked agent/trigger, so any documents:write/delete token
+// could bypass the comment author-only guard + soft-delete semantics.
+// ---------------------------------------------------------------------------
+
+test('F5: MCP update_document rejects type=comment (must use update_comment)', async () => {
+  const { app, seed } = await makeTestApp();
+  const token = await setupToken(seed.workspace.id, seed.user.id, [
+    'documents:write',
+    'documents:read',
+  ]);
+
+  // Create a parent + comment via the proper REST path.
+  const parentRes = await app.request('/api/v1/w/acme/p/web/documents', {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: 'work_item', title: 'Parent' }),
+  });
+  const parent = (await parentRes.json()).data as { slug: string };
+  const commentRes = await app.request(`/api/v1/w/acme/p/web/documents/${parent.slug}/comments`, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ body: 'original' }),
+  });
+  const comment = (await commentRes.json()).data as { slug: string };
+
+  // Try to update via generic MCP tool.
+  const res = await callTool(app, token, 'update_document', {
+    workspace_slug: 'acme',
+    project_slug: 'web',
+    slug: comment.slug,
+    body: 'tampered through generic tool',
+  });
+  const body = (await res.json()) as {
+    error?: { code: number; data?: { reason: string } };
+  };
+  expect(body.error).toBeDefined();
+  expect(body.error?.data?.reason).toBe('comment_requires_comment_tool');
+});
+
+test('F5: MCP delete_document rejects type=comment (must use delete_comment)', async () => {
+  const { app, seed } = await makeTestApp();
+  const token = await setupToken(seed.workspace.id, seed.user.id, [
+    'documents:delete',
+    'documents:read',
+  ]);
+
+  const parentRes = await app.request('/api/v1/w/acme/p/web/documents', {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: 'work_item', title: 'Parent' }),
+  });
+  const parent = (await parentRes.json()).data as { slug: string };
+  const commentRes = await app.request(`/api/v1/w/acme/p/web/documents/${parent.slug}/comments`, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ body: 'to keep' }),
+  });
+  const comment = (await commentRes.json()).data as { slug: string };
+
+  const res = await callTool(app, token, 'delete_document', {
+    workspace_slug: 'acme',
+    project_slug: 'web',
+    slug: comment.slug,
+  });
+  const body = (await res.json()) as {
+    error?: { code: number; data?: { reason: string } };
+  };
+  expect(body.error).toBeDefined();
+  expect(body.error?.data?.reason).toBe('comment_requires_comment_tool');
+});

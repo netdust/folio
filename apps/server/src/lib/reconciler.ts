@@ -23,7 +23,7 @@
 import { and, eq, inArray } from 'drizzle-orm';
 import type { DB } from '../db/client.ts';
 import { documents, projects } from '../db/schema.ts';
-import { emitEvent } from './events.ts';
+import { emitEvent, txWithEvents } from './events.ts';
 
 export interface ReconcileOptions {
   onEvent?: (event: {
@@ -77,7 +77,7 @@ export async function reconcileAllowLists(
     const removed = idStrs.filter((id) => !liveSet.has(id));
     if (removed.length === 0) continue;
 
-    await db.transaction(async (tx) => {
+    await txWithEvents(db, async (tx) => {
       await tx
         .update(documents)
         .set({

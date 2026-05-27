@@ -7,7 +7,7 @@ import { z } from 'zod';
 import { db } from '../db/client.ts';
 import { memberships, workspaces } from '../db/schema.ts';
 import { seedBuiltinTriggers } from '../lib/builtin-triggers.ts';
-import { emitEvent } from '../lib/events.ts';
+import { emitEvent, txWithEvents } from '../lib/events.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
 import { slugUniqueInWorkspaces } from '../lib/slug-unique.ts';
 import { listWorkspaces } from '../services/workspaces.ts';
@@ -55,7 +55,7 @@ workspacesRoute.post(
       slug = await slugUniqueInWorkspaces(db, baseSlug || 'workspace');
     }
 
-    await db.transaction(async (tx) => {
+    await txWithEvents(db, async (tx) => {
       await tx.insert(workspaces).values({ id, slug, name });
       await tx.insert(memberships).values({ workspaceId: id, userId: user.id, role: 'owner' });
       // Phase 2.6 sub-phase D — seed the 4 builtin triggers transactionally
@@ -89,7 +89,7 @@ workspaceItemRoute.patch(
     const { name } = c.req.valid('json');
     const user = getUser(c);
     const now = new Date();
-    await db.transaction(async (tx) => {
+    await txWithEvents(db, async (tx) => {
       await tx.update(workspaces).set({ name, updatedAt: now }).where(eq(workspaces.id, ws.id));
       await emitEvent(tx, {
         workspaceId: ws.id,

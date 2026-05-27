@@ -2,7 +2,8 @@ import { test, expect } from 'bun:test';
 import { eq } from 'drizzle-orm';
 import { makeTestApp } from '../test/harness.ts';
 import { events } from '../db/schema.ts';
-import { emitEvent } from './events.ts';
+import { emitEvent, txWithEvents } from './events.ts';
+import { eventBus, type BusEvent } from './event-bus.ts';
 
 test('emitEvent inserts row with correct fields', async () => {
   const { db, seed } = await makeTestApp();
@@ -84,4 +85,88 @@ test('emitEvent accepts agent.allow_list.reconciled kind', async () => {
   const rows = await db.select().from(events).where(eq(events.workspaceId, seed.workspace.id));
   expect(rows).toHaveLength(1);
   expect(rows[0]!.kind).toBe('agent.allow_list.reconciled');
+});
+
+// ---------------------------------------------------------------------------
+// F6 — txWithEvents defers bus publish until the tx commits.
+// On rollback, the row is gone AND the bus publish must not fire.
+// ---------------------------------------------------------------------------
+
+/** Spy on eventBus.publish, capture published events into the returned array. */
+function spyPublish(): { events: BusEvent[]; restore: () => void } {
+  const captured: BusEvent[] = [];
+  const orig = eventBus.publish.bind(eventBus);
+  eventBus.publish = (e: BusEvent) => {
+    captured.push(e);
+    return orig(e);
+  };
+  return { events: captured, restore: () => { eventBus.publish = orig; } };
+}
+
+test('F6: txWithEvents publishes only AFTER the tx commits', async () => {
+  const { db, seed } = await makeTestApp();
+  const spy = spyPublish();
+  try {
+    await txWithEvents(db, async (tx) => {
+      await emitEvent(tx, {
+        workspaceId: seed.workspace.id,
+        kind: 'workspace.updated',
+        actor: seed.user.id,
+      });
+      // Inside the tx, the bus has NOT been published yet.
+      expect(spy.events).toHaveLength(0);
+    });
+    // After commit, the publish fires.
+    expect(spy.events).toHaveLength(1);
+    expect(spy.events[0]!.kind).toBe('workspace.updated');
+  } finally {
+    spy.restore();
+  }
+});
+
+test('F6: txWithEvents discards pending publishes when the tx body throws', async () => {
+  // Note: bun-sqlite has a pre-existing quirk where async throws inside
+  // db.transaction don't roll back the underlying SQL row. That's tracked
+  // separately. For F6, what matters is that the BUS PUBLISH is suppressed —
+  // i.e. SSE subscribers don't see phantom events. Without that, the row
+  // could be there or not depending on the driver, but at minimum the bus
+  // event must not fire.
+  const { db, seed } = await makeTestApp();
+  const spy = spyPublish();
+  try {
+    let thrown: Error | null = null;
+    try {
+      await txWithEvents(db, async (tx) => {
+        await emitEvent(tx, {
+          workspaceId: seed.workspace.id,
+          kind: 'workspace.updated',
+          actor: seed.user.id,
+        });
+        throw new Error('forced rollback');
+      });
+    } catch (err) {
+      thrown = err as Error;
+    }
+    expect(thrown?.message).toBe('forced rollback');
+    // The bus event MUST NOT fire — this is what F6 is about.
+    expect(spy.events).toHaveLength(0);
+  } finally {
+    spy.restore();
+  }
+});
+
+test('F6: emitEvent(db, ...) outside a transaction still publishes inline (legacy)', async () => {
+  // Used by events.test.ts itself + any one-shot emit without a tx.
+  const { db, seed } = await makeTestApp();
+  const spy = spyPublish();
+  try {
+    await emitEvent(db, {
+      workspaceId: seed.workspace.id,
+      kind: 'workspace.updated',
+      actor: seed.user.id,
+    });
+    expect(spy.events).toHaveLength(1);
+  } finally {
+    spy.restore();
+  }
 });

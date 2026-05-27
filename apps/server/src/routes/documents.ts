@@ -7,7 +7,7 @@ import {
 import { db } from '../db/client.ts';
 import { documents, events, statuses } from '../db/schema.ts';
 import { jsonOk, HTTPError } from '../lib/http.ts';
-import { emitEvent } from '../lib/events.ts';
+import { emitEvent, txWithEvents } from '../lib/events.ts';
 import { parseMarkdown, serializeMarkdown } from '../lib/frontmatter.ts';
 import { type AuthContext, getUser } from '../middleware/auth.ts';
 import { requireScope } from '../middleware/bearer.ts';
@@ -248,7 +248,7 @@ documentsRoute.patch('/:slug', requireScope('documents:write'), async (c) => {
       updatedBy: user.id,
       updatedAt: new Date(),
     };
-    await db.transaction(async (tx) => {
+    await txWithEvents(db, async (tx) => {
       await tx.update(documents).set(updated).where(eq(documents.id, existing.id));
       await emitEvent(tx, {
         workspaceId: ws.id, projectId: p.id, documentId: existing.id,
@@ -323,7 +323,7 @@ documentsRoute.post('/:slug/activity', requireScope('documents:write'), async (c
   if (!existing) throw new HTTPError('DOCUMENT_NOT_FOUND', `document "${slug}" not found`, 404);
 
   const now = new Date();
-  await db.transaction(async (tx) => {
+  await txWithEvents(db, async (tx) => {
     // Bump updatedAt as well as lastTouchedAt so the doc surfaces in the
     // list's `updated_at desc` sort — that's the user's mental model when
     // they log activity: "I just worked on this, it should be at the top."
