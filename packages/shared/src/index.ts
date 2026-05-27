@@ -39,3 +39,4 @@ export {
   type Operator,
 } from './filter-compile.ts';
 export { nextFires, validateCronShape, type CronShapeResult } from './cron.ts';
+export { type EventKind, KNOWN_EVENT_KINDS } from './events.ts';

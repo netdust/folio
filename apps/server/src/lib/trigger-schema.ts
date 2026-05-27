@@ -1,24 +1,8 @@
 import { z } from 'zod';
-import { validateCronShape, type CronShapeResult } from '@folio/shared';
-import type { EventKind } from './events.ts';
+import { validateCronShape, type CronShapeResult, KNOWN_EVENT_KINDS } from '@folio/shared';
 
 // Re-export so existing server imports (`from './trigger-schema.ts'`) stay stable.
-export { validateCronShape, type CronShapeResult };
-
-/** Source-of-truth list. Keep in sync with EventKind in events.ts. */
-export const KNOWN_EVENT_KINDS: readonly EventKind[] = [
-  'document.created', 'document.updated', 'document.deleted',
-  'status.created',   'status.updated',   'status.deleted',
-  'field.created',    'field.updated',    'field.deleted',
-  'view.created',     'view.updated',     'view.deleted',
-  'table.created',    'table.updated',    'table.deleted',
-  'project.created',  'project.updated',  'project.deleted',
-  'workspace.created','workspace.updated',
-  'activity.logged',
-  'agent.created',    'agent.deleted',   'agent.task.assigned',
-  'comment.created',  'comment.mentioned', 'comment.deleted',
-  'agent.allow_list.reconciled',
-];
+export { validateCronShape, type CronShapeResult, KNOWN_EVENT_KINDS };
 
 const cronOrNull = z.union([
   z.string().refine((s) => validateCronShape(s).ok, { message: 'invalid cron expression' }),

@@ -1,20 +1,14 @@
 import { nanoid } from 'nanoid';
+import type { EventKind } from '@folio/shared';
 import { events } from '../db/schema.ts';
 import type { DB } from '../db/client.ts';
 import { eventBus } from './event-bus.ts';
 
-export type EventKind =
-  | 'document.created' | 'document.updated' | 'document.deleted'
-  | 'status.created'   | 'status.updated'   | 'status.deleted'
-  | 'field.created'    | 'field.updated'    | 'field.deleted'
-  | 'view.created'     | 'view.updated'     | 'view.deleted'
-  | 'table.created'    | 'table.updated'    | 'table.deleted'
-  | 'project.created'  | 'project.updated'  | 'project.deleted'
-  | 'workspace.created' | 'workspace.updated'
-  | 'activity.logged'
-  | 'agent.created'    | 'agent.deleted'   | 'agent.task.assigned'
-  | 'comment.created'  | 'comment.mentioned' | 'comment.deleted'
-  | 'agent.allow_list.reconciled';
+// Phase 2.6 sub-phase D: EventKind moved to @folio/shared so the web UI can
+// import it (TriggerForm needs the same union). Re-exported here for source
+// compatibility with the many server callers that import EventKind from this
+// module.
+export type { EventKind };
 
 export interface EmitArgs {
   workspaceId: string;
