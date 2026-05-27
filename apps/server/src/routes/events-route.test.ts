@@ -45,12 +45,10 @@ async function withSubscribeSpy<T>(
 ): Promise<T> {
   const origSubscribe = eventBus.subscribe.bind(eventBus);
   const captured = { filter: undefined as unknown };
-  // @ts-expect-error — spy: capture filter arg then delegate to real impl
-  eventBus.subscribe = (wsId: string, filter: unknown, handler: unknown) => {
+  eventBus.subscribe = ((wsId: string, filter: unknown, handler: unknown) => {
     captured.filter = filter;
-    // @ts-expect-error
-    return origSubscribe(wsId, filter, handler);
-  };
+    return (origSubscribe as (a: string, b: unknown, c: unknown) => unknown)(wsId, filter, handler);
+  }) as typeof eventBus.subscribe;
   try {
     return await body(captured);
   } finally {

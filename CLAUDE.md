@@ -93,11 +93,12 @@ folio/
 
 ## How to Work in This Repo
 
-1. Read this file. Read `@docs/PHASES.md` to see what phase you're in and which task is next.
-2. Pick the next unchecked task. Plan briefly, then implement.
-3. Run tests before committing: `bun test`.
-4. Commit atomically per task. Update `@docs/PHASES.md` to check the box.
-5. When you learn something worth remembering across sessions (gotcha, dependency quirk, decision rationale), write it to `.claude/memory/notes.md`.
+1. **At session start, load the `ntdst-execute-with-tests` skill** (via the Skill tool). It wraps `superpowers:executing-plans` and `superpowers:subagent-driven-development` with the mandatory testing-workflow gates this harness requires for any plan execution. Required for any non-trivial work in this repo.
+2. Read this file. Read `@docs/PHASES.md` to see what phase you're in and which task is next.
+3. Pick the next unchecked task. Plan briefly, then implement.
+4. Run tests before committing: `bun test`.
+5. Commit atomically per task. Update `@docs/PHASES.md` to check the box.
+6. When you learn something worth remembering across sessions (gotcha, dependency quirk, decision rationale), write it to `.claude/memory/notes.md`.
 
 ## Build & Run
 

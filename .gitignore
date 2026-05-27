@@ -17,3 +17,5 @@ folio.tar.gz
 playwright-report/
 test-results/
 .playwright/
+
+.claude/.last-integration

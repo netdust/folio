@@ -163,8 +163,9 @@ test('POST emits comment.created in the events log', async () => {
     where: eq(events.kind, 'comment.created'),
   });
   expect(rows.length).toBe(1);
-  expect(rows[0].actor).toBe(seed.user.id);
-  const payload = rows[0].payload as Record<string, unknown>;
+  const row = rows[0]!;
+  expect(row.actor).toBe(seed.user.id);
+  const payload = row.payload as Record<string, unknown>;
   expect(payload.kind).toBe('comment');
   expect(payload.author).toBe(`user:${seed.user.id}`);
   expect(typeof payload.parent_id).toBe('string');
