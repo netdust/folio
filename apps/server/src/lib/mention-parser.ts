@@ -32,7 +32,7 @@ const POS1_ADJACENCY_ALLOW = new Set([
 
 export interface ParseMentionsInput {
   body: string;
-  workspaceAgents: { id: string; slug: string; allowedProjectIds: string[] | ['*'] }[];
+  workspaceAgents: { id: string; slug: string; allowedProjectIds: string[] }[];
   workspaceMembers: { id: string; email: string }[];
   currentProjectId: string;
 }
@@ -62,6 +62,7 @@ export function parseMentions(input: ParseMentionsInput): ParseMentionsResult {
   // Pass 1: tokenise and resolve.
   for (const match of body.matchAll(TOKEN_RE)) {
     const slug = match[1];
+    if (slug === undefined) continue; // TOKEN_RE always has capture group 1; defensive.
     const endOffset = (match.index ?? 0) + match[0].length;
     const agentTarget = `agent:${slug}`;
     const userTarget = `user:${slug}`;
@@ -70,7 +71,7 @@ export function parseMentions(input: ParseMentionsInput): ParseMentionsResult {
     const agent = workspaceAgents.find((a) => a.slug === slug);
     if (agent) {
       const inAllowList =
-        agent.allowedProjectIds[0] === '*' || agent.allowedProjectIds.includes(currentProjectId);
+        agent.allowedProjectIds.includes('*') || agent.allowedProjectIds.includes(currentProjectId);
 
       if (inAllowList) {
         if (!seen.has(agentTarget)) {
@@ -98,12 +99,13 @@ export function parseMentions(input: ParseMentionsInput): ParseMentionsResult {
     // Attempt member resolution by email localpart.
     const memberMatches = workspaceMembers.filter((m) => m.email.split('@')[0] === slug);
     if (memberMatches.length === 1) {
-      const target = `user:${memberMatches[0].id}`;
+      const m = memberMatches[0]!; // length===1 ensures defined
+      const target = `user:${m.id}`;
       if (!seen.has(target)) {
         mentions.push({
           target,
           resolved: true,
-          resolvedId: memberMatches[0].id,
+          resolvedId: m.id,
           resolvedType: 'user',
         });
         seen.add(target);
@@ -131,8 +133,9 @@ export function parseMentions(input: ParseMentionsInput): ParseMentionsResult {
     const pos1 = nextTokens[0];
     if (pos1) {
       const m = pos1.match(KEYWORD_RE);
-      if (m) {
-        const kind = m[1].toLowerCase() === 'approved' ? 'approval' : 'rejection';
+      const kw = m?.[1];
+      if (kw) {
+        const kind = kw.toLowerCase() === 'approved' ? 'approval' : 'rejection';
         approvalIntent = { kind, targetAgent: hit.slug, targetAgentId: hit.agentId };
       }
     }
@@ -142,12 +145,16 @@ export function parseMentions(input: ParseMentionsInput): ParseMentionsResult {
     // from "@agent looks approved" (no match).
     if (!approvalIntent && nextTokens.length === 2) {
       const pos2 = nextTokens[1];
-      const pos1Clean = nextTokens[0].replace(/[.,!;:?]+$/, '').toLowerCase();
-      if (POS1_ADJACENCY_ALLOW.has(pos1Clean)) {
-        const m = pos2.match(KEYWORD_RE);
-        if (m) {
-          const kind = m[1].toLowerCase() === 'approved' ? 'approval' : 'rejection';
-          approvalIntent = { kind, targetAgent: hit.slug, targetAgentId: hit.agentId };
+      const pos1Raw = nextTokens[0];
+      if (pos2 && pos1Raw) {
+        const pos1Clean = pos1Raw.replace(/[.,!;:?]+$/, '').toLowerCase();
+        if (POS1_ADJACENCY_ALLOW.has(pos1Clean)) {
+          const m = pos2.match(KEYWORD_RE);
+          const kw = m?.[1];
+          if (kw) {
+            const kind = kw.toLowerCase() === 'approved' ? 'approval' : 'rejection';
+            approvalIntent = { kind, targetAgent: hit.slug, targetAgentId: hit.agentId };
+          }
         }
       }
     }

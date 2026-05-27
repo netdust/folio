@@ -127,6 +127,6 @@ describe('0007_phase_2_6_comments migration', () => {
       )
       .all() as { name: string }[];
     expect(indexes.length).toBe(1);
-    expect(indexes[0].name).toBe('documents_comments_idx');
+    expect(indexes[0]?.name).toBe('documents_comments_idx');
   });
 });

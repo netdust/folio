@@ -131,7 +131,7 @@ workspaceItemRoute.get('/members', async (c) => {
       if (!u) return null;
       return { id: u.id, email: u.email, name: u.name, role: r.role };
     })
-    .filter((m): m is { id: string; email: string; name: string; role: string } => m !== null);
+    .filter((m): m is NonNullable<typeof m> => m !== null);
   return jsonOk(c, { members });
 });
 

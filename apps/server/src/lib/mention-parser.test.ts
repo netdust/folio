@@ -45,7 +45,7 @@ describe('parseMentions', () => {
       currentProjectId: 'pr-other',
     });
     expect(r.mentions[0]).toMatchObject({ target: 'agent:drafter', resolved: false });
-    expect(r.mentions[0].resolvedId).toBeUndefined();
+    expect(r.mentions[0]?.resolvedId).toBeUndefined();
   });
 
   it('resolves member by email localpart, unresolved on ambiguity', () => {

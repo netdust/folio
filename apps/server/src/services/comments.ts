@@ -175,7 +175,7 @@ function assertAuthor(existing: Document, ctx: AuthorContext): void {
 interface AgentForParser {
   id: string;
   slug: string;
-  allowedProjectIds: string[] | ['*'];
+  allowedProjectIds: string[];
 }
 
 interface MemberForParser {
@@ -219,7 +219,7 @@ async function loadWorkspaceAgents(
     return {
       id: r.id,
       slug: r.slug,
-      allowedProjectIds: (allowed.includes('*') ? ['*'] : allowed) as string[] | ['*'],
+      allowedProjectIds: allowed.includes('*') ? ['*'] : allowed,
     };
   });
 }
