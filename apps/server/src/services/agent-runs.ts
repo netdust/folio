@@ -572,30 +572,40 @@ export async function listRuns(
  * succeeds (C-8). Claim alone is not yet a state worth broadcasting.
  */
 export async function claimNextPlanningRun(tx: DBOrTx): Promise<Document | null> {
-  const claimedAt = new Date().toISOString();
-  const rows = await tx.all<Document>(sql`
+  // Two timestamps from the same instant in two encodings: ISO for the
+  // JSON `worker_started_at` field (round-trips through json_set as text),
+  // ms-epoch for `documents.updated_at` (declared `integer(...
+  // mode:'timestamp_ms')`). Binding the ISO string into an INTEGER column
+  // would store it as TEXT due to SQLite affinity, breaking ORDER BY
+  // against the Drizzle-written `updatedAt: new Date()` rows.
+  const nowMs = Date.now();
+  const claimedAtIso = new Date(nowMs).toISOString();
+  const rows = await tx.all<{ id: string }>(sql`
     UPDATE documents
        SET frontmatter = json_set(
              frontmatter,
              '$.status', 'running',
-             '$.worker_started_at', ${claimedAt}
+             '$.worker_started_at', ${claimedAtIso}
            ),
            status = 'running',
-           updated_at = ${claimedAt}
+           updated_at = ${nowMs}
      WHERE id = (
        SELECT id FROM documents
         WHERE type = 'agent_run'
-          AND json_extract(frontmatter, '$.status') = 'planning'
+          AND status = 'planning'
         ORDER BY created_at ASC
         LIMIT 1
      )
-       AND json_extract(frontmatter, '$.status') = 'planning'
-     RETURNING *
+       AND status = 'planning'
+     RETURNING id
   `);
   if (rows.length === 0) return null;
-  // Re-read via the typed query so callers get the same row shape as the
-  // other helpers (Date columns parsed, frontmatter typed as JSON, etc.) —
-  // RETURNING * yields raw SQLite columns.
+  // RETURNING only `id` (cheap, snake_case-vs-camelCase agnostic); the
+  // typed Document shape — with Date columns parsed + frontmatter parsed
+  // as JSON — comes from the findFirst below. Tightening to RETURNING id
+  // (vs RETURNING *) closes the type-lie that prior `tx.all<Document>`
+  // typing introduced: the raw row only ever exposes the column we
+  // actually read.
   const raw = rows[0]!;
   const row = await tx.query.documents.findFirst({
     where: eq(documents.id, raw.id),
@@ -624,8 +634,13 @@ export async function claimNextPlanningRun(tx: DBOrTx): Promise<Document | null>
 export async function recoverOrphanRuns(
   args: { staleThresholdMs: number },
 ): Promise<string[]> {
-  const threshold = new Date(Date.now() - args.staleThresholdMs).toISOString();
-  const completedAt = new Date().toISOString();
+  // Threshold is an ISO string for lexicographic compare against
+  // `worker_started_at` (also stored as ISO inside frontmatter JSON);
+  // `nowMs` is the ms-epoch we bind into the INTEGER `updated_at` column.
+  // Two encodings for one instant — same pattern as claimNextPlanningRun.
+  const nowMs = Date.now();
+  const threshold = new Date(nowMs - args.staleThresholdMs).toISOString();
+  const completedAtIso = new Date(nowMs).toISOString();
 
   // Mitigation 39 — closed-enum value sourced from `runErrorReasonSchema.enum`
   // rather than a raw string literal. If a future schema change drops or
@@ -641,12 +656,12 @@ export async function recoverOrphanRuns(
                '$.status', 'failed',
                '$.error_reason', ${errorReason},
                '$.worker_started_at', NULL,
-               '$.completed_at', ${completedAt}
+               '$.completed_at', ${completedAtIso}
              ),
              status = 'failed',
-             updated_at = ${completedAt}
+             updated_at = ${nowMs}
        WHERE type = 'agent_run'
-         AND json_extract(frontmatter, '$.status') = 'running'
+         AND status = 'running'
          AND json_extract(frontmatter, '$.worker_started_at') < ${threshold}
        RETURNING id, workspace_id, project_id
     `);

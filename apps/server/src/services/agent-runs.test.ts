@@ -1116,6 +1116,73 @@ describe('claimNextPlanningRun', () => {
   });
 });
 
+// F8 regression — raw-SQL paths must write ms-epoch numbers into the INTEGER
+// `updated_at` column, NOT ISO strings. SQLite's INTEGER affinity stores
+// non-numeric strings as TEXT, and ORDER BY then sorts all numerics before
+// all text regardless of magnitude — a freshly claimed run would sort AFTER
+// every Drizzle-written row, breaking dashboards.
+describe('updated_at is an INTEGER ms-epoch across raw-SQL + Drizzle write paths', () => {
+  test('claimNextPlanningRun writes a numeric updated_at that sorts correctly with Drizzle-written rows', async () => {
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+
+    // Drizzle-write path: createRun. Row sits at planning.
+    const drizzleRun = await createRun({
+      workspace: seed.workspace,
+      project: seed.project,
+      runsTable,
+      agent,
+      actor: seed.user,
+      input: {
+        parentDocumentId: parent.id,
+        firedBy: 'agent.task.assigned',
+        chainId: crypto.randomUUID(),
+        triggerId: null,
+      },
+    });
+    // Push createRun's updated_at firmly into the past, then settle the
+    // row at a non-planning status so the claim picks the SECOND planning
+    // row we seed below. Drizzle's .update writes via the integer path,
+    // so updated_at after this is a number.
+    const drizzlePastMs = Date.now() - 10_000;
+    await db.update(documents)
+      .set({ updatedAt: new Date(drizzlePastMs), status: 'completed' })
+      .where(eq(documents.id, drizzleRun.document.id));
+
+    // Seed a SECOND, fresh planning row for the claim. seedRunAt insert
+    // also goes through Drizzle (writes updated_at as integer).
+    const claimable = await seedRunAt(
+      db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'planning',
+    );
+
+    const beforeClaim = Date.now();
+    const claimed = await db.transaction(async (tx) => claimNextPlanningRun(tx));
+    expect(claimed).not.toBeNull();
+    expect(claimed!.id).toBe(claimable.id);
+
+    // Read both rows' raw updated_at column via SQL — bypassing Drizzle's
+    // Date deserialization. If F8 regressed, claimed.updated_at would be
+    // a TEXT-affinity ISO string and the typeof check would fail; with
+    // F8 in place both are numeric ms-epoch and ORDER BY is chronological.
+    const rows = await db.all<{ id: string; updated_at: number | string }>(sql`
+      SELECT id, updated_at FROM documents
+       WHERE id IN (${drizzleRun.document.id}, ${claimable.id})
+       ORDER BY updated_at ASC
+    `);
+    expect(rows.length).toBe(2);
+    for (const r of rows) {
+      expect(typeof r.updated_at).toBe('number');
+    }
+    // Claimed (raw-SQL) row was updated AFTER the Drizzle-completed row.
+    expect(rows[0]!.id).toBe(drizzleRun.document.id);
+    expect(rows[1]!.id).toBe(claimable.id);
+    expect((rows[1]!.updated_at as number)).toBeGreaterThanOrEqual(beforeClaim);
+  });
+});
+
 // ---------- recoverOrphanRuns ----------
 
 describe('recoverOrphanRuns', () => {
