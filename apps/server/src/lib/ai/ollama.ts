@@ -85,7 +85,22 @@ export const ollama: AIProvider = {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
     });
-    if (!resp.ok || !resp.body) throw new Error(`ollama: ${resp.status} ${resp.statusText}`);
+    // B round 4 fix #2 — sanitize the stream-startup error throw. Pre-fix
+    // the throw echoed resp.statusText raw, which proxies happily populate
+    // with internal hostnames + path fragments. The runner surfaces this
+    // error message to operators (and potentially to comments on the
+    // agent_run row), so it inherits the same testKey whitelist. NEVER
+    // echo `resp.statusText`, `base`, or the caller-supplied `model`.
+    if (!resp.ok || !resp.body) {
+      if (resp.status === 401 || resp.status === 403) {
+        throw new Error(`Unauthorized (${resp.status}): key rejected by Ollama.`);
+      }
+      if (resp.status === 429) throw new Error('Rate limited (429). Try again shortly.');
+      if (resp.status >= 500) {
+        throw new Error(`Server error (${resp.status}). The provider may be down.`);
+      }
+      throw new Error(`Error (${resp.status}).`);
+    }
 
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();

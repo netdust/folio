@@ -165,6 +165,72 @@ describe('ollama provider', () => {
     expect(events).toContainEqual({ type: 'done', reason: 'max_tokens' });
   });
 
+  // B round 4 fix #2 — stream() startup error throw must NOT echo the raw
+  // response statusText (which proxies populate with internal hostnames + path
+  // fragments) or the base URL. Mirror the testKey whitelist on the throw.
+  test('stream() throws a sanitized error on 502, no statusText echo', async () => {
+    global.fetch = mock(
+      async () =>
+        new Response('', {
+          status: 502,
+          statusText: 'Cannot reach upstream ollama-7.internal.svc.cluster.local',
+        }),
+    ) as never;
+    let caught: unknown;
+    try {
+      const iter = ollama.stream({
+        system: 'sys',
+        messages: [{ role: 'user', content: 'hi' }],
+        tools: [],
+        maxTokens: 10,
+        apiKey: '',
+        model: 'llama3.1',
+        baseUrl: 'http://example.com:11434',
+      });
+      for await (const _ of iter) {
+        // drain
+      }
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    const message = (caught as Error).message;
+    expect(message).not.toMatch(/internal\.svc\.cluster/);
+    expect(message).not.toMatch(/example\.com/);
+    expect(message).toMatch(/server error/i);
+  });
+
+  test('stream() throws sanitized error on 401, no statusText echo', async () => {
+    global.fetch = mock(
+      async () =>
+        new Response('', {
+          status: 401,
+          statusText: 'Token rejected by internal-auth-proxy.lan:8443',
+        }),
+    ) as never;
+    let caught: unknown;
+    try {
+      const iter = ollama.stream({
+        system: 'sys',
+        messages: [{ role: 'user', content: 'hi' }],
+        tools: [],
+        maxTokens: 10,
+        apiKey: '',
+        model: 'llama3.1',
+        baseUrl: 'http://example.com:11434',
+      });
+      for await (const _ of iter) {
+        // drain
+      }
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    const message = (caught as Error).message;
+    expect(message).not.toMatch(/internal-auth-proxy/);
+    expect(message).toMatch(/unauthorized/i);
+  });
+
   test('stream() skips malformed NDJSON lines and still yields done', async () => {
     // Hand-roll the body so we can inject a literally-malformed line between
     // two valid JSON lines (jsonl() JSON-encodes everything, including strings).

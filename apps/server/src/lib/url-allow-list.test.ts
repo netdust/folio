@@ -120,4 +120,36 @@ describe('validatePublicUrl', () => {
     const r = validatePublicUrl('http://[0:0:0:0:0:ffff:a9fe:a9fe]/');
     expect(r.ok).toBe(false);
   });
+
+  // B round 4 fix #3 — greedy trailing-dot strip. Pre-fix `slice(0, -1)` only
+  // stripped one dot, so `localhost..` survived as `localhost.` and slipped
+  // the equality check. Linux resolves any-trailing-dots form to the same
+  // address. `.replace(/\.+$/, '')` matches that behavior.
+  test('blocks multi-dot trailing-localhost (greedy strip — two dots)', () => {
+    expect(validatePublicUrl('http://localhost..:11434').ok).toBe(false);
+  });
+
+  test('blocks multi-dot trailing-localhost (greedy strip — three dots)', () => {
+    expect(validatePublicUrl('http://localhost...:11434').ok).toBe(false);
+  });
+
+  test('blocks multi-dot trailing foo.localhost (greedy strip — suffix)', () => {
+    expect(validatePublicUrl('http://foo.localhost..:11434').ok).toBe(false);
+  });
+
+  // B round 4 fix #4 — expanded-form pure IPv6 loopback + unspecified.
+  // Round 3 only added the IPv4-mapped expanded form; ::1 and :: were left
+  // exact-match. Bun's URL parser canonicalizes both today, but the bracket
+  // form `[0:0:0:0:0:0:0:1]` arrives as a literal IPv6 string that the parser
+  // may or may not compress depending on runtime. Defense in depth.
+  test('blocks expanded IPv6 loopback (0:0:0:0:0:0:0:1)', () => {
+    const r = validatePublicUrl('http://[0:0:0:0:0:0:0:1]/');
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toMatch(/private|loopback/i);
+  });
+
+  test('blocks expanded IPv6 unspecified (0:0:0:0:0:0:0:0)', () => {
+    const r = validatePublicUrl('http://[0:0:0:0:0:0:0:0]/');
+    expect(r.ok).toBe(false);
+  });
 });

@@ -18,8 +18,16 @@ const BLOCKED_IPV4_PREFIXES = [
   /^169\.254\./, // 169.254.0.0/16 link-local
   /^172\.(1[6-9]|2[0-9]|3[01])\./, // 172.16.0.0/12 private
   /^192\.168\./, // 192.168.0.0/16 private
-  /^::1$/, // IPv6 loopback
-  /^::$/, // IPv6 unspecified
+  /^::1$/, // IPv6 loopback (canonical)
+  /^::$/, // IPv6 unspecified (canonical)
+  // B round 4 fix #4 — expanded-form IPv6 zero-segments for ::1 and ::.
+  // Round 3 only added the IPv4-mapped expanded form; pure ::1 and :: were
+  // left exact-match. Bun's URL parser canonicalizes both today, but a
+  // future runtime / proxy may not. Defense in depth.
+  //   `0:0:0:0:0:0:0:1` → ::1   (any number of leading-zero quibbles, last quibble = 0-prefix + 1)
+  //   `0:0:0:0:0:0:0:0` → ::    (any number of leading-zero quibbles, last quibble = 0-prefix)
+  /^(?:0{1,4}:){7}0{0,3}1$/i, // ::1 expanded
+  /^(?:0{1,4}:){7}0{0,4}$/i, // :: expanded
   /^fe[89ab][0-9a-f]:/i, // IPv6 link-local fe80::/10
   /^fc[0-9a-f]{2}:/i, // IPv6 unique-local fc00::/7
   /^fd[0-9a-f]{2}:/i, //   "
@@ -50,7 +58,12 @@ export function validatePublicUrl(input: string): UrlValidationResult {
   // Bun's URL parser preserves the trailing dot (verified). Strip BEFORE every
   // downstream comparison so the IPv4-prefix / IPv6-mapped paths also see the
   // canonicalized form.
-  if (host.endsWith('.')) host = host.slice(0, -1);
+  //
+  // B round 4 fix #3 — greedy strip. Pre-fix used `slice(0, -1)` which only
+  // removed ONE trailing dot — `localhost..` survived as `localhost.` and
+  // slipped the equality check. Linux resolves any-trailing-dots form to the
+  // same address; `.replace(/\.+$/, '')` matches that behavior.
+  host = host.replace(/\.+$/, '');
 
   if (host === 'localhost' || host.endsWith('.localhost')) {
     return { ok: false, reason: 'base_url localhost is not allowed' };
