@@ -1379,6 +1379,83 @@ describe('recoverOrphanRuns', () => {
     const fm = row!.frontmatter as AgentRunFrontmatter;
     expect(fm.error_reason).toBeUndefined();
   });
+
+  // F7 regression — recovery flushes persisted provider-health state by
+  // calling maybeEmitProviderHealthEdge per distinct (workspace, provider)
+  // pair. Without it, a workspace that previously tipped degraded could
+  // carry that state for an arbitrarily long time after the underlying
+  // provider failures aged out of the window — surfacing as stale data
+  // in the runner-stats UI.
+  test('flushes stale degraded persisted state by re-evaluating per provider after recovery', async () => {
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+
+    // Persist a stale degraded state for anthropic — as if a prior
+    // provider outage tipped the edge, but the underlying events are
+    // not in the recent window. Combined with no events in the SQL
+    // filter's window, checkProviderHealth returns next.healthy.
+    await db.update(workspaces).set({
+      providerHealth: { anthropic: { status: 'degraded', consecutive_failures: 3 } },
+    }).where(eq(workspaces.id, seed.workspace.id));
+
+    // Seed a single stale running row (worker_started_at older than threshold).
+    await seedRunAt(
+      db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'running',
+      { workerStartedAt: new Date(Date.now() - 10 * 60_000).toISOString() },
+    );
+
+    // Recovery — converts to failed/worker_crash. F7 fires
+    // maybeEmitProviderHealthEdge for (workspace, anthropic) which sees
+    // current=degraded, next=healthy (insufficient signal post-F5) →
+    // persists healthy + emits a workspace.provider.recovered event.
+    const recovered = await recoverOrphanRuns({ staleThresholdMs: 5 * 60_000 });
+    expect(recovered.length).toBe(1);
+
+    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, seed.workspace.id) });
+    expect(ws!.providerHealth.anthropic?.status).toBe('healthy');
+
+    const recoveredEvents = await db.query.events.findMany({
+      where: eq(events.kind, 'workspace.provider.recovered'),
+    });
+    expect(recoveredEvents.length).toBe(1);
+    expect((recoveredEvents[0]!.payload as { provider: string }).provider).toBe('anthropic');
+    // F4 — workspace-scoped event must carry projectId=null.
+    expect(recoveredEvents[0]!.projectId).toBeNull();
+    // F7 — actor identifies the recovery path.
+    expect(recoveredEvents[0]!.actor).toBe('system:orphan-recovery');
+  });
+
+  test('does NOT emit a duplicate edge when recovery touches multiple runs in the same (workspace, provider)', async () => {
+    // Defense-in-depth — three orphan rows in the same workspace + provider
+    // produce ONE provider-health edge call total (dedup by Set), not three.
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+
+    await db.update(workspaces).set({
+      providerHealth: { anthropic: { status: 'degraded', consecutive_failures: 3 } },
+    }).where(eq(workspaces.id, seed.workspace.id));
+
+    for (let i = 0; i < 3; i++) {
+      await seedRunAt(
+        db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'running',
+        { workerStartedAt: new Date(Date.now() - 10 * 60_000).toISOString() },
+      );
+    }
+
+    const recovered = await recoverOrphanRuns({ staleThresholdMs: 5 * 60_000 });
+    expect(recovered.length).toBe(3);
+
+    const recoveredEvents = await db.query.events.findMany({
+      where: eq(events.kind, 'workspace.provider.recovered'),
+    });
+    expect(recoveredEvents.length).toBe(1);
+  });
 });
 
 // ---------- countPendingPlanning ----------
@@ -2044,6 +2121,84 @@ describe('checkProviderHealth', () => {
     expect(result.next.status).toBe('degraded');
   });
 
+  // F5 regression — infrastructure-class error_reasons (worker_crash from
+  // orphan recovery, budget_exceeded, rate_limited, depth_exceeded,
+  // fanout_exceeded, chain_*_exceeded, no_ai_key, idempotency_violation,
+  // rejected) are EXCLUDED at the SQL layer. Pre-F5, the SQL excluded
+  // only 'cancelled' and the JS loop broke on any non-provider_error
+  // row — so a single worker_crash midway through a degraded streak
+  // reset next.status to healthy and triggered a spurious recovered.
+  test('worker_crash failures do NOT break a still-degraded provider streak', async () => {
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+
+    // Order (oldest first): 3× provider_error, then a worker_crash on top.
+    // Pre-F5: the worker_crash as newest event broke the loop, returning
+    // next.healthy with 0 trailing failures.
+    // Post-F5: the SQL drops the worker_crash row; loop sees 3
+    // provider_errors → degraded.
+    for (let i = 0; i < 3; i++) {
+      await seedTerminalRunEvent(db, {
+        workspace: seed.workspace, project: seed.project, runsTable,
+        agent, parent, user: seed.user,
+        provider: 'anthropic',
+        kind: 'agent.run.failed',
+        errorReason: 'provider_error',
+        seq: 9_000_001 + i,
+      });
+    }
+    await seedTerminalRunEvent(db, {
+      workspace: seed.workspace, project: seed.project, runsTable,
+      agent, parent, user: seed.user,
+      provider: 'anthropic',
+      kind: 'agent.run.failed',
+      errorReason: 'worker_crash',
+      seq: 9_000_004,
+    });
+
+    const result = await checkProviderHealth({
+      workspaceId: seed.workspace.id,
+      provider: 'anthropic',
+      threshold: 3,
+    });
+    expect(result.next.status).toBe('degraded');
+    expect(result.next.consecutive_failures).toBe(3);
+  });
+
+  test('budget_exceeded failures do NOT count toward provider degradation', async () => {
+    // Defense-in-depth — confirms the SQL filter excludes other
+    // infrastructure-class reasons too, not just worker_crash.
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+
+    // 5 budget_exceeded failures — none are provider signals.
+    for (let i = 0; i < 5; i++) {
+      await seedTerminalRunEvent(db, {
+        workspace: seed.workspace, project: seed.project, runsTable,
+        agent, parent, user: seed.user,
+        provider: 'anthropic',
+        kind: 'agent.run.failed',
+        errorReason: 'budget_exceeded',
+        seq: 9_100_001 + i,
+      });
+    }
+
+    const result = await checkProviderHealth({
+      workspaceId: seed.workspace.id,
+      provider: 'anthropic',
+      threshold: 3,
+    });
+    // Insufficient signal (0 provider-relevant events) → healthy.
+    expect(result.next.status).toBe('healthy');
+    expect(result.next.consecutive_failures).toBe(0);
+  });
+
   test('next is healthy when the most recent event is a successful completion', async () => {
     // Mitigation 45 — a single success breaks the streak. Resets to
     // healthy even if older events in the window were failures.
@@ -2161,6 +2316,10 @@ describe('transitionRun → maybeEmitProviderHealthEdge', () => {
     });
     expect(degradedEvents.length).toBe(1);
     expect((degradedEvents[0]!.payload as { provider: string }).provider).toBe('anthropic');
+    // F4 — workspace.provider.* events are workspace-scoped per
+    // event-bus.ts BUG-021. projectId MUST be null so cross-project
+    // SSE subscribers receive the event.
+    expect(degradedEvents[0]!.projectId).toBeNull();
 
     // Persisted state reflects degraded.
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, seed.workspace.id) });
@@ -2214,6 +2373,17 @@ describe('transitionRun → maybeEmitProviderHealthEdge', () => {
       where: eq(events.kind, 'workspace.provider.degraded'),
     });
     expect(degradedEvents.length).toBe(0);
+
+    // F11 follow-up — `consecutive_failures` stays at threshold (3)
+    // on the 4th continued failure. This is by design: the SQL filter
+    // LIMITs the window to `threshold` rows, so the algorithm has no
+    // signal beyond threshold. Dashboards should read this as
+    // "threshold+ consecutive failures", NOT a live counter.
+    const ws = await db.query.workspaces.findFirst({
+      where: eq(workspaces.id, seed.workspace.id),
+    });
+    expect(ws!.providerHealth.anthropic?.status).toBe('degraded');
+    expect(ws!.providerHealth.anthropic?.consecutive_failures).toBe(3);
   });
 
   test('emits workspace.provider.recovered exactly once on recovery edge', async () => {
@@ -2260,6 +2430,9 @@ describe('transitionRun → maybeEmitProviderHealthEdge', () => {
     });
     expect(recoveredEvents.length).toBe(1);
     expect((recoveredEvents[0]!.payload as { provider: string }).provider).toBe('anthropic');
+    // F4 — workspace-scoped: projectId is null so cross-project SSE
+    // subscribers receive the recovery signal.
+    expect(recoveredEvents[0]!.projectId).toBeNull();
 
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, seed.workspace.id) });
     expect(ws!.providerHealth.anthropic?.status).toBe('healthy');

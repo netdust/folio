@@ -41,6 +41,7 @@ import { emitEvent, txWithEvents, type EventKind } from '../lib/events.ts';
 import {
   agentRunFrontmatterSchema,
   isValidTransition,
+  providerSchema,
   runErrorReasonSchema,
   TERMINAL_STATUSES,
   type AgentRunFrontmatter,
@@ -347,7 +348,6 @@ export async function transitionRun(
       const provider = (row.frontmatter as AgentRunFrontmatter).provider;
       await maybeEmitProviderHealthEdge(tx, {
         workspaceId: row.workspaceId,
-        projectId: row.projectId,
         provider,
         actor: args.actor,
       });
@@ -685,7 +685,15 @@ export async function recoverOrphanRuns(
   const errorReason = runErrorReasonSchema.enum.worker_crash;
 
   return txWithEvents(db, async (tx) => {
-    const updated = await tx.all<{ id: string; workspace_id: string; project_id: string | null }>(sql`
+    // RETURNING includes the snapshotted provider from the run's
+    // frontmatter so F7 can call maybeEmitProviderHealthEdge per
+    // distinct (workspace, provider) pair below without re-querying.
+    const updated = await tx.all<{
+      id: string;
+      workspace_id: string;
+      project_id: string | null;
+      provider: string | null;
+    }>(sql`
       UPDATE documents
          SET frontmatter = json_set(
                frontmatter,
@@ -699,7 +707,8 @@ export async function recoverOrphanRuns(
        WHERE type = 'agent_run'
          AND status = 'running'
          AND json_extract(frontmatter, '$.worker_started_at') < ${threshold}
-       RETURNING id, workspace_id, project_id
+       RETURNING id, workspace_id, project_id,
+                 json_extract(frontmatter, '$.provider') AS provider
     `);
 
     for (const r of updated) {
@@ -717,6 +726,31 @@ export async function recoverOrphanRuns(
           to: 'failed',
           error_reason: errorReason,
         },
+      });
+    }
+
+    // F7 fix (post-C.1 review) — fire the tipping-edge detector once
+    // per distinct (workspace, provider) pair after recovery. F5
+    // already ensures worker_crash events themselves don't influence
+    // the computation; the call here exists to FLUSH stale persisted
+    // state. Without it, a workspace that tipped degraded earlier
+    // could carry that state for hours after the underlying provider
+    // failures aged out of the window — until some unrelated
+    // transitionRun call triggered a fresh check. Calling per
+    // (workspace, provider) means recovery itself surfaces the
+    // current truth.
+    const seen = new Set<string>();
+    for (const r of updated) {
+      if (!r.provider) continue;
+      const key = `${r.workspace_id}::${r.provider}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const parsedProvider = providerSchema.safeParse(r.provider);
+      if (!parsedProvider.success) continue;
+      await maybeEmitProviderHealthEdge(tx, {
+        workspaceId: r.workspace_id,
+        provider: parsedProvider.data,
+        actor: 'system:orphan-recovery',
       });
     }
 
@@ -965,20 +999,33 @@ async function getPersistedProviderHealth(
 
 /**
  * Compares persisted state against derived state (from the most recent N
- * terminal events) and returns both. Returns `{current, next}`. Mitigation 45
- * — pure read; no side effects, no edge emission. The
- * `maybeEmitProviderHealthEdge` wrapper is what makes the tipping-edge call.
+ * provider-relevant terminal events) and returns both. Returns
+ * `{current, next}`. Mitigation 45 — pure read; no side effects, no
+ * edge emission. The `maybeEmitProviderHealthEdge` wrapper makes the
+ * tipping-edge call.
  *
- * Algorithm (per plan §C-5 acceptance):
- *   1. Fetch the last `threshold` non-cancelled terminal events for the
- *      (workspace, provider) joined via documents.frontmatter.provider.
- *   2. If fewer than `threshold` events available → next is healthy
- *      (insufficient signal).
- *   3. If all `threshold` are `agent.run.failed` with
- *      `error_reason='provider_error'` → next is degraded with that count.
- *   4. Else → walk the result backward to count trailing failures
- *      (newest-first); next.status follows from whether the most-recent
- *      event broke the streak.
+ * Algorithm (post-F5 fix, post-C.1 review):
+ *   1. Fetch the last `threshold` PROVIDER-RELEVANT terminal events for
+ *      (workspace, provider). A "provider-relevant" event is either
+ *      `agent.run.completed` (positive provider signal) or
+ *      `agent.run.failed` with `error_reason='provider_error'` (negative
+ *      provider signal). All other error reasons are EXCLUDED at the
+ *      SQL layer — they're either local guard hits (budget_exceeded,
+ *      chain_*_exceeded, fanout_exceeded, depth_exceeded, rate_limited,
+ *      idempotency_violation, no_ai_key), human actions (rejected),
+ *      cancellations (cancelled), or infrastructure failures
+ *      (worker_crash — from recoverOrphanRuns). None of those say
+ *      anything about the provider's health.
+ *   2. If fewer than `threshold` provider-relevant events available →
+ *      next is healthy (insufficient signal).
+ *   3. Walk newest-first counting trailing failures, breaking on a
+ *      completed. If trailing count ≥ threshold → degraded with that
+ *      count; else healthy.
+ *
+ * Pre-F5, the SQL excluded ONLY 'cancelled' and the loop broke on any
+ * non-provider_error row. That meant a single worker_crash (or any
+ * other infra failure) reset a still-degraded provider to healthy and
+ * emitted a spurious workspace.provider.recovered event.
  */
 export async function checkProviderHealth(
   args: { workspaceId: string; provider: ProviderName; threshold?: number },
@@ -996,9 +1043,13 @@ export async function checkProviderHealth(
   // takes the agent_run row's snapshotted provider (mitigation 46 — not
   // current agent state, the run's recorded provider).
   //
-  // The `IS NULL OR != 'cancelled'` guard is null-safe: completed events
-  // have no error_reason, failed-but-cancelled events do. Excludes only
-  // the cancelled subset; counts everything else.
+  // F5 filter: only provider-relevant events flow through. A completed
+  // event has NULL error_reason → keeps the row. A failed event with
+  // error_reason='provider_error' → keeps the row. Anything else
+  // (cancelled, worker_crash, budget_exceeded, rate_limited,
+  // depth_exceeded, fanout_exceeded, chain_*_exceeded,
+  // idempotency_violation, no_ai_key, rejected) → dropped at the SQL
+  // layer so the loop counts ONLY provider signals.
   const rows = await tx.all<{ kind: string; error_reason: string | null }>(sql`
     SELECT e.kind AS kind,
            json_extract(e.payload, '$.error_reason') AS error_reason
@@ -1008,22 +1059,25 @@ export async function checkProviderHealth(
        AND e.kind IN ('agent.run.completed', 'agent.run.failed')
        AND d.type = 'agent_run'
        AND json_extract(d.frontmatter, '$.provider') = ${args.provider}
-       AND (json_extract(e.payload, '$.error_reason') IS NULL
-            OR json_extract(e.payload, '$.error_reason') != 'cancelled')
+       AND (
+         e.kind = 'agent.run.completed'
+         OR json_extract(e.payload, '$.error_reason') = 'provider_error'
+       )
      ORDER BY e.seq DESC
      LIMIT ${threshold}
   `);
 
-  // Insufficient signal — not enough events to assert degradation.
+  // Insufficient signal — not enough provider-relevant events to assert
+  // degradation.
   if (rows.length < threshold) {
     return { current, next: { status: 'healthy', consecutive_failures: 0 } };
   }
 
-  // Count trailing failures (newest-first). The streak breaks on the
-  // first non-failed event (a completed) or on a non-provider_error
-  // failure (e.g. budget_exceeded — a run-local failure, not a provider
-  // signal). When the streak length equals the threshold, all rows are
-  // provider failures → degraded.
+  // Count trailing failures (newest-first). Since the SQL filter
+  // already excluded non-provider rows, the only way the loop's else
+  // branch triggers is an agent.run.completed event (genuine recovery
+  // signal). Every other row in `rows` is by construction a
+  // provider_error failure.
   let trailingFailures = 0;
   for (const r of rows) {
     if (r.kind === 'agent.run.failed' && r.error_reason === 'provider_error') {
@@ -1086,7 +1140,6 @@ async function maybeEmitProviderHealthEdge(
   tx: Parameters<Parameters<DB['transaction']>[0]>[0],
   args: {
     workspaceId: string;
-    projectId: string | null;
     provider: ProviderName;
     actor: string;
   },
@@ -1098,13 +1151,17 @@ async function maybeEmitProviderHealthEdge(
 
   // No transition → nothing to do. Covers both "still healthy" AND "still
   // degraded" (4th consecutive failure case from the tests).
+  //
+  // F11 evaluation (post-C.1 review): the original review claimed
+  // consecutive_failures persists at the tipping-edge value and lies
+  // about reality. False — checkProviderHealth caps `next.consecutive_failures`
+  // at `threshold` via the SQL `LIMIT threshold`, so the persisted
+  // value at the edge IS the algorithm's notion of "consecutive
+  // failures." Dashboards reading this column should treat it as
+  // "trailing failures up to threshold" (operator-readable as
+  // "threshold+ consecutive failures") rather than a live counter
+  // beyond threshold. Documenting here to lock the interpretation.
   if (current.status === next.status) return;
-
-  // Persist the new state — merge into the existing JSON, do NOT clobber
-  // sibling providers. json_set with the provider-keyed path mutates only
-  // the one entry. Using sql.placeholder for the provider name keeps the
-  // path safe even though it's known-enum (defense-in-depth: future enum
-  // extensions don't get to inject SQL).
   await tx.update(workspaces)
     .set({
       providerHealth: sql`json_set(
@@ -1119,12 +1176,19 @@ async function maybeEmitProviderHealthEdge(
     ? 'workspace.provider.degraded'
     : 'workspace.provider.recovered';
 
+  // F4 fix (post-C.1 review) — workspace.provider.* events are
+  // WORKSPACE-WIDE per event-bus.ts BUG-021: they MUST emit with
+  // `projectId: null` so SSE subscribers filtered to any specific
+  // project still receive them. The earlier draft passed the triggering
+  // run's projectId; the event-bus filter then dropped the event for
+  // every OTHER project's subscriber, leaving sibling projects unaware
+  // of the workspace-level provider state flip. No documentId either —
+  // there's no single run-row this event points at; it's an aggregate
+  // signal computed over the last N runs.
   await emitEvent(tx, {
     kind,
     workspaceId: args.workspaceId,
-    projectId: args.projectId,
-    // No documentId — workspace-level edge event, no run-specific row to
-    // point at. EmitArgs.documentId is optional; omit it.
+    projectId: null,
     actor: args.actor,
     payload: {
       provider: args.provider,
