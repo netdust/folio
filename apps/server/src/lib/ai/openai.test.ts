@@ -114,4 +114,45 @@ describe('openai provider', () => {
       arguments: { q: 'hello' },
     });
   });
+
+  test('stream() yields done event even when tool_call args fail to JSON.parse', async () => {
+    mockCreate.mockImplementationOnce((async (opts: { stream?: boolean }) => {
+      if (!opts.stream) return { id: 'cmpl_x' };
+      return (async function* () {
+        yield {
+          choices: [
+            {
+              delta: {
+                tool_calls: [
+                  { index: 0, id: 'call_abc', function: { name: 'f', arguments: '{"x' } },
+                ],
+              },
+            },
+          ],
+          usage: null,
+        };
+        yield {
+          choices: [{ delta: {}, finish_reason: 'tool_calls' }],
+          usage: { prompt_tokens: 2, completion_tokens: 1 },
+        };
+      })();
+    }) as never);
+
+    const events: unknown[] = [];
+    for await (const ev of openai.stream({
+      system: 'sys',
+      messages: [{ role: 'user', content: 'hi' }],
+      tools: [],
+      maxTokens: 100,
+      apiKey: 'sk',
+      model: 'gpt-4o-mini',
+    })) {
+      events.push(ev);
+    }
+    // Tool call event still emitted but with empty args (malformed buffer).
+    expect(events).toContainEqual({ type: 'tool_call', id: 'call_abc', name: 'f', arguments: {} });
+    // Trailing events still fire.
+    expect(events).toContainEqual({ type: 'tokens', tokens_in: 2, tokens_out: 1 });
+    expect(events.some((e) => (e as { type: string }).type === 'done')).toBe(true);
+  });
 });

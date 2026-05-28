@@ -73,7 +73,18 @@ export const anthropic: AIProvider = {
         const idx = ev.index as number;
         const tc = toolCallsByIndex[idx];
         if (tc) {
-          const args = tc.jsonBuf.length > 0 ? JSON.parse(tc.jsonBuf) : {};
+          let args: Record<string, unknown> = {};
+          if (tc.jsonBuf.length > 0) {
+            try {
+              args = JSON.parse(tc.jsonBuf) as Record<string, unknown>;
+            } catch {
+              // Malformed tool_use input_json buffer (truncated/garbled stream).
+              // Emit the tool_call event with empty args so the runner still sees
+              // the attempt; don't crash the generator before the trailing
+              // tokens/done events.
+              args = {};
+            }
+          }
           yield { type: 'tool_call', id: tc.id, name: tc.name, arguments: args } as ProviderEvent;
         }
       } else if (t === 'message_delta') {

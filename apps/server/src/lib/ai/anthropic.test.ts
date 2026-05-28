@@ -20,6 +20,7 @@ import { anthropic } from './anthropic.ts';
 describe('anthropic provider', () => {
   beforeEach(() => {
     mockCreate.mockClear();
+    mockStream.mockClear();
   });
 
   test('stream() yields text + tokens + done events from the Anthropic SDK stream', async () => {
@@ -54,5 +55,48 @@ describe('anthropic provider', () => {
     const result = await anthropic.testKey({ apiKey: 'sk-bad', model: 'claude-haiku-4-5' });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).toMatch(/unauth|401/i);
+  });
+
+  test('stream() yields done event even when tool_use input_json fails to JSON.parse', async () => {
+    mockStream.mockImplementationOnce((async function* () {
+      yield {
+        type: 'content_block_start',
+        index: 0,
+        content_block: { type: 'tool_use', id: 'toolu_abc', name: 'f' },
+      };
+      yield {
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'input_json_delta', partial_json: '{"x' },
+      };
+      yield { type: 'content_block_stop', index: 0 };
+      yield {
+        type: 'message_delta',
+        usage: { input_tokens: 2, output_tokens: 1 },
+        delta: { stop_reason: 'tool_use' },
+      };
+    }) as never);
+
+    const events: unknown[] = [];
+    for await (const ev of anthropic.stream({
+      system: 'sys',
+      messages: [{ role: 'user', content: 'hi' }],
+      tools: [],
+      maxTokens: 100,
+      apiKey: 'sk-test',
+      model: 'claude-haiku-4-5',
+    })) {
+      events.push(ev);
+    }
+    // Tool call event still emitted but with empty args (malformed buffer).
+    expect(events).toContainEqual({
+      type: 'tool_call',
+      id: 'toolu_abc',
+      name: 'f',
+      arguments: {},
+    });
+    // Trailing events still fire.
+    expect(events).toContainEqual({ type: 'tokens', tokens_in: 2, tokens_out: 1 });
+    expect(events.some((e) => (e as { type: string }).type === 'done')).toBe(true);
   });
 });

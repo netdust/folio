@@ -89,11 +89,22 @@ export const openai: AIProvider = {
     }
 
     for (const tc of Object.values(toolCallsByIndex)) {
+      let args: Record<string, unknown> = {};
+      if (tc.argsBuf) {
+        try {
+          args = JSON.parse(tc.argsBuf) as Record<string, unknown>;
+        } catch {
+          // Malformed tool_call args buffer (truncated/garbled stream). Emit the
+          // tool_call event with empty args so the runner still sees the attempt;
+          // don't crash the generator before the trailing tokens/done events.
+          args = {};
+        }
+      }
       yield {
         type: 'tool_call',
         id: tc.id,
         name: tc.name,
-        arguments: tc.argsBuf ? JSON.parse(tc.argsBuf) : {},
+        arguments: args,
       } as ProviderEvent;
     }
 

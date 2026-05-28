@@ -56,7 +56,15 @@ export const ollama: AIProvider = {
       buffer = lines.pop() ?? '';
       for (const line of lines) {
         if (!line.trim()) continue;
-        const chunk = JSON.parse(line) as Record<string, unknown>;
+        let chunk: Record<string, unknown>;
+        try {
+          chunk = JSON.parse(line) as Record<string, unknown>;
+        } catch {
+          // Skip malformed NDJSON lines (proxy keep-alives, mid-stream HTML
+          // error pages, network blips). Don't crash a stream that has valid
+          // lines around the garbage.
+          continue;
+        }
         const msg = chunk.message as OllamaMessage | undefined;
         if (msg?.content) yield { type: 'text', delta: msg.content } as ProviderEvent;
         if (msg?.tool_calls) {

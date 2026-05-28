@@ -76,4 +76,47 @@ describe('ollama provider', () => {
     });
     expect(r.ok).toBe(false);
   });
+
+  test('stream() skips malformed NDJSON lines and still yields done', async () => {
+    // Hand-roll the body so we can inject a literally-malformed line between
+    // two valid JSON lines (jsonl() JSON-encodes everything, including strings).
+    const enc = new TextEncoder();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          enc.encode(JSON.stringify({ message: { content: 'Hi' }, done: false }) + '\n'),
+        );
+        controller.enqueue(enc.encode('not-json-at-all\n'));
+        controller.enqueue(
+          enc.encode(
+            JSON.stringify({
+              message: { content: '' },
+              done: true,
+              done_reason: 'stop',
+              prompt_eval_count: 4,
+              eval_count: 1,
+            }) + '\n',
+          ),
+        );
+        controller.close();
+      },
+    });
+    global.fetch = mock(async () => new Response(body, { status: 200 })) as never;
+
+    const events: unknown[] = [];
+    for await (const ev of ollama.stream({
+      system: 'sys',
+      messages: [{ role: 'user', content: 'hi' }],
+      tools: [],
+      maxTokens: 100,
+      apiKey: '',
+      model: 'llama3.1',
+      baseUrl: 'http://localhost:11434',
+    })) {
+      events.push(ev);
+    }
+    expect(events).toContainEqual({ type: 'text', delta: 'Hi' });
+    expect(events).toContainEqual({ type: 'tokens', tokens_in: 4, tokens_out: 1 });
+    expect(events).toContainEqual({ type: 'done', reason: 'stop' });
+  });
 });
