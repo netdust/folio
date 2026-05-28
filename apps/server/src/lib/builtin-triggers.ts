@@ -42,7 +42,8 @@ export const BUILTIN_TRIGGER_DEFS: ReadonlyArray<BuiltinTriggerDef> = [
       // otherwise the Phase 3 dispatcher will resolve to undefined and the
       // trigger silently never fires.
       agent: '$event.agent',
-      enabled: false,
+      // Phase 3 (Task A-3): runner exists, so these fire usefully.
+      enabled: true,
       builtin: true,
       payload: null,
     },
@@ -54,7 +55,7 @@ export const BUILTIN_TRIGGER_DEFS: ReadonlyArray<BuiltinTriggerDef> = [
       on_event: 'comment.mentioned',
       schedule: null,
       agent: '$event.agent_slug',
-      enabled: false,
+      enabled: true,
       builtin: true,
       payload: null,
     },

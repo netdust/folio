@@ -62,10 +62,11 @@ test('POST /api/v1/workspaces auto-seeds 4 builtin triggers', async () => {
     expect(fm.builtin).toBe(true);
   }
 
-  // Enabled defaults per spec §6f.
+  // Enabled defaults per spec §6f (updated Phase 3 / Task A-3: runner-bound
+  // builtins now start enabled because the runner exists).
   const byslug = Object.fromEntries(triggers.map((t) => [t.slug, t]));
-  expect((byslug['builtin-on-assignment']!.frontmatter as Record<string, unknown>).enabled).toBe(false);
-  expect((byslug['builtin-on-mention']!.frontmatter as Record<string, unknown>).enabled).toBe(false);
+  expect((byslug['builtin-on-assignment']!.frontmatter as Record<string, unknown>).enabled).toBe(true);
+  expect((byslug['builtin-on-mention']!.frontmatter as Record<string, unknown>).enabled).toBe(true);
   expect((byslug['builtin-on-approval']!.frontmatter as Record<string, unknown>).enabled).toBe(true);
   expect((byslug['builtin-on-rejection']!.frontmatter as Record<string, unknown>).enabled).toBe(true);
 
