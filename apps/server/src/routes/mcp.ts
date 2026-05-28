@@ -395,6 +395,16 @@ const TOOLS: ToolDef[] = [
       const ws = await resolveWorkspaceForToken(token, args);
       const p = await resolveProjectInWorkspace(ws, token, args);
       const type = optionalString(args, 'type');
+      // R2 — enforce the advisory inputSchema enum at the handler level
+      // (MCP doesn't validate inputs against the JSON schema). Explicit
+      // rejection prevents agent_run row enumeration via this tool.
+      // Service layer (listDocuments) ALSO excludes agent_run from the
+      // default no-filter response under R2 — see services/documents.ts.
+      if (type === 'agent_run') {
+        throw new Error(
+          'agent_run documents must be listed via the runs endpoints (Sub-phase D), not list_documents',
+        );
+      }
       // For work_item lists, default to the project's first table unless
       // table_slug is given. For all other type filters, leave activeTableId
       // null so the service applies its default selection.
@@ -444,6 +454,15 @@ const TOOLS: ToolDef[] = [
       const slug = requireString(args, 'slug');
       const doc = await getDocument(p.id, slug);
       if (!doc) throw new Error('document not found');
+      // R2 — agent_run rows are runner-owned and carry sensitive
+      // frontmatter (system_prompt, chain_id, tokens). Read access goes
+      // through Sub-phase D's /runs endpoints, not the generic
+      // get_document tool.
+      if (doc.type === 'agent_run') {
+        throw new Error(
+          'agent_run documents must be read via the runs endpoints (Sub-phase D), not get_document',
+        );
+      }
       return textResult(doc);
     },
   },
@@ -466,6 +485,12 @@ const TOOLS: ToolDef[] = [
       const slug = requireString(args, 'slug');
       const doc = await getDocument(p.id, slug);
       if (!doc) throw new Error('document not found');
+      // R2 — same agent_run guard as get_document above.
+      if (doc.type === 'agent_run') {
+        throw new Error(
+          'agent_run documents must be read via the runs endpoints (Sub-phase D), not get_document_markdown',
+        );
+      }
       // Mirror documents.ts GET /:slug.md: strip reserved keys, then layer
       // canonical column values on top so they win.
       const userFm = stripReservedFrontmatter(

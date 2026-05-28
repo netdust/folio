@@ -190,6 +190,19 @@ documentsRoute.get('/:slugMd{[^/]+\\.md}', async (c) => {
   const slug = slugMd.slice(0, -3);
   const row = await getDocument(p.id, slug);
   if (!row) throw new HTTPError('DOCUMENT_NOT_FOUND', `document "${slug}" not found`, 404);
+  // R2 fix (post-review-of-review) — agent_run rows are runner-owned
+  // and contain operator-sensitive frontmatter (system_prompt, chain_id,
+  // tokens_in/out, provider). Bundle 4 hardened WRITE paths but left
+  // generic-document READ paths open. A `documents:read` bearer could
+  // dump the system_prompt by knowing/enumerating a run slug. Reject
+  // with the same code Sub-phase D's /runs/:id read will own.
+  if (row.type === 'agent_run') {
+    throw new HTTPError(
+      'AGENT_RUN_REQUIRES_RUNNER_PATH',
+      'agent_run documents are runner-owned; read via the /runs endpoints (Sub-phase D), not the generic document endpoint',
+      422,
+    );
+  }
 
   // Strip reserved keys from frontmatter at read time too, as defense in
   // depth: older rows written before stripReservedFrontmatter shipped may
@@ -215,6 +228,14 @@ documentsRoute.get('/:slug', async (c) => {
   const slug = c.req.param('slug');
   const row = await getDocument(p.id, slug);
   if (!row) throw new HTTPError('DOCUMENT_NOT_FOUND', `document "${slug}" not found`, 404);
+  // R2 — same agent_run guard as the markdown-GET variant above.
+  if (row.type === 'agent_run') {
+    throw new HTTPError(
+      'AGENT_RUN_REQUIRES_RUNNER_PATH',
+      'agent_run documents are runner-owned; read via the /runs endpoints (Sub-phase D), not the generic document endpoint',
+      422,
+    );
+  }
   return jsonOk(c, row);
 });
 

@@ -11,7 +11,7 @@
  * still calls `validateStatus` etc. directly.
  */
 
-import { and, desc, eq, gte, inArray, isNull, lt, or, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, isNull, lt, ne, or, sql } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import {
   slugify,
@@ -144,6 +144,17 @@ export async function listDocuments(
   ]);
   if (opts.type && KNOWN_TYPES.has(opts.type as DocumentType)) {
     whereClauses.push(eq(documents.type, opts.type as DocumentType));
+  } else {
+    // R2 fix (post-review-of-review) — when no explicit type filter is
+    // supplied, EXCLUDE agent_run rows from generic-document listings.
+    // agent_run rows are runner-owned (mitigations 23-47); the runs UI
+    // (Sub-phase D) reads them via /api/v1/p/:pslug/runs. Allowing
+    // them through the default listing was the read-side counterpart
+    // to the cross-route attack surface bundle 4 closed for writes —
+    // FE consumers with a 4-member type union narrow would silently
+    // drop or mis-route them, and a `documents:read` bearer could
+    // enumerate them by slug.
+    whereClauses.push(ne(documents.type, 'agent_run'));
   }
   // Table-scoping rules: work_items use the active table; pages, agents, and
   // triggers are project-scoped (tableId IS NULL is enforced at write time).

@@ -43,6 +43,7 @@ import {
   isValidTransition,
   providerSchema,
   runErrorReasonSchema,
+  runStatusSchema,
   TERMINAL_STATUSES,
   type AgentRunFrontmatter,
   type RunErrorReason,
@@ -271,10 +272,27 @@ export async function transitionRun(
   // need a timestamp — otherwise `worker_started_at` stays NULL and
   // `recoverOrphanRuns` (predicate `worker_started_at < threshold`)
   // silently skips the row, leaving a phantom in-flight run.
-  // The COALESCE preserves an existing value (so a row already-claimed
-  // and now legitimately re-transitioning through running keeps its
-  // original claim time, which is what orphan recovery actually wants
-  // to compare against).
+  //
+  // R12 evaluation (post-review-of-review): per the state machine at
+  // agent-run-schema.ts:101-108, the COALESCE preserve-branch's
+  // left-hand side (`json_extract(...worker_started_at)`) is ALWAYS
+  // NULL through any production code path today:
+  //   - planning → running: createRun inserts planning rows without
+  //     worker_started_at; claimNextPlanningRun is the only writer that
+  //     stamps it AND atomically transitions in the same UPDATE, so
+  //     no observation of a planning row with a non-NULL
+  //     worker_started_at is reachable.
+  //   - awaiting_approval → running: awaiting_approval is reachable
+  //     ONLY from planning (running → awaiting_approval is not in
+  //     TRANSITIONS), so the same argument applies recursively.
+  //
+  // The COALESCE is therefore defense-in-depth for a FUTURE state
+  // machine extension — e.g. a Sub-phase D `running → awaiting_approval`
+  // pause-for-approval transition that would carry a real claim time
+  // through to the resume. The test at agent-runs.test.ts:620-643
+  // hand-seeds the precondition to pin the contract for that future
+  // change. Removing the COALESCE today would be safe but breaks that
+  // forward compatibility pin.
   const nowIsoForRunning = new Date().toISOString();
   const workerStartedAtArg = isTerminal
     ? sql`NULL`
@@ -315,13 +333,45 @@ export async function transitionRun(
       .returning({ id: documents.id });
 
     if (claimed.length === 0) {
+      // R5 + R6 (post-review-of-review) — distinguish race-loss from
+      // genuine state-machine violation:
+      //   - Outer throw (line 230-238): isValidTransition returned false
+      //     → caller passed an illegal `to` value for this `from`.
+      //     Code: `INVALID_RUN_TRANSITION`.
+      //   - Inner throw (here): UPDATE WHERE status=`from` affected 0
+      //     rows → row's status changed between our read and our
+      //     write (TOCTOU race-loser). Code: `RUN_TRANSITION_RACED`.
+      //
+      // Distinct codes let Sub-phase D approval handlers catch+ignore
+      // RUN_TRANSITION_RACED (benign double-click) without masking
+      // INVALID_RUN_TRANSITION (real ABI bug).
+      //
+      // R6 — attach `observedFrom` (the row's actual current status,
+      // re-read inside the same tx so the snapshot is consistent with
+      // the failed UPDATE). `from` remains the caller's intended-source
+      // snapshot. Sentry / log keys can dedup on (code, from, to,
+      // observedFrom) for race-loss without conflating with the
+      // 4-tuple-with-only-3-fields outer throw.
+      const observedRow = await tx.query.documents.findFirst({
+        where: and(eq(documents.id, runId), eq(documents.type, 'agent_run')),
+      });
+      // Read the COLUMN (not frontmatter.status) — the inner WHERE
+      // guard predicates on `documents.status`, so the observed value
+      // that caused the 0-rows-affected outcome is whatever's in the
+      // column. Under mitigation 40 lockstep both are equal in
+      // production, but the column is what matters for the predicate.
+      // The `?? undefined` collapse turns null (row gone or status
+      // cleared) into undefined so the err.observedFrom field has a
+      // single `RunStatus | undefined` shape.
+      const observedFrom = (observedRow?.status ?? undefined) as RunStatus | undefined;
       const err = new HTTPError(
-        'INVALID_RUN_TRANSITION',
-        `agent_run ${runId} no longer at status ${from} (raced by another transition)`,
+        'RUN_TRANSITION_RACED',
+        `agent_run ${runId} no longer at status ${from} (raced by another transition; observed ${observedFrom ?? 'gone'})`,
         409,
-      ) as HTTPError & { from: RunStatus; to: RunStatus };
+      ) as HTTPError & { from: RunStatus; to: RunStatus; observedFrom: RunStatus | undefined };
       err.from = from;
       err.to = to;
+      err.observedFrom = observedFrom;
       throw err;
     }
 
@@ -678,11 +728,20 @@ export async function recoverOrphanRuns(
   const threshold = new Date(nowMs - args.staleThresholdMs).toISOString();
   const completedAtIso = new Date(nowMs).toISOString();
 
-  // Mitigation 39 — closed-enum value sourced from `runErrorReasonSchema.enum`
-  // rather than a raw string literal. If a future schema change drops or
-  // renames `worker_crash`, this line stops compiling and both the SQL
-  // write AND the event payload below break together.
+  // Mitigation 39 — closed-enum values sourced from `runErrorReasonSchema.enum`
+  // / `runStatusSchema.enum` rather than raw string literals. If a future
+  // schema change drops or renames `worker_crash` OR `failed`, these
+  // assignments stop compiling and BOTH the SQL writes AND the event
+  // payload below break together.
+  //
+  // R7 fix (post-review-of-review) — the original A1 fix routed only
+  // `error_reason` through the enum; `status='failed'` and the
+  // matched-source `status='running'` were raw literals. Now the
+  // terminal-status name + the running predicate are both compile-time
+  // anchored against the Zod enum.
   const errorReason = runErrorReasonSchema.enum.worker_crash;
+  const failedStatus = runStatusSchema.enum.failed;
+  const runningStatus = runStatusSchema.enum.running;
 
   return txWithEvents(db, async (tx) => {
     // RETURNING includes the snapshotted provider from the run's
@@ -697,15 +756,15 @@ export async function recoverOrphanRuns(
       UPDATE documents
          SET frontmatter = json_set(
                frontmatter,
-               '$.status', 'failed',
+               '$.status', ${failedStatus},
                '$.error_reason', ${errorReason},
                '$.worker_started_at', NULL,
                '$.completed_at', ${completedAtIso}
              ),
-             status = 'failed',
+             status = ${failedStatus},
              updated_at = ${nowMs}
        WHERE type = 'agent_run'
-         AND status = 'running'
+         AND status = ${runningStatus}
          AND json_extract(frontmatter, '$.worker_started_at') < ${threshold}
        RETURNING id, workspace_id, project_id,
                  json_extract(frontmatter, '$.provider') AS provider
@@ -722,8 +781,8 @@ export async function recoverOrphanRuns(
         // operator can grep `actor:system` for forced recoveries.
         actor: 'system:orphan-recovery',
         payload: {
-          from: 'running',
-          to: 'failed',
+          from: runningStatus,
+          to: failedStatus,
           error_reason: errorReason,
         },
       });
@@ -739,6 +798,19 @@ export async function recoverOrphanRuns(
     // transitionRun call triggered a fresh check. Calling per
     // (workspace, provider) means recovery itself surfaces the
     // current truth.
+    //
+    // R14 evaluation (post-review-of-review) — this only fires when
+    // a recovery actually happens (i.e. there were stale running
+    // rows). A workspace that's totally idle (no runs, no recoveries)
+    // still relies on R4's recency floor to reset state: once all
+    // window-eligible events age out, the next ANY-event-driven
+    // checkProviderHealth call returns healthy(0) and the edge flips
+    // back. For a workspace that's idle on a specific PROVIDER but
+    // active on others, F7's recovery flush + transitionRun's
+    // terminal-edge call are both sufficient to surface the current
+    // truth at the moment activity occurs. Periodic background
+    // polling (e.g. C.3 sweeping ALL workspaces every minute) is
+    // unnecessary and was rejected as over-engineering.
     const seen = new Set<string>();
     for (const r of updated) {
       if (!r.provider) continue;
@@ -765,12 +837,22 @@ export async function recoverOrphanRuns(
  *
  * Single-statement SELECT; accepts a tx for read-your-writes consistency
  * inside the poller's claim tx, defaults to `db` for external callers.
+ *
+ * R3 fix (post-review-of-review) — predicate is `status = 'planning'` on
+ * the indexed COLUMN, not `json_extract(frontmatter, '$.status')`. The
+ * partial index `documents_runs_pending_idx (created_at ASC) WHERE
+ * type='agent_run' AND status='planning'` requires the column predicate
+ * to be planner-eligible. The F6 bundle 1 fix flipped two of the three
+ * status read sites (claim + recovery) but missed this one. Once C.2
+ * runs the poller every ~1s, the prior JSON predicate forced a full
+ * type='agent_run' partition scan with per-row JSON eval. Mitigation 40
+ * lockstep makes the values equivalent; only the index hit differs.
  */
 export async function countPendingPlanning(tx: DBOrTx = db): Promise<number> {
   const rows = await tx.all<{ count: number }>(sql`
     SELECT COUNT(*) as count FROM documents
      WHERE type = 'agent_run'
-       AND json_extract(frontmatter, '$.status') = 'planning'
+       AND status = 'planning'
   `);
   return rows[0]?.count ?? 0;
 }
@@ -982,6 +1064,24 @@ export interface ProviderHealthState {
 const DEFAULT_DEGRADE_THRESHOLD = 3;
 
 /**
+ * R4 fix (post-review-of-review) — recency floor for the provider-health
+ * window. Events older than this are ignored: an idle workspace can't
+ * stay locked in a stale `degraded` state because its window goes
+ * empty + the insufficient-signal branch returns healthy. Default 24h
+ * matches typical operator expectation ("if there's been no signal in
+ * a day, treat the provider as unknown, not historically broken").
+ *
+ * Without this, the algorithm pre-R4 considered the last N
+ * provider-relevant events for ALL TIME. A workspace that had 3
+ * provider_errors then stopped using the provider entirely would
+ * persist degraded indefinitely. Worse: a subsequent orphan-recovery
+ * burst (via F7) would compute next.healthy(0) and emit a SPURIOUS
+ * workspace.provider.recovered event sourced from observation gap,
+ * not real recovery.
+ */
+const DEFAULT_PROVIDER_HEALTH_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/**
  * Walks the workspace's persisted `provider_health` and returns the current
  * state for one provider. Missing keys default to `{healthy, 0}` — a
  * never-seen provider is healthy.
@@ -1028,10 +1128,22 @@ async function getPersistedProviderHealth(
  * emitted a spurious workspace.provider.recovered event.
  */
 export async function checkProviderHealth(
-  args: { workspaceId: string; provider: ProviderName; threshold?: number },
+  args: {
+    workspaceId: string;
+    provider: ProviderName;
+    threshold?: number;
+    /**
+     * R4 — events older than `now() - windowMs` are excluded from the
+     * window. Defaults to `DEFAULT_PROVIDER_HEALTH_WINDOW_MS` (24h).
+     * The C.3 poller may override per workspace if needed.
+     */
+    windowMs?: number;
+  },
   tx: DBOrTx = db,
 ): Promise<{ current: ProviderHealthState; next: ProviderHealthState }> {
   const threshold = args.threshold ?? DEFAULT_DEGRADE_THRESHOLD;
+  const windowMs = args.windowMs ?? DEFAULT_PROVIDER_HEALTH_WINDOW_MS;
+  const cutoffMs = Date.now() - windowMs;
   const current = await getPersistedProviderHealth(
     { workspaceId: args.workspaceId, provider: args.provider },
     tx,
@@ -1050,6 +1162,13 @@ export async function checkProviderHealth(
   // depth_exceeded, fanout_exceeded, chain_*_exceeded,
   // idempotency_violation, no_ai_key, rejected) → dropped at the SQL
   // layer so the loop counts ONLY provider signals.
+  //
+  // R4 recency floor (post-review-of-review): `e.created_at >= cutoffMs`
+  // drops events older than the window. Without it, an idle workspace
+  // would stay degraded forever (last 3 provider_errors from week 1
+  // count for all time) AND F7's per-recovery flush could emit a
+  // spurious `recovered` based on an empty window (insufficient signal
+  // returns healthy(0), edge detector then flips degraded→healthy).
   const rows = await tx.all<{ kind: string; error_reason: string | null }>(sql`
     SELECT e.kind AS kind,
            json_extract(e.payload, '$.error_reason') AS error_reason
@@ -1057,6 +1176,7 @@ export async function checkProviderHealth(
       JOIN documents d ON d.id = e.document_id
      WHERE e.workspace_id = ${args.workspaceId}
        AND e.kind IN ('agent.run.completed', 'agent.run.failed')
+       AND e.created_at >= ${cutoffMs}
        AND d.type = 'agent_run'
        AND json_extract(d.frontmatter, '$.provider') = ${args.provider}
        AND (
@@ -1078,11 +1198,22 @@ export async function checkProviderHealth(
   // branch triggers is an agent.run.completed event (genuine recovery
   // signal). Every other row in `rows` is by construction a
   // provider_error failure.
+  //
+  // R13 simplify (post-review-of-review) — the SQL filter above
+  // guarantees that for any `failed` row in `rows`, `error_reason`
+  // equals 'provider_error'. The previous JS condition checked both
+  // — over-specified, and risked obscuring the contract: a future
+  // "simplification" of the SQL filter could break both layers in one
+  // stroke if the JS appeared to defend independently. Checking ONLY
+  // `r.kind` makes the SQL→JS contract explicit.
   let trailingFailures = 0;
   for (const r of rows) {
-    if (r.kind === 'agent.run.failed' && r.error_reason === 'provider_error') {
+    if (r.kind === 'agent.run.failed') {
       trailingFailures += 1;
     } else {
+      // The else branch is reachable only on agent.run.completed —
+      // the SQL filter excludes every other failed-but-not-provider
+      // shape.
       break;
     }
   }

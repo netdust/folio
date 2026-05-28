@@ -581,7 +581,21 @@ describe('transitionRun', () => {
 
       const loserErr = (rejected[0] as PromiseRejectedResult).reason as HTTPError;
       expect(loserErr).toBeInstanceOf(HTTPError);
-      expect(loserErr.code).toBe('INVALID_RUN_TRANSITION');
+      // R5 — race-loss is a distinct code (RUN_TRANSITION_RACED) from
+      // genuine state-machine violation (INVALID_RUN_TRANSITION). The
+      // bun:sqlite single-connection model serializes the two findFirsts
+      // so the loser will EITHER hit the outer isValidTransition check
+      // (INVALID_RUN_TRANSITION; running→running invalid) OR the inner
+      // WHERE-status guard (RUN_TRANSITION_RACED) depending on whether
+      // the winner's tx has committed before the loser's findFirst.
+      // Both paths are valid loser outcomes, both indicate "lost the
+      // race." This test pins the union behavior; the deterministic
+      // F1-inner-throw test below pins the specific RUN_TRANSITION_RACED
+      // code on the inner path.
+      expect(
+        loserErr.code === 'RUN_TRANSITION_RACED' ||
+        loserErr.code === 'INVALID_RUN_TRANSITION',
+      ).toBe(true);
 
       // Exactly one agent.run.running event for this row.
       const runEvents = await db.query.events.findMany({
@@ -590,6 +604,65 @@ describe('transitionRun', () => {
       });
       expect(runEvents.length).toBe(1);
     }
+  });
+
+  // R8 deterministic test — pin the F1 inner-throw path that the
+  // bun:sqlite-single-connection race test rarely exercises. We force
+  // a lockstep violation (column='running' but frontmatter.status='
+  // awaiting_approval') so transitionRun's outer isValidTransition
+  // sees 'awaiting_approval' (valid → running) but its inner UPDATE's
+  // `WHERE status='awaiting_approval'` matches 0 rows because the
+  // column is already 'running'. That's the exact pre-condition the
+  // F1 fix defends against — the production version arises from a
+  // concurrent transitionRun winner committing between our findFirst
+  // and our UPDATE.
+  test('throws RUN_TRANSITION_RACED on lockstep mismatch (inner-throw path)', async () => {
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+
+    const run = await seedRunAt(
+      db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'awaiting_approval',
+    );
+
+    // Force lockstep violation: column = 'running' but
+    // frontmatter.status stays 'awaiting_approval'. This is exactly
+    // the post-race-winner state from the loser's perspective:
+    //  - transitionRun's findFirst reads frontmatter.status =
+    //    'awaiting_approval' (the JSON field — used to derive `from`).
+    //  - isValidTransition('awaiting_approval','running') → true,
+    //    passes outer check.
+    //  - Inner UPDATE WHERE documents.status = 'awaiting_approval'
+    //    (the COLUMN, which IS 'running') affects 0 rows → triggers
+    //    RUN_TRANSITION_RACED inner throw.
+    //
+    // In production, mitigation 40 lockstep keeps column + JSON in
+    // sync — but ONLY within a single tx. A concurrent winner that
+    // commits between our findFirst (reading from JSON) and our
+    // UPDATE (predicating on column) produces exactly this skew.
+    await db.update(documents)
+      .set({ status: 'running' })
+      .where(eq(documents.id, run.id));
+
+    let caught: HTTPError | undefined;
+    try {
+      await transitionRun(run.id, { newStatus: 'running', actor: seed.user.id });
+    } catch (e) {
+      caught = e as HTTPError;
+    }
+    expect(caught).toBeInstanceOf(HTTPError);
+    expect(caught!.code).toBe('RUN_TRANSITION_RACED');
+
+    // R6 — observedFrom reflects the COLUMN's actual value (what the
+    // failed WHERE predicate evaluated against), not the frontmatter
+    // snapshot. Aids triage of race vs ABI violation in Sub-phase D
+    // approval handlers.
+    const err = caught as HTTPError & { from: string; to: string; observedFrom: string | undefined };
+    expect(err.from).toBe('awaiting_approval');
+    expect(err.to).toBe('running');
+    expect(err.observedFrom).toBe('running');
   });
 
   test('preserves existing worker_started_at when an awaiting_approval row resumes to running', async () => {
@@ -2234,6 +2307,52 @@ describe('checkProviderHealth', () => {
     });
     expect(result.next.status).toBe('healthy');
   });
+
+  // R4 regression — events older than `windowMs` are excluded. An idle
+  // workspace can't stay locked in stale degraded state; F7's
+  // per-recovery flush can't fire a spurious recovered against an
+  // empty window.
+  test('events older than the recency window are excluded (windowMs)', async () => {
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+
+    // 3 stale provider_error events (≥30 days ago).
+    const staleMs = Date.now() - 30 * 24 * 60 * 60 * 1000;
+    for (let i = 0; i < 3; i++) {
+      await seedTerminalRunEvent(db, {
+        workspace: seed.workspace, project: seed.project, runsTable,
+        agent, parent, user: seed.user,
+        provider: 'anthropic',
+        kind: 'agent.run.failed',
+        errorReason: 'provider_error',
+        seq: 9_500_001 + i,
+        createdAtMs: staleMs + i,
+      });
+    }
+
+    // With a 24h window, all 3 events drop → insufficient signal → healthy(0).
+    const result = await checkProviderHealth({
+      workspaceId: seed.workspace.id,
+      provider: 'anthropic',
+      threshold: 3,
+      windowMs: 24 * 60 * 60 * 1000,
+    });
+    expect(result.next.status).toBe('healthy');
+    expect(result.next.consecutive_failures).toBe(0);
+
+    // With a long enough window (60 days), the same events count → degraded.
+    const longWindow = await checkProviderHealth({
+      workspaceId: seed.workspace.id,
+      provider: 'anthropic',
+      threshold: 3,
+      windowMs: 60 * 24 * 60 * 60 * 1000,
+    });
+    expect(longWindow.next.status).toBe('degraded');
+    expect(longWindow.next.consecutive_failures).toBe(3);
+  });
 });
 
 // ---------- getProviderHealth ----------
@@ -2702,6 +2821,86 @@ describe('ensureRunsTable', () => {
     expect(byKind['status.created']).toBe(6);
     expect(byKind['view.created']).toBe(3);
     expect(byKind['runs_table.lazy_seeded']).toBe(1);
+  });
+});
+
+// ---------- R11: worker_started_at Z-suffix CHECK ----------
+
+describe('worker_started_at Z-suffix DB constraint (migration 0014)', () => {
+  test('rejects an INSERT with non-Z worker_started_at on an agent_run row', async () => {
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+
+    const now = new Date().toISOString();
+    let caught: Error | undefined;
+    try {
+      await db.insert(documents).values({
+        id: nanoid(),
+        workspaceId: seed.workspace.id,
+        projectId: seed.project.id,
+        tableId: runsTable.id,
+        type: 'agent_run',
+        slug: `helper-bad-${nanoid(6)}`,
+        title: 'bad tz',
+        status: 'running',
+        body: '',
+        frontmatter: {
+          assignee: `agent:${agent.slug}`,
+          status: 'running',
+          agent_slug: agent.slug,
+          provider: 'anthropic',
+          model: 'claude-sonnet-4-6',
+          system_prompt: 'x',
+          max_tokens: 1000,
+          tokens_in: 0,
+          tokens_out: 0,
+          trigger_id: null,
+          chain_id: crypto.randomUUID(),
+          fired_by: 'manual',
+          started_at: now,
+          // Non-Z offset — the R11 trigger MUST reject this.
+          worker_started_at: '2026-05-28T17:54:32.123+02:00',
+        } as unknown as Record<string, unknown>,
+        parentId: parent.id,
+        createdBy: seed.user.id,
+        updatedBy: seed.user.id,
+      });
+    } catch (e) {
+      caught = e as Error;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    expect(caught!.message.toLowerCase()).toContain('worker_started_at');
+  });
+
+  test('accepts an INSERT with a Z-suffixed worker_started_at on an agent_run row', async () => {
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+
+    const created = await seedRunAt(
+      db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'running',
+      { workerStartedAt: new Date().toISOString() },
+    );
+    expect(created.id).toBeTruthy();
+  });
+
+  test('accepts NULL worker_started_at (planning + recovered rows)', async () => {
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+
+    // seedRunAt default has no worker_started_at — must pass.
+    const created = await seedRunAt(
+      db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'planning',
+    );
+    expect(created.id).toBeTruthy();
   });
 });
 
