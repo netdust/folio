@@ -77,11 +77,17 @@ export const anthropic: AIProvider = {
           if (tc.jsonBuf.length > 0) {
             try {
               args = JSON.parse(tc.jsonBuf) as Record<string, unknown>;
-            } catch {
+            } catch (err) {
               // Malformed tool_use input_json buffer (truncated/garbled stream).
               // Emit the tool_call event with empty args so the runner still sees
               // the attempt; don't crash the generator before the trailing
-              // tokens/done events.
+              // tokens/done events. Warn so operators have a grep target when
+              // an agent run goes sideways — silent {} is indistinguishable
+              // from a legitimate {} call.
+              console.warn(
+                '[ai/anthropic] dropped malformed tool_use JSON in stream:',
+                err instanceof Error ? err.message : err,
+              );
               args = {};
             }
           }

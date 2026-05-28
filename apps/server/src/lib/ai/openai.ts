@@ -103,10 +103,16 @@ export const openai: AIProvider = {
       if (tc.argsBuf) {
         try {
           args = JSON.parse(tc.argsBuf) as Record<string, unknown>;
-        } catch {
+        } catch (err) {
           // Malformed tool_call args buffer (truncated/garbled stream). Emit the
           // tool_call event with empty args so the runner still sees the attempt;
           // don't crash the generator before the trailing tokens/done events.
+          // Warn so operators have a grep target when an agent run goes sideways
+          // — silent {} is indistinguishable from a legitimate {} call.
+          console.warn(
+            '[ai/openai] dropped malformed tool_call JSON in stream:',
+            err instanceof Error ? err.message : err,
+          );
           args = {};
         }
       }

@@ -59,10 +59,15 @@ export const ollama: AIProvider = {
         let chunk: Record<string, unknown>;
         try {
           chunk = JSON.parse(line) as Record<string, unknown>;
-        } catch {
+        } catch (err) {
           // Skip malformed NDJSON lines (proxy keep-alives, mid-stream HTML
           // error pages, network blips). Don't crash a stream that has valid
-          // lines around the garbage.
+          // lines around the garbage. Warn so operators have a grep target
+          // when an agent run goes sideways.
+          console.warn(
+            '[ai/ollama] dropped malformed NDJSON line in stream:',
+            err instanceof Error ? err.message : err,
+          );
           continue;
         }
         const msg = chunk.message as OllamaMessage | undefined;
@@ -112,9 +117,14 @@ export const ollama: AIProvider = {
           if (reason === 'length') stopReason = 'max_tokens';
           else if (reason === 'tool_calls') stopReason = 'tool_use';
         }
-      } catch {
-        // Drop silently; matches in-loop behavior. The trailing tokens/done
-        // below still fire, but we may have missed a real done flag.
+      } catch (err) {
+        // Drop silently in terms of stream output; matches in-loop behavior.
+        // The trailing tokens/done below still fire, but we may have missed
+        // a real done flag. Warn so operators have a grep target.
+        console.warn(
+          '[ai/ollama] dropped malformed trailing NDJSON record:',
+          err instanceof Error ? err.message : err,
+        );
       }
     }
 
