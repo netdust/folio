@@ -44,7 +44,7 @@ import { slugUniqueInDocuments, slugUniqueInWorkspaceDocuments } from '../lib/sl
 
 // ----- shared types & helpers (kept service-private; routes don't import) -----
 
-export type DocumentType = 'work_item' | 'page' | 'agent' | 'trigger';
+export type DocumentType = 'work_item' | 'page' | 'agent' | 'trigger' | 'agent_run';
 
 const RESERVED_FRONTMATTER_KEYS = [
   'type',
@@ -140,6 +140,7 @@ export async function listDocuments(
     'page',
     'agent',
     'trigger',
+    'agent_run',
   ]);
   if (opts.type && KNOWN_TYPES.has(opts.type as DocumentType)) {
     whereClauses.push(eq(documents.type, opts.type as DocumentType));
