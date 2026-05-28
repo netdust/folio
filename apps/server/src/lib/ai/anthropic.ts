@@ -44,7 +44,7 @@ export const anthropic: AIProvider = {
         description: t.description,
         input_schema: t.input_schema as { type: 'object'; [k: string]: unknown },
       })),
-      messages: anthropicMessages as never,
+      messages: anthropicMessages as Anthropic.MessageParam[],
     });
 
     let inTokens = 0;
