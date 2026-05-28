@@ -32,13 +32,24 @@ Created 2026-05-28 by `/evaluate` after Phase 3 Sub-phase A. One bullet per item
 
 ---
 
-**From Phase 3 Sub-phase C.1 review (2026-05-28 evening):**
+**From Phase 3 Sub-phase C.1 review (2026-05-28 evening — threat-model rounds 1+2):**
 
-- **C.1-R-1 — `events.document_id` has no FK to `documents.id`. Surfaces in Sub-phase D when `DELETE /runs/:id` lands.** `checkProviderHealth`'s INNER JOIN at `apps/server/src/services/agent-runs.ts:947-958` drops events whose target document was individually deleted. Workspace-cascade deletes are fine (events.workspace_id cascade catches them); individual run-deletes — not yet possible in C.1 but planned for Sub-phase D — would orphan recently-failed events out of the health window, potentially making a degraded provider look healthy. Two fixes available: (a) FK-constrain `events.document_id` with `ON DELETE SET NULL` so the row remains discoverable; (b) LEFT JOIN with NULL guards in `checkProviderHealth`. Decision lives with whoever writes the `DELETE /runs/:id` route — they own the cascade design. Surfaced by /code-review round 2 OF-1.
+- **C.1-R-1 — `events.document_id` has no FK to `documents.id`. Surfaces in Sub-phase D when `DELETE /runs/:id` lands.** `checkProviderHealth`'s INNER JOIN at `apps/server/src/services/agent-runs.ts:947-958` drops events whose target document was individually deleted. Workspace-cascade deletes are fine (events.workspace_id cascade catches them); individual run-deletes — not yet possible in C.1 but planned for Sub-phase D — would orphan recently-failed events out of the health window, potentially making a degraded provider look healthy. Two fixes available: (a) FK-constrain `events.document_id` with `ON DELETE SET NULL` so the row remains discoverable; (b) LEFT JOIN with NULL guards in `checkProviderHealth`. Decision lives with whoever writes the `DELETE /runs/:id` route — they own the cascade design. Surfaced by /code-review round 2 OF-1. **STILL ACTIVE — Sub-phase D follow-up.**
 
-- **C.1-R-2 — `ensureRunsTable` existence-check + INSERT race in concurrent first-callers. Surfaces in Sub-phase C.2 runner-loop.** Two simultaneous "first run" callers in distinct transactions could both miss the existence row, both attempt the INSERT, and the second hits the unique index `tables_project_slug_idx (project_id, slug)`. The outer tx rolls back. Practical race window is the first-run-after-table-creation window for a given project; in C.2 the runner is the only caller path. Fix options: (a) catch the unique-constraint violation in `ensureRunsTable` and return the existing row instead of throwing; (b) serialize lazy-seed at the runner level (single async lock per project_id); (c) accept that the loser's first run fails and gets retried on the next poll tick. Decision lives with C.2 runner-loop author. Surfaced by /code-review round 2 OF-2.
+- ~~**C.1-R-2** — `ensureRunsTable` existence-check + INSERT race~~. **RESOLVED 2026-05-28 evening as F14** in freeform /code-review bundle 5 (`126a7b2`). Switched to `onConflictDoNothing` + post-insert re-fetch; loser short-circuits, lifecycle events emit exactly once across concurrent callers. Race test in place.
 
-- **C.1-R-3 — `tasks/todo.md` C-section section is stale.** It still lists Sub-phase A tasks as `[ ]` and doesn't track C.1's commits. Either update it to current state OR retire it (it's already superseded by per-phase plans + STATE.md's plan-expansion status). Trivial. Decision: UPDATE-IN-PLACE (one editor pass after C.1 closes) or RETIRE (delete + add a note to STATE.md that todo.md is no longer the active surface).
+- **C.1-R-3 — `tasks/todo.md` C-section section is stale.** It still lists Sub-phase A tasks as `[ ]` and doesn't track C.1's commits. Either update it to current state OR retire it (it's already superseded by per-phase plans + STATE.md's plan-expansion status). Trivial. Decision: UPDATE-IN-PLACE (one editor pass after C.1 closes) or RETIRE (delete + add a note to STATE.md that todo.md is no longer the active surface). **STILL ACTIVE — housekeeping.**
+
+**From Phase 3 Sub-phase C.1 freeform code-review (2026-05-28 night — 9 angles + 10 verifiers, 15 findings):**
+
+All 15 findings shipped as 5 atomic commits (bundles 1–5). Summary:
+- **Bundle 1 (`799238f`)** — F8 ISO→ms-epoch in raw-SQL `updated_at`, F12 `tx.all<Document>` type lie, F6 `json_extract(...status)` → indexed `status` column.
+- **Bundle 2 (`3ff4d8c`)** — F2 stamp `worker_started_at` on every →running transition, F1 `transitionRun` TOCTOU race fix.
+- **Bundle 3 (`cb5ab5e`)** — F4 `workspace.provider.*` events emit with projectId:null, F5 `checkProviderHealth` filters to provider-relevant signals only, F7 `recoverOrphanRuns` flushes provider state per (workspace, provider), F11 (REFUTED — algorithm correct; counter capped at threshold by design).
+- **Bundle 4 (`e505ae7`)** — F3+F9+F10 cross-route `agent_run` guards (PATCH md, PATCH json, DELETE, createDocument, DOCUMENT_TYPES).
+- **Bundle 5 (`126a7b2`)** — F13 (REFUTED — schema already enforces Z-only via Zod's default `offset: false`), F14 `ensureRunsTable` race (resolves C.1-R-2), F15 partial-index drift surface (documented; Drizzle limitation).
+
+Net suite delta: server **782 → 796** (+14 tests). Two threat-model findings were REFUTED on verification; locked in via code comments + tests.
 
 ---
 

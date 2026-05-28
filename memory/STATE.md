@@ -1,24 +1,40 @@
 # Folio — STATE
 
-_Last updated: 2026-05-28 late evening (Phase 3 Sub-phase C.1 COMPLETE + review-closed on `phase-3/agent-runner` — 6 tasks C-1..C-6 shipped + 2-round /code-review verified all 12 bound mitigations + 1 A1 audit-trail fixup + 2 plan corrections; next blocking step is plan-correction commit expanding C-7..C-9 task bodies before Sub-phase C.2 work)._
+_Last updated: 2026-05-28 night (Phase 3 Sub-phase C.1 FULLY HARDENED on `phase-3/agent-runner` — 6 tasks shipped + 2-round threat-model review (all 12 mitigations in place) + 1 audit-trail fixup A1 + 2 plan corrections + 9-angle/10-verifier freeform code-review found 15 bugs, ALL FIXED across 5 atomic bundles. Server suite **796 pass / 1 skip / 0 fail**. Next blocking step is plan-correction commit expanding C-7..C-9 task bodies before Sub-phase C.2 work.)_
 
 Living snapshot of where the project actually is. Read at session start. Update at session end if anything below changed.
 
-## Next up — C.1 review-closed; C.2 expansion required before code work
+## Next up — C.1 fully hardened; C.2 expansion required before code work
 
-**C.1 is shipped + reviewed.** Two independent medium-effort /code-review rounds against the threat model verified all 12 C.1-bound mitigations (23, 24, 28, 29, 36, 37, 38, 39, 40, 45, 46, 47) are in place with file/line evidence. Zero correctness defects. One audit-trail tightening (`runErrorReasonSchema.enum.worker_crash` replacing the raw literal in `recoverOrphanRuns`) shipped as A1. Two plan corrections shipped (mitigation 36 BEGIN-IMMEDIATE-vs-DEFERRED, mitigation 40 worker_started_at null-vs-undefined acceptance text). Two robustness follow-ups handed to C.2/D via `tasks/retro-follow-ups.md` (events.document_id FK + ensureRunsTable race).
+**C.1 is shipped + threat-model-reviewed + freeform-reviewed + fully fixed.** Two phases of review:
+
+1. **Threat-model review (2 medium-effort rounds, both CONFIRMED)** — verified all 12 C.1-bound mitigations (23, 24, 28, 29, 36, 37, 38, 39, 40, 45, 46, 47) are in place with file/line evidence. Zero defects against named mitigations. Produced A1 (worker_crash literal → enum constant) + 2 plan corrections (mitigation 36 DEFERRED-vs-BEGIN-IMMEDIATE, mitigation 40 worker_started_at null-vs-undefined).
+
+2. **Freeform code-review (9 angles × up to 8 candidates + 10 verifiers + dedup)** — surfaced 15 bugs the threat-model review missed because the bound rounds couldn't see across files. 4 CRITICAL, 4 HIGH, 3 MEDIUM, 4 LOW. **ALL 15 SHIPPED as 5 atomic bundles** with passing regression tests. Two findings (F11 counter cap + F13 ISO offset enforcement) reduced to documentation after verification proved them already-enforced-by-design — locked in via comments + tests so the invariants don't silently drift.
+
+The freeform review surfaced this entire class of bug **that the threat-model review couldn't see**: C-1 widened `DocumentType` to include `agent_run`, which opened mutation paths through generic routes (PATCH /documents, DELETE /documents, POST markdown) that bypassed every state-machine + sanitizer + edge-emission mitigation. The threat-model review verified mitigations 28/39/40 in their CALL SITES, but didn't audit cross-route attack surfaces. Bundle 4 (`e505ae7`) closes that gap with 5 cross-route agent_run guards + 5 regression tests.
 
 **Next blocking step**: **plan-correction commit expanding C-7..C-9 task bodies** before ANY C.2 code work. Per plan §"Sub-phase C.1 close-out" line 1015: *"Plan-correction commit: expand C.2 (runner + dispatcher) task bodies. Following the same per-task format as C.1 above, with per-task mitigation pointers into the C-extension threat model."*
 
 C-7..C-9 today are header-only outlines at plan lines 3818–3845 (no Steps / no Files / no Tests body). Dispatching against them is the failure mode the C-section audit caught (handoff `8beec5e`). The plan-correction must produce executable bodies in the same shape as C.1's expanded section (lines 423–993).
 
-**Branch state at session start (Phase 3 C.2 onwards):**
-- HEAD: TBD (will land after this session's commits — `b4d84c1` is C-6, plus the A1 + plan-correction + retro-follow-ups + STATE updates from this session)
-- Server suite: **782 pass / 1 skip / 0 fail** (C.1 complete delta: 716 → 782 = +66)
+**Branch state at session end (Phase 3 C.2 onwards):**
+- HEAD: `126a7b2` (review-fix bundle 5; 5 review-fix commits on top of C-6 `b4d84c1` + A1 `13ccf61` + plan-corrections+STATE `1615c34`)
+- Server suite: **796 pass / 1 skip / 0 fail** (C.1 complete + reviewed delta: 716 → 796 = +80 tests across services + cross-route guards)
 - Web suite: **559 pass / 8 skip / 0 fail** (unchanged through C.1 — server + shared only)
 - Shared: **51 / 0 fail**
 - TSC: clean both apps for touched files
-- `.last-integration` marker: `666635a` (set after C-6 by /integration gate)
+- `.last-integration` marker: `666635a` (pre-review; rerun /integration to advance to `126a7b2`)
+
+### Sub-phase C.1 review-fix bundles (this session)
+
+| Bundle | Commit | Findings | Bug class |
+|---|---|---|---|
+| 1 | `799238f` | F8 + F12 + F6 | ISO→ms-epoch in raw SQL · `tx.all<Document>` type tightened · `status` column predicate replaces `json_extract` (partial-index now used) |
+| 2 | `3ff4d8c` | F2 + F1 | `worker_started_at` stamped on every →running (orphan recovery reaches them) · `transitionRun` TOCTOU race fix (status predicate + rowcount check + 50-iter race test) |
+| 3 | `cb5ab5e` | F4 + F5 + F7 + F11 | `workspace.provider.*` events `projectId:null` (cross-project SSE delivery) · provider-relevant filter at SQL (worker_crash no longer resets degraded) · orphan-recovery flushes per-(workspace, provider) · counter-cap semantics documented |
+| 4 | `e505ae7` | F3 + F9 + F10 | Cross-route agent_run guards (PATCH md/JSON + DELETE + createDocument + DOCUMENT_TYPES) — closes the attack surface DocumentType-widening opened |
+| 5 | `126a7b2` | F13 + F14 + F15 | Zod `.datetime()` Z-only enforcement documented · `ensureRunsTable` race resolved via `onConflictDoNothing` (resolves retro-follow-up C.1-R-2) · Drizzle partial-index limitation documented |
 
 ### Plan-expansion status (DON'T FORGET — gates the next sub-phase)
 
