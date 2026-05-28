@@ -6,6 +6,10 @@ Living snapshot of where the project actually is. Read at session start. Update 
 
 ## Next up — C.1 fully hardened; C.2 expansion required before code work
 
+> **⛔ Runner prerequisite — MCP dispatch extraction (added 2026-05-28).** Before `lib/runner.ts::runAgent` can work, `tools/list` + `tools/call` + the `TOOLS` registry must be lifted out of the Hono route (`routes/mcp.ts:1253-1314`) into a callable `lib/mcp-dispatch.ts` exposing `callTool(token, actor, name, args)` + `listTools(token)` (scope-filtered). The runner has no HTTP request, so it cannot reach tool dispatch as it stands today — every `tool_call` from the model hits a wall. Pure extraction; existing MCP route tests pin the behavior. New task block lives in `docs/PHASES.md` under "MCP tool dispatch — extract to a callable lib (runner prerequisite)", placed immediately before the Runner section. Rationale + product framing: `memory/project_folio-agent-thesis.md` (agent = power user, human = reviewer; turn-based runs; "set up a project for me" keystone — all flow through this tool surface).
+>
+> _Build-decision (2026-05-28): hand-roll the runner loop on the existing `lib/ai/provider.stream()` generators — NOT the Vercel AI SDK. The provider layer already normalizes events (`text|tool_call|tokens|done`) and the tool round-trip; the SDK would force re-adapting 4 finished, tested provider files for ~40 lines of glue. Net loss._
+
 **C.1 is shipped + threat-model-reviewed + freeform-reviewed + fully fixed.** Two phases of review:
 
 1. **Threat-model review (2 medium-effort rounds, both CONFIRMED)** — verified all 12 C.1-bound mitigations (23, 24, 28, 29, 36, 37, 38, 39, 40, 45, 46, 47) are in place with file/line evidence. Zero defects against named mitigations. Produced A1 (worker_crash literal → enum constant) + 2 plan corrections (mitigation 36 DEFERRED-vs-BEGIN-IMMEDIATE, mitigation 40 worker_started_at null-vs-undefined).
@@ -1100,3 +1104,4 @@ See `docs/PHASES.md` for the canonical phase list (above-section mirrors it). Lo
 **Decisions**
 - **accept tx (plan signature)**. Caller (Sub-phase C.2 createRun extension, or test) wraps with `txWithEvents` or `db.transaction` as appropriate.
 - **the F11 finding is REFUTED by the algorithm**. Reverting my code change and removing the misleading test:
+[2026-05-28] — session ended (no significant changes captured)
