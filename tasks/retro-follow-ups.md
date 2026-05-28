@@ -27,3 +27,5 @@ Created 2026-05-28 by `/evaluate` after Phase 3 Sub-phase A. One bullet per item
   **Source:** Phase 3 Sub-phase A retro, Harness Gap #1.
 
 - **B-2 minor cast tightenings deferred from code-quality review:** (a) `input_schema as { type: 'object'; [k: string]: unknown }` could become `Tool.InputSchema` if exported; (b) `stream as AsyncIterable<Record<string, unknown>>` could be `MessageStreamEvent`. Both at the SDK boundary. Defer to next-touch — neither blocks B-3/4/5.
+
+- **Should `/code-review` raise its 15-finding cap for security-rich surfaces when invoked at `--effort=high`?** Sub-phase B's 7 rounds each hit the cap (15/15/9/9/11/7/15), driving a multi-round trickle pattern. Decision: YES → modify the medium/high `/code-review` skill to use cap=30 when invoked with `--effort=high` AND the diff includes surfaces from the `netdust-core:threat-modeling` predicate. NO → current cap stays; multi-round review accepted as v1 reality. (Surfaced by `docs/superpowers/retros/2026-05-28-phase-3-sub-phase-B-retro.md` Harness gap §6.) Decision-needed-by: before Sub-phase C planning starts (runner surfaces fit the predicate).
