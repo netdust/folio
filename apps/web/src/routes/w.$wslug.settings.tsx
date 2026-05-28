@@ -2,6 +2,7 @@ import { createFileRoute } from '@tanstack/react-router';
 import { useState } from 'react';
 import { useWorkspace } from '../lib/api/workspaces.ts';
 import { TokensTab } from '../components/settings/tokens-tab.tsx';
+import { AiTab } from '../components/settings/ai-tab.tsx';
 import { Tabs } from '../components/ui/tabs.tsx';
 
 export const Route = createFileRoute('/w/$wslug/settings')({
@@ -13,7 +14,7 @@ function RouteComponent() {
   return <SettingsPage wslug={wslug} />;
 }
 
-type TabKey = 'tokens';
+type TabKey = 'tokens' | 'ai';
 
 export function SettingsPage({ wslug }: { wslug: string }) {
   const workspace = useWorkspace(wslug);
@@ -32,12 +33,18 @@ export function SettingsPage({ wslug }: { wslug: string }) {
         <Tabs<TabKey>
           value={tab}
           onChange={setTab}
-          items={[{ value: 'tokens', label: 'API tokens' }]}
+          items={[
+            { value: 'tokens', label: 'API tokens' },
+            { value: 'ai', label: 'AI' },
+          ]}
         />
       </div>
 
       {tab === 'tokens' && workspace.data ? (
         <TokensTab wslug={wslug} workspaceId={workspace.data.id} />
+      ) : null}
+      {tab === 'ai' && workspace.data ? (
+        <AiTab wslug={wslug} workspaceId={workspace.data.id} />
       ) : null}
     </div>
   );

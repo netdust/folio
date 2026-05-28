@@ -1,0 +1,203 @@
+import { useState } from 'react';
+import { toast } from 'sonner';
+import {
+  type AiProvider,
+  useWorkspaceAiKeys,
+  useUpsertAiKey,
+  useDeleteAiKey,
+} from '../../lib/api/settings.ts';
+import { useTestKey } from '../../lib/api/ai-test-key.ts';
+import { formatApiError } from '../../lib/api/index.ts';
+import { Button } from '../ui/button.tsx';
+
+interface Props {
+  wslug: string;
+  workspaceId: string;
+}
+
+const PROVIDERS: AiProvider[] = ['anthropic', 'openai', 'openrouter', 'ollama'];
+
+const KNOWN_MODELS: Record<AiProvider, readonly [string, ...string[]]> = {
+  anthropic: ['claude-opus-4-7', 'claude-sonnet-4-6', 'claude-haiku-4-5'],
+  openai: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo'],
+  openrouter: ['anthropic/claude-haiku-4-5', 'openai/gpt-4o-mini'],
+  ollama: ['llama3.1', 'qwen2.5'],
+};
+
+export function AiTab({ wslug, workspaceId }: Props) {
+  const [provider, setProvider] = useState<AiProvider>('anthropic');
+  const [model, setModel] = useState<string>(KNOWN_MODELS.anthropic[0]);
+  const [apiKey, setApiKey] = useState('');
+  const [baseUrl, setBaseUrl] = useState('');
+  const [testResult, setTestResult] = useState<null | { ok: boolean; reason?: string }>(null);
+
+  const keysQuery = useWorkspaceAiKeys(wslug, workspaceId);
+  const upsertKey = useUpsertAiKey(wslug, workspaceId);
+  const deleteKey = useDeleteAiKey(wslug, workspaceId);
+  const testKey = useTestKey();
+
+  function onProviderChange(next: AiProvider) {
+    setProvider(next);
+    setModel(KNOWN_MODELS[next][0]);
+    setTestResult(null);
+  }
+
+  async function onTest() {
+    setTestResult(null);
+    try {
+      const r = await testKey.mutateAsync({
+        wslug,
+        provider,
+        model,
+        apiKey,
+        baseUrl: baseUrl || undefined,
+      });
+      setTestResult(r);
+    } catch (err) {
+      setTestResult({ ok: false, reason: formatApiError(err) });
+    }
+  }
+
+  async function onSave() {
+    try {
+      await upsertKey.mutateAsync({ provider, apiKey, baseUrl: baseUrl || undefined });
+      toast.success(`Saved ${provider} key`);
+      setApiKey('');
+      setBaseUrl('');
+      setTestResult(null);
+    } catch (err) {
+      toast.error(formatApiError(err));
+    }
+  }
+
+  const inputClass =
+    'mt-1 block w-full rounded-md border border-border-light bg-content px-2 py-1.5 text-sm';
+
+  return (
+    <div className="space-y-6">
+      <section>
+        <h2 className="text-sm font-medium">AI Provider</h2>
+        <p className="mt-0.5 text-xs text-fg-2">
+          Configure a provider key so agents in this workspace can talk to an LLM.
+          Keys are encrypted at rest. Bring-your-own-key — Folio never holds a default.
+        </p>
+
+        <div className="mt-4 grid max-w-md gap-3">
+          <label className="block">
+            <span className="block text-xs font-medium text-fg-2">Provider</span>
+            <select
+              value={provider}
+              onChange={(e) => onProviderChange(e.target.value as AiProvider)}
+              aria-label="Provider"
+              className={inputClass}
+            >
+              {PROVIDERS.map((p) => (
+                <option key={p} value={p}>{p}</option>
+              ))}
+            </select>
+          </label>
+
+          <label className="block">
+            <span className="block text-xs font-medium text-fg-2">Model</span>
+            <input
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+              list={`models-${provider}`}
+              aria-label="Model"
+              className={inputClass}
+            />
+            <datalist id={`models-${provider}`}>
+              {KNOWN_MODELS[provider].map((m) => (
+                <option key={m} value={m} />
+              ))}
+            </datalist>
+          </label>
+
+          <label className="block">
+            <span className="block text-xs font-medium text-fg-2">API key</span>
+            <input
+              type="password"
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+              aria-label="API key"
+              className={inputClass}
+            />
+          </label>
+
+          {provider === 'ollama' ? (
+            <label className="block">
+              <span className="block text-xs font-medium text-fg-2">Base URL</span>
+              <input
+                value={baseUrl}
+                onChange={(e) => setBaseUrl(e.target.value)}
+                placeholder="http://localhost:11434"
+                aria-label="Base URL"
+                className={inputClass}
+              />
+            </label>
+          ) : null}
+
+          <div className="mt-1 flex gap-2">
+            <Button
+              variant="secondary"
+              onClick={onTest}
+              disabled={!apiKey || testKey.isPending}
+            >
+              {testKey.isPending ? 'Testing…' : 'Test'}
+            </Button>
+            <Button onClick={onSave} disabled={!apiKey || upsertKey.isPending}>
+              {upsertKey.isPending ? 'Saving…' : 'Save key'}
+            </Button>
+          </div>
+
+          {testResult ? (
+            <div
+              role="status"
+              className={testResult.ok ? 'text-xs text-success' : 'text-xs text-danger'}
+            >
+              {testResult.ok ? '✓ Key validated' : `✗ ${testResult.reason ?? 'Unknown error'}`}
+            </div>
+          ) : null}
+        </div>
+      </section>
+
+      <section>
+        <h2 className="text-sm font-medium">Configured keys</h2>
+        <ul className="mt-2 divide-y divide-border-light overflow-hidden rounded-md border border-border-light">
+          {PROVIDERS.map((p) => {
+            const row = (keysQuery.data ?? []).find((k) => k.provider === p);
+            return (
+              <li
+                key={p}
+                className="flex items-center justify-between bg-content px-3 py-2 text-sm"
+              >
+                <span>
+                  <span className="font-medium">{p}</span>
+                  {row ? (
+                    <span className="ml-2 text-xs text-fg-2">
+                      ✓ saved {new Date(row.createdAt).toLocaleDateString()}
+                    </span>
+                  ) : (
+                    <span className="ml-2 text-xs text-fg-3">— not configured</span>
+                  )}
+                </span>
+                {row ? (
+                  <Button
+                    variant="ghost"
+                    onClick={() =>
+                      deleteKey
+                        .mutateAsync(row.id)
+                        .catch((err) => toast.error(formatApiError(err)))
+                    }
+                  >
+                    Remove
+                  </Button>
+                ) : null}
+              </li>
+            );
+          })}
+        </ul>
+      </section>
+    </div>
+  );
+}
