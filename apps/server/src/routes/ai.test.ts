@@ -120,6 +120,39 @@ describe('POST /api/v1/w/:wslug/ai/test-key', () => {
     expect(body.error.code).toBe('FORBIDDEN');
   });
 
+  // B round 2 fix #12 — a session caller whose browser also carries a stray
+  // Authorization header must NOT get 403. The session cookie wins.
+  test('accepts session callers even when an Authorization header is also present', async () => {
+    const { app, db, seed } = await makeTestApp();
+    const { token, hash } = newApiToken();
+    await db.insert(apiTokens).values({
+      id: nanoid(),
+      workspaceId: seed.workspace.id,
+      name: 'stray PAT',
+      tokenHash: hash,
+      scopes: ['documents:read'],
+      createdBy: seed.user.id,
+    });
+
+    const res = await app.request(`/api/v1/w/${seed.workspace.slug}/ai/test-key`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Cookie: seed.sessionCookie, // session present
+        Authorization: `Bearer ${token}`, // stray token alongside
+      },
+      body: JSON.stringify({
+        provider: 'anthropic',
+        model: 'claude-haiku-4-5',
+        api_key: 'sk-mock-good',
+      }),
+    });
+    // Session takes precedence — request runs, mocked provider returns ok.
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.data).toEqual({ ok: true });
+  });
+
   test('does NOT persist the key', async () => {
     const { app, db, seed } = await makeTestApp();
     const before = await db.query.aiKeys.findMany();
