@@ -17,7 +17,7 @@
  * The runner (Task C-2+) calls these directly; routes (Task C-7) wrap them.
  */
 
-import { and, desc, eq, gte, inArray, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, ne, sql } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { db, type DB } from '../db/client.ts';
 import {
@@ -490,9 +490,18 @@ const ACTIVE_RUN_STATUSES = ['planning', 'awaiting_approval', 'running'] as cons
  * `(parent_id, created_at DESC) WHERE type='agent_run'` covers
  * `WHERE type='agent_run' AND parent_id = ? ORDER BY created_at DESC`.
  * Status + agent_slug predicates are residual filters on the candidate set.
+ *
+ * `excludeRunId` (optional) — drop a specific run id from the candidate set.
+ * The resume path passes the ORIGINAL run's id here (the row the resuming run
+ * is resuming, i.e. `frontmatter.resume_of`): during a resume there are TWO
+ * non-terminal rows on the same (parent, agent_slug) — the original
+ * `awaiting_approval` row AND the new `running` resuming row — but the original
+ * is LINEAGE, not a competing peer, so it must not trip the resume's
+ * idempotency check. Excluding it is order-independent (no reliance on
+ * created_at tiebreaks). A genuine third peer is still returned.
  */
 export async function getActiveRun(
-  args: { parentId: string; agentSlug: string },
+  args: { parentId: string; agentSlug: string; excludeRunId?: string },
   tx: DBOrTx = db,
 ): Promise<Document | null> {
   const row = await tx.query.documents.findFirst({
@@ -501,6 +510,7 @@ export async function getActiveRun(
       eq(documents.parentId, args.parentId),
       inArray(documents.status, [...ACTIVE_RUN_STATUSES]),
       sql`json_extract(${documents.frontmatter}, '$.agent_slug') = ${args.agentSlug}`,
+      ...(args.excludeRunId ? [ne(documents.id, args.excludeRunId)] : []),
     ),
     orderBy: [desc(documents.createdAt)],
   });

@@ -201,11 +201,14 @@ export async function runAgentResume(args: { runId: string }): Promise<void> {
       return;
     }
 
-    // Same pre-flight gate as a fresh run (rate limits, chain guards, etc.).
-    if (await preflight(ctx)) return;
+    // Same pre-flight gate as a fresh run (rate limits, chain guards, etc.),
+    // but exclude the original run from step 6's idempotency check — it is the
+    // lineage being resumed, not a competing peer. `original.id` and
+    // `ctx.fm.resume_of` are the same id; use the loaded row's id directly.
+    if (await preflight(ctx, original.id)) return;
 
     // Build the resume message history, then delegate to the SHARED loop.
-    const messages = await buildResumeMessages(ctx, original);
+    const messages = await buildResumeMessages(ctx);
     await runLoop(ctx, messages);
   } catch (err) {
     await failRunLastResort(runId, providerLabel, err);
@@ -304,8 +307,15 @@ async function loadContext(runId: string): Promise<RunContext | null> {
  * Six belt-and-suspenders checks, cheapest first. Returns true if a check
  * BLOCKED (the run was transitioned to failed and the caller must return).
  * None of these throw.
+ *
+ * `excludeRunId` (optional) — a sibling run id to drop from step 6's
+ * idempotency check. The resume path passes the ORIGINAL run's id
+ * (`fm.resume_of`): the original `awaiting_approval` row and the resuming
+ * `running` row are BOTH non-terminal on the same (parent, agent_slug), but
+ * the original is the lineage being resumed, not a competing peer, so it must
+ * not trip the idempotency violation. A genuine third peer still trips it.
  */
-async function preflight(ctx: RunContext): Promise<boolean> {
+async function preflight(ctx: RunContext, excludeRunId?: string): Promise<boolean> {
   const { run, fm, agent, agentFm } = ctx;
   const runId = run.id;
 
@@ -384,7 +394,16 @@ async function preflight(ctx: RunContext): Promise<boolean> {
   // 6 — idempotency: another sibling run already active on the same parent for
   // this agent slug. getActiveRun returns the most-recent non-terminal run; if
   // it is a DIFFERENT run than this one, a peer is in flight — block.
-  const active = await getActiveRun({ parentId: ctx.parentId, agentSlug: fm.agent_slug });
+  //
+  // On a resume, `excludeRunId` = the original (`fm.resume_of`) row so the
+  // lineage row is dropped from the candidate set BEFORE ordering — this is
+  // order-independent (no reliance on created_at tiebreaks between the original
+  // and the resuming row). A genuine third peer is still returned and blocks.
+  const active = await getActiveRun({
+    parentId: ctx.parentId,
+    agentSlug: fm.agent_slug,
+    excludeRunId,
+  });
   if (active && active.id !== runId) {
     await failRun(
       ctx,
@@ -450,8 +469,12 @@ async function buildInitialMessages(ctx: RunContext): Promise<Message[]> {
  *
  * Mitigation 25 — literal text only, no `[[wiki-link]]` expansion.
  */
-async function buildResumeMessages(ctx: RunContext, original: Document): Promise<Message[]> {
-  // Reuse the fresh-run base (parent body + comment/result thread).
+async function buildResumeMessages(ctx: RunContext): Promise<Message[]> {
+  // Reuse the fresh-run base (parent body + comment/result thread). That base
+  // already includes the FULL comment/result thread on the parent, so any
+  // catch-up comments the human added after the original entered
+  // awaiting_approval are picked up here — no delta-from-original needed, which
+  // is why the original run row is not consulted during message-building.
   const messages = await buildInitialMessages(ctx);
 
   // plan + approval comments on the parent become approval context. These are
@@ -469,14 +492,6 @@ async function buildResumeMessages(ctx: RunContext, original: Document): Promise
     if (!c.body || c.body.trim().length === 0) continue;
     messages.push({ role: 'user', content: c.body });
   }
-
-  // Catch-up: any NEW normal/result comments posted after the original run
-  // entered awaiting_approval. buildInitialMessages already includes the full
-  // thread, so this would double-count — instead we rely on the full-thread
-  // inclusion above. The `original.started_at` boundary is retained as a hook
-  // for a future delta-only construction; for now the full thread is the
-  // catch-up surface and `original` confirms the resume lineage.
-  void original;
 
   return messages;
 }

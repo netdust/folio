@@ -837,11 +837,19 @@ describe('runAgentResume', () => {
       where: and(eq(tables.projectId, project.id), eq(tables.slug, 'runs')),
     });
     // Original run is awaiting_approval; the running-run seeded by scaffold
-    // becomes the resuming row.
+    // becomes the resuming row. Stamp the original with a STRICTLY-LATER
+    // createdAt than the resuming row — the realistic order (the original was
+    // created first in wall-clock terms, but second-resolution clocks tie, and
+    // a desc(createdAt) sort without the exclusion would surface the original).
+    // This pins the real contract: the resume must proceed regardless of order.
     const original = await seedRunAt(db, workspace, project, runsTable!, agent, parent, user, {
       status: 'awaiting_approval',
       chain_id: (await readRun(db, run.id)).chain_id,
     });
+    await db
+      .update(documents)
+      .set({ createdAt: new Date(Date.now() + 60_000) })
+      .where(eq(documents.id, original.id));
     // Plan + approval comments on the parent.
     await seedUserComment(
       db,
@@ -915,6 +923,13 @@ describe('runAgentResume', () => {
       status: 'awaiting_approval',
       chain_id: (await readRun(db, run.id)).chain_id,
     });
+    // Realistic adversarial order: original strictly newer than the resuming
+    // row, so a desc(createdAt) sort without the lineage exclusion would surface
+    // the original and trip idempotency. Pins the contract here too.
+    await db
+      .update(documents)
+      .set({ createdAt: new Date(Date.now() + 60_000) })
+      .where(eq(documents.id, original.id));
     await db
       .update(documents)
       .set({
@@ -940,6 +955,93 @@ describe('runAgentResume', () => {
     const results = await listKind(db, parent.id, 'result');
     expect(results.length).toBe(1);
     expect(results[0]!.body).toBe('done resuming');
+  });
+
+  test('does not trip idempotency_violation against the original awaiting_approval run being resumed', async () => {
+    const { db, workspace, project, user, agent, parent, run } = await scaffold();
+    const runsTable = await db.query.tables.findFirst({
+      where: and(eq(tables.projectId, project.id), eq(tables.slug, 'runs')),
+    });
+    // Original awaiting_approval row, stamped STRICTLY LATER than the resuming
+    // row. WITHOUT the lineage exclusion, getActiveRun (desc createdAt) would
+    // return the original and fail the resume with idempotency_violation. The
+    // exclusion of resume_of must keep the resume alive.
+    const original = await seedRunAt(db, workspace, project, runsTable!, agent, parent, user, {
+      status: 'awaiting_approval',
+      chain_id: (await readRun(db, run.id)).chain_id,
+    });
+    await db
+      .update(documents)
+      .set({ createdAt: new Date(Date.now() + 60_000) })
+      .where(eq(documents.id, original.id));
+    await db
+      .update(documents)
+      .set({
+        frontmatter: sql`json_set(${documents.frontmatter}, '$.resume_of', ${original.id})`,
+      })
+      .where(eq(documents.id, run.id));
+
+    const control: StubControl = {
+      rounds: [
+        [
+          { type: 'text', delta: 'resumed fine' },
+          { type: 'done', reason: 'stop' },
+        ],
+      ],
+      called: 0,
+    };
+    installProviderStub(control);
+
+    await runAgentResume({ runId: run.id });
+
+    // Provider was called and the run completed — the original did NOT trip the
+    // idempotency check.
+    expect(control.called).toBe(1);
+    const fm = await readRun(db, run.id);
+    expect(fm.status).toBe('completed');
+    expect(fm.error_reason ?? null).toBeNull();
+    const results = await listKind(db, parent.id, 'result');
+    expect(results[0]!.body).toBe('resumed fine');
+  });
+
+  test('still trips idempotency_violation when a DIFFERENT peer run is active on the same parent during resume', async () => {
+    const { db, workspace, project, user, agent, parent, run } = await scaffold();
+    const runsTable = await db.query.tables.findFirst({
+      where: and(eq(tables.projectId, project.id), eq(tables.slug, 'runs')),
+    });
+    const chainId = (await readRun(db, run.id)).chain_id;
+    // The original awaiting_approval row (lineage — excluded from the check).
+    const original = await seedRunAt(db, workspace, project, runsTable!, agent, parent, user, {
+      status: 'awaiting_approval',
+      chain_id: chainId,
+    });
+    await db
+      .update(documents)
+      .set({
+        frontmatter: sql`json_set(${documents.frontmatter}, '$.resume_of', ${original.id})`,
+      })
+      .where(eq(documents.id, run.id));
+    // A THIRD, unrelated peer at running on the same (parent, agent_slug). This
+    // is a genuine competing peer — the resume MUST still be blocked. Stamp it
+    // newest so it is the row getActiveRun surfaces after the lineage exclusion.
+    const peer = await seedRunAt(db, workspace, project, runsTable!, agent, parent, user, {
+      status: 'running',
+      chain_id: crypto.randomUUID(),
+    });
+    await db
+      .update(documents)
+      .set({ createdAt: new Date(Date.now() + 120_000) })
+      .where(eq(documents.id, peer.id));
+
+    const control: StubControl = { rounds: [], called: 0 };
+    installProviderStub(control);
+
+    await runAgentResume({ runId: run.id });
+
+    const fm = await readRun(db, run.id);
+    expect(fm.status).toBe('failed');
+    expect(fm.error_reason).toBe('idempotency_violation');
+    expect(control.called).toBe(0);
   });
 
   test('transitions failed/idempotency_violation if resume_of points at a non-awaiting_approval row', async () => {
