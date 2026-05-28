@@ -54,6 +54,41 @@ export function validatePublicUrl(input: string): UrlValidationResult {
     }
   }
 
+  // IPv4-mapped IPv6 (::ffff:a.b.c.d or ::ffff:hhhh:hhhh).
+  // Bun's URL parser canonicalizes both forms to ::ffff:hhhh:hhhh.
+  // Linux routes these to the underlying IPv4 address, so a mapped
+  // loopback/private IPv4 reaches the same target — the existing
+  // IPv4 prefix checks don't see it because the host string is IPv6.
+  const mappedMatch = host.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
+  if (mappedMatch) {
+    const hi = Number.parseInt(mappedMatch[1] ?? '0', 16);
+    const lo = Number.parseInt(mappedMatch[2] ?? '0', 16);
+    const ipv4 = `${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`;
+    for (const re of BLOCKED_IPV4_PREFIXES) {
+      if (re.test(ipv4)) {
+        return {
+          ok: false,
+          reason: `base_url IPv4-mapped IPv6 points at a private/loopback address (${host} → ${ipv4})`,
+        };
+      }
+    }
+  }
+
+  // Also block the dotted IPv4-mapped form ::ffff:a.b.c.d if the parser kept it.
+  // (Bun normalizes to the hex form above; other runtimes may not.)
+  const dottedMappedMatch = host.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/i);
+  if (dottedMappedMatch) {
+    const ipv4 = dottedMappedMatch[1]!;
+    for (const re of BLOCKED_IPV4_PREFIXES) {
+      if (re.test(ipv4)) {
+        return {
+          ok: false,
+          reason: `base_url IPv4-mapped IPv6 points at a private/loopback address (${host} → ${ipv4})`,
+        };
+      }
+    }
+  }
+
   // Defensive: any IPv4 octet outside 0-255 is invalid; URL parser allows it
   // through some platforms. Catch with a quick numeric range check.
   if (looksLikeIpv4(host)) {

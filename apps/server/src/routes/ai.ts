@@ -37,12 +37,33 @@ const TestKeyBody = z
     api_key: z.string().min(1),
     base_url: z.string().url().optional(),
   })
-  .strict();
+  .strict()
+  // Fix #2: base_url is only valid for ollama. For openai/anthropic/openrouter
+  // the route forwards it to the SDK constructor's baseURL, which would send
+  // the Bearer key to attacker-controlled hosts that pass validatePublicUrl
+  // (any public host). zValidator returns 400 on .refine() failures.
+  .refine((b) => b.base_url === undefined || b.provider === 'ollama', {
+    message: 'base_url is only allowed for the ollama provider',
+    path: ['base_url'],
+  });
 
 // POST /test-key — validates a provider key by calling provider.testKey().
 // Does NOT persist the key (that lives in settings.ts POST /ai-keys).
 aiRoute.post('/test-key', zValidator('json', TestKeyBody), async (c) => {
   const { provider, model, api_key, base_url } = c.req.valid('json');
+
+  // Fix #5: explicit base_url is required for ollama. The provider's
+  // testKey() falls back to DEFAULT_BASE = 'http://localhost:11434' when no
+  // baseUrl is supplied, which would bypass validatePublicUrl entirely and
+  // let a session caller probe the server's loopback Ollama.
+  if (provider === 'ollama' && base_url === undefined) {
+    throw new HTTPError(
+      'INVALID_BODY',
+      'base_url is required for the ollama provider',
+      422,
+    );
+  }
+
   if (base_url !== undefined) {
     const v = validatePublicUrl(base_url);
     if (!v.ok) {

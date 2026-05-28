@@ -230,4 +230,72 @@ describe('POST /api/v1/w/:wslug/ai/test-key', () => {
     });
     expect(res.status).toBe(200);
   });
+
+  // Fix #1 — IPv4-mapped IPv6 must be rejected at the route boundary too.
+  test('rejects base_url IPv4-mapped IPv6 pointing at loopback', async () => {
+    const { app, seed } = await makeTestApp();
+    const res = await app.request(`/api/v1/w/${seed.workspace.slug}/ai/test-key`, {
+      method: 'POST',
+      headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        provider: 'ollama',
+        model: 'x',
+        api_key: '_',
+        base_url: 'http://[::ffff:127.0.0.1]/',
+      }),
+    });
+    expect(res.status).toBe(422);
+  });
+
+  // Fix #2 — base_url is only valid for ollama. For openai/anthropic/openrouter
+  // the route would forward it to new OpenAI({baseURL}) and exfiltrate the
+  // Bearer key. Reject at the schema layer (zValidator -> 400).
+  test('rejects base_url when provider is not ollama (openai)', async () => {
+    const { app, seed } = await makeTestApp();
+    const res = await app.request(`/api/v1/w/${seed.workspace.slug}/ai/test-key`, {
+      method: 'POST',
+      headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        provider: 'openai',
+        model: 'gpt-4o',
+        api_key: 'sk-mock',
+        base_url: 'https://anything.example.com/',
+      }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  test('rejects base_url when provider is anthropic', async () => {
+    const { app, seed } = await makeTestApp();
+    const res = await app.request(`/api/v1/w/${seed.workspace.slug}/ai/test-key`, {
+      method: 'POST',
+      headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        provider: 'anthropic',
+        model: 'claude-haiku-4-5',
+        api_key: 'sk-mock',
+        base_url: 'https://anything.example.com/',
+      }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  // Fix #5 — ollama provider defaults baseUrl to http://localhost:11434 inside
+  // the SDK wrapper. The route must require an explicit base_url so callers
+  // can't probe the server's loopback Ollama by omitting it.
+  test('rejects ollama without base_url (default-base loopback fallback)', async () => {
+    const { app, seed } = await makeTestApp();
+    const res = await app.request(`/api/v1/w/${seed.workspace.slug}/ai/test-key`, {
+      method: 'POST',
+      headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        provider: 'ollama',
+        model: 'llama3.1',
+        api_key: '_',
+      }),
+    });
+    expect(res.status).toBe(422);
+    const body = await res.json();
+    expect(body.error.message ?? body.error.code).toMatch(/base_url|ollama/i);
+  });
 });
