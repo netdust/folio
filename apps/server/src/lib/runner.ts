@@ -55,6 +55,7 @@ import { executeTool } from './agent-tools.ts';
 import { type Message, type ToolDef, getProvider } from './ai/provider.ts';
 import { sanitizeProviderError } from './ai/sanitize-error.ts';
 import { decryptSecret } from './crypto.ts';
+import { HTTPError } from './http.ts';
 
 /**
  * Hard cap on outer provider rounds (one provider call + one tool-result
@@ -134,12 +135,79 @@ export async function runAgent(args: { runId: string }): Promise<void> {
     // --- pre-flight checks (cheapest first); each returns true if it BLOCKED.
     if (await preflight(ctx)) return;
 
-    // --- stream consumption (outer round-loop).
-    await runLoop(ctx);
+    // --- stream consumption (outer round-loop). buildInitialMessages is
+    // called HERE (not inside runLoop) so runLoop is reusable by
+    // runAgentResume, which builds a different message history.
+    const messages = await buildInitialMessages(ctx);
+    await runLoop(ctx, messages);
   } catch (err) {
     // Top-level containment. Any unhandled throw → fail the run with a
     // sanitized detail. If the last-resort transition itself races (run
     // already terminal), swallow + return. Never propagate to the poller.
+    await failRunLastResort(runId, providerLabel, err);
+  }
+}
+
+/**
+ * Resume entry point — invoked when the poller claims a planning row whose
+ * `frontmatter.resume_of` is set (an approved-plan resume). The run-under-load
+ * is the NEW resuming row (already at `running`, claimed by the poller); its
+ * `resume_of` points at the ORIGINAL `awaiting_approval` run.
+ *
+ * Same top-level containment contract as `runAgent`: never throws out; every
+ * failure path transitions the resuming run terminal via failRunLastResort.
+ *
+ * Belt-and-suspenders idempotency guard (mitigation 47): the trigger handler
+ * (C.3) only creates a resuming row when the original is awaiting_approval, but
+ * if the original is observed in any OTHER status here (already terminal, or
+ * raced to running), we do NOT continue — the resuming run is failed with
+ * `idempotency_violation` and the provider is never called.
+ */
+export async function runAgentResume(args: { runId: string }): Promise<void> {
+  const { runId } = args;
+
+  let providerLabel = 'AI';
+  try {
+    const ctx = await loadContext(runId);
+    if (ctx === null) {
+      console.error(`[runner] resume run ${runId} not found or missing context; skipping`);
+      return;
+    }
+    providerLabel = PROVIDER_LABELS[ctx.fm.provider];
+
+    // Locate the original run via resume_of. Missing pointer or non-existent
+    // target → idempotency_violation (the resume contract is broken).
+    const originalId = ctx.fm.resume_of;
+    const original = originalId
+      ? await db.query.documents.findFirst({
+          where: and(eq(documents.id, originalId), eq(documents.type, 'agent_run')),
+        })
+      : undefined;
+    if (!original) {
+      await failRun(
+        ctx,
+        runErrorReasonSchema.enum.idempotency_violation,
+        'Resume target run not found.',
+      );
+      return;
+    }
+    const originalFm = original.frontmatter as AgentRunFrontmatter;
+    if (originalFm.status !== 'awaiting_approval') {
+      await failRun(
+        ctx,
+        runErrorReasonSchema.enum.idempotency_violation,
+        `Resume target is at status '${originalFm.status}', not awaiting_approval.`,
+      );
+      return;
+    }
+
+    // Same pre-flight gate as a fresh run (rate limits, chain guards, etc.).
+    if (await preflight(ctx)) return;
+
+    // Build the resume message history, then delegate to the SHARED loop.
+    const messages = await buildResumeMessages(ctx, original);
+    await runLoop(ctx, messages);
+  } catch (err) {
     await failRunLastResort(runId, providerLabel, err);
   }
 }
@@ -370,6 +438,49 @@ async function buildInitialMessages(ctx: RunContext): Promise<Message[]> {
   return messages;
 }
 
+/**
+ * Build the message history for an APPROVED-PLAN RESUME (oldest first):
+ *   1. parent doc body + the normal comment/result thread (same as a fresh
+ *      run — `buildInitialMessages`),
+ *   2. PLUS the original run's `kind=plan` comment + ALL `kind=approval`
+ *      comments on the parent, surfaced as user-message context so the model
+ *      knows its plan was reviewed and approved,
+ *   3. PLUS any new comments posted since the original run started awaiting
+ *      approval (catch-up context the human may have added).
+ *
+ * Mitigation 25 — literal text only, no `[[wiki-link]]` expansion.
+ */
+async function buildResumeMessages(ctx: RunContext, original: Document): Promise<Message[]> {
+  // Reuse the fresh-run base (parent body + comment/result thread).
+  const messages = await buildInitialMessages(ctx);
+
+  // plan + approval comments on the parent become approval context. These are
+  // separate `kind`s not picked up by buildInitialMessages (which filters to
+  // comment/result), so they are additive — no double-counting.
+  const approvalCtx = await listComments({
+    parentId: ctx.parent.id,
+    kind: ['plan', 'approval'],
+  });
+  // listComments orders newest-first; reverse so plan (older) precedes
+  // approval (newer) in the conversation.
+  for (const c of [...approvalCtx].reverse()) {
+    const cfm = c.frontmatter as Record<string, unknown>;
+    if (typeof cfm.deleted_at === 'string' && cfm.deleted_at.length > 0) continue;
+    if (!c.body || c.body.trim().length === 0) continue;
+    messages.push({ role: 'user', content: c.body });
+  }
+
+  // Catch-up: any NEW normal/result comments posted after the original run
+  // entered awaiting_approval. buildInitialMessages already includes the full
+  // thread, so this would double-count — instead we rely on the full-thread
+  // inclusion above. The `original.started_at` boundary is retained as a hook
+  // for a future delta-only construction; for now the full thread is the
+  // catch-up surface and `original` confirms the resume lineage.
+  void original;
+
+  return messages;
+}
+
 /** Translate the agent's tool whitelist into provider-side ToolDefs. */
 function buildToolDefs(agentFm: Record<string, unknown>): ToolDef[] {
   const tools = Array.isArray(agentFm.tools) ? (agentFm.tools as string[]) : [];
@@ -389,12 +500,11 @@ function buildToolDefs(agentFm: Record<string, unknown>): ToolDef[] {
 // The outer round-loop
 // ---------------------------------------------------------------------------
 
-async function runLoop(ctx: RunContext): Promise<void> {
+async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
   const { run, fm } = ctx;
   const runId = run.id;
   const providerLabel = PROVIDER_LABELS[fm.provider];
 
-  const messages = await buildInitialMessages(ctx);
   const tools = buildToolDefs(ctx.agentFm);
 
   let round = 0;
@@ -691,4 +801,102 @@ async function failRunLastResort(
     }
     console.error(`[runner] last-resort failure transition for run ${runId} threw:`, transitionErr);
   }
+}
+
+// ---------------------------------------------------------------------------
+// rejectRun — awaiting_approval → rejected (SYNCHRONOUS, not a poller path)
+// ---------------------------------------------------------------------------
+
+/**
+ * Reject a pending-approval run, invoked SYNCHRONOUSLY by the C.3
+ * trigger-matcher when a `kind=rejection` comment lands on a parent that has an
+ * `awaiting_approval` run. This is NOT a mid-stream cancel (that path is C-8's
+ * `wasCancelled`, mitigation 44) — it's the distinct awaiting_approval → rejected
+ * lifecycle edge.
+ *
+ * Flow:
+ *   1. Load the run + its parent/workspace/project (for the closing comment).
+ *   2. Transition `awaiting_approval → rejected` via `transitionRun`, using the
+ *      run's `created_by` as a FK-valid actor (reconciliation 3 — a free-form
+ *      `system:*` actor violates `documents.updated_by`'s FK to `users.id`).
+ *   3. Mitigation 43 (approval/rejection race) — first-COMMIT-wins. If the
+ *      approval handler already moved the run out of awaiting_approval, our
+ *      WHERE `status='awaiting_approval'` matches zero rows → transitionRun
+ *      throws `RUN_TRANSITION_RACED`; or, if the row is already at a status
+ *      from which rejected is not a legal move, the state-machine guard throws
+ *      `INVALID_RUN_TRANSITION`. BOTH mean "the run already left
+ *      awaiting_approval" — we return silently, emitting nothing.
+ *   4. Any other error (e.g. AGENT_RUN_NOT_FOUND) re-throws to the caller.
+ *   5. On a successful rejection, post a closing `kind=comment` from the agent
+ *      AFTER the terminal transition (so SSE subscribers see the status flip
+ *      first). The rejection-comment id is referenced in the BODY text, not in
+ *      frontmatter (reconciliation 4 — createComment carries no passthrough fm).
+ *
+ * `agent.run.rejected` is emitted by transitionRun's standard event emission.
+ *
+ * Mitigation 42 (graceful-shutdown SIGTERM) is a DOCUMENTED v1.1 residual —
+ * no SIGTERM handler is added here.
+ */
+export async function rejectRun(args: {
+  runId: string;
+  rejectionCommentId: string;
+}): Promise<void> {
+  const { runId, rejectionCommentId } = args;
+
+  const run = await db.query.documents.findFirst({
+    where: and(eq(documents.id, runId), eq(documents.type, 'agent_run')),
+  });
+  if (!run) {
+    // Non-race error — re-throw (mirrors transitionRun's AGENT_RUN_NOT_FOUND).
+    throw new HTTPError('AGENT_RUN_NOT_FOUND', `agent_run ${runId} not found`, 404);
+  }
+  // FK-valid actor for the transition's updated_by write (reconciliation 3).
+  const transitionActor = run.createdBy ?? '';
+
+  try {
+    const { txWithEvents } = await import('./events.ts');
+    await txWithEvents(db, async () => {
+      await transitionRun(runId, { newStatus: 'rejected', actor: transitionActor });
+    });
+  } catch (err) {
+    const code = (err as { code?: string } | undefined)?.code;
+    // Mitigation 43 — the approval handler won the race (RUN_TRANSITION_RACED),
+    // or the run already left awaiting_approval by another path
+    // (INVALID_RUN_TRANSITION). Either way the rejection is a no-op.
+    if (code === 'RUN_TRANSITION_RACED' || code === 'INVALID_RUN_TRANSITION') {
+      return;
+    }
+    throw err;
+  }
+
+  // Post the closing comment AFTER the terminal transition. Load the
+  // parent/workspace/project for createComment. If any is missing the run is
+  // already rejected (durable truth); the comment is best-effort.
+  if (!run.parentId || !run.projectId) return;
+  const parent = await db.query.documents.findFirst({ where: eq(documents.id, run.parentId) });
+  const workspace = await db.query.workspaces.findFirst({
+    where: eq(workspaces.id, run.workspaceId),
+  });
+  const project = await db.query.projects.findFirst({
+    where: eq(projectsTable.id, run.projectId),
+  });
+  const fm = run.frontmatter as AgentRunFrontmatter;
+  const agent = await db.query.documents.findFirst({
+    where: and(
+      eq(documents.workspaceId, run.workspaceId),
+      eq(documents.type, 'agent'),
+      eq(documents.slug, fm.agent_slug),
+    ),
+  });
+  if (!parent || !workspace || !project || !agent) return;
+
+  await createComment({
+    workspace,
+    project,
+    parent,
+    authorContext: { type: 'agent', agentSlug: agent.slug, agentId: agent.id },
+    actor: `agent:${agent.slug}`,
+    body: `Run cancelled by reviewer. (rejection: ${rejectionCommentId})`,
+    kind: 'comment',
+  });
 }

@@ -9,7 +9,7 @@
  */
 
 import { afterEach, describe, expect, test } from 'bun:test';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import {
@@ -31,7 +31,7 @@ import type { AIProvider, ProviderEvent } from './ai/provider.ts';
 import { __INTERNAL_TEST_ONLY__ as providerTestHatch } from './ai/provider.ts';
 import { newApiToken } from './auth.ts';
 import { encryptSecret } from './crypto.ts';
-import { runAgent } from './runner.ts';
+import { rejectRun, runAgent, runAgentResume } from './runner.ts';
 
 type TestDB = Awaited<ReturnType<typeof makeTestApp>>['db'];
 
@@ -778,6 +778,277 @@ describe('runAgent stream loop', () => {
     const fm = await readRun(db, run.id);
     expect(fm.done_reason).toBe('refusal');
     expect(fm.status).toBe('completed');
+  });
+});
+
+// ==========================================================================
+// C-9 — runAgentResume
+// ==========================================================================
+
+/**
+ * Seed a run at an arbitrary status (e.g. awaiting_approval) with a chosen
+ * chain_id, plus optional resume_of. Reuses seedRunningRun's shape via
+ * overrides.
+ */
+async function seedRunAt(
+  db: TestDB,
+  workspace: Workspace,
+  project: Project,
+  runsTable: TableEntity,
+  agent: Document,
+  parent: Document,
+  user: User,
+  overrides: Partial<AgentRunFrontmatter>,
+): Promise<Document> {
+  return seedRunningRun(db, workspace, project, runsTable, agent, parent, user, overrides);
+}
+
+/** Post an arbitrary-kind comment on the parent from a user. */
+async function seedUserComment(
+  db: TestDB,
+  workspace: Workspace,
+  project: Project,
+  parent: Document,
+  body: string,
+  kind: 'comment' | 'approval' | 'rejection',
+  targetAgent?: string,
+): Promise<void> {
+  const userRow = await db.query.users.findFirst({});
+  const { workspaces } = await import('../db/schema.ts');
+  const fullWs = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspace.id) });
+  await createComment({
+    workspace: fullWs!,
+    project,
+    parent,
+    authorContext: { type: 'user', userId: userRow!.id },
+    actor: userRow!.id,
+    body,
+    kind,
+    targetAgent,
+  });
+}
+
+describe('runAgentResume', () => {
+  test('builds message history from parent body + thread + original kind=plan + kind=approval comments', async () => {
+    const { db, workspace, project, user, agent, parent, run } = await scaffold({
+      parentBody: 'Set up the project.',
+    });
+    const runsTable = await db.query.tables.findFirst({
+      where: and(eq(tables.projectId, project.id), eq(tables.slug, 'runs')),
+    });
+    // Original run is awaiting_approval; the running-run seeded by scaffold
+    // becomes the resuming row.
+    const original = await seedRunAt(db, workspace, project, runsTable!, agent, parent, user, {
+      status: 'awaiting_approval',
+      chain_id: (await readRun(db, run.id)).chain_id,
+    });
+    // Plan + approval comments on the parent.
+    await seedUserComment(
+      db,
+      workspace,
+      project,
+      parent,
+      'Here is my plan: step 1, step 2.',
+      'comment',
+    );
+    // Manually stamp a kind=plan comment by patching the just-created one is
+    // awkward; instead use a real kind=plan via direct insert.
+    const planId = nanoid();
+    await db.insert(documents).values({
+      id: planId,
+      workspaceId: workspace.id,
+      projectId: project.id,
+      tableId: null,
+      type: 'comment',
+      slug: `c-${nanoid(8)}`,
+      title: 'plan',
+      status: null,
+      body: 'PLAN: do A then B.',
+      frontmatter: { author: `user:${user.id}`, kind: 'plan', visibility: 'normal', mentions: [] },
+      parentId: parent.id,
+      createdBy: user.id,
+      updatedBy: user.id,
+    });
+    await seedUserComment(db, workspace, project, parent, 'approve @helper', 'approval', 'helper');
+
+    // Mark the resuming run as a resume of the original.
+    await db
+      .update(documents)
+      .set({
+        frontmatter: sql`json_set(${documents.frontmatter}, '$.resume_of', ${original.id})`,
+      })
+      .where(eq(documents.id, run.id));
+
+    let capturedMessages: { role: string; content: string }[] = [];
+    const stub: AIProvider = {
+      async *stream(opts) {
+        capturedMessages = opts.messages.map((m) => ({ role: m.role, content: m.content ?? '' }));
+        yield { type: 'text', delta: 'resumed work' } as ProviderEvent;
+        yield { type: 'done', reason: 'stop' } as ProviderEvent;
+      },
+      async testKey() {
+        return { ok: true as const };
+      },
+    };
+    providerTestHatch.overrideRegistry('anthropic', async () => stub);
+
+    await runAgentResume({ runId: run.id });
+
+    // The plan + approval comment bodies must appear in the message history.
+    const joined = capturedMessages.map((m) => m.content).join('\n');
+    expect(joined).toContain('PLAN: do A then B.');
+    expect(joined).toContain('approve @helper');
+    // Parent body present too.
+    expect(joined).toContain('Set up the project.');
+    // Order: plan before approval.
+    const planIdx = joined.indexOf('PLAN: do A then B.');
+    const approvalIdx = joined.indexOf('approve @helper');
+    expect(planIdx).toBeLessThan(approvalIdx);
+  });
+
+  test('uses the same loop as runAgent for the post-message-construction path', async () => {
+    const { db, workspace, project, user, agent, parent, run } = await scaffold();
+    const runsTable = await db.query.tables.findFirst({
+      where: and(eq(tables.projectId, project.id), eq(tables.slug, 'runs')),
+    });
+    const original = await seedRunAt(db, workspace, project, runsTable!, agent, parent, user, {
+      status: 'awaiting_approval',
+      chain_id: (await readRun(db, run.id)).chain_id,
+    });
+    await db
+      .update(documents)
+      .set({
+        frontmatter: sql`json_set(${documents.frontmatter}, '$.resume_of', ${original.id})`,
+      })
+      .where(eq(documents.id, run.id));
+
+    const control: StubControl = {
+      rounds: [
+        [
+          { type: 'text', delta: 'done resuming' },
+          { type: 'done', reason: 'stop' },
+        ],
+      ],
+      called: 0,
+    };
+    installProviderStub(control);
+
+    await runAgentResume({ runId: run.id });
+
+    const fm = await readRun(db, run.id);
+    expect(fm.status).toBe('completed');
+    const results = await listKind(db, parent.id, 'result');
+    expect(results.length).toBe(1);
+    expect(results[0]!.body).toBe('done resuming');
+  });
+
+  test('transitions failed/idempotency_violation if resume_of points at a non-awaiting_approval row', async () => {
+    const { db, workspace, project, user, agent, parent, run } = await scaffold();
+    const runsTable = await db.query.tables.findFirst({
+      where: and(eq(tables.projectId, project.id), eq(tables.slug, 'runs')),
+    });
+    // Original already terminal (completed) — not awaiting_approval.
+    const original = await seedRunAt(db, workspace, project, runsTable!, agent, parent, user, {
+      status: 'completed',
+      chain_id: (await readRun(db, run.id)).chain_id,
+    });
+    await db
+      .update(documents)
+      .set({
+        frontmatter: sql`json_set(${documents.frontmatter}, '$.resume_of', ${original.id})`,
+      })
+      .where(eq(documents.id, run.id));
+
+    const control: StubControl = { rounds: [], called: 0 };
+    installProviderStub(control);
+
+    await runAgentResume({ runId: run.id });
+
+    const fm = await readRun(db, run.id);
+    expect(fm.status).toBe('failed');
+    expect(fm.error_reason).toBe('idempotency_violation');
+    expect(control.called).toBe(0);
+  });
+});
+
+// ==========================================================================
+// C-9 — rejectRun
+// ==========================================================================
+
+describe('rejectRun', () => {
+  test('transitions awaiting_approval -> rejected and emits agent.run.rejected', async () => {
+    const { db, workspace, project, user, agent, parent } = await scaffold();
+    const runsTable = await db.query.tables.findFirst({
+      where: and(eq(tables.projectId, project.id), eq(tables.slug, 'runs')),
+    });
+    const run = await seedRunAt(db, workspace, project, runsTable!, agent, parent, user, {
+      status: 'awaiting_approval',
+    });
+
+    const { events } = await import('../db/schema.ts');
+    const before = await db.query.events.findMany({ where: eq(events.documentId, run.id) });
+
+    await rejectRun({ runId: run.id, rejectionCommentId: 'rc-1' });
+
+    const fm = await readRun(db, run.id);
+    expect(fm.status).toBe('rejected');
+    const after = await db.query.events.findMany({ where: eq(events.documentId, run.id) });
+    const rejectedEvents = after.filter((e) => e.kind === 'agent.run.rejected');
+    expect(rejectedEvents.length).toBe(1);
+    expect(after.length).toBeGreaterThan(before.length);
+  });
+
+  test('posts a kind=comment from the agent referencing the rejection comment', async () => {
+    const { db, workspace, project, user, agent, parent } = await scaffold();
+    const runsTable = await db.query.tables.findFirst({
+      where: and(eq(tables.projectId, project.id), eq(tables.slug, 'runs')),
+    });
+    const run = await seedRunAt(db, workspace, project, runsTable!, agent, parent, user, {
+      status: 'awaiting_approval',
+    });
+
+    await rejectRun({ runId: run.id, rejectionCommentId: 'rc-abc-123' });
+
+    const comments = await listKind(db, parent.id, 'comment');
+    const cancelMsg = comments.find((c) => c.body.includes('Run cancelled by reviewer.'));
+    expect(cancelMsg).toBeTruthy();
+    // The id reference lives in the BODY, not frontmatter (reconciliation 4).
+    expect(cancelMsg!.body).toContain('rc-abc-123');
+  });
+
+  test('returns silently when the run is no longer at awaiting_approval (race-loser path)', async () => {
+    const { db, workspace, project, user, agent, parent } = await scaffold();
+    const runsTable = await db.query.tables.findFirst({
+      where: and(eq(tables.projectId, project.id), eq(tables.slug, 'runs')),
+    });
+    // At running — awaiting_approval -> rejected is not valid from running, and
+    // even running -> rejected isn't a legal transition. The race-loser catch
+    // must swallow it.
+    const run = await seedRunAt(db, workspace, project, runsTable!, agent, parent, user, {
+      status: 'running',
+    });
+
+    const { events } = await import('../db/schema.ts');
+    const before = await db.query.events.findMany({ where: eq(events.documentId, run.id) });
+
+    // Must not throw.
+    await rejectRun({ runId: run.id, rejectionCommentId: 'rc-1' });
+
+    const fm = await readRun(db, run.id);
+    expect(fm.status).toBe('running');
+    const after = await db.query.events.findMany({ where: eq(events.documentId, run.id) });
+    expect(after.length).toBe(before.length);
+  });
+
+  test('re-throws non-race errors (run not found)', async () => {
+    await scaffold(); // boot the app/db
+    let threw = false;
+    try {
+      await rejectRun({ runId: 'does-not-exist', rejectionCommentId: 'rc-1' });
+    } catch {
+      threw = true;
+    }
+    expect(threw).toBe(true);
   });
 });
 
