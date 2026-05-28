@@ -180,6 +180,56 @@ describe('openai provider', () => {
     expect(events).toContainEqual({ type: 'done', reason: 'refusal' });
   });
 
+  test('stream() handles a tool_call delta with no function field (marker chunk)', async () => {
+    // The OpenAI SDK types ToolCall.function as optional. A marker delta
+    // {index: N} with no function field appears in the wild (e.g. between
+    // parallel tool_calls). Pre-fix this crashed the generator with a
+    // TypeError on `tc.function.name` before the trailing tokens/done fired.
+    mockCreate.mockImplementationOnce((async (opts: { stream?: boolean }) => {
+      if (!opts.stream) return { id: 'cmpl_x' };
+      return (async function* () {
+        // Marker delta — no function field.
+        yield { choices: [{ delta: { tool_calls: [{ index: 0 }] } }], usage: null };
+        // Follow-up with the real first chunk for the same index.
+        yield {
+          choices: [
+            {
+              delta: {
+                tool_calls: [
+                  { index: 0, id: 'call_a', function: { name: 'f', arguments: '{}' } },
+                ],
+              },
+            },
+          ],
+          usage: null,
+        };
+        yield {
+          choices: [{ delta: {}, finish_reason: 'tool_calls' }],
+          usage: { prompt_tokens: 2, completion_tokens: 1 },
+        };
+      })();
+    }) as never);
+
+    const events: unknown[] = [];
+    for await (const ev of openai.stream({
+      system: 'sys',
+      messages: [{ role: 'user', content: 'hi' }],
+      tools: [],
+      maxTokens: 100,
+      apiKey: 'sk',
+      model: 'gpt-4o-mini',
+    })) {
+      events.push(ev);
+    }
+    expect(events).toContainEqual({ type: 'done', reason: 'tool_use' });
+    expect(events).toContainEqual({
+      type: 'tool_call',
+      id: 'call_a',
+      name: 'f',
+      arguments: {},
+    });
+  });
+
   test('stream() yields done event even when tool_call args fail to JSON.parse', async () => {
     mockCreate.mockImplementationOnce((async (opts: { stream?: boolean }) => {
       if (!opts.stream) return { id: 'cmpl_x' };

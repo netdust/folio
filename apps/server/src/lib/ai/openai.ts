@@ -66,7 +66,11 @@ export const openai: AIProvider = {
               tool_calls?: Array<{
                 index: number;
                 id?: string;
-                function: { name?: string; arguments?: string };
+                // The OpenAI SDK type marks `function` as optional —
+                // marker deltas like {index: N} appear in the wild between
+                // parallel tool_calls. Match the SDK shape so we don't
+                // assume the field is always present.
+                function?: { name?: string; arguments?: string };
               }>;
             }
           | undefined;
@@ -77,8 +81,8 @@ export const openai: AIProvider = {
               toolCallsByIndex[tc.index] ??
               (toolCallsByIndex[tc.index] = { id: '', name: '', argsBuf: '' });
             if (tc.id) entry.id = tc.id;
-            if (tc.function.name) entry.name = tc.function.name;
-            entry.argsBuf += tc.function.arguments ?? '';
+            if (tc.function?.name) entry.name = tc.function.name;
+            entry.argsBuf += tc.function?.arguments ?? '';
           }
         }
         const finish = choices[0].finish_reason as string | undefined;
