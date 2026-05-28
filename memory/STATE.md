@@ -1,10 +1,34 @@
 # Folio — STATE
 
-_Last updated: 2026-05-28 morning (Phase 3 Sub-phase A shipped on `phase-3/agent-runner`; retro at `docs/superpowers/retros/2026-05-28-phase-3-sub-phase-A-retro.md`)._
+_Last updated: 2026-05-28 evening (Phase 3 Sub-phase B shipped + Sub-phase C readiness handoff committed on `phase-3/agent-runner`; B retro at `docs/superpowers/retros/2026-05-28-phase-3-sub-phase-B-retro.md`)._
 
 Living snapshot of where the project actually is. Read at session start. Update at session end if anything below changed.
 
-## Next up — Sub-phase B in a fresh session
+## Next up — Sub-phase C in a fresh session
+
+**Read this FIRST**: `docs/superpowers/handoffs/2026-05-28-phase-3-sub-phase-C-readiness.md` — covers the 3-way split (C.1 services / C.2 runner+dispatcher / C.3 wiring), the standalone threat-modeling session that MUST run before any C task, the 16-attack inventory the threat-modeling session needs to address, the 8 known-unknowns to resolve, and the Sub-phase B mitigation inheritance map.
+
+**The handoff is awaiting user confirmation** on three things:
+1. 3-way split shape (vs subdividing further or merging)
+2. Standalone threat-model order (one session for all of C vs per-sub-sub-phase)
+3. The 16-attack inventory + 8 known-unknowns are the right pre-threat-model scoping
+
+After confirmation: invoke `netdust-core:threat-modeling` against the handoff's inventory, commit the resulting `## Threat model` extension to `docs/superpowers/plans/2026-05-27-phase-3-agent-runner.md` (alongside the existing 22-mitigation Sub-phase B section), THEN start C.1 planning. **No code touches until the threat model is committed** — this enforces the pre-dispatch security check from the Sub-phase B retro Recommendation 1.
+
+**Branch state at session start:**
+- HEAD: `2b9e768` (Sub-phase C readiness handoff, on top of round-7 close + B retro)
+- Server suite: **716 tests, 1 skip, 0 fail** (715 pass + 1 skip — `bun test` from `apps/server`)
+- Web suite: **559 tests, 8 skipped, 0 fail**
+- Shared: 51, 0 fail
+- TSC: clean both apps
+
+**Sub-phase B retro headline**: 42 min B-1..B-7 implementation, 5h27m across 7 review-fix rounds = 1:7.7 ratio. Root cause: missing `## Threat model` in the plan at write-time. Plan correction `4fd7dd6` added it after round 2; rounds 3-7 enriched it iteratively to 22 mitigations + 21 attacks. Round-7 ultra-effort review's anti-regression scan returned `[]` — convergence signal. Captured in `memory/lessons.md` (2026-05-28 entries) and `~/.claude/projects/-home-ntdst-Projects-folio/memory/project_phase-3-sub-phase-B-shipped.md`.
+
+**Sub-phase B threat model lives in** `docs/superpowers/plans/2026-05-27-phase-3-agent-runner.md` `## Threat model` section. 22 mitigations enumerate per-route gates, sanitization sites, validation symmetry, and a "future routes MUST" rule. Sub-phase C extends this; does NOT re-litigate it.
+
+---
+
+## Earlier context — Sub-phase A + Phase 2.6
 
 **Phase 2.6 merged to main** at `984b31c` on 2026-05-27 evening. Pushed. Handoff doc at `docs/superpowers/handoffs/2026-05-27-phase-2.6-complete-and-merged-handoff.md`.
 
