@@ -376,6 +376,42 @@ describe('openai provider', () => {
     expect(msg).not.toMatch(/Bad init/);
   });
 
+  // Round 7 #11 — flush skips entries with empty name (truncated marker
+  // delta). Pre-round-7 the runner dispatcher received `name: ''` and
+  // either no-op'd or threw 'unknown tool: '. The new skip drops the
+  // event with a warn log instead.
+  test('stream() drops tool_call with empty name (truncated marker delta, round 7 #11)', async () => {
+    mockCreate.mockImplementationOnce((async (opts: { stream?: boolean }) => {
+      if (!opts.stream) return { id: 'cmpl_x' };
+      return (async function* () {
+        // Marker delta only — no id/name ever fills in.
+        yield { choices: [{ delta: { tool_calls: [{ index: 0 }] } }], usage: null };
+        yield {
+          choices: [{ delta: {}, finish_reason: 'tool_calls' }],
+          usage: { prompt_tokens: 2, completion_tokens: 1 },
+        };
+      })();
+    }) as never);
+
+    const events: unknown[] = [];
+    for await (const ev of openai.stream({
+      system: 'sys',
+      messages: [{ role: 'user', content: 'hi' }],
+      tools: [],
+      maxTokens: 100,
+      apiKey: 'sk',
+      model: 'gpt-4o-mini',
+    })) {
+      events.push(ev);
+    }
+    // No tool_call event should be emitted for the empty-name entry.
+    const toolCalls = events.filter((e) => (e as { type: string }).type === 'tool_call');
+    expect(toolCalls).toHaveLength(0);
+    // Trailing events still fire.
+    expect(events).toContainEqual({ type: 'tokens', tokens_in: 2, tokens_out: 1 });
+    expect(events).toContainEqual({ type: 'done', reason: 'tool_use' });
+  });
+
   test('stream() yields done event even when tool_call args fail to JSON.parse', async () => {
     mockCreate.mockImplementationOnce((async (opts: { stream?: boolean }) => {
       if (!opts.stream) return { id: 'cmpl_x' };

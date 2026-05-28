@@ -169,16 +169,21 @@ function mcpInvalidParams(message: string, data: Record<string, unknown>): Error
  * MCP is the agent-facing surface; gating MCP closes the privilege-escalation
  * vector without breaking admin workflows.
  *
- * Uses code -32601 (MCP-conventional "method not found / refused") to signal
- * "this method is not available to this caller" rather than -32602 (invalid
- * params), which would imply the request shape was wrong.
+ * Round 7 #12 — uses code -32000 (JSON-RPC "server-defined error"). The
+ * round-6 code -32601 was overloaded: SDK clients (including the Cursor
+ * MCP client) branch on -32601 → 'capability missing' handler and lose
+ * `data.reason` in the process. -32000 is the protocol's catch-all for
+ * server-defined errors; SDKs preserve `data` on this code, so the
+ * downstream `data.reason: 'human_pat_rejected_on_agent_lifecycle'`
+ * stays addressable. The message body still uses the same wording so
+ * a tail-the-logs operator gets the same signal.
  */
 function mcpRejectHumanPat(token: ApiToken): void {
   if (!token.agentId) {
     const err = new Error(
       'agent-lifecycle tools require an agent-bound bearer; human PATs are rejected',
     ) as Error & { code: number; data: Record<string, unknown> };
-    err.code = -32601;
+    err.code = -32000;
     err.data = { reason: 'human_pat_rejected_on_agent_lifecycle' };
     throw err;
   }

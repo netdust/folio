@@ -235,6 +235,39 @@ describe('AiTab', () => {
     );
   });
 
+  // Round 7 #13 — onTest mirrors the round-4 #5 onSave pattern. The useTestKey
+  // mutation hits the upstream provider with the click-time apiKey + baseUrl;
+  // a mid-flight provider switch cannot abort the in-flight fetch. The stale
+  // result must NOT paint onto the now-visible different-provider chip, AND
+  // an honest info-toast must surface so the user knows the test executed
+  // for the previous provider.
+  test('onTest suppresses chip + shows truthful info-toast when provider switches mid-flight', async () => {
+    let resolveTest: (v: { ok: true }) => void = () => {};
+    mockTestMutate.mockImplementationOnce(
+      () => new Promise<{ ok: true }>((res) => { resolveTest = res; }),
+    );
+    const { toast } = await import('sonner');
+    vi.mocked(toast.info).mockClear();
+
+    renderTab();
+    fireEvent.change(screen.getByLabelText(/api key/i), { target: { value: 'sk-test' } });
+    fireEvent.click(screen.getByRole('button', { name: /^test$/i }));
+
+    // Switch provider before test resolves — bumps testSeqRef, invalidating
+    // the in-flight result.
+    fireEvent.change(screen.getByLabelText(/provider/i), { target: { value: 'openai' } });
+
+    resolveTest({ ok: true });
+    await new Promise((r) => setTimeout(r, 10));
+
+    // The stale OK must NOT paint as the success chip.
+    expect(screen.queryByText(/key validated/i)).not.toBeInTheDocument();
+    // Truthful surfacing — the test executed for the click-time provider.
+    expect(toast.info).toHaveBeenCalledWith(
+      expect.stringMatching(/test completed.*previous provider.*anthropic/i),
+    );
+  });
+
   // B round 4 fix #8 — placeholder must NOT be the value validatePublicUrl
   // rejects. Pre-fix the placeholder advertised http://localhost:11434;
   // self-hosted admins typed it, got 422, concluded the feature was broken.

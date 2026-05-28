@@ -1330,7 +1330,9 @@ test('MCP get_agent_self with a human PAT returns -32602 no_agent_bound_to_token
 // (they mint, modify, or revoke `agent_token` bearer credentials). A stolen
 // human PAT with `agents:write` could mint a new agent with arbitrary scopes,
 // escalating beyond the original PAT's scope set. Reject at dispatch with
-// MCP error -32601 + reason `human_pat_rejected_on_agent_lifecycle`.
+// MCP error -32000 (round 7 #12 — was -32601, but SDKs route -32601 through
+// the 'capability missing' handler and drop `data.reason`. -32000 preserves
+// it.) + reason `human_pat_rejected_on_agent_lifecycle`.
 //
 // HTTP-side agent CRUD (POST/PATCH/DELETE /documents with type=agent) is
 // intentionally NOT gated — that's the admin-facing surface. See threat-model
@@ -1357,7 +1359,7 @@ test('MCP create_agent rejects human-PAT caller (round 6 #1)', async () => {
     error?: { code: number; data?: { reason: string } };
   };
   expect(body.error).toBeDefined();
-  expect(body.error!.code).toBe(-32601);
+  expect(body.error!.code).toBe(-32000);
   expect(body.error!.data?.reason).toBe('human_pat_rejected_on_agent_lifecycle');
 });
 
@@ -1394,7 +1396,7 @@ test('MCP update_agent rejects human-PAT caller (round 6 #1)', async () => {
     error?: { code: number; data?: { reason: string } };
   };
   expect(body.error).toBeDefined();
-  expect(body.error!.code).toBe(-32601);
+  expect(body.error!.code).toBe(-32000);
   expect(body.error!.data?.reason).toBe('human_pat_rejected_on_agent_lifecycle');
 });
 
@@ -1429,7 +1431,7 @@ test('MCP delete_agent rejects human-PAT caller (round 6 #1)', async () => {
     error?: { code: number; data?: { reason: string } };
   };
   expect(body.error).toBeDefined();
-  expect(body.error!.code).toBe(-32601);
+  expect(body.error!.code).toBe(-32000);
   expect(body.error!.data?.reason).toBe('human_pat_rejected_on_agent_lifecycle');
 });
 

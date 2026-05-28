@@ -73,8 +73,21 @@ export function AiTab({ wslug, workspaceId }: Props) {
   // so the fetch is actually canceled. Deferred per "Out of scope" in the
   // plan's threat model (mitigation 17).
 
+  // Round 7 #13 — mirror onSave's honest-info-toast pattern onto onTest. The
+  // useTestKey mutation hits the upstream provider with the click-time
+  // provider's apiKey + baseUrl; switching the dropdown mid-flight cannot
+  // abort the in-flight HTTP fetch. Pre-round-7 the stale-seq guard silently
+  // dropped the result, leaving the user unaware that:
+  //   - the upstream provider was hit (telemetry, rate-limit consumption);
+  //   - the apiKey value was sent (potential audit-log entry on a third
+  //     provider's side);
+  //   - whether the key was valid (the actual answer is gone).
+  // Surface a truthful info-toast so the user knows the test happened for
+  // the click-time provider. Whether the user sees the result rendered in
+  // the chip is not the same as whether the side effect happened.
   async function onTest() {
     setTestResult(null);
+    const providerAtClick = provider;
     const seq = ++testSeqRef.current;
     try {
       const r = await testKey.mutateAsync({
@@ -84,10 +97,16 @@ export function AiTab({ wslug, workspaceId }: Props) {
         apiKey,
         baseUrl: baseUrl || undefined,
       });
-      if (seq !== testSeqRef.current) return; // newer request kicked off, discard
+      if (seq !== testSeqRef.current) {
+        toast.info(`Test completed for previous provider (${providerAtClick})`);
+        return;
+      }
       setTestResult(r);
     } catch (err) {
-      if (seq !== testSeqRef.current) return;
+      if (seq !== testSeqRef.current) {
+        toast.info(`Test completed for previous provider (${providerAtClick})`);
+        return;
+      }
       setTestResult({ ok: false, reason: formatApiError(err) });
     }
   }
