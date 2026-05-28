@@ -1063,3 +1063,9 @@ See `docs/PHASES.md` for the canonical phase list (above-section mirrors it). Lo
 - **accept tx (plan signature)**. Caller (Sub-phase C.2 createRun extension, or test) wraps with `txWithEvents` or `db.transaction` as appropriate.
 [2026-05-28] — session ended (no significant changes captured)
 [2026-05-28] — session ended (no significant changes captured)
+
+---
+### 2026-05-28 — tagged capture
+
+**Decisions**
+- **accept tx (plan signature)**. Caller (Sub-phase C.2 createRun extension, or test) wraps with `txWithEvents` or `db.transaction` as appropriate.
