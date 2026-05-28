@@ -376,3 +376,41 @@ The unquoted `<<EOF` heredoc tells bash to interpolate `$HOOK_SRC_DIR` AT INSTAL
 **Reference data, not a rule.** Sub-phase B benchmark: 42 min B-1..B-7 implementation, 5h27m review-fix cycles. Ratio 1:7.7. Sub-phase A benchmark: ~50 min total, no review cycles (clean threat-model-free plan). Sub-phase B's high ratio is the cost of NOT writing the threat model at plan-time.
 
 **Hypothesis to test on Sub-phase C:** with the threat model carried forward from B + the new pre-dispatch security check (per Sub-phase B retro recommendation §1), the ratio should drop closer to 1:2 or 1:3. If Sub-phase C also runs 1:7+, the discipline isn't holding. Re-measure at Sub-phase C close.
+
+## 2026-05-28 — Sub-phase C.1 implementation:review ratio (hypothesis test result)
+
+**Result of the hypothesis test from the Sub-phase B entry above.** Sub-phase C.1 ratio: ~2h primary implementation : ~3h review work (counting bundles 1-8 across freeform review + review-of-review). Ratio ~1:1.5. The hypothesis ("dropping closer to 1:2 or 1:3 with the threat model carried forward") was wrong direction but right magnitude — review-fix work was LESS than 1:7, but a second review layer (review-of-review) added unanticipated time.
+
+**New benchmark**: phase-3 sub-phases with services-layer cross-cutting concerns are running ~1:1.5 to 1:2. The 1:7 of Sub-phase B was a threat-model-write-time tax, not a permanent regime. Future sub-phases should plan for 1:2 review time as baseline.
+
+## 2026-05-28 — `tx.all<T>` with RETURNING * is a runtime type lie
+
+**Mistake found in C-3, fixed in F12 (bundle 1).** When Drizzle's bun-sqlite query helper is called via raw SQL with `tx.all<Document>(sql\`UPDATE ... RETURNING *\`)`, the generic type `T` does NOT match the runtime shape. `RETURNING *` yields raw SQLite columns in snake_case (`workspace_id`, `parent_id`, `frontmatter`), but `Document = typeof documents.$inferSelect` is camelCase (`workspaceId`, `parentId`). Only `.id` reads happen to work (no case difference).
+
+**Why it slips past tsc:** the cast is a generic argument, not a runtime check. TypeScript trusts the annotation; the raw row at runtime has snake_case keys; any `.workspaceId` access reads `undefined`.
+
+**Rule:**
+- If you read more than `.id` off a `tx.all<T>(sql\`...RETURNING *\`)` row, either (a) restrict `T` to a snake_case shape literal matching what `RETURNING *` produces, or (b) convert RETURNING to a narrow column list with camelCase aliases (`RETURNING id, workspace_id AS workspaceId, ...`).
+- The pattern `tx.all<{ id: string }>(sql\`UPDATE ... RETURNING id\`)` is safe — only reads `.id`, only returns `id`.
+- If the function is supposed to return a typed `Document`, follow the RETURNING with a typed `tx.query.documents.findFirst(...)` re-read. That's the canonical shape (used by `claimNextPlanningRun`).
+
+**Trigger:** any new `tx.all<>(sql\`...\`)` call with `RETURNING *` OR with a `T` that's a Drizzle `$inferSelect` type. Audit at write time AND at every code review.
+
+## 2026-05-28 — Cross-cutting changes need a sibling-site audit at plan-write time
+
+**Meta-pattern from Sub-phase C.1 reviews.** Across two layers of code-review (freeform 9-angle, then review-of-review 5-angle), every primary fix that touched a CROSS-CUTTING concern had 1-2 SIBLING SITES that needed the SAME change but were missed by the primary fix:
+
+- C-1 widened `DocumentType` to include `'agent_run'` on the server. Bundle 4 hardened agent_run writes (5 route guards). Bundle 6 hardened agent_run reads (4 more route guards) AND FE+shared union widening (2 more files). Same root change rippled to 11+ sites.
+- F6 in bundle 1 changed `json_extract(...status)` → `status` column predicate in 2 places (claim + recovery). Bundle 6 found `countPendingPlanning` was the 3rd site, also needed the change.
+- F4 in bundle 3 fixed `workspace.provider.*` event scope to `projectId: null`. Audit of similar workspace-wide events (`runs_table.lazy_seeded`, etc.) not done — open question.
+- F5 in bundle 3 tightened SQL filter. Bundle 6 (R4) added the recency-floor that should have shipped together.
+
+**Rule:** when a plan task touches any of these cross-cutting concerns, the task body includes a `## Sibling-site audit` block enumerating the surface to check:
+
+- TypeScript union / enum / discriminator: audit FE union + shared union/enum + every consumer's switch/narrow.
+- SQL predicate on a JSON-extract → column change: audit ALL read sites of the same field (count, filter, sort).
+- Event scope (projectId, workspaceId, documentId): audit every emitter of similar-class events.
+- Cross-route guard (writes hardened → audit reads; reads hardened → audit writes).
+- Closed-enum literal: audit every site that writes/compares the literal.
+
+The audit lives in the plan, gets verified by the implementer, reviewed at code-review time. Per-task cost: 5-10 minutes at plan-write; net savings ~1-2 review-fix bundles per sub-phase.
