@@ -19,10 +19,7 @@
 
 import { and, eq, sql } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
-import type { DB } from '../db/client.ts';
-
-// Drizzle tx and DB share the same query API.
-type DBOrTx = DB | Parameters<Parameters<DB['transaction']>[0]>[0];
+import { db } from '../db/client.ts';
 import {
   documents,
   type Document,
@@ -87,7 +84,6 @@ function generateRunSlug(agentSlug: string, isoTimestamp: string): string {
 }
 
 export async function createRun(
-  db: DBOrTx,
   args: CreateRunArgs,
 ): Promise<CreateRunResult> {
   const { workspace, project, runsTable, agent, actor, input } = args;
@@ -146,7 +142,7 @@ export async function createRun(
   // service owns the tx boundary via `txWithEvents` — rollback discards
   // both the row AND the queued bus publish via the scrub path in
   // `lib/events.ts`.
-  await txWithEvents(db as DB, async (tx) => {
+  await txWithEvents(db, async (tx) => {
     await tx.insert(documents).values(row);
     await emitEvent(tx, {
       workspaceId: workspace.id,
@@ -196,7 +192,6 @@ export interface TransitionRunArgs {
  *    43) catch this and no-op.
  */
 export async function transitionRun(
-  db: DBOrTx,
   runId: string,
   args: TransitionRunArgs,
 ): Promise<Document> {
@@ -260,7 +255,7 @@ export async function transitionRun(
   // service owns the tx boundary via `txWithEvents` — rollback discards
   // both the column write AND the queued bus publish via the scrub path
   // in `lib/events.ts`.
-  await txWithEvents(db as DB, async (tx) => {
+  await txWithEvents(db, async (tx) => {
     await tx
       .update(documents)
       .set({
@@ -314,7 +309,6 @@ export async function transitionRun(
  * needed. Drizzle's `db.update(...)` and `tx.update(...)` share the API.
  */
 export async function incrementTokens(
-  db: DBOrTx,
   runId: string,
   args: { in: number; out: number },
 ): Promise<{ tokens_in: number; tokens_out: number }> {

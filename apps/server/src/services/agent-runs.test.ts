@@ -184,7 +184,7 @@ describe('createRun', () => {
     const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
 
     const runsTable = await seedRunsTable(db, seed.project.id);
-    const result = await createRun(db, {
+    const result = await createRun({
       workspace: seed.workspace,
       project: seed.project,
       runsTable,
@@ -247,7 +247,7 @@ describe('transitionRun', () => {
     const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
 
     const runsTable = await seedRunsTable(db, seed.project.id);
-    const created = await createRun(db, {
+    const created = await createRun({
       workspace: seed.workspace,
       project: seed.project,
       runsTable,
@@ -261,7 +261,7 @@ describe('transitionRun', () => {
       },
     });
 
-    await transitionRun(db, created.document.id, { newStatus: 'running' });
+    await transitionRun(created.document.id, { newStatus: 'running' });
 
     const row = await db.query.documents.findFirst({
       where: eq(documents.id, created.document.id),
@@ -283,7 +283,7 @@ describe('transitionRun', () => {
     const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
 
     const runsTable = await seedRunsTable(db, seed.project.id);
-    const created = await createRun(db, {
+    const created = await createRun({
       workspace: seed.workspace,
       project: seed.project,
       runsTable,
@@ -300,7 +300,7 @@ describe('transitionRun', () => {
     // planning → completed is illegal (must pass through running first).
     let caught: HTTPError | null = null;
     try {
-      await transitionRun(db, created.document.id, { newStatus: 'completed' });
+      await transitionRun(created.document.id, { newStatus: 'completed' });
     } catch (e) {
       caught = e as HTTPError;
     }
@@ -317,7 +317,7 @@ describe('transitionRun', () => {
     const { db } = await makeTestApp();
     let caught: HTTPError | null = null;
     try {
-      await transitionRun(db, nanoid(), { newStatus: 'running' });
+      await transitionRun(nanoid(), { newStatus: 'running' });
     } catch (e) {
       caught = e as HTTPError;
     }
@@ -337,7 +337,7 @@ describe('transitionRun', () => {
     // Pre-condition: worker_started_at is set.
     expect((run.frontmatter as AgentRunFrontmatter).worker_started_at).toBeTruthy();
 
-    await transitionRun(db, run.id, { newStatus: 'completed' });
+    await transitionRun(run.id, { newStatus: 'completed' });
 
     // Read in a fresh query — both status flip + worker_started_at clear must be
     // visible in a single read (mitigation 40 — one UPDATE, no intermediate
@@ -359,7 +359,7 @@ describe('transitionRun', () => {
     const run = await seedRunningRun(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user);
 
     await expect(
-      transitionRun(db, run.id, {
+      transitionRun(run.id, {
         newStatus: 'failed',
         errorReason: 'made_up_reason' as never,
       }),
@@ -375,7 +375,7 @@ describe('transitionRun', () => {
     const run = await seedRunningRun(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user);
 
     const hostileDetail = 'apiKey:sk-abc123 baseUrl:https://attacker.example';
-    await transitionRun(db, run.id, {
+    await transitionRun(run.id, {
       newStatus: 'failed',
       errorReason: 'provider_error',
       errorDetail: hostileDetail,
@@ -403,7 +403,7 @@ describe('transitionRun', () => {
     const runsTable = await seedRunsTable(db, seed.project.id);
     const run = await seedRunningRun(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user);
 
-    await transitionRun(db, run.id, { newStatus: 'failed', errorReason: 'worker_crash' });
+    await transitionRun(run.id, { newStatus: 'failed', errorReason: 'worker_crash' });
 
     const after = await db.query.documents.findFirst({ where: eq(documents.id, run.id) });
     expect(after!.status).toBe('failed');
@@ -422,9 +422,9 @@ describe('incrementTokens', () => {
     const runsTable = await seedRunsTable(db, seed.project.id);
     const run = await seedRunningRun(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user);
 
-    const first = await incrementTokens(db, run.id, { in: 10, out: 5 });
+    const first = await incrementTokens(run.id, { in: 10, out: 5 });
     expect(first).toEqual({ tokens_in: 10, tokens_out: 5 });
-    const second = await incrementTokens(db, run.id, { in: 10, out: 5 });
+    const second = await incrementTokens(run.id, { in: 10, out: 5 });
     expect(second).toEqual({ tokens_in: 20, tokens_out: 10 });
 
     const after = await db.query.documents.findFirst({ where: eq(documents.id, run.id) });
@@ -441,8 +441,8 @@ describe('incrementTokens', () => {
     const runsTable = await seedRunsTable(db, seed.project.id);
     const run = await seedRunningRun(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user);
 
-    await incrementTokens(db, run.id, { in: 7, out: 3 });
-    const after = await incrementTokens(db, run.id, { in: 0, out: 0 });
+    await incrementTokens(run.id, { in: 7, out: 3 });
+    const after = await incrementTokens(run.id, { in: 0, out: 0 });
     expect(after).toEqual({ tokens_in: 7, tokens_out: 3 });
   });
 
@@ -486,7 +486,7 @@ describe('incrementTokens', () => {
       updatedBy: seed.user.id,
     });
 
-    const out = await incrementTokens(db, id, { in: 13, out: 4 });
+    const out = await incrementTokens(id, { in: 13, out: 4 });
     expect(out).toEqual({ tokens_in: 13, tokens_out: 4 });
   });
 });
