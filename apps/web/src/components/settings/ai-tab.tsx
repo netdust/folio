@@ -61,6 +61,18 @@ export function AiTab({ wslug, workspaceId }: Props) {
     saveSeqRef.current += 1;
   }
 
+  // B round 4 fix #5 — honest toast wording. The client.post does NOT accept
+  // an AbortSignal, and useUpsertAiKey's mutationFn doesn't forward one
+  // either, so the server-side write CANNOT be aborted from the UI once
+  // dispatched. The round-3 seq-id guard suppressed the toast but the row
+  // was already committed for the OLD provider. Replacing the silent
+  // suppression with a truthful info-toast: "Save completed for previous
+  // provider" — the user sees what actually happened, no lie.
+  //
+  // Long-term: thread an AbortSignal through client.post + useUpsertAiKey
+  // so the fetch is actually canceled. Deferred per "Out of scope" in the
+  // plan's threat model (mitigation 17).
+
   async function onTest() {
     setTestResult(null);
     const seq = ++testSeqRef.current;
@@ -87,6 +99,13 @@ export function AiTab({ wslug, workspaceId }: Props) {
     // would see "Saved openai key" — but the row that landed in the DB is
     // an anthropic one. Capture the click-time provider AND check the seq
     // before painting.
+    //
+    // B round 4 fix #5 — on stale-seq, surface a TRUTHFUL info toast naming
+    // the click-time provider, instead of silently dropping the success.
+    // The mutation already committed server-side (client.post can't be
+    // aborted), so the row was written for the OLD provider. Hiding that
+    // from the user is a lie. Whether the user sees the result or not is
+    // not the same as whether the side effect happened.
     const providerAtClick = provider;
     const seq = ++saveSeqRef.current;
     try {
@@ -96,13 +115,24 @@ export function AiTab({ wslug, workspaceId }: Props) {
         label: 'default',
         baseUrl: baseUrl || undefined,
       });
-      if (seq !== saveSeqRef.current) return; // user changed provider mid-flight
+      if (seq !== saveSeqRef.current) {
+        // User changed provider mid-flight. The server-side write completed
+        // for `providerAtClick` — tell them so they aren't surprised by it.
+        toast.info(`Save completed for previous provider (${providerAtClick})`);
+        return;
+      }
       toast.success(`Saved ${providerAtClick} key`);
       setApiKey('');
       setBaseUrl('');
       setTestResult(null);
     } catch (err) {
-      if (seq !== saveSeqRef.current) return;
+      if (seq !== saveSeqRef.current) {
+        // Failed save under provider-change — still surface it so the user
+        // knows the OLD provider's row is NOT written. Silent drop would
+        // leave them unsure.
+        toast.info(`Save failed for previous provider (${providerAtClick})`);
+        return;
+      }
       toast.error(formatApiError(err));
     }
   }
@@ -167,10 +197,22 @@ export function AiTab({ wslug, workspaceId }: Props) {
               <input
                 value={baseUrl}
                 onChange={(e) => setBaseUrl(e.target.value)}
-                placeholder="http://localhost:11434"
+                /*
+                 * B round 4 fix #8 — placeholder honesty. Pre-fix the
+                 * placeholder showed http://localhost:11434, the exact value
+                 * validatePublicUrl rejects post-round-3 (SSRF guard). A
+                 * self-hosted admin typing the placeholder hit 422 and
+                 * concluded the feature was broken. Use a publicly-resolvable
+                 * example + a help line spelling out the loopback restriction.
+                 */
+                placeholder="https://ollama.example.com"
                 aria-label="Base URL"
                 className={inputClass}
               />
+              <span className="mt-1 block text-xs text-fg-3">
+                Must be reachable from the Folio server, not your browser.
+                Loopback addresses (localhost, 127.0.0.1, private ranges) are rejected.
+              </span>
             </label>
           ) : null}
 

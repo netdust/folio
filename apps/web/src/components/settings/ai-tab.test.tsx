@@ -19,7 +19,9 @@ vi.mock('../../lib/api/settings.ts', () => ({
   useDeleteAiKey: vi.fn(() => ({ mutateAsync: vi.fn(), isPending: false })),
 }));
 
-vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('sonner', () => ({
+  toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() },
+}));
 
 function renderTab() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -196,7 +198,13 @@ describe('AiTab', () => {
   // click time. Pre-fix the toast read closure `provider`, which had already
   // changed by the time the mutation resolved. Symmetry with the round-2 onTest
   // guard pattern. After fix #9 the guard is seq-based + capture-by-value.
-  test('onSave toast is suppressed when provider switches mid-flight', async () => {
+  //
+  // B round 4 fix #5 — on stale-seq the success toast is suppressed AND a
+  // truthful info toast surfaces naming the click-time provider. The
+  // server-side write completed (client.post can't be aborted from the UI);
+  // hiding that from the user is a lie. The previous "silent drop" left the
+  // workspace's AI-key roster mutated with no UI signal.
+  test('onSave suppresses success + shows truthful info-toast when provider switches mid-flight', async () => {
     let resolveSave: (v: { ok: true }) => void = () => {};
     const upsertSpy = vi.fn(
       () => new Promise<{ ok: true }>((res) => { resolveSave = res; }),
@@ -207,19 +215,37 @@ describe('AiTab', () => {
     } as never);
     const { toast } = await import('sonner');
     vi.mocked(toast.success).mockClear();
+    vi.mocked(toast.info).mockClear();
 
     renderTab();
     fireEvent.change(screen.getByLabelText(/api key/i), { target: { value: 'sk-test' } });
     fireEvent.click(screen.getByRole('button', { name: /save key/i }));
 
     // Switch provider before save resolves — bumps saveSeqRef, invalidating
-    // the in-flight save's toast.
+    // the in-flight save's success render.
     fireEvent.change(screen.getByLabelText(/provider/i), { target: { value: 'openai' } });
 
     resolveSave({ ok: true });
     await new Promise((r) => setTimeout(r, 10));
 
     expect(toast.success).not.toHaveBeenCalled();
+    // Truthful surfacing — the write completed for the click-time provider.
+    expect(toast.info).toHaveBeenCalledWith(
+      expect.stringMatching(/save completed.*previous provider.*anthropic/i),
+    );
+  });
+
+  // B round 4 fix #8 — placeholder must NOT be the value validatePublicUrl
+  // rejects. Pre-fix the placeholder advertised http://localhost:11434;
+  // self-hosted admins typed it, got 422, concluded the feature was broken.
+  test('Ollama baseUrl placeholder is publicly-resolvable + help text explains the loopback restriction', () => {
+    renderTab();
+    fireEvent.change(screen.getByLabelText(/provider/i), { target: { value: 'ollama' } });
+    const baseUrlInput = screen.getByLabelText(/base url/i) as HTMLInputElement;
+    expect(baseUrlInput.placeholder).not.toMatch(/localhost/);
+    expect(baseUrlInput.placeholder).not.toMatch(/127\.0\.0\.1/);
+    expect(screen.getByText(/reachable from the Folio server/i)).toBeInTheDocument();
+    expect(screen.getByText(/loopback addresses.*rejected/i)).toBeInTheDocument();
   });
 
   // B round 3 fix #14 — ollama rows pinned via API may carry a baseUrl that
