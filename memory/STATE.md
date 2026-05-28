@@ -1,6 +1,6 @@
 # Folio — STATE
 
-_Last updated: 2026-05-28 LATE night (Phase 3 Sub-phase C.1 FULLY HARDENED — TWICE — on `phase-3/agent-runner`. Layer 1: 6 tasks + 2-round threat-model review (12 mitigations) + freeform 9-angle/10-verifier review found 15 bugs, ALL FIXED across 5 bundles. Layer 2: medium-effort review-of-review of the fixes themselves found 15 MORE bugs, ALL FIXED across 2 bundles (bundles 6+7). Server suite **810 pass / 1 skip / 0 fail**. Next blocking step is plan-correction commit expanding C-7..C-9 task bodies before Sub-phase C.2 work.)_
+_Last updated: 2026-05-28 LATE night + C.2 plan expansion. Sub-phase C.1 FULLY HARDENED — TWICE — on `phase-3/agent-runner` (Layer 1: 6 tasks + 2-round threat-model + freeform 9-angle/10-verifier → 15 bugs fixed in 5 bundles. Layer 2: review-of-review → 15 more bugs fixed in 2 bundles). C.1 retro shipped at `e148584`. **C.2 plan expansion shipped at `bdf49d0` — C-7..C-9 now have executable bodies; C.2 code work can start.** Server suite **810 pass / 1 skip / 0 fail**._
 
 Living snapshot of where the project actually is. Read at session start. Update at session end if anything below changed.
 
@@ -64,14 +64,15 @@ The Sub-phase C plan is **partially expanded**. Tasks have an executable body (S
 
 - **C.1 services (C-1..C-6)** — EXPANDED ✓ in `23ae2d1`. Bodies at plan §"Sub-phase C.1 — Services layer (expanded task bodies — written 2026-05-28)", lines 423–993. **ALL 6 SHIPPED + REVIEW-CLOSED.**
   - C-1 `07869cc` · C-2 `a8ad551` · C-3 `9e217ea` · C-4 `bc3aa67` · C-5 `11f74a7` · C-6 `b4d84c1`.
-- **C.2 runner+dispatcher (C-7..C-9)** — NOT EXPANDED. Original `### Task C-N` outlines at plan lines 3818–3845 are header-only (no Steps / no Files / no Tests body). **THIS IS THE NEXT GATING STEP.**
-- **C.3 wiring+triggers (C-10..C-13)** — NOT EXPANDED. Same shape: header-only outlines at plan lines 3846–3878. Gated by the C.2 close-out (a parallel plan-correction commit will be needed before C.3 can start).
+- **C.2 runner+dispatcher (C-7..C-9)** — EXPANDED ✓ in `bdf49d0`. Bodies at plan §"Sub-phase C.2 — Runner + dispatcher (expanded task bodies — written 2026-05-28)", lines 3818–4226. **READY TO START.** Resolves the 3 EXPANSION RECONCILIATION decisions in-line (lib/agent-tools.ts rename, skeleton-now/real-tools-in-D path, general-primitives target). Original outlines remain at lines 4228+ under an explicit "DO NOT execute against these" divider for historical traceability.
+- **C.3 wiring+triggers (C-10..C-13)** — NOT EXPANDED. Original outlines at plan lines 4258+ (post-C.2-expansion offset). Gated by the C.2 close-out — a parallel plan-correction commit will be needed before C.3 can start. **The C-12 autonomy-gate EXPANSION RECONCILIATION (CRITICAL — the V1↔autonomous decision point) MUST be folded into that expansion.**
 
 **What this means in practice for the next session(s):**
-1. C.1 is DONE. /integration green at HEAD, 2-round /code-review verified.
-2. Controller MUST write a plan-correction commit expanding C-7..C-9 task bodies (per-task Steps + Files + Tests + Commit) before any C.2 code touches. Recommended approach: invoke `superpowers:writing-plans` against the existing C-7/C-8/C-9 outlines + the threat model + the C.1-R-1/R-2 retro follow-ups; produce the same shape as C.1's expanded section.
-3. Same again before C.3 — plan-correction expanding C-10..C-13.
-4. NEVER dispatch a subagent against an unexpanded `### Task C-N` outline — that was the failure mode the C-section audit caught (handoff `8beec5e`).
+1. C.1 is DONE. /integration + 2-round /code-review + freeform 9-angle + review-of-review-of-review all verified.
+2. C.2 plan expansion is DONE (`bdf49d0`). Next session can dispatch C-7 directly via `executing-plans` / `subagent-driven-development`.
+3. Sibling-site audit from C.1 retro is now in the C.2 pre-flight invariants — controller MUST scan the 5 lockstep classes (TS unions, JSON↔column predicates, event scopes, cross-route guards, closed-enum literals) before dispatching each C.2 task.
+4. After C-9 closes: plan-correction commit expanding C-10..C-13. The C-12 critical reconciliation (autonomy gate `FOLIO_AGENT_CHAINS_ENABLED` + `isAgentOriginated` short-circuit + boundary test) is the highest-priority item in that expansion.
+5. NEVER dispatch a subagent against an unexpanded `### Task C-N` outline OR against the historical outlines below the expansion divider — that was the failure mode the C-section audit caught (handoff `8beec5e`).
 
 ### Sub-phase C.1 progress detail (COMPLETE)
 
