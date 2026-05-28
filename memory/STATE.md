@@ -1,30 +1,63 @@
 # Folio — STATE
 
-_Last updated: 2026-05-28 evening (Phase 3 Sub-phase B shipped + Sub-phase C readiness handoff committed on `phase-3/agent-runner`; B retro at `docs/superpowers/retros/2026-05-28-phase-3-sub-phase-B-retro.md`)._
+_Last updated: 2026-05-28 late evening (Phase 3 Sub-phase C.1 partially shipped — C-1..C-4 done on `phase-3/agent-runner`; C-5 is next executable task; C.2 + C.3 still need plan-correction expansion before they can be picked up)._
 
 Living snapshot of where the project actually is. Read at session start. Update at session end if anything below changed.
 
-## Next up — Sub-phase C in a fresh session
+## Next up — Sub-phase C.1 in progress (C-5 next)
 
-**Read this FIRST**: `docs/superpowers/handoffs/2026-05-28-phase-3-sub-phase-C-readiness.md` — covers the 3-way split (C.1 services / C.2 runner+dispatcher / C.3 wiring), the standalone threat-modeling session that MUST run before any C task, the 16-attack inventory the threat-modeling session needs to address, the 8 known-unknowns to resolve, and the Sub-phase B mitigation inheritance map.
+**Next executable task**: **C-5** (`checkProviderHealth + getProviderHealth + tipping-edge wiring`, mitigations 45/46/47). Plan body at `docs/superpowers/plans/2026-05-27-phase-3-agent-runner.md` line 900. Requires migration `0013_workspace_provider_health.sql` adding `provider_health JSON` column, schema update, three new functions, and wiring `maybeEmitProviderHealthEdge` into `transitionRun`'s terminal branch. 9 tests expected.
 
-**The handoff is awaiting user confirmation** on three things:
-1. 3-way split shape (vs subdividing further or merging)
-2. Standalone threat-model order (one session for all of C vs per-sub-sub-phase)
-3. The 16-attack inventory + 8 known-unknowns are the right pre-threat-model scoping
+**Branch state at session start (Phase 3 C-5 onwards):**
+- HEAD: `bc3aa67` (C-4 shipped 2026-05-28 late evening)
+- Server suite: **764 pass / 1 skip / 0 fail**
+- Web suite: **559 pass / 8 skip / 0 fail** (unchanged through C.1 — server + shared only)
+- Shared: **51 / 0 fail**
+- TSC: clean both apps for touched files
+- `.last-integration` marker: `932c82a` (set 2026-05-28 by /integration gate after C-3)
 
-After confirmation: invoke `netdust-core:threat-modeling` against the handoff's inventory, commit the resulting `## Threat model` extension to `docs/superpowers/plans/2026-05-27-phase-3-agent-runner.md` (alongside the existing 22-mitigation Sub-phase B section), THEN start C.1 planning. **No code touches until the threat model is committed** — this enforces the pre-dispatch security check from the Sub-phase B retro Recommendation 1.
+### Plan-expansion status (DON'T FORGET — gates the next sub-phase)
 
-**Branch state at session start:**
-- HEAD: `2b9e768` (Sub-phase C readiness handoff, on top of round-7 close + B retro)
-- Server suite: **716 tests, 1 skip, 0 fail** (715 pass + 1 skip — `bun test` from `apps/server`)
-- Web suite: **559 tests, 8 skipped, 0 fail**
-- Shared: 51, 0 fail
-- TSC: clean both apps
+The Sub-phase C plan is **partially expanded**. Tasks have an executable body (Steps + Files + Tests + Commit) ONLY where listed below. Tasks without a body must be expanded via a plan-correction commit (same per-task format as C.1) BEFORE they can be picked up by `executing-plans` or subagents.
 
-**Sub-phase B retro headline**: 42 min B-1..B-7 implementation, 5h27m across 7 review-fix rounds = 1:7.7 ratio. Root cause: missing `## Threat model` in the plan at write-time. Plan correction `4fd7dd6` added it after round 2; rounds 3-7 enriched it iteratively to 22 mitigations + 21 attacks. Round-7 ultra-effort review's anti-regression scan returned `[]` — convergence signal. Captured in `memory/lessons.md` (2026-05-28 entries) and `~/.claude/projects/-home-ntdst-Projects-folio/memory/project_phase-3-sub-phase-B-shipped.md`.
+- **C.1 services (C-1..C-6)** — EXPANDED ✓ in `23ae2d1`. Bodies at plan §"Sub-phase C.1 — Services layer (expanded task bodies — written 2026-05-28)", lines 423–993.
+  - C-1 shipped `07869cc` · C-2 shipped `a8ad551` · C-3 shipped `9e217ea` · C-4 shipped `bc3aa67` · **C-5 next** · C-6 after C-5.
+- **C.2 runner+dispatcher (C-7..C-9)** — NOT EXPANDED. Original `### Task C-N` outlines at plan lines 3818–3845 are header-only (no Steps / no Files / no Tests body). The C-6 close-out (plan line 1015) gates this: *"Plan-correction commit: expand C.2 (runner + dispatcher) task bodies. Following the same per-task format as C.1 above, with per-task mitigation pointers into the C-extension threat model."*
+- **C.3 wiring+triggers (C-10..C-13)** — NOT EXPANDED. Same shape: header-only outlines at plan lines 3846–3878. Gated by the C.2 close-out (a parallel plan-correction commit will be needed before C.3 can start).
 
-**Sub-phase B threat model lives in** `docs/superpowers/plans/2026-05-27-phase-3-agent-runner.md` `## Threat model` section. 22 mitigations enumerate per-route gates, sanitization sites, validation symmetry, and a "future routes MUST" rule. Sub-phase C extends this; does NOT re-litigate it.
+**What this means in practice for the next session(s):**
+1. C-5 + C-6 can ship immediately — bodies are written.
+2. After C-6 closes, controller MUST write a plan-correction commit expanding C-7..C-9 task bodies (per-task Steps + Files + Tests + Commit) before any C.2 work. The Sub-phase C close-out step explicitly says this.
+3. Same again before C.3 — plan-correction expanding C-10..C-13.
+4. NEVER dispatch a subagent against an unexpanded `### Task C-N` outline — that was the failure mode the C-section audit caught (handoff `8beec5e`).
+
+### Sub-phase C.1 progress detail
+
+Five commits shipped on top of the readiness handoff `2b9e768`:
+- `07869cc` C-1 — createRun + transitionRun + incrementTokens (+3 quality follow-ups: `2685711`/`d400aa8`/`962d4e7`/`b83340b`)
+- `a8ad551` C-2 — getActiveRun + getPendingApprovalRun + listRuns (+1 quality follow-up `58fcd3b` — validate `since` + harden wildcard test + tighten status type)
+- `9e217ea` C-3 — claimNextPlanningRun + recoverOrphanRuns + countPendingPlanning (race-test 100 iterations / mitigation 36 + 37)
+- `bc3aa67` C-4 — checkRunRateLimits + checkChainGuards + 2k-row EXPLAIN-plan volume guard (mitigation 29 + 30)
+
+Test counts evolved: 716 (B close) → 744 (C-1) → 752 (C-2 quality) → 752 (C-3) — wait, **C-3 ship was 752, C-4 ship is 764**. Net Sub-phase C.1 delta so far: +48 tests across server suite (716 → 764).
+
+**Plan-vs-code drift caught in C.1** (documented in commit bodies, captured in `memory/lessons.md`):
+- C-1: plan's `txWithEvents` shape was loose; real C-1 manages its own tx via `txWithEvents(db, ...)`. Same convention for transitionRun.
+- C-2: plan's `since` filter silently dropped invalid timestamps; quality fix throws `INVALID_QUERY (422)` matching `listComments`.
+- C-3: plan's race-test cleanup used `errorReason: 'cancel_requested'` — actual enum is `'cancelled'`. `transitionRun(tx, ...)` shorthand in plan was wrong (real signature `transitionRun(runId, args)`).
+- C-4: plan put `tx` first in `checkRunRateLimits(tx, args)` — actual convention is `(args, tx?)` matching getActiveRun/listRuns. Helpers stayed pure (env-default reads deferred to caller in C-10), not internal.
+
+**Earlier C-section history (pre-C.1):**
+- `2b9e768` Sub-phase C readiness handoff (lays out C.1/C.2/C.3 split + 16-attack inventory + 8 known-unknowns)
+- `c2796e9` Sub-phase C threat-model extension (25 mitigations: 23–47)
+- `23ae2d1` C.1 expanded task bodies (the executable Steps + Files + Tests + Commit format)
+- `8beec5e` handoff note: plan-vs-handoff gaps surfaced by C-section audit
+
+**Sub-phase B context (still relevant — threat model inheritance):**
+
+Sub-phase B retro headline: 42 min B-1..B-7 implementation, 5h27m across 7 review-fix rounds = 1:7.7 ratio. Root cause: missing `## Threat model` in the plan at write-time. Plan correction `4fd7dd6` added it after round 2; rounds 3-7 enriched it iteratively to 22 mitigations + 21 attacks. Round-7 ultra-effort review's anti-regression scan returned `[]` — convergence signal. Captured in `memory/lessons.md` (2026-05-28 entries) and `~/.claude/projects/-home-ntdst-Projects-folio/memory/project_phase-3-sub-phase-B-shipped.md`.
+
+Sub-phase B threat model lives in `docs/superpowers/plans/2026-05-27-phase-3-agent-runner.md` `## Threat model` section. 22 mitigations enumerate per-route gates, sanitization sites, validation symmetry, and a "future routes MUST" rule. Sub-phase C extends this with mitigations 23–47 (the threat model committed at `c2796e9`); does NOT re-litigate it.
 
 ---
 
@@ -785,6 +818,7 @@ See `docs/PHASES.md` for the canonical phase list (above-section mirrors it). Lo
 [2026-05-27] — session ended (no significant changes captured)
 [2026-05-27] — session ended (no significant changes captured)
 [2026-05-27] — session ended (no significant changes captured)
+[2026-05-28] — session ended (no significant changes captured)
 [2026-05-28] — session ended (no significant changes captured)
 [2026-05-28] — session ended (no significant changes captured)
 [2026-05-28] — session ended (no significant changes captured)
