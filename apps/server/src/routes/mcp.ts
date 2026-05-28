@@ -154,6 +154,37 @@ function mcpInvalidParams(message: string, data: Record<string, unknown>): Error
 }
 
 /**
+ * Round 6 #1 — auth-grant mutations on the agent surface MUST reject human PATs.
+ *
+ * Agent CRUD via MCP (`create_agent` / `update_agent` / `delete_agent`) is an
+ * auth-grant mutation: it mints, modifies, or revokes an `agent_token` bearer
+ * credential. An agent-bound bearer (token.agentId set) calling these has a
+ * legitimate use case — agent self-management / parent spawning a child. A
+ * human PAT calling them has the SAME SHAPE as a stolen-credential escalation:
+ * the attacker mints a new agent with arbitrary scopes and pivots through it.
+ *
+ * Symmetric carve-out: HTTP-side agent CRUD (`POST/PATCH/DELETE
+ * /api/v1/w/:wslug/documents` with `type=agent`) is intentionally NOT gated
+ * — that's the admin-facing surface where workspace admins manage agents.
+ * MCP is the agent-facing surface; gating MCP closes the privilege-escalation
+ * vector without breaking admin workflows.
+ *
+ * Uses code -32601 (MCP-conventional "method not found / refused") to signal
+ * "this method is not available to this caller" rather than -32602 (invalid
+ * params), which would imply the request shape was wrong.
+ */
+function mcpRejectHumanPat(token: ApiToken): void {
+  if (!token.agentId) {
+    const err = new Error(
+      'agent-lifecycle tools require an agent-bound bearer; human PATs are rejected',
+    ) as Error & { code: number; data: Record<string, unknown> };
+    err.code = -32601;
+    err.data = { reason: 'human_pat_rejected_on_agent_lifecycle' };
+    throw err;
+  }
+}
+
+/**
  * Translate an HTTPError thrown by `lib/agent-guards.ts` into the MCP-shaped
  * error so create_agent / update_agent / delete_agent all surface the same
  * `error.data.reason` strings the protocol promises.
@@ -1008,6 +1039,8 @@ const TOOLS: ToolDef[] = [
     },
     requiredScope: 'agents:write',
     handler: async ({ token, actor }, args) => {
+      // Round 6 #1: human PATs cannot mint agent bearers via MCP.
+      mcpRejectHumanPat(token);
       const ws = await resolveWorkspaceForToken(token, args);
       const title = requireString(args, 'title');
       const body = optionalString(args, 'body') ?? '';
@@ -1060,6 +1093,8 @@ const TOOLS: ToolDef[] = [
     },
     requiredScope: 'agents:write',
     handler: async ({ token, actor }, args) => {
+      // Round 6 #1: human PATs cannot modify agent bearers via MCP.
+      mcpRejectHumanPat(token);
       const ws = await resolveWorkspaceForToken(token, args);
       const slug = requireString(args, 'slug');
       const existing = await getWorkspaceDocument(ws.id, 'agent', slug);
@@ -1114,6 +1149,8 @@ const TOOLS: ToolDef[] = [
     },
     requiredScope: 'agents:write',
     handler: async ({ token, actor }, args) => {
+      // Round 6 #1: human PATs cannot revoke agent bearers via MCP.
+      mcpRejectHumanPat(token);
       const ws = await resolveWorkspaceForToken(token, args);
       const slug = requireString(args, 'slug');
       const existing = await getWorkspaceDocument(ws.id, 'agent', slug);

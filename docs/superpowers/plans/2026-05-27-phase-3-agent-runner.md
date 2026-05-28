@@ -119,6 +119,7 @@ These are the rules the code MUST follow. `/code-review` should verify each one 
    | `/api/v1/w/:wslug/tokens/:wsId` | POST | Mint a new API token (round 5) — stolen Bearer could mint elevated-scope replacements |
    | `/api/v1/w/:wslug/tokens/:wsId/:tokenId` | DELETE | Revoke an API token (round 5) — stolen Bearer could revoke peers |
    | `/api/v1/w/:wslug` | PATCH, DELETE | Workspace rename / deletion (round 5) — destructive identity mutation |
+   | `POST /mcp` tools: `create_agent`, `update_agent`, `delete_agent` | * | Reject human PAT (`token.agentId === null`); agent-bound bearers OK for agent self-management (round 6 #1) |
    | Any FUTURE route that mutates auth grants, workspace identity, master secrets, or BYOK credentials | * | New routes that fit the pattern MUST use `requireSession` in the same commit they are introduced |
 
    **Routes intentionally NOT session-only (bearer-OK):**
@@ -126,6 +127,7 @@ These are the rules the code MUST follow. `/code-review` should verify each one 
    - `GET /tokens` — metadata read
    - `POST/PATCH/DELETE` on documents, projects, statuses, fields, views, runs — agent workflow; that's the point of API tokens
    - `POST /api/v1/workspaces` — workspace CREATE is session-only by virtue of not being under `/api/v1/w/:wslug` (the workspace scope), so it's mounted before the bearer chain.
+   - `POST/PATCH/DELETE /api/v1/w/:wslug/documents` with `type=agent` (HTTP): bearer-OK by design — workspace admins manage agents via the API. The MCP equivalents are gated (see row above) because MCP is the agent's own surface; an agent-bound bearer using HTTP routes would be unusual, and the differentiation closes the privilege-escalation vector on the path attackers would actually use (MCP) without breaking the admin path (HTTP). Asymmetric on purpose; revisit if MCP usage broadens beyond agents.
 
    **Test contract:** for each row in the "covered" table, a test asserts the route returns 403 when called with `Authorization: Bearer <valid token>` only, AND when called with `Authorization: Bearer <valid token>` + `Cookie: folio_session=garbage`. Round 5's settings.test.ts gained the DELETE garbage-cookie test for symmetry; tokens.test.ts and workspaces.test.ts gain equivalents in round 5.
 
