@@ -1170,6 +1170,11 @@ explicit; terminal statuses are dead-ends."
 
 ### Task A-4b: Pre-commit hook — migration ↔ journal pairing
 
+> **⚠ Plan defect noted during phase-3-A execution (shipped fix in `13e5954`):**
+> The Step 5 `install.sh` listing below uses an unquoted heredoc (`<<EOF`), which interpolates `$HOOK_SRC_DIR` at install time and bakes the installer-machine's absolute path into `.git/hooks/pre-commit`. On any other clone path (or after a `git worktree`/move), the generated hook references a non-existent file and `set -e` makes every commit fail closed.
+> The shipped artifact at `13e5954` switches to a single-quoted heredoc (`<<'EOF'`) and resolves the repo root at hook-RUNTIME via `$(git rev-parse --show-toplevel)`. The unused `HOOK_SRC_DIR` local was removed, and the generated hook upgrades `set -e` to `set -euo pipefail` to match the outer scripts.
+> Refer to commit `13e5954` for the actual pattern; the Step 5 block below is preserved as historical context but should not be copied.
+
 > **Why.** `[[drizzle-migration-journal]]` says every new `.sql` migration must update `_journal.json` in the same commit. The runtime can't help here — Drizzle's `migrate()` silently skips files that aren't in the journal, so a missing entry is invisible until production. A pre-commit hook closes the loop. This task is the project's automated enforcement of remark #4 from the Phase 3 review.
 
 **Files:**
