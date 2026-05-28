@@ -820,7 +820,10 @@ describe('listRuns', () => {
     expect(ids).toHaveLength(1);
   });
 
-  test('callerAgentProjectsAllowList=["*"] returns everything (no narrowing)', async () => {
+  test('throws INVALID_QUERY on invalid `since` timestamp', async () => {
+    // Mirrors listComments(comments.ts): invalid `since` used to silently fall
+    // through (no filter), so a polling worker passing a bad ISO got the FULL
+    // list and would re-process every historical row. Surface clearly.
     const { db, seed } = await makeTestApp();
     const table = await getWorkItemsTable(db, seed.project.id);
     const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
@@ -828,13 +831,53 @@ describe('listRuns', () => {
     const runsTable = await seedRunsTable(db, seed.project.id);
 
     await seedRunAt(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'running');
-    await seedRunAt(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'planning');
+
+    let caught: unknown;
+    try {
+      await listRuns({ workspaceId: seed.workspace.id, since: 'not-a-date' });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(HTTPError);
+    expect((caught as HTTPError).code).toBe('INVALID_QUERY');
+    expect((caught as HTTPError).status).toBe(422);
+  });
+
+  test('callerAgentProjectsAllowList=["*"] returns everything (no narrowing)', async () => {
+    // Two projects in the same workspace, one row in each. The wildcard must
+    // return BOTH rows — a test that seeded only one project would also pass
+    // with `[seed.project.id]` (no wildcard skip), so it would not prove the
+    // mitigation 24 wildcard short-circuit is intact.
+    const { db, seed } = await makeTestApp();
+    const table1 = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent1 = await seedWorkItem(db, seed.workspace, seed.project, table1, seed.user);
+    const runsTable1 = await seedRunsTable(db, seed.project.id);
+
+    const project2Id = nanoid();
+    await db.insert(schemaProjects).values({
+      id: project2Id,
+      workspaceId: seed.workspace.id,
+      slug: 'p2-wildcard',
+      name: 'P2 Wildcard',
+    });
+    await seedProjectDefaults(db, project2Id);
+    const project2 = (await db.query.projects.findFirst({
+      where: (p, { eq: e }) => e(p.id, project2Id),
+    }))!;
+    const table2 = await getWorkItemsTable(db, project2.id);
+    const parent2 = await seedWorkItem(db, seed.workspace, project2, table2, seed.user);
+    const runsTable2 = await seedRunsTable(db, project2.id);
+
+    const inP1 = await seedRunAt(db, seed.workspace, seed.project, runsTable1, agent, parent1, seed.user, 'running');
+    const inP2 = await seedRunAt(db, seed.workspace, project2, runsTable2, agent, parent2, seed.user, 'planning');
 
     const rows = await listRuns({
       workspaceId: seed.workspace.id,
       callerAgentProjectsAllowList: ['*'],
     });
-    expect(rows.length).toBe(2);
+    const ids = rows.map((r) => r.id).sort();
+    expect(ids).toEqual([inP1.id, inP2.id].sort());
   });
 
   test('callerAgentProjectsAllowList=[projectId] narrows to allowed projects (mitigation 24)', async () => {

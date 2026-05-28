@@ -442,7 +442,7 @@ export interface ListRunsFilter {
   projectId?: string;
   parentId?: string;
   agentSlug?: string;
-  status?: string;
+  status?: RunStatus;
   chainId?: string;
   /** ISO timestamp — returns rows with `started_at >= since`. */
   since?: string;
@@ -495,10 +495,20 @@ export async function listRuns(
     // filter on the column-backed `createdAt` because it's index-friendly
     // and is set to the same moment by createRun (both come from the same
     // `new Date()` call in the same transaction).
+    //
+    // Invalid `since` used to silently fall through (no filter applied), so a
+    // polling worker that passed a bad ISO got the FULL list back and would
+    // re-process every historical row. Mirrors `listComments` (services/
+    // comments.ts) — surface clearly so the caller fixes the input.
     const ts = new Date(filter.since);
-    if (!Number.isNaN(ts.getTime())) {
-      whereClauses.push(gte(documents.createdAt, ts));
+    if (Number.isNaN(ts.getTime())) {
+      throw new HTTPError(
+        'INVALID_QUERY',
+        `invalid since timestamp: ${filter.since}`,
+        422,
+      );
     }
+    whereClauses.push(gte(documents.createdAt, ts));
   }
 
   // Mitigation 24 allow-list narrowing. The short-circuit above already
