@@ -57,6 +57,10 @@ export async function makeTestApp(opts: HarnessOptions = {}): Promise<{
 }> {
   const sqlite = new Database(':memory:');
   sqlite.exec('PRAGMA foreign_keys = ON');
+  // R9 — mirror the production busy_timeout so race tests reproduce
+  // production lock-waiting behavior rather than SQLITE_BUSY-immediately
+  // semantics that would mask F1 / F14 race fixes.
+  sqlite.exec('PRAGMA busy_timeout = 5000');
   const db = drizzle(sqlite, { schema });
   migrate(db, { migrationsFolder: MIGRATIONS_DIR });
 
