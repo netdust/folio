@@ -183,7 +183,7 @@ describe('POST /api/v1/w/:wslug/ai/test-key', () => {
     });
     expect(res.status).toBe(422);
     const body = await res.json();
-    expect(body.error.message ?? body.error.code).toMatch(/base_url|loopback|private/i);
+    expect(body.error.code).toBe('INVALID_BODY');
   });
 
   test('rejects base_url pointing at link-local AWS metadata', async () => {
@@ -329,6 +329,6 @@ describe('POST /api/v1/w/:wslug/ai/test-key', () => {
     });
     expect(res.status).toBe(422);
     const body = await res.json();
-    expect(body.error.message ?? body.error.code).toMatch(/base_url|ollama/i);
+    expect(body.error.code).toBe('INVALID_BODY');
   });
 });

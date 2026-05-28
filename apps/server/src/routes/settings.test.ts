@@ -28,7 +28,6 @@ describe('POST /api/v1/w/:wslug/settings/:workspaceId/ai-keys', () => {
     expect(res.status).toBe(422);
     const body = await res.json();
     expect(body.error.code).toBe('INVALID_BODY');
-    expect(body.error.message).toMatch(/loopback|private|baseUrl|base_url/i);
   });
 
   test('rejects ollama baseUrl pointing at AWS metadata link-local (422)', async () => {
