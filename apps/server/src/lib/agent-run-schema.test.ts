@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import {
   agentRunFrontmatterSchema,
+  runDoneReasonSchema,
   runStatusSchema,
   runErrorReasonSchema,
   isValidTransition,
@@ -70,6 +71,55 @@ describe('agentRunFrontmatterSchema', () => {
     expect(() =>
       agentRunFrontmatterSchema.parse({ ...valid, status: 'failed', error_reason: 'bogus' }),
     ).toThrow();
+  });
+
+  // Round 7 #20 — done_reason mirrors ProviderEvent.done.reason. The widened
+  // values (refusal, pause_turn) MUST round-trip through the persistence
+  // schema so the Sub-phase C runner can store them without inventing fields
+  // or collapsing distinct outcomes into 'provider_error'.
+  test('accepts done_reason=refusal on a completed run', () => {
+    expect(() =>
+      agentRunFrontmatterSchema.parse({ ...valid, status: 'completed', done_reason: 'refusal' }),
+    ).not.toThrow();
+  });
+
+  test('accepts done_reason=pause_turn on a completed run', () => {
+    expect(() =>
+      agentRunFrontmatterSchema.parse({ ...valid, status: 'completed', done_reason: 'pause_turn' }),
+    ).not.toThrow();
+  });
+
+  test('accepts the three canonical done_reason values', () => {
+    for (const dr of ['stop', 'tool_use', 'max_tokens']) {
+      expect(() =>
+        agentRunFrontmatterSchema.parse({ ...valid, status: 'completed', done_reason: dr }),
+      ).not.toThrow();
+    }
+  });
+
+  test('rejects unknown done_reason', () => {
+    expect(() =>
+      agentRunFrontmatterSchema.parse({
+        ...valid,
+        status: 'completed',
+        done_reason: 'safety_pause',
+      }),
+    ).toThrow();
+  });
+
+  test('done_reason is optional (pre-Sub-phase-C rows have no value)', () => {
+    expect(() => agentRunFrontmatterSchema.parse(valid)).not.toThrow();
+  });
+});
+
+describe('runDoneReasonSchema', () => {
+  test('accepts the five ProviderEvent done.reason values', () => {
+    for (const r of ['stop', 'tool_use', 'max_tokens', 'refusal', 'pause_turn']) {
+      expect(() => runDoneReasonSchema.parse(r)).not.toThrow();
+    }
+  });
+  test('rejects unknown', () => {
+    expect(() => runDoneReasonSchema.parse('content_filter')).toThrow();
   });
 });
 

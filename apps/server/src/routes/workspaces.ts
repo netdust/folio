@@ -5,7 +5,7 @@ import { Hono } from 'hono';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import { db } from '../db/client.ts';
-import { memberships, workspaces } from '../db/schema.ts';
+import { documents, memberships, workspaces } from '../db/schema.ts';
 import { seedBuiltinTriggers } from '../lib/builtin-triggers.ts';
 import { emitEvent, txWithEvents } from '../lib/events.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
@@ -134,6 +134,39 @@ workspaceItemRoute.delete('/', requireSessionUser, async (c) => {
 
 workspaceItemRoute.get('/members', async (c) => {
   const ws = getWorkspace(c);
+  // Round 7 #22 — agent-bound bearers narrowed to specific projects must NOT
+  // receive the full workspace membership. F3 (events.ts) already narrows
+  // event visibility for the same caller class; this route had no parallel.
+  // An agent allow-listed to one project was previously receiving the
+  // emails of users on every project in the workspace — a PII leak that
+  // ignored the F3-style narrowing contract.
+  //
+  // v1 implementation: project-narrowed agent-bound bearers receive an
+  // EMPTY list. They have no business knowing workspace membership; their
+  // work is scoped to docs in the allow-list projects. Session callers and
+  // wildcard-allow-list agents continue to see the full list. v1.1 would
+  // refine this to "members of at least one allowed project" once
+  // project-scoped memberships exist in the schema (currently workspace-
+  // level only).
+  //
+  // Threat model attack 21 + mitigation 22.
+  const token = c.get('token') ?? null;
+  if (token?.agentId) {
+    const agent = await db.query.documents.findFirst({
+      where: eq(documents.id, token.agentId),
+    });
+    const projects =
+      (agent?.frontmatter as { projects?: unknown } | undefined)?.projects;
+    const projectList = Array.isArray(projects)
+      ? (projects.filter((p) => typeof p === 'string') as string[])
+      : [];
+    const isWildcard = projectList.includes('*');
+    if (!isWildcard) {
+      // Project-narrowed agent → no member visibility in v1.
+      return jsonOk(c, { members: [] });
+    }
+  }
+
   const rows = await db
     .select({
       userId: memberships.userId,
