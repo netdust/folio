@@ -56,14 +56,46 @@ async function loadProvider(name: Provider): Promise<AIProvider> {
   if (cached) return cached;
   const inflight = loading[name];
   if (inflight) return inflight;
-  const promise = REGISTRY[name]().then((impl) => {
-    cache[name] = impl;
-    delete loading[name];
-    return impl;
-  });
+  const promise = REGISTRY[name]()
+    .then((impl) => {
+      cache[name] = impl;
+      delete loading[name];
+      return impl;
+    })
+    .catch((err) => {
+      // A failed dynamic import previously stayed in `loading[name]` forever
+      // — every subsequent caller awaited the same rejection until restart.
+      // Clear the slot so transient failures (e.g. a flaky filesystem during
+      // SDK import) recover on the next call.
+      delete loading[name];
+      throw err;
+    });
   loading[name] = promise;
   return promise;
 }
+
+/**
+ * Test-only escape hatch. Lets specs override REGISTRY entries with a stub
+ * (to drive the rejection-cleanup path through real code) and observe the
+ * `loading` table without exposing it. Not part of the runtime contract —
+ * do not call from production code.
+ */
+export const __testing = {
+  overrideRegistry(name: Provider, loader: () => Promise<AIProvider>): void {
+    REGISTRY[name] = loader;
+  },
+  hasInflight(name: Provider): boolean {
+    return loading[name] !== undefined;
+  },
+  hasCached(name: Provider): boolean {
+    return cache[name] !== undefined;
+  },
+  reset(): void {
+    for (const k of Object.keys(cache) as Provider[]) delete cache[k];
+    for (const k of Object.keys(loading) as Provider[]) delete loading[k];
+  },
+  loadProvider,
+};
 
 export function getProvider(name: Provider): AIProvider {
   if (!REGISTRY[name]) throw new Error(`Unknown AI provider: ${String(name)}`);
