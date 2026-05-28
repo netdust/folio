@@ -305,3 +305,13 @@ A 2-minute DevTools read beats 3 commits of guessing.
 **Rule:** When a code-review report says "15 findings," ALWAYS report verified-but-cut findings to the user with the verdict and a one-line summary, even if abbreviated. If the cap forced a cut, name that explicitly. The user should know what was deferred. Better: rank by severity, mention the count of verified findings, then truncate displayed detail — don't truncate the count.
 
 **Trigger:** Running `/code-review` or any reviewer pipeline with a fixed output cap. If the verified-confirmed count exceeds the cap, the closing summary must say so (e.g., "18 verified, top 15 below, remainder: …"). Don't let a presentation limit hide a correctness signal.
+
+## 2026-05-28 — When the plan was written before the convention, re-read it against the live codebase
+
+**Mistake:** Phase 3's plan was authored 2026-05-26. Phase 2.6's reviewer pass (later in the same week) codified two Folio conventions: Zod schema consts use camelCase (every peer schema in `apps/server/src/lib/*-schema.ts` does), and frontmatter schemas always call `.strict()`. The Phase 3 A-4 plan reproduced the older convention verbatim — PascalCase consts, no `.strict()`. The implementer shipped it as written. Stage 2 code-review caught it, but at fix-up cost (commit `bc4b5ee`). Same root cause behind A-4b's installer-heredoc bug: the plan was written before the worktree-portability concern got attention.
+
+**Why:** A plan is a snapshot of conventions at the time it was authored. Between writing and executing, the codebase keeps moving. Patterns codified in reviewer passes (BUG-* fixes, code-review findings) settle into the codebase but DON'T propagate backward into already-written plans. The plan is a stale rubric the moment a new pattern lands.
+
+**Rule:** When the executing-skill cycle (`ntdst-execute-with-tests` → `subagent-driven-development`) opens a plan that's more than a few days old, the controller's pre-flight MUST include: for each new module/class/schema the plan introduces, grep peer files in the target directory (`apps/server/src/lib/*-schema.ts`, `apps/web/src/lib/api/*.ts`, etc) and verify the plan's example matches the live convention. If a peer file uses `.strict()`, the plan's schema must too; if peers are camelCase, the plan's must be too. Caught at pre-flight = zero fix-up cycles; caught at Stage 2 review = one extra commit per drift.
+
+**Trigger:** Any `superpowers:executing-plans` or `superpowers:subagent-driven-development` invocation on a plan file with `mtime > 5 days`. Or any plan task that introduces a NEW file matching a pattern that other peer files in the codebase already follow. Look at the FIRST peer file for each pattern; if it disagrees with the plan, the live code wins.
