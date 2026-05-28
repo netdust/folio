@@ -527,3 +527,139 @@ export async function listRuns(
   });
   return rows;
 }
+
+// ----- claim + orphan recovery + count (Task C-3) -----
+
+/**
+ * Atomically claim the oldest `planning` agent_run row and flip it to
+ * `running` + stamp `worker_started_at`. Returns the claimed row, or null
+ * when no planning rows exist.
+ *
+ * Mitigation 36 — exactly-once claim under SQLite's transaction semantics.
+ * The atomicity hinges on a SINGLE UPDATE statement combining:
+ *   - inner SELECT that picks the oldest planning row
+ *   - outer UPDATE that re-checks `frontmatter.status = 'planning'` so
+ *     between the SELECT and the UPDATE another claimer's commit can't
+ *     race in and re-claim the same row.
+ *   - RETURNING * yields 1 row when this caller claimed it, 0 rows when
+ *     a concurrent claimer beat us — drives the race-test invariant.
+ *
+ * Caller MUST pass a transaction handle (not the bare `db`). The poller
+ * (C-10) chains claim + preflight + transitionRun inside ONE tx so a
+ * process crash mid-preflight leaves NO orphaned `running` row.
+ *
+ * No event emission: the runner emits `agent.run.running` AFTER preflight
+ * succeeds (C-8). Claim alone is not yet a state worth broadcasting.
+ */
+export async function claimNextPlanningRun(tx: DBOrTx): Promise<Document | null> {
+  const claimedAt = new Date().toISOString();
+  const rows = await tx.all<Document>(sql`
+    UPDATE documents
+       SET frontmatter = json_set(
+             frontmatter,
+             '$.status', 'running',
+             '$.worker_started_at', ${claimedAt}
+           ),
+           status = 'running',
+           updated_at = ${claimedAt}
+     WHERE id = (
+       SELECT id FROM documents
+        WHERE type = 'agent_run'
+          AND json_extract(frontmatter, '$.status') = 'planning'
+        ORDER BY created_at ASC
+        LIMIT 1
+     )
+       AND json_extract(frontmatter, '$.status') = 'planning'
+     RETURNING *
+  `);
+  if (rows.length === 0) return null;
+  // Re-read via the typed query so callers get the same row shape as the
+  // other helpers (Date columns parsed, frontmatter typed as JSON, etc.) —
+  // RETURNING * yields raw SQLite columns.
+  const raw = rows[0]!;
+  const row = await tx.query.documents.findFirst({
+    where: eq(documents.id, raw.id),
+  });
+  return row ?? null;
+}
+
+/**
+ * Recover orphaned `running` agent_run rows whose worker_started_at is
+ * older than `staleThresholdMs`. Transitions them to `failed` with
+ * `error_reason = 'worker_crash'`, clears `worker_started_at`, sets
+ * `completed_at`, and emits one `agent.run.failed` per row.
+ *
+ * Mitigation 37 — recovery is bounded by TWO predicates:
+ *  - `status = 'running'` so a row that has ALREADY transitioned (e.g. to
+ *    completed) won't be incorrectly re-failed.
+ *  - `worker_started_at < threshold` so genuinely-active runners aren't
+ *    interrupted mid-stream.
+ *
+ * Owns its own tx via `txWithEvents` so the row UPDATE and the bus
+ * publishes commit (or roll back) together. Same shape as `transitionRun`
+ * (Task C-1) — callers do not pass a tx.
+ *
+ * Returns the ids of the recovered runs (empty array when none).
+ */
+export async function recoverOrphanRuns(
+  args: { staleThresholdMs: number },
+): Promise<string[]> {
+  const threshold = new Date(Date.now() - args.staleThresholdMs).toISOString();
+  const completedAt = new Date().toISOString();
+
+  return txWithEvents(db, async (tx) => {
+    const updated = await tx.all<{ id: string; workspace_id: string; project_id: string | null }>(sql`
+      UPDATE documents
+         SET frontmatter = json_set(
+               frontmatter,
+               '$.status', 'failed',
+               '$.error_reason', 'worker_crash',
+               '$.worker_started_at', NULL,
+               '$.completed_at', ${completedAt}
+             ),
+             status = 'failed',
+             updated_at = ${completedAt}
+       WHERE type = 'agent_run'
+         AND json_extract(frontmatter, '$.status') = 'running'
+         AND json_extract(frontmatter, '$.worker_started_at') < ${threshold}
+       RETURNING id, workspace_id, project_id
+    `);
+
+    for (const r of updated) {
+      await emitEvent(tx, {
+        kind: 'agent.run.failed',
+        workspaceId: r.workspace_id,
+        projectId: r.project_id,
+        documentId: r.id,
+        // Recovery runs as the system — no user actor available. The
+        // emitted event's `actor` field carries the provenance so the
+        // operator can grep `actor:system` for forced recoveries.
+        actor: 'system:orphan-recovery',
+        payload: {
+          from: 'running',
+          to: 'failed',
+          error_reason: 'worker_crash',
+        },
+      });
+    }
+
+    return updated.map((r) => r.id);
+  });
+}
+
+/**
+ * COUNT(*) of `agent_run` rows at status='planning'. Used by the poller
+ * to decide whether to bother with a claim attempt (cheap pre-check) and
+ * by the admin runner-stats endpoint (D-6).
+ *
+ * Single-statement SELECT; accepts a tx for read-your-writes consistency
+ * inside the poller's claim tx, defaults to `db` for external callers.
+ */
+export async function countPendingPlanning(tx: DBOrTx = db): Promise<number> {
+  const rows = await tx.all<{ count: number }>(sql`
+    SELECT COUNT(*) as count FROM documents
+     WHERE type = 'agent_run'
+       AND json_extract(frontmatter, '$.status') = 'planning'
+  `);
+  return rows[0]?.count ?? 0;
+}

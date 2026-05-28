@@ -35,6 +35,9 @@ import {
   getActiveRun,
   getPendingApprovalRun,
   listRuns,
+  claimNextPlanningRun,
+  recoverOrphanRuns,
+  countPendingPlanning,
 } from './agent-runs.ts';
 
 type TestDB = Awaited<ReturnType<typeof makeTestApp>>['db'];
@@ -614,7 +617,7 @@ async function seedRunAt(
   parent: Document,
   user: User,
   status: AgentRunFrontmatter['status'],
-  overrides: { createdAt?: Date; chainId?: string } = {},
+  overrides: { createdAt?: Date; chainId?: string; workerStartedAt?: string } = {},
 ): Promise<Document> {
   const id = nanoid();
   const now = new Date().toISOString();
@@ -632,6 +635,9 @@ async function seedRunAt(
     chain_id: overrides.chainId ?? crypto.randomUUID(),
     fired_by: 'agent.task.assigned',
     started_at: now,
+    ...(overrides.workerStartedAt !== undefined
+      ? { worker_started_at: overrides.workerStartedAt }
+      : {}),
   };
   await db.insert(documents).values({
     id,
@@ -996,5 +1002,216 @@ describe('sanitizeProviderError integration guard', () => {
     expect(out).not.toContain('sk-leak-12345');
     expect(out).not.toContain('req_attacker_owned');
     expect(out).not.toContain('Incorrect API key');
+  });
+});
+
+// ---------- claimNextPlanningRun ----------
+
+describe('claimNextPlanningRun', () => {
+  test('returns null when no planning rows exist', async () => {
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+
+    // Seed running + completed rows — neither claimable.
+    await seedRunAt(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'running');
+    await seedRunAt(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'completed');
+
+    const claimed = await db.transaction(async (tx) => claimNextPlanningRun(tx));
+    expect(claimed).toBeNull();
+  });
+
+  test('claims oldest planning row by created_at ASC and flips status + worker_started_at', async () => {
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+
+    const older = await seedRunAt(
+      db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'planning',
+      { createdAt: new Date(Date.now() - 60_000) },
+    );
+    await seedRunAt(
+      db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'planning',
+      { createdAt: new Date() },
+    );
+
+    const claimed = await db.transaction(async (tx) => claimNextPlanningRun(tx));
+    expect(claimed).not.toBeNull();
+    expect(claimed!.id).toBe(older.id);
+    // documents.status column + frontmatter.status flipped in lockstep (mitigation 40).
+    expect(claimed!.status).toBe('running');
+    const fm = claimed!.frontmatter as AgentRunFrontmatter;
+    expect(fm.status).toBe('running');
+    expect(typeof fm.worker_started_at).toBe('string');
+    expect(fm.worker_started_at!.length).toBeGreaterThan(0);
+  });
+
+  test('exactly one of two concurrent claimers wins the same row (race test, 100 iterations)', async () => {
+    // Mitigation 36 — atomic claim under SQLite's transaction semantics.
+    // We seed exactly ONE planning row per iteration, then race two
+    // independent transactions calling claimNextPlanningRun. Exactly one
+    // must return the row; the other must return null. If both win, the
+    // UPDATE ... WHERE status='planning' guard is broken and rows could be
+    // double-claimed across worker instances.
+    //
+    // Per [[mock-the-wire-not-the-response]]: real SQLite, no stubs.
+    // 100 iterations defeats single-pass scheduler luck.
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+
+    for (let i = 0; i < 100; i++) {
+      await seedRunAt(
+        db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'planning',
+      );
+
+      const [a, b] = await Promise.all([
+        db.transaction(async (tx) => claimNextPlanningRun(tx)),
+        db.transaction(async (tx) => claimNextPlanningRun(tx)),
+      ]);
+
+      const winners = [a, b].filter((r): r is Document => r !== null);
+      expect(winners.length).toBe(1);
+
+      // Cleanup: transition the claimed (now running) row to a terminal
+      // state so the next iteration starts with zero claimable rows.
+      // transitionRun manages its own tx; runs the actor as the agent slug
+      // to match the runner's convention.
+      // Use a real user id for FK satisfaction. transitionRun writes
+      // updatedBy → documents.updated_by → users.id. Production code path
+      // (the runner) uses the agent's owner user id; tests use seed.user.id
+      // for the same reason.
+      await transitionRun(winners[0]!.id, {
+        newStatus: 'failed',
+        actor: seed.user.id,
+        errorReason: 'cancelled',
+      });
+    }
+  });
+});
+
+// ---------- recoverOrphanRuns ----------
+
+describe('recoverOrphanRuns', () => {
+  test('transitions stale running rows to failed with error_reason=worker_crash', async () => {
+    // Mitigation 37 — recovery boundary is `worker_started_at < threshold`
+    // AND status='running'. Fresh runners are untouched; transitioned rows
+    // (completed/failed) are untouched.
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+
+    const stale = await seedRunAt(
+      db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'running',
+      { workerStartedAt: new Date(Date.now() - 10 * 60_000).toISOString() },
+    );
+
+    const recovered = await recoverOrphanRuns({ staleThresholdMs: 5 * 60_000 });
+    expect(recovered).toEqual([stale.id]);
+
+    // Row is now failed + worker_started_at cleared + completed_at set.
+    const row = await db.query.documents.findFirst({ where: eq(documents.id, stale.id) });
+    expect(row!.status).toBe('failed');
+    const fm = row!.frontmatter as AgentRunFrontmatter;
+    expect(fm.status).toBe('failed');
+    expect(fm.error_reason).toBe('worker_crash');
+    expect(fm.worker_started_at).toBeNull();
+    expect(typeof fm.completed_at).toBe('string');
+
+    // Event emitted, scoped to the workspace + project.
+    const failedEvents = await db.query.events.findMany({
+      where: eq(events.kind, 'agent.run.failed'),
+    });
+    expect(failedEvents.length).toBe(1);
+    expect(failedEvents[0]!.documentId).toBe(stale.id);
+    expect(failedEvents[0]!.workspaceId).toBe(seed.workspace.id);
+    expect(failedEvents[0]!.projectId).toBe(seed.project.id);
+  });
+
+  test('skips rows whose worker_started_at is fresher than threshold', async () => {
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+
+    const fresh = await seedRunAt(
+      db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'running',
+      { workerStartedAt: new Date(Date.now() - 10_000).toISOString() }, // 10s ago
+    );
+
+    const recovered = await recoverOrphanRuns({ staleThresholdMs: 5 * 60_000 });
+    expect(recovered).toEqual([]);
+
+    // Row unchanged.
+    const row = await db.query.documents.findFirst({ where: eq(documents.id, fresh.id) });
+    expect(row!.status).toBe('running');
+  });
+
+  test('skips rows whose status is no longer running (mitigation 37 status predicate)', async () => {
+    // The race the predicate guards: a row was running with stale
+    // worker_started_at, then a different code path transitioned it to
+    // completed. Recovery must NOT flip it back to failed.
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+
+    // Seed a row that LOOKS orphaned (stale worker_started_at) but has
+    // already transitioned to completed (status mismatch).
+    const completed = await seedRunAt(
+      db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'completed',
+      { workerStartedAt: new Date(Date.now() - 10 * 60_000).toISOString() },
+    );
+
+    const recovered = await recoverOrphanRuns({ staleThresholdMs: 5 * 60_000 });
+    expect(recovered).toEqual([]);
+
+    const row = await db.query.documents.findFirst({ where: eq(documents.id, completed.id) });
+    expect(row!.status).toBe('completed');
+    const fm = row!.frontmatter as AgentRunFrontmatter;
+    expect(fm.error_reason).toBeUndefined();
+  });
+});
+
+// ---------- countPendingPlanning ----------
+
+describe('countPendingPlanning', () => {
+  test('returns the number of agent_run rows at status=planning', async () => {
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+
+    await seedRunAt(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'planning');
+    await seedRunAt(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'planning');
+    await seedRunAt(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'running');
+    await seedRunAt(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'completed');
+
+    const count = await db.transaction(async (tx) => countPendingPlanning(tx));
+    expect(count).toBe(2);
+  });
+
+  test('returns 0 when no planning rows exist', async () => {
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+
+    await seedRunAt(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'running');
+
+    const count = await db.transaction(async (tx) => countPendingPlanning(tx));
+    expect(count).toBe(0);
   });
 });
