@@ -52,6 +52,19 @@ settingsRoute.post(
       }),
   ),
   async (c) => {
+    // B round 4 fix #1 — mirror the authMethod gate already on /ai/test-key
+    // onto the persistence path. Pre-fix, attachToken hydrates user from
+    // token.createdBy so requireUser was satisfied — a stolen workspace PAT
+    // could rotate the workspace's BYOK setup without ever touching test-key.
+    // AI key management is session-only; the GET path stays bearer-OK by
+    // intent (agents may read metadata).
+    if (c.get('authMethod') === 'token') {
+      throw new HTTPError(
+        'FORBIDDEN',
+        'AI key management is session-only (no API tokens)',
+        403,
+      );
+    }
     const user = getUser(c);
     const workspaceId = c.req.param('workspaceId');
     const m = await db.query.memberships.findFirst({
@@ -99,6 +112,14 @@ settingsRoute.post(
 );
 
 settingsRoute.delete('/:workspaceId/ai-keys/:keyId', async (c) => {
+  // B round 4 fix #1 — session-only; see POST handler.
+  if (c.get('authMethod') === 'token') {
+    throw new HTTPError(
+      'FORBIDDEN',
+      'AI key management is session-only (no API tokens)',
+      403,
+    );
+  }
   const user = getUser(c);
   const workspaceId = c.req.param('workspaceId');
   const keyId = c.req.param('keyId');

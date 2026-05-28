@@ -1,4 +1,7 @@
 import { describe, expect, test } from 'bun:test';
+import { nanoid } from 'nanoid';
+import { apiTokens } from '../db/schema.ts';
+import { newApiToken } from '../lib/auth.ts';
 import { makeTestApp } from '../test/harness.ts';
 
 // POST /api/v1/w/:wslug/settings/:workspaceId/ai-keys
@@ -160,5 +163,118 @@ describe('POST /api/v1/w/:wslug/settings/:workspaceId/ai-keys', () => {
       }),
     });
     expect(res.status).toBe(200);
+  });
+
+  // B round 4 fix #1 — mirror the authMethod gate from /ai/test-key onto the
+  // persistence path. Pre-fix the route only ran requireUser; attachToken
+  // hydrates user from token.createdBy, so a stolen / leaked workspace PAT
+  // could mint or rotate the workspace's AI key without ever touching
+  // test-key. AI-key management is session-only.
+  test('POST /ai-keys rejects API-token callers with 403', async () => {
+    const { app, db, seed } = await makeTestApp();
+    const { token, hash } = newApiToken();
+    await db.insert(apiTokens).values({
+      id: nanoid(),
+      workspaceId: seed.workspace.id,
+      name: 'persistence-PAT',
+      tokenHash: hash,
+      scopes: ['documents:read'],
+      createdBy: seed.user.id,
+    });
+    const res = await app.request(path(seed.workspace.slug, seed.workspace.id), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        provider: 'anthropic',
+        apiKey: 'sk-mock',
+        label: 'default',
+      }),
+    });
+    expect(res.status).toBe(403);
+    const body = await res.json();
+    expect(body.error.code).toBe('FORBIDDEN');
+  });
+
+  // B round 4 fix #1 — symmetric to ai.test.ts: garbage cookie + valid bearer
+  // must still resolve to authMethod==='token' (cookie-presence is not auth).
+  test('POST /ai-keys rejects bearer even when an empty/garbage folio_session cookie is also sent', async () => {
+    const { app, db, seed } = await makeTestApp();
+    const { token, hash } = newApiToken();
+    await db.insert(apiTokens).values({
+      id: nanoid(),
+      workspaceId: seed.workspace.id,
+      name: 'cookie-bypass-PAT',
+      tokenHash: hash,
+      scopes: ['documents:read'],
+      createdBy: seed.user.id,
+    });
+    for (const garbageCookie of [
+      'folio_session=garbage',
+      'folio_session=',
+      'folio_session=expired-id',
+    ]) {
+      const res = await app.request(path(seed.workspace.slug, seed.workspace.id), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: garbageCookie,
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          provider: 'anthropic',
+          apiKey: 'sk-mock',
+          label: 'default',
+        }),
+      });
+      expect(res.status).toBe(403);
+      const body = await res.json();
+      expect(body.error.code).toBe('FORBIDDEN');
+    }
+  });
+
+  // B round 4 fix #1 — DELETE inherits the authMethod check from mitigation 11.
+  test('DELETE /ai-keys/:keyId rejects API-token callers with 403', async () => {
+    const { app, db, seed } = await makeTestApp();
+    // Seed an aiKeys row first via the session-authenticated POST.
+    const postRes = await app.request(path(seed.workspace.slug, seed.workspace.id), {
+      method: 'POST',
+      headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        provider: 'anthropic',
+        apiKey: 'sk-mock',
+        label: 'default',
+      }),
+    });
+    expect(postRes.status).toBe(200);
+    const listRes = await app.request(path(seed.workspace.slug, seed.workspace.id), {
+      method: 'GET',
+      headers: { Cookie: seed.sessionCookie },
+    });
+    const listBody = await listRes.json();
+    const keyId = listBody.data.keys[0]?.id as string;
+    expect(typeof keyId).toBe('string');
+
+    const { token, hash } = newApiToken();
+    await db.insert(apiTokens).values({
+      id: nanoid(),
+      workspaceId: seed.workspace.id,
+      name: 'delete-PAT',
+      tokenHash: hash,
+      scopes: ['documents:read'],
+      createdBy: seed.user.id,
+    });
+    const res = await app.request(
+      `${path(seed.workspace.slug, seed.workspace.id)}/${keyId}`,
+      {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      },
+    );
+    expect(res.status).toBe(403);
+    const body = await res.json();
+    expect(body.error.code).toBe('FORBIDDEN');
   });
 });
