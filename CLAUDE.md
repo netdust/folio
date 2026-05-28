@@ -115,6 +115,8 @@ bun run build                     # Build React → embed → bun compile single
 docker build -f docker/Dockerfile -t folio:dev .
 ```
 
+- One-time per fresh clone: `./scripts/hooks/install.sh` to enable the migration-journal pre-commit check. Re-run if you re-clone.
+
 ## Decisions Already Made — Do Not Re-Litigate
 
 - Stack: see table above.
