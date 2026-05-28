@@ -47,6 +47,23 @@ const REGISTRY: Record<Provider, () => Promise<AIProvider>> = {
 };
 
 const cache: Partial<Record<Provider, AIProvider>> = {};
+// Share one in-flight import per provider so concurrent first-callers
+// don't each trigger a dynamic import + duplicate module evaluation.
+const loading: Partial<Record<Provider, Promise<AIProvider>>> = {};
+
+async function loadProvider(name: Provider): Promise<AIProvider> {
+  const cached = cache[name];
+  if (cached) return cached;
+  const inflight = loading[name];
+  if (inflight) return inflight;
+  const promise = REGISTRY[name]().then((impl) => {
+    cache[name] = impl;
+    delete loading[name];
+    return impl;
+  });
+  loading[name] = promise;
+  return promise;
+}
 
 export function getProvider(name: Provider): AIProvider {
   if (!REGISTRY[name]) throw new Error(`Unknown AI provider: ${String(name)}`);
@@ -54,13 +71,11 @@ export function getProvider(name: Provider): AIProvider {
   if (cached) return cached;
   const proxy: AIProvider = {
     async *stream(opts) {
-      const impl = await REGISTRY[name]();
-      cache[name] = impl;
+      const impl = await loadProvider(name);
       yield* impl.stream(opts);
     },
     async testKey(opts) {
-      const impl = await REGISTRY[name]();
-      cache[name] = impl;
+      const impl = await loadProvider(name);
       return impl.testKey(opts);
     },
   };
