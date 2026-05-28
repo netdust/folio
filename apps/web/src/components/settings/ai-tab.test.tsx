@@ -32,6 +32,7 @@ function renderTab() {
 
 describe('AiTab', () => {
   beforeEach(() => {
+    mockTestMutate.mockClear();
     vi.mocked(useWorkspaceAiKeys).mockReturnValue({ data: [], isLoading: false } as never);
     vi.mocked(useUpsertAiKey).mockReturnValue({
       mutateAsync: vi.fn(async () => ({ ok: true })),
@@ -66,7 +67,7 @@ describe('AiTab', () => {
     fireEvent.change(screen.getByLabelText(/api key/i), { target: { value: 'sk-test' } });
     fireEvent.click(screen.getByRole('button', { name: /^test$/i }));
     await waitFor(() => expect(screen.getByText(/key validated/i)).toBeInTheDocument());
-    expect(mockTestMutate).toHaveBeenCalled();
+    expect(mockTestMutate).toHaveBeenCalledTimes(1);
   });
 
   test('shows ollama base URL field only when ollama is selected', () => {
