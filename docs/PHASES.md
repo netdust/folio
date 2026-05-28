@@ -836,9 +836,11 @@ Hand-rolled Hono sub-app at `/mcp`. Speaks JSON-RPC 2.0 over HTTP POST. Bearer-a
 
 ### Data model
 
-- [ ] Migration `0009_phase_3_agent_runs.sql`: widen `documents.type` enum to include `agent_run`. CHECK constraint: `type='agent_run' ⇒ workspace_id IS NOT NULL AND project_id IS NOT NULL AND table_id IS NOT NULL AND parent_id IS NOT NULL`. Indexes: `documents_runs_by_parent_idx` (parent_id), `documents_runs_by_status_idx` (table_id, status), `documents_runs_pending_idx` (partial on status='planning' — the poller's claim index), `documents_runs_by_chain_idx` (expression index on json_extract chain_id — for fanout/duration/token aggregation).
-- [ ] `agent_run` frontmatter Zod: `agent_slug` (required), `provider`, `model`, `tokens_in`, `tokens_out`, `max_tokens`, `trigger_id` (nullable), `chain_id` (uuid; root mints, descendants inherit), `fired_by` (string — chain_id-prefixed trigger chain), `system_prompt` (snapshot), `worker_started_at` (set when poller claims; cleared on terminal), `error_reason` (nullable), `started_at`, `completed_at`.
-- [ ] Status state machine: `planning → awaiting_approval → running → completed | failed | rejected`. Transitions enforced in service layer.
+> Shipped on `phase-3/agent-runner` as Sub-phase A (2026-05-28). Migration shipped as `0012_phase_3_agent_runs.sql` + `0012a_flip_runner_builtins_to_enabled.sql` — Phase 2.6 took 0007–0011, so the original `0009`/`0009a` tags slid forward. State-machine transitions live in `apps/server/src/lib/agent-run-schema.ts::isValidTransition()` for Sub-phase A; service-layer enforcement lands in Sub-phase C.
+
+- [x] Migration `0012_phase_3_agent_runs.sql`: widen `documents.type` enum to include `agent_run`. CHECK constraint: `type='agent_run' ⇒ workspace_id IS NOT NULL AND project_id IS NOT NULL AND table_id IS NOT NULL AND parent_id IS NOT NULL`. Indexes: `documents_runs_by_parent_idx` (parent_id), `documents_runs_by_status_idx` (table_id, status), `documents_runs_pending_idx` (partial on status='planning' — the poller's claim index), `documents_runs_by_chain_idx` (expression index on json_extract chain_id — for fanout/duration/token aggregation). *(A-2, commit `13c76d8`.)*
+- [x] `agent_run` frontmatter Zod: `agent_slug` (required), `provider`, `model`, `tokens_in`, `tokens_out`, `max_tokens`, `trigger_id` (nullable), `chain_id` (uuid; root mints, descendants inherit), `fired_by` (string — chain_id-prefixed trigger chain), `system_prompt` (snapshot), `worker_started_at` (set when poller claims; cleared on terminal), `error_reason` (nullable), `started_at`, `completed_at`. Lives at `apps/server/src/lib/agent-run-schema.ts` (camelCase consts per house style, `.strict()` enforced). *(A-4, commits `02c4564` + fixup `bc4b5ee`.)*
+- [x] Status state machine: `planning → awaiting_approval → running → completed | failed | rejected`. `isValidTransition(from, to)` helper + `TERMINAL_STATUSES` constant shipped in `agent-run-schema.ts`. Service-layer enforcement at write-time deferred to Sub-phase C. *(A-4.)*
 
 ### Provider abstraction
 
@@ -871,7 +873,7 @@ Hand-rolled Hono sub-app at `/mcp`. Speaks JSON-RPC 2.0 over HTTP POST. Bearer-a
 
 ### Built-in triggers — wiring (defined in Phase 2.6, activated here)
 
-- [ ] Migration `0009a_flip_runner_builtins_to_enabled.sql`: flips `builtin-on-assignment` and `builtin-on-mention` from `enabled: false` to `enabled: true` for every workspace. Idempotent (no-op if already enabled).
+- [x] Migration `0012a_flip_runner_builtins_to_enabled.sql`: flips `builtin-on-assignment` and `builtin-on-mention` from `enabled: false` to `enabled: true` for every workspace. Idempotent (no-op if already enabled). Companion change in `apps/server/src/lib/builtin-triggers.ts` so newly-created workspaces seed the runner builtins already enabled. *(A-3, commit `d6fd994`. Migration tag shipped as 0012a, not 0009a — Phase 2.6 took 0007–0011.)*
 - [ ] `builtin-on-assignment` (`on_event: agent.task.assigned`): trigger handler calls `runAgent` with the assignee.
 - [ ] `builtin-on-mention` (`on_event: comment.mentioned`): trigger handler calls `runAgent` with the mentioned agent.
 - [ ] `builtin-on-approval` (`on_event: comment.created`, filter `kind=approval`): trigger handler invokes `runAgentResume` for the matching `awaiting_approval` run on `(parent_id, target_agent)`.
@@ -897,7 +899,7 @@ Hand-rolled Hono sub-app at `/mcp`. Speaks JSON-RPC 2.0 over HTTP POST. Bearer-a
 
 ### Events + SSE
 
-- [ ] New event kinds: `agent.run.started`, `agent.run.awaiting_approval`, `agent.run.running`, `agent.run.completed`, `agent.run.failed`, `agent.run.rejected`, `ai.action`, `runs_table.lazy_seeded`, `workspace.provider.degraded`, `workspace.provider.recovered`. Added to `KNOWN_EVENT_KINDS`.
+- [x] New event kinds: `agent.run.started`, `agent.run.awaiting_approval`, `agent.run.running`, `agent.run.completed`, `agent.run.failed`, `agent.run.rejected`, `ai.action`, `runs_table.lazy_seeded`, `workspace.provider.degraded`, `workspace.provider.recovered`. Added to `KNOWN_EVENT_KINDS` at `packages/shared/src/events.ts`. *(A-1, commit `52439c6`.)*
 - [ ] `ai.action` audit event emitted per provider call with `actor_type: 'agent'`, `actor_id: <agent_id>`, `provider`, `model`, `tokens_in`, `tokens_out`. No content stored.
 - [ ] New SSE filter params: `?agent=<doc_id>`, `?table=<table_id>`. AND-combined with existing filters.
 

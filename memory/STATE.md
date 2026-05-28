@@ -1,40 +1,51 @@
 # Folio — STATE
 
-_Last updated: 2026-05-27 evening (Phase 2.6 ALL 15 code-review findings RESOLVED across Tier 1 + 2 + 3; manifest updated; only 3 minor/deferred items remain OPEN)_
+_Last updated: 2026-05-28 morning (Phase 3 Sub-phase A shipped on `phase-3/agent-runner`; retro at `docs/superpowers/retros/2026-05-28-phase-3-sub-phase-A-retro.md`)._
 
 Living snapshot of where the project actually is. Read at session start. Update at session end if anything below changed.
 
-## Next up — verify e2e + merge
+## Next up — Sub-phase B in a fresh session
 
-**Phase 2.6 is now at `b0d8c0d` on `phase-2.6/comments-and-slideover`** (15 atomic commits on top of `977c364`'s 3 BLOCKER fixes, on top of `d305810`'s automated build). **All 18 must-fix-before-merge items resolved.** All unit test suites green.
+**Phase 2.6 merged to main** at `984b31c` on 2026-05-27 evening. Pushed. Handoff doc at `docs/superpowers/handoffs/2026-05-27-phase-2.6-complete-and-merged-handoff.md`.
 
-**Done in this session (2026-05-27 evening):** 15 BUGs from the code-review pass, each with failing-test-first → smallest-possible-fix → atomic commit. See `tasks/shake-out-manifest-phase-2.6.md` Fix Log table for the commit → bug → root cause map.
+**Phase 3 Sub-phase A shipped** on `phase-3/agent-runner` 2026-05-28 morning (50-min single session under subagent-driven-development). Seven tasks + two review-fixups + two plan-corrections + one retro:
 
-- TIER 1 (6): BUG-007 token presets, BUG-008 backfill txWithEvents, BUG-009 mention parser code/quote masking, BUG-010 cascade per-row events, BUG-011 idempotency before authorship, BUG-014 safe text reset.
-- TIER 2 (6): BUG-012 agent_id visibility, BUG-013 target_agent_id + migration 0011, BUG-015 0009 comment fix, BUG-016 trigger PATCH refine, BUG-017 don't close editor on fail, BUG-021 workspace events to project subs.
-- TIER 3 (3): BUG-018 resolveAgentProjects audit, BUG-019 json parse 422, BUG-020 crypto.randomUUID optimistic id.
+- `edeff54` A-0 — auto-migrate on boot
+- `52439c6` A-1 — Phase 3 event kinds in shared (`agent.run.*`, `ai.action`, provider degraded/recovered, `runs_table.lazy_seeded`)
+- `13c76d8` A-2 — migration 0012 widens `documents.type` to `agent_run` + 4 partial indexes
+- `d6fd994` A-3 — migration 0012a flips runner-bound builtins (`builtin-on-assignment` + `builtin-on-mention`) to `enabled: true`
+- `02c4564` A-4 — `agent-run-schema.ts` (Zod + `isValidTransition` state machine)
+- `a9b3ae8` plan corrections — mandatory skill invocation + A-2/A-3 defect notes (folded controller pre-flights)
+- `bc4b5ee` A-4 fixup — Stage-2 review caught 2 BLOCKERs + 2 IMPORTANTs (PascalCase→camelCase rename, missing `.strict()`, tightened regexes, `resume_of.uuid()`)
+- `24d96c7` A-4b — pre-commit hook + bash harness + installer + CLAUDE.md note
+- `13e5954` A-4b fixup — Stage-2 review caught 1 IMPORTANT (install.sh unquoted heredoc baked absolute path; fixed to `<<'EOF'` + runtime `$(git rev-parse --show-toplevel)`)
+- `32862a7` plan correction — A-4 Zod house-style drift callout (post-A retro)
+- `23cc7e8` plan correction — A-4b install.sh heredoc portability callout (post-A retro)
+- `499f033` retro — Sub-phase A
+- `b05761a` lessons A + C from Sub-phase A retro (auto-mined: schema-vs-plan column audit + heredoc quoting rule)
 
-**Open work — all non-blocking:**
-1. **Verify Playwright** still green (`bun run e2e` from apps/web) — Tier 1+2+3 changes affect cascade events / visibility / PATCH validation; e2e wasn't re-run in this session. Recommended before merge.
-2. **3 BUGs deferred:** BUG-002 (MCP create_agent slug schema — IMPORTANT, ~30 min fix), BUG-003 (Milkdown teardown intermittent — MINOR), BUG-004 (web bundle size — defer to Phase 7).
-3. **Reviewer backlog:** 23 SHOULD-FIX + 24 NICE-TO-HAVE from the four shake-out reviewer agents, untouched. Most are simplicity/perf wins, not bugs.
-4. **`/code-review --base=main --effort=high --comment`** for a final inline pass on the much larger diff (130 files, +21K LOC).
-5. **`superpowers:finishing-a-development-branch`** to merge `--no-ff` into main.
+**A-5 integration gate green** (server 544/1/0, web 547/8/0, shared 51/0, TS clean for both apps + root, dev DB migrates clean). `/code-review --base=9e27fda` at medium effort returned `[]` (no defects).
 
-**Test baseline at end of code-review fix session (current):**
-- Server **524 / 1-skip / 0-fail** (was 495 at start of session; +29: 28 new regression tests + 1 from BUG-008's mid-loop-throw test).
-- Web **547 / 8-skip / 0-fail** (was 537; +10 from new BUG-007/014/017/020 tests).
-- Shared **46 / 0-fail** (unchanged).
-- Scripts (backfill) **7 / 0-fail** (was 6; +1 from BUG-008).
-- Playwright NOT re-run this session.
-- Server + web `tsc --noEmit` still clean per prior session.
+**Open work for Sub-phase B (next session):**
+1. **Plan tasks B-1 through B-8** in `docs/superpowers/plans/2026-05-27-phase-3-agent-runner.md` — provider abstraction + 4 implementations (Anthropic, OpenAI, OpenRouter, Ollama) + `POST /ai/test-key` + workspace AI-settings tab UI.
+2. **BUG-002 (MCP `create_agent` slug schema)** still parked from Phase 2.6. Per user decision 2026-05-28, folds into D-3/D-4 (MCP dispatch refactor) — not Sub-phase B.
+3. **A-1 reviewer NICE-TO-HAVEs** (events.ts phase-rot file-header comment, sync-guard test comment precision, describe-block "Phase 3 additions" suffix) deferred to next-touch in B+. See `tasks/retro-follow-ups.md`.
+4. **3 follow-ups for human review** at `tasks/retro-follow-ups.md`: skill-invocation contract tightening, A-1 cleanup timing, writing-plans freshness-check promotion.
 
-**Important per-session lessons reinforced (already in memory):**
-- `bun test` from repo root mixes Vitest into Bun's runner → false fails. Always run server tests from `apps/server`, web tests from `apps/web` (via `bun run test`).
-- Per-bug atomic commits + failing-test-first preserved the pattern from BUG-001/005/006. 15-bug session stayed steady because of it.
-- The drizzle migration journal got updated correctly (idx 11) per `[[feedback_drizzle-migration-journal]]`. Don't skip on future migrations.
+**Test counts on `phase-3/agent-runner`:**
+- Server **544 / 1-skip / 0-fail** (524 → 544 across Sub-phase A; +20 from A-0+A-2+A-3+A-4)
+- Web **547 / 8-skip / 0-fail** (unchanged — Sub-phase A was server + shared only)
+- Shared **51 / 0-fail** (46 → 51 from A-1; +5)
+- Scripts (backfill) **7 / 0-fail** (unchanged)
+- Playwright NOT run this session (Sub-phase A is foundation — no UI surfaces).
+- Server + web `tsc --noEmit` both clean for touched files. Pre-existing errors elsewhere unchanged.
 
-**Phase 3 — AI in UI + Agent runner** still queued. Branches from main when 2.6 merges.
+**Discipline notes reinforced this session (in memory):**
+- `bun test` from repo root mixes Vitest into Bun's runner → false fails (440-fail count seen mid-session). Always `cd apps/server && bun test` or `cd apps/web && bun run test`. Reinforced [[bun-test-from-repo-root-forbidden]].
+- Drizzle's migrator is journal-idempotent — to test a migration's UPDATE against pre-seeded rows, use `sqlite.exec(readFileSync(<sql>))` after the migrator runs once. Captured at [[drizzle-migrate-is-idempotent]] (NEW).
+- Plan-vs-reality drift caught twice (phantom columns in 0012, wrong `tables.title` column name). Reinforced [[plan-server-source-audit]].
+- House-style drift in plans authored before Phase 2.6's reviewer pass codified camelCase + `.strict()`. Captured in `memory/lessons.md` (NEW 2026-05-28 entry).
+- Generated-script heredocs MUST be single-quoted (`<<'EOF'`) for portability. Captured in `memory/lessons.md` (NEW 2026-05-28 entry — auto-mined).
 
 
 ## Phase
@@ -52,8 +63,8 @@ Phase numbering aligned with `docs/PHASES.md` (canonical) as of 2026-05-24 reorg
 - **Phase 1.9.1 (Type-change UI + useUpdateView fix):** shipped + merged to main at `d12c598` on 2026-05-25 (PR #3). Compatible-only type-change in column `⋯` menu (`string ↔ text`, `number ↔ currency`, `* → text`); 422 with `INVALID_TYPE_CHANGE` for anything else. Default ISO `EUR` auto-injected on `* → currency`; options auto-cleared on `currency → *`. `useUpdateView` envelope unwrap fixed. Web 254 / 1-skip, server 135 / 135, shared 28 / 28, web TS clean.
 - **Phase 2 (Agents):** **shipped + merged to main** at `3431301` on 2026-05-26 (PR #4). Bearer auth + scope middleware, in-memory event bus + SSE endpoint with Last-Event-Id replay, migration 0006 widens documents.type to agent + trigger, agent/trigger frontmatter Zod schemas + auto-token-mint + revoke + delegation guard, hand-rolled JSON-RPC MCP server at /mcp with 12 v1 tools, web tokens settings tab + assignee picker + Agents/Triggers rail leaves + DocumentTypeList, 4 reference doc files (API/MCP/AGENTS/TRIGGERS), README walkthrough. Shake-out caught 4 bugs (A/B/C/D), all fixed and committed before merge.
 - **Phase 2.5 (Workspace-scoped agents):** **shipped + merged to main + pushed** at `7d73124` on 2026-05-26. 45 commits (18 plan-execution + 12 shake-out fixes + 14 memory/auto-capture + the merge commit + the Phase 3.5 doc draft). `documents.workspace_id NOT NULL` + nullable `project_id` + CHECK constraint; agent + trigger Zod gain `projects: string[]` (default `['*']`); new `requireResource` middleware mounted on `pScope` blocks cross-allow-list bearer access; `/api/v1/w/:wslug/documents` endpoints for agent + trigger CRUD; project-level POST/GET reject those types; MCP `list_projects` filters by allow-list, project-scoped tools return `-32602 agent_not_in_allow_list` on disallowed projects, agent-lifecycle tools rejected (HTTP-only in 2.5). Project-delete cascades through workspace agents' frontmatter.projects transactionally. UI: rail leaves removed, workspace popover gains Agents/Triggers entries, new `/w/:wslug/agents` + `/triggers` pages with full slideover CRUD, new design-system `<Chip>` primitive (BUG-010), ProjectsField + ToolsField + ProviderModelField multi-selects, per-agent-field help text. Shake-out caught 12 bugs, 11 fixed, 1 deferred as pre-existing (table-cell assignee picker — never wired pre-2.5). Suite at merge: server 259 / 1-skip / 0-fail, web 339 / 1-skip / 0-fail, shared 28 / 0-fail, Web TS clean. Phase 2.5 Playwright e2e: 1/1.
-- **Phase 2.6 (Comments + tabbed slideover + trigger form + reconciler):** **automated build complete on `phase-2.6/comments-and-slideover` at `d305810`.** All 5 sub-phases shipped: A (comments core), B (MCP comment tools), C (tabbed slideover + UI), D (cron helper + trigger schema $event/builtin lock + builtin auto-seed + backfill + cron-input + trigger-form + slideover mount + MCP agent-lifecycle + docs), E1 (allow-list reconciler). E2 in-session pieces done: manual-QA scenarios written (`apps/web/tests/manual-qa-phase-2.6.md`), DECISIONS appended. Manual QA + Playwright + shake-out + merge are user-side. Suite: server **418 / 1-skip / 0-fail** (+159 since branch start), web **504 / 8-skip / 0-fail** (+165 unit, +8 Playwright TODOs), shared **37 / 0-fail** (+9), scripts **6 / 0-fail** (new).
-- **Phase 3 (AI in UI + Agent runner):** queued — second spine. Slash commands, provider abstraction, agent runner, trigger scheduler/matcher.
+- **Phase 2.6 (Comments + tabbed slideover + trigger form + reconciler):** **shipped + merged to main + pushed** at `984b31c` on 2026-05-27 evening. All 5 sub-phases (A–E1) + the 15-bug code-review fix pass. Suite at merge: server 524 / 1-skip / 0-fail, web 547 / 8-skip / 0-fail, shared 46 / 0-fail. Handoff: `docs/superpowers/handoffs/2026-05-27-phase-2.6-complete-and-merged-handoff.md`.
+- **Phase 3 (Agent runner + provider abstraction + runs as documents):** **Sub-phase A shipped** on `phase-3/agent-runner` 2026-05-28 morning (auto-migrate on boot, event kinds, migration 0012 widens documents.type to agent_run + 4 partial indexes, migration 0012a flips runner builtins, agent_run Zod + state machine, pre-commit hook for migration↔journal pairing). 9 substantive commits in a 50-min session under subagent-driven-development with two-stage review per task. Two plan defects surfaced (A-4 house-style drift, A-4b heredoc portability) and corrected in the plan. Retro at `docs/superpowers/retros/2026-05-28-phase-3-sub-phase-A-retro.md`. **Sub-phases B (provider abstraction + AI settings tab) → C (runner core) → D (routes + MCP parity) → E (web UI) → F (shake-out + merge)** queued.
 - **Phase 4 (Inbound webhooks):** queued — plan ready at `docs/superpowers/plans/2026-05-24-phase-4-inbound-webhooks.md`. 7 tasks.
 - **Phase 5 (CMS bridge — Statamic):** queued — plan ready at `docs/superpowers/plans/2026-05-24-phase-5-statamic-cms-bridge.md`. 10 tasks. WordPress is Phase 5.1.
 - **Phase 6 (Per-view render modes):** queued — kanban becomes a render mode; calendar added.
@@ -62,9 +73,9 @@ Phase numbering aligned with `docs/PHASES.md` (canonical) as of 2026-05-24 reorg
 
 ## Current branch
 
-`phase-2.6/comments-and-slideover` at `d305810` (ahead of `main` by ~50 non-memory commits + auto-memory). NOT pushed. Phase 2.6 sub-phases A + B + C + D + E1 shipped; E2 = user-side (manual QA + Playwright + shake-out + merge).
+`phase-3/agent-runner` at `b05761a` — branched from main at `984b31c` (Phase 2.6 merge). Sub-phase A shipped; Sub-phase B (provider abstraction, 8 tasks) ready to start in a fresh session per user direction "batch them, do A first, then B in new session." Not pushed.
 
-Tests on this branch: **server 418 / 1-skip / 0-fail, web 504 / 8-skip / 0-fail, shared 37 / 0-fail, scripts/backfill 6 / 0-fail**. Web TS clean on all D-touched files. Server TS — pre-existing errors elsewhere not regressed by 2.6.
+Tests on this branch: **server 544 / 1-skip / 0-fail, web 547 / 8-skip / 0-fail, shared 51 / 0-fail, scripts/backfill 7 / 0-fail**. Server + web TS clean for touched files. Pre-existing errors elsewhere unchanged. `.last-integration` marker at `13e5954`; `.last-evaluate` marker at `b05761a`.
 
 **Known flake:** `apps/web/src/components/views/list-view-create.test.tsx` intermittently fails in full-suite runs due to high-concurrency jsdom interaction. Passes in isolation. See `~/.claude/projects/-home-ntdst-Projects-folio/memory/project_known-test-flakes.md`.
 

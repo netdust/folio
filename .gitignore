@@ -19,3 +19,4 @@ test-results/
 .playwright/
 
 .claude/.last-integration
+.claude/.last-evaluate
