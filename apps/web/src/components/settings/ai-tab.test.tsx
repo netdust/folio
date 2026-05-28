@@ -181,10 +181,70 @@ describe('AiTab', () => {
     expect(anthropicRow?.textContent).toMatch(/1 other label/);
     expect(anthropicRow?.textContent).toMatch(/prod/);
 
-    // OpenAI: no default → 'not configured' overall, but the non-default row
-    // is still listed under the via-API hint so agents using it are visible.
-    expect(openaiRow?.textContent).toMatch(/not configured/);
+    // B round 3 fix #8 — when only non-default rows exist the header used
+    // to say "not configured" AND the footer "+ N other labels (managed via
+    // API)" simultaneously, which was a contradiction. Now the header says
+    // "configured via API (no default-label key)" and "not configured"
+    // never appears.
+    expect(openaiRow?.textContent).toMatch(/configured via API/i);
+    expect(openaiRow?.textContent).not.toMatch(/not configured/);
     expect(openaiRow?.textContent).toMatch(/managed via API/i);
     expect(openaiRow?.textContent).toMatch(/prod/);
+  });
+
+  // B round 3 fix #7 — Save toast must name the provider the user selected at
+  // click time. Pre-fix the toast read closure `provider`, which had already
+  // changed by the time the mutation resolved. Symmetry with the round-2 onTest
+  // guard pattern. After fix #9 the guard is seq-based + capture-by-value.
+  test('onSave toast is suppressed when provider switches mid-flight', async () => {
+    let resolveSave: (v: { ok: true }) => void = () => {};
+    const upsertSpy = vi.fn(
+      () => new Promise<{ ok: true }>((res) => { resolveSave = res; }),
+    );
+    vi.mocked(useUpsertAiKey).mockReturnValue({
+      mutateAsync: upsertSpy,
+      isPending: false,
+    } as never);
+    const { toast } = await import('sonner');
+    vi.mocked(toast.success).mockClear();
+
+    renderTab();
+    fireEvent.change(screen.getByLabelText(/api key/i), { target: { value: 'sk-test' } });
+    fireEvent.click(screen.getByRole('button', { name: /save key/i }));
+
+    // Switch provider before save resolves — bumps saveSeqRef, invalidating
+    // the in-flight save's toast.
+    fireEvent.change(screen.getByLabelText(/provider/i), { target: { value: 'openai' } });
+
+    resolveSave({ ok: true });
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  // B round 3 fix #14 — ollama rows pinned via API may carry a baseUrl that
+  // points at an internal host. Surface it so an admin auditing the workspace
+  // can see what's wired up.
+  test('non-default ollama row shows the baseUrl alongside the label', () => {
+    vi.mocked(useWorkspaceAiKeys).mockReturnValue({
+      data: [
+        {
+          id: 'k1',
+          workspaceId: 'ws_1',
+          provider: 'ollama',
+          label: 'prod',
+          baseUrl: 'https://ollama.internal.example/',
+          createdAt: '2026-01-01T00:00:00Z',
+        },
+      ],
+      isLoading: false,
+    } as never);
+    const { container } = renderTab();
+    const rows = container.querySelectorAll('ul > li');
+    const ollamaRow = Array.from(rows).find(
+      (li) => li.querySelector('span.font-medium')?.textContent === 'ollama',
+    );
+    expect(ollamaRow?.textContent).toMatch(/prod/);
+    expect(ollamaRow?.textContent).toMatch(/ollama\.internal\.example/);
   });
 });

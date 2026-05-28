@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { toast } from 'sonner';
 import {
   type AiProvider,
@@ -36,15 +36,18 @@ export function AiTab({ wslug, workspaceId }: Props) {
   const deleteKey = useDeleteAiKey(wslug, workspaceId);
   const testKey = useTestKey();
 
-  // B round 2 fix #8 — avoid painting a stale Test result onto the wrong
-  // provider when the user switches the dropdown mid-flight. Compare the
-  // provider captured at click-time against the latest provider via a ref;
-  // closure-captured `provider` would be stale by the time the promise
-  // resolves.
-  const providerRef = useRef(provider);
-  useEffect(() => {
-    providerRef.current = provider;
-  }, [provider]);
+  // B round 3 fix #9 — replace the round-2 providerRef + useEffect pattern
+  // with monotonically-incrementing sequence ids per inflight operation.
+  // The ref-via-effect approach left a microtask race window: between a
+  // mutation's resolve callback running and the next render's effect flush,
+  // providerRef.current still pointed at the previous value. The seq pattern
+  // is synchronous — incrementing is committed BEFORE any further await.
+  //
+  // Separate seqs per operation (test vs save) so they don't invalidate each
+  // other; both seqs ALSO bump on provider-change so any inflight work for
+  // the abandoned provider gets discarded.
+  const testSeqRef = useRef(0);
+  const saveSeqRef = useRef(0);
 
   function onProviderChange(next: AiProvider) {
     setProvider(next);
@@ -52,11 +55,15 @@ export function AiTab({ wslug, workspaceId }: Props) {
     setApiKey('');
     setBaseUrl('');
     setTestResult(null);
+    // Invalidate any in-flight Test / Save — when their promises resolve,
+    // the seq comparison rejects them.
+    testSeqRef.current += 1;
+    saveSeqRef.current += 1;
   }
 
   async function onTest() {
     setTestResult(null);
-    const providerAtClick = provider;
+    const seq = ++testSeqRef.current;
     try {
       const r = await testKey.mutateAsync({
         wslug,
@@ -65,24 +72,37 @@ export function AiTab({ wslug, workspaceId }: Props) {
         apiKey,
         baseUrl: baseUrl || undefined,
       });
-      // User switched provider during the await — discard this result so
-      // an Anthropic '✓ Key validated' doesn't paint onto an OpenAI panel.
-      if (providerRef.current !== providerAtClick) return;
+      if (seq !== testSeqRef.current) return; // newer request kicked off, discard
       setTestResult(r);
     } catch (err) {
-      if (providerRef.current !== providerAtClick) return;
+      if (seq !== testSeqRef.current) return;
       setTestResult({ ok: false, reason: formatApiError(err) });
     }
   }
 
   async function onSave() {
+    // B round 3 fix #7 — mirror the seq-id guard onto Save. Pre-fix the toast
+    // closed over `provider` at definition time, so a user who clicked Save
+    // on Anthropic then switched to OpenAI before the mutation resolved
+    // would see "Saved openai key" — but the row that landed in the DB is
+    // an anthropic one. Capture the click-time provider AND check the seq
+    // before painting.
+    const providerAtClick = provider;
+    const seq = ++saveSeqRef.current;
     try {
-      await upsertKey.mutateAsync({ provider, apiKey, label: 'default', baseUrl: baseUrl || undefined });
-      toast.success(`Saved ${provider} key`);
+      await upsertKey.mutateAsync({
+        provider: providerAtClick,
+        apiKey,
+        label: 'default',
+        baseUrl: baseUrl || undefined,
+      });
+      if (seq !== saveSeqRef.current) return; // user changed provider mid-flight
+      toast.success(`Saved ${providerAtClick} key`);
       setApiKey('');
       setBaseUrl('');
       setTestResult(null);
     } catch (err) {
+      if (seq !== saveSeqRef.current) return;
       toast.error(formatApiError(err));
     }
   }
@@ -182,14 +202,17 @@ export function AiTab({ wslug, workspaceId }: Props) {
         <h2 className="text-sm font-medium">Configured keys</h2>
         <ul className="mt-2 divide-y divide-border-light overflow-hidden rounded-md border border-border-light">
           {PROVIDERS.map((p) => {
-            // B round 2 fix #10 — surface non-default rows too. The Save
-            // flow in this tab always writes label='default', but rows
-            // created via API or pinned by an agent live alongside under
-            // different labels. Previously they were invisible — the UI
-            // claimed 'not configured' while a 'prod' key was in use.
+            // B round 2 fix #10 + round 3 fix #8 — surface non-default rows.
+            // Round-2 listed them but the header still said "not configured"
+            // when only non-default rows existed: the UI was lying. Now the
+            // header reflects what's actually in the DB:
+            //   - rows.length === 0           → "not configured"
+            //   - default exists              → "✓ default saved <date>"
+            //   - only non-default rows       → "configured via API (no default-label key)"
             const rows = (keysQuery.data ?? []).filter((k) => k.provider === p);
             const defaultRow = rows.find((k) => k.label === 'default');
             const otherRows = rows.filter((k) => k.label !== 'default');
+            const noRows = rows.length === 0;
             return (
               <li
                 key={p}
@@ -202,8 +225,12 @@ export function AiTab({ wslug, workspaceId }: Props) {
                       <span className="ml-2 text-xs text-fg-2">
                         ✓ default saved {new Date(defaultRow.createdAt).toLocaleDateString()}
                       </span>
-                    ) : (
+                    ) : noRows ? (
                       <span className="ml-2 text-xs text-fg-3">— not configured</span>
+                    ) : (
+                      <span className="ml-2 text-xs text-fg-2">
+                        configured via API (no default-label key)
+                      </span>
                     )}
                   </span>
                   {defaultRow ? (
@@ -221,8 +248,23 @@ export function AiTab({ wslug, workspaceId }: Props) {
                 </div>
                 {otherRows.length > 0 ? (
                   <div className="mt-1 text-xs text-fg-2">
-                    + {otherRows.length} other label{otherRows.length === 1 ? '' : 's'} (managed via API):{' '}
-                    {otherRows.map((r) => r.label).join(', ')}
+                    {otherRows.length} other label
+                    {otherRows.length === 1 ? '' : 's'} (managed via API):
+                    {/*
+                      B round 3 fix #14 — surface baseUrl alongside the label for
+                      ollama rows. An admin who pinned an internal-only host via
+                      API needs to see it; the row was previously a bare label.
+                    */}
+                    <ul className="mt-0.5 space-y-0.5">
+                      {otherRows.map((r) => (
+                        <li key={r.id} className="font-mono text-fg-2">
+                          {r.label}
+                          {r.baseUrl ? (
+                            <span className="ml-2 text-fg-3">→ {r.baseUrl}</span>
+                          ) : null}
+                        </li>
+                      ))}
+                    </ul>
                   </div>
                 ) : null}
               </li>
