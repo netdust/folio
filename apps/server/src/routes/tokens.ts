@@ -7,7 +7,7 @@ import { db } from '../db/client.ts';
 import { apiTokens, memberships } from '../db/schema.ts';
 import { newApiToken } from '../lib/auth.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
-import { type AuthContext, getUser, requireUser } from '../middleware/auth.ts';
+import { type AuthContext, getUser, requireSession, requireUser } from '../middleware/auth.ts';
 
 const tokensRoute = new Hono<AuthContext>();
 tokensRoute.use('*', requireUser);
@@ -29,6 +29,11 @@ tokensRoute.get('/:workspaceId', async (c) => {
 
 tokensRoute.post(
   '/:workspaceId',
+  // B round 5 #1 — session-only. Pre-fix a stolen workspace Bearer could mint a
+  // higher-scope replacement (POST /tokens), because attachToken hydrates
+  // c.user from token.createdBy so requireUser was satisfied. requireSession
+  // rejects authMethod === 'token' with 403. Threat model mitigation 11.
+  requireSession,
   zValidator(
     'json',
     z.object({
@@ -60,7 +65,10 @@ tokensRoute.post(
   },
 );
 
-tokensRoute.delete('/:workspaceId/:tokenId', async (c) => {
+// B round 5 #2 — session-only. Pre-fix a stolen workspace Bearer could revoke
+// peer Bearers (including a CI/CD token belonging to the workspace owner),
+// because attachToken hydrates user from token.createdBy. Threat mitigation 11.
+tokensRoute.delete('/:workspaceId/:tokenId', requireSession, async (c) => {
   const user = getUser(c);
   const workspaceId = c.req.param('workspaceId');
   const tokenId = c.req.param('tokenId');

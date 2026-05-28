@@ -5,7 +5,7 @@ import { providerSchema } from '../lib/agent-run-schema.ts';
 import { getProvider } from '../lib/ai/provider.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
 import { validatePublicUrl } from '../lib/url-allow-list.ts';
-import { type AuthContext, requireUser } from '../middleware/auth.ts';
+import { type AuthContext, requireSession, requireUser } from '../middleware/auth.ts';
 import type { ScopeContext } from '../middleware/scope.ts';
 
 const aiRoute = new Hono<AuthContext & ScopeContext>();
@@ -17,24 +17,13 @@ const aiRoute = new Hono<AuthContext & ScopeContext>();
 // cookie-header presence — but Bun forwards garbage/expired cookie headers
 // verbatim, so `Cookie: folio_session=garbage` + `Authorization: Bearer …`
 // would slip through (attachUser sets user=null, attachToken hydrates user
-// from the token). Now we gate on the authMethod flag set in the upstream
-// auth middlewares: 'session' is set only when the cookie hydrated a real
-// user; 'token' is set only when the bearer hydrated one. A bearer-auth
-// request never sets 'session', regardless of any stray cookie header
-// (B round 3 fix #1).
+// from the token). The B round 3 fix gated on the authMethod flag inline;
+// B round 5 #1 refactors that inline gate into the shared `requireSession`
+// helper so the contract is enumerated in one place (threat model 11).
 //
-// Order: this guard runs before requireUser so a bearer-only request gets a
-// precise 403 (not the generic 401 requireUser would emit).
-aiRoute.use('*', async (c, next) => {
-  if (c.get('authMethod') === 'token') {
-    throw new HTTPError(
-      'FORBIDDEN',
-      'AI key management is session-only (no API tokens)',
-      403,
-    );
-  }
-  return next();
-});
+// Order: requireSession runs before requireUser so a bearer-only request gets
+// a precise 403 (not the generic 401 requireUser would emit).
+aiRoute.use('*', requireSession);
 aiRoute.use('*', requireUser);
 
 const TestKeyBody = z

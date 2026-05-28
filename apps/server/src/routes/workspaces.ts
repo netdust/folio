@@ -11,7 +11,7 @@ import { emitEvent, txWithEvents } from '../lib/events.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
 import { slugUniqueInWorkspaces } from '../lib/slug-unique.ts';
 import { listWorkspaces } from '../services/workspaces.ts';
-import { type AuthContext, getUser, requireUser } from '../middleware/auth.ts';
+import { type AuthContext, getUser, requireSession, requireUser } from '../middleware/auth.ts';
 import { type ScopeContext, getRole, getWorkspace } from '../middleware/scope.ts';
 
 const workspacesRoute = new Hono<AuthContext & ScopeContext>();
@@ -82,6 +82,10 @@ workspaceItemRoute.get('/', (c) => jsonOk(c, { ...getWorkspace(c), role: getRole
 
 workspaceItemRoute.patch(
   '/',
+  // B round 5 #3 — session-only. Pre-fix a stolen workspace Bearer whose
+  // createdBy resolves to the workspace owner could rename the workspace
+  // (destructive identity mutation). Threat model mitigation 11.
+  requireSession,
   zValidator('json', z.object({ name: z.string().min(1).max(80) })),
   async (c) => {
     if (getRole(c) !== 'owner') throw new HTTPError('FORBIDDEN', 'owner only', 403);
@@ -102,7 +106,10 @@ workspaceItemRoute.patch(
   },
 );
 
-workspaceItemRoute.delete('/', async (c) => {
+// B round 5 #3 — session-only. Pre-fix a stolen workspace Bearer whose
+// createdBy resolves to the workspace owner could DELETE the workspace.
+// Threat model mitigation 11.
+workspaceItemRoute.delete('/', requireSession, async (c) => {
   if (getRole(c) !== 'owner') throw new HTTPError('FORBIDDEN', 'owner only', 403);
   const ws = getWorkspace(c);
   await db.delete(workspaces).where(eq(workspaces.id, ws.id));

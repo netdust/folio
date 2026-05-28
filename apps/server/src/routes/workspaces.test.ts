@@ -1,6 +1,8 @@
 import { expect, test } from 'bun:test';
 import { and, eq } from 'drizzle-orm';
-import { documents } from '../db/schema.ts';
+import { nanoid } from 'nanoid';
+import { apiTokens, documents } from '../db/schema.ts';
+import { newApiToken } from '../lib/auth.ts';
 import { makeTestApp } from '../test/harness.ts';
 
 test('GET /api/v1/workspaces lists user workspaces', async () => {
@@ -144,4 +146,80 @@ test('GET /api/v1/w/:wslug/members 401 without auth', async () => {
   const { app } = await makeTestApp();
   const res = await app.request('/api/v1/w/acme/members');
   expect(res.status).toBe(401);
+});
+
+// B round 5 #3 — workspace identity mutations (PATCH rename, DELETE) are
+// session-only. Pre-fix a stolen Bearer whose createdBy resolves to the
+// workspace owner could rename or delete the workspace via the bearer chain
+// (attachToken hydrates user from token.createdBy, requireUser is satisfied).
+// requireSession rejects authMethod === 'token' with 403. Threat model
+// mitigation 11.
+
+test('PATCH /api/v1/w/:wslug rejects API-token callers with 403', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const { token, hash } = newApiToken();
+  await db.insert(apiTokens).values({
+    id: nanoid(),
+    workspaceId: seed.workspace.id,
+    name: 'rename-attacker',
+    tokenHash: hash,
+    scopes: ['documents:read'],
+    createdBy: seed.user.id,
+  });
+  const res = await app.request('/api/v1/w/acme', {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ name: 'PWNED' }),
+  });
+  expect(res.status).toBe(403);
+  const body = await res.json();
+  expect(body.error.code).toBe('FORBIDDEN');
+});
+
+test('PATCH /api/v1/w/:wslug rejects bearer + garbage cookie with 403', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const { token, hash } = newApiToken();
+  await db.insert(apiTokens).values({
+    id: nanoid(),
+    workspaceId: seed.workspace.id,
+    name: 'cookie-bypass-attacker',
+    tokenHash: hash,
+    scopes: ['documents:read'],
+    createdBy: seed.user.id,
+  });
+  const res = await app.request('/api/v1/w/acme', {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      Cookie: 'folio_session=garbage',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ name: 'PWNED' }),
+  });
+  expect(res.status).toBe(403);
+  const body = await res.json();
+  expect(body.error.code).toBe('FORBIDDEN');
+});
+
+test('DELETE /api/v1/w/:wslug rejects API-token callers with 403', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const { token, hash } = newApiToken();
+  await db.insert(apiTokens).values({
+    id: nanoid(),
+    workspaceId: seed.workspace.id,
+    name: 'delete-attacker',
+    tokenHash: hash,
+    scopes: ['documents:read'],
+    createdBy: seed.user.id,
+  });
+  const res = await app.request('/api/v1/w/acme', {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  expect(res.status).toBe(403);
+  const body = await res.json();
+  expect(body.error.code).toBe('FORBIDDEN');
 });

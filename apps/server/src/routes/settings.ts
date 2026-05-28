@@ -8,7 +8,7 @@ import { aiKeys, memberships } from '../db/schema.ts';
 import { encryptSecret } from '../lib/crypto.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
 import { validatePublicUrl } from '../lib/url-allow-list.ts';
-import { type AuthContext, getUser, requireUser } from '../middleware/auth.ts';
+import { type AuthContext, getUser, requireSession, requireUser } from '../middleware/auth.ts';
 
 const settingsRoute = new Hono<AuthContext>();
 settingsRoute.use('*', requireUser);
@@ -31,8 +31,13 @@ settingsRoute.get('/:workspaceId/ai-keys', async (c) => {
 });
 
 // Add or update an AI key
+// B round 5 #1 — refactored: the inline authMethod check (round 4 fix #1) is
+// now the shared `requireSession` middleware (threat model mitigation 11).
+// AI key management is session-only; the GET path stays bearer-OK by intent
+// (agents may read metadata).
 settingsRoute.post(
   '/:workspaceId/ai-keys',
+  requireSession,
   zValidator(
     'json',
     z
@@ -52,19 +57,6 @@ settingsRoute.post(
       }),
   ),
   async (c) => {
-    // B round 4 fix #1 — mirror the authMethod gate already on /ai/test-key
-    // onto the persistence path. Pre-fix, attachToken hydrates user from
-    // token.createdBy so requireUser was satisfied — a stolen workspace PAT
-    // could rotate the workspace's BYOK setup without ever touching test-key.
-    // AI key management is session-only; the GET path stays bearer-OK by
-    // intent (agents may read metadata).
-    if (c.get('authMethod') === 'token') {
-      throw new HTTPError(
-        'FORBIDDEN',
-        'AI key management is session-only (no API tokens)',
-        403,
-      );
-    }
     const user = getUser(c);
     const workspaceId = c.req.param('workspaceId');
     const m = await db.query.memberships.findFirst({
@@ -111,15 +103,9 @@ settingsRoute.post(
   },
 );
 
-settingsRoute.delete('/:workspaceId/ai-keys/:keyId', async (c) => {
-  // B round 4 fix #1 — session-only; see POST handler.
-  if (c.get('authMethod') === 'token') {
-    throw new HTTPError(
-      'FORBIDDEN',
-      'AI key management is session-only (no API tokens)',
-      403,
-    );
-  }
+// B round 5 #1 — refactored: the inline authMethod check (round 4 fix #1) is
+// now the shared `requireSession` middleware (threat model mitigation 11).
+settingsRoute.delete('/:workspaceId/ai-keys/:keyId', requireSession, async (c) => {
   const user = getUser(c);
   const workspaceId = c.req.param('workspaceId');
   const keyId = c.req.param('keyId');

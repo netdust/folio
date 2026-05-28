@@ -48,6 +48,25 @@ export const requireUser: MiddlewareHandler<AuthContext> = async (c, next) => {
   return next();
 };
 
+/**
+ * Session-only gate (B round 5 — threat model mitigation 11). Rejects with 403
+ * when `authMethod === 'token'`. ALL routes that mutate auth grants, workspace
+ * ownership/identity, or BYOK credentials MUST use this middleware. See the
+ * plan's threat model section for the full enumerated route table — new routes
+ * that fit the pattern MUST wire it in the same commit they are introduced.
+ *
+ * Pre-fix rounds 3-4 inlined `if (c.get('authMethod') === 'token') throw …`
+ * on each route. The asymmetry that round 5 caught (tokens.ts + workspaces.ts
+ * had no guard) is exactly what an enumerated mitigation table without a
+ * shared helper enables. Now there's one helper; routes pull it explicitly.
+ */
+export const requireSession: MiddlewareHandler<AuthContext> = async (c, next) => {
+  if (c.get('authMethod') === 'token') {
+    throw new HTTPError('FORBIDDEN', 'This route is session-only (no API tokens)', 403);
+  }
+  return next();
+};
+
 export function getUser(c: Context<AuthContext>): User {
   const user = c.get('user');
   if (!user) throw new Error('user not attached - requireUser missing?');

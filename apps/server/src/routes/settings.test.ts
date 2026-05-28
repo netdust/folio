@@ -235,6 +235,61 @@ describe('POST /api/v1/w/:wslug/settings/:workspaceId/ai-keys', () => {
     }
   });
 
+  // B round 5 #10 — symmetric to POST: garbage cookie + valid bearer must
+  // still resolve to authMethod==='token' on DELETE. Round 4 added the POST
+  // garbage-cookie test but left DELETE asymmetric. Threat mitigation 11
+  // contract requires both verbs tested with garbage-cookie variants.
+  test('DELETE /ai-keys/:keyId rejects bearer + garbage cookie with 403', async () => {
+    const { app, db, seed } = await makeTestApp();
+    // Seed an aiKeys row first via the session-authenticated POST.
+    const postRes = await app.request(path(seed.workspace.slug, seed.workspace.id), {
+      method: 'POST',
+      headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        provider: 'anthropic',
+        apiKey: 'sk-mock',
+        label: 'default',
+      }),
+    });
+    expect(postRes.status).toBe(200);
+    const listRes = await app.request(path(seed.workspace.slug, seed.workspace.id), {
+      method: 'GET',
+      headers: { Cookie: seed.sessionCookie },
+    });
+    const listBody = await listRes.json();
+    const keyId = listBody.data.keys[0]?.id as string;
+    expect(typeof keyId).toBe('string');
+
+    const { token, hash } = newApiToken();
+    await db.insert(apiTokens).values({
+      id: nanoid(),
+      workspaceId: seed.workspace.id,
+      name: 'delete-cookie-bypass-PAT',
+      tokenHash: hash,
+      scopes: ['documents:read'],
+      createdBy: seed.user.id,
+    });
+    for (const garbageCookie of [
+      'folio_session=garbage',
+      'folio_session=',
+      'folio_session=expired-id',
+    ]) {
+      const res = await app.request(
+        `${path(seed.workspace.slug, seed.workspace.id)}/${keyId}`,
+        {
+          method: 'DELETE',
+          headers: {
+            Cookie: garbageCookie,
+            Authorization: `Bearer ${token}`,
+          },
+        },
+      );
+      expect(res.status).toBe(403);
+      const body = await res.json();
+      expect(body.error.code).toBe('FORBIDDEN');
+    }
+  });
+
   // B round 4 fix #1 — DELETE inherits the authMethod check from mitigation 11.
   test('DELETE /ai-keys/:keyId rejects API-token callers with 403', async () => {
     const { app, db, seed } = await makeTestApp();
