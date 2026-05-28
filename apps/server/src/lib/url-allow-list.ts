@@ -65,6 +65,16 @@ export function validatePublicUrl(input: string): UrlValidationResult {
   // same address; `.replace(/\.+$/, '')` matches that behavior.
   host = host.replace(/\.+$/, '');
 
+  // B round 5 #7 — reject empty host after the trailing-dot strip. Bare-dot
+  // inputs (http://., http://..) parse successfully in Bun's URL parser but
+  // become empty strings after the greedy strip; without this check they
+  // would slip every host-equality + IP prefix guard and return ok:true.
+  // On a host where the resolver maps empty/root-dot to loopback this would
+  // re-open the SSRF round 3 was supposed to close. Threat mitigation 18.
+  if (host === '') {
+    return { ok: false, reason: 'base_url host is empty' };
+  }
+
   if (host === 'localhost' || host.endsWith('.localhost')) {
     return { ok: false, reason: 'base_url localhost is not allowed' };
   }

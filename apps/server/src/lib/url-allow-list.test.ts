@@ -152,4 +152,21 @@ describe('validatePublicUrl', () => {
     const r = validatePublicUrl('http://[0:0:0:0:0:0:0:0]/');
     expect(r.ok).toBe(false);
   });
+
+  // B round 5 #7 — bare-dot inputs parse successfully in Bun's URL parser
+  // (the parser interprets the trailing dot as a root-anchored DNS form and
+  // accepts the host) but become empty strings after the greedy trailing-dot
+  // strip. Pre-fix the empty string slipped every host-equality + prefix
+  // regex and returned ok:true. Threat mitigation 18.
+  test('blocks bare-dot host (http://./)', () => {
+    const r = validatePublicUrl('http://./');
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toMatch(/empty|host/i);
+  });
+
+  test('blocks multiple-dot host (http://.../)', () => {
+    const r = validatePublicUrl('http://.../');
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toMatch(/empty|host/i);
+  });
 });
