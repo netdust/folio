@@ -86,6 +86,8 @@ Each attack listed has a mitigation in the next section. Numbering pairs across 
 13. **OpenRouter testKey false-positive**: OpenRouter's `/api/v1/models` endpoint is PUBLIC. testKey via `models.list()` returns ok for any apiKey value (including the empty string). Admins believe a key is valid; the first real stream call fails 401 and the agent run errors out — by which point the key is encrypted-at-rest and audit logs show "key validated." Auth-required endpoint (`/api/v1/key` or `/api/v1/credits`) must be used. (Round 3 attack.)
 14. **Trailing-dot DNS form bypassing host equality**: hostnames may carry a trailing dot (root-anchored DNS form: `localhost.`, `foo.localhost.`). Linux resolves these to the same address as the non-trailing-dot form. String-equality and `endsWith()` checks must strip the trailing dot before comparison. (Round 3 attack — round 2's `host === 'localhost' || host.endsWith('.localhost')` didn't see `localhost.`.)
 15. **IPv4-mapped IPv6 expanded forms**: `0:0:0:0:0:ffff:hhhh:hhhh` is the same address as `::ffff:hhhh:hhhh` — the URL parser may preserve either form depending on runtime. Detection must handle both canonical and expanded shapes. (Round 3 attack — Bun canonicalizes the expanded form to the 2-segment shape, but defending against runtime drift requires both regexes.)
+16. **Test-escape-hatch reachable from production**: `__INTERNAL_TEST_ONLY__.overrideRegistry` is exported from `provider.ts` as a normal ES module binding. A future production refactor or IDE-autocomplete reach calls it, poisoning the process-wide provider cache. JSDoc `@internal` is not enforced by TS. Cosmetic rename without a runtime guard is documentation, not protection. (Round 4 attack — round 3's rename was acknowledged in the commit message as "real refactor deferred to v1.1.")
+17. **Silent server-side commit under client-side race**: `onSave` was given a seq-id guard in round 3 fix #7. The guard suppresses the client's success toast when provider changed mid-flight, but the `mutateAsync` was already dispatched — the server row IS committed for the OLD provider. User sees no signal of save, but the workspace's AI-key roster has changed. The "discard" name is misleading: only the UI render is discarded. (Round 4 attack.)
 
 ### Mitigations required
 
@@ -95,17 +97,49 @@ These are the rules the code MUST follow. `/code-review` should verify each one 
 2. **baseUrl ALLOWED only for Ollama and OpenRouter**. Anthropic and OpenAI use hardcoded canonical URLs (`https://api.anthropic.com`, `https://api.openai.com/v1`). The server validation step explicitly rejects `baseUrl` when `provider in ('anthropic', 'openai')`. The plan's original "baseUrl: z.string().url().optional()" is too permissive — narrow it provider-by-provider.
 3. **`POST /ai-keys` validates baseUrl through the same path** as `/ai/test-key`. Single source of truth for what baseUrl is acceptable.
 4. **Ollama requires explicit `baseUrl`** for the test-key flow. The default-to-localhost behavior in the provider implementation stays (the runner needs a sensible default for `Ollama` agents already configured), but the test-key route explicitly requires `baseUrl !== undefined` when provider is `ollama` and surfaces an error if missing.
-5. **Error messages sanitized** before they reach HTTP responses. A helper `sanitizeProviderError(err)` strips anything resembling a token (any base64-ish string longer than 20 characters, anything matching `sk-[a-zA-Z0-9]{20,}`, anything matching `Bearer\s+\S+`). Provider implementations route their `catch` blocks through this helper.
+5. **Error messages sanitized** before they reach HTTP responses OR before they're thrown out of a provider method that the runner will surface. Sites that must use the whitelist: `openai.testKey`, `anthropic.testKey`, `ollama.testKey`, `openrouter.testKey`, AND `openai.stream` / `anthropic.stream` / `ollama.stream` / `openrouter.stream` startup error throws (the `throw new Error(...)` paths inside stream() before the async iterator yields anything). The whitelist: 401/403→'Unauthorized', 429→'Rate limited', 5xx→'Server error', other-status→'Error (<status>)', no-status→'Network error or unreachable host.' NEVER echo `e.message`, NEVER echo caller-supplied `baseUrl`/`model`.
 6. **`ProviderEvent.done.reason` adds `'refusal'`** now (sub-phase B). `'pause_turn'` deferred to Sub-phase C when the runner gains a paused state. Each provider implementation maps its specific stop reasons explicitly — no silent downgrade. SDK-specific stop reasons that don't map to the union should emit a warning log line, not silently become `'stop'`.
 7. **`AIProvider.stream`'s `baseUrl` parameter is documented as Ollama-and-OpenRouter only**. The Anthropic + OpenAI implementations ignore it. Either remove from the shared interface (cleaner) OR add a runtime check that throws if a caller passes baseUrl to an unsupported provider (acceptable v1). The latter is faster to ship; the former is right long-term.
 8. **JSON.parse calls are try/catch-wrapped** in all four provider implementations. On parse failure: log + emit a `type: 'tool_call'` event with `arguments: { __parse_error: true, raw: <truncated buf> }` so the runner can distinguish truncation from intent and decide whether to retry or fail. Streams MUST NOT abort on a single bad chunk.
 9. **Token-accumulator updates use `!== undefined`**, not truthy checks. `if (usage?.prompt_tokens !== undefined) tokensIn = usage.prompt_tokens;` — handles the zero case correctly.
 10. **Provider proxy caches resolved Providers, not rejected Promises.** On dynamic-import failure: drop the cache entry instead of caching the rejection. Next call retries from scratch. Belt-and-braces: a process-level retry counter logs after N consecutive failures so operations can spot a wedged provider.
-11. **`authMethod` flag on the request context.** `attachUser` sets `'session'` ONLY when a valid session cookie actually hydrated a user (post-`readSession`, post-null-check). `attachToken` sets `'token'` when a Bearer hydrated one and no session was present. Routes that need session-only auth check `c.get('authMethod') === 'session'` or reject `c.get('authMethod') === 'token'`, NOT cookie presence. A garbage cookie + valid bearer authenticates as `'token'`, never `'session'`.
-12. **Persistence and test-key share validation logic.** Every guard added to `/ai/test-key` is mirrored on `POST /ai-keys`: same baseUrl-only-for-ollama refine, same `validatePublicUrl()` call, same "ollama requires explicit baseUrl" guard. New guards added to one route MUST land on the other in the same commit. A single helper (`validateAiKeyBody(body)`) is the long-term shape; symmetric inline checks with shared tests are acceptable v1.
+11. **`authMethod` flag on the request context.** `attachUser` sets `'session'` ONLY when a valid session cookie actually hydrated a user (post-`readSession`, post-null-check). `attachToken` sets `'token'` when a Bearer hydrated one and no session was present. Routes that need session-only auth check `c.get('authMethod') === 'session'` or reject `c.get('authMethod') === 'token'`, NOT cookie presence.
+
+   **Session-only routes that MUST check `authMethod !== 'token'`:**
+   - `POST /api/v1/w/:wslug/ai/test-key` (already gated as of round 3)
+   - `POST /api/v1/w/:wslug/settings/:workspaceId/ai-keys` (gap closed in round 4 — was using only `requireUser`)
+   - `DELETE /api/v1/w/:wslug/settings/:workspaceId/ai-keys/:keyId` (gap closed in round 4)
+   - Any future route that mutates AI keys, master secrets, or token grants.
+
+   The rule: AI-key management is session-only because a stolen Bearer should not be able to rotate the workspace's BYOK setup. Read paths (`GET /ai-keys`, which returns metadata only) are bearer-OK.
+
+   A garbage cookie + valid bearer authenticates as `'token'`, never `'session'`. This is asserted by a test in `apps/server/src/routes/ai.test.ts` and a sibling test in `settings.test.ts`.
+12. **Persistence and test-key share validation logic.** Every guard added to `/ai/test-key` is mirrored on `POST /ai-keys`. The shared guard set:
+
+   | Guard | /ai/test-key (ai.ts) | POST /ai-keys (settings.ts) |
+   |---|---|---|
+   | authMethod !== 'token' | round 3 #1 | round 4 #1 |
+   | baseUrl-only-for-ollama refine | round 2 #2 | round 2 #3 |
+   | ollama-requires-explicit-baseUrl | round 2 #5 | round 3 #2 |
+   | validatePublicUrl(baseUrl) when defined | round 1 #2 | round 2 #3 |
+   | zValidator returns 400, route-thrown HTTPError returns 422 | — | round 4 #9 (superRefine harmonization deferred — see "Out of scope") |
+
+   New guards added to one route MUST land on the other in the same commit. A single helper (`validateAiKeyBody(body)`) is the long-term shape; symmetric inline checks with shared tests are acceptable v1. `DELETE /ai-keys/:keyId` inherits the authMethod check from mitigation 11 above but doesn't need baseUrl validation (no body).
 13. **OpenRouter testKey overrides openai.testKey** with a call to `/api/v1/key` (auth-required) — NOT `/api/v1/models` (public). The override lives in `lib/ai/openrouter.ts` as an explicit `testKey: async ({apiKey}) => fetch(.../key)`, NOT a delegate-to-openai-with-baseURL-override. A defense-in-depth test (`openrouter+baseUrl` is rejected by the refine) pins the schema contract.
-14. **`validatePublicUrl` strips trailing dot before any host comparison.** `host = host.endsWith('.') ? host.slice(0, -1) : host` runs once, BEFORE the localhost check, the IPv4 prefix loop, and the IPv6-mapped detection. A test asserts `http://localhost.:...` AND `http://foo.localhost.:...` are blocked.
-15. **`validatePublicUrl` detects IPv4-mapped IPv6 in both canonical and expanded forms.** The mapped-match regex is `/^::ffff:.../i` ∪ `/^(?:0:){5}ffff:.../i`. Both shapes must be tested with known-loopback / link-local payloads. A defensive comment documents the assumed Bun canonicalization behavior so future runtime drift doesn't silently reopen the hole.
+14. **`validatePublicUrl` strips ALL trailing dots before any host comparison.** `host = host.replace(/\.+$/, '')` runs once, BEFORE the localhost check, the IPv4 prefix loop, and the IPv6-mapped detection. A test asserts `http://localhost.:...`, `http://localhost..:...`, AND `http://foo.localhost.:...` are blocked. The greedy strip closes the multi-dot bypass (round 4 #3).
+15. **`validatePublicUrl` detects ALL IPv6 prefixes in both canonical and expanded forms.** The defense-in-depth must be symmetric across:
+
+   - `::1` (loopback) — block `^::1$/` AND `^(?:0{1,4}:){7}0{0,3}1$/i` (any number of leading-zero zero-segments).
+   - `::` (unspecified) — block `^::$/` AND `^(?:0{1,4}:){7}0{0,4}$/i`.
+   - `::ffff:hhhh:hhhh` (IPv4-mapped) — block `^::ffff:.../i` AND `^(?:0:){5}ffff:.../i` PLUS decoded-IPv4 check via BLOCKED_IPV4_PREFIXES.
+   - `fe80::/10` (link-local) — block `^fe[89ab][0-9a-f]:/i` AND `^fe[89ab][0-9a-f]:(?:0:){5,7}` for expanded.
+   - `fc00::/7` (unique-local) — block `^fc.../i` AND `^fd.../i` AND expanded forms.
+
+   Cleaner: write a `canonicalizeIpv6(host: string): string` helper that compresses leading-zero segments, THEN run the canonical regexes. Pragmatic v1: add the expanded forms for the same 5 prefixes inline. The test suite covers both forms for each prefix.
+
+16. **Test-only escape hatches are unreachable from production code.** The `__INTERNAL_TEST_ONLY__` export from `apps/server/src/lib/ai/provider.ts` has a RUNTIME GUARD: every call to `overrideRegistry`, `reset`, `hasInflight`, `hasCached`, `loadProvider` checks `process.env.NODE_ENV === 'test'` and throws if not. Production code that accidentally imports + calls these will crash at startup or first request, not silently mutate the registry. A future refactor (deferred) moves these into a separate `provider.testing.ts` file with an ESLint `no-restricted-imports` rule banning non-test imports — until that lands, the runtime guard is the enforcement.
+
+17. **Web-side mutations are abortable on context-change.** When the AI tab's `onSave` mutation is in flight and the user switches provider, the mutation is ABORTED via AbortController — not just the toast suppressed. The server-side row IS NOT committed for the old provider once the user has signaled intent to abandon it. A `toast.info('Save canceled — provider changed')` notifies the user that the in-flight mutation was discarded, so the side-effect-or-not is visible.
 
 ### Out of scope (explicit deferrals)
 
@@ -115,6 +149,9 @@ These are the rules the code MUST follow. `/code-review` should verify each one 
 - **Per-key allow-lists** of which paths the apiKey is valid against — Anthropic, OpenAI, OpenRouter don't expose this in their key shapes. Accepted residual risk.
 - **Anti-CSRF for `/ai/test-key`** — Folio's session cookie is SameSite=Lax (verify), and the route requires a session, so CSRF from a third-party origin is mitigated by browser-level same-origin policy. If session config is ever weakened, revisit.
 - **Threat model for `runs` table data exfil** (Sub-phase C concern) — agent_run rows can contain user prompts and tool-call args that include sensitive workspace data. Cross-workspace isolation depends on the existing scope-check infrastructure from Phase 2.5. Sub-phase C's plan should reference back to this section before extending.
+- **Greedy trailing-dot strip in IPv4 prefix loop** — the current per-prefix regex uses `^192\.168\.` etc. After the greedy trailing-dot strip on the host string, trailing dots can't appear before the prefix anchors. Defense-in-depth would normalize ALL non-significant whitespace + case-fold before each check; v1 relies on the URL parser's canonicalization plus the greedy strip.
+- **Harmonizing 400-vs-422 status codes** on settings.ts INVALID_BODY responses — the zValidator emits 400 for shape failures, the imperative-check emits 422. Both carry `error.code: 'INVALID_BODY'` so consumers can dedupe on the code rather than the status. Migration to `.superRefine` (one shape, 400 INVALID_BODY) deferred to v1.1 alongside the API doc generator.
+- **AbortController on the OpenAI / Anthropic / Ollama SDK calls** — the web-side abort (mitigation 17) cancels the fetch from the UI but the server's outbound SDK call to the provider continues to completion. The wasted token spend is acceptable v1; the persisted-but-abandoned row is what's being prevented.
 
 ### How to use this section
 
