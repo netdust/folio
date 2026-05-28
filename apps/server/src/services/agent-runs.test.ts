@@ -14,6 +14,7 @@ import {
   documents,
   events,
   tables,
+  users,
   type Document,
   type Project,
   type TableEntity,
@@ -24,6 +25,7 @@ import { newApiToken } from '../lib/auth.ts';
 import { toolsToScopes } from '../lib/agent-schema.ts';
 import type { AgentRunFrontmatter } from '../lib/agent-run-schema.ts';
 import { HTTPError } from '../lib/http.ts';
+import { sanitizeProviderError } from '../lib/ai/sanitize-error.ts';
 import { createRun, transitionRun, incrementTokens } from './agent-runs.ts';
 
 type TestDB = Awaited<ReturnType<typeof makeTestApp>>['db'];
@@ -261,7 +263,7 @@ describe('transitionRun', () => {
       },
     });
 
-    await transitionRun(created.document.id, { newStatus: 'running' });
+    await transitionRun(created.document.id, { newStatus: 'running', actor: seed.user.id });
 
     const row = await db.query.documents.findFirst({
       where: eq(documents.id, created.document.id),
@@ -300,7 +302,7 @@ describe('transitionRun', () => {
     // planning → completed is illegal (must pass through running first).
     let caught: HTTPError | null = null;
     try {
-      await transitionRun(created.document.id, { newStatus: 'completed' });
+      await transitionRun(created.document.id, { newStatus: 'completed', actor: seed.user.id });
     } catch (e) {
       caught = e as HTTPError;
     }
@@ -314,10 +316,10 @@ describe('transitionRun', () => {
   });
 
   test('throws AGENT_RUN_NOT_FOUND when the row does not exist', async () => {
-    const { db } = await makeTestApp();
+    const { db, seed } = await makeTestApp();
     let caught: HTTPError | null = null;
     try {
-      await transitionRun(nanoid(), { newStatus: 'running' });
+      await transitionRun(nanoid(), { newStatus: 'running', actor: seed.user.id });
     } catch (e) {
       caught = e as HTTPError;
     }
@@ -337,7 +339,7 @@ describe('transitionRun', () => {
     // Pre-condition: worker_started_at is set.
     expect((run.frontmatter as AgentRunFrontmatter).worker_started_at).toBeTruthy();
 
-    await transitionRun(run.id, { newStatus: 'completed' });
+    await transitionRun(run.id, { newStatus: 'completed', actor: seed.user.id });
 
     // Read in a fresh query — both status flip + worker_started_at clear must be
     // visible in a single read (mitigation 40 — one UPDATE, no intermediate
@@ -361,6 +363,7 @@ describe('transitionRun', () => {
     await expect(
       transitionRun(run.id, {
         newStatus: 'failed',
+        actor: seed.user.id,
         errorReason: 'made_up_reason' as never,
       }),
     ).rejects.toThrow();
@@ -377,6 +380,7 @@ describe('transitionRun', () => {
     const hostileDetail = 'apiKey:sk-abc123 baseUrl:https://attacker.example';
     await transitionRun(run.id, {
       newStatus: 'failed',
+      actor: seed.user.id,
       errorReason: 'provider_error',
       errorDetail: hostileDetail,
     });
@@ -403,11 +407,82 @@ describe('transitionRun', () => {
     const runsTable = await seedRunsTable(db, seed.project.id);
     const run = await seedRunningRun(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user);
 
-    await transitionRun(run.id, { newStatus: 'failed', errorReason: 'worker_crash' });
+    await transitionRun(run.id, { newStatus: 'failed', actor: seed.user.id, errorReason: 'worker_crash' });
 
     const after = await db.query.documents.findFirst({ where: eq(documents.id, run.id) });
     expect(after!.status).toBe('failed');
     expect((after!.frontmatter as AgentRunFrontmatter).status).toBe('failed');
+  });
+
+  test('writes the supplied actor to documents.updatedBy and the emitted event', async () => {
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+    const run = await seedRunningRun(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user);
+
+    // A distinct actor (e.g. approver, admin force-fail) advances the run —
+    // must be recorded on the row AND the event, not the row's prior updatedBy.
+    // documents.updated_by has an FK to users.id, so the actor must be a real
+    // user id. (System-actor variants like a polling worker would either go
+    // through a seeded system user or — if we ever need free-form actor — a
+    // future schema change to drop the FK / add a polymorphic actor column.)
+    const workerActorId = nanoid();
+    await db.insert(users).values({
+      id: workerActorId,
+      email: `worker-${workerActorId}@test.local`,
+      name: 'Worker User',
+    });
+    await transitionRun(run.id, { newStatus: 'completed', actor: workerActorId });
+
+    const after = await db.query.documents.findFirst({ where: eq(documents.id, run.id) });
+    expect(after!.updatedBy).toBe(workerActorId);
+
+    const completedEvents = await db.query.events.findMany({
+      where: eq(events.kind, 'agent.run.completed'),
+    });
+    expect(completedEvents.length).toBe(1);
+    expect(completedEvents[0]!.actor).toBe(workerActorId);
+  });
+
+  test('locks the bare-string errorDetail contract: input string → constant fallback (no leak surface)', async () => {
+    // sanitizeProviderError is whitelist-based: any input WITHOUT a numeric
+    // `.status` falls through to the constant 'Network error or unreachable
+    // host.' branch — including a stringified-JSON of a structured error or
+    // a free-form attacker-controlled message. This test locks that contract
+    // so a future refactor of transitionRun can't accidentally start
+    // round-tripping `args.errorDetail` into the persisted column.
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+    const run = await seedRunningRun(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user);
+
+    // A stringified-JSON SDK error — sanitizeProviderError does NOT JSON.parse;
+    // it sees a string with no `.status` property → constant output.
+    const stringifiedSdkError = JSON.stringify({
+      status: 401,
+      message: 'Incorrect API key: sk-leak-12345',
+      requestId: 'req_abc',
+    });
+    await transitionRun(run.id, {
+      newStatus: 'failed',
+      actor: seed.user.id,
+      errorReason: 'provider_error',
+      errorDetail: stringifiedSdkError,
+    });
+
+    const after = await db.query.documents.findFirst({ where: eq(documents.id, run.id) });
+    const fm = after!.frontmatter as AgentRunFrontmatter;
+    // Constant fallback — NOT the 401 whitelist message, because the input is
+    // a string (no `.status` to read).
+    expect(fm.error_detail).toBe('Network error or unreachable host.');
+    // Defense in depth — no credential / message fragment survives.
+    expect(fm.error_detail).not.toContain('sk-leak-12345');
+    expect(fm.error_detail).not.toContain('req_abc');
+    expect(fm.error_detail).not.toContain('Incorrect API key');
   });
 });
 
@@ -488,5 +563,50 @@ describe('incrementTokens', () => {
 
     const out = await incrementTokens(id, { in: 13, out: 4 });
     expect(out).toEqual({ tokens_in: 13, tokens_out: 4 });
+  });
+
+  test('throws AGENT_RUN_NOT_FOUND when the id points at a non-agent_run document', async () => {
+    // Without the type='agent_run' guard on the read-back, the UPDATE silently
+    // no-ops (its where clause already filters) AND the read returns the
+    // wrong row's tokens — masking the NOT_FOUND path entirely. Pass a
+    // work_item id to assert the asymmetry is fixed: both UPDATE and read
+    // must filter by type.
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const workItem = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+
+    let caught: HTTPError | null = null;
+    try {
+      await incrementTokens(workItem.id, { in: 5, out: 3 });
+    } catch (e) {
+      caught = e as HTTPError;
+    }
+    expect(caught).toBeInstanceOf(HTTPError);
+    expect(caught!.status).toBe(404);
+    expect(caught!.code).toBe('AGENT_RUN_NOT_FOUND');
+  });
+});
+
+// ---------- sanitizer integration assumption ----------
+
+describe('sanitizeProviderError integration guard', () => {
+  test('discards SDK .message content for structured 401s (whitelist returns fixed string)', async () => {
+    // This is the production-path guarantee transitionRun depends on: when
+    // the runner (C-2+) passes a structured SDK error object through
+    // `sanitizeProviderError`, no credential-bearing fragment from the
+    // upstream `.message` can survive. We test the sanitizer directly here
+    // because transitionRun currently accepts `errorDetail: string` only —
+    // this regression guard locks the upstream contract.
+    const sdkError = {
+      status: 401,
+      message: 'Incorrect API key provided: sk-leak-12345. Find it at...',
+      requestId: 'req_attacker_owned',
+    };
+    const out = sanitizeProviderError(sdkError, 'anthropic');
+    // Whitelist output — no SDK message body, no key fragment, no requestId.
+    expect(out).toBe('Unauthorized (401): key rejected by anthropic.');
+    expect(out).not.toContain('sk-leak-12345');
+    expect(out).not.toContain('req_attacker_owned');
+    expect(out).not.toContain('Incorrect API key');
   });
 });

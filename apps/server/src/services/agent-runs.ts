@@ -172,6 +172,13 @@ export async function createRun(
 
 export interface TransitionRunArgs {
   newStatus: RunStatus;
+  /**
+   * Identity that performed the transition. Written to documents.updatedBy
+   * AND the emitted event's `actor` field so callers (polling worker,
+   * approver, admin force-fail) record provenance accurately. Required —
+   * no default — so the caller cannot accidentally lose identity.
+   */
+  actor: string;
   /** ISO timestamp; defaults to "now" when transitioning to a terminal state. */
   completedAt?: string;
   errorReason?: RunErrorReason;
@@ -268,7 +275,7 @@ export async function transitionRun(
           '$.error_reason', ${errorReason ?? null},
           '$.error_detail', ${errorDetail ?? null}
         )`,
-        updatedBy: row.updatedBy,
+        updatedBy: args.actor,
         updatedAt: new Date(),
       })
       .where(eq(documents.id, runId));
@@ -278,7 +285,7 @@ export async function transitionRun(
       projectId: row.projectId,
       documentId: row.id,
       kind: `agent.run.${to}` as EventKind,
-      actor: row.updatedBy ?? row.createdBy ?? 'system',
+      actor: args.actor,
       payload: {
         from,
         to,
@@ -324,8 +331,12 @@ export async function incrementTokens(
     })
     .where(and(eq(documents.id, runId), eq(documents.type, 'agent_run')));
 
+  // Read-back MUST also filter by type='agent_run'. The UPDATE above no-ops on
+  // non-run rows, but without the type guard here the read would return the
+  // wrong row (e.g. a work_item with a colliding id) and the NOT_FOUND throw
+  // would never fire. Symmetric with transitionRun's row lookup.
   const row = await db.query.documents.findFirst({
-    where: eq(documents.id, runId),
+    where: and(eq(documents.id, runId), eq(documents.type, 'agent_run')),
   });
   if (!row) {
     throw new HTTPError(
