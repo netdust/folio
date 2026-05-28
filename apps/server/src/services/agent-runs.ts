@@ -627,13 +627,19 @@ export async function recoverOrphanRuns(
   const threshold = new Date(Date.now() - args.staleThresholdMs).toISOString();
   const completedAt = new Date().toISOString();
 
+  // Mitigation 39 — closed-enum value sourced from `runErrorReasonSchema.enum`
+  // rather than a raw string literal. If a future schema change drops or
+  // renames `worker_crash`, this line stops compiling and both the SQL
+  // write AND the event payload below break together.
+  const errorReason = runErrorReasonSchema.enum.worker_crash;
+
   return txWithEvents(db, async (tx) => {
     const updated = await tx.all<{ id: string; workspace_id: string; project_id: string | null }>(sql`
       UPDATE documents
          SET frontmatter = json_set(
                frontmatter,
                '$.status', 'failed',
-               '$.error_reason', 'worker_crash',
+               '$.error_reason', ${errorReason},
                '$.worker_started_at', NULL,
                '$.completed_at', ${completedAt}
              ),
@@ -658,7 +664,7 @@ export async function recoverOrphanRuns(
         payload: {
           from: 'running',
           to: 'failed',
-          error_reason: 'worker_crash',
+          error_reason: errorReason,
         },
       });
     }
