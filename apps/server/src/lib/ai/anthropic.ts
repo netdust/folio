@@ -119,10 +119,23 @@ export const anthropic: AIProvider = {
       await c.models.list();
       return { ok: true };
     } catch (err) {
+      // B round 2 fix #9 — never surface SDK e.message. SDK error strings
+      // embed partial credentials, request IDs, and proxy details that end
+      // up in the DOM (the AI tab's ✗ <reason> chip) and in log shippers.
+      // Whitelist by HTTP status only.
       const e = err as { status?: number; message?: string };
       if (e.status === 401)
         return { ok: false, reason: 'Unauthorized (401): key rejected by Anthropic.' };
-      return { ok: false, reason: e.message ?? 'Unknown error' };
+      if (e.status === 403)
+        return { ok: false, reason: 'Forbidden (403): key lacks required permissions.' };
+      if (e.status === 429)
+        return { ok: false, reason: 'Rate limited (429). Try again shortly.' };
+      if (typeof e.status === 'number' && e.status >= 500)
+        return { ok: false, reason: `Server error (${e.status}). The provider may be down.` };
+      if (typeof e.status === 'number')
+        return { ok: false, reason: `Error (${e.status}).` };
+      // Network / non-HTTP error — no status field.
+      return { ok: false, reason: 'Network error or unreachable host.' };
     }
   },
 };

@@ -230,6 +230,40 @@ describe('openai provider', () => {
     });
   });
 
+  // B round 2 fix #9 — testKey() must NOT surface raw SDK e.message on
+  // non-401 paths. SDK error strings can embed partial credentials, request
+  // IDs, and proxy details. Whitelist by status only.
+  test('testKey() reports rate-limit cleanly without leaking SDK message', async () => {
+    mockModelsList.mockImplementationOnce(async () => {
+      const err = new Error('Rate limit hit; key sk-...XYZ at 1234567/min') as Error & {
+        status: number;
+      };
+      err.status = 429;
+      throw err;
+    });
+    const r = await openai.testKey({ apiKey: 'sk-bad', model: 'gpt-4o-mini' });
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.reason).toMatch(/rate limit/i);
+      expect(r.reason).not.toMatch(/sk-/i); // no key leak
+      expect(r.reason).not.toMatch(/1234567/); // no specifics from the message
+    }
+  });
+
+  test('testKey() reports network error cleanly without leaking proxy details', async () => {
+    mockModelsList.mockImplementationOnce(async () => {
+      // No status field — looks like a fetch/connect error.
+      throw new Error('ECONNREFUSED at internal.proxy.example.com:8080');
+    });
+    const r = await openai.testKey({ apiKey: 'sk', model: 'gpt-4o-mini' });
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.reason).toMatch(/network|unreachable/i);
+      expect(r.reason).not.toMatch(/proxy\.example/);
+      expect(r.reason).not.toMatch(/ECONNREFUSED/);
+    }
+  });
+
   test('stream() yields done event even when tool_call args fail to JSON.parse', async () => {
     mockCreate.mockImplementationOnce((async (opts: { stream?: boolean }) => {
       if (!opts.stream) return { id: 'cmpl_x' };
