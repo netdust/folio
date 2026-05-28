@@ -70,6 +70,33 @@ describe('AiTab', () => {
     expect(mockTestMutate).toHaveBeenCalledTimes(1);
   });
 
+  // B round 2 fix #8 — if the user switches the provider dropdown while a
+  // Test mutation is in flight, the resolved Anthropic result must NOT paint
+  // '✓ Key validated' onto the now-visible OpenAI panel.
+  test('Test result does not paint after provider switches mid-flight', async () => {
+    let resolveTest: (v: { ok: true } | { ok: false; reason: string }) => void = () => {};
+    mockTestMutate.mockImplementationOnce(
+      () =>
+        new Promise<{ ok: true } | { ok: false; reason: string }>((res) => {
+          resolveTest = res;
+        }),
+    );
+
+    renderTab();
+    fireEvent.change(screen.getByLabelText(/api key/i), { target: { value: 'sk-anthropic' } });
+    fireEvent.click(screen.getByRole('button', { name: /^test$/i }));
+
+    // Switch provider before the mutation resolves.
+    fireEvent.change(screen.getByLabelText(/provider/i), { target: { value: 'openai' } });
+
+    // Now resolve the original (Anthropic) mutation.
+    resolveTest({ ok: true });
+
+    // Give react-query a tick to flush; assert nothing paints.
+    await new Promise((r) => setTimeout(r, 10));
+    expect(screen.queryByText(/key validated/i)).not.toBeInTheDocument();
+  });
+
   test('shows ollama base URL field only when ollama is selected', () => {
     renderTab();
     expect(screen.queryByLabelText(/base url/i)).not.toBeInTheDocument();

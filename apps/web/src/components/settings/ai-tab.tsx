@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import {
   type AiProvider,
@@ -36,6 +36,16 @@ export function AiTab({ wslug, workspaceId }: Props) {
   const deleteKey = useDeleteAiKey(wslug, workspaceId);
   const testKey = useTestKey();
 
+  // B round 2 fix #8 — avoid painting a stale Test result onto the wrong
+  // provider when the user switches the dropdown mid-flight. Compare the
+  // provider captured at click-time against the latest provider via a ref;
+  // closure-captured `provider` would be stale by the time the promise
+  // resolves.
+  const providerRef = useRef(provider);
+  useEffect(() => {
+    providerRef.current = provider;
+  }, [provider]);
+
   function onProviderChange(next: AiProvider) {
     setProvider(next);
     setModel(KNOWN_MODELS[next][0]);
@@ -46,6 +56,7 @@ export function AiTab({ wslug, workspaceId }: Props) {
 
   async function onTest() {
     setTestResult(null);
+    const providerAtClick = provider;
     try {
       const r = await testKey.mutateAsync({
         wslug,
@@ -54,8 +65,12 @@ export function AiTab({ wslug, workspaceId }: Props) {
         apiKey,
         baseUrl: baseUrl || undefined,
       });
+      // User switched provider during the await — discard this result so
+      // an Anthropic '✓ Key validated' doesn't paint onto an OpenAI panel.
+      if (providerRef.current !== providerAtClick) return;
       setTestResult(r);
     } catch (err) {
+      if (providerRef.current !== providerAtClick) return;
       setTestResult({ ok: false, reason: formatApiError(err) });
     }
   }
