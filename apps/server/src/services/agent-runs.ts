@@ -20,6 +20,9 @@
 import { and, eq, sql } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import type { DB } from '../db/client.ts';
+
+// Drizzle tx and DB share the same query API.
+type DBOrTx = DB | Parameters<Parameters<DB['transaction']>[0]>[0];
 import {
   documents,
   type Document,
@@ -29,7 +32,7 @@ import {
   type Workspace,
 } from '../db/schema.ts';
 import { HTTPError } from '../lib/http.ts';
-import { emitEvent, type EventKind } from '../lib/events.ts';
+import { emitEvent, txWithEvents, type EventKind } from '../lib/events.ts';
 import {
   agentRunFrontmatterSchema,
   isValidTransition,
@@ -40,30 +43,6 @@ import {
   type RunStatus,
 } from '../lib/agent-run-schema.ts';
 import { sanitizeProviderError } from '../lib/ai/sanitize-error.ts';
-
-/**
- * Tx-only contract.
- *
- * Spec-review C-1 fixup (2026-05-28): the earlier `DBOrTx` accept-either
- * surface relied on a `_.session !== undefined` runtime discriminator to
- * decide whether to open a fresh transaction. That discriminator was wrong
- * — Drizzle stores `session` at `this.session` (top-level, not under `_`),
- * so the check was ALWAYS false. Bare-`db` callers therefore got a
- * non-atomic insert + emitEvent pair, breaking durable-vs-bus parity on
- * any service-call that wasn't manually wrapped.
- *
- * The codebase convention (see `services/documents.ts`, `services/comments.ts`)
- * is `txWithEvents` — a `db.transaction` wrapper that defers bus publishes
- * until commit and scrubs the events row on rollback. Tightening this
- * service's signatures to tx-only forces callers to use it (or another
- * tx-aware wrapper) instead of accidentally passing `db` and silently
- * losing atomicity.
- *
- * Callers wrap with `txWithEvents(db, async (tx) => ...)`. The runner
- * (Task C-2+) already operates inside a tx scope; routes (Task C-7) wrap
- * at the handler boundary.
- */
-type Tx = Parameters<Parameters<DB['transaction']>[0]>[0];
 
 // ----- createRun -----
 
@@ -108,7 +87,7 @@ function generateRunSlug(agentSlug: string, isoTimestamp: string): string {
 }
 
 export async function createRun(
-  tx: Tx,
+  db: DBOrTx,
   args: CreateRunArgs,
 ): Promise<CreateRunResult> {
   const { workspace, project, runsTable, agent, actor, input } = args;
@@ -164,28 +143,30 @@ export async function createRun(
   };
 
   // Insert + event emission must be atomic for durable+bus parity. The
-  // caller owns the tx (typically via `txWithEvents(db, ...)`), so we just
-  // write inline — rollback discards both the row AND the queued bus
-  // publish via the scrub path in `lib/events.ts`.
-  await tx.insert(documents).values(row);
-  await emitEvent(tx, {
-    workspaceId: workspace.id,
-    projectId: project.id,
-    documentId: id,
-    kind: 'agent.run.started',
-    actor: actor.id,
-    payload: {
-      slug,
-      agent: agent.slug,
-      chain_id: input.chainId,
-      fired_by: input.firedBy,
-      trigger_id: input.triggerId,
-    },
+  // service owns the tx boundary via `txWithEvents` — rollback discards
+  // both the row AND the queued bus publish via the scrub path in
+  // `lib/events.ts`.
+  await txWithEvents(db as DB, async (tx) => {
+    await tx.insert(documents).values(row);
+    await emitEvent(tx, {
+      workspaceId: workspace.id,
+      projectId: project.id,
+      documentId: id,
+      kind: 'agent.run.started',
+      actor: actor.id,
+      payload: {
+        slug,
+        agent: agent.slug,
+        chain_id: input.chainId,
+        fired_by: input.firedBy,
+        trigger_id: input.triggerId,
+      },
+    });
   });
 
   // Re-read so callers get the full DB-side row shape (timestamps, default
   // columns) instead of the in-memory pre-insert shape.
-  const inserted = await tx.query.documents.findFirst({
+  const inserted = await db.query.documents.findFirst({
     where: eq(documents.id, id),
   });
   return { document: inserted! };
@@ -215,11 +196,11 @@ export interface TransitionRunArgs {
  *    43) catch this and no-op.
  */
 export async function transitionRun(
-  tx: Tx,
+  db: DBOrTx,
   runId: string,
   args: TransitionRunArgs,
 ): Promise<Document> {
-  const row = await tx.query.documents.findFirst({
+  const row = await db.query.documents.findFirst({
     where: and(eq(documents.id, runId), eq(documents.type, 'agent_run')),
   });
   if (!row) {
@@ -275,37 +256,43 @@ export async function transitionRun(
     ? sql`NULL`
     : sql`json_extract(${documents.frontmatter}, '$.worker_started_at')`;
 
-  await tx
-    .update(documents)
-    .set({
-      status: to,
-      frontmatter: sql`json_set(
-        ${documents.frontmatter},
-        '$.status', ${to},
-        '$.completed_at', ${completedAt},
-        '$.worker_started_at', ${workerStartedAtArg},
-        '$.error_reason', ${errorReason ?? null},
-        '$.error_detail', ${errorDetail ?? null}
-      )`,
-      updatedBy: row.updatedBy,
-      updatedAt: new Date(),
-    })
-    .where(eq(documents.id, runId));
+  // UPDATE + event emission must be atomic for durable+bus parity. The
+  // service owns the tx boundary via `txWithEvents` — rollback discards
+  // both the column write AND the queued bus publish via the scrub path
+  // in `lib/events.ts`.
+  await txWithEvents(db as DB, async (tx) => {
+    await tx
+      .update(documents)
+      .set({
+        status: to,
+        frontmatter: sql`json_set(
+          ${documents.frontmatter},
+          '$.status', ${to},
+          '$.completed_at', ${completedAt},
+          '$.worker_started_at', ${workerStartedAtArg},
+          '$.error_reason', ${errorReason ?? null},
+          '$.error_detail', ${errorDetail ?? null}
+        )`,
+        updatedBy: row.updatedBy,
+        updatedAt: new Date(),
+      })
+      .where(eq(documents.id, runId));
 
-  await emitEvent(tx, {
-    workspaceId: row.workspaceId,
-    projectId: row.projectId,
-    documentId: row.id,
-    kind: `agent.run.${to}` as EventKind,
-    actor: row.updatedBy ?? row.createdBy ?? 'system',
-    payload: {
-      from,
-      to,
-      error_reason: errorReason ?? null,
-    },
+    await emitEvent(tx, {
+      workspaceId: row.workspaceId,
+      projectId: row.projectId,
+      documentId: row.id,
+      kind: `agent.run.${to}` as EventKind,
+      actor: row.updatedBy ?? row.createdBy ?? 'system',
+      payload: {
+        from,
+        to,
+        error_reason: errorReason ?? null,
+      },
+    });
   });
 
-  const updated = await tx.query.documents.findFirst({
+  const updated = await db.query.documents.findFirst({
     where: eq(documents.id, runId),
   });
   return updated!;
@@ -323,18 +310,15 @@ export async function transitionRun(
  * the UPDATE still runs (json_set is a no-op delta) and the returned totals
  * reflect the (unchanged) row state.
  *
- * Takes `Tx` (not `DBOrTx`) for the same reason `createRun`/`transitionRun`
- * do: callers compose increments with the surrounding state-machine writes
- * inside one `txWithEvents` block. The atomic-SQL guarantee here is local
- * to this single statement, but the runner needs lockstep between
- * "tokens accrued" and "run transitioned" — which is the caller's tx scope.
+ * Single-statement UPDATE; no events emitted, so no `txWithEvents` wrap
+ * needed. Drizzle's `db.update(...)` and `tx.update(...)` share the API.
  */
 export async function incrementTokens(
-  tx: Tx,
+  db: DBOrTx,
   runId: string,
   args: { in: number; out: number },
 ): Promise<{ tokens_in: number; tokens_out: number }> {
-  await tx
+  await db
     .update(documents)
     .set({
       frontmatter: sql`json_set(
@@ -346,7 +330,7 @@ export async function incrementTokens(
     })
     .where(and(eq(documents.id, runId), eq(documents.type, 'agent_run')));
 
-  const row = await tx.query.documents.findFirst({
+  const row = await db.query.documents.findFirst({
     where: eq(documents.id, runId),
   });
   if (!row) {
