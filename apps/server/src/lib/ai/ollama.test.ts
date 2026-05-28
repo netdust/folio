@@ -351,4 +351,83 @@ describe('ollama provider', () => {
     expect(events).toContainEqual({ type: 'tokens', tokens_in: 4, tokens_out: 1 });
     expect(events).toContainEqual({ type: 'done', reason: 'stop' });
   });
+
+  // B round 6 #3 — `Number.isFinite(Number(x))` regression: ''/null/false/[]
+  // all coerce to 0 and clobber the running accumulator to 0. The new
+  // type-guard accepts number-typed values or digits-only strings; everything
+  // else preserves the running total. Tests run two done chunks: first sets
+  // a non-zero running total, second carries a falsy value — the final tokens
+  // event MUST show the preserved value, not 0.
+  describe('round 6 #3 — falsy token-count preservation', () => {
+    async function streamAndCollect(falsyValue: unknown): Promise<unknown[]> {
+      global.fetch = mock(
+        async () =>
+          new Response(
+            jsonl([
+              // First done chunk: sets tokensIn=42, tokensOut=13.
+              {
+                message: { content: '' },
+                done: true,
+                done_reason: 'stop',
+                prompt_eval_count: 42,
+                eval_count: 13,
+              },
+              // Second done chunk: falsy value MUST be ignored, not clobber to 0.
+              {
+                message: { content: '' },
+                done: true,
+                done_reason: 'stop',
+                prompt_eval_count: falsyValue,
+                eval_count: falsyValue,
+              },
+            ]),
+            { status: 200 },
+          ),
+      ) as never;
+      const events: unknown[] = [];
+      for await (const ev of ollama.stream({
+        system: 'sys',
+        messages: [{ role: 'user', content: 'hi' }],
+        tools: [],
+        maxTokens: 100,
+        apiKey: '',
+        model: 'llama3.1',
+        baseUrl: 'http://example.com:11434',
+      })) {
+        events.push(ev);
+      }
+      return events;
+    }
+
+    test('empty string preserves running tokensIn/tokensOut', async () => {
+      const events = await streamAndCollect('');
+      expect(events).toContainEqual({ type: 'tokens', tokens_in: 42, tokens_out: 13 });
+    });
+
+    test('null preserves running tokensIn/tokensOut', async () => {
+      const events = await streamAndCollect(null);
+      expect(events).toContainEqual({ type: 'tokens', tokens_in: 42, tokens_out: 13 });
+    });
+
+    test('false preserves running tokensIn/tokensOut', async () => {
+      const events = await streamAndCollect(false);
+      expect(events).toContainEqual({ type: 'tokens', tokens_in: 42, tokens_out: 13 });
+    });
+
+    test('empty array preserves running tokensIn/tokensOut', async () => {
+      const events = await streamAndCollect([]);
+      expect(events).toContainEqual({ type: 'tokens', tokens_in: 42, tokens_out: 13 });
+    });
+
+    test('digits-only string coerces (round-5 intent — "7" → 7)', async () => {
+      const events = await streamAndCollect('7');
+      // Second chunk's '7' replaces the first chunk's 42.
+      expect(events).toContainEqual({ type: 'tokens', tokens_in: 7, tokens_out: 7 });
+    });
+
+    test('non-numeric string preserves running total', async () => {
+      const events = await streamAndCollect('abc');
+      expect(events).toContainEqual({ type: 'tokens', tokens_in: 42, tokens_out: 13 });
+    });
+  });
 });

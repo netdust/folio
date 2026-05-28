@@ -19,6 +19,13 @@
  * no model name, no SDK message body).
  */
 export function sanitizeProviderError(err: unknown, providerName: string): string {
+  // Round 6 #2 — null/undefined falls through to the network-error branch
+  // (same shape as a fetch that failed before producing a Response object).
+  // Pre-fix, `const e = err as { status?: number }` then `e.status` threw
+  // 'null is not an object' at runtime, leaking through the outer catch and
+  // defeating the whitelist intent.
+  if (err == null) return 'Network error or unreachable host.';
+
   const e = err as { status?: number };
   if (e.status === 401 || e.status === 403) {
     return `Unauthorized (${e.status}): key rejected by ${providerName}.`;

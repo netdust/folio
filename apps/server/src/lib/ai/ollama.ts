@@ -52,20 +52,54 @@ function* handleOllamaChunk(
     // 7.5; without truncation the fractional value propagates into the
     // `tokens` event + the SQLite column (REAL, with IEEE-754 drift on SUM
     // for budget accounting). Tokens are intrinsically integer; pin the type.
-    const promptEval = Number(chunk.prompt_eval_count);
-    const evalCount = Number(chunk.eval_count);
+    //
     // B round 5 #9 — Math.max(0, ...) clamp. Round 4's Math.trunc pinned the
     // type but not the sign: Number('-7') is -7 (passes isFinite, trunc keeps
     // the sign), so a malformed proxy payload with a negative count propagated
     // into the accumulator + the tokens event + the SQLite REAL column. The
     // agent_run_schema.ts z.nonnegative() is a downstream backstop; this is
     // defense in depth at the source.
-    if (Number.isFinite(promptEval)) state.tokensIn = Math.max(0, Math.trunc(promptEval));
-    if (Number.isFinite(evalCount)) state.tokensOut = Math.max(0, Math.trunc(evalCount));
+    //
+    // B round 6 #3 — type-guard the input BEFORE Number coercion. The round-5
+    // rewrite `Number.isFinite(Number(x))` accepts the falsy set ('', null,
+    // false, []) — all coerce to 0 — and clobbered the running accumulator to
+    // 0 on any falsy chunk. The original (round 3) `Number(x) || existing`
+    // preserved the running total via the OR fallback; the round-5 rewrite
+    // lost that property. Tighten: accept number-typed values, OR string-typed
+    // values that match a digits-only regex (the round-5 intent of "accept
+    // stringified ints from sloppy proxies" — '7' → 7, but '' / 'abc' → reject).
+    state.tokensIn = coerceTokenCount(chunk.prompt_eval_count, state.tokensIn);
+    state.tokensOut = coerceTokenCount(chunk.eval_count, state.tokensOut);
     const reason = chunk.done_reason as string | undefined;
     if (reason === 'length') state.stopReason = 'max_tokens';
     else if (reason === 'tool_calls') state.stopReason = 'tool_use';
   }
+}
+
+/**
+ * Type-guard + sign-clamp + truncate. Returns the new value if input is a
+ * usable count, otherwise returns `existing` (preserving the running total).
+ *
+ * Accepts:
+ *   - `number` values that pass `Number.isFinite`
+ *   - `string` values that match `/^-?\d+(\.\d+)?$/` (round-5's sloppy-proxy
+ *     intent; the regex rejects ''/'abc'/'null'/'false'/'true')
+ *
+ * Rejects (returns `existing`):
+ *   - `null`, `undefined`, `''`, `false`, `[]`, objects, NaN
+ *   - strings that don't match the digits pattern
+ *
+ * Output is clamped to >=0 and truncated to integer (rationale in caller).
+ */
+function coerceTokenCount(raw: unknown, existing: number): number {
+  let n: number | null = null;
+  if (typeof raw === 'number') {
+    n = raw;
+  } else if (typeof raw === 'string' && /^-?\d+(\.\d+)?$/.test(raw)) {
+    n = Number(raw);
+  }
+  if (n === null || !Number.isFinite(n)) return existing;
+  return Math.max(0, Math.trunc(n));
 }
 
 export const ollama: AIProvider = {
