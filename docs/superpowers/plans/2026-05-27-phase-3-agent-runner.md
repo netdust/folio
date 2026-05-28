@@ -3962,7 +3962,9 @@ The rest of the Sub-phase C, D, E, F tasks are written below. Due to the size of
 
   Test: `it('registerTool throws on duplicate name')`.
 
-- [ ] **Step 5 — Add the self-vs-peer agent-lifecycle gate (mitigation 27).**
+- [ ] **Step 5 — ~~Add the self-vs-peer agent-lifecycle gate (mitigation 27).~~ ⚠️ PLAN CORRECTION 2026-05-29 (C-7 code-quality review): GATE REMOVED FROM C-7 — mitigation 27 RE-SCOPED to D-3.**
+
+  > **Do NOT implement the gate below.** Code-quality review found the blanket `args.slug`-vs-`actor` gate contradicts the live per-tool guards in `routes/mcp.ts`: `create_agent` has NO self-slug gate there (it uses `assertAgentAllowListWidening`, so the blanket gate wrongly rejects legit agent→child spawn); `delete_agent` rejects SELF-delete anchored to `existing.id === token.agentId` (the OPPOSITE of the blanket gate, and by id not slug); `get_agent_self` takes no `slug` arg (dead no-op). The blanket gate also trusts the caller-supplied `actor` string instead of `token.agentId`. **Decision (human controller): C-7's dispatcher enforces NO lifecycle gate — transport + scope + Zod-validation only.** The real per-tool guards move into `lib/agent-tools.ts` in D-3 with the real handlers, anchored to `token.agentId`. C-7 fix-commit `dd9f736` removed the gate; a deferral comment in `executeTool` is the landing pad. **D-3 planning MUST carry mitigation 27 explicitly** (tracked in `tasks/retro-follow-ups.md` as C.2-R-1). The original Step 5 spec is retained below for traceability only.
 
   The gate fires for tool names starting with `create_agent | update_agent | delete_agent` AND `get_agent_self`. Implementation lives in `executeTool` so EVERY caller goes through it:
 
