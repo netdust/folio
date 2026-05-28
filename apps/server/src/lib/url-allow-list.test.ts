@@ -1,5 +1,9 @@
 import { describe, expect, test } from 'bun:test';
-import { validatePublicUrl } from './url-allow-list.ts';
+import {
+  EXPANDED_IPV6_LOOPBACK,
+  EXPANDED_IPV6_UNSPECIFIED,
+  validatePublicUrl,
+} from './url-allow-list.ts';
 
 describe('validatePublicUrl', () => {
   test('allows a public https URL', () => {
@@ -168,5 +172,45 @@ describe('validatePublicUrl', () => {
     const r = validatePublicUrl('http://.../');
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toMatch(/empty|host/i);
+  });
+});
+
+// B round 5 #11 — direct regex tests. Round 4's expanded-IPv6 tests gave a
+// false-positive signal because Bun's URL parser compressed `[0:0:0:0:0:0:0:1]`
+// to `::1` BEFORE validatePublicUrl saw the host — the canonical regex was
+// matching, not the expanded one. A regression in the expanded regex itself
+// would have passed those tests. Exercise the regex directly so the failure
+// mode is honest. Threat mitigation 15.
+describe('EXPANDED_IPV6_LOOPBACK regex (direct, defense-in-depth)', () => {
+  test('matches expanded loopback (0:0:0:0:0:0:0:1)', () => {
+    expect(EXPANDED_IPV6_LOOPBACK.test('0:0:0:0:0:0:0:1')).toBe(true);
+  });
+
+  test('matches expanded loopback with longer zero-quibbles', () => {
+    expect(EXPANDED_IPV6_LOOPBACK.test('00:00:00:00:00:00:00:1')).toBe(true);
+    expect(EXPANDED_IPV6_LOOPBACK.test('0000:0000:0000:0000:0000:0000:0000:1')).toBe(true);
+  });
+
+  test('does NOT match non-loopback expanded forms', () => {
+    expect(EXPANDED_IPV6_LOOPBACK.test('0:0:0:0:0:0:0:2')).toBe(false);
+    expect(EXPANDED_IPV6_LOOPBACK.test('0:0:0:0:0:0:0:10')).toBe(false);
+  });
+
+  test('does NOT match the canonical compressed form (different regex handles ::1)', () => {
+    expect(EXPANDED_IPV6_LOOPBACK.test('::1')).toBe(false);
+  });
+});
+
+describe('EXPANDED_IPV6_UNSPECIFIED regex (direct, defense-in-depth)', () => {
+  test('matches expanded unspecified (0:0:0:0:0:0:0:0)', () => {
+    expect(EXPANDED_IPV6_UNSPECIFIED.test('0:0:0:0:0:0:0:0')).toBe(true);
+  });
+
+  test('matches with longer zero-quibbles', () => {
+    expect(EXPANDED_IPV6_UNSPECIFIED.test('0000:0000:0000:0000:0000:0000:0000:0000')).toBe(true);
+  });
+
+  test('does NOT match non-zero last quibble', () => {
+    expect(EXPANDED_IPV6_UNSPECIFIED.test('0:0:0:0:0:0:0:1')).toBe(false);
   });
 });

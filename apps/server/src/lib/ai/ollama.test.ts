@@ -270,6 +270,45 @@ describe('ollama provider', () => {
     expect(events).toContainEqual({ type: 'tokens', tokens_in: 7, tokens_out: 99 });
   });
 
+  // B round 5 #9 — Math.max(0, ...) clamp. Round 4's Math.trunc pinned the
+  // type but not the sign. Number('-7') passes isFinite and Math.trunc keeps
+  // the sign, so a malformed proxy payload with a negative count propagated
+  // into the accumulator + the tokens event. agent_run_schema.ts z.nonnegative
+  // would catch it downstream but the source should clamp.
+  test('stream() clamps negative token counts to 0', async () => {
+    global.fetch = mock(
+      async () =>
+        new Response(
+          jsonl([
+            { message: { content: 'Hi' }, done: false },
+            {
+              message: { content: '' },
+              done: true,
+              done_reason: 'stop',
+              // Malformed proxy could send negatives. Pre-fix these
+              // propagated as -7 / -3 into the tokens event.
+              prompt_eval_count: -7,
+              eval_count: -3,
+            },
+          ]),
+          { status: 200 },
+        ),
+    ) as never;
+    const events: unknown[] = [];
+    for await (const ev of ollama.stream({
+      system: 'sys',
+      messages: [{ role: 'user', content: 'hi' }],
+      tools: [],
+      maxTokens: 100,
+      apiKey: '',
+      model: 'llama3.1',
+      baseUrl: 'http://example.com:11434',
+    })) {
+      events.push(ev);
+    }
+    expect(events).toContainEqual({ type: 'tokens', tokens_in: 0, tokens_out: 0 });
+  });
+
   test('stream() skips malformed NDJSON lines and still yields done', async () => {
     // Hand-roll the body so we can inject a literally-malformed line between
     // two valid JSON lines (jsonl() JSON-encodes everything, including strings).

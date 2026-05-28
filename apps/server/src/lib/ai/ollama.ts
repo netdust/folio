@@ -54,8 +54,14 @@ function* handleOllamaChunk(
     // for budget accounting). Tokens are intrinsically integer; pin the type.
     const promptEval = Number(chunk.prompt_eval_count);
     const evalCount = Number(chunk.eval_count);
-    if (Number.isFinite(promptEval)) state.tokensIn = Math.trunc(promptEval);
-    if (Number.isFinite(evalCount)) state.tokensOut = Math.trunc(evalCount);
+    // B round 5 #9 — Math.max(0, ...) clamp. Round 4's Math.trunc pinned the
+    // type but not the sign: Number('-7') is -7 (passes isFinite, trunc keeps
+    // the sign), so a malformed proxy payload with a negative count propagated
+    // into the accumulator + the tokens event + the SQLite REAL column. The
+    // agent_run_schema.ts z.nonnegative() is a downstream backstop; this is
+    // defense in depth at the source.
+    if (Number.isFinite(promptEval)) state.tokensIn = Math.max(0, Math.trunc(promptEval));
+    if (Number.isFinite(evalCount)) state.tokensOut = Math.max(0, Math.trunc(evalCount));
     const reason = chunk.done_reason as string | undefined;
     if (reason === 'length') state.stopReason = 'max_tokens';
     else if (reason === 'tool_calls') state.stopReason = 'tool_use';

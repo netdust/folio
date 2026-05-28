@@ -11,6 +11,17 @@
  */
 export type UrlValidationResult = { ok: true } | { ok: false; reason: string };
 
+/**
+ * B round 5 #11 — exported as named symbols so the regex itself can be
+ * unit-tested directly. The existing expanded-IPv6 tests pass via Bun's URL
+ * parser canonicalization (`[0:0:0:0:0:0:0:1]` → `::1`), so a regression in
+ * the expanded regex would NOT have failed those tests — the canonical regex
+ * was doing the work. Direct tests on the regexes themselves give an honest
+ * signal of expanded-form coverage. Threat model mitigation 15.
+ */
+export const EXPANDED_IPV6_LOOPBACK = /^(?:0{1,4}:){7}0{0,3}1$/i;
+export const EXPANDED_IPV6_UNSPECIFIED = /^(?:0{1,4}:){7}0{0,4}$/i;
+
 const BLOCKED_IPV4_PREFIXES = [
   /^0\./, // 0.0.0.0/8 unspecified
   /^10\./, // 10.0.0.0/8 private
@@ -26,8 +37,8 @@ const BLOCKED_IPV4_PREFIXES = [
   // future runtime / proxy may not. Defense in depth.
   //   `0:0:0:0:0:0:0:1` → ::1   (any number of leading-zero quibbles, last quibble = 0-prefix + 1)
   //   `0:0:0:0:0:0:0:0` → ::    (any number of leading-zero quibbles, last quibble = 0-prefix)
-  /^(?:0{1,4}:){7}0{0,3}1$/i, // ::1 expanded
-  /^(?:0{1,4}:){7}0{0,4}$/i, // :: expanded
+  EXPANDED_IPV6_LOOPBACK,
+  EXPANDED_IPV6_UNSPECIFIED,
   /^fe[89ab][0-9a-f]:/i, // IPv6 link-local fe80::/10
   /^fc[0-9a-f]{2}:/i, // IPv6 unique-local fc00::/7
   /^fd[0-9a-f]{2}:/i, //   "
