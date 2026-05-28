@@ -323,7 +323,7 @@ Numbered 23–N, continuing the B sequence. Each mitigation is code-checkable.
 30. **Token budget enforced at three layers, all in agent-runs services + runner:**
     - **Per-run cap** (`agent.frontmatter.max_tokens_per_run`): checked in `runAgent` AFTER each `tokens` event. Exceeding → transition `failed` with `error_reason='budget_exceeded'`, abort provider stream via the existing AbortController on the stream call, post a partial-result comment with `kind=comment` describing the cap hit + what work completed before it.
     - **Per-chain cap** (`FOLIO_MAX_CHAIN_TOKENS`, default 1,000,000): checked in `checkChainGuards`, blocks at poller-claim-time (mitigation 29's pattern).
-    - **Per-workspace + per-agent hourly cap**: `checkRunRateLimits`, called BEFORE `claimNextPlanningRun` (so a workspace at cap doesn't even claim, leaves rows `planning` for the next hour). 
+    - **Per-workspace + per-agent hourly cap**: `checkRunRateLimits`, called BEFORE `claimNextPlanningRun` (so a workspace at cap doesn't even claim, leaves rows `planning` for the next hour).
     - Test (`runner.budget-multilayer.test.ts`): budget-of-1 per-run scenario fires `failed budget_exceeded` after exactly 1 token; budget-of-1 per-chain fires `chain_guard` on the second sibling run; budget-of-1 per-hour blocks claim entirely.
 
 31. **Provider circuit-breaker at poller-claim time.** When `checkProviderHealth(workspaceId, provider)` returns `degraded`, the poller skips claim of `agent_run` rows whose agent's provider is degraded; the rows stay `planning`. The next `agent.run.completed` for any agent on that provider (via a different workspace, or a manual retry) flips the workspace.provider.recovered edge, and pending runs resume claim. Test (`poller.circuit-breaker.test.ts`): seeded 3 consecutive `agent.run.failed provider_error` for `(workspace=w1, provider=anthropic)`, then a 4th planning row appears — poller does NOT claim it; after a manual `completed` event arrives, the same row IS claimed on the next tick.
@@ -336,9 +336,8 @@ Numbered 23–N, continuing the B sequence. Each mitigation is code-checkable.
 
 35. **Dispatcher uses tx-first signature; runner owns the outer tx.** `executeMcpTool(name, args, authContext, tx)` accepts an optional `tx` parameter. The runner passes the tx it's holding for state-machine updates; the dispatcher passes that same tx to the tool handler. When the handler is `create_document`, the doc insert + event emit happen on the runner's tx. On runner failure post-dispatch, the tx rolls back atomically — no half-applied tool effect. When the runner does NOT hold a tx (the `runAgent` loop releases the tx between provider events to avoid blocking the DB), the dispatcher opens its own short-lived tx around the handler call. Tested via `mcp-dispatch.tx-scope.test.ts`: a handler that throws after a partial DB write leaves the runner's tx in a consistent rollback.
 
-36. **`claimNextPlanningRun` uses `BEGIN IMMEDIATE` + UPDATE-with-status-predicate.** SQL pattern:
+36. **`claimNextPlanningRun` uses a single UPDATE-with-status-predicate as the atomic claim.** SQL pattern:
     ```sql
-    BEGIN IMMEDIATE;
     UPDATE documents
        SET frontmatter = json_set(frontmatter, '$.status', 'running', '$.worker_started_at', ?)
      WHERE id = (
@@ -349,10 +348,11 @@ Numbered 23–N, continuing the B sequence. Each mitigation is code-checkable.
         LIMIT 1
      ) AND json_extract(frontmatter, '$.status') = 'planning'
     RETURNING *;
-    COMMIT;
     ```
     The `AND ... = 'planning'` in the outer UPDATE WHERE is load-bearing — between the inner SELECT and the UPDATE, another claimer's COMMIT may have flipped the status. `RETURNING *` lets us distinguish row-claimed (1 row returned) from row-already-claimed (0 rows returned).
-    
+
+    **Transaction isolation note (plan-correction 2026-05-28, post-C.1 review).** An earlier draft of this mitigation wrapped the claim in `BEGIN IMMEDIATE`. The shipped implementation (`apps/server/src/services/agent-runs.ts::claimNextPlanningRun`) uses Drizzle's bun-sqlite `db.transaction(...)` default (DEFERRED). This is acceptable AS LONG AS the outer `AND status='planning'` predicate is preserved — that predicate is the load-bearing race guard, not the isolation level. SQLite's writer lock serializes the UPDATE statements; the predicate then ensures only one writer's UPDATE matches. Verified end-to-end by the 100-iteration race test at `agent-runs.test.ts::claimNextPlanningRun > exactly one of two concurrent claimers wins the same row`. v1 is single-process per CLAUDE.md — multi-process semantics are out of scope. If a future refactor introduces a SELECT-then-UPDATE pattern (e.g. richer preflight inside the claim tx), the new pattern MUST either re-derive the predicate guard or escalate to `BEGIN IMMEDIATE`; document the choice in the commit.
+
     Test (`agent-runs.claim-race.test.ts`): TWO Bun async functions race on `claimNextPlanningRun(tx1)` and `claimNextPlanningRun(tx2)` against the same DB; exactly one returns the row, the other returns null. Run 100 iterations to defeat scheduler luck. (Per `[[mock-the-wire-not-the-response]]`, this test does NOT mock the DB; it uses `makeTestApp()` with a real SQLite.)
 
 37. **Orphan-recovery skips rows whose `worker_started_at` is fresh OR whose status is no longer `running`.** `recoverOrphanRuns(tx, {staleThresholdMs})` query:
@@ -463,27 +463,27 @@ Numbered 23–N, continuing the B sequence. Each mitigation is code-checkable.
 **Steps:**
 
 - [ ] **Step 1 — Extend `DocumentType` union.**
-  
+
   Edit `apps/server/src/services/documents.ts:47`:
   ```ts
   export type DocumentType = 'work_item' | 'page' | 'agent' | 'trigger' | 'agent_run';
   ```
-  
+
   Run `bun x tsc --noEmit -p .` from `apps/server/`. Expected: clean. Existing call sites that match on `type` already handle defaults via discriminated-union or default-branch; this addition should be type-additive only. If any call site narrows on the existing 4-value union and breaks, write down which file:line and stop — that is a hidden assumption the plan needs to address before C-1 proceeds.
 
 - [ ] **Step 2 — Write the failing test for createRun (happy path).**
-  
+
   Create `apps/server/src/services/agent-runs.test.ts`:
   ```ts
   import { describe, expect, it } from 'bun:test';
   import { makeTestApp } from '../test/harness.ts';
   import { createRun } from './agent-runs.ts';
-  
+
   describe('createRun', () => {
     it('inserts an agent_run document at status=planning and emits agent.run.started', async () => {
       const { db, seed } = await makeTestApp({ withAgent: true });
       const { workspace, project, agent } = seed;
-  
+
       const result = await db.transaction(async (tx) => {
         return createRun(tx, {
           workspace,
@@ -498,40 +498,40 @@ Numbered 23–N, continuing the B sequence. Each mitigation is code-checkable.
           },
         });
       });
-  
+
       expect(result.document.type).toBe('agent_run');
       expect((result.document.frontmatter as any).status).toBe('planning');
       expect(result.document.slug).toMatch(/^[a-z0-9-]+-\d{4}-\d{2}-\d{2}t\d{2}-\d{2}-\d{2}-[a-z0-9]{8}$/);
-  
+
       const events = await db.query.events.findMany({ where: (e, { eq }) => eq(e.kind, 'agent.run.started') });
       expect(events).toHaveLength(1);
       expect(events[0].documentId).toBe(result.document.id);
     });
   });
   ```
-  
+
   Run: `bun test src/services/agent-runs.test.ts`. Expected: FAIL with `Cannot find module './agent-runs.ts'`.
 
 - [ ] **Step 3 — Create `services/agent-runs.ts` with the minimal createRun.**
-  
+
   Create the file with the createRun function. Re-uses `services/documents.ts::createDocument` for the underlying insert (per the plan's "Reuses the existing documents service for the underlying insert + slug-uniqueness check"). Constructs the slug as `<agentSlug>-<isoTimestamp-with-dashes-not-colons>-<nanoid(8)>`. Frontmatter populated from args + `agent.frontmatter` (provider/model/system_prompt/max_tokens copied at run-start so a later agent edit doesn't mutate the historical run). Calls `agentRunFrontmatterSchema.parse(frontmatter)` before insert to fail fast on schema drift.
-  
+
   Run: `bun test src/services/agent-runs.test.ts`. Expected: PASS.
 
 - [ ] **Step 4 — Add failing tests for transitionRun (happy + state machine + atomic clear).**
-  
+
   Append to the test file:
   - `it('transitions planning → running and emits agent.run.running')`
   - `it('throws INVALID_RUN_TRANSITION on illegal moves')` — assert `from`/`to` are present on the error
-  - `it('clears worker_started_at on terminal status in one read')` — seed a row at running with worker_started_at set, transition to completed, read in a SECOND transaction, assert both `frontmatter.status === 'completed'` AND `frontmatter.worker_started_at === undefined`
+  - `it('clears worker_started_at on terminal status in one read')` — seed a row at running with worker_started_at set, transition to completed, read in a SECOND transaction, assert both `frontmatter.status === 'completed'` AND `frontmatter.worker_started_at` is cleared. (Plan-correction 2026-05-28, post-C.1 review: an earlier draft said `=== undefined`. The shipped implementation uses `json_set(..., '$.worker_started_at', NULL)` which round-trips as JSON null on read, not the `undefined` of a missing key. Either shape satisfies mitigation 40's goal — "no observable intermediate state where status=terminal AND worker_started_at is still set" — because both `null` and `undefined` are falsy in JS predicates. Test should use `toBeFalsy()` or `toBeNull()`, not `toBeUndefined()`.)
   - `it('rejects unknown error_reason via Zod')` — transitionRun(..., { errorReason: 'made_up_reason' }) throws
   - `it('runs error_detail through sanitizeProviderError')` — pass a detail containing `"apiKey:sk-abc123 baseUrl:https://attacker"`, verify the persisted `error_detail` has both fragments stripped (re-use the B sanitizer's test fixture)
   - `it('writes documents.status column and frontmatter.status in lockstep')` — assert both are equal after the UPDATE
-  
+
   Run: `bun test src/services/agent-runs.test.ts`. Expected: 1 PASS (createRun), 6 FAIL (transitionRun cases).
 
 - [ ] **Step 5 — Implement transitionRun.**
-  
+
   Implementation outline:
   ```ts
   export async function transitionRun(
@@ -541,7 +541,7 @@ Numbered 23–N, continuing the B sequence. Each mitigation is code-checkable.
   ): Promise<Document> {
     const row = await tx.query.documents.findFirst({ where: (d, { eq, and }) => and(eq(d.id, runId), eq(d.type, 'agent_run')) });
     if (!row) throw new HTTPException(404, { message: 'agent_run not found', cause: { code: 'AGENT_RUN_NOT_FOUND' } });
-  
+
     const from = (row.frontmatter as AgentRunFrontmatter).status;
     if (!isValidTransition(from, args.newStatus)) {
       throw new HTTPException(409, {
@@ -549,11 +549,11 @@ Numbered 23–N, continuing the B sequence. Each mitigation is code-checkable.
         cause: { code: 'INVALID_RUN_TRANSITION', from, to: args.newStatus },
       });
     }
-  
+
     const isTerminal = TERMINAL_STATUSES.includes(args.newStatus);
     const errorReason = args.errorReason ? runErrorReasonSchema.parse(args.errorReason) : undefined;
     const errorDetail = args.errorDetail ? sanitizeProviderError(args.errorDetail) : undefined;
-  
+
     // ONE UPDATE — status flip + completed_at + worker_started_at clear + error_reason/detail in a single json_set.
     await tx.update(documents)
       .set({
@@ -569,7 +569,7 @@ Numbered 23–N, continuing the B sequence. Each mitigation is code-checkable.
         updatedAt: new Date().toISOString(),
       })
       .where(eq(documents.id, runId));
-  
+
     await emitEvent(tx, {
       kind: `agent.run.${args.newStatus}` as EventKind,
       workspaceId: row.workspaceId,
@@ -578,23 +578,23 @@ Numbered 23–N, continuing the B sequence. Each mitigation is code-checkable.
       actorEmail: null,           // C.2's runner will pass the agent's identity; transitionRun is dispatched by the runner
       payload: { from, to: args.newStatus, error_reason: errorReason ?? null },
     });
-  
+
     const updated = await tx.query.documents.findFirst({ where: eq(documents.id, runId) });
     return updated!;
   }
   ```
-  
+
   Imports: `documents, eq, sql` from drizzle + schema, `HTTPException` from hono, `runErrorReasonSchema, isValidTransition, TERMINAL_STATUSES, type RunStatus, type RunErrorReason, type AgentRunFrontmatter` from `../lib/agent-run-schema.ts`, `sanitizeProviderError` from `../lib/ai/sanitize-error.ts`, `emitEvent, type EventKind` from `../lib/event-bus.ts`.
-  
+
   Run: `bun test src/services/agent-runs.test.ts`. Expected: ALL 7 PASS.
 
 - [ ] **Step 6 — Add incrementTokens helper + test.**
-  
+
   Tests (append):
   - `it('atomically increments tokens_in and tokens_out')` — call with `{ in: 10, out: 5 }` twice serially, assert final = `{ tokens_in: 20, tokens_out: 10 }`.
   - `it('handles increment-by-zero (no-op)')` — verify mitigation against `[[falsy-zero-bug-class]]`.
   - `it('initializes from zero when frontmatter has no tokens_in/out keys')` — seed an old row, COALESCE handles null.
-  
+
   Implementation (atomic SQL JSON-patch per mitigation 38):
   ```ts
   export async function incrementTokens(
@@ -610,17 +610,17 @@ Numbered 23–N, continuing the B sequence. Each mitigation is code-checkable.
         updatedAt: new Date().toISOString(),
       })
       .where(and(eq(documents.id, runId), eq(documents.type, 'agent_run')));
-  
+
     const row = await tx.query.documents.findFirst({ where: eq(documents.id, runId) });
     const fm = row!.frontmatter as AgentRunFrontmatter;
     return { tokens_in: fm.tokens_in, tokens_out: fm.tokens_out };
   }
   ```
-  
+
   Run: `bun test src/services/agent-runs.test.ts`. Expected: 10 PASS.
 
 - [ ] **Step 7 — Run full server suite + typecheck.**
-  
+
   ```
   bun test
   bun x tsc --noEmit -p .
@@ -628,25 +628,25 @@ Numbered 23–N, continuing the B sequence. Each mitigation is code-checkable.
   Expected: suite at 716 + 10 new = ~726, 0 fail. Typecheck clean. If `DocumentType`-narrowing breakage shows up in another file, fix at root (extend the narrow), do not paper over with a cast.
 
 - [ ] **Step 8 — Invoke `netdust-core:testing-workflow` and report.**
-  
+
   Per the ntdst-execute-with-tests addendum: invoke the Skill tool with `netdust-core:testing-workflow`, walk its task-complete checklist, then emit the Test-evidence + STATUS blocks at the end of the report.
 
 - [ ] **Step 9 — Commit.**
-  
+
   ```bash
   git add apps/server/src/services/agent-runs.ts apps/server/src/services/agent-runs.test.ts apps/server/src/services/documents.ts
   git commit -m "phase-3: C-1 services/agent-runs — createRun + transitionRun + incrementTokens
-  
+
   - Extends DocumentType union with 'agent_run' (migration 0012 latent fix)
   - createRun inserts row via createDocument, auto-slug, emits agent.run.started
   - transitionRun: state machine guard, atomic status+worker_started_at clear,
     error_reason from closed enum, error_detail through sanitizeProviderError
   - incrementTokens: atomic SQL json_set, handles zero (no falsy-zero bug)
-  
+
   Threat-model mitigations: 23, 28, 39, 40 (Sub-phase C extension).
-  
+
   Suite: 716 → ~726, 0 fail. tsc clean.
-  
+
   Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
   ```
 
@@ -669,7 +669,7 @@ Numbered 23–N, continuing the B sequence. Each mitigation is code-checkable.
 **Steps:**
 
 - [ ] **Step 1 — Write failing tests.**
-  
+
   Append 6 tests:
   - `getActiveRun returns most-recent non-terminal run`
   - `getActiveRun returns null when only terminal runs exist`
@@ -677,11 +677,11 @@ Numbered 23–N, continuing the B sequence. Each mitigation is code-checkable.
   - `getPendingApprovalRun returns the awaiting_approval row only`
   - `listRuns narrows by callerAgentProjectsAllowList` (mitigation 24): seed runs in p1 and p2, call with `{ callerAgentProjectsAllowList: ['p1-id'] }`, assert only p1 rows return; call with `['*']` → all return; call with `[]` → empty array.
   - `EXPLAIN QUERY PLAN of getActiveRun uses documents_runs_by_status_idx` — run `tx.run(sql\`EXPLAIN QUERY PLAN <getActiveRun's query>\`)` and assert the result.detail strings include the index name.
-  
+
   Run: `bun test src/services/agent-runs.test.ts`. Expected: FAIL on the 6 new cases.
 
 - [ ] **Step 2 — Implement.**
-  
+
   ```ts
   export async function getActiveRun(tx: DBOrTx, args: { parentId: string; agentSlug: string }) {
     return tx.query.documents.findFirst({
@@ -695,13 +695,13 @@ Numbered 23–N, continuing the B sequence. Each mitigation is code-checkable.
     });
   }
   ```
-  
+
   Similar shape for getPendingApprovalRun and listRuns. Allow-list narrowing in listRuns: when `callerAgentProjectsAllowList` provided + does not contain `'*'`, add an `inArray(documents.projectId, [...allowList])` predicate. When the list is empty (`[]`), short-circuit with an empty return — don't issue a SQL query with `WHERE projectId IN ()` (SQLite parse error in some drivers).
-  
+
   Run: `bun test src/services/agent-runs.test.ts`. Expected: ALL PASS.
 
 - [ ] **Step 3 — Full suite + typecheck + workflow invocation + commit.**
-  
+
   As C-1 Steps 7-9. Suite: ~726 → ~732. Commit message: `phase-3: C-2 services/agent-runs — getActiveRun + listRuns with allow-list narrowing`. Mitigations: 23, 24.
 
 ---
@@ -722,7 +722,7 @@ Numbered 23–N, continuing the B sequence. Each mitigation is code-checkable.
 **Steps:**
 
 - [ ] **Step 1 — Write failing tests including the race test.**
-  
+
   Append 7 tests:
   - `claimNextPlanningRun returns null when no planning rows exist`
   - `claimNextPlanningRun claims oldest planning row by created_at ASC, sets status=running + worker_started_at`
@@ -749,11 +749,11 @@ Numbered 23–N, continuing the B sequence. Each mitigation is code-checkable.
   - `recoverOrphanRuns skips rows with fresh worker_started_at`
   - `recoverOrphanRuns skips rows whose status is no longer running` — seed a row at running with stale worker_started_at, then transition it to completed in a separate tx, then call recoverOrphanRuns; assert 0 rows recovered (mitigation 37's status='running' predicate is load-bearing).
   - `countPendingPlanning returns count of status=planning rows`
-  
+
   Run: `bun test src/services/agent-runs.test.ts`. Expected: 7 new FAIL.
 
 - [ ] **Step 2 — Implement.**
-  
+
   `claimNextPlanningRun`:
   ```ts
   export async function claimNextPlanningRun(tx: DBOrTx): Promise<Document | null> {
@@ -782,7 +782,7 @@ Numbered 23–N, continuing the B sequence. Each mitigation is code-checkable.
     return (result[0] as Document | undefined) ?? null;
   }
   ```
-  
+
   `recoverOrphanRuns`:
   ```ts
   export async function recoverOrphanRuns(
@@ -806,7 +806,7 @@ Numbered 23–N, continuing the B sequence. Each mitigation is code-checkable.
          AND json_extract(frontmatter, '$.worker_started_at') < ${threshold}
        RETURNING id
     `) as Array<{ id: string }>;
-    
+
     // Emit agent.run.failed for each recovered row — per Sub-phase A event contract.
     for (const r of rows) {
       const row = await tx.query.documents.findFirst({ where: eq(documents.id, r.id) });
@@ -822,7 +822,7 @@ Numbered 23–N, continuing the B sequence. Each mitigation is code-checkable.
     return rows.map(r => r.id);
   }
   ```
-  
+
   `countPendingPlanning`:
   ```ts
   export async function countPendingPlanning(tx: DBOrTx): Promise<number> {
@@ -834,11 +834,11 @@ Numbered 23–N, continuing the B sequence. Each mitigation is code-checkable.
     return count;
   }
   ```
-  
+
   Run: `bun test src/services/agent-runs.test.ts`. Expected: ALL PASS. The race test in particular MUST pass — if it fails even once across 100 iterations, mitigation 36 is broken and the implementation needs the `BEGIN IMMEDIATE` raised explicitly via `db.exec('BEGIN IMMEDIATE')` rather than relying on Drizzle's default.
 
 - [ ] **Step 3 — Full suite + typecheck + workflow invocation + commit.**
-  
+
   As before. Suite: ~732 → ~739. Commit: `phase-3: C-3 services/agent-runs — atomic claim + orphan recovery + count`. Mitigations: 36, 37.
 
 ---
@@ -859,7 +859,7 @@ Numbered 23–N, continuing the B sequence. Each mitigation is code-checkable.
 **Steps:**
 
 - [ ] **Step 1 — Write failing tests.**
-  
+
   Append:
   - `checkRunRateLimits returns ok when under both caps`
   - `checkRunRateLimits returns rate_limited (workspace) when workspace cap hit`
@@ -886,13 +886,13 @@ Numbered 23–N, continuing the B sequence. Each mitigation is code-checkable.
     ```
 
 - [ ] **Step 2 — Implement.**
-  
+
   Both functions query the events table (`agent.run.started`) for the rate-limit and the documents table (filtered by chain_id) for the chain guards. The chain-guard query MUST be a single SELECT with `count(*) AS fanout, (max - min) AS duration_ms, sum(...) AS tokens` so the EXPLAIN-plan check holds.
-  
+
   Run: `bun test src/services/agent-runs.test.ts`. Expected: ALL PASS.
 
 - [ ] **Step 3 — Full suite + typecheck + workflow invocation + commit.**
-  
+
   Suite: ~739 → ~749. Commit: `phase-3: C-4 services/agent-runs — rate limits + chain guards + EXPLAIN-plan volume test`. Mitigations: 29, 30 (partial — full enforcement at runner/poller in C.2/C.3).
 
 ---
@@ -922,18 +922,18 @@ Numbered 23–N, continuing the B sequence. Each mitigation is code-checkable.
 **Steps:**
 
 - [ ] **Step 1 — Write migration 0013 + update journal.**
-  
+
   Create `apps/server/src/db/migrations/0013_workspace_provider_health.sql`:
   ```sql
   ALTER TABLE workspaces ADD COLUMN provider_health JSON DEFAULT '{}' NOT NULL;
   ```
-  
+
   Update `apps/server/src/db/migrations/meta/_journal.json` — add the entry per `[[drizzle-migration-journal]]`. Pre-commit hook from A-4b will refuse to commit if the journal is not updated.
-  
+
   Update the Drizzle schema in `apps/server/src/db/schema.ts` to expose `providerHealth: text('provider_health', { mode: 'json' }).$type<Record<string, { status: 'healthy' | 'degraded'; consecutive_failures: number }>>().notNull().default(sql\`('{}')\`)`.
 
 - [ ] **Step 2 — Write failing tests.**
-  
+
   Append:
   - `checkProviderHealth returns healthy with 0 failures when no events exist`
   - `checkProviderHealth returns degraded after 3 consecutive provider_error failures` (tipping edge)
@@ -946,13 +946,13 @@ Numbered 23–N, continuing the B sequence. Each mitigation is code-checkable.
   - `maybeEmitProviderHealthEdge keeps SSE delivery fire-and-forget` — register a slow event-bus subscriber (resolves after 1s), assert transitionRun + tipping edge complete in < 100ms.
 
 - [ ] **Step 3 — Implement.**
-  
+
   Wire `maybeEmitProviderHealthEdge` into transitionRun's terminal-status branch. Update workspaces.provider_health in the same tx (one UPDATE on the workspaces row inside the same tx as the agent_run UPDATE).
-  
+
   Run: `bun test src/services/agent-runs.test.ts`. Expected: ALL PASS.
 
 - [ ] **Step 4 — Full suite + typecheck + workflow invocation + commit.**
-  
+
   Suite: ~749 → ~758. Commit: `phase-3: C-5 services/agent-runs — provider health + tipping-edge emission`. Mitigations: 45, 46, 47.
 
 ---
@@ -972,7 +972,7 @@ Numbered 23–N, continuing the B sequence. Each mitigation is code-checkable.
 **Steps:**
 
 - [ ] **Step 1 — Write failing tests.**
-  
+
   Append:
   - `ensureRunsTable creates a runs table on first call with 6 statuses + 3 views`
   - `ensureRunsTable is idempotent: second call returns the same id, no duplicate events`
@@ -982,13 +982,13 @@ Numbered 23–N, continuing the B sequence. Each mitigation is code-checkable.
   - `nextChainId result always satisfies agentRunFrontmatterSchema.chain_id` (z.string().uuid() compatibility test)
 
 - [ ] **Step 2 — Implement.**
-  
+
   Re-uses `services/tables.ts::createTable`, `services/statuses.ts::createStatus`, `services/views.ts::createView` for the per-row inserts. Idempotency keyed on `(workspaceId, projectId, slug='runs')`.
-  
+
   Run: `bun test src/services/agent-runs.test.ts`. Expected: ALL PASS.
 
 - [ ] **Step 3 — Full suite + typecheck + workflow invocation + commit.**
-  
+
   Suite: ~758 → ~764. Commit: `phase-3: C-6 services/agent-runs — lazy runs-table seed + chain_id helper`. Mitigations: 23 (verified inherited), 29 (chain_id format locked).
 
 ---
@@ -1007,7 +1007,7 @@ After C-6 commits:
   Expected: server ~764 / 1-skip / 0-fail, web 559 / 8-skip / 0-fail, shared 51 / 0-fail. Place `.last-integration` marker at HEAD.
 
 - [ ] **/code-review (medium effort, --base=c2796e9).** The base is the threat-model-extension commit; review compares only C.1's diff. Reviewer prompt MUST include:
-  
+
   > "Verify code against the threat model in the plan (sections: `## Threat model` AND `## Threat model — Sub-phase C extension`). Mitigations 23, 24, 28, 29 (chain_id format), 36, 37, 38, 39 (closed enum usage), 40, 45, 46, 47 are bound to Sub-phase C.1. Report which are in place, which are missing, which are out of scope per the deferrals lists. Round budget: 2 medium-effort rounds (per readiness handoff §How to use)."
 
 - [ ] **/evaluate (retro).** If any mitigations are missing OR new attack classes surfaced, plan-correct the threat model FIRST (extend to mitigation 48+), then fix the code.

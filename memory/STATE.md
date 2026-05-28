@@ -1,51 +1,72 @@
 # Folio — STATE
 
-_Last updated: 2026-05-28 late evening (Phase 3 Sub-phase C.1 partially shipped — C-1..C-4 done on `phase-3/agent-runner`; C-5 is next executable task; C.2 + C.3 still need plan-correction expansion before they can be picked up)._
+_Last updated: 2026-05-28 late evening (Phase 3 Sub-phase C.1 COMPLETE + review-closed on `phase-3/agent-runner` — 6 tasks C-1..C-6 shipped + 2-round /code-review verified all 12 bound mitigations + 1 A1 audit-trail fixup + 2 plan corrections; next blocking step is plan-correction commit expanding C-7..C-9 task bodies before Sub-phase C.2 work)._
 
 Living snapshot of where the project actually is. Read at session start. Update at session end if anything below changed.
 
-## Next up — Sub-phase C.1 in progress (C-5 next)
+## Next up — C.1 review-closed; C.2 expansion required before code work
 
-**Next executable task**: **C-5** (`checkProviderHealth + getProviderHealth + tipping-edge wiring`, mitigations 45/46/47). Plan body at `docs/superpowers/plans/2026-05-27-phase-3-agent-runner.md` line 900. Requires migration `0013_workspace_provider_health.sql` adding `provider_health JSON` column, schema update, three new functions, and wiring `maybeEmitProviderHealthEdge` into `transitionRun`'s terminal branch. 9 tests expected.
+**C.1 is shipped + reviewed.** Two independent medium-effort /code-review rounds against the threat model verified all 12 C.1-bound mitigations (23, 24, 28, 29, 36, 37, 38, 39, 40, 45, 46, 47) are in place with file/line evidence. Zero correctness defects. One audit-trail tightening (`runErrorReasonSchema.enum.worker_crash` replacing the raw literal in `recoverOrphanRuns`) shipped as A1. Two plan corrections shipped (mitigation 36 BEGIN-IMMEDIATE-vs-DEFERRED, mitigation 40 worker_started_at null-vs-undefined acceptance text). Two robustness follow-ups handed to C.2/D via `tasks/retro-follow-ups.md` (events.document_id FK + ensureRunsTable race).
 
-**Branch state at session start (Phase 3 C-5 onwards):**
-- HEAD: `bc3aa67` (C-4 shipped 2026-05-28 late evening)
-- Server suite: **764 pass / 1 skip / 0 fail**
+**Next blocking step**: **plan-correction commit expanding C-7..C-9 task bodies** before ANY C.2 code work. Per plan §"Sub-phase C.1 close-out" line 1015: *"Plan-correction commit: expand C.2 (runner + dispatcher) task bodies. Following the same per-task format as C.1 above, with per-task mitigation pointers into the C-extension threat model."*
+
+C-7..C-9 today are header-only outlines at plan lines 3818–3845 (no Steps / no Files / no Tests body). Dispatching against them is the failure mode the C-section audit caught (handoff `8beec5e`). The plan-correction must produce executable bodies in the same shape as C.1's expanded section (lines 423–993).
+
+**Branch state at session start (Phase 3 C.2 onwards):**
+- HEAD: TBD (will land after this session's commits — `b4d84c1` is C-6, plus the A1 + plan-correction + retro-follow-ups + STATE updates from this session)
+- Server suite: **782 pass / 1 skip / 0 fail** (C.1 complete delta: 716 → 782 = +66)
 - Web suite: **559 pass / 8 skip / 0 fail** (unchanged through C.1 — server + shared only)
 - Shared: **51 / 0 fail**
 - TSC: clean both apps for touched files
-- `.last-integration` marker: `932c82a` (set 2026-05-28 by /integration gate after C-3)
+- `.last-integration` marker: `666635a` (set after C-6 by /integration gate)
 
 ### Plan-expansion status (DON'T FORGET — gates the next sub-phase)
 
 The Sub-phase C plan is **partially expanded**. Tasks have an executable body (Steps + Files + Tests + Commit) ONLY where listed below. Tasks without a body must be expanded via a plan-correction commit (same per-task format as C.1) BEFORE they can be picked up by `executing-plans` or subagents.
 
-- **C.1 services (C-1..C-6)** — EXPANDED ✓ in `23ae2d1`. Bodies at plan §"Sub-phase C.1 — Services layer (expanded task bodies — written 2026-05-28)", lines 423–993.
-  - C-1 shipped `07869cc` · C-2 shipped `a8ad551` · C-3 shipped `9e217ea` · C-4 shipped `bc3aa67` · **C-5 next** · C-6 after C-5.
-- **C.2 runner+dispatcher (C-7..C-9)** — NOT EXPANDED. Original `### Task C-N` outlines at plan lines 3818–3845 are header-only (no Steps / no Files / no Tests body). The C-6 close-out (plan line 1015) gates this: *"Plan-correction commit: expand C.2 (runner + dispatcher) task bodies. Following the same per-task format as C.1 above, with per-task mitigation pointers into the C-extension threat model."*
+- **C.1 services (C-1..C-6)** — EXPANDED ✓ in `23ae2d1`. Bodies at plan §"Sub-phase C.1 — Services layer (expanded task bodies — written 2026-05-28)", lines 423–993. **ALL 6 SHIPPED + REVIEW-CLOSED.**
+  - C-1 `07869cc` · C-2 `a8ad551` · C-3 `9e217ea` · C-4 `bc3aa67` · C-5 `11f74a7` · C-6 `b4d84c1`.
+- **C.2 runner+dispatcher (C-7..C-9)** — NOT EXPANDED. Original `### Task C-N` outlines at plan lines 3818–3845 are header-only (no Steps / no Files / no Tests body). **THIS IS THE NEXT GATING STEP.**
 - **C.3 wiring+triggers (C-10..C-13)** — NOT EXPANDED. Same shape: header-only outlines at plan lines 3846–3878. Gated by the C.2 close-out (a parallel plan-correction commit will be needed before C.3 can start).
 
 **What this means in practice for the next session(s):**
-1. C-5 + C-6 can ship immediately — bodies are written.
-2. After C-6 closes, controller MUST write a plan-correction commit expanding C-7..C-9 task bodies (per-task Steps + Files + Tests + Commit) before any C.2 work. The Sub-phase C close-out step explicitly says this.
+1. C.1 is DONE. /integration green at HEAD, 2-round /code-review verified.
+2. Controller MUST write a plan-correction commit expanding C-7..C-9 task bodies (per-task Steps + Files + Tests + Commit) before any C.2 code touches. Recommended approach: invoke `superpowers:writing-plans` against the existing C-7/C-8/C-9 outlines + the threat model + the C.1-R-1/R-2 retro follow-ups; produce the same shape as C.1's expanded section.
 3. Same again before C.3 — plan-correction expanding C-10..C-13.
 4. NEVER dispatch a subagent against an unexpanded `### Task C-N` outline — that was the failure mode the C-section audit caught (handoff `8beec5e`).
 
-### Sub-phase C.1 progress detail
+### Sub-phase C.1 progress detail (COMPLETE)
 
-Five commits shipped on top of the readiness handoff `2b9e768`:
-- `07869cc` C-1 — createRun + transitionRun + incrementTokens (+3 quality follow-ups: `2685711`/`d400aa8`/`962d4e7`/`b83340b`)
-- `a8ad551` C-2 — getActiveRun + getPendingApprovalRun + listRuns (+1 quality follow-up `58fcd3b` — validate `since` + harden wildcard test + tighten status type)
-- `9e217ea` C-3 — claimNextPlanningRun + recoverOrphanRuns + countPendingPlanning (race-test 100 iterations / mitigation 36 + 37)
-- `bc3aa67` C-4 — checkRunRateLimits + checkChainGuards + 2k-row EXPLAIN-plan volume guard (mitigation 29 + 30)
+Six tasks shipped on top of the readiness handoff `2b9e768`. Plus A1 audit-trail fixup + 2 plan corrections + retro-follow-ups + STATE tick:
 
-Test counts evolved: 716 (B close) → 744 (C-1) → 752 (C-2 quality) → 752 (C-3) — wait, **C-3 ship was 752, C-4 ship is 764**. Net Sub-phase C.1 delta so far: +48 tests across server suite (716 → 764).
+| Task | Commit | Tests | Mitigations |
+|---|---|---|---|
+| C-1 createRun + transitionRun + incrementTokens | `07869cc` (+ 3 quality follow-ups) | +20 | 23, 28, 39, 40 |
+| C-2 getActiveRun + getPendingApprovalRun + listRuns | `a8ad551` (+ `58fcd3b` quality) | +8 | 23, 24 |
+| C-3 claimNextPlanningRun + recoverOrphanRuns + countPendingPlanning | `9e217ea` | +8 | 36, 37 |
+| C-4 checkRunRateLimits + checkChainGuards + EXPLAIN volume | `bc3aa67` | +12 | 29 (partial), 30 (helper) |
+| C-5 checkProviderHealth + getProviderHealth + tipping-edge | `11f74a7` + migration 0013 | +11 | 45, 46, 47 |
+| C-6 ensureRunsTable + nextChainId | `b4d84c1` | +7 | 23 inherited, 29 chain_id |
+| A1 worker_crash → runErrorReasonSchema.enum | (this session) | 0 (refactor) | 39 audit |
+
+Server suite delta: 716 (B close) → **782 (C.1 complete)** = **+66 tests**.
 
 **Plan-vs-code drift caught in C.1** (documented in commit bodies, captured in `memory/lessons.md`):
 - C-1: plan's `txWithEvents` shape was loose; real C-1 manages its own tx via `txWithEvents(db, ...)`. Same convention for transitionRun.
 - C-2: plan's `since` filter silently dropped invalid timestamps; quality fix throws `INVALID_QUERY (422)` matching `listComments`.
 - C-3: plan's race-test cleanup used `errorReason: 'cancel_requested'` — actual enum is `'cancelled'`. `transitionRun(tx, ...)` shorthand in plan was wrong (real signature `transitionRun(runId, args)`).
 - C-4: plan put `tx` first in `checkRunRateLimits(tx, args)` — actual convention is `(args, tx?)` matching getActiveRun/listRuns. Helpers stayed pure (env-default reads deferred to caller in C-10), not internal.
+- C-5: plan returned `{old, new}`; `new` is reserved JS keyword — renamed to `{current, next}`. Migration plan said `JSON` type; SQLite has no JSON type — used TEXT + Drizzle `mode: 'json'`.
+- C-6: plan said "re-use services/tables.ts::createTable, statuses.ts::createStatus, views.ts::createView" — those functions DON'T EXIST. Followed `lib/seed-project-defaults.ts` precedent (direct inserts + manual emitEvent).
+- Plan corrections shipped this session (post-C.1 review): mitigation 36 (BEGIN IMMEDIATE → DEFERRED-with-load-bearing-status-predicate, documented why), mitigation 40 acceptance text (worker_started_at "=== undefined" → "null OR cleared", documented why JSON null is correct).
+
+### C.1 code-review findings deferred to other sub-phases
+
+Captured in `tasks/retro-follow-ups.md` (this session) as **C.1-R-1**, **C.1-R-2**, **C.1-R-3**:
+
+- **C.1-R-1 (→ Sub-phase D)**: `events.document_id` has no FK to `documents.id`. `checkProviderHealth` INNER JOIN drops events whose target document was individually deleted. Surfaces when `DELETE /runs/:id` lands.
+- **C.1-R-2 (→ Sub-phase C.2)**: `ensureRunsTable` existence-check + INSERT is not race-safe for concurrent first-callers. Runner-loop author should pick fix (a/b/c).
+- **C.1-R-3 (housekeeping)**: `tasks/todo.md` C-section is stale — update-in-place or retire.
 
 **Earlier C-section history (pre-C.1):**
 - `2b9e768` Sub-phase C readiness handoff (lays out C.1/C.2/C.3 split + 16-attack inventory + 8 known-unknowns)
