@@ -48,6 +48,77 @@ Other reconciliations:
 
 ---
 
+## Threat model
+
+> Added 2026-05-28 mid-Sub-phase-B after two rounds of `/code-review` surfaced ~30 security-class findings on the BYOK + arbitrary-URL surface. The plan as originally written had functional requirements ("BYOK is libsodium-encrypted") but no security spec. Without one, every `/code-review` round was independently re-discovering the attack surface. This section is the **convergence target** for security reviews on Sub-phase B + C — `/code-review` checks the code against these named mitigations instead of free-form bug hunting.
+
+### What we're defending
+
+- AI provider API keys (`apiKey`) — stored libsodium-encrypted at rest, server-side decryption only.
+- The decryption secret (`FOLIO_MASTER_KEY` env var) — never logged, never returned in responses.
+- The server's network position — the host can reach private services (databases, internal APIs, cloud metadata endpoints) that no outsider should reach via Folio.
+- Workspace integrity — one workspace's keys must not leak to another workspace, or to a workspace member who shouldn't have admin role.
+
+### Who we're defending against
+
+1. **External attackers** with no Folio account — can hit any public endpoint, can supply any body content to public routes (none of the keys-related routes are public, but the attack surface includes accidentally-public routes from misconfiguration).
+2. **Workspace members with write access to /ai-keys** but not admin role — must not be able to exfiltrate other members' keys.
+3. **Workspace admins phished into testing/saving a key with attacker-controlled parameters** — admin clicks "Test" or "Save" with a baseUrl field they didn't realize was malicious.
+4. **Malicious agents** (Sub-phase C and later) running with workspace-scoped tokens — must not be able to test-key, exfiltrate keys, or steer baseUrl to leak credentials during agent runs.
+5. **Insider threat with stolen credentials** is OUT of scope — if an attacker has a workspace admin's session, Folio can't defend against that. Mitigations stop above this line.
+
+### Attacks to defend against
+
+Each attack listed has a mitigation in the next section. Numbering pairs across the two sections.
+
+1. **SSRF via baseUrl**: an attacker supplies a `baseUrl` that resolves to a private network address (RFC1918 ranges, link-local 169.254.0.0/16, loopback 127.0.0.0/8, IPv6 loopback `::1`, **IPv4-mapped IPv6 like `::ffff:127.0.0.1`**, cloud metadata endpoints like `169.254.169.254`). The server then makes a request to that URL while testing the key or running an agent, reaching private services the attacker shouldn't reach.
+2. **Credential exfiltration via baseUrl**: the OpenAI provider passes the `apiKey` as a `Bearer` header in `Authorization`. If `baseUrl` points at an attacker-controlled HTTPS endpoint, the apiKey leaks to the attacker's server on every request. Worst-case: attacker steals a real OpenAI key by getting an admin to test it against `baseUrl: https://attacker.example/v1`. Specific to OpenAI-shaped providers (OpenAI, OpenRouter). Anthropic SDK doesn't honor `baseUrl` through the test API surface (see attack 7).
+3. **Persistence-path exfil**: even if `/ai/test-key` validates `baseUrl`, the `POST /ai-keys` route (settings.ts) ALSO writes baseUrl into the encrypted blob. If that path doesn't validate, an attacker who can write to `/ai-keys` stores `(apiKey, attacker_baseUrl)`. A later agent run reads the row and leaks the key.
+4. **Local service abuse via Ollama default**: the Ollama provider defaults `baseUrl` to `http://localhost:11434` when omitted. On a server that runs other unauthenticated services on localhost (Redis, internal HTTP, the server's own debug endpoints), `testKey` against Ollama probes those services even when no Ollama instance is running.
+5. **Error-message info disclosure**: SDK error responses occasionally embed partial key bytes or partial response bodies. If the server passes the SDK error message verbatim into the HTTP response, key fragments leak to the client's DOM and to logs.
+6. **Provider downgrade via untrusted stop-reason**: future Anthropic / OpenAI stop reasons (`refusal`, `pause_turn`, `content_filter`) get silently downgraded to `'stop'` in the current `ProviderEvent` union. The runner can't distinguish "model refused" from "model completed." Worst-case: a refusal counts as success and a downstream tool runs with empty / misleading arguments.
+7. **Interface lies**: `AIProvider.stream` accepts `baseUrl` for all four providers, but Anthropic ignores it (SDK doesn't take baseURL through the messages.stream surface in a meaningful way). Operator believes they've configured Anthropic to use a custom endpoint; provider silently uses the canonical one. Latent until someone tries it.
+8. **JSON.parse crashes mid-stream**: provider streams emit JSON fragments (tool_call args via `input_json_delta`, Ollama NDJSON lines). If any fragment is malformed (network blip, truncation, encoding edge case), `JSON.parse` throws, the stream's async iteration unwinds, and the agent run dies with a cryptic error. Worst-case: the runner has no fallback, the agent_run row stays at `running` forever and the worker_crash recovery (Sub-phase C) is the only path out.
+9. **Falsy-zero bugs in token accounting**: provider streams report `tokens_in: 0` legitimately at certain points (e.g. cached prompts, completion-only updates). Code that does `if (delta.tokens_in)` skips on zero, under-counting tokens. Budget enforcement (Sub-phase C) becomes inaccurate; cheap agents can silently exceed budgets that should have stopped them.
+10. **Provider proxy cache poisoning**: the lazy-import proxy in `provider.ts` caches the first resolved AIProvider per name. If the first call's dynamic import fails (rare — usually only on missing peer deps or network-imported modules), a rejected Promise gets cached and every subsequent call inherits the failure forever. Recovery requires process restart.
+
+### Mitigations required
+
+These are the rules the code MUST follow. `/code-review` should verify each one is in place before declaring convergence on Sub-phase B + C.
+
+1. **One shared baseUrl validator**, exported from `apps/server/src/lib/ai/baseurl-validator.ts` (TBD — write during round-3 fix batch). Validates: scheme is `https` (or `http` for Ollama-localhost-only exception), resolves DNS to a non-private IPv4, NOT IPv4-mapped IPv6 (`::ffff:`), NOT IPv6 loopback (`::1`), NOT any RFC1918 range, NOT link-local (169.254.0.0/16, fe80::/10), NOT cloud metadata IPs (169.254.169.254 specifically). **Cache the resolved IP for the duration of the request** to prevent DNS-rebinding mid-fetch. Called from BOTH `/ai/test-key` AND `POST /ai-keys` — both paths route through the validator before persistence OR network use.
+2. **baseUrl ALLOWED only for Ollama and OpenRouter**. Anthropic and OpenAI use hardcoded canonical URLs (`https://api.anthropic.com`, `https://api.openai.com/v1`). The server validation step explicitly rejects `baseUrl` when `provider in ('anthropic', 'openai')`. The plan's original "baseUrl: z.string().url().optional()" is too permissive — narrow it provider-by-provider.
+3. **`POST /ai-keys` validates baseUrl through the same path** as `/ai/test-key`. Single source of truth for what baseUrl is acceptable.
+4. **Ollama requires explicit `baseUrl`** for the test-key flow. The default-to-localhost behavior in the provider implementation stays (the runner needs a sensible default for `Ollama` agents already configured), but the test-key route explicitly requires `baseUrl !== undefined` when provider is `ollama` and surfaces an error if missing.
+5. **Error messages sanitized** before they reach HTTP responses. A helper `sanitizeProviderError(err)` strips anything resembling a token (any base64-ish string longer than 20 characters, anything matching `sk-[a-zA-Z0-9]{20,}`, anything matching `Bearer\s+\S+`). Provider implementations route their `catch` blocks through this helper.
+6. **`ProviderEvent.done.reason` adds `'refusal'`** now (sub-phase B). `'pause_turn'` deferred to Sub-phase C when the runner gains a paused state. Each provider implementation maps its specific stop reasons explicitly — no silent downgrade. SDK-specific stop reasons that don't map to the union should emit a warning log line, not silently become `'stop'`.
+7. **`AIProvider.stream`'s `baseUrl` parameter is documented as Ollama-and-OpenRouter only**. The Anthropic + OpenAI implementations ignore it. Either remove from the shared interface (cleaner) OR add a runtime check that throws if a caller passes baseUrl to an unsupported provider (acceptable v1). The latter is faster to ship; the former is right long-term.
+8. **JSON.parse calls are try/catch-wrapped** in all four provider implementations. On parse failure: log + emit a `type: 'tool_call'` event with `arguments: { __parse_error: true, raw: <truncated buf> }` so the runner can distinguish truncation from intent and decide whether to retry or fail. Streams MUST NOT abort on a single bad chunk.
+9. **Token-accumulator updates use `!== undefined`**, not truthy checks. `if (usage?.prompt_tokens !== undefined) tokensIn = usage.prompt_tokens;` — handles the zero case correctly.
+10. **Provider proxy caches resolved Providers, not rejected Promises.** On dynamic-import failure: drop the cache entry instead of caching the rejection. Next call retries from scratch. Belt-and-braces: a process-level retry counter logs after N consecutive failures so operations can spot a wedged provider.
+
+### Out of scope (explicit deferrals)
+
+- **DNS rebinding beyond cached resolution** — fully bulletproof would require DNS-pinning at the fetch layer or DNS-over-HTTPS with locked resolvers. Accepted residual risk for v1.
+- **Auditing every outbound HTTP request** the runner makes (per-request justification log) — Sub-phase C's `ai.action` event + the runner's commit pattern already provides a coarse audit trail. Deeper auditing parked for v1.1.
+- **Rotating `FOLIO_MASTER_KEY`** without a deploy — operational concern, not v1.
+- **Per-key allow-lists** of which paths the apiKey is valid against — Anthropic, OpenAI, OpenRouter don't expose this in their key shapes. Accepted residual risk.
+- **Anti-CSRF for `/ai/test-key`** — Folio's session cookie is SameSite=Lax (verify), and the route requires a session, so CSRF from a third-party origin is mitigated by browser-level same-origin policy. If session config is ever weakened, revisit.
+- **Threat model for `runs` table data exfil** (Sub-phase C concern) — agent_run rows can contain user prompts and tool-call args that include sensitive workspace data. Cross-workspace isolation depends on the existing scope-check infrastructure from Phase 2.5. Sub-phase C's plan should reference back to this section before extending.
+
+### How to use this section
+
+- Before dispatching ANY task in Sub-phase B or C that touches user-controlled URLs, baseUrl handling, key persistence, or provider streams: the controller pre-flight verifies that the task's plan-supplied code includes the relevant mitigations (1-10 above).
+- `/code-review` invocations on Sub-phase B + C: include "Verify code against the threat model in the plan (section: Threat model). Each numbered mitigation should be checked. Report which mitigations are in place, which are missing, and which are out of scope per the deferrals list."
+- `/evaluate` retros: list mitigations that were not implemented as plan-correction defects.
+- Sub-phase C plan-writing (when it happens): cross-reference this threat model when sketching the runner's outbound-request handling. Don't re-litigate; extend.
+
+### Lesson (for memory/lessons.md)
+
+> **Plans for features that touch user-controlled URLs, untrusted parsing, auth surfaces, or BYOK MUST include a `## Threat model` section before task breakdown. Without one, `/code-review` rounds independently re-discover the attack surface and don't converge. With one, reviews verify against a fixed spec and converge in one pass.**
+
+---
+
 ## Testing-workflow contract (do not violate)
 
 This branch is executed under `netdust-core:ntdst-execute-with-tests`, which wraps `superpowers:subagent-driven-development` with mandatory testing gates. The harness expects:
