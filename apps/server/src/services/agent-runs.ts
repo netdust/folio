@@ -663,3 +663,191 @@ export async function countPendingPlanning(tx: DBOrTx = db): Promise<number> {
   `);
   return rows[0]?.count ?? 0;
 }
+
+// ----- rate limits + chain guards (Task C-4) -----
+
+/**
+ * Result shape for both rate-limit + chain-guard checks. `reason: null`
+ * means OK; a non-null reason means the caller should NOT proceed.
+ */
+export type GuardResult =
+  | { ok: true; reason: null }
+  | { ok: false; reason: 'rate_limited'; detail: string }
+  | {
+      ok: false;
+      reason: 'fanout_exceeded' | 'chain_duration_exceeded' | 'chain_tokens_exceeded';
+      detail: string;
+    };
+
+export interface CheckRunRateLimitsArgs {
+  workspaceId: string;
+  agentSlug: string;
+  /** Hourly cap across the whole workspace, all agents. */
+  workspaceMaxRunsPerHour: number;
+  /** Hourly cap for THIS agent slug in this workspace. */
+  agentMaxRunsPerHour: number;
+}
+
+/**
+ * Counts `agent.run.started` events in the last hour for (workspace) AND
+ * (workspace, agent_slug). Compares against the caller-supplied caps; the
+ * caller (poller in C-10) sources defaults from env vars
+ * `FOLIO_MAX_RUNS_PER_HOUR_PER_WORKSPACE` / `_PER_AGENT`.
+ *
+ * Mitigation 30 — per-workspace + per-agent hourly cap, checked BEFORE
+ * `claimNextPlanningRun`. A workspace at cap doesn't even claim the row;
+ * the row stays `planning` for the next poller tick.
+ *
+ * Ordering: workspace failure is reported BEFORE agent failure when both
+ * caps are hit. Deterministic so the operator sees the highest-blast-radius
+ * cause first.
+ *
+ * The query reads `events.kind = 'agent.run.started'` + matches the
+ * agent slug from `payload.agent` (set in C-1 createRun's emission).
+ *
+ * Read-only — defaults `tx` to bare `db`. The poller passes its own tx
+ * for read-your-writes inside the claim transaction.
+ */
+export async function checkRunRateLimits(
+  args: CheckRunRateLimitsArgs,
+  tx: DBOrTx = db,
+): Promise<GuardResult> {
+  // events.created_at is stored as ms epoch (INTEGER, timestamp_ms mode).
+  // bun:sqlite refuses Date objects as bound parameters — pass a number.
+  const hourAgoMs = Date.now() - 60 * 60_000;
+
+  const workspaceRows = await tx.all<{ count: number }>(sql`
+    SELECT COUNT(*) as count FROM events
+     WHERE kind = 'agent.run.started'
+       AND workspace_id = ${args.workspaceId}
+       AND created_at >= ${hourAgoMs}
+  `);
+  const workspaceCount = workspaceRows[0]?.count ?? 0;
+
+  if (workspaceCount >= args.workspaceMaxRunsPerHour) {
+    return {
+      ok: false,
+      reason: 'rate_limited',
+      detail: `workspace cap ${args.workspaceMaxRunsPerHour}/hour exceeded (${workspaceCount} observed)`,
+    };
+  }
+
+  const agentRows = await tx.all<{ count: number }>(sql`
+    SELECT COUNT(*) as count FROM events
+     WHERE kind = 'agent.run.started'
+       AND workspace_id = ${args.workspaceId}
+       AND created_at >= ${hourAgoMs}
+       AND json_extract(payload, '$.agent') = ${args.agentSlug}
+  `);
+  const agentCount = agentRows[0]?.count ?? 0;
+
+  if (agentCount >= args.agentMaxRunsPerHour) {
+    return {
+      ok: false,
+      reason: 'rate_limited',
+      detail: `agent cap ${args.agentMaxRunsPerHour}/hour exceeded (${agentCount} observed)`,
+    };
+  }
+
+  return { ok: true, reason: null };
+}
+
+export interface CheckChainGuardsArgs {
+  chainId: string;
+  maxFanout: number;
+  maxChainDurationMs: number;
+  maxChainTokens: number;
+}
+
+/**
+ * Single SELECT aggregating fanout (COUNT), chain wall-time
+ * (max(completed_at) - min(started_at)), and total tokens (SUM of
+ * tokens_in + tokens_out) for one chain. Returns the FIRST-failing cap
+ * in deterministic order: fanout → duration → tokens. Returns
+ * `{reason: null}` when all are under cap.
+ *
+ * Mitigation 29 — chain fan-out cap. The aggregating query rides
+ * `documents_runs_by_chain_idx` (partial index on
+ * `(json_extract(frontmatter, '$.chain_id'), created_at DESC) WHERE
+ * type='agent_run'`) which scales to chains across millions of total
+ * rows. The volume test in `agent-runs.test.ts` asserts EXPLAIN QUERY
+ * PLAN names this index so a future planner regression that drops it
+ * surfaces in CI, not production.
+ *
+ * Non-completed rows (no `completed_at`) contribute their `started_at`
+ * to the MAX expression via COALESCE — the chain's wall-time treats an
+ * in-flight run as "completing now."
+ *
+ * Read-only — defaults `tx` to bare `db`. Poller (C-10) and runner
+ * (C-8) pass their tx for read-consistency.
+ */
+export async function checkChainGuards(
+  args: CheckChainGuardsArgs,
+  tx: DBOrTx = db,
+): Promise<GuardResult> {
+  const rows = await tx.all<{
+    fanout: number;
+    first_started: string | null;
+    last_completed: string | null;
+    tokens_total: number;
+  }>(sql`
+    SELECT COUNT(*) AS fanout,
+           MIN(json_extract(frontmatter, '$.started_at')) AS first_started,
+           MAX(
+             COALESCE(
+               json_extract(frontmatter, '$.completed_at'),
+               json_extract(frontmatter, '$.started_at')
+             )
+           ) AS last_completed,
+           COALESCE(SUM(
+             COALESCE(json_extract(frontmatter, '$.tokens_in'),  0) +
+             COALESCE(json_extract(frontmatter, '$.tokens_out'), 0)
+           ), 0) AS tokens_total
+      FROM documents
+     WHERE type = 'agent_run'
+       AND json_extract(frontmatter, '$.chain_id') = ${args.chainId}
+  `);
+
+  const row = rows[0];
+  const fanout = row?.fanout ?? 0;
+  const tokensTotal = row?.tokens_total ?? 0;
+
+  // Fanout first — highest-blast-radius signal; an exploding chain is
+  // the canonical worst-case attack on the runner queue.
+  if (fanout > args.maxFanout) {
+    return {
+      ok: false,
+      reason: 'fanout_exceeded',
+      detail: `chain has ${fanout} runs, cap ${args.maxFanout}`,
+    };
+  }
+
+  // Duration second — only meaningful when both ends are populated.
+  // Date.parse on an ISO string returns NaN on bad input; we guard but
+  // a bad timestamp here implies a corrupt agent_run row that other
+  // paths (Zod schema, createRun) would have already caught.
+  if (row?.first_started && row.last_completed) {
+    const firstMs = Date.parse(row.first_started);
+    const lastMs = Date.parse(row.last_completed);
+    if (!Number.isNaN(firstMs) && !Number.isNaN(lastMs)) {
+      const durationMs = lastMs - firstMs;
+      if (durationMs > args.maxChainDurationMs) {
+        return {
+          ok: false,
+          reason: 'chain_duration_exceeded',
+          detail: `chain wall-time ${durationMs}ms, cap ${args.maxChainDurationMs}ms`,
+        };
+      }
+    }
+  }
+
+  if (tokensTotal > args.maxChainTokens) {
+    return {
+      ok: false,
+      reason: 'chain_tokens_exceeded',
+      detail: `chain total ${tokensTotal} tokens, cap ${args.maxChainTokens}`,
+    };
+  }
+
+  return { ok: true, reason: null };
+}

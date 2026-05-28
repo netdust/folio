@@ -38,6 +38,8 @@ import {
   claimNextPlanningRun,
   recoverOrphanRuns,
   countPendingPlanning,
+  checkRunRateLimits,
+  checkChainGuards,
 } from './agent-runs.ts';
 
 type TestDB = Awaited<ReturnType<typeof makeTestApp>>['db'];
@@ -617,7 +619,15 @@ async function seedRunAt(
   parent: Document,
   user: User,
   status: AgentRunFrontmatter['status'],
-  overrides: { createdAt?: Date; chainId?: string; workerStartedAt?: string } = {},
+  overrides: {
+    createdAt?: Date;
+    chainId?: string;
+    workerStartedAt?: string;
+    tokensIn?: number;
+    tokensOut?: number;
+    startedAt?: string;
+    completedAt?: string;
+  } = {},
 ): Promise<Document> {
   const id = nanoid();
   const now = new Date().toISOString();
@@ -629,14 +639,17 @@ async function seedRunAt(
     model: 'claude-sonnet-4-6',
     system_prompt: 'You are a helper.',
     max_tokens: 12_345,
-    tokens_in: 0,
-    tokens_out: 0,
+    tokens_in: overrides.tokensIn ?? 0,
+    tokens_out: overrides.tokensOut ?? 0,
     trigger_id: null,
     chain_id: overrides.chainId ?? crypto.randomUUID(),
     fired_by: 'agent.task.assigned',
-    started_at: now,
+    started_at: overrides.startedAt ?? now,
     ...(overrides.workerStartedAt !== undefined
       ? { worker_started_at: overrides.workerStartedAt }
+      : {}),
+    ...(overrides.completedAt !== undefined
+      ? { completed_at: overrides.completedAt }
       : {}),
   };
   await db.insert(documents).values({
@@ -1214,4 +1227,460 @@ describe('countPendingPlanning', () => {
     const count = await db.transaction(async (tx) => countPendingPlanning(tx));
     expect(count).toBe(0);
   });
+});
+
+// ---------- checkRunRateLimits ----------
+
+/**
+ * Direct event seed for rate-limit tests. Inserts an `agent.run.started`
+ * event with explicit `createdAt` so we can simulate "N events in the last
+ * hour" without time-traveling the clock.
+ */
+async function seedRunStartedEvent(
+  db: TestDB,
+  args: {
+    workspaceId: string;
+    projectId: string | null;
+    agentSlug: string;
+    createdAt: Date;
+    seq: number;
+  },
+): Promise<void> {
+  await db.insert(events).values({
+    id: nanoid(),
+    workspaceId: args.workspaceId,
+    projectId: args.projectId,
+    documentId: nanoid(),
+    kind: 'agent.run.started',
+    actor: null,
+    payload: { agent: args.agentSlug } as unknown as Record<string, unknown>,
+    createdAt: args.createdAt,
+    seq: args.seq,
+  });
+}
+
+/**
+ * Type narrowing for GuardResult — the discriminated union forces callers
+ * to check `ok` before reading `detail`, but tests want a one-liner. This
+ * helper throws if the result is OK so the subsequent `result.detail`
+ * access type-checks via the asserts predicate.
+ */
+function expectGuardFailure<T extends { ok: boolean }>(
+  result: T,
+): asserts result is Extract<T, { ok: false }> {
+  expect(result.ok).toBe(false);
+  if (result.ok) throw new Error('expected guard failure, got ok');
+}
+
+describe('checkRunRateLimits', () => {
+  test('returns ok when both workspace + agent counts are under cap', async () => {
+    const { db, seed } = await makeTestApp();
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+
+    // 1 started event in the last hour — well under any sane cap.
+    await seedRunStartedEvent(db, {
+      workspaceId: seed.workspace.id,
+      projectId: seed.project.id,
+      agentSlug: agent.slug,
+      createdAt: new Date(Date.now() - 30_000),
+      seq: 1_000_001,
+    });
+
+    const result = await checkRunRateLimits({
+      workspaceId: seed.workspace.id,
+      agentSlug: agent.slug,
+      workspaceMaxRunsPerHour: 200,
+      agentMaxRunsPerHour: 60,
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  test('returns rate_limited with workspace detail when workspace cap is hit', async () => {
+    const { db, seed } = await makeTestApp();
+    const agentA = await seedAgent(db, seed.workspace, seed.user, 'helper-a');
+    const agentB = await seedAgent(db, seed.workspace, seed.user, 'helper-b');
+
+    // Workspace cap of 5; seed 5 in the last hour split across two agents
+    // so the workspace count exceeds cap but neither agent individually does.
+    for (let i = 0; i < 3; i++) {
+      await seedRunStartedEvent(db, {
+        workspaceId: seed.workspace.id,
+        projectId: seed.project.id,
+        agentSlug: agentA.slug,
+        createdAt: new Date(Date.now() - (i + 1) * 1000),
+        seq: 2_000_001 + i,
+      });
+    }
+    for (let i = 0; i < 3; i++) {
+      await seedRunStartedEvent(db, {
+        workspaceId: seed.workspace.id,
+        projectId: seed.project.id,
+        agentSlug: agentB.slug,
+        createdAt: new Date(Date.now() - (i + 1) * 1000),
+        seq: 2_100_001 + i,
+      });
+    }
+
+    const result = await checkRunRateLimits({
+      workspaceId: seed.workspace.id,
+      agentSlug: agentA.slug,
+      workspaceMaxRunsPerHour: 5,
+      agentMaxRunsPerHour: 60,
+    });
+    expectGuardFailure(result);
+    expect(result.reason).toBe('rate_limited');
+    expect(result.detail).toMatch(/workspace/i);
+  });
+
+  test('returns rate_limited with agent detail when agent cap is hit', async () => {
+    const { db, seed } = await makeTestApp();
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+
+    // 4 events for one agent, cap=3 (agent), workspace cap=200 (not hit).
+    for (let i = 0; i < 4; i++) {
+      await seedRunStartedEvent(db, {
+        workspaceId: seed.workspace.id,
+        projectId: seed.project.id,
+        agentSlug: agent.slug,
+        createdAt: new Date(Date.now() - (i + 1) * 1000),
+        seq: 3_000_001 + i,
+      });
+    }
+
+    const result = await checkRunRateLimits({
+      workspaceId: seed.workspace.id,
+      agentSlug: agent.slug,
+      workspaceMaxRunsPerHour: 200,
+      agentMaxRunsPerHour: 3,
+    });
+    expectGuardFailure(result);
+    expect(result.reason).toBe('rate_limited');
+    expect(result.detail).toMatch(/agent/i);
+  });
+
+  test('prefers workspace failure when both caps are hit (deterministic ordering)', async () => {
+    const { db, seed } = await makeTestApp();
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+
+    // 5 events for the agent; both caps = 3, both hit. Workspace wins.
+    for (let i = 0; i < 5; i++) {
+      await seedRunStartedEvent(db, {
+        workspaceId: seed.workspace.id,
+        projectId: seed.project.id,
+        agentSlug: agent.slug,
+        createdAt: new Date(Date.now() - (i + 1) * 1000),
+        seq: 4_000_001 + i,
+      });
+    }
+
+    const result = await checkRunRateLimits({
+      workspaceId: seed.workspace.id,
+      agentSlug: agent.slug,
+      workspaceMaxRunsPerHour: 3,
+      agentMaxRunsPerHour: 3,
+    });
+    expectGuardFailure(result);
+    expect(result.reason).toBe('rate_limited');
+    expect(result.detail).toMatch(/workspace/i);
+    expect(result.detail).not.toMatch(/agent/i);
+  });
+
+  test('excludes events older than one hour from the window', async () => {
+    const { db, seed } = await makeTestApp();
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+
+    // 5 events 90 minutes ago (outside window) + 1 event 30s ago.
+    // Cap=2 — would fail if old events counted, passes when they don't.
+    for (let i = 0; i < 5; i++) {
+      await seedRunStartedEvent(db, {
+        workspaceId: seed.workspace.id,
+        projectId: seed.project.id,
+        agentSlug: agent.slug,
+        createdAt: new Date(Date.now() - 90 * 60_000),
+        seq: 5_000_001 + i,
+      });
+    }
+    await seedRunStartedEvent(db, {
+      workspaceId: seed.workspace.id,
+      projectId: seed.project.id,
+      agentSlug: agent.slug,
+      createdAt: new Date(Date.now() - 30_000),
+      seq: 5_100_001,
+    });
+
+    const result = await checkRunRateLimits({
+      workspaceId: seed.workspace.id,
+      agentSlug: agent.slug,
+      workspaceMaxRunsPerHour: 2,
+      agentMaxRunsPerHour: 2,
+    });
+    expect(result.ok).toBe(true);
+  });
+});
+
+// ---------- checkChainGuards ----------
+
+describe('checkChainGuards', () => {
+  test('returns ok when chain is under all caps', async () => {
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+    const chainId = crypto.randomUUID();
+
+    // 3 rows, total 600 tokens, 10s wall time — comfortably under defaults.
+    for (let i = 0; i < 3; i++) {
+      await seedRunAt(
+        db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'completed',
+        {
+          chainId,
+          tokensIn: 100,
+          tokensOut: 100,
+          startedAt: new Date(Date.now() - 10_000).toISOString(),
+          completedAt: new Date().toISOString(),
+        },
+      );
+    }
+
+    const result = await checkChainGuards({
+      chainId,
+      maxFanout: 25,
+      maxChainDurationMs: 30 * 60_000,
+      maxChainTokens: 1_000_000,
+    });
+    expect(result.reason).toBeNull();
+  });
+
+  test('returns fanout_exceeded when run count > maxFanout', async () => {
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+    const chainId = crypto.randomUUID();
+
+    for (let i = 0; i < 6; i++) {
+      await seedRunAt(
+        db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'completed',
+        { chainId },
+      );
+    }
+
+    const result = await checkChainGuards({
+      chainId,
+      maxFanout: 5,
+      maxChainDurationMs: 30 * 60_000,
+      maxChainTokens: 1_000_000,
+    });
+    expectGuardFailure(result);
+    expect(result.reason).toBe('fanout_exceeded');
+    expect(result.detail).toMatch(/6 runs|fanout/i);
+  });
+
+  test('returns chain_duration_exceeded when max-min wall time > cap', async () => {
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+    const chainId = crypto.randomUUID();
+
+    const startedAt = new Date(Date.now() - 60 * 60_000).toISOString();   // 1h ago
+    const completedAt = new Date(Date.now() - 10_000).toISOString();      // ~now
+
+    await seedRunAt(
+      db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'completed',
+      { chainId, startedAt, completedAt },
+    );
+    await seedRunAt(
+      db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'completed',
+      { chainId, startedAt, completedAt },
+    );
+
+    const result = await checkChainGuards({
+      chainId,
+      maxFanout: 25,
+      maxChainDurationMs: 30 * 60_000, // 30 min cap; actual ≈ 60 min
+      maxChainTokens: 1_000_000,
+    });
+    expectGuardFailure(result);
+    expect(result.reason).toBe('chain_duration_exceeded');
+    expect(result.detail).toMatch(/duration|ms/i);
+  });
+
+  test('returns chain_tokens_exceeded when sum(tokens_in + tokens_out) > cap', async () => {
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+    const chainId = crypto.randomUUID();
+
+    // 3 rows × 2000 tokens = 6000; cap=5000.
+    for (let i = 0; i < 3; i++) {
+      await seedRunAt(
+        db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'completed',
+        { chainId, tokensIn: 1000, tokensOut: 1000 },
+      );
+    }
+
+    const result = await checkChainGuards({
+      chainId,
+      maxFanout: 25,
+      maxChainDurationMs: 30 * 60_000,
+      maxChainTokens: 5000,
+    });
+    expectGuardFailure(result);
+    expect(result.reason).toBe('chain_tokens_exceeded');
+    expect(result.detail).toMatch(/tokens|6000/i);
+  });
+
+  test('prefers fanout_exceeded when multiple caps are hit (deterministic ordering)', async () => {
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+    const chainId = crypto.randomUUID();
+
+    // 6 rows, each 10k tokens (60k total), 60min wall — ALL three caps hit.
+    const startedAt = new Date(Date.now() - 60 * 60_000).toISOString();
+    const completedAt = new Date().toISOString();
+    for (let i = 0; i < 6; i++) {
+      await seedRunAt(
+        db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'completed',
+        { chainId, tokensIn: 5000, tokensOut: 5000, startedAt, completedAt },
+      );
+    }
+
+    const result = await checkChainGuards({
+      chainId,
+      maxFanout: 5,
+      maxChainDurationMs: 30 * 60_000,
+      maxChainTokens: 50_000,
+    });
+    // Fanout is checked first per the mitigation 29 ordering.
+    expect(result.reason).toBe('fanout_exceeded');
+  });
+
+  test('ignores rows from other chains (chain_id scope)', async () => {
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+    const myChain = crypto.randomUUID();
+    const otherChain = crypto.randomUUID();
+
+    // 100 rows in otherChain — should not affect myChain's fanout count.
+    for (let i = 0; i < 100; i++) {
+      await seedRunAt(
+        db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'completed',
+        { chainId: otherChain },
+      );
+    }
+    // 3 rows in myChain — well under cap.
+    for (let i = 0; i < 3; i++) {
+      await seedRunAt(
+        db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'completed',
+        { chainId: myChain },
+      );
+    }
+
+    const result = await checkChainGuards({
+      chainId: myChain,
+      maxFanout: 5,
+      maxChainDurationMs: 30 * 60_000,
+      maxChainTokens: 1_000_000,
+    });
+    expect(result.reason).toBeNull();
+  });
+
+  test('EXPLAIN QUERY PLAN for checkChainGuards uses documents_runs_by_chain_idx', async () => {
+    // Mitigation 29 volume guard (per plan): seed enough rows that the
+    // planner would skip the index for full scans on small tables, then
+    // assert EXPLAIN picks the chain index. Lacks env-skip per the plan
+    // suggestion — bun:test has no test.skipIf, and 2k rows is fast.
+    //
+    // Why 2k and not 10k from the plan: 10k inserts via INSERT-each is
+    // too slow (~20s); 2k still trips SQLite's planner heuristics for
+    // index-vs-scan on the chain_id residual filter (verified locally).
+    // The intent — guard against a planner regression that drops the
+    // partial index — still holds at 2k.
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+
+    // 2k rows across ~100 chain ids, batch-insert via raw SQL for speed.
+    // Bypass createRun's transactional emit — this is shape-only seeding
+    // for the EXPLAIN plan, not behavior verification.
+    const chainIds = Array.from({ length: 100 }, () => crypto.randomUUID());
+    const targetChainId = chainIds[0]!;
+    const now = new Date().toISOString();
+    for (let i = 0; i < 2_000; i++) {
+      const id = nanoid();
+      const chainId = chainIds[i % chainIds.length]!;
+      const fm = {
+        assignee: `agent:${agent.slug}`,
+        status: 'completed',
+        agent_slug: agent.slug,
+        provider: 'anthropic',
+        model: 'claude-sonnet-4-6',
+        system_prompt: 'x',
+        max_tokens: 1000,
+        tokens_in: 10,
+        tokens_out: 10,
+        trigger_id: null,
+        chain_id: chainId,
+        fired_by: 'agent.task.assigned',
+        started_at: now,
+        completed_at: now,
+      };
+      await db.insert(documents).values({
+        id,
+        workspaceId: seed.workspace.id,
+        projectId: seed.project.id,
+        tableId: runsTable.id,
+        type: 'agent_run',
+        slug: `${agent.slug}-bulk-${i}`,
+        title: `${agent.slug} bulk ${i}`,
+        status: 'completed',
+        body: '',
+        frontmatter: fm as unknown as Record<string, unknown>,
+        parentId: parent.id,
+        createdBy: seed.user.id,
+        updatedBy: seed.user.id,
+      });
+    }
+
+    // ANALYZE so the planner has stats to make a real choice. Without
+    // ANALYZE on a fresh table, SQLite often chooses scan even when the
+    // index would win.
+    await db.all(sql`ANALYZE`);
+
+    // Mirror checkChainGuards' core query in raw SQL so we EXPLAIN the
+    // exact shape Drizzle generates.
+    const plan = await db.all(sql`
+      EXPLAIN QUERY PLAN
+      SELECT COUNT(*) AS fanout,
+             MIN(json_extract(frontmatter, '$.started_at')) AS first_started,
+             MAX(json_extract(frontmatter, '$.completed_at')) AS last_completed,
+             COALESCE(SUM(
+               COALESCE(json_extract(frontmatter, '$.tokens_in'), 0) +
+               COALESCE(json_extract(frontmatter, '$.tokens_out'), 0)
+             ), 0) AS tokens_total
+        FROM documents
+       WHERE type = 'agent_run'
+         AND json_extract(frontmatter, '$.chain_id') = ${targetChainId}
+    `);
+    const planStr = JSON.stringify(plan);
+    if (process.env.FOLIO_EXPLAIN_DEBUG) {
+      // eslint-disable-next-line no-console
+      console.log('EXPLAIN checkChainGuards:', planStr);
+    }
+    expect(planStr).toContain('documents_runs_by_chain_idx');
+  }, 60_000);
 });
