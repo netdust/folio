@@ -72,6 +72,14 @@ export const agentRunFrontmatterSchema = z
     fired_by: z.string(),
 
     started_at: z.string().datetime(),
+    // ISO 8601 timestamp with `Z` suffix only — Zod's .datetime() defaults
+    // to `offset: false` which rejects `+HH:MM`-style offsets at parse
+    // time. This enforcement is what makes the
+    // `json_extract(...worker_started_at) < ${threshold}` lex-compare in
+    // recoverOrphanRuns safe (F13 audit — fixed-width UTC ISO sorts
+    // chronologically; offset-tagged ISOs would sort before `Z`). Don't
+    // pass `{ offset: true }` here without re-thinking the orphan-recovery
+    // predicate.
     completed_at: z.string().datetime().optional(),
 
     worker_started_at: z.string().datetime().optional(),

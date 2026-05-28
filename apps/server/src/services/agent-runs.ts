@@ -1293,18 +1293,54 @@ export async function ensureRunsTable(
   });
   if (existing) return existing;
 
+  // F14 fix (post-C.1 review) — TOCTOU race against the lookup above.
+  // Two concurrent callers (Sub-phase C.2 runner instances on parallel
+  // first-runs for the same project) could both miss the existing row
+  // and both try to insert. The unique index
+  // `tables_project_slug_idx (project_id, slug)` would then reject the
+  // loser with SQLITE_CONSTRAINT_UNIQUE, rolling back its outer tx.
+  //
+  // Use `ON CONFLICT DO NOTHING` so the insert is a no-op when a
+  // concurrent winner already committed the row. After the insert
+  // (or the no-op), re-query the row — both winner and loser end up
+  // with the SAME row id, AND the loser doesn't fire the per-status /
+  // per-view inserts + 11 events below (the post-INSERT check ensures
+  // only the winner's path proceeds).
   const tableId = nanoid();
-  await tx.insert(tables).values({
-    id: tableId,
-    projectId: args.projectId,
-    slug: 'runs',
-    name: 'Runs',
-    icon: null,
-    // Order 100 so it sorts after work-items (0) and any human-created
-    // tables (typically inserted with order 10-50). Lazy-seeded tables
-    // are system surfaces, not curated, so they land at the bottom.
-    order: 100,
+  await tx
+    .insert(tables)
+    .values({
+      id: tableId,
+      projectId: args.projectId,
+      slug: 'runs',
+      name: 'Runs',
+      icon: null,
+      // Order 100 so it sorts after work-items (0) and any human-created
+      // tables (typically inserted with order 10-50). Lazy-seeded tables
+      // are system surfaces, not curated, so they land at the bottom.
+      order: 100,
+    })
+    .onConflictDoNothing({ target: [tables.projectId, tables.slug] });
+
+  // Re-fetch to learn which insert won. If our own attempt succeeded,
+  // the row id matches `tableId`; if a concurrent caller raced ahead,
+  // we get their id and the rest of this function short-circuits to
+  // return without re-seeding statuses/views/events.
+  const settled = await tx.query.tables.findFirst({
+    where: and(eq(tables.projectId, args.projectId), eq(tables.slug, 'runs')),
   });
+  if (!settled) {
+    // Should be unreachable — insert with ON CONFLICT DO NOTHING either
+    // wrote our row OR found a sibling. Defensive throw vs silently
+    // returning undefined.
+    throw new Error('ensureRunsTable: post-insert lookup returned null');
+  }
+  if (settled.id !== tableId) {
+    // Lost the race — winner already seeded statuses + views + events.
+    // Return their row without re-seeding to keep idempotency
+    // (events emitted exactly once per project).
+    return settled;
+  }
   await emitEvent(tx, {
     kind: 'table.created',
     workspaceId: args.workspaceId,

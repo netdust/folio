@@ -261,6 +261,22 @@ export const documents = sqliteTable(
     workspaceTypeIdx: index('documents_workspace_type_idx').on(t.workspaceId, t.type),
     parentIdx: index('documents_parent_idx').on(t.parentId),
     tableIdx: index('documents_table_idx').on(t.tableId),
+    // F15 (post-C.1 review) — the following partial indexes are created
+    // directly in raw-SQL migrations and CANNOT be declared here because
+    // Drizzle's index builder does not support partial-index `WHERE`
+    // clauses or expression-indexed columns like `json_extract(...)`.
+    // They are intentional, load-bearing, and tested:
+    //  - `documents_comments_idx`        (migration 0007, comments hot path)
+    //  - `documents_runs_by_parent_idx`  (migration 0012, getActiveRun)
+    //  - `documents_runs_by_status_idx`  (migration 0012, list-runs-by-table)
+    //  - `documents_runs_pending_idx`    (migration 0012, claimNextPlanningRun)
+    //  - `documents_runs_by_chain_idx`   (migration 0012, checkChainGuards)
+    // DO NOT run `bun --filter=server db:generate` without checking the
+    // generated diff for `DROP INDEX` statements against any of these.
+    // The integration test suite + the EXPLAIN volume tests in
+    // services/agent-runs.test.ts will fail if these indexes go away,
+    // but only at test time, not at generate-time. Audit before
+    // applying.
   }),
 );
 

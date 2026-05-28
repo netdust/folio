@@ -2661,6 +2661,48 @@ describe('ensureRunsTable', () => {
     expect(payload.slug).toBe('runs');
     expect(typeof payload.table_id).toBe('string');
   });
+
+  // F14 regression — two concurrent first-callers in distinct
+  // transactions must converge to the SAME table id and emit the
+  // event suite EXACTLY ONCE total. Pre-F14, the loser hit the
+  // unique-index violation and its outer tx rolled back; post-F14,
+  // ON CONFLICT DO NOTHING + post-INSERT re-fetch makes the loser a
+  // no-op.
+  test('two concurrent callers converge on the same table id (race, no duplicate events)', async () => {
+    const { db, seed } = await makeTestApp();
+
+    const [a, b] = await Promise.all([
+      db.transaction(async (tx) =>
+        ensureRunsTable(tx, { workspaceId: seed.workspace.id, projectId: seed.project.id }),
+      ),
+      db.transaction(async (tx) =>
+        ensureRunsTable(tx, { workspaceId: seed.workspace.id, projectId: seed.project.id }),
+      ),
+    ]);
+    expect(a.id).toBe(b.id);
+
+    // Exactly one set of lifecycle events — the loser did not re-emit.
+    const lifecycleEvents = await db.query.events.findMany({
+      where: (e, { eq: eqOp, and: andOp, inArray }) =>
+        andOp(
+          eqOp(e.workspaceId, seed.workspace.id),
+          inArray(e.kind, [
+            'table.created',
+            'status.created',
+            'view.created',
+            'runs_table.lazy_seeded',
+          ]),
+        ),
+    });
+    const byKind = lifecycleEvents.reduce<Record<string, number>>((acc, e) => {
+      acc[e.kind] = (acc[e.kind] ?? 0) + 1;
+      return acc;
+    }, {});
+    expect(byKind['table.created']).toBe(1);
+    expect(byKind['status.created']).toBe(6);
+    expect(byKind['view.created']).toBe(3);
+    expect(byKind['runs_table.lazy_seeded']).toBe(1);
+  });
 });
 
 // ---------- nextChainId ----------
