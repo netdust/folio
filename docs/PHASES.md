@@ -849,13 +849,25 @@ Hand-rolled Hono sub-app at `/mcp`. Speaks JSON-RPC 2.0 over HTTP POST. Bearer-a
 - [ ] `routes/ai.ts`: `POST /api/v1/w/:wslug/ai/test-key` — validates a key with a cheap call without storing.
 - [ ] Workspace AI-key UI in `/w/:wslug/settings` — new "AI" tab with provider/model selectors + key input + Test button. Hooks into existing `aiKeys` storage (Phase 0).
 
-### MCP tool dispatch — extract to a callable lib (runner prerequisite)
+### Tool-execution layer — one tool surface, two faces (runner prerequisite)
 
-> **Why this is a hard prerequisite for the runner.** Today `tools/list` + `tools/call` + the `TOOLS` registry + the per-tool scope check live *inline inside the Hono route* (`apps/server/src/routes/mcp.ts:1253-1314`), reachable only via an HTTP request with a bearer-auth'd `token`/`actor`. The runner has **no HTTP request** — it has an `agent_run` row. So when `runAgent`'s loop receives a `tool_call` event it has no function to invoke; the model can talk, but every tool call hits a wall. Lifting dispatch into a shared lib that *both* the route and the runner call is the gate everything else sits behind. Pure extraction — the existing MCP route tests pin the behavior, so a green suite proves the lift is faithful. See `memory/project_folio-agent-thesis.md`: the introspect-and-shape tools that make "set up a project for me" work all flow through this surface.
+> **Decision (2026-05-28): inside-agent === outside-agent. ONE authorization model.** A customer's external agent (Claude Code over the MCP HTTP endpoint) and Folio's own in-process runner agent are the **same kind of agent** — same identity, same `tools:` set, same `projects:` scope, same authorization check. The ONLY difference is transport. So the internal runner is **NOT an MCP client** — it doesn't speak JSON-RPC to itself, there's no wire. The tools just need to stop living *only* behind the MCP route.
+>
+> **Why this is a hard prerequisite for the runner.** Today the `TOOLS` registry + per-tool scope check + handler dispatch live *inline inside the Hono route* (`apps/server/src/routes/mcp.ts:1253-1314`), reachable only via an HTTP request. The runner has **no HTTP request** — it has an `agent_run` row + the agent's token. When `runAgent`'s loop receives a `tool_call` event it has no function to invoke. So: lift the tool *implementations* + registry + scope check into a shared **tool-execution layer** that both faces call. MCP becomes ONE consumer (the JSON-RPC face), the runner is the other (the in-process face). Pure extraction — the existing MCP route tests pin the behavior, so a green suite proves the lift is faithful. See `memory/project_folio-agent-thesis.md`: the introspect-and-shape tools that make "set up a project for me" work all flow through this surface.
+>
+> ```
+>            tool impls (read_doc, create_work_item, list_projects, …) + scope check   ← lib/agent-tools.ts
+>                                    │
+>                    ┌───────────────┴────────────────┐
+>               routes/mcp.ts                     lib/runner.ts
+>               (JSON-RPC face,                   (in-process face,
+>                external agents)                  Folio's own agent)
+> ```
 
-- [ ] `lib/mcp-dispatch.ts`: extract the `TOOLS` registry + dispatch out of `routes/mcp.ts`. Expose `callTool(token, actor, name, args): Promise<ToolResult>` (the body of `mcp.ts:1272-1313` verbatim — unknown-tool, scope-gate, handler-invoke, error→code mapping) and `listTools(token): ToolDef[]` (**scope-filtered to the token, not the raw static array** — the runner hands the model only the tools its agent is allowed to call).
-- [ ] `routes/mcp.ts`: rewire `tools/list` + `tools/call` to call the lib. Route becomes a thin JSON-RPC wrapper; no behavior change. Existing MCP route tests stay green (the pin that proves the extraction is faithful).
-- [ ] Confirm the lib's `ToolDef` shape matches the provider layer's `ToolDef` (`lib/ai/provider.ts:18-22`) so `runAgent` can pass `listTools(token)` straight into `provider.stream({ tools })` with no adapter.
+- [ ] `lib/agent-tools.ts` (NOT `mcp-dispatch` — it is not MCP-specific): extract the `TOOLS` registry + scope check + handler dispatch out of `routes/mcp.ts`. Expose `executeTool(token, actor, name, args): Promise<ToolResult>` (the body of `mcp.ts:1272-1313` verbatim — unknown-tool, **scope-gate `token.scopes.includes(tool.requiredScope)`**, handler-invoke, error mapping) and `listTools(token): ToolDef[]` (**scope-filtered to the token, not the raw static array** — the runner hands the model only the tools its agent is allowed to call). The scope check is IDENTICAL for both callers — the token carries the authority, so the layer needs no "which caller" parameter (per the inside===outside decision).
+- [ ] `routes/mcp.ts`: shrinks to pure transport — parse JSON-RPC envelope → resolve bearer token → `executeTool(...)` → wrap result/error as JSON-RPC. No behavior change. Existing MCP route tests stay green (the pin that proves the extraction is faithful).
+- [ ] `lib/runner.ts` (later task): on a `tool_call` event, calls `executeTool(agentRun.token, actor, name, args)` **directly** — no JSON-RPC, no bearer round-trip, no self-HTTP. The agent's token (its `tools:`/`projects:`-derived scopes, the same object MCP middleware resolves from a bearer header) IS the authorization. An agent therefore cannot do more in-process than it could over the wire — same code path below the transport.
+- [ ] Confirm the layer's `ToolDef` shape matches the provider layer's `ToolDef` (`lib/ai/provider.ts:18-22`) so `runAgent` can pass `listTools(token)` straight into `provider.stream({ tools })` with no adapter.
 
 ### Runner (polling-worker model)
 
