@@ -93,4 +93,31 @@ describe('validatePublicUrl', () => {
     const r = validatePublicUrl('http://[::ffff:8.8.8.8]/');
     expect(r.ok).toBe(true);
   });
+
+  // B round 3 fix #4 — trailing-dot localhost (root-anchored DNS form). Linux
+  // resolves localhost. to 127.0.0.1; round 2 missed the trailing dot in the
+  // equality check.
+  test('blocks trailing-dot localhost (root-anchored DNS form)', () => {
+    expect(validatePublicUrl('http://localhost.:11434').ok).toBe(false);
+  });
+
+  test('blocks "foo.localhost." (trailing-dot suffix form)', () => {
+    expect(validatePublicUrl('http://foo.localhost.:11434').ok).toBe(false);
+  });
+
+  // B round 3 fix #5 — expanded IPv4-mapped IPv6 form. Bun's URL parser
+  // canonicalizes 0:0:0:0:0:ffff:hhhh:hhhh to the 2-segment shape ::ffff:..
+  // already (verified via `bun --eval`), so the existing path catches these.
+  // We add the expanded regex as defense-in-depth against any future runtime
+  // / proxy that does NOT canonicalize.
+  test('blocks expanded IPv4-mapped IPv6 (0:0:0:0:0:ffff:7f00:1 → 127.0.0.1)', () => {
+    const r = validatePublicUrl('http://[0:0:0:0:0:ffff:7f00:1]/');
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toMatch(/private|loopback|mapped/i);
+  });
+
+  test('blocks expanded IPv4-mapped IPv6 reaching AWS metadata', () => {
+    const r = validatePublicUrl('http://[0:0:0:0:0:ffff:a9fe:a9fe]/');
+    expect(r.ok).toBe(false);
+  });
 });

@@ -141,11 +141,27 @@ export const ollama: AIProvider = {
         body: JSON.stringify({ name: model }),
       });
       if (resp.ok) return { ok: true };
-      if (resp.status === 404) return { ok: false, reason: `Model not found on ${base}: ${model}` };
-      return { ok: false, reason: `Ollama HTTP ${resp.status}` };
-    } catch (err) {
-      const e = err as { message?: string };
-      return { ok: false, reason: e.message ?? `Cannot reach ${base}` };
+      // B round 3 fix #3 — mirror the openai/anthropic Fix #9 whitelist.
+      // The pre-fix shape echoed `${base}` and `${model}` into the reason
+      // string, which surfaces in the AI tab's ✗ chip and in log shippers.
+      // Don't echo the model name (an admin's model string may carry
+      // version/path information) or the base URL (may carry an internal
+      // hostname if a proxy rewrites it).
+      if (resp.status === 404) return { ok: false, reason: 'Model not found (404).' };
+      if (resp.status === 401 || resp.status === 403)
+        return {
+          ok: false,
+          reason: `Unauthorized (${resp.status}): key rejected by Ollama.`,
+        };
+      if (resp.status === 429)
+        return { ok: false, reason: 'Rate limited (429). Try again shortly.' };
+      if (resp.status >= 500)
+        return { ok: false, reason: `Server error (${resp.status}). The provider may be down.` };
+      return { ok: false, reason: `Error (${resp.status}).` };
+    } catch {
+      // Network / non-HTTP error — never surface err.message (proxy hostnames,
+      // ECONNREFUSED targets, system paths can leak through).
+      return { ok: false, reason: 'Network error or unreachable host.' };
     }
   },
 };

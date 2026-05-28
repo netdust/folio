@@ -84,6 +84,43 @@ describe('ollama provider', () => {
     expect(r.ok).toBe(false);
   });
 
+  // B round 3 fix #3 — Ollama testKey must mirror the openai/anthropic
+  // whitelist: never echo the base URL, model name, or raw error message
+  // into the reason string. The pre-fix shape interpolated `${base}` and
+  // `${model}` into the reason, which surfaces in the AI tab DOM + log
+  // shippers.
+  test('testKey() network error does not echo baseUrl or proxy hostname', async () => {
+    global.fetch = mock(async () => {
+      throw new Error('ECONNREFUSED at internal.proxy.example.com:8080');
+    }) as never;
+    const r = await ollama.testKey({
+      apiKey: '',
+      model: 'llama3.1',
+      baseUrl: 'http://internal-ollama.lan:11434',
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.reason).toMatch(/network|unreachable/i);
+      expect(r.reason).not.toMatch(/proxy\.example/);
+      expect(r.reason).not.toMatch(/internal-ollama/);
+      expect(r.reason).not.toMatch(/ECONNREFUSED/);
+    }
+  });
+
+  test('testKey() 404 does not echo the model name', async () => {
+    global.fetch = mock(async () => new Response('not found', { status: 404 })) as never;
+    const r = await ollama.testKey({
+      apiKey: '',
+      model: 'org/secret-internal-model:v17',
+      baseUrl: 'http://internal-ollama.lan:11434',
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.reason).not.toMatch(/secret-internal-model/);
+      expect(r.reason).not.toMatch(/internal-ollama/);
+    }
+  });
+
   test('stream() parses the trailing NDJSON record even without a final newline', async () => {
     // A sloppy proxy can drop the final \n. Pre-fix the trailing record sat
     // in `buffer` and was silently discarded — the generator yielded a

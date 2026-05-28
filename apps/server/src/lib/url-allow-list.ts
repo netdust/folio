@@ -42,7 +42,15 @@ export function validatePublicUrl(input: string): UrlValidationResult {
   }
 
   // Strip IPv6 brackets if present.
-  const host = parsed.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  let host = parsed.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+
+  // B round 3 fix #4 — strip a trailing dot before any host-equality / endsWith
+  // comparison. The root-anchored DNS form `localhost.` (or `foo.localhost.`)
+  // resolves to the same address but bypassed a strict equality check.
+  // Bun's URL parser preserves the trailing dot (verified). Strip BEFORE every
+  // downstream comparison so the IPv4-prefix / IPv6-mapped paths also see the
+  // canonicalized form.
+  if (host.endsWith('.')) host = host.slice(0, -1);
 
   if (host === 'localhost' || host.endsWith('.localhost')) {
     return { ok: false, reason: 'base_url localhost is not allowed' };
@@ -55,11 +63,16 @@ export function validatePublicUrl(input: string): UrlValidationResult {
   }
 
   // IPv4-mapped IPv6 (::ffff:a.b.c.d or ::ffff:hhhh:hhhh).
-  // Bun's URL parser canonicalizes both forms to ::ffff:hhhh:hhhh.
-  // Linux routes these to the underlying IPv4 address, so a mapped
-  // loopback/private IPv4 reaches the same target — the existing
-  // IPv4 prefix checks don't see it because the host string is IPv6.
-  const mappedMatch = host.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
+  // Bun's URL parser canonicalizes both forms to ::ffff:hhhh:hhhh — and the
+  // expanded form `0:0:0:0:0:ffff:hhhh:hhhh` to the same 2-segment shape
+  // (verified via `bun --eval`). The expanded regex below is defense-in-depth
+  // against any future runtime / proxy that DOESN'T canonicalize (B round 3
+  // fix #5) — Linux routes these forms to the underlying IPv4 address, so a
+  // mapped loopback/private IPv4 reaches the same target even though the host
+  // string is IPv6.
+  const mappedMatch =
+    host.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i) ??
+    host.match(/^(?:0:){5}ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
   if (mappedMatch) {
     const hi = Number.parseInt(mappedMatch[1] ?? '0', 16);
     const lo = Number.parseInt(mappedMatch[2] ?? '0', 16);
@@ -75,8 +88,11 @@ export function validatePublicUrl(input: string): UrlValidationResult {
   }
 
   // Also block the dotted IPv4-mapped form ::ffff:a.b.c.d if the parser kept it.
-  // (Bun normalizes to the hex form above; other runtimes may not.)
-  const dottedMappedMatch = host.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/i);
+  // (Bun normalizes to the hex form above; other runtimes may not.) Match the
+  // expanded form too as defense-in-depth (B round 3 fix #5).
+  const dottedMappedMatch =
+    host.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/i) ??
+    host.match(/^(?:0:){5}ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/i);
   if (dottedMappedMatch) {
     const ipv4 = dottedMappedMatch[1]!;
     for (const re of BLOCKED_IPV4_PREFIXES) {
