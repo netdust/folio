@@ -1,5 +1,12 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
 
+// NOTE: Bun's `mock.module(...)` is process-global and leaks across test files
+// within the same `bun test` run. The `@anthropic-ai/sdk` stub below covers
+// only the SDK surface this provider actually uses (messages.stream/create +
+// models.list); if a future test exercises other surfaces, the stub will
+// return undefined and the test will fail with a cryptic error in a different
+// file. See memory/feedback_mock-module-leaks-across-bun-tests.md.
+
 // Mock the SDK module BEFORE importing the provider so the provider sees the mock.
 const mockCreate = mock(async () => ({}));
 const mockStream = mock(async function* () {

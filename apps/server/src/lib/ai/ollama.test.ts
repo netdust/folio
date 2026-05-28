@@ -1,6 +1,13 @@
 import { afterEach, describe, expect, mock, test } from 'bun:test';
 import { ollama } from './ollama.ts';
 
+// NOTE: this file overrides `global.fetch` instead of using `mock.module(...)`,
+// but the same hazard applies — `global.fetch` is process-global. The
+// `afterEach` below restores the original; if a future test forgets to swap
+// it back, ALL subsequent fetch calls in the bun-test process (other test
+// files included) will hit the stale mock. See
+// memory/feedback_mock-module-leaks-across-bun-tests.md.
+
 const originalFetch = global.fetch;
 
 function jsonl(lines: unknown[]): ReadableStream<Uint8Array> {
