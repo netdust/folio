@@ -313,6 +313,49 @@ describe('POST /api/v1/w/:wslug/ai/test-key', () => {
     expect(res.status).toBe(400);
   });
 
+  // B round 3 fix #1 — A Bearer token paired with a garbage / empty /
+  // unknown-id `folio_session` cookie must still be rejected. The round-2
+  // guard checked cookie-header presence; Bun forwards the cookie verbatim
+  // (no client cookie jar in HTTP requests), so attachUser sees the invalid
+  // session-id, readSession returns null, attachToken then hydrates the
+  // bearer's creator into c.user — and the cookie-presence guard waved
+  // it through. We now check authMethod==='token' instead.
+  test('rejects Bearer token even when an empty/garbage folio_session cookie is also sent', async () => {
+    const { app, db, seed } = await makeTestApp();
+    const { token, hash } = newApiToken();
+    await db.insert(apiTokens).values({
+      id: nanoid(),
+      workspaceId: seed.workspace.id,
+      name: 'bypass-test',
+      tokenHash: hash,
+      scopes: ['documents:read'],
+      createdBy: seed.user.id,
+    });
+
+    for (const garbageCookie of [
+      'folio_session=garbage',
+      'folio_session=',
+      'folio_session=expired-id',
+    ]) {
+      const res = await app.request(`/api/v1/w/${seed.workspace.slug}/ai/test-key`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: garbageCookie,
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          provider: 'anthropic',
+          model: 'claude-haiku-4-5',
+          api_key: 'sk-mock-good',
+        }),
+      });
+      expect(res.status).toBe(403);
+      const body = await res.json();
+      expect(body.error.code).toBe('FORBIDDEN');
+    }
+  });
+
   // Fix #5 — ollama provider defaults baseUrl to http://localhost:11434 inside
   // the SDK wrapper. The route must require an explicit base_url so callers
   // can't probe the server's loopback Ollama by omitting it.

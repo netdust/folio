@@ -62,6 +62,19 @@ settingsRoute.post(
     }
     const { provider, apiKey, label, baseUrl } = c.req.valid('json');
 
+    // B round 3 fix #2: persistence symmetry with /ai/test-key. An ollama
+    // row persisted with no baseUrl falls back to DEFAULT_BASE='http://
+    // localhost:11434' inside the provider wrapper — the same loopback
+    // bypass the test-key route closes with fix #5. Require an explicit
+    // baseUrl so the validatePublicUrl check below has something to gate on.
+    if (provider === 'ollama' && baseUrl === undefined) {
+      throw new HTTPError(
+        'INVALID_BODY',
+        'baseUrl is required for the ollama provider',
+        422,
+      );
+    }
+
     // Fix #3: SSRF guard on the persistence path. Without this, an admin
     // could pin baseUrl=http://127.0.0.1:11434 or AWS metadata, and the
     // agent runner (Sub-phase C) would fetch it. Same rule as /ai/test-key.

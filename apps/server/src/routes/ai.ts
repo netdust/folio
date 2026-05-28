@@ -1,6 +1,5 @@
 import { zValidator } from '@hono/zod-validator';
 import { Hono } from 'hono';
-import { getCookie } from 'hono/cookie';
 import { z } from 'zod';
 import { providerSchema } from '../lib/agent-run-schema.ts';
 import { getProvider } from '../lib/ai/provider.ts';
@@ -14,22 +13,20 @@ const aiRoute = new Hono<AuthContext & ScopeContext>();
 // UI-only key test action: session callers only — never API tokens.
 //
 // attachToken (upstream on wScope) hydrates c.user from token.createdBy when
-// a Bearer token is present and no session exists, so requireUser alone would
-// accept bearer-only requests. We must reject token-authenticated callers
-// without penalizing session callers whose browser also carried a stray
-// Authorization header (B round 2 fix #12).
+// a Bearer token is present and no session exists. The round-2 guard checked
+// cookie-header presence — but Bun forwards garbage/expired cookie headers
+// verbatim, so `Cookie: folio_session=garbage` + `Authorization: Bearer …`
+// would slip through (attachUser sets user=null, attachToken hydrates user
+// from the token). Now we gate on the authMethod flag set in the upstream
+// auth middlewares: 'session' is set only when the cookie hydrated a real
+// user; 'token' is set only when the bearer hydrated one. A bearer-auth
+// request never sets 'session', regardless of any stray cookie header
+// (B round 3 fix #1).
 //
-// Signal: the folio_session cookie. If it's present, the request is
-// session-authenticated regardless of any stray Bearer header. There is no
-// `session` variable on context — readSession() in attachUser only stores
-// the user, not the session id — so we re-read the cookie directly.
 // Order: this guard runs before requireUser so a bearer-only request gets a
-// precise 403 (not the generic 401 requireUser would emit if attachToken
-// had failed to hydrate a user).
+// precise 403 (not the generic 401 requireUser would emit).
 aiRoute.use('*', async (c, next) => {
-  const hasToken = !!c.get('token');
-  const hasSessionCookie = !!getCookie(c, 'folio_session');
-  if (hasToken && !hasSessionCookie) {
+  if (c.get('authMethod') === 'token') {
     throw new HTTPError(
       'FORBIDDEN',
       'AI key management is session-only (no API tokens)',

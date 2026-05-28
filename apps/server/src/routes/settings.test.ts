@@ -110,6 +110,26 @@ describe('POST /api/v1/w/:wslug/settings/:workspaceId/ai-keys', () => {
     expect(body.data).toEqual({ ok: true });
   });
 
+  // B round 3 fix #2 — persistence symmetry with /ai/test-key. Ollama
+  // without baseUrl would fall through to the DEFAULT_BASE='http://
+  // localhost:11434' loopback bypass inside the provider wrapper. Round 2
+  // closed that hole on test-key but left persistence open. Mirror the guard.
+  test('rejects ollama without baseUrl (422 — persistence symmetry)', async () => {
+    const { app, seed } = await makeTestApp();
+    const res = await app.request(path(seed.workspace.slug, seed.workspace.id), {
+      method: 'POST',
+      headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        provider: 'ollama',
+        apiKey: 'sk-mock',
+        label: 'default',
+      }),
+    });
+    expect(res.status).toBe(422);
+    const body = await res.json();
+    expect(body.error.code).toBe('INVALID_BODY');
+  });
+
   // Happy path — non-ollama provider without baseUrl still works.
   test('accepts anthropic without baseUrl (200)', async () => {
     const { app, seed } = await makeTestApp();

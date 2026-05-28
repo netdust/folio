@@ -37,13 +37,18 @@ export const attachToken: MiddlewareHandler<AuthContext> = async (c, next) => {
     // into the user context. Downstream handlers (createdBy, updatedBy, event
     // actor) can then use a single `getUser(c)` call without branching on
     // token vs session. attachUser runs first in the chain, so if a session
-    // cookie was present and valid we leave that user in place.
+    // cookie was present and valid we leave that user (and its authMethod)
+    // in place — a stray Authorization header does NOT downgrade a session
+    // to 'token' auth (B round 3 fix #1).
     const sessionUser = c.get('user');
     if (!sessionUser && row.createdBy) {
       const creator = await db.query.users.findFirst({
         where: eq(users.id, row.createdBy),
       });
-      if (creator) c.set('user', creator);
+      if (creator) {
+        c.set('user', creator);
+        c.set('authMethod', 'token');
+      }
     }
   }
   return next();
