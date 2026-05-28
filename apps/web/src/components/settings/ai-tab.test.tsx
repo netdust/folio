@@ -58,4 +58,17 @@ describe('AiTab', () => {
     fireEvent.change(screen.getByLabelText(/provider/i), { target: { value: 'ollama' } });
     expect(screen.getByLabelText(/base url/i)).toBeInTheDocument();
   });
+
+  test('switching provider clears the API key field', () => {
+    renderTab();
+    const apiKeyInput = screen.getByLabelText(/api key/i) as HTMLInputElement;
+    fireEvent.change(apiKeyInput, { target: { value: 'sk-ant-test' } });
+    expect(apiKeyInput.value).toBe('sk-ant-test');
+    expect(screen.getByRole('button', { name: /save key/i })).toBeEnabled();
+
+    fireEvent.change(screen.getByLabelText(/provider/i), { target: { value: 'openai' } });
+
+    expect((screen.getByLabelText(/api key/i) as HTMLInputElement).value).toBe('');
+    expect(screen.getByRole('button', { name: /save key/i })).toBeDisabled();
+  });
 });

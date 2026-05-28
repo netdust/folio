@@ -39,6 +39,8 @@ export function AiTab({ wslug, workspaceId }: Props) {
   function onProviderChange(next: AiProvider) {
     setProvider(next);
     setModel(KNOWN_MODELS[next][0]);
+    setApiKey('');
+    setBaseUrl('');
     setTestResult(null);
   }
 
