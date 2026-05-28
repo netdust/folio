@@ -17,9 +17,9 @@
  * The runner (Task C-2+) calls these directly; routes (Task C-7) wrap them.
  */
 
-import { and, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, sql } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
-import { db } from '../db/client.ts';
+import { db, type DB } from '../db/client.ts';
 import {
   documents,
   type Document,
@@ -28,6 +28,10 @@ import {
   type User,
   type Workspace,
 } from '../db/schema.ts';
+
+// Drizzle tx and DB share the same query API. Mirrored verbatim from
+// `services/comments.ts` so read helpers can be called from inside a tx.
+type DBOrTx = DB | Parameters<Parameters<DB['transaction']>[0]>[0];
 import { HTTPError } from '../lib/http.ts';
 import { emitEvent, txWithEvents, type EventKind } from '../lib/events.ts';
 import {
@@ -349,4 +353,167 @@ export async function incrementTokens(
   const tokensIn = typeof fm.tokens_in === 'number' ? fm.tokens_in : 0;
   const tokensOut = typeof fm.tokens_out === 'number' ? fm.tokens_out : 0;
   return { tokens_in: tokensIn, tokens_out: tokensOut };
+}
+
+// ----- read helpers (getActiveRun, getPendingApprovalRun, listRuns) -----
+//
+// Read-only — no event emission. Accept an optional `tx: DBOrTx = db` so
+// internal callers from inside a transaction (e.g. the runner about to claim
+// or transition a run) can pass their tx handle for read-your-writes
+// consistency. Same pattern as `comments.ts:loadWorkspaceAgents`.
+
+/** Non-terminal statuses — what `getActiveRun` considers "active". */
+const ACTIVE_RUN_STATUSES = ['planning', 'awaiting_approval', 'running'] as const;
+
+/**
+ * Most recent non-terminal agent_run row for a given (parent, agent_slug).
+ *
+ * Storage shape (per C-1 createRun):
+ *  - `documents.parentId` column holds the parent work_item/page id.
+ *  - `documents.status` column mirrors `frontmatter.status` in lockstep
+ *    (mitigation 40 — set in a single UPDATE).
+ *  - `frontmatter.agent_slug` holds the agent slug.
+ *
+ * Mitigation 23 — the parent_id boundary IS the workspace+project boundary
+ * because the parent row is already scope-checked by upstream document
+ * routes (the documents-list path scope-check covers `type='agent_run'`).
+ * Therefore predicating on `parentId` is sufficient and avoids the planner
+ * picking a different index than we expect.
+ *
+ * Index hit (EXPLAIN-verified): `documents_runs_by_parent_idx` on
+ * `(parent_id, created_at DESC) WHERE type='agent_run'` covers
+ * `WHERE type='agent_run' AND parent_id = ? ORDER BY created_at DESC`.
+ * Status + agent_slug predicates are residual filters on the candidate set.
+ */
+export async function getActiveRun(
+  args: { parentId: string; agentSlug: string },
+  tx: DBOrTx = db,
+): Promise<Document | null> {
+  const row = await tx.query.documents.findFirst({
+    where: and(
+      eq(documents.type, 'agent_run'),
+      eq(documents.parentId, args.parentId),
+      inArray(documents.status, [...ACTIVE_RUN_STATUSES]),
+      sql`json_extract(${documents.frontmatter}, '$.agent_slug') = ${args.agentSlug}`,
+    ),
+    orderBy: [desc(documents.createdAt)],
+  });
+  return row ?? null;
+}
+
+/**
+ * The single `awaiting_approval` agent_run row for a (parent, agent_slug),
+ * if any. Used by the approval-resume code path (Sub-phase D).
+ *
+ * Same storage + scope conventions as getActiveRun.
+ */
+export async function getPendingApprovalRun(
+  args: { parentId: string; agentSlug: string },
+  tx: DBOrTx = db,
+): Promise<Document | null> {
+  const row = await tx.query.documents.findFirst({
+    where: and(
+      eq(documents.type, 'agent_run'),
+      eq(documents.parentId, args.parentId),
+      eq(documents.status, 'awaiting_approval'),
+      sql`json_extract(${documents.frontmatter}, '$.agent_slug') = ${args.agentSlug}`,
+    ),
+    orderBy: [desc(documents.createdAt)],
+  });
+  return row ?? null;
+}
+
+/**
+ * Filterable list of agent_run rows.
+ *
+ * Mitigation 24 — `callerAgentProjectsAllowList` narrows results to rows in
+ * the caller's allowed projects when the caller is a project-narrowed
+ * agent-bound bearer. Semantics:
+ *  - `undefined` → no narrowing (admin / non-agent caller).
+ *  - `['*']`     → no narrowing (agent has wildcard allow-list).
+ *  - `[]`        → SHORT-CIRCUIT, return empty array. SQLite's
+ *                  `WHERE projectId IN ()` is a parse error, so we never
+ *                  issue the query. This is also the desired semantics: an
+ *                  agent with no allowed projects sees no runs.
+ *  - `[a, b]`    → narrow `documents.projectId` to that allow-list.
+ */
+export interface ListRunsFilter {
+  workspaceId?: string;
+  projectId?: string;
+  parentId?: string;
+  agentSlug?: string;
+  status?: string;
+  chainId?: string;
+  /** ISO timestamp — returns rows with `started_at >= since`. */
+  since?: string;
+  /**
+   * Project ids the calling bearer is allowed to read runs from. See
+   * mitigation 24 semantics above.
+   */
+  callerAgentProjectsAllowList?: string[];
+}
+
+export async function listRuns(
+  filter: ListRunsFilter,
+  tx: DBOrTx = db,
+): Promise<Document[]> {
+  // Mitigation 24 short-circuit — never issue `WHERE IN ()`.
+  if (
+    filter.callerAgentProjectsAllowList !== undefined &&
+    !filter.callerAgentProjectsAllowList.includes('*') &&
+    filter.callerAgentProjectsAllowList.length === 0
+  ) {
+    return [];
+  }
+
+  const whereClauses = [eq(documents.type, 'agent_run')];
+
+  if (filter.workspaceId !== undefined) {
+    whereClauses.push(eq(documents.workspaceId, filter.workspaceId));
+  }
+  if (filter.projectId !== undefined) {
+    whereClauses.push(eq(documents.projectId, filter.projectId));
+  }
+  if (filter.parentId !== undefined) {
+    whereClauses.push(eq(documents.parentId, filter.parentId));
+  }
+  if (filter.status !== undefined) {
+    whereClauses.push(eq(documents.status, filter.status));
+  }
+  if (filter.agentSlug !== undefined) {
+    whereClauses.push(
+      sql`json_extract(${documents.frontmatter}, '$.agent_slug') = ${filter.agentSlug}`,
+    );
+  }
+  if (filter.chainId !== undefined) {
+    whereClauses.push(
+      sql`json_extract(${documents.frontmatter}, '$.chain_id') = ${filter.chainId}`,
+    );
+  }
+  if (filter.since !== undefined) {
+    // `started_at` is the frontmatter timestamp the run was created at; we
+    // filter on the column-backed `createdAt` because it's index-friendly
+    // and is set to the same moment by createRun (both come from the same
+    // `new Date()` call in the same transaction).
+    const ts = new Date(filter.since);
+    if (!Number.isNaN(ts.getTime())) {
+      whereClauses.push(gte(documents.createdAt, ts));
+    }
+  }
+
+  // Mitigation 24 allow-list narrowing. The short-circuit above already
+  // handled `[]`; here we narrow only when the list is non-empty AND does
+  // not contain the wildcard.
+  if (
+    filter.callerAgentProjectsAllowList !== undefined &&
+    !filter.callerAgentProjectsAllowList.includes('*')
+  ) {
+    whereClauses.push(inArray(documents.projectId, filter.callerAgentProjectsAllowList));
+  }
+
+  const rows = await tx.query.documents.findMany({
+    where: and(...whereClauses),
+    orderBy: [desc(documents.createdAt)],
+  });
+  return rows;
 }

@@ -6,13 +6,14 @@
  */
 
 import { test, expect, describe } from 'bun:test';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { makeTestApp } from '../test/harness.ts';
 import {
   apiTokens,
   documents,
   events,
+  projects as schemaProjects,
   tables,
   users,
   type Document,
@@ -21,12 +22,20 @@ import {
   type User,
   type Workspace,
 } from '../db/schema.ts';
+import { seedProjectDefaults } from '../lib/seed-project-defaults.ts';
 import { newApiToken } from '../lib/auth.ts';
 import { toolsToScopes } from '../lib/agent-schema.ts';
 import type { AgentRunFrontmatter } from '../lib/agent-run-schema.ts';
 import { HTTPError } from '../lib/http.ts';
 import { sanitizeProviderError } from '../lib/ai/sanitize-error.ts';
-import { createRun, transitionRun, incrementTokens } from './agent-runs.ts';
+import {
+  createRun,
+  transitionRun,
+  incrementTokens,
+  getActiveRun,
+  getPendingApprovalRun,
+  listRuns,
+} from './agent-runs.ts';
 
 type TestDB = Awaited<ReturnType<typeof makeTestApp>>['db'];
 
@@ -584,6 +593,342 @@ describe('incrementTokens', () => {
     expect(caught).toBeInstanceOf(HTTPError);
     expect(caught!.status).toBe(404);
     expect(caught!.code).toBe('AGENT_RUN_NOT_FOUND');
+  });
+});
+
+// ---------- read helpers (getActiveRun, getPendingApprovalRun, listRuns) ----------
+
+/**
+ * Seed an agent_run row at an arbitrary status with an optional createdAt
+ * override. Read helpers' tests need to control both ordering and status
+ * across multiple rows on the same (parent, agent_slug). seedRunningRun
+ * defaults to status='running' AND uses `new Date()` for createdAt, neither
+ * of which is enough on its own.
+ */
+async function seedRunAt(
+  db: TestDB,
+  workspace: Workspace,
+  project: Project,
+  runsTable: TableEntity,
+  agent: Document,
+  parent: Document,
+  user: User,
+  status: AgentRunFrontmatter['status'],
+  overrides: { createdAt?: Date; chainId?: string } = {},
+): Promise<Document> {
+  const id = nanoid();
+  const now = new Date().toISOString();
+  const fm: AgentRunFrontmatter = {
+    assignee: `agent:${agent.slug}`,
+    status,
+    agent_slug: agent.slug,
+    provider: 'anthropic',
+    model: 'claude-sonnet-4-6',
+    system_prompt: 'You are a helper.',
+    max_tokens: 12_345,
+    tokens_in: 0,
+    tokens_out: 0,
+    trigger_id: null,
+    chain_id: overrides.chainId ?? crypto.randomUUID(),
+    fired_by: 'agent.task.assigned',
+    started_at: now,
+  };
+  await db.insert(documents).values({
+    id,
+    workspaceId: workspace.id,
+    projectId: project.id,
+    tableId: runsTable.id,
+    type: 'agent_run',
+    slug: `${agent.slug}-${now.replace(/:/g, '-')}-${nanoid(8)}`,
+    title: `${agent.slug} run`,
+    status,
+    body: '',
+    frontmatter: fm as unknown as Record<string, unknown>,
+    parentId: parent.id,
+    createdBy: user.id,
+    updatedBy: user.id,
+    ...(overrides.createdAt ? { createdAt: overrides.createdAt } : {}),
+  });
+  const row = await db.query.documents.findFirst({ where: eq(documents.id, id) });
+  return row!;
+}
+
+describe('getActiveRun', () => {
+  test('returns the most recent non-terminal run for (parent, agentSlug)', async () => {
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+
+    // Older planning row, newer running row → running wins (most recent).
+    await seedRunAt(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'planning', {
+      createdAt: new Date(Date.now() - 60_000),
+    });
+    const newer = await seedRunAt(
+      db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'running',
+      { createdAt: new Date() },
+    );
+
+    const active = await getActiveRun({ parentId: parent.id, agentSlug: agent.slug });
+    expect(active).not.toBeNull();
+    expect(active!.id).toBe(newer.id);
+    expect(active!.status).toBe('running');
+  });
+
+  test('returns null when only terminal runs exist', async () => {
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+
+    await seedRunAt(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'completed');
+    await seedRunAt(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'failed');
+
+    const active = await getActiveRun({ parentId: parent.id, agentSlug: agent.slug });
+    expect(active).toBeNull();
+  });
+
+  test('returns null when no runs exist for the (parent, agent) pair', async () => {
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const helper = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const other = await seedAgent(db, seed.workspace, seed.user, 'other');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+
+    // An unrelated agent has a running row on the same parent — must not match
+    // when we query for `helper`.
+    await seedRunAt(db, seed.workspace, seed.project, runsTable, other, parent, seed.user, 'running');
+
+    const active = await getActiveRun({ parentId: parent.id, agentSlug: helper.slug });
+    expect(active).toBeNull();
+  });
+
+  test('ignores rows from other parents (scope predicate is parent_id)', async () => {
+    // Mitigation 23 — parent_id is the scope predicate. Another work_item's
+    // active run must not surface in this work_item's getActiveRun.
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parentA = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const parentB = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+
+    await seedRunAt(db, seed.workspace, seed.project, runsTable, agent, parentA, seed.user, 'running');
+
+    const active = await getActiveRun({ parentId: parentB.id, agentSlug: agent.slug });
+    expect(active).toBeNull();
+  });
+});
+
+describe('getPendingApprovalRun', () => {
+  test('returns ONLY the awaiting_approval row for (parent, agentSlug)', async () => {
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+
+    await seedRunAt(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'planning');
+    const pending = await seedRunAt(
+      db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'awaiting_approval',
+    );
+    await seedRunAt(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'running');
+
+    const found = await getPendingApprovalRun({ parentId: parent.id, agentSlug: agent.slug });
+    expect(found).not.toBeNull();
+    expect(found!.id).toBe(pending.id);
+    expect(found!.status).toBe('awaiting_approval');
+  });
+
+  test('returns null when status is something else (running only)', async () => {
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+
+    await seedRunAt(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'running');
+
+    const found = await getPendingApprovalRun({ parentId: parent.id, agentSlug: agent.slug });
+    expect(found).toBeNull();
+  });
+});
+
+describe('listRuns', () => {
+  test('filters by workspaceId + status', async () => {
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+
+    const p1 = await seedRunAt(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'planning');
+    const p2 = await seedRunAt(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'planning');
+    await seedRunAt(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'running');
+
+    const rows = await listRuns({ workspaceId: seed.workspace.id, status: 'planning' });
+    const ids = rows.map((r) => r.id).sort();
+    expect(ids).toEqual([p1.id, p2.id].sort());
+  });
+
+  test('filters by projectId + chainId (chain aggregation)', async () => {
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+
+    const chainId = crypto.randomUUID();
+    const inChain1 = await seedRunAt(
+      db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'running',
+      { chainId },
+    );
+    const inChain2 = await seedRunAt(
+      db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'completed',
+      { chainId },
+    );
+    await seedRunAt(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'running');
+
+    const rows = await listRuns({ projectId: seed.project.id, chainId });
+    const ids = rows.map((r) => r.id).sort();
+    expect(ids).toEqual([inChain1.id, inChain2.id].sort());
+  });
+
+  test('filters by `since` — only rows with createdAt >= since are returned', async () => {
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+
+    const oldStamp = new Date(Date.now() - 120_000);
+    const newStamp = new Date();
+
+    await seedRunAt(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'running', { createdAt: oldStamp });
+    const recent = await seedRunAt(
+      db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'running',
+      { createdAt: newStamp },
+    );
+
+    const cutoff = new Date(Date.now() - 60_000).toISOString();
+    const rows = await listRuns({ workspaceId: seed.workspace.id, since: cutoff });
+    const ids = rows.map((r) => r.id);
+    expect(ids).toContain(recent.id);
+    expect(ids).toHaveLength(1);
+  });
+
+  test('callerAgentProjectsAllowList=["*"] returns everything (no narrowing)', async () => {
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+
+    await seedRunAt(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'running');
+    await seedRunAt(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'planning');
+
+    const rows = await listRuns({
+      workspaceId: seed.workspace.id,
+      callerAgentProjectsAllowList: ['*'],
+    });
+    expect(rows.length).toBe(2);
+  });
+
+  test('callerAgentProjectsAllowList=[projectId] narrows to allowed projects (mitigation 24)', async () => {
+    // Two projects in the same workspace. Allow-list only one — only that
+    // project's run should come back.
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent1 = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable1 = await seedRunsTable(db, seed.project.id);
+
+    const project2Id = nanoid();
+    await db.insert(schemaProjects).values({
+      id: project2Id,
+      workspaceId: seed.workspace.id,
+      slug: 'p2',
+      name: 'P2',
+    });
+    await seedProjectDefaults(db, project2Id);
+    const project2 = (await db.query.projects.findFirst({
+      where: (p, { eq: e }) => e(p.id, project2Id),
+    }))!;
+    const table2 = await getWorkItemsTable(db, project2.id);
+    const parent2 = await seedWorkItem(db, seed.workspace, project2, table2, seed.user);
+    const runsTable2 = await seedRunsTable(db, project2.id);
+
+    const inP1 = await seedRunAt(db, seed.workspace, seed.project, runsTable1, agent, parent1, seed.user, 'running');
+    await seedRunAt(db, seed.workspace, project2, runsTable2, agent, parent2, seed.user, 'running');
+
+    const rows = await listRuns({
+      workspaceId: seed.workspace.id,
+      callerAgentProjectsAllowList: [seed.project.id],
+    });
+    const ids = rows.map((r) => r.id);
+    expect(ids).toEqual([inP1.id]);
+  });
+
+  test('callerAgentProjectsAllowList=[] short-circuits to [] (mitigation 24, no `WHERE IN ()`)', async () => {
+    // Seed a row to prove that the short-circuit is not just "no rows" by
+    // accident — it's an explicit guard against SQLite's `IN ()` parse error.
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+
+    await seedRunAt(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'running');
+
+    const rows = await listRuns({
+      workspaceId: seed.workspace.id,
+      callerAgentProjectsAllowList: [],
+    });
+    expect(rows).toEqual([]);
+  });
+
+  test('EXPLAIN QUERY PLAN of getActiveRun uses a partial agent_run index', async () => {
+    // The natural index for `WHERE type='agent_run' AND parent_id=? ORDER BY
+    // created_at DESC` is `documents_runs_by_parent_idx` (parent_id,
+    // created_at DESC) WHERE type='agent_run'. We assert on that index
+    // because the planner has no incentive to choose
+    // `documents_runs_by_status_idx` (its leading column is `table_id`, not
+    // available in getActiveRun's input set).
+    //
+    // DIVERGENCE FROM PLAN: the plan brief says the EXPLAIN test should
+    // verify `documents_runs_by_status_idx`, but that index is on
+    // `(table_id, status, created_at DESC)` and the query has no `table_id`
+    // predicate. Asserting on the index actually chosen — the parent-keyed
+    // one — keeps the test load-bearing without forcing a query reshape that
+    // adds an unused `table_id` predicate just to pin a misaligned index.
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+    await seedRunAt(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'running');
+
+    // Mirror getActiveRun's where clause shape in raw SQL so we EXPLAIN the
+    // exact form Drizzle generates.
+    const plan = await db.all(sql`
+      EXPLAIN QUERY PLAN
+      SELECT * FROM documents
+      WHERE type = 'agent_run'
+        AND parent_id = ${parent.id}
+        AND status IN ('planning', 'awaiting_approval', 'running')
+        AND json_extract(frontmatter, '$.agent_slug') = ${agent.slug}
+      ORDER BY created_at DESC
+      LIMIT 1
+    `);
+    const stringified = JSON.stringify(plan);
+    if (process.env.FOLIO_EXPLAIN_DEBUG) {
+      // eslint-disable-next-line no-console
+      console.log('EXPLAIN getActiveRun:', stringified);
+    }
+    expect(stringified).toContain('documents_runs_by_parent_idx');
   });
 });
 
