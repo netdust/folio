@@ -1,13 +1,13 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { AIProvider, ProviderEvent } from './provider.ts';
 
-function client(apiKey: string): Anthropic {
-  return new Anthropic({ apiKey });
+function client(apiKey: string, baseUrl?: string): Anthropic {
+  return new Anthropic({ apiKey, baseURL: baseUrl });
 }
 
 export const anthropic: AIProvider = {
-  async *stream({ system, messages, tools, maxTokens, apiKey, model }) {
-    const c = client(apiKey);
+  async *stream({ system, messages, tools, maxTokens, apiKey, model, baseUrl }) {
+    const c = client(apiKey, baseUrl);
 
     const anthropicMessages = messages.map((m) => {
       if (m.role === 'tool') {
@@ -110,9 +110,9 @@ export const anthropic: AIProvider = {
     yield { type: 'done', reason: stopReason };
   },
 
-  async testKey({ apiKey }) {
+  async testKey({ apiKey, baseUrl }) {
     try {
-      const c = client(apiKey);
+      const c = client(apiKey, baseUrl);
       // models.list validates the key with a pure read — no token usage.
       // testKey validates the KEY only — the model string is validated on
       // the first real stream() call.

@@ -8,12 +8,15 @@ const mockStream = mock(async function* () {
   yield { type: 'message_stop' };
 });
 const mockModelsList = mock(async (): Promise<{ data: Array<{ id: string }> }> => ({ data: [] }));
+const anthropicCtorSpy = mock((opts: unknown) => opts);
 
 mock.module('@anthropic-ai/sdk', () => ({
   default: class Anthropic {
     messages = { create: mockCreate, stream: () => mockStream() };
     models = { list: mockModelsList };
-    constructor(_: unknown) {}
+    constructor(opts: unknown) {
+      anthropicCtorSpy(opts);
+    }
   },
 }));
 
@@ -24,6 +27,7 @@ describe('anthropic provider', () => {
     mockCreate.mockClear();
     mockStream.mockClear();
     mockModelsList.mockClear();
+    anthropicCtorSpy.mockClear();
   });
 
   test('stream() yields text + tokens + done events from the Anthropic SDK stream', async () => {
@@ -114,6 +118,42 @@ describe('anthropic provider', () => {
       events.push(ev);
     }
     expect(events).toContainEqual({ type: 'done', reason: 'pause_turn' });
+  });
+
+  test('stream() passes baseUrl through to the SDK constructor', async () => {
+    const iter = anthropic.stream({
+      system: 'sys',
+      messages: [{ role: 'user', content: 'hi' }],
+      tools: [],
+      maxTokens: 10,
+      apiKey: 'sk',
+      model: 'claude-haiku-4-5',
+      baseUrl: 'https://anthropic.example.com',
+    });
+    for await (const _ of iter) {
+      // drain
+    }
+    expect(anthropicCtorSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        apiKey: 'sk',
+        baseURL: 'https://anthropic.example.com',
+      }),
+    );
+  });
+
+  test('testKey() passes baseUrl through to the SDK constructor', async () => {
+    mockModelsList.mockImplementationOnce(async () => ({ data: [{ id: 'claude-haiku-4-5' }] }));
+    await anthropic.testKey({
+      apiKey: 'sk',
+      model: 'claude-haiku-4-5',
+      baseUrl: 'https://anthropic.example.com',
+    });
+    expect(anthropicCtorSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        apiKey: 'sk',
+        baseURL: 'https://anthropic.example.com',
+      }),
+    );
   });
 
   test('stream() yields done event even when tool_use input_json fails to JSON.parse', async () => {
