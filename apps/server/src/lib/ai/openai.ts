@@ -5,8 +5,13 @@ function client(apiKey: string, baseUrl?: string): OpenAI {
   return new OpenAI({ apiKey, baseURL: baseUrl });
 }
 
-function toOpenAIMessages(system: string, messages: Message[]) {
-  const out: Array<Record<string, unknown>> = [{ role: 'system', content: system }];
+function toOpenAIMessages(
+  system: string,
+  messages: Message[],
+): OpenAI.Chat.Completions.ChatCompletionMessageParam[] {
+  const out: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
+    { role: 'system', content: system },
+  ];
   for (const m of messages) {
     if (m.role === 'tool') {
       out.push({ role: 'tool', content: m.content, tool_call_id: m.tool_use_id });
@@ -16,7 +21,7 @@ function toOpenAIMessages(system: string, messages: Message[]) {
         content: m.content,
         tool_calls: m.tool_calls.map((tc) => ({
           id: tc.id,
-          type: 'function',
+          type: 'function' as const,
           function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
         })),
       });
@@ -35,7 +40,7 @@ export const openai: AIProvider = {
       max_tokens: maxTokens,
       stream: true,
       stream_options: { include_usage: true },
-      messages: toOpenAIMessages(system, messages) as never,
+      messages: toOpenAIMessages(system, messages),
       tools: tools.length
         ? tools.map((t) => ({
             type: 'function' as const,
