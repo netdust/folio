@@ -46,6 +46,16 @@ const REGISTRY: Record<Provider, () => Promise<AIProvider>> = {
   ollama: async () => (await import('./ollama.ts')).ollama,
 };
 
+// Round 7 #15 — module-load snapshot of REGISTRY for the test-only reset()
+// hatch. Pre-round-7 reset() cleared `cache` + `loading` but left REGISTRY
+// mutations from `__INTERNAL_TEST_ONLY__.overrideRegistry(...)` in place;
+// a test that threw mid-test before its explicit restore leaked the stub
+// to every subsequent test in the Bun process. Snapshotting at module load
+// lets reset() restore the original loaders without needing per-call cleanup
+// in the tests. Spread is intentional — a per-test mutation to REGISTRY[k]
+// must NOT mutate ORIGINAL_REGISTRY (which would defeat the snapshot).
+const ORIGINAL_REGISTRY: Record<Provider, () => Promise<AIProvider>> = { ...REGISTRY };
+
 const cache: Partial<Record<Provider, AIProvider>> = {};
 // Share one in-flight import per provider so concurrent first-callers
 // don't each trigger a dynamic import + duplicate module evaluation.
@@ -119,6 +129,11 @@ export const __INTERNAL_TEST_ONLY__ = {
     guardTestOnly('reset');
     for (const k of Object.keys(cache) as Provider[]) delete cache[k];
     for (const k of Object.keys(loading) as Provider[]) delete loading[k];
+    // Round 7 #15 — restore the module-load REGISTRY snapshot so test stubs
+    // from overrideRegistry() are unwound. See ORIGINAL_REGISTRY comment.
+    for (const k of Object.keys(REGISTRY) as Provider[]) {
+      REGISTRY[k] = ORIGINAL_REGISTRY[k];
+    }
   },
   loadProvider(name: Provider): Promise<AIProvider> {
     guardTestOnly('loadProvider');

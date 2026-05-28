@@ -49,23 +49,18 @@ export const requireUser: MiddlewareHandler<AuthContext> = async (c, next) => {
 };
 
 /**
- * Session-only gate (B round 5 — threat model mitigation 11). Rejects with 403
- * when `authMethod === 'token'`. ALL routes that mutate auth grants, workspace
- * ownership/identity, or BYOK credentials MUST use this middleware. See the
- * plan's threat model section for the full enumerated route table — new routes
- * that fit the pattern MUST wire it in the same commit they are introduced.
+ * Round 7 #14 — non-composite `requireSession` deleted as dead code. The round-6
+ * #6 migration replaced every live importer with `requireSessionUser` (composite
+ * with `requireUser`), which closes the ordering ambiguity the standalone gate
+ * left open. The original was kept around `--just in case--`; an IDE
+ * autocomplete grabbing it onto a new mutation route would silently lose the
+ * `requireUser` half. Deletion is safer than commenting "use requireSessionUser
+ * instead" — there's only one helper now and the type system makes it the only
+ * spelling that compiles.
  *
- * Pre-fix rounds 3-4 inlined `if (c.get('authMethod') === 'token') throw …`
- * on each route. The asymmetry that round 5 caught (tokens.ts + workspaces.ts
- * had no guard) is exactly what an enumerated mitigation table without a
- * shared helper enables. Now there's one helper; routes pull it explicitly.
+ * Threat model mitigation 11 still applies to the same enumerated route table;
+ * the gate now lives entirely inside `requireSessionUser` (below).
  */
-export const requireSession: MiddlewareHandler<AuthContext> = async (c, next) => {
-  if (c.get('authMethod') === 'token') {
-    throw new HTTPError('FORBIDDEN', 'This route is session-only (no API tokens)', 403);
-  }
-  return next();
-};
 
 /**
  * Composite: enforce session-only AND require an authenticated user.

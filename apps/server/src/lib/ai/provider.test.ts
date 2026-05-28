@@ -109,3 +109,44 @@ describe('loadProvider rejection handling', () => {
     __INTERNAL_TEST_ONLY__.reset();
   });
 });
+
+// Round 7 #15 — reset() must restore REGISTRY to its module-load snapshot.
+// Pre-round-7 reset() cleared `cache` + `loading` but left REGISTRY mutations
+// from overrideRegistry() in place. A test that threw mid-test before its
+// explicit `overrideRegistry(name, originalLoader)` restore leaked the stub
+// to every subsequent test in the same Bun process.
+describe('__INTERNAL_TEST_ONLY__.reset() (round 7 #15)', () => {
+  test('reset() unwinds overrideRegistry stubs to the module-load snapshot', async () => {
+    // Install a sentinel stub for anthropic that yields a distinctive event.
+    const sentinelImpl: AIProvider = {
+      async *stream() {
+        yield { type: 'done', reason: 'stop' };
+      },
+      async testKey() {
+        return { ok: true };
+      },
+    };
+    __INTERNAL_TEST_ONLY__.overrideRegistry('anthropic', async () => sentinelImpl);
+
+    // Confirm the stub is in effect via loadProvider.
+    const beforeReset = await __INTERNAL_TEST_ONLY__.loadProvider('anthropic');
+    expect(beforeReset).toBe(sentinelImpl);
+
+    // Reset — this should clear caches AND restore the original REGISTRY entry.
+    __INTERNAL_TEST_ONLY__.reset();
+
+    // After reset, loadProvider must NOT return the sentinel — it must resolve
+    // to the real anthropic provider (the module-load snapshot is back in
+    // REGISTRY). We don't deep-equal against the real impl (would require
+    // importing it); the contract is "not the sentinel" — the test for
+    // identity-not-equal is the cleanest assertion.
+    const afterReset = await __INTERNAL_TEST_ONLY__.loadProvider('anthropic');
+    expect(afterReset).not.toBe(sentinelImpl);
+    // And the resolved impl should look like a real provider (stream + testKey).
+    expect(typeof afterReset.stream).toBe('function');
+    expect(typeof afterReset.testKey).toBe('function');
+
+    // Clean up the cache so the next test still sees the real impl freshly.
+    __INTERNAL_TEST_ONLY__.reset();
+  });
+});
