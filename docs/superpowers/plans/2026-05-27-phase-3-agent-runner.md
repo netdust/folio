@@ -917,6 +917,11 @@ seed so newly-created workspaces start enabled directly."
 
 ### Task A-4: agent_run frontmatter Zod + state-machine helper
 
+> **⚠ Plan defect noted during phase-3-A execution (shipped fix in `bc4b5ee`):**
+> The Zod consts below are written PascalCase (`RunStatusSchema`, `AgentRunFrontmatterSchema`, `ProviderSchema`, `RunErrorReasonSchema`) and the main object omits `.strict()`. The `assignee` and `agent_slug` regexes use loose `.+` instead of the project's slug grammar `[a-z0-9-]+`. The `resume_of` field is a bare `z.string()` instead of `.uuid()`.
+> The shipped artifact at `bc4b5ee` renames all four consts to camelCase (peer schemas in `apps/server/src/lib/*-schema.ts` use camelCase per CLAUDE.md), adds `.strict()` to the main schema (matches `agentFrontmatterSchema` / `triggerFrontmatterSchema` / `commentFrontmatterSchema`), tightens both regexes to `^agent:[a-z0-9-]+$` / `^[a-z0-9-]+$`, and pins `resume_of` to `.uuid()`.
+> Refer to commit `bc4b5ee` for the actual pattern; the block below is preserved as historical context but should not be copied.
+
 **Files:**
 - Create: `apps/server/src/lib/agent-run-schema.ts`
 - Create: `apps/server/src/lib/agent-run-schema.test.ts`
