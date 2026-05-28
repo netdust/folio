@@ -1,6 +1,6 @@
 # Folio — STATE
 
-_Last updated: 2026-05-28 night (Phase 3 Sub-phase C.1 FULLY HARDENED on `phase-3/agent-runner` — 6 tasks shipped + 2-round threat-model review (all 12 mitigations in place) + 1 audit-trail fixup A1 + 2 plan corrections + 9-angle/10-verifier freeform code-review found 15 bugs, ALL FIXED across 5 atomic bundles. Server suite **796 pass / 1 skip / 0 fail**. Next blocking step is plan-correction commit expanding C-7..C-9 task bodies before Sub-phase C.2 work.)_
+_Last updated: 2026-05-28 LATE night (Phase 3 Sub-phase C.1 FULLY HARDENED — TWICE — on `phase-3/agent-runner`. Layer 1: 6 tasks + 2-round threat-model review (12 mitigations) + freeform 9-angle/10-verifier review found 15 bugs, ALL FIXED across 5 bundles. Layer 2: medium-effort review-of-review of the fixes themselves found 15 MORE bugs, ALL FIXED across 2 bundles (bundles 6+7). Server suite **810 pass / 1 skip / 0 fail**. Next blocking step is plan-correction commit expanding C-7..C-9 task bodies before Sub-phase C.2 work.)_
 
 Living snapshot of where the project actually is. Read at session start. Update at session end if anything below changed.
 
@@ -30,8 +30,8 @@ C-7..C-9 today are header-only outlines at plan lines 3818–3845 (no Steps / no
 > 3. **C-12 (CRITICAL)** — fold in the autonomy gate: `FOLIO_AGENT_CHAINS_ENABLED` (default false) + `isAgentOriginated(event)` short-circuit so agent-originated `@`-mentions create ZERO rows in V1 (human-originated still fire) + `agent.chain.suppressed` + boundary test. This is the V1↔autonomous decision point. See `docs/PHASES.md` task blocks + `memory/project_folio-agent-thesis.md`.
 
 **Branch state at session end (Phase 3 C.2 onwards):**
-- HEAD: `126a7b2` (review-fix bundle 5; 5 review-fix commits on top of C-6 `b4d84c1` + A1 `13ccf61` + plan-corrections+STATE `1615c34`)
-- Server suite: **796 pass / 1 skip / 0 fail** (C.1 complete + reviewed delta: 716 → 796 = +80 tests across services + cross-route guards)
+- HEAD: `2acbff2` (review-of-review bundle 7; 2 review-of-review commits on top of bundle-5 close `126a7b2`)
+- Server suite: **810 pass / 1 skip / 0 fail** (C.1 complete + 2 layers of review-fix delta: 716 → 810 = +94 tests across services + cross-route guards + recovery edges + 4 read-path guards + DB-level constraints)
 - Web suite: **559 pass / 8 skip / 0 fail** (unchanged through C.1 — server + shared only)
 - Shared: **51 / 0 fail**
 - TSC: clean both apps for touched files
@@ -46,6 +46,17 @@ C-7..C-9 today are header-only outlines at plan lines 3818–3845 (no Steps / no
 | 3 | `cb5ab5e` | F4 + F5 + F7 + F11 | `workspace.provider.*` events `projectId:null` (cross-project SSE delivery) · provider-relevant filter at SQL (worker_crash no longer resets degraded) · orphan-recovery flushes per-(workspace, provider) · counter-cap semantics documented |
 | 4 | `e505ae7` | F3 + F9 + F10 | Cross-route agent_run guards (PATCH md/JSON + DELETE + createDocument + DOCUMENT_TYPES) — closes the attack surface DocumentType-widening opened |
 | 5 | `126a7b2` | F13 + F14 + F15 | Zod `.datetime()` Z-only enforcement documented · `ensureRunsTable` race resolved via `onConflictDoNothing` (resolves retro-follow-up C.1-R-2) · Drizzle partial-index limitation documented |
+
+### Sub-phase C.1 review-of-review bundles (this session, layer 2)
+
+Medium-effort review of bundles 1-5 — 5 angles + 6 verifiers — surfaced 15 MORE bugs that the bundle-fixes themselves missed. Meta-finding: **the same pattern that bit C.1 originally (cross-file/cross-route guards needing lockstep) bit the review-fix work too**. Bundles 6-7 close that gap; if Stefan wants a layer-3 review-of-review-of-review it stays on the same diff range as future work touches it.
+
+| Bundle | Commit | Findings | Bug class |
+|---|---|---|---|
+| 6 | `772b124` | R1 + R2 + R3 + R4 + R5 + R6 + R7 + R8 | FE+shared DocumentType lockstep (R1) · agent_run READ paths guard (R2 — closed the read-side counterpart to bundle 4's writes) · `countPendingPlanning` predicate misses partial index (R3 — F6's missed 3rd site) · F5 recency floor (R4 — fixes "locked degraded forever" + F7 spurious recovered) · F1 distinct race-loser code (R5 + R6 — `RUN_TRANSITION_RACED` + `err.observedFrom`) · recoverOrphanRuns enum hygiene (R7) · F1 deterministic inner-throw test (R8) |
+| 7 | `2acbff2` | R9 + R10 + R11 + R13 | `PRAGMA busy_timeout = 5000` for serializing concurrent writes (R9) · migration drift guard script + test (R10) · DB-level CHECK constraint via triggers for worker_started_at Z-suffix (R11 — migration 0014) · simplified provider-health JS loop (R13) |
+
+R12 (F2 COALESCE branch is dead code through current state machine) + R14 (F7 idle workspace is indirectly fixed by R4's recency floor) + R15 (F11 stale `consecutive_failures > threshold` data — academic on this branch with no pre-F5 deploys) all resolved via code comments / retro-follow-up notes, no behavioral change.
 
 ### Plan-expansion status (DON'T FORGET — gates the next sub-phase)
 
