@@ -202,3 +202,36 @@ export function assertNotSelfDelete(
     );
   }
 }
+
+/**
+ * Round 7 #19 — mirror round-6's MCP gate on the HTTP surface.
+ *
+ * Agent CRUD on HTTP (`POST/PATCH/DELETE /api/v1/w/:wslug/documents` with
+ * `type=agent`) is an auth-grant mutation: it mints, modifies, or revokes an
+ * `agent_token` bearer credential. A stolen human PAT carrying `agents:write`
+ * could mint a new agent with arbitrary scopes and pivot through it — the
+ * exact privilege-escalation shape round 6 closed on MCP.
+ *
+ * Legitimate callers:
+ *   - Session callers (no token) — workspace admin managing agents via the UI.
+ *   - Agent-bound bearers (`token.agentId` set) — agent self-management /
+ *     parent spawning a child. Width-guards still apply.
+ *
+ * Rejected:
+ *   - Human PATs (token present, `token.agentId === null`) — `agents:write`
+ *     was the only gate before round 7; that gate is insufficient when the
+ *     PAT itself is the credential being escalated against.
+ */
+export function assertNotHumanPatForAgentLifecycle(
+  type: 'agent' | 'trigger',
+  token: ApiToken | null,
+): void {
+  if (type !== 'agent') return;
+  if (!token) return; // session-authenticated
+  if (token.agentId) return; // agent-bound bearer
+  throw new HTTPError(
+    'HUMAN_PAT_AGENT_LIFECYCLE_HTTP',
+    'agent lifecycle requires session auth or an agent-bound bearer; human PATs are rejected',
+    403,
+  );
+}

@@ -224,6 +224,38 @@ test('DELETE /api/v1/w/:wslug rejects API-token callers with 403', async () => {
   expect(body.error.code).toBe('FORBIDDEN');
 });
 
+// Round 7 #21 — POST /api/v1/workspaces gets explicit requireSessionUser.
+//
+// Pre-round-7 the route was session-only by routing topology: workspacesRoute
+// mounts at v1 (no wScope), attachToken never runs, so `authMethod` stays
+// undefined and the upstream `requireUser` produces 401 for bearer-only
+// callers. That's contract-via-implementation. A future middleware refactor
+// that hoists attachToken would silently turn this bearer-reachable.
+//
+// Threat model attack 20 + mitigation 21. The explicit gate is a no-op
+// today (bearer-only requests still don't authenticate as 'session') but
+// pins the contract against future routing changes.
+test('Round 7 #21: POST /api/v1/workspaces 401 for no auth', async () => {
+  const { app } = await makeTestApp();
+  const res = await app.request('/api/v1/workspaces', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'NoAuth' }),
+  });
+  expect(res.status).toBe(401);
+  expect((await res.json()).error.code).toBe('UNAUTHENTICATED');
+});
+
+test('Round 7 #21: POST /api/v1/workspaces accepts session callers (status 201)', async () => {
+  const { app, seed } = await makeTestApp();
+  const res = await app.request('/api/v1/workspaces', {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Session Created' }),
+  });
+  expect(res.status).toBe(201);
+});
+
 // Round 6 #4 — symmetric to the PATCH garbage-cookie test above. Round 5 #10
 // added the bearer + garbage cookie variant on settings.ts DELETE but missed
 // the workspaces.ts DELETE equivalent. A garbage-cookie + valid-bearer request

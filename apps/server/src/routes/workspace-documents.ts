@@ -17,6 +17,7 @@ import {
   assertAgentAllowListWidening,
   assertAgentScope,
   assertAgentToolsWidening,
+  assertNotHumanPatForAgentLifecycle,
   assertNotSelfDelete,
 } from '../lib/agent-guards.ts';
 import { type AuthContext, getUser } from '../middleware/auth.ts';
@@ -68,6 +69,10 @@ workspaceDocumentsRoute.post('/', requireScope('documents:write'), async (c) => 
   // Agent-CRUD guards — same invariants the MCP create_agent tool enforces.
   // Centralised in lib/agent-guards.ts so HTTP and MCP can't drift.
   const token = c.get('token') ?? null;
+  // Round 7 #19 — HTTP twin of round-6's MCP human-PAT rejection. Closes the
+  // agent-credential-escalation vector via the HTTP surface. Threat model
+  // mitigation 19.
+  assertNotHumanPatForAgentLifecycle(v.type, token);
   assertAgentScope(v.type, token, 'write');
   if (v.type === 'agent') {
     await assertAgentAllowListWidening(
@@ -136,6 +141,8 @@ workspaceDocumentsRoute.patch('/:slug', requireScope('documents:write'), async (
   if (!existing) throw new HTTPError('DOCUMENT_NOT_FOUND', `document "${slug}" not found`, 404);
 
   const token = c.get('token') ?? null;
+  // Round 7 #19 — human PATs cannot patch agent documents via HTTP.
+  assertNotHumanPatForAgentLifecycle(existing.type as 'agent' | 'trigger', token);
   assertAgentScope(existing.type as 'agent' | 'trigger', token, 'write');
 
   // BUG-019 — wrap so malformed/empty bodies surface as 422 INVALID_BODY.
@@ -182,6 +189,8 @@ workspaceDocumentsRoute.delete('/:slug', requireScope('documents:delete'), async
   if (!existing) throw new HTTPError('DOCUMENT_NOT_FOUND', `document "${slug}" not found`, 404);
 
   const token = c.get('token') ?? null;
+  // Round 7 #19 — human PATs cannot delete agent documents via HTTP.
+  assertNotHumanPatForAgentLifecycle(existing.type as 'agent' | 'trigger', token);
   assertAgentScope(existing.type as 'agent' | 'trigger', token, 'delete');
   if (existing.type === 'agent') {
     assertNotSelfDelete(token, existing.id);

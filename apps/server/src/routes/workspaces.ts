@@ -32,6 +32,15 @@ workspacesRoute.get('/', async (c) => {
 
 workspacesRoute.post(
   '/',
+  // Round 7 #21 — explicit session-only gate. The route was previously
+  // session-only by virtue of being mounted on v1 (not wScope) — attachToken
+  // never runs at that mount level, so `authMethod` stays undefined and the
+  // upstream `requireUser` rejects bearer-only callers. That's a routing
+  // topology, not a contract. A future middleware consolidation that mounts
+  // attachToken at app root would silently turn this bearer-reachable.
+  // Pin the contract with the explicit composite. No-op for current
+  // production but the test below asserts the gate fires.
+  requireSessionUser,
   zValidator(
     'json',
     z.object({
