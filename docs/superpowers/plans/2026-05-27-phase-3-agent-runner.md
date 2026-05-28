@@ -3815,6 +3815,420 @@ The rest of the Sub-phase C, D, E, F tasks are written below. Due to the size of
 - Chain helper: `nextChainId({ firedBy }) → string` — extracts the chain prefix from `fired_by` if present, else mints a fresh `crypto.randomUUID()`.
 - Tests: lazy-seed is idempotent (calling twice yields the same table id, no duplicate events).
 
+### Sub-phase C.2 — Runner + dispatcher (expanded task bodies — written 2026-05-28)
+
+> Sub-phase C.2 expands C-7..C-9 into the full Steps + Files + Tests + Commit form, mirroring the C.1 services-layer expansion at line 423. The original outlines at lines 3940+ (now further below, post-expansion) stay as historical context — they predate the three 2026-05-28 reconciliation decisions called out on their respective `⚠️ EXPANSION RECONCILIATION` blocks. **Do not implement against the outlines.** The expanded bodies below resolve the reconciliations; the outlines remain only so future readers can trace the design evolution.
+>
+> All C.2 tasks SEQUENTIAL. Each appends to one or two well-isolated files (`lib/agent-tools.ts` for C-7; `lib/runner.ts` for C-8 + C-9). Dispatched via `superpowers:subagent-driven-development` wrapped by `netdust-core:ntdst-execute-with-tests` per the project CLAUDE.md contract. Each subagent's close-out invokes `netdust-core:testing-workflow` and reports the Test-evidence + STATUS blocks per the wrapper's mandatory addendum.
+>
+> **Per-task mitigation pointers** name the threat-model mitigations the task implements. `/code-review` after C.2 closes verifies these are in place; controller pre-flight before dispatch verifies the planned code touches them.
+>
+> **Pre-flight invariants for every C.2 task:**
+> - `cd apps/server` — run all commands from the server app dir (never repo root — see `[[bun-test-from-repo-root-forbidden]]`).
+> - Test runner: `bun test src/lib/<file>.test.ts` (specific file) then `bun test` (full server suite).
+> - Typecheck: `bun x tsc --noEmit` (catches signature drift between runner + dispatcher + services).
+> - Baseline at C.2 start (post-C.1 close + 2 layers of review-fix): **server 810 / 1-skip / 0-fail, shared 51 / 0-fail, web 559 / 8-skip / 0-fail**. C.2 adds ~25-30 server tests; expected end-of-C.2 baseline: **server ~840 / 1-skip / 0-fail**.
+> - `lib/runner.ts` and `lib/agent-tools.ts` are NEW files; no pre-existing latent defects to worry about (unlike C-1's `DocumentType` widening). The pre-flight is about not breaking the services layer + provider layer that C.2 sits on.
+>
+> **Pre-flight verification (controller, before dispatching C-7):**
+> 1. Confirm `apps/server/src/services/agent-runs.ts` exports the C.1 surface: `createRun, transitionRun, incrementTokens, getActiveRun, getPendingApprovalRun, listRuns, claimNextPlanningRun, recoverOrphanRuns, countPendingPlanning, checkRunRateLimits, checkChainGuards, checkProviderHealth, getProviderHealth, ensureRunsTable, nextChainId` — that's the call surface C.2 builds on.
+> 2. Confirm `apps/server/src/lib/ai/provider.ts` exports the proxy + the providers expose `stream(messages, tools, opts)` returning an `AsyncIterable<ProviderEvent>` per Sub-phase B's locked interface.
+> 3. Confirm `apps/server/src/lib/agent-run-schema.ts` has `done_reason` (B mitigation 20) and the 12-value `runErrorReasonSchema` enum.
+> 4. **Sibling-site audit pre-flight (post-C.1 retro recommendation)**. Before dispatching ANY C.2 task, scan the surface the task will touch for the 5 lockstep classes:
+>    - TS union/enum: any new exported type widens shared/`apps/web/src/lib/api/*.ts`? (Likely no — C.2 doesn't introduce new doc types.)
+>    - SQL JSON-extract↔column predicates: any new query touches `frontmatter.status` or similar? (C.2 doesn't write to documents directly outside what services/agent-runs.ts already does; predicates live in C.1.)
+>    - Event scope (workspace-wide vs project-scoped): every `emitEvent` call site in the runner. The C.1 `workspace.provider.*` precedent says workspace-wide events MUST emit with `projectId: null`. Runner-side events like `agent.run.*` are project-scoped because they reference a specific run document. Audit `ai.action` + any new events C-8/C-9 introduce.
+>    - Cross-route guards (writes vs reads): C.2 doesn't add HTTP routes (that's Sub-phase D). Runner-emitted events flow through SSE; subscribers are bounded by the existing event-bus filter.
+>    - Closed-enum literals: `error_reason` writes from the runner. Every assignment MUST go through `runErrorReasonSchema.enum.X`, not raw string literals. C.1's A1 + R7 already pin this; C-8 and C-9 must follow.
+
+#### Task C-7: `lib/agent-tools.ts` — `executeTool` shared tool-execution layer
+
+**Threat-model mitigations bound to this task:** 26 (Zod re-validation before dispatch — `MCP_INVALID_ARGS` shape), 27 (self-vs-peer agent-lifecycle gate — `-32602 agent_self_management_only`), 34 (`__echo` test tool `NODE_ENV='test'` gate), 35 (tx-first signature so the runner can pass its tx and roll back tool side-effects on failure). Inherits B mitigations 18+19 (HTTP agent-lifecycle hardened) via the underlying service layer — the dispatcher doesn't re-implement, it routes through `services/documents.ts::createDocument` etc. which already carry those guards.
+
+**Files:**
+- Create: `apps/server/src/lib/agent-tools.ts` (renamed from `mcp-dispatch.ts` per the EXPANSION RECONCILIATION on the original outline below).
+- Create: `apps/server/src/lib/agent-tools.test.ts`.
+
+**Reconciled scope (resolves the 3 reconciliation items on the original outline at line 3940+):**
+
+1. **Name + auth shape.** File is `lib/agent-tools.ts`; function is `executeTool(token, actor, name, args, tx?)`; auth context is plain `{token: ApiToken, actor: string}` (NO `McpAuthContext` type). Inside-agent === outside-agent: the runner calls `executeTool` directly (same path the future `routes/mcp.ts` refactor in D-3 will use). MCP is one *face* over this layer, not the layer itself.
+
+2. **Skeleton-vs-extraction decision: SKELETON.** C-7 ships ONE tool: `__echo` (test-only, gated on `NODE_ENV === 'test'` per mitigation 34). Real `TOOLS` extraction from `routes/mcp.ts` lands in D-3. **Acknowledged consequence:** C.2 + C.3's runner can only execute `__echo` end-to-end; the "set up a project for me" keystone demo (per `memory/project_folio-agent-thesis.md`) cannot work until Sub-phase D. This is intentional: pulling the real extraction forward into C-7 would double its file-touch scope (routes/mcp.ts is ~600 LOC of tool implementations) and tangle C.2's runner-correctness work with D-3's refactor-correctness work. The skeleton-now path keeps each task auditable in isolation.
+
+3. **General-primitives design target (locks the v1 tool registry shape).** When D-3 expands `TOOLS`, the *target* is a tiny set of general primitives + skills/playbook-as-content, NOT a feature menu of 40 narrow verbs. C-7 cannot ship those primitives yet (their handlers live in D-3) — but C-7 MUST NOT bake in any naming/typing pattern that forecloses them. Concretely: the dispatcher's tool registration shape accepts a `{name: string, schema: ZodObject, requiredScope: Scope, handler: (args, ctx) => Promise<unknown>}` record — generic over schema, no narrow-type assumptions. Test stubs for D-3's eventual `read`/`query`/`write_document` shape can be written now (D-3 fills the bodies).
+
+**Acceptance criteria:**
+
+- `executeTool(token, actor, name, args, tx?: DBOrTx): Promise<unknown>` looks up `name` in a module-local `Map<string, ToolDef>` registry. Unknown names throw an `Error` whose `.message` matches the JSON-RPC `-32601 method not found` convention (string format: `"method not found: <name>"`). Test asserts the message.
+- The registry initialization checks `process.env.NODE_ENV` once and ONLY registers `__echo` when `=== 'test'`. Production calls to `executeTool('__echo', ...)` throw `method not found` (mitigation 34 — same shape as B-16 `__INTERNAL_TEST_ONLY__`).
+- Before invoking the handler, the dispatcher runs the tool's Zod schema via `.parse(args)`. On parse failure throws `MCP_INVALID_ARGS` with the Zod issues' PATHS only (not values — mitigation 26 + 28 sanitization). Test asserts the handler is NEVER invoked on parse failure.
+- Self-vs-peer gate for `create_agent | update_agent | delete_agent | get_agent_self` tool names (when those exist in D-3): if `token.agentId` is set AND `args.slug !== token.agentSlug`, throw `-32602 agent_self_management_only`. Stubbed in C-7 via a test-only handler placeholder; D-3 wires the real handlers. Test asserts the gate even with a stub handler that would otherwise succeed.
+- Optional `tx` arg is passed verbatim to the handler's `ctx.tx`. If absent, handler receives `ctx.tx === undefined` and may open its own (or rely on the caller's outer `txWithEvents`). This matches mitigation 35 — runner-owned outer tx, dispatcher transparent.
+- Scope check: the dispatcher reads `token.scopes` and verifies `requiredScope` is granted. Token without the scope → throw `Error('forbidden: scope <required> missing')`. Mirrors the existing `requireScope` middleware shape from Phase 2.
+
+**Steps:**
+
+- [ ] **Step 1 — Write the registry + tool-def shape.**
+
+  ```ts
+  export interface ToolDef<TArgs = unknown, TOut = unknown> {
+    name: string;
+    requiredScope: Scope;
+    schema: z.ZodSchema<TArgs>;
+    handler: (args: TArgs, ctx: ToolContext) => Promise<TOut>;
+  }
+  export interface ToolContext {
+    token: ApiToken;
+    actor: string;
+    tx?: DBOrTx;
+  }
+  const registry = new Map<string, ToolDef>();
+  ```
+
+  Mitigation 34 — register `__echo` only when `NODE_ENV === 'test'`. Use a top-level `if` guard at module load.
+
+  ```ts
+  if (process.env.NODE_ENV === 'test') {
+    registry.set('__echo', {
+      name: '__echo',
+      requiredScope: 'documents:read', // arbitrary; just so the scope check has something to verify
+      schema: z.object({ value: z.string() }).strict(),
+      handler: async (args) => ({ echoed: args.value }),
+    });
+  }
+  ```
+
+- [ ] **Step 2 — Write failing tests for the dispatcher's contract.**
+
+  Create `apps/server/src/lib/agent-tools.test.ts`:
+
+  - `it('throws "method not found" for an unknown tool name')`
+  - `it('throws "method not found" for __echo when NODE_ENV !== "test"')` — mutate `process.env.NODE_ENV` for this one test; reset in afterEach.
+  - `it('runs the tool when args parse + scope check pass')` — call `executeTool` with a valid `__echo` invocation; assert `{echoed: 'hi'}` returned.
+  - `it('throws MCP_INVALID_ARGS with PATHS only when args fail Zod parse')` — pass `__echo` `{value: 123}` (number, not string); assert the error's payload includes `path: ['value']` but NOT the value `123`.
+  - `it('throws forbidden: scope missing when the token lacks the requiredScope')` — register a tool requiring `agents:write`; call with a token holding only `documents:read`.
+  - `it('threads the optional tx arg into the handler ctx')` — pass `tx` (a real test tx via `db.transaction`); handler asserts `ctx.tx` is the same reference.
+  - `it('omits tx from the handler ctx when not passed')` — assert `ctx.tx === undefined`.
+
+  Run: `bun test src/lib/agent-tools.test.ts`. Expected: 7 FAIL (file doesn't exist yet).
+
+- [ ] **Step 3 — Implement `executeTool` body.**
+
+  ```ts
+  export async function executeTool(
+    token: ApiToken,
+    actor: string,
+    name: string,
+    args: unknown,
+    tx?: DBOrTx,
+  ): Promise<unknown> {
+    const def = registry.get(name);
+    if (!def) {
+      throw new Error(`method not found: ${name}`);
+    }
+    if (!token.scopes.includes(def.requiredScope)) {
+      throw new Error(`forbidden: scope ${def.requiredScope} missing`);
+    }
+    let parsed: unknown;
+    try {
+      parsed = def.schema.parse(args);
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        const paths = err.issues.map((i) => ({ path: i.path }));
+        const e = new Error('MCP_INVALID_ARGS') as Error & { issues: typeof paths };
+        e.issues = paths;
+        throw e;
+      }
+      throw err;
+    }
+    return def.handler(parsed as never, { token, actor, tx });
+  }
+  ```
+
+  Run: `bun test src/lib/agent-tools.test.ts`. Expected: 7 PASS.
+
+- [ ] **Step 4 — Add a `registerTool` helper for D-3 (forward compatibility).**
+
+  D-3 will register the real tools by importing this layer and calling `registerTool(def)`. Export it:
+
+  ```ts
+  export function registerTool<TArgs, TOut>(def: ToolDef<TArgs, TOut>): void {
+    if (registry.has(def.name)) {
+      throw new Error(`tool already registered: ${def.name}`);
+    }
+    registry.set(def.name, def as ToolDef);
+  }
+  ```
+
+  Test: `it('registerTool throws on duplicate name')`.
+
+- [ ] **Step 5 — Add the self-vs-peer agent-lifecycle gate (mitigation 27).**
+
+  The gate fires for tool names starting with `create_agent | update_agent | delete_agent` AND `get_agent_self`. Implementation lives in `executeTool` so EVERY caller goes through it:
+
+  ```ts
+  const AGENT_LIFECYCLE_TOOLS = new Set(['create_agent', 'update_agent', 'delete_agent', 'get_agent_self']);
+  // Inside executeTool, after scope check, before parse:
+  if (token.agentId && AGENT_LIFECYCLE_TOOLS.has(name)) {
+    const targetSlug = (args as { slug?: string })?.slug;
+    if (targetSlug && targetSlug !== token.agentSlug) {
+      const e = new Error('agent_self_management_only') as Error & { code: number };
+      e.code = -32602;
+      throw e;
+    }
+  }
+  ```
+
+  Test (`it('rejects agent A calling delete_agent on B with -32602')`) — register a stub `delete_agent` tool with a no-op handler; call with token where `agentSlug='A'` and `args.slug='B'`; assert the throw.
+
+  Test (`it('allows agent A calling update_agent on A')`) — same setup, `args.slug='A'`; assert the handler ran.
+
+  Run: `bun test src/lib/agent-tools.test.ts`. Expected: 10 PASS (7 + 1 dup + 2 lifecycle).
+
+- [ ] **Step 6 — Full suite + typecheck + workflow invocation + commit.**
+
+  ```
+  bun test
+  bun x tsc --noEmit
+  ```
+
+  Expected: server ~810 → ~820 / 1-skip / 0-fail. Typecheck clean.
+
+  Invoke `Skill("netdust-core:testing-workflow")` and walk the close-out checklist.
+
+  Commit: `phase-3: C-7 lib/agent-tools — executeTool shared dispatcher + self-vs-peer + Zod re-validation`. Mitigations: 26, 27, 34, 35.
+
+---
+
+#### Task C-8: `lib/runner.ts` — `runAgent` core loop
+
+**Threat-model mitigations bound to this task:** 25 (no automatic `[[wiki-link]]` inlining — runner reads only explicit message history), 28 (sanitize `error_detail` on every persist site — the runner is where stream errors get caught and persisted), 30 (per-run + per-chain token-budget enforcement — three layers, runner enforces per-run after each `tokens` event), 31 (provider circuit-breaker — the runner calls `checkProviderHealth` AFTER its own emit and respects the `degraded` state by NOT claiming further sibling rows; actual claim-time gate is C-10's job, but the runner emits the signal), 40 (atomic single-UPDATE state transitions — runner uses `transitionRun` from C.1 which already enforces this), 41 (terminal-status `worker_started_at` clear — also inherited from `transitionRun`), 44 (cancel-via-comment is in scope — runner's per-tool-dispatch + per-`tokens`-event cancel checks read the comment thread), 47 (SSE delivery fire-and-forget — runner emits via `emitEvent` which is sync).
+
+**Files:**
+- Create: `apps/server/src/lib/runner.ts`.
+- Create: `apps/server/src/lib/runner.test.ts`.
+
+**Reconciled scope (resolves the EXPANSION RECONCILIATION on the original outline):**
+
+- Tool dispatch via **`executeTool(agentRun.token, actor, name, args, tx)`** directly (NOT `executeMcpTool`). The runner is NOT an MCP client — it imports `lib/agent-tools.ts` and calls in-process. Mitigation: inside-agent === outside-agent, ONE auth model.
+- Provider loop hand-rolled on **`provider.stream(messages, tools, opts)`** (Sub-phase B's AsyncIterable<ProviderEvent>). NOT the Vercel AI SDK. The provider layer already normalizes `text|tool_call|tokens|done` and exposes the AbortController.
+
+**Acceptance criteria:**
+
+- `runAgent({runId}): Promise<void>` is the entry point. **Invariant entering `runAgent`**: row at `status='running'` with `worker_started_at` set (the poller already claimed it via C-3's `claimNextPlanningRun`). The runner does NOT call `claimNextPlanningRun` itself.
+- The function loads the run row, the parent doc (for prompt context), the agent doc (for system_prompt + tools list — already snapshotted into the run's frontmatter, but the agent doc is needed for the API token's scopes), and the agent's BYOK token resolved via the workspace's `provider_keys` envelope.
+- **Pre-flight checks** (six guards, runner-side — per spec §4b + threat model 30/31):
+  1. `checkProviderHealth(workspaceId, provider)` — if `degraded`, transition `failed (error_reason='provider_error')` and return. (The poller should not have claimed it; this is belt-and-suspenders.)
+  2. `checkRunRateLimits` — if rate-limited, transition `failed (error_reason='rate_limited')`.
+  3. `checkChainGuards` — if fanout/duration/tokens exceeded, transition `failed (error_reason='chain_guard')`.
+  4. Provider key present in the workspace's `provider_keys[provider]` — if not, transition `failed (error_reason='no_ai_key')`.
+  5. `getActiveRun(parentId, agent.slug)` for siblings other than this row — if a peer is already running on the same parent, transition `failed (error_reason='idempotency_violation')`.
+  6. depth check: walk `frontmatter.fired_by` chain via `chain_id`; if depth > `agent.max_delegation_depth`, transition `failed (error_reason='depth_exceeded')`.
+
+  All six failures emit the corresponding `agent.run.failed` event via `transitionRun`. None throw out of `runAgent` — the row's terminal state IS the signal.
+
+- **Stream consumption** (the main loop):
+  - Open the provider stream with the agent's tools (the names — the dispatcher resolves at execution time) + the constructed message history (system prompt + parent body + comment thread filtered to comments with `payload.parent_id === run.parent_id`, OLDEST first; mitigation 25 — NO wiki-link auto-expansion; comments + body literal text only).
+  - For each `ProviderEvent` from the AsyncIterable:
+    - `kind === 'text'` → accumulate into a current `kind=comment` (or `kind=result` at end) buffer. Don't write yet.
+    - `kind === 'tokens'` → call `incrementTokens(runId, {in: ev.in, out: ev.out})`. AFTER each tokens event, check the per-run budget: if `(tokens_in + tokens_out) > frontmatter.max_tokens`, transition `failed (error_reason='budget_exceeded')`, abort the provider stream via the existing AbortController, post a `kind=comment` from the agent ("Budget cap exceeded after N tokens — partial work above."), return. Same check for per-chain via `checkChainGuards(chain_id)` if positive — but that one is C-10's claim-time enforcement primarily; runner does it as a heartbeat too.
+    - `kind === 'tool_call'` → BEFORE dispatching, check the comment thread for `kind=cancel` with `created_at > run.started_at` (mitigation 44). If found, transition `failed (error_reason='cancel_via_comment')`, abort the provider stream, post a final `kind=comment` from the agent ("Cancelled by user — partial work above."), return. Otherwise, dispatch via `executeTool(token, actor, ev.name, ev.args, tx)` — handle thrown `MCP_INVALID_ARGS` by terminating `failed (error_reason='mcp_invalid_args')` + the issue paths in `error_detail` (sanitized — paths only, no values). Handle other thrown errors by `failed (error_reason='mcp_tool_error')` with `sanitizeProviderError(err)` as `error_detail`. On success, format the tool result as a string + feed it back into the provider stream via `provider.continueWithToolResult(streamHandle, ev.toolUseId, result)` (B's locked interface).
+    - `kind === 'done'` → record `done_reason` (the value the provider returned) into `frontmatter.done_reason`. Write the accumulated text buffer as a final `kind=result` comment from the agent on the parent (with `frontmatter.run_id = runId`). Transition `completed`. Return.
+
+- **Tx scope:** the runner does NOT hold a tx for the duration of the stream — streams can run minutes. Each individual mutation (`transitionRun`, `incrementTokens`, `createComment`, `executeTool`) opens its own tx. Mitigation 35 — tool handlers run in their own short-lived tx (the dispatcher passes `undefined` for `tx` in this code path).
+
+- **Error containment:** any unhandled throw inside `runAgent` is caught at the top level → transition `failed (error_reason='mcp_tool_error')` with `error_detail = sanitizeProviderError(err)`. The runner NEVER propagates an exception to the poller — if `runAgent` rejects, the poller logs and continues.
+
+**Steps:**
+
+- [ ] **Step 1 — Write failing tests for the runner's pre-flight checks (6 sub-tests).**
+
+  Append to `apps/server/src/lib/runner.test.ts`:
+
+  - `it('terminates failed/no_ai_key when the workspace has no key for the agent's provider')` — seed a workspace with no `provider_keys`, an agent, a planning row claimed to running. Call `runAgent({runId})`. Assert row at `failed`, `error_reason='no_ai_key'`, no provider call attempted (mock `provider.stream` and assert it was NOT called).
+  - `it('terminates failed/provider_error when checkProviderHealth returns degraded')` — seed 3 prior provider_error agent.run.failed events for the provider; assert the runner exits without calling stream.
+  - `it('terminates failed/rate_limited when checkRunRateLimits returns rate_limited')` — seed events to trip the workspace cap.
+  - `it('terminates failed/chain_guard when checkChainGuards returns fanout_exceeded')` — seed 26 sibling rows on the same chain_id.
+  - `it('terminates failed/depth_exceeded when fired_by depth > agent.max_delegation_depth')` — seed a chain of 4 fired_by rows with agent.max_delegation_depth=2.
+  - `it('terminates failed/idempotency_violation when getActiveRun returns a peer')` — seed a sibling row at status=running for the same (parentId, agentSlug).
+
+  Run: `bun test src/lib/runner.test.ts`. Expected: 6 FAIL (runner.ts doesn't export `runAgent` yet).
+
+- [ ] **Step 2 — Implement the 6 pre-flight checks.**
+
+  Each check calls into the C.1 services layer. If any returns "block", call `transitionRun(runId, {newStatus: 'failed', actor: 'system:runner', errorReason: <reason>, errorDetail: <sanitized>})` and `return`. Order matters (most cost-effective check first):
+
+  1. provider key check (free — workspaces row read)
+  2. depth check (walks chain; ms-cost)
+  3. rate limits + chain guards + provider health (3 SQL reads)
+  4. idempotency check (1 SQL read)
+
+  Run: `bun test src/lib/runner.test.ts`. Expected: 6 PASS.
+
+- [ ] **Step 3 — Write failing tests for the stream consumption loop (8 sub-tests, mock provider).**
+
+  - `it('writes accumulated text as kind=result comment + transitions completed on done event')` — mock stream yields `text → tokens → done(stop)`. Assert the agent's comment exists with the accumulated text body + `frontmatter.run_id === runId`.
+  - `it('increments tokens after each tokens event')` — stream yields 3 token events; assert final `frontmatter.tokens_in/out` is the sum.
+  - `it('terminates failed/budget_exceeded when tokens cross max_tokens')` — stream yields tokens that exceed max_tokens; assert row at `failed`, partial-result comment posted with budget cap message, stream aborted (mock asserts AbortController was triggered).
+  - `it('dispatches a tool_call via executeTool and feeds result back')` — register a test tool that echoes; stream yields tool_call → continueWithToolResult is called with the echoed value.
+  - `it('terminates failed/mcp_invalid_args when tool dispatch throws MCP_INVALID_ARGS')` — register a test tool with a strict schema; stream yields tool_call with bad args; assert `error_reason='mcp_invalid_args'`, `error_detail` contains issue PATHS only (no values).
+  - `it('terminates failed/mcp_tool_error when tool dispatch throws unknown')` — test tool throws Error('boom'); assert `error_reason='mcp_tool_error'`, `error_detail` is sanitized (doesn't contain 'boom' verbatim if it would look like an SDK leak).
+  - `it('terminates failed/cancel_via_comment when a kind=cancel comment exists before next tool dispatch')` — seed a cancel comment on the parent with `created_at > run.started_at`; stream yields a tool_call. Assert `failed/cancel_via_comment`, agent posts "Cancelled by user." comment, stream aborted.
+  - `it('persists done_reason from the done event into frontmatter.done_reason')` — stream yields `done(reason='refusal')`. Assert `frontmatter.done_reason === 'refusal'` AND row at `completed` (not failed — refusal is a clean termination per B-mitigation-20).
+
+  Run: `bun test src/lib/runner.test.ts`. Expected: 8 FAIL.
+
+- [ ] **Step 4 — Implement the stream consumption loop.**
+
+  Mock `AIProvider` at the test boundary per `[[mock-the-wire-not-the-response]]` — production code calls `getProvider(workspaceId, providerName)` which the test stubs via `provider.ts`'s `__INTERNAL_TEST_ONLY__.overrideRegistry`. Real `provider.stream` is never called in unit tests.
+
+  Run: `bun test src/lib/runner.test.ts`. Expected: 14 PASS (6 pre-flight + 8 loop).
+
+- [ ] **Step 5 — Add the top-level error containment + actor convention.**
+
+  ```ts
+  export async function runAgent(args: {runId: string}): Promise<void> {
+    try {
+      // ... all the above ...
+    } catch (err) {
+      // Last-resort transition. If we already transitioned to a terminal
+      // state above (the normal path), this UPDATE will be a no-op via
+      // F1's WHERE-status guard — the row is no longer at 'running'.
+      // RUN_TRANSITION_RACED is caught and logged silently.
+      try {
+        await transitionRun(args.runId, {
+          newStatus: 'failed',
+          actor: 'system:runner',
+          errorReason: runErrorReasonSchema.enum.mcp_tool_error,
+          errorDetail: sanitizeProviderError(err, /* unknown provider */ 'anthropic'),
+        });
+      } catch (raceErr) {
+        if ((raceErr as {code?: string}).code === 'RUN_TRANSITION_RACED') {
+          // Already terminal — fine.
+          return;
+        }
+        // eslint-disable-next-line no-console
+        console.error('[runner] top-level transitionRun also failed', raceErr);
+      }
+    }
+  }
+  ```
+
+  Test (`it('top-level catch transitions failed when something throws unexpectedly')`).
+
+- [ ] **Step 6 — Full suite + typecheck + workflow invocation + commit.**
+
+  Expected: server ~820 → ~835 / 1-skip / 0-fail. Typecheck clean.
+
+  Commit: `phase-3: C-8 lib/runner — runAgent core loop with 6 pre-flight checks + stream consumption`. Mitigations: 25, 28, 30, 31, 40, 41, 44, 47.
+
+---
+
+#### Task C-9: `lib/runner.ts` — `runAgentResume` + `rejectRun`
+
+**Threat-model mitigations bound to this task:** 42 (graceful-shutdown SIGTERM is v1.1 — DOCUMENTED residual, runner does NOT add a SIGTERM handler), 43 (approval+rejection race resolution via first-COMMIT-wins + `INVALID_RUN_TRANSITION` / `RUN_TRANSITION_RACED` loser no-op — inherits C.1 R5's distinguishing code), 44 (cancel-via-comment scope inherited from C-8 — rejectRun does NOT add a new cancel path; the existing C-8 cancel check is the canonical surface).
+
+**Files:**
+- Modify: `apps/server/src/lib/runner.ts` (append `runAgentResume` + `rejectRun`).
+- Modify: `apps/server/src/lib/runner.test.ts` (append resume + reject tests).
+
+**Acceptance criteria:**
+
+- `runAgentResume({runId}): Promise<void>` — invoked when the poller claims a planning row whose `frontmatter.resume_of` is set. Loads BOTH the original `awaiting_approval` run (via `resume_of` UUID → `documents` lookup) AND the new resuming row. Builds the message history from:
+  1. parent doc body (same as `runAgent`)
+  2. comment thread filtered to parent_id (same)
+  3. PLUS the original run's `kind=plan` comment + ALL `kind=approval` comments on the parent (these become user-message context for the resume — "your plan was approved")
+  4. PLUS any new comments since the original run's `awaiting_approval` transition (catch-up context)
+
+  After building, the resume path uses the SAME stream consumption loop as `runAgent` — `runAgentResume` is a thin wrapper that constructs different messages then delegates to a shared internal `runAgentLoop` helper. Refactor C-8's `runAgent` to also call `runAgentLoop` so both paths share the loop body.
+
+- `rejectRun({runId}): Promise<void>` — invoked **synchronously by the trigger-matcher** in C.3 when a `kind=rejection` comment lands on a parent doc that has an `awaiting_approval` run. NOT a poller-claimed path. Loads the run row + transitions `awaiting_approval → rejected` via `transitionRun`. Catches `RUN_TRANSITION_RACED` (mitigation 43 — the approval-handler may have already won) and returns silently. Posts a final `kind=comment` from the agent ("Run cancelled by reviewer.") on the parent referencing the rejection comment's id. Emits `agent.run.rejected` via `transitionRun`'s standard event emission.
+
+- Both functions follow the same top-level error containment as `runAgent`.
+
+**Steps:**
+
+- [ ] **Step 1 — Refactor C-8's `runAgent` to extract `runAgentLoop(args, messages)` helper.**
+
+  Move the stream-consumption loop into a private `async function runAgentLoop(runId, messages, abortController, tx?)` that takes the constructed message history as input + the AbortController. `runAgent` now constructs messages from (parent doc + comment thread) and calls `runAgentLoop`. No behavior change; ALL 14 C-8 tests must still pass.
+
+  Run: `bun test src/lib/runner.test.ts`. Expected: 14 PASS (no regressions).
+
+- [ ] **Step 2 — Write failing tests for `runAgentResume`.**
+
+  - `it('builds message history from parent body + thread + original kind=plan + kind=approval comments')` — seed an `awaiting_approval` run with a `kind=plan` comment; seed a `kind=approval` comment; seed a new resuming planning row with `frontmatter.resume_of = <originalRunId>`. Mock provider.stream; assert the messages array passed to `provider.stream` contains the plan + approval comments in order.
+  - `it('uses the same loop as runAgent for the post-message-construction path')` — same setup but with a complete stream (text + done); assert resume run transitions `completed` AND `kind=result` posted.
+  - `it('throws if frontmatter.resume_of points at a non-awaiting_approval row')` — defensive: the trigger handler that creates the resuming row should only do so when the original is awaiting_approval; if the original is already terminal, `runAgentResume` should NOT continue (transitions `failed/idempotency_violation`).
+
+  Run: `bun test src/lib/runner.test.ts`. Expected: 3 FAIL.
+
+- [ ] **Step 3 — Implement `runAgentResume`.**
+
+  Run: `bun test src/lib/runner.test.ts`. Expected: 17 PASS.
+
+- [ ] **Step 4 — Write failing tests for `rejectRun`.**
+
+  - `it('transitions awaiting_approval → rejected and emits agent.run.rejected')`
+  - `it('posts a kind=comment from the agent referencing the rejection comment id')` — assert the new comment's body matches "Run cancelled by reviewer." AND the `frontmatter.rejection_of_comment_id` points at the rejection comment.
+  - `it('returns silently when the run is no longer at awaiting_approval (race-loser path)')` — seed the run at `running` (the approval-handler raced ahead); call rejectRun; assert no throw, no new events, run stays at running.
+  - `it('throws non-race errors')` — seed the run as not-found (impossible state); assert throw.
+
+  Run: `bun test src/lib/runner.test.ts`. Expected: 4 FAIL.
+
+- [ ] **Step 5 — Implement `rejectRun`.**
+
+  ```ts
+  export async function rejectRun(args: {runId: string, rejectionCommentId: string}): Promise<void> {
+    try {
+      await transitionRun(args.runId, {
+        newStatus: 'rejected',
+        actor: 'system:trigger-matcher',
+      });
+    } catch (err) {
+      if ((err as {code?: string}).code === 'RUN_TRANSITION_RACED') {
+        // Approval already won. Per mitigation 43, loser silently no-ops.
+        return;
+      }
+      throw err;
+    }
+    // Post the closing comment AFTER the terminal transition so SSE
+    // subscribers see status change first, then the explanation.
+    const run = await db.query.documents.findFirst({where: eq(documents.id, args.runId)});
+    if (!run) return;
+    await createComment({/* parent, body, frontmatter.rejection_of_comment_id */});
+  }
+  ```
+
+  Run: `bun test src/lib/runner.test.ts`. Expected: 21 PASS (17 + 4).
+
+- [ ] **Step 6 — Full suite + typecheck + workflow invocation + commit.**
+
+  Expected: server ~835 → ~842 / 1-skip / 0-fail. Typecheck clean.
+
+  Commit: `phase-3: C-9 lib/runner — runAgentResume + rejectRun + loop refactor`. Mitigations: 42, 43, 44.
+
+---
+
+#### Sub-phase C.2 close-out (controller, not subagents)
+
+After C-9 commits:
+
+- [ ] **`/integration` gate.** Server suite ~842 / 1-skip / 0-fail; web 559 / 8-skip / 0-fail (unchanged); shared 51 / 0-fail. `.last-integration` advanced.
+
+- [ ] **`/code-review --base=<C.1 close sha> --effort=medium`** with reviewer prompt instructing verification of mitigations 24, 25, 26, 27, 30, 31, 34, 35, 41, 42, 43, 44, 47. Round budget per C readiness handoff: 2 medium-effort rounds.
+
+- [ ] **Sibling-site audit applied to the C.2 diff** (post-C.1 retro recommendation). Check the 5 lockstep classes against the runner + dispatcher diff. Expected: no new findings if the per-task audits in Steps were thorough; flag any drift.
+
+- [ ] **`/evaluate` retro.** If review or audit surfaced new attack classes, plan-correct first then fix code.
+
+- [ ] **Plan-correction commit: expand C-10..C-13 task bodies (Sub-phase C.3).** Following the same per-task format as C.2 above + the C.2 critical reconciliation block for C-12 (autonomy gate).
+
+---
+
+### Original Sub-phase C task outlines (historical context — DO NOT execute against these)
+
+> The outlines below at `### Task C-7 / C-8 / C-9 / C-10 / C-11 / C-12 / C-13` predate the C.1 review-of-review retro recommendation (sibling-site audit) AND the three 2026-05-28 reconciliation decisions (tool-layer rename, autonomy gate, primitives-not-feature-menu). They remain in the plan so future readers can trace how the design evolved, but **execution MUST use the expanded C.2 section above** (and the future C.3 expansion that will land in a separate plan-correction commit after C.2 closes).
+
 ### Task C-7: `lib/mcp-dispatch.ts` — `executeMcpTool` shared dispatcher (skeleton)
 
 > ⚠️ **EXPANSION RECONCILIATION (decisions 2026-05-28 — apply when expanding this task; outline below predates them).** Two corrections, both from `memory/STATE.md` "Next up" markers + `docs/PHASES.md` "Tool-execution layer — one tool surface, two faces":
