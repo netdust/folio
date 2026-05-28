@@ -28,7 +28,7 @@ This doc decides the shape. It does NOT plan the tasks. Planning sessions consum
 
 | Sub-sub-phase | Tasks | Scope summary | Why this layer |
 |---|---|---|---|
-| **C.1 — Services** | C-1, C-2, C-3, C-4, C-5, C-6 | `services/agent-runs.ts` — createRun, transitionRun, getActiveRun, getPendingApprovalRun, listRuns, claimNextPlanningRun, recoverOrphanRuns, countPendingPlanning, checkRunRateLimits, checkChainGuards, checkProviderHealth, getProviderHealth, ensureRunsTable, chain_id helper. All pure functions over the DB. State machine validation lives here. No side effects beyond DB writes + event emission. | Most testable layer. Each function is independently unit-testable with `makeTestApp()`. The state machine + concurrency contracts (orphan recovery, atomic claim) are codified BEFORE the runner consumes them. If C.1 is bug-free, C.2 and C.3 are dramatically easier. |
+| **C.1 — Services** | C-1, C-2, C-3, C-4, C-5, C-6 | `services/agent-runs.ts` — createRun, transitionRun, getActiveRun, getPendingApprovalRun, listRuns, claimNextPlanningRun, recoverOrphanRuns, countPendingPlanning, checkRunRateLimits, checkChainGuards, checkProviderHealth, getProviderHealth, ensureRunsTable, chain_id helper. All pure functions over the DB. State machine validation lives here. No side effects beyond DB writes + event emission. **Note: C-5 MODIFIES C-1's `transitionRun` (adds the provider-health tipping-edge emit). C.1 planning session must call this out so the expanded C-5 task ships its own tests for the changed `transitionRun` behavior, not just the new `checkProviderHealth`.** | Most testable layer. Each function is independently unit-testable with `makeTestApp()`. The state machine + concurrency contracts (orphan recovery, atomic claim) are codified BEFORE the runner consumes them. If C.1 is bug-free, C.2 and C.3 are dramatically easier. |
 | **C.2 — Runner + dispatcher** | C-7, C-8, C-9 | `lib/mcp-dispatch.ts` skeleton (with `__echo` test tool only), `lib/runner.ts` `runAgent` core loop, `runAgentResume`, `rejectRun`. Consumes C.1's services. The full execution loop with provider stream + tool dispatch + budget enforcement + cancel checks. | The stateful core. This is where most novel bugs live (recursion guards, mid-stream token budget, cancel-check timing). Separating from wiring means we can review the loop logic without conflating it with poller scheduling or trigger plumbing. |
 | **C.3 — Wiring + triggers** | C-10, C-11, C-12, C-13 | `lib/poller.ts`, `index.ts` wire-in (skipped in test), trigger handlers (agent.task.assigned + comment.mentioned → insert agent_run row), integration gate + first end-to-end smoke. | Glue layer. Each piece is small but the END-TO-END behavior (PATCH assignee → row appears → poller claims → runner runs → result comment posts) is the celebration moment. Splitting it from C.2 means the runner is review-closed before we test wire-up. |
 
@@ -174,12 +174,13 @@ Concrete attack/mitigation pairs the session should produce. This is NOT the thr
 
 For each of C.1, C.2, C.3, the planning session produces:
 
-1. **Expanded task bodies**: each C-N gets the full "Steps + Files + Tests + Commit" format that B-1..B-7 had. The plan currently has scope summaries only; planning expands them.
-2. **Threat-model coverage section**: which mitigations from B + the new C mitigations does this sub-sub-phase implement or rely on? Per-task mitigation pointer.
-3. **Subagent dispatch order**: which tasks run in parallel-safe groups, which are sequential (state machine ordering).
-4. **Test count expectations**: from the plan's existing `~50 new tests for Sub-phase C` budget, allocate per task.
-5. **`/integration` checkpoint**: confirms green before next sub-sub-phase plan-writing starts.
-6. **Test fixtures shared across the sub-sub-phase**: `makeTestApp` already exists; do we need a `makeAgentRunFixture(seed, opts)` helper? Decide.
+1. **Sub-sub-phase header in the plan**: insert `### Sub-phase C.1 — Services (C-1..C-6)` (and corresponding C.2 / C.3) headers in the plan body. The plan currently lists C-1..C-13 as a flat sequence; the headers make the review-able groups explicit. (Audit found this missing 2026-05-28.)
+2. **Expanded task bodies**: each C-N gets the full "Steps + Files + Tests + Commit" format that B-1..B-7 had. The plan currently has scope summaries only; planning expands them.
+3. **Threat-model coverage section**: which mitigations from B + the new C mitigations does this sub-sub-phase implement or rely on? Per-task mitigation pointer.
+4. **Subagent dispatch order**: which tasks run in parallel-safe groups, which are sequential (state machine ordering).
+5. **Test count expectations**: from the plan's existing `~50 new tests for Sub-phase C` budget, allocate per task. **The plan's C-13 integration gate has a STALE test target (`~556 + ~50 = ~606`); Sub-phase B's review cycle raised server tests to 715, so the C close target is ~765, not ~606. C.3 planning session updates this.**
+6. **`/integration` checkpoint**: confirms green before next sub-sub-phase plan-writing starts.
+7. **Test fixtures shared across the sub-sub-phase**: `makeTestApp` already exists; do we need a `makeAgentRunFixture(seed, opts)` helper? Decide.
 
 ---
 
