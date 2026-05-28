@@ -45,7 +45,14 @@ interface ParsedMdInput {
   status: string | null;
 }
 
-const DOCUMENT_TYPES: readonly DocumentType[] = ['work_item', 'page', 'agent', 'trigger'];
+// F10 fix (post-C.1 review) — `agent_run` is in the DocumentType union
+// (widened in C-1) but was missing from this set, so parseMarkdownInput
+// silently coerced `type: agent_run` in user-submitted markdown to
+// `work_item`, polluting work_items frontmatter inference with
+// run-shaped fields (tokens_in, chain_id, agent_slug). Include it so
+// the type is recognized; the PATCH/POST handlers reject it with a
+// clean 422 (see the agent_run guards below).
+const DOCUMENT_TYPES: readonly DocumentType[] = ['work_item', 'page', 'agent', 'trigger', 'agent_run'];
 
 function parseMarkdownInput(raw: string, defaults?: { type?: DocumentType }): ParsedMdInput {
   const { frontmatter, body } = parseMarkdown(raw);
@@ -251,6 +258,18 @@ documentsRoute.patch('/:slug', requireScope('documents:write'), async (c) => {
       throw new HTTPError(
         'INVALID_DOCUMENT_SCOPE',
         `${existing.type} documents must be mutated through /api/v1/w/:wslug/documents (workspace-scoped), not the project-scoped markdown PATCH`,
+        422,
+      );
+    }
+    // F3 fix (post-C.1 review) — agent_run rows are runner-owned. The
+    // state machine, error_reason enum, sanitizer, and agent.run.*
+    // event emission all live in services/agent-runs.ts::transitionRun.
+    // A markdown PATCH here would wholesale-replace frontmatter,
+    // bypassing all of those mitigations. Reject.
+    if (existing.type === 'agent_run') {
+      throw new HTTPError(
+        'AGENT_RUN_REQUIRES_RUNNER_PATH',
+        'agent_run documents are runner-owned and mutate only via the runner / approve / cancel endpoints (Sub-phase D), not the generic markdown PATCH',
         422,
       );
     }

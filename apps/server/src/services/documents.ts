@@ -309,6 +309,22 @@ export async function createDocument(
     );
   }
 
+  // F9 fix (post-C.1 review) — same shape as the comment guard above.
+  // agent_run rows have a fixed Zod schema, a fixed slug shape, and
+  // the migration-0012 CHECK constraint requires table_id + parent_id
+  // NOT NULL — none of which the generic createDocument path fills
+  // for non-work_item types. createRun (services/agent-runs.ts) is
+  // the only sound entry. A buggy MCP caller driving createDocument
+  // with type='agent_run' would otherwise hit SQLITE_CONSTRAINT_CHECK
+  // and surface an opaque 500.
+  if ((input.type as string) === 'agent_run') {
+    throw new HTTPError(
+      'AGENT_RUN_REQUIRES_RUNNER_PATH',
+      'agent_run documents are created by the runner (services/agent-runs.ts::createRun), not the generic document endpoint',
+      422,
+    );
+  }
+
   // Phase 2.5 invariant: agent/trigger ⇒ project=null; work_item/page ⇒ project required.
   // The CHECK constraint also enforces this at the DB layer; the service-level guard
   // gives a clean error message instead of "SQLITE_CONSTRAINT_CHECK".
@@ -587,6 +603,20 @@ export async function updateDocument(
     );
   }
 
+  // F3 fix (post-C.1 review) — agent_run rows are runner-owned. The
+  // state machine + closed error_reason enum + sanitizer + agent.run.*
+  // event emission live in services/agent-runs.ts::transitionRun. A
+  // generic updateDocument that merged arbitrary frontmatter would
+  // bypass all of those. Reject defensively at the service layer so
+  // EVERY entry point (HTTP, MCP, future CLI) inherits the rule.
+  if (existing.type === 'agent_run') {
+    throw new HTTPError(
+      'AGENT_RUN_REQUIRES_RUNNER_PATH',
+      'agent_run documents are runner-owned and mutate only via the runner / approve / cancel endpoints (Sub-phase D), not the generic document update endpoint',
+      422,
+    );
+  }
+
   if (patch.status !== undefined && existing.type === 'work_item') {
     const tId = existing.tableId ?? args.fallbackTable?.id;
     if (!tId) {
@@ -771,6 +801,20 @@ export async function deleteDocument(args: DeleteDocumentArgs): Promise<void> {
     throw new HTTPError(
       'COMMENT_REQUIRES_COMMENT_TOOL',
       "comment documents must be deleted via DELETE /comments/:slug (or MCP delete_comment), not the generic document endpoint",
+      422,
+    );
+  }
+
+  // F3 fix (post-C.1 review) — agent_run rows are runner-owned. Deleting
+  // them through the generic path would orphan their events + skip the
+  // provider-health flush that DELETE /runs/:id will handle in
+  // Sub-phase D. See `tasks/retro-follow-ups.md` C.1-R-1 for the
+  // events.document_id FK question that needs resolving before D-side
+  // deletes ship.
+  if (existing.type === 'agent_run') {
+    throw new HTTPError(
+      'AGENT_RUN_REQUIRES_RUNNER_PATH',
+      'agent_run documents are runner-owned and delete only via the runs endpoints (Sub-phase D), not the generic document endpoint',
       422,
     );
   }
