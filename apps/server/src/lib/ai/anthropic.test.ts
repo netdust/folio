@@ -7,10 +7,12 @@ const mockStream = mock(async function* () {
   yield { type: 'message_delta', usage: { input_tokens: 5, output_tokens: 1 } };
   yield { type: 'message_stop' };
 });
+const mockModelsList = mock(async (): Promise<{ data: Array<{ id: string }> }> => ({ data: [] }));
 
 mock.module('@anthropic-ai/sdk', () => ({
   default: class Anthropic {
     messages = { create: mockCreate, stream: () => mockStream() };
+    models = { list: mockModelsList };
     constructor(_: unknown) {}
   },
 }));
@@ -21,6 +23,7 @@ describe('anthropic provider', () => {
   beforeEach(() => {
     mockCreate.mockClear();
     mockStream.mockClear();
+    mockModelsList.mockClear();
   });
 
   test('stream() yields text + tokens + done events from the Anthropic SDK stream', async () => {
@@ -41,13 +44,13 @@ describe('anthropic provider', () => {
   });
 
   test('testKey() returns ok on a 200 response', async () => {
-    mockCreate.mockImplementationOnce(async () => ({ id: 'msg_x' }));
+    mockModelsList.mockImplementationOnce(async () => ({ data: [{ id: 'claude-haiku-4-5' }] }));
     const result = await anthropic.testKey({ apiKey: 'sk-test', model: 'claude-haiku-4-5' });
     expect(result.ok).toBe(true);
   });
 
   test('testKey() returns structured failure on 401', async () => {
-    mockCreate.mockImplementationOnce(async () => {
+    mockModelsList.mockImplementationOnce(async () => {
       const err = new Error('Unauthorized') as Error & { status: number };
       err.status = 401;
       throw err;

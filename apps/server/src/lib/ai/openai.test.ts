@@ -12,6 +12,7 @@ const mockCreate = mock(async (opts: { stream?: boolean }) => {
   if (opts.stream) return defaultStream();
   return { id: 'cmpl_x' };
 });
+const mockModelsList = mock(async (): Promise<{ data: Array<{ id: string }> }> => ({ data: [] }));
 
 mock.module('openai', () => ({
   default: class OpenAI {
@@ -20,6 +21,7 @@ mock.module('openai', () => ({
         create: mockCreate,
       },
     };
+    models = { list: mockModelsList };
     constructor(_: unknown) {}
   },
 }));
@@ -29,6 +31,7 @@ import { openai } from './openai.ts';
 describe('openai provider', () => {
   beforeEach(() => {
     mockCreate.mockClear();
+    mockModelsList.mockClear();
   });
 
   test('stream() yields text + tokens + done', async () => {
@@ -48,9 +51,18 @@ describe('openai provider', () => {
     expect(events).toContainEqual({ type: 'done', reason: 'stop' });
   });
 
-  test('testKey() returns ok on a 200 from the mock', async () => {
+  test('testKey() returns ok on a 200 from the models.list mock', async () => {
+    mockModelsList.mockImplementationOnce(async () => ({ data: [{ id: 'gpt-4o-mini' }] }));
     const r = await openai.testKey({ apiKey: 'sk', model: 'gpt-4o-mini' });
     expect(r.ok).toBe(true);
+  });
+
+  test('testKey() does not call chat.completions with max_tokens (avoids o1/o3 rejection)', async () => {
+    mockCreate.mockClear();
+    mockModelsList.mockImplementationOnce(async () => ({ data: [{ id: 'o1-mini' }] }));
+    const r = await openai.testKey({ apiKey: 'sk', model: 'o1-mini' });
+    expect(r.ok).toBe(true);
+    expect(mockCreate).not.toHaveBeenCalled();
   });
 
   test('stream() correctly assembles a multi-chunk tool_call when id only appears on first chunk', async () => {

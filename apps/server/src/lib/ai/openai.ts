@@ -113,19 +113,18 @@ export const openai: AIProvider = {
     yield { type: 'done', reason: stopReason };
   },
 
-  async testKey({ apiKey, model, baseUrl }) {
+  async testKey({ apiKey, baseUrl }) {
     try {
       const c = client(apiKey, baseUrl);
-      await c.chat.completions.create({
-        model,
-        max_tokens: 1,
-        messages: [{ role: 'user', content: 'ping' }],
-      });
+      // models.list validates the key without invoking a chat completion;
+      // avoids the max_tokens-vs-max_completion_tokens rejection on o1/o3.
+      // testKey validates the KEY only — the model string is validated on
+      // the first real stream() call.
+      await c.models.list();
       return { ok: true };
     } catch (err) {
       const e = err as { status?: number; message?: string };
       if (e.status === 401) return { ok: false, reason: 'Unauthorized (401): key rejected by OpenAI.' };
-      if (e.status === 404) return { ok: false, reason: `Model not found (404): ${model}` };
       return { ok: false, reason: e.message ?? 'Unknown error' };
     }
   },
