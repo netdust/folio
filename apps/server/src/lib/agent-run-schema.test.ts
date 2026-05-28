@@ -1,13 +1,13 @@
 import { describe, expect, test } from 'bun:test';
 import {
-  AgentRunFrontmatterSchema,
-  RunStatusSchema,
-  RunErrorReasonSchema,
+  agentRunFrontmatterSchema,
+  runStatusSchema,
+  runErrorReasonSchema,
   isValidTransition,
   TERMINAL_STATUSES,
 } from './agent-run-schema.ts';
 
-describe('RunStatusSchema', () => {
+describe('runStatusSchema', () => {
   test('accepts the six lifecycle statuses', () => {
     for (const s of [
       'planning',
@@ -17,15 +17,15 @@ describe('RunStatusSchema', () => {
       'failed',
       'rejected',
     ]) {
-      expect(() => RunStatusSchema.parse(s)).not.toThrow();
+      expect(() => runStatusSchema.parse(s)).not.toThrow();
     }
   });
   test('rejects unknown', () => {
-    expect(() => RunStatusSchema.parse('queued')).toThrow();
+    expect(() => runStatusSchema.parse('queued')).toThrow();
   });
 });
 
-describe('RunErrorReasonSchema', () => {
+describe('runErrorReasonSchema', () => {
   test('accepts every documented reason', () => {
     for (const r of [
       'budget_exceeded', 'depth_exceeded', 'no_ai_key', 'provider_error',
@@ -33,12 +33,12 @@ describe('RunErrorReasonSchema', () => {
       'rate_limited', 'fanout_exceeded', 'chain_duration_exceeded',
       'chain_tokens_exceeded', 'worker_crash',
     ]) {
-      expect(() => RunErrorReasonSchema.parse(r)).not.toThrow();
+      expect(() => runErrorReasonSchema.parse(r)).not.toThrow();
     }
   });
 });
 
-describe('AgentRunFrontmatterSchema', () => {
+describe('agentRunFrontmatterSchema', () => {
   const valid = {
     assignee: 'agent:reply-drafter',
     status: 'planning',
@@ -55,20 +55,20 @@ describe('AgentRunFrontmatterSchema', () => {
     started_at: new Date().toISOString(),
   };
   test('accepts a valid minimal frontmatter', () => {
-    expect(() => AgentRunFrontmatterSchema.parse(valid)).not.toThrow();
+    expect(() => agentRunFrontmatterSchema.parse(valid)).not.toThrow();
   });
   test('rejects assignee not in agent:<slug> form', () => {
-    expect(() => AgentRunFrontmatterSchema.parse({ ...valid, assignee: 'reply-drafter' })).toThrow();
+    expect(() => agentRunFrontmatterSchema.parse({ ...valid, assignee: 'reply-drafter' })).toThrow();
   });
   test('rejects unknown provider', () => {
-    expect(() => AgentRunFrontmatterSchema.parse({ ...valid, provider: 'gemini' })).toThrow();
+    expect(() => agentRunFrontmatterSchema.parse({ ...valid, provider: 'gemini' })).toThrow();
   });
   test('rejects non-uuid chain_id', () => {
-    expect(() => AgentRunFrontmatterSchema.parse({ ...valid, chain_id: 'abc' })).toThrow();
+    expect(() => agentRunFrontmatterSchema.parse({ ...valid, chain_id: 'abc' })).toThrow();
   });
   test('error_reason must be from the union when present', () => {
     expect(() =>
-      AgentRunFrontmatterSchema.parse({ ...valid, status: 'failed', error_reason: 'bogus' }),
+      agentRunFrontmatterSchema.parse({ ...valid, status: 'failed', error_reason: 'bogus' }),
     ).toThrow();
   });
 });
@@ -94,8 +94,8 @@ describe('isValidTransition', () => {
   });
   test('no transitions out of terminal states', () => {
     for (const term of TERMINAL_STATUSES) {
-      for (const next of ['planning','awaiting_approval','running','completed','failed','rejected']) {
-        expect(isValidTransition(term, next as never)).toBe(false);
+      for (const next of runStatusSchema.options) {
+        expect(isValidTransition(term, next)).toBe(false);
       }
     }
   });
