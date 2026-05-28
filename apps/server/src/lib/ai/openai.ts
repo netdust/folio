@@ -47,7 +47,10 @@ export const openai: AIProvider = {
     let tokensIn = 0;
     let tokensOut = 0;
     let stopReason: 'stop' | 'tool_use' | 'max_tokens' = 'stop';
-    const toolCallsById: Record<string, { name: string; argsBuf: string }> = {};
+    // OpenAI streams tool_calls with `id` ONLY on the first delta per call;
+    // continuation deltas carry only `index` + arg fragments. Key by `index`
+    // (always present) and track id/name as separate fields set on first sight.
+    const toolCallsByIndex: Record<number, { id: string; name: string; argsBuf: string }> = {};
 
     for await (const chunk of stream as AsyncIterable<Record<string, unknown>>) {
       const choices = chunk.choices as Array<Record<string, unknown>> | undefined;
@@ -55,17 +58,22 @@ export const openai: AIProvider = {
         const delta = choices[0].delta as
           | {
               content?: string;
-              tool_calls?: Array<{ id: string; function: { name?: string; arguments?: string } }>;
+              tool_calls?: Array<{
+                index: number;
+                id?: string;
+                function: { name?: string; arguments?: string };
+              }>;
             }
           | undefined;
         if (delta?.content) yield { type: 'text', delta: delta.content } as ProviderEvent;
         if (delta?.tool_calls) {
           for (const tc of delta.tool_calls) {
             const entry =
-              toolCallsById[tc.id] ??
-              (toolCallsById[tc.id] = { name: tc.function.name ?? '', argsBuf: '' });
-            entry.argsBuf += tc.function.arguments ?? '';
+              toolCallsByIndex[tc.index] ??
+              (toolCallsByIndex[tc.index] = { id: '', name: '', argsBuf: '' });
+            if (tc.id) entry.id = tc.id;
             if (tc.function.name) entry.name = tc.function.name;
+            entry.argsBuf += tc.function.arguments ?? '';
           }
         }
         const finish = choices[0].finish_reason as string | undefined;
@@ -80,10 +88,10 @@ export const openai: AIProvider = {
       if (usage?.completion_tokens) tokensOut = usage.completion_tokens;
     }
 
-    for (const [id, tc] of Object.entries(toolCallsById)) {
+    for (const tc of Object.values(toolCallsByIndex)) {
       yield {
         type: 'tool_call',
-        id,
+        id: tc.id,
         name: tc.name,
         arguments: tc.argsBuf ? JSON.parse(tc.argsBuf) : {},
       } as ProviderEvent;

@@ -1,6 +1,6 @@
-import { describe, expect, mock, test } from 'bun:test';
+import { beforeEach, describe, expect, mock, test } from 'bun:test';
 
-const mockStream = mock(async function* () {
+const defaultStream = mock(async function* () {
   yield { choices: [{ delta: { content: 'Hi' } }], usage: null };
   yield {
     choices: [{ delta: {}, finish_reason: 'stop' }],
@@ -8,14 +8,16 @@ const mockStream = mock(async function* () {
   };
 });
 
+const mockCreate = mock(async (opts: { stream?: boolean }) => {
+  if (opts.stream) return defaultStream();
+  return { id: 'cmpl_x' };
+});
+
 mock.module('openai', () => ({
   default: class OpenAI {
     chat = {
       completions: {
-        create: mock(async (opts: { stream?: boolean }) => {
-          if (opts.stream) return mockStream();
-          return { id: 'cmpl_x' };
-        }),
+        create: mockCreate,
       },
     };
     constructor(_: unknown) {}
@@ -25,6 +27,10 @@ mock.module('openai', () => ({
 import { openai } from './openai.ts';
 
 describe('openai provider', () => {
+  beforeEach(() => {
+    mockCreate.mockClear();
+  });
+
   test('stream() yields text + tokens + done', async () => {
     const events: unknown[] = [];
     for await (const ev of openai.stream({
@@ -45,5 +51,67 @@ describe('openai provider', () => {
   test('testKey() returns ok on a 200 from the mock', async () => {
     const r = await openai.testKey({ apiKey: 'sk', model: 'gpt-4o-mini' });
     expect(r.ok).toBe(true);
+  });
+
+  test('stream() correctly assembles a multi-chunk tool_call when id only appears on first chunk', async () => {
+    // OpenAI streams tool_calls with `id` ONLY on the first delta;
+    // continuation deltas carry only `index` + arg fragments.
+    const multiChunkStream = async function* () {
+      // First chunk: id + name + opening of args JSON.
+      yield {
+        choices: [
+          {
+            delta: {
+              tool_calls: [
+                { index: 0, id: 'call_abc', function: { name: 'search', arguments: '{"q":"hel' } },
+              ],
+            },
+          },
+        ],
+        usage: null,
+      };
+      // Continuation chunk: NO id, NO name — only index + partial args.
+      yield {
+        choices: [
+          {
+            delta: {
+              tool_calls: [{ index: 0, function: { arguments: 'lo"}' } }],
+            },
+          },
+        ],
+        usage: null,
+      };
+      // Final chunk: finish_reason + usage.
+      yield {
+        choices: [{ delta: {}, finish_reason: 'tool_calls' }],
+        usage: { prompt_tokens: 3, completion_tokens: 5 },
+      };
+    };
+
+    mockCreate.mockImplementationOnce((async (opts: { stream?: boolean }) => {
+      if (opts.stream) return multiChunkStream();
+      return { id: 'cmpl_x' };
+    }) as never);
+
+    const events: unknown[] = [];
+    for await (const ev of openai.stream({
+      system: 'sys',
+      messages: [{ role: 'user', content: 'hi' }],
+      tools: [{ name: 'search', description: 'x', input_schema: { type: 'object' } }],
+      maxTokens: 100,
+      apiKey: 'sk-test',
+      model: 'gpt-4o-mini',
+    })) {
+      events.push(ev);
+    }
+
+    const toolCalls = events.filter((e) => (e as { type: string }).type === 'tool_call');
+    expect(toolCalls).toHaveLength(1);
+    expect(toolCalls[0]).toEqual({
+      type: 'tool_call',
+      id: 'call_abc',
+      name: 'search',
+      arguments: { q: 'hello' },
+    });
   });
 });
