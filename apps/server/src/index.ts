@@ -1,7 +1,12 @@
 import { app } from './app.ts';
+import { runMigrationsOnBoot } from './db/auto-migrate.ts';
 import { db } from './db/client.ts';
 import { env } from './env.ts';
 import { reconcileAllowLists } from './lib/reconciler.ts';
+
+// Phase 3 A-0: apply any pending migrations at boot so dev environments never
+// serve traffic against a stale schema. No-op in NODE_ENV=test.
+runMigrationsOnBoot(db);
 
 console.log(`[folio] listening on http://localhost:${env.PORT}`);
 
