@@ -47,10 +47,15 @@ function* handleOllamaChunk(
   if (chunk.done) {
     // Fix #15 — Number()||existing keeps the running total when the proxy
     // sends a non-numeric value (NaN coerces back to the previous total).
+    //
+    // B round 4 fix #7 — Math.trunc on the coerced value. Number('7.5') is
+    // 7.5; without truncation the fractional value propagates into the
+    // `tokens` event + the SQLite column (REAL, with IEEE-754 drift on SUM
+    // for budget accounting). Tokens are intrinsically integer; pin the type.
     const promptEval = Number(chunk.prompt_eval_count);
     const evalCount = Number(chunk.eval_count);
-    if (Number.isFinite(promptEval)) state.tokensIn = promptEval;
-    if (Number.isFinite(evalCount)) state.tokensOut = evalCount;
+    if (Number.isFinite(promptEval)) state.tokensIn = Math.trunc(promptEval);
+    if (Number.isFinite(evalCount)) state.tokensOut = Math.trunc(evalCount);
     const reason = chunk.done_reason as string | undefined;
     if (reason === 'length') state.stopReason = 'max_tokens';
     else if (reason === 'tool_calls') state.stopReason = 'tool_use';

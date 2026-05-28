@@ -231,6 +231,45 @@ describe('ollama provider', () => {
     expect(message).toMatch(/unauthorized/i);
   });
 
+  // B round 4 fix #7 — token counts must be integer. Number('7.5') is 7.5;
+  // pre-fix the fractional value propagated into the tokens event + SQLite
+  // REAL column with IEEE-754 drift on SUM for budget accounting. Math.trunc
+  // pins the type at the boundary.
+  test('stream() truncates fractional token counts to integers', async () => {
+    global.fetch = mock(
+      async () =>
+        new Response(
+          jsonl([
+            { message: { content: 'Hi' }, done: false },
+            {
+              message: { content: '' },
+              done: true,
+              done_reason: 'stop',
+              // Proxy / sloppy stringifier could send fractional numbers
+              // (or strings that Number() coerces to fractions).
+              prompt_eval_count: 7.5,
+              eval_count: 99.9,
+            },
+          ]),
+          { status: 200 },
+        ),
+    ) as never;
+    const events: unknown[] = [];
+    for await (const ev of ollama.stream({
+      system: 'sys',
+      messages: [{ role: 'user', content: 'hi' }],
+      tools: [],
+      maxTokens: 100,
+      apiKey: '',
+      model: 'llama3.1',
+      baseUrl: 'http://example.com:11434',
+    })) {
+      events.push(ev);
+    }
+    // Truncated, not rounded — Math.trunc(7.5) === 7, Math.trunc(99.9) === 99.
+    expect(events).toContainEqual({ type: 'tokens', tokens_in: 7, tokens_out: 99 });
+  });
+
   test('stream() skips malformed NDJSON lines and still yields done', async () => {
     // Hand-roll the body so we can inject a literally-malformed line between
     // two valid JSON lines (jsonl() JSON-encodes everything, including strings).

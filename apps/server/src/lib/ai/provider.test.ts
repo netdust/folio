@@ -17,6 +17,57 @@ describe('getProvider', () => {
   });
 });
 
+// B round 4 fix #6 — runtime guard on the test-only escape hatch. Round 3's
+// rename to __INTERNAL_TEST_ONLY__ was cosmetic. A future production refactor
+// or IDE-autocomplete reach could still call these and silently poison the
+// process-wide provider cache. Now every entry-point throws unless
+// NODE_ENV === 'test'. Production code that accidentally lands an import
+// crashes loudly at the call site.
+describe('__INTERNAL_TEST_ONLY__ runtime guard', () => {
+  test('overrideRegistry throws when NODE_ENV is not test', () => {
+    const prev = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    try {
+      expect(() =>
+        __INTERNAL_TEST_ONLY__.overrideRegistry('anthropic', async () => {
+          throw new Error('should not be reached');
+        }),
+      ).toThrow(/tests only/i);
+    } finally {
+      process.env.NODE_ENV = prev;
+    }
+  });
+
+  test('reset throws when NODE_ENV is not test', () => {
+    const prev = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    try {
+      expect(() => __INTERNAL_TEST_ONLY__.reset()).toThrow(/tests only/i);
+    } finally {
+      process.env.NODE_ENV = prev;
+    }
+  });
+
+  test('hasInflight + hasCached + loadProvider throw when NODE_ENV is not test', () => {
+    const prev = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    try {
+      expect(() => __INTERNAL_TEST_ONLY__.hasInflight('anthropic')).toThrow(/tests only/i);
+      expect(() => __INTERNAL_TEST_ONLY__.hasCached('anthropic')).toThrow(/tests only/i);
+      expect(() => __INTERNAL_TEST_ONLY__.loadProvider('anthropic')).toThrow(/tests only/i);
+    } finally {
+      process.env.NODE_ENV = prev;
+    }
+  });
+
+  test('all entry-points work normally when NODE_ENV === "test"', () => {
+    // Bun sets NODE_ENV=test by default in `bun test`; assert sanity.
+    expect(process.env.NODE_ENV).toBe('test');
+    expect(() => __INTERNAL_TEST_ONLY__.hasInflight('anthropic')).not.toThrow();
+    expect(() => __INTERNAL_TEST_ONLY__.hasCached('anthropic')).not.toThrow();
+  });
+});
+
 describe('loadProvider rejection handling', () => {
   test('clears loading[name] on rejection so subsequent calls do not see the cached failure', async () => {
     // Save original state. We override the 'ollama' registry entry to drive

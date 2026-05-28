@@ -83,26 +83,47 @@ async function loadProvider(name: Provider): Promise<AIProvider> {
  * rejection-cleanup path through real code) and observe the `loading` table
  * without exposing it. Renamed in B round 3 fix #11 from `__testing` to
  * `__INTERNAL_TEST_ONLY__` to make accidental imports from production code
- * visible at the call site. A follow-up (deferred to v1.1) extracts these
- * into a separate file gated by an ESLint rule that bans non-test imports.
+ * visible at the call site.
+ *
+ * B round 4 fix #6 — runtime guard added. Every entry-point checks
+ * NODE_ENV === 'test' and throws otherwise. Round 3's rename was cosmetic;
+ * a future production refactor or IDE-autocomplete reach calls these and
+ * silently poisons the process-wide provider cache. Now it crashes loudly
+ * instead. A follow-up (deferred to v1.1) extracts these into a separate
+ * file gated by an ESLint rule that bans non-test imports.
  *
  * Any production reference to this export is a bug.
  */
+function guardTestOnly(method: string): void {
+  if (process.env.NODE_ENV !== 'test') {
+    throw new Error(
+      `provider.__INTERNAL_TEST_ONLY__.${method} is for tests only; not callable in NODE_ENV=${process.env.NODE_ENV ?? '(unset)'}`,
+    );
+  }
+}
+
 export const __INTERNAL_TEST_ONLY__ = {
   overrideRegistry(name: Provider, loader: () => Promise<AIProvider>): void {
+    guardTestOnly('overrideRegistry');
     REGISTRY[name] = loader;
   },
   hasInflight(name: Provider): boolean {
+    guardTestOnly('hasInflight');
     return loading[name] !== undefined;
   },
   hasCached(name: Provider): boolean {
+    guardTestOnly('hasCached');
     return cache[name] !== undefined;
   },
   reset(): void {
+    guardTestOnly('reset');
     for (const k of Object.keys(cache) as Provider[]) delete cache[k];
     for (const k of Object.keys(loading) as Provider[]) delete loading[k];
   },
-  loadProvider,
+  loadProvider(name: Provider): Promise<AIProvider> {
+    guardTestOnly('loadProvider');
+    return loadProvider(name);
+  },
 };
 
 export function getProvider(name: Provider): AIProvider {
