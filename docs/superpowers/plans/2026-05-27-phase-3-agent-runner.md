@@ -98,22 +98,38 @@ These are the rules the code MUST follow. `/code-review` should verify each one 
 3. **`POST /ai-keys` validates baseUrl through the same path** as `/ai/test-key`. Single source of truth for what baseUrl is acceptable.
 4. **Ollama requires explicit `baseUrl`** for the test-key flow. The default-to-localhost behavior in the provider implementation stays (the runner needs a sensible default for `Ollama` agents already configured), but the test-key route explicitly requires `baseUrl !== undefined` when provider is `ollama` and surfaces an error if missing.
 5. **Error messages sanitized** before they reach HTTP responses OR before they're thrown out of a provider method that the runner will surface. Sites that must use the whitelist: `openai.testKey`, `anthropic.testKey`, `ollama.testKey`, `openrouter.testKey`, AND `openai.stream` / `anthropic.stream` / `ollama.stream` / `openrouter.stream` startup error throws (the `throw new Error(...)` paths inside stream() before the async iterator yields anything). The whitelist: 401/403→'Unauthorized', 429→'Rate limited', 5xx→'Server error', other-status→'Error (<status>)', no-status→'Network error or unreachable host.' NEVER echo `e.message`, NEVER echo caller-supplied `baseUrl`/`model`.
+
+   **Implementation status (as of round 5):**
+   - `openai.testKey`, `anthropic.testKey`, `ollama.testKey`, `openrouter.testKey`: ✓ (rounds 3-4)
+   - `ollama.stream` startup error: ✓ (round 4)
+   - `anthropic.stream`, `openai.stream`, `openrouter.stream` startup errors: ✓ (round 5)
 6. **`ProviderEvent.done.reason` adds `'refusal'`** now (sub-phase B). `'pause_turn'` deferred to Sub-phase C when the runner gains a paused state. Each provider implementation maps its specific stop reasons explicitly — no silent downgrade. SDK-specific stop reasons that don't map to the union should emit a warning log line, not silently become `'stop'`.
 7. **`AIProvider.stream`'s `baseUrl` parameter is documented as Ollama-and-OpenRouter only**. The Anthropic + OpenAI implementations ignore it. Either remove from the shared interface (cleaner) OR add a runtime check that throws if a caller passes baseUrl to an unsupported provider (acceptable v1). The latter is faster to ship; the former is right long-term.
 8. **JSON.parse calls are try/catch-wrapped** in all four provider implementations. On parse failure: log + emit a `type: 'tool_call'` event with `arguments: { __parse_error: true, raw: <truncated buf> }` so the runner can distinguish truncation from intent and decide whether to retry or fail. Streams MUST NOT abort on a single bad chunk.
 9. **Token-accumulator updates use `!== undefined`**, not truthy checks. `if (usage?.prompt_tokens !== undefined) tokensIn = usage.prompt_tokens;` — handles the zero case correctly.
 10. **Provider proxy caches resolved Providers, not rejected Promises.** On dynamic-import failure: drop the cache entry instead of caching the rejection. Next call retries from scratch. Belt-and-braces: a process-level retry counter logs after N consecutive failures so operations can spot a wedged provider.
-11. **`authMethod` flag on the request context.** `attachUser` sets `'session'` ONLY when a valid session cookie actually hydrated a user (post-`readSession`, post-null-check). `attachToken` sets `'token'` when a Bearer hydrated one and no session was present. Routes that need session-only auth check `c.get('authMethod') === 'session'` or reject `c.get('authMethod') === 'token'`, NOT cookie presence.
+11. **Session-only routes via a `requireSession` middleware.** `attachUser` sets `c.set('authMethod', 'session')` ONLY when a valid session cookie hydrated a user (post-`readSession`, post-null-check). `attachToken` sets `'token'` when a Bearer hydrated one and no session was present. The middleware `requireSession` (in `apps/server/src/middleware/auth.ts`) rejects with 403 when `authMethod === 'token'`. ALL routes that mutate auth grants, workspace ownership/identity, or BYOK credentials MUST use it.
 
-   **Session-only routes that MUST check `authMethod !== 'token'`:**
-   - `POST /api/v1/w/:wslug/ai/test-key` (already gated as of round 3)
-   - `POST /api/v1/w/:wslug/settings/:workspaceId/ai-keys` (gap closed in round 4 — was using only `requireUser`)
-   - `DELETE /api/v1/w/:wslug/settings/:workspaceId/ai-keys/:keyId` (gap closed in round 4)
-   - Any future route that mutates AI keys, master secrets, or token grants.
+   **Routes covered by `requireSession`:**
 
-   The rule: AI-key management is session-only because a stolen Bearer should not be able to rotate the workspace's BYOK setup. Read paths (`GET /ai-keys`, which returns metadata only) are bearer-OK.
+   | Route | Verb(s) | Rationale |
+   |---|---|---|
+   | `/api/v1/w/:wslug/ai/test-key` | POST | Test a BYOK credential (round 3) |
+   | `/api/v1/w/:wslug/settings/:wsId/ai-keys` | POST, DELETE | Mutate BYOK row (round 4 closed POST, round 4 closed DELETE) |
+   | `/api/v1/w/:wslug/tokens/:wsId` | POST | Mint a new API token (round 5) — stolen Bearer could mint elevated-scope replacements |
+   | `/api/v1/w/:wslug/tokens/:wsId/:tokenId` | DELETE | Revoke an API token (round 5) — stolen Bearer could revoke peers |
+   | `/api/v1/w/:wslug` | PATCH, DELETE | Workspace rename / deletion (round 5) — destructive identity mutation |
+   | Any FUTURE route that mutates auth grants, workspace identity, master secrets, or BYOK credentials | * | New routes that fit the pattern MUST use `requireSession` in the same commit they are introduced |
 
-   A garbage cookie + valid bearer authenticates as `'token'`, never `'session'`. This is asserted by a test in `apps/server/src/routes/ai.test.ts` and a sibling test in `settings.test.ts`.
+   **Routes intentionally NOT session-only (bearer-OK):**
+   - `GET /ai-keys` — metadata read (agents need this for telemetry)
+   - `GET /tokens` — metadata read
+   - `POST/PATCH/DELETE` on documents, projects, statuses, fields, views, runs — agent workflow; that's the point of API tokens
+   - `POST /api/v1/workspaces` — workspace CREATE is session-only by virtue of not being under `/api/v1/w/:wslug` (the workspace scope), so it's mounted before the bearer chain.
+
+   **Test contract:** for each row in the "covered" table, a test asserts the route returns 403 when called with `Authorization: Bearer <valid token>` only, AND when called with `Authorization: Bearer <valid token>` + `Cookie: folio_session=garbage`. Round 5's settings.test.ts gained the DELETE garbage-cookie test for symmetry; tokens.test.ts and workspaces.test.ts gain equivalents in round 5.
+
+   A garbage cookie + valid bearer authenticates as `'token'`, never `'session'`. This is asserted by tests across `ai.test.ts`, `settings.test.ts`, `tokens.test.ts`, and `workspaces.test.ts`.
 12. **Persistence and test-key share validation logic.** Every guard added to `/ai/test-key` is mirrored on `POST /ai-keys`. The shared guard set:
 
    | Guard | /ai/test-key (ai.ts) | POST /ai-keys (settings.ts) |
@@ -139,7 +155,11 @@ These are the rules the code MUST follow. `/code-review` should verify each one 
 
 16. **Test-only escape hatches are unreachable from production code.** The `__INTERNAL_TEST_ONLY__` export from `apps/server/src/lib/ai/provider.ts` has a RUNTIME GUARD: every call to `overrideRegistry`, `reset`, `hasInflight`, `hasCached`, `loadProvider` checks `process.env.NODE_ENV === 'test'` and throws if not. Production code that accidentally imports + calls these will crash at startup or first request, not silently mutate the registry. A future refactor (deferred) moves these into a separate `provider.testing.ts` file with an ESLint `no-restricted-imports` rule banning non-test imports — until that lands, the runtime guard is the enforcement.
 
-17. **Web-side mutations are abortable on context-change.** When the AI tab's `onSave` mutation is in flight and the user switches provider, the mutation is ABORTED via AbortController — not just the toast suppressed. The server-side row IS NOT committed for the old provider once the user has signaled intent to abandon it. A `toast.info('Save canceled — provider changed')` notifies the user that the in-flight mutation was discarded, so the side-effect-or-not is visible.
+17. **Web mutations surface honest feedback on context-change.** When the AI tab's `onSave` mutation is in flight and the user switches provider, the mutation IS NOT aborted at the wire level (deferred to v1.1 — see Out-of-scope). Instead, the resolved-success branch shows a truthful `toast.info("Save completed for previous provider (anthropic)")` naming the provider captured at click time, NOT the current state. The user knows a side effect happened and which provider it landed on. The same wording is used in the resolved-error branch so the user sees the OUTCOME of the abandoned save, not silence.
+
+   The captured-at-click value is used consistently across both branches; the current-state value is never displayed in this surface so a stale paint cannot mislead.
+
+18. **`validatePublicUrl` rejects empty hosts after the trailing-dot strip.** Bare-dot inputs (`http://.`, `http://..`) parse successfully in Bun's URL parser but become empty strings after the greedy dot strip; without an explicit check they would slip every host-equality and prefix-regex guard and return `ok:true`. After `host = host.replace(/\.+$/, '')`, the validator immediately checks `if (host === '') return { ok: false, reason: 'base_url host is empty' }`. A test covers `http://./` and `http://.../`.
 
 ### Out of scope (explicit deferrals)
 
