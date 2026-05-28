@@ -3817,6 +3817,10 @@ The rest of the Sub-phase C, D, E, F tasks are written below. Due to the size of
 
 ### Task C-7: `lib/mcp-dispatch.ts` — `executeMcpTool` shared dispatcher (skeleton)
 
+> ⚠️ **EXPANSION RECONCILIATION (decisions 2026-05-28 — apply when expanding this task; outline below predates them).** Two corrections, both from `memory/STATE.md` "Next up" markers + `docs/PHASES.md` "Tool-execution layer — one tool surface, two faces":
+> 1. **Rename. Inside-agent === outside-agent, ONE auth model.** The runner is NOT an MCP client (no JSON-RPC to itself). The file is `lib/agent-tools.ts` (NOT `mcp-dispatch.ts`); the fn is `executeTool(token, actor, name, args)` (NOT `executeMcpTool`); the auth context is plain `{ token, actor }` (NOT `McpAuthContext`). MCP is just one *face* over this layer; the runner calls `executeTool` directly. The scope check is identical for both callers — the token carries authority, no "which caller" param.
+> 2. **Decide the extraction-vs-skeleton timing DELIBERATELY.** The outline below defers the real `routes/mcp.ts` refactor to D-3 and registers only a dummy `__echo`. BUT `docs/PHASES.md` frames the *real* extraction (lift the existing `TOOLS` out of `routes/mcp.ts`) as the prerequisite. If you keep the skeleton-now/real-tools-in-D approach, then C-8's runner can only call `__echo` and the "set up a project for me" keystone demo (`memory/project_folio-agent-thesis.md`) cannot work until Sub-phase D — confirm that's acceptable, or pull the real extraction forward into C-7. This is a scope call for the expansion session, not a silent default.
+
 > The runner needs this to dispatch tool calls. Full MCP-tool registry coverage lands in Sub-phase D, but the skeleton is required for C-8.
 
 **Files:** Create `apps/server/src/lib/mcp-dispatch.ts` + `.test.ts`.
@@ -3828,6 +3832,8 @@ The rest of the Sub-phase C, D, E, F tasks are written below. Due to the size of
 - `routes/mcp.ts` is NOT refactored yet (that's D-3).
 
 ### Task C-8: `lib/runner.ts` — runAgent core loop
+
+> ⚠️ **EXPANSION RECONCILIATION (decision 2026-05-28).** "tool dispatch via `executeMcpTool`" below → the runner calls **`executeTool(agentRun.token, actor, name, args)` directly** (renamed per C-7's reconciliation; no MCP/JSON-RPC framing — the runner is not an MCP client). This is the load-bearing line proving inside-agent === outside-agent. Also: build the loop hand-rolled on the existing `lib/ai/provider.stream()` generators — NOT the Vercel AI SDK (build-decision in STATE). The provider layer already normalizes `text|tool_call|tokens|done` + the tool round-trip.
 
 **Files:** Create `apps/server/src/lib/runner.ts` + `runner.test.ts`.
 
@@ -3864,6 +3870,12 @@ if (env.NODE_ENV !== 'test') {
 Test by smoke (not a unit test — covered by integration tests in D-12).
 
 ### Task C-12: Wire `agent.task.assigned` + `comment.mentioned` triggers to insert agent_run rows
+
+> ⚠️ **EXPANSION RECONCILIATION — THE CRITICAL ONE (decision 2026-05-28).** This task is the literal code path where V1-turn-based vs. autonomous is decided, and the outline below knows ONLY the autonomous version. **You MUST fold in the autonomy gate** (`docs/PHASES.md` → "Autonomy gate — V1 ships 'agent does one task, waits'"; `memory/project_folio-agent-thesis.md`). Concretely, when expanding:
+> - V1 ships turn-based: a human initiates, agent does one task, stops, waits. The V1↔autonomous line is exactly *can an agent's own output fire another agent run?*
+> - Add `FOLIO_AGENT_CHAINS_ENABLED` (default **false**). When OFF, the `comment.mentioned` handler MUST NOT create an agent_run row if the triggering comment is **agent-originated** (author is an agent / comment frontmatter carries a `run_id`). Human-posted `@`-mentions and human `agent.task.assigned` fire normally. Emit one `agent.chain.suppressed` event (never silent).
+> - Add a boundary test (`runner.autonomy-gate.test.ts` per PHASES): flag OFF → agent-posted `@`-mention yields ZERO rows + one suppressed signal; human-posted `@`-mention yields exactly one row. Flag ON → agent mention fires (subject to the six guards).
+> - The six guards stay live regardless of the flag (they cap a single run too). Flag governs cross-run fan-out; guards govern resource caps. Orthogonal — don't conflate them.
 
 **Files:** Modify `apps/server/src/lib/trigger-matcher.ts` (or wherever the trigger fire path lives — find via `grep -rn "agent.task.assigned" apps/server/src`). Modify `apps/server/src/services/comments.ts` (mention parser already exists; just make sure the `comment.mentioned` event is emitted and the trigger handler creates an `agent_run` row instead of synchronously invoking anything).
 
