@@ -26,35 +26,35 @@
 import { and, eq, sql } from 'drizzle-orm';
 import { db } from '../db/client.ts';
 import {
+  type ApiToken,
+  type Document,
+  type Project,
+  type Workspace,
   aiKeys,
   apiTokens,
   documents,
   projects as projectsTable,
   workspaces,
-  type ApiToken,
-  type Document,
-  type Project,
-  type Workspace,
 } from '../db/schema.ts';
 import {
-  transitionRun,
-  incrementTokens,
-  getActiveRun,
-  checkRunRateLimits,
+  type ProviderName,
   checkChainGuards,
   checkProviderHealth,
-  type ProviderName,
+  checkRunRateLimits,
+  getActiveRun,
+  incrementTokens,
+  transitionRun,
 } from '../services/agent-runs.ts';
-import { createComment, listComments, type AuthorContext } from '../services/comments.ts';
+import { type AuthorContext, createComment, listComments } from '../services/comments.ts';
 import {
-  runErrorReasonSchema,
   type AgentRunFrontmatter,
   type RunDoneReason,
+  runErrorReasonSchema,
 } from './agent-run-schema.ts';
-import { getProvider, type Message, type ToolDef } from './ai/provider.ts';
+import { executeTool } from './agent-tools.ts';
+import { type Message, type ToolDef, getProvider } from './ai/provider.ts';
 import { sanitizeProviderError } from './ai/sanitize-error.ts';
 import { decryptSecret } from './crypto.ts';
-import { executeTool } from './agent-tools.ts';
 
 /**
  * Hard cap on outer provider rounds (one provider call + one tool-result
@@ -83,6 +83,8 @@ const PROVIDER_LABELS: Record<ProviderName, string> = {
 interface RunContext {
   run: Document;
   fm: AgentRunFrontmatter;
+  /** Guaranteed non-null: loadContext returns null when run.parentId is absent. */
+  parentId: string;
   parent: Document;
   agent: Document;
   agentFm: Record<string, unknown>;
@@ -155,8 +157,9 @@ async function loadContext(runId: string): Promise<RunContext | null> {
   const fm = run.frontmatter as AgentRunFrontmatter;
 
   if (!run.parentId) return null;
+  const parentId = run.parentId;
   const parent = await db.query.documents.findFirst({
-    where: eq(documents.id, run.parentId),
+    where: eq(documents.id, parentId),
   });
   if (!parent) return null;
 
@@ -210,6 +213,7 @@ async function loadContext(runId: string): Promise<RunContext | null> {
   return {
     run,
     fm,
+    parentId,
     parent,
     agent,
     agentFm,
@@ -242,7 +246,11 @@ async function preflight(ctx: RunContext): Promise<boolean> {
     where: and(eq(aiKeys.workspaceId, run.workspaceId), eq(aiKeys.provider, fm.provider)),
   });
   if (!hasKey) {
-    await failRun(ctx, runErrorReasonSchema.enum.no_ai_key, 'No AI key configured for this provider.');
+    await failRun(
+      ctx,
+      runErrorReasonSchema.enum.no_ai_key,
+      'No AI key configured for this provider.',
+    );
     return true;
   }
 
@@ -256,7 +264,8 @@ async function preflight(ctx: RunContext): Promise<boolean> {
   `);
   const chainDepth = depthRows[0]?.count ?? 0;
   if (chainDepth > maxDepth) {
-    await failRun(ctx,
+    await failRun(
+      ctx,
       runErrorReasonSchema.enum.depth_exceeded,
       `Delegation chain depth ${chainDepth} exceeds max ${maxDepth}.`,
     );
@@ -296,7 +305,8 @@ async function preflight(ctx: RunContext): Promise<boolean> {
     provider: fm.provider,
   });
   if (health.next.status === 'degraded') {
-    await failRun(ctx,
+    await failRun(
+      ctx,
       runErrorReasonSchema.enum.provider_error,
       `Provider degraded after ${health.next.consecutive_failures} consecutive failures.`,
     );
@@ -306,9 +316,10 @@ async function preflight(ctx: RunContext): Promise<boolean> {
   // 6 — idempotency: another sibling run already active on the same parent for
   // this agent slug. getActiveRun returns the most-recent non-terminal run; if
   // it is a DIFFERENT run than this one, a peer is in flight — block.
-  const active = await getActiveRun({ parentId: run.parentId!, agentSlug: fm.agent_slug });
+  const active = await getActiveRun({ parentId: ctx.parentId, agentSlug: fm.agent_slug });
   if (active && active.id !== runId) {
-    await failRun(ctx,
+    await failRun(
+      ctx,
       runErrorReasonSchema.enum.idempotency_violation,
       'A sibling run for this agent is already active on the parent.',
     );
@@ -425,7 +436,8 @@ async function runLoop(ctx: RunContext): Promise<void> {
             `Budget cap exceeded after ${usedIn + usedOut} tokens — partial work above.`,
             'comment',
           );
-          await failRun(ctx,
+          await failRun(
+            ctx,
             runErrorReasonSchema.enum.budget_exceeded,
             `Token budget ${fm.max_tokens} exceeded (${usedIn + usedOut} used).`,
           );
@@ -435,8 +447,7 @@ async function runLoop(ctx: RunContext): Promise<void> {
       } else if (ev.type === 'tool_call') {
         // Cancel-via-comment check (mitigation 44) BEFORE executing the tool.
         if (await wasCancelled(ctx)) {
-          await postAgentComment(ctx, 'Cancelled by user — partial work above.', 'comment');
-          await failRun(ctx, runErrorReasonSchema.enum.cancelled, 'Cancelled by user via comment.');
+          await handleCancel(ctx);
           terminated = true;
           break;
         }
@@ -471,14 +482,16 @@ async function runLoop(ctx: RunContext): Promise<void> {
           if (isInvalidArgs(err)) {
             // error_detail = the issue PATHS only (no values — already
             // paths-only from C-7). JSON.stringify the issues array.
-            await failRun(ctx,
+            await failRun(
+              ctx,
               runErrorReasonSchema.enum.provider_error,
               JSON.stringify(err.issues),
             );
             return;
           }
           // Any other tool throw → sanitized detail.
-          await failRun(ctx,
+          await failRun(
+            ctx,
             runErrorReasonSchema.enum.provider_error,
             sanitizeProviderError(err, providerLabel),
           );
@@ -492,13 +505,24 @@ async function runLoop(ctx: RunContext): Promise<void> {
 
     // Terminal (stop / max_tokens / refusal / pause_turn, or no tool_calls).
     // refusal + pause_turn are CLEAN completions (mitigation 20) → completed.
+    //
+    // Pure-text runs (text + done, no tool_call) never hit the tool_call
+    // cancel check above, so a user's "stop" would be silently ignored. Check
+    // wasCancelled once on the terminal path (mitigation 44): one extra
+    // comment-thread read on the final round, which is acceptable.
+    if (await wasCancelled(ctx)) {
+      await handleCancel(ctx);
+      return;
+    }
+
     await postResultAndComplete(ctx, textBuf, doneReason);
     return;
   }
 
   // Round cap exhausted — runaway tool loop. chain_guard family: use
   // fanout_exceeded (closest enum member for "too many rounds").
-  await failRun(ctx,
+  await failRun(
+    ctx,
     runErrorReasonSchema.enum.fanout_exceeded,
     `Exceeded ${MAX_TOOL_ROUNDS} tool rounds without terminating.`,
   );
@@ -581,17 +605,27 @@ async function wasCancelled(ctx: RunContext): Promise<boolean> {
   const cancels = await listComments({
     parentId: ctx.parent.id,
     kind: 'rejection',
+    // Strict `>` (gt) boundary: a rejection stamped in the SAME millisecond as
+    // started_at is not matched. Harmless — started_at is stamped well before
+    // any user reaction, so a same-ms tie can only be a pre-existing rejection.
     since: ctx.fm.started_at,
   });
   return cancels.length > 0;
 }
 
+/**
+ * Shared cancel handling (mitigation 44), called from both the tool_call branch
+ * and the terminal path: post the partial-work cancel comment from the agent,
+ * then transition the run to failed/cancelled. Does NOT write a kind=result
+ * comment — the partial work already streamed into the cancel comment above.
+ */
+async function handleCancel(ctx: RunContext): Promise<void> {
+  await postAgentComment(ctx, 'Cancelled by user — partial work above.', 'comment');
+  await failRun(ctx, runErrorReasonSchema.enum.cancelled, 'Cancelled by user via comment.');
+}
+
 function isInvalidArgs(err: unknown): err is Error & { issues: unknown } {
-  return (
-    err instanceof Error &&
-    err.message === 'MCP_INVALID_ARGS' &&
-    'issues' in err
-  );
+  return err instanceof Error && err.message === 'MCP_INVALID_ARGS' && 'issues' in err;
 }
 
 /**

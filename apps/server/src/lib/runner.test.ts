@@ -8,29 +8,29 @@
  * reset in afterEach (see [[mock-module-leaks-across-bun-tests]]).
  */
 
-import { test, expect, describe, afterEach } from 'bun:test';
+import { afterEach, describe, expect, test } from 'bun:test';
 import { and, eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
-import { makeTestApp } from '../test/harness.ts';
 import {
-  aiKeys,
-  apiTokens,
-  documents,
-  tables,
   type Document,
   type Project,
   type TableEntity,
   type User,
   type Workspace,
+  aiKeys,
+  apiTokens,
+  documents,
+  tables,
 } from '../db/schema.ts';
-import { newApiToken } from './auth.ts';
-import { toolsToScopes } from './agent-schema.ts';
-import { encryptSecret } from './crypto.ts';
+import { createComment } from '../services/comments.ts';
+import { makeTestApp } from '../test/harness.ts';
 import type { AgentRunFrontmatter } from './agent-run-schema.ts';
+import { toolsToScopes } from './agent-schema.ts';
 import type { AIProvider, ProviderEvent } from './ai/provider.ts';
 import { __INTERNAL_TEST_ONLY__ as providerTestHatch } from './ai/provider.ts';
-import { createComment } from '../services/comments.ts';
+import { newApiToken } from './auth.ts';
+import { encryptSecret } from './crypto.ts';
 import { runAgent } from './runner.ts';
 
 type TestDB = Awaited<ReturnType<typeof makeTestApp>>['db'];
@@ -39,9 +39,8 @@ type TestDB = Awaited<ReturnType<typeof makeTestApp>>['db'];
 // Teardown — unwind both module-global registries between tests.
 // --------------------------------------------------------------------------
 
-const toolRegistry = (
-  globalThis as unknown as { __folioToolRegistry?: Map<string, unknown> }
-).__folioToolRegistry;
+const toolRegistry = (globalThis as unknown as { __folioToolRegistry?: Map<string, unknown> })
+  .__folioToolRegistry;
 const registeredTools: string[] = [];
 
 afterEach(() => {
@@ -249,8 +248,22 @@ async function scaffold(
   if (opts.withAiKey !== false) await seedAiKey(db, seed.workspace.id);
   const wiTable = await getWorkItemsTable(db, seed.project.id);
   const runsTable = await seedRunsTable(db, seed.project.id);
-  const agent = await seedAgent(db, seed.workspace, seed.user, 'helper', opts.tools, opts.agentOverrides);
-  const parent = await seedWorkItem(db, seed.workspace, seed.project, wiTable, seed.user, opts.parentBody);
+  const agent = await seedAgent(
+    db,
+    seed.workspace,
+    seed.user,
+    'helper',
+    opts.tools,
+    opts.agentOverrides,
+  );
+  const parent = await seedWorkItem(
+    db,
+    seed.workspace,
+    seed.project,
+    wiTable,
+    seed.user,
+    opts.parentBody,
+  );
   const run = await seedRunningRun(
     db,
     seed.workspace,
@@ -281,11 +294,11 @@ async function readRun(db: TestDB, runId: string): Promise<AgentRunFrontmatter> 
 }
 
 async function listKind(db: TestDB, parentId: string, kind: string): Promise<Document[]> {
-  return db.query.documents.findMany({
-    where: and(eq(documents.parentId, parentId), eq(documents.type, 'comment')),
-  }).then((rows) =>
-    rows.filter((r) => (r.frontmatter as Record<string, unknown>).kind === kind),
-  );
+  return db.query.documents
+    .findMany({
+      where: and(eq(documents.parentId, parentId), eq(documents.type, 'comment')),
+    })
+    .then((rows) => rows.filter((r) => (r.frontmatter as Record<string, unknown>).kind === kind));
 }
 
 // ==========================================================================
@@ -545,7 +558,12 @@ describe('runAgent stream loop', () => {
         // result back) → emit text + stop. Distinguish by message count.
         const hasToolResult = opts.messages.some((m) => m.role === 'tool');
         if (!hasToolResult) {
-          yield { type: 'tool_call', id: 'tc-1', name: toolName, arguments: { value: 'hi' } } as ProviderEvent;
+          yield {
+            type: 'tool_call',
+            id: 'tc-1',
+            name: toolName,
+            arguments: { value: 'hi' },
+          } as ProviderEvent;
           yield { type: 'tokens', tokens_in: 5, tokens_out: 5 } as ProviderEvent;
           yield { type: 'done', reason: 'tool_use' } as ProviderEvent;
         } else {
@@ -584,7 +602,12 @@ describe('runAgent stream loop', () => {
 
     const stub: AIProvider = {
       async *stream() {
-        yield { type: 'tool_call', id: 'tc-1', name: toolName, arguments: { value: 123 } } as ProviderEvent;
+        yield {
+          type: 'tool_call',
+          id: 'tc-1',
+          name: toolName,
+          arguments: { value: 123 },
+        } as ProviderEvent;
         yield { type: 'done', reason: 'tool_use' } as ProviderEvent;
       },
       async testKey() {
@@ -654,7 +677,12 @@ describe('runAgent stream loop', () => {
         // Emit a tool_call so the cancel check (which runs before tool exec)
         // fires. We need a registered tool to avoid method-not-found — but the
         // cancel check short-circuits BEFORE executeTool, so any name works.
-        yield { type: 'tool_call', id: 'tc-1', name: '__echo', arguments: { value: 'x' } } as ProviderEvent;
+        yield {
+          type: 'tool_call',
+          id: 'tc-1',
+          name: '__echo',
+          arguments: { value: 'x' },
+        } as ProviderEvent;
         yield { type: 'done', reason: 'tool_use' } as ProviderEvent;
       },
       async testKey() {
@@ -685,6 +713,51 @@ describe('runAgent stream loop', () => {
     const comments = await listKind(db, parent.id, 'comment');
     const cancelMsg = comments.find((c) => c.body.includes('Cancelled by user'));
     expect(cancelMsg).toBeTruthy();
+  });
+
+  test('terminates failed/cancelled for a pure-text run when a cancel comment exists before completion', async () => {
+    const { db, workspace, project, run, parent } = await scaffold();
+
+    const userRow = await db.query.users.findFirst({});
+
+    // Pure-text run: text + done(stop), NO tool_call. The tool_call cancel
+    // check never fires for this shape — the terminal-path check must catch it.
+    const control: StubControl = {
+      rounds: [
+        [
+          { type: 'text', delta: 'Here is the answer.' },
+          { type: 'done', reason: 'stop' },
+        ],
+      ],
+      called: 0,
+    };
+    installProviderStub(control);
+
+    // Seed a rejection comment AFTER started_at (the cancel signal).
+    const { workspaces } = await import('../db/schema.ts');
+    const fullWs = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspace.id) });
+    await createComment({
+      workspace: fullWs!,
+      project,
+      parent,
+      authorContext: { type: 'user', userId: userRow!.id },
+      actor: userRow!.id,
+      body: 'stop @helper',
+      kind: 'rejection',
+      targetAgent: 'helper',
+    });
+
+    await runAgent({ runId: run.id });
+
+    const fm = await readRun(db, run.id);
+    expect(fm.status).toBe('failed');
+    expect(fm.error_reason).toBe('cancelled');
+    const comments = await listKind(db, parent.id, 'comment');
+    const cancelMsg = comments.find((c) => c.body.includes('Cancelled by user'));
+    expect(cancelMsg).toBeTruthy();
+    // No result comment may be written — the partial work is in the cancel msg.
+    const results = await listKind(db, parent.id, 'result');
+    expect(results.length).toBe(0);
   });
 
   test('done_reason persisted — refusal terminates as completed', async () => {
