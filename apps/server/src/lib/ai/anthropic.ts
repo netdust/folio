@@ -1,0 +1,110 @@
+import Anthropic from '@anthropic-ai/sdk';
+import type { AIProvider, ProviderEvent } from './provider.ts';
+
+function client(apiKey: string): Anthropic {
+  return new Anthropic({ apiKey });
+}
+
+export const anthropic: AIProvider = {
+  async *stream({ system, messages, tools, maxTokens, apiKey, model }) {
+    const c = client(apiKey);
+
+    const anthropicMessages = messages.map((m) => {
+      if (m.role === 'tool') {
+        return {
+          role: 'user' as const,
+          content: [
+            { type: 'tool_result' as const, tool_use_id: m.tool_use_id, content: m.content },
+          ],
+        };
+      }
+      if (m.role === 'assistant' && m.tool_calls?.length) {
+        return {
+          role: 'assistant' as const,
+          content: [
+            ...(m.content ? [{ type: 'text' as const, text: m.content }] : []),
+            ...m.tool_calls.map((tc) => ({
+              type: 'tool_use' as const,
+              id: tc.id,
+              name: tc.name,
+              input: tc.arguments,
+            })),
+          ],
+        };
+      }
+      return { role: m.role, content: m.content };
+    });
+
+    const stream = c.messages.stream({
+      model,
+      system,
+      max_tokens: maxTokens,
+      tools: tools.map((t) => ({
+        name: t.name,
+        description: t.description,
+        input_schema: t.input_schema as { type: 'object'; [k: string]: unknown },
+      })),
+      messages: anthropicMessages as never,
+    });
+
+    let inTokens = 0;
+    let outTokens = 0;
+    let stopReason: 'stop' | 'tool_use' | 'max_tokens' = 'stop';
+    const toolCallsByIndex: Record<number, { id: string; name: string; jsonBuf: string }> = {};
+
+    for await (const ev of stream as AsyncIterable<Record<string, unknown>>) {
+      const t = ev.type as string;
+      if (
+        t === 'content_block_start' &&
+        (ev.content_block as { type: string } | undefined)?.type === 'tool_use'
+      ) {
+        const cb = ev.content_block as { id: string; name: string };
+        const idx = ev.index as number;
+        toolCallsByIndex[idx] = { id: cb.id, name: cb.name, jsonBuf: '' };
+      } else if (t === 'content_block_delta') {
+        const delta = ev.delta as { type: string; text?: string; partial_json?: string };
+        if (delta.type === 'text_delta' && delta.text) {
+          yield { type: 'text', delta: delta.text } as ProviderEvent;
+        } else if (delta.type === 'input_json_delta' && delta.partial_json !== undefined) {
+          const idx = ev.index as number;
+          if (toolCallsByIndex[idx]) toolCallsByIndex[idx].jsonBuf += delta.partial_json;
+        }
+      } else if (t === 'content_block_stop') {
+        const idx = ev.index as number;
+        const tc = toolCallsByIndex[idx];
+        if (tc) {
+          const args = tc.jsonBuf.length > 0 ? JSON.parse(tc.jsonBuf) : {};
+          yield { type: 'tool_call', id: tc.id, name: tc.name, arguments: args } as ProviderEvent;
+        }
+      } else if (t === 'message_delta') {
+        const usage = ev.usage as { input_tokens?: number; output_tokens?: number } | undefined;
+        const delta = ev.delta as { stop_reason?: string } | undefined;
+        if (usage?.input_tokens) inTokens = usage.input_tokens;
+        if (usage?.output_tokens) outTokens = usage.output_tokens;
+        if (delta?.stop_reason === 'tool_use') stopReason = 'tool_use';
+        else if (delta?.stop_reason === 'max_tokens') stopReason = 'max_tokens';
+      }
+    }
+
+    yield { type: 'tokens', tokens_in: inTokens, tokens_out: outTokens };
+    yield { type: 'done', reason: stopReason };
+  },
+
+  async testKey({ apiKey, model }) {
+    try {
+      const c = client(apiKey);
+      await c.messages.create({
+        model,
+        max_tokens: 1,
+        messages: [{ role: 'user', content: 'ping' }],
+      });
+      return { ok: true };
+    } catch (err) {
+      const e = err as { status?: number; message?: string };
+      if (e.status === 401)
+        return { ok: false, reason: 'Unauthorized (401): key rejected by Anthropic.' };
+      if (e.status === 404) return { ok: false, reason: `Model not found (404): ${model}` };
+      return { ok: false, reason: e.message ?? 'Unknown error' };
+    }
+  },
+};

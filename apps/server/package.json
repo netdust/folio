@@ -11,6 +11,7 @@
     "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.99.0",
     "@folio/shared": "workspace:*",
     "@hono/zod-validator": "^0.4.1",
     "@noble/ciphers": "^1.1.1",
