@@ -75,12 +75,20 @@ async function loadProvider(name: Provider): Promise<AIProvider> {
 }
 
 /**
- * Test-only escape hatch. Lets specs override REGISTRY entries with a stub
- * (to drive the rejection-cleanup path through real code) and observe the
- * `loading` table without exposing it. Not part of the runtime contract —
- * do not call from production code.
+ * @internal
+ *
+ * INTERNAL TEST-ONLY ESCAPE HATCH. Do not import from production code.
+ *
+ * Lets specs override REGISTRY entries with a stub (to drive the
+ * rejection-cleanup path through real code) and observe the `loading` table
+ * without exposing it. Renamed in B round 3 fix #11 from `__testing` to
+ * `__INTERNAL_TEST_ONLY__` to make accidental imports from production code
+ * visible at the call site. A follow-up (deferred to v1.1) extracts these
+ * into a separate file gated by an ESLint rule that bans non-test imports.
+ *
+ * Any production reference to this export is a bug.
  */
-export const __testing = {
+export const __INTERNAL_TEST_ONLY__ = {
   overrideRegistry(name: Provider, loader: () => Promise<AIProvider>): void {
     REGISTRY[name] = loader;
   },

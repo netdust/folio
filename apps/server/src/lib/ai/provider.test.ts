@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type { AIProvider } from './provider.ts';
-import { __testing, getProvider } from './provider.ts';
+import { __INTERNAL_TEST_ONLY__, getProvider } from './provider.ts';
 
 describe('getProvider', () => {
   test('returns a provider object exposing stream + testKey for each known provider', () => {
@@ -23,20 +23,20 @@ describe('loadProvider rejection handling', () => {
     // the rejection-cleanup path through real code, then restore.
     const originalLoader = (): Promise<AIProvider> =>
       import('./ollama.ts').then((m) => m.ollama);
-    __testing.reset();
+    __INTERNAL_TEST_ONLY__.reset();
 
     // First call: import fails.
     let failures = 0;
-    __testing.overrideRegistry('ollama', async () => {
+    __INTERNAL_TEST_ONLY__.overrideRegistry('ollama', async () => {
       failures += 1;
       throw new Error('simulated import failure');
     });
-    await expect(__testing.loadProvider('ollama')).rejects.toThrow('simulated import failure');
+    await expect(__INTERNAL_TEST_ONLY__.loadProvider('ollama')).rejects.toThrow('simulated import failure');
 
     // After the rejection settles, the loading table must be empty — otherwise
     // every subsequent caller would await the same poisoned rejection forever.
-    expect(__testing.hasInflight('ollama')).toBe(false);
-    expect(__testing.hasCached('ollama')).toBe(false);
+    expect(__INTERNAL_TEST_ONLY__.hasInflight('ollama')).toBe(false);
+    expect(__INTERNAL_TEST_ONLY__.hasCached('ollama')).toBe(false);
 
     // Second call with a now-working loader resolves normally — proves we are
     // NOT receiving the prior rejection from a poisoned slot.
@@ -48,13 +48,13 @@ describe('loadProvider rejection handling', () => {
         return { ok: true };
       },
     };
-    __testing.overrideRegistry('ollama', async () => fakeImpl);
-    const got = await __testing.loadProvider('ollama');
+    __INTERNAL_TEST_ONLY__.overrideRegistry('ollama', async () => fakeImpl);
+    const got = await __INTERNAL_TEST_ONLY__.loadProvider('ollama');
     expect(got).toBe(fakeImpl);
     expect(failures).toBe(1); // only the first attempt rejected
 
     // Restore.
-    __testing.overrideRegistry('ollama', originalLoader);
-    __testing.reset();
+    __INTERNAL_TEST_ONLY__.overrideRegistry('ollama', originalLoader);
+    __INTERNAL_TEST_ONLY__.reset();
   });
 });

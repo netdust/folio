@@ -11,6 +11,52 @@ type OllamaMessage = {
   tool_calls?: OllamaToolCall[];
 };
 
+type ParserState = {
+  tokensIn: number;
+  tokensOut: number;
+  stopReason: 'stop' | 'tool_use' | 'max_tokens';
+};
+
+/**
+ * B round 3 fix #10 — extracted from the read-loop + trailing-flush so the
+ * two call sites share one implementation. Pre-fix the two paths drifted
+ * (e.g. round 2 added a console.warn to only one). yield* lets the caller
+ * forward events transparently; `state` carries the running totals.
+ *
+ * B round 3 fix #15 — numeric chunk fields are coerced via Number() so a
+ * stringified value from a sloppy proxy ("7" instead of 7) doesn't propagate
+ * a string into the accumulators (which would then surface in the `tokens`
+ * event and break consumers that arithmetic on it).
+ */
+function* handleOllamaChunk(
+  chunk: Record<string, unknown>,
+  state: ParserState,
+): Generator<ProviderEvent> {
+  const msg = chunk.message as OllamaMessage | undefined;
+  if (msg?.content) yield { type: 'text', delta: msg.content };
+  if (msg?.tool_calls) {
+    for (const tc of msg.tool_calls) {
+      yield {
+        type: 'tool_call',
+        id: crypto.randomUUID(),
+        name: tc.function.name,
+        arguments: tc.function.arguments,
+      };
+    }
+  }
+  if (chunk.done) {
+    // Fix #15 — Number()||existing keeps the running total when the proxy
+    // sends a non-numeric value (NaN coerces back to the previous total).
+    const promptEval = Number(chunk.prompt_eval_count);
+    const evalCount = Number(chunk.eval_count);
+    if (Number.isFinite(promptEval)) state.tokensIn = promptEval;
+    if (Number.isFinite(evalCount)) state.tokensOut = evalCount;
+    const reason = chunk.done_reason as string | undefined;
+    if (reason === 'length') state.stopReason = 'max_tokens';
+    else if (reason === 'tool_calls') state.stopReason = 'tool_use';
+  }
+}
+
 export const ollama: AIProvider = {
   async *stream({ system, messages, tools, maxTokens, model, baseUrl }) {
     const base = baseUrl ?? DEFAULT_BASE;
@@ -44,9 +90,7 @@ export const ollama: AIProvider = {
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
-    let tokensIn = 0;
-    let tokensOut = 0;
-    let stopReason: 'stop' | 'tool_use' | 'max_tokens' = 'stop';
+    const state: ParserState = { tokensIn: 0, tokensOut: 0, stopReason: 'stop' };
 
     while (true) {
       const { value, done } = await reader.read();
@@ -70,25 +114,7 @@ export const ollama: AIProvider = {
           );
           continue;
         }
-        const msg = chunk.message as OllamaMessage | undefined;
-        if (msg?.content) yield { type: 'text', delta: msg.content } as ProviderEvent;
-        if (msg?.tool_calls) {
-          for (const tc of msg.tool_calls) {
-            yield {
-              type: 'tool_call',
-              id: crypto.randomUUID(),
-              name: tc.function.name,
-              arguments: tc.function.arguments,
-            } as ProviderEvent;
-          }
-        }
-        if (chunk.done) {
-          tokensIn = (chunk.prompt_eval_count as number | undefined) ?? tokensIn;
-          tokensOut = (chunk.eval_count as number | undefined) ?? tokensOut;
-          const reason = chunk.done_reason as string | undefined;
-          if (reason === 'length') stopReason = 'max_tokens';
-          else if (reason === 'tool_calls') stopReason = 'tool_use';
-        }
+        yield* handleOllamaChunk(chunk, state);
       }
     }
 
@@ -98,25 +124,7 @@ export const ollama: AIProvider = {
     if (buffer.trim().length > 0) {
       try {
         const chunk = JSON.parse(buffer) as Record<string, unknown>;
-        const msg = chunk.message as OllamaMessage | undefined;
-        if (msg?.content) yield { type: 'text', delta: msg.content } as ProviderEvent;
-        if (msg?.tool_calls) {
-          for (const tc of msg.tool_calls) {
-            yield {
-              type: 'tool_call',
-              id: crypto.randomUUID(),
-              name: tc.function.name,
-              arguments: tc.function.arguments,
-            } as ProviderEvent;
-          }
-        }
-        if (chunk.done) {
-          tokensIn = (chunk.prompt_eval_count as number | undefined) ?? tokensIn;
-          tokensOut = (chunk.eval_count as number | undefined) ?? tokensOut;
-          const reason = chunk.done_reason as string | undefined;
-          if (reason === 'length') stopReason = 'max_tokens';
-          else if (reason === 'tool_calls') stopReason = 'tool_use';
-        }
+        yield* handleOllamaChunk(chunk, state);
       } catch (err) {
         // Drop silently in terms of stream output; matches in-loop behavior.
         // The trailing tokens/done below still fire, but we may have missed
@@ -128,8 +136,8 @@ export const ollama: AIProvider = {
       }
     }
 
-    yield { type: 'tokens', tokens_in: tokensIn, tokens_out: tokensOut };
-    yield { type: 'done', reason: stopReason };
+    yield { type: 'tokens', tokens_in: state.tokensIn, tokens_out: state.tokensOut };
+    yield { type: 'done', reason: state.stopReason };
   },
 
   async testKey({ model, baseUrl }) {

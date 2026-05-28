@@ -92,6 +92,23 @@ describe('POST /api/v1/w/:wslug/settings/:workspaceId/ai-keys', () => {
     expect(res.status).toBe(400);
   });
 
+  // B round 3 fix #13 — defense-in-depth: openrouter persistence must also
+  // be rejected by the refine. Persistence symmetry with /ai/test-key.
+  test('rejects baseUrl when provider is openrouter (400 from refine)', async () => {
+    const { app, seed } = await makeTestApp();
+    const res = await app.request(path(seed.workspace.slug, seed.workspace.id), {
+      method: 'POST',
+      headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        provider: 'openrouter',
+        apiKey: 'sk-or-mock',
+        label: 'default',
+        baseUrl: 'https://anything.example.com/',
+      }),
+    });
+    expect(res.status).toBe(400);
+  });
+
   // Happy path — ollama with a public baseUrl persists.
   test('accepts ollama with a public baseUrl (200)', async () => {
     const { app, seed } = await makeTestApp();

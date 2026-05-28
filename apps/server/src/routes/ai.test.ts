@@ -313,6 +313,25 @@ describe('POST /api/v1/w/:wslug/ai/test-key', () => {
     expect(res.status).toBe(400);
   });
 
+  // B round 3 fix #13 — defense-in-depth: openrouter must also be rejected
+  // by the refine. OpenRouter's testKey now hits /api/v1/key directly, but
+  // the refine is still the contract pin — if someone removes the override
+  // or changes the schema, the test catches it.
+  test('rejects base_url when provider is openrouter (refine — defense in depth)', async () => {
+    const { app, seed } = await makeTestApp();
+    const res = await app.request(`/api/v1/w/${seed.workspace.slug}/ai/test-key`, {
+      method: 'POST',
+      headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        provider: 'openrouter',
+        model: 'anthropic/claude-haiku-4-5',
+        api_key: 'sk-or-mock',
+        base_url: 'https://anything.example.com/',
+      }),
+    });
+    expect(res.status).toBe(400);
+  });
+
   // B round 3 fix #1 — A Bearer token paired with a garbage / empty /
   // unknown-id `folio_session` cookie must still be rejected. The round-2
   // guard checked cookie-header presence; Bun forwards the cookie verbatim

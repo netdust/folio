@@ -142,7 +142,11 @@ export const openai: AIProvider = {
       // embed partial credentials, request IDs, and proxy details that end
       // up in the DOM (the AI tab's ✗ <reason> chip) and in log shippers.
       // Whitelist by HTTP status only.
-      const e = err as { status?: number; message?: string };
+      //
+      // B round 3 fix #12 — narrowed cast: only .status. The pre-fix cast
+      // advertised .message even though we never read it. Now any future
+      // `e.message` reach is a TS error rather than a silent leak.
+      const e = err as { status?: number };
       if (e.status === 401)
         return { ok: false, reason: 'Unauthorized (401): key rejected by OpenAI.' };
       if (e.status === 403)
