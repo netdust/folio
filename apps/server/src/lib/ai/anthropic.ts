@@ -49,7 +49,7 @@ export const anthropic: AIProvider = {
 
     let inTokens = 0;
     let outTokens = 0;
-    let stopReason: 'stop' | 'tool_use' | 'max_tokens' = 'stop';
+    let stopReason: 'stop' | 'tool_use' | 'max_tokens' | 'refusal' | 'pause_turn' = 'stop';
     const toolCallsByIndex: Record<number, { id: string; name: string; jsonBuf: string }> = {};
 
     for await (const ev of stream as AsyncIterable<Record<string, unknown>>) {
@@ -94,6 +94,9 @@ export const anthropic: AIProvider = {
         if (usage?.output_tokens !== undefined) outTokens = usage.output_tokens;
         if (delta?.stop_reason === 'tool_use') stopReason = 'tool_use';
         else if (delta?.stop_reason === 'max_tokens') stopReason = 'max_tokens';
+        else if (delta?.stop_reason === 'refusal') stopReason = 'refusal';
+        else if (delta?.stop_reason === 'pause_turn') stopReason = 'pause_turn';
+        // end_turn, stop_sequence, anything else → default 'stop'
       }
     }
 

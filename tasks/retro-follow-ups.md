@@ -2,6 +2,9 @@
 
 Created 2026-05-28 by `/evaluate` after Phase 3 Sub-phase A. One bullet per item.
 
+**Resolved:**
+- 2026-05-28: `ProviderEvent.done.reason` widened to `'stop' | 'tool_use' | 'max_tokens' | 'refusal' | 'pause_turn'`. Anthropic maps `refusal` + `pause_turn` explicitly; OpenAI `content_filter` → `refusal`. Shipped as B fix #10.
+
 ---
 
 - **Should the implementer-prompt template in `superpowers:subagent-driven-development` require a literal `Skill('netdust-core:testing-workflow')` invocation in the subagent's report?**
@@ -22,7 +25,5 @@ Created 2026-05-28 by `/evaluate` after Phase 3 Sub-phase A. One bullet per item
   **Decision needed:** YES / NO.
   **What changes if YES:** an addition to `superpowers:writing-plans/SKILL.md` listing the freshness check. Folio's `memory/lessons.md` already has the rule (2026-05-28 entry) — promoting it to skill-level makes it cross-project.
   **Source:** Phase 3 Sub-phase A retro, Harness Gap #1.
-
-- **Should the `ProviderEvent.done.reason` union (in `apps/server/src/lib/ai/provider.ts` from B-1) be widened from `'stop' | 'tool_use' | 'max_tokens'` to also include `'refusal'` and `'pause_turn'`?** B-2's code-quality reviewer flagged that Anthropic's `StopReason` includes both, and the current provider silently downgrades them to `'stop'`. `refusal` carries safety-refusal semantics worth surfacing; `pause_turn` is extended-thinking continuation that needs runner support. **Decision needed:** Defer until Sub-phase C's runner state machine is real, then widen if the runner actually wants to branch on these. Logging here so it surfaces during the C-1 dispatch.
 
 - **B-2 minor cast tightenings deferred from code-quality review:** (a) `input_schema as { type: 'object'; [k: string]: unknown }` could become `Tool.InputSchema` if exported; (b) `stream as AsyncIterable<Record<string, unknown>>` could be `MessageStreamEvent`. Both at the SDK boundary. Defer to next-touch — neither blocks B-3/4/5.

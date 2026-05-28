@@ -46,7 +46,7 @@ export const openai: AIProvider = {
 
     let tokensIn = 0;
     let tokensOut = 0;
-    let stopReason: 'stop' | 'tool_use' | 'max_tokens' = 'stop';
+    let stopReason: 'stop' | 'tool_use' | 'max_tokens' | 'refusal' | 'pause_turn' = 'stop';
     // OpenAI streams tool_calls with `id` ONLY on the first delta per call;
     // continuation deltas carry only `index` + arg fragments. Key by `index`
     // (always present) and track id/name as separate fields set on first sight.
@@ -79,6 +79,7 @@ export const openai: AIProvider = {
         const finish = choices[0].finish_reason as string | undefined;
         if (finish === 'tool_calls') stopReason = 'tool_use';
         else if (finish === 'length') stopReason = 'max_tokens';
+        else if (finish === 'content_filter') stopReason = 'refusal';
       }
       const usage = chunk.usage as
         | { prompt_tokens?: number; completion_tokens?: number }

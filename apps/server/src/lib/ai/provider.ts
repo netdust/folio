@@ -4,7 +4,7 @@ export type ProviderEvent =
   | { type: 'text'; delta: string }
   | { type: 'tool_call'; id: string; name: string; arguments: unknown }
   | { type: 'tokens'; tokens_in: number; tokens_out: number }
-  | { type: 'done'; reason: 'stop' | 'tool_use' | 'max_tokens' };
+  | { type: 'done'; reason: 'stop' | 'tool_use' | 'max_tokens' | 'refusal' | 'pause_turn' };
 
 export type Message =
   | { role: 'user'; content: string }

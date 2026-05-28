@@ -79,6 +79,40 @@ describe('anthropic provider', () => {
     expect(events).toContainEqual({ type: 'tokens', tokens_in: 0, tokens_out: 0 });
   });
 
+  test('stream() maps stop_reason=refusal to done.reason=refusal', async () => {
+    mockStream.mockImplementationOnce((async function* () {
+      yield { type: 'content_block_delta', delta: { type: 'text_delta', text: 'I cannot help with that' } };
+      yield { type: 'message_delta', delta: { stop_reason: 'refusal' }, usage: { input_tokens: 4, output_tokens: 6 } };
+      yield { type: 'message_stop' };
+    }) as never);
+
+    const events: unknown[] = [];
+    for await (const ev of anthropic.stream({
+      system: 'sys', messages: [{ role: 'user', content: 'do bad thing' }],
+      tools: [], maxTokens: 100, apiKey: 'sk', model: 'claude-haiku-4-5',
+    })) {
+      events.push(ev);
+    }
+    expect(events).toContainEqual({ type: 'done', reason: 'refusal' });
+  });
+
+  test('stream() maps stop_reason=pause_turn to done.reason=pause_turn', async () => {
+    mockStream.mockImplementationOnce((async function* () {
+      yield { type: 'content_block_delta', delta: { type: 'text_delta', text: 'thinking...' } };
+      yield { type: 'message_delta', delta: { stop_reason: 'pause_turn' }, usage: { input_tokens: 4, output_tokens: 3 } };
+      yield { type: 'message_stop' };
+    }) as never);
+
+    const events: unknown[] = [];
+    for await (const ev of anthropic.stream({
+      system: 'sys', messages: [{ role: 'user', content: 'long task' }],
+      tools: [], maxTokens: 100, apiKey: 'sk', model: 'claude-opus-4-7',
+    })) {
+      events.push(ev);
+    }
+    expect(events).toContainEqual({ type: 'done', reason: 'pause_turn' });
+  });
+
   test('stream() yields done event even when tool_use input_json fails to JSON.parse', async () => {
     mockStream.mockImplementationOnce((async function* () {
       yield {

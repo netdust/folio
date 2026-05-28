@@ -146,6 +146,28 @@ describe('openai provider', () => {
     expect(events).toContainEqual({ type: 'tokens', tokens_in: 0, tokens_out: 0 });
   });
 
+  test('stream() maps finish_reason=content_filter to done.reason=refusal', async () => {
+    mockCreate.mockImplementationOnce((async (opts: { stream?: boolean }) => {
+      if (!opts.stream) return { id: 'cmpl_x' };
+      return (async function* () {
+        yield { choices: [{ delta: { content: 'I cannot' } }], usage: null };
+        yield {
+          choices: [{ delta: {}, finish_reason: 'content_filter' }],
+          usage: { prompt_tokens: 3, completion_tokens: 2 },
+        };
+      })();
+    }) as never);
+
+    const events: unknown[] = [];
+    for await (const ev of openai.stream({
+      system: 'sys', messages: [{ role: 'user', content: 'do bad thing' }],
+      tools: [], maxTokens: 100, apiKey: 'sk', model: 'gpt-4o-mini',
+    })) {
+      events.push(ev);
+    }
+    expect(events).toContainEqual({ type: 'done', reason: 'refusal' });
+  });
+
   test('stream() yields done event even when tool_call args fail to JSON.parse', async () => {
     mockCreate.mockImplementationOnce((async (opts: { stream?: boolean }) => {
       if (!opts.stream) return { id: 'cmpl_x' };
