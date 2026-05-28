@@ -849,6 +849,14 @@ Hand-rolled Hono sub-app at `/mcp`. Speaks JSON-RPC 2.0 over HTTP POST. Bearer-a
 - [ ] `routes/ai.ts`: `POST /api/v1/w/:wslug/ai/test-key` — validates a key with a cheap call without storing.
 - [ ] Workspace AI-key UI in `/w/:wslug/settings` — new "AI" tab with provider/model selectors + key input + Test button. Hooks into existing `aiKeys` storage (Phase 0).
 
+### MCP tool dispatch — extract to a callable lib (runner prerequisite)
+
+> **Why this is a hard prerequisite for the runner.** Today `tools/list` + `tools/call` + the `TOOLS` registry + the per-tool scope check live *inline inside the Hono route* (`apps/server/src/routes/mcp.ts:1253-1314`), reachable only via an HTTP request with a bearer-auth'd `token`/`actor`. The runner has **no HTTP request** — it has an `agent_run` row. So when `runAgent`'s loop receives a `tool_call` event it has no function to invoke; the model can talk, but every tool call hits a wall. Lifting dispatch into a shared lib that *both* the route and the runner call is the gate everything else sits behind. Pure extraction — the existing MCP route tests pin the behavior, so a green suite proves the lift is faithful. See `memory/project_folio-agent-thesis.md`: the introspect-and-shape tools that make "set up a project for me" work all flow through this surface.
+
+- [ ] `lib/mcp-dispatch.ts`: extract the `TOOLS` registry + dispatch out of `routes/mcp.ts`. Expose `callTool(token, actor, name, args): Promise<ToolResult>` (the body of `mcp.ts:1272-1313` verbatim — unknown-tool, scope-gate, handler-invoke, error→code mapping) and `listTools(token): ToolDef[]` (**scope-filtered to the token, not the raw static array** — the runner hands the model only the tools its agent is allowed to call).
+- [ ] `routes/mcp.ts`: rewire `tools/list` + `tools/call` to call the lib. Route becomes a thin JSON-RPC wrapper; no behavior change. Existing MCP route tests stay green (the pin that proves the extraction is faithful).
+- [ ] Confirm the lib's `ToolDef` shape matches the provider layer's `ToolDef` (`lib/ai/provider.ts:18-22`) so `runAgent` can pass `listTools(token)` straight into `provider.stream({ tools })` with no adapter.
+
 ### Runner (polling-worker model)
 
 - [ ] `services/agent-runs.ts`: `createRun`, `transitionRun`, `incrementTokens`, `getActiveRun`, `claimNextPlanningRun` (atomic UPDATE-based claim), `recoverOrphanRuns` (boot-time crash recovery), `checkRunRateLimits` (workspace + agent caps), `checkChainGuards` (fanout + duration + tokens by chain_id), `countPendingPlanning` (backpressure visibility). All transactional, all emit events.
