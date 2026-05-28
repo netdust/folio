@@ -1850,6 +1850,12 @@ export const anthropic: AIProvider = {
         description: t.description,
         input_schema: t.input_schema as Record<string, unknown>,
       })),
+      // ⚠ Plan defect noted during B-2 execution (shipped fix in `20b1ff0`):
+      // `as never` disables ALL type checking at the SDK boundary, defeating
+      // the purpose of the wrapping function. Shipped fix uses the SDK's
+      // exported `MessageParam[]` type instead. Refer to commit `20b1ff0` for
+      // the actual pattern; the `as never` below is preserved as historical
+      // context but should not be copied.
       messages: anthropicMessages as never,
     });
 
