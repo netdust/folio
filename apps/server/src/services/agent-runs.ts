@@ -22,6 +22,9 @@ import { nanoid } from 'nanoid';
 import { db, type DB } from '../db/client.ts';
 import {
   documents,
+  statuses,
+  tables,
+  views,
   workspaces,
   type Document,
   type Project,
@@ -1071,4 +1074,218 @@ async function maybeEmitProviderHealthEdge(
       consecutive_failures: next.consecutive_failures,
     },
   });
+}
+
+// ----- ensureRunsTable + nextChainId (Task C-6) -----
+
+/**
+ * Status rows seeded into a new `runs` table — mirror the agent_run state
+ * machine. Categories map to existing status categories so kanban + filter
+ * UI render correctly. `failed` and `rejected` use `cancelled` because
+ * that's the closest semantic match in the existing enum (the state
+ * machine treats both as terminal "did not complete normally").
+ */
+const RUNS_TABLE_STATUSES = [
+  { key: 'planning',          name: 'Planning',          category: 'unstarted' as const, color: '#94a3b8', order: 0  },
+  { key: 'awaiting_approval', name: 'Awaiting approval', category: 'unstarted' as const, color: '#f59e0b', order: 10 },
+  { key: 'running',           name: 'Running',           category: 'started'   as const, color: '#3b82f6', order: 20 },
+  { key: 'completed',         name: 'Completed',         category: 'completed' as const, color: '#10b981', order: 30 },
+  { key: 'failed',            name: 'Failed',            category: 'cancelled' as const, color: '#ef4444', order: 40 },
+  { key: 'rejected',          name: 'Rejected',          category: 'cancelled' as const, color: '#6b7280', order: 50 },
+];
+
+/**
+ * View rows for the runs table — three pre-built filters operators will
+ * reach for first. All `type='list'` because runs are time-series data
+ * that reads naturally as a list, not a kanban.
+ */
+const RUNS_TABLE_VIEWS: Array<{
+  name: string;
+  filters: Record<string, unknown>;
+  sort: Array<{ key: string; dir: 'asc' | 'desc' }>;
+  visibleFields: string[];
+  isDefault: boolean;
+  order: number;
+}> = [
+  {
+    name: 'All runs',
+    filters: { type: { $eq: 'agent_run' } },
+    sort: [{ key: 'created_at', dir: 'desc' }],
+    visibleFields: ['title', 'status', 'agent_slug', 'provider', 'tokens_in', 'tokens_out', 'completed_at'],
+    isDefault: true,
+    order: 0,
+  },
+  {
+    name: 'Failures',
+    filters: { type: { $eq: 'agent_run' }, status: { $in: ['failed', 'rejected'] } },
+    sort: [{ key: 'completed_at', dir: 'desc' }],
+    visibleFields: ['title', 'status', 'agent_slug', 'error_reason', 'completed_at'],
+    isDefault: false,
+    order: 10,
+  },
+  {
+    name: 'Awaiting approval',
+    filters: { type: { $eq: 'agent_run' }, status: { $eq: 'awaiting_approval' } },
+    sort: [{ key: 'started_at', dir: 'desc' }],
+    visibleFields: ['title', 'agent_slug', 'started_at'],
+    isDefault: false,
+    order: 20,
+  },
+];
+
+/**
+ * Idempotent lazy-seed of a project's `runs` table + 6 statuses + 3 views.
+ *
+ * Mitigation 23 (verified inherited) — the `tables` row is scoped to
+ * `projectId` (FK with `onDelete: cascade`), and the unique index
+ * `tables_project_slug_idx (project_id, slug)` enforces "one runs table
+ * per project." Status + view rows are scoped to `tableId` (cascade on
+ * delete). Workspace scope is inherited via `project.workspace_id` —
+ * we don't write workspaceId to tables/statuses/views directly because
+ * those tables don't have a workspace_id column; the project FK is the
+ * single source of truth for scope.
+ *
+ * Caller MUST pass a transaction handle. For the lazy-seed-inside-
+ * createRun path (Sub-phase C.2), this lets the runs-table insert AND
+ * the agent_run row insert commit (or roll back) atomically. Callers
+ * that want bus delivery should wrap with `txWithEvents`; bare
+ * `db.transaction` publishes inline (per lib/events.ts:130).
+ *
+ * Emits, on the create path only:
+ *   - 1× `table.created`     (row id in payload)
+ *   - 6× `status.created`    (one per status row)
+ *   - 3× `view.created`      (one per view row)
+ *   - 1× `runs_table.lazy_seeded` (the rail-refresh signal — its purpose
+ *     is to let project SSE subscribers know a new leaf appeared)
+ *
+ * On the idempotent path, ZERO events emit. The caller can call this
+ * once per run without burning event ids on a no-op.
+ */
+export async function ensureRunsTable(
+  tx: Parameters<Parameters<DB['transaction']>[0]>[0],
+  args: { workspaceId: string; projectId: string },
+): Promise<TableEntity> {
+  // Idempotency check. The unique index on (project_id, slug) means
+  // there's at most one row to find; the type predicate is implicit.
+  const existing = await tx.query.tables.findFirst({
+    where: and(eq(tables.projectId, args.projectId), eq(tables.slug, 'runs')),
+  });
+  if (existing) return existing;
+
+  const tableId = nanoid();
+  await tx.insert(tables).values({
+    id: tableId,
+    projectId: args.projectId,
+    slug: 'runs',
+    name: 'Runs',
+    icon: null,
+    // Order 100 so it sorts after work-items (0) and any human-created
+    // tables (typically inserted with order 10-50). Lazy-seeded tables
+    // are system surfaces, not curated, so they land at the bottom.
+    order: 100,
+  });
+  await emitEvent(tx, {
+    kind: 'table.created',
+    workspaceId: args.workspaceId,
+    projectId: args.projectId,
+    documentId: tableId,
+    actor: 'system:runs-table-seeder',
+    payload: { slug: 'runs', name: 'Runs' },
+  });
+
+  for (const s of RUNS_TABLE_STATUSES) {
+    const statusId = nanoid();
+    await tx.insert(statuses).values({
+      id: statusId,
+      projectId: args.projectId,
+      tableId,
+      ...s,
+    });
+    await emitEvent(tx, {
+      kind: 'status.created',
+      workspaceId: args.workspaceId,
+      projectId: args.projectId,
+      documentId: statusId,
+      actor: 'system:runs-table-seeder',
+      payload: { table_id: tableId, key: s.key, name: s.name },
+    });
+  }
+
+  for (const v of RUNS_TABLE_VIEWS) {
+    const viewId = nanoid();
+    await tx.insert(views).values({
+      id: viewId,
+      projectId: args.projectId,
+      tableId,
+      name: v.name,
+      type: 'list',
+      filters: v.filters as unknown,
+      sort: v.sort as unknown,
+      visibleFields: v.visibleFields,
+      isDefault: v.isDefault,
+      order: v.order,
+    });
+    await emitEvent(tx, {
+      kind: 'view.created',
+      workspaceId: args.workspaceId,
+      projectId: args.projectId,
+      documentId: viewId,
+      actor: 'system:runs-table-seeder',
+      payload: { table_id: tableId, name: v.name },
+    });
+  }
+
+  // Final rail-refresh signal. Subscribers can listen for just this kind
+  // (not the 10 sub-events) to know a new project surface is available.
+  await emitEvent(tx, {
+    kind: 'runs_table.lazy_seeded',
+    workspaceId: args.workspaceId,
+    projectId: args.projectId,
+    documentId: tableId,
+    actor: 'system:runs-table-seeder',
+    payload: { table_id: tableId, slug: 'runs' },
+  });
+
+  // Re-read so callers get the same row shape they'd get from a
+  // findFirst (timestamps populated, etc.) — symmetric with the
+  // idempotent branch's return.
+  const created = await tx.query.tables.findFirst({ where: eq(tables.id, tableId) });
+  return created!;
+}
+
+/**
+ * Strict UUIDv4 shape: `xxxxxxxx-xxxx-4xxx-[8-b]xxx-xxxxxxxxxxxx`.
+ * The 3rd group MUST start with `4` (version), and the 4th group MUST
+ * start with 8/9/a/b (variant). `crypto.randomUUID()` produces this
+ * shape by spec; we use it both to validate extracted ids and to mint
+ * fresh ones. Mitigation 29 — no other shapes accepted.
+ */
+const UUID_V4_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+/**
+ * Mint or extract the chain_id for a new run.
+ *
+ * Two paths:
+ *  - `firedBy` matches `chain:<uuid>:...` AND the captured uuid is a
+ *    valid UUIDv4 → return the captured uuid (joins the existing chain).
+ *  - Anything else → mint fresh via `crypto.randomUUID()`.
+ *
+ * Mitigation 29 — chain_id format locked. Output is GUARANTEED to satisfy
+ * `agent_run_schema.ts`'s `chain_id: z.string().uuid()` validator. A
+ * mangled `chain:not-a-uuid:...` does NOT propagate; it falls through to
+ * the fresh-mint path so the new run starts its own chain rather than
+ * persisting an invalid id that the Zod parse on insert would reject
+ * downstream.
+ */
+export function nextChainId(args: { firedBy: string }): string {
+  // Match `chain:<token>:...` where <token> is the captured group.
+  // Non-greedy in case the rest of firedBy contains another `:`.
+  const match = args.firedBy.match(/^chain:([^:]+):/i);
+  if (match) {
+    const captured = match[1]!;
+    if (UUID_V4_RE.test(captured)) return captured;
+    // Fall through — captured token isn't a valid v4. Mint fresh rather
+    // than propagate an invalid id (defense for mitigation 29).
+  }
+  return crypto.randomUUID();
 }

@@ -43,7 +43,11 @@ import {
   checkChainGuards,
   checkProviderHealth,
   getProviderHealth,
+  ensureRunsTable,
+  nextChainId,
 } from './agent-runs.ts';
+import { statuses, views } from '../db/schema.ts';
+import { agentRunFrontmatterSchema } from '../lib/agent-run-schema.ts';
 
 type TestDB = Awaited<ReturnType<typeof makeTestApp>>['db'];
 
@@ -2183,5 +2187,177 @@ describe('transitionRun → maybeEmitProviderHealthEdge', () => {
     // forgotten. 200ms gives plenty of headroom for SQLite + JSON
     // serialization without blessing a regression.
     expect(elapsedMs).toBeLessThan(200);
+  });
+});
+
+// ---------- ensureRunsTable ----------
+
+describe('ensureRunsTable', () => {
+  test('creates a runs table on first call with 6 statuses + 3 views + 11 events', async () => {
+    const { db, seed } = await makeTestApp();
+
+    const created = await db.transaction(async (tx) =>
+      ensureRunsTable(tx, { workspaceId: seed.workspace.id, projectId: seed.project.id }),
+    );
+    expect(created.slug).toBe('runs');
+    expect(created.projectId).toBe(seed.project.id);
+    expect(typeof created.id).toBe('string');
+
+    // Six statuses covering the run state machine.
+    const statusRows = await db.query.statuses.findMany({
+      where: eq(statuses.tableId, created.id),
+    });
+    const keys = statusRows.map((s) => s.key).sort();
+    expect(keys).toEqual([
+      'awaiting_approval',
+      'completed',
+      'failed',
+      'planning',
+      'rejected',
+      'running',
+    ]);
+
+    // Three views: All / Failures / Awaiting approval.
+    const viewRows = await db.query.views.findMany({
+      where: eq(views.tableId, created.id),
+    });
+    expect(viewRows.length).toBe(3);
+    const viewNames = viewRows.map((v) => v.name).sort();
+    expect(viewNames).toEqual(['All runs', 'Awaiting approval', 'Failures']);
+
+    // 11 lifecycle events: 1 table.created + 6 status.created + 3 view.created
+    // + 1 runs_table.lazy_seeded.
+    const lifecycleEvents = await db.query.events.findMany({
+      where: (e, { inArray, and: andOp, eq: eqOp }) =>
+        andOp(
+          eqOp(e.workspaceId, seed.workspace.id),
+          inArray(e.kind, [
+            'table.created',
+            'status.created',
+            'view.created',
+            'runs_table.lazy_seeded',
+          ]),
+        ),
+    });
+    const byKind = lifecycleEvents.reduce<Record<string, number>>((acc, e) => {
+      acc[e.kind] = (acc[e.kind] ?? 0) + 1;
+      return acc;
+    }, {});
+    expect(byKind['table.created']).toBe(1);
+    expect(byKind['status.created']).toBe(6);
+    expect(byKind['view.created']).toBe(3);
+    expect(byKind['runs_table.lazy_seeded']).toBe(1);
+  });
+
+  test('is idempotent: second call returns the same table id and emits zero new events', async () => {
+    // Mitigation 23 (verified inherited) — re-running ensureRunsTable on a
+    // project where it already seeded MUST be a no-op. The runner calls
+    // it once per run, and getting duplicate tables / statuses / views
+    // or a second `runs_table.lazy_seeded` event would corrupt the UI
+    // (rail leaves doubled) and the event log.
+    const { db, seed } = await makeTestApp();
+
+    const first = await db.transaction(async (tx) =>
+      ensureRunsTable(tx, { workspaceId: seed.workspace.id, projectId: seed.project.id }),
+    );
+
+    // Snapshot event count after first seed.
+    const eventsAfterFirst = await db.query.events.findMany({
+      where: (e, { eq: eqOp }) => eqOp(e.workspaceId, seed.workspace.id),
+    });
+    const firstCount = eventsAfterFirst.length;
+
+    const second = await db.transaction(async (tx) =>
+      ensureRunsTable(tx, { workspaceId: seed.workspace.id, projectId: seed.project.id }),
+    );
+    expect(second.id).toBe(first.id);
+
+    // No additional events on the idempotent path.
+    const eventsAfterSecond = await db.query.events.findMany({
+      where: (e, { eq: eqOp }) => eqOp(e.workspaceId, seed.workspace.id),
+    });
+    expect(eventsAfterSecond.length).toBe(firstCount);
+
+    // Still exactly 6 statuses + 3 views — no duplicates from re-seeding.
+    const statusRows = await db.query.statuses.findMany({
+      where: eq(statuses.tableId, first.id),
+    });
+    expect(statusRows.length).toBe(6);
+    const viewRows = await db.query.views.findMany({
+      where: eq(views.tableId, first.id),
+    });
+    expect(viewRows.length).toBe(3);
+  });
+
+  test('emits runs_table.lazy_seeded exactly once on create with workspace + project scope', async () => {
+    // The runner's frontend subscribers listen for this event to refresh
+    // the rail (a new `Runs` leaf appears under the project). The scope
+    // fields are what filter the SSE delivery — project subscribers in
+    // the right project see it; everyone else doesn't.
+    const { db, seed } = await makeTestApp();
+
+    await db.transaction(async (tx) =>
+      ensureRunsTable(tx, { workspaceId: seed.workspace.id, projectId: seed.project.id }),
+    );
+
+    const seededEvents = await db.query.events.findMany({
+      where: eq(events.kind, 'runs_table.lazy_seeded'),
+    });
+    expect(seededEvents.length).toBe(1);
+    expect(seededEvents[0]!.workspaceId).toBe(seed.workspace.id);
+    expect(seededEvents[0]!.projectId).toBe(seed.project.id);
+    const payload = seededEvents[0]!.payload as { table_id?: string; slug?: string };
+    expect(payload.slug).toBe('runs');
+    expect(typeof payload.table_id).toBe('string');
+  });
+});
+
+// ---------- nextChainId ----------
+
+describe('nextChainId', () => {
+  test('mints a new UUIDv4 when firedBy has no chain prefix', () => {
+    const a = nextChainId({ firedBy: 'agent.task.assigned' });
+    const b = nextChainId({ firedBy: 'manual' });
+    // Both are valid UUIDv4s (4 in the 3rd group's first position).
+    const uuidV4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    expect(a).toMatch(uuidV4);
+    expect(b).toMatch(uuidV4);
+    // Distinct mints — randomness guard.
+    expect(a).not.toBe(b);
+  });
+
+  test('extracts the UUID from firedBy when it carries a chain prefix', () => {
+    const existing = 'b67e4f50-3acb-4d1f-9c63-9d1e8b3a2c4f';
+    const result = nextChainId({ firedBy: `chain:${existing}:agent.task.assigned` });
+    expect(result).toBe(existing);
+  });
+
+  test('mints fresh when firedBy looks like chain: but the UUID is malformed', () => {
+    // Mitigation 29 — chain_id MUST be a valid UUID, no exceptions. A
+    // mangled `chain:not-a-uuid:...` MUST NOT propagate; mint fresh instead.
+    const result = nextChainId({ firedBy: 'chain:not-a-uuid:agent.task.assigned' });
+    expect(result).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+  });
+
+  test('result always satisfies agentRunFrontmatterSchema.chain_id (z.string().uuid())', () => {
+    // Mitigation 29 lock — the helper's output is exactly what
+    // createRun writes into frontmatter.chain_id. If the schema rejects
+    // it, the runner can't create a chain-aggregated row. 50 mints to
+    // catch a stray bad randomUUID + every supported firedBy shape.
+    const inputs = [
+      'agent.task.assigned',
+      'manual',
+      'comment.mentioned',
+      'trigger:foo',
+      'chain:7c9e6679-7425-40de-944b-e07fc1f90ae7:agent.task.assigned',
+    ];
+    for (let i = 0; i < 50; i++) {
+      for (const firedBy of inputs) {
+        const id = nextChainId({ firedBy });
+        // Use the schema's own validator on a single field via .pick().
+        const parsed = agentRunFrontmatterSchema.shape.chain_id.safeParse(id);
+        expect(parsed.success).toBe(true);
+      }
+    }
   });
 });
