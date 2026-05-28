@@ -39,7 +39,7 @@ Other reconciliations:
 
 | Sub-phase | Scope | Acceptance items from spec §10 |
 |---|---|---|
-| **A. Foundation** | Auto-migrate on boot · Migration 0012 (agent_run + indexes) · Migration 0012a (flip builtins) · Zod schema · Event kinds · State machine helpers | §10.1, §10.16, §10.25 (chain_id) |
+| **A. Foundation** | Auto-migrate on boot · Migration 0012 (agent_run + indexes) · Migration 0012a (flip builtins) · Zod schema · Event kinds · State machine helpers · Pre-commit hook for migration↔journal pairing | §10.1, §10.16, §10.25 (chain_id) |
 | **B. Providers** | `AIProvider` interface · 4 implementations · AI settings tab · `POST /ai/test-key` | §10.2 |
 | **C. Runner core** | `services/agent-runs.ts` · `lib/runner.ts` · `lib/poller.ts` · 6 recursion guards · crash recovery · token budget | §10.3, §10.4–10.6, §10.8–10.11, §10.16, §10.17, §10.18 |
 | **D. Routes + MCP parity** | `routes/runs.ts` (5 verbs) · `lib/mcp-dispatch.ts` · 5 new MCP tools · refactor existing MCP dispatch · admin runner-stats endpoint · approval-comment → resume_run wiring | §10.7, §10.12, §10.13, §10.21, §10.22 |
@@ -1129,6 +1129,208 @@ optional worker_started_at + resume_of + error fields.
 
 isValidTransition() encodes the state machine: every transition is
 explicit; terminal statuses are dead-ends."
+```
+
+### Task A-4b: Pre-commit hook — migration ↔ journal pairing
+
+> **Why.** `[[drizzle-migration-journal]]` says every new `.sql` migration must update `_journal.json` in the same commit. The runtime can't help here — Drizzle's `migrate()` silently skips files that aren't in the journal, so a missing entry is invisible until production. A pre-commit hook closes the loop. This task is the project's automated enforcement of remark #4 from the Phase 3 review.
+
+**Files:**
+- Create: `scripts/hooks/pre-commit-migration-journal.sh`
+- Create: `scripts/hooks/pre-commit-migration-journal.test.sh`
+- Modify: `scripts/hooks/install.sh` (or create if absent) — symlinks the hook into `.git/hooks/pre-commit` (composes with existing hooks if any).
+
+- [ ] **Step 1: Inspect the current hook setup**
+
+```bash
+ls -la .git/hooks/ scripts/hooks/ 2>/dev/null
+```
+
+If `scripts/hooks/` doesn't exist yet, create it. If `.git/hooks/pre-commit` already exists (e.g. from Husky or a prior hook), the installer must `cat` the existing hook + our new check so we don't clobber anything.
+
+- [ ] **Step 2: Write a test harness for the hook**
+
+Create `scripts/hooks/pre-commit-migration-journal.test.sh`:
+
+```bash
+#!/usr/bin/env bash
+# Black-box test for the migration-journal pre-commit hook.
+# Runs the hook against a synthetic staged set and asserts pass/fail.
+set -euo pipefail
+
+HOOK="$(cd "$(dirname "$0")" && pwd)/pre-commit-migration-journal.sh"
+TMP="$(mktemp -d)"
+trap "rm -rf $TMP" EXIT
+
+# Simulate staged files via an env override the hook supports.
+fail=0
+
+# Case 1: staged migration WITHOUT journal — must FAIL (exit 1).
+if FOLIO_HOOK_STAGED_FILES="apps/server/src/db/migrations/9999_test.sql" "$HOOK" > "$TMP/out1" 2>&1; then
+  echo "FAIL: hook allowed an orphan migration"; fail=1
+else
+  grep -q "journal entry" "$TMP/out1" || { echo "FAIL: missing journal-entry message"; fail=1; }
+fi
+
+# Case 2: staged migration WITH journal — must PASS (exit 0).
+if FOLIO_HOOK_STAGED_FILES=$'apps/server/src/db/migrations/9999_test.sql\napps/server/src/db/migrations/meta/_journal.json' "$HOOK" > "$TMP/out2" 2>&1; then
+  : # ok
+else
+  echo "FAIL: hook rejected a paired migration + journal"; fail=1
+fi
+
+# Case 3: no migration in stage — must PASS.
+if FOLIO_HOOK_STAGED_FILES="README.md" "$HOOK" > "$TMP/out3" 2>&1; then
+  : # ok
+else
+  echo "FAIL: hook fired on non-migration commit"; fail=1
+fi
+
+if [ "$fail" -ne 0 ]; then exit 1; fi
+echo "OK: 3/3 hook cases"
+```
+
+Make it executable: `chmod +x scripts/hooks/pre-commit-migration-journal.test.sh`.
+
+- [ ] **Step 3: Run the test to verify it fails**
+
+```bash
+./scripts/hooks/pre-commit-migration-journal.test.sh
+```
+
+Expected: FAIL — `pre-commit-migration-journal.sh` doesn't exist yet.
+
+- [ ] **Step 4: Implement the hook**
+
+Create `scripts/hooks/pre-commit-migration-journal.sh`:
+
+```bash
+#!/usr/bin/env bash
+# Refuses commits that add or modify apps/server/src/db/migrations/*.sql
+# without also staging apps/server/src/db/migrations/meta/_journal.json.
+# Drizzle's migrator silently skips migrations not listed in the journal —
+# the symptom is invisible locally and explosive in production.
+set -euo pipefail
+
+# Allow tests to inject staged-files list via env (NL-separated).
+if [ -n "${FOLIO_HOOK_STAGED_FILES:-}" ]; then
+  staged="$FOLIO_HOOK_STAGED_FILES"
+else
+  staged="$(git diff --cached --name-only --diff-filter=ACMR || true)"
+fi
+
+# Find any staged migration .sql files (ignore the _journal.json itself).
+migration_files="$(echo "$staged" | grep -E '^apps/server/src/db/migrations/[^/]+\.sql$' || true)"
+
+if [ -z "$migration_files" ]; then
+  exit 0
+fi
+
+# At least one migration is staged — journal MUST also be staged.
+if echo "$staged" | grep -q '^apps/server/src/db/migrations/meta/_journal\.json$'; then
+  exit 0
+fi
+
+cat >&2 <<EOF
+✗ Migration file(s) staged without _journal.json update:
+
+$(echo "$migration_files" | sed 's/^/    /')
+
+Drizzle's migrate() silently skips migrations not listed in
+apps/server/src/db/migrations/meta/_journal.json, so a missing
+journal entry breaks production without local symptoms.
+
+Add the new migration's entry to _journal.json (idx, version, when,
+tag, breakpoints) and stage it:
+
+    git add apps/server/src/db/migrations/meta/_journal.json
+
+See ~/.claude/projects/-home-ntdst-Projects-folio/memory/feedback_drizzle-migration-journal.md
+for the full rule.
+
+To override (emergency only — make a follow-up commit immediately):
+
+    git commit --no-verify ...
+
+EOF
+exit 1
+```
+
+Make it executable: `chmod +x scripts/hooks/pre-commit-migration-journal.sh`.
+
+- [ ] **Step 5: Implement the installer**
+
+Create or update `scripts/hooks/install.sh`:
+
+```bash
+#!/usr/bin/env bash
+# Installs the project's pre-commit hooks into .git/hooks/.
+# Safe to re-run; composes with any existing pre-commit.
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+HOOK_DST="$REPO_ROOT/.git/hooks/pre-commit"
+HOOK_SRC_DIR="$REPO_ROOT/scripts/hooks"
+
+cat > "$HOOK_DST" <<EOF
+#!/usr/bin/env bash
+# Auto-generated by scripts/hooks/install.sh — do not edit by hand.
+set -e
+"$HOOK_SRC_DIR/pre-commit-migration-journal.sh"
+EOF
+chmod +x "$HOOK_DST"
+echo "installed: $HOOK_DST"
+```
+
+Make it executable: `chmod +x scripts/hooks/install.sh`.
+
+- [ ] **Step 6: Document install in CLAUDE.md or README**
+
+Append to `CLAUDE.md` under "Build & Run":
+
+```markdown
+- One-time per fresh clone: `./scripts/hooks/install.sh` to enable the
+  migration-journal pre-commit check. Re-run if you re-clone.
+```
+
+- [ ] **Step 7: Install the hook locally + run the harness**
+
+```bash
+./scripts/hooks/install.sh
+./scripts/hooks/pre-commit-migration-journal.test.sh
+```
+
+Expected: `installed: ...` then `OK: 3/3 hook cases`.
+
+- [ ] **Step 8: Smoke against the real index**
+
+Try a doomed commit and a clean commit to confirm the hook fires in both directions. Use `--no-verify` only to abandon the doomed commit:
+
+```bash
+# Doomed: stage just a fake migration without the journal.
+mkdir -p /tmp/folio-hook-smoke && touch apps/server/src/db/migrations/9999_smoke.sql
+git add apps/server/src/db/migrations/9999_smoke.sql
+git commit -m "smoke: should be rejected"  # MUST fail
+git restore --staged apps/server/src/db/migrations/9999_smoke.sql
+rm apps/server/src/db/migrations/9999_smoke.sql
+```
+
+Expected: commit aborted with the journal-entry message.
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add scripts/hooks/ CLAUDE.md
+git commit -m "phase-3: pre-commit hook — migration ↔ journal pairing (A-4b)
+
+Refuses commits that add an apps/server/src/db/migrations/*.sql
+file without also staging the matching _journal.json entry.
+Drizzle's migrate() silently skips files missing from the journal,
+which makes the failure invisible until production.
+
+Installer at scripts/hooks/install.sh is composable with other
+pre-commit hooks (it writes a fresh .git/hooks/pre-commit pointing
+at the script). One-time per fresh clone."
 ```
 
 ### Task A-5: Sub-phase A integration gate
@@ -2558,6 +2760,7 @@ The rest of the Sub-phase C, D, E, F tasks are written below. Due to the size of
 - `checkChainGuards(tx, { chainId })` — single query against `documents_runs_by_chain_idx` aggregating `count(*) > FOLIO_MAX_FANOUT_PER_CHAIN`, `max(completed_at) - min(started_at) > FOLIO_MAX_CHAIN_DURATION_MS`, `sum(tokens_in + tokens_out) > FOLIO_MAX_CHAIN_TOKENS`. Returns first-failing reason or `{ok:true}`.
 - Defaults: 25 / 30 min (1.8M ms) / 1,000,000 tokens.
 - Tests: each cap independently triggers the right `reason`; mixed cases prefer the first-failing reason.
+- **Volume test (added per Phase 3 review remark #3 — SQLite JSON index performance).** Insert 10,000 synthetic `agent_run` rows spread across ~500 distinct `chain_id`s. Run `EXPLAIN QUERY PLAN` on the `checkChainGuards` aggregation query and assert the output contains the string `documents_runs_by_chain_idx`. The assertion guards against a future refactor that inadvertently makes the planner fall back to a full table scan. Skip via env `FOLIO_SKIP_VOLUME_TESTS=1` for fast local runs; CI always runs it.
 
 ### Task C-5: `services/agent-runs.ts` — checkProviderHealth + getProviderHealth
 
@@ -2818,7 +3021,8 @@ After expanding C-1..F-8 inline (the executor's job, per the spec), re-read this
 - [ ] **Spec §9 open questions:** noted in this plan's Open decisions box. ✅
 - [ ] **Spec §10 acceptance:** every numbered item maps to at least one task above. ✅
 - [ ] **Testing-workflow gates:** present at each sub-phase boundary (A-5, B-8, C-13, D-8, E-9). ✅
-- [ ] **`[[memory-feedback-items]]`:** `[[migrations-first-when-routes-look-broken]]` honored by Task A-0; `[[drizzle-migration-journal]]` honored by A-2 + A-3; `[[verify-subagent-test-counts]]` called out in the testing-workflow contract; `[[mock-the-wire-not-the-response]]` called out in C-5 + C-8; `[[plan-server-source-audit]]` is implicit in the executor's habit but worth a callout: when the executor adds the 5 new MCP tools in D-4, they MUST grep ALL of `apps/server/src` for hardcoded scope strings and tool-name constants, not just the new files. ✅
+- [ ] **`[[memory-feedback-items]]`:** `[[migrations-first-when-routes-look-broken]]` honored by Task A-0; `[[drizzle-migration-journal]]` honored by A-2 + A-3 + automated via the pre-commit hook in A-4b; `[[verify-subagent-test-counts]]` called out in the testing-workflow contract; `[[mock-the-wire-not-the-response]]` called out in C-5 + C-8; `[[plan-server-source-audit]]` is implicit in the executor's habit but worth a callout: when the executor adds the 5 new MCP tools in D-4, they MUST grep ALL of `apps/server/src` for hardcoded scope strings and tool-name constants, not just the new files. ✅
+- [ ] **Phase 3 review remarks folded in (2026-05-28).** Remark #1 (poller claim race) — already covered by C-3's optimistic-lock pattern; multi-instance is post-v1 per spec §9. Remark #2 (provider degrade sensitivity) — covered by env-tunable `FOLIO_PROVIDER_DEGRADE_THRESHOLD` (default 3 consecutive); time-window deferred to v1.1 if shake-out reveals banner thrash. Remark #3 (SQLite JSON index) — C-4 now includes a 10k-row EXPLAIN volume test asserting the chain index is used. Remark #4 (testing-workflow enforcement) — automated via the new A-4b pre-commit hook. Remark #5 (dependency placement) — already correct in B-2/B-3 (`cd apps/server && bun add`). ✅
 - [ ] **Placeholders scanned:** Sub-phases C / D / E / F are described as scope summaries, NOT as bare "TBD". Each Task has scope + files + behavioral expectations + test coverage in plain English. The executor expands each into the full failing-test → implementation → pass → commit form following the A-* / B-* pattern shown verbatim. This is intentional: writing all ~70 tasks inline would produce a ~5000-line plan that nobody re-reads; the locked structure + scope per task is enough for a skilled executor and avoids the false confidence of one-shot code that hasn't been measured against the real codebase. ✅
 
 ---
