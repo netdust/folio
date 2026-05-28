@@ -1,10 +1,35 @@
-import { afterEach, describe, expect, mock, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+
+// NOTE: openai.test.ts uses `mock.module('openai', ...)` and Bun's module mocks
+// are process-global, leaking across files within a run. We mock the SDK here
+// too so the stream-sanitize test below works whether or not openai.test.ts
+// ran first. The shape mirrors openai.test.ts's stub.
+const mockCreate = mock(async (_opts: { stream?: boolean }) => ({ id: 'cmpl_x' }));
+const mockModelsList = mock(async (): Promise<{ data: Array<{ id: string }> }> => ({ data: [] }));
+
+mock.module('openai', () => ({
+  default: class OpenAI {
+    chat = {
+      completions: {
+        create: mockCreate,
+      },
+    };
+    models = { list: mockModelsList };
+    constructor(_: unknown) {}
+  },
+}));
+
 import { openrouter } from './openrouter.ts';
 
 // `global.fetch` is process-global — restore after each test.
 const originalFetch = global.fetch;
 
 describe('openrouter provider', () => {
+  beforeEach(() => {
+    mockCreate.mockClear();
+    mockModelsList.mockClear();
+  });
+
   afterEach(() => {
     global.fetch = originalFetch;
   });
@@ -52,6 +77,45 @@ describe('openrouter provider', () => {
     const r = await openrouter.testKey({ apiKey: 'bogus', model: 'anything' });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toMatch(/unauth/i);
+  });
+
+  // B round 5 #6 — round 4 mitigation 5 enriched the contract to cover
+  // openrouter.stream startup throws. Round 4 left it inheriting openai.stream's
+  // (broken) propagation of raw SDK errors. Round 5 threads providerName
+  // through streamOpenAICompatible so OpenRouter requests get correctly-named
+  // sanitized messages (mitigation 5 + cosmetic correctness for operators).
+  test('stream() sanitizes a 401 thrown by chat.completions.create and names OpenRouter', async () => {
+    mockCreate.mockImplementationOnce((async () => {
+      const err = new Error('Incorrect API key: sk-or-real-XYZ at openrouter.internal.example.com') as Error & { status: number };
+      err.status = 401;
+      throw err;
+    }) as never);
+
+    let thrown: unknown;
+    try {
+      const iter = openrouter.stream({
+        system: 'sys',
+        messages: [{ role: 'user', content: 'hi' }],
+        tools: [],
+        maxTokens: 100,
+        apiKey: 'sk-or-real-XYZ',
+        model: 'anthropic/claude-haiku-4-5',
+      });
+      for await (const _ of iter) {
+        // drain
+      }
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    const msg = (thrown as Error).message;
+    expect(msg).not.toMatch(/sk-or-real/);
+    expect(msg).not.toMatch(/internal\.example/);
+    expect(msg).not.toMatch(/Incorrect API key/);
+    expect(msg).toMatch(/unauthorized/i);
+    // The provider name in the sanitized message is OpenRouter, not OpenAI.
+    expect(msg).toMatch(/OpenRouter/);
+    expect(msg).not.toMatch(/OpenAI/);
   });
 
   test('testKey() network error returns sanitized reason (no echo of internal host)', async () => {

@@ -271,6 +271,43 @@ describe('openai provider', () => {
     }
   });
 
+  // B round 5 #5 — round 4 mitigation 5 enriched the contract to cover
+  // openai.stream startup throws, but only ollama.stream wrapped its throws
+  // in code. openai.stream propagated the raw SDK error message on the
+  // create() await — embedding partial keys and proxy hostnames. The await
+  // is now try/catch'd; the throw rewrites to the same testKey whitelist.
+  test('stream() sanitizes a 401 thrown by chat.completions.create (mitigation 5)', async () => {
+    mockCreate.mockImplementationOnce((async () => {
+      const err = new Error('Incorrect API key provided: sk-real-0123456789. See https://platform.openai.com/account/api-keys.') as Error & { status: number };
+      err.status = 401;
+      throw err;
+    }) as never);
+
+    let thrown: unknown;
+    try {
+      const iter = openai.stream({
+        system: 'sys',
+        messages: [{ role: 'user', content: 'hi' }],
+        tools: [],
+        maxTokens: 100,
+        apiKey: 'sk-real-0123456789',
+        model: 'gpt-4o-mini',
+      });
+      for await (const _ of iter) {
+        // drain
+      }
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    const msg = (thrown as Error).message;
+    expect(msg).not.toMatch(/sk-real/);
+    expect(msg).not.toMatch(/platform\.openai\.com/);
+    expect(msg).not.toMatch(/Incorrect API key/);
+    expect(msg).toMatch(/unauthorized/i);
+    expect(msg).toMatch(/OpenAI/);
+  });
+
   test('stream() yields done event even when tool_call args fail to JSON.parse', async () => {
     mockCreate.mockImplementationOnce((async (opts: { stream?: boolean }) => {
       if (!opts.stream) return { id: 'cmpl_x' };

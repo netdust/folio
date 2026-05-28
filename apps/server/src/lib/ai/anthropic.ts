@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { AIProvider, ProviderEvent } from './provider.ts';
+import { sanitizeProviderError } from './sanitize-error.ts';
 
 function client(apiKey: string, baseUrl?: string): Anthropic {
   return new Anthropic({ apiKey, baseURL: baseUrl });
@@ -52,58 +53,67 @@ export const anthropic: AIProvider = {
     let stopReason: 'stop' | 'tool_use' | 'max_tokens' | 'refusal' | 'pause_turn' = 'stop';
     const toolCallsByIndex: Record<number, { id: string; name: string; jsonBuf: string }> = {};
 
-    for await (const ev of stream as AsyncIterable<Record<string, unknown>>) {
-      const t = ev.type as string;
-      if (
-        t === 'content_block_start' &&
-        (ev.content_block as { type: string } | undefined)?.type === 'tool_use'
-      ) {
-        const cb = ev.content_block as { id: string; name: string };
-        const idx = ev.index as number;
-        toolCallsByIndex[idx] = { id: cb.id, name: cb.name, jsonBuf: '' };
-      } else if (t === 'content_block_delta') {
-        const delta = ev.delta as { type: string; text?: string; partial_json?: string };
-        if (delta.type === 'text_delta' && delta.text) {
-          yield { type: 'text', delta: delta.text } as ProviderEvent;
-        } else if (delta.type === 'input_json_delta' && delta.partial_json !== undefined) {
+    // B round 5 #4 — sanitize stream-startup throws. Anthropic's SDK fires
+    // network/auth errors as the async iterator is awaited (not at the
+    // synchronous .stream() call). Pre-fix the raw e.message propagated to
+    // the runner — embedding partial keys ('Incorrect API key provided:
+    // sk-real-…') and proxy/host details. Mitigation 5 whitelist.
+    try {
+      for await (const ev of stream as AsyncIterable<Record<string, unknown>>) {
+        const t = ev.type as string;
+        if (
+          t === 'content_block_start' &&
+          (ev.content_block as { type: string } | undefined)?.type === 'tool_use'
+        ) {
+          const cb = ev.content_block as { id: string; name: string };
           const idx = ev.index as number;
-          if (toolCallsByIndex[idx]) toolCallsByIndex[idx].jsonBuf += delta.partial_json;
-        }
-      } else if (t === 'content_block_stop') {
-        const idx = ev.index as number;
-        const tc = toolCallsByIndex[idx];
-        if (tc) {
-          let args: Record<string, unknown> = {};
-          if (tc.jsonBuf.length > 0) {
-            try {
-              args = JSON.parse(tc.jsonBuf) as Record<string, unknown>;
-            } catch (err) {
-              // Malformed tool_use input_json buffer (truncated/garbled stream).
-              // Emit the tool_call event with empty args so the runner still sees
-              // the attempt; don't crash the generator before the trailing
-              // tokens/done events. Warn so operators have a grep target when
-              // an agent run goes sideways — silent {} is indistinguishable
-              // from a legitimate {} call.
-              console.warn(
-                '[ai/anthropic] dropped malformed tool_use JSON in stream:',
-                err instanceof Error ? err.message : err,
-              );
-              args = {};
-            }
+          toolCallsByIndex[idx] = { id: cb.id, name: cb.name, jsonBuf: '' };
+        } else if (t === 'content_block_delta') {
+          const delta = ev.delta as { type: string; text?: string; partial_json?: string };
+          if (delta.type === 'text_delta' && delta.text) {
+            yield { type: 'text', delta: delta.text } as ProviderEvent;
+          } else if (delta.type === 'input_json_delta' && delta.partial_json !== undefined) {
+            const idx = ev.index as number;
+            if (toolCallsByIndex[idx]) toolCallsByIndex[idx].jsonBuf += delta.partial_json;
           }
-          yield { type: 'tool_call', id: tc.id, name: tc.name, arguments: args } as ProviderEvent;
+        } else if (t === 'content_block_stop') {
+          const idx = ev.index as number;
+          const tc = toolCallsByIndex[idx];
+          if (tc) {
+            let args: Record<string, unknown> = {};
+            if (tc.jsonBuf.length > 0) {
+              try {
+                args = JSON.parse(tc.jsonBuf) as Record<string, unknown>;
+              } catch (err) {
+                // Malformed tool_use input_json buffer (truncated/garbled stream).
+                // Emit the tool_call event with empty args so the runner still sees
+                // the attempt; don't crash the generator before the trailing
+                // tokens/done events. Warn so operators have a grep target when
+                // an agent run goes sideways — silent {} is indistinguishable
+                // from a legitimate {} call.
+                console.warn(
+                  '[ai/anthropic] dropped malformed tool_use JSON in stream:',
+                  err instanceof Error ? err.message : err,
+                );
+                args = {};
+              }
+            }
+            yield { type: 'tool_call', id: tc.id, name: tc.name, arguments: args } as ProviderEvent;
+          }
+        } else if (t === 'message_delta') {
+          const usage = ev.usage as { input_tokens?: number; output_tokens?: number } | undefined;
+          const delta = ev.delta as { stop_reason?: string } | undefined;
+          if (usage?.input_tokens !== undefined) inTokens = usage.input_tokens;
+          if (usage?.output_tokens !== undefined) outTokens = usage.output_tokens;
+          if (delta?.stop_reason === 'tool_use') stopReason = 'tool_use';
+          else if (delta?.stop_reason === 'max_tokens') stopReason = 'max_tokens';
+          else if (delta?.stop_reason === 'refusal') stopReason = 'refusal';
+          else if (delta?.stop_reason === 'pause_turn') stopReason = 'pause_turn';
+          // end_turn, stop_sequence, anything else → default 'stop'
         }
-      } else if (t === 'message_delta') {
-        const usage = ev.usage as { input_tokens?: number; output_tokens?: number } | undefined;
-        const delta = ev.delta as { stop_reason?: string } | undefined;
-        if (usage?.input_tokens !== undefined) inTokens = usage.input_tokens;
-        if (usage?.output_tokens !== undefined) outTokens = usage.output_tokens;
-        if (delta?.stop_reason === 'tool_use') stopReason = 'tool_use';
-        else if (delta?.stop_reason === 'max_tokens') stopReason = 'max_tokens';
-        else if (delta?.stop_reason === 'refusal') stopReason = 'refusal';
-        else if (delta?.stop_reason === 'pause_turn') stopReason = 'pause_turn';
-        // end_turn, stop_sequence, anything else → default 'stop'
       }
+    } catch (err) {
+      throw new Error(sanitizeProviderError(err, 'Anthropic'));
     }
 
     yield { type: 'tokens', tokens_in: inTokens, tokens_out: outTokens };

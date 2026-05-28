@@ -197,6 +197,45 @@ describe('anthropic provider', () => {
     );
   });
 
+  // B round 5 #4 — round 4 mitigation 5 enriched the contract to cover
+  // anthropic.stream startup throws, but only ollama.stream wrapped its
+  // throws in code. anthropic.stream propagated the raw SDK error message,
+  // which embeds the upstream URL and partial key. The for-await is now
+  // try/catch'd; the throw rewrites to the same testKey whitelist.
+  test('stream() sanitizes a 401 thrown during async iteration (mitigation 5)', async () => {
+    mockStream.mockImplementationOnce((async function* () {
+      const err = new Error('Incorrect API key provided: sk-real-0123456789. See https://docs.anthropic.com.') as Error & { status: number };
+      err.status = 401;
+      throw err;
+      // eslint-disable-next-line no-unreachable
+      yield {};
+    }) as never);
+
+    let thrown: unknown;
+    try {
+      const iter = anthropic.stream({
+        system: 'sys',
+        messages: [{ role: 'user', content: 'hi' }],
+        tools: [],
+        maxTokens: 100,
+        apiKey: 'sk-real-0123456789',
+        model: 'claude-haiku-4-5',
+      });
+      for await (const _ of iter) {
+        // drain — should throw mid-iter
+      }
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    const msg = (thrown as Error).message;
+    expect(msg).not.toMatch(/sk-real/);
+    expect(msg).not.toMatch(/docs\.anthropic\.com/);
+    expect(msg).not.toMatch(/Incorrect API key/);
+    expect(msg).toMatch(/unauthorized/i);
+    expect(msg).toMatch(/Anthropic/);
+  });
+
   test('stream() yields done event even when tool_use input_json fails to JSON.parse', async () => {
     mockStream.mockImplementationOnce((async function* () {
       yield {

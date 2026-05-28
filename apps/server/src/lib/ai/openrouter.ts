@@ -1,13 +1,17 @@
-import { openai } from './openai.ts';
+import { streamOpenAICompatible } from './openai.ts';
 import type { AIProvider } from './provider.ts';
 
 const OPENROUTER_BASE = 'https://openrouter.ai/api/v1';
 
 /**
  * OpenRouter exposes an OpenAI-compatible API. We reuse the OpenAI provider's
- * `stream` with a base-URL override. Model strings pass through verbatim —
- * caller is expected to format them as "anthropic/claude-haiku-4-5" or
- * whatever route they want.
+ * `stream` (via the exported `streamOpenAICompatible` helper) with a base-URL
+ * override AND a `providerName: 'OpenRouter'` thread-through so sanitized
+ * error messages correctly name the upstream (B round 5 #6 — pre-fix a
+ * 401 from OpenRouter surfaced as 'key rejected by OpenAI' which misled
+ * operators on which provider was failing). Model strings pass through
+ * verbatim — caller is expected to format them as "anthropic/claude-haiku-4-5"
+ * or whatever route they want.
  *
  * B round 3 fix #6 — testKey is overridden, NOT delegated to openai.testKey.
  * OpenRouter serves `/api/v1/models` WITHOUT authentication, so the OpenAI
@@ -16,7 +20,8 @@ const OPENROUTER_BASE = 'https://openrouter.ai/api/v1';
  * 401 for unknown keys, 200 with the key's metadata for valid ones.
  */
 export const openrouter: AIProvider = {
-  stream: (opts) => openai.stream({ ...opts, baseUrl: OPENROUTER_BASE }),
+  stream: (opts) =>
+    streamOpenAICompatible({ ...opts, baseUrl: OPENROUTER_BASE, providerName: 'OpenRouter' }),
   testKey: async ({ apiKey }) => {
     try {
       const res = await fetch(`${OPENROUTER_BASE}/key`, {
