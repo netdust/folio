@@ -5,7 +5,7 @@ import { providerSchema } from '../lib/agent-run-schema.ts';
 import { getProvider } from '../lib/ai/provider.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
 import { validatePublicUrl } from '../lib/url-allow-list.ts';
-import { type AuthContext, requireSession, requireUser } from '../middleware/auth.ts';
+import { type AuthContext, requireSessionUser } from '../middleware/auth.ts';
 import type { ScopeContext } from '../middleware/scope.ts';
 
 const aiRoute = new Hono<AuthContext & ScopeContext>();
@@ -18,13 +18,14 @@ const aiRoute = new Hono<AuthContext & ScopeContext>();
 // verbatim, so `Cookie: folio_session=garbage` + `Authorization: Bearer …`
 // would slip through (attachUser sets user=null, attachToken hydrates user
 // from the token). The B round 3 fix gated on the authMethod flag inline;
-// B round 5 #1 refactors that inline gate into the shared `requireSession`
+// B round 5 #1 refactored that inline gate into the shared `requireSession`
 // helper so the contract is enumerated in one place (threat model 11).
 //
-// Order: requireSession runs before requireUser so a bearer-only request gets
-// a precise 403 (not the generic 401 requireUser would emit).
-aiRoute.use('*', requireSession);
-aiRoute.use('*', requireUser);
+// Round 6 #6 — codified as `requireSessionUser` (one composite) so all 4
+// session-only routes have the same ordering: token → 403, no user → 401.
+// Pre-fix ai.ts was the only file that wired both gates at the router level;
+// the other 3 wired them asymmetrically (router + per-handler). Now uniform.
+aiRoute.use('*', requireSessionUser);
 
 const TestKeyBody = z
   .object({

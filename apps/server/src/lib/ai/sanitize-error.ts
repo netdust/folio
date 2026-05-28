@@ -27,8 +27,17 @@ export function sanitizeProviderError(err: unknown, providerName: string): strin
   if (err == null) return 'Network error or unreachable host.';
 
   const e = err as { status?: number };
-  if (e.status === 401 || e.status === 403) {
-    return `Unauthorized (${e.status}): key rejected by ${providerName}.`;
+  // Round 6 #7 — distinguish 401 (key rejected) from 403 (key valid but
+  // missing scope/permission). The round-5 helper collapsed them into one
+  // line; the inline whitelists in anthropic.testKey / openai.testKey
+  // distinguished them. The 403 case is semantically distinct and worth
+  // preserving (helps the AI tab's ✗ chip explain "your key works, but the
+  // model is gated"). NEVER echo the upstream's `e.message` body.
+  if (e.status === 401) {
+    return `Unauthorized (401): key rejected by ${providerName}.`;
+  }
+  if (e.status === 403) {
+    return `Forbidden (403): key lacks required permissions on ${providerName}.`;
   }
   if (e.status === 429) {
     return 'Rate limited (429). Try again shortly.';

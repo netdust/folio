@@ -35,18 +35,25 @@ describe('sanitizeProviderError', () => {
     );
   });
 
-  test('returns 401 message naming the provider', () => {
+  // Round 6 #7 — 401 and 403 are distinct cases. The round-5 helper collapsed
+  // them; the inline whitelists in anthropic/openai testKey distinguished
+  // them. 401 = key rejected; 403 = key valid but missing scope. Worth
+  // preserving — the UX chip in the AI tab can explain "your key works but
+  // the model is gated" rather than just "unauthorized".
+  test('returns 401-specific message naming the provider', () => {
     const msg = sanitizeProviderError({ status: 401 }, 'OpenAI');
     expect(msg).toMatch(/unauthorized/i);
     expect(msg).toMatch(/401/);
     expect(msg).toMatch(/openai/i);
+    expect(msg).not.toMatch(/forbidden/i);
   });
 
-  test('returns 403 message naming the provider', () => {
+  test('returns 403-specific message naming the provider', () => {
     const msg = sanitizeProviderError({ status: 403 }, 'Anthropic');
-    expect(msg).toMatch(/unauthorized|forbidden/i);
+    expect(msg).toMatch(/forbidden/i);
     expect(msg).toMatch(/403/);
     expect(msg).toMatch(/anthropic/i);
+    expect(msg).not.toMatch(/unauthorized/i);
   });
 
   test('returns the rate-limited message for 429', () => {

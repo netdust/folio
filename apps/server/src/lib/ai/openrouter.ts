@@ -1,5 +1,6 @@
 import { streamOpenAICompatible } from './openai.ts';
 import type { AIProvider } from './provider.ts';
+import { sanitizeProviderError } from './sanitize-error.ts';
 
 const OPENROUTER_BASE = 'https://openrouter.ai/api/v1';
 
@@ -28,19 +29,14 @@ export const openrouter: AIProvider = {
         headers: { Authorization: `Bearer ${apiKey}` },
       });
       if (res.ok) return { ok: true };
-      if (res.status === 401 || res.status === 403)
-        return {
-          ok: false,
-          reason: `Unauthorized (${res.status}): key rejected by OpenRouter.`,
-        };
-      if (res.status === 429)
-        return { ok: false, reason: 'Rate limited (429). Try again shortly.' };
-      if (res.status >= 500)
-        return { ok: false, reason: `Server error (${res.status}). The provider may be down.` };
-      return { ok: false, reason: `Error (${res.status}).` };
-    } catch {
-      // Never surface err.message — see the Fix #9 / Fix #3 contract.
-      return { ok: false, reason: 'Network error or unreachable host.' };
+      // Round 6 #7 — migrated to the shared sanitizeProviderError helper.
+      // `Response` has a `.status` field, so the helper's `{ status?: number }`
+      // shape accepts it directly. Helper distinguishes 401 from 403 (round 6).
+      return { ok: false, reason: sanitizeProviderError(res, 'OpenRouter') };
+    } catch (err) {
+      // Round 6 #7 — keep the helper for symmetry. Network errors have no
+      // .status field; the helper returns the network-error branch.
+      return { ok: false, reason: sanitizeProviderError(err, 'OpenRouter') };
     }
   },
 };

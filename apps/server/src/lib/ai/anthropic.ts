@@ -129,27 +129,9 @@ export const anthropic: AIProvider = {
       await c.models.list();
       return { ok: true };
     } catch (err) {
-      // B round 2 fix #9 — never surface SDK e.message. SDK error strings
-      // embed partial credentials, request IDs, and proxy details that end
-      // up in the DOM (the AI tab's ✗ <reason> chip) and in log shippers.
-      // Whitelist by HTTP status only.
-      //
-      // B round 3 fix #12 — narrowed cast: only .status. The pre-fix cast
-      // advertised .message even though we never read it. Now any future
-      // `e.message` reach is a TS error rather than a silent leak.
-      const e = err as { status?: number };
-      if (e.status === 401)
-        return { ok: false, reason: 'Unauthorized (401): key rejected by Anthropic.' };
-      if (e.status === 403)
-        return { ok: false, reason: 'Forbidden (403): key lacks required permissions.' };
-      if (e.status === 429)
-        return { ok: false, reason: 'Rate limited (429). Try again shortly.' };
-      if (typeof e.status === 'number' && e.status >= 500)
-        return { ok: false, reason: `Server error (${e.status}). The provider may be down.` };
-      if (typeof e.status === 'number')
-        return { ok: false, reason: `Error (${e.status}).` };
-      // Network / non-HTTP error — no status field.
-      return { ok: false, reason: 'Network error or unreachable host.' };
+      // Round 6 #7 — migrated to the shared sanitizeProviderError helper.
+      // Same whitelist semantics; helper preserves the 401/403 distinction.
+      return { ok: false, reason: sanitizeProviderError(err, 'Anthropic') };
     }
   },
 };

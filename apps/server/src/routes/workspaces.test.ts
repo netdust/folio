@@ -223,3 +223,31 @@ test('DELETE /api/v1/w/:wslug rejects API-token callers with 403', async () => {
   const body = await res.json();
   expect(body.error.code).toBe('FORBIDDEN');
 });
+
+// Round 6 #4 — symmetric to the PATCH garbage-cookie test above. Round 5 #10
+// added the bearer + garbage cookie variant on settings.ts DELETE but missed
+// the workspaces.ts DELETE equivalent. A garbage-cookie + valid-bearer request
+// authenticates as 'token' (round 3 fix #1) — must hit the requireSessionUser
+// composite's 403 branch, not slip into the 401 branch.
+test('DELETE /api/v1/w/:wslug rejects bearer + garbage cookie with 403', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const { token, hash } = newApiToken();
+  await db.insert(apiTokens).values({
+    id: nanoid(),
+    workspaceId: seed.workspace.id,
+    name: 'delete-cookie-bypass-attacker',
+    tokenHash: hash,
+    scopes: ['documents:read'],
+    createdBy: seed.user.id,
+  });
+  const res = await app.request('/api/v1/w/acme', {
+    method: 'DELETE',
+    headers: {
+      Cookie: 'folio_session=garbage',
+      Authorization: `Bearer ${token}`,
+    },
+  });
+  expect(res.status).toBe(403);
+  const body = await res.json();
+  expect(body.error.code).toBe('FORBIDDEN');
+});

@@ -67,6 +67,39 @@ export const requireSession: MiddlewareHandler<AuthContext> = async (c, next) =>
   return next();
 };
 
+/**
+ * Composite: enforce session-only AND require an authenticated user.
+ *
+ * Round 6 #6 — middleware ordering across the 4 session-only routes was
+ * asymmetric: `ai.ts` wired requireSession → requireUser at the router level;
+ * `tokens.ts` / `settings.ts` / `workspaces.ts` wired requireUser at router
+ * level and requireSession per-handler. Same external behavior in the happy
+ * paths (token callers got 403, no-auth callers got 401) but the ORDER of
+ * checks for a Bearer + invalid cookie request differed across files, and
+ * a future maintainer could land a handler that forgets `requireSession`
+ * and only get caught by a test.
+ *
+ * One canonical helper. Used on every route that mutates auth grants,
+ * workspace identity, master secrets, or BYOK credentials (see threat model
+ * mitigation 11 for the enumerated table).
+ *
+ * Order matters:
+ *   1. authMethod === 'token' → 403 FORBIDDEN (precise: this is "wrong kind
+ *      of auth", not "no auth")
+ *   2. no user attached → 401 UNAUTHENTICATED
+ * A garbage-cookie + valid-bearer request authenticates as 'token' (round 3
+ * fix #1), so it falls into branch 1 and returns 403, not 401.
+ */
+export const requireSessionUser: MiddlewareHandler<AuthContext> = async (c, next) => {
+  if (c.get('authMethod') === 'token') {
+    throw new HTTPError('FORBIDDEN', 'This route is session-only (no API tokens)', 403);
+  }
+  if (!c.get('user')) {
+    throw new HTTPError('UNAUTHENTICATED', 'login required', 401);
+  }
+  return next();
+};
+
 export function getUser(c: Context<AuthContext>): User {
   const user = c.get('user');
   if (!user) throw new Error('user not attached - requireUser missing?');
