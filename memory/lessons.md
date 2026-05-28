@@ -315,3 +315,37 @@ A 2-minute DevTools read beats 3 commits of guessing.
 **Rule:** When the executing-skill cycle (`ntdst-execute-with-tests` → `subagent-driven-development`) opens a plan that's more than a few days old, the controller's pre-flight MUST include: for each new module/class/schema the plan introduces, grep peer files in the target directory (`apps/server/src/lib/*-schema.ts`, `apps/web/src/lib/api/*.ts`, etc) and verify the plan's example matches the live convention. If a peer file uses `.strict()`, the plan's schema must too; if peers are camelCase, the plan's must be too. Caught at pre-flight = zero fix-up cycles; caught at Stage 2 review = one extra commit per drift.
 
 **Trigger:** Any `superpowers:executing-plans` or `superpowers:subagent-driven-development` invocation on a plan file with `mtime > 5 days`. Or any plan task that introduces a NEW file matching a pattern that other peer files in the codebase already follow. Look at the FIRST peer file for each pattern; if it disagrees with the plan, the live code wins.
+
+## 2026-05-28 — When the plan rebuilds an existing table, audit columns against the live schema
+
+**Mistake:** A-2's plan included a SQLite table-rebuild migration for `documents`. The plan's CREATE TABLE block declared `author_id` and `target_agent_id` as real columns — but in the live schema (post-migrations 0007/0008/0011) those names are JSON fields inside `frontmatter`, not real columns. The plan's `INSERT INTO documents_new SELECT * FROM documents;` would have failed at runtime because the column counts didn't match. The controller pre-flight caught it; if it hadn't, the subagent would have shipped a broken migration and the test would have failed cryptically (SQLite error about column count mismatch, not "your plan was wrong"). A-2's subagent ALSO surfaced a third drift mid-execution: the plan referenced `tables.title` when the real column is `tables.name`.
+
+**Why:** SQLite's lack of `ALTER TABLE CHANGE CHECK` forces table-rebuild migrations to re-declare every column of the original table. Any column the plan misses or misnames silently breaks the data copy. The plan author was working from a mental model of the schema that drifted from the actual schema between when the plan was written and when it ran. Drizzle's generated schema files (`schema.ts`) are the source of truth, not the plan's CREATE TABLE.
+
+**Rule:** Whenever a plan introduces a `CREATE TABLE <existing_table>_new (...)` rebuild block, the controller pre-flight MUST do two grep checks BEFORE dispatching:
+
+1. Open `apps/server/src/db/schema.ts` and grep for the target table's column list (e.g. `documents` table). Compare line-by-line against the plan's CREATE TABLE. Any plan-listed column that doesn't appear in `schema.ts` is a phantom column → strike it from the plan SQL.
+2. Open the most recent `documents_new`-style migration in `apps/server/src/db/migrations/` (e.g. `0007_phase_2_6_comments.sql`) and copy the column list verbatim. Cross-reference with `schema.ts`. That column list is the canonical one for the next rebuild migration.
+
+Pre-flight catches in ~2 minutes what shipping the broken plan would cost ~20 minutes to debug + 1 corrective commit. ALSO: when the plan references column names from sibling tables (`tables.title` vs `tables.name`), grep `apps/server/src/db/schema.ts` for the actual definition and correct in the dispatch brief.
+
+**Trigger:** Any plan task that contains the text `CREATE TABLE` and includes a column list, OR any plan SQL block that references columns of an existing table by name. Pre-flight is required even if the plan was written yesterday — schema drift can happen across a single sub-phase if a backfill migration ran in between.
+
+## 2026-05-28 — Generated-script heredocs must be single-quoted
+
+**Mistake:** A-4b's plan supplied an `install.sh` containing this block:
+
+```bash
+cat > "$HOOK_DST" <<EOF
+#!/usr/bin/env bash
+"$HOOK_SRC_DIR/pre-commit-migration-journal.sh"
+EOF
+```
+
+The unquoted `<<EOF` heredoc tells bash to interpolate `$HOOK_SRC_DIR` AT INSTALLATION TIME, baking the installer's machine-absolute path into the generated `.git/hooks/pre-commit`. That makes the hook non-portable: another developer cloning the repo and running `./scripts/hooks/install.sh` would get a hook pointing at the FIRST developer's home directory. Caught by Stage 2 code-review (`13e5954`), fixed with `<<'EOF'` (single-quoted, no interpolation) + a runtime `$(git rev-parse --show-toplevel)` lookup inside the generated script.
+
+**Why:** Bash heredoc quoting has two modes that look almost identical but behave opposite. `<<EOF` interpolates variables (and command substitutions, backticks, etc.) before writing the body to the destination. `<<'EOF'` writes the body literally, deferring all interpolation to whenever the generated script runs. For ANY generated artifact that should be portable across machines, runtimes, or working trees, the literal mode is correct — but the unquoted form is more common in casual examples, so it sneaks into plans.
+
+**Rule:** Any plan that includes a heredoc inside a script-generator (installer, scaffolder, codegen helper) MUST use single-quoted heredocs (`<<'EOF'`) unless there is a specific reason to interpolate at generation time. If interpolation IS needed, the plan must justify why in a comment above the heredoc. The default is to defer. Also: prefer runtime lookups (`$(git rev-parse --show-toplevel)`, `${BASH_SOURCE[0]}`, `$(dirname ...)`) over baked absolute paths.
+
+**Trigger:** Any plan or commit that contains a heredoc inside a shell script that writes to another shell script (hooks, helpers, generated commands, dotfile setup). Grep the plan SQL/bash blocks for `<<EOF` (without quotes) and flag every occurrence. The fix is a 4-character change (`<<'EOF'`) but catching it pre-execution avoids a portability bug that only surfaces when a second developer/machine touches the repo.
