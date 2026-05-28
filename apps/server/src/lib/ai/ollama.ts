@@ -87,6 +87,37 @@ export const ollama: AIProvider = {
       }
     }
 
+    // Flush any trailing record that wasn't terminated with \n (e.g. a proxy
+    // dropped the final newline). Without this the real done_reason + token
+    // counts get silently discarded and we emit a fake-success done.
+    if (buffer.trim().length > 0) {
+      try {
+        const chunk = JSON.parse(buffer) as Record<string, unknown>;
+        const msg = chunk.message as OllamaMessage | undefined;
+        if (msg?.content) yield { type: 'text', delta: msg.content } as ProviderEvent;
+        if (msg?.tool_calls) {
+          for (const tc of msg.tool_calls) {
+            yield {
+              type: 'tool_call',
+              id: crypto.randomUUID(),
+              name: tc.function.name,
+              arguments: tc.function.arguments,
+            } as ProviderEvent;
+          }
+        }
+        if (chunk.done) {
+          tokensIn = (chunk.prompt_eval_count as number | undefined) ?? tokensIn;
+          tokensOut = (chunk.eval_count as number | undefined) ?? tokensOut;
+          const reason = chunk.done_reason as string | undefined;
+          if (reason === 'length') stopReason = 'max_tokens';
+          else if (reason === 'tool_calls') stopReason = 'tool_use';
+        }
+      } catch {
+        // Drop silently; matches in-loop behavior. The trailing tokens/done
+        // below still fire, but we may have missed a real done flag.
+      }
+    }
+
     yield { type: 'tokens', tokens_in: tokensIn, tokens_out: tokensOut };
     yield { type: 'done', reason: stopReason };
   },

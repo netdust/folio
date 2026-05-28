@@ -77,6 +77,50 @@ describe('ollama provider', () => {
     expect(r.ok).toBe(false);
   });
 
+  test('stream() parses the trailing NDJSON record even without a final newline', async () => {
+    // A sloppy proxy can drop the final \n. Pre-fix the trailing record sat
+    // in `buffer` and was silently discarded — the generator yielded a
+    // fake-success done.reason='stop' with tokens=0/0 instead of the real
+    // done_reason + token counts. Verify the flush picks it up.
+    const enc = new TextEncoder();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          enc.encode(JSON.stringify({ message: { content: 'Hi' }, done: false }) + '\n'),
+        );
+        // No trailing newline on the final record.
+        controller.enqueue(
+          enc.encode(
+            JSON.stringify({
+              message: { content: '' },
+              done: true,
+              done_reason: 'length',
+              prompt_eval_count: 7,
+              eval_count: 99,
+            }),
+          ),
+        );
+        controller.close();
+      },
+    });
+    global.fetch = mock(async () => new Response(body, { status: 200 })) as never;
+
+    const events: unknown[] = [];
+    for await (const ev of ollama.stream({
+      system: 'sys',
+      messages: [{ role: 'user', content: 'hi' }],
+      tools: [],
+      maxTokens: 100,
+      apiKey: '',
+      model: 'llama3.1',
+      baseUrl: 'http://localhost:11434',
+    })) {
+      events.push(ev);
+    }
+    expect(events).toContainEqual({ type: 'tokens', tokens_in: 7, tokens_out: 99 });
+    expect(events).toContainEqual({ type: 'done', reason: 'max_tokens' });
+  });
+
   test('stream() skips malformed NDJSON lines and still yields done', async () => {
     // Hand-roll the body so we can inject a literally-malformed line between
     // two valid JSON lines (jsonl() JSON-encodes everything, including strings).
