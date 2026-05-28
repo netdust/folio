@@ -88,6 +88,13 @@ Each attack listed has a mitigation in the next section. Numbering pairs across 
 15. **IPv4-mapped IPv6 expanded forms**: `0:0:0:0:0:ffff:hhhh:hhhh` is the same address as `::ffff:hhhh:hhhh` — the URL parser may preserve either form depending on runtime. Detection must handle both canonical and expanded shapes. (Round 3 attack — Bun canonicalizes the expanded form to the 2-segment shape, but defending against runtime drift requires both regexes.)
 16. **Test-escape-hatch reachable from production**: `__INTERNAL_TEST_ONLY__.overrideRegistry` is exported from `provider.ts` as a normal ES module binding. A future production refactor or IDE-autocomplete reach calls it, poisoning the process-wide provider cache. JSDoc `@internal` is not enforced by TS. Cosmetic rename without a runtime guard is documentation, not protection. (Round 4 attack — round 3's rename was acknowledged in the commit message as "real refactor deferred to v1.1.")
 17. **Silent server-side commit under client-side race**: `onSave` was given a seq-id guard in round 3 fix #7. The guard suppresses the client's success toast when provider changed mid-flight, but the `mutateAsync` was already dispatched — the server row IS committed for the OLD provider. User sees no signal of save, but the workspace's AI-key roster has changed. The "discard" name is misleading: only the UI render is discarded. (Round 4 attack.)
+18. **HTTP twin of MCP agent-lifecycle**: round 6 #1 rejected human PATs on MCP `create_agent`/`update_agent`/`delete_agent`. But the HTTP equivalents — POST/PATCH/DELETE on `/api/v1/w/:wslug/documents` with `type=agent` — accept human PATs with `documents:write` + `agents:write` scope. The width-guards in `lib/agent-guards.ts` bypass for human PATs (`!token.agentId`). A stolen Bearer mints/edits/revokes agent_token via HTTP exactly as MCP did before round 6.
+
+19. **Sub-phase C runner cannot persist refusal/pause_turn**: round 4 widened `ProviderEvent.done.reason` to include 'refusal' and 'pause_turn'. The persistence schema (`agent_run_schema.ts`) has no slot to store them. Sub-phase C runner will either drop the signal (status='completed' — operator-confusing), collapse to error_reason='provider_error' (lossy), or invent a field (drift).
+
+20. **POST /workspaces is session-only by routing topology, not by gate**: workspacesRoute is mounted on v1 (not wScope), so attachToken never runs. The protection relies on `requireUser` rejecting Bearer-only callers. A future middleware consolidation that mounts attachToken at app root would silently turn this into a bearer-reachable route. No test asserts the routing invariant.
+
+21. **Member PII leak via GET /members for narrowed agents**: an agent token's frontmatter.projects narrows what events/documents it can see (F3). GET /api/v1/w/:wslug/members has no analogous narrowing. An agent allow-listed to one project receives the full workspace membership (50 emails including users on 9 projects the agent has no F3 visibility into).
 
 ### Mitigations required
 
@@ -120,14 +127,16 @@ These are the rules the code MUST follow. `/code-review` should verify each one 
    | `/api/v1/w/:wslug/tokens/:wsId/:tokenId` | DELETE | Revoke an API token (round 5) — stolen Bearer could revoke peers |
    | `/api/v1/w/:wslug` | PATCH, DELETE | Workspace rename / deletion (round 5) — destructive identity mutation |
    | `POST /mcp` tools: `create_agent`, `update_agent`, `delete_agent` | * | Reject human PAT (`token.agentId === null`); agent-bound bearers OK for agent self-management (round 6 #1) |
+   | `POST/PATCH/DELETE /api/v1/w/:wslug/documents` (type=agent) | * | Reject human PAT via parallel HTTP helper (round 7 #19) |
+   | `POST /api/v1/workspaces` | POST | Explicit `requireSessionUser` (round 7 #21) |
    | Any FUTURE route that mutates auth grants, workspace identity, master secrets, or BYOK credentials | * | New routes that fit the pattern MUST use `requireSession` in the same commit they are introduced |
 
    **Routes intentionally NOT session-only (bearer-OK):**
    - `GET /ai-keys` — metadata read (agents need this for telemetry)
    - `GET /tokens` — metadata read
-   - `POST/PATCH/DELETE` on documents, projects, statuses, fields, views, runs — agent workflow; that's the point of API tokens
-   - `POST /api/v1/workspaces` — workspace CREATE is session-only by virtue of not being under `/api/v1/w/:wslug` (the workspace scope), so it's mounted before the bearer chain.
-   - `POST/PATCH/DELETE /api/v1/w/:wslug/documents` with `type=agent` (HTTP): bearer-OK by design — workspace admins manage agents via the API. The MCP equivalents are gated (see row above) because MCP is the agent's own surface; an agent-bound bearer using HTTP routes would be unusual, and the differentiation closes the privilege-escalation vector on the path attackers would actually use (MCP) without breaking the admin path (HTTP). Asymmetric on purpose; revisit if MCP usage broadens beyond agents.
+   - `POST/PATCH/DELETE` on documents (non-agent types), projects, statuses, fields, views, runs — agent workflow; that's the point of API tokens
+   - `GET /api/v1/w/:wslug/members` — bearer-OK for session callers and wildcard-allow-list agents; NARROWED for project-allow-list agents (see mitigation 22).
+   - `POST/PATCH/DELETE /api/v1/w/:wslug/documents` with `type=agent` (HTTP): bearer-OK ONLY for agent-bound bearers (legitimate self-management) and session callers (admin workflow). Human PATs were previously accepted here on the assumption that "admin-facing HTTP" was a distinct surface; round 7 #19 closed that gap because a stolen PAT with `agents:write` is a privilege-escalation vector regardless of which surface the attacker reaches. Both MCP and HTTP now uniformly reject human PATs on agent CRUD.
 
    **Test contract:** for each row in the "covered" table, a test asserts the route returns 403 when called with `Authorization: Bearer <valid token>` only, AND when called with `Authorization: Bearer <valid token>` + `Cookie: folio_session=garbage`. Round 5's settings.test.ts gained the DELETE garbage-cookie test for symmetry; tokens.test.ts and workspaces.test.ts gain equivalents in round 5.
 
@@ -162,6 +171,14 @@ These are the rules the code MUST follow. `/code-review` should verify each one 
    The captured-at-click value is used consistently across both branches; the current-state value is never displayed in this surface so a stale paint cannot mislead.
 
 18. **`validatePublicUrl` rejects empty hosts after the trailing-dot strip.** Bare-dot inputs (`http://.`, `http://..`) parse successfully in Bun's URL parser but become empty strings after the greedy dot strip; without an explicit check they would slip every host-equality and prefix-regex guard and return `ok:true`. After `host = host.replace(/\.+$/, '')`, the validator immediately checks `if (host === '') return { ok: false, reason: 'base_url host is empty' }`. A test covers `http://./` and `http://.../`.
+
+19. **HTTP agent-lifecycle routes reject human PATs**, mirroring round-6 MCP fix. POST/PATCH/DELETE on `/api/v1/w/:wslug/documents` with body.type==='agent' check `!c.get('token')?.agentId` before mutating the row. Human PATs → 403 with `error.code: 'HUMAN_PAT_AGENT_LIFECYCLE_HTTP'`. Agent-bound bearers and session callers continue to work. Combined with the existing MCP gate, agent CRUD is now uniformly gated on both surfaces.
+
+20. **`agent_run_schema.ts` accepts done.reason: 'refusal' and 'pause_turn'**. The schema gains a `done_reason` enum field matching the widened ProviderEvent union (`stop|tool_use|max_tokens|refusal|pause_turn`). Sub-phase C runner persists the done event's reason directly. Status mapping: 'refusal' and 'pause_turn' both terminate the run as 'completed' but with `done_reason` distinguishing them from clean completion. Operator dashboards can branch on `done_reason='refusal'` to triage safety stops.
+
+21. **POST /api/v1/workspaces gets explicit `requireSessionUser`** — no longer relying on routing topology. The middleware throws 403 if `authMethod === 'token'` AND 401 if `!user`. Tests assert both. The change is no-op for current production (bearer-only requests are already rejected by `requireUser`) but pins the contract against future middleware refactors.
+
+22. **GET /api/v1/w/:wslug/members narrows by agent allow-list**. When the caller is an agent-bound bearer with `frontmatter.projects` not containing '*', the response narrows. The same narrowing pattern as F3 in events.ts. v1 implementation (project-scoped memberships not yet present in schema): project-narrowed agent-bound bearers receive an EMPTY members list — they have no business knowing workspace membership; their work is scoped to docs in the allow-list projects. Session callers and agent-bound bearers with `projects: ['*']` see the full list. v1.1 would refine this to "members of at least one allowed project" once project-scoped memberships exist.
 
 ### Out of scope (explicit deferrals)
 
