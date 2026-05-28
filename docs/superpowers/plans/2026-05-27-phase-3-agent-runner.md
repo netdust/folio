@@ -60,8 +60,30 @@ Every code-touching task ends with the SAME closing block. No exceptions, no tas
 2. **Write minimal code to pass** (GREEN).
 3. **Re-run that test file** → PASS.
 4. **Re-run the entire affected app's unit suite** — `cd apps/server && bun test` for server tasks, `cd apps/web && bun run test` for web tasks, `cd packages/shared && bun test` for shared. Expect: prior count + delta from this task, 0-fail. If anything regresses, STOP — do not commit.
-5. **Verify subagent test counts from the controller** per `[[verify-subagent-test-counts]]`. Subagents have misreported 3+ times in prior phases. The controller re-runs the same command after the subagent reports.
-6. **Commit atomically.** Conventional message: `phase-3: <what> (<task-id>)` per CLAUDE.md.
+5. **Type-check the affected app** — `cd apps/server && bun x tsc --noEmit` for server, `cd apps/web && bun x tsc --noEmit` for web. Required by testing-workflow's task-complete checklist ("Static analysis clean on changed files"). Touch-files-only is acceptable for speed if the full project check is too slow.
+6. **Verify subagent test counts from the controller** per `[[verify-subagent-test-counts]]`. Subagents have misreported 3+ times in prior phases. The controller re-runs the same command after the subagent reports.
+7. **Commit atomically.** Conventional message: `phase-3: <what> (<task-id>)` per CLAUDE.md.
+
+**Mandatory subagent invocation language (verbatim, from `netdust-core:ntdst-execute-with-tests`):**
+
+Every dispatch prompt to a subagent MUST end with this block, copy-pasted as-is:
+
+> Before reporting this task complete, you MUST invoke `Skill("netdust-core:testing-workflow")` via the Skill tool and complete its task-complete checklist. A task without unit tests is not done. Do not report success without invoking the skill.
+>
+> Your final message MUST end with this block, verbatim:
+>
+> ```
+> ## Test evidence
+> - Test file(s): <path1>, <path2>
+> - RED proof: <command> → <fail snippet, 1-3 lines>
+> - GREEN proof: <command> → <pass snippet, 1-3 lines>
+> - Suite delta: <app> was <N>, now <M>, <K> fails
+> - Typecheck: <command> → <status>
+> ```
+>
+> Missing any of these = task not done. Do not rationalize.
+
+The wrapping skill is explicit that **invocation is what makes the gate auditable**, not just running the tests. The SubagentStop hook in `netdust-core` is meant to detect missing invocations and surface reminders — that is a backstop, not the primary mechanism. The dispatch prompt is the primary mechanism. Without the invocation line, the discipline reverts to "trust the implementer," which is the failure mode the wrapping skill exists to prevent.
 
 **Rules that apply to ALL tasks:**
 
@@ -522,6 +544,11 @@ Expected: FAIL — the migration file does not exist yet.
 
 - [ ] **Step 4: Write the migration**
 
+> **⚠ Plan defect noted during A-2 execution (shipped fix in `13c76d8`):**
+> The SQL block below declares `author_id` and `target_agent_id` as columns on the rebuilt `documents_new` table. These are NOT real columns in the live schema — they are frontmatter JSON fields. The actual `documents` table on main (post-migrations 0007/0008/0011) has 16 columns: `id, project_id, workspace_id, table_id, type, slug, title, status, body, frontmatter, parent_id, created_by, updated_by, created_at, updated_at, last_touched_at`.
+> The plan's `INSERT INTO documents_new SELECT * FROM documents;` would also fail because column counts mismatch. The shipped migration uses an explicit 16-column list for both INSERT and SELECT.
+> Treat the SQL below as a sketch of intent. The actual SQL that landed is at `apps/server/src/db/migrations/0012_phase_3_agent_runs.sql` (commit `13c76d8`) — copy from there or follow that pattern for any similar table-rebuild migration.
+
 Create `apps/server/src/db/migrations/0012_phase_3_agent_runs.sql`:
 
 ```sql
@@ -703,6 +730,11 @@ Drizzle journal updated per the team's migration-journal discipline."
 The existing journal uses `idx 12 -> tag 0012_phase_3_agent_runs`. Drizzle journal entries are referenced by their tag, not by sub-versions. Use tag `0012a_flip_runner_builtins_to_enabled` with `idx: 13`. The "a" suffix carries intent (companion of 0012) but the journal sees them as two distinct migrations.
 
 - [ ] **Step 2: Write the failing test**
+
+> **⚠ Plan defect noted during A-3 execution (shipped fix in `d6fd994`):**
+> The test pattern below calls `migrate(db, …)` once, seeds pre-flip rows, then calls `migrate(db, …)` again expecting 0012a to run against the seeded rows. **This does not work.** Drizzle's `migrate()` is idempotent at the journal level — on the second call it sees 0012a already in `__drizzle_migrations` and no-ops. The seeded rows are never touched and the test fails.
+> The shipped test (`apps/server/src/db/migrations/0012a_flip_runner_builtins_to_enabled.test.ts` in `d6fd994`) reads the SQL file directly via `readFileSync` and `sqlite.exec()`-utes it manually after seeding. Use that pattern for any migration test that needs a "seed then re-run this specific migration" shape.
+> Also: the plan's seed flow assumed the assertions about `enabled` values live in `builtin-triggers.test.ts`. They actually live in `apps/server/src/routes/workspaces.test.ts` (the auto-seed-builtins assertion). Both shipped tests now agree.
 
 Create `apps/server/src/db/migrations/0012a_flip_runner_builtins_to_enabled.test.ts`:
 
