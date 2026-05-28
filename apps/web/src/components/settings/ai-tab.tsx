@@ -62,7 +62,7 @@ export function AiTab({ wslug, workspaceId }: Props) {
 
   async function onSave() {
     try {
-      await upsertKey.mutateAsync({ provider, apiKey, baseUrl: baseUrl || undefined });
+      await upsertKey.mutateAsync({ provider, apiKey, label: 'default', baseUrl: baseUrl || undefined });
       toast.success(`Saved ${provider} key`);
       setApiKey('');
       setBaseUrl('');
@@ -167,7 +167,7 @@ export function AiTab({ wslug, workspaceId }: Props) {
         <h2 className="text-sm font-medium">Configured keys</h2>
         <ul className="mt-2 divide-y divide-border-light overflow-hidden rounded-md border border-border-light">
           {PROVIDERS.map((p) => {
-            const row = (keysQuery.data ?? []).find((k) => k.provider === p);
+            const row = (keysQuery.data ?? []).find((k) => k.provider === p && k.label === 'default');
             return (
               <li
                 key={p}
