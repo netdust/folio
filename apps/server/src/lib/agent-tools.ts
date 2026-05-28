@@ -55,20 +55,6 @@ if (process.env.NODE_ENV === 'test') {
     registry;
 }
 
-// Agent-lifecycle tools are self-management only: an agent may only act on its
-// own document, never on a peer agent (mitigation 27).
-const AGENT_LIFECYCLE_TOOLS = new Set([
-  'create_agent',
-  'update_agent',
-  'delete_agent',
-  'get_agent_self',
-]);
-
-/** Strip an optional `agent:` prefix to get the bare slug from an actor label. */
-function slugFromActor(actor: string): string {
-  return actor.startsWith('agent:') ? actor.slice('agent:'.length) : actor;
-}
-
 /**
  * Register `__echo` ONLY in the test environment. The gate is checked at module
  * load AND `executeTool` re-checks `NODE_ENV` at call time for lifecycle/echo
@@ -101,7 +87,7 @@ export function registerTool<TArgs, TOut>(def: ToolDef<TArgs, TOut>): void {
  * Dispatch a tool by name through the shared auth model.
  *
  * Order: lookup → call-time `__echo` production gate → scope check →
- * self-vs-peer lifecycle gate → Zod re-validation → handler.
+ * Zod re-validation → handler.
  */
 export async function executeTool(
   token: ApiToken,
@@ -126,19 +112,11 @@ export async function executeTool(
     throw new Error(`forbidden: scope ${def.requiredScope} missing`);
   }
 
-  // Self-vs-peer gate (mitigation 27): an agent-bound token may only target its
-  // own slug on the lifecycle tools. Human PATs (no agentId) are not gated.
-  if (token.agentId && AGENT_LIFECYCLE_TOOLS.has(name)) {
-    const targetSlug =
-      typeof args === 'object' && args !== null
-        ? (args as { slug?: unknown }).slug
-        : undefined;
-    if (typeof targetSlug === 'string' && targetSlug !== slugFromActor(actor)) {
-      const e = new Error('agent_self_management_only') as Error & { code: number };
-      e.code = -32602;
-      throw e;
-    }
-  }
+  // No agent-lifecycle self/peer gate here. The dispatcher is transport +
+  // scope + arg-validation only. Per-tool lifecycle guards (allow-list
+  // widening on create/update, self-delete rejection on delete, token-anchored
+  // resolution on get_agent_self — see routes/mcp.ts today) are anchored to
+  // token.agentId and move into this layer in D-3 with the real handlers.
 
   // Zod re-validation. On failure, surface PATHS only — never values
   // (mitigation 26 + 28: a rejected arg value must not leak into the error).

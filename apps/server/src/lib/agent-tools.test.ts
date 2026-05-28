@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { z } from 'zod';
 import type { ApiToken } from '../db/schema.ts';
 import { makeTestApp } from '../test/harness.ts';
-import { executeTool, registerTool, type ToolDef } from './agent-tools.ts';
+import { type ToolDef, executeTool, registerTool } from './agent-tools.ts';
 
 /**
  * Build a minimal ApiToken stub. Only the fields executeTool reads
@@ -50,9 +50,9 @@ describe('executeTool dispatch', () => {
     const prev = process.env.NODE_ENV;
     process.env.NODE_ENV = 'production';
     try {
-      await expect(
-        executeTool(makeToken(), 'tester', '__echo', { value: 'hi' }),
-      ).rejects.toThrow('method not found: __echo');
+      await expect(executeTool(makeToken(), 'tester', '__echo', { value: 'hi' })).rejects.toThrow(
+        'method not found: __echo',
+      );
     } finally {
       process.env.NODE_ENV = prev;
     }
@@ -89,9 +89,7 @@ describe('executeTool dispatch', () => {
     expect(e.issues).toEqual([{ path: ['value'] }]);
     // The offending value (123) must NOT appear anywhere in the payload.
     expect(JSON.stringify(e.issues)).not.toContain('123');
-    expect(JSON.stringify({ message: e.message, issues: e.issues })).not.toContain(
-      '123',
-    );
+    expect(JSON.stringify({ message: e.message, issues: e.issues })).not.toContain('123');
   });
 
   it('throws forbidden: scope missing when the token lacks the requiredScope', async () => {
@@ -167,63 +165,28 @@ describe('registerTool', () => {
   });
 });
 
-describe('self-vs-peer agent-lifecycle gate', () => {
-  function lifecycleProbe(name: string, ran: { value: boolean }): ToolDef {
-    return {
-      name,
+describe('agent-lifecycle gating (deferred to D-3)', () => {
+  it('does not block an agent-bound token from a lifecycle tool — per-tool guards live in D-3', async () => {
+    const ran = { value: false };
+    registerThrowaway({
+      name: 'create_agent',
       requiredScope: 'agents:write',
       schema: z.object({ slug: z.string() }).strict(),
       handler: async () => {
         ran.value = true;
         return { ok: true };
       },
-    };
-  }
+    });
 
-  it('rejects agent A calling delete_agent on B with -32602', async () => {
-    const ran = { value: false };
-    registerThrowaway(lifecycleProbe('delete_agent', ran));
-
-    let thrown: unknown;
-    try {
-      await executeTool(
-        makeToken({ agentId: 'doc_A', scopes: ['agents:write'] }),
-        'agent:A',
-        'delete_agent',
-        { slug: 'B' },
-      );
-    } catch (err) {
-      thrown = err;
-    }
-    expect(ran.value).toBe(false);
-    const e = thrown as Error & { code?: number };
-    expect(e.message).toBe('agent_self_management_only');
-    expect(e.code).toBe(-32602);
-  });
-
-  it('allows agent A calling update_agent on A', async () => {
-    const ran = { value: false };
-    registerThrowaway(lifecycleProbe('update_agent', ran));
-
+    // Agent-bound token; target slug differs from any caller identity. The
+    // dispatcher no longer blocks agent→peer lifecycle calls — only scope + Zod
+    // gate. Per-tool guards (allow-list widening, self-delete rejection) arrive
+    // in D-3 with the real handlers.
     const out = await executeTool(
       makeToken({ agentId: 'doc_A', scopes: ['agents:write'] }),
       'agent:A',
-      'update_agent',
-      { slug: 'A' },
-    );
-    expect(ran.value).toBe(true);
-    expect(out).toEqual({ ok: true });
-  });
-
-  it('does not gate a human PAT (no agentId) on lifecycle tools', async () => {
-    const ran = { value: false };
-    registerThrowaway(lifecycleProbe('create_agent', ran));
-
-    const out = await executeTool(
-      makeToken({ agentId: null, scopes: ['agents:write'] }),
-      'user:somebody',
       'create_agent',
-      { slug: 'anything' },
+      { slug: 'child' },
     );
     expect(ran.value).toBe(true);
     expect(out).toEqual({ ok: true });
