@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { providerSchema } from '../lib/agent-run-schema.ts';
 import { getProvider } from '../lib/ai/provider.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
+import { validatePublicUrl } from '../lib/url-allow-list.ts';
 import { type AuthContext, requireUser } from '../middleware/auth.ts';
 import type { ScopeContext } from '../middleware/scope.ts';
 
@@ -42,6 +43,12 @@ const TestKeyBody = z
 // Does NOT persist the key (that lives in settings.ts POST /ai-keys).
 aiRoute.post('/test-key', zValidator('json', TestKeyBody), async (c) => {
   const { provider, model, api_key, base_url } = c.req.valid('json');
+  if (base_url !== undefined) {
+    const v = validatePublicUrl(base_url);
+    if (!v.ok) {
+      throw new HTTPError('INVALID_BODY', v.reason, 422);
+    }
+  }
   const result = await getProvider(provider).testKey({
     apiKey: api_key,
     model,

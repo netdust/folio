@@ -135,4 +135,99 @@ describe('POST /api/v1/w/:wslug/ai/test-key', () => {
     const after = await db.query.aiKeys.findMany();
     expect(after.length).toBe(before.length);
   });
+
+  test('rejects base_url pointing at loopback IPv4', async () => {
+    const { app, seed } = await makeTestApp();
+    const res = await app.request(`/api/v1/w/${seed.workspace.slug}/ai/test-key`, {
+      method: 'POST',
+      headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        provider: 'ollama',
+        model: 'llama3.1',
+        api_key: '_',
+        base_url: 'http://127.0.0.1:11434',
+      }),
+    });
+    expect(res.status).toBe(422);
+    const body = await res.json();
+    expect(body.error.message ?? body.error.code).toMatch(/base_url|loopback|private/i);
+  });
+
+  test('rejects base_url pointing at link-local AWS metadata', async () => {
+    const { app, seed } = await makeTestApp();
+    const res = await app.request(`/api/v1/w/${seed.workspace.slug}/ai/test-key`, {
+      method: 'POST',
+      headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        provider: 'ollama',
+        model: 'x',
+        api_key: '_',
+        base_url: 'http://169.254.169.254/',
+      }),
+    });
+    expect(res.status).toBe(422);
+  });
+
+  test('rejects base_url with non-http scheme', async () => {
+    const { app, seed } = await makeTestApp();
+    const res = await app.request(`/api/v1/w/${seed.workspace.slug}/ai/test-key`, {
+      method: 'POST',
+      headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        provider: 'ollama',
+        model: 'x',
+        api_key: '_',
+        base_url: 'file:///etc/passwd',
+      }),
+    });
+    expect(res.status).toBe(422);
+  });
+
+  test('rejects base_url hostname "localhost"', async () => {
+    const { app, seed } = await makeTestApp();
+    const res = await app.request(`/api/v1/w/${seed.workspace.slug}/ai/test-key`, {
+      method: 'POST',
+      headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        provider: 'ollama',
+        model: 'x',
+        api_key: '_',
+        base_url: 'http://localhost:11434',
+      }),
+    });
+    expect(res.status).toBe(422);
+  });
+
+  test('rejects base_url private IPv4 (10/8, 172.16/12, 192.168/16)', async () => {
+    const { app, seed } = await makeTestApp();
+    for (const ip of ['http://10.0.0.5/', 'http://172.20.0.5/', 'http://192.168.1.1/']) {
+      const res = await app.request(`/api/v1/w/${seed.workspace.slug}/ai/test-key`, {
+        method: 'POST',
+        headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          provider: 'ollama',
+          model: 'x',
+          api_key: '_',
+          base_url: ip,
+        }),
+      });
+      expect(res.status).toBe(422);
+    }
+  });
+
+  test('allows base_url on a public host', async () => {
+    const { app, seed } = await makeTestApp();
+    // mockTestKey returns ok:true from the test setup at the top of the file
+    const res = await app.request(`/api/v1/w/${seed.workspace.slug}/ai/test-key`, {
+      method: 'POST',
+      headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        provider: 'ollama',
+        model: 'llama3.1',
+        api_key: '_',
+        base_url: 'https://ollama.example.com/',
+      }),
+    });
+    expect(res.status).toBe(200);
+  });
 });
