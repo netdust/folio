@@ -1,0 +1,79 @@
+import { afterEach, describe, expect, mock, test } from 'bun:test';
+import { ollama } from './ollama.ts';
+
+const originalFetch = global.fetch;
+
+function jsonl(lines: unknown[]): ReadableStream<Uint8Array> {
+  const enc = new TextEncoder();
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const l of lines) controller.enqueue(enc.encode(JSON.stringify(l) + '\n'));
+      controller.close();
+    },
+  });
+}
+
+describe('ollama provider', () => {
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  test('stream() yields text + tokens + done from /api/chat NDJSON', async () => {
+    global.fetch = mock(
+      async () =>
+        new Response(
+          jsonl([
+            { message: { content: 'Hi ' }, done: false },
+            { message: { content: 'there' }, done: false },
+            {
+              message: { content: '' },
+              done: true,
+              done_reason: 'stop',
+              prompt_eval_count: 7,
+              eval_count: 2,
+            },
+          ]),
+          { status: 200 },
+        ),
+    ) as never;
+
+    const events: unknown[] = [];
+    for await (const ev of ollama.stream({
+      system: 'sys',
+      messages: [{ role: 'user', content: 'hi' }],
+      tools: [],
+      maxTokens: 100,
+      apiKey: '',
+      model: 'llama3.1',
+      baseUrl: 'http://localhost:11434',
+    })) {
+      events.push(ev);
+    }
+    expect(events).toContainEqual({ type: 'text', delta: 'Hi ' });
+    expect(events).toContainEqual({ type: 'text', delta: 'there' });
+    expect(events).toContainEqual({ type: 'tokens', tokens_in: 7, tokens_out: 2 });
+    expect(events).toContainEqual({ type: 'done', reason: 'stop' });
+  });
+
+  test('testKey() returns ok on a 200', async () => {
+    global.fetch = mock(async () => new Response('{}', { status: 200 })) as never;
+    const r = await ollama.testKey({
+      apiKey: '',
+      model: 'llama3.1',
+      baseUrl: 'http://localhost:11434',
+    });
+    expect(r.ok).toBe(true);
+  });
+
+  test('testKey() returns failure on connection refused', async () => {
+    global.fetch = mock(async () => {
+      throw new Error('ECONNREFUSED');
+    }) as never;
+    const r = await ollama.testKey({
+      apiKey: '',
+      model: 'llama3.1',
+      baseUrl: 'http://localhost:11434',
+    });
+    expect(r.ok).toBe(false);
+  });
+});
