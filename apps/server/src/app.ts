@@ -12,6 +12,7 @@ import {
   resolveWorkspace,
   type ScopeContext,
 } from './middleware/scope.ts';
+import { aiRoute } from './routes/ai.ts';
 import { auth } from './routes/auth.ts';
 import { commentsRoute } from './routes/comments.ts';
 import { documentsRoute } from './routes/documents.ts';
@@ -44,6 +45,7 @@ v1.route('/workspaces', workspacesRoute);
 
 const wScope = new Hono<AuthContext & ScopeContext>();
 wScope.use('*', attachToken, requireUserOrToken, resolveWorkspace);
+wScope.route('/ai', aiRoute);
 wScope.route('/settings', settingsRoute);
 wScope.route('/tokens', tokensRoute);
 wScope.route('/events', eventsRoute);
