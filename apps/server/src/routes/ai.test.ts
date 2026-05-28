@@ -1,4 +1,7 @@
 import { describe, expect, mock, test } from 'bun:test';
+import { nanoid } from 'nanoid';
+import { apiTokens } from '../db/schema.ts';
+import { newApiToken } from '../lib/auth.ts';
 
 // Mock at the provider-factory boundary so the route sees a stubbed testKey
 // without touching any real SDK. Bun hoists mock.module before the dynamic
@@ -83,6 +86,38 @@ describe('POST /api/v1/w/:wslug/ai/test-key', () => {
       body: JSON.stringify({ provider: 'anthropic', model: 'x', api_key: 'sk' }),
     });
     expect(res.status).toBe(401);
+  });
+
+  test('rejects API-token callers with 403', async () => {
+    const { app, db, seed } = await makeTestApp();
+    // Mint a workspace-scoped human PAT for the seed user. The route is
+    // documented as "UI-only / session-only" — even a perfectly valid PAT
+    // belonging to the seed user must be rejected.
+    const { token, hash } = newApiToken();
+    await db.insert(apiTokens).values({
+      id: nanoid(),
+      workspaceId: seed.workspace.id,
+      name: 'test PAT',
+      tokenHash: hash,
+      scopes: ['documents:read'],
+      createdBy: seed.user.id,
+    });
+
+    const res = await app.request(`/api/v1/w/${seed.workspace.slug}/ai/test-key`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        provider: 'anthropic',
+        model: 'claude-haiku-4-5',
+        api_key: 'sk-mock',
+      }),
+    });
+    expect(res.status).toBe(403);
+    const body = await res.json();
+    expect(body.error.code).toBe('FORBIDDEN');
   });
 
   test('does NOT persist the key', async () => {
