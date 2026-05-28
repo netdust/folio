@@ -57,6 +57,28 @@ describe('anthropic provider', () => {
     if (!result.ok) expect(result.reason).toMatch(/unauth|401/i);
   });
 
+  test('stream() records the final usage.input_tokens=0 over a prior non-zero value', async () => {
+    mockStream.mockImplementationOnce((async function* () {
+      yield { type: 'message_delta', usage: { input_tokens: 12, output_tokens: 0 } };
+      // Later delta corrects to 0 (e.g. cache-hit recomputation).
+      yield { type: 'message_delta', usage: { input_tokens: 0, output_tokens: 0 } };
+      yield { type: 'message_stop' };
+    }) as never);
+
+    const events: unknown[] = [];
+    for await (const ev of anthropic.stream({
+      system: 'sys',
+      messages: [{ role: 'user', content: 'hi' }],
+      tools: [],
+      maxTokens: 100,
+      apiKey: 'sk-test',
+      model: 'claude-haiku-4-5',
+    })) {
+      events.push(ev);
+    }
+    expect(events).toContainEqual({ type: 'tokens', tokens_in: 0, tokens_out: 0 });
+  });
+
   test('stream() yields done event even when tool_use input_json fails to JSON.parse', async () => {
     mockStream.mockImplementationOnce((async function* () {
       yield {

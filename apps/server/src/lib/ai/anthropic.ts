@@ -90,8 +90,8 @@ export const anthropic: AIProvider = {
       } else if (t === 'message_delta') {
         const usage = ev.usage as { input_tokens?: number; output_tokens?: number } | undefined;
         const delta = ev.delta as { stop_reason?: string } | undefined;
-        if (usage?.input_tokens) inTokens = usage.input_tokens;
-        if (usage?.output_tokens) outTokens = usage.output_tokens;
+        if (usage?.input_tokens !== undefined) inTokens = usage.input_tokens;
+        if (usage?.output_tokens !== undefined) outTokens = usage.output_tokens;
         if (delta?.stop_reason === 'tool_use') stopReason = 'tool_use';
         else if (delta?.stop_reason === 'max_tokens') stopReason = 'max_tokens';
       }

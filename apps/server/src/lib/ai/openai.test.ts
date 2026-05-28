@@ -115,6 +115,37 @@ describe('openai provider', () => {
     });
   });
 
+  test('stream() records usage.prompt_tokens=0 and completion_tokens=0 on the final chunk', async () => {
+    mockCreate.mockImplementationOnce((async (opts: { stream?: boolean }) => {
+      if (!opts.stream) return { id: 'cmpl_x' };
+      return (async function* () {
+        // Interim chunk reports non-zero usage.
+        yield {
+          choices: [{ delta: { content: '' } }],
+          usage: { prompt_tokens: 5, completion_tokens: 3 },
+        };
+        // Final chunk legitimately reports 0/0 (e.g. content_filter stop).
+        yield {
+          choices: [{ delta: {}, finish_reason: 'content_filter' }],
+          usage: { prompt_tokens: 0, completion_tokens: 0 },
+        };
+      })();
+    }) as never);
+
+    const events: unknown[] = [];
+    for await (const ev of openai.stream({
+      system: 'sys',
+      messages: [{ role: 'user', content: 'hi' }],
+      tools: [],
+      maxTokens: 100,
+      apiKey: 'sk',
+      model: 'gpt-4o-mini',
+    })) {
+      events.push(ev);
+    }
+    expect(events).toContainEqual({ type: 'tokens', tokens_in: 0, tokens_out: 0 });
+  });
+
   test('stream() yields done event even when tool_call args fail to JSON.parse', async () => {
     mockCreate.mockImplementationOnce((async (opts: { stream?: boolean }) => {
       if (!opts.stream) return { id: 'cmpl_x' };

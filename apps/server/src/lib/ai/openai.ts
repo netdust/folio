@@ -84,8 +84,8 @@ export const openai: AIProvider = {
         | { prompt_tokens?: number; completion_tokens?: number }
         | null
         | undefined;
-      if (usage?.prompt_tokens) tokensIn = usage.prompt_tokens;
-      if (usage?.completion_tokens) tokensOut = usage.completion_tokens;
+      if (usage?.prompt_tokens !== undefined) tokensIn = usage.prompt_tokens;
+      if (usage?.completion_tokens !== undefined) tokensOut = usage.completion_tokens;
     }
 
     for (const tc of Object.values(toolCallsByIndex)) {
