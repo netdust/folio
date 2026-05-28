@@ -205,6 +205,239 @@ These are the rules the code MUST follow. `/code-review` should verify each one 
 
 ---
 
+## Threat model — Sub-phase C extension (runner, services, poller, triggers)
+
+> Added 2026-05-28 evening, **before** any Sub-phase C task is dispatched, per the Sub-phase C readiness handoff (`docs/superpowers/handoffs/2026-05-28-phase-3-sub-phase-C-readiness.md`) and Recommendation 1 from the Sub-phase B retro (no code touches a runner-class surface until a threat model is committed). This section EXTENDS the Sub-phase B threat model above — it does NOT re-litigate it. Sub-phase B mitigations 1–22 remain in force across all Sub-phase C code (the runner consumes the same `aiKeys` rows that B validated, the same provider implementations whose errors B sanitized, the same `ProviderEvent` union B widened). C adds new assets (the `agent_run` row content, the runner's outbound HTTP capacity, the MCP dispatch as a NEW caller path) and the new attacks they unlock. The 22 + N format means `/code-review` on C verifies against the union, not just the C-specific items.
+>
+> Calibration: B took 7 rounds and 5h27m of `/code-review` review-fix cycles because the threat model was written retrospectively. C must converge in 1–2 rounds per sub-sub-phase. This section is the convergence target.
+
+### What we're defending (new in C)
+
+In addition to the four B assets (apiKey, FOLIO_MASTER_KEY, server network position, workspace integrity), Sub-phase C introduces:
+
+- **`agent_run` row content as a workspace-secret-bearing asset.** The runner inlines parent-doc content into the LLM prompt, persists tool-call args into the run's frontmatter (as future runs build prompt history from prior runs), and writes prompts/results into `comments` referenced by `frontmatter.run_id`. Any of those surfaces can carry workspace-sensitive data (PII pasted into a work item, doc body excerpts from `[[wiki-links]]`, prior comment threads). The new asset is: **the contents of every `agent_run` row, every comment with `frontmatter.run_id` set, and every prompt-history reconstruction the runner performs.**
+- **The runner's outbound HTTP capacity.** Each agent run consumes a provider stream. A misbehaving prompt or unguarded chain can detonate a single user action into thousands of provider calls, exhausting workspace budget, billing the BYOK key the workspace owns, and saturating the runner's per-host connection pool. The asset being defended: **the workspace's BYOK budget AND the server's outbound bandwidth/connection-pool fairness across workspaces.**
+- **The MCP-dispatch surface from inside the runner.** Sub-phase B closed `routes/mcp.ts`. Sub-phase C introduces `lib/mcp-dispatch.ts` as a NEW caller path: the runner dispatches tool calls on behalf of an agent-bound bearer using the same tool registry. The asset: **scope-check and allow-list integrity for tool calls dispatched by the runner, with the runner being a privileged caller that must not weaken the gates.**
+- **The audit trail (events table) as a distinguishability asset.** Operators triage runner bugs by reading `agent.run.failed` events. If `worker_crash` runs are indistinguishable from `provider_error` runs are indistinguishable from explicit `cancelled` runs, every triage starts at zero. The asset: **a distinguishable `error_reason` taxonomy on terminal `agent.run.failed`/`agent.run.rejected` events.**
+
+### Who we're defending against (new in C)
+
+The five B actor classes carry forward (external attackers, members-with-write-no-admin, phished admins, malicious agents, insiders OUT of scope). C adds two:
+
+6. **Prompt-injection attackers who can write to a document the runner will read.** An attacker who can post a comment, edit a doc title, or write into a wiki page can plant instructions that the agent will see when the runner inlines content for the LLM. They may not have direct API access at all — their attack surface is "future agent runs that read this doc." IN scope.
+7. **Concurrent operators racing on the same `agent_run` row.** Two poller workers (multi-process deployments) or two threads (within one process) both call `claimNextPlanningRun` on the same row. Not malicious, but the failure mode (duplicate provider charges + duplicate comments + corrupted state-machine ordering) is identical to a deliberate attack. IN scope.
+
+### Attacks to defend against (Sub-phase C)
+
+Numbered 23–N, continuing the B sequence. Each attack pairs with a mitigation below.
+
+**Asset: `agent_run` row content**
+
+23. **Cross-workspace `agent_run` read via the documents API.** The `agent_run` rows live in the `documents` table (Sub-phase A widened the `type` enum + added `documents_runs_*` partial indexes). GET `/api/v1/w/:wslug/projects/:pslug/documents?type=agent_run` is the natural query. The existing scope-check infrastructure (Phase 2.5 + B mitigation 11) covers workspace + project membership for the human-readable doc types; the runs table is a new type that is mounted on the same routes. If the documents-list path has any `type='work_item' || type='page'` carve-out that gated the broader workspace check, agent_run leaks across the carve-out.
+
+24. **Cross-project `agent_run` read by a project-narrowed agent-bound bearer.** B's mitigation 22 narrowed `GET /members` for agents with `frontmatter.projects` not containing `'*'`. The runs table needs the same narrowing: an agent bound to project A must not be able to list/read agent_runs from project B via the documents API, even though both rows live under the same workspace.
+
+25. **Prompt-injection exfil via `[[wiki-link]]` inlining.** The runner inlines content from documents the parent references. Attacker plants `[[secrets/api-rotation-keys]]` in a doc the runner will read; the runner expands the wiki link, inlines the secret doc's body into the LLM request; secret data ends up in the provider's training data / abuse logs / forwarded to attacker-controlled `baseUrl` (cf. B attack 2).
+
+26. **Tool-call arg JSON poisoning bypasses zod refines.** Agent calls `create_document(body=<attacker-prompted markdown>)`. The B mitigations close malformed JSON parsing (B#8) at the provider layer; what arrives at `executeMcpTool` is well-formed JSON. But Zod-validation lives in the route handlers (`routes/mcp.ts`). The runner now bypasses the route layer entirely. If `lib/mcp-dispatch.ts` looks up the tool but doesn't re-run the Zod schema, malformed-but-parseable args (`title: <very long string>`, `frontmatter: {__proto__: ...}`, `slug: '../../escapes'`) reach the handler unvalidated.
+
+27. **Prompt-injection-driven tool privilege escalation.** Attacker plants instructions that the agent should call `delete_document` or `create_agent` on a target the legitimate operator never intended. The attack does not need to bypass tool scope — it bypasses *operator intent*. Sub-phase B closed `create_agent`/`update_agent`/`delete_agent` against human PATs but agent-bound bearers (which the runner uses) remain authorized. A prompt-injected agent can legitimately call `delete_agent` on a peer agent within its allow-list.
+
+28. **`agent_run.error_reason` and `error_detail` carry raw SDK strings.** The runner catches stream errors and writes them into the run row. If `error_detail` echoes the SDK's raw error message, key fragments / URL fragments / sensitive context leaks (cf. B attack 5 — same vulnerability class, new write surface). Worse: error_detail is persisted, so a future read of the runs table re-exposes the leak indefinitely.
+
+**Asset: runner outbound HTTP capacity**
+
+29. **Chain-level fan-out DoS via `comment.mentioned` recursion.** Agent A's run posts a comment that mentions Agent B; Agent B's run posts a comment that mentions Agent A. Without `chain_id` aggregation + a hard fan-out cap, two agents mentioning each other detonate into thousands of runs.
+
+30. **Token-budget bypass via chain-of-N-runs.** Agent's `max_tokens_per_run` cap is bypassed by spawning N child runs each at the cap. Workspace's hourly cap is bypassed by spreading runs across the boundary. The chain-level cap (`FOLIO_MAX_CHAIN_TOKENS`) is the defense, but it must be enforced AT POLLER CLAIM TIME (before the next child is even claimed), not only at runner start-of-execution.
+
+31. **Provider-degraded retry amplification.** Provider hits 3 consecutive failures → degraded; pending `planning` rows continue to get claimed; each one fails the same way, burning rate-limit retry quota and worsening the degradation. The amplification is asymmetric: degradation lasts hours, recovery is immediate. Without a circuit-breaker, one bad provider config tarpits the whole workspace's run queue.
+
+32. **DNS-rebinding mid-stream via provider baseUrl.** B mitigation 1 cached DNS resolution per request. The runner's stream is multi-request over time: a long-running stream may make multiple HTTPS requests under the hood (or, in Ollama's case, multiple NDJSON requests). If each request re-resolves the host, a DNS-rebinding attacker can switch IPs mid-run. B explicitly listed this as OUT of scope (residual risk for v1); we re-acknowledge.
+
+33. **Outbound rate-limit fairness across workspaces.** One workspace's runaway chain monopolizes the runner's per-host connection pool. Other workspaces' runs queue up but their poller still claims rows at full rate; the rows transition to `running` but the runner blocks on the saturated pool. No SLA, just stuttering.
+
+**Asset: MCP dispatch from runner**
+
+34. **`executeMcpTool` skeleton with `__echo` test tool reachable in production.** Sub-phase C registers a single `__echo` tool for testing the dispatcher. If the registration is process-global and not guarded by `NODE_ENV === 'test'`, `__echo` becomes a discoverable production tool. Even though it does nothing meaningful, it teaches the agent that tools exist that aren't in the v1 documented set — and a future expansion of the test tool to "echo with side effects" silently becomes a production vector. (Same shape as B attack 16: `__INTERNAL_TEST_ONLY__`.)
+
+35. **MCP dispatcher transaction scope leakage.** A tool like `create_document` does multi-statement DB work (row insert + event emit). The runner calls `executeMcpTool` in the middle of its run loop. If the runner holds an open transaction (for state-machine updates), the tool's nested transaction either deadlocks, commits prematurely, or rolls back the runner's state on tool failure. Pattern from B's service layer is tx-first; the dispatcher MUST match.
+
+36. **Agent-bound bearer in dispatcher dispatches tools that mutate agent grants.** The dispatcher receives an agent-bound bearer (`token.agentId !== null`). B mitigation 11 (and HTTP mitigation 19) said agent-bound bearers MAY self-manage. But the runner is acting on behalf of an agent that is responding to prompt-injected instructions. The dispatcher must apply the SAME `requireSessionUser`-equivalent rejection on `create_agent`/`update_agent`/`delete_agent` that the route handler applied — agent-bound bearers reaching these tools through the runner should be treated as agent-bound, not session-equivalent. Or, alternatively, the dispatcher MUST distinguish "agent self-management" (bearer.agentId === args.target_agent) from "agent acting on a peer," and reject the latter. The narrower policy is better — agent-bound bearers reach the dispatcher exclusively through prompt-influenced flows.
+
+**Asset: concurrency / state machine integrity**
+
+37. **`claimNextPlanningRun` race not actually atomic.** Two pollers SELECT the same row; both UPDATE; SQLite serializes the UPDATEs but the wrong pattern (`UPDATE ... WHERE id=? AND status='planning'`) returns rowcount=1 to ONLY the first writer. If the implementation uses any other pattern (e.g. SELECT + UPDATE without `BEGIN IMMEDIATE`, or `UPDATE` without the `status='planning'` predicate), both writers may both win.
+
+38. **Orphan recovery races with active poller mid-stream.** `recoverOrphanRuns` runs every boot AND (per Task C-10) every poller tick that exceeds the stale threshold. If a row's `worker_started_at` is older than threshold but the runner is genuinely mid-stream (slow provider, large context window), `recoverOrphanRuns` transitions it to `failed` while the runner is still streaming. The runner then writes `transitionRun(... completed)`, which throws `INVALID_RUN_TRANSITION` because the state machine forbids `failed → completed`. The stream's tokens are billed to the BYOK key; the row is `failed`; the partial comment is never posted; the operator sees a phantom failure.
+
+39. **`incrementTokens` lost-update race.** Two concurrent `tokens` events from a parallel stream (Ollama emits multiple progress events; Anthropic's SDK fires updates on multiple boundaries) both read `frontmatter.tokens_in=100`, both write `=110` (each adding 10). The actual sum is 120; the row stores 110. Budget enforcement under-counts. Must be either single-stream-serial (only one ticker at a time per run) or atomic JSON-patch SQL (`UPDATE ... SET frontmatter = json_set(frontmatter, '$.tokens_in', json_extract(frontmatter, '$.tokens_in') + ?)`).
+
+**Asset: crash recovery + error distinguishability**
+
+40. **`worker_crash` indistinguishable from `provider_error` indistinguishable from explicit cancel.** All three end up as `status='failed'` with `error_reason=?`. If the error_reason taxonomy is collapsed or under-specified, operator triage is broken. Distinct values required: `worker_crash` (recovered orphan), `provider_error` (stream errored), `budget_exceeded` (token cap hit), `chain_guard` (fan-out/duration/chain-tokens cap hit), `rate_limited` (workspace or agent hourly cap), `cancel_requested` (DELETE /runs/:id — D), `cancel_via_comment` (kind=cancel comment — TBD).
+
+41. **`worker_started_at` not cleared atomically with terminal status.** If `transitionRun(... completed)` writes `status='completed'` in one statement and `worker_started_at=null` in another (or doesn't clear it at all), an operator querying "rows where worker_started_at IS NOT NULL" sees completed-but-still-claimed rows. Worse: a future `recoverOrphanRuns` may try to "recover" a completed row because the clear was missed.
+
+42. **Graceful-shutdown SIGTERM during in-flight runs.** Folio process catches SIGTERM, stops poller, but in-flight `runAgent` calls don't finish. The next boot's `recoverOrphanRuns` transitions them to `failed (worker_crash)` — operator-misleading because there was no crash. v1.1 deferral noted explicitly so reviewers don't re-litigate.
+
+**Asset: approval / cancel flow**
+
+43. **Approval-comment auth too permissive (v1 policy).** A `kind=plan` agent_run waits for a human's `## Approved` comment. v1 policy: any workspace member with `comments:write` on the parent can approve. This is intentional but it MUST be explicit and load-bearing — the threat model documents the policy so a future reviewer doesn't surface it as a finding. Role-gated approval is a v1.1 enhancement.
+
+44. **Approval+rejection race on the same `awaiting_approval` run.** Member A posts approval, Member B posts rejection — simultaneously. The two trigger handlers race. The runner state machine forbids both `awaiting_approval → running` (resume) and `awaiting_approval → rejected` from happening once. Whichever comment's tx wins is the outcome; the loser's trigger handler must detect the state mismatch and no-op, not throw or duplicate.
+
+45. **Cancel-via-comment signal source not yet decided.** Plan §4b mentions a "cancel check before each tool dispatch" but doesn't define the cancel signal. The options: (a) `kind=cancel` comment on the parent, (b) DELETE `/runs/:id` route (deferred to D-1), (c) explicit `agent_run.cancel_requested_at` column polled by the runner. Without a decision, the runner has nothing to check. Lock this in BEFORE C-8 runner implementation begins (this is known-unknown #4 from the readiness handoff).
+
+**Asset: provider-health flag emission**
+
+46. **`workspace.provider.degraded` emitted more than once on edge.** Mitigation requires once-on-tipping, once-on-recovery. If `transitionRun` calls `checkProviderHealth` after every terminal event without a "previous state" check, the third consecutive failure emits `degraded` and the fourth and fifth also re-emit. Operator dashboards spam.
+
+47. **`workspace.provider.degraded` emitted with stale provider name on read.** `checkProviderHealth` reads the `provider` from the event payload. If the provider name in the payload is whatever the agent's frontmatter said at run-start AND the agent switched providers mid-window, the degraded flag binds to the wrong provider. (Per `[[plan-server-source-audit]]`: grep the whole code path for "provider:" in the agent_run event payload.)
+
+**Asset: SSE delivery from runner-emitted events**
+
+48. **SSE consumer backpressure blocks runner event emission.** B mitigation chain emits events synchronously inside `transitionRun`'s tx. If the SSE channel uses a bounded buffer with backpressure (the standard pattern), a slow SSE consumer (browser tab stuck on a giant comment thread) causes `emitEvent` to block, which holds the tx open, which stalls the runner. v1 needs fire-and-forget semantics on the SSE delivery side; the in-memory event bus already publishes to subscribers without awaiting them (per the Phase 2 bus impl), but the runner's specific call sites should not introduce new sync-await boundaries.
+
+### Mitigations required (Sub-phase C)
+
+Numbered 23–N, continuing the B sequence. Each mitigation is code-checkable.
+
+23. **Documents-list path scope-check covers `type='agent_run'`.** No carve-out by type in the workspace+project scope predicate. The Sub-phase A partial indexes (`documents_runs_by_status_idx`, `_chain_idx`, `_assigned_idx`) preserve the existing `(workspace_id, project_id)` filter. Test (`apps/server/src/routes/documents.test.ts` + new `documents.runs-scope.test.ts`): one workspace's member querying `?type=agent_run` MUST NOT see another workspace's runs even when the SQL planner uses a partial index.
+
+24. **`GET /documents?type=agent_run` narrows by agent allow-list.** When the caller is an agent-bound bearer with `frontmatter.projects` not containing `'*'`, the response filters to runs whose `project_id` is in the allow-list. Same narrowing pattern as B mitigation 22 (members) and B mitigation 11's F3 events narrowing. Test (`runs.list-narrowing.test.ts`): agent allow-listed to `[p1]` calling `?type=agent_run` against a workspace with runs in p1 AND p2 sees only p1 rows.
+
+25. **No automatic `[[wiki-link]]` expansion in prompt construction for v1.** Sub-phase C's `runAgent` builds the LLM prompt from explicit message history (parent doc body, comment thread, kind=plan/approval comments — NOT auto-expanded wiki links). If a comment or doc body contains `[[other-doc]]`, the raw markdown reaches the LLM but the runner does NOT fetch and inline the linked doc's content server-side. The LLM may try to follow the link via a tool call (`get_document`), which then goes through the tool-scope + allow-list gates. This eliminates the server-side exfil vector. v1.1 reconsideration if usability suffers. Test (`runner.prompt-construction.test.ts`): a doc with `[[secret-doc]]` in its body produces a prompt containing literal `[[secret-doc]]` text, with no body of `secret-doc` inlined.
+
+26. **`executeMcpTool` re-runs the tool's Zod schema before dispatch.** `lib/mcp-dispatch.ts` looks up the tool definition (which carries its Zod schema as a property) and calls `schema.parse(args)` (NOT `.passthrough()` — `.strict()` per `[[zod-strict-house-style]]`) BEFORE invoking the handler. Failed validation throws an `MCP_INVALID_ARGS` HTTPException with the Zod issues array, caught by the runner and persisted as `error_reason='mcp_invalid_args'` on the run row with `error_detail` containing the issue paths (NOT the values — paths only, to avoid leaking the bad input back into a readable surface). Test (`mcp-dispatch.zod.test.ts`): malformed args reach the dispatcher and the handler is NEVER invoked.
+
+27. **Dispatcher distinguishes "agent self-management" from "agent acting on peer."** For tools `create_agent`/`update_agent`/`delete_agent`/`get_agent_self`, the dispatcher checks `authContext.token.agentId === args.agent_slug_or_id` (self-management OK) vs `authContext.token.agentId !== args.target_agent_slug_or_id` (acting on peer — REJECTED with `-32602 agent_self_management_only` error code). Human PATs were closed in B mitigation 19; this closes agent-bound bearers acting on peers via the runner. Test (`mcp-dispatch.agent-lifecycle.test.ts`): an agent-bound bearer for agent A calling `delete_agent(slug='B')` through `executeMcpTool` is rejected; calling `update_agent(slug='A')` is allowed.
+
+28. **`agent_run.error_reason` is from a closed enum; `error_detail` is sanitized.** `error_reason` MUST be one of: `worker_crash | provider_error | budget_exceeded | chain_guard | rate_limited | cancel_requested | cancel_via_comment | mcp_invalid_args | mcp_tool_error | refusal | pause_turn`. The `agent_run_schema.ts` Zod schema enforces this (additions to the existing schema in Task C-1). The `error_detail` field, when present, passes through `sanitizeProviderError` (the B-mitigation-5 helper) — NEVER echoes raw SDK strings, NEVER echoes `baseUrl`/`model`/`apiKey`. Reviewer-checkable: grep for `errorDetail =` and `error_detail:` in the runner; every assignment goes through the sanitizer. Test (`agent-runs.error-sanitization.test.ts`): a simulated SDK error containing `apiKey:sk-abc123` and `baseUrl:https://attacker` lands in `error_detail` with both fragments stripped.
+
+29. **`chain_id` is a UUIDv4 string (already enforced by `agent_run_schema.ts:71` — `z.string().uuid()`); fan-out cap is enforced at TWO places.** Mitigation pair:
+    - At POLLER CLAIM TIME, before `claimNextPlanningRun` actually claims a row, the poller calls `checkChainGuards(chainId)` and skips the row (leaves it `planning`, increments a `chain_guard_blocked` counter) if fanout is at cap. (This is the new gate — the plan currently has `checkChainGuards` running at run-start; we move/duplicate it to claim-time.)
+    - At RUN START, the runner re-checks `checkChainGuards` after claim but before the first provider stream (catches the case where another claim raced past the cap).
+    - The cap (`FOLIO_MAX_FANOUT_PER_CHAIN`, default 25 per plan) is enforced BY COUNT not by depth — a row's `chain_id` is inherited from the trigger that fired it (via the `fired_by` chain extraction in `nextChainId`), so a 25-wide flat chain is identical to a 25-deep recursive one. Test (`runner.chain-fanout.test.ts`): a deliberate 30-agent loop produces exactly 25 runs at status `completed/failed`, 5 runs at status `failed` with `error_reason='chain_guard'`, and zero `running` rows lingering.
+
+30. **Token budget enforced at three layers, all in agent-runs services + runner:**
+    - **Per-run cap** (`agent.frontmatter.max_tokens_per_run`): checked in `runAgent` AFTER each `tokens` event. Exceeding → transition `failed` with `error_reason='budget_exceeded'`, abort provider stream via the existing AbortController on the stream call, post a partial-result comment with `kind=comment` describing the cap hit + what work completed before it.
+    - **Per-chain cap** (`FOLIO_MAX_CHAIN_TOKENS`, default 1,000,000): checked in `checkChainGuards`, blocks at poller-claim-time (mitigation 29's pattern).
+    - **Per-workspace + per-agent hourly cap**: `checkRunRateLimits`, called BEFORE `claimNextPlanningRun` (so a workspace at cap doesn't even claim, leaves rows `planning` for the next hour). 
+    - Test (`runner.budget-multilayer.test.ts`): budget-of-1 per-run scenario fires `failed budget_exceeded` after exactly 1 token; budget-of-1 per-chain fires `chain_guard` on the second sibling run; budget-of-1 per-hour blocks claim entirely.
+
+31. **Provider circuit-breaker at poller-claim time.** When `checkProviderHealth(workspaceId, provider)` returns `degraded`, the poller skips claim of `agent_run` rows whose agent's provider is degraded; the rows stay `planning`. The next `agent.run.completed` for any agent on that provider (via a different workspace, or a manual retry) flips the workspace.provider.recovered edge, and pending runs resume claim. Test (`poller.circuit-breaker.test.ts`): seeded 3 consecutive `agent.run.failed provider_error` for `(workspace=w1, provider=anthropic)`, then a 4th planning row appears — poller does NOT claim it; after a manual `completed` event arrives, the same row IS claimed on the next tick.
+
+32. **DNS-rebinding mid-stream is OUT of scope** — re-affirmed from B's deferral list. The B mitigation cached DNS resolution per request; the runner relies on the same per-fetch cache via Bun's underlying fetch impl. v1 residual risk.
+
+33. **Per-workspace outbound concurrency fairness deferred to v1.1.** v1 enforces `FOLIO_POLLER_CONCURRENCY` (default 5) GLOBALLY across all workspaces. A runaway chain in workspace A can starve workspace B's runs. v1.1 splits the concurrency budget per-workspace via a workspace_id-aware semaphore. Documented here so reviewers don't surface it as a finding.
+
+34. **`__echo` test tool is gated on `NODE_ENV === 'test'`** at registration time. `lib/mcp-dispatch.ts` registry initialization checks `process.env.NODE_ENV` and conditionally adds `__echo` only in test. Production calls to `executeMcpTool('__echo', ...)` return `-32601 method not found` (the standard MCP error for unknown tools — not a custom `TEST_TOOL_DISABLED` code, because the production registry simply doesn't know about it). Same pattern as B mitigation 16 (`__INTERNAL_TEST_ONLY__`). Test (`mcp-dispatch.test-tool-gating.test.ts`): with `NODE_ENV='production'`, the registry returns the standard not-found error.
+
+35. **Dispatcher uses tx-first signature; runner owns the outer tx.** `executeMcpTool(name, args, authContext, tx)` accepts an optional `tx` parameter. The runner passes the tx it's holding for state-machine updates; the dispatcher passes that same tx to the tool handler. When the handler is `create_document`, the doc insert + event emit happen on the runner's tx. On runner failure post-dispatch, the tx rolls back atomically — no half-applied tool effect. When the runner does NOT hold a tx (the `runAgent` loop releases the tx between provider events to avoid blocking the DB), the dispatcher opens its own short-lived tx around the handler call. Tested via `mcp-dispatch.tx-scope.test.ts`: a handler that throws after a partial DB write leaves the runner's tx in a consistent rollback.
+
+36. **`claimNextPlanningRun` uses `BEGIN IMMEDIATE` + UPDATE-with-status-predicate.** SQL pattern:
+    ```sql
+    BEGIN IMMEDIATE;
+    UPDATE documents
+       SET frontmatter = json_set(frontmatter, '$.status', 'running', '$.worker_started_at', ?)
+     WHERE id = (
+       SELECT id FROM documents
+        WHERE type = 'agent_run'
+          AND json_extract(frontmatter, '$.status') = 'planning'
+        ORDER BY created_at ASC
+        LIMIT 1
+     ) AND json_extract(frontmatter, '$.status') = 'planning'
+    RETURNING *;
+    COMMIT;
+    ```
+    The `AND ... = 'planning'` in the outer UPDATE WHERE is load-bearing — between the inner SELECT and the UPDATE, another claimer's COMMIT may have flipped the status. `RETURNING *` lets us distinguish row-claimed (1 row returned) from row-already-claimed (0 rows returned).
+    
+    Test (`agent-runs.claim-race.test.ts`): TWO Bun async functions race on `claimNextPlanningRun(tx1)` and `claimNextPlanningRun(tx2)` against the same DB; exactly one returns the row, the other returns null. Run 100 iterations to defeat scheduler luck. (Per `[[mock-the-wire-not-the-response]]`, this test does NOT mock the DB; it uses `makeTestApp()` with a real SQLite.)
+
+37. **Orphan-recovery skips rows whose `worker_started_at` is fresh OR whose status is no longer `running`.** `recoverOrphanRuns(tx, {staleThresholdMs})` query:
+    ```sql
+    UPDATE documents
+       SET frontmatter = json_set(frontmatter, '$.status', 'failed', '$.error_reason', 'worker_crash', '$.worker_started_at', NULL, '$.completed_at', ?)
+     WHERE type = 'agent_run'
+       AND json_extract(frontmatter, '$.status') = 'running'
+       AND json_extract(frontmatter, '$.worker_started_at') < ?
+    RETURNING id;
+    ```
+    The status predicate `= 'running'` is load-bearing — if a runner transitioned the row to `completed` between the recovery scan and the recovery write, the predicate excludes it. The runner's `transitionRun` MUST clear `worker_started_at` in the same UPDATE that flips status (mitigation 41). Test (`agent-runs.orphan-recovery.test.ts`): mid-flight scenario — seed a row at `running`, mid-stream, simulate a recovery scan; if the runner's transition-to-completed happens first, the recovery's UPDATE affects 0 rows; if the recovery's UPDATE happens first, the runner's `transitionRun(... completed)` throws `INVALID_RUN_TRANSITION { from: 'failed', to: 'completed' }` (caught + logged, not re-thrown, runner exits gracefully).
+
+38. **`incrementTokens` uses atomic SQL JSON-patch.** Implementation:
+    ```sql
+    UPDATE documents
+       SET frontmatter = json_set(
+         frontmatter,
+         '$.tokens_in',  COALESCE(json_extract(frontmatter, '$.tokens_in'),  0) + ?,
+         '$.tokens_out', COALESCE(json_extract(frontmatter, '$.tokens_out'), 0) + ?
+       )
+     WHERE id = ?
+     RETURNING json_extract(frontmatter, '$.tokens_in'), json_extract(frontmatter, '$.tokens_out');
+    ```
+    The COALESCE handles the initial-null case (row was just-created with no `tokens_in/out` keys yet). Test (`agent-runs.increment-tokens-race.test.ts`): two concurrent `incrementTokens(tx1, runId, {in:10, out:5})` and `incrementTokens(tx2, runId, {in:7, out:3})` end with `tokens_in=17, tokens_out=8`. Per `[[falsy-zero-bug-class]]`: incrementing by `0` is allowed (`incrementTokens(tx, runId, {in:0, out:0})` succeeds, no-op).
+
+39. **Closed `error_reason` enum in `agent_run_schema.ts`** (extending the schema added in Sub-phase A). Values: `worker_crash | provider_error | budget_exceeded | chain_guard | rate_limited | cancel_requested | cancel_via_comment | mcp_invalid_args | mcp_tool_error | refusal | pause_turn`. The schema's Zod `.enum([...])` enforces this at every `transitionRun(... failed)` call site. Runner code paths that need to write `error_reason` import the enum's `.enum` accessor (`AgentRunErrorReason.enum.budget_exceeded`) — no string literals. Test (`agent-run-schema.error-reason.test.ts`): an unknown error_reason value throws Zod issue; every listed value parses.
+
+40. **`transitionRun` writes status + worker_started_at clear in ONE UPDATE.** Already in the C-1 scope ("clears worker_started_at on terminal statuses") — make it explicit + atomic. The SQL is one `UPDATE documents SET frontmatter = json_set(frontmatter, '$.status', ?, '$.worker_started_at', NULL, ...)` statement. Test (`agent-runs.transition-atomic.test.ts`): after `transitionRun(tx, runId, { newStatus: 'completed' })`, reading the row in another tx shows both status=completed AND worker_started_at=null in a single read (no intermediate state observable).
+
+41. **Graceful-shutdown SIGTERM handler is v1.1; v1 documents the residual.** v1 SIGTERM does NOT attempt to drain in-flight runners. In-flight rows stay `running`; next boot's `recoverOrphanRuns` transitions them to `failed worker_crash`. The audit-trail event distinguishes this from a real crash via... it doesn't — both look identical. Documented residual; reviewer should NOT surface it.
+
+42. **v1 approval policy: any workspace member with `comments:write` on the parent can approve.** Documented explicitly. The runner accepts `## Approved` from any comment on the parent (per the existing kind=approval + the resume_of trigger handler in C-9). v1.1 may add a role-gate. Surfacing this as a finding in `/code-review` is incorrect — it's documented policy.
+
+43. **Approval+rejection race resolution: first-COMMIT-wins, loser no-ops.** The trigger handlers for `kind=approval` and `kind=rejection` both call `transitionRun(awaiting_approval → running | rejected)` inside the comment-insert tx (per Sub-phase 2.6's transactional event emission pattern). The state machine's `isValidTransition` (from A-4) only allows `awaiting_approval → running` OR `awaiting_approval → rejected`, and only from that one source state. The loser's `transitionRun` throws `INVALID_RUN_TRANSITION { from: 'running'|'rejected', to: 'rejected'|'running' }`, the handler catches + logs + returns 200 to the comment-create call (the comment was still created — it's a comment after the fact). Test (`runner.approval-race.test.ts`): seeded race produces exactly one terminal state.
+
+44. **Cancel-via-comment IS in scope; signal source is `kind=cancel` comment on the parent.** Lock this decision now (resolves known-unknown #4 from the readiness handoff). The runner's cancel check (before each tool dispatch + after each `tokens` event) reads the comment thread for the parent doc and looks for a `kind=cancel` comment with `created_at > run.started_at`. On cancel: transition `failed` with `error_reason='cancel_via_comment'`, abort the provider stream, post a final `kind=comment` from the agent ("Cancelled by user.") referencing the cancel comment's id. The HTTP DELETE `/runs/:id` route (Sub-phase D) emits a kind=cancel comment via the same path (so the runner has ONE check path, not two). Test (`runner.cancel-via-comment.test.ts`): mid-stream cancel comment causes the next cancel check to abort within ~1s.
+
+45. **Tipping-edge detection on degraded/recovered emission.** `transitionRun`'s post-terminal hook calls `checkProviderHealth` and compares its return (`degraded | healthy`) against the previous result (cached on the workspace row OR queried from the events table). Only emit `workspace.provider.degraded` when transition is `healthy → degraded`; only emit `workspace.provider.recovered` when transition is `degraded → healthy`. No emission on `degraded → degraded` (continued failure) or `healthy → healthy` (normal). Cache key: `(workspace_id, provider_name)`; storage location: SQLite `workspaces.provider_health` JSON column (added in Task C-5's migration). Test (`provider-health.tipping-edge.test.ts`): 5 consecutive failures emit exactly 1 `degraded` event; 1 completed emits exactly 1 `recovered` event; subsequent failures emit nothing until next recovery.
+
+46. **`workspace.provider.degraded` payload's `provider` field is sourced from the FAILED RUN'S agent.frontmatter.provider at run-start time** — captured into the `agent.run.failed` event payload, then `checkProviderHealth` reads it from that payload window. If the agent's provider changes between runs, the new provider's health is tracked separately. Test (`provider-health.provider-name-source.test.ts`): an agent that flips provider mid-window does NOT mis-attribute failures to the new provider.
+
+47. **SSE event emission is fire-and-forget.** The existing in-memory event bus (Phase 2, `lib/event-bus.ts`) already publishes to subscribers without awaiting them. Sub-phase C does NOT introduce new `await` points on the SSE delivery path. `transitionRun`'s `emitEvent` call is sync (per existing convention). Test (`runner.sse-backpressure.test.ts`): a deliberately slow SSE subscriber (resolves its `onEvent` after 5s) does NOT block `transitionRun` from completing; `transitionRun` returns within the normal timing budget.
+
+### Out of scope (Sub-phase C explicit deferrals)
+
+- **Graceful SIGTERM drain.** v1 does not attempt to finish in-flight runs on shutdown. Reviewer should NOT surface as a finding (per mitigation 41).
+- **Per-workspace outbound concurrency fairness.** v1 enforces global `FOLIO_POLLER_CONCURRENCY`; v1.1 splits per-workspace.
+- **Per-tenant token-bucket rate limiting.** v1 uses hourly caps in `checkRunRateLimits`. v1.1 may move to a sliding-window or token-bucket.
+- **Role-gated approval.** v1: any commenter with `comments:write` can approve. v1.1: agent frontmatter may carry an `approvers: ['email|role']` list.
+- **DNS-rebinding mid-stream.** Re-affirmed from B's deferral list. Cached resolution per fetch is the limit.
+- **Automatic `[[wiki-link]]` server-side expansion in prompts.** v1 keeps the literal wiki-link text in the prompt; the LLM must use tool calls to fetch link targets, going through scope + allow-list gates. Eliminates the server-side exfil vector for v1.
+- **`agent_run` row body-content as a separate encrypted blob.** v1 stores run prompts + tool args in plaintext `documents.frontmatter`. Workspace boundaries protect cross-workspace access (mitigation 23+24); within-workspace exposure is acceptable v1.
+- **Cancel via WebSocket / push notification.** v1 polls the comment thread for `kind=cancel` (per mitigation 44). Latency is ≤1 tool-dispatch interval.
+- **Audit-log of every outbound provider request.** B deferred this; C re-affirms.
+- **HTTP routes for runs (list, get, cancel, retry).** All in Sub-phase D. C's mitigation 44's cancel-via-comment is the only v1-C user-facing cancel.
+- **MCP tools for runs (`list_runs`, `get_run`, `run_agent`, etc.).** All in Sub-phase D.
+
+### Sub-phase C extension — how to use this section
+
+- **Threat-model inheritance.** The 22 Sub-phase B mitigations (above) remain in force across all C code. The runner reading the encrypted `aiKeys` row trusts B mitigations 1–5 already validated the baseUrl, gated the persistence, sanitized error messages. The runner emitting `agent.run.failed` events trusts B mitigations 6, 9 already widened the schema for refusal/pause_turn and fixed falsy-zero token accumulators. Do NOT re-validate inputs B already validated; DO route runner-specific outputs through the B-sanitization helpers.
+- **Controller pre-flight (per Sub-phase B retro Recommendation 1).** Before dispatching any Sub-phase C subagent task, the controller verifies the task's plan-supplied code touches at least the mitigations that bind on that task. Per-task mitigation pointers are added during each C.1/C.2/C.3 planning session.
+- **`/code-review` invocation contract.** Each round on Sub-phase C MUST receive: "Verify code against the combined threat model in the plan (sections: `## Threat model` AND `## Threat model — Sub-phase C extension`). Mitigations 1–22 are inherited from B and remain in force; mitigations 23–47 are new for C. Report which are in place, which are missing, which are out of scope per the deferrals lists."
+- **`/evaluate` retros for each of C.1, C.2, C.3.** Lists mitigations not implemented as plan-correction defects. New attack classes discovered during review trigger mitigation additions to this section (numbered 48+).
+- **Round budget per C.1/C.2/C.3.** 2 medium-effort `/code-review` rounds per sub-sub-phase. Round 3 is a verification pass, not a discovery pass. If round 3 surfaces NEW critical attacks, this section was too shallow — pause and extend rather than fix-and-loop.
+- **Downstream Sub-phase D.** D's HTTP + MCP-parity surface gets a SEPARATE threat-model extension at D-plan-write time. The attack classes are different (DELETE /runs/:id auth, MCP run-tools scope, admin-stats PII).
+
+### Locked decisions (resolves known-unknowns from the readiness handoff)
+
+The threat model resolves 5 of the 8 readiness-handoff known-unknowns by making concrete choices:
+
+1. **Tool-call args parsing**: dispatcher re-runs Zod BEFORE handler dispatch (mitigation 26). Handler never sees malformed args.
+2. **`chain_id` format**: UUIDv4 string (`z.string().uuid()`) — already enforced by `agent_run_schema.ts:71`. The `nextChainId({firedBy})` helper extracts a UUIDv4 from `fired_by` or mints fresh. No hierarchical format. Aggregation is purely by `chain_id` equality + cap counters.
+3. **Token accounting boundaries**: per-run (runner loop after `tokens` events), per-chain (poller claim-time + runner start), per-workspace + per-agent hourly (poller pre-claim). Four checks, three call sites (mitigation 30).
+4. **`kind=cancel` IS the cancel signal**: locked in mitigation 44. DELETE /runs/:id (Sub-phase D) emits a kind=cancel comment via the same path; runner has ONE check.
+5. **`worker_started_at` cleared atomically with terminal status**: mitigation 40 + 41. One UPDATE statement covers both transitions; orphan recovery uses the status predicate as the second gate.
+
+The remaining 3 known-unknowns are resolved by mitigations elsewhere:
+
+6. **MCP dispatcher tx scope**: tx-first signature (mitigation 35). Runner passes tx; dispatcher reuses it.
+7. **SSE consumer backpressure**: fire-and-forget per Phase 2's existing event bus contract (mitigation 47). No new await points in C.
+8. **Token budget overflow handling**: cancel provider stream via existing AbortController, persist `error_reason='budget_exceeded'`, post partial-result comment (mitigation 30, per-run branch).
+
+---
+
 ## Testing-workflow contract (do not violate)
 
 This branch is executed under `netdust-core:ntdst-execute-with-tests`, which wraps `superpowers:subagent-driven-development` with mandatory testing gates. The harness expects:
