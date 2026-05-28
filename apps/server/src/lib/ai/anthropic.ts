@@ -1,4 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
+import { coerceTokenCount } from './coerce-token-count.ts';
 import type { AIProvider, ProviderEvent } from './provider.ts';
 import { sanitizeProviderError } from './sanitize-error.ts';
 
@@ -8,8 +9,6 @@ function client(apiKey: string, baseUrl?: string): Anthropic {
 
 export const anthropic: AIProvider = {
   async *stream({ system, messages, tools, maxTokens, apiKey, model, baseUrl }) {
-    const c = client(apiKey, baseUrl);
-
     const anthropicMessages = messages.map((m) => {
       if (m.role === 'tool') {
         return {
@@ -36,17 +35,30 @@ export const anthropic: AIProvider = {
       return { role: m.role, content: m.content };
     });
 
-    const stream = c.messages.stream({
-      model,
-      system,
-      max_tokens: maxTokens,
-      tools: tools.map((t) => ({
-        name: t.name,
-        description: t.description,
-        input_schema: t.input_schema as { type: 'object'; [k: string]: unknown },
-      })),
-      messages: anthropicMessages as Anthropic.MessageParam[],
-    });
+    // Round 7 #6 — widen the try/catch to cover SDK construction AND the
+    // synchronous .stream() call. Pre-round-7 the try wrapped only the
+    // for-await loop; `new Anthropic({apiKey, baseURL})` and the
+    // `c.messages.stream({...})` invocation can both throw synchronously
+    // (invalid baseURL parse, missing required init args), and those
+    // throws propagated raw to the runner. Now they're sanitized too.
+    let c: Anthropic;
+    let stream: ReturnType<Anthropic['messages']['stream']>;
+    try {
+      c = client(apiKey, baseUrl);
+      stream = c.messages.stream({
+        model,
+        system,
+        max_tokens: maxTokens,
+        tools: tools.map((t) => ({
+          name: t.name,
+          description: t.description,
+          input_schema: t.input_schema as { type: 'object'; [k: string]: unknown },
+        })),
+        messages: anthropicMessages as Anthropic.MessageParam[],
+      });
+    } catch (err) {
+      throw new Error(sanitizeProviderError(err, 'Anthropic'));
+    }
 
     let inTokens = 0;
     let outTokens = 0;
@@ -58,6 +70,15 @@ export const anthropic: AIProvider = {
     // synchronous .stream() call). Pre-fix the raw e.message propagated to
     // the runner — embedding partial keys ('Incorrect API key provided:
     // sk-real-…') and proxy/host details. Mitigation 5 whitelist.
+    //
+    // Round 7 #8 — finally block aborts the upstream SDK stream when the
+    // consumer breaks out of the for-await early (timeout, runner shutdown).
+    // Without this the SDK keeps the underlying fetch alive until GC, which
+    // costs us tokens (provider still streaming) AND leaks the connection.
+    // MessageStream exposes both .abort() and .controller.abort(); the
+    // controller form is more defensive (works on partially-initialized
+    // streams). Wrap in try/{} so a SDK-version mismatch (no .controller)
+    // doesn't double-throw over the original break/throw reason.
     try {
       for await (const ev of stream as AsyncIterable<Record<string, unknown>>) {
         const t = ev.type as string;
@@ -101,10 +122,14 @@ export const anthropic: AIProvider = {
             yield { type: 'tool_call', id: tc.id, name: tc.name, arguments: args } as ProviderEvent;
           }
         } else if (t === 'message_delta') {
-          const usage = ev.usage as { input_tokens?: number; output_tokens?: number } | undefined;
+          const usage = ev.usage as { input_tokens?: unknown; output_tokens?: unknown } | undefined;
           const delta = ev.delta as { stop_reason?: string } | undefined;
-          if (usage?.input_tokens !== undefined) inTokens = usage.input_tokens;
-          if (usage?.output_tokens !== undefined) outTokens = usage.output_tokens;
+          // Round 7 #9 — coerceTokenCount clamps negative / fractional /
+          // non-numeric upstream values. Pre-round-7 the round-4 `!== undefined`
+          // guard accepted any value as-is; a sloppy proxy emitting
+          // input_tokens=-1 propagated into the agent_run REAL column.
+          inTokens = coerceTokenCount(usage?.input_tokens, inTokens);
+          outTokens = coerceTokenCount(usage?.output_tokens, outTokens);
           if (delta?.stop_reason === 'tool_use') stopReason = 'tool_use';
           else if (delta?.stop_reason === 'max_tokens') stopReason = 'max_tokens';
           else if (delta?.stop_reason === 'refusal') stopReason = 'refusal';
@@ -114,6 +139,17 @@ export const anthropic: AIProvider = {
       }
     } catch (err) {
       throw new Error(sanitizeProviderError(err, 'Anthropic'));
+    } finally {
+      // Round 7 #8 — abort the SDK stream on consumer break / mid-iter
+      // throw so the underlying fetch closes promptly. Defensive try/{}
+      // because the controller may be undefined on partially-initialized
+      // streams, and we must NEVER throw from finally (would mask the
+      // original reason for exiting the loop).
+      try {
+        (stream as unknown as { controller?: AbortController }).controller?.abort();
+      } catch {
+        // Intentionally swallow — see comment above.
+      }
     }
 
     yield { type: 'tokens', tokens_in: inTokens, tokens_out: outTokens };

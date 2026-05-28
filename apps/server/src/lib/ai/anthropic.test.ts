@@ -236,6 +236,80 @@ describe('anthropic provider', () => {
     expect(msg).toMatch(/Anthropic/);
   });
 
+  // Round 7 #9 — coerceTokenCount applied to message_delta usage. Pre-round-7
+  // the `!== undefined` guard accepted any value as-is; a sloppy proxy
+  // emitting input_tokens=-1 propagated into the agent_run REAL column.
+  test('stream() coerces negative input_tokens to 0 (round 7 #9)', async () => {
+    mockStream.mockImplementationOnce((async function* () {
+      yield {
+        type: 'message_delta',
+        usage: { input_tokens: -1, output_tokens: 5 },
+        delta: { stop_reason: 'end_turn' },
+      };
+      yield { type: 'message_stop' };
+    }) as never);
+
+    const events: unknown[] = [];
+    for await (const ev of anthropic.stream({
+      system: 'sys',
+      messages: [{ role: 'user', content: 'hi' }],
+      tools: [],
+      maxTokens: 100,
+      apiKey: 'sk-test',
+      model: 'claude-haiku-4-5',
+    })) {
+      events.push(ev);
+    }
+    expect(events).toContainEqual({ type: 'tokens', tokens_in: 0, tokens_out: 5 });
+  });
+
+  // Round 7 #6 — round 5 #4's try/catch wrapped only the for-await. The
+  // `new Anthropic(...)` constructor + the synchronous `c.messages.stream(...)`
+  // call can also throw (invalid baseURL, init mismatch); pre-round-7 those
+  // throws propagated raw. Widened try now sanitizes those too.
+  test('stream() sanitizes a synchronous throw from messages.stream() (round 7 #6)', async () => {
+    // Make messages.stream() throw synchronously by replacing the SDK class
+    // for this test only. Use mock.module is process-global, but mockStream
+    // is per-test — switching to a thrower works.
+    const original = mockStream.getMockImplementation();
+    const throwerStream = mock(() => {
+      throw new Error('Connection failed: target=sk-real-12345 host=proxy.example.com:9999');
+    });
+    // Replace the stream() factory on the Anthropic class — only this test
+    // re-throws. Direct invocation via mockImplementationOnce mimics the
+    // SDK contract (messages.stream is sync; returns an async iterator).
+    mockStream.mockImplementationOnce(throwerStream as never);
+
+    let thrown: unknown;
+    try {
+      const iter = anthropic.stream({
+        system: 'sys',
+        messages: [{ role: 'user', content: 'hi' }],
+        tools: [],
+        maxTokens: 100,
+        apiKey: 'sk-real-12345',
+        model: 'claude-haiku-4-5',
+      });
+      for await (const _ of iter) {
+        // drain
+      }
+    } catch (e) {
+      thrown = e;
+    } finally {
+      // Restore the default implementation for subsequent tests.
+      if (original) mockStream.mockImplementation(original);
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    const msg = (thrown as Error).message;
+    // Contract: never leak the partial key, never leak the proxy host.
+    // Status-less errors collapse to the generic network-error message
+    // (matching ollama / openai network-error tests). What matters is the
+    // raw SDK message body must NOT propagate.
+    expect(msg).not.toMatch(/sk-real/);
+    expect(msg).not.toMatch(/proxy\.example/);
+    expect(msg).not.toMatch(/Connection failed/);
+  });
+
   test('stream() yields done event even when tool_use input_json fails to JSON.parse', async () => {
     mockStream.mockImplementationOnce((async function* () {
       yield {

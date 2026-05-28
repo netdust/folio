@@ -1,3 +1,4 @@
+import { coerceTokenCount } from './coerce-token-count.ts';
 import type { AIProvider, ProviderEvent } from './provider.ts';
 import { sanitizeProviderError } from './sanitize-error.ts';
 
@@ -77,34 +78,31 @@ function* handleOllamaChunk(
   }
 }
 
+// Round 7 #9 — `coerceTokenCount` is now in `lib/ai/coerce-token-count.ts`
+// shared with the anthropic + openai providers. Round 7 also tightened the
+// string-accepting regex from /^-?\d+(\.\d+)?$/ (round 5's permissive
+// "stringified ints from sloppy proxies" intent) to /^\d+$/ (digits-only,
+// non-negative). The number-typed path keeps the sign-clamp + truncate
+// since `number` values still need defense against NaN/negative/fractional.
+
 /**
- * Type-guard + sign-clamp + truncate. Returns the new value if input is a
- * usable count, otherwise returns `existing` (preserving the running total).
+ * Round 7 #5 — Ollama silently dropped the apiKey arg pre-round-7. The fetch
+ * sent `content-type` only. Self-hosted users with TLS-fronted Ollama
+ * (reverse proxy requiring Authorization) had their key stored but never
+ * sent — the upstream rejected every request.
  *
- * Accepts:
- *   - `number` values that pass `Number.isFinite`
- *   - `string` values that match `/^-?\d+(\.\d+)?$/` (round-5's sloppy-proxy
- *     intent; the regex rejects ''/'abc'/'null'/'false'/'true')
- *
- * Rejects (returns `existing`):
- *   - `null`, `undefined`, `''`, `false`, `[]`, objects, NaN
- *   - strings that don't match the digits pattern
- *
- * Output is clamped to >=0 and truncated to integer (rationale in caller).
+ * Send `Authorization: Bearer <apiKey>` when apiKey is non-empty. The
+ * canonical localhost installation doesn't require it; passing an empty
+ * key keeps headers identical to pre-round-7 (no Authorization line).
  */
-function coerceTokenCount(raw: unknown, existing: number): number {
-  let n: number | null = null;
-  if (typeof raw === 'number') {
-    n = raw;
-  } else if (typeof raw === 'string' && /^-?\d+(\.\d+)?$/.test(raw)) {
-    n = Number(raw);
-  }
-  if (n === null || !Number.isFinite(n)) return existing;
-  return Math.max(0, Math.trunc(n));
+function buildOllamaHeaders(apiKey: string | undefined): Record<string, string> {
+  const h: Record<string, string> = { 'content-type': 'application/json' };
+  if (apiKey && apiKey.length > 0) h.Authorization = `Bearer ${apiKey}`;
+  return h;
 }
 
 export const ollama: AIProvider = {
-  async *stream({ system, messages, tools, maxTokens, model, baseUrl }) {
+  async *stream({ system, messages, tools, maxTokens, apiKey, model, baseUrl }) {
     const base = baseUrl ?? DEFAULT_BASE;
     const body = {
       model,
@@ -128,7 +126,7 @@ export const ollama: AIProvider = {
 
     const resp = await fetch(`${base}/api/chat`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: buildOllamaHeaders(apiKey),
       body: JSON.stringify(body),
     });
     // B round 4 fix #2 — sanitize the stream-startup error throw. Pre-fix
@@ -150,47 +148,69 @@ export const ollama: AIProvider = {
     let buffer = '';
     const state: ParserState = { tokensIn: 0, tokensOut: 0, stopReason: 'stop' };
 
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() ?? '';
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        let chunk: Record<string, unknown>;
+    // Round 7 #8 — try/finally ensures the reader is cancelled + released
+    // when the consumer breaks out of the for-await early (timeout, runner
+    // shutdown, exception). Bun's GC does NOT promptly release a locked
+    // ReadableStream — pre-round-7 the underlying socket leaked until the
+    // process eventually finalized the reader, which under high agent-run
+    // concurrency exhausted FDs. Cancel first (signals upstream we're
+    // done), then releaseLock so future getReader() calls succeed.
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          let chunk: Record<string, unknown>;
+          try {
+            chunk = JSON.parse(line) as Record<string, unknown>;
+          } catch (err) {
+            // Skip malformed NDJSON lines (proxy keep-alives, mid-stream HTML
+            // error pages, network blips). Don't crash a stream that has valid
+            // lines around the garbage. Warn so operators have a grep target
+            // when an agent run goes sideways.
+            console.warn(
+              '[ai/ollama] dropped malformed NDJSON line in stream:',
+              err instanceof Error ? err.message : err,
+            );
+            continue;
+          }
+          yield* handleOllamaChunk(chunk, state);
+        }
+      }
+
+      // Flush any trailing record that wasn't terminated with \n (e.g. a proxy
+      // dropped the final newline). Without this the real done_reason + token
+      // counts get silently discarded and we emit a fake-success done.
+      if (buffer.trim().length > 0) {
         try {
-          chunk = JSON.parse(line) as Record<string, unknown>;
+          const chunk = JSON.parse(buffer) as Record<string, unknown>;
+          yield* handleOllamaChunk(chunk, state);
         } catch (err) {
-          // Skip malformed NDJSON lines (proxy keep-alives, mid-stream HTML
-          // error pages, network blips). Don't crash a stream that has valid
-          // lines around the garbage. Warn so operators have a grep target
-          // when an agent run goes sideways.
+          // Drop silently in terms of stream output; matches in-loop behavior.
+          // The trailing tokens/done below still fire, but we may have missed
+          // a real done flag. Warn so operators have a grep target.
           console.warn(
-            '[ai/ollama] dropped malformed NDJSON line in stream:',
+            '[ai/ollama] dropped malformed trailing NDJSON record:',
             err instanceof Error ? err.message : err,
           );
-          continue;
         }
-        yield* handleOllamaChunk(chunk, state);
       }
-    }
-
-    // Flush any trailing record that wasn't terminated with \n (e.g. a proxy
-    // dropped the final newline). Without this the real done_reason + token
-    // counts get silently discarded and we emit a fake-success done.
-    if (buffer.trim().length > 0) {
+    } finally {
+      // Defensive try/{} on each — must NEVER throw from finally, which
+      // would mask the original reason for exiting the loop.
       try {
-        const chunk = JSON.parse(buffer) as Record<string, unknown>;
-        yield* handleOllamaChunk(chunk, state);
-      } catch (err) {
-        // Drop silently in terms of stream output; matches in-loop behavior.
-        // The trailing tokens/done below still fire, but we may have missed
-        // a real done flag. Warn so operators have a grep target.
-        console.warn(
-          '[ai/ollama] dropped malformed trailing NDJSON record:',
-          err instanceof Error ? err.message : err,
-        );
+        await reader.cancel();
+      } catch {
+        // Reader already errored / cancelled. Swallow.
+      }
+      try {
+        reader.releaseLock();
+      } catch {
+        // Lock already released (cancel may release implicitly). Swallow.
       }
     }
 
@@ -198,12 +218,12 @@ export const ollama: AIProvider = {
     yield { type: 'done', reason: state.stopReason };
   },
 
-  async testKey({ model, baseUrl }) {
+  async testKey({ apiKey, model, baseUrl }) {
     const base = baseUrl ?? DEFAULT_BASE;
     try {
       const resp = await fetch(`${base}/api/show`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: buildOllamaHeaders(apiKey),
         body: JSON.stringify({ name: model }),
       });
       if (resp.ok) return { ok: true };

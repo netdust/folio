@@ -1,4 +1,5 @@
 import OpenAI from 'openai';
+import { coerceTokenCount } from './coerce-token-count.ts';
 import type { AIProvider, Message, ProviderEvent } from './provider.ts';
 import { sanitizeProviderError } from './sanitize-error.ts';
 
@@ -52,14 +53,19 @@ export async function* streamOpenAICompatible({
   baseUrl,
   providerName,
 }: Parameters<AIProvider['stream']>[0] & { providerName: string }): AsyncGenerator<ProviderEvent> {
-  const c = client(apiKey, baseUrl);
   // B round 5 #5 — sanitize stream-startup throws. OpenAI's
   // `chat.completions.create({stream: true})` returns a Promise that resolves
   // to the iterator; auth/network errors fire on this await BEFORE the
   // for-await loop begins. Pre-fix the raw e.message propagated to the
   // runner — embedding partial keys + proxy host details. Mitigation 5.
+  //
+  // Round 7 #7 — widen the try to also cover `new OpenAI({apiKey,baseURL})`.
+  // The SDK constructor parses baseURL and can throw synchronously on a
+  // malformed value; that throw propagated raw pre-round-7.
+  let c: OpenAI;
   let stream;
   try {
+    c = client(apiKey, baseUrl);
     stream = await c.chat.completions.create({
       model,
       max_tokens: maxTokens,
@@ -87,6 +93,12 @@ export async function* streamOpenAICompatible({
 
   // B round 5 #5 — also wrap the iteration. Network failures mid-stream
   // arrive as throws from the for-await; same sanitize contract.
+  //
+  // Round 7 #8 — finally aborts the SDK stream on consumer break / mid-iter
+  // throw. The OpenAI Stream exposes a `.controller: AbortController`;
+  // calling .abort() closes the underlying fetch promptly. Defensive
+  // try/{} because we must NEVER throw from finally (would mask the
+  // original reason for exiting the loop).
   try {
     for await (const chunk of stream as AsyncIterable<Record<string, unknown>>) {
       const choices = chunk.choices as Array<Record<string, unknown>> | undefined;
@@ -122,17 +134,39 @@ export async function* streamOpenAICompatible({
         else if (finish === 'content_filter') stopReason = 'refusal';
       }
       const usage = chunk.usage as
-        | { prompt_tokens?: number; completion_tokens?: number }
+        | { prompt_tokens?: unknown; completion_tokens?: unknown }
         | null
         | undefined;
-      if (usage?.prompt_tokens !== undefined) tokensIn = usage.prompt_tokens;
-      if (usage?.completion_tokens !== undefined) tokensOut = usage.completion_tokens;
+      // Round 7 #9 — coerceTokenCount clamps negative / fractional /
+      // non-numeric upstream values. Pre-round-7 the round-4 `!== undefined`
+      // guard accepted any value as-is; a sloppy OpenAI-compatible proxy
+      // emitting completion_tokens=7.5 propagated into the agent_run REAL
+      // column (IEEE-754 drift on SUM for budget accounting).
+      tokensIn = coerceTokenCount(usage?.prompt_tokens, tokensIn);
+      tokensOut = coerceTokenCount(usage?.completion_tokens, tokensOut);
     }
   } catch (err) {
     throw new Error(sanitizeProviderError(err, providerName));
+  } finally {
+    try {
+      (stream as unknown as { controller?: AbortController }).controller?.abort();
+    } catch {
+      // Intentionally swallow — see comment above the try.
+    }
   }
 
   for (const tc of Object.values(toolCallsByIndex)) {
+    // Round 7 #11 — skip flush entries with empty name. A truncated marker
+    // delta (`{index: 0}` with no follow-up id/name fill-in) leaves an
+    // entry with name=''. Pre-round-7 the runner dispatcher received
+    // `name: ''` and either no-op'd or threw 'unknown tool: '. Drop with
+    // a warn so operators have a grep target.
+    if (!tc.name) {
+      console.warn(
+        '[ai/openai] dropped tool_call with empty name (truncated marker delta)',
+      );
+      continue;
+    }
     let args: Record<string, unknown> = {};
     if (tc.argsBuf) {
       try {

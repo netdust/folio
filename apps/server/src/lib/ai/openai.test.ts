@@ -308,6 +308,74 @@ describe('openai provider', () => {
     expect(msg).toMatch(/OpenAI/);
   });
 
+  // Round 7 #9 — coerceTokenCount applied to chunk.usage. Pre-round-7 the
+  // round-4 `!== undefined` guard accepted any value as-is; a sloppy
+  // OpenAI-compatible proxy emitting completion_tokens=7.5 propagated into
+  // the agent_run REAL column (IEEE-754 drift on SUM for budget accounting).
+  test('stream() coerces fractional prompt_tokens via truncation (round 7 #9)', async () => {
+    mockCreate.mockImplementationOnce((async (opts: { stream?: boolean }) => {
+      if (!opts.stream) return { id: 'cmpl_x' };
+      return (async function* () {
+        yield { choices: [{ delta: { content: 'Hi' } }], usage: null };
+        yield {
+          choices: [{ delta: {}, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 7.5, completion_tokens: 3 },
+        };
+      })();
+    }) as never);
+
+    const events: unknown[] = [];
+    for await (const ev of openai.stream({
+      system: 'sys',
+      messages: [{ role: 'user', content: 'hi' }],
+      tools: [],
+      maxTokens: 100,
+      apiKey: 'sk',
+      model: 'gpt-4o-mini',
+    })) {
+      events.push(ev);
+    }
+    expect(events).toContainEqual({ type: 'tokens', tokens_in: 7, tokens_out: 3 });
+  });
+
+  // Round 7 #7 — round 5 #5's try/catch covered the `await c.chat.create()`
+  // but NOT the `new OpenAI({baseURL})` constructor. A synchronous throw
+  // from the constructor (malformed baseURL) propagated raw pre-round-7.
+  // The widened try now sanitizes those too.
+  test('stream() sanitizes a synchronous throw from chat.completions.create (round 7 #7)', async () => {
+    mockCreate.mockImplementationOnce((() => {
+      // Synchronous throw (not async) — mimics the SDK's pre-stream argument
+      // validation throwing before the Promise is even returned.
+      throw new Error('Bad init: target=sk-real-12345 host=proxy.example.com:9999');
+    }) as never);
+
+    let thrown: unknown;
+    try {
+      const iter = openai.stream({
+        system: 'sys',
+        messages: [{ role: 'user', content: 'hi' }],
+        tools: [],
+        maxTokens: 100,
+        apiKey: 'sk-real-12345',
+        model: 'gpt-4o-mini',
+      });
+      for await (const _ of iter) {
+        // drain
+      }
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    const msg = (thrown as Error).message;
+    // Contract: never leak the partial key, never leak the proxy host.
+    // Status-less errors collapse to the generic network-error message
+    // (matching ollama / anthropic network-error tests). What matters is
+    // the raw SDK message body must NOT propagate.
+    expect(msg).not.toMatch(/sk-real/);
+    expect(msg).not.toMatch(/proxy\.example/);
+    expect(msg).not.toMatch(/Bad init/);
+  });
+
   test('stream() yields done event even when tool_call args fail to JSON.parse', async () => {
     mockCreate.mockImplementationOnce((async (opts: { stream?: boolean }) => {
       if (!opts.stream) return { id: 'cmpl_x' };
