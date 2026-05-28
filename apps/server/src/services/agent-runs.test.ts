@@ -16,6 +16,7 @@ import {
   projects as schemaProjects,
   tables,
   users,
+  workspaces,
   type Document,
   type Project,
   type TableEntity,
@@ -40,6 +41,8 @@ import {
   countPendingPlanning,
   checkRunRateLimits,
   checkChainGuards,
+  checkProviderHealth,
+  getProviderHealth,
 } from './agent-runs.ts';
 
 type TestDB = Awaited<ReturnType<typeof makeTestApp>>['db'];
@@ -1683,4 +1686,502 @@ describe('checkChainGuards', () => {
     }
     expect(planStr).toContain('documents_runs_by_chain_idx');
   }, 60_000);
+});
+
+// ---------- checkProviderHealth ----------
+
+/**
+ * Seed a run's terminal event directly — bypasses transitionRun's
+ * tipping-edge wiring so provider-health tests can build up a fixed event
+ * window without firing the very thing under test. Insert is into both
+ * `events` and the underlying `documents` row (so the JOIN on
+ * `documents.frontmatter.provider` resolves).
+ *
+ * `kind` is one of 'agent.run.completed' | 'agent.run.failed'.
+ * `errorReason` only meaningful for the failed kind.
+ */
+async function seedTerminalRunEvent(
+  db: TestDB,
+  args: {
+    workspace: Workspace;
+    project: Project;
+    runsTable: TableEntity;
+    agent: Document;
+    parent: Document;
+    user: User;
+    provider: AgentRunFrontmatter['provider'];
+    kind: 'agent.run.completed' | 'agent.run.failed';
+    errorReason?: string | null;
+    seq: number;
+    createdAtMs?: number;
+  },
+): Promise<{ runId: string; eventId: string }> {
+  const runId = nanoid();
+  const eventId = nanoid();
+  const now = new Date().toISOString();
+  const status = args.kind === 'agent.run.completed' ? 'completed' : 'failed';
+  const fm: AgentRunFrontmatter = {
+    assignee: `agent:${args.agent.slug}`,
+    status,
+    agent_slug: args.agent.slug,
+    provider: args.provider,
+    model: 'claude-sonnet-4-6',
+    system_prompt: 'x',
+    max_tokens: 1000,
+    tokens_in: 0,
+    tokens_out: 0,
+    trigger_id: null,
+    chain_id: crypto.randomUUID(),
+    fired_by: 'agent.task.assigned',
+    started_at: now,
+    completed_at: now,
+    ...(args.errorReason ? { error_reason: args.errorReason as never } : {}),
+  };
+  await db.insert(documents).values({
+    id: runId,
+    workspaceId: args.workspace.id,
+    projectId: args.project.id,
+    tableId: args.runsTable.id,
+    type: 'agent_run',
+    slug: `${args.agent.slug}-evt-${nanoid(6)}`,
+    title: `${args.agent.slug} run`,
+    status,
+    body: '',
+    frontmatter: fm as unknown as Record<string, unknown>,
+    parentId: args.parent.id,
+    createdBy: args.user.id,
+    updatedBy: args.user.id,
+  });
+  await db.insert(events).values({
+    id: eventId,
+    workspaceId: args.workspace.id,
+    projectId: args.project.id,
+    documentId: runId,
+    kind: args.kind,
+    actor: null,
+    payload: {
+      from: 'running',
+      to: status,
+      error_reason: args.errorReason ?? null,
+    } as unknown as Record<string, unknown>,
+    createdAt: new Date(args.createdAtMs ?? Date.now() - (1_000_000 - args.seq * 1000)),
+    seq: args.seq,
+  });
+  return { runId, eventId };
+}
+
+describe('checkProviderHealth', () => {
+  test('returns healthy with 0 failures when no events exist', async () => {
+    const { db, seed } = await makeTestApp();
+
+    const result = await checkProviderHealth({
+      workspaceId: seed.workspace.id,
+      provider: 'anthropic',
+      threshold: 3,
+    });
+    expect(result.current).toEqual({ status: 'healthy', consecutive_failures: 0 });
+    expect(result.next).toEqual({ status: 'healthy', consecutive_failures: 0 });
+  });
+
+  test('next is degraded after threshold consecutive provider_error failures', async () => {
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+
+    for (let i = 0; i < 3; i++) {
+      await seedTerminalRunEvent(db, {
+        workspace: seed.workspace, project: seed.project, runsTable,
+        agent, parent, user: seed.user,
+        provider: 'anthropic',
+        kind: 'agent.run.failed',
+        errorReason: 'provider_error',
+        seq: 7_000_000 + i,
+      });
+    }
+
+    const result = await checkProviderHealth({
+      workspaceId: seed.workspace.id,
+      provider: 'anthropic',
+      threshold: 3,
+    });
+    expect(result.next.status).toBe('degraded');
+    expect(result.next.consecutive_failures).toBe(3);
+  });
+
+  test('excludes cancelled error_reason from the window', async () => {
+    // Window of 3 non-cancelled events should yield degraded even when
+    // a `cancelled` event happens between the failures (don't count it).
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+
+    // Order (newest last): fail, fail, cancelled, fail
+    // After excluding cancelled, the last 3 are: fail, fail, fail → degraded.
+    await seedTerminalRunEvent(db, {
+      workspace: seed.workspace, project: seed.project, runsTable,
+      agent, parent, user: seed.user,
+      provider: 'anthropic',
+      kind: 'agent.run.failed',
+      errorReason: 'provider_error',
+      seq: 7_100_001,
+    });
+    await seedTerminalRunEvent(db, {
+      workspace: seed.workspace, project: seed.project, runsTable,
+      agent, parent, user: seed.user,
+      provider: 'anthropic',
+      kind: 'agent.run.failed',
+      errorReason: 'provider_error',
+      seq: 7_100_002,
+    });
+    await seedTerminalRunEvent(db, {
+      workspace: seed.workspace, project: seed.project, runsTable,
+      agent, parent, user: seed.user,
+      provider: 'anthropic',
+      kind: 'agent.run.failed',
+      errorReason: 'cancelled',
+      seq: 7_100_003,
+    });
+    await seedTerminalRunEvent(db, {
+      workspace: seed.workspace, project: seed.project, runsTable,
+      agent, parent, user: seed.user,
+      provider: 'anthropic',
+      kind: 'agent.run.failed',
+      errorReason: 'provider_error',
+      seq: 7_100_004,
+    });
+
+    const result = await checkProviderHealth({
+      workspaceId: seed.workspace.id,
+      provider: 'anthropic',
+      threshold: 3,
+    });
+    expect(result.next.status).toBe('degraded');
+  });
+
+  test('next is healthy when the most recent event is a successful completion', async () => {
+    // Mitigation 45 — a single success breaks the streak. Resets to
+    // healthy even if older events in the window were failures.
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+
+    // Order (newest last): fail, fail, fail, completed
+    for (let i = 0; i < 3; i++) {
+      await seedTerminalRunEvent(db, {
+        workspace: seed.workspace, project: seed.project, runsTable,
+        agent, parent, user: seed.user,
+        provider: 'anthropic',
+        kind: 'agent.run.failed',
+        errorReason: 'provider_error',
+        seq: 7_200_001 + i,
+      });
+    }
+    await seedTerminalRunEvent(db, {
+      workspace: seed.workspace, project: seed.project, runsTable,
+      agent, parent, user: seed.user,
+      provider: 'anthropic',
+      kind: 'agent.run.completed',
+      seq: 7_200_004,
+    });
+
+    const result = await checkProviderHealth({
+      workspaceId: seed.workspace.id,
+      provider: 'anthropic',
+      threshold: 3,
+    });
+    expect(result.next.status).toBe('healthy');
+  });
+});
+
+// ---------- getProviderHealth ----------
+
+describe('getProviderHealth', () => {
+  test('returns all 4 providers with sensible defaults when no state is persisted', async () => {
+    const { db, seed } = await makeTestApp();
+
+    const result = await getProviderHealth({ workspaceId: seed.workspace.id });
+    expect(result).toEqual({
+      anthropic: { status: 'healthy', consecutive_failures: 0 },
+      openai:    { status: 'healthy', consecutive_failures: 0 },
+      openrouter:{ status: 'healthy', consecutive_failures: 0 },
+      ollama:    { status: 'healthy', consecutive_failures: 0 },
+    });
+  });
+
+  test('returns persisted state for a provider that has been written to', async () => {
+    const { db, seed } = await makeTestApp();
+
+    // Persist anthropic at degraded; openai stays at the default.
+    await db.update(workspaces).set({
+      providerHealth: {
+        anthropic: { status: 'degraded', consecutive_failures: 5 },
+      },
+    }).where(eq(workspaces.id, seed.workspace.id));
+
+    const result = await getProviderHealth({ workspaceId: seed.workspace.id });
+    expect(result.anthropic).toEqual({ status: 'degraded', consecutive_failures: 5 });
+    expect(result.openai).toEqual({ status: 'healthy', consecutive_failures: 0 });
+  });
+});
+
+// ---------- maybeEmitProviderHealthEdge (tested through transitionRun) ----------
+
+describe('transitionRun → maybeEmitProviderHealthEdge', () => {
+  test('emits workspace.provider.degraded exactly once on tipping edge', async () => {
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+
+    // Pre-seed 2 prior provider_error failures (just under threshold=3).
+    for (let i = 0; i < 2; i++) {
+      await seedTerminalRunEvent(db, {
+        workspace: seed.workspace, project: seed.project, runsTable,
+        agent, parent, user: seed.user,
+        provider: 'anthropic',
+        kind: 'agent.run.failed',
+        errorReason: 'provider_error',
+        seq: 8_000_001 + i,
+      });
+    }
+
+    // Now transition a fresh run to failed/provider_error — the 3rd failure.
+    // This should trip the edge (healthy → degraded) and emit exactly once.
+    const created = await createRun({
+      workspace: seed.workspace,
+      project: seed.project,
+      runsTable,
+      agent,
+      actor: seed.user,
+      input: {
+        parentDocumentId: parent.id,
+        firedBy: 'agent.task.assigned',
+        chainId: crypto.randomUUID(),
+        triggerId: null,
+      },
+    });
+    await transitionRun(created.document.id, { newStatus: 'running', actor: seed.user.id });
+    await transitionRun(created.document.id, {
+      newStatus: 'failed',
+      actor: seed.user.id,
+      errorReason: 'provider_error',
+    });
+
+    const degradedEvents = await db.query.events.findMany({
+      where: eq(events.kind, 'workspace.provider.degraded'),
+    });
+    expect(degradedEvents.length).toBe(1);
+    expect((degradedEvents[0]!.payload as { provider: string }).provider).toBe('anthropic');
+
+    // Persisted state reflects degraded.
+    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, seed.workspace.id) });
+    expect(ws!.providerHealth.anthropic?.status).toBe('degraded');
+  });
+
+  test('a 4th consecutive failure does NOT emit a second degraded event (continued state)', async () => {
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+
+    // Pre-seed 3 failures + persisted degraded state.
+    for (let i = 0; i < 3; i++) {
+      await seedTerminalRunEvent(db, {
+        workspace: seed.workspace, project: seed.project, runsTable,
+        agent, parent, user: seed.user,
+        provider: 'anthropic',
+        kind: 'agent.run.failed',
+        errorReason: 'provider_error',
+        seq: 8_100_001 + i,
+      });
+    }
+    await db.update(workspaces).set({
+      providerHealth: { anthropic: { status: 'degraded', consecutive_failures: 3 } },
+    }).where(eq(workspaces.id, seed.workspace.id));
+
+    // 4th failure — still degraded, no new edge to emit.
+    const created = await createRun({
+      workspace: seed.workspace,
+      project: seed.project,
+      runsTable,
+      agent,
+      actor: seed.user,
+      input: {
+        parentDocumentId: parent.id,
+        firedBy: 'agent.task.assigned',
+        chainId: crypto.randomUUID(),
+        triggerId: null,
+      },
+    });
+    await transitionRun(created.document.id, { newStatus: 'running', actor: seed.user.id });
+    await transitionRun(created.document.id, {
+      newStatus: 'failed',
+      actor: seed.user.id,
+      errorReason: 'provider_error',
+    });
+
+    const degradedEvents = await db.query.events.findMany({
+      where: eq(events.kind, 'workspace.provider.degraded'),
+    });
+    expect(degradedEvents.length).toBe(0);
+  });
+
+  test('emits workspace.provider.recovered exactly once on recovery edge', async () => {
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+
+    // Pre-seed degraded persisted state + 3 prior failures.
+    for (let i = 0; i < 3; i++) {
+      await seedTerminalRunEvent(db, {
+        workspace: seed.workspace, project: seed.project, runsTable,
+        agent, parent, user: seed.user,
+        provider: 'anthropic',
+        kind: 'agent.run.failed',
+        errorReason: 'provider_error',
+        seq: 8_200_001 + i,
+      });
+    }
+    await db.update(workspaces).set({
+      providerHealth: { anthropic: { status: 'degraded', consecutive_failures: 3 } },
+    }).where(eq(workspaces.id, seed.workspace.id));
+
+    // A successful completion — degraded → healthy.
+    const created = await createRun({
+      workspace: seed.workspace,
+      project: seed.project,
+      runsTable,
+      agent,
+      actor: seed.user,
+      input: {
+        parentDocumentId: parent.id,
+        firedBy: 'agent.task.assigned',
+        chainId: crypto.randomUUID(),
+        triggerId: null,
+      },
+    });
+    await transitionRun(created.document.id, { newStatus: 'running', actor: seed.user.id });
+    await transitionRun(created.document.id, { newStatus: 'completed', actor: seed.user.id });
+
+    const recoveredEvents = await db.query.events.findMany({
+      where: eq(events.kind, 'workspace.provider.recovered'),
+    });
+    expect(recoveredEvents.length).toBe(1);
+    expect((recoveredEvents[0]!.payload as { provider: string }).provider).toBe('anthropic');
+
+    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, seed.workspace.id) });
+    expect(ws!.providerHealth.anthropic?.status).toBe('healthy');
+  });
+
+  test('uses provider from run frontmatter, not current agent state (mitigation 46)', async () => {
+    // The agent's `provider` could be edited mid-window — the run snapshots
+    // its provider at create time. The emitted edge event MUST carry the
+    // run's recorded provider, not the agent's current value.
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+
+    // 2 prior failures on anthropic (the run's recorded provider).
+    for (let i = 0; i < 2; i++) {
+      await seedTerminalRunEvent(db, {
+        workspace: seed.workspace, project: seed.project, runsTable,
+        agent, parent, user: seed.user,
+        provider: 'anthropic',
+        kind: 'agent.run.failed',
+        errorReason: 'provider_error',
+        seq: 8_300_001 + i,
+      });
+    }
+
+    // Create a run while the agent IS anthropic (snapshots provider into fm).
+    const created = await createRun({
+      workspace: seed.workspace,
+      project: seed.project,
+      runsTable,
+      agent,
+      actor: seed.user,
+      input: {
+        parentDocumentId: parent.id,
+        firedBy: 'agent.task.assigned',
+        chainId: crypto.randomUUID(),
+        triggerId: null,
+      },
+    });
+
+    // Now FLIP the agent's frontmatter.provider to openai mid-window — as
+    // if an operator edited it. The run's recorded provider stays anthropic.
+    await db.update(documents).set({
+      frontmatter: sql`json_set(${documents.frontmatter}, '$.provider', 'openai')`,
+    }).where(eq(documents.id, agent.id));
+
+    await transitionRun(created.document.id, { newStatus: 'running', actor: seed.user.id });
+    await transitionRun(created.document.id, {
+      newStatus: 'failed',
+      actor: seed.user.id,
+      errorReason: 'provider_error',
+    });
+
+    const degradedEvents = await db.query.events.findMany({
+      where: eq(events.kind, 'workspace.provider.degraded'),
+    });
+    expect(degradedEvents.length).toBe(1);
+    // Mitigation 46 — recorded provider, not current agent state.
+    expect((degradedEvents[0]!.payload as { provider: string }).provider).toBe('anthropic');
+  });
+
+  test('keeps SSE delivery fire-and-forget — slow subscriber does not block transition (mitigation 47)', async () => {
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+
+    // Register a subscriber whose async handler returns a promise that
+    // never resolves. The bus calls the handler synchronously + discards
+    // the return value (event-bus.ts:65) — even if a subscriber kicks off
+    // long async work, the publisher does NOT await it.
+    const { eventBus } = await import('../lib/event-bus.ts');
+    const unsubscribe = eventBus.subscribe(seed.workspace.id, undefined, () => {
+      // Async handler that never resolves — proxy for a slow SSE writer.
+      return new Promise(() => { /* never resolves */ }) as unknown as void;
+    });
+
+    const created = await createRun({
+      workspace: seed.workspace,
+      project: seed.project,
+      runsTable,
+      agent,
+      actor: seed.user,
+      input: {
+        parentDocumentId: parent.id,
+        firedBy: 'agent.task.assigned',
+        chainId: crypto.randomUUID(),
+        triggerId: null,
+      },
+    });
+    await transitionRun(created.document.id, { newStatus: 'running', actor: seed.user.id });
+
+    const startMs = performance.now();
+    await transitionRun(created.document.id, { newStatus: 'completed', actor: seed.user.id });
+    const elapsedMs = performance.now() - startMs;
+
+    unsubscribe();
+
+    // Must complete fast — the never-resolving subscriber is fire-and-
+    // forgotten. 200ms gives plenty of headroom for SQLite + JSON
+    // serialization without blessing a regression.
+    expect(elapsedMs).toBeLessThan(200);
+  });
 });

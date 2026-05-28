@@ -78,6 +78,15 @@ export const workspaces = sqliteTable('workspaces', {
   updatedAt: integer('updated_at', { mode: 'timestamp_ms' })
     .notNull()
     .default(sql`(unixepoch() * 1000)`),
+  // Phase 3 (Task C-5) — per-workspace AI provider health, durable so
+  // tipping-edge detection survives restarts. Shape: `{ [provider]: {
+  // status, consecutive_failures } }`. Missing keys default to
+  // { healthy, 0 } at read time. Migration 0013 adds the column with
+  // a string-literal '{}' default so existing workspaces backfill safely.
+  providerHealth: text('provider_health', { mode: 'json' })
+    .$type<Record<string, { status: 'healthy' | 'degraded'; consecutive_failures: number }>>()
+    .notNull()
+    .default({}),
 });
 
 export const memberships = sqliteTable(

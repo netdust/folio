@@ -1,0 +1,21 @@
+-- Phase 3 (Task C-5): per-workspace AI provider health state.
+--
+-- Mitigation 45 — tipping-edge detection. The runner emits exactly one
+-- `workspace.provider.degraded` event when a provider transitions from
+-- healthy → degraded, and exactly one `workspace.provider.recovered` on
+-- the reverse edge. Continued state emits nothing. The persisted state
+-- lives here so the edge detection survives process restarts and the
+-- "exactly one" guarantee is not just an in-memory hope.
+--
+-- Shape: `{ [provider: 'anthropic'|'openai'|'openrouter'|'ollama']: {
+--   status: 'healthy'|'degraded',
+--   consecutive_failures: number
+-- } }`
+-- Missing keys default to `{ healthy, 0 }` at read time.
+--
+-- Stored as TEXT (SQLite has no JSON type — text + json_set/json_extract
+-- is the standard pattern across this codebase, see documents.frontmatter
+-- and views.filters). Drizzle's `text(... {mode: 'json'})` round-trips
+-- parse/stringify automatically.
+
+ALTER TABLE workspaces ADD COLUMN provider_health TEXT NOT NULL DEFAULT '{}';

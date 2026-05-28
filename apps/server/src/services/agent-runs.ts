@@ -22,6 +22,7 @@ import { nanoid } from 'nanoid';
 import { db, type DB } from '../db/client.ts';
 import {
   documents,
+  workspaces,
   type Document,
   type Project,
   type TableEntity,
@@ -296,6 +297,22 @@ export async function transitionRun(
         error_reason: errorReason ?? null,
       },
     });
+
+    // Mitigation 45 — tipping-edge detection. Runs ONLY on terminal
+    // transitions because the algorithm reads `agent.run.completed` /
+    // `agent.run.failed` events that only emit on terminal transitions
+    // (mid-flight running/awaiting_approval aren't degradation signals).
+    // Provider source: the run row's snapshotted frontmatter.provider
+    // (mitigation 46) — not the agent doc's current provider.
+    if (isTerminal) {
+      const provider = (row.frontmatter as AgentRunFrontmatter).provider;
+      await maybeEmitProviderHealthEdge(tx, {
+        workspaceId: row.workspaceId,
+        projectId: row.projectId,
+        provider,
+        actor: args.actor,
+      });
+    }
   });
 
   const updated = await db.query.documents.findFirst({
@@ -850,4 +867,208 @@ export async function checkChainGuards(
   }
 
   return { ok: true, reason: null };
+}
+
+// ----- provider health (Task C-5) -----
+
+export type ProviderName = 'anthropic' | 'openai' | 'openrouter' | 'ollama';
+const ALL_PROVIDERS: ProviderName[] = ['anthropic', 'openai', 'openrouter', 'ollama'];
+
+export interface ProviderHealthState {
+  status: 'healthy' | 'degraded';
+  consecutive_failures: number;
+}
+
+/**
+ * Default threshold for degradation. Configurable per call via the
+ * `threshold` arg (the poller / runner read `FOLIO_PROVIDER_DEGRADE_THRESHOLD`
+ * at their call site). 3 is the spec default — high enough to ride out a
+ * single API hiccup, low enough to alert on a real outage within ~3 runs.
+ */
+const DEFAULT_DEGRADE_THRESHOLD = 3;
+
+/**
+ * Walks the workspace's persisted `provider_health` and returns the current
+ * state for one provider. Missing keys default to `{healthy, 0}` — a
+ * never-seen provider is healthy.
+ */
+async function getPersistedProviderHealth(
+  args: { workspaceId: string; provider: ProviderName },
+  tx: DBOrTx = db,
+): Promise<ProviderHealthState> {
+  const ws = await tx.query.workspaces.findFirst({
+    where: eq(workspaces.id, args.workspaceId),
+  });
+  const state = ws?.providerHealth?.[args.provider];
+  return state ?? { status: 'healthy', consecutive_failures: 0 };
+}
+
+/**
+ * Compares persisted state against derived state (from the most recent N
+ * terminal events) and returns both. Returns `{current, next}`. Mitigation 45
+ * — pure read; no side effects, no edge emission. The
+ * `maybeEmitProviderHealthEdge` wrapper is what makes the tipping-edge call.
+ *
+ * Algorithm (per plan §C-5 acceptance):
+ *   1. Fetch the last `threshold` non-cancelled terminal events for the
+ *      (workspace, provider) joined via documents.frontmatter.provider.
+ *   2. If fewer than `threshold` events available → next is healthy
+ *      (insufficient signal).
+ *   3. If all `threshold` are `agent.run.failed` with
+ *      `error_reason='provider_error'` → next is degraded with that count.
+ *   4. Else → walk the result backward to count trailing failures
+ *      (newest-first); next.status follows from whether the most-recent
+ *      event broke the streak.
+ */
+export async function checkProviderHealth(
+  args: { workspaceId: string; provider: ProviderName; threshold?: number },
+  tx: DBOrTx = db,
+): Promise<{ current: ProviderHealthState; next: ProviderHealthState }> {
+  const threshold = args.threshold ?? DEFAULT_DEGRADE_THRESHOLD;
+  const current = await getPersistedProviderHealth(
+    { workspaceId: args.workspaceId, provider: args.provider },
+    tx,
+  );
+
+  // events.seq is monotonic per-insert and unique across the workspace —
+  // ordering by it newest-first is the canonical "last N" without ties
+  // (created_at can collide at the same ms). The JOIN on document_id
+  // takes the agent_run row's snapshotted provider (mitigation 46 — not
+  // current agent state, the run's recorded provider).
+  //
+  // The `IS NULL OR != 'cancelled'` guard is null-safe: completed events
+  // have no error_reason, failed-but-cancelled events do. Excludes only
+  // the cancelled subset; counts everything else.
+  const rows = await tx.all<{ kind: string; error_reason: string | null }>(sql`
+    SELECT e.kind AS kind,
+           json_extract(e.payload, '$.error_reason') AS error_reason
+      FROM events e
+      JOIN documents d ON d.id = e.document_id
+     WHERE e.workspace_id = ${args.workspaceId}
+       AND e.kind IN ('agent.run.completed', 'agent.run.failed')
+       AND d.type = 'agent_run'
+       AND json_extract(d.frontmatter, '$.provider') = ${args.provider}
+       AND (json_extract(e.payload, '$.error_reason') IS NULL
+            OR json_extract(e.payload, '$.error_reason') != 'cancelled')
+     ORDER BY e.seq DESC
+     LIMIT ${threshold}
+  `);
+
+  // Insufficient signal — not enough events to assert degradation.
+  if (rows.length < threshold) {
+    return { current, next: { status: 'healthy', consecutive_failures: 0 } };
+  }
+
+  // Count trailing failures (newest-first). The streak breaks on the
+  // first non-failed event (a completed) or on a non-provider_error
+  // failure (e.g. budget_exceeded — a run-local failure, not a provider
+  // signal). When the streak length equals the threshold, all rows are
+  // provider failures → degraded.
+  let trailingFailures = 0;
+  for (const r of rows) {
+    if (r.kind === 'agent.run.failed' && r.error_reason === 'provider_error') {
+      trailingFailures += 1;
+    } else {
+      break;
+    }
+  }
+
+  const next: ProviderHealthState =
+    trailingFailures >= threshold
+      ? { status: 'degraded', consecutive_failures: trailingFailures }
+      : { status: 'healthy', consecutive_failures: trailingFailures };
+
+  return { current, next };
+}
+
+/**
+ * Returns the persisted health state for all 4 known providers.
+ * Missing keys default to `{healthy, 0}` — symmetric with the missing-key
+ * default inside `getPersistedProviderHealth`. Used by the workspace
+ * settings UI (Phase 3 D-6) and the runner-stats admin endpoint.
+ */
+export async function getProviderHealth(
+  args: { workspaceId: string },
+  tx: DBOrTx = db,
+): Promise<Record<ProviderName, ProviderHealthState>> {
+  const ws = await tx.query.workspaces.findFirst({
+    where: eq(workspaces.id, args.workspaceId),
+  });
+  const persisted = ws?.providerHealth ?? {};
+  return Object.fromEntries(
+    ALL_PROVIDERS.map((p) => [
+      p,
+      persisted[p] ?? { status: 'healthy', consecutive_failures: 0 },
+    ]),
+  ) as Record<ProviderName, ProviderHealthState>;
+}
+
+/**
+ * Tipping-edge detector — internal helper called from `transitionRun`
+ * AFTER its own `agent.run.<status>` emit. Mitigation 45 — emits exactly
+ * one `workspace.provider.degraded` on the healthy→degraded transition,
+ * exactly one `workspace.provider.recovered` on the reverse. Continued
+ * state (both ends agree) is a no-op.
+ *
+ * Provider name is the run's frontmatter.provider — mitigation 46. The
+ * caller (transitionRun) sources this from the row's frontmatter, not
+ * from the current agent doc.
+ *
+ * Same-tx persistence: the new state is written to workspaces.provider_health
+ * inside the caller's `txWithEvents` block, so the column write + the
+ * edge event commit (or roll back) atomically with the underlying
+ * agent_run UPDATE.
+ *
+ * Not exported through the barrel — runner / dispatcher reach
+ * provider-health state through `checkProviderHealth` and `getProviderHealth`.
+ */
+async function maybeEmitProviderHealthEdge(
+  tx: Parameters<Parameters<DB['transaction']>[0]>[0],
+  args: {
+    workspaceId: string;
+    projectId: string | null;
+    provider: ProviderName;
+    actor: string;
+  },
+): Promise<void> {
+  const { current, next } = await checkProviderHealth(
+    { workspaceId: args.workspaceId, provider: args.provider },
+    tx,
+  );
+
+  // No transition → nothing to do. Covers both "still healthy" AND "still
+  // degraded" (4th consecutive failure case from the tests).
+  if (current.status === next.status) return;
+
+  // Persist the new state — merge into the existing JSON, do NOT clobber
+  // sibling providers. json_set with the provider-keyed path mutates only
+  // the one entry. Using sql.placeholder for the provider name keeps the
+  // path safe even though it's known-enum (defense-in-depth: future enum
+  // extensions don't get to inject SQL).
+  await tx.update(workspaces)
+    .set({
+      providerHealth: sql`json_set(
+        ${workspaces.providerHealth},
+        ${'$.' + args.provider},
+        json(${JSON.stringify(next)})
+      )`,
+    })
+    .where(eq(workspaces.id, args.workspaceId));
+
+  const kind: EventKind = next.status === 'degraded'
+    ? 'workspace.provider.degraded'
+    : 'workspace.provider.recovered';
+
+  await emitEvent(tx, {
+    kind,
+    workspaceId: args.workspaceId,
+    projectId: args.projectId,
+    // No documentId — workspace-level edge event, no run-specific row to
+    // point at. EmitArgs.documentId is optional; omit it.
+    actor: args.actor,
+    payload: {
+      provider: args.provider,
+      consecutive_failures: next.consecutive_failures,
+    },
+  });
 }
