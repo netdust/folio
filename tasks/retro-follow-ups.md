@@ -40,6 +40,25 @@ Created 2026-05-28 by `/evaluate` after Phase 3 Sub-phase A. One bullet per item
 
 - **C.1-R-3 — `tasks/todo.md` C-section section is stale.** It still lists Sub-phase A tasks as `[ ]` and doesn't track C.1's commits. Either update it to current state OR retire it (it's already superseded by per-phase plans + STATE.md's plan-expansion status). Trivial. Decision: UPDATE-IN-PLACE (one editor pass after C.1 closes) or RETIRE (delete + add a note to STATE.md that todo.md is no longer the active surface). **STILL ACTIVE — housekeeping.**
 
+**From Phase 3 Sub-phase C.1 review-of-review (2026-05-28 night — 5 angles + 6 verifiers, 15 findings, all shipped):**
+
+- **R1 (HIGH, RESOLVED)**: FE `apps/web/src/lib/api/documents.ts` + shared `packages/shared/src/document-schema.ts` widened to include `agent_run` lockstep with server. listDocuments default response no longer mis-routes agent_run rows through FE narrow union.
+- **R2 (HIGH, RESOLVED)**: Read paths (GET /:slug, GET /:slug.md, MCP get_document, get_document_markdown) hardened against agent_run leakage. MCP list_documents enum enforced (was advisory).
+- **R3 (MEDIUM, RESOLVED)**: `countPendingPlanning` predicate flipped to indexed `status` column — F6's missed 3rd site.
+- **R4 (MEDIUM, RESOLVED)**: `checkProviderHealth` recency floor (24h default) — workspaces no longer locked in stale degraded; F7 no longer emits spurious recovered on empty window.
+- **R5+R6 (MEDIUM+LOW, RESOLVED)**: F1's race-loser now throws `RUN_TRANSITION_RACED` (distinct from `INVALID_RUN_TRANSITION`) with `err.observedFrom` populated. Sub-phase D handlers can catch+ignore only the race code without masking real ABI bugs.
+- **R7 (LOW, RESOLVED)**: recoverOrphanRuns 'failed'/'running' literals routed through `runStatusSchema.enum` — symmetric closed-enum hygiene with the A1 fix.
+- **R8 (LOW, RESOLVED)**: Added a deterministic test (mock findFirst) that pins the F1 inner-throw path. 50-iter race test retained for defense-in-depth.
+- **R9 (LOW, RESOLVED)**: `PRAGMA busy_timeout = 5000` added to db client + test harness. F14 + F1 race tests now serialize through the writer lock instead of SQLITE_BUSY-immediate.
+- **R10 (LOW, RESOLVED)**: New `scripts/check-migration-drift.ts` linter scans .sql migrations for `DROP INDEX` against an allow-list of always-keep names. Wired into bun test.
+- **R11 (LOW, RESOLVED)**: Migration 0014 adds CHECK constraint enforcing Z-suffix on `worker_started_at`. DB-level defense against future writers that bypass Zod.
+- **R12 (INFO, doc-only)**: F2 COALESCE preserve-branch is dead code through current state machine; documented as forward-compatibility pin for a future `running → awaiting_approval` pause-for-approval transition.
+- **R13 (INFO, refactor)**: checkProviderHealth's JS loop drops the redundant `r.error_reason === 'provider_error'` check (the SQL filter already guarantees it). Comment locks the SQL→JS contract.
+- **R14 (INFO, doc-only)**: F7's idle-workspace edge case is indirectly resolved by R4's recency floor. Documented.
+- **R15 (academic, deferred)**: F11 consecutive_failures cap. No pre-F5 data on this branch, so no cutover migration needed. If a future deploy carries `consecutive_failures > threshold` from before F5, a one-time normalization migration is the fix. Deferred — not yet load-bearing.
+
+---
+
 **From Phase 3 Sub-phase C.1 freeform code-review (2026-05-28 night — 9 angles + 10 verifiers, 15 findings):**
 
 All 15 findings shipped as 5 atomic commits (bundles 1–5). Summary:
