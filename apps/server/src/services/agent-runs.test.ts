@@ -505,6 +505,117 @@ describe('transitionRun', () => {
     expect(fm.error_detail).not.toContain('req_abc');
     expect(fm.error_detail).not.toContain('Incorrect API key');
   });
+
+  // F2 regression — every → running transition stamps a fresh
+  // worker_started_at. Before F2, only claimNextPlanningRun stamped it;
+  // a direct planning → running via transitionRun (admin force-resume,
+  // Sub-phase D approval-resume) left worker_started_at NULL, and
+  // recoverOrphanRuns silently skipped the row forever.
+  test('stamps worker_started_at on direct planning → running (orphan recovery sees it)', async () => {
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+
+    // Create a planning row via createRun (no claim — direct path).
+    const created = await createRun({
+      workspace: seed.workspace,
+      project: seed.project,
+      runsTable,
+      agent,
+      actor: seed.user,
+      input: {
+        parentDocumentId: parent.id,
+        firedBy: 'agent.task.assigned',
+        chainId: crypto.randomUUID(),
+        triggerId: null,
+      },
+    });
+    const fmBefore = created.document.frontmatter as AgentRunFrontmatter;
+    expect(fmBefore.worker_started_at).toBeUndefined();
+
+    const beforeIso = new Date(Date.now() - 1).toISOString();
+    await transitionRun(created.document.id, {
+      newStatus: 'running',
+      actor: seed.user.id,
+    });
+
+    const after = await db.query.documents.findFirst({
+      where: eq(documents.id, created.document.id),
+    });
+    const fmAfter = after!.frontmatter as AgentRunFrontmatter;
+    expect(typeof fmAfter.worker_started_at).toBe('string');
+    expect(fmAfter.worker_started_at!.length).toBeGreaterThan(0);
+    // Stamped at "now" — sorts at or after the pre-call mark.
+    expect(fmAfter.worker_started_at! >= beforeIso).toBe(true);
+  });
+
+  // F1 regression — TOCTOU race fix. Two concurrent transitionRun calls
+  // from the same `from` state must yield exactly one winner; the loser
+  // gets INVALID_RUN_TRANSITION 409 (mitigation 43's "loser no-ops").
+  // Mirrors claimNextPlanningRun's race test shape but exercises the
+  // approval-resume code path.
+  test('exactly one of two concurrent transitions from the same state wins (race test, 50 iterations)', async () => {
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+
+    for (let i = 0; i < 50; i++) {
+      // Fresh awaiting_approval row each iteration.
+      const run = await seedRunAt(
+        db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'awaiting_approval',
+      );
+
+      const results = await Promise.allSettled([
+        transitionRun(run.id, { newStatus: 'running', actor: seed.user.id }),
+        transitionRun(run.id, { newStatus: 'running', actor: seed.user.id }),
+      ]);
+
+      const fulfilled = results.filter((r) => r.status === 'fulfilled');
+      const rejected = results.filter((r) => r.status === 'rejected');
+      expect(fulfilled.length).toBe(1);
+      expect(rejected.length).toBe(1);
+
+      const loserErr = (rejected[0] as PromiseRejectedResult).reason as HTTPError;
+      expect(loserErr).toBeInstanceOf(HTTPError);
+      expect(loserErr.code).toBe('INVALID_RUN_TRANSITION');
+
+      // Exactly one agent.run.running event for this row.
+      const runEvents = await db.query.events.findMany({
+        where: (e, { and: andOp, eq: eqOp }) =>
+          andOp(eqOp(e.kind, 'agent.run.running'), eqOp(e.documentId, run.id)),
+      });
+      expect(runEvents.length).toBe(1);
+    }
+  });
+
+  test('preserves existing worker_started_at when an awaiting_approval row resumes to running', async () => {
+    // awaiting_approval → running is the Sub-phase D approval-resume path.
+    // If the row was pre-claimed (worker_started_at set from a prior
+    // running → awaiting_approval — currently not valid in the state
+    // machine, but the helper plus a hand-edit can produce it; the
+    // COALESCE branch must preserve), the original timestamp MUST
+    // survive. Orphan recovery's threshold compares against that value.
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+
+    const originalClaimIso = new Date(Date.now() - 60_000).toISOString();
+    const run = await seedRunAt(
+      db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'awaiting_approval',
+      { workerStartedAt: originalClaimIso },
+    );
+    await transitionRun(run.id, { newStatus: 'running', actor: seed.user.id });
+
+    const after = await db.query.documents.findFirst({ where: eq(documents.id, run.id) });
+    const fmAfter = after!.frontmatter as AgentRunFrontmatter;
+    expect(fmAfter.worker_started_at).toBe(originalClaimIso);
+  });
 });
 
 // ---------- incrementTokens ----------

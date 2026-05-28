@@ -262,16 +262,40 @@ export async function transitionRun(
   // writes error_{reason,detail}. No intermediate state observable to a
   // concurrent reader. The `json_set` keeps non-touched frontmatter keys
   // intact (e.g. tokens_in/out continue to accumulate even mid-transition).
+  //
+  // Mitigation 37 (F2 fix, post-C.1 review) — every → running transition
+  // stamps a fresh `worker_started_at`. claimNextPlanningRun is the usual
+  // claim path, but direct planning → running (admin force-resume) and
+  // awaiting_approval → running (approval-resume in Sub-phase D) ALSO
+  // need a timestamp — otherwise `worker_started_at` stays NULL and
+  // `recoverOrphanRuns` (predicate `worker_started_at < threshold`)
+  // silently skips the row, leaving a phantom in-flight run.
+  // The COALESCE preserves an existing value (so a row already-claimed
+  // and now legitimately re-transitioning through running keeps its
+  // original claim time, which is what orphan recovery actually wants
+  // to compare against).
+  const nowIsoForRunning = new Date().toISOString();
   const workerStartedAtArg = isTerminal
     ? sql`NULL`
-    : sql`json_extract(${documents.frontmatter}, '$.worker_started_at')`;
+    : to === 'running'
+      ? sql`COALESCE(json_extract(${documents.frontmatter}, '$.worker_started_at'), ${nowIsoForRunning})`
+      : sql`json_extract(${documents.frontmatter}, '$.worker_started_at')`;
 
   // UPDATE + event emission must be atomic for durable+bus parity. The
   // service owns the tx boundary via `txWithEvents` — rollback discards
   // both the column write AND the queued bus publish via the scrub path
   // in `lib/events.ts`.
+  //
+  // F1 fix (post-C.1 review) — the WHERE includes the `from`-status guard
+  // as a TOCTOU defense. Without it, two concurrent transitionRun calls
+  // both pass `isValidTransition(from, to)` against the same row snapshot
+  // and both UPDATE — double-emitting `agent.run.<to>` events. The status
+  // predicate makes the UPDATE a no-op for the loser; we detect that via
+  // `.returning({id})` returning zero rows and throw INVALID_RUN_TRANSITION
+  // (mitigation 43's "loser no-ops" pattern, generalized from the
+  // claim-race shape claimNextPlanningRun already uses).
   await txWithEvents(db, async (tx) => {
-    await tx
+    const claimed = await tx
       .update(documents)
       .set({
         status: to,
@@ -286,7 +310,19 @@ export async function transitionRun(
         updatedBy: args.actor,
         updatedAt: new Date(),
       })
-      .where(eq(documents.id, runId));
+      .where(and(eq(documents.id, runId), eq(documents.status, from)))
+      .returning({ id: documents.id });
+
+    if (claimed.length === 0) {
+      const err = new HTTPError(
+        'INVALID_RUN_TRANSITION',
+        `agent_run ${runId} no longer at status ${from} (raced by another transition)`,
+        409,
+      ) as HTTPError & { from: RunStatus; to: RunStatus };
+      err.from = from;
+      err.to = to;
+      throw err;
+    }
 
     await emitEvent(tx, {
       workspaceId: row.workspaceId,
