@@ -182,33 +182,48 @@ export function AiTab({ wslug, workspaceId }: Props) {
         <h2 className="text-sm font-medium">Configured keys</h2>
         <ul className="mt-2 divide-y divide-border-light overflow-hidden rounded-md border border-border-light">
           {PROVIDERS.map((p) => {
-            const row = (keysQuery.data ?? []).find((k) => k.provider === p && k.label === 'default');
+            // B round 2 fix #10 — surface non-default rows too. The Save
+            // flow in this tab always writes label='default', but rows
+            // created via API or pinned by an agent live alongside under
+            // different labels. Previously they were invisible — the UI
+            // claimed 'not configured' while a 'prod' key was in use.
+            const rows = (keysQuery.data ?? []).filter((k) => k.provider === p);
+            const defaultRow = rows.find((k) => k.label === 'default');
+            const otherRows = rows.filter((k) => k.label !== 'default');
             return (
               <li
                 key={p}
-                className="flex items-center justify-between bg-content px-3 py-2 text-sm"
+                className="flex flex-col items-stretch bg-content px-3 py-2 text-sm"
               >
-                <span>
-                  <span className="font-medium">{p}</span>
-                  {row ? (
-                    <span className="ml-2 text-xs text-fg-2">
-                      ✓ saved {new Date(row.createdAt).toLocaleDateString()}
-                    </span>
-                  ) : (
-                    <span className="ml-2 text-xs text-fg-3">— not configured</span>
-                  )}
-                </span>
-                {row ? (
-                  <Button
-                    variant="ghost"
-                    onClick={() =>
-                      deleteKey
-                        .mutateAsync(row.id)
-                        .catch((err) => toast.error(formatApiError(err)))
-                    }
-                  >
-                    Remove
-                  </Button>
+                <div className="flex items-center justify-between">
+                  <span>
+                    <span className="font-medium">{p}</span>
+                    {defaultRow ? (
+                      <span className="ml-2 text-xs text-fg-2">
+                        ✓ default saved {new Date(defaultRow.createdAt).toLocaleDateString()}
+                      </span>
+                    ) : (
+                      <span className="ml-2 text-xs text-fg-3">— not configured</span>
+                    )}
+                  </span>
+                  {defaultRow ? (
+                    <Button
+                      variant="ghost"
+                      onClick={() =>
+                        deleteKey
+                          .mutateAsync(defaultRow.id)
+                          .catch((err) => toast.error(formatApiError(err)))
+                      }
+                    >
+                      Remove
+                    </Button>
+                  ) : null}
+                </div>
+                {otherRows.length > 0 ? (
+                  <div className="mt-1 text-xs text-fg-2">
+                    + {otherRows.length} other label{otherRows.length === 1 ? '' : 's'} (managed via API):{' '}
+                    {otherRows.map((r) => r.label).join(', ')}
+                  </div>
                 ) : null}
               </li>
             );

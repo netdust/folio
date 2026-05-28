@@ -136,7 +136,10 @@ describe('AiTab', () => {
     );
   });
 
-  test('configured keys list ignores non-default labels', () => {
+  // B round 2 fix #10 — non-default rows must be visible. Previously the UI
+  // hard-coded label='default' and ignored anything else; agents pinning a
+  // 'prod' key would run while the Settings tab claimed 'not configured'.
+  test('configured keys list shows non-default labels as managed-via-API', () => {
     vi.mocked(useWorkspaceAiKeys).mockReturnValue({
       data: [
         {
@@ -167,14 +170,21 @@ describe('AiTab', () => {
       isLoading: false,
     } as never);
     const { container } = renderTab();
-    // The anthropic row shows saved (k1, default). OpenAI shows NOT configured because
-    // its only key is label='prod', which the UI ignores.
     const rows = container.querySelectorAll('ul > li');
     const rowByProvider = (name: string) =>
       Array.from(rows).find((li) => li.querySelector('span.font-medium')?.textContent === name);
     const anthropicRow = rowByProvider('anthropic');
     const openaiRow = rowByProvider('openai');
-    expect(anthropicRow?.textContent).toMatch(/✓ saved/);
+
+    // Anthropic: default exists → 'default saved' + the via-API hint counts the 1 other label.
+    expect(anthropicRow?.textContent).toMatch(/default saved/);
+    expect(anthropicRow?.textContent).toMatch(/1 other label/);
+    expect(anthropicRow?.textContent).toMatch(/prod/);
+
+    // OpenAI: no default → 'not configured' overall, but the non-default row
+    // is still listed under the via-API hint so agents using it are visible.
     expect(openaiRow?.textContent).toMatch(/not configured/);
+    expect(openaiRow?.textContent).toMatch(/managed via API/i);
+    expect(openaiRow?.textContent).toMatch(/prod/);
   });
 });
