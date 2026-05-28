@@ -691,7 +691,11 @@ describe('runAgent stream loop', () => {
     };
     providerTestHatch.overrideRegistry('anthropic', async () => stub);
 
-    // Seed a rejection comment AFTER started_at.
+    // Seed a rejection comment AT-OR-AFTER started_at. FIX #1 — the run's
+    // started_at and this rejection's createdAt can land in the SAME
+    // millisecond; the inclusive (createdAt >= started_at) boundary in
+    // wasCancelled means that tie counts as a valid mid-run cancel (it used to
+    // be dropped by the strict `>` filter, making this test flaky ~1/25).
     const { workspaces } = await import('../db/schema.ts');
     const fullWs = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspace.id) });
     await createComment({
@@ -733,7 +737,9 @@ describe('runAgent stream loop', () => {
     };
     installProviderStub(control);
 
-    // Seed a rejection comment AFTER started_at (the cancel signal).
+    // Seed a rejection comment AT-OR-AFTER started_at (the cancel signal). FIX
+    // #1 — same-ms tie with started_at is intentionally counted as a cancel via
+    // the inclusive boundary in wasCancelled.
     const { workspaces } = await import('../db/schema.ts');
     const fullWs = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspace.id) });
     await createComment({
@@ -760,6 +766,54 @@ describe('runAgent stream loop', () => {
     expect(results.length).toBe(0);
   });
 
+  test('FIX #1 — a rejection stamped in the SAME ms as started_at still cancels (inclusive boundary)', async () => {
+    // Deterministic pin for the formerly-flaky same-ms tie. Force the rejection
+    // comment's createdAt to EXACTLY equal the run's started_at; under the old
+    // strict `>` (gt) since-filter this rejection was dropped and the run
+    // completed instead of cancelling. The inclusive (>=) boundary catches it.
+    const { db, workspace, project, run, parent } = await scaffold();
+    const userRow = await db.query.users.findFirst({});
+
+    const control: StubControl = {
+      rounds: [
+        [
+          { type: 'text', delta: 'about to finish' },
+          { type: 'done', reason: 'stop' },
+        ],
+      ],
+      called: 0,
+    };
+    installProviderStub(control);
+
+    const { workspaces } = await import('../db/schema.ts');
+    const fullWs = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspace.id) });
+    await createComment({
+      workspace: fullWs!,
+      project,
+      parent,
+      authorContext: { type: 'user', userId: userRow!.id },
+      actor: userRow!.id,
+      body: 'stop @helper',
+      kind: 'rejection',
+      targetAgent: 'helper',
+    });
+    // Force the rejection's createdAt to EXACTLY the run's started_at.
+    const startedAt = (await readRun(db, run.id)).started_at;
+    const rej = await listKind(db, parent.id, 'rejection');
+    await db
+      .update(documents)
+      .set({ createdAt: new Date(startedAt) })
+      .where(eq(documents.id, rej[0]!.id));
+
+    await runAgent({ runId: run.id });
+
+    const fm = await readRun(db, run.id);
+    expect(fm.status).toBe('failed');
+    expect(fm.error_reason).toBe('cancelled');
+    const results = await listKind(db, parent.id, 'result');
+    expect(results.length).toBe(0);
+  });
+
   test('done_reason persisted — refusal terminates as completed', async () => {
     const { db, run } = await scaffold();
     const control: StubControl = {
@@ -778,6 +832,98 @@ describe('runAgent stream loop', () => {
     const fm = await readRun(db, run.id);
     expect(fm.done_reason).toBe('refusal');
     expect(fm.status).toBe('completed');
+  });
+
+  test('FIX #2 — stream ends without a done event fails as provider_error, no result comment', async () => {
+    const { db, run, parent } = await scaffold();
+    const stub: AIProvider = {
+      // Yield text then END — no { type:'done' } event.
+      async *stream() {
+        yield { type: 'text', delta: 'partial truncated output' } as ProviderEvent;
+      },
+      async testKey() {
+        return { ok: true as const };
+      },
+    };
+    providerTestHatch.overrideRegistry('anthropic', async () => stub);
+
+    await runAgent({ runId: run.id });
+
+    const fm = await readRun(db, run.id);
+    expect(fm.status).toBe('failed');
+    expect(fm.error_reason).toBe('provider_error');
+    // No clean completion — the truncated text must NOT be posted as a result.
+    const results = await listKind(db, parent.id, 'result');
+    expect(results.length).toBe(0);
+  });
+
+  test('FIX #3 — done_reason=tool_use with zero collected tool_calls fails, no completion', async () => {
+    const { db, run, parent } = await scaffold();
+    const stub: AIProvider = {
+      // Signal tool_use but NEVER emit a tool_call event.
+      async *stream() {
+        yield { type: 'text', delta: 'thinking...' } as ProviderEvent;
+        yield { type: 'done', reason: 'tool_use' } as ProviderEvent;
+      },
+      async testKey() {
+        return { ok: true as const };
+      },
+    };
+    providerTestHatch.overrideRegistry('anthropic', async () => stub);
+
+    await runAgent({ runId: run.id });
+
+    const fm = await readRun(db, run.id);
+    expect(fm.status).toBe('failed');
+    expect(fm.error_reason).toBe('provider_error');
+    const results = await listKind(db, parent.id, 'result');
+    expect(results.length).toBe(0);
+  });
+
+  test('FIX #7 — multi-tool round where the 2nd call throws fails cleanly (terminal, no completion)', async () => {
+    const { db, run, parent } = await scaffold({ tools: ['list_documents'] });
+    const { registerTool } = await import('./agent-tools.ts');
+    const okName = `__test_ok_${nanoid(6)}`;
+    const boomName = `__test_boom2_${nanoid(6)}`;
+    registerTool({
+      name: okName,
+      requiredScope: 'documents:read',
+      schema: z.object({}).strict(),
+      handler: async () => ({ ok: true }),
+    });
+    registerTool({
+      name: boomName,
+      requiredScope: 'documents:read',
+      schema: z.object({}).strict(),
+      handler: async () => {
+        throw new Error('second tool exploded');
+      },
+    });
+    registeredTools.push(okName, boomName);
+
+    const stub: AIProvider = {
+      async *stream() {
+        // One round with TWO tool_calls; the second handler throws.
+        yield { type: 'tool_call', id: 'tc-1', name: okName, arguments: {} } as ProviderEvent;
+        yield { type: 'tool_call', id: 'tc-2', name: boomName, arguments: {} } as ProviderEvent;
+        yield { type: 'done', reason: 'tool_use' } as ProviderEvent;
+      },
+      async testKey() {
+        return { ok: true as const };
+      },
+    };
+    providerTestHatch.overrideRegistry('anthropic', async () => stub);
+
+    await runAgent({ runId: run.id });
+
+    const fm = await readRun(db, run.id);
+    // Terminal-failed (the locked spec keeps tool errors terminal — no feedback
+    // to the model). The first tool's effect may have committed (mitigation 35),
+    // but the run is cleanly failed with no completion.
+    expect(fm.status).toBe('failed');
+    expect(fm.error_reason).toBe('provider_error');
+    const results = await listKind(db, parent.id, 'result');
+    expect(results.length).toBe(0);
   });
 });
 
@@ -955,6 +1101,52 @@ describe('runAgentResume', () => {
     const results = await listKind(db, parent.id, 'result');
     expect(results.length).toBe(1);
     expect(results[0]!.body).toBe('done resuming');
+  });
+
+  test('FIX #5 — a post-start rejection mid-resume cancels the otherwise-completing resume', async () => {
+    const { db, workspace, project, user, agent, parent, run } = await scaffold();
+    const runsTable = await db.query.tables.findFirst({
+      where: and(eq(tables.projectId, project.id), eq(tables.slug, 'runs')),
+    });
+    const original = await seedRunAt(db, workspace, project, runsTable!, agent, parent, user, {
+      status: 'awaiting_approval',
+      chain_id: (await readRun(db, run.id)).chain_id,
+    });
+    await db
+      .update(documents)
+      .set({
+        frontmatter: sql`json_set(${documents.frontmatter}, '$.resume_of', ${original.id})`,
+      })
+      .where(eq(documents.id, run.id));
+
+    // Pure-text resume that would otherwise complete — but a rejection lands
+    // mid-resume. The shared terminal-path wasCancelled check (FIX #5) must
+    // treat it as a deliberate stop and cancel the resume.
+    const control: StubControl = {
+      rounds: [
+        [
+          { type: 'text', delta: 'resuming the approved plan...' },
+          { type: 'done', reason: 'stop' },
+        ],
+      ],
+      called: 0,
+    };
+    installProviderStub(control);
+
+    // Rejection AFTER the resuming run's started_at.
+    await seedUserComment(db, workspace, project, parent, 'stop @helper', 'rejection', 'helper');
+
+    await runAgentResume({ runId: run.id });
+
+    const fm = await readRun(db, run.id);
+    expect(fm.status).toBe('failed');
+    expect(fm.error_reason).toBe('cancelled');
+    const comments = await listKind(db, parent.id, 'comment');
+    const cancelMsg = comments.find((c) => c.body.includes('Cancelled by user'));
+    expect(cancelMsg).toBeTruthy();
+    // No result comment — the cancel pre-empts the completion.
+    const results = await listKind(db, parent.id, 'result');
+    expect(results.length).toBe(0);
   });
 
   test('does not trip idempotency_violation against the original awaiting_approval run being resumed', async () => {

@@ -265,7 +265,18 @@ async function loadContext(runId: string): Promise<RunContext | null> {
   const actor = `agent:${agent.slug}`;
   // FK-valid actor for transitionRun (see RunContext.transitionActor). Prefer
   // the run's owner; fall back to the agent's creator.
-  const transitionActor = run.createdBy ?? agent.createdBy ?? '';
+  //
+  // FIX #9 — no empty-string fallback. `documents.updated_by` has a FK to
+  // `users.id`; an empty string violates it and would strand the run at
+  // running. If neither the run nor the agent carries an FK-valid creator,
+  // treat it like a missing-context failure: return null so runAgent logs +
+  // returns, leaving the run for orphan-recovery. Unreachable in C.2 (createRun
+  // always stamps an FK-valid owner); this is a C.3 obligation when other
+  // create paths land.
+  const transitionActor = run.createdBy ?? agent.createdBy;
+  if (!transitionActor) {
+    return null;
+  }
   const authorContext: AuthorContext = {
     type: 'agent',
     agentSlug: agent.slug,
@@ -319,11 +330,11 @@ async function preflight(ctx: RunContext, excludeRunId?: string): Promise<boolea
   const { run, fm, agent, agentFm } = ctx;
   const runId = run.id;
 
-  // 1 — provider key present.
-  const hasKey = await db.query.aiKeys.findFirst({
-    where: and(eq(aiKeys.workspaceId, run.workspaceId), eq(aiKeys.provider, fm.provider)),
-  });
-  if (!hasKey) {
+  // 1 — provider key present. FIX #10 — loadContext already resolved + decrypted
+  // the key into ctx.apiKey (empty string when absent — a missing key is a
+  // pre-flight failure, not a load failure). Derive presence from that instead
+  // of a second ai_keys query.
+  if (!ctx.apiKey) {
     await failRun(
       ctx,
       runErrorReasonSchema.enum.no_ai_key,
@@ -371,9 +382,10 @@ async function preflight(ctx: RunContext, excludeRunId?: string): Promise<boolea
   });
   if (!chain.ok) {
     // checkChainGuards returns fanout_exceeded / chain_duration_exceeded /
-    // chain_tokens_exceeded — all real enum members. Pass through verbatim.
-    const reason = runErrorReasonSchema.parse(chain.reason);
-    await failRun(ctx, reason, chain.detail);
+    // chain_tokens_exceeded — all typed literal members of RunErrorReason.
+    // FIX #10 — pass through without a redundant first parse; transitionRun
+    // closed-enum-validates errorReason again before persisting.
+    await failRun(ctx, chain.reason, chain.detail);
     return true;
   }
 
@@ -546,15 +558,12 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
       if (ev.type === 'text') {
         textBuf += ev.delta;
       } else if (ev.type === 'tokens') {
-        await incrementTokens(runId, { in: ev.tokens_in, out: ev.tokens_out });
-        // Re-read the live totals to compare against the run's budget. The
-        // increment is atomic; we read back the fresh row.
-        const fresh = await db.query.documents.findFirst({
-          where: and(eq(documents.id, runId), eq(documents.type, 'agent_run')),
+        // FIX #10 — incrementTokens returns the post-increment totals atomically;
+        // use them directly instead of a redundant read-back SELECT.
+        const { tokens_in: usedIn, tokens_out: usedOut } = await incrementTokens(runId, {
+          in: ev.tokens_in,
+          out: ev.tokens_out,
         });
-        const ffm = (fresh?.frontmatter ?? {}) as Record<string, unknown>;
-        const usedIn = typeof ffm.tokens_in === 'number' ? ffm.tokens_in : 0;
-        const usedOut = typeof ffm.tokens_out === 'number' ? ffm.tokens_out : 0;
         if (usedIn + usedOut > fm.max_tokens) {
           await postAgentComment(
             ctx,
@@ -587,7 +596,13 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
     // Tool round — execute collected calls, append the round-trip messages,
     // loop again.
     if (doneReason === 'tool_use' && collectedToolCalls.length > 0) {
-      messages.push({
+      // FIX #7 — accumulate the assistant tool_calls message + per-call
+      // tool-result messages in LOCALS and only commit them to `messages` once
+      // the WHOLE batch succeeds. If any call throws mid-batch we failRun +
+      // return (terminal, per the locked spec — errors are NOT fed back to the
+      // model; that's deferred D-3), WITHOUT leaving a dangling assistant
+      // tool_calls message that claims calls we never resolved.
+      const assistantMsg: Message = {
         role: 'assistant',
         content: textBuf,
         tool_calls: collectedToolCalls.map((tc) => ({
@@ -595,7 +610,8 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
           name: tc.name,
           arguments: tc.arguments,
         })),
-      });
+      };
+      const toolResultMsgs: Message[] = [];
 
       for (const tc of collectedToolCalls) {
         let resultString: string;
@@ -614,7 +630,9 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
             );
             return;
           }
-          // Any other tool throw → sanitized detail.
+          // Any other tool throw → sanitized detail. A prior call in this batch
+          // may have already committed its own tx (mitigation 35 — acceptable);
+          // we just don't pollute message history with a half-resolved round.
           await failRun(
             ctx,
             runErrorReasonSchema.enum.provider_error,
@@ -622,10 +640,38 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
           );
           return;
         }
-        messages.push({ role: 'tool', tool_use_id: tc.id, content: resultString });
+        toolResultMsgs.push({ role: 'tool', tool_use_id: tc.id, content: resultString });
       }
 
+      // Whole batch succeeded — commit the balanced round-trip atomically.
+      messages.push(assistantMsg, ...toolResultMsgs);
       continue; // next round
+    }
+
+    // FIX #3 — done_reason='tool_use' with ZERO usable tool_calls. The model
+    // signalled it wants a tool but produced no call the provider could surface
+    // (e.g. a malformed tool_call the provider dropped). Completing cleanly
+    // would mask a failed generation as success. Fail loudly; no result comment.
+    if (doneReason === 'tool_use' && collectedToolCalls.length === 0) {
+      await failRun(
+        ctx,
+        runErrorReasonSchema.enum.provider_error,
+        'Provider signalled tool_use but produced no usable tool call.',
+      );
+      return;
+    }
+
+    // FIX #2 — the stream ended without ever yielding a `done` event (doneReason
+    // still undefined and not terminated). Treat a stream that stops without a
+    // completion signal as a truncated/failed generation, NOT a clean complete
+    // with partial text. Fail loudly; no result comment.
+    if (doneReason === undefined) {
+      await failRun(
+        ctx,
+        runErrorReasonSchema.enum.provider_error,
+        'Provider stream ended without a completion signal.',
+      );
+      return;
     }
 
     // Terminal (stop / max_tokens / refusal / pause_turn, or no tool_calls).
@@ -635,6 +681,11 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
     // cancel check above, so a user's "stop" would be silently ignored. Check
     // wasCancelled once on the terminal path (mitigation 44): one extra
     // comment-thread read on the final round, which is acceptable.
+    //
+    // FIX #5 — this terminal check intentionally applies to BOTH fresh and
+    // resume runs (runLoop is shared). A post-start rejection landing during a
+    // resume is a deliberate mid-resume stop, so it cancels an otherwise-
+    // completing approved resume. Intended, not a bug — pinned by a test.
     if (await wasCancelled(ctx)) {
       await handleCancel(ctx);
       return;
@@ -658,8 +709,13 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
 // ---------------------------------------------------------------------------
 
 /**
- * Write the accumulated text as the final `kind=result` comment, persist
- * `done_reason`, then transition the run to completed.
+ * Write the accumulated text as the final `kind=result` comment, then
+ * transition the run to completed — persisting `done_reason` ATOMICALLY in the
+ * same transition (FIX #4). transitionRun folds done_reason into its existing
+ * status `json_set` and emits `agent.run.completed`, so the done_reason write,
+ * the status flip, and the event all commit together. No more bare out-of-tx
+ * json_set that could strand done_reason on a still-running row (or hide it
+ * from SSE subscribers, who now see it on the completed event).
  */
 async function postResultAndComplete(
   ctx: RunContext,
@@ -668,23 +724,16 @@ async function postResultAndComplete(
 ): Promise<void> {
   const runId = ctx.run.id;
 
-  // Persist done_reason into frontmatter (independent of the transition's
-  // status/error columns). transitionRun's json_set preserves untouched keys,
-  // so write done_reason first.
-  if (doneReason) {
-    await db
-      .update(documents)
-      .set({
-        frontmatter: sql`json_set(${documents.frontmatter}, '$.done_reason', ${doneReason})`,
-      })
-      .where(and(eq(documents.id, runId), eq(documents.type, 'agent_run')));
-  }
-
   // Final answer as a kind=result comment on the parent, linking the run.
   const finalText = textBuf.trim().length > 0 ? textBuf : '(no output)';
   await postAgentComment(ctx, finalText, 'result');
 
-  await txWithEventsTransition(runId, ctx.transitionActor, 'completed', undefined, undefined);
+  // transitionRun owns its own txWithEvents; done_reason rides inside it.
+  await transitionRun(runId, {
+    newStatus: 'completed',
+    actor: ctx.transitionActor,
+    doneReason,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -727,15 +776,20 @@ async function postAgentComment(
  * post-start rejection on the parent as the cancel trigger.
  */
 async function wasCancelled(ctx: RunContext): Promise<boolean> {
-  const cancels = await listComments({
+  // FIX #1 — INCLUSIVE boundary (createdAt >= started_at). listComments' `since`
+  // filter is strict `>` (gt), which drops a rejection stamped in the SAME
+  // millisecond as started_at — a real mid-run cancel that races the run's own
+  // start timestamp. A rejection BEFORE started_at belongs to a prior run/plan
+  // (handled by rejectRun's awaiting_approval→rejected path); a rejection
+  // AT-OR-AFTER start is a valid mid-run cancel. So we fetch all rejections on
+  // the parent and apply the inclusive comparison ourselves rather than relying
+  // on listComments' exclusive `since`.
+  const rejections = await listComments({
     parentId: ctx.parent.id,
     kind: 'rejection',
-    // Strict `>` (gt) boundary: a rejection stamped in the SAME millisecond as
-    // started_at is not matched. Harmless — started_at is stamped well before
-    // any user reaction, so a same-ms tie can only be a pre-existing rejection.
-    since: ctx.fm.started_at,
   });
-  return cancels.length > 0;
+  const startedMs = new Date(ctx.fm.started_at).getTime();
+  return rejections.some((c) => new Date(c.createdAt).getTime() >= startedMs);
 }
 
 /**
@@ -754,26 +808,15 @@ function isInvalidArgs(err: unknown): err is Error & { issues: unknown } {
 }
 
 /**
- * Wrap `transitionRun` in `txWithEvents`. transitionRun reads its own row but
- * its UPDATE + event emit must commit atomically — the caller owns the tx
- * boundary. We import txWithEvents lazily to keep the top imports tidy.
+ * Shared predicate for "the run already left the source status under us".
+ * `transitionRun` throws RUN_TRANSITION_RACED (TOCTOU loser — UPDATE WHERE
+ * status=from affected 0 rows) or INVALID_RUN_TRANSITION (illegal move). Both
+ * mean a concurrent path already moved the run terminal; the caller treats it
+ * as a benign no-op.
  */
-async function txWithEventsTransition(
-  runId: string,
-  actor: string,
-  newStatus: 'completed' | 'failed',
-  errorReason: AgentRunFrontmatter['error_reason'] | undefined,
-  errorDetail: string | undefined,
-): Promise<void> {
-  const { txWithEvents } = await import('./events.ts');
-  await txWithEvents(db, async () => {
-    await transitionRun(runId, {
-      newStatus,
-      actor,
-      errorReason,
-      errorDetail,
-    });
-  });
+function isAlreadyTerminalRace(err: unknown): boolean {
+  const code = (err as { code?: string } | undefined)?.code;
+  return code === 'RUN_TRANSITION_RACED' || code === 'INVALID_RUN_TRANSITION';
 }
 
 /** Transition the run to failed with a closed-enum reason + sanitized detail. */
@@ -782,7 +825,15 @@ async function failRun(
   errorReason: NonNullable<AgentRunFrontmatter['error_reason']>,
   errorDetail: string,
 ): Promise<void> {
-  await txWithEventsTransition(ctx.run.id, ctx.transitionActor, 'failed', errorReason, errorDetail);
+  // transitionRun owns its own `txWithEvents` (UPDATE + event emit commit
+  // atomically). Call it directly — no outer wrapper (which would nest an
+  // empty db.transaction whose fn never emits).
+  await transitionRun(ctx.run.id, {
+    newStatus: 'failed',
+    actor: ctx.transitionActor,
+    errorReason,
+    errorDetail,
+  });
 }
 
 /**
@@ -799,18 +850,28 @@ async function failRunLastResort(
   const runRow = await db.query.documents.findFirst({
     where: and(eq(documents.id, runId), eq(documents.type, 'agent_run')),
   });
-  const actor = runRow?.createdBy ?? '';
-  try {
-    await txWithEventsTransition(
-      runId,
-      actor,
-      'failed',
-      runErrorReasonSchema.enum.provider_error,
-      sanitizeProviderError(err, providerLabel),
+  // FIX #9 — no empty-string actor fallback. `documents.updated_by` has a FK to
+  // `users.id`; an empty string violates it and would strand the run at running.
+  // If the run row's createdBy is absent (unexpected in C.2, where createRun
+  // always stamps an FK-valid owner — a C.3 obligation when other create paths
+  // land), log and leave the run for orphan-recovery rather than attempt an
+  // FK-violating transition.
+  const actor = runRow?.createdBy;
+  if (!actor) {
+    console.error(
+      `[runner] last-resort failure for run ${runId}: no FK-valid actor (createdBy absent); leaving for orphan-recovery`,
     );
+    return;
+  }
+  try {
+    await transitionRun(runId, {
+      newStatus: 'failed',
+      actor,
+      errorReason: runErrorReasonSchema.enum.provider_error,
+      errorDetail: sanitizeProviderError(err, providerLabel),
+    });
   } catch (transitionErr) {
-    const code = (transitionErr as { code?: string } | undefined)?.code;
-    if (code === 'RUN_TRANSITION_RACED' || code === 'INVALID_RUN_TRANSITION') {
+    if (isAlreadyTerminalRace(transitionErr)) {
       // Run is already terminal — nothing more to do.
       return;
     }
@@ -866,19 +927,26 @@ export async function rejectRun(args: {
     throw new HTTPError('AGENT_RUN_NOT_FOUND', `agent_run ${runId} not found`, 404);
   }
   // FK-valid actor for the transition's updated_by write (reconciliation 3).
-  const transitionActor = run.createdBy ?? '';
+  // FIX #9 — no empty-string fallback (`documents.updated_by` FK→users.id). In
+  // C.2 createRun always stamps an FK-valid owner; if absent (unexpected — a
+  // C.3 obligation when other create paths land) the rejection cannot write a
+  // valid updated_by, so leave the run as-is rather than violate the FK.
+  const transitionActor = run.createdBy;
+  if (!transitionActor) {
+    console.error(
+      `[runner] rejectRun for run ${runId}: no FK-valid actor (createdBy absent); skipping`,
+    );
+    return;
+  }
 
   try {
-    const { txWithEvents } = await import('./events.ts');
-    await txWithEvents(db, async () => {
-      await transitionRun(runId, { newStatus: 'rejected', actor: transitionActor });
-    });
+    // transitionRun owns its own txWithEvents (atomic UPDATE + event emit).
+    await transitionRun(runId, { newStatus: 'rejected', actor: transitionActor });
   } catch (err) {
-    const code = (err as { code?: string } | undefined)?.code;
     // Mitigation 43 — the approval handler won the race (RUN_TRANSITION_RACED),
     // or the run already left awaiting_approval by another path
     // (INVALID_RUN_TRANSITION). Either way the rejection is a no-op.
-    if (code === 'RUN_TRANSITION_RACED' || code === 'INVALID_RUN_TRANSITION') {
+    if (isAlreadyTerminalRace(err)) {
       return;
     }
     throw err;

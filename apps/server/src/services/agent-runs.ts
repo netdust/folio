@@ -46,6 +46,7 @@ import {
   runStatusSchema,
   TERMINAL_STATUSES,
   type AgentRunFrontmatter,
+  type RunDoneReason,
   type RunErrorReason,
   type RunStatus,
 } from '../lib/agent-run-schema.ts';
@@ -193,6 +194,14 @@ export interface TransitionRunArgs {
   completedAt?: string;
   errorReason?: RunErrorReason;
   errorDetail?: string;
+  /**
+   * Optional `frontmatter.done_reason` to persist atomically with the status
+   * flip. Folded into the same `json_set` as status/error so the runner's
+   * completed transition writes done_reason + status in ONE event-emitting tx
+   * (no stranding done_reason on a still-running row). Closed-enum-validated
+   * by the caller (runDoneReasonSchema); pass-through here.
+   */
+  doneReason?: RunDoneReason;
 }
 
 /**
@@ -293,6 +302,13 @@ export async function transitionRun(
   // hand-seeds the precondition to pin the contract for that future
   // change. Removing the COALESCE today would be safe but breaks that
   // forward compatibility pin.
+  // done_reason: when supplied, write it; otherwise preserve whatever's there
+  // (json_set with the existing value is a no-op). Keeps the status flip +
+  // done_reason atomic in the single UPDATE below.
+  const doneReasonArg = args.doneReason
+    ? sql`${args.doneReason}`
+    : sql`json_extract(${documents.frontmatter}, '$.done_reason')`;
+
   const nowIsoForRunning = new Date().toISOString();
   const workerStartedAtArg = isTerminal
     ? sql`NULL`
@@ -324,7 +340,8 @@ export async function transitionRun(
           '$.completed_at', ${completedAt},
           '$.worker_started_at', ${workerStartedAtArg},
           '$.error_reason', ${errorReason ?? null},
-          '$.error_detail', ${errorDetail ?? null}
+          '$.error_detail', ${errorDetail ?? null},
+          '$.done_reason', ${doneReasonArg}
         )`,
         updatedBy: args.actor,
         updatedAt: new Date(),
