@@ -31,13 +31,21 @@
 
 import { and, eq } from 'drizzle-orm';
 import { db } from '../db/client.ts';
-import { apiTokens, documents, projects, users, workspaces } from '../db/schema.ts';
+import { type Document, apiTokens, documents, projects, users, workspaces } from '../db/schema.ts';
 import { env } from '../env.ts';
-import { createRun, ensureRunsTable, getActiveRun, nextChainId } from '../services/agent-runs.ts';
+import {
+  createRun,
+  ensureRunsTable,
+  getActiveRun,
+  getPendingApprovalRun,
+  nextChainId,
+} from '../services/agent-runs.ts';
 import { resolveAgentProjects } from './agent-projects.ts';
+import type { AgentRunFrontmatter } from './agent-run-schema.ts';
 import type { BusEvent } from './event-bus.ts';
 import type { Reactor } from './event-dispatcher.ts';
 import { emitEvent, txWithEvents } from './events.ts';
+import { rejectRun } from './runner.ts';
 
 type ReactorEvent = BusEvent & { seq: number };
 
@@ -111,17 +119,176 @@ function isAgentOriginated(event: ReactorEvent): boolean {
 }
 
 /**
- * D-5 fills the internal_action handlers (resume_run / reject_run for the
- * approval / rejection builtin triggers). For C-11 this is a documented no-op:
- * the approval flow isn't wired yet, so honoring the trigger here would have
- * nothing to act on.
+ * Resolve the FK-valid owning User for a trigger-created run from the event's
+ * actor. Mirrors maybeCreateRun's step-6 logic so both create paths
+ * (assignment/mention dispatch AND the resume_run internal_action) own runs the
+ * SAME way — never fabricating a `system:` user (which would violate
+ * documents.updated_by → users.id).
+ *
+ *   a) actor IS a users.id (session path) → that user.
+ *   b) actor is an api_tokens.id for a HUMAN PAT (agentId NULL) → the token's
+ *      `createdBy` human. (Agent tokens emit `actor='agent:<slug>'`, caught by
+ *      the autonomy gate upstream, so they never reach a create path.)
+ *   c) neither resolves → null (caller logs + skips rather than fabricate one).
  */
-function handleInternalActionStub(action: string, event: ReactorEvent): void {
-  // D-5 fills this in (resume_run / reject_run). Logged so a misfire during
-  // bring-up is visible without changing behavior.
-  console.log(
-    `[trigger-matcher] internal_action '${action}' is a stub (D-5 fills it); event kind=${event.kind}`,
+async function resolveOwnerUser(actorId: string | null | undefined) {
+  if (!actorId) return null;
+  const direct = await db.query.users.findFirst({ where: eq(users.id, actorId) });
+  if (direct) return direct;
+  const token = await db.query.apiTokens.findFirst({ where: eq(apiTokens.id, actorId) });
+  if (token && token.agentId === null && token.createdBy) {
+    return (await db.query.users.findFirst({ where: eq(users.id, token.createdBy) })) ?? null;
+  }
+  return null;
+}
+
+/**
+ * D-5 — the internal_action handlers for the builtin approval / rejection
+ * triggers. The matcher matches `builtin-on-approval` (event_filter
+ * `{kind:'approval'}` → `resume_run`) / `builtin-on-rejection`
+ * (`{kind:'rejection'}` → `reject_run`) against a `comment.created` event, then
+ * calls this. The comment.created payload (services/comments.ts) carries
+ * `document_id` (the comment id), `parent_id` (the run's parent work_item/page)
+ * and `target_agent` (the agent slug).
+ *
+ * `reject_run` — find the parent's awaiting_approval run for the target agent
+ * and reject it. `rejectRun` itself catches the approval/rejection race
+ * (mitigation 43) as a benign no-op.
+ *
+ * `resume_run` — create a NEW `planning` run with `frontmatter.resume_of` =
+ * the original run id + the original's INHERITED `chain_id`. The poller then
+ * claims it and routes to `runAgentResume`. Idempotent against the
+ * dispatcher's at-least-once replay (mitigation 52): if a resume row already
+ * exists for this (parent, agent) lineage we skip creating a second one.
+ *
+ * Robustness (mitigation 49 — a throw halts the reactor): "nothing to do"
+ * (no pending run, unresolvable owner, missing scope) logs + returns; only
+ * genuine errors propagate.
+ */
+async function handleInternalAction(action: string, event: ReactorEvent): Promise<void> {
+  if (!event.workspaceId) return;
+  const payload = (
+    typeof event.payload === 'object' && event.payload !== null ? event.payload : {}
+  ) as Record<string, unknown>;
+
+  const parentId = typeof payload.parent_id === 'string' ? payload.parent_id : undefined;
+  const agentSlug = typeof payload.target_agent === 'string' ? payload.target_agent : undefined;
+  const commentId = typeof payload.document_id === 'string' ? payload.document_id : undefined;
+  if (!parentId || !agentSlug) {
+    console.log(
+      `[trigger-matcher] internal_action '${action}' missing parent_id/target_agent in payload; skipping`,
+    );
+    return;
+  }
+
+  // The single awaiting_approval run for (parent, agent). Absent → nothing to
+  // act on (the at-least-once dispatcher may replay after the run already
+  // moved on, or the comment targeted an agent with no pending run). Benign.
+  const pending = await getPendingApprovalRun({ parentId, agentSlug });
+  if (!pending) {
+    console.log(
+      `[trigger-matcher] internal_action '${action}': no awaiting_approval run for parent=${parentId} agent=${agentSlug}; skipping`,
+    );
+    return;
+  }
+
+  if (action === 'reject_run') {
+    // rejectRun catches RUN_TRANSITION_RACED + INVALID_RUN_TRANSITION itself
+    // (mitigation 43) — a replayed/raced rejection is a no-op there.
+    await rejectRun({ runId: pending.id, rejectionCommentId: commentId ?? pending.id });
+    return;
+  }
+
+  if (action === 'resume_run') {
+    await handleResumeRun(event, pending, agentSlug, parentId);
+    return;
+  }
+
+  console.log(`[trigger-matcher] unknown internal_action '${action}'; skipping`);
+}
+
+/**
+ * resume_run create path. Creates a new `planning` run that resumes the
+ * `pending` (awaiting_approval) original, then leaves it for the poller.
+ */
+async function handleResumeRun(
+  event: ReactorEvent,
+  pending: Document,
+  agentSlug: string,
+  parentId: string,
+): Promise<void> {
+  const workspaceId = event.workspaceId;
+  if (!workspaceId) return;
+
+  // Idempotency / at-least-once (mitigation 52). The dispatcher may replay the
+  // same comment.created event; the original STAYS awaiting_approval until the
+  // poller runs runAgentResume, so a naive replay could create a SECOND resume
+  // row. getActiveRun excluding the original lineage row detects an
+  // already-created resume peer — if present, a resume is already in flight.
+  const inFlightResume = await getActiveRun({ parentId, agentSlug, excludeRunId: pending.id });
+  if (inFlightResume) {
+    console.log(
+      `[trigger-matcher] resume_run: a resume is already in flight (${inFlightResume.id}) for parent=${parentId} agent=${agentSlug}; skipping`,
+    );
+    return;
+  }
+
+  // Resolve the agent doc within the event's workspace.
+  const agent = await db.query.documents.findFirst({
+    where: and(
+      eq(documents.workspaceId, workspaceId),
+      eq(documents.type, 'agent'),
+      eq(documents.slug, agentSlug),
+    ),
+  });
+  if (!agent) {
+    console.log(`[trigger-matcher] resume_run: agent '${agentSlug}' not found; skipping`);
+    return;
+  }
+
+  // Owner: the resume row is owned by a real user — reuse the original run's
+  // owner (it was created by the originating human in C-11), falling back to
+  // resolving the event actor. Never fabricate `system:` (FK constraint).
+  let ownerUser = pending.createdBy
+    ? ((await db.query.users.findFirst({ where: eq(users.id, pending.createdBy) })) ?? null)
+    : null;
+  if (!ownerUser) ownerUser = await resolveOwnerUser(event.actor);
+  if (!ownerUser) {
+    console.log(
+      '[trigger-matcher] resume_run: cannot resolve a FK-valid owner for the resume run; skipping',
+    );
+    return;
+  }
+
+  const workspace = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) });
+  if (!pending.projectId) return;
+  const project = await db.query.projects.findFirst({ where: eq(projects.id, pending.projectId) });
+  if (!workspace || !project) return;
+
+  // Inherit the original run's chain_id — a resume CONTINUES the chain, it does
+  // not start a fresh one.
+  const originalFm = pending.frontmatter as AgentRunFrontmatter;
+  const chainId = originalFm.chain_id;
+  const projectId = project.id;
+
+  const runsTable = await db.transaction(async (tx) =>
+    ensureRunsTable(tx, { workspaceId, projectId }),
   );
+
+  await createRun({
+    workspace,
+    project,
+    runsTable,
+    agent,
+    actor: ownerUser,
+    input: {
+      parentDocumentId: parentId,
+      firedBy: `resume-of:${pending.id}`,
+      chainId,
+      triggerId: null,
+      resumeOf: pending.id,
+    },
+  });
 }
 
 async function maybeCreateRun(
@@ -202,13 +369,7 @@ async function maybeCreateRun(
   //    log rather than fabricate an owner.
   const actorId = event.actor;
   if (!actorId) return;
-  let actorUser = await db.query.users.findFirst({ where: eq(users.id, actorId) });
-  if (!actorUser) {
-    const token = await db.query.apiTokens.findFirst({ where: eq(apiTokens.id, actorId) });
-    if (token && token.agentId === null && token.createdBy) {
-      actorUser = await db.query.users.findFirst({ where: eq(users.id, token.createdBy) });
-    }
-  }
+  const actorUser = await resolveOwnerUser(actorId);
   if (!actorUser) {
     console.log(
       `[trigger-matcher] actor '${actorId}' does not resolve to a user (nor a human PAT creator); cannot own a trigger-created run (skipping)`,
@@ -262,7 +423,7 @@ export const triggerMatcher: Reactor = {
       if (fm.on_event !== event.kind) continue;
       if (fm.event_filter && !matchesFilter(fm.event_filter, event.payload)) continue;
       if (fm.internal_action) {
-        handleInternalActionStub(String(fm.internal_action), event);
+        await handleInternalAction(String(fm.internal_action), event);
         continue;
       }
       const agentSlug = resolveAgentPlaceholder(fm.agent, event.payload);

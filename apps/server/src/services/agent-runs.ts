@@ -63,6 +63,13 @@ export interface CreateRunInput {
   chainId: string;
   /** Trigger that fired this run, or null for non-trigger origins. */
   triggerId: string | null;
+  /**
+   * Set ONLY on an approved-plan resume (D-5): the original awaiting_approval
+   * run's id. When present it is written to `frontmatter.resume_of`, which the
+   * poller (poller.ts) reads to route the claimed planning row to
+   * `runAgentResume` instead of `runAgent`. Omitted for fresh runs.
+   */
+  resumeOf?: string;
 }
 
 export interface CreateRunArgs {
@@ -126,6 +133,10 @@ export async function createRun(
     chain_id: input.chainId,
     fired_by: input.firedBy,
     started_at: startedAt,
+    // Resume lineage (D-5). Only stamped on an approved-plan resume; the poller
+    // routes a planning row with this set to `runAgentResume`. Omitted entirely
+    // (not null) for fresh runs so the `.strict()` schema's optional holds.
+    ...(input.resumeOf !== undefined ? { resume_of: input.resumeOf } : {}),
   };
 
   // Schema-validate before insert so a misconfigured agent (or a future

@@ -84,8 +84,11 @@ export const agentRunFrontmatterSchema = z
 
     worker_started_at: z.string().datetime().optional(),
 
-    // Set on resume — points to the original awaiting_approval run id.
-    resume_of: z.string().uuid().optional(),
+    // Set on resume — points to the original awaiting_approval run id. Run ids
+    // are `nanoid()` (see createRun), NOT UUIDs, so this is a plain non-empty
+    // string, not `.uuid()` (D-5 — the resume_run internal_action writes the
+    // original nanoid run id here via createRun's `resumeOf`).
+    resume_of: z.string().min(1).optional(),
 
     error_reason: runErrorReasonSchema.optional(),
     error_detail: z.string().optional(),

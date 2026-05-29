@@ -177,6 +177,92 @@ async function seedRunningRun(
   });
 }
 
+/**
+ * Seed an `awaiting_approval` agent_run (adapted from seedRunningRun) so the
+ * D-5 internal_action handlers (resume_run / reject_run) have a pending run to
+ * act on. Returns the run id.
+ */
+async function seedAwaitingApprovalRun(
+  db: TestDB,
+  workspace: Workspace,
+  project: Project,
+  runsTable: TableEntity,
+  agent: Document,
+  parent: Document,
+  user: User,
+  chainId: string = crypto.randomUUID(),
+): Promise<string> {
+  const id = nanoid();
+  const now = new Date().toISOString();
+  await db.insert(documents).values({
+    id,
+    workspaceId: workspace.id,
+    projectId: project.id,
+    tableId: runsTable.id,
+    type: 'agent_run',
+    slug: `${agent.slug}-${now.replace(/:/g, '-')}-${nanoid(8)}`,
+    title: `${agent.slug} run`,
+    status: 'awaiting_approval',
+    body: '',
+    frontmatter: {
+      assignee: `agent:${agent.slug}`,
+      status: 'awaiting_approval',
+      agent_slug: agent.slug,
+      provider: 'anthropic',
+      model: 'claude-sonnet-4-6',
+      system_prompt: 'You are a helper.',
+      max_tokens: 12_345,
+      tokens_in: 0,
+      tokens_out: 0,
+      trigger_id: null,
+      chain_id: chainId,
+      fired_by: 'agent.task.assigned',
+      started_at: now,
+      worker_started_at: now,
+    },
+    parentId: parent.id,
+    createdBy: user.id,
+    updatedBy: user.id,
+  });
+  return id;
+}
+
+/** A `comment.created` event carrying the C.3 payload (services/comments.ts). */
+function commentCreatedEvent(args: {
+  seed: TestSeed;
+  parentId: string;
+  agentSlug: string;
+  kind: 'approval' | 'rejection';
+  actor: string;
+  commentId?: string;
+}): BusEvent & { seq: number } {
+  const commentId = args.commentId ?? `comment-${nanoid(6)}`;
+  return {
+    id: `ev-${nanoid(6)}`,
+    workspaceId: args.seed.workspace.id,
+    projectId: args.seed.project.id,
+    documentId: commentId, // comment.created: documentId IS the comment
+    kind: 'comment.created',
+    actor: args.actor,
+    payload: {
+      document_id: commentId,
+      parent_id: args.parentId,
+      author: args.actor,
+      kind: args.kind,
+      target_agent: args.agentSlug,
+    },
+    createdAt: Date.now(),
+    seq: 1,
+  };
+}
+
+async function ensureRunsTableFor(db: TestDB, seed: TestSeed): Promise<TableEntity> {
+  return db.transaction(async (tx) => {
+    const { ensureRunsTable } = await import('../services/agent-runs.ts');
+    return ensureRunsTable(tx, { workspaceId: seed.workspace.id, projectId: seed.project.id });
+  });
+}
+
 async function countRuns(db: TestDB, parentId: string, agentSlug: string): Promise<number> {
   const rows = await db.query.documents.findMany({
     where: and(
@@ -497,4 +583,163 @@ test('flag ON + agent-originated @mention → one run', async () => {
   );
 
   expect(await countRuns(db, wi.id, 'helper')).toBe(1);
+});
+
+// ----- D-5: resume_run / reject_run internal_actions (mitigations 43, 52) -----
+
+test('reject_run transitions the awaiting_approval run to rejected', async () => {
+  const { db, seed } = await makeTestApp();
+  await seedTriggers(db, seed.workspace.id, seed.user.id);
+  const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+  const wiTable = await getWorkItemsTable(db, seed.project.id);
+  const wi = await seedWorkItem(db, seed.workspace, seed.project, wiTable, seed.user);
+  const runsTable = await ensureRunsTableFor(db, seed);
+  const runId = await seedAwaitingApprovalRun(
+    db,
+    seed.workspace,
+    seed.project,
+    runsTable,
+    agent,
+    wi,
+    seed.user,
+  );
+
+  await triggerMatcher.react(
+    commentCreatedEvent({
+      seed,
+      parentId: wi.id,
+      agentSlug: 'helper',
+      kind: 'rejection',
+      actor: seed.user.id,
+    }),
+  );
+
+  const run = await db.query.documents.findFirst({ where: eq(documents.id, runId) });
+  expect(run?.status).toBe('rejected');
+});
+
+test('resume_run creates a NEW planning row with frontmatter.resume_of + inherited chain_id', async () => {
+  const { db, seed } = await makeTestApp();
+  await seedTriggers(db, seed.workspace.id, seed.user.id);
+  const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+  const wiTable = await getWorkItemsTable(db, seed.project.id);
+  const wi = await seedWorkItem(db, seed.workspace, seed.project, wiTable, seed.user);
+  const runsTable = await ensureRunsTableFor(db, seed);
+  const chainId = crypto.randomUUID();
+  const originalId = await seedAwaitingApprovalRun(
+    db,
+    seed.workspace,
+    seed.project,
+    runsTable,
+    agent,
+    wi,
+    seed.user,
+    chainId,
+  );
+
+  await triggerMatcher.react(
+    commentCreatedEvent({
+      seed,
+      parentId: wi.id,
+      agentSlug: 'helper',
+      kind: 'approval',
+      actor: seed.user.id,
+    }),
+  );
+
+  // Two runs now: the original awaiting_approval + the new planning resume row.
+  expect(await countRuns(db, wi.id, 'helper')).toBe(2);
+
+  const resumeRow = await db.query.documents.findFirst({
+    where: and(
+      eq(documents.type, 'agent_run'),
+      eq(documents.parentId, wi.id),
+      eq(documents.status, 'planning'),
+    ),
+  });
+  expect(resumeRow).toBeTruthy();
+  const fm = resumeRow?.frontmatter as Record<string, unknown>;
+  // The poller routes on `frontmatter.resume_of` being a string.
+  expect(typeof fm.resume_of).toBe('string');
+  expect(fm.resume_of).toBe(originalId);
+  // chain_id is INHERITED — a resume continues the original chain.
+  expect(fm.chain_id).toBe(chainId);
+  // Owned by the originating human.
+  expect(resumeRow?.createdBy).toBe(seed.user.id);
+});
+
+test('resume_run fired TWICE creates exactly ONE resume row (idempotency, mitigation 52)', async () => {
+  const { db, seed } = await makeTestApp();
+  await seedTriggers(db, seed.workspace.id, seed.user.id);
+  const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+  const wiTable = await getWorkItemsTable(db, seed.project.id);
+  const wi = await seedWorkItem(db, seed.workspace, seed.project, wiTable, seed.user);
+  const runsTable = await ensureRunsTableFor(db, seed);
+  await seedAwaitingApprovalRun(db, seed.workspace, seed.project, runsTable, agent, wi, seed.user);
+
+  const ev = () =>
+    commentCreatedEvent({
+      seed,
+      parentId: wi.id,
+      agentSlug: 'helper',
+      kind: 'approval',
+      actor: seed.user.id,
+    });
+
+  await triggerMatcher.react(ev());
+  await triggerMatcher.react(ev()); // at-least-once replay
+
+  // original awaiting_approval (1) + exactly one planning resume row (1) = 2.
+  expect(await countRuns(db, wi.id, 'helper')).toBe(2);
+  const planningRows = await db.query.documents.findMany({
+    where: and(
+      eq(documents.type, 'agent_run'),
+      eq(documents.parentId, wi.id),
+      eq(documents.status, 'planning'),
+    ),
+  });
+  expect(planningRows.length).toBe(1);
+});
+
+test('reject_run is a no-op (no throw) when the run already left awaiting_approval (race, mitigation 43)', async () => {
+  const { db, seed } = await makeTestApp();
+  await seedTriggers(db, seed.workspace.id, seed.user.id);
+  const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+  const wiTable = await getWorkItemsTable(db, seed.project.id);
+  const wi = await seedWorkItem(db, seed.workspace, seed.project, wiTable, seed.user);
+  const runsTable = await ensureRunsTableFor(db, seed);
+  const runId = await seedAwaitingApprovalRun(
+    db,
+    seed.workspace,
+    seed.project,
+    runsTable,
+    agent,
+    wi,
+    seed.user,
+  );
+  // Simulate the approval handler having already moved the run out of
+  // awaiting_approval (e.g. resumed → running). getPendingApprovalRun then
+  // returns null and the handler skips before ever calling rejectRun; even if
+  // it did, rejectRun catches the race. Either way: no throw.
+  await db
+    .update(documents)
+    .set({
+      status: 'running',
+      frontmatter: sql`json_set(${documents.frontmatter}, '$.status', 'running')`,
+    })
+    .where(eq(documents.id, runId));
+
+  // Must not throw.
+  await triggerMatcher.react(
+    commentCreatedEvent({
+      seed,
+      parentId: wi.id,
+      agentSlug: 'helper',
+      kind: 'rejection',
+      actor: seed.user.id,
+    }),
+  );
+
+  const run = await db.query.documents.findFirst({ where: eq(documents.id, runId) });
+  expect(run?.status).toBe('running'); // untouched
 });
