@@ -412,6 +412,22 @@ git commit -m "phase-3: SSE ?agent= + ?table= filters (D-7)"
 
 ---
 
+## D execution outcomes + plan corrections (2026-05-29, post-build)
+
+D-1..D-7 shipped + two-stage reviewed. Reconciliations discovered at build/review time, recorded so this plan matches reality:
+
+- **D-1** (`2ecb1b4`): cancel-of-running posts `kind=rejection` (+`target_agent`), NOT `kind=cancel` (no such comment kind; runner's `wasCancelled` detects post-start rejections — corrected in the cancel reconciliation note above). The `createRunForParent` extraction (review #4) initially reordered idempotency-vs-input-comment; fixed by an early idempotency check on the create verb before the input-comment.
+- **D-2** (`4f17050`): registration via explicit `registerRealTools()` (not bare side-effect import — ESM circular-init); 20 tools in sibling `lib/agent-tools-registry.ts`; the 3 MCP-error helpers extracted to `lib/mcp-errors.ts` (shared by registry + mcp.ts so D-3 left no dead copies).
+- **D-3** (`f7db7a6`): `routes/mcp.ts` 1271→186 lines. Caught a D-2 latent behavior change — `create_document.type` strict enum masked the service's `COMMENT_REQUIRES_COMMENT_TOOL`; reverted to `z.string()` (handler + service + DB CHECK are the real type gates, matching legacy).
+- **D-4** (`a316508`): `createRunForParent` exported + `loadRunScopedByToken` extracted from runs.ts as the shared seam (one impl, two faces). `cancel_run`'s `transitionRun` actor uses `ctx.actor` (the FK-valid `users.id` the MCP route resolves via `getUser`), NOT `token.id` — `documents.updated_by` FKs to `users.id`.
+- **D-5** (`fe20e8a`): **plan-correction — `agent-run-schema.ts` `resume_of` was `z.string().uuid()`, which would REJECT a real run id (run ids are `nanoid()`, not UUIDs) at `createRun` parse time. Relaxed to `z.string().min(1)`.** `chain_id` correctly STAYS `.uuid()` (minted via `crypto.randomUUID`). `CreateRunInput` gained an optional `resumeOf?: string`. Owner resolution extracted to a shared `resolveOwnerUser` (no `system:` fabrication, FK-safe).
+- **D-6** (`d32f78e`): uses the house `jsonOk` envelope (`{data:{...}}`) not bare `c.json`, matching sibling wScope routes; `data` holds exactly the 3 keys. Computes all 3 counts workspace-scoped (does NOT use the global `countPendingPlanning` — would leak cross-tenant, mit 60).
+- **D-7** (`707f070`): Option A (payload enrichment), `?agent=` matches the agent SLUG via `payload.agent`, `?table=` matches `payload.table_id`. **plan-correction — enriched THREE lifecycle emitters (createRun + transitionRun + `recoverOrphanRuns`), not just the two named, so filtering is uniform across the full run lifecycle.** Filtered in the subscriber callback (the bus `SubFilter` only knows kinds/projectId/parentId/runId). Keys are purely additive — rate-limiter (`payload.agent`) + provider-health (`payload.error_reason`) consumers verified unaffected. `?agent=<doc_id>` (spec wording) → the E-phase web client passes the SLUG, which is what the events carry.
+
+**Suite:** 877 (D start) → **942 / 1 skip / 0 fail**, tsc clean throughout. **D-8 remaining:** the user-run `/code-review --base=cad6443 --effort=medium` (combined threat model 1–63) + `/evaluate`. **D-9 still deferred.**
+
+---
+
 ## Self-review
 
 - **Spec coverage:** §4g (6 routes) → D-1 ✓. §4i (5 MCP tools) → D-4 ✓. §4 shared dispatch → D-2/D-3 ✓. resume/reject wiring → D-5 ✓. admin-stats → D-6 ✓. SSE filters → D-7 ✓. Provider-health route → D-1 ✓.
