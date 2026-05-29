@@ -4250,7 +4250,152 @@ After C-9 commits:
 
 - [ ] **`/evaluate` retro.** If review or audit surfaced new attack classes, plan-correct first then fix code.
 
-- [ ] **Plan-correction commit: expand C-10..C-13 task bodies (Sub-phase C.3).** Following the same per-task format as C.2 above + the C.2 critical reconciliation block for C-12 (autonomy gate).
+- [ ] **Plan-correction commit: expand C-10..C-13 task bodies (Sub-phase C.3).** Following the same per-task format as C.2 above + the C.2 critical reconciliation block for C-12 (autonomy gate). ✅ DONE 2026-05-29 — see the expanded "Sub-phase C.3" section immediately below.
+
+---
+
+### Sub-phase C.3 — Wiring + triggers + autonomy gate (expanded task bodies — written 2026-05-29)
+
+> Sub-phase C.3 expands C-10..C-13 into the full Steps + Files + Tests + Commit form, mirroring the C.1/C.2 expansions. The original outlines at `### Task C-10..C-13` below the historical divider predate this expansion + the autonomy-gate decision. **Do not implement against the outlines.**
+>
+> All C.3 tasks SEQUENTIAL. Dispatched via `superpowers:subagent-driven-development` wrapped by `netdust-core:ntdst-execute-with-tests`. Each subagent's close-out invokes `netdust-core:testing-workflow` and reports the Test-evidence + STATUS blocks.
+>
+> **Architecture decision (locked 2026-05-29) — the trigger-matcher is INLINE-IN-TX, not a bus subscriber.** Ground-truth read of the live code (the C.2 retro's "ground-truth the dependency surface" lesson, applied):
+> - **No `trigger-matcher.ts` exists.** The 4 builtin triggers are *defined* as documents (`lib/builtin-triggers.ts`) but nothing *consumes* trigger events to fire actions. C.3 CREATES the matcher.
+> - The in-process `eventBus` (`lib/event-bus.ts`) `subscribe(workspaceId, filter, handler)` is **workspace-scoped + fire-and-forget** (per-subscriber errors swallowed at `event-bus.ts:67`). It is the WRONG surface for durably creating `agent_run` rows — a swallowed handler error or a crash between commit and publish would silently drop a trigger (an agent never runs).
+> - **Threat-model mitigation 43 already dictates the design:** the `kind=approval`/`kind=rejection` handlers call `transitionRun(...)` *inside the comment-insert tx* (first-COMMIT-wins race resolution). The matcher therefore runs **synchronously inside the emitting write's transaction** — the comment-insert tx for mention/approval/rejection, the assignee-PATCH tx for assignment. Run-creation / transition commits or rolls back atomically with the originating write. No missed-event window.
+> - **Consequence for `createRun` (C.1 service):** `createRun` currently owns its own tx via `txWithEvents(db, ...)` and does NOT accept a caller tx. To create the run row in the SAME tx as the originating write, C-10a adds an optional `tx?` param to `createRun` (the C.1/C.2 `(args, tx?)` convention — same shape C-9 added to `getActiveRun`). This is the first C.3 task.
+> - The matcher is invoked from `emitEvent` (or a thin wrapper the emitting services call) so EVERY trigger-relevant event flows through it once, in-tx. It reads the workspace's `enabled` trigger documents, matches `on_event` + `event_filter`, and for each match either creates an `agent_run` row at `planning` (assignment/mention) or invokes the `internal_action` (resume_run/reject_run). The poller (C-10) claims `planning` rows ~1s later.
+>
+> **Threat-model EXTENSION for the new trigger-matcher surface (mitigations 49–52, new this sub-phase — extends the C threat model 23–47):**
+> - **49 — Trigger-match runs in the originating write's tx; a matcher throw MUST roll back the originating write, not be swallowed.** Unlike the SSE bus (fire-and-forget by design), the matcher is transactional: if it throws, the comment/assignment write rolls back too (atomic). The matcher MUST NOT swallow its own errors the way `eventBus.publish` does. (Distinct from mitigation 47 — that's the SSE *delivery* path, fire-and-forget; this is the trigger *action* path, transactional.)
+> - **50 — Allow-list enforcement at trigger-match time.** A mention/assignment naming an agent whose `frontmatter.projects` allow-list does NOT include the parent doc's project MUST NOT create a run (mirrors Phase 2.5 `requireResource`). Match-time gate, before `createRun`.
+> - **51 — Autonomy gate (THE V1↔autonomous boundary).** `FOLIO_AGENT_CHAINS_ENABLED` (default false). When OFF, an agent-ORIGINATED trigger event (the originating comment's author is an agent, or it carries a `run_id` in payload/frontmatter) MUST create ZERO runs and emit exactly one `agent.chain.suppressed` event. Human-originated events fire normally. The six runner guards (C-4/C-5) are orthogonal and stay live regardless of the flag.
+> - **52 — Idempotency at trigger-match time.** A single originating event MUST create at most one run per (parent, agent). If `getActiveRun(parentId, agentSlug)` already returns a non-terminal run, the matcher MUST NOT create a duplicate (defends against double-fire from two matching triggers, or a re-emitted event). Inherits the C-8 idempotency model.
+>
+> **Pre-flight invariants for every C.3 task:**
+> - `cd apps/server`; tests via `bun test src/lib/<file>.test.ts` then `bun test`; typecheck `bun x tsc --noEmit`.
+> - Baseline at C.3 start: **server 851 / 1-skip / 0-fail** (post-C.2 + code-review). C.3 adds ~30-40 server tests; expected end-of-C.3: **server ~885 / 1-skip / 0-fail**.
+> - **Carried obligations from C.2 (`tasks/retro-follow-ups.md`):** C.2-R-3 (system-actor FK) lands HERE — trigger-created runs may have no human owner. C.3 MUST decide the FK-valid actor for trigger-created runs (the `actor: User` that `createRun` requires + the `transitionActor` for `transitionRun`). See C-10a.
+> - **Sibling-site audit (5 lockstep classes)** before each task: closed-enum literals (every `error_reason`/event kind from its schema enum), event scope (`projectId: null` for workspace-wide), no new FE-union widening (C.3 is server-only).
+
+#### Task C-10a: `createRun` accepts an optional `tx` (C.1-service extension)
+
+**Threat-model mitigations bound:** 49 (in-tx atomicity prerequisite). Inherits 23 (run-is-its-own-scope snapshot).
+
+**Files:** Modify `apps/server/src/services/agent-runs.ts` + `agent-runs.test.ts`.
+
+**Acceptance criteria:**
+- `createRun(args: CreateRunArgs, tx?: DBOrTx): Promise<CreateRunResult>`. When `tx` is provided, the INSERT + `emitEvent` run on that tx (the caller's `txWithEvents` owns the boundary). When absent, behavior is byte-identical to today (opens its own `txWithEvents(db, ...)`). Mirrors the C.2 `getActiveRun(args, tx?)` and `executeTool(..., tx?)` convention.
+- Resolve `DBOrTx` the same way C-7/C-8 did (re-declare locally or import the `DB` type from `db/client.ts`).
+- **System-actor decision (C.2-R-3):** the trigger path's `actor` (a `User` — `createRun` requires `actor: User` and writes `actor.id` to `created_by`, FK→`users.id`). The originating WRITE always has a human actor (the person who assigned/mentioned/approved/rejected — even an agent-originated comment was ultimately authored under some token; resolve the originating user). Use the **originating event's human actor** as the run's `created_by`. Document inline: trigger-created runs are owned by the human who triggered them; there is no `system:` user. (This closes C.2-R-3 for the trigger path; the runner's `transitionActor` already uses `run.createdBy`, so it inherits this FK-valid owner.)
+
+**Steps:**
+- [ ] **Step 1 — Failing test.** In `agent-runs.test.ts`: `it('createRun joins a caller-provided tx (one atomic commit)')` — open `txWithEvents(db, async (tx) => { await createRun(args, tx); throw new Error('rollback') })`, catch, then assert NO run row was inserted (the rollback discarded it). Contrast: `it('createRun opens its own tx when none passed')` — existing behavior, run row exists after the call. Run → 1 new FAIL (tx param not accepted).
+- [ ] **Step 2 — Implement.** Add `tx?: DBOrTx`. Factor the insert+emit body into a helper that takes a tx; the public fn either uses the passed tx or wraps `txWithEvents(db, ...)`. Run → PASS.
+- [ ] **Step 3 — Regression.** `bun test src/services/agent-runs.test.ts` → all green (existing createRun tests unchanged). `bun test` full suite. `bun x tsc --noEmit`.
+- [ ] **Step 4 — Commit + testing-workflow.** Invoke `Skill("netdust-core:testing-workflow")`. Commit: `phase-3: C-10a createRun accepts optional tx — in-tx trigger-match prerequisite`. Mitigation 49.
+
+#### Task C-10: `lib/trigger-matcher.ts` — inline-in-tx matcher + autonomy gate
+
+> ⚠️ **This task folds in the C-12 autonomy-gate reconciliation (the V1↔autonomous decision point).** The original C-12 outline below the divider is superseded by this task — the matcher and the gate are one surface.
+
+**Threat-model mitigations bound:** 49 (in-tx, no swallow), 50 (allow-list at match-time), 51 (autonomy gate — `FOLIO_AGENT_CHAINS_ENABLED` + `isAgentOriginated` + `agent.chain.suppressed`), 52 (match-time idempotency via `getActiveRun`). Inherits 43 (approval/rejection first-COMMIT-wins handled by the run-transition path, wired in C-12/D-5; C-10 ships the assignment/mention create path + the gate).
+
+**Files:** Create `apps/server/src/lib/trigger-matcher.ts` + `trigger-matcher.test.ts`.
+
+**Scope (C.3 lands the CREATE path — assignment + mention; the resume_run/reject_run internal_actions wire in D-5 per the existing plan, but C-10 builds the dispatch skeleton so D-5 only fills the two handlers).**
+
+**Acceptance criteria:**
+- `matchTriggers(tx: DBOrTx, event: { workspaceId, projectId, documentId, kind, actor, payload }): Promise<void>` — invoked inline from the emitting path (C-11 wires the call sites). Loads the workspace's `enabled: true` trigger documents (type=`trigger`), filters to those whose `frontmatter.on_event === event.kind` AND whose `frontmatter.event_filter` (if present) matches the event payload (e.g. `{kind:'approval'}` against `payload.kind`).
+- For each matched trigger:
+  - If the trigger maps to an agent (assignment/mention — `frontmatter.agent` resolves to a slug via `$event.agent` / `$event.agent_slug`): resolve the agent doc, enforce **mitigation 50** (agent's `frontmatter.projects` allow-list includes `event.projectId`, or is `['*']` — else skip, no row), enforce **mitigation 52** (`getActiveRun(parentId, agentSlug, tx)` non-null → skip, no duplicate), enforce **mitigation 51** (autonomy gate — below), then `createRun(args, tx)` at `planning` with `input.triggerId = trigger.id`, `input.firedBy = event.kind`, `input.chainId` (new chain via `nextChainId` for a human-originated root; inherited if a chain exists). Actor = the originating human user (C-10a decision).
+  - If the trigger carries an `internal_action` (`resume_run`/`reject_run`): C-10 dispatches to a named handler stub that D-5 fills. C-10 ships the dispatch + a `not-yet-wired` no-op-with-log for these two (so the matcher is complete and D-5 is purely additive). Do NOT implement resume/reject logic here — that's D-5 (it needs `getPendingApprovalRun` + `runAgentResume`/`rejectRun` wiring).
+- **Mitigation 51 — autonomy gate (THE critical fold-in):**
+  - Read `env.FOLIO_AGENT_CHAINS_ENABLED` (default **false** — add to the env config alongside the existing `FOLIO_*` vars).
+  - `isAgentOriginated(event): boolean` — true if the originating actor is an agent (`event.actor` starts with `agent:`) OR the originating doc/comment carries a `run_id` (payload/frontmatter). 
+  - When the gate is OFF AND `isAgentOriginated(event)` AND the matched trigger would create a run: create ZERO rows, emit exactly ONE `agent.chain.suppressed` event (`emitEvent(tx, {kind:'agent.chain.suppressed', workspaceId, projectId, documentId, actor, payload:{trigger_id, agent_slug, reason:'autonomy_gate'}})`), return. Human-originated events are unaffected. When the gate is ON, agent-originated mentions fire normally (subject to 50 + 52 + the six runner guards).
+  - The six runner guards (C-4/C-5) are orthogonal — the gate governs cross-run FAN-OUT, the guards govern per-run resource caps. Do NOT conflate.
+- **Mitigation 49 — the matcher does NOT swallow errors.** Unlike `eventBus.publish`, a throw inside `matchTriggers` propagates (rolling back the originating tx). Wrap individual trigger evaluation so one malformed trigger doc doesn't abort the others ONLY if that's safe — but a `createRun`/`emitEvent` failure MUST propagate (atomicity). Document the distinction in a header comment.
+- **`agent.chain.suppressed` event kind** — add to the shared `KNOWN_EVENT_KINDS` in `packages/shared` (sibling-site: this is the one shared-package touch in C.3; audit the FE consumer doesn't need it — it's server-internal observability).
+
+**Steps:**
+- [ ] **Step 1 — Add the env var + event kind.** Add `FOLIO_AGENT_CHAINS_ENABLED` (default false, coerced bool) to the env config module. Add `'agent.chain.suppressed'` to `packages/shared` `KNOWN_EVENT_KINDS` + the server `EventKind` union. Run `bun test` in shared + server to confirm no break. (No new test yet — config + enum.)
+- [ ] **Step 2 — Failing tests for the create path + allow-list + idempotency.** In `trigger-matcher.test.ts`:
+  - `it('creates one agent_run at planning for a human assignment matching builtin-on-assignment')` — seed an enabled assignment trigger + an agent allow-listed to the project; call `matchTriggers(tx, {kind:'agent.task.assigned', actor:<human>, payload:{agent:<slug>}, ...})`; assert one planning row in the project's runs table.
+  - `it('creates one agent_run for a human @mention matching builtin-on-mention')` — `comment.mentioned`, human author.
+  - `it('does NOT create a run when the agent allow-list excludes the project (mitigation 50)')` — agent `projects:['other']`; assert zero rows.
+  - `it('does NOT create a duplicate when getActiveRun returns a non-terminal peer (mitigation 52)')` — seed a running run for (parent, agent); assert no second row.
+  - Run → all FAIL (matchTriggers doesn't exist).
+- [ ] **Step 3 — Implement the create path** (load triggers, match, allow-list, idempotency, createRun(args, tx)). Run → the 4 above PASS.
+- [ ] **Step 4 — Failing tests for the autonomy gate (mitigation 51).** In `runner.autonomy-gate.test.ts` (per PHASES naming) OR `trigger-matcher.test.ts`:
+  - `it('flag OFF + agent-originated @mention → ZERO rows + one agent.chain.suppressed')` — `FOLIO_AGENT_CHAINS_ENABLED=false`, originating comment author is `agent:foo`; assert zero runs + exactly one suppressed event.
+  - `it('flag OFF + human @mention → exactly one row, no suppressed event')`.
+  - `it('flag ON + agent-originated @mention → one row (subject to guards)')` — toggle the env for this test, restore after.
+  - Run → FAIL (gate not implemented).
+- [ ] **Step 5 — Implement the autonomy gate + `isAgentOriginated`** inside the create path (before `createRun`). Add the `internal_action` dispatch stub (resume_run/reject_run → log + no-op, D-5 fills). Run → all PASS.
+- [ ] **Step 6 — Full suite + typecheck + workflow + commit.** `bun test` (expect ~851 → ~865), `bun x tsc --noEmit`. Invoke `Skill("netdust-core:testing-workflow")`. Commit: `phase-3: C-10 trigger-matcher — inline-in-tx create path + autonomy gate (FOLIO_AGENT_CHAINS_ENABLED)`. Mitigations 49, 50, 51, 52.
+
+#### Task C-11: `lib/poller.ts` — `startRunnerPoller` + boot wiring
+
+**Threat-model mitigations bound:** 36/37 (claim-race + orphan recovery, via C.1's `claimNextPlanningRun`/`recoverOrphanRuns`), 38 (orphan-recovery vs active-poller race — the recency floor from C.1 R4 already mitigates; the poller respects `FOLIO_WORKER_STALE_MS`).
+
+**Files:** Create `apps/server/src/lib/poller.ts` + `poller.test.ts`. Modify `apps/server/src/index.ts`.
+
+**Acceptance criteria:**
+- `startRunnerPoller(db): () => void` (returns a stop fn). Env: `FOLIO_POLLER_INTERVAL_MS` (default 1000), `FOLIO_POLLER_CONCURRENCY` (default 5), `FOLIO_WORKER_STALE_MS` (default 300000), backpressure threshold 10 (log when pending exceeds it). Add these to the env config.
+- **Boot:** call `recoverOrphanRuns(db)` once before the loop starts (C.1 service).
+- **Main loop:** every interval, while in-flight < concurrency cap, `claimNextPlanningRun(db)` (C.1 — race-safe claim); for each claimed row, fire-and-forget `runAgent({runId})` (or `runAgentResume` if `frontmatter.resume_of` is set — check the row + dispatch the right entry) with `.catch(logError).finally(() => decrement in-flight)`. The runner NEVER throws to the poller (C-8 top-level containment guarantees this).
+- **Resume dispatch:** when a claimed planning row has `frontmatter.resume_of`, call `runAgentResume({runId})` instead of `runAgent` (C-9). The poller is the single claim point for both.
+- **Backpressure:** if `countPendingPlanning(db)` (C.1) exceeds the threshold, log a warning (never silently drop). No hard cap in v1 — just observability.
+- **Boot wiring (C-11 mirrors the reconciler pattern in `index.ts`):** `if (env.NODE_ENV !== 'test') { void startRunnerPoller(db); }` after the reconciler block. NOT started in test env (covered by unit tests with fake timers + D's integration smoke).
+
+**Steps:**
+- [ ] **Step 1 — Add env vars** (`FOLIO_POLLER_INTERVAL_MS`, `FOLIO_POLLER_CONCURRENCY`, `FOLIO_WORKER_STALE_MS`) to the env config with defaults. (No test — config.)
+- [ ] **Step 2 — Failing tests with fake timers.** In `poller.test.ts` (use Bun's `setSystemTime` or a manual interval stub — mock `runAgent`/`runAgentResume` via `mock.module` or by injecting them; prefer injection to avoid the module-global leak per `[[mock-module-leaks-across-bun-tests]]`):
+  - `it('calls recoverOrphanRuns once on boot before the first claim')`.
+  - `it('claims a planning row and dispatches runAgent within one interval')`.
+  - `it('dispatches runAgentResume when the claimed row has frontmatter.resume_of')`.
+  - `it('respects the concurrency cap (never more than N in-flight)')` — seed N+2 planning rows, cap=N, assert only N runAgent calls in-flight at once.
+  - `it('logs backpressure when pending exceeds threshold')`.
+  - `it('a runAgent rejection does not crash the loop (next tick still claims)')`.
+  - Run → FAIL.
+- [ ] **Step 3 — Implement the poller.** Run → PASS.
+- [ ] **Step 4 — Wire into index.ts** (NODE_ENV-gated, mirrors reconciler). No unit test (smoke in C-13/D).
+- [ ] **Step 5 — Full suite + typecheck + workflow + commit.** Invoke `Skill("netdust-core:testing-workflow")`. Commit: `phase-3: C-11 runner poller — claim loop + concurrency cap + boot wiring`. Mitigations 36, 37, 38.
+
+#### Task C-12: Wire the matcher into the emitting paths (the actual trigger fire)
+
+> ⚠️ **The autonomy gate itself lives in C-10's matcher (mitigation 51). C-12 WIRES the matcher into the comment + assignment write paths so trigger events actually flow through it in-tx.** The original C-12 outline (below the divider) conflated the gate + the wiring; this expansion splits them: C-10 = matcher + gate, C-12 = call-site wiring.
+
+**Threat-model mitigations bound:** 49 (the wiring is what puts the matcher IN the originating tx), 43 (approval/rejection handlers — the `internal_action` path stubbed in C-10 is wired to its call site here; the actual resume/reject LOGIC is D-5).
+
+**Files:** Modify `apps/server/src/services/comments.ts` (the `comment.mentioned` + `comment.created` emit sites at ~426, ~567), `apps/server/src/services/documents.ts` (the `agent.task.assigned` emit sites at ~540, ~780), and `apps/server/src/routes/documents.ts` (the `agent.task.assigned` emit at ~347). + tests.
+
+**Acceptance criteria:**
+- At each site that emits `agent.task.assigned`, `comment.mentioned`, or `comment.created` (the 4 builtin triggers' `on_event` values), call `matchTriggers(tx, event)` **on the SAME tx** that emitted the event, AFTER the `emitEvent` call (so the event row exists). Since these emits are already inside a `txWithEvents` (or a tx), the matcher joins it — atomic.
+- The matcher call MUST be inside the existing tx, not after commit. Verify each call site is within a `txWithEvents`/tx scope; if any emit is NOT in a tx, wrap it (note the divergence).
+- **Mitigation 43 readiness:** the `comment.created` with `kind:'approval'|'rejection'` flows to the matcher's `internal_action` dispatch (stubbed in C-10). C-12 confirms the wiring reaches it; D-5 fills the resume/reject handlers. C-12 does NOT implement resume/reject — but its test asserts the matcher IS invoked for an approval/rejection comment (the stub logs).
+- No double-fire: a single comment-create emits `comment.created` (and possibly `comment.mentioned`) — ensure the matcher isn't invoked twice for the same logical event in a way that creates two runs (mitigation 52's `getActiveRun` guard backstops this, but avoid the double-invoke at the source).
+
+**Steps:**
+- [ ] **Step 1 — Failing integration-style tests.** In `comments.test.ts` / `documents.test.ts` (or a new `trigger-wiring.test.ts`):
+  - `it('PATCH work_item assignee to agent:foo creates one planning run')` — end-to-end through `updateDocument`; assert one run row.
+  - `it('POST comment with @foo mention creates one planning run')` — through `createComment`; assert one row.
+  - `it('approval comment invokes the matcher internal_action dispatch')` — assert the stub was reached (spy/log), zero runs created by the stub (D-5 fills it).
+  - `it('agent-originated @mention with chains disabled creates zero runs (gate wired end-to-end)')` — the autonomy gate, exercised through the real comment path.
+  - Run → FAIL (matcher not wired into the emit sites).
+- [ ] **Step 2 — Wire `matchTriggers(tx, event)` into each emit site.** Run → PASS.
+- [ ] **Step 3 — Full suite + typecheck + workflow + commit.** Invoke `Skill("netdust-core:testing-workflow")`. Commit: `phase-3: C-12 wire trigger-matcher into comment + assignment emit paths (in-tx)`. Mitigations 49, 43.
+
+#### Task C-13: Sub-phase C.3 integration gate (controller, not a subagent)
+
+- [ ] `bun test` full server suite green; expect ~851 → ~885 / 1-skip / 0-fail. Web + shared unchanged (C.3 is server-only except the one `agent.chain.suppressed` shared-enum add).
+- [ ] `bun x tsc --noEmit` clean (server). FE/shared typecheck unaffected.
+- [ ] **Smoke the dev server (the first "agent does work" moment):** configure an Anthropic key (Sub-phase B UI), assign a work_item to an agent → watch the runs table populate a `planning` row → poller claims it ~1s → `runAgent` streams → `kind=result` comment lands on the parent. With only `__echo` registered (C-7 skeleton), the agent can't do real tool work yet — but the LOOP runs end-to-end: claim → stream → comment → completed. (Real tools land in D-3; the "set up a project for me" demo is Sub-phase D.)
+- [ ] **Autonomy-gate smoke:** with `FOLIO_AGENT_CHAINS_ENABLED` unset (default false), an agent-posted `@mention` produces zero runs + one `agent.chain.suppressed` in the events table. Flip the env to true, restart, repeat → one run fires.
+- [ ] `/integration` → `/code-review --base=<C.2 close sha> --effort=medium` (reviewer prompt names mitigations 43, 49, 50, 51, 52 + the carried 36/37/38) → sibling-site audit on the C.3 diff → `/evaluate`.
+- [ ] Sub-phase C complete. Next: **Sub-phase D** (routes + MCP parity + real tools in D-3 → mitigation 27 lands here per C.2-R-1; tool-error-feedback redesign per C.2-R-2).
 
 ---
 
