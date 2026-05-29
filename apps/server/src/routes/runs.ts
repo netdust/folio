@@ -102,23 +102,45 @@ async function resolveAgentAllowList(
 }
 
 /**
- * Load an agent_run by id and re-scope it (mitigation 58). Throws 404
- * AGENT_RUN_NOT_FOUND on any mismatch — never 403, so cross-tenant existence
+ * Context-free core of the run re-scope (mitigation 58). Loads an agent_run by
+ * id and gates it against a caller's `workspaceId` + project `allowList`. Throws
+ * 404 AGENT_RUN_NOT_FOUND on any mismatch — never 403, so cross-tenant existence
  * is not confirmed.
+ *
+ * D-4 seam — BOTH the HTTP route (via `loadRunScoped`, which derives
+ * `{workspaceId, allowList}` from the Hono Context) and the MCP run tools (which
+ * derive the same from the bearer token) call this ONE implementation. `null`
+ * allowList means no project narrowing (session / human PAT / wildcard agent).
+ */
+export async function loadRunScopedByToken(
+  runId: string,
+  scope: { workspaceId: string; allowList: string[] | null },
+): Promise<Document> {
+  const run = await db.query.documents.findFirst({ where: eq(documents.id, runId) });
+  const notFound = () => new HTTPError('AGENT_RUN_NOT_FOUND', `agent_run ${runId} not found`, 404);
+  if (!run || run.type !== 'agent_run' || run.workspaceId !== scope.workspaceId) throw notFound();
+  if (
+    scope.allowList !== null &&
+    (run.projectId === null || !scope.allowList.includes(run.projectId))
+  ) {
+    throw notFound();
+  }
+  return run;
+}
+
+/**
+ * Load an agent_run by id and re-scope it (mitigation 58). Derives the
+ * `{workspaceId, allowList}` from the Hono Context, then delegates to the
+ * context-free `loadRunScopedByToken` so the HTTP route and the MCP tools share
+ * one re-scope implementation.
  */
 async function loadRunScoped(
   c: Context<AuthContext & ScopeContext>,
   runId: string,
 ): Promise<Document> {
   const ws = getWorkspace(c);
-  const run = await db.query.documents.findFirst({ where: eq(documents.id, runId) });
-  const notFound = () => new HTTPError('AGENT_RUN_NOT_FOUND', `agent_run ${runId} not found`, 404);
-  if (!run || run.type !== 'agent_run' || run.workspaceId !== ws.id) throw notFound();
   const allowList = await resolveAgentAllowList(c);
-  if (allowList !== null && (run.projectId === null || !allowList.includes(run.projectId))) {
-    throw notFound();
-  }
-  return run;
+  return loadRunScopedByToken(runId, { workspaceId: ws.id, allowList });
 }
 
 /**
@@ -155,7 +177,7 @@ async function getProjectRow(projectId: string): Promise<Project> {
  * ordering-sensitive, so they stay inline at each call site. The caller is
  * responsible for resolving `agent`, `parent`, and `actorUser` first.
  */
-async function createRunForParent(args: {
+export async function createRunForParent(args: {
   workspace: Workspace;
   parent: Document;
   agent: Document;

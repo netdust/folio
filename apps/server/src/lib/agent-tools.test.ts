@@ -1,10 +1,22 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import type { DB } from '../db/client.ts';
-import { type ApiToken, apiTokens, documents } from '../db/schema.ts';
+import {
+  type ApiToken,
+  type Document,
+  type Project,
+  type User,
+  type Workspace,
+  apiTokens,
+  documents,
+  tables as tablesTable,
+} from '../db/schema.ts';
+import { env } from '../env.ts';
 import { makeTestApp } from '../test/harness.ts';
+import { createRun, ensureRunsTable, nextChainId } from '../services/agent-runs.ts';
+import { listComments } from '../services/comments.ts';
 import { type ToolDef, executeTool, listToolDefs, registerTool } from './agent-tools.ts';
 import { newApiToken } from './auth.ts';
 
@@ -546,5 +558,374 @@ describe('D-2: agent-lifecycle guards survive the migration (mitigation 57)', ()
     const e = thrown as Error & { code?: number; data?: { reason?: string } };
     expect(e.code).toBe(-32602);
     expect(e.data?.reason).toBe('tools_widening_forbidden');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// D-4 — the 5 run-management MCP tools (list_runs, get_run, run_agent,
+// cancel_run, retry_run). Each delegates to the SAME seam D-1's HTTP routes
+// call (createRunForParent, loadRunScopedByToken, listRuns, transitionRun), so
+// these assert: (a) each happy path via executeTool, (b) HTTP-twin PARITY
+// (same row effect / outcome as the D-1 verb against the same seed), and
+// (c) the bound mitigations (54 autonomy gate, 58 cross-scope, 56/63
+// idempotency). Real DB via makeTestApp, no mocking.
+// ---------------------------------------------------------------------------
+
+/** Seed an agent doc with the FULL frontmatter createRun snapshots, + a token. */
+async function seedRunAgent(
+  db: DB,
+  workspaceId: string,
+  userId: string,
+  slug: string,
+  opts: { projects?: string[]; agentBound?: boolean; scopes?: string[] } = {},
+): Promise<{ agent: Document; token: ApiToken }> {
+  const agentId = nanoid();
+  await db.insert(documents).values({
+    id: agentId,
+    projectId: null,
+    workspaceId,
+    tableId: null,
+    type: 'agent',
+    slug,
+    title: slug,
+    status: null,
+    body: '',
+    frontmatter: {
+      system_prompt: 'You are a helper.',
+      model: 'claude-sonnet-4-6',
+      provider: 'anthropic',
+      tools: ['list_documents'],
+      projects: opts.projects ?? ['*'],
+      max_delegation_depth: 2,
+      max_tokens_per_run: 12_345,
+      requires_approval: false,
+    },
+    createdBy: userId,
+    updatedBy: userId,
+  });
+  const { hash } = newApiToken();
+  const tokenId = nanoid();
+  const scopes = opts.scopes ?? ['agents:write', 'documents:read'];
+  await db.insert(apiTokens).values({
+    id: tokenId,
+    workspaceId,
+    name: `agent:${slug}`,
+    tokenHash: hash,
+    scopes,
+    // agentBound defaults FALSE → a human-PAT-shaped token (createdBy set,
+    // agentId null) so run_agent's autonomy gate allows it.
+    agentId: opts.agentBound ? agentId : null,
+    createdBy: userId,
+  });
+  const [token] = await db.select().from(apiTokens).where(eq(apiTokens.id, tokenId));
+  const agent = await db.query.documents.findFirst({ where: eq(documents.id, agentId) });
+  return { agent: agent!, token: token! };
+}
+
+async function seedWorkItem(
+  db: DB,
+  workspace: Workspace,
+  project: Project,
+  user: User,
+): Promise<Document> {
+  const table = await db.query.tables.findFirst({
+    where: and(eq(tablesTable.projectId, project.id), eq(tablesTable.slug, 'work-items')),
+  });
+  const id = nanoid();
+  await db.insert(documents).values({
+    id,
+    workspaceId: workspace.id,
+    projectId: project.id,
+    tableId: table!.id,
+    type: 'work_item',
+    slug: `wi-${nanoid(6)}`,
+    title: 'Parent WI',
+    status: null,
+    body: '',
+    frontmatter: {},
+    createdBy: user.id,
+    updatedBy: user.id,
+  });
+  return (await db.query.documents.findFirst({ where: eq(documents.id, id) }))!;
+}
+
+async function seedRunRow(
+  db: DB,
+  workspace: Workspace,
+  project: Project,
+  agent: Document,
+  actor: User,
+  parent: Document,
+): Promise<Document> {
+  const runsTable = await db.transaction(async (tx) =>
+    ensureRunsTable(tx, { workspaceId: workspace.id, projectId: project.id }),
+  );
+  const { document } = await createRun({
+    workspace,
+    project,
+    runsTable,
+    agent,
+    actor,
+    input: {
+      parentDocumentId: parent.id,
+      firedBy: 'manual',
+      chainId: nextChainId({ firedBy: 'manual' }),
+      triggerId: null,
+    },
+  });
+  return document;
+}
+
+/** Parse the textResult JSON envelope the run tools return. */
+function parseText<T>(out: unknown): T {
+  return JSON.parse((out as { content: { text: string }[] }).content[0]!.text) as T;
+}
+
+describe('D-4: run-management MCP tools', () => {
+  it('run_agent (human PAT) creates a planning run — happy path', async () => {
+    const { db, seed } = await makeTestApp();
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, seed.user);
+    const { token } = await seedRunAgent(db, seed.workspace.id, seed.user.id, 'helper');
+
+    const out = await executeTool(token, seed.user.id, 'run_agent', {
+      workspace_slug: 'acme',
+      agent_slug: 'helper',
+      parent_slug: parent.slug,
+    });
+    const res = parseText<{ run_id: string; status: string }>(out);
+    expect(res.status).toBe('planning');
+    const row = await db.query.documents.findFirst({ where: eq(documents.id, res.run_id) });
+    expect(row?.type).toBe('agent_run');
+    expect(row?.status).toBe('planning');
+  });
+
+  it('run_agent with input posts a comment to the parent (mit 59)', async () => {
+    const { db, seed } = await makeTestApp();
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, seed.user);
+    await seedRunAgent(db, seed.workspace.id, seed.user.id, 'helper');
+    const { token } = await seedRunAgent(db, seed.workspace.id, seed.user.id, 'helper2');
+
+    await executeTool(token, seed.user.id, 'run_agent', {
+      workspace_slug: 'acme',
+      agent_slug: 'helper2',
+      parent_slug: parent.slug,
+      input: 'do the thing',
+    });
+    const comments = await listComments({ parentId: parent.id });
+    expect(comments.length).toBe(1);
+    expect(comments[0]?.body).toBe('do the thing');
+  });
+
+  it('list_runs + get_run return the seeded run (read happy paths)', async () => {
+    const { db, seed } = await makeTestApp();
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, seed.user);
+    const { agent, token } = await seedRunAgent(db, seed.workspace.id, seed.user.id, 'helper');
+    const run = await seedRunRow(db, seed.workspace, seed.project, agent, seed.user, parent);
+
+    const listed = parseText<{ id: string }[]>(
+      await executeTool(token, seed.user.id, 'list_runs', {
+        workspace_slug: 'acme',
+        project_slug: 'web',
+      }),
+    );
+    expect(listed.map((r) => r.id)).toContain(run.id);
+
+    const got = parseText<{ id: string; type: string }>(
+      await executeTool(token, seed.user.id, 'get_run', {
+        workspace_slug: 'acme',
+        run_id: run.id,
+      }),
+    );
+    expect(got.id).toBe(run.id);
+    expect(got.type).toBe('agent_run');
+  });
+
+  it('cancel_run on a planning run → failed (parity with HTTP cancel)', async () => {
+    const { db, seed } = await makeTestApp();
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, seed.user);
+    const { agent, token } = await seedRunAgent(db, seed.workspace.id, seed.user.id, 'helper');
+    const run = await seedRunRow(db, seed.workspace, seed.project, agent, seed.user, parent);
+
+    const res = parseText<{ run_id: string; status: string }>(
+      await executeTool(token, seed.user.id, 'cancel_run', {
+        workspace_slug: 'acme',
+        run_id: run.id,
+      }),
+    );
+    expect(res.status).toBe('failed');
+    const row = await db.query.documents.findFirst({ where: eq(documents.id, run.id) });
+    expect(row?.status).toBe('failed');
+    expect((row?.frontmatter as { error_reason?: string }).error_reason).toBe('cancelled');
+  });
+
+  it('retry_run on a terminal run creates a fresh planning run (mit 63 happy)', async () => {
+    const { db, seed } = await makeTestApp();
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, seed.user);
+    const { agent, token } = await seedRunAgent(db, seed.workspace.id, seed.user.id, 'helper');
+    const run = await seedRunRow(db, seed.workspace, seed.project, agent, seed.user, parent);
+    // Terminalize the original so it's not an active peer.
+    await db
+      .update(documents)
+      .set({
+        status: 'failed',
+        frontmatter: { ...(run.frontmatter as Record<string, unknown>), status: 'failed' },
+      })
+      .where(eq(documents.id, run.id));
+
+    const res = parseText<{ run_id: string; status: string }>(
+      await executeTool(token, seed.user.id, 'retry_run', {
+        workspace_slug: 'acme',
+        run_id: run.id,
+      }),
+    );
+    expect(res.status).toBe('planning');
+    expect(res.run_id).not.toBe(run.id);
+    const rows = await db.query.documents.findMany({ where: eq(documents.type, 'agent_run') });
+    expect(rows.length).toBe(2);
+  });
+
+  it('retry_run while original still active → RUN_ALREADY_ACTIVE (mit 63)', async () => {
+    const { db, seed } = await makeTestApp();
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, seed.user);
+    const { agent, token } = await seedRunAgent(db, seed.workspace.id, seed.user.id, 'helper');
+    const run = await seedRunRow(db, seed.workspace, seed.project, agent, seed.user, parent);
+
+    let thrown: unknown;
+    try {
+      await executeTool(token, seed.user.id, 'retry_run', {
+        workspace_slug: 'acme',
+        run_id: run.id,
+      });
+    } catch (err) {
+      thrown = err;
+    }
+    expect((thrown as { code?: string }).code).toBe('RUN_ALREADY_ACTIVE');
+    // No second run materialized.
+    const rows = await db.query.documents.findMany({ where: eq(documents.type, 'agent_run') });
+    expect(rows.length).toBe(1);
+  });
+
+  it('run_agent twice on the same parent → RUN_ALREADY_ACTIVE (mit 56)', async () => {
+    const { db, seed } = await makeTestApp();
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, seed.user);
+    const { token } = await seedRunAgent(db, seed.workspace.id, seed.user.id, 'helper');
+    const argsBag = { workspace_slug: 'acme', agent_slug: 'helper', parent_slug: parent.slug };
+
+    await executeTool(token, seed.user.id, 'run_agent', argsBag);
+    let thrown: unknown;
+    try {
+      await executeTool(token, seed.user.id, 'run_agent', argsBag);
+    } catch (err) {
+      thrown = err;
+    }
+    expect((thrown as { code?: string }).code).toBe('RUN_ALREADY_ACTIVE');
+  });
+
+  it('mit 54: agent-bound bearer run_agent with chains OFF is suppressed', async () => {
+    const { db, seed } = await makeTestApp();
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, seed.user);
+    const { token, agent } = await seedRunAgent(db, seed.workspace.id, seed.user.id, 'helper', {
+      agentBound: true,
+    });
+
+    const prev = env.FOLIO_AGENT_CHAINS_ENABLED;
+    env.FOLIO_AGENT_CHAINS_ENABLED = false;
+    let thrown: unknown;
+    try {
+      await executeTool(token, `agent:${agent.slug}`, 'run_agent', {
+        workspace_slug: 'acme',
+        agent_slug: 'helper',
+        parent_slug: parent.slug,
+      });
+    } catch (err) {
+      thrown = err;
+    } finally {
+      env.FOLIO_AGENT_CHAINS_ENABLED = prev;
+    }
+    const e = thrown as { code?: number; data?: { reason?: string } };
+    expect(e.code).toBe(-32602);
+    expect(e.data?.reason).toBe('agent_chains_disabled');
+    // Zero runs created.
+    const rows = await db.query.documents.findMany({ where: eq(documents.type, 'agent_run') });
+    expect(rows.length).toBe(0);
+  });
+
+  it('mit 58: get_run for a run id from ANOTHER workspace → AGENT_RUN_NOT_FOUND', async () => {
+    const { db, seed } = await makeTestApp();
+    // Build a second workspace + project + run inside it.
+    const { workspaces, projects, memberships } = await import('../db/schema.ts');
+    const { seedProjectDefaults } = await import('./seed-project-defaults.ts');
+    const otherWsId = nanoid();
+    await db.insert(workspaces).values({ id: otherWsId, slug: 'other', name: 'Other' });
+    await db
+      .insert(memberships)
+      .values({ workspaceId: otherWsId, userId: seed.user.id, role: 'owner' });
+    const otherProjectId = nanoid();
+    await db
+      .insert(projects)
+      .values({ id: otherProjectId, workspaceId: otherWsId, slug: 'other-web', name: 'Other Web' });
+    await seedProjectDefaults(db, otherProjectId);
+    const [otherWs] = await db.select().from(workspaces).where(eq(workspaces.id, otherWsId));
+    const [otherProj] = await db.select().from(projects).where(eq(projects.id, otherProjectId));
+    const otherParent = await seedWorkItem(db, otherWs!, otherProj!, seed.user);
+    const { agent: otherAgent } = await seedRunAgent(db, otherWsId, seed.user.id, 'helper');
+    const otherRun = await seedRunRow(db, otherWs!, otherProj!, otherAgent, seed.user, otherParent);
+
+    // A token bound to the FIRST workspace addresses the OTHER workspace's run.
+    const { token } = await seedRunAgent(db, seed.workspace.id, seed.user.id, 'reader', {
+      scopes: ['documents:read', 'agents:write'],
+    });
+    for (const tool of ['get_run', 'cancel_run', 'retry_run']) {
+      let thrown: unknown;
+      try {
+        await executeTool(token, seed.user.id, tool, {
+          workspace_slug: 'acme',
+          run_id: otherRun.id,
+        });
+      } catch (err) {
+        thrown = err;
+      }
+      expect((thrown as { code?: string }).code).toBe('AGENT_RUN_NOT_FOUND');
+    }
+  });
+
+  it('HTTP-twin parity: MCP run_agent + HTTP POST /runs produce the same row effect', async () => {
+    const { app, db, seed } = await makeTestApp();
+    // Two distinct parents so the two creates do not collide on idempotency.
+    const parentA = await seedWorkItem(db, seed.workspace, seed.project, seed.user);
+    const parentB = await seedWorkItem(db, seed.workspace, seed.project, seed.user);
+    await seedRunAgent(db, seed.workspace.id, seed.user.id, 'helper');
+    const { token } = await seedRunAgent(db, seed.workspace.id, seed.user.id, 'mcp-caller');
+
+    // HTTP twin (session) against parentA.
+    const httpRes = await app.request('/api/v1/w/acme/runs', {
+      method: 'POST',
+      headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agent_slug: 'helper', parent_slug: parentA.slug }),
+    });
+    expect(httpRes.status).toBe(201);
+    const httpBody = (await httpRes.json()) as { data: { run_id: string; status: string } };
+
+    // MCP tool against parentB.
+    const mcpOut = parseText<{ run_id: string; status: string }>(
+      await executeTool(token, seed.user.id, 'run_agent', {
+        workspace_slug: 'acme',
+        agent_slug: 'mcp-caller',
+        parent_slug: parentB.slug,
+      }),
+    );
+
+    // Same semantic outcome: both report a planning run.
+    expect(httpBody.data.status).toBe('planning');
+    expect(mcpOut.status).toBe('planning');
+    // Same row effect: both rows are planning agent_run docs in the workspace.
+    const httpRow = await db.query.documents.findFirst({
+      where: eq(documents.id, httpBody.data.run_id),
+    });
+    const mcpRow = await db.query.documents.findFirst({ where: eq(documents.id, mcpOut.run_id) });
+    expect(httpRow?.type).toBe('agent_run');
+    expect(mcpRow?.type).toBe('agent_run');
+    expect(httpRow?.status).toBe(mcpRow?.status);
+    expect(httpRow?.workspaceId).toBe(mcpRow?.workspaceId);
   });
 });

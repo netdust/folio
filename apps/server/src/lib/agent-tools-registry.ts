@@ -30,17 +30,26 @@
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../db/client.ts';
+import { env } from '../env.ts';
 import {
   type ApiToken,
+  type Document,
   type Project,
   type TableEntity,
+  type User,
   type Workspace,
   documents,
   projects,
   tables as tablesTable,
+  users as usersTable,
   views as viewsTable,
   workspaces,
 } from '../db/schema.ts';
+import { emitEvent, txWithEvents } from './events.ts';
+import type { AgentRunFrontmatter, RunStatus } from './agent-run-schema.ts';
+import { runStatusSchema } from './agent-run-schema.ts';
+import { createRunForParent, loadRunScopedByToken } from '../routes/runs.ts';
+import { type ListRunsFilter, listRuns, transitionRun } from '../services/agent-runs.ts';
 import {
   type AuthorContext,
   createComment,
@@ -235,6 +244,69 @@ async function resolveTableForArgs(
 /** Wrap the string actor as the `{ id }`-shaped value the service layer reads. */
 function serviceActor(ctx: ToolContext): never {
   return { id: ctx.actor } as never;
+}
+
+// ---------------------------------------------------------------------------
+// D-4: run-management tool helpers. Token-based equivalents of the Context-
+// coupled helpers in routes/runs.ts, so the MCP run tools share D-1's seam.
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve a bearer token's effective project allow-list. Returns `null` when
+ * there is no narrowing (human PAT or wildcard agent). Token-based twin of
+ * `resolveAgentAllowList` in routes/runs.ts — same `resolveAgentProjects` +
+ * `intersectAgentProjects` shape.
+ */
+async function resolveAgentAllowListForToken(token: ApiToken): Promise<string[] | null> {
+  if (!token.agentId) return null;
+  const agent = await db.query.documents.findFirst({
+    where: and(eq(documents.id, token.agentId), eq(documents.type, 'agent')),
+  });
+  if (!agent) {
+    throw mcpInvalidParams('agent for this token no longer exists', { reason: 'agent_missing' });
+  }
+  const effective = intersectAgentProjects(resolveAgentProjects(agent), token.projectIds ?? null);
+  return effective.includes('*') ? null : effective;
+}
+
+/**
+ * Resolve the human owner `User` for createRunForParent's `actor`. Twin of
+ * `resolveActorUser` in routes/runs.ts: for a human PAT the owner is
+ * `token.createdBy → user`. The autonomy gate (mit 54) fires first for
+ * agent-bound bearers, so this is only reached on the human-PAT path; if no
+ * user resolves we reject rather than fabricate provenance.
+ */
+async function resolveActorUserForToken(token: ApiToken): Promise<User> {
+  if (token.createdBy) {
+    const user = await db.query.users.findFirst({
+      where: eq(usersTable.id, token.createdBy),
+    });
+    if (user) return user;
+  }
+  throw mcpInvalidParams('no user resolves for this run', { reason: 'no_actor_user' });
+}
+
+/** Resolve a parent document by slug within a workspace (404-equivalent if gone). */
+async function resolveParentInWorkspace(ws: Workspace, parentSlug: string): Promise<Document> {
+  const parent = await db.query.documents.findFirst({
+    where: and(eq(documents.workspaceId, ws.id), eq(documents.slug, parentSlug)),
+  });
+  if (!parent) {
+    throw mcpInvalidParams(`parent "${parentSlug}" not found`, {
+      reason: 'parent_not_found',
+      parent_slug: parentSlug,
+    });
+  }
+  return parent;
+}
+
+/** Resolve a project row by id (used for the input-comment on run_agent). */
+async function resolveProjectById(projectId: string): Promise<Project> {
+  const p = await db.query.projects.findFirst({ where: eq(projects.id, projectId) });
+  if (!p) {
+    throw mcpInvalidParams('parent has no project', { reason: 'parent_not_found' });
+  }
+  return p;
 }
 
 // ---------------------------------------------------------------------------
@@ -1274,6 +1346,355 @@ export function registerRealTools(): void {
         });
       }
       return textResult(agent);
+    },
+  });
+
+  // --- Phase 3 Sub-phase D (Task D-4) — run-management tools ---
+  //
+  // MCP twins of D-1's HTTP run verbs. Each delegates to the SAME service /
+  // runner functions the routes call (createRunForParent, loadRunScopedByToken,
+  // listRuns, transitionRun, createComment) so enforcement is shared. The
+  // `AgentRun` return type is the raw run Document(s) — matching how
+  // list_documents returns rows. Bound mitigations: 24 (list narrowing), 54
+  // (autonomy gate), 55 (allow-list on parent), 56/63 (idempotency via the
+  // shared create tail), 58 (id re-scope), 59 (input-comment ordering).
+  //
+  // Error surfacing: HTTPErrors from the shared helpers (RUN_ALREADY_ACTIVE
+  // 409, AGENT_RUN_NOT_FOUND 404, etc.) propagate as-is and D-3's
+  // `mapToolErrorToJsonRpc` falls them through to -32603 carrying the message.
+  // "Parity" with the HTTP twin means same ROW EFFECT + same semantic outcome,
+  // not a byte-identical error envelope (HTTP returns a status, MCP a JSON-RPC
+  // error). Per-tool argument/scope rejections that are MCP-native (autonomy
+  // gate, missing parent/agent) use `mcpInvalidParams` for the structured
+  // `data.reason` the protocol promises.
+
+  registerTool({
+    name: 'list_runs',
+    description:
+      "List agent_run documents in a project. Optional status / agent_slug / since filters. For agent-bound tokens, narrowed to the agent's allow-list.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace_slug: { type: 'string' },
+        project_slug: { type: 'string' },
+        status: { type: 'string' },
+        agent_slug: { type: 'string' },
+        since: { type: 'string' },
+      },
+      required: ['workspace_slug', 'project_slug'],
+    },
+    requiredScope: 'documents:read',
+    schema: z
+      .object({
+        workspace_slug: z.string(),
+        project_slug: z.string(),
+        // status validated against the run-status enum in the handler so an
+        // unknown value surfaces a clean rejection rather than a Zod path error.
+        status: z.string().optional(),
+        agent_slug: z.string().optional(),
+        since: z.string().optional(),
+      })
+      .strict(),
+    handler: async (args, ctx) => {
+      const { token } = ctx;
+      const ws = await resolveWorkspaceForToken(token, args);
+      const project = await resolveProjectInWorkspace(ws, token, args);
+      const allowList = await resolveAgentAllowListForToken(token);
+
+      const statusRaw = optionalString(args, 'status');
+      let status: RunStatus | undefined;
+      if (statusRaw !== undefined) {
+        const parsed = runStatusSchema.safeParse(statusRaw);
+        if (!parsed.success) {
+          throw mcpInvalidParams(`invalid status: ${statusRaw}`, { reason: 'invalid_status' });
+        }
+        status = parsed.data;
+      }
+
+      const filter: ListRunsFilter = {
+        projectId: project.id,
+        status,
+        agentSlug: optionalString(args, 'agent_slug'),
+        since: optionalString(args, 'since'),
+        callerAgentProjectsAllowList: allowList ?? undefined,
+      };
+      const rows = await listRuns(filter);
+      return textResult(rows);
+    },
+  });
+
+  registerTool({
+    name: 'get_run',
+    description: 'Get a single agent_run document by id.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace_slug: { type: 'string' },
+        run_id: { type: 'string' },
+      },
+      required: ['workspace_slug', 'run_id'],
+    },
+    requiredScope: 'documents:read',
+    schema: z
+      .object({
+        workspace_slug: z.string(),
+        run_id: z.string(),
+      })
+      .strict(),
+    handler: async (args, ctx) => {
+      const { token } = ctx;
+      const ws = await resolveWorkspaceForToken(token, args);
+      const allowList = await resolveAgentAllowListForToken(token);
+      const runId = requireString(args, 'run_id');
+      const run = await loadRunScopedByToken(runId, { workspaceId: ws.id, allowList });
+      return textResult(run);
+    },
+  });
+
+  registerTool({
+    name: 'run_agent',
+    description:
+      'Start an agent run targeted at a parent work_item or page. Returns { run_id, status }. Optional `input` is posted as a comment on the parent. Agent-originated chains require FOLIO_AGENT_CHAINS_ENABLED.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace_slug: { type: 'string' },
+        agent_slug: { type: 'string' },
+        parent_slug: { type: 'string' },
+        input: { type: 'string' },
+      },
+      required: ['workspace_slug', 'agent_slug', 'parent_slug'],
+    },
+    requiredScope: 'agents:write',
+    schema: z
+      .object({
+        workspace_slug: z.string(),
+        agent_slug: z.string(),
+        parent_slug: z.string(),
+        input: z.string().optional(),
+      })
+      .strict(),
+    handler: async (args, ctx) => {
+      const { token } = ctx;
+      const ws = await resolveWorkspaceForToken(token, args);
+
+      // 1. Resolve parent within the workspace.
+      const parentSlug = requireString(args, 'parent_slug');
+      const parent = await resolveParentInWorkspace(ws, parentSlug);
+      const agentSlug = requireString(args, 'agent_slug');
+
+      // 2. Autonomy gate (mit 54) — an agent-bound bearer create is an
+      //    agent-ORIGINATED chain hop; gate behind FOLIO_AGENT_CHAINS_ENABLED.
+      //    Human PATs (agentId null) are always allowed.
+      const agentOriginated = !!token.agentId;
+      if (agentOriginated && !env.FOLIO_AGENT_CHAINS_ENABLED) {
+        await txWithEvents(db, async (tx) => {
+          await emitEvent(tx, {
+            workspaceId: ws.id,
+            projectId: parent.projectId ?? null,
+            documentId: parent.id,
+            kind: 'agent.chain.suppressed',
+            actor: token.id,
+            payload: { agent_slug: agentSlug, reason: 'autonomy_gate' },
+          });
+        });
+        throw mcpInvalidParams('agent-originated chains are disabled', {
+          reason: 'agent_chains_disabled',
+        });
+      }
+
+      // 3. Allow-list (mit 55) — parent.projectId must be in the caller's
+      //    allowed projects. BEFORE the input comment (mit 59 ordering).
+      const allowList = await resolveAgentAllowListForToken(token);
+      if (
+        allowList !== null &&
+        (parent.projectId === null || !allowList.includes(parent.projectId))
+      ) {
+        throw mcpInvalidParams('not allow-listed for that project', {
+          reason: 'agent_not_in_allow_list',
+        });
+      }
+
+      // 4. Resolve agent doc.
+      const agent = await db.query.documents.findFirst({
+        where: and(
+          eq(documents.workspaceId, ws.id),
+          eq(documents.slug, agentSlug),
+          eq(documents.type, 'agent'),
+        ),
+      });
+      if (!agent) {
+        throw mcpInvalidParams(`agent "${agentSlug}" not found`, {
+          reason: 'agent_not_found',
+          agent_slug: agentSlug,
+        });
+      }
+
+      // 5. Optional input comment (mit 59) — posted AFTER the allow-list check
+      //    so a disallowed parent never receives a comment.
+      const input = optionalString(args, 'input');
+      if (input) {
+        if (parent.projectId === null) {
+          throw mcpInvalidParams('parent has no project', { reason: 'parent_not_found' });
+        }
+        await createComment({
+          workspace: ws,
+          project: await resolveProjectById(parent.projectId),
+          parent,
+          authorContext: await resolveAuthorContextForToken(token),
+          actor: token.id,
+          body: input,
+        });
+      }
+
+      // 6. Shared create tail (m56 idempotency + ensureRunsTable + createRun).
+      const actorUser = await resolveActorUserForToken(token);
+      const document = await createRunForParent({
+        workspace: ws,
+        parent,
+        agent,
+        actorUser,
+        firedBy: 'manual',
+      });
+      return textResult({ run_id: document.id, status: 'planning' });
+    },
+  });
+
+  registerTool({
+    name: 'cancel_run',
+    description:
+      'Cancel an agent run by id. planning|awaiting_approval → failed (cancelled). running → posts a rejection comment (in-loop cancel signal). terminal → no-op. Returns { run_id, status }.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace_slug: { type: 'string' },
+        run_id: { type: 'string' },
+      },
+      required: ['workspace_slug', 'run_id'],
+    },
+    requiredScope: 'agents:write',
+    schema: z
+      .object({
+        workspace_slug: z.string(),
+        run_id: z.string(),
+      })
+      .strict(),
+    handler: async (args, ctx) => {
+      const { token } = ctx;
+      const ws = await resolveWorkspaceForToken(token, args);
+      const allowList = await resolveAgentAllowListForToken(token);
+      const runId = requireString(args, 'run_id');
+      const run = await loadRunScopedByToken(runId, { workspaceId: ws.id, allowList });
+      const status = run.status as RunStatus;
+
+      if (status === 'planning' || status === 'awaiting_approval') {
+        // transitionRun writes `updatedBy` (FK → users.id), so the actor must
+        // be an FK-valid user id — `ctx.actor` (the MCP route / runner supplies
+        // the authenticated user id), NOT `token.id`. Mirrors D-2's serviceActor
+        // convention.
+        await transitionRun(run.id, {
+          newStatus: 'failed',
+          actor: ctx.actor,
+          errorReason: 'cancelled',
+        });
+        return textResult({ run_id: run.id, status: 'failed' });
+      }
+
+      if (status === 'running') {
+        // Mit 44 — one cancel path. A post-start kind=rejection comment is the
+        // runner's in-loop cancel signal (see lib/runner.ts wasCancelled).
+        if (run.parentId === null || run.projectId === null) {
+          throw mcpInvalidParams('run has no parent', { reason: 'agent_run_not_found' });
+        }
+        const parent = await db.query.documents.findFirst({
+          where: eq(documents.id, run.parentId),
+        });
+        if (!parent) {
+          throw mcpInvalidParams('parent missing', { reason: 'agent_run_not_found' });
+        }
+        const project = await resolveProjectById(run.projectId);
+        const runAgentSlug = (run.frontmatter as AgentRunFrontmatter).agent_slug;
+        await createComment({
+          workspace: ws,
+          project,
+          parent,
+          authorContext: await resolveAuthorContextForToken(token),
+          actor: token.id,
+          body: 'Cancellation requested.',
+          kind: 'rejection',
+          targetAgent: `agent:${runAgentSlug}`,
+        });
+        return textResult({ run_id: run.id, status: 'running' });
+      }
+
+      // Terminal — no-op.
+      return textResult({ run_id: run.id, status });
+    },
+  });
+
+  registerTool({
+    name: 'retry_run',
+    description:
+      "Retry an agent run by id. Re-resolves the original's agent + parent and creates a fresh planning run. Rejects (idempotency) if a run is still active for that parent. Returns { run_id, status }.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace_slug: { type: 'string' },
+        run_id: { type: 'string' },
+      },
+      required: ['workspace_slug', 'run_id'],
+    },
+    requiredScope: 'agents:write',
+    schema: z
+      .object({
+        workspace_slug: z.string(),
+        run_id: z.string(),
+      })
+      .strict(),
+    handler: async (args, ctx) => {
+      const { token } = ctx;
+      const ws = await resolveWorkspaceForToken(token, args);
+      const allowList = await resolveAgentAllowListForToken(token);
+      const runId = requireString(args, 'run_id');
+      const original = await loadRunScopedByToken(runId, { workspaceId: ws.id, allowList });
+      const fm = original.frontmatter as AgentRunFrontmatter;
+      const agentSlug = fm.agent_slug;
+
+      if (original.parentId === null || original.projectId === null) {
+        throw mcpInvalidParams('run has no parent', { reason: 'agent_run_not_found' });
+      }
+
+      const parent = await db.query.documents.findFirst({
+        where: eq(documents.id, original.parentId),
+      });
+      if (!parent) {
+        throw mcpInvalidParams('parent missing', { reason: 'agent_run_not_found' });
+      }
+      const agent = await db.query.documents.findFirst({
+        where: and(
+          eq(documents.workspaceId, ws.id),
+          eq(documents.slug, agentSlug),
+          eq(documents.type, 'agent'),
+        ),
+      });
+      if (!agent) {
+        throw mcpInvalidParams(`agent "${agentSlug}" not found`, {
+          reason: 'agent_not_found',
+          agent_slug: agentSlug,
+        });
+      }
+      const actorUser = await resolveActorUserForToken(token);
+
+      // m63 — the idempotency check inside createRunForParent intentionally does
+      // NOT exclude the original run; a still-active original blocks the retry.
+      const document = await createRunForParent({
+        workspace: ws,
+        parent,
+        agent,
+        actorUser,
+        firedBy: `retry-of:${runId}`,
+      });
+      return textResult({ run_id: document.id, status: 'planning' });
     },
   });
 } // end registerRealTools

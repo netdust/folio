@@ -64,8 +64,9 @@ test('MCP tools/list returns the v1 tools including comment + agent-lifecycle to
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
   });
   const body = (await res.json()) as { result: { tools: { name: string }[] } };
-  // 12 original + 4 comment tools + 4 agent-lifecycle tools = 20 total.
-  expect(body.result.tools.length).toBe(20);
+  // 12 original + 4 comment tools + 4 agent-lifecycle tools + 5 run-management
+  // tools (D-4) = 25 total.
+  expect(body.result.tools.length).toBe(25);
   const names = body.result.tools.map((t) => t.name);
   expect(names).toContain('create_comment');
   expect(names).toContain('list_comments');
@@ -75,6 +76,11 @@ test('MCP tools/list returns the v1 tools including comment + agent-lifecycle to
   expect(names).toContain('update_agent');
   expect(names).toContain('delete_agent');
   expect(names).toContain('get_agent_self');
+  expect(names).toContain('list_runs');
+  expect(names).toContain('get_run');
+  expect(names).toContain('run_agent');
+  expect(names).toContain('cancel_run');
+  expect(names).toContain('retry_run');
 });
 
 test('MCP tools/call list_workspaces returns the workspaces visible to the token', async () => {
