@@ -1,0 +1,269 @@
+# Reaction Plane — Durable Event Reactions Design
+
+**Date:** 2026-05-29
+**Status:** APPROVED (brainstorm complete) — ready for implementation planning
+**Phase:** 3, Sub-phase C.3 (reshuffles the C.3 plan written 2026-05-29 at `96accdd`)
+**Supersedes:** the Option-A "inline-in-tx matcher" approach in the C.3 plan section. See the decision brief `docs/superpowers/specs/2026-05-29-event-delivery-decision.md` for the A-vs-B analysis; this document is the chosen design (Option B-minimal, confirmed by external evaluation).
+
+---
+
+## Goal
+
+Formalize **durable, replayable reactions over the append-only SQLite event log**, so that any agent — in-app or external — reacts to events through one uniform, at-least-once mechanism. The trigger-matcher (the component that turns "a human assigns/@mentions an agent" into "an `agent_run` is created") becomes the first reactor on this substrate.
+
+This is deliberately **not** a message broker, workflow engine, or distributed queue. No exactly-once, no DLQ, no orchestration graphs, no sidecar. One SQLite table + one poll loop.
+
+---
+
+## Background: the problem
+
+Folio's product thesis: **"everything is an event; agents react to events; an in-app agent and an external (Claude-Code-over-MCP) agent are the same — same identity, tools, scopes, auth."** Behavior is authored as **content**: a user creates an **agent** (document) and a **trigger** (document) whose frontmatter says *"on event X matching filter F, run agent A"* (or run an `internal_action`).
+
+The event system today is **emit + observe**, not **emit + react**:
+
+- Every write calls `emitEvent(tx, ...)` → durably inserts an `events` row (with a monotonic, UNIQUE-indexed `seq`) inside the writer's transaction, then queues an in-memory bus publish drained **after commit**.
+- The in-memory bus (`lib/event-bus.ts`) is **at-most-once, best-effort, only-while-connected**: a crash between commit and the post-commit drain loses the publish; subscribers exist only for the life of a connection; per-subscriber handler errors are swallowed.
+- The only subscriber today is the **SSE endpoint** (`routes/events.ts`) — read-only fan-out to connected clients. Nothing server-side **acts** on an event.
+
+That looseness is **correct for observation** (a missed live update self-heals on the next state re-read; SSE has Last-Event-Id replay). It is **wrong for reaction**: a dropped "create a run" is never re-derived — the agent silently never runs. And the looseness is **identical for inside and outside subscribers** — so making only the in-app reaction reliable would re-introduce the inside/outside asymmetry the product forbids.
+
+**Decision (this document):** add a second delivery plane purpose-built for reactions, keep the existing bus untouched for observation, and name the two planes explicitly so the overloaded term "event system" stops hiding two different delivery contracts.
+
+---
+
+## Section 1 — The two planes
+
+The event system has **two delivery planes over one append-only log** (the `events` table). Both planes read the same rows; neither is unified into the other.
+
+| | **Observation Plane** | **Reaction Plane** |
+|---|---|---|
+| Purpose | tell live listeners what happened | make something happen because of an event |
+| Mechanism | in-memory `eventBus` (existing, **untouched**) | new `lib/event-dispatcher.ts` (polling) |
+| Delivery | at-most-once, best-effort | at-least-once |
+| Scope | per-connection, per-workspace | global, cross-workspace, server-owned |
+| Loss behavior | self-heals (state re-read / SSE replay on reconnect) | retried until acked (reactors are idempotent) |
+| Consumers | SSE clients (UI, external agents *observing*) | reactors (matcher = first; future: external-agent reactors, reconcilers) |
+| Latency | low (live fan-out) | poll-interval bounded (~1s) |
+
+The Observation Plane keeps the fast lossy path the UI relies on. The Reaction Plane polls the durable table by `seq`. **The UI is never unified onto the durable path** — it does not need durability; it re-reads state. Collapsing the two would be reinventing a broker (explicitly out of scope).
+
+This naming is load-bearing: it prevents a future change from "fixing" one plane by conflating it with the other.
+
+---
+
+## Section 2 — Data model
+
+One new table. The `events` table and its `seq` + `events_workspace_seq_idx` already exist and are sufficient (they back the existing SSE replay).
+
+```ts
+// new migration + apps/server/src/db/schema.ts
+export const reactorCursors = sqliteTable('reactor_cursors', {
+  reactorId: text('reactor_id').primaryKey(),   // stable id, matches the in-code registry, e.g. 'trigger-matcher'
+  lastSeq:   integer('last_seq').notNull(),      // highest events.seq this reactor has processed (acked)
+  updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull().default(sql`(unixepoch() * 1000)`),
+});
+```
+
+That is the entire durable footprint of the Reaction Plane — one integer per reactor.
+
+- `reactorId` — primary key → one row per reactor. The id comes from the static registry (Section 3).
+- `lastSeq` — advance-on-success, written **after** the handler resolves (Section 3, durability model). Absent row = reactor never registered → seed at `MAX(seq)` on first registration, persist, resume thereafter.
+- `updatedAt` — observability only (when the reactor last made progress); not load-bearing.
+
+**Health metric (free, no new table):** reactor lag = `MAX(events.seq) − reactorCursors.lastSeq`. A reactor halted on a poison event (Section 3) shows as growing lag — the operator signal. Recovery: bump `lastSeq` past the poison event (one `UPDATE`).
+
+**Cascade safety:** `reactor_cursors` has **no FK** to `events` (it stores a `seq` value, not a row reference). `events` rows are workspace-cascade-deleted; that never orphans or breaks a cursor. The cursor is a global high-water mark, decoupled from any individual event row's lifecycle.
+
+---
+
+## Section 3 — The dispatch contract
+
+### The reactor interface
+
+```ts
+interface Reactor {
+  id: string;                              // stable; matches reactor_cursors.reactorId — e.g. 'trigger-matcher'
+  kinds: readonly EventKind[];             // coarse kind-filter — EFFICIENCY, not security
+  react(event: BusEvent): Promise<void>;   // idempotent; a throw = not-acked = retried next tick
+}
+```
+
+### The static registry
+
+```ts
+const REACTORS: readonly Reactor[] = [triggerMatcher];  // matcher is element 0; adding reactor #2 is a code change
+```
+
+No runtime registration API (YAGNI — one reactor in V1; runtime registration adds cursor-seeding lifecycle complexity for an unbuilt need).
+
+### The dispatch loop
+
+One **global** timer (cross-workspace), per-reactor cursor drain. Per tick, for each reactor independently:
+
+```
+for each reactor R in REACTORS:
+  cursor = load R.lastSeq
+           (if the reactor_cursors row is ABSENT: seed cursor = SELECT COALESCE(MAX(seq),0) FROM events,
+            persist the row, and use that — "start from now"; see Cold start below)
+  rows = SELECT * FROM events WHERE seq > cursor ORDER BY seq ASC LIMIT FOLIO_DISPATCHER_BATCH
+  for each event in rows (strict seq order):
+    if event.kind ∉ R.kinds:
+      persist R.lastSeq = event.seq        // seen-and-skipped — cursor advances past filtered events
+      continue
+    try:
+      await R.react(event)                 // the reactor's own effect + its own idempotency
+      persist R.lastSeq = event.seq         // CURSOR-AFTER: advance only on success
+    catch err:
+      log(err) + emit observability signal
+      BREAK this reactor's drain this tick  // halt; cursor unchanged → retried next tick
+  // one reactor halting does NOT abort the other reactors' drains this tick (failure isolation)
+```
+
+### Contract properties
+
+- **At-least-once (cursor-after).** The cursor advances only after `react()` resolves. A crash between the reactor's effect and the cursor write means the event is re-run next tick → the reactor's idempotency absorbs it. This is the only model an **external** reactor can also satisfy (an external agent cannot enlist in the server's SQLite transaction), so it keeps inside===outside true at the durability layer. The reaction effect and the cursor write are deliberately **not** in one transaction.
+- **Strict in-order per reactor.** A reactor never sees `seq=N+1` before acking `seq=N`. A genuinely poison event **halts that reactor** (safe failure — never skip, e.g. never silently drop an assignment). Visible as cursor-lag; recoverable by bumping the integer. No DLQ, no skip-on-failure, no retry-counter (those edge toward broker semantics and are out of scope). Rationale: reactor handlers are *our* code, so a poison event is a bug to fix, not a steady-state condition; halt-and-surface beats drop-or-count.
+- **Failure isolation.** Independent cursors + independent per-reactor drains within the shared tick → reactor A halting on a poison event does not stall reactor B.
+- **Kind-filter advances the cursor.** A reactor with a narrow filter still moves its cursor past events it does not handle, so it never falls infinitely behind `MAX(seq)`. The filter is an efficiency/clarity device, **not** a security boundary — the reactor still runs its own allow-list / visibility / autonomy checks on every event it does handle.
+  - *Implementation note (cursor write batching):* the pseudocode persists `lastSeq` per event for clarity. The plan may batch the cursor write to once per drain-tick (persist the highest acked `seq` after the loop) to avoid a write-per-skipped-event on a busy log — provided it preserves the contract: the persisted cursor must never be ahead of an event whose `react()` has not yet succeeded. Batching the *skipped-event* advances is always safe; batching across a *handled* event is only safe up to the last successfully-reacted seq.
+
+### Cold start / restart
+
+- **First registration** (cursor row absent): seed `lastSeq = MAX(events.seq)` ("start from now"), persist. On a fresh install the log is empty → seeds at 0 → the reactor sees every real event. On an existing instance, a newly-added reactor does **not** retroactively react to all history (no stampede of runs for long-closed tasks).
+- **Every subsequent boot** (cursor row present): resume from the stored cursor — the reactor processes the backlog that accumulated while the process was down. This is what makes at-least-once survive **restarts**, not just mid-tick crashes.
+- No per-reactor seed-policy knob until two reactors genuinely disagree (a future backfill-from-history reactor would seed at 0 explicitly).
+
+### Boot wiring
+
+Mirrors the existing reconciler and the runner poller (C-12):
+
+```ts
+if (env.NODE_ENV !== 'test') {
+  startEventDispatcher(db);
+}
+```
+
+New env (in `src/env.ts`, Zod-coerced, alongside the existing `FOLIO_*` vars):
+- `FOLIO_DISPATCHER_INTERVAL_MS` (default `1000`)
+- `FOLIO_DISPATCHER_BATCH` (default `100`)
+
+Not started in `NODE_ENV=test` (covered by unit tests that drive the loop manually with a fake reactor).
+
+### Relationship to the runner poller (two separate loops, two jobs)
+
+- **Event dispatcher** (this design): `events` → reactors → *create* `agent_run` rows (and other reactions).
+- **Runner poller** (C-12, unchanged): claims `planning` `agent_run` rows → *executes* `runAgent`/`runAgentResume`.
+
+The matcher (a reactor) creates a `planning` run; the poller later claims and runs it. Two stages, two loops.
+
+---
+
+## Section 4 — The matcher reads trigger documents, as the first reactor
+
+**Core principle preserved and strengthened: behavior is authored as content.** A trigger is a **document** (`type='trigger'`) whose frontmatter wires events to an agent or an internal action. The matcher's whole job is to **read those trigger documents and honor them.** Option B does not touch that logic — it changes only the plumbing that carries events to it.
+
+```ts
+// apps/server/src/lib/trigger-matcher.ts
+export const triggerMatcher: Reactor = {
+  id: 'trigger-matcher',
+  kinds: ['agent.task.assigned', 'comment.mentioned', 'comment.created'],
+  async react(event) {
+    // 1. Load the workspace's ENABLED trigger DOCUMENTS (type='trigger').
+    //    Match each: frontmatter.on_event === event.kind
+    //    AND frontmatter.event_filter (if present) matches the event payload.
+    //    THE TRIGGER DOCUMENT IS THE SOURCE OF TRUTH — this is document-as-trigger.   [mit 49]
+    // 2. For each matched trigger mapping to an agent (resolve frontmatter.agent,
+    //    incl. the $event.agent / $event.agent_slug placeholders):
+    //    - allow-list gate: agent.frontmatter.projects ∋ event.projectId (or '*')      [mit 50]
+    //    - autonomy gate: if isAgentOriginated(event) && !FOLIO_AGENT_CHAINS_ENABLED
+    //        → emit ONE agent.chain.suppressed, create ZERO runs, return                [mit 51]
+    //    - idempotency: getActiveRun(parent, agentSlug) non-null → skip (no duplicate)  [mit 52]
+    //        ← this guard is ALSO what absorbs the at-least-once replay window
+    //    - createRun(...) at status=planning
+    // 3. For internal_action triggers (frontmatter.internal_action: 'resume_run' | 'reject_run',
+    //    i.e. builtin-on-approval / builtin-on-rejection): dispatch to a named handler stub
+    //    that Sub-phase D-5 fills (resume_run → runAgentResume path; reject_run → rejectRun).
+  },
+};
+```
+
+`react()` is **idempotent by construction** — the `getActiveRun` guard (mitigation 52) makes a replayed event (crash between effect and cursor-write) a no-op. That guard was already in the plan; under the Reaction Plane it is *also* the at-least-once safety net.
+
+### The clarification that matters: two separate concerns
+
+1. **Matching LOGIC** — read trigger documents, honor `on_event` / `event_filter` / `agent` / `internal_action`. **Stays in full. It is the reactor's body.**
+2. **Delivery MECHANISM** — how an event reaches that logic. This is the *only* thing the design changes. Option A would hard-wire a `matchTriggers(tx, event)` call into each emit site (`services/comments.ts`, `services/documents.ts`, `routes/documents.ts`). Option B deletes that hard-wiring: the dispatcher reads the **`events` table** — which **every** emit already writes to, unconditionally — and feeds every event to the matcher.
+
+### Why the Reaction Plane is *more* faithful to document-as-trigger
+
+| | Option A (hard-wired emit sites) | Option B (Reaction Plane) |
+|---|---|---|
+| Honors trigger documents | matcher logic — same | matcher logic — same |
+| *When* matching runs | only at the ~3 emit sites a dev wired | on **every** event in the log, automatically |
+| New event kind / new emitter | triggers silently don't fire until wired | triggers fire automatically, no wiring |
+| User-authored trigger on a new event kind | works only if that emit site was wired | works the instant the trigger document is saved |
+| document-as-trigger promise | "works where we remembered to wire it" | "works for every event, period" |
+
+The full thesis delivered: a **user-authored** trigger document beyond the 4 builtins — e.g. *"on `document.updated` where `status: done`, run agent X"* — works the moment it is saved, with **zero new code**, because `document.updated` is already in the event log, the dispatcher already feeds it to the matcher, and the matcher already reads all enabled trigger documents.
+
+### Approval / rejection race (mitigation 43) under the Reaction Plane
+
+Two members approve/reject the same `awaiting_approval` run simultaneously. Both `internal_action` handlers (wired in D-5) call `transitionRun`; the state machine allows `awaiting_approval → running` OR `→ rejected` only from that one source state, so the loser gets `INVALID_RUN_TRANSITION` / `RUN_TRANSITION_RACED` and no-ops. C-9 already implements exactly this. It works identically whether the matcher runs in-tx (Option A) or as an async reactor (Option B) — the race is resolved at the `transitionRun` layer, not the delivery layer.
+
+---
+
+## C.3 plan reshuffle
+
+Option B simplifies the previously-written C.3 section. **Deleted:**
+
+- ~~C-12 "wire `matchTriggers` into the emit sites"~~ — the hand-wiring is gone. Not the matcher; only the per-emit-site calls. The matching logic lives in the reactor, reached by the dispatcher.
+- ~~C-10a "`createRun` gains `tx?`"~~ — for the reaction path. The matcher does not share the originating write's tx (at-least-once, cursor-after); `createRun` runs in its own. (Retain `tx?` only if a non-trigger caller needs it — not this design.)
+
+**Reshuffled task list:**
+
+- **C-10 — `lib/event-dispatcher.ts`** (NEW first task): `reactor_cursors` table + migration; the `Reactor` interface; the static `REACTORS` registry; the global poll loop (Section 3); seed-at-MAX + persist + resume; the `FOLIO_DISPATCHER_*` env vars; boot wiring. Tested with a fake reactor driving the loop manually (fake timers; inject the reactor to avoid module-global mock leakage).
+- **C-11 — `lib/trigger-matcher.ts`** as `REACTORS[0]`: match against trigger documents + allow-list (50) + autonomy gate (51) + idempotency (52) + `createRun`; the `internal_action` dispatch stub for D-5. The autonomy-gate boundary test lives here (flag OFF + agent-originated → 0 runs + 1 suppressed; human-originated → 1 run; flag ON → fires). Also adds the `agent.chain.suppressed` event kind to shared `KNOWN_EVENT_KINDS` + the server `EventKind` union (the one shared-package touch; server-internal observability — no FE consumer).
+- **C-12 — `lib/poller.ts`** (runner poller, unchanged from the prior plan): claims `planning` runs → `runAgent`/`runAgentResume` (dispatches resume when `frontmatter.resume_of` is set); concurrency cap; backpressure log; boot recovery via `recoverOrphanRuns`; boot wiring.
+- **C-13 — integration gate (controller):** the first "agent does work" smoke — assign a work_item to an agent → the dispatcher matches the trigger document → creates a `planning` run → the poller claims and runs it → a `kind=result` comment lands on the parent (with only `__echo` registered until D-3, the LOOP runs end-to-end even though real tool work waits for D). Plus the autonomy-gate smoke (default-off agent mention → 0 runs + 1 `agent.chain.suppressed`; flip env → 1 run). Then `/integration` → `/code-review --base=<C.2 close sha> --effort=medium` (naming mitigations 43, 49, 50, 51, 52 + the dispatcher's at-least-once/idempotency contract) → sibling-site audit → `/evaluate`.
+
+---
+
+## Threat model delta (extends the Sub-phase C model, mitigations 23–47)
+
+- **49 (REFRAMED)** — *was* "matcher runs in-tx; a matcher throw must roll back the originating write." *Now:* "the matcher reads trigger documents as a reactor on the durable log. A reactor throw **halts the reactor's cursor** (the event is retried next tick); it does **not** roll back the originating write — that write committed independently. The dispatcher must surface the halt (log + observability + visible cursor-lag), never silently skip." Distinct from mitigation 47 (SSE delivery, fire-and-forget by design): the Reaction Plane is at-least-once, not fire-and-forget.
+- **50 (unchanged)** — allow-list enforcement at match time: a trigger naming an agent whose `frontmatter.projects` excludes the parent doc's project creates no run.
+- **51 (unchanged)** — autonomy gate: `FOLIO_AGENT_CHAINS_ENABLED` (default false) + `isAgentOriginated(event)` short-circuit + one `agent.chain.suppressed`; the V1↔autonomous boundary. The six per-run runner guards are orthogonal (per-run resource caps vs. cross-run fan-out).
+- **52 (unchanged, expanded role)** — match-time idempotency via `getActiveRun`: at most one active run per (parent, agent). Under the Reaction Plane this guard does **double duty** — it prevents duplicate runs from double-matching AND absorbs the at-least-once replay window. It is therefore **load-bearing for correctness**, not just a guard: a reactor MUST be idempotent, and this is the matcher's idempotency.
+
+---
+
+## Anti-scope (explicit — do NOT build)
+
+Per the external evaluation and the product thesis, the Reaction Plane is "durable replayable reactions over an append-only SQLite event log" — and nothing more:
+
+- **No** unifying SSE / the UI onto the durable path (the Observation Plane stays in-memory + lossy).
+- **No** broker semantics, **no** exactly-once (at-least-once + idempotent reactors only).
+- **No** dead-letter queue, **no** per-event retry counters (poison event → halt + surface + operator bumps the cursor).
+- **No** orchestration, workflow graphs, or distributed infrastructure.
+- **No** runtime reactor-registration API (static in-code registry).
+- **No** per-reactor seed-policy knob (seed-at-MAX for all, until two reactors disagree).
+
+"You are not building Kafka. You are not building Temporal."
+
+---
+
+## Testing strategy
+
+- **Dispatcher (C-10):** unit tests drive the loop manually (fake timers; a fake reactor injected). Cover: seed-at-MAX on first registration + persist; resume-from-cursor on restart (backlog processed); strict in-order drain; cursor-after (advance only on success); poison-event halt (cursor unchanged, retried next tick, reactor B unaffected); kind-filter advances the cursor past skipped events. Reset any module-global between tests (per the Bun `mock.module` leak lesson); prefer injecting reactors over `mock.module`.
+- **Matcher (C-11):** match assignment/mention against seeded enabled trigger documents → one `planning` run; allow-list exclusion → zero runs; idempotency (active peer) → no duplicate; **autonomy-gate boundary** (flag OFF agent-originated → 0 + suppressed; human → 1; flag ON → 1); `internal_action` triggers reach the stub. Re-run the matcher's timing/ordering-sensitive tests ≥3× before GREEN (per the C.2 testing-workflow lesson — the same-ms flake class).
+- **End-to-end (C-13):** assign → dispatcher → run → poller → result comment; autonomy-gate smoke.
+- **No new exactly-once / crash-injection harness** beyond the cursor-after + idempotency unit coverage — the at-least-once contract is verified by "effect ran, cursor advanced only on success, replay is a no-op," not by a fault-injection framework.
+
+---
+
+## Open questions for D / beyond (carried, not for C.3)
+
+- **C.2-R-1 (mitigation 27):** real per-tool agent-lifecycle guards land in D-3 when the real `TOOLS` move into `lib/agent-tools.ts`.
+- **C.2-R-2:** feed tool errors back to the model (self-correct) vs. terminate — D-3+ when real errorable tools exist.
+- **External-agent reactor:** the Reaction Plane is designed so an external agent can be a reactor on identical terms (at-least-once, idempotent, cursor) — but no external-reactor surface is built in Phase 3. The substrate is ready; the exposure is future work.
+- **Pre-existing `transitionRun` null-materialization** (`error_reason`/`error_detail`/`worker_started_at` `?? null` fail a strict frontmatter parse) — cleanup before the markdown-export wedge needs strict read-time validation.
