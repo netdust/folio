@@ -6,9 +6,11 @@ _2026-05-29 (late) — **C.2 SHIPPED + retro'd; C.3 REDESIGNED (Option A → Rea
 
 Living snapshot of where the project actually is. Read at session start. Update at session end if anything below changed.
 
-## Next up — C.3 (Reaction Plane) fully planned; BUILD it next session
+## Next up — Sub-phase D (routes + MCP parity + real tools). C.3 SHIPPED.
 
-> **🎯 READ FIRST**: `docs/superpowers/handoffs/2026-05-29-phase-3-sub-phase-C.3-execution.md` (EXECUTION handoff — design is done, next session BUILDS). It points at the finished plan + spec, the skill order, the build-time pre-flight, and the per-task watch-outs.
+> **🎯 READ FIRST**: `docs/superpowers/handoffs/2026-05-29-phase-3-sub-phase-D-readiness.md` (READINESS handoff — D is NOT yet planned to executable depth). Two STOP-gates before any D code: (1) run the C-13 **manual dev-server smoke** (never executed — C.3 closed on unit gates only), (2) **expand + reconcile the D plan** — the D task bodies are outline-only AND reference renamed C-7 symbols (`executeMcpTool`→`executeTool`, `mcp-dispatch.ts`→`agent-tools.ts`); D also needs its own `netdust-core:threat-modeling` extension (mitigations 54+). Carried obligations land in D-1 (C.1-R-1 events FK), D-3 (C.2-R-1 mitigation 27 + C.2-R-2 tool-error feedback), D-5 (fills the matcher's internal_action resume/reject stubs). Skill order: writing-plans + threat-modeling FIRST (expand), then ntdst-execute-with-tests (Step 2.5 plan-freshness per task).
+>
+> **(historical) C.3 execution handoff**: `docs/superpowers/handoffs/2026-05-29-phase-3-sub-phase-C.3-execution.md` — drove the C.3 build; kept for trace.
 >
 > **Plan to execute:** `docs/superpowers/plans/2026-05-29-phase-3-C3-reaction-plane.md` (standalone, 5 tasks, real code in every step). **Design spec:** `docs/superpowers/specs/2026-05-29-reaction-plane-design.md`. **Decision brief (why B not A):** `docs/superpowers/specs/2026-05-29-event-delivery-decision.md`.
 >
