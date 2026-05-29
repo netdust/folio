@@ -15,6 +15,12 @@ export const runErrorReasonSchema = z.enum([
   'depth_exceeded',
   'no_ai_key',
   'provider_error',
+  // D-9.1 — runner gave up after N consecutive recoverable tool errors
+  // (model couldn't self-correct). Distinct from 'provider_error' (hard
+  // provider/transport failure). Mitigation 64: excluded from
+  // checkProviderHealth's allow-list filter, so it never degrades a
+  // provider — a model-recovery failure is not a provider signal.
+  'tool_error',
   'cancelled',
   'rejected',
   'idempotency_violation',

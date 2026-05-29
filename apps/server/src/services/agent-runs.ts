@@ -1228,8 +1228,10 @@ export async function checkProviderHealth(
   // error_reason='provider_error' → keeps the row. Anything else
   // (cancelled, worker_crash, budget_exceeded, rate_limited,
   // depth_exceeded, fanout_exceeded, chain_*_exceeded,
-  // idempotency_violation, no_ai_key, rejected) → dropped at the SQL
-  // layer so the loop counts ONLY provider signals.
+  // idempotency_violation, no_ai_key, rejected, tool_error) → dropped
+  // at the SQL layer so the loop counts ONLY provider signals.
+  // (D-9.1 mitigation 64: tool_error is a model-recovery failure, not a
+  // provider signal — the allow-list filter excludes it automatically.)
   //
   // R4 recency floor (post-review-of-review): `e.created_at >= cutoffMs`
   // drops events older than the window. Without it, an idle workspace

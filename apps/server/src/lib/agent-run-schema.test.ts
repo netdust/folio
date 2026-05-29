@@ -37,6 +37,17 @@ describe('runErrorReasonSchema', () => {
       expect(() => runErrorReasonSchema.parse(r)).not.toThrow();
     }
   });
+
+  // D-9.1 — 'tool_error' distinguishes "model couldn't self-correct after N
+  // consecutive recoverable tool errors" from hard 'provider_error' failures.
+  // Used by the runner in D-9.2 when it gives up feeding tool errors back.
+  test('accepts tool_error', () => {
+    expect(() => runErrorReasonSchema.parse('tool_error')).not.toThrow();
+  });
+
+  test('rejects unknown reason', () => {
+    expect(() => runErrorReasonSchema.parse('flux_capacitor_error')).toThrow();
+  });
 });
 
 describe('agentRunFrontmatterSchema', () => {

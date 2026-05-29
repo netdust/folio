@@ -2345,6 +2345,42 @@ describe('checkProviderHealth', () => {
     expect(result.next.consecutive_failures).toBe(0);
   });
 
+  // D-9.1 / mitigation 64 — 'tool_error' (model couldn't self-correct after
+  // N consecutive recoverable tool errors) is a MODEL-recovery failure, not a
+  // provider signal. The allow-list SQL filter
+  // (`kind='agent.run.completed' OR error_reason='provider_error'`) excludes
+  // it automatically. This pins the contract: if a future change flips the
+  // filter to an exclude-list, this test fails before tool_error can silently
+  // start degrading providers on model-recovery failures.
+  test('tool_error failures do NOT count toward provider degradation', async () => {
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+
+    // 3 tool_error failures (≥ threshold) — none are provider signals.
+    for (let i = 0; i < 3; i++) {
+      await seedTerminalRunEvent(db, {
+        workspace: seed.workspace, project: seed.project, runsTable,
+        agent, parent, user: seed.user,
+        provider: 'anthropic',
+        kind: 'agent.run.failed',
+        errorReason: 'tool_error',
+        seq: 9_200_001 + i,
+      });
+    }
+
+    const result = await checkProviderHealth({
+      workspaceId: seed.workspace.id,
+      provider: 'anthropic',
+      threshold: 3,
+    });
+    // Insufficient signal (0 provider-relevant events) → healthy, NOT degraded.
+    expect(result.next.status).toBe('healthy');
+    expect(result.next.consecutive_failures).toBe(0);
+  });
+
   test('next is healthy when the most recent event is a successful completion', async () => {
     // Mitigation 45 — a single success breaks the streak. Resets to
     // healthy even if older events in the window were failures.
