@@ -12,6 +12,7 @@ import {
   resolveTable,
   resolveWorkspace,
 } from './middleware/scope.ts';
+import { adminRunnerStatsRoute } from './routes/admin-runner-stats.ts';
 import { aiRoute } from './routes/ai.ts';
 import { auth } from './routes/auth.ts';
 import { commentsRoute } from './routes/comments.ts';
@@ -56,6 +57,8 @@ wScope.route('/projects', projectsRoute);
 // a run id is globally unique and these derive the allow-list inline (m58).
 wScope.route('/runs', runsRoute);
 wScope.route('/provider-health', providerHealthRoute);
+// D-6: admin-only workspace-aggregate runner stats (mitigation 60). No MCP twin.
+wScope.route('/admin/runner-stats', adminRunnerStatsRoute);
 
 const pScope = new Hono<AuthContext & ScopeContext>();
 // Phase 2.5: resolveProject must run before requireResource (the gate reads
