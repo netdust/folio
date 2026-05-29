@@ -25,6 +25,7 @@ Created 2026-05-28 by `/evaluate` after Phase 3 Sub-phase A. One bullet per item
   **Decision needed:** YES / NO.
   **What changes if YES:** an addition to `superpowers:writing-plans/SKILL.md` listing the freshness check. Folio's `memory/lessons.md` already has the rule (2026-05-28 entry) — promoting it to skill-level makes it cross-project.
   **Source:** Phase 3 Sub-phase A retro, Harness Gap #1.
+  **C.2 corroboration (2026-05-29):** THIRD sub-phase to hit this. C.2's plan assumed an entire provider API that didn't exist (`continueWithToolResult` + injectable `AbortController`) plus non-existent error_reason enum members, a FK-violating `system:runner` actor, and a `kind=cancel` that doesn't exist — all caught at controller pre-flight + corrected in 3 inline plan-corrections, but only because the controller manually read the dependency surface. A skill-level freshness gate would make that manual read a hard rule. (surfaced by `docs/superpowers/retros/2026-05-29-phase-3-sub-phase-C.2-retro.md`)
 
 - **B-2 minor cast tightenings deferred from code-quality review:** (a) `input_schema as { type: 'object'; [k: string]: unknown }` could become `Tool.InputSchema` if exported; (b) `stream as AsyncIterable<Record<string, unknown>>` could be `MessageStreamEvent`. Both at the SDK boundary. Defer to next-touch — neither blocks B-3/4/5.
 

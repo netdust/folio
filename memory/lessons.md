@@ -414,3 +414,9 @@ The unquoted `<<EOF` heredoc tells bash to interpolate `$HOOK_SRC_DIR` AT INSTAL
 - Closed-enum literal: audit every site that writes/compares the literal.
 
 The audit lives in the plan, gets verified by the implementer, reviewed at code-review time. Per-task cost: 5-10 minutes at plan-write; net savings ~1-2 review-fix bundles per sub-phase.
+
+## 2026-05-29 — ground-truth the dependency surface before expanding a runner/integration plan (Sub-phase C.2)
+
+A plan expanded as an outline before its dependency surface was read will drift. C.2's plan assumed a Vercel-AI-SDK-shaped provider — `continueWithToolResult(streamHandle, ...)` continuation + an injectable `AbortController` — that the actual Sub-phase B layer (`lib/ai/provider.ts`) does NOT have: `stream(opts)` is one-shot, no continuation, no abort param; the tool round-trip is via message history (re-call `stream()` with appended `{role:'assistant', tool_calls}` + `{role:'tool', tool_use_id, content}`). It also named `error_reason` enum members that don't exist, an `actor:'system:runner'` that violates the `documents.updated_by`→`users.id` FK, and a `kind=cancel` comment kind that doesn't exist.
+
+All three C.2 tasks shipped DIVERGED_DEFECT — but every drift was caught at controller PRE-FLIGHT (reading `provider.ts`/`agent-runs.ts`/`comments.ts`/`agent-run-schema.ts` against the plan) and corrected in the plan BEFORE/at dispatch (3 inline plan-corrections). Rule: when expanding/executing a plan that integrates against another sub-phase's code, READ that code's actual exported signatures + types + enums first — the plan's prose is a hypothesis, the source is truth. Reinforces [[plan-server-source-audit]]. Third sub-phase (A, C.1, C.2) to surface plan-freshness drift → promoted to a HUMAN_DECISION follow-up (plan-freshness check as a writing-plans skill rule).
