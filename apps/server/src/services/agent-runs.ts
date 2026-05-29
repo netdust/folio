@@ -174,7 +174,13 @@ export async function createRun(
       actor: actor.id,
       payload: {
         slug,
+        // D-7: `agent` (the agent slug) and `table_id` (the runs table) are the
+        // SSE filter keys for `?agent=` / `?table=`. They MUST be present
+        // uniformly across started + every transition event so the web runs UI
+        // can follow a run's whole lifecycle through one filter. started already
+        // carried `agent`; `table_id` is added here.
         agent: agent.slug,
+        table_id: runsTable.id,
         chain_id: input.chainId,
         fired_by: input.firedBy,
         trigger_id: input.triggerId,
@@ -422,6 +428,12 @@ export async function transitionRun(
         from,
         to,
         error_reason: errorReason ?? null,
+        // D-7: stamp the same `agent` (slug) + `table_id` keys the started
+        // event carries so `?agent=` / `?table=` SSE filters match EVERY
+        // lifecycle event for a run, not just its started event. Sourced from
+        // the run row already loaded above (fm.agent_slug + row.tableId).
+        agent: fm.agent_slug,
+        table_id: row.tableId,
       },
     });
 
@@ -799,6 +811,11 @@ export async function recoverOrphanRuns(
       workspace_id: string;
       project_id: string | null;
       provider: string | null;
+      // D-7: returned so the orphan-recovery agent.run.failed event below
+      // carries the same `agent`/`table_id` filter keys as the other
+      // lifecycle events (uniform `?agent=` / `?table=` matching).
+      agent_slug: string | null;
+      table_id: string | null;
     }>(sql`
       UPDATE documents
          SET frontmatter = json_set(
@@ -813,8 +830,9 @@ export async function recoverOrphanRuns(
        WHERE type = 'agent_run'
          AND status = ${runningStatus}
          AND json_extract(frontmatter, '$.worker_started_at') < ${threshold}
-       RETURNING id, workspace_id, project_id,
-                 json_extract(frontmatter, '$.provider') AS provider
+       RETURNING id, workspace_id, project_id, table_id AS table_id,
+                 json_extract(frontmatter, '$.provider') AS provider,
+                 json_extract(frontmatter, '$.agent_slug') AS agent_slug
     `);
 
     for (const r of updated) {
@@ -831,6 +849,9 @@ export async function recoverOrphanRuns(
           from: runningStatus,
           to: failedStatus,
           error_reason: errorReason,
+          // D-7: same filter keys as transitionRun / started emit.
+          agent: r.agent_slug,
+          table_id: r.table_id,
         },
       });
     }
