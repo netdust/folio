@@ -4,7 +4,9 @@ _Last updated: 2026-05-29 — **Sub-phase C.2 SHIPPED + double-reviewed + code-r
 
 Living snapshot of where the project actually is. Read at session start. Update at session end if anything below changed.
 
-## Next up — C.2 DONE; next gate is `/evaluate` retro then C.3 plan-correction
+## Next up — C.2 DONE + retro'd + C.3 plan EXPANDED; next session executes C.3
+
+> **🎯 READ FIRST**: `docs/superpowers/handoffs/2026-05-29-phase-3-sub-phase-C.3-readiness.md`. Wires the next session through the skill order, the 6 pre-flight reads, the per-task dispatch checklist, the inline-in-tx matcher architecture, the autonomy-gate semantics, and the C.3-specific watch-outs (in-tx-no-swallow, createRun nesting, system-actor, poller fake-timers, ≥3× timing-test rule). C.3 = C-10a → C-10 → C-11 → C-12 → C-13, sequential, subagent-driven. **Two HUMAN_DECISION items (plan-freshness rule; /code-review cap) gate the C-13 review step — surface them before then.** C.3 expanded bodies at plan lines 4257–4401 (`96accdd`). C.2 retro at `92b2ab6`.
 
 > **✅ Sub-phase C.2 SHIPPED (2026-05-29).** C-7/C-8/C-9 all done via subagent-driven-development. C.2 commit range (`2acbff2..HEAD`):
 > - **C-7** `lib/agent-tools.ts` `executeTool` shared dispatcher — `2825181` + fix `dd9f736` + plan-correction `79df93d`. SKELETON only (`__echo` test tool; real `TOOLS` extraction is D-3). Mitigation 27 (self-vs-peer lifecycle gate) **RE-SCOPED to D-3** (the blanket gate contradicted the live per-tool guards in `routes/mcp.ts`; dispatcher is now transport+scope+Zod only).
