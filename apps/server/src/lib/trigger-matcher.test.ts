@@ -382,6 +382,96 @@ test('flag OFF + human @mention → exactly one run, no suppressed event', async
   expect(suppressed.length).toBe(0);
 });
 
+// ----- FIX 2: allow-list reuses resolveAgentProjects (mitigation 50 hardening) -----
+//
+// The matcher previously hand-rolled `(fm.projects as string[]) ?? ['*']` then
+// `.includes('*')`. A hand-edited `.md` with a NON-ARRAY `projects` (a bare
+// string) made `.includes()` do substring matching on the string — wrong
+// allow-list semantics, and a non-string entry could throw. The canonical
+// `resolveAgentProjects` guards `!Array.isArray → ['*']`, so a string
+// `projects` becomes WILDCARD (the documented legacy/back-compat behavior),
+// going through the exact same normalization as every other call site.
+test('malformed projects (non-array string) is treated as wildcard via resolveAgentProjects (no substring match)', async () => {
+  const { db, seed } = await makeTestApp();
+  await seedTriggers(db, seed.workspace.id, seed.user.id);
+  const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+  // Corrupt the agent frontmatter: projects is a STRING, not an array. With the
+  // old hand-rolled cast this would substring-match; resolveAgentProjects
+  // collapses it to ['*'] (legacy back-compat), so the run fires for ANY
+  // project — including this one.
+  await db
+    .update(documents)
+    .set({
+      frontmatter: { ...(agent.frontmatter as Record<string, unknown>), projects: 'alpha' },
+    })
+    .where(eq(documents.id, agent.id));
+
+  const wiTable = await getWorkItemsTable(db, seed.project.id);
+  const wi = await seedWorkItem(db, seed.workspace, seed.project, wiTable, seed.user);
+
+  await triggerMatcher.react(
+    assignmentEvent({
+      seed,
+      workItem: wi,
+      agentSlug: 'helper',
+      agentId: agent.id,
+      actor: seed.user.id,
+    }),
+  );
+
+  // resolveAgentProjects(non-array) === ['*'] → wildcard → run fires.
+  expect(await countRuns(db, wi.id, 'helper')).toBe(1);
+});
+
+// ----- FIX 3: comment-mention run owner resolves token id → token creator -----
+//
+// A HUMAN posting a comment-mention via a personal API token (agentId NULL)
+// has `event.actor = <api_tokens.id>` (resolveActor returns token.id on
+// bearer), NOT a users.id. The matcher previously only did
+// `users.findFirst({id: actor})` → null → dropped the run silently. The fix
+// resolves a non-user actor as a human PAT and uses its `createdBy` as owner.
+async function seedHumanPat(db: TestDB, workspace: Workspace, user: User): Promise<string> {
+  const id = nanoid();
+  const { hash } = newApiToken();
+  await db.insert(apiTokens).values({
+    id,
+    workspaceId: workspace.id,
+    name: 'human pat',
+    tokenHash: hash,
+    scopes: ['documents:write'],
+    agentId: null, // human PAT
+    createdBy: user.id,
+  });
+  return id;
+}
+
+test('comment.mentioned via a human PAT token id resolves owner to the token creator', async () => {
+  const { db, seed } = await makeTestApp();
+  await seedTriggers(db, seed.workspace.id, seed.user.id);
+  const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+  const wiTable = await getWorkItemsTable(db, seed.project.id);
+  const wi = await seedWorkItem(db, seed.workspace, seed.project, wiTable, seed.user);
+  const patId = await seedHumanPat(db, seed.workspace, seed.user);
+
+  // actor = the api_tokens.id (bearer path), NOT seed.user.id.
+  await triggerMatcher.react(
+    mentionEvent({
+      seed,
+      parentId: wi.id,
+      agentSlug: 'helper',
+      agentId: agent.id,
+      actor: patId,
+    }),
+  );
+
+  expect(await countRuns(db, wi.id, 'helper')).toBe(1);
+  const run = await db.query.documents.findFirst({
+    where: and(eq(documents.type, 'agent_run'), eq(documents.parentId, wi.id)),
+  });
+  expect(run?.status).toBe('planning');
+  expect(run?.createdBy).toBe(seed.user.id); // owned by the token's human creator
+});
+
 test('flag ON + agent-originated @mention → one run', async () => {
   const { db, seed } = await makeTestApp();
   (env as Record<string, unknown>)[flagKey] = true;

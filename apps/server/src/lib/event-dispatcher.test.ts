@@ -4,6 +4,7 @@ import type { DB } from '../db/client.ts';
 import { events, reactorCursors } from '../db/schema.ts';
 import { makeTestApp } from '../test/harness.ts';
 import type { TestSeed } from '../test/harness.ts';
+import type { BusEvent } from './event-bus.ts';
 import { eventBus } from './event-bus.ts';
 import { type Reactor, runDispatcherOnce } from './event-dispatcher.ts';
 
@@ -170,4 +171,35 @@ test('reactor.halted broadcast error_summary carries the error CLASS, not the (t
 
   expect(summaries).toEqual(['Error']); // the CLASS name, never the message
   expect(summaries).not.toContain('secret-tenant-title');
+});
+
+// A system event must transcend BOTH workspace AND project scope. The bus only
+// short-circuits the projectId filter on `projectId === null` (BUG-021), so
+// emitReactorHealth MUST publish projectId:null (and documentId:null), not omit
+// them — otherwise a `?project=X` SSE client never sees reactor.halted.
+test('reactor.halted is published with projectId:null and documentId:null (reaches project-scoped subscribers)', async () => {
+  const { db, seed } = await makeTestApp();
+  await db.insert(reactorCursors).values({ reactorId: 'sys-r', lastSeq: 0, updatedAt: new Date() });
+  await seedEvent(db, seed, 1, 'document.created');
+
+  const halted: BusEvent[] = [];
+  const unsub = eventBus.subscribe('any-ws', undefined, (e) => {
+    if (e.kind === 'reactor.halted') halted.push(e);
+  });
+
+  const r: Reactor = {
+    id: 'sys-r',
+    kinds: ['document.created'],
+    react: async () => {
+      throw new Error('boom');
+    },
+  };
+
+  await runDispatcherOnce(db, [r]);
+  unsub();
+
+  expect(halted.length).toBe(1);
+  expect(halted[0]!.workspaceId).toBeNull();
+  expect(halted[0]!.projectId).toBeNull();
+  expect(halted[0]!.documentId).toBeNull();
 });

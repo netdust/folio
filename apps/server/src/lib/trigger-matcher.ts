@@ -31,9 +31,10 @@
 
 import { and, eq } from 'drizzle-orm';
 import { db } from '../db/client.ts';
-import { documents, projects, users, workspaces } from '../db/schema.ts';
+import { apiTokens, documents, projects, users, workspaces } from '../db/schema.ts';
 import { env } from '../env.ts';
 import { createRun, ensureRunsTable, getActiveRun, nextChainId } from '../services/agent-runs.ts';
+import { resolveAgentProjects } from './agent-projects.ts';
 import type { BusEvent } from './event-bus.ts';
 import type { Reactor } from './event-dispatcher.ts';
 import { emitEvent, txWithEvents } from './events.ts';
@@ -148,10 +149,14 @@ async function maybeCreateRun(
   });
   if (!agent) return;
 
-  // 3. Allow-list (mitigation 50). Default ['*'] when unset. Skip (zero runs)
-  //    when the list is narrowed and excludes this event's project.
-  const agentFm = agent.frontmatter as Record<string, unknown>;
-  const allowList = (agentFm.projects as string[] | undefined) ?? ['*'];
+  // 3. Allow-list (mitigation 50). Reuse the canonical `resolveAgentProjects`
+  //    so the matcher normalizes `frontmatter.projects` IDENTICALLY to every
+  //    other call site (bearer middleware, SSE replay, reconciler, comments,
+  //    mcp). It guards non-array input (→ ['*']), drops non-string entries, and
+  //    collapses mixed ['proj','*'] → ['*'] — none of which the old `as
+  //    string[]` cast did (a string `projects` would substring-match). Skip
+  //    (zero runs) when the list is narrowed and excludes this event's project.
+  const allowList = resolveAgentProjects(agent);
   if (!allowList.includes('*') && (!event.projectId || !allowList.includes(event.projectId))) {
     return;
   }
@@ -183,23 +188,30 @@ async function maybeCreateRun(
 
   // 6. Resolve workspace + project rows + the originating-human owner.
   //
-  //    Trigger-created runs are OWNED by the originating human (resolved from
-  //    `event.actor`, a users.id for human-originated events). There is NO
+  //    Trigger-created runs are OWNED by the originating human. There is NO
   //    `system:` user — that would violate the documents.updated_by →
-  //    users.id FK (this closes follow-up C.2-R-3). For V1 with the flag OFF,
-  //    only human-originated events reach this point, so `event.actor` always
-  //    resolves to a real user. When the flag is ON and the event is
-  //    agent-originated, the owner must STILL be a real user: a genuine
-  //    agent-chain hop carries the originating human through `event.actor`
-  //    (the chain's owner), while `payload.run_id` marks it agent-originated.
-  //    If no user resolves (e.g. `actor='agent:foo'` with the flag ON), we
-  //    cannot own the run — return and log rather than fabricate an owner.
+  //    users.id FK (this closes follow-up C.2-R-3). `event.actor` is set by
+  //    routes' resolveActor: a `users.id` on a SESSION request, but the
+  //    `api_tokens.id` on a BEARER request. So we resolve in two steps:
+  //      a) actor IS a users.id (session path) → use it directly.
+  //      b) actor is an api_tokens.id → for a HUMAN PAT (agentId NULL) the
+  //         human owner is the token's `createdBy`. (Agent tokens emit
+  //         `actor='agent:<slug>'`, caught by the autonomy gate / isAgent
+  //         Originated upstream, so they never need token-id resolution here.)
+  //    If neither resolves to a real user, we cannot own the run — return and
+  //    log rather than fabricate an owner.
   const actorId = event.actor;
   if (!actorId) return;
-  const actorUser = await db.query.users.findFirst({ where: eq(users.id, actorId) });
+  let actorUser = await db.query.users.findFirst({ where: eq(users.id, actorId) });
+  if (!actorUser) {
+    const token = await db.query.apiTokens.findFirst({ where: eq(apiTokens.id, actorId) });
+    if (token && token.agentId === null && token.createdBy) {
+      actorUser = await db.query.users.findFirst({ where: eq(users.id, token.createdBy) });
+    }
+  }
   if (!actorUser) {
     console.log(
-      `[trigger-matcher] actor '${actorId}' does not resolve to a user; cannot own a trigger-created run (skipping)`,
+      `[trigger-matcher] actor '${actorId}' does not resolve to a user (nor a human PAT creator); cannot own a trigger-created run (skipping)`,
     );
     return;
   }

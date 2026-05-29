@@ -51,6 +51,13 @@ const halted = new Set<string>();
  * `workspaceId: null` event can't persist. Publish to the bus only (live-only —
  * NOT inserted into `events`, NOT replayed over SSE on reconnect). The durable
  * truth is cursor-lag (spec §4b). `createdAt` set explicitly.
+ *
+ * `workspaceId`, `projectId`, AND `documentId` are all set null so the event
+ * transcends EVERY scope. The bus only short-circuits the projectId filter on
+ * `projectId === null` (the BUG-021 precedent); leaving projectId `undefined`
+ * would let a `?project=X` SSE subscriber's project gate DROP the health
+ * signal. Null at every layer keeps a project-scoped operator able to see
+ * reactor.halted / reactor.recovered.
  */
 function emitReactorHealth(
   kind: 'reactor.halted' | 'reactor.recovered',
@@ -58,6 +65,8 @@ function emitReactorHealth(
 ): void {
   eventBus.publish({
     workspaceId: null,
+    projectId: null,
+    documentId: null,
     kind,
     actor: 'system:dispatcher',
     payload,
