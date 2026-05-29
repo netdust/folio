@@ -1,69 +1,46 @@
 /**
- * Hand-rolled JSON-RPC 2.0 MCP endpoint at POST /mcp.
+ * D-2: the 20 production tools, registered into the shared `executeTool`
+ * registry so BOTH transport faces (MCP route + in-process runner) dispatch
+ * them through the one auth+dispatch point in `agent-tools.ts`.
  *
- * Speaks `initialize`, `tools/list`, `tools/call`, and `ping`. All tool
- * implementations delegate to the service layer in `services/*` so the MCP and
- * REST surfaces share the same writes + event emissions.
+ * Migrated verbatim from the legacy inline `TOOLS` array in `routes/mcp.ts`.
+ * Two shape changes versus the legacy handlers:
  *
- * Scope gating is INLINE (not via `requireScope` middleware) because we want
- * JSON-RPC error envelopes for scope rejections, not HTTP 403. Per-tool
- * `requiredScope` is enforced before the handler runs.
+ *   1. Handler signature is `(args, ctx)` (canonical order), not the legacy
+ *      `(ctx, args)`. `executeTool` calls handlers this way.
+ *   2. `ctx.actor` is a STRING (the legacy `ctx.actor.id`). Service calls that
+ *      need a `User`-shaped actor wrap it as `{ id: ctx.actor } as never` —
+ *      identical to the legacy `actor as never` cast, which passed an object
+ *      whose `.id` is the FK-valid user id. The MCP transport supplies the
+ *      authenticated user id as actor; the runner supplies its FK-valid
+ *      transition actor. Neither is D-2's concern — D-2 preserves behavior.
  *
- * The token's `workspaceId` is the only workspace this MCP session can access.
- * Every tool that takes `workspace_slug` checks that the slug resolves to the
- * token's workspace; otherwise it throws "workspace not accessible".
+ * Error shape (option (b) from the D-2 plan): agent-lifecycle guards in
+ * `agent-guards.ts` throw `HTTPError`; the legacy MCP route translated those
+ * to JSON-RPC `-32602` shapes via `mcpInvalidParams` + `rethrowAgentGuardAsMcp`
+ * + `mcpRejectHumanPat`. Those translations are REPLICATED here, inside the
+ * migrated handlers, so the handler emits the exact same error shape the MCP
+ * route emits today. D-3 then becomes a pure transport swap (catch the thrown
+ * error, copy `.code`/`.data`/`.message` into the JSON-RPC envelope) with zero
+ * behavior change. The HTTP-side carve-out (agent CRUD via the workspace
+ * documents route is intentionally NOT human-PAT-gated) is unaffected — those
+ * routes keep calling `agent-guards.ts` directly.
  */
 
 import { and, eq } from 'drizzle-orm';
-import { Hono } from 'hono';
+import { z } from 'zod';
 import { db } from '../db/client.ts';
 import {
+  type ApiToken,
+  type Project,
+  type TableEntity,
+  type Workspace,
   documents,
   projects,
   tables as tablesTable,
   views as viewsTable,
   workspaces,
 } from '../db/schema.ts';
-import type {
-  ApiToken,
-  Project,
-  TableEntity,
-  Workspace,
-} from '../db/schema.ts';
-import { HTTPError } from '../lib/http.ts';
-import {
-  mcpInvalidParams,
-  mcpRejectHumanPat,
-  rethrowAgentGuardAsMcp,
-} from '../lib/mcp-errors.ts';
-import {
-  assertAgentAllowListWidening,
-  assertAgentToolsWidening,
-} from '../lib/agent-guards.ts';
-import { serializeMarkdown } from '../lib/frontmatter.ts';
-import { stripReservedFrontmatter } from '../services/documents.ts';
-import {
-  type AuthContext,
-  getUser,
-} from '../middleware/auth.ts';
-import {
-  attachToken,
-  getToken,
-  requireToken,
-} from '../middleware/bearer.ts';
-import { intersectAgentProjects, resolveAgentProjects } from '../lib/agent-projects.ts';
-import {
-  createDocument,
-  deleteDocument,
-  getDocument,
-  getWorkspaceDocument,
-  listDocuments,
-  updateDocument,
-  type DocumentType,
-} from '../services/documents.ts';
-import { listStatuses } from '../services/statuses.ts';
-import { listFields } from '../services/fields.ts';
-import { listViews, runView } from '../services/views.ts';
 import {
   type AuthorContext,
   createComment,
@@ -73,42 +50,35 @@ import {
   updateComment,
 } from '../services/comments.ts';
 import {
+  type DocumentType,
+  createDocument,
+  deleteDocument,
+  getDocument,
+  getWorkspaceDocument,
+  listDocuments,
+  stripReservedFrontmatter,
+  updateDocument,
+} from '../services/documents.ts';
+import { listFields } from '../services/fields.ts';
+import { listStatuses } from '../services/statuses.ts';
+import { listViews, runView } from '../services/views.ts';
+import { assertAgentAllowListWidening, assertAgentToolsWidening } from './agent-guards.ts';
+import { intersectAgentProjects, resolveAgentProjects } from './agent-projects.ts';
+import { registerTool } from './agent-tools.ts';
+import type { ToolContext } from './agent-tools.ts';
+import {
   type CommentKind,
   type CommentVisibility,
   commentKindSchema,
   commentVisibilitySchema,
-} from '../lib/comment-schema.ts';
+} from './comment-schema.ts';
+import { serializeMarkdown } from './frontmatter.ts';
+import { HTTPError } from './http.ts';
+import { mcpInvalidParams, mcpRejectHumanPat, rethrowAgentGuardAsMcp } from './mcp-errors.ts';
 
-// --- JSON-RPC types ---
-
-interface JsonRpcRequest {
-  jsonrpc: '2.0';
-  id: number | string;
-  method: string;
-  params?: Record<string, unknown>;
-}
-
-interface JsonRpcResponse {
-  jsonrpc: '2.0';
-  id: number | string;
-  result?: unknown;
-  error?: { code: number; message: string; data?: unknown };
-}
-
-// --- Tool registry ---
-
-interface ToolContext {
-  token: ApiToken;
-  actor: { id: string };
-}
-
-interface ToolDef {
-  name: string;
-  description: string;
-  inputSchema: Record<string, unknown>;
-  requiredScope: string;
-  handler: (ctx: ToolContext, args: Record<string, unknown>) => Promise<unknown>;
-}
+// ---------------------------------------------------------------------------
+// Result envelopes — verbatim from routes/mcp.ts.
+// ---------------------------------------------------------------------------
 
 function textResult(payload: unknown): { content: { type: 'text'; text: string }[] } {
   return { content: [{ type: 'text', text: JSON.stringify(payload) }] };
@@ -117,6 +87,16 @@ function textResult(payload: unknown): { content: { type: 'text'; text: string }
 function markdownResult(md: string): { content: { type: 'text'; text: string }[] } {
   return { content: [{ type: 'text', text: md }] };
 }
+
+// ---------------------------------------------------------------------------
+// Arg helpers — verbatim from routes/mcp.ts, adapted to take a parsed args bag.
+//
+// The legacy handlers re-validated args inline via requireString/optionalString
+// even though MCP performs no schema validation. `executeTool` now runs
+// `schema.parse(args)` FIRST (mitigation 26), so the Zod schema is the gate;
+// these helpers keep the same coercion semantics for the handler body (e.g.
+// "empty string → absent" for optionalString) so behavior is identical.
+// ---------------------------------------------------------------------------
 
 function requireString(args: Record<string, unknown>, key: string): string {
   const v = args[key];
@@ -129,6 +109,20 @@ function requireString(args: Record<string, unknown>, key: string): string {
 function optionalString(args: Record<string, unknown>, key: string): string | undefined {
   const v = args[key];
   return typeof v === 'string' && v.length > 0 ? v : undefined;
+}
+
+/** Parse a possibly-CSV string arg into a typed list (or undefined). */
+function parseCsvArg<T extends string>(
+  args: Record<string, unknown>,
+  key: string,
+): T[] | undefined {
+  const raw = args[key];
+  if (typeof raw !== 'string' || raw.length === 0) return undefined;
+  const parts = raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean) as T[];
+  return parts.length > 0 ? parts : undefined;
 }
 
 /** Resolve and validate that the workspace_slug matches the token's workspace. */
@@ -157,9 +151,9 @@ async function resolveProjectInWorkspace(
   });
   if (!p) throw new Error('project not found');
 
-  // Phase 2.5: when the request comes through an agent-bound token, intersect
-  // the agent's frontmatter.projects with the token's optional projectIds
-  // narrowing and reject if the requested project isn't in the result.
+  // Phase 2.5: agent-bound tokens intersect the agent's frontmatter.projects
+  // with the token's optional projectIds narrowing; reject if the requested
+  // project isn't in the result.
   if (token.agentId) {
     const agent = await db.query.documents.findFirst({
       where: and(eq(documents.id, token.agentId), eq(documents.type, 'agent')),
@@ -172,9 +166,6 @@ async function resolveProjectInWorkspace(
     const agentProjects = resolveAgentProjects(agent);
     const effective = intersectAgentProjects(agentProjects, token.projectIds ?? null);
     if (!effective.includes('*') && !effective.includes(p.id)) {
-      // Structured server log — needed for operators debugging "my agent is
-      // silently ignoring this project". The MCP response keeps minimal data
-      // (not leaky); the log carries the full reasoning trail.
       console.info('[mcp] allow-list rejection', {
         agent_slug: agent.slug,
         agent_id: agent.id,
@@ -194,13 +185,8 @@ async function resolveProjectInWorkspace(
 
 /**
  * Resolve the comment author context for a bearer token.
- *
- * - Agent-bound token (`token.agentId` set) → `{ type: 'agent', agentSlug, agentId }`.
- *   The slug is looked up from the agent doc; clients never supply it.
- * - Otherwise → `{ type: 'user', userId: token.createdBy }` (human PAT / session bearer).
- *
- * Mirrors `resolveAuthorContext` in routes/comments.ts but takes a token directly
- * because MCP has no session/user context plumbing.
+ * - Agent-bound token → `{ type: 'agent', agentSlug, agentId }`.
+ * - Otherwise → `{ type: 'user', userId: token.createdBy }`.
  */
 async function resolveAuthorContextForToken(token: ApiToken): Promise<AuthorContext> {
   if (token.agentId) {
@@ -214,29 +200,12 @@ async function resolveAuthorContextForToken(token: ApiToken): Promise<AuthorCont
     }
     return { type: 'agent', agentSlug: agent.slug, agentId: token.agentId };
   }
-  // Human PAT: attribute the comment to the token's owner (createdBy). A
-  // workspace-scoped token without a creator (legacy/system) cannot author a
-  // comment — surface this as an MCP error rather than silently mis-attributing.
   if (!token.createdBy) {
     throw mcpInvalidParams('token has no owner; cannot resolve comment author', {
       reason: 'unknown_author',
     });
   }
   return { type: 'user', userId: token.createdBy };
-}
-
-/** Parse a possibly-CSV string MCP arg into a typed list (or undefined). */
-function parseCsvArg<T extends string>(
-  args: Record<string, unknown>,
-  key: string,
-): T[] | undefined {
-  const raw = args[key];
-  if (typeof raw !== 'string' || raw.length === 0) return undefined;
-  const parts = raw
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean) as T[];
-  return parts.length > 0 ? parts : undefined;
 }
 
 /**
@@ -263,37 +232,66 @@ async function resolveTableForArgs(
   return t;
 }
 
-const TOOLS: ToolDef[] = [
-  {
+/** Wrap the string actor as the `{ id }`-shaped value the service layer reads. */
+function serviceActor(ctx: ToolContext): never {
+  return { id: ctx.actor } as never;
+}
+
+// ---------------------------------------------------------------------------
+// Zod schemas — capture the SAME required/optional fields each legacy handler
+// reads, per the legacy inline checks + the advisory inputSchema. `.strict()`
+// is house style. `executeTool` runs `schema.parse(args)` before the handler.
+// ---------------------------------------------------------------------------
+
+const documentTypeEnum = z.enum(['work_item', 'page', 'agent', 'trigger']);
+
+// ---------------------------------------------------------------------------
+// Tool registrations. Wrapped in a function (not run at import time) so the
+// circular import with agent-tools.ts resolves — agent-tools.ts invokes this
+// AFTER its `registry`/`registerTool` are initialized. Idempotent-guarded so a
+// double call (e.g. test re-import) is a no-op rather than a duplicate-name
+// throw.
+// ---------------------------------------------------------------------------
+
+let registered = false;
+
+export function registerRealTools(): void {
+  if (registered) return;
+  registered = true;
+
+  registerTool({
     name: 'list_workspaces',
     description: 'List workspaces visible to the token.',
     inputSchema: { type: 'object', properties: {} },
     requiredScope: 'documents:read',
-    handler: async ({ token }) => {
+    schema: z.object({}).strict(),
+    handler: async (_args, ctx) => {
       const ws = await db.query.workspaces.findFirst({
-        where: eq(workspaces.id, token.workspaceId),
+        where: eq(workspaces.id, ctx.token.workspaceId),
       });
       return textResult({
         workspaces: ws ? [{ id: ws.id, slug: ws.slug, name: ws.name }] : [],
       });
     },
-  },
-  {
+  });
+
+  registerTool({
     name: 'list_projects',
     description:
-      'List projects in the bound workspace. For agent-bound tokens, filtered to the agent\'s allow-list.',
+      "List projects in the bound workspace. For agent-bound tokens, filtered to the agent's allow-list.",
     inputSchema: {
       type: 'object',
       properties: { workspace_slug: { type: 'string' } },
       required: ['workspace_slug'],
     },
     requiredScope: 'documents:read',
-    handler: async ({ token }, args) => {
+    schema: z.object({ workspace_slug: z.string() }).strict(),
+    handler: async (args, ctx) => {
+      const { token } = ctx;
       const ws = await resolveWorkspaceForToken(token, args);
       const all = await db.query.projects.findMany({
         where: eq(projects.workspaceId, ws.id),
       });
-      // Human PAT or no agent binding — return all.
       if (!token.agentId) {
         return textResult({
           projects: all.map((p) => ({ id: p.id, slug: p.slug, name: p.name })),
@@ -304,15 +302,14 @@ const TOOLS: ToolDef[] = [
       });
       const agentProjects = agent ? resolveAgentProjects(agent) : ['*'];
       const effective = intersectAgentProjects(agentProjects, token.projectIds ?? null);
-      const filtered = effective.includes('*')
-        ? all
-        : all.filter((p) => effective.includes(p.id));
+      const filtered = effective.includes('*') ? all : all.filter((p) => effective.includes(p.id));
       return textResult({
         projects: filtered.map((p) => ({ id: p.id, slug: p.slug, name: p.name })),
       });
     },
-  },
-  {
+  });
+
+  registerTool({
     name: 'list_documents',
     description: 'List documents in a project. Optional type filter and pagination.',
     inputSchema: {
@@ -328,29 +325,33 @@ const TOOLS: ToolDef[] = [
       required: ['workspace_slug', 'project_slug'],
     },
     requiredScope: 'documents:read',
-    handler: async ({ token }, args) => {
-      const ws = await resolveWorkspaceForToken(token, args);
-      const p = await resolveProjectInWorkspace(ws, token, args);
+    schema: z
+      .object({
+        workspace_slug: z.string(),
+        project_slug: z.string(),
+        // Handler explicitly rejects agent_run; allow any string through so that
+        // rejection (a clean error message) fires instead of a Zod path error.
+        type: z.string().optional(),
+        table_slug: z.string().optional(),
+        limit: z.number().optional(),
+        cursor: z.string().optional(),
+      })
+      .strict(),
+    handler: async (args, ctx) => {
+      const ws = await resolveWorkspaceForToken(ctx.token, args);
+      const p = await resolveProjectInWorkspace(ws, ctx.token, args);
       const type = optionalString(args, 'type');
-      // R2 — enforce the advisory inputSchema enum at the handler level
-      // (MCP doesn't validate inputs against the JSON schema). Explicit
-      // rejection prevents agent_run row enumeration via this tool.
-      // Service layer (listDocuments) ALSO excludes agent_run from the
-      // default no-filter response under R2 — see services/documents.ts.
       if (type === 'agent_run') {
         throw new Error(
           'agent_run documents must be listed via the runs endpoints (Sub-phase D), not list_documents',
         );
       }
-      // For work_item lists, default to the project's first table unless
-      // table_slug is given. For all other type filters, leave activeTableId
-      // null so the service applies its default selection.
       let activeTableId: string | null = null;
       if (type === 'work_item') {
         const t = await resolveTableForArgs(p, args);
         activeTableId = t.id;
       }
-      const limit = typeof args['limit'] === 'number' ? args['limit'] : 50;
+      const limit = typeof args['limit'] === 'number' ? (args['limit'] as number) : 50;
       const cursor = optionalString(args, 'cursor');
       const result = await listDocuments({
         projectId: p.id,
@@ -371,8 +372,9 @@ const TOOLS: ToolDef[] = [
         next_cursor: result.nextCursor,
       });
     },
-  },
-  {
+  });
+
+  registerTool({
     name: 'get_document',
     description: 'Get a single document with frontmatter + body.',
     inputSchema: {
@@ -385,16 +387,19 @@ const TOOLS: ToolDef[] = [
       required: ['workspace_slug', 'project_slug', 'slug'],
     },
     requiredScope: 'documents:read',
-    handler: async ({ token }, args) => {
-      const ws = await resolveWorkspaceForToken(token, args);
-      const p = await resolveProjectInWorkspace(ws, token, args);
+    schema: z
+      .object({
+        workspace_slug: z.string(),
+        project_slug: z.string(),
+        slug: z.string(),
+      })
+      .strict(),
+    handler: async (args, ctx) => {
+      const ws = await resolveWorkspaceForToken(ctx.token, args);
+      const p = await resolveProjectInWorkspace(ws, ctx.token, args);
       const slug = requireString(args, 'slug');
       const doc = await getDocument(p.id, slug);
       if (!doc) throw new Error('document not found');
-      // R2 — agent_run rows are runner-owned and carry sensitive
-      // frontmatter (system_prompt, chain_id, tokens). Read access goes
-      // through Sub-phase D's /runs endpoints, not the generic
-      // get_document tool.
       if (doc.type === 'agent_run') {
         throw new Error(
           'agent_run documents must be read via the runs endpoints (Sub-phase D), not get_document',
@@ -402,8 +407,9 @@ const TOOLS: ToolDef[] = [
       }
       return textResult(doc);
     },
-  },
-  {
+  });
+
+  registerTool({
     name: 'get_document_markdown',
     description: 'Get the raw markdown (YAML frontmatter + body) of a document.',
     inputSchema: {
@@ -416,37 +422,38 @@ const TOOLS: ToolDef[] = [
       required: ['workspace_slug', 'project_slug', 'slug'],
     },
     requiredScope: 'documents:read',
-    handler: async ({ token }, args) => {
-      const ws = await resolveWorkspaceForToken(token, args);
-      const p = await resolveProjectInWorkspace(ws, token, args);
+    schema: z
+      .object({
+        workspace_slug: z.string(),
+        project_slug: z.string(),
+        slug: z.string(),
+      })
+      .strict(),
+    handler: async (args, ctx) => {
+      const ws = await resolveWorkspaceForToken(ctx.token, args);
+      const p = await resolveProjectInWorkspace(ws, ctx.token, args);
       const slug = requireString(args, 'slug');
       const doc = await getDocument(p.id, slug);
       if (!doc) throw new Error('document not found');
-      // R2 — same agent_run guard as get_document above.
       if (doc.type === 'agent_run') {
         throw new Error(
           'agent_run documents must be read via the runs endpoints (Sub-phase D), not get_document_markdown',
         );
       }
-      // Mirror documents.ts GET /:slug.md: strip reserved keys, then layer
-      // canonical column values on top so they win.
-      const userFm = stripReservedFrontmatter(
-        (doc.frontmatter as Record<string, unknown>) ?? {},
-      );
+      const userFm = stripReservedFrontmatter((doc.frontmatter as Record<string, unknown>) ?? {});
       const fm: Record<string, unknown> = {
         ...userFm,
         type: doc.type,
         title: doc.title,
         ...(doc.status ? { status: doc.status } : {}),
-        ...(doc.lastTouchedAt
-          ? { last_touched_at: doc.lastTouchedAt.toISOString() }
-          : {}),
+        ...(doc.lastTouchedAt ? { last_touched_at: doc.lastTouchedAt.toISOString() } : {}),
       };
       const md = serializeMarkdown({ frontmatter: fm, body: doc.body });
       return markdownResult(md);
     },
-  },
-  {
+  });
+
+  registerTool({
     name: 'create_document',
     description:
       'Create a document. type: work_item|page|agent|trigger. work_item creation uses the project default table unless table_slug is given. Agents return a one-time api_token in the response.',
@@ -465,11 +472,22 @@ const TOOLS: ToolDef[] = [
       required: ['workspace_slug', 'project_slug', 'type', 'title'],
     },
     requiredScope: 'documents:write',
-    handler: async ({ token, actor }, args) => {
+    schema: z
+      .object({
+        workspace_slug: z.string(),
+        project_slug: z.string(),
+        type: documentTypeEnum,
+        title: z.string(),
+        body: z.string().optional(),
+        frontmatter: z.record(z.unknown()).optional(),
+        status: z.string().optional(),
+        table_slug: z.string().optional(),
+      })
+      .strict(),
+    handler: async (args, ctx) => {
+      const { token } = ctx;
       const ws = await resolveWorkspaceForToken(token, args);
       const type = requireString(args, 'type') as DocumentType;
-      // Phase 2.5: agent/trigger lifecycle is HTTP-only in this phase.
-      // create_agent / create_trigger MCP tools ship in Phase 2.6.
       if (type === 'agent' || type === 'trigger') {
         throw mcpInvalidParams(
           `${type} documents must be created via the workspace-scoped HTTP endpoint (POST /api/v1/w/:wslug/documents); not available via MCP in Phase 2.5`,
@@ -486,18 +504,14 @@ const TOOLS: ToolDef[] = [
           : {};
       const statusArg = optionalString(args, 'status') ?? null;
 
-      const table =
-        type === 'work_item' ? await resolveTableForArgs(p, args) : null;
+      const table = type === 'work_item' ? await resolveTableForArgs(p, args) : null;
 
       const { document, agentTokenPlaintext } = await createDocument({
         workspace: ws,
         project: p,
         table,
-        actor: actor as never,
+        actor: serviceActor(ctx),
         token,
-        // MCP never routes through a table-scoped URL. The service uses this
-        // flag to reject agent/trigger creation on table URLs — irrelevant
-        // here.
         isTableScopedUrl: false,
         input: { type, title, body, frontmatter, status: statusArg },
       });
@@ -507,8 +521,9 @@ const TOOLS: ToolDef[] = [
         : document;
       return textResult(payload);
     },
-  },
-  {
+  });
+
+  registerTool({
     name: 'update_document',
     description:
       'Patch a document. Supplied frontmatter is shallow-merged into the existing frontmatter (null values delete keys). Reserved keys (type, title, status, last_touched_at) live as columns and are ignored when present in frontmatter.',
@@ -526,31 +541,38 @@ const TOOLS: ToolDef[] = [
       required: ['workspace_slug', 'project_slug', 'slug'],
     },
     requiredScope: 'documents:write',
-    handler: async ({ token, actor }, args) => {
+    schema: z
+      .object({
+        workspace_slug: z.string(),
+        project_slug: z.string(),
+        slug: z.string(),
+        title: z.string().optional(),
+        body: z.string().optional(),
+        status: z.string().nullable().optional(),
+        // Handler validates frontmatter is a non-array object itself and throws
+        // a precise error; allow any value through Zod so that check fires.
+        frontmatter: z.unknown().optional(),
+      })
+      .strict(),
+    handler: async (args, ctx) => {
+      const { token } = ctx;
       const ws = await resolveWorkspaceForToken(token, args);
       const p = await resolveProjectInWorkspace(ws, token, args);
       const slug = requireString(args, 'slug');
       const existing = await getDocument(p.id, slug);
       if (!existing) throw new Error('document not found');
-      // Phase 2.5: agent/trigger mutation is HTTP-only in this phase.
       if (existing.type === 'agent' || existing.type === 'trigger') {
         throw mcpInvalidParams(
           `${existing.type} documents cannot be mutated via MCP in Phase 2.5; use PATCH /api/v1/w/:wslug/documents/${slug}`,
           { reason: 'agent_lifecycle_via_http_only' },
         );
       }
-      // F5: comments must go through update_comment so the author-only guard
-      // + soft-delete + kind-immutable invariants apply.
       if (existing.type === 'comment') {
-        throw mcpInvalidParams(
-          'comment documents must be mutated via the update_comment tool',
-          { reason: 'comment_requires_comment_tool' },
-        );
+        throw mcpInvalidParams('comment documents must be mutated via the update_comment tool', {
+          reason: 'comment_requires_comment_tool',
+        });
       }
 
-      // For work_item patches, surface a fallback table only if the doc has
-      // none (legacy rows). The service tolerates `null` here for non-work_item
-      // updates.
       let fallbackTable: TableEntity | null = null;
       if (existing.type === 'work_item' && !existing.tableId) {
         const t = await db.query.tables.findFirst({
@@ -561,12 +583,9 @@ const TOOLS: ToolDef[] = [
       }
 
       const patch: Parameters<typeof updateDocument>[0]['patch'] = {};
-      if (typeof args['title'] === 'string') patch.title = args['title'];
-      if (typeof args['body'] === 'string') patch.body = args['body'];
-      if (
-        typeof args['status'] === 'string' ||
-        args['status'] === null
-      ) {
+      if (typeof args['title'] === 'string') patch.title = args['title'] as string;
+      if (typeof args['body'] === 'string') patch.body = args['body'] as string;
+      if (typeof args['status'] === 'string' || args['status'] === null) {
         patch.status = args['status'] as string | null;
       }
       const fmArg = args['frontmatter'];
@@ -581,14 +600,15 @@ const TOOLS: ToolDef[] = [
         workspace: ws,
         project: p,
         fallbackTable,
-        actor: actor as never,
+        actor: serviceActor(ctx),
         existing,
         patch,
       });
       return textResult(updated);
     },
-  },
-  {
+  });
+
+  registerTool({
     name: 'delete_document',
     description: 'Delete a document.',
     inputSchema: {
@@ -601,7 +621,15 @@ const TOOLS: ToolDef[] = [
       required: ['workspace_slug', 'project_slug', 'slug'],
     },
     requiredScope: 'documents:delete',
-    handler: async ({ token, actor }, args) => {
+    schema: z
+      .object({
+        workspace_slug: z.string(),
+        project_slug: z.string(),
+        slug: z.string(),
+      })
+      .strict(),
+    handler: async (args, ctx) => {
+      const { token } = ctx;
       const ws = await resolveWorkspaceForToken(token, args);
       const p = await resolveProjectInWorkspace(ws, token, args);
       const slug = requireString(args, 'slug');
@@ -613,23 +641,22 @@ const TOOLS: ToolDef[] = [
           { reason: 'agent_lifecycle_via_http_only' },
         );
       }
-      // F5: comments must go through delete_comment (soft-delete + author guard).
       if (existing.type === 'comment') {
-        throw mcpInvalidParams(
-          'comment documents must be deleted via the delete_comment tool',
-          { reason: 'comment_requires_comment_tool' },
-        );
+        throw mcpInvalidParams('comment documents must be deleted via the delete_comment tool', {
+          reason: 'comment_requires_comment_tool',
+        });
       }
       await deleteDocument({
         workspace: ws,
         project: p,
-        actor: actor as never,
+        actor: serviceActor(ctx),
         existing,
       });
       return textResult({ ok: true, slug });
     },
-  },
-  {
+  });
+
+  registerTool({
     name: 'list_statuses',
     description: 'List statuses for a table (uses the project default unless table_slug is given).',
     inputSchema: {
@@ -642,15 +669,23 @@ const TOOLS: ToolDef[] = [
       required: ['workspace_slug', 'project_slug'],
     },
     requiredScope: 'documents:read',
-    handler: async ({ token }, args) => {
-      const ws = await resolveWorkspaceForToken(token, args);
-      const p = await resolveProjectInWorkspace(ws, token, args);
+    schema: z
+      .object({
+        workspace_slug: z.string(),
+        project_slug: z.string(),
+        table_slug: z.string().optional(),
+      })
+      .strict(),
+    handler: async (args, ctx) => {
+      const ws = await resolveWorkspaceForToken(ctx.token, args);
+      const p = await resolveProjectInWorkspace(ws, ctx.token, args);
       const t = await resolveTableForArgs(p, args);
       const list = await listStatuses(t.id);
       return textResult({ table: { id: t.id, slug: t.slug }, statuses: list });
     },
-  },
-  {
+  });
+
+  registerTool({
     name: 'list_fields',
     description: 'List fields for a table (uses the project default unless table_slug is given).',
     inputSchema: {
@@ -663,15 +698,23 @@ const TOOLS: ToolDef[] = [
       required: ['workspace_slug', 'project_slug'],
     },
     requiredScope: 'documents:read',
-    handler: async ({ token }, args) => {
-      const ws = await resolveWorkspaceForToken(token, args);
-      const p = await resolveProjectInWorkspace(ws, token, args);
+    schema: z
+      .object({
+        workspace_slug: z.string(),
+        project_slug: z.string(),
+        table_slug: z.string().optional(),
+      })
+      .strict(),
+    handler: async (args, ctx) => {
+      const ws = await resolveWorkspaceForToken(ctx.token, args);
+      const p = await resolveProjectInWorkspace(ws, ctx.token, args);
       const t = await resolveTableForArgs(p, args);
       const list = await listFields(t.id);
       return textResult({ table: { id: t.id, slug: t.slug }, fields: list });
     },
-  },
-  {
+  });
+
+  registerTool({
     name: 'list_views',
     description: 'List views for a table (uses the project default unless table_slug is given).',
     inputSchema: {
@@ -684,15 +727,23 @@ const TOOLS: ToolDef[] = [
       required: ['workspace_slug', 'project_slug'],
     },
     requiredScope: 'documents:read',
-    handler: async ({ token }, args) => {
-      const ws = await resolveWorkspaceForToken(token, args);
-      const p = await resolveProjectInWorkspace(ws, token, args);
+    schema: z
+      .object({
+        workspace_slug: z.string(),
+        project_slug: z.string(),
+        table_slug: z.string().optional(),
+      })
+      .strict(),
+    handler: async (args, ctx) => {
+      const ws = await resolveWorkspaceForToken(ctx.token, args);
+      const p = await resolveProjectInWorkspace(ws, ctx.token, args);
       const t = await resolveTableForArgs(p, args);
       const list = await listViews(t.id);
       return textResult({ table: { id: t.id, slug: t.slug }, views: list });
     },
-  },
-  {
+  });
+
+  registerTool({
     name: 'run_view',
     description:
       'Run a saved view by view_slug (or view_id). Applies stored filters and returns matching documents.',
@@ -709,13 +760,20 @@ const TOOLS: ToolDef[] = [
       required: ['workspace_slug', 'project_slug'],
     },
     requiredScope: 'documents:read',
-    handler: async ({ token }, args) => {
-      const ws = await resolveWorkspaceForToken(token, args);
-      const p = await resolveProjectInWorkspace(ws, token, args);
+    schema: z
+      .object({
+        workspace_slug: z.string(),
+        project_slug: z.string(),
+        view_slug: z.string().optional(),
+        view_id: z.string().optional(),
+        table_slug: z.string().optional(),
+        limit: z.number().optional(),
+      })
+      .strict(),
+    handler: async (args, ctx) => {
+      const ws = await resolveWorkspaceForToken(ctx.token, args);
+      const p = await resolveProjectInWorkspace(ws, ctx.token, args);
       const t = await resolveTableForArgs(p, args);
-      // Views don't have a slug column in v1, so accept either view_id or
-      // view name match via view_slug (slugified name match would be brittle
-      // — use view_id when known).
       const viewId = optionalString(args, 'view_id');
       const viewSlug = optionalString(args, 'view_slug');
       let view = null;
@@ -724,23 +782,17 @@ const TOOLS: ToolDef[] = [
           where: and(eq(viewsTable.tableId, t.id), eq(viewsTable.id, viewId)),
         });
       } else if (viewSlug) {
-        // Fallback: look up by name (case-insensitive exact match). Views have
-        // no slug column; we accept the human name here.
         const candidates = await db.query.views.findMany({
           where: eq(viewsTable.tableId, t.id),
         });
-        view =
-          candidates.find(
-            (v) => v.name.toLowerCase() === viewSlug.toLowerCase(),
-          ) ?? null;
+        view = candidates.find((v) => v.name.toLowerCase() === viewSlug.toLowerCase()) ?? null;
       } else {
-        // No identifier — return the default view if one exists.
         view = await db.query.views.findFirst({
           where: and(eq(viewsTable.tableId, t.id), eq(viewsTable.isDefault, true)),
         });
       }
       if (!view) throw new Error('view not found');
-      const limit = typeof args['limit'] === 'number' ? args['limit'] : 50;
+      const limit = typeof args['limit'] === 'number' ? (args['limit'] as number) : 50;
       const docs = await runView({
         view,
         projectId: p.id,
@@ -752,19 +804,11 @@ const TOOLS: ToolDef[] = [
         documents: docs,
       });
     },
-  },
+  });
 
-  // ---------------------------------------------------------------------------
-  // Phase 2.6 — comment tools (delegate to services/comments.ts).
-  //
-  // Author resolution: agent-bound tokens always post as `agent:<slug>`; clients
-  // do NOT supply `author`. Human PATs post as `user:<creator>`. The service
-  // handles mention parsing + approval-keyword detection. Update/delete enforce
-  // author-only at the service layer; this route catches COMMENT_AUTHOR_ONLY
-  // and re-throws as a structured JSON-RPC error so agents can branch on
-  // `data.reason`.
-  // ---------------------------------------------------------------------------
-  {
+  // --- Phase 2.6 comment tools ---
+
+  registerTool({
     name: 'create_comment',
     description:
       'Post a comment on a work_item or page. Mention parsing + approval-keyword detection happen server-side; the author is resolved from the bearer token.',
@@ -785,7 +829,19 @@ const TOOLS: ToolDef[] = [
       required: ['workspace_slug', 'project_slug', 'parent_slug', 'body'],
     },
     requiredScope: 'documents:write',
-    handler: async ({ token }, args) => {
+    schema: z
+      .object({
+        workspace_slug: z.string(),
+        project_slug: z.string(),
+        parent_slug: z.string(),
+        body: z.string(),
+        kind: commentKindSchema.optional(),
+        target_agent: z.string().optional(),
+        visibility: commentVisibilitySchema.optional(),
+      })
+      .strict(),
+    handler: async (args, ctx) => {
+      const { token } = ctx;
       const ws = await resolveWorkspaceForToken(token, args);
       const project = await resolveProjectInWorkspace(ws, token, args);
       const parentSlug = requireString(args, 'parent_slug');
@@ -797,9 +853,6 @@ const TOOLS: ToolDef[] = [
       const authorContext = await resolveAuthorContextForToken(token);
       const body = requireString(args, 'body');
 
-      // Narrow the enum-typed args through the same Zod parsers the route uses,
-      // so an invalid value surfaces a clean JSON-RPC error instead of leaking
-      // into the service.
       const kindArg = optionalString(args, 'kind');
       const kind = kindArg !== undefined ? commentKindSchema.parse(kindArg) : undefined;
       const visibilityArg = optionalString(args, 'visibility');
@@ -825,8 +878,9 @@ const TOOLS: ToolDef[] = [
         ...(fm.target_agent !== undefined ? { target_agent: fm.target_agent } : {}),
       });
     },
-  },
-  {
+  });
+
+  registerTool({
     name: 'list_comments',
     description:
       'List comments on a work_item or page. Newest-first. Optional kind / since / visibility filters. Default visibility is "normal" (internal rows excluded unless explicitly requested).',
@@ -843,17 +897,27 @@ const TOOLS: ToolDef[] = [
       required: ['workspace_slug', 'project_slug', 'parent_slug'],
     },
     requiredScope: 'documents:read',
-    handler: async ({ token }, args) => {
-      const ws = await resolveWorkspaceForToken(token, args);
-      const project = await resolveProjectInWorkspace(ws, token, args);
+    schema: z
+      .object({
+        workspace_slug: z.string(),
+        project_slug: z.string(),
+        parent_slug: z.string(),
+        // kind/visibility accept a single value OR a comma-separated list; the
+        // handler parses + validates each part via comment-schema. Keep Zod lax.
+        kind: z.string().optional(),
+        since: z.string().optional(),
+        visibility: z.string().optional(),
+      })
+      .strict(),
+    handler: async (args, ctx) => {
+      const ws = await resolveWorkspaceForToken(ctx.token, args);
+      const project = await resolveProjectInWorkspace(ws, ctx.token, args);
       const parentSlug = requireString(args, 'parent_slug');
       const parent = await db.query.documents.findFirst({
         where: and(eq(documents.projectId, project.id), eq(documents.slug, parentSlug)),
       });
       if (!parent) throw new Error(`parent ${parentSlug} not found`);
 
-      // `kind` and `visibility` accept a single value or a comma-separated list,
-      // matching the REST query convention (?kind=plan,result).
       const kinds = parseCsvArg<string>(args, 'kind');
       const visibility = parseCsvArg<string>(args, 'visibility');
       const since = optionalString(args, 'since');
@@ -873,8 +937,9 @@ const TOOLS: ToolDef[] = [
       });
       return textResult(rows);
     },
-  },
-  {
+  });
+
+  registerTool({
     name: 'update_comment',
     description:
       'Edit a comment body or visibility. Author-only — `kind` is immutable after creation; supplying it is rejected by the service.',
@@ -890,11 +955,20 @@ const TOOLS: ToolDef[] = [
       required: ['workspace_slug', 'project_slug', 'slug'],
     },
     requiredScope: 'documents:write',
-    handler: async ({ token }, args) => {
+    schema: z
+      .object({
+        workspace_slug: z.string(),
+        project_slug: z.string(),
+        slug: z.string(),
+        body: z.string().optional(),
+        visibility: commentVisibilitySchema.optional(),
+      })
+      .strict(),
+    handler: async (args, ctx) => {
+      const { token } = ctx;
       const ws = await resolveWorkspaceForToken(token, args);
       const project = await resolveProjectInWorkspace(ws, token, args);
       const slug = requireString(args, 'slug');
-      // S13: getCommentScoped folds the project-membership check.
       const existing = await getCommentScoped(ws.id, project.id, slug);
       if (!existing) throw new Error('comment not found');
 
@@ -926,8 +1000,9 @@ const TOOLS: ToolDef[] = [
         throw err;
       }
     },
-  },
-  {
+  });
+
+  registerTool({
     name: 'delete_comment',
     description:
       'Soft-delete a comment. Author-only. The row stays in the database with `deleted_at` set; downstream UIs mute it.',
@@ -941,11 +1016,18 @@ const TOOLS: ToolDef[] = [
       required: ['workspace_slug', 'project_slug', 'slug'],
     },
     requiredScope: 'documents:delete',
-    handler: async ({ token }, args) => {
+    schema: z
+      .object({
+        workspace_slug: z.string(),
+        project_slug: z.string(),
+        slug: z.string(),
+      })
+      .strict(),
+    handler: async (args, ctx) => {
+      const { token } = ctx;
       const ws = await resolveWorkspaceForToken(token, args);
       const project = await resolveProjectInWorkspace(ws, token, args);
       const slug = requireString(args, 'slug');
-      // S13: getCommentScoped folds the project-membership check.
       const existing = await getCommentScoped(ws.id, project.id, slug);
       if (!existing) throw new Error('comment not found');
 
@@ -973,26 +1055,14 @@ const TOOLS: ToolDef[] = [
         throw err;
       }
     },
-  },
+  });
 
-  // ---------------------------------------------------------------------------
-  // Phase 2.6 sub-phase D — agent-lifecycle tools.
-  //
-  // create_agent / update_agent / delete_agent all delegate to the same
-  // service layer the workspace-scoped HTTP routes use (see
-  // routes/workspace-documents.ts). create_agent returns the freshly minted
-  // bearer token as `agent_token` on the response (one-time reveal — same
-  // contract as the HTTP POST). update_agent enforces an allow-list-widening
-  // guard: an agent-bound token cannot patch a target agent's
-  // frontmatter.projects to include project ids it doesn't have itself.
-  // delete_agent rejects self-delete. get_agent_self is read-only and
-  // requires only documents:read but additionally needs the token to be
-  // agent-bound.
-  // ---------------------------------------------------------------------------
-  {
+  // --- Phase 2.6 sub-phase D — agent-lifecycle tools (carry mitigation 57) ---
+
+  registerTool({
     name: 'create_agent',
     description:
-      'Create a workspace-scoped agent document. Mints a bearer token and returns it ONCE in the response as `agent_token`. The token is scoped to the calling token\'s workspace.',
+      "Create a workspace-scoped agent document. Mints a bearer token and returns it ONCE in the response as `agent_token`. The token is scoped to the calling token's workspace.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -1005,7 +1075,19 @@ const TOOLS: ToolDef[] = [
       required: ['workspace_slug', 'title', 'frontmatter'],
     },
     requiredScope: 'agents:write',
-    handler: async ({ token, actor }, args) => {
+    schema: z
+      .object({
+        workspace_slug: z.string(),
+        slug: z.string().optional(),
+        title: z.string(),
+        body: z.string().optional(),
+        // Handler validates frontmatter is a non-array object itself; allow any
+        // value through Zod so the precise mcpInvalidParams error fires.
+        frontmatter: z.unknown(),
+      })
+      .strict(),
+    handler: async (args, ctx) => {
+      const { token } = ctx;
       // Round 6 #1: human PATs cannot mint agent bearers via MCP.
       mcpRejectHumanPat(token);
       const ws = await resolveWorkspaceForToken(token, args);
@@ -1019,19 +1101,16 @@ const TOOLS: ToolDef[] = [
       }
       const frontmatter = fmArg as Record<string, unknown>;
 
-      // Reject child agents whose allow-list widens past the calling agent's
-      // own. update_agent has had this guard since Phase 2.6 D8; create_agent
-      // was missing it (Phase 2.6 review finding F2).
-      await assertAgentAllowListWidening(token, frontmatter, 'create').catch(rethrowAgentGuardAsMcp);
-      // BUG-005: same shape for tools — otherwise an agent-bound token can
-      // mint a child with broader tools and inherit scopes via toolsToScopes.
+      await assertAgentAllowListWidening(token, frontmatter, 'create').catch(
+        rethrowAgentGuardAsMcp,
+      );
       await assertAgentToolsWidening(token, frontmatter, 'create').catch(rethrowAgentGuardAsMcp);
 
       const { document, agentTokenPlaintext } = await createDocument({
         workspace: ws,
         project: null,
         table: null,
-        actor: actor as never,
+        actor: serviceActor(ctx),
         token,
         isTableScopedUrl: false,
         input: { type: 'agent', title, body, frontmatter, status: null },
@@ -1042,11 +1121,12 @@ const TOOLS: ToolDef[] = [
         ...(agentTokenPlaintext ? { agent_token: agentTokenPlaintext } : {}),
       });
     },
-  },
-  {
+  });
+
+  registerTool({
     name: 'update_agent',
     description:
-      'Patch an existing workspace-scoped agent document. Reserved keys are ignored. When called with an agent-bound token, the target\'s frontmatter.projects allow-list cannot be widened beyond the calling agent\'s own allow-list.',
+      "Patch an existing workspace-scoped agent document. Reserved keys are ignored. When called with an agent-bound token, the target's frontmatter.projects allow-list cannot be widened beyond the calling agent's own allow-list.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -1059,7 +1139,17 @@ const TOOLS: ToolDef[] = [
       required: ['workspace_slug', 'slug'],
     },
     requiredScope: 'agents:write',
-    handler: async ({ token, actor }, args) => {
+    schema: z
+      .object({
+        workspace_slug: z.string(),
+        slug: z.string(),
+        title: z.string().optional(),
+        body: z.string().optional(),
+        frontmatter: z.unknown().optional(),
+      })
+      .strict(),
+    handler: async (args, ctx) => {
+      const { token } = ctx;
       // Round 6 #1: human PATs cannot modify agent bearers via MCP.
       mcpRejectHumanPat(token);
       const ws = await resolveWorkspaceForToken(token, args);
@@ -1073,8 +1163,8 @@ const TOOLS: ToolDef[] = [
       }
 
       const patch: Parameters<typeof updateDocument>[0]['patch'] = {};
-      if (typeof args['title'] === 'string') patch.title = args['title'];
-      if (typeof args['body'] === 'string') patch.body = args['body'];
+      if (typeof args['title'] === 'string') patch.title = args['title'] as string;
+      if (typeof args['body'] === 'string') patch.body = args['body'] as string;
       const fmArg = args['frontmatter'];
       if (fmArg !== undefined) {
         if (!fmArg || typeof fmArg !== 'object' || Array.isArray(fmArg)) {
@@ -1084,28 +1174,30 @@ const TOOLS: ToolDef[] = [
         }
         patch.frontmatter = fmArg as Record<string, unknown>;
 
-        // Allow-list widening guard — shared with create_agent and the HTTP
-        // workspace-documents routes via lib/agent-guards.ts.
-        await assertAgentAllowListWidening(token, patch.frontmatter, 'patch').catch(rethrowAgentGuardAsMcp);
-        // BUG-005: tools-widening guard.
-        await assertAgentToolsWidening(token, patch.frontmatter, 'patch').catch(rethrowAgentGuardAsMcp);
+        await assertAgentAllowListWidening(token, patch.frontmatter, 'patch').catch(
+          rethrowAgentGuardAsMcp,
+        );
+        await assertAgentToolsWidening(token, patch.frontmatter, 'patch').catch(
+          rethrowAgentGuardAsMcp,
+        );
       }
 
       const updated = await updateDocument({
         workspace: ws,
         project: null,
         fallbackTable: null,
-        actor: actor as never,
+        actor: serviceActor(ctx),
         existing,
         patch,
       });
       return textResult(updated);
     },
-  },
-  {
+  });
+
+  registerTool({
     name: 'delete_agent',
     description:
-      'Soft-delete a workspace-scoped agent document. Cascades to revoke the agent\'s bearer token. Rejects self-delete when called with an agent-bound token.',
+      "Soft-delete a workspace-scoped agent document. Cascades to revoke the agent's bearer token. Rejects self-delete when called with an agent-bound token.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -1115,7 +1207,14 @@ const TOOLS: ToolDef[] = [
       required: ['workspace_slug', 'slug'],
     },
     requiredScope: 'agents:write',
-    handler: async ({ token, actor }, args) => {
+    schema: z
+      .object({
+        workspace_slug: z.string(),
+        slug: z.string(),
+      })
+      .strict(),
+    handler: async (args, ctx) => {
+      const { token } = ctx;
       // Round 6 #1: human PATs cannot revoke agent bearers via MCP.
       mcpRejectHumanPat(token);
       const ws = await resolveWorkspaceForToken(token, args);
@@ -1127,9 +1226,8 @@ const TOOLS: ToolDef[] = [
           slug,
         });
       }
-      // Self-delete guard: only meaningful when the call comes from an
-      // agent-bound token. Kept inline (not `assertNotSelfDelete`) because
-      // the HTTP and MCP layers throw different error shapes — HTTPError vs
+      // Self-delete guard: kept inline (not `assertNotSelfDelete`) because the
+      // HTTP and MCP layers throw different error shapes — HTTPError vs
       // mcpInvalidParams — and the helper hardcodes HTTPError.
       if (token.agentId && existing.id === token.agentId) {
         throw mcpInvalidParams('agent cannot delete itself via MCP', {
@@ -1140,24 +1238,26 @@ const TOOLS: ToolDef[] = [
       await deleteDocument({
         workspace: ws,
         project: null,
-        actor: actor as never,
+        actor: serviceActor(ctx),
         existing,
       });
       return textResult({ ok: true, slug });
     },
-  },
-  {
+  });
+
+  registerTool({
     name: 'get_agent_self',
     description:
-      'Return the calling agent\'s own document. Requires an agent-bound bearer token; user-minted (PAT) tokens have no agent identity and receive an error.',
+      "Return the calling agent's own document. Requires an agent-bound bearer token; user-minted (PAT) tokens have no agent identity and receive an error.",
     inputSchema: { type: 'object', properties: {}, required: [] },
     requiredScope: 'documents:read',
-    handler: async ({ token }) => {
+    schema: z.object({}).strict(),
+    handler: async (_args, ctx) => {
+      const { token } = ctx;
       if (!token.agentId) {
-        throw mcpInvalidParams(
-          'get_agent_self requires an agent-bound token',
-          { reason: 'no_agent_bound_to_token' },
-        );
+        throw mcpInvalidParams('get_agent_self requires an agent-bound token', {
+          reason: 'no_agent_bound_to_token',
+        });
       }
       const agent = await db.query.documents.findFirst({
         where: and(eq(documents.id, token.agentId), eq(documents.type, 'agent')),
@@ -1169,117 +1269,5 @@ const TOOLS: ToolDef[] = [
       }
       return textResult(agent);
     },
-  },
-];
-
-// --- Route ---
-
-const mcpRoute = new Hono<AuthContext>();
-mcpRoute.use('*', attachToken, requireToken);
-
-mcpRoute.post('/', async (c) => {
-  let body: JsonRpcRequest;
-  try {
-    body = (await c.req.json()) as JsonRpcRequest;
-  } catch {
-    return c.json<JsonRpcResponse>(
-      {
-        jsonrpc: '2.0',
-        id: 0,
-        error: { code: -32700, message: 'parse error' },
-      },
-      200,
-    );
-  }
-
-  const id = body.id;
-  const token = getToken(c);
-  const actor = getUser(c);
-
-  if (body.method === 'initialize') {
-    return c.json<JsonRpcResponse>({
-      jsonrpc: '2.0',
-      id,
-      result: {
-        protocolVersion: '2024-11-05',
-        serverInfo: { name: 'folio', version: '0.1.0' },
-        capabilities: { tools: {} },
-      },
-    });
-  }
-
-  if (body.method === 'ping') {
-    return c.json<JsonRpcResponse>({ jsonrpc: '2.0', id, result: {} });
-  }
-
-  if (body.method === 'tools/list') {
-    return c.json<JsonRpcResponse>({
-      jsonrpc: '2.0',
-      id,
-      result: {
-        tools: TOOLS.map((t) => ({
-          name: t.name,
-          description: t.description,
-          inputSchema: t.inputSchema,
-        })),
-      },
-    });
-  }
-
-  if (body.method === 'tools/call') {
-    const params = (body.params ?? {}) as {
-      name?: string;
-      arguments?: Record<string, unknown>;
-    };
-    const tool = TOOLS.find((t) => t.name === params.name);
-    if (!tool) {
-      return c.json<JsonRpcResponse>({
-        jsonrpc: '2.0',
-        id,
-        error: { code: -32601, message: `unknown tool: ${params.name ?? '?'}` },
-      });
-    }
-    if (!token.scopes.includes(tool.requiredScope)) {
-      return c.json<JsonRpcResponse>({
-        jsonrpc: '2.0',
-        id,
-        error: {
-          code: -32603,
-          message: `tool ${tool.name} requires scope: ${tool.requiredScope}`,
-          data: { tool: tool.name, required_scope: tool.requiredScope },
-        },
-      });
-    }
-    try {
-      const result = await tool.handler(
-        { token, actor: { id: actor.id } },
-        params.arguments ?? {},
-      );
-      return c.json<JsonRpcResponse>({ jsonrpc: '2.0', id, result });
-    } catch (err) {
-      const message =
-        err instanceof HTTPError
-          ? err.message
-          : err instanceof Error
-            ? err.message
-            : String(err);
-      // Errors thrown via mcpInvalidParams() carry their own `code` and `data`.
-      const e = err as { code?: number; data?: unknown };
-      const code = typeof e.code === 'number' ? e.code : -32603;
-      const data = e.data;
-      return c.json<JsonRpcResponse>({
-        jsonrpc: '2.0',
-        id,
-        error: data !== undefined ? { code, message, data } : { code, message },
-      });
-    }
-  }
-
-  return c.json<JsonRpcResponse>({
-    jsonrpc: '2.0',
-    id,
-    error: { code: -32601, message: `method not supported: ${body.method}` },
   });
-});
-
-export { mcpRoute };
+} // end registerRealTools

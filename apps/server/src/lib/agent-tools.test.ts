@@ -1,8 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { eq } from 'drizzle-orm';
+import { nanoid } from 'nanoid';
 import { z } from 'zod';
-import type { ApiToken } from '../db/schema.ts';
+import type { DB } from '../db/client.ts';
+import { type ApiToken, apiTokens, documents } from '../db/schema.ts';
 import { makeTestApp } from '../test/harness.ts';
-import { type ToolDef, executeTool, registerTool } from './agent-tools.ts';
+import { type ToolDef, executeTool, listToolDefs, registerTool } from './agent-tools.ts';
+import { newApiToken } from './auth.ts';
 
 /**
  * Build a minimal ApiToken stub. Only the fields executeTool reads
@@ -166,10 +170,15 @@ describe('registerTool', () => {
 });
 
 describe('agent-lifecycle gating (deferred to D-3)', () => {
-  it('does not block an agent-bound token from a lifecycle tool — per-tool guards live in D-3', async () => {
+  it('does not block an agent-bound token at the DISPATCHER level — only scope + Zod gate', async () => {
+    // D-2 NOTE: the dispatcher itself (executeTool) still applies no
+    // lifecycle gate — scope + Zod only. The per-tool guards now live inside
+    // the migrated handlers (see the "D-2 real-tool" suites below), not in
+    // executeTool. This probe uses a throwaway tool name so it exercises the
+    // dispatcher in isolation.
     const ran = { value: false };
     registerThrowaway({
-      name: 'create_agent',
+      name: '__lifecycle_probe',
       requiredScope: 'agents:write',
       schema: z.object({ slug: z.string() }).strict(),
       handler: async () => {
@@ -178,17 +187,364 @@ describe('agent-lifecycle gating (deferred to D-3)', () => {
       },
     });
 
-    // Agent-bound token; target slug differs from any caller identity. The
-    // dispatcher no longer blocks agent→peer lifecycle calls — only scope + Zod
-    // gate. Per-tool guards (allow-list widening, self-delete rejection) arrive
-    // in D-3 with the real handlers.
     const out = await executeTool(
       makeToken({ agentId: 'doc_A', scopes: ['agents:write'] }),
       'agent:A',
-      'create_agent',
+      '__lifecycle_probe',
       { slug: 'child' },
     );
     expect(ran.value).toBe(true);
     expect(out).toEqual({ ok: true });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// D-2 Step A — ToolDef transport-metadata round-trip + listToolDefs accessor.
+// ---------------------------------------------------------------------------
+
+describe('D-2 Step A: ToolDef transport metadata', () => {
+  it('round-trips description + inputSchema and surfaces them in listToolDefs()', () => {
+    const inputSchema = { type: 'object', properties: { foo: { type: 'string' } } };
+    registerThrowaway({
+      name: '__meta_probe',
+      requiredScope: 'documents:read',
+      description: 'a probe tool',
+      inputSchema,
+      schema: z.object({ foo: z.string() }).strict(),
+      handler: async () => null,
+    });
+
+    const entry = listToolDefs().find((t) => t.name === '__meta_probe');
+    expect(entry).toBeDefined();
+    expect(entry?.description).toBe('a probe tool');
+    expect(entry?.inputSchema).toEqual(inputSchema);
+  });
+
+  it('lists all 20 real tools with description + inputSchema and excludes __echo', () => {
+    const entries = listToolDefs();
+    const names = entries.map((e) => e.name);
+    // The 20 production tools must be present.
+    for (const n of [
+      'list_workspaces',
+      'list_projects',
+      'list_documents',
+      'get_document',
+      'get_document_markdown',
+      'create_document',
+      'update_document',
+      'delete_document',
+      'list_statuses',
+      'list_fields',
+      'list_views',
+      'run_view',
+      'create_comment',
+      'list_comments',
+      'update_comment',
+      'delete_comment',
+      'create_agent',
+      'update_agent',
+      'delete_agent',
+      'get_agent_self',
+    ]) {
+      expect(names).toContain(n);
+    }
+    // __echo (test-only) must never appear in the public tool list.
+    expect(names).not.toContain('__echo');
+    // Every real tool carries transport metadata.
+    const createAgent = entries.find((e) => e.name === 'create_agent');
+    expect(typeof createAgent?.description).toBe('string');
+    expect(createAgent?.inputSchema).toBeTruthy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// D-2 Step B/C — exercise a representative sample of the 20 real tools through
+// `executeTool` (the RUNNER's direct path), proving the migration carried the
+// behavior AND the agent-lifecycle guards (mitigation 57).
+// ---------------------------------------------------------------------------
+
+/** Seed an agent doc + agent-bound token directly in the test DB. */
+async function seedAgent(
+  db: DB,
+  workspaceId: string,
+  userId: string,
+  opts: { projects?: string[]; tools?: string[]; scopes?: string[]; slug?: string } = {},
+): Promise<{ token: ApiToken; agentId: string; agentSlug: string; plaintext: string }> {
+  const agentId = nanoid();
+  const agentSlug = opts.slug ?? `agent-${nanoid(6)}`;
+  await db.insert(documents).values({
+    id: agentId,
+    projectId: null,
+    workspaceId,
+    tableId: null,
+    type: 'agent',
+    slug: agentSlug,
+    title: 'Test Agent',
+    status: null,
+    body: '',
+    frontmatter: {
+      system_prompt: 'help',
+      model: 'm',
+      provider: 'anthropic',
+      tools: opts.tools ?? ['list_documents', 'create_document'],
+      projects: opts.projects ?? ['*'],
+    },
+    createdBy: userId,
+    updatedBy: userId,
+  });
+  const { token: plaintext, hash } = newApiToken();
+  const tokenId = nanoid();
+  const scopes = opts.scopes ?? ['documents:read', 'documents:write', 'documents:delete'];
+  await db.insert(apiTokens).values({
+    id: tokenId,
+    workspaceId,
+    name: `agent:${agentSlug}`,
+    tokenHash: hash,
+    scopes,
+    agentId,
+    createdBy: userId,
+  });
+  const [token] = await db.select().from(apiTokens).where(eq(apiTokens.id, tokenId));
+  return { token: token!, agentId, agentSlug, plaintext };
+}
+
+/** A human-PAT (no agentId) ApiToken row for the seed workspace/user. */
+async function seedHumanPat(
+  db: DB,
+  workspaceId: string,
+  userId: string,
+  scopes: string[],
+): Promise<ApiToken> {
+  const { hash } = newApiToken();
+  const tokenId = nanoid();
+  await db.insert(apiTokens).values({
+    id: tokenId,
+    workspaceId,
+    name: 'pat-test',
+    tokenHash: hash,
+    scopes,
+    createdBy: userId,
+  });
+  const [token] = await db.select().from(apiTokens).where(eq(apiTokens.id, tokenId));
+  return token!;
+}
+
+describe('D-2: read/write/comment tools via executeTool', () => {
+  it('list_documents returns project docs (read happy path)', async () => {
+    const { db, seed } = await makeTestApp();
+    const token = await seedHumanPat(db, seed.workspace.id, seed.user.id, ['documents:read']);
+    const out = (await executeTool(token, seed.user.id, 'list_documents', {
+      workspace_slug: 'acme',
+      project_slug: 'web',
+    })) as { content: { text: string }[] };
+    const parsed = JSON.parse(out.content[0]!.text) as { documents: unknown[] };
+    expect(Array.isArray(parsed.documents)).toBe(true);
+  });
+
+  it('create_document creates a work_item (write happy path)', async () => {
+    const { db, seed } = await makeTestApp();
+    const token = await seedHumanPat(db, seed.workspace.id, seed.user.id, ['documents:write']);
+    const out = (await executeTool(token, seed.user.id, 'create_document', {
+      workspace_slug: 'acme',
+      project_slug: 'web',
+      type: 'work_item',
+      title: 'From the runner path',
+    })) as { content: { text: string }[] };
+    const doc = JSON.parse(out.content[0]!.text) as { title: string; type: string };
+    expect(doc.title).toBe('From the runner path');
+    expect(doc.type).toBe('work_item');
+  });
+
+  it('create_comment posts on a work_item (comment happy path)', async () => {
+    const { db, seed } = await makeTestApp();
+    const writeTok = await seedHumanPat(db, seed.workspace.id, seed.user.id, ['documents:write']);
+    // Create a parent work_item first.
+    const created = (await executeTool(writeTok, seed.user.id, 'create_document', {
+      workspace_slug: 'acme',
+      project_slug: 'web',
+      type: 'work_item',
+      title: 'Parent',
+    })) as { content: { text: string }[] };
+    const parent = JSON.parse(created.content[0]!.text) as { slug: string };
+
+    const out = (await executeTool(writeTok, seed.user.id, 'create_comment', {
+      workspace_slug: 'acme',
+      project_slug: 'web',
+      parent_slug: parent.slug,
+      body: 'hello from the runner',
+    })) as { content: { text: string }[] };
+    const comment = JSON.parse(out.content[0]!.text) as { slug: string };
+    expect(comment.slug).toBeTruthy();
+  });
+});
+
+describe('D-2: agent-lifecycle guards survive the migration (mitigation 57)', () => {
+  it('delete_agent rejects self-delete from the agent-bound token', async () => {
+    const { db, seed } = await makeTestApp();
+    const { token, agentSlug } = await seedAgent(db, seed.workspace.id, seed.user.id, {
+      scopes: ['agents:write', 'documents:read'],
+    });
+    let thrown: unknown;
+    try {
+      await executeTool(token, `agent:${agentSlug}`, 'delete_agent', {
+        workspace_slug: 'acme',
+        slug: agentSlug, // agent deleting itself
+      });
+    } catch (err) {
+      thrown = err;
+    }
+    const e = thrown as Error & { code?: number; data?: { reason?: string } };
+    expect(e).toBeInstanceOf(Error);
+    expect(e.code).toBe(-32602);
+    expect(e.data?.reason).toBe('cannot_delete_self');
+  });
+
+  it('create_agent rejects a human PAT (no agent binding)', async () => {
+    const { db, seed } = await makeTestApp();
+    const pat = await seedHumanPat(db, seed.workspace.id, seed.user.id, [
+      'agents:write',
+      'documents:read',
+    ]);
+    let thrown: unknown;
+    try {
+      await executeTool(pat, seed.user.id, 'create_agent', {
+        workspace_slug: 'acme',
+        title: 'Spawned',
+        frontmatter: { system_prompt: 'x', model: 'm', provider: 'anthropic' },
+      });
+    } catch (err) {
+      thrown = err;
+    }
+    const e = thrown as Error & { code?: number; data?: { reason?: string } };
+    expect(e).toBeInstanceOf(Error);
+    expect(e.code).toBe(-32000);
+    expect(e.data?.reason).toBe('human_pat_rejected_on_agent_lifecycle');
+  });
+
+  it('update_agent rejects a human PAT (no agent binding)', async () => {
+    const { db, seed } = await makeTestApp();
+    // Seed a target agent for the PAT to attempt to patch.
+    const { agentSlug } = await seedAgent(db, seed.workspace.id, seed.user.id);
+    const pat = await seedHumanPat(db, seed.workspace.id, seed.user.id, [
+      'agents:write',
+      'documents:read',
+    ]);
+    let thrown: unknown;
+    try {
+      await executeTool(pat, seed.user.id, 'update_agent', {
+        workspace_slug: 'acme',
+        slug: agentSlug,
+        title: 'Renamed',
+      });
+    } catch (err) {
+      thrown = err;
+    }
+    const e = thrown as Error & { code?: number; data?: { reason?: string } };
+    expect(e.code).toBe(-32000);
+    expect(e.data?.reason).toBe('human_pat_rejected_on_agent_lifecycle');
+  });
+
+  it('delete_agent rejects a human PAT (no agent binding)', async () => {
+    const { db, seed } = await makeTestApp();
+    const { agentSlug } = await seedAgent(db, seed.workspace.id, seed.user.id);
+    const pat = await seedHumanPat(db, seed.workspace.id, seed.user.id, [
+      'agents:write',
+      'documents:read',
+    ]);
+    let thrown: unknown;
+    try {
+      await executeTool(pat, seed.user.id, 'delete_agent', {
+        workspace_slug: 'acme',
+        slug: agentSlug,
+      });
+    } catch (err) {
+      thrown = err;
+    }
+    const e = thrown as Error & { code?: number; data?: { reason?: string } };
+    expect(e.code).toBe(-32000);
+    expect(e.data?.reason).toBe('human_pat_rejected_on_agent_lifecycle');
+  });
+
+  it('get_agent_self requires an agent-bound token (rejects human PAT)', async () => {
+    const { db, seed } = await makeTestApp();
+    const pat = await seedHumanPat(db, seed.workspace.id, seed.user.id, ['documents:read']);
+    let thrown: unknown;
+    try {
+      await executeTool(pat, seed.user.id, 'get_agent_self', {});
+    } catch (err) {
+      thrown = err;
+    }
+    const e = thrown as Error & { code?: number; data?: { reason?: string } };
+    expect(e.code).toBe(-32602);
+    expect(e.data?.reason).toBe('no_agent_bound_to_token');
+  });
+
+  it('get_agent_self returns the calling agent for an agent-bound token', async () => {
+    const { db, seed } = await makeTestApp();
+    const { token, agentSlug } = await seedAgent(db, seed.workspace.id, seed.user.id, {
+      scopes: ['documents:read'],
+    });
+    const out = (await executeTool(token, `agent:${agentSlug}`, 'get_agent_self', {})) as {
+      content: { text: string }[];
+    };
+    const agent = JSON.parse(out.content[0]!.text) as { slug: string; type: string };
+    expect(agent.slug).toBe(agentSlug);
+    expect(agent.type).toBe('agent');
+  });
+
+  it('create_agent rejects allow-list widening by an agent-bound caller', async () => {
+    const { db, seed } = await makeTestApp();
+    // Caller agent is narrowed to a single project id.
+    const { token, agentSlug } = await seedAgent(db, seed.workspace.id, seed.user.id, {
+      projects: [seed.project.id],
+      scopes: ['agents:write', 'documents:read'],
+    });
+    let thrown: unknown;
+    try {
+      await executeTool(token, `agent:${agentSlug}`, 'create_agent', {
+        workspace_slug: 'acme',
+        title: 'Wide child',
+        frontmatter: {
+          system_prompt: 'x',
+          model: 'm',
+          provider: 'anthropic',
+          projects: ['*'], // widen past caller's narrow allow-list
+        },
+      });
+    } catch (err) {
+      thrown = err;
+    }
+    const e = thrown as Error & { code?: number; data?: { reason?: string } };
+    expect(e.code).toBe(-32602);
+    expect(e.data?.reason).toBe('allow_list_widening_forbidden');
+  });
+
+  it('create_agent rejects tools widening by an agent-bound caller', async () => {
+    const { db, seed } = await makeTestApp();
+    // Caller agent has a narrow toolset.
+    const { token, agentSlug } = await seedAgent(db, seed.workspace.id, seed.user.id, {
+      projects: ['*'],
+      tools: ['list_documents'],
+      scopes: ['agents:write', 'documents:read'],
+    });
+    let thrown: unknown;
+    try {
+      await executeTool(token, `agent:${agentSlug}`, 'create_agent', {
+        workspace_slug: 'acme',
+        title: 'Powerful child',
+        frontmatter: {
+          system_prompt: 'x',
+          model: 'm',
+          provider: 'anthropic',
+          projects: ['*'],
+          tools: ['list_documents', 'delete_document'], // widen tools
+        },
+      });
+    } catch (err) {
+      thrown = err;
+    }
+    const e = thrown as Error & { code?: number; data?: { reason?: string } };
+    expect(e.code).toBe(-32602);
+    expect(e.data?.reason).toBe('tools_widening_forbidden');
   });
 });

@@ -43,6 +43,21 @@ export interface ToolDef<TArgs = unknown, TOut = unknown> {
   requiredScope: string;
   schema: z.ZodSchema<TArgs>;
   handler: (args: TArgs, ctx: ToolContext) => Promise<TOut>;
+  /**
+   * D-2: MCP-transport metadata. Carried verbatim from the legacy mcp.ts
+   * `ToolDef` so D-3's `tools/list` can read it via `listToolDefs()`. The
+   * runner ignores these; `executeTool` never touches them.
+   */
+  description?: string;
+  /** JSON Schema advertised by `tools/list`. Advisory only — not validated. */
+  inputSchema?: Record<string, unknown>;
+}
+
+/** Transport metadata for one registered tool — what `tools/list` advertises. */
+export interface ToolListEntry {
+  name: string;
+  description?: string;
+  inputSchema?: Record<string, unknown>;
 }
 
 const registry = new Map<string, ToolDef>();
@@ -81,6 +96,26 @@ export function registerTool<TArgs, TOut>(def: ToolDef<TArgs, TOut>): void {
     throw new Error(`tool already registered: ${def.name}`);
   }
   registry.set(def.name, def as ToolDef);
+}
+
+/**
+ * Return the MCP-transport metadata for every registered tool. D-3's
+ * `tools/list` reads this instead of the legacy inline `TOOLS` array. The
+ * test-only `__echo` tool is excluded — it must never appear in the public
+ * tool list (mitigation 34). Order is registration order (Map preserves it),
+ * which keeps `tools/list` output stable across calls.
+ */
+export function listToolDefs(): ToolListEntry[] {
+  const out: ToolListEntry[] = [];
+  for (const def of registry.values()) {
+    if (def.name === '__echo') continue;
+    out.push({
+      name: def.name,
+      description: def.description,
+      inputSchema: def.inputSchema,
+    });
+  }
+  return out;
 }
 
 /**
@@ -135,3 +170,16 @@ export async function executeTool(
 
   return def.handler(parsed as never, { token, actor, tx });
 }
+
+// D-2: register the 20 production tools into the module-global registry. The
+// registrations live in a sibling file so this file stays pure dispatch
+// infrastructure. `registerRealTools()` is a FUNCTION (not a side-effect
+// import) so the circular edge resolves: the registry module imports
+// `registerTool` from here, and we only invoke its registrations AFTER this
+// module's `const registry` (and `registerTool`) are fully initialized —
+// calling at the textual bottom guarantees that. D-3 makes routes/mcp.ts a
+// thin transport over `executeTool` + `listToolDefs` and deletes its own
+// inline `TOOLS` array.
+import { registerRealTools } from './agent-tools-registry.ts';
+
+registerRealTools();
