@@ -243,8 +243,6 @@ function serviceActor(ctx: ToolContext): never {
 // is house style. `executeTool` runs `schema.parse(args)` before the handler.
 // ---------------------------------------------------------------------------
 
-const documentTypeEnum = z.enum(['work_item', 'page', 'agent', 'trigger']);
-
 // ---------------------------------------------------------------------------
 // Tool registrations. Wrapped in a function (not run at import time) so the
 // circular import with agent-tools.ts resolves — agent-tools.ts invokes this
@@ -476,7 +474,15 @@ export function registerRealTools(): void {
       .object({
         workspace_slug: z.string(),
         project_slug: z.string(),
-        type: documentTypeEnum,
+        // Legacy mcp.ts ran NO Zod validation on `type`; the handler + service
+        // layer reject unsupported types with precise messages (e.g.
+        // type=comment → COMMENT_REQUIRES_COMMENT_TOOL, type=agent/trigger →
+        // mcpInvalidParams "via the workspace-scoped HTTP endpoint"). Keeping
+        // this a plain string (not `documentTypeEnum`) preserves that contract:
+        // a non-enum value surfaces the handler's rejection rather than a Zod
+        // path error. Mirrors `list_documents`, which keeps `type` lax to let
+        // its own agent_run rejection fire.
+        type: z.string(),
         title: z.string(),
         body: z.string().optional(),
         frontmatter: z.record(z.unknown()).optional(),
