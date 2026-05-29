@@ -45,11 +45,16 @@ import {
   views as viewsTable,
   workspaces,
 } from '../db/schema.ts';
-import { emitEvent, txWithEvents } from './events.ts';
+import { emitChainSuppressed } from './autonomy-gate.ts';
 import type { AgentRunFrontmatter, RunStatus } from './agent-run-schema.ts';
 import { runStatusSchema } from './agent-run-schema.ts';
 import { createRunForParent, loadRunScopedByToken } from '../routes/runs.ts';
-import { type ListRunsFilter, listRuns, transitionRun } from '../services/agent-runs.ts';
+import {
+  type ListRunsFilter,
+  getActiveRun,
+  listRuns,
+  transitionRun,
+} from '../services/agent-runs.ts';
 import {
   type AuthorContext,
   createComment,
@@ -1488,15 +1493,12 @@ export function registerRealTools(): void {
       //    Human PATs (agentId null) are always allowed.
       const agentOriginated = !!token.agentId;
       if (agentOriginated && !env.FOLIO_AGENT_CHAINS_ENABLED) {
-        await txWithEvents(db, async (tx) => {
-          await emitEvent(tx, {
-            workspaceId: ws.id,
-            projectId: parent.projectId ?? null,
-            documentId: parent.id,
-            kind: 'agent.chain.suppressed',
-            actor: token.id,
-            payload: { agent_slug: agentSlug, reason: 'autonomy_gate' },
-          });
+        await emitChainSuppressed(db, {
+          workspaceId: ws.id,
+          projectId: parent.projectId ?? null,
+          documentId: parent.id,
+          agentSlug,
+          actor: token.id,
         });
         throw mcpInvalidParams('agent-originated chains are disabled', {
           reason: 'agent_chains_disabled',
@@ -1530,8 +1532,19 @@ export function registerRealTools(): void {
         });
       }
 
-      // 5. Optional input comment (mit 59) — posted AFTER the allow-list check
-      //    so a disallowed parent never receives a comment.
+      // 5. Early idempotency check (m56) — mirror the HTTP face's ordering
+      //    (routes/runs.ts). A duplicate-active create must reject BEFORE the
+      //    input comment is posted (step 6), otherwise a duplicate run_agent
+      //    with `input` leaves a STRAY comment then throws (Finding 3). The
+      //    backstop inside createRunForParent remains the shared contract guard.
+      const earlyActive = await getActiveRun({ parentId: parent.id, agentSlug: agent.slug });
+      if (earlyActive) {
+        throw new HTTPError('RUN_ALREADY_ACTIVE', 'a run is already active for this parent', 409);
+      }
+
+      // 6. Optional input comment (mit 59) — posted AFTER the allow-list +
+      //    idempotency checks so a disallowed/duplicate parent never receives a
+      //    comment.
       const input = optionalString(args, 'input');
       if (input) {
         if (parent.projectId === null) {
@@ -1547,7 +1560,7 @@ export function registerRealTools(): void {
         });
       }
 
-      // 6. Shared create tail (m56 idempotency + ensureRunsTable + createRun).
+      // 7. Shared create tail (m56 idempotency backstop + ensureRunsTable + createRun).
       const actorUser = await resolveActorUserForToken(token);
       const document = await createRunForParent({
         workspace: ws,
@@ -1683,6 +1696,24 @@ export function registerRealTools(): void {
           agent_slug: agentSlug,
         });
       }
+
+      // Autonomy gate (mit 54) — a retry SPAWNS a fresh planning run, so an
+      // agent-bound bearer retry is an agent-ORIGINATED chain hop and must be
+      // gated identically to run_agent. Without this, an agent could retry a run
+      // in its allow-list with chains OFF and bypass the gate (Finding 2).
+      if (token.agentId && !env.FOLIO_AGENT_CHAINS_ENABLED) {
+        await emitChainSuppressed(db, {
+          workspaceId: ws.id,
+          projectId: parent.projectId ?? null,
+          documentId: parent.id,
+          agentSlug,
+          actor: token.id,
+        });
+        throw mcpInvalidParams('agent-originated chains are disabled', {
+          reason: 'agent_chains_disabled',
+        });
+      }
+
       const actorUser = await resolveActorUserForToken(token);
 
       // m63 — the idempotency check inside createRunForParent intentionally does

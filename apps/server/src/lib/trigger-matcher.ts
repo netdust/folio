@@ -44,7 +44,7 @@ import { resolveAgentProjects } from './agent-projects.ts';
 import type { AgentRunFrontmatter } from './agent-run-schema.ts';
 import type { BusEvent } from './event-bus.ts';
 import type { Reactor } from './event-dispatcher.ts';
-import { emitEvent, txWithEvents } from './events.ts';
+import { emitChainSuppressed } from './autonomy-gate.ts';
 import { rejectRun } from './runner.ts';
 
 type ReactorEvent = BusEvent & { seq: number };
@@ -165,6 +165,42 @@ async function resolveOwnerUser(actorId: string | null | undefined) {
  * (no pending run, unresolvable owner, missing scope) logs + returns; only
  * genuine errors propagate.
  */
+/**
+ * Strip a leading `agent:` prefix, yielding the bare slug. Mirrors the strip in
+ * services/comments.ts:resolveKindAndTarget — `target_agent` stores one of three
+ * forms (bare slug, `agent:<slug>`, or a doc id); the run frontmatter stores the
+ * BARE `agent.slug`, so all lookups normalize to it.
+ */
+function normalizeAgentSlug(s: string): string {
+  return s.startsWith('agent:') ? s.slice('agent:'.length) : s;
+}
+
+/**
+ * Resolve the target agent's BARE slug from a comment.created payload. Prefers
+ * the immutable `target_agent_id` doc-id handle (BUG-013) — looks up the agent
+ * doc in this workspace and returns its slug, surviving renames — and falls back
+ * to the `agent:`-stripped `target_agent`.
+ */
+async function resolveTargetAgentSlug(
+  workspaceId: string,
+  payload: Record<string, unknown>,
+): Promise<string | undefined> {
+  const targetAgentId =
+    typeof payload.target_agent_id === 'string' ? payload.target_agent_id : undefined;
+  if (targetAgentId) {
+    const agentDoc = await db.query.documents.findFirst({
+      where: and(
+        eq(documents.id, targetAgentId),
+        eq(documents.workspaceId, workspaceId),
+        eq(documents.type, 'agent'),
+      ),
+    });
+    if (agentDoc) return agentDoc.slug;
+  }
+  const raw = typeof payload.target_agent === 'string' ? payload.target_agent : undefined;
+  return raw ? normalizeAgentSlug(raw) : undefined;
+}
+
 async function handleInternalAction(action: string, event: ReactorEvent): Promise<void> {
   if (!event.workspaceId) return;
   const payload = (
@@ -172,8 +208,18 @@ async function handleInternalAction(action: string, event: ReactorEvent): Promis
   ) as Record<string, unknown>;
 
   const parentId = typeof payload.parent_id === 'string' ? payload.parent_id : undefined;
-  const agentSlug = typeof payload.target_agent === 'string' ? payload.target_agent : undefined;
   const commentId = typeof payload.document_id === 'string' ? payload.document_id : undefined;
+
+  // Finding 1 — resolve the target agent to its BARE slug before the lookups.
+  // `getPendingApprovalRun`/`getActiveRun` match `frontmatter.agent_slug` (the
+  // bare `agent.slug`), but `target_agent` can arrive PREFIXED (`agent:<slug>`):
+  // the cancel route emits that form, and clients may supply it per the
+  // comment-schema "three forms". Passing it raw found NO run → a silent no-op
+  // (`## Approved` does nothing; the resume idempotency guard was defeated).
+  //   1) prefer `target_agent_id` (BUG-013's immutable doc-id handle): resolve
+  //      the agent doc by id → its slug, surviving renames.
+  //   2) fall back to the stripped `target_agent` slug.
+  const agentSlug = await resolveTargetAgentSlug(event.workspaceId, payload);
   if (!parentId || !agentSlug) {
     console.log(
       `[trigger-matcher] internal_action '${action}' missing parent_id/target_agent in payload; skipping`,
@@ -332,17 +378,14 @@ async function maybeCreateRun(
   //    event creates ZERO runs and emits exactly one durable
   //    `agent.chain.suppressed`. Human-originated events fall through.
   if (isAgentOriginated(event) && !env.FOLIO_AGENT_CHAINS_ENABLED) {
-    await txWithEvents(db, async (tx) => {
-      await emitEvent(tx, {
-        workspaceId,
-        projectId: event.projectId ?? null,
-        documentId: parentId,
-        kind: 'agent.chain.suppressed',
-        // `event.actor` is the agent identity (or upstream actor) that
-        // originated the suppressed chain hop; `system` only if absent.
-        actor: event.actor ?? 'system',
-        payload: { agent_slug: agentSlug, reason: 'autonomy_gate' },
-      });
+    await emitChainSuppressed(db, {
+      workspaceId,
+      projectId: event.projectId ?? null,
+      documentId: parentId,
+      agentSlug,
+      // `event.actor` is the agent identity (or upstream actor) that
+      // originated the suppressed chain hop; `system` only if absent.
+      actor: event.actor ?? 'system',
     });
     return;
   }

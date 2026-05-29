@@ -235,6 +235,13 @@ function commentCreatedEvent(args: {
   kind: 'approval' | 'rejection';
   actor: string;
   commentId?: string;
+  /**
+   * Override the literal `target_agent` payload value. Defaults to
+   * `args.agentSlug` (the bare slug). Pass `agent:<slug>` to exercise the
+   * PREFIXED form that the cancel route + clients can emit (see
+   * comments.ts "three forms" — Finding 1).
+   */
+  targetAgent?: string;
 }): BusEvent & { seq: number } {
   const commentId = args.commentId ?? `comment-${nanoid(6)}`;
   return {
@@ -249,7 +256,7 @@ function commentCreatedEvent(args: {
       parent_id: args.parentId,
       author: args.actor,
       kind: args.kind,
-      target_agent: args.agentSlug,
+      target_agent: args.targetAgent ?? args.agentSlug,
     },
     createdAt: Date.now(),
     seq: 1,
@@ -742,4 +749,86 @@ test('reject_run is a no-op (no throw) when the run already left awaiting_approv
 
   const run = await db.query.documents.findFirst({ where: eq(documents.id, runId) });
   expect(run?.status).toBe('running'); // untouched
+});
+
+// ----- Finding 1: prefixed `agent:<slug>` target_agent must still resolve -----
+//
+// The cancel route (routes/runs.ts) emits `target_agent: 'agent:<slug>'`, and
+// clients can supply the prefixed form per the comment-schema "three forms".
+// The handler passed `target_agent` RAW to getPendingApprovalRun, which matches
+// the BARE slug — so a prefixed value found NO run and the approval/rejection
+// silently no-op'd. These two tests use the PREFIXED form; they fail before the
+// normalize fix.
+
+test('reject_run resolves a PREFIXED target_agent (agent:<slug>) and rejects the run (Finding 1)', async () => {
+  const { db, seed } = await makeTestApp();
+  await seedTriggers(db, seed.workspace.id, seed.user.id);
+  const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+  const wiTable = await getWorkItemsTable(db, seed.project.id);
+  const wi = await seedWorkItem(db, seed.workspace, seed.project, wiTable, seed.user);
+  const runsTable = await ensureRunsTableFor(db, seed);
+  const runId = await seedAwaitingApprovalRun(
+    db,
+    seed.workspace,
+    seed.project,
+    runsTable,
+    agent,
+    wi,
+    seed.user,
+  );
+
+  await triggerMatcher.react(
+    commentCreatedEvent({
+      seed,
+      parentId: wi.id,
+      agentSlug: 'helper',
+      targetAgent: 'agent:helper', // PREFIXED form (cancel route + client "three forms")
+      kind: 'rejection',
+      actor: seed.user.id,
+    }),
+  );
+
+  const run = await db.query.documents.findFirst({ where: eq(documents.id, runId) });
+  expect(run?.status).toBe('rejected');
+});
+
+test('resume_run resolves a PREFIXED target_agent (agent:<slug>) and creates the resume row (Finding 1)', async () => {
+  const { db, seed } = await makeTestApp();
+  await seedTriggers(db, seed.workspace.id, seed.user.id);
+  const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+  const wiTable = await getWorkItemsTable(db, seed.project.id);
+  const wi = await seedWorkItem(db, seed.workspace, seed.project, wiTable, seed.user);
+  const runsTable = await ensureRunsTableFor(db, seed);
+  const originalId = await seedAwaitingApprovalRun(
+    db,
+    seed.workspace,
+    seed.project,
+    runsTable,
+    agent,
+    wi,
+    seed.user,
+  );
+
+  await triggerMatcher.react(
+    commentCreatedEvent({
+      seed,
+      parentId: wi.id,
+      agentSlug: 'helper',
+      targetAgent: 'agent:helper', // PREFIXED form
+      kind: 'approval',
+      actor: seed.user.id,
+    }),
+  );
+
+  // original awaiting_approval + the new planning resume row.
+  expect(await countRuns(db, wi.id, 'helper')).toBe(2);
+  const resumeRow = await db.query.documents.findFirst({
+    where: and(
+      eq(documents.type, 'agent_run'),
+      eq(documents.parentId, wi.id),
+      eq(documents.status, 'planning'),
+    ),
+  });
+  expect(resumeRow).toBeTruthy();
+  expect((resumeRow?.frontmatter as Record<string, unknown>).resume_of).toBe(originalId);
 });

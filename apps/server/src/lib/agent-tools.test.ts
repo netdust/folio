@@ -850,6 +850,108 @@ describe('D-4: run-management MCP tools', () => {
     expect(rows.length).toBe(0);
   });
 
+  // ----- Finding 2: retry_run must honor the autonomy gate (mit 54) -----
+
+  it('Finding 2: agent-bound bearer retry_run with chains OFF → suppressed, no new run', async () => {
+    const { db, seed } = await makeTestApp();
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, seed.user);
+    const { agent, token } = await seedRunAgent(db, seed.workspace.id, seed.user.id, 'helper', {
+      agentBound: true,
+    });
+    const run = await seedRunRow(db, seed.workspace, seed.project, agent, seed.user, parent);
+    // Terminalize the original so idempotency would NOT block — the gate must.
+    await db
+      .update(documents)
+      .set({
+        status: 'failed',
+        frontmatter: { ...(run.frontmatter as Record<string, unknown>), status: 'failed' },
+      })
+      .where(eq(documents.id, run.id));
+
+    const prev = env.FOLIO_AGENT_CHAINS_ENABLED;
+    env.FOLIO_AGENT_CHAINS_ENABLED = false;
+    let thrown: unknown;
+    try {
+      await executeTool(token, `agent:${agent.slug}`, 'retry_run', {
+        workspace_slug: 'acme',
+        run_id: run.id,
+      });
+    } catch (err) {
+      thrown = err;
+    } finally {
+      env.FOLIO_AGENT_CHAINS_ENABLED = prev;
+    }
+    const e = thrown as { code?: number; data?: { reason?: string } };
+    expect(e.code).toBe(-32602);
+    expect(e.data?.reason).toBe('agent_chains_disabled');
+    // Only the seeded (failed) original; no fresh planning run.
+    const rows = await db.query.documents.findMany({ where: eq(documents.type, 'agent_run') });
+    expect(rows.length).toBe(1);
+  });
+
+  it('Finding 2: agent-bound bearer retry_run with chains ON → planning (gate only blocks when off)', async () => {
+    const { db, seed } = await makeTestApp();
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, seed.user);
+    const { agent, token } = await seedRunAgent(db, seed.workspace.id, seed.user.id, 'helper', {
+      agentBound: true,
+    });
+    const run = await seedRunRow(db, seed.workspace, seed.project, agent, seed.user, parent);
+    await db
+      .update(documents)
+      .set({
+        status: 'failed',
+        frontmatter: { ...(run.frontmatter as Record<string, unknown>), status: 'failed' },
+      })
+      .where(eq(documents.id, run.id));
+
+    const prev = env.FOLIO_AGENT_CHAINS_ENABLED;
+    env.FOLIO_AGENT_CHAINS_ENABLED = true;
+    try {
+      const res = parseText<{ status: string }>(
+        await executeTool(token, `agent:${agent.slug}`, 'retry_run', {
+          workspace_slug: 'acme',
+          run_id: run.id,
+        }),
+      );
+      expect(res.status).toBe('planning');
+    } finally {
+      env.FOLIO_AGENT_CHAINS_ENABLED = prev;
+    }
+    const rows = await db.query.documents.findMany({ where: eq(documents.type, 'agent_run') });
+    expect(rows.length).toBe(2);
+  });
+
+  // ----- Finding 3: run_agent duplicate must NOT leave a stray input comment -----
+
+  it('Finding 3: duplicate run_agent with input → RUN_ALREADY_ACTIVE and NO stray comment', async () => {
+    const { db, seed } = await makeTestApp();
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, seed.user);
+    const { token } = await seedRunAgent(db, seed.workspace.id, seed.user.id, 'helper');
+    const argsBag = {
+      workspace_slug: 'acme',
+      agent_slug: 'helper',
+      parent_slug: parent.slug,
+      input: 'first run input',
+    };
+
+    // First create succeeds + posts one input comment.
+    await executeTool(token, seed.user.id, 'run_agent', argsBag);
+    const before = (await listComments({ parentId: parent.id })).length;
+    expect(before).toBe(1);
+
+    // Duplicate (active) create with input → must reject BEFORE the comment.
+    let thrown: unknown;
+    try {
+      await executeTool(token, seed.user.id, 'run_agent', { ...argsBag, input: 'second input' });
+    } catch (err) {
+      thrown = err;
+    }
+    expect((thrown as { code?: string }).code).toBe('RUN_ALREADY_ACTIVE');
+    // No stray comment from the rejected duplicate.
+    const after = (await listComments({ parentId: parent.id })).length;
+    expect(after).toBe(before);
+  });
+
   it('mit 58: get_run for a run id from ANOTHER workspace → AGENT_RUN_NOT_FOUND', async () => {
     const { db, seed } = await makeTestApp();
     // Build a second workspace + project + run inside it.

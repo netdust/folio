@@ -722,3 +722,75 @@ test('retry while original still active → 409 RUN_ALREADY_ACTIVE (m63)', async
   expect(res.status).toBe(409);
   expect((await res.json()).error.code).toBe('RUN_ALREADY_ACTIVE');
 });
+
+// ----- Finding 2: retry path must honor the autonomy gate (m54) -----
+
+test('Finding 2: agent-bound bearer retry with chains OFF → 403 + suppressed + no new run', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const table = await getWorkItemsTable(db, seed.project.id);
+  const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+  const { agent, token } = await seedAgent(db, seed.workspace, seed.user, 'helper');
+  const run = await seedRun(db, seed.workspace, seed.project, agent, seed.user, parent);
+  // Terminalize the original so idempotency would NOT block it — the gate must.
+  await db
+    .update(documents)
+    .set({
+      status: 'failed',
+      frontmatter: { ...(run.frontmatter as Record<string, unknown>), status: 'failed' },
+    })
+    .where(eq(documents.id, run.id));
+
+  const seen: string[] = [];
+  const unsub = eventBus.subscribe(seed.workspace.id, undefined, (e) => {
+    if (e.kind === 'agent.chain.suppressed') seen.push(e.kind);
+  });
+
+  const prev = env.FOLIO_AGENT_CHAINS_ENABLED;
+  env.FOLIO_AGENT_CHAINS_ENABLED = false;
+  try {
+    const res = await app.request(`/api/v1/w/acme/runs/${run.id}/retry`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(res.status).toBe(403);
+    expect((await res.json()).error.code).toBe('AGENT_CHAINS_DISABLED');
+  } finally {
+    env.FOLIO_AGENT_CHAINS_ENABLED = prev;
+    unsub();
+  }
+
+  // Only the seeded (failed) original — no fresh planning run.
+  const runs = await db.query.documents.findMany({ where: eq(documents.type, 'agent_run') });
+  expect(runs.length).toBe(1);
+  expect(seen).toEqual(['agent.chain.suppressed']);
+});
+
+test('Finding 2: agent-bound bearer retry with chains ON → 201 (gate only blocks when off)', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const table = await getWorkItemsTable(db, seed.project.id);
+  const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+  const { agent, token } = await seedAgent(db, seed.workspace, seed.user, 'helper');
+  const run = await seedRun(db, seed.workspace, seed.project, agent, seed.user, parent);
+  await db
+    .update(documents)
+    .set({
+      status: 'failed',
+      frontmatter: { ...(run.frontmatter as Record<string, unknown>), status: 'failed' },
+    })
+    .where(eq(documents.id, run.id));
+
+  const prev = env.FOLIO_AGENT_CHAINS_ENABLED;
+  env.FOLIO_AGENT_CHAINS_ENABLED = true;
+  try {
+    const res = await app.request(`/api/v1/w/acme/runs/${run.id}/retry`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(res.status).toBe(201);
+    expect((await res.json()).data.status).toBe('planning');
+  } finally {
+    env.FOLIO_AGENT_CHAINS_ENABLED = prev;
+  }
+  const runs = await db.query.documents.findMany({ where: eq(documents.type, 'agent_run') });
+  expect(runs.length).toBe(2);
+});

@@ -27,7 +27,8 @@ import {
   type TableEntity,
   type Workspace,
 } from '../db/schema.ts';
-import { createSession, hashPassword } from '../lib/auth.ts';
+import { apiTokens } from '../db/schema.ts';
+import { createSession, hashPassword, newApiToken } from '../lib/auth.ts';
 import type { RunStatus } from '../lib/agent-run-schema.ts';
 
 type TestDB = Awaited<ReturnType<typeof makeTestApp>>['db'];
@@ -214,6 +215,31 @@ describe('GET /admin/runner-stats', () => {
     });
 
     expect(res.status).toBe(200);
+  });
+
+  test('Finding 4: bearer token (creator is owner) → 403 (session-only, mit 60)', async () => {
+    const { app, db, seed } = await makeTestApp();
+    // Mint a bearer token whose CREATOR is the seeded owner. getRole would
+    // resolve the creator's owner role and let it through — but the endpoint is
+    // UI/ops-only, so a token (any token) must be rejected as not session-auth.
+    const { token, hash } = newApiToken();
+    await db.insert(apiTokens).values({
+      id: nanoid(),
+      workspaceId: seed.workspace.id,
+      name: 'agent:stats-probe',
+      tokenHash: hash,
+      scopes: ['documents:read', 'agents:write'],
+      agentId: null,
+      createdBy: seed.user.id, // an OWNER mints it
+    });
+
+    const res = await app.request(URL, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe('FORBIDDEN');
   });
 
   test('counts are correct across statuses + today worker_crash events', async () => {

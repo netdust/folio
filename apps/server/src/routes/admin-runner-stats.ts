@@ -25,9 +25,15 @@ import { type ScopeContext, getRole, getWorkspace } from '../middleware/scope.ts
 export const adminRunnerStatsRoute = new Hono<AuthContext & ScopeContext>();
 
 adminRunnerStatsRoute.get('/', async (c) => {
-  // Mitigation 60 — admin-only. resolveWorkspace (wScope) attached the
-  // caller's membership role; gate before reading any counts. Mirrors the
-  // inline owner/admin check used by settings.ts.
+  // Mitigation 60 — session-only AND admin-only. This is a UI/ops endpoint with
+  // no MCP twin, so it must NOT be reachable by an agent-bound (or any) bearer.
+  // `getRole` resolves the TOKEN CREATOR's role, so an agent token minted by an
+  // admin would otherwise pass the role check (Finding 4). Reject token-auth
+  // first: `authMethod === 'token'` is stamped by the bearer middleware; session
+  // requests stamp `'session'`. Keep the admin role check for human sessions.
+  if (c.get('authMethod') === 'token') {
+    throw new HTTPError('FORBIDDEN', 'admin only', 403);
+  }
   const role = getRole(c);
   if (role !== 'owner' && role !== 'admin') {
     throw new HTTPError('FORBIDDEN', 'admin only', 403);

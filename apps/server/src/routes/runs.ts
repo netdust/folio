@@ -31,7 +31,7 @@ import { env } from '../env.ts';
 import { intersectAgentProjects, resolveAgentProjects } from '../lib/agent-projects.ts';
 import type { AgentRunFrontmatter, RunStatus } from '../lib/agent-run-schema.ts';
 import { runStatusSchema } from '../lib/agent-run-schema.ts';
-import { emitEvent, txWithEvents } from '../lib/events.ts';
+import { emitChainSuppressed } from '../lib/autonomy-gate.ts';
 import { HTTPError } from '../lib/http.ts';
 import { jsonOk } from '../lib/http.ts';
 import type { AuthContext } from '../middleware/auth.ts';
@@ -296,16 +296,12 @@ runsRoute.post('/', requireScope('agents:write'), async (c) => {
   const token = c.get('token') ?? null;
   const agentOriginated = !!token?.agentId;
   if (agentOriginated && !env.FOLIO_AGENT_CHAINS_ENABLED) {
-    const actor = resolveActor(c);
-    await txWithEvents(db, async (tx) => {
-      await emitEvent(tx, {
-        workspaceId: ws.id,
-        projectId: parent.projectId ?? null,
-        documentId: parent.id,
-        kind: 'agent.chain.suppressed',
-        actor,
-        payload: { agent_slug: body.agent_slug, reason: 'autonomy_gate' },
-      });
+    await emitChainSuppressed(db, {
+      workspaceId: ws.id,
+      projectId: parent.projectId ?? null,
+      documentId: parent.id,
+      agentSlug: body.agent_slug,
+      actor: resolveActor(c),
     });
     throw new HTTPError('AGENT_CHAINS_DISABLED', 'agent-originated chains are disabled', 403);
   }
@@ -449,6 +445,23 @@ runsRoute.post('/:runId/retry', requireScope('agents:write'), async (c) => {
   if (!agent) {
     throw new HTTPError('AGENT_NOT_FOUND', `agent "${agentSlug}" not found`, 404);
   }
+
+  // Autonomy gate (mitigation 54) — a retry SPAWNS a fresh planning run, so an
+  // agent-bound bearer retry is itself an agent-ORIGINATED chain hop and must be
+  // gated identically to the create verb. Without this, an agent could retry a
+  // run in its allow-list with chains OFF and bypass the gate (Finding 2).
+  const token = c.get('token') ?? null;
+  if (token?.agentId && !env.FOLIO_AGENT_CHAINS_ENABLED) {
+    await emitChainSuppressed(db, {
+      workspaceId: ws.id,
+      projectId: parent.projectId ?? null,
+      documentId: parent.id,
+      agentSlug,
+      actor: resolveActor(c),
+    });
+    throw new HTTPError('AGENT_CHAINS_DISABLED', 'agent-originated chains are disabled', 403);
+  }
+
   const actorUser = await resolveActorUser(c);
 
   // m63 — the idempotency check inside createRunForParent intentionally does
