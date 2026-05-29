@@ -21,3 +21,6 @@ test-results/
 .claude/.last-integration
 .claude/.last-evaluate
 .claude/.last-evaluate
+
+# Local API key file (BYOK testing — never commit)
+key
