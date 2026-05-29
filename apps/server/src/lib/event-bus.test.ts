@@ -86,6 +86,24 @@ test('handler errors do not break other subscribers', () => {
   unsub2();
 });
 
+// ── system events (workspaceId: null) ───────────────────────────────────────
+
+test('system event (workspaceId: null) is delivered to a subscriber whose workspace does not match', () => {
+  const seen: string[] = [];
+  const unsub = eventBus.subscribe('ws-A', undefined, (e) => seen.push(e.kind));
+  eventBus.publish({ workspaceId: null, kind: 'reactor.halted', payload: { reactor_id: 'x', stuck_at_seq: 1 } });
+  unsub();
+  expect(seen).toEqual(['reactor.halted']);
+});
+
+test('a normal workspace-scoped event still does NOT cross workspaces', () => {
+  const seen: string[] = [];
+  const unsub = eventBus.subscribe('ws-A', undefined, (e) => seen.push(e.kind));
+  eventBus.publish({ workspaceId: 'ws-B', kind: 'document.created' });
+  unsub();
+  expect(seen).toEqual([]); // ws-A subscriber must not see ws-B's event
+});
+
 // ── parentId filter ────────────────────────────────────────────────────────
 
 test('parentId filter passes when payload.parent_id matches', () => {

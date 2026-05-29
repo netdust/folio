@@ -24,6 +24,11 @@ describe('KNOWN_EVENT_KINDS — Phase 3 additions', () => {
     expect(KNOWN_EVENT_KINDS).toContain('workspace.provider.recovered');
   });
 
+  test('includes reactor health system events', () => {
+    expect(KNOWN_EVENT_KINDS).toContain('reactor.halted');
+    expect(KNOWN_EVENT_KINDS).toContain('reactor.recovered');
+  });
+
   test('EventKind union and KNOWN_EVENT_KINDS array stay in sync', () => {
     // Compile-time check: every entry in KNOWN_EVENT_KINDS must be
     // assignable to EventKind. If the union is missing one, this would

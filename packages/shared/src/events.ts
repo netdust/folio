@@ -29,7 +29,9 @@ export type EventKind =
   | 'ai.action'
   | 'runs_table.lazy_seeded'
   | 'workspace.provider.degraded'
-  | 'workspace.provider.recovered';
+  | 'workspace.provider.recovered'
+  | 'reactor.halted'
+  | 'reactor.recovered';
 
 /** Source-of-truth list. Keep in sync with EventKind above. */
 export const KNOWN_EVENT_KINDS: readonly EventKind[] = [
@@ -55,4 +57,7 @@ export const KNOWN_EVENT_KINDS: readonly EventKind[] = [
   'runs_table.lazy_seeded',
   'workspace.provider.degraded',
   'workspace.provider.recovered',
+  // Phase 3 C.3 — Reaction Plane system-level events (workspaceId: null):
+  'reactor.halted',
+  'reactor.recovered',
 ];
