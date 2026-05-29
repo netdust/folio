@@ -3,6 +3,7 @@ import { runMigrationsOnBoot } from './db/auto-migrate.ts';
 import { db } from './db/client.ts';
 import { env } from './env.ts';
 import { startEventDispatcher } from './lib/event-dispatcher.ts';
+import { startRunnerPoller } from './lib/poller.ts';
 import { reconcileAllowLists } from './lib/reconciler.ts';
 
 // Phase 3 A-0: apply any pending migrations at boot so dev environments never
@@ -35,6 +36,17 @@ if (env.NODE_ENV !== 'test') {
     `[folio] event dispatcher enabled (interval: ${env.FOLIO_DISPATCHER_INTERVAL_MS}ms)`,
   );
   startEventDispatcher(db);
+}
+
+// Phase 3 C-12: runner poller (Reaction Plane). Claims `planning` agent_run
+// rows ~every interval and dispatches them to the runner, bounded by a
+// concurrency cap, recovering orphaned `running` rows once on boot. Skipped in
+// test mode to avoid timer leaks across test runs.
+if (env.NODE_ENV !== 'test') {
+  console.log(
+    `[folio] runner poller enabled (interval: ${env.FOLIO_POLLER_INTERVAL_MS}ms, concurrency: ${env.FOLIO_POLLER_CONCURRENCY})`,
+  );
+  startRunnerPoller(db);
 }
 
 export default {

@@ -23,6 +23,14 @@ const envSchema = z.object({
   // avoid a busy-loop from a mis-set env var.
   FOLIO_DISPATCHER_INTERVAL_MS: z.coerce.number().int().min(100).default(1_000),
   FOLIO_DISPATCHER_BATCH: z.coerce.number().int().min(1).default(100),
+  // Reaction Plane (Task C-12) — runner poller. The poller claims `planning`
+  // agent_run rows and dispatches them to the runner, bounded by a concurrency
+  // cap, recovering orphaned `running` rows once on boot. Floor the interval at
+  // 100ms to avoid a busy-loop from a mis-set env var; floor the stale
+  // threshold at 10s so a mis-set value can't fail genuinely-active runs.
+  FOLIO_POLLER_INTERVAL_MS: z.coerce.number().int().min(100).default(1_000),
+  FOLIO_POLLER_CONCURRENCY: z.coerce.number().int().min(1).default(5),
+  FOLIO_WORKER_STALE_MS: z.coerce.number().int().min(10_000).default(300_000),
   // V1 autonomy gate (Task C-11). When OFF (the default), the trigger-matcher
   // refuses to fan out agent-ORIGINATED chains: an agent's own @mention/comment
   // creates ZERO runs + one `agent.chain.suppressed` signal. Human-originated
