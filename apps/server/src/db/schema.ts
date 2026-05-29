@@ -394,6 +394,24 @@ export const events = sqliteTable(
   }),
 );
 
+/**
+ * Reaction Plane (Phase 3 C-10b) — per-reactor replay cursor over `events`.
+ *
+ * The durable event dispatcher polls `events` by `seq` and fans each event out
+ * to registered reactors. Each reactor's cursor (`last_seq`) advances ONLY on
+ * a successful `react()` (cursor-after / at-least-once). On first registration
+ * the cursor is seeded at MAX(seq) so reactors start "from now" and never
+ * replay history. Cursor-lag (`MAX(seq) − last_seq`) is the durable truth for
+ * reactor health (spec §4b).
+ */
+export const reactorCursors = sqliteTable('reactor_cursors', {
+  reactorId: text('reactor_id').primaryKey(),
+  lastSeq: integer('last_seq').notNull(),
+  updatedAt: integer('updated_at', { mode: 'timestamp_ms' })
+    .notNull()
+    .default(sql`(unixepoch() * 1000)`),
+});
+
 // --- Type exports ---
 
 export type User = typeof users.$inferSelect;
@@ -407,3 +425,4 @@ export type View = typeof views.$inferSelect;
 export type ApiToken = typeof apiTokens.$inferSelect;
 export type AiKey = typeof aiKeys.$inferSelect;
 export type Event = typeof events.$inferSelect;
+export type ReactorCursor = typeof reactorCursors.$inferSelect;

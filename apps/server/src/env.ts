@@ -18,6 +18,11 @@ const envSchema = z.object({
   // DoS via a mis-set env var. Default 1h is fine — the project-delete cascade
   // is the primary cleanup, this is the safety net.
   FOLIO_RECONCILER_INTERVAL_MS: z.coerce.number().int().min(60_000).default(3_600_000),
+  // Reaction Plane (Task C-10b) — durable event dispatcher poll cadence + the
+  // max events drained per reactor per tick. Floor the interval at 100ms to
+  // avoid a busy-loop from a mis-set env var.
+  FOLIO_DISPATCHER_INTERVAL_MS: z.coerce.number().int().min(100).default(1_000),
+  FOLIO_DISPATCHER_BATCH: z.coerce.number().int().min(1).default(100),
 });
 
 export const env = envSchema.parse(process.env);
