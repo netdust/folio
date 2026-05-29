@@ -38,7 +38,7 @@ The event system has **two delivery planes over one append-only log** (the `even
 | | **Observation Plane** | **Reaction Plane** |
 |---|---|---|
 | Purpose | tell live listeners what happened | make something happen because of an event |
-| Mechanism | in-memory `eventBus` (existing, **untouched**) | new `lib/event-dispatcher.ts` (polling) |
+| Mechanism | in-memory `eventBus` (existing, **one additive rule** — see §4b) | new `lib/event-dispatcher.ts` (polling) |
 | Delivery | at-most-once, best-effort | at-least-once |
 | Scope | per-connection, per-workspace | global, cross-workspace, server-owned |
 | Loss behavior | self-heals (state re-read / SSE replay on reconnect) | retried until acked (reactors are idempotent) |
@@ -46,6 +46,8 @@ The event system has **two delivery planes over one append-only log** (the `even
 | Latency | low (live fan-out) | poll-interval bounded (~1s) |
 
 The Observation Plane keeps the fast lossy path the UI relies on. The Reaction Plane polls the durable table by `seq`. **The UI is never unified onto the durable path** — it does not need durability; it re-reads state. Collapsing the two would be reinventing a broker (explicitly out of scope).
+
+> **The one Observation-Plane change:** the Reaction Plane reports its *own health* (a halted reactor) back onto the Observation Plane as a **system-level event** so the operator/UI can see it live. This requires one narrow additive rule in the existing bus (`workspaceId: null` = system-level → delivered to all subscribers). See §4b. This is additive (a new `null`-workspace case), not a change to existing per-workspace delivery.
 
 This naming is load-bearing: it prevents a future change from "fixing" one plane by conflating it with the other.
 
@@ -113,8 +115,14 @@ for each reactor R in REACTORS:
     try:
       await R.react(event)                 // the reactor's own effect + its own idempotency
       persist R.lastSeq = event.seq         // CURSOR-AFTER: advance only on success
+      if R was previously halted:           // edge-trigger: halted → healthy
+        emit reactor.recovered (system-level, workspaceId=null); mark R healthy in-memory
     catch err:
-      log(err) + emit observability signal
+      log(err)
+      if R was NOT previously halted:       // edge-trigger: healthy → halted (fires ONCE, not per-tick)
+        emit reactor.halted (system-level, workspaceId=null,
+              payload: {reactor_id: R.id, stuck_at_seq: event.seq, error_summary: sanitize(err)})
+        mark R halted in-memory
       BREAK this reactor's drain this tick  // halt; cursor unchanged → retried next tick
   // one reactor halting does NOT abort the other reactors' drains this tick (failure isolation)
 ```
@@ -124,6 +132,7 @@ for each reactor R in REACTORS:
 - **At-least-once (cursor-after).** The cursor advances only after `react()` resolves. A crash between the reactor's effect and the cursor write means the event is re-run next tick → the reactor's idempotency absorbs it. This is the only model an **external** reactor can also satisfy (an external agent cannot enlist in the server's SQLite transaction), so it keeps inside===outside true at the durability layer. The reaction effect and the cursor write are deliberately **not** in one transaction.
 - **Strict in-order per reactor.** A reactor never sees `seq=N+1` before acking `seq=N`. A genuinely poison event **halts that reactor** (safe failure — never skip, e.g. never silently drop an assignment). Visible as cursor-lag; recoverable by bumping the integer. No DLQ, no skip-on-failure, no retry-counter (those edge toward broker semantics and are out of scope). Rationale: reactor handlers are *our* code, so a poison event is a bug to fix, not a steady-state condition; halt-and-surface beats drop-or-count.
 - **Failure isolation.** Independent cursors + independent per-reactor drains within the shared tick → reactor A halting on a poison event does not stall reactor B.
+- **Edge-triggered halt observability.** The dispatcher tracks each reactor's last-known health **in memory** (healthy | halted). A poison event is retried every tick (~1s), but `reactor.halted` fires **once** on the healthy→halted edge (not per-tick — no event-log spam, no flapping banner), and `reactor.recovered` fires once when the reactor next succeeds (cursor advances past the poison event). On process restart, in-memory health resets to "healthy" and is re-derived: if the poison event is still poison, the next failed tick re-fires `reactor.halted` (correct — a restart that didn't fix the bug is still halted). Mirrors the existing `workspace.provider.degraded`/`recovered` tipping-edge pattern (`maybeEmitProviderHealthEdge`, C.1 mitigation 45–47) — with one deliberate difference: provider-health edge state is **persisted** (a workspace stays durably `degraded`), whereas reactor health is held **in memory** and re-derived from cursor-lag on restart. Rationale: reactor health is a live operational signal, not durable workspace state; the durable truth is the cursor (lag = halted), so persisting a separate health flag would be redundant state to keep in sync. A double-emit across a fast restart is harmless (the banner is idempotent on `reactor_id`). These are **system-level** events (§4b). The error payload is **sanitized** (`sanitizeProviderError`-style — no raw internals/secrets) and carries no tenant data.
 - **Kind-filter advances the cursor.** A reactor with a narrow filter still moves its cursor past events it does not handle, so it never falls infinitely behind `MAX(seq)`. The filter is an efficiency/clarity device, **not** a security boundary — the reactor still runs its own allow-list / visibility / autonomy checks on every event it does handle.
   - *Implementation note (cursor write batching):* the pseudocode persists `lastSeq` per event for clarity. The plan may batch the cursor write to once per drain-tick (persist the highest acked `seq` after the loop) to avoid a write-per-skipped-event on a busy log — provided it preserves the contract: the persisted cursor must never be ahead of an event whose `react()` has not yet succeeded. Batching the *skipped-event* advances is always safe; batching across a *handled* event is only safe up to the last successfully-reacted seq.
 
@@ -155,6 +164,24 @@ Not started in `NODE_ENV=test` (covered by unit tests that drive the loop manual
 - **Runner poller** (C-12, unchanged): claims `planning` `agent_run` rows → *executes* `runAgent`/`runAgentResume`.
 
 The matcher (a reactor) creates a `planning` run; the poller later claims and runs it. Two stages, two loops.
+
+---
+
+## Section 4b — System-level events (reactor health on the Observation Plane)
+
+A reactor's health is neither workspace-scoped nor project-scoped — the dispatcher is **one server-wide loop** reacting across all workspaces, so a halted reactor is an **instance-level** fact. `reactor.halted` / `reactor.recovered` are therefore the first **system-level** events: a genuine third scope alongside the existing workspace-scoped and project-scoped events.
+
+**Delivery — one narrow additive bus rule.** The existing `eventBus.publish()` filters `sub.workspaceId === e.workspaceId` (a subscriber sees only its own workspace). System events carry `workspaceId: null` and are delivered to **all** subscribers regardless of their workspace filter. This generalizes, by exactly one notch, the precedent already in the bus (`BUG-021`: workspace-level events with `projectId: null` transcend *project* scope) — now `workspaceId: null` transcends *workspace* scope. It is **additive** (a new `null`-workspace case before the existing equality check); existing per-workspace delivery is unchanged.
+
+**Scoping rules for system events:**
+- `workspaceId: null` (and `projectId: null`, `documentId: null`) — a system event belongs to no tenant.
+- **MUST be tenant-data-free by construction.** Because a system event reaches every connected subscriber across every workspace, its payload may contain ONLY instance-level, non-tenant data. `reactor.halted` carries `{reactor_id, stuck_at_seq, error_summary}` — a reactor id, a sequence integer, and a sanitized error string. No document content, no workspace identifiers, no agent slugs that would leak cross-tenant. This is a hard rule, enforced by review: any future system event MUST pass the "would I show this to an unrelated tenant?" test.
+- **Durable + observable.** Like all events, `reactor.halted`/`recovered` are written to the `events` table (so they appear in the audit log and via Last-Event-Id replay) AND published live. The Reaction Plane's *own* events flow through the Observation Plane — the planes compose; they are not walled off from each other.
+- **Not consumed by the Reaction Plane.** The matcher's `kinds` filter does not include `reactor.*` — reactors do not react to reactor-health events (no feedback loop). System events are observation-only in V1.
+
+**UI (deferred to Sub-phase E):** the web UI subscribes to system events over SSE and renders a system-status banner — identical to the existing `workspace.provider.degraded` banner, just instance-level instead of workspace-level. C.3 ships the **event + edge-detection + the bus rule**; the **visual banner** lands in E alongside the provider-degraded banner. The event is the contract; the banner is downstream and free once the event exists.
+
+**Event kinds added** (shared `KNOWN_EVENT_KINDS` + server `EventKind` union): `reactor.halted`, `reactor.recovered`.
 
 ---
 
@@ -221,7 +248,7 @@ Option B simplifies the previously-written C.3 section. **Deleted:**
 
 **Reshuffled task list:**
 
-- **C-10 — `lib/event-dispatcher.ts`** (NEW first task): `reactor_cursors` table + migration; the `Reactor` interface; the static `REACTORS` registry; the global poll loop (Section 3); seed-at-MAX + persist + resume; the `FOLIO_DISPATCHER_*` env vars; boot wiring. Tested with a fake reactor driving the loop manually (fake timers; inject the reactor to avoid module-global mock leakage).
+- **C-10 — `lib/event-dispatcher.ts`** (NEW first task): `reactor_cursors` table + migration; the `Reactor` interface; the static `REACTORS` registry; the global poll loop (Section 3); seed-at-MAX + persist + resume; the `FOLIO_DISPATCHER_*` env vars; boot wiring; **edge-triggered `reactor.halted`/`reactor.recovered` emission with in-memory per-reactor health tracking** (§3 contract + §4b); the **`workspaceId: null` system-event delivery rule** in `lib/event-bus.ts` (one additive case, mirroring the `projectId: null` precedent); the two new event kinds (`reactor.halted`, `reactor.recovered`) in shared `KNOWN_EVENT_KINDS` + server `EventKind`. Tested with a fake reactor driving the loop manually (fake timers; inject the reactor to avoid module-global mock leakage). Edge-trigger tests: a poison event fires `reactor.halted` exactly ONCE across N retry ticks; recovery fires `reactor.recovered` once; a system event (`workspaceId: null`) reaches a subscriber whose workspace filter does NOT match.
 - **C-11 — `lib/trigger-matcher.ts`** as `REACTORS[0]`: match against trigger documents + allow-list (50) + autonomy gate (51) + idempotency (52) + `createRun`; the `internal_action` dispatch stub for D-5. The autonomy-gate boundary test lives here (flag OFF + agent-originated → 0 runs + 1 suppressed; human-originated → 1 run; flag ON → fires). Also adds the `agent.chain.suppressed` event kind to shared `KNOWN_EVENT_KINDS` + the server `EventKind` union (the one shared-package touch; server-internal observability — no FE consumer).
 - **C-12 — `lib/poller.ts`** (runner poller, unchanged from the prior plan): claims `planning` runs → `runAgent`/`runAgentResume` (dispatches resume when `frontmatter.resume_of` is set); concurrency cap; backpressure log; boot recovery via `recoverOrphanRuns`; boot wiring.
 - **C-13 — integration gate (controller):** the first "agent does work" smoke — assign a work_item to an agent → the dispatcher matches the trigger document → creates a `planning` run → the poller claims and runs it → a `kind=result` comment lands on the parent (with only `__echo` registered until D-3, the LOOP runs end-to-end even though real tool work waits for D). Plus the autonomy-gate smoke (default-off agent mention → 0 runs + 1 `agent.chain.suppressed`; flip env → 1 run). Then `/integration` → `/code-review --base=<C.2 close sha> --effort=medium` (naming mitigations 43, 49, 50, 51, 52 + the dispatcher's at-least-once/idempotency contract) → sibling-site audit → `/evaluate`.
@@ -234,6 +261,7 @@ Option B simplifies the previously-written C.3 section. **Deleted:**
 - **50 (unchanged)** — allow-list enforcement at match time: a trigger naming an agent whose `frontmatter.projects` excludes the parent doc's project creates no run.
 - **51 (unchanged)** — autonomy gate: `FOLIO_AGENT_CHAINS_ENABLED` (default false) + `isAgentOriginated(event)` short-circuit + one `agent.chain.suppressed`; the V1↔autonomous boundary. The six per-run runner guards are orthogonal (per-run resource caps vs. cross-run fan-out).
 - **52 (unchanged, expanded role)** — match-time idempotency via `getActiveRun`: at most one active run per (parent, agent). Under the Reaction Plane this guard does **double duty** — it prevents duplicate runs from double-matching AND absorbs the at-least-once replay window. It is therefore **load-bearing for correctness**, not just a guard: a reactor MUST be idempotent, and this is the matcher's idempotency.
+- **53 (NEW) — system-event tenant isolation.** `reactor.halted`/`reactor.recovered` (and any future `workspaceId: null` system event) are broadcast to **every** connected subscriber across **all** workspaces by the new bus rule (§4b). Therefore a system event's payload MUST be tenant-data-free: instance-level fields only (`reactor_id`, `stuck_at_seq`, sanitized `error_summary`). A system event that carried workspace content would leak it cross-tenant. Enforced by review ("would I show this to an unrelated tenant?") + the error_summary is sanitized at emit. The bus rule is delivery-only — it does NOT bypass the SSE layer's existing per-event visibility checks for *workspace*-scoped events; it adds a `null`-workspace broadcast case that applies ONLY to events explicitly emitted as system-level.
 
 ---
 
@@ -241,7 +269,7 @@ Option B simplifies the previously-written C.3 section. **Deleted:**
 
 Per the external evaluation and the product thesis, the Reaction Plane is "durable replayable reactions over an append-only SQLite event log" — and nothing more:
 
-- **No** unifying SSE / the UI onto the durable path (the Observation Plane stays in-memory + lossy).
+- **No** unifying SSE / the UI onto the durable path (the Observation Plane stays in-memory + lossy). *The one exception is additive and narrow:* the `workspaceId: null` system-event delivery rule (§4b), so the Reaction Plane can report its own health back onto the Observation Plane. Reactions are NOT delivered to the UI via the durable plane; only the reactor-health *signal* rides the in-memory bus, as an ordinary (system-scoped) event.
 - **No** broker semantics, **no** exactly-once (at-least-once + idempotent reactors only).
 - **No** dead-letter queue, **no** per-event retry counters (poison event → halt + surface + operator bumps the cursor).
 - **No** orchestration, workflow graphs, or distributed infrastructure.
@@ -254,7 +282,7 @@ Per the external evaluation and the product thesis, the Reaction Plane is "durab
 
 ## Testing strategy
 
-- **Dispatcher (C-10):** unit tests drive the loop manually (fake timers; a fake reactor injected). Cover: seed-at-MAX on first registration + persist; resume-from-cursor on restart (backlog processed); strict in-order drain; cursor-after (advance only on success); poison-event halt (cursor unchanged, retried next tick, reactor B unaffected); kind-filter advances the cursor past skipped events. Reset any module-global between tests (per the Bun `mock.module` leak lesson); prefer injecting reactors over `mock.module`.
+- **Dispatcher (C-10):** unit tests drive the loop manually (fake timers; a fake reactor injected). Cover: seed-at-MAX on first registration + persist; resume-from-cursor on restart (backlog processed); strict in-order drain; cursor-after (advance only on success); poison-event halt (cursor unchanged, retried next tick, reactor B unaffected); kind-filter advances the cursor past skipped events. **Edge-trigger:** poison event fires `reactor.halted` exactly once across N retry ticks (not per-tick); recovery fires `reactor.recovered` once; restart with the bug unfixed re-fires `halted` on the next failed tick. **System-event delivery:** a `workspaceId: null` event reaches a subscriber whose workspace filter does not match (the new bus rule), while a normal workspace-scoped event still does NOT cross workspaces (existing behavior unbroken). Reset any module-global between tests (per the Bun `mock.module` leak lesson); prefer injecting reactors over `mock.module`.
 - **Matcher (C-11):** match assignment/mention against seeded enabled trigger documents → one `planning` run; allow-list exclusion → zero runs; idempotency (active peer) → no duplicate; **autonomy-gate boundary** (flag OFF agent-originated → 0 + suppressed; human → 1; flag ON → 1); `internal_action` triggers reach the stub. Re-run the matcher's timing/ordering-sensitive tests ≥3× before GREEN (per the C.2 testing-workflow lesson — the same-ms flake class).
 - **End-to-end (C-13):** assign → dispatcher → run → poller → result comment; autonomy-gate smoke.
 - **No new exactly-once / crash-injection harness** beyond the cursor-after + idempotency unit coverage — the at-least-once contract is verified by "effect ran, cursor advanced only on success, replay is a no-op," not by a fault-injection framework.
