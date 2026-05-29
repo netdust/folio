@@ -4256,6 +4256,8 @@ After C-9 commits:
 
 ### Sub-phase C.3 — Wiring + triggers + autonomy gate (expanded task bodies — written 2026-05-29)
 
+> **⚠️ SUPERSEDED 2026-05-29 (Option A → Option B / Reaction Plane).** This section described the **inline-in-tx matcher** (Option A). After a design discussion + external evaluation, C.3 was redesigned as the **Reaction Plane** (Option B-minimal): a durable, at-least-once event dispatcher with the matcher as its first reactor — no per-emit-site hand-wiring. **Execute the standalone plan `docs/superpowers/plans/2026-05-29-phase-3-C3-reaction-plane.md` instead** (tasks C-10a / C-10b / C-11 / C-12 / C-13). Design spec: `docs/superpowers/specs/2026-05-29-reaction-plane-design.md`; decision brief: `docs/superpowers/specs/2026-05-29-event-delivery-decision.md`. The Option-A section below is kept for traceability only — **do not implement against it.**
+
 > Sub-phase C.3 expands C-10..C-13 into the full Steps + Files + Tests + Commit form, mirroring the C.1/C.2 expansions. The original outlines at `### Task C-10..C-13` below the historical divider predate this expansion + the autonomy-gate decision. **Do not implement against the outlines.**
 >
 > All C.3 tasks SEQUENTIAL. Dispatched via `superpowers:subagent-driven-development` wrapped by `netdust-core:ntdst-execute-with-tests`. Each subagent's close-out invokes `netdust-core:testing-workflow` and reports the Test-evidence + STATUS blocks.
