@@ -20,7 +20,9 @@ Created 2026-05-28 by `/evaluate` after Phase 3 Sub-phase A. One bullet per item
   **Recommendation:** DEFER. The comments aren't bugs and the convention "drop phase markers at next-touch" is already common in the codebase.
   **Source:** Phase 3 Sub-phase A retro, Recommendation #4.
 
-- **Should the writing-plans skill add a "plan freshness check" to its checklist (when plan mtime > 5 days, controller re-reads against live peer files before dispatching)?**
+- ~~**Should the writing-plans skill add a "plan freshness check"?**~~ **RESOLVED 2026-05-29 (Folio Phase 3 C.3 gate): PROMOTED to a skill rule.** Added as **Step 2.5 (plan-freshness gate)** in `netdust-core:ntdst-execute-with-tests` SKILL.md — a per-task controller obligation to ground-truth each task's named dependencies (signatures/enums/scopes/columns/payloads) against live source AFTER the upstream skill loads, before writing that task's dispatch. Homed in the netdust-core wrapper (NOT upstream `superpowers`, which is unwritable plugin-cache). Calibration cites A/C.2/C.3. **NOTE: the edit is live in the plugin cache but the cache is not git-backed — the same edit must be applied in the netdust-core plugin SOURCE repo to survive a plugin re-sync.** Original item retained below for trace.
+
+- **(SUPERSEDED — see RESOLVED above) Should the writing-plans skill add a "plan freshness check" to its checklist (when plan mtime > 5 days, controller re-reads against live peer files before dispatching)?**
   Two of the four plan defects in Sub-phase A were *house-style drift* (the plan was written before Phase 2.6 codified the camelCase + .strict() patterns). A pre-flight checkpoint catches them at zero cost.
   **Decision needed:** YES / NO.
   **What changes if YES:** an addition to `superpowers:writing-plans/SKILL.md` listing the freshness check. Folio's `memory/lessons.md` already has the rule (2026-05-28 entry) — promoting it to skill-level makes it cross-project.
@@ -29,7 +31,7 @@ Created 2026-05-28 by `/evaluate` after Phase 3 Sub-phase A. One bullet per item
 
 - **B-2 minor cast tightenings deferred from code-quality review:** (a) `input_schema as { type: 'object'; [k: string]: unknown }` could become `Tool.InputSchema` if exported; (b) `stream as AsyncIterable<Record<string, unknown>>` could be `MessageStreamEvent`. Both at the SDK boundary. Defer to next-touch — neither blocks B-3/4/5.
 
-- **Should `/code-review` raise its 15-finding cap for security-rich surfaces when invoked at `--effort=high`?** Sub-phase B's 7 rounds each hit the cap (15/15/9/9/11/7/15), driving a multi-round trickle pattern. Decision: YES → modify the medium/high `/code-review` skill to use cap=30 when invoked with `--effort=high` AND the diff includes surfaces from the `netdust-core:threat-modeling` predicate. NO → current cap stays; multi-round review accepted as v1 reality. (Surfaced by `docs/superpowers/retros/2026-05-28-phase-3-sub-phase-B-retro.md` Harness gap §6.) Decision-needed-by: before Sub-phase C planning starts (runner surfaces fit the predicate).
+- ~~**Should `/code-review` raise its 15-finding cap for security-rich surfaces at `--effort=high`?**~~ **RESOLVED 2026-05-29 (Folio Phase 3 C.3 gate): KEEP CAP AT 15.** C.3's medium-effort review surfaced 5 findings (no trickle, well under cap); the cap only pinched during Sub-phase B's 7 rounds. Accepted as v1 reality — revisit only if it pinches again. (Surfaced by `docs/superpowers/retros/2026-05-28-phase-3-sub-phase-B-retro.md` Harness gap §6.)
 
 ---
 
