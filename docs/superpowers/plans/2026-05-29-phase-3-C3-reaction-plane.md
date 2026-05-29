@@ -180,6 +180,11 @@ export type ReactorCursor = typeof reactorCursors.$inferSelect;
 
 - [ ] **Step 2: Generate + journal the migration.**
 
+> **⚠ Plan defect noted during phase-3-C.3 execution (shipped fix in `8c7655d`):**
+> This step says run `bun run db:generate`, but this project maintains HAND-WRITTEN raw migrations from 0007 onward with no live Drizzle snapshot, so `db:generate` re-emits contaminated DDL (it re-emitted `events.seq`, the seq indexes, and `workspaces.provider_health`).
+> The shipped fix discarded the generated file and HAND-WROTE `0015_reactor_cursors.sql` (one `CREATE TABLE reactor_cursors`, tab-indented, backtick-quoted, matching the 0007+ style) + a manual `meta/_journal.json` entry.
+> Refer to commit `8c7655d` for the actual pattern; the `db:generate` instruction below is preserved as historical context but should NOT be followed for this project — hand-write the `.sql` + journal entry.
+
 Run: `cd apps/server && bun run db:generate` (creates the `.sql`). Open the generated file, confirm it creates `reactor_cursors`. **Verify `meta/_journal.json` gained the new entry** (the pre-commit hook checks this; `migrate()` silently skips un-journaled files). If `db:generate` didn't update the journal, add the entry manually.
 Run: `cd apps/server && bun test src/db/` (migration tests still green).
 
