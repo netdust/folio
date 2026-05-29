@@ -31,7 +31,11 @@ export type EventKind =
   | 'workspace.provider.degraded'
   | 'workspace.provider.recovered'
   | 'reactor.halted'
-  | 'reactor.recovered';
+  | 'reactor.recovered'
+  // Emitted when the trigger-matcher reactor declines to fan out an
+  // agent-originated chain because FOLIO_AGENT_CHAINS_ENABLED is off (V1
+  // autonomy gate). Workspace-scoped, durable.
+  | 'agent.chain.suppressed';
 
 /** Source-of-truth list. Keep in sync with EventKind above. */
 export const KNOWN_EVENT_KINDS: readonly EventKind[] = [
@@ -60,4 +64,6 @@ export const KNOWN_EVENT_KINDS: readonly EventKind[] = [
   // Phase 3 C.3 — Reaction Plane system-level events (workspaceId: null):
   'reactor.halted',
   'reactor.recovered',
+  // Phase 3 C-11 — autonomy-gate suppression signal (trigger-matcher).
+  'agent.chain.suppressed',
 ];

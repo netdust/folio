@@ -23,6 +23,16 @@ const envSchema = z.object({
   // avoid a busy-loop from a mis-set env var.
   FOLIO_DISPATCHER_INTERVAL_MS: z.coerce.number().int().min(100).default(1_000),
   FOLIO_DISPATCHER_BATCH: z.coerce.number().int().min(1).default(100),
+  // V1 autonomy gate (Task C-11). When OFF (the default), the trigger-matcher
+  // refuses to fan out agent-ORIGINATED chains: an agent's own @mention/comment
+  // creates ZERO runs + one `agent.chain.suppressed` signal. Human-originated
+  // assignments/mentions still fire. NOTE: `z.coerce.boolean()` treats ANY
+  // non-empty string as true (so 'false' → true), which is wrong — use an
+  // explicit string→boolean transform so 'false' and unset both yield false.
+  FOLIO_AGENT_CHAINS_ENABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
 });
 
 export const env = envSchema.parse(process.env);

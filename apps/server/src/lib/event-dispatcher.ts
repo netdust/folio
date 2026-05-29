@@ -33,6 +33,7 @@ import type { DB } from '../db/client.ts';
 import { events, reactorCursors } from '../db/schema.ts';
 import { env } from '../env.ts';
 import { type BusEvent, eventBus } from './event-bus.ts';
+import { REACTORS } from './reactors.ts';
 
 export interface Reactor {
   id: string;
@@ -122,10 +123,16 @@ export async function runDispatcherOnce(db: DB, reactors: readonly Reactor[]): P
         console.error(`[dispatcher] reactor ${r.id} halted at seq ${row.seq}`, err);
         if (!halted.has(r.id)) {
           halted.add(r.id);
+          // Mitigation 53 — reactor.halted is a workspaceId:null system event
+          // broadcast to EVERY subscriber across ALL tenants. A reactor's
+          // thrown Error.message can carry tenant data (a document title in an
+          // error string). Broadcast only the error CLASS name, never the
+          // message; the full message stays in the server-side console.error
+          // above.
           emitReactorHealth('reactor.halted', {
             reactor_id: r.id,
             stuck_at_seq: row.seq,
-            error_summary: err instanceof Error ? err.message : 'unknown',
+            error_summary: err instanceof Error ? err.name : 'unknown',
           });
         }
         break; // halt this reactor's drain this tick; cursor unchanged → retry next tick
@@ -133,10 +140,6 @@ export async function runDispatcherOnce(db: DB, reactors: readonly Reactor[]): P
     }
   }
 }
-
-// C-10b placeholder — C-11 relocates this to lib/reactors.ts and registers the
-// matcher. The dispatcher boots with an empty reactor set until then.
-const REACTORS: readonly Reactor[] = [];
 
 /**
  * Start the interval-driven dispatcher loop. Returns a stop function that

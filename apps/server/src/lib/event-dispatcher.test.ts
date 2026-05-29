@@ -141,3 +141,33 @@ test('reactor.halted fires exactly ONCE across repeated retry ticks; recovered f
   unsub();
   expect(seenSystemEvents).toEqual(['reactor.halted', 'reactor.recovered']);
 });
+
+test('reactor.halted broadcast error_summary carries the error CLASS, not the (tenant-data-bearing) message (mitigation 53)', async () => {
+  const { db, seed } = await makeTestApp();
+  await db
+    .insert(reactorCursors)
+    .values({ reactorId: 'leak-r', lastSeq: 0, updatedAt: new Date() });
+  await seedEvent(db, seed, 1, 'document.created');
+
+  const summaries: unknown[] = [];
+  // reactor.halted is workspaceId:null → delivered to EVERY subscriber.
+  const unsub = eventBus.subscribe('any-ws', undefined, (e) => {
+    if (e.kind === 'reactor.halted') {
+      summaries.push((e.payload as Record<string, unknown>).error_summary);
+    }
+  });
+
+  const r: Reactor = {
+    id: 'leak-r',
+    kinds: ['document.created'],
+    react: async () => {
+      throw new Error('secret-tenant-title');
+    },
+  };
+
+  await runDispatcherOnce(db, [r]);
+  unsub();
+
+  expect(summaries).toEqual(['Error']); // the CLASS name, never the message
+  expect(summaries).not.toContain('secret-tenant-title');
+});
