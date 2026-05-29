@@ -67,6 +67,18 @@ import { HTTPError } from './http.ts';
 const MAX_TOOL_ROUNDS = 25;
 
 /**
+ * Sub-cap on CONSECUTIVE all-error tool rounds (mitigation 64). Distinct from
+ * MAX_TOOL_ROUNDS (the outer runaway backstop): a model that keeps calling a
+ * tool with bad args / a tool that keeps throwing recoverably will, post-D-9.2,
+ * have each error fed back so it can adapt. This bounds how many times in a row
+ * it may fail WITHOUT making any progress (zero successful tool results in the
+ * round) before the run is failed with `tool_error`. A round with ≥1 success
+ * resets the counter (the model moved forward). Hardcoded at 3 — NOT
+ * env-configurable.
+ */
+const MAX_CONSECUTIVE_TOOL_ERRORS = 3;
+
+/**
  * Provider-name → capitalized label for `sanitizeProviderError`. Matches the
  * casing used at existing call sites (e.g. anthropic.ts passes 'Anthropic').
  */
@@ -535,6 +547,10 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
   const tools = buildToolDefs(ctx.agentFm);
 
   let round = 0;
+  // Mitigation 64 — consecutive all-error rounds (no successful tool result).
+  // Reset to 0 whenever a round makes progress; failRun(tool_error) when it
+  // reaches MAX_CONSECUTIVE_TOOL_ERRORS.
+  let consecutiveToolErrorRounds = 0;
   while (round < MAX_TOOL_ROUNDS) {
     round++;
 
@@ -596,12 +612,17 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
     // Tool round — execute collected calls, append the round-trip messages,
     // loop again.
     if (doneReason === 'tool_use' && collectedToolCalls.length > 0) {
-      // FIX #7 — accumulate the assistant tool_calls message + per-call
-      // tool-result messages in LOCALS and only commit them to `messages` once
-      // the WHOLE batch succeeds. If any call throws mid-batch we failRun +
-      // return (terminal, per the locked spec — errors are NOT fed back to the
-      // model; that's deferred D-3), WITHOUT leaving a dangling assistant
-      // tool_calls message that claims calls we never resolved.
+      // D-9.2 — RECOVERABLE tool errors are FED BACK to the model instead of
+      // terminating the run (mitigations 64-66). We accumulate the assistant
+      // tool_calls message + per-call tool-result messages in LOCALS:
+      //   - success            → result string (roundHadSuccess = true)
+      //   - recoverable error  → sanitized error message (roundHadRecoverableError)
+      //   - FATAL error        → abort the WHOLE round: failRun + return, no
+      //                          half-round committed, no feed-back (decision 5).
+      // After the loop (no fatal), commit assistantMsg + ALL tool-result
+      // messages atomically, then apply the consecutive-error counter, then
+      // continue. A prior call in this batch may have already committed its own
+      // tx (mitigation 35 — acceptable; each tool gets its own tx).
       const assistantMsg: Message = {
         role: 'assistant',
         content: textBuf,
@@ -612,39 +633,85 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
         })),
       };
       const toolResultMsgs: Message[] = [];
+      let roundHadSuccess = false;
+      let roundHadRecoverableError = false;
+      let fatalReturned = false;
 
       for (const tc of collectedToolCalls) {
-        let resultString: string;
         try {
           // tx=undefined — each tool gets its own short-lived tx (mitigation 35).
           const result = await executeTool(ctx.token, ctx.actor, tc.name, tc.arguments);
-          resultString = typeof result === 'string' ? result : JSON.stringify(result);
+          const resultString = typeof result === 'string' ? result : JSON.stringify(result);
+          toolResultMsgs.push({ role: 'tool', tool_use_id: tc.id, content: resultString });
+          roundHadSuccess = true;
         } catch (err) {
-          if (isInvalidArgs(err)) {
-            // error_detail = the issue PATHS only (no values — already
-            // paths-only from C-7). JSON.stringify the issues array.
+          if (isFatalToolError(err)) {
+            // FATAL — scope-denied / unknown tool. Abort the whole round
+            // immediately; do NOT commit a half-round or feed back (decision 5,
+            // mitigation 66). One fatal call terminates the run even if siblings
+            // were recoverable.
             await failRun(
               ctx,
               runErrorReasonSchema.enum.provider_error,
-              JSON.stringify(err.issues),
+              sanitizeProviderError(err, providerLabel),
             );
-            return;
+            fatalReturned = true;
+            break;
           }
-          // Any other tool throw → sanitized detail. A prior call in this batch
-          // may have already committed its own tx (mitigation 35 — acceptable);
-          // we just don't pollute message history with a half-resolved round.
+          if (isInvalidArgs(err)) {
+            // RECOVERABLE — bad args. Feed back the invalid PATHS only, never
+            // values (mitigation 65). err.issues are already paths-only from
+            // C-7: map each i.path to a dotted string; never JSON.stringify
+            // anything that could carry a value.
+            const paths = err.issues
+              .map((i) => (Array.isArray(i.path) ? i.path.join('.') : String(i.path)))
+              .join(', ');
+            toolResultMsgs.push({
+              role: 'tool',
+              tool_use_id: tc.id,
+              content: `Tool '${tc.name}' rejected the arguments. Invalid fields: ${paths}. Fix and retry.`,
+            });
+            roundHadRecoverableError = true;
+            continue;
+          }
+          // RECOVERABLE — handler-execution throw (DOCUMENT_NOT_FOUND,
+          // SLUG_CONFLICT, a tool's own thrown error, …). Feed back the SAFE
+          // machine code/reason (HTTPError.code or mcpInvalidParams reason) so
+          // the model can self-correct, falling back to the status-sanitized
+          // phrase for unknown throws (mitigation 65 — never a raw SDK string /
+          // key / baseUrl / arg value / message body).
+          toolResultMsgs.push({
+            role: 'tool',
+            tool_use_id: tc.id,
+            content: `Tool '${tc.name}' failed: ${safeToolErrorMessage(err, providerLabel)}. Adjust and retry.`,
+          });
+          roundHadRecoverableError = true;
+        }
+      }
+
+      if (fatalReturned) return;
+
+      // Commit the balanced round-trip atomically (success + recoverable-error
+      // results together).
+      messages.push(assistantMsg, ...toolResultMsgs);
+
+      // Consecutive-error counter (mitigation 64). A round with ≥1 success is
+      // progress → reset. A round that was ALL recoverable errors (zero
+      // successes) → increment; at the sub-cap, fail with `tool_error`.
+      if (roundHadSuccess) {
+        consecutiveToolErrorRounds = 0;
+      } else if (roundHadRecoverableError) {
+        consecutiveToolErrorRounds++;
+        if (consecutiveToolErrorRounds >= MAX_CONSECUTIVE_TOOL_ERRORS) {
           await failRun(
             ctx,
-            runErrorReasonSchema.enum.provider_error,
-            sanitizeProviderError(err, providerLabel),
+            runErrorReasonSchema.enum.tool_error,
+            `Model failed to recover after ${MAX_CONSECUTIVE_TOOL_ERRORS} consecutive tool errors.`,
           );
           return;
         }
-        toolResultMsgs.push({ role: 'tool', tool_use_id: tc.id, content: resultString });
       }
 
-      // Whole batch succeeded — commit the balanced round-trip atomically.
-      messages.push(assistantMsg, ...toolResultMsgs);
       continue; // next round
     }
 
@@ -803,8 +870,65 @@ async function handleCancel(ctx: RunContext): Promise<void> {
   await failRun(ctx, runErrorReasonSchema.enum.cancelled, 'Cancelled by user via comment.');
 }
 
-function isInvalidArgs(err: unknown): err is Error & { issues: unknown } {
+function isInvalidArgs(
+  err: unknown,
+): err is Error & { issues: Array<{ path: Array<string | number> }> } {
   return err instanceof Error && err.message === 'MCP_INVALID_ARGS' && 'issues' in err;
+}
+
+/**
+ * D-9.2 — actionable, leak-free message for a RECOVERABLE handler throw fed back
+ * to the model (mitigation 65). The real registry tools throw shapes that carry
+ * a SAFE machine code that's far more actionable than a status-only sanitize:
+ *
+ *   - `HTTPError(code, message, status)` — `.code` is a developer-authored,
+ *     closed enum string (e.g. `PARENT_NOT_FOUND`, `SLUG_CONFLICT`,
+ *     `RUN_ALREADY_ACTIVE`). Surface the `.code`, NEVER `.message` (it
+ *     interpolates slugs/titles/values — verified at the throw sites in
+ *     agent-tools-registry.ts / services/documents.ts).
+ *   - `mcpInvalidParams(message, {reason})` — `.data.reason` is a
+ *     developer-authored, closed string (e.g. `parent_not_found`,
+ *     `agent_missing`). Surface the `reason`, NEVER `.message` (same leak risk),
+ *     and NEVER the numeric `.code` (-32602 is uninformative).
+ *
+ * Security invariant (mitigation 65): the returned string is ONLY a code/reason
+ * (machine enum) or a status-sanitized phrase — never `err.message`, never arg
+ * values, never an SDK body. The `.code`/`.reason` strings are closed
+ * developer constants (not user/tool input), so they are safe to surface.
+ *
+ * Unknown throws (a bare `Error`, no string `.code`, no `.data.reason`) fall
+ * back to `sanitizeProviderError` — the status-based whitelist, still safe.
+ */
+function safeToolErrorMessage(err: unknown, providerLabel: string): string {
+  if (err != null && typeof err === 'object') {
+    // HTTPError: string `.code` enum (e.g. PARENT_NOT_FOUND). Guard on string
+    // so the numeric mcpInvalidParams `.code` (-32602) does not match here.
+    const code = (err as { code?: unknown }).code;
+    if (typeof code === 'string' && code.length > 0) {
+      return code;
+    }
+    // mcpInvalidParams shape: `.data.reason` (string).
+    const reason = (err as { data?: { reason?: unknown } }).data?.reason;
+    if (typeof reason === 'string' && reason.length > 0) {
+      return reason;
+    }
+  }
+  return sanitizeProviderError(err, providerLabel);
+}
+
+/**
+ * D-9.2 — a FATAL tool error terminates the run (no feed-back). Two classes:
+ *   - scope-denied: executeTool throws `forbidden: scope <s> missing` when the
+ *     agent's token lacks the tool's required scope (mitigation 66).
+ *   - unknown tool: executeTool throws `method not found: <name>` for a tool
+ *     not in the registry (or the test-only `__echo` outside NODE_ENV=test).
+ * Everything else (handler throws, MCP_INVALID_ARGS) is recoverable.
+ */
+function isFatalToolError(err: unknown): err is Error {
+  return (
+    err instanceof Error &&
+    (err.message.startsWith('forbidden: scope') || err.message.startsWith('method not found'))
+  );
 }
 
 /**

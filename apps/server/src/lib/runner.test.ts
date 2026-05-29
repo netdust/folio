@@ -31,6 +31,8 @@ import type { AIProvider, ProviderEvent } from './ai/provider.ts';
 import { __INTERNAL_TEST_ONLY__ as providerTestHatch } from './ai/provider.ts';
 import { newApiToken } from './auth.ts';
 import { encryptSecret } from './crypto.ts';
+import { HTTPError } from './http.ts';
+import { mcpInvalidParams } from './mcp-errors.ts';
 import { rejectRun, runAgent, runAgentResume } from './runner.ts';
 
 type TestDB = Awaited<ReturnType<typeof makeTestApp>>['db'];
@@ -588,8 +590,11 @@ describe('runAgent stream loop', () => {
     expect(results[0]!.body).toBe('final answer');
   });
 
-  test('mcp_invalid_args — bad args fail with paths-only detail', async () => {
-    const { db, run } = await scaffold({ tools: ['list_documents'] });
+  // D-9.2 — invalid-args is now a RECOVERABLE error that FEEDS BACK to the
+  // model (paths-only, no values — mitigation 65) instead of terminating. The
+  // model corrects the call next round and the run completes.
+  test('mcp_invalid_args — bad args feed back paths-only, model recovers → completed', async () => {
+    const { db, run, parent } = await scaffold({ tools: ['list_documents'] });
     const { registerTool } = await import('./agent-tools.ts');
     const toolName = `__test_strict_${nanoid(6)}`;
     registerTool({
@@ -600,15 +605,25 @@ describe('runAgent stream loop', () => {
     });
     registeredTools.push(toolName);
 
+    let round2Messages: import('./ai/provider.ts').Message[] | undefined;
     const stub: AIProvider = {
-      async *stream() {
-        yield {
-          type: 'tool_call',
-          id: 'tc-1',
-          name: toolName,
-          arguments: { value: 123 },
-        } as ProviderEvent;
-        yield { type: 'done', reason: 'tool_use' } as ProviderEvent;
+      async *stream(opts) {
+        const hasToolResult = opts.messages.some((m) => m.role === 'tool');
+        if (!hasToolResult) {
+          // Round 1 — wrong type for `value` (number, not string).
+          yield {
+            type: 'tool_call',
+            id: 'tc-1',
+            name: toolName,
+            arguments: { value: 99999 },
+          } as ProviderEvent;
+          yield { type: 'done', reason: 'tool_use' } as ProviderEvent;
+        } else {
+          // Round 2 — the error was fed back; model gives up gracefully.
+          round2Messages = opts.messages;
+          yield { type: 'text', delta: 'understood, stopping' } as ProviderEvent;
+          yield { type: 'done', reason: 'stop' } as ProviderEvent;
+        }
       },
       async testKey() {
         return { ok: true as const };
@@ -619,19 +634,22 @@ describe('runAgent stream loop', () => {
     await runAgent({ runId: run.id });
 
     const fm = await readRun(db, run.id);
-    expect(fm.status).toBe('failed');
-    expect(fm.error_reason).toBe('provider_error');
-    // transitionRun collapses any bare-string errorDetail through
-    // sanitizeProviderError (closed whitelist), so the persisted detail never
-    // carries the rejected arg value (mitigation 26/28). The runner passes the
-    // paths-only issues array; the sanitizer drops it to the safe constant.
-    expect(fm.error_detail).not.toContain('123');
+    expect(fm.status).toBe('completed');
+    // The fed-back tool message names the invalid PATH but NOT the bad value.
+    const toolMsg = round2Messages?.find((m) => m.role === 'tool');
+    expect(toolMsg).toBeTruthy();
+    expect(toolMsg!.content).toContain('value');
+    expect(toolMsg!.content).not.toContain('99999');
+    expect(parent.id).toBeTruthy();
   });
 
-  test('mcp_tool_error — tool throws, detail is sanitized (no verbatim leak)', async () => {
+  // D-9.2 — a handler throw is now RECOVERABLE: the sanitized error feeds back
+  // and the model adapts next round → completed. The fed-back content carries
+  // no raw SDK string / secret (mitigation 65).
+  test('mcp_tool_error — handler throw feeds back sanitized, model recovers → completed', async () => {
     const { db, run } = await scaffold({ tools: ['list_documents'] });
     const { registerTool } = await import('./agent-tools.ts');
-    const toolName = `__test_boom_${nanoid(6)}`;
+    const toolName = `__test_thrower_${nanoid(6)}`;
     registerTool({
       name: toolName,
       requiredScope: 'documents:read',
@@ -644,10 +662,18 @@ describe('runAgent stream loop', () => {
     });
     registeredTools.push(toolName);
 
+    let round2Messages: import('./ai/provider.ts').Message[] | undefined;
     const stub: AIProvider = {
-      async *stream() {
-        yield { type: 'tool_call', id: 'tc-1', name: toolName, arguments: {} } as ProviderEvent;
-        yield { type: 'done', reason: 'tool_use' } as ProviderEvent;
+      async *stream(opts) {
+        const hasToolResult = opts.messages.some((m) => m.role === 'tool');
+        if (!hasToolResult) {
+          yield { type: 'tool_call', id: 'tc-1', name: toolName, arguments: {} } as ProviderEvent;
+          yield { type: 'done', reason: 'tool_use' } as ProviderEvent;
+        } else {
+          round2Messages = opts.messages;
+          yield { type: 'text', delta: 'giving up cleanly' } as ProviderEvent;
+          yield { type: 'done', reason: 'stop' } as ProviderEvent;
+        }
       },
       async testKey() {
         return { ok: true as const };
@@ -658,13 +684,13 @@ describe('runAgent stream loop', () => {
     await runAgent({ runId: run.id });
 
     const fm = await readRun(db, run.id);
-    expect(fm.status).toBe('failed');
-    expect(fm.error_reason).toBe('provider_error');
-    // The secret must never survive into error_detail. transitionRun's
-    // closed-whitelist sanitizer guarantees this even though the runner
-    // pre-sanitizes (defense in depth).
-    expect(fm.error_detail).not.toContain('sk-secret-leak');
-    expect(fm.error_detail).not.toContain('boom');
+    expect(fm.status).toBe('completed');
+    // The fed-back tool message is sanitized — no raw SDK string / secret.
+    const toolMsg = round2Messages?.find((m) => m.role === 'tool');
+    expect(toolMsg).toBeTruthy();
+    expect(toolMsg!.content).toContain('failed');
+    expect(toolMsg!.content).not.toContain('sk-secret-leak');
+    expect(toolMsg!.content).not.toContain('boom');
   });
 
   test('cancel_via_comment — post-start rejection comment cancels + posts partial', async () => {
@@ -880,8 +906,13 @@ describe('runAgent stream loop', () => {
     expect(results.length).toBe(0);
   });
 
-  test('FIX #7 — multi-tool round where the 2nd call throws fails cleanly (terminal, no completion)', async () => {
-    const { db, run, parent } = await scaffold({ tools: ['list_documents'] });
+  // D-9.2 (was FIX #7, part a) — a multi-tool round where BOTH calls are
+  // recoverable (success + handler-throw) FEEDS BOTH results back and continues
+  // (mitigations 64-66). The round-trip is committed atomically and the model
+  // gets to adapt next round. This REPLACES the locked-spec "no feedback /
+  // terminal" behavior: recoverable tool errors no longer terminate.
+  test('D-9.2 — all-recoverable batch feeds both back, continues, recovers → completed', async () => {
+    const { db, run } = await scaffold({ tools: ['list_documents'] });
     const { registerTool } = await import('./agent-tools.ts');
     const okName = `__test_ok_${nanoid(6)}`;
     const boomName = `__test_boom2_${nanoid(6)}`;
@@ -901,11 +932,116 @@ describe('runAgent stream loop', () => {
     });
     registeredTools.push(okName, boomName);
 
+    let round2Messages: import('./ai/provider.ts').Message[] | undefined;
+    const stub: AIProvider = {
+      async *stream(opts) {
+        const hasToolResult = opts.messages.some((m) => m.role === 'tool');
+        if (!hasToolResult) {
+          // One round with TWO tool_calls; one succeeds, one throws recoverably.
+          yield { type: 'tool_call', id: 'tc-1', name: okName, arguments: {} } as ProviderEvent;
+          yield { type: 'tool_call', id: 'tc-2', name: boomName, arguments: {} } as ProviderEvent;
+          yield { type: 'done', reason: 'tool_use' } as ProviderEvent;
+        } else {
+          round2Messages = opts.messages;
+          yield { type: 'text', delta: 'done' } as ProviderEvent;
+          yield { type: 'done', reason: 'stop' } as ProviderEvent;
+        }
+      },
+      async testKey() {
+        return { ok: true as const };
+      },
+    };
+    providerTestHatch.overrideRegistry('anthropic', async () => stub);
+
+    await runAgent({ runId: run.id });
+
+    const fm = await readRun(db, run.id);
+    expect(fm.status).toBe('completed');
+    // BOTH tool results were fed back (one success, one sanitized error).
+    const toolMsgs = (round2Messages ?? []).filter((m) => m.role === 'tool');
+    expect(toolMsgs.length).toBe(2);
+    const failMsg = toolMsgs.find((m) => m.content.includes('failed'));
+    expect(failMsg).toBeTruthy();
+    expect(failMsg!.content).not.toContain('second tool exploded');
+  });
+
+  // D-9.2 (was FIX #7, part b) — a FATAL call (scope-denied) anywhere in a
+  // batch terminates the WHOLE round immediately: no feed-back, no extra round,
+  // no half-committed round-trip (decision 5, mitigation 66). The fatal sibling
+  // wins even though the other call was recoverable.
+  test('D-9.2 — fatal scope-denied in a batch terminates the whole round (provider_error)', async () => {
+    const { db, run, parent } = await scaffold({ tools: ['list_documents'] });
+    const { registerTool } = await import('./agent-tools.ts');
+    const boomName = `__test_boom3_${nanoid(6)}`;
+    const deniedName = `__test_denied_${nanoid(6)}`;
+    registerTool({
+      name: boomName,
+      requiredScope: 'documents:read',
+      schema: z.object({}).strict(),
+      handler: async () => {
+        throw new Error('recoverable boom');
+      },
+    });
+    // requires a scope the agent's token does NOT hold → executeTool throws
+    // `forbidden: scope …` (fatal).
+    registerTool({
+      name: deniedName,
+      requiredScope: 'documents:delete',
+      schema: z.object({}).strict(),
+      handler: async () => ({ ok: true }),
+    });
+    registeredTools.push(boomName, deniedName);
+
+    const control: StubControl = {
+      rounds: [
+        [
+          { type: 'tool_call', id: 'tc-1', name: boomName, arguments: {} },
+          { type: 'tool_call', id: 'tc-2', name: deniedName, arguments: {} },
+          { type: 'done', reason: 'tool_use' },
+        ],
+      ],
+      called: 0,
+    };
+    installProviderStub(control);
+
+    await runAgent({ runId: run.id });
+
+    const fm = await readRun(db, run.id);
+    expect(fm.status).toBe('failed');
+    expect(fm.error_reason).toBe('provider_error');
+    // No feed-back round was attempted (only the one round was pulled).
+    expect(control.called).toBe(1);
+    const results = await listKind(db, parent.id, 'result');
+    expect(results.length).toBe(0);
+  });
+
+  // ========================================================================
+  // D-9.2 — recoverable-error feed-back + bounds (mitigations 64-66)
+  // ========================================================================
+
+  // Mitigation 64 — a tool that ALWAYS throws recoverably never makes progress;
+  // the run terminates with `tool_error` after exactly MAX_CONSECUTIVE_TOOL_ERRORS
+  // (3) rounds, NOT at the outer MAX_TOOL_ROUNDS (25).
+  test('D-9.2 sub-cap — always-throwing tool terminates tool_error after 3 rounds', async () => {
+    const { db, run } = await scaffold({ tools: ['list_documents'] });
+    const { registerTool } = await import('./agent-tools.ts');
+    const boomName = `__test_alwaysboom_${nanoid(6)}`;
+    registerTool({
+      name: boomName,
+      requiredScope: 'documents:read',
+      schema: z.object({}).strict(),
+      handler: async () => {
+        throw new Error('persistent failure');
+      },
+    });
+    registeredTools.push(boomName);
+
+    // The stub emits the same throwing tool_call on EVERY round.
+    const control: StubControl = { rounds: [], called: 0 };
     const stub: AIProvider = {
       async *stream() {
-        // One round with TWO tool_calls; the second handler throws.
-        yield { type: 'tool_call', id: 'tc-1', name: okName, arguments: {} } as ProviderEvent;
-        yield { type: 'tool_call', id: 'tc-2', name: boomName, arguments: {} } as ProviderEvent;
+        control.called++;
+        yield { type: 'tool_call', id: 'tc-1', name: boomName, arguments: {} } as ProviderEvent;
         yield { type: 'done', reason: 'tool_use' } as ProviderEvent;
       },
       async testKey() {
@@ -917,13 +1053,240 @@ describe('runAgent stream loop', () => {
     await runAgent({ runId: run.id });
 
     const fm = await readRun(db, run.id);
-    // Terminal-failed (the locked spec keeps tool errors terminal — no feedback
-    // to the model). The first tool's effect may have committed (mitigation 35),
-    // but the run is cleanly failed with no completion.
+    expect(fm.status).toBe('failed');
+    expect(fm.error_reason).toBe('tool_error');
+    // Exactly 3 rounds, not 25 — the sub-cap fired before the outer backstop.
+    expect(control.called).toBe(3);
+  });
+
+  // Mitigation 64 — the counter RESETS on a successful round. Pattern:
+  // error(1) → success(2) → error(3,4,5). The sub-cap fires at round 5 (3
+  // consecutive AFTER the reset), not at round 4.
+  test('D-9.2 sub-cap — counter resets on progress, terminates at round 5', async () => {
+    const { db, run } = await scaffold({ tools: ['list_documents'] });
+    const { registerTool } = await import('./agent-tools.ts');
+    const okName = `__test_ok2_${nanoid(6)}`;
+    const boomName = `__test_boom4_${nanoid(6)}`;
+    registerTool({
+      name: okName,
+      requiredScope: 'documents:read',
+      schema: z.object({}).strict(),
+      handler: async () => ({ ok: true }),
+    });
+    registerTool({
+      name: boomName,
+      requiredScope: 'documents:read',
+      schema: z.object({}).strict(),
+      handler: async () => {
+        throw new Error('boom');
+      },
+    });
+    registeredTools.push(okName, boomName);
+
+    let round = 0;
+    const stub: AIProvider = {
+      async *stream() {
+        round++;
+        // Round 2 succeeds (resets the counter); all others throw recoverably.
+        const name = round === 2 ? okName : boomName;
+        yield { type: 'tool_call', id: `tc-${round}`, name, arguments: {} } as ProviderEvent;
+        yield { type: 'done', reason: 'tool_use' } as ProviderEvent;
+      },
+      async testKey() {
+        return { ok: true as const };
+      },
+    };
+    providerTestHatch.overrideRegistry('anthropic', async () => stub);
+
+    await runAgent({ runId: run.id });
+
+    const fm = await readRun(db, run.id);
+    expect(fm.status).toBe('failed');
+    expect(fm.error_reason).toBe('tool_error');
+    // error(1) success(2) error(3,4,5) → terminates at round 5, not round 4.
+    expect(round).toBe(5);
+  });
+
+  // Mitigation 66 — a single fatal scope-denied call terminates immediately as
+  // provider_error; the provider is NOT called again (no feed-back round).
+  test('D-9.2 fatal — scope-denied terminates provider_error, no feed-back round', async () => {
+    const { db, run } = await scaffold({ tools: ['list_documents'] });
+    const { registerTool } = await import('./agent-tools.ts');
+    const deniedName = `__test_denied2_${nanoid(6)}`;
+    registerTool({
+      name: deniedName,
+      requiredScope: 'documents:delete', // not in the agent's token scopes
+      schema: z.object({}).strict(),
+      handler: async () => ({ ok: true }),
+    });
+    registeredTools.push(deniedName);
+
+    const control: StubControl = {
+      rounds: [
+        [
+          { type: 'tool_call', id: 'tc-1', name: deniedName, arguments: {} },
+          { type: 'done', reason: 'tool_use' },
+        ],
+      ],
+      called: 0,
+    };
+    installProviderStub(control);
+
+    await runAgent({ runId: run.id });
+
+    const fm = await readRun(db, run.id);
     expect(fm.status).toBe('failed');
     expect(fm.error_reason).toBe('provider_error');
-    const results = await listKind(db, parent.id, 'result');
-    expect(results.length).toBe(0);
+    expect(control.called).toBe(1);
+  });
+
+  // Mitigation 65 — a recoverable handler throw whose message embeds a secret
+  // and an attacker URL: the fed-back tool message contains NEITHER.
+  test('D-9.2 sanitization — secret + URL never reach the fed-back message', async () => {
+    const { db, run } = await scaffold({ tools: ['list_documents'] });
+    const { registerTool } = await import('./agent-tools.ts');
+    const leakName = `__test_leak_${nanoid(6)}`;
+    registerTool({
+      name: leakName,
+      requiredScope: 'documents:read',
+      schema: z.object({}).strict(),
+      handler: async () => {
+        const e = new Error('leak sk-secret-leak https://attacker.example') as Error & {
+          status: number;
+        };
+        e.status = 500;
+        throw e;
+      },
+    });
+    registeredTools.push(leakName);
+
+    let round2Messages: import('./ai/provider.ts').Message[] | undefined;
+    const stub: AIProvider = {
+      async *stream(opts) {
+        const hasToolResult = opts.messages.some((m) => m.role === 'tool');
+        if (!hasToolResult) {
+          yield { type: 'tool_call', id: 'tc-1', name: leakName, arguments: {} } as ProviderEvent;
+          yield { type: 'done', reason: 'tool_use' } as ProviderEvent;
+        } else {
+          round2Messages = opts.messages;
+          yield { type: 'text', delta: 'ok' } as ProviderEvent;
+          yield { type: 'done', reason: 'stop' } as ProviderEvent;
+        }
+      },
+      async testKey() {
+        return { ok: true as const };
+      },
+    };
+    providerTestHatch.overrideRegistry('anthropic', async () => stub);
+
+    await runAgent({ runId: run.id });
+
+    const toolMsg = round2Messages?.find((m) => m.role === 'tool');
+    expect(toolMsg).toBeTruthy();
+    expect(toolMsg!.content).not.toContain('sk-secret-leak');
+    expect(toolMsg!.content).not.toContain('https://attacker');
+    expect(db).toBeTruthy();
+  });
+
+  // D-9.2 — a recoverable HTTPError feeds back its SAFE machine `.code`
+  // (actionable: the model can self-correct) but NOT the message body, which
+  // interpolates the slug (mitigation 65). Proves actionable + leak-free.
+  test('D-9.2 — HTTPError feeds back .code (PARENT_NOT_FOUND), not the interpolated slug', async () => {
+    const { db, run } = await scaffold({ tools: ['list_documents'] });
+    const { registerTool } = await import('./agent-tools.ts');
+    const toolName = `__test_httperr_${nanoid(6)}`;
+    registerTool({
+      name: toolName,
+      requiredScope: 'documents:read',
+      schema: z.object({}).strict(),
+      handler: async () => {
+        // The message embeds a slug — exactly the leak we must NOT surface.
+        throw new HTTPError('PARENT_NOT_FOUND', 'parent "secret-slug-xyz" not found', 404);
+      },
+    });
+    registeredTools.push(toolName);
+
+    let round2Messages: import('./ai/provider.ts').Message[] | undefined;
+    const stub: AIProvider = {
+      async *stream(opts) {
+        const hasToolResult = opts.messages.some((m) => m.role === 'tool');
+        if (!hasToolResult) {
+          yield { type: 'tool_call', id: 'tc-1', name: toolName, arguments: {} } as ProviderEvent;
+          yield { type: 'done', reason: 'tool_use' } as ProviderEvent;
+        } else {
+          round2Messages = opts.messages;
+          yield { type: 'text', delta: 'recovered' } as ProviderEvent;
+          yield { type: 'done', reason: 'stop' } as ProviderEvent;
+        }
+      },
+      async testKey() {
+        return { ok: true as const };
+      },
+    };
+    providerTestHatch.overrideRegistry('anthropic', async () => stub);
+
+    await runAgent({ runId: run.id });
+
+    const fm = await readRun(db, run.id);
+    expect(fm.status).toBe('completed');
+    const toolMsg = round2Messages?.find((m) => m.role === 'tool');
+    expect(toolMsg).toBeTruthy();
+    // Actionable: the safe machine code is surfaced.
+    expect(toolMsg!.content).toContain('PARENT_NOT_FOUND');
+    // Leak-free: the interpolated slug from the message body never reaches it.
+    expect(toolMsg!.content).not.toContain('secret-slug-xyz');
+  });
+
+  // D-9.2 — a recoverable mcpInvalidParams (NO `.status`) feeds back its SAFE
+  // `.data.reason` (actionable) but NOT the message body (which interpolates a
+  // value) and NOT the bare network-error fallback (which would mislead the
+  // model). Pre-fix this routed through sanitizeProviderError → "Network error
+  // or unreachable host." because the throw carries no `.status`.
+  test('D-9.2 — mcpInvalidParams feeds back .data.reason (parent_not_found), not the value', async () => {
+    const { db, run } = await scaffold({ tools: ['list_documents'] });
+    const { registerTool } = await import('./agent-tools.ts');
+    const toolName = `__test_mcperr_${nanoid(6)}`;
+    registerTool({
+      name: toolName,
+      requiredScope: 'documents:read',
+      schema: z.object({}).strict(),
+      handler: async () => {
+        throw mcpInvalidParams('parent "secret" not found', { reason: 'parent_not_found' });
+      },
+    });
+    registeredTools.push(toolName);
+
+    let round2Messages: import('./ai/provider.ts').Message[] | undefined;
+    const stub: AIProvider = {
+      async *stream(opts) {
+        const hasToolResult = opts.messages.some((m) => m.role === 'tool');
+        if (!hasToolResult) {
+          yield { type: 'tool_call', id: 'tc-1', name: toolName, arguments: {} } as ProviderEvent;
+          yield { type: 'done', reason: 'tool_use' } as ProviderEvent;
+        } else {
+          round2Messages = opts.messages;
+          yield { type: 'text', delta: 'recovered' } as ProviderEvent;
+          yield { type: 'done', reason: 'stop' } as ProviderEvent;
+        }
+      },
+      async testKey() {
+        return { ok: true as const };
+      },
+    };
+    providerTestHatch.overrideRegistry('anthropic', async () => stub);
+
+    await runAgent({ runId: run.id });
+
+    const fm = await readRun(db, run.id);
+    expect(fm.status).toBe('completed');
+    const toolMsg = round2Messages?.find((m) => m.role === 'tool');
+    expect(toolMsg).toBeTruthy();
+    // Actionable: the safe reason is surfaced.
+    expect(toolMsg!.content).toContain('parent_not_found');
+    // Leak-free: the value from the message body never reaches it.
+    expect(toolMsg!.content).not.toContain('secret');
+    // Not misleading: the status-less fallback ("Network error…") is gone.
+    expect(toolMsg!.content).not.toContain('Network error');
   });
 });
 
