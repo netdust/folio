@@ -435,6 +435,79 @@ describe('transitionRun', () => {
     expect((after!.frontmatter as AgentRunFrontmatter).status).toBe('failed');
   });
 
+  test('does not materialize done_reason:null when transitioning to a non-completion terminal state', async () => {
+    // Regression — FIX #4 (commit 1486296) folded done_reason into
+    // transitionRun's json_set via a self-assign preserve-branch:
+    //   json_set(fm, '$.done_reason', json_extract(fm, '$.done_reason'))
+    // On a row WITHOUT done_reason (every failed/rejected path: no_ai_key,
+    // budget, chain_guard, tool_error, awaiting_approval rejection) this
+    // MATERIALIZES `done_reason: null` — schema-INVALID against
+    // agentRunFrontmatterSchema (done_reason is .optional(), NOT
+    // .nullable(), under .strict()). The key must be ABSENT, not null.
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+    const created = await createRun({
+      workspace: seed.workspace,
+      project: seed.project,
+      runsTable,
+      agent,
+      actor: seed.user,
+      input: {
+        parentDocumentId: parent.id,
+        firedBy: 'agent.task.assigned',
+        chainId: crypto.randomUUID(),
+        triggerId: null,
+      },
+    });
+
+    // planning → running → failed, with NO doneReason on any hop.
+    await transitionRun(created.document.id, { newStatus: 'running', actor: seed.user.id });
+    await transitionRun(created.document.id, {
+      newStatus: 'failed',
+      actor: seed.user.id,
+      errorReason: 'worker_crash',
+    });
+
+    const after = await db.query.documents.findFirst({ where: eq(documents.id, created.document.id) });
+    const fm = after!.frontmatter as Record<string, unknown>;
+
+    // The key must be ABSENT — not present-with-null. `'in'` distinguishes
+    // the two; the buggy code leaves `done_reason: null` IN the object.
+    expect('done_reason' in fm).toBe(false);
+    expect(fm.done_reason).toBeUndefined();
+
+    // And done_reason must round-trip the strict OPTIONAL (non-nullable)
+    // schema field. With done_reason:null present, this rejects — which is
+    // the corruption FIX #4 introduced. (Scoped to done_reason: a full
+    // agentRunFrontmatterSchema.safeParse still fails here on the
+    // pre-existing error_reason/error_detail/worker_started_at `?? null`
+    // materializations, which are out of scope for this fix.)
+    const parsed = agentRunFrontmatterSchema.shape.done_reason.safeParse(fm.done_reason);
+    expect(parsed.success).toBe(true);
+  });
+
+  test('writes done_reason atomically on a completed transition when supplied', async () => {
+    // Companion guarantee — the completed path MUST still write done_reason
+    // in the same UPDATE as the status flip (unchanged behavior).
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+    const run = await seedRunningRun(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user);
+
+    await transitionRun(run.id, { newStatus: 'completed', actor: seed.user.id, doneReason: 'refusal' });
+
+    const after = await db.query.documents.findFirst({ where: eq(documents.id, run.id) });
+    const fm = after!.frontmatter as AgentRunFrontmatter;
+    expect(fm.status).toBe('completed');
+    expect(fm.done_reason).toBe('refusal');
+    expect(agentRunFrontmatterSchema.shape.done_reason.safeParse(fm.done_reason).success).toBe(true);
+  });
+
   test('writes the supplied actor to documents.updatedBy and the emitted event', async () => {
     const { db, seed } = await makeTestApp();
     const table = await getWorkItemsTable(db, seed.project.id);

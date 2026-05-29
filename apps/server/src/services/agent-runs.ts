@@ -302,12 +302,22 @@ export async function transitionRun(
   // hand-seeds the precondition to pin the contract for that future
   // change. Removing the COALESCE today would be safe but breaks that
   // forward compatibility pin.
-  // done_reason: when supplied, write it; otherwise preserve whatever's there
-  // (json_set with the existing value is a no-op). Keeps the status flip +
-  // done_reason atomic in the single UPDATE below.
-  const doneReasonArg = args.doneReason
-    ? sql`${args.doneReason}`
-    : sql`json_extract(${documents.frontmatter}, '$.done_reason')`;
+  // done_reason: ONLY touched when supplied (the completed path). When
+  // absent, the '$.done_reason' pair is OMITTED from json_set entirely —
+  // it is NOT a self-assign no-op. `json_set(fm, '$.done_reason',
+  // json_extract(fm, '$.done_reason'))` on a row WITHOUT the key
+  // MATERIALIZES `done_reason: null`, which is schema-INVALID:
+  // agent-run-schema.ts has `done_reason: runDoneReasonSchema.optional()`
+  // under `.strict()` (optional, NOT nullable). failRun / failRunLastResort
+  // / rejectRun pass no doneReason and transition rows that never had one,
+  // so the self-assign corrupted every failed/rejected run's frontmatter
+  // source-of-truth (FIX #4 / commit 1486296 regression). The conditional
+  // fragment below leaves the key absent for rows that never had it and
+  // preserves the existing value for rows that do, while keeping the
+  // completed-path write atomic with the status flip in the single UPDATE.
+  const doneReasonPair = args.doneReason
+    ? sql`, '$.done_reason', ${args.doneReason}`
+    : sql``;
 
   const nowIsoForRunning = new Date().toISOString();
   const workerStartedAtArg = isTerminal
@@ -340,8 +350,7 @@ export async function transitionRun(
           '$.completed_at', ${completedAt},
           '$.worker_started_at', ${workerStartedAtArg},
           '$.error_reason', ${errorReason ?? null},
-          '$.error_detail', ${errorDetail ?? null},
-          '$.done_reason', ${doneReasonArg}
+          '$.error_detail', ${errorDetail ?? null}${doneReasonPair}
         )`,
         updatedBy: args.actor,
         updatedAt: new Date(),
