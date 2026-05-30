@@ -84,7 +84,15 @@ Performance reviewer CONFIRMED E-FOLLOWUP-5 (useRunsLiveSync over-invalidation) 
 
 ---
 
-## F-4 live e2e (USER-run, real Anthropic) — PENDING
+## F-4 live e2e — FIRST RUN surfaced F-D5 (SSE idle-timeout); fix shipped, re-run pending
+
+### F-D5 (IMPORTANT, found by F-4 live run) — Bun reaped idle SSE streams at 10s — FIXED `5e184ce`
+**Symptom:** the e2e webServer logged `[Bun.serve]: request timed out after 10 seconds` + `vite http proxy error: /events?kinds=... socket hang up` for both banner SSE streams (provider-health, reactor-halt).
+**Root cause (systematic-debugging, 4 phases + web verification):** `index.ts`'s `{ port, fetch }` export set no `idleTimeout`, so Bun applied its 10s idle cap. An SSE stream is idle between events; the 30s keep-alive heartbeat (`events.ts:270`) couldn't fire before the 10s cap, and Bun's idle timer is NOT reset by the server's own heartbeat writes (verified — this is why Bun's SSE guide says DISABLE the timeout, not raise it). Hono-on-Bun can't reach the per-request `server.timeout(req,0)`, so the lever is the global `idleTimeout`.
+**Fix:** `idleTimeout: 0` on the server export (also Bun's own post-1.1.27 default; correct for an app whose core surfaces are long-lived streams). `index.test.ts` pins it. Server 967/0 fail, tsc clean.
+**Real verification:** PENDING the e2e re-run (unit test guards the config; the socket-level behavior only shows with a live server).
+
+## F-4 live e2e (USER-run, real Anthropic) — RE-RUN after F-D5 fix
 `cd apps/web && FOLIO_TEST_ANTHROPIC_KEY="$(cat ../../key)" bun run e2e phase-3-real-anthropic.spec.ts`
 Result to be pasted by the user → triaged into this manifest (assign → run → kind=result comment + Runs tab). Pass = the full runner works end-to-end with a real provider. Failure → new finding(s) here.
 
