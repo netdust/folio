@@ -53,6 +53,16 @@ function mockWorkspaceDoc(
   const body = options.body ?? '# Instructions\n\nDo the triage.';
   const frontmatter =
     options.frontmatter ?? { description: 'Sorts inbound issues' };
+  // The Runs tab mounts useRunsLiveSync, which opens an EventSource. jsdom has
+  // no EventSource — stub a no-op so the Runs tab doesn't crash the slideover.
+  vi.stubGlobal(
+    'EventSource',
+    class {
+      addEventListener() {}
+      removeEventListener() {}
+      close() {}
+    } as unknown as typeof EventSource,
+  );
   vi.stubGlobal(
     'fetch',
     vi.fn<typeof fetch>(async (url, init) => {
@@ -248,7 +258,10 @@ describe('WorkspaceDocumentSlideover', () => {
     expect(screen.queryByRole('button', { name: /Log activity/ })).toBeNull();
   });
 
-  it('switching to Runs renders the Phase 3 placeholder; body editor still visible', async () => {
+  it('switching to Runs renders the agent run-history section; body editor still visible', async () => {
+    // Default agent fixture has no `projects` allow-list → wildcard fallback →
+    // RunsHistorySection shows its no-project empty state. The old Phase 3
+    // placeholder is gone (E-4 wired the real section).
     mockWorkspaceDoc('triage', 'agent');
     const { queryClient, router } = setup('?doc=triage');
     render(
@@ -267,7 +280,7 @@ describe('WorkspaceDocumentSlideover', () => {
     await userEvent.click(runsBtn);
 
     await waitFor(() => {
-      expect(screen.getByText(/No runs yet — Phase 3 wires the runner/)).toBeInTheDocument();
+      expect(screen.getByText(/no project scoped to this agent/i)).toBeInTheDocument();
     });
     expect(document.querySelector('[data-testid="workspace-slideover-editor"]')).not.toBeNull();
   });

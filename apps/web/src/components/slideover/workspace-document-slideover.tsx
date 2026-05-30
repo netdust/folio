@@ -33,6 +33,7 @@ import { RawMdEditor } from './raw-md-editor.tsx';
 import { WorkspaceActivityPanel } from './workspace-activity-panel.tsx';
 import { WorkspaceLogActivityButton } from './workspace-log-activity-button.tsx';
 import { TriggerForm } from '../triggers/trigger-form.tsx';
+import { RunsHistorySection } from '../runs/runs-history-section.tsx';
 
 type WorkspaceDocTabValue = 'fields' | 'activity' | 'runs';
 
@@ -286,9 +287,15 @@ function SlideoverBody({
           </div>
         ) : null}
         {tab === 'runs' ? (
-          <div className="text-fg-3 text-sm py-8 text-center">
-            No runs yet — Phase 3 wires the runner.
-          </div>
+          doc.type === 'agent' ? (
+            <RunsHistorySection
+              wslug={wslug}
+              agentSlug={doc.slug}
+              projects={(doc.frontmatter.projects as string[] | undefined) ?? ['*']}
+            />
+          ) : (
+            <div className="text-fg-3 text-sm py-8 text-center">Runs apply to agents only.</div>
+          )
         ) : null}
       </div>
       <div
