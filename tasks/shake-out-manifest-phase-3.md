@@ -92,7 +92,28 @@ Performance reviewer CONFIRMED E-FOLLOWUP-5 (useRunsLiveSync over-invalidation) 
 **Fix:** `idleTimeout: 0` on the server export (also Bun's own post-1.1.27 default; correct for an app whose core surfaces are long-lived streams). `index.test.ts` pins it. Server 967/0 fail, tsc clean.
 **Real verification:** PENDING the e2e re-run (unit test guards the config; the socket-level behavior only shows with a live server).
 
-## F-4 live e2e (USER-run, real Anthropic) — RE-RUN after F-D5 fix
+## F-4 — CLOSED. Real product bug found + fixed; runner proven end-to-end with a real key.
+
+**F-4's headline outcome:** the live shake-out surfaced **F-D6**, a real intermittent product bug, and the agent runner is proven end-to-end with a real Anthropic provider.
+
+### F-D6 (IMPORTANT, found by F-4 live run) — dispatcher cursor seeded at MAX(seq) → boot-race silently dropped assignments — FIXED `9fe7783`
+**Symptom:** assigning a work_item to an agent intermittently produced NO run + NO result comment (the agent silently never ran). Reproduced via the real-Anthropic e2e (consistent fail) AND `diagnose-http-chain.ts` (failed one run, succeeded the next — timing-dependent).
+**Root cause (systematic-debugging, 4 phases, read-only DB forensics — no extra billed runs):** `loadOrSeedCursor` (event-dispatcher.ts) seeded a brand-new reactor's cursor at `MAX(events.seq)` ("start from now", per the C.3 spec — to avoid a newly-added reactor replaying old history). But it runs LAZILY on the dispatcher's first tick (~1s after boot), racing the events written during startup: on a fresh instance, an `agent.task.assigned` written before that tick lands BELOW the seeded MAX(seq), so the matcher treats it as already-seen and never reacts. **Proof:** the failed-run DB showed `reactor_cursors.last_seq = 11` = the assignment's own seq, with 0 agent_run rows — seeded past it, never processed.
+**Fix:** seed at `0` (process the full log) on first registration. Safe — the trigger-matcher is idempotent (`getActiveRun` no-ops replays) + kind-filtered, and V1 has one reactor seeded at first boot (no long-lived-instance stampede case). The dispatcher test that pinned the buggy seed-at-MAX behavior was rewritten to assert the fix. Server 967/0 fail, tsc clean.
+**Verification:** `diagnose-http-chain.ts` POST-fix is DETERMINISTIC — run created at t+1s, `kind=result` comment at t+2s, every run. The full chain (assign → event → dispatcher → matcher → poller → runner → real Anthropic call → result comment) is proven over HTTP with a real key.
+
+### F-D5 (IMPORTANT) — Bun reaped idle SSE streams at 10s — FIXED `5e184ce`
+(see below — surfaced in the first F-4 run; `idleTimeout: 0` on the server export.)
+
+### The Playwright browser spec — SKIP-BY-DEFAULT (not a CI gate)
+`phase-3-real-anthropic.spec.ts` is gated behind `FOLIO_E2E_REAL_ANTHROPIC=1` (opt-in manual smoke). Its remaining flakiness is **Playwright-harness-specific**, NOT product: the global-setup `unlink` leaves an orphaned `-wal` that defeats DB post-mortem, and the picker→PATCH→comment-refetch read path is brittle to iterate without a live clickable browser (remote-control session). **The authoritative end-to-end proof is `scripts/diagnose-http-chain.ts`** (committed, deterministic, repeatable). User decision (2026-05-31): F-4's acceptance — "the runner works end-to-end with a real provider" — is MET and EXCEEDED (a real product bug found + fixed); accept the headless/HTTP proof, keep the browser spec as an opt-in manual smoke, stop the billed-run tail-chase.
+
+### Diagnostic scripts — KEPT
+`scripts/diagnose-agent-chain.ts` (manual-tick + `--loop` modes) + `scripts/diagnose-http-chain.ts` are kept in the tree: they ARE the authoritative end-to-end agent-chain proof + a reusable boundary tracer for future runner debugging.
+
+---
+
+## (historical) F-4 live e2e (USER-run, real Anthropic) — RE-RUN after F-D5 fix
 `cd apps/web && FOLIO_TEST_ANTHROPIC_KEY="$(cat ../../key)" bun run e2e phase-3-real-anthropic.spec.ts`
 Result to be pasted by the user → triaged into this manifest (assign → run → kind=result comment + Runs tab). Pass = the full runner works end-to-end with a real provider. Failure → new finding(s) here.
 

@@ -26,8 +26,31 @@ import { test, expect, signUpFresh, createWorkspace, createProject } from './fix
 
 const ANTHROPIC_KEY = process.env.FOLIO_TEST_ANTHROPIC_KEY;
 
-// Inert in CI / without a key. The whole file's single test skips.
-test.skip(!ANTHROPIC_KEY, 'set FOLIO_TEST_ANTHROPIC_KEY to run');
+// ---------------------------------------------------------------------------
+// STATUS (F-4 shake-out, 2026-05-31): SKIP-BY-DEFAULT, opt-in only.
+//
+// This browser spec drives the agent runner through the real UI. During the
+// F-4 shake-out it surfaced + we FIXED a real product bug: the dispatcher
+// seeded its reactor cursor at MAX(seq) on first registration, which raced
+// server boot and silently dropped an assignment created in the first ~1s
+// (commit 9fe7783; regression-tested in event-dispatcher.test.ts).
+//
+// The AUTHORITATIVE end-to-end proof is `apps/server/scripts/diagnose-http-
+// chain.ts` — it boots the real server, drives the EXACT same chain over HTTP
+// with a real key, and DETERMINISTICALLY produces a kind=result comment (run
+// at t+1s, comment at t+2s, post-fix). The product chain is proven there.
+//
+// This browser spec is gated behind FOLIO_E2E_REAL_ANTHROPIC (not just the
+// key) because its REMAINING flakiness is Playwright-harness-specific (the
+// global-setup unlink leaves an orphaned WAL that defeats post-mortem; the
+// picker→PATCH→comment-refetch read path is brittle to iterate without a
+// live browser). It is kept as a manual smoke, not a CI gate. To run it:
+//   FOLIO_E2E_REAL_ANTHROPIC=1 FOLIO_TEST_ANTHROPIC_KEY=sk-ant-… bun run e2e -- phase-3-real-anthropic
+// ---------------------------------------------------------------------------
+test.skip(
+  !ANTHROPIC_KEY || process.env.FOLIO_E2E_REAL_ANTHROPIC !== '1',
+  'manual smoke — set FOLIO_E2E_REAL_ANTHROPIC=1 + FOLIO_TEST_ANTHROPIC_KEY; the authoritative e2e proof is scripts/diagnose-http-chain.ts',
+);
 
 test('configure Anthropic key in UI, assign agent, run posts a kind=result comment', async ({
   page,
