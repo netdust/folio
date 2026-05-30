@@ -2,7 +2,35 @@ import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { renderHook, act, waitFor } from '@testing-library/react';
 import React from 'react';
-import { useRuns, useCreateRun, useCancelRun, runsKeys } from './runs.ts';
+import { useRuns, useCreateRun, useCancelRun, useRunsLiveSync, runsKeys } from './runs.ts';
+
+class MockEventSource {
+  static instances: MockEventSource[] = [];
+  url: string;
+  withCredentials: boolean;
+  onmessage: ((e: MessageEvent) => void) | null = null;
+  listeners = new Map<string, ((e: MessageEvent) => void)[]>();
+  closed = false;
+  constructor(url: string, init?: EventSourceInit) {
+    this.url = url;
+    this.withCredentials = init?.withCredentials ?? false;
+    MockEventSource.instances.push(this);
+  }
+  addEventListener(type: string, fn: (e: MessageEvent) => void) {
+    const arr = this.listeners.get(type) ?? [];
+    arr.push(fn);
+    this.listeners.set(type, arr);
+  }
+  removeEventListener(type: string, fn: (e: MessageEvent) => void) {
+    this.listeners.set(type, (this.listeners.get(type) ?? []).filter((f) => f !== fn));
+  }
+  emit(type: string, data: string) {
+    const ev = { data } as MessageEvent;
+    for (const fn of this.listeners.get(type) ?? []) fn(ev);
+    if (type === 'message') this.onmessage?.(ev);
+  }
+  close() { this.closed = true; }
+}
 
 function wrapperOf(qc: QueryClient) {
   return ({ children }: { children: React.ReactNode }) => (
@@ -21,8 +49,8 @@ beforeEach(() => {
       return new Response(JSON.stringify({ data: { run_id: 'r1', status: 'failed' } }),
         { status: 200, headers: { 'content-type': 'application/json' } });
     }
-    // list: server returns a BARE array via jsonOk; client passes it through.
-    return new Response(JSON.stringify([{ id: 'r1', slug: 'run-1', type: 'agent_run', status: 'running', frontmatter: {} }]),
+    // Real server wraps via jsonOk → { data: [...] }; client.get unwraps the single `data` key to the array.
+    return new Response(JSON.stringify({ data: [{ id: 'r1', slug: 'run-1', type: 'agent_run', status: 'running', frontmatter: {} }] }),
       { status: 200, headers: { 'content-type': 'application/json' } });
   }));
 });
@@ -57,5 +85,37 @@ describe('runs hooks', () => {
 
   test('runsKeys.list is project-scoped + filter-keyed', () => {
     expect(runsKeys.list('acme', 'web', { status: 'running' })).toEqual(['runs', 'acme', 'web', 'list', { status: 'running' }]);
+  });
+});
+
+describe('useRunsLiveSync', () => {
+  beforeEach(() => {
+    MockEventSource.instances = [];
+    vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  test('subscribes to all six run kinds + the agent filter and invalidates on event', () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(qc, 'invalidateQueries');
+    renderHook(() => useRunsLiveSync('acme', { agent: 'bot' }), { wrapper: wrapperOf(qc) });
+
+    expect(MockEventSource.instances).toHaveLength(1);
+    const es = MockEventSource.instances[0]!;
+    for (const kind of [
+      'agent.run.started',
+      'agent.run.awaiting_approval',
+      'agent.run.running',
+      'agent.run.completed',
+      'agent.run.failed',
+      'agent.run.rejected',
+    ]) {
+      expect(es.url).toContain(kind);
+    }
+    expect(es.url).toContain('agent=bot');
+
+    invalidate.mockClear();
+    act(() => es.emit('agent.run.completed', JSON.stringify({ id: 'e1', kind: 'agent.run.completed' })));
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: runsKeys.all });
   });
 });

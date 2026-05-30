@@ -80,9 +80,8 @@ export function useCancelRun(wslug: string) {
   return useMutation<RunMutationResult, ApiError, { runId: string }>({
     mutationFn: ({ runId }) =>
       client.post<RunMutationResult>(`/api/v1/w/${wslug}/runs/${runId}/cancel`),
-    onSettled: (_d, _e, vars) => {
+    onSettled: () => {
       qc.invalidateQueries({ queryKey: runsKeys.all });
-      qc.invalidateQueries({ queryKey: runsKeys.detail(wslug, vars.runId) });
     },
   });
 }
