@@ -28,7 +28,7 @@
  * self-heals because the next failed tick re-fires it (spec §4b).
  */
 
-import { asc, eq, gt } from 'drizzle-orm';
+import { asc, eq, gt, sql } from 'drizzle-orm';
 import type { DB } from '../db/client.ts';
 import { events, reactorCursors } from '../db/schema.ts';
 import { env } from '../env.ts';
@@ -74,30 +74,61 @@ function emitReactorHealth(
   });
 }
 
+/**
+ * Eagerly seed any not-yet-registered reactor's cursor at `MAX(events.seq)`
+ * ("start from now"), to be called ONCE at server boot BEFORE traffic is served
+ * (see index.ts). This is the fix for the F-4/F-6 cursor-seed bug, and it
+ * resolves BOTH failure modes the shake-out surfaced:
+ *
+ *   - F-4 (seed lazily on first tick): the dispatcher's first tick ran ~1s
+ *     after boot, racing events written during startup — an assignment written
+ *     before the seed landed below MAX(seq) and was silently dropped. Seeding
+ *     EAGERLY at boot (before any request can write an event) closes that race.
+ *   - F-6 (seed at 0): seeding a brand-new reactor at 0 made it REPLAY the
+ *     entire append-only event log on an existing instance's first upgrade
+ *     boot — re-matching every historical assignment whose run already
+ *     COMPLETED (getActiveRun only no-ops *active* peers, not closed ones) →
+ *     a stampede of billed re-runs on long-closed tasks.
+ *
+ * Eager + seed-at-MAX is correct under both: the cursor exists before the first
+ * event of this process is written (no race), AND it starts "from now" (no
+ * historical replay). `onConflictDoNothing` makes it idempotent across reboots
+ * and any concurrent first-call.
+ */
+export async function seedReactorCursors(db: DB, reactors: readonly Reactor[]): Promise<void> {
+  const [{ max } = { max: 0 }] = await db
+    .select({ max: sql<number>`COALESCE(MAX(${events.seq}), 0)` })
+    .from(events);
+  const seed = max ?? 0;
+  for (const r of reactors) {
+    await db
+      .insert(reactorCursors)
+      .values({ reactorId: r.id, lastSeq: seed, updatedAt: new Date() })
+      .onConflictDoNothing();
+  }
+}
+
 async function loadOrSeedCursor(db: DB, reactorId: string): Promise<number> {
   const row = await db.query.reactorCursors.findFirst({
     where: eq(reactorCursors.reactorId, reactorId),
   });
   if (row) return row.lastSeq;
-  // F-4 shake-out fix — seed at 0, NOT MAX(seq).
-  //
-  // The C.3 spec seeded a brand-new reactor's cursor at MAX(events.seq)
-  // ("start from now") to avoid a newly-added reactor stampeding on long-closed
-  // history. But `loadOrSeedCursor` runs LAZILY on the dispatcher's FIRST TICK
-  // (~1s after boot), which RACES the events written during startup: on a fresh
-  // instance, an `agent.task.assigned` written before that first tick lands
-  // BELOW the seeded MAX(seq), so the matcher treats it as "already seen" and
-  // SILENTLY never creates the run. (Reproduced: cursor seeded at the
-  // assignment's own seq, 0 runs created — F-4 e2e + diagnose-http-chain.ts.)
-  // Seeding at 0 makes a first-registration reactor process the FULL log, which
-  // is safe: the matcher is idempotent (getActiveRun no-ops replays) and
-  // kind-filtered (it ignores document.created/etc.), and V1 has exactly one
-  // reactor seeded at first boot — so there is no "stampede on a long-lived
-  // instance" case to protect against. If a genuinely-new reactor type is added
-  // to an existing instance later, give IT an explicit seed-at-MAX at
-  // registration; do not re-introduce the boot race here.
-  await db.insert(reactorCursors).values({ reactorId, lastSeq: 0, updatedAt: new Date() });
-  return 0;
+  // Fallback seed for a reactor whose cursor was NOT eagerly seeded at boot
+  // (e.g. a test calling runDispatcherOnce directly, or a reactor registered
+  // after startup). Seed at MAX(seq) — NEVER 0 — so a late registration on an
+  // existing instance does not replay the whole historical log (the F-6
+  // stampede). The boot race is closed by seedReactorCursors() at startup
+  // (index.ts); this lazy path must stay seed-at-MAX to preserve the
+  // "start from now" property. onConflictDoNothing guards a concurrent insert.
+  const [{ max } = { max: 0 }] = await db
+    .select({ max: sql<number>`COALESCE(MAX(${events.seq}), 0)` })
+    .from(events);
+  const seed = max ?? 0;
+  await db
+    .insert(reactorCursors)
+    .values({ reactorId, lastSeq: seed, updatedAt: new Date() })
+    .onConflictDoNothing();
+  return seed;
 }
 
 async function persistCursor(db: DB, reactorId: string, seq: number): Promise<void> {
@@ -177,10 +208,26 @@ export function startEventDispatcher(db: DB): () => void {
   // at-least-once-per-overlap. Skip a tick while the prior one is still running;
   // the next interval picks up where it left off.
   let running = false;
+
+  // F-4/F-6 fix: seed every reactor's cursor at MAX(seq) EAGERLY, before the
+  // first tick can run, so (a) the cursor exists before any request writes an
+  // event (closes the boot race that silently dropped startup assignments) and
+  // (b) a fresh-but-existing instance starts "from now" instead of replaying
+  // its whole historical log (avoids the completed-task re-run stampede). We
+  // hold the `running` latch until the seed resolves so no tick processes an
+  // unseeded reactor; `onConflictDoNothing` makes reboots a no-op.
+  running = true;
+  const seeded = seedReactorCursors(db, REACTORS)
+    .catch((err) => console.error('[dispatcher] cursor seed error', err))
+    .finally(() => {
+      running = false;
+    });
+
   const handle = setInterval(() => {
     if (running) return;
     running = true;
-    void runDispatcherOnce(db, REACTORS)
+    void seeded
+      .then(() => runDispatcherOnce(db, REACTORS))
       .catch((err) => console.error('[dispatcher] tick error', err))
       .finally(() => {
         running = false;

@@ -6,7 +6,7 @@ import { makeTestApp } from '../test/harness.ts';
 import type { TestSeed } from '../test/harness.ts';
 import type { BusEvent } from './event-bus.ts';
 import { eventBus } from './event-bus.ts';
-import { type Reactor, runDispatcherOnce } from './event-dispatcher.ts';
+import { type Reactor, runDispatcherOnce, seedReactorCursors } from './event-dispatcher.ts';
 
 afterEach(() => eventBus.__clear());
 
@@ -35,15 +35,37 @@ async function cursorSeq(db: DB, reactorId: string): Promise<number | undefined>
   return row?.lastSeq;
 }
 
-test('seeds cursor at 0 on first registration and processes pre-existing events (no boot-race drop)', async () => {
-  // F-4 shake-out regression test. The cursor used to seed at MAX(seq) ("start
-  // from now"), which raced server boot: any event written BEFORE the
-  // dispatcher's first lazy tick (the seed point) landed below the seed and was
-  // silently skipped — on a fresh instance an `agent.task.assigned` created
-  // during startup was dropped and the agent never ran. Seeding at 0 makes a
-  // first-registration reactor process the FULL log, so a pre-existing
-  // assignment is never lost. Safe: the trigger-matcher is idempotent
-  // (getActiveRun no-ops replays) + kind-filtered.
+test('seedReactorCursors eagerly seeds at MAX(seq) (start-from-now) before traffic', async () => {
+  // F-4/F-6 regression test. The fix is EAGER seed-at-MAX at boot (startEvent
+  // Dispatcher calls seedReactorCursors before the first tick), which resolves
+  // BOTH failure modes: it closes the boot race (cursor exists before any event
+  // is written) WITHOUT replaying history (a fresh-but-existing instance starts
+  // "from now", not from seq 1 — which would re-run every historical completed
+  // assignment, the F-6 stampede). Here we verify the eager seed lands at
+  // MAX(seq) and is idempotent across reboots.
+  const { db, seed } = await makeTestApp();
+  await seedEvent(db, seed, 1, 'document.created');
+  await seedEvent(db, seed, 2, 'document.created');
+  await seedEvent(db, seed, 3, 'document.created');
+
+  const r: Reactor = { id: 'test-r', kinds: ['document.created'], react: async () => {} };
+
+  await seedReactorCursors(db, [r]);
+  expect(await cursorSeq(db, 'test-r')).toBe(3); // seeded "from now" at MAX(seq)
+
+  // Idempotent: a second seed (reboot) does NOT reset/replay a cursor that has
+  // since advanced past MAX — onConflictDoNothing leaves the existing row.
+  await seedEvent(db, seed, 4, 'document.created');
+  await seedReactorCursors(db, [r]);
+  expect(await cursorSeq(db, 'test-r')).toBe(3); // unchanged — reboot is a no-op
+});
+
+test('runDispatcherOnce lazy-seeds an unseeded reactor at MAX(seq), not 0 (no historical replay)', async () => {
+  // The lazy fallback in loadOrSeedCursor (for a reactor not eagerly seeded —
+  // e.g. a direct test call) must ALSO seed at MAX(seq), never 0. Seeding at 0
+  // would replay the full historical log on an existing instance, re-running
+  // every past completed assignment (F-6). So a reactor first seen by
+  // runDispatcherOnce processes only events AFTER the seed point.
   const { db, seed } = await makeTestApp();
   await seedEvent(db, seed, 1, 'document.created');
   await seedEvent(db, seed, 2, 'document.created');
@@ -58,13 +80,13 @@ test('seeds cursor at 0 on first registration and processes pre-existing events 
     },
   };
 
-  await runDispatcherOnce(db, [r]); // first run: cursor absent → seed at 0 → process all history
-  expect(seen).toEqual([1, 2, 3]); // pre-existing events ARE processed (the fix)
+  await runDispatcherOnce(db, [r]); // cursor absent → lazy seed at MAX(seq)=3, no replay
+  expect(seen).toEqual([]); // started "from now" — saw nothing historical
   expect(await cursorSeq(db, 'test-r')).toBe(3);
 
   await seedEvent(db, seed, 4, 'document.created');
   await runDispatcherOnce(db, [r]);
-  expect(seen).toEqual([1, 2, 3, 4]); // then continues from the cursor
+  expect(seen).toEqual([4]); // reactor sees only the post-seed event
 });
 
 test('advances cursor only on success (at-least-once); a throwing react halts and retries next tick', async () => {
