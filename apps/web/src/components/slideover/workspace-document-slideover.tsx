@@ -18,6 +18,8 @@ import { Skeleton } from '../ui/skeleton.tsx';
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
 import { TabStrip, type TabItem } from '../ui/tab-strip.tsx';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '../ui/dialog.tsx';
+import { ResizeHandle } from '../ui/resize-handle.tsx';
+import { useResizableWidth } from '../../lib/use-resizable-width.ts';
 import {
   useWorkspaceDocument,
   useUpdateWorkspaceDocument,
@@ -51,6 +53,11 @@ export function WorkspaceDocumentSlideover({ wslug }: Props) {
   const [moreOpen, setMoreOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const del = useDeleteWorkspaceDocument(wslug);
+  const { width, onDragStart } = useResizableWidth('agent-config', {
+    default: 480,
+    min: 360,
+    max: 1100,
+  });
 
   // Alt+M toggles raw ↔ rich, matching the project slideover's shortcut.
   useEffect(() => {
@@ -84,7 +91,8 @@ export function WorkspaceDocumentSlideover({ wslug }: Props) {
 
   return (
     <Sheet open={open} onOpenChange={(o) => { if (!o) close(); }}>
-      <SheetContent width={800} className="h-screen">
+      <SheetContent width={width} className="h-screen">
+        <ResizeHandle onDragStart={onDragStart} />
         <SheetHeader>
           <SheetTitle>
             {isLoading ? (

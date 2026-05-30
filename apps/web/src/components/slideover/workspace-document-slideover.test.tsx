@@ -1,5 +1,5 @@
-import { describe, it, expect, afterEach, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
@@ -117,6 +117,10 @@ function mockWorkspaceDoc(
 }
 
 describe('WorkspaceDocumentSlideover', () => {
+  // The resizable-width hook persists to localStorage (key folio:width:agent-config);
+  // clear between tests so a width set by one test can't leak into another.
+  beforeEach(() => localStorage.clear());
+
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
@@ -503,5 +507,43 @@ describe('WorkspaceDocumentSlideover', () => {
     // send the merged frontmatter object — but the diff'd keys must include
     // `enabled` and exclude anything else that didn't change.
     expect(patch.frontmatter!.builtin).toBe(true);
+  });
+
+  it('renders a resize handle and widening it grows the SheetContent width', async () => {
+    mockWorkspaceDoc('triage', 'agent');
+    const { queryClient, router } = setup('?doc=triage');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText('Triage Agent');
+
+    // Handle present (ResizeHandle: role=separator, aria-label "Resize panel"),
+    // and it lives INSIDE the SheetContent (the position:fixed Radix dialog
+    // content), so its absolute left-0 anchors to the slideover's left edge.
+    const handle = await screen.findByRole('separator', { name: /resize/i });
+    const content = handle.parentElement as HTMLElement;
+    expect(content.className).toContain('fixed');
+    expect(content.className).toContain('right-0');
+
+    // The default width (480) starts unpersisted; useResizableWidth only writes
+    // localStorage on pointerup. (jsdom's CSSOM silently drops the inline
+    // `width: min(…px, 100vw)` value, so the rendered style string can't be
+    // asserted — the localStorage write is the observable proof the drag
+    // flowed through the hook and changed the width.)
+    expect(localStorage.getItem('folio:width:agent-config')).toBeNull();
+
+    // Drag the left-edge handle LEFT (smaller clientX) → widens. Mirror the
+    // useResizableWidth test idiom: pointerdown on the handle, then dispatch
+    // move/up on window (jsdom routes MouseEvents to the pointer listeners).
+    fireEvent.pointerDown(handle, { clientX: 1000 });
+    fireEvent(window, new MouseEvent('pointermove', { clientX: 900 }));
+    fireEvent(window, new MouseEvent('pointerup'));
+
+    // 480 + (1000 - 900) = 580 — persisted on pointerup.
+    await waitFor(() =>
+      expect(localStorage.getItem('folio:width:agent-config')).toBe('580'),
+    );
   });
 });
