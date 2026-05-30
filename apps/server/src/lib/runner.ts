@@ -811,11 +811,11 @@ async function postResultAndComplete(
  * Post an agent-authored comment on the parent. `kind=result` for the final
  * answer; `kind=comment` for partial / cancel / budget messages.
  *
- * Note on run linkage: `createComment` does not accept a `run_id` input, so the
- * comment→run linkage is not stamped on the comment row here. The run remains
- * the source of truth for its own outcome; the comment is the human-facing
- * surface. (Wiring run_id into comment frontmatter would require a
- * createComment signature change, deferred to C-9/D.)
+ * Note on run linkage: this path deliberately omits `run_id`. The runner only
+ * authors `result` / `comment` kind comments, and run linkage on those isn't
+ * needed — the run is its own source of truth for its outcome. (`createComment`
+ * does accept a `run_id` input as of E-4b; that capability exists for the
+ * plan-comment path posted via the API, not this one.)
  */
 async function postAgentComment(
   ctx: RunContext,
