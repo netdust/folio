@@ -9,7 +9,9 @@ import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { debounce } from '../../lib/debounce.ts';
 import { SlashMenu } from './slash-menu.tsx';
+import { WikiMenu } from './wiki-menu.tsx';
 import { BodyToolbar } from './body-toolbar.tsx';
+import { matchWikiTrigger } from '../../lib/wiki-trigger.ts';
 import type { DocumentSummary } from '../../lib/api/documents.ts';
 import type { SlashContext } from '../../lib/slash-registry.ts';
 
@@ -48,6 +50,9 @@ function MilkdownEditor({
   useEffect(() => () => debouncedOnChange.cancel(), [debouncedOnChange]);
 
   const [slash, setSlash] = useState<SlashState>({ open: false, query: '', rect: { top: 0, left: 0 } });
+  // `[[` wiki-link trigger — independent of the `/` slash trigger (different
+  // chars, mutually exclusive in practice). Mirrors the slash machinery.
+  const [wiki, setWiki] = useState<SlashState>({ open: false, query: '', rect: { top: 0, left: 0 } });
 
   useEditor((root) =>
     Editor.make()
@@ -100,6 +105,14 @@ function MilkdownEditor({
           setSlash({ open: true, query: m[1] ?? '', rect: { top: rect.bottom + 4, left: rect.left } });
         } else {
           setSlash((s) => (s.open ? { ...s, open: false } : s));
+        }
+
+        const wikiQuery = matchWikiTrigger(beforeText);
+        if (wikiQuery !== null) {
+          const rect = range.getBoundingClientRect();
+          setWiki({ open: true, query: wikiQuery, rect: { top: rect.bottom + 4, left: rect.left } });
+        } else {
+          setWiki((w) => (w.open ? { ...w, open: false } : w));
         }
       };
 
@@ -164,6 +177,30 @@ function MilkdownEditor({
     },
   };
 
+  // Insert a `[[slug]]` wiki-link, replacing the `[[<query>` token at the
+  // caret. Mirrors slashCtx.insert's range logic but locates the `[[` opener
+  // instead of the last `/`.
+  const insertWikiLink = (slug: string) => {
+    const dom = getProseDOM();
+    if (!dom) return;
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    const range = sel.getRangeAt(0);
+    const node = range.startContainer;
+    if (node.nodeType === Node.TEXT_NODE) {
+      const txt = (node as Text).data;
+      const at = txt.lastIndexOf('[[', range.startOffset - 1);
+      if (at >= 0) {
+        const replaceRange = document.createRange();
+        replaceRange.setStart(node, at);
+        replaceRange.setEnd(node, range.startOffset);
+        replaceRange.deleteContents();
+        (node as Text).insertData(at, `[[${slug}]]`);
+      }
+    }
+    dom.dispatchEvent(new InputEvent('input', { bubbles: true }));
+  };
+
   return (
     <>
       <Milkdown />
@@ -173,6 +210,18 @@ function MilkdownEditor({
           query={slash.query}
           rect={slash.rect}
           onClose={() => setSlash((s) => ({ ...s, open: false }))}
+        />
+      ) : null}
+      {wiki.open ? (
+        <WikiMenu
+          documents={documentsRef.current}
+          query={wiki.query}
+          rect={wiki.rect}
+          onSelect={(slug) => {
+            insertWikiLink(slug);
+            setWiki((w) => ({ ...w, open: false }));
+          }}
+          onClose={() => setWiki((w) => ({ ...w, open: false }))}
         />
       ) : null}
     </>
