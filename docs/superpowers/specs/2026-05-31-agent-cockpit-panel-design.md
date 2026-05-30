@@ -49,10 +49,10 @@ The agent DOCUMENT (create/edit: system_prompt, model/provider, tools, project a
 - Cockpit panel: **fixed ~360px** (narrow, ambient, always the same width — no jumping).
 - Config slideover: **resizable, overlays the panel + spills left**, default ~480px, persists. The worktable's width is unchanged when config opens (the slideover floats over the panel + the center's right edge, it doesn't reflow the flex layout).
 
-## Open decisions for spec/plan review
-- **Dropdown "Agents"**: toggle the cockpit panel, OR keep a thin list page? (Lean: toggle the panel — one agent surface.)
-- **Panel persistence across navigation**: stays open as you move between projects/docs? (Lean: yes — it's ambient.)
-- **Mobile/narrow viewport**: below some width the panel becomes an overlay rather than pushing center? (Defer — desktop-first per the "keyboard-fast Linear-like" wedge.)
+## Resolved decisions
+- **Dropdown "Agents" TOGGLES the cockpit panel** (DECIDED 2026-05-31). One agent surface — no separate list page. The `/w/:wslug/agents` route + page is removed/retired; the agent list lives inside the panel. (Slideover-deep-links that used `?doc=` on the agents route must be re-pointed at the panel's slideover.)
+- **Panel persists across navigation** (lean: yes — ambient; open state lives at the `w.$wslug` layout level so it survives center-route changes).
+- **Mobile/narrow viewport**: defer — desktop-first per the "keyboard-fast Linear-like" wedge.
 
 ## Testing
 - `AgentCockpitPanel`: renders the icon-tab header + 3 screens; toggle open/close; Cmd-K opens on Run; rail tool opens on Activity.
