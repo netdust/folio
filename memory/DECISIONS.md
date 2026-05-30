@@ -155,3 +155,16 @@ Five sub-phases (A comments core, B MCP comment tools, C tabbed slideover + UI, 
 - **Bulk-export of agents/triggers + workspace-scoped `.md` export endpoint** — Phase 7 polish.
 - **Approval-comment PATCH `target_agent` recompute** — permanently deferred via the pinning test (see top of this section).
 - **`(activates in Phase 3)` banner on builtin-on-assignment / builtin-on-mention** — generic "Builtin" banner is what ships; the Phase-3-activation note is shake-out polish.
+
+## Phase 3 Sub-phase E — Web realtime: ship the SSE client (2026-05-30)
+
+- **The Phase-2.6 "SSE consumer" deferral is LIFTED in Sub-phase E.** Decision (Stefan, 2026-05-30): build the browser-side SSE client — option **A** (push), explicitly scoped to "**don't over-engineer**." Runs lifecycle, provider health, and reactor-halt banners update live; the comments-tab `// when SSE ships` TODO is resolved as a side effect.
+- **Why this is small, not infrastructure:** the server half is already complete and load-bearing for the reaction plane — `lib/event-bus.ts` (in-proc pub/sub), `routes/events.ts` (`streamSSE`, `Last-Event-Id` replay, `?project/?parent/?run/?agent/?table` filters, all AND-combined), `lib/agent-event-visibility.ts` (per-bearer gate). D-7 added `?agent=`(slug)/`?table=`(id) specifically for E. The only gap was a browser consumer. So A = "connect the one wire the server is already waving," not "build realtime."
+- **The minimal shape (anti-over-engineering guardrails):**
+  - ONE reusable hook (`apps/web/src/lib/api/event-stream.ts`, `useEventStream(path, { onEvent })` or similar). Native `EventSource`. No socket lib, no Redis, no client-side event store.
+  - **Auth = cookies, automatic.** The API client uses `credentials: 'include'` (cookie session); native `EventSource` sends same-origin cookies on its own. No token threading, no Authorization header (EventSource can't set one anyway). Same-origin relative paths (`/api/v1/w/:wslug/.../events?...`).
+  - **SSE invalidates react-query; it does NOT become a second source of truth.** On message → `queryClient.invalidateQueries(...)` (or a targeted setQueryData for the run row). react-query stays the cache/store; SSE is just the "something changed, refetch" signal. This keeps optimistic writes + existing hooks untouched and avoids a parallel state tree.
+  - Reconnect: rely on `EventSource`'s built-in auto-reconnect + `Last-Event-Id` (server already supports replay). Don't hand-roll backoff in v1.
+  - Clean up the `EventSource` on unmount (effect teardown). One connection per subscribing surface is fine for v1 volume; a shared/multiplexed singleton is a later optimization only if connection count becomes real.
+- **What we explicitly did NOT do:** option C (hybrid SSE-for-banners-only — two realtime models = more overhead than one), a websocket upgrade (SSE is sufficient and stays within "one binary, no sidecars"), document locking (still deferred — last-write-wins via `updated_at` holds), a global client event store / event-sourcing on the web side.
+- **Supersedes** the `[[realtime-and-locking-deferred]]` memory for the *consumer* half. Document locking remains deferred.
