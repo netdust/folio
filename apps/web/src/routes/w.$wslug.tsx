@@ -23,6 +23,8 @@ import { NewViewSheet } from '../components/views/new-view-sheet.tsx';
 import { openCommandPalette } from '../lib/command-palette-bus.ts';
 import { agentPanelBus } from '../lib/agent-panel-bus.ts';
 import { AgentSidePanel } from '../components/agent-panel/agent-side-panel.tsx';
+import { ProviderHealthBanner } from '../components/shell/provider-health-banner.tsx';
+import { ReactorHaltBanner } from '../components/shell/reactor-halt-banner.tsx';
 import { modKeyHint } from '../lib/platform.ts';
 import { buildRailTree, type RailTreeHandlers } from '../lib/rail-tree.ts';
 
@@ -345,7 +347,13 @@ function WorkspaceLayout() {
             }}
           />
         }
-        main={<Outlet />}
+        main={
+          <>
+            <ReactorHaltBanner wslug={wslug} />
+            <ProviderHealthBanner wslug={wslug} />
+            <Outlet />
+          </>
+        }
         panel={<AgentSidePanel wslug={wslug} />}
       />
       <WorkspaceCreate open={creatingWorkspace} onOpenChange={setCreatingWorkspace} />
