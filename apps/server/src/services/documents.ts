@@ -135,12 +135,28 @@ export async function listDocuments(
   // widened in Phase 2 to include agent + trigger, ?type=agent / ?type=trigger
   // silently degraded to "no type filter" and returned every doc on the
   // project. The set membership keeps the fix tight to the union members.
+  // C1 (Phase-3 shake-out): an EXPLICIT `type=agent_run` must be rejected at
+  // the source, not listed. agent_run rows are runner-owned and carry
+  // operator-sensitive frontmatter (system_prompt, provider, tokens); every
+  // other generic-document path (single GET, markdown, create, update, delete)
+  // already rejects them with AGENT_RUN_REQUIRES_RUNNER_PATH, but this list
+  // path treated `agent_run` as a queryable type — leaking system_prompt to any
+  // documents:read bearer. Reject here so the wall is complete regardless of
+  // caller (defense in depth; the route also early-rejects for a clean error).
+  // The runs UI reads runs via GET /api/v1/w/:wslug/p/:pslug/runs.
+  if ((opts.type as string) === 'agent_run') {
+    throw new HTTPError(
+      'AGENT_RUN_REQUIRES_RUNNER_PATH',
+      'agent_run documents are runner-owned; list via the /runs endpoints, not the generic document endpoint',
+      422,
+    );
+  }
+  // `agent_run` is intentionally absent: it is rejected above, never listed.
   const KNOWN_TYPES: ReadonlySet<DocumentType> = new Set([
     'work_item',
     'page',
     'agent',
     'trigger',
-    'agent_run',
   ]);
   if (opts.type && KNOWN_TYPES.has(opts.type as DocumentType)) {
     whereClauses.push(eq(documents.type, opts.type as DocumentType));

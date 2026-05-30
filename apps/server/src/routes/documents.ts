@@ -144,6 +144,19 @@ documentsRoute.get('/', async (c) => {
     );
   }
 
+  // C1 (Phase-3 shake-out): reject explicit `type=agent_run` early with a clean
+  // 422. agent_run rows are runner-owned (system_prompt/provider/tokens) and
+  // are read via the /runs endpoints, never enumerated through generic
+  // documents. listDocuments also rejects this (defense in depth) — this route
+  // guard mirrors the agent/trigger guard above so the error is consistent.
+  if (type === 'agent_run') {
+    throw new HTTPError(
+      'AGENT_RUN_REQUIRES_RUNNER_PATH',
+      'agent_run documents are runner-owned; list via the /runs endpoints, not the generic document endpoint',
+      422,
+    );
+  }
+
   if (limitRaw !== undefined) {
     const n = Number(limitRaw);
     if (!Number.isFinite(n) || !Number.isInteger(n) || n < 1) {
