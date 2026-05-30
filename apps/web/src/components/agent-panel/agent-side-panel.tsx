@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { agentPanelBus, type AgentPanelTab } from '../../lib/agent-panel-bus.ts';
 import { PanelHeader, type PanelTab } from './panel-header.tsx';
+import { AgentRunLauncher } from './agent-run-launcher.tsx';
 
 const TABS: PanelTab<AgentPanelTab>[] = [
   { value: 'run', icon: '▶', label: 'Run' },
@@ -33,7 +34,7 @@ export function AgentSidePanel({ wslug }: AgentSidePanelProps) {
         onClose={() => agentPanelBus.close()}
       />
       {tab === 'run' ? (
-        <div className="p-4 text-sm text-fg-3">Run launcher (E-5b) · {wslug}</div>
+        <AgentRunLauncher wslug={wslug} onLaunched={() => setTab('activity')} />
       ) : (
         <div className="p-4 text-sm text-fg-3">Activity feed (E-5c) · {wslug}</div>
       )}
