@@ -49,7 +49,23 @@ if (env.NODE_ENV !== 'test') {
   startRunnerPoller(db);
 }
 
+// F shake-out (F-4 live e2e): disable Bun's idle-connection reaper.
+//
+// Bun.serve applies a 10s idleTimeout to a plain `{ port, fetch }` export. An
+// SSE stream (routes/events.ts — the provider-health / reactor-halt banners +
+// runs live-sync) is idle between events, so Bun killed the socket at 10s,
+// 20s BEFORE the 30s keep-alive heartbeat could fire → a reconnect storm
+// (observed as `vite http proxy error: socket hang up` on /events). Bun's idle
+// timer is not reliably reset by the server's own heartbeat writes (which is
+// why Bun's SSE guidance is to DISABLE the timeout, not raise it), and
+// Hono-on-Bun can't reach the per-request `server.timeout(req, 0)`. So we
+// disable it globally here — which is also Bun's own post-1.1.27 default and
+// the correct policy for an app whose core surfaces are long-lived streams.
+// (No `satisfies` type: @types/bun's serve-options type isn't cleanly named
+// across versions; `index.test.ts` pins `idleTimeout === 0` at runtime, which
+// is the guard that matters. Bun reads these keys off the default export.)
 export default {
   port: env.PORT,
+  idleTimeout: 0,
   fetch: app.fetch,
 };
