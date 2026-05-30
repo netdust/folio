@@ -348,11 +348,17 @@ function WorkspaceLayout() {
           />
         }
         main={
-          <>
+          // flex column so a visible banner reserves its own height (shrink-0)
+          // and the Outlet page fills the rest (flex-1 min-h-0) instead of an
+          // h-full page overflowing the viewport beneath the banner. Banners
+          // are null in the healthy case → this collapses to just the Outlet.
+          <div className="flex h-full min-h-0 flex-col">
             <ReactorHaltBanner wslug={wslug} />
             <ProviderHealthBanner wslug={wslug} />
-            <Outlet />
-          </>
+            <div className="min-h-0 flex-1">
+              <Outlet />
+            </div>
+          </div>
         }
         panel={<AgentSidePanel wslug={wslug} />}
       />
