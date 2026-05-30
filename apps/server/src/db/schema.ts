@@ -399,10 +399,12 @@ export const events = sqliteTable(
  *
  * The durable event dispatcher polls `events` by `seq` and fans each event out
  * to registered reactors. Each reactor's cursor (`last_seq`) advances ONLY on
- * a successful `react()` (cursor-after / at-least-once). On first registration
- * the cursor is seeded at MAX(seq) so reactors start "from now" and never
- * replay history. Cursor-lag (`MAX(seq) − last_seq`) is the durable truth for
- * reactor health (spec §4b).
+ * a successful `react()` (cursor-after / at-least-once). The cursor is seeded
+ * at MAX(seq) EAGERLY at server boot (seedReactorCursors, before traffic) so
+ * reactors start "from now", never replay history, AND don't race startup
+ * writes (the F-4/F-6 fix — lazy seeding raced events written during boot).
+ * Cursor-lag (`MAX(seq) − last_seq`) is the durable truth for reactor health
+ * (spec §4b).
  */
 export const reactorCursors = sqliteTable('reactor_cursors', {
   reactorId: text('reactor_id').primaryKey(),

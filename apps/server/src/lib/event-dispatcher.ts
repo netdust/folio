@@ -14,8 +14,9 @@
  *    unchanged → the same event is retried next tick) and is NEVER allowed to
  *    roll back the originating write (mitigation 49). Other reactors are
  *    unaffected.
- *  - On first registration the cursor seeds at MAX(seq) so a reactor starts
- *    "from now" and never replays history.
+ *  - The cursor seeds at MAX(seq) EAGERLY at boot (seedReactorCursors, before
+ *    traffic) so a reactor starts "from now", never replays history, and
+ *    doesn't race startup writes (F-4/F-6).
  *  - Events whose kind the reactor doesn't subscribe to still advance the
  *    cursor (seen-and-skipped) so a narrow reactor never lags forever.
  *
