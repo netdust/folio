@@ -1,16 +1,6 @@
 import type { AgentRunDoc } from '../../lib/api/runs.ts';
+import { relativeTime } from '../../lib/relative-time.ts';
 import { RunStatusChip } from './run-status-chip.tsx';
-
-function relativeTime(iso: string): string {
-  const ms = Date.parse(iso);
-  if (Number.isNaN(ms)) return '';
-  const m = Math.floor((Date.now() - ms) / 60_000);
-  if (m < 1) return 'just now';
-  if (m < 60) return `${m}m`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h`;
-  return `${Math.floor(h / 24)}d`;
-}
 
 interface RunRowProps {
   run: AgentRunDoc;
