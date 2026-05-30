@@ -316,7 +316,7 @@ export function ApprovalButtons({
     return (
       <p className="text-xs text-fg-3 mt-1 flex items-center gap-1.5">
         <RunStatusChip status={run.status ?? 'unknown'} />
-        <span>run {run.status}</span>
+        <span>— approval no longer needed</span>
       </p>
     );
   }

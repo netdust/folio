@@ -440,7 +440,7 @@ describe('ApprovalButtons', () => {
     stubRunFetch('running');
     renderButtons({ planComment: planWithRun });
     await waitFor(() => {
-      expect(screen.getByText(/run running/i)).toBeInTheDocument();
+      expect(screen.getByText(/approval no longer needed/i)).toBeInTheDocument();
     });
     expect(screen.queryByRole('button', { name: /approve/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /reject/i })).not.toBeInTheDocument();
