@@ -69,6 +69,21 @@ describe('useProviderHealth', () => {
   test('key factory is workspace-scoped', () => {
     expect(providerHealthKeys.detail('acme')).toEqual(['provider-health', 'acme']);
   });
+  test('refetches on workspace.provider.degraded SSE event (invalidation)', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { result } = renderHook(() => useProviderHealth('acme'), { wrapper: wrapperOf(qc) });
+    await waitFor(() => expect(result.current.data).toBeDefined());
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    const callsBefore = fetchMock.mock.calls.length;
+    const es = MockEventSource.instances[0]!;
+    act(() =>
+      es.emit(
+        'workspace.provider.degraded',
+        JSON.stringify({ kind: 'workspace.provider.degraded', payload: {} }),
+      ),
+    );
+    await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThan(callsBefore));
+  });
 });
 
 describe('useReactorHealth', () => {

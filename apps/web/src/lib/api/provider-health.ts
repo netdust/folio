@@ -79,6 +79,13 @@ export function useReactorHealth(wslug: string): ReactorHealth {
     queryFn: () => REACTOR_INITIAL,
     initialData: REACTOR_INITIAL,
     staleTime: Number.POSITIVE_INFINITY,
+    // `reactor.halted` is a live-only system event with NO SSE replay. If the
+    // cache entry is garbage-collected on unmount (default gcTime 5m), a fresh
+    // mount re-runs the seeding queryFn → halted:false, and a banner mounted
+    // AFTER a halt began would wrongly read healthy until the next recovery
+    // event. Keep the last-seen reactor state forever so unmount/remount cannot
+    // GC-reset it back to the not-halted default.
+    gcTime: Number.POSITIVE_INFINITY,
     enabled: !!wslug,
   });
   useEventStream(wslug, { kinds: [...REACTOR_KINDS] }, (event) => {
