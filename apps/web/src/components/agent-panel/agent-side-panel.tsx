@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { agentPanelBus, type AgentPanelTab } from '../../lib/agent-panel-bus.ts';
 import { PanelHeader, type PanelTab } from './panel-header.tsx';
 import { AgentRunLauncher } from './agent-run-launcher.tsx';
+import { ActivityFeedScreen } from './activity-feed-screen.tsx';
 
 const TABS: PanelTab<AgentPanelTab>[] = [
   { value: 'run', icon: '▶', label: 'Run' },
@@ -36,7 +37,7 @@ export function AgentSidePanel({ wslug }: AgentSidePanelProps) {
       {tab === 'run' ? (
         <AgentRunLauncher wslug={wslug} onLaunched={() => setTab('activity')} />
       ) : (
-        <div className="p-4 text-sm text-fg-3">Activity feed (E-5c) · {wslug}</div>
+        <ActivityFeedScreen wslug={wslug} />
       )}
     </div>
   );

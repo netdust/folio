@@ -43,7 +43,7 @@ interface Props {
 
 export function WorkspaceDocumentSlideover({ wslug }: Props) {
   const navigate = useNavigate();
-  const search = useSearch({ strict: false }) as { doc?: string };
+  const search = useSearch({ strict: false }) as { doc?: string; tab?: WorkspaceDocTabValue };
   const open = !!search.doc;
   const slug = search.doc ?? null;
   const { data: doc, isLoading, error } = useWorkspaceDocument(wslug, slug);
@@ -140,7 +140,7 @@ export function WorkspaceDocumentSlideover({ wslug }: Props) {
           </div>
         </SheetHeader>
         <div className="flex-1 min-h-0 overflow-hidden px-6 py-4">
-          {slug ? <SlideoverBody wslug={wslug} slug={slug} mode={mode} /> : null}
+          {slug ? <SlideoverBody wslug={wslug} slug={slug} mode={mode} searchTab={search.tab} /> : null}
         </div>
       </SheetContent>
       <Dialog
@@ -193,21 +193,24 @@ function SlideoverBody({
   wslug,
   slug,
   mode,
+  searchTab,
 }: {
   wslug: string;
   slug: string;
   mode: EditorMode;
+  searchTab?: WorkspaceDocTabValue;
 }) {
   const { data: doc, isLoading, error } = useWorkspaceDocument(wslug, slug);
   const update = useUpdateWorkspaceDocument(wslug);
   const [pendingKeys, setPendingKeys] = useState<Set<string>>(new Set());
 
-  // Tab state — per-slideover-open. Defaults to Fields on each fresh open
-  // and resets to Fields whenever the user navigates to a different doc.
-  const [tab, setTab] = useState<WorkspaceDocTabValue>('fields');
+  // Tab state — per-slideover-open. Defaults to Fields on each fresh open and
+  // resets whenever the user navigates to a different doc. A ?tab= deep-link
+  // (e.g. the activity feed opening an agent's Runs tab) wins over that default.
+  const [tab, setTab] = useState<WorkspaceDocTabValue>(searchTab ?? 'fields');
   useEffect(() => {
-    setTab('fields');
-  }, [doc?.id]);
+    setTab(searchTab ?? 'fields');
+  }, [doc?.id, searchTab]);
 
   if (isLoading) return <div className="text-fg-3">Loading document…</div>;
   if (error || !doc) return <div className="text-danger">Failed to load document.</div>;

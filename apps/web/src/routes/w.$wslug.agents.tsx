@@ -6,6 +6,7 @@ export const Route = createFileRoute('/w/$wslug/agents')({
   validateSearch: z.object({
     doc: z.string().optional(),
     project: z.string().optional(),
+    tab: z.enum(['fields', 'activity', 'runs']).optional(),
   }),
   component: AgentsRoute,
 });
