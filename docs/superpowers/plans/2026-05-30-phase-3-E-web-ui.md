@@ -25,7 +25,7 @@ The mega-plan outline (`2026-05-27-phase-3-agent-runner.md` §"Sub-phase E") dri
 | `?table=` filter | (unspecified) | `?table=<tableId>` — matches `payload.table_id` (events.ts:170). |
 | SSE filters combine | (unspecified) | AND-combined. `?project ?kinds ?parent ?run ?agent ?table`. |
 | SSE message shape | (unspecified) | `{ id: <nanoid>, event: <kind>, data: JSON.stringify({id,workspaceId,projectId,documentId,kind,actor,payload,createdAt}) }`. Heartbeat `event: 'ping'` every 30s. `id` drives `Last-Event-Id` replay. |
-| List runs response | `{data: AgentRun[]}` | `jsonOk(c, rows)` = **bare array**. The client unwraps `{data}` only when it's the sole key; a bare array passes straight through. |
+| List runs response | `{data: AgentRun[]}` | `jsonOk(c, rows)` envelopes as **`{ data: [...] }`** (verified `lib/http.ts:15` → `c.json({ data })`). The client unwraps the single `data` key → `useRuns` returns the array. (An earlier draft called this a "bare array" — WRONG; the wire format is enveloped. Test mocks MUST return `{ data: [...] }`, corrected at E-2 review `6858ba7`.) |
 | List runs path | (unspecified) | `GET /api/v1/w/:wslug/p/:pslug/runs?status=&agent=&since=` (project-scoped). |
 | Single run path | (unspecified) | `GET /api/v1/w/:wslug/runs/:runId` (workspace-scoped). |
 | Create run | `POST /runs` | `POST /api/v1/w/:wslug/runs` body `{agent_slug, parent_slug, input?}` → `{run_id, status:'planning'}` (201). |
