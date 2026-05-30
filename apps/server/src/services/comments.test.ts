@@ -174,6 +174,26 @@ test('createComment happy path: returns a Document with type=comment + c- slug +
   expect(Array.isArray(fm.mentions)).toBe(true);
 });
 
+test('createComment threads run_id into plan-comment frontmatter', async () => {
+  const { db, seed } = await makeTestApp();
+  const table = await getWorkItemsTable(db, seed.project.id);
+  const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+
+  const comment = await createComment({
+    workspace: seed.workspace,
+    project: seed.project,
+    parent,
+    authorContext: userContext(seed.user),
+    actor: seed.user.id,
+    body: 'Here is my plan',
+    kind: 'plan',
+    // a nanoid-style run id (NOT a uuid) — proves the schema relaxation.
+    run_id: 'run_abc123',
+  });
+
+  expect((comment.frontmatter as Record<string, unknown>).run_id).toBe('run_abc123');
+});
+
 test('createComment persists the row to the documents table', async () => {
   const { db, seed } = await makeTestApp();
   const table = await getWorkItemsTable(db, seed.project.id);

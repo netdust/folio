@@ -53,7 +53,8 @@ export const commentFrontmatterSchema = z
     // gating as `target_agent`. Mirrors the F11/S2 immutable-handle pattern
     // already established for `author` and `payload.agent_id`.
     target_agent_id: z.string().min(1).max(200).optional(),
-    run_id: z.string().uuid().optional(),
+    // run ids are nanoid, not UUID (matches the resume_of fix in C-9).
+    run_id: z.string().min(1).optional(),
     deleted_at: z.string().datetime().optional(),
   })
   .strict()

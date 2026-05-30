@@ -80,6 +80,21 @@ test('POST /documents/:parent/comments creates a comment (session)', async () =>
   expect(j.data.frontmatter.visibility).toBe('normal');
 });
 
+test('POST threads run_id into a plan comment (E-4b)', async () => {
+  const { app, seed } = await makeTestApp();
+  const parent = await createParent(app, seed.sessionCookie, 'Parent run_id');
+  const res = await app.request(parentPath(parent), {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    // run_id is a nanoid-style id (NOT a uuid) — proves the schema relaxation.
+    body: JSON.stringify({ body: 'Here is my plan', kind: 'plan', run_id: 'run_abc123' }),
+  });
+  expect(res.status).toBe(201);
+  const j = await res.json();
+  expect(j.data.frontmatter.kind).toBe('plan');
+  expect(j.data.frontmatter.run_id).toBe('run_abc123');
+});
+
 // -----------------------------------------------------------------------------
 // 2. POST 422 INVALID_BODY — Zod shape rejection
 // -----------------------------------------------------------------------------
