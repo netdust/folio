@@ -80,4 +80,28 @@ describe('useEventStream', () => {
     renderHook(() => useEventStream('', { kinds: ['agent.run.running'] }, vi.fn()));
     expect(MockEventSource.instances).toHaveLength(0);
   });
+
+  test('re-subscribes (tears down old, opens new) when the kinds filter changes', () => {
+    const { rerender } = renderHook(
+      ({ kinds }) => useEventStream('acme', { kinds }, vi.fn()),
+      { initialProps: { kinds: ['agent.run.running'] } },
+    );
+    expect(MockEventSource.instances).toHaveLength(1);
+    const first = MockEventSource.instances[0]!;
+
+    act(() => rerender({ kinds: ['agent.run.completed'] }));
+
+    expect(first.closed).toBe(true);
+    expect(MockEventSource.instances).toHaveLength(2);
+    const second = MockEventSource.instances[1]!;
+    expect(second.url).toContain('kinds=agent.run.completed');
+  });
+
+  test('swallows malformed JSON without throwing or calling onEvent', () => {
+    const onEvent = vi.fn<(e: StreamedEvent) => void>();
+    renderHook(() => useEventStream('acme', { kinds: ['agent.run.running'] }, onEvent));
+    const es = MockEventSource.instances[0]!;
+    act(() => es.emit('agent.run.running', '{not json'));
+    expect(onEvent).not.toHaveBeenCalled();
+  });
 });
