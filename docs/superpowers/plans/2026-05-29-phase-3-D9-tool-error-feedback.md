@@ -8,7 +8,7 @@
 
 **Tech Stack:** Bun, the existing `runLoop` generator-driven loop on `provider.stream()`, `executeTool`, `agent-run-schema.ts` enum.
 
-**Status:** PLAN ONLY — written 2026-05-29, awaiting Stefan's approval before any code. Supersedes the D-9 stub in `2026-05-29-phase-3-D-routes-mcp-real-tools.md`. Originating follow-up: C.2-R-2.
+**Status:** ✅ SHIPPED 2026-05-30. Approved as-written (both invalid-args + handler-throws feed back; `MAX_CONSECUTIVE_TOOL_ERRORS=3` hardcoded). D-9.1 `695330c` (enum), D-9.2 `b8e6886` (loop change + `safeToolErrorMessage` refinement). Two-stage reviewed; suite 950→960/1skip/0fail. Supersedes the D-9 stub in `2026-05-29-phase-3-D-routes-mcp-real-tools.md`. Originating follow-up: C.2-R-2 (now RESOLVED).
 
 ---
 
