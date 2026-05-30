@@ -1,5 +1,13 @@
 import { test, expect } from 'bun:test';
-import { filterCompile, FilterCompileError } from './filter-compile.ts';
+import { filterCompile, FilterCompileError, type FilterAST } from './filter-compile.ts';
+
+// filterCompile ALWAYS returns the top-level `and` node (see filter-compile.ts).
+// Narrow the FilterAST union to that variant so tests can read `.clauses`
+// without TS flagging the `cmp` arm (which has no clauses).
+function asAnd(ast: FilterAST): Extract<FilterAST, { kind: 'and' }> {
+  if (ast.kind !== 'and') throw new Error(`expected top-level 'and' node, got '${ast.kind}'`);
+  return ast;
+}
 
 test('scalar shorthand becomes $eq', () => {
   const ast = filterCompile({ status: 'todo' });
@@ -11,19 +19,19 @@ test('scalar shorthand becomes $eq', () => {
 
 test('$in operator', () => {
   const ast = filterCompile({ status: { $in: ['todo', 'done'] } });
-  expect(ast.clauses[0]).toEqual({
+  expect(asAnd(ast).clauses[0]).toEqual({
     kind: 'cmp', key: 'status', op: '$in', value: ['todo', 'done'],
   });
 });
 
 test('multiple keys are AND-combined', () => {
   const ast = filterCompile({ status: 'todo', type: 'work_item' });
-  expect(ast.clauses).toHaveLength(2);
+  expect(asAnd(ast).clauses).toHaveLength(2);
 });
 
 test('$exists boolean', () => {
   const ast = filterCompile({ priority: { $exists: true } });
-  expect(ast.clauses[0]).toEqual({
+  expect(asAnd(ast).clauses[0]).toEqual({
     kind: 'cmp', key: 'priority', op: '$exists', value: true,
   });
 });
@@ -31,7 +39,7 @@ test('$exists boolean', () => {
 test('comparators $gt $gte $lt $lte $ne', () => {
   for (const op of ['$gt', '$gte', '$lt', '$lte', '$ne'] as const) {
     const ast = filterCompile({ count: { [op]: 5 } });
-    expect(ast.clauses[0]).toEqual({ kind: 'cmp', key: 'count', op, value: 5 });
+    expect(asAnd(ast).clauses[0]).toEqual({ kind: 'cmp', key: 'count', op, value: 5 });
   }
 });
 

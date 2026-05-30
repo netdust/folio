@@ -1,4 +1,6 @@
 {
+  "// note": "Base config only — each workspace (apps/server, apps/web, packages/shared) has its own tsconfig that `extends` this and sets its own `types` + `include`. The empty `include` makes a bare `tsc` at repo root a no-op so it does NOT glob the whole monorepo without per-workspace types (which produced ~194 phantom bun:test / testing-library errors). Type-check per workspace, never from repo root.",
+  "include": [],
   "compilerOptions": {
     "target": "ES2022",
     "module": "ESNext",
