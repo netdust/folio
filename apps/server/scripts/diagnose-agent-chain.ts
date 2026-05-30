@@ -10,26 +10,39 @@
  *   UI assign
  *     → PATCH frontmatter.assignee='agent:<slug>' (services/documents updateDocument)
  *     → emits `agent.task.assigned` event
- *     → dispatcher (runDispatcherOnce(db, REACTORS)) fans it to the trigger-matcher reactor
+ *     → dispatcher fans it to the trigger-matcher reactor
  *     → matcher creates a `planning` agent_run row
- *     → poller (runPollerOnce(db, deps)) claims it
+ *     → poller claims it
  *     → runner (runAgent) calls Anthropic → posts a `kind=result` comment on the parent.
  *
- * This reuses the C-13 wiring smoke's setup (workspace + project + agent +
- * work_item, real runDispatcherOnce + runPollerOnce — the same functions
- * index.ts wires) with TWO differences:
- *   1. Assign via the REAL `updateDocument` service (the UI path that must emit
- *      `agent.task.assigned`), not a direct emitEvent.
- *   2. Use the REAL `runAgent` in the poller deps (the actual billed Anthropic
- *      call happens), not the smoke's stub.
+ * TWO MODES:
  *
- * It does NOT start the index.ts pollers — it drives runDispatcherOnce +
- * runPollerOnce manually so each boundary is observable in isolation.
+ *   DEFAULT (manual ticks) — drives the chain with explicit
+ *     `runDispatcherOnce(db, REACTORS)` + `runPollerOnce(db, deps)` calls so each
+ *     boundary is observable in isolation. PROVES the product chain works.
+ *     This reuses the C-13 wiring smoke's setup with TWO differences:
+ *       1. Assign via the REAL `updateDocument` service (the UI's PATCH path that
+ *          must emit `agent.task.assigned`), not a direct emitEvent.
+ *       2. Use the REAL `runAgent` in the poller deps (the actual billed
+ *          Anthropic call happens), not the smoke's stub.
+ *
+ *   --loop (REAL interval loops) — instead of manual ticks, starts the REAL
+ *     `setInterval` dispatcher + poller EXACTLY as index.ts boot does
+ *     (`startEventDispatcher(db)` + `startRunnerPoller(db)`), THEN assigns, then
+ *     polls for ~90s (the e2e's timeout) for a result comment. This is the
+ *     mechanism the failing Playwright e2e relies on. The decisive question:
+ *     **do the real interval loops process an assignment emitted AFTER they
+ *     start?** If --loop produces a result comment → loops + product are fine and
+ *     the e2e failure is Playwright-harness-specific (selector/timing/proxy). If
+ *     --loop stalls (0 comments) → we've reproduced the e2e bug headlessly and
+ *     isolated it to the loop wiring (cursor seed / boot order / --hot reload).
  *
  * RUN (real billed Haiku call — the USER runs this, not CI):
+ *   # manual-tick mode (default):
  *   FOLIO_TEST_ANTHROPIC_KEY=sk-ant-... bun run apps/server/scripts/diagnose-agent-chain.ts
- *   # or drop the key in ./key (relative to apps/server) and just:
- *   bun run apps/server/scripts/diagnose-agent-chain.ts
+ *   # real-interval-loop mode (reproduces the e2e mechanism):
+ *   FOLIO_TEST_ANTHROPIC_KEY=sk-ant-... bun run apps/server/scripts/diagnose-agent-chain.ts --loop
+ *   # or drop the key in ./key (relative to apps/server) and omit FOLIO_TEST_ANTHROPIC_KEY.
  */
 
 // ---------------------------------------------------------------------------
@@ -42,10 +55,18 @@ import { Database } from 'bun:sqlite';
 import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { resolve as pathResolve } from 'node:path';
 
+// Mode selection: --loop drives the REAL setInterval dispatcher+poller loops
+// (the mechanism the failing e2e relies on); default drives manual ticks.
+const LOOP_MODE = process.argv.includes('--loop');
+
 // Resolve paths relative to THIS file so it works from repo root or apps/server.
 const SERVER_ROOT = pathResolve(import.meta.dir, '..');
 const KEY_FILE = pathResolve(SERVER_ROOT, 'key');
-const DB_FILE = pathResolve(SERVER_ROOT, 'diag-agent-chain.db');
+// Isolated DB per mode so a loop run never collides with a manual run's file.
+const DB_FILE = pathResolve(
+  SERVER_ROOT,
+  LOOP_MODE ? 'diag-agent-chain-loop.db' : 'diag-agent-chain.db',
+);
 const MIGRATIONS_DIR = pathResolve(SERVER_ROOT, 'src/db/migrations');
 
 // --- Anthropic key: env first, then ./key file. Hard-fail if absent. ---
@@ -115,9 +136,11 @@ async function main(): Promise<void> {
   const { seedBuiltinTriggers } = await import('../src/lib/builtin-triggers.ts');
   const { seedProjectDefaults } = await import('../src/lib/seed-project-defaults.ts');
   const { encryptSecret } = await import('../src/lib/crypto.ts');
-  const { runDispatcherOnce } = await import('../src/lib/event-dispatcher.ts');
+  const { runDispatcherOnce, startEventDispatcher } = await import(
+    '../src/lib/event-dispatcher.ts'
+  );
   const { REACTORS } = await import('../src/lib/reactors.ts');
-  const { runPollerOnce } = await import('../src/lib/poller.ts');
+  const { runPollerOnce, startRunnerPoller } = await import('../src/lib/poller.ts');
   const { runAgent, runAgentResume } = await import('../src/lib/runner.ts');
   const { updateDocument } = await import('../src/services/documents.ts');
   const { documents, apiTokens, events, tables, aiKeys } = schema;
@@ -246,6 +269,165 @@ async function main(): Promise<void> {
   const markBreak = (label: string) => {
     if (!firstBreak) firstBreak = label;
   };
+
+  // Shared B1 — assign via the REAL updateDocument (the UI's PATCH path that
+  // must emit agent.task.assigned). Used by both modes.
+  const assignWorkItemToAgent = async (): Promise<void> => {
+    const [ws] = await db.select().from(schema.workspaces).where(eq(schema.workspaces.id, workspaceId));
+    const [proj] = await db.select().from(schema.projects).where(eq(schema.projects.id, projectId));
+    const [actorUser] = await db.select().from(schema.users).where(eq(schema.users.id, userId));
+    const existing = await db.query.documents.findFirst({ where: eq(documents.id, workItemId) });
+    if (!ws || !proj || !actorUser || !existing) throw new Error('B1: setup rows missing for updateDocument');
+    await updateDocument({
+      workspace: ws,
+      project: proj,
+      fallbackTable: null,
+      actor: actorUser,
+      existing,
+      patch: { frontmatter: { assignee: `agent:${AGENT_SLUG}` } },
+    });
+  };
+
+  // ===========================================================================
+  // --loop MODE — drive the chain with the REAL setInterval loops (the exact
+  // mechanism the failing Playwright e2e relies on), then poll ~90s for a
+  // result comment. Mirrors index.ts boot order: loops start FIRST (seeding
+  // their cursors at MAX(seq)), THEN the assignment arrives as live traffic.
+  // ===========================================================================
+  if (LOOP_MODE) {
+    let stopDispatcher: (() => void) | null = null;
+    let stopPoller: (() => void) | null = null;
+
+    // Clean shutdown helper — setInterval handles MUST be cleared or the
+    // process never exits.
+    const stopLoops = () => {
+      try {
+        stopDispatcher?.();
+      } catch {
+        /* ignore */
+      }
+      try {
+        stopPoller?.();
+      } catch {
+        /* ignore */
+      }
+    };
+
+    try {
+      // STEP 2 — start the REAL loops exactly as index.ts does (db-only args;
+      // they read FOLIO_DISPATCHER_INTERVAL_MS / FOLIO_POLLER_INTERVAL_MS and
+      // wire the real runAgent internally). Capture the stop fns.
+      stopDispatcher = startEventDispatcher(db);
+      stopPoller = startRunnerPoller(db);
+
+      // STEP 3 — wait briefly so the dispatcher does its FIRST tick and seeds
+      // its per-reactor cursor at MAX(seq) BEFORE any assignment exists. This
+      // mirrors production: loops boot, THEN traffic arrives.
+      await new Promise((r) => setTimeout(r, 1_500));
+      console.log('[loop] dispatcher+poller started, cursor seeded');
+
+      // STEP 4 — NOW assign (live traffic emitted AFTER the loops are running).
+      await assignWorkItemToAgent();
+      const reread = await db.query.documents.findFirst({ where: eq(documents.id, workItemId) });
+      const persisted = (reread?.frontmatter as Record<string, unknown> | undefined)?.assignee;
+      console.log(`[B1] assignee persisted = ${truncate(persisted)}`);
+      if (persisted !== `agent:${AGENT_SLUG}`) markBreak('B1');
+
+      const evRows = await db
+        .select()
+        .from(events)
+        .where(and(eq(events.documentId, workItemId), eq(events.kind, 'agent.task.assigned')));
+      console.log(`[B2] agent.task.assigned emitted = ${evRows.length} payload=${truncate(evRows[0]?.payload)}`);
+      if (evRows.length === 0) markBreak('B2');
+
+      // STEP 5 — poll up to ~90s (the e2e timeout). Every 2s re-query the run
+      // row + the parent's comments. Stop early on a result comment OR a
+      // terminal run state. NO manual runDispatcherOnce/runPollerOnce — the
+      // real setInterval loops must do ALL the work.
+      const TERMINAL = new Set(['completed', 'failed', 'cancelled', 'rejected']);
+      const POLL_MS = 2_000;
+      const TIMEOUT_MS = 90_000;
+      const startedAt = Date.now();
+      let sawResultComment = false;
+      let lastRunStatus: string | null | undefined;
+
+      while (Date.now() - startedAt < TIMEOUT_MS) {
+        await new Promise((r) => setTimeout(r, POLL_MS));
+        const elapsedS = Math.round((Date.now() - startedAt) / 1_000);
+
+        const runRow = await db.query.documents.findFirst({
+          where: and(eq(documents.type, 'agent_run'), eq(documents.parentId, workItemId)),
+        });
+        lastRunStatus = runRow?.status;
+
+        const commentRows = await db.query.documents.findMany({
+          where: and(eq(documents.type, 'comment'), eq(documents.parentId, workItemId)),
+        });
+        sawResultComment = commentRows.some(
+          (c) => (c.frontmatter as Record<string, unknown>)?.kind === 'result',
+        );
+
+        console.log(
+          `[wait ${elapsedS}s] run status=${runRow?.status ?? '<none>'} comments=${commentRows.length}`,
+        );
+
+        if (sawResultComment) break;
+        if (runRow && TERMINAL.has(String(runRow.status))) {
+          // Terminal but no result comment yet — one more poll picks up a
+          // late comment write; otherwise the next iteration's check ends it.
+          if (runRow.status === 'completed') {
+            await new Promise((r) => setTimeout(r, POLL_MS));
+            const recheck = await db.query.documents.findMany({
+              where: and(eq(documents.type, 'comment'), eq(documents.parentId, workItemId)),
+            });
+            sawResultComment = recheck.some(
+              (c) => (c.frontmatter as Record<string, unknown>)?.kind === 'result',
+            );
+          }
+          break;
+        }
+      }
+
+      // STEP 6 — final boundary snapshot + VERDICT.
+      const finalRun = await db.query.documents.findFirst({
+        where: and(eq(documents.type, 'agent_run'), eq(documents.parentId, workItemId)),
+      });
+      const fm = (finalRun?.frontmatter ?? {}) as Record<string, unknown>;
+      console.log(`[B3] planning/run row = ${finalRun ? 1 : 0} status=${truncate(finalRun?.status)}`);
+      console.log(
+        `[B4] run status = ${finalRun?.status} error_reason=${truncate(fm.error_reason)} error_detail=${truncate(fm.error_detail)}`,
+      );
+
+      const finalComments = await db.query.documents.findMany({
+        where: and(eq(documents.type, 'comment'), eq(documents.parentId, workItemId)),
+      });
+      const kinds = finalComments.map((c) => (c.frontmatter as Record<string, unknown>)?.kind);
+      console.log(`[B5] comments on parent = ${finalComments.length} kinds=${truncate(kinds)}`);
+      const resultComment = finalComments.find(
+        (c) => (c.frontmatter as Record<string, unknown>)?.kind === 'result',
+      );
+      if (resultComment) console.log(`[B5] result comment body = ${truncate(resultComment.body)}`);
+
+      console.log('');
+      if (resultComment) {
+        console.log(
+          'VERDICT: LOOPS WORK — the REAL setInterval dispatcher+poller processed an assignment emitted AFTER they started and produced a kind=result comment. The product chain + loop wiring are fine. The Sub-phase D e2e failure is Playwright-harness-specific (selector / timing / proxy / dev-vs-built server) — fix the SPEC, not the loops.',
+        );
+      } else {
+        console.log(
+          `VERDICT: LOOPS STALLED — E2E REPRODUCED HEADLESSLY. After ${Math.round((Date.now() - startedAt) / 1_000)}s the real interval loops produced NO kind=result comment (last run status=${lastRunStatus ?? '<no run row>'}). The assignment was emitted AFTER the loops started, so this isolates the failure to the loop wiring: the dispatcher seeded its cursor at MAX(seq) on boot and the assignment seq is at/below it (boot-order / cursor-seed bug), OR the poller never claimed the run, OR --hot reload restarted the loops mid-run. This is a REAL product/ops bug, not a Playwright artifact.`,
+        );
+      }
+    } catch (err) {
+      console.error('[loop] FATAL during loop-mode driving:', err);
+    } finally {
+      // STEP 7 — clear the setInterval handles so the process can exit, then
+      // close the DB. Without this the loops keep the event loop alive forever.
+      stopLoops();
+      sqlite.close();
+    }
+    return;
+  }
 
   // -------------------------------------------------------------------------
   // PRIME THE DISPATCHER (production boot order). A reactor's cursor seeds at
