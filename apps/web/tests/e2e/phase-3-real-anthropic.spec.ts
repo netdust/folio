@@ -98,18 +98,23 @@ test('configure Anthropic key in UI, assign agent, run posts a kind=result comme
   // still showed "No agents yet", so the click hit nothing, NO assignment
   // PATCH fired, and the run never started (root cause of the F-4 e2e
   // timeout; the product chain itself is proven by scripts/diagnose-agent-
-  // chain.ts --loop). Each agent renders as a <button> with the title +
-  // `agent:<slug>`; wait for that button (Playwright auto-waits) then click it.
-  const agentOption = page.getByRole('button', { name: /Reply Drafter/ });
+  // chain.ts --loop). The popover OPTION button's accessible name is the title
+  // + the slug line, i.e. "Reply Drafter agent:reply-…"; wait for it (Playwright
+  // auto-waits the agents query) then click. (The bare trigger still reads
+  // "Unassigned" at this point, so this name is unambiguous to the option.)
+  const agentOption = page.getByRole('button', { name: /Reply Drafter agent:/ });
   await agentOption.waitFor({ state: 'visible', timeout: 10_000 });
   await agentOption.click();
+  // Close the popover so its option button stops shadowing the trigger.
+  await page.keyboard.press('Escape');
 
   // Fail fast + prove the PATCH landed: the trigger relabels Unassigned →
-  // Reply Drafter. (Without this, a silently-missed assignment only surfaced
-  // 90s later as "0 comments".)
-  await expect(dialog.getByRole('button', { name: /Reply Drafter/ })).toBeVisible({
-    timeout: 10_000,
-  });
+  // Reply Drafter. Use an EXACT name so it matches only the trigger, never the
+  // popover option (whose name includes the "agent:<slug>" line). (Without
+  // this, a silently-missed assignment only surfaced 90s later as "0 comments".)
+  await expect(
+    dialog.getByRole('button', { name: 'Reply Drafter', exact: true }),
+  ).toBeVisible({ timeout: 10_000 });
 
   // --- 5. Open the Comments tab and wait for the kind=result comment ---
   // KindChip renders `kind` verbatim for non-comment/non-error kinds, so a
