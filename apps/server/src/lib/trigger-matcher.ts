@@ -342,14 +342,13 @@ async function maybeCreateRun(
   agentSlug: string,
   triggerId: string,
 ): Promise<void> {
-  console.log(`[DIAG maybeCreateRun] ENTER kind=${event.kind} agentSlug=${agentSlug} actor=${event.actor} projectId=${event.projectId} docId=${event.documentId}`);
-  if (!event.workspaceId) { console.log('[DIAG] return: no workspaceId'); return; }
+  if (!event.workspaceId) return;
   const workspaceId = event.workspaceId;
 
   // 1. Resolve the parent (work_item / page). Per-event-kind: assignment →
   //    documentId; comment.* → payload.parent_id.
   const parentId = resolveParentId(event);
-  if (!parentId) { console.log('[DIAG] return: no parentId (resolveParentId)'); return; }
+  if (!parentId) return;
 
   // 2. Resolve the agent doc by slug within the event's workspace. An
   //    unresolved slug is a legitimate UX (a human typed a speculative slug);
@@ -361,7 +360,7 @@ async function maybeCreateRun(
       eq(documents.slug, agentSlug),
     ),
   });
-  if (!agent) { console.log(`[DIAG] return: agent not found for slug=${agentSlug} in ws=${workspaceId}`); return; }
+  if (!agent) return;
 
   // 3. Allow-list (mitigation 50). Reuse the canonical `resolveAgentProjects`
   //    so the matcher normalizes `frontmatter.projects` IDENTICALLY to every
@@ -372,7 +371,6 @@ async function maybeCreateRun(
   //    (zero runs) when the list is narrowed and excludes this event's project.
   const allowList = resolveAgentProjects(agent);
   if (!allowList.includes('*') && (!event.projectId || !allowList.includes(event.projectId))) {
-    console.log(`[DIAG] return: allow-list miss. allowList=${JSON.stringify(allowList)} eventProjectId=${event.projectId}`);
     return;
   }
 
@@ -396,7 +394,7 @@ async function maybeCreateRun(
   //    means a run is already in flight — short-circuit. Also the at-least-once
   //    replay safety net.
   const active = await getActiveRun({ parentId, agentSlug });
-  if (active) { console.log(`[DIAG] return: active run already exists for parent=${parentId} agent=${agentSlug}`); return; }
+  if (active) return;
 
   // 6. Resolve workspace + project rows + the originating-human owner.
   //
@@ -413,9 +411,8 @@ async function maybeCreateRun(
   //    If neither resolves to a real user, we cannot own the run — return and
   //    log rather than fabricate an owner.
   const actorId = event.actor;
-  if (!actorId) { console.log('[DIAG] return: no event.actor'); return; }
+  if (!actorId) return;
   const actorUser = await resolveOwnerUser(actorId);
-  console.log(`[DIAG] resolveOwnerUser(${actorId}) = ${JSON.stringify(actorUser)}`);
   if (!actorUser) {
     console.log(
       `[trigger-matcher] actor '${actorId}' does not resolve to a user (nor a human PAT creator); cannot own a trigger-created run (skipping)`,
@@ -426,12 +423,11 @@ async function maybeCreateRun(
   const workspace = await db.query.workspaces.findFirst({
     where: eq(workspaces.id, workspaceId),
   });
-  if (!event.projectId) { console.log('[DIAG] return: no event.projectId (step 6)'); return; }
+  if (!event.projectId) return;
   const project = await db.query.projects.findFirst({
     where: eq(projects.id, event.projectId),
   });
-  if (!workspace || !project) { console.log(`[DIAG] return: workspace/project not found ws=${!!workspace} proj=${!!project}`); return; }
-  console.log('[DIAG] all gates passed → creating run');
+  if (!workspace || !project) return;
 
   // 7. Lazy-seed the project's runs table (own tx — ensureRunsTable requires a
   //    transaction handle), THEN create the run (createRun owns its OWN
@@ -464,20 +460,17 @@ export const triggerMatcher: Reactor = {
     const triggers = await db.query.documents.findMany({
       where: and(eq(documents.workspaceId, event.workspaceId), eq(documents.type, 'trigger')),
     });
-    console.log(`[DIAG react] kind=${event.kind} ws=${event.workspaceId} triggersFound=${triggers.length}`);
     for (const trigger of triggers) {
       const fm = trigger.frontmatter as Record<string, unknown>;
-      if (fm.enabled !== true) { console.log(`[DIAG react] skip ${trigger.slug}: enabled=${JSON.stringify(fm.enabled)}`); continue; }
-      if (fm.on_event !== event.kind) { console.log(`[DIAG react] skip ${trigger.slug}: on_event=${JSON.stringify(fm.on_event)} != ${event.kind}`); continue; }
-      if (fm.event_filter && !matchesFilter(fm.event_filter, event.payload)) { console.log(`[DIAG react] skip ${trigger.slug}: event_filter miss`); continue; }
+      if (fm.enabled !== true) continue;
+      if (fm.on_event !== event.kind) continue;
+      if (fm.event_filter && !matchesFilter(fm.event_filter, event.payload)) continue;
       if (fm.internal_action) {
-        console.log(`[DIAG react] ${trigger.slug}: internal_action=${fm.internal_action}`);
         await handleInternalAction(String(fm.internal_action), event);
         continue;
       }
       const agentSlug = resolveAgentPlaceholder(fm.agent, event.payload);
-      console.log(`[DIAG react] ${trigger.slug}: resolveAgentPlaceholder(${JSON.stringify(fm.agent)}) = ${JSON.stringify(agentSlug)}`);
-      if (!agentSlug) { console.log(`[DIAG react] skip ${trigger.slug}: no agentSlug`); continue; }
+      if (!agentSlug) continue;
       await maybeCreateRun(event, agentSlug, trigger.id);
     }
   },
