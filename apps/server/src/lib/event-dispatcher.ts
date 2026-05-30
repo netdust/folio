@@ -28,7 +28,7 @@
  * self-heals because the next failed tick re-fires it (spec §4b).
  */
 
-import { asc, eq, gt, sql } from 'drizzle-orm';
+import { asc, eq, gt } from 'drizzle-orm';
 import type { DB } from '../db/client.ts';
 import { events, reactorCursors } from '../db/schema.ts';
 import { env } from '../env.ts';
@@ -79,12 +79,25 @@ async function loadOrSeedCursor(db: DB, reactorId: string): Promise<number> {
     where: eq(reactorCursors.reactorId, reactorId),
   });
   if (row) return row.lastSeq;
-  const [{ max } = { max: 0 }] = await db
-    .select({ max: sql<number>`COALESCE(MAX(${events.seq}), 0)` })
-    .from(events);
-  const seed = max ?? 0;
-  await db.insert(reactorCursors).values({ reactorId, lastSeq: seed, updatedAt: new Date() });
-  return seed;
+  // F-4 shake-out fix — seed at 0, NOT MAX(seq).
+  //
+  // The C.3 spec seeded a brand-new reactor's cursor at MAX(events.seq)
+  // ("start from now") to avoid a newly-added reactor stampeding on long-closed
+  // history. But `loadOrSeedCursor` runs LAZILY on the dispatcher's FIRST TICK
+  // (~1s after boot), which RACES the events written during startup: on a fresh
+  // instance, an `agent.task.assigned` written before that first tick lands
+  // BELOW the seeded MAX(seq), so the matcher treats it as "already seen" and
+  // SILENTLY never creates the run. (Reproduced: cursor seeded at the
+  // assignment's own seq, 0 runs created — F-4 e2e + diagnose-http-chain.ts.)
+  // Seeding at 0 makes a first-registration reactor process the FULL log, which
+  // is safe: the matcher is idempotent (getActiveRun no-ops replays) and
+  // kind-filtered (it ignores document.created/etc.), and V1 has exactly one
+  // reactor seeded at first boot — so there is no "stampede on a long-lived
+  // instance" case to protect against. If a genuinely-new reactor type is added
+  // to an existing instance later, give IT an explicit seed-at-MAX at
+  // registration; do not re-introduce the boot race here.
+  await db.insert(reactorCursors).values({ reactorId, lastSeq: 0, updatedAt: new Date() });
+  return 0;
 }
 
 async function persistCursor(db: DB, reactorId: string, seq: number): Promise<void> {

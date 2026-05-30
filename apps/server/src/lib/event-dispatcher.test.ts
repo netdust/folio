@@ -35,7 +35,15 @@ async function cursorSeq(db: DB, reactorId: string): Promise<number | undefined>
   return row?.lastSeq;
 }
 
-test('seeds cursor at MAX(seq) on first registration and does not replay history', async () => {
+test('seeds cursor at 0 on first registration and processes pre-existing events (no boot-race drop)', async () => {
+  // F-4 shake-out regression test. The cursor used to seed at MAX(seq) ("start
+  // from now"), which raced server boot: any event written BEFORE the
+  // dispatcher's first lazy tick (the seed point) landed below the seed and was
+  // silently skipped — on a fresh instance an `agent.task.assigned` created
+  // during startup was dropped and the agent never ran. Seeding at 0 makes a
+  // first-registration reactor process the FULL log, so a pre-existing
+  // assignment is never lost. Safe: the trigger-matcher is idempotent
+  // (getActiveRun no-ops replays) + kind-filtered.
   const { db, seed } = await makeTestApp();
   await seedEvent(db, seed, 1, 'document.created');
   await seedEvent(db, seed, 2, 'document.created');
@@ -50,13 +58,13 @@ test('seeds cursor at MAX(seq) on first registration and does not replay history
     },
   };
 
-  await runDispatcherOnce(db, [r]); // first run: cursor absent → seed at MAX(seq)=3, no replay
-  expect(seen).toEqual([]); // started "from now" — saw nothing historical
+  await runDispatcherOnce(db, [r]); // first run: cursor absent → seed at 0 → process all history
+  expect(seen).toEqual([1, 2, 3]); // pre-existing events ARE processed (the fix)
   expect(await cursorSeq(db, 'test-r')).toBe(3);
 
   await seedEvent(db, seed, 4, 'document.created');
   await runDispatcherOnce(db, [r]);
-  expect(seen).toEqual([4]); // reactor sees only seq 4
+  expect(seen).toEqual([1, 2, 3, 4]); // then continues from the cursor
 });
 
 test('advances cursor only on success (at-least-once); a throwing react halts and retries next tick', async () => {
