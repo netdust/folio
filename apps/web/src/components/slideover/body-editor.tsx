@@ -11,7 +11,7 @@ import { debounce } from '../../lib/debounce.ts';
 import { SlashMenu } from './slash-menu.tsx';
 import { WikiMenu } from './wiki-menu.tsx';
 import { BodyToolbar } from './body-toolbar.tsx';
-import { matchWikiTrigger } from '../../lib/wiki-trigger.ts';
+import { matchWikiTrigger, replaceWikiToken } from '../../lib/wiki-trigger.ts';
 import type { DocumentSummary } from '../../lib/api/documents.ts';
 import type { SlashContext } from '../../lib/slash-registry.ts';
 
@@ -189,13 +189,15 @@ function MilkdownEditor({
     const node = range.startContainer;
     if (node.nodeType === Node.TEXT_NODE) {
       const txt = (node as Text).data;
-      const at = txt.lastIndexOf('[[', range.startOffset - 1);
-      if (at >= 0) {
+      // Pure helper computes the range to replace — including an orphaned
+      // trailing `]]` after the caret — so we never produce `[[slug]]]]`.
+      const repl = replaceWikiToken(txt, range.startOffset, slug);
+      if (repl) {
         const replaceRange = document.createRange();
-        replaceRange.setStart(node, at);
-        replaceRange.setEnd(node, range.startOffset);
+        replaceRange.setStart(node, repl.start);
+        replaceRange.setEnd(node, repl.end);
         replaceRange.deleteContents();
-        (node as Text).insertData(at, `[[${slug}]]`);
+        (node as Text).insertData(repl.start, `[[${slug}]]`);
       }
     }
     dom.dispatchEvent(new InputEvent('input', { bubbles: true }));
