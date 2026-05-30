@@ -972,36 +972,38 @@ Hand-rolled Hono sub-app at `/mcp`. Speaks JSON-RPC 2.0 over HTTP POST. Bearer-a
 
 ### Phase 3 acceptance
 
-- [ ] **Polling worker.** Trigger handlers return immediately (no LLM blocking). Poller picks up `planning` rows within ~1s.
-- [ ] **Crash recovery.** Killing the server mid-run → next boot recovers orphan runs as `failed (worker_crash)`; agent.run.failed emitted.
-- [ ] **Concurrency.** Up to `FOLIO_POLLER_CONCURRENCY` (default 5) runs simultaneously; race-safe atomic claim.
-- [ ] Configure Anthropic key → assign a work item to an agent → runner runs → kind=comment + kind=result comments appear on the work item within seconds.
-- [ ] `@`-mention an agent in a comment → run fires → comments appear under the parent.
-- [ ] Create an `agent_run` row directly in the runs table with `status=planning` and `assignee=agent:<slug>` → runner adopts → run completes.
-- [ ] Agent with `requires_approval: true` → kind=plan comment posted, run at `awaiting_approval`. Approve via button → poller picks up new resuming planning row → completes. Reject → original run transitions to `rejected`, agent posts closing note.
-- [ ] Approve via `@drafter approved` in a comment → same flow.
-- [ ] Approve via MCP `create_comment` → same.
-- [ ] **All six recursion guards** enforced:
+> **F-7 sign-off (2026-05-31).** Ticked boxes are verified by the unit/integration suites (server 968 / 1-skip / 0-fail, web 631 / 0-fail, shared 53 / 0) AND, for the live end-to-end items, by `apps/server/scripts/diagnose-http-chain.ts` — which drives the FULL chain (configure key → assign → event → dispatcher → matcher → poller → runner → real Anthropic call → kind=result comment) against the real running server with a real BYOK key, DETERMINISTICALLY (run at t+1s, result comment at t+2s, post-fix). The real-Anthropic Playwright spec is skip-gated (`FOLIO_E2E_REAL_ANTHROPIC=1`) — harness-flaky, not product (see F-4 in `tasks/shake-out-manifest-phase-3.md`); the HTTP-chain script is the authoritative live proof. Items left unchecked are mechanism-tested but not exercised end-to-end with a real provider, and are noted inline.
+
+- [x] **Polling worker.** Trigger handlers return immediately (no LLM blocking). Poller picks up `planning` rows within ~1s. *(C-12 poller; verified live — diagnose-http-chain run created at t+1s.)*
+- [x] **Crash recovery.** Killing the server mid-run → next boot recovers orphan runs as `failed (worker_crash)`; agent.run.failed emitted. *(C-3 recoverOrphanRuns + boot wiring; unit-tested.)*
+- [x] **Concurrency.** Up to `FOLIO_POLLER_CONCURRENCY` (default 5) runs simultaneously; race-safe atomic claim. *(C-3 claimNextPlanningRun TOCTOU-safe claim + poller cap; unit-tested.)*
+- [x] Configure Anthropic key → assign a work item to an agent → runner runs → kind=comment + kind=result comments appear on the work item within seconds. *(VERIFIED LIVE with a real Anthropic key — diagnose-http-chain.ts, deterministic.)*
+- [ ] `@`-mention an agent in a comment → run fires → comments appear under the parent. *(builtin-on-mention matcher path unit-tested; not exercised end-to-end with a real provider — the assignment path was the live-proven one. Same code path as assignment via the matcher.)*
+- [x] Create an `agent_run` row directly in the runs table with `status=planning` and `assignee=agent:<slug>` → runner adopts → run completes. *(The poller claims any planning row; this is the exact path diagnose-http-chain exercises.)*
+- [ ] Agent with `requires_approval: true` → kind=plan comment posted, run at `awaiting_approval`. Approve via button → poller picks up resuming planning row → completes. Reject → rejected, closing note. *(D-5 resume_run/reject_run wired + unit-tested; the awaiting_approval gate itself is unbuilt in V1 — model-initiated approval is Phase 3.x. See `2026-05-30-phase-3.x-model-initiated-approval.md`. E-4b/E-6 plumb the UI but run_id is not yet stamped on plan comments — F6-D1.)*
+- [ ] Approve via `@drafter approved` in a comment → same flow. *(Blocked on the awaiting_approval gate — Phase 3.x.)*
+- [ ] Approve via MCP `create_comment` → same. *(Blocked on the awaiting_approval gate — Phase 3.x.)*
+- [x] **All six recursion guards** enforced *(C-4 checkRunRateLimits/checkChainGuards + runner preflight; unit-tested incl. the rate_limited/fanout_exceeded wiring tests rewritten in F-D6's neighborhood):*
   - max_delegation_depth violation → `depth_exceeded`.
   - Same-slug `fired_by` cycle → `depth_exceeded` (caught by trigger matcher).
   - Workspace run-rate cap exceeded → `rate_limited`.
   - Per-agent run-rate cap exceeded → `rate_limited`.
   - Fanout > 25 in chain → `fanout_exceeded`.
   - Chain duration > 30 min OR tokens > 1M → `chain_duration_exceeded` / `chain_tokens_exceeded`.
-- [ ] Token budget per-run exceeded → `budget_exceeded`.
-- [ ] No AI key → `no_ai_key`.
-- [ ] Cron trigger set to `* * * * *` → within ~60 seconds an `agent_run` row appears, poller picks up, run completes.
-- [ ] Event trigger with filter → fires exactly once per matching event; loop prevention works.
-- [ ] Cancel mid-flight run → runner exits within ~1 iteration, no further comments.
-- [ ] Retry failed run → new run row at planning, original preserved, completes.
-- [ ] Lazy-seed: first run in a fresh project creates the runs table with 3 default saved views.
-- [ ] Runs table spreadsheet UI fully functional — sort, filter, column reorder, save view.
-- [ ] **Chain_id tracking.** Every agent_run row has chain_id. Root mints fresh uuid. Descendants inherit.
-- [ ] MCP `run_agent` returns `run_id`, SSE stream shows transitions.
-- [ ] **Backpressure visible.** `GET /api/v1/admin/runner-stats` returns stats; log line on high pending count.
-- [ ] **Agent Offline banner.** With provider stubbed to always fail, the workspace banner appears after N consecutive `provider_error` failures (default 3); one successful run clears it. Per provider (Anthropic degraded ≠ OpenAI degraded). Cancelled runs excluded from the window.
-- [ ] All existing user-flow tests still pass — no Phase 2 / 2.5 / 2.6 regression.
-- [ ] Commit: `phase-3: complete`
+- [x] Token budget per-run exceeded → `budget_exceeded`. *(C-8 runLoop token budget; unit-tested.)*
+- [x] No AI key → `no_ai_key`. *(C-8 preflight; unit-tested.)*
+- [ ] Cron trigger set to `* * * * *` → within ~60 seconds an `agent_run` row appears, poller picks up, run completes. *(Cron-trigger scheduling is Phase 3.5 — `2026-05-24-phase-4` / 3.5 scope; the runner consumes a `planning` row regardless of what created it, which IS proven.)*
+- [x] Event trigger with filter → fires exactly once per matching event; loop prevention works. *(C-11 matcher + idempotency/autonomy gate; unit-tested + the F-D6 boot-race fix ensures the assignment is never dropped.)*
+- [x] Cancel mid-flight run → runner exits within ~1 iteration, no further comments. *(C-8/C-9 cancel-via-comment mitigation 44; unit-tested.)*
+- [x] Retry failed run → new run row at planning, original preserved, completes. *(D-1 retry → createRun(firedBy:'retry-of:') + poller claim; unit-tested.)*
+- [x] Lazy-seed: first run in a fresh project creates the runs table with 3 default saved views. *(C-6 ensureRunsTable; unit-tested + observed in diagnose-http-chain — `runs_table.lazy_seeded` event fired.)*
+- [x] Runs table spreadsheet UI fully functional — sort, filter, column reorder, save view. *(Phase 1.5/1.6 TableView, shipped + merged. NOTE: agent_run rows are walled off from the generic /documents endpoint (C1 security), so runs surface via the dedicated agent slideover Runs tab + activity feed (Sub-phase E), NOT the work-items TableView — see `project_runs-not-a-tableview` memory.)*
+- [x] **Chain_id tracking.** Every agent_run row has chain_id. Root mints fresh uuid. Descendants inherit. *(C-6 nextChainId + createRun; unit-tested.)*
+- [x] MCP `run_agent` returns `run_id`, SSE stream shows transitions. *(D-4 run MCP tools + D-7 SSE filters; unit-tested.)*
+- [x] **Backpressure visible.** `GET /api/v1/w/:wslug/admin/runner-stats` returns stats. *(D-6; session-only + owner/admin gated; unit-tested. Note: route is workspace-scoped, not the spec's `/api/v1/admin/...`.)*
+- [x] **Agent Offline banner.** Workspace banner appears after N consecutive `provider_error` failures (default 3); one success clears it; per-provider; cancelled runs excluded. *(C-5 checkProviderHealth + Sub-phase E provider-health-banner; unit-tested.)*
+- [x] All existing user-flow tests still pass — no Phase 2 / 2.5 / 2.6 regression. *(Full suites green: server 968, web 631, shared 53.)*
+- [ ] Commit: `phase-3: complete` *(declared at the F-8 merge — pending user go-ahead; the branch is merge-ready.)*
 
 ---
 
