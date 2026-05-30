@@ -117,6 +117,18 @@ workspaceDocumentsRoute.get('/', async (c) => {
     type,
     projectFilter,
   });
+  // I1 (F shake-out) — narrow agent-bound tokens, mirroring the event-history
+  // H7 guard below. An agent-bound token may see ONLY its own agent row;
+  // sibling agents (incl. frontmatter.system_prompt / projects / tools) and
+  // all triggers (workspace-wide ops metadata) are hidden. We FILTER the list
+  // (not 404 it) so an agent reading its own row via the list stays legitimate.
+  // Non-agent tokens (session, human PAT) bypass.
+  const token = c.get('token') ?? null;
+  if (token?.agentId) {
+    return c.json({
+      data: rows.filter((r) => r.type === 'agent' && r.id === token.agentId),
+    });
+  }
   return c.json({ data: rows });
 });
 
@@ -128,6 +140,19 @@ workspaceDocumentsRoute.get('/:slug', async (c) => {
     (await getWorkspaceDocument(ws.id, 'agent', slug)) ??
     (await getWorkspaceDocument(ws.id, 'trigger', slug));
   if (!row) throw new HTTPError('DOCUMENT_NOT_FOUND', `document "${slug}" not found`, 404);
+  // I1 (F shake-out) — mirror the event-history H7 guard. An agent-bound token
+  // may read ONLY its own agent row; sibling agents (incl. system_prompt /
+  // projects / tools) 404, and triggers (workspace-wide ops metadata) are
+  // hidden entirely. Non-agent tokens (session, human PAT) bypass.
+  const token = c.get('token') ?? null;
+  if (token?.agentId) {
+    if (row.type === 'agent' && row.id !== token.agentId) {
+      throw new HTTPError('DOCUMENT_NOT_FOUND', `document "${slug}" not found`, 404);
+    }
+    if (row.type === 'trigger') {
+      throw new HTTPError('DOCUMENT_NOT_FOUND', `document "${slug}" not found`, 404);
+    }
+  }
   return jsonOk(c, row);
 });
 

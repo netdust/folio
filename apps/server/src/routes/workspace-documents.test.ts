@@ -1092,3 +1092,135 @@ test('Round 7 #19: DELETE agent rejects human PAT with 403', async () => {
   expect(res.status).toBe(403);
   expect((await res.json()).error.code).toBe('HUMAN_PAT_AGENT_LIFECYCLE_HTTP');
 });
+
+// ---------------------------------------------------------------------------
+// I1 (F shake-out) — agent-bound token reads on the workspace doc list/get
+// must be narrowed the same way the event-history H7 guard narrows them.
+// Without the guard an allow-listed agent could enumerate sibling agents'
+// rows (incl. frontmatter.system_prompt / projects / tools) and all
+// workspace triggers via GET / and GET /:slug.
+// ---------------------------------------------------------------------------
+
+/** Mint a token bound to a specific agent (agentId set), mirroring the F1/G4 harness. */
+async function mintAgentBoundToken(
+  workspaceId: string,
+  userId: string,
+  agentId: string,
+  scopes: string[] = ['documents:read'],
+): Promise<string> {
+  const { token, hash } = newApiToken();
+  await realDb.insert(apiTokens).values({
+    id: nanoid(),
+    workspaceId,
+    name: 'agent-bound',
+    tokenHash: hash,
+    scopes,
+    createdBy: userId,
+    agentId,
+  });
+  return token;
+}
+
+test('I1: GET ?type=agent with an agent-bound token returns ONLY its own agent (sibling hidden)', async () => {
+  const { app, seed } = await makeTestApp();
+  // Two distinct agents + a trigger, all created via the session (human) path.
+  const aRes = await postWorkspaceDoc(app, seed.sessionCookie, {
+    type: 'agent', title: 'Agent A',
+    frontmatter: { system_prompt: 'A-secret-prompt', model: 'm', provider: 'anthropic', tools: [] },
+  });
+  const agentA = (await aRes.json()).data as { id: string; slug: string };
+  const bRes = await postWorkspaceDoc(app, seed.sessionCookie, {
+    type: 'agent', title: 'Agent B',
+    frontmatter: { system_prompt: 'B-secret-prompt', model: 'm', provider: 'anthropic', tools: [] },
+  });
+  const agentB = (await bRes.json()).data as { id: string; slug: string };
+  await postWorkspaceDoc(app, seed.sessionCookie, {
+    type: 'trigger', title: 'WH Trigger',
+    frontmatter: { agent: agentA.slug, schedule: '* * * * *', on_event: null },
+  });
+
+  const tokenA = await mintAgentBoundToken(seed.workspace.id, seed.user.id, agentA.id);
+
+  // Agent list — only A comes back.
+  const res = await app.request(`${WS_PATH}?type=agent`, {
+    headers: { Authorization: `Bearer ${tokenA}` },
+  });
+  expect(res.status).toBe(200);
+  const text = await res.text();
+  const body = JSON.parse(text);
+  expect(body.data).toHaveLength(1);
+  expect(body.data[0].id).toBe(agentA.id);
+  // B's slug and system_prompt must not appear anywhere in the payload.
+  expect(text).not.toContain(agentB.slug);
+  expect(text).not.toContain('B-secret-prompt');
+
+  // Trigger list — hidden entirely from a narrowed agent.
+  const trigRes = await app.request(`${WS_PATH}?type=trigger`, {
+    headers: { Authorization: `Bearer ${tokenA}` },
+  });
+  expect(trigRes.status).toBe(200);
+  expect((await trigRes.json()).data).toHaveLength(0);
+});
+
+test('I1: GET /:slug with an agent-bound token — 404 for a sibling agent, 200 for self, 404 for a trigger', async () => {
+  const { app, seed } = await makeTestApp();
+  const aRes = await postWorkspaceDoc(app, seed.sessionCookie, {
+    type: 'agent', title: 'Agent A',
+    frontmatter: { system_prompt: 'A-secret-prompt', model: 'm', provider: 'anthropic', tools: [] },
+  });
+  const agentA = (await aRes.json()).data as { id: string; slug: string };
+  const bRes = await postWorkspaceDoc(app, seed.sessionCookie, {
+    type: 'agent', title: 'Agent B',
+    frontmatter: { system_prompt: 'B-secret-prompt', model: 'm', provider: 'anthropic', tools: [] },
+  });
+  const agentB = (await bRes.json()).data as { id: string; slug: string };
+  const trigRes = await postWorkspaceDoc(app, seed.sessionCookie, {
+    type: 'trigger', title: 'WH Trigger',
+    frontmatter: { agent: agentA.slug, schedule: '* * * * *', on_event: null },
+  });
+  const trigger = (await trigRes.json()).data as { slug: string };
+
+  const tokenA = await mintAgentBoundToken(seed.workspace.id, seed.user.id, agentA.id);
+
+  // Sibling agent → 404 DOCUMENT_NOT_FOUND (no system_prompt leak).
+  const siblingRes = await app.request(`${WS_PATH}/${agentB.slug}`, {
+    headers: { Authorization: `Bearer ${tokenA}` },
+  });
+  expect(siblingRes.status).toBe(404);
+  expect((await siblingRes.json()).error.code).toBe('DOCUMENT_NOT_FOUND');
+
+  // Self → 200 (an agent may read its own row).
+  const selfRes = await app.request(`${WS_PATH}/${agentA.slug}`, {
+    headers: { Authorization: `Bearer ${tokenA}` },
+  });
+  expect(selfRes.status).toBe(200);
+  expect((await selfRes.json()).data.id).toBe(agentA.id);
+
+  // Trigger → 404 (workspace-wide ops metadata hidden from narrowed agents).
+  const trigGetRes = await app.request(`${WS_PATH}/${trigger.slug}`, {
+    headers: { Authorization: `Bearer ${tokenA}` },
+  });
+  expect(trigGetRes.status).toBe(404);
+  expect((await trigGetRes.json()).error.code).toBe('DOCUMENT_NOT_FOUND');
+});
+
+test('I1 regression: a SESSION (human) request to the list still returns ALL agents + the trigger', async () => {
+  const { app, seed } = await makeTestApp();
+  await postWorkspaceDoc(app, seed.sessionCookie, {
+    type: 'agent', title: 'Agent A',
+    frontmatter: { system_prompt: 'x', model: 'm', provider: 'anthropic', tools: [] },
+  });
+  await postWorkspaceDoc(app, seed.sessionCookie, {
+    type: 'agent', title: 'Agent B',
+    frontmatter: { system_prompt: 'x', model: 'm', provider: 'anthropic', tools: [] },
+  });
+  await postWorkspaceDoc(app, seed.sessionCookie, {
+    type: 'trigger', title: 'WH Trigger',
+    frontmatter: { agent: 'agent-a', schedule: '* * * * *', on_event: null },
+  });
+
+  const agentsRes = await app.request(`${WS_PATH}?type=agent`, { headers: { Cookie: seed.sessionCookie } });
+  expect((await agentsRes.json()).data).toHaveLength(2);
+  const trigRes = await app.request(`${WS_PATH}?type=trigger`, { headers: { Cookie: seed.sessionCookie } });
+  expect((await trigRes.json()).data).toHaveLength(1);
+});
