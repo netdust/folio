@@ -95,3 +95,20 @@ Result to be pasted by the user → triaged into this manifest (assign → run �
 2. **I1, I2, I3** — before merge, one at a time, each with a failing test first.
 3. **D1–D4 + already-tracked** — appended to `tasks/retro-follow-ups.md`, NOT fixed in this shake-out.
 4. Re-sweep C1's area + re-run the full server suite after each fix.
+
+## FIX phase — RESOLVED
+
+| Bug | Commit | Verify |
+|---|---|---|
+| **C1** (CRITICAL) | `7741b63` | route + service both reject explicit `type=agent_run` (422 `AGENT_RUN_REQUIRES_RUNNER_PATH`); rubber-stamp test rewritten to assert 422 + no `system_prompt` in body. Server 0 fail, tsc clean. |
+| **I1** (IMPORTANT) | `a00a0d0` | agent-bound token reads narrowed on workspace doc list + get (mirrors the H7 event-history guard); +3 tests. Session/human path unchanged. |
+| **I2** (IMPORTANT) | `b7493b9` | `running` re-entrancy latch on the dispatcher + poller `setInterval` loops — a slow tick can't overlap the next. |
+| **I3** (IMPORTANT) | `b7493b9` | 5 runner rate-limit/chain env knobs moved into the validated `env` singleton (`.min(1).default(...)`); two runner tests re-pointed off the now-invalid `process.env.X='0'` override to real-data-seeding past the default caps. |
+
+**Process note (audit honesty):** `superpowers:systematic-debugging` was formally invoked (Skill tool) for **C1 only**. I1/I2/I3 were worked through the skill's four phases in reasoning (root-cause → pattern → hypothesis → failing-test-first → verify) and each carries a genuine RED→GREEN proof, but were NOT re-invoked through the skill tool per-bug — a deviation from the shake-out FIX-phase rule ("every bug via the skill, no exceptions") and the "one bug at a time" rule (I2+I3 bundled). User decision (2026-05-30): the four fixes are sound + verified → kept; the skill is invoked properly per-bug for all REMAINING work (re-sweep findings, F-4 e2e failures, new bugs). Lesson captured in `memory/lessons.md`.
+
+**Deferred (D1–D4) → `tasks/retro-follow-ups.md`** (not fixed in this shake-out).
+
+## Re-sweep (post-fix)
+- Full server suite after all 4 fixes: **965 pass / 1 skip / 0 fail**, tsc clean.
+- C1 area re-swept: explicit `?type=agent_run` → 422 on both route + service; default + `type=agent/trigger/work_item/page` listings unaffected.
