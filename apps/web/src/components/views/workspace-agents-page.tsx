@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Plus, Loader2 } from 'lucide-react';
 import { useNavigate } from '@tanstack/react-router';
 import { toast } from 'sonner';
@@ -10,12 +11,20 @@ import {
 import { Button } from '../ui/button.tsx';
 import { Chip } from '../ui/chip.tsx';
 import { Icon } from '../ui/icon.tsx';
+import { Tabs } from '../ui/tabs.tsx';
 import { WorkspaceDocumentSlideover } from '../slideover/workspace-document-slideover.tsx';
+import { ActivityFeedScreen } from '../agent-panel/activity-feed-screen.tsx';
+import { AgentRunLauncher } from '../agent-panel/agent-run-launcher.tsx';
+
+/** Page-level tab: which of the consolidated agent surfaces is showing. */
+export type PageView = 'agents' | 'activity' | 'run';
 
 interface Props {
   wslug: string;
   /** When set, the list is filtered to agents allow-listed for this project id (URL: ?project=). */
   projectFilter?: string;
+  /** Deep-link target tab (URL: ?view=). Defaults to the agent list. */
+  initialView?: PageView;
 }
 
 /**
@@ -23,8 +32,19 @@ interface Props {
  * and chips for the projects it's allow-listed against (id → current slug
  * lookup; orphans render muted).
  */
-export function WorkspaceAgentsPage({ wslug, projectFilter }: Props) {
+export function WorkspaceAgentsPage({ wslug, projectFilter, initialView }: Props) {
   const navigate = useNavigate();
+  const [view, setView] = useState<PageView>(initialView ?? 'agents');
+  // Switch the visible tab AND reflect it in the URL (mirrors how settings +
+  // the activity feed navigate), preserving any ?project=/?doc= already set.
+  const changeView = (next: PageView) => {
+    setView(next);
+    void navigate({
+      to: '/w/$wslug/agents',
+      params: { wslug },
+      search: (prev) => ({ ...(prev as Record<string, unknown>), view: next }),
+    });
+  };
   const agentsQ = useWorkspaceAgents(wslug, { project: projectFilter });
   const projectsQ = useProjects(wslug);
   const create = useCreateWorkspaceDocument(wslug);
@@ -54,9 +74,6 @@ export function WorkspaceAgentsPage({ wslug, projectFilter }: Props) {
     }
   };
 
-  if (agentsQ.isLoading) {
-    return <div className="mx-auto max-w-3xl px-6 py-8 text-sm text-fg-2">Loading…</div>;
-  }
   const agents = agentsQ.data ?? [];
   const filterName = projectFilter ? projectsById.get(projectFilter)?.name ?? projectFilter : null;
 
@@ -71,18 +88,10 @@ export function WorkspaceAgentsPage({ wslug, projectFilter }: Props) {
     </Button>
   );
 
-  return (
-    <div className="mx-auto max-w-3xl px-6 py-8">
-      <header className="mb-6 flex items-center justify-between">
-        <div>
-          <h1 className="text-lg font-medium tracking-tight">Agents</h1>
-          <p className="mt-0.5 text-xs text-fg-2">
-            AI agents in this workspace. Each agent is a markdown document with a project allow-list.
-          </p>
-        </div>
-        {createButton}
-      </header>
-
+  const agentsBody = agentsQ.isLoading ? (
+    <div className="text-sm text-fg-2">Loading…</div>
+  ) : (
+    <>
       {filterName && (
         <div className="mb-3 flex items-center gap-2 text-sm text-fg-2">
           Filtered to <strong className="font-medium text-fg">{filterName}</strong>
@@ -159,6 +168,38 @@ export function WorkspaceAgentsPage({ wslug, projectFilter }: Props) {
             );
           })}
         </ul>
+      )}
+    </>
+  );
+
+  return (
+    <div className="mx-auto max-w-3xl px-6 py-8">
+      <header className="mb-4 flex items-center justify-between">
+        <div>
+          <h1 className="text-lg font-medium tracking-tight">Agents</h1>
+          <p className="mt-0.5 text-xs text-fg-2">
+            AI agents in this workspace. Each agent is a markdown document with a project allow-list.
+          </p>
+        </div>
+        {view === 'agents' && createButton}
+      </header>
+
+      <div className="mb-5">
+        <Tabs<PageView>
+          value={view}
+          onChange={changeView}
+          items={[
+            { value: 'agents', label: 'Agents' },
+            { value: 'activity', label: 'Activity' },
+            { value: 'run', label: 'Run' },
+          ]}
+        />
+      </div>
+
+      {view === 'agents' && agentsBody}
+      {view === 'activity' && <ActivityFeedScreen wslug={wslug} />}
+      {view === 'run' && (
+        <AgentRunLauncher wslug={wslug} onLaunched={() => changeView('activity')} />
       )}
 
       <WorkspaceDocumentSlideover wslug={wslug} />

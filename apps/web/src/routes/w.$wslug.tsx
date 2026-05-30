@@ -1,7 +1,7 @@
 import { createFileRoute, Outlet, useNavigate, useParams, useRouterState } from '@tanstack/react-router';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQueries, useQueryClient } from '@tanstack/react-query';
-import { Bot, Search } from 'lucide-react';
+import { Search } from 'lucide-react';
 import { toast } from 'sonner';
 import { useLogout, useMe } from '../lib/api/auth.ts';
 import { useProjects, useUpdateProject, useDeleteProject, projectsKeys } from '../lib/api/projects.ts';
@@ -21,8 +21,6 @@ import { ProjectCreate } from '../components/onboarding/project-create.tsx';
 import { TableCreate } from '../components/onboarding/table-create.tsx';
 import { NewViewSheet } from '../components/views/new-view-sheet.tsx';
 import { openCommandPalette } from '../lib/command-palette-bus.ts';
-import { agentPanelBus } from '../lib/agent-panel-bus.ts';
-import { AgentSidePanel } from '../components/agent-panel/agent-side-panel.tsx';
 import { ProviderHealthBanner } from '../components/shell/provider-health-banner.tsx';
 import { ReactorHaltBanner } from '../components/shell/reactor-halt-banner.tsx';
 import { modKeyHint } from '../lib/platform.ts';
@@ -42,12 +40,6 @@ const TOOLS: NavItem[] = [
     lucideIcon: Search,
     kbd: modKeyHint('K'),
     onClick: openCommandPalette,
-  },
-  {
-    id: 'agents',
-    label: 'Agents',
-    lucideIcon: Bot,
-    onClick: () => agentPanelBus.open('activity'),
   },
 ];
 
@@ -360,7 +352,6 @@ function WorkspaceLayout() {
             </div>
           </div>
         }
-        panel={<AgentSidePanel wslug={wslug} />}
       />
       <WorkspaceCreate open={creatingWorkspace} onOpenChange={setCreatingWorkspace} />
       <ProjectCreate wslug={wslug} open={creatingProject} onOpenChange={setCreatingProject} />

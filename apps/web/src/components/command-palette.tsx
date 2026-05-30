@@ -15,7 +15,6 @@ import { useWorkspaces } from '../lib/api/workspaces.ts';
 import { matches } from '../lib/command-registry.ts';
 import { getResolvedTheme, setTheme } from '../lib/theme.ts';
 import { subscribeOpenEvent } from '../lib/command-palette-bus.ts';
-import { agentPanelBus } from '../lib/agent-panel-bus.ts';
 
 function getKeyMod(): 'metaKey' | 'ctrlKey' {
   if (typeof navigator === 'undefined') return 'ctrlKey';
@@ -206,8 +205,12 @@ export function CommandPalette() {
               {ctx.workspaceSlug && matches({ label: 'Run agent…' }, query) ? (
                 <CommandItem
                   onSelect={() => {
-                    agentPanelBus.open('run');
                     close();
+                    void navigate({
+                      to: '/w/$wslug/agents',
+                      params: { wslug: ctx.workspaceSlug! },
+                      search: { view: 'run' },
+                    });
                   }}
                 >
                   Run agent…

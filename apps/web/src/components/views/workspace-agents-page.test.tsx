@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, afterEach } from 'vitest';
+import { describe, expect, it, vi, afterEach, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -237,5 +237,90 @@ describe('WorkspaceAgentsPage — create + open affordances', () => {
     const { container } = render(<WorkspaceAgentsPage wslug="ws" />, { wrapper: wrap(newQc()) });
     await screen.findByText('Triage Bot');
     expect(container.querySelector('[role="dialog"]')).toBeNull();
+  });
+});
+
+// --- Page-level tabs (Agents | Activity | Run) ---
+
+// The Activity tab mounts ActivityFeedScreen, which opens an EventSource. Stub
+// it with a no-op (copied from activity-feed-screen.test.tsx) so the feed mounts
+// cleanly with an empty state.
+class MockEventSource {
+  static instances: MockEventSource[] = [];
+  url: string;
+  listeners = new Map<string, ((e: MessageEvent) => void)[]>();
+  constructor(url: string) {
+    this.url = url;
+    MockEventSource.instances.push(this);
+  }
+  addEventListener(t: string, fn: (e: MessageEvent) => void) {
+    const a = this.listeners.get(t) ?? [];
+    a.push(fn);
+    this.listeners.set(t, a);
+  }
+  removeEventListener() {}
+  close() {}
+}
+
+describe('WorkspaceAgentsPage — page tabs', () => {
+  beforeEach(() => {
+    MockEventSource.instances = [];
+    vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource);
+  });
+
+  it('renders the three page tabs', async () => {
+    stubFetch();
+    render(<WorkspaceAgentsPage wslug="ws" />, { wrapper: wrap(newQc()) });
+    await screen.findByText('Triage Bot');
+    expect(screen.getByRole('button', { name: 'Agents' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Activity' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Run' })).toBeInTheDocument();
+  });
+
+  it('the Agents tab shows the list + "New agent" button by default', async () => {
+    stubFetch();
+    render(<WorkspaceAgentsPage wslug="ws" />, { wrapper: wrap(newQc()) });
+    expect(await screen.findByText('Triage Bot')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /new agent/i })).toBeInTheDocument();
+  });
+
+  it('clicking the Activity tab shows the activity feed (and hides the list)', async () => {
+    stubFetch();
+    render(<WorkspaceAgentsPage wslug="ws" />, { wrapper: wrap(newQc()) });
+    await screen.findByText('Triage Bot');
+    await userEvent.click(screen.getByRole('button', { name: 'Activity' }));
+    expect(await screen.findByText(/no recent agent activity/i)).toBeInTheDocument();
+    expect(screen.queryByText('Triage Bot')).toBeNull();
+    // The feed opened a live SSE channel.
+    expect(MockEventSource.instances.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('clicking the Run tab shows the run launcher', async () => {
+    stubFetch();
+    render(<WorkspaceAgentsPage wslug="ws" />, { wrapper: wrap(newQc()) });
+    await screen.findByText('Triage Bot');
+    await userEvent.click(screen.getByRole('button', { name: 'Run' }));
+    expect(await screen.findByText('Target document')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /run agent/i })).toBeInTheDocument();
+  });
+
+  it('initialView="run" opens directly on the Run tab', async () => {
+    stubFetch();
+    render(<WorkspaceAgentsPage wslug="ws" initialView="run" />, { wrapper: wrap(newQc()) });
+    expect(await screen.findByText('Target document')).toBeInTheDocument();
+    // The agents list is not shown.
+    expect(screen.queryByText('Triage Bot')).toBeNull();
+  });
+
+  it('changing tabs reflects the new view in the URL via navigate(?view=)', async () => {
+    stubFetch();
+    render(<WorkspaceAgentsPage wslug="ws" />, { wrapper: wrap(newQc()) });
+    await screen.findByText('Triage Bot');
+    await userEvent.click(screen.getByRole('button', { name: 'Activity' }));
+    const call = navigateMock.mock.calls.find(
+      (c) => (c[0] as { to?: string }).to === '/w/$wslug/agents' && typeof (c[0] as { search?: unknown }).search === 'function',
+    )!;
+    const search = (call[0] as { search: (prev: unknown) => unknown }).search({ project: 'p-a' });
+    expect(search).toEqual({ project: 'p-a', view: 'activity' });
   });
 });
