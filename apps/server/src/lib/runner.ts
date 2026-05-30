@@ -25,6 +25,7 @@
 
 import { and, eq, sql } from 'drizzle-orm';
 import { db } from '../db/client.ts';
+import { env } from '../env.ts';
 import {
   type ApiToken,
   type Document,
@@ -377,8 +378,8 @@ async function preflight(ctx: RunContext, excludeRunId?: string): Promise<boolea
   const rate = await checkRunRateLimits({
     workspaceId: run.workspaceId,
     agentSlug: fm.agent_slug,
-    workspaceMaxRunsPerHour: Number(process.env.FOLIO_MAX_RUNS_PER_HOUR_PER_WORKSPACE ?? 100),
-    agentMaxRunsPerHour: Number(process.env.FOLIO_MAX_RUNS_PER_HOUR_PER_AGENT ?? 50),
+    workspaceMaxRunsPerHour: env.FOLIO_MAX_RUNS_PER_HOUR_PER_WORKSPACE,
+    agentMaxRunsPerHour: env.FOLIO_MAX_RUNS_PER_HOUR_PER_AGENT,
   });
   if (!rate.ok) {
     await failRun(ctx, runErrorReasonSchema.enum.rate_limited, rate.detail);
@@ -388,9 +389,9 @@ async function preflight(ctx: RunContext, excludeRunId?: string): Promise<boolea
   // 4 — chain guards (fanout / duration / total tokens).
   const chain = await checkChainGuards({
     chainId: fm.chain_id,
-    maxFanout: Number(process.env.FOLIO_MAX_CHAIN_FANOUT ?? 25),
-    maxChainDurationMs: Number(process.env.FOLIO_MAX_CHAIN_DURATION_MS ?? 30 * 60_000),
-    maxChainTokens: Number(process.env.FOLIO_MAX_CHAIN_TOKENS ?? 200_000),
+    maxFanout: env.FOLIO_MAX_CHAIN_FANOUT,
+    maxChainDurationMs: env.FOLIO_MAX_CHAIN_DURATION_MS,
+    maxChainTokens: env.FOLIO_MAX_CHAIN_TOKENS,
   });
   if (!chain.ok) {
     // checkChainGuards returns fanout_exceeded / chain_duration_exceeded /

@@ -31,6 +31,17 @@ const envSchema = z.object({
   FOLIO_POLLER_INTERVAL_MS: z.coerce.number().int().min(100).default(1_000),
   FOLIO_POLLER_CONCURRENCY: z.coerce.number().int().min(1).default(5),
   FOLIO_WORKER_STALE_MS: z.coerce.number().int().min(10_000).default(300_000),
+  // I2/I3 (Phase-3 shake-out) — runner rate-limit + chain guards. Previously
+  // read inline as `Number(process.env.X ?? default)` in runner.ts's security
+  // pre-flight, bypassing this validated singleton: a typo'd value silently
+  // became NaN in the guard path, and the defaults were duplicated in string
+  // literals. Validated here like every other knob; `.min(1)` floors prevent a
+  // mis-set value from disabling a cap.
+  FOLIO_MAX_RUNS_PER_HOUR_PER_WORKSPACE: z.coerce.number().int().min(1).default(100),
+  FOLIO_MAX_RUNS_PER_HOUR_PER_AGENT: z.coerce.number().int().min(1).default(50),
+  FOLIO_MAX_CHAIN_FANOUT: z.coerce.number().int().min(1).default(25),
+  FOLIO_MAX_CHAIN_DURATION_MS: z.coerce.number().int().min(1).default(30 * 60_000),
+  FOLIO_MAX_CHAIN_TOKENS: z.coerce.number().int().min(1).default(200_000),
   // V1 autonomy gate (Task C-11). When OFF (the default), the trigger-matcher
   // refuses to fan out agent-ORIGINATED chains: an agent's own @mention/comment
   // creates ZERO runs + one `agent.chain.suppressed` signal. Human-originated

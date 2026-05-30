@@ -21,6 +21,7 @@ import {
   aiKeys,
   apiTokens,
   documents,
+  events,
   tables,
 } from '../db/schema.ts';
 import { createComment } from '../services/comments.ts';
@@ -178,6 +179,30 @@ async function seedAiKey(db: TestDB, workspaceId: string): Promise<void> {
     provider: 'anthropic',
     label: 'default',
     encryptedKey: encryptSecret('sk-test-fake-key'),
+  });
+}
+
+/**
+ * Seed an `agent.run.started` event in the workspace within the last hour.
+ * checkRunRateLimits counts these (kind + workspace_id + created_at >= hourAgo)
+ * to enforce the per-workspace / per-agent hourly cap, so the rate-limit
+ * wiring test seeds enough of them to cross the env default cap. `seq` must be
+ * unique (events_seq_idx) — callers pass a high, collision-free base.
+ */
+async function seedRunStartedEvent(
+  db: TestDB,
+  args: { workspaceId: string; projectId: string | null; agentSlug: string; seq: number },
+): Promise<void> {
+  await db.insert(events).values({
+    id: nanoid(),
+    workspaceId: args.workspaceId,
+    projectId: args.projectId,
+    documentId: nanoid(),
+    kind: 'agent.run.started',
+    actor: null,
+    payload: { agent: args.agentSlug } as unknown as Record<string, unknown>,
+    createdAt: new Date(Date.now() - 30_000),
+    seq: args.seq,
   });
 }
 
@@ -349,14 +374,29 @@ describe('runAgent pre-flight checks', () => {
     expect(control.called).toBe(0);
   });
 
-  test('rate_limited — workspace cap of 0 blocks', async () => {
-    process.env.FOLIO_MAX_RUNS_PER_HOUR_PER_WORKSPACE = '0';
-    const { db, run } = await scaffold();
+  // Tests the runner → checkRunRateLimits → terminal-fail WIRING (not the cap
+  // value — that is unit-tested directly on the helper in agent-runs.test.ts).
+  // The env knobs are now validated + parsed once at import (.min(1), no
+  // runtime override), so we trip the real default workspace cap (100) by
+  // seeding 100 agent.run.started events in the last hour. If the runner ever
+  // STOPS calling the guard, the run completes instead of failing → red.
+  test('rate_limited — exceeding the workspace cap blocks the run', async () => {
+    const { db, run, workspace, project, agent } = await scaffold();
     const control: StubControl = { rounds: [], called: 0 };
     installProviderStub(control);
 
+    // 100 started events ≥ default FOLIO_MAX_RUNS_PER_HOUR_PER_WORKSPACE (100,
+    // compared with >=). Workspace-level cap, so the agent slug is incidental.
+    for (let i = 0; i < 100; i++) {
+      await seedRunStartedEvent(db, {
+        workspaceId: workspace.id,
+        projectId: project.id,
+        agentSlug: agent.slug,
+        seq: 9_000_001 + i,
+      });
+    }
+
     await runAgent({ runId: run.id });
-    delete process.env.FOLIO_MAX_RUNS_PER_HOUR_PER_WORKSPACE;
 
     const fm = await readRun(db, run.id);
     expect(fm.status).toBe('failed');
@@ -364,14 +404,35 @@ describe('runAgent pre-flight checks', () => {
     expect(control.called).toBe(0);
   });
 
-  test('chain_guard — fanout cap of 0 blocks with fanout_exceeded', async () => {
-    process.env.FOLIO_MAX_CHAIN_FANOUT = '0';
-    const { db, run } = await scaffold();
+  // Tests the runner → checkChainGuards → terminal-fail WIRING (not the cap
+  // value — unit-tested directly on the helper in agent-runs.test.ts). The env
+  // knobs are validated + parsed once at import (.min(1), no runtime override),
+  // so we trip the real default fanout cap (25, compared with >) by seeding 26
+  // runs on one chain. max_delegation_depth is raised to 100 so the EARLIER
+  // depth guard (step 2, same chain count, default 2) passes and lets execution
+  // reach the chain guard (step 4). If the runner ever STOPS calling the chain
+  // guard, the run no longer fails with fanout_exceeded → red.
+  test('chain_guard — exceeding the chain fanout cap blocks with fanout_exceeded', async () => {
+    const { db, workspace, project, user, agent, parent, run } = await scaffold({
+      agentOverrides: { max_delegation_depth: 100 },
+    });
     const control: StubControl = { rounds: [], called: 0 };
     installProviderStub(control);
 
+    const runsTable = await db.query.tables.findFirst({
+      where: and(eq(tables.projectId, project.id), eq(tables.slug, 'runs')),
+    });
+    // scaffold() seeded 1 run on a fresh chain. Add 25 completed siblings on the
+    // SAME chain_id → 26 runs > default FOLIO_MAX_CHAIN_FANOUT (25).
+    const chainId = (await readRun(db, run.id)).chain_id;
+    for (let i = 0; i < 25; i++) {
+      await seedRunningRun(db, workspace, project, runsTable!, agent, parent, user, {
+        chain_id: chainId,
+        status: 'completed',
+      });
+    }
+
     await runAgent({ runId: run.id });
-    delete process.env.FOLIO_MAX_CHAIN_FANOUT;
 
     const fm = await readRun(db, run.id);
     expect(fm.status).toBe('failed');

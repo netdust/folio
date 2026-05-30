@@ -157,10 +157,21 @@ export async function runDispatcherOnce(db: DB, reactors: readonly Reactor[]): P
  * the loop.
  */
 export function startEventDispatcher(db: DB): () => void {
+  // I2 (Phase-3 shake-out): re-entrancy latch. setInterval does NOT await the
+  // async callback, so a tick that outruns the interval (slow react(), a full
+  // 100-event batch) would overlap the next — two ticks racing the same
+  // per-reactor cursor read-modify-write, turning at-least-once into
+  // at-least-once-per-overlap. Skip a tick while the prior one is still running;
+  // the next interval picks up where it left off.
+  let running = false;
   const handle = setInterval(() => {
-    void runDispatcherOnce(db, REACTORS).catch((err) =>
-      console.error('[dispatcher] tick error', err),
-    );
+    if (running) return;
+    running = true;
+    void runDispatcherOnce(db, REACTORS)
+      .catch((err) => console.error('[dispatcher] tick error', err))
+      .finally(() => {
+        running = false;
+      });
   }, env.FOLIO_DISPATCHER_INTERVAL_MS);
   return () => clearInterval(handle);
 }

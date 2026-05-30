@@ -113,8 +113,18 @@ export function startRunnerPoller(
     inFlight,
   };
 
+  // I2 (Phase-3 shake-out): re-entrancy latch — see startEventDispatcher. A
+  // slow poller tick (claim + dispatch under load) must not overlap the next
+  // and double-claim; skip while the prior tick is still running.
+  let running = false;
   const handle = setInterval(() => {
-    void runPollerOnce(db, deps).catch((err) => console.error('[poller] tick error', err));
+    if (running) return;
+    running = true;
+    void runPollerOnce(db, deps)
+      .catch((err) => console.error('[poller] tick error', err))
+      .finally(() => {
+        running = false;
+      });
   }, env.FOLIO_POLLER_INTERVAL_MS);
 
   return () => clearInterval(handle);
