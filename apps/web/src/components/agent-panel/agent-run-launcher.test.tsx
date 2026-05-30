@@ -34,6 +34,28 @@ describe('AgentRunLauncher', () => {
     expect(JSON.parse(String((postCall![1] as RequestInit).body))).toMatchObject({ agent_slug: 'bot', parent_slug: 'task-1' });
   });
 
+  test('surfaces server error and does not call onLaunched on failure', async () => {
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async (url, init) => {
+      const u = String(url);
+      if (init?.method === 'POST' && u.endsWith('/runs')) {
+        return new Response(
+          JSON.stringify({ error: { code: 'RUN_ALREADY_ACTIVE', message: 'A run is already active.' } }),
+          { status: 409, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      return new Response(JSON.stringify({ data: [{ id: 'a1', slug: 'bot', type: 'agent', title: 'Reply Bot', frontmatter: {}, status: null, parentId: null, createdAt: '', updatedAt: '', lastTouchedAt: null }] }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }));
+    const onLaunched = vi.fn();
+    wrap(<AgentRunLauncher wslug="acme" onLaunched={onLaunched} />);
+    await screen.findByRole('option', { name: /Reply Bot/i });
+    fireEvent.change(screen.getByLabelText(/agent/i), { target: { value: 'bot' } });
+    fireEvent.change(screen.getByLabelText(/parent|target/i), { target: { value: 'task-1' } });
+    fireEvent.click(screen.getByRole('button', { name: /run agent/i }));
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('A run is already active.');
+    expect(onLaunched).not.toHaveBeenCalled();
+  });
+
   test('disables submit until agent + parent are chosen', () => {
     wrap(<AgentRunLauncher wslug="acme" onLaunched={vi.fn()} />);
     expect(screen.getByRole('button', { name: /run agent/i })).toBeDisabled();

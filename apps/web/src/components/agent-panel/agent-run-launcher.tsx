@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Button } from '../ui/button.tsx';
-import { ApiError } from '../../lib/api/client.ts';
+import { formatApiError } from '../../lib/api/index.ts';
 import { useCreateRun, type RunMutationResult } from '../../lib/api/runs.ts';
 import { useWorkspaceAgents } from '../../lib/api/workspace-documents.ts';
 
@@ -36,12 +36,7 @@ export function AgentRunLauncher({ wslug, onLaunched }: AgentRunLauncherProps) {
       });
       onLaunched(result);
     } catch (err) {
-      if (err instanceof ApiError) {
-        const body = err.body as { error?: { code?: string; message?: string } } | null;
-        setError(body?.error?.message ?? body?.error?.code ?? 'Failed to start run.');
-      } else {
-        setError('Failed to start run.');
-      }
+      setError(formatApiError(err));
     }
   };
 
