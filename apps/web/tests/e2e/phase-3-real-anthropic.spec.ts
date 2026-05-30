@@ -91,8 +91,25 @@ test('configure Anthropic key in UI, assign agent, run posts a kind=result comme
 
   const dialog = page.locator('[role="dialog"]');
   await dialog.getByRole('button', { name: /unassigned/i }).click();
-  // The Agents section of the picker lists allow-listed agents by title.
-  await page.getByText('Reply Drafter').last().click();
+
+  // The picker is a Popover; its agent list comes from useWorkspaceAgents,
+  // which resolves AFTER the popover opens. The original `getByText('Reply
+  // Drafter').last().click()` raced that query — at click time the popover
+  // still showed "No agents yet", so the click hit nothing, NO assignment
+  // PATCH fired, and the run never started (root cause of the F-4 e2e
+  // timeout; the product chain itself is proven by scripts/diagnose-agent-
+  // chain.ts --loop). Each agent renders as a <button> with the title +
+  // `agent:<slug>`; wait for that button (Playwright auto-waits) then click it.
+  const agentOption = page.getByRole('button', { name: /Reply Drafter/ });
+  await agentOption.waitFor({ state: 'visible', timeout: 10_000 });
+  await agentOption.click();
+
+  // Fail fast + prove the PATCH landed: the trigger relabels Unassigned →
+  // Reply Drafter. (Without this, a silently-missed assignment only surfaced
+  // 90s later as "0 comments".)
+  await expect(dialog.getByRole('button', { name: /Reply Drafter/ })).toBeVisible({
+    timeout: 10_000,
+  });
 
   // --- 5. Open the Comments tab and wait for the kind=result comment ---
   // KindChip renders `kind` verbatim for non-comment/non-error kinds, so a
