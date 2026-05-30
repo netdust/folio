@@ -21,6 +21,7 @@ function setup(initialSearch: string) {
     path: '/w/$wslug',
     validateSearch: z.object({
       doc: z.string().optional(),
+      tab: z.enum(['fields', 'activity', 'runs']).optional(),
     }),
     component: () => {
       const { wslug } = workspace.useParams();
@@ -204,6 +205,55 @@ describe('WorkspaceDocumentSlideover', () => {
     );
     expect(fieldsBtn).toBeDefined();
     expect(fieldsBtn!.getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('deep-link ?tab=runs opens on the Runs tab', async () => {
+    mockWorkspaceDoc('triage', 'agent');
+    const { queryClient, router } = setup('?doc=triage&tab=runs');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText('Triage Agent');
+
+    const tablist = document.querySelector('[role="tablist"]')!;
+    const runsBtn = Array.from(tablist.querySelectorAll('[role="tab"]')).find(
+      (t) => (t.textContent ?? '').includes('Runs'),
+    );
+    expect(runsBtn).toBeDefined();
+    await waitFor(() => {
+      expect(runsBtn!.getAttribute('aria-pressed')).toBe('true');
+    });
+  });
+
+  it('manual tab click clears the ?tab= param so it stops re-asserting', async () => {
+    mockWorkspaceDoc('triage', 'agent');
+    const { queryClient, router } = setup('?doc=triage&tab=runs');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText('Triage Agent');
+
+    // Arrived on Runs (the deep-link).
+    expect((router.state.location.search as { tab?: string }).tab).toBe('runs');
+
+    const tablist = document.querySelector('[role="tablist"]')!;
+    const fieldsBtn = Array.from(tablist.querySelectorAll('[role="tab"]')).find(
+      (t) => (t.textContent ?? '').includes('Fields'),
+    ) as HTMLElement;
+    await userEvent.click(fieldsBtn);
+
+    // Clicking a tab clears the ?tab= param (and the doc stays).
+    await waitFor(() => {
+      const s = router.state.location.search as { doc?: string; tab?: string };
+      expect(s.tab).toBeUndefined();
+      expect(s.doc).toBe('triage');
+    });
+    // Fields is now the selected tab.
+    expect(fieldsBtn.getAttribute('aria-pressed')).toBe('true');
   });
 
   it('switching to Activity renders the workspace Activity panel + Log button (agent); body editor still visible', async () => {

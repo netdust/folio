@@ -5,6 +5,7 @@ import type { ReactNode } from 'react';
 import { ApprovalButtons } from './approval-buttons.tsx';
 import type { Comment } from '../../lib/api/comments.ts';
 import type { Member } from '../../lib/api/members.ts';
+import { runsKeys } from '../../lib/api/runs.ts';
 
 // ---------------------------------------------------------------------------
 // Time anchor — plan was created 5 minutes before NOW
@@ -444,6 +445,32 @@ describe('ApprovalButtons', () => {
     });
     expect(screen.queryByRole('button', { name: /approve/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /reject/i })).not.toBeInTheDocument();
+  });
+
+  it('E-6: pre-gate (planning) run does NOT show the muted line — falls through to buttons', () => {
+    // Seed the run query cache so `run` is defined synchronously on first
+    // render (avoids a fetch-timing race): a planning run has data immediately.
+    const qc = makeQC();
+    qc.setQueryData(runsKeys.detail('acme', 'r1'), {
+      id: 'r1',
+      slug: 'run-1',
+      type: 'agent_run',
+      title: 'Run',
+      parentId: 'doc-1',
+      projectId: 'proj-1',
+      workspaceId: 'ws-1',
+      status: 'planning',
+      frontmatter: { agent_slug: 'drafter' },
+      createdAt: NOW,
+      updatedAt: NOW,
+    });
+    renderButtons({ planComment: planWithRun }, qc);
+    // A planning run has not yet reached the awaiting_approval gate, so the
+    // "approval no longer needed" muted line must NOT render. The component
+    // falls through to the interactive buttons.
+    expect(screen.queryByText(/approval no longer needed/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /approve/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /reject/i })).toBeInTheDocument();
   });
 
   it('E-6: plan without run_id keeps legacy interactive buttons (no run fetch)', () => {

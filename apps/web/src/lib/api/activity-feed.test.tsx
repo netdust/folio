@@ -59,6 +59,30 @@ describe('useActivityFeed', () => {
     expect(result.current.items).toHaveLength(2);
     expect(result.current.items[0].runDocId).toBe('run-2');
   });
+  test('carries forward firedBy when a transition event omits it', () => {
+    const { result } = renderHook(() => useActivityFeed('acme'));
+    const es = MockEventSource.instances[0]!;
+    // started carries fired_by
+    act(() =>
+      es.emit(
+        'agent.run.started',
+        JSON.stringify({ id: 'e1', kind: 'agent.run.started', documentId: 'run-1', payload: { agent: 'bot', fired_by: 'trigger' } }),
+      ),
+    );
+    expect(result.current.items).toHaveLength(1);
+    expect(result.current.items[0].firedBy).toBe('trigger');
+    // running does NOT carry fired_by — must be carried forward
+    act(() =>
+      es.emit(
+        'agent.run.running',
+        JSON.stringify({ id: 'e2', kind: 'agent.run.running', documentId: 'run-1', payload: { agent: 'bot', to: 'running' } }),
+      ),
+    );
+    expect(result.current.items).toHaveLength(1);
+    expect(result.current.items[0].status).toBe('running');
+    expect(result.current.items[0].firedBy).toBe('trigger');
+  });
+
   test('ignores events without a documentId', () => {
     const { result } = renderHook(() => useActivityFeed('acme'));
     const es = MockEventSource.instances[0]!;

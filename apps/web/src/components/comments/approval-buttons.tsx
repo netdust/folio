@@ -306,13 +306,16 @@ export function ApprovalButtons({
 
   // --- E-6: live run state ---
   // When the comment is linked to a run, reflect the run's LIVE state.
-  // Interactive buttons ONLY while the run still awaits approval; once it has
-  // moved on (running/completed/failed/rejected), show a muted status line
-  // instead of stale buttons. A found `resolution` above (an explicit human
-  // approval/rejection comment) still takes priority — the recorded human
-  // decision is the strongest signal. When there is no run_id (legacy
-  // comments) `run` is undefined and we fall through unchanged.
-  if (runId && run && run.status !== 'awaiting_approval') {
+  // Interactive buttons while the run still awaits approval (or is PRE-gate:
+  // planning) — approval may still be needed. Only once the run has moved
+  // PAST the gate (running) or reached a terminal state (completed/failed/
+  // rejected) do we show a muted status line instead of stale buttons. A found
+  // `resolution` above (an explicit human approval/rejection comment) still
+  // takes priority — the recorded human decision is the strongest signal.
+  // When there is no run_id (legacy comments) `run` is undefined and we fall
+  // through unchanged.
+  const PAST_APPROVAL = new Set(['running', 'completed', 'failed', 'rejected']);
+  if (runId && run && PAST_APPROVAL.has(run.status ?? '')) {
     return (
       <p className="text-xs text-fg-3 mt-1 flex items-center gap-1.5">
         <RunStatusChip status={run.status ?? 'unknown'} />

@@ -202,6 +202,8 @@ function SlideoverBody({
 }) {
   const { data: doc, isLoading, error } = useWorkspaceDocument(wslug, slug);
   const update = useUpdateWorkspaceDocument(wslug);
+  const navigate = useNavigate();
+  const search = useSearch({ strict: false }) as { doc?: string; tab?: WorkspaceDocTabValue };
   const [pendingKeys, setPendingKeys] = useState<Set<string>>(new Set());
 
   // Tab state — per-slideover-open. Defaults to Fields on each fresh open and
@@ -211,6 +213,20 @@ function SlideoverBody({
   useEffect(() => {
     setTab(searchTab ?? 'fields');
   }, [doc?.id, searchTab]);
+
+  // A MANUAL tab click both updates local state AND clears the ?tab= param.
+  // Without clearing, the deep-link param keeps re-asserting on every doc.id
+  // change (the effect above re-fires), overriding the user's choice when
+  // they switch between agents whose navigations carry the search forward.
+  // Deep-link arrival still works: the effect seeds tab from ?tab= on first
+  // render; only an explicit click drops the param.
+  const selectTab = (next: WorkspaceDocTabValue) => {
+    setTab(next);
+    if (search.tab !== undefined) {
+      const { tab: _tab, ...rest } = search;
+      void navigate({ to: '.', search: rest });
+    }
+  };
 
   if (isLoading) return <div className="text-fg-3">Loading document…</div>;
   if (error || !doc) return <div className="text-danger">Failed to load document.</div>;
@@ -245,7 +261,7 @@ function SlideoverBody({
       <header className="flex-shrink-0 pb-2">
         <div className="font-mono text-[11px] text-fg-3">/{doc.slug}</div>
       </header>
-      <TabStrip value={tab} items={tabItems} onChange={setTab} />
+      <TabStrip value={tab} items={tabItems} onChange={selectTab} />
       <div
         data-testid="workspace-slideover-tab-content"
         className="folio-scroll shrink-0 max-h-[40vh] overflow-y-auto pb-3 pt-3"
