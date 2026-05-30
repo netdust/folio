@@ -9,27 +9,63 @@ function wrap(ui: React.ReactNode) {
   return render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>);
 }
 
+function runDoc(id: string, title: string, createdAt: string) {
+  return { id, slug: id, type: 'agent_run', status: 'completed', frontmatter: { agent_slug: 'bot', fired_by: title }, createdAt, updatedAt: createdAt, parentId: 'p1', lastTouchedAt: null };
+}
+
 beforeEach(() => {
   vi.stubGlobal('EventSource', class { addEventListener() {} removeEventListener() {} close() {} } as unknown as typeof EventSource);
-  vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () =>
-    new Response(JSON.stringify({ data: [
-      { id: 'r1', slug: 'run-1', type: 'agent_run', status: 'completed', frontmatter: { agent_slug: 'bot', fired_by: 'assignment' }, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), parentId: 'p1', lastTouchedAt: null },
-    ] }), { status: 200, headers: { 'content-type': 'application/json' } })));
 });
 afterEach(() => vi.unstubAllGlobals());
 
+function fetchCalls(): string[] {
+  return (fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls
+    .map((c) => String(c[0]))
+    .filter((u) => u.includes('/runs'));
+}
+
 describe('RunsHistorySection', () => {
-  test('renders the agent run rows for the primary (first non-wildcard) project', async () => {
+  test('queries EVERY concrete project the agent is scoped to and renders all their runs', async () => {
+    // marketing → an older run; sales → a newer run. Each project returns a
+    // DIFFERENT run, so both endpoints must be fetched for both to appear.
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      const data = url.includes('/p/marketing/runs')
+        ? [runDoc('r-mkt', 'marketing-run', '2026-05-29T10:00:00.000Z')]
+        : url.includes('/p/sales/runs')
+          ? [runDoc('r-sales', 'sales-run', '2026-05-30T10:00:00.000Z')]
+          : [];
+      return new Response(JSON.stringify({ data }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }));
+
     wrap(<RunsHistorySection wslug="acme" agentSlug="bot" projects={['marketing', 'sales']} />);
-    await waitFor(() => expect(screen.getByText('bot')).toBeInTheDocument());
-    expect(screen.getByText('completed')).toBeInTheDocument();
-    const call = (fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.find((c) => String(c[0]).includes('/runs'));
-    expect(String(call![0])).toContain('/p/marketing/runs');
-    expect(String(call![0])).toContain('agent=bot');
+
+    // `fired_by` renders as "· <title>" in the row metadata line.
+    await waitFor(() => expect(screen.getByText(/marketing-run/)).toBeInTheDocument());
+    expect(screen.getByText(/sales-run/)).toBeInTheDocument();
+
+    const calls = fetchCalls();
+    expect(calls.some((u) => u.includes('/p/marketing/runs'))).toBe(true);
+    expect(calls.some((u) => u.includes('/p/sales/runs'))).toBe(true);
+    expect(calls.every((u) => u.includes('agent=bot'))).toBe(true);
+
+    // Merged newest-first: the sales run (2026-05-30) renders before the
+    // marketing run (2026-05-29).
+    const rows = screen.getAllByText(/-run$/);
+    expect(rows.map((n) => n.textContent)).toEqual(['· sales-run', '· marketing-run']);
   });
 
   test('shows an empty state for a wildcard-only agent (no concrete project)', () => {
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () =>
+      new Response(JSON.stringify({ data: [] }), { status: 200, headers: { 'content-type': 'application/json' } })));
     wrap(<RunsHistorySection wslug="acme" agentSlug="bot" projects={['*']} />);
     expect(screen.getByText(/no project/i)).toBeInTheDocument();
+  });
+
+  test('shows "No runs yet." only when ALL projects return zero runs', async () => {
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () =>
+      new Response(JSON.stringify({ data: [] }), { status: 200, headers: { 'content-type': 'application/json' } })));
+    wrap(<RunsHistorySection wslug="acme" agentSlug="bot" projects={['marketing', 'sales']} />);
+    await waitFor(() => expect(screen.getByText(/no runs yet/i)).toBeInTheDocument());
   });
 });
