@@ -348,7 +348,7 @@ documentsRoute.patch('/:slug', requireScope('documents:write'), async (c) => {
     // adopts its first real title. See services/documents.ts::maybeReslugPlaceholder.
     const nextSlug =
       parsed.title !== existing.title
-        ? await maybeReslugPlaceholder(p.id, existing.slug, parsed.title)
+        ? await maybeReslugPlaceholder(p.id, existing.slug, existing.title, parsed.title)
         : null;
     const updated = {
       ...existing,

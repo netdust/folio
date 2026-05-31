@@ -8,12 +8,17 @@ export const agentFrontmatterSchema = z.object({
   // each run at create-time). Kept optional so pre-migration agents still
   // validate; migration 0013 strips it. New agents don't carry it.
   system_prompt: z.string().optional(),
-  // Empty string means "no model" — the agent form commits `model: ''` when
-  // switching to the modelless Claude Code provider, and the per-key frontmatter
-  // PATCH clears a field by sending ''. Coerce '' → undefined so it reads as
-  // absent (valid for claude-code; the superRefine below still requires a model
-  // for API providers). A present non-empty model must be ≥1 char.
-  model: z.preprocess((v) => (v === '' ? undefined : v), z.string().min(1).optional()),
+  // Empty string OR null means "no model". The agent form commits `model: ''`
+  // when switching to the modelless Claude Code provider; a per-key frontmatter
+  // PATCH clears a field by sending '' (form) or null (Folio's null-clears
+  // convention). Coerce both '' and null → undefined so the field reads as
+  // absent (valid for claude-code; the superRefine below + the post-merge
+  // re-check in updateDocument still require a model for API providers). A
+  // present non-empty model must be ≥1 char.
+  model: z.preprocess(
+    (v) => (v === '' || v === null ? undefined : v),
+    z.string().min(1).optional(),
+  ),
   provider: z.enum(['anthropic', 'openai', 'openrouter', 'ollama', 'claude-code']),
   tools: z.array(z.enum([...V1_MCP_TOOLS] as [string, ...string[]])),
   // Phase 2.5: project allow-list. `['*']` (default) = all workspace projects.
