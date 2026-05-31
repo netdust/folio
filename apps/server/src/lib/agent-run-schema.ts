@@ -29,6 +29,10 @@ export const runErrorReasonSchema = z.enum([
   'chain_duration_exceeded',
   'chain_tokens_exceeded',
   'worker_crash',
+  // The agent's prompt (its document body) was empty at run/resume time — the
+  // agent was misconfigured (body cleared). Distinct from a provider/transport
+  // fault: a config error the operator must fix, not a retryable failure.
+  'prompt_empty',
 ]);
 export type RunErrorReason = z.infer<typeof runErrorReasonSchema>;
 

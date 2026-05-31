@@ -39,6 +39,7 @@ import {
   getActiveRun,
   getPendingApprovalRun,
   nextChainId,
+  transitionRun,
 } from '../services/agent-runs.ts';
 import { resolveAgentProjects } from './agent-projects.ts';
 import type { AgentRunFrontmatter } from './agent-run-schema.ts';
@@ -49,7 +50,7 @@ import { rejectRun } from './runner.ts';
 import { HTTPError } from './http.ts';
 
 /**
- * Create a run on the REACTOR path, skipping (not throwing) when the agent has
+ * Create a FRESH trigger-fired run, skipping (not throwing) when the agent has
  * no prompt. `createRun` throws `AGENT_PROMPT_EMPTY` (422) for an agent whose
  * body — the prompt — is empty; on the synchronous HTTP/MCP paths that 422 is
  * the right response, but here a throw escapes `react()` and the durable
@@ -58,9 +59,13 @@ import { HTTPError } from './http.ts';
  * instance-wide. So a misconfigured (body-less) agent must be SKIPPED — the
  * same skip-and-return semantics as the sibling guards (unresolved agent/owner)
  * — not allowed to poison the reactor. Any OTHER error still propagates (a real
- * fault SHOULD halt for retry). A body-non-empty guard at agent-create
- * (documents.ts) closes the hole at the source; this is the reactor-side
- * defense-in-depth so no future empty-prompt source can wedge the dispatcher.
+ * fault SHOULD halt for retry).
+ *
+ * FRESH-path only: there is no pre-existing run to strand, so a bare skip is
+ * correct. The RESUME path does NOT use this — it must FAIL the stranded
+ * awaiting_approval run instead of skipping (see handleResumeRun). No create-
+ * time empty-body guard exists (a deliberate decision — see
+ * tasks/retro-follow-ups.md); this reactor-side skip is the load-bearing fix.
  */
 async function createRunSkippingEmptyPrompt(
   args: Parameters<typeof createRun>[0],
@@ -352,20 +357,46 @@ async function handleResumeRun(
     ensureRunsTable(tx, { workspaceId, projectId }),
   );
 
-  await createRunSkippingEmptyPrompt({
-    workspace,
-    project,
-    runsTable,
-    agent,
-    actor: ownerUser,
-    input: {
-      parentDocumentId: parentId,
-      firedBy: `resume-of:${pending.id}`,
-      chainId,
-      triggerId: null,
-      resumeOf: pending.id,
-    },
-  });
+  // RESUME path: do NOT silently skip a body-less agent the way the fresh-
+  // trigger path does. The fresh path has no pre-existing run to strand, but
+  // here the original `pending` run sits in awaiting_approval and its ONLY exit
+  // is the resume row executing — a bare skip would leave it dangling forever
+  // (no sweeper touches awaiting_approval) with zero operator feedback after
+  // they approved. So on an empty prompt, FAIL the original run: transitionRun
+  // emits agent.run.failed (the operator-visible signal, surfaced in the
+  // activity feed), mirroring rejectRun's terminal-transition convention. Any
+  // OTHER createRun error still propagates (a real fault halts for retry).
+  try {
+    await createRun({
+      workspace,
+      project,
+      runsTable,
+      agent,
+      actor: ownerUser,
+      input: {
+        parentDocumentId: parentId,
+        firedBy: `resume-of:${pending.id}`,
+        chainId,
+        triggerId: null,
+        resumeOf: pending.id,
+      },
+    });
+  } catch (err) {
+    if (err instanceof HTTPError && err.code === 'AGENT_PROMPT_EMPTY') {
+      console.log(
+        `[trigger-matcher] resume_run: agent '${agentSlug}' has an empty prompt (body); failing the stranded awaiting_approval run ${pending.id} instead of leaving it dangling`,
+      );
+      await transitionRun(pending.id, {
+        newStatus: 'failed',
+        actor: ownerUser.id,
+        errorReason: 'prompt_empty',
+        errorDetail:
+          "The agent's prompt (document body) was cleared before approval; restore it and re-run.",
+      });
+      return;
+    }
+    throw err;
+  }
 }
 
 async function maybeCreateRun(

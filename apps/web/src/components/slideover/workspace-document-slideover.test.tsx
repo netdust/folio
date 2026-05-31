@@ -302,6 +302,34 @@ describe('WorkspaceDocumentSlideover', () => {
     expect((router.state.location.search as { tab?: string }).tab).toBeUndefined();
   });
 
+  it('reopening the SAME doc with a fresh ?tab= deep-link re-seeds (seed gate resets on close)', async () => {
+    // Regression: the seededForDocRef gate must reset when the slideover closes,
+    // or reopening the same doc with a deep-link tab is ignored (the panel is
+    // mounted persistently at the layout — it doesn't unmount on close).
+    mockWorkspaceDoc('triage', 'agent');
+    const { queryClient, router } = setup('?wdoc=triage'); // open with NO ?tab=
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText('Triage Agent');
+    // Seeds to Fields (no ?tab=).
+    expect(screen.getByRole('tab', { name: 'Fields' })).toHaveAttribute('aria-selected', 'true');
+
+    // Close the slideover (strip ?wdoc=).
+    await router.navigate({ to: '.', search: {} });
+    await waitFor(() => expect(screen.queryByRole('tab', { name: 'Fields' })).toBeNull());
+
+    // Reopen the SAME doc with a Runs deep-link.
+    await router.navigate({ to: '.', search: { wdoc: 'triage', tab: 'runs' } });
+
+    // Must re-seed to Runs — not stay stale on Fields.
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: 'Runs' })).toHaveAttribute('aria-selected', 'true');
+    });
+  });
+
   it('switching to Activity renders the panel + Log button (agent) and HIDES the body editor', async () => {
     mockWorkspaceDoc('triage', 'agent');
     const { queryClient, router } = setup('?wdoc=triage');

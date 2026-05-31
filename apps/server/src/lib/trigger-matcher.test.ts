@@ -708,6 +708,49 @@ test('resume_run creates a NEW planning row with frontmatter.resume_of + inherit
   expect(resumeRow?.createdBy).toBe(seed.user.id);
 });
 
+test('resume_run of a body-less agent FAILS the stranded run (not skip-and-dangle, not halt)', async () => {
+  // Regression: the reactor skip is correct for FRESH triggers (no run to
+  // strand) but on RESUME the original awaiting_approval run's only exit is the
+  // resume row. A bare skip would leave it dangling forever (no sweeper touches
+  // awaiting_approval) with no operator feedback. So an empty-prompt agent must
+  // FAIL the original run (transitionRun → failed + agent.run.failed event),
+  // never silently skip and never throw (which would halt the reactor).
+  const { db, seed } = await makeTestApp();
+  await seedTriggers(db, seed.workspace.id, seed.user.id);
+  // Agent whose body (prompt) was cleared after the run entered awaiting_approval.
+  const agent = await seedAgent(db, seed.workspace, seed.user, 'helper', undefined, '   ');
+  const wiTable = await getWorkItemsTable(db, seed.project.id);
+  const wi = await seedWorkItem(db, seed.workspace, seed.project, wiTable, seed.user);
+  const runsTable = await ensureRunsTableFor(db, seed);
+  const originalId = await seedAwaitingApprovalRun(
+    db,
+    seed.workspace,
+    seed.project,
+    runsTable,
+    agent,
+    wi,
+    seed.user,
+  );
+
+  // Must NOT throw (a throw = halted reactor).
+  await triggerMatcher.react(
+    commentCreatedEvent({
+      seed,
+      parentId: wi.id,
+      agentSlug: 'helper',
+      kind: 'approval',
+      actor: seed.user.id,
+    }),
+  );
+
+  // No resume row created.
+  expect(await countRuns(db, wi.id, 'helper')).toBe(1);
+  // The original run was FAILED (not left dangling in awaiting_approval).
+  const run = await db.query.documents.findFirst({ where: eq(documents.id, originalId) });
+  expect(run?.status).toBe('failed');
+  expect((run?.frontmatter as { error_reason?: string }).error_reason).toBe('prompt_empty');
+});
+
 test('resume_run fired TWICE creates exactly ONE resume row (idempotency, mitigation 52)', async () => {
   const { db, seed } = await makeTestApp();
   await seedTriggers(db, seed.workspace.id, seed.user.id);

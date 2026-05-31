@@ -77,9 +77,17 @@ export function WorkspaceDocumentSlideover({ wslug }: Props) {
   searchRef.current = search;
   const seededForDocRef = useRef<string | null>(null);
   useEffect(() => {
-    if (doc?.id && seededForDocRef.current !== doc.id) {
-      seededForDocRef.current = doc.id;
-      setTab(searchRef.current.tab ?? 'fields');
+    if (doc?.id) {
+      if (seededForDocRef.current !== doc.id) {
+        seededForDocRef.current = doc.id;
+        setTab(searchRef.current.tab ?? 'fields');
+      }
+    } else {
+      // Slideover closed (doc cleared). Reset the seed gate so REOPENING the
+      // SAME doc with a fresh ?tab= deep-link re-seeds — the component is
+      // mounted persistently at the layout, so without this the ref would keep
+      // the last doc.id and a reopen-same-doc deep-link would be ignored.
+      seededForDocRef.current = null;
     }
   }, [doc?.id]);
   // A MANUAL tab click updates state AND clears the ?tab= deep-link param so it

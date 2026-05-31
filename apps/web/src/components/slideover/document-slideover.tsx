@@ -70,9 +70,15 @@ export function DocumentSlideover({ wslug, pslug }: Props) {
     setTab('fields');
   }, [doc?.id]);
   // Comment count drives the Comments-tab badge (HeaderTabs renders it when >0).
-  // Gated on doc.slug so it idles until the doc resolves; shares CommentsTab's
-  // react-query key so it's a cache hit, not an extra fetch.
-  const commentCount = useComments(wslug, pslug, doc?.slug ?? '').data?.length ?? 0;
+  // Gated on doc.slug so it idles until the doc resolves. Pass the SAME default
+  // visibility (['normal']) that CommentsTab uses with the toggle off, so this
+  // query shares CommentsTab's react-query key (a cache hit, not a second
+  // fetch) AND the badge count matches the rows the tab renders. (A user who
+  // flips CommentsTab's show-internal toggle will see internal comments the
+  // badge doesn't count — an acceptable minor drift; the badge tracks the
+  // default view.)
+  const commentCount =
+    useComments(wslug, pslug, doc?.slug ?? '', { visibility: ['normal'] }).data?.length ?? 0;
   const tabItems: HeaderTabItem<DocTabValue>[] = [
     { value: 'fields', label: 'Fields', icon: FileText },
     { value: 'comments', label: 'Comments', icon: MessageCircle, count: commentCount },
