@@ -252,7 +252,7 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
           onSortChange={onSortChange}
         />
         {/* MainFrame's children container already supplies px-[22px] py-2; don't double it up. */}
-        <div className="flex min-h-0 flex-1 gap-3 overflow-x-auto">
+        <div className="flex min-h-0 flex-1 items-stretch gap-3 overflow-x-auto">
           {columns.map((col) => (
           <KanbanColumn
             key={col.value ?? '__unset__'}

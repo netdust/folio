@@ -310,4 +310,37 @@ describe('KanbanView', () => {
     expect(documentsUrls.some((u) => u.includes('sort=board_position'))).toBe(true);
     expect(router.state.location.search).toEqual({});
   });
+
+  // BF2 (2026-05-31): a short column's tinted background stopped at its last
+  // card instead of filling the board's full height. The fix relies on the
+  // board row stretching each column wrapper (items-stretch + wrapper min-h-0)
+  // so the body's flex-1 grows to the row height. Guard the load-bearing
+  // class on the body div.
+  it('kanban column body stretches to fill height (flex-1)', async () => {
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async (url) => {
+      const u = String(url);
+      if (u.includes('/statuses')) {
+        return new Response(
+          JSON.stringify({ data: [{ id: 's1', key: 'todo', name: 'Todo', color: '#6EAFFF', category: 'unstarted', order: 1 }] }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      if (u.includes('/documents')) {
+        return new Response(
+          JSON.stringify({ data: { data: [{ id: 'd1', slug: 'a', type: 'work_item', title: 'Card A', status: 'todo', parentId: null, frontmatter: {}, createdAt: '', updatedAt: new Date().toISOString() }], nextCursor: null } }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      return new Response('{"data":[]}', { status: 200, headers: { 'content-type': 'application/json' } });
+    }));
+
+    const { queryClient, router } = setup();
+    render(<QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider>);
+    const bodies = await screen.findAllByTestId('kanban-column-body');
+    expect(bodies.length).toBeGreaterThan(0);
+    // The body fills the stretched wrapper via flex-1...
+    expect(bodies[0]!.className).toContain('flex-1');
+    // ...and the wrapper must be able to stretch within the flex row.
+    expect(bodies[0]!.parentElement!.className).toContain('min-h-0');
+  });
 });

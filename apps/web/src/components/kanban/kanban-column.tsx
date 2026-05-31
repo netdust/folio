@@ -25,7 +25,7 @@ export function KanbanColumn({ value, label, color, count, onAdd, isAddPending, 
   const colId = `col-${value ?? '__unset__'}`;
   const { setNodeRef, isOver } = useDroppable({ id: colId, data: { columnValue: value } });
   return (
-    <div className="flex w-[280px] shrink-0 flex-col">
+    <div className="flex w-[280px] min-h-0 shrink-0 flex-col">
       <div className="mb-1 flex items-center gap-2 px-2 py-1">
         {/* When a color is provided (status grouping) render the colored dot.
             Otherwise render a transparent placeholder of the same footprint so
@@ -51,6 +51,7 @@ export function KanbanColumn({ value, label, color, count, onAdd, isAddPending, 
       </div>
       <div
         ref={setNodeRef}
+        data-testid="kanban-column-body"
         className={cn(
           'flex min-h-[200px] flex-1 flex-col gap-1.5 rounded-lg p-1 transition-colors',
           isOver ? 'bg-card' : 'bg-[rgb(0_0_0_/_0.025)] dark:bg-[rgb(255_255_255_/_0.03)]',
