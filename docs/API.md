@@ -92,6 +92,61 @@ Source: `apps/server/src/routes/settings.ts`. BYOK store — keys are libsodium-
 
 `provider` is one of `anthropic | openai | openrouter | ollama`.
 
+## Runner backend: claude-code (Phase 3.x)
+
+The `claude-code` backend executes an agent via the local `claude` CLI instead of calling a BYOK API provider. It is off by default and gated behind the `FOLIO_CLAUDE_CODE_ENABLED` environment flag (see `docs/INSTALL.md`).
+
+> **Security notice.** The `claude-code` runner spawns the local `claude` binary with access to the host's filesystem, SSH keys, and any MCP servers CC has configured. Only enable this on local or personal Folio installs where you control who can define agents. **Never enable it on a shared or hosted instance that holds fleet credentials.**
+
+### Configuring an agent to use this backend
+
+Set `provider: claude-code` in the agent's frontmatter. `model` is optional — when omitted, CC uses its own configured default.
+
+```yaml
+---
+type: agent
+title: Local Dev Helper
+provider: claude-code        # no model required; CC uses its own default
+system_prompt: |
+  You are a local dev assistant. You have access to the project filesystem.
+projects: ["*"]
+---
+```
+
+The agent editor UI shows the `claude-code` option (labelled "no key needed") only when the server flag is on.
+
+### Keyless operation
+
+`claude-code` agents do not use the workspace AI-key store. No key is read, and no key is required. Because of this, `POST /ai/test-key` rejects a payload with `provider: claude-code` with `422 INVALID_PROVIDER_FOR_KEY_TEST` — there is nothing to test.
+
+### How a run executes
+
+When the runner poller claims a `planning` run whose parent agent has `provider: claude-code`, it branches to `ccExecute` instead of the normal provider stream loop:
+
+1. If the agent has `requires_approval: true`, the run transitions to `awaiting_approval` and the CLI is NOT spawned until a human approves via `POST /agent-runs/:id/approve`.
+2. On approval (or immediately if no approval gate), the server spawns `claude -p <prompt>` in Folio's own working directory.
+3. CC runs its own full agentic loop to completion — it may read/write files, run shell commands, call MCP servers, etc. Folio does not step through the loop; it just waits.
+4. The full session transcript is captured and written to the run document's `body` field via `setRunBody`.
+5. When the process exits, the run transitions to `completed` (or `failed` on non-zero exit), and the final result is posted as a `kind=result` comment on the parent document.
+
+### v1 known gaps (fast-follow / Task 7b)
+
+These are deferred to a fast-follow; the runner still works without them:
+
+- **No MCP callback token.** The env contract for `FOLIO_MCP_TOKEN` (a scoped token CC reads to call back into Folio's own MCP server) is documented below but not yet wired — CC is spawned with an empty token value, so it cannot write back into Folio over MCP in v1. Task 7b mints and injects this token.
+- **Runs in Folio's own cwd.** The CLI is spawned from the server's working directory. Host context (project path, etc.) must come from the agent's system prompt or tools — there is no automatic cwd injection yet.
+- **No mid-run cancellation.** Once the `claude` process is spawned, there is no in-flight kill mechanism. A cancellation request transitions the run row to `cancelled` in the database but does not terminate the subprocess.
+
+### FOLIO_MCP_TOKEN env contract
+
+When Task 7b ships, the server will:
+
+1. Mint a short-lived, scoped Bearer token for the run.
+2. Inject it as `FOLIO_MCP_TOKEN=<token>` in the subprocess environment.
+3. CC reads this env var to authenticate against `PUBLIC_URL/mcp` so it can call Folio's MCP tools (read/write documents, post comments, etc.) during the run.
+
+Until then, `FOLIO_MCP_TOKEN` is not set and CC cannot call back into Folio over MCP.
+
 ## Projects (`/api/v1/w/:wslug/projects`, `/api/v1/w/:wslug/p/:pslug`)
 
 Source: `apps/server/src/routes/projects.ts`
