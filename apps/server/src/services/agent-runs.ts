@@ -106,9 +106,9 @@ export async function createRun(
 ): Promise<CreateRunResult> {
   const { workspace, project, runsTable, agent, actor, input } = args;
 
-  // Snapshot provider/model/system_prompt/max_tokens from the agent at
-  // run-create time so a later edit of the agent doesn't mutate historical
-  // runs (mitigation 23 — the run is its own scope).
+  // Snapshot provider/model/max_tokens from the agent frontmatter + the prompt
+  // from the agent body at run-create time so a later edit of the agent doesn't
+  // mutate historical runs (mitigation 23 — the run is its own scope).
   const agentFm = agent.frontmatter as Record<string, unknown>;
   const provider = agentFm.provider as AgentRunFrontmatter['provider'];
   const model = agentFm.model as string;
@@ -117,6 +117,13 @@ export async function createRun(
   // agent body doesn't mutate historical runs (mitigation 23). `system_prompt`
   // remains the run-frontmatter field name (the runner reads ctx.fm.system_prompt).
   const systemPrompt = (agent.body ?? '').trim();
+  if (systemPrompt.length === 0) {
+    throw new HTTPError(
+      'AGENT_PROMPT_EMPTY',
+      "This agent has no prompt. Write the agent's instructions in its document body before running it.",
+      422,
+    );
+  }
   const maxTokens = agentFm.max_tokens_per_run as number;
 
   const id = nanoid();

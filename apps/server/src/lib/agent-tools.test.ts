@@ -293,7 +293,9 @@ async function seedAgent(
     slug: agentSlug,
     title: 'Test Agent',
     status: null,
-    body: '',
+    // The agent body IS the prompt (snapshot at run-create); createRun rejects
+    // an empty body, so seed a non-empty one.
+    body: 'help',
     frontmatter: {
       system_prompt: 'help',
       model: 'm',
@@ -589,7 +591,9 @@ async function seedRunAgent(
     slug,
     title: slug,
     status: null,
-    body: '',
+    // The agent body IS the prompt (snapshot at run-create); createRun rejects
+    // an empty body, so seed a non-empty one.
+    body: 'You are a helper.',
     frontmatter: {
       system_prompt: 'You are a helper.',
       model: 'claude-sonnet-4-6',

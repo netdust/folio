@@ -327,7 +327,9 @@ async function setupAgentBoundToken(
     slug: agentSlug,
     title: 'Test Agent',
     status: null,
-    body: '',
+    // The agent body IS the prompt (snapshot at run-create); createRun rejects
+    // an empty body, so seed a non-empty one.
+    body: 'help',
     frontmatter: {
       system_prompt: 'help',
       model: 'm',

@@ -292,6 +292,31 @@ describe('createRun', () => {
     const fm = result.document.frontmatter as AgentRunFrontmatter;
     expect(fm.system_prompt).toBe('You are the body prompt.');
   });
+
+  test('rejects an agent whose body (the prompt) is empty', async () => {
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    // Whitespace-only body → trim() → '' → the empty-prompt guard must fire.
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'whitespace-agent', '   ');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+
+    await expect(
+      createRun({
+        workspace: seed.workspace,
+        project: seed.project,
+        runsTable,
+        agent,
+        actor: seed.user,
+        input: {
+          parentDocumentId: parent.id,
+          firedBy: 'agent.task.assigned',
+          chainId: crypto.randomUUID(),
+          triggerId: null,
+        },
+      }),
+    ).rejects.toThrow(/empty|prompt/i);
+  });
 });
 
 // ---------- transitionRun ----------
