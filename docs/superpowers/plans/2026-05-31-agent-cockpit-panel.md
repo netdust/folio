@@ -404,6 +404,10 @@ git commit -m "ui: AgentList (list + New agent), extracted for the cockpit panel
 
 - [ ] **Step 3: Wire into `w.$wslug.tsx`** — `panel={<AgentCockpitPanel wslug={wslug} />}` on `<Shell>`; add to `TOOLS`: `{id:'agents', label:'Agents', lucideIcon: Bot, onClick: () => agentPanelBus.toggle()}` (re-import `Bot`); change `onOpenAgents={() => agentPanelBus.toggle()}` (remove the `navigate('/agents')`); mount `<WorkspaceDocumentSlideover wslug={wslug} />` inside the layout (e.g. alongside the existing create dialogs/sheets, so it's present on every center route). Re-run `w.$wslug.test.tsx`.
 
+> **⚠ Plan correction noted during Task 6 execution (shipped in `bc0e801`):**
+> The plan omitted that the **layout route needs `validateSearch`** for `doc` so `?doc=` survives navigation on the no-project index route (`w.$wslug.index.tsx` has none). Add `validateSearch: z.object({ doc: z.string().optional(), tab: z.string().optional() })` to the `/w/$wslug` route.
+> Critically, `tab` MUST be `z.string().optional()`, NOT `z.enum(['fields','activity','runs'])`: TanStack merges the parent enum onto every child, which then rejects sibling routes' own `tab` values (the `settings` route uses `tab: 'tokens'|'ai'`) — a real tsc error in `provider-health-banner.tsx`. The parent widens to `string`; each child keeps its narrower enum; the slideover narrows `tab` on read. Refer to `bc0e801`.
+
 > **⚠️ Task 6 note (Step 2.5):** The slideover currently mounts on the agents PAGE. Moving it to the layout means it's always mounted (reads `?doc=` from any route). Confirm that doesn't double-mount if the page also still mounts it (Task 7 retires the page, so it won't — but order matters: do Task 6 + 7 together or ensure no double-mount). Also: the activity-feed-screen's row nav (`to:'/w/$wslug/agents'`) is retired in Task 7 — Task 6's panel works regardless, but flag the cross-dependency.
 
 - [ ] **Step 4: Commit**
