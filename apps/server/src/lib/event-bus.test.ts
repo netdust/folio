@@ -1,5 +1,5 @@
-import { test, expect } from 'bun:test';
-import { eventBus, type BusEvent } from './event-bus.ts';
+import { expect, test } from 'bun:test';
+import { type BusEvent, eventBus } from './event-bus.ts';
 
 test('subscribe receives published events for matching workspace', () => {
   const received: BusEvent[] = [];
@@ -20,7 +20,9 @@ test('subscribe does not receive events from other workspaces', () => {
 
 test('subscribe with a kinds filter only receives matching events', () => {
   const received: BusEvent[] = [];
-  const unsub = eventBus.subscribe('ws-1', { kinds: ['document.created'] }, (e) => received.push(e));
+  const unsub = eventBus.subscribe('ws-1', { kinds: ['document.created'] }, (e) =>
+    received.push(e),
+  );
   eventBus.publish({ workspaceId: 'ws-1', kind: 'document.updated', payload: {} });
   eventBus.publish({ workspaceId: 'ws-1', kind: 'document.created', payload: {} });
   expect(received.length).toBe(1);
@@ -78,7 +80,9 @@ test('unsubscribe stops receiving events', () => {
 
 test('handler errors do not break other subscribers', () => {
   const received: BusEvent[] = [];
-  const unsub1 = eventBus.subscribe('ws-1', undefined, () => { throw new Error('boom'); });
+  const unsub1 = eventBus.subscribe('ws-1', undefined, () => {
+    throw new Error('boom');
+  });
   const unsub2 = eventBus.subscribe('ws-1', undefined, (e) => received.push(e));
   eventBus.publish({ workspaceId: 'ws-1', kind: 'document.created', payload: {} });
   expect(received.length).toBe(1);
@@ -86,12 +90,77 @@ test('handler errors do not break other subscribers', () => {
   unsub2();
 });
 
+// ── system events (workspaceId: null) ───────────────────────────────────────
+
+test('system event (workspaceId: null) is delivered to a subscriber whose workspace does not match', () => {
+  const seen: string[] = [];
+  const unsub = eventBus.subscribe('ws-A', undefined, (e) => seen.push(e.kind));
+  eventBus.publish({
+    workspaceId: null,
+    kind: 'reactor.halted',
+    payload: { reactor_id: 'x', stuck_at_seq: 1 },
+  });
+  unsub();
+  expect(seen).toEqual(['reactor.halted']);
+});
+
+test('a normal workspace-scoped event still does NOT cross workspaces', () => {
+  const seen: string[] = [];
+  const unsub = eventBus.subscribe('ws-A', undefined, (e) => seen.push(e.kind));
+  eventBus.publish({ workspaceId: 'ws-B', kind: 'document.created' });
+  unsub();
+  expect(seen).toEqual([]); // ws-A subscriber must not see ws-B's event
+});
+
+// A system event (workspaceId: null) must reach a PROJECT-scoped subscriber.
+// Regression: emitReactorHealth omitted projectId, leaving e.projectId
+// undefined. The projectId filter only short-circuits on `e.projectId === null`
+// (the BUG-021 precedent); with `undefined`, the guard `e.projectId !== null` is
+// true and the system event was DROPPED for any `?project=X` SSE client —
+// reactor-health alerts invisible to project-scoped operators. The fix: system
+// events publish projectId:null (and documentId:null) explicitly.
+test('system event (workspaceId: null) IS delivered to a subscriber with a projectId filter', () => {
+  const seen: string[] = [];
+  const unsub = eventBus.subscribe('ws-A', { projectId: 'p1' }, (e) => seen.push(e.kind));
+  eventBus.publish({
+    workspaceId: null,
+    projectId: null,
+    documentId: null,
+    kind: 'reactor.halted',
+    payload: { reactor_id: 'x', stuck_at_seq: 1 },
+  });
+  unsub();
+  expect(seen).toEqual(['reactor.halted']);
+});
+
+// Proves the ROOT CAUSE: a system event with projectId UNDEFINED (the pre-fix
+// emitReactorHealth shape) is wrongly dropped by a projectId-filtered
+// subscriber. Pins the contract that callers must pass projectId:null, not omit
+// it. (emitReactorHealth's own test in event-dispatcher.test.ts proves it now
+// passes projectId:null.)
+test('system event with projectId UNDEFINED is dropped by a projectId filter (why callers must pass null)', () => {
+  const seen: string[] = [];
+  const unsub = eventBus.subscribe('ws-A', { projectId: 'p1' }, (e) => seen.push(e.kind));
+  eventBus.publish({
+    workspaceId: null,
+    projectId: undefined,
+    kind: 'reactor.halted',
+    payload: { reactor_id: 'x', stuck_at_seq: 1 },
+  });
+  unsub();
+  expect(seen).toEqual([]); // undefined projectId fails the project gate — documents the trap
+});
+
 // ── parentId filter ────────────────────────────────────────────────────────
 
 test('parentId filter passes when payload.parent_id matches', () => {
   const received: BusEvent[] = [];
   const unsub = eventBus.subscribe('ws-p', { parentId: 'doc-1' }, (e) => received.push(e));
-  eventBus.publish({ workspaceId: 'ws-p', kind: 'comment.created', payload: { parent_id: 'doc-1' } });
+  eventBus.publish({
+    workspaceId: 'ws-p',
+    kind: 'comment.created',
+    payload: { parent_id: 'doc-1' },
+  });
   expect(received.length).toBe(1);
   unsub();
 });
@@ -99,7 +168,11 @@ test('parentId filter passes when payload.parent_id matches', () => {
 test('parentId filter excludes when payload.parent_id does not match', () => {
   const received: BusEvent[] = [];
   const unsub = eventBus.subscribe('ws-p', { parentId: 'doc-1' }, (e) => received.push(e));
-  eventBus.publish({ workspaceId: 'ws-p', kind: 'comment.created', payload: { parent_id: 'doc-2' } });
+  eventBus.publish({
+    workspaceId: 'ws-p',
+    kind: 'comment.created',
+    payload: { parent_id: 'doc-2' },
+  });
   expect(received.length).toBe(0);
   unsub();
 });
@@ -117,7 +190,11 @@ test('parentId filter excludes events whose payload has no parent_id key', () =>
 test('runId filter passes when payload.run_id matches', () => {
   const received: BusEvent[] = [];
   const unsub = eventBus.subscribe('ws-r', { runId: 'run-abc' }, (e) => received.push(e));
-  eventBus.publish({ workspaceId: 'ws-r', kind: 'document.created', payload: { run_id: 'run-abc' } });
+  eventBus.publish({
+    workspaceId: 'ws-r',
+    kind: 'document.created',
+    payload: { run_id: 'run-abc' },
+  });
   expect(received.length).toBe(1);
   unsub();
 });
@@ -125,7 +202,11 @@ test('runId filter passes when payload.run_id matches', () => {
 test('runId filter excludes when payload.run_id does not match', () => {
   const received: BusEvent[] = [];
   const unsub = eventBus.subscribe('ws-r', { runId: 'run-abc' }, (e) => received.push(e));
-  eventBus.publish({ workspaceId: 'ws-r', kind: 'document.created', payload: { run_id: 'run-xyz' } });
+  eventBus.publish({
+    workspaceId: 'ws-r',
+    kind: 'document.created',
+    payload: { run_id: 'run-xyz' },
+  });
   expect(received.length).toBe(0);
   unsub();
 });
@@ -142,20 +223,44 @@ test('runId filter excludes events whose payload has no run_id key', () => {
 
 test('AND-combination: kinds + parentId + projectId all must match', () => {
   const received: BusEvent[] = [];
-  const unsub = eventBus.subscribe('ws-and', {
-    kinds: ['comment.created'],
-    projectId: 'p1',
-    parentId: 'doc-1',
-  }, (e) => received.push(e));
+  const unsub = eventBus.subscribe(
+    'ws-and',
+    {
+      kinds: ['comment.created'],
+      projectId: 'p1',
+      parentId: 'doc-1',
+    },
+    (e) => received.push(e),
+  );
 
   // Fails kind filter
-  eventBus.publish({ workspaceId: 'ws-and', projectId: 'p1', kind: 'document.updated', payload: { parent_id: 'doc-1' } });
+  eventBus.publish({
+    workspaceId: 'ws-and',
+    projectId: 'p1',
+    kind: 'document.updated',
+    payload: { parent_id: 'doc-1' },
+  });
   // Fails projectId filter
-  eventBus.publish({ workspaceId: 'ws-and', projectId: 'p2', kind: 'comment.created', payload: { parent_id: 'doc-1' } });
+  eventBus.publish({
+    workspaceId: 'ws-and',
+    projectId: 'p2',
+    kind: 'comment.created',
+    payload: { parent_id: 'doc-1' },
+  });
   // Fails parentId filter
-  eventBus.publish({ workspaceId: 'ws-and', projectId: 'p1', kind: 'comment.created', payload: { parent_id: 'doc-99' } });
+  eventBus.publish({
+    workspaceId: 'ws-and',
+    projectId: 'p1',
+    kind: 'comment.created',
+    payload: { parent_id: 'doc-99' },
+  });
   // Passes all filters
-  eventBus.publish({ workspaceId: 'ws-and', projectId: 'p1', kind: 'comment.created', payload: { parent_id: 'doc-1' } });
+  eventBus.publish({
+    workspaceId: 'ws-and',
+    projectId: 'p1',
+    kind: 'comment.created',
+    payload: { parent_id: 'doc-1' },
+  });
 
   expect(received.length).toBe(1);
   expect(received[0]!.kind).toBe('comment.created');

@@ -2,6 +2,7 @@ import { createFileRoute, Outlet, useNavigate, useParams, useRouterState } from 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQueries, useQueryClient } from '@tanstack/react-query';
 import { Search } from 'lucide-react';
+import { z } from 'zod';
 import { toast } from 'sonner';
 import { useLogout, useMe } from '../lib/api/auth.ts';
 import { useProjects, useUpdateProject, useDeleteProject, projectsKeys } from '../lib/api/projects.ts';
@@ -21,23 +22,48 @@ import { ProjectCreate } from '../components/onboarding/project-create.tsx';
 import { TableCreate } from '../components/onboarding/table-create.tsx';
 import { NewViewSheet } from '../components/views/new-view-sheet.tsx';
 import { openCommandPalette } from '../lib/command-palette-bus.ts';
+import { ProviderHealthBanner } from '../components/shell/provider-health-banner.tsx';
+import { ReactorHaltBanner } from '../components/shell/reactor-halt-banner.tsx';
 import { modKeyHint } from '../lib/platform.ts';
 import { buildRailTree, type RailTreeHandlers } from '../lib/rail-tree.ts';
+import { agentPanelBus } from '../lib/agent-panel-bus.ts';
+import { AgentCockpitPanel } from '../components/agent-panel/agent-cockpit-panel.tsx';
+import { WorkspaceDocumentSlideover } from '../components/slideover/workspace-document-slideover.tsx';
 
 export const Route = createFileRoute('/w/$wslug')({
+  // The agent cockpit panel + config slideover live at the layout, so `?wdoc=`
+  // and `?tab=` must validate workspace-wide (the no-project landing route
+  // doesn't declare them otherwise). `wdoc` (workspace-doc) is DISTINCT from
+  // the project DocumentSlideover's `?doc=` so the two slideovers — both
+  // mounted under this layout — never open as stacked dual modals on one param.
+  // The work-item `?doc=` param is validated by the CHILD project routes
+  // (work-items / board / wiki each declare it), not here.
+  validateSearch: z.object({
+    wdoc: z.string().optional(),
+    // Broad `string` (not a narrow enum) so the merged parent type doesn't
+    // collide with sibling routes that declare their own narrower `tab` enums
+    // (settings: tokens|ai, agents: fields|activity|runs). A parent enum would
+    // force `tab` to that enum everywhere and reject e.g. settings' `tab:'ai'`
+    // at navigate sites. The slideover narrows `tab` on read.
+    tab: z.string().optional(),
+  }),
   component: WorkspaceLayout,
 });
 
 // Exported for tests. Production callers go through the file route.
 export { WorkspaceLayout };
 
-const TOOLS: NavItem[] = [{
-  id: 'search',
-  label: 'Search',
-  lucideIcon: Search,
-  kbd: modKeyHint('K'),
-  onClick: openCommandPalette,
-}];
+const TOOLS: NavItem[] = [
+  {
+    id: 'search',
+    label: 'Search',
+    lucideIcon: Search,
+    kbd: modKeyHint('K'),
+    onClick: openCommandPalette,
+  },
+  // The agent cockpit panel is toggled from the workspace dropdown ("Agents")
+  // and Cmd-K ("Run agent…") — no rail tool, to avoid a redundant entry.
+];
 
 function WorkspaceLayout() {
   // Use generic useParams so the component is mountable in tests without the
@@ -308,9 +334,7 @@ function WorkspaceLayout() {
                   onSelectWorkspace={onSelectWorkspace}
                   onCreateWorkspace={onCreateWorkspace}
                   onCreateProject={() => setCreatingProject(true)}
-                  onOpenAgents={() =>
-                    void navigate({ to: '/w/$wslug/agents', params: { wslug } })
-                  }
+                  onOpenAgents={() => agentPanelBus.toggle()}
                   onOpenTriggers={() =>
                     void navigate({ to: '/w/$wslug/triggers', params: { wslug } })
                   }
@@ -335,7 +359,20 @@ function WorkspaceLayout() {
             }}
           />
         }
-        main={<Outlet />}
+        main={
+          // flex column so a visible banner reserves its own height (shrink-0)
+          // and the Outlet page fills the rest (flex-1 min-h-0) instead of an
+          // h-full page overflowing the viewport beneath the banner. Banners
+          // are null in the healthy case → this collapses to just the Outlet.
+          <div className="flex h-full min-h-0 flex-col">
+            <ReactorHaltBanner wslug={wslug} />
+            <ProviderHealthBanner wslug={wslug} />
+            <div className="min-h-0 flex-1">
+              <Outlet />
+            </div>
+          </div>
+        }
+        panel={<AgentCockpitPanel wslug={wslug} />}
       />
       <WorkspaceCreate open={creatingWorkspace} onOpenChange={setCreatingWorkspace} />
       <ProjectCreate wslug={wslug} open={creatingProject} onOpenChange={setCreatingProject} />
@@ -382,6 +419,7 @@ function WorkspaceLayout() {
           )}
         </DialogContent>
       </Dialog>
+      <WorkspaceDocumentSlideover wslug={wslug} />
     </>
   );
 }

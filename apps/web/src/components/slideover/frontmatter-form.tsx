@@ -24,10 +24,8 @@ interface AgentFieldMeta {
 }
 
 const AGENT_FIELDS: AgentFieldMeta[] = [
-  {
-    key: 'system_prompt',
-    description: 'Instructions the agent receives on every run. Describe its role and what it should do.',
-  },
+  // system_prompt removed — the agent's prompt is now its document body
+  // (rendered by the body editor on the Fields tab), not a frontmatter field.
   {
     key: 'provider',
     description: 'AI provider + model. Needs a configured API key in workspace settings.',
@@ -94,8 +92,9 @@ export function FrontmatterForm({
   const pinnedByKey = new Map(pinnedFields.map((f) => [f.key, f]));
 
   // Sort keys: pinned (by `order`) first, then inferred (alphabetical).
-  // Agents get a canonical field order on top of that (system_prompt first,
-  // provider+model adjacent, etc.) so the slideover reads top-down.
+  // Agents get a canonical field order on top of that (provider+model first,
+  // then tools/projects, etc.) so the slideover reads top-down. The prompt is
+  // no longer a frontmatter field — it lives in the document body.
   const inferredKeysRaw = Object.keys(frontmatter).filter((k) => !pinnedByKey.has(k));
   const inferredKeys =
     type === 'agent' ? orderKeysForAgent(inferredKeysRaw) : inferredKeysRaw.sort();

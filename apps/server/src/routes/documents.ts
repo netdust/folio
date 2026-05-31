@@ -45,7 +45,14 @@ interface ParsedMdInput {
   status: string | null;
 }
 
-const DOCUMENT_TYPES: readonly DocumentType[] = ['work_item', 'page', 'agent', 'trigger'];
+// F10 fix (post-C.1 review) — `agent_run` is in the DocumentType union
+// (widened in C-1) but was missing from this set, so parseMarkdownInput
+// silently coerced `type: agent_run` in user-submitted markdown to
+// `work_item`, polluting work_items frontmatter inference with
+// run-shaped fields (tokens_in, chain_id, agent_slug). Include it so
+// the type is recognized; the PATCH/POST handlers reject it with a
+// clean 422 (see the agent_run guards below).
+const DOCUMENT_TYPES: readonly DocumentType[] = ['work_item', 'page', 'agent', 'trigger', 'agent_run'];
 
 function parseMarkdownInput(raw: string, defaults?: { type?: DocumentType }): ParsedMdInput {
   const { frontmatter, body } = parseMarkdown(raw);
@@ -137,6 +144,19 @@ documentsRoute.get('/', async (c) => {
     );
   }
 
+  // C1 (Phase-3 shake-out): reject explicit `type=agent_run` early with a clean
+  // 422. agent_run rows are runner-owned (system_prompt/provider/tokens) and
+  // are read via the /runs endpoints, never enumerated through generic
+  // documents. listDocuments also rejects this (defense in depth) — this route
+  // guard mirrors the agent/trigger guard above so the error is consistent.
+  if (type === 'agent_run') {
+    throw new HTTPError(
+      'AGENT_RUN_REQUIRES_RUNNER_PATH',
+      'agent_run documents are runner-owned; list via the /runs endpoints, not the generic document endpoint',
+      422,
+    );
+  }
+
   if (limitRaw !== undefined) {
     const n = Number(limitRaw);
     if (!Number.isFinite(n) || !Number.isInteger(n) || n < 1) {
@@ -183,6 +203,19 @@ documentsRoute.get('/:slugMd{[^/]+\\.md}', async (c) => {
   const slug = slugMd.slice(0, -3);
   const row = await getDocument(p.id, slug);
   if (!row) throw new HTTPError('DOCUMENT_NOT_FOUND', `document "${slug}" not found`, 404);
+  // R2 fix (post-review-of-review) — agent_run rows are runner-owned
+  // and contain operator-sensitive frontmatter (system_prompt, chain_id,
+  // tokens_in/out, provider). Bundle 4 hardened WRITE paths but left
+  // generic-document READ paths open. A `documents:read` bearer could
+  // dump the system_prompt by knowing/enumerating a run slug. Reject
+  // with the same code Sub-phase D's /runs/:id read will own.
+  if (row.type === 'agent_run') {
+    throw new HTTPError(
+      'AGENT_RUN_REQUIRES_RUNNER_PATH',
+      'agent_run documents are runner-owned; read via the /runs endpoints (Sub-phase D), not the generic document endpoint',
+      422,
+    );
+  }
 
   // Strip reserved keys from frontmatter at read time too, as defense in
   // depth: older rows written before stripReservedFrontmatter shipped may
@@ -208,6 +241,14 @@ documentsRoute.get('/:slug', async (c) => {
   const slug = c.req.param('slug');
   const row = await getDocument(p.id, slug);
   if (!row) throw new HTTPError('DOCUMENT_NOT_FOUND', `document "${slug}" not found`, 404);
+  // R2 — same agent_run guard as the markdown-GET variant above.
+  if (row.type === 'agent_run') {
+    throw new HTTPError(
+      'AGENT_RUN_REQUIRES_RUNNER_PATH',
+      'agent_run documents are runner-owned; read via the /runs endpoints (Sub-phase D), not the generic document endpoint',
+      422,
+    );
+  }
   return jsonOk(c, row);
 });
 
@@ -251,6 +292,18 @@ documentsRoute.patch('/:slug', requireScope('documents:write'), async (c) => {
       throw new HTTPError(
         'INVALID_DOCUMENT_SCOPE',
         `${existing.type} documents must be mutated through /api/v1/w/:wslug/documents (workspace-scoped), not the project-scoped markdown PATCH`,
+        422,
+      );
+    }
+    // F3 fix (post-C.1 review) — agent_run rows are runner-owned. The
+    // state machine, error_reason enum, sanitizer, and agent.run.*
+    // event emission all live in services/agent-runs.ts::transitionRun.
+    // A markdown PATCH here would wholesale-replace frontmatter,
+    // bypassing all of those mitigations. Reject.
+    if (existing.type === 'agent_run') {
+      throw new HTTPError(
+        'AGENT_RUN_REQUIRES_RUNNER_PATH',
+        'agent_run documents are runner-owned and mutate only via the runner / approve / cancel endpoints (Sub-phase D), not the generic markdown PATCH',
         422,
       );
     }

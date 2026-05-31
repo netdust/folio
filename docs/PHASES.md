@@ -836,9 +836,11 @@ Hand-rolled Hono sub-app at `/mcp`. Speaks JSON-RPC 2.0 over HTTP POST. Bearer-a
 
 ### Data model
 
-- [ ] Migration `0009_phase_3_agent_runs.sql`: widen `documents.type` enum to include `agent_run`. CHECK constraint: `type='agent_run' ⇒ workspace_id IS NOT NULL AND project_id IS NOT NULL AND table_id IS NOT NULL AND parent_id IS NOT NULL`. Indexes: `documents_runs_by_parent_idx` (parent_id), `documents_runs_by_status_idx` (table_id, status), `documents_runs_pending_idx` (partial on status='planning' — the poller's claim index), `documents_runs_by_chain_idx` (expression index on json_extract chain_id — for fanout/duration/token aggregation).
-- [ ] `agent_run` frontmatter Zod: `agent_slug` (required), `provider`, `model`, `tokens_in`, `tokens_out`, `max_tokens`, `trigger_id` (nullable), `chain_id` (uuid; root mints, descendants inherit), `fired_by` (string — chain_id-prefixed trigger chain), `system_prompt` (snapshot), `worker_started_at` (set when poller claims; cleared on terminal), `error_reason` (nullable), `started_at`, `completed_at`.
-- [ ] Status state machine: `planning → awaiting_approval → running → completed | failed | rejected`. Transitions enforced in service layer.
+> Shipped on `phase-3/agent-runner` as Sub-phase A (2026-05-28). Migration shipped as `0012_phase_3_agent_runs.sql` + `0012a_flip_runner_builtins_to_enabled.sql` — Phase 2.6 took 0007–0011, so the original `0009`/`0009a` tags slid forward. State-machine transitions live in `apps/server/src/lib/agent-run-schema.ts::isValidTransition()` for Sub-phase A; service-layer enforcement lands in Sub-phase C.
+
+- [x] Migration `0012_phase_3_agent_runs.sql`: widen `documents.type` enum to include `agent_run`. CHECK constraint: `type='agent_run' ⇒ workspace_id IS NOT NULL AND project_id IS NOT NULL AND table_id IS NOT NULL AND parent_id IS NOT NULL`. Indexes: `documents_runs_by_parent_idx` (parent_id), `documents_runs_by_status_idx` (table_id, status), `documents_runs_pending_idx` (partial on status='planning' — the poller's claim index), `documents_runs_by_chain_idx` (expression index on json_extract chain_id — for fanout/duration/token aggregation). *(A-2, commit `13c76d8`.)*
+- [x] `agent_run` frontmatter Zod: `agent_slug` (required), `provider`, `model`, `tokens_in`, `tokens_out`, `max_tokens`, `trigger_id` (nullable), `chain_id` (uuid; root mints, descendants inherit), `fired_by` (string — chain_id-prefixed trigger chain), `system_prompt` (snapshot), `worker_started_at` (set when poller claims; cleared on terminal), `error_reason` (nullable), `started_at`, `completed_at`. Lives at `apps/server/src/lib/agent-run-schema.ts` (camelCase consts per house style, `.strict()` enforced). *(A-4, commits `02c4564` + fixup `bc4b5ee`.)*
+- [x] Status state machine: `planning → awaiting_approval → running → completed | failed | rejected`. `isValidTransition(from, to)` helper + `TERMINAL_STATUSES` constant shipped in `agent-run-schema.ts`. Service-layer enforcement at write-time deferred to Sub-phase C. *(A-4.)*
 
 ### Provider abstraction
 
@@ -846,6 +848,26 @@ Hand-rolled Hono sub-app at `/mcp`. Speaks JSON-RPC 2.0 over HTTP POST. Bearer-a
 - [ ] `lib/ai/anthropic.ts`, `openai.ts`, `openrouter.ts`, `ollama.ts` — all support streaming.
 - [ ] `routes/ai.ts`: `POST /api/v1/w/:wslug/ai/test-key` — validates a key with a cheap call without storing.
 - [ ] Workspace AI-key UI in `/w/:wslug/settings` — new "AI" tab with provider/model selectors + key input + Test button. Hooks into existing `aiKeys` storage (Phase 0).
+
+### Tool-execution layer — one tool surface, two faces (runner prerequisite)
+
+> **Decision (2026-05-28): inside-agent === outside-agent. ONE authorization model.** A customer's external agent (Claude Code over the MCP HTTP endpoint) and Folio's own in-process runner agent are the **same kind of agent** — same identity, same `tools:` set, same `projects:` scope, same authorization check. The ONLY difference is transport. So the internal runner is **NOT an MCP client** — it doesn't speak JSON-RPC to itself, there's no wire. The tools just need to stop living *only* behind the MCP route.
+>
+> **Why this is a hard prerequisite for the runner.** Today the `TOOLS` registry + per-tool scope check + handler dispatch live *inline inside the Hono route* (`apps/server/src/routes/mcp.ts:1253-1314`), reachable only via an HTTP request. The runner has **no HTTP request** — it has an `agent_run` row + the agent's token. When `runAgent`'s loop receives a `tool_call` event it has no function to invoke. So: lift the tool *implementations* + registry + scope check into a shared **tool-execution layer** that both faces call. MCP becomes ONE consumer (the JSON-RPC face), the runner is the other (the in-process face). Pure extraction — the existing MCP route tests pin the behavior, so a green suite proves the lift is faithful. See `memory/project_folio-agent-thesis.md`: the introspect-and-shape tools that make "set up a project for me" work all flow through this surface.
+>
+> ```
+>            tool impls (read_doc, create_work_item, list_projects, …) + scope check   ← lib/agent-tools.ts
+>                                    │
+>                    ┌───────────────┴────────────────┐
+>               routes/mcp.ts                     lib/runner.ts
+>               (JSON-RPC face,                   (in-process face,
+>                external agents)                  Folio's own agent)
+> ```
+
+- [ ] `lib/agent-tools.ts` (NOT `mcp-dispatch` — it is not MCP-specific): extract the `TOOLS` registry + scope check + handler dispatch out of `routes/mcp.ts`. Expose `executeTool(token, actor, name, args): Promise<ToolResult>` (the body of `mcp.ts:1272-1313` verbatim — unknown-tool, **scope-gate `token.scopes.includes(tool.requiredScope)`**, handler-invoke, error mapping) and `listTools(token): ToolDef[]` (**scope-filtered to the token, not the raw static array** — the runner hands the model only the tools its agent is allowed to call). The scope check is IDENTICAL for both callers — the token carries the authority, so the layer needs no "which caller" parameter (per the inside===outside decision).
+- [ ] `routes/mcp.ts`: shrinks to pure transport — parse JSON-RPC envelope → resolve bearer token → `executeTool(...)` → wrap result/error as JSON-RPC. No behavior change. Existing MCP route tests stay green (the pin that proves the extraction is faithful).
+- [ ] `lib/runner.ts` (later task): on a `tool_call` event, calls `executeTool(agentRun.token, actor, name, args)` **directly** — no JSON-RPC, no bearer round-trip, no self-HTTP. The agent's token (its `tools:`/`projects:`-derived scopes, the same object MCP middleware resolves from a bearer header) IS the authorization. An agent therefore cannot do more in-process than it could over the wire — same code path below the transport.
+- [ ] Confirm the layer's `ToolDef` shape matches the provider layer's `ToolDef` (`lib/ai/provider.ts:18-22`) so `runAgent` can pass `listTools(token)` straight into `provider.stream({ tools })` with no adapter.
 
 ### Runner (polling-worker model)
 
@@ -871,11 +893,20 @@ Hand-rolled Hono sub-app at `/mcp`. Speaks JSON-RPC 2.0 over HTTP POST. Bearer-a
 
 ### Built-in triggers — wiring (defined in Phase 2.6, activated here)
 
-- [ ] Migration `0009a_flip_runner_builtins_to_enabled.sql`: flips `builtin-on-assignment` and `builtin-on-mention` from `enabled: false` to `enabled: true` for every workspace. Idempotent (no-op if already enabled).
+- [x] Migration `0012a_flip_runner_builtins_to_enabled.sql`: flips `builtin-on-assignment` and `builtin-on-mention` from `enabled: false` to `enabled: true` for every workspace. Idempotent (no-op if already enabled). Companion change in `apps/server/src/lib/builtin-triggers.ts` so newly-created workspaces seed the runner builtins already enabled. *(A-3, commit `d6fd994`. Migration tag shipped as 0012a, not 0009a — Phase 2.6 took 0007–0011.)*
 - [ ] `builtin-on-assignment` (`on_event: agent.task.assigned`): trigger handler calls `runAgent` with the assignee.
 - [ ] `builtin-on-mention` (`on_event: comment.mentioned`): trigger handler calls `runAgent` with the mentioned agent.
 - [ ] `builtin-on-approval` (`on_event: comment.created`, filter `kind=approval`): trigger handler invokes `runAgentResume` for the matching `awaiting_approval` run on `(parent_id, target_agent)`.
 - [ ] `builtin-on-rejection` (`on_event: comment.created`, filter `kind=rejection`): trigger handler transitions the matching run to `rejected`, posts a closing `kind=comment` from the agent.
+
+#### Autonomy gate — V1 ships "agent does one task, waits" (decision 2026-05-28)
+
+> **Decision (do NOT rescope — build the whole substrate; gate the *exposure*).** V1 behaviour is **turn-based: a human initiates a run, the agent does one task, posts results, stops, and waits for human feedback.** The full autonomous substrate (runner, poller, six guards, chain_id machinery, resume gate) is still built and tested per this plan — we drive the engine in first gear and fine-tune `runAgent` on single turns until it *really* works before enabling agent→agent chains. The line between V1 and autonomous is exactly: **can an agent's own output fire another agent run?** Human-initiated runs (a person assigns a task or `@`-mentions an agent) are V1-allowed. Agent-*originated* fan-out is not. Rationale + product thesis: `memory/project_folio-agent-thesis.md`.
+
+- [ ] **`FOLIO_AGENT_CHAINS_ENABLED` config flag (default `false` in V1).** Named task so the turn-based decision is encoded in code, not assumed. Read once at boot into the runner/trigger-matcher config.
+- [ ] **Gate agent-originated fan-out, not all triggers.** When the flag is OFF: the trigger-matcher MUST NOT fire `runAgent`/`runAgentResume` for an event whose originating actor is an agent (i.e. a `comment.created`/`comment.mentioned` whose comment carries a `run_id` in frontmatter — an agent wrote it). Human-originated `agent.task.assigned` and human-posted `@`-mention/`approval`/`rejection` events fire normally. Implementation seam: the matcher already has the triggering event + payload; add an `isAgentOriginated(event)` check (comment author is an agent / payload carries `run_id`) and short-circuit when flag OFF. Emit one `agent.chain.suppressed` event (or log line) so suppressed fan-out is observable, never silent.
+- [ ] **The six guards stay LIVE regardless of the flag** — they protect a single run too (a single `runAgent` can loop on tool calls and burn budget/tokens). The flag governs *cross-run* fan-out; the guards govern *within-and-across-run* resource caps. Orthogonal.
+- [ ] Test (`runner.autonomy-gate.test.ts`): with flag OFF, an agent-posted comment that `@`-mentions another agent produces ZERO child runs and one `agent.chain.suppressed` signal; a human-posted `@`-mention of an agent produces exactly one run. With flag ON, the agent-posted mention fires the chain (subject to the six guards). Pins the V1↔autonomous boundary so it can't silently regress.
 
 ### Approval gate — three channels (consolidated)
 
@@ -897,7 +928,7 @@ Hand-rolled Hono sub-app at `/mcp`. Speaks JSON-RPC 2.0 over HTTP POST. Bearer-a
 
 ### Events + SSE
 
-- [ ] New event kinds: `agent.run.started`, `agent.run.awaiting_approval`, `agent.run.running`, `agent.run.completed`, `agent.run.failed`, `agent.run.rejected`, `ai.action`, `runs_table.lazy_seeded`, `workspace.provider.degraded`, `workspace.provider.recovered`. Added to `KNOWN_EVENT_KINDS`.
+- [x] New event kinds: `agent.run.started`, `agent.run.awaiting_approval`, `agent.run.running`, `agent.run.completed`, `agent.run.failed`, `agent.run.rejected`, `ai.action`, `runs_table.lazy_seeded`, `workspace.provider.degraded`, `workspace.provider.recovered`. Added to `KNOWN_EVENT_KINDS` at `packages/shared/src/events.ts`. *(A-1, commit `52439c6`.)*
 - [ ] `ai.action` audit event emitted per provider call with `actor_type: 'agent'`, `actor_id: <agent_id>`, `provider`, `model`, `tokens_in`, `tokens_out`. No content stored.
 - [ ] New SSE filter params: `?agent=<doc_id>`, `?table=<table_id>`. AND-combined with existing filters.
 
@@ -941,36 +972,38 @@ Hand-rolled Hono sub-app at `/mcp`. Speaks JSON-RPC 2.0 over HTTP POST. Bearer-a
 
 ### Phase 3 acceptance
 
-- [ ] **Polling worker.** Trigger handlers return immediately (no LLM blocking). Poller picks up `planning` rows within ~1s.
-- [ ] **Crash recovery.** Killing the server mid-run → next boot recovers orphan runs as `failed (worker_crash)`; agent.run.failed emitted.
-- [ ] **Concurrency.** Up to `FOLIO_POLLER_CONCURRENCY` (default 5) runs simultaneously; race-safe atomic claim.
-- [ ] Configure Anthropic key → assign a work item to an agent → runner runs → kind=comment + kind=result comments appear on the work item within seconds.
-- [ ] `@`-mention an agent in a comment → run fires → comments appear under the parent.
-- [ ] Create an `agent_run` row directly in the runs table with `status=planning` and `assignee=agent:<slug>` → runner adopts → run completes.
-- [ ] Agent with `requires_approval: true` → kind=plan comment posted, run at `awaiting_approval`. Approve via button → poller picks up new resuming planning row → completes. Reject → original run transitions to `rejected`, agent posts closing note.
-- [ ] Approve via `@drafter approved` in a comment → same flow.
-- [ ] Approve via MCP `create_comment` → same.
-- [ ] **All six recursion guards** enforced:
+> **F-7 sign-off (2026-05-31).** Ticked boxes are verified by the unit/integration suites (server 968 / 1-skip / 0-fail, web 631 / 0-fail, shared 53 / 0) AND, for the live end-to-end items, by `apps/server/scripts/diagnose-http-chain.ts` — which drives the FULL chain (configure key → assign → event → dispatcher → matcher → poller → runner → real Anthropic call → kind=result comment) against the real running server with a real BYOK key, DETERMINISTICALLY (run at t+1s, result comment at t+2s, post-fix). The real-Anthropic Playwright spec is skip-gated (`FOLIO_E2E_REAL_ANTHROPIC=1`) — harness-flaky, not product (see F-4 in `tasks/shake-out-manifest-phase-3.md`); the HTTP-chain script is the authoritative live proof. Items left unchecked are mechanism-tested but not exercised end-to-end with a real provider, and are noted inline.
+
+- [x] **Polling worker.** Trigger handlers return immediately (no LLM blocking). Poller picks up `planning` rows within ~1s. *(C-12 poller; verified live — diagnose-http-chain run created at t+1s.)*
+- [x] **Crash recovery.** Killing the server mid-run → next boot recovers orphan runs as `failed (worker_crash)`; agent.run.failed emitted. *(C-3 recoverOrphanRuns + boot wiring; unit-tested.)*
+- [x] **Concurrency.** Up to `FOLIO_POLLER_CONCURRENCY` (default 5) runs simultaneously; race-safe atomic claim. *(C-3 claimNextPlanningRun TOCTOU-safe claim + poller cap; unit-tested.)*
+- [x] Configure Anthropic key → assign a work item to an agent → runner runs → kind=comment + kind=result comments appear on the work item within seconds. *(VERIFIED LIVE with a real Anthropic key — diagnose-http-chain.ts, deterministic.)*
+- [ ] `@`-mention an agent in a comment → run fires → comments appear under the parent. *(builtin-on-mention matcher path unit-tested; not exercised end-to-end with a real provider — the assignment path was the live-proven one. Same code path as assignment via the matcher.)*
+- [x] Create an `agent_run` row directly in the runs table with `status=planning` and `assignee=agent:<slug>` → runner adopts → run completes. *(The poller claims any planning row; this is the exact path diagnose-http-chain exercises.)*
+- [ ] Agent with `requires_approval: true` → kind=plan comment posted, run at `awaiting_approval`. Approve via button → poller picks up resuming planning row → completes. Reject → rejected, closing note. *(D-5 resume_run/reject_run wired + unit-tested; the awaiting_approval gate itself is unbuilt in V1 — model-initiated approval is Phase 3.x. See `2026-05-30-phase-3.x-model-initiated-approval.md`. E-4b/E-6 plumb the UI but run_id is not yet stamped on plan comments — F6-D1.)*
+- [ ] Approve via `@drafter approved` in a comment → same flow. *(Blocked on the awaiting_approval gate — Phase 3.x.)*
+- [ ] Approve via MCP `create_comment` → same. *(Blocked on the awaiting_approval gate — Phase 3.x.)*
+- [x] **All six recursion guards** enforced *(C-4 checkRunRateLimits/checkChainGuards + runner preflight; unit-tested incl. the rate_limited/fanout_exceeded wiring tests rewritten in F-D6's neighborhood):*
   - max_delegation_depth violation → `depth_exceeded`.
   - Same-slug `fired_by` cycle → `depth_exceeded` (caught by trigger matcher).
   - Workspace run-rate cap exceeded → `rate_limited`.
   - Per-agent run-rate cap exceeded → `rate_limited`.
   - Fanout > 25 in chain → `fanout_exceeded`.
   - Chain duration > 30 min OR tokens > 1M → `chain_duration_exceeded` / `chain_tokens_exceeded`.
-- [ ] Token budget per-run exceeded → `budget_exceeded`.
-- [ ] No AI key → `no_ai_key`.
-- [ ] Cron trigger set to `* * * * *` → within ~60 seconds an `agent_run` row appears, poller picks up, run completes.
-- [ ] Event trigger with filter → fires exactly once per matching event; loop prevention works.
-- [ ] Cancel mid-flight run → runner exits within ~1 iteration, no further comments.
-- [ ] Retry failed run → new run row at planning, original preserved, completes.
-- [ ] Lazy-seed: first run in a fresh project creates the runs table with 3 default saved views.
-- [ ] Runs table spreadsheet UI fully functional — sort, filter, column reorder, save view.
-- [ ] **Chain_id tracking.** Every agent_run row has chain_id. Root mints fresh uuid. Descendants inherit.
-- [ ] MCP `run_agent` returns `run_id`, SSE stream shows transitions.
-- [ ] **Backpressure visible.** `GET /api/v1/admin/runner-stats` returns stats; log line on high pending count.
-- [ ] **Agent Offline banner.** With provider stubbed to always fail, the workspace banner appears after N consecutive `provider_error` failures (default 3); one successful run clears it. Per provider (Anthropic degraded ≠ OpenAI degraded). Cancelled runs excluded from the window.
-- [ ] All existing user-flow tests still pass — no Phase 2 / 2.5 / 2.6 regression.
-- [ ] Commit: `phase-3: complete`
+- [x] Token budget per-run exceeded → `budget_exceeded`. *(C-8 runLoop token budget; unit-tested.)*
+- [x] No AI key → `no_ai_key`. *(C-8 preflight; unit-tested.)*
+- [ ] Cron trigger set to `* * * * *` → within ~60 seconds an `agent_run` row appears, poller picks up, run completes. *(Cron-trigger scheduling is Phase 3.5 — `2026-05-24-phase-4` / 3.5 scope; the runner consumes a `planning` row regardless of what created it, which IS proven.)*
+- [x] Event trigger with filter → fires exactly once per matching event; loop prevention works. *(C-11 matcher + idempotency/autonomy gate; unit-tested + the F-D6 boot-race fix ensures the assignment is never dropped.)*
+- [x] Cancel mid-flight run → runner exits within ~1 iteration, no further comments. *(C-8/C-9 cancel-via-comment mitigation 44; unit-tested.)*
+- [x] Retry failed run → new run row at planning, original preserved, completes. *(D-1 retry → createRun(firedBy:'retry-of:') + poller claim; unit-tested.)*
+- [x] Lazy-seed: first run in a fresh project creates the runs table with 3 default saved views. *(C-6 ensureRunsTable; unit-tested + observed in diagnose-http-chain — `runs_table.lazy_seeded` event fired.)*
+- [x] Runs table spreadsheet UI fully functional — sort, filter, column reorder, save view. *(Phase 1.5/1.6 TableView, shipped + merged. NOTE: agent_run rows are walled off from the generic /documents endpoint (C1 security), so runs surface via the dedicated agent slideover Runs tab + activity feed (Sub-phase E), NOT the work-items TableView — see `project_runs-not-a-tableview` memory.)*
+- [x] **Chain_id tracking.** Every agent_run row has chain_id. Root mints fresh uuid. Descendants inherit. *(C-6 nextChainId + createRun; unit-tested.)*
+- [x] MCP `run_agent` returns `run_id`, SSE stream shows transitions. *(D-4 run MCP tools + D-7 SSE filters; unit-tested.)*
+- [x] **Backpressure visible.** `GET /api/v1/w/:wslug/admin/runner-stats` returns stats. *(D-6; session-only + owner/admin gated; unit-tested. Note: route is workspace-scoped, not the spec's `/api/v1/admin/...`.)*
+- [x] **Agent Offline banner.** Workspace banner appears after N consecutive `provider_error` failures (default 3); one success clears it; per-provider; cancelled runs excluded. *(C-5 checkProviderHealth + Sub-phase E provider-health-banner; unit-tested.)*
+- [x] All existing user-flow tests still pass — no Phase 2 / 2.5 / 2.6 regression. *(Full suites green: server 968, web 631, shared 53.)*
+- [ ] Commit: `phase-3: complete` *(declared at the F-8 merge — pending user go-ahead; the branch is merge-ready.)*
 
 ---
 

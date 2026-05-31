@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
@@ -64,6 +64,33 @@ function setup({ initialPath = '/w/acme/p/sales/work-items', onFetch }: SetupOpt
     if (u.includes(`/api/v1/w/${workspace.slug}/p/sales/documents`)) {
       return respond({ data: { data: [], nextCursor: null } });
     }
+    // The layout now mounts <WorkspaceDocumentSlideover>, which fetches the
+    // workspace doc + its events whenever ?doc=<slug> is present. Tests that
+    // start with ?doc= (e.g. preserving it across a view switch) would
+    // otherwise hit the catch-all `{}` and crash FrontmatterForm on a missing
+    // `data` envelope. Order matters: the /events suffix is matched first.
+    if (/\/w\/[^/]+\/documents\/[^/]+\/events$/.test(u)) {
+      return respond({ data: [] });
+    }
+    if (u.includes(`/w/${workspace.slug}/documents?`)) {
+      return respond({ data: [] });
+    }
+    if (/\/w\/[^/]+\/documents\/[^/?]+/.test(u)) {
+      return respond({
+        data: {
+          id: 'd-doc',
+          slug: 'lead-foo',
+          type: 'work_item',
+          title: 'Lead Foo',
+          status: null,
+          parentId: null,
+          frontmatter: {},
+          body: '',
+          createdAt: '2026-01-01',
+          updatedAt: '2026-01-02',
+        },
+      });
+    }
     if (init?.method === 'DELETE') return new Response(null, { status: 204 });
 
     return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
@@ -106,9 +133,19 @@ function setup({ initialPath = '/w/acme/p/sales/work-items', onFetch }: SetupOpt
   return { queryClient, router, fetchMock };
 }
 
+// The layout now mounts the provider-health + reactor-halt banners, whose
+// E-2b hooks open an EventSource. jsdom has none, so stub a no-op constructor.
+class NoopEventSource {
+  constructor(_url: string) {}
+  addEventListener() {}
+  removeEventListener() {}
+  close() {}
+}
+
 describe('WorkspaceLayout — delete + nav side effects', () => {
   beforeEach(() => {
     localStorage.clear();
+    vi.stubGlobal('EventSource', NoopEventSource as unknown as typeof EventSource);
   });
   afterEach(() => {
     vi.restoreAllMocks();
@@ -131,8 +168,14 @@ describe('WorkspaceLayout — delete + nav side effects', () => {
 
     await waitFor(() => expect(screen.getByText('Triage')).toBeInTheDocument());
 
-    // Click "Triage" — fires onViewClick handler.
-    await userEvent.click(screen.getByText('Triage'));
+    // REGRESSION (dual-modal collision): ?doc= is the PROJECT slideover's param.
+    // The layout-mounted WorkspaceDocumentSlideover now reads ?wdoc=, so a
+    // work-item ?doc=lead-foo must NOT open the workspace slideover (it would
+    // 404 on a work-item slug and stack a second focus-trapping modal). With
+    // the workspace slideover staying closed, there's no Radix
+    // pointer-events:none overlay, so userEvent can click normally.
+    expect(screen.queryByText('Failed to load')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText('Triage'));
 
     await waitFor(() => {
       const s = router.state.location.search as Record<string, unknown>;

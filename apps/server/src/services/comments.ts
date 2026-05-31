@@ -99,6 +99,12 @@ export interface CreateCommentInput {
   kind?: CommentKind;
   targetAgent?: string;
   visibility?: CommentVisibility;
+  /**
+   * Links a kind=plan comment to its agent run. Set by API callers posting a
+   * plan comment (the runner only consumes plan comments, never stamps them).
+   * Run ids are nanoid, not UUID.
+   */
+  run_id?: string;
 }
 
 export interface UpdateCommentInput {
@@ -367,6 +373,7 @@ export async function createComment(input: CreateCommentInput): Promise<Document
     };
     if (targetAgent !== undefined) frontmatterRaw.target_agent = targetAgent;
     if (targetAgentId !== undefined) frontmatterRaw.target_agent_id = targetAgentId;
+    if (input.run_id !== undefined) frontmatterRaw.run_id = input.run_id;
     const frontmatter = commentFrontmatterSchema.parse(frontmatterRaw);
 
     const inserted = {

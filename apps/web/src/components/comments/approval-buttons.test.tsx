@@ -5,6 +5,7 @@ import type { ReactNode } from 'react';
 import { ApprovalButtons } from './approval-buttons.tsx';
 import type { Comment } from '../../lib/api/comments.ts';
 import type { Member } from '../../lib/api/members.ts';
+import { runsKeys } from '../../lib/api/runs.ts';
 
 // ---------------------------------------------------------------------------
 // Time anchor — plan was created 5 minutes before NOW
@@ -381,6 +382,101 @@ describe('ApprovalButtons', () => {
     };
     renderButtons({ planComment: idCanonicalPlan, threadComments: [approvalComment] });
     expect(screen.getByText(/approved by/i)).toBeInTheDocument();
+  });
+
+  // E-6 — when a plan comment is linked to a run via frontmatter.run_id, the
+  // Approve/Reject buttons must reflect the LIVE run state: interactive only
+  // while the run is awaiting_approval; muted status line once it moves on.
+  // Comments without run_id keep the legacy behavior (no fetch, buttons render).
+
+  function stubRunFetch(status: string) {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        if (typeof url === 'string' && url.includes('/runs/')) {
+          return new Response(
+            JSON.stringify({
+              data: {
+                id: 'r1',
+                slug: 'run-1',
+                type: 'agent_run',
+                title: 'Run',
+                parentId: 'doc-1',
+                projectId: 'proj-1',
+                workspaceId: 'ws-1',
+                status,
+                frontmatter: { agent_slug: 'drafter' },
+                createdAt: NOW,
+                updatedAt: NOW,
+              },
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        // comment-create fallback
+        return new Response(JSON.stringify({ data: {} }), {
+          status: 201,
+          headers: { 'content-type': 'application/json' },
+        });
+      }),
+    );
+  }
+
+  const planWithRun: Comment = {
+    ...planComment,
+    frontmatter: { ...planComment.frontmatter, run_id: 'r1' },
+  };
+
+  it('E-6: awaiting_approval run shows interactive Approve/Reject buttons', async () => {
+    stubRunFetch('awaiting_approval');
+    renderButtons({ planComment: planWithRun });
+    await waitFor(() => {
+      expect(vi.mocked(fetch)).toHaveBeenCalled();
+    });
+    expect(screen.getByRole('button', { name: /approve/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /reject/i })).toBeInTheDocument();
+  });
+
+  it('E-6: running run shows muted status line, no buttons', async () => {
+    stubRunFetch('running');
+    renderButtons({ planComment: planWithRun });
+    await waitFor(() => {
+      expect(screen.getByText(/approval no longer needed/i)).toBeInTheDocument();
+    });
+    expect(screen.queryByRole('button', { name: /approve/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /reject/i })).not.toBeInTheDocument();
+  });
+
+  it('E-6: pre-gate (planning) run does NOT show the muted line — falls through to buttons', () => {
+    // Seed the run query cache so `run` is defined synchronously on first
+    // render (avoids a fetch-timing race): a planning run has data immediately.
+    const qc = makeQC();
+    qc.setQueryData(runsKeys.detail('acme', 'r1'), {
+      id: 'r1',
+      slug: 'run-1',
+      type: 'agent_run',
+      title: 'Run',
+      parentId: 'doc-1',
+      projectId: 'proj-1',
+      workspaceId: 'ws-1',
+      status: 'planning',
+      frontmatter: { agent_slug: 'drafter' },
+      createdAt: NOW,
+      updatedAt: NOW,
+    });
+    renderButtons({ planComment: planWithRun }, qc);
+    // A planning run has not yet reached the awaiting_approval gate, so the
+    // "approval no longer needed" muted line must NOT render. The component
+    // falls through to the interactive buttons.
+    expect(screen.queryByText(/approval no longer needed/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /approve/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /reject/i })).toBeInTheDocument();
+  });
+
+  it('E-6: plan without run_id keeps legacy interactive buttons (no run fetch)', () => {
+    renderButtons(); // planComment has no run_id
+    expect(screen.getByRole('button', { name: /approve/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /reject/i })).toBeInTheDocument();
   });
 
   it('F9: a deleted approval followed by a fresh approval still resolves on the fresh one', () => {

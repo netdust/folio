@@ -305,3 +305,134 @@ A 2-minute DevTools read beats 3 commits of guessing.
 **Rule:** When a code-review report says "15 findings," ALWAYS report verified-but-cut findings to the user with the verdict and a one-line summary, even if abbreviated. If the cap forced a cut, name that explicitly. The user should know what was deferred. Better: rank by severity, mention the count of verified findings, then truncate displayed detail — don't truncate the count.
 
 **Trigger:** Running `/code-review` or any reviewer pipeline with a fixed output cap. If the verified-confirmed count exceeds the cap, the closing summary must say so (e.g., "18 verified, top 15 below, remainder: …"). Don't let a presentation limit hide a correctness signal.
+
+## 2026-05-28 — When the plan was written before the convention, re-read it against the live codebase
+
+**Mistake:** Phase 3's plan was authored 2026-05-26. Phase 2.6's reviewer pass (later in the same week) codified two Folio conventions: Zod schema consts use camelCase (every peer schema in `apps/server/src/lib/*-schema.ts` does), and frontmatter schemas always call `.strict()`. The Phase 3 A-4 plan reproduced the older convention verbatim — PascalCase consts, no `.strict()`. The implementer shipped it as written. Stage 2 code-review caught it, but at fix-up cost (commit `bc4b5ee`). Same root cause behind A-4b's installer-heredoc bug: the plan was written before the worktree-portability concern got attention.
+
+**Why:** A plan is a snapshot of conventions at the time it was authored. Between writing and executing, the codebase keeps moving. Patterns codified in reviewer passes (BUG-* fixes, code-review findings) settle into the codebase but DON'T propagate backward into already-written plans. The plan is a stale rubric the moment a new pattern lands.
+
+**Rule:** When the executing-skill cycle (`ntdst-execute-with-tests` → `subagent-driven-development`) opens a plan that's more than a few days old, the controller's pre-flight MUST include: for each new module/class/schema the plan introduces, grep peer files in the target directory (`apps/server/src/lib/*-schema.ts`, `apps/web/src/lib/api/*.ts`, etc) and verify the plan's example matches the live convention. If a peer file uses `.strict()`, the plan's schema must too; if peers are camelCase, the plan's must be too. Caught at pre-flight = zero fix-up cycles; caught at Stage 2 review = one extra commit per drift.
+
+**Trigger:** Any `superpowers:executing-plans` or `superpowers:subagent-driven-development` invocation on a plan file with `mtime > 5 days`. Or any plan task that introduces a NEW file matching a pattern that other peer files in the codebase already follow. Look at the FIRST peer file for each pattern; if it disagrees with the plan, the live code wins.
+
+## 2026-05-28 — When the plan rebuilds an existing table, audit columns against the live schema
+
+**Mistake:** A-2's plan included a SQLite table-rebuild migration for `documents`. The plan's CREATE TABLE block declared `author_id` and `target_agent_id` as real columns — but in the live schema (post-migrations 0007/0008/0011) those names are JSON fields inside `frontmatter`, not real columns. The plan's `INSERT INTO documents_new SELECT * FROM documents;` would have failed at runtime because the column counts didn't match. The controller pre-flight caught it; if it hadn't, the subagent would have shipped a broken migration and the test would have failed cryptically (SQLite error about column count mismatch, not "your plan was wrong"). A-2's subagent ALSO surfaced a third drift mid-execution: the plan referenced `tables.title` when the real column is `tables.name`.
+
+**Why:** SQLite's lack of `ALTER TABLE CHANGE CHECK` forces table-rebuild migrations to re-declare every column of the original table. Any column the plan misses or misnames silently breaks the data copy. The plan author was working from a mental model of the schema that drifted from the actual schema between when the plan was written and when it ran. Drizzle's generated schema files (`schema.ts`) are the source of truth, not the plan's CREATE TABLE.
+
+**Rule:** Whenever a plan introduces a `CREATE TABLE <existing_table>_new (...)` rebuild block, the controller pre-flight MUST do two grep checks BEFORE dispatching:
+
+1. Open `apps/server/src/db/schema.ts` and grep for the target table's column list (e.g. `documents` table). Compare line-by-line against the plan's CREATE TABLE. Any plan-listed column that doesn't appear in `schema.ts` is a phantom column → strike it from the plan SQL.
+2. Open the most recent `documents_new`-style migration in `apps/server/src/db/migrations/` (e.g. `0007_phase_2_6_comments.sql`) and copy the column list verbatim. Cross-reference with `schema.ts`. That column list is the canonical one for the next rebuild migration.
+
+Pre-flight catches in ~2 minutes what shipping the broken plan would cost ~20 minutes to debug + 1 corrective commit. ALSO: when the plan references column names from sibling tables (`tables.title` vs `tables.name`), grep `apps/server/src/db/schema.ts` for the actual definition and correct in the dispatch brief.
+
+**Trigger:** Any plan task that contains the text `CREATE TABLE` and includes a column list, OR any plan SQL block that references columns of an existing table by name. Pre-flight is required even if the plan was written yesterday — schema drift can happen across a single sub-phase if a backfill migration ran in between.
+
+## 2026-05-28 — Generated-script heredocs must be single-quoted
+
+**Mistake:** A-4b's plan supplied an `install.sh` containing this block:
+
+```bash
+cat > "$HOOK_DST" <<EOF
+#!/usr/bin/env bash
+"$HOOK_SRC_DIR/pre-commit-migration-journal.sh"
+EOF
+```
+
+The unquoted `<<EOF` heredoc tells bash to interpolate `$HOOK_SRC_DIR` AT INSTALLATION TIME, baking the installer's machine-absolute path into the generated `.git/hooks/pre-commit`. That makes the hook non-portable: another developer cloning the repo and running `./scripts/hooks/install.sh` would get a hook pointing at the FIRST developer's home directory. Caught by Stage 2 code-review (`13e5954`), fixed with `<<'EOF'` (single-quoted, no interpolation) + a runtime `$(git rev-parse --show-toplevel)` lookup inside the generated script.
+
+**Why:** Bash heredoc quoting has two modes that look almost identical but behave opposite. `<<EOF` interpolates variables (and command substitutions, backticks, etc.) before writing the body to the destination. `<<'EOF'` writes the body literally, deferring all interpolation to whenever the generated script runs. For ANY generated artifact that should be portable across machines, runtimes, or working trees, the literal mode is correct — but the unquoted form is more common in casual examples, so it sneaks into plans.
+
+**Rule:** Any plan that includes a heredoc inside a script-generator (installer, scaffolder, codegen helper) MUST use single-quoted heredocs (`<<'EOF'`) unless there is a specific reason to interpolate at generation time. If interpolation IS needed, the plan must justify why in a comment above the heredoc. The default is to defer. Also: prefer runtime lookups (`$(git rev-parse --show-toplevel)`, `${BASH_SOURCE[0]}`, `$(dirname ...)`) over baked absolute paths.
+
+**Trigger:** Any plan or commit that contains a heredoc inside a shell script that writes to another shell script (hooks, helpers, generated commands, dotfile setup). Grep the plan SQL/bash blocks for `<<EOF` (without quotes) and flag every occurrence. The fix is a 4-character change (`<<'EOF'`) but catching it pre-execution avoids a portability bug that only surfaces when a second developer/machine touches the repo.
+
+
+## 2026-05-28 — Plans for features touching user-controlled URLs require a Threat model section before task breakdown
+
+**Mistake:** Folio Phase 3 Sub-phase B's plan had functional requirements ("BYOK is libsodium-encrypted") but no threat model. The plan author treated "BYOK + libsodium" as covering security — it didn't. It covered storage-at-rest but not the URL + outbound-request + cross-route consistency surface. Seven tasks of provider + UI code shipped. Two rounds of `/code-review` at `--effort=medium` surfaced ~30 security-class findings across the surface (SSRF + IPv4-mapped IPv6 bypass, credential exfiltration via attacker-controlled baseUrl, persistence-path validation gap, Ollama localhost default, error-message leaks, JSON.parse stream aborts). Critical-class items kept emerging in round 2 that round 1 missed.
+
+**Why:** Without an explicit threat model, every `/code-review` round independently re-discovers the attack surface from scratch. Each round catches a different subset. The cap-of-15 on medium-effort reviews can hide critical findings below the threshold across multiple rounds. Convergence is slow and probabilistic. The "BYOK + encrypted" language is a property statement, not a security spec — the implementer built what the plan asked for, and the plan didn't ask for the right things.
+
+**Rule:** When writing a plan that touches user-controlled URLs (webhooks, BYOK provider URLs, OAuth redirects, embed URLs, CMS bridge endpoints), auth/session/token surfaces (new auth methods, scope additions, multi-tenancy boundaries), untrusted parsing (frontmatter from external sources, AI tool-call args, webhook payloads, file uploads), BYOK credentials, file handling, or any surface where the server makes outbound requests to user-supplied URLs — invoke `netdust-core:threat-modeling` alongside `superpowers:writing-plans`. The threat-modeling skill produces a `## Threat model` section the plan embeds inline, BEFORE task breakdown, with named assets, named attacks, named mitigations, and explicit deferrals. `/code-review` then checks against the named mitigations instead of free-form bug hunting — converges in one round.
+
+**Trigger:** Any plan whose feature description includes the words webhook, URL, baseUrl, redirect, OAuth, upload, parse, untrusted, third-party, BYOK, credential, key, token (in auth context), workspace boundary, cross-workspace, scope-check, or any surface where the server makes outbound HTTP requests to addresses the user supplied. Also: any feature that adds a new public-ish endpoint. Worked example: `docs/superpowers/plans/2026-05-27-phase-3-agent-runner.md` section `## Threat model` — written retrospectively at the cost of 2 rounds of review-fix iteration. Future plans should write it proactively.
+
+## 2026-05-28 — Convergence signal for a threat model: anti-regression scan returns `[]`
+
+**Mistake-prevention pattern, not a mistake.** Sub-phase B went through 7 rounds of `/code-review` (rounds 1-6 medium, round 7 ultra-effort 9-angle local). Findings per round: 15, 15, 9, 9, 11, 7, 15. The threat-model section was iteratively enriched after rounds 2, 4, 5, 6, 7. Round 7's ultra-effort review dispatched an anti-regression angle that walked all ~50 prior findings and confirmed each was still fixed in the current code. That anti-regression scan returned `[]` — zero regressions across 7 rounds of fix-on-fix.
+
+**Why that's the signal:** when a threat model has matured from "checklist" (a list of routes) to "spec" (a rule the codebase enforces), new review rounds find genuinely-new attack classes, not asymmetry leftovers from the previous round's incomplete fixes. Round 7's 15 findings were: 2 new attack classes on adjacent surfaces (HTTP twin of MCP agent-CRUD; PII leak via /members), 1 Sub-phase C data-contract gap (agent_run schema missing slots for refusal/pause_turn), 5 provider long-tail bugs, 4 defense-in-depth gaps, 3 hygiene items. None were "round N missed asymmetric route Y" — that pattern was extinct.
+
+**Rule:** when running `/code-review` in iterative rounds on a security-rich surface, dispatch an anti-regression angle alongside the discovery angles. The anti-regression angle re-verifies every prior finding's fix is still in place. When that angle returns `[]`, you have evidence that the threat model is now a spec, not a checklist. Stop iterating; the remaining findings are new surface, not leftover gaps.
+
+**Trigger:** ≥3 rounds of `/code-review` on the same surface, OR explicit user request for ultra-effort. The anti-regression angle is angle B' in the ultra pattern. Cost: one more subagent dispatch, ~3 minutes wall-clock.
+
+## 2026-05-28 — Implementation:review-cycle time ratio benchmark
+
+**Reference data, not a rule.** Sub-phase B benchmark: 42 min B-1..B-7 implementation, 5h27m review-fix cycles. Ratio 1:7.7. Sub-phase A benchmark: ~50 min total, no review cycles (clean threat-model-free plan). Sub-phase B's high ratio is the cost of NOT writing the threat model at plan-time.
+
+**Hypothesis to test on Sub-phase C:** with the threat model carried forward from B + the new pre-dispatch security check (per Sub-phase B retro recommendation §1), the ratio should drop closer to 1:2 or 1:3. If Sub-phase C also runs 1:7+, the discipline isn't holding. Re-measure at Sub-phase C close.
+
+## 2026-05-28 — Sub-phase C.1 implementation:review ratio (hypothesis test result)
+
+**Result of the hypothesis test from the Sub-phase B entry above.** Sub-phase C.1 ratio: ~2h primary implementation : ~3h review work (counting bundles 1-8 across freeform review + review-of-review). Ratio ~1:1.5. The hypothesis ("dropping closer to 1:2 or 1:3 with the threat model carried forward") was wrong direction but right magnitude — review-fix work was LESS than 1:7, but a second review layer (review-of-review) added unanticipated time.
+
+**New benchmark**: phase-3 sub-phases with services-layer cross-cutting concerns are running ~1:1.5 to 1:2. The 1:7 of Sub-phase B was a threat-model-write-time tax, not a permanent regime. Future sub-phases should plan for 1:2 review time as baseline.
+
+## 2026-05-28 — `tx.all<T>` with RETURNING * is a runtime type lie
+
+**Mistake found in C-3, fixed in F12 (bundle 1).** When Drizzle's bun-sqlite query helper is called via raw SQL with `tx.all<Document>(sql\`UPDATE ... RETURNING *\`)`, the generic type `T` does NOT match the runtime shape. `RETURNING *` yields raw SQLite columns in snake_case (`workspace_id`, `parent_id`, `frontmatter`), but `Document = typeof documents.$inferSelect` is camelCase (`workspaceId`, `parentId`). Only `.id` reads happen to work (no case difference).
+
+**Why it slips past tsc:** the cast is a generic argument, not a runtime check. TypeScript trusts the annotation; the raw row at runtime has snake_case keys; any `.workspaceId` access reads `undefined`.
+
+**Rule:**
+- If you read more than `.id` off a `tx.all<T>(sql\`...RETURNING *\`)` row, either (a) restrict `T` to a snake_case shape literal matching what `RETURNING *` produces, or (b) convert RETURNING to a narrow column list with camelCase aliases (`RETURNING id, workspace_id AS workspaceId, ...`).
+- The pattern `tx.all<{ id: string }>(sql\`UPDATE ... RETURNING id\`)` is safe — only reads `.id`, only returns `id`.
+- If the function is supposed to return a typed `Document`, follow the RETURNING with a typed `tx.query.documents.findFirst(...)` re-read. That's the canonical shape (used by `claimNextPlanningRun`).
+
+**Trigger:** any new `tx.all<>(sql\`...\`)` call with `RETURNING *` OR with a `T` that's a Drizzle `$inferSelect` type. Audit at write time AND at every code review.
+
+## 2026-05-28 — Cross-cutting changes need a sibling-site audit at plan-write time
+
+**Meta-pattern from Sub-phase C.1 reviews.** Across two layers of code-review (freeform 9-angle, then review-of-review 5-angle), every primary fix that touched a CROSS-CUTTING concern had 1-2 SIBLING SITES that needed the SAME change but were missed by the primary fix:
+
+- C-1 widened `DocumentType` to include `'agent_run'` on the server. Bundle 4 hardened agent_run writes (5 route guards). Bundle 6 hardened agent_run reads (4 more route guards) AND FE+shared union widening (2 more files). Same root change rippled to 11+ sites.
+- F6 in bundle 1 changed `json_extract(...status)` → `status` column predicate in 2 places (claim + recovery). Bundle 6 found `countPendingPlanning` was the 3rd site, also needed the change.
+- F4 in bundle 3 fixed `workspace.provider.*` event scope to `projectId: null`. Audit of similar workspace-wide events (`runs_table.lazy_seeded`, etc.) not done — open question.
+- F5 in bundle 3 tightened SQL filter. Bundle 6 (R4) added the recency-floor that should have shipped together.
+
+**Rule:** when a plan task touches any of these cross-cutting concerns, the task body includes a `## Sibling-site audit` block enumerating the surface to check:
+
+- TypeScript union / enum / discriminator: audit FE union + shared union/enum + every consumer's switch/narrow.
+- SQL predicate on a JSON-extract → column change: audit ALL read sites of the same field (count, filter, sort).
+- Event scope (projectId, workspaceId, documentId): audit every emitter of similar-class events.
+- Cross-route guard (writes hardened → audit reads; reads hardened → audit writes).
+- Closed-enum literal: audit every site that writes/compares the literal.
+
+The audit lives in the plan, gets verified by the implementer, reviewed at code-review time. Per-task cost: 5-10 minutes at plan-write; net savings ~1-2 review-fix bundles per sub-phase.
+
+## 2026-05-29 — ground-truth the dependency surface before expanding a runner/integration plan (Sub-phase C.2)
+
+A plan expanded as an outline before its dependency surface was read will drift. C.2's plan assumed a Vercel-AI-SDK-shaped provider — `continueWithToolResult(streamHandle, ...)` continuation + an injectable `AbortController` — that the actual Sub-phase B layer (`lib/ai/provider.ts`) does NOT have: `stream(opts)` is one-shot, no continuation, no abort param; the tool round-trip is via message history (re-call `stream()` with appended `{role:'assistant', tool_calls}` + `{role:'tool', tool_use_id, content}`). It also named `error_reason` enum members that don't exist, an `actor:'system:runner'` that violates the `documents.updated_by`→`users.id` FK, and a `kind=cancel` comment kind that doesn't exist.
+
+All three C.2 tasks shipped DIVERGED_DEFECT — but every drift was caught at controller PRE-FLIGHT (reading `provider.ts`/`agent-runs.ts`/`comments.ts`/`agent-run-schema.ts` against the plan) and corrected in the plan BEFORE/at dispatch (3 inline plan-corrections). Rule: when expanding/executing a plan that integrates against another sub-phase's code, READ that code's actual exported signatures + types + enums first — the plan's prose is a hypothesis, the source is truth. Reinforces [[plan-server-source-audit]]. Third sub-phase (A, C.1, C.2) to surface plan-freshness drift → promoted to a HUMAN_DECISION follow-up (plan-freshness check as a writing-plans skill rule).
+
+## 2026-05-29 — `bun run db:generate` contaminates migrations on this project (Sub-phase C.3)
+
+This project maintains HAND-WRITTEN raw migrations from 0007 onward with no live Drizzle snapshot. Running `bun run db:generate` re-emits contaminated DDL — for C-10b's `reactor_cursors` table it also re-emitted `events.seq`, the seq indexes, and `workspaces.provider_health` (everything the drifted snapshot thinks is "missing"). Rule: to add a migration, HAND-WRITE the next `00NN_<name>.sql` (one `CREATE TABLE`, tab-indented, backtick-quoted identifiers, matching the 0007+ style) AND hand-add the `meta/_journal.json` entry (idx/version/when/tag). Do NOT trust `db:generate`'s output — discard it. The A-4b pre-commit hook still verifies the `.sql`↔journal pairing. Reinforces [[drizzle-migration-journal]]. C.3 caught this at the implementer (correctly recovered); the plan said "run db:generate" — corrected at `21dd2c0`.
+
+## 2026-05-29 — plan-freshness ground-truthing is now a skill rule (Sub-phase C.3 gate)
+
+THIRD consecutive sub-phase (A, C.2, C.3) to surface plan-vs-source drift caught only by the controller reading live signatures before dispatch (C.3: `recoverOrphanRuns({staleThresholdMs})` vs the plan's `recoverOrphanRuns(db)`, plus the db:generate trap above). The standing HUMAN_DECISION was answered at the C.3 gate: PROMOTED to a skill rule — `netdust-core:ntdst-execute-with-tests` now has **Step 2.5 (plan-freshness gate)**, a per-task controller obligation to ground-truth each task's named dependencies (signatures/enums/scopes/columns/payloads) against live source after the upstream skill loads, before writing that task's dispatch. The edit is live in the plugin cache; the netdust-core plugin SOURCE repo needs the same edit to survive a plugin re-sync. This [[plan-server-source-audit]] discipline is no longer honor-system.
+
+## 2026-05-30 — ground-truth "reuse X for new data-type Y" premises at SPEC/PLAN-write, not task-dispatch (Sub-phase E)
+
+Step 2.5 (plan-freshness) catches dependency-signature drift at TASK dispatch — but Sub-phase E showed a class of drift that surfaces TWO documents earlier and costs far more: a wrong *architectural premise*. The E spec, the mega-plan, AND the readiness handoff all asserted "the runs table renders through the existing `TableView`." One `grep` of `routes/documents.ts` falsifies it: `agent_run` rows are deliberately walled off from the generic `/documents` endpoint (`AGENT_RUN_REQUIRES_RUNNER_PATH` — they carry system_prompt/tokens) and are readable ONLY via `/runs`; plus the web UI has no multi-table nav and `TableView` doesn't type-scope. The premise survived plan-write + plan-expansion + handoff and was only caught when E-3/E-4's Step-2.5 ground-truthing actually read the endpoint at dispatch — forcing a mid-execution STOP → re-brainstorm → re-plan. Rule: when a spec/plan's core approach is "reuse existing infrastructure X (component / endpoint / table) for new data-type Y," ground-truth that X actually ACCEPTS Y (read X's source) DURING writing-plans/brainstorming self-review — before the plan ships — not deferred to task dispatch. Step 2.5 is the task-level safety net; this is the spec-level extension that prevents building two plan-documents on a false foundation. The data layer (E-1/E-2/E-2b) survived the redesign untouched because it was built on `/runs` (the real source), not the premise. See [[project_runs-not-a-tableview]] (auto-memory, written mid-execution) + [[plan-server-source-audit]].
+
+## 2026-05-30 — invoke systematic-debugging PER BUG via the Skill tool, not just "in spirit" (Phase 3 Sub-phase F shake-out)
+
+The shake-out FIX phase mandates `Skill("superpowers:systematic-debugging")` for EVERY bug — "no exceptions, not even obvious ones" — and "ONE bug at a time." During F's fix phase I invoked the skill formally for C1 (the merge-blocker) but then worked I1/I2/I3 through the skill's four phases *in reasoning only* (root-cause → pattern → hypothesis → failing-test-first → verify) without re-invoking the tool, and bundled I2+I3 into one cycle. Outcomes were sound (each carried a genuine RED→GREEN proof; 0 fail; tsc clean), but the process drifted: the per-bug skill invocation is what makes the discipline auditable from the transcript (same class as the testing-workflow addendum lesson). The pull toward "I already see the fix, the phases are obvious here" is exactly the rationalization the skill's red-flags table names. Rule: in a shake-out (or any multi-bug fix session), invoke the debugging skill once per bug via the Skill tool, fix one bug per cycle, and re-sweep between — even when the root cause is already established by the sweep. The sweep finding a bug ≠ the fix being authorized without the per-bug gate. User accepted the 4 already-verified F fixes but directed the skill be invoked properly for all remaining work.

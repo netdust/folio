@@ -16,7 +16,6 @@ import { Route as DevDesignSystemRouteImport } from './routes/dev.design-system'
 import { Route as WWslugIndexRouteImport } from './routes/w.$wslug.index'
 import { Route as WWslugTriggersRouteImport } from './routes/w.$wslug.triggers'
 import { Route as WWslugSettingsRouteImport } from './routes/w.$wslug.settings'
-import { Route as WWslugAgentsRouteImport } from './routes/w.$wslug.agents'
 import { Route as WWslugPPslugRouteImport } from './routes/w.$wslug.p.$pslug'
 import { Route as WWslugPPslugIndexRouteImport } from './routes/w.$wslug.p.$pslug.index'
 import { Route as WWslugPPslugWorkItemsRouteImport } from './routes/w.$wslug.p.$pslug.work-items'
@@ -58,11 +57,6 @@ const WWslugSettingsRoute = WWslugSettingsRouteImport.update({
   path: '/settings',
   getParentRoute: () => WWslugRoute,
 } as any)
-const WWslugAgentsRoute = WWslugAgentsRouteImport.update({
-  id: '/agents',
-  path: '/agents',
-  getParentRoute: () => WWslugRoute,
-} as any)
 const WWslugPPslugRoute = WWslugPPslugRouteImport.update({
   id: '/p/$pslug',
   path: '/p/$pslug',
@@ -94,7 +88,6 @@ export interface FileRoutesByFullPath {
   '/login': typeof LoginRoute
   '/dev/design-system': typeof DevDesignSystemRoute
   '/w/$wslug': typeof WWslugRouteWithChildren
-  '/w/$wslug/agents': typeof WWslugAgentsRoute
   '/w/$wslug/settings': typeof WWslugSettingsRoute
   '/w/$wslug/triggers': typeof WWslugTriggersRoute
   '/w/$wslug/': typeof WWslugIndexRoute
@@ -108,7 +101,6 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
   '/dev/design-system': typeof DevDesignSystemRoute
-  '/w/$wslug/agents': typeof WWslugAgentsRoute
   '/w/$wslug/settings': typeof WWslugSettingsRoute
   '/w/$wslug/triggers': typeof WWslugTriggersRoute
   '/w/$wslug': typeof WWslugIndexRoute
@@ -123,7 +115,6 @@ export interface FileRoutesById {
   '/login': typeof LoginRoute
   '/dev/design-system': typeof DevDesignSystemRoute
   '/w/$wslug': typeof WWslugRouteWithChildren
-  '/w/$wslug/agents': typeof WWslugAgentsRoute
   '/w/$wslug/settings': typeof WWslugSettingsRoute
   '/w/$wslug/triggers': typeof WWslugTriggersRoute
   '/w/$wslug/': typeof WWslugIndexRoute
@@ -140,7 +131,6 @@ export interface FileRouteTypes {
     | '/login'
     | '/dev/design-system'
     | '/w/$wslug'
-    | '/w/$wslug/agents'
     | '/w/$wslug/settings'
     | '/w/$wslug/triggers'
     | '/w/$wslug/'
@@ -154,7 +144,6 @@ export interface FileRouteTypes {
     | '/'
     | '/login'
     | '/dev/design-system'
-    | '/w/$wslug/agents'
     | '/w/$wslug/settings'
     | '/w/$wslug/triggers'
     | '/w/$wslug'
@@ -168,7 +157,6 @@ export interface FileRouteTypes {
     | '/login'
     | '/dev/design-system'
     | '/w/$wslug'
-    | '/w/$wslug/agents'
     | '/w/$wslug/settings'
     | '/w/$wslug/triggers'
     | '/w/$wslug/'
@@ -237,13 +225,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof WWslugSettingsRouteImport
       parentRoute: typeof WWslugRoute
     }
-    '/w/$wslug/agents': {
-      id: '/w/$wslug/agents'
-      path: '/agents'
-      fullPath: '/w/$wslug/agents'
-      preLoaderRoute: typeof WWslugAgentsRouteImport
-      parentRoute: typeof WWslugRoute
-    }
     '/w/$wslug/p/$pslug': {
       id: '/w/$wslug/p/$pslug'
       path: '/p/$pslug'
@@ -301,7 +282,6 @@ const WWslugPPslugRouteWithChildren = WWslugPPslugRoute._addFileChildren(
 )
 
 interface WWslugRouteChildren {
-  WWslugAgentsRoute: typeof WWslugAgentsRoute
   WWslugSettingsRoute: typeof WWslugSettingsRoute
   WWslugTriggersRoute: typeof WWslugTriggersRoute
   WWslugIndexRoute: typeof WWslugIndexRoute
@@ -309,7 +289,6 @@ interface WWslugRouteChildren {
 }
 
 const WWslugRouteChildren: WWslugRouteChildren = {
-  WWslugAgentsRoute: WWslugAgentsRoute,
   WWslugSettingsRoute: WWslugSettingsRoute,
   WWslugTriggersRoute: WWslugTriggersRoute,
   WWslugIndexRoute: WWslugIndexRoute,

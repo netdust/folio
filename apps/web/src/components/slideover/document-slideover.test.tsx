@@ -357,7 +357,7 @@ describe('DocumentSlideover', () => {
   });
 
   // ---------------------------------------------------------------------
-  // C9: TabStrip integration
+  // Header tabs (NocoDB-style icon toggles in the single header row)
   // ---------------------------------------------------------------------
 
   function mockDocWithComments(
@@ -453,7 +453,7 @@ describe('DocumentSlideover', () => {
     );
   }
 
-  it('renders the TabStrip with Fields / Comments / Activity for a work_item', async () => {
+  it('renders the icon tab toggles Fields / Comments / Activity for a work_item', async () => {
     mockDocWithComments('fix-login', 'work_item', 0);
     const { queryClient, router } = setup('?doc=fix-login');
     render(
@@ -463,16 +463,13 @@ describe('DocumentSlideover', () => {
     );
     await screen.findByText('Fix login bug');
 
-    const tablist = document.querySelector('[role="tablist"]');
-    expect(tablist).not.toBeNull();
-    const tabs = tablist!.querySelectorAll('[role="tab"]');
-    const labels = Array.from(tabs).map((t) => t.textContent ?? '');
-    expect(labels.some((l) => l.includes('Fields'))).toBe(true);
-    expect(labels.some((l) => l.includes('Comments'))).toBe(true);
-    expect(labels.some((l) => l.includes('Activity'))).toBe(true);
+    // Icon-only tabs: the accessible name lives on aria-label, not text.
+    expect(screen.getByRole('tab', { name: 'Fields' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Comments' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Activity' })).toBeInTheDocument();
   });
 
-  it('renders the TabStrip with Fields / Comments / Activity for a page', async () => {
+  it('renders the icon tab toggles Fields / Comments / Activity for a page', async () => {
     mockDocWithComments('intro', 'page', 0);
     const { queryClient, router } = setup('?doc=intro');
     render(
@@ -482,17 +479,12 @@ describe('DocumentSlideover', () => {
     );
     await screen.findByText('Fix login bug');
 
-    const tablist = document.querySelector('[role="tablist"]');
-    expect(tablist).not.toBeNull();
-    const labels = Array.from(tablist!.querySelectorAll('[role="tab"]')).map(
-      (t) => t.textContent ?? '',
-    );
-    expect(labels.some((l) => l.includes('Fields'))).toBe(true);
-    expect(labels.some((l) => l.includes('Comments'))).toBe(true);
-    expect(labels.some((l) => l.includes('Activity'))).toBe(true);
+    expect(screen.getByRole('tab', { name: 'Fields' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Comments' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Activity' })).toBeInTheDocument();
   });
 
-  it('defaults to the Fields tab on open', async () => {
+  it('defaults to the Fields tab on open (aria-selected)', async () => {
     mockDocWithComments('fix-login', 'work_item', 0);
     const { queryClient, router } = setup('?doc=fix-login');
     render(
@@ -502,15 +494,12 @@ describe('DocumentSlideover', () => {
     );
     await screen.findByText('Fix login bug');
 
-    const tablist = document.querySelector('[role="tablist"]')!;
-    const fieldsBtn = Array.from(tablist.querySelectorAll('[role="tab"]')).find(
-      (t) => (t.textContent ?? '').includes('Fields'),
-    );
-    expect(fieldsBtn).toBeDefined();
-    expect(fieldsBtn!.getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByRole('tab', { name: 'Fields' })).toHaveAttribute('aria-selected', 'true');
   });
 
-  it('shows the comment count badge on the Comments tab', async () => {
+  it('shows the comment count as a badge on the Comments tab', async () => {
+    // Regression: the count badge was dropped in the HeaderTabs refactor. With
+    // 3 comments the Comments tab must show "3" (HeaderTabs renders count>0).
     mockDocWithComments('fix-login', 'work_item', 3);
     const { queryClient, router } = setup('?doc=fix-login');
     render(
@@ -521,17 +510,11 @@ describe('DocumentSlideover', () => {
     await screen.findByText('Fix login bug');
 
     await waitFor(() => {
-      const tablist = document.querySelector('[role="tablist"]')!;
-      const commentsBtn = Array.from(tablist.querySelectorAll('[role="tab"]')).find(
-        (t) => (t.textContent ?? '').includes('Comments'),
-      );
-      expect(commentsBtn).toBeDefined();
-      // The badge renders the count inside a span.
-      expect(commentsBtn!.textContent).toContain('3');
+      expect(screen.getByRole('tab', { name: 'Comments' })).toHaveTextContent('3');
     });
   });
 
-  it('switching to the Activity tab mounts the ActivityPanel; body editor still visible', async () => {
+  it('switching to the Activity tab mounts the ActivityPanel and HIDES the body editor', async () => {
     mockDocWithComments('fix-login', 'work_item', 0);
     const { queryClient, router } = setup('?doc=fix-login');
     render(
@@ -541,25 +524,22 @@ describe('DocumentSlideover', () => {
     );
     await screen.findByText('Fix login bug');
 
-    // Default tab is Fields — ActivityPanel's "No activity yet." copy not in DOM.
+    // On Fields (default) the body editor is present; ActivityPanel copy is not.
+    expect(document.querySelector('[data-testid="slideover-editor"]')).not.toBeNull();
     expect(screen.queryByText(/No activity yet\./)).toBeNull();
 
-    const tablist = document.querySelector('[role="tablist"]')!;
-    const activityBtn = Array.from(tablist.querySelectorAll('[role="tab"]')).find(
-      (t) => (t.textContent ?? '').includes('Activity'),
-    ) as HTMLElement;
-    await userEvent.click(activityBtn);
+    await userEvent.click(screen.getByRole('tab', { name: 'Activity' }));
 
     // ActivityPanel renders "No activity yet." for the empty-events case.
     await waitFor(() => {
       expect(screen.getByText(/No activity yet\./)).toBeInTheDocument();
     });
 
-    // Body editor still visible regardless of tab.
-    expect(document.querySelector('[data-testid="slideover-editor"]')).not.toBeNull();
+    // The Milkdown body editor only belongs on Fields — gone on Activity.
+    expect(document.querySelector('[data-testid="slideover-editor"]')).toBeNull();
   });
 
-  it('switching to the Comments tab mounts the CommentsTab; body editor still visible', async () => {
+  it('switching to the Comments tab mounts the CommentsTab and HIDES the body editor', async () => {
     mockDocWithComments('fix-login', 'work_item', 0);
     const { queryClient, router } = setup('?doc=fix-login');
     render(
@@ -569,18 +549,14 @@ describe('DocumentSlideover', () => {
     );
     await screen.findByText('Fix login bug');
 
-    const tablist = document.querySelector('[role="tablist"]')!;
-    const commentsBtn = Array.from(tablist.querySelectorAll('[role="tab"]')).find(
-      (t) => (t.textContent ?? '').includes('Comments'),
-    ) as HTMLElement;
-    await userEvent.click(commentsBtn);
+    await userEvent.click(screen.getByRole('tab', { name: 'Comments' }));
 
     // CommentsTab renders a "0 comments · newest first" row when empty.
     await waitFor(() => {
       expect(screen.getByText(/comments · newest first/)).toBeInTheDocument();
     });
-    // Body editor still in DOM below the tabs.
-    expect(document.querySelector('[data-testid="slideover-editor"]')).not.toBeNull();
+    // Body editor is NOT rendered on the Comments tab.
+    expect(document.querySelector('[data-testid="slideover-editor"]')).toBeNull();
   });
 
   it('reopening with a different doc resets the tab back to Fields', async () => {
@@ -649,30 +625,22 @@ describe('DocumentSlideover', () => {
     await screen.findByText('Fix login bug');
 
     // Switch to Activity.
-    const tablist = document.querySelector('[role="tablist"]')!;
-    const activityBtn = Array.from(tablist.querySelectorAll('[role="tab"]')).find(
-      (t) => (t.textContent ?? '').includes('Activity'),
-    ) as HTMLElement;
-    await userEvent.click(activityBtn);
+    await userEvent.click(screen.getByRole('tab', { name: 'Activity' }));
     await waitFor(() => {
-      expect(activityBtn.getAttribute('aria-pressed')).toBe('true');
+      expect(screen.getByRole('tab', { name: 'Activity' })).toHaveAttribute('aria-selected', 'true');
     });
 
     // Navigate to a different doc without closing the sheet.
     await router.navigate({ to: '.', search: { doc: 'other-doc' } });
     await screen.findByText('Other doc');
 
-    // Tab strip has reset to Fields.
+    // Tab has reset to Fields.
     await waitFor(() => {
-      const list = document.querySelector('[role="tablist"]')!;
-      const fieldsBtn = Array.from(list.querySelectorAll('[role="tab"]')).find(
-        (t) => (t.textContent ?? '').includes('Fields'),
-      );
-      expect(fieldsBtn!.getAttribute('aria-pressed')).toBe('true');
+      expect(screen.getByRole('tab', { name: 'Fields' })).toHaveAttribute('aria-selected', 'true');
     });
   });
 
-  it('body editor stays visible across tab switches', async () => {
+  it('the body editor is present ONLY on the Fields tab', async () => {
     mockDocWithComments('fix-login', 'work_item', 0);
     const { queryClient, router } = setup('?doc=fix-login');
     render(
@@ -682,13 +650,20 @@ describe('DocumentSlideover', () => {
     );
     await screen.findByText('Fix login bug');
 
-    const tablist = document.querySelector('[role="tablist"]')!;
-    const allTabs = Array.from(tablist.querySelectorAll('[role="tab"]')) as HTMLElement[];
+    // Fields (default): editor present.
+    expect(document.querySelector('[data-testid="slideover-editor"]')).not.toBeNull();
 
-    for (const t of allTabs) {
-      await userEvent.click(t);
+    // Comments: editor gone.
+    await userEvent.click(screen.getByRole('tab', { name: 'Comments' }));
+    await waitFor(() => {
+      expect(document.querySelector('[data-testid="slideover-editor"]')).toBeNull();
+    });
+
+    // Back to Fields: editor returns.
+    await userEvent.click(screen.getByRole('tab', { name: 'Fields' }));
+    await waitFor(() => {
       expect(document.querySelector('[data-testid="slideover-editor"]')).not.toBeNull();
-    }
+    });
   });
 
   it('derives listParams from URL search so optimistic writes target the active table cache', async () => {

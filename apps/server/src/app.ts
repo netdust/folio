@@ -1,17 +1,19 @@
 import { Hono } from 'hono';
+import { serveStatic } from 'hono/bun';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
-import { serveStatic } from 'hono/bun';
 import { env } from './env.ts';
 import { registerErrorHandler } from './lib/http.ts';
-import { attachUser, type AuthContext } from './middleware/auth.ts';
+import { type AuthContext, attachUser } from './middleware/auth.ts';
 import { attachToken, requireResource, requireUserOrToken } from './middleware/bearer.ts';
 import {
+  type ScopeContext,
   resolveProject,
   resolveTable,
   resolveWorkspace,
-  type ScopeContext,
 } from './middleware/scope.ts';
+import { adminRunnerStatsRoute } from './routes/admin-runner-stats.ts';
+import { aiRoute } from './routes/ai.ts';
 import { auth } from './routes/auth.ts';
 import { commentsRoute } from './routes/comments.ts';
 import { documentsRoute } from './routes/documents.ts';
@@ -20,6 +22,7 @@ import { fieldsRoute } from './routes/fields.ts';
 import { healthRoute } from './routes/health.ts';
 import { mcpRoute } from './routes/mcp.ts';
 import { projectItemRoute, projectsRoute } from './routes/projects.ts';
+import { providerHealthRoute, runsListRoute, runsRoute } from './routes/runs.ts';
 import { settingsRoute } from './routes/settings.ts';
 import { statusesRoute } from './routes/statuses.ts';
 import { tablesRoute } from './routes/tables.ts';
@@ -44,11 +47,18 @@ v1.route('/workspaces', workspacesRoute);
 
 const wScope = new Hono<AuthContext & ScopeContext>();
 wScope.use('*', attachToken, requireUserOrToken, resolveWorkspace);
+wScope.route('/ai', aiRoute);
 wScope.route('/settings', settingsRoute);
 wScope.route('/tokens', tokensRoute);
 wScope.route('/events', eventsRoute);
 wScope.route('/documents', workspaceDocumentsRoute);
 wScope.route('/projects', projectsRoute);
+// Runs: id-addressed verbs (single/create/cancel/retry) are workspace-scoped —
+// a run id is globally unique and these derive the allow-list inline (m58).
+wScope.route('/runs', runsRoute);
+wScope.route('/provider-health', providerHealthRoute);
+// D-6: admin-only workspace-aggregate runner stats (mitigation 60). No MCP twin.
+wScope.route('/admin/runner-stats', adminRunnerStatsRoute);
 
 const pScope = new Hono<AuthContext & ScopeContext>();
 // Phase 2.5: resolveProject must run before requireResource (the gate reads
@@ -71,6 +81,9 @@ pScope.route('/statuses', statusesRoute);
 pScope.route('/fields', fieldsRoute);
 pScope.route('/views', viewsRoute);
 pScope.route('/documents', documentsRoute);
+// Runs list is project-scoped: resolveProject + requireResource() already
+// enforced the agent allow-list upstream (m24 narrowing via the filter).
+pScope.route('/runs', runsListRoute);
 // Comments mount: one router handles both parent-scoped POST/GET-list and
 // item-scoped GET/PATCH/DELETE via full internal paths. Mounted at '/' under
 // pScope so resolveProject + requireResource() apply (Phase 2.5).

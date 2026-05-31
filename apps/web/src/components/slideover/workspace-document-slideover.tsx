@@ -1,23 +1,29 @@
 /**
  * Phase 2.5: slideover for workspace-scoped documents (agents + triggers).
  *
- * Mirrors DocumentSlideover's URL-driven lifecycle (?doc=<slug> opens it) but
+ * Mirrors DocumentSlideover's URL-driven lifecycle but on its OWN param: the
+ * workspace slideover opens on ?wdoc=<slug> (NOT ?doc=) so it never collides
+ * with the project DocumentSlideover, which keeps ?doc=. Both mount under the
+ * /w/$wslug layout; sharing one param made them stack as dual modals. `wdoc`
+ * (workspace-doc) covers both agents AND triggers. It
  * uses workspace-scoped hooks and skips project-specific surface: no status
  * field, no pinned fields, no activity panel, no log-activity, no copy-as-MD
  * (agents don't have a workspace-scoped .md endpoint yet).
  */
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { toast } from 'sonner';
-import { MoreHorizontal, Trash2, X } from 'lucide-react';
+import { Bot, Check, Code, FileText, History, MoreHorizontal, Pencil, Trash2, X } from 'lucide-react';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '../ui/sheet.tsx';
 import { IconButton } from '../ui/icon-button.tsx';
 import { Button } from '../ui/button.tsx';
 import { Icon } from '../ui/icon.tsx';
 import { Skeleton } from '../ui/skeleton.tsx';
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
-import { TabStrip, type TabItem } from '../ui/tab-strip.tsx';
+import { HeaderTabs, type HeaderTabItem } from './header-tabs.tsx';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '../ui/dialog.tsx';
+import { ResizeHandle } from '../ui/resize-handle.tsx';
+import { useResizableWidth } from '../../lib/use-resizable-width.ts';
 import {
   useWorkspaceDocument,
   useUpdateWorkspaceDocument,
@@ -28,11 +34,12 @@ import { formatApiError } from '../../lib/api/index.ts';
 import { InlineEdit } from '../inline/inline-edit.tsx';
 import { FrontmatterForm } from './frontmatter-form.tsx';
 import { BodyEditor } from './body-editor.tsx';
-import { ModeToggle, type EditorMode } from './mode-toggle.tsx';
+import { type EditorMode } from './mode-toggle.tsx';
 import { RawMdEditor } from './raw-md-editor.tsx';
 import { WorkspaceActivityPanel } from './workspace-activity-panel.tsx';
 import { WorkspaceLogActivityButton } from './workspace-log-activity-button.tsx';
 import { TriggerForm } from '../triggers/trigger-form.tsx';
+import { RunsHistorySection } from '../runs/runs-history-section.tsx';
 
 type WorkspaceDocTabValue = 'fields' | 'activity' | 'runs';
 
@@ -42,14 +49,62 @@ interface Props {
 
 export function WorkspaceDocumentSlideover({ wslug }: Props) {
   const navigate = useNavigate();
-  const search = useSearch({ strict: false }) as { doc?: string };
-  const open = !!search.doc;
-  const slug = search.doc ?? null;
+  const search = useSearch({ strict: false }) as { wdoc?: string; tab?: WorkspaceDocTabValue };
+  const open = !!search.wdoc;
+  const slug = search.wdoc ?? null;
   const { data: doc, isLoading, error } = useWorkspaceDocument(wslug, slug);
   const [mode, setMode] = useState<EditorMode>('rich');
   const [moreOpen, setMoreOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const del = useDeleteWorkspaceDocument(wslug);
+  const { width, onDragStart } = useResizableWidth('agent-config', {
+    default: 480,
+    min: 360,
+    max: 1100,
+  });
+
+  // Tab state lives here (not in SlideoverBody) so the icon toggles render
+  // inline in the header — NocoDB-style single row. Defaults to Fields; a
+  // ?tab= deep-link (e.g. the activity feed opening an agent's Runs tab) wins
+  // ONCE, when a doc opens.
+  const [tab, setTab] = useState<WorkspaceDocTabValue>(search.tab ?? 'fields');
+  // Re-seed the tab ONLY when a different doc opens — keyed on doc.id, NOT on
+  // search.tab. Reading search.tab as an effect dep was a bug: selectTab strips
+  // ?tab= on a manual click, which flips search.tab defined→undefined and
+  // re-fired this effect, stomping the user's just-clicked tab back to Fields.
+  // `searchRef` reads the CURRENT ?tab= at seed time without making it a dep.
+  const searchRef = useRef(search);
+  searchRef.current = search;
+  const seededForDocRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (doc?.id) {
+      if (seededForDocRef.current !== doc.id) {
+        seededForDocRef.current = doc.id;
+        setTab(searchRef.current.tab ?? 'fields');
+      }
+    } else {
+      // Slideover closed (doc cleared). Reset the seed gate so REOPENING the
+      // SAME doc with a fresh ?tab= deep-link re-seeds — the component is
+      // mounted persistently at the layout, so without this the ref would keep
+      // the last doc.id and a reopen-same-doc deep-link would be ignored.
+      seededForDocRef.current = null;
+    }
+  }, [doc?.id]);
+  // A MANUAL tab click updates state AND clears the ?tab= deep-link param so it
+  // doesn't re-assert on a later doc switch. Clearing the param no longer
+  // re-seeds the tab (the effect is doc.id-keyed), so the click sticks.
+  const selectTab = (next: WorkspaceDocTabValue) => {
+    setTab(next);
+    if (search.tab !== undefined) {
+      const { tab: _tab, ...rest } = search;
+      void navigate({ to: '.', search: rest });
+    }
+  };
+  const tabItems: HeaderTabItem<WorkspaceDocTabValue>[] = [
+    { value: 'fields', label: 'Fields', icon: FileText },
+    { value: 'activity', label: 'Activity', icon: History },
+    { value: 'runs', label: 'Runs', icon: Bot },
+  ];
 
   // Alt+M toggles raw ↔ rich, matching the project slideover's shortcut.
   useEffect(() => {
@@ -65,7 +120,7 @@ export function WorkspaceDocumentSlideover({ wslug }: Props) {
   }, [open]);
 
   const close = () => {
-    const { doc: _doc, ...next } = search;
+    const { wdoc: _wdoc, ...next } = search;
     void navigate({ to: '.', search: next });
   };
 
@@ -83,7 +138,8 @@ export function WorkspaceDocumentSlideover({ wslug }: Props) {
 
   return (
     <Sheet open={open} onOpenChange={(o) => { if (!o) close(); }}>
-      <SheetContent width={800} className="h-screen">
+      <SheetContent width={width} className="h-screen">
+        <ResizeHandle onDragStart={onDragStart} />
         <SheetHeader>
           <SheetTitle>
             {isLoading ? (
@@ -102,7 +158,7 @@ export function WorkspaceDocumentSlideover({ wslug }: Props) {
           <div data-testid="workspace-slideover-toolbar" className="flex items-center gap-1.5">
             {doc ? (
               <>
-                <ModeToggle mode={mode} onChange={setMode} />
+                <HeaderTabs value={tab} items={tabItems} onChange={selectTab} />
                 <div aria-hidden className="mx-0.5 h-4 w-px bg-border-light" />
                 <Popover open={moreOpen} onOpenChange={setMoreOpen}>
                   <PopoverTrigger asChild>
@@ -114,8 +170,44 @@ export function WorkspaceDocumentSlideover({ wslug }: Props) {
                       <Icon icon={MoreHorizontal} size={16} />
                     </button>
                   </PopoverTrigger>
-                  <PopoverContent align="end" className="min-w-[160px] py-1">
+                  <PopoverContent align="end" className="min-w-[180px] py-1">
                     <div role="menu" className="flex flex-col">
+                      {/* Rich/Raw editor switch lives here (not the header) to
+                          keep the narrow panel header uncramped. Only relevant
+                          where the body editor renders: agents on Fields. */}
+                      {tab === 'fields' && doc.type === 'agent' ? (
+                        <>
+                          <button
+                            type="button"
+                            role="menuitemradio"
+                            aria-checked={mode === 'rich'}
+                            onClick={() => {
+                              setMode('rich');
+                              setMoreOpen(false);
+                            }}
+                            className="inline-flex items-center gap-2 px-3 py-1.5 text-left text-sm text-fg-2 transition-colors duration-fast hover:bg-card hover:text-fg"
+                          >
+                            <Icon icon={Pencil} size={14} />
+                            Edit (rich)
+                            {mode === 'rich' ? <Icon icon={Check} size={14} className="ml-auto" /> : null}
+                          </button>
+                          <button
+                            type="button"
+                            role="menuitemradio"
+                            aria-checked={mode === 'raw'}
+                            onClick={() => {
+                              setMode('raw');
+                              setMoreOpen(false);
+                            }}
+                            className="inline-flex items-center gap-2 px-3 py-1.5 text-left text-sm text-fg-2 transition-colors duration-fast hover:bg-card hover:text-fg"
+                          >
+                            <Icon icon={Code} size={14} />
+                            Raw markdown
+                            {mode === 'raw' ? <Icon icon={Check} size={14} className="ml-auto" /> : null}
+                          </button>
+                          <div aria-hidden className="my-1 h-px bg-border-light" />
+                        </>
+                      ) : null}
                       <button
                         type="button"
                         role="menuitem"
@@ -139,7 +231,7 @@ export function WorkspaceDocumentSlideover({ wslug }: Props) {
           </div>
         </SheetHeader>
         <div className="flex-1 min-h-0 overflow-hidden px-6 py-4">
-          {slug ? <SlideoverBody wslug={wslug} slug={slug} mode={mode} /> : null}
+          {slug ? <SlideoverBody wslug={wslug} slug={slug} mode={mode} tab={tab} /> : null}
         </div>
       </SheetContent>
       <Dialog
@@ -192,21 +284,16 @@ function SlideoverBody({
   wslug,
   slug,
   mode,
+  tab,
 }: {
   wslug: string;
   slug: string;
   mode: EditorMode;
+  tab: WorkspaceDocTabValue;
 }) {
   const { data: doc, isLoading, error } = useWorkspaceDocument(wslug, slug);
   const update = useUpdateWorkspaceDocument(wslug);
   const [pendingKeys, setPendingKeys] = useState<Set<string>>(new Set());
-
-  // Tab state — per-slideover-open. Defaults to Fields on each fresh open
-  // and resets to Fields whenever the user navigates to a different doc.
-  const [tab, setTab] = useState<WorkspaceDocTabValue>('fields');
-  useEffect(() => {
-    setTab('fields');
-  }, [doc?.id]);
 
   if (isLoading) return <div className="text-fg-3">Loading document…</div>;
   if (error || !doc) return <div className="text-danger">Failed to load document.</div>;
@@ -230,35 +317,36 @@ function SlideoverBody({
     }
   };
 
-  const tabItems: TabItem<WorkspaceDocTabValue>[] = [
-    { value: 'fields', label: 'Fields', icon: '📋' },
-    { value: 'activity', label: 'Activity', icon: '📜' },
-    { value: 'runs', label: 'Runs', icon: '🤖' },
-  ];
-
   return (
     <article className="flex h-full flex-col">
       <header className="flex-shrink-0 pb-2">
         <div className="font-mono text-[11px] text-fg-3">/{doc.slug}</div>
       </header>
-      <TabStrip value={tab} items={tabItems} onChange={setTab} />
-      <div
-        data-testid="workspace-slideover-tab-content"
-        className="folio-scroll shrink-0 max-h-[40vh] overflow-y-auto pb-3 pt-3"
-      >
-        {tab === 'fields' ? (
-          doc.type === 'trigger' ? (
-            <TriggerFieldsTabPane
-              doc={doc}
-              wslug={wslug}
-              onPatch={onPatch}
-            />
-          ) : (
+      {/* FIELDS tab.
+          • Triggers: a single full-height form — no Milkdown body editor, so
+            the form fills the pane instead of being capped at 40vh above an
+            empty editor area.
+          • Agents: the frontmatter form (capped) sits ABOVE the body editor.
+          ACTIVITY / RUNS tabs render a full-height panel with no editor. */}
+      {tab === 'fields' && doc.type === 'trigger' ? (
+        <div
+          data-testid="workspace-slideover-tab-content"
+          className="folio-scroll min-h-0 flex-1 overflow-y-auto pt-3"
+        >
+          <TriggerFieldsTabPane doc={doc} wslug={wslug} onPatch={onPatch} />
+        </div>
+      ) : null}
+      {tab === 'fields' && doc.type !== 'trigger' ? (
+        <>
+          <div
+            data-testid="workspace-slideover-tab-content"
+            className="folio-scroll shrink-0 max-h-[40vh] overflow-y-auto pb-3 pt-3"
+          >
             <FrontmatterForm
               wslug={wslug}
               // FrontmatterForm requires a pslug for the AssigneePicker branch;
-              // agents and triggers don't carry an `assignee` field so the
-              // AssigneePicker is never rendered. Empty string is safe.
+              // agents don't carry an `assignee` field so the AssigneePicker is
+              // never rendered. Empty string is safe.
               pslug=""
               type={doc.type}
               status={null}
@@ -266,52 +354,69 @@ function SlideoverBody({
               frontmatter={doc.frontmatter}
               pinnedFields={[]}
               onStatusCommit={() => {
-                /* no-op: agents/triggers have no status */
+                /* no-op: agents have no status */
               }}
               onFrontmatterCommit={(p) => void onPatch({ frontmatter: p }, Object.keys(p))}
               pendingKeys={pendingKeys}
             />
-          )
-        ) : null}
-        {tab === 'activity' ? (
-          <div className="flex flex-col gap-2">
-            {/* Log button only on agents — A7 rejects type=trigger with
-                INVALID_ACTIVITY_TARGET, so triggers stay read-only here. */}
-            {doc.type === 'agent' ? (
-              <div className="flex justify-end">
-                <WorkspaceLogActivityButton wslug={wslug} slug={doc.slug} />
-              </div>
-            ) : null}
-            <WorkspaceActivityPanel wslug={wslug} slug={doc.slug} />
           </div>
-        ) : null}
-        {tab === 'runs' ? (
-          <div className="text-fg-3 text-sm py-8 text-center">
-            No runs yet — Phase 3 wires the runner.
+          <div
+            data-testid="workspace-slideover-editor"
+            className="folio-scroll flex-1 min-h-0 overflow-y-auto border-t border-border-light pt-4 focus-within:border-fg-3"
+          >
+            <div className="mb-1.5 font-mono text-[11px] uppercase tracking-wide text-fg-3">
+              Prompt
+            </div>
+            {mode === 'rich' ? (
+              <BodyEditor
+                key={`rich-${doc.slug}`}
+                value={doc.body}
+                onChange={(body) => onPatch({ body }, ['body'])}
+                documents={[]}
+                aiConfigured={false}
+                showToolbar={false}
+              />
+            ) : (
+              <RawMdEditor
+                key={`raw-${doc.slug}`}
+                value={doc.body}
+                onChange={(body) => onPatch({ body }, ['body'])}
+              />
+            )}
           </div>
-        ) : null}
-      </div>
-      <div
-        data-testid="workspace-slideover-editor"
-        className="folio-scroll flex-1 min-h-0 overflow-y-auto border-t border-border-light pt-4 focus-within:border-fg-3"
-      >
-        {mode === 'rich' ? (
-          <BodyEditor
-            key={`rich-${doc.slug}`}
-            value={doc.body}
-            onChange={(body) => onPatch({ body }, ['body'])}
-            documents={[]}
-            aiConfigured={false}
-            showToolbar={false}
-          />
-        ) : (
-          <RawMdEditor
-            key={`raw-${doc.slug}`}
-            value={doc.body}
-            onChange={(body) => onPatch({ body }, ['body'])}
-          />
-        )}
-      </div>
+        </>
+      ) : null}
+      {tab === 'activity' ? (
+        <div
+          data-testid="workspace-slideover-tab-content"
+          className="folio-scroll flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pt-3"
+        >
+          {/* Log button only on agents — A7 rejects type=trigger with
+              INVALID_ACTIVITY_TARGET, so triggers stay read-only here. */}
+          {doc.type === 'agent' ? (
+            <div className="flex justify-end">
+              <WorkspaceLogActivityButton wslug={wslug} slug={doc.slug} />
+            </div>
+          ) : null}
+          <WorkspaceActivityPanel wslug={wslug} slug={doc.slug} />
+        </div>
+      ) : null}
+      {tab === 'runs' ? (
+        <div
+          data-testid="workspace-slideover-tab-content"
+          className="folio-scroll min-h-0 flex-1 overflow-y-auto pt-3"
+        >
+          {doc.type === 'agent' ? (
+            <RunsHistorySection
+              wslug={wslug}
+              agentSlug={doc.slug}
+              projects={(doc.frontmatter.projects as string[] | undefined) ?? ['*']}
+            />
+          ) : (
+            <div className="text-fg-3 text-sm py-8 text-center">Runs apply to agents only.</div>
+          )}
+        </div>
+      ) : null}
     </article>
   );
 }

@@ -3,6 +3,8 @@ import type { Comment } from '../../lib/api/comments.ts';
 import type { Member } from '../../lib/api/members.ts';
 import { useCreateComment } from '../../lib/api/comments.ts';
 import { type AgentRef, authorAgentSlug, authorDisplayName } from '../../lib/author-ref.ts';
+import { useRun } from '../../lib/api/runs.ts';
+import { RunStatusChip } from '../runs/run-status-chip.tsx';
 import { Button } from '../ui/button.tsx';
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
 
@@ -268,6 +270,12 @@ export function ApprovalButtons({
   workspaceMembers,
   workspaceAgents,
 }: ApprovalButtonsProps) {
+  // useRun MUST be called before any early return (rules of hooks). It's
+  // enabled only when run_id is present, so a comment without run_id never
+  // fetches — preserving the exact legacy behavior for unlinked comments.
+  const runId = planComment.frontmatter.run_id;
+  const { data: run } = useRun(workspaceSlug, runId);
+
   // Guard: only render on kind=plan comments
   if (planComment.frontmatter.kind !== 'plan') return null;
 
@@ -292,6 +300,26 @@ export function ApprovalButtons({
       <p className="text-xs text-fg-3 mt-1">
         {verb} by {resolution.authorLabel}
         {resolution.duration ? ` · ${resolution.duration}` : ''}
+      </p>
+    );
+  }
+
+  // --- E-6: live run state ---
+  // When the comment is linked to a run, reflect the run's LIVE state.
+  // Interactive buttons while the run still awaits approval (or is PRE-gate:
+  // planning) — approval may still be needed. Only once the run has moved
+  // PAST the gate (running) or reached a terminal state (completed/failed/
+  // rejected) do we show a muted status line instead of stale buttons. A found
+  // `resolution` above (an explicit human approval/rejection comment) still
+  // takes priority — the recorded human decision is the strongest signal.
+  // When there is no run_id (legacy comments) `run` is undefined and we fall
+  // through unchanged.
+  const PAST_APPROVAL = new Set(['running', 'completed', 'failed', 'rejected']);
+  if (runId && run && PAST_APPROVAL.has(run.status ?? '')) {
+    return (
+      <p className="text-xs text-fg-3 mt-1 flex items-center gap-1.5">
+        <RunStatusChip status={run.status ?? 'unknown'} />
+        <span>— approval no longer needed</span>
       </p>
     );
   }

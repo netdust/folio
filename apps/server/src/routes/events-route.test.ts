@@ -794,3 +794,237 @@ test('F3: agent allow-list narrows server-side replay filter (foreign projectId 
   expect(text).toContain('evt-a-allowed');
   expect(text).not.toContain('evt-b-leaked');
 });
+
+// ---------------------------------------------------------------------------
+// D-7 — `?agent=` + `?table=` SSE filters.
+//
+// `?agent=` matches `payload.agent` (the agent SLUG); `?table=` matches
+// `payload.table_id` (the runs table id). Both keys are stamped uniformly
+// across every run-lifecycle event (started + transitions + orphan-recovery),
+// so the web runs UI follows a whole run through one filter. These filters are
+// ADDITIONAL — AND-combined with the F3 allow-list + subject visibility — so
+// they narrow, never widen.
+//
+// These tests drive the REPLAY path (Last-Event-Id anchor) with a plain
+// non-agent PAT so the F3 + visibility layers are pass-through, isolating the
+// new payload-key filters. The live-path callback uses the exact same
+// predicate (verified by reading events.ts); the replay assertion is the
+// load-bearing spec check, mirroring how the existing ?parent=/?run= replay
+// tests are structured.
+// ---------------------------------------------------------------------------
+
+/** Drain SSE replay frames for ~300ms, then cancel. Returns the raw text. */
+async function drainReplay(res: Response): Promise<string> {
+  const reader = res.body?.getReader();
+  if (!reader) throw new Error('no body');
+  const decoder = new TextDecoder();
+  let text = '';
+  const start = Date.now();
+  while (Date.now() - start < 300) {
+    const { value, done } = await Promise.race([
+      reader.read(),
+      new Promise<{ value?: Uint8Array; done: boolean }>((resolve) =>
+        setTimeout(() => resolve({ done: false }), 100),
+      ),
+    ]);
+    if (done) break;
+    if (value) text += decoder.decode(value);
+  }
+  await reader.cancel();
+  return text;
+}
+
+/** Plain (non-agent) PAT so F3 + visibility are no-ops for the D-7 tests. */
+async function setupPlainToken(opts: {
+  workspaceId: string;
+  userId: string;
+  name: string;
+}): Promise<string> {
+  const { token, hash } = newApiToken();
+  await db.insert(apiTokens).values({
+    id: nanoid(),
+    workspaceId: opts.workspaceId,
+    name: opts.name,
+    tokenHash: hash,
+    scopes: ['documents:read'],
+    createdBy: opts.userId,
+  });
+  return token;
+}
+
+/**
+ * Seed an anchor + a run-lifecycle event per (agent, table) tuple. Returns the
+ * anchor id. Each lifecycle event id encodes its agent + table for assertions.
+ */
+async function seedRunEvents(
+  workspaceId: string,
+  projectId: string,
+  actor: string,
+  rows: Array<{ id: string; agent: string; table_id: string; kind: string }>,
+): Promise<string> {
+  const { events } = await import('../db/schema.ts');
+  const base = Date.now();
+  const values = [
+    {
+      id: 'd7-anchor',
+      workspaceId,
+      projectId: null,
+      documentId: null,
+      kind: 'workspace.created' as const,
+      actor,
+      payload: {},
+      createdAt: new Date(base - 90_000),
+      seq: 7000,
+    },
+    ...rows.map((r, i) => ({
+      id: r.id,
+      workspaceId,
+      projectId,
+      documentId: `run-${i}`,
+      kind: r.kind as 'agent.run.started',
+      actor,
+      payload: { agent: r.agent, table_id: r.table_id, from: 'planning', to: 'running' },
+      createdAt: new Date(base - 60_000 + i * 1_000),
+      seq: 7001 + i,
+    })),
+  ];
+  await db.insert(events).values(values);
+  return 'd7-anchor';
+}
+
+test('D-7: ?agent=<slug> returns only events whose payload.agent matches (replay isolation)', async () => {
+  const { app, seed } = await makeTestApp();
+  const token = await setupPlainToken({
+    workspaceId: seed.workspace.id,
+    userId: seed.user.id,
+    name: 'd7-agent-filter',
+  });
+  await seedRunEvents(seed.workspace.id, seed.project.id, seed.user.id, [
+    { id: 'evt-alpha-started', agent: 'alpha-bot', table_id: 'tbl-runs', kind: 'agent.run.started' },
+    { id: 'evt-alpha-running', agent: 'alpha-bot', table_id: 'tbl-runs', kind: 'agent.run.running' },
+    { id: 'evt-beta-started', agent: 'beta-bot', table_id: 'tbl-runs', kind: 'agent.run.started' },
+  ]);
+
+  const res = await app.request('/api/v1/w/acme/events?agent=alpha-bot', {
+    headers: { Authorization: `Bearer ${token}`, 'Last-Event-Id': 'd7-anchor' },
+  });
+  expect(res.status).toBe(200);
+  const text = await drainReplay(res);
+
+  // Both alpha lifecycle events flow through; beta's is excluded.
+  expect(text).toContain('evt-alpha-started');
+  expect(text).toContain('evt-alpha-running');
+  expect(text).not.toContain('evt-beta-started');
+});
+
+test('D-7: ?table=<tableId> returns only events for that runs table', async () => {
+  const { app, seed } = await makeTestApp();
+  const token = await setupPlainToken({
+    workspaceId: seed.workspace.id,
+    userId: seed.user.id,
+    name: 'd7-table-filter',
+  });
+  await seedRunEvents(seed.workspace.id, seed.project.id, seed.user.id, [
+    { id: 'evt-tblA', agent: 'a-bot', table_id: 'tbl-A', kind: 'agent.run.started' },
+    { id: 'evt-tblB', agent: 'b-bot', table_id: 'tbl-B', kind: 'agent.run.started' },
+  ]);
+
+  const res = await app.request('/api/v1/w/acme/events?table=tbl-A', {
+    headers: { Authorization: `Bearer ${token}`, 'Last-Event-Id': 'd7-anchor' },
+  });
+  expect(res.status).toBe(200);
+  const text = await drainReplay(res);
+
+  expect(text).toContain('evt-tblA');
+  expect(text).not.toContain('evt-tblB');
+});
+
+test('D-7: ?agent=X&parent=Y AND-combines the new filter with an existing one', async () => {
+  const { app, db: testDb, seed } = await makeTestApp();
+  const token = await setupPlainToken({
+    workspaceId: seed.workspace.id,
+    userId: seed.user.id,
+    name: 'd7-and-combine',
+  });
+
+  // Three events, all agent=combo-bot, but differing parent_id. Only the one
+  // matching BOTH agent AND parent should flow through.
+  const { events } = await import('../db/schema.ts');
+  const base = Date.now();
+  await testDb.insert(events).values([
+    {
+      id: 'd7-anchor',
+      workspaceId: seed.workspace.id,
+      projectId: null,
+      documentId: null,
+      kind: 'workspace.created',
+      actor: seed.user.id,
+      payload: {},
+      createdAt: new Date(base - 90_000),
+      seq: 7100,
+    },
+    {
+      id: 'evt-match-both',
+      workspaceId: seed.workspace.id,
+      projectId: seed.project.id,
+      documentId: 'run-x',
+      kind: 'agent.run.started',
+      actor: seed.user.id,
+      payload: { agent: 'combo-bot', table_id: 'tbl', parent_id: 'parent-1' },
+      createdAt: new Date(base - 60_000),
+      seq: 7101,
+    },
+    {
+      id: 'evt-wrong-parent',
+      workspaceId: seed.workspace.id,
+      projectId: seed.project.id,
+      documentId: 'run-y',
+      kind: 'agent.run.started',
+      actor: seed.user.id,
+      payload: { agent: 'combo-bot', table_id: 'tbl', parent_id: 'parent-2' },
+      createdAt: new Date(base - 50_000),
+      seq: 7102,
+    },
+    {
+      id: 'evt-wrong-agent',
+      workspaceId: seed.workspace.id,
+      projectId: seed.project.id,
+      documentId: 'run-z',
+      kind: 'agent.run.started',
+      actor: seed.user.id,
+      payload: { agent: 'other-bot', table_id: 'tbl', parent_id: 'parent-1' },
+      createdAt: new Date(base - 40_000),
+      seq: 7103,
+    },
+  ]);
+
+  const res = await app.request('/api/v1/w/acme/events?agent=combo-bot&parent=parent-1', {
+    headers: { Authorization: `Bearer ${token}`, 'Last-Event-Id': 'd7-anchor' },
+  });
+  expect(res.status).toBe(200);
+  const text = await drainReplay(res);
+
+  expect(text).toContain('evt-match-both');
+  expect(text).not.toContain('evt-wrong-parent');
+  expect(text).not.toContain('evt-wrong-agent');
+});
+
+test('D-7: empty ?agent= / ?table= are normalized to no-filter', async () => {
+  const { app, seed } = await makeTestApp();
+  const token = await setupPlainToken({
+    workspaceId: seed.workspace.id,
+    userId: seed.user.id,
+    name: 'd7-empty',
+  });
+  await seedRunEvents(seed.workspace.id, seed.project.id, seed.user.id, [
+    { id: 'evt-passthrough', agent: 'any-bot', table_id: 'any-tbl', kind: 'agent.run.started' },
+  ]);
+
+  // Empty values must NOT filter everything out (mirrors empty ?parent=/?run=).
+  const res = await app.request('/api/v1/w/acme/events?agent=&table=', {
+    headers: { Authorization: `Bearer ${token}`, 'Last-Event-Id': 'd7-anchor' },
+  });
+  expect(res.status).toBe(200);
+  const text = await drainReplay(res);
+  expect(text).toContain('evt-passthrough');
+});

@@ -16,6 +16,14 @@ function realDb(): DrizzleDb {
   sqlite.exec('PRAGMA journal_mode = WAL');
   sqlite.exec('PRAGMA foreign_keys = ON');
   sqlite.exec('PRAGMA synchronous = NORMAL');
+  // R9 fix (post-review-of-review) — wait up to 5s for the SQLite writer
+  // lock before returning SQLITE_BUSY. Required for concurrent-write
+  // patterns introduced by Phase 3 (claimNextPlanningRun race,
+  // ensureRunsTable's ON CONFLICT DO NOTHING + re-fetch). Without this,
+  // a tx that arrives while another holds the write lock would receive
+  // SQLITE_BUSY immediately rather than waiting — surfacing as opaque
+  // 500s under runner / poller load.
+  sqlite.exec('PRAGMA busy_timeout = 5000');
   return drizzle(sqlite, { schema });
 }
 

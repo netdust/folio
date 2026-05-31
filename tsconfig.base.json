@@ -1,0 +1,19 @@
+{
+  "// note": "Base config ONLY — never invoked directly (there is intentionally no tsconfig.json at the repo root). Each workspace (apps/server, apps/web, packages/shared) has its own tsconfig that `extends` this and sets its own `types` + `include`. This file used to be tsconfig.json, which made a bare `tsc` at root glob the whole monorepo without per-workspace types → ~194 phantom bun:test / testing-library errors. Type-check per workspace.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "jsx": "react-jsx",
+    "allowImportingTsExtensions": true,
+    "noEmit": true
+  }
+}

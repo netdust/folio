@@ -1,5 +1,8 @@
 import { test, expect } from 'bun:test';
 import { makeTestApp } from '../test/harness.ts';
+import { eq, sql } from 'drizzle-orm';
+import { nanoid } from 'nanoid';
+import { documents, tables } from '../db/schema.ts';
 
 const path = '/api/v1/w/acme/p/web/documents';
 
@@ -995,4 +998,278 @@ test('agent bearer narrowed to other projects is denied at project scope (FORBID
     headers: { Authorization: `Bearer ${wildToken}` },
   });
   expect(wildRes.status).toBe(200);
+});
+
+// ---------- F3 + F9 + F10 regression — cross-route agent_run guards ----------
+//
+// agent_run rows are runner-owned. The state machine + closed
+// error_reason enum + sanitizer + agent.run.* event emission all live
+// in services/agent-runs.ts. The generic document routes must reject
+// agent_run defensively (PATCH / DELETE / POST / createDocument) so a
+// hostile or buggy MCP client (cast-to-string at the boundary) can't
+// drive a row mutation that bypasses C.1's mitigations.
+
+async function seedAgentRunRow(
+  db: Awaited<ReturnType<typeof makeTestApp>>['db'],
+  seed: Awaited<ReturnType<typeof makeTestApp>>['seed'],
+): Promise<{ runSlug: string }> {
+  const tableId = nanoid();
+  await db.insert(tables).values({
+    id: tableId,
+    projectId: seed.project.id,
+    slug: 'runs-fixture',
+    name: 'Runs (test fixture)',
+    icon: null,
+    order: 100,
+  });
+  const parentId = nanoid();
+  await db.insert(documents).values({
+    id: parentId,
+    workspaceId: seed.workspace.id,
+    projectId: seed.project.id,
+    tableId: null,
+    type: 'work_item',
+    slug: `wi-parent-${nanoid(6)}`,
+    title: 'Parent',
+    status: null,
+    body: '',
+    frontmatter: {},
+    createdBy: seed.user.id,
+    updatedBy: seed.user.id,
+  });
+  const runId = nanoid();
+  const runSlug = `helper-run-${nanoid(6)}`;
+  await db.insert(documents).values({
+    id: runId,
+    workspaceId: seed.workspace.id,
+    projectId: seed.project.id,
+    tableId,
+    type: 'agent_run',
+    slug: runSlug,
+    title: 'fixture run',
+    status: 'planning',
+    body: '',
+    frontmatter: {
+      assignee: 'agent:helper',
+      status: 'planning',
+      agent_slug: 'helper',
+      provider: 'anthropic',
+      model: 'claude-sonnet-4-6',
+      system_prompt: 'x',
+      max_tokens: 1000,
+      tokens_in: 0,
+      tokens_out: 0,
+      trigger_id: null,
+      chain_id: crypto.randomUUID(),
+      fired_by: 'manual',
+      started_at: new Date().toISOString(),
+    },
+    parentId,
+    createdBy: seed.user.id,
+    updatedBy: seed.user.id,
+  });
+  return { runSlug };
+}
+
+test('F3: PATCH markdown on an agent_run row returns 422 AGENT_RUN_REQUIRES_RUNNER_PATH', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const { runSlug } = await seedAgentRunRow(db, seed);
+
+  const md = `---
+title: hacked
+status: completed
+tokens_in: 999999
+---
+
+body
+`;
+  const res = await app.request(`/api/v1/w/acme/p/web/documents/${runSlug}`, {
+    method: 'PATCH',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'text/markdown' },
+    body: md,
+  });
+  expect(res.status).toBe(422);
+  const body = await res.json();
+  expect(body.error.code).toBe('AGENT_RUN_REQUIRES_RUNNER_PATH');
+
+  // Row is unchanged — verifying the guard didn't silently let the PATCH
+  // through.
+  const row = await db.query.documents.findFirst({
+    where: eq(documents.slug, runSlug),
+  });
+  expect(row!.status).toBe('planning');
+  expect((row!.frontmatter as Record<string, unknown>).tokens_in).toBe(0);
+});
+
+test('F3: PATCH JSON on an agent_run row returns 422 AGENT_RUN_REQUIRES_RUNNER_PATH', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const { runSlug } = await seedAgentRunRow(db, seed);
+
+  const res = await app.request(`/api/v1/w/acme/p/web/documents/${runSlug}`, {
+    method: 'PATCH',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ frontmatter: { status: 'completed' } }),
+  });
+  expect(res.status).toBe(422);
+  const body = await res.json();
+  expect(body.error.code).toBe('AGENT_RUN_REQUIRES_RUNNER_PATH');
+});
+
+test('F3: DELETE on an agent_run row returns 422 AGENT_RUN_REQUIRES_RUNNER_PATH', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const { runSlug } = await seedAgentRunRow(db, seed);
+
+  const res = await app.request(`/api/v1/w/acme/p/web/documents/${runSlug}`, {
+    method: 'DELETE',
+    headers: { Cookie: seed.sessionCookie },
+  });
+  expect(res.status).toBe(422);
+  const body = await res.json();
+  expect(body.error.code).toBe('AGENT_RUN_REQUIRES_RUNNER_PATH');
+
+  // Row still exists.
+  const row = await db.query.documents.findFirst({
+    where: eq(documents.slug, runSlug),
+  });
+  expect(row).toBeTruthy();
+});
+
+test('F9 + F10: POST markdown with type: agent_run returns 422 (not silently coerced to work_item)', async () => {
+  // Pre-F10, parseMarkdownInput's DOCUMENT_TYPES didn't include agent_run
+  // so the type was silently coerced to 'work_item' (the default).
+  // Post-F10, the type is recognized; post-F9, createDocument rejects it
+  // with a clean 422 instead of an opaque CHECK-constraint 500.
+  const { app, seed } = await makeTestApp();
+  const md = `---
+type: agent_run
+title: spoofed
+assignee: agent:malicious
+tokens_in: 999999
+---
+
+body
+`;
+  const res = await app.request('/api/v1/w/acme/p/web/documents', {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'text/markdown' },
+    body: md,
+  });
+  expect(res.status).toBe(422);
+  const body = await res.json();
+  expect(body.error.code).toBe('AGENT_RUN_REQUIRES_RUNNER_PATH');
+});
+
+test('F9: POST JSON with type: agent_run returns 422 (defense-in-depth)', async () => {
+  // documentCreateSchema may reject this at the route layer before
+  // reaching createDocument — verify the response is a clean 422 with a
+  // type-related error (either AGENT_RUN_REQUIRES_RUNNER_PATH if it
+  // passes the schema, or INVALID_BODY if the schema rejects it
+  // upstream — both are acceptable as long as it isn't 500).
+  const { app, seed } = await makeTestApp();
+  const res = await app.request('/api/v1/w/acme/p/web/documents', {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      type: 'agent_run',
+      title: 'spoofed',
+      frontmatter: {},
+    }),
+  });
+  expect(res.status).toBe(422);
+  const body = await res.json();
+  // Either the route-level Zod schema or the service-level guard catches
+  // this. Both signal the same intent: agent_run is not creatable via
+  // the generic documents endpoint.
+  expect(
+    body.error.code === 'AGENT_RUN_REQUIRES_RUNNER_PATH' ||
+    body.error.code === 'INVALID_BODY',
+  ).toBe(true);
+});
+
+// ---------- R2 regression — agent_run READ paths guarded ----------
+//
+// Bundle 4 hardened WRITE paths (PATCH md/JSON, DELETE, POST). The
+// review-of-review surfaced that READ paths (GET /:slug, GET /:slug.md,
+// MCP get_document, MCP get_document_markdown, MCP list_documents) were
+// still open. A `documents:read` bearer could enumerate run slugs via
+// list_documents?type=agent_run and dump each row's frontmatter.system_prompt
+// via get_document. These tests pin the closed surface.
+
+test('R2: GET /:slug.md on an agent_run row returns 422 AGENT_RUN_REQUIRES_RUNNER_PATH', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const { runSlug } = await seedAgentRunRow(db, seed);
+
+  const res = await app.request(`/api/v1/w/acme/p/web/documents/${runSlug}.md`, {
+    headers: { Cookie: seed.sessionCookie },
+  });
+  expect(res.status).toBe(422);
+  const body = await res.json();
+  expect(body.error.code).toBe('AGENT_RUN_REQUIRES_RUNNER_PATH');
+});
+
+test('R2: GET /:slug (JSON) on an agent_run row returns 422 AGENT_RUN_REQUIRES_RUNNER_PATH', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const { runSlug } = await seedAgentRunRow(db, seed);
+
+  const res = await app.request(`/api/v1/w/acme/p/web/documents/${runSlug}`, {
+    headers: { Cookie: seed.sessionCookie },
+  });
+  expect(res.status).toBe(422);
+  const body = await res.json();
+  expect(body.error.code).toBe('AGENT_RUN_REQUIRES_RUNNER_PATH');
+});
+
+test('R2: default GET /documents (no type filter) does NOT leak agent_run rows', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const { runSlug } = await seedAgentRunRow(db, seed);
+
+  // Also seed a regular work_item so the response isn't empty.
+  await db.insert(documents).values({
+    id: nanoid(),
+    workspaceId: seed.workspace.id,
+    projectId: seed.project.id,
+    tableId: null,
+    type: 'work_item',
+    slug: `wi-visible-${nanoid(6)}`,
+    title: 'Visible',
+    status: null,
+    body: '',
+    frontmatter: {},
+    createdBy: seed.user.id,
+    updatedBy: seed.user.id,
+  });
+
+  const res = await app.request('/api/v1/w/acme/p/web/documents', {
+    headers: { Cookie: seed.sessionCookie },
+  });
+  expect(res.status).toBe(200);
+  const body = await res.json();
+  const slugs = (body.data as Array<{ slug: string; type: string }>).map((d) => d.slug);
+  expect(slugs).not.toContain(runSlug);
+  // The work_item IS returned.
+  expect(slugs.some((s) => s.startsWith('wi-visible-'))).toBe(true);
+});
+
+test('C1: explicit ?type=agent_run is REJECTED (422) and never lists system_prompt', async () => {
+  // Phase-3 shake-out C1 (security): the agent_run wall is enforced on the
+  // single GET / markdown / create / update / delete paths AND the MCP read
+  // tools — but the generic-document LIST path previously treated `agent_run`
+  // as a queryable type, returning full rows (incl. frontmatter.system_prompt)
+  // to any documents:read bearer or in-project agent. That is the slug-
+  // enumeration → system_prompt-dump vector the R2 mitigation claimed to close.
+  // Fixed in two layers: the route early-rejects explicit type=agent_run with a
+  // clean 422, and listDocuments rejects it at the source (defense in depth).
+  // Runs are read via GET /api/v1/w/:wslug/p/:pslug/runs, never enumerated here.
+  const { app, db, seed } = await makeTestApp();
+  await seedAgentRunRow(db, seed);
+
+  const res = await app.request('/api/v1/w/acme/p/web/documents?type=agent_run', {
+    headers: { Cookie: seed.sessionCookie },
+  });
+  // Hard requirement: rejected, not listed.
+  expect(res.status).toBe(422);
+  const body = await res.json();
+  expect(body.error.code).toBe('AGENT_RUN_REQUIRES_RUNNER_PATH');
+  // And the operator-sensitive prompt must not appear anywhere in the response.
+  expect(JSON.stringify(body)).not.toContain('system_prompt');
 });

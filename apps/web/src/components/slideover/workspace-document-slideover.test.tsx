@@ -1,5 +1,5 @@
-import { describe, it, expect, afterEach, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
@@ -20,7 +20,12 @@ function setup(initialSearch: string) {
     getParentRoute: () => rootRoute,
     path: '/w/$wslug',
     validateSearch: z.object({
+      // The workspace slideover opens on ?wdoc= (distinct from the project
+      // slideover's ?doc=). `doc` is also declared so the no-collision test can
+      // navigate to ?doc= and assert the workspace slideover stays CLOSED.
+      wdoc: z.string().optional(),
       doc: z.string().optional(),
+      tab: z.enum(['fields', 'activity', 'runs']).optional(),
     }),
     component: () => {
       const { wslug } = workspace.useParams();
@@ -53,6 +58,16 @@ function mockWorkspaceDoc(
   const body = options.body ?? '# Instructions\n\nDo the triage.';
   const frontmatter =
     options.frontmatter ?? { description: 'Sorts inbound issues' };
+  // The Runs tab mounts useRunsLiveSync, which opens an EventSource. jsdom has
+  // no EventSource — stub a no-op so the Runs tab doesn't crash the slideover.
+  vi.stubGlobal(
+    'EventSource',
+    class {
+      addEventListener() {}
+      removeEventListener() {}
+      close() {}
+    } as unknown as typeof EventSource,
+  );
   vi.stubGlobal(
     'fetch',
     vi.fn<typeof fetch>(async (url, init) => {
@@ -106,12 +121,16 @@ function mockWorkspaceDoc(
 }
 
 describe('WorkspaceDocumentSlideover', () => {
+  // The resizable-width hook persists to localStorage (key folio:width:agent-config);
+  // clear between tests so a width set by one test can't leak into another.
+  beforeEach(() => localStorage.clear());
+
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
 
-  it('is closed by default (no ?doc=)', async () => {
+  it('is closed by default (no ?wdoc=)', async () => {
     vi.stubGlobal('fetch', vi.fn<typeof fetch>());
     const { queryClient, router } = setup('');
     render(
@@ -123,9 +142,41 @@ describe('WorkspaceDocumentSlideover', () => {
     expect(screen.queryByText('Triage Agent')).not.toBeInTheDocument();
   });
 
-  it('opens and fetches when ?doc= is set', async () => {
+  // REGRESSION (dual-modal collision): the workspace slideover must open ONLY
+  // on its own ?wdoc= param. ?doc= belongs to the project DocumentSlideover —
+  // both mount under the /w/$wslug layout, so a shared param made them stack as
+  // two modals (the workspace one 404ing on a work-item slug). Proving the
+  // param separation here proves the two slideovers can no longer both open on
+  // one param.
+  it('does NOT open on ?doc= (that param belongs to the project slideover)', async () => {
+    // ?doc= must never drive the workspace slideover. If it does, a work-item
+    // slug would 404 here as a second stacked modal. Fetch is stubbed empty:
+    // if the slideover wrongly opened it would fire a workspace-doc fetch and
+    // surface a "Failed to load" sheet — neither should happen.
+    const fetchSpy = vi.fn<typeof fetch>(
+      async () =>
+        new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } }),
+    );
+    vi.stubGlobal('fetch', fetchSpy);
+    const { queryClient, router } = setup('?doc=lead-foo');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(screen.getByText('workspace body')).toBeInTheDocument());
+    // The slideover never opens: no title, no "Failed to load" sheet, and no
+    // workspace-document fetch was issued for the work-item slug.
+    expect(screen.queryByText('Triage Agent')).not.toBeInTheDocument();
+    expect(screen.queryByText('Failed to load')).not.toBeInTheDocument();
+    expect(
+      fetchSpy.mock.calls.some(([url]) => String(url).includes('/documents/lead-foo')),
+    ).toBe(false);
+  });
+
+  it('opens and fetches when ?wdoc= is set', async () => {
     mockWorkspaceDoc('triage', 'agent');
-    const { queryClient, router } = setup('?doc=triage');
+    const { queryClient, router } = setup('?wdoc=triage');
     render(
       <QueryClientProvider client={queryClient}>
         <RouterProvider router={router} />
@@ -135,9 +186,9 @@ describe('WorkspaceDocumentSlideover', () => {
     expect(screen.getByText(/Do the triage\./)).toBeInTheDocument();
   });
 
-  it('renders the TabStrip with Fields / Activity / Runs for an agent', async () => {
+  it('renders the icon tab toggles Fields / Activity / Runs for an agent (no Comments)', async () => {
     mockWorkspaceDoc('triage', 'agent');
-    const { queryClient, router } = setup('?doc=triage');
+    const { queryClient, router } = setup('?wdoc=triage');
     render(
       <QueryClientProvider client={queryClient}>
         <RouterProvider router={router} />
@@ -145,21 +196,16 @@ describe('WorkspaceDocumentSlideover', () => {
     );
     await screen.findByText('Triage Agent');
 
-    const tablist = document.querySelector('[role="tablist"]');
-    expect(tablist).not.toBeNull();
-    const labels = Array.from(tablist!.querySelectorAll('[role="tab"]')).map(
-      (t) => t.textContent ?? '',
-    );
-    expect(labels.some((l) => l.includes('Fields'))).toBe(true);
-    expect(labels.some((l) => l.includes('Activity'))).toBe(true);
-    expect(labels.some((l) => l.includes('Runs'))).toBe(true);
-    // No Comments tab on workspace-scoped slideover.
-    expect(labels.some((l) => l.includes('Comments'))).toBe(false);
+    expect(screen.getByRole('tab', { name: 'Fields' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Activity' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Runs' })).toBeInTheDocument();
+    // No Comments tab on the workspace-scoped slideover.
+    expect(screen.queryByRole('tab', { name: 'Comments' })).toBeNull();
   });
 
-  it('renders the TabStrip with Fields / Activity / Runs for a trigger', async () => {
+  it('renders the icon tab toggles Fields / Activity / Runs for a trigger', async () => {
     mockWorkspaceDoc('webhook-orders', 'trigger');
-    const { queryClient, router } = setup('?doc=webhook-orders');
+    const { queryClient, router } = setup('?wdoc=webhook-orders');
     render(
       <QueryClientProvider client={queryClient}>
         <RouterProvider router={router} />
@@ -167,20 +213,15 @@ describe('WorkspaceDocumentSlideover', () => {
     );
     await screen.findByText('Triage Agent');
 
-    const tablist = document.querySelector('[role="tablist"]');
-    expect(tablist).not.toBeNull();
-    const labels = Array.from(tablist!.querySelectorAll('[role="tab"]')).map(
-      (t) => t.textContent ?? '',
-    );
-    expect(labels.some((l) => l.includes('Fields'))).toBe(true);
-    expect(labels.some((l) => l.includes('Activity'))).toBe(true);
-    expect(labels.some((l) => l.includes('Runs'))).toBe(true);
-    expect(labels.some((l) => l.includes('Comments'))).toBe(false);
+    expect(screen.getByRole('tab', { name: 'Fields' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Activity' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Runs' })).toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'Comments' })).toBeNull();
   });
 
-  it('defaults to the Fields tab on open', async () => {
+  it('defaults to the Fields tab on open (aria-selected)', async () => {
     mockWorkspaceDoc('triage', 'agent');
-    const { queryClient, router } = setup('?doc=triage');
+    const { queryClient, router } = setup('?wdoc=triage');
     render(
       <QueryClientProvider client={queryClient}>
         <RouterProvider router={router} />
@@ -188,17 +229,12 @@ describe('WorkspaceDocumentSlideover', () => {
     );
     await screen.findByText('Triage Agent');
 
-    const tablist = document.querySelector('[role="tablist"]')!;
-    const fieldsBtn = Array.from(tablist.querySelectorAll('[role="tab"]')).find(
-      (t) => (t.textContent ?? '').includes('Fields'),
-    );
-    expect(fieldsBtn).toBeDefined();
-    expect(fieldsBtn!.getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByRole('tab', { name: 'Fields' })).toHaveAttribute('aria-selected', 'true');
   });
 
-  it('switching to Activity renders the workspace Activity panel + Log button (agent); body editor still visible', async () => {
+  it('deep-link ?tab=runs opens on the Runs tab', async () => {
     mockWorkspaceDoc('triage', 'agent');
-    const { queryClient, router } = setup('?doc=triage');
+    const { queryClient, router } = setup('?wdoc=triage&tab=runs');
     render(
       <QueryClientProvider client={queryClient}>
         <RouterProvider router={router} />
@@ -206,14 +242,108 @@ describe('WorkspaceDocumentSlideover', () => {
     );
     await screen.findByText('Triage Agent');
 
-    // The C9 placeholder is gone.
-    expect(screen.queryByText(/Activity tab — wired in C10/)).toBeNull();
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: 'Runs' })).toHaveAttribute('aria-selected', 'true');
+    });
+  });
 
-    const tablist = document.querySelector('[role="tablist"]')!;
-    const activityBtn = Array.from(tablist.querySelectorAll('[role="tab"]')).find(
-      (t) => (t.textContent ?? '').includes('Activity'),
-    ) as HTMLElement;
-    await userEvent.click(activityBtn);
+  it('manual tab click clears the ?tab= param so it stops re-asserting', async () => {
+    mockWorkspaceDoc('triage', 'agent');
+    const { queryClient, router } = setup('?wdoc=triage&tab=runs');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText('Triage Agent');
+
+    // Arrived on Runs (the deep-link).
+    expect((router.state.location.search as { tab?: string }).tab).toBe('runs');
+
+    await userEvent.click(screen.getByRole('tab', { name: 'Fields' }));
+
+    // Clicking a tab clears the ?tab= param (and the wdoc stays).
+    await waitFor(() => {
+      const s = router.state.location.search as { wdoc?: string; tab?: string };
+      expect(s.tab).toBeUndefined();
+      expect(s.wdoc).toBe('triage');
+    });
+    // Fields is now the selected tab.
+    expect(screen.getByRole('tab', { name: 'Fields' })).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('deep-link ?tab=runs then clicking a DIFFERENT non-Fields tab sticks (not stomped to Fields)', async () => {
+    // Regression: clicking a tab strips ?tab=, which used to re-fire the seed
+    // effect (search.tab dep flips defined→undefined) and reset to Fields,
+    // stomping the click. The seed must be doc.id-keyed so the click sticks.
+    mockWorkspaceDoc('triage', 'agent');
+    const { queryClient, router } = setup('?wdoc=triage&tab=runs');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText('Triage Agent');
+
+    // Arrived on Runs via the deep-link.
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: 'Runs' })).toHaveAttribute('aria-selected', 'true');
+    });
+
+    // Click ACTIVITY (a different non-Fields tab).
+    await userEvent.click(screen.getByRole('tab', { name: 'Activity' }));
+
+    // It must land on Activity — NOT be stomped back to Fields.
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: 'Activity' })).toHaveAttribute('aria-selected', 'true');
+    });
+    expect(screen.getByRole('tab', { name: 'Fields' })).toHaveAttribute('aria-selected', 'false');
+    // ?tab= was cleared by the click.
+    expect((router.state.location.search as { tab?: string }).tab).toBeUndefined();
+  });
+
+  it('reopening the SAME doc with a fresh ?tab= deep-link re-seeds (seed gate resets on close)', async () => {
+    // Regression: the seededForDocRef gate must reset when the slideover closes,
+    // or reopening the same doc with a deep-link tab is ignored (the panel is
+    // mounted persistently at the layout — it doesn't unmount on close).
+    mockWorkspaceDoc('triage', 'agent');
+    const { queryClient, router } = setup('?wdoc=triage'); // open with NO ?tab=
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText('Triage Agent');
+    // Seeds to Fields (no ?tab=).
+    expect(screen.getByRole('tab', { name: 'Fields' })).toHaveAttribute('aria-selected', 'true');
+
+    // Close the slideover (strip ?wdoc=).
+    await router.navigate({ to: '.', search: {} });
+    await waitFor(() => expect(screen.queryByRole('tab', { name: 'Fields' })).toBeNull());
+
+    // Reopen the SAME doc with a Runs deep-link.
+    await router.navigate({ to: '.', search: { wdoc: 'triage', tab: 'runs' } });
+
+    // Must re-seed to Runs — not stay stale on Fields.
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: 'Runs' })).toHaveAttribute('aria-selected', 'true');
+    });
+  });
+
+  it('switching to Activity renders the panel + Log button (agent) and HIDES the body editor', async () => {
+    mockWorkspaceDoc('triage', 'agent');
+    const { queryClient, router } = setup('?wdoc=triage');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText('Triage Agent');
+
+    // On Fields (default) the body editor is present.
+    expect(document.querySelector('[data-testid="workspace-slideover-editor"]')).not.toBeNull();
+
+    await userEvent.click(screen.getByRole('tab', { name: 'Activity' }));
 
     // Real Activity panel renders ("No activity yet." for the empty-events mock).
     await waitFor(() => {
@@ -221,12 +351,13 @@ describe('WorkspaceDocumentSlideover', () => {
     });
     // Log Activity button is shown for agent docs.
     expect(screen.getByRole('button', { name: /Log activity/ })).toBeInTheDocument();
-    expect(document.querySelector('[data-testid="workspace-slideover-editor"]')).not.toBeNull();
+    // The Milkdown body editor only belongs on Fields — gone on Activity.
+    expect(document.querySelector('[data-testid="workspace-slideover-editor"]')).toBeNull();
   });
 
   it('Activity tab on a trigger renders the panel WITHOUT the Log button', async () => {
     mockWorkspaceDoc('webhook', 'trigger');
-    const { queryClient, router } = setup('?doc=webhook');
+    const { queryClient, router } = setup('?wdoc=webhook');
     render(
       <QueryClientProvider client={queryClient}>
         <RouterProvider router={router} />
@@ -234,11 +365,7 @@ describe('WorkspaceDocumentSlideover', () => {
     );
     await screen.findByText('Triage Agent');
 
-    const tablist = document.querySelector('[role="tablist"]')!;
-    const activityBtn = Array.from(tablist.querySelectorAll('[role="tab"]')).find(
-      (t) => (t.textContent ?? '').includes('Activity'),
-    ) as HTMLElement;
-    await userEvent.click(activityBtn);
+    await userEvent.click(screen.getByRole('tab', { name: 'Activity' }));
 
     await waitFor(() => {
       expect(screen.getByText('No activity yet.')).toBeInTheDocument();
@@ -248,9 +375,13 @@ describe('WorkspaceDocumentSlideover', () => {
     expect(screen.queryByRole('button', { name: /Log activity/ })).toBeNull();
   });
 
-  it('switching to Runs renders the Phase 3 placeholder; body editor still visible', async () => {
+  it('switching to Runs renders the agent run-history section and HIDES the body editor', async () => {
+    // Default agent fixture is wildcard-scoped (no `projects` → ['*']). The
+    // fixture's /projects fetch returns no projects, so a wildcard agent in an
+    // (effectively) empty workspace shows RunsHistorySection's terminal
+    // "no projects in this workspace" state.
     mockWorkspaceDoc('triage', 'agent');
-    const { queryClient, router } = setup('?doc=triage');
+    const { queryClient, router } = setup('?wdoc=triage');
     render(
       <QueryClientProvider client={queryClient}>
         <RouterProvider router={router} />
@@ -258,23 +389,17 @@ describe('WorkspaceDocumentSlideover', () => {
     );
     await screen.findByText('Triage Agent');
 
-    expect(screen.queryByText(/No runs yet — Phase 3 wires the runner/)).toBeNull();
-
-    const tablist = document.querySelector('[role="tablist"]')!;
-    const runsBtn = Array.from(tablist.querySelectorAll('[role="tab"]')).find(
-      (t) => (t.textContent ?? '').includes('Runs'),
-    ) as HTMLElement;
-    await userEvent.click(runsBtn);
+    await userEvent.click(screen.getByRole('tab', { name: 'Runs' }));
 
     await waitFor(() => {
-      expect(screen.getByText(/No runs yet — Phase 3 wires the runner/)).toBeInTheDocument();
+      expect(screen.getByText(/no projects in this workspace/i)).toBeInTheDocument();
     });
-    expect(document.querySelector('[data-testid="workspace-slideover-editor"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="workspace-slideover-editor"]')).toBeNull();
   });
 
-  it('body editor stays visible across all tab switches', async () => {
+  it('the body editor is present ONLY on the Fields tab', async () => {
     mockWorkspaceDoc('triage', 'agent');
-    const { queryClient, router } = setup('?doc=triage');
+    const { queryClient, router } = setup('?wdoc=triage');
     render(
       <QueryClientProvider client={queryClient}>
         <RouterProvider router={router} />
@@ -282,12 +407,20 @@ describe('WorkspaceDocumentSlideover', () => {
     );
     await screen.findByText('Triage Agent');
 
-    const tablist = document.querySelector('[role="tablist"]')!;
-    const allTabs = Array.from(tablist.querySelectorAll('[role="tab"]')) as HTMLElement[];
-    for (const t of allTabs) {
-      await userEvent.click(t);
+    // Fields (default): editor present.
+    expect(document.querySelector('[data-testid="workspace-slideover-editor"]')).not.toBeNull();
+
+    // Activity: editor gone.
+    await userEvent.click(screen.getByRole('tab', { name: 'Activity' }));
+    await waitFor(() => {
+      expect(document.querySelector('[data-testid="workspace-slideover-editor"]')).toBeNull();
+    });
+
+    // Back to Fields: editor returns.
+    await userEvent.click(screen.getByRole('tab', { name: 'Fields' }));
+    await waitFor(() => {
       expect(document.querySelector('[data-testid="workspace-slideover-editor"]')).not.toBeNull();
-    }
+    });
   });
 
   it('trigger slideover Fields tab renders TriggerForm (not FrontmatterForm)', async () => {
@@ -300,7 +433,7 @@ describe('WorkspaceDocumentSlideover', () => {
         enabled: true,
       },
     });
-    const { queryClient, router } = setup('?doc=webhook-orders');
+    const { queryClient, router } = setup('?wdoc=webhook-orders');
     render(
       <QueryClientProvider client={queryClient}>
         <RouterProvider router={router} />
@@ -314,11 +447,18 @@ describe('WorkspaceDocumentSlideover', () => {
 
     // FrontmatterForm's "Add field" affordance must be absent.
     expect(screen.queryByRole('button', { name: /Add field/i })).toBeNull();
+
+    // A trigger has NO Milkdown body editor on Fields, so the Edit/Raw MD mode
+    // toggle must be hidden and the body-editor area must not render — the form
+    // fills the pane instead of sitting capped above an empty editor.
+    expect(screen.queryByRole('button', { name: /^Edit$/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Raw MD/ })).toBeNull();
+    expect(document.querySelector('[data-testid="workspace-slideover-editor"]')).toBeNull();
   });
 
   it('agent slideover Fields tab still renders FrontmatterForm (not TriggerForm)', async () => {
     mockWorkspaceDoc('triage', 'agent');
-    const { queryClient, router } = setup('?doc=triage');
+    const { queryClient, router } = setup('?wdoc=triage');
     render(
       <QueryClientProvider client={queryClient}>
         <RouterProvider router={router} />
@@ -344,7 +484,7 @@ describe('WorkspaceDocumentSlideover', () => {
         enabled: true,
       },
     });
-    const { queryClient, router } = setup('?doc=webhook-orders');
+    const { queryClient, router } = setup('?wdoc=webhook-orders');
     render(
       <QueryClientProvider client={queryClient}>
         <RouterProvider router={router} />
@@ -376,7 +516,7 @@ describe('WorkspaceDocumentSlideover', () => {
       },
       onPatch: (body) => patches.push(body),
     });
-    const { queryClient, router } = setup('?doc=webhook-orders');
+    const { queryClient, router } = setup('?wdoc=webhook-orders');
     render(
       <QueryClientProvider client={queryClient}>
         <RouterProvider router={router} />
@@ -410,7 +550,7 @@ describe('WorkspaceDocumentSlideover', () => {
       },
       onPatch: (body) => patches.push(body),
     });
-    const { queryClient, router } = setup('?doc=repo-import');
+    const { queryClient, router } = setup('?wdoc=repo-import');
     render(
       <QueryClientProvider client={queryClient}>
         <RouterProvider router={router} />
@@ -440,5 +580,43 @@ describe('WorkspaceDocumentSlideover', () => {
     // send the merged frontmatter object — but the diff'd keys must include
     // `enabled` and exclude anything else that didn't change.
     expect(patch.frontmatter!.builtin).toBe(true);
+  });
+
+  it('renders a resize handle and widening it grows the SheetContent width', async () => {
+    mockWorkspaceDoc('triage', 'agent');
+    const { queryClient, router } = setup('?wdoc=triage');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText('Triage Agent');
+
+    // Handle present (ResizeHandle: role=separator, aria-label "Resize panel"),
+    // and it lives INSIDE the SheetContent (the position:fixed Radix dialog
+    // content), so its absolute left-0 anchors to the slideover's left edge.
+    const handle = await screen.findByRole('separator', { name: /resize/i });
+    const content = handle.parentElement as HTMLElement;
+    expect(content.className).toContain('fixed');
+    expect(content.className).toContain('right-0');
+
+    // The default width (480) starts unpersisted; useResizableWidth only writes
+    // localStorage on pointerup. (jsdom's CSSOM silently drops the inline
+    // `width: min(…px, 100vw)` value, so the rendered style string can't be
+    // asserted — the localStorage write is the observable proof the drag
+    // flowed through the hook and changed the width.)
+    expect(localStorage.getItem('folio:width:agent-config')).toBeNull();
+
+    // Drag the left-edge handle LEFT (smaller clientX) → widens. Mirror the
+    // useResizableWidth test idiom: pointerdown on the handle, then dispatch
+    // move/up on window (jsdom routes MouseEvents to the pointer listeners).
+    fireEvent.pointerDown(handle, { clientX: 1000 });
+    fireEvent(window, new MouseEvent('pointermove', { clientX: 900 }));
+    fireEvent(window, new MouseEvent('pointerup'));
+
+    // 480 + (1000 - 900) = 580 — persisted on pointerup.
+    await waitFor(() =>
+      expect(localStorage.getItem('folio:width:agent-config')).toBe('580'),
+    );
   });
 });

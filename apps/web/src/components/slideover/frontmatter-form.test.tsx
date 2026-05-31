@@ -72,6 +72,33 @@ describe('FrontmatterForm', () => {
     expect(onCommit).toHaveBeenCalledWith({ priority: 'high' });
   });
 
+  it('does not surface system_prompt as a curated agent field (prompt is the body now)', () => {
+    render(
+      <FrontmatterForm
+        type="agent"
+        status={null}
+        statuses={[]}
+        // A stale doc may still carry a system_prompt key. The curated
+        // AGENT_FIELDS entry (with its descriptive help text) must be gone, so
+        // the field no longer reads as a first-class prompt surface. No
+        // `provider`/`projects` keys here — those mount sub-editors needing a
+        // QueryClient; `max_tokens_per_run` renders plainly via FieldRenderer.
+        frontmatter={{ system_prompt: 'old', max_tokens_per_run: 100000 }}
+        pinnedFields={[]}
+        onStatusCommit={() => {}}
+        onFrontmatterCommit={() => {}}
+      />,
+    );
+    // The curated description that accompanied the removed AGENT_FIELDS entry
+    // must not render — that text was the only thing marking system_prompt as
+    // the prompt surface.
+    expect(
+      screen.queryByText(/Instructions the agent receives on every run/i),
+    ).toBeNull();
+    // sanity: the form did render its curated fields.
+    expect(screen.getByText('max_tokens_per_run')).toBeInTheDocument();
+  });
+
   it('a pinned field type overrides inference', () => {
     render(
       <FrontmatterForm

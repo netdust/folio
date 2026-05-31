@@ -1,6 +1,8 @@
 import { expect, test } from 'bun:test';
 import { and, eq } from 'drizzle-orm';
-import { documents } from '../db/schema.ts';
+import { nanoid } from 'nanoid';
+import { apiTokens, documents } from '../db/schema.ts';
+import { newApiToken } from '../lib/auth.ts';
 import { makeTestApp } from '../test/harness.ts';
 
 test('GET /api/v1/workspaces lists user workspaces', async () => {
@@ -62,10 +64,11 @@ test('POST /api/v1/workspaces auto-seeds 4 builtin triggers', async () => {
     expect(fm.builtin).toBe(true);
   }
 
-  // Enabled defaults per spec §6f.
+  // Enabled defaults per spec §6f (updated Phase 3 / Task A-3: runner-bound
+  // builtins now start enabled because the runner exists).
   const byslug = Object.fromEntries(triggers.map((t) => [t.slug, t]));
-  expect((byslug['builtin-on-assignment']!.frontmatter as Record<string, unknown>).enabled).toBe(false);
-  expect((byslug['builtin-on-mention']!.frontmatter as Record<string, unknown>).enabled).toBe(false);
+  expect((byslug['builtin-on-assignment']!.frontmatter as Record<string, unknown>).enabled).toBe(true);
+  expect((byslug['builtin-on-mention']!.frontmatter as Record<string, unknown>).enabled).toBe(true);
   expect((byslug['builtin-on-approval']!.frontmatter as Record<string, unknown>).enabled).toBe(true);
   expect((byslug['builtin-on-rejection']!.frontmatter as Record<string, unknown>).enabled).toBe(true);
 
@@ -143,4 +146,224 @@ test('GET /api/v1/w/:wslug/members 401 without auth', async () => {
   const { app } = await makeTestApp();
   const res = await app.request('/api/v1/w/acme/members');
   expect(res.status).toBe(401);
+});
+
+// Round 7 #22 — GET /members narrowing by agent allow-list.
+//
+// Threat model attack 21 + mitigation 22. F3 (events.ts) narrows event
+// visibility for agent-bound bearers whose frontmatter.projects is not
+// wildcard; this route had no parallel. An agent allow-listed to one
+// project was receiving the email roster of users on every project.
+//
+// v1 implementation: project-narrowed agent-bound bearers receive an
+// empty list. Wildcard agents + session callers see the full list.
+test('Round 7 #22: GET /members returns empty list for project-narrowed agent-bound token', async () => {
+  const { app, db, seed } = await makeTestApp();
+  // Create the agent doc with a narrow projects allow-list.
+  const res1 = await app.request('/api/v1/w/acme/documents', {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      type: 'agent', title: 'Narrowed Agent',
+      frontmatter: {
+        system_prompt: 'x', model: 'm', provider: 'anthropic', tools: [],
+        projects: [seed.project.id],
+      },
+    }),
+  });
+  expect(res1.status).toBe(201);
+  const agent = (await res1.json()).data as { id: string };
+
+  // Mint a bearer token bound to that agent.
+  const { token, hash } = newApiToken();
+  await db.insert(apiTokens).values({
+    id: nanoid(),
+    workspaceId: seed.workspace.id,
+    name: 'narrowed-bound',
+    tokenHash: hash,
+    scopes: ['documents:read'],
+    createdBy: seed.user.id,
+    agentId: agent.id,
+  });
+
+  const res = await app.request('/api/v1/w/acme/members', {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  expect(res.status).toBe(200);
+  const body = (await res.json()) as { data: { members: unknown[] } };
+  expect(body.data.members).toEqual([]);
+});
+
+test('Round 7 #22: GET /members returns full list for wildcard-allow-list agent-bound token', async () => {
+  const { app, db, seed } = await makeTestApp();
+  // Create an agent with projects:['*'] (workspace-wide).
+  const res1 = await app.request('/api/v1/w/acme/documents', {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      type: 'agent', title: 'Wildcard Agent',
+      frontmatter: {
+        system_prompt: 'x', model: 'm', provider: 'anthropic', tools: [],
+        projects: ['*'],
+      },
+    }),
+  });
+  expect(res1.status).toBe(201);
+  const agent = (await res1.json()).data as { id: string };
+
+  const { token, hash } = newApiToken();
+  await db.insert(apiTokens).values({
+    id: nanoid(),
+    workspaceId: seed.workspace.id,
+    name: 'wildcard-bound',
+    tokenHash: hash,
+    scopes: ['documents:read'],
+    createdBy: seed.user.id,
+    agentId: agent.id,
+  });
+
+  const res = await app.request('/api/v1/w/acme/members', {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  expect(res.status).toBe(200);
+  const body = (await res.json()) as {
+    data: { members: { id: string }[] };
+  };
+  expect(body.data.members.length).toBeGreaterThan(0);
+});
+
+// B round 5 #3 — workspace identity mutations (PATCH rename, DELETE) are
+// session-only. Pre-fix a stolen Bearer whose createdBy resolves to the
+// workspace owner could rename or delete the workspace via the bearer chain
+// (attachToken hydrates user from token.createdBy, requireUser is satisfied).
+// requireSession rejects authMethod === 'token' with 403. Threat model
+// mitigation 11.
+
+test('PATCH /api/v1/w/:wslug rejects API-token callers with 403', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const { token, hash } = newApiToken();
+  await db.insert(apiTokens).values({
+    id: nanoid(),
+    workspaceId: seed.workspace.id,
+    name: 'rename-attacker',
+    tokenHash: hash,
+    scopes: ['documents:read'],
+    createdBy: seed.user.id,
+  });
+  const res = await app.request('/api/v1/w/acme', {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ name: 'PWNED' }),
+  });
+  expect(res.status).toBe(403);
+  const body = await res.json();
+  expect(body.error.code).toBe('FORBIDDEN');
+});
+
+test('PATCH /api/v1/w/:wslug rejects bearer + garbage cookie with 403', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const { token, hash } = newApiToken();
+  await db.insert(apiTokens).values({
+    id: nanoid(),
+    workspaceId: seed.workspace.id,
+    name: 'cookie-bypass-attacker',
+    tokenHash: hash,
+    scopes: ['documents:read'],
+    createdBy: seed.user.id,
+  });
+  const res = await app.request('/api/v1/w/acme', {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      Cookie: 'folio_session=garbage',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ name: 'PWNED' }),
+  });
+  expect(res.status).toBe(403);
+  const body = await res.json();
+  expect(body.error.code).toBe('FORBIDDEN');
+});
+
+test('DELETE /api/v1/w/:wslug rejects API-token callers with 403', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const { token, hash } = newApiToken();
+  await db.insert(apiTokens).values({
+    id: nanoid(),
+    workspaceId: seed.workspace.id,
+    name: 'delete-attacker',
+    tokenHash: hash,
+    scopes: ['documents:read'],
+    createdBy: seed.user.id,
+  });
+  const res = await app.request('/api/v1/w/acme', {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  expect(res.status).toBe(403);
+  const body = await res.json();
+  expect(body.error.code).toBe('FORBIDDEN');
+});
+
+// Round 7 #21 — POST /api/v1/workspaces gets explicit requireSessionUser.
+//
+// Pre-round-7 the route was session-only by routing topology: workspacesRoute
+// mounts at v1 (no wScope), attachToken never runs, so `authMethod` stays
+// undefined and the upstream `requireUser` produces 401 for bearer-only
+// callers. That's contract-via-implementation. A future middleware refactor
+// that hoists attachToken would silently turn this bearer-reachable.
+//
+// Threat model attack 20 + mitigation 21. The explicit gate is a no-op
+// today (bearer-only requests still don't authenticate as 'session') but
+// pins the contract against future routing changes.
+test('Round 7 #21: POST /api/v1/workspaces 401 for no auth', async () => {
+  const { app } = await makeTestApp();
+  const res = await app.request('/api/v1/workspaces', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'NoAuth' }),
+  });
+  expect(res.status).toBe(401);
+  expect((await res.json()).error.code).toBe('UNAUTHENTICATED');
+});
+
+test('Round 7 #21: POST /api/v1/workspaces accepts session callers (status 201)', async () => {
+  const { app, seed } = await makeTestApp();
+  const res = await app.request('/api/v1/workspaces', {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Session Created' }),
+  });
+  expect(res.status).toBe(201);
+});
+
+// Round 6 #4 — symmetric to the PATCH garbage-cookie test above. Round 5 #10
+// added the bearer + garbage cookie variant on settings.ts DELETE but missed
+// the workspaces.ts DELETE equivalent. A garbage-cookie + valid-bearer request
+// authenticates as 'token' (round 3 fix #1) — must hit the requireSessionUser
+// composite's 403 branch, not slip into the 401 branch.
+test('DELETE /api/v1/w/:wslug rejects bearer + garbage cookie with 403', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const { token, hash } = newApiToken();
+  await db.insert(apiTokens).values({
+    id: nanoid(),
+    workspaceId: seed.workspace.id,
+    name: 'delete-cookie-bypass-attacker',
+    tokenHash: hash,
+    scopes: ['documents:read'],
+    createdBy: seed.user.id,
+  });
+  const res = await app.request('/api/v1/w/acme', {
+    method: 'DELETE',
+    headers: {
+      Cookie: 'folio_session=garbage',
+      Authorization: `Bearer ${token}`,
+    },
+  });
+  expect(res.status).toBe(403);
+  const body = await res.json();
+  expect(body.error.code).toBe('FORBIDDEN');
 });

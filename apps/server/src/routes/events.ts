@@ -44,6 +44,16 @@ eventsRoute.get('/', async (c) => {
   const parentId = parentParam && parentParam.trim() ? parentParam.trim() : undefined;
   const runParam = c.req.query('run');
   const runId = runParam && runParam.trim() ? runParam.trim() : undefined;
+  // D-7: agent + table filters for the runs UI (E-3/E-4). `?agent=` matches
+  // the agent SLUG via `payload.agent`; `?table=` matches the runs table id
+  // via `payload.table_id`. Both keys are now stamped uniformly across every
+  // run-lifecycle event (started + transitions + orphan-recovery). These are
+  // ADDITIONAL filters, AND-combined with the F3 allow-list + subject
+  // visibility security filters below — they narrow, never widen.
+  const agentParam = c.req.query('agent');
+  const agentFilter = agentParam && agentParam.trim() ? agentParam.trim() : undefined;
+  const tableParam = c.req.query('table');
+  const tableFilter = tableParam && tableParam.trim() ? tableParam.trim() : undefined;
   const lastEventId = c.req.header('Last-Event-Id');
 
   // F3 — agent allow-list enforcement. SSE mounts under wScope only (no
@@ -150,6 +160,16 @@ eventsRoute.get('/', async (c) => {
               const r = (row.payload as Record<string, unknown> | null)?.run_id;
               if (r !== runId) continue;
             }
+            // D-7: `?agent=` matches payload.agent (the agent slug).
+            if (agentFilter !== undefined) {
+              const a = (row.payload as Record<string, unknown> | null)?.agent;
+              if (a !== agentFilter) continue;
+            }
+            // D-7: `?table=` matches payload.table_id (the runs table id).
+            if (tableFilter !== undefined) {
+              const t = (row.payload as Record<string, unknown> | null)?.table_id;
+              if (t !== tableFilter) continue;
+            }
             if (stream.aborted) break outer;
             await stream.writeSSE({
               id: row.id,
@@ -220,6 +240,19 @@ eventsRoute.get('/', async (c) => {
           })
         ) {
           return;
+        }
+        // D-7: `?agent=` / `?table=` payload-key filters. The bus SubFilter
+        // only knows kinds/projectId/parentId/runId, so these are applied in
+        // the subscriber callback (same place as the F3 + visibility filters
+        // above) rather than extending the bus. AND-combined with everything
+        // above — they only narrow.
+        if (agentFilter !== undefined) {
+          const a = (e.payload as Record<string, unknown> | undefined)?.agent;
+          if (a !== agentFilter) return;
+        }
+        if (tableFilter !== undefined) {
+          const t = (e.payload as Record<string, unknown> | undefined)?.table_id;
+          if (t !== tableFilter) return;
         }
         queue.push(e);
         wake();

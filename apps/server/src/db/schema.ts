@@ -78,6 +78,15 @@ export const workspaces = sqliteTable('workspaces', {
   updatedAt: integer('updated_at', { mode: 'timestamp_ms' })
     .notNull()
     .default(sql`(unixepoch() * 1000)`),
+  // Phase 3 (Task C-5) — per-workspace AI provider health, durable so
+  // tipping-edge detection survives restarts. Shape: `{ [provider]: {
+  // status, consecutive_failures } }`. Missing keys default to
+  // { healthy, 0 } at read time. Migration 0013 adds the column with
+  // a string-literal '{}' default so existing workspaces backfill safely.
+  providerHealth: text('provider_health', { mode: 'json' })
+    .$type<Record<string, { status: 'healthy' | 'degraded'; consecutive_failures: number }>>()
+    .notNull()
+    .default({}),
 });
 
 export const memberships = sqliteTable(
@@ -216,7 +225,9 @@ export const documents = sqliteTable(
       .notNull()
       .references(() => workspaces.id, { onDelete: 'cascade' }),
     tableId: text('table_id').references(() => tables.id, { onDelete: 'set null' }),
-    type: text('type', { enum: ['work_item', 'page', 'agent', 'trigger', 'comment'] }).notNull(),
+    type: text('type', {
+      enum: ['work_item', 'page', 'agent', 'trigger', 'comment', 'agent_run'],
+    }).notNull(),
     slug: text('slug').notNull(),
     title: text('title').notNull(),
     status: text('status'), // matches a statuses.key for work_items; null for pages
@@ -242,6 +253,13 @@ export const documents = sqliteTable(
   (t) => ({
     slugIdx: uniqueIndex('documents_project_slug_idx').on(t.projectId, t.slug),
     typeIdx: index('documents_project_type_idx').on(t.projectId, t.type),
+    // NOTE: the REAL shape of this index is PARTIAL — `WHERE project_id IS NULL`
+    // — set by migration 0017 (see the F15 note below). It uniquely constrains
+    // only workspace-SCOPED docs (agents/triggers, project_id NULL). Drizzle's
+    // builder can't express the WHERE clause, so this declaration is the
+    // non-partial fallback; the migration is the source of truth. Without the
+    // partial predicate it wrongly collided project-scoped work_item/page slugs
+    // across projects in a workspace (the "New work item" 500 — 0017 fixes it).
     workspaceSlugIdx: uniqueIndex('documents_workspace_type_slug_idx').on(
       t.workspaceId,
       t.type,
@@ -250,6 +268,26 @@ export const documents = sqliteTable(
     workspaceTypeIdx: index('documents_workspace_type_idx').on(t.workspaceId, t.type),
     parentIdx: index('documents_parent_idx').on(t.parentId),
     tableIdx: index('documents_table_idx').on(t.tableId),
+    // F15 (post-C.1 review) — the following partial indexes are created
+    // directly in raw-SQL migrations and CANNOT be declared here because
+    // Drizzle's index builder does not support partial-index `WHERE`
+    // clauses or expression-indexed columns like `json_extract(...)`.
+    // They are intentional, load-bearing, and tested:
+    //  - `documents_comments_idx`        (migration 0007, comments hot path)
+    //  - `documents_runs_by_parent_idx`  (migration 0012, getActiveRun)
+    //  - `documents_runs_by_status_idx`  (migration 0012, list-runs-by-table)
+    //  - `documents_runs_pending_idx`    (migration 0012, claimNextPlanningRun)
+    //  - `documents_runs_by_chain_idx`   (migration 0012, checkChainGuards)
+    //  - `documents_workspace_type_slug_idx` is RECREATED PARTIAL
+    //      (`WHERE project_id IS NULL`) by migration 0017 — see the note on
+    //      workspaceSlugIdx above. The builder declares it non-partial; the
+    //      migration narrows it to workspace-scoped (agent/trigger) rows.
+    // DO NOT run `bun --filter=server db:generate` without checking the
+    // generated diff for `DROP INDEX` statements against any of these.
+    // The integration test suite + the EXPLAIN volume tests in
+    // services/agent-runs.test.ts will fail if these indexes go away,
+    // but only at test time, not at generate-time. Audit before
+    // applying.
   }),
 );
 
@@ -367,6 +405,26 @@ export const events = sqliteTable(
   }),
 );
 
+/**
+ * Reaction Plane (Phase 3 C-10b) — per-reactor replay cursor over `events`.
+ *
+ * The durable event dispatcher polls `events` by `seq` and fans each event out
+ * to registered reactors. Each reactor's cursor (`last_seq`) advances ONLY on
+ * a successful `react()` (cursor-after / at-least-once). The cursor is seeded
+ * at MAX(seq) EAGERLY at server boot (seedReactorCursors, before traffic) so
+ * reactors start "from now", never replay history, AND don't race startup
+ * writes (the F-4/F-6 fix — lazy seeding raced events written during boot).
+ * Cursor-lag (`MAX(seq) − last_seq`) is the durable truth for reactor health
+ * (spec §4b).
+ */
+export const reactorCursors = sqliteTable('reactor_cursors', {
+  reactorId: text('reactor_id').primaryKey(),
+  lastSeq: integer('last_seq').notNull(),
+  updatedAt: integer('updated_at', { mode: 'timestamp_ms' })
+    .notNull()
+    .default(sql`(unixepoch() * 1000)`),
+});
+
 // --- Type exports ---
 
 export type User = typeof users.$inferSelect;
@@ -380,3 +438,4 @@ export type View = typeof views.$inferSelect;
 export type ApiToken = typeof apiTokens.$inferSelect;
 export type AiKey = typeof aiKeys.$inferSelect;
 export type Event = typeof events.$inferSelect;
+export type ReactorCursor = typeof reactorCursors.$inferSelect;

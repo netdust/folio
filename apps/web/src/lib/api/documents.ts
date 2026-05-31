@@ -1,7 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { client } from './client.ts';
 
-export type DocumentType = 'work_item' | 'page' | 'agent' | 'trigger';
+// R1 fix (post-review-of-review) — kept lockstep with the server's
+// DocumentType union (apps/server/src/services/documents.ts:47). C-1
+// widened the server union to include 'agent_run' but the FE was not
+// updated; default GET /documents (no type filter) then leaked
+// agent_run rows through to FE consumers that narrowed on the 4-member
+// shape. Routes that explicitly handle agent_run rows should switch on
+// `type === 'agent_run'` and either delegate to Sub-phase D's /runs
+// UI or render a "Use the runs view" placeholder.
+export type DocumentType = 'work_item' | 'page' | 'agent' | 'trigger' | 'agent_run';
 
 export interface DocumentSummary {
   id: string;

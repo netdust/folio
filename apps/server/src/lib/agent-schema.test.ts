@@ -15,6 +15,16 @@ describe('agentFrontmatterSchema', () => {
     expect(r.success).toBe(true);
   });
 
+  test('agent frontmatter validates without system_prompt (body is the prompt now)', () => {
+    const result = agentFrontmatterSchema.safeParse({
+      model: 'claude-haiku-4-5',
+      provider: 'anthropic',
+      tools: [],
+      projects: ['*'],
+    });
+    expect(result.success).toBe(true);
+  });
+
   test('applies defaults for max_delegation_depth, max_tokens_per_run, requires_approval', () => {
     const r = agentFrontmatterSchema.safeParse({
       system_prompt: 'x',

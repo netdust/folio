@@ -1,14 +1,14 @@
 import type { EventKind } from './events.ts';
 
 export interface BusEvent {
-  id?: string;             // optional; SSE assigns one on emit if absent
-  workspaceId: string;
+  id?: string; // optional; SSE assigns one on emit if absent
+  workspaceId: string | null; // null = system-level event (delivered to ALL subscribers)
   projectId?: string | null;
   documentId?: string | null;
   kind: EventKind;
   actor?: string;
   payload?: unknown;
-  createdAt?: number;      // unix ms; defaults to Date.now()
+  createdAt?: number; // unix ms; defaults to Date.now()
 }
 
 export interface SubFilter {
@@ -39,7 +39,12 @@ class EventBus {
 
   publish(e: BusEvent): void {
     for (const sub of this.subs) {
-      if (sub.workspaceId !== e.workspaceId) continue;
+      // System-level events (workspaceId === null) transcend workspace scope —
+      // delivered to every subscriber. Generalizes the BUG-021 projectId-null
+      // precedent by one notch. Used for reactor.halted/recovered (Reaction
+      // Plane reporting its own health onto the Observation Plane). MUST be
+      // tenant-data-free by construction (mitigation 53).
+      if (e.workspaceId !== null && sub.workspaceId !== e.workspaceId) continue;
       if (sub.filter?.kinds && !sub.filter.kinds.includes(e.kind)) continue;
       // BUG-021 — workspace-level events (projectId=null) transcend project
       // scope. An agent SSEing to `?project=X` for sensible defaults still

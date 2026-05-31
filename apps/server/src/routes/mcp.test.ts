@@ -64,8 +64,9 @@ test('MCP tools/list returns the v1 tools including comment + agent-lifecycle to
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
   });
   const body = (await res.json()) as { result: { tools: { name: string }[] } };
-  // 12 original + 4 comment tools + 4 agent-lifecycle tools = 20 total.
-  expect(body.result.tools.length).toBe(20);
+  // 12 original + 4 comment tools + 4 agent-lifecycle tools + 5 run-management
+  // tools (D-4) = 25 total.
+  expect(body.result.tools.length).toBe(25);
   const names = body.result.tools.map((t) => t.name);
   expect(names).toContain('create_comment');
   expect(names).toContain('list_comments');
@@ -75,6 +76,11 @@ test('MCP tools/list returns the v1 tools including comment + agent-lifecycle to
   expect(names).toContain('update_agent');
   expect(names).toContain('delete_agent');
   expect(names).toContain('get_agent_self');
+  expect(names).toContain('list_runs');
+  expect(names).toContain('get_run');
+  expect(names).toContain('run_agent');
+  expect(names).toContain('cancel_run');
+  expect(names).toContain('retry_run');
 });
 
 test('MCP tools/call list_workspaces returns the workspaces visible to the token', async () => {
@@ -321,7 +327,9 @@ async function setupAgentBoundToken(
     slug: agentSlug,
     title: 'Test Agent',
     status: null,
-    body: '',
+    // The agent body IS the prompt (snapshot at run-create); createRun rejects
+    // an empty body, so seed a non-empty one.
+    body: 'help',
     frontmatter: {
       system_prompt: 'help',
       model: 'm',
@@ -999,11 +1007,14 @@ test('MCP create_agent without agents:write returns -32603 scope rejection', asy
 
 test('MCP create_agent mints a token and returns it ONCE in the response', async () => {
   const { app, seed } = await makeTestApp();
-  const token = await setupToken(seed.workspace.id, seed.user.id, [
-    'agents:write',
-    'documents:read',
-  ]);
-  const res = await callTool(app, token, 'create_agent', {
+  // Round 6 #1: human PATs are now rejected on MCP agent-lifecycle tools.
+  // The legitimate caller is an agent-bound bearer minting a child agent.
+  const { agentToken } = await setupAgentBoundToken(seed.workspace.id, seed.user.id, {
+    projects: ['*'],
+    scopes: ['agents:write', 'documents:read'],
+    agentSlug: 'parent-minter',
+  });
+  const res = await callTool(app, agentToken, 'create_agent', {
     workspace_slug: 'acme',
     title: 'Helper',
     frontmatter: {
@@ -1032,11 +1043,13 @@ test('MCP create_agent mints a token and returns it ONCE in the response', async
 
 test('MCP update_agent patches title + frontmatter', async () => {
   const { app, seed } = await makeTestApp();
-  const token = await setupToken(seed.workspace.id, seed.user.id, [
-    'agents:write',
-    'documents:read',
-  ]);
-  await callTool(app, token, 'create_agent', {
+  // Round 6 #1: agent-bound bearer required for MCP agent-lifecycle tools.
+  const { agentToken } = await setupAgentBoundToken(seed.workspace.id, seed.user.id, {
+    projects: ['*'],
+    scopes: ['agents:write', 'documents:read'],
+    agentSlug: 'parent-patcher',
+  });
+  await callTool(app, agentToken, 'create_agent', {
     workspace_slug: 'acme',
     title: 'Target',
     frontmatter: {
@@ -1047,7 +1060,7 @@ test('MCP update_agent patches title + frontmatter', async () => {
     },
   });
 
-  const res = await callTool(app, token, 'update_agent', {
+  const res = await callTool(app, agentToken, 'update_agent', {
     workspace_slug: 'acme',
     slug: 'target',
     title: 'New Title',
@@ -1222,13 +1235,15 @@ test('MCP update_agent allows non-widening patches from an agent-bound token', a
   expect(parsed.title).toBe('Narrowed Target');
 });
 
-test('MCP delete_agent removes the agent (human PAT)', async () => {
+test('MCP delete_agent removes the agent (agent-bound parent token)', async () => {
   const { app, seed } = await makeTestApp();
-  const token = await setupToken(seed.workspace.id, seed.user.id, [
-    'agents:write',
-    'documents:read',
-  ]);
-  await callTool(app, token, 'create_agent', {
+  // Round 6 #1: human PATs rejected — parent agent revokes a child it minted.
+  const { agentToken } = await setupAgentBoundToken(seed.workspace.id, seed.user.id, {
+    projects: ['*'],
+    scopes: ['agents:write', 'documents:read'],
+    agentSlug: 'parent-deleter',
+  });
+  await callTool(app, agentToken, 'create_agent', {
     workspace_slug: 'acme',
     title: 'Doomed',
     frontmatter: {
@@ -1238,7 +1253,7 @@ test('MCP delete_agent removes the agent (human PAT)', async () => {
       tools: ['list_documents'],
     },
   });
-  const res = await callTool(app, token, 'delete_agent', {
+  const res = await callTool(app, agentToken, 'delete_agent', {
     workspace_slug: 'acme',
     slug: 'doomed',
   });
@@ -1314,6 +1329,118 @@ test('MCP get_agent_self with a human PAT returns -32602 no_agent_bound_to_token
   expect(body.error).toBeDefined();
   expect(body.error.code).toBe(-32602);
   expect(body.error.data?.reason).toBe('no_agent_bound_to_token');
+});
+
+// ---------------------------------------------------------------------------
+// Round 6 #1 — MCP agent-lifecycle tools reject human PATs.
+//
+// `create_agent` / `update_agent` / `delete_agent` are auth-grant mutations
+// (they mint, modify, or revoke `agent_token` bearer credentials). A stolen
+// human PAT with `agents:write` could mint a new agent with arbitrary scopes,
+// escalating beyond the original PAT's scope set. Reject at dispatch with
+// MCP error -32000 (round 7 #12 — was -32601, but SDKs route -32601 through
+// the 'capability missing' handler and drop `data.reason`. -32000 preserves
+// it.) + reason `human_pat_rejected_on_agent_lifecycle`.
+//
+// HTTP-side agent CRUD (POST/PATCH/DELETE /documents with type=agent) is
+// intentionally NOT gated — that's the admin-facing surface. See threat-model
+// mitigation 11.
+// ---------------------------------------------------------------------------
+
+test('MCP create_agent rejects human-PAT caller (round 6 #1)', async () => {
+  const { app, seed } = await makeTestApp();
+  const token = await setupToken(seed.workspace.id, seed.user.id, [
+    'agents:write',
+    'documents:read',
+  ]);
+  const res = await callTool(app, token, 'create_agent', {
+    workspace_slug: 'acme',
+    title: 'Helper',
+    frontmatter: {
+      system_prompt: 'help',
+      provider: 'anthropic',
+      model: 'claude-sonnet-4-6',
+      tools: ['list_documents'],
+    },
+  });
+  const body = (await res.json()) as {
+    error?: { code: number; data?: { reason: string } };
+  };
+  expect(body.error).toBeDefined();
+  expect(body.error!.code).toBe(-32000);
+  expect(body.error!.data?.reason).toBe('human_pat_rejected_on_agent_lifecycle');
+});
+
+test('MCP update_agent rejects human-PAT caller (round 6 #1)', async () => {
+  const { app, seed } = await makeTestApp();
+  // Seed an agent via agent-bound bearer (the legitimate path).
+  const { agentToken } = await setupAgentBoundToken(seed.workspace.id, seed.user.id, {
+    projects: ['*'],
+    scopes: ['agents:write', 'documents:read'],
+    agentSlug: 'r6-update-seed',
+  });
+  await callTool(app, agentToken, 'create_agent', {
+    workspace_slug: 'acme',
+    title: 'Existing',
+    frontmatter: {
+      system_prompt: 'p',
+      provider: 'anthropic',
+      model: 'claude-sonnet-4-6',
+      tools: ['list_documents'],
+    },
+  });
+
+  // Then attempt the patch via human PAT — must be rejected.
+  const humanPat = await setupToken(seed.workspace.id, seed.user.id, [
+    'agents:write',
+    'documents:read',
+  ]);
+  const res = await callTool(app, humanPat, 'update_agent', {
+    workspace_slug: 'acme',
+    slug: 'existing',
+    title: 'Patched',
+  });
+  const body = (await res.json()) as {
+    error?: { code: number; data?: { reason: string } };
+  };
+  expect(body.error).toBeDefined();
+  expect(body.error!.code).toBe(-32000);
+  expect(body.error!.data?.reason).toBe('human_pat_rejected_on_agent_lifecycle');
+});
+
+test('MCP delete_agent rejects human-PAT caller (round 6 #1)', async () => {
+  const { app, seed } = await makeTestApp();
+  // Seed an agent via agent-bound bearer.
+  const { agentToken } = await setupAgentBoundToken(seed.workspace.id, seed.user.id, {
+    projects: ['*'],
+    scopes: ['agents:write', 'documents:read'],
+    agentSlug: 'r6-delete-seed',
+  });
+  await callTool(app, agentToken, 'create_agent', {
+    workspace_slug: 'acme',
+    title: 'Existing',
+    frontmatter: {
+      system_prompt: 'p',
+      provider: 'anthropic',
+      model: 'claude-sonnet-4-6',
+      tools: ['list_documents'],
+    },
+  });
+
+  const humanPat = await setupToken(seed.workspace.id, seed.user.id, [
+    'agents:write',
+    'documents:read',
+  ]);
+  const res = await callTool(app, humanPat, 'delete_agent', {
+    workspace_slug: 'acme',
+    slug: 'existing',
+  });
+  const body = (await res.json()) as {
+    error?: { code: number; data?: { reason: string } };
+  };
+  expect(body.error).toBeDefined();
+  expect(body.error!.code).toBe(-32000);
+  expect(body.error!.data?.reason).toBe('human_pat_rejected_on_agent_lifecycle');
 });
 
 // ---------------------------------------------------------------------------

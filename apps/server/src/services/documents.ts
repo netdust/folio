@@ -11,7 +11,7 @@
  * still calls `validateStatus` etc. directly.
  */
 
-import { and, desc, eq, gte, inArray, isNull, lt, or, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, isNull, lt, ne, or, sql } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import {
   slugify,
@@ -44,7 +44,7 @@ import { slugUniqueInDocuments, slugUniqueInWorkspaceDocuments } from '../lib/sl
 
 // ----- shared types & helpers (kept service-private; routes don't import) -----
 
-export type DocumentType = 'work_item' | 'page' | 'agent' | 'trigger';
+export type DocumentType = 'work_item' | 'page' | 'agent' | 'trigger' | 'agent_run';
 
 const RESERVED_FRONTMATTER_KEYS = [
   'type',
@@ -135,6 +135,23 @@ export async function listDocuments(
   // widened in Phase 2 to include agent + trigger, ?type=agent / ?type=trigger
   // silently degraded to "no type filter" and returned every doc on the
   // project. The set membership keeps the fix tight to the union members.
+  // C1 (Phase-3 shake-out): an EXPLICIT `type=agent_run` must be rejected at
+  // the source, not listed. agent_run rows are runner-owned and carry
+  // operator-sensitive frontmatter (system_prompt, provider, tokens); every
+  // other generic-document path (single GET, markdown, create, update, delete)
+  // already rejects them with AGENT_RUN_REQUIRES_RUNNER_PATH, but this list
+  // path treated `agent_run` as a queryable type — leaking system_prompt to any
+  // documents:read bearer. Reject here so the wall is complete regardless of
+  // caller (defense in depth; the route also early-rejects for a clean error).
+  // The runs UI reads runs via GET /api/v1/w/:wslug/p/:pslug/runs.
+  if ((opts.type as string) === 'agent_run') {
+    throw new HTTPError(
+      'AGENT_RUN_REQUIRES_RUNNER_PATH',
+      'agent_run documents are runner-owned; list via the /runs endpoints, not the generic document endpoint',
+      422,
+    );
+  }
+  // `agent_run` is intentionally absent: it is rejected above, never listed.
   const KNOWN_TYPES: ReadonlySet<DocumentType> = new Set([
     'work_item',
     'page',
@@ -143,6 +160,17 @@ export async function listDocuments(
   ]);
   if (opts.type && KNOWN_TYPES.has(opts.type as DocumentType)) {
     whereClauses.push(eq(documents.type, opts.type as DocumentType));
+  } else {
+    // R2 fix (post-review-of-review) — when no explicit type filter is
+    // supplied, EXCLUDE agent_run rows from generic-document listings.
+    // agent_run rows are runner-owned (mitigations 23-47); the runs UI
+    // (Sub-phase D) reads them via /api/v1/p/:pslug/runs. Allowing
+    // them through the default listing was the read-side counterpart
+    // to the cross-route attack surface bundle 4 closed for writes —
+    // FE consumers with a 4-member type union narrow would silently
+    // drop or mis-route them, and a `documents:read` bearer could
+    // enumerate them by slug.
+    whereClauses.push(ne(documents.type, 'agent_run'));
   }
   // Table-scoping rules: work_items use the active table; pages, agents, and
   // triggers are project-scoped (tableId IS NULL is enforced at write time).
@@ -304,6 +332,22 @@ export async function createDocument(
     throw new HTTPError(
       'COMMENT_REQUIRES_COMMENT_TOOL',
       "comment documents must be created via POST /comments (or MCP create_comment), not the generic document endpoint",
+      422,
+    );
+  }
+
+  // F9 fix (post-C.1 review) — same shape as the comment guard above.
+  // agent_run rows have a fixed Zod schema, a fixed slug shape, and
+  // the migration-0012 CHECK constraint requires table_id + parent_id
+  // NOT NULL — none of which the generic createDocument path fills
+  // for non-work_item types. createRun (services/agent-runs.ts) is
+  // the only sound entry. A buggy MCP caller driving createDocument
+  // with type='agent_run' would otherwise hit SQLITE_CONSTRAINT_CHECK
+  // and surface an opaque 500.
+  if ((input.type as string) === 'agent_run') {
+    throw new HTTPError(
+      'AGENT_RUN_REQUIRES_RUNNER_PATH',
+      'agent_run documents are created by the runner (services/agent-runs.ts::createRun), not the generic document endpoint',
       422,
     );
   }
@@ -586,6 +630,20 @@ export async function updateDocument(
     );
   }
 
+  // F3 fix (post-C.1 review) — agent_run rows are runner-owned. The
+  // state machine + closed error_reason enum + sanitizer + agent.run.*
+  // event emission live in services/agent-runs.ts::transitionRun. A
+  // generic updateDocument that merged arbitrary frontmatter would
+  // bypass all of those. Reject defensively at the service layer so
+  // EVERY entry point (HTTP, MCP, future CLI) inherits the rule.
+  if (existing.type === 'agent_run') {
+    throw new HTTPError(
+      'AGENT_RUN_REQUIRES_RUNNER_PATH',
+      'agent_run documents are runner-owned and mutate only via the runner / approve / cancel endpoints (Sub-phase D), not the generic document update endpoint',
+      422,
+    );
+  }
+
   if (patch.status !== undefined && existing.type === 'work_item') {
     const tId = existing.tableId ?? args.fallbackTable?.id;
     if (!tId) {
@@ -770,6 +828,20 @@ export async function deleteDocument(args: DeleteDocumentArgs): Promise<void> {
     throw new HTTPError(
       'COMMENT_REQUIRES_COMMENT_TOOL',
       "comment documents must be deleted via DELETE /comments/:slug (or MCP delete_comment), not the generic document endpoint",
+      422,
+    );
+  }
+
+  // F3 fix (post-C.1 review) — agent_run rows are runner-owned. Deleting
+  // them through the generic path would orphan their events + skip the
+  // provider-health flush that DELETE /runs/:id will handle in
+  // Sub-phase D. See `tasks/retro-follow-ups.md` C.1-R-1 for the
+  // events.document_id FK question that needs resolving before D-side
+  // deletes ship.
+  if (existing.type === 'agent_run') {
+    throw new HTTPError(
+      'AGENT_RUN_REQUIRES_RUNNER_PATH',
+      'agent_run documents are runner-owned and delete only via the runs endpoints (Sub-phase D), not the generic document endpoint',
       422,
     );
   }

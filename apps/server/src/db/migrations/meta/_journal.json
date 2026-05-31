@@ -85,6 +85,55 @@
       "when": 1780780000000,
       "tag": "0011_phase_2_6_target_agent_id_backfill",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1780867200000,
+      "tag": "0012_phase_3_agent_runs",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1780870800000,
+      "tag": "0012a_flip_runner_builtins_to_enabled",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "6",
+      "when": 1780880000000,
+      "tag": "0013_workspace_provider_health",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "6",
+      "when": 1780890000000,
+      "tag": "0014_worker_started_at_z_check",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "6",
+      "when": 1780900000000,
+      "tag": "0015_reactor_cursors",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "6",
+      "when": 1780910000000,
+      "tag": "0016_agent_body_as_prompt",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "6",
+      "when": 1780920000000,
+      "tag": "0017_scope_workspace_slug_index_to_null_project",
+      "breakpoints": true
     }
   ]
 }

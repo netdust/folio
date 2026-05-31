@@ -54,6 +54,9 @@ const PostBody = z
     kind: commentKindSchema.optional(),
     target_agent: z.string().optional(),
     visibility: commentVisibilitySchema.optional(),
+    // Links a kind=plan comment to its agent run (E-4b). Run ids are nanoid,
+    // not UUID, so this matches the schema's relaxed `.min(1)` constraint.
+    run_id: z.string().min(1).optional(),
   })
   .strict();
 
@@ -166,6 +169,7 @@ commentsRoute.post(
       kind: parsed.data.kind,
       targetAgent: parsed.data.target_agent,
       visibility: parsed.data.visibility,
+      run_id: parsed.data.run_id,
     });
     return jsonOk(c, doc, 201);
   },
