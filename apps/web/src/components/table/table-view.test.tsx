@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { act, render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { act, render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
   createMemoryHistory,
@@ -1504,5 +1504,63 @@ describe('TableView', () => {
     await waitFor(() => expect(patchCalls.length).toBe(1));
     expect(patchCalls[0].id).toBe('f1');
     expect(patchCalls[0].body).toMatchObject({ type: 'number', options: null });
+  });
+
+  // Phase 3.x: the column-settings picker is pinned as a sticky right-most
+  // table column, mirroring the sticky-left Title column. These two tests
+  // assert the picker has MOVED out of the top filter bar and into a dedicated
+  // pinned settings column in the header.
+  function setupPinnedSettings(initialEntry = '/w/acme/p/web/work-items') {
+    const fetchMock = vi.fn<typeof fetch>(async (url, init) => {
+      const u = String(url);
+      const method = init?.method ?? 'GET';
+      if (u.includes('/statuses') && method === 'GET') {
+        return new Response(JSON.stringify({ data: [statusRow] }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (u.includes('/fields') && method === 'GET') {
+        return new Response(JSON.stringify({ data: [fieldRow] }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (u.includes('/views') && method === 'GET') {
+        return new Response(JSON.stringify({ data: [viewRow] }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (u.includes('/documents') && method === 'GET') {
+        return new Response(JSON.stringify({ data: { data: [docRow], nextCursor: null } }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { queryClient, router } = setup(initialEntry);
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    return { queryClient, router };
+  }
+
+  it('renders a pinned settings column header that opens the column picker', async () => {
+    setupPinnedSettings();
+    await waitFor(() => expect(screen.getByText('First task')).toBeInTheDocument());
+
+    const settingsBtn = await screen.findByRole('button', { name: /columns/i });
+    expect(settingsBtn).toBeInTheDocument();
+    expect(settingsBtn.closest('[data-testid="table-settings-col"]')).toBeTruthy();
+  });
+
+  it('the top filter bar no longer contains the column picker', async () => {
+    setupPinnedSettings();
+    await waitFor(() => expect(screen.getByText('First task')).toBeInTheDocument());
+
+    const filterBar = screen.getByTestId('filter-bar');
+    expect(within(filterBar).queryByRole('button', { name: /columns/i })).toBeNull();
   });
 });

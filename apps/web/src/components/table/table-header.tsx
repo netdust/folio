@@ -20,6 +20,7 @@ interface Props {
   onSort: (next: SortState | null) => void;
   onReorder: (nextOrder: string[]) => void;
   trailing?: ReactNode;
+  settings?: ReactNode;
   renderColumnMenu?: (column: Column) => ReactNode;
   // When set, the matching column header swaps its label for an InlineEdit
   // input. Commit fires onRenameCommit(key, nextLabel); the parent clears
@@ -34,6 +35,7 @@ export function TableHeader({
   onSort,
   onReorder,
   trailing,
+  settings,
   renderColumnMenu,
   renamingKey,
   onRenameCommit,
@@ -73,6 +75,14 @@ export function TableHeader({
         </SortableContext>
       </DndContext>
       {trailing ? <div className="flex-shrink-0">{trailing}</div> : null}
+      {settings ? (
+        <div
+          data-testid="table-settings-col"
+          className="sticky right-0 z-[1] flex h-full w-11 flex-shrink-0 items-center justify-center border-l border-border-light bg-content"
+        >
+          {settings}
+        </div>
+      ) : null}
     </div>
   );
 }
