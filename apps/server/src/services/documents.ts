@@ -95,6 +95,7 @@ const SORT_COLUMNS = {
   title: documents.title,
   status: documents.status,
   updated_at: documents.updatedAt,
+  board_position: documents.boardPosition,
 } as const;
 export type SortKey = keyof typeof SORT_COLUMNS;
 export type SortDir = 'asc' | 'desc';
@@ -107,6 +108,11 @@ export type SortDir = 'asc' | 'desc';
 const NULL_SENTINEL = '￿';
 function sortExpr(key: SortKey): SQL {
   if (key === 'status') return sql`coalesce(${documents.status}, ${NULL_SENTINEL})`;
+  // board_position is NULLABLE text (manual kanban rank; null = unranked). Same
+  // sentinel discipline as status: coalesce in ORDER BY + keyset predicate +
+  // cursor so NULLs sort LAST in asc and never drop across a page boundary.
+  if (key === 'board_position')
+    return sql`coalesce(${documents.boardPosition}, ${NULL_SENTINEL})`;
   // SQLiteColumn is an SQLWrapper; the comparison/order helpers accept it, but
   // the union with SQL confuses overload resolution. Normalize to SQL.
   return sql`${SORT_COLUMNS[key]}`;
@@ -374,6 +380,8 @@ export async function listDocuments(
       sortValue = String(last.updatedAt.getTime());
     } else if (sortKey === 'status') {
       sortValue = String(last.status ?? NULL_SENTINEL);
+    } else if (sortKey === 'board_position') {
+      sortValue = String(last.boardPosition ?? NULL_SENTINEL);
     } else {
       sortValue = String((last as Record<string, unknown>)[sortKey] ?? '');
     }
@@ -700,6 +708,7 @@ export interface DocumentPatch {
   status?: string | null;
   frontmatter?: Record<string, unknown>;
   parentId?: string | null;
+  boardPosition?: string | null;
 }
 
 export interface UpdateDocumentArgs {
@@ -876,6 +885,7 @@ export async function updateDocument(
     ...(nextSlug ? { slug: nextSlug } : {}),
     ...(patch.status !== undefined ? { status: patch.status } : {}),
     ...(patch.body !== undefined ? { body: patch.body } : {}),
+    ...(patch.boardPosition !== undefined ? { boardPosition: patch.boardPosition } : {}),
     frontmatter: mergedFrontmatter,
     ...(patch.parentId !== undefined ? { parentId: patch.parentId } : {}),
     updatedBy: user.id,
