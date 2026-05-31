@@ -77,7 +77,7 @@ export function BoardToolbar({ groupBy, sort, fields, onGroupByChange, onSortCha
   };
 
   return (
-    <div className="flex flex-shrink-0 items-center gap-2 pb-2">
+    <div className="flex flex-shrink-0 items-center gap-2">
       <Popover open={groupOpen} onOpenChange={setGroupOpen}>
         <PopoverTrigger asChild>
           <button type="button" className={triggerClass}>
