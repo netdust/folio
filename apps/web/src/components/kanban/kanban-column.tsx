@@ -1,4 +1,5 @@
 import { useDroppable } from '@dnd-kit/core';
+import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { Plus } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { cn } from '../ui/cn.ts';
@@ -11,10 +12,16 @@ interface Props {
   count: number;
   onAdd?: () => void;
   isAddPending?: boolean;
+  // Doc ids in this column, display order. Used as the SortableContext items
+  // when manual reorder is enabled.
+  docIds: string[];
+  // When true (manual board mode), wrap cards in a SortableContext so they can
+  // be reordered within the column.
+  reorderEnabled: boolean;
   children: ReactNode;
 }
 
-export function KanbanColumn({ value, label, color, count, onAdd, isAddPending, children }: Props) {
+export function KanbanColumn({ value, label, color, count, onAdd, isAddPending, docIds, reorderEnabled, children }: Props) {
   const colId = `col-${value ?? '__unset__'}`;
   const { setNodeRef, isOver } = useDroppable({ id: colId, data: { columnValue: value } });
   return (
@@ -49,7 +56,13 @@ export function KanbanColumn({ value, label, color, count, onAdd, isAddPending, 
           isOver ? 'bg-card' : 'bg-[rgb(0_0_0_/_0.025)] dark:bg-[rgb(255_255_255_/_0.03)]',
         )}
       >
-        {children}
+        {reorderEnabled ? (
+          <SortableContext items={docIds} strategy={verticalListSortingStrategy}>
+            {children}
+          </SortableContext>
+        ) : (
+          children
+        )}
       </div>
     </div>
   );

@@ -111,6 +111,27 @@ test('PATCH JSON merges frontmatter', async () => {
   expect(body.data.frontmatter.tag).toBeUndefined();
 });
 
+test('PATCH boardPosition persists the manual kanban rank', async () => {
+  const { app, seed } = await makeTestApp();
+  await app.request(path, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: 'work_item', title: 'Ranked' }),
+  });
+  const patch = await app.request(`${path}/ranked`, {
+    method: 'PATCH',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ boardPosition: 'm' }),
+  });
+  expect(patch.status).toBe(200);
+  const body = await patch.json();
+  expect(body.data.boardPosition).toBe('m');
+  // Confirm it survives a round-trip read (not just echoed back).
+  const get = await app.request(`${path}/ranked`, { headers: { Cookie: seed.sessionCookie } });
+  const fetched = await get.json();
+  expect(fetched.data.boardPosition).toBe('m');
+});
+
 test('DELETE returns 204', async () => {
   const { app, seed } = await makeTestApp();
   await app.request(path, {

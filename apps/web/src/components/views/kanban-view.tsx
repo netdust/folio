@@ -11,6 +11,7 @@ import { KanbanColumn } from '../kanban/kanban-column.tsx';
 import { KanbanCard } from '../kanban/kanban-card.tsx';
 import { BoardToolbar, type BoardSort } from '../kanban/board-toolbar.tsx';
 import { buildColumns } from '../kanban/board-grouping.ts';
+import { computeReorderPosition } from '../kanban/board-reorder.ts';
 import { EmptyState } from './empty-state.tsx';
 import { KanbanSkeleton } from './kanban-skeleton.tsx';
 
@@ -128,10 +129,47 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
     return String(v);
   };
 
+  // Manual mode (no field sort) is the only mode where within-column
+  // drag-reorder is allowed; a field-sort active means the order is derived,
+  // so reordering would be meaningless.
+  const reorderEnabled = effectiveSort === null;
+
   const onDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event;
     if (!over) return;
     const overId = String(over.id);
+
+    // over.id is a doc id (not col-*) → within-list reorder, only in manual mode.
+    if (reorderEnabled && !overId.startsWith('col-')) {
+      const activeId = String(active.id);
+      const overDocId = overId;
+      if (activeId === overDocId) return;
+      // Find the column containing the over card.
+      const col = columns.find((c) => c.docIds.includes(overDocId));
+      if (!col) return;
+      // Build display-ordered positions of the column WITHOUT the dragged card.
+      const idsWithoutActive = col.docIds.filter((id) => id !== activeId);
+      const overIndexInFiltered = idsWithoutActive.indexOf(overDocId);
+      // Drop AT the over card's slot (before it). Use that index.
+      const positions = idsWithoutActive.map((id) => docsById.get(id)?.boardPosition ?? null);
+      const newPos = computeReorderPosition(positions, overIndexInFiltered);
+      const reorderSlug = (active.data.current as { slug?: string } | undefined)?.slug;
+      if (!reorderSlug) return;
+      setPendingSlugs((p) => new Set(p).add(reorderSlug));
+      try {
+        await update.mutateAsync({ slug: reorderSlug, patch: { boardPosition: newPos } });
+      } catch (err) {
+        toast.error(formatApiError(err));
+      } finally {
+        setPendingSlugs((p) => {
+          const n = new Set(p);
+          n.delete(reorderSlug);
+          return n;
+        });
+      }
+      return;
+    }
+
     if (!overId.startsWith('col-')) return;
     const raw = overId.slice('col-'.length);
     const colValue = raw === '__unset__' ? null : raw;
@@ -188,11 +226,21 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
             count={col.docIds.length}
             onAdd={col.value === null ? undefined : () => onCreateInColumn(col.value)}
             isAddPending={create.isPending}
+            docIds={col.docIds}
+            reorderEnabled={reorderEnabled}
           >
             {col.docIds.map((id) => {
               const doc = docsById.get(id);
               if (!doc) return null;
-              return <KanbanCard key={doc.id} doc={doc} onOpen={openDoc} isPending={pendingSlugs.has(doc.slug)} />;
+              return (
+                <KanbanCard
+                  key={doc.id}
+                  doc={doc}
+                  onOpen={openDoc}
+                  isPending={pendingSlugs.has(doc.slug)}
+                  sortable={reorderEnabled}
+                />
+              );
             })}
             </KanbanColumn>
           ))}

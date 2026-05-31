@@ -117,6 +117,7 @@ export type DocumentPatch = Partial<{
   body: string;
   frontmatter: Record<string, unknown>;
   parentId: string | null;
+  boardPosition: string | null;
 }>;
 
 // Merge a frontmatter patch the same way the server does: undefined/null
