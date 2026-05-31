@@ -22,6 +22,6 @@ test('renders the Triggers tab when tab=triggers', () => {
 test('clicking a tab calls onTabChange', async () => {
   const onTabChange = vi.fn();
   render(<WorkspaceAutomationPage wslug="netdust" tab="agents" onTabChange={onTabChange} />);
-  await userEvent.click(screen.getByRole('tab', { name: /triggers/i }));
+  await userEvent.click(screen.getByRole('button', { name: /triggers/i }));
   expect(onTabChange).toHaveBeenCalledWith('triggers');
 });

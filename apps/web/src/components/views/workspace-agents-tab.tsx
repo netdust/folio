@@ -7,6 +7,7 @@ import {
   useWorkspaceAgents,
 } from '../../lib/api/workspace-documents.ts';
 import { Button } from '../ui/button.tsx';
+import { Chip } from '../ui/chip.tsx';
 import { Icon } from '../ui/icon.tsx';
 
 interface Props {
@@ -83,10 +84,8 @@ export function WorkspaceAgentsTab({ wslug }: Props) {
                 <div className="flex items-center justify-between gap-3">
                   <div className="text-sm font-medium">{agent.title}</div>
                   <div className="flex shrink-0 items-center gap-1.5">
-                    {providerModel ? (
-                      <span className="rounded-sm bg-card px-1.5 py-0.5 font-mono text-[10px] text-fg-3">{providerModel}</span>
-                    ) : null}
-                    <span className="rounded-sm bg-card px-1.5 py-0.5 text-[10px] text-fg-3">{projectLabel}</span>
+                    {providerModel ? <Chip mono>{providerModel}</Chip> : null}
+                    <Chip muted>{projectLabel}</Chip>
                   </div>
                 </div>
                 <div className="mt-0.5 font-mono text-[10px] text-fg-3">/{agent.slug}</div>

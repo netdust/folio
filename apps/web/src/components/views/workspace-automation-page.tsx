@@ -1,6 +1,6 @@
 import { WorkspaceAgentsTab } from './workspace-agents-tab.tsx';
 import { WorkspaceTriggersPage } from './workspace-triggers-page.tsx';
-import { cn } from '../ui/cn.ts';
+import { Tabs } from '../ui/tabs.tsx';
 
 export type AutomationTab = 'agents' | 'triggers';
 
@@ -31,22 +31,8 @@ export function WorkspaceAutomationPage({ wslug, tab, onTabChange }: Props) {
         </p>
       </header>
 
-      <div role="tablist" className="mb-5 flex gap-1 border-b border-border-light">
-        {TABS.map((t) => (
-          <button
-            key={t.value}
-            type="button"
-            role="tab"
-            aria-selected={tab === t.value}
-            onClick={() => onTabChange(t.value)}
-            className={cn(
-              '-mb-px border-b-2 px-3 py-1.5 text-sm',
-              tab === t.value ? 'border-fg-1 text-fg' : 'border-transparent text-fg-3 hover:text-fg-2',
-            )}
-          >
-            {t.label}
-          </button>
-        ))}
+      <div className="mb-5">
+        <Tabs value={tab} onChange={onTabChange} items={TABS} />
       </div>
 
       {tab === 'agents' ? <WorkspaceAgentsTab wslug={wslug} /> : <WorkspaceTriggersPage wslug={wslug} />}
