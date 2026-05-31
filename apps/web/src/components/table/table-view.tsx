@@ -20,6 +20,7 @@ import {
   useDeleteField,
 } from '../../lib/api/fields.ts';
 import { useViews, useUpdateView } from '../../lib/api/views.ts';
+import { useTables } from '../../lib/api/tables.ts';
 import { formatApiError } from '../../lib/api/index.ts';
 import { Icon } from '../ui/icon.tsx';
 import { FilterBar } from '../filter/filter-bar.tsx';
@@ -83,6 +84,7 @@ export function TableView({ wslug, pslug, tslug }: Props) {
   const { data: statuses } = useStatuses(wslug, pslug);
   const { data: fields } = useFields(wslug, pslug, tslug);
   const { data: viewsData } = useViews(wslug, pslug);
+  const { data: tablesData } = useTables(wslug, pslug);
   const update = useUpdateDocument(wslug, pslug, listParams);
   const create = useCreateDocument(wslug, pslug);
   const updateView = useUpdateView(wslug, pslug);
@@ -423,7 +425,15 @@ export function TableView({ wslug, pslug, tslug }: Props) {
             sort={sort}
             onSort={onSortChange}
             onReorder={onReorder}
-            trailing={<TableAddColumn onSubmit={onAddColumn} />}
+            trailing={
+              <TableAddColumn
+                onSubmit={onAddColumn}
+                tables={(Array.isArray(tablesData) ? tablesData : []).map((t) => ({
+                  id: t.id,
+                  name: t.name,
+                }))}
+              />
+            }
             settings={
               <ColumnPicker
                 columns={allColumns}

@@ -18,6 +18,7 @@ const FIELD_TYPES: { value: FieldType; label: string }[] = [
   { value: 'user_ref', label: 'User' },
   { value: 'url', label: 'URL' },
   { value: 'document_ref', label: 'Document link' },
+  { value: 'relation', label: 'Relation (link to docs)' },
 ];
 
 const KEY_RE = /^[a-z][a-z0-9_]*$/;
@@ -40,15 +41,18 @@ export interface AddColumnPayload {
 
 interface Props {
   onSubmit: (payload: AddColumnPayload) => Promise<void> | void;
+  tables?: { id: string; name: string }[];
 }
 
-export function TableAddColumn({ onSubmit }: Props) {
+export function TableAddColumn({ onSubmit, tables = [] }: Props) {
   const [open, setOpen] = useState(false);
   const [key, setKey] = useState('');
   const [label, setLabel] = useState('');
   const [type, setType] = useState<FieldType>('string');
   const [optionsText, setOptionsText] = useState('');
   const [currencyCode, setCurrencyCode] = useState('EUR');
+  const [relTarget, setRelTarget] = useState('wiki');
+  const [relCardinality, setRelCardinality] = useState<'single' | 'multi'>('single');
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -58,6 +62,8 @@ export function TableAddColumn({ onSubmit }: Props) {
     setType('string');
     setOptionsText('');
     setCurrencyCode('EUR');
+    setRelTarget('wiki');
+    setRelCardinality('single');
     setError(null);
     setSubmitting(false);
   }
@@ -88,6 +94,8 @@ export function TableAddColumn({ onSubmit }: Props) {
         return;
       }
       options = [currencyCode];
+    } else if (type === 'relation') {
+      options = [relTarget, relCardinality];
     }
     const finalLabel = label.trim() || titleize(key);
 
@@ -204,6 +212,48 @@ export function TableAddColumn({ onSubmit }: Props) {
                 placeholder="EUR"
                 className="rounded-sm border border-border-light bg-content px-2 py-1 text-sm outline-none focus:border-border"
               />
+            </>
+          ) : null}
+
+          {type === 'relation' ? (
+            <>
+              <label
+                className="text-[11px] uppercase tracking-wide text-fg-3"
+                htmlFor="add-col-rel-target"
+              >
+                Links to
+              </label>
+              <select
+                id="add-col-rel-target"
+                aria-label="Links to"
+                value={relTarget}
+                onChange={(e) => setRelTarget(e.target.value)}
+                className="rounded-sm border border-border-light bg-content px-2 py-1 text-sm outline-none focus:border-border"
+              >
+                <option value="wiki">Wiki / Pages</option>
+                {tables.map((t) => (
+                  <option key={t.id} value={`table:${t.id}`}>
+                    {t.name}
+                  </option>
+                ))}
+              </select>
+
+              <label
+                className="text-[11px] uppercase tracking-wide text-fg-3"
+                htmlFor="add-col-rel-card"
+              >
+                Cardinality
+              </label>
+              <select
+                id="add-col-rel-card"
+                aria-label="Cardinality"
+                value={relCardinality}
+                onChange={(e) => setRelCardinality(e.target.value as 'single' | 'multi')}
+                className="rounded-sm border border-border-light bg-content px-2 py-1 text-sm outline-none focus:border-border"
+              >
+                <option value="single">Single link</option>
+                <option value="multi">Multiple links</option>
+              </select>
             </>
           ) : null}
 

@@ -74,6 +74,26 @@ describe('TableAddColumn', () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
+  it('relation type reveals target + cardinality and submits them as options', async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    render(<TableAddColumn onSubmit={onSubmit} tables={[{ id: 'tbl_1', name: 'People' }]} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /add column/i }));
+
+    fireEvent.change(screen.getByLabelText(/^key$/i), { target: { value: 'owner' } });
+    fireEvent.change(screen.getByLabelText(/^type$/i), { target: { value: 'relation' } });
+    fireEvent.change(screen.getByLabelText(/links to/i), { target: { value: 'table:tbl_1' } });
+    fireEvent.change(screen.getByLabelText(/cardinality/i), { target: { value: 'single' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /^create$/i }));
+
+    await waitFor(() => {
+      expect(onSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({ key: 'owner', type: 'relation', options: ['table:tbl_1', 'single'] }),
+      );
+    });
+  });
+
   it('auto-derives the label from the key when label is left blank', async () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined);
     render(<TableAddColumn onSubmit={onSubmit} />);
