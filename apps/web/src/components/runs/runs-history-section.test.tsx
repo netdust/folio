@@ -70,11 +70,52 @@ describe('RunsHistorySection', () => {
     expect(rows.map((n) => n.textContent)).toEqual(['· sales-run', '· marketing-run']);
   });
 
-  test('shows an empty state for a wildcard-only agent (no concrete project)', () => {
+  test('wildcard agent queries EVERY workspace project and renders their runs', async () => {
+    // projects: ['*'] = runs everywhere. The Runs tab must enumerate all
+    // workspace projects (by slug) and merge their runs — not show empty.
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url.includes('/projects')) {
+        return new Response(
+          JSON.stringify({ data: [proj('id-mkt', 'marketing'), proj('id-sales', 'sales')] }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      const data = url.includes('/p/marketing/runs')
+        ? [runDoc('r-mkt', 'marketing-run', '2026-05-29T10:00:00.000Z')]
+        : url.includes('/p/sales/runs')
+          ? [runDoc('r-sales', 'sales-run', '2026-05-30T10:00:00.000Z')]
+          : [];
+      return new Response(JSON.stringify({ data }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }));
+
+    wrap(<RunsHistorySection wslug="acme" agentSlug="bot" projects={['*']} />);
+
+    await waitFor(() => expect(screen.getByText(/marketing-run/)).toBeInTheDocument());
+    expect(screen.getByText(/sales-run/)).toBeInTheDocument();
+    const calls = fetchCalls();
+    expect(calls.some((u) => u.includes('/p/marketing/runs'))).toBe(true);
+    expect(calls.some((u) => u.includes('/p/sales/runs'))).toBe(true);
+  });
+
+  test('wildcard agent in an EMPTY workspace shows a terminal "no projects" state (not a spinner)', async () => {
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url.includes('/projects')) {
+        return new Response(JSON.stringify({ data: [] }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      return new Response(JSON.stringify({ data: [] }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }));
+    wrap(<RunsHistorySection wslug="acme" agentSlug="bot" projects={['*']} />);
+    await waitFor(() => expect(screen.getByText(/no projects in this workspace/i)).toBeInTheDocument());
+    expect(screen.queryByText(/loading runs/i)).toBeNull();
+  });
+
+  test('a genuinely unscoped agent (empty allow-list, no wildcard) shows "No project scoped"', () => {
     vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () =>
       new Response(JSON.stringify({ data: [] }), { status: 200, headers: { 'content-type': 'application/json' } })));
-    wrap(<RunsHistorySection wslug="acme" agentSlug="bot" projects={['*']} />);
-    expect(screen.getByText(/no project/i)).toBeInTheDocument();
+    wrap(<RunsHistorySection wslug="acme" agentSlug="bot" projects={[]} />);
+    expect(screen.getByText(/no project scoped/i)).toBeInTheDocument();
   });
 
   test('shows "No runs yet." only when ALL projects return zero runs', async () => {

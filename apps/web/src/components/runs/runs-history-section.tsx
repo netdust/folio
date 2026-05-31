@@ -11,26 +11,30 @@ interface RunsHistorySectionProps {
 }
 
 export function RunsHistorySection({ wslug, agentSlug, projects }: RunsHistorySectionProps) {
-  // An agent's allow-list can scope MULTIPLE concrete projects. Runs are
-  // project-scoped (`/w/:wslug/p/:pslug/runs`, resolved by SLUG), but the
-  // allow-list stores project IDs — so we resolve each ID → its slug via the
-  // workspace projects list before querying. Each concrete project's runs are
-  // merged newest-first. `useQueries` is a single hook call, so it's legal in
-  // render even though the inner array varies in length. Hooks run
-  // unconditionally (before any early return) to satisfy the rules of hooks.
+  // Runs are project-scoped (`/w/:wslug/p/:pslug/runs`, resolved by SLUG). We
+  // query each project the agent can run in and merge results newest-first.
+  // Which projects?
+  //  - WILDCARD allow-list (`['*']` — the default): the agent runs EVERYWHERE,
+  //    so target every workspace project's slug.
+  //  - CONCRETE allow-list: it stores project IDs, so resolve each ID → its
+  //    slug via the workspace projects list (drop unresolvable/deleted IDs).
+  // `useQueries` is a single hook call, legal in render even though the inner
+  // array varies in length. Hooks run unconditionally (before any early
+  // return) to satisfy the rules of hooks.
   const { data: workspaceProjects, isPending: projectsPending } = useProjects(wslug);
   const projectList = Array.isArray(workspaceProjects) ? workspaceProjects : [];
   const slugById = new Map(projectList.map((p) => [p.id, p.slug]));
-  // Map allow-list IDs → slugs; drop the wildcard and any ID not yet resolved
-  // (projects still loading or removed). Stable, deduped.
-  const concreteSlugs = Array.from(
-    new Set(projects.filter((p) => p !== '*').map((id) => slugById.get(id)).filter((s): s is string => !!s)),
-  );
+  const isWildcard = projects.includes('*');
+  const targetSlugs = isWildcard
+    ? Array.from(new Set(projectList.map((p) => p.slug)))
+    : Array.from(
+        new Set(projects.map((id) => slugById.get(id)).filter((s): s is string => !!s)),
+      );
   const filter = { agent: agentSlug };
 
   useRunsLiveSync(wslug, { agent: agentSlug });
   const runQueries = useQueries({
-    queries: concreteSlugs.map((slug) => ({
+    queries: targetSlugs.map((slug) => ({
       queryKey: runsKeys.list(wslug, slug, filter),
       queryFn: () =>
         client.get<AgentRunDoc[]>(`/api/v1/w/${wslug}/p/${slug}/runs?agent=${encodeURIComponent(agentSlug)}`),
@@ -39,17 +43,20 @@ export function RunsHistorySection({ wslug, agentSlug, projects }: RunsHistorySe
     })),
   });
 
-  // No concrete projects in the allow-list (wildcard-only, or none resolved).
-  if (projects.filter((p) => p !== '*').length === 0) {
+  // A genuinely unscoped agent — no wildcard AND no concrete project IDs.
+  if (!isWildcard && projects.length === 0) {
     return <div className="text-fg-3 text-sm py-8 text-center">No project scoped to this agent yet.</div>;
   }
-  if (concreteSlugs.length === 0) {
-    // The allow-list has concrete IDs but none resolve to a slug. Distinguish:
+  if (targetSlugs.length === 0) {
+    // Nothing to query yet. Distinguish:
     //  - projects still loading → transient "Loading…" (slugs will arrive).
-    //  - projects loaded, still no match → the scoped project(s) were deleted;
-    //    a TERMINAL state, not a perpetual spinner.
+    //  - loaded, still nothing → wildcard agent in an empty workspace (no
+    //    projects), OR a concrete allow-list whose projects were all deleted.
+    //    A TERMINAL state, not a perpetual spinner.
     return projectsPending ? (
       <div className="text-fg-3 text-sm py-8 text-center">Loading runs…</div>
+    ) : isWildcard ? (
+      <div className="text-fg-3 text-sm py-8 text-center">No projects in this workspace yet.</div>
     ) : (
       <div className="text-fg-3 text-sm py-8 text-center">
         The project(s) this agent was scoped to no longer exist.

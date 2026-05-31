@@ -348,8 +348,10 @@ describe('WorkspaceDocumentSlideover', () => {
   });
 
   it('switching to Runs renders the agent run-history section and HIDES the body editor', async () => {
-    // Default agent fixture has no `projects` allow-list → wildcard fallback →
-    // RunsHistorySection shows its no-project empty state.
+    // Default agent fixture is wildcard-scoped (no `projects` → ['*']). The
+    // fixture's /projects fetch returns no projects, so a wildcard agent in an
+    // (effectively) empty workspace shows RunsHistorySection's terminal
+    // "no projects in this workspace" state.
     mockWorkspaceDoc('triage', 'agent');
     const { queryClient, router } = setup('?wdoc=triage');
     render(
@@ -362,7 +364,7 @@ describe('WorkspaceDocumentSlideover', () => {
     await userEvent.click(screen.getByRole('tab', { name: 'Runs' }));
 
     await waitFor(() => {
-      expect(screen.getByText(/no project scoped to this agent/i)).toBeInTheDocument();
+      expect(screen.getByText(/no projects in this workspace/i)).toBeInTheDocument();
     });
     expect(document.querySelector('[data-testid="workspace-slideover-editor"]')).toBeNull();
   });
