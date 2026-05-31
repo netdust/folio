@@ -408,6 +408,84 @@ test('sort by an unregistered key falls back to updated_at desc', async () => {
   expect(titles(data)).toEqual(['c', 'b', 'a']);
 });
 
+// ----- FS-2: non-numeric field holding JSON numbers must not drop rows -----
+
+/**
+ * Seed work items under a `select`-typed field `bucket` whose frontmatter
+ * values are JSON NUMBERS (2, 10, 3) plus one row MISSING the field. A
+ * non-numeric field sorts on the raw json_extract: pre-fix the value keeps its
+ * NUMERIC storage class in ORDER BY, but the keyset cursor is text → a page
+ * boundary between numeric rows drops the row whose value sorts after the
+ * cursor under numeric-vs-text affinity (e.g. 10 vs '3'). Casting json_extract
+ * to text in fieldSortExpr makes ORDER BY, the keyset predicate, and the text
+ * cursor all compare with consistent TEXT affinity — no drops.
+ */
+async function seedSelectNumbers(): Promise<Seeded> {
+  const { db, seed } = await makeTestApp();
+  const table = await getWorkItemsTable(db, seed.project.id);
+  await db.insert(fields).values({
+    id: nanoid(),
+    projectId: seed.project.id,
+    tableId: table.id,
+    key: 'bucket',
+    type: 'select',
+  });
+  const rows: { title: string; bucket?: number }[] = [
+    { title: 'b2', bucket: 2 },
+    { title: 'b10', bucket: 10 },
+    { title: 'b3', bucket: 3 },
+    { title: 'bmiss' }, // missing bucket
+  ];
+  let t = T;
+  for (const r of rows) {
+    t += 10;
+    const fm: Record<string, unknown> = {};
+    if (r.bucket !== undefined) fm.bucket = r.bucket;
+    await db.insert(documents).values({
+      id: nanoid(),
+      projectId: seed.project.id,
+      workspaceId: seed.workspace.id,
+      tableId: table.id,
+      type: 'work_item',
+      slug: r.title.toLowerCase(),
+      title: r.title,
+      status: 'todo',
+      body: '',
+      frontmatter: fm,
+      createdAt: new Date(t),
+      updatedAt: new Date(t),
+    });
+  }
+  return {
+    db,
+    projectId: seed.project.id,
+    tableId: table.id,
+    workspaceId: seed.workspace.id,
+  };
+}
+
+test('sort by a non-numeric field holding numeric JSON values drops no rows across a page boundary (regression)', async () => {
+  const { projectId, tableId } = await seedSelectNumbers();
+  const opts = {
+    projectId,
+    activeTableId: tableId,
+    type: 'work_item' as const,
+    sort: 'bucket',
+    dir: 'asc' as const,
+  };
+  const p1 = await listDocuments({ ...opts, limit: 2 });
+  const p2 = p1.nextCursor
+    ? await listDocuments({ ...opts, limit: 2, cursor: p1.nextCursor })
+    : { data: [], nextCursor: null };
+  const p3 = p2.nextCursor
+    ? await listDocuments({ ...opts, limit: 2, cursor: p2.nextCursor })
+    : { data: [], nextCursor: null };
+  const all = [...p1.data, ...p2.data, ...p3.data].map((d) => d.id);
+  // ALL rows must survive paging. Pre-fix, numeric '10' compares against text
+  // cursor '3' as 10 > '3' → FALSE under SQLite affinity → '10' is dropped.
+  expect(new Set(all).size).toBe(4);
+});
+
 test('a cursor minted under one sort is ignored under a different sort', async () => {
   const { projectId, tableId } = await seedFive();
 

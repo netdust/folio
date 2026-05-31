@@ -126,7 +126,11 @@ function fieldSortExpr(key: string, type: string): SQL {
   if (NUMERIC_FIELD_TYPES.has(type)) {
     return sql`coalesce(cast(json_extract(${documents.frontmatter}, ${path}) as real), ${NUMERIC_NULL_SENTINEL})`;
   }
-  return sql`coalesce(json_extract(${documents.frontmatter}, ${path}), ${NULL_SENTINEL})`;
+  // cast to text so ORDER BY, the keyset predicate, and the (text) cursor value
+  // all compare with consistent TEXT affinity. Without the cast, a non-numeric
+  // field holding JSON numbers/booleans sorts numerically in ORDER BY but the
+  // text cursor compares with text affinity → rows drop across page boundaries.
+  return sql`coalesce(cast(json_extract(${documents.frontmatter}, ${path}) as text), ${NULL_SENTINEL})`;
 }
 
 function resolveSort(sort?: string, dir?: string): { key: SortKey; dir: SortDir } {
