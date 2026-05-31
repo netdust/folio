@@ -6,13 +6,11 @@ import { gridTemplate, type Column } from './columns.ts';
 import { InlineEdit } from '../inline/inline-edit.tsx';
 
 // SortKey is `string` because saved views can persist a sort by any column
-// key (built-in or custom field). Only `SORTABLE_BUILTIN_KEYS` are clickable
-// from the header today; custom keys can still arrive via URL/view hydration.
+// key (built-in or custom field). Every column header is clickable to sort;
+// custom field sorts are validated server-side.
 export type SortKey = string;
 export type SortDir = 'asc' | 'desc';
 export interface SortState { key: SortKey; dir: SortDir; }
-
-const SORTABLE_BUILTIN_KEYS: readonly string[] = ['title', 'status', 'updated_at'];
 
 interface Props {
   columns: Column[];         // visible columns, already ordered
@@ -20,6 +18,7 @@ interface Props {
   onSort: (next: SortState | null) => void;
   onReorder: (nextOrder: string[]) => void;
   trailing?: ReactNode;
+  settings?: ReactNode;
   renderColumnMenu?: (column: Column) => ReactNode;
   // When set, the matching column header swaps its label for an InlineEdit
   // input. Commit fires onRenameCommit(key, nextLabel); the parent clears
@@ -34,6 +33,7 @@ export function TableHeader({
   onSort,
   onReorder,
   trailing,
+  settings,
   renderColumnMenu,
   renamingKey,
   onRenameCommit,
@@ -73,6 +73,14 @@ export function TableHeader({
         </SortableContext>
       </DndContext>
       {trailing ? <div className="flex-shrink-0">{trailing}</div> : null}
+      {settings ? (
+        <div
+          data-testid="table-settings-col"
+          className="sticky right-0 z-[1] flex h-full w-11 flex-shrink-0 items-center justify-center border-l border-border-light bg-content"
+        >
+          {settings}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -102,8 +110,7 @@ function SortableHeaderCell({
     transition,
     opacity: isDragging ? 0.5 : 1,
   };
-  const sortable =
-    column.source === 'builtin' && SORTABLE_BUILTIN_KEYS.includes(column.key as SortKey);
+  const sortable = true; // every column is sortable; field sort is validated server-side
   const onClick = sortable
     ? () => {
         const isActive = sort?.key === column.key;

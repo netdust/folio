@@ -401,13 +401,6 @@ export function TableView({ wslug, pslug, tslug }: Props) {
           pinnedFields={fields ?? []}
           onChange={onClauseChange}
         />
-        <ColumnPicker
-          columns={allColumns}
-          visibleKeys={visibleKeys}
-          onChange={onVisibilityChange}
-          suggestions={suggestions}
-          onPinSuggestion={onPinSuggestion}
-        />
       </div>
       <div
         data-testid="table-scroll"
@@ -431,6 +424,15 @@ export function TableView({ wslug, pslug, tslug }: Props) {
             onSort={onSortChange}
             onReorder={onReorder}
             trailing={<TableAddColumn onSubmit={onAddColumn} />}
+            settings={
+              <ColumnPicker
+                columns={allColumns}
+                visibleKeys={visibleKeys}
+                onChange={onVisibilityChange}
+                suggestions={suggestions}
+                onPinSuggestion={onPinSuggestion}
+              />
+            }
             renderColumnMenu={renderColumnMenu}
             renamingKey={renamingKey}
             onRenameCommit={onRenameCommit}

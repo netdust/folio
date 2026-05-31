@@ -24,11 +24,13 @@ export interface DocumentSummary {
   // ISO timestamp; null until activity is first logged. Phase 1.7 column —
   // surfaces in /stale_for filters and the planned "stale dashboard" bucket.
   lastTouchedAt: string | null;
-}
-
-export interface Document extends DocumentSummary {
+  // The list endpoint already returns `body` over the wire (server selects
+  // rows un-projected); the type historically under-declared it. Widening
+  // here makes node.doc.body available for card excerpts.
   body: string;
 }
+
+export type Document = DocumentSummary;
 
 export interface DocumentListPage {
   data: DocumentSummary[];

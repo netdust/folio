@@ -1,6 +1,6 @@
 import { createFileRoute, Outlet, useNavigate, useRouterState, useSearch } from '@tanstack/react-router';
 import { z } from 'zod';
-import { Plus, Loader2 } from 'lucide-react';
+import { Plus, Loader2, List, Columns3 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useProject } from '../lib/api/projects.ts';
 import { useDocuments, useCreateDocument } from '../lib/api/documents.ts';
@@ -16,9 +16,8 @@ export const Route = createFileRoute('/w/$wslug/p/$pslug')({
 });
 
 const TABS = [
-  { id: 'work-items', label: 'Work items', path: 'work-items' as const },
-  { id: 'board', label: 'Board', path: 'board' as const },
-  { id: 'wiki', label: 'Wiki', path: 'wiki' as const },
+  { id: 'work-items', label: 'Work items', path: 'work-items' as const, icon: List },
+  { id: 'board', label: 'Board', path: 'board' as const, icon: Columns3 },
 ];
 
 function ProjectLayout() {
@@ -41,20 +40,18 @@ function ProjectLayout() {
   const pageCount = pages?.data.length ?? 0;
 
   const onCreate = async () => {
-    const type = activeTab === 'wiki' ? 'page' : 'work_item';
     try {
-      const created = await create.mutateAsync({ type, title: 'Untitled' });
+      const created = await create.mutateAsync({ type: 'work_item', title: 'Untitled' });
       void navigate({ to: '.', search: { ...search, doc: created.slug }, replace: false });
     } catch (err) {
       toast.error(formatApiError(err));
     }
   };
 
-  const actionLabel = activeTab === 'wiki' ? 'New page' : 'New work item';
   const actions = (
     <Button variant="primary" onClick={onCreate} disabled={create.isPending} className="whitespace-nowrap">
       <Icon icon={create.isPending ? Loader2 : Plus} size={14} className={create.isPending ? 'animate-spin' : ''} />
-      {actionLabel}
+      New work item
     </Button>
   );
 
@@ -70,6 +67,7 @@ function ProjectLayout() {
               <FrameTab
                 key={t.id}
                 active={activeTab === t.id}
+                icon={t.icon}
                 onClick={() =>
                   navigate({
                     to: `/w/$wslug/p/$pslug/${t.path}`,

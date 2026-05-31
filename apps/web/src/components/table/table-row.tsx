@@ -67,6 +67,10 @@ export function TableRow({
             />
           ))}
         </div>
+        <div
+          aria-hidden
+          className="sticky right-0 z-[1] w-11 flex-shrink-0 self-stretch border-l border-border-light bg-content group-hover/row:bg-card"
+        />
       </div>
     </RowContextMenu>
   );

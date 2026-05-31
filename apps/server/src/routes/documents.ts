@@ -192,6 +192,8 @@ documentsRoute.get('/', async (c) => {
     assignee: c.req.query('assignee') ?? undefined,
     updatedSince: c.req.query('updated_since') ?? undefined,
     staleFor: c.req.query('stale_for') ?? undefined,
+    sort: c.req.query('sort') ?? undefined,
+    dir: c.req.query('dir') ?? undefined,
   });
 
   return c.json({ data: result.data, nextCursor: result.nextCursor });
