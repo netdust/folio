@@ -375,6 +375,21 @@ describe('POST /api/v1/w/:wslug/ai/test-key', () => {
     }
   });
 
+  // claude-code is keyless/local — there is no API key to validate.
+  // The route must return 422 (not 500) and never reach getProvider().
+  test('rejects claude-code provider with 422 (keyless — no API key to test)', async () => {
+    const { app, seed } = await makeTestApp();
+    const res = await app.request(`/api/v1/w/${seed.workspace.slug}/ai/test-key`, {
+      method: 'POST',
+      headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider: 'claude-code', model: 'x', api_key: 'x' }),
+    });
+    expect(res.status).toBe(422);
+    const body = await res.json();
+    expect(body.error.code).toBe('INVALID_BODY');
+    expect(body.error.message).toMatch(/claude-code/i);
+  });
+
   // Fix #5 — ollama provider defaults baseUrl to http://localhost:11434 inside
   // the SDK wrapper. The route must require an explicit base_url so callers
   // can't probe the server's loopback Ollama by omitting it.
