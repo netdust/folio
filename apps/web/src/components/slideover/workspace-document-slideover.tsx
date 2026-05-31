@@ -13,7 +13,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { toast } from 'sonner';
-import { Bot, FileText, History, MoreHorizontal, Trash2, X } from 'lucide-react';
+import { Bot, Check, Code, FileText, History, MoreHorizontal, Pencil, Trash2, X } from 'lucide-react';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '../ui/sheet.tsx';
 import { IconButton } from '../ui/icon-button.tsx';
 import { Button } from '../ui/button.tsx';
@@ -34,7 +34,7 @@ import { formatApiError } from '../../lib/api/index.ts';
 import { InlineEdit } from '../inline/inline-edit.tsx';
 import { FrontmatterForm } from './frontmatter-form.tsx';
 import { BodyEditor } from './body-editor.tsx';
-import { ModeToggle, type EditorMode } from './mode-toggle.tsx';
+import { type EditorMode } from './mode-toggle.tsx';
 import { RawMdEditor } from './raw-md-editor.tsx';
 import { WorkspaceActivityPanel } from './workspace-activity-panel.tsx';
 import { WorkspaceLogActivityButton } from './workspace-log-activity-button.tsx';
@@ -139,15 +139,6 @@ export function WorkspaceDocumentSlideover({ wslug }: Props) {
               <>
                 <HeaderTabs value={tab} items={tabItems} onChange={selectTab} />
                 <div aria-hidden className="mx-0.5 h-4 w-px bg-border-light" />
-                {/* The Edit/Raw MD toggle only makes sense where the Milkdown
-                    body editor renders: agents on the Fields tab. Triggers use
-                    a form (no body editor), and Activity/Runs have no editor. */}
-                {tab === 'fields' && doc.type === 'agent' ? (
-                  <>
-                    <ModeToggle mode={mode} onChange={setMode} />
-                    <div aria-hidden className="mx-0.5 h-4 w-px bg-border-light" />
-                  </>
-                ) : null}
                 <Popover open={moreOpen} onOpenChange={setMoreOpen}>
                   <PopoverTrigger asChild>
                     <button
@@ -158,8 +149,44 @@ export function WorkspaceDocumentSlideover({ wslug }: Props) {
                       <Icon icon={MoreHorizontal} size={16} />
                     </button>
                   </PopoverTrigger>
-                  <PopoverContent align="end" className="min-w-[160px] py-1">
+                  <PopoverContent align="end" className="min-w-[180px] py-1">
                     <div role="menu" className="flex flex-col">
+                      {/* Rich/Raw editor switch lives here (not the header) to
+                          keep the narrow panel header uncramped. Only relevant
+                          where the body editor renders: agents on Fields. */}
+                      {tab === 'fields' && doc.type === 'agent' ? (
+                        <>
+                          <button
+                            type="button"
+                            role="menuitemradio"
+                            aria-checked={mode === 'rich'}
+                            onClick={() => {
+                              setMode('rich');
+                              setMoreOpen(false);
+                            }}
+                            className="inline-flex items-center gap-2 px-3 py-1.5 text-left text-sm text-fg-2 transition-colors duration-fast hover:bg-card hover:text-fg"
+                          >
+                            <Icon icon={Pencil} size={14} />
+                            Edit (rich)
+                            {mode === 'rich' ? <Icon icon={Check} size={14} className="ml-auto" /> : null}
+                          </button>
+                          <button
+                            type="button"
+                            role="menuitemradio"
+                            aria-checked={mode === 'raw'}
+                            onClick={() => {
+                              setMode('raw');
+                              setMoreOpen(false);
+                            }}
+                            className="inline-flex items-center gap-2 px-3 py-1.5 text-left text-sm text-fg-2 transition-colors duration-fast hover:bg-card hover:text-fg"
+                          >
+                            <Icon icon={Code} size={14} />
+                            Raw markdown
+                            {mode === 'raw' ? <Icon icon={Check} size={14} className="ml-auto" /> : null}
+                          </button>
+                          <div aria-hidden className="my-1 h-px bg-border-light" />
+                        </>
+                      ) : null}
                       <button
                         type="button"
                         role="menuitem"
