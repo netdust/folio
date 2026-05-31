@@ -497,6 +497,23 @@ describe('DocumentSlideover', () => {
     expect(screen.getByRole('tab', { name: 'Fields' })).toHaveAttribute('aria-selected', 'true');
   });
 
+  it('shows the comment count as a badge on the Comments tab', async () => {
+    // Regression: the count badge was dropped in the HeaderTabs refactor. With
+    // 3 comments the Comments tab must show "3" (HeaderTabs renders count>0).
+    mockDocWithComments('fix-login', 'work_item', 3);
+    const { queryClient, router } = setup('?doc=fix-login');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText('Fix login bug');
+
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: 'Comments' })).toHaveTextContent('3');
+    });
+  });
+
   it('switching to the Activity tab mounts the ActivityPanel and HIDES the body editor', async () => {
     mockDocWithComments('fix-login', 'work_item', 0);
     const { queryClient, router } = setup('?doc=fix-login');

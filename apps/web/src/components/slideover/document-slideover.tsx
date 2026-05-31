@@ -69,9 +69,13 @@ export function DocumentSlideover({ wslug, pslug }: Props) {
   useEffect(() => {
     setTab('fields');
   }, [doc?.id]);
+  // Comment count drives the Comments-tab badge (HeaderTabs renders it when >0).
+  // Gated on doc.slug so it idles until the doc resolves; shares CommentsTab's
+  // react-query key so it's a cache hit, not an extra fetch.
+  const commentCount = useComments(wslug, pslug, doc?.slug ?? '').data?.length ?? 0;
   const tabItems: HeaderTabItem<DocTabValue>[] = [
     { value: 'fields', label: 'Fields', icon: FileText },
-    { value: 'comments', label: 'Comments', icon: MessageCircle },
+    { value: 'comments', label: 'Comments', icon: MessageCircle, count: commentCount },
     { value: 'activity', label: 'Activity', icon: History },
   ];
 

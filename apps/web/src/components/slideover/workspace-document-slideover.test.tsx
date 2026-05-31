@@ -272,6 +272,36 @@ describe('WorkspaceDocumentSlideover', () => {
     expect(screen.getByRole('tab', { name: 'Fields' })).toHaveAttribute('aria-selected', 'true');
   });
 
+  it('deep-link ?tab=runs then clicking a DIFFERENT non-Fields tab sticks (not stomped to Fields)', async () => {
+    // Regression: clicking a tab strips ?tab=, which used to re-fire the seed
+    // effect (search.tab dep flips defined→undefined) and reset to Fields,
+    // stomping the click. The seed must be doc.id-keyed so the click sticks.
+    mockWorkspaceDoc('triage', 'agent');
+    const { queryClient, router } = setup('?wdoc=triage&tab=runs');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText('Triage Agent');
+
+    // Arrived on Runs via the deep-link.
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: 'Runs' })).toHaveAttribute('aria-selected', 'true');
+    });
+
+    // Click ACTIVITY (a different non-Fields tab).
+    await userEvent.click(screen.getByRole('tab', { name: 'Activity' }));
+
+    // It must land on Activity — NOT be stomped back to Fields.
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: 'Activity' })).toHaveAttribute('aria-selected', 'true');
+    });
+    expect(screen.getByRole('tab', { name: 'Fields' })).toHaveAttribute('aria-selected', 'false');
+    // ?tab= was cleared by the click.
+    expect((router.state.location.search as { tab?: string }).tab).toBeUndefined();
+  });
+
   it('switching to Activity renders the panel + Log button (agent) and HIDES the body editor', async () => {
     mockWorkspaceDoc('triage', 'agent');
     const { queryClient, router } = setup('?wdoc=triage');

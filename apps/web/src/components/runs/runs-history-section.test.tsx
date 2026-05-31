@@ -91,4 +91,25 @@ describe('RunsHistorySection', () => {
     wrap(<RunsHistorySection wslug="acme" agentSlug="bot" projects={['id-mkt', 'id-sales']} />);
     await waitFor(() => expect(screen.getByText(/no runs yet/i)).toBeInTheDocument());
   });
+
+  test('stale allow-list IDs (projects deleted) show a TERMINAL state, not a perpetual "Loading runs…"', async () => {
+    // The projects list resolves, but it does NOT contain the agent's allow-list
+    // IDs (those projects were deleted). concreteSlugs is empty AND projects
+    // finished loading → must show the deleted-project terminal copy, never spin
+    // on "Loading runs…" forever.
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url.includes('/projects')) {
+        // Workspace has some OTHER project; the agent's IDs aren't here.
+        return new Response(
+          JSON.stringify({ data: [proj('id-other', 'other')] }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      return new Response(JSON.stringify({ data: [] }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }));
+    wrap(<RunsHistorySection wslug="acme" agentSlug="bot" projects={['id-deleted-1', 'id-deleted-2']} />);
+    await waitFor(() => expect(screen.getByText(/no longer exist/i)).toBeInTheDocument());
+    expect(screen.queryByText(/loading runs/i)).toBeNull();
+  });
 });

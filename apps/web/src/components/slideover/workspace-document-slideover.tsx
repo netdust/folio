@@ -10,7 +10,7 @@
  * field, no pinned fields, no activity panel, no log-activity, no copy-as-MD
  * (agents don't have a workspace-scoped .md endpoint yet).
  */
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { toast } from 'sonner';
 import { Bot, Check, Code, FileText, History, MoreHorizontal, Pencil, Trash2, X } from 'lucide-react';
@@ -65,13 +65,26 @@ export function WorkspaceDocumentSlideover({ wslug }: Props) {
 
   // Tab state lives here (not in SlideoverBody) so the icon toggles render
   // inline in the header — NocoDB-style single row. Defaults to Fields; a
-  // ?tab= deep-link (e.g. the activity feed opening an agent's Runs tab) wins.
+  // ?tab= deep-link (e.g. the activity feed opening an agent's Runs tab) wins
+  // ONCE, when a doc opens.
   const [tab, setTab] = useState<WorkspaceDocTabValue>(search.tab ?? 'fields');
+  // Re-seed the tab ONLY when a different doc opens — keyed on doc.id, NOT on
+  // search.tab. Reading search.tab as an effect dep was a bug: selectTab strips
+  // ?tab= on a manual click, which flips search.tab defined→undefined and
+  // re-fired this effect, stomping the user's just-clicked tab back to Fields.
+  // `searchRef` reads the CURRENT ?tab= at seed time without making it a dep.
+  const searchRef = useRef(search);
+  searchRef.current = search;
+  const seededForDocRef = useRef<string | null>(null);
   useEffect(() => {
-    setTab(search.tab ?? 'fields');
-  }, [doc?.id, search.tab]);
-  // A MANUAL tab click updates state AND clears the ?tab= deep-link param, so
-  // the seed effect above doesn't keep re-asserting it on later doc switches.
+    if (doc?.id && seededForDocRef.current !== doc.id) {
+      seededForDocRef.current = doc.id;
+      setTab(searchRef.current.tab ?? 'fields');
+    }
+  }, [doc?.id]);
+  // A MANUAL tab click updates state AND clears the ?tab= deep-link param so it
+  // doesn't re-assert on a later doc switch. Clearing the param no longer
+  // re-seeds the tab (the effect is doc.id-keyed), so the click sticks.
   const selectTab = (next: WorkspaceDocTabValue) => {
     setTab(next);
     if (search.tab !== undefined) {

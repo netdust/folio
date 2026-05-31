@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useSyncExternalStore } from 'react';
 import { Activity, Bot, Play } from 'lucide-react';
 import { agentPanelBus, type AgentPanelScreen, type AgentPanelState } from '../../lib/agent-panel-bus.ts';
 import { PanelHeader, type PanelTab } from './panel-header.tsx';
@@ -13,8 +13,12 @@ const TABS: PanelTab<AgentPanelScreen>[] = [
 ];
 
 export function AgentCockpitPanel({ wslug }: { wslug: string }) {
-  const [state, setState] = useState<AgentPanelState>(() => agentPanelBus.get());
-  useEffect(() => agentPanelBus.subscribe(setState), []);
+  // useSyncExternalStore subscribes synchronously and re-reads the snapshot, so
+  // an emit that lands in the render→effect gap on first mount (e.g. a Cmd-K
+  // "Run agent…" racing the panel's mount) is never missed (no external-store
+  // tearing). The bus replaces `state` with a new object per change, so the
+  // snapshot identity is stable between renders (no render loop).
+  const state: AgentPanelState = useSyncExternalStore(agentPanelBus.subscribe, agentPanelBus.get);
   if (!state.open) return null;
   const setScreen = (screen: AgentPanelScreen) => agentPanelBus.open(screen);
   return (

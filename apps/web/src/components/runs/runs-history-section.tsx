@@ -18,7 +18,7 @@ export function RunsHistorySection({ wslug, agentSlug, projects }: RunsHistorySe
   // merged newest-first. `useQueries` is a single hook call, so it's legal in
   // render even though the inner array varies in length. Hooks run
   // unconditionally (before any early return) to satisfy the rules of hooks.
-  const { data: workspaceProjects } = useProjects(wslug);
+  const { data: workspaceProjects, isPending: projectsPending } = useProjects(wslug);
   const projectList = Array.isArray(workspaceProjects) ? workspaceProjects : [];
   const slugById = new Map(projectList.map((p) => [p.id, p.slug]));
   // Map allow-list IDs → slugs; drop the wildcard and any ID not yet resolved
@@ -43,9 +43,18 @@ export function RunsHistorySection({ wslug, agentSlug, projects }: RunsHistorySe
   if (projects.filter((p) => p !== '*').length === 0) {
     return <div className="text-fg-3 text-sm py-8 text-center">No project scoped to this agent yet.</div>;
   }
-  // Allow-list has IDs but the projects list hasn't resolved any slug yet.
   if (concreteSlugs.length === 0) {
-    return <div className="text-fg-3 text-sm py-8 text-center">Loading runs…</div>;
+    // The allow-list has concrete IDs but none resolve to a slug. Distinguish:
+    //  - projects still loading → transient "Loading…" (slugs will arrive).
+    //  - projects loaded, still no match → the scoped project(s) were deleted;
+    //    a TERMINAL state, not a perpetual spinner.
+    return projectsPending ? (
+      <div className="text-fg-3 text-sm py-8 text-center">Loading runs…</div>
+    ) : (
+      <div className="text-fg-3 text-sm py-8 text-center">
+        The project(s) this agent was scoped to no longer exist.
+      </div>
+    );
   }
   if (runQueries.some((q) => q.isLoading)) {
     return <div className="text-fg-3 text-sm py-8 text-center">Loading runs…</div>;
