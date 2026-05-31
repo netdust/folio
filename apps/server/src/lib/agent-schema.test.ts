@@ -171,6 +171,23 @@ describe('toolsToScopes', () => {
   });
 });
 
+describe('claude-code agent frontmatter', () => {
+  test('accepts provider=claude-code with NO model', () => {
+    const parsed = agentFrontmatterSchema.parse({ provider: 'claude-code', tools: [], projects: ['*'] });
+    expect(parsed.provider).toBe('claude-code');
+    expect(parsed.model).toBeUndefined();
+  });
+  test('still requires model for an API provider', () => {
+    expect(() => agentFrontmatterSchema.parse({ provider: 'anthropic', tools: [], projects: ['*'] })).toThrow();
+  });
+  test('PATCH path (.innerType().partial()) still parses a partial agent frontmatter', () => {
+    // proves the documents.ts:806 consumer fix works after the schema became ZodEffects
+    const schema = agentFrontmatterSchema.innerType().partial();
+    const r = schema.safeParse({ requires_approval: true });
+    expect(r.success).toBe(true);
+  });
+});
+
 describe('V1_MCP_TOOLS', () => {
   test('contains the v1 tools including agent-lifecycle tools', () => {
     expect(V1_MCP_TOOLS).toEqual([

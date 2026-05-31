@@ -143,7 +143,7 @@ export async function runAgent(args: { runId: string }): Promise<void> {
       console.error(`[runner] run ${runId} not found or missing context; skipping`);
       return;
     }
-    providerLabel = PROVIDER_LABELS[ctx.fm.provider];
+    providerLabel = PROVIDER_LABELS[ctx.fm.provider as ProviderName] ?? 'Claude Code';
 
     // --- pre-flight checks (cheapest first); each returns true if it BLOCKED.
     if (await preflight(ctx)) return;
@@ -186,7 +186,7 @@ export async function runAgentResume(args: { runId: string }): Promise<void> {
       console.error(`[runner] resume run ${runId} not found or missing context; skipping`);
       return;
     }
-    providerLabel = PROVIDER_LABELS[ctx.fm.provider];
+    providerLabel = PROVIDER_LABELS[ctx.fm.provider as ProviderName] ?? 'Claude Code';
 
     // Locate the original run via resume_of. Missing pointer or non-existent
     // target → idempotency_violation (the resume contract is broken).
@@ -299,8 +299,10 @@ async function loadContext(runId: string): Promise<RunContext | null> {
   // BYOK key for the run's snapshotted provider. Absent key is a pre-flight
   // failure (no_ai_key), not a load failure — but resolve it here so the
   // pre-flight check is a pure read. Carry undefined through when missing.
+  // claude-code has no API key row; cast is safe — the DB column only holds
+  // the 4 API providers, so the query simply returns undefined for claude-code.
   const keyRow = await db.query.aiKeys.findFirst({
-    where: and(eq(aiKeys.workspaceId, run.workspaceId), eq(aiKeys.provider, fm.provider)),
+    where: and(eq(aiKeys.workspaceId, run.workspaceId), eq(aiKeys.provider, fm.provider as ProviderName)),
   });
   const apiKey = keyRow ? decryptSecret(keyRow.encryptedKey) : '';
   const baseUrl = keyRow?.baseUrl ?? undefined;
@@ -403,9 +405,11 @@ async function preflight(ctx: RunContext, excludeRunId?: string): Promise<boolea
   }
 
   // 5 — provider health.
+  // claude-code is keyless/local and has no health to check; the no_ai_key
+  // preflight (Task 3) gates it before reaching here. Cast is safe.
   const health = await checkProviderHealth({
     workspaceId: run.workspaceId,
-    provider: fm.provider,
+    provider: fm.provider as ProviderName,
   });
   if (health.next.status === 'degraded') {
     await failRun(
@@ -543,7 +547,7 @@ function buildToolDefs(agentFm: Record<string, unknown>): ToolDef[] {
 async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
   const { run, fm } = ctx;
   const runId = run.id;
-  const providerLabel = PROVIDER_LABELS[fm.provider];
+  const providerLabel = PROVIDER_LABELS[fm.provider as ProviderName] ?? 'Claude Code';
 
   const tools = buildToolDefs(ctx.agentFm);
 

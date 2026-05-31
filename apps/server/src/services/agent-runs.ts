@@ -111,7 +111,7 @@ export async function createRun(
   // mutate historical runs (mitigation 23 — the run is its own scope).
   const agentFm = agent.frontmatter as Record<string, unknown>;
   const provider = agentFm.provider as AgentRunFrontmatter['provider'];
-  const model = agentFm.model as string;
+  const model = (agentFm.model as string | undefined) ?? '';
   // The agent's BODY is its system prompt (the markdown editor is the prompt
   // surface). Snapshot it onto the run at create-time so a later edit of the
   // agent body doesn't mutate historical runs (mitigation 23). `system_prompt`
@@ -456,11 +456,14 @@ export async function transitionRun(
     // (mitigation 46) — not the agent doc's current provider.
     if (isTerminal) {
       const provider = (row.frontmatter as AgentRunFrontmatter).provider;
-      await maybeEmitProviderHealthEdge(tx, {
-        workspaceId: row.workspaceId,
-        provider,
-        actor: args.actor,
-      });
+      // claude-code is keyless/local with no health to track; skip.
+      if (provider !== 'claude-code') {
+        await maybeEmitProviderHealthEdge(tx, {
+          workspaceId: row.workspaceId,
+          provider: provider as ProviderName,
+          actor: args.actor,
+        });
+      }
     }
   });
 
@@ -898,9 +901,11 @@ export async function recoverOrphanRuns(
       seen.add(key);
       const parsedProvider = providerSchema.safeParse(r.provider);
       if (!parsedProvider.success) continue;
+      // claude-code is keyless/local with no health to track; skip.
+      if (parsedProvider.data === 'claude-code') continue;
       await maybeEmitProviderHealthEdge(tx, {
         workspaceId: r.workspace_id,
-        provider: parsedProvider.data,
+        provider: parsedProvider.data as ProviderName,
         actor: 'system:orphan-recovery',
       });
     }

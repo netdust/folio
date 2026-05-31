@@ -803,7 +803,7 @@ export async function updateDocument(
   ) {
     const schema =
       existing.type === 'agent'
-        ? agentFrontmatterSchema.partial()
+        ? agentFrontmatterSchema.innerType().partial()
         : triggerFrontmatterSchema.innerType().partial();
     const r = schema.safeParse(patch.frontmatter);
     if (!r.success) {

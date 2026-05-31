@@ -60,7 +60,7 @@ export const runDoneReasonSchema = z.enum([
 ]);
 export type RunDoneReason = z.infer<typeof runDoneReasonSchema>;
 
-export const providerSchema = z.enum(['anthropic', 'openai', 'openrouter', 'ollama']);
+export const providerSchema = z.enum(['anthropic', 'openai', 'openrouter', 'ollama', 'claude-code']);
 export type Provider = z.infer<typeof providerSchema>;
 
 export const agentRunFrontmatterSchema = z
@@ -70,7 +70,7 @@ export const agentRunFrontmatterSchema = z
 
     agent_slug: z.string().regex(/^[a-z0-9-]+$/),
     provider: providerSchema,
-    model: z.string(),
+    model: z.string().default(''),
     system_prompt: z.string(),
     max_tokens: z.number().int().positive(),
 
