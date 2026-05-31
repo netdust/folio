@@ -10,7 +10,7 @@ import { test, expect } from 'bun:test';
 import { and, eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { makeTestApp } from '../test/harness.ts';
-import { documents, tables } from '../db/schema.ts';
+import { documents, fields, tables } from '../db/schema.ts';
 import { listDocuments } from './documents.ts';
 
 async function getWorkItemsTable(
@@ -244,6 +244,168 @@ test('sort by status with NULL statuses spanning a page boundary drops no rows (
   // ALL 5 rows must appear across pages, none dropped (pre-fix the NULL-status
   // group is excluded from later pages → set size < 5).
   expect(new Set(all).size).toBe(5);
+});
+
+// ----- FS-1: sort by validated, type-aware frontmatter fields -----
+
+/**
+ * Seed work items with numeric `priority` and ISO `due_date` in frontmatter,
+ * AND register `fields` rows (priority: number, due_date: date) on the seeded
+ * table so the custom-sort validation accepts the keys.
+ */
+async function seedFields(
+  rows: { title: string; priority?: number; due_date?: string }[],
+): Promise<Seeded> {
+  const { db, seed } = await makeTestApp();
+  const table = await getWorkItemsTable(db, seed.project.id);
+  await db.insert(fields).values([
+    {
+      id: nanoid(),
+      projectId: seed.project.id,
+      tableId: table.id,
+      key: 'priority',
+      type: 'number',
+    },
+    {
+      id: nanoid(),
+      projectId: seed.project.id,
+      tableId: table.id,
+      key: 'due_date',
+      type: 'date',
+    },
+  ]);
+  let t = T;
+  for (const r of rows) {
+    t += 10;
+    const fm: Record<string, unknown> = {};
+    if (r.priority !== undefined) fm.priority = r.priority;
+    if (r.due_date !== undefined) fm.due_date = r.due_date;
+    await db.insert(documents).values({
+      id: nanoid(),
+      projectId: seed.project.id,
+      workspaceId: seed.workspace.id,
+      tableId: table.id,
+      type: 'work_item',
+      slug: r.title.toLowerCase(),
+      title: r.title,
+      status: 'todo',
+      body: '',
+      frontmatter: fm,
+      createdAt: new Date(t),
+      updatedAt: new Date(t),
+    });
+  }
+  return {
+    db,
+    projectId: seed.project.id,
+    tableId: table.id,
+    workspaceId: seed.workspace.id,
+  };
+}
+
+test('sort by priority asc orders numerically (1,2,10 not 1,10,2)', async () => {
+  const { projectId, tableId } = await seedFields([
+    { title: 'p2', priority: 2 },
+    { title: 'p10', priority: 10 },
+    { title: 'p1', priority: 1 },
+  ]);
+  const { data } = await listDocuments({
+    projectId,
+    activeTableId: tableId,
+    type: 'work_item',
+    sort: 'priority',
+    dir: 'asc',
+  });
+  expect(
+    data.map((d) => (d.frontmatter as Record<string, unknown>).priority),
+  ).toEqual([1, 2, 10]);
+});
+
+test('sort by due_date asc orders chronologically', async () => {
+  const { projectId, tableId } = await seedFields([
+    { title: 'd2', due_date: '2026-03-15' },
+    { title: 'd3', due_date: '2026-11-01' },
+    { title: 'd1', due_date: '2026-01-02' },
+  ]);
+  const { data } = await listDocuments({
+    projectId,
+    activeTableId: tableId,
+    type: 'work_item',
+    sort: 'due_date',
+    dir: 'asc',
+  });
+  expect(
+    data.map((d) => (d.frontmatter as Record<string, unknown>).due_date),
+  ).toEqual(['2026-01-02', '2026-03-15', '2026-11-01']);
+});
+
+test('sort by priority with missing values keeps them last (asc) and drops none across a page boundary', async () => {
+  const { projectId, tableId } = await seedFields([
+    { title: 'a', priority: 1 },
+    { title: 'b', priority: 2 },
+    { title: 'c' }, // missing
+    { title: 'd' }, // missing
+    { title: 'e', priority: 3 },
+  ]);
+  const opts = {
+    projectId,
+    activeTableId: tableId,
+    type: 'work_item' as const,
+    sort: 'priority',
+    dir: 'asc' as const,
+  };
+  const p1 = await listDocuments({ ...opts, limit: 2 });
+  const p2 = p1.nextCursor
+    ? await listDocuments({ ...opts, limit: 2, cursor: p1.nextCursor })
+    : { data: [], nextCursor: null };
+  const p3 = p2.nextCursor
+    ? await listDocuments({ ...opts, limit: 2, cursor: p2.nextCursor })
+    : { data: [], nextCursor: null };
+  const all = [...p1.data, ...p2.data, ...p3.data];
+  expect(new Set(all.map((d) => d.id)).size).toBe(5);
+  // The two missing-priority rows must land last under asc.
+  expect(all.slice(-2).map((d) => d.title).sort()).toEqual(['c', 'd']);
+});
+
+test('sort by priority pages numerically across a boundary without drops (cast guard)', async () => {
+  const { projectId, tableId } = await seedFields([
+    { title: 'a', priority: 10 },
+    { title: 'b', priority: 2 },
+    { title: 'c', priority: 1 },
+    { title: 'd', priority: 3 },
+  ]);
+  const opts = {
+    projectId,
+    activeTableId: tableId,
+    type: 'work_item' as const,
+    sort: 'priority',
+    dir: 'asc' as const,
+  };
+  const p1 = await listDocuments({ ...opts, limit: 2 });
+  const p2 = p1.nextCursor
+    ? await listDocuments({ ...opts, limit: 2, cursor: p1.nextCursor })
+    : { data: [], nextCursor: null };
+  const ordered = [...p1.data, ...p2.data].map(
+    (d) => (d.frontmatter as Record<string, unknown>).priority,
+  );
+  expect(ordered).toEqual([1, 2, 3, 10]);
+  expect(new Set([...p1.data, ...p2.data].map((d) => d.id)).size).toBe(4);
+});
+
+test('sort by an unregistered key falls back to updated_at desc', async () => {
+  const { projectId, tableId } = await seedFields([
+    { title: 'a', priority: 1 },
+    { title: 'b', priority: 2 },
+    { title: 'c', priority: 3 },
+  ]);
+  const { data } = await listDocuments({
+    projectId,
+    activeTableId: tableId,
+    type: 'work_item',
+    sort: 'not_a_field',
+  });
+  // updated_at desc: last-seeded ('c') first.
+  expect(titles(data)).toEqual(['c', 'b', 'a']);
 });
 
 test('a cursor minted under one sort is ignored under a different sort', async () => {

@@ -23,6 +23,7 @@ import { db } from '../db/client.ts';
 import {
   apiTokens,
   documents,
+  fields,
   statuses,
 } from '../db/schema.ts';
 import type {
@@ -111,21 +112,42 @@ function sortExpr(key: SortKey): SQL {
   return sql`${SORT_COLUMNS[key]}`;
 }
 
+// Custom frontmatter-field sort. numeric types cast json_extract to REAL so
+// 1,2,10 sorts numerically (not lexically 1,10,2); everything else sorts on the
+// raw json_extract (ISO dates sort right lexically). NULL/missing coalesces to a
+// type-matched sentinel applied IDENTICALLY in ORDER BY, the keyset predicate,
+// AND the cursor value — or NULL rows silently drop across a page boundary
+// (exactly the status-NULL bug). The path interpolation is safe: `key` is
+// validated /^[a-zA-Z0-9_]+$/ AND matched against a registered `fields` row.
+const NUMERIC_FIELD_TYPES = new Set(['number', 'currency']);
+const NUMERIC_NULL_SENTINEL = 9e18;
+function fieldSortExpr(key: string, type: string): SQL {
+  const path = `$.${key}`;
+  if (NUMERIC_FIELD_TYPES.has(type)) {
+    return sql`coalesce(cast(json_extract(${documents.frontmatter}, ${path}) as real), ${NUMERIC_NULL_SENTINEL})`;
+  }
+  return sql`coalesce(json_extract(${documents.frontmatter}, ${path}), ${NULL_SENTINEL})`;
+}
+
 function resolveSort(sort?: string, dir?: string): { key: SortKey; dir: SortDir } {
   const key = (sort && sort in SORT_COLUMNS ? sort : 'updated_at') as SortKey;
   const d: SortDir = dir === 'asc' ? 'asc' : dir === 'desc' ? 'desc' : key === 'updated_at' ? 'desc' : 'asc';
   return { key, dir: d };
 }
 
-function encodeCursor(sortKey: SortKey, sortValue: string, id: string): string {
+function encodeCursor(sortKey: string, sortValue: string, id: string): string {
   return Buffer.from(`${sortKey}:${Buffer.from(sortValue).toString('base64')}:${id}`).toString('base64');
 }
 
-function decodeCursor(s: string): { sortKey: SortKey; sortValue: string; id: string } | null {
+// sortKey may be a built-in (title/status/updated_at) OR a validated field key
+// (priority/due_date/…), so the guard only enforces non-emptiness here. The
+// cursor is matched against the request's effective sort key at the call site;
+// a mismatched cursor is ignored (page 1).
+function decodeCursor(s: string): { sortKey: string; sortValue: string; id: string } | null {
   try {
     const [sortKey, b64v, id] = Buffer.from(s, 'base64').toString().split(':');
-    if (!sortKey || !(sortKey in SORT_COLUMNS) || b64v === undefined || !id) return null;
-    return { sortKey: sortKey as SortKey, sortValue: Buffer.from(b64v, 'base64').toString(), id };
+    if (!sortKey || b64v === undefined || !id) return null;
+    return { sortKey, sortValue: Buffer.from(b64v, 'base64').toString(), id };
   } catch {
     return null;
   }
@@ -260,13 +282,44 @@ export async function listDocuments(
     }
   }
 
-  const { key: sortKey, dir: sortDir } = resolveSort(opts.sort, opts.dir);
+  // sortKey/sortDir widen to string to admit a custom field key alongside the
+  // built-in SortKey union.
+  const resolved = resolveSort(opts.sort, opts.dir);
+  let sortKey: string = resolved.key;
+  let sortDir = resolved.dir;
+  // Field sort: opts.sort is not a built-in, is a valid identifier, and matches
+  // a `fields` row registered for this table. Never interpolate raw input — the
+  // matched row supplies both the safe key and its type. If no field matches,
+  // resolveSort already fell back to updated_at, so we leave sortKey as-is.
+  let fieldSort: { key: string; type: string } | null = null;
+  if (
+    opts.sort &&
+    !(opts.sort in SORT_COLUMNS) &&
+    opts.activeTableId &&
+    /^[a-zA-Z0-9_]+$/.test(opts.sort)
+  ) {
+    const row = await db
+      .select({ key: fields.key, type: fields.type })
+      .from(fields)
+      .where(and(eq(fields.tableId, opts.activeTableId), eq(fields.key, opts.sort)))
+      .limit(1);
+    if (row[0]) {
+      fieldSort = { key: row[0].key, type: row[0].type };
+      sortKey = opts.sort; // keep the raw key for cursor identity
+      sortDir = opts.dir === 'asc' ? 'asc' : opts.dir === 'desc' ? 'desc' : 'asc';
+    }
+  }
+
+  const orderExpr: SQL = fieldSort
+    ? fieldSortExpr(fieldSort.key, fieldSort.type)
+    : sortExpr(sortKey as SortKey);
+
   const decoded = opts.cursor ? decodeCursor(opts.cursor) : null;
   const cursor = decoded && decoded.sortKey === sortKey ? decoded : null;
 
   if (cursor) {
     const cmpGt = sortDir === 'asc' ? gt : lt;
-    if (sortKey === 'updated_at') {
+    if (sortKey === 'updated_at' && !fieldSort) {
       const ts = new Date(Number(cursor.sortValue));
       whereClauses.push(
         or(
@@ -275,11 +328,17 @@ export async function listDocuments(
         ) as never,
       );
     } else {
-      const col = sortExpr(sortKey);
+      const col = orderExpr;
+      // For a numeric field sort the column is a REAL (cast); cast the cursor
+      // value too so the comparison is numeric, not string-affinity.
+      const cmpVal: SQL | string =
+        fieldSort && NUMERIC_FIELD_TYPES.has(fieldSort.type)
+          ? sql`cast(${cursor.sortValue} as real)`
+          : cursor.sortValue;
       whereClauses.push(
         or(
-          cmpGt(col, cursor.sortValue),
-          and(eq(col, cursor.sortValue), cmpGt(documents.id, cursor.id)),
+          cmpGt(col, cmpVal),
+          and(eq(col, cmpVal), cmpGt(documents.id, cursor.id)),
         ) as never,
       );
     }
@@ -290,7 +349,7 @@ export async function listDocuments(
     .select()
     .from(documents)
     .where(and(...whereClauses))
-    .orderBy(dirFn(sortExpr(sortKey)), dirFn(documents.id))
+    .orderBy(dirFn(orderExpr), dirFn(documents.id))
     .limit(limit + 1);
 
   const hasMore = rows.length > limit;
@@ -298,12 +357,22 @@ export async function listDocuments(
   const last = page[page.length - 1];
   let nextCursor: string | null = null;
   if (hasMore && last) {
-    const sortValue =
-      sortKey === 'updated_at'
-        ? String(last.updatedAt.getTime())
-        : sortKey === 'status'
-          ? String(last.status ?? NULL_SENTINEL)
-          : String((last as Record<string, unknown>)[sortKey] ?? '');
+    let sortValue: string;
+    if (fieldSort) {
+      const raw = (last.frontmatter as Record<string, unknown>)[fieldSort.key];
+      sortValue =
+        raw == null
+          ? NUMERIC_FIELD_TYPES.has(fieldSort.type)
+            ? String(NUMERIC_NULL_SENTINEL)
+            : NULL_SENTINEL
+          : String(raw);
+    } else if (sortKey === 'updated_at') {
+      sortValue = String(last.updatedAt.getTime());
+    } else if (sortKey === 'status') {
+      sortValue = String(last.status ?? NULL_SENTINEL);
+    } else {
+      sortValue = String((last as Record<string, unknown>)[sortKey] ?? '');
+    }
     nextCursor = encodeCursor(sortKey, sortValue, last.id);
   }
   return { data: page, nextCursor };
