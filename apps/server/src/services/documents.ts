@@ -722,6 +722,31 @@ export interface UpdateDocumentArgs {
   patch: DocumentPatch;
 }
 
+// A doc carries the create-time placeholder slug if it is exactly `untitled`
+// or `untitled-<N>` (the dedup form). Such a doc was created before the user
+// named it — its slug is not yet meaningful, so it may adopt its first real
+// title. Any other slug is a real, frozen name.
+function isUntitledPlaceholderSlug(slug: string): boolean {
+  return slug === 'untitled' || /^untitled-\d+$/.test(slug);
+}
+
+// Re-slug a doc from its first real title — but ONLY while it still carries the
+// create-time `untitled` placeholder slug. Returns null (slug unchanged) when:
+// the current slug is already a real name (immutability — protects [[slug]]
+// links), OR the new title still slugifies to a placeholder, OR it didn't
+// change. Self-guarding so every call site is safe; this is the SINGLE place
+// the placeholder-reslug policy lives (JSON + markdown PATCH both call it).
+export async function maybeReslugPlaceholder(
+  projectId: string,
+  currentSlug: string,
+  nextTitle: string,
+): Promise<string | null> {
+  if (!isUntitledPlaceholderSlug(currentSlug)) return null;
+  const baseSlug = slugify(nextTitle) || 'doc';
+  if (baseSlug === currentSlug || isUntitledPlaceholderSlug(baseSlug)) return null;
+  return slugUniqueInDocuments(db, projectId, baseSlug);
+}
+
 export async function updateDocument(
   args: UpdateDocumentArgs,
 ): Promise<Document> {
@@ -850,10 +875,17 @@ export async function updateDocument(
     }
   }
 
-  // Slugs are immutable for ALL document types (extends the table/agent/trigger
-  // precedent). A retitle changes the title only — never the slug — so [[slug]]
-  // relation links and backlinks stay valid forever. No rename cascade.
-  const nextSlug: string | null = null;
+  // Slugs are immutable ONCE A DOC HAS A REAL NAME — a retitle never moves the
+  // slug, so [[slug]] relation links + backlinks stay valid forever (no cascade).
+  // THE ONE EXCEPTION: a doc still carrying the create-time `untitled` / `untitled-N`
+  // placeholder slug (created before the user typed a title — every "New work item"
+  // / "New page" seeds title 'Untitled') adopts its FIRST real title as its
+  // permanent slug. After that it's named and frozen. Workspace docs (agent/trigger)
+  // never re-slug. Guarded by tests in documents.test.ts.
+  const nextSlug =
+    patch.title !== undefined && p
+      ? await maybeReslugPlaceholder(p.id, existing.slug, patch.title)
+      : null;
 
   const updated = {
     ...existing,

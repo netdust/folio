@@ -19,6 +19,7 @@ import {
   getDocument,
   getAssignee,
   listDocuments,
+  maybeReslugPlaceholder,
   updateDocument,
   stripReservedFrontmatter,
   type DocumentType,
@@ -341,10 +342,14 @@ documentsRoute.patch('/:slug', requireScope('documents:write'), async (c) => {
         }
       }
     }
-    // Slugs are immutable for ALL document types (Phase 3.x) — a retitle
-    // changes the title only, never the slug, so [[slug]] relation links and
-    // backlinks stay valid. No rename cascade. See services/documents.ts.
-    const nextSlug: string | null = null;
+    // Slugs are immutable once a doc has a real name (so [[slug]] links stay
+    // valid — no rename cascade). The ONE exception, shared with the JSON path:
+    // a doc still on its create-time `untitled` / `untitled-N` placeholder slug
+    // adopts its first real title. See services/documents.ts::maybeReslugPlaceholder.
+    const nextSlug =
+      parsed.title !== existing.title
+        ? await maybeReslugPlaceholder(p.id, existing.slug, parsed.title)
+        : null;
     const updated = {
       ...existing,
       title: parsed.title,

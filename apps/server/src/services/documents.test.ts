@@ -94,6 +94,51 @@ test('retitling a work_item does NOT change its slug (slugs are immutable)', asy
   expect(updated.slug).toBe('fix-login-bug');
 });
 
+test('retitling an UNTITLED placeholder DOES re-slug (first real name wins, once)', async () => {
+  const { db, seed } = await makeTestApp();
+  const table = await getWorkItemsTable(db, seed.project.id);
+  const { document } = await createDocument({
+    workspace: seed.workspace, project: seed.project, table, actor: seed.user, token: null,
+    input: { type: 'work_item', title: 'Untitled', body: '', frontmatter: {}, status: null },
+  });
+  expect(document.slug).toBe('untitled');
+
+  // First real title: placeholder slug adopts it.
+  const named = await updateDocument({
+    workspace: seed.workspace, project: seed.project, fallbackTable: table, actor: seed.user,
+    existing: document, patch: { title: 'Onboard new client' },
+  });
+  expect(named.slug).toBe('onboard-new-client');
+
+  // Second rename: now it's a real slug → immutable, does NOT change again.
+  const renamed = await updateDocument({
+    workspace: seed.workspace, project: seed.project, fallbackTable: table, actor: seed.user,
+    existing: named, patch: { title: 'Onboard the new client properly' },
+  });
+  expect(renamed.slug).toBe('onboard-new-client');
+});
+
+test('retitling an untitled-N collision placeholder also re-slugs', async () => {
+  const { db, seed } = await makeTestApp();
+  const table = await getWorkItemsTable(db, seed.project.id);
+  // First Untitled → 'untitled'; second → 'untitled-2' (collision form is still a placeholder).
+  await createDocument({
+    workspace: seed.workspace, project: seed.project, table, actor: seed.user, token: null,
+    input: { type: 'work_item', title: 'Untitled', body: '', frontmatter: {}, status: null },
+  });
+  const { document: second } = await createDocument({
+    workspace: seed.workspace, project: seed.project, table, actor: seed.user, token: null,
+    input: { type: 'work_item', title: 'Untitled', body: '', frontmatter: {}, status: null },
+  });
+  expect(second.slug).toBe('untitled-2');
+
+  const named = await updateDocument({
+    workspace: seed.workspace, project: seed.project, fallbackTable: table, actor: seed.user,
+    existing: second, patch: { title: 'Real Title' },
+  });
+  expect(named.slug).toBe('real-title');
+});
+
 test('getDocument returns null for unknown slug', async () => {
   const { seed } = await makeTestApp();
   const row = await getDocument(seed.project.id, 'nope');
