@@ -180,6 +180,18 @@ describe('claude-code agent frontmatter', () => {
   test('still requires model for an API provider', () => {
     expect(() => agentFrontmatterSchema.parse({ provider: 'anthropic', tools: [], projects: ['*'] })).toThrow();
   });
+  test('accepts provider=claude-code with EMPTY-STRING model (UI clears model to "")', () => {
+    // The agent form commits `model: ''` when switching to the modelless
+    // Claude Code provider (provider-model-field.tsx). Empty string means
+    // "no model" — it must coerce to undefined, not trip z.string().min(1).
+    const parsed = agentFrontmatterSchema.parse({ provider: 'claude-code', model: '', tools: [], projects: ['*'] });
+    expect(parsed.provider).toBe('claude-code');
+    expect(parsed.model).toBeUndefined();
+  });
+  test('empty-string model still rejected for an API provider', () => {
+    // '' coerces to undefined → superRefine still requires a model for API providers.
+    expect(() => agentFrontmatterSchema.parse({ provider: 'anthropic', model: '', tools: [], projects: ['*'] })).toThrow();
+  });
   test('PATCH path (.innerType().partial()) still parses a partial agent frontmatter', () => {
     // proves the documents.ts:806 consumer fix works after the schema became ZodEffects
     const schema = agentFrontmatterSchema.innerType().partial();
