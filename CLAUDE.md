@@ -105,13 +105,18 @@ folio/
 
 ```bash
 bun install                       # Install all workspace deps
-bun dev                           # Run server + Vite dev together
-bun --filter=server dev           # Backend only
-bun --filter=web dev              # Frontend only
-bun --filter=server db:generate   # Generate Drizzle migration from schema diff
-bun --filter=server db:migrate    # Apply pending migrations
-bun --filter=server db:studio     # Open Drizzle Studio
-bun test                          # All unit tests
+bun dev                                  # Run server + Vite dev together
+bun run --filter @folio/server dev        # Backend only (@folio/server, NOT "server")
+bun run --filter @folio/web dev           # Frontend only
+bun run db:generate                       # Generate Drizzle migration (root script → @folio/server)
+bun run db:migrate                        # Apply pending migrations (root script → @folio/server)
+bun run db:studio                         # Open Drizzle Studio (root script → @folio/server)
+# Tests: run server/shared from their own dir — root-cwd `bun test apps/server`
+# triggers a spurious ~650-fail module-init cascade (a cwd quirk, not a regression).
+cd apps/server && bun test               # server unit tests (1011)
+cd packages/shared && bun test           # shared unit tests (63)
+cd apps/web && npx vitest run            # web tests (vitest, NOT bun test)
+bun x tsc --noEmit                       # typecheck — run from EACH of apps/server, apps/web, packages/shared (no root tsconfig)
 bun run build                     # Build React → embed → bun compile single binary
 docker build -f docker/Dockerfile -t folio:dev .
 ```
