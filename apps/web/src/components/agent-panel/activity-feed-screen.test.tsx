@@ -66,10 +66,15 @@ describe('ActivityFeedScreen', () => {
       ),
     );
     await user.click(screen.getByText('bot'));
+    // New nav stays on the current route (`to: '.'`) and merges `?doc=`/`?tab=`
+    // so the layout-mounted slideover opens on the agent's Runs tab.
     expect(navigateMock).toHaveBeenCalledWith({
-      to: '/w/$wslug/agents',
-      params: { wslug: 'acme' },
-      search: { doc: 'bot', tab: 'runs' },
+      to: '.',
+      search: expect.any(Function),
     });
+    const { search } = navigateMock.mock.calls[0]![0] as {
+      search: (prev: Record<string, unknown>) => Record<string, unknown>;
+    };
+    expect(search({ existing: 'kept' })).toEqual({ existing: 'kept', doc: 'bot', tab: 'runs' });
   });
 });

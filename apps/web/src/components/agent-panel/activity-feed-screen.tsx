@@ -21,9 +21,8 @@ export function ActivityFeedScreen({ wslug }: Props) {
 
   const openAgentRuns = (item: ActivityItem) => {
     void navigate({
-      to: '/w/$wslug/agents',
-      params: { wslug },
-      search: { doc: item.agent, tab: 'runs' },
+      to: '.',
+      search: (prev) => ({ ...(prev as Record<string, unknown>), doc: item.agent, tab: 'runs' }),
     });
   };
 
