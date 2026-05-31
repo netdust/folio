@@ -154,7 +154,8 @@ export function DocumentSlideover({ wslug, pslug }: Props) {
                   <Icon icon={Clipboard} size={14} />
                   Copy MD
                 </Button>
-                <ModeToggle mode={mode} onChange={setMode} />
+                {/* Rich/Raw toggle only where the body editor renders (Fields). */}
+                {tab === 'fields' ? <ModeToggle mode={mode} onChange={setMode} /> : null}
                 <LogActivityButton wslug={wslug} pslug={pslug} slug={doc.slug} />
                 <div aria-hidden className="mx-0.5 h-4 w-px bg-border-light" />
                 <Popover open={moreOpen} onOpenChange={setMoreOpen}>

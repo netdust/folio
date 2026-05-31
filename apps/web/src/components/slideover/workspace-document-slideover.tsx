@@ -139,8 +139,15 @@ export function WorkspaceDocumentSlideover({ wslug }: Props) {
               <>
                 <HeaderTabs value={tab} items={tabItems} onChange={selectTab} />
                 <div aria-hidden className="mx-0.5 h-4 w-px bg-border-light" />
-                <ModeToggle mode={mode} onChange={setMode} />
-                <div aria-hidden className="mx-0.5 h-4 w-px bg-border-light" />
+                {/* The Edit/Raw MD toggle only makes sense where the Milkdown
+                    body editor renders: agents on the Fields tab. Triggers use
+                    a form (no body editor), and Activity/Runs have no editor. */}
+                {tab === 'fields' && doc.type === 'agent' ? (
+                  <>
+                    <ModeToggle mode={mode} onChange={setMode} />
+                    <div aria-hidden className="mx-0.5 h-4 w-px bg-border-light" />
+                  </>
+                ) : null}
                 <Popover open={moreOpen} onOpenChange={setMoreOpen}>
                   <PopoverTrigger asChild>
                     <button
@@ -267,36 +274,43 @@ function SlideoverBody({
       <header className="flex-shrink-0 pb-2">
         <div className="font-mono text-[11px] text-fg-3">/{doc.slug}</div>
       </header>
-      {/* FIELDS tab: the form (capped) sits ABOVE the body editor. ACTIVITY /
-          RUNS tabs: a single full-height panel, NO body editor (Milkdown only
-          belongs on Fields). */}
-      {tab === 'fields' ? (
+      {/* FIELDS tab.
+          • Triggers: a single full-height form — no Milkdown body editor, so
+            the form fills the pane instead of being capped at 40vh above an
+            empty editor area.
+          • Agents: the frontmatter form (capped) sits ABOVE the body editor.
+          ACTIVITY / RUNS tabs render a full-height panel with no editor. */}
+      {tab === 'fields' && doc.type === 'trigger' ? (
+        <div
+          data-testid="workspace-slideover-tab-content"
+          className="folio-scroll min-h-0 flex-1 overflow-y-auto pt-3"
+        >
+          <TriggerFieldsTabPane doc={doc} wslug={wslug} onPatch={onPatch} />
+        </div>
+      ) : null}
+      {tab === 'fields' && doc.type !== 'trigger' ? (
         <>
           <div
             data-testid="workspace-slideover-tab-content"
             className="folio-scroll shrink-0 max-h-[40vh] overflow-y-auto pb-3 pt-3"
           >
-            {doc.type === 'trigger' ? (
-              <TriggerFieldsTabPane doc={doc} wslug={wslug} onPatch={onPatch} />
-            ) : (
-              <FrontmatterForm
-                wslug={wslug}
-                // FrontmatterForm requires a pslug for the AssigneePicker branch;
-                // agents and triggers don't carry an `assignee` field so the
-                // AssigneePicker is never rendered. Empty string is safe.
-                pslug=""
-                type={doc.type}
-                status={null}
-                statuses={[]}
-                frontmatter={doc.frontmatter}
-                pinnedFields={[]}
-                onStatusCommit={() => {
-                  /* no-op: agents/triggers have no status */
-                }}
-                onFrontmatterCommit={(p) => void onPatch({ frontmatter: p }, Object.keys(p))}
-                pendingKeys={pendingKeys}
-              />
-            )}
+            <FrontmatterForm
+              wslug={wslug}
+              // FrontmatterForm requires a pslug for the AssigneePicker branch;
+              // agents don't carry an `assignee` field so the AssigneePicker is
+              // never rendered. Empty string is safe.
+              pslug=""
+              type={doc.type}
+              status={null}
+              statuses={[]}
+              frontmatter={doc.frontmatter}
+              pinnedFields={[]}
+              onStatusCommit={() => {
+                /* no-op: agents have no status */
+              }}
+              onFrontmatterCommit={(p) => void onPatch({ frontmatter: p }, Object.keys(p))}
+              pendingKeys={pendingKeys}
+            />
           </div>
           <div
             data-testid="workspace-slideover-editor"

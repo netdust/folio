@@ -387,6 +387,13 @@ describe('WorkspaceDocumentSlideover', () => {
 
     // FrontmatterForm's "Add field" affordance must be absent.
     expect(screen.queryByRole('button', { name: /Add field/i })).toBeNull();
+
+    // A trigger has NO Milkdown body editor on Fields, so the Edit/Raw MD mode
+    // toggle must be hidden and the body-editor area must not render — the form
+    // fills the pane instead of sitting capped above an empty editor.
+    expect(screen.queryByRole('button', { name: /^Edit$/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Raw MD/ })).toBeNull();
+    expect(document.querySelector('[data-testid="workspace-slideover-editor"]')).toBeNull();
   });
 
   it('agent slideover Fields tab still renders FrontmatterForm (not TriggerForm)', async () => {
