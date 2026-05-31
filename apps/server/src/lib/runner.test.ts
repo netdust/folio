@@ -35,7 +35,7 @@ import { newApiToken } from './auth.ts';
 import { encryptSecret } from './crypto.ts';
 import { HTTPError } from './http.ts';
 import { mcpInvalidParams } from './mcp-errors.ts';
-import { rejectRun, runAgent, runAgentResume } from './runner.ts';
+import { __setCcSpawnForTest, rejectRun, runAgent, runAgentResume } from './runner.ts';
 
 type TestDB = Awaited<ReturnType<typeof makeTestApp>>['db'];
 
@@ -508,9 +508,9 @@ describe('runAgent pre-flight checks', () => {
   test('claude-code — no ai_key row and no provider health check fire (neither no_ai_key nor provider_error)', async () => {
     // claude-code is keyless/local. A run with provider='claude-code' and NO
     // ai_keys row must NOT be killed at step 1 (no_ai_key) or step 5
-    // (provider_error). Install a no-op stub so the stream loop doesn't also
-    // throw provider_error (the real cc executor lands in Task 7); the ONLY
-    // meaningful assertions are about the two preflight reasons.
+    // (provider_error). Wire a no-op spawn override so ccExecute terminates
+    // cleanly without spawning a real process. The ONLY meaningful assertions
+    // are about the two preflight reasons.
     // Task 4: FOLIO_CLAUDE_CODE_ENABLED must be on for this test — the new
     // step-0 gate would otherwise short-circuit with claude_code_disabled before
     // reaching the key/health checks this test targets.
@@ -520,25 +520,19 @@ describe('runAgent pre-flight checks', () => {
       runOverrides: { provider: 'claude-code' },
     });
 
-    // Register a stub for 'claude-code' so getProvider() doesn't throw and the
-    // stream loop terminates cleanly. This also proves that, once preflight
-    // passes, the run can proceed through to the stream step.
-    const stub: AIProvider = {
-      async *stream() {
-        yield { type: 'text', delta: 'ok' } as ProviderEvent;
-        yield { type: 'done', reason: 'stop' } as ProviderEvent;
-      },
-      async testKey() {
-        return { ok: true as const };
-      },
-    };
-    providerTestHatch.overrideRegistry('claude-code', async () => stub);
-
     const prevCcEnabled = env.FOLIO_CLAUDE_CODE_ENABLED;
     (env as { FOLIO_CLAUDE_CODE_ENABLED: boolean }).FOLIO_CLAUDE_CODE_ENABLED = true;
+    // Wire a stub spawn that exits 0 so ccExecute completes normally without
+    // spawning the real claude CLI (Task 7: ccExecute is now the execution path).
+    __setCcSpawnForTest(() => ({
+      stdoutText: async () => 'ok',
+      exited: Promise.resolve(0),
+      kill: () => {},
+    }));
     try {
       await runAgent({ runId: run.id });
     } finally {
+      __setCcSpawnForTest(undefined);
       (env as { FOLIO_CLAUDE_CODE_ENABLED: boolean }).FOLIO_CLAUDE_CODE_ENABLED = prevCcEnabled;
     }
 
@@ -1833,6 +1827,81 @@ describe('rejectRun', () => {
       threw = true;
     }
     expect(threw).toBe(true);
+  });
+});
+
+// ==========================================================================
+// claude-code branch
+// ==========================================================================
+
+describe('runAgent claude-code branch', () => {
+  test('claude-code run: end-to-end completes, posts result, stores transcript', async () => {
+    const { db, workspace, project, user, agent, parent, run } = await scaffold({
+      withAiKey: false,
+      agentOverrides: { provider: 'claude-code', requires_approval: false },
+      runOverrides: { provider: 'claude-code' },
+    });
+
+    const prevCc = env.FOLIO_CLAUDE_CODE_ENABLED;
+    (env as { FOLIO_CLAUDE_CODE_ENABLED: boolean }).FOLIO_CLAUDE_CODE_ENABLED = true;
+    __setCcSpawnForTest(() => ({
+      stdoutText: async () => 'did health check\nALL GOOD',
+      exited: Promise.resolve(0),
+      kill: () => {},
+    }));
+    try {
+      await runAgent({ runId: run.id });
+
+      // status=completed
+      const fm = await readRun(db, run.id);
+      expect(fm.status).toBe('completed');
+
+      // body holds transcript
+      const runRow = await db.query.documents.findFirst({
+        where: and(eq(documents.id, run.id), eq(documents.type, 'agent_run')),
+      });
+      expect(runRow!.body).toContain('did health check');
+
+      // a kind=result comment exists on the parent with the final result
+      const results = await listKind(db, parent.id, 'result');
+      expect(results.length).toBeGreaterThan(0);
+      expect(results[0]!.body).toContain('ALL GOOD');
+
+      // keep TypeScript happy — suppress unused variable warnings
+      expect(workspace.id).toBeTruthy();
+      expect(project.id).toBeTruthy();
+      expect(user.id).toBeTruthy();
+      expect(agent.id).toBeTruthy();
+    } finally {
+      __setCcSpawnForTest(undefined);
+      (env as { FOLIO_CLAUDE_CODE_ENABLED: boolean }).FOLIO_CLAUDE_CODE_ENABLED = prevCc;
+    }
+  });
+
+  test('claude-code run: failed executor transitions run to failed', async () => {
+    const { db, run } = await scaffold({
+      withAiKey: false,
+      agentOverrides: { provider: 'claude-code', requires_approval: false },
+      runOverrides: { provider: 'claude-code' },
+    });
+
+    const prevCc = env.FOLIO_CLAUDE_CODE_ENABLED;
+    (env as { FOLIO_CLAUDE_CODE_ENABLED: boolean }).FOLIO_CLAUDE_CODE_ENABLED = true;
+    __setCcSpawnForTest(() => ({
+      stdoutText: async () => 'error: something went wrong',
+      exited: Promise.resolve(1),
+      kill: () => {},
+    }));
+    try {
+      await runAgent({ runId: run.id });
+
+      const fm = await readRun(db, run.id);
+      expect(fm.status).toBe('failed');
+      expect(fm.error_reason).toBe('provider_error');
+    } finally {
+      __setCcSpawnForTest(undefined);
+      (env as { FOLIO_CLAUDE_CODE_ENABLED: boolean }).FOLIO_CLAUDE_CODE_ENABLED = prevCc;
+    }
   });
 });
 

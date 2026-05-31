@@ -44,8 +44,10 @@ import {
   checkRunRateLimits,
   getActiveRun,
   incrementTokens,
+  setRunBody,
   transitionRun,
 } from '../services/agent-runs.ts';
+import { runClaudeCode, type SpawnFn } from './cc-executor.ts';
 import { type AuthorContext, createComment, listComments } from '../services/comments.ts';
 import {
   type AgentRunFrontmatter,
@@ -89,6 +91,13 @@ const PROVIDER_LABELS: Record<ProviderName, string> = {
   openrouter: 'OpenRouter',
   ollama: 'Ollama',
 };
+
+// Test-only spawn override for the claude-code branch (mirrors provider.ts's
+// __INTERNAL_TEST_ONLY__ hatch).
+let __ccSpawnOverride: SpawnFn | undefined;
+export function __setCcSpawnForTest(fn: SpawnFn | undefined): void {
+  __ccSpawnOverride = fn;
+}
 
 // ---------------------------------------------------------------------------
 // Loaded context
@@ -151,8 +160,12 @@ export async function runAgent(args: { runId: string }): Promise<void> {
     // --- stream consumption (outer round-loop). buildInitialMessages is
     // called HERE (not inside runLoop) so runLoop is reusable by
     // runAgentResume, which builds a different message history.
-    const messages = await buildInitialMessages(ctx);
-    await runLoop(ctx, messages);
+    if (ctx.fm.provider === 'claude-code') {
+      await ccExecute(ctx);
+    } else {
+      const messages = await buildInitialMessages(ctx);
+      await runLoop(ctx, messages);
+    }
   } catch (err) {
     // Top-level containment. Any unhandled throw → fail the run with a
     // sanitized detail. If the last-resort transition itself races (run
@@ -794,6 +807,37 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
 // ---------------------------------------------------------------------------
 // Terminal handling
 // ---------------------------------------------------------------------------
+
+/**
+ * claude-code execution branch. CC runs its own agentic loop to completion;
+ * we capture the transcript onto the run body, post the final result as a
+ * kind=result comment, and transition the run. Pre-run approval
+ * (requires_approval) is handled by the existing awaiting_approval gate before
+ * this point. v1 passes no MCP token (mcpToken: '') — the fresh-token mint is
+ * a fast-follow (Task 7b).
+ */
+async function ccExecute(ctx: RunContext): Promise<void> {
+  const outcome = await runClaudeCode(
+    {
+      systemPrompt: ctx.fm.system_prompt,
+      model: ctx.fm.model && ctx.fm.model.length > 0 ? ctx.fm.model : undefined,
+      mcpToken: '',
+      cwd: process.cwd(),
+    },
+    __ccSpawnOverride ? { spawn: __ccSpawnOverride } : {},
+  );
+
+  // Always persist the transcript (even on failure) for audit.
+  await setRunBody(ctx.run.id, outcome.transcript);
+
+  if (outcome.status === 'failed') {
+    await failRun(ctx, runErrorReasonSchema.enum.provider_error, outcome.detail);
+    return;
+  }
+
+  await postAgentComment(ctx, outcome.result, 'result');
+  await transitionRun(ctx.run.id, { newStatus: 'completed', actor: ctx.transitionActor });
+}
 
 /**
  * Write the accumulated text as the final `kind=result` comment, then
