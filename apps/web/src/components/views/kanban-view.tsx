@@ -12,6 +12,7 @@ import { KanbanCard } from '../kanban/kanban-card.tsx';
 import { BoardToolbar, type BoardSort } from '../kanban/board-toolbar.tsx';
 import { buildColumns } from '../kanban/board-grouping.ts';
 import { computeReorderPosition } from '../kanban/board-reorder.ts';
+import { resolveDrop, coerceGroupValue } from '../kanban/board-drag.ts';
 import { EmptyState } from './empty-state.tsx';
 import { KanbanSkeleton } from './kanban-skeleton.tsx';
 
@@ -112,7 +113,10 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
     if (value === null) return;
     try {
       const created = await create.mutateAsync({ type: 'work_item', title: 'Untitled' });
-      const patch = groupBy === 'status' ? { status: value } : { frontmatter: { [groupBy]: value } };
+      const patch =
+        groupBy === 'status'
+          ? { status: value }
+          : { frontmatter: { [groupBy]: coerceGroupValue(value, groupField?.type) } };
       await update.mutateAsync({ slug: created.slug, patch });
       void navigate({ to: '.', search: { ...search, doc: created.slug }, replace: false });
     } catch (err) {
@@ -134,52 +138,65 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
   // so reordering would be meaningless.
   const reorderEnabled = effectiveSort === null;
 
+  // Builds the grouping-field patch for moving a card into `colValue`.
+  // Status grouping writes the status column directly; field grouping coerces
+  // the (always-string) column value back to the field's declared type so we
+  // don't flip e.g. number 3 into the string "3".
+  const groupingPatch = (colValue: string | null): Record<string, unknown> =>
+    groupBy === 'status'
+      ? { status: colValue }
+      : { frontmatter: { [groupBy]: coerceGroupValue(colValue, groupField?.type) } };
+
+  // Computes the board_position for dropping the active card into `col` at the
+  // slot occupied by `overDocId` (drop-before). `null` overDocId appends.
+  const dropSlotPosition = (col: { docIds: string[] }, activeId: string, overDocId: string | null): string => {
+    const idsWithoutActive = col.docIds.filter((id) => id !== activeId);
+    const idx = overDocId === null ? idsWithoutActive.length : idsWithoutActive.indexOf(overDocId);
+    const targetIndex = idx === -1 ? idsWithoutActive.length : idx;
+    const positions = idsWithoutActive.map((id) => docsById.get(id)?.boardPosition ?? null);
+    return computeReorderPosition(positions, targetIndex);
+  };
+
   const onDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event;
     if (!over) return;
     const overId = String(over.id);
+    const activeId = String(active.id);
+    const slug = (active.data.current as { slug?: string } | undefined)?.slug;
+    if (!slug) return;
 
-    // over.id is a doc id (not col-*) → within-list reorder, only in manual mode.
-    if (reorderEnabled && !overId.startsWith('col-')) {
-      const activeId = String(active.id);
-      const overDocId = overId;
-      if (activeId === overDocId) return;
-      // Find the column containing the over card.
-      const col = columns.find((c) => c.docIds.includes(overDocId));
-      if (!col) return;
-      // Build display-ordered positions of the column WITHOUT the dragged card.
-      const idsWithoutActive = col.docIds.filter((id) => id !== activeId);
-      const overIndexInFiltered = idsWithoutActive.indexOf(overDocId);
-      // Drop AT the over card's slot (before it). Use that index.
-      const positions = idsWithoutActive.map((id) => docsById.get(id)?.boardPosition ?? null);
-      const newPos = computeReorderPosition(positions, overIndexInFiltered);
-      const reorderSlug = (active.data.current as { slug?: string } | undefined)?.slug;
-      if (!reorderSlug) return;
-      setPendingSlugs((p) => new Set(p).add(reorderSlug));
-      try {
-        await update.mutateAsync({ slug: reorderSlug, patch: { boardPosition: newPos } });
-      } catch (err) {
-        toast.error(formatApiError(err));
-      } finally {
-        setPendingSlugs((p) => {
-          const n = new Set(p);
-          n.delete(reorderSlug);
-          return n;
-        });
-      }
-      return;
+    const overIsColumn = overId.startsWith('col-');
+    // Destination column: either the col-* droppable, or the column owning the
+    // over-card (manual mode drops land on cards inside per-column contexts).
+    let destCol: { value: string | null; docIds: string[] } | undefined;
+    if (overIsColumn) {
+      const raw = overId.slice('col-'.length);
+      const value = raw === '__unset__' ? null : raw;
+      destCol = columns.find((c) => c.value === value) ?? { value, docIds: [] };
+    } else {
+      destCol = columns.find((c) => c.docIds.includes(overId));
+    }
+    if (!destCol) return;
+    const destColumnValue = destCol.value;
+
+    const activeDoc = docsById.get(activeId);
+    const activeGroupValue = activeDoc ? currentGroupValue(activeDoc) : null;
+
+    const action = resolveDrop({ reorderEnabled, overIsColumn, activeGroupValue, destColumnValue });
+    if (action.kind === 'none') return;
+    if (action.kind === 'reorder' && activeId === overId) return;
+
+    let patch: Record<string, unknown>;
+    if (action.kind === 'reorder') {
+      patch = { boardPosition: dropSlotPosition(destCol, activeId, overId) };
+    } else if (action.kind === 'regroup') {
+      patch = groupingPatch(destColumnValue);
+    } else {
+      // regroup-reorder: land the card where dropped in the destination column.
+      const overDocId = overIsColumn ? null : overId;
+      patch = { ...groupingPatch(destColumnValue), boardPosition: dropSlotPosition(destCol, activeId, overDocId) };
     }
 
-    if (!overId.startsWith('col-')) return;
-    const raw = overId.slice('col-'.length);
-    const colValue = raw === '__unset__' ? null : raw;
-    const data = active.data.current as { slug?: string } | undefined;
-    const slug = data?.slug;
-    if (!slug) return;
-    // The draggable id is the doc id (see KanbanCard's useDraggable).
-    const doc = docsById.get(String(active.id));
-    if (doc && currentGroupValue(doc) === colValue) return;
-    const patch = groupBy === 'status' ? { status: colValue } : { frontmatter: { [groupBy]: colValue } };
     setPendingSlugs((p) => new Set(p).add(slug));
     try {
       await update.mutateAsync({ slug, patch });

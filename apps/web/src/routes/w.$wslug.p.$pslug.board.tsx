@@ -6,8 +6,6 @@ export const Route = createFileRoute('/w/$wslug/p/$pslug/board')({
   validateSearch: z.object({
     doc: z.string().optional(),
     view: z.string().min(1).optional(),
-    sort: z.string().min(1).optional(),
-    dir: z.enum(['asc', 'desc']).optional(),
   }),
   component: BoardRoute,
 });
