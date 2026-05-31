@@ -129,24 +129,23 @@ When the runner poller claims a `planning` run whose parent agent has `provider:
 4. The full session transcript is captured and written to the run document's `body` field via `setRunBody`.
 5. When the process exits, the run transitions to `completed` (or `failed` on non-zero exit), and the final result is posted as a `kind=result` comment on the parent document.
 
-### v1 known gaps (fast-follow / Task 7b)
+### MCP callback (CC writes back into Folio) — wired (Task 7b)
 
-These are deferred to a fast-follow; the runner still works without them:
+A `claude-code` run **can** call back into Folio's MCP tools (`update_document`, `create_comment`, etc.) during the run. For each run, `ccExecute`:
 
-- **No MCP callback token.** The env contract for `FOLIO_MCP_TOKEN` (a scoped token CC reads to call back into Folio's own MCP server) is documented below but not yet wired — CC is spawned with an empty token value, so it cannot write back into Folio over MCP in v1. Task 7b mints and injects this token.
+1. Mints a **short-lived, scoped Bearer token** that mirrors the run's agent token — same `scopes`, `agentId`, and project allow-list (`projectIds`). Identical permission envelope to an API-loop agent; CC is not a privilege backdoor.
+2. Spawns `claude` with `--mcp-config '<json>' --strict-mcp-config`, where the config registers one HTTP MCP server pointing at `${PUBLIC_URL}/mcp` with `Authorization: Bearer <minted token>`. `--strict-mcp-config` means CC uses ONLY this server (not the operator's other `~/.claude` MCP servers) for Folio calls.
+3. **Revokes** the token (deletes the row) in a `finally` block — on success, failure, or throw. The agent-delete cascade is the backstop.
+
+So CC's Folio-side writes are governed by the agent's exact scopes; its host-side powers (SSH, `wp`, files) remain governed by the machine, outside Folio's envelope.
+
+### v1 known gaps (fast-follow)
+
+These are deferred; the runner still works without them:
+
 - **Runs in Folio's own cwd.** The CLI is spawned from the server's working directory. Host context (project path, etc.) must come from the agent's system prompt or tools — there is no automatic cwd injection yet.
 - **No mid-run cancellation.** Once the `claude` process is spawned, there is no in-flight kill mechanism. A cancellation request transitions the run row to `cancelled` in the database but does not terminate the subprocess.
 - **Human-approval transition deferred.** The `planning → awaiting_approval` transition (so a `requires_approval` agent actually pauses for a human) is not wired in this branch; only the poller-skip half of the gate exists. When that transition lands, the resume path (`runAgentResume`) must also branch to `ccExecute` for claude-code — see the TODO on that function.
-
-### FOLIO_MCP_TOKEN env contract
-
-When Task 7b ships, the server will:
-
-1. Mint a short-lived, scoped Bearer token for the run.
-2. Inject it as `FOLIO_MCP_TOKEN=<token>` in the subprocess environment.
-3. CC reads this env var to authenticate against `PUBLIC_URL/mcp` so it can call Folio's MCP tools (read/write documents, post comments, etc.) during the run.
-
-Until then, `FOLIO_MCP_TOKEN` is not set and CC cannot call back into Folio over MCP.
 
 ## Projects (`/api/v1/w/:wslug/projects`, `/api/v1/w/:wslug/p/:pslug`)
 
