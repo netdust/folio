@@ -1,14 +1,15 @@
 import { describe, test, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { Activity, Bot, Play } from 'lucide-react';
 import { PanelHeader, type PanelTab } from './panel-header.tsx';
 
 type Screen = 'activity' | 'run' | 'agents';
 
 const tabs: PanelTab<Screen>[] = [
-  { value: 'activity', icon: 'A', label: 'Activity' },
-  { value: 'run', icon: 'R', label: 'Run' },
-  { value: 'agents', icon: 'G', label: 'Agents' },
+  { value: 'activity', icon: Activity, label: 'Activity' },
+  { value: 'run', icon: Play, label: 'Run' },
+  { value: 'agents', icon: Bot, label: 'Agents' },
 ];
 
 describe('PanelHeader', () => {

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Activity, Bot, Play } from 'lucide-react';
 import { agentPanelBus, type AgentPanelScreen, type AgentPanelState } from '../../lib/agent-panel-bus.ts';
 import { PanelHeader, type PanelTab } from './panel-header.tsx';
 import { ActivityFeedScreen } from './activity-feed-screen.tsx';
@@ -6,9 +7,9 @@ import { AgentRunLauncher } from './agent-run-launcher.tsx';
 import { AgentList } from './agent-list.tsx';
 
 const TABS: PanelTab<AgentPanelScreen>[] = [
-  { value: 'activity', icon: '⚡', label: 'Activity' },
-  { value: 'run', icon: '▶', label: 'Run' },
-  { value: 'agents', icon: '🤖', label: 'Agents' },
+  { value: 'activity', icon: Activity, label: 'Activity' },
+  { value: 'run', icon: Play, label: 'Run' },
+  { value: 'agents', icon: Bot, label: 'Agents' },
 ];
 
 export function AgentCockpitPanel({ wslug }: { wslug: string }) {

@@ -1,9 +1,9 @@
+import { type LucideIcon, X } from 'lucide-react';
 import { Icon } from '../ui/icon.tsx';
-import { X } from 'lucide-react';
 
 export interface PanelTab<T extends string> {
   value: T;
-  icon: string;
+  icon: LucideIcon;
   label: string;
 }
 
@@ -33,13 +33,13 @@ export function PanelHeader<T extends string>({
             aria-label={t.label}
             aria-pressed={active === t.value}
             onClick={() => onTab(t.value)}
-            className={`rounded px-2 py-1 text-sm ${
+            className={`grid h-7 w-7 place-items-center rounded ${
               active === t.value
                 ? 'bg-content text-fg shadow-sm'
                 : 'text-fg-3 hover:text-fg-2'
             }`}
           >
-            {t.icon}
+            <Icon icon={t.icon} size={16} />
           </button>
         ))}
       </div>

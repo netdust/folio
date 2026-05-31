@@ -1,7 +1,7 @@
 import { createFileRoute, Outlet, useNavigate, useParams, useRouterState } from '@tanstack/react-router';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQueries, useQueryClient } from '@tanstack/react-query';
-import { Bot, Search } from 'lucide-react';
+import { Search } from 'lucide-react';
 import { z } from 'zod';
 import { toast } from 'sonner';
 import { useLogout, useMe } from '../lib/api/auth.ts';
@@ -61,12 +61,8 @@ const TOOLS: NavItem[] = [
     kbd: modKeyHint('K'),
     onClick: openCommandPalette,
   },
-  {
-    id: 'agents',
-    label: 'Agents',
-    lucideIcon: Bot,
-    onClick: () => agentPanelBus.toggle(),
-  },
+  // The agent cockpit panel is toggled from the workspace dropdown ("Agents")
+  // and Cmd-K ("Run agent…") — no rail tool, to avoid a redundant entry.
 ];
 
 function WorkspaceLayout() {
