@@ -253,6 +253,13 @@ export const documents = sqliteTable(
   (t) => ({
     slugIdx: uniqueIndex('documents_project_slug_idx').on(t.projectId, t.slug),
     typeIdx: index('documents_project_type_idx').on(t.projectId, t.type),
+    // NOTE: the REAL shape of this index is PARTIAL — `WHERE project_id IS NULL`
+    // — set by migration 0017 (see the F15 note below). It uniquely constrains
+    // only workspace-SCOPED docs (agents/triggers, project_id NULL). Drizzle's
+    // builder can't express the WHERE clause, so this declaration is the
+    // non-partial fallback; the migration is the source of truth. Without the
+    // partial predicate it wrongly collided project-scoped work_item/page slugs
+    // across projects in a workspace (the "New work item" 500 — 0017 fixes it).
     workspaceSlugIdx: uniqueIndex('documents_workspace_type_slug_idx').on(
       t.workspaceId,
       t.type,
@@ -271,6 +278,10 @@ export const documents = sqliteTable(
     //  - `documents_runs_by_status_idx`  (migration 0012, list-runs-by-table)
     //  - `documents_runs_pending_idx`    (migration 0012, claimNextPlanningRun)
     //  - `documents_runs_by_chain_idx`   (migration 0012, checkChainGuards)
+    //  - `documents_workspace_type_slug_idx` is RECREATED PARTIAL
+    //      (`WHERE project_id IS NULL`) by migration 0017 — see the note on
+    //      workspaceSlugIdx above. The builder declares it non-partial; the
+    //      migration narrows it to workspace-scoped (agent/trigger) rows.
     // DO NOT run `bun --filter=server db:generate` without checking the
     // generated diff for `DROP INDEX` statements against any of these.
     // The integration test suite + the EXPLAIN volume tests in
