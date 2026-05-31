@@ -22,7 +22,7 @@ function setup() {
     validateSearch: z.object({ doc: z.string().optional() }),
     component: () => {
       const { wslug, pslug } = board.useParams();
-      return <KanbanView wslug={wslug} pslug={pslug} />;
+      return <KanbanView wslug={wslug} pslug={pslug} tslug="work-items" />;
     },
   });
   const router = createRouter({
@@ -66,7 +66,7 @@ describe('KanbanView', () => {
           { status: 200, headers: { 'content-type': 'application/json' } },
         );
       }
-      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+      return new Response('{"data":[]}', { status: 200, headers: { 'content-type': 'application/json' } });
     }));
 
     const { queryClient, router } = setup();
@@ -111,7 +111,7 @@ describe('KanbanView', () => {
             { status: 200, headers: { 'content-type': 'application/json' } },
           );
         }
-        return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+        return new Response('{"data":[]}', { status: 200, headers: { 'content-type': 'application/json' } });
       }),
     );
 
@@ -143,12 +143,90 @@ describe('KanbanView', () => {
           { status: 200, headers: { 'content-type': 'application/json' } },
         );
       }
-      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+      return new Response('{"data":[]}', { status: 200, headers: { 'content-type': 'application/json' } });
     }));
 
     const { queryClient, router } = setup();
     render(<QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider>);
     await userEvent.click(await screen.findByText('Card A'));
     await waitFor(() => expect(router.state.location.search).toEqual({ doc: 'a' }));
+  });
+
+  it('groups by a field (view.groupBy) using the field options as columns', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>(async (url) => {
+        const u = String(url);
+        if (u.includes('/statuses')) {
+          return new Response(
+            JSON.stringify({ data: [{ id: 's1', key: 'todo', name: 'Todo', color: '#6EAFFF', category: 'unstarted', order: 1 }] }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        if (u.includes('/views')) {
+          return new Response(
+            JSON.stringify({
+              data: [
+                {
+                  id: 'v1',
+                  name: 'Board',
+                  type: 'kanban',
+                  filters: {},
+                  sort: null,
+                  groupBy: 'priority',
+                  visibleFields: null,
+                  columnOrder: null,
+                  isDefault: true,
+                  order: 1,
+                },
+              ],
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        if (u.includes('/fields')) {
+          return new Response(
+            JSON.stringify({
+              data: [
+                { id: 'f1', key: 'priority', type: 'select', label: 'Priority', options: ['Low', 'High'], required: false, order: 1 },
+              ],
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        if (u.includes('/documents')) {
+          return new Response(
+            JSON.stringify({
+              data: {
+                data: [
+                  { id: 'd1', slug: 'a', type: 'work_item', title: 'Card A', status: null, parentId: null, frontmatter: { priority: 'High' }, createdAt: '', updatedAt: new Date().toISOString() },
+                ],
+                nextCursor: null,
+              },
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        return new Response('{"data":[]}', { status: 200, headers: { 'content-type': 'application/json' } });
+      }),
+    );
+
+    const { queryClient, router } = setup();
+    render(<QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider>);
+    // Columns come from the field options, not statuses. Locate columns via the
+    // add-button aria-label which is unambiguous (the card's priority badge also
+    // renders the text "High", so a plain text query would be ambiguous).
+    const lowHeader = await screen.findByLabelText('New work item in Low');
+    const highHeader = await screen.findByLabelText('New work item in High');
+    expect(lowHeader).toBeInTheDocument();
+    expect(highHeader).toBeInTheDocument();
+    // The card with priority=High renders under the "High" column.
+    const cardA = await screen.findByText('Card A');
+    expect(cardA).toBeInTheDocument();
+    const highColumn = highHeader.closest('div.flex.w-\\[280px\\]');
+    const lowColumn = lowHeader.closest('div.flex.w-\\[280px\\]');
+    expect(highColumn).not.toBeNull();
+    expect(highColumn!.textContent).toContain('Card A');
+    expect(lowColumn!.textContent).not.toContain('Card A');
   });
 });

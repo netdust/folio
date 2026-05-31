@@ -9,5 +9,5 @@ export const Route = createFileRoute('/w/$wslug/p/$pslug/board')({
 
 function BoardRoute() {
   const { wslug, pslug } = Route.useParams();
-  return <KanbanView wslug={wslug} pslug={pslug} />;
+  return <KanbanView wslug={wslug} pslug={pslug} tslug="work-items" />;
 }
