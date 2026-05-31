@@ -160,6 +160,13 @@ describe('claude-code agent', () => {
 Run: `bun test apps/server/src/lib/agent-run-schema.test.ts apps/server/src/lib/agent-schema.test.ts`
 Expected: FAIL — `'claude-code'` rejected; model still required.
 
+> **PLAN CORRECTION (2026-05-31, controller ground-truth gate) — three drifts vs source:**
+>
+> 1. **`ProviderName` ≠ `providerSchema`.** `apps/server/src/services/agent-runs.ts:1129` defines a SEPARATE hand-maintained `ProviderName = 'anthropic'|'openai'|'openrouter'|'ollama'` + `ALL_PROVIDERS` — used ONLY by provider-HEALTH-checking (`checkProviderHealth`, `getProviderHealth`). `claude-code` is keyless/local and has NO health to check, so it must **NOT** be added to `ProviderName`/`ALL_PROVIDERS`. Add it ONLY to `providerSchema` (agent-run-schema) + the agent `provider` enum. The plan's earlier "add `claude-code` to `PROVIDER_LABELS`" was WRONG.
+> 2. **`PROVIDER_LABELS` (runner.ts:86) is typed `Record<ProviderName, string>`** — since `ProviderName` stays the 4 API providers, do NOT add a claude-code key (it would be a type error). Instead make the lookup tolerate claude-code where it's indexed by `fm.provider` (e.g. `PROVIDER_LABELS[fm.provider as ProviderName] ?? 'Claude Code'`). The claude-code branch (Task 7) never reaches the provider-error label path anyway, but the type must still compile.
+> 3. **`agentFrontmatterSchema.partial()` is consumed at `documents.ts:806`.** `.partial()` is a `ZodObject` method that does NOT exist on the `ZodEffects` a `.superRefine` produces. The codebase already handles this for triggers: `triggerFrontmatterSchema.innerType().partial()` (l.807). So IF you add `.superRefine`, you MUST also change `documents.ts:806` from `agentFrontmatterSchema.partial()` to `agentFrontmatterSchema.innerType().partial()` (mirroring the trigger line). Add a `safeParse` test for the agent PATCH path to prove `.partial()` still works.
+> 4. **Run fm `model` (agent-run-schema) is `z.string()` (required); `createRun` does `const model = agentFm.model as string` (agent-runs.ts:114).** For a claude-code agent with no `model`, that's `undefined`. Change run fm to `model: z.string().default('')` AND `createRun` to `const model = (agentFm.model as string | undefined) ?? ''`.
+
 - [ ] **Step 3: Widen the enums + conditionally require model**
 
 In `apps/server/src/lib/agent-run-schema.ts` l.63:
@@ -168,14 +175,16 @@ In `apps/server/src/lib/agent-run-schema.ts` l.63:
 export const providerSchema = z.enum(['anthropic', 'openai', 'openrouter', 'ollama', 'claude-code']);
 ```
 
-In `apps/server/src/lib/agent-schema.ts`, change the `provider` enum (l.12) to include `'claude-code'`, make `model` optional (l.11), and add a refinement so model is required for API providers but optional for `claude-code`:
+And change run fm `model: z.string()` → `model: z.string().default('')` (claude-code runs may have no pinned model).
+
+In `apps/server/src/lib/agent-schema.ts`, change the `provider` enum (l.12) to include `'claude-code'`, make `model` optional (l.11), and add the refinement (placed on the exported schema — note the `.innerType()` consumer fix in `documents.ts` per the correction above):
 
 ```ts
   model: z.string().min(1).optional(),
   provider: z.enum(['anthropic', 'openai', 'openrouter', 'ollama', 'claude-code']),
 ```
 
-Then, on the object schema, append a `.superRefine` (or `.refine`) — place it on the schema being exported:
+Then, on the object schema, append a `.superRefine` — place it on the schema being exported:
 
 ```ts
 .superRefine((fm, ctx) => {
