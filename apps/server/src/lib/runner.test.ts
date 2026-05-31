@@ -542,6 +542,59 @@ describe('runAgent pre-flight checks', () => {
     expect(fm.error_reason).not.toBe('provider_error');
   });
 
+  test('claude-code — the CLI prompt carries the task + parent context, not just the system prompt', async () => {
+    // BUG: ccExecute spawned `claude -p <systemPrompt>` with ONLY the agent's
+    // standing instructions — the per-run task (the input comment) and the
+    // parent work-item body never reached the CLI, so a claude-code agent was
+    // blind to what it was acting on. The API-provider path builds this context
+    // via buildInitialMessages; the cc path must include it too.
+    const { db, workspace, project, user, agent, parent, run } = await scaffold({
+      agentOverrides: { provider: 'claude-code' },
+      runOverrides: { provider: 'claude-code' },
+      parentBody: 'Migrate billing emails to the new 2026 template.',
+    });
+    // The per-run task, exactly as POST /runs persists it: a kind=comment on the
+    // parent authored by the firing user. Insert directly to mirror the stored
+    // row without coupling to createComment's full validation surface.
+    await db.insert(documents).values({
+      id: nanoid(),
+      workspaceId: workspace.id,
+      projectId: project.id,
+      tableId: null,
+      type: 'comment',
+      slug: `c-${nanoid(8)}`,
+      title: '',
+      status: null,
+      body: 'Summarize this work item into frontmatter.summary.',
+      frontmatter: { author: `user:${user.id}`, kind: 'comment', visibility: 'normal' },
+      parentId: parent.id,
+      createdBy: user.id,
+      updatedBy: user.id,
+    });
+
+    let capturedPrompt = '';
+    const prevCcEnabled = env.FOLIO_CLAUDE_CODE_ENABLED;
+    (env as { FOLIO_CLAUDE_CODE_ENABLED: boolean }).FOLIO_CLAUDE_CODE_ENABLED = true;
+    __setCcSpawnForTest((args) => {
+      const i = args.argv.indexOf('-p');
+      capturedPrompt = i >= 0 ? (args.argv[i + 1] ?? '') : '';
+      return { stdoutText: async () => 'done', exited: Promise.resolve(0), kill: () => {} };
+    });
+    try {
+      await runAgent({ runId: run.id });
+    } finally {
+      __setCcSpawnForTest(undefined);
+      (env as { FOLIO_CLAUDE_CODE_ENABLED: boolean }).FOLIO_CLAUDE_CODE_ENABLED = prevCcEnabled;
+    }
+
+    // System prompt (identity) still present (scaffold's default run prompt):
+    expect(capturedPrompt).toContain('You are a helper.');
+    // AND the per-run task reached the CLI:
+    expect(capturedPrompt).toContain('Summarize this work item into frontmatter.summary.');
+    // AND the parent work-item context reached the CLI:
+    expect(capturedPrompt).toContain('Migrate billing emails to the new 2026 template.');
+  });
+
   test('claude-code — fails with claude_code_disabled when FOLIO_CLAUDE_CODE_ENABLED is off', async () => {
     // Preflight step 0: if a run names the claude-code backend but the operator
     // flag is off, the run must fail immediately with claude_code_disabled —

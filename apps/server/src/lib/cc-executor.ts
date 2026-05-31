@@ -24,6 +24,13 @@ export type SpawnFn = (args: {
 
 export interface CcInput {
   systemPrompt: string;
+  // The per-run task + relevant document context (parent body + comment thread,
+  // flattened to literal text — same source the API-provider path uses, no
+  // wiki-link expansion). The systemPrompt is the agent's STANDING identity;
+  // taskContext is WHAT to do THIS run + the document(s) it concerns. Optional:
+  // a run with no parent/task (e.g. "set up a project for me") supplies none and
+  // the agent acts from its identity + tools alone.
+  taskContext?: string;
   model: string | undefined;
   mcpToken: string;
   mcpUrl: string | undefined;
@@ -50,7 +57,12 @@ export async function runClaudeCode(
 ): Promise<CcOutcome> {
   const spawn = deps.spawn ?? defaultSpawn;
 
-  const argv = ['claude', '-p', input.systemPrompt];
+  // Compose the single `-p` prompt: standing identity, then the task + context
+  // for this run (if any). `claude -p` takes one prompt string, so we flatten.
+  const prompt = input.taskContext && input.taskContext.trim().length > 0
+    ? `${input.systemPrompt}\n\n---\n\n${input.taskContext}`
+    : input.systemPrompt;
+  const argv = ['claude', '-p', prompt];
   if (input.model) argv.push('--model', input.model);
 
   if (input.mcpToken && input.mcpUrl) {

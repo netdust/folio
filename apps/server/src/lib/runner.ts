@@ -852,10 +852,22 @@ async function ccExecute(ctx: RunContext): Promise<void> {
     createdBy: ctx.transitionActor,
   });
 
+  // Build the per-run task + document context (parent body + comment thread,
+  // incl. the run's input comment) — the SAME source the API-provider path uses
+  // via buildInitialMessages. Without this the CLI saw only the standing system
+  // prompt and was blind to what it was acting on. Flattened to labelled text
+  // because `claude -p` takes a single prompt string. Empty when there's no
+  // parent/task (e.g. a "create a project" run) — the agent acts from identity.
+  const contextMessages = await buildInitialMessages(ctx);
+  const taskContext = contextMessages
+    .map((m) => `${m.role === 'assistant' ? 'You previously said' : 'Context / task'}:\n${m.content}`)
+    .join('\n\n');
+
   try {
     const outcome = await runClaudeCode(
       {
         systemPrompt: ctx.fm.system_prompt,
+        taskContext,
         model: ctx.fm.model && ctx.fm.model.length > 0 ? ctx.fm.model : undefined,
         mcpToken: ccToken,
         mcpUrl: `${env.PUBLIC_URL}/mcp`,
