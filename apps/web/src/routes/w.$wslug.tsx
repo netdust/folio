@@ -1,7 +1,8 @@
 import { createFileRoute, Outlet, useNavigate, useParams, useRouterState } from '@tanstack/react-router';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQueries, useQueryClient } from '@tanstack/react-query';
-import { Search } from 'lucide-react';
+import { Bot, Search } from 'lucide-react';
+import { z } from 'zod';
 import { toast } from 'sonner';
 import { useLogout, useMe } from '../lib/api/auth.ts';
 import { useProjects, useUpdateProject, useDeleteProject, projectsKeys } from '../lib/api/projects.ts';
@@ -25,8 +26,24 @@ import { ProviderHealthBanner } from '../components/shell/provider-health-banner
 import { ReactorHaltBanner } from '../components/shell/reactor-halt-banner.tsx';
 import { modKeyHint } from '../lib/platform.ts';
 import { buildRailTree, type RailTreeHandlers } from '../lib/rail-tree.ts';
+import { agentPanelBus } from '../lib/agent-panel-bus.ts';
+import { AgentCockpitPanel } from '../components/agent-panel/agent-cockpit-panel.tsx';
+import { WorkspaceDocumentSlideover } from '../components/slideover/workspace-document-slideover.tsx';
 
 export const Route = createFileRoute('/w/$wslug')({
+  // The agent cockpit panel + config slideover live at the layout, so `?doc=`
+  // and `?tab=` must validate workspace-wide (the no-project landing route
+  // doesn't declare them otherwise). TanStack merges parent + child search
+  // schemas; children that also declare `doc` use the identical shape.
+  validateSearch: z.object({
+    doc: z.string().optional(),
+    // Broad `string` (not a narrow enum) so the merged parent type doesn't
+    // collide with sibling routes that declare their own narrower `tab` enums
+    // (settings: tokens|ai, agents: fields|activity|runs). A parent enum would
+    // force `tab` to that enum everywhere and reject e.g. settings' `tab:'ai'`
+    // at navigate sites. The slideover narrows `tab` on read.
+    tab: z.string().optional(),
+  }),
   component: WorkspaceLayout,
 });
 
@@ -40,6 +57,12 @@ const TOOLS: NavItem[] = [
     lucideIcon: Search,
     kbd: modKeyHint('K'),
     onClick: openCommandPalette,
+  },
+  {
+    id: 'agents',
+    label: 'Agents',
+    lucideIcon: Bot,
+    onClick: () => agentPanelBus.toggle(),
   },
 ];
 
@@ -312,9 +335,7 @@ function WorkspaceLayout() {
                   onSelectWorkspace={onSelectWorkspace}
                   onCreateWorkspace={onCreateWorkspace}
                   onCreateProject={() => setCreatingProject(true)}
-                  onOpenAgents={() =>
-                    void navigate({ to: '/w/$wslug/agents', params: { wslug } })
-                  }
+                  onOpenAgents={() => agentPanelBus.toggle()}
                   onOpenTriggers={() =>
                     void navigate({ to: '/w/$wslug/triggers', params: { wslug } })
                   }
@@ -352,6 +373,7 @@ function WorkspaceLayout() {
             </div>
           </div>
         }
+        panel={<AgentCockpitPanel wslug={wslug} />}
       />
       <WorkspaceCreate open={creatingWorkspace} onOpenChange={setCreatingWorkspace} />
       <ProjectCreate wslug={wslug} open={creatingProject} onOpenChange={setCreatingProject} />
@@ -398,6 +420,7 @@ function WorkspaceLayout() {
           )}
         </DialogContent>
       </Dialog>
+      <WorkspaceDocumentSlideover wslug={wslug} />
     </>
   );
 }

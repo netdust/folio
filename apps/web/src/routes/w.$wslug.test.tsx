@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
@@ -63,6 +63,33 @@ function setup({ initialPath = '/w/acme/p/sales/work-items', onFetch }: SetupOpt
     if (u.endsWith(`/api/v1/w/${workspace.slug}/p/sales/fields`)) return respond({ data: [] });
     if (u.includes(`/api/v1/w/${workspace.slug}/p/sales/documents`)) {
       return respond({ data: { data: [], nextCursor: null } });
+    }
+    // The layout now mounts <WorkspaceDocumentSlideover>, which fetches the
+    // workspace doc + its events whenever ?doc=<slug> is present. Tests that
+    // start with ?doc= (e.g. preserving it across a view switch) would
+    // otherwise hit the catch-all `{}` and crash FrontmatterForm on a missing
+    // `data` envelope. Order matters: the /events suffix is matched first.
+    if (/\/w\/[^/]+\/documents\/[^/]+\/events$/.test(u)) {
+      return respond({ data: [] });
+    }
+    if (u.includes(`/w/${workspace.slug}/documents?`)) {
+      return respond({ data: [] });
+    }
+    if (/\/w\/[^/]+\/documents\/[^/?]+/.test(u)) {
+      return respond({
+        data: {
+          id: 'd-doc',
+          slug: 'lead-foo',
+          type: 'work_item',
+          title: 'Lead Foo',
+          status: null,
+          parentId: null,
+          frontmatter: {},
+          body: '',
+          createdAt: '2026-01-01',
+          updatedAt: '2026-01-02',
+        },
+      });
     }
     if (init?.method === 'DELETE') return new Response(null, { status: 204 });
 
@@ -141,8 +168,13 @@ describe('WorkspaceLayout — delete + nav side effects', () => {
 
     await waitFor(() => expect(screen.getByText('Triage')).toBeInTheDocument());
 
-    // Click "Triage" — fires onViewClick handler.
-    await userEvent.click(screen.getByText('Triage'));
+    // Click "Triage" — fires onViewClick handler. The layout now mounts the
+    // WorkspaceDocumentSlideover, and ?doc=lead-foo opens it as a Radix modal
+    // dialog that sets `pointer-events: none` on the rest of the page in jsdom.
+    // userEvent honors that and refuses the click; fireEvent dispatches the
+    // event directly (this test asserts the handler→URL effect, not pointer
+    // fidelity — the slideover staying open is exactly the scenario under test).
+    fireEvent.click(screen.getByText('Triage'));
 
     await waitFor(() => {
       const s = router.state.location.search as Record<string, unknown>;
