@@ -120,6 +120,13 @@
       "when": 1780900000000,
       "tag": "0015_reactor_cursors",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "6",
+      "when": 1780910000000,
+      "tag": "0016_agent_body_as_prompt",
+      "breakpoints": true
     }
   ]
 }
