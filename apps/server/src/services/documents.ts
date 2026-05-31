@@ -722,28 +722,6 @@ export interface UpdateDocumentArgs {
   patch: DocumentPatch;
 }
 
-// "Auto-derived" = the slug was generated from the previous title at create
-// time (or auto-disambiguated with `-N`). Strip a trailing `-<digits>` and
-// compare to slugify(oldTitle). The `untitled` special case covers fresh docs
-// where the create-time slug is literally `untitled`.
-function isSlugAutoDerived(slug: string, oldTitle: string): boolean {
-  if (slug === 'untitled') return true;
-  const base = slug.replace(/-\d+$/, '');
-  return base === slugify(oldTitle);
-}
-
-export async function maybeRegenerateSlug(
-  projectId: string,
-  existing: { slug: string; title: string },
-  nextTitle: string,
-): Promise<string | null> {
-  if (nextTitle === existing.title) return null;
-  if (!isSlugAutoDerived(existing.slug, existing.title)) return null;
-  const baseSlug = slugify(nextTitle) || 'doc';
-  if (baseSlug === existing.slug.replace(/-\d+$/, '')) return null;
-  return slugUniqueInDocuments(db, projectId, baseSlug);
-}
-
 export async function updateDocument(
   args: UpdateDocumentArgs,
 ): Promise<Document> {
@@ -872,12 +850,10 @@ export async function updateDocument(
     }
   }
 
-  // Agents/triggers don't rename their slug on title change (URLs are sticky
-  // and frontmatter references would break). Only project-scoped docs do.
-  const nextSlug =
-    patch.title !== undefined && p
-      ? await maybeRegenerateSlug(p.id, existing, patch.title)
-      : null;
+  // Slugs are immutable for ALL document types (extends the table/agent/trigger
+  // precedent). A retitle changes the title only — never the slug — so [[slug]]
+  // relation links and backlinks stay valid forever. No rename cascade.
+  const nextSlug: string | null = null;
 
   const updated = {
     ...existing,

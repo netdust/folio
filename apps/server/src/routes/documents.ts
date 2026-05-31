@@ -19,7 +19,6 @@ import {
   getDocument,
   getAssignee,
   listDocuments,
-  maybeRegenerateSlug,
   updateDocument,
   stripReservedFrontmatter,
   type DocumentType,
@@ -325,7 +324,10 @@ documentsRoute.patch('/:slug', requireScope('documents:write'), async (c) => {
         }
       }
     }
-    const nextSlug = await maybeRegenerateSlug(p.id, existing, parsed.title);
+    // Slugs are immutable for ALL document types (Phase 3.x) — a retitle
+    // changes the title only, never the slug, so [[slug]] relation links and
+    // backlinks stay valid. No rename cascade. See services/documents.ts.
+    const nextSlug: string | null = null;
     const updated = {
       ...existing,
       title: parsed.title,

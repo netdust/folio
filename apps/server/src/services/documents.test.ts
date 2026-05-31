@@ -59,6 +59,41 @@ test('listDocuments returns docs for the given project', async () => {
   expect(data[0]!.slug).toBe('hello');
 });
 
+// Slugs are immutable for ALL document types (Phase 3.x). A retitle changes
+// the title only — never the slug — so [[slug]] relation links and backlinks
+// stay valid forever. This test PINS the deliberate removal of slug
+// regeneration: if anyone re-adds it, this fails loudly.
+test('retitling a work_item does NOT change its slug (slugs are immutable)', async () => {
+  const { db, seed } = await makeTestApp();
+  const table = await getWorkItemsTable(db, seed.project.id);
+  const { document } = await createDocument({
+    workspace: seed.workspace,
+    project: seed.project,
+    table,
+    actor: seed.user,
+    token: null,
+    input: {
+      type: 'work_item',
+      title: 'Fix login bug',
+      body: '',
+      frontmatter: {},
+      status: null,
+    },
+  });
+  expect(document.slug).toBe('fix-login-bug');
+
+  const updated = await updateDocument({
+    workspace: seed.workspace,
+    project: seed.project,
+    fallbackTable: table,
+    actor: seed.user,
+    existing: document,
+    patch: { title: 'Fix the login bug completely' },
+  });
+  expect(updated.title).toBe('Fix the login bug completely');
+  expect(updated.slug).toBe('fix-login-bug');
+});
+
 test('getDocument returns null for unknown slug', async () => {
   const { seed } = await makeTestApp();
   const row = await getDocument(seed.project.id, 'nope');
