@@ -20,7 +20,7 @@ function newQc() {
   return new QueryClient({ defaultOptions: { queries: { retry: false } } });
 }
 
-function stubFetch(opts: { providersWithKeys: string[] }) {
+function stubFetch(opts: { providersWithKeys: string[]; claudeCodeEnabled?: boolean }) {
   const keys = opts.providersWithKeys.map((p, i) => ({
     id: `k${i}`,
     workspaceId: 'w1',
@@ -34,9 +34,19 @@ function stubFetch(opts: { providersWithKeys: string[] }) {
     vi.fn(async (input: RequestInfo) => {
       const url = new URL(String(input), 'http://x');
       if (url.pathname === '/api/v1/w/ws') {
-        return new Response(JSON.stringify({ data: { id: 'w1', slug: 'ws', name: 'WS' } }), {
-          status: 200, headers: { 'content-type': 'application/json' },
-        });
+        return new Response(
+          JSON.stringify({
+            data: {
+              id: 'w1',
+              slug: 'ws',
+              name: 'WS',
+              ...(opts.claudeCodeEnabled !== undefined
+                ? { claude_code_enabled: opts.claudeCodeEnabled }
+                : {}),
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
       }
       if (url.pathname === '/api/v1/w/ws/settings/w1/ai-keys') {
         return new Response(JSON.stringify({ data: { keys } }), {
@@ -117,5 +127,25 @@ describe('ProviderModelField', () => {
     );
     const input = screen.getByPlaceholderText('model name') as HTMLInputElement;
     expect(input.value).toBe('mistralai/mixtral');
+  });
+
+  it('hides the claude-code option when claude_code_enabled is false/absent', async () => {
+    stubFetch({ providersWithKeys: ['anthropic'], claudeCodeEnabled: false });
+    render(
+      <Host initial={{ provider: 'anthropic', model: 'claude-haiku-4-5' }} />,
+      { wrapper: wrap(newQc()) },
+    );
+    await userEvent.click(screen.getByRole('button', { name: /Anthropic/ }));
+    expect(screen.queryByRole('button', { name: /claude code/i })).not.toBeInTheDocument();
+  });
+
+  it('shows the claude-code option when claude_code_enabled is true', async () => {
+    stubFetch({ providersWithKeys: ['anthropic'], claudeCodeEnabled: true });
+    render(
+      <Host initial={{ provider: 'anthropic', model: 'claude-haiku-4-5' }} />,
+      { wrapper: wrap(newQc()) },
+    );
+    await userEvent.click(screen.getByRole('button', { name: /Anthropic/ }));
+    expect(await screen.findByRole('button', { name: /claude code/i })).toBeInTheDocument();
   });
 });

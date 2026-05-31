@@ -18,6 +18,7 @@ export interface WorkspaceMembership {
 
 export interface WorkspaceDetail extends Workspace {
   role: WorkspaceRole;
+  claude_code_enabled?: boolean;
 }
 
 export const workspacesKeys = {

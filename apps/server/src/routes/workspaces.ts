@@ -6,6 +6,7 @@ import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import { db } from '../db/client.ts';
 import { documents, memberships, workspaces } from '../db/schema.ts';
+import { env } from '../env.ts';
 import { seedBuiltinTriggers } from '../lib/builtin-triggers.ts';
 import { emitEvent, txWithEvents } from '../lib/events.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
@@ -92,7 +93,9 @@ workspacesRoute.post(
 
 const workspaceItemRoute = new Hono<AuthContext & ScopeContext>();
 
-workspaceItemRoute.get('/', (c) => jsonOk(c, { ...getWorkspace(c), role: getRole(c) }));
+workspaceItemRoute.get('/', (c) =>
+  jsonOk(c, { ...getWorkspace(c), role: getRole(c), claude_code_enabled: env.FOLIO_CLAUDE_CODE_ENABLED }),
+);
 
 workspaceItemRoute.patch(
   '/',
