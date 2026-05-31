@@ -524,6 +524,20 @@ export async function incrementTokens(
   return { tokens_in: tokensIn, tokens_out: tokensOut };
 }
 
+/**
+ * Persist a claude-code run's full session transcript onto the run document's
+ * body (unused for API-loop runs). Plain update — NOT event-emitting; the
+ * transcript is metadata, and the terminal transition (transitionRun) carries
+ * the event. Caller invokes this BEFORE transitionRun so the body is present
+ * when `agent.run.completed` fires.
+ */
+export async function setRunBody(runId: string, body: string): Promise<void> {
+  await db
+    .update(documents)
+    .set({ body })
+    .where(and(eq(documents.id, runId), eq(documents.type, 'agent_run')));
+}
+
 // ----- read helpers (getActiveRun, getPendingApprovalRun, listRuns) -----
 //
 // Read-only — no event emission. Accept an optional `tx: DBOrTx = db` so

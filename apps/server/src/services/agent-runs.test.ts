@@ -33,6 +33,7 @@ import {
   createRun,
   transitionRun,
   incrementTokens,
+  setRunBody,
   getActiveRun,
   getPendingApprovalRun,
   listRuns,
@@ -3119,5 +3120,40 @@ describe('nextChainId', () => {
         expect(parsed.success).toBe(true);
       }
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// setRunBody
+// ---------------------------------------------------------------------------
+
+describe('setRunBody', () => {
+  test('setRunBody writes the transcript to the run document body', async () => {
+    const { db } = await makeTestApp();
+
+    // Seed workspace + project using the standard project-defaults helper.
+    const wsId = nanoid();
+    await db.insert(workspaces).values({ id: wsId, name: 'test-ws', slug: `ws-${nanoid(6)}` });
+    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, wsId) });
+
+    const userId = nanoid();
+    await db.insert(users).values({ id: userId, email: `u-${nanoid(6)}@test.dev`, passwordHash: 'x', name: 'Tester' });
+    const user = await db.query.users.findFirst({ where: eq(users.id, userId) });
+
+    const projectId = nanoid();
+    await db.insert(schemaProjects).values({ id: projectId, workspaceId: wsId, name: 'test-proj', slug: `p-${nanoid(6)}` });
+    await seedProjectDefaults(db, projectId);
+    const project = await db.query.projects.findFirst({ where: (p, { eq }) => eq(p.id, projectId) });
+
+    const runsTable = await seedRunsTable(db, projectId);
+    const agent = await seedAgent(db, ws!, user!, `agent-${nanoid(6)}`);
+    const workItemsTable = await getWorkItemsTable(db, projectId);
+    const parent = await seedWorkItem(db, ws!, project!, workItemsTable, user!);
+    const run = await seedRunningRun(db, ws!, project!, runsTable, agent, parent, user!);
+
+    await setRunBody(run.id, 'FULL TRANSCRIPT TEXT');
+
+    const row = await db.query.documents.findFirst({ where: eq(documents.id, run.id) });
+    expect(row!.body).toBe('FULL TRANSCRIPT TEXT');
   });
 });
