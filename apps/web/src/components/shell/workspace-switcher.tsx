@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { Bot, Zap } from 'lucide-react';
+import { Bot, Zap, Play } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
 import { Icon } from '../ui/icon.tsx';
 import { cn } from '../ui/cn.ts';
@@ -23,6 +23,7 @@ interface WorkspaceSwitcherProps {
   // under each project in the rail.
   onOpenAgents?: () => void;
   onOpenTriggers?: () => void;
+  onWorkWithAgent?: () => void;
 }
 
 export function WorkspaceSwitcher({
@@ -34,6 +35,7 @@ export function WorkspaceSwitcher({
   onOpenSettings,
   onOpenAgents,
   onOpenTriggers,
+  onWorkWithAgent,
 }: WorkspaceSwitcherProps) {
   return (
     <Popover>
@@ -62,7 +64,7 @@ export function WorkspaceSwitcher({
             </button>
           ))}
         </div>
-        {(onOpenAgents || onOpenTriggers) && (
+        {(onOpenAgents || onOpenTriggers || onWorkWithAgent) && (
           <div className="border-t border-border-light p-1">
             {onOpenAgents ? (
               <button
@@ -71,7 +73,7 @@ export function WorkspaceSwitcher({
                 className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-fg-2 hover:bg-card hover:text-fg"
               >
                 <Icon icon={Bot} size={14} />
-                Agents
+                Agents & Triggers
               </button>
             ) : null}
             {onOpenTriggers ? (
@@ -82,6 +84,16 @@ export function WorkspaceSwitcher({
               >
                 <Icon icon={Zap} size={14} />
                 Triggers
+              </button>
+            ) : null}
+            {onWorkWithAgent ? (
+              <button
+                type="button"
+                onClick={onWorkWithAgent}
+                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-fg-2 hover:bg-card hover:text-fg"
+              >
+                <Icon icon={Play} size={14} />
+                Work with an agent
               </button>
             ) : null}
           </div>
