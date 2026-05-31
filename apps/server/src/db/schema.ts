@@ -200,7 +200,7 @@ export const fields = sqliteTable(
       enum: [
         'string', 'text', 'number', 'boolean', 'date', 'datetime',
         'select', 'multi_select', 'user_ref', 'url', 'document_ref',
-        'currency',
+        'currency', 'relation',
       ],
     }).notNull(),
     label: text('label'),

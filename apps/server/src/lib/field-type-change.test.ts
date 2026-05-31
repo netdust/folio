@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { validateTypeChange } from './field-type-change.ts';
+import { FIELD_TYPES, validateTypeChange } from './field-type-change.ts';
 
 describe('validateTypeChange', () => {
   it('accepts string → text and back', () => {
@@ -41,5 +41,14 @@ describe('validateTypeChange', () => {
   it('rejects select ↔ multi_select', () => {
     expect(validateTypeChange('select', 'multi_select').ok).toBe(false);
     expect(validateTypeChange('multi_select', 'select').ok).toBe(false);
+  });
+
+  it('relation is a known field type', () => {
+    expect(FIELD_TYPES).toContain('relation');
+  });
+
+  it('relation → text is always safe; relation → number is blocked', () => {
+    expect(validateTypeChange('relation', 'text')).toEqual({ ok: true });
+    expect(validateTypeChange('relation', 'number').ok).toBe(false);
   });
 });
