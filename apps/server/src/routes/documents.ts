@@ -23,6 +23,7 @@ import {
   stripReservedFrontmatter,
   type DocumentType,
 } from '../services/documents.ts';
+import { findBacklinks } from '../services/backlinks.ts';
 
 const documentsRoute = new Hono<AuthContext & ScopeContext>();
 
@@ -251,6 +252,22 @@ documentsRoute.get('/:slug', async (c) => {
     );
   }
   return jsonOk(c, row);
+});
+
+// GET /:slug/backlinks — query-time backlinks: documents whose frontmatter
+// wiki-links (`[[slug]]`) point at this doc, as either a single relation
+// string or an element of a multi-relation array. Nothing is stored in
+// reverse, so backlinks can never drift from the source-of-truth frontmatter.
+documentsRoute.get('/:slug/backlinks', requireScope('documents:read'), async (c) => {
+  const ws = getWorkspace(c);
+  const p = getProject(c);
+  const slug = c.req.param('slug');
+
+  const target = await getDocument(p.id, slug);
+  if (!target) throw new HTTPError('DOCUMENT_NOT_FOUND', `document "${slug}" not found`, 404);
+
+  const data = await findBacklinks({ workspaceId: ws.id, projectId: p.id, slug });
+  return jsonOk(c, data);
 });
 
 documentsRoute.patch('/:slug', requireScope('documents:write'), async (c) => {
