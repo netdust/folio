@@ -4,7 +4,10 @@ import { V1_MCP_TOOLS, type McpTool } from '@folio/shared';
 export { V1_MCP_TOOLS, type McpTool };
 
 export const agentFrontmatterSchema = z.object({
-  system_prompt: z.string().min(1),
+  // Legacy: the agent's prompt now lives in its document BODY (snapshotted onto
+  // each run at create-time). Kept optional so pre-migration agents still
+  // validate; migration 0013 strips it. New agents don't carry it.
+  system_prompt: z.string().optional(),
   model: z.string().min(1),
   provider: z.enum(['anthropic', 'openai', 'openrouter', 'ollama']),
   tools: z.array(z.enum([...V1_MCP_TOOLS] as [string, ...string[]])),
