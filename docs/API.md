@@ -123,8 +123,8 @@ The agent editor UI shows the `claude-code` option (labelled "no key needed") on
 
 When the runner poller claims a `planning` run whose parent agent has `provider: claude-code`, it branches to `ccExecute` instead of the normal provider stream loop:
 
-1. If the agent has `requires_approval: true`, the run transitions to `awaiting_approval` and the CLI is NOT spawned until a human approves via `POST /agent-runs/:id/approve`.
-2. On approval (or immediately if no approval gate), the server spawns `claude -p <prompt>` in Folio's own working directory.
+1. **Pre-run approval is enforced at the poller, not via a REST endpoint.** The poller only claims runs at `status: planning`; a run sitting at `awaiting_approval` is never claimed, so the CLI is never spawned for it. Approval/resume is comment-driven (a `kind=approval` comment routed by the trigger-matcher's `resume_run` internal action), the same flow used by API-provider agents. There is **no** `POST /agent-runs/:id/approve` endpoint. **Note:** in this branch the `requires_approval` field is a schema field only — the production code path that transitions a `planning` run into `awaiting_approval` is **deferred** (see the gaps below); the gate is proven today by tests that seed `awaiting_approval` directly and confirm the poller skips it.
+2. For a claimed run (no gate, or once resumed), the server spawns `claude -p <prompt>` in Folio's own working directory.
 3. CC runs its own full agentic loop to completion — it may read/write files, run shell commands, call MCP servers, etc. Folio does not step through the loop; it just waits.
 4. The full session transcript is captured and written to the run document's `body` field via `setRunBody`.
 5. When the process exits, the run transitions to `completed` (or `failed` on non-zero exit), and the final result is posted as a `kind=result` comment on the parent document.
@@ -136,6 +136,7 @@ These are deferred to a fast-follow; the runner still works without them:
 - **No MCP callback token.** The env contract for `FOLIO_MCP_TOKEN` (a scoped token CC reads to call back into Folio's own MCP server) is documented below but not yet wired — CC is spawned with an empty token value, so it cannot write back into Folio over MCP in v1. Task 7b mints and injects this token.
 - **Runs in Folio's own cwd.** The CLI is spawned from the server's working directory. Host context (project path, etc.) must come from the agent's system prompt or tools — there is no automatic cwd injection yet.
 - **No mid-run cancellation.** Once the `claude` process is spawned, there is no in-flight kill mechanism. A cancellation request transitions the run row to `cancelled` in the database but does not terminate the subprocess.
+- **Human-approval transition deferred.** The `planning → awaiting_approval` transition (so a `requires_approval` agent actually pauses for a human) is not wired in this branch; only the poller-skip half of the gate exists. When that transition lands, the resume path (`runAgentResume`) must also branch to `ccExecute` for claude-code — see the TODO on that function.
 
 ### FOLIO_MCP_TOKEN env contract
 

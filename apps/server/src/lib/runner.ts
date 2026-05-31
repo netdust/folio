@@ -191,6 +191,15 @@ export async function runAgent(args: { runId: string }): Promise<void> {
  * if the original is observed in any OTHER status here (already terminal, or
  * raced to running), we do NOT continue — the resuming run is failed with
  * `idempotency_violation` and the provider is never called.
+ *
+ * TODO(claude-code): this resume path does NOT branch to ccExecute — it always
+ * calls runLoop → getProvider(fm.provider), which throws "Unknown AI provider"
+ * for `claude-code` (it's intentionally absent from the provider REGISTRY).
+ * Unreachable today (no production code transitions a claude-code run into
+ * awaiting_approval, and resume_of is not client-settable), but the moment the
+ * deferred planning→awaiting_approval gate is wired, an approved claude-code run
+ * will crash here. When that lands, mirror runAgent's branch:
+ *   if (ctx.fm.provider === 'claude-code') { await ccExecute(ctx); return; }
  */
 export async function runAgentResume(args: { runId: string }): Promise<void> {
   const { runId } = args;
