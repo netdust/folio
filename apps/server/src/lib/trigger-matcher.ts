@@ -46,6 +46,37 @@ import type { BusEvent } from './event-bus.ts';
 import type { Reactor } from './event-dispatcher.ts';
 import { emitChainSuppressed } from './autonomy-gate.ts';
 import { rejectRun } from './runner.ts';
+import { HTTPError } from './http.ts';
+
+/**
+ * Create a run on the REACTOR path, skipping (not throwing) when the agent has
+ * no prompt. `createRun` throws `AGENT_PROMPT_EMPTY` (422) for an agent whose
+ * body — the prompt — is empty; on the synchronous HTTP/MCP paths that 422 is
+ * the right response, but here a throw escapes `react()` and the durable
+ * dispatcher treats it as a HALT: it stops advancing this reactor's cursor and
+ * replays the same event every tick forever, wedging ALL trigger processing
+ * instance-wide. So a misconfigured (body-less) agent must be SKIPPED — the
+ * same skip-and-return semantics as the sibling guards (unresolved agent/owner)
+ * — not allowed to poison the reactor. Any OTHER error still propagates (a real
+ * fault SHOULD halt for retry). A body-non-empty guard at agent-create
+ * (documents.ts) closes the hole at the source; this is the reactor-side
+ * defense-in-depth so no future empty-prompt source can wedge the dispatcher.
+ */
+async function createRunSkippingEmptyPrompt(
+  args: Parameters<typeof createRun>[0],
+): Promise<void> {
+  try {
+    await createRun(args);
+  } catch (err) {
+    if (err instanceof HTTPError && err.code === 'AGENT_PROMPT_EMPTY') {
+      console.log(
+        `[trigger-matcher] agent '${args.agent.slug}' has an empty prompt (body); skipping the trigger-created run instead of halting the reactor`,
+      );
+      return;
+    }
+    throw err;
+  }
+}
 
 type ReactorEvent = BusEvent & { seq: number };
 
@@ -321,7 +352,7 @@ async function handleResumeRun(
     ensureRunsTable(tx, { workspaceId, projectId }),
   );
 
-  await createRun({
+  await createRunSkippingEmptyPrompt({
     workspace,
     project,
     runsTable,
@@ -437,7 +468,7 @@ async function maybeCreateRun(
     ensureRunsTable(tx, { workspaceId, projectId }),
   );
 
-  await createRun({
+  await createRunSkippingEmptyPrompt({
     workspace,
     project,
     runsTable,

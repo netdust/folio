@@ -86,6 +86,7 @@ async function seedAgent(
   user: User,
   slug: string,
   projectsAllowList: string[] = ['*'],
+  body = 'You are a helper.',
 ): Promise<Document> {
   const id = nanoid();
   const { hash } = newApiToken();
@@ -100,8 +101,9 @@ async function seedAgent(
     title: slug,
     status: null,
     // The agent body IS the prompt (snapshot at run-create); createRun rejects
-    // an empty body, so seed a non-empty one.
-    body: 'You are a helper.',
+    // an empty body, so seed a non-empty one by default (override for the
+    // empty-prompt skip test).
+    body,
     frontmatter: {
       system_prompt: 'You are a helper.',
       model: 'claude-sonnet-4-6',
@@ -355,6 +357,35 @@ test('creates one planning agent_run for a human assignment matching builtin-on-
   });
   expect(run?.status).toBe('planning');
   expect(run?.createdBy).toBe(seed.user.id); // owned by the originating human
+});
+
+test('a body-less (empty-prompt) agent is SKIPPED, not thrown — react() must not halt the reactor', async () => {
+  // Regression: createRun throws AGENT_PROMPT_EMPTY for an empty-body agent. On
+  // the reactor path that throw would escape react(), and the durable dispatcher
+  // treats a throwing react() as a HALT (cursor not advanced → the same event
+  // replays forever, wedging ALL trigger processing instance-wide). So react()
+  // must SKIP the body-less agent (zero runs) and return normally, like the
+  // other misconfiguration guards (unresolved agent/owner).
+  const { db, seed } = await makeTestApp();
+  await seedTriggers(db, seed.workspace.id, seed.user.id);
+  // Empty body = no prompt.
+  const agent = await seedAgent(db, seed.workspace, seed.user, 'no-prompt', undefined, '   ');
+  const wiTable = await getWorkItemsTable(db, seed.project.id);
+  const wi = await seedWorkItem(db, seed.workspace, seed.project, wiTable, seed.user);
+
+  // Must NOT throw (a throw here = a halted reactor in production).
+  await triggerMatcher.react(
+    assignmentEvent({
+      seed,
+      workItem: wi,
+      agentSlug: 'no-prompt',
+      agentId: agent.id,
+      actor: seed.user.id,
+    }),
+  );
+
+  // Skipped: zero runs created (the run was not created, but the reactor lives).
+  expect(await countRuns(db, wi.id, 'no-prompt')).toBe(0);
 });
 
 test('does NOT create a run when the agent allow-list excludes the project (mitigation 50)', async () => {
