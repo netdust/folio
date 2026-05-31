@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -12,6 +12,7 @@ import {
 } from '@tanstack/react-router';
 import { z } from 'zod';
 import { KanbanView } from './kanban-view.tsx';
+import { boardControlsBus } from '../../lib/board-controls-bus.ts';
 
 function setup() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -33,9 +34,11 @@ function setup() {
 }
 
 describe('KanbanView', () => {
+  beforeEach(() => boardControlsBus.reset());
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+    boardControlsBus.reset();
   });
 
   it('groups cards by status column', async () => {
@@ -228,5 +231,83 @@ describe('KanbanView', () => {
     expect(highColumn).not.toBeNull();
     expect(highColumn!.textContent).toContain('Card A');
     expect(lowColumn!.textContent).not.toContain('Card A');
+  });
+
+  // BF1 (2026-05-31): the default board is reached at `/board` with NO `?view=`
+  // param. The old code gated group-by/sort behind a "view is URL-pinned" check
+  // and early-returned otherwise, so selecting Manual silently did nothing.
+  // Now changes apply ad-hoc via the module bus regardless of `?view=`:
+  // selecting Manual switches the documents fetch to `sort=board_position`.
+  it('selecting Manual applies ad-hoc without ?view= (fetch switches to board_position)', async () => {
+    const documentsUrls: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>(async (url) => {
+        const u = String(url);
+        if (u.includes('/statuses')) {
+          return new Response(
+            JSON.stringify({ data: [{ id: 's1', key: 'todo', name: 'Todo', color: '#6EAFFF', category: 'unstarted', order: 1 }] }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        if (u.includes('/views')) {
+          // Default view with a FIELD sort (title) — not manual. Selecting
+          // Manual must override it ad-hoc and refetch by board_position.
+          return new Response(
+            JSON.stringify({
+              data: [
+                {
+                  id: 'v1',
+                  name: 'Board',
+                  type: 'kanban',
+                  filters: {},
+                  sort: [{ key: 'title', dir: 'asc' }],
+                  groupBy: null,
+                  visibleFields: null,
+                  columnOrder: null,
+                  isDefault: true,
+                  order: 1,
+                },
+              ],
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        if (u.includes('/documents')) {
+          documentsUrls.push(u);
+          return new Response(
+            JSON.stringify({
+              data: {
+                data: [{ id: 'd1', slug: 'a', type: 'work_item', title: 'Card A', status: 'todo', parentId: null, frontmatter: {}, createdAt: '', updatedAt: new Date().toISOString() }],
+                nextCursor: null,
+              },
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        return new Response('{"data":[]}', { status: 200, headers: { 'content-type': 'application/json' } });
+      }),
+    );
+
+    const { queryClient, router } = setup();
+    render(<QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider>);
+    await waitFor(() => expect(screen.getByText('Card A')).toBeInTheDocument());
+
+    // No `?view=` was set, and once the view loaded the fetch used its field
+    // sort (title) — the toolbar reflects the stored field sort, not Manual.
+    expect(router.state.location.search).toEqual({});
+    await waitFor(() => expect(documentsUrls.some((u) => u.includes('sort=title'))).toBe(true));
+    await waitFor(() => expect(screen.getByText('Title ↑')).toBeInTheDocument());
+
+    // Select Manual via the toolbar. Open the Sort popover, click "Manual".
+    await userEvent.click(screen.getByText('Sort:'));
+    await userEvent.click(await screen.findByText('Manual'));
+
+    // The ad-hoc override applied without a pinned view: the toolbar now shows
+    // Manual, and the board's documents query resolves to board_position order
+    // (no `?view=` was ever set — the old gated code would have no-op'd here).
+    await waitFor(() => expect(screen.getByText('Manual')).toBeInTheDocument());
+    expect(documentsUrls.some((u) => u.includes('sort=board_position'))).toBe(true);
+    expect(router.state.location.search).toEqual({});
   });
 });

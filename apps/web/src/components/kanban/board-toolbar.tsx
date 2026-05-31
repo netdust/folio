@@ -3,11 +3,11 @@ import { ChevronDown } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
 import { Icon } from '../ui/icon.tsx';
 import type { Field } from '../../lib/api/fields.ts';
+import type { BoardSort } from '../../lib/board-controls-bus.ts';
 
-export interface BoardSort {
-  key: string;
-  dir: 'asc' | 'desc';
-}
+// Canonical home is board-controls-bus; re-export so existing importers
+// (kanban-view) keep working without churn.
+export type { BoardSort };
 
 interface Props {
   groupBy: string; // 'status' or field key

@@ -1,5 +1,5 @@
 import { useNavigate, useSearch } from '@tanstack/react-router';
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useSyncExternalStore } from 'react';
 import { DndContext, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
 import { toast } from 'sonner';
 import { useCreateDocument, useDocuments, useUpdateDocument, type DocumentSummary } from '../../lib/api/documents.ts';
@@ -9,7 +9,8 @@ import { useFields } from '../../lib/api/fields.ts';
 import { formatApiError } from '../../lib/api/index.ts';
 import { KanbanColumn } from '../kanban/kanban-column.tsx';
 import { KanbanCard } from '../kanban/kanban-card.tsx';
-import { BoardToolbar, type BoardSort } from '../kanban/board-toolbar.tsx';
+import { BoardToolbar } from '../kanban/board-toolbar.tsx';
+import { boardControlsBus, type BoardSort } from '../../lib/board-controls-bus.ts';
 import { buildColumns } from '../kanban/board-grouping.ts';
 import { computeReorderPosition } from '../kanban/board-reorder.ts';
 import { resolveDrop, coerceGroupValue } from '../kanban/board-drag.ts';
@@ -42,10 +43,21 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
     return list.find((v) => v.isDefault) ?? list[0] ?? null;
   }, [urlViewId, viewsData]);
 
-  // Derive the board's in-column sort from `activeView.sort` (a JSON array of
+  // Ad-hoc group-by / sort overrides live in a module bus keyed by view id.
+  // Selecting Manual / a group-by applies IMMEDIATELY without `?view=`; the
+  // override wins over the view's stored value. The bus returns the same
+  // Map-stored reference until mutated, so getSnapshot is stable (no loop).
+  const override = useSyncExternalStore(
+    boardControlsBus.subscribe,
+    () => (activeView ? boardControlsBus.get(activeView.id) : undefined),
+  );
+
+  // Derive the board's in-column sort. The bus override wins INCLUDING `null`
+  // (manual); otherwise fall back to `activeView.sort` (a JSON array of
   // `{key,dir}`, first entry wins) exactly like table-view. `null` = manual,
   // which sorts by `board_position` for hand-ranked ordering.
   const effectiveSort: BoardSort | null = useMemo(() => {
+    if (override && 'sort' in override) return override.sort ?? null;
     const viewSort = activeView?.sort;
     if (!Array.isArray(viewSort) || viewSort.length === 0) return null;
     const first = viewSort[0];
@@ -54,7 +66,7 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
     if (typeof k !== 'string') return null;
     const d = (first as { dir?: unknown }).dir;
     return { key: k, dir: d === 'desc' ? 'desc' : 'asc' };
-  }, [activeView]);
+  }, [activeView, override]);
 
   const listParams = useMemo(
     () =>
@@ -68,7 +80,7 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
   const update = useUpdateDocument(wslug, pslug, listParams);
   const create = useCreateDocument(wslug, pslug);
 
-  const groupBy = (activeView?.groupBy ?? 'status') || 'status';
+  const groupBy = (override?.groupBy ?? activeView?.groupBy ?? 'status') || 'status';
   const groupField = groupBy === 'status' ? null : (fields ?? []).find((f) => f.key === groupBy) ?? null;
 
   const columns = useMemo(
@@ -86,27 +98,34 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
     void navigate({ to: '.', search: { ...search, doc: slug }, replace: false });
   };
 
-  // Persisting group-by / sort follows table-view's consent gate: only write to
-  // the view when the user explicitly opened it via ?view=<id>. Without it,
-  // activeView is a fallback and changes stay ad-hoc.
+  // Group-by / sort ALWAYS apply ad-hoc via the bus (so the default board at
+  // `/board` with no `?view=` responds immediately). Persistence to the stored
+  // view follows table-view's consent gate: only write when the user explicitly
+  // opened it via `?view=<id>`.
   const isActiveViewUrlPinned = !!urlViewId && !!activeView && activeView.id === urlViewId;
 
   const onGroupByChange = (gb: string) => {
-    if (!isActiveViewUrlPinned || !activeView) return;
-    // Store 'status' as null per the column's "defaults to status" convention.
-    updateView.mutate(
-      { id: activeView.id, patch: { groupBy: gb === 'status' ? null : gb } },
-      { onError: (err) => toast.error(formatApiError(err)) },
-    );
+    if (!activeView) return;
+    boardControlsBus.setGroupBy(activeView.id, gb);
+    if (isActiveViewUrlPinned) {
+      // Store 'status' as null per the column's "defaults to status" convention.
+      updateView.mutate(
+        { id: activeView.id, patch: { groupBy: gb === 'status' ? null : gb } },
+        { onError: (err) => toast.error(formatApiError(err)) },
+      );
+    }
   };
 
   const onSortChange = (s: BoardSort | null) => {
-    if (!isActiveViewUrlPinned || !activeView) return;
-    // Empty array = manual (board_position) ordering.
-    updateView.mutate(
-      { id: activeView.id, patch: { sort: s ? [{ key: s.key, dir: s.dir }] : [] } },
-      { onError: (err) => toast.error(formatApiError(err)) },
-    );
+    if (!activeView) return;
+    boardControlsBus.setSort(activeView.id, s);
+    if (isActiveViewUrlPinned) {
+      // Empty array = manual (board_position) ordering.
+      updateView.mutate(
+        { id: activeView.id, patch: { sort: s ? [{ key: s.key, dir: s.dir }] : [] } },
+        { onError: (err) => toast.error(formatApiError(err)) },
+      );
+    }
   };
 
   const onCreateInColumn = async (value: string | null) => {
