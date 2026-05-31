@@ -14,6 +14,9 @@ export const runErrorReasonSchema = z.enum([
   'budget_exceeded',
   'depth_exceeded',
   'no_ai_key',
+  // The run names the claude-code backend but FOLIO_CLAUDE_CODE_ENABLED is off
+  // for this install. An operator-config gate, not a retryable fault.
+  'claude_code_disabled',
   'provider_error',
   // D-9.1 — runner gave up after N consecutive recoverable tool errors
   // (model couldn't self-correct). Distinct from 'provider_error' (hard

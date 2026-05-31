@@ -25,6 +25,7 @@ import {
   tables,
 } from '../db/schema.ts';
 import { createComment } from '../services/comments.ts';
+import { env } from '../env.ts';
 import { makeTestApp } from '../test/harness.ts';
 import type { AgentRunFrontmatter } from './agent-run-schema.ts';
 import { toolsToScopes } from './agent-schema.ts';
@@ -510,6 +511,9 @@ describe('runAgent pre-flight checks', () => {
     // (provider_error). Install a no-op stub so the stream loop doesn't also
     // throw provider_error (the real cc executor lands in Task 7); the ONLY
     // meaningful assertions are about the two preflight reasons.
+    // Task 4: FOLIO_CLAUDE_CODE_ENABLED must be on for this test — the new
+    // step-0 gate would otherwise short-circuit with claude_code_disabled before
+    // reaching the key/health checks this test targets.
     const { db, run } = await scaffold({
       withAiKey: false,
       agentOverrides: { provider: 'claude-code' },
@@ -530,11 +534,40 @@ describe('runAgent pre-flight checks', () => {
     };
     providerTestHatch.overrideRegistry('claude-code', async () => stub);
 
-    await runAgent({ runId: run.id });
+    const prevCcEnabled = env.FOLIO_CLAUDE_CODE_ENABLED;
+    (env as { FOLIO_CLAUDE_CODE_ENABLED: boolean }).FOLIO_CLAUDE_CODE_ENABLED = true;
+    try {
+      await runAgent({ runId: run.id });
+    } finally {
+      (env as { FOLIO_CLAUDE_CODE_ENABLED: boolean }).FOLIO_CLAUDE_CODE_ENABLED = prevCcEnabled;
+    }
 
     const fm = await readRun(db, run.id);
     expect(fm.error_reason).not.toBe('no_ai_key');
     expect(fm.error_reason).not.toBe('provider_error');
+  });
+
+  test('claude-code — fails with claude_code_disabled when FOLIO_CLAUDE_CODE_ENABLED is off', async () => {
+    // Preflight step 0: if a run names the claude-code backend but the operator
+    // flag is off, the run must fail immediately with claude_code_disabled —
+    // before any DB work, key checks, or provider calls.
+    const { db, run } = await scaffold({
+      withAiKey: false,
+      agentOverrides: { provider: 'claude-code' },
+      runOverrides: { provider: 'claude-code' },
+    });
+
+    const prevCcEnabled = env.FOLIO_CLAUDE_CODE_ENABLED;
+    (env as { FOLIO_CLAUDE_CODE_ENABLED: boolean }).FOLIO_CLAUDE_CODE_ENABLED = false;
+    try {
+      await runAgent({ runId: run.id });
+    } finally {
+      (env as { FOLIO_CLAUDE_CODE_ENABLED: boolean }).FOLIO_CLAUDE_CODE_ENABLED = prevCcEnabled;
+    }
+
+    const fm = await readRun(db, run.id);
+    expect(fm.status).toBe('failed');
+    expect(fm.error_reason).toBe('claude_code_disabled');
   });
 });
 

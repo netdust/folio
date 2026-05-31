@@ -345,6 +345,18 @@ async function preflight(ctx: RunContext, excludeRunId?: string): Promise<boolea
   const { run, fm, agent, agentFm } = ctx;
   const runId = run.id;
 
+  // 0 — claude-code backend gate. Refuse to spawn a local CLI unless explicitly
+  // enabled for this install (spawns `claude` with host SSH/file access; unsafe
+  // on shared/hosted deployments). Cheapest check — runs before any DB work.
+  if (ctx.fm.provider === 'claude-code' && !env.FOLIO_CLAUDE_CODE_ENABLED) {
+    await failRun(
+      ctx,
+      runErrorReasonSchema.enum.claude_code_disabled,
+      'The claude-code backend is disabled. Set FOLIO_CLAUDE_CODE_ENABLED=true to enable it.',
+    );
+    return true;
+  }
+
   // 1 — provider key present. FIX #10 — loadContext already resolved + decrypted
   // the key into ctx.apiKey (empty string when absent — a missing key is a
   // pre-flight failure, not a load failure). Derive presence from that instead
