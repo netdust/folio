@@ -349,7 +349,9 @@ async function preflight(ctx: RunContext, excludeRunId?: string): Promise<boolea
   // the key into ctx.apiKey (empty string when absent — a missing key is a
   // pre-flight failure, not a load failure). Derive presence from that instead
   // of a second ai_keys query.
-  if (!ctx.apiKey) {
+  // claude-code is a keyless local backend — it spawns the `claude` CLI, which
+  // authenticates itself. Skip the BYOK key requirement for it.
+  if (ctx.fm.provider !== 'claude-code' && !ctx.apiKey) {
     await failRun(
       ctx,
       runErrorReasonSchema.enum.no_ai_key,
@@ -404,20 +406,21 @@ async function preflight(ctx: RunContext, excludeRunId?: string): Promise<boolea
     return true;
   }
 
-  // 5 — provider health.
-  // claude-code is keyless/local and has no health to check; the no_ai_key
-  // preflight (Task 3) gates it before reaching here. Cast is safe.
-  const health = await checkProviderHealth({
-    workspaceId: run.workspaceId,
-    provider: fm.provider as ProviderName,
-  });
-  if (health.next.status === 'degraded') {
-    await failRun(
-      ctx,
-      runErrorReasonSchema.enum.provider_error,
-      `Provider degraded after ${health.next.consecutive_failures} consecutive failures.`,
-    );
-    return true;
+  // 5 — provider health. Skip for claude-code: it is keyless/local with no
+  // tracked health state (and `ProviderName` excludes it).
+  if (ctx.fm.provider !== 'claude-code') {
+    const health = await checkProviderHealth({
+      workspaceId: run.workspaceId,
+      provider: fm.provider as ProviderName,
+    });
+    if (health.next.status === 'degraded') {
+      await failRun(
+        ctx,
+        runErrorReasonSchema.enum.provider_error,
+        `Provider degraded after ${health.next.consecutive_failures} consecutive failures.`,
+      );
+      return true;
+    }
   }
 
   // 6 — idempotency: another sibling run already active on the same parent for

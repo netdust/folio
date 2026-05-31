@@ -503,6 +503,39 @@ describe('runAgent pre-flight checks', () => {
     expect(fm.error_reason).toBe('provider_error');
     expect(control.called).toBe(0);
   });
+
+  test('claude-code — no ai_key row and no provider health check fire (neither no_ai_key nor provider_error)', async () => {
+    // claude-code is keyless/local. A run with provider='claude-code' and NO
+    // ai_keys row must NOT be killed at step 1 (no_ai_key) or step 5
+    // (provider_error). Install a no-op stub so the stream loop doesn't also
+    // throw provider_error (the real cc executor lands in Task 7); the ONLY
+    // meaningful assertions are about the two preflight reasons.
+    const { db, run } = await scaffold({
+      withAiKey: false,
+      agentOverrides: { provider: 'claude-code' },
+      runOverrides: { provider: 'claude-code' },
+    });
+
+    // Register a stub for 'claude-code' so getProvider() doesn't throw and the
+    // stream loop terminates cleanly. This also proves that, once preflight
+    // passes, the run can proceed through to the stream step.
+    const stub: AIProvider = {
+      async *stream() {
+        yield { type: 'text', delta: 'ok' } as ProviderEvent;
+        yield { type: 'done', reason: 'stop' } as ProviderEvent;
+      },
+      async testKey() {
+        return { ok: true as const };
+      },
+    };
+    providerTestHatch.overrideRegistry('claude-code', async () => stub);
+
+    await runAgent({ runId: run.id });
+
+    const fm = await readRun(db, run.id);
+    expect(fm.error_reason).not.toBe('no_ai_key');
+    expect(fm.error_reason).not.toBe('provider_error');
+  });
 });
 
 // ==========================================================================
