@@ -1,0 +1,1 @@
+- claude-code runner v1: ccExecute uses process.cwd() (not workspace-derived) + no mid-run cancel + no MCP token — all deferred to Task 7b.

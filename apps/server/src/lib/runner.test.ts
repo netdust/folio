@@ -1898,6 +1898,12 @@ describe('runAgent claude-code branch', () => {
       const fm = await readRun(db, run.id);
       expect(fm.status).toBe('failed');
       expect(fm.error_reason).toBe('provider_error');
+
+      // FIX 4 — transcript must be persisted even on failure
+      const runRow = await db.query.documents.findFirst({
+        where: and(eq(documents.id, run.id), eq(documents.type, 'agent_run')),
+      });
+      expect(runRow!.body).toContain('error: something went wrong');
     } finally {
       __setCcSpawnForTest(undefined);
       (env as { FOLIO_CLAUDE_CODE_ENABLED: boolean }).FOLIO_CLAUDE_CODE_ENABLED = prevCc;

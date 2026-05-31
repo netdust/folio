@@ -96,6 +96,9 @@ const PROVIDER_LABELS: Record<ProviderName, string> = {
 // __INTERNAL_TEST_ONLY__ hatch).
 let __ccSpawnOverride: SpawnFn | undefined;
 export function __setCcSpawnForTest(fn: SpawnFn | undefined): void {
+  if (process.env.NODE_ENV !== 'test') {
+    throw new Error('__setCcSpawnForTest is test-only and must not be called in production');
+  }
   __ccSpawnOverride = fn;
 }
 
@@ -815,6 +818,11 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
  * (requires_approval) is handled by the existing awaiting_approval gate before
  * this point. v1 passes no MCP token (mcpToken: '') — the fresh-token mint is
  * a fast-follow (Task 7b).
+ *
+ * KNOWN GAP (deferred): no mid-run cancellation. CC runs its own loop to
+ * completion; a rejection comment posted DURING a CC run is not observed (unlike
+ * the API path's per-tool-boundary wasCancelled check). Subprocess cancel lands
+ * with the Task 7b token/lifecycle work.
  */
 async function ccExecute(ctx: RunContext): Promise<void> {
   const outcome = await runClaudeCode(
@@ -822,6 +830,8 @@ async function ccExecute(ctx: RunContext): Promise<void> {
       systemPrompt: ctx.fm.system_prompt,
       model: ctx.fm.model && ctx.fm.model.length > 0 ? ctx.fm.model : undefined,
       mcpToken: '',
+      // v1: Folio's own cwd (spec decision). CC's host context comes from the
+      // prompt, not the cwd. Per-agent working_dir is a named deferral.
       cwd: process.cwd(),
     },
     __ccSpawnOverride ? { spawn: __ccSpawnOverride } : {},
@@ -831,6 +841,8 @@ async function ccExecute(ctx: RunContext): Promise<void> {
   await setRunBody(ctx.run.id, outcome.transcript);
 
   if (outcome.status === 'failed') {
+    // non-zero CC exit = provider-level failure (claude_code_disabled covers
+    // the gate case; this is a runtime CC failure).
     await failRun(ctx, runErrorReasonSchema.enum.provider_error, outcome.detail);
     return;
   }
