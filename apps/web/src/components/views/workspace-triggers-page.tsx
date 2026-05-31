@@ -50,7 +50,7 @@ export function WorkspaceTriggersPage({ wslug }: Props) {
         },
       });
       void navigate({
-        to: '/w/$wslug/triggers',
+        to: '/w/$wslug/agents',
         params: { wslug },
         search: (prev) => ({ ...(prev as Record<string, unknown>), wdoc: created.slug }),
       });
@@ -60,7 +60,7 @@ export function WorkspaceTriggersPage({ wslug }: Props) {
   };
 
   if (triggersQ.isLoading) {
-    return <div className="mx-auto max-w-3xl px-6 py-8 text-sm text-fg-2">Loading…</div>;
+    return <div className="text-sm text-fg-2">Loading…</div>;
   }
   const triggers = triggersQ.data ?? [];
 
@@ -76,16 +76,8 @@ export function WorkspaceTriggersPage({ wslug }: Props) {
   );
 
   return (
-    <div className="mx-auto max-w-3xl px-6 py-8">
-      <header className="mb-6 flex items-center justify-between">
-        <div>
-          <h1 className="text-lg font-medium tracking-tight">Triggers</h1>
-          <p className="mt-0.5 text-xs text-fg-2">
-            Cron- and event-driven triggers that fire workspace agents.
-          </p>
-        </div>
-        {createButton}
-      </header>
+    <div>
+      <div className="mb-3 flex justify-end">{createButton}</div>
 
       {triggers.length === 0 ? (
         <div className="rounded-md border border-border-light bg-shell p-6 text-center text-sm text-fg-2">
@@ -114,7 +106,7 @@ export function WorkspaceTriggersPage({ wslug }: Props) {
                   type="button"
                   onClick={() =>
                     void navigate({
-                      to: '/w/$wslug/triggers',
+                      to: '/w/$wslug/agents',
                       params: { wslug },
                       search: (prev) => ({ ...(prev as Record<string, unknown>), wdoc: trigger.slug }),
                     })
