@@ -11,6 +11,7 @@ import { EmptyState } from './empty-state.tsx';
 import { RowContextMenu } from './row-context-menu.tsx';
 import { WikiSkeleton } from './wiki-skeleton.tsx';
 import { buildTree, descendantIds, type TreeNode } from '../../lib/wiki-tree.ts';
+import { WikiCard } from './wiki-card.tsx';
 import { cn } from '../ui/cn.ts';
 
 interface Props { wslug: string; pslug: string; }
@@ -107,26 +108,41 @@ export function WikiTree({ wslug, pslug }: Props) {
   return (
     <div className="flex h-full flex-col gap-2">
       <DndContext sensors={sensors} onDragEnd={onDragEnd}>
-        <ul className="flex flex-col">
+        {/* Roots render as cards; the existing TreeRow tree (with
+            drag-to-reparent) lives inside each expanded card's subtree.
+            Root-level reparent via cards is out of scope. */}
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {tree.map((node) => (
-            <TreeRow
+            <WikiCard
               key={node.doc.id}
               node={node}
-              depth={0}
-              expanded={expanded}
-              onToggle={(id) => setExpanded((p) => {
-                const n = new Set(p);
-                if (n.has(id)) n.delete(id); else n.add(id);
-                return n;
-              })}
               onOpen={openDoc}
               onAddChild={onAddChild}
-              pendingId={pendingId}
-              wslug={wslug}
-              pslug={pslug}
+              renderChildren={(n) => (
+                <ul className="flex flex-col">
+                  {n.children.map((c) => (
+                    <TreeRow
+                      key={c.doc.id}
+                      node={c}
+                      depth={0}
+                      expanded={expanded}
+                      onToggle={(id) => setExpanded((p) => {
+                        const s = new Set(p);
+                        if (s.has(id)) s.delete(id); else s.add(id);
+                        return s;
+                      })}
+                      onOpen={openDoc}
+                      onAddChild={onAddChild}
+                      pendingId={pendingId}
+                      wslug={wslug}
+                      pslug={pslug}
+                    />
+                  ))}
+                </ul>
+              )}
             />
           ))}
-        </ul>
+        </div>
       </DndContext>
     </div>
   );

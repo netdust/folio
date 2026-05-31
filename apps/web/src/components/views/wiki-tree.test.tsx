@@ -1,5 +1,5 @@
-import { describe, it, expect, afterEach, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { describe, it, expect, afterEach, test, vi } from 'vitest';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
@@ -40,6 +40,25 @@ function pagesResponse(items: Array<{ id: string; slug: string; title: string; p
           id: i.id, slug: i.slug, type: 'page', title: i.title,
           status: null, parentId: i.parentId ?? null,
           frontmatter: {}, createdAt: '', updatedAt: '',
+        })),
+        nextCursor: null,
+      },
+    }),
+    { status: 200, headers: { 'content-type': 'application/json' } },
+  );
+}
+
+function cardPagesResponse(
+  items: Array<{ id: string; slug: string; title: string; parentId?: string | null; body?: string }>,
+) {
+  return new Response(
+    JSON.stringify({
+      data: {
+        data: items.map((i) => ({
+          id: i.id, slug: i.slug, type: 'page', title: i.title,
+          status: null, parentId: i.parentId ?? null,
+          frontmatter: {}, body: i.body ?? '',
+          createdAt: '', updatedAt: '', lastTouchedAt: null,
         })),
         nextCursor: null,
       },
@@ -116,7 +135,9 @@ describe('WikiTree', () => {
     render(<QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider>);
     await waitFor(() => expect(screen.getByText('Parent')).toBeInTheDocument());
 
-    const addBtn = await screen.findByTestId('wiki-add-child-a');
+    // Root pages render as cards; the card's add-child button carries an
+    // aria-label rather than the TreeRow's wiki-add-child-{slug} testid.
+    const addBtn = await screen.findByRole('button', { name: /Add child page under Parent/ });
     await userEvent.click(addBtn);
 
     await waitFor(() => expect(createCalls.length).toBe(1));
@@ -144,5 +165,36 @@ describe('WikiTree', () => {
     await waitFor(() => expect(screen.getByText('No pages yet')).toBeInTheDocument());
     await userEvent.click(screen.getByRole('button', { name: 'Create your first page' }));
     await waitFor(() => expect(router.state.location.search).toEqual({ doc: 'untitled' }));
+  });
+
+  test('wiki overview renders root pages as cards with excerpt and child count', async () => {
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () => cardPagesResponse([
+      { id: 'r1', slug: 'guide', title: 'Guide', parentId: null, body: '# Guide\n\nHow to start.' },
+      { id: 'r2', slug: 'faq', title: 'FAQ', parentId: null, body: 'Questions.' },
+      { id: 'c1', slug: 'step-1', title: 'Step 1', parentId: 'r1', body: '' },
+    ])));
+
+    const { queryClient, router } = setup();
+    render(<QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider>);
+
+    expect(await screen.findByText('Guide')).toBeInTheDocument();
+    expect(screen.getByText('How to start.')).toBeInTheDocument();
+    expect(screen.getByText(/1 page/i)).toBeInTheDocument();
+    expect(screen.getByText('FAQ')).toBeInTheDocument();
+  });
+
+  test('expanding a card reveals its child subtree', async () => {
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () => cardPagesResponse([
+      { id: 'r1', slug: 'guide', title: 'Guide', parentId: null, body: '# Guide\n\nHow to start.' },
+      { id: 'r2', slug: 'faq', title: 'FAQ', parentId: null, body: 'Questions.' },
+      { id: 'c1', slug: 'step-1', title: 'Step 1', parentId: 'r1', body: '' },
+    ])));
+
+    const { queryClient, router } = setup();
+    render(<QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider>);
+
+    const card = (await screen.findByText('Guide')).closest('[data-testid^="wiki-card-"]')!;
+    fireEvent.click(within(card as HTMLElement).getByRole('button', { name: /expand guide/i }));
+    expect(await screen.findByText('Step 1')).toBeInTheDocument();
   });
 });
