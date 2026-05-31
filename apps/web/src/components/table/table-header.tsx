@@ -6,13 +6,11 @@ import { gridTemplate, type Column } from './columns.ts';
 import { InlineEdit } from '../inline/inline-edit.tsx';
 
 // SortKey is `string` because saved views can persist a sort by any column
-// key (built-in or custom field). Only `SORTABLE_BUILTIN_KEYS` are clickable
-// from the header today; custom keys can still arrive via URL/view hydration.
+// key (built-in or custom field). Every column header is clickable to sort;
+// custom field sorts are validated server-side.
 export type SortKey = string;
 export type SortDir = 'asc' | 'desc';
 export interface SortState { key: SortKey; dir: SortDir; }
-
-const SORTABLE_BUILTIN_KEYS: readonly string[] = ['title', 'status', 'updated_at'];
 
 interface Props {
   columns: Column[];         // visible columns, already ordered
@@ -112,8 +110,7 @@ function SortableHeaderCell({
     transition,
     opacity: isDragging ? 0.5 : 1,
   };
-  const sortable =
-    column.source === 'builtin' && SORTABLE_BUILTIN_KEYS.includes(column.key as SortKey);
+  const sortable = true; // every column is sortable; field sort is validated server-side
   const onClick = sortable
     ? () => {
         const isActive = sort?.key === column.key;

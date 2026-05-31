@@ -1563,4 +1563,94 @@ describe('TableView', () => {
     const filterBar = screen.getByTestId('filter-bar');
     expect(within(filterBar).queryByRole('button', { name: /columns/i })).toBeNull();
   });
+
+  it('clicking a custom field header sorts by that field', async () => {
+    // FS-2: every column header is sortable, not just built-ins. The seeded
+    // default view exposes the custom currency field `amount` (label "Amount")
+    // via visibleFields, so its header should be a sortable button.
+    const mockView = {
+      ...viewRow,
+      id: 'v1',
+      slug: 'default',
+      name: 'All',
+      isDefault: true,
+      filters: {},
+      sort: [],
+      columnOrder: null,
+      visibleFields: ['title', 'status', 'updated_at', 'amount'],
+    };
+
+    const navigateCalls: Array<{ search: Record<string, unknown> }> = [];
+    const updateViewCalls: Array<{ id: string; patch: Record<string, unknown> }> = [];
+
+    const fetchMock = vi.fn<typeof fetch>(async (url, init) => {
+      const u = String(url);
+      const method = init?.method ?? 'GET';
+      if (u.includes('/statuses') && method === 'GET') {
+        return new Response(JSON.stringify({ data: [statusRow] }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (u.includes('/fields') && method === 'GET') {
+        return new Response(JSON.stringify({ data: [fieldRow] }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (u.includes('/views') && method === 'GET') {
+        return new Response(JSON.stringify({ data: [mockView] }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (u.includes('/views/v1') && method === 'PATCH') {
+        const body = await (init?.body instanceof ReadableStream
+          ? new Response(init.body).text()
+          : Promise.resolve(String(init?.body ?? '{}')));
+        updateViewCalls.push({ id: 'v1', patch: JSON.parse(body) });
+        return new Response(JSON.stringify(mockView), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (u.includes('/documents') && method === 'GET') {
+        return new Response(JSON.stringify({ data: { data: [docRow], nextCursor: null } }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    // ?view=v1 — user has explicitly opened this view, so sort auto-save fires.
+    const { queryClient, router } = setup('/w/acme/p/web/work-items?view=v1');
+    const originalNavigate = router.navigate;
+    router.navigate = vi.fn(async (opts: any) => {
+      if (opts.search) {
+        navigateCalls.push({ search: opts.search });
+      }
+      return originalNavigate.call(router, opts);
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByText('First task')).toBeInTheDocument());
+
+    const fieldHeader = screen.getByRole('button', { name: /Amount/ });
+    fireEvent.click(fieldHeader);
+
+    await waitFor(() => {
+      expect(navigateCalls.some((call) => call.search.sort === 'amount')).toBe(true);
+    });
+
+    await waitFor(() => {
+      expect(updateViewCalls.some((call) =>
+        Array.isArray(call.patch.sort) &&
+        call.patch.sort.length === 1 &&
+        call.patch.sort[0].key === 'amount' &&
+        call.patch.sort[0].dir === 'asc'
+      )).toBe(true);
+    });
+  });
 });
