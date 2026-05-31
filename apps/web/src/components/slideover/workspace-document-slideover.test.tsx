@@ -186,7 +186,7 @@ describe('WorkspaceDocumentSlideover', () => {
     expect(screen.getByText(/Do the triage\./)).toBeInTheDocument();
   });
 
-  it('renders the TabStrip with Fields / Activity / Runs for an agent', async () => {
+  it('renders the icon tab toggles Fields / Activity / Runs for an agent (no Comments)', async () => {
     mockWorkspaceDoc('triage', 'agent');
     const { queryClient, router } = setup('?wdoc=triage');
     render(
@@ -196,19 +196,14 @@ describe('WorkspaceDocumentSlideover', () => {
     );
     await screen.findByText('Triage Agent');
 
-    const tablist = document.querySelector('[role="tablist"]');
-    expect(tablist).not.toBeNull();
-    const labels = Array.from(tablist!.querySelectorAll('[role="tab"]')).map(
-      (t) => t.textContent ?? '',
-    );
-    expect(labels.some((l) => l.includes('Fields'))).toBe(true);
-    expect(labels.some((l) => l.includes('Activity'))).toBe(true);
-    expect(labels.some((l) => l.includes('Runs'))).toBe(true);
-    // No Comments tab on workspace-scoped slideover.
-    expect(labels.some((l) => l.includes('Comments'))).toBe(false);
+    expect(screen.getByRole('tab', { name: 'Fields' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Activity' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Runs' })).toBeInTheDocument();
+    // No Comments tab on the workspace-scoped slideover.
+    expect(screen.queryByRole('tab', { name: 'Comments' })).toBeNull();
   });
 
-  it('renders the TabStrip with Fields / Activity / Runs for a trigger', async () => {
+  it('renders the icon tab toggles Fields / Activity / Runs for a trigger', async () => {
     mockWorkspaceDoc('webhook-orders', 'trigger');
     const { queryClient, router } = setup('?wdoc=webhook-orders');
     render(
@@ -218,18 +213,13 @@ describe('WorkspaceDocumentSlideover', () => {
     );
     await screen.findByText('Triage Agent');
 
-    const tablist = document.querySelector('[role="tablist"]');
-    expect(tablist).not.toBeNull();
-    const labels = Array.from(tablist!.querySelectorAll('[role="tab"]')).map(
-      (t) => t.textContent ?? '',
-    );
-    expect(labels.some((l) => l.includes('Fields'))).toBe(true);
-    expect(labels.some((l) => l.includes('Activity'))).toBe(true);
-    expect(labels.some((l) => l.includes('Runs'))).toBe(true);
-    expect(labels.some((l) => l.includes('Comments'))).toBe(false);
+    expect(screen.getByRole('tab', { name: 'Fields' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Activity' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Runs' })).toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'Comments' })).toBeNull();
   });
 
-  it('defaults to the Fields tab on open', async () => {
+  it('defaults to the Fields tab on open (aria-selected)', async () => {
     mockWorkspaceDoc('triage', 'agent');
     const { queryClient, router } = setup('?wdoc=triage');
     render(
@@ -239,12 +229,7 @@ describe('WorkspaceDocumentSlideover', () => {
     );
     await screen.findByText('Triage Agent');
 
-    const tablist = document.querySelector('[role="tablist"]')!;
-    const fieldsBtn = Array.from(tablist.querySelectorAll('[role="tab"]')).find(
-      (t) => (t.textContent ?? '').includes('Fields'),
-    );
-    expect(fieldsBtn).toBeDefined();
-    expect(fieldsBtn!.getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByRole('tab', { name: 'Fields' })).toHaveAttribute('aria-selected', 'true');
   });
 
   it('deep-link ?tab=runs opens on the Runs tab', async () => {
@@ -257,13 +242,8 @@ describe('WorkspaceDocumentSlideover', () => {
     );
     await screen.findByText('Triage Agent');
 
-    const tablist = document.querySelector('[role="tablist"]')!;
-    const runsBtn = Array.from(tablist.querySelectorAll('[role="tab"]')).find(
-      (t) => (t.textContent ?? '').includes('Runs'),
-    );
-    expect(runsBtn).toBeDefined();
     await waitFor(() => {
-      expect(runsBtn!.getAttribute('aria-pressed')).toBe('true');
+      expect(screen.getByRole('tab', { name: 'Runs' })).toHaveAttribute('aria-selected', 'true');
     });
   });
 
@@ -280,11 +260,7 @@ describe('WorkspaceDocumentSlideover', () => {
     // Arrived on Runs (the deep-link).
     expect((router.state.location.search as { tab?: string }).tab).toBe('runs');
 
-    const tablist = document.querySelector('[role="tablist"]')!;
-    const fieldsBtn = Array.from(tablist.querySelectorAll('[role="tab"]')).find(
-      (t) => (t.textContent ?? '').includes('Fields'),
-    ) as HTMLElement;
-    await userEvent.click(fieldsBtn);
+    await userEvent.click(screen.getByRole('tab', { name: 'Fields' }));
 
     // Clicking a tab clears the ?tab= param (and the wdoc stays).
     await waitFor(() => {
@@ -293,10 +269,10 @@ describe('WorkspaceDocumentSlideover', () => {
       expect(s.wdoc).toBe('triage');
     });
     // Fields is now the selected tab.
-    expect(fieldsBtn.getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByRole('tab', { name: 'Fields' })).toHaveAttribute('aria-selected', 'true');
   });
 
-  it('switching to Activity renders the workspace Activity panel + Log button (agent); body editor still visible', async () => {
+  it('switching to Activity renders the panel + Log button (agent) and HIDES the body editor', async () => {
     mockWorkspaceDoc('triage', 'agent');
     const { queryClient, router } = setup('?wdoc=triage');
     render(
@@ -306,14 +282,10 @@ describe('WorkspaceDocumentSlideover', () => {
     );
     await screen.findByText('Triage Agent');
 
-    // The C9 placeholder is gone.
-    expect(screen.queryByText(/Activity tab — wired in C10/)).toBeNull();
+    // On Fields (default) the body editor is present.
+    expect(document.querySelector('[data-testid="workspace-slideover-editor"]')).not.toBeNull();
 
-    const tablist = document.querySelector('[role="tablist"]')!;
-    const activityBtn = Array.from(tablist.querySelectorAll('[role="tab"]')).find(
-      (t) => (t.textContent ?? '').includes('Activity'),
-    ) as HTMLElement;
-    await userEvent.click(activityBtn);
+    await userEvent.click(screen.getByRole('tab', { name: 'Activity' }));
 
     // Real Activity panel renders ("No activity yet." for the empty-events mock).
     await waitFor(() => {
@@ -321,7 +293,8 @@ describe('WorkspaceDocumentSlideover', () => {
     });
     // Log Activity button is shown for agent docs.
     expect(screen.getByRole('button', { name: /Log activity/ })).toBeInTheDocument();
-    expect(document.querySelector('[data-testid="workspace-slideover-editor"]')).not.toBeNull();
+    // The Milkdown body editor only belongs on Fields — gone on Activity.
+    expect(document.querySelector('[data-testid="workspace-slideover-editor"]')).toBeNull();
   });
 
   it('Activity tab on a trigger renders the panel WITHOUT the Log button', async () => {
@@ -334,11 +307,7 @@ describe('WorkspaceDocumentSlideover', () => {
     );
     await screen.findByText('Triage Agent');
 
-    const tablist = document.querySelector('[role="tablist"]')!;
-    const activityBtn = Array.from(tablist.querySelectorAll('[role="tab"]')).find(
-      (t) => (t.textContent ?? '').includes('Activity'),
-    ) as HTMLElement;
-    await userEvent.click(activityBtn);
+    await userEvent.click(screen.getByRole('tab', { name: 'Activity' }));
 
     await waitFor(() => {
       expect(screen.getByText('No activity yet.')).toBeInTheDocument();
@@ -348,10 +317,9 @@ describe('WorkspaceDocumentSlideover', () => {
     expect(screen.queryByRole('button', { name: /Log activity/ })).toBeNull();
   });
 
-  it('switching to Runs renders the agent run-history section; body editor still visible', async () => {
+  it('switching to Runs renders the agent run-history section and HIDES the body editor', async () => {
     // Default agent fixture has no `projects` allow-list → wildcard fallback →
-    // RunsHistorySection shows its no-project empty state. The old Phase 3
-    // placeholder is gone (E-4 wired the real section).
+    // RunsHistorySection shows its no-project empty state.
     mockWorkspaceDoc('triage', 'agent');
     const { queryClient, router } = setup('?wdoc=triage');
     render(
@@ -361,21 +329,15 @@ describe('WorkspaceDocumentSlideover', () => {
     );
     await screen.findByText('Triage Agent');
 
-    expect(screen.queryByText(/No runs yet — Phase 3 wires the runner/)).toBeNull();
-
-    const tablist = document.querySelector('[role="tablist"]')!;
-    const runsBtn = Array.from(tablist.querySelectorAll('[role="tab"]')).find(
-      (t) => (t.textContent ?? '').includes('Runs'),
-    ) as HTMLElement;
-    await userEvent.click(runsBtn);
+    await userEvent.click(screen.getByRole('tab', { name: 'Runs' }));
 
     await waitFor(() => {
       expect(screen.getByText(/no project scoped to this agent/i)).toBeInTheDocument();
     });
-    expect(document.querySelector('[data-testid="workspace-slideover-editor"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="workspace-slideover-editor"]')).toBeNull();
   });
 
-  it('body editor stays visible across all tab switches', async () => {
+  it('the body editor is present ONLY on the Fields tab', async () => {
     mockWorkspaceDoc('triage', 'agent');
     const { queryClient, router } = setup('?wdoc=triage');
     render(
@@ -385,12 +347,20 @@ describe('WorkspaceDocumentSlideover', () => {
     );
     await screen.findByText('Triage Agent');
 
-    const tablist = document.querySelector('[role="tablist"]')!;
-    const allTabs = Array.from(tablist.querySelectorAll('[role="tab"]')) as HTMLElement[];
-    for (const t of allTabs) {
-      await userEvent.click(t);
+    // Fields (default): editor present.
+    expect(document.querySelector('[data-testid="workspace-slideover-editor"]')).not.toBeNull();
+
+    // Activity: editor gone.
+    await userEvent.click(screen.getByRole('tab', { name: 'Activity' }));
+    await waitFor(() => {
+      expect(document.querySelector('[data-testid="workspace-slideover-editor"]')).toBeNull();
+    });
+
+    // Back to Fields: editor returns.
+    await userEvent.click(screen.getByRole('tab', { name: 'Fields' }));
+    await waitFor(() => {
       expect(document.querySelector('[data-testid="workspace-slideover-editor"]')).not.toBeNull();
-    }
+    });
   });
 
   it('trigger slideover Fields tab renders TriggerForm (not FrontmatterForm)', async () => {

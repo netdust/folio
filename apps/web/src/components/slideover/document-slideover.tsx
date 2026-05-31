@@ -1,14 +1,14 @@
 import { useEffect, useState, useMemo } from 'react';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { toast } from 'sonner';
-import { Clipboard, MoreHorizontal, Trash2, X } from 'lucide-react';
+import { Clipboard, FileText, History, MessageCircle, MoreHorizontal, Trash2, X } from 'lucide-react';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '../ui/sheet.tsx';
 import { IconButton } from '../ui/icon-button.tsx';
 import { Button } from '../ui/button.tsx';
 import { Icon } from '../ui/icon.tsx';
 import { Skeleton } from '../ui/skeleton.tsx';
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
-import { TabStrip, type TabItem } from '../ui/tab-strip.tsx';
+import { HeaderTabs, type HeaderTabItem } from './header-tabs.tsx';
 import {
   Dialog,
   DialogContent,
@@ -61,6 +61,19 @@ export function DocumentSlideover({ wslug, pslug }: Props) {
   const [moreOpen, setMoreOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const del = useDeleteDocument(wslug, pslug);
+
+  // Tab state lives here (not in SlideoverBody) so the icon toggles can render
+  // inline in the header — NocoDB-style single row — while the body reads the
+  // active tab. Resets to Fields whenever a different doc opens.
+  const [tab, setTab] = useState<DocTabValue>('fields');
+  useEffect(() => {
+    setTab('fields');
+  }, [doc?.id]);
+  const tabItems: HeaderTabItem<DocTabValue>[] = [
+    { value: 'fields', label: 'Fields', icon: FileText },
+    { value: 'comments', label: 'Comments', icon: MessageCircle },
+    { value: 'activity', label: 'Activity', icon: History },
+  ];
 
   // Alt+M toggles raw ↔ rich. Window listener stays at this level so the
   // shortcut works regardless of where focus lives inside the slideover.
@@ -130,6 +143,8 @@ export function DocumentSlideover({ wslug, pslug }: Props) {
           <div data-testid="slideover-toolbar" className="flex items-center gap-1.5">
             {doc ? (
               <>
+                <HeaderTabs value={tab} items={tabItems} onChange={setTab} />
+                <div aria-hidden className="mx-0.5 h-4 w-px bg-border-light" />
                 <Button
                   variant="secondary"
                   size="sm"
@@ -184,6 +199,7 @@ export function DocumentSlideover({ wslug, pslug }: Props) {
               pslug={pslug}
               slug={slug}
               mode={mode}
+              tab={tab}
             />
           ) : null}
         </div>
@@ -276,11 +292,13 @@ function SlideoverBody({
   pslug,
   slug,
   mode,
+  tab,
 }: {
   wslug: string;
   pslug: string;
   slug: string;
   mode: EditorMode;
+  tab: DocTabValue;
 }) {
   const { data: doc, isLoading, error } = useDocument(wslug, pslug, slug);
   const { data: statuses } = useStatuses(wslug, pslug);
@@ -303,17 +321,6 @@ function SlideoverBody({
   // only). The hook is gated on doc.slug so it idles until the doc resolves.
   const { data: members } = useMembers(wslug);
   const { data: me } = useMe();
-  const commentsQ = useComments(wslug, pslug, doc?.slug ?? '');
-  const commentCount = commentsQ.data?.length ?? 0;
-
-  // Tab state — per-slideover-open. Defaults to Fields on each fresh open
-  // and resets to Fields whenever the user navigates to a different doc
-  // without closing the sheet first.
-  const [tab, setTab] = useState<DocTabValue>('fields');
-  useEffect(() => {
-    setTab('fields');
-  }, [doc?.id]);
-
   if (isLoading) return <div className="text-fg-3">Loading document…</div>;
   if (error || !doc) return <div className="text-danger">Failed to load document.</div>;
 
@@ -338,15 +345,9 @@ function SlideoverBody({
 
   // Wiki pages are "just a markdown file" — no status, no pinned fields,
   // no inferred frontmatter, no slug pill. Work items keep the full
-  // frontmatter form on the Fields tab. Body editor renders below the tabs
-  // for both.
+  // frontmatter form on the Fields tab. The body editor renders ONLY on the
+  // Fields tab (Comments/Activity are full-height panels).
   const isPage = doc.type === 'page';
-
-  const tabItems: TabItem<DocTabValue>[] = [
-    { value: 'fields', label: 'Fields', icon: '📋' },
-    { value: 'comments', label: 'Comments', icon: '💬', count: commentCount },
-    { value: 'activity', label: 'Activity', icon: '📜' },
-  ];
 
   return (
     <article className="flex h-full flex-col">
@@ -358,33 +359,57 @@ function SlideoverBody({
           <div className="font-mono text-[11px] text-fg-3">/{doc.slug}</div>
         </header>
       ) : null}
-      <TabStrip value={tab} items={tabItems} onChange={setTab} />
-      {/* Tab content area — sits ABOVE the body editor. The testid is kept
-          as `slideover-activity` so existing flex/layout assertions keep
-          working (rename is a follow-up — see C9 notes). */}
-      <div
-        data-testid="slideover-activity"
-        className="folio-scroll shrink-0 max-h-[40vh] overflow-y-auto pb-3 pt-3"
-      >
-        {tab === 'fields' ? (
-          isPage ? (
-            <div className="text-xs text-fg-3">No fields for pages.</div>
-          ) : (
-            <FrontmatterForm
-              wslug={wslug}
-              pslug={pslug}
-              type={doc.type}
-              status={doc.status}
-              statuses={statuses ?? []}
-              frontmatter={doc.frontmatter}
-              pinnedFields={fields ?? []}
-              onStatusCommit={(next) => void onPatch({ status: next }, ['status'])}
-              onFrontmatterCommit={(p) => void onPatch({ frontmatter: p }, Object.keys(p))}
-              pendingKeys={pendingKeys}
-            />
-          )
-        ) : null}
-        {tab === 'comments' && workspace && project ? (
+      {/* FIELDS tab: the frontmatter form (capped) sits ABOVE the body editor.
+          COMMENTS / ACTIVITY tabs: a single full-height panel, NO body editor
+          (the Milkdown editor only belongs on Fields). */}
+      {tab === 'fields' ? (
+        <>
+          <div
+            data-testid="slideover-activity"
+            className="folio-scroll shrink-0 max-h-[40vh] overflow-y-auto pb-3 pt-3"
+          >
+            {isPage ? (
+              <div className="text-xs text-fg-3">No fields for pages.</div>
+            ) : (
+              <FrontmatterForm
+                wslug={wslug}
+                pslug={pslug}
+                type={doc.type}
+                status={doc.status}
+                statuses={statuses ?? []}
+                frontmatter={doc.frontmatter}
+                pinnedFields={fields ?? []}
+                onStatusCommit={(next) => void onPatch({ status: next }, ['status'])}
+                onFrontmatterCommit={(p) => void onPatch({ frontmatter: p }, Object.keys(p))}
+                pendingKeys={pendingKeys}
+              />
+            )}
+          </div>
+          <div
+            data-testid="slideover-editor"
+            className="folio-scroll flex-1 min-h-0 overflow-y-auto border-t border-border-light pt-4 focus-within:border-fg-3"
+          >
+            {mode === 'rich' ? (
+              <BodyEditor
+                key={`rich-${doc.slug}`}
+                value={doc.body}
+                onChange={(body) => onPatch({ body }, ['body'])}
+                documents={docPage?.data ?? []}
+                aiConfigured={aiConfigured}
+                showToolbar={isPage}
+          />
+            ) : (
+              <RawMdEditor
+                key={`raw-${doc.slug}`}
+                value={doc.body}
+                onChange={(body) => onPatch({ body }, ['body'])}
+              />
+            )}
+          </div>
+        </>
+      ) : null}
+      {tab === 'comments' && workspace && project ? (
+        <div className="folio-scroll min-h-0 flex-1 overflow-y-auto pt-3">
           <CommentsTab
             workspaceSlug={wslug}
             workspaceId={workspace.id}
@@ -396,32 +421,13 @@ function SlideoverBody({
             currentAgentSlug={null}
             workspaceMembers={members ?? []}
           />
-        ) : null}
-        {tab === 'activity' ? (
+        </div>
+      ) : null}
+      {tab === 'activity' ? (
+        <div className="folio-scroll min-h-0 flex-1 overflow-y-auto pt-3">
           <ActivityPanel wslug={wslug} pslug={pslug} slug={doc.slug} />
-        ) : null}
-      </div>
-      <div
-        data-testid="slideover-editor"
-        className="folio-scroll flex-1 min-h-0 overflow-y-auto border-t border-border-light pt-4 focus-within:border-fg-3"
-      >
-        {mode === 'rich' ? (
-          <BodyEditor
-            key={`rich-${doc.slug}`}
-            value={doc.body}
-            onChange={(body) => onPatch({ body }, ['body'])}
-            documents={docPage?.data ?? []}
-            aiConfigured={aiConfigured}
-            showToolbar={isPage}
-          />
-        ) : (
-          <RawMdEditor
-            key={`raw-${doc.slug}`}
-            value={doc.body}
-            onChange={(body) => onPatch({ body }, ['body'])}
-          />
-        )}
-      </div>
+        </div>
+      ) : null}
     </article>
   );
 }
