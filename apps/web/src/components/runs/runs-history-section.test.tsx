@@ -24,12 +24,26 @@ function fetchCalls(): string[] {
     .filter((u) => u.includes('/runs'));
 }
 
+// The agent's frontmatter.projects allow-list stores project IDs, but the
+// project-scoped runs route resolves :pslug by SLUG. So the fetch mock must
+// serve the workspace's projects list (id→slug) and the runs endpoints keyed
+// by SLUG. `proj(id, slug)` builds a Project row.
+function proj(id: string, slug: string) {
+  return { id, slug, name: slug, icon: null, description: null, workspaceId: 'w1', archivedAt: null, createdAt: '', updatedAt: '' };
+}
+
 describe('RunsHistorySection', () => {
-  test('queries EVERY concrete project the agent is scoped to and renders all their runs', async () => {
-    // marketing → an older run; sales → a newer run. Each project returns a
-    // DIFFERENT run, so both endpoints must be fetched for both to appear.
+  test('resolves allow-list project IDs → slugs, then queries each project by SLUG', async () => {
+    // Agent allow-list holds IDs (id-mkt, id-sales); the runs route wants slugs
+    // (marketing, sales). marketing → older run; sales → newer run.
     vi.stubGlobal('fetch', vi.fn<typeof fetch>(async (input) => {
       const url = String(input);
+      if (url.includes('/projects')) {
+        return new Response(
+          JSON.stringify({ data: [proj('id-mkt', 'marketing'), proj('id-sales', 'sales')] }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
       const data = url.includes('/p/marketing/runs')
         ? [runDoc('r-mkt', 'marketing-run', '2026-05-29T10:00:00.000Z')]
         : url.includes('/p/sales/runs')
@@ -38,19 +52,20 @@ describe('RunsHistorySection', () => {
       return new Response(JSON.stringify({ data }), { status: 200, headers: { 'content-type': 'application/json' } });
     }));
 
-    wrap(<RunsHistorySection wslug="acme" agentSlug="bot" projects={['marketing', 'sales']} />);
+    wrap(<RunsHistorySection wslug="acme" agentSlug="bot" projects={['id-mkt', 'id-sales']} />);
 
     // `fired_by` renders as "· <title>" in the row metadata line.
     await waitFor(() => expect(screen.getByText(/marketing-run/)).toBeInTheDocument());
     expect(screen.getByText(/sales-run/)).toBeInTheDocument();
 
     const calls = fetchCalls();
+    // The runs URLs use the resolved SLUGs, never the raw allow-list IDs.
     expect(calls.some((u) => u.includes('/p/marketing/runs'))).toBe(true);
     expect(calls.some((u) => u.includes('/p/sales/runs'))).toBe(true);
+    expect(calls.some((u) => u.includes('/p/id-mkt/') || u.includes('/p/id-sales/'))).toBe(false);
     expect(calls.every((u) => u.includes('agent=bot'))).toBe(true);
 
-    // Merged newest-first: the sales run (2026-05-30) renders before the
-    // marketing run (2026-05-29).
+    // Merged newest-first: sales (2026-05-30) before marketing (2026-05-29).
     const rows = screen.getAllByText(/-run$/);
     expect(rows.map((n) => n.textContent)).toEqual(['· sales-run', '· marketing-run']);
   });
@@ -63,9 +78,17 @@ describe('RunsHistorySection', () => {
   });
 
   test('shows "No runs yet." only when ALL projects return zero runs', async () => {
-    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () =>
-      new Response(JSON.stringify({ data: [] }), { status: 200, headers: { 'content-type': 'application/json' } })));
-    wrap(<RunsHistorySection wslug="acme" agentSlug="bot" projects={['marketing', 'sales']} />);
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url.includes('/projects')) {
+        return new Response(
+          JSON.stringify({ data: [proj('id-mkt', 'marketing'), proj('id-sales', 'sales')] }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      return new Response(JSON.stringify({ data: [] }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }));
+    wrap(<RunsHistorySection wslug="acme" agentSlug="bot" projects={['id-mkt', 'id-sales']} />);
     await waitFor(() => expect(screen.getByText(/no runs yet/i)).toBeInTheDocument());
   });
 });
