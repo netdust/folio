@@ -106,6 +106,61 @@ test('POST /fields 422 on currency with non-ISO code', async () => {
   expect(res.status).toBe(422);
 });
 
+test('POST /fields 422 on relation without options', async () => {
+  const { app, seed } = await makeTestApp();
+  const res = await app.request(path, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ key: 'rel_a', type: 'relation' }),
+  });
+  expect(res.status).toBe(422);
+  expect((await res.json()).error.code).toBe('INVALID_BODY');
+});
+
+test('POST /fields 422 on relation with bad cardinality', async () => {
+  const { app, seed } = await makeTestApp();
+  const res = await app.request(path, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ key: 'rel_b', type: 'relation', options: ['wiki', 'lots'] }),
+  });
+  expect(res.status).toBe(422);
+});
+
+test('POST /fields accepts relation [wiki, single]', async () => {
+  const { app, seed } = await makeTestApp();
+  const res = await app.request(path, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ key: 'rel_c', type: 'relation', options: ['wiki', 'single'] }),
+  });
+  expect(res.status).toBe(201);
+  const body = await res.json();
+  const field = body.data?.field ?? body.data ?? body.field;
+  expect(field.type).toBe('relation');
+  expect(field.options).toEqual(['wiki', 'single']);
+});
+
+test('POST /fields accepts relation [table:<id>, multi]', async () => {
+  const { app, seed } = await makeTestApp();
+  const res = await app.request(path, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ key: 'rel_d', type: 'relation', options: ['table:tbl_abc', 'multi'] }),
+  });
+  expect(res.status).toBe(201);
+});
+
+test('POST /fields 422 on relation with bad target', async () => {
+  const { app, seed } = await makeTestApp();
+  const res = await app.request(path, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ key: 'rel_e', type: 'relation', options: ['garbage', 'single'] }),
+  });
+  expect(res.status).toBe(422);
+});
+
 test('PATCH allows compatible string→text', async () => {
   const { app, seed } = await makeTestApp();
   const create = await app.request(path, {

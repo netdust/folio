@@ -36,6 +36,24 @@ function validateOptions(type: string, options: string[] | undefined): void {
     }
     return;
   }
+  if (type === 'relation') {
+    if (!options || options.length !== 2) {
+      throw new HTTPError(
+        'INVALID_BODY',
+        'field type "relation" requires options [target, cardinality], e.g. ["wiki","single"] or ["table:<id>","multi"]',
+        422,
+      );
+    }
+    const [target, cardinality] = options;
+    const targetOk = target === 'wiki' || /^table:[\w-]+$/.test(target ?? '');
+    if (!targetOk) {
+      throw new HTTPError('INVALID_BODY', `relation target must be "wiki" or "table:<id>", got "${target}"`, 422);
+    }
+    if (cardinality !== 'single' && cardinality !== 'multi') {
+      throw new HTTPError('INVALID_BODY', `relation cardinality must be "single" or "multi", got "${cardinality}"`, 422);
+    }
+    return;
+  }
   if (options !== undefined) {
     throw new HTTPError('INVALID_BODY', `field type "${type}" does not allow options`, 422);
   }
