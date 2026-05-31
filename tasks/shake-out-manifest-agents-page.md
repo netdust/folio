@@ -44,8 +44,17 @@ Quick visual confirmations I can't fully judge (the automated probe hit viewport
 - **Fix direction (Phase 3):** the feed needs an initial **history backfill** — fetch recent `agent_run`s on mount, then live-tail on top. There is no workspace-wide runs-list endpoint today (the comment notes this); options: (a) add a workspace-scoped `GET /w/:wslug/runs?recent=N` that returns recent agent_runs (visibility-gated like the project `/runs`), and seed `useActivityFeed` from it; OR (b) reuse the SSE `Last-Event-Id` replay if the event log retains enough history (likely not far enough back). (a) is the right-altitude fix.
 - **Severity: IMPORTANT** — the feature works for *new* live activity, but the primary surface looks broken (empty) for anyone opening it to review past runs.
 
+### BUG-2 (IMPORTANT — security) — `/runs` list leaks `system_prompt` to workspace members; BUG-1 fix widened it
+- **Symptom:** `GET /api/v1/w/:wslug/runs` (the new BUG-1 endpoint) returns each agent_run's `frontmatter.system_prompt` verbatim — confirmed live: `"system_prompt":"You are an expert in using the folio mcp"`. The Activity feed (any workspace member) now fetches this, though it only needs `{id, agent_slug, status, fired_by}`.
+- **Root cause:** `listRuns` returns full `documents` rows and BOTH `/runs` list paths (project + the new workspace one) `jsonOk(c, rows)` without redaction. The F-shakeout **C1** fix closed `system_prompt` leakage on `GET ?type=agent_run`, but the `/runs` endpoints were never redacted — a **pre-existing leak** on the project list that BUG-1's workspace endpoint now widens to a member-facing feed.
+- **Provenance:** the leak is PRE-EXISTING (project `/runs`); BUG-1's fix this session widened the exposure surface (workspace-wide, member-facing). Caught immediately at fix-verification.
+- **Fix direction:** redact `system_prompt` (and any other sensitive run frontmatter) from the `/runs` LIST responses — ideally a shared `serializeRunForList(row)` used by both the project and workspace list handlers, dropping `system_prompt`. The single-run `GET /:runId` may warrant the same review. The activity feed doesn't need it, so no client change required.
+- **Severity: IMPORTANT (security)** — system_prompt is an agent's full instructions; not a credential, but workspace-member-visible internal config that the C1 fix established should not leak through document-list surfaces.
+
 ## Phase 3 — Fix
-One IMPORTANT bug (BUG-1) pending. Fix via systematic-debugging after manifest sign-off. The 10 review findings + agents-page UI flow are otherwise clean.
+- **BUG-1: FIXED** (`53e6c53`) — workspace `GET /runs` + `useWorkspaceRuns` + `useActivityFeed` seeds history then live-tails. Server 1049/0, web 705/0, tsc clean. Verified live: endpoint returns runs newest-first.
+- **BUG-2: pending** — surfaced by verifying BUG-1's fix. Fix via systematic-debugging (redact system_prompt from `/runs` list responses).
+- The 10 review findings + agents-page UI flow are otherwise clean.
 
 ## Notes / non-blocking observations
 - Pre-existing test data in Netdust has agents with `model: "m"` (a one-char model from an earlier session) — cosmetic data, not a defect; chips render it faithfully as `anthropic·m`.
