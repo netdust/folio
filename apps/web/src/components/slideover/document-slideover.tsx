@@ -311,6 +311,8 @@ function SlideoverBody({
   mode: EditorMode;
   tab: DocTabValue;
 }) {
+  const navigate = useNavigate();
+  const search = useSearch({ strict: false }) as Record<string, unknown>;
   const { data: doc, isLoading, error } = useDocument(wslug, pslug, slug);
   const { data: statuses } = useStatuses(wslug, pslug);
   const { data: fields } = useFields(wslug, pslug, 'work-items');
@@ -393,6 +395,10 @@ function SlideoverBody({
                 onStatusCommit={(next) => void onPatch({ status: next }, ['status'])}
                 onFrontmatterCommit={(p) => void onPatch({ frontmatter: p }, Object.keys(p))}
                 pendingKeys={pendingKeys}
+                docSlug={doc.slug}
+                onOpenBacklink={(s) =>
+                  void navigate({ to: '.', search: { ...search, doc: s } })
+                }
               />
             )}
           </div>

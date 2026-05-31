@@ -6,6 +6,10 @@ import { InlineSelect } from '../inline/inline-select.tsx';
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
 import { Icon } from '../ui/icon.tsx';
 import { cn } from '../ui/cn.ts';
+import { RelationCell } from '../relations/relation-cell.tsx';
+import { RelationPicker, type RelationCandidate } from '../relations/relation-picker.tsx';
+
+const RELATION_TOKEN_RE = /^\[\[([\w-]+)\]\]$/;
 
 interface Props {
   fieldKey: string;
@@ -14,9 +18,23 @@ interface Props {
   options?: string[];
   onCommit: (next: unknown) => void;
   isPending?: boolean;
+  // Slideover-only: when provided, the relation case renders an editable
+  // chips+picker surface. Omitted on the table path, where the relation case
+  // falls back to read-only chips (RelationCell).
+  relationCandidates?: RelationCandidate[];
+  resolveSlug?: (slug: string) => { slug: string; title: string } | null;
 }
 
-export function FieldRenderer({ fieldKey, type, value, options, onCommit, isPending }: Props) {
+export function FieldRenderer({
+  fieldKey,
+  type,
+  value,
+  options,
+  onCommit,
+  isPending,
+  relationCandidates,
+  resolveSlug,
+}: Props) {
   switch (type) {
     case 'string':
     case 'datetime': // fallback: plain text in v1
@@ -109,9 +127,151 @@ export function FieldRenderer({ fieldKey, type, value, options, onCommit, isPend
         />
       );
     }
+    case 'relation': {
+      const resolve = resolveSlug ?? (() => null);
+      // Table path: no candidates threaded → read-only chips.
+      if (relationCandidates === undefined) {
+        return <RelationCell value={value} resolve={resolve} />;
+      }
+      // Slideover path: editable chips + scoped picker.
+      const isMulti = options?.[1] === 'multi';
+      return (
+        <RelationField
+          value={value}
+          isMulti={isMulti}
+          candidates={relationCandidates}
+          resolve={resolve}
+          onCommit={onCommit}
+          isPending={isPending}
+          ariaLabel={fieldKey}
+        />
+      );
+    }
     default:
       return <span className="text-fg-3 italic">unsupported type: {type}</span>;
   }
+}
+
+function toRelationTokens(value: unknown): string[] {
+  if (typeof value === 'string') return value ? [value] : [];
+  if (Array.isArray(value)) return value.filter((v): v is string => typeof v === 'string');
+  return [];
+}
+
+function tokenSlug(token: string): string | null {
+  return RELATION_TOKEN_RE.exec(token)?.[1] ?? null;
+}
+
+function RelationField({
+  value,
+  isMulti,
+  candidates,
+  resolve,
+  onCommit,
+  isPending,
+  ariaLabel,
+}: {
+  value: unknown;
+  isMulti: boolean;
+  candidates: RelationCandidate[];
+  resolve: (slug: string) => { slug: string; title: string } | null;
+  onCommit: (next: unknown) => void;
+  isPending?: boolean;
+  ariaLabel: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const tokens = toRelationTokens(value);
+  const alreadyLinkedSlugs = tokens
+    .map(tokenSlug)
+    .filter((s): s is string => s !== null);
+
+  const addLink = (slug: string) => {
+    const token = `[[${slug}]]`;
+    if (isMulti) {
+      if (tokens.includes(token)) return;
+      onCommit([...tokens, token]);
+    } else {
+      onCommit(token);
+    }
+    setQuery('');
+    setOpen(false);
+  };
+
+  const removeLink = (token: string) => {
+    if (isMulti) {
+      onCommit(tokens.filter((t) => t !== token));
+    } else {
+      onCommit('');
+    }
+  };
+
+  return (
+    <div
+      role="group"
+      aria-label={ariaLabel}
+      className={cn('flex flex-wrap items-center gap-1', isPending && 'opacity-60')}
+    >
+      {tokens.map((tok) => {
+        const slug = tokenSlug(tok);
+        const resolved = slug ? resolve(slug) : null;
+        return (
+          <span
+            key={tok}
+            className={cn(
+              'inline-flex items-center gap-1 rounded-sm bg-card px-1.5 py-0.5 text-xs',
+              resolved ? 'text-fg' : 'font-mono text-fg-3 line-through',
+            )}
+          >
+            {resolved ? resolved.title : tok}
+            <button
+              type="button"
+              aria-label={`Remove ${resolved ? resolved.title : tok}`}
+              onClick={() => removeLink(tok)}
+              className="text-fg-3 hover:text-fg"
+            >
+              ×
+            </button>
+          </span>
+        );
+      })}
+      {isMulti || tokens.length === 0 ? (
+        <Popover
+          open={open}
+          onOpenChange={(o) => {
+            setOpen(o);
+            if (!o) setQuery('');
+          }}
+        >
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              aria-label={`Add link to ${ariaLabel}`}
+              className="inline-grid h-5 w-5 place-items-center rounded-sm text-fg-3 hover:bg-card hover:text-fg-2"
+            >
+              <Icon icon={Plus} size={14} />
+            </button>
+          </PopoverTrigger>
+          <PopoverContent align="start" className="w-auto border-none bg-transparent p-0 shadow-none">
+            <input
+              autoFocus
+              placeholder="Search documents…"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              className="mb-1 block w-[260px] rounded-sm border border-border-light bg-shell px-2 py-1 text-sm input-focus"
+            />
+            <RelationPicker
+              candidates={candidates}
+              query={query}
+              excludeSlugs={alreadyLinkedSlugs}
+              onSelect={(target) => addLink(target.slug)}
+              onClose={() => setOpen(false)}
+            />
+          </PopoverContent>
+        </Popover>
+      ) : null}
+    </div>
+  );
 }
 
 function TextArea({

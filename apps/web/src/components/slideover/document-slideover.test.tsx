@@ -46,6 +46,14 @@ function mockDoc(slug: string, type: 'work_item' | 'page' = 'work_item') {
   vi.stubGlobal(
     'fetch',
     vi.fn<typeof fetch>(async (url) => {
+      // Backlinks lives at /documents/:slug/backlinks — match it BEFORE the
+      // broad /documents/:slug doc-detail branch so the doc envelope doesn't
+      // leak into the backlinks query (server returns a row array here).
+      if (String(url).includes('/backlinks')) {
+        return new Response(JSON.stringify({ data: [] }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
       if (String(url).includes(`/documents/${slug}`)) {
         return new Response(
           JSON.stringify({
