@@ -41,8 +41,10 @@ export function AgentList({ wslug }: Props) {
       const created = await create.mutateAsync({
         type: 'agent',
         title: 'Untitled',
+        // The body IS the prompt — seed a starter so the editor isn't blank and
+        // the empty-prompt guard (server) doesn't block the first run.
+        body: '# Prompt\n\nDescribe this agent: its role, and what it should do on every run.',
         frontmatter: {
-          system_prompt: 'Describe what this agent does.',
           model: 'claude-haiku-4-5',
           provider: 'anthropic',
           tools: [],

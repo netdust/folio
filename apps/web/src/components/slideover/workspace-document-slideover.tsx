@@ -343,6 +343,9 @@ function SlideoverBody({
             data-testid="workspace-slideover-editor"
             className="folio-scroll flex-1 min-h-0 overflow-y-auto border-t border-border-light pt-4 focus-within:border-fg-3"
           >
+            <div className="mb-1.5 font-mono text-[11px] uppercase tracking-wide text-fg-3">
+              Prompt
+            </div>
             {mode === 'rich' ? (
               <BodyEditor
                 key={`rich-${doc.slug}`}

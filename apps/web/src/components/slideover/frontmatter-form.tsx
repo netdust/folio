@@ -24,10 +24,8 @@ interface AgentFieldMeta {
 }
 
 const AGENT_FIELDS: AgentFieldMeta[] = [
-  {
-    key: 'system_prompt',
-    description: 'Instructions the agent receives on every run. Describe its role and what it should do.',
-  },
+  // system_prompt removed — the agent's prompt is now its document body
+  // (rendered by the body editor on the Fields tab), not a frontmatter field.
   {
     key: 'provider',
     description: 'AI provider + model. Needs a configured API key in workspace settings.',
