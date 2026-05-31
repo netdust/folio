@@ -574,8 +574,11 @@ git commit -m "phase-3.x: setRunBody — persist CC transcript on the run docume
 
 ### Task 7: Wire the branch into `runAgent` (ccExecute path)
 
+> **PLAN CORRECTION (2026-05-31, controller ground-truth gate) — the run's token has no recoverable plaintext.** The plan said `mcpToken: ctx.token.token`. VERIFIED FALSE: `apiTokens` stores only `tokenHash` (sha256 of the bearer); the plaintext is shown once at mint and discarded (`documents.ts:556` `newApiToken()` → plaintext used then dropped). `ctx.token` is an `ApiToken` row (runner.ts:107) with NO `.token` field. So Folio cannot recover the run-token plaintext to hand to CC.
+> **Scope decision (user, 2026-05-31): "Minimal branch now, MCP token as fast-follow."** Task 7 ships the executor branch WITHOUT an MCP token: spawn → transcript→body → result comment → `completed`. Pass `mcpToken: ''` (CC gets no Folio token; its MCP callbacks would 401, acceptable for v1 — host-side work still runs). The fresh-token mint/scope/revoke lifecycle is split out to **Task 7b** (deferred; uses `newApiToken()` + `toolsToScopes(agent.tools)` + agent `projectIds`, then revoke post-run). Update the self-review's "token reuse" claim accordingly.
+
 **Files:**
-- Modify: `apps/server/src/lib/runner.ts:154-155` (branch after preflight)
+- Modify: `apps/server/src/lib/runner.ts` (branch after preflight — current branch point is the `const messages = await buildInitialMessages(ctx); await runLoop(ctx, messages);` pair at ~l.153-155, post Tasks 2–4)
 - Test: `apps/server/src/lib/runner.test.ts` (append — integration over the runner with an injected spawn)
 
 The branch calls the executor, persists the transcript, posts the result comment, and transitions the run. To keep the executor injectable in the runner test, expose a module-level spawn override on the runner (mirroring the provider `__INTERNAL_TEST_ONLY__` pattern already in `provider.ts`).
@@ -664,7 +667,7 @@ async function ccExecute(ctx: RunContext): Promise<void> {
     {
       systemPrompt: ctx.fm.system_prompt,
       model: ctx.fm.model && ctx.fm.model.length > 0 ? ctx.fm.model : undefined,
-      mcpToken: ctx.token.token,
+      mcpToken: '', // Task 7b will mint a fresh scoped token; v1 ships no MCP callback (see correction above)
       cwd: process.cwd(),
     },
     __ccSpawnOverride ? { spawn: __ccSpawnOverride } : {},
@@ -683,7 +686,7 @@ async function ccExecute(ctx: RunContext): Promise<void> {
 }
 ```
 
-> `ctx.token.token` — confirm the column name on the loaded `apiTokens` row (it is the bearer string; grep `apiTokens` schema if unsure). `transitionRun` is already imported in runner.ts (l.47).
+> `transitionRun(runId, { newStatus, actor })` is already imported in runner.ts (l.47); `actor` is required, `doneReason`/`completedAt` optional — the call above is valid. `mcpToken` is intentionally `''` in v1 per the correction above.
 
 - [ ] **Step 4: Run test to verify it passes**
 
