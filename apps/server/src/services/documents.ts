@@ -12,6 +12,7 @@
  */
 
 import { and, asc, desc, eq, gt, gte, inArray, isNull, lt, ne, or, sql } from 'drizzle-orm';
+import type { SQL } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import {
   slugify,
@@ -96,6 +97,19 @@ const SORT_COLUMNS = {
 } as const;
 export type SortKey = keyof typeof SORT_COLUMNS;
 export type SortDir = 'asc' | 'desc';
+
+// status is NULLABLE — coalesce NULL to a high sentinel (max BMP codepoint) so
+// NULLs sort LAST in asc (first in desc) and the keyset cursor can address
+// them. The SAME sentinel must be used in ORDER BY, the keyset predicate, AND
+// the cursor value, or NULL-status rows silently drop across page boundaries.
+// title/updated_at are notNull, so they keep using the raw column.
+const NULL_SENTINEL = '￿';
+function sortExpr(key: SortKey): SQL {
+  if (key === 'status') return sql`coalesce(${documents.status}, ${NULL_SENTINEL})`;
+  // SQLiteColumn is an SQLWrapper; the comparison/order helpers accept it, but
+  // the union with SQL confuses overload resolution. Normalize to SQL.
+  return sql`${SORT_COLUMNS[key]}`;
+}
 
 function resolveSort(sort?: string, dir?: string): { key: SortKey; dir: SortDir } {
   const key = (sort && sort in SORT_COLUMNS ? sort : 'updated_at') as SortKey;
@@ -247,7 +261,6 @@ export async function listDocuments(
   }
 
   const { key: sortKey, dir: sortDir } = resolveSort(opts.sort, opts.dir);
-  const sortCol = SORT_COLUMNS[sortKey];
   const decoded = opts.cursor ? decodeCursor(opts.cursor) : null;
   const cursor = decoded && decoded.sortKey === sortKey ? decoded : null;
 
@@ -262,10 +275,11 @@ export async function listDocuments(
         ) as never,
       );
     } else {
+      const col = sortExpr(sortKey);
       whereClauses.push(
         or(
-          cmpGt(sortCol, cursor.sortValue),
-          and(eq(sortCol, cursor.sortValue), cmpGt(documents.id, cursor.id)),
+          cmpGt(col, cursor.sortValue),
+          and(eq(col, cursor.sortValue), cmpGt(documents.id, cursor.id)),
         ) as never,
       );
     }
@@ -276,7 +290,7 @@ export async function listDocuments(
     .select()
     .from(documents)
     .where(and(...whereClauses))
-    .orderBy(dirFn(sortCol), dirFn(documents.id))
+    .orderBy(dirFn(sortExpr(sortKey)), dirFn(documents.id))
     .limit(limit + 1);
 
   const hasMore = rows.length > limit;
@@ -285,7 +299,11 @@ export async function listDocuments(
   let nextCursor: string | null = null;
   if (hasMore && last) {
     const sortValue =
-      sortKey === 'updated_at' ? String(last.updatedAt.getTime()) : String((last as Record<string, unknown>)[sortKey] ?? '');
+      sortKey === 'updated_at'
+        ? String(last.updatedAt.getTime())
+        : sortKey === 'status'
+          ? String(last.status ?? NULL_SENTINEL)
+          : String((last as Record<string, unknown>)[sortKey] ?? '');
     nextCursor = encodeCursor(sortKey, sortValue, last.id);
   }
   return { data: page, nextCursor };

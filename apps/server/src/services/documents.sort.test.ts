@@ -184,6 +184,68 @@ test('keyset pagination under title asc drops/dupes nothing', async () => {
   expect(union.size).toBe(5);
 });
 
+/**
+ * Seed 5 work items where 3 have a NULL status and 2 have real statuses.
+ * status is a NULLABLE column (schema.ts: text('status')), so a page
+ * boundary can land inside the NULL-status group. The keyset cursor must
+ * still address those rows or they silently vanish from later pages.
+ */
+async function seedNullStatuses(): Promise<Seeded> {
+  const { db, seed } = await makeTestApp();
+  const table = await getWorkItemsTable(db, seed.project.id);
+  const rows = [
+    { title: 'n1', status: null, updatedAt: T + 10 },
+    { title: 'n2', status: null, updatedAt: T + 20 },
+    { title: 'n3', status: null, updatedAt: T + 30 },
+    { title: 'aaa', status: 'backlog', updatedAt: T + 40 },
+    { title: 'zzz', status: 'todo', updatedAt: T + 50 },
+  ];
+  for (const r of rows) {
+    await db.insert(documents).values({
+      id: nanoid(),
+      projectId: seed.project.id,
+      workspaceId: seed.workspace.id,
+      tableId: table.id,
+      type: 'work_item',
+      slug: r.title.toLowerCase(),
+      title: r.title,
+      status: r.status,
+      body: '',
+      frontmatter: {},
+      createdAt: new Date(r.updatedAt),
+      updatedAt: new Date(r.updatedAt),
+    });
+  }
+  return {
+    db,
+    projectId: seed.project.id,
+    tableId: table.id,
+    workspaceId: seed.workspace.id,
+  };
+}
+
+test('sort by status with NULL statuses spanning a page boundary drops no rows (regression)', async () => {
+  const { projectId, tableId } = await seedNullStatuses();
+  const opts = {
+    projectId,
+    activeTableId: tableId,
+    type: 'work_item' as const,
+    sort: 'status' as const,
+    dir: 'asc' as const,
+  };
+  const p1 = await listDocuments({ ...opts, limit: 2 });
+  const p2 = p1.nextCursor
+    ? await listDocuments({ ...opts, limit: 2, cursor: p1.nextCursor })
+    : { data: [], nextCursor: null };
+  const p3 = p2.nextCursor
+    ? await listDocuments({ ...opts, limit: 2, cursor: p2.nextCursor })
+    : { data: [], nextCursor: null };
+  const all = [...p1.data, ...p2.data, ...p3.data].map((d) => d.id);
+  // ALL 5 rows must appear across pages, none dropped (pre-fix the NULL-status
+  // group is excluded from later pages → set size < 5).
+  expect(new Set(all).size).toBe(5);
+});
+
 test('a cursor minted under one sort is ignored under a different sort', async () => {
   const { projectId, tableId } = await seedFive();
 
