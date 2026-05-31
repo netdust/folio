@@ -294,20 +294,19 @@ describe('KanbanView', () => {
     await waitFor(() => expect(screen.getByText('Card A')).toBeInTheDocument());
 
     // No `?view=` was set, and once the view loaded the fetch used its field
-    // sort (title) — the toolbar reflects the stored field sort, not Manual.
+    // sort (title). The group-by/sort toolbar now lives in the project tab row
+    // (BoardControls), not inside KanbanView — KanbanView is a pure READER of
+    // the bus. Drive the bus directly here to assert the reader reacts.
     expect(router.state.location.search).toEqual({});
     await waitFor(() => expect(documentsUrls.some((u) => u.includes('sort=title'))).toBe(true));
-    await waitFor(() => expect(screen.getByText('Title ↑')).toBeInTheDocument());
 
-    // Select Manual via the toolbar. Open the Sort popover, click "Manual".
-    await userEvent.click(screen.getByText('Sort:'));
-    await userEvent.click(await screen.findByText('Manual'));
-
-    // The ad-hoc override applied without a pinned view: the toolbar now shows
-    // Manual, and the board's documents query resolves to board_position order
-    // (no `?view=` was ever set — the old gated code would have no-op'd here).
-    await waitFor(() => expect(screen.getByText('Manual')).toBeInTheDocument());
-    expect(documentsUrls.some((u) => u.includes('sort=board_position'))).toBe(true);
+    // Selecting Manual = writing a null sort override to the bus (what
+    // BoardControls does on the "Manual" click). The ad-hoc override applied
+    // without a pinned view: the board's documents query resolves to
+    // board_position order (no `?view=` was ever set — the old gated code would
+    // have no-op'd here).
+    boardControlsBus.setSort('v1', null);
+    await waitFor(() => expect(documentsUrls.some((u) => u.includes('sort=board_position'))).toBe(true));
     expect(router.state.location.search).toEqual({});
   });
 

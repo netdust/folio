@@ -6,6 +6,7 @@ import { useProject } from '../lib/api/projects.ts';
 import { useDocuments, useCreateDocument } from '../lib/api/documents.ts';
 import { formatApiError } from '../lib/api/index.ts';
 import { MainFrame, FrameTab } from '../components/shell/main-frame.tsx';
+import { BoardControls } from '../components/kanban/board-controls.tsx';
 import { DocumentSlideover } from '../components/slideover/document-slideover.tsx';
 import { Button } from '../components/ui/button.tsx';
 import { Icon } from '../components/ui/icon.tsx';
@@ -79,6 +80,12 @@ function ProjectLayout() {
                 {t.label}
               </FrameTab>
             ))}
+            {activeTab === 'board' ? (
+              <>
+                <div className="mx-1 h-5 w-px self-center bg-border-light" aria-hidden />
+                <BoardControls wslug={wslug} pslug={pslug} tslug="work-items" />
+              </>
+            ) : null}
           </>
         }
       >

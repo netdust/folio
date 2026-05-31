@@ -4,12 +4,11 @@ import { DndContext, PointerSensor, useSensor, useSensors, type DragEndEvent } f
 import { toast } from 'sonner';
 import { useCreateDocument, useDocuments, useUpdateDocument, type DocumentSummary } from '../../lib/api/documents.ts';
 import { useStatuses } from '../../lib/api/statuses.ts';
-import { useViews, useUpdateView } from '../../lib/api/views.ts';
+import { useViews } from '../../lib/api/views.ts';
 import { useFields } from '../../lib/api/fields.ts';
 import { formatApiError } from '../../lib/api/index.ts';
 import { KanbanColumn } from '../kanban/kanban-column.tsx';
 import { KanbanCard } from '../kanban/kanban-card.tsx';
-import { BoardToolbar } from '../kanban/board-toolbar.tsx';
 import { boardControlsBus, type BoardSort } from '../../lib/board-controls-bus.ts';
 import { buildColumns } from '../kanban/board-grouping.ts';
 import { computeReorderPosition } from '../kanban/board-reorder.ts';
@@ -29,7 +28,6 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
   const { data: statuses } = useStatuses(wslug, pslug);
   const { data: viewsData } = useViews(wslug, pslug);
   const { data: fields } = useFields(wslug, pslug, tslug);
-  const updateView = useUpdateView(wslug, pslug);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
   const [pendingSlugs, setPendingSlugs] = useState<Set<string>>(new Set());
 
@@ -96,36 +94,6 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
 
   const openDoc = (slug: string) => {
     void navigate({ to: '.', search: { ...search, doc: slug }, replace: false });
-  };
-
-  // Group-by / sort ALWAYS apply ad-hoc via the bus (so the default board at
-  // `/board` with no `?view=` responds immediately). Persistence to the stored
-  // view follows table-view's consent gate: only write when the user explicitly
-  // opened it via `?view=<id>`.
-  const isActiveViewUrlPinned = !!urlViewId && !!activeView && activeView.id === urlViewId;
-
-  const onGroupByChange = (gb: string) => {
-    if (!activeView) return;
-    boardControlsBus.setGroupBy(activeView.id, gb);
-    if (isActiveViewUrlPinned) {
-      // Store 'status' as null per the column's "defaults to status" convention.
-      updateView.mutate(
-        { id: activeView.id, patch: { groupBy: gb === 'status' ? null : gb } },
-        { onError: (err) => toast.error(formatApiError(err)) },
-      );
-    }
-  };
-
-  const onSortChange = (s: BoardSort | null) => {
-    if (!activeView) return;
-    boardControlsBus.setSort(activeView.id, s);
-    if (isActiveViewUrlPinned) {
-      // Empty array = manual (board_position) ordering.
-      updateView.mutate(
-        { id: activeView.id, patch: { sort: s ? [{ key: s.key, dir: s.dir }] : [] } },
-        { onError: (err) => toast.error(formatApiError(err)) },
-      );
-    }
   };
 
   const onCreateInColumn = async (value: string | null) => {
@@ -244,13 +212,6 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
   return (
     <DndContext sensors={sensors} onDragEnd={onDragEnd}>
       <div className="flex h-full min-h-0 flex-col">
-        <BoardToolbar
-          groupBy={groupBy}
-          sort={effectiveSort}
-          fields={fields ?? []}
-          onGroupByChange={onGroupByChange}
-          onSortChange={onSortChange}
-        />
         {/* MainFrame's children container already supplies px-[22px] py-2; don't double it up. */}
         <div className="flex min-h-0 flex-1 items-stretch gap-3 overflow-x-auto">
           {columns.map((col) => (
