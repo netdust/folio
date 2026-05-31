@@ -112,7 +112,11 @@ export async function createRun(
   const agentFm = agent.frontmatter as Record<string, unknown>;
   const provider = agentFm.provider as AgentRunFrontmatter['provider'];
   const model = agentFm.model as string;
-  const systemPrompt = agentFm.system_prompt as string;
+  // The agent's BODY is its system prompt (the markdown editor is the prompt
+  // surface). Snapshot it onto the run at create-time so a later edit of the
+  // agent body doesn't mutate historical runs (mitigation 23). `system_prompt`
+  // remains the run-frontmatter field name (the runner reads ctx.fm.system_prompt).
+  const systemPrompt = (agent.body ?? '').trim();
   const maxTokens = agentFm.max_tokens_per_run as number;
 
   const id = nanoid();

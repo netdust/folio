@@ -108,6 +108,7 @@ async function seedAgent(
   workspace: Workspace,
   user: User,
   slug: string,
+  body = 'You are a helper.',
 ): Promise<Document> {
   const id = nanoid();
   const { hash } = newApiToken();
@@ -121,7 +122,7 @@ async function seedAgent(
     slug,
     title: slug,
     status: null,
-    body: '',
+    body,
     frontmatter: {
       system_prompt: 'You are a helper.',
       model: 'claude-sonnet-4-6',
@@ -257,6 +258,39 @@ describe('createRun', () => {
     expect(runStartedEvents[0]!.documentId).toBe(result.document.id);
     expect(runStartedEvents[0]!.workspaceId).toBe(seed.workspace.id);
     expect(runStartedEvents[0]!.projectId).toBe(seed.project.id);
+  });
+
+  test('snapshots the agent BODY as the run system prompt (not frontmatter.system_prompt)', async () => {
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    // Body differs from frontmatter.system_prompt so the assertion proves the
+    // snapshot source is the body, not the frontmatter field.
+    const agent = await seedAgent(
+      db,
+      seed.workspace,
+      seed.user,
+      'bodyprompt',
+      'You are the body prompt.',
+    );
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+
+    const result = await createRun({
+      workspace: seed.workspace,
+      project: seed.project,
+      runsTable,
+      agent,
+      actor: seed.user,
+      input: {
+        parentDocumentId: parent.id,
+        firedBy: 'agent.task.assigned',
+        chainId: crypto.randomUUID(),
+        triggerId: null,
+      },
+    });
+
+    const fm = result.document.frontmatter as AgentRunFrontmatter;
+    expect(fm.system_prompt).toBe('You are the body prompt.');
   });
 });
 
