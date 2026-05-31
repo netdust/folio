@@ -235,10 +235,12 @@ describe('KanbanView', () => {
 
   // BF1 (2026-05-31): the default board is reached at `/board` with NO `?view=`
   // param. The old code gated group-by/sort behind a "view is URL-pinned" check
-  // and early-returned otherwise, so selecting Manual silently did nothing.
+  // and early-returned otherwise, so an ad-hoc sort silently did nothing.
   // Now changes apply ad-hoc via the module bus regardless of `?view=`:
-  // selecting Manual switches the documents fetch to `sort=board_position`.
-  it('selecting Manual applies ad-hoc without ?view= (fetch switches to board_position)', async () => {
+  // writing a FIELD-sort override switches the documents fetch to that field.
+  // (Manual/board_position sort is PARKED, so this asserts the still-live
+  // ad-hoc path using a real field sort instead of the parked null sort.)
+  it('a field-sort override applies ad-hoc without ?view= (fetch switches to that field)', async () => {
     const documentsUrls: string[] = [];
     vi.stubGlobal(
       'fetch',
@@ -251,8 +253,8 @@ describe('KanbanView', () => {
           );
         }
         if (u.includes('/views')) {
-          // Default view with a FIELD sort (title) — not manual. Selecting
-          // Manual must override it ad-hoc and refetch by board_position.
+          // Default view with a FIELD sort (title). An ad-hoc override to a
+          // DIFFERENT field (updated_at) must win and refetch by that field.
           return new Response(
             JSON.stringify({
               data: [
@@ -300,13 +302,12 @@ describe('KanbanView', () => {
     expect(router.state.location.search).toEqual({});
     await waitFor(() => expect(documentsUrls.some((u) => u.includes('sort=title'))).toBe(true));
 
-    // Selecting Manual = writing a null sort override to the bus (what
-    // BoardControls does on the "Manual" click). The ad-hoc override applied
-    // without a pinned view: the board's documents query resolves to
-    // board_position order (no `?view=` was ever set — the old gated code would
-    // have no-op'd here).
-    boardControlsBus.setSort('v1', null);
-    await waitFor(() => expect(documentsUrls.some((u) => u.includes('sort=board_position'))).toBe(true));
+    // Writing a field-sort override to the bus (what BoardControls does when a
+    // field is picked in the Sort menu) applies ad-hoc without a pinned view:
+    // the board's documents query switches to that field even though no
+    // `?view=` was ever set — the old gated code would have no-op'd here.
+    boardControlsBus.setSort('v1', { key: 'updated_at', dir: 'asc' });
+    await waitFor(() => expect(documentsUrls.some((u) => u.includes('sort=updated_at'))).toBe(true));
     expect(router.state.location.search).toEqual({});
   });
 
