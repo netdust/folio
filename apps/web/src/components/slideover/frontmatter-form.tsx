@@ -92,8 +92,9 @@ export function FrontmatterForm({
   const pinnedByKey = new Map(pinnedFields.map((f) => [f.key, f]));
 
   // Sort keys: pinned (by `order`) first, then inferred (alphabetical).
-  // Agents get a canonical field order on top of that (system_prompt first,
-  // provider+model adjacent, etc.) so the slideover reads top-down.
+  // Agents get a canonical field order on top of that (provider+model first,
+  // then tools/projects, etc.) so the slideover reads top-down. The prompt is
+  // no longer a frontmatter field — it lives in the document body.
   const inferredKeysRaw = Object.keys(frontmatter).filter((k) => !pinnedByKey.has(k));
   const inferredKeys =
     type === 'agent' ? orderKeysForAgent(inferredKeysRaw) : inferredKeysRaw.sort();
