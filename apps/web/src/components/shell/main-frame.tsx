@@ -1,5 +1,7 @@
 import type { ReactNode } from 'react';
+import type { LucideIcon } from 'lucide-react';
 import { cn } from '../ui/cn.ts';
+import { Icon } from '../ui/icon.tsx';
 
 interface MainFrameProps {
   title: ReactNode;
@@ -50,10 +52,11 @@ export function MainFrame({
 interface TabProps {
   active?: boolean;
   onClick?: () => void;
+  icon?: LucideIcon;
   children: ReactNode;
 }
 
-export function FrameTab({ active = false, onClick, children }: TabProps) {
+export function FrameTab({ active = false, onClick, icon, children }: TabProps) {
   return (
     <button
       type="button"
@@ -61,10 +64,11 @@ export function FrameTab({ active = false, onClick, children }: TabProps) {
       aria-selected={active}
       onClick={onClick}
       className={cn(
-        'rounded-sm px-2.5 py-1 text-[11px] transition-colors duration-fast',
+        'inline-flex items-center gap-1.5 rounded-sm px-2.5 py-1 text-[11px] transition-colors duration-fast',
         active ? 'bg-primary text-primary-fg' : 'text-fg-2 hover:bg-card',
       )}
     >
+      {icon ? <Icon icon={icon} size={14} /> : null}
       {children}
     </button>
   );
