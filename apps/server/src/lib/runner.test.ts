@@ -24,6 +24,7 @@ import {
   events,
   tables,
 } from '../db/schema.ts';
+import { claimNextPlanningRun } from '../services/agent-runs.ts';
 import { createComment } from '../services/comments.ts';
 import { env } from '../env.ts';
 import { makeTestApp } from '../test/harness.ts';
@@ -1904,6 +1905,47 @@ describe('runAgent claude-code branch', () => {
         where: and(eq(documents.id, run.id), eq(documents.type, 'agent_run')),
       });
       expect(runRow!.body).toContain('error: something went wrong');
+    } finally {
+      __setCcSpawnForTest(undefined);
+      (env as { FOLIO_CLAUDE_CODE_ENABLED: boolean }).FOLIO_CLAUDE_CODE_ENABLED = prevCc;
+    }
+  });
+
+  test('claude-code with requires_approval: an awaiting_approval run is not claimed by the poller (no spawn before approval)', async () => {
+    // Regression: the pre-run approval gate works at the POLLER level.
+    // claimNextPlanningRun only claims status='planning' rows. A run sitting at
+    // status='awaiting_approval' must never be claimed, so runAgent/ccExecute
+    // are never invoked, so the claude CLI is never spawned.
+    const prevCc = env.FOLIO_CLAUDE_CODE_ENABLED;
+    (env as { FOLIO_CLAUDE_CODE_ENABLED: boolean }).FOLIO_CLAUDE_CODE_ENABLED = true;
+    let spawned = false;
+    __setCcSpawnForTest(() => {
+      spawned = true;
+      return { stdoutText: async () => '', exited: Promise.resolve(0), kill: () => {} };
+    });
+    try {
+      const { db, workspace, project, user, agent, parent } = await scaffold({
+        withAiKey: false,
+        agentOverrides: { provider: 'claude-code', requires_approval: true },
+        runOverrides: { provider: 'claude-code' },
+      });
+      const runsTable = await db.query.tables.findFirst({
+        where: and(eq(tables.projectId, project.id), eq(tables.slug, 'runs')),
+      });
+
+      // Seed a claude-code run sitting at awaiting_approval.
+      const run = await seedRunAt(db, workspace, project, runsTable!, agent, parent, user, {
+        status: 'awaiting_approval',
+        provider: 'claude-code',
+      });
+
+      // The poller only claims planning rows.
+      const claimed = await claimNextPlanningRun(db);
+
+      // It must NOT have claimed our awaiting_approval run...
+      expect(claimed?.id).not.toBe(run.id);
+      // ...and nothing was spawned.
+      expect(spawned).toBe(false);
     } finally {
       __setCcSpawnForTest(undefined);
       (env as { FOLIO_CLAUDE_CODE_ENABLED: boolean }).FOLIO_CLAUDE_CODE_ENABLED = prevCc;
