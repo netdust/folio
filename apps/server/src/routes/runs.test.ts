@@ -609,6 +609,62 @@ test('GET list → 422 INVALID_QUERY on unknown status enum value', async () => 
   expect((await res.json()).error.code).toBe('INVALID_QUERY');
 });
 
+// ----- GET workspace-scoped list (wScope) -----
+
+test('GET workspace-scoped list returns runs newest-first', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const table = await getWorkItemsTable(db, seed.project.id);
+  const parent1 = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+  const parent2 = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+  const { agent } = await seedAgent(db, seed.workspace, seed.user, 'helper');
+  const run1 = await seedRun(db, seed.workspace, seed.project, agent, seed.user, parent1);
+  const run2 = await seedRun(db, seed.workspace, seed.project, agent, seed.user, parent2);
+  // The two seeds can land in the same millisecond; pin run1 strictly older so
+  // the desc(createdAt) ordering assertion tests real ordering, not tie-luck.
+  await db
+    .update(documents)
+    .set({ createdAt: new Date(Date.now() - 60_000) })
+    .where(eq(documents.id, run1.id));
+
+  const res = await app.request('/api/v1/w/acme/runs', {
+    headers: { Cookie: seed.sessionCookie },
+  });
+  expect(res.status).toBe(200);
+  const { data } = await res.json();
+  expect(Array.isArray(data)).toBe(true);
+  const ids = data.map((r: Document) => r.id);
+  expect(ids).toContain(run1.id);
+  expect(ids).toContain(run2.id);
+  // newest-first (desc createdAt) — run2 created after run1
+  expect(ids.indexOf(run2.id)).toBeLessThan(ids.indexOf(run1.id));
+});
+
+test('GET workspace-scoped list honors ?limit=', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const table = await getWorkItemsTable(db, seed.project.id);
+  const parent1 = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+  const parent2 = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+  const { agent } = await seedAgent(db, seed.workspace, seed.user, 'helper');
+  await seedRun(db, seed.workspace, seed.project, agent, seed.user, parent1);
+  await seedRun(db, seed.workspace, seed.project, agent, seed.user, parent2);
+
+  const res = await app.request('/api/v1/w/acme/runs?limit=1', {
+    headers: { Cookie: seed.sessionCookie },
+  });
+  expect(res.status).toBe(200);
+  const { data } = await res.json();
+  expect(data.length).toBe(1);
+});
+
+test('GET workspace-scoped list → 422 INVALID_QUERY on unknown status enum value', async () => {
+  const { app, seed } = await makeTestApp();
+  const res = await app.request('/api/v1/w/acme/runs?status=garbage', {
+    headers: { Cookie: seed.sessionCookie },
+  });
+  expect(res.status).toBe(422);
+  expect((await res.json()).error.code).toBe('INVALID_QUERY');
+});
+
 // ----- POST /runs/:runId/cancel -----
 
 test('cancel a planning run → failed', async () => {

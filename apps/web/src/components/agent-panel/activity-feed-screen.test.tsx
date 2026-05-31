@@ -7,6 +7,14 @@ vi.mock('@tanstack/react-router', () => ({
   useNavigate: () => navigateMock,
 }));
 
+// useActivityFeed now backfills from useWorkspaceRuns (react-query). These tests
+// exercise the LIVE-tail path with no QueryClientProvider, so stub the history
+// query to return no rows.
+vi.mock('../../lib/api/runs.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../lib/api/runs.ts')>();
+  return { ...actual, useWorkspaceRuns: () => ({ data: undefined }) };
+});
+
 import { ActivityFeedScreen } from './activity-feed-screen.tsx';
 
 class MockEventSource {

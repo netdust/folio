@@ -56,6 +56,22 @@ export function useRuns(wslug: string, pslug: string, filter: RunsFilter = {}) {
   });
 }
 
+/**
+ * Workspace-scoped recent-runs list (across all projects the caller can read).
+ * Backs the Agent Activity feed's history backfill — see activity-feed.ts.
+ */
+export function useWorkspaceRuns(wslug: string, opts: { limit?: number } = {}) {
+  return useQuery({
+    queryKey: [...runsKeys.all, wslug, 'workspace-list', opts.limit ?? 50] as const,
+    queryFn: () =>
+      client.get<AgentRunDoc[]>(
+        `/api/v1/w/${wslug}/runs${opts.limit ? `?limit=${opts.limit}` : ''}`,
+      ),
+    staleTime: 30_000,
+    enabled: !!wslug,
+  });
+}
+
 export function useRun(wslug: string, runId: string | undefined) {
   return useQuery({
     queryKey: runsKeys.detail(wslug, runId ?? ''),
