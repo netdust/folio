@@ -12,6 +12,7 @@
 
 export interface SpawnHandle {
   stdoutText: () => Promise<string>;
+  stderrText: () => Promise<string>;
   exited: Promise<number>;
   kill: () => void;
 }
@@ -46,6 +47,7 @@ const defaultSpawn: SpawnFn = ({ argv, cwd, env }) => {
   const proc = Bun.spawn(argv, { cwd, env, stdout: 'pipe', stderr: 'pipe' });
   return {
     stdoutText: () => new Response(proc.stdout).text(),
+    stderrText: () => new Response(proc.stderr).text(),
     exited: proc.exited,
     kill: () => proc.kill(),
   };
@@ -84,11 +86,16 @@ export async function runClaudeCode(
   };
 
   const handle = spawn({ argv, cwd: input.cwd, env: childEnv });
-  const transcript = await handle.stdoutText();
+  // Drain BOTH pipes concurrently. An unread stderr pipe can fill the OS buffer
+  // and block (hang) the child; reading both also lets a CLI failure surface its
+  // actual error in the failure detail instead of a bare exit code.
+  const [transcript, stderrText] = await Promise.all([handle.stdoutText(), handle.stderrText()]);
   const exitCode = await handle.exited;
 
   if (exitCode !== 0) {
-    return { status: 'failed', transcript, detail: `claude exited with exit code ${exitCode}` };
+    const stderrTail = stderrText.trim();
+    const detail = `claude exited with exit code ${exitCode}${stderrTail ? `: ${stderrTail.slice(0, 500)}` : ''}`;
+    return { status: 'failed', transcript, detail };
   }
 
   const result = transcript.trim().length > 0 ? transcript.trim() : '(no output)';

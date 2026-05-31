@@ -527,6 +527,7 @@ describe('runAgent pre-flight checks', () => {
     // spawning the real claude CLI (Task 7: ccExecute is now the execution path).
     __setCcSpawnForTest(() => ({
       stdoutText: async () => 'ok',
+      stderrText: async () => '',
       exited: Promise.resolve(0),
       kill: () => {},
     }));
@@ -578,7 +579,7 @@ describe('runAgent pre-flight checks', () => {
     __setCcSpawnForTest((args) => {
       const i = args.argv.indexOf('-p');
       capturedPrompt = i >= 0 ? (args.argv[i + 1] ?? '') : '';
-      return { stdoutText: async () => 'done', exited: Promise.resolve(0), kill: () => {} };
+      return { stdoutText: async () => 'done', stderrText: async () => '', exited: Promise.resolve(0), kill: () => {} };
     });
     try {
       await runAgent({ runId: run.id });
@@ -593,6 +594,15 @@ describe('runAgent pre-flight checks', () => {
     expect(capturedPrompt).toContain('Summarize this work item into frontmatter.summary.');
     // AND the parent work-item context reached the CLI:
     expect(capturedPrompt).toContain('Migrate billing emails to the new 2026 template.');
+    // FIX #4: the untrusted task/context is fenced in an explicit DATA envelope
+    // so the model is told not to follow instructions inside it.
+    expect(capturedPrompt).toContain('===== BEGIN CONTEXT =====');
+    expect(capturedPrompt).toContain('===== END CONTEXT =====');
+    // The system prompt stays ABOVE/outside the envelope (identity comes before
+    // the BEGIN marker; untrusted text comes after it).
+    expect(capturedPrompt.indexOf('You are a helper.')).toBeLessThan(
+      capturedPrompt.indexOf('===== BEGIN CONTEXT ====='),
+    );
   });
 
   test('claude-code — fails with claude_code_disabled when FOLIO_CLAUDE_CODE_ENABLED is off', async () => {
@@ -1801,6 +1811,60 @@ describe('runAgentResume', () => {
     expect(fm.error_reason).toBe('idempotency_violation');
     expect(control.called).toBe(0);
   });
+
+  test('FIX #8 — a claude-code resume branches to ccExecute and completes (no "Unknown AI provider")', async () => {
+    // REGRESSION: runAgentResume always called runLoop → getProvider('claude-code'),
+    // which throws "Unknown AI provider" (claude-code is intentionally absent from
+    // the REGISTRY). A resumed claude-code run must mirror runAgent's branch and
+    // delegate to ccExecute instead of crashing.
+    const { db, workspace, project, user, agent, parent, run } = await scaffold({
+      withAiKey: false,
+      agentOverrides: { provider: 'claude-code', requires_approval: false },
+      runOverrides: { provider: 'claude-code' },
+    });
+    const runsTable = await db.query.tables.findFirst({
+      where: and(eq(tables.projectId, project.id), eq(tables.slug, 'runs')),
+    });
+    const original = await seedRunAt(db, workspace, project, runsTable!, agent, parent, user, {
+      status: 'awaiting_approval',
+      provider: 'claude-code',
+      chain_id: (await readRun(db, run.id)).chain_id,
+    });
+    await db
+      .update(documents)
+      .set({
+        frontmatter: sql`json_set(${documents.frontmatter}, '$.resume_of', ${original.id})`,
+      })
+      .where(eq(documents.id, run.id));
+
+    let spawned = false;
+    const prevCc = env.FOLIO_CLAUDE_CODE_ENABLED;
+    (env as { FOLIO_CLAUDE_CODE_ENABLED: boolean }).FOLIO_CLAUDE_CODE_ENABLED = true;
+    __setCcSpawnForTest(() => {
+      spawned = true;
+      return {
+        stdoutText: async () => 'resumed cc work\nDONE',
+        stderrText: async () => '',
+        exited: Promise.resolve(0),
+        kill: () => {},
+      };
+    });
+    try {
+      await runAgentResume({ runId: run.id });
+    } finally {
+      __setCcSpawnForTest(undefined);
+      (env as { FOLIO_CLAUDE_CODE_ENABLED: boolean }).FOLIO_CLAUDE_CODE_ENABLED = prevCc;
+    }
+
+    // The cc spawn was reached (proving the cc branch ran, not runLoop)...
+    expect(spawned).toBe(true);
+    // ...and the resume completed rather than crashing on "Unknown AI provider".
+    const fm = await readRun(db, run.id);
+    expect(fm.status).toBe('completed');
+    expect(fm.error_reason).toBeFalsy();
+    const results = await listKind(db, parent.id, 'result');
+    expect(results.length).toBe(1);
+  });
 });
 
 // ==========================================================================
@@ -1900,6 +1964,7 @@ describe('runAgent claude-code branch', () => {
     (env as { FOLIO_CLAUDE_CODE_ENABLED: boolean }).FOLIO_CLAUDE_CODE_ENABLED = true;
     __setCcSpawnForTest(() => ({
       stdoutText: async () => 'did health check\nALL GOOD',
+      stderrText: async () => '',
       exited: Promise.resolve(0),
       kill: () => {},
     }));
@@ -1943,6 +2008,7 @@ describe('runAgent claude-code branch', () => {
     (env as { FOLIO_CLAUDE_CODE_ENABLED: boolean }).FOLIO_CLAUDE_CODE_ENABLED = true;
     __setCcSpawnForTest(() => ({
       stdoutText: async () => 'error: something went wrong',
+      stderrText: async () => '',
       exited: Promise.resolve(1),
       kill: () => {},
     }));
@@ -1974,7 +2040,7 @@ describe('runAgent claude-code branch', () => {
     let spawned = false;
     __setCcSpawnForTest(() => {
       spawned = true;
-      return { stdoutText: async () => '', exited: Promise.resolve(0), kill: () => {} };
+      return { stdoutText: async () => '', stderrText: async () => '', exited: Promise.resolve(0), kill: () => {} };
     });
     try {
       const { db, workspace, project, user, agent, parent } = await scaffold({
@@ -2018,6 +2084,7 @@ describe('runAgent claude-code branch', () => {
     (env as { FOLIO_CLAUDE_CODE_ENABLED: boolean }).FOLIO_CLAUDE_CODE_ENABLED = true;
     __setCcSpawnForTest(() => ({
       stdoutText: async () => 'done',
+      stderrText: async () => '',
       exited: Promise.resolve(0),
       kill: () => {},
     }));
@@ -2047,6 +2114,7 @@ describe('runAgent claude-code branch', () => {
     (env as { FOLIO_CLAUDE_CODE_ENABLED: boolean }).FOLIO_CLAUDE_CODE_ENABLED = true;
     __setCcSpawnForTest(() => ({
       stdoutText: async () => 'error output',
+      stderrText: async () => '',
       exited: Promise.resolve(1),
       kill: () => {},
     }));
