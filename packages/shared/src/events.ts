@@ -26,6 +26,11 @@ export type EventKind =
   | 'agent.run.completed'
   | 'agent.run.failed'
   | 'agent.run.rejected'
+  // Phase 3.x — emitted when a claude-code run's full session transcript is
+  // persisted onto the run document body (setRunBody). Honors rule #4: the
+  // body write is never eventless, and transcript consumers get a dedicated
+  // signal independent of the terminal transitionRun event.
+  | 'agent.run.transcript'
   | 'ai.action'
   | 'runs_table.lazy_seeded'
   | 'workspace.provider.degraded'
@@ -57,6 +62,7 @@ export const KNOWN_EVENT_KINDS: readonly EventKind[] = [
   'agent.run.completed',
   'agent.run.failed',
   'agent.run.rejected',
+  'agent.run.transcript',
   'ai.action',
   'runs_table.lazy_seeded',
   'workspace.provider.degraded',

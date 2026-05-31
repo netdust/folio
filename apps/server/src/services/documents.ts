@@ -722,6 +722,38 @@ export interface UpdateDocumentArgs {
   patch: DocumentPatch;
 }
 
+// A doc carries the create-time placeholder slug if it is exactly `untitled`
+// or `untitled-<N>` (the dedup form). Such a doc was created before the user
+// named it — its slug is not yet meaningful, so it may adopt its first real
+// title. Any other slug is a real, frozen name.
+function isUntitledPlaceholderSlug(slug: string): boolean {
+  return slug === 'untitled' || /^untitled-\d+$/.test(slug);
+}
+
+// Re-slug a doc from its first real title — but ONLY while it still carries the
+// create-time `untitled` placeholder slug. Returns null (slug unchanged) when:
+// the current slug is already a real name (immutability — protects [[slug]]
+// links), OR the new title still slugifies to a placeholder, OR it didn't
+// change. Self-guarding so every call site is safe; this is the SINGLE place
+// the placeholder-reslug policy lives (JSON + markdown PATCH both call it).
+export async function maybeReslugPlaceholder(
+  projectId: string,
+  currentSlug: string,
+  currentTitle: string,
+  nextTitle: string,
+): Promise<string | null> {
+  // Provenance, not text shape. Re-slug ONLY a doc that is still unnamed: its
+  // slug is placeholder-shaped AND its title is still the create-time seed
+  // 'Untitled'. A doc the user deliberately TITLED 'Untitled' / 'Untitled-5'
+  // (and may have linked via [[slug]]) keeps its slug frozen — there is no
+  // rename cascade, so a silent slug move would break those links.
+  if (!isUntitledPlaceholderSlug(currentSlug)) return null;
+  if (currentTitle.trim().toLowerCase() !== 'untitled') return null;
+  const baseSlug = slugify(nextTitle) || 'doc';
+  if (baseSlug === currentSlug || isUntitledPlaceholderSlug(baseSlug)) return null;
+  return slugUniqueInDocuments(db, projectId, baseSlug);
+}
+
 export async function updateDocument(
   args: UpdateDocumentArgs,
 ): Promise<Document> {
@@ -803,7 +835,7 @@ export async function updateDocument(
   ) {
     const schema =
       existing.type === 'agent'
-        ? agentFrontmatterSchema.partial()
+        ? agentFrontmatterSchema.innerType().partial()
         : triggerFrontmatterSchema.innerType().partial();
     const r = schema.safeParse(patch.frontmatter);
     if (!r.success) {
@@ -822,7 +854,14 @@ export async function updateDocument(
     };
     for (const [k, v] of Object.entries(patch.frontmatter)) {
       if ((RESERVED_FRONTMATTER_KEYS as readonly string[]).includes(k)) continue;
-      if (v === null) delete merged[k];
+      // Folio's "empty means absent" contract: both `null` and '' clear the key.
+      // The agent form commits `model: ''` when switching to the modelless
+      // claude-code provider, and the per-key frontmatter PATCH clears a field
+      // by sending ''. Persisting a literal '' would leak an empty-but-present
+      // key (e.g. a modelless API agent reading `model === ''`). No Folio field
+      // uses '' as a meaningful value — selects store option strings, text
+      // stores content — so treating '' as "clear" is uniform and correct.
+      if (v === null || v === '') delete merged[k];
       else merged[k] = v;
     }
     return merged;
@@ -850,10 +889,42 @@ export async function updateDocument(
     }
   }
 
-  // Slugs are immutable for ALL document types (extends the table/agent/trigger
-  // precedent). A retitle changes the title only — never the slug — so [[slug]]
-  // relation links and backlinks stay valid forever. No rename cascade.
-  const nextSlug: string | null = null;
+  // Companion to BUG-016 for agents — re-assert the create-time superRefine on
+  // the MERGED shape. The PATCH-payload validation above uses
+  // `agentFrontmatterSchema.innerType().partial()`, which strips the
+  // superRefine ("model is required for API providers") so server-managed
+  // fields survive .strict(). A PATCH clearing `model` on an API-provider agent
+  // is valid against partial() but produces a modelless API agent that only
+  // fails at run time. Mirror agent-schema.ts's predicate (`provider !==
+  // 'claude-code' && !model`) here so the operator gets a 422 up front.
+  if (existing.type === 'agent') {
+    const fm = mergedFrontmatter as Record<string, unknown>;
+    const provider = fm.provider;
+    const model = fm.model;
+    if (
+      provider !== undefined &&
+      provider !== 'claude-code' &&
+      (model === undefined || model === null || model === '')
+    ) {
+      throw new HTTPError(
+        'INVALID_PATCH',
+        'model is required for API providers',
+        422,
+      );
+    }
+  }
+
+  // Slugs are immutable ONCE A DOC HAS A REAL NAME — a retitle never moves the
+  // slug, so [[slug]] relation links + backlinks stay valid forever (no cascade).
+  // THE ONE EXCEPTION: a doc still carrying the create-time `untitled` / `untitled-N`
+  // placeholder slug (created before the user typed a title — every "New work item"
+  // / "New page" seeds title 'Untitled') adopts its FIRST real title as its
+  // permanent slug. After that it's named and frozen. Workspace docs (agent/trigger)
+  // never re-slug. Guarded by tests in documents.test.ts.
+  const nextSlug =
+    patch.title !== undefined && p
+      ? await maybeReslugPlaceholder(p.id, existing.slug, existing.title, patch.title)
+      : null;
 
   const updated = {
     ...existing,

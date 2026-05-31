@@ -1,6 +1,14 @@
 import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { useActivityFeed } from './activity-feed.ts';
+import * as runsApi from './runs.ts';
+
+// Default: no history (live-tail-only tests). Backfill tests override per-case.
+function stubNoHistory() {
+  vi.spyOn(runsApi, 'useWorkspaceRuns').mockReturnValue({
+    data: undefined,
+  } as unknown as ReturnType<typeof runsApi.useWorkspaceRuns>);
+}
 
 class MockEventSource {
   static instances: MockEventSource[] = [];
@@ -24,6 +32,7 @@ class MockEventSource {
 beforeEach(() => {
   MockEventSource.instances = [];
   vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource);
+  stubNoHistory();
 });
 afterEach(() => vi.unstubAllGlobals());
 
@@ -81,6 +90,61 @@ describe('useActivityFeed', () => {
     expect(result.current.items).toHaveLength(1);
     expect(result.current.items[0].status).toBe('running');
     expect(result.current.items[0].firedBy).toBe('trigger');
+  });
+
+  test('seeds items from workspace run history with no SSE events fired', () => {
+    vi.spyOn(runsApi, 'useWorkspaceRuns').mockReturnValueOnce({
+      data: [
+        {
+          id: 'run-h1',
+          status: 'completed',
+          frontmatter: { agent_slug: 'bot', fired_by: 'manual' },
+          updatedAt: '2026-05-31T10:00:00.000Z',
+        },
+        {
+          id: 'run-h2',
+          status: 'failed',
+          frontmatter: { agent_slug: 'seo', fired_by: 'cron' },
+          updatedAt: '2026-05-31T11:00:00.000Z',
+        },
+      ],
+    } as unknown as ReturnType<typeof runsApi.useWorkspaceRuns>);
+
+    const { result } = renderHook(() => useActivityFeed('acme'));
+    expect(result.current.items).toHaveLength(2);
+    // newest-first by `at` (run-h2 is later)
+    expect(result.current.items[0].runDocId).toBe('run-h2');
+    expect(result.current.items[0].agent).toBe('seo');
+    expect(result.current.items[0].status).toBe('failed');
+    expect(result.current.items[0].firedBy).toBe('cron');
+    expect(result.current.items[1].runDocId).toBe('run-h1');
+  });
+
+  test('a live event supersedes the same run from history (live wins)', () => {
+    vi.spyOn(runsApi, 'useWorkspaceRuns').mockReturnValue({
+      data: [
+        {
+          id: 'run-1',
+          status: 'running',
+          frontmatter: { agent_slug: 'bot', fired_by: 'manual' },
+          updatedAt: '2026-05-31T10:00:00.000Z',
+        },
+      ],
+    } as unknown as ReturnType<typeof runsApi.useWorkspaceRuns>);
+
+    const { result } = renderHook(() => useActivityFeed('acme'));
+    expect(result.current.items).toHaveLength(1);
+    expect(result.current.items[0].status).toBe('running');
+    const es = MockEventSource.instances[0]!;
+    act(() =>
+      es.emit(
+        'agent.run.completed',
+        JSON.stringify({ id: 'e1', kind: 'agent.run.completed', documentId: 'run-1', payload: { agent: 'bot', to: 'completed' } }),
+      ),
+    );
+    // still one row, live status wins
+    expect(result.current.items).toHaveLength(1);
+    expect(result.current.items[0].status).toBe('completed');
   });
 
   test('ignores events without a documentId', () => {

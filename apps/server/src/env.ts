@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-const envSchema = z.object({
+export const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   PORT: z.coerce.number().default(3000),
   PUBLIC_URL: z.string().url().default('http://localhost:3000'),
@@ -54,6 +54,15 @@ const envSchema = z.object({
   // non-empty string as true (so 'false' → true), which is wrong — use an
   // explicit string→boolean transform so 'false' and unset both yield false.
   FOLIO_AGENT_CHAINS_ENABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  // Gates the `claude-code` runner backend (spawns a local `claude` CLI with
+  // host SSH/file access). OFF by default — only safe on local/personal installs,
+  // NEVER on a shared/hosted Folio that holds fleet credentials. Same explicit
+  // string→boolean transform as FOLIO_AGENT_CHAINS_ENABLED (z.coerce.boolean
+  // treats 'false' as true).
+  FOLIO_CLAUDE_CODE_ENABLED: z
     .enum(['true', 'false'])
     .default('false')
     .transform((v) => v === 'true'),

@@ -1,17 +1,17 @@
-import { createFileRoute } from '@tanstack/react-router';
+import { createFileRoute, redirect } from '@tanstack/react-router';
 import { z } from 'zod';
-import { WorkspaceTriggersPage } from '../components/views/workspace-triggers-page.tsx';
 
+// Legacy /triggers route. Triggers now live under /agents?tab=triggers; the
+// trigger config slideover still opens via ?wdoc=. validateSearch parses the
+// incoming wdoc so a deep link like /w/X/triggers?wdoc=some-trigger survives
+// the redirect and lands on the Triggers tab with the slideover open.
 export const Route = createFileRoute('/w/$wslug/triggers')({
-  // Triggers open in the layout-mounted WorkspaceDocumentSlideover, which reads
-  // ?wdoc= (distinct from the project DocumentSlideover's ?doc=).
-  validateSearch: z.object({
-    wdoc: z.string().optional(),
-  }),
-  component: TriggersRoute,
+  validateSearch: z.object({ wdoc: z.string().optional() }),
+  beforeLoad: ({ params, search }) => {
+    throw redirect({
+      to: '/w/$wslug/agents',
+      params: { wslug: params.wslug },
+      search: { tab: 'triggers', ...(search.wdoc ? { wdoc: search.wdoc } : {}) },
+    });
+  },
 });
-
-function TriggersRoute() {
-  const { wslug } = Route.useParams();
-  return <WorkspaceTriggersPage wslug={wslug} />;
-}

@@ -111,4 +111,12 @@ describe('AgentCockpitPanel', () => {
     fireEvent.click(closeBtn);
     expect(screen.queryByRole('button', { name: 'Close' })).toBeNull();
   });
+
+  it('exposes only Activity + Run tabs (no agents-management screen)', async () => {
+    await renderPanel();
+    act(() => agentPanelBus.open('activity'));
+    expect(await screen.findByRole('button', { name: /activity/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /run/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^agents$/i })).not.toBeInTheDocument();
+  });
 });

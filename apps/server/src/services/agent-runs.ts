@@ -111,7 +111,7 @@ export async function createRun(
   // mutate historical runs (mitigation 23 — the run is its own scope).
   const agentFm = agent.frontmatter as Record<string, unknown>;
   const provider = agentFm.provider as AgentRunFrontmatter['provider'];
-  const model = agentFm.model as string;
+  const model = (agentFm.model as string | undefined) ?? '';
   // The agent's BODY is its system prompt (the markdown editor is the prompt
   // surface). Snapshot it onto the run at create-time so a later edit of the
   // agent body doesn't mutate historical runs (mitigation 23). `system_prompt`
@@ -205,6 +205,22 @@ export async function createRun(
     where: eq(documents.id, id),
   });
   return { document: inserted! };
+}
+
+/**
+ * Strip server-internal / sensitive run frontmatter before returning a run
+ * over the API. `system_prompt` is the agent's full snapshotted instructions —
+ * workspace-member-visible config that must not leak through run read/list
+ * surfaces (mirrors the F-shakeout C1 fix that closed it on GET ?type=agent_run).
+ * No web consumer reads it. Returns a shallow-cloned row with the key removed
+ * from frontmatter; does NOT mutate the input. Conservative — strips ONLY
+ * system_prompt; agent_slug / status / fired_by / tokens_* / provider / model
+ * are all feed/UI-needed and kept.
+ */
+export function redactRunForApi(row: Document): Document {
+  const fm = { ...(row.frontmatter as Record<string, unknown>) };
+  delete fm.system_prompt;
+  return { ...row, frontmatter: fm };
 }
 
 // ----- transitionRun -----
@@ -456,11 +472,14 @@ export async function transitionRun(
     // (mitigation 46) — not the agent doc's current provider.
     if (isTerminal) {
       const provider = (row.frontmatter as AgentRunFrontmatter).provider;
-      await maybeEmitProviderHealthEdge(tx, {
-        workspaceId: row.workspaceId,
-        provider,
-        actor: args.actor,
-      });
+      // claude-code is keyless/local with no health to track; skip.
+      if (provider !== 'claude-code') {
+        await maybeEmitProviderHealthEdge(tx, {
+          workspaceId: row.workspaceId,
+          provider: provider as ProviderName,
+          actor: args.actor,
+        });
+      }
     }
   });
 
@@ -519,6 +538,41 @@ export async function incrementTokens(
   const tokensIn = typeof fm.tokens_in === 'number' ? fm.tokens_in : 0;
   const tokensOut = typeof fm.tokens_out === 'number' ? fm.tokens_out : 0;
   return { tokens_in: tokensIn, tokens_out: tokensOut };
+}
+
+/**
+ * Persist a claude-code run's full session transcript onto the run document's
+ * body (unused for API-loop runs). Emits `agent.run.transcript` in the SAME
+ * transaction as the body write, so the write is never eventless (rule #4 —
+ * every write emits an event). The terminal transition (transitionRun) still
+ * carries its own `agent.run.{completed,failed}` event; this is a dedicated
+ * transcript signal so consumers watching for the body get a body-specific
+ * event even if the subsequent transition races or fails. Caller invokes this
+ * BEFORE transitionRun so the body is present when `agent.run.completed` fires.
+ */
+export async function setRunBody(runId: string, body: string): Promise<void> {
+  await txWithEvents(db, async (tx) => {
+    const row = await tx.query.documents.findFirst({
+      where: and(eq(documents.id, runId), eq(documents.type, 'agent_run')),
+    });
+    if (!row) return; // run gone; nothing to persist
+    await tx
+      .update(documents)
+      .set({ body })
+      .where(and(eq(documents.id, runId), eq(documents.type, 'agent_run')));
+    await emitEvent(tx, {
+      workspaceId: row.workspaceId,
+      projectId: row.projectId ?? null,
+      documentId: runId,
+      // events.actor is free-form (no FK, unlike documents.updated_by), so the
+      // system provenance string is safe here — matches the convention used by
+      // `system:orphan-recovery` / `system:runs-table-seeder` elsewhere in this
+      // file. The transcript write is the runner's, not a user's.
+      kind: 'agent.run.transcript',
+      actor: 'system:runner',
+      payload: {},
+    });
+  });
 }
 
 // ----- read helpers (getActiveRun, getPendingApprovalRun, listRuns) -----
@@ -898,9 +952,11 @@ export async function recoverOrphanRuns(
       seen.add(key);
       const parsedProvider = providerSchema.safeParse(r.provider);
       if (!parsedProvider.success) continue;
+      // claude-code is keyless/local with no health to track; skip.
+      if (parsedProvider.data === 'claude-code') continue;
       await maybeEmitProviderHealthEdge(tx, {
         workspaceId: r.workspace_id,
-        provider: parsedProvider.data,
+        provider: parsedProvider.data as ProviderName,
         actor: 'system:orphan-recovery',
       });
     }

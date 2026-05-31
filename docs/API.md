@@ -92,6 +92,61 @@ Source: `apps/server/src/routes/settings.ts`. BYOK store — keys are libsodium-
 
 `provider` is one of `anthropic | openai | openrouter | ollama`.
 
+## Runner backend: claude-code (Phase 3.x)
+
+The `claude-code` backend executes an agent via the local `claude` CLI instead of calling a BYOK API provider. It is off by default and gated behind the `FOLIO_CLAUDE_CODE_ENABLED` environment flag (see `docs/INSTALL.md`).
+
+> **Security notice.** The `claude-code` runner spawns the local `claude` binary with access to the host's filesystem, SSH keys, and any MCP servers CC has configured. Only enable this on local or personal Folio installs where you control who can define agents. **Never enable it on a shared or hosted instance that holds fleet credentials.**
+
+### Configuring an agent to use this backend
+
+Set `provider: claude-code` in the agent's frontmatter. `model` is optional — when omitted, CC uses its own configured default.
+
+```yaml
+---
+type: agent
+title: Local Dev Helper
+provider: claude-code        # no model required; CC uses its own default
+system_prompt: |
+  You are a local dev assistant. You have access to the project filesystem.
+projects: ["*"]
+---
+```
+
+The agent editor UI shows the `claude-code` option (labelled "no key needed") only when the server flag is on.
+
+### Keyless operation
+
+`claude-code` agents do not use the workspace AI-key store. No key is read, and no key is required. Because of this, `POST /ai/test-key` rejects a payload with `provider: claude-code` with `422 INVALID_BODY` ("claude-code does not use an API key and cannot be tested here") — there is nothing to test.
+
+### How a run executes
+
+When the runner poller claims a `planning` run whose parent agent has `provider: claude-code`, it branches to `ccExecute` instead of the normal provider stream loop:
+
+1. **Pre-run approval is enforced at the poller, not via a REST endpoint.** The poller only claims runs at `status: planning`; a run sitting at `awaiting_approval` is never claimed, so the CLI is never spawned for it. Approval/resume is comment-driven (a `kind=approval` comment routed by the trigger-matcher's `resume_run` internal action), the same flow used by API-provider agents. There is **no** `POST /agent-runs/:id/approve` endpoint. **Note:** in this branch the `requires_approval` field is a schema field only — the production code path that transitions a `planning` run into `awaiting_approval` is **deferred** (see the gaps below); the gate is proven today by tests that seed `awaiting_approval` directly and confirm the poller skips it.
+2. For a claimed run (no gate, or once resumed), the server spawns `claude -p <prompt>` in Folio's own working directory.
+3. CC runs its own full agentic loop to completion — it may read/write files, run shell commands, call MCP servers, etc. Folio does not step through the loop; it just waits.
+4. The full session transcript is captured and written to the run document's `body` field via `setRunBody`.
+5. When the process exits, the run transitions to `completed` (or `failed` on non-zero exit), and the final result is posted as a `kind=result` comment on the parent document.
+
+### MCP callback (CC writes back into Folio) — wired (Task 7b)
+
+A `claude-code` run **can** call back into Folio's MCP tools (`update_document`, `create_comment`, etc.) during the run. For each run, `ccExecute`:
+
+1. Mints a **short-lived, scoped Bearer token** that mirrors the run's agent token — same `scopes`, `agentId`, and project allow-list (`projectIds`). Identical permission envelope to an API-loop agent; CC is not a privilege backdoor.
+2. Spawns `claude` with `--mcp-config '<json>' --strict-mcp-config`, where the config registers one HTTP MCP server pointing at `${PUBLIC_URL}/mcp` with `Authorization: Bearer <minted token>`. `--strict-mcp-config` means CC uses ONLY this server (not the operator's other `~/.claude` MCP servers) for Folio calls.
+3. **Revokes** the token (deletes the row) in a `finally` block — on success, failure, or throw. The agent-delete cascade is the backstop.
+
+So CC's Folio-side writes are governed by the agent's exact scopes; its host-side powers (SSH, `wp`, files) remain governed by the machine, outside Folio's envelope.
+
+### v1 known gaps (fast-follow)
+
+These are deferred; the runner still works without them:
+
+- **Runs in Folio's own cwd.** The CLI is spawned from the server's working directory. Host context (project path, etc.) must come from the agent's system prompt or tools — there is no automatic cwd injection yet.
+- **No mid-run cancellation.** Once the `claude` process is spawned, there is no in-flight kill mechanism. A cancellation request transitions the run row to `cancelled` in the database but does not terminate the subprocess.
+- **Human-approval transition deferred.** The `planning → awaiting_approval` transition (so a `requires_approval` agent actually pauses for a human) is not wired in this branch; only the poller-skip half of the gate exists. When that transition lands, the resume path (`runAgentResume`) must also branch to `ccExecute` for claude-code — see the TODO on that function.
+
 ## Projects (`/api/v1/w/:wslug/projects`, `/api/v1/w/:wslug/p/:pslug`)
 
 Source: `apps/server/src/routes/projects.ts`

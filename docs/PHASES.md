@@ -1007,6 +1007,18 @@ Hand-rolled Hono sub-app at `/mcp`. Speaks JSON-RPC 2.0 over HTTP POST. Bearer-a
 
 ---
 
+## Phase 3.x — claude-code runner backend — SHIPPED 2026-05-31
+
+A fifth runner backend: execute an agent via the local `claude` CLI instead of a BYOK API provider. Off by default (`FOLIO_CLAUDE_CODE_ENABLED`). When `provider: claude-code`, `runAgent` branches to `ccExecute` (NOT the provider stream loop): it spawns `claude -p`, lets CC run its own agentic loop to completion using host SSH/files/MCP, captures the full transcript onto the run `body`, and posts the final result as a `kind=result` comment. Keyless (no AI key; `/ai/test-key` rejects it 422). Model optional. Pre-run approval gate only (`requires_approval` → `awaiting_approval` before spawn). UI shows the provider option only when the flag is on.
+
+**MCP callback (Task 7b — wired):** a claude-code run mints a short-lived scoped Bearer (mirroring the agent token's scopes/projectIds), spawns CC with `--mcp-config`+`--strict-mcp-config` pointing at `${PUBLIC_URL}/mcp`, and revokes it in a `finally`. CC can `update_document`/`create_comment`/etc. under the agent's exact envelope.
+
+**v1 known gaps (fast-follow):** runs in Folio's own cwd (host context comes from the agent prompt); no mid-run cancellation; `planning→awaiting_approval` transition deferred (and `runAgentResume` then needs the claude-code branch — see TODO).
+
+Spec: `docs/superpowers/specs/2026-05-31-claude-code-runner-backend-design.md`. Plan: `docs/superpowers/plans/2026-05-31-claude-code-runner-backend.md`.
+
+---
+
 ## Phase 3.5 — Script & webhook trigger actions (Half-week)
 
 **Goal:** A trigger today must fire an agent (`agent` is a required field in `apps/server/src/lib/trigger-schema.ts`). Open the action surface so triggers can also POST to a webhook URL or run a script, for cases where the user wants automation without an LLM in the loop.

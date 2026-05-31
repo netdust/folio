@@ -44,6 +44,7 @@ import {
   getProviderHealth,
   listRuns,
   nextChainId,
+  redactRunForApi,
   transitionRun,
 } from '../services/agent-runs.ts';
 import { createComment } from '../services/comments.ts';
@@ -253,7 +254,7 @@ runsListRoute.get('/', requireScope('documents:read'), async (c) => {
     since: since || undefined,
     callerAgentProjectsAllowList: allowList ?? undefined,
   });
-  return jsonOk(c, rows);
+  return jsonOk(c, rows.map(redactRunForApi));
 });
 
 // -----------------------------------------------------------------------------
@@ -262,10 +263,42 @@ runsListRoute.get('/', requireScope('documents:read'), async (c) => {
 
 export const runsRoute = new Hono<AuthContext & ScopeContext>();
 
+// GET /runs — workspace-scoped recent-runs list. Mirrors the project-scoped
+// `runsListRoute` GET '/' contract (status enum validation, allow-list
+// narrowing, system_prompt redaction) but scopes by `workspaceId` instead of `projectId`,
+// so the Agent Activity feed can backfill cross-project run history on mount.
+// Registered BEFORE `GET /:runId` so the root path resolves distinctly.
+runsRoute.get('/', requireScope('documents:read'), async (c) => {
+  const ws = getWorkspace(c);
+  const allowList = await resolveAgentAllowList(c);
+
+  const statusRaw = c.req.query('status');
+  let status: RunStatus | undefined;
+  if (statusRaw !== undefined) {
+    const parsed = runStatusSchema.safeParse(statusRaw);
+    if (!parsed.success) {
+      throw new HTTPError('INVALID_QUERY', `invalid status: ${statusRaw}`, 422);
+    }
+    status = parsed.data;
+  }
+
+  const limitRaw = c.req.query('limit');
+  const limit = limitRaw ? Math.min(100, Math.max(1, Number(limitRaw) || 50)) : 50;
+
+  const rows = await listRuns({
+    workspaceId: ws.id,
+    status,
+    agentSlug: c.req.query('agent') || undefined,
+    since: c.req.query('since') || undefined,
+    callerAgentProjectsAllowList: allowList ?? undefined,
+  });
+  return jsonOk(c, rows.slice(0, limit).map(redactRunForApi));
+});
+
 // GET /runs/:runId
 runsRoute.get('/:runId', requireScope('documents:read'), async (c) => {
   const run = await loadRunScoped(c, c.req.param('runId'));
-  return jsonOk(c, run);
+  return jsonOk(c, redactRunForApi(run));
 });
 
 // POST /runs

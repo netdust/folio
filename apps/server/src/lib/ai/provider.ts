@@ -39,7 +39,9 @@ export interface AIProvider {
   }): Promise<{ ok: true } | { ok: false; reason: string }>;
 }
 
-const REGISTRY: Record<Provider, () => Promise<AIProvider>> = {
+// REGISTRY covers the 4 API-backed providers only. claude-code is keyless/local
+// and uses a separate executor; it is intentionally absent here.
+const REGISTRY: Partial<Record<Provider, () => Promise<AIProvider>>> = {
   anthropic: async () => (await import('./anthropic.ts')).anthropic,
   openai: async () => (await import('./openai.ts')).openai,
   openrouter: async () => (await import('./openrouter.ts')).openrouter,
@@ -54,7 +56,7 @@ const REGISTRY: Record<Provider, () => Promise<AIProvider>> = {
 // lets reset() restore the original loaders without needing per-call cleanup
 // in the tests. Spread is intentional — a per-test mutation to REGISTRY[k]
 // must NOT mutate ORIGINAL_REGISTRY (which would defeat the snapshot).
-const ORIGINAL_REGISTRY: Record<Provider, () => Promise<AIProvider>> = { ...REGISTRY };
+const ORIGINAL_REGISTRY: Partial<Record<Provider, () => Promise<AIProvider>>> = { ...REGISTRY };
 
 const cache: Partial<Record<Provider, AIProvider>> = {};
 // Share one in-flight import per provider so concurrent first-callers
@@ -66,7 +68,7 @@ async function loadProvider(name: Provider): Promise<AIProvider> {
   if (cached) return cached;
   const inflight = loading[name];
   if (inflight) return inflight;
-  const promise = REGISTRY[name]()
+  const promise = REGISTRY[name]!()
     .then((impl) => {
       cache[name] = impl;
       delete loading[name];
@@ -132,7 +134,7 @@ export const __INTERNAL_TEST_ONLY__ = {
     // Round 7 #15 — restore the module-load REGISTRY snapshot so test stubs
     // from overrideRegistry() are unwound. See ORIGINAL_REGISTRY comment.
     for (const k of Object.keys(REGISTRY) as Provider[]) {
-      REGISTRY[k] = ORIGINAL_REGISTRY[k];
+      REGISTRY[k] = ORIGINAL_REGISTRY[k]!;
     }
   },
   loadProvider(name: Provider): Promise<AIProvider> {

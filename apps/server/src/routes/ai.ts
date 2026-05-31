@@ -49,6 +49,15 @@ const TestKeyBody = z
 aiRoute.post('/test-key', zValidator('json', TestKeyBody), async (c) => {
   const { provider, model, api_key, base_url } = c.req.valid('json');
 
+  // claude-code is a keyless/local backend — there is no API key to validate.
+  if (provider === 'claude-code') {
+    throw new HTTPError(
+      'INVALID_BODY',
+      'claude-code does not use an API key and cannot be tested here',
+      422,
+    );
+  }
+
   // Fix #5: explicit base_url is required for ollama. The provider's
   // testKey() falls back to DEFAULT_BASE = 'http://localhost:11434' when no
   // baseUrl is supplied, which would bypass validatePublicUrl entirely and

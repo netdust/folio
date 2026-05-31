@@ -334,10 +334,17 @@ function WorkspaceLayout() {
                   onSelectWorkspace={onSelectWorkspace}
                   onCreateWorkspace={onCreateWorkspace}
                   onCreateProject={() => setCreatingProject(true)}
-                  onOpenAgents={() => agentPanelBus.toggle()}
-                  onOpenTriggers={() =>
-                    void navigate({ to: '/w/$wslug/triggers', params: { wslug } })
+                  onOpenAgents={() =>
+                    void navigate({ to: '/w/$wslug/agents', params: { wslug } })
                   }
+                  onOpenTriggers={() =>
+                    void navigate({
+                      to: '/w/$wslug/agents',
+                      params: { wslug },
+                      search: { tab: 'triggers' },
+                    })
+                  }
+                  onWorkWithAgent={() => agentPanelBus.toggle()}
                 />
               ),
             }}

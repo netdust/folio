@@ -94,6 +94,51 @@ test('retitling a work_item does NOT change its slug (slugs are immutable)', asy
   expect(updated.slug).toBe('fix-login-bug');
 });
 
+test('retitling an UNTITLED placeholder DOES re-slug (first real name wins, once)', async () => {
+  const { db, seed } = await makeTestApp();
+  const table = await getWorkItemsTable(db, seed.project.id);
+  const { document } = await createDocument({
+    workspace: seed.workspace, project: seed.project, table, actor: seed.user, token: null,
+    input: { type: 'work_item', title: 'Untitled', body: '', frontmatter: {}, status: null },
+  });
+  expect(document.slug).toBe('untitled');
+
+  // First real title: placeholder slug adopts it.
+  const named = await updateDocument({
+    workspace: seed.workspace, project: seed.project, fallbackTable: table, actor: seed.user,
+    existing: document, patch: { title: 'Onboard new client' },
+  });
+  expect(named.slug).toBe('onboard-new-client');
+
+  // Second rename: now it's a real slug → immutable, does NOT change again.
+  const renamed = await updateDocument({
+    workspace: seed.workspace, project: seed.project, fallbackTable: table, actor: seed.user,
+    existing: named, patch: { title: 'Onboard the new client properly' },
+  });
+  expect(renamed.slug).toBe('onboard-new-client');
+});
+
+test('retitling an untitled-N collision placeholder also re-slugs', async () => {
+  const { db, seed } = await makeTestApp();
+  const table = await getWorkItemsTable(db, seed.project.id);
+  // First Untitled → 'untitled'; second → 'untitled-2' (collision form is still a placeholder).
+  await createDocument({
+    workspace: seed.workspace, project: seed.project, table, actor: seed.user, token: null,
+    input: { type: 'work_item', title: 'Untitled', body: '', frontmatter: {}, status: null },
+  });
+  const { document: second } = await createDocument({
+    workspace: seed.workspace, project: seed.project, table, actor: seed.user, token: null,
+    input: { type: 'work_item', title: 'Untitled', body: '', frontmatter: {}, status: null },
+  });
+  expect(second.slug).toBe('untitled-2');
+
+  const named = await updateDocument({
+    workspace: seed.workspace, project: seed.project, fallbackTable: table, actor: seed.user,
+    existing: second, patch: { title: 'Real Title' },
+  });
+  expect(named.slug).toBe('real-title');
+});
+
 test('getDocument returns null for unknown slug', async () => {
   const { seed } = await makeTestApp();
   const row = await getDocument(seed.project.id, 'nope');
@@ -770,4 +815,114 @@ test('F8: deleting a non-parent doc does not collateral-delete unrelated comment
   });
   const stillThere = await db.query.documents.findFirst({ where: eq(documents.id, commentB) });
   expect(stillThere).toBeTruthy();
+});
+
+// FIX #6 — `model: ''` clears the key on merge (empty string is "absent", not a
+// stored literal ''). The agent schema preprocesses '' → undefined so the PATCH
+// validates, but the merge loop only deletes on `=== null`, so '' would persist.
+test("PATCH agent with model: '' clears the key (does not persist empty string)", async () => {
+  const { seed } = await makeTestApp();
+  const { document } = await createDocument({
+    workspace: seed.workspace, project: null, table: null, actor: seed.user, token: null,
+    input: {
+      type: 'agent', title: 'EmptyModel', body: '', status: null,
+      frontmatter: {
+        model: 'claude-sonnet-4-6', provider: 'anthropic',
+        tools: ['list_documents'],
+      },
+    },
+  });
+  const updated = await updateDocument({
+    workspace: seed.workspace, project: null, fallbackTable: null, actor: seed.user,
+    existing: document,
+    // Switch to the modelless claude-code provider AND clear the model together,
+    // so the post-merge superRefine (FIX #1) is satisfied.
+    patch: { frontmatter: { provider: 'claude-code', model: '' } },
+  });
+  const fm = updated.frontmatter as Record<string, unknown>;
+  expect(fm.model).toBeUndefined();
+  expect('model' in fm ? fm.model : undefined).toBeUndefined();
+});
+
+// FIX #1 — the agent superRefine ("model is required for API providers") is
+// stripped by `.innerType().partial()` on the PATCH-payload validation, so a
+// PATCH clearing the model on an API-provider agent slips through and persists
+// a modelless API agent that only fails at run time. Re-check post-merge.
+test('FIX#1: PATCH clearing model on an API-provider agent rejects with INVALID_PATCH', async () => {
+  const { seed } = await makeTestApp();
+  const { document } = await createDocument({
+    workspace: seed.workspace, project: null, table: null, actor: seed.user, token: null,
+    input: {
+      type: 'agent', title: 'ApiAgent', body: '', status: null,
+      frontmatter: {
+        model: 'claude-sonnet-4-6', provider: 'anthropic',
+        tools: ['list_documents'],
+      },
+    },
+  });
+  await expect(
+    updateDocument({
+      workspace: seed.workspace, project: null, fallbackTable: null, actor: seed.user,
+      existing: document,
+      patch: { frontmatter: { model: null } },
+    }),
+  ).rejects.toMatchObject({ code: 'INVALID_PATCH', status: 422 });
+});
+
+test('FIX#1: PATCH clearing model on a claude-code agent succeeds (no model required)', async () => {
+  const { seed } = await makeTestApp();
+  const { document } = await createDocument({
+    workspace: seed.workspace, project: null, table: null, actor: seed.user, token: null,
+    input: {
+      type: 'agent', title: 'CcAgent', body: '', status: null,
+      frontmatter: {
+        provider: 'claude-code',
+        tools: ['list_documents'],
+      },
+    },
+  });
+  const updated = await updateDocument({
+    workspace: seed.workspace, project: null, fallbackTable: null, actor: seed.user,
+    existing: document,
+    patch: { frontmatter: { model: null } },
+  });
+  const fm = updated.frontmatter as Record<string, unknown>;
+  expect(fm.model).toBeUndefined();
+  expect(fm.provider).toBe('claude-code');
+});
+
+// FIX #3 — placeholder re-slug is keyed on PROVENANCE, not just slug text shape.
+// A doc whose slug is placeholder-shaped (`untitled-5`) but whose TITLE is a real
+// 'Untitled-5' (user deliberately named it that) must NOT silently move its slug
+// on a later retitle — that would break [[slug]] links (no rename cascade exists).
+test('FIX#3: a placeholder-SHAPED slug with a real (non-seed) title does NOT re-slug', async () => {
+  const { db, seed } = await makeTestApp();
+  const table = await getWorkItemsTable(db, seed.project.id);
+  // Seed a work_item whose slug is placeholder-shaped but title is a real name.
+  const id = nanoid();
+  await db.insert(documents).values({
+    id,
+    workspaceId: seed.workspace.id,
+    projectId: seed.project.id,
+    tableId: table.id,
+    type: 'work_item',
+    slug: 'untitled-5',
+    title: 'Untitled-5',
+    status: null,
+    body: '',
+    frontmatter: {},
+    createdBy: seed.user.id,
+    updatedBy: seed.user.id,
+  });
+  const existing = (await db.query.documents.findFirst({
+    where: eq(documents.id, id),
+  }))! as Document;
+
+  const updated = await updateDocument({
+    workspace: seed.workspace, project: seed.project, fallbackTable: table, actor: seed.user,
+    existing,
+    patch: { title: 'Whatever' },
+  });
+  expect(updated.title).toBe('Whatever');
+  expect(updated.slug).toBe('untitled-5');
 });

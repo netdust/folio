@@ -1,0 +1,2 @@
+- claude-code runner: MCP callback IS wired (Task 7b, commit 2b9f0c0) — ccExecute mints a short-lived scoped Bearer (mirrors agent token scopes/projectIds), passes `--mcp-config`+`--strict-mcp-config` pointing CC at `${PUBLIC_URL}/mcp`, revokes in finally. CC can write back into Folio under the agent's exact envelope.
+- claude-code runner remaining v1 gaps: ccExecute uses process.cwd() (not workspace-derived); no mid-run cancel; planning→awaiting_approval transition deferred (when wired, runAgentResume needs the claude-code branch — see TODO in runner.ts).

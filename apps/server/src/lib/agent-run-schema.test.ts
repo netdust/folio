@@ -134,6 +134,11 @@ describe('runDoneReasonSchema', () => {
   });
 });
 
+import { providerSchema } from './agent-run-schema.ts';
+test('providerSchema accepts claude-code', () => {
+  expect(providerSchema.parse('claude-code')).toBe('claude-code');
+});
+
 describe('isValidTransition', () => {
   test('planning → awaiting_approval | running | failed', () => {
     expect(isValidTransition('planning', 'awaiting_approval')).toBe(true);

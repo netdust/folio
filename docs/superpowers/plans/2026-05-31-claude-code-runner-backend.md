@@ -160,6 +160,13 @@ describe('claude-code agent', () => {
 Run: `bun test apps/server/src/lib/agent-run-schema.test.ts apps/server/src/lib/agent-schema.test.ts`
 Expected: FAIL — `'claude-code'` rejected; model still required.
 
+> **PLAN CORRECTION (2026-05-31, controller ground-truth gate) — three drifts vs source:**
+>
+> 1. **`ProviderName` ≠ `providerSchema`.** `apps/server/src/services/agent-runs.ts:1129` defines a SEPARATE hand-maintained `ProviderName = 'anthropic'|'openai'|'openrouter'|'ollama'` + `ALL_PROVIDERS` — used ONLY by provider-HEALTH-checking (`checkProviderHealth`, `getProviderHealth`). `claude-code` is keyless/local and has NO health to check, so it must **NOT** be added to `ProviderName`/`ALL_PROVIDERS`. Add it ONLY to `providerSchema` (agent-run-schema) + the agent `provider` enum. The plan's earlier "add `claude-code` to `PROVIDER_LABELS`" was WRONG.
+> 2. **`PROVIDER_LABELS` (runner.ts:86) is typed `Record<ProviderName, string>`** — since `ProviderName` stays the 4 API providers, do NOT add a claude-code key (it would be a type error). Instead make the lookup tolerate claude-code where it's indexed by `fm.provider` (e.g. `PROVIDER_LABELS[fm.provider as ProviderName] ?? 'Claude Code'`). The claude-code branch (Task 7) never reaches the provider-error label path anyway, but the type must still compile.
+> 3. **`agentFrontmatterSchema.partial()` is consumed at `documents.ts:806`.** `.partial()` is a `ZodObject` method that does NOT exist on the `ZodEffects` a `.superRefine` produces. The codebase already handles this for triggers: `triggerFrontmatterSchema.innerType().partial()` (l.807). So IF you add `.superRefine`, you MUST also change `documents.ts:806` from `agentFrontmatterSchema.partial()` to `agentFrontmatterSchema.innerType().partial()` (mirroring the trigger line). Add a `safeParse` test for the agent PATCH path to prove `.partial()` still works.
+> 4. **Run fm `model` (agent-run-schema) is `z.string()` (required); `createRun` does `const model = agentFm.model as string` (agent-runs.ts:114).** For a claude-code agent with no `model`, that's `undefined`. Change run fm to `model: z.string().default('')` AND `createRun` to `const model = (agentFm.model as string | undefined) ?? ''`.
+
 - [ ] **Step 3: Widen the enums + conditionally require model**
 
 In `apps/server/src/lib/agent-run-schema.ts` l.63:
@@ -168,14 +175,16 @@ In `apps/server/src/lib/agent-run-schema.ts` l.63:
 export const providerSchema = z.enum(['anthropic', 'openai', 'openrouter', 'ollama', 'claude-code']);
 ```
 
-In `apps/server/src/lib/agent-schema.ts`, change the `provider` enum (l.12) to include `'claude-code'`, make `model` optional (l.11), and add a refinement so model is required for API providers but optional for `claude-code`:
+And change run fm `model: z.string()` → `model: z.string().default('')` (claude-code runs may have no pinned model).
+
+In `apps/server/src/lib/agent-schema.ts`, change the `provider` enum (l.12) to include `'claude-code'`, make `model` optional (l.11), and add the refinement (placed on the exported schema — note the `.innerType()` consumer fix in `documents.ts` per the correction above):
 
 ```ts
   model: z.string().min(1).optional(),
   provider: z.enum(['anthropic', 'openai', 'openrouter', 'ollama', 'claude-code']),
 ```
 
-Then, on the object schema, append a `.superRefine` (or `.refine`) — place it on the schema being exported:
+Then, on the object schema, append a `.superRefine` — place it on the schema being exported:
 
 ```ts
 .superRefine((fm, ctx) => {
@@ -565,8 +574,11 @@ git commit -m "phase-3.x: setRunBody — persist CC transcript on the run docume
 
 ### Task 7: Wire the branch into `runAgent` (ccExecute path)
 
+> **PLAN CORRECTION (2026-05-31, controller ground-truth gate) — the run's token has no recoverable plaintext.** The plan said `mcpToken: ctx.token.token`. VERIFIED FALSE: `apiTokens` stores only `tokenHash` (sha256 of the bearer); the plaintext is shown once at mint and discarded (`documents.ts:556` `newApiToken()` → plaintext used then dropped). `ctx.token` is an `ApiToken` row (runner.ts:107) with NO `.token` field. So Folio cannot recover the run-token plaintext to hand to CC.
+> **Scope decision (user, 2026-05-31): "Minimal branch now, MCP token as fast-follow."** Task 7 ships the executor branch WITHOUT an MCP token: spawn → transcript→body → result comment → `completed`. Pass `mcpToken: ''` (CC gets no Folio token; its MCP callbacks would 401, acceptable for v1 — host-side work still runs). The fresh-token mint/scope/revoke lifecycle is split out to **Task 7b** (deferred; uses `newApiToken()` + `toolsToScopes(agent.tools)` + agent `projectIds`, then revoke post-run). Update the self-review's "token reuse" claim accordingly.
+
 **Files:**
-- Modify: `apps/server/src/lib/runner.ts:154-155` (branch after preflight)
+- Modify: `apps/server/src/lib/runner.ts` (branch after preflight — current branch point is the `const messages = await buildInitialMessages(ctx); await runLoop(ctx, messages);` pair at ~l.153-155, post Tasks 2–4)
 - Test: `apps/server/src/lib/runner.test.ts` (append — integration over the runner with an injected spawn)
 
 The branch calls the executor, persists the transcript, posts the result comment, and transitions the run. To keep the executor injectable in the runner test, expose a module-level spawn override on the runner (mirroring the provider `__INTERNAL_TEST_ONLY__` pattern already in `provider.ts`).
@@ -655,7 +667,7 @@ async function ccExecute(ctx: RunContext): Promise<void> {
     {
       systemPrompt: ctx.fm.system_prompt,
       model: ctx.fm.model && ctx.fm.model.length > 0 ? ctx.fm.model : undefined,
-      mcpToken: ctx.token.token,
+      mcpToken: '', // Task 7b will mint a fresh scoped token; v1 ships no MCP callback (see correction above)
       cwd: process.cwd(),
     },
     __ccSpawnOverride ? { spawn: __ccSpawnOverride } : {},
@@ -674,7 +686,7 @@ async function ccExecute(ctx: RunContext): Promise<void> {
 }
 ```
 
-> `ctx.token.token` — confirm the column name on the loaded `apiTokens` row (it is the bearer string; grep `apiTokens` schema if unsure). `transitionRun` is already imported in runner.ts (l.47).
+> `transitionRun(runId, { newStatus, actor })` is already imported in runner.ts (l.47); `actor` is required, `doneReason`/`completedAt` optional — the call above is valid. `mcpToken` is intentionally `''` in v1 per the correction above.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -823,6 +835,27 @@ A fifth runner backend: execute an agent via the local `claude` CLI instead of a
 git add docs/INSTALL.md docs/API.md docs/PHASES.md
 git commit -m "docs: claude-code runner backend — install, API, phases"
 ```
+
+---
+
+### Task 7b: Wire CC's MCP callback into Folio (mint token + --mcp-config)
+
+> **Added 2026-05-31** after the user asked "can the agent do work via MCP?" — answer was NO: v1 shipped one-way (CC does host work; can't write back into Folio). This task wires the callback loop. **Ground-truthed against the real machine:** `claude 2.1.158` supports `--mcp-config <json-string-or-file>` + `--strict-mcp-config`. The HTTP MCP config shape (verified from the user's own `~/.claude.json` `stitch` entry) is `{ "type": "http", "url": "...", "headers": { "Authorization": "Bearer <tok>" } }`. Folio's MCP endpoint is `POST /mcp` — **root-level, NOT under `/api/v1`, NOT workspace-scoped in the URL** (`app.ts:100`); the bearer resolves workspace+agent. So the URL is `${env.PUBLIC_URL}/mcp`.
+
+**Files:**
+- Modify: `apps/server/src/lib/cc-executor.ts` (add `mcpUrl` to `CcInput`; build `--mcp-config` argv when token+url present)
+- Modify: `apps/server/src/lib/runner.ts` (`ccExecute` mints a token, passes url, revokes after)
+- Test: `cc-executor.test.ts` (argv includes `--mcp-config` + `--strict-mcp-config` with the right JSON) + `runner.test.ts` (token minted with same scopes/workspace/agent/projectIds as `ctx.token`, and revoked after the run)
+
+**Design (verified):**
+- Mint in `ccExecute` via `newApiToken()` (`auth.ts:54` → `{ token, hash }`). Insert an `apiTokens` row mirroring `ctx.token`: same `workspaceId`, `agentId`, `scopes`, `projectIds`, `name: 'cc-run:<runId>'`, `tokenHash: hash`. This guarantees the IDENTICAL scope envelope (locked decision #2) without recomputing scopes.
+- Build inline config string: `JSON.stringify({ mcpServers: { folio: { type: 'http', url: `${env.PUBLIC_URL}/mcp`, headers: { Authorization: `Bearer ${token}` } } } })`.
+- In `cc-executor.ts`: when `mcpToken` AND `mcpUrl` are present, push `'--mcp-config', <configString>, '--strict-mcp-config'` to argv. Keep `FOLIO_MCP_TOKEN` env too (belt-and-suspenders / future). When absent, omit (preserves the v1 no-callback behavior + existing tests).
+- After the run completes (success OR fail), revoke: `db.delete(apiTokens).where(eq(apiTokens.id, <minted id>))`. Wrap in try/finally so a thrown run still revokes. (The agent-delete cascade is the backstop, but explicit revoke is the short-lived-token contract.)
+
+**TDD:** unit-test the argv shaping in cc-executor (config JSON parses, contains the URL + Bearer); integration-test in runner that the minted token row exists during the run and is gone after. Keep all existing tests green (they pass `mcpToken: ''` / no url → no `--mcp-config`).
+
+**Commit:** `phase-3.x: wire CC MCP callback — mint scoped token + --mcp-config (Task 7b)`
 
 ---
 

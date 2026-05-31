@@ -1,4 +1,4 @@
-export type AgentPanelScreen = 'activity' | 'run' | 'agents';
+export type AgentPanelScreen = 'activity' | 'run';
 export interface AgentPanelState {
   open: boolean;
   screen: AgentPanelScreen;
