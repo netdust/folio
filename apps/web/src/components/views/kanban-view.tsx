@@ -70,7 +70,10 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
     () =>
       effectiveSort
         ? { type: 'work_item' as const, sort: effectiveSort.key, dir: effectiveSort.dir, limit: 200 }
-        : { type: 'work_item' as const, sort: 'board_position', dir: 'asc' as const, limit: 200 },
+        // Manual (board_position) order is PARKED — a null sort defaults to
+        // updated_at desc. Restore `sort: 'board_position'` here when manual
+        // drag-sort is un-parked.
+        : { type: 'work_item' as const, sort: 'updated_at', dir: 'desc' as const, limit: 200 },
     [effectiveSort],
   );
 
@@ -123,7 +126,10 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
   // Manual mode (no field sort) is the only mode where within-column
   // drag-reorder is allowed; a field-sort active means the order is derived,
   // so reordering would be meaningless.
-  const reorderEnabled = effectiveSort === null;
+  // Manual drag-reorder is PARKED (board_position sort hidden from the toolbar).
+  // Force it off so cards are plain draggables (cross-column regroup still works)
+  // and no board_position is written. Restore `effectiveSort === null` to un-park.
+  const reorderEnabled = false;
 
   // Builds the grouping-field patch for moving a card into `colValue`.
   // Status grouping writes the status column directly; field grouping coerces
