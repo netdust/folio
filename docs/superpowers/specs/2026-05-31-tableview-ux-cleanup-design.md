@@ -15,7 +15,7 @@ _2026-05-31. First slice of the pre-Phase-4 "serious UX cleaning" round. Scope: 
 ## Decisions (locked with Stefan, 2026-05-31)
 
 - **Sort:** server-side, **built-ins only** (`title`, `status`, `updated_at`). Custom-field sort deferred; their headers stay non-clickable (no false affordance). Default order unchanged: `updated_at desc`.
-- **Wiki:** removed from the top tab bar. Stays reachable as the existing rail node (no rail change needed — it's already wired).
+- **Wiki:** removed from the top tab bar. Stays reachable as the existing rail node (no rail change needed — it's already wired). Wiki overview shows items as cards, not as a list.
 - **Pinned last column:** column-settings only. Header = sliders/settings icon (opens existing ColumnPicker popover). Row cells empty. `+ Add column` stays as the header `trailing` affordance, sitting just left of the pinned settings column.
 
 ## Section 1 — Server-side sort (built-ins only)
