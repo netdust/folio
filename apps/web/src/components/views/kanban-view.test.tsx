@@ -341,5 +341,14 @@ describe('KanbanView', () => {
     expect(bodies[0]!.className).toContain('flex-1');
     // ...and the wrapper must be able to stretch within the flex row.
     expect(bodies[0]!.parentElement!.className).toContain('min-h-0');
+    // BF3 (2026-05-31): a column with many cards used to overflow OUT of the
+    // tinted box (overflow visible), spilling cards below the tint and pushing
+    // the whole board to scroll. The body must scroll its own cards internally
+    // (overflow-y-auto) and be allowed to shrink below content (min-h-0) so the
+    // tint always fills exactly the board height. The 200px floor is gone — the
+    // stretch handles height now.
+    expect(bodies[0]!.className).toContain('overflow-y-auto');
+    expect(bodies[0]!.className).toContain('min-h-0');
+    expect(bodies[0]!.className).not.toContain('min-h-[200px]');
   });
 });

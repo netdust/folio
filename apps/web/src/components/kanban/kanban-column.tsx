@@ -53,7 +53,7 @@ export function KanbanColumn({ value, label, color, count, onAdd, isAddPending, 
         ref={setNodeRef}
         data-testid="kanban-column-body"
         className={cn(
-          'flex min-h-[200px] flex-1 flex-col gap-1.5 rounded-lg p-1 transition-colors',
+          'flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto rounded-lg p-1 transition-colors folio-scroll',
           isOver ? 'bg-card' : 'bg-[rgb(0_0_0_/_0.025)] dark:bg-[rgb(255_255_255_/_0.03)]',
         )}
       >
