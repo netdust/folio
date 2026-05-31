@@ -24,6 +24,7 @@
  */
 
 import { and, eq, sql } from 'drizzle-orm';
+import { nanoid } from 'nanoid';
 import { db } from '../db/client.ts';
 import { env } from '../env.ts';
 import {
@@ -57,6 +58,7 @@ import {
 import { executeTool } from './agent-tools.ts';
 import { type Message, type ToolDef, getProvider } from './ai/provider.ts';
 import { sanitizeProviderError } from './ai/sanitize-error.ts';
+import { newApiToken } from './auth.ts';
 import { decryptSecret } from './crypto.ts';
 import { HTTPError } from './http.ts';
 
@@ -834,30 +836,52 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
  * with the Task 7b token/lifecycle work.
  */
 async function ccExecute(ctx: RunContext): Promise<void> {
-  const outcome = await runClaudeCode(
-    {
-      systemPrompt: ctx.fm.system_prompt,
-      model: ctx.fm.model && ctx.fm.model.length > 0 ? ctx.fm.model : undefined,
-      mcpToken: '',
-      // v1: Folio's own cwd (spec decision). CC's host context comes from the
-      // prompt, not the cwd. Per-agent working_dir is a named deferral.
-      cwd: process.cwd(),
-    },
-    __ccSpawnOverride ? { spawn: __ccSpawnOverride } : {},
-  );
+  // Mint a short-lived scoped bearer token so CC can call back into Folio's MCP
+  // endpoint. The token mirrors the run's existing agent token (same scopes,
+  // agentId, projectIds) and is revoked unconditionally in the finally block.
+  const { token: ccToken, hash: ccHash } = newApiToken();
+  const ccTokenId = nanoid();
+  await db.insert(apiTokens).values({
+    id: ccTokenId,
+    workspaceId: ctx.token.workspaceId,
+    name: `cc-run:${ctx.run.id}`,
+    tokenHash: ccHash,
+    scopes: ctx.token.scopes,
+    agentId: ctx.token.agentId,
+    projectIds: ctx.token.projectIds,
+    createdBy: ctx.transitionActor,
+  });
 
-  // Always persist the transcript (even on failure) for audit.
-  await setRunBody(ctx.run.id, outcome.transcript);
+  try {
+    const outcome = await runClaudeCode(
+      {
+        systemPrompt: ctx.fm.system_prompt,
+        model: ctx.fm.model && ctx.fm.model.length > 0 ? ctx.fm.model : undefined,
+        mcpToken: ccToken,
+        mcpUrl: `${env.PUBLIC_URL}/mcp`,
+        // v1: Folio's own cwd (spec decision). CC's host context comes from the
+        // prompt, not the cwd. Per-agent working_dir is a named deferral.
+        cwd: process.cwd(),
+      },
+      __ccSpawnOverride ? { spawn: __ccSpawnOverride } : {},
+    );
 
-  if (outcome.status === 'failed') {
-    // non-zero CC exit = provider-level failure (claude_code_disabled covers
-    // the gate case; this is a runtime CC failure).
-    await failRun(ctx, runErrorReasonSchema.enum.provider_error, outcome.detail);
-    return;
+    // Always persist the transcript (even on failure) for audit.
+    await setRunBody(ctx.run.id, outcome.transcript);
+
+    if (outcome.status === 'failed') {
+      // non-zero CC exit = provider-level failure (claude_code_disabled covers
+      // the gate case; this is a runtime CC failure).
+      await failRun(ctx, runErrorReasonSchema.enum.provider_error, outcome.detail);
+      return;
+    }
+
+    await postAgentComment(ctx, outcome.result, 'result');
+    await transitionRun(ctx.run.id, { newStatus: 'completed', actor: ctx.transitionActor });
+  } finally {
+    // Revoke the ephemeral MCP token regardless of success or failure.
+    await db.delete(apiTokens).where(eq(apiTokens.id, ccTokenId));
   }
-
-  await postAgentComment(ctx, outcome.result, 'result');
-  await transitionRun(ctx.run.id, { newStatus: 'completed', actor: ctx.transitionActor });
 }
 
 /**

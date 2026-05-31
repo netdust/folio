@@ -26,6 +26,7 @@ export interface CcInput {
   systemPrompt: string;
   model: string | undefined;
   mcpToken: string;
+  mcpUrl: string | undefined;
   cwd: string;
 }
 
@@ -51,6 +52,19 @@ export async function runClaudeCode(
 
   const argv = ['claude', '-p', input.systemPrompt];
   if (input.model) argv.push('--model', input.model);
+
+  if (input.mcpToken && input.mcpUrl) {
+    const mcpConfig = JSON.stringify({
+      mcpServers: {
+        folio: {
+          type: 'http',
+          url: input.mcpUrl,
+          headers: { Authorization: `Bearer ${input.mcpToken}` },
+        },
+      },
+    });
+    argv.push('--mcp-config', mcpConfig, '--strict-mcp-config');
+  }
 
   const childEnv: Record<string, string> = {
     ...(process.env as Record<string, string>),

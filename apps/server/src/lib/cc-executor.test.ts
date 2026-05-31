@@ -12,7 +12,7 @@ function fakeSpawn(opts: { stdout: string; exitCode: number }): SpawnFn {
 describe('runClaudeCode', () => {
   test('clean exit returns completed + transcript + final result', async () => {
     const outcome: CcOutcome = await runClaudeCode(
-      { systemPrompt: 'do the thing', model: undefined, mcpToken: 'tok_123', cwd: '/tmp' },
+      { systemPrompt: 'do the thing', model: undefined, mcpToken: 'tok_123', mcpUrl: undefined, cwd: '/tmp' },
       { spawn: fakeSpawn({ stdout: 'line1\nFINAL RESULT', exitCode: 0 }) },
     );
     expect(outcome.status).toBe('completed');
@@ -22,7 +22,7 @@ describe('runClaudeCode', () => {
 
   test('non-zero exit returns failed with detail', async () => {
     const outcome = await runClaudeCode(
-      { systemPrompt: 'x', model: undefined, mcpToken: 't', cwd: '/tmp' },
+      { systemPrompt: 'x', model: undefined, mcpToken: 't', mcpUrl: undefined, cwd: '/tmp' },
       { spawn: fakeSpawn({ stdout: 'boom', exitCode: 1 }) },
     );
     expect(outcome.status).toBe('failed');
@@ -36,7 +36,7 @@ describe('runClaudeCode', () => {
       return { stdoutText: async () => 'ok', exited: Promise.resolve(0), kill: () => {} };
     };
     await runClaudeCode(
-      { systemPrompt: 'x', model: 'claude-opus-4-8', mcpToken: 't', cwd: '/tmp' },
+      { systemPrompt: 'x', model: 'claude-opus-4-8', mcpToken: 't', mcpUrl: undefined, cwd: '/tmp' },
       { spawn: spy },
     );
     expect(capturedArgs).toContain('--model');
@@ -50,7 +50,7 @@ describe('runClaudeCode', () => {
       return { stdoutText: async () => 'ok', exited: Promise.resolve(0), kill: () => {} };
     };
     await runClaudeCode(
-      { systemPrompt: 'x', model: undefined, mcpToken: 't', cwd: '/tmp' },
+      { systemPrompt: 'x', model: undefined, mcpToken: 't', mcpUrl: undefined, cwd: '/tmp' },
       { spawn: spy },
     );
     expect(capturedArgs).not.toContain('--model');
@@ -63,9 +63,40 @@ describe('runClaudeCode', () => {
       return { stdoutText: async () => 'ok', exited: Promise.resolve(0), kill: () => {} };
     };
     await runClaudeCode(
-      { systemPrompt: 'x', model: undefined, mcpToken: 'tok_abc', cwd: '/tmp' },
+      { systemPrompt: 'x', model: undefined, mcpToken: 'tok_abc', mcpUrl: undefined, cwd: '/tmp' },
       { spawn: spy },
     );
     expect(capturedEnv.FOLIO_MCP_TOKEN).toBe('tok_abc');
+  });
+
+  test('emits --mcp-config + --strict-mcp-config when token and url present', async () => {
+    let argv: string[] = [];
+    const spy: SpawnFn = (a) => {
+      argv = a.argv;
+      return { stdoutText: async () => 'ok', exited: Promise.resolve(0), kill: () => {} };
+    };
+    await runClaudeCode(
+      { systemPrompt: 'x', model: undefined, mcpToken: 'tok_x', mcpUrl: 'http://h/mcp', cwd: '/tmp' },
+      { spawn: spy },
+    );
+    expect(argv).toContain('--mcp-config');
+    expect(argv).toContain('--strict-mcp-config');
+    const cfgIdx = argv.indexOf('--mcp-config') + 1;
+    const cfg = JSON.parse(argv[cfgIdx]!);
+    expect(cfg.mcpServers.folio.url).toBe('http://h/mcp');
+    expect(cfg.mcpServers.folio.headers.Authorization).toBe('Bearer tok_x');
+  });
+
+  test('omits --mcp-config when url is absent (v1 one-way)', async () => {
+    let argv: string[] = [];
+    const spy: SpawnFn = (a) => {
+      argv = a.argv;
+      return { stdoutText: async () => 'ok', exited: Promise.resolve(0), kill: () => {} };
+    };
+    await runClaudeCode(
+      { systemPrompt: 'x', model: undefined, mcpToken: '', mcpUrl: undefined, cwd: '/tmp' },
+      { spawn: spy },
+    );
+    expect(argv).not.toContain('--mcp-config');
   });
 });

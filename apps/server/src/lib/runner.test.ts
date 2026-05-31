@@ -1951,6 +1951,65 @@ describe('runAgent claude-code branch', () => {
       (env as { FOLIO_CLAUDE_CODE_ENABLED: boolean }).FOLIO_CLAUDE_CODE_ENABLED = prevCc;
     }
   });
+
+  test('claude-code run: cc-run token minted before spawn and revoked after completion', async () => {
+    // Verifies the mint-token-→-pass-to-CC-→-revoke lifecycle (Task 7b).
+    // We assert that AFTER runAgent returns, no cc-run:<runId> token row remains.
+    const { db, run } = await scaffold({
+      withAiKey: false,
+      agentOverrides: { provider: 'claude-code', requires_approval: false },
+      runOverrides: { provider: 'claude-code' },
+    });
+
+    const prevCc = env.FOLIO_CLAUDE_CODE_ENABLED;
+    (env as { FOLIO_CLAUDE_CODE_ENABLED: boolean }).FOLIO_CLAUDE_CODE_ENABLED = true;
+    __setCcSpawnForTest(() => ({
+      stdoutText: async () => 'done',
+      exited: Promise.resolve(0),
+      kill: () => {},
+    }));
+    try {
+      await runAgent({ runId: run.id });
+
+      // After completion the ephemeral token must be gone (revoked in finally).
+      const leftover = await db.query.apiTokens.findFirst({
+        where: (t, { like }) => like(t.name, `cc-run:${run.id}`),
+      });
+      expect(leftover).toBeUndefined();
+    } finally {
+      __setCcSpawnForTest(undefined);
+      (env as { FOLIO_CLAUDE_CODE_ENABLED: boolean }).FOLIO_CLAUDE_CODE_ENABLED = prevCc;
+    }
+  });
+
+  test('claude-code run: cc-run token revoked even when executor fails', async () => {
+    // Verifies the finally-revoke path on failure.
+    const { db, run } = await scaffold({
+      withAiKey: false,
+      agentOverrides: { provider: 'claude-code', requires_approval: false },
+      runOverrides: { provider: 'claude-code' },
+    });
+
+    const prevCc = env.FOLIO_CLAUDE_CODE_ENABLED;
+    (env as { FOLIO_CLAUDE_CODE_ENABLED: boolean }).FOLIO_CLAUDE_CODE_ENABLED = true;
+    __setCcSpawnForTest(() => ({
+      stdoutText: async () => 'error output',
+      exited: Promise.resolve(1),
+      kill: () => {},
+    }));
+    try {
+      await runAgent({ runId: run.id });
+
+      // Run failed, but token must still be cleaned up.
+      const leftover = await db.query.apiTokens.findFirst({
+        where: (t, { like }) => like(t.name, `cc-run:${run.id}`),
+      });
+      expect(leftover).toBeUndefined();
+    } finally {
+      __setCcSpawnForTest(undefined);
+      (env as { FOLIO_CLAUDE_CODE_ENABLED: boolean }).FOLIO_CLAUDE_CODE_ENABLED = prevCc;
+    }
+  });
 });
 
 // ==========================================================================
