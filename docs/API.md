@@ -117,7 +117,7 @@ The agent editor UI shows the `claude-code` option (labelled "no key needed") on
 
 ### Keyless operation
 
-`claude-code` agents do not use the workspace AI-key store. No key is read, and no key is required. Because of this, `POST /ai/test-key` rejects a payload with `provider: claude-code` with `422 INVALID_PROVIDER_FOR_KEY_TEST` — there is nothing to test.
+`claude-code` agents do not use the workspace AI-key store. No key is read, and no key is required. Because of this, `POST /ai/test-key` rejects a payload with `provider: claude-code` with `422 INVALID_BODY` ("claude-code does not use an API key and cannot be tested here") — there is nothing to test.
 
 ### How a run executes
 
