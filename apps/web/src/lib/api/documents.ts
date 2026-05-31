@@ -17,6 +17,7 @@ export interface DocumentSummary {
   type: DocumentType;
   title: string;
   status: string | null;
+  boardPosition: string | null;
   parentId: string | null;
   frontmatter: Record<string, unknown>;
   createdAt: string;

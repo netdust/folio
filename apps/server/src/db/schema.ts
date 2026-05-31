@@ -231,6 +231,7 @@ export const documents = sqliteTable(
     slug: text('slug').notNull(),
     title: text('title').notNull(),
     status: text('status'), // matches a statuses.key for work_items; null for pages
+    boardPosition: text('board_position'), // fractional rank for manual kanban order; null = unranked
     body: text('body').notNull().default(''),
     // frontmatter stored as JSON object. Type inference happens in the UI.
     frontmatter: text('frontmatter', { mode: 'json' })
