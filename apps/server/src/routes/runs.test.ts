@@ -467,6 +467,36 @@ test('GET /runs/:runId returns the run (session)', async () => {
   expect(data.type).toBe('agent_run');
 });
 
+test('BUG-2: GET /runs/:runId does NOT leak frontmatter.system_prompt (session)', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const table = await getWorkItemsTable(db, seed.project.id);
+  const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+  const { agent } = await seedAgent(db, seed.workspace, seed.user, 'helper');
+  const run = await seedRun(db, seed.workspace, seed.project, agent, seed.user, parent);
+  // The run was created via the real path, so frontmatter.system_prompt is the
+  // snapshotted agent body. Pin a known SECRET so the leak is unambiguous.
+  await db
+    .update(documents)
+    .set({
+      frontmatter: {
+        ...(run.frontmatter as Record<string, unknown>),
+        system_prompt: 'SECRET PROMPT',
+      },
+    })
+    .where(eq(documents.id, run.id));
+
+  const res = await app.request(`/api/v1/w/acme/runs/${run.id}`, {
+    headers: { Cookie: seed.sessionCookie },
+  });
+  expect(res.status).toBe(200);
+  const { data } = await res.json();
+  // Redacted...
+  expect(data.frontmatter.system_prompt).toBeUndefined();
+  // ...but the feed/UI-needed keys survive (no over-redaction).
+  expect(data.frontmatter.agent_slug).toBe('helper');
+  expect(data.frontmatter.status).toBe('planning');
+});
+
 test('GET /runs/:runId → 404 AGENT_RUN_NOT_FOUND for unknown id', async () => {
   const { app, seed } = await makeTestApp();
   const res = await app.request('/api/v1/w/acme/runs/does-not-exist', {
@@ -576,6 +606,34 @@ test('GET project-scoped list returns the run', async () => {
   expect(data.map((r: Document) => r.id)).toContain(run.id);
 });
 
+test('BUG-2: GET project-scoped list does NOT leak frontmatter.system_prompt', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const table = await getWorkItemsTable(db, seed.project.id);
+  const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+  const { agent } = await seedAgent(db, seed.workspace, seed.user, 'helper');
+  const run = await seedRun(db, seed.workspace, seed.project, agent, seed.user, parent);
+  await db
+    .update(documents)
+    .set({
+      frontmatter: {
+        ...(run.frontmatter as Record<string, unknown>),
+        system_prompt: 'SECRET PROMPT',
+      },
+    })
+    .where(eq(documents.id, run.id));
+
+  const res = await app.request('/api/v1/w/acme/p/web/runs', {
+    headers: { Cookie: seed.sessionCookie },
+  });
+  expect(res.status).toBe(200);
+  const { data } = await res.json();
+  const row = data.find((r: Document) => r.id === run.id);
+  expect(row).toBeDefined();
+  expect(row.frontmatter.system_prompt).toBeUndefined();
+  expect(row.frontmatter.agent_slug).toBe('helper');
+  expect(row.frontmatter.status).toBe('planning');
+});
+
 test('GET list filters by status', async () => {
   const { app, db, seed } = await makeTestApp();
   const table = await getWorkItemsTable(db, seed.project.id);
@@ -637,6 +695,34 @@ test('GET workspace-scoped list returns runs newest-first', async () => {
   expect(ids).toContain(run2.id);
   // newest-first (desc createdAt) — run2 created after run1
   expect(ids.indexOf(run2.id)).toBeLessThan(ids.indexOf(run1.id));
+});
+
+test('BUG-2: GET workspace-scoped list does NOT leak frontmatter.system_prompt', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const table = await getWorkItemsTable(db, seed.project.id);
+  const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+  const { agent } = await seedAgent(db, seed.workspace, seed.user, 'helper');
+  const run = await seedRun(db, seed.workspace, seed.project, agent, seed.user, parent);
+  await db
+    .update(documents)
+    .set({
+      frontmatter: {
+        ...(run.frontmatter as Record<string, unknown>),
+        system_prompt: 'SECRET PROMPT',
+      },
+    })
+    .where(eq(documents.id, run.id));
+
+  const res = await app.request('/api/v1/w/acme/runs', {
+    headers: { Cookie: seed.sessionCookie },
+  });
+  expect(res.status).toBe(200);
+  const { data } = await res.json();
+  const row = data.find((r: Document) => r.id === run.id);
+  expect(row).toBeDefined();
+  expect(row.frontmatter.system_prompt).toBeUndefined();
+  expect(row.frontmatter.agent_slug).toBe('helper');
+  expect(row.frontmatter.status).toBe('planning');
 });
 
 test('GET workspace-scoped list honors ?limit=', async () => {

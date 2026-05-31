@@ -207,6 +207,22 @@ export async function createRun(
   return { document: inserted! };
 }
 
+/**
+ * Strip server-internal / sensitive run frontmatter before returning a run
+ * over the API. `system_prompt` is the agent's full snapshotted instructions —
+ * workspace-member-visible config that must not leak through run read/list
+ * surfaces (mirrors the F-shakeout C1 fix that closed it on GET ?type=agent_run).
+ * No web consumer reads it. Returns a shallow-cloned row with the key removed
+ * from frontmatter; does NOT mutate the input. Conservative — strips ONLY
+ * system_prompt; agent_slug / status / fired_by / tokens_* / provider / model
+ * are all feed/UI-needed and kept.
+ */
+export function redactRunForApi(row: Document): Document {
+  const fm = { ...(row.frontmatter as Record<string, unknown>) };
+  delete fm.system_prompt;
+  return { ...row, frontmatter: fm };
+}
+
 // ----- transitionRun -----
 
 export interface TransitionRunArgs {

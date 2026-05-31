@@ -44,6 +44,7 @@ import {
   getProviderHealth,
   listRuns,
   nextChainId,
+  redactRunForApi,
   transitionRun,
 } from '../services/agent-runs.ts';
 import { createComment } from '../services/comments.ts';
@@ -253,7 +254,7 @@ runsListRoute.get('/', requireScope('documents:read'), async (c) => {
     since: since || undefined,
     callerAgentProjectsAllowList: allowList ?? undefined,
   });
-  return jsonOk(c, rows);
+  return jsonOk(c, rows.map(redactRunForApi));
 });
 
 // -----------------------------------------------------------------------------
@@ -264,7 +265,7 @@ export const runsRoute = new Hono<AuthContext & ScopeContext>();
 
 // GET /runs — workspace-scoped recent-runs list. Mirrors the project-scoped
 // `runsListRoute` GET '/' contract (status enum validation, allow-list
-// narrowing, no redaction) but scopes by `workspaceId` instead of `projectId`,
+// narrowing, system_prompt redaction) but scopes by `workspaceId` instead of `projectId`,
 // so the Agent Activity feed can backfill cross-project run history on mount.
 // Registered BEFORE `GET /:runId` so the root path resolves distinctly.
 runsRoute.get('/', requireScope('documents:read'), async (c) => {
@@ -291,13 +292,13 @@ runsRoute.get('/', requireScope('documents:read'), async (c) => {
     since: c.req.query('since') || undefined,
     callerAgentProjectsAllowList: allowList ?? undefined,
   });
-  return jsonOk(c, rows.slice(0, limit));
+  return jsonOk(c, rows.slice(0, limit).map(redactRunForApi));
 });
 
 // GET /runs/:runId
 runsRoute.get('/:runId', requireScope('documents:read'), async (c) => {
   const run = await loadRunScoped(c, c.req.param('runId'));
-  return jsonOk(c, run);
+  return jsonOk(c, redactRunForApi(run));
 });
 
 // POST /runs
