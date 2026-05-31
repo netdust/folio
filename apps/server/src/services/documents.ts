@@ -11,7 +11,7 @@
  * still calls `validateStatus` etc. directly.
  */
 
-import { and, desc, eq, gte, inArray, isNull, lt, ne, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, gte, inArray, isNull, lt, ne, or, sql } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import {
   slugify,
@@ -89,17 +89,29 @@ async function validateStatusForTable(
 
 // ----- list/get reads -----
 
-function encodeCursor(updatedAt: number, id: string): string {
-  return Buffer.from(`${updatedAt}:${id}`).toString('base64');
+const SORT_COLUMNS = {
+  title: documents.title,
+  status: documents.status,
+  updated_at: documents.updatedAt,
+} as const;
+export type SortKey = keyof typeof SORT_COLUMNS;
+export type SortDir = 'asc' | 'desc';
+
+function resolveSort(sort?: string, dir?: string): { key: SortKey; dir: SortDir } {
+  const key = (sort && sort in SORT_COLUMNS ? sort : 'updated_at') as SortKey;
+  const d: SortDir = dir === 'asc' ? 'asc' : dir === 'desc' ? 'desc' : key === 'updated_at' ? 'desc' : 'asc';
+  return { key, dir: d };
 }
 
-function decodeCursor(s: string): { updatedAt: number; id: string } | null {
+function encodeCursor(sortKey: SortKey, sortValue: string, id: string): string {
+  return Buffer.from(`${sortKey}:${Buffer.from(sortValue).toString('base64')}:${id}`).toString('base64');
+}
+
+function decodeCursor(s: string): { sortKey: SortKey; sortValue: string; id: string } | null {
   try {
-    const raw = Buffer.from(s, 'base64').toString('utf8');
-    const [t, id] = raw.split(':');
-    const updatedAt = Number(t);
-    if (!Number.isFinite(updatedAt) || !id) return null;
-    return { updatedAt, id };
+    const [sortKey, b64v, id] = Buffer.from(s, 'base64').toString().split(':');
+    if (!sortKey || !(sortKey in SORT_COLUMNS) || b64v === undefined || !id) return null;
+    return { sortKey: sortKey as SortKey, sortValue: Buffer.from(b64v, 'base64').toString(), id };
   } catch {
     return null;
   }
@@ -121,13 +133,14 @@ export interface ListDocumentsOptions {
   assignee?: string;
   updatedSince?: string;
   staleFor?: string;
+  sort?: string;
+  dir?: string;
 }
 
 export async function listDocuments(
   opts: ListDocumentsOptions,
 ): Promise<{ data: Document[]; nextCursor: string | null }> {
   const limit = Math.min(200, opts.limit ?? 50);
-  const cursor = opts.cursor ? decodeCursor(opts.cursor) : null;
 
   const whereClauses = [eq(documents.projectId, opts.projectId)];
   // Apply the type filter for every known DocumentType. Previously this
@@ -233,28 +246,48 @@ export async function listDocuments(
     }
   }
 
+  const { key: sortKey, dir: sortDir } = resolveSort(opts.sort, opts.dir);
+  const sortCol = SORT_COLUMNS[sortKey];
+  const decoded = opts.cursor ? decodeCursor(opts.cursor) : null;
+  const cursor = decoded && decoded.sortKey === sortKey ? decoded : null;
+
   if (cursor) {
-    const ts = new Date(cursor.updatedAt);
-    whereClauses.push(
-      or(
-        lt(documents.updatedAt, ts),
-        and(eq(documents.updatedAt, ts), lt(documents.id, cursor.id)) as never,
-      ) as never,
-    );
+    const cmpGt = sortDir === 'asc' ? gt : lt;
+    if (sortKey === 'updated_at') {
+      const ts = new Date(Number(cursor.sortValue));
+      whereClauses.push(
+        or(
+          cmpGt(documents.updatedAt, ts),
+          and(eq(documents.updatedAt, ts), cmpGt(documents.id, cursor.id)),
+        ) as never,
+      );
+    } else {
+      whereClauses.push(
+        or(
+          cmpGt(sortCol, cursor.sortValue),
+          and(eq(sortCol, cursor.sortValue), cmpGt(documents.id, cursor.id)),
+        ) as never,
+      );
+    }
   }
 
+  const dirFn = sortDir === 'asc' ? asc : desc;
   const rows = await db
     .select()
     .from(documents)
     .where(and(...whereClauses))
-    .orderBy(desc(documents.updatedAt), desc(documents.id))
+    .orderBy(dirFn(sortCol), dirFn(documents.id))
     .limit(limit + 1);
 
   const hasMore = rows.length > limit;
   const page = hasMore ? rows.slice(0, limit) : rows;
   const last = page[page.length - 1];
-  const nextCursor =
-    hasMore && last ? encodeCursor(last.updatedAt.getTime(), last.id) : null;
+  let nextCursor: string | null = null;
+  if (hasMore && last) {
+    const sortValue =
+      sortKey === 'updated_at' ? String(last.updatedAt.getTime()) : String((last as Record<string, unknown>)[sortKey] ?? '');
+    nextCursor = encodeCursor(sortKey, sortValue, last.id);
+  }
   return { data: page, nextCursor };
 }
 
