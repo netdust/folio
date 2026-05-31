@@ -20,7 +20,7 @@ _Date: 2026-06-01 · Branch: `phase-3.x/agents-page` · Scope (Stefan): agents-p
 | S9 | `?wdoc=<slug>` opens the config slideover (edit path) | 1 dialog, provider/model fields | dialog open, shake-writer config + 3 inputs | ✅ |
 | S10 | `/triggers` → redirect to `/agents?tab=triggers`, Triggers tab active | (verified prior session) | redirect + Triggers selected | ✅ |
 | S11 | Switcher exposes the two distinct destinations | "Agents & Triggers" + "Work with an agent" | both present (+ standalone shortcuts) | ✅ |
-| S12 | "Work with an agent" opens the cockpit panel (interaction) | panel opens, Activity default | `w-[360px]` panel, "No recent agent activity" | ✅ |
+| S12 | "Work with an agent" opens the cockpit panel (interaction) | panel opens, Activity default | `w-[360px]` panel opens ✅ BUT Activity shows "No recent activity" despite 5 real runs → **BUG-1** | ⚠️ |
 
 **Track A verdict: 0 defects.** Every fix + the agents-page UI flow verified live.
 
@@ -36,10 +36,16 @@ Quick visual confirmations I can't fully judge (the automated probe hit viewport
 
 ## Phase 2 — Bug clusters
 
-**Zero bugs found in Track A.** The 10 review findings (the substance of this branch) were already fixed + TDD'd; this sweep re-confirmed the user-facing ones live. No CRITICAL / IMPORTANT / MINOR defects surfaced.
+### BUG-1 (IMPORTANT) — Activity feed shows "No recent activity" despite real run history
+- **Symptom:** Open "Work with an agent" → the panel's Activity screen shows "No recent agent activity." even though the workspace has **5 `agent_run` rows** (4 completed, 1 failed) from this session.
+- **Root cause:** `apps/web/src/lib/api/activity-feed.ts::useActivityFeed` is **SSE-live-tail only** — `useState<ActivityItem[]>([])` starts empty on every mount and only accrues items from `agent.run.*` events that stream in *while the panel is open*. Its own comment states it: _"SSE is the only source (no workspace-wide runs-list endpoint); items accrue from live events."_ Historical runs emitted their events in the past, so there is **no backfill** — the feed is always empty on open until a new run fires live.
+- **Why tests missed it:** unit tests inject synthetic SSE events, so the live-tail logic passes; the missing-history gap only shows in a real environment after runs have already happened. (Exactly what shake-out is for.)
+- **Provenance:** PRE-EXISTING (Phase-3 sub-phase E cockpit work), NOT introduced by the agents-page branch. But the agents-page change makes the cockpit panel the deliberate "Work with an agent" destination, so this empty-on-open feed is now front-and-center.
+- **Fix direction (Phase 3):** the feed needs an initial **history backfill** — fetch recent `agent_run`s on mount, then live-tail on top. There is no workspace-wide runs-list endpoint today (the comment notes this); options: (a) add a workspace-scoped `GET /w/:wslug/runs?recent=N` that returns recent agent_runs (visibility-gated like the project `/runs`), and seed `useActivityFeed` from it; OR (b) reuse the SSE `Last-Event-Id` replay if the event log retains enough history (likely not far enough back). (a) is the right-altitude fix.
+- **Severity: IMPORTANT** — the feature works for *new* live activity, but the primary surface looks broken (empty) for anyone opening it to review past runs.
 
 ## Phase 3 — Fix
-N/A — empty manifest. Pending only the Track-B eyeball checks above.
+One IMPORTANT bug (BUG-1) pending. Fix via systematic-debugging after manifest sign-off. The 10 review findings + agents-page UI flow are otherwise clean.
 
 ## Notes / non-blocking observations
 - Pre-existing test data in Netdust has agents with `model: "m"` (a one-char model from an earlier session) — cosmetic data, not a defect; chips render it faithfully as `anthropic·m`.
