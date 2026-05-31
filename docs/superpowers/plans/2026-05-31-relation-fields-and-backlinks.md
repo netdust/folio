@@ -277,7 +277,8 @@ git commit -m "phase-3.x: validate relation target + cardinality on field create
 Removes `maybeRegenerateSlug` from the update path so a retitle never moves the slug — the linchpin that keeps `[[slug]]` links durable. This task is independent of relations and can land on its own.
 
 **Files:**
-- Modify: `apps/server/src/services/documents.ts:875-880` (call site) and `:735-745` (function — keep exported for now to avoid breaking imports, but it will be unused; remove if nothing imports it)
+- Modify: `apps/server/src/services/documents.ts:875-880` (call site) and `:735-745` (function)
+- Modify: `apps/server/src/routes/documents.ts` (PLAN CORRECTION 2026-05-31: a SECOND call site exists here — the markdown-PATCH path at `~:325` calls `maybeRegenerateSlug` independently of the service-layer JSON-PATCH path. Both must be replaced with `const nextSlug: string | null = null` and the now-dead import removed. The original plan only named `services/documents.ts`; grep ALL of `apps/server` for callers — `plan-server-source-audit` lesson.)
 - Test: `apps/server/src/services/documents.test.ts`
 
 - [ ] **Step 1: Write a failing pin test for slug immutability**
