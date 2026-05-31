@@ -1,84 +1,212 @@
 import { useNavigate, useSearch } from '@tanstack/react-router';
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useSyncExternalStore } from 'react';
 import { DndContext, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
 import { toast } from 'sonner';
 import { useCreateDocument, useDocuments, useUpdateDocument, type DocumentSummary } from '../../lib/api/documents.ts';
 import { useStatuses } from '../../lib/api/statuses.ts';
+import { useViews } from '../../lib/api/views.ts';
+import { useFields } from '../../lib/api/fields.ts';
 import { formatApiError } from '../../lib/api/index.ts';
 import { KanbanColumn } from '../kanban/kanban-column.tsx';
 import { KanbanCard } from '../kanban/kanban-card.tsx';
+import { boardControlsBus, type BoardSort } from '../../lib/board-controls-bus.ts';
+import { buildColumns } from '../kanban/board-grouping.ts';
+import { computeReorderPosition } from '../kanban/board-reorder.ts';
+import { resolveDrop, coerceGroupValue } from '../kanban/board-drag.ts';
 import { EmptyState } from './empty-state.tsx';
 import { KanbanSkeleton } from './kanban-skeleton.tsx';
 
 interface Props {
   wslug: string;
   pslug: string;
+  tslug: string;
 }
 
-export function KanbanView({ wslug, pslug }: Props) {
+export function KanbanView({ wslug, pslug, tslug }: Props) {
   const navigate = useNavigate();
   const search = useSearch({ strict: false }) as Record<string, unknown>;
-  const listParams = useMemo(
-    () => ({ type: 'work_item' as const, sort: 'updated_at' as const, dir: 'desc' as const, limit: 200 }),
-    [],
-  );
-  const { data: page, isLoading, error } = useDocuments(wslug, pslug, listParams);
   const { data: statuses } = useStatuses(wslug, pslug);
-  const update = useUpdateDocument(wslug, pslug, listParams);
-  const create = useCreateDocument(wslug, pslug);
+  const { data: viewsData } = useViews(wslug, pslug);
+  const { data: fields } = useFields(wslug, pslug, tslug);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
   const [pendingSlugs, setPendingSlugs] = useState<Set<string>>(new Set());
+
+  const urlViewId = typeof search.view === 'string' ? search.view : undefined;
+  const activeView = useMemo(() => {
+    const list = viewsData ?? [];
+    if (urlViewId) {
+      const found = list.find((v) => v.id === urlViewId);
+      if (found) return found;
+    }
+    return list.find((v) => v.isDefault) ?? list[0] ?? null;
+  }, [urlViewId, viewsData]);
+
+  // Ad-hoc group-by / sort overrides live in a module bus keyed by view id.
+  // Selecting Manual / a group-by applies IMMEDIATELY without `?view=`; the
+  // override wins over the view's stored value. The bus returns the same
+  // Map-stored reference until mutated, so getSnapshot is stable (no loop).
+  const override = useSyncExternalStore(
+    boardControlsBus.subscribe,
+    () => (activeView ? boardControlsBus.get(activeView.id) : undefined),
+  );
+
+  // Derive the board's in-column sort. The bus override wins INCLUDING `null`
+  // (manual); otherwise fall back to `activeView.sort` (a JSON array of
+  // `{key,dir}`, first entry wins) exactly like table-view. `null` = manual,
+  // which sorts by `board_position` for hand-ranked ordering.
+  const effectiveSort: BoardSort | null = useMemo(() => {
+    if (override && 'sort' in override) return override.sort ?? null;
+    const viewSort = activeView?.sort;
+    if (!Array.isArray(viewSort) || viewSort.length === 0) return null;
+    const first = viewSort[0];
+    if (!first || typeof first !== 'object' || !('key' in first)) return null;
+    const k = (first as { key: unknown }).key;
+    if (typeof k !== 'string') return null;
+    const d = (first as { dir?: unknown }).dir;
+    return { key: k, dir: d === 'desc' ? 'desc' : 'asc' };
+  }, [activeView, override]);
+
+  const listParams = useMemo(
+    () =>
+      effectiveSort
+        ? { type: 'work_item' as const, sort: effectiveSort.key, dir: effectiveSort.dir, limit: 200 }
+        // Manual (board_position) order is PARKED — a null sort defaults to
+        // updated_at desc. Restore `sort: 'board_position'` here when manual
+        // drag-sort is un-parked.
+        : { type: 'work_item' as const, sort: 'updated_at', dir: 'desc' as const, limit: 200 },
+    [effectiveSort],
+  );
+
+  const { data: page, isLoading, error } = useDocuments(wslug, pslug, listParams);
+  const update = useUpdateDocument(wslug, pslug, listParams);
+  const create = useCreateDocument(wslug, pslug);
+
+  const groupBy = (override?.groupBy ?? activeView?.groupBy ?? 'status') || 'status';
+  const groupField = groupBy === 'status' ? null : (fields ?? []).find((f) => f.key === groupBy) ?? null;
+
+  const columns = useMemo(
+    () => buildColumns({ docs: page?.data ?? [], groupBy, field: groupField, statuses: statuses ?? [] }),
+    [page, groupBy, groupField, statuses],
+  );
+
+  const docsById = useMemo(() => {
+    const m = new Map<string, DocumentSummary>();
+    for (const d of page?.data ?? []) m.set(d.id, d);
+    return m;
+  }, [page]);
 
   const openDoc = (slug: string) => {
     void navigate({ to: '.', search: { ...search, doc: slug }, replace: false });
   };
 
-  const onCreateInColumn = async (statusKey: string) => {
+  const onCreateInColumn = async (value: string | null) => {
+    if (value === null) return;
     try {
       const created = await create.mutateAsync({ type: 'work_item', title: 'Untitled' });
-      await update.mutateAsync({ slug: created.slug, patch: { status: statusKey } });
+      const patch =
+        groupBy === 'status'
+          ? { status: value }
+          : { frontmatter: { [groupBy]: coerceGroupValue(value, groupField?.type) } };
+      await update.mutateAsync({ slug: created.slug, patch });
       void navigate({ to: '.', search: { ...search, doc: created.slug }, replace: false });
     } catch (err) {
       toast.error(formatApiError(err));
     }
   };
 
+  // Returns the doc's current grouping value (status key or frontmatter value)
+  // so onDragEnd can no-op when the card is dropped on its own column.
+  const currentGroupValue = (d: DocumentSummary): string | null => {
+    if (groupBy === 'status') return d.status ?? null;
+    const v = (d.frontmatter as Record<string, unknown>)[groupBy];
+    if (v === null || v === undefined || v === '') return null;
+    return String(v);
+  };
+
+  // Manual mode (no field sort) is the only mode where within-column
+  // drag-reorder is allowed; a field-sort active means the order is derived,
+  // so reordering would be meaningless.
+  // Manual drag-reorder is PARKED (board_position sort hidden from the toolbar).
+  // Force it off so cards are plain draggables (cross-column regroup still works)
+  // and no board_position is written. Restore `effectiveSort === null` to un-park.
+  const reorderEnabled = false;
+
+  // Builds the grouping-field patch for moving a card into `colValue`.
+  // Status grouping writes the status column directly; field grouping coerces
+  // the (always-string) column value back to the field's declared type so we
+  // don't flip e.g. number 3 into the string "3".
+  const groupingPatch = (colValue: string | null): Record<string, unknown> =>
+    groupBy === 'status'
+      ? { status: colValue }
+      : { frontmatter: { [groupBy]: coerceGroupValue(colValue, groupField?.type) } };
+
+  // Computes the board_position for dropping the active card into `col` at the
+  // slot occupied by `overDocId` (drop-before). `null` overDocId appends.
+  const dropSlotPosition = (col: { docIds: string[] }, activeId: string, overDocId: string | null): string => {
+    const idsWithoutActive = col.docIds.filter((id) => id !== activeId);
+    const idx = overDocId === null ? idsWithoutActive.length : idsWithoutActive.indexOf(overDocId);
+    const targetIndex = idx === -1 ? idsWithoutActive.length : idx;
+    const positions = idsWithoutActive.map((id) => docsById.get(id)?.boardPosition ?? null);
+    return computeReorderPosition(positions, targetIndex);
+  };
+
   const onDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event;
     if (!over) return;
     const overId = String(over.id);
-    if (!overId.startsWith('col-')) return;
-    const newStatus = overId.slice('col-'.length);
-    const data = active.data.current as { slug?: string; currentStatus?: string | null } | undefined;
-    const slug = data?.slug;
-    const currentStatus = data?.currentStatus;
+    const activeId = String(active.id);
+    const slug = (active.data.current as { slug?: string } | undefined)?.slug;
     if (!slug) return;
-    if (currentStatus === newStatus) return;
+
+    const overIsColumn = overId.startsWith('col-');
+    // Destination column: either the col-* droppable, or the column owning the
+    // over-card (manual mode drops land on cards inside per-column contexts).
+    let destCol: { value: string | null; docIds: string[] } | undefined;
+    if (overIsColumn) {
+      const raw = overId.slice('col-'.length);
+      const value = raw === '__unset__' ? null : raw;
+      destCol = columns.find((c) => c.value === value) ?? { value, docIds: [] };
+    } else {
+      destCol = columns.find((c) => c.docIds.includes(overId));
+    }
+    if (!destCol) return;
+    const destColumnValue = destCol.value;
+
+    const activeDoc = docsById.get(activeId);
+    const activeGroupValue = activeDoc ? currentGroupValue(activeDoc) : null;
+
+    const action = resolveDrop({ reorderEnabled, overIsColumn, activeGroupValue, destColumnValue });
+    if (action.kind === 'none') return;
+    if (action.kind === 'reorder' && activeId === overId) return;
+
+    let patch: Record<string, unknown>;
+    if (action.kind === 'reorder') {
+      patch = { boardPosition: dropSlotPosition(destCol, activeId, overId) };
+    } else if (action.kind === 'regroup') {
+      patch = groupingPatch(destColumnValue);
+    } else {
+      // regroup-reorder: land the card where dropped in the destination column.
+      const overDocId = overIsColumn ? null : overId;
+      patch = { ...groupingPatch(destColumnValue), boardPosition: dropSlotPosition(destCol, activeId, overDocId) };
+    }
+
     setPendingSlugs((p) => new Set(p).add(slug));
     try {
-      await update.mutateAsync({ slug, patch: { status: newStatus } });
+      await update.mutateAsync({ slug, patch });
     } catch (err) {
       toast.error(formatApiError(err));
     } finally {
-      setPendingSlugs((p) => { const n = new Set(p); n.delete(slug); return n; });
+      setPendingSlugs((p) => {
+        const n = new Set(p);
+        n.delete(slug);
+        return n;
+      });
     }
   };
 
-  const grouped = useMemo(() => {
-    if (!statuses || !page) return new Map<string, DocumentSummary[]>();
-    const m = new Map<string, DocumentSummary[]>();
-    for (const s of statuses) m.set(s.key, []);
-    m.set('__no_status__', []);
-    for (const d of page.data) {
-      const k = d.status && m.has(d.status) ? d.status : '__no_status__';
-      m.get(k)!.push(d);
-    }
-    return m;
-  }, [statuses, page]);
-
   if (isLoading) return <KanbanSkeleton />;
   if (error) return <div className="p-4 text-danger">Failed to load board.</div>;
-  if (!statuses || statuses.length === 0) {
+  if (groupBy === 'status' && (!statuses || statuses.length === 0)) {
     return (
       <EmptyState
         title="No statuses"
@@ -89,42 +217,37 @@ export function KanbanView({ wslug, pslug }: Props) {
 
   return (
     <DndContext sensors={sensors} onDragEnd={onDragEnd}>
-      {/* MainFrame's children container already supplies px-[22px] py-2; don't double it up. */}
-      <div className="flex h-full gap-3 overflow-x-auto">
-        {statuses.map((s) => (
+      <div className="flex h-full min-h-0 flex-col">
+        {/* MainFrame's children container already supplies px-[22px] py-2; don't double it up. */}
+        <div className="flex min-h-0 flex-1 items-stretch gap-3 overflow-x-auto">
+          {columns.map((col) => (
           <KanbanColumn
-            key={s.key}
-            status={s}
-            count={grouped.get(s.key)?.length ?? 0}
-            onAdd={() => onCreateInColumn(s.key)}
+            key={col.value ?? '__unset__'}
+            value={col.value}
+            label={col.label}
+            color={col.color}
+            count={col.docIds.length}
+            onAdd={col.value === null ? undefined : () => onCreateInColumn(col.value)}
             isAddPending={create.isPending}
+            docIds={col.docIds}
+            reorderEnabled={reorderEnabled}
           >
-            {(grouped.get(s.key) ?? []).map((doc) => (
-              <KanbanCard key={doc.id} doc={doc} onOpen={openDoc} isPending={pendingSlugs.has(doc.slug)} />
-            ))}
-          </KanbanColumn>
-        ))}
-        {/* Cards without a status get rendered in a parking lot — Phase 1 keeps them visible.
-            Header mirrors KanbanColumn's structure (dot placeholder + name + count) so the
-            vertical alignment matches the status columns. Bug F (2026-05-26). */}
-        {(grouped.get('__no_status__')?.length ?? 0) > 0 ? (
-          <div className="flex w-[280px] shrink-0 flex-col">
-            <div className="mb-1 flex items-center gap-2 px-2 py-1">
-              {/* Transparent placeholder matches the colored dot's footprint so the
-                  text + count baseline aligns with status-column headers. */}
-              <span className="h-2 w-2 rounded-full" aria-hidden />
-              <span className="text-sm font-medium text-fg-3">No status</span>
-              <span className="font-mono text-[11px] text-fg-3">
-                {grouped.get('__no_status__')!.length}
-              </span>
-            </div>
-            <div className="flex min-h-[200px] flex-1 flex-col gap-1.5 rounded-lg p-1">
-              {grouped.get('__no_status__')!.map((doc) => (
-                <KanbanCard key={doc.id} doc={doc} onOpen={openDoc} isPending={pendingSlugs.has(doc.slug)} />
-              ))}
-            </div>
-          </div>
-        ) : null}
+            {col.docIds.map((id) => {
+              const doc = docsById.get(id);
+              if (!doc) return null;
+              return (
+                <KanbanCard
+                  key={doc.id}
+                  doc={doc}
+                  onOpen={openDoc}
+                  isPending={pendingSlugs.has(doc.slug)}
+                  sortable={reorderEnabled}
+                />
+              );
+            })}
+            </KanbanColumn>
+          ))}
+        </div>
       </div>
     </DndContext>
   );

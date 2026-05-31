@@ -1,5 +1,9 @@
-import { useDraggable } from '@dnd-kit/core';
+import { useDraggable, type DraggableAttributes } from '@dnd-kit/core';
+import type { SyntheticListenerMap } from '@dnd-kit/core/dist/hooks/utilities';
+import { useSortable } from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import { Flag, Calendar } from 'lucide-react';
+import type { CSSProperties } from 'react';
 import { cn } from '../ui/cn.ts';
 import { Icon } from '../ui/icon.tsx';
 import { Avatar } from '../ui/avatar.tsx';
@@ -9,6 +13,10 @@ interface Props {
   doc: DocumentSummary;
   onOpen: (slug: string) => void;
   isPending?: boolean;
+  // When the board is in manual mode, cards become sortable so they can be
+  // reordered within a column. Otherwise they are plain draggables (cross-
+  // column regroup only).
+  sortable?: boolean;
 }
 
 const LABEL_HUES = [
@@ -25,14 +33,18 @@ function labelHue(label: string): string {
   return LABEL_HUES[Math.abs(h) % LABEL_HUES.length] ?? LABEL_HUES[0];
 }
 
-export function KanbanCard({ doc, onOpen, isPending }: Props) {
-  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
-    id: doc.id,
-    data: { slug: doc.slug, currentStatus: doc.status },
-  });
-  const style = transform
-    ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)`, zIndex: isDragging ? 50 : undefined }
-    : undefined;
+// dnd bindings shared between the sortable and draggable wrappers. Both dnd-kit
+// hooks expose the same shape we consume here; `transition` is sortable-only.
+interface DndBindings {
+  setNodeRef: (node: HTMLElement | null) => void;
+  attributes: DraggableAttributes;
+  listeners: SyntheticListenerMap | undefined;
+  style: CSSProperties | undefined;
+  isDragging: boolean;
+}
+
+function CardBody({ doc, onOpen, isPending, dnd }: { doc: DocumentSummary; onOpen: (slug: string) => void; isPending?: boolean; dnd: DndBindings }) {
+  const { setNodeRef, attributes, listeners, style, isDragging } = dnd;
 
   const priority = typeof doc.frontmatter?.priority === 'string' ? doc.frontmatter.priority : null;
   const due = typeof doc.frontmatter?.due_date === 'string' ? doc.frontmatter.due_date : null;
@@ -109,5 +121,37 @@ export function KanbanCard({ doc, onOpen, isPending }: Props) {
         </div>
       ) : null}
     </div>
+  );
+}
+
+function DraggableCard({ doc, onOpen, isPending }: Omit<Props, 'sortable'>) {
+  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
+    id: doc.id,
+    data: { slug: doc.slug, currentStatus: doc.status },
+  });
+  const style: CSSProperties | undefined = transform
+    ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)`, zIndex: isDragging ? 50 : undefined }
+    : undefined;
+  return <CardBody doc={doc} onOpen={onOpen} isPending={isPending} dnd={{ setNodeRef, attributes, listeners, style, isDragging }} />;
+}
+
+function SortableCard({ doc, onOpen, isPending }: Omit<Props, 'sortable'>) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: doc.id,
+    data: { slug: doc.slug, currentStatus: doc.status },
+  });
+  const style: CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    zIndex: isDragging ? 50 : undefined,
+  };
+  return <CardBody doc={doc} onOpen={onOpen} isPending={isPending} dnd={{ setNodeRef, attributes, listeners, style, isDragging }} />;
+}
+
+export function KanbanCard({ doc, onOpen, isPending, sortable }: Props) {
+  return sortable ? (
+    <SortableCard doc={doc} onOpen={onOpen} isPending={isPending} />
+  ) : (
+    <DraggableCard doc={doc} onOpen={onOpen} isPending={isPending} />
   );
 }

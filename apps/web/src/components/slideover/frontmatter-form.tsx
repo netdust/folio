@@ -4,9 +4,13 @@ import { inferFieldType } from '@folio/shared';
 import type { Status } from '../../lib/api/statuses.ts';
 import type { Field, FieldType } from '../../lib/api/fields.ts';
 import type { DocumentType } from '../../lib/api/documents.ts';
+import { useDocuments } from '../../lib/api/documents.ts';
+import { useBacklinks } from '../../lib/api/backlinks.ts';
 import { useProjects } from '../../lib/api/projects.ts';
 import { InlineSelect } from '../inline/inline-select.tsx';
 import { FieldRenderer } from './field-renderer.tsx';
+import { BacklinksPanel } from './backlinks-panel.tsx';
+import type { RelationCandidate } from '../relations/relation-picker.tsx';
 import { AssigneePicker } from '../assignee/assignee-picker.tsx';
 import { ProjectsField } from '../inline/projects-field.tsx';
 import { ToolsField } from '../inline/tools-field.tsx';
@@ -75,6 +79,15 @@ interface Props {
   onStatusCommit: (next: string) => void;
   onFrontmatterCommit: (patch: Record<string, unknown>) => void;
   pendingKeys?: Set<string>;
+  // Phase 3.x relations: the slug of the document being edited. When set (the
+  // project slideover path), relation fields get an editable picker fed by
+  // candidate documents, and a "Linked from" backlinks panel renders at the
+  // bottom. Omitted on the workspace slideover (agents/triggers, pslug="") —
+  // those don't use relations/backlinks in v1, and a missing docSlug keeps the
+  // candidate/backlinks queries from mounting (so non-agent tests need no
+  // QueryClientProvider).
+  docSlug?: string;
+  onOpenBacklink?: (slug: string) => void;
 }
 
 export function FrontmatterForm({
@@ -88,6 +101,8 @@ export function FrontmatterForm({
   onStatusCommit,
   onFrontmatterCommit,
   pendingKeys,
+  docSlug,
+  onOpenBacklink,
 }: Props) {
   const pinnedByKey = new Map(pinnedFields.map((f) => [f.key, f]));
 
@@ -152,6 +167,10 @@ export function FrontmatterForm({
         // The `provider` key on agents renders a paired editor that owns both
         // `provider` and `model` (model has been filtered out of orderedKeys).
         const isProvider = key === 'provider' && type === 'agent';
+        // Phase 3.x: relation fields in the project slideover (docSlug set) get
+        // an editable picker fed by candidate documents. Without docSlug they
+        // fall through to FieldRenderer, which renders read-only chips.
+        const isRelation = fieldType === 'relation' && !!docSlug;
         // Phase 2.5: short field-help text for non-obvious agent keys. Renders
         // below the input so it doesn't crowd the label column.
         const description = type === 'agent' ? AGENT_FIELD_DESC[key] : undefined;
@@ -195,6 +214,16 @@ export function FrontmatterForm({
                   value={typeof value === 'string' ? value : ''}
                   onChange={(next) => onFrontmatterCommit({ [key]: next })}
                 />
+              ) : isRelation ? (
+                <RelationFieldWithCandidates
+                  wslug={wslug}
+                  pslug={pslug}
+                  fieldKey={key}
+                  value={value}
+                  options={options ?? undefined}
+                  onCommit={(next) => onFrontmatterCommit({ [key]: next })}
+                  isPending={pendingKeys?.has(key)}
+                />
               ) : (
                 <FieldRenderer
                   fieldKey={key}
@@ -220,8 +249,101 @@ export function FrontmatterForm({
           onAdd={(key) => onFrontmatterCommit({ [key]: '' })}
         />
       </dd>
+
+      {docSlug ? (
+        <>
+          <dt className="self-start pt-1 font-mono text-[11px] text-fg-3" />
+          <dd>
+            <BacklinksPanelWithData
+              wslug={wslug}
+              pslug={pslug}
+              docSlug={docSlug}
+              onOpen={onOpenBacklink ?? (() => {})}
+            />
+          </dd>
+        </>
+      ) : null}
     </dl>
   );
+}
+
+/**
+ * Phase 3.x: relation field for the project slideover. Fetches candidate
+ * documents (pages for a `wiki` target, work_items for a `table:<id>` target)
+ * and builds a slug→{slug,title} resolver, then hands both to FieldRenderer's
+ * editable relation surface. Mounted only when a relation field actually
+ * renders (docSlug present), so the useDocuments queries don't fire for
+ * non-relation docs. Both useDocuments calls run unconditionally at this
+ * component's top level (React hooks rule) — the cheaper of the two for the
+ * field's target is the one whose result we use.
+ */
+function RelationFieldWithCandidates({
+  wslug,
+  pslug,
+  fieldKey,
+  value,
+  options,
+  onCommit,
+  isPending,
+}: {
+  wslug: string;
+  pslug: string;
+  fieldKey: string;
+  value: unknown;
+  options?: string[];
+  onCommit: (next: unknown) => void;
+  isPending?: boolean;
+}) {
+  const target = options?.[0] ?? '';
+  const isWiki = target === 'wiki';
+  const pagesQ = useDocuments(wslug, pslug, { type: 'page' }, { enabled: isWiki });
+  const itemsQ = useDocuments(wslug, pslug, { type: 'work_item' }, { enabled: !isWiki });
+  const docs = (isWiki ? pagesQ.data?.data : itemsQ.data?.data) ?? [];
+  const candidates: RelationCandidate[] = docs.map((d) => ({
+    id: d.id,
+    slug: d.slug,
+    title: d.title,
+  }));
+  const bySlug = new Map(candidates.map((c) => [c.slug, c]));
+  const resolveSlug = (slug: string) => {
+    const c = bySlug.get(slug);
+    return c ? { slug: c.slug, title: c.title } : null;
+  };
+  return (
+    <FieldRenderer
+      fieldKey={fieldKey}
+      type="relation"
+      value={value}
+      options={options}
+      onCommit={onCommit}
+      isPending={isPending}
+      relationCandidates={candidates}
+      resolveSlug={resolveSlug}
+    />
+  );
+}
+
+/**
+ * Phase 3.x: "Linked from" panel. Mounted only when docSlug is set (the
+ * project slideover), so the backlinks query doesn't fire on the workspace
+ * slideover (agents/triggers) or in tests that omit docSlug.
+ */
+function BacklinksPanelWithData({
+  wslug,
+  pslug,
+  docSlug,
+  onOpen,
+}: {
+  wslug: string;
+  pslug: string;
+  docSlug: string;
+  onOpen: (slug: string) => void;
+}) {
+  const { data: backlinks } = useBacklinks(wslug, pslug, docSlug);
+  // Defensive: the hook is typed BacklinkRow[], but degrade rather than crash
+  // if a proxy/error path ever hands back a non-array body.
+  const rows = Array.isArray(backlinks) ? backlinks : [];
+  return <BacklinksPanel backlinks={rows} onOpen={onOpen} />;
 }
 
 function AddField({

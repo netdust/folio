@@ -24,6 +24,9 @@ export const documentPatchSchema = z.object({
   body: z.string().optional(),
   frontmatter: z.record(z.unknown()).optional(),
   parentId: z.string().nullable().optional(),
+  // Fractional rank for manual kanban ordering; null = unranked. Set by the
+  // board's within-column drag-reorder.
+  boardPosition: z.string().nullable().optional(),
 });
 
 export type DocumentCreateInput = z.infer<typeof documentCreateSchema>;

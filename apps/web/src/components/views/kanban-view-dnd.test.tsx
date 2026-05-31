@@ -21,7 +21,7 @@ function setup() {
     validateSearch: z.object({ doc: z.string().optional() }),
     component: () => {
       const { wslug, pslug } = board.useParams();
-      return <KanbanView wslug={wslug} pslug={pslug} />;
+      return <KanbanView wslug={wslug} pslug={pslug} tslug="work-items" />;
     },
   });
   const router = createRouter({
@@ -73,7 +73,7 @@ describe('KanbanView DnD', () => {
           { status: 200, headers: { 'content-type': 'application/json' } },
         );
       }
-      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+      return new Response('{"data":[]}', { status: 200, headers: { 'content-type': 'application/json' } });
     }));
 
     const { queryClient, router } = setup();

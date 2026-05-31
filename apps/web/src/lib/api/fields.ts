@@ -13,7 +13,8 @@ export type FieldType =
   | 'user_ref'
   | 'url'
   | 'document_ref'
-  | 'currency';
+  | 'currency'
+  | 'relation';
 
 export interface Field {
   id: string;

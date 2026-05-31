@@ -3,6 +3,7 @@ import { render, screen } from '@testing-library/react';
 import { DndContext } from '@dnd-kit/core';
 import type { DocumentSummary } from '../../lib/api/documents.ts';
 import { KanbanCard } from './kanban-card.tsx';
+import { KanbanColumn } from './kanban-column.tsx';
 
 function sampleDoc(overrides: Partial<DocumentSummary> = {}): DocumentSummary {
   return {
@@ -50,5 +51,39 @@ describe('KanbanCard', () => {
     renderCard();
     const card = screen.getByRole('button', { name: /Card A/ });
     expect(card.className).toContain('hover:border-fg-3');
+  });
+
+  // Mode-switch smoke tests: jsdom can't realistically fire dnd-kit's DragEnd,
+  // so the reorder math is unit-tested in board-reorder.test.ts. Here we only
+  // prove the card+column render in both board modes without crashing.
+  it('renders a sortable card (manual mode) without crashing', () => {
+    render(
+      <DndContext>
+        <KanbanCard doc={sampleDoc()} onOpen={() => {}} sortable />
+      </DndContext>,
+    );
+    expect(screen.getByRole('button', { name: /Card A/ })).toBeTruthy();
+  });
+
+  it('column wraps cards in a sortable context when reorder is enabled', () => {
+    render(
+      <DndContext>
+        <KanbanColumn value="todo" label="Todo" count={1} docIds={['d1']} reorderEnabled>
+          <KanbanCard doc={sampleDoc()} onOpen={() => {}} sortable />
+        </KanbanColumn>
+      </DndContext>,
+    );
+    expect(screen.getByRole('button', { name: /Card A/ })).toBeTruthy();
+  });
+
+  it('column renders cards directly when reorder is disabled (sort active)', () => {
+    render(
+      <DndContext>
+        <KanbanColumn value="todo" label="Todo" count={1} docIds={['d1']} reorderEnabled={false}>
+          <KanbanCard doc={sampleDoc()} onOpen={() => {}} />
+        </KanbanColumn>
+      </DndContext>,
+    );
+    expect(screen.getByRole('button', { name: /Card A/ })).toBeTruthy();
   });
 });

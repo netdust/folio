@@ -1,7 +1,7 @@
 export const FIELD_TYPES = [
   'string', 'text', 'number', 'boolean', 'date', 'datetime',
   'select', 'multi_select', 'user_ref', 'url', 'document_ref',
-  'currency',
+  'currency', 'relation',
 ] as const;
 
 export type FieldType = (typeof FIELD_TYPES)[number];

@@ -134,6 +134,20 @@
       "when": 1780920000000,
       "tag": "0017_scope_workspace_slug_index_to_null_project",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "6",
+      "when": 1780930000000,
+      "tag": "0018_board_position",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "6",
+      "when": 1780940000000,
+      "tag": "0019_relation_field_type",
+      "breakpoints": true
     }
   ]
 }

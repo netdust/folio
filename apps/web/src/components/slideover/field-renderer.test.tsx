@@ -86,4 +86,42 @@ describe('FieldRenderer', () => {
     );
     expect(screen.getByRole('link', { name: 'https://example.com' })).toBeInTheDocument();
   });
+
+  it('renders relation as read-only chips when no candidates are provided (table path)', () => {
+    const onCommit = vi.fn();
+    render(
+      <FieldRenderer
+        fieldKey="owner"
+        type="relation"
+        value={['[[people-ada]]', '[[ghost]]']}
+        options={['table:tbl_1', 'multi']}
+        onCommit={onCommit}
+        resolveSlug={(slug) => (slug === 'people-ada' ? { slug, title: 'Ada' } : null)}
+      />,
+    );
+    expect(screen.getByText('Ada')).toBeInTheDocument();
+    expect(screen.getByText('[[ghost]]')).toHaveClass('line-through');
+    // No add affordance on the table path.
+    expect(screen.queryByRole('button', { name: /add link/i })).toBeNull();
+  });
+
+  it('renders an add affordance when candidates are provided (slideover path)', () => {
+    const onCommit = vi.fn();
+    render(
+      <FieldRenderer
+        fieldKey="owner"
+        type="relation"
+        value={['[[people-ada]]']}
+        options={['table:tbl_1', 'multi']}
+        onCommit={onCommit}
+        relationCandidates={[
+          { id: 'a', slug: 'people-ada', title: 'Ada' },
+          { id: 'b', slug: 'people-bob', title: 'Bob' },
+        ]}
+        resolveSlug={(slug) => (slug === 'people-ada' ? { slug, title: 'Ada' } : null)}
+      />,
+    );
+    expect(screen.getByText('Ada')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /add link/i })).toBeInTheDocument();
+  });
 });

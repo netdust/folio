@@ -20,6 +20,7 @@ import {
   useDeleteField,
 } from '../../lib/api/fields.ts';
 import { useViews, useUpdateView } from '../../lib/api/views.ts';
+import { useTables } from '../../lib/api/tables.ts';
 import { formatApiError } from '../../lib/api/index.ts';
 import { Icon } from '../ui/icon.tsx';
 import { FilterBar } from '../filter/filter-bar.tsx';
@@ -80,9 +81,17 @@ export function TableView({ wslug, pslug, tslug }: Props) {
   }, [clauses, sort]);
 
   const { data: page, isLoading, error } = useDocuments(wslug, pslug, listParams);
+  // Broad, unfiltered project coverage for resolving relation [[slug]] tokens
+  // to titles in read-only table cells. The table's `page` query is filtered
+  // (status/assignee) and work_item-only, so it can't be relied on to contain
+  // every link target — relations can point at pages too. Two extra queries
+  // (pages + all work_items) build a complete slug→title map. Finding 9.
+  const { data: relPages } = useDocuments(wslug, pslug, { type: 'page' });
+  const { data: relItems } = useDocuments(wslug, pslug, { type: 'work_item' });
   const { data: statuses } = useStatuses(wslug, pslug);
   const { data: fields } = useFields(wslug, pslug, tslug);
   const { data: viewsData } = useViews(wslug, pslug);
+  const { data: tablesData } = useTables(wslug, pslug);
   const update = useUpdateDocument(wslug, pslug, listParams);
   const create = useCreateDocument(wslug, pslug);
   const updateView = useUpdateView(wslug, pslug);
@@ -328,6 +337,15 @@ export function TableView({ wslug, pslug, tslug }: Props) {
 
   const docs = useMemo(() => page?.data ?? [], [page]);
 
+  // slug→{slug,title} resolver covering the project's pages + work_items, so
+  // relation cells render valid links as titled chips (not struck-through).
+  const relationResolve = useMemo(() => {
+    const map = new Map<string, { slug: string; title: string }>();
+    for (const d of relPages?.data ?? []) map.set(d.slug, { slug: d.slug, title: d.title });
+    for (const d of relItems?.data ?? []) map.set(d.slug, { slug: d.slug, title: d.title });
+    return (slug: string) => map.get(slug) ?? null;
+  }, [relPages, relItems]);
+
   const suggestions = useMemo(
     () => columnSuggestions(docs, fields ?? []),
     [docs, fields],
@@ -423,7 +441,15 @@ export function TableView({ wslug, pslug, tslug }: Props) {
             sort={sort}
             onSort={onSortChange}
             onReorder={onReorder}
-            trailing={<TableAddColumn onSubmit={onAddColumn} />}
+            trailing={
+              <TableAddColumn
+                onSubmit={onAddColumn}
+                tables={(Array.isArray(tablesData) ? tablesData : []).map((t) => ({
+                  id: t.id,
+                  name: t.name,
+                }))}
+              />
+            }
             settings={
               <ColumnPicker
                 columns={allColumns}
@@ -467,6 +493,7 @@ export function TableView({ wslug, pslug, tslug }: Props) {
                 isPending={pendingSlugs.has(doc.slug)}
                 onOpen={openDoc}
                 onUpdate={onUpdate}
+                resolveRelation={relationResolve}
               />
             ))}
             {!isLoading && !error && filteredDocs.length > 0 ? (

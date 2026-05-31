@@ -19,11 +19,11 @@ import {
   getDocument,
   getAssignee,
   listDocuments,
-  maybeRegenerateSlug,
   updateDocument,
   stripReservedFrontmatter,
   type DocumentType,
 } from '../services/documents.ts';
+import { findBacklinks } from '../services/backlinks.ts';
 
 const documentsRoute = new Hono<AuthContext & ScopeContext>();
 
@@ -254,6 +254,22 @@ documentsRoute.get('/:slug', async (c) => {
   return jsonOk(c, row);
 });
 
+// GET /:slug/backlinks — query-time backlinks: documents whose frontmatter
+// wiki-links (`[[slug]]`) point at this doc, as either a single relation
+// string or an element of a multi-relation array. Nothing is stored in
+// reverse, so backlinks can never drift from the source-of-truth frontmatter.
+documentsRoute.get('/:slug/backlinks', requireScope('documents:read'), async (c) => {
+  const ws = getWorkspace(c);
+  const p = getProject(c);
+  const slug = c.req.param('slug');
+
+  const target = await getDocument(p.id, slug);
+  if (!target) throw new HTTPError('DOCUMENT_NOT_FOUND', `document "${slug}" not found`, 404);
+
+  const data = await findBacklinks({ workspaceId: ws.id, projectId: p.id, slug });
+  return jsonOk(c, data);
+});
+
 documentsRoute.patch('/:slug', requireScope('documents:write'), async (c) => {
   const user = getUser(c);
   const p = getProject(c);
@@ -325,7 +341,10 @@ documentsRoute.patch('/:slug', requireScope('documents:write'), async (c) => {
         }
       }
     }
-    const nextSlug = await maybeRegenerateSlug(p.id, existing, parsed.title);
+    // Slugs are immutable for ALL document types (Phase 3.x) — a retitle
+    // changes the title only, never the slug, so [[slug]] relation links and
+    // backlinks stay valid. No rename cascade. See services/documents.ts.
+    const nextSlug: string | null = null;
     const updated = {
       ...existing,
       title: parsed.title,

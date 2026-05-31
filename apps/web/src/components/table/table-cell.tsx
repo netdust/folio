@@ -21,6 +21,11 @@ interface Props {
   onTitleCommit: (slug: string, next: string) => void;
   onStatusCommit: (slug: string, next: string) => void;
   onFieldCommit: (slug: string, key: string, next: unknown) => void;
+  // Project-wide slug→title resolver for relation columns. Threading this
+  // (WITHOUT relationCandidates) keeps the table relation cell read-only but
+  // lets valid links render as titled chips instead of struck-through
+  // "broken-link" tokens. Finding 9.
+  resolveRelation?: (slug: string) => { slug: string; title: string } | null;
 }
 
 export function TableCell({
@@ -33,6 +38,7 @@ export function TableCell({
   onTitleCommit,
   onStatusCommit,
   onFieldCommit,
+  resolveRelation,
 }: Props) {
   const content = renderContent();
   if (!isSticky) return content;
@@ -103,6 +109,7 @@ export function TableCell({
         options={column.fieldOptions ?? undefined}
         onCommit={(next) => onFieldCommit(doc.slug, column.key, next)}
         isPending={isPending}
+        resolveSlug={resolveRelation}
       />
     );
     if (!urgencyClass) return rendered;

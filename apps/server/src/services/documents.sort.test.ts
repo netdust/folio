@@ -486,6 +486,93 @@ test('sort by a non-numeric field holding numeric JSON values drops no rows acro
   expect(new Set(all).size).toBe(4);
 });
 
+// ----- B3: manual-order sort key (board_position), nulls last + keyset -----
+
+/**
+ * Seed 4 work items, then set board_position directly on three ('b','a','c')
+ * and leave one NULL. board_position is a NULLABLE text column, so it must
+ * follow the same coalesce-to-sentinel discipline as `status`: NULLs sort
+ * LAST under asc and the keyset cursor must address them or they vanish.
+ */
+async function seedBoardPositions(): Promise<Seeded & { ids: Record<string, string> }> {
+  const { db, seed } = await makeTestApp();
+  const table = await getWorkItemsTable(db, seed.project.id);
+  const ids: Record<string, string> = {};
+  const rows: { title: string; pos: string | null }[] = [
+    { title: 'wb', pos: 'b' },
+    { title: 'wa', pos: 'a' },
+    { title: 'wc', pos: 'c' },
+    { title: 'wnull', pos: null },
+  ];
+  let t = T;
+  for (const r of rows) {
+    t += 10;
+    const id = nanoid();
+    ids[r.title] = id;
+    await db.insert(documents).values({
+      id,
+      projectId: seed.project.id,
+      workspaceId: seed.workspace.id,
+      tableId: table.id,
+      type: 'work_item',
+      slug: r.title.toLowerCase(),
+      title: r.title,
+      status: 'todo',
+      body: '',
+      frontmatter: {},
+      createdAt: new Date(t),
+      updatedAt: new Date(t),
+    });
+    if (r.pos !== null) {
+      await db
+        .update(documents)
+        .set({ boardPosition: r.pos })
+        .where(eq(documents.id, id));
+    }
+  }
+  return {
+    db,
+    projectId: seed.project.id,
+    tableId: table.id,
+    workspaceId: seed.workspace.id,
+    ids,
+  };
+}
+
+test('sort by board_position orders ranked rows asc, nulls last', async () => {
+  const { projectId, tableId } = await seedBoardPositions();
+  const r = await listDocuments({
+    projectId,
+    activeTableId: tableId,
+    type: 'work_item',
+    sort: 'board_position',
+    dir: 'asc',
+  });
+  const pos = r.data.map((d) => d.boardPosition ?? null);
+  expect(pos.slice(0, 3)).toEqual(['a', 'b', 'c']);
+  expect(pos[3]).toBeNull();
+});
+
+test('board_position keyset pagination with a null row across a boundary drops nothing', async () => {
+  const { projectId, tableId } = await seedBoardPositions();
+  const opts = {
+    projectId,
+    activeTableId: tableId,
+    type: 'work_item' as const,
+    sort: 'board_position' as const,
+    dir: 'asc' as const,
+  };
+  const p1 = await listDocuments({ ...opts, limit: 2 });
+  const p2 = p1.nextCursor
+    ? await listDocuments({ ...opts, limit: 2, cursor: p1.nextCursor })
+    : { data: [], nextCursor: null };
+  const p3 = p2.nextCursor
+    ? await listDocuments({ ...opts, limit: 2, cursor: p2.nextCursor })
+    : { data: [], nextCursor: null };
+  const all = [...p1.data, ...p2.data, ...p3.data].map((d) => d.id);
+  expect(new Set(all).size).toBe(4); // ALL rows survive (3 ranked + 1 null)
+});
+
 test('a cursor minted under one sort is ignored under a different sort', async () => {
   const { projectId, tableId } = await seedFive();
 

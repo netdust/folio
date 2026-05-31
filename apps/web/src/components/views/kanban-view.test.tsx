@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -12,6 +12,7 @@ import {
 } from '@tanstack/react-router';
 import { z } from 'zod';
 import { KanbanView } from './kanban-view.tsx';
+import { boardControlsBus } from '../../lib/board-controls-bus.ts';
 
 function setup() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -22,7 +23,7 @@ function setup() {
     validateSearch: z.object({ doc: z.string().optional() }),
     component: () => {
       const { wslug, pslug } = board.useParams();
-      return <KanbanView wslug={wslug} pslug={pslug} />;
+      return <KanbanView wslug={wslug} pslug={pslug} tslug="work-items" />;
     },
   });
   const router = createRouter({
@@ -33,9 +34,11 @@ function setup() {
 }
 
 describe('KanbanView', () => {
+  beforeEach(() => boardControlsBus.reset());
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+    boardControlsBus.reset();
   });
 
   it('groups cards by status column', async () => {
@@ -66,7 +69,7 @@ describe('KanbanView', () => {
           { status: 200, headers: { 'content-type': 'application/json' } },
         );
       }
-      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+      return new Response('{"data":[]}', { status: 200, headers: { 'content-type': 'application/json' } });
     }));
 
     const { queryClient, router } = setup();
@@ -111,7 +114,7 @@ describe('KanbanView', () => {
             { status: 200, headers: { 'content-type': 'application/json' } },
           );
         }
-        return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+        return new Response('{"data":[]}', { status: 200, headers: { 'content-type': 'application/json' } });
       }),
     );
 
@@ -143,12 +146,210 @@ describe('KanbanView', () => {
           { status: 200, headers: { 'content-type': 'application/json' } },
         );
       }
-      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+      return new Response('{"data":[]}', { status: 200, headers: { 'content-type': 'application/json' } });
     }));
 
     const { queryClient, router } = setup();
     render(<QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider>);
     await userEvent.click(await screen.findByText('Card A'));
     await waitFor(() => expect(router.state.location.search).toEqual({ doc: 'a' }));
+  });
+
+  it('groups by a field (view.groupBy) using the field options as columns', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>(async (url) => {
+        const u = String(url);
+        if (u.includes('/statuses')) {
+          return new Response(
+            JSON.stringify({ data: [{ id: 's1', key: 'todo', name: 'Todo', color: '#6EAFFF', category: 'unstarted', order: 1 }] }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        if (u.includes('/views')) {
+          return new Response(
+            JSON.stringify({
+              data: [
+                {
+                  id: 'v1',
+                  name: 'Board',
+                  type: 'kanban',
+                  filters: {},
+                  sort: null,
+                  groupBy: 'priority',
+                  visibleFields: null,
+                  columnOrder: null,
+                  isDefault: true,
+                  order: 1,
+                },
+              ],
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        if (u.includes('/fields')) {
+          return new Response(
+            JSON.stringify({
+              data: [
+                { id: 'f1', key: 'priority', type: 'select', label: 'Priority', options: ['Low', 'High'], required: false, order: 1 },
+              ],
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        if (u.includes('/documents')) {
+          return new Response(
+            JSON.stringify({
+              data: {
+                data: [
+                  { id: 'd1', slug: 'a', type: 'work_item', title: 'Card A', status: null, parentId: null, frontmatter: { priority: 'High' }, createdAt: '', updatedAt: new Date().toISOString() },
+                ],
+                nextCursor: null,
+              },
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        return new Response('{"data":[]}', { status: 200, headers: { 'content-type': 'application/json' } });
+      }),
+    );
+
+    const { queryClient, router } = setup();
+    render(<QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider>);
+    // Columns come from the field options, not statuses. Locate columns via the
+    // add-button aria-label which is unambiguous (the card's priority badge also
+    // renders the text "High", so a plain text query would be ambiguous).
+    const lowHeader = await screen.findByLabelText('New work item in Low');
+    const highHeader = await screen.findByLabelText('New work item in High');
+    expect(lowHeader).toBeInTheDocument();
+    expect(highHeader).toBeInTheDocument();
+    // The card with priority=High renders under the "High" column.
+    const cardA = await screen.findByText('Card A');
+    expect(cardA).toBeInTheDocument();
+    const highColumn = highHeader.closest('div.flex.w-\\[280px\\]');
+    const lowColumn = lowHeader.closest('div.flex.w-\\[280px\\]');
+    expect(highColumn).not.toBeNull();
+    expect(highColumn!.textContent).toContain('Card A');
+    expect(lowColumn!.textContent).not.toContain('Card A');
+  });
+
+  // BF1 (2026-05-31): the default board is reached at `/board` with NO `?view=`
+  // param. The old code gated group-by/sort behind a "view is URL-pinned" check
+  // and early-returned otherwise, so an ad-hoc sort silently did nothing.
+  // Now changes apply ad-hoc via the module bus regardless of `?view=`:
+  // writing a FIELD-sort override switches the documents fetch to that field.
+  // (Manual/board_position sort is PARKED, so this asserts the still-live
+  // ad-hoc path using a real field sort instead of the parked null sort.)
+  it('a field-sort override applies ad-hoc without ?view= (fetch switches to that field)', async () => {
+    const documentsUrls: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>(async (url) => {
+        const u = String(url);
+        if (u.includes('/statuses')) {
+          return new Response(
+            JSON.stringify({ data: [{ id: 's1', key: 'todo', name: 'Todo', color: '#6EAFFF', category: 'unstarted', order: 1 }] }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        if (u.includes('/views')) {
+          // Default view with a FIELD sort (title). An ad-hoc override to a
+          // DIFFERENT field (updated_at) must win and refetch by that field.
+          return new Response(
+            JSON.stringify({
+              data: [
+                {
+                  id: 'v1',
+                  name: 'Board',
+                  type: 'kanban',
+                  filters: {},
+                  sort: [{ key: 'title', dir: 'asc' }],
+                  groupBy: null,
+                  visibleFields: null,
+                  columnOrder: null,
+                  isDefault: true,
+                  order: 1,
+                },
+              ],
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        if (u.includes('/documents')) {
+          documentsUrls.push(u);
+          return new Response(
+            JSON.stringify({
+              data: {
+                data: [{ id: 'd1', slug: 'a', type: 'work_item', title: 'Card A', status: 'todo', parentId: null, frontmatter: {}, createdAt: '', updatedAt: new Date().toISOString() }],
+                nextCursor: null,
+              },
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        return new Response('{"data":[]}', { status: 200, headers: { 'content-type': 'application/json' } });
+      }),
+    );
+
+    const { queryClient, router } = setup();
+    render(<QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider>);
+    await waitFor(() => expect(screen.getByText('Card A')).toBeInTheDocument());
+
+    // No `?view=` was set, and once the view loaded the fetch used its field
+    // sort (title). The group-by/sort toolbar now lives in the project tab row
+    // (BoardControls), not inside KanbanView — KanbanView is a pure READER of
+    // the bus. Drive the bus directly here to assert the reader reacts.
+    expect(router.state.location.search).toEqual({});
+    await waitFor(() => expect(documentsUrls.some((u) => u.includes('sort=title'))).toBe(true));
+
+    // Writing a field-sort override to the bus (what BoardControls does when a
+    // field is picked in the Sort menu) applies ad-hoc without a pinned view:
+    // the board's documents query switches to that field even though no
+    // `?view=` was ever set — the old gated code would have no-op'd here.
+    boardControlsBus.setSort('v1', { key: 'updated_at', dir: 'asc' });
+    await waitFor(() => expect(documentsUrls.some((u) => u.includes('sort=updated_at'))).toBe(true));
+    expect(router.state.location.search).toEqual({});
+  });
+
+  // BF2 (2026-05-31): a short column's tinted background stopped at its last
+  // card instead of filling the board's full height. The fix relies on the
+  // board row stretching each column wrapper (items-stretch + wrapper min-h-0)
+  // so the body's flex-1 grows to the row height. Guard the load-bearing
+  // class on the body div.
+  it('kanban column body stretches to fill height (flex-1)', async () => {
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async (url) => {
+      const u = String(url);
+      if (u.includes('/statuses')) {
+        return new Response(
+          JSON.stringify({ data: [{ id: 's1', key: 'todo', name: 'Todo', color: '#6EAFFF', category: 'unstarted', order: 1 }] }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      if (u.includes('/documents')) {
+        return new Response(
+          JSON.stringify({ data: { data: [{ id: 'd1', slug: 'a', type: 'work_item', title: 'Card A', status: 'todo', parentId: null, frontmatter: {}, createdAt: '', updatedAt: new Date().toISOString() }], nextCursor: null } }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      return new Response('{"data":[]}', { status: 200, headers: { 'content-type': 'application/json' } });
+    }));
+
+    const { queryClient, router } = setup();
+    render(<QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider>);
+    const bodies = await screen.findAllByTestId('kanban-column-body');
+    expect(bodies.length).toBeGreaterThan(0);
+    // The body fills the stretched wrapper via flex-1...
+    expect(bodies[0]!.className).toContain('flex-1');
+    // ...and the wrapper must be able to stretch within the flex row.
+    expect(bodies[0]!.parentElement!.className).toContain('min-h-0');
+    // BF3 (2026-05-31): a column with many cards used to overflow OUT of the
+    // tinted box (overflow visible), spilling cards below the tint and pushing
+    // the whole board to scroll. The body must scroll its own cards internally
+    // (overflow-y-auto) and be allowed to shrink below content (min-h-0) so the
+    // tint always fills exactly the board height. The 200px floor is gone — the
+    // stretch handles height now.
+    expect(bodies[0]!.className).toContain('overflow-y-auto');
+    expect(bodies[0]!.className).toContain('min-h-0');
+    expect(bodies[0]!.className).not.toContain('min-h-[200px]');
   });
 });
