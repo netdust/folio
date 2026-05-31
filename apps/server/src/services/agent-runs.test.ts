@@ -3156,4 +3156,37 @@ describe('setRunBody', () => {
     const row = await db.query.documents.findFirst({ where: eq(documents.id, run.id) });
     expect(row!.body).toBe('FULL TRANSCRIPT TEXT');
   });
+
+  test('setRunBody emits agent.run.transcript so the body write is never eventless (rule #4)', async () => {
+    const { db } = await makeTestApp();
+
+    const wsId = nanoid();
+    await db.insert(workspaces).values({ id: wsId, name: 'test-ws', slug: `ws-${nanoid(6)}` });
+    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, wsId) });
+
+    const userId = nanoid();
+    await db.insert(users).values({ id: userId, email: `u-${nanoid(6)}@test.dev`, passwordHash: 'x', name: 'Tester' });
+    const user = await db.query.users.findFirst({ where: eq(users.id, userId) });
+
+    const projectId = nanoid();
+    await db.insert(schemaProjects).values({ id: projectId, workspaceId: wsId, name: 'test-proj', slug: `p-${nanoid(6)}` });
+    await seedProjectDefaults(db, projectId);
+    const project = await db.query.projects.findFirst({ where: (p, { eq }) => eq(p.id, projectId) });
+
+    const runsTable = await seedRunsTable(db, projectId);
+    const agent = await seedAgent(db, ws!, user!, `agent-${nanoid(6)}`);
+    const workItemsTable = await getWorkItemsTable(db, projectId);
+    const parent = await seedWorkItem(db, ws!, project!, workItemsTable, user!);
+    const run = await seedRunningRun(db, ws!, project!, runsTable, agent, parent, user!);
+
+    await setRunBody(run.id, 'TRANSCRIPT WITH EVENT');
+
+    const transcriptEvents = await db.query.events.findMany({
+      where: eq(events.kind, 'agent.run.transcript'),
+    });
+    expect(transcriptEvents.length).toBe(1);
+    expect(transcriptEvents[0]!.documentId).toBe(run.id);
+    expect(transcriptEvents[0]!.workspaceId).toBe(wsId);
+    expect(transcriptEvents[0]!.projectId).toBe(projectId);
+  });
 });

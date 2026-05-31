@@ -526,16 +526,37 @@ export async function incrementTokens(
 
 /**
  * Persist a claude-code run's full session transcript onto the run document's
- * body (unused for API-loop runs). Plain update — NOT event-emitting; the
- * transcript is metadata, and the terminal transition (transitionRun) carries
- * the event. Caller invokes this BEFORE transitionRun so the body is present
- * when `agent.run.completed` fires.
+ * body (unused for API-loop runs). Emits `agent.run.transcript` in the SAME
+ * transaction as the body write, so the write is never eventless (rule #4 —
+ * every write emits an event). The terminal transition (transitionRun) still
+ * carries its own `agent.run.{completed,failed}` event; this is a dedicated
+ * transcript signal so consumers watching for the body get a body-specific
+ * event even if the subsequent transition races or fails. Caller invokes this
+ * BEFORE transitionRun so the body is present when `agent.run.completed` fires.
  */
 export async function setRunBody(runId: string, body: string): Promise<void> {
-  await db
-    .update(documents)
-    .set({ body })
-    .where(and(eq(documents.id, runId), eq(documents.type, 'agent_run')));
+  await txWithEvents(db, async (tx) => {
+    const row = await tx.query.documents.findFirst({
+      where: and(eq(documents.id, runId), eq(documents.type, 'agent_run')),
+    });
+    if (!row) return; // run gone; nothing to persist
+    await tx
+      .update(documents)
+      .set({ body })
+      .where(and(eq(documents.id, runId), eq(documents.type, 'agent_run')));
+    await emitEvent(tx, {
+      workspaceId: row.workspaceId,
+      projectId: row.projectId ?? null,
+      documentId: runId,
+      // events.actor is free-form (no FK, unlike documents.updated_by), so the
+      // system provenance string is safe here — matches the convention used by
+      // `system:orphan-recovery` / `system:runs-table-seeder` elsewhere in this
+      // file. The transcript write is the runner's, not a user's.
+      kind: 'agent.run.transcript',
+      actor: 'system:runner',
+      payload: {},
+    });
+  });
 }
 
 // ----- read helpers (getActiveRun, getPendingApprovalRun, listRuns) -----
