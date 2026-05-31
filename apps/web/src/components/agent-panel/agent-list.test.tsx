@@ -19,7 +19,7 @@ function setup(initialSearch = '') {
   const workspace = createRoute({
     getParentRoute: () => rootRoute,
     path: '/w/$wslug',
-    validateSearch: z.object({ doc: z.string().optional() }),
+    validateSearch: z.object({ wdoc: z.string().optional() }),
     component: () => {
       const { wslug } = workspace.useParams();
       return <AgentList wslug={wslug} />;
@@ -113,7 +113,7 @@ describe('AgentList', () => {
     expect(screen.getByRole('button', { name: /new agent/i })).toBeInTheDocument();
   });
 
-  it('clicking an agent row sets ?doc=<slug> on the current route', async () => {
+  it('clicking an agent row sets ?wdoc=<slug> on the current route', async () => {
     stubFetch([
       { slug: 'triage', title: 'Triage Agent' },
       { slug: 'reply', title: 'Reply Bot' },
@@ -122,7 +122,7 @@ describe('AgentList', () => {
     const row = await screen.findByText('Reply Bot');
     await userEvent.click(row);
     await waitFor(() => {
-      expect((router.state.location.search as { doc?: string }).doc).toBe('reply');
+      expect((router.state.location.search as { wdoc?: string }).wdoc).toBe('reply');
     });
   });
 
@@ -133,13 +133,13 @@ describe('AgentList', () => {
     expect(screen.getByRole('button', { name: /new agent/i })).toBeInTheDocument();
   });
 
-  it('New agent creates an agent then sets ?doc=<created.slug>', async () => {
+  it('New agent creates an agent then sets ?wdoc=<created.slug>', async () => {
     stubFetch([], 'untitled-1');
     const router = renderList();
     const btn = await screen.findByRole('button', { name: /new agent/i });
     await userEvent.click(btn);
     await waitFor(() => {
-      expect((router.state.location.search as { doc?: string }).doc).toBe('untitled-1');
+      expect((router.state.location.search as { wdoc?: string }).wdoc).toBe('untitled-1');
     });
   });
 });

@@ -66,8 +66,9 @@ describe('ActivityFeedScreen', () => {
       ),
     );
     await user.click(screen.getByText('bot'));
-    // New nav stays on the current route (`to: '.'`) and merges `?doc=`/`?tab=`
-    // so the layout-mounted slideover opens on the agent's Runs tab.
+    // New nav stays on the current route (`to: '.'`) and merges `?wdoc=`/`?tab=`
+    // so the layout-mounted workspace slideover opens on the agent's Runs tab.
+    // `wdoc` (not `doc`) keeps it off the project slideover's param.
     expect(navigateMock).toHaveBeenCalledWith({
       to: '.',
       search: expect.any(Function),
@@ -75,6 +76,6 @@ describe('ActivityFeedScreen', () => {
     const { search } = navigateMock.mock.calls[0]![0] as {
       search: (prev: Record<string, unknown>) => Record<string, unknown>;
     };
-    expect(search({ existing: 'kept' })).toEqual({ existing: 'kept', doc: 'bot', tab: 'runs' });
+    expect(search({ existing: 'kept' })).toEqual({ existing: 'kept', wdoc: 'bot', tab: 'runs' });
   });
 });

@@ -31,12 +31,15 @@ import { AgentCockpitPanel } from '../components/agent-panel/agent-cockpit-panel
 import { WorkspaceDocumentSlideover } from '../components/slideover/workspace-document-slideover.tsx';
 
 export const Route = createFileRoute('/w/$wslug')({
-  // The agent cockpit panel + config slideover live at the layout, so `?doc=`
+  // The agent cockpit panel + config slideover live at the layout, so `?wdoc=`
   // and `?tab=` must validate workspace-wide (the no-project landing route
-  // doesn't declare them otherwise). TanStack merges parent + child search
-  // schemas; children that also declare `doc` use the identical shape.
+  // doesn't declare them otherwise). `wdoc` (workspace-doc) is DISTINCT from
+  // the project DocumentSlideover's `?doc=` so the two slideovers — both
+  // mounted under this layout — never open as stacked dual modals on one param.
+  // The work-item `?doc=` param is validated by the CHILD project routes
+  // (work-items / board / wiki each declare it), not here.
   validateSearch: z.object({
-    doc: z.string().optional(),
+    wdoc: z.string().optional(),
     // Broad `string` (not a narrow enum) so the merged parent type doesn't
     // collide with sibling routes that declare their own narrower `tab` enums
     // (settings: tokens|ai, agents: fields|activity|runs). A parent enum would

@@ -20,6 +20,10 @@ function setup(initialSearch: string) {
     getParentRoute: () => rootRoute,
     path: '/w/$wslug',
     validateSearch: z.object({
+      // The workspace slideover opens on ?wdoc= (distinct from the project
+      // slideover's ?doc=). `doc` is also declared so the no-collision test can
+      // navigate to ?doc= and assert the workspace slideover stays CLOSED.
+      wdoc: z.string().optional(),
       doc: z.string().optional(),
       tab: z.enum(['fields', 'activity', 'runs']).optional(),
     }),
@@ -126,7 +130,7 @@ describe('WorkspaceDocumentSlideover', () => {
     vi.unstubAllGlobals();
   });
 
-  it('is closed by default (no ?doc=)', async () => {
+  it('is closed by default (no ?wdoc=)', async () => {
     vi.stubGlobal('fetch', vi.fn<typeof fetch>());
     const { queryClient, router } = setup('');
     render(
@@ -138,9 +142,41 @@ describe('WorkspaceDocumentSlideover', () => {
     expect(screen.queryByText('Triage Agent')).not.toBeInTheDocument();
   });
 
-  it('opens and fetches when ?doc= is set', async () => {
+  // REGRESSION (dual-modal collision): the workspace slideover must open ONLY
+  // on its own ?wdoc= param. ?doc= belongs to the project DocumentSlideover —
+  // both mount under the /w/$wslug layout, so a shared param made them stack as
+  // two modals (the workspace one 404ing on a work-item slug). Proving the
+  // param separation here proves the two slideovers can no longer both open on
+  // one param.
+  it('does NOT open on ?doc= (that param belongs to the project slideover)', async () => {
+    // ?doc= must never drive the workspace slideover. If it does, a work-item
+    // slug would 404 here as a second stacked modal. Fetch is stubbed empty:
+    // if the slideover wrongly opened it would fire a workspace-doc fetch and
+    // surface a "Failed to load" sheet — neither should happen.
+    const fetchSpy = vi.fn<typeof fetch>(
+      async () =>
+        new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } }),
+    );
+    vi.stubGlobal('fetch', fetchSpy);
+    const { queryClient, router } = setup('?doc=lead-foo');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(screen.getByText('workspace body')).toBeInTheDocument());
+    // The slideover never opens: no title, no "Failed to load" sheet, and no
+    // workspace-document fetch was issued for the work-item slug.
+    expect(screen.queryByText('Triage Agent')).not.toBeInTheDocument();
+    expect(screen.queryByText('Failed to load')).not.toBeInTheDocument();
+    expect(
+      fetchSpy.mock.calls.some(([url]) => String(url).includes('/documents/lead-foo')),
+    ).toBe(false);
+  });
+
+  it('opens and fetches when ?wdoc= is set', async () => {
     mockWorkspaceDoc('triage', 'agent');
-    const { queryClient, router } = setup('?doc=triage');
+    const { queryClient, router } = setup('?wdoc=triage');
     render(
       <QueryClientProvider client={queryClient}>
         <RouterProvider router={router} />
@@ -152,7 +188,7 @@ describe('WorkspaceDocumentSlideover', () => {
 
   it('renders the TabStrip with Fields / Activity / Runs for an agent', async () => {
     mockWorkspaceDoc('triage', 'agent');
-    const { queryClient, router } = setup('?doc=triage');
+    const { queryClient, router } = setup('?wdoc=triage');
     render(
       <QueryClientProvider client={queryClient}>
         <RouterProvider router={router} />
@@ -174,7 +210,7 @@ describe('WorkspaceDocumentSlideover', () => {
 
   it('renders the TabStrip with Fields / Activity / Runs for a trigger', async () => {
     mockWorkspaceDoc('webhook-orders', 'trigger');
-    const { queryClient, router } = setup('?doc=webhook-orders');
+    const { queryClient, router } = setup('?wdoc=webhook-orders');
     render(
       <QueryClientProvider client={queryClient}>
         <RouterProvider router={router} />
@@ -195,7 +231,7 @@ describe('WorkspaceDocumentSlideover', () => {
 
   it('defaults to the Fields tab on open', async () => {
     mockWorkspaceDoc('triage', 'agent');
-    const { queryClient, router } = setup('?doc=triage');
+    const { queryClient, router } = setup('?wdoc=triage');
     render(
       <QueryClientProvider client={queryClient}>
         <RouterProvider router={router} />
@@ -213,7 +249,7 @@ describe('WorkspaceDocumentSlideover', () => {
 
   it('deep-link ?tab=runs opens on the Runs tab', async () => {
     mockWorkspaceDoc('triage', 'agent');
-    const { queryClient, router } = setup('?doc=triage&tab=runs');
+    const { queryClient, router } = setup('?wdoc=triage&tab=runs');
     render(
       <QueryClientProvider client={queryClient}>
         <RouterProvider router={router} />
@@ -233,7 +269,7 @@ describe('WorkspaceDocumentSlideover', () => {
 
   it('manual tab click clears the ?tab= param so it stops re-asserting', async () => {
     mockWorkspaceDoc('triage', 'agent');
-    const { queryClient, router } = setup('?doc=triage&tab=runs');
+    const { queryClient, router } = setup('?wdoc=triage&tab=runs');
     render(
       <QueryClientProvider client={queryClient}>
         <RouterProvider router={router} />
@@ -250,11 +286,11 @@ describe('WorkspaceDocumentSlideover', () => {
     ) as HTMLElement;
     await userEvent.click(fieldsBtn);
 
-    // Clicking a tab clears the ?tab= param (and the doc stays).
+    // Clicking a tab clears the ?tab= param (and the wdoc stays).
     await waitFor(() => {
-      const s = router.state.location.search as { doc?: string; tab?: string };
+      const s = router.state.location.search as { wdoc?: string; tab?: string };
       expect(s.tab).toBeUndefined();
-      expect(s.doc).toBe('triage');
+      expect(s.wdoc).toBe('triage');
     });
     // Fields is now the selected tab.
     expect(fieldsBtn.getAttribute('aria-pressed')).toBe('true');
@@ -262,7 +298,7 @@ describe('WorkspaceDocumentSlideover', () => {
 
   it('switching to Activity renders the workspace Activity panel + Log button (agent); body editor still visible', async () => {
     mockWorkspaceDoc('triage', 'agent');
-    const { queryClient, router } = setup('?doc=triage');
+    const { queryClient, router } = setup('?wdoc=triage');
     render(
       <QueryClientProvider client={queryClient}>
         <RouterProvider router={router} />
@@ -290,7 +326,7 @@ describe('WorkspaceDocumentSlideover', () => {
 
   it('Activity tab on a trigger renders the panel WITHOUT the Log button', async () => {
     mockWorkspaceDoc('webhook', 'trigger');
-    const { queryClient, router } = setup('?doc=webhook');
+    const { queryClient, router } = setup('?wdoc=webhook');
     render(
       <QueryClientProvider client={queryClient}>
         <RouterProvider router={router} />
@@ -317,7 +353,7 @@ describe('WorkspaceDocumentSlideover', () => {
     // RunsHistorySection shows its no-project empty state. The old Phase 3
     // placeholder is gone (E-4 wired the real section).
     mockWorkspaceDoc('triage', 'agent');
-    const { queryClient, router } = setup('?doc=triage');
+    const { queryClient, router } = setup('?wdoc=triage');
     render(
       <QueryClientProvider client={queryClient}>
         <RouterProvider router={router} />
@@ -341,7 +377,7 @@ describe('WorkspaceDocumentSlideover', () => {
 
   it('body editor stays visible across all tab switches', async () => {
     mockWorkspaceDoc('triage', 'agent');
-    const { queryClient, router } = setup('?doc=triage');
+    const { queryClient, router } = setup('?wdoc=triage');
     render(
       <QueryClientProvider client={queryClient}>
         <RouterProvider router={router} />
@@ -367,7 +403,7 @@ describe('WorkspaceDocumentSlideover', () => {
         enabled: true,
       },
     });
-    const { queryClient, router } = setup('?doc=webhook-orders');
+    const { queryClient, router } = setup('?wdoc=webhook-orders');
     render(
       <QueryClientProvider client={queryClient}>
         <RouterProvider router={router} />
@@ -385,7 +421,7 @@ describe('WorkspaceDocumentSlideover', () => {
 
   it('agent slideover Fields tab still renders FrontmatterForm (not TriggerForm)', async () => {
     mockWorkspaceDoc('triage', 'agent');
-    const { queryClient, router } = setup('?doc=triage');
+    const { queryClient, router } = setup('?wdoc=triage');
     render(
       <QueryClientProvider client={queryClient}>
         <RouterProvider router={router} />
@@ -411,7 +447,7 @@ describe('WorkspaceDocumentSlideover', () => {
         enabled: true,
       },
     });
-    const { queryClient, router } = setup('?doc=webhook-orders');
+    const { queryClient, router } = setup('?wdoc=webhook-orders');
     render(
       <QueryClientProvider client={queryClient}>
         <RouterProvider router={router} />
@@ -443,7 +479,7 @@ describe('WorkspaceDocumentSlideover', () => {
       },
       onPatch: (body) => patches.push(body),
     });
-    const { queryClient, router } = setup('?doc=webhook-orders');
+    const { queryClient, router } = setup('?wdoc=webhook-orders');
     render(
       <QueryClientProvider client={queryClient}>
         <RouterProvider router={router} />
@@ -477,7 +513,7 @@ describe('WorkspaceDocumentSlideover', () => {
       },
       onPatch: (body) => patches.push(body),
     });
-    const { queryClient, router } = setup('?doc=repo-import');
+    const { queryClient, router } = setup('?wdoc=repo-import');
     render(
       <QueryClientProvider client={queryClient}>
         <RouterProvider router={router} />
@@ -511,7 +547,7 @@ describe('WorkspaceDocumentSlideover', () => {
 
   it('renders a resize handle and widening it grows the SheetContent width', async () => {
     mockWorkspaceDoc('triage', 'agent');
-    const { queryClient, router } = setup('?doc=triage');
+    const { queryClient, router } = setup('?wdoc=triage');
     render(
       <QueryClientProvider client={queryClient}>
         <RouterProvider router={router} />

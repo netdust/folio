@@ -9,7 +9,6 @@ import {
 } from '../../lib/api/workspace-documents.ts';
 import { Button } from '../ui/button.tsx';
 import { Icon } from '../ui/icon.tsx';
-import { WorkspaceDocumentSlideover } from '../slideover/workspace-document-slideover.tsx';
 
 interface Props {
   wslug: string;
@@ -53,7 +52,7 @@ export function WorkspaceTriggersPage({ wslug }: Props) {
       void navigate({
         to: '/w/$wslug/triggers',
         params: { wslug },
-        search: (prev) => ({ ...(prev as Record<string, unknown>), doc: created.slug }),
+        search: (prev) => ({ ...(prev as Record<string, unknown>), wdoc: created.slug }),
       });
     } catch (err) {
       toast.error(formatApiError(err));
@@ -117,7 +116,7 @@ export function WorkspaceTriggersPage({ wslug }: Props) {
                     void navigate({
                       to: '/w/$wslug/triggers',
                       params: { wslug },
-                      search: (prev) => ({ ...(prev as Record<string, unknown>), doc: trigger.slug }),
+                      search: (prev) => ({ ...(prev as Record<string, unknown>), wdoc: trigger.slug }),
                     })
                   }
                   className="block w-full px-3 py-2.5 text-left hover:bg-card"
@@ -136,8 +135,6 @@ export function WorkspaceTriggersPage({ wslug }: Props) {
           })}
         </ul>
       )}
-
-      <WorkspaceDocumentSlideover wslug={wslug} />
     </div>
   );
 }

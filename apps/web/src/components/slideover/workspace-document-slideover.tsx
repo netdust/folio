@@ -1,7 +1,11 @@
 /**
  * Phase 2.5: slideover for workspace-scoped documents (agents + triggers).
  *
- * Mirrors DocumentSlideover's URL-driven lifecycle (?doc=<slug> opens it) but
+ * Mirrors DocumentSlideover's URL-driven lifecycle but on its OWN param: the
+ * workspace slideover opens on ?wdoc=<slug> (NOT ?doc=) so it never collides
+ * with the project DocumentSlideover, which keeps ?doc=. Both mount under the
+ * /w/$wslug layout; sharing one param made them stack as dual modals. `wdoc`
+ * (workspace-doc) covers both agents AND triggers. It
  * uses workspace-scoped hooks and skips project-specific surface: no status
  * field, no pinned fields, no activity panel, no log-activity, no copy-as-MD
  * (agents don't have a workspace-scoped .md endpoint yet).
@@ -45,9 +49,9 @@ interface Props {
 
 export function WorkspaceDocumentSlideover({ wslug }: Props) {
   const navigate = useNavigate();
-  const search = useSearch({ strict: false }) as { doc?: string; tab?: WorkspaceDocTabValue };
-  const open = !!search.doc;
-  const slug = search.doc ?? null;
+  const search = useSearch({ strict: false }) as { wdoc?: string; tab?: WorkspaceDocTabValue };
+  const open = !!search.wdoc;
+  const slug = search.wdoc ?? null;
   const { data: doc, isLoading, error } = useWorkspaceDocument(wslug, slug);
   const [mode, setMode] = useState<EditorMode>('rich');
   const [moreOpen, setMoreOpen] = useState(false);
@@ -73,7 +77,7 @@ export function WorkspaceDocumentSlideover({ wslug }: Props) {
   }, [open]);
 
   const close = () => {
-    const { doc: _doc, ...next } = search;
+    const { wdoc: _wdoc, ...next } = search;
     void navigate({ to: '.', search: next });
   };
 
@@ -211,7 +215,7 @@ function SlideoverBody({
   const { data: doc, isLoading, error } = useWorkspaceDocument(wslug, slug);
   const update = useUpdateWorkspaceDocument(wslug);
   const navigate = useNavigate();
-  const search = useSearch({ strict: false }) as { doc?: string; tab?: WorkspaceDocTabValue };
+  const search = useSearch({ strict: false }) as { wdoc?: string; tab?: WorkspaceDocTabValue };
   const [pendingKeys, setPendingKeys] = useState<Set<string>>(new Set());
 
   // Tab state — per-slideover-open. Defaults to Fields on each fresh open and

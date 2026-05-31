@@ -168,12 +168,13 @@ describe('WorkspaceLayout — delete + nav side effects', () => {
 
     await waitFor(() => expect(screen.getByText('Triage')).toBeInTheDocument());
 
-    // Click "Triage" — fires onViewClick handler. The layout now mounts the
-    // WorkspaceDocumentSlideover, and ?doc=lead-foo opens it as a Radix modal
-    // dialog that sets `pointer-events: none` on the rest of the page in jsdom.
-    // userEvent honors that and refuses the click; fireEvent dispatches the
-    // event directly (this test asserts the handler→URL effect, not pointer
-    // fidelity — the slideover staying open is exactly the scenario under test).
+    // REGRESSION (dual-modal collision): ?doc= is the PROJECT slideover's param.
+    // The layout-mounted WorkspaceDocumentSlideover now reads ?wdoc=, so a
+    // work-item ?doc=lead-foo must NOT open the workspace slideover (it would
+    // 404 on a work-item slug and stack a second focus-trapping modal). With
+    // the workspace slideover staying closed, there's no Radix
+    // pointer-events:none overlay, so userEvent can click normally.
+    expect(screen.queryByText('Failed to load')).not.toBeInTheDocument();
     fireEvent.click(screen.getByText('Triage'));
 
     await waitFor(() => {

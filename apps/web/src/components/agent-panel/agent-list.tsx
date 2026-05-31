@@ -17,8 +17,10 @@ interface Props {
  * Agent Cockpit Panel: the agent list + "New agent" button. Extracted from the
  * retiring workspace-agents-page. Lean for the narrow (~360px) panel — title +
  * slug only (no project chips, no project filter). Row click and create both
- * set `?doc=<slug>` on the CURRENT route via `to: '.'` so the config slideover
- * (mounted at the layout level) opens regardless of which route we're on.
+ * set `?wdoc=<slug>` on the CURRENT route via `to: '.'` so the config slideover
+ * (mounted at the layout level) opens regardless of which route we're on. The
+ * param is `wdoc` (NOT `doc`) so it never collides with the project
+ * DocumentSlideover's `?doc=` when both mount under the same layout.
  */
 export function AgentList({ wslug }: Props) {
   const navigate = useNavigate();
@@ -29,11 +31,11 @@ export function AgentList({ wslug }: Props) {
   const openAgent = (slug: string) =>
     void navigate({
       to: '.',
-      search: (prev) => ({ ...(prev as Record<string, unknown>), doc: slug }),
+      search: (prev) => ({ ...(prev as Record<string, unknown>), wdoc: slug }),
     });
 
   // Minimal-viable agent: required Zod fields filled with placeholders. User
-  // refines them in the slideover that opens via ?doc=.
+  // refines them in the slideover that opens via ?wdoc=.
   const onCreate = async () => {
     try {
       const created = await create.mutateAsync({

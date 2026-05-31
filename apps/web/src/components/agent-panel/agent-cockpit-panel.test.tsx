@@ -33,7 +33,7 @@ function setup() {
     getParentRoute: () => rootRoute,
     path: '/w/$wslug',
     validateSearch: z.object({
-      doc: z.string().optional(),
+      wdoc: z.string().optional(),
       tab: z.enum(['fields', 'activity', 'runs']).optional(),
     }),
     component: () => <AgentCockpitPanel wslug="main" />,

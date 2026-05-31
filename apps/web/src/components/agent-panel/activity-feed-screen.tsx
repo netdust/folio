@@ -22,7 +22,7 @@ export function ActivityFeedScreen({ wslug }: Props) {
   const openAgentRuns = (item: ActivityItem) => {
     void navigate({
       to: '.',
-      search: (prev) => ({ ...(prev as Record<string, unknown>), doc: item.agent, tab: 'runs' }),
+      search: (prev) => ({ ...(prev as Record<string, unknown>), wdoc: item.agent, tab: 'runs' }),
     });
   };
 
