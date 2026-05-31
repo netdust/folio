@@ -53,8 +53,11 @@ Quick visual confirmations I can't fully judge (the automated probe hit viewport
 
 ## Phase 3 — Fix
 - **BUG-1: FIXED** (`53e6c53`) — workspace `GET /runs` + `useWorkspaceRuns` + `useActivityFeed` seeds history then live-tails. Server 1049/0, web 705/0, tsc clean. Verified live: endpoint returns runs newest-first.
-- **BUG-2: pending** — surfaced by verifying BUG-1's fix. Fix via systematic-debugging (redact system_prompt from `/runs` list responses).
+- **BUG-2: FIXED** (`74fe206`) — shared `redactRunForApi` strips `system_prompt` from all three `/runs` response paths (project list, workspace list, single run); service layer unchanged (internal callers keep full rows). Verified live: `system_prompt` ABSENT from the response, `agent_slug`/`status` retained (not over-redacted). 3 redaction tests added. Server 1051/0.
 - The 10 review findings + agents-page UI flow are otherwise clean.
+
+## Final status
+Both shake-out bugs fixed + verified live. BUG-1 (`53e6c53`) + BUG-2 (`74fe206`). Track-B human eyeball checks (pill tabs / Chip visual, real row-click, slideover edit-save, panel run end-to-end, `/triggers?wdoc=` deep-link) remain as optional visual confirmation — logic verified.
 
 ## Notes / non-blocking observations
 - Pre-existing test data in Netdust has agents with `model: "m"` (a one-char model from an earlier session) — cosmetic data, not a defect; chips render it faithfully as `anthropic·m`.
