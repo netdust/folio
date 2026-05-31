@@ -16,6 +16,7 @@ interface Props {
   isPending: boolean;
   onOpen: (slug: string) => void;
   onUpdate: (slug: string, patch: DocumentPatch) => void;
+  resolveRelation?: (slug: string) => { slug: string; title: string } | null;
 }
 
 export function TableRow({
@@ -27,6 +28,7 @@ export function TableRow({
   isPending,
   onOpen,
   onUpdate,
+  resolveRelation,
 }: Props) {
   const onTitleCommit = (slug: string, next: string) => onUpdate(slug, { title: next });
   const onStatusCommit = (slug: string, next: string) => onUpdate(slug, { status: next });
@@ -64,6 +66,7 @@ export function TableRow({
               onTitleCommit={onTitleCommit}
               onStatusCommit={onStatusCommit}
               onFieldCommit={onFieldCommit}
+              resolveRelation={resolveRelation}
             />
           ))}
         </div>

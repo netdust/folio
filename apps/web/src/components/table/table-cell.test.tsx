@@ -121,6 +121,47 @@ describe('TableCell urgency', () => {
     expect(stickyEl).toBeNull();
   });
 
+  it('resolves relation titles when resolveRelation is provided (valid links are not struck-through)', () => {
+    // Finding 9: the table relation cell used to render every [[slug]] as a
+    // struck-through "broken-link" chip because TableCell never threaded a
+    // resolver down to FieldRenderer. With resolveRelation supplied, a slug
+    // that resolves must render as the document's title (normal chip) and a
+    // slug that does NOT resolve stays struck-through.
+    const column: Column = {
+      key: 'owner',
+      label: 'Owner',
+      source: 'field',
+      fieldType: 'relation',
+      fieldOptions: ['table:tbl_1', 'multi'],
+    };
+    const doc = makeDoc({ owner: ['[[people-ada]]', '[[ghost]]'] });
+    const { container } = render(
+      <TableCell
+        column={column}
+        doc={doc}
+        statuses={[]}
+        isPending={false}
+        onOpen={noop}
+        onTitleCommit={noop}
+        onStatusCommit={noop}
+        onFieldCommit={noop}
+        resolveRelation={(slug) =>
+          slug === 'people-ada' ? { slug, title: 'Ada' } : null
+        }
+      />,
+    );
+
+    // The resolved link renders as a title chip, NOT struck-through.
+    const ada = container.querySelector('button');
+    expect(ada?.textContent).toBe('Ada');
+    expect(ada?.getAttribute('class') ?? '').not.toContain('line-through');
+    // The unresolved link stays as the raw token, struck through.
+    const struck = [...container.querySelectorAll('span')].find(
+      (el) => el.textContent === '[[ghost]]',
+    );
+    expect(struck?.getAttribute('class') ?? '').toContain('line-through');
+  });
+
   it('does NOT apply urgency to non-date field columns', () => {
     const column: Column = {
       key: 'amount',
