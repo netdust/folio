@@ -27,6 +27,7 @@ export interface DocumentSummary {
 }
 
 export { slugify } from './slug.ts';
+export { rankBetween } from './board-rank.ts';
 export { ErrorCode, type ErrorCode as ErrorCodeType } from './error-codes.ts';
 export * from './document-schema.ts';
 export { V1_MCP_TOOLS, MCP_TOOL_GROUPS, type McpTool } from './mcp-tools.ts';
