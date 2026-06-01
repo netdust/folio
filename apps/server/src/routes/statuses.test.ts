@@ -211,3 +211,29 @@ test('DELETE /statuses: dryRun delete does not mutate an existing status', async
   expect(await statusCount(db, seed.project.id)).toBe(beforeStatuses);
   expect(await eventCount(db)).toBe(beforeEvents);
 });
+
+// P2-6: a dryRun delete must NOT skip the 409 STATUS_IN_USE guard — preview
+// fails the way the real delete would. Pins the early-return placement (after
+// the in-use check) so a regression that moved it above the guard is caught.
+test('DELETE /statuses: dryRun delete of an in-use status still 409s', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const { configWriteToken } = await mintTokens(db, seed);
+  const created = await (
+    await app.request(base, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${configWriteToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key: 'in_use', name: 'In Use' }),
+    })
+  ).json();
+  const status = created.data.status as { id: string; tableId: string };
+  await db.insert(documents).values({
+    id: nanoid(), projectId: seed.project.id, workspaceId: seed.workspace.id,
+    tableId: status.tableId, type: 'work_item', slug: 'uses-it', title: 'Uses It', status: 'in_use',
+  });
+  const res = await app.request(`${base}/${status.id}?dryRun=true`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${configWriteToken}` },
+  });
+  expect(res.status).toBe(409);
+  expect((await res.json()).error.code).toBe('STATUS_IN_USE');
+});
