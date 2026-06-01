@@ -72,6 +72,19 @@ export const requireToken: MiddlewareHandler<AuthContext> = async (c, next) => {
   return next();
 };
 
+// Legacy granular scopes that pre-date the Phase 2 consolidation into the
+// single canonical `config:write`. Tokens minted before that consolidation
+// still carry one of these; we grandfather them in so existing PATs keep
+// passing `requireScope('config:write')` without an upgrade path. These can
+// no longer be MINTED — the POST /tokens ceiling rejects any scope outside
+// roleToScopes(role), and config:write is the only config scope offered there.
+const CONFIG_WRITE_LEGACY_ALIASES = [
+  'fields:write',
+  'views:write',
+  'tables:write',
+  'statuses:write',
+];
+
 /** Factory: require the token to carry the given scope. */
 export function requireScope(scope: string): MiddlewareHandler<AuthContext> {
   return async (c, next) => {
@@ -80,7 +93,13 @@ export function requireScope(scope: string): MiddlewareHandler<AuthContext> {
     // Session-authenticated requests bypass scope checks; membership is the gate.
     if (user && !t) return next();
     if (!t) throw new HTTPError('UNAUTHENTICATED', 'API token required', 401);
-    if (!t.scopes.includes(scope)) {
+    // The alias only applies to the config:write target — other scopes are
+    // matched strictly, so a legacy scope never leaks into an unrelated grant.
+    const holds =
+      t.scopes.includes(scope) ||
+      (scope === 'config:write' &&
+        CONFIG_WRITE_LEGACY_ALIASES.some((a) => t.scopes.includes(a)));
+    if (!holds) {
       throw new HTTPError('FORBIDDEN_SCOPE', `token missing required scope: ${scope}`, 403);
     }
     return next();

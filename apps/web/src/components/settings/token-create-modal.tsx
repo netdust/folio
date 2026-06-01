@@ -15,10 +15,11 @@ const ALL_SCOPES = [
   'documents:read',
   'documents:write',
   'documents:delete',
-  'fields:write',
-  'views:write',
-  'tables:write',
-  'statuses:write',
+  // Phase 2 consolidated the four granular config scopes
+  // (fields/views/tables/statuses:write) into one canonical config:write.
+  // The granular scopes can no longer be minted (the POST /tokens ceiling
+  // rejects them), so the modal no longer offers them.
+  'config:write',
   // Phase 2.6 sub-phase D — required for MCP agent-lifecycle tools
   // (create_agent / update_agent / delete_agent).
   'agents:write',
@@ -28,8 +29,8 @@ type Scope = (typeof ALL_SCOPES)[number];
 
 // Presets mirror the conceptual groups used by agent-schema's toolsToScopes
 // (read tools → documents:read; write tools → write + read; delete → +read).
-// Full access also adds the destructive admin ops (delete + tables:write,
-// which cascade-deletes documents).
+// "Read + write" adds config:write (the consolidated fields/views/tables/
+// statuses scope). Full access also adds the destructive delete op.
 //
 // BUG-007: agents:write is deliberately NOT in ANY preset. Human PATs bypass
 // assertAgentAllowListWidening / assertAgentToolsWidening, so bundling
@@ -41,26 +42,12 @@ const PRESETS: { label: string; scopes: Scope[]; tone?: PresetTone }[] = [
   { label: 'Read-only', scopes: ['documents:read'] },
   {
     label: 'Read + write',
-    scopes: [
-      'documents:read',
-      'documents:write',
-      'fields:write',
-      'views:write',
-      'statuses:write',
-    ],
+    scopes: ['documents:read', 'documents:write', 'config:write'],
   },
   {
     label: 'Full access',
     tone: 'danger',
-    scopes: [
-      'documents:read',
-      'documents:write',
-      'documents:delete',
-      'fields:write',
-      'views:write',
-      'statuses:write',
-      'tables:write',
-    ],
+    scopes: ['documents:read', 'documents:write', 'documents:delete', 'config:write'],
   },
 ];
 
