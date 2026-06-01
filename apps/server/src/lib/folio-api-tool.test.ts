@@ -402,6 +402,36 @@ describe('folio_api write tool (P3-6/7)', () => {
     expect(out.status).toBe(201);
   });
 
+  test('folio_api low write (document create) dispatches and succeeds (P3-7)', async () => {
+    const { seed } = await makeTestApp();
+    // The folio_api write tool itself is gated by config:write at the
+    // executeTool layer (caller + token must both hold it). The documents POST
+    // route additionally requires documents:write. A low-tier classification
+    // (a /p/:slug/documents create) auto-dispatches rather than refusing, so
+    // give the token both scopes.
+    const tok = callerToken({
+      workspaceId: seed.workspace.id,
+      scopes: ['config:write', 'documents:write', 'documents:read'],
+      createdBy: seed.user.id,
+    });
+    const out = (await executeTool(
+      tok,
+      'agent:op',
+      'folio_api',
+      {
+        method: 'POST',
+        path: `/api/v1/w/${seed.workspace.slug}/p/${seed.project.slug}/documents`,
+        body: { type: 'work_item', title: 'A task' },
+      },
+      undefined,
+      { callerScopes: tok.scopes },
+    )) as { status: number; refused?: boolean };
+    // The seeded project's default "Work Items" table is auto-attached on the
+    // /p/:slug URL, so the work_item create resolves a table and returns 201.
+    expect(out.status).toBe(201); // dispatched + succeeded (NOT refused)
+    expect(out.refused).toBeUndefined(); // low tier does not refuse
+  });
+
   test('folio_api high-risk REFUSES without dispatching or mutating (P3-7)', async () => {
     const { seed, db: testDb } = await makeTestApp();
     const tok = callerToken({
