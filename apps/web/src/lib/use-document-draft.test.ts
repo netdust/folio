@@ -44,6 +44,31 @@ describe('useDocumentDraft', () => {
     expect(d.keys).toEqual(['model']);
   });
 
+  it('seed-once: a prop change does NOT re-seed (owner remounts via key for that)', () => {
+    // The hook seeds once per mount. React Query toggles `doc` on refetch, and an
+    // in-place re-seed oscillated (re-seed → stomp → empty). So the hook ignores
+    // prop changes entirely; the OWNER remounts the draft subtree (React key on
+    // doc.id+updatedAt) to get a fresh seed. Here a rerender with a different doc
+    // must leave the draft untouched.
+    const { result, rerender } = renderHook(({ doc }) => useDocumentDraft(doc), {
+      initialProps: { doc: baseDoc },
+    });
+    rerender({ doc: { ...baseDoc, id: 'd2', updatedAt: '2026-09-09T00:00:00Z', body: '# Other' } });
+    // Draft unchanged (still the original seed) — proves no in-place re-seed.
+    expect(result.current.draft.body).toBe('# Hello');
+  });
+
+  it('remount (fresh mount) seeds from the new doc — how the owner switches docs', () => {
+    // The owner keys the subtree on doc version; a switch/post-save bump remounts
+    // the hook, which seeds fresh from the new doc. Modeled here as a new
+    // renderHook call (= remount).
+    const a = renderHook(() => useDocumentDraft(baseDoc));
+    expect(a.result.current.draft.body).toBe('# Hello');
+    const b = renderHook(() => useDocumentDraft({ ...baseDoc, id: 'd2', body: '# Other' }));
+    expect(b.result.current.draft.body).toBe('# Other');
+    expect(b.result.current.isDirty).toBe(false);
+  });
+
   it('setBody makes it dirty and diff returns only body', () => {
     const { result } = renderHook(() => useDocumentDraft(baseDoc));
     act(() => result.current.setBody('# Changed'));
@@ -68,24 +93,12 @@ describe('useDocumentDraft', () => {
     expect(result.current.draft.body).toBe('# Hello');
   });
 
-  it('re-seeds when doc.id changes (doc switch)', () => {
-    const { result, rerender } = renderHook(({ doc }) => useDocumentDraft(doc), {
-      initialProps: { doc: baseDoc },
-    });
-    act(() => result.current.setBody('# Changed'));
-    rerender({ doc: { ...baseDoc, id: 'd2', body: '# Other' } });
-    expect(result.current.isDirty).toBe(false);
-    expect(result.current.draft.body).toBe('# Other');
-  });
-
-  it('re-seeds when doc.updatedAt changes (post-save) and clears dirty', () => {
-    const { result, rerender } = renderHook(({ doc }) => useDocumentDraft(doc), {
-      initialProps: { doc: baseDoc },
-    });
-    act(() => result.current.setBody('# Saved body'));
-    // Simulate the server returning the saved doc with the new body + updatedAt.
-    rerender({ doc: { ...baseDoc, body: '# Saved body', updatedAt: '2026-01-02T00:00:00Z' } });
-    expect(result.current.isDirty).toBe(false);
+  it('post-save: remounting on the new version clears dirty', () => {
+    // After a save the server returns a bumped updatedAt; the owner remounts the
+    // subtree on the new version, re-seeding fresh from the saved doc → clean.
+    const saved = { ...baseDoc, body: '# Saved body', updatedAt: '2026-01-02T00:00:00Z' };
+    const { result } = renderHook(() => useDocumentDraft(saved));
     expect(result.current.draft.body).toBe('# Saved body');
+    expect(result.current.isDirty).toBe(false);
   });
 });

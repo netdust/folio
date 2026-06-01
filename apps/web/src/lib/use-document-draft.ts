@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useState } from 'react';
 import { SERVER_MANAGED_FRONTMATTER_KEYS } from '@folio/shared';
 
 const MANAGED = new Set<string>(SERVER_MANAGED_FRONTMATTER_KEYS);
@@ -48,23 +48,20 @@ export interface DocumentDraft {
  * changes (a save returned a fresh version). The slideover is mounted
  * persistently at the layout, so the hook can't rely on remount to re-seed.
  */
+/**
+ * Seeds ONCE per mount from `doc`. Does NOT re-seed on doc-identity change —
+ * the OWNER remounts this hook (via a React `key` on the draft-owning subtree,
+ * keyed on doc.id + updatedAt) to get a fresh seed for a switch or post-save
+ * version bump. Remount = a clean useState initializer: no mid-render setState,
+ * no effect lag, no oscillation against React Query's refetch toggling. The hook
+ * is only mounted once a REAL doc exists (the owner gates on `doc` truthy + keys
+ * the subtree on the doc version), so it never sees the loading placeholder.
+ */
 export function useDocumentDraft(doc: DraftDoc): DocumentDraft {
   const [draft, setDraft] = useState<DraftState>(() => ({
     body: doc.body,
     frontmatter: doc.frontmatter,
   }));
-
-  // Re-seed on doc.id (switch) or doc.updatedAt (post-save) change. This runs
-  // DURING render (the React "derive state from a changing key" pattern), not in
-  // an effect, so there's no empty-draft frame: a mount-only body editor keyed on
-  // the same identity reads the freshly-seeded value, not the stale fallback the
-  // parent passes while the doc is still loading.
-  const seedKeyRef = useRef<string>(`${doc.id}::${doc.updatedAt}`);
-  const currentKey = `${doc.id}::${doc.updatedAt}`;
-  if (seedKeyRef.current !== currentKey) {
-    seedKeyRef.current = currentKey;
-    setDraft({ body: doc.body, frontmatter: doc.frontmatter });
-  }
 
   const setBody = (body: string) => setDraft((d) => ({ ...d, body }));
   const setFrontmatter = (patch: Record<string, unknown>) =>
@@ -77,12 +74,18 @@ export function useDocumentDraft(doc: DraftDoc): DocumentDraft {
   const draftFm = editableFrontmatter(draft.frontmatter);
   const docFm = editableFrontmatter(doc.frontmatter);
 
+  // No real doc loaded (placeholder, id === '') → the draft holds the last good
+  // value but there's nothing to diff against, so it's never dirty. Comparing
+  // against the empty placeholder would otherwise report a false dirty.
+  const hasDoc = doc.id !== '';
+
   const isDirty =
-    draft.body !== doc.body || JSON.stringify(draftFm) !== JSON.stringify(docFm);
+    hasDoc && (draft.body !== doc.body || JSON.stringify(draftFm) !== JSON.stringify(docFm));
 
   const diff = (): { patch: Record<string, unknown>; keys: string[] } => {
     const patch: Record<string, unknown> = {};
     const keys: string[] = [];
+    if (!hasDoc) return { patch, keys };
     if (draft.body !== doc.body) {
       patch.body = draft.body;
       keys.push('body');
