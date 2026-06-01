@@ -43,6 +43,22 @@ import { RunsHistorySection } from '../runs/runs-history-section.tsx';
 
 type WorkspaceDocTabValue = 'fields' | 'activity' | 'runs';
 
+const WORKSPACE_DOC_TABS: readonly WorkspaceDocTabValue[] = ['fields', 'activity', 'runs'];
+
+// The `?tab=` param is SHARED across this layout (settings: tokens|ai, the
+// automation page: agents|triggers, this slideover: fields|activity|runs — see
+// w.$wslug.tsx validateSearch). So `search.tab` may legitimately hold a value
+// from a SIBLING surface. Opening an agent from /agents?tab=agents spreads
+// `tab: 'agents'` into the URL alongside `wdoc=`; if we seeded the slideover
+// tab from that raw value it'd be 'agents', which matches none of the render
+// branches → a blank pane until the user clicks Fields. Narrow to our own enum,
+// defaulting anything else to 'fields'.
+function asWorkspaceDocTab(value: string | undefined): WorkspaceDocTabValue {
+  return value && (WORKSPACE_DOC_TABS as readonly string[]).includes(value)
+    ? (value as WorkspaceDocTabValue)
+    : 'fields';
+}
+
 interface Props {
   wslug: string;
 }
@@ -67,7 +83,7 @@ export function WorkspaceDocumentSlideover({ wslug }: Props) {
   // inline in the header — NocoDB-style single row. Defaults to Fields; a
   // ?tab= deep-link (e.g. the activity feed opening an agent's Runs tab) wins
   // ONCE, when a doc opens.
-  const [tab, setTab] = useState<WorkspaceDocTabValue>(search.tab ?? 'fields');
+  const [tab, setTab] = useState<WorkspaceDocTabValue>(asWorkspaceDocTab(search.tab));
   // Re-seed the tab ONLY when a different doc opens — keyed on doc.id, NOT on
   // search.tab. Reading search.tab as an effect dep was a bug: selectTab strips
   // ?tab= on a manual click, which flips search.tab defined→undefined and
@@ -80,7 +96,7 @@ export function WorkspaceDocumentSlideover({ wslug }: Props) {
     if (doc?.id) {
       if (seededForDocRef.current !== doc.id) {
         seededForDocRef.current = doc.id;
-        setTab(searchRef.current.tab ?? 'fields');
+        setTab(asWorkspaceDocTab(searchRef.current.tab));
       }
     } else {
       // Slideover closed (doc cleared). Reset the seed gate so REOPENING the

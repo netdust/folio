@@ -25,7 +25,12 @@ function setup(initialSearch: string) {
       // navigate to ?doc= and assert the workspace slideover stays CLOSED.
       wdoc: z.string().optional(),
       doc: z.string().optional(),
-      tab: z.enum(['fields', 'activity', 'runs']).optional(),
+      // Broad `string`, matching the real /w/$wslug layout route. `?tab=` is
+      // SHARED across that layout (settings: tokens|ai, automation page:
+      // agents|triggers, slideover: fields|activity|runs). A narrow enum here
+      // would reject `tab=agents` and mask the cross-surface collision the
+      // slideover must defend against.
+      tab: z.string().optional(),
     }),
     component: () => {
       const { wslug } = workspace.useParams();
@@ -184,6 +189,28 @@ describe('WorkspaceDocumentSlideover', () => {
     );
     await waitFor(() => expect(screen.getByText('Triage Agent')).toBeInTheDocument());
     expect(screen.getByText(/Do the triage\./)).toBeInTheDocument();
+  });
+
+  // REGRESSION: opening an agent/trigger from the automation page carries that
+  // page's ?tab=agents (or ?tab=triggers) into the URL alongside ?wdoc=. The
+  // `tab` param is shared, so the slideover used to seed its OWN tab to 'agents'
+  // — which matches none of fields|activity|runs — leaving a blank pane until
+  // the user clicked Fields. The slideover must narrow an unknown tab to Fields.
+  it('seeds Fields (not a blank pane) when ?tab= holds a sibling-surface value like "agents"', async () => {
+    mockWorkspaceDoc('triage', 'agent');
+    const { queryClient, router } = setup('?wdoc=triage&tab=agents');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText('Triage Agent');
+
+    // Fields is selected and its content renders immediately — no blank pane.
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: 'Fields' })).toHaveAttribute('aria-selected', 'true');
+    });
+    expect(document.querySelector('[data-testid="workspace-slideover-editor"]')).not.toBeNull();
   });
 
   it('renders the icon tab toggles Fields / Activity / Runs for an agent (no Comments)', async () => {
