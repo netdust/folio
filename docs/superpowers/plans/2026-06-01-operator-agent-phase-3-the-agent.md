@@ -6,11 +6,11 @@
 
 **Goal:** Ship the built-in operator agent: a general `folio_api`/`folio_api_get` tool pair (the escape hatch reaching any token-scoped route), the `folio` skill (the API manual, as workspace content), a 2-layer agent memory (working log + workspace profile, as hidden documents), and a seeded operator-agent document born into every workspace — riding the entire Phase-1/Phase-2/Phase-3-runner spine with NO new interface.
 
-**Architecture:** `folio_api` dispatches **in-process HTTP** (`app.request(...)`) **seeding the run's existing `ctx.token` directly into the Hono request context** (`{ token: ctx.token, user, authMethod: 'token' }` via `app.request`'s env arg) — so `attachToken` is bypassed and `requireScope`/`requireResource` read `ctx.token` exactly as for an external bearer call. **No ephemeral token is minted.** (`ccExecute` mints a real DB token only because the CLI is an *out-of-process* subprocess that can't reach Hono's context and must send a real `Authorization` header for `attachToken` to re-resolve — `runner.ts:881-895`. `folio_api` is in-process and holds `ctx.token` already, so copying that mint would cargo-cult a workaround it doesn't need and pay a per-call DB insert/delete for nothing. See `project_folio-api-inprocess-no-token-mint`, decided 2026-06-01.) The Phase-1 ceiling applies for free because `ctx.token.scopes` is already `agent ∩ caller`. Reads go through `folio_api_get` (GET-only, ungated beyond the token's read scope); writes go through `folio_api` (gated: high-risk → compute dryRun, post the plan, REFUSE to apply until the approval-gate PAUSE side lands). Memory + the seeded agent ride the document primitive — reserved-slug `page` documents flagged `folio_system: true`, filtered out of the wiki overview but readable/writable by the agent and surfaceable in the sidepanel.
+**Architecture:** `folio_api` dispatches **in-process HTTP** (`app.request(...)`) authenticated by a **short-lived minted bearer token** mirroring the run's `ctx.token` (same `scopes`/`agentId`/`projectIds`/`workspaceId`), sent as an `Authorization: Bearer <plaintext>` header and **revoked unconditionally in a `finally`** — the proven `ccExecute` pattern (`runner.ts:881-896,948-950`). Because the request hits the REAL route, `attachToken` re-resolves the header into `ctx.token` and `requireScope`/`requireResource` enforce exactly as for an external bearer call. The Phase-1 ceiling applies because the minted token's scopes/agentId/projectIds are copied verbatim from `ctx.token` (already `agent ∩ caller`) — the mint widens nothing. Reads go through `folio_api_get` (GET-only, ungated beyond the token's read scope); writes go through `folio_api` (gated: high-risk → compute dryRun, post the plan, REFUSE to apply until the approval-gate PAUSE side lands). Memory + the seeded agent ride the document primitive — reserved-slug `page` documents flagged `folio_system: true`, filtered out of the wiki overview but readable/writable by the agent and surfaceable in the sidepanel.
 
-> **Correction note (2026-06-01, post-commit `2a5681c`):** This plan was first written around an *ephemeral-token mint* mirroring `ccExecute`. That was reversed the same day — the in-process tool seeds `ctx.token` into the request context instead of minting. The change *dissolves* three original mitigations rather than weakening anything: **P3-1/P3-2/P3-3 below existed only because a token was minted** (mis-scope, log-leak, lifetime/revoke). With no token there is no credential to mis-scope, leak, or fail to revoke — a strictly stronger posture. They are retargeted below to the seeded-ctx equivalents.
+> **⚠️ CORRECTION (2026-06-02, plan-freshness gate — REVERSES the 2026-06-01 no-mint decision):** This plan was rewritten 2026-06-01 around a *no-mint seeded-ctx* design (seed `ctx.token` into `app.request`'s env arg, bypass `attachToken`). **Ground-truth at execution proved that design infeasible in Hono 4.6.12 with this middleware chain:** (1) `app.request(input, init, env)`'s third arg is `Env`/Bindings (`c.env`), NOT the variable store (`c.var`) that `requireScope` reads via `c.get('token')` — a value seeded there is invisible to the guards; (2) `app.ts:49` mounts `attachToken` as `*` middleware on every workspace route, and it **unconditionally** calls `c.set('token', row ?? null)` from the Authorization header — so even a correctly-seeded var would be overwritten to `null` (no header present). The ONLY in-process way to satisfy `requireScope` is a real `Authorization: Bearer <plaintext>` header `attachToken` can resolve from `apiTokens`. **Decision (Stefan, 2026-06-02): fall back to the mint-and-revoke variant.** The no-mint memory (`project_folio-api-inprocess-no-token-mint`) is SUPERSEDED. The three mitigations the no-mint design dissolved are **REINSTATED below** in their token-lifetime form (P3-1 mis-scoped mint, P3-2 plaintext leak, P3-3 lifetime/revoke).
 
-**Tech Stack:** Bun, Hono (`app.request` in-process with seeded ctx vars — NOT `newApiToken()`), Drizzle, Zod, the shared tool registry (`lib/agent-tools-registry.ts` + `lib/agent-tools.ts`), the seed pattern (`seedBuiltinTriggers`/`seedProjectDefaults`).
+**Tech Stack:** Bun, Hono (`app.request` in-process with a minted-then-revoked `Authorization: Bearer` header — the `newApiToken()` + insert + `finally` revoke pattern from `ccExecute`), Drizzle, Zod, the shared tool registry (`lib/agent-tools-registry.ts` + `lib/agent-tools.ts`), the seed pattern (`seedBuiltinTriggers`/`seedProjectDefaults`).
 
 **Decisions locked with Stefan 2026-06-01:**
 - **`folio_api` is SPLIT** — `folio_api_get` (reads, ungated) + `folio_api` (writes, gated). Cleaner auto-vs-plan boundary at the tool layer.
@@ -26,10 +26,10 @@
 
 ### What we're defending
 
-1. **The delegate ceiling** — `effective = agent ∩ caller`, fail-closed. `folio_api` must NOT become a hole that escapes it. The seeded `ctx.token` it passes to `app.request` MUST be the run's own token (already narrowed to `agent ∩ caller`) and nothing broader.
+1. **The delegate ceiling** — `effective = agent ∩ caller`, fail-closed. `folio_api` must NOT become a hole that escapes it. The token it mints for `app.request` MUST copy the run's own `ctx.token` authority (already narrowed to `agent ∩ caller`) verbatim and nothing broader.
 2. **BYOK keys** — the agent must NEVER read an AI key back through `folio_api_get GET …/ai-keys` (the GET path is bearer-OK + redacts inline today; the general primitive must inherit that redaction, not bypass it).
-3. **The tenant boundary** — `folio_api` must not reach a workspace/project the caller can't. The seeded `ctx.token` is workspace-pinned + project-allow-listed exactly like the run's token (it *is* the run's token).
-4. **The seeded-ctx fidelity** — `app.request` must seed the request context with `ctx.token` AND nothing that grants more (e.g. do NOT also seed a session `user` that would trip `requireScope`'s session-bypass at `bearer.ts:81` and skip the scope check). The seeded `authMethod` must be `'token'` so the bearer ceiling, not the session-membership gate, applies. *(Replaces the original "ephemeral token's lifetime" invariant — with no minted token there is no credential to revoke or leak.)*
+3. **The tenant boundary** — `folio_api` must not reach a workspace/project the caller can't. The minted token copies `ctx.token`'s `workspaceId` + `projectIds`, so it is workspace-pinned + project-allow-listed exactly like the run's token.
+4. **The minted token's fidelity + lifetime** — the token `folio_api` mints for `app.request` MUST copy `ctx.token`'s `scopes`/`agentId`/`projectIds`/`workspaceId` verbatim (no widening) and MUST be revoked in a `finally` so it never outlives the single call (the `ccExecute` lifetime contract, `runner.ts:948-950`). The plaintext is sent ONLY as the in-process `Authorization` header and is never logged, returned in a tool result, or written to the run transcript.
 5. **The integrity of "hidden" memory documents** — the `folio_system` flag must actually exclude them from the wiki overview (no accidental exposure of the workspace profile / log to every member's UI) while keeping them under the same tenant guard.
 6. **The audit trail** — every `folio_api` mutation must emit an event (it does, because it goes through the real route, which emits).
 
@@ -37,15 +37,15 @@
 
 1. **A prompt-injected operator agent** (IN scope) — steered by malicious document/comment content into an escalating `folio_api` call. Mitigated by: the ceiling (can't exceed caller), high-risk refuse-with-plan, the "treat untrusted context as data" fence (already in the runner).
 2. **A workspace member using the operator** (IN scope) — gets a member-tier ceiling; `folio_api` can't do owner-only things on their behalf (Phase-2 P2-1 + Phase-1 ceiling).
-3. **An attacker who reads server logs / run transcripts** (IN scope) — *N/A under the seeded-ctx design: no plaintext credential is ever created, so there is nothing to leak into a log, transcript, event payload, or tool result.* (Under the reverted mint variant this would require the minted plaintext to never be serialized — see commit `2a5681c`.)
+3. **An attacker who reads server logs / run transcripts** (IN scope) — under the mint variant a plaintext token exists for the duration of one call, so the mitigation is that the minted plaintext is NEVER serialized into a log, transcript, event payload, or tool result, and the row is revoked in a `finally` (P3-2/P3-3).
 4. **A workspace member browsing the wiki** (IN scope for memory hiding) — must not see the operator's memory documents in the normal page list.
 5. **Insider with a stolen session** (OUT of scope) — trust root.
 
 ### Attacks to defend against
 
-- **P3-1 — `folio_api` escapes the ceiling via a mis-seeded ctx.** If the handler seeds `app.request` with anything broader than the run's own `ctx.token` — a fabricated token with extra scopes, or a different agent's token — the agent exceeds its delegate authority. (Class: ceiling bypass via ctx seeding.) *(Was: "mis-scoped ephemeral token" — retargeted; no token is minted.)*
-- **P3-2 — Seeded `user` trips the session-bypass and skips the scope check.** `requireScope` (`bearer.ts:81`) does `if (user && !t) return next()` — a session user with NO token bypasses scope enforcement entirely. If `folio_api` seeds a `user` but the route reads `token` as null (wrong env key, or `attachToken` not actually bypassed), every `config:write` gate silently passes → full ceiling bypass. (Class: scope-gate no-op via session-bypass collision.) *(Was: "ephemeral token leaks" — retargeted; the real risk moved from credential-leak to gate-bypass.)*
-- **P3-3 — `app.request` env arg does not actually populate `c.get('token')`.** If Hono's env/bindings arg is the wrong shape (or the wrong context key), the seeded token never lands, the request runs as unauthenticated, and either fails 401 (best case) or — combined with P3-2 — runs ungated. (Class: silent auth-context drop.) *(Was: "ephemeral token outlives the call" — no token to outlive; retargeted to the seeding-mechanism failure.)*
+- **P3-1 — `folio_api` escapes the ceiling via a mis-scoped minted token.** If the minted token carries anything broader than the run's own `ctx.token` — extra scopes, a different `agentId`, wider `projectIds` — the agent exceeds its delegate authority. (Class: ceiling bypass via mint widening.) Mitigated by copying `ctx.token`'s scopes/agentId/projectIds verbatim.
+- **P3-2 — The minted plaintext leaks.** The `folio_pat_...` plaintext is logged, returned in a tool result, embedded in an error, or written to the run transcript → a usable bearer credential escapes the process boundary. (Class: credential leak.) Mitigated by sending the plaintext ONLY as the in-process `Authorization` header — never serialized anywhere.
+- **P3-3 — The minted token outlives the call (revoke gap).** An exception path skips the revoke, leaving a live token row in `apiTokens` that a later attacker could use if its plaintext were ever recovered. (Class: credential lifetime.) Mitigated by `db.delete(apiTokens).where(eq(id, mintedId))` in a `finally` that runs on every path (the `ccExecute` contract, `runner.ts:948-950`).
 - **P3-4 — BYOK key read-back via the general GET primitive.** `folio_api_get GET …/ai-keys` returns the encrypted key (or any partial) because the general path doesn't inherit the route's inline redaction. (Class: redaction bypass — but note: since folio_api_get rides the REAL route over HTTP, it inherits the route's redaction automatically; the attack is only live if we shortcut the route. Mitigation is "ride the real route, never shortcut.")
 - **P3-5 — SSRF / path escape via the `path` argument.** The agent (or injected content) supplies a `path` like `http://169.254.169.254/...` or `../../` or an absolute URL → `app.request` reaches outside the intended API surface. (Class: SSRF / path traversal via the general primitive.)
 - **P3-6 — Method/verb smuggling.** `folio_api_get` (advertised read-only) accepts a non-GET method in its body → a "read" tool performs a write, escaping the auto/plan boundary. (Class: tool-contract bypass.)
@@ -56,9 +56,9 @@
 
 ### Mitigations required
 
-- **P3-1 → `app.request` is seeded with the run's own `ctx.token`, never a fabricated one.** In the `folio_api` handler, call `app.request(validatedPath, { method, body }, { token: ctx.token, user: <ctx.token's resolved creator>, authMethod: 'token' })` — passing the exact `ApiToken` the run already holds (already `agent ∩ caller`). NO `newApiToken()`, NO `apiTokens` insert. A test asserts a `folio_api` write to a `config:write` route FAILS when `ctx.token.scopes` lacks `config:write` (member-delegated run), and SUCCEEDS for owner-delegated — proving the seeded ctx flows through `requireScope`.
-- **P3-2 → `authMethod` is seeded `'token'` and the seeded `token` is non-null, so the session-bypass branch is never taken.** `requireScope`'s `if (user && !t) return next()` must NOT fire — confirm by seeding `token: ctx.token` (non-null) so the bypass condition `!t` is false. A test asserts that a member-delegated `folio_api` call to a `config:write` route returns 403 (NOT silently allowed): if this test passes only because of the resource guard and not the scope guard, the bypass is live — so the test must use a token that has resource access but lacks `config:write`, isolating the scope check.
-- **P3-3 → a test proves the seeded env arg actually populates `c.get('token')`.** Because seeding ctx vars via `app.request`'s env arg is a less-trodden Hono path than sending an `Authorization` header, the plan REQUIRES a direct test: a trivial route guarded by `requireScope('config:write')` is hit via `app.request(path, init, { token: <a config:write token> })` and must return 2xx; the same with `{ token: <a token lacking config:write> }` must return 403. This pins the seeding mechanism itself before any folio_api logic rides on it. (If Hono's env arg cannot populate the context var in this version, fall back to the synthetic-header path — mint-and-revoke per `ccExecute` — and reinstate the original P3-1/2/3; the implementer MUST resolve this in Task 1 ground-truth.)
+- **P3-1 → the minted token copies `ctx.token`'s authority verbatim, widening nothing.** In `dispatchAsCaller`, `newApiToken()` then insert with `scopes: caller.scopes`, `agentId: caller.agentId`, `projectIds: caller.projectIds`, `workspaceId: caller.workspaceId`, `createdBy: caller.createdBy` — the exact `ccExecute` shape. A test asserts a `folio_api` write to a `config:write` route FAILS when `ctx.token.scopes` lacks `config:write` (member-delegated run) and SUCCEEDS for owner-delegated — proving the minted token (and thus `requireScope`) inherits the ceiling.
+- **P3-2 → the minted plaintext is never serialized.** It is passed only into the `Authorization` header of the in-process `app.request`; it never appears in a return value, log line, error message, or transcript. A test asserts the tool result + any thrown error for a `folio_api` call contains no `folio_pat_` substring.
+- **P3-3 → the minted row is revoked in a `finally`.** `dispatchAsCaller` wraps the `app.request` in `try { ... } finally { await db.delete(apiTokens).where(eq(apiTokens.id, mintedId)); }` so no path leaves a live row (mirrors `runner.ts:948-950`). A test asserts the `api_tokens` row count is unchanged after a `dispatchAsCaller` call (minted-then-revoked nets zero) AND after a call whose route returns an error (revoke still runs).
 - **P3-4 → `folio_api_get` rides the real Hono route via `app.request`, never a service shortcut.** Because it hits the real GET handler, it inherits that handler's inline redaction (e.g. `settings.ts` strips `encryptedKey`). A test calls `folio_api_get` against `…/ai-keys` and asserts the response contains NO `encryptedKey`/`encrypted_key` field. (Plus: per the spec's redact-at-the-loader note, grep the GET handlers the operator can reach to confirm none return a secret.)
 - **P3-5 → `path` is validated to be a relative API path.** A shared `validateApiPath(path)` (in the folio_api lib) requires: starts with `/api/v1/`, contains no scheme (`://`), no `..` segment, no `@`, no backslash; rejects otherwise with a tool error. `app.request` is called with the validated relative path only. A test feeds `http://169.254.169.254/`, `/api/v1/../../etc`, `//evil.com`, and a valid `/api/v1/w/x/p/y/tables` — first three rejected, last accepted.
 - **P3-6 → `folio_api_get` forces method GET.** Its handler hardcodes `method: 'GET'` and its Zod schema does NOT accept a `method` field — only `path` (+ optional query). `folio_api` (write) accepts `method` ∈ `{POST, PATCH, PUT, DELETE}` and REJECTS `GET` (reads must use the read tool). A test asserts `folio_api` with `method: 'GET'` is rejected and `folio_api_get` has no way to express a write.
@@ -79,7 +79,7 @@
 ### How to use this section
 
 - **Controller pre-flight:** verify each task carries its named P3-mitigation before dispatch.
-- **`/code-review high`:** "Verify against the Phase 3 threat model (P3-1…P3-10) AND confirm Phase-1 (D1–D10) + Phase-2 (P2-1…P2-8) are not weakened by the general primitive. Pay special attention to the seeded-ctx scope-gate (P3-1/2 — confirm `requireScope`'s session-bypass at `bearer.ts:81` is NOT tripped by a seeded `user`) and path validation (P3-5). NOTE: this primitive seeds `ctx.token` into `app.request`; it MUST NOT mint an ephemeral token — flag any `newApiToken()`/`apiTokens` insert in `folio-api-tool.ts` as a regression."
+- **`/code-review high`:** "Verify against the Phase 3 threat model (P3-1…P3-10) AND confirm Phase-1 (D1–D10) + Phase-2 (P2-1…P2-8) are not weakened by the general primitive. Pay special attention to the minted-token lifecycle (P3-1/2/3 — confirm the minted token copies `ctx.token`'s scopes/agentId/projectIds verbatim, the plaintext is NEVER serialized into a log/return/error/transcript, and the `apiTokens` row is revoked in a `finally` on EVERY path incl. errors — mirror `runner.ts:948-950`) and path validation (P3-5). The mint mirrors `ccExecute`; flag any divergence (a widened scope, a missing revoke, a leaked plaintext) as a regression."
 - **`/evaluate` retro:** any missing P3-mitigation → plan-correction defect.
 
 ---
@@ -88,7 +88,7 @@
 
 | File | Responsibility | Change |
 |---|---|---|
-| `apps/server/src/lib/folio-api-tool.ts` | NEW — `validateApiPath`, `classifyRisk`, the **in-process `app.request` dispatch seeding `ctx.token`** (NOT a token mint), the two tool registrations | Create |
+| `apps/server/src/lib/folio-api-tool.ts` | NEW — `validateApiPath`, `classifyRisk`, the **in-process `app.request` dispatch via a minted-then-revoked `Authorization: Bearer` header** (the `ccExecute` mint pattern), the two tool registrations | Create |
 | `apps/server/src/lib/agent-tools-registry.ts` | Register `folio_api` + `folio_api_get` (calls into folio-api-tool.ts) | Modify (registration only) |
 | `apps/server/src/lib/agent-schema.ts` | `V1_MCP_TOOLS` / tool whitelist must include the two new tools; `CONFIG_WRITE_TOOLS` already has `folio_api` (Phase 2) | Modify |
 | `packages/shared/src/index.ts` | `V1_MCP_TOOLS` const (the canonical tool-name list the agent form + Zod consume) | Modify — add `folio_api`, `folio_api_get` |
@@ -99,7 +99,9 @@
 | `docs/skills/folio/SKILL.md` (or the workspace-content location) | The `folio` skill — API manual + recipes | Create |
 | Tests per file | TDD | Create |
 
-> **Open ground-truth the implementer MUST resolve in Task 1** (the Explore agent was interrupted before returning these — verify directly): (a) the exact `listDocuments` signature + where the `type='page'` wiki query is built (`services/documents.ts`) + whether `json_extract` is already used there; (b) `seedBuiltinTriggers`/`seedProjectDefaults` signatures + the in-tx `createDocument` service for `type:'agent'`; (c) confirm `app` is importable into `lib/` without a circular import (it's exported at `app.ts:34`; if importing `app` into `lib/folio-api-tool.ts` cycles, lazy-import inside the handler: `const { app } = await import('../app.ts')`); **(d) confirm Hono's `app.request(input, requestInit, Env)` env arg actually populates `c.get('token')` / `c.get('user')` / `c.get('authMethod')` for the route's middleware in THIS Hono version — write the P3-3 mechanism test FIRST. If it cannot (the env arg only seeds Bindings, not the var-store `c.set` reads), fall back to the synthetic-header + mint/revoke path (`ccExecute` pattern) and reinstate the original ephemeral-token P3-1/2/3. This single fact decides the whole auth mechanism — resolve it before writing the tool.**
+> **Open ground-truth the implementer MUST resolve in Task 1** (verify directly): (a) the exact `listDocuments` signature + where the `type='page'` wiki query is built (`services/documents.ts`) + whether `json_extract` is already used there; (b) `seedBuiltinTriggers`/`seedProjectDefaults` signatures + the in-tx `createDocument` service for `type:'agent'`; (c) confirm `app` is importable into `lib/` without a circular import (it's exported at `app.ts:34`; if importing `app` into `lib/folio-api-tool.ts` cycles, lazy-import inside the handler: `const { app } = await import('../app.ts')`).
+>
+> **(d) — RESOLVED 2026-06-02 (controller ground-truth): use the mint-and-revoke header path.** Hono 4.6.12's `app.request` env arg does NOT populate the `c.var` store `requireScope` reads (it sets `c.env`/Bindings), and `attachToken` (`app.ts:49`, mounted `*` on every workspace route) unconditionally overwrites `c.set('token', ...)` from the Authorization header. So the no-mint seeded-ctx path is infeasible. `dispatchAsCaller` mints a short-lived token mirroring `ctx.token`, sends it as `Authorization: Bearer`, and revokes it in a `finally` — the `ccExecute` pattern (`runner.ts:881-896,948-950`). See the ⚠️ CORRECTION note at the top. This is baked into Tasks 1+3 below.
 
 ---
 
@@ -256,47 +258,55 @@ git commit -m "phase-op-3: classifyRisk v1 resource-type proxy (P3-7)"
 
 ---
 
-## Task 3: The seeded-ctx in-process dispatch core
+## Task 3: The mint-and-revoke in-process dispatch core
 
-**Mitigations: P3-1, P3-2, P3-3, P3-4.** The heart of `folio_api` — call the real route in-process **seeding the caller's own `ctx.token` into the request context**. NO token mint. (See the Architecture correction note + `project_folio-api-inprocess-no-token-mint`, 2026-06-01.)
+**Mitigations: P3-1, P3-2, P3-3, P3-4.** The heart of `folio_api` — call the real route in-process authenticated by a **short-lived minted token mirroring `ctx.token`**, sent as an `Authorization: Bearer` header and revoked in a `finally`. The `ccExecute` pattern (`runner.ts:881-896,948-950`).
 
-> **PRECONDITION (Task 1 ground-truth (d)):** the P3-3 mechanism test below MUST already be green — i.e. Hono's `app.request(input, init, env)` env arg verifiably populates `c.get('token')` for the route middleware in this Hono version. If Task 1 found it does NOT, this task reverts to the synthetic-header + `newApiToken()` mint/revoke variant (preserved in git history at commit `2a5681c`) and P3-1/2/3 revert to their original token-lifetime form. Do not start Task 3 until (d) is resolved.
+> **RESOLVED (Task 1 ground-truth (d), 2026-06-02):** the no-mint seeded-ctx path is infeasible in Hono 4.6.12 (env arg ≠ var store; `attachToken` overwrites `c.set('token')` on every workspace route). This task uses the mint-and-revoke variant. P3-1/2/3 are in their token-lifetime form (mis-scope / plaintext-leak / revoke).
 
 **Files:**
 - Modify: `apps/server/src/lib/folio-api-tool.ts` (add `dispatchAsCaller`)
 - Test: `apps/server/src/lib/folio-api-tool.test.ts` (extend — integration-style, real db + real app)
 
-- [ ] **Step 1: Write the failing test** — assert the SEEDED CTX flows through the real scope guard, and that NO token is minted.
+- [ ] **Step 1: Write the failing test** — assert the minted token flows through the real scope guard, nets ZERO token rows (mint+revoke), and never leaks its plaintext.
 
 ```typescript
 import { dispatchAsCaller } from './folio-api-tool.ts';
-// uses the test harness's seeded db + ctx.token fixtures (grep agent-tools.test.ts)
+// uses the test harness's seeded db + ApiToken fixtures (grep agent-tools.test.ts / runs.test.ts for newApiToken + apiTokens insert shape)
 
 describe('dispatchAsCaller (P3-1/2/3/4)', () => {
-  test('seeds the caller token and reaches the route (P3-1)', async () => {
+  test('reaches the route as the caller delegate (P3-1)', async () => {
     const res = await dispatchAsCaller(ownerWriteToken, 'GET', '/api/v1/w/' + ws.slug + '/p/' + proj.slug + '/tables', undefined);
     expect(res.status).toBe(200);
   });
 
-  test('the scope ceiling enforces: a token lacking config:write is 403 on a config:write route (P3-1/P3-2)', async () => {
+  test('the scope ceiling enforces: a token lacking config:write is 403 on a config:write route (P3-1)', async () => {
     // memberToken: resource access to proj, but scopes WITHOUT config:write —
     // isolates the scope guard from the resource guard so a passing 403 proves
-    // requireScope fired (not requireResource). Guards against the bearer.ts:81
-    // session-bypass: if a stray `user` were seeded, this would wrongly 200.
+    // requireScope fired (the minted token inherited the missing scope).
     const res = await dispatchAsCaller(memberToken, 'POST',
       '/api/v1/w/' + ws.slug + '/p/' + proj.slug + '/tables', { name: 'x' });
     expect(res.status).toBe(403);
   });
 
-  test('mints NO ephemeral token — api_tokens row count is unchanged (P3-3)', async () => {
+  test('mints then revokes — api_tokens row count is unchanged, even on route error (P3-3)', async () => {
     const before = await countTokens();
     await dispatchAsCaller(ownerWriteToken, 'GET', '/api/v1/w/' + ws.slug + '/p/' + proj.slug + '/tables', undefined);
-    expect(await countTokens()).toBe(before); // nothing inserted, nothing to revoke
+    expect(await countTokens()).toBe(before); // minted-then-revoked nets zero
+    // error path: a 4xx/5xx from the route must still revoke (finally)
+    await dispatchAsCaller(memberToken, 'POST', '/api/v1/w/' + ws.slug + '/p/' + proj.slug + '/tables', { name: 'x' });
+    expect(await countTokens()).toBe(before);
+  });
+
+  test('never serializes the minted plaintext (P3-2)', async () => {
+    const res = await dispatchAsCaller(ownerWriteToken, 'GET', '/api/v1/w/' + ws.slug + '/p/' + proj.slug + '/tables', undefined);
+    const text = await res.clone().text();
+    expect(text).not.toMatch(/folio_pat_/); // the plaintext lives only in the in-process Authorization header
   });
 });
 ```
 
-> `countTokens()` = row count of `api_tokens`. `ownerWriteToken` / `memberToken` = seeded `ApiToken` fixtures (grep `agent-tools.test.ts` for the shape). The P3-2 test is the load-bearing one: it must use a token with resource access but WITHOUT `config:write`, so a `403` can only come from the scope guard — proving the seeded ctx did not trip the session-bypass.
+> `countTokens()` = row count of `api_tokens`. `ownerWriteToken` / `memberToken` = seeded `ApiToken` fixtures (grep `runs.test.ts` for the `newApiToken()` + `apiTokens` insert shape). The P3-1 403 test must use a token with resource access but WITHOUT `config:write`, so a `403` can only come from the scope guard — proving the minted token inherited the ceiling. The P3-3 test exercises both the success and the error path so the `finally` revoke is proven on both.
 
 - [ ] **Step 2: Run to verify fail** — FAIL.
 
@@ -304,26 +314,30 @@ describe('dispatchAsCaller (P3-1/2/3/4)', () => {
 
 ```typescript
 import { eq } from 'drizzle-orm';
+import { nanoid } from 'nanoid';
 import { db } from '../db/client.ts';
-import { users, type ApiToken } from '../db/schema.ts';
+import { apiTokens, type ApiToken } from '../db/schema.ts';
+import { newApiToken } from './auth.ts';
 
 /**
  * Call a Folio API route IN-PROCESS as the caller delegate (mitigations P3-1/2/3/4).
  *
- * Seeds the caller's OWN `ctx.token` into the Hono request context via
- * `app.request`'s env arg — NO ephemeral token is minted. `attachToken` is
- * bypassed (we provide the resolved token directly); `requireScope` /
- * `requireResource` read the seeded `token` exactly as for an external bearer
- * call. Because it hits the REAL route, it inherits that route's scope guard,
- * tenant guard, redaction, and event emission for free — one auth model, two
- * faces. The seeded token IS the Phase-1-narrowed authority (agent ∩ caller);
- * we pass it verbatim and widen nothing.
+ * Mints a SHORT-LIVED bearer token mirroring the caller's own `ctx.token`
+ * (same scopes / agentId / projectIds / workspaceId — widening NOTHING), sends
+ * it as an `Authorization: Bearer` header to `app.request`, and REVOKES it in a
+ * `finally`. This is the proven `ccExecute` pattern (runner.ts:881-896,948-950):
+ * the no-mint seeded-ctx path is infeasible because `app.request`'s env arg sets
+ * c.env (Bindings), not the c.var store `requireScope` reads, and `attachToken`
+ * (app.ts:49) overwrites c.set('token') from the header on every workspace route.
+ * Because it hits the REAL route, it inherits that route's scope guard, tenant
+ * guard, redaction, and event emission for free — one auth model, two faces.
  *
- * SECURITY (P3-2): seed `authMethod: 'token'` and a NON-NULL `token`, so
- * requireScope's session-bypass (`if (user && !t) return next()`, bearer.ts:81)
- * is never taken. The seeded `user` is the token's creator (for createdBy /
- * event-actor resolution), matching what attachToken would have set — it does
- * NOT grant session authority because `token` is present.
+ * SECURITY:
+ *  - P3-1: scopes/agentId/projectIds copied verbatim from `caller` — the minted
+ *    token is exactly the Phase-1-narrowed authority (agent ∩ caller).
+ *  - P3-2: the plaintext is passed ONLY into the Authorization header; it is
+ *    never logged, returned, or written to a transcript.
+ *  - P3-3: the row is deleted in `finally` so no path leaves a live credential.
  */
 export async function dispatchAsCaller(
   caller: ApiToken,
@@ -332,40 +346,47 @@ export async function dispatchAsCaller(
   body: unknown,
 ): Promise<Response> {
   const validPath = validateApiPath(path);
-  // Resolve the token's creator exactly as attachToken (bearer.ts:56-63) would,
-  // so getUser(c) downstream works without branching.
-  const creator = caller.createdBy
-    ? await db.query.users.findFirst({ where: eq(users.id, caller.createdBy) })
-    : undefined;
-  // Lazy import if a static import of `app` cycles (resolved Task 1c).
-  const { app } = await import('../app.ts');
-  const init: RequestInit = {
-    method,
-    headers: body !== undefined ? { 'Content-Type': 'application/json' } : {},
-    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-  };
-  // Third arg = Hono env/bindings. Seeds c.get('token') / c.get('user') /
-  // c.get('authMethod') for the route middleware. Shape confirmed in Task 1(d);
-  // if this Hono version cannot seed the var-store this way, fall back to the
-  // synthetic-header + mint/revoke variant (commit 2a5681c).
-  return await app.request(validPath, init, {
-    token: caller,
-    user: creator ?? null,
-    authMethod: 'token',
+  const { token: plaintext, hash } = newApiToken();
+  const mintedId = nanoid();
+  await db.insert(apiTokens).values({
+    id: mintedId,
+    workspaceId: caller.workspaceId,
+    name: `folio_api:${mintedId}`,
+    tokenHash: hash,
+    scopes: caller.scopes, // P3-1: verbatim, no widening
+    agentId: caller.agentId,
+    projectIds: caller.projectIds,
+    createdBy: caller.createdBy,
   });
+  try {
+    // Lazy import if a static import of `app` cycles (resolved Task 1c).
+    const { app } = await import('../app.ts');
+    const init: RequestInit = {
+      method,
+      headers: {
+        Authorization: `Bearer ${plaintext}`, // P3-2: plaintext only here
+        ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+      },
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+    };
+    return await app.request(validPath, init);
+  } finally {
+    // P3-3: revoke unconditionally — success, error, or throw.
+    await db.delete(apiTokens).where(eq(apiTokens.id, mintedId));
+  }
 }
 ```
 
-> P3-2 is satisfied structurally + by test: `token` is seeded non-null so the session-bypass branch can't fire, and the isolating 403 test proves it. There is no plaintext credential anywhere in this path.
+> The minted token is the only credential, lives for exactly one in-process call, and is revoked on every path. No plaintext escapes the `Authorization` header. Confirm the `apiTokens` insert column shape against `ccExecute` (runner.ts:887-896) at implementation — the fields above mirror it.
 
-- [ ] **Step 4: Run to verify pass** — PASS (3).
+- [ ] **Step 4: Run to verify pass** — PASS (4).
 
 - [ ] **Step 5: tsc + commit**
 
 ```bash
 cd apps/server && bun x tsc --noEmit
 git add apps/server/src/lib/folio-api-tool.ts apps/server/src/lib/folio-api-tool.test.ts
-git commit -m "phase-op-3: seeded-ctx in-process dispatch core (P3-1/2/3/4)"
+git commit -m "phase-op-3: mint-and-revoke in-process dispatch core (P3-1/2/3/4)"
 ```
 
 ---
@@ -696,7 +717,7 @@ git commit -m "phase-op-3: record folio_api primitive-widening in DECISIONS"
 
 **Type consistency:** `dispatchAsCaller(caller, method, path, body)`, `validateApiPath(path)`, `classifyRisk(method, path, body)`, `RiskTier` used identically across tasks. Tool names `folio_api`/`folio_api_get` consistent in registry, `V1_MCP_TOOLS`, `agent-schema.ts`, seed, and skill. ✅
 
-**Biggest risk flagged:** the seeded-ctx dispatch (Task 3) is the load-bearing security mechanism — P3-1/2/3 must be verified hardest at `/code-review` (seed the run's own token verbatim, the session-bypass at `bearer.ts:81` is NOT tripped, NO `newApiToken()`/`apiTokens` insert appears). The one open unknown is Task 1(d): whether Hono's `app.request` env arg populates the var-store the middleware reads — resolve it FIRST; if it can't, fall back to the mint/revoke variant (commit `2a5681c`).
+**Biggest risk flagged:** the mint-and-revoke dispatch (Task 3) is the load-bearing security mechanism — P3-1/2/3 must be verified hardest at `/code-review` (minted scopes/agentId/projectIds copied verbatim from `ctx.token`; the plaintext never serialized into a log/return/error/transcript; the `apiTokens` row revoked in a `finally` on EVERY path incl. errors, mirroring `runner.ts:948-950`). Task 1(d) is RESOLVED (2026-06-02): the no-mint seeded-ctx path is infeasible in Hono 4.6.12 (env arg ≠ var store; `attachToken` overwrites the token on every workspace route), so the mint/revoke variant is in the plan, not a fallback.
 
 ---
 
