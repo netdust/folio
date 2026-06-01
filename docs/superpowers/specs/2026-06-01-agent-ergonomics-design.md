@@ -27,7 +27,7 @@ This design fixes all three, plus adds a minimal one-call orientation primitive.
 
 | Decision | Choice | Rationale |
 |---|---|---|
-| `find` match target | Title substring, case-insensitive, workspace-wide | Solves ~90% of "the X one" lookups. FTS5 is explicitly deferred to v1.1 per CLAUDE.md. |
+| `find` match target | Title substring, case-insensitive, workspace-wide | Solves ~90% of "the X one" lookups. FTS5 is explicitly deferred to v1.1 per CLAUDE.md. Implemented via a new `titleQuery` option on `listDocuments` (a `LIKE` clause), NOT the filter engine — confirmed the filter AST has no substring operator (`$eq/$ne/$in/$nin/$gt/$gte/$lt/$lte/$exists` only). |
 | List de-noise | Exclude system types by default | Cleanest signal; gated on a backward-compat caller audit. |
 | Operating-surface docs | Tighten tool descriptions only | Cheap, high-leverage. Skill-as-content doc stays a named follow-up. |
 | Surface | Shared registry (MCP + in-app runner + REST) | One source; the canary and in-app agents inherit identically. |
@@ -67,9 +67,12 @@ find_documents({
 - **`project_slug` in EACH result row** is a correctness requirement, not a nicety: workspace-wide find
   returns hits across projects, and every mutation tool requires `project_slug`. Omitting it returns
   slugs the agent cannot act on.
-- **Title match rides the existing filter engine.** `listDocuments` already accepts a `filter`
-  (`filterCompile` / `compileFilterToWhere`, services/documents.ts ~line 284). The title substring is
-  expressed as a filter — no new SQL, no new query language.
+- **Title match via a new `titleQuery` option on `listDocuments`.** The existing `filter` engine
+  (`filterCompile` / `compileFilterToWhere`) supports only equality/range operators
+  (`$eq/$ne/$in/$nin/$gt/$gte/$lt/$lte/$exists`) — NO substring/`LIKE`. So `find` adds a small explicit
+  `titleQuery?: string` to `ListDocumentsOptions` that pushes a case-insensitive `LIKE` clause on
+  `documents.title`, mirroring the existing `assignee` `sql\`...\`` clause (services/documents.ts:251).
+  Tiny, well-understood addition — not a reverse-engineered DSL extension.
 - **Scope enforcement (SECURITY-CRITICAL):**
   - `project_slug` given → resolve via `resolveProjectInWorkspace` (inherits the allow-list check),
     then single-project title filter.
