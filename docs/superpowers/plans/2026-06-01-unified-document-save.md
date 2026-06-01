@@ -995,25 +995,55 @@ as they are today.
 
 - [ ] **Step 5: Add the unsaved dialog + doc-switch guard**
 
-Add the same `Dialog` driven by `guard.prompting` (mirror Task 4 Step 6) and the
-same doc-switch interception effect (mirror Task 5 Step 3) — but on `search.doc`
-instead of `search.wdoc`:
+Add the same `Dialog` driven by `guard.prompting` (mirror Task 4 Step 6).
+
+**PLAN CORRECTION (from Task 5):** the original `lastLoadedSlugRef` +
+`[search.doc]`-effect-reading-`isDirty` approach DOES NOT WORK — switching the
+doc unloads the old one and `useDocumentDraft` re-seeds on the new load, so
+`isDirty` is already `false` by the time any effect fires. Use the **dirty-slug
+latch** pattern Task 5 landed for the workspace slideover (see
+`workspace-document-slideover.tsx`, the `dirtySlugRef` / `prevWdocRef` /
+`pendingSwitchRef` block). Adapt it for `?doc=` instead of `?wdoc=`:
 
 ```tsx
-  const lastLoadedSlugRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (doc?.slug) lastLoadedSlugRef.current = doc.slug;
-  }, [doc?.slug]);
-  useEffect(() => {
+  // Latch the slug whose buffer is dirty (survives the switch's re-seed).
+  const dirtySlugRef = useRef<string | null>(null);
+  if (doc?.slug && isDirty) dirtySlugRef.current = doc.slug;
+  else if (doc?.slug && doc.slug === dirtySlugRef.current && !isDirty) dirtySlugRef.current = null;
+```
+
+Then build the guard on the latched signal — `const guard =
+useUnsavedGuard(isDirty || dirtySlugRef.current !== null);` (replacing the plain
+`useUnsavedGuard(isDirty)` added in Step 3) — and detect the `?doc=` flip during
+render into a `pendingSwitchRef`, consumed by a `[search.doc]` effect that
+reverts to `dirtySlugRef.current` and queues the intended switch behind the
+guard:
+
+```tsx
+  const prevDocRef = useRef<string | undefined>(search.doc as string | undefined);
+  const pendingSwitchRef = useRef<string | null>(null);
+  if (prevDocRef.current !== (search.doc as string | undefined)) {
     const incoming = search.doc as string | undefined;
-    const current = lastLoadedSlugRef.current;
-    if (!incoming || !current || incoming === current) return;
-    if (!isDirty) return;
-    void navigate({ to: '.', search: { ...search, doc: current } });
+    const dirtySlug = dirtySlugRef.current;
+    if (incoming && dirtySlug && incoming !== dirtySlug) pendingSwitchRef.current = incoming;
+    prevDocRef.current = incoming;
+  }
+  useEffect(() => {
+    const incoming = pendingSwitchRef.current;
+    const dirtySlug = dirtySlugRef.current;
+    pendingSwitchRef.current = null;
+    if (!incoming || !dirtySlug || incoming === dirtySlug) return;
+    void navigate({ to: '.', search: { ...search, doc: dirtySlug } });
     guard.guard(() => navigate({ to: '.', search: { ...search, doc: incoming } }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [(search as Record<string, unknown>).doc]);
 ```
+
+> The dialog handlers (`reset(); guard.proceed()` for Discard; `await onSave();
+> guard.proceed()` for Save; `guard.cancel()` for Cancel) need no latch-specific
+> code — the render-time `else if` releases the latch once the reverted doc's
+> buffer goes clean. See the working workspace implementation for the exact
+> shape.
 
 - [ ] **Step 6: Run the file's tests**
 
