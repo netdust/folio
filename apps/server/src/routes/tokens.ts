@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { db } from '../db/client.ts';
 import { apiTokens, memberships } from '../db/schema.ts';
 import { newApiToken } from '../lib/auth.ts';
+import { roleToScopes } from '../lib/agent-schema.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
 import {
   type AuthContext,
@@ -56,6 +57,20 @@ tokensRoute.post(
     if (!m) throw new HTTPError('FORBIDDEN', 'not a member', 403);
 
     const { name, scopes } = c.req.valid('json');
+    // Scope ceiling: a caller may only mint a token carrying scopes their own
+    // role already grants (the SAME roleToScopes ceiling the runner enforces at
+    // execution time). Without this, a member mints a config:write/agents:write
+    // token and uses it directly against owner-only routes — escalating past the
+    // agent∩caller ceiling at the one place a human creates raw authority.
+    const allowed = roleToScopes(m.role);
+    const over = scopes.filter((s) => !allowed.includes(s));
+    if (over.length > 0) {
+      throw new HTTPError(
+        'FORBIDDEN_SCOPE',
+        `role '${m.role}' cannot mint a token with scope(s): ${over.join(', ')}`,
+        403,
+      );
+    }
     const { token, hash } = newApiToken();
     const id = nanoid();
     await db.insert(apiTokens).values({
