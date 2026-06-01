@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useRef } from 'react';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { toast } from 'sonner';
 import { Clipboard, FileText, History, MessageCircle, MoreHorizontal, Trash2, X } from 'lucide-react';
@@ -43,6 +43,9 @@ import { RawMdEditor } from './raw-md-editor.tsx';
 import { LogActivityButton } from './log-activity-button.tsx';
 import { ActivityPanel } from './activity-panel.tsx';
 import { CommentsTab } from '../comments/comments-tab.tsx';
+import { useDocumentDraft } from '../../lib/use-document-draft.ts';
+import { useUnsavedGuard } from '../../lib/use-unsaved-guard.ts';
+import { SaveButton } from './save-button.tsx';
 
 type DocTabValue = 'fields' | 'comments' | 'activity';
 
@@ -61,6 +64,53 @@ export function DocumentSlideover({ wslug, pslug }: Props) {
   const [moreOpen, setMoreOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const del = useDeleteDocument(wslug, pslug);
+
+  // Buffered save: body + frontmatter buffer in a shared draft owned here (where
+  // both the header save icon AND the body editor live). Title + status keep
+  // their immediate-commit paths (see SlideoverTitleEditor + onStatusCommit).
+  const listParams = useUrlDerivedListParams(doc?.type ?? 'work_item');
+  const update = useUpdateDocument(wslug, pslug, listParams);
+  // Stable fallback keeps hook order stable across loading→loaded; the draft
+  // re-seeds on doc.id/updatedAt inside the hook.
+  const draftDoc = doc ?? { id: '', updatedAt: '', body: '', frontmatter: {} };
+  const { draft, setBody, setFrontmatter, isDirty, reset, diff } = useDocumentDraft(draftDoc);
+
+  // Doc-SWITCH interception needs to know the buffer was dirty at the instant the
+  // URL flips — but switching unloads the old doc and useDocumentDraft re-seeds on
+  // the new load, clearing isDirty before any effect observes it. So we LATCH,
+  // during render, the slug whose buffer is dirty. The latch survives the switch's
+  // re-seed; we release it only when the loaded doc's own buffer goes clean.
+  const dirtySlugRef = useRef<string | null>(null);
+  if (doc?.slug && isDirty) dirtySlugRef.current = doc.slug;
+  else if (doc?.slug && doc.slug === dirtySlugRef.current && !isDirty) dirtySlugRef.current = null;
+
+  // The guard prompts while the LATCHED buffer is dirty — not just live isDirty —
+  // so a switch (which re-seeds and clears live isDirty) still routes through the
+  // prompt. The close path benefits too: same dirty signal, no behavior change.
+  const guard = useUnsavedGuard(isDirty || dirtySlugRef.current !== null);
+
+  const onSave = async () => {
+    if (!doc) return;
+    const { patch, keys } = diff();
+    if (keys.length === 0) return;
+    try {
+      await update.mutateAsync({ slug: doc.slug, patch });
+      toast.success('Saved');
+    } catch (err) {
+      toast.error(formatApiError(err));
+    }
+  };
+
+  // Status stays IMMEDIATE-commit (NOT buffered) — it's a single-click field, not
+  // a long-form edit. FrontmatterForm reads status from doc.status (server truth).
+  const onStatusCommit = async (next: string) => {
+    if (!doc) return;
+    try {
+      await update.mutateAsync({ slug: doc.slug, patch: { status: next } });
+    } catch (err) {
+      toast.error(formatApiError(err));
+    }
+  };
 
   // Tab state lives here (not in SlideoverBody) so the icon toggles can render
   // inline in the header — NocoDB-style single row — while the body reads the
@@ -99,10 +149,57 @@ export function DocumentSlideover({ wslug, pslug }: Props) {
     return () => window.removeEventListener('keydown', onKey);
   }, [open]);
 
-  const close = () => {
+  // Cmd/Ctrl-S saves the buffered draft when dirty.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && (e.key === 's' || e.key === 'S')) {
+        e.preventDefault();
+        if (isDirty && !update.isPending) void onSave();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+    // onSave/isDirty captured fresh each render via the listener closure.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, isDirty, update.isPending]);
+
+  const doClose = () => {
     const { doc: _doc, ...next } = search;
     void navigate({ to: '.', search: next });
   };
+  const close = () => guard.guard(doClose);
+
+  // Guard doc-SWITCH (not just close): if the URL doc flips to a DIFFERENT slug
+  // while the buffer is dirty, intercept — revert the URL to the latched (still
+  // dirty) doc and prompt. The guard's queued action re-applies the intended
+  // switch once the buffer is resolved (Save re-seeds, Discard resets).
+  //
+  // Detection runs DURING render (not in a [search.doc] effect): switching doc
+  // unloads the old doc, and useDocumentDraft re-seeds on the new load, so by the
+  // time an effect fires both isDirty AND the loaded slug have already moved on.
+  // Comparing the committed doc to the previous one during render catches the
+  // flip while dirtySlugRef still names the dirty doc.
+  const prevDocRef = useRef<string | undefined>(search.doc);
+  const pendingSwitchRef = useRef<string | null>(null);
+  if (prevDocRef.current !== search.doc) {
+    const incoming = search.doc;
+    const dirtySlug = dirtySlugRef.current;
+    if (incoming && dirtySlug && incoming !== dirtySlug) {
+      pendingSwitchRef.current = incoming;
+    }
+    prevDocRef.current = incoming;
+  }
+  useEffect(() => {
+    const incoming = pendingSwitchRef.current;
+    const dirtySlug = dirtySlugRef.current;
+    pendingSwitchRef.current = null;
+    if (!incoming || !dirtySlug || incoming === dirtySlug) return;
+    // Revert URL to the dirty doc and queue the intended switch behind the guard.
+    void navigate({ to: '.', search: { ...search, doc: dirtySlug } });
+    guard.guard(() => navigate({ to: '.', search: { ...search, doc: incoming } }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search.doc]);
 
   const onCopyMd = async () => {
     if (!slug) return;
@@ -168,6 +265,7 @@ export function DocumentSlideover({ wslug, pslug }: Props) {
                 {tab === 'fields' ? <ModeToggle mode={mode} onChange={setMode} /> : null}
                 <LogActivityButton wslug={wslug} pslug={pslug} slug={doc.slug} />
                 <div aria-hidden className="mx-0.5 h-4 w-px bg-border-light" />
+                <SaveButton dirty={isDirty} saving={update.isPending} onSave={() => void onSave()} />
                 <Popover open={moreOpen} onOpenChange={setMoreOpen}>
                   <PopoverTrigger asChild>
                     <button
@@ -204,13 +302,17 @@ export function DocumentSlideover({ wslug, pslug }: Props) {
           </div>
         </SheetHeader>
         <div className="flex-1 min-h-0 overflow-hidden px-6 py-4">
-          {slug ? (
+          {slug && doc ? (
             <SlideoverBody
+              doc={doc}
               wslug={wslug}
               pslug={pslug}
-              slug={slug}
               mode={mode}
               tab={tab}
+              draft={draft}
+              setBody={setBody}
+              setFrontmatter={setFrontmatter}
+              onStatusCommit={(next) => void onStatusCommit(next)}
             />
           ) : null}
         </div>
@@ -240,6 +342,29 @@ export function DocumentSlideover({ wslug, pslug }: Props) {
               disabled={del.isPending}
             >
               {del.isPending ? 'Deleting…' : 'Delete'}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={guard.prompting} onOpenChange={(o) => { if (!o) guard.cancel(); }}>
+        <DialogContent>
+          <DialogTitle>Unsaved changes</DialogTitle>
+          <DialogDescription>
+            {doc ? <>You have unsaved edits to &ldquo;{doc.title}&rdquo;.</> : null}
+          </DialogDescription>
+          <div className="mt-5 flex items-center justify-end gap-2">
+            <Button variant="secondary" onClick={() => { reset(); guard.proceed(); }}>
+              Discard
+            </Button>
+            <Button variant="secondary" onClick={() => guard.cancel()}>
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              disabled={update.isPending}
+              onClick={async () => { await onSave(); guard.proceed(); }}
+            >
+              {update.isPending ? 'Saving…' : 'Save'}
             </Button>
           </div>
         </DialogContent>
@@ -299,62 +424,44 @@ function SlideoverTitleEditor({ doc, wslug, pslug }: { doc: Document; wslug: str
 }
 
 function SlideoverBody({
+  doc,
   wslug,
   pslug,
-  slug,
   mode,
   tab,
+  draft,
+  setBody,
+  setFrontmatter,
+  onStatusCommit,
 }: {
+  doc: Document;
   wslug: string;
   pslug: string;
-  slug: string;
   mode: EditorMode;
   tab: DocTabValue;
+  draft: { body: string; frontmatter: Record<string, unknown> };
+  setBody: (body: string) => void;
+  setFrontmatter: (patch: Record<string, unknown>) => void;
+  onStatusCommit: (next: string) => void;
 }) {
   const navigate = useNavigate();
   const search = useSearch({ strict: false }) as Record<string, unknown>;
-  const { data: doc, isLoading, error } = useDocument(wslug, pslug, slug);
   const { data: statuses } = useStatuses(wslug, pslug);
   const { data: fields } = useFields(wslug, pslug, 'work-items');
-  const listParams = useUrlDerivedListParams(doc?.type ?? 'work_item');
-  const update = useUpdateDocument(wslug, pslug, listParams);
-  // Documents list — same listParams as useUpdateDocument so React Query
-  // dedupes the key. Gated on `doc` so we don't fire the request with the
-  // default 'work_item' type before the real doc.type is known (would cause
-  // a wrong-type slash-menu flash for page docs + a redundant roundtrip).
-  const { data: docPage } = useDocuments(wslug, pslug, listParams, { enabled: !!doc });
+  const listParams = useUrlDerivedListParams(doc.type);
+  // Documents list — same listParams as the parent's useUpdateDocument so React
+  // Query dedupes the key. Feeds the body editor's slash-menu document links.
+  const { data: docPage } = useDocuments(wslug, pslug, listParams, { enabled: true });
   // AI key presence — drives the slash menu's aiConfigured flag
   const { data: workspace } = useWorkspace(wslug);
   const { data: project } = useProject(wslug, pslug);
   const { data: aiKeys } = useWorkspaceAiKeys(wslug, workspace?.id ?? '');
   const aiConfigured = (aiKeys ?? []).length > 0;
-  const [pendingKeys, setPendingKeys] = useState<Set<string>>(new Set());
 
   // Comments + members + current user — for the Comments tab (work_item/page
   // only). The hook is gated on doc.slug so it idles until the doc resolves.
   const { data: members } = useMembers(wslug);
   const { data: me } = useMe();
-  if (isLoading) return <div className="text-fg-3">Loading document…</div>;
-  if (error || !doc) return <div className="text-danger">Failed to load document.</div>;
-
-  const onPatch = async (patch: Record<string, unknown>, keys: string[]) => {
-    setPendingKeys((prev) => {
-      const n = new Set(prev);
-      keys.forEach((k) => n.add(k));
-      return n;
-    });
-    try {
-      await update.mutateAsync({ slug: doc.slug, patch });
-    } catch (err) {
-      toast.error(formatApiError(err));
-    } finally {
-      setPendingKeys((prev) => {
-        const n = new Set(prev);
-        keys.forEach((k) => n.delete(k));
-        return n;
-      });
-    }
-  };
 
   // Wiki pages are "just a markdown file" — no status, no pinned fields,
   // no inferred frontmatter, no slug pill. Work items keep the full
@@ -388,13 +495,16 @@ function SlideoverBody({
                 wslug={wslug}
                 pslug={pslug}
                 type={doc.type}
+                // Status reads from doc.status (server truth) — it commits
+                // IMMEDIATELY, it is NOT part of the buffered draft.
                 status={doc.status}
                 statuses={statuses ?? []}
-                frontmatter={doc.frontmatter}
+                // Frontmatter reads from + writes to the buffered draft.
+                frontmatter={draft.frontmatter}
                 pinnedFields={fields ?? []}
-                onStatusCommit={(next) => void onPatch({ status: next }, ['status'])}
-                onFrontmatterCommit={(p) => void onPatch({ frontmatter: p }, Object.keys(p))}
-                pendingKeys={pendingKeys}
+                onStatusCommit={(next) => onStatusCommit(next)}
+                onFrontmatterCommit={(p) => setFrontmatter(p)}
+                pendingKeys={new Set()}
                 docSlug={doc.slug}
                 onOpenBacklink={(s) =>
                   void navigate({ to: '.', search: { ...search, doc: s } })
@@ -408,18 +518,22 @@ function SlideoverBody({
           >
             {mode === 'rich' ? (
               <BodyEditor
-                key={`rich-${doc.slug}`}
-                value={doc.body}
-                onChange={(body) => onPatch({ body }, ['body'])}
+                // Key on the seed identity (slug + updatedAt) so the editor
+                // remounts onto the freshly-seeded draft body — both on a
+                // doc-switch AND when the shared draft re-seeds after the parent
+                // loads/saves the doc (BodyEditor only reads `value` at mount).
+                key={`rich-${doc.slug}-${doc.updatedAt}`}
+                value={draft.body}
+                onChange={(body) => setBody(body)}
                 documents={docPage?.data ?? []}
                 aiConfigured={aiConfigured}
                 showToolbar={isPage}
           />
             ) : (
               <RawMdEditor
-                key={`raw-${doc.slug}`}
-                value={doc.body}
-                onChange={(body) => onPatch({ body }, ['body'])}
+                key={`raw-${doc.slug}-${doc.updatedAt}`}
+                value={draft.body}
+                onChange={(body) => setBody(body)}
               />
             )}
           </div>
