@@ -744,6 +744,31 @@ describe('D-4: run-management MCP tools', () => {
     expect(got.type).toBe('agent_run');
   });
 
+  it('get_run does NOT leak frontmatter.system_prompt (redacted at the loader)', async () => {
+    const { db, seed } = await makeTestApp();
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, seed.user);
+    const { agent, token } = await seedRunAgent(db, seed.workspace.id, seed.user.id, 'helper');
+    const run = await seedRunRow(db, seed.workspace, seed.project, agent, seed.user, parent);
+
+    // Stamp a distinctive secret onto the run's snapshotted system_prompt.
+    await db
+      .update(documents)
+      .set({
+        frontmatter: { ...(run.frontmatter as Record<string, unknown>), system_prompt: 'SECRET' },
+      })
+      .where(eq(documents.id, run.id));
+
+    const out = await executeTool(token, seed.user.id, 'get_run', {
+      workspace_slug: 'acme',
+      run_id: run.id,
+    });
+    const raw = (out as { content: { text: string }[] }).content[0]!.text;
+    expect(raw).not.toContain('SECRET');
+    expect(raw).not.toContain('system_prompt');
+    const got = parseText<{ frontmatter: Record<string, unknown> }>(out);
+    expect(got.frontmatter.system_prompt).toBeUndefined();
+  });
+
   it('cancel_run on a planning run → failed (parity with HTTP cancel)', async () => {
     const { db, seed } = await makeTestApp();
     const parent = await seedWorkItem(db, seed.workspace, seed.project, seed.user);

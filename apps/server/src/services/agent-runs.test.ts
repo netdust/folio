@@ -1117,6 +1117,25 @@ describe('listRuns', () => {
     expect(ids).toEqual([p1.id, p2.id].sort());
   });
 
+  test('caps result count with `limit` (newest-first)', async () => {
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+
+    const base = Date.now();
+    const oldest = await seedRunAt(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'running', { createdAt: new Date(base - 20_000) });
+    const middle = await seedRunAt(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'running', { createdAt: new Date(base - 10_000) });
+    const newest = await seedRunAt(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'running', { createdAt: new Date(base) });
+
+    const rows = await listRuns({ workspaceId: seed.workspace.id, limit: 2 });
+    expect(rows.length).toBe(2);
+    // newest-first ordering: the two most recent rows, oldest excluded.
+    expect(rows.map((r) => r.id)).toEqual([newest.id, middle.id]);
+    expect(rows.map((r) => r.id)).not.toContain(oldest.id);
+  });
+
   test('filters by projectId + chainId (chain aggregation)', async () => {
     const { db, seed } = await makeTestApp();
     const table = await getWorkItemsTable(db, seed.project.id);

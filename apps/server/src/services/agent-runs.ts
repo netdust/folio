@@ -681,6 +681,14 @@ export interface ListRunsFilter {
    * mitigation 24 semantics above.
    */
   callerAgentProjectsAllowList?: string[];
+  /**
+   * Cap the number of rows returned (newest-first). `undefined` → no SQL LIMIT,
+   * preserving the unbounded contract for callers that want every row (the
+   * MCP `list_runs` tool, the project-scoped list route). The workspace
+   * recent-runs feed passes this so run history can't grow into an unbounded
+   * fetch on every workspace-shell mount.
+   */
+  limit?: number;
 }
 
 export async function listRuns(
@@ -754,6 +762,9 @@ export async function listRuns(
   const rows = await tx.query.documents.findMany({
     where: and(...whereClauses),
     orderBy: [desc(documents.createdAt)],
+    // `undefined` → Drizzle emits no LIMIT (unbounded), preserving existing
+    // callers; a number caps the fetch at the SQL layer (newest-first).
+    limit: filter.limit,
   });
   return rows;
 }

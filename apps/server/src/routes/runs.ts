@@ -126,7 +126,14 @@ export async function loadRunScopedByToken(
   ) {
     throw notFound();
   }
-  return run;
+  // Redact at the loader so EVERY consumer (the HTTP wrapper `loadRunScoped`
+  // AND the MCP run tools get_run / cancel_run / retry_run) inherits
+  // system_prompt redaction. retry_run reads only `agent_slug` off the loaded
+  // row and re-resolves the agent doc fresh; cancel_run reads only id/status/
+  // parentId/projectId/agent_slug — neither depends on the raw system_prompt,
+  // so redacting here is safe. The runner's own claim path does NOT go through
+  // this loader (it reads ctx.fm.system_prompt off a separately-claimed row).
+  return redactRunForApi(run);
 }
 
 /**
@@ -291,13 +298,18 @@ runsRoute.get('/', requireScope('documents:read'), async (c) => {
     agentSlug: c.req.query('agent') || undefined,
     since: c.req.query('since') || undefined,
     callerAgentProjectsAllowList: allowList ?? undefined,
+    // Cap at the SQL layer (was a post-fetch JS slice over an unbounded fetch).
+    limit,
   });
-  return jsonOk(c, rows.slice(0, limit).map(redactRunForApi));
+  return jsonOk(c, rows.map(redactRunForApi));
 });
 
 // GET /runs/:runId
 runsRoute.get('/:runId', requireScope('documents:read'), async (c) => {
   const run = await loadRunScoped(c, c.req.param('runId'));
+  // Redundant with the loader-level redaction (loadRunScopedByToken already
+  // strips system_prompt); kept as cheap defense-in-depth — deleting an absent
+  // key is a no-op.
   return jsonOk(c, redactRunForApi(run));
 });
 
