@@ -8,6 +8,7 @@ import { fields } from '../db/schema.ts';
 import { jsonOk, HTTPError } from '../lib/http.ts';
 import { emitEvent, txWithEvents } from '../lib/events.ts';
 import { FIELD_TYPES, type FieldType, validateTypeChange } from '../lib/field-type-change.ts';
+import { dryRunResult, isDryRun } from '../lib/dry-run.ts';
 import { listFields } from '../services/fields.ts';
 import { type AuthContext, getUser } from '../middleware/auth.ts';
 import { requireScope } from '../middleware/bearer.ts';
@@ -21,6 +22,7 @@ const baseSchema = z.object({
   label: z.string().max(80).optional(),
   options: z.array(z.string()).nullable().optional(),
   order: z.number().int().optional(),
+  dryRun: z.boolean().optional(),
 });
 
 function validateOptions(type: string, options: string[] | undefined): void {
@@ -64,7 +66,7 @@ fieldsRoute.get('/', async (c) => {
   return jsonOk(c, await listFields(t.id));
 });
 
-fieldsRoute.post('/', requireScope('fields:write'), zValidator('json', baseSchema), async (c) => {
+fieldsRoute.post('/', requireScope('config:write'), zValidator('json', baseSchema), async (c) => {
   const user = getUser(c);
   const p = getProject(c);
   const t = getTable(c);
@@ -90,6 +92,9 @@ fieldsRoute.post('/', requireScope('fields:write'), zValidator('json', baseSchem
     options: input.options ?? null,
     order: input.order ?? 0,
   };
+  if (isDryRun(input)) {
+    return jsonOk(c, dryRunResult('create', row));
+  }
   await txWithEvents(db, async (tx) => {
     await tx.insert(fields).values(row);
     await emitEvent(tx, {
@@ -102,7 +107,7 @@ fieldsRoute.post('/', requireScope('fields:write'), zValidator('json', baseSchem
 
 fieldsRoute.patch(
   '/:id',
-  requireScope('fields:write'),
+  requireScope('config:write'),
   zValidator('json', baseSchema.partial()),
   async (c) => {
     const user = getUser(c);
@@ -169,6 +174,10 @@ fieldsRoute.patch(
       updatePatch.options = null;
     }
 
+    if (isDryRun(patch)) {
+      return jsonOk(c, dryRunResult('update', { ...row, ...updatePatch }));
+    }
+
     await txWithEvents(db, async (tx) => {
       await tx.update(fields).set(updatePatch).where(eq(fields.id, id));
       await emitEvent(tx, {
@@ -180,7 +189,7 @@ fieldsRoute.patch(
   },
 );
 
-fieldsRoute.delete('/:id', requireScope('fields:write'), async (c) => {
+fieldsRoute.delete('/:id', requireScope('config:write'), async (c) => {
   const user = getUser(c);
   const p = getProject(c);
   const t = getTable(c);
@@ -190,6 +199,9 @@ fieldsRoute.delete('/:id', requireScope('fields:write'), async (c) => {
     where: and(eq(fields.tableId, t.id), eq(fields.id, id)),
   });
   if (!row) throw new HTTPError('FIELD_NOT_FOUND', `field "${id}" not found`, 404);
+  if (c.req.query('dryRun') === 'true') {
+    return jsonOk(c, dryRunResult('delete', { id: row.id, key: row.key }));
+  }
   await txWithEvents(db, async (tx) => {
     await tx.delete(fields).where(eq(fields.id, id));
     await emitEvent(tx, {

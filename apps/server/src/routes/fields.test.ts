@@ -1,4 +1,8 @@
 import { test, expect } from 'bun:test';
+import { eq } from 'drizzle-orm';
+import { nanoid } from 'nanoid';
+import { apiTokens, events, fields } from '../db/schema.ts';
+import { newApiToken } from '../lib/auth.ts';
 import { makeTestApp } from '../test/harness.ts';
 
 const path = '/api/v1/w/acme/p/web/fields';
@@ -251,4 +255,114 @@ test('PATCH currency→number clears options when client sends options: null', a
   const body = await patch.json();
   expect(body.data.field.type).toBe('number');
   expect(body.data.field.options).toBeNull();
+});
+
+// --- Phase 2 (operator): config:write guard + dryRun (P2-2/4/6/8) ---
+
+async function mintTokens(db: Awaited<ReturnType<typeof makeTestApp>>['db'], seed: Awaited<ReturnType<typeof makeTestApp>>['seed']) {
+  const cw = newApiToken();
+  await db.insert(apiTokens).values({
+    id: nanoid(),
+    workspaceId: seed.workspace.id,
+    name: 'config-write',
+    tokenHash: cw.hash,
+    scopes: ['config:write', 'documents:read'],
+    createdBy: seed.user.id,
+  });
+  const dw = newApiToken();
+  await db.insert(apiTokens).values({
+    id: nanoid(),
+    workspaceId: seed.workspace.id,
+    name: 'docs-write',
+    tokenHash: dw.hash,
+    scopes: ['documents:write', 'documents:read'],
+    createdBy: seed.user.id,
+  });
+  return { configWriteToken: cw.token, docsWriteToken: dw.token };
+}
+
+async function fieldCount(db: Awaited<ReturnType<typeof makeTestApp>>['db'], projectId: string): Promise<number> {
+  return (await db.select().from(fields).where(eq(fields.projectId, projectId))).length;
+}
+
+async function eventCount(db: Awaited<ReturnType<typeof makeTestApp>>['db']): Promise<number> {
+  return (await db.select().from(events)).length;
+}
+
+test('POST /fields: config:write token creates a field', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const { configWriteToken } = await mintTokens(db, seed);
+  const res = await app.request(path, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${configWriteToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ key: 'priority', type: 'text' }),
+  });
+  expect(res.status).toBe(201);
+  expect((await res.json()).data.field.key).toBe('priority');
+});
+
+test('POST /fields: documents:write token cannot create a field (403)', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const { docsWriteToken } = await mintTokens(db, seed);
+  const res = await app.request(path, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${docsWriteToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ key: 'priority', type: 'text' }),
+  });
+  expect(res.status).toBe(403);
+});
+
+test('POST /fields: dryRun create does not mutate', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const { configWriteToken } = await mintTokens(db, seed);
+  const beforeFields = await fieldCount(db, seed.project.id);
+  const beforeEvents = await eventCount(db);
+  const res = await app.request(path, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${configWriteToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ key: 'preview_field', type: 'text', dryRun: true }),
+  });
+  expect(res.status).toBe(200);
+  const data = (await res.json()).data;
+  expect(data.dry_run).toBe(true);
+  expect(data.would).toBe('create');
+  expect(data.resource.key).toBe('preview_field');
+  expect(await fieldCount(db, seed.project.id)).toBe(beforeFields);
+  expect(await eventCount(db)).toBe(beforeEvents);
+});
+
+test('DELETE /fields: dryRun delete on missing field 404s', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const { configWriteToken } = await mintTokens(db, seed);
+  const res = await app.request(`${path}/does-not-exist?dryRun=true`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${configWriteToken}` },
+  });
+  expect(res.status).toBe(404);
+});
+
+test('DELETE /fields: dryRun delete does not mutate an existing field', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const { configWriteToken } = await mintTokens(db, seed);
+  const created = await (
+    await app.request(path, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${configWriteToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key: 'keepme', type: 'text' }),
+    })
+  ).json();
+  const fieldId = created.data.field.id as string;
+  const beforeFields = await fieldCount(db, seed.project.id);
+  const beforeEvents = await eventCount(db);
+
+  const res = await app.request(`${path}/${fieldId}?dryRun=true`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${configWriteToken}` },
+  });
+  expect(res.status).toBe(200);
+  const data = (await res.json()).data;
+  expect(data.dry_run).toBe(true);
+  expect(data.would).toBe('delete');
+  expect(await fieldCount(db, seed.project.id)).toBe(beforeFields);
+  expect(await eventCount(db)).toBe(beforeEvents);
 });
