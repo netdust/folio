@@ -64,9 +64,11 @@ const AGENT_WRITE_TOOLS: ReadonlySet<string> = new Set([
 const CONFIG_WRITE_TOOLS: ReadonlySet<string> = new Set(['folio_api']);
 
 /**
- * The complete set of document scopes a fully-privileged caller (owner/admin)
- * may delegate. Mirrors the four scopes the tool registry gates on
- * (documents:read/write/delete + agents:write).
+ * The complete set of scopes a fully-privileged caller (owner/admin) may
+ * delegate. Four are gated by the tool registry today
+ * (documents:read/write/delete + agents:write); config:write is reserved ahead
+ * of its consumer — the Phase-3 folio_api primitive — so owner/admin delegation
+ * already carries it the moment that tool is registered.
  */
 const ALL_DOCUMENT_SCOPES = [
   'documents:read',
