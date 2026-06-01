@@ -19,4 +19,14 @@ describe('validateApiPath (P3-5)', () => {
     expect(() => validateApiPath('/admin/secret')).toThrow();
     expect(() => validateApiPath('relative/no/slash')).toThrow();
   });
+  test('rejects control characters and null bytes (P3-5 hardening)', () => {
+    expect(() => validateApiPath('/api/v1/x\x00y')).toThrow();
+    expect(() => validateApiPath('/api/v1/x\ny')).toThrow();
+    expect(() => validateApiPath('/api/v1/x\ty')).toThrow();
+    expect(() => validateApiPath('/api/v1/x\x7fy')).toThrow();
+  });
+  test('accepts percent-encoded sequences by design (router does not decode them)', () => {
+    // documents the assumption in Fix 2's comment — NOT a bypass for app.request
+    expect(validateApiPath('/api/v1/w/a/%2e%2e/b')).toBe('/api/v1/w/a/%2e%2e/b');
+  });
 });

@@ -39,6 +39,18 @@ export function validateApiPath(path: string): string {
   if (!path.startsWith('/api/v1/')) {
     throw new Error('folio_api: path must start with /api/v1/');
   }
+  // Reject control chars (incl. null byte, newline, tab, DEL) — the contract
+  // returns the path verbatim, so a future caller that logs/concats it must
+  // not receive an embedded control char. Fail closed.
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: intentional control-char guard
+  if (/[\x00-\x1f\x7f]/.test(path)) {
+    throw new Error('folio_api: path contains a control character');
+  }
+  // NOTE: we do NOT decode percent-encoding here. This is safe ONLY because the
+  // sole consumer is Hono's in-process app.request, whose WHATWG URL parsing does
+  // not decode %2e/%2f into router path segments (encoded traversal → 404, not
+  // escape). A future consumer that decodes or hits a filesystem path would
+  // reopen %2e%2e traversal and must re-validate.
   if (path.includes('..') || path.includes('@') || path.includes('\\')) {
     throw new Error('folio_api: path contains a disallowed sequence');
   }
