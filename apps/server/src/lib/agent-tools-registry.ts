@@ -388,7 +388,8 @@ export function registerRealTools(): void {
 
   registerTool({
     name: 'list_documents',
-    description: 'List documents in a project. Optional type filter and pagination.',
+    description:
+      'List documents in a project. Returns work_item + page only. Comments → list_comments; runs → list_runs. Optional type filter and pagination.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -741,7 +742,7 @@ export function registerRealTools(): void {
   registerTool({
     name: 'update_document',
     description:
-      'Patch a document. Supplied frontmatter is shallow-merged into the existing frontmatter (null values delete keys). Reserved keys (type, title, status, last_touched_at) live as columns and are ignored when present in frontmatter.',
+      'Patch a document. Supplied frontmatter is shallow-merged into the existing frontmatter (null values delete keys). Reserved keys (type, title, status, last_touched_at) live as columns and are ignored when present in frontmatter. Discover valid status keys via list_statuses.',
     inputSchema: {
       type: 'object',
       properties: {
