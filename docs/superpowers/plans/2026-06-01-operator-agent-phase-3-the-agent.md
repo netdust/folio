@@ -481,16 +481,20 @@ test('folio_api low/medium write executes (medium = config) (P3-7)', async () =>
   expect(out.status).toBe(201);
 });
 
-test('folio_api high-risk REFUSES with a posted plan, does not mutate (P3-7)', async () => {
+test('folio_api high-risk REFUSES with a plan, does not mutate or dispatch (P3-7)', async () => {
   const before = await countWorkspaces();
   const out = await executeTool(callerToken, 'agent:op', 'folio_api',
     { method: 'DELETE', path: `/api/v1/w/${ws.slug}`, body: {} }, undefined,
     { callerScopes: callerToken.scopes });
   expect(out.refused).toBe(true);
-  expect(out.plan).toBeDefined(); // the dryRun diff
-  expect(await countWorkspaces()).toBe(before); // no mutation
+  expect(out.plan).toBeDefined();            // a structured description of the proposed action
+  expect(out.plan.risk).toBe('high');
+  expect(out.plan.method).toBe('DELETE');
+  expect(await countWorkspaces()).toBe(before); // no mutation — and NO dispatch attempted
 });
 ```
+
+> ⚠️ **CORRECTION (2026-06-02, ground-truth at Task 5):** the original plan had the high-risk branch *dispatch a dryRun* (`dispatchAsCaller(..., {dryRun:true})`) to compute a real diff. Verified-false premise: **every high-risk route is `requireSessionUser` (session-only) and has NO dryRun support** — workspace delete/rename (`workspaces.ts:131`), token mint/revoke (`tokens.ts:36,93`), ai-keys write/delete (`settings.ts:47,118`). A `folio_api` bearer literally cannot reach them (403 `requireSessionUser` before any handler), and none read `isDryRun`/`isDryRunDelete`. So a high-risk dryRun dispatch would return a useless 403 envelope (and waste a token mint/revoke). The corrected high-risk branch **REFUSES WITHOUT dispatching** — it returns a structured `plan` built from the classification (method/path/risk/reason), never attempting the route. This is strictly safer (no dispatch of a destructive verb at all) and the load-bearing property (refuse + zero mutation) is unchanged. The `// TODO(approval-gate)` still marks the future pause-and-request-approval swap point. (Medium/low still dispatch normally; medium rides the route's own dryRun-as-undo if the *agent* requests it via `body.dryRun`, unchanged.)
 
 - [ ] **Step 2: Run to verify fail** — FAIL.
 
@@ -518,15 +522,16 @@ test('folio_api high-risk REFUSES with a posted plan, does not mutate (P3-7)', a
       const body = args.body ?? {};
       const tier = classifyRisk(args.method, args.path, body);
       if (tier === 'high') {
-        // Compute the dryRun plan and REFUSE to apply (mitigation P3-7).
+        // REFUSE high-risk WITHOUT dispatching (mitigation P3-7). High-risk
+        // routes are session-only + dryRun-less (see the Task 5 correction note),
+        // so we do NOT attempt the route — we return a structured plan describing
+        // the proposed action for a human to review.
         // TODO(approval-gate): replace refuse with request_approval +
         // running→awaiting_approval once the PAUSE side lands (localized swap).
-        const dry = await dispatchAsCaller(ctx.token, args.method, args.path, { ...body, dryRun: true });
-        const plan = await dry.json().catch(() => null);
         return {
           refused: true,
-          reason: 'high-risk action requires human approval',
-          plan, // the dryRun diff — surfaced to the human, not applied
+          reason: 'high-risk action requires human approval; not applied',
+          plan: { risk: tier, method: args.method, path: args.path, body },
         };
       }
       const res = await dispatchAsCaller(ctx.token, args.method, args.path, body);
@@ -536,7 +541,7 @@ test('folio_api high-risk REFUSES with a posted plan, does not mutate (P3-7)', a
   });
 ```
 
-> The high-risk branch returns the plan in the tool result; the runner surfaces it. (Posting it as a `kind=plan` comment on the run parent — the spec's preferred rendering — can be a thin follow-up; the structured `plan` return is the load-bearing part and is what the test asserts. If the comment-post is wanted in v1, call the comments route via `dispatchAsCaller` here; keep it OUT if it complicates the refuse path — note the choice in a comment.)
+> The high-risk branch returns a structured `plan` (risk/method/path/body) in the tool result; the runner surfaces it to the human via the run transcript. No dispatch, no mutation, no token mint on the high-risk path. (Posting it as a `kind=plan` comment on the run parent — the spec's preferred rendering — is a deferred thin follow-up; the structured `plan` return is the load-bearing part the test asserts.)
 
 - [ ] **Step 4: Run to verify pass + tsc** — PASS (3) + clean.
 
