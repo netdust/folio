@@ -1,5 +1,6 @@
 import { test, expect } from 'bun:test';
 import { makeTestApp } from '../test/harness.ts';
+import { newApiToken } from '../lib/auth.ts';
 
 test('GET /w/:wslug/projects lists projects in workspace', async () => {
   const { app, seed } = await makeTestApp();
@@ -187,4 +188,92 @@ test('DELETE project — non-owner returns 403 without scrubbing', async () => {
   const { documents } = await import('../db/schema.ts');
   const row = await db.query.documents.findFirst({ where: eq(documents.id, agent.id) });
   expect((row!.frontmatter as { projects: string[] }).projects).toEqual([seed.project.id]);
+});
+
+// --- Phase 2 (operator): config:write guard + dryRun on project routes (P2-2/4/5/6/8) ---
+
+async function mintProjectTokens(
+  db: Awaited<ReturnType<typeof makeTestApp>>['db'],
+  seed: Awaited<ReturnType<typeof makeTestApp>>['seed'],
+) {
+  const { apiTokens } = await import('../db/schema.ts');
+  const cw = newApiToken();
+  await db.insert(apiTokens).values({
+    id: nanoid(),
+    workspaceId: seed.workspace.id,
+    name: 'config-write',
+    tokenHash: cw.hash,
+    scopes: ['config:write', 'documents:read'],
+    createdBy: seed.user.id,
+  });
+  const dw = newApiToken();
+  await db.insert(apiTokens).values({
+    id: nanoid(),
+    workspaceId: seed.workspace.id,
+    name: 'docs-write',
+    tokenHash: dw.hash,
+    scopes: ['documents:write', 'documents:read'],
+    createdBy: seed.user.id,
+  });
+  return { configWriteToken: cw.token, docsWriteToken: dw.token };
+}
+
+async function projectCount(
+  db: Awaited<ReturnType<typeof makeTestApp>>['db'],
+  wsId: string,
+): Promise<number> {
+  const { projects } = await import('../db/schema.ts');
+  const { eq } = await import('drizzle-orm');
+  return (await db.select().from(projects).where(eq(projects.workspaceId, wsId))).length;
+}
+
+test('POST /projects: config:write token creates a project (201)', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const { configWriteToken } = await mintProjectTokens(db, seed);
+  const res = await app.request('/api/v1/w/acme/projects', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${configWriteToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Mobile' }),
+  });
+  expect(res.status).toBe(201);
+  expect((await res.json()).data.slug).toBe('mobile');
+});
+
+test('POST /projects: documents:write token cannot create a project (403)', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const { docsWriteToken } = await mintProjectTokens(db, seed);
+  const res = await app.request('/api/v1/w/acme/projects', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${docsWriteToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Mobile' }),
+  });
+  expect(res.status).toBe(403);
+});
+
+test('POST /projects: dryRun create does not mutate', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const { configWriteToken } = await mintProjectTokens(db, seed);
+  const before = await projectCount(db, seed.workspace.id);
+  const res = await app.request('/api/v1/w/acme/projects', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${configWriteToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Preview', dryRun: true }),
+  });
+  expect(res.status).toBe(200);
+  const data = (await res.json()).data;
+  expect(data.dry_run).toBe(true);
+  expect(data.would).toBe('create');
+  expect(data.resource.name).toBe('Preview');
+  expect(await projectCount(db, seed.workspace.id)).toBe(before);
+});
+
+test('P2-5 regression: a token cannot create a workspace', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const { configWriteToken } = await mintProjectTokens(db, seed);
+  const res = await app.request('/api/v1/workspaces', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${configWriteToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Hax' }),
+  });
+  expect([401, 403]).toContain(res.status);
 });
