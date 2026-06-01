@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { validateApiPath } from './folio-api-tool.ts';
+import { classifyRisk, validateApiPath } from './folio-api-tool.ts';
 
 describe('validateApiPath (P3-5)', () => {
   test('accepts a relative API path', () => {
@@ -28,5 +28,34 @@ describe('validateApiPath (P3-5)', () => {
   test('accepts percent-encoded sequences by design (router does not decode them)', () => {
     // documents the assumption in Fix 2's comment — NOT a bypass for app.request
     expect(validateApiPath('/api/v1/w/a/%2e%2e/b')).toBe('/api/v1/w/a/%2e%2e/b');
+  });
+});
+
+describe('classifyRisk (P3-7, v1 resource-type proxy)', () => {
+  test('document writes are low', () => {
+    expect(classifyRisk('POST', '/api/v1/w/a/p/b/documents', {})).toBe('low');
+  });
+  test('config writes (tables/fields/views/statuses/projects) are medium', () => {
+    expect(classifyRisk('POST', '/api/v1/w/a/p/b/tables', {})).toBe('medium');
+    expect(classifyRisk('DELETE', '/api/v1/w/a/p/b/views/v1', {})).toBe('medium');
+  });
+  test('membership/role + workspace delete + explicit bulk are high', () => {
+    expect(classifyRisk('DELETE', '/api/v1/w/a', {})).toBe('high'); // workspace delete
+    expect(classifyRisk('POST', '/api/v1/w/a/members', {})).toBe('high'); // future
+    expect(classifyRisk('PATCH', '/api/v1/w/a/p/b/documents', { bulk: true })).toBe('high');
+  });
+
+  // Pin tests (P3-7): the project-config rule must NOT swallow document/comment/run
+  // sub-resources mounted under /p/:slug. Document writes stay low; the projects
+  // COLLECTION and the project ITEM route are the only project-config medium paths.
+  test('document write under a project is low, project create/rename are medium', () => {
+    expect(classifyRisk('POST', '/api/v1/w/a/p/b/documents', {})).toBe('low'); // sub-resource
+    expect(classifyRisk('POST', '/api/v1/w/a/p/b/comments', {})).toBe('low'); // sub-resource
+    expect(classifyRisk('GET', '/api/v1/w/a/p/b/runs', {})).toBe('low'); // read, sub-resource
+    expect(classifyRisk('POST', '/api/v1/w/a/projects', {})).toBe('medium'); // create project
+    expect(classifyRisk('PATCH', '/api/v1/w/a/projects/b', {})).toBe('medium'); // rename project
+    expect(classifyRisk('DELETE', '/api/v1/w/a/projects/b', {})).toBe('medium'); // delete project
+    // Plan's spec example also pins the bare project-item form as medium:
+    expect(classifyRisk('PATCH', '/api/v1/w/a/p/b', {})).toBe('medium'); // project item (no sub-resource)
   });
 });

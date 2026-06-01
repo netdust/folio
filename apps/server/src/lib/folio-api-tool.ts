@@ -56,3 +56,48 @@ export function validateApiPath(path: string): string {
   }
   return path;
 }
+
+export type RiskTier = 'low' | 'medium' | 'high';
+
+/**
+ * v1 risk proxy by resource type (mitigation P3-7). The real scorer (objects /
+ * reversibility / workspace-wide / permissions) drops in here later without
+ * re-plumbing — every mutation already routes through dryRun→render→apply.
+ *
+ * Rule order (first match wins):
+ *  1. HIGH  — permission/membership routes, workspace-level deletion, explicit bulk.
+ *  2. MEDIUM — structure config (tables/fields/views/statuses), the projects
+ *     COLLECTION (/projects, /projects/:slug), and the bare project ITEM route
+ *     (/p/:slug with NO further sub-resource segment). Reads (GET) are never medium.
+ *  3. LOW   — everything else token-scoped, incl. document/comment/run writes that
+ *     live UNDER a project (/p/:slug/<sub-resource>).
+ *
+ * The project-config rule is deliberately anchored to /projects(/:slug)? and to a
+ * /p/:slug TERMINUS — it must NOT swallow /p/:slug/documents, /comments, /runs, etc.
+ */
+export function classifyRisk(
+  method: string,
+  path: string,
+  body: Record<string, unknown>,
+): RiskTier {
+  // 1. High: permission/membership, workspace-level destruction, or explicit bulk.
+  if (/\/members?(\/|$)/.test(path)) return 'high';
+  if (method === 'DELETE' && /^\/api\/v1\/w\/[^/]+$/.test(path)) return 'high'; // workspace delete
+  if (body && body.bulk === true) return 'high';
+
+  // 2. Medium: structure/config writes.
+  if (/\/(tables|fields|views|statuses)(\/|$)/.test(path)) return 'medium';
+  // Project config: the projects collection / project item (real route shape),
+  // OR the bare /p/:slug terminus (plan spec shape). Anchored to end-of-path so
+  // sub-resources like /p/:slug/documents fall through to low.
+  if (
+    method !== 'GET' &&
+    (/^\/api\/v1\/w\/[^/]+\/projects(\/[^/]+)?$/.test(path) ||
+      /^\/api\/v1\/w\/[^/]+\/p\/[^/]+$/.test(path))
+  ) {
+    return 'medium';
+  }
+
+  // 3. Low: document writes + everything else token-scoped.
+  return 'low';
+}
