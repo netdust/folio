@@ -31,7 +31,7 @@ function ProjectLayout() {
   const { data: workItems } = useDocuments(wslug, pslug, { type: 'work_item', limit: 200 });
   const { data: pages } = useDocuments(wslug, pslug, { type: 'page', limit: 200 });
   const create = useCreateDocument(wslug, pslug);
-  useLiveDocuments(wslug, pslug);
+  useLiveDocuments(wslug, pslug, project?.id);
 
   if (isLoading) return <div className="p-8 text-fg-3">Loading project…</div>;
   if (!project) return <div className="p-8 text-danger">Project not found.</div>;

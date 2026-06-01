@@ -7,6 +7,13 @@
 
 ---
 
+## STATUS: RESOLVED
+
+- **BUG-1 — RESOLVED** (fix verified live: PATCH → DOM updated in 300ms without refresh, row re-sorted to top). Fix: `useLiveDocuments(wslug, pslug, projectId)` now passes the project **id** to the SSE filter (slug stays for the cache key); caller passes `project?.id`. Unit test corrected to assert the id (was asserting the slug — the baked-in bug). Full web suite 741 pass, tsc clean.
+- **BUG-2 — VERIFIED NON-ISSUE** (by inspection): slideover filters client-side by docId (no project filter → immune to the id bug); comments pass `parent: parentId` (correct id). Both share the same `useEventStream` infra now proven to connect + deliver events via the views test. Synthetic slideover-open was flaky to drive; left for the manual-checks list below rather than fixed (nothing to fix).
+
+---
+
 ## BUG-1 — CRITICAL — document views never live-update (project filter id/slug mismatch)
 
 **Symptom:** Edited a work item's title via the live API (the same write path an agent uses; PATCH returns 200, persists, and renders correctly after a manual reload). With the list view open, the DOM did NOT update for >5s across multiple attempts. A manual page reload was required to see the change. The entire feature's purpose — "the screen moves when an agent edits" — does not work for the views.

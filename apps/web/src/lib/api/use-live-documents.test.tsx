@@ -16,15 +16,30 @@ vi.mock('@tanstack/react-query', async (orig) => {
 import { useLiveDocuments } from './use-live-documents.ts';
 
 describe('useLiveDocuments', () => {
-  it('subscribes with project filter + document kinds and invalidates list key on event', () => {
-    calls.length = 0; invalidateSpy.mockClear();
-    renderHook(() => useLiveDocuments('acme', 'web'));
+  it('subscribes with the project ID (not slug) + document kinds, and invalidates the slug-keyed list', () => {
+    calls.length = 0;
+    invalidateSpy.mockClear();
+    // The events route filters ?project= by document-row projectId, so the SSE
+    // filter MUST carry the project ID. The cache key is slug-based.
+    renderHook(() => useLiveDocuments('acme', 'web', 'proj-id-123'));
     expect(calls).toHaveLength(1);
     expect(calls[0]!.filters).toMatchObject({
-      project: 'web',
+      project: 'proj-id-123',
       kinds: ['document.created', 'document.updated', 'document.deleted'],
     });
+    // Regression guard: the filter must NOT be the slug.
+    expect((calls[0]!.filters as { project: string }).project).not.toBe('web');
     calls[0]!.onEvent({ kind: 'document.updated' });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['documents', 'acme', 'web', 'list'] });
+  });
+
+  it('does not open a mis-scoped subscription before the project id resolves', () => {
+    calls.length = 0;
+    // projectId undefined (project query still loading) → no filter with an
+    // empty/slug project; the hook should pass project: undefined so buildQuery
+    // omits it rather than subscribing to the wrong scope.
+    renderHook(() => useLiveDocuments('acme', 'web', undefined));
+    expect(calls).toHaveLength(1);
+    expect((calls[0]!.filters as { project?: string }).project).toBeUndefined();
   });
 });

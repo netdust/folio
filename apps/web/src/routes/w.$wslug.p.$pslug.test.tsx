@@ -115,6 +115,8 @@ describe('ProjectLayout — live document updates', () => {
     // Wait for the route to render (project loaded) before asserting.
     await waitFor(() => expect(screen.getByText('Sales')).toBeInTheDocument());
 
-    expect(liveSpy).toHaveBeenCalledWith('acme', 'sales');
+    // wslug + pslug for the slug-keyed cache, project.id for the SSE filter
+    // (the /events route matches ?project= by id, not slug).
+    expect(liveSpy).toHaveBeenCalledWith('acme', 'sales', 'p1');
   });
 });
