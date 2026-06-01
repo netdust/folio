@@ -175,6 +175,51 @@ git commit -m "phase-op-1: add caller_scopes/caller_project_ids to run frontmatt
 
 ---
 
+## Task 1b: Restore the suite to green (PLAN CORRECTION, added mid-execution 2026-06-01)
+
+**Why this task exists:** Task 1 made `caller_scopes` a REQUIRED `.strict()` schema field (correct for the D10 fail-closed contract). That immediately invalidated every existing run-frontmatter producer + fixture that predates this phase — **59 suite failures** — none of which Task 1 was allowed to touch. Tasks 2–4 need a clean full-suite signal, so the consumers must be fixed NOW, not deferred to Task 5/7. Root cause: the original plan tightened the schema before fixing its consumers. This task fixes the consumers with a SAFE PLACEHOLDER caller authority (full agent authority — i.e. pre-delegation behavior); Task 5 REPLACES the placeholder in `createRun` with real caller-derivation, and Task 7 backfills history. The placeholder is intentionally non-restrictive because the ENFORCEMENT (Task 3) isn't wired yet — these two new fields are inert data until Task 3.
+
+**Mitigations:** keeps D10 (schema stays required); sets up D1 (createRun now writes the fields, Task 5 makes them caller-derived).
+
+**Files:**
+- Modify: `apps/server/src/services/agent-runs.ts` (`createRun` `runFm` object, ~line 133)
+- Modify: the run-fm-seeding test fixtures across the 12 failing test files (see ground-truth list in the dispatch)
+
+- [ ] **Step 1: Patch `createRun` to write the two fields (placeholder = agent authority)**
+
+In the `runFm: AgentRunFrontmatter = { ... }` object (~line 133), add:
+
+```typescript
+    // Phase 1 delegation PLACEHOLDER (Task 1b). Real caller-derivation lands in
+    // Task 5 (from `actor`). Until then, stamp the agent's OWN authority so the
+    // field is present (D10 schema contract) and behavior is unchanged
+    // (pre-delegation: agent authority). The enforcement intersect (Task 3) is
+    // not wired yet, so these are inert data this task.
+    caller_scopes: (agent.frontmatter as Record<string, unknown>).scopes as string[] ?? [],
+    caller_project_ids: null,
+```
+
+> Verify the agent's scope source at ground-truth time: an agent's effective scopes come from its frontmatter / its minted token's `scopes`. If agent frontmatter has no `scopes` key, use the auto-minted token's scopes (the same the runner loads at `runner.ts:307`) or a safe default `[]` — Task 5 supersedes this anyway. The ONLY requirement here: the field is present and parses. `null` for projects = no narrowing (placeholder = unrestricted, matching pre-delegation).
+
+- [ ] **Step 2: Add the two fields to every direct run-fm test fixture**
+
+The 12 files that hand-build run frontmatter (verified failing): `agent-tools.test.ts`, `runner.test.ts`, `poller.test.ts`, `trigger-matcher.test.ts`, `builtin-triggers.test.ts`, `event-bus.test.ts`, `events.test.ts`, `documents.test.ts` (routes), `admin-runner-stats.test.ts` (routes), `agent-runs.test.ts` (services), `runs.test.ts` (routes). For each direct fixture object that builds an `agent_run` frontmatter, add `caller_scopes: [], caller_project_ids: null`. **PREFER a shared helper:** if these tests share a fixture builder, add the fields there once. If they hand-roll, add the two keys to each. (Tests that go through `createRun` are fixed by Step 1 and need no fixture change.)
+
+- [ ] **Step 3: Run the FULL suite to green**
+
+Run: `cd apps/server && bun test`
+Expected: 0 fail (back to the pre-Task-1 baseline + Task 1's new tests). If any failure remains, it's a fixture you missed — fix it. Do NOT proceed with any red.
+
+- [ ] **Step 4: Typecheck + commit**
+
+```bash
+cd apps/server && bun x tsc --noEmit   # expect clean
+git add apps/server/src/services/agent-runs.ts apps/server/src/**/*.test.ts
+git commit -m "phase-op-1: restore suite green after required caller fields (Task 1b plan-correction)"
+```
+
+---
+
 ## Task 2: `callerProjectsFor` + caller-authority derivation helper
 
 **Mitigations:** D5 (wildcard asymmetry), D1 (server-side derivation).
