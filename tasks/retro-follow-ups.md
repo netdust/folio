@@ -216,3 +216,11 @@ Found by `/code-review high` on the delegation branch; deferred by Stefan (fix-6
 
 ## Phase-op-2 (token-scoped config write surface)
 - **OP2-F1 (web cleanup):** `apps/web/src/components/settings/token-create-modal.tsx` (+ its test) offers the now-DEAD scopes `tables:write`/`fields:write`/`views:write`/`statuses:write` as selectable token scopes. Phase 2 collapses all four into the single canonical `config:write`. The modal should offer `config:write` and drop the four. Not a server-task; do as a web cleanup before/at Phase-2 shake-out. (Found during Task 3, 2026-06-01.)
+
+---
+
+- **SSE event-stream connection fan-out — deliberate v1 simplicity tradeoff, revisit only if many live panels coexist.** (Logged 2026-06-01 from a frontend quality audit.) `useEventStream` (`apps/web/src/lib/api/event-stream.ts:62`) opens ONE `EventSource` per consuming hook — each with its own server-side `kinds`/`project`/`parent` filter (no client-side stream pool/demux). With the activity feed + provider-health banner + reactor banner + runs panel + document slideover + comments tab open at once, that's ~5+ concurrent connections to the same workspace. **This is BY DESIGN** (the hook docstring: "there is no unfiltered firehose by design") and fine at current scale — browsers multiplex over HTTP/2 to one origin. NOT a bug, NOT urgent.
+  **The audit's "HIGH cache-key mismatch BUG" was a FALSE POSITIVE** — the id-for-SSE-filter / slug-for-cache-key split (`use-live-documents.ts:13-16`) is the *correct fix* (shipped this session as `bb6da69`), not a defect. Recorded here so it isn't re-raised as a bug.
+  **Decision needed:** none now. Upgrade trigger = if a future view holds many simultaneous live panels (or hits browser per-origin connection limits), introduce a single shared workspace EventSource that fans out to subscribers by filter. Until then, leave as-is.
+  **Two genuinely-real micro-follow-ups in the same file (≤2 lines each, next-touch):** (a) add an `es.onerror` handler — a dropped/failed stream is currently fully silent; (b) `console.warn` in the malformed-frame `catch {}` (`event-stream.ts:68`) instead of swallowing. Both minor; defer to next time that file is touched.
+  **Source:** Frontend event/SSE audit, 2026-06-01. Routing/auth/shell + react-query data layer both audited CLEAN in the same pass (no action).
