@@ -298,6 +298,88 @@ describe('WorkspaceDocumentSlideover', () => {
     expect(patches).toHaveLength(0);
   });
 
+  it('switching to a different wdoc while dirty opens the unsaved prompt; Discard lands on the new doc', async () => {
+    // Two real docs: the dirty one (triage) and the switch target (other-agent).
+    // Both must return a valid frontmatter object so the brief render of the
+    // target during the URL revert doesn't crash FrontmatterForm.
+    vi.stubGlobal(
+      'EventSource',
+      class {
+        addEventListener() {}
+        removeEventListener() {}
+        close() {}
+      } as unknown as typeof EventSource,
+    );
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>(async (url) => {
+        const u = String(url);
+        const slug = u.includes('/documents/other-agent') ? 'other-agent' : 'triage';
+        if (u.endsWith('/events')) {
+          return new Response(JSON.stringify({ data: [] }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
+        if (u.includes('/w/main/documents?')) {
+          return new Response(JSON.stringify({ data: [] }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
+        if (u.includes('/w/main/documents/')) {
+          return new Response(
+            JSON.stringify({
+              data: {
+                id: slug === 'other-agent' ? 'd2' : 'd1',
+                slug,
+                type: 'agent',
+                title: slug === 'other-agent' ? 'Other Agent' : 'Triage Agent',
+                status: null,
+                parentId: null,
+                frontmatter: { description: 'x' },
+                body: '# Instructions',
+                createdAt: '2026-01-01',
+                updatedAt: '2026-01-02',
+              },
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+      }),
+    );
+    const { queryClient, router } = setup('?wdoc=triage');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText('Triage Agent');
+    await userEvent.click(screen.getByRole('button', { name: 'More actions' }));
+    await userEvent.click(screen.getByRole('menuitemradio', { name: /Raw markdown/ }));
+    const textarea = await screen.findByRole('textbox');
+    await userEvent.type(textarea, ' edited');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled());
+
+    // Programmatic switch to a different doc (simulates clicking another row).
+    await router.navigate({ to: '.', search: { wdoc: 'other-agent' } });
+
+    // The switch is intercepted: the prompt appears and the URL is reverted to
+    // the still-loaded doc so it isn't swapped out from under the dirty buffer.
+    expect(await screen.findByText(/Unsaved changes/i)).toBeInTheDocument();
+    await waitFor(() =>
+      expect((router.state.location.search as { wdoc?: string }).wdoc).toBe('triage'),
+    );
+
+    // Discard resets the buffer (isDirty → false), proceed() re-applies the
+    // intended switch, and the effect lets it through cleanly → land on the new doc.
+    await userEvent.click(screen.getByRole('button', { name: 'Discard' }));
+    await waitFor(() =>
+      expect((router.state.location.search as { wdoc?: string }).wdoc).toBe('other-agent'),
+    );
+  });
+
   it('renders the icon tab toggles Fields / Activity / Runs for an agent (no Comments)', async () => {
     mockWorkspaceDoc('triage', 'agent');
     const { queryClient, router } = setup('?wdoc=triage');

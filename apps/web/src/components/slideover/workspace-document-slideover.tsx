@@ -82,7 +82,21 @@ export function WorkspaceDocumentSlideover({ wslug }: Props) {
   // stable across the loading→loaded transition.
   const draftDoc = doc ?? { id: '', updatedAt: '', body: '', frontmatter: {} };
   const { draft, setBody, setFrontmatter, isDirty, reset, diff } = useDocumentDraft(draftDoc);
-  const guard = useUnsavedGuard(isDirty);
+
+  // Doc-SWITCH interception needs to know the buffer was dirty at the instant the
+  // URL flips — but switching unloads the old doc and useDocumentDraft re-seeds on
+  // the new load, clearing isDirty before any effect observes it. So we LATCH,
+  // during render, the slug whose buffer is dirty. The latch survives the switch's
+  // re-seed; we release it only when the loaded doc's own buffer goes clean
+  // (save/discard) or when an intercepted switch is resolved (see the effect below).
+  const dirtySlugRef = useRef<string | null>(null);
+  if (doc?.slug && isDirty) dirtySlugRef.current = doc.slug;
+  else if (doc?.slug && doc.slug === dirtySlugRef.current && !isDirty) dirtySlugRef.current = null;
+
+  // The guard prompts while the LATCHED buffer is dirty — not just live isDirty —
+  // so a switch (which re-seeds and clears live isDirty) still routes through the
+  // prompt. The close path benefits too: same dirty signal, no behavior change.
+  const guard = useUnsavedGuard(isDirty || dirtySlugRef.current !== null);
 
   const onSave = async () => {
     if (!doc) return;
@@ -177,6 +191,39 @@ export function WorkspaceDocumentSlideover({ wslug }: Props) {
     void navigate({ to: '.', search: next });
   };
   const close = () => guard.guard(doClose);
+
+  // Guard doc-SWITCH (not just close): if the URL wdoc flips to a DIFFERENT slug
+  // while the buffer is dirty, intercept — revert the URL to the latched (still
+  // dirty) doc and prompt. The guard's queued action re-applies the intended
+  // switch once the buffer is resolved (Save re-seeds, Discard resets).
+  //
+  // Detection runs DURING render (not in a [search.wdoc] effect): switching wdoc
+  // unloads the old doc, and useDocumentDraft re-seeds on the new load, so by the
+  // time an effect fires both isDirty AND the loaded slug have already moved on.
+  // Comparing the committed wdoc to the previous one during render catches the
+  // flip while dirtySlugRef still names the dirty doc.
+  const prevWdocRef = useRef<string | undefined>(search.wdoc);
+  const pendingSwitchRef = useRef<string | null>(null);
+  if (prevWdocRef.current !== search.wdoc) {
+    const incoming = search.wdoc;
+    const dirtySlug = dirtySlugRef.current;
+    if (incoming && dirtySlug && incoming !== dirtySlug) {
+      pendingSwitchRef.current = incoming;
+    }
+    prevWdocRef.current = incoming;
+  }
+  useEffect(() => {
+    const incoming = pendingSwitchRef.current;
+    const dirtySlug = dirtySlugRef.current;
+    pendingSwitchRef.current = null;
+    if (!incoming || !dirtySlug || incoming === dirtySlug) return;
+    // Revert URL to the dirty doc and queue the intended switch behind the guard.
+    // proceed()/cancel() clears the latch (see the dialog handlers) so the guard
+    // stops prompting once the user resolves it.
+    void navigate({ to: '.', search: { ...search, wdoc: dirtySlug } });
+    guard.guard(() => navigate({ to: '.', search: { ...search, wdoc: incoming } }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search.wdoc]);
 
   const onDelete = async () => {
     if (!doc) return;
