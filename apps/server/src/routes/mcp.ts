@@ -169,7 +169,23 @@ mcpRoute.post('/', async (c) => {
       arguments?: Record<string, unknown>;
     };
     try {
-      const result = await executeTool(token, actor.id, params.name ?? '', params.arguments ?? {});
+      const result = await executeTool(
+        token,
+        actor.id,
+        params.name ?? '',
+        params.arguments ?? {},
+        undefined,
+        {
+          // MCP delegation (D2/D3): the bearer TOKEN-HOLDER is the caller, so
+          // the caller authority IS the token's own scopes/projects. The
+          // agent∩caller intersect is a no-op here (token ∩ itself), which
+          // correctly preserves MCP's always-token-scoped authority while
+          // satisfying the executeTool caller contract. Authority is taken from
+          // the authenticated token, NEVER from the request body (D2).
+          callerScopes: token.scopes,
+          callerProjectIds: token.projectIds ?? null,
+        },
+      );
       return c.json<JsonRpcResponse>({ jsonrpc: '2.0', id, result });
     } catch (err) {
       return c.json<JsonRpcResponse>(mapToolErrorToJsonRpc(err, id));
