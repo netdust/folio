@@ -171,9 +171,68 @@ test('POST /statuses: dryRun create does not mutate', async () => {
   const data = (await res.json()).data;
   expect(data.dry_run).toBe(true);
   expect(data.would).toBe('create');
-  expect(data.resource.key).toBe('preview');
+  expect(data.resource.status.key).toBe('preview');
   expect(await statusCount(db, seed.project.id)).toBe(beforeStatuses);
   expect(await eventCount(db)).toBe(beforeEvents);
+});
+
+test('POST /statuses: dryRun resource matches the live created status (minus id)', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const { configWriteToken } = await mintTokens(db, seed);
+  const body = { key: 'parity', name: 'Parity', color: '#123456' };
+
+  const live = await (
+    await app.request(base, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${configWriteToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  ).json();
+  const dry = await (
+    await app.request(base, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${configWriteToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...body, key: 'parity2', dryRun: true }),
+    })
+  ).json();
+
+  // P2-3: dryRun resource equals live `data` (same `status` wrapper), minus the
+  // volatile id + key (key differs to avoid a SLUG_CONFLICT on the seed).
+  const { id: _liveId, key: _liveKey, ...liveRow } = live.data.status;
+  const { id: _dryId, key: _dryKey, ...dryRow } = dry.data.resource.status;
+  expect(dryRow).toEqual(liveRow);
+});
+
+// Finding 1: a live (dryRun:false) PATCH must NOT leak the dryRun flag into the
+// response body or into the emitted event's `changes` array.
+test('PATCH /statuses: dryRun:false does not leak the flag into response or event changes', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const { configWriteToken } = await mintTokens(db, seed);
+  const created = await (
+    await app.request(base, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${configWriteToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key: 'noleak', name: 'No Leak' }),
+    })
+  ).json();
+  const id = created.data.status.id as string;
+
+  const res = await app.request(`${base}/${id}`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${configWriteToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Renamed', dryRun: false }),
+  });
+  expect(res.status).toBe(200);
+  const { data } = await res.json();
+  expect(data.status.name).toBe('Renamed');
+  expect(data.status).not.toHaveProperty('dryRun');
+
+  const evs = await db.select().from(events);
+  const updated = evs.find((e) => e.kind === 'status.updated');
+  expect(updated).toBeDefined();
+  const changes = (updated!.payload as { changes: string[] }).changes;
+  expect(changes).not.toContain('dryRun');
+  expect(changes).toContain('name');
 });
 
 test('DELETE /statuses: dryRun delete on missing status 404s', async () => {

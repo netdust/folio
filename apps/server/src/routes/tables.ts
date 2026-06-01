@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { slugify } from '@folio/shared';
 import { db } from '../db/client.ts';
 import { tables } from '../db/schema.ts';
-import { dryRunResult, isDryRun } from '../lib/dry-run.ts';
+import { dryRunResult, isDryRun, isDryRunDelete } from '../lib/dry-run.ts';
 import { emitEvent, txWithEvents } from '../lib/events.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
 import { slugUniqueInTables } from '../lib/slug-unique.ts';
@@ -141,7 +141,7 @@ tablesRoute.delete('/:tslug', requireScope('config:write'), async (c) => {
   });
   if (!row) throw new HTTPError('TABLE_NOT_FOUND', `table "${tslug}" not found`, 404);
 
-  if (c.req.query('dryRun') === 'true') {
+  if (isDryRunDelete(c)) {
     return jsonOk(c, dryRunResult('delete', { id: row.id, slug: row.slug, name: row.name }));
   }
 

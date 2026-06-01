@@ -8,7 +8,7 @@ import { fields } from '../db/schema.ts';
 import { jsonOk, HTTPError } from '../lib/http.ts';
 import { emitEvent, txWithEvents } from '../lib/events.ts';
 import { FIELD_TYPES, type FieldType, validateTypeChange } from '../lib/field-type-change.ts';
-import { dryRunResult, isDryRun } from '../lib/dry-run.ts';
+import { dryRunResult, isDryRun, isDryRunDelete } from '../lib/dry-run.ts';
 import { listFields } from '../services/fields.ts';
 import { type AuthContext, getUser } from '../middleware/auth.ts';
 import { requireScope } from '../middleware/bearer.ts';
@@ -93,7 +93,7 @@ fieldsRoute.post('/', requireScope('config:write'), zValidator('json', baseSchem
     order: input.order ?? 0,
   };
   if (isDryRun(input)) {
-    return jsonOk(c, dryRunResult('create', row));
+    return jsonOk(c, dryRunResult('create', { field: row }));
   }
   await txWithEvents(db, async (tx) => {
     await tx.insert(fields).values(row);
@@ -120,6 +120,7 @@ fieldsRoute.patch(
     });
     if (!row) throw new HTTPError('FIELD_NOT_FOUND', `field "${id}" not found`, 404);
     const patch = c.req.valid('json');
+    const { dryRun: _dryRun, ...patchFields } = patch;
     const finalType = patch.type ?? row.type;
 
     if (patch.type && patch.type !== row.type) {
@@ -162,7 +163,7 @@ fieldsRoute.patch(
     validateOptions(finalType, finalOptions ?? undefined);
 
     // Persist the (possibly mutated) options.
-    const updatePatch: { type?: FieldType; key?: string; label?: string; options?: string[] | null; order?: number } = { ...patch };
+    const updatePatch: { type?: FieldType; key?: string; label?: string; options?: string[] | null; order?: number } = { ...patchFields };
     if (
       patch.type === 'currency' &&
       row.type !== 'currency' &&
@@ -175,7 +176,7 @@ fieldsRoute.patch(
     }
 
     if (isDryRun(patch)) {
-      return jsonOk(c, dryRunResult('update', { ...row, ...updatePatch }));
+      return jsonOk(c, dryRunResult('update', { field: { ...row, ...updatePatch } }));
     }
 
     await txWithEvents(db, async (tx) => {
@@ -199,7 +200,7 @@ fieldsRoute.delete('/:id', requireScope('config:write'), async (c) => {
     where: and(eq(fields.tableId, t.id), eq(fields.id, id)),
   });
   if (!row) throw new HTTPError('FIELD_NOT_FOUND', `field "${id}" not found`, 404);
-  if (c.req.query('dryRun') === 'true') {
+  if (isDryRunDelete(c)) {
     return jsonOk(c, dryRunResult('delete', { id: row.id, key: row.key }));
   }
   await txWithEvents(db, async (tx) => {

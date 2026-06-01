@@ -7,7 +7,7 @@ import { slugify } from '@folio/shared';
 import { db } from '../db/client.ts';
 import { documents, projects } from '../db/schema.ts';
 import { emitEvent, txWithEvents } from '../lib/events.ts';
-import { dryRunResult, isDryRun } from '../lib/dry-run.ts';
+import { dryRunResult, isDryRun, isDryRunDelete } from '../lib/dry-run.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
 import { requireScope } from '../middleware/bearer.ts';
 import { resolveAgentProjects } from '../lib/agent-projects.ts';
@@ -107,21 +107,22 @@ projectItemRoute.patch(
     const ws = getWorkspace(c);
     const user = getUser(c);
     const patch = c.req.valid('json');
+    const { dryRun: _dryRun, ...patchFields } = patch;
     const now = new Date();
     if (isDryRun(patch)) {
-      return jsonOk(c, dryRunResult('update', { ...p, ...patch, updatedAt: now }));
+      return jsonOk(c, dryRunResult('update', { ...p, ...patchFields, updatedAt: now }));
     }
     await txWithEvents(db, async (tx) => {
-      await tx.update(projects).set({ ...patch, updatedAt: now }).where(eq(projects.id, p.id));
+      await tx.update(projects).set({ ...patchFields, updatedAt: now }).where(eq(projects.id, p.id));
       await emitEvent(tx, {
         workspaceId: ws.id,
         projectId: p.id,
         kind: 'project.updated',
         actor: user.id,
-        payload: { changes: Object.keys(patch) },
+        payload: { changes: Object.keys(patchFields) },
       });
     });
-    return jsonOk(c, { ...p, ...patch, updatedAt: now });
+    return jsonOk(c, { ...p, ...patchFields, updatedAt: now });
   },
 );
 
@@ -130,7 +131,7 @@ projectItemRoute.delete('/', requireScope('config:write'), async (c) => {
   const p = getProject(c);
   const ws = getWorkspace(c);
 
-  if (c.req.query('dryRun') === 'true') {
+  if (isDryRunDelete(c)) {
     return jsonOk(c, dryRunResult('delete', { id: p.id, slug: p.slug, name: p.name }));
   }
 

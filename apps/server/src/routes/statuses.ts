@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { db } from '../db/client.ts';
 import { documents, statuses } from '../db/schema.ts';
 import { jsonOk, HTTPError } from '../lib/http.ts';
-import { dryRunResult, isDryRun } from '../lib/dry-run.ts';
+import { dryRunResult, isDryRun, isDryRunDelete } from '../lib/dry-run.ts';
 import { emitEvent, txWithEvents } from '../lib/events.ts';
 import { listStatuses } from '../services/statuses.ts';
 import { type AuthContext, getUser } from '../middleware/auth.ts';
@@ -59,7 +59,7 @@ statusesRoute.post(
       order: input.order ?? 0,
     };
     if (isDryRun(input)) {
-      return jsonOk(c, dryRunResult('create', row));
+      return jsonOk(c, dryRunResult('create', { status: row }));
     }
     await txWithEvents(db, async (tx) => {
       await tx.insert(statuses).values(row);
@@ -97,24 +97,25 @@ statusesRoute.patch(
     });
     if (!row) throw new HTTPError('STATUS_NOT_FOUND', `status "${id}" not found`, 404);
     const patch = c.req.valid('json');
+    const { dryRun: _dryRun, ...patchFields } = patch;
     if (isDryRun(patch)) {
-      return jsonOk(c, dryRunResult('update', { ...row, ...patch }));
+      return jsonOk(c, dryRunResult('update', { status: { ...row, ...patchFields } }));
     }
 
     await txWithEvents(db, async (tx) => {
-      if (patch.key && patch.key !== row.key) {
+      if (patchFields.key && patchFields.key !== row.key) {
         await tx.update(documents)
-          .set({ status: patch.key })
+          .set({ status: patchFields.key })
           .where(and(eq(documents.tableId, t.id), eq(documents.status, row.key)));
       }
-      await tx.update(statuses).set(patch).where(eq(statuses.id, id));
+      await tx.update(statuses).set(patchFields).where(eq(statuses.id, id));
       await emitEvent(tx, {
         workspaceId: ws.id, projectId: p.id, kind: 'status.updated', actor: user.id,
-        payload: { id, changes: Object.keys(patch) },
+        payload: { id, changes: Object.keys(patchFields) },
       });
     });
 
-    return jsonOk(c, { status: { ...row, ...patch } });
+    return jsonOk(c, { status: { ...row, ...patchFields } });
   },
 );
 
@@ -137,7 +138,7 @@ statusesRoute.delete('/:id', requireScope('config:write'), async (c) => {
     throw new HTTPError('STATUS_IN_USE', `status "${row.key}" is used by ${usage!.n} document(s)`, 409);
   }
 
-  if (c.req.query('dryRun') === 'true') {
+  if (isDryRunDelete(c)) {
     return jsonOk(c, dryRunResult('delete', { id: row.id, key: row.key }));
   }
 

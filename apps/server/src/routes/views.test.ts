@@ -228,7 +228,7 @@ test('POST /views: dryRun create does not mutate', async () => {
   const data = (await res.json()).data;
   expect(data.dry_run).toBe(true);
   expect(data.would).toBe('create');
-  expect(data.resource.name).toBe('Preview');
+  expect(data.resource.view.name).toBe('Preview');
   expect(await viewCount(db, seed.project.id)).toBe(beforeViews);
   expect(await eventCount(db)).toBe(beforeEvents);
 });
@@ -293,7 +293,9 @@ test('POST /views: dryRun resource matches the live created view (minus id)', as
     })
   ).json();
 
+  // P2-3: the dryRun resource equals the live success `data` (same wrapper key),
+  // minus the volatile id. Proves the preview shape matches the real response.
   const { id: _liveId, ...liveRow } = live.data.view;
-  const { id: _dryId, ...dryRow } = dry.data.resource;
+  const { id: _dryId, ...dryRow } = dry.data.resource.view;
   expect(dryRow).toEqual(liveRow);
 });

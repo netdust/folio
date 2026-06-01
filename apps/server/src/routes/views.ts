@@ -8,7 +8,7 @@ import { db } from '../db/client.ts';
 import { views } from '../db/schema.ts';
 import { jsonOk, HTTPError } from '../lib/http.ts';
 import { emitEvent, txWithEvents } from '../lib/events.ts';
-import { dryRunResult, isDryRun } from '../lib/dry-run.ts';
+import { dryRunResult, isDryRun, isDryRunDelete } from '../lib/dry-run.ts';
 import { listViews } from '../services/views.ts';
 import { type AuthContext, getUser } from '../middleware/auth.ts';
 import { requireScope } from '../middleware/bearer.ts';
@@ -70,7 +70,7 @@ viewsRoute.post('/', requireScope('config:write'), zValidator('json', baseSchema
     isDefault: input.isDefault ?? false,
   };
   if (isDryRun(input)) {
-    return jsonOk(c, dryRunResult('create', row));
+    return jsonOk(c, dryRunResult('create', { view: row }));
   }
   await txWithEvents(db, async (tx) => {
     await tx.insert(views).values(row);
@@ -94,18 +94,19 @@ viewsRoute.patch('/:id', requireScope('config:write'), zValidator('json', baseSc
   if (!row) throw new HTTPError('VIEW_NOT_FOUND', `view "${id}" not found`, 404);
   const patch = c.req.valid('json');
   if (patch.filters !== undefined) validateFilters(patch.filters);
+  const { dryRun: _dryRun, ...patchFields } = patch;
   if (isDryRun(patch)) {
-    return jsonOk(c, dryRunResult('update', { ...row, ...patch }));
+    return jsonOk(c, dryRunResult('update', { view: { ...row, ...patchFields } }));
   }
 
   await txWithEvents(db, async (tx) => {
-    await tx.update(views).set(patch).where(eq(views.id, id));
+    await tx.update(views).set(patchFields).where(eq(views.id, id));
     await emitEvent(tx, {
       workspaceId: ws.id, projectId: p.id, kind: 'view.updated', actor: user.id,
-      payload: { id, changes: Object.keys(patch) },
+      payload: { id, changes: Object.keys(patchFields) },
     });
   });
-  return jsonOk(c, { view: { ...row, ...patch } });
+  return jsonOk(c, { view: { ...row, ...patchFields } });
 });
 
 viewsRoute.delete('/:id', requireScope('config:write'), async (c) => {
@@ -118,7 +119,7 @@ viewsRoute.delete('/:id', requireScope('config:write'), async (c) => {
     where: and(eq(views.tableId, t.id), eq(views.id, id)),
   });
   if (!row) throw new HTTPError('VIEW_NOT_FOUND', `view "${id}" not found`, 404);
-  if (c.req.query('dryRun') === 'true') {
+  if (isDryRunDelete(c)) {
     return jsonOk(c, dryRunResult('delete', { id: row.id, name: row.name }));
   }
   await txWithEvents(db, async (tx) => {

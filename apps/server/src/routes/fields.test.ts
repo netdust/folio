@@ -326,9 +326,36 @@ test('POST /fields: dryRun create does not mutate', async () => {
   const data = (await res.json()).data;
   expect(data.dry_run).toBe(true);
   expect(data.would).toBe('create');
-  expect(data.resource.key).toBe('preview_field');
+  expect(data.resource.field.key).toBe('preview_field');
   expect(await fieldCount(db, seed.project.id)).toBe(beforeFields);
   expect(await eventCount(db)).toBe(beforeEvents);
+});
+
+test('POST /fields: dryRun resource matches the live created field (minus id)', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const { configWriteToken } = await mintTokens(db, seed);
+  const body = { key: 'parity_field', type: 'text' as const, label: 'Parity' };
+
+  const live = await (
+    await app.request(path, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${configWriteToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  ).json();
+  const dry = await (
+    await app.request(path, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${configWriteToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...body, key: 'parity_field2', dryRun: true }),
+    })
+  ).json();
+
+  // P2-3: dryRun resource equals live `data` (same `field` wrapper), minus
+  // the volatile id + key (key differs to avoid a SLUG_CONFLICT on the seed).
+  const { id: _liveId, key: _liveKey, ...liveRow } = live.data.field;
+  const { id: _dryId, key: _dryKey, ...dryRow } = dry.data.resource.field;
+  expect(dryRow).toEqual(liveRow);
 });
 
 test('DELETE /fields: dryRun delete on missing field 404s', async () => {
