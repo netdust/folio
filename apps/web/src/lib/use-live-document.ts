@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useEventStream, type StreamedEvent } from './api/event-stream.ts';
 
 export interface ExternalUpdate {
@@ -32,6 +32,15 @@ export function useLiveDocument({ wslug, docId, isDirty, onRefetch }: UseLiveDoc
   dismiss: () => void;
 } {
   const [externalUpdate, setExternalUpdate] = useState<ExternalUpdate | null>(null);
+
+  // Clear a stale 'updated' banner once the draft goes clean (the user saved or
+  // discarded) — otherwise the banner lingers on a document the user just wrote.
+  // A 'deleted' banner persists regardless: the document is gone, not editable.
+  useEffect(() => {
+    if (!isDirty) {
+      setExternalUpdate((cur) => (cur?.kind === 'updated' ? null : cur));
+    }
+  }, [isDirty]);
 
   useEventStream(wslug, { kinds: ['document.updated', 'document.deleted'] }, (e: StreamedEvent) => {
     if (e.documentId !== docId) return;

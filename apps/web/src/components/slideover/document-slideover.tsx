@@ -45,6 +45,7 @@ import { ActivityPanel } from './activity-panel.tsx';
 import { CommentsTab } from '../comments/comments-tab.tsx';
 import { useDocumentDraft } from '../../lib/use-document-draft.ts';
 import { useLiveDocument } from '../../lib/use-live-document.ts';
+import { ExternalUpdateBanner } from './external-update-banner.tsx';
 import { SaveButton } from './save-button.tsx';
 import { useQueryClient } from '@tanstack/react-query';
 import { documentsKeys } from '../../lib/api/documents.ts';
@@ -490,40 +491,15 @@ function DocumentSlideoverInner({
   return (
     <div className="flex h-full flex-col">
       {externalUpdate && (
-        <div
-          role="status"
-          className="mb-2 flex flex-shrink-0 items-center gap-2 rounded border border-border-light bg-card px-3 py-1.5 text-xs text-fg-2"
-        >
-          <span>
-            {externalUpdate.kind === 'deleted'
-              ? 'This document was deleted.'
-              : `Updated by ${externalUpdate.actor ?? 'someone'}.`}
-          </span>
-          <div className="ml-auto flex items-center gap-1.5">
-            {externalUpdate.kind === 'updated' && (
-              <button
-                type="button"
-                className="rounded px-1.5 py-0.5 font-medium text-fg hover:bg-bg"
-                onClick={() => {
-                  dismiss();
-                  reset();
-                  void qc.invalidateQueries({
-                    queryKey: documentsKeys.detail(wslug, pslug, doc.slug),
-                  });
-                }}
-              >
-                Reload
-              </button>
-            )}
-            <button
-              type="button"
-              className="rounded px-1.5 py-0.5 text-fg-3 hover:bg-bg hover:text-fg"
-              onClick={dismiss}
-            >
-              Dismiss
-            </button>
-          </div>
-        </div>
+        <ExternalUpdateBanner
+          update={externalUpdate}
+          onDismiss={dismiss}
+          onReload={() => {
+            dismiss();
+            reset();
+            void qc.invalidateQueries({ queryKey: documentsKeys.detail(wslug, pslug, doc.slug) });
+          }}
+        />
       )}
       <div className="min-h-0 flex-1">
         <SlideoverBody

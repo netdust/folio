@@ -65,6 +65,33 @@ describe('useLiveDocument (notify-don\'t-stomp)', () => {
     expect(result.current.externalUpdate).toBeNull();
   });
 
+  it('clears a stale updated banner when the draft goes clean (user saved)', () => {
+    calls.length = 0;
+    let dirty = true;
+    const { result, rerender } = renderHook(
+      ({ isDirty }) => useLiveDocument({ wslug: 'acme', docId: 'd1', isDirty, onRefetch: vi.fn() }),
+      { initialProps: { isDirty: dirty } },
+    );
+    act(() => calls[0]!.onEvent({ kind: 'document.updated', documentId: 'd1' }));
+    expect(result.current.externalUpdate).toMatchObject({ kind: 'updated' });
+    // User saves → draft becomes clean → stale banner clears.
+    dirty = false;
+    rerender({ isDirty: dirty });
+    expect(result.current.externalUpdate).toBeNull();
+  });
+
+  it('keeps a deleted banner even when the draft is clean', () => {
+    calls.length = 0;
+    const { result, rerender } = renderHook(
+      ({ isDirty }) => useLiveDocument({ wslug: 'acme', docId: 'd1', isDirty, onRefetch: vi.fn() }),
+      { initialProps: { isDirty: false } },
+    );
+    act(() => calls[0]!.onEvent({ kind: 'document.deleted', documentId: 'd1' }));
+    expect(result.current.externalUpdate).toMatchObject({ kind: 'deleted' });
+    rerender({ isDirty: false });
+    expect(result.current.externalUpdate).toMatchObject({ kind: 'deleted' });
+  });
+
   it('dismiss clears the banner', () => {
     calls.length = 0;
     const { result } = renderHook(() =>
