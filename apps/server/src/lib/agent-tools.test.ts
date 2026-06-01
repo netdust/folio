@@ -1158,3 +1158,50 @@ describe('find_documents: workspace-wide title lookup, allow-list enforced', () 
     expect(slugs).toContain('web');
   });
 });
+
+describe('describe_workspace: one-call orientation, allow-list enforced', () => {
+  it('returns projects → tables → status keys', async () => {
+    const { db, seed } = await makeTestApp();
+    const token = await seedHumanPat(db, seed.workspace.id, seed.user.id, ['documents:read']);
+    const res = (await executeTool(token, seed.user.id, 'describe_workspace', {
+      workspace_slug: 'acme',
+    })) as { content: { text: string }[] };
+    const out = JSON.parse(res.content[0]!.text) as {
+      workspace: { slug: string };
+      projects: { slug: string; tables: { statuses: { key: string }[] }[] }[];
+    };
+    expect(out.workspace.slug).toBe('acme');
+    const web = out.projects.find((p) => p.slug === 'web');
+    expect(web).toBeTruthy();
+    expect(web!.tables[0]!.statuses.map((s) => s.key)).toContain('todo');
+  });
+
+  it('omits non-allow-listed projects (agent token)', async () => {
+    const { db, seed } = await makeTestApp();
+
+    // Second project ('ops') in the SAME workspace — exists, so it would appear
+    // absent the allow-list.
+    const projectBId = nanoid();
+    await db.insert(projects).values({
+      id: projectBId,
+      workspaceId: seed.workspace.id,
+      slug: 'ops',
+      name: 'Ops',
+    });
+    await seedProjectDefaults(db, projectBId);
+
+    // Agent token allow-listed to ONLY the 'web' project (frontmatter.projects).
+    const { token: agentToken, agentSlug } = await seedAgent(
+      db,
+      seed.workspace.id,
+      seed.user.id,
+      { projects: [seed.project.id], scopes: ['documents:read'] },
+    );
+
+    const res = (await executeTool(agentToken, `agent:${agentSlug}`, 'describe_workspace', {
+      workspace_slug: 'acme',
+    })) as { content: { text: string }[] };
+    const out = JSON.parse(res.content[0]!.text) as { projects: { slug: string }[] };
+    expect(out.projects.map((p) => p.slug).sort()).toEqual(['web']); // 'ops' absent
+  });
+});

@@ -532,6 +532,56 @@ export function registerRealTools(): void {
   });
 
   registerTool({
+    name: 'describe_workspace',
+    description:
+      "One-call orientation: every allow-listed project, its tables, and each table's status keys. Call this first to learn the workspace shape.",
+    inputSchema: {
+      type: 'object',
+      properties: { workspace_slug: { type: 'string' } },
+      required: ['workspace_slug'],
+    },
+    requiredScope: 'documents:read',
+    schema: z.object({ workspace_slug: z.string() }).strict(),
+    handler: async (args, ctx) => {
+      const { token } = ctx;
+      const ws = await resolveWorkspaceForToken(token, args);
+      const all = await db.query.projects.findMany({ where: eq(projects.workspaceId, ws.id) });
+
+      let visible = all;
+      if (token.agentId) {
+        const agent = await db.query.documents.findFirst({
+          where: and(eq(documents.id, token.agentId), eq(documents.type, 'agent')),
+        });
+        const agentProjects = agent ? resolveAgentProjects(agent) : ['*'];
+        const effective = intersectAgentProjects(agentProjects, token.projectIds ?? null);
+        visible = effective.includes('*') ? all : all.filter((p) => effective.includes(p.id));
+      }
+
+      const projectsOut = [];
+      for (const p of visible) {
+        const tbls = await db.query.tables.findMany({
+          where: eq(tablesTable.projectId, p.id),
+          orderBy: (t, { asc }) => [asc(t.order)],
+        });
+        const tablesOut = [];
+        for (const t of tbls) {
+          const statuses = await listStatuses(t.id);
+          tablesOut.push({
+            slug: t.slug,
+            statuses: statuses.map((s) => ({ key: s.key, name: s.name, category: s.category })),
+          });
+        }
+        projectsOut.push({ slug: p.slug, name: p.name, tables: tablesOut });
+      }
+
+      return textResult({
+        workspace: { slug: ws.slug, name: ws.name },
+        projects: projectsOut,
+      });
+    },
+  });
+
+  registerTool({
     name: 'get_document',
     description: 'Get a single document with frontmatter + body.',
     inputSchema: {
