@@ -10,12 +10,14 @@ import { test, expect } from 'bun:test';
 import { and, eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { makeTestApp } from '../test/harness.ts';
-import { apiTokens, documents, tables } from '../db/schema.ts';
+import { seedProjectDefaults } from '../lib/seed-project-defaults.ts';
+import { apiTokens, documents, projects, tables } from '../db/schema.ts';
 import type { Document } from '../db/schema.ts';
 import { HTTPError } from '../lib/http.ts';
 import {
   createDocument,
   deleteDocument,
+  findDocumentsInProjects,
   getDocument,
   listDocuments,
   updateDocument,
@@ -1022,4 +1024,49 @@ test('listDocuments with no type excludes comment and agent_run', async () => {
   expect(types.has('agent_run')).toBe(false);
   expect(types.has('work_item')).toBe(true);
   expect(types.has('page')).toBe(true);
+});
+
+test('findDocumentsInProjects searches only the given project ids', async () => {
+  const { db, seed } = await makeTestApp();
+  const tableA = await getWorkItemsTable(db, seed.project.id);
+
+  // Second project in the SAME workspace — mirror the harness: insert a
+  // projects row then seedProjectDefaults so it gets a work-items table.
+  const projectBId = nanoid();
+  await db.insert(projects).values({
+    id: projectBId,
+    workspaceId: seed.workspace.id,
+    slug: 'ops',
+    name: 'Ops',
+  });
+  await seedProjectDefaults(db, projectBId);
+  const projectB = (await db.query.projects.findFirst({
+    where: eq(projects.id, projectBId),
+  }))!;
+  const tableB = await getWorkItemsTable(db, projectBId);
+
+  await createDocument({
+    workspace: seed.workspace,
+    project: seed.project,
+    table: tableA,
+    actor: seed.user,
+    token: null,
+    input: { type: 'work_item', title: 'Combell hosting', body: '', frontmatter: {}, status: null },
+  });
+  await createDocument({
+    workspace: seed.workspace,
+    project: projectB,
+    table: tableB,
+    actor: seed.user,
+    token: null,
+    input: { type: 'work_item', title: 'Combell billing', body: '', frontmatter: {}, status: null },
+  });
+
+  const res = await findDocumentsInProjects({
+    projectIds: [seed.project.id],
+    titleQuery: 'combell',
+    limit: 25,
+  });
+  expect(res.map((d) => d.projectId)).toEqual([seed.project.id]); // B excluded
+  expect(res[0]!.title).toBe('Combell hosting');
 });

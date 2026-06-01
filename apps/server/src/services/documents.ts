@@ -400,6 +400,41 @@ export async function listDocuments(
   return { data: page, nextCursor };
 }
 
+export interface FindDocumentsOptions {
+  projectIds: string[]; // already resolved to the caller's allow-listed set
+  titleQuery: string;
+  /** Restrict to authorable types; defaults to work_item + page. */
+  types?: ('work_item' | 'page')[];
+  limit?: number;
+}
+
+/**
+ * Workspace-wide title search across an EXPLICIT project-id allow-list.
+ * Callers (find_documents) resolve the allow-list first; this function never
+ * widens it. agent_run + comment are always excluded.
+ */
+export async function findDocumentsInProjects(
+  opts: FindDocumentsOptions,
+): Promise<Document[]> {
+  if (opts.projectIds.length === 0) return [];
+  const limit = Math.min(200, opts.limit ?? 25);
+  const q = opts.titleQuery.trim();
+  if (q.length === 0) return [];
+  const pattern = `%${q.replace(/[%_\\]/g, '\\$&')}%`;
+  const allowedTypes = opts.types ?? ['work_item', 'page'];
+
+  const rows = await db.query.documents.findMany({
+    where: and(
+      inArray(documents.projectId, opts.projectIds),
+      inArray(documents.type, allowedTypes),
+      sql`${documents.title} LIKE ${pattern} ESCAPE '\\' COLLATE NOCASE`,
+    ),
+    orderBy: (t, { desc }) => [desc(t.updatedAt)],
+    limit,
+  });
+  return rows;
+}
+
 export async function getDocument(
   projectId: string,
   slug: string,
