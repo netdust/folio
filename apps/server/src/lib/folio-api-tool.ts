@@ -224,5 +224,41 @@ export function registerFolioApiTools(): void {
       return { status: res.status, body: json };
     },
   });
-  // folio_api (write) registered in Task 5.
+  registerTool({
+    name: 'folio_api',
+    description:
+      'Write a Folio resource. method ∈ POST|PATCH|PUT|DELETE; path is a relative /api/v1/... path. ' +
+      'High-risk actions are NOT applied automatically — the proposed plan is returned for approval. ' +
+      'Use folio_api_get for reads.',
+    requiredScope: 'config:write',
+    schema: z
+      .object({
+        method: z.enum(['POST', 'PATCH', 'PUT', 'DELETE']), // P3-6: no GET
+        path: z.string(),
+        body: z.record(z.unknown()).optional(),
+      })
+      .strict(),
+    handler: async (
+      args: { method: string; path: string; body?: Record<string, unknown> },
+      ctx: ToolContext,
+    ) => {
+      const body = args.body ?? {};
+      const tier = classifyRisk(args.method, args.path, body);
+      if (tier === 'high') {
+        // REFUSE high-risk WITHOUT dispatching (P3-7). High-risk routes are
+        // session-only + dryRun-less, so we never attempt them — we return a
+        // structured plan describing the proposed action for human review.
+        // TODO(approval-gate): replace refuse with request_approval +
+        // running→awaiting_approval once the PAUSE side lands (localized swap).
+        return {
+          refused: true,
+          reason: 'high-risk action requires human approval; not applied',
+          plan: { risk: tier, method: args.method, path: args.path, body },
+        };
+      }
+      const res = await dispatchAsCaller(ctx.token, args.method, args.path, body);
+      const json = await res.json().catch(() => null);
+      return { status: res.status, body: json };
+    },
+  });
 }

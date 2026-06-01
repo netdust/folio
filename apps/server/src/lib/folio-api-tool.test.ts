@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { eq } from 'drizzle-orm';
 import { db } from '../db/client.ts';
-import { apiTokens, type ApiToken } from '../db/schema.ts';
+import { apiTokens, type ApiToken, workspaces } from '../db/schema.ts';
 import { makeTestApp } from '../test/harness.ts';
 import { executeTool } from './agent-tools.ts';
 import { registerRealTools } from './agent-tools-registry.ts';
@@ -353,5 +353,77 @@ describe('folio_api_get tool (P3-4/6)', () => {
     )) as { status: number; body: unknown };
     expect(out.status).toBe(200); // hit the real handler, not a 404
     expect(JSON.stringify(out)).not.toMatch(/encrypted_?[Kk]ey/);
+  });
+});
+
+describe('folio_api write tool (P3-6/7)', () => {
+  test('folio_api rejects method GET (P3-6)', async () => {
+    const { seed } = await makeTestApp();
+    const tok = callerToken({
+      workspaceId: seed.workspace.id,
+      scopes: ['config:write', 'documents:read'],
+      createdBy: seed.user.id,
+    });
+    await expect(
+      executeTool(
+        tok,
+        'agent:op',
+        'folio_api',
+        {
+          method: 'GET',
+          path: `/api/v1/w/${seed.workspace.slug}/p/${seed.project.slug}/tables`,
+          body: {},
+        },
+        undefined,
+        { callerScopes: tok.scopes },
+      ),
+    ).rejects.toThrow();
+  });
+
+  test('folio_api medium write (config) executes → 201 (P3-7)', async () => {
+    const { seed } = await makeTestApp();
+    const tok = callerToken({
+      workspaceId: seed.workspace.id,
+      scopes: ['config:write', 'documents:read'],
+      createdBy: seed.user.id,
+    });
+    const out = (await executeTool(
+      tok,
+      'agent:op',
+      'folio_api',
+      {
+        method: 'POST',
+        path: `/api/v1/w/${seed.workspace.slug}/p/${seed.project.slug}/tables`,
+        body: { name: 'Sprints' },
+      },
+      undefined,
+      { callerScopes: tok.scopes },
+    )) as { status: number; body: unknown };
+    expect(out.status).toBe(201);
+  });
+
+  test('folio_api high-risk REFUSES without dispatching or mutating (P3-7)', async () => {
+    const { seed, db: testDb } = await makeTestApp();
+    const tok = callerToken({
+      workspaceId: seed.workspace.id,
+      scopes: ['config:write', 'documents:read'],
+      createdBy: seed.user.id,
+    });
+    const before = (await testDb.select().from(workspaces)).length;
+    const tokensBefore = await countTokens();
+    const out = (await executeTool(
+      tok,
+      'agent:op',
+      'folio_api',
+      { method: 'DELETE', path: `/api/v1/w/${seed.workspace.slug}`, body: {} },
+      undefined,
+      { callerScopes: tok.scopes },
+    )) as { refused: boolean; plan: { risk: string; method: string; path: string } };
+    expect(out.refused).toBe(true);
+    expect(out.plan).toBeDefined();
+    expect(out.plan.risk).toBe('high');
+    expect(out.plan.method).toBe('DELETE');
+    expect((await testDb.select().from(workspaces)).length).toBe(before); // no mutation
+    expect(await countTokens()).toBe(tokensBefore); // high branch did NOT mint
   });
 });
