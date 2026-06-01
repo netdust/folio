@@ -694,6 +694,20 @@ Run: `cd apps/server && bun x tsc --noEmit` (web/shared unchanged but run them i
 
 ---
 
+## Execution outcomes (2026-06-01)
+
+Built subagent-driven on branch **`fix/token-mint-scope-ceiling`** (NOT `phase-op-2/…` — see `project_phase-op-2-on-fix-branch`; a mid-session branch switch folded Stefan's mint-ceiling fix into this branch, kept together deliberately). All 9 tasks shipped, each two-stage-reviewed (most via one combined review for the verified template mirrors; tables/projects/the auth-fix got full separate spec+quality passes):
+
+- **T1** `763df41`+`32be8e1` — `config:write` added to `ALL_DOCUMENT_SCOPES` (owner/admin only) + `CONFIG_WRITE_TOOLS`→`folio_api` in `toolsToScopes`. Reviewer confirmed it's MINTABLE (`z.array(z.string())`, no enum).
+- **T2** `8f8be01` — `lib/dry-run.ts` (`dryRunResult`/`isDryRun`).
+- **T3 tables** `e7ff11f` · **T4 fields** `24c62a6` · **T5 views** `fa1fd02` · **T6 statuses** `a2069a5`+`1e37155` (in-use 409 guard test) — each: dead scope → `config:write`, dryRun on POST/PATCH (validated json) + DELETE (`?dryRun=true`), early-return AFTER all validation/404/409 checks, before `txWithEvents`. Reviewers verified the per-resource validation-ordering (filters/options/type-change/in-use/key-conflict) is never jumped by the dryRun return.
+- **T7 projects** `fcc9433` — ADDED `requireScope('config:write')` (routes were scope-less-but-bearer-OK) + dryRun; owner-role DELETE gate preserved; `workspaces.ts` untouched (P2-5 regression test green). Reviewer traced Drizzle source: stray `dryRun` in `.set()` is safely ignored.
+- **T8** `a2821fb` — proof that `config:write` inherits the Phase-1 `executeTool` double-membership ceiling (owner-delegated runs, member denied, agent-token-lacks-scope denied).
+- **Companion auth fix** `9f75c40` (Stefan) — `POST /tokens` validates requested scopes against `roleToScopes(role)`; member can't mint `config:write`. Security-reviewed APPROVED, 0 issues.
+- **T9 gate** — server **1130**/1-skip/0, shared **63**/0, web **741**/8-skip/0 (web untouched), tsc clean ×3, NO migration. Follow-up **OP2-F1** (token-create modal offers the 4 now-dead scopes) tracked in `tasks/retro-follow-ups.md`.
+
+**Remaining gates (user-run):** `/code-review high` over the branch diff (threat model P2-1…P2-8 + the inherited Phase-1 ceiling + the companion auth fix as input), `/shakeout`, merge.
+
 ## Execution Handoff
 
 Plan complete. Recommended: **subagent-driven** (`superpowers:subagent-driven-development` via `netdust-core:ntdst-execute-with-tests`) — fresh subagent per task, two-stage review (spec then quality) per task, controller verifies the named P2-mitigation per task. After Task 9: `/code-review high` with the threat model as input, then `/integration`, `/shakeout`, merge.
