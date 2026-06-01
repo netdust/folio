@@ -57,6 +57,22 @@ const AGENT_WRITE_TOOLS: ReadonlySet<string> = new Set([
   'create_agent', 'update_agent', 'delete_agent',
 ]);
 
+/**
+ * The complete set of document scopes a fully-privileged caller (owner/admin)
+ * may delegate. Mirrors the four scopes the tool registry gates on
+ * (documents:read/write/delete + agents:write).
+ */
+const ALL_DOCUMENT_SCOPES = ['documents:read', 'documents:write', 'documents:delete', 'agents:write'] as const;
+
+/** Human analog of toolsToScopes: map a workspace membership role to the scope
+ *  set a delegated run may use on that caller's behalf (Phase 1 delegation).
+ *  owner/admin → all scopes; member → day-to-day read+write (NOT delete, NOT
+ *  agents:write). The run's effective authority is still agent ∩ caller. */
+export function roleToScopes(role: 'owner' | 'admin' | 'member'): string[] {
+  if (role === 'owner' || role === 'admin') return [...ALL_DOCUMENT_SCOPES];
+  return ['documents:read', 'documents:write'];
+}
+
 /** Translate the agent's tool whitelist into the matching set of token scopes. */
 export function toolsToScopes(tools: readonly string[]): string[] {
   const scopes = new Set<string>();

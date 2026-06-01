@@ -264,6 +264,59 @@ test('MCP tools/call delete_document requires documents:delete and removes the d
   expect(lookupBody.error!.message).toMatch(/document not found/);
 });
 
+test('tools/call ignores any caller authority smuggled in params (D2 — token is the authority)', async () => {
+  // D2 lock: the bearer token is the SOLE source of caller authority. A client
+  // that forges caller_scopes / callerScopes in the request body must NOT gain
+  // the scope it lacks. Here the token holds only write+read (no
+  // documents:delete); the body smuggles documents:delete via every plausible
+  // shape. delete_document must still be denied for the missing scope.
+  const { app, seed } = await makeTestApp();
+  const writeOnly = await setupToken(seed.workspace.id, seed.user.id, [
+    'documents:write',
+    'documents:read',
+  ]);
+  const created = await callTool(app, writeOnly, 'create_document', {
+    workspace_slug: 'acme',
+    project_slug: 'web',
+    type: 'work_item',
+    title: 'd2-guard',
+  });
+  const createdBody = (await created.json()) as { result: { content: { text: string }[] } };
+  const createdDoc = JSON.parse(createdBody.result.content[0]!.text) as { slug: string };
+
+  const res = await app.request('/mcp', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${writeOnly}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      // Forged authority at both the params level and inside arguments — none of
+      // it must be honored. Authority comes only from the authenticated token.
+      caller_scopes: ['documents:delete'],
+      callerScopes: ['documents:delete'],
+      callerProjectIds: null,
+      params: {
+        name: 'delete_document',
+        caller_scopes: ['documents:delete'],
+        callerScopes: ['documents:delete'],
+        arguments: {
+          workspace_slug: 'acme',
+          project_slug: 'web',
+          slug: createdDoc.slug,
+          caller_scopes: ['documents:delete'],
+          callerScopes: ['documents:delete'],
+          callerProjectIds: null,
+        },
+      },
+    }),
+  });
+  const body = (await res.json()) as { error?: { message: string }; result?: unknown };
+  expect(body.result).toBeUndefined();
+  expect(body.error).toBeDefined();
+  expect(body.error!.message).toMatch(/documents:delete/);
+});
+
 test('MCP tools/call list_statuses returns the seeded default statuses', async () => {
   const { app, seed } = await makeTestApp();
   const token = await setupToken(seed.workspace.id, seed.user.id, ['documents:read']);

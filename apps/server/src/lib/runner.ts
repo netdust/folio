@@ -49,6 +49,7 @@ import {
   transitionRun,
 } from '../services/agent-runs.ts';
 import { runClaudeCode, type SpawnFn } from './cc-executor.ts';
+import { intersectAgentProjects } from './agent-projects.ts';
 import { type AuthorContext, createComment, listComments } from '../services/comments.ts';
 import {
   type AgentRunFrontmatter,
@@ -108,7 +109,7 @@ export function __setCcSpawnForTest(fn: SpawnFn | undefined): void {
 // Loaded context
 // ---------------------------------------------------------------------------
 
-interface RunContext {
+export interface RunContext {
   run: Document;
   fm: AgentRunFrontmatter;
   /** Guaranteed non-null: loadContext returns null when run.parentId is absent. */
@@ -136,6 +137,15 @@ interface RunContext {
   authorContext: AuthorContext;
   apiKey: string;
   baseUrl: string | undefined;
+  /**
+   * Phase 1 delegation (D1, D8): the caller's authority snapshot, read from the
+   * run's frontmatter (stamped server-side at createRun). Threaded into every
+   * executeTool call so the run's effective authority is agent ∩ caller.
+   * FAIL CLOSED: a run missing the snapshot reads `[]` (deny-all scopes). The
+   * caller PROJECT narrowing is applied centrally to `token.projectIds` in
+   * loadContext (see the narrowedToken fold) — it is NOT threaded per-tool.
+   */
+  callerScopes: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -266,7 +276,9 @@ export async function runAgentResume(args: { runId: string }): Promise<void> {
 // Context loading
 // ---------------------------------------------------------------------------
 
-async function loadContext(runId: string): Promise<RunContext | null> {
+// Exported for the delegation fold regression tests (runner.test.ts asserts
+// ctx.token.projectIds is caller-narrowed). Not part of the public runner API.
+export async function loadContext(runId: string): Promise<RunContext | null> {
   const run = await db.query.documents.findFirst({
     where: and(eq(documents.id, runId), eq(documents.type, 'agent_run')),
   });
@@ -309,6 +321,20 @@ async function loadContext(runId: string): Promise<RunContext | null> {
   });
   if (!token) return null;
 
+  // Caller-identity delegation (central project clamp). Narrow the agent
+  // token's project reach to the CALLER's project set ONCE here, so every
+  // downstream `intersectAgentProjects(agentProjects, token.projectIds)` — in
+  // the registry tools AND the ccExecute ephemeral-token mint (which copies
+  // ctx.token.projectIds) — automatically enforces agent ∩ token ∩ caller. This
+  // gives the PROJECT ceiling the same central altitude the SCOPE ceiling has
+  // in executeTool. caller_project_ids null = owner/no-narrowing (intersect
+  // returns the token list unchanged); an explicit list narrows; [] denies.
+  const callerProjectIds = (fm.caller_project_ids as string[] | null) ?? null;
+  const narrowedToken = {
+    ...token,
+    projectIds: intersectAgentProjects(token.projectIds ?? ['*'], callerProjectIds),
+  };
+
   const actor = `agent:${agent.slug}`;
   // FK-valid actor for transitionRun (see RunContext.transitionActor). Prefer
   // the run's owner; fall back to the agent's creator.
@@ -350,12 +376,17 @@ async function loadContext(runId: string): Promise<RunContext | null> {
     agentFm,
     workspace,
     project,
-    token,
+    token: narrowedToken,
     actor,
     transitionActor,
     authorContext,
     apiKey,
     baseUrl,
+    // Phase 1 delegation (D1, D8): read the caller scope snapshot from the run
+    // fm. FAIL CLOSED — a run lacking it denies (empty scopes) rather than
+    // inheriting the agent's full authority. The caller PROJECT narrowing was
+    // already folded into narrowedToken.projectIds above.
+    callerScopes: fm.caller_scopes ?? [],
   };
 }
 
@@ -694,7 +725,12 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
       for (const tc of collectedToolCalls) {
         try {
           // tx=undefined — each tool gets its own short-lived tx (mitigation 35).
-          const result = await executeTool(ctx.token, ctx.actor, tc.name, tc.arguments);
+          // Phase 1 delegation (D1, D8): pass the caller snapshot so executeTool
+          // enforces agent ∩ caller. runAgentResume reuses this same runLoop with
+          // a ctx whose snapshot was inherited from the original run (D6).
+          const result = await executeTool(ctx.token, ctx.actor, tc.name, tc.arguments, undefined, {
+            callerScopes: ctx.callerScopes,
+          });
           const resultString = typeof result === 'string' ? result : JSON.stringify(result);
           toolResultMsgs.push({ role: 'tool', tool_use_id: tc.id, content: resultString });
           roundHadSuccess = true;

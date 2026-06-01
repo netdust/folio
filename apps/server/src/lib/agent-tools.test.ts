@@ -20,7 +20,22 @@ import { makeTestApp } from '../test/harness.ts';
 import { createRun, ensureRunsTable, nextChainId } from '../services/agent-runs.ts';
 import { listComments } from '../services/comments.ts';
 import { type ToolDef, executeTool, listToolDefs, registerTool } from './agent-tools.ts';
+import { intersectAgentProjects } from './agent-projects.ts';
 import { newApiToken } from './auth.ts';
+
+/**
+ * Replicate the central caller-project clamp that `loadContext` (runner.ts)
+ * applies before any tool runs: narrow the agent token's project reach to the
+ * caller's project set. After the code-review fix the PROJECT half of
+ * agent ∩ caller lives in `token.projectIds`, not in a per-tool param — so the
+ * delegation tests narrow the token the same way the runner does.
+ */
+function narrowTokenToCaller(token: ApiToken, callerProjectIds: string[] | null): ApiToken {
+  return {
+    ...token,
+    projectIds: intersectAgentProjects(token.projectIds ?? ['*'], callerProjectIds),
+  };
+}
 
 /**
  * Build a minimal ApiToken stub. Only the fields executeTool reads
@@ -40,6 +55,31 @@ function makeToken(overrides: Partial<ApiToken> = {}): ApiToken {
     createdAt: new Date(),
     ...overrides,
   };
+}
+
+/**
+ * Caller-authority grant for executeTool that mirrors the supplied token's own
+ * scopes (the caller is "as authorized as the agent token" — the intent of
+ * these pre-delegation tests). Phase 1 delegation (Task 5/6) wires REAL caller
+ * values from the runner / MCP route; in unit tests the token IS the authority,
+ * so we echo its scopes through the caller param to satisfy the new
+ * agent ∩ caller intersect without weakening any test's original assertion.
+ */
+function callerOf(token: ApiToken): {
+  callerScopes: string[];
+} {
+  return { callerScopes: token.scopes };
+}
+
+/** executeTool with a caller mirroring the token's scopes (success-path helper). */
+function exec(
+  token: ApiToken,
+  actor: string,
+  name: string,
+  args: unknown,
+  tx?: Parameters<typeof executeTool>[4],
+): Promise<unknown> {
+  return executeTool(token, actor, name, args, tx, callerOf(token));
 }
 
 // Track throwaway registrations so they don't leak into sibling tests/files
@@ -77,8 +117,29 @@ describe('executeTool dispatch', () => {
   });
 
   it('runs the tool when args parse + scope check pass', async () => {
-    const out = await executeTool(makeToken(), 'tester', '__echo', { value: 'hi' });
+    const out = await exec(makeToken(), 'tester', '__echo', { value: 'hi' });
     expect(out).toEqual({ echoed: 'hi' });
+  });
+
+  it('caller WITHOUT the required scope → tool denied even though agent token has it', async () => {
+    await expect(
+      executeTool(makeToken(), 'tester', '__echo', { value: 'x' }, undefined, {
+        callerScopes: [],
+      }),
+    ).rejects.toThrow('forbidden: scope documents:read missing');
+  });
+
+  it('caller WITH the required scope → tool runs', async () => {
+    const out = await executeTool(makeToken(), 'tester', '__echo', { value: 'x' }, undefined, {
+      callerScopes: ['documents:read'],
+    });
+    expect(out).toEqual({ echoed: 'x' });
+  });
+
+  it('undefined caller authority → DENY (fail closed, not fall open)', async () => {
+    await expect(executeTool(makeToken(), 'tester', '__echo', { value: 'x' })).rejects.toThrow(
+      'forbidden: scope documents:read missing',
+    );
   });
 
   it('throws MCP_INVALID_ARGS with PATHS only when args fail Zod parse', async () => {
@@ -95,7 +156,7 @@ describe('executeTool dispatch', () => {
 
     let thrown: unknown;
     try {
-      await executeTool(makeToken(), 'tester', '__parse_probe', { value: 123 });
+      await exec(makeToken(), 'tester', '__parse_probe', { value: 123 });
     } catch (err) {
       thrown = err;
     }
@@ -142,7 +203,7 @@ describe('executeTool dispatch', () => {
     });
 
     await db.transaction(async (tx) => {
-      await executeTool(makeToken(), 'tester', '__tx_probe', {}, tx);
+      await exec(makeToken(), 'tester', '__tx_probe', {}, tx);
       expect(seenTx).toBe(tx);
     });
   });
@@ -159,7 +220,7 @@ describe('executeTool dispatch', () => {
       },
     });
 
-    await executeTool(makeToken(), 'tester', '__notx_probe', {});
+    await exec(makeToken(), 'tester', '__notx_probe', {});
     expect(seenTx).toBe(undefined);
   });
 });
@@ -201,7 +262,7 @@ describe('agent-lifecycle gating (deferred to D-3)', () => {
       },
     });
 
-    const out = await executeTool(
+    const out = await exec(
       makeToken({ agentId: 'doc_A', scopes: ['agents:write'] }),
       'agent:A',
       '__lifecycle_probe',
@@ -349,7 +410,7 @@ describe('D-2: read/write/comment tools via executeTool', () => {
   it('list_documents returns project docs (read happy path)', async () => {
     const { db, seed } = await makeTestApp();
     const token = await seedHumanPat(db, seed.workspace.id, seed.user.id, ['documents:read']);
-    const out = (await executeTool(token, seed.user.id, 'list_documents', {
+    const out = (await exec(token, seed.user.id, 'list_documents', {
       workspace_slug: 'acme',
       project_slug: 'web',
     })) as { content: { text: string }[] };
@@ -360,7 +421,7 @@ describe('D-2: read/write/comment tools via executeTool', () => {
   it('create_document creates a work_item (write happy path)', async () => {
     const { db, seed } = await makeTestApp();
     const token = await seedHumanPat(db, seed.workspace.id, seed.user.id, ['documents:write']);
-    const out = (await executeTool(token, seed.user.id, 'create_document', {
+    const out = (await exec(token, seed.user.id, 'create_document', {
       workspace_slug: 'acme',
       project_slug: 'web',
       type: 'work_item',
@@ -375,7 +436,7 @@ describe('D-2: read/write/comment tools via executeTool', () => {
     const { db, seed } = await makeTestApp();
     const writeTok = await seedHumanPat(db, seed.workspace.id, seed.user.id, ['documents:write']);
     // Create a parent work_item first.
-    const created = (await executeTool(writeTok, seed.user.id, 'create_document', {
+    const created = (await exec(writeTok, seed.user.id, 'create_document', {
       workspace_slug: 'acme',
       project_slug: 'web',
       type: 'work_item',
@@ -383,7 +444,7 @@ describe('D-2: read/write/comment tools via executeTool', () => {
     })) as { content: { text: string }[] };
     const parent = JSON.parse(created.content[0]!.text) as { slug: string };
 
-    const out = (await executeTool(writeTok, seed.user.id, 'create_comment', {
+    const out = (await exec(writeTok, seed.user.id, 'create_comment', {
       workspace_slug: 'acme',
       project_slug: 'web',
       parent_slug: parent.slug,
@@ -402,7 +463,7 @@ describe('D-2: agent-lifecycle guards survive the migration (mitigation 57)', ()
     });
     let thrown: unknown;
     try {
-      await executeTool(token, `agent:${agentSlug}`, 'delete_agent', {
+      await exec(token, `agent:${agentSlug}`, 'delete_agent', {
         workspace_slug: 'acme',
         slug: agentSlug, // agent deleting itself
       });
@@ -423,7 +484,7 @@ describe('D-2: agent-lifecycle guards survive the migration (mitigation 57)', ()
     ]);
     let thrown: unknown;
     try {
-      await executeTool(pat, seed.user.id, 'create_agent', {
+      await exec(pat, seed.user.id, 'create_agent', {
         workspace_slug: 'acme',
         title: 'Spawned',
         frontmatter: { system_prompt: 'x', model: 'm', provider: 'anthropic' },
@@ -447,7 +508,7 @@ describe('D-2: agent-lifecycle guards survive the migration (mitigation 57)', ()
     ]);
     let thrown: unknown;
     try {
-      await executeTool(pat, seed.user.id, 'update_agent', {
+      await exec(pat, seed.user.id, 'update_agent', {
         workspace_slug: 'acme',
         slug: agentSlug,
         title: 'Renamed',
@@ -469,7 +530,7 @@ describe('D-2: agent-lifecycle guards survive the migration (mitigation 57)', ()
     ]);
     let thrown: unknown;
     try {
-      await executeTool(pat, seed.user.id, 'delete_agent', {
+      await exec(pat, seed.user.id, 'delete_agent', {
         workspace_slug: 'acme',
         slug: agentSlug,
       });
@@ -486,7 +547,7 @@ describe('D-2: agent-lifecycle guards survive the migration (mitigation 57)', ()
     const pat = await seedHumanPat(db, seed.workspace.id, seed.user.id, ['documents:read']);
     let thrown: unknown;
     try {
-      await executeTool(pat, seed.user.id, 'get_agent_self', {});
+      await exec(pat, seed.user.id, 'get_agent_self', {});
     } catch (err) {
       thrown = err;
     }
@@ -500,7 +561,7 @@ describe('D-2: agent-lifecycle guards survive the migration (mitigation 57)', ()
     const { token, agentSlug } = await seedAgent(db, seed.workspace.id, seed.user.id, {
       scopes: ['documents:read'],
     });
-    const out = (await executeTool(token, `agent:${agentSlug}`, 'get_agent_self', {})) as {
+    const out = (await exec(token, `agent:${agentSlug}`, 'get_agent_self', {})) as {
       content: { text: string }[];
     };
     const agent = JSON.parse(out.content[0]!.text) as { slug: string; type: string };
@@ -517,7 +578,7 @@ describe('D-2: agent-lifecycle guards survive the migration (mitigation 57)', ()
     });
     let thrown: unknown;
     try {
-      await executeTool(token, `agent:${agentSlug}`, 'create_agent', {
+      await exec(token, `agent:${agentSlug}`, 'create_agent', {
         workspace_slug: 'acme',
         title: 'Wide child',
         frontmatter: {
@@ -545,7 +606,7 @@ describe('D-2: agent-lifecycle guards survive the migration (mitigation 57)', ()
     });
     let thrown: unknown;
     try {
-      await executeTool(token, `agent:${agentSlug}`, 'create_agent', {
+      await exec(token, `agent:${agentSlug}`, 'create_agent', {
         workspace_slug: 'acme',
         title: 'Powerful child',
         frontmatter: {
@@ -693,7 +754,7 @@ describe('D-4: run-management MCP tools', () => {
     const parent = await seedWorkItem(db, seed.workspace, seed.project, seed.user);
     const { token } = await seedRunAgent(db, seed.workspace.id, seed.user.id, 'helper');
 
-    const out = await executeTool(token, seed.user.id, 'run_agent', {
+    const out = await exec(token, seed.user.id, 'run_agent', {
       workspace_slug: 'acme',
       agent_slug: 'helper',
       parent_slug: parent.slug,
@@ -711,7 +772,7 @@ describe('D-4: run-management MCP tools', () => {
     await seedRunAgent(db, seed.workspace.id, seed.user.id, 'helper');
     const { token } = await seedRunAgent(db, seed.workspace.id, seed.user.id, 'helper2');
 
-    await executeTool(token, seed.user.id, 'run_agent', {
+    await exec(token, seed.user.id, 'run_agent', {
       workspace_slug: 'acme',
       agent_slug: 'helper2',
       parent_slug: parent.slug,
@@ -729,7 +790,7 @@ describe('D-4: run-management MCP tools', () => {
     const run = await seedRunRow(db, seed.workspace, seed.project, agent, seed.user, parent);
 
     const listed = parseText<{ id: string }[]>(
-      await executeTool(token, seed.user.id, 'list_runs', {
+      await exec(token, seed.user.id, 'list_runs', {
         workspace_slug: 'acme',
         project_slug: 'web',
       }),
@@ -737,7 +798,7 @@ describe('D-4: run-management MCP tools', () => {
     expect(listed.map((r) => r.id)).toContain(run.id);
 
     const got = parseText<{ id: string; type: string }>(
-      await executeTool(token, seed.user.id, 'get_run', {
+      await exec(token, seed.user.id, 'get_run', {
         workspace_slug: 'acme',
         run_id: run.id,
       }),
@@ -760,7 +821,7 @@ describe('D-4: run-management MCP tools', () => {
       })
       .where(eq(documents.id, run.id));
 
-    const out = await executeTool(token, seed.user.id, 'get_run', {
+    const out = await exec(token, seed.user.id, 'get_run', {
       workspace_slug: 'acme',
       run_id: run.id,
     });
@@ -783,7 +844,7 @@ describe('D-4: run-management MCP tools', () => {
       })
       .where(eq(documents.id, run.id));
 
-    const out = await executeTool(token, seed.user.id, 'list_runs', {
+    const out = await exec(token, seed.user.id, 'list_runs', {
       workspace_slug: 'acme',
       project_slug: 'web',
     });
@@ -799,7 +860,7 @@ describe('D-4: run-management MCP tools', () => {
     const run = await seedRunRow(db, seed.workspace, seed.project, agent, seed.user, parent);
 
     const res = parseText<{ run_id: string; status: string }>(
-      await executeTool(token, seed.user.id, 'cancel_run', {
+      await exec(token, seed.user.id, 'cancel_run', {
         workspace_slug: 'acme',
         run_id: run.id,
       }),
@@ -825,7 +886,7 @@ describe('D-4: run-management MCP tools', () => {
       .where(eq(documents.id, run.id));
 
     const res = parseText<{ run_id: string; status: string }>(
-      await executeTool(token, seed.user.id, 'retry_run', {
+      await exec(token, seed.user.id, 'retry_run', {
         workspace_slug: 'acme',
         run_id: run.id,
       }),
@@ -844,7 +905,7 @@ describe('D-4: run-management MCP tools', () => {
 
     let thrown: unknown;
     try {
-      await executeTool(token, seed.user.id, 'retry_run', {
+      await exec(token, seed.user.id, 'retry_run', {
         workspace_slug: 'acme',
         run_id: run.id,
       });
@@ -863,10 +924,10 @@ describe('D-4: run-management MCP tools', () => {
     const { token } = await seedRunAgent(db, seed.workspace.id, seed.user.id, 'helper');
     const argsBag = { workspace_slug: 'acme', agent_slug: 'helper', parent_slug: parent.slug };
 
-    await executeTool(token, seed.user.id, 'run_agent', argsBag);
+    await exec(token, seed.user.id, 'run_agent', argsBag);
     let thrown: unknown;
     try {
-      await executeTool(token, seed.user.id, 'run_agent', argsBag);
+      await exec(token, seed.user.id, 'run_agent', argsBag);
     } catch (err) {
       thrown = err;
     }
@@ -884,7 +945,7 @@ describe('D-4: run-management MCP tools', () => {
     env.FOLIO_AGENT_CHAINS_ENABLED = false;
     let thrown: unknown;
     try {
-      await executeTool(token, `agent:${agent.slug}`, 'run_agent', {
+      await exec(token, `agent:${agent.slug}`, 'run_agent', {
         workspace_slug: 'acme',
         agent_slug: 'helper',
         parent_slug: parent.slug,
@@ -924,7 +985,7 @@ describe('D-4: run-management MCP tools', () => {
     env.FOLIO_AGENT_CHAINS_ENABLED = false;
     let thrown: unknown;
     try {
-      await executeTool(token, `agent:${agent.slug}`, 'retry_run', {
+      await exec(token, `agent:${agent.slug}`, 'retry_run', {
         workspace_slug: 'acme',
         run_id: run.id,
       });
@@ -960,7 +1021,7 @@ describe('D-4: run-management MCP tools', () => {
     env.FOLIO_AGENT_CHAINS_ENABLED = true;
     try {
       const res = parseText<{ status: string }>(
-        await executeTool(token, `agent:${agent.slug}`, 'retry_run', {
+        await exec(token, `agent:${agent.slug}`, 'retry_run', {
           workspace_slug: 'acme',
           run_id: run.id,
         }),
@@ -987,14 +1048,14 @@ describe('D-4: run-management MCP tools', () => {
     };
 
     // First create succeeds + posts one input comment.
-    await executeTool(token, seed.user.id, 'run_agent', argsBag);
+    await exec(token, seed.user.id, 'run_agent', argsBag);
     const before = (await listComments({ parentId: parent.id })).length;
     expect(before).toBe(1);
 
     // Duplicate (active) create with input → must reject BEFORE the comment.
     let thrown: unknown;
     try {
-      await executeTool(token, seed.user.id, 'run_agent', { ...argsBag, input: 'second input' });
+      await exec(token, seed.user.id, 'run_agent', { ...argsBag, input: 'second input' });
     } catch (err) {
       thrown = err;
     }
@@ -1032,7 +1093,7 @@ describe('D-4: run-management MCP tools', () => {
     for (const tool of ['get_run', 'cancel_run', 'retry_run']) {
       let thrown: unknown;
       try {
-        await executeTool(token, seed.user.id, tool, {
+        await exec(token, seed.user.id, tool, {
           workspace_slug: 'acme',
           run_id: otherRun.id,
         });
@@ -1062,7 +1123,7 @@ describe('D-4: run-management MCP tools', () => {
 
     // MCP tool against parentB.
     const mcpOut = parseText<{ run_id: string; status: string }>(
-      await executeTool(token, seed.user.id, 'run_agent', {
+      await exec(token, seed.user.id, 'run_agent', {
         workspace_slug: 'acme',
         agent_slug: 'mcp-caller',
         parent_slug: parentB.slug,
@@ -1102,14 +1163,14 @@ describe('find_documents: workspace-wide title lookup, allow-list enforced', () 
       'documents:write',
     ]);
     // Create a work_item titled "Combell setup" in seed.project (slug 'web').
-    await executeTool(token, seed.user.id, 'create_document', {
+    await exec(token, seed.user.id, 'create_document', {
       workspace_slug: 'acme',
       project_slug: 'web',
       type: 'work_item',
       title: 'Combell setup',
     });
 
-    const res = (await executeTool(token, seed.user.id, 'find_documents', {
+    const res = (await exec(token, seed.user.id, 'find_documents', {
       workspace_slug: 'acme',
       query: 'combell',
     })) as { content: { text: string }[] };
@@ -1126,7 +1187,7 @@ describe('find_documents: workspace-wide title lookup, allow-list enforced', () 
       'documents:read',
       'documents:write',
     ]);
-    await executeTool(token, seed.user.id, 'create_document', {
+    await exec(token, seed.user.id, 'create_document', {
       workspace_slug: 'acme',
       project_slug: 'web',
       type: 'work_item',
@@ -1134,7 +1195,7 @@ describe('find_documents: workspace-wide title lookup, allow-list enforced', () 
     });
     // limit:0 must be rejected by the schema (min(1)), not honored as LIMIT 0.
     await expect(
-      executeTool(token, seed.user.id, 'find_documents', {
+      exec(token, seed.user.id, 'find_documents', {
         workspace_slug: 'acme',
         query: 'combell',
         limit: 0,
@@ -1157,13 +1218,13 @@ describe('find_documents: workspace-wide title lookup, allow-list enforced', () 
 
     // A human PAT seeds a matching doc in BOTH 'web' and 'ops'.
     const pat = await seedHumanPat(db, seed.workspace.id, seed.user.id, ['documents:write']);
-    await executeTool(pat, seed.user.id, 'create_document', {
+    await exec(pat, seed.user.id, 'create_document', {
       workspace_slug: 'acme',
       project_slug: 'web',
       type: 'work_item',
       title: 'Combell web',
     });
-    await executeTool(pat, seed.user.id, 'create_document', {
+    await exec(pat, seed.user.id, 'create_document', {
       workspace_slug: 'acme',
       project_slug: 'ops',
       type: 'work_item',
@@ -1178,7 +1239,7 @@ describe('find_documents: workspace-wide title lookup, allow-list enforced', () 
       { projects: [seed.project.id], scopes: ['documents:read'] },
     );
 
-    const res = (await executeTool(agentToken, `agent:${agentSlug}`, 'find_documents', {
+    const res = (await exec(agentToken, `agent:${agentSlug}`, 'find_documents', {
       workspace_slug: 'acme',
       query: 'combell',
     })) as { content: { text: string }[] };
@@ -1191,11 +1252,231 @@ describe('find_documents: workspace-wide title lookup, allow-list enforced', () 
   });
 });
 
+describe('caller project intersect (D4/D5): central clamp folded into token.projectIds', () => {
+  it('caller not in the project → tool rejected even when agent allow-lists it', async () => {
+    const { db, seed } = await makeTestApp();
+
+    // Second project ('ops') in the SAME workspace.
+    const projectBId = nanoid();
+    await db.insert(projects).values({
+      id: projectBId,
+      workspaceId: seed.workspace.id,
+      slug: 'ops',
+      name: 'Ops',
+    });
+    await seedProjectDefaults(db, projectBId);
+
+    // Seed a doc in 'ops' so the only thing that can reject is the project clamp.
+    const pat = await seedHumanPat(db, seed.workspace.id, seed.user.id, [
+      'documents:read',
+      'documents:write',
+    ]);
+    await exec(pat, seed.user.id, 'create_document', {
+      workspace_slug: 'acme',
+      project_slug: 'ops',
+      type: 'work_item',
+      title: 'Ops doc',
+    });
+    const opsDoc = (
+      JSON.parse(
+        (
+          (await exec(pat, seed.user.id, 'find_documents', {
+            workspace_slug: 'acme',
+            project_slug: 'ops',
+            query: 'ops doc',
+          })) as { content: { text: string }[] }
+        ).content[0]!.text,
+      ) as { documents: { slug: string }[] }
+    ).documents[0]!;
+
+    // Agent token allow-lists BOTH projects (wildcard); token unrestricted.
+    const { token: agentToken, agentSlug } = await seedAgent(db, seed.workspace.id, seed.user.id, {
+      projects: ['*'],
+      scopes: ['documents:read'],
+    });
+
+    // Caller is a regular member clamped to the 'web' project only — NOT 'ops'.
+    // The runner's loadContext folds that clamp into token.projectIds before any
+    // tool runs; replicate it here, then drive the tool with the narrowed token.
+    const narrowed = narrowTokenToCaller(agentToken, [seed.project.id]);
+    let thrown: unknown;
+    try {
+      await executeTool(
+        narrowed,
+        `agent:${agentSlug}`,
+        'get_document',
+        { workspace_slug: 'acme', project_slug: 'ops', slug: opsDoc.slug },
+        undefined,
+        { callerScopes: ['documents:read'] },
+      );
+    } catch (err) {
+      thrown = err;
+    }
+    const e = thrown as Error & { code?: number; data?: { reason?: string } };
+    expect(e).toBeInstanceOf(Error);
+    expect(e.code).toBe(-32602);
+    expect(e.data?.reason).toBe('agent_not_in_allow_list');
+  });
+
+  it('caller is owner (callerProjectIds null) → no extra narrowing; agent allow-list still applies', async () => {
+    const { db, seed } = await makeTestApp();
+
+    // Second project ('ops') in the SAME workspace.
+    const projectBId = nanoid();
+    await db.insert(projects).values({
+      id: projectBId,
+      workspaceId: seed.workspace.id,
+      slug: 'ops',
+      name: 'Ops',
+    });
+    await seedProjectDefaults(db, projectBId);
+
+    const pat = await seedHumanPat(db, seed.workspace.id, seed.user.id, [
+      'documents:read',
+      'documents:write',
+    ]);
+    await exec(pat, seed.user.id, 'create_document', {
+      workspace_slug: 'acme',
+      project_slug: 'ops',
+      type: 'work_item',
+      title: 'Ops doc',
+    });
+    const opsDoc = (
+      JSON.parse(
+        (
+          (await exec(pat, seed.user.id, 'find_documents', {
+            workspace_slug: 'acme',
+            project_slug: 'ops',
+            query: 'ops doc',
+          })) as { content: { text: string }[] }
+        ).content[0]!.text,
+      ) as { documents: { slug: string }[] }
+    ).documents[0]!;
+
+    // Agent allow-lists '*'; token unrestricted; OWNER caller (null). The fold
+    // intersects the token reach with null → no narrowing, so the owner keeps
+    // the agent's full project reach.
+    const { token: agentToken, agentSlug } = await seedAgent(db, seed.workspace.id, seed.user.id, {
+      projects: ['*'],
+      scopes: ['documents:read'],
+    });
+    const narrowed = narrowTokenToCaller(agentToken, null);
+
+    const out = (await executeTool(
+      narrowed,
+      `agent:${agentSlug}`,
+      'get_document',
+      { workspace_slug: 'acme', project_slug: 'ops', slug: opsDoc.slug },
+      undefined,
+      { callerScopes: ['documents:read'] },
+    )) as { content: { text: string }[] };
+    const doc = JSON.parse(out.content[0]!.text) as { title: string };
+    expect(doc.title).toBe('Ops doc');
+  });
+
+  // ----------------------------------------------------------------------
+  // The leak the code review found: the THREE enumeration tools that DON'T go
+  // through resolveProjectInWorkspace (find_documents no-project_slug branch,
+  // describe_workspace, list_projects) filter on token.projectIds. Before the
+  // central fold, the caller-project clamp never reached token.projectIds for
+  // these paths, so a member delegated to P1 ('web') could enumerate P2's
+  // ('ops') docs/projects via an agent allow-listed '*'. With the fold,
+  // token.projectIds is caller-narrowed to ['web'] and the leak closes.
+  // ----------------------------------------------------------------------
+  async function seedTwoProjectLeakFixture(): Promise<{
+    db: DB;
+    seed: Awaited<ReturnType<typeof makeTestApp>>['seed'];
+    narrowed: ApiToken;
+    agentSlug: string;
+  }> {
+    const { db, seed } = await makeTestApp();
+
+    // P2 ('ops') alongside the seeded P1 ('web').
+    const opsId = nanoid();
+    await db.insert(projects).values({
+      id: opsId,
+      workspaceId: seed.workspace.id,
+      slug: 'ops',
+      name: 'Ops',
+    });
+    await seedProjectDefaults(db, opsId);
+
+    // A matching doc in BOTH projects.
+    const pat = await seedHumanPat(db, seed.workspace.id, seed.user.id, ['documents:write']);
+    await exec(pat, seed.user.id, 'create_document', {
+      workspace_slug: 'acme',
+      project_slug: 'web',
+      type: 'work_item',
+      title: 'Combell web',
+    });
+    await exec(pat, seed.user.id, 'create_document', {
+      workspace_slug: 'acme',
+      project_slug: 'ops',
+      type: 'work_item',
+      title: 'Combell ops',
+    });
+
+    // Agent allow-lists '*' (wildcard); the member caller is clamped to P1.
+    const { token: agentToken, agentSlug } = await seedAgent(db, seed.workspace.id, seed.user.id, {
+      projects: ['*'],
+      scopes: ['documents:read'],
+    });
+    const narrowed = narrowTokenToCaller(agentToken, [seed.project.id]);
+    return { db, seed, narrowed, agentSlug };
+  }
+
+  it('find_documents (NO project_slug) returns ONLY the caller P1 docs — not P2 (leak fix)', async () => {
+    const { seed, narrowed, agentSlug } = await seedTwoProjectLeakFixture();
+    const res = (await executeTool(
+      narrowed,
+      `agent:${agentSlug}`,
+      'find_documents',
+      { workspace_slug: 'acme', query: 'combell' },
+      undefined,
+      { callerScopes: ['documents:read'] },
+    )) as { content: { text: string }[] };
+    const out = JSON.parse(res.content[0]!.text) as {
+      documents: { project_slug: string | null }[];
+    };
+    const slugs = out.documents.map((d) => d.project_slug);
+    expect(slugs).toContain('web');
+    expect(slugs).not.toContain('ops');
+  });
+
+  it('describe_workspace shows ONLY the caller P1 project — not P2 (leak fix)', async () => {
+    const { seed, narrowed, agentSlug } = await seedTwoProjectLeakFixture();
+    const res = (await executeTool(
+      narrowed,
+      `agent:${agentSlug}`,
+      'describe_workspace',
+      { workspace_slug: 'acme' },
+      undefined,
+      { callerScopes: ['documents:read'] },
+    )) as { content: { text: string }[] };
+    const out = JSON.parse(res.content[0]!.text) as { projects: { slug: string }[] };
+    expect(out.projects.map((p) => p.slug).sort()).toEqual(['web']);
+  });
+
+  it('list_projects returns ONLY the caller P1 project — not P2 (leak fix)', async () => {
+    const { seed, narrowed, agentSlug } = await seedTwoProjectLeakFixture();
+    const res = (await executeTool(
+      narrowed,
+      `agent:${agentSlug}`,
+      'list_projects',
+      { workspace_slug: 'acme' },
+      undefined,
+      { callerScopes: ['documents:read'] },
+    )) as { content: { text: string }[] };
+    const out = JSON.parse(res.content[0]!.text) as { projects: { slug: string }[] };
+    expect(out.projects.map((p) => p.slug).sort()).toEqual(['web']);
+  });
+});
+
 describe('describe_workspace: one-call orientation, allow-list enforced', () => {
   it('returns projects → tables → status keys', async () => {
     const { db, seed } = await makeTestApp();
     const token = await seedHumanPat(db, seed.workspace.id, seed.user.id, ['documents:read']);
-    const res = (await executeTool(token, seed.user.id, 'describe_workspace', {
+    const res = (await exec(token, seed.user.id, 'describe_workspace', {
       workspace_slug: 'acme',
     })) as { content: { text: string }[] };
     const out = JSON.parse(res.content[0]!.text) as {
@@ -1230,7 +1511,7 @@ describe('describe_workspace: one-call orientation, allow-list enforced', () => 
       { projects: [seed.project.id], scopes: ['documents:read'] },
     );
 
-    const res = (await executeTool(agentToken, `agent:${agentSlug}`, 'describe_workspace', {
+    const res = (await exec(agentToken, `agent:${agentSlug}`, 'describe_workspace', {
       workspace_slug: 'acme',
     })) as { content: { text: string }[] };
     const out = JSON.parse(res.content[0]!.text) as { projects: { slug: string }[] };

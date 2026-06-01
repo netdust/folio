@@ -22,6 +22,8 @@ import { nanoid } from 'nanoid';
 import { db, type DB } from '../db/client.ts';
 import {
   documents,
+  memberships,
+  projects,
   statuses,
   tables,
   views,
@@ -32,6 +34,8 @@ import {
   type User,
   type Workspace,
 } from '../db/schema.ts';
+import { roleToScopes } from '../lib/agent-schema.ts';
+import { callerProjectsFor } from '../lib/agent-projects.ts';
 
 // Drizzle tx and DB share the same query API. Mirrored verbatim from
 // `services/comments.ts` so read helpers can be called from inside a tx.
@@ -130,6 +134,68 @@ export async function createRun(
   const startedAt = new Date().toISOString();
   const slug = generateRunSlug(agent.slug, startedAt);
 
+  // ----- Phase 1 delegation: caller authority snapshot (D1, D2, D6) -----
+  //
+  // The run carries the CALLER's authority so the agent can never exceed the
+  // human who started it (effective = agent ∩ caller, enforced in executeTool).
+  // The snapshot is ALWAYS server-derived — NEVER read from `input` (D2).
+  let callerScopes: string[];
+  let callerProjectIds: string[] | null;
+
+  if (input.resumeOf !== undefined) {
+    // D6: a resume INHERITS the original run's caller snapshot — it must NOT
+    // re-derive from the resume actor's membership. Re-deriving could re-open
+    // the authority ceiling on the second hop (e.g. an owner approving a
+    // member's run would re-stamp owner scopes). `resume_of` holds the original
+    // agent_run document's id (createRun stamps it verbatim from
+    // CreateRunInput.resumeOf; the runner resolves it the same way at
+    // runner.ts via `documents.id = fm.resume_of` + `type='agent_run'`).
+    const original = await db.query.documents.findFirst({
+      where: and(eq(documents.id, input.resumeOf), eq(documents.type, 'agent_run')),
+    });
+    const origFm = original?.frontmatter as AgentRunFrontmatter | undefined;
+    // Fail closed if the original is missing or lacks a snapshot (D9/D10):
+    // inherit deny-all rather than re-deriving a fresh (possibly broader) one.
+    callerScopes = origFm?.caller_scopes ?? [];
+    callerProjectIds = origFm?.caller_project_ids ?? null;
+  } else {
+    // Fresh run: derive from the AUTHENTICATED actor's workspace membership.
+    const membership = await db.query.memberships.findFirst({
+      where: and(
+        eq(memberships.workspaceId, workspace.id),
+        eq(memberships.userId, actor.id),
+      ),
+    });
+    const callerRole = membership?.role;
+    if (!callerRole) {
+      // Finding 6: a run whose owner has no membership in the run's workspace
+      // would get caller_scopes:[] and silently deny every tool. Fail loudly at
+      // create time so the cause is visible, not a mute first-tool 'forbidden'.
+      throw new HTTPError(
+        'RUN_OWNER_NOT_A_MEMBER',
+        'The run owner is not a member of this workspace; cannot establish caller authority.',
+        403,
+      );
+    }
+    callerScopes = roleToScopes(callerRole); // callerRole now non-null
+    // Project membership in Folio is WORKSPACE-LEVEL only — there is no
+    // per-project membership table, so a workspace member can see every
+    // project in that workspace. owner/admin → null (no narrowing, via
+    // callerProjectsFor); a member is clamped to the EXPLICIT list of this
+    // workspace's project ids — NOT wildcard (D5), so the snapshot can never
+    // borrow an agent's broader cross-workspace reach. An owner/admin passes
+    // an empty projectIds list (unused on the null branch).
+    let memberProjectIds: string[] = [];
+    if (callerRole === 'member') {
+      const wsProjects = await db.query.projects.findMany({
+        where: eq(projects.workspaceId, workspace.id),
+        columns: { id: true },
+      });
+      memberProjectIds = wsProjects.map((p) => p.id);
+    }
+    callerProjectIds = callerProjectsFor({ role: callerRole, projectIds: memberProjectIds });
+  }
+
   const runFm: AgentRunFrontmatter = {
     assignee: `agent:${agent.slug}`,
     status: 'planning',
@@ -144,6 +210,11 @@ export async function createRun(
     chain_id: input.chainId,
     fired_by: input.firedBy,
     started_at: startedAt,
+    // Phase 1 delegation (D1, D2, D6): the caller's server-derived authority
+    // snapshot. Fresh runs derive from the actor's membership role; resumes
+    // inherit the original run's snapshot. See the derivation block above.
+    caller_scopes: callerScopes,
+    caller_project_ids: callerProjectIds,
     // Resume lineage (D-5). Only stamped on an approved-plan resume; the poller
     // routes a planning row with this set to `runAgentResume`. Omitted entirely
     // (not null) for fresh runs so the `.strict()` schema's optional holds.

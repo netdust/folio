@@ -84,6 +84,15 @@ export const agentRunFrontmatterSchema = z
     chain_id: z.string().uuid(),
     fired_by: z.string(),
 
+    // Caller-authority snapshot (Phase 1 delegation). Captured server-side at
+    // createRun from the authenticated actor — NEVER client-supplied (mitigation
+    // D2). The run's effective authority is agent ∩ caller for both scopes and
+    // projects. caller_project_ids === null means the caller is a workspace
+    // owner/admin (all projects); an array is an explicit allow-list; [] means no
+    // project access (deny). (mitigations D1, D5, D9, D10)
+    caller_scopes: z.array(z.string()),
+    caller_project_ids: z.array(z.string()).nullable(),
+
     started_at: z.string().datetime(),
     // ISO 8601 timestamp with `Z` suffix only — Zod's .datetime() defaults
     // to `offset: false` which rejects `+HH:MM`-style offsets at parse

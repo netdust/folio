@@ -35,6 +35,10 @@ export interface ToolContext {
   actor: string;
   /** Optional ambient transaction the handler should join, if any. */
   tx?: DBOrTx;
+  /** Caller-authority snapshot (Phase 1 delegation, mitigation D3). The
+   *  run's effective authority is agent ∩ caller. (Project narrowing now lives
+   *  in the centrally-narrowed `token.projectIds` from loadContext, not here.) */
+  callerScopes: string[];
 }
 
 export interface ToolDef<TArgs = unknown, TOut = unknown> {
@@ -130,6 +134,7 @@ export async function executeTool(
   name: string,
   args: unknown,
   tx?: DBOrTx,
+  caller?: { callerScopes: string[] },
 ): Promise<unknown> {
   const def = registry.get(name);
   if (!def) throw new Error(`method not found: ${name}`);
@@ -142,8 +147,17 @@ export async function executeTool(
     throw new Error(`method not found: ${name}`);
   }
 
-  // Scope check — mirrors `requireScope` in middleware/bearer.ts.
-  if (!token.scopes.includes(def.requiredScope)) {
+  // Delegate ceiling (mitigation D3/D9/D10): caller authority FAILS CLOSED.
+  // Missing/undefined caller scopes are treated as [] (deny-all), NEVER as
+  // wildcard — so an un-wired call site or un-backfilled run denies rather than
+  // escalates. Project narrowing is no longer threaded here — it lives in the
+  // centrally-narrowed `token.projectIds` from loadContext; only scopes are
+  // guarded at this layer.
+  const callerScopes = caller?.callerScopes ?? [];
+
+  // Scope check is now a DOUBLE membership test: agent token AND caller must
+  // both hold the scope (mitigation D3). Name-only error (mitigation D7).
+  if (!token.scopes.includes(def.requiredScope) || !callerScopes.includes(def.requiredScope)) {
     throw new Error(`forbidden: scope ${def.requiredScope} missing`);
   }
 
@@ -168,7 +182,12 @@ export async function executeTool(
     throw err;
   }
 
-  return def.handler(parsed as never, { token, actor, tx });
+  return def.handler(parsed as never, {
+    token,
+    actor,
+    tx,
+    callerScopes,
+  });
 }
 
 // D-2: register the 20 production tools into the module-global registry. The

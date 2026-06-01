@@ -1,5 +1,12 @@
 # Operator Agent — Phase 1: Caller-Identity Delegation Implementation Plan
 
+> **CODE-REVIEW FINDINGS (2026-06-01, /code-review high) → Task 9 + Task 10.** A high-effort review of the whole branch diff (D1–D10 as convergence target) found that the green two-stage review MISSED a class of leak because its tests only exercised `get_document` (which routes through the clamped helper). 10 findings, all CONFIRMED. ROOT CAUSE: the SCOPE ceiling is central (`executeTool`, every tool inherits) but the PROJECT ceiling was distributed (4th param threaded into `resolveProjectInWorkspace`, which 3 enumeration tools + the claude-code path DON'T use) → fall-open project leak.
+> - **Task 9 (central fold, Stefan-approved):** narrow `ctx.token.projectIds` ONCE in `loadContext` (runner.ts ~316) BEFORE building RunContext: `token.projectIds = intersectAgentProjects(token.projectIds ?? ['*'], fm.caller_project_ids)`. This makes the EXISTING `intersectAgentProjects(agentProjects, token.projectIds)` in `find_documents` (510), `describe_workspace` (560), `list_projects` (386), and `resolveProjectInWorkspace` (184) all become agent∩token∩caller automatically; ccExecute (878, copies `ctx.token.projectIds`) inherits the narrowed value → claude-code project-clamp fixed for free. Then REMOVE the now-redundant 4th `callerProjectIds` param from `resolveProjectInWorkspace` + its 16 call sites (deletes the future-tool footgun). OWED-CHECK DONE: the only `token.projectIds` consumers are (a) runner-context (`ctx.token` — the 4 registry sites + ccExecute, which SHOULD see the narrowed value) and (b) request-context (`bearer.ts:136`, `events.ts:77`, `runs.ts:101` — each loads its OWN per-request token, NOT the runner's `ctx.token`, so they're UNTOUCHED by mutating the in-memory runner copy). Safe. NOTE: this fixes PROJECTS only — the scope half stays in executeTool. claude-code's CLI tools still bypass executeTool entirely (scope ceiling) — that's the tracked out-of-scope gap, unchanged.
+> - **Task 9 also fixes Finding 6 (silent non-member deny):** MCP `run_agent` + trigger-matcher resolve the run owner via `token.createdBy` with NO membership check → a non-member actor → `caller_scopes: []` → run looks healthy (planning) but DENIES every tool with a mute `forbidden`. Fix: at run-create, if the resolved actor has no membership in the run's workspace, FAIL LOUDLY at create time (throw a clear `RUN_OWNER_NOT_A_MEMBER` error) instead of creating a run that silently dies at first tool dispatch. (Keeps fail-closed, adds the missing signal.)
+> - **DEFERRED with notes (Findings 7, 8 → `tasks/retro-follow-ups.md`):** Finding 7 (retry re-derives caller authority from the retrying actor, not the original run — unlike resume/D6) + Finding 8 (chain via run_agent re-derives instead of inheriting parent; NOT weaponizable today — `agents:write` gates chaining to owner/admin, both → full scopes). Both are authority-consistency gaps to close when retry/chain authority semantics are revisited. Finding 9 (member project-list frozen at create-time) + Finding 10 (export ALL_DOCUMENT_SCOPES) are minor — fold 10 into Task 9, note 9 with the member-semantics revisit.
+
+> **TASK 7 BACKFILL VALUE CORRECTION (2026-06-01, ground-truthed):** The plan's Task 7 proposed stamping historical runs with the AGENT's own authority (to "preserve pre-delegation behavior"). On reflection that is WRONG — it would preserve escalation potential on any historical run that later resumes. Better: a run's `caller_scopes` is only READ when the runner dispatches a tool, which only happens for NON-terminal runs (planning/running/awaiting_approval). Terminal historical runs (completed/failed/rejected) never re-dispatch → their value is inert. The only historical run that could still dispatch is a stranded non-terminal one — and for THOSE, fail-closed `[]` is the SAFEST stamp (a resumed pre-delegation run gets deny-all, not escalation). So Task 7 stamps EVERY `agent_run` lacking the keys with `caller_scopes: []` + `caller_project_ids: null` — pure SQL, no awkward `apiTokens.scopes` join, and it IS the D10 fail-closed contract. This supersedes Task 7's "stamp agent authority" body below.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `netdust-core:ntdst-execute-with-tests` (wraps `superpowers:subagent-driven-development`) to implement this plan task-by-task. Step 2.5 plan-freshness per task; two-stage review per task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make an agent run carry the **caller's** authority, not just the agent's, and **intersect** the two at tool-execution time — so an agent can never exceed the permissions of the human who started its run.
@@ -7,6 +14,14 @@
 **Architecture:** Today a run executes with the agent's auto-minted token; the token's scopes + `projectIds` are the sole authority (`runner.ts` loads `apiTokens` by `agent.id`; `executeTool(token, …)` checks `token.scopes`). This phase threads a **caller scope set** + **caller project set** onto the run at `createRun`, then at tool dispatch computes `effective = agent ∩ caller` for BOTH scopes and projects. It extends the EXISTING `intersectAgentProjects(agentProjects, token.projectIds)` precedent in `agent-tools-registry.ts:183` to a full delegate model. No new tables for v1 — the caller authority rides two new nullable columns on the run row + a new `ToolContext` field carrying the caller's effective set.
 
 **Tech Stack:** Hono + Drizzle + bun:sqlite; the shared `executeTool`/`agent-tools.ts` dispatcher; `agent-run-schema.ts` (Zod run frontmatter); `services/agent-runs.ts::createRun`; `lib/runner.ts` `RunContext`; `lib/agent-projects.ts` intersect helpers; Bun test.
+
+**HUMAN-CALLER SCOPE POLICY (2026-06-01, resolves the Step 2.5 open contract).** Human session users have NO scopes array — authority is role-based (owner/admin/member via `memberships`); scopes (`documents:read`/`documents:write`/`documents:delete`/`agents:write` — the complete set) exist only on agent/PAT tokens. The delegate intersect needs a caller scope set, so we define the human analog of `toolsToScopes` — a `roleToScopes(role)` helper:
+> - **owner / admin** → ALL scopes: `['documents:read','documents:write','documents:delete','agents:write']`
+> - **member** → `['documents:read','documents:write']` (day-to-day; NOT delete, NOT agents:write)
+>
+> Members are ADDITIONALLY project-clamped via `callerProjectsFor` (already built, Task 2/4). The caller's role is looked up inside `createRun` from `args.workspace.id` + `args.actor.id` against `memberships` (server-derived → satisfies D2; never client-supplied). For a human PAT actor (token-auth, no membership row in play), this plan path is the SESSION-user case; PAT-initiated runs are out of this plan's scope (runs are created by session users via `runs.ts` or by the reactor with an owner actor). If `createRun`'s actor has no membership row in the run's workspace, FAIL CLOSED → `[]` scopes (deny). This policy was chosen by Stefan 2026-06-01 over "member read-only" and "all-callers-full-scopes".
+
+**EXECUTION ORDERING CORRECTION (2026-06-01, mid-flight):** Task 3 (scope enforcement in `executeTool`) is fail-closed, so once it lands the two un-wired production call sites (`runner.ts:697`, `mcp.ts:172`) deny-close → ~51 runner/mcp integration tests go red until Tasks 5 (runner wiring) + 6 (MCP wiring) restore them. This is EXPECTED, not a regression (all failures are `forbidden: scope … missing`). Therefore: Tasks 3+4 are reviewed on their OWN green test files (suite-red is accepted between them, same pattern as Task 1b), and the FULL-SUITE-GREEN gate is deferred until after Task 6. The end-of-phase two-stage review covers the 3→6 enforcement+wiring unit as a whole, because reviewing the intersect logic in isolation from its wiring would be reviewing half a mechanism. Do NOT modify `runner.ts`/`mcp.ts` production code to force green early.
 
 **Scope note:** This is Phase 1 of a 3-phase spec (`docs/superpowers/specs/2026-06-01-builtin-folio-operator-agent-design.md`). Phase 2 (token-scoped API surface + `dryRun`) and Phase 3 (the agent + skill + memory) get their own plans. This plan produces working, testable software on its own: after it, every run enforces the delegate ceiling, even though no new tools exist yet (the existing 20 tools immediately benefit).
 
@@ -171,6 +186,51 @@ Expected: PASS (both new tests + all existing tests in the file).
 ```bash
 git add apps/server/src/lib/agent-run-schema.ts apps/server/src/lib/agent-run-schema.test.ts
 git commit -m "phase-op-1: add caller_scopes/caller_project_ids to run frontmatter (D1,D10)"
+```
+
+---
+
+## Task 1b: Restore the suite to green (PLAN CORRECTION, added mid-execution 2026-06-01)
+
+**Why this task exists:** Task 1 made `caller_scopes` a REQUIRED `.strict()` schema field (correct for the D10 fail-closed contract). That immediately invalidated every existing run-frontmatter producer + fixture that predates this phase — **59 suite failures** — none of which Task 1 was allowed to touch. Tasks 2–4 need a clean full-suite signal, so the consumers must be fixed NOW, not deferred to Task 5/7. Root cause: the original plan tightened the schema before fixing its consumers. This task fixes the consumers with a SAFE PLACEHOLDER caller authority (full agent authority — i.e. pre-delegation behavior); Task 5 REPLACES the placeholder in `createRun` with real caller-derivation, and Task 7 backfills history. The placeholder is intentionally non-restrictive because the ENFORCEMENT (Task 3) isn't wired yet — these two new fields are inert data until Task 3.
+
+**Mitigations:** keeps D10 (schema stays required); sets up D1 (createRun now writes the fields, Task 5 makes them caller-derived).
+
+**Files:**
+- Modify: `apps/server/src/services/agent-runs.ts` (`createRun` `runFm` object, ~line 133)
+- Modify: the run-fm-seeding test fixtures across the 12 failing test files (see ground-truth list in the dispatch)
+
+- [ ] **Step 1: Patch `createRun` to write the two fields (placeholder = agent authority)**
+
+In the `runFm: AgentRunFrontmatter = { ... }` object (~line 133), add:
+
+```typescript
+    // Phase 1 delegation PLACEHOLDER (Task 1b). Real caller-derivation lands in
+    // Task 5 (from `actor`). Until then, stamp the agent's OWN authority so the
+    // field is present (D10 schema contract) and behavior is unchanged
+    // (pre-delegation: agent authority). The enforcement intersect (Task 3) is
+    // not wired yet, so these are inert data this task.
+    caller_scopes: (agent.frontmatter as Record<string, unknown>).scopes as string[] ?? [],
+    caller_project_ids: null,
+```
+
+> Verify the agent's scope source at ground-truth time: an agent's effective scopes come from its frontmatter / its minted token's `scopes`. If agent frontmatter has no `scopes` key, use the auto-minted token's scopes (the same the runner loads at `runner.ts:307`) or a safe default `[]` — Task 5 supersedes this anyway. The ONLY requirement here: the field is present and parses. `null` for projects = no narrowing (placeholder = unrestricted, matching pre-delegation).
+
+- [ ] **Step 2: Add the two fields to every direct run-fm test fixture**
+
+The 12 files that hand-build run frontmatter (verified failing): `agent-tools.test.ts`, `runner.test.ts`, `poller.test.ts`, `trigger-matcher.test.ts`, `builtin-triggers.test.ts`, `event-bus.test.ts`, `events.test.ts`, `documents.test.ts` (routes), `admin-runner-stats.test.ts` (routes), `agent-runs.test.ts` (services), `runs.test.ts` (routes). For each direct fixture object that builds an `agent_run` frontmatter, add `caller_scopes: [], caller_project_ids: null`. **PREFER a shared helper:** if these tests share a fixture builder, add the fields there once. If they hand-roll, add the two keys to each. (Tests that go through `createRun` are fixed by Step 1 and need no fixture change.)
+
+- [ ] **Step 3: Run the FULL suite to green**
+
+Run: `cd apps/server && bun test`
+Expected: 0 fail (back to the pre-Task-1 baseline + Task 1's new tests). If any failure remains, it's a fixture you missed — fix it. Do NOT proceed with any red.
+
+- [ ] **Step 4: Typecheck + commit**
+
+```bash
+cd apps/server && bun x tsc --noEmit   # expect clean
+git add apps/server/src/services/agent-runs.ts apps/server/src/**/*.test.ts
+git commit -m "phase-op-1: restore suite green after required caller fields (Task 1b plan-correction)"
 ```
 
 ---

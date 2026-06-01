@@ -13,6 +13,7 @@ import {
   apiTokens,
   documents,
   events,
+  memberships,
   projects as schemaProjects,
   tables,
   users,
@@ -178,6 +179,8 @@ async function seedRunningRun(
     fired_by: 'agent.task.assigned',
     started_at: now,
     worker_started_at: now,
+    caller_scopes: [],
+    caller_project_ids: null,
     ...overrides,
   };
   await db.insert(documents).values({
@@ -317,6 +320,236 @@ describe('createRun', () => {
         },
       }),
     ).rejects.toThrow(/empty|prompt/i);
+  });
+
+  // ----- Phase 1 caller-delegation snapshot (D1, D2, D6) -----
+
+  test('stamps caller_scopes/caller_project_ids from the actor membership role (owner → all scopes, no project narrowing)', async () => {
+    const { db, seed } = await makeTestApp();
+    // Harness seeds seed.user as workspace OWNER.
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+
+    const result = await createRun({
+      workspace: seed.workspace,
+      project: seed.project,
+      runsTable,
+      agent,
+      actor: seed.user,
+      input: {
+        parentDocumentId: parent.id,
+        firedBy: 'agent.task.assigned',
+        chainId: crypto.randomUUID(),
+        triggerId: null,
+      },
+    });
+
+    const fm = result.document.frontmatter as AgentRunFrontmatter;
+    expect([...fm.caller_scopes].sort()).toEqual(
+      ['agents:write', 'documents:delete', 'documents:read', 'documents:write'],
+    );
+    // owner → null (no project narrowing).
+    expect(fm.caller_project_ids).toBe(null);
+  });
+
+  test('member actor → documents:read+write only, project_ids clamped to the workspace project list (NOT wildcard)', async () => {
+    const { db, seed } = await makeTestApp();
+    // Seed a SECOND user as a plain member of the same workspace.
+    const memberId = nanoid();
+    await db.insert(users).values({
+      id: memberId,
+      email: 'bob@test.local',
+      name: 'Bob',
+      passwordHash: 'x',
+    });
+    await db.insert(memberships).values({
+      workspaceId: seed.workspace.id,
+      userId: memberId,
+      role: 'member',
+    });
+    const [member] = await db.select().from(users).where(eq(users.id, memberId));
+
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+
+    const result = await createRun({
+      workspace: seed.workspace,
+      project: seed.project,
+      runsTable,
+      agent,
+      actor: member!,
+      input: {
+        parentDocumentId: parent.id,
+        firedBy: 'manual',
+        chainId: crypto.randomUUID(),
+        triggerId: null,
+      },
+    });
+
+    const fm = result.document.frontmatter as AgentRunFrontmatter;
+    expect([...fm.caller_scopes].sort()).toEqual(['documents:read', 'documents:write']);
+    expect(fm.caller_scopes).not.toContain('documents:delete');
+    expect(fm.caller_scopes).not.toContain('agents:write');
+    // Member → explicit list of THIS workspace's project ids, never '*'.
+    expect(fm.caller_project_ids).not.toBe(null);
+    expect(fm.caller_project_ids).toContain(seed.project.id);
+    expect(fm.caller_project_ids).not.toContain('*');
+  });
+
+  test('fails LOUDLY (Finding 6) when the run owner has NO membership in the workspace', async () => {
+    // Was: silently stamped caller_scopes:[] → the run is created but DENIES
+    // every tool on the first call, with no visible cause. Finding 6 made this
+    // throw at create time so the misconfiguration is loud, not a mute
+    // first-tool 'forbidden'.
+    const { db, seed } = await makeTestApp();
+    // A user with NO membership row for this workspace.
+    const strangerId = nanoid();
+    await db.insert(users).values({
+      id: strangerId,
+      email: 'stranger@test.local',
+      name: 'Stranger',
+      passwordHash: 'x',
+    });
+    const [stranger] = await db.select().from(users).where(eq(users.id, strangerId));
+
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+
+    let thrown: unknown;
+    try {
+      await createRun({
+        workspace: seed.workspace,
+        project: seed.project,
+        runsTable,
+        agent,
+        actor: stranger!,
+        input: {
+          parentDocumentId: parent.id,
+          firedBy: 'manual',
+          chainId: crypto.randomUUID(),
+          triggerId: null,
+        },
+      });
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(HTTPError);
+    expect((thrown as HTTPError).code).toBe('RUN_OWNER_NOT_A_MEMBER');
+    expect((thrown as HTTPError).status).toBe(403);
+  });
+
+  test('ignores caller_* smuggled into input — authority is server-derived only (D2)', async () => {
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+
+    // The actor here is a MEMBER; smuggled input tries to escalate to delete.
+    const memberId = nanoid();
+    await db.insert(users).values({
+      id: memberId,
+      email: 'mallory@test.local',
+      name: 'Mallory',
+      passwordHash: 'x',
+    });
+    await db.insert(memberships).values({
+      workspaceId: seed.workspace.id,
+      userId: memberId,
+      role: 'member',
+    });
+    const [member] = await db.select().from(users).where(eq(users.id, memberId));
+
+    const result = await createRun({
+      workspace: seed.workspace,
+      project: seed.project,
+      runsTable,
+      agent,
+      actor: member!,
+      input: {
+        parentDocumentId: parent.id,
+        firedBy: 'manual',
+        chainId: crypto.randomUUID(),
+        triggerId: null,
+        // CreateRunInput has no caller_* fields; cast through unknown to prove
+        // even a smuggled payload can't influence the derived snapshot.
+        ...({ caller_scopes: ['documents:delete', 'agents:write'], caller_project_ids: ['*'] } as unknown as Record<string, never>),
+      },
+    });
+
+    const fm = result.document.frontmatter as AgentRunFrontmatter;
+    // Derived from the member role — the smuggled delete/agents:write/'*' are gone.
+    expect([...fm.caller_scopes].sort()).toEqual(['documents:read', 'documents:write']);
+    expect(fm.caller_project_ids).not.toContain('*');
+  });
+
+  test('resume INHERITS the original run caller snapshot — does not re-derive from the resume actor (D6)', async () => {
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+
+    // Original run created by a MEMBER → narrow snapshot (read+write only).
+    const memberId = nanoid();
+    await db.insert(users).values({
+      id: memberId,
+      email: 'carol@test.local',
+      name: 'Carol',
+      passwordHash: 'x',
+    });
+    await db.insert(memberships).values({
+      workspaceId: seed.workspace.id,
+      userId: memberId,
+      role: 'member',
+    });
+    const [member] = await db.select().from(users).where(eq(users.id, memberId));
+
+    const original = await createRun({
+      workspace: seed.workspace,
+      project: seed.project,
+      runsTable,
+      agent,
+      actor: member!,
+      input: {
+        parentDocumentId: parent.id,
+        firedBy: 'manual',
+        chainId: crypto.randomUUID(),
+        triggerId: null,
+      },
+    });
+    const origFm = original.document.frontmatter as AgentRunFrontmatter;
+    expect([...origFm.caller_scopes].sort()).toEqual(['documents:read', 'documents:write']);
+
+    // Resume created by the OWNER (seed.user). If it re-derived, it would
+    // re-open the ceiling to the full owner scope set. It must NOT.
+    const resume = await createRun({
+      workspace: seed.workspace,
+      project: seed.project,
+      runsTable,
+      agent,
+      actor: seed.user,
+      input: {
+        parentDocumentId: parent.id,
+        firedBy: 'manual',
+        chainId: origFm.chain_id,
+        triggerId: null,
+        resumeOf: original.document.id,
+      },
+    });
+
+    const resumeFm = resume.document.frontmatter as AgentRunFrontmatter;
+    // Inherited the member's narrow snapshot — NOT owner's all-scopes.
+    expect([...resumeFm.caller_scopes].sort()).toEqual(['documents:read', 'documents:write']);
+    expect(resumeFm.caller_scopes).not.toContain('documents:delete');
+    expect(resumeFm.caller_scopes).not.toContain('agents:write');
+    expect(resumeFm.caller_project_ids).toEqual(origFm.caller_project_ids);
   });
 });
 
@@ -969,6 +1202,8 @@ async function seedRunAt(
     chain_id: overrides.chainId ?? crypto.randomUUID(),
     fired_by: 'agent.task.assigned',
     started_at: overrides.startedAt ?? now,
+    caller_scopes: [],
+    caller_project_ids: null,
     ...(overrides.workerStartedAt !== undefined
       ? { worker_started_at: overrides.workerStartedAt }
       : {}),
@@ -2219,6 +2454,8 @@ async function seedTerminalRunEvent(
     fired_by: 'agent.task.assigned',
     started_at: now,
     completed_at: now,
+    caller_scopes: [],
+    caller_project_ids: null,
     ...(args.errorReason ? { error_reason: args.errorReason as never } : {}),
   };
   await db.insert(documents).values({

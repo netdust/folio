@@ -169,7 +169,10 @@ async function resolveProjectInWorkspace(
 
   // Phase 2.5: agent-bound tokens intersect the agent's frontmatter.projects
   // with the token's optional projectIds narrowing; reject if the requested
-  // project isn't in the result.
+  // project isn't in the result. Phase 1 delegation (mitigation D4): the
+  // caller's project set is ALREADY folded into `token.projectIds` upstream in
+  // loadContext (the central clamp), so this single intersect now enforces
+  // agent ∩ token ∩ caller — no per-site caller param needed.
   if (token.agentId) {
     const agent = await db.query.documents.findFirst({
       where: and(eq(documents.id, token.agentId), eq(documents.type, 'agent')),

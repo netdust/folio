@@ -65,6 +65,8 @@ describe('agentRunFrontmatterSchema', () => {
     chain_id: '00000000-0000-7000-8000-000000000000',
     fired_by: '00000000-0000-7000-8000-000000000000:trigger:builtin-on-assignment',
     started_at: new Date().toISOString(),
+    caller_scopes: ['documents:read'],
+    caller_project_ids: null,
   };
   test('accepts a valid minimal frontmatter', () => {
     expect(() => agentRunFrontmatterSchema.parse(valid)).not.toThrow();
@@ -120,6 +122,38 @@ describe('agentRunFrontmatterSchema', () => {
 
   test('done_reason is optional (pre-Sub-phase-C rows have no value)', () => {
     expect(() => agentRunFrontmatterSchema.parse(valid)).not.toThrow();
+  });
+
+  // Phase 1 caller-identity delegation (D1, D10) — the caller-authority
+  // snapshot captured server-side at createRun. The run's effective authority
+  // is agent ∩ caller for both scopes and projects.
+  test('caller_scopes and caller_project_ids parse and round-trip', () => {
+    const withCaller = {
+      ...valid,
+      caller_scopes: ['documents:read', 'documents:write'],
+      caller_project_ids: ['proj_1'],
+    };
+    const parsed = agentRunFrontmatterSchema.parse(withCaller);
+    expect(parsed.caller_scopes).toEqual(['documents:read', 'documents:write']);
+    expect(parsed.caller_project_ids).toEqual(['proj_1']);
+  });
+
+  // caller_project_ids === null means the caller is a workspace owner/admin
+  // (all projects); an array is an explicit allow-list; [] means deny (D5, D9).
+  test('caller_project_ids accepts null', () => {
+    expect(() =>
+      agentRunFrontmatterSchema.parse({
+        ...valid,
+        caller_scopes: ['documents:read'],
+        caller_project_ids: null,
+      }),
+    ).not.toThrow();
+  });
+
+  // D10 non-null contract — caller_scopes is REQUIRED for new rows.
+  test('caller_scopes is required (missing throws)', () => {
+    const { caller_scopes: _omit, ...withoutCallerScopes } = valid;
+    expect(() => agentRunFrontmatterSchema.parse(withoutCallerScopes)).toThrow();
   });
 });
 
