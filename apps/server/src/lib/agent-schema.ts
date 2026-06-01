@@ -62,7 +62,7 @@ const AGENT_WRITE_TOOLS: ReadonlySet<string> = new Set([
  * may delegate. Mirrors the four scopes the tool registry gates on
  * (documents:read/write/delete + agents:write).
  */
-const ALL_DOCUMENT_SCOPES = ['documents:read', 'documents:write', 'documents:delete', 'agents:write'] as const;
+export const ALL_DOCUMENT_SCOPES = ['documents:read', 'documents:write', 'documents:delete', 'agents:write'] as const;
 
 /** Human analog of toolsToScopes: map a workspace membership role to the scope
  *  set a delegated run may use on that caller's behalf (Phase 1 delegation).

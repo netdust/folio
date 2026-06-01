@@ -20,7 +20,22 @@ import { makeTestApp } from '../test/harness.ts';
 import { createRun, ensureRunsTable, nextChainId } from '../services/agent-runs.ts';
 import { listComments } from '../services/comments.ts';
 import { type ToolDef, executeTool, listToolDefs, registerTool } from './agent-tools.ts';
+import { intersectAgentProjects } from './agent-projects.ts';
 import { newApiToken } from './auth.ts';
+
+/**
+ * Replicate the central caller-project clamp that `loadContext` (runner.ts)
+ * applies before any tool runs: narrow the agent token's project reach to the
+ * caller's project set. After the code-review fix the PROJECT half of
+ * agent ∩ caller lives in `token.projectIds`, not in a per-tool param — so the
+ * delegation tests narrow the token the same way the runner does.
+ */
+function narrowTokenToCaller(token: ApiToken, callerProjectIds: string[] | null): ApiToken {
+  return {
+    ...token,
+    projectIds: intersectAgentProjects(token.projectIds ?? ['*'], callerProjectIds),
+  };
+}
 
 /**
  * Build a minimal ApiToken stub. Only the fields executeTool reads
@@ -1240,7 +1255,7 @@ describe('find_documents: workspace-wide title lookup, allow-list enforced', () 
   });
 });
 
-describe('caller project intersect (D4/D5): per-tool clamp to the caller', () => {
+describe('caller project intersect (D4/D5): central clamp folded into token.projectIds', () => {
   it('caller not in the project → tool rejected even when agent allow-lists it', async () => {
     const { db, seed } = await makeTestApp();
 
@@ -1284,10 +1299,13 @@ describe('caller project intersect (D4/D5): per-tool clamp to the caller', () =>
     });
 
     // Caller is a regular member clamped to the 'web' project only — NOT 'ops'.
+    // The runner's loadContext folds that clamp into token.projectIds before any
+    // tool runs; replicate it here, then drive the tool with the narrowed token.
+    const narrowed = narrowTokenToCaller(agentToken, [seed.project.id]);
     let thrown: unknown;
     try {
       await executeTool(
-        agentToken,
+        narrowed,
         `agent:${agentSlug}`,
         'get_document',
         { workspace_slug: 'acme', project_slug: 'ops', slug: opsDoc.slug },
@@ -1338,14 +1356,17 @@ describe('caller project intersect (D4/D5): per-tool clamp to the caller', () =>
       ) as { documents: { slug: string }[] }
     ).documents[0]!;
 
-    // Agent allow-lists '*'; token unrestricted; OWNER caller (null).
+    // Agent allow-lists '*'; token unrestricted; OWNER caller (null). The fold
+    // intersects the token reach with null → no narrowing, so the owner keeps
+    // the agent's full project reach.
     const { token: agentToken, agentSlug } = await seedAgent(db, seed.workspace.id, seed.user.id, {
       projects: ['*'],
       scopes: ['documents:read'],
     });
+    const narrowed = narrowTokenToCaller(agentToken, null);
 
     const out = (await executeTool(
-      agentToken,
+      narrowed,
       `agent:${agentSlug}`,
       'get_document',
       { workspace_slug: 'acme', project_slug: 'ops', slug: opsDoc.slug },
@@ -1354,6 +1375,103 @@ describe('caller project intersect (D4/D5): per-tool clamp to the caller', () =>
     )) as { content: { text: string }[] };
     const doc = JSON.parse(out.content[0]!.text) as { title: string };
     expect(doc.title).toBe('Ops doc');
+  });
+
+  // ----------------------------------------------------------------------
+  // The leak the code review found: the THREE enumeration tools that DON'T go
+  // through resolveProjectInWorkspace (find_documents no-project_slug branch,
+  // describe_workspace, list_projects) filter on token.projectIds. Before the
+  // central fold, the caller-project clamp never reached token.projectIds for
+  // these paths, so a member delegated to P1 ('web') could enumerate P2's
+  // ('ops') docs/projects via an agent allow-listed '*'. With the fold,
+  // token.projectIds is caller-narrowed to ['web'] and the leak closes.
+  // ----------------------------------------------------------------------
+  async function seedTwoProjectLeakFixture(): Promise<{
+    db: DB;
+    seed: Awaited<ReturnType<typeof makeTestApp>>['seed'];
+    narrowed: ApiToken;
+    agentSlug: string;
+  }> {
+    const { db, seed } = await makeTestApp();
+
+    // P2 ('ops') alongside the seeded P1 ('web').
+    const opsId = nanoid();
+    await db.insert(projects).values({
+      id: opsId,
+      workspaceId: seed.workspace.id,
+      slug: 'ops',
+      name: 'Ops',
+    });
+    await seedProjectDefaults(db, opsId);
+
+    // A matching doc in BOTH projects.
+    const pat = await seedHumanPat(db, seed.workspace.id, seed.user.id, ['documents:write']);
+    await exec(pat, seed.user.id, 'create_document', {
+      workspace_slug: 'acme',
+      project_slug: 'web',
+      type: 'work_item',
+      title: 'Combell web',
+    });
+    await exec(pat, seed.user.id, 'create_document', {
+      workspace_slug: 'acme',
+      project_slug: 'ops',
+      type: 'work_item',
+      title: 'Combell ops',
+    });
+
+    // Agent allow-lists '*' (wildcard); the member caller is clamped to P1.
+    const { token: agentToken, agentSlug } = await seedAgent(db, seed.workspace.id, seed.user.id, {
+      projects: ['*'],
+      scopes: ['documents:read'],
+    });
+    const narrowed = narrowTokenToCaller(agentToken, [seed.project.id]);
+    return { db, seed, narrowed, agentSlug };
+  }
+
+  it('find_documents (NO project_slug) returns ONLY the caller P1 docs — not P2 (leak fix)', async () => {
+    const { seed, narrowed, agentSlug } = await seedTwoProjectLeakFixture();
+    const res = (await executeTool(
+      narrowed,
+      `agent:${agentSlug}`,
+      'find_documents',
+      { workspace_slug: 'acme', query: 'combell' },
+      undefined,
+      { callerScopes: ['documents:read'], callerProjectIds: [seed.project.id] },
+    )) as { content: { text: string }[] };
+    const out = JSON.parse(res.content[0]!.text) as {
+      documents: { project_slug: string | null }[];
+    };
+    const slugs = out.documents.map((d) => d.project_slug);
+    expect(slugs).toContain('web');
+    expect(slugs).not.toContain('ops');
+  });
+
+  it('describe_workspace shows ONLY the caller P1 project — not P2 (leak fix)', async () => {
+    const { seed, narrowed, agentSlug } = await seedTwoProjectLeakFixture();
+    const res = (await executeTool(
+      narrowed,
+      `agent:${agentSlug}`,
+      'describe_workspace',
+      { workspace_slug: 'acme' },
+      undefined,
+      { callerScopes: ['documents:read'], callerProjectIds: [seed.project.id] },
+    )) as { content: { text: string }[] };
+    const out = JSON.parse(res.content[0]!.text) as { projects: { slug: string }[] };
+    expect(out.projects.map((p) => p.slug).sort()).toEqual(['web']);
+  });
+
+  it('list_projects returns ONLY the caller P1 project — not P2 (leak fix)', async () => {
+    const { seed, narrowed, agentSlug } = await seedTwoProjectLeakFixture();
+    const res = (await executeTool(
+      narrowed,
+      `agent:${agentSlug}`,
+      'list_projects',
+      { workspace_slug: 'acme' },
+      undefined,
+      { callerScopes: ['documents:read'], callerProjectIds: [seed.project.id] },
+    )) as { content: { text: string }[] };
+    const out = JSON.parse(res.content[0]!.text) as { projects: { slug: string }[] };
+    expect(out.projects.map((p) => p.slug).sort()).toEqual(['web']);
   });
 });
 

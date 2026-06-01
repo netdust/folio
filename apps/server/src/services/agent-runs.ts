@@ -167,8 +167,17 @@ export async function createRun(
       ),
     });
     const callerRole = membership?.role;
-    // Fail closed: no membership → no authority (deny-all). (D9/D10)
-    callerScopes = callerRole ? roleToScopes(callerRole) : [];
+    if (!callerRole) {
+      // Finding 6: a run whose owner has no membership in the run's workspace
+      // would get caller_scopes:[] and silently deny every tool. Fail loudly at
+      // create time so the cause is visible, not a mute first-tool 'forbidden'.
+      throw new HTTPError(
+        'RUN_OWNER_NOT_A_MEMBER',
+        'The run owner is not a member of this workspace; cannot establish caller authority.',
+        403,
+      );
+    }
+    callerScopes = roleToScopes(callerRole); // callerRole now non-null
     // Project membership in Folio is WORKSPACE-LEVEL only — there is no
     // per-project membership table, so a workspace member can see every
     // project in that workspace. owner/admin → null (no narrowing, via
@@ -184,9 +193,7 @@ export async function createRun(
       });
       memberProjectIds = wsProjects.map((p) => p.id);
     }
-    callerProjectIds = callerRole
-      ? callerProjectsFor({ role: callerRole, projectIds: memberProjectIds })
-      : [];
+    callerProjectIds = callerProjectsFor({ role: callerRole, projectIds: memberProjectIds });
   }
 
   const runFm: AgentRunFrontmatter = {

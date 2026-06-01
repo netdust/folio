@@ -160,7 +160,6 @@ async function resolveProjectInWorkspace(
   ws: Workspace,
   token: ApiToken,
   args: Record<string, unknown>,
-  callerProjectIds: string[] | null, // NEW — Phase 1 delegation (D4)
 ): Promise<Project> {
   const slug = requireString(args, 'project_slug');
   const p = await db.query.projects.findFirst({
@@ -170,7 +169,10 @@ async function resolveProjectInWorkspace(
 
   // Phase 2.5: agent-bound tokens intersect the agent's frontmatter.projects
   // with the token's optional projectIds narrowing; reject if the requested
-  // project isn't in the result.
+  // project isn't in the result. Phase 1 delegation (mitigation D4): the
+  // caller's project set is ALREADY folded into `token.projectIds` upstream in
+  // loadContext (the central clamp), so this single intersect now enforces
+  // agent ∩ token ∩ caller — no per-site caller param needed.
   if (token.agentId) {
     const agent = await db.query.documents.findFirst({
       where: and(eq(documents.id, token.agentId), eq(documents.type, 'agent')),
@@ -181,11 +183,7 @@ async function resolveProjectInWorkspace(
       });
     }
     const agentProjects = resolveAgentProjects(agent);
-    const agentTokenEffective = intersectAgentProjects(agentProjects, token.projectIds ?? null);
-    // Phase 1 delegation (mitigation D4): clamp once more to the caller's
-    // project set. null = owner (no narrowing); array/[] = explicit member
-    // allow-list. Reuses the audited helper — no hand-rolled set logic.
-    const effective = intersectAgentProjects(agentTokenEffective, callerProjectIds);
+    const effective = intersectAgentProjects(agentProjects, token.projectIds ?? null);
     if (!effective.includes('*') && !effective.includes(p.id)) {
       console.info('[mcp] allow-list rejection', {
         agent_slug: agent.slug,
@@ -422,7 +420,7 @@ export function registerRealTools(): void {
       .strict(),
     handler: async (args, ctx) => {
       const ws = await resolveWorkspaceForToken(ctx.token, args);
-      const p = await resolveProjectInWorkspace(ws, ctx.token, args, ctx.callerProjectIds);
+      const p = await resolveProjectInWorkspace(ws, ctx.token, args);
       const type = optionalString(args, 'type');
       if (type === 'agent_run') {
         throw new Error(
@@ -498,7 +496,7 @@ export function registerRealTools(): void {
       let projectIds: string[];
       const projectSlug = optionalString(args, 'project_slug');
       if (projectSlug) {
-        const p = await resolveProjectInWorkspace(ws, token, args, ctx.callerProjectIds); // enforces allow-list
+        const p = await resolveProjectInWorkspace(ws, token, args); // enforces allow-list
         projectIds = [p.id];
       } else if (!token.agentId) {
         projectIds = all.map((p) => p.id);
@@ -607,7 +605,7 @@ export function registerRealTools(): void {
       .strict(),
     handler: async (args, ctx) => {
       const ws = await resolveWorkspaceForToken(ctx.token, args);
-      const p = await resolveProjectInWorkspace(ws, ctx.token, args, ctx.callerProjectIds);
+      const p = await resolveProjectInWorkspace(ws, ctx.token, args);
       const slug = requireString(args, 'slug');
       const doc = await getDocument(p.id, slug);
       if (!doc) throw new Error('document not found');
@@ -642,7 +640,7 @@ export function registerRealTools(): void {
       .strict(),
     handler: async (args, ctx) => {
       const ws = await resolveWorkspaceForToken(ctx.token, args);
-      const p = await resolveProjectInWorkspace(ws, ctx.token, args, ctx.callerProjectIds);
+      const p = await resolveProjectInWorkspace(ws, ctx.token, args);
       const slug = requireString(args, 'slug');
       const doc = await getDocument(p.id, slug);
       if (!doc) throw new Error('document not found');
@@ -713,7 +711,7 @@ export function registerRealTools(): void {
           { reason: 'agent_lifecycle_via_http_only' },
         );
       }
-      const p = await resolveProjectInWorkspace(ws, token, args, ctx.callerProjectIds);
+      const p = await resolveProjectInWorkspace(ws, token, args);
       const title = requireString(args, 'title');
       const body = optionalString(args, 'body') ?? '';
       const fmArg = args['frontmatter'];
@@ -776,7 +774,7 @@ export function registerRealTools(): void {
     handler: async (args, ctx) => {
       const { token } = ctx;
       const ws = await resolveWorkspaceForToken(token, args);
-      const p = await resolveProjectInWorkspace(ws, token, args, ctx.callerProjectIds);
+      const p = await resolveProjectInWorkspace(ws, token, args);
       const slug = requireString(args, 'slug');
       const existing = await getDocument(p.id, slug);
       if (!existing) throw new Error('document not found');
@@ -850,7 +848,7 @@ export function registerRealTools(): void {
     handler: async (args, ctx) => {
       const { token } = ctx;
       const ws = await resolveWorkspaceForToken(token, args);
-      const p = await resolveProjectInWorkspace(ws, token, args, ctx.callerProjectIds);
+      const p = await resolveProjectInWorkspace(ws, token, args);
       const slug = requireString(args, 'slug');
       const existing = await getDocument(p.id, slug);
       if (!existing) throw new Error('document not found');
@@ -897,7 +895,7 @@ export function registerRealTools(): void {
       .strict(),
     handler: async (args, ctx) => {
       const ws = await resolveWorkspaceForToken(ctx.token, args);
-      const p = await resolveProjectInWorkspace(ws, ctx.token, args, ctx.callerProjectIds);
+      const p = await resolveProjectInWorkspace(ws, ctx.token, args);
       const t = await resolveTableForArgs(p, args);
       const list = await listStatuses(t.id);
       return textResult({ table: { id: t.id, slug: t.slug }, statuses: list });
@@ -926,7 +924,7 @@ export function registerRealTools(): void {
       .strict(),
     handler: async (args, ctx) => {
       const ws = await resolveWorkspaceForToken(ctx.token, args);
-      const p = await resolveProjectInWorkspace(ws, ctx.token, args, ctx.callerProjectIds);
+      const p = await resolveProjectInWorkspace(ws, ctx.token, args);
       const t = await resolveTableForArgs(p, args);
       const list = await listFields(t.id);
       return textResult({ table: { id: t.id, slug: t.slug }, fields: list });
@@ -955,7 +953,7 @@ export function registerRealTools(): void {
       .strict(),
     handler: async (args, ctx) => {
       const ws = await resolveWorkspaceForToken(ctx.token, args);
-      const p = await resolveProjectInWorkspace(ws, ctx.token, args, ctx.callerProjectIds);
+      const p = await resolveProjectInWorkspace(ws, ctx.token, args);
       const t = await resolveTableForArgs(p, args);
       const list = await listViews(t.id);
       return textResult({ table: { id: t.id, slug: t.slug }, views: list });
@@ -991,7 +989,7 @@ export function registerRealTools(): void {
       .strict(),
     handler: async (args, ctx) => {
       const ws = await resolveWorkspaceForToken(ctx.token, args);
-      const p = await resolveProjectInWorkspace(ws, ctx.token, args, ctx.callerProjectIds);
+      const p = await resolveProjectInWorkspace(ws, ctx.token, args);
       const t = await resolveTableForArgs(p, args);
       const viewId = optionalString(args, 'view_id');
       const viewSlug = optionalString(args, 'view_slug');
@@ -1062,7 +1060,7 @@ export function registerRealTools(): void {
     handler: async (args, ctx) => {
       const { token } = ctx;
       const ws = await resolveWorkspaceForToken(token, args);
-      const project = await resolveProjectInWorkspace(ws, token, args, ctx.callerProjectIds);
+      const project = await resolveProjectInWorkspace(ws, token, args);
       const parentSlug = requireString(args, 'parent_slug');
       const parent = await db.query.documents.findFirst({
         where: and(eq(documents.projectId, project.id), eq(documents.slug, parentSlug)),
@@ -1130,7 +1128,7 @@ export function registerRealTools(): void {
       .strict(),
     handler: async (args, ctx) => {
       const ws = await resolveWorkspaceForToken(ctx.token, args);
-      const project = await resolveProjectInWorkspace(ws, ctx.token, args, ctx.callerProjectIds);
+      const project = await resolveProjectInWorkspace(ws, ctx.token, args);
       const parentSlug = requireString(args, 'parent_slug');
       const parent = await db.query.documents.findFirst({
         where: and(eq(documents.projectId, project.id), eq(documents.slug, parentSlug)),
@@ -1186,7 +1184,7 @@ export function registerRealTools(): void {
     handler: async (args, ctx) => {
       const { token } = ctx;
       const ws = await resolveWorkspaceForToken(token, args);
-      const project = await resolveProjectInWorkspace(ws, token, args, ctx.callerProjectIds);
+      const project = await resolveProjectInWorkspace(ws, token, args);
       const slug = requireString(args, 'slug');
       const existing = await getCommentScoped(ws.id, project.id, slug);
       if (!existing) throw new Error('comment not found');
@@ -1245,7 +1243,7 @@ export function registerRealTools(): void {
     handler: async (args, ctx) => {
       const { token } = ctx;
       const ws = await resolveWorkspaceForToken(token, args);
-      const project = await resolveProjectInWorkspace(ws, token, args, ctx.callerProjectIds);
+      const project = await resolveProjectInWorkspace(ws, token, args);
       const slug = requireString(args, 'slug');
       const existing = await getCommentScoped(ws.id, project.id, slug);
       if (!existing) throw new Error('comment not found');
@@ -1539,7 +1537,7 @@ export function registerRealTools(): void {
     handler: async (args, ctx) => {
       const { token } = ctx;
       const ws = await resolveWorkspaceForToken(token, args);
-      const project = await resolveProjectInWorkspace(ws, token, args, ctx.callerProjectIds);
+      const project = await resolveProjectInWorkspace(ws, token, args);
       const allowList = await resolveAgentAllowListForToken(token);
 
       const statusRaw = optionalString(args, 'status');

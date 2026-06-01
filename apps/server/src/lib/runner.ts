@@ -49,6 +49,7 @@ import {
   transitionRun,
 } from '../services/agent-runs.ts';
 import { runClaudeCode, type SpawnFn } from './cc-executor.ts';
+import { intersectAgentProjects } from './agent-projects.ts';
 import { type AuthorContext, createComment, listComments } from '../services/comments.ts';
 import {
   type AgentRunFrontmatter,
@@ -108,7 +109,7 @@ export function __setCcSpawnForTest(fn: SpawnFn | undefined): void {
 // Loaded context
 // ---------------------------------------------------------------------------
 
-interface RunContext {
+export interface RunContext {
   run: Document;
   fm: AgentRunFrontmatter;
   /** Guaranteed non-null: loadContext returns null when run.parentId is absent. */
@@ -275,7 +276,9 @@ export async function runAgentResume(args: { runId: string }): Promise<void> {
 // Context loading
 // ---------------------------------------------------------------------------
 
-async function loadContext(runId: string): Promise<RunContext | null> {
+// Exported for the delegation fold regression tests (runner.test.ts asserts
+// ctx.token.projectIds is caller-narrowed). Not part of the public runner API.
+export async function loadContext(runId: string): Promise<RunContext | null> {
   const run = await db.query.documents.findFirst({
     where: and(eq(documents.id, runId), eq(documents.type, 'agent_run')),
   });
@@ -318,6 +321,20 @@ async function loadContext(runId: string): Promise<RunContext | null> {
   });
   if (!token) return null;
 
+  // Caller-identity delegation (central project clamp). Narrow the agent
+  // token's project reach to the CALLER's project set ONCE here, so every
+  // downstream `intersectAgentProjects(agentProjects, token.projectIds)` — in
+  // the registry tools AND the ccExecute ephemeral-token mint (which copies
+  // ctx.token.projectIds) — automatically enforces agent ∩ token ∩ caller. This
+  // gives the PROJECT ceiling the same central altitude the SCOPE ceiling has
+  // in executeTool. caller_project_ids null = owner/no-narrowing (intersect
+  // returns the token list unchanged); an explicit list narrows; [] denies.
+  const callerProjectIds = (fm.caller_project_ids as string[] | null) ?? null;
+  const narrowedToken = {
+    ...token,
+    projectIds: intersectAgentProjects(token.projectIds ?? ['*'], callerProjectIds),
+  };
+
   const actor = `agent:${agent.slug}`;
   // FK-valid actor for transitionRun (see RunContext.transitionActor). Prefer
   // the run's owner; fall back to the agent's creator.
@@ -359,7 +376,7 @@ async function loadContext(runId: string): Promise<RunContext | null> {
     agentFm,
     workspace,
     project,
-    token,
+    token: narrowedToken,
     actor,
     transitionActor,
     authorContext,

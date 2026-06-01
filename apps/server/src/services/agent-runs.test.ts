@@ -400,7 +400,11 @@ describe('createRun', () => {
     expect(fm.caller_project_ids).not.toContain('*');
   });
 
-  test('fails closed (deny-all) when the actor has NO membership in the workspace', async () => {
+  test('fails LOUDLY (Finding 6) when the run owner has NO membership in the workspace', async () => {
+    // Was: silently stamped caller_scopes:[] → the run is created but DENIES
+    // every tool on the first call, with no visible cause. Finding 6 made this
+    // throw at create time so the misconfiguration is loud, not a mute
+    // first-tool 'forbidden'.
     const { db, seed } = await makeTestApp();
     // A user with NO membership row for this workspace.
     const strangerId = nanoid();
@@ -417,23 +421,27 @@ describe('createRun', () => {
     const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
     const runsTable = await seedRunsTable(db, seed.project.id);
 
-    const result = await createRun({
-      workspace: seed.workspace,
-      project: seed.project,
-      runsTable,
-      agent,
-      actor: stranger!,
-      input: {
-        parentDocumentId: parent.id,
-        firedBy: 'manual',
-        chainId: crypto.randomUUID(),
-        triggerId: null,
-      },
-    });
-
-    const fm = result.document.frontmatter as AgentRunFrontmatter;
-    expect(fm.caller_scopes).toEqual([]);
-    expect(fm.caller_project_ids).toEqual([]);
+    let thrown: unknown;
+    try {
+      await createRun({
+        workspace: seed.workspace,
+        project: seed.project,
+        runsTable,
+        agent,
+        actor: stranger!,
+        input: {
+          parentDocumentId: parent.id,
+          firedBy: 'manual',
+          chainId: crypto.randomUUID(),
+          triggerId: null,
+        },
+      });
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(HTTPError);
+    expect((thrown as HTTPError).code).toBe('RUN_OWNER_NOT_A_MEMBER');
+    expect((thrown as HTTPError).status).toBe(403);
   });
 
   test('ignores caller_* smuggled into input — authority is server-derived only (D2)', async () => {

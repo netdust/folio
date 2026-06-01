@@ -22,6 +22,7 @@ import {
   apiTokens,
   documents,
   events,
+  projects,
   tables,
 } from '../db/schema.ts';
 import { claimNextPlanningRun } from '../services/agent-runs.ts';
@@ -36,7 +37,7 @@ import { newApiToken } from './auth.ts';
 import { encryptSecret } from './crypto.ts';
 import { HTTPError } from './http.ts';
 import { mcpInvalidParams } from './mcp-errors.ts';
-import { __setCcSpawnForTest, rejectRun, runAgent, runAgentResume } from './runner.ts';
+import { __setCcSpawnForTest, loadContext, rejectRun, runAgent, runAgentResume } from './runner.ts';
 
 type TestDB = Awaited<ReturnType<typeof makeTestApp>>['db'];
 
@@ -2163,5 +2164,76 @@ describe('runAgent top-level containment', () => {
     const fm = await readRun(db, run.id);
     expect(fm.status).toBe('failed');
     expect(fm.error_reason).toBe('provider_error');
+  });
+});
+
+// ==========================================================================
+// Caller-identity delegation — central project clamp fold in loadContext.
+//
+// SECURITY REGRESSION (code review): the PROJECT half of agent ∩ caller was
+// distributed into resolveProjectInWorkspace, so the three enumeration tools
+// that DON'T use that helper (find_documents no-project branch,
+// describe_workspace, list_projects) plus the ccExecute ephemeral-token mint
+// BYPASSED the caller-project clamp → cross-project leak. The fix folds the
+// narrowing into loadContext: ctx.token.projectIds is narrowed to the caller's
+// project set ONCE, so every downstream
+// `intersectAgentProjects(agentProjects, token.projectIds)` enforces the clamp
+// automatically. These tests assert the fold itself.
+// ==========================================================================
+
+describe('loadContext: central caller-project clamp fold', () => {
+  test('MEMBER-delegated run (caller_project_ids=[P1]) narrows ctx.token.projectIds to [P1] — NOT P2', async () => {
+    const { db, project, run } = await scaffold();
+
+    // Second project (P2) in the SAME workspace. The agent allow-lists '*'
+    // (seedAgent default), so absent the fold the token would reach P2 too.
+    const p2Id = nanoid();
+    await db.insert(projects).values({
+      id: p2Id,
+      workspaceId: run.workspaceId,
+      slug: 'ops',
+      name: 'Ops',
+    });
+
+    // Re-stamp the run's caller snapshot to a MEMBER clamped to ONLY P1.
+    await db
+      .update(documents)
+      .set({
+        frontmatter: sql`json_set(${documents.frontmatter}, '$.caller_project_ids', json(${JSON.stringify(
+          [project.id],
+        )}))`,
+      })
+      .where(eq(documents.id, run.id));
+
+    const ctx = await loadContext(run.id);
+    expect(ctx).not.toBeNull();
+    // The fold narrowed the agent token's reach to the caller's single project.
+    expect(ctx!.token.projectIds).toEqual([project.id]);
+    expect(ctx!.token.projectIds).not.toContain(p2Id);
+  });
+
+  test('OWNER-delegated run (caller_project_ids=null) → no narrowing; token.projectIds stays the agent reach', async () => {
+    // seedRunningRun default caller_project_ids is null (owner). The agent
+    // token has no projectIds narrowing of its own, so the intersect of
+    // (token reach ?? ['*']) with null returns the unchanged list.
+    const { run } = await scaffold();
+    const ctx = await loadContext(run.id);
+    expect(ctx).not.toBeNull();
+    // ['*'] = wildcard (owner, no narrowing) — the token reaches every project.
+    expect(ctx!.token.projectIds).toEqual(['*']);
+  });
+
+  test('caller_project_ids=[] (non-member / explicit deny) → token.projectIds clamped to [] (deny-all)', async () => {
+    const { db, run } = await scaffold();
+    await db
+      .update(documents)
+      .set({
+        frontmatter: sql`json_set(${documents.frontmatter}, '$.caller_project_ids', json('[]'))`,
+      })
+      .where(eq(documents.id, run.id));
+
+    const ctx = await loadContext(run.id);
+    expect(ctx).not.toBeNull();
+    expect(ctx!.token.projectIds).toEqual([]);
   });
 });
