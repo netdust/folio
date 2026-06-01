@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 
 interface DraftDoc {
   id: string;
@@ -33,21 +33,22 @@ export interface DocumentDraft {
  * persistently at the layout, so the hook can't rely on remount to re-seed.
  */
 export function useDocumentDraft(doc: DraftDoc): DocumentDraft {
-  const seed = useMemo<DraftState>(
-    () => ({ body: doc.body, frontmatter: doc.frontmatter }),
-    [doc.body, doc.frontmatter],
-  );
-  const [draft, setDraft] = useState<DraftState>(seed);
+  const [draft, setDraft] = useState<DraftState>(() => ({
+    body: doc.body,
+    frontmatter: doc.frontmatter,
+  }));
 
-  // Re-seed on doc.id (switch) or doc.updatedAt (post-save) change.
+  // Re-seed on doc.id (switch) or doc.updatedAt (post-save) change. This runs
+  // DURING render (the React "derive state from a changing key" pattern), not in
+  // an effect, so there's no empty-draft frame: a mount-only body editor keyed on
+  // the same identity reads the freshly-seeded value, not the stale fallback the
+  // parent passes while the doc is still loading.
   const seedKeyRef = useRef<string>(`${doc.id}::${doc.updatedAt}`);
-  useEffect(() => {
-    const key = `${doc.id}::${doc.updatedAt}`;
-    if (seedKeyRef.current !== key) {
-      seedKeyRef.current = key;
-      setDraft({ body: doc.body, frontmatter: doc.frontmatter });
-    }
-  }, [doc.id, doc.updatedAt, doc.body, doc.frontmatter]);
+  const currentKey = `${doc.id}::${doc.updatedAt}`;
+  if (seedKeyRef.current !== currentKey) {
+    seedKeyRef.current = currentKey;
+    setDraft({ body: doc.body, frontmatter: doc.frontmatter });
+  }
 
   const setBody = (body: string) => setDraft((d) => ({ ...d, body }));
   const setFrontmatter = (patch: Record<string, unknown>) =>

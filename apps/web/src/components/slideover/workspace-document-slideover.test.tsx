@@ -213,6 +213,91 @@ describe('WorkspaceDocumentSlideover', () => {
     expect(document.querySelector('[data-testid="workspace-slideover-editor"]')).not.toBeNull();
   });
 
+  it('shows a disabled Save icon when clean and enables it after an edit (agent)', async () => {
+    mockWorkspaceDoc('triage', 'agent');
+    const { queryClient, router } = setup('?wdoc=triage');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText('Triage Agent');
+    const saveBtn = screen.getByRole('button', { name: 'Save' });
+    expect(saveBtn).toBeDisabled();
+
+    // Edit the body via the raw editor (deterministic in jsdom; Milkdown is not).
+    // Switch to raw markdown through the More menu.
+    await userEvent.click(screen.getByRole('button', { name: 'More actions' }));
+    await userEvent.click(screen.getByRole('menuitemradio', { name: /Raw markdown/ }));
+    const textarea = await screen.findByRole('textbox');
+    await userEvent.type(textarea, ' edited');
+    await waitFor(() => expect(saveBtn).toBeEnabled());
+  });
+
+  it('clicking Save PATCHes the diff, toasts, and returns the icon to disabled', async () => {
+    const patches: unknown[] = [];
+    mockWorkspaceDoc('triage', 'agent', { onPatch: (p) => patches.push(p) });
+    const { queryClient, router } = setup('?wdoc=triage');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText('Triage Agent');
+    await userEvent.click(screen.getByRole('button', { name: 'More actions' }));
+    await userEvent.click(screen.getByRole('menuitemradio', { name: /Raw markdown/ }));
+    const textarea = await screen.findByRole('textbox');
+    await userEvent.type(textarea, ' edited');
+    const saveBtn = screen.getByRole('button', { name: 'Save' });
+    await waitFor(() => expect(saveBtn).toBeEnabled());
+    await userEvent.click(saveBtn);
+    await waitFor(() => expect(patches.length).toBeGreaterThan(0));
+    expect(patches[0]).toMatchObject({ body: expect.stringContaining('edited') });
+  });
+
+  it('trigger pane no longer renders its own inline Save button (save is the header icon)', async () => {
+    mockWorkspaceDoc('shake-trigger', 'trigger', {
+      frontmatter: { schedule: '0 9 * * 1', agent: 'shake-folio-only', enabled: false },
+    });
+    const { queryClient, router } = setup('?wdoc=shake-trigger');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await screen.findByLabelText('Enabled');
+    // Exactly one element labelled Save — the header icon. The old pane Save
+    // button had the literal text "Save" inside the scroll area.
+    const saves = screen.getAllByRole('button', { name: 'Save' });
+    expect(saves).toHaveLength(1);
+    expect(saves[0]).toHaveAttribute('aria-label', 'Save');
+  });
+
+  it('closing while dirty opens the unsaved prompt; Discard closes without saving', async () => {
+    const patches: unknown[] = [];
+    mockWorkspaceDoc('triage', 'agent', { onPatch: (p) => patches.push(p) });
+    const { queryClient, router } = setup('?wdoc=triage');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText('Triage Agent');
+    await userEvent.click(screen.getByRole('button', { name: 'More actions' }));
+    await userEvent.click(screen.getByRole('menuitemradio', { name: /Raw markdown/ }));
+    const textarea = await screen.findByRole('textbox');
+    await userEvent.type(textarea, ' edited');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled());
+
+    await userEvent.click(screen.getByRole('button', { name: 'Close document' }));
+    // Prompt appears instead of an immediate close.
+    expect(await screen.findByText(/Unsaved changes/i)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Discard' }));
+    // Closed (title gone) and no PATCH fired.
+    await waitFor(() => expect(screen.queryByText('Triage Agent')).not.toBeInTheDocument());
+    expect(patches).toHaveLength(0);
+  });
+
   it('renders the icon tab toggles Fields / Activity / Runs for an agent (no Comments)', async () => {
     mockWorkspaceDoc('triage', 'agent');
     const { queryClient, router } = setup('?wdoc=triage');
