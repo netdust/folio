@@ -22,6 +22,14 @@ This is **Claude-Code-for-Folio** — the locked agent thesis (`folio-agent-thes
 
 This **deliberately extends one locked decision**: `folio-tools-as-primitives` said "documents-only primitives." This spec widens the primitive to the **whole token-scoped REST surface** via `folio_api`. That widening is the entire point — mark it explicitly in `DECISIONS.md`.
 
+### The governing principle (applies to EVERY agent, not just the operator)
+
+> **The operator agent is not the source of truth for Folio behavior. The API is. The skill is documentation of the API.**
+
+This is subtle and load-bearing. The wrong mental model is *"the operator agent knows how projects work."* The right one is *"projects work because the API works; the operator agent merely knows how to use it."* Behavior lives in the routes + the schema + the scope checks — never in the agent's prompt or the skill. The skill **describes** the API; it never **is** the behavior.
+
+Why it matters: Folio will soon have several agents — MCP (bring-your-own), the built-in operator, research agents, workflow agents. If behavior leaks into any one agent's head, that agent becomes *special*, the others diverge, and the platform fractures. Keeping the API as the single source of truth keeps every agent — present and future — a **thin, interchangeable client** of the same capable platform. If a rule matters, it lives in the route, not the prompt.
+
 ## Scope: sequenced phases (folded into one spec on purpose)
 
 The agent is meaningless without the API surface beneath it. The agent phase's every capability claim is a direct cell in the API-completion phase's route table. Splitting them into separate specs would let them drift; one spec nails capability to its prerequisite route.
@@ -64,9 +72,11 @@ Today Folio's REST surface is documents-mostly and session-auth-mostly. The gene
 - **(e)** it **emits an event** on mutation (every-write-emits-event holds for the general path),
 - **(f)** it supports **`dryRun=true`** — returns `{would_create, would_update, would_delete, ...}` WITHOUT mutating. This is the universal planning mechanism: the plan/apply gate calls the endpoint with `dryRun`, renders the diff, and on apply re-calls without it. **No per-endpoint plan logic ever gets written.** It also powers the medium-risk "auto-with-undo" preview. `dryRun` support is part of the route contract, not an afterthought.
 
-**Resource inventory** (each row becomes a route + scope audit, a `dryRun` implementation, and a row in the `folio` skill's reference table):
+**Resource inventory** (each row becomes a route + scope audit, a `dryRun` implementation, and a row in the `folio` skill's reference table).
 
-| Resource | Operations needed | Current state | Gate for agent |
+> ⚠️ **The last column is a v1 coarse default, NOT policy.** Policy is the **risk score** (objects touched / reversibility / workspace-scope / permissions affected — see the risk-gate section). This column is merely the **initial per-resource default** that approximates the score before the scorer exists. Do not harden it into "the rules" — the same resource can be any tier depending on payload. When the scorer lands, this column becomes a fallback, not the source.
+
+| Resource | Operations needed | Current state | v1 gate default *(coarse — superseded by risk score)* |
 |---|---|---|---|
 | **Views** | create / update / delete | read-only (MCP `list_views` / `run_view`) | **auto** (reversible config) |
 | **Filters** | author (part of view config) | via view config | **auto** |
@@ -75,7 +85,7 @@ Today Folio's REST surface is documents-mostly and session-auth-mostly. The gene
 | **Users / memberships** | invite / add / role-change | session-only | **plan → apply** (highest blast radius) |
 | **Workspaces / projects** | create / configure | partial; token-scope audit needed | create = **plan → apply**; configure = **auto** |
 
-Each row lands with: route verb+path, required scope, auth method (must include token), tenant guard, event emission, and **auto vs plan→apply** classification. This table **is** the agent's API manual (it gets copied into the skill).
+Each row lands with: route verb+path, required scope, auth method (must include token), tenant guard, event emission, `dryRun` support, and its **v1 gate default** (the coarse classification above). This table **is** the agent's API manual (it gets copied into the skill) — but remember the skill *documents* these routes; it does not *define* their behavior (see the governing principle).
 
 **Honest risk:** This phase opens auth on resources currently session-walled *for good reason* (users, settings). That is a real attack-surface change and is why this spec carries a mandatory threat model (below).
 
@@ -178,6 +188,12 @@ Net-new: (1) the caller-identity-on-run + scope-intersect keystone (Phase 1 — 
 ## Strategic assessment
 
 This is **more important than autonomous research agents, work-item agents, or agent chains** — because it becomes the **operating system for Folio**. External MCP = "bring your own agent." Built-in operator = "Folio already understands itself." Complementary, not competing. The novel pieces are the **`folio` skill** and the **caller-identity delegation model**; the rest is plumbing around them. Prioritize accordingly: it earns its place ahead of further autonomy work.
+
+### Scope reality (read before estimating)
+
+**The actual operator agent is roughly 10–20% of the effort. The other 80–90% is building the platform that makes the agent possible.** Phase 1 (caller delegation) touches runner / permissions / scopes / audit / approvals / tools. Phase 2 (API completion) touches settings / memberships / users / workspaces / views / fields / events / auth. **That is a substantial platform project, not a feature.** Do not estimate this as "add an agent."
+
+This is **not a criticism of the design — it is evidence the abstraction layer is correct.** The agent is becoming the *thin layer on top of a more capable Folio platform*, rather than the platform becoming a thin layer underneath the agent. That is the direction Folio should go: a capable, fully-API'd, properly-scoped platform with agents (built-in, MCP, research, workflow) as interchangeable thin clients. The size of Phases 1–2 is the price of building Folio *right*, and the operator agent is the first beneficiary, not the only one — every future agent inherits the same surface.
 
 ## Explicitly out of scope (YAGNI)
 
