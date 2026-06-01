@@ -235,7 +235,11 @@ async function seedRunningRun(
     fired_by: 'agent.task.assigned',
     started_at: now,
     worker_started_at: now,
-    caller_scopes: [],
+    // The harness user is the workspace OWNER (test/harness.ts seeds role:owner),
+    // so the delegated run carries the full owner scope set + no project
+    // narrowing — mirroring what createRun would stamp. Tests that need a
+    // narrower caller pass `caller_scopes` via overrides.
+    caller_scopes: ['documents:read', 'documents:write', 'documents:delete', 'agents:write'],
     caller_project_ids: null,
     ...overrides,
   };

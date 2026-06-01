@@ -136,6 +136,15 @@ interface RunContext {
   authorContext: AuthorContext;
   apiKey: string;
   baseUrl: string | undefined;
+  /**
+   * Phase 1 delegation (D1, D8): the caller's authority snapshot, read from the
+   * run's frontmatter (stamped server-side at createRun). Threaded into every
+   * executeTool call so the run's effective authority is agent ∩ caller.
+   * FAIL CLOSED: a run missing the snapshot reads `[]` / `null` (deny-all
+   * scopes; null project-narrowing is handled by the intersect downstream).
+   */
+  callerScopes: string[];
+  callerProjectIds: string[] | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -356,6 +365,11 @@ async function loadContext(runId: string): Promise<RunContext | null> {
     authorContext,
     apiKey,
     baseUrl,
+    // Phase 1 delegation (D1, D8): read the caller snapshot from the run fm.
+    // FAIL CLOSED — a run lacking the snapshot denies (empty scopes / null
+    // project narrowing) rather than inheriting the agent's full authority.
+    callerScopes: fm.caller_scopes ?? [],
+    callerProjectIds: fm.caller_project_ids ?? null,
   };
 }
 
@@ -694,7 +708,13 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
       for (const tc of collectedToolCalls) {
         try {
           // tx=undefined — each tool gets its own short-lived tx (mitigation 35).
-          const result = await executeTool(ctx.token, ctx.actor, tc.name, tc.arguments);
+          // Phase 1 delegation (D1, D8): pass the caller snapshot so executeTool
+          // enforces agent ∩ caller. runAgentResume reuses this same runLoop with
+          // a ctx whose snapshot was inherited from the original run (D6).
+          const result = await executeTool(ctx.token, ctx.actor, tc.name, tc.arguments, undefined, {
+            callerScopes: ctx.callerScopes,
+            callerProjectIds: ctx.callerProjectIds,
+          });
           const resultString = typeof result === 'string' ? result : JSON.stringify(result);
           toolResultMsgs.push({ role: 'tool', tool_use_id: tc.id, content: resultString });
           roundHadSuccess = true;
