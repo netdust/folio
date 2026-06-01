@@ -232,6 +232,9 @@ export async function listDocuments(
     // drop or mis-route them, and a `documents:read` bearer could
     // enumerate them by slug.
     whereClauses.push(ne(documents.type, 'agent_run'));
+    // Comments are reply-thread rows surfaced via list_comments, not authorable
+    // documents — exclude from the generic default listing (agent-ergonomics).
+    whereClauses.push(ne(documents.type, 'comment'));
   }
   // Table-scoping rules: work_items use the active table; pages, agents, and
   // triggers are project-scoped (tableId IS NULL is enforced at write time).
