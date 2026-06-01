@@ -1,6 +1,9 @@
 import { test, expect } from 'bun:test';
+import { eq } from 'drizzle-orm';
+import { nanoid } from 'nanoid';
 import { makeTestApp } from '../test/harness.ts';
-import { views } from '../db/schema.ts';
+import { apiTokens, events, views } from '../db/schema.ts';
+import { newApiToken } from '../lib/auth.ts';
 
 const path = '/api/v1/w/acme/p/web/views';
 
@@ -148,4 +151,149 @@ test('POST returns data.view.id as a unique non-empty string', async () => {
   expect(typeof bId).toBe('string');
   expect(bId.length).toBeGreaterThan(0);
   expect(bId).not.toBe(aId);
+});
+
+// --- Phase 2 (operator): config:write guard + dryRun (P2-2/3/4/6/8) ---
+
+async function mintTokens(
+  db: Awaited<ReturnType<typeof makeTestApp>>['db'],
+  seed: Awaited<ReturnType<typeof makeTestApp>>['seed'],
+) {
+  const cw = newApiToken();
+  await db.insert(apiTokens).values({
+    id: nanoid(),
+    workspaceId: seed.workspace.id,
+    name: 'config-write',
+    tokenHash: cw.hash,
+    scopes: ['config:write', 'documents:read'],
+    createdBy: seed.user.id,
+  });
+  const dw = newApiToken();
+  await db.insert(apiTokens).values({
+    id: nanoid(),
+    workspaceId: seed.workspace.id,
+    name: 'docs-write',
+    tokenHash: dw.hash,
+    scopes: ['documents:write', 'documents:read'],
+    createdBy: seed.user.id,
+  });
+  return { configWriteToken: cw.token, docsWriteToken: dw.token };
+}
+
+async function viewCount(
+  db: Awaited<ReturnType<typeof makeTestApp>>['db'],
+  projectId: string,
+): Promise<number> {
+  return (await db.select().from(views).where(eq(views.projectId, projectId))).length;
+}
+
+async function eventCount(db: Awaited<ReturnType<typeof makeTestApp>>['db']): Promise<number> {
+  return (await db.select().from(events)).length;
+}
+
+test('POST /views: config:write token creates a view', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const { configWriteToken } = await mintTokens(db, seed);
+  const res = await app.request(path, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${configWriteToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'My View', type: 'list' }),
+  });
+  expect(res.status).toBe(201);
+  expect((await res.json()).data.view.name).toBe('My View');
+});
+
+test('POST /views: documents:write token cannot create a view (403)', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const { docsWriteToken } = await mintTokens(db, seed);
+  const res = await app.request(path, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${docsWriteToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'My View', type: 'list' }),
+  });
+  expect(res.status).toBe(403);
+});
+
+test('POST /views: dryRun create does not mutate', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const { configWriteToken } = await mintTokens(db, seed);
+  const beforeViews = await viewCount(db, seed.project.id);
+  const beforeEvents = await eventCount(db);
+  const res = await app.request(path, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${configWriteToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Preview', type: 'list', dryRun: true }),
+  });
+  expect(res.status).toBe(200);
+  const data = (await res.json()).data;
+  expect(data.dry_run).toBe(true);
+  expect(data.would).toBe('create');
+  expect(data.resource.name).toBe('Preview');
+  expect(await viewCount(db, seed.project.id)).toBe(beforeViews);
+  expect(await eventCount(db)).toBe(beforeEvents);
+});
+
+test('DELETE /views: dryRun delete on missing view 404s', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const { configWriteToken } = await mintTokens(db, seed);
+  const res = await app.request(`${path}/does-not-exist?dryRun=true`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${configWriteToken}` },
+  });
+  expect(res.status).toBe(404);
+});
+
+test('DELETE /views: dryRun delete does not mutate an existing view', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const { configWriteToken } = await mintTokens(db, seed);
+  const created = await (
+    await app.request(path, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${configWriteToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Keepme', type: 'list' }),
+    })
+  ).json();
+  const id = created.data.view.id as string;
+  const beforeViews = await viewCount(db, seed.project.id);
+  const beforeEvents = await eventCount(db);
+
+  const res = await app.request(`${path}/${id}?dryRun=true`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${configWriteToken}` },
+  });
+  expect(res.status).toBe(200);
+  const data = (await res.json()).data;
+  expect(data.dry_run).toBe(true);
+  expect(data.would).toBe('delete');
+  expect(await viewCount(db, seed.project.id)).toBe(beforeViews);
+  expect(await eventCount(db)).toBe(beforeEvents);
+});
+
+test('POST /views: dryRun resource matches the live created view (minus id)', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const { configWriteToken } = await mintTokens(db, seed);
+  const body = {
+    name: 'Shape parity',
+    type: 'list' as const,
+    filters: { assignee: 'alice@test.local' },
+  };
+
+  const live = await (
+    await app.request(path, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${configWriteToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  ).json();
+  const dry = await (
+    await app.request(path, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${configWriteToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...body, dryRun: true }),
+    })
+  ).json();
+
+  const { id: _liveId, ...liveRow } = live.data.view;
+  const { id: _dryId, ...dryRow } = dry.data.resource;
+  expect(dryRow).toEqual(liveRow);
 });
