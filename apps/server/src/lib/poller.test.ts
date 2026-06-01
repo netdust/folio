@@ -151,6 +151,8 @@ async function seedPlanningRun(
     chain_id: crypto.randomUUID(),
     fired_by: 'agent.task.assigned',
     started_at: now,
+    caller_scopes: [],
+    caller_project_ids: null,
     ...overrides,
   };
   await db.insert(documents).values({
@@ -200,6 +202,8 @@ async function seedStaleRunningRun(
     fired_by: 'agent.task.assigned',
     started_at: ancient,
     worker_started_at: ancient,
+    caller_scopes: [],
+    caller_project_ids: null,
   };
   await db.insert(documents).values({
     id,

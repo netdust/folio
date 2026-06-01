@@ -235,6 +235,8 @@ async function seedRunningRun(
     fired_by: 'agent.task.assigned',
     started_at: now,
     worker_started_at: now,
+    caller_scopes: [],
+    caller_project_ids: null,
     ...overrides,
   };
   await db.insert(documents).values({

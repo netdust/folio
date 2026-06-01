@@ -144,6 +144,12 @@ export async function createRun(
     chain_id: input.chainId,
     fired_by: input.firedBy,
     started_at: startedAt,
+    // Phase 1 delegation PLACEHOLDER. Real caller-derivation lands in a later
+    // task (derived from the run's actor); for now stamp inert defaults so the
+    // required schema fields are present. The enforcement intersect that reads
+    // these is not wired yet, so these values change no behavior.
+    caller_scopes: [],
+    caller_project_ids: null,
     // Resume lineage (D-5). Only stamped on an approved-plan resume; the poller
     // routes a planning row with this set to `runAgentResume`. Omitted entirely
     // (not null) for fresh runs so the `.strict()` schema's optional holds.

@@ -178,6 +178,8 @@ async function seedRunningRun(
     fired_by: 'agent.task.assigned',
     started_at: now,
     worker_started_at: now,
+    caller_scopes: [],
+    caller_project_ids: null,
     ...overrides,
   };
   await db.insert(documents).values({
@@ -969,6 +971,8 @@ async function seedRunAt(
     chain_id: overrides.chainId ?? crypto.randomUUID(),
     fired_by: 'agent.task.assigned',
     started_at: overrides.startedAt ?? now,
+    caller_scopes: [],
+    caller_project_ids: null,
     ...(overrides.workerStartedAt !== undefined
       ? { worker_started_at: overrides.workerStartedAt }
       : {}),
@@ -2219,6 +2223,8 @@ async function seedTerminalRunEvent(
     fired_by: 'agent.task.assigned',
     started_at: now,
     completed_at: now,
+    caller_scopes: [],
+    caller_project_ids: null,
     ...(args.errorReason ? { error_reason: args.errorReason as never } : {}),
   };
   await db.insert(documents).values({
