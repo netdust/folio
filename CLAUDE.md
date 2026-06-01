@@ -95,11 +95,12 @@ folio/
 
 1. **At session start, load the `ntdst-execute-with-tests` skill** (via the Skill tool). It wraps `superpowers:executing-plans` and `superpowers:subagent-driven-development` with the mandatory testing-workflow gates this harness requires for any plan execution. Required for any non-trivial work in this repo.
 2. **When WRITING a new plan, invoke `netdust-core:threat-modeling`** alongside `superpowers:writing-plans` IF the plan touches any of: user-controlled URLs (webhooks, BYOK provider URLs, OAuth redirects), auth/session/token surfaces, untrusted parsing (frontmatter from external sources, AI tool-call args, webhook payloads, file uploads), BYOK credentials, multi-tenancy boundaries, or anywhere the server makes outbound requests to user-supplied URLs. The skill produces a `## Threat model` section the plan embeds inline — required before task breakdown. Worked example lives in `docs/superpowers/plans/2026-05-27-phase-3-agent-runner.md` (section: `## Threat model`). Opt-in; not auto-invoked.
-3. Read this file. Read `@docs/PHASES.md` to see what phase you're in and which task is next.
-4. Pick the next unchecked task. Plan briefly, then implement.
-5. Run tests before committing: `bun test`.
-6. Commit atomically per task. Update `@docs/PHASES.md` to check the box.
-7. When you learn something worth remembering across sessions (gotcha, dependency quirk, decision rationale), write it to `.claude/memory/notes.md`.
+3. **Architecture invariants are a contract.** `ARCHITECTURE-INVARIANTS.md` (root) names this repo's convergence points — the single places authorization, data access, live updates, error handling, and entity modeling are decided. **When writing a plan** that touches one of those properties, invoke `netdust-core:architecture-invariants` (situation A) to cite the touched invariants. **When running `/code-review`**, verify the diff against `ARCHITECTURE-INVARIANTS.md` and FLAG (don't block) any path that bypasses a convergence point, keyed to the invariant number (e.g. "writes scopes without `roleToScopes` → bypasses invariant 5"). `/shakeout` auto-dispatches the `invariant-auditor` for this. If the doc doesn't exist yet, author it via `/architecture-invariants audit`.
+4. Read this file. Read `@docs/PHASES.md` to see what phase you're in and which task is next.
+5. Pick the next unchecked task. Plan briefly, then implement.
+6. Run tests before committing: `bun test`.
+7. Commit atomically per task. Update `@docs/PHASES.md` to check the box.
+8. When you learn something worth remembering across sessions (gotcha, dependency quirk, decision rationale), write it to `.claude/memory/notes.md`.
 
 ## Build & Run
 
