@@ -23,7 +23,7 @@
  *    Task 1 does NOT import app.
  */
 
-import { eq } from 'drizzle-orm';
+import { eq, like } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { db } from '../db/client.ts';
 import { apiTokens, type ApiToken } from '../db/schema.ts';
@@ -120,11 +120,11 @@ export function classifyRisk(
  * Call a Folio API route IN-PROCESS as the caller delegate (P3-1/2/3/4).
  * Mints a short-lived bearer mirroring `caller` (scopes/agentId/projectIds/
  * workspaceId verbatim — widening NOTHING), sends it as Authorization: Bearer
- * to app.request, and REVOKES it in a finally. The ccExecute pattern
- * (runner.ts:881-896,948-950). The no-mint seeded-ctx path is infeasible in
+ * to app.request, and REVOKES it in a finally. The ccExecute mint/revoke
+ * pattern in runner.ts. The no-mint seeded-ctx path is infeasible in
  * Hono 4.6.12 (app.request env arg sets c.env not the c.var store requireScope
- * reads; attachToken at app.ts:49 overwrites c.set('token') from the header on
- * every workspace route).
+ * reads; attachToken's app-wide mount in app.ts overwrites c.set('token') from
+ * the header on every workspace route).
  *  - P3-1: scopes/agentId/projectIds copied verbatim (agent ∩ caller ceiling).
  *  - P3-2: plaintext only in the Authorization header — never logged/returned.
  *  - P3-3: row deleted in finally so no path leaves a live credential.
@@ -160,6 +160,29 @@ export async function dispatchAsCaller(
     };
     return await app.request(validPath, init);
   } finally {
-    await db.delete(apiTokens).where(eq(apiTokens.id, mintedId));
+    // Revoke the minted token on EVERY path. Swallow+log a revoke failure so it
+    // neither masks the primary error nor crashes the caller; the boot sweep
+    // (sweepOrphanedFolioApiTokens) is the backstop if this delete ever fails.
+    try {
+      await db.delete(apiTokens).where(eq(apiTokens.id, mintedId));
+    } catch (err) {
+      console.error(`[folio_api] failed to revoke minted token ${mintedId}:`, err);
+    }
   }
+}
+
+/**
+ * Boot-time backstop: delete any `folio_api:`-named tokens left live by a
+ * crash or a revoke failure between dispatchAsCaller's insert and its finally.
+ * These ephemeral tokens are minted per-request and revoked in the same call,
+ * so any surviving at boot are orphans. Cheap, idempotent, self-healing — the
+ * same defense-in-depth posture as recoverOrphanRuns / seedReactorCursors.
+ * Returns the count deleted (for logging/tests).
+ */
+export async function sweepOrphanedFolioApiTokens(database = db): Promise<number> {
+  const orphans = await database
+    .delete(apiTokens)
+    .where(like(apiTokens.name, 'folio_api:%'))
+    .returning({ id: apiTokens.id });
+  return orphans.length;
 }

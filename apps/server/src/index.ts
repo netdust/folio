@@ -3,12 +3,21 @@ import { runMigrationsOnBoot } from './db/auto-migrate.ts';
 import { db } from './db/client.ts';
 import { env } from './env.ts';
 import { startEventDispatcher } from './lib/event-dispatcher.ts';
+import { sweepOrphanedFolioApiTokens } from './lib/folio-api-tool.ts';
 import { startRunnerPoller } from './lib/poller.ts';
 import { reconcileAllowLists } from './lib/reconciler.ts';
 
 // Phase 3 A-0: apply any pending migrations at boot so dev environments never
 // serve traffic against a stale schema. No-op in NODE_ENV=test.
 runMigrationsOnBoot(db);
+
+// Backstop for dispatchAsCaller's minted tokens: clear any left live by a
+// crash/revoke-failure on a prior run. These are per-request ephemerals.
+void sweepOrphanedFolioApiTokens(db)
+  .then((n) => {
+    if (n > 0) console.log(`[folio] swept ${n} orphaned folio_api token(s)`);
+  })
+  .catch((err) => console.error('[folio] folio_api token sweep failed', err));
 
 console.log(`[folio] listening on http://localhost:${env.PORT}`);
 

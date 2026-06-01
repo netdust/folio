@@ -1,8 +1,14 @@
 import { describe, expect, test } from 'bun:test';
+import { eq } from 'drizzle-orm';
 import { db } from '../db/client.ts';
 import { apiTokens, type ApiToken } from '../db/schema.ts';
 import { makeTestApp } from '../test/harness.ts';
-import { classifyRisk, dispatchAsCaller, validateApiPath } from './folio-api-tool.ts';
+import {
+  classifyRisk,
+  dispatchAsCaller,
+  sweepOrphanedFolioApiTokens,
+  validateApiPath,
+} from './folio-api-tool.ts';
 
 describe('validateApiPath (P3-5)', () => {
   test('accepts a relative API path', () => {
@@ -184,5 +190,65 @@ describe('dispatchAsCaller (P3-1/2/3/4)', () => {
     );
     const text = await res.clone().text();
     expect(text).not.toMatch(/folio_pat_/);
+  });
+
+  test('minted token inherits caller config:write — POST succeeds for owner (P3-1)', async () => {
+    const { seed } = await makeTestApp();
+    const owner = callerToken({
+      workspaceId: seed.workspace.id,
+      scopes: ['config:write', 'documents:read'],
+      createdBy: seed.user.id,
+    });
+    const res = await dispatchAsCaller(
+      owner,
+      'POST',
+      `/api/v1/w/${seed.workspace.slug}/p/${seed.project.slug}/tables`,
+      { name: 'Sprints' },
+    );
+    expect(res.status).toBe(201); // create table succeeded → minted token had config:write
+  });
+});
+
+describe('sweepOrphanedFolioApiTokens (P3-3 backstop)', () => {
+  test('deletes folio_api: tokens left live by a crash/revoke-failure', async () => {
+    const { db: testDb, seed } = await makeTestApp();
+    // simulate an orphan: insert a folio_api:-named token directly
+    await testDb.insert(apiTokens).values({
+      id: 'orphan1',
+      workspaceId: seed.workspace.id,
+      name: 'folio_api:orphan1',
+      tokenHash: 'h',
+      scopes: ['config:write'],
+      agentId: null,
+      projectIds: null,
+      createdBy: seed.user.id,
+    });
+    const swept = await sweepOrphanedFolioApiTokens(testDb);
+    expect(swept).toBeGreaterThanOrEqual(1);
+    const remaining = await testDb
+      .select()
+      .from(apiTokens)
+      .where(eq(apiTokens.name, 'folio_api:orphan1'));
+    expect(remaining.length).toBe(0);
+  });
+
+  test('leaves non-folio_api tokens untouched', async () => {
+    const { db: testDb, seed } = await makeTestApp();
+    await testDb.insert(apiTokens).values({
+      id: 'pat1',
+      workspaceId: seed.workspace.id,
+      name: 'a human PAT',
+      tokenHash: 'h2',
+      scopes: ['documents:read'],
+      agentId: null,
+      projectIds: null,
+      createdBy: seed.user.id,
+    });
+    await sweepOrphanedFolioApiTokens(testDb);
+    const remaining = await testDb
+      .select()
+      .from(apiTokens)
+      .where(eq(apiTokens.id, 'pat1'));
+    expect(remaining.length).toBe(1);
   });
 });
