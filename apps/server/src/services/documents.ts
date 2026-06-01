@@ -163,6 +163,19 @@ function decodeCursor(s: string): { sortKey: string; sortValue: string; id: stri
   }
 }
 
+/**
+ * Build a case-insensitive `%substring%` LIKE pattern for a title search,
+ * escaping the LIKE metacharacters (`%`, `_`, `\`) so user input matches
+ * literally. Returns null when the (trimmed) query is empty — callers skip the
+ * clause. Pair with `ESCAPE '\\' COLLATE NOCASE` in the SQL. Shared by
+ * `listDocuments` (titleQuery) and `findDocumentsInProjects`.
+ */
+function likeContainsPattern(query: string | undefined): string | null {
+  const q = (query ?? '').trim();
+  if (q.length === 0) return null;
+  return `%${q.replace(/[%_\\]/g, '\\$&')}%`;
+}
+
 export interface ListDocumentsOptions {
   projectId: string;
   /**
@@ -177,6 +190,8 @@ export interface ListDocumentsOptions {
   filter?: unknown; // already parsed JSON or undefined
   statusValues?: string[];
   assignee?: string;
+  /** Case-insensitive substring match on documents.title (LIKE). */
+  titleQuery?: string;
   updatedSince?: string;
   staleFor?: string;
   sort?: string;
@@ -230,6 +245,9 @@ export async function listDocuments(
     // drop or mis-route them, and a `documents:read` bearer could
     // enumerate them by slug.
     whereClauses.push(ne(documents.type, 'agent_run'));
+    // Comments are reply-thread rows surfaced via list_comments, not authorable
+    // documents — exclude from the generic default listing (agent-ergonomics).
+    whereClauses.push(ne(documents.type, 'comment'));
   }
   // Table-scoping rules: work_items use the active table; pages, agents, and
   // triggers are project-scoped (tableId IS NULL is enforced at write time).
@@ -252,6 +270,11 @@ export async function listDocuments(
     whereClauses.push(
       sql`json_extract(${documents.frontmatter}, '$.assignee') = ${opts.assignee}`,
     );
+  }
+
+  const titlePattern = likeContainsPattern(opts.titleQuery);
+  if (titlePattern) {
+    whereClauses.push(sql`${documents.title} LIKE ${titlePattern} ESCAPE '\\' COLLATE NOCASE`);
   }
 
   if (opts.updatedSince) {
@@ -388,6 +411,40 @@ export async function listDocuments(
     nextCursor = encodeCursor(sortKey, sortValue, last.id);
   }
   return { data: page, nextCursor };
+}
+
+export interface FindDocumentsOptions {
+  projectIds: string[]; // already resolved to the caller's allow-listed set
+  titleQuery: string;
+  /** Restrict to authorable types; defaults to work_item + page. */
+  types?: ('work_item' | 'page')[];
+  limit?: number;
+}
+
+/**
+ * Workspace-wide title search across an EXPLICIT project-id allow-list.
+ * Callers (find_documents) resolve the allow-list first; this function never
+ * widens it. agent_run + comment are always excluded.
+ */
+export async function findDocumentsInProjects(
+  opts: FindDocumentsOptions,
+): Promise<Document[]> {
+  if (opts.projectIds.length === 0) return [];
+  const limit = Math.min(200, opts.limit ?? 25);
+  const pattern = likeContainsPattern(opts.titleQuery);
+  if (!pattern) return [];
+  const allowedTypes = opts.types ?? ['work_item', 'page'];
+
+  const rows = await db.query.documents.findMany({
+    where: and(
+      inArray(documents.projectId, opts.projectIds),
+      inArray(documents.type, allowedTypes),
+      sql`${documents.title} LIKE ${pattern} ESCAPE '\\' COLLATE NOCASE`,
+    ),
+    orderBy: (t, { desc }) => [desc(t.updatedAt)],
+    limit,
+  });
+  return rows;
 }
 
 export async function getDocument(

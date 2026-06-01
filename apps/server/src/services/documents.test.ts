@@ -10,12 +10,14 @@ import { test, expect } from 'bun:test';
 import { and, eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { makeTestApp } from '../test/harness.ts';
-import { apiTokens, documents, tables } from '../db/schema.ts';
+import { seedProjectDefaults } from '../lib/seed-project-defaults.ts';
+import { apiTokens, documents, projects, tables } from '../db/schema.ts';
 import type { Document } from '../db/schema.ts';
 import { HTTPError } from '../lib/http.ts';
 import {
   createDocument,
   deleteDocument,
+  findDocumentsInProjects,
   getDocument,
   listDocuments,
   updateDocument,
@@ -925,4 +927,146 @@ test('FIX#3: a placeholder-SHAPED slug with a real (non-seed) title does NOT re-
   });
   expect(updated.title).toBe('Whatever');
   expect(updated.slug).toBe('untitled-5');
+});
+
+test('listDocuments titleQuery matches title substring, case-insensitive', async () => {
+  const { db, seed } = await makeTestApp();
+  const table = await getWorkItemsTable(db, seed.project.id);
+  await createDocument({
+    workspace: seed.workspace,
+    project: seed.project,
+    table,
+    actor: seed.user,
+    token: null,
+    input: {
+      type: 'work_item',
+      title: 'Hosting setup on Combell',
+      body: '',
+      frontmatter: {},
+      status: null,
+    },
+  });
+  await createDocument({
+    workspace: seed.workspace,
+    project: seed.project,
+    table,
+    actor: seed.user,
+    token: null,
+    input: {
+      type: 'work_item',
+      title: 'Homepage hero block',
+      body: '',
+      frontmatter: {},
+      status: null,
+    },
+  });
+
+  const hit = await listDocuments({ projectId: seed.project.id, titleQuery: 'combell' });
+  expect(hit.data.map((d) => d.title)).toEqual(['Hosting setup on Combell']);
+
+  const miss = await listDocuments({ projectId: seed.project.id, titleQuery: 'zzz-nope' });
+  expect(miss.data).toEqual([]);
+});
+
+test('listDocuments with no type excludes comment and agent_run', async () => {
+  const { db, seed } = await makeTestApp();
+  const table = await getWorkItemsTable(db, seed.project.id);
+
+  // Create a work_item via the normal service to get a real id.
+  const { document: workItem } = await createDocument({
+    workspace: seed.workspace,
+    project: seed.project,
+    table,
+    actor: seed.user,
+    token: null,
+    input: { type: 'work_item', title: 'Task one', body: '', frontmatter: {}, status: null },
+  });
+
+  // Seed a page row directly (mirrors the pattern used by nested-page tests).
+  const pageId = nanoid();
+  await db.insert(documents).values({
+    id: pageId,
+    workspaceId: seed.workspace.id,
+    projectId: seed.project.id,
+    tableId: null,
+    type: 'page',
+    slug: `wiki-page-${pageId}`,
+    title: 'Wiki page',
+    status: null,
+    body: '',
+    frontmatter: {},
+    createdBy: seed.user.id,
+    updatedBy: seed.user.id,
+  });
+
+  // Seed a comment row directly — createDocument rejects type:'comment'
+  // (comments go through their own service). Mirror the seedTrigger pattern.
+  // The CHECK constraint requires parentId IS NOT NULL for comment rows.
+  const commentId = nanoid();
+  await db.insert(documents).values({
+    id: commentId,
+    workspaceId: seed.workspace.id,
+    projectId: seed.project.id,
+    parentId: workItem.id,
+    type: 'comment' as Document['type'],
+    slug: `comment-${commentId}`,
+    title: 'Re: something',
+    body: 'a reply',
+    frontmatter: {},
+    createdBy: seed.user.id,
+    updatedBy: seed.user.id,
+  });
+
+  const { data } = await listDocuments({ projectId: seed.project.id });
+  const types = new Set(data.map((d) => d.type));
+
+  expect(types.has('comment')).toBe(false);
+  expect(types.has('agent_run')).toBe(false);
+  expect(types.has('work_item')).toBe(true);
+  expect(types.has('page')).toBe(true);
+});
+
+test('findDocumentsInProjects searches only the given project ids', async () => {
+  const { db, seed } = await makeTestApp();
+  const tableA = await getWorkItemsTable(db, seed.project.id);
+
+  // Second project in the SAME workspace — mirror the harness: insert a
+  // projects row then seedProjectDefaults so it gets a work-items table.
+  const projectBId = nanoid();
+  await db.insert(projects).values({
+    id: projectBId,
+    workspaceId: seed.workspace.id,
+    slug: 'ops',
+    name: 'Ops',
+  });
+  await seedProjectDefaults(db, projectBId);
+  const projectB = (await db.query.projects.findFirst({
+    where: eq(projects.id, projectBId),
+  }))!;
+  const tableB = await getWorkItemsTable(db, projectBId);
+
+  await createDocument({
+    workspace: seed.workspace,
+    project: seed.project,
+    table: tableA,
+    actor: seed.user,
+    token: null,
+    input: { type: 'work_item', title: 'Combell hosting', body: '', frontmatter: {}, status: null },
+  });
+  await createDocument({
+    workspace: seed.workspace,
+    project: projectB,
+    table: tableB,
+    actor: seed.user,
+    token: null,
+    input: { type: 'work_item', title: 'Combell billing', body: '', frontmatter: {}, status: null },
+  });
+
+  const res = await findDocumentsInProjects({
+    projectIds: [seed.project.id],
+    titleQuery: 'combell',
+    limit: 25,
+  });
+  expect(res.map((d) => d.projectId)).toEqual([seed.project.id]); // B excluded
+  expect(res[0]!.title).toBe('Combell hosting');
 });

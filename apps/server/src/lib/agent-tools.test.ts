@@ -11,9 +11,11 @@ import {
   type Workspace,
   apiTokens,
   documents,
+  projects,
   tables as tablesTable,
 } from '../db/schema.ts';
 import { env } from '../env.ts';
+import { seedProjectDefaults } from './seed-project-defaults.ts';
 import { makeTestApp } from '../test/harness.ts';
 import { createRun, ensureRunsTable, nextChainId } from '../services/agent-runs.ts';
 import { listComments } from '../services/comments.ts';
@@ -1079,5 +1081,159 @@ describe('D-4: run-management MCP tools', () => {
     expect(mcpRow?.type).toBe('agent_run');
     expect(httpRow?.status).toBe(mcpRow?.status);
     expect(httpRow?.workspaceId).toBe(mcpRow?.workspaceId);
+  });
+});
+
+describe('tool descriptions teach the new ergonomics', () => {
+  it('tool descriptions teach the new ergonomics', () => {
+    const defs = listToolDefs();
+    const byName = Object.fromEntries(defs.map((d) => [d.name, d.description]));
+    expect(byName['list_documents']).toContain('list_comments');
+    expect(byName['update_document']).toContain('list_statuses');
+    expect(byName['find_documents']).toContain('do NOT page through');
+  });
+});
+
+describe('find_documents: workspace-wide title lookup, allow-list enforced', () => {
+  it('find_documents resolves a title workspace-wide with project_slug in results', async () => {
+    const { db, seed } = await makeTestApp();
+    const token = await seedHumanPat(db, seed.workspace.id, seed.user.id, [
+      'documents:read',
+      'documents:write',
+    ]);
+    // Create a work_item titled "Combell setup" in seed.project (slug 'web').
+    await executeTool(token, seed.user.id, 'create_document', {
+      workspace_slug: 'acme',
+      project_slug: 'web',
+      type: 'work_item',
+      title: 'Combell setup',
+    });
+
+    const res = (await executeTool(token, seed.user.id, 'find_documents', {
+      workspace_slug: 'acme',
+      query: 'combell',
+    })) as { content: { text: string }[] };
+    const out = JSON.parse(res.content[0]!.text) as {
+      documents: { title: string; project_slug: string | null }[];
+    };
+    expect(out.documents).toHaveLength(1);
+    expect(out.documents[0]).toMatchObject({ title: 'Combell setup', project_slug: 'web' });
+  });
+
+  it('find_documents rejects limit:0 (would otherwise silently return empty)', async () => {
+    const { db, seed } = await makeTestApp();
+    const token = await seedHumanPat(db, seed.workspace.id, seed.user.id, [
+      'documents:read',
+      'documents:write',
+    ]);
+    await executeTool(token, seed.user.id, 'create_document', {
+      workspace_slug: 'acme',
+      project_slug: 'web',
+      type: 'work_item',
+      title: 'Combell setup',
+    });
+    // limit:0 must be rejected by the schema (min(1)), not honored as LIMIT 0.
+    await expect(
+      executeTool(token, seed.user.id, 'find_documents', {
+        workspace_slug: 'acme',
+        query: 'combell',
+        limit: 0,
+      }),
+    ).rejects.toThrow();
+  });
+
+  it('find_documents does NOT return docs from a non-allow-listed project (agent token)', async () => {
+    const { db, seed } = await makeTestApp();
+
+    // Second project ('ops') in the SAME workspace.
+    const projectBId = nanoid();
+    await db.insert(projects).values({
+      id: projectBId,
+      workspaceId: seed.workspace.id,
+      slug: 'ops',
+      name: 'Ops',
+    });
+    await seedProjectDefaults(db, projectBId);
+
+    // A human PAT seeds a matching doc in BOTH 'web' and 'ops'.
+    const pat = await seedHumanPat(db, seed.workspace.id, seed.user.id, ['documents:write']);
+    await executeTool(pat, seed.user.id, 'create_document', {
+      workspace_slug: 'acme',
+      project_slug: 'web',
+      type: 'work_item',
+      title: 'Combell web',
+    });
+    await executeTool(pat, seed.user.id, 'create_document', {
+      workspace_slug: 'acme',
+      project_slug: 'ops',
+      type: 'work_item',
+      title: 'Combell ops',
+    });
+
+    // Agent token allow-listed to ONLY the 'web' project (frontmatter.projects).
+    const { token: agentToken, agentSlug } = await seedAgent(
+      db,
+      seed.workspace.id,
+      seed.user.id,
+      { projects: [seed.project.id], scopes: ['documents:read'] },
+    );
+
+    const res = (await executeTool(agentToken, `agent:${agentSlug}`, 'find_documents', {
+      workspace_slug: 'acme',
+      query: 'combell',
+    })) as { content: { text: string }[] };
+    const out = JSON.parse(res.content[0]!.text) as {
+      documents: { project_slug: string | null }[];
+    };
+    const slugs = out.documents.map((d) => d.project_slug);
+    expect(slugs).not.toContain('ops'); // non-allow-listed project's match must be absent
+    expect(slugs).toContain('web');
+  });
+});
+
+describe('describe_workspace: one-call orientation, allow-list enforced', () => {
+  it('returns projects → tables → status keys', async () => {
+    const { db, seed } = await makeTestApp();
+    const token = await seedHumanPat(db, seed.workspace.id, seed.user.id, ['documents:read']);
+    const res = (await executeTool(token, seed.user.id, 'describe_workspace', {
+      workspace_slug: 'acme',
+    })) as { content: { text: string }[] };
+    const out = JSON.parse(res.content[0]!.text) as {
+      workspace: { slug: string };
+      projects: { slug: string; tables: { statuses: { key: string }[] }[] }[];
+    };
+    expect(out.workspace.slug).toBe('acme');
+    const web = out.projects.find((p) => p.slug === 'web');
+    expect(web).toBeTruthy();
+    expect(web!.tables[0]!.statuses.map((s) => s.key)).toContain('todo');
+  });
+
+  it('omits non-allow-listed projects (agent token)', async () => {
+    const { db, seed } = await makeTestApp();
+
+    // Second project ('ops') in the SAME workspace — exists, so it would appear
+    // absent the allow-list.
+    const projectBId = nanoid();
+    await db.insert(projects).values({
+      id: projectBId,
+      workspaceId: seed.workspace.id,
+      slug: 'ops',
+      name: 'Ops',
+    });
+    await seedProjectDefaults(db, projectBId);
+
+    // Agent token allow-listed to ONLY the 'web' project (frontmatter.projects).
+    const { token: agentToken, agentSlug } = await seedAgent(
+      db,
+      seed.workspace.id,
+      seed.user.id,
+      { projects: [seed.project.id], scopes: ['documents:read'] },
+    );
+
+    const res = (await executeTool(agentToken, `agent:${agentSlug}`, 'describe_workspace', {
+      workspace_slug: 'acme',
+    })) as { content: { text: string }[] };
+    const out = JSON.parse(res.content[0]!.text) as { projects: { slug: string }[] };
+    expect(out.projects.map((p) => p.slug).sort()).toEqual(['web']); // 'ops' absent
   });
 });

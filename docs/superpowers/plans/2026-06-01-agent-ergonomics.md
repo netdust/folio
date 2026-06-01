@@ -45,8 +45,19 @@ grep -rn "type:.*comment\|'comment'\|\"comment\"" apps/web/src --include=*.ts --
 Expected: every caller either passes an explicit `type` (unaffected) or expects only authorable docs. **If any caller relies on `comment` rows appearing in the generic list, STOP** — record it here and resolve before Task 5:
 
 ```
-Caller audit result: ________________________________________________
-(none rely on comments in generic list  /  the following do: ...)
+Caller audit result (2026-06-01):
+  Test files: service tests → src/services/documents.test.ts (+ documents.sort.test.ts);
+              TOOL tests → src/lib/agent-tools.test.ts (NOT agent-tools-registry.test.ts).
+              Tool-test harness: `const { db, seed } = await makeTestApp()`; seed.workspace slug
+              'acme', seed.project slug 'web', seed.user. seedHumanPat(db, wsId, userId, scopes) +
+              seedAgent(db, wsId, userId, {...}). Call: executeTool(token, seed.user.id, 'tool', args).
+              Service-test seed: makeTestApp() + createDocument({...}) with seed.project.id.
+  De-noise callers of listDocuments (non-test): routes/documents.ts:185 (REST list, passes ?type=
+              through — default path now excludes comments, which is the intended improvement),
+              agent-tools-registry.ts:432 (the MCP tool being improved).
+  Web: comments consumed ONLY via the dedicated comments API + comment-row.tsx + ?types=comment_*
+              events stream — NEVER from the generic document list.
+  VERDICT: CLEAN — no caller relies on comment rows in the generic list. De-noise safe to proceed.
 ```
 
 - [ ] **Step 3: Commit the audit note**
