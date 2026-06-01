@@ -22,7 +22,7 @@ This is **Claude-Code-for-Folio** — the locked agent thesis (`folio-agent-thes
 
 This **deliberately extends one locked decision**: `folio-tools-as-primitives` said "documents-only primitives." This spec widens the primitive to the **whole token-scoped REST surface** via `folio_api`. That widening is the entire point — mark it explicitly in `DECISIONS.md`.
 
-## Scope: two sequenced sub-phases (folded into one spec on purpose)
+## Scope: sequenced phases (folded into one spec on purpose)
 
 The agent is meaningless without the API surface beneath it. The agent phase's every capability claim is a direct cell in the API-completion phase's route table. Splitting them into separate specs would let them drift; one spec nails capability to its prerequisite route.
 
