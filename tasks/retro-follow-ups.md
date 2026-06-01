@@ -218,6 +218,14 @@ Found by `/code-review high` on the delegation branch; deferred by Stefan (fix-6
 - **OP2-F1 — ✅ CLOSED `dffbb60` (2026-06-01).** Was: the token-create modal offered the 4 now-dead scopes + never offered `config:write`. `/code-review high` PROMOTED this from cleanup to CRITICAL (the mint-ceiling fix 403'd the dead scopes → owner couldn't mint a token at all). Fixed: modal offers `config:write` + drops the 4; `requireScope('config:write')` accepts the 4 legacy scopes as aliases (`CONFIG_WRITE_LEGACY_ALIASES` in `bearer.ts`) so existing tokens keep working — no migration. Security-reviewed: alias structurally confined to `config:write`, cannot leak to any other scope; mint stays strict (can't MINT the old scopes).
 - **OP2-F2 (dryRun hygiene) — ✅ CLOSED `0b4747d` (2026-06-01).** `/code-review` findings: dryRun flag leaked into live PATCH response/event-changes; dryRun create resource shape diverged from live; DELETE bypassed the single reader. Fixed: strip `dryRun` before `.set()`/response/event; wrap create resource to match live; `isDryRunDelete(c)` helper across all 5 DELETE handlers. Reviewed APPROVED.
 
+## Agent-onboarding DX (cold external-agent test, 2026-06-02)
+A real cold external agent oriented on the live instance over MCP in **2 tool calls** (8/10). Full findings: `docs/superpowers/specs/2026-06-02-agent-onboarding-dx-findings.md`. Backlog (none blocking; #1/#3 feed the Phase-3 `folio` skill):
+- **AGENT-DX-1** — `relation` field exposes raw target-table ID (`table:<id>`), not a slug; agent had to reverse-map. Resolve to a slug/name on the agent-facing surface (`list_fields` + frontmatter).
+- **AGENT-DX-2** — `status: null` ambiguous (unset vs N/A); document semantics in the skill.
+- **AGENT-DX-3** — no surfaced "who am I / what is this instance" entry; `get_agent_self` exists but nothing steers a cold agent to it. = the Phase-3 `folio` skill + memory job (+ a cheap description tweak).
+- **AGENT-DX-4** — test/junk records indistinguishable from real (dev-DB hygiene + maybe a draft/archived convention).
+- **AGENT-DX-5 (mild)** — `describe_workspace` lists the `runs` table but `list_documents` can't read it; description already steers correctly, optional annotation.
+
 ---
 
 - **SSE event-stream connection fan-out — deliberate v1 simplicity tradeoff, revisit only if many live panels coexist.** (Logged 2026-06-01 from a frontend quality audit.) `useEventStream` (`apps/web/src/lib/api/event-stream.ts:62`) opens ONE `EventSource` per consuming hook — each with its own server-side `kinds`/`project`/`parent` filter (no client-side stream pool/demux). With the activity feed + provider-health banner + reactor banner + runs panel + document slideover + comments tab open at once, that's ~5+ concurrent connections to the same workspace. **This is BY DESIGN** (the hook docstring: "there is no unfiltered firehose by design") and fine at current scale — browsers multiplex over HTTP/2 to one origin. NOT a bug, NOT urgent.
