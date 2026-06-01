@@ -8,9 +8,11 @@ A **built-in operator agent**, seeded into every Folio instance, that a user *ta
 
 1. **A general API primitive** — `folio_api(method, path, body)` — one escape hatch that reaches any REST endpoint, alongside the ergonomic `query` / `read` / `write_document` hot-path tools.
 2. **A `folio` skill** — the API + schema + conventions manual, loaded as workspace content. This is *how* the agent knows which endpoint and payload to use. A new Folio feature → documented in the skill → the agent can use it, with **no runner change**. This is the mechanism that eliminates the "maintain a tool list per task" problem.
-3. **A per-instance agent memory** — a place the agent reads at start and appends to, so it *learns* this instance's specifics over time (project conventions, field meanings, who's who).
+3. **A per-instance agent memory, split in two** — a volatile **working log** (recent timeline, decays) and a curated **workspace profile** (canonical truths). Not one append-only blob — see the memory section for why that rots by month 6.
 
-**Authority is a delegate model — the agent can never exceed the permissions of the human talking to it** (load-bearing security invariant). **Safety is a two-tier gate**: document-level writes auto-execute; mutating instance-level `folio_api` calls go *plan → human applies*. The agent self-critiques risky plans in-loop before proposing (free, no second human).
+**Authority is a delegate model — the agent can never exceed the permissions of the human talking to it** (load-bearing security invariant). **Safety is a risk-tiered gate**: low-risk → auto; medium → auto-with-undo; high → plan/apply (v1 approximates risk by resource type; the real model scores it — see the gate section). The plan/apply tier rides a **universal `dryRun` mechanism** — every mutating route returns `{would_create, would_update, ...}` — so there is no per-endpoint plan code.
+
+**Strategic framing:** this is not a feature — it is the **operating system for Folio**. The external-MCP story is "bring your own agent"; the built-in operator is "Folio already understands itself." Complementary, not competing. The genuinely novel pieces are the **`folio` skill** and the **caller-identity delegation model** — the rest is plumbing around them.
 
 The agent rides the **entire Phase 3 spine already built** — runner, **cockpit panel** (its home — the cockpit was built for exactly this), runs-history, SSE, scopes, the agent-document model, body-as-prompt. **No new interface.**
 
@@ -22,21 +24,47 @@ This **deliberately extends one locked decision**: `folio-tools-as-primitives` s
 
 ## Scope: two sequenced sub-phases (folded into one spec on purpose)
 
-The agent is meaningless without the API surface beneath it. Sub-phase 2's every capability claim is a direct cell in sub-phase 1's route table. Splitting them into separate specs would let them drift; one spec nails capability to its prerequisite route.
+The agent is meaningless without the API surface beneath it. The agent phase's every capability claim is a direct cell in the API-completion phase's route table. Splitting them into separate specs would let them drift; one spec nails capability to its prerequisite route.
 
-> **Note on phase numbering.** Phase 4 as written (`docs/PHASES.md:1059`) is **inbound webhooks** — external systems POST *into* Folio. It does **not** build the token-scoped write surface this agent needs. The prerequisite is the distinct API-completion work below (Sub-phase 1), independent of Phase 4 (can run before or after it). "Wait until after Phase 4" was the original instinct; the corrected dependency is "after API-completion," which is its own body of work.
+> **Note on phase numbering.** Phase 4 as written (`docs/PHASES.md:1059`) is **inbound webhooks** — external systems POST *into* Folio. It does **not** build the token-scoped write surface this agent needs. The prerequisite is the distinct API-completion work below, independent of Phase 4 (can run before or after it). "Wait until after Phase 4" was the original instinct; the corrected dependency is "after API-completion," which is its own body of work.
 
-### Sub-phase 1 — API completion (the token-scoped write surface) — the heavier, riskier half
+### Build sequence (the recommended ordering)
 
-Today Folio's REST surface is documents-mostly and session-auth-mostly. The general `folio_api` primitive is only as capable as the routes it can call **with a bearer token and a scope**. Sub-phase 1 walks every instance resource the agent must operate and guarantees, per resource:
+The genuinely novel pieces are **delegation** and **the skill**; everything else is plumbing around them. Build in this order — caller-identity delegation is **Phase 1, nothing before it** (see "the biggest technical risk" below):
+
+1. **Finish the approval gate** (Phase 3.x `awaiting_approval`) — the plan/apply tier needs it.
+2. **Caller-identity delegation** — thread the caller onto the run + intersect scopes at execution. *The real project. Lead phase.*
+3. **Token-scoped API surface** — the resource inventory below, every mutating route supporting `dryRun`.
+4. **`folio_api`** — the general primitive on top of (2)+(3).
+5. **The `folio` skill** — the manual.
+6. **Seed the operator agent** — the body-as-prompt document.
+
+### Phase 1 — Caller-identity delegation — THE keystone, build first
+
+**This is the real project. Everything else is straightforward plumbing.** It changes the execution model:
+
+```
+Currently:   Agent → owns token → runs tools
+Target:      User → starts run
+             Run  → carries caller identity
+             Tool execution → resolves caller's permissions
+             Agent → acts as delegate (effective = agent_scopes ∩ caller_permissions)
+```
+
+It touches **runner, scopes, tools, audit logs, and the approval gate**. Make it Phase 1; nothing else lands before it, because every route's auth assertion in the next phase needs a caller on the run to assert *against*. Threat-model it hardest.
+
+### Phase 2 — API completion (the token-scoped write surface) — the heavier, riskier half
+
+Today Folio's REST surface is documents-mostly and session-auth-mostly. The general `folio_api` primitive is only as capable as the routes it can call **with a bearer token and a scope**. This phase walks every instance resource the agent must operate and guarantees, per resource:
 
 - **(a)** a REST route exists,
 - **(b)** it accepts the agent's **bearer token** (not session-only),
 - **(c)** it is behind a **scope** the delegate-authority check can mirror from the caller,
 - **(d)** it re-asserts the **tenant guard** (cross-workspace isolation),
-- **(e)** it **emits an event** on mutation (every-write-emits-event holds for the general path).
+- **(e)** it **emits an event** on mutation (every-write-emits-event holds for the general path),
+- **(f)** it supports **`dryRun=true`** — returns `{would_create, would_update, would_delete, ...}` WITHOUT mutating. This is the universal planning mechanism: the plan/apply gate calls the endpoint with `dryRun`, renders the diff, and on apply re-calls without it. **No per-endpoint plan logic ever gets written.** It also powers the medium-risk "auto-with-undo" preview. `dryRun` support is part of the route contract, not an afterthought.
 
-**Resource inventory** (each row becomes a route + scope audit, and a row in the `folio` skill's reference table):
+**Resource inventory** (each row becomes a route + scope audit, a `dryRun` implementation, and a row in the `folio` skill's reference table):
 
 | Resource | Operations needed | Current state | Gate for agent |
 |---|---|---|---|
@@ -49,17 +77,17 @@ Today Folio's REST surface is documents-mostly and session-auth-mostly. The gene
 
 Each row lands with: route verb+path, required scope, auth method (must include token), tenant guard, event emission, and **auto vs plan→apply** classification. This table **is** the agent's API manual (it gets copied into the skill).
 
-**Honest risk:** Sub-phase 1 opens auth on resources currently session-walled *for good reason* (users, settings). That is a real attack-surface change and is why this spec carries a mandatory threat model (below).
+**Honest risk:** This phase opens auth on resources currently session-walled *for good reason* (users, settings). That is a real attack-surface change and is why this spec carries a mandatory threat model (below).
 
-### Sub-phase 2 — The agent itself — the smaller, content-heavy half
+### Phase 3 — The agent itself — the smaller, content-heavy half
 
-On top of the completed surface:
+On top of the delegation model + completed surface:
 
-- **The `folio_api` tool** — `folio_api(method, path, body)`, registered in the shared tool registry (`lib/agent-tools-registry.ts`), scoped at execution time by the delegate intersect (below). Mutating calls to plan→apply resources route through the approval gate.
-- **The `folio` skill** — workspace content (not hardcoded), containing the resource→route→scope table, schema conventions, worked recipes for keystone tasks, and the plan→apply protocol.
-- **The memory convention** — a per-instance memory document/table the agent reads at start and appends to.
+- **The `folio_api` tool** — `folio_api(method, path, body)`, registered in the shared tool registry (`lib/agent-tools-registry.ts`), scoped at execution time by the delegate intersect. Mutating calls route through the risk gate (`dryRun` → plan → apply for high-risk).
+- **The `folio` skill** — workspace content (not hardcoded), containing the resource→route→scope table, schema conventions, worked recipes for keystone tasks, and the risk-gate protocol.
+- **The memory convention** — the two-layer working-log + workspace-profile design (see memory section).
 - **The seeded agent document** — every fresh instance is born with the operator agent (body-as-prompt; the prompt points it at the skill + memory).
-- **The finished approval gate** — Phase 3.x `awaiting_approval` (designed, not built): `docs/superpowers/plans/2026-05-30-phase-3.x-model-initiated-approval.md`.
+- **The approval gate** — finished first per the build sequence (Phase 3.x `awaiting_approval`, designed-not-built): `docs/superpowers/plans/2026-05-30-phase-3.x-model-initiated-approval.md`.
 
 ## Authority & safety model (the security heart)
 
@@ -73,27 +101,41 @@ effective_permissions = agent_scopes ∩ caller_permissions
 
 An owner talking to it can add a user; a member talking to it cannot — *the same agent*, different ceiling. This closes the privileged-bot escalation path entirely. **The agent can never exceed the human in front of it.**
 
-### Keystone task (most security-sensitive line in the design)
+### The biggest technical risk — caller-identity delegation (Phase 1, build first)
 
-Folio's current run model resolves authority from the **agent's own token/owner**, not from a live caller. To make authority mirror the *live caller*, Sub-phase 1 must **thread the caller's identity onto the run** and **intersect scopes at tool-execution time** in the shared `executeTool` path (`lib/agent-tools.ts`). This is a real change to the runner's auth resolution. It is the keystone — call it out first in the plan, threat-model it hardest.
+**This is the real project; everything else is plumbing.** Folio's current run model resolves authority from the **agent's own token/owner**, not from a live caller (`Agent → owns token → runs tools`). The target (`User → starts run → Run carries caller identity → tool execution resolves the caller's permissions → Agent acts as delegate`) is a change to the **execution model**, not a tweak. It touches **runner, scopes, tools, audit logs, and the approval gate** at once. The intersect (`agent_scopes ∩ caller_permissions`) happens at tool-execution time in the shared `executeTool` path (`lib/agent-tools.ts`). Build it first; threat-model it hardest. Nothing else lands before it.
 
-### Two-tier execution gate
+### Risk-tiered execution gate
 
-- **Auto (no gate):** document writes, queries, reads, triggering an already-permitted agent, reversible config (views/filters/fields). Event-emitting, auditable, undoable. Asking permission here is the fatigue trap → don't.
-- **Plan → human applies:** any *mutating* `folio_api` call to instance state — users, settings, deletes, bulk ops, cross-workspace, role changes. The agent emits a **readable diff** as a plan comment; a human clicks apply. Cheap *because rare*.
-- **Free self-critique:** before proposing a risky plan, the agent critiques its own plan in-loop ("what's irreversible here?"). One reasoning step, no second human; catches dumb mistakes before they reach the human.
+Risk is **scored, not inferred from resource type** — the same endpoint is low- or high-risk by *payload* (edit one field vs. bulk-edit 200). The score considers:
 
-> **Cost note:** the human's *attention* is the scarce resource, not tokens. Approval fatigue kills these products. Tier the gate by **blast radius**, never per-task.
+- **number of objects touched** (1 vs. 200),
+- **reversibility** (undoable vs. destructive),
+- **workspace-wide effects** (one project vs. the whole workspace),
+- **permissions affected** (none vs. role/membership changes).
+
+Three tiers:
+
+- **Low-risk → auto.** Document writes, queries, reads, triggering an already-permitted agent, single reversible config edits. Asking permission here is the fatigue trap.
+- **Medium-risk → auto-with-undo.** Runs, but surfaces an undo affordance (the `dryRun` diff is the undo preview). Bounded, reversible, but worth a glance.
+- **High-risk → plan/apply.** Many objects, irreversible, workspace-wide, or permission-affecting. The agent emits the `dryRun` diff; a human clicks apply.
+
+**v1 ships the resource-type approximation** (the inventory table's auto/plan→apply column) — it is the coarse proxy for the score. **The full scored model is explicitly NOT v1**, but the gate is designed so the scorer drops in later without re-plumbing: every mutation already routes through the same `dryRun`→render→apply path; the only thing v1 hardcodes is the tier decision.
+
+- **Free self-critique:** before proposing a high-risk plan, the agent critiques its own plan in-loop ("what's irreversible here?"). One reasoning step, no second human.
+
+> **Cost note:** the human's *attention* is the scarce resource, not tokens. Approval fatigue kills these products. Tier the gate by **risk**, never per-task.
 
 ### Threat model (mandatory — per CLAUDE.md; touches auth/token surfaces, BYOK, multi-tenancy)
 
 The implementation plan MUST expand this into a full `## Threat model` section (invoke `netdust-core:threat-modeling`). Named surfaces to cover:
 
 1. **Privilege escalation** via the general primitive → mitigated by the intersect-with-caller invariant.
-2. **Confused deputy** — agent tricked via document/injected content into an escalating `folio_api` call → mitigated by the delegate ceiling (can't exceed caller) + plan→apply on mutations + the existing "treat untrusted context as data" fence.
+2. **Confused deputy** — agent tricked via document/injected content into an escalating `folio_api` call → mitigated by the delegate ceiling (can't exceed caller) + high-risk plan/apply on mutations + the existing "treat untrusted context as data" fence.
 3. **BYOK key exfiltration** — agent must never read an AI key back via `folio_api GET settings` → redact secrets **at the loader** (extends the locked redact-at-the-loader discipline; grep every consumer: HTTP + MCP + the new general path).
-4. **Multi-tenancy / cross-workspace** — `folio_api` must not reach a workspace the caller can't → intersect handles it; every Sub-phase 1 route re-asserts the tenant guard independently.
-5. **Audit** — every `folio_api` mutation emits an event → complete trail of agent-initiated instance changes.
+4. **Multi-tenancy / cross-workspace** — `folio_api` must not reach a workspace the caller can't → intersect handles it; every Phase 2 route re-asserts the tenant guard independently.
+5. **`dryRun` parity** — a `dryRun` call must NOT mutate and must NOT leak data the real call would redact (it shares the same loader/redaction path); the diff it returns is itself subject to the delegate ceiling.
+6. **Audit** — every `folio_api` mutation emits an event → complete trail of agent-initiated instance changes.
 
 ## The skill & the memory system
 
@@ -103,11 +145,25 @@ The implementation plan MUST expand this into a full `## Threat model` section (
 - Contains: the **resource→route→scope table** (the API reference), schema conventions (frontmatter-is-the-schema, snake_case keys, slug rules, document-type split), **worked recipes** for keystone tasks ("set up a project," "author a view + filter," "add a user"), and the **plan→apply protocol** (auto vs draft).
 - Versioned + seeded on fresh instances; updatable. New feature → skill row → agent can use it. **This kills the maintain-a-list problem.**
 
-### The memory system — how it learns this instance
+### The memory system — how it learns this instance (the weakest part — designed against its own rot)
 
-- A **per-instance agent memory** the agent reads at run start and appends to: project naming conventions, what a custom field *means here*, who's who, past decisions. Distinct from the skill (general Folio knowledge, same everywhere) — memory is **this customer's** accrued context.
-- Mechanically: a **dedicated memory document/table in the workspace**, riding the document primitive the agent already owns (no new storage, stays inside one-binary / SQLite, no sidecar). Read at start, appended via `write_document`.
-- **Honest caveat:** memory needs curation (what to keep, decay of stale facts) or it bloats and degrades. v1 = append-with-light-structure; **memory curation is named as a future refinement, not a v1 solve.**
+Memory is distinct from the skill (general Folio knowledge, same everywhere) — memory is **this customer's** accrued context. It is also the part most likely to fail, and not because the idea is bad: **every agent-memory system sounds good until month 6.** A single append-only blob becomes *worse than useless* after ~500 runs:
+
+```
+User prefers blue fields.  →  (no wait)
+User renamed sales pipeline.  →  (actually reverted)
+Project alpha means X.  →  Project alpha now means Y.
+```
+
+The churn — facts that get superseded, reverted, contradicted — turns one append-only store into garbage the agent can't trust. So memory is **split in two**, never one thing:
+
+- **Working memory (`memory.log`)** — *volatile.* The raw recent timeline (last ~30–60 days). Append-friendly, decays out. The agent's short-term "what happened lately." Bloat here is bounded by the decay window, so churn is harmless.
+- **Instance profile (`workspace_profile.md`)** — *curated.* Canonical truths only: project naming conventions, **field definitions** (what a custom field *means here*), **team members**, **preferred workflow**. This is the thing the agent **trusts**. Updated deliberately (a fact changes → the profile is *edited*, not appended-over), so contradictions get resolved at write time, not accumulated.
+
+This is the PARA-style raw-timeline-vs-distilled-knowledge split: the log is cheap and forgettable; the profile is small, authoritative, and curated. The agent reads *both* at start but **weights the profile as truth and the log as recent context**.
+
+- Mechanically: both ride the document primitive the agent already owns (e.g. two reserved-slug `page` documents per workspace, or a small dedicated store if it earns itself) — no new storage, stays inside one-binary / SQLite, no sidecar.
+- **Still-honest caveat:** even split, the profile needs a *curation discipline* (when does a log fact get promoted to the profile? when does a profile fact get retired?). v1 keeps promotion **manual/agent-proposed** (the agent suggests a profile edit, it's a normal reviewable write); **auto-promotion and log decay are explicitly future refinements, not a v1 solve.** The split is what makes those refinements *possible* without a rewrite.
 
 ## In-app surface — no new interface
 
@@ -117,7 +173,11 @@ The operator agent's home is the **already-shipped cockpit panel** (~360px right
 
 Reuses: the runner, the cockpit panel, runs-history, SSE, the scope system, the agent-document + body-as-prompt model, the shared tool registry, the redact-at-the-loader discipline, the (designed) approval gate.
 
-Net-new: (1) the token-scoped write routes of Sub-phase 1, (2) the caller-identity-on-run + scope-intersect keystone, (3) the `folio_api` tool, (4) the `folio` skill content, (5) the memory convention, (6) the seeded operator agent document, (7) finishing the `awaiting_approval` gate.
+Net-new: (1) the caller-identity-on-run + scope-intersect keystone (Phase 1 — the real work), (2) the token-scoped write routes + universal `dryRun` (Phase 2), (3) the `folio_api` tool, (4) the `folio` skill content, (5) the two-layer memory convention, (6) the seeded operator agent document, (7) finishing the `awaiting_approval` gate.
+
+## Strategic assessment
+
+This is **more important than autonomous research agents, work-item agents, or agent chains** — because it becomes the **operating system for Folio**. External MCP = "bring your own agent." Built-in operator = "Folio already understands itself." Complementary, not competing. The novel pieces are the **`folio` skill** and the **caller-identity delegation model**; the rest is plumbing around them. Prioritize accordingly: it earns its place ahead of further autonomy work.
 
 ## Explicitly out of scope (YAGNI)
 
@@ -135,6 +195,6 @@ Net-new: (1) the token-scoped write routes of Sub-phase 1, (2) the caller-identi
 
 ## Prerequisites before build
 
-- Sub-phase 1 (API completion) lands first; Sub-phase 2 stands on it.
-- The `awaiting_approval` gate (Phase 3.x) must be finished for the plan→apply tier.
-- A `netdust-core:threat-modeling` pass expands the threat model section before task breakdown.
+- **Build in the documented sequence**: approval gate → caller-identity delegation (Phase 1) → token-scoped API surface + `dryRun` (Phase 2) → `folio_api` → skill → seed agent (Phase 3). Caller-identity delegation comes first; nothing else before it.
+- The `awaiting_approval` gate (Phase 3.x) must be finished for the high-risk plan/apply tier.
+- A `netdust-core:threat-modeling` pass expands the threat model section before task breakdown — delegation is the surface to model hardest.
