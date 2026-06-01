@@ -1,5 +1,8 @@
 import { describe, expect, test } from 'bun:test';
-import { classifyRisk, validateApiPath } from './folio-api-tool.ts';
+import { db } from '../db/client.ts';
+import { apiTokens, type ApiToken } from '../db/schema.ts';
+import { makeTestApp } from '../test/harness.ts';
+import { classifyRisk, dispatchAsCaller, validateApiPath } from './folio-api-tool.ts';
 
 describe('validateApiPath (P3-5)', () => {
   test('accepts a relative API path', () => {
@@ -78,5 +81,108 @@ describe('classifyRisk (P3-7, v1 resource-type proxy)', () => {
   });
   test('members read does not classify high (symmetry)', () => {
     expect(classifyRisk('GET', '/api/v1/w/a/members', {})).not.toBe('high');
+  });
+});
+
+function callerToken(over: Partial<ApiToken>): ApiToken {
+  return {
+    id: 'tok_caller',
+    workspaceId: '',
+    name: 'caller',
+    tokenHash: 'unused',
+    scopes: [],
+    agentId: null,
+    projectIds: null,
+    createdBy: null,
+    lastUsedAt: null,
+    createdAt: new Date(),
+    ...over,
+  };
+}
+
+async function countTokens(): Promise<number> {
+  return (await db.select().from(apiTokens)).length;
+}
+
+describe('dispatchAsCaller (P3-1/2/3/4)', () => {
+  test('reaches the route as the caller delegate (P3-1)', async () => {
+    const { seed } = await makeTestApp();
+    const owner = callerToken({
+      workspaceId: seed.workspace.id,
+      scopes: ['config:write', 'documents:read'],
+      createdBy: seed.user.id,
+    });
+    const res = await dispatchAsCaller(
+      owner,
+      'GET',
+      `/api/v1/w/${seed.workspace.slug}/p/${seed.project.slug}/tables`,
+      undefined,
+    );
+    expect(res.status).toBe(200);
+  });
+
+  test('scope ceiling: a token lacking config:write is 403 on a config:write route (P3-1)', async () => {
+    const { seed } = await makeTestApp();
+    // agentId:null → requireResource bypasses, isolating requireScope. scopes lack config:write.
+    const member = callerToken({
+      workspaceId: seed.workspace.id,
+      scopes: ['documents:read', 'documents:write'],
+      createdBy: seed.user.id,
+      agentId: null,
+    });
+    const res = await dispatchAsCaller(
+      member,
+      'POST',
+      `/api/v1/w/${seed.workspace.slug}/p/${seed.project.slug}/tables`,
+      { name: 'x' },
+    );
+    expect(res.status).toBe(403);
+  });
+
+  test('mints then revokes — token count unchanged, even on route error (P3-3)', async () => {
+    const { seed } = await makeTestApp();
+    const owner = callerToken({
+      workspaceId: seed.workspace.id,
+      scopes: ['config:write', 'documents:read'],
+      createdBy: seed.user.id,
+    });
+    const member = callerToken({
+      workspaceId: seed.workspace.id,
+      scopes: ['documents:read'],
+      createdBy: seed.user.id,
+      agentId: null,
+    });
+    const before = await countTokens();
+    await dispatchAsCaller(
+      owner,
+      'GET',
+      `/api/v1/w/${seed.workspace.slug}/p/${seed.project.slug}/tables`,
+      undefined,
+    );
+    expect(await countTokens()).toBe(before); // success path nets zero
+    await dispatchAsCaller(
+      member,
+      'POST',
+      `/api/v1/w/${seed.workspace.slug}/p/${seed.project.slug}/tables`,
+      { name: 'x' },
+    ); // 403 path
+    expect(await countTokens()).toBe(before); // finally still revoked
+  });
+
+  test('never serializes the minted plaintext (P3-2)', async () => {
+    const { seed } = await makeTestApp();
+    const owner = callerToken({
+      workspaceId: seed.workspace.id,
+      scopes: ['config:write', 'documents:read'],
+      createdBy: seed.user.id,
+    });
+    const res = await dispatchAsCaller(
+      owner,
+      'GET',
+      `/api/v1/w/${seed.workspace.slug}/p/${seed.project.slug}/tables`,
+      undefined,
+    );
+    const text = await res.clone().text();
+    expect(text).not.toMatch(/folio_pat_/);
   });
 });

@@ -23,6 +23,12 @@
  *    Task 1 does NOT import app.
  */
 
+import { eq } from 'drizzle-orm';
+import { nanoid } from 'nanoid';
+import { db } from '../db/client.ts';
+import { apiTokens, type ApiToken } from '../db/schema.ts';
+import { newApiToken } from './auth.ts';
+
 /**
  * Validate the `path` arg of folio_api/folio_api_get (mitigation P3-5).
  * Only relative paths under /api/v1/ are allowed; no scheme, no protocol-
@@ -108,4 +114,52 @@ export function classifyRisk(
 
   // 3. Low: document writes + everything else token-scoped.
   return 'low';
+}
+
+/**
+ * Call a Folio API route IN-PROCESS as the caller delegate (P3-1/2/3/4).
+ * Mints a short-lived bearer mirroring `caller` (scopes/agentId/projectIds/
+ * workspaceId verbatim — widening NOTHING), sends it as Authorization: Bearer
+ * to app.request, and REVOKES it in a finally. The ccExecute pattern
+ * (runner.ts:881-896,948-950). The no-mint seeded-ctx path is infeasible in
+ * Hono 4.6.12 (app.request env arg sets c.env not the c.var store requireScope
+ * reads; attachToken at app.ts:49 overwrites c.set('token') from the header on
+ * every workspace route).
+ *  - P3-1: scopes/agentId/projectIds copied verbatim (agent ∩ caller ceiling).
+ *  - P3-2: plaintext only in the Authorization header — never logged/returned.
+ *  - P3-3: row deleted in finally so no path leaves a live credential.
+ */
+export async function dispatchAsCaller(
+  caller: ApiToken,
+  method: string,
+  path: string,
+  body: unknown,
+): Promise<Response> {
+  const validPath = validateApiPath(path);
+  const { token: plaintext, hash } = newApiToken();
+  const mintedId = nanoid();
+  await db.insert(apiTokens).values({
+    id: mintedId,
+    workspaceId: caller.workspaceId,
+    name: `folio_api:${mintedId}`,
+    tokenHash: hash,
+    scopes: caller.scopes,
+    agentId: caller.agentId,
+    projectIds: caller.projectIds,
+    createdBy: caller.createdBy,
+  });
+  try {
+    const { app } = await import('../app.ts'); // lazy — avoids import cycle
+    const init: RequestInit = {
+      method,
+      headers: {
+        Authorization: `Bearer ${plaintext}`,
+        ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+      },
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+    };
+    return await app.request(validPath, init);
+  } finally {
+    await db.delete(apiTokens).where(eq(apiTokens.id, mintedId));
+  }
 }
