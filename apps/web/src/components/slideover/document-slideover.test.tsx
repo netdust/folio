@@ -118,6 +118,28 @@ describe('DocumentSlideover', () => {
     expect(screen.getByText(/Reproduce/)).toBeInTheDocument();
   });
 
+  // REGRESSION (refetch-stomp): the buffered draft used to be consumed by the
+  // parent with `doc ?? placeholder`. React Query flipping `doc` to undefined on
+  // refetch flipped the placeholder in, blanking the body AND making the buffer
+  // perpetually dirty. The fix moves the draft into a keyed inner mounted only
+  // once a REAL doc loads. After the doc loads and renders (with no user edit),
+  // the body text must be present AND the Save button disabled (clean) — the
+  // remount key guarantees a clean seed from the loaded doc, never a placeholder.
+  it('after the doc loads, the body is shown and the buffer is NOT dirty (no refetch-stomp)', async () => {
+    mockDoc('fix-login');
+    const { queryClient, router } = setup('?doc=fix-login');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText('Fix login bug');
+    // Body content is present (not the empty placeholder).
+    expect(screen.getByText(/Reproduce/)).toBeInTheDocument();
+    // No user edit → the buffer is clean → Save stays disabled.
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+  });
+
   it('clicking close removes ?doc= from the URL', async () => {
     mockDoc('fix-login');
     const { queryClient, router } = setup('?doc=fix-login');
@@ -672,6 +694,238 @@ describe('DocumentSlideover', () => {
     await waitFor(() => {
       expect(document.querySelector('[data-testid="slideover-editor"]')).not.toBeNull();
     });
+  });
+
+  // ---------------------------------------------------------------------
+  // Buffered save (header disk icon) — unified-document-save
+  // ---------------------------------------------------------------------
+
+  // A self-contained mock for the buffered-save tests: serves the doc detail
+  // (capturing PATCH bodies), one status option, and empty arrays for the rest.
+  function mockSaveDoc(
+    slug: string,
+    type: 'work_item' | 'page',
+    opts: { onPatch?: (body: unknown) => void; statuses?: boolean } = {},
+  ) {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>(async (url, init) => {
+        const u = String(url);
+        const method = (init?.method ?? 'GET').toUpperCase();
+        if (u.includes('/backlinks')) {
+          return new Response(JSON.stringify({ data: [] }), {
+            status: 200, headers: { 'content-type': 'application/json' },
+          });
+        }
+        if (u.includes(`/documents/${slug}`) && !u.includes('/documents/' + slug + '/comments')) {
+          if (method === 'PATCH' && opts.onPatch) {
+            try {
+              opts.onPatch(init?.body ? JSON.parse(String(init.body)) : null);
+            } catch {
+              opts.onPatch(init?.body);
+            }
+          }
+          return new Response(
+            JSON.stringify({
+              data: {
+                id: 'd1',
+                slug,
+                type,
+                title: 'Fix login bug',
+                status: 'todo',
+                parentId: null,
+                frontmatter: {},
+                body: '# Steps\n\n1. Reproduce',
+                createdAt: '2026-01-01',
+                updatedAt: '2026-01-02',
+              },
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        if (u.includes('/statuses')) {
+          return new Response(
+            JSON.stringify({
+              data: opts.statuses
+                ? [
+                    { key: 'todo', name: 'Todo', color: '#888', order: 0 },
+                    { key: 'in_progress', name: 'In progress', color: '#08f', order: 1 },
+                  ]
+                : [],
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        if (u.includes('/fields') || u.includes('/settings/ai-keys') || u.includes('/workspaces')) {
+          return new Response(JSON.stringify({ data: [] }), {
+            status: 200, headers: { 'content-type': 'application/json' },
+          });
+        }
+        if (u.includes('/documents')) {
+          return new Response(JSON.stringify({ data: { data: [], nextCursor: null } }), {
+            status: 200, headers: { 'content-type': 'application/json' },
+          });
+        }
+        return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+      }),
+    );
+  }
+
+  it('shows a disabled Save icon when clean, enables after a body edit, and PATCHes on save', async () => {
+    const patches: unknown[] = [];
+    mockSaveDoc('fix-login', 'work_item', { onPatch: (p) => patches.push(p) });
+    const { queryClient, router } = setup('?doc=fix-login');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText('Fix login bug');
+    const saveBtn = screen.getByRole('button', { name: 'Save' });
+    expect(saveBtn).toBeDisabled();
+
+    // Switch to raw markdown via the header ModeToggle (it's in the header on the
+    // Fields tab, not in a menu). The Raw button toggles the editor to a textarea.
+    await userEvent.click(screen.getByRole('button', { name: /Raw/ }));
+    const textarea = await screen.findByRole('textbox');
+    await userEvent.type(textarea, ' edited');
+    await waitFor(() => expect(saveBtn).toBeEnabled());
+
+    await userEvent.click(saveBtn);
+    await waitFor(() => expect(patches.length).toBeGreaterThan(0));
+    expect(patches[0]).toMatchObject({ body: expect.stringContaining('edited') });
+  });
+
+  it('status commit still PATCHes immediately and does NOT make the buffer dirty', async () => {
+    const patches: Array<Record<string, unknown>> = [];
+    mockSaveDoc('fix-login', 'work_item', {
+      statuses: true,
+      onPatch: (p) => patches.push(p as Record<string, unknown>),
+    });
+    const { queryClient, router } = setup('?doc=fix-login');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText('Fix login bug');
+    const saveBtn = screen.getByRole('button', { name: 'Save' });
+    expect(saveBtn).toBeDisabled();
+
+    // Open the status InlineSelect (its trigger renders the current "Todo" chip)
+    // and pick "In progress".
+    await userEvent.click(screen.getByRole('button', { name: /Todo/ }));
+    await userEvent.click(await screen.findByRole('option', { name: /In progress/ }));
+
+    await waitFor(() => expect(patches.some((p) => p.status === 'in_progress')).toBe(true));
+    // Status is immediate-commit, not buffered: the Save icon stays disabled.
+    expect(saveBtn).toBeDisabled();
+  });
+
+  it('closing while dirty prompts; Save persists then closes', async () => {
+    const patches: unknown[] = [];
+    mockSaveDoc('fix-login', 'work_item', { onPatch: (p) => patches.push(p) });
+    const { queryClient, router } = setup('?doc=fix-login');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText('Fix login bug');
+    await userEvent.click(screen.getByRole('button', { name: /Raw/ }));
+    const textarea = await screen.findByRole('textbox');
+    await userEvent.type(textarea, ' edited');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled());
+
+    await userEvent.click(screen.getByRole('button', { name: /Close document/ }));
+    expect(await screen.findByText(/Unsaved changes/i)).toBeInTheDocument();
+
+    // The dialog's primary Save button persists then proceeds (closes).
+    const dialogSave = screen.getAllByRole('button', { name: /^Save$/ }).find(
+      (b) => b.getAttribute('aria-label') !== 'Save',
+    );
+    expect(dialogSave).toBeDefined();
+    await userEvent.click(dialogSave!);
+    await waitFor(() => expect(patches.length).toBeGreaterThan(0));
+    expect(patches[0]).toMatchObject({ body: expect.stringContaining('edited') });
+    await waitFor(() => expect(screen.queryByText('Fix login bug')).not.toBeInTheDocument());
+  });
+
+  it('switching to a different doc while dirty opens the unsaved prompt; Discard lands on the new doc', async () => {
+    // Two real docs: the dirty one (fix-login) and the switch target (other-doc).
+    // Both must return a valid frontmatter object so the brief render of the
+    // target during the URL revert doesn't crash FrontmatterForm.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>(async (url) => {
+        const u = String(url);
+        if (u.includes('/backlinks')) {
+          return new Response(JSON.stringify({ data: [] }), {
+            status: 200, headers: { 'content-type': 'application/json' },
+          });
+        }
+        const m = u.match(/\/documents\/(fix-login|other-doc)(\?|$)/);
+        if (m) {
+          const slug = m[1];
+          return new Response(
+            JSON.stringify({
+              data: {
+                id: slug === 'fix-login' ? 'd1' : 'd2',
+                slug,
+                type: 'work_item',
+                title: slug === 'fix-login' ? 'Fix login bug' : 'Other doc',
+                status: 'todo',
+                parentId: null,
+                frontmatter: {},
+                body: '# Body',
+                createdAt: '2026-01-01',
+                updatedAt: '2026-01-02',
+              },
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        if (u.includes('/statuses') || u.includes('/fields') || u.includes('/settings/ai-keys')) {
+          return new Response(JSON.stringify({ data: [] }), {
+            status: 200, headers: { 'content-type': 'application/json' },
+          });
+        }
+        if (u.includes('/documents')) {
+          return new Response(JSON.stringify({ data: { data: [], nextCursor: null } }), {
+            status: 200, headers: { 'content-type': 'application/json' },
+          });
+        }
+        return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+      }),
+    );
+    const { queryClient, router } = setup('?doc=fix-login');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText('Fix login bug');
+    await userEvent.click(screen.getByRole('button', { name: /Raw/ }));
+    const textarea = await screen.findByRole('textbox');
+    await userEvent.type(textarea, ' edited');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled());
+
+    // Programmatic switch to a different doc (simulates clicking another row).
+    await router.navigate({ to: '.', search: { doc: 'other-doc' } });
+
+    // The switch is intercepted: the prompt appears and the URL is reverted to
+    // the still-loaded doc so it isn't swapped out from under the dirty buffer.
+    expect(await screen.findByText(/Unsaved changes/i)).toBeInTheDocument();
+    await waitFor(() =>
+      expect((router.state.location.search as { doc?: string }).doc).toBe('fix-login'),
+    );
+
+    // Discard resets the buffer (isDirty → false), proceed() re-applies the
+    // intended switch, and the effect lets it through cleanly → land on the new doc.
+    await userEvent.click(screen.getByRole('button', { name: 'Discard' }));
+    await waitFor(() =>
+      expect((router.state.location.search as { doc?: string }).doc).toBe('other-doc'),
+    );
   });
 
   it('derives listParams from URL search so optimistic writes target the active table cache', async () => {

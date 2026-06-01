@@ -191,6 +191,28 @@ describe('WorkspaceDocumentSlideover', () => {
     expect(screen.getByText(/Do the triage\./)).toBeInTheDocument();
   });
 
+  // REGRESSION (refetch-stomp): the buffered draft used to be consumed by the
+  // parent with `doc ?? placeholder`. React Query flipping `doc` to undefined on
+  // refetch flipped the placeholder in, blanking the body AND making the buffer
+  // perpetually dirty. The fix moves the draft into a keyed inner mounted only
+  // once a REAL doc loads. After the doc loads and renders (with no user edit),
+  // the body text must be present AND the Save button disabled (clean) — the
+  // remount key guarantees a clean seed from the loaded doc, never a placeholder.
+  it('after the doc loads, the body is shown and the buffer is NOT dirty (no refetch-stomp)', async () => {
+    mockWorkspaceDoc('triage', 'agent');
+    const { queryClient, router } = setup('?wdoc=triage');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText('Triage Agent');
+    // Body content is present (not the empty placeholder).
+    expect(screen.getByText(/Do the triage\./)).toBeInTheDocument();
+    // No user edit → the buffer is clean → Save stays disabled.
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+  });
+
   // REGRESSION: opening an agent/trigger from the automation page carries that
   // page's ?tab=agents (or ?tab=triggers) into the URL alongside ?wdoc=. The
   // `tab` param is shared, so the slideover used to seed its OWN tab to 'agents'
@@ -211,6 +233,173 @@ describe('WorkspaceDocumentSlideover', () => {
       expect(screen.getByRole('tab', { name: 'Fields' })).toHaveAttribute('aria-selected', 'true');
     });
     expect(document.querySelector('[data-testid="workspace-slideover-editor"]')).not.toBeNull();
+  });
+
+  it('shows a disabled Save icon when clean and enables it after an edit (agent)', async () => {
+    mockWorkspaceDoc('triage', 'agent');
+    const { queryClient, router } = setup('?wdoc=triage');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText('Triage Agent');
+    const saveBtn = screen.getByRole('button', { name: 'Save' });
+    expect(saveBtn).toBeDisabled();
+
+    // Edit the body via the raw editor (deterministic in jsdom; Milkdown is not).
+    // Switch to raw markdown through the More menu.
+    await userEvent.click(screen.getByRole('button', { name: 'More actions' }));
+    await userEvent.click(screen.getByRole('menuitemradio', { name: /Raw markdown/ }));
+    const textarea = await screen.findByRole('textbox');
+    await userEvent.type(textarea, ' edited');
+    await waitFor(() => expect(saveBtn).toBeEnabled());
+  });
+
+  it('clicking Save PATCHes the diff, toasts, and returns the icon to disabled', async () => {
+    const patches: unknown[] = [];
+    mockWorkspaceDoc('triage', 'agent', { onPatch: (p) => patches.push(p) });
+    const { queryClient, router } = setup('?wdoc=triage');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText('Triage Agent');
+    await userEvent.click(screen.getByRole('button', { name: 'More actions' }));
+    await userEvent.click(screen.getByRole('menuitemradio', { name: /Raw markdown/ }));
+    const textarea = await screen.findByRole('textbox');
+    await userEvent.type(textarea, ' edited');
+    const saveBtn = screen.getByRole('button', { name: 'Save' });
+    await waitFor(() => expect(saveBtn).toBeEnabled());
+    await userEvent.click(saveBtn);
+    await waitFor(() => expect(patches.length).toBeGreaterThan(0));
+    expect(patches[0]).toMatchObject({ body: expect.stringContaining('edited') });
+  });
+
+  it('trigger pane no longer renders its own inline Save button (save is the header icon)', async () => {
+    mockWorkspaceDoc('shake-trigger', 'trigger', {
+      frontmatter: { schedule: '0 9 * * 1', agent: 'shake-folio-only', enabled: false },
+    });
+    const { queryClient, router } = setup('?wdoc=shake-trigger');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await screen.findByLabelText('Enabled');
+    // Exactly one element labelled Save — the header icon. The old pane Save
+    // button had the literal text "Save" inside the scroll area.
+    const saves = screen.getAllByRole('button', { name: 'Save' });
+    expect(saves).toHaveLength(1);
+    expect(saves[0]).toHaveAttribute('aria-label', 'Save');
+  });
+
+  it('closing while dirty opens the unsaved prompt; Discard closes without saving', async () => {
+    const patches: unknown[] = [];
+    mockWorkspaceDoc('triage', 'agent', { onPatch: (p) => patches.push(p) });
+    const { queryClient, router } = setup('?wdoc=triage');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText('Triage Agent');
+    await userEvent.click(screen.getByRole('button', { name: 'More actions' }));
+    await userEvent.click(screen.getByRole('menuitemradio', { name: /Raw markdown/ }));
+    const textarea = await screen.findByRole('textbox');
+    await userEvent.type(textarea, ' edited');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled());
+
+    await userEvent.click(screen.getByRole('button', { name: 'Close document' }));
+    // Prompt appears instead of an immediate close.
+    expect(await screen.findByText(/Unsaved changes/i)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Discard' }));
+    // Closed (title gone) and no PATCH fired.
+    await waitFor(() => expect(screen.queryByText('Triage Agent')).not.toBeInTheDocument());
+    expect(patches).toHaveLength(0);
+  });
+
+  it('switching to a different wdoc while dirty opens the unsaved prompt; Discard lands on the new doc', async () => {
+    // Two real docs: the dirty one (triage) and the switch target (other-agent).
+    // Both must return a valid frontmatter object so the brief render of the
+    // target during the URL revert doesn't crash FrontmatterForm.
+    vi.stubGlobal(
+      'EventSource',
+      class {
+        addEventListener() {}
+        removeEventListener() {}
+        close() {}
+      } as unknown as typeof EventSource,
+    );
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>(async (url) => {
+        const u = String(url);
+        const slug = u.includes('/documents/other-agent') ? 'other-agent' : 'triage';
+        if (u.endsWith('/events')) {
+          return new Response(JSON.stringify({ data: [] }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
+        if (u.includes('/w/main/documents?')) {
+          return new Response(JSON.stringify({ data: [] }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
+        if (u.includes('/w/main/documents/')) {
+          return new Response(
+            JSON.stringify({
+              data: {
+                id: slug === 'other-agent' ? 'd2' : 'd1',
+                slug,
+                type: 'agent',
+                title: slug === 'other-agent' ? 'Other Agent' : 'Triage Agent',
+                status: null,
+                parentId: null,
+                frontmatter: { description: 'x' },
+                body: '# Instructions',
+                createdAt: '2026-01-01',
+                updatedAt: '2026-01-02',
+              },
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+      }),
+    );
+    const { queryClient, router } = setup('?wdoc=triage');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText('Triage Agent');
+    await userEvent.click(screen.getByRole('button', { name: 'More actions' }));
+    await userEvent.click(screen.getByRole('menuitemradio', { name: /Raw markdown/ }));
+    const textarea = await screen.findByRole('textbox');
+    await userEvent.type(textarea, ' edited');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled());
+
+    // Programmatic switch to a different doc (simulates clicking another row).
+    await router.navigate({ to: '.', search: { wdoc: 'other-agent' } });
+
+    // The switch is intercepted: the prompt appears and the URL is reverted to
+    // the still-loaded doc so it isn't swapped out from under the dirty buffer.
+    expect(await screen.findByText(/Unsaved changes/i)).toBeInTheDocument();
+    await waitFor(() =>
+      expect((router.state.location.search as { wdoc?: string }).wdoc).toBe('triage'),
+    );
+
+    // Discard resets the buffer (isDirty → false), proceed() re-applies the
+    // intended switch, and the effect lets it through cleanly → land on the new doc.
+    await userEvent.click(screen.getByRole('button', { name: 'Discard' }));
+    await waitFor(() =>
+      expect((router.state.location.search as { wdoc?: string }).wdoc).toBe('other-agent'),
+    );
   });
 
   it('renders the icon tab toggles Fields / Activity / Runs for an agent (no Comments)', async () => {

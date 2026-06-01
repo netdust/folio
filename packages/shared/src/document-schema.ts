@@ -10,6 +10,32 @@ import { z } from 'zod';
 // F9 guard); the enum widening here is purely for read-shape parsing.
 export const documentTypeEnum = z.enum(['work_item', 'page', 'agent', 'trigger', 'agent_run']);
 
+/**
+ * Frontmatter keys the SERVER owns and injects — clients must never echo them
+ * back on a PATCH. The agent/trigger frontmatter schemas are `.strict()` and
+ * reject these (e.g. `api_token_id: z.undefined()`), and the document service
+ * strips the generic-reserved ones on merge anyway. The buffered-save draft
+ * (`useDocumentDraft`) strips this set before diffing/sending so round-tripping
+ * a doc's own frontmatter doesn't 422.
+ *
+ * Union of: generic RESERVED_FRONTMATTER_KEYS (services/documents.ts) +
+ * agent server-managed (lib/agent-schema.ts) + trigger server-managed
+ * (lib/trigger-schema.ts). Keep in sync if those grow.
+ */
+export const SERVER_MANAGED_FRONTMATTER_KEYS = [
+  // Generic reserved (mirror columns / server bookkeeping)
+  'type',
+  'title',
+  'status',
+  'last_touched_at',
+  // Agent server-managed
+  'api_token_id',
+  'parent_agent',
+  // Trigger server-managed
+  'last_fired_at',
+  'last_status',
+] as const;
+
 export const documentCreateSchema = z.object({
   type: documentTypeEnum,
   title: z.string().min(1).max(500),
