@@ -65,7 +65,10 @@ export type RiskTier = 'low' | 'medium' | 'high';
  * re-plumbing — every mutation already routes through dryRun→render→apply.
  *
  * Rule order (first match wins):
- *  1. HIGH  — permission/membership routes, workspace-level deletion, explicit bulk.
+ *  1. HIGH  — token mint/revoke, BYOK/settings writes, workspace-terminus
+ *     rename/delete, permission/membership routes, explicit bulk. These create or
+ *     destroy standing credentials, AI keys, memberships, or the workspace itself,
+ *     so they REFUSE-with-plan rather than auto-apply. Reads (GET) never gate high.
  *  2. MEDIUM — structure config (tables/fields/views/statuses), the projects
  *     COLLECTION (/projects, /projects/:slug), and the bare project ITEM route
  *     (/p/:slug with NO further sub-resource segment). Reads (GET) are never medium.
@@ -80,9 +83,14 @@ export function classifyRisk(
   path: string,
   body: Record<string, unknown>,
 ): RiskTier {
-  // 1. High: permission/membership, workspace-level destruction, or explicit bulk.
-  if (/\/members?(\/|$)/.test(path)) return 'high';
-  if (method === 'DELETE' && /^\/api\/v1\/w\/[^/]+$/.test(path)) return 'high'; // workspace delete
+  // Normalize method case (defense-in-depth: a lowercase 'delete' still gates).
+  const m = method.toUpperCase();
+
+  // 1. High: credential/membership/workspace-terminus writes, or explicit bulk.
+  if (/\/tokens(\/|$)/.test(path) && m !== 'GET') return 'high'; // mint/revoke standing credentials
+  if (/\/(settings|ai-keys)(\/|$)/.test(path) && m !== 'GET') return 'high'; // BYOK key / settings (credential ops)
+  if (/^\/api\/v1\/w\/[^/]+$/.test(path) && m !== 'GET') return 'high'; // workspace rename or delete
+  if (/\/members?(\/|$)/.test(path) && m !== 'GET') return 'high';
   if (body && body.bulk === true) return 'high';
 
   // 2. Medium: structure/config writes.
@@ -91,7 +99,7 @@ export function classifyRisk(
   // OR the bare /p/:slug terminus (plan spec shape). Anchored to end-of-path so
   // sub-resources like /p/:slug/documents fall through to low.
   if (
-    method !== 'GET' &&
+    m !== 'GET' &&
     (/^\/api\/v1\/w\/[^/]+\/projects(\/[^/]+)?$/.test(path) ||
       /^\/api\/v1\/w\/[^/]+\/p\/[^/]+$/.test(path))
   ) {

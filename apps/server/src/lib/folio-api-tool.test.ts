@@ -58,4 +58,25 @@ describe('classifyRisk (P3-7, v1 resource-type proxy)', () => {
     // Plan's spec example also pins the bare project-item form as medium:
     expect(classifyRisk('PATCH', '/api/v1/w/a/p/b', {})).toBe('medium'); // project item (no sub-resource)
   });
+
+  test('token mint/revoke routes are high (P3-7 hardening)', () => {
+    expect(classifyRisk('POST', '/api/v1/w/a/tokens', {})).toBe('high');
+    expect(classifyRisk('DELETE', '/api/v1/w/a/tokens/tok1', {})).toBe('high');
+    expect(classifyRisk('GET', '/api/v1/w/a/tokens', {})).not.toBe('high'); // read doesn't gate
+  });
+  test('BYOK key / settings writes are high (P3-7 hardening)', () => {
+    expect(classifyRisk('POST', '/api/v1/w/a/settings/ws1/ai-keys', {})).toBe('high');
+    expect(classifyRisk('DELETE', '/api/v1/w/a/settings/ws1/ai-keys/k1', {})).toBe('high');
+  });
+  test('workspace rename + delete are high; project sub-resources unaffected', () => {
+    expect(classifyRisk('PATCH', '/api/v1/w/a', {})).toBe('high'); // rename
+    expect(classifyRisk('DELETE', '/api/v1/w/a', {})).toBe('high'); // delete
+    expect(classifyRisk('POST', '/api/v1/w/a/p/b/documents', {})).toBe('low'); // regression guard
+  });
+  test('method case is normalized', () => {
+    expect(classifyRisk('delete', '/api/v1/w/a', {})).toBe('high');
+  });
+  test('members read does not classify high (symmetry)', () => {
+    expect(classifyRisk('GET', '/api/v1/w/a/members', {})).not.toBe('high');
+  });
 });
