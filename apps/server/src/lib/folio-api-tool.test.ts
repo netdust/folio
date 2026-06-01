@@ -45,6 +45,18 @@ describe('validateApiPath (P3-5)', () => {
     // documents the assumption in Fix 2's comment — NOT a bypass for app.request
     expect(validateApiPath('/api/v1/w/a/%2e%2e/b')).toBe('/api/v1/w/a/%2e%2e/b');
   });
+  test('rejects the SSE events stream routes (no-hang guard)', () => {
+    expect(() => validateApiPath('/api/v1/w/acme/events')).toThrow();
+    expect(() => validateApiPath('/api/v1/w/acme/p/web/events')).toThrow();
+    expect(() => validateApiPath('/api/v1/w/acme/events/')).toThrow();
+  });
+  test('does NOT reject paths that merely contain "events" as a non-final segment', () => {
+    // a hypothetical resource path with events earlier is still fine — only the
+    // trailing /events stream route is blocked
+    expect(validateApiPath('/api/v1/w/acme/p/web/events-archive')).toBe(
+      '/api/v1/w/acme/p/web/events-archive',
+    );
+  });
 });
 
 describe('classifyRisk (P3-7, v1 resource-type proxy)', () => {

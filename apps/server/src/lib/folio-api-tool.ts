@@ -47,6 +47,12 @@ export function validateApiPath(path: string): string {
   if (!path.startsWith('/api/v1/')) {
     throw new Error('folio_api: path must start with /api/v1/');
   }
+  // Reject the SSE stream routes — they never close, so the tool's res.json()
+  // would hang the run forever (prompt-injection self-DoS). The agent reads via
+  // the REST list/get routes, never the live stream.
+  if (/\/events\/?$/.test(path)) {
+    throw new Error('folio_api: the live events stream is not callable via folio_api');
+  }
   // Reject control chars (incl. null byte, newline, tab, DEL) — the contract
   // returns the path verbatim, so a future caller that logs/concats it must
   // not receive an embedded control char. Fail closed.
@@ -212,6 +218,9 @@ export function registerFolioApiTools(): void {
     handler: async (args: { path: string }, ctx: ToolContext) => {
       const res = await dispatchAsCaller(ctx.token, 'GET', args.path, undefined); // P3-6: GET forced
       const json = await res.json().catch(() => null);
+      // Deliberate {status, body} envelope (NOT the MCP textResult shape): the
+      // runner JSON.stringifies any non-string tool return (runner.ts), so the
+      // model sees the HTTP status + parsed body. Do not "fix" into textResult.
       return { status: res.status, body: json };
     },
   });
