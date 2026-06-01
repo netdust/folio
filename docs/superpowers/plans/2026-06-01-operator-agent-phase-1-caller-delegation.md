@@ -8,6 +8,8 @@
 
 **Tech Stack:** Hono + Drizzle + bun:sqlite; the shared `executeTool`/`agent-tools.ts` dispatcher; `agent-run-schema.ts` (Zod run frontmatter); `services/agent-runs.ts::createRun`; `lib/runner.ts` `RunContext`; `lib/agent-projects.ts` intersect helpers; Bun test.
 
+**EXECUTION ORDERING CORRECTION (2026-06-01, mid-flight):** Task 3 (scope enforcement in `executeTool`) is fail-closed, so once it lands the two un-wired production call sites (`runner.ts:697`, `mcp.ts:172`) deny-close → ~51 runner/mcp integration tests go red until Tasks 5 (runner wiring) + 6 (MCP wiring) restore them. This is EXPECTED, not a regression (all failures are `forbidden: scope … missing`). Therefore: Tasks 3+4 are reviewed on their OWN green test files (suite-red is accepted between them, same pattern as Task 1b), and the FULL-SUITE-GREEN gate is deferred until after Task 6. The end-of-phase two-stage review covers the 3→6 enforcement+wiring unit as a whole, because reviewing the intersect logic in isolation from its wiring would be reviewing half a mechanism. Do NOT modify `runner.ts`/`mcp.ts` production code to force green early.
+
 **Scope note:** This is Phase 1 of a 3-phase spec (`docs/superpowers/specs/2026-06-01-builtin-folio-operator-agent-design.md`). Phase 2 (token-scoped API surface + `dryRun`) and Phase 3 (the agent + skill + memory) get their own plans. This plan produces working, testable software on its own: after it, every run enforces the delegate ceiling, even though no new tools exist yet (the existing 20 tools immediately benefit).
 
 **Ground-truth (verified vs live source 2026-06-01, branch `phase-3.x/agent-ergonomics`, HEAD `69a0e5e`):**
