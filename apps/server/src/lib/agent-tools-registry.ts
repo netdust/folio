@@ -68,6 +68,7 @@ import {
   type DocumentType,
   createDocument,
   deleteDocument,
+  findDocumentsInProjects,
   getDocument,
   getWorkspaceDocument,
   listDocuments,
@@ -446,6 +447,86 @@ export function registerRealTools(): void {
           updated_at: d.updatedAt,
         })),
         next_cursor: result.nextCursor,
+      });
+    },
+  });
+
+  registerTool({
+    name: 'find_documents',
+    description:
+      'Resolve a title to a document. Case-insensitive substring match on title, workspace-wide by default (narrow with project_slug). Use this when you have a title but not a slug — do NOT page through list_documents.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace_slug: { type: 'string' },
+        query: { type: 'string' },
+        project_slug: { type: 'string' },
+        type: { type: 'string', enum: ['work_item', 'page'] },
+        limit: { type: 'number' },
+      },
+      required: ['workspace_slug', 'query'],
+    },
+    requiredScope: 'documents:read',
+    schema: z
+      .object({
+        workspace_slug: z.string(),
+        query: z.string(),
+        project_slug: z.string().optional(),
+        type: z.enum(['work_item', 'page']).optional(),
+        limit: z.number().optional(),
+      })
+      .strict(),
+    handler: async (args, ctx) => {
+      const { token } = ctx;
+      const ws = await resolveWorkspaceForToken(token, args);
+      const query = requireString(args, 'query');
+      const typeArg = optionalString(args, 'type') as 'work_item' | 'page' | undefined;
+      const limit = typeof args['limit'] === 'number' ? (args['limit'] as number) : 25;
+
+      let projectIds: string[];
+      const projectSlug = optionalString(args, 'project_slug');
+      if (projectSlug) {
+        const p = await resolveProjectInWorkspace(ws, token, args); // enforces allow-list
+        projectIds = [p.id];
+      } else {
+        const all = await db.query.projects.findMany({ where: eq(projects.workspaceId, ws.id) });
+        if (!token.agentId) {
+          projectIds = all.map((p) => p.id);
+        } else {
+          const agent = await db.query.documents.findFirst({
+            where: and(eq(documents.id, token.agentId), eq(documents.type, 'agent')),
+          });
+          const agentProjects = agent ? resolveAgentProjects(agent) : ['*'];
+          const effective = intersectAgentProjects(agentProjects, token.projectIds ?? null);
+          projectIds = effective.includes('*')
+            ? all.map((p) => p.id)
+            : all.filter((p) => effective.includes(p.id)).map((p) => p.id);
+        }
+      }
+
+      const rows = await findDocumentsInProjects({
+        projectIds,
+        titleQuery: query,
+        types: typeArg ? [typeArg] : undefined,
+        limit,
+      });
+
+      const idToSlug = new Map(
+        (await db.query.projects.findMany({ where: eq(projects.workspaceId, ws.id) })).map((p) => [
+          p.id,
+          p.slug,
+        ]),
+      );
+      return textResult({
+        documents: rows.map((d) => ({
+          id: d.id,
+          slug: d.slug,
+          title: d.title,
+          type: d.type,
+          status: d.status,
+          project_slug: d.projectId ? (idToSlug.get(d.projectId) ?? null) : null,
+          updated_at: d.updatedAt,
+        })),
       });
     },
   });
