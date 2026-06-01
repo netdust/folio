@@ -67,9 +67,8 @@ function makeToken(overrides: Partial<ApiToken> = {}): ApiToken {
  */
 function callerOf(token: ApiToken): {
   callerScopes: string[];
-  callerProjectIds: string[] | null;
 } {
-  return { callerScopes: token.scopes, callerProjectIds: null };
+  return { callerScopes: token.scopes };
 }
 
 /** executeTool with a caller mirroring the token's scopes (success-path helper). */
@@ -126,7 +125,6 @@ describe('executeTool dispatch', () => {
     await expect(
       executeTool(makeToken(), 'tester', '__echo', { value: 'x' }, undefined, {
         callerScopes: [],
-        callerProjectIds: null,
       }),
     ).rejects.toThrow('forbidden: scope documents:read missing');
   });
@@ -134,7 +132,6 @@ describe('executeTool dispatch', () => {
   it('caller WITH the required scope → tool runs', async () => {
     const out = await executeTool(makeToken(), 'tester', '__echo', { value: 'x' }, undefined, {
       callerScopes: ['documents:read'],
-      callerProjectIds: null,
     });
     expect(out).toEqual({ echoed: 'x' });
   });
@@ -1310,7 +1307,7 @@ describe('caller project intersect (D4/D5): central clamp folded into token.proj
         'get_document',
         { workspace_slug: 'acme', project_slug: 'ops', slug: opsDoc.slug },
         undefined,
-        { callerScopes: ['documents:read'], callerProjectIds: [seed.project.id] },
+        { callerScopes: ['documents:read'] },
       );
     } catch (err) {
       thrown = err;
@@ -1371,7 +1368,7 @@ describe('caller project intersect (D4/D5): central clamp folded into token.proj
       'get_document',
       { workspace_slug: 'acme', project_slug: 'ops', slug: opsDoc.slug },
       undefined,
-      { callerScopes: ['documents:read'], callerProjectIds: null },
+      { callerScopes: ['documents:read'] },
     )) as { content: { text: string }[] };
     const doc = JSON.parse(out.content[0]!.text) as { title: string };
     expect(doc.title).toBe('Ops doc');
@@ -1436,7 +1433,7 @@ describe('caller project intersect (D4/D5): central clamp folded into token.proj
       'find_documents',
       { workspace_slug: 'acme', query: 'combell' },
       undefined,
-      { callerScopes: ['documents:read'], callerProjectIds: [seed.project.id] },
+      { callerScopes: ['documents:read'] },
     )) as { content: { text: string }[] };
     const out = JSON.parse(res.content[0]!.text) as {
       documents: { project_slug: string | null }[];
@@ -1454,7 +1451,7 @@ describe('caller project intersect (D4/D5): central clamp folded into token.proj
       'describe_workspace',
       { workspace_slug: 'acme' },
       undefined,
-      { callerScopes: ['documents:read'], callerProjectIds: [seed.project.id] },
+      { callerScopes: ['documents:read'] },
     )) as { content: { text: string }[] };
     const out = JSON.parse(res.content[0]!.text) as { projects: { slug: string }[] };
     expect(out.projects.map((p) => p.slug).sort()).toEqual(['web']);
@@ -1468,7 +1465,7 @@ describe('caller project intersect (D4/D5): central clamp folded into token.proj
       'list_projects',
       { workspace_slug: 'acme' },
       undefined,
-      { callerScopes: ['documents:read'], callerProjectIds: [seed.project.id] },
+      { callerScopes: ['documents:read'] },
     )) as { content: { text: string }[] };
     const out = JSON.parse(res.content[0]!.text) as { projects: { slug: string }[] };
     expect(out.projects.map((p) => p.slug).sort()).toEqual(['web']);

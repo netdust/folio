@@ -183,7 +183,6 @@ mcpRoute.post('/', async (c) => {
           // satisfying the executeTool caller contract. Authority is taken from
           // the authenticated token, NEVER from the request body (D2).
           callerScopes: token.scopes,
-          callerProjectIds: token.projectIds ?? null,
         },
       );
       return c.json<JsonRpcResponse>({ jsonrpc: '2.0', id, result });

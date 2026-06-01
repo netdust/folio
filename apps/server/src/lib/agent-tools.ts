@@ -36,9 +36,9 @@ export interface ToolContext {
   /** Optional ambient transaction the handler should join, if any. */
   tx?: DBOrTx;
   /** Caller-authority snapshot (Phase 1 delegation, mitigation D3). The
-   *  run's effective authority is agent ∩ caller. */
+   *  run's effective authority is agent ∩ caller. (Project narrowing now lives
+   *  in the centrally-narrowed `token.projectIds` from loadContext, not here.) */
   callerScopes: string[];
-  callerProjectIds: string[] | null;
 }
 
 export interface ToolDef<TArgs = unknown, TOut = unknown> {
@@ -134,7 +134,7 @@ export async function executeTool(
   name: string,
   args: unknown,
   tx?: DBOrTx,
-  caller?: { callerScopes: string[]; callerProjectIds: string[] | null },
+  caller?: { callerScopes: string[] },
 ): Promise<unknown> {
   const def = registry.get(name);
   if (!def) throw new Error(`method not found: ${name}`);
@@ -150,8 +150,9 @@ export async function executeTool(
   // Delegate ceiling (mitigation D3/D9/D10): caller authority FAILS CLOSED.
   // Missing/undefined caller scopes are treated as [] (deny-all), NEVER as
   // wildcard — so an un-wired call site or un-backfilled run denies rather than
-  // escalates. callerProjectIds keeps its nullable form (null = owner / no
-  // narrowing) for the project intersect (Task 4); only scopes are guarded here.
+  // escalates. Project narrowing is no longer threaded here — it lives in the
+  // centrally-narrowed `token.projectIds` from loadContext; only scopes are
+  // guarded at this layer.
   const callerScopes = caller?.callerScopes ?? [];
 
   // Scope check is now a DOUBLE membership test: agent token AND caller must
@@ -186,7 +187,6 @@ export async function executeTool(
     actor,
     tx,
     callerScopes,
-    callerProjectIds: caller?.callerProjectIds ?? null,
   });
 }
 

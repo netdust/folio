@@ -141,11 +141,11 @@ export interface RunContext {
    * Phase 1 delegation (D1, D8): the caller's authority snapshot, read from the
    * run's frontmatter (stamped server-side at createRun). Threaded into every
    * executeTool call so the run's effective authority is agent ∩ caller.
-   * FAIL CLOSED: a run missing the snapshot reads `[]` / `null` (deny-all
-   * scopes; null project-narrowing is handled by the intersect downstream).
+   * FAIL CLOSED: a run missing the snapshot reads `[]` (deny-all scopes). The
+   * caller PROJECT narrowing is applied centrally to `token.projectIds` in
+   * loadContext (see the narrowedToken fold) — it is NOT threaded per-tool.
    */
   callerScopes: string[];
-  callerProjectIds: string[] | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -382,11 +382,11 @@ export async function loadContext(runId: string): Promise<RunContext | null> {
     authorContext,
     apiKey,
     baseUrl,
-    // Phase 1 delegation (D1, D8): read the caller snapshot from the run fm.
-    // FAIL CLOSED — a run lacking the snapshot denies (empty scopes / null
-    // project narrowing) rather than inheriting the agent's full authority.
+    // Phase 1 delegation (D1, D8): read the caller scope snapshot from the run
+    // fm. FAIL CLOSED — a run lacking it denies (empty scopes) rather than
+    // inheriting the agent's full authority. The caller PROJECT narrowing was
+    // already folded into narrowedToken.projectIds above.
     callerScopes: fm.caller_scopes ?? [],
-    callerProjectIds: fm.caller_project_ids ?? null,
   };
 }
 
@@ -730,7 +730,6 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
           // a ctx whose snapshot was inherited from the original run (D6).
           const result = await executeTool(ctx.token, ctx.actor, tc.name, tc.arguments, undefined, {
             callerScopes: ctx.callerScopes,
-            callerProjectIds: ctx.callerProjectIds,
           });
           const resultString = typeof result === 'string' ? result : JSON.stringify(result);
           toolResultMsgs.push({ role: 'tool', tool_use_id: tc.id, content: resultString });
