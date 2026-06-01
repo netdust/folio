@@ -40,12 +40,14 @@ The agent is meaningless without the API surface beneath it. The agent phase's e
 
 The genuinely novel pieces are **delegation** and **the skill**; everything else is plumbing around them. Build in this order — caller-identity delegation is **Phase 1, nothing before it** (see "the biggest technical risk" below):
 
-1. **Finish the approval gate** (Phase 3.x `awaiting_approval`) — the plan/apply tier needs it.
+1. **Finish the approval gate** (Phase 3.x `awaiting_approval`) — needed ONLY by the high-risk plan/apply tier. **~80% already built** (see note below): the state, resume, reject, comment-rendezvous, and `requires_approval` flag all shipped in Phase 3 D-5. The missing part is the small **pause side** — the `running → awaiting_approval` transition + a runner-intercepted `request_approval` control tool (plan: `docs/superpowers/plans/2026-05-30-phase-3.x-model-initiated-approval.md`, Option A; ~1–2 days, not a phase). **NOT a hard blocker for the whole agent** — the low-risk (auto) and medium-risk (auto-with-undo) tiers don't touch it; an early operator slice can simply *refuse* high-risk actions until the gate lands, then upgrade "refuse" → "pause and ask."
 2. **Caller-identity delegation** — thread the caller onto the run + intersect scopes at execution. *The real project. Lead phase.*
 3. **Token-scoped API surface** — the resource inventory below, every mutating route supporting `dryRun`.
 4. **`folio_api`** — the general primitive on top of (2)+(3).
 5. **The `folio` skill** — the manual.
 6. **Seed the operator agent** — the body-as-prompt document.
+
+> **Approval-gate status (corrected 2026-06-01 by reading live source).** STATE.md labels Phase 3.x "UNBUILT," which overstates it. Verified against `lib/agent-run-schema.ts` + `lib/runner.ts`: the RESUME/REJECT half is fully built (D-5) — `awaiting_approval` state, `awaiting_approval → running/rejected/failed` transitions, `resume_run`/`reject_run` triggers, poller `resume_of` routing, `buildResumeMessages` reading the `kind=plan` comment, and the `requires_approval` agent flag (present but unwired). The ONLY missing piece is the PAUSE side: the `running → awaiting_approval` transition and the `request_approval` control tool. So "finish the approval gate" is a small finish, not a from-scratch prerequisite.
 
 ### Phase 1 — Caller-identity delegation — THE keystone, build first
 
@@ -212,5 +214,5 @@ This is **not a criticism of the design — it is evidence the abstraction layer
 ## Prerequisites before build
 
 - **Build in the documented sequence**: approval gate → caller-identity delegation (Phase 1) → token-scoped API surface + `dryRun` (Phase 2) → `folio_api` → skill → seed agent (Phase 3). Caller-identity delegation comes first; nothing else before it.
-- The `awaiting_approval` gate (Phase 3.x) must be finished for the high-risk plan/apply tier.
+- The `awaiting_approval` gate (Phase 3.x) must be finished **for the high-risk plan/apply tier only** — and it's ~80% built (just the pause side remains; see the build-sequence note). Low/medium tiers don't need it, so an early operator slice can ship before it by refusing high-risk actions.
 - A `netdust-core:threat-modeling` pass expands the threat model section before task breakdown — delegation is the surface to model hardest.
