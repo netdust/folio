@@ -1,4 +1,20 @@
 import { useRef, useState } from 'react';
+import { SERVER_MANAGED_FRONTMATTER_KEYS } from '@folio/shared';
+
+const MANAGED = new Set<string>(SERVER_MANAGED_FRONTMATTER_KEYS);
+
+/**
+ * Drop server-managed keys (api_token_id, last_touched_at, …) so they never
+ * count toward dirtiness or get echoed back on a PATCH (the agent/trigger
+ * schemas are .strict() and reject them; the server drops them on merge).
+ */
+function editableFrontmatter(fm: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(fm)) {
+    if (!MANAGED.has(k)) out[k] = v;
+  }
+  return out;
+}
 
 interface DraftDoc {
   id: string;
@@ -55,9 +71,14 @@ export function useDocumentDraft(doc: DraftDoc): DocumentDraft {
     setDraft((d) => ({ ...d, frontmatter: { ...d.frontmatter, ...patch } }));
   const reset = () => setDraft({ body: doc.body, frontmatter: doc.frontmatter });
 
+  // Compare + send only the EDITABLE frontmatter (server-managed keys excluded),
+  // so a doc's own injected keys (api_token_id, last_touched_at, …) never make
+  // the buffer look dirty and never get echoed back on a PATCH.
+  const draftFm = editableFrontmatter(draft.frontmatter);
+  const docFm = editableFrontmatter(doc.frontmatter);
+
   const isDirty =
-    draft.body !== doc.body ||
-    JSON.stringify(draft.frontmatter) !== JSON.stringify(doc.frontmatter);
+    draft.body !== doc.body || JSON.stringify(draftFm) !== JSON.stringify(docFm);
 
   const diff = (): { patch: Record<string, unknown>; keys: string[] } => {
     const patch: Record<string, unknown> = {};
@@ -66,13 +87,11 @@ export function useDocumentDraft(doc: DraftDoc): DocumentDraft {
       patch.body = draft.body;
       keys.push('body');
     }
-    if (JSON.stringify(draft.frontmatter) !== JSON.stringify(doc.frontmatter)) {
-      patch.frontmatter = draft.frontmatter;
-      const oldFm = doc.frontmatter;
-      const newFm = draft.frontmatter;
-      const allKeys = new Set([...Object.keys(oldFm), ...Object.keys(newFm)]);
+    if (JSON.stringify(draftFm) !== JSON.stringify(docFm)) {
+      patch.frontmatter = draftFm;
+      const allKeys = new Set([...Object.keys(docFm), ...Object.keys(draftFm)]);
       for (const k of allKeys) {
-        if (JSON.stringify(oldFm[k]) !== JSON.stringify(newFm[k])) keys.push(k);
+        if (JSON.stringify(docFm[k]) !== JSON.stringify(draftFm[k])) keys.push(k);
       }
     }
     return { patch, keys };
