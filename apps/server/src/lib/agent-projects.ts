@@ -66,3 +66,19 @@ export function intersectAgentProjects(
   if (agentList.includes('*')) return tokenList;
   return agentList.filter((id) => tokenList.includes(id));
 }
+
+/**
+ * Map an authenticated caller to the project set the delegate ceiling clamps
+ * against (mitigation D5). Owners/admins have full project access → null
+ * (wildcard; `intersectAgentProjects` treats null as "no narrowing"). A regular
+ * member is clamped to their EXPLICIT project membership list — never wildcard,
+ * so a member can never borrow an agent's broader project reach. An empty
+ * membership list stays [] (deny), never coerced to wildcard (mitigation D9).
+ */
+export function callerProjectsFor(actor: {
+  role: 'owner' | 'admin' | 'member';
+  projectIds: string[];
+}): string[] | null {
+  if (actor.role === 'owner' || actor.role === 'admin') return null;
+  return actor.projectIds;
+}
