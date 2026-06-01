@@ -191,6 +191,28 @@ describe('WorkspaceDocumentSlideover', () => {
     expect(screen.getByText(/Do the triage\./)).toBeInTheDocument();
   });
 
+  // REGRESSION (refetch-stomp): the buffered draft used to be consumed by the
+  // parent with `doc ?? placeholder`. React Query flipping `doc` to undefined on
+  // refetch flipped the placeholder in, blanking the body AND making the buffer
+  // perpetually dirty. The fix moves the draft into a keyed inner mounted only
+  // once a REAL doc loads. After the doc loads and renders (with no user edit),
+  // the body text must be present AND the Save button disabled (clean) — the
+  // remount key guarantees a clean seed from the loaded doc, never a placeholder.
+  it('after the doc loads, the body is shown and the buffer is NOT dirty (no refetch-stomp)', async () => {
+    mockWorkspaceDoc('triage', 'agent');
+    const { queryClient, router } = setup('?wdoc=triage');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText('Triage Agent');
+    // Body content is present (not the empty placeholder).
+    expect(screen.getByText(/Do the triage\./)).toBeInTheDocument();
+    // No user edit → the buffer is clean → Save stays disabled.
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+  });
+
   // REGRESSION: opening an agent/trigger from the automation page carries that
   // page's ?tab=agents (or ?tab=triggers) into the URL alongside ?wdoc=. The
   // `tab` param is shared, so the slideover used to seed its OWN tab to 'agents'

@@ -44,16 +44,35 @@ import { LogActivityButton } from './log-activity-button.tsx';
 import { ActivityPanel } from './activity-panel.tsx';
 import { CommentsTab } from '../comments/comments-tab.tsx';
 import { useDocumentDraft } from '../../lib/use-document-draft.ts';
-import { useUnsavedGuard } from '../../lib/use-unsaved-guard.ts';
 import { SaveButton } from './save-button.tsx';
 
 type DocTabValue = 'fields' | 'comments' | 'activity';
+
+interface InnerActions {
+  save: () => Promise<void>;
+  discard: () => void;
+}
 
 interface Props {
   wslug: string;
   pslug: string;
 }
 
+/**
+ * unified-document-save: the buffered draft (useDocumentDraft) seeds ONCE per
+ * mount and never re-seeds in place. So the PARENT keeps only the Sheet shell +
+ * loading/error states + tab/mode state + the close/switch guard + delete +
+ * copy-as-MD; everything that READS the draft (the draft itself, the body,
+ * onSave, onStatusCommit) lives in a KEYED inner (DocumentSlideoverInner)
+ * mounted only once a REAL doc exists, keyed on `${doc.id}:${doc.updatedAt}`. A
+ * doc switch or a post-save version bump remounts the inner → a fresh clean
+ * seed, no in-place re-seed, no oscillation against React Query's refetch
+ * toggling.
+ *
+ * Dirtiness + saving state mirror up so the parent can render the header Save
+ * button + drive the unsaved-changes dialog through the inner's imperative
+ * save/discard (actions ref).
+ */
 export function DocumentSlideover({ wslug, pslug }: Props) {
   const navigate = useNavigate();
   const search = useSearch({ strict: false }) as { doc?: string };
@@ -65,56 +84,16 @@ export function DocumentSlideover({ wslug, pslug }: Props) {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const del = useDeleteDocument(wslug, pslug);
 
-  // Buffered save: body + frontmatter buffer in a shared draft owned here (where
-  // both the header save icon AND the body editor live). Title + status keep
-  // their immediate-commit paths (see SlideoverTitleEditor + onStatusCommit).
-  const listParams = useUrlDerivedListParams(doc?.type ?? 'work_item');
-  const update = useUpdateDocument(wslug, pslug, listParams);
-  // Stable fallback keeps hook order stable across loading→loaded; the draft
-  // re-seeds on doc.id/updatedAt inside the hook.
-  const draftDoc = doc ?? { id: '', updatedAt: '', body: '', frontmatter: {} };
-  const { draft, setBody, setFrontmatter, isDirty, reset, diff } = useDocumentDraft(draftDoc);
+  // Dirtiness + saving are OWNED by the keyed inner (it owns the draft) and
+  // MIRRORED up here so the header Save button + close/switch guard can read
+  // them. Imperative save/discard come back via the actions ref.
+  const [dirty, setDirty] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const actionsRef = useRef<InnerActions | null>(null);
 
-  // Doc-SWITCH interception needs to know the buffer was dirty at the instant the
-  // URL flips — but switching unloads the old doc and useDocumentDraft re-seeds on
-  // the new load, clearing isDirty before any effect observes it. So we LATCH,
-  // during render, the slug whose buffer is dirty. The latch survives the switch's
-  // re-seed; we release it only when the loaded doc's own buffer goes clean.
-  const dirtySlugRef = useRef<string | null>(null);
-  if (doc?.slug && isDirty) dirtySlugRef.current = doc.slug;
-  else if (doc?.slug && doc.slug === dirtySlugRef.current && !isDirty) dirtySlugRef.current = null;
-
-  // The guard prompts while the LATCHED buffer is dirty — not just live isDirty —
-  // so a switch (which re-seeds and clears live isDirty) still routes through the
-  // prompt. The close path benefits too: same dirty signal, no behavior change.
-  const guard = useUnsavedGuard(isDirty || dirtySlugRef.current !== null);
-
-  const onSave = async () => {
-    if (!doc) return;
-    const { patch, keys } = diff();
-    if (keys.length === 0) return;
-    try {
-      await update.mutateAsync({ slug: doc.slug, patch });
-      toast.success('Saved');
-    } catch (err) {
-      toast.error(formatApiError(err));
-    }
-  };
-
-  // Status stays IMMEDIATE-commit (NOT buffered) — it's a single-click field, not
-  // a long-form edit. FrontmatterForm reads status from doc.status (server truth).
-  const onStatusCommit = async (next: string) => {
-    if (!doc) return;
-    try {
-      await update.mutateAsync({ slug: doc.slug, patch: { status: next } });
-    } catch (err) {
-      toast.error(formatApiError(err));
-    }
-  };
-
-  // Tab state lives here (not in SlideoverBody) so the icon toggles can render
-  // inline in the header — NocoDB-style single row — while the body reads the
-  // active tab. Resets to Fields whenever a different doc opens.
+  // Tab state lives here (not in the inner) so the icon toggles render inline in
+  // the header — NocoDB-style single row — AND so a tab switch doesn't remount
+  // the draft-owning inner. Resets to Fields whenever a different doc opens.
   const [tab, setTab] = useState<DocTabValue>('fields');
   useEffect(() => {
     setTab('fields');
@@ -123,10 +102,7 @@ export function DocumentSlideover({ wslug, pslug }: Props) {
   // Gated on doc.slug so it idles until the doc resolves. Pass the SAME default
   // visibility (['normal']) that CommentsTab uses with the toggle off, so this
   // query shares CommentsTab's react-query key (a cache hit, not a second
-  // fetch) AND the badge count matches the rows the tab renders. (A user who
-  // flips CommentsTab's show-internal toggle will see internal comments the
-  // badge doesn't count — an acceptable minor drift; the badge tracks the
-  // default view.)
+  // fetch) AND the badge count matches the rows the tab renders.
   const commentCount =
     useComments(wslug, pslug, doc?.slug ?? '', { visibility: ['normal'] }).data?.length ?? 0;
   const tabItems: HeaderTabItem<DocTabValue>[] = [
@@ -149,37 +125,66 @@ export function DocumentSlideover({ wslug, pslug }: Props) {
     return () => window.removeEventListener('keydown', onKey);
   }, [open]);
 
-  // Cmd/Ctrl-S saves the buffered draft when dirty.
+  // Cmd/Ctrl-S saves the buffered draft when dirty (delegates to the inner).
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && (e.key === 's' || e.key === 'S')) {
         e.preventDefault();
-        if (isDirty && !update.isPending) void onSave();
+        if (dirty && !saving) void actionsRef.current?.save();
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-    // onSave/isDirty captured fresh each render via the listener closure.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, isDirty, update.isPending]);
+  }, [open, dirty, saving]);
+
+  // ----- close + doc-switch guard ------------------------------------------
+  // Because the inner remounts on a doc switch (clearing its own isDirty before
+  // any effect could observe it), we LATCH the slug whose buffer was dirty so
+  // the switch still routes through the prompt. The latch is set whenever the
+  // inner reports dirty, released when it reports clean for the loaded doc.
+  const dirtySlugRef = useRef<string | null>(null);
+  if (doc?.slug && dirty) dirtySlugRef.current = doc.slug;
+  else if (doc?.slug && doc.slug === dirtySlugRef.current && !dirty) dirtySlugRef.current = null;
+
+  const [prompting, setPrompting] = useState(false);
+  const queuedRef = useRef<(() => void) | null>(null);
+  const guard = (action: () => void) => {
+    if (!dirty && dirtySlugRef.current === null) {
+      action();
+      return;
+    }
+    queuedRef.current = action;
+    setPrompting(true);
+  };
+  const proceed = () => {
+    const action = queuedRef.current;
+    queuedRef.current = null;
+    setPrompting(false);
+    action?.();
+  };
+  const cancelPrompt = () => {
+    queuedRef.current = null;
+    setPrompting(false);
+  };
 
   const doClose = () => {
     const { doc: _doc, ...next } = search;
     void navigate({ to: '.', search: next });
   };
-  const close = () => guard.guard(doClose);
+  const close = () => guard(doClose);
 
   // Guard doc-SWITCH (not just close): if the URL doc flips to a DIFFERENT slug
   // while the buffer is dirty, intercept — revert the URL to the latched (still
   // dirty) doc and prompt. The guard's queued action re-applies the intended
-  // switch once the buffer is resolved (Save re-seeds, Discard resets).
+  // switch once the buffer is resolved (Save remounts the inner clean, Discard
+  // resets it).
   //
   // Detection runs DURING render (not in a [search.doc] effect): switching doc
-  // unloads the old doc, and useDocumentDraft re-seeds on the new load, so by the
-  // time an effect fires both isDirty AND the loaded slug have already moved on.
-  // Comparing the committed doc to the previous one during render catches the
-  // flip while dirtySlugRef still names the dirty doc.
+  // unloads the old doc and remounts the inner clean, so by the time an effect
+  // fires both `dirty` AND the loaded slug have already moved on. Comparing the
+  // committed doc to the previous one during render catches the flip while
+  // dirtySlugRef still names the dirty doc.
   const prevDocRef = useRef<string | undefined>(search.doc);
   const pendingSwitchRef = useRef<string | null>(null);
   if (prevDocRef.current !== search.doc) {
@@ -197,7 +202,7 @@ export function DocumentSlideover({ wslug, pslug }: Props) {
     if (!incoming || !dirtySlug || incoming === dirtySlug) return;
     // Revert URL to the dirty doc and queue the intended switch behind the guard.
     void navigate({ to: '.', search: { ...search, doc: dirtySlug } });
-    guard.guard(() => navigate({ to: '.', search: { ...search, doc: incoming } }));
+    guard(() => navigate({ to: '.', search: { ...search, doc: incoming } }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search.doc]);
 
@@ -222,6 +227,12 @@ export function DocumentSlideover({ wslug, pslug }: Props) {
       toast.error(formatApiError(err));
     }
   };
+
+  // Shared key — the crux of the refetch-stomp fix: a doc switch OR a post-save
+  // updatedAt bump remounts the inner → a fresh useDocumentDraft seed from the
+  // loaded doc. The inner is null until a REAL doc loads, so it never sees the
+  // loading placeholder.
+  const innerKey = doc ? `${doc.id}:${doc.updatedAt}` : null;
 
   return (
     <Sheet
@@ -265,7 +276,9 @@ export function DocumentSlideover({ wslug, pslug }: Props) {
                 {tab === 'fields' ? <ModeToggle mode={mode} onChange={setMode} /> : null}
                 <LogActivityButton wslug={wslug} pslug={pslug} slug={doc.slug} />
                 <div aria-hidden className="mx-0.5 h-4 w-px bg-border-light" />
-                <SaveButton dirty={isDirty} saving={update.isPending} onSave={() => void onSave()} />
+                {/* Save reads the buffered draft (owned by the inner) — render it
+                    off the mirrored dirty flag; the click delegates to the inner. */}
+                <SaveButton dirty={dirty} saving={saving} onSave={() => void actionsRef.current?.save()} />
                 <Popover open={moreOpen} onOpenChange={setMoreOpen}>
                   <PopoverTrigger asChild>
                     <button
@@ -302,17 +315,17 @@ export function DocumentSlideover({ wslug, pslug }: Props) {
           </div>
         </SheetHeader>
         <div className="flex-1 min-h-0 overflow-hidden px-6 py-4">
-          {slug && doc ? (
-            <SlideoverBody
+          {slug && doc && innerKey ? (
+            <DocumentSlideoverInner
+              key={innerKey}
               doc={doc}
               wslug={wslug}
               pslug={pslug}
               mode={mode}
               tab={tab}
-              draft={draft}
-              setBody={setBody}
-              setFrontmatter={setFrontmatter}
-              onStatusCommit={(next) => void onStatusCommit(next)}
+              onDirtyChange={setDirty}
+              onSavingChange={setSaving}
+              actionsRef={actionsRef}
             />
           ) : null}
         </div>
@@ -346,25 +359,25 @@ export function DocumentSlideover({ wslug, pslug }: Props) {
           </div>
         </DialogContent>
       </Dialog>
-      <Dialog open={guard.prompting} onOpenChange={(o) => { if (!o) guard.cancel(); }}>
+      <Dialog open={prompting} onOpenChange={(o) => { if (!o) cancelPrompt(); }}>
         <DialogContent>
           <DialogTitle>Unsaved changes</DialogTitle>
           <DialogDescription>
             {doc ? <>You have unsaved edits to &ldquo;{doc.title}&rdquo;.</> : null}
           </DialogDescription>
           <div className="mt-5 flex items-center justify-end gap-2">
-            <Button variant="secondary" onClick={() => { reset(); guard.proceed(); }}>
+            <Button variant="secondary" onClick={() => { actionsRef.current?.discard(); proceed(); }}>
               Discard
             </Button>
-            <Button variant="secondary" onClick={() => guard.cancel()}>
+            <Button variant="secondary" onClick={() => cancelPrompt()}>
               Cancel
             </Button>
             <Button
               variant="primary"
-              disabled={update.isPending}
-              onClick={async () => { await onSave(); guard.proceed(); }}
+              disabled={saving}
+              onClick={async () => { await actionsRef.current?.save(); proceed(); }}
             >
-              {update.isPending ? 'Saving…' : 'Save'}
+              {saving ? 'Saving…' : 'Save'}
             </Button>
           </div>
         </DialogContent>
@@ -393,6 +406,86 @@ function useUrlDerivedListParams(docType: Document['type']): DocumentListParams 
     }
     return base;
   }, [search, docType]);
+}
+
+/**
+ * Owns the buffered draft (useDocumentDraft) + the body + onSave + the immediate
+ * status commit. Mounted only when a REAL doc is loaded, KEYED on
+ * `${doc.id}:${doc.updatedAt}` by the parent — so a doc switch or a post-save
+ * version bump remounts it and re-seeds the draft cleanly (no in-place re-seed,
+ * no oscillation).
+ *
+ * It mirrors dirtiness + saving up to the parent (which renders the header Save
+ * button + the unsaved-changes dialog) and exposes imperative save/discard via
+ * the actions ref so the dialog can drive them.
+ */
+function DocumentSlideoverInner({
+  doc,
+  wslug,
+  pslug,
+  mode,
+  tab,
+  onDirtyChange,
+  onSavingChange,
+  actionsRef,
+}: {
+  doc: Document;
+  wslug: string;
+  pslug: string;
+  mode: EditorMode;
+  tab: DocTabValue;
+  onDirtyChange: (dirty: boolean) => void;
+  onSavingChange: (saving: boolean) => void;
+  actionsRef: React.MutableRefObject<InnerActions | null>;
+}) {
+  const listParams = useUrlDerivedListParams(doc.type);
+  const update = useUpdateDocument(wslug, pslug, listParams);
+  const { draft, setBody, setFrontmatter, isDirty, reset, diff } = useDocumentDraft(doc);
+
+  const onSave = async () => {
+    const { patch, keys } = diff();
+    if (keys.length === 0) return;
+    try {
+      await update.mutateAsync({ slug: doc.slug, patch });
+      toast.success('Saved');
+    } catch (err) {
+      toast.error(formatApiError(err));
+    }
+  };
+
+  // Status stays IMMEDIATE-commit (NOT buffered) — it's a single-click field, not
+  // a long-form edit. FrontmatterForm reads status from doc.status (server truth).
+  const onStatusCommit = async (next: string) => {
+    try {
+      await update.mutateAsync({ slug: doc.slug, patch: { status: next } });
+    } catch (err) {
+      toast.error(formatApiError(err));
+    }
+  };
+
+  useEffect(() => {
+    onDirtyChange(isDirty);
+  }, [isDirty, onDirtyChange]);
+
+  useEffect(() => {
+    onSavingChange(update.isPending);
+  }, [update.isPending, onSavingChange]);
+
+  actionsRef.current = { save: onSave, discard: reset };
+
+  return (
+    <SlideoverBody
+      doc={doc}
+      wslug={wslug}
+      pslug={pslug}
+      mode={mode}
+      tab={tab}
+      draft={draft}
+      setBody={setBody}
+      setFrontmatter={setFrontmatter}
+      onStatusCommit={(next) => void onStatusCommit(next)}
+    />
+  );
 }
 
 function SlideoverTitleEditor({ doc, wslug, pslug }: { doc: Document; wslug: string; pslug: string }) {
@@ -449,7 +542,7 @@ function SlideoverBody({
   const { data: statuses } = useStatuses(wslug, pslug);
   const { data: fields } = useFields(wslug, pslug, 'work-items');
   const listParams = useUrlDerivedListParams(doc.type);
-  // Documents list — same listParams as the parent's useUpdateDocument so React
+  // Documents list — same listParams as the inner's useUpdateDocument so React
   // Query dedupes the key. Feeds the body editor's slash-menu document links.
   const { data: docPage } = useDocuments(wslug, pslug, listParams, { enabled: true });
   // AI key presence — drives the slash menu's aiConfigured flag
@@ -518,11 +611,11 @@ function SlideoverBody({
           >
             {mode === 'rich' ? (
               <BodyEditor
-                // Key on the seed identity (slug + updatedAt) so the editor
-                // remounts onto the freshly-seeded draft body — both on a
-                // doc-switch AND when the shared draft re-seeds after the parent
-                // loads/saves the doc (BodyEditor only reads `value` at mount).
-                key={`rich-${doc.slug}-${doc.updatedAt}`}
+                // The inner remounts on doc.id/updatedAt, so the body editor
+                // remounts onto the freshly-seeded draft body with it. The
+                // mode-scoped key still flips rich↔raw without remounting on a
+                // toggle.
+                key={`rich-${doc.slug}`}
                 value={draft.body}
                 onChange={(body) => setBody(body)}
                 documents={docPage?.data ?? []}
@@ -531,7 +624,7 @@ function SlideoverBody({
           />
             ) : (
               <RawMdEditor
-                key={`raw-${doc.slug}-${doc.updatedAt}`}
+                key={`raw-${doc.slug}`}
                 value={draft.body}
                 onChange={(body) => setBody(body)}
               />
