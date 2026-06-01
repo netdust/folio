@@ -81,15 +81,19 @@ export function TableView({ wslug, pslug, tslug }: Props) {
   }, [clauses, sort]);
 
   const { data: page, isLoading, error } = useDocuments(wslug, pslug, listParams);
+  const { data: statuses } = useStatuses(wslug, pslug);
+  const { data: fields } = useFields(wslug, pslug, tslug);
   // Broad, unfiltered project coverage for resolving relation [[slug]] tokens
   // to titles in read-only table cells. The table's `page` query is filtered
   // (status/assignee) and work_item-only, so it can't be relied on to contain
   // every link target — relations can point at pages too. Two extra queries
   // (pages + all work_items) build a complete slug→title map. Finding 9.
-  const { data: relPages } = useDocuments(wslug, pslug, { type: 'page' });
-  const { data: relItems } = useDocuments(wslug, pslug, { type: 'work_item' });
-  const { data: statuses } = useStatuses(wslug, pslug);
-  const { data: fields } = useFields(wslug, pslug, tslug);
+  // O5 (health audit): only fetch them when this table actually HAS a relation
+  // column — otherwise every table mount paid for two unbounded list queries
+  // it never used.
+  const hasRelationColumn = (fields ?? []).some((f) => f.type === 'relation');
+  const { data: relPages } = useDocuments(wslug, pslug, { type: 'page' }, { enabled: hasRelationColumn });
+  const { data: relItems } = useDocuments(wslug, pslug, { type: 'work_item' }, { enabled: hasRelationColumn });
   const { data: viewsData } = useViews(wslug, pslug);
   const { data: tablesData } = useTables(wslug, pslug);
   const update = useUpdateDocument(wslug, pslug, listParams);
