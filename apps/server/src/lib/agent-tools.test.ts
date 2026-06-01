@@ -769,6 +769,27 @@ describe('D-4: run-management MCP tools', () => {
     expect(got.frontmatter.system_prompt).toBeUndefined();
   });
 
+  it('list_runs does NOT leak frontmatter.system_prompt (redacted per row)', async () => {
+    const { db, seed } = await makeTestApp();
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, seed.user);
+    const { agent, token } = await seedRunAgent(db, seed.workspace.id, seed.user.id, 'helper');
+    const run = await seedRunRow(db, seed.workspace, seed.project, agent, seed.user, parent);
+    await db
+      .update(documents)
+      .set({
+        frontmatter: { ...(run.frontmatter as Record<string, unknown>), system_prompt: 'SECRET' },
+      })
+      .where(eq(documents.id, run.id));
+
+    const out = await executeTool(token, seed.user.id, 'list_runs', {
+      workspace_slug: 'acme',
+      project_slug: 'web',
+    });
+    const raw = (out as { content: { text: string }[] }).content[0]!.text;
+    expect(raw).not.toContain('SECRET');
+    expect(raw).not.toContain('system_prompt');
+  });
+
   it('cancel_run on a planning run → failed (parity with HTTP cancel)', async () => {
     const { db, seed } = await makeTestApp();
     const parent = await seedWorkItem(db, seed.workspace, seed.project, seed.user);

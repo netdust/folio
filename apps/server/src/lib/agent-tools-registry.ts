@@ -53,6 +53,7 @@ import {
   type ListRunsFilter,
   getActiveRun,
   listRuns,
+  redactRunForApi,
   transitionRun,
 } from '../services/agent-runs.ts';
 import {
@@ -1423,8 +1424,11 @@ export function registerRealTools(): void {
         since: optionalString(args, 'since'),
         callerAgentProjectsAllowList: allowList ?? undefined,
       };
+      // Redact system_prompt from every row — the MCP list path must match the
+      // HTTP list routes + the single-run loader (system_prompt is never exposed
+      // over read surfaces). listRuns returns raw rows for internal callers.
       const rows = await listRuns(filter);
-      return textResult(rows);
+      return textResult(rows.map(redactRunForApi));
     },
   });
 
