@@ -163,6 +163,19 @@ function decodeCursor(s: string): { sortKey: string; sortValue: string; id: stri
   }
 }
 
+/**
+ * Build a case-insensitive `%substring%` LIKE pattern for a title search,
+ * escaping the LIKE metacharacters (`%`, `_`, `\`) so user input matches
+ * literally. Returns null when the (trimmed) query is empty — callers skip the
+ * clause. Pair with `ESCAPE '\\' COLLATE NOCASE` in the SQL. Shared by
+ * `listDocuments` (titleQuery) and `findDocumentsInProjects`.
+ */
+function likeContainsPattern(query: string | undefined): string | null {
+  const q = (query ?? '').trim();
+  if (q.length === 0) return null;
+  return `%${q.replace(/[%_\\]/g, '\\$&')}%`;
+}
+
 export interface ListDocumentsOptions {
   projectId: string;
   /**
@@ -259,9 +272,9 @@ export async function listDocuments(
     );
   }
 
-  if (opts.titleQuery && opts.titleQuery.trim().length > 0) {
-    const pattern = `%${opts.titleQuery.trim().replace(/[%_\\]/g, '\\$&')}%`;
-    whereClauses.push(sql`${documents.title} LIKE ${pattern} ESCAPE '\\' COLLATE NOCASE`);
+  const titlePattern = likeContainsPattern(opts.titleQuery);
+  if (titlePattern) {
+    whereClauses.push(sql`${documents.title} LIKE ${titlePattern} ESCAPE '\\' COLLATE NOCASE`);
   }
 
   if (opts.updatedSince) {
@@ -418,9 +431,8 @@ export async function findDocumentsInProjects(
 ): Promise<Document[]> {
   if (opts.projectIds.length === 0) return [];
   const limit = Math.min(200, opts.limit ?? 25);
-  const q = opts.titleQuery.trim();
-  if (q.length === 0) return [];
-  const pattern = `%${q.replace(/[%_\\]/g, '\\$&')}%`;
+  const pattern = likeContainsPattern(opts.titleQuery);
+  if (!pattern) return [];
   const allowedTypes = opts.types ?? ['work_item', 'page'];
 
   const rows = await db.query.documents.findMany({

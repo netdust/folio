@@ -474,7 +474,9 @@ export function registerRealTools(): void {
         query: z.string(),
         project_slug: z.string().optional(),
         type: z.enum(['work_item', 'page']).optional(),
-        limit: z.number().optional(),
+        // min(1): limit:0 would otherwise pass through as LIMIT 0 and silently
+        // return an empty result (Math.min(200, 0 ?? 25) === 0).
+        limit: z.number().int().min(1).max(200).optional(),
       })
       .strict(),
     handler: async (args, ctx) => {
@@ -484,25 +486,26 @@ export function registerRealTools(): void {
       const typeArg = optionalString(args, 'type') as 'work_item' | 'page' | undefined;
       const limit = typeof args['limit'] === 'number' ? (args['limit'] as number) : 25;
 
+      // Fetch workspace projects ONCE — reused for the workspace-wide allow-list
+      // resolution AND the id→slug result mapping (one query, not two).
+      const all = await db.query.projects.findMany({ where: eq(projects.workspaceId, ws.id) });
+
       let projectIds: string[];
       const projectSlug = optionalString(args, 'project_slug');
       if (projectSlug) {
         const p = await resolveProjectInWorkspace(ws, token, args); // enforces allow-list
         projectIds = [p.id];
+      } else if (!token.agentId) {
+        projectIds = all.map((p) => p.id);
       } else {
-        const all = await db.query.projects.findMany({ where: eq(projects.workspaceId, ws.id) });
-        if (!token.agentId) {
-          projectIds = all.map((p) => p.id);
-        } else {
-          const agent = await db.query.documents.findFirst({
-            where: and(eq(documents.id, token.agentId), eq(documents.type, 'agent')),
-          });
-          const agentProjects = agent ? resolveAgentProjects(agent) : ['*'];
-          const effective = intersectAgentProjects(agentProjects, token.projectIds ?? null);
-          projectIds = effective.includes('*')
-            ? all.map((p) => p.id)
-            : all.filter((p) => effective.includes(p.id)).map((p) => p.id);
-        }
+        const agent = await db.query.documents.findFirst({
+          where: and(eq(documents.id, token.agentId), eq(documents.type, 'agent')),
+        });
+        const agentProjects = agent ? resolveAgentProjects(agent) : ['*'];
+        const effective = intersectAgentProjects(agentProjects, token.projectIds ?? null);
+        projectIds = effective.includes('*')
+          ? all.map((p) => p.id)
+          : all.filter((p) => effective.includes(p.id)).map((p) => p.id);
       }
 
       const rows = await findDocumentsInProjects({
@@ -512,12 +515,7 @@ export function registerRealTools(): void {
         limit,
       });
 
-      const idToSlug = new Map(
-        (await db.query.projects.findMany({ where: eq(projects.workspaceId, ws.id) })).map((p) => [
-          p.id,
-          p.slug,
-        ]),
-      );
+      const idToSlug = new Map(all.map((p) => [p.id, p.slug]));
       return textResult({
         documents: rows.map((d) => ({
           id: d.id,

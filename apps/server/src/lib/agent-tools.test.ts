@@ -1120,6 +1120,28 @@ describe('find_documents: workspace-wide title lookup, allow-list enforced', () 
     expect(out.documents[0]).toMatchObject({ title: 'Combell setup', project_slug: 'web' });
   });
 
+  it('find_documents rejects limit:0 (would otherwise silently return empty)', async () => {
+    const { db, seed } = await makeTestApp();
+    const token = await seedHumanPat(db, seed.workspace.id, seed.user.id, [
+      'documents:read',
+      'documents:write',
+    ]);
+    await executeTool(token, seed.user.id, 'create_document', {
+      workspace_slug: 'acme',
+      project_slug: 'web',
+      type: 'work_item',
+      title: 'Combell setup',
+    });
+    // limit:0 must be rejected by the schema (min(1)), not honored as LIMIT 0.
+    await expect(
+      executeTool(token, seed.user.id, 'find_documents', {
+        workspace_slug: 'acme',
+        query: 'combell',
+        limit: 0,
+      }),
+    ).rejects.toThrow();
+  });
+
   it('find_documents does NOT return docs from a non-allow-listed project (agent token)', async () => {
     const { db, seed } = await makeTestApp();
 
