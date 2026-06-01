@@ -348,7 +348,7 @@ describe('createRun', () => {
 
     const fm = result.document.frontmatter as AgentRunFrontmatter;
     expect([...fm.caller_scopes].sort()).toEqual(
-      ['agents:write', 'documents:delete', 'documents:read', 'documents:write'],
+      ['agents:write', 'config:write', 'documents:delete', 'documents:read', 'documents:write'],
     );
     // owner → null (no project narrowing).
     expect(fm.caller_project_ids).toBe(null);

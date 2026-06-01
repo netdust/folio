@@ -56,13 +56,25 @@ const DELETE_TOOLS: ReadonlySet<string> = new Set(['delete_document']);
 const AGENT_WRITE_TOOLS: ReadonlySet<string> = new Set([
   'create_agent', 'update_agent', 'delete_agent',
 ]);
+// Phase 2 (operator) — structure/config mutation (tables, fields, views,
+// statuses, project config) is reached through the general folio_api primitive
+// (Phase 3), gated on the new canonical config:write scope. Registered here so
+// toolsToScopes is consistent the moment folio_api is added; owner/admin gets
+// config:write via ALL_DOCUMENT_SCOPES in roleToScopes.
+const CONFIG_WRITE_TOOLS: ReadonlySet<string> = new Set(['folio_api']);
 
 /**
  * The complete set of document scopes a fully-privileged caller (owner/admin)
  * may delegate. Mirrors the four scopes the tool registry gates on
  * (documents:read/write/delete + agents:write).
  */
-const ALL_DOCUMENT_SCOPES = ['documents:read', 'documents:write', 'documents:delete', 'agents:write'] as const;
+const ALL_DOCUMENT_SCOPES = [
+  'documents:read',
+  'documents:write',
+  'documents:delete',
+  'agents:write',
+  'config:write',
+] as const;
 
 /** Human analog of toolsToScopes: map a workspace membership role to the scope
  *  set a delegated run may use on that caller's behalf (Phase 1 delegation).
@@ -89,6 +101,10 @@ export function toolsToScopes(tools: readonly string[]): string[] {
     if (AGENT_WRITE_TOOLS.has(tool)) {
       scopes.add('agents:write');
       scopes.add('documents:read'); // agent rows are documents
+    }
+    if (CONFIG_WRITE_TOOLS.has(tool)) {
+      scopes.add('config:write');
+      scopes.add('documents:read'); // config edits imply reading structure
     }
   }
   return Array.from(scopes);
