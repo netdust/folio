@@ -1,0 +1,55 @@
+# Architecture Invariants — Folio
+
+> Folio's confidence comes from a small set of **convergence points** — single places where each cross-cutting property is decided. This doc names them so `/code-review` and `/shakeout` can FLAG any path that bypasses one, instead of re-auditing wiring/dedup/safety every session. Authored 2026-06-02 by `/architecture-invariants audit`, with each convergence point verified by grep against source (consumer counts noted). Sibling to the per-plan `## Threat model` sections (which do this for attacks).
+
+**How to read an invariant:** each names a CONVERGENCE POINT (the one place a property is decided, with `file:symbol`) and the BYPASS that is a bug (a path that does the property itself instead of routing through the convergence point). Reviews check diffs against these, mechanically. **A bug is almost always a path that skips a convergence point** — the one CRITICAL finding of the 2026-06-01 auth audit (a member minting a token above their role) was exactly that: the single write path that bypassed invariant 7.
+
+---
+
+## Invariants (converged — enforced)
+
+1. **Authentication identity: every request's identity is the `AuthContext` primitive set by the auth middleware — nothing re-derives identity another way.** Converges on `apps/server/src/middleware/auth.ts` (`AuthContext`, `attachUser`) + `middleware/bearer.ts` (`attachToken`) — the ONLY setters of `c.set('token' | 'user' | 'authMethod')`. Every downstream guard reads `c.get('token')`, never the raw `Authorization` header or cookie. A handler that parses the raw credential a second time (or trusts a caller-supplied identity) is a bug — read the context primitive. *(This closed the "stray Authorization header downgrades a session" class — B round 3 fix #1.)*
+
+2. **Authorization (tools): every agent tool call passes the `executeTool` scope double-check — token scope ∩ caller scope, fail-closed.** Converges on `apps/server/src/lib/agent-tools.ts:160` (`executeTool` — its own docstring: "the ONE dispatch+auth point that both transport faces call"). Both the MCP route and the in-process runner call it; missing `callerScopes` defaults to `[]` (deny), never wildcard. A tool path that checks scopes itself, or runs a tool outside `executeTool`, is a bug — route it through the dispatcher.
+
+3. **Authorization (project ceiling): an actor's effective project reach is `agent ∩ token ∩ caller`, computed in one place.** Converges on `apps/server/src/lib/agent-projects.ts` (`intersectAgentProjects`, `resolveAgentProjects`, `callerProjectsFor`), folded into the run token once at `runner.ts:~336` and enforced by `requireResource()` (`middleware/bearer.ts:140`). 10 route files + the runner + SSE all read this same intersect. A path that widens projects, or re-derives the ceiling its own way, is a bug — use the shared intersect.
+
+4. **HTTP authorization: mutating routes are gated by `requireScope` (+ `requireResource` for project-scoped), and session-only routes reject token callers via `requireSessionUser`.** Converges on `middleware/bearer.ts` (`requireScope`, `requireResource`, `requireUserOrToken`) + `middleware/auth.ts` (`requireSessionUser`). A mutation route mounted without a scope guard, or an auth-grant/credential route reachable by a bearer token, is a bug.
+
+5. **Data access (server): every write goes through `txWithEvents` so the mutation and its event are one atomic unit.** Converges on `apps/server/src/lib/events.ts` (`txWithEvents`, `emitEvent`) — 16 server files. This IS the architectural "every write emits an event" rule (CLAUDE.md). A write that inserts/updates outside `txWithEvents`, or emits no event, is a bug — wrap it.
+
+6. **Data access (web): all HTTP goes through the one `client`, and react-query keys come from the per-resource key factories.** Converges on `apps/web/src/lib/api/client.ts:48` (`client`, ~25 importers) + 19 `*Keys` factory objects. A bare `fetch` outside the client, or an ad-hoc string query-key that should use a factory, is a bug — drift risk on invalidation. *(Known soft spots: 3 sites hand-build literal keys that mirror a factory — `documents.ts:190`, `projects.ts:78`, `routes/w.$wslug.tsx:301` — tracked in `tasks/retro-follow-ups.md`.)*
+
+7. **Token authority never exceeds the minting caller's role.** Converges on `roleToScopes` (`apps/server/src/lib/agent-schema.ts:85`) — the role→scope ceiling. A write path that accepts caller-supplied scopes (or any authority) without intersecting `roleToScopes(role)` is a bug — route it through the ceiling. *(This is the invariant whose bypass at `routes/tokens.ts` was the 2026-06-01 CRITICAL privilege-escalation fix `9f75c40`.)*
+
+8. **Live updates: SSE teaches react-query WHEN to refetch; the event stream is not a source of truth EXCEPT for the two ratified live-tail/broadcast consumers below.** Converges on `apps/web/src/lib/api/event-stream.ts:49` (`useEventStream` — docstring: "owns NO state and is NOT a source of truth"), 7 consumers. The default: events invalidate queries; the canonical GET refetches. A NEW consumer that builds UI state directly from an event payload (instead of invalidate-and-refetch) is a bug — it desyncs — UNLESS it is a broadcast-only datum with no GET, or an append-only live-tail feed, in which case it must be added to Deliberate exceptions (two such consumers are ratified there today). SSE filters match by **id**, cache keys by **slug** — also see Deliberate exceptions.
+
+9. **Error handling: failures throw `HTTPError` → the `{ error: { code, message } }` envelope → the client surfaces via `formatApiError`.** Converges on `apps/server/src/lib/http.ts:25` (envelope) + `apps/web/src/lib/api/errors.ts:23` (`formatApiError`, 27 web files). A handler that returns a bespoke error shape, or swallows an error (`catch {}` discarding it), or a UI that hand-formats an error instead of `formatApiError`, is a bug.
+
+10. **Entity modeling: new entity types and fields are DATA (frontmatter) before they are tables.** Converges on the `documents` schema (`apps/server/src/db/schema.ts:232-237`): 3 typed columns (`title`, `status`, `body`) + a `frontmatter` JSON blob; "everything else lives in frontmatter for maximum flexibility." Agents, triggers, and (Phase 3) skills/memory are `type:'agent'`/`'page'` documents, NOT new tables. A migration adding a column for what is clearly an attribute of one type — or a new table for what could be a document type — is a bug. Re-confirm before adding any `*.sql` that adds a column.
+
+---
+
+## Open — NOT yet converged (gaps)
+
+- **Live-update connection model:** `useEventStream` opens ONE `EventSource` per consumer (7 today), not a shared workspace stream. This is a deliberate v1 simplicity choice, NOT a missing convergence point — but it means "the live stream" is not yet a single connection. Tracked in `tasks/retro-follow-ups.md` (SSE fan-out, 2026-06-01) with an upgrade trigger (shared pool) if many panels coexist. Recorded here so it isn't mistaken for invariant 8 being violated.
+
+*(All other audited properties are converged. No faked invariants.)*
+
+---
+
+## Deliberate exceptions (intentional bypasses — do not re-flag)
+
+- **`useReactorHealth` writes the query cache directly (`setQueryData`) instead of invalidate-and-refetch (invariant 8)** — because reactor health is broadcast-only; there is NO GET endpoint, so the event IS the only source of truth for that one datum. (`apps/web/src/lib/api/provider-health.ts`.)
+- **`useActivityFeed` builds live-tail rows directly from the SSE payload and lets "live win" over the history GET (invariant 8)** — because it is an append-only ACTIVITY LOG, not an editable record: a `agent.run.*` transition feed legitimately wants the event-derived row layered on top of the `useWorkspaceRuns` history seed. History comes from react-query; only the fresh live tail is event-derived. (`apps/web/src/lib/api/activity-feed.ts:24-28,77-78`.) *(Ratified 2026-06-02 after the invariant-auditor flagged it as a second, undocumented SSE-as-truth consumer — the doc's original "NEVER" over-claimed; invariant 8 now names the two allowed shapes explicitly.)*
+- **SSE filters match by resource ID while cache keys are slug-based (invariant 8)** — this is correct, not a mismatch: the `/events` route matches `?project=`/`?parent=` against the event row's real id, while `documentsKeys`/`commentsKeys` key on slug. Two identifiers, two purposes. (Fix shipped `bb6da69`; documented at `use-live-documents.ts:13-16`.)
+- **Human PATs skip `requireResource` (`bearer.ts:146`, `if (!token.agentId) return next()`) (invariant 3)** — deferred to a Phase 3+ per-PAT narrowing UI. SAFE only because invariant 7 now gates what scopes a PAT can hold; revisit when PAT project-narrowing ships. *(Open follow-up: a human PAT can still hold workspace-wide `config:write` un-narrowed.)*
+
+---
+
+## How to use this doc
+
+- **`/code-review` + `/shakeout`:** verify the diff against these invariants. FLAG (don't block) any path that bypasses a convergence point as a finding: "bypasses invariant <N> (<property>) — confirm intentional or route through <symbol>." The human accepts (and adds to Deliberate exceptions) or fixes. `/shakeout` auto-dispatches the `invariant-auditor` agent for this.
+- **Plan-writers (`superpowers:writing-plans` + `netdust-core:architecture-invariants`):** a plan touching one of these properties cites the invariant in a `## Architecture invariants touched` note, so the implementer routes through the convergence point. (Phase 3 `folio_api` already does this — it rides invariants 2/3/4/7 via `app.request`, deliberately NOT hand-rolling auth.)
+- **The built-in operator agent (Phase 3+):** reads this doc before editing Folio's own code/config. Staying inside the invariants is what makes the agent safe to let touch the app.
+- **Keep it current:** add an invariant when a new convergence point is introduced; move a gap to Invariants when closed. A `/evaluate` retro that finds a bypass this doc didn't name should sharpen an invariant.

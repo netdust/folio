@@ -22,6 +22,8 @@ function build() {
     return c.json({ id: t.id, scopes: t.scopes });
   });
   app.get('/scoped', requireToken, requireScope('documents:write'), (c) => c.json({ ok: true }));
+  app.get('/config', requireToken, requireScope('config:write'), (c) => c.json({ ok: true }));
+  app.get('/delete', requireToken, requireScope('documents:delete'), (c) => c.json({ ok: true }));
   return app;
 }
 
@@ -82,4 +84,59 @@ test('requireScope passes when the token has the required scope', async () => {
   const app = build();
   const res = await app.request('/scoped', { headers: { Authorization: `Bearer ${token}` } });
   expect(res.status).toBe(200);
+});
+
+// --- config:write legacy-alias grandfathering (OP2-F1) -------------------
+// Phase 2 consolidated four granular config scopes into one canonical
+// config:write. Tokens minted before that carry the legacy granular scopes;
+// requireScope('config:write') must still accept them so existing PATs keep
+// working without an upgrade path.
+
+test('requireScope(config:write) passes a token holding a legacy granular scope', async () => {
+  const { seed } = await makeTestApp();
+  const { token, hash } = newApiToken();
+  await db.insert(apiTokens).values({
+    id: nanoid(), workspaceId: seed.workspace.id, name: 'legacy', tokenHash: hash,
+    scopes: ['fields:write'], createdBy: seed.user.id,
+  });
+  const app = build();
+  const res = await app.request('/config', { headers: { Authorization: `Bearer ${token}` } });
+  expect(res.status).toBe(200);
+});
+
+test('requireScope(config:write) passes a token holding config:write directly', async () => {
+  const { seed } = await makeTestApp();
+  const { token, hash } = newApiToken();
+  await db.insert(apiTokens).values({
+    id: nanoid(), workspaceId: seed.workspace.id, name: 'modern', tokenHash: hash,
+    scopes: ['config:write'], createdBy: seed.user.id,
+  });
+  const app = build();
+  const res = await app.request('/config', { headers: { Authorization: `Bearer ${token}` } });
+  expect(res.status).toBe(200);
+});
+
+test('requireScope(config:write) rejects a token with only documents:read', async () => {
+  const { seed } = await makeTestApp();
+  const { token, hash } = newApiToken();
+  await db.insert(apiTokens).values({
+    id: nanoid(), workspaceId: seed.workspace.id, name: 'reader', tokenHash: hash,
+    scopes: ['documents:read'], createdBy: seed.user.id,
+  });
+  const app = build();
+  const res = await app.request('/config', { headers: { Authorization: `Bearer ${token}` } });
+  expect(res.status).toBe(403);
+  expect((await res.json()).error.code).toBe('FORBIDDEN_SCOPE');
+});
+
+test('the config:write alias does NOT leak to other scopes (fields:write !=> documents:delete)', async () => {
+  const { seed } = await makeTestApp();
+  const { token, hash } = newApiToken();
+  await db.insert(apiTokens).values({
+    id: nanoid(), workspaceId: seed.workspace.id, name: 'legacy', tokenHash: hash,
+    scopes: ['fields:write'], createdBy: seed.user.id,
+  });
+  const app = build();
+  const res = await app.request('/delete', { headers: { Authorization: `Bearer ${token}` } });
+  expect(res.status).toBe(403);
 });

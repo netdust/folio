@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { slugify } from '@folio/shared';
 import { db } from '../db/client.ts';
 import { tables } from '../db/schema.ts';
+import { dryRunResult, isDryRun, isDryRunDelete } from '../lib/dry-run.ts';
 import { emitEvent, txWithEvents } from '../lib/events.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
 import { slugUniqueInTables } from '../lib/slug-unique.ts';
@@ -25,6 +26,7 @@ const baseSchema = z.object({
     .optional(),
   icon: z.string().max(32).nullable().optional(),
   order: z.number().int().optional(),
+  dryRun: z.boolean().optional(),
 });
 
 // PATCH intentionally excludes `slug`: renaming a table's slug would silently
@@ -34,6 +36,7 @@ const patchSchema = z.object({
   name: z.string().min(1).max(80).optional(),
   icon: z.string().nullable().optional(),
   order: z.number().int().optional(),
+  dryRun: z.boolean().optional(),
 });
 
 tablesRoute.get('/', async (c) => {
@@ -45,7 +48,7 @@ tablesRoute.get('/', async (c) => {
   return jsonOk(c, rows);
 });
 
-tablesRoute.post('/', requireScope('tables:write'), zValidator('json', baseSchema), async (c) => {
+tablesRoute.post('/', requireScope('config:write'), zValidator('json', baseSchema), async (c) => {
   const user = getUser(c);
   const p = getProject(c);
   const ws = getWorkspace(c);
@@ -74,6 +77,9 @@ tablesRoute.post('/', requireScope('tables:write'), zValidator('json', baseSchem
     icon: input.icon ?? null,
     order: input.order ?? 0,
   };
+  if (isDryRun(input)) {
+    return jsonOk(c, dryRunResult('create', row));
+  }
   await txWithEvents(db, async (tx) => {
     await tx.insert(tables).values(row);
     await emitEvent(tx, {
@@ -87,7 +93,7 @@ tablesRoute.post('/', requireScope('tables:write'), zValidator('json', baseSchem
   return jsonOk(c, row, 201);
 });
 
-tablesRoute.patch('/:tslug', requireScope('tables:write'), zValidator('json', patchSchema), async (c) => {
+tablesRoute.patch('/:tslug', requireScope('config:write'), zValidator('json', patchSchema), async (c) => {
   const user = getUser(c);
   const p = getProject(c);
   const ws = getWorkspace(c);
@@ -106,6 +112,10 @@ tablesRoute.patch('/:tslug', requireScope('tables:write'), zValidator('json', pa
   if (patch.icon !== undefined) updates.icon = patch.icon;
   if (patch.order !== undefined) updates.order = patch.order;
 
+  if (isDryRun(patch)) {
+    return jsonOk(c, dryRunResult('update', { ...row, ...updates }));
+  }
+
   await txWithEvents(db, async (tx) => {
     if (Object.keys(updates).length > 0) {
       await tx.update(tables).set(updates).where(eq(tables.id, row.id));
@@ -121,7 +131,7 @@ tablesRoute.patch('/:tslug', requireScope('tables:write'), zValidator('json', pa
   return jsonOk(c, { ...row, ...updates });
 });
 
-tablesRoute.delete('/:tslug', requireScope('tables:write'), async (c) => {
+tablesRoute.delete('/:tslug', requireScope('config:write'), async (c) => {
   const user = getUser(c);
   const p = getProject(c);
   const ws = getWorkspace(c);
@@ -130,6 +140,10 @@ tablesRoute.delete('/:tslug', requireScope('tables:write'), async (c) => {
     where: and(eq(tables.projectId, p.id), eq(tables.slug, tslug)),
   });
   if (!row) throw new HTTPError('TABLE_NOT_FOUND', `table "${tslug}" not found`, 404);
+
+  if (isDryRunDelete(c)) {
+    return jsonOk(c, dryRunResult('delete', { id: row.id, slug: row.slug, name: row.name }));
+  }
 
   await txWithEvents(db, async (tx) => {
     await tx.delete(tables).where(eq(tables.id, row.id));

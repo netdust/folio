@@ -19,13 +19,15 @@ const SCOPES = [
   'documents:read',
   'documents:write',
   'documents:delete',
-  'fields:write',
-  'views:write',
-  'tables:write',
-  'statuses:write',
+  // Phase 2 consolidated fields/views/tables/statuses:write into one canonical
+  // config:write. The four granular scopes can no longer be minted, so the
+  // modal must not offer them.
+  'config:write',
   // Phase 2.6 sub-phase D — agents:write scope for MCP agent-lifecycle tools.
   'agents:write',
 ] as const;
+
+const DEAD_GRANULAR_SCOPES = ['fields:write', 'views:write', 'tables:write', 'statuses:write'];
 
 describe('TokenCreateModal', () => {
   it('renders a checkbox for every v1 scope', () => {
@@ -36,6 +38,17 @@ describe('TokenCreateModal', () => {
     );
     for (const scope of SCOPES) {
       expect(screen.getByLabelText(scope)).toBeInTheDocument();
+    }
+  });
+
+  it('does NOT offer the dead granular config scopes', () => {
+    const qc = new QueryClient();
+    render(
+      <TokenCreateModal wslug="acme" workspaceId="ws-1" open onOpenChange={() => {}} />,
+      { wrapper: wrap(qc) },
+    );
+    for (const scope of DEAD_GRANULAR_SCOPES) {
+      expect(screen.queryByLabelText(scope)).toBeNull();
     }
   });
 
@@ -65,7 +78,7 @@ describe('TokenCreateModal', () => {
     expect(screen.getByRole('button', { name: /full access/i })).toBeInTheDocument();
   });
 
-  it('clicking "Read + write" checks the right subset (no delete, no tables:write, no agents:write)', async () => {
+  it('clicking "Read + write" checks documents:read/write + config:write (no delete, no agents:write)', async () => {
     const qc = new QueryClient();
     const user = userEvent.setup();
     render(
@@ -75,11 +88,8 @@ describe('TokenCreateModal', () => {
     await user.click(screen.getByRole('button', { name: /read \+ write/i }));
     expect((screen.getByLabelText('documents:read') as HTMLInputElement).checked).toBe(true);
     expect((screen.getByLabelText('documents:write') as HTMLInputElement).checked).toBe(true);
-    expect((screen.getByLabelText('fields:write') as HTMLInputElement).checked).toBe(true);
-    expect((screen.getByLabelText('views:write') as HTMLInputElement).checked).toBe(true);
-    expect((screen.getByLabelText('statuses:write') as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByLabelText('config:write') as HTMLInputElement).checked).toBe(true);
     expect((screen.getByLabelText('documents:delete') as HTMLInputElement).checked).toBe(false);
-    expect((screen.getByLabelText('tables:write') as HTMLInputElement).checked).toBe(false);
     // BUG-007 — agents:write is too privileged to bundle in a "Read + write"
     // preset; human PATs bypass the widening guards so the preset would
     // silently grant whole-instance agent-management capability.
@@ -207,7 +217,7 @@ describe('TokenCreateModal', () => {
     await user.click(screen.getByLabelText('agents:write'));
     expect(screen.getByRole('alert')).toBeInTheDocument();
     // Uncheck one scope — warning should disappear because it's no longer "every scope".
-    await user.click(screen.getByLabelText('tables:write'));
+    await user.click(screen.getByLabelText('config:write'));
     expect(screen.queryByRole('alert')).toBeNull();
   });
 });

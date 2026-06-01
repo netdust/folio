@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { agentFrontmatterSchema, toolsToScopes, V1_MCP_TOOLS } from './agent-schema.ts';
+import { agentFrontmatterSchema, roleToScopes, toolsToScopes, V1_MCP_TOOLS } from './agent-schema.ts';
 
 describe('agentFrontmatterSchema', () => {
   test('accepts a complete valid agent frontmatter', () => {
@@ -197,6 +197,24 @@ describe('claude-code agent frontmatter', () => {
     const schema = agentFrontmatterSchema.innerType().partial();
     const r = schema.safeParse({ requires_approval: true });
     expect(r.success).toBe(true);
+  });
+});
+
+describe('config:write scope', () => {
+  test('owner and admin can delegate config:write', () => {
+    expect(roleToScopes('owner')).toContain('config:write');
+    expect(roleToScopes('admin')).toContain('config:write');
+  });
+
+  test('member CANNOT delegate config:write (P2-1)', () => {
+    expect(roleToScopes('member')).not.toContain('config:write');
+    expect(roleToScopes('member')).toEqual(['documents:read', 'documents:write']);
+  });
+
+  test('the config tool maps to config:write + read (P2-2)', () => {
+    const scopes = toolsToScopes(['folio_api']);
+    expect(scopes).toContain('config:write');
+    expect(scopes).toContain('documents:read');
   });
 });
 

@@ -7,7 +7,9 @@ import { slugify } from '@folio/shared';
 import { db } from '../db/client.ts';
 import { documents, projects } from '../db/schema.ts';
 import { emitEvent, txWithEvents } from '../lib/events.ts';
+import { dryRunResult, isDryRun, isDryRunDelete } from '../lib/dry-run.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
+import { requireScope } from '../middleware/bearer.ts';
 import { resolveAgentProjects } from '../lib/agent-projects.ts';
 import { seedProjectDefaults } from '../lib/seed-project-defaults.ts';
 import { slugUniqueInProjects } from '../lib/slug-unique.ts';
@@ -31,6 +33,7 @@ projectsRoute.get('/', async (c) => {
 
 projectsRoute.post(
   '/',
+  requireScope('config:write'),
   zValidator(
     'json',
     z.object({
@@ -42,6 +45,7 @@ projectsRoute.post(
         .regex(/^[a-z0-9-]+$/)
         .optional(),
       icon: z.string().max(32).optional(),
+      dryRun: z.boolean().optional(),
     }),
   ),
   async (c) => {
@@ -59,6 +63,10 @@ projectsRoute.post(
         throw new HTTPError('SLUG_CONFLICT', `slug "${explicit}" is taken in this workspace`, 409);
     } else {
       slug = await slugUniqueInProjects(db, ws.id, slug || 'project');
+    }
+
+    if (isDryRun(c.req.valid('json'))) {
+      return jsonOk(c, dryRunResult('create', { id, workspaceId: ws.id, slug, name, icon: icon ?? null }));
     }
 
     await txWithEvents(db, async (tx) => {
@@ -85,11 +93,13 @@ projectItemRoute.get('/', (c) => jsonOk(c, getProject(c)));
 
 projectItemRoute.patch(
   '/',
+  requireScope('config:write'),
   zValidator(
     'json',
     z.object({
       name: z.string().min(1).max(80).optional(),
       icon: z.string().max(32).nullable().optional(),
+      dryRun: z.boolean().optional(),
     }),
   ),
   async (c) => {
@@ -97,25 +107,33 @@ projectItemRoute.patch(
     const ws = getWorkspace(c);
     const user = getUser(c);
     const patch = c.req.valid('json');
+    const { dryRun: _dryRun, ...patchFields } = patch;
     const now = new Date();
+    if (isDryRun(patch)) {
+      return jsonOk(c, dryRunResult('update', { ...p, ...patchFields, updatedAt: now }));
+    }
     await txWithEvents(db, async (tx) => {
-      await tx.update(projects).set({ ...patch, updatedAt: now }).where(eq(projects.id, p.id));
+      await tx.update(projects).set({ ...patchFields, updatedAt: now }).where(eq(projects.id, p.id));
       await emitEvent(tx, {
         workspaceId: ws.id,
         projectId: p.id,
         kind: 'project.updated',
         actor: user.id,
-        payload: { changes: Object.keys(patch) },
+        payload: { changes: Object.keys(patchFields) },
       });
     });
-    return jsonOk(c, { ...p, ...patch, updatedAt: now });
+    return jsonOk(c, { ...p, ...patchFields, updatedAt: now });
   },
 );
 
-projectItemRoute.delete('/', async (c) => {
+projectItemRoute.delete('/', requireScope('config:write'), async (c) => {
   if (getRole(c) !== 'owner') throw new HTTPError('FORBIDDEN', 'owner only', 403);
   const p = getProject(c);
   const ws = getWorkspace(c);
+
+  if (isDryRunDelete(c)) {
+    return jsonOk(c, dryRunResult('delete', { id: p.id, slug: p.slug, name: p.name }));
+  }
 
   // Phase 2.5: application-level cascade. frontmatter.projects lives inside a
   // JSON column, so SQLite's FK system cannot scrub references when a project

@@ -225,6 +225,47 @@ describe('executeTool dispatch', () => {
   });
 });
 
+describe('config:write delegate ceiling (Phase 2 / P2-1, P2-2)', () => {
+  // A throwaway tool requiring config:write — proves the ceiling, not behavior.
+  function registerConfigProbe() {
+    registerThrowaway({
+      name: '__config_probe',
+      requiredScope: 'config:write',
+      schema: z.object({}).strict(),
+      handler: async () => ({ ok: true }),
+    });
+  }
+
+  it('owner-delegated run (agent + caller both hold config:write) → runs', async () => {
+    registerConfigProbe();
+    const token = makeToken({ scopes: ['config:write', 'documents:read'] });
+    const out = await executeTool(token, 'agent:op', '__config_probe', {}, undefined, {
+      callerScopes: ['config:write', 'documents:read'],
+    });
+    expect(out).toEqual({ ok: true });
+  });
+
+  it('member-delegated run (caller lacks config:write) → denied, fail closed (P2-1)', async () => {
+    registerConfigProbe();
+    const token = makeToken({ scopes: ['config:write', 'documents:read'] });
+    await expect(
+      executeTool(token, 'agent:op', '__config_probe', {}, undefined, {
+        callerScopes: ['documents:read', 'documents:write'], // member scopes — no config:write
+      }),
+    ).rejects.toThrow('forbidden: scope config:write missing');
+  });
+
+  it('agent token lacks config:write → denied even if caller has it (P2-2)', async () => {
+    registerConfigProbe();
+    const token = makeToken({ scopes: ['documents:read'] }); // agent lacks config:write
+    await expect(
+      executeTool(token, 'agent:op', '__config_probe', {}, undefined, {
+        callerScopes: ['config:write'],
+      }),
+    ).rejects.toThrow('forbidden: scope config:write missing');
+  });
+});
+
 describe('registerTool', () => {
   it('registerTool throws on duplicate name', () => {
     registerThrowaway({

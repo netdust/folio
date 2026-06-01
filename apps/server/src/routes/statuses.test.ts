@@ -1,7 +1,11 @@
 import { test, expect } from 'bun:test';
+import { eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { makeTestApp } from '../test/harness.ts';
-import { documents, statuses } from '../db/schema.ts';
+import { apiTokens, documents, events, statuses } from '../db/schema.ts';
+import { newApiToken } from '../lib/auth.ts';
+
+const base = '/api/v1/w/acme/p/web/statuses';
 
 async function createStatus(app: Awaited<ReturnType<typeof makeTestApp>>['app'], cookie: string, body: object) {
   return app.request('/api/v1/w/acme/p/web/statuses', {
@@ -96,4 +100,199 @@ test('DELETE /:id 204 when unused', async () => {
     method: 'DELETE', headers: { Cookie: seed.sessionCookie },
   });
   expect(res.status).toBe(204);
+});
+
+// --- Phase 2 (operator): config:write guard + dryRun (P2-2/4/6/8) ---
+
+async function mintTokens(db: Awaited<ReturnType<typeof makeTestApp>>['db'], seed: Awaited<ReturnType<typeof makeTestApp>>['seed']) {
+  const cw = newApiToken();
+  await db.insert(apiTokens).values({
+    id: nanoid(),
+    workspaceId: seed.workspace.id,
+    name: 'config-write',
+    tokenHash: cw.hash,
+    scopes: ['config:write', 'documents:read'],
+    createdBy: seed.user.id,
+  });
+  const dw = newApiToken();
+  await db.insert(apiTokens).values({
+    id: nanoid(),
+    workspaceId: seed.workspace.id,
+    name: 'docs-write',
+    tokenHash: dw.hash,
+    scopes: ['documents:write', 'documents:read'],
+    createdBy: seed.user.id,
+  });
+  return { configWriteToken: cw.token, docsWriteToken: dw.token };
+}
+
+async function statusCount(db: Awaited<ReturnType<typeof makeTestApp>>['db'], projectId: string): Promise<number> {
+  return (await db.select().from(statuses).where(eq(statuses.projectId, projectId))).length;
+}
+
+async function eventCount(db: Awaited<ReturnType<typeof makeTestApp>>['db']): Promise<number> {
+  return (await db.select().from(events)).length;
+}
+
+test('POST /statuses: config:write token creates a status', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const { configWriteToken } = await mintTokens(db, seed);
+  const res = await app.request(base, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${configWriteToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ key: 'in_review', name: 'In Review' }),
+  });
+  expect(res.status).toBe(201);
+  expect((await res.json()).data.status.key).toBe('in_review');
+});
+
+test('POST /statuses: documents:write token cannot create a status (403)', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const { docsWriteToken } = await mintTokens(db, seed);
+  const res = await app.request(base, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${docsWriteToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ key: 'in_review', name: 'In Review' }),
+  });
+  expect(res.status).toBe(403);
+});
+
+test('POST /statuses: dryRun create does not mutate', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const { configWriteToken } = await mintTokens(db, seed);
+  const beforeStatuses = await statusCount(db, seed.project.id);
+  const beforeEvents = await eventCount(db);
+  const res = await app.request(base, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${configWriteToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ key: 'preview', name: 'Preview', dryRun: true }),
+  });
+  expect(res.status).toBe(200);
+  const data = (await res.json()).data;
+  expect(data.dry_run).toBe(true);
+  expect(data.would).toBe('create');
+  expect(data.resource.status.key).toBe('preview');
+  expect(await statusCount(db, seed.project.id)).toBe(beforeStatuses);
+  expect(await eventCount(db)).toBe(beforeEvents);
+});
+
+test('POST /statuses: dryRun resource matches the live created status (minus id)', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const { configWriteToken } = await mintTokens(db, seed);
+  const body = { key: 'parity', name: 'Parity', color: '#123456' };
+
+  const live = await (
+    await app.request(base, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${configWriteToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  ).json();
+  const dry = await (
+    await app.request(base, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${configWriteToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...body, key: 'parity2', dryRun: true }),
+    })
+  ).json();
+
+  // P2-3: dryRun resource equals live `data` (same `status` wrapper), minus the
+  // volatile id + key (key differs to avoid a SLUG_CONFLICT on the seed).
+  const { id: _liveId, key: _liveKey, ...liveRow } = live.data.status;
+  const { id: _dryId, key: _dryKey, ...dryRow } = dry.data.resource.status;
+  expect(dryRow).toEqual(liveRow);
+});
+
+// Finding 1: a live (dryRun:false) PATCH must NOT leak the dryRun flag into the
+// response body or into the emitted event's `changes` array.
+test('PATCH /statuses: dryRun:false does not leak the flag into response or event changes', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const { configWriteToken } = await mintTokens(db, seed);
+  const created = await (
+    await app.request(base, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${configWriteToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key: 'noleak', name: 'No Leak' }),
+    })
+  ).json();
+  const id = created.data.status.id as string;
+
+  const res = await app.request(`${base}/${id}`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${configWriteToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Renamed', dryRun: false }),
+  });
+  expect(res.status).toBe(200);
+  const { data } = await res.json();
+  expect(data.status.name).toBe('Renamed');
+  expect(data.status).not.toHaveProperty('dryRun');
+
+  const evs = await db.select().from(events);
+  const updated = evs.find((e) => e.kind === 'status.updated');
+  expect(updated).toBeDefined();
+  const changes = (updated!.payload as { changes: string[] }).changes;
+  expect(changes).not.toContain('dryRun');
+  expect(changes).toContain('name');
+});
+
+test('DELETE /statuses: dryRun delete on missing status 404s', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const { configWriteToken } = await mintTokens(db, seed);
+  const res = await app.request(`${base}/does-not-exist?dryRun=true`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${configWriteToken}` },
+  });
+  expect(res.status).toBe(404);
+});
+
+test('DELETE /statuses: dryRun delete does not mutate an existing status', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const { configWriteToken } = await mintTokens(db, seed);
+  const created = await (
+    await app.request(base, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${configWriteToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key: 'keepme', name: 'Keep Me' }),
+    })
+  ).json();
+  const id = created.data.status.id as string;
+  const beforeStatuses = await statusCount(db, seed.project.id);
+  const beforeEvents = await eventCount(db);
+
+  const res = await app.request(`${base}/${id}?dryRun=true`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${configWriteToken}` },
+  });
+  expect(res.status).toBe(200);
+  const data = (await res.json()).data;
+  expect(data.dry_run).toBe(true);
+  expect(data.would).toBe('delete');
+  expect(await statusCount(db, seed.project.id)).toBe(beforeStatuses);
+  expect(await eventCount(db)).toBe(beforeEvents);
+});
+
+// P2-6: a dryRun delete must NOT skip the 409 STATUS_IN_USE guard — preview
+// fails the way the real delete would. Pins the early-return placement (after
+// the in-use check) so a regression that moved it above the guard is caught.
+test('DELETE /statuses: dryRun delete of an in-use status still 409s', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const { configWriteToken } = await mintTokens(db, seed);
+  const created = await (
+    await app.request(base, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${configWriteToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key: 'in_use', name: 'In Use' }),
+    })
+  ).json();
+  const status = created.data.status as { id: string; tableId: string };
+  await db.insert(documents).values({
+    id: nanoid(), projectId: seed.project.id, workspaceId: seed.workspace.id,
+    tableId: status.tableId, type: 'work_item', slug: 'uses-it', title: 'Uses It', status: 'in_use',
+  });
+  const res = await app.request(`${base}/${status.id}?dryRun=true`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${configWriteToken}` },
+  });
+  expect(res.status).toBe(409);
+  expect((await res.json()).error.code).toBe('STATUS_IN_USE');
 });
