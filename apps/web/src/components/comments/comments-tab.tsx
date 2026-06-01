@@ -1,13 +1,16 @@
 import { useMemo, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import type { Member } from '../../lib/api/members.ts';
 import {
   useComments,
   useCreateComment,
   useUpdateComment,
   useDeleteComment,
+  commentsKeys,
   type CommentVisibility,
 } from '../../lib/api/comments.ts';
 import { useWorkspaceAgents } from '../../lib/api/workspace-documents.ts';
+import { useEventStream } from '../../lib/api/event-stream.ts';
 import type { AgentRef } from '../../lib/author-ref.ts';
 import { Button } from '../ui/button.tsx';
 import {
@@ -19,14 +22,6 @@ import {
 import { CommentComposer } from './comment-composer.tsx';
 import { CommentRow } from './comment-row.tsx';
 import { ApprovalButtons } from './approval-buttons.tsx';
-
-// ---------------------------------------------------------------------------
-// SSE subscription is INTENTIONALLY DEFERRED.
-// When SSE ships, mount an EventSource here that subscribes to:
-//   /api/v1/w/:wslug/p/:pslug/documents/:parentSlug/events?types=comment_created,comment_updated,comment_deleted
-// and invalidates commentsKeys.list on receipt.
-// See future task: "SSE consumer for CommentsTab".
-// ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
 // Props
@@ -236,6 +231,20 @@ export function CommentsTab({
         (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
       ),
     [comments],
+  );
+
+  // ---------- SSE live-update ------------------------------------------
+  // parentId (not parentSlug) is the filter key the server matches on.
+  // The query cache is keyed on parentSlug, so we use it in the queryKey.
+  const qc = useQueryClient();
+  useEventStream(
+    workspaceSlug,
+    { parent: parentId, kinds: ['comment.created', 'comment.deleted'] },
+    () => {
+      qc.invalidateQueries({
+        queryKey: [...commentsKeys.all, workspaceSlug, projectSlug, parentSlug, 'list'],
+      });
+    },
   );
 
   // ---------- Mutations -------------------------------------------------

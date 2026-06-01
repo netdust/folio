@@ -5,6 +5,28 @@ import type { ReactNode } from 'react';
 import { CommentsTab } from './comments-tab.tsx';
 import type { Comment } from '../../lib/api/comments.ts';
 import type { Member } from '../../lib/api/members.ts';
+import type { StreamedEvent, EventStreamFilters } from '../../lib/api/event-stream.ts';
+
+// ---------------------------------------------------------------------------
+// Module-level mock for useEventStream.
+// vi.mock is hoisted to the top of the file regardless of where it appears in
+// source, so we declare it here at module scope alongside a spy ref the SSE
+// tests can inspect without interfering with other tests (the default no-op
+// means all existing tests continue to pass unchanged).
+// ---------------------------------------------------------------------------
+
+const mockUseEventStream = vi.fn<
+  [string, EventStreamFilters, (e: StreamedEvent) => void],
+  void
+>();
+
+vi.mock('../../lib/api/event-stream.ts', () => ({
+  useEventStream: (
+    wslug: string,
+    filters: EventStreamFilters,
+    onEvent: (e: StreamedEvent) => void,
+  ) => mockUseEventStream(wslug, filters, onEvent),
+}));
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -494,5 +516,53 @@ describe('CommentsTab', () => {
     rerender(<CommentsTab {...defaultProps} parentId="doc-B" parentSlug="b" />);
     const submitB = screen.getByTestId('comment-composer-submit') as HTMLButtonElement;
     expect(submitB.disabled).toBe(false);
+  });
+
+  // SSE live-update — CommentsTab must subscribe to comment.created +
+  // comment.deleted events filtered by parentId (NOT parentSlug), and must
+  // invalidate the comments list query (keyed on parentSlug) on receipt.
+  describe('SSE live-update', () => {
+    beforeEach(() => {
+      mockUseEventStream.mockReset();
+    });
+
+    it('subscribes with parent:parentId + correct kinds, invalidates list on event', async () => {
+      // Capture the filters + callback passed to useEventStream on the first call.
+      let capturedFilters: EventStreamFilters | undefined;
+      let capturedOnEvent: ((e: StreamedEvent) => void) | undefined;
+
+      mockUseEventStream.mockImplementation((_wslug, filters, onEvent) => {
+        capturedFilters = filters;
+        capturedOnEvent = onEvent;
+      });
+
+      const qc = makeQC();
+      const invalidateSpy = vi.spyOn(qc, 'invalidateQueries');
+
+      renderTab(
+        {
+          workspaceSlug: 'acme',
+          projectSlug: 'web',
+          parentSlug: 'wi-1',
+          parentId: 'pid-1',
+        },
+        qc,
+      );
+
+      // The hook must have been called with parent=parentId (not parentSlug)
+      // and exactly the two dotted event kinds.
+      expect(capturedFilters).toMatchObject({
+        parent: 'pid-1',
+        kinds: ['comment.created', 'comment.deleted'],
+      });
+
+      // Firing the SSE callback must invalidate the list query keyed on
+      // parentSlug (not parentId).
+      capturedOnEvent!({ id: 'e-1', kind: 'comment.created' });
+
+      expect(invalidateSpy).toHaveBeenCalledWith({
+        queryKey: ['comments', 'acme', 'web', 'wi-1', 'list'],
+      });
+    });
   });
 });
