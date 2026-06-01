@@ -1240,6 +1240,123 @@ describe('find_documents: workspace-wide title lookup, allow-list enforced', () 
   });
 });
 
+describe('caller project intersect (D4/D5): per-tool clamp to the caller', () => {
+  it('caller not in the project → tool rejected even when agent allow-lists it', async () => {
+    const { db, seed } = await makeTestApp();
+
+    // Second project ('ops') in the SAME workspace.
+    const projectBId = nanoid();
+    await db.insert(projects).values({
+      id: projectBId,
+      workspaceId: seed.workspace.id,
+      slug: 'ops',
+      name: 'Ops',
+    });
+    await seedProjectDefaults(db, projectBId);
+
+    // Seed a doc in 'ops' so the only thing that can reject is the project clamp.
+    const pat = await seedHumanPat(db, seed.workspace.id, seed.user.id, [
+      'documents:read',
+      'documents:write',
+    ]);
+    await exec(pat, seed.user.id, 'create_document', {
+      workspace_slug: 'acme',
+      project_slug: 'ops',
+      type: 'work_item',
+      title: 'Ops doc',
+    });
+    const opsDoc = (
+      JSON.parse(
+        (
+          (await exec(pat, seed.user.id, 'find_documents', {
+            workspace_slug: 'acme',
+            project_slug: 'ops',
+            query: 'ops doc',
+          })) as { content: { text: string }[] }
+        ).content[0]!.text,
+      ) as { documents: { slug: string }[] }
+    ).documents[0]!;
+
+    // Agent token allow-lists BOTH projects (wildcard); token unrestricted.
+    const { token: agentToken, agentSlug } = await seedAgent(db, seed.workspace.id, seed.user.id, {
+      projects: ['*'],
+      scopes: ['documents:read'],
+    });
+
+    // Caller is a regular member clamped to the 'web' project only — NOT 'ops'.
+    let thrown: unknown;
+    try {
+      await executeTool(
+        agentToken,
+        `agent:${agentSlug}`,
+        'get_document',
+        { workspace_slug: 'acme', project_slug: 'ops', slug: opsDoc.slug },
+        undefined,
+        { callerScopes: ['documents:read'], callerProjectIds: [seed.project.id] },
+      );
+    } catch (err) {
+      thrown = err;
+    }
+    const e = thrown as Error & { code?: number; data?: { reason?: string } };
+    expect(e).toBeInstanceOf(Error);
+    expect(e.code).toBe(-32602);
+    expect(e.data?.reason).toBe('agent_not_in_allow_list');
+  });
+
+  it('caller is owner (callerProjectIds null) → no extra narrowing; agent allow-list still applies', async () => {
+    const { db, seed } = await makeTestApp();
+
+    // Second project ('ops') in the SAME workspace.
+    const projectBId = nanoid();
+    await db.insert(projects).values({
+      id: projectBId,
+      workspaceId: seed.workspace.id,
+      slug: 'ops',
+      name: 'Ops',
+    });
+    await seedProjectDefaults(db, projectBId);
+
+    const pat = await seedHumanPat(db, seed.workspace.id, seed.user.id, [
+      'documents:read',
+      'documents:write',
+    ]);
+    await exec(pat, seed.user.id, 'create_document', {
+      workspace_slug: 'acme',
+      project_slug: 'ops',
+      type: 'work_item',
+      title: 'Ops doc',
+    });
+    const opsDoc = (
+      JSON.parse(
+        (
+          (await exec(pat, seed.user.id, 'find_documents', {
+            workspace_slug: 'acme',
+            project_slug: 'ops',
+            query: 'ops doc',
+          })) as { content: { text: string }[] }
+        ).content[0]!.text,
+      ) as { documents: { slug: string }[] }
+    ).documents[0]!;
+
+    // Agent allow-lists '*'; token unrestricted; OWNER caller (null).
+    const { token: agentToken, agentSlug } = await seedAgent(db, seed.workspace.id, seed.user.id, {
+      projects: ['*'],
+      scopes: ['documents:read'],
+    });
+
+    const out = (await executeTool(
+      agentToken,
+      `agent:${agentSlug}`,
+      'get_document',
+      { workspace_slug: 'acme', project_slug: 'ops', slug: opsDoc.slug },
+      undefined,
+      { callerScopes: ['documents:read'], callerProjectIds: null },
+    )) as { content: { text: string }[] };
+    const doc = JSON.parse(out.content[0]!.text) as { title: string };
+    expect(doc.title).toBe('Ops doc');
+  });
+});
+
 describe('describe_workspace: one-call orientation, allow-list enforced', () => {
   it('returns projects → tables → status keys', async () => {
     const { db, seed } = await makeTestApp();
