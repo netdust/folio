@@ -4,6 +4,7 @@ import { Plus, Loader2, List, Columns3 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useProject } from '../lib/api/projects.ts';
 import { useDocuments, useCreateDocument } from '../lib/api/documents.ts';
+import { useLiveDocuments } from '../lib/api/use-live-documents.ts';
 import { formatApiError } from '../lib/api/index.ts';
 import { MainFrame, FrameTab } from '../components/shell/main-frame.tsx';
 import { BoardControls } from '../components/kanban/board-controls.tsx';
@@ -30,6 +31,7 @@ function ProjectLayout() {
   const { data: workItems } = useDocuments(wslug, pslug, { type: 'work_item', limit: 200 });
   const { data: pages } = useDocuments(wslug, pslug, { type: 'page', limit: 200 });
   const create = useCreateDocument(wslug, pslug);
+  useLiveDocuments(wslug, pslug);
 
   if (isLoading) return <div className="p-8 text-fg-3">Loading project…</div>;
   if (!project) return <div className="p-8 text-danger">Project not found.</div>;

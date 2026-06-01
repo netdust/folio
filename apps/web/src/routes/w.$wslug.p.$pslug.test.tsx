@@ -12,6 +12,10 @@ import {
 import { z } from 'zod';
 import { Route as ProjectFileRoute } from './w.$wslug.p.$pslug.tsx';
 
+// ─── useLiveDocuments mount assertion ────────────────────────────────────────
+const liveSpy = vi.fn();
+vi.mock('@/lib/api/use-live-documents', () => ({ useLiveDocuments: (...a: unknown[]) => liveSpy(...a) }));
+
 // Shared mock fixtures —————————————————————————————————————————
 
 const workspace = { id: 'w1', slug: 'acme', name: 'Acme' };
@@ -87,5 +91,30 @@ describe('ProjectLayout — tab bar', () => {
 
     // Sanity: the project actually loaded (avoids passing on a "not found" screen).
     await waitFor(() => expect(screen.getByText('Sales')).toBeInTheDocument());
+  });
+});
+
+describe('ProjectLayout — live document updates', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    liveSpy.mockClear();
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('mounts useLiveDocuments with wslug and pslug from the route params', async () => {
+    const { queryClient, router } = setup({ initialPath: '/w/acme/p/sales/work-items' });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    // Wait for the route to render (project loaded) before asserting.
+    await waitFor(() => expect(screen.getByText('Sales')).toBeInTheDocument());
+
+    expect(liveSpy).toHaveBeenCalledWith('acme', 'sales');
   });
 });
