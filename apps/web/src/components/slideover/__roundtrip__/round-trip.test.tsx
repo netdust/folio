@@ -78,6 +78,17 @@ describe('Slideover round-trip', () => {
 
   beforeEach(() => {
     patches = [];
+    // The slideover now subscribes to live document events (useLiveDocument →
+    // useEventStream), which opens an EventSource. jsdom has none — stub a no-op
+    // so the live-update subscription doesn't crash the slideover.
+    vi.stubGlobal(
+      'EventSource',
+      class {
+        addEventListener() {}
+        removeEventListener() {}
+        close() {}
+      } as unknown as typeof EventSource,
+    );
     const fetchMock = vi.fn<typeof fetch>(async (url, init) => {
       const u = String(url);
       const method = init?.method ?? 'GET';

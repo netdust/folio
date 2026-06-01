@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { act, render, screen, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
@@ -11,6 +11,16 @@ import {
   RouterProvider,
 } from '@tanstack/react-router';
 import { z } from 'zod';
+
+// Capture the onEvent the live-document hook registers with useEventStream so
+// the tests can fire a synthetic document.updated / document.deleted frame.
+const liveCalls: { onEvent: (e: unknown) => void }[] = [];
+vi.mock('../../lib/api/event-stream.ts', () => ({
+  useEventStream: (_w: string, _filters: unknown, onEvent: (e: unknown) => void) => {
+    liveCalls.push({ onEvent });
+  },
+}));
+
 import { WorkspaceDocumentSlideover } from './workspace-document-slideover.tsx';
 
 function setup(initialSearch: string) {
@@ -834,5 +844,96 @@ describe('WorkspaceDocumentSlideover', () => {
     await waitFor(() =>
       expect(localStorage.getItem('folio:width:agent-config')).toBe('580'),
     );
+  });
+
+  // ---------------------------------------------------------------------
+  // Live external-update banner — notify-don't-stomp (useLiveDocument)
+  // ---------------------------------------------------------------------
+
+  it('clean draft + external document.updated → refetches (no banner)', async () => {
+    liveCalls.length = 0;
+    let docFetches = 0;
+    vi.stubGlobal(
+      'EventSource',
+      class {
+        addEventListener() {}
+        removeEventListener() {}
+        close() {}
+      } as unknown as typeof EventSource,
+    );
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>(async (url) => {
+        const u = String(url);
+        if (u.endsWith('/events')) {
+          return new Response(JSON.stringify({ data: [] }), {
+            status: 200, headers: { 'content-type': 'application/json' },
+          });
+        }
+        if (u.includes('/w/main/documents?')) {
+          return new Response(JSON.stringify({ data: [] }), {
+            status: 200, headers: { 'content-type': 'application/json' },
+          });
+        }
+        if (u.includes('/w/main/documents/triage')) {
+          docFetches += 1;
+          return new Response(
+            JSON.stringify({
+              data: {
+                id: 'd1', slug: 'triage', type: 'agent', title: 'Triage Agent',
+                status: null, parentId: null, frontmatter: { description: 'x' },
+                body: '# Instructions\n\nDo the triage.',
+                createdAt: '2026-01-01', updatedAt: '2026-01-02',
+              },
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+      }),
+    );
+
+    const { queryClient, router } = setup('?wdoc=triage');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText('Triage Agent');
+    const before = docFetches;
+    expect(liveCalls.length).toBeGreaterThan(0);
+
+    act(() => liveCalls.at(-1)!.onEvent({ kind: 'document.updated', documentId: 'd1', actor: 'agent:helper' }));
+
+    expect(screen.queryByText(/updated by/i)).not.toBeInTheDocument();
+    await waitFor(() => expect(docFetches).toBeGreaterThan(before));
+  });
+
+  it('dirty draft + external document.updated → shows banner, does NOT stomp the edit', async () => {
+    liveCalls.length = 0;
+    mockWorkspaceDoc('triage', 'agent');
+    const { queryClient, router } = setup('?wdoc=triage');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText('Triage Agent');
+
+    // Dirty the buffer via the raw editor (deterministic in jsdom).
+    await userEvent.click(screen.getByRole('button', { name: 'More actions' }));
+    await userEvent.click(screen.getByRole('menuitemradio', { name: /Raw markdown/ }));
+    const textarea = await screen.findByRole('textbox');
+    await userEvent.type(textarea, ' MY-UNSAVED-EDIT');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled());
+    expect(liveCalls.length).toBeGreaterThan(0);
+
+    act(() => liveCalls.at(-1)!.onEvent({ kind: 'document.updated', documentId: 'd1', actor: 'agent:helper' }));
+
+    // Banner appears, and the unsaved edit is NOT stomped: the editor still
+    // shows the typed text AND the buffer stays dirty (Save still enabled).
+    expect(await screen.findByText(/updated by/i)).toBeInTheDocument();
+    expect(screen.getByTestId('raw-md-editor').textContent).toContain('MY-UNSAVED-EDIT');
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
   });
 });

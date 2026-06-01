@@ -38,11 +38,14 @@ import { HeaderTabs, type HeaderTabItem } from './header-tabs.tsx';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '../ui/dialog.tsx';
 import { ResizeHandle } from '../ui/resize-handle.tsx';
 import { useResizableWidth } from '../../lib/use-resizable-width.ts';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   useWorkspaceDocument,
   useUpdateWorkspaceDocument,
   useDeleteWorkspaceDocument,
+  workspaceDocumentsKeys,
 } from '../../lib/api/workspace-documents.ts';
+import { useLiveDocument } from '../../lib/use-live-document.ts';
 import type { Document } from '../../lib/api/documents.ts';
 import { formatApiError } from '../../lib/api/index.ts';
 import { InlineEdit } from '../inline/inline-edit.tsx';
@@ -454,7 +457,18 @@ function WorkspaceSlideoverInner({
   actionsRef: React.MutableRefObject<InnerActions | null>;
 }) {
   const update = useUpdateWorkspaceDocument(wslug);
+  const qc = useQueryClient();
   const { draft, setBody, setFrontmatter, isDirty, reset, diff } = useDocumentDraft(doc);
+
+  // Live external-update awareness (notify-don't-stomp): a clean draft pulls
+  // server truth on a remote document.updated; a DIRTY draft shows a banner and
+  // is NEVER refetched (would overwrite unsaved typing). Deletions always banner.
+  const { externalUpdate, dismiss } = useLiveDocument({
+    wslug,
+    docId: doc.id,
+    isDirty,
+    onRefetch: () => qc.invalidateQueries({ queryKey: workspaceDocumentsKeys.detail(wslug, doc.slug) }),
+  });
 
   const onSave = async () => {
     const { patch, keys } = diff();
@@ -482,15 +496,55 @@ function WorkspaceSlideoverInner({
   actionsRef.current = { save: onSave, discard: reset };
 
   return (
-    <SlideoverBody
-      doc={doc}
-      wslug={wslug}
-      mode={mode}
-      tab={tab}
-      draft={draft}
-      setBody={setBody}
-      setFrontmatter={setFrontmatter}
-    />
+    <div className="flex h-full flex-col">
+      {externalUpdate && (
+        <div
+          role="status"
+          className="mb-2 flex flex-shrink-0 items-center gap-2 rounded border border-border-light bg-card px-3 py-1.5 text-xs text-fg-2"
+        >
+          <span>
+            {externalUpdate.kind === 'deleted'
+              ? 'This document was deleted.'
+              : `Updated by ${externalUpdate.actor ?? 'someone'}.`}
+          </span>
+          <div className="ml-auto flex items-center gap-1.5">
+            {externalUpdate.kind === 'updated' && (
+              <button
+                type="button"
+                className="rounded px-1.5 py-0.5 font-medium text-fg hover:bg-bg"
+                onClick={() => {
+                  dismiss();
+                  reset();
+                  void qc.invalidateQueries({
+                    queryKey: workspaceDocumentsKeys.detail(wslug, doc.slug),
+                  });
+                }}
+              >
+                Reload
+              </button>
+            )}
+            <button
+              type="button"
+              className="rounded px-1.5 py-0.5 text-fg-3 hover:bg-bg hover:text-fg"
+              onClick={dismiss}
+            >
+              Dismiss
+            </button>
+          </div>
+        </div>
+      )}
+      <div className="min-h-0 flex-1">
+        <SlideoverBody
+          doc={doc}
+          wslug={wslug}
+          mode={mode}
+          tab={tab}
+          draft={draft}
+          setBody={setBody}
+          setFrontmatter={setFrontmatter}
+        />
+      </div>
+    </div>
   );
 }
 

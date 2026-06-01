@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
@@ -11,6 +11,16 @@ import {
   RouterProvider,
 } from '@tanstack/react-router';
 import { z } from 'zod';
+
+// Capture the onEvent the live-document hook registers with useEventStream so
+// the tests can fire a synthetic document.updated / document.deleted frame.
+const liveCalls: { onEvent: (e: unknown) => void }[] = [];
+vi.mock('../../lib/api/event-stream.ts', () => ({
+  useEventStream: (_w: string, _filters: unknown, onEvent: (e: unknown) => void) => {
+    liveCalls.push({ onEvent });
+  },
+}));
+
 import { DocumentSlideover } from './document-slideover.tsx';
 
 function setup(initialSearch: string) {
@@ -989,5 +999,96 @@ describe('DocumentSlideover', () => {
         ),
       ).toBe(true);
     });
+  });
+
+  // ---------------------------------------------------------------------
+  // Live external-update banner — notify-don't-stomp (useLiveDocument)
+  // ---------------------------------------------------------------------
+
+  it('clean draft + external document.updated → refetches (no banner)', async () => {
+    liveCalls.length = 0;
+    let docFetches = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>(async (url) => {
+        const u = String(url);
+        if (u.includes('/backlinks')) {
+          return new Response(JSON.stringify({ data: [] }), {
+            status: 200, headers: { 'content-type': 'application/json' },
+          });
+        }
+        if (u.includes('/documents/fix-login') && !u.includes('/comments')) {
+          docFetches += 1;
+          return new Response(
+            JSON.stringify({
+              data: {
+                id: 'd1', slug: 'fix-login', type: 'work_item', title: 'Fix login bug',
+                status: 'todo', parentId: null, frontmatter: {}, body: '# Steps\n\n1. Reproduce',
+                createdAt: '2026-01-01', updatedAt: '2026-01-02',
+              },
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        if (u.includes('/statuses') || u.includes('/fields') || u.includes('/settings/ai-keys')) {
+          return new Response(JSON.stringify({ data: [] }), {
+            status: 200, headers: { 'content-type': 'application/json' },
+          });
+        }
+        if (u.includes('/documents')) {
+          return new Response(JSON.stringify({ data: { data: [], nextCursor: null } }), {
+            status: 200, headers: { 'content-type': 'application/json' },
+          });
+        }
+        return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+      }),
+    );
+
+    const { queryClient, router } = setup('?doc=fix-login');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText('Fix login bug');
+    const before = docFetches;
+    expect(liveCalls.length).toBeGreaterThan(0);
+
+    // Fire an external update for the open doc while the draft is clean.
+    act(() => liveCalls.at(-1)!.onEvent({ kind: 'document.updated', documentId: 'd1', actor: 'agent:helper' }));
+
+    // No banner — the clean draft path refetches instead.
+    expect(screen.queryByText(/updated by/i)).not.toBeInTheDocument();
+    await waitFor(() => expect(docFetches).toBeGreaterThan(before));
+  });
+
+  it('dirty draft + external document.updated → shows banner, does NOT stomp the edit', async () => {
+    liveCalls.length = 0;
+    mockSaveDoc('fix-login', 'work_item');
+    const { queryClient, router } = setup('?doc=fix-login');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText('Fix login bug');
+
+    // Dirty the buffer via the raw editor.
+    await userEvent.click(screen.getByRole('button', { name: /Raw/ }));
+    const textarea = await screen.findByRole('textbox');
+    await userEvent.type(textarea, ' MY-UNSAVED-EDIT');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled());
+    expect(liveCalls.length).toBeGreaterThan(0);
+
+    // External update arrives while dirty.
+    act(() => liveCalls.at(-1)!.onEvent({ kind: 'document.updated', documentId: 'd1', actor: 'agent:helper' }));
+
+    // Banner appears…
+    expect(await screen.findByText(/updated by/i)).toBeInTheDocument();
+    // …and the unsaved edit is NOT stomped: the editor still shows the typed
+    // text AND the buffer stays dirty (Save still enabled — no silent refetch
+    // reset the draft to server truth).
+    expect(screen.getByTestId('raw-md-editor').textContent).toContain('MY-UNSAVED-EDIT');
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
   });
 });
