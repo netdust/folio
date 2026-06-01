@@ -14,7 +14,6 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as WWslugRouteImport } from './routes/w.$wslug'
 import { Route as DevDesignSystemRouteImport } from './routes/dev.design-system'
 import { Route as WWslugIndexRouteImport } from './routes/w.$wslug.index'
-import { Route as WWslugTriggersRouteImport } from './routes/w.$wslug.triggers'
 import { Route as WWslugSettingsRouteImport } from './routes/w.$wslug.settings'
 import { Route as WWslugAgentsRouteImport } from './routes/w.$wslug.agents'
 import { Route as WWslugPPslugRouteImport } from './routes/w.$wslug.p.$pslug'
@@ -46,11 +45,6 @@ const DevDesignSystemRoute = DevDesignSystemRouteImport.update({
 const WWslugIndexRoute = WWslugIndexRouteImport.update({
   id: '/',
   path: '/',
-  getParentRoute: () => WWslugRoute,
-} as any)
-const WWslugTriggersRoute = WWslugTriggersRouteImport.update({
-  id: '/triggers',
-  path: '/triggers',
   getParentRoute: () => WWslugRoute,
 } as any)
 const WWslugSettingsRoute = WWslugSettingsRouteImport.update({
@@ -96,7 +90,6 @@ export interface FileRoutesByFullPath {
   '/w/$wslug': typeof WWslugRouteWithChildren
   '/w/$wslug/agents': typeof WWslugAgentsRoute
   '/w/$wslug/settings': typeof WWslugSettingsRoute
-  '/w/$wslug/triggers': typeof WWslugTriggersRoute
   '/w/$wslug/': typeof WWslugIndexRoute
   '/w/$wslug/p/$pslug': typeof WWslugPPslugRouteWithChildren
   '/w/$wslug/p/$pslug/board': typeof WWslugPPslugBoardRoute
@@ -110,7 +103,6 @@ export interface FileRoutesByTo {
   '/dev/design-system': typeof DevDesignSystemRoute
   '/w/$wslug/agents': typeof WWslugAgentsRoute
   '/w/$wslug/settings': typeof WWslugSettingsRoute
-  '/w/$wslug/triggers': typeof WWslugTriggersRoute
   '/w/$wslug': typeof WWslugIndexRoute
   '/w/$wslug/p/$pslug/board': typeof WWslugPPslugBoardRoute
   '/w/$wslug/p/$pslug/wiki': typeof WWslugPPslugWikiRoute
@@ -125,7 +117,6 @@ export interface FileRoutesById {
   '/w/$wslug': typeof WWslugRouteWithChildren
   '/w/$wslug/agents': typeof WWslugAgentsRoute
   '/w/$wslug/settings': typeof WWslugSettingsRoute
-  '/w/$wslug/triggers': typeof WWslugTriggersRoute
   '/w/$wslug/': typeof WWslugIndexRoute
   '/w/$wslug/p/$pslug': typeof WWslugPPslugRouteWithChildren
   '/w/$wslug/p/$pslug/board': typeof WWslugPPslugBoardRoute
@@ -142,7 +133,6 @@ export interface FileRouteTypes {
     | '/w/$wslug'
     | '/w/$wslug/agents'
     | '/w/$wslug/settings'
-    | '/w/$wslug/triggers'
     | '/w/$wslug/'
     | '/w/$wslug/p/$pslug'
     | '/w/$wslug/p/$pslug/board'
@@ -156,7 +146,6 @@ export interface FileRouteTypes {
     | '/dev/design-system'
     | '/w/$wslug/agents'
     | '/w/$wslug/settings'
-    | '/w/$wslug/triggers'
     | '/w/$wslug'
     | '/w/$wslug/p/$pslug/board'
     | '/w/$wslug/p/$pslug/wiki'
@@ -170,7 +159,6 @@ export interface FileRouteTypes {
     | '/w/$wslug'
     | '/w/$wslug/agents'
     | '/w/$wslug/settings'
-    | '/w/$wslug/triggers'
     | '/w/$wslug/'
     | '/w/$wslug/p/$pslug'
     | '/w/$wslug/p/$pslug/board'
@@ -221,13 +209,6 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/w/$wslug/'
       preLoaderRoute: typeof WWslugIndexRouteImport
-      parentRoute: typeof WWslugRoute
-    }
-    '/w/$wslug/triggers': {
-      id: '/w/$wslug/triggers'
-      path: '/triggers'
-      fullPath: '/w/$wslug/triggers'
-      preLoaderRoute: typeof WWslugTriggersRouteImport
       parentRoute: typeof WWslugRoute
     }
     '/w/$wslug/settings': {
@@ -303,7 +284,6 @@ const WWslugPPslugRouteWithChildren = WWslugPPslugRoute._addFileChildren(
 interface WWslugRouteChildren {
   WWslugAgentsRoute: typeof WWslugAgentsRoute
   WWslugSettingsRoute: typeof WWslugSettingsRoute
-  WWslugTriggersRoute: typeof WWslugTriggersRoute
   WWslugIndexRoute: typeof WWslugIndexRoute
   WWslugPPslugRoute: typeof WWslugPPslugRouteWithChildren
 }
@@ -311,7 +291,6 @@ interface WWslugRouteChildren {
 const WWslugRouteChildren: WWslugRouteChildren = {
   WWslugAgentsRoute: WWslugAgentsRoute,
   WWslugSettingsRoute: WWslugSettingsRoute,
-  WWslugTriggersRoute: WWslugTriggersRoute,
   WWslugIndexRoute: WWslugIndexRoute,
   WWslugPPslugRoute: WWslugPPslugRouteWithChildren,
 }
