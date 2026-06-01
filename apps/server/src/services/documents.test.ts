@@ -926,3 +926,42 @@ test('FIX#3: a placeholder-SHAPED slug with a real (non-seed) title does NOT re-
   expect(updated.title).toBe('Whatever');
   expect(updated.slug).toBe('untitled-5');
 });
+
+test('listDocuments titleQuery matches title substring, case-insensitive', async () => {
+  const { db, seed } = await makeTestApp();
+  const table = await getWorkItemsTable(db, seed.project.id);
+  await createDocument({
+    workspace: seed.workspace,
+    project: seed.project,
+    table,
+    actor: seed.user,
+    token: null,
+    input: {
+      type: 'work_item',
+      title: 'Hosting setup on Combell',
+      body: '',
+      frontmatter: {},
+      status: null,
+    },
+  });
+  await createDocument({
+    workspace: seed.workspace,
+    project: seed.project,
+    table,
+    actor: seed.user,
+    token: null,
+    input: {
+      type: 'work_item',
+      title: 'Homepage hero block',
+      body: '',
+      frontmatter: {},
+      status: null,
+    },
+  });
+
+  const hit = await listDocuments({ projectId: seed.project.id, titleQuery: 'combell' });
+  expect(hit.data.map((d) => d.title)).toEqual(['Hosting setup on Combell']);
+
+  const miss = await listDocuments({ projectId: seed.project.id, titleQuery: 'zzz-nope' });
+  expect(miss.data).toEqual([]);
+});

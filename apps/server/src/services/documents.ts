@@ -177,6 +177,8 @@ export interface ListDocumentsOptions {
   filter?: unknown; // already parsed JSON or undefined
   statusValues?: string[];
   assignee?: string;
+  /** Case-insensitive substring match on documents.title (LIKE). */
+  titleQuery?: string;
   updatedSince?: string;
   staleFor?: string;
   sort?: string;
@@ -252,6 +254,11 @@ export async function listDocuments(
     whereClauses.push(
       sql`json_extract(${documents.frontmatter}, '$.assignee') = ${opts.assignee}`,
     );
+  }
+
+  if (opts.titleQuery && opts.titleQuery.trim().length > 0) {
+    const pattern = `%${opts.titleQuery.trim().replace(/[%_\\]/g, '\\$&')}%`;
+    whereClauses.push(sql`${documents.title} LIKE ${pattern} ESCAPE '\\' COLLATE NOCASE`);
   }
 
   if (opts.updatedSince) {
