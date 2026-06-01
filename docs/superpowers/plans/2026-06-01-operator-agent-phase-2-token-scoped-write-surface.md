@@ -91,6 +91,8 @@
 
 **Note on the scope retarget mechanics:** `requireScope(scope)` (bearer.ts:76) checks `token.scopes.includes(scope)` and **bypasses entirely for session users** (line 81: `if (user && !t) return next()`). So retargeting the guard to `config:write` does NOT break the human UI — sessions pass via membership as before. It only changes which *token* scope is required.
 
+**⚠️ PLAN-CORRECTION (2026-06-01, resolved before dispatch — the Task-3-Step-3f open question is now LOCKED for all route tasks):** Ground-truth of the web client (`apps/web/src/lib/api/client.ts:55` — `delete: (path) => request('DELETE', path)`, NO body) and existing DELETE route tests (no body sent) proves a `zValidator('json', …)` on DELETE would BREAK every existing caller (empty body fails validation). **Decision for ALL route tasks 3-7: DELETE reads the dryRun flag from the QUERY param (`c.req.query('dryRun') === 'true'`), NOT a body schema. POST/PATCH read it from the validated JSON body via `isDryRun(c.req.valid('json'))`.** Do NOT add a `deleteSchema`/`zValidator` to any DELETE route. The dryRun-delete test therefore sends the flag as `?dryRun=true` in the URL, no body. P2-8 (uniform parse) is preserved: POST/PATCH always via `isDryRun`; DELETE always via the query read — two parse paths, each used consistently across all five routes, documented here.
+
 ---
 
 ## Task 1: Introduce the `config:write` canonical scope
