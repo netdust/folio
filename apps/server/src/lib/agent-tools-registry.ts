@@ -82,6 +82,7 @@ import { assertAgentAllowListWidening, assertAgentToolsWidening } from './agent-
 import { intersectAgentProjects, resolveAgentProjects } from './agent-projects.ts';
 import { registerTool } from './agent-tools.ts';
 import type { ToolContext } from './agent-tools.ts';
+import { registerFolioApiTools } from './folio-api-tool.ts';
 import {
   type CommentKind,
   type CommentVisibility,
@@ -1865,4 +1866,10 @@ export function registerRealTools(): void {
       return textResult({ run_id: document.id, status: 'planning' });
     },
   });
+
+  // Phase-op-3: the operator agent's general REST bridge. folio_api_get (reads,
+  // GET-forced) registers here; the write tool folio_api is added in Task 5.
+  // Registered last, and in its own module, to keep this file's tool defs and
+  // the bridge's mint/dispatch core (folio-api-tool.ts) separate.
+  registerFolioApiTools();
 } // end registerRealTools

@@ -3,12 +3,19 @@ import { eq } from 'drizzle-orm';
 import { db } from '../db/client.ts';
 import { apiTokens, type ApiToken } from '../db/schema.ts';
 import { makeTestApp } from '../test/harness.ts';
+import { executeTool } from './agent-tools.ts';
+import { registerRealTools } from './agent-tools-registry.ts';
 import {
   classifyRisk,
   dispatchAsCaller,
   sweepOrphanedFolioApiTokens,
   validateApiPath,
 } from './folio-api-tool.ts';
+
+// folio_api_get is registered via registerRealTools() → registerFolioApiTools().
+// Idempotent-guarded, so calling at module load is safe even if a sibling test
+// already triggered it.
+registerRealTools();
 
 describe('validateApiPath (P3-5)', () => {
   test('accepts a relative API path', () => {
@@ -250,5 +257,89 @@ describe('sweepOrphanedFolioApiTokens (P3-3 backstop)', () => {
       .from(apiTokens)
       .where(eq(apiTokens.id, 'pat1'));
     expect(remaining.length).toBe(1);
+  });
+});
+
+describe('folio_api_get tool (P3-4/6)', () => {
+  test('folio_api_get reads a route, returns parsed body (P3-6)', async () => {
+    const { seed } = await makeTestApp();
+    const tok = callerToken({
+      workspaceId: seed.workspace.id,
+      scopes: ['documents:read'],
+      createdBy: seed.user.id,
+    });
+    const out = (await executeTool(
+      tok,
+      'agent:op',
+      'folio_api_get',
+      { path: `/api/v1/w/${seed.workspace.slug}/p/${seed.project.slug}/tables` },
+      undefined,
+      { callerScopes: tok.scopes },
+    )) as { status: number; body: unknown };
+    expect(out.status).toBe(200);
+  });
+
+  test('folio_api_get schema rejects a method field (P3-6 — GET-forced, no method)', async () => {
+    const { seed } = await makeTestApp();
+    const tok = callerToken({
+      workspaceId: seed.workspace.id,
+      scopes: ['documents:read'],
+      createdBy: seed.user.id,
+    });
+    // .strict() schema → an extra `method` key is rejected by Zod inside executeTool
+    await expect(
+      executeTool(
+        tok,
+        'agent:op',
+        'folio_api_get',
+        {
+          path: `/api/v1/w/${seed.workspace.slug}/p/${seed.project.slug}/tables`,
+          method: 'POST',
+        },
+        undefined,
+        { callerScopes: tok.scopes },
+      ),
+    ).rejects.toThrow();
+  });
+
+  test('folio_api_get is gated by the token read scope — no documents:read → forbidden (P3-4)', async () => {
+    const { seed } = await makeTestApp();
+    const tok = callerToken({
+      workspaceId: seed.workspace.id,
+      scopes: [], // no documents:read
+      createdBy: seed.user.id,
+    });
+    await expect(
+      executeTool(
+        tok,
+        'agent:op',
+        'folio_api_get',
+        { path: `/api/v1/w/${seed.workspace.slug}/p/${seed.project.slug}/tables` },
+        undefined,
+        { callerScopes: tok.scopes },
+      ),
+    ).rejects.toThrow();
+  });
+
+  test('folio_api_get against ai-keys returns NO encrypted key (P3-4)', async () => {
+    const { seed } = await makeTestApp();
+    const tok = callerToken({
+      workspaceId: seed.workspace.id,
+      scopes: ['documents:read'],
+      createdBy: seed.user.id,
+    });
+    // ai-keys GET is mounted at /settings/:workspaceId/ai-keys under wScope; the
+    // handler strips encryptedKey from every row. Hitting the real handler (200,
+    // keys:[] when none seeded) proves the redaction, not a 404 vacuous pass.
+    const out = (await executeTool(
+      tok,
+      'agent:op',
+      'folio_api_get',
+      { path: `/api/v1/w/${seed.workspace.slug}/settings/${seed.workspace.id}/ai-keys` },
+      undefined,
+      { callerScopes: tok.scopes },
+    )) as { status: number; body: unknown };
+    expect(out.status).toBe(200); // hit the real handler, not a 404
+    expect(JSON.stringify(out)).not.toMatch(/encrypted_?[Kk]ey/);
   });
 });

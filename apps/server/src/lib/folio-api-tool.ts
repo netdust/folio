@@ -25,8 +25,10 @@
 
 import { eq, like } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
+import { z } from 'zod';
 import { db } from '../db/client.ts';
 import { apiTokens, type ApiToken } from '../db/schema.ts';
+import { registerTool, type ToolContext } from './agent-tools.ts';
 import { newApiToken } from './auth.ts';
 
 /**
@@ -185,4 +187,33 @@ export async function sweepOrphanedFolioApiTokens(database = db): Promise<number
     .where(like(apiTokens.name, 'folio_api:%'))
     .returning({ id: apiTokens.id });
   return orphans.length;
+}
+
+/**
+ * Register the operator agent's general REST bridge tools into the shared
+ * tool registry. Called from registerRealTools() in agent-tools-registry.ts
+ * (the explicit-registration seam that breaks the circular import — this file
+ * imports `registerTool` from agent-tools.ts, the registry imports this).
+ *
+ * folio_api_get (this task, P3-4/6): reads any token-scoped route by GET —
+ * method is FORCED to GET (no `method` arg, `.strict()` rejects one), so the
+ * model cannot smuggle a write through the read tool. Gated only by the token's
+ * `documents:read` scope (executeTool checks requiredScope against BOTH the
+ * run's token AND the caller). The write tool `folio_api` (gated, refuse-with-
+ * plan) is registered in Task 5.
+ */
+export function registerFolioApiTools(): void {
+  registerTool({
+    name: 'folio_api_get',
+    description:
+      'Read any Folio resource by GET. path is a relative /api/v1/... path. Read-only — use folio_api for writes.',
+    requiredScope: 'documents:read',
+    schema: z.object({ path: z.string() }).strict(), // P3-6: no method field
+    handler: async (args: { path: string }, ctx: ToolContext) => {
+      const res = await dispatchAsCaller(ctx.token, 'GET', args.path, undefined); // P3-6: GET forced
+      const json = await res.json().catch(() => null);
+      return { status: res.status, body: json };
+    },
+  });
+  // folio_api (write) registered in Task 5.
 }

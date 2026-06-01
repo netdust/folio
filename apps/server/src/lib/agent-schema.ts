@@ -48,6 +48,10 @@ const READ_TOOLS: ReadonlySet<string> = new Set([
   // agent_id, no agents:write needed. Maps to documents:read since the agent
   // row is a document.
   'get_agent_self',
+  // Phase-op-3 — operator REST read bridge. GET-forced, maps to documents:read
+  // so the run's read scope gates it (the write tool folio_api → config:write
+  // lives in CONFIG_WRITE_TOOLS below).
+  'folio_api_get',
 ]);
 const WRITE_TOOLS: ReadonlySet<string> = new Set(['create_document', 'update_document']);
 const DELETE_TOOLS: ReadonlySet<string> = new Set(['delete_document']);

@@ -26,6 +26,11 @@ export const V1_MCP_TOOLS = [
   'update_agent',
   'delete_agent',
   'get_agent_self',
+  // Phase-op-3 — operator REST bridge. folio_api_get reads any token-scoped
+  // route (GET-forced, maps to documents:read); folio_api writes (gated,
+  // refuse-with-plan, maps to config:write — registered server-side in Task 5).
+  'folio_api_get',
+  'folio_api',
 ] as const;
 
 export type McpTool = (typeof V1_MCP_TOOLS)[number];
@@ -61,5 +66,12 @@ export const MCP_TOOL_GROUPS: { label: string; tools: McpTool[] }[] = [
   {
     label: 'Agent lifecycle',
     tools: ['create_agent', 'update_agent', 'delete_agent', 'get_agent_self'],
+  },
+  {
+    // Phase-op-3 — the general REST bridge. Grouped on its own because these are
+    // the operator's universal primitives, not document/agent verbs: folio_api_get
+    // maps to documents:read, folio_api to config:write (see toolsToScopes).
+    label: 'API bridge',
+    tools: ['folio_api_get', 'folio_api'],
   },
 ];

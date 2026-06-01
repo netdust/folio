@@ -65,9 +65,13 @@ test('MCP tools/list returns the v1 tools including comment + agent-lifecycle to
   });
   const body = (await res.json()) as { result: { tools: { name: string }[] } };
   // 12 original + 4 comment tools + 4 agent-lifecycle tools + 5 run-management
-  // tools (D-4) + 1 find_documents tool + 1 describe_workspace tool = 27 total.
-  expect(body.result.tools.length).toBe(27);
+  // tools (D-4) + 1 find_documents tool + 1 describe_workspace tool + 1
+  // folio_api_get (Phase-op-3 T4 reads) = 28 total. folio_api (writes) is NOT
+  // registered until T5, so it does not appear in tools/list yet.
+  expect(body.result.tools.length).toBe(28);
   const names = body.result.tools.map((t) => t.name);
+  expect(names).toContain('folio_api_get');
+  expect(names).not.toContain('folio_api'); // T5 registers the write tool
   expect(names).toContain('find_documents');
   expect(names).toContain('describe_workspace');
   expect(names).toContain('create_comment');
