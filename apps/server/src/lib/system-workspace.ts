@@ -147,6 +147,17 @@ async function ensureSystemPage(
  * The operator AGENT doc is intentionally NOT seeded here: it needs a user
  * actor for its token's `createdBy`, so it is created in `ensureOperatorAgent`
  * at owner-designation (Task 5).
+ *
+ * Two deliberate divergences from the production `POST /workspaces` path:
+ *  - These structure inserts use raw `db.insert` and emit NO events (they do
+ *    NOT go through `txWithEvents` — the every-write-emits-event convergence
+ *    point). This is intentional: bootstrap is a one-time, structure-only boot
+ *    path with no live SSE consumer and no reactor in `__system`, so there is
+ *    nothing to desync. (The operator agent — the one seeded write with a
+ *    potential consumer — DOES emit `document.created`/`agent.created` because
+ *    it goes through `createDocument`.)
+ *  - `__system` gets NO builtin triggers (unlike user workspaces, which call
+ *    `seedBuiltinTriggers`): the system library is not a reacting workspace.
  */
 export async function bootstrapSystemWorkspace(db: DB): Promise<void> {
   const sys = await resolveSystemWorkspace(db);
