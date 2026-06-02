@@ -1232,7 +1232,7 @@ test('I1 regression: a SESSION (human) request to the list still returns ALL age
 
 import { SYSTEM_WORKSPACE_SLUG } from '../lib/system-workspace.ts';
 import { listWorkspaceDocuments as listWorkspaceDocsService } from '../services/documents.ts';
-import { workspaces as realWorkspaces } from '../db/schema.ts';
+import { workspaces as realWorkspaces, memberships } from '../db/schema.ts';
 
 /** Seed the __system workspace + a library agent directly (bypasses bootstrap). */
 async function seedSystemLibraryAgent(workspaceUserId: string, slug: string): Promise<string> {
@@ -1364,6 +1364,44 @@ test('D3: non-member direct GET /w/__system/documents?type=agent is 403 FORBIDDE
   const body = await res.json();
   expect(body.error.code).toBe('FORBIDDEN');
   expect(body.error.message).toBe('not a member');
+});
+
+// Phase D D2-vs-D4 crux — the COUNTERPART to D4's redaction: a `__system`
+// MEMBER (the library curator) listing `__system`'s OWN agents must see the
+// FULL prompt — the request IS for `__system`, so the cross-workspace D4
+// redaction branch is skipped and the curator can read/edit the agent. This
+// pins that the library's own members are NOT redacted against themselves
+// (without it, tightening D4 redaction could silently blind curators).
+test('D2: a __system member listing __system\'s OWN agents sees un-redacted body + system_prompt', async () => {
+  const { app, seed } = await makeTestApp();
+  // seedSystemLibraryAgent creates __system + an agent with a recognizable
+  // non-empty body ('Library operator.') + system_prompt ('You are the
+  // operator.'). Make the seed user a __system member so the direct request
+  // passes the membership gate.
+  const systemId = await seedSystemLibraryAgent(seed.user.id, 'operator');
+  await realDb.insert(memberships).values({
+    workspaceId: systemId,
+    userId: seed.user.id,
+    role: 'member',
+  });
+
+  const res = await app.request(
+    `/api/v1/w/${SYSTEM_WORKSPACE_SLUG}/documents?type=agent`,
+    { headers: { Cookie: seed.sessionCookie } },
+  );
+  expect(res.status).toBe(200);
+  const data = (await res.json()).data as Array<{
+    slug: string;
+    body: string;
+    library?: boolean;
+    frontmatter: Record<string, unknown>;
+  }>;
+  const operator = data.find((d) => d.slug === 'operator');
+  expect(operator).toBeDefined();
+  // Request IS for __system → self-list, NOT a cross-workspace union → D4
+  // redaction does NOT fire. The curator sees the full prompt to edit it.
+  expect(operator?.body).toBe('Library operator.');
+  expect(operator?.frontmatter.system_prompt).toBe('You are the operator.');
 });
 
 // Phase D D4 — the cross-workspace agent listing unions in `__system` library

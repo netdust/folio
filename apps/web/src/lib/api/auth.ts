@@ -46,7 +46,14 @@ export function useLogin() {
   return useMutation({
     mutationFn: (vars: { email: string; password: string }) =>
       client.post<{ user: SessionUser }>('/api/v1/auth/login', vars),
-    onSuccess: (data) => qc.setQueryData(authKeys.me, data),
+    onSuccess: (data) => {
+      // Seed an instant optimistic user for the rest of the app, then
+      // invalidate so the full `me` payload (incl. server-authoritative
+      // `is_system_member`) self-populates — otherwise the flag stays
+      // undefined for up to staleTime (60s) and the System Library entry hides.
+      qc.setQueryData(authKeys.me, data);
+      qc.invalidateQueries({ queryKey: authKeys.me });
+    },
   });
 }
 
@@ -55,7 +62,13 @@ export function useRegister() {
   return useMutation({
     mutationFn: (vars: { email: string; password: string; name: string }) =>
       client.post<{ user: SessionUser }>('/api/v1/auth/register', vars),
-    onSuccess: (data) => qc.setQueryData(authKeys.me, data),
+    onSuccess: (data) => {
+      // See useLogin: seed optimistic user, then invalidate so the full
+      // payload (incl. `is_system_member`) refetches instead of waiting out
+      // staleTime.
+      qc.setQueryData(authKeys.me, data);
+      qc.invalidateQueries({ queryKey: authKeys.me });
+    },
   });
 }
 
