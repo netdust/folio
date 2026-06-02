@@ -21,6 +21,12 @@ export const agentFrontmatterSchema = z.object({
   ),
   provider: z.enum(['anthropic', 'openai', 'openrouter', 'ollama', 'claude-code']),
   tools: z.array(z.enum([...V1_MCP_TOOLS] as [string, ...string[]])),
+  // Phase B: frontmatter-declared skills, materialized at load by the runner's
+  // loadAgentDefinition (a narrow internal SYSTEM-auth read of the __system Skills
+  // project — NOT a tool). Each entry is a slug of a `page` doc in the __system
+  // `skills` project. Absent/[] ⇒ no skills. Validated as slugs (the same shape
+  // the Skills docs use).
+  skills: z.array(z.string().regex(/^[a-z0-9-]+$/)).optional(),
   // Phase 2.5: project allow-list. `['*']` (default) = all workspace projects.
   // Explicit ids are project uuids (survives rename). Wildcard cannot mix with ids.
   projects: z.array(z.string()).default(['*']).refine(

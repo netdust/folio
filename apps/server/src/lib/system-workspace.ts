@@ -9,6 +9,7 @@ import { createDocument } from '../services/documents.ts';
 import { HTTPError } from './http.ts';
 import {
   FOLIO_SKILL_BODY,
+  FOLIO_SKILL_SLUG,
   OPERATOR_AGENT_TITLE,
   OPERATOR_PROMPT,
   OPERATOR_TOOLS,
@@ -408,6 +409,9 @@ export async function ensureOperatorAgent(
           tools: [...OPERATOR_TOOLS],
           projects: ['*'],
           requires_approval: false,
+          // Phase B: the `folio` skill is MATERIALIZED into the run context at
+          // load (loadAgentDefinition), not read at runtime via get_document.
+          skills: [FOLIO_SKILL_SLUG],
         },
       },
     });

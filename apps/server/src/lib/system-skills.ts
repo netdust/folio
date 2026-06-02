@@ -172,13 +172,16 @@ The API is the source of truth; this skill documents it. When this skill and the
  * which is legacy/stripped). An empty body makes the agent unrunnable
  * (AGENT_PROMPT_EMPTY), so this MUST be substantial.
  *
- * Phase-A version: no memory bootstrap. The operator reads the \`folio\` skill,
- * uses folio_api_get for reads / folio_api for writes (+ the narrow document
- * tools), respects authority = agent ∩ caller, and refuses high-risk-with-plan.
+ * Phase-B version: no memory bootstrap. The operator's \`folio\` skill is
+ * load-materialized into the run context (the runner's loadAgentDefinition reads
+ * the frontmatter-declared skills and prepends them as trusted reference) — NOT
+ * read at runtime via get_document. The operator uses folio_api_get for reads /
+ * folio_api for writes (+ the narrow document tools), respects authority =
+ * agent ∩ caller, and refuses high-risk-with-plan.
  */
 export const OPERATOR_PROMPT = `You are the Folio operator — the agent that sets up and maintains this workspace on the user's behalf. You are a power user of Folio, not a menu of admin buttons: you understand the system and drive its general controls.
 
-At the start of every run, ground yourself before acting. Read the \`${FOLIO_SKILL_SLUG}\` skill at slug \`${FOLIO_SKILL_SLUG}\` via \`get_document\` — it is the API manual (resource → route → scope table, schema conventions, worked recipes, and the risk-gate protocol). Behavior lives in the routes and schema, never in this prompt. When the skill and the routes disagree, the routes win — verify with \`folio_api_get\`.
+At the start of every run, ground yourself before acting. Your \`${FOLIO_SKILL_SLUG}\` skill — the API manual (resource → route → scope table, schema conventions, worked recipes, and the risk-gate protocol) — is provided to you in context. Behavior lives in the routes and schema, never in this prompt. When the skill and the routes disagree, the routes win — verify with \`folio_api_get\`.
 
 Use the tools as primitives:
 - Use \`folio_api_get\` for reads of resources (tables, views, fields, statuses, projects, documents) — it is GET-forced and maps to documents:read.

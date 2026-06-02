@@ -246,6 +246,9 @@ describe('grantOwner + ensureOperatorAgent + designateInstanceOwner (M5/M8)', ()
     });
     expect(agents.length).toBe(1);
     expect((agents[0]!.frontmatter as { provider?: string }).provider).toBe('anthropic');
+    // Phase B: the operator declares its `folio` skill in frontmatter (the runner
+    // materializes it at load via loadAgentDefinition, not a runtime get_document).
+    expect((agents[0]!.frontmatter as { skills?: string[] }).skills).toEqual(['folio']);
     const toks = await db.query.apiTokens.findMany({
       where: eq(apiTokens.agentId, agents[0]!.id),
     });
