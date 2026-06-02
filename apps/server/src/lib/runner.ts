@@ -169,6 +169,13 @@ export interface RunContext {
    * loadContext (see the narrowedToken fold) — it is NOT threaded per-tool.
    */
   callerScopes: string[];
+  /**
+   * Phase C C3 — read from the run frontmatter (`fm.unattended === true`).
+   * True ONLY on a fired (no-human-in-the-loop) run; threaded into executeTool
+   * so the folio_api write handler floors MEDIUM-risk config writes to
+   * refuse-with-plan. Default false for attended runs / pre-C3 rows.
+   */
+  unattended?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -460,6 +467,9 @@ export async function loadContext(runId: string): Promise<RunContext | null> {
     // inheriting the agent's full authority. The caller PROJECT narrowing was
     // already folded into narrowedToken.projectIds above.
     callerScopes: fm.caller_scopes ?? [],
+    // Phase C C3 — fired-path marker, read from the run fm. Default false
+    // (attended) for runs created before C3 or launched by a human.
+    unattended: fm.unattended === true,
   };
 }
 
@@ -900,6 +910,9 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
           // a ctx whose snapshot was inherited from the original run (D6).
           const result = await executeTool(ctx.token, ctx.actor, tc.name, tc.arguments, undefined, {
             callerScopes: ctx.callerScopes,
+            // Phase C C3 — the fired-path marker. Lets the folio_api write
+            // handler floor MEDIUM config writes on an unattended run.
+            unattended: ctx.unattended,
           });
           const resultString = typeof result === 'string' ? result : JSON.stringify(result);
           toolResultMsgs.push({ role: 'tool', tool_use_id: tc.id, content: resultString });

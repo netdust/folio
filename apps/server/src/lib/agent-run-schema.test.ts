@@ -150,6 +150,20 @@ describe('agentRunFrontmatterSchema', () => {
     ).not.toThrow();
   });
 
+  // Phase C C3 — the `unattended` marker rides on a trigger-fired run so the
+  // folio_api write handler can floor MEDIUM-risk config writes (refuse-with-
+  // plan) on the no-human-in-the-loop path. The `.strict()` schema must accept
+  // the optional key.
+  test('accepts unattended:true (C3 fired-path marker)', () => {
+    expect(() =>
+      agentRunFrontmatterSchema.parse({ ...valid, unattended: true }),
+    ).not.toThrow();
+  });
+
+  test('unattended is optional (attended runs omit it)', () => {
+    expect(() => agentRunFrontmatterSchema.parse(valid)).not.toThrow();
+  });
+
   // D10 non-null contract — caller_scopes is REQUIRED for new rows.
   test('caller_scopes is required (missing throws)', () => {
     const { caller_scopes: _omit, ...withoutCallerScopes } = valid;

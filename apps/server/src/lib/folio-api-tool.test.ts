@@ -403,6 +403,60 @@ describe('folio_api write tool (P3-6/7)', () => {
     expect(out.status).toBe(201);
   });
 
+  // Phase C C3 — the unattended (trigger-fired) MEDIUM floor.
+  test('folio_api MEDIUM write REFUSES on an unattended (trigger-fired) run (C3)', async () => {
+    const { seed, db: testDb } = await makeTestApp();
+    const tok = callerToken({
+      workspaceId: seed.workspace.id,
+      scopes: ['config:write', 'documents:read'],
+      createdBy: seed.user.id,
+    });
+    const tablesBefore = (await testDb.query.tables.findMany()).length;
+    const out = (await executeTool(
+      tok,
+      'agent:op',
+      'folio_api',
+      {
+        method: 'POST',
+        path: `/api/v1/w/${seed.workspace.slug}/p/${seed.project.slug}/tables`,
+        body: { name: 'Sprints' },
+      },
+      undefined,
+      // The run-derived second field: a fired run has no human in the loop.
+      { callerScopes: tok.scopes, unattended: true },
+    )) as { refused: boolean; plan: { risk: string; method: string; path: string } };
+    expect(out.refused).toBe(true);
+    expect(out.plan).toBeDefined();
+    expect(out.plan.risk).toBe('medium');
+    expect(out.plan.method).toBe('POST');
+    // No dispatch: the tables count is unchanged (refuse-with-plan, not applied).
+    expect((await testDb.query.tables.findMany()).length).toBe(tablesBefore);
+  });
+
+  test('folio_api MEDIUM write still EXECUTES on an attended run (unattended:false) (C3)', async () => {
+    const { seed } = await makeTestApp();
+    const tok = callerToken({
+      workspaceId: seed.workspace.id,
+      scopes: ['config:write', 'documents:read'],
+      createdBy: seed.user.id,
+    });
+    const out = (await executeTool(
+      tok,
+      'agent:op',
+      'folio_api',
+      {
+        method: 'POST',
+        path: `/api/v1/w/${seed.workspace.slug}/p/${seed.project.slug}/tables`,
+        body: { name: 'Sprints' },
+      },
+      undefined,
+      { callerScopes: tok.scopes, unattended: false },
+    )) as { status?: number; refused?: boolean };
+    // Attended path keeps Phase B MEDIUM behaviour: dispatched + created.
+    expect(out.refused).toBeUndefined();
+    expect(out.status).toBe(201);
+  });
+
   test('folio_api low write (document create) dispatches and succeeds (P3-7)', async () => {
     const { seed } = await makeTestApp();
     // The folio_api write tool itself is gated by config:write at the

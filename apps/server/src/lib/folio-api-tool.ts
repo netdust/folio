@@ -246,6 +246,17 @@ export function registerFolioApiTools(): void {
           plan: { risk: tier, method: args.method, path: args.path, body },
         };
       }
+      if (tier === 'medium' && ctx.unattended === true) {
+        // Fired-path MEDIUM floor (C3) — DETERMINISTIC bound on the unattended
+        // injection chain: a trigger-fired run has no human in the loop, so config
+        // writes refuse-with-plan exactly like HIGH. The B10 fence is best-effort
+        // for LOW only. An ATTENDED (human-invoked) run keeps MEDIUM (Phase B).
+        return {
+          refused: true,
+          reason: 'medium-risk config write refused on an unattended (trigger-fired) run; not applied',
+          plan: { risk: tier, method: args.method, path: args.path, body },
+        };
+      }
       const res = await dispatchAsCaller(ctx.token, args.method, args.path, body);
       const json = await res.json().catch(() => null);
       return { status: res.status, body: json };

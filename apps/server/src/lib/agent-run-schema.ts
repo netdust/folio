@@ -79,6 +79,14 @@ export const agentRunFrontmatterSchema = z
     // No migration: the field is JSON in the frontmatter column.
     agent_home_workspace_id: z.string().optional(),
 
+    // Phase C C3 — set ONLY on a FRESH trigger-fired run (no human in the loop
+    // at invocation). The folio_api write handler reads this to FLOOR
+    // MEDIUM-risk config writes to refuse-with-plan on the unattended path,
+    // exactly like HIGH. Derived server-side at createRun from (triggerId set
+    // AND no resumeOf) — NEVER client-supplied. Omitted entirely (not false)
+    // for attended runs so the `.strict()` optional holds (mirror resume_of).
+    unattended: z.boolean().optional(),
+
     provider: providerSchema,
     model: z.string().default(''),
     system_prompt: z.string(),

@@ -221,6 +221,14 @@ export async function createRun(
     // routes a planning row with this set to `runAgentResume`. Omitted entirely
     // (not null) for fresh runs so the `.strict()` schema's optional holds.
     ...(input.resumeOf !== undefined ? { resume_of: input.resumeOf } : {}),
+    // Phase C C3 — `unattended` floor marker. Set ONLY on a FRESH trigger fire
+    // (triggerId set AND no resumeOf): no human is in the loop at invocation, so
+    // the folio_api write handler refuses MEDIUM config writes (refuse-with-plan,
+    // like HIGH). Derived from triggerId/resumeOf, NOT firedBy (free-form). A
+    // direct human run-launch passes triggerId:null → attended; a resume is a
+    // continuation of a human-approved run → attended. Omitted (not false) when
+    // attended so the `.strict()` optional holds (mirror resume_of above).
+    ...(input.triggerId != null && input.resumeOf == null ? { unattended: true } : {}),
   };
 
   // Schema-validate before insert so a misconfigured agent (or a future

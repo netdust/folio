@@ -39,6 +39,11 @@ export interface ToolContext {
    *  run's effective authority is agent ∩ caller. (Project narrowing now lives
    *  in the centrally-narrowed `token.projectIds` from loadContext, not here.) */
   callerScopes: string[];
+  /** Phase C C3 — second run-derived field on the gate: true ONLY on a fired
+   *  (no-human-in-the-loop) run. The folio_api write handler reads it to floor
+   *  MEDIUM-risk config writes to refuse-with-plan. Undefined on non-run
+   *  callers (MCP/human) → treated as attended. */
+  unattended?: boolean;
 }
 
 export interface ToolDef<TArgs = unknown, TOut = unknown> {
@@ -134,7 +139,7 @@ export async function executeTool(
   name: string,
   args: unknown,
   tx?: DBOrTx,
-  caller?: { callerScopes: string[] },
+  caller?: { callerScopes: string[]; unattended?: boolean },
 ): Promise<unknown> {
   const def = registry.get(name);
   if (!def) throw new Error(`method not found: ${name}`);
@@ -187,6 +192,9 @@ export async function executeTool(
     actor,
     tx,
     callerScopes,
+    // Phase C C3 — flow the run-derived fired marker into ToolContext. Undefined
+    // on non-run (MCP/human) callers → the folio_api handler treats it attended.
+    unattended: caller?.unattended,
   });
 }
 
