@@ -48,12 +48,25 @@ test.afterAll(() => {
 });
 
 // A rail row scoped by its visible label. rail-tree testids (item/menu/plus)
-// repeat per row, so we always scope through the row's <li>.
+// repeat per row AND a row's <li> CONTAINS its expanded children's items, so we
+// scope to the row's own <div class="group/row">, which holds only this row's
+// item/menu/plus as direct descendants. Exact text avoids "Alpha" matching
+// "Alpha Renamed".
 function railRow(page: Page, label: string): Locator {
   return page
-    .locator('li')
-    .filter({ has: page.getByTestId('rail-tree-item').filter({ hasText: label }) })
+    .locator('div.group\\/row')
+    .filter({ has: page.getByTestId('rail-tree-item').getByText(label, { exact: true }) })
     .first();
+}
+
+// A column-header sort button. Its accessible name is the column label TEXT
+// rendered UPPERCASE (CSS `uppercase` → "TITLE") and may carry a trailing sort
+// arrow ("UPDATED ↓"), so we match case-insensitively, anchored to the start.
+// Scope to table-scroll so it never collides with the filter popover's
+// same-named picks or with cells.
+function sortHeader(page: Page, label: string): Locator {
+  const re = new RegExp(`^${label}`, 'i');
+  return page.getByTestId('table-scroll').getByRole('button', { name: re });
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -94,23 +107,27 @@ test.describe('Rail rows', () => {
     });
 
     await test.step('project: double-click rename commits on Enter', async () => {
-      const row = railRow(page, 'Alpha');
-      await row.getByTestId('rail-tree-item').dblclick();
-      const input = row.getByTestId('rail-tree-rename-input');
+      // Double-click the item element itself (its onDoubleClick opens rename).
+      await railRow(page, 'Alpha').getByTestId('rail-tree-item').dblclick();
+      const input = page.getByTestId('rail-tree-rename-input');
       await expect(input).toBeVisible();
       await input.fill('Alpha Renamed');
       await shot(page, 'rail-project-rename-editing');
       await input.press('Enter');
-      await expect(railRow(page, 'Alpha Renamed').getByTestId('rail-tree-item')).toBeVisible();
+      await expect(
+        page.getByTestId('rail-tree-item').getByText('Alpha Renamed', { exact: true }),
+      ).toBeVisible();
     });
 
     await test.step('project: rename Escape cancels', async () => {
-      const row = railRow(page, 'Alpha Renamed');
-      await row.getByTestId('rail-tree-item').dblclick();
-      const input = row.getByTestId('rail-tree-rename-input');
+      await railRow(page, 'Alpha Renamed').getByTestId('rail-tree-item').dblclick();
+      const input = page.getByTestId('rail-tree-rename-input');
+      await expect(input).toBeVisible();
       await input.fill('Should Not Stick');
       await input.press('Escape');
-      await expect(railRow(page, 'Alpha Renamed').getByTestId('rail-tree-item')).toBeVisible();
+      await expect(
+        page.getByTestId('rail-tree-item').getByText('Alpha Renamed', { exact: true }),
+      ).toBeVisible();
       await shot(page, 'rail-project-rename-escape');
     });
 
@@ -125,7 +142,7 @@ test.describe('Rail rows', () => {
 
     await test.step('table: ⋯ menu opens with Rename + Delete', async () => {
       // The default work-items table renders as a row under the project.
-      const tableRow = railRow(page, 'Work items');
+      const tableRow = railRow(page, 'Work Items');
       if (await tableRow.count()) {
         await tableRow.hover();
         await tableRow.getByTestId('rail-tree-menu').click();
@@ -141,7 +158,7 @@ test.describe('Rail rows', () => {
     });
 
     await test.step('view: + on table opens New view sheet', async () => {
-      const tableRow = railRow(page, 'Work items');
+      const tableRow = railRow(page, 'Work Items');
       if (await tableRow.count()) {
         await tableRow.hover();
         await tableRow.getByRole('button', { name: 'New view' }).click();
@@ -171,7 +188,7 @@ test.describe('Table column + row ops', () => {
     await expect(page.getByRole('button', { name: /Edit title: Alpha task/ })).toBeVisible();
 
     await test.step('header: click cycles sort asc → desc → none', async () => {
-      const title = page.getByRole('button', { name: /^Sort by Title/ });
+      const title = sortHeader(page, 'Title');
       await title.click();
       await expect(page).toHaveURL(/[?&]sort=title/);
       await expect(page).toHaveURL(/[?&]dir=asc/);
@@ -188,9 +205,14 @@ test.describe('Table column + row ops', () => {
       await page.getByRole('button', { name: 'Columns' }).click();
       const toggle = page.getByRole('checkbox', { name: /Toggle Priority/ });
       await expect(toggle).toBeVisible();
-      await toggle.uncheck();
+      // The checkbox sits inside a <label>; Playwright's uncheck() auto-retry
+      // double-fires through the label. A forced click toggles cleanly. Assert
+      // by the column actually disappearing rather than checkbox state.
+      await toggle.click({ force: true });
+      await expect(sortHeader(page, 'Priority')).toHaveCount(0);
       await shot(page, 'table-column-hidden');
-      await toggle.check();
+      await toggle.click({ force: true });
+      await expect(sortHeader(page, 'Priority')).toBeVisible();
       await page.keyboard.press('Escape');
     });
 
@@ -202,7 +224,7 @@ test.describe('Table column + row ops', () => {
       await page.locator('#add-col-options').fill('lead, won, lost');
       await shot(page, 'table-add-column-form');
       await page.getByRole('button', { name: 'Create' }).click();
-      await expect(page.getByRole('button', { name: /^Sort by Stage/ })).toBeVisible();
+      await expect(sortHeader(page, 'Stage')).toBeVisible();
       await shot(page, 'table-add-column-created');
     });
 
@@ -214,7 +236,7 @@ test.describe('Table column + row ops', () => {
       const input = page.getByRole('textbox', { name: /Rename column/ });
       await input.fill('Pipeline Stage');
       await input.press('Enter');
-      await expect(page.getByRole('button', { name: /^Sort by Pipeline Stage/ })).toBeVisible();
+      await expect(sortHeader(page, 'Pipeline Stage')).toBeVisible();
       await shot(page, 'table-column-renamed');
     });
 
@@ -223,11 +245,13 @@ test.describe('Table column + row ops', () => {
       await header.hover();
       await header.getByRole('button', { name: 'Column actions' }).click();
       await page.getByRole('menuitem', { name: 'Hide column' }).click();
-      await expect(page.getByRole('button', { name: /^Sort by Pipeline Stage/ })).toHaveCount(0);
+      await expect(sortHeader(page, 'Pipeline Stage')).toHaveCount(0);
       await shot(page, 'table-column-menu-hidden');
-      // Restore via picker so Delete step can find it.
+      // Restore via picker so Delete step can find it. Forced click — same
+      // label-wrapped-checkbox reason as the column-picker step above.
       await page.getByRole('button', { name: 'Columns' }).click();
-      await page.getByRole('checkbox', { name: /Toggle Pipeline Stage/ }).check();
+      await page.getByRole('checkbox', { name: /Toggle Pipeline Stage/ }).click({ force: true });
+      await expect(sortHeader(page, 'Pipeline Stage')).toBeVisible();
       await page.keyboard.press('Escape');
     });
 
@@ -239,7 +263,7 @@ test.describe('Table column + row ops', () => {
       await expect(page.getByRole('dialog')).toBeVisible();
       await shot(page, 'table-column-delete-confirm');
       await page.getByRole('button', { name: 'Delete', exact: true }).click();
-      await expect(page.getByRole('button', { name: /^Sort by Pipeline Stage/ })).toHaveCount(0);
+      await expect(sortHeader(page, 'Pipeline Stage')).toHaveCount(0);
     });
 
     await test.step('add row: creates a work item', async () => {
@@ -252,6 +276,11 @@ test.describe('Table column + row ops', () => {
     });
 
     await test.step('inline cell: edit a title', async () => {
+      // Creating a row via add-row opens a ?doc= slideover over the table
+      // (table-view onCreate navigates with the new slug). Close it so the row
+      // cells underneath are clickable.
+      await page.keyboard.press('Escape');
+      await expect(page.getByRole('button', { name: 'Edit title: Bravo task' })).toBeVisible();
       const cell = page.getByRole('button', { name: 'Edit title: Bravo task' });
       await cell.click();
       const input = page.getByRole('textbox', { name: 'Edit title: Bravo task' });
@@ -262,13 +291,14 @@ test.describe('Table column + row ops', () => {
     });
 
     await test.step('header: drag-reorder (degrades to Track B if unstable)', async () => {
-      const before = await page.getByRole('button', { name: /^Sort by / }).allInnerTexts();
-      const source = page.getByRole('button', { name: /^Sort by Title/ });
-      const target = page.getByRole('button', { name: /^Sort by Status/ });
+      const headerCells = () => page.locator('.group\\/header');
+      const before = await headerCells().allInnerTexts();
+      const source = sortHeader(page, 'Title');
+      const target = sortHeader(page, 'Status');
       try {
         await source.dragTo(target);
         await page.waitForTimeout(300);
-        const after = await page.getByRole('button', { name: /^Sort by / }).allInnerTexts();
+        const after = await headerCells().allInnerTexts();
         if (JSON.stringify(before) === JSON.stringify(after)) {
           note(
             'Table: column drag-reorder did not change column order under headless Playwright — verify drag-to-reorder manually.',
@@ -296,37 +326,47 @@ test.describe('Filters + Kanban', () => {
 
     // The filter-add trigger is the ChipAdd button inside the filter bar.
     const addFilter = () => page.getByTestId('filter-bar').getByRole('button').last();
+    // Filter-add is a Radix popover → role="dialog". Scoping picks to it avoids
+    // colliding with same-named column-header sort buttons (Status, Priority…).
+    const filterPopover = () => page.getByRole('dialog');
 
     await test.step('filter: add Status', async () => {
       await addFilter().click();
-      await page.getByRole('button', { name: 'Status' }).click();
-      await page
-        .getByRole('button', { name: /To ?do|Todo|todo/i })
-        .first()
+      await filterPopover()
+        .getByRole('button', { name: /^Status/ })
         .click();
+      await filterPopover().getByRole('button').first().click();
       await expect(page).toHaveURL(/[?&]status=/);
       await shot(page, 'filter-status');
     });
 
     await test.step('filter: add Priority', async () => {
       await addFilter().click();
-      await page.getByRole('button', { name: 'Priority' }).click();
-      await page.getByRole('button', { name: 'high', exact: true }).click();
+      await filterPopover()
+        .getByRole('button', { name: /^Priority/ })
+        .click();
+      await filterPopover().getByRole('button', { name: 'high', exact: true }).click();
       await expect(page).toHaveURL(/[?&]priority=high/);
       await shot(page, 'filter-priority');
     });
 
     await test.step('filter: add Labels', async () => {
       await addFilter().click();
-      await page.getByRole('button', { name: 'Labels' }).click();
-      await page.getByRole('button', { name: 'bug', exact: true }).click();
-      await expect(page).toHaveURL(/[?&]labels=bug/);
+      await filterPopover()
+        .getByRole('button', { name: /^Labels/ })
+        .click();
+      await filterPopover().getByRole('button', { name: 'bug', exact: true }).click();
+      // labels is array-encoded in the URL: labels=["bug"] (URL-escaped), so
+      // assert the param is present + mentions bug rather than `labels=bug`.
+      await expect(page).toHaveURL(/[?&]labels=.*bug/);
       await shot(page, 'filter-labels');
     });
 
     await test.step('filter: add Assignee (free text)', async () => {
       await addFilter().click();
-      await page.getByRole('button', { name: 'Assignee' }).click();
+      await filterPopover()
+        .getByRole('button', { name: /^Assignee/ })
+        .click();
       await page.getByPlaceholder('user@example.com').fill('a@folio.test');
       await page.getByPlaceholder('user@example.com').press('Enter');
       await expect(page).toHaveURL(/[?&]assignee=/);
@@ -335,9 +375,16 @@ test.describe('Filters + Kanban', () => {
 
     await test.step('filter: add Updated since (date)', async () => {
       await addFilter().click();
-      await page.getByRole('button', { name: 'Updated since' }).click();
+      await filterPopover()
+        .getByRole('button', { name: /^Updated since/ })
+        .click();
       await page.getByPlaceholder('YYYY-MM-DD').fill('2026-01-01');
-      await page.getByPlaceholder('YYYY-MM-DD').press('Enter');
+      // Headless Chrome does NOT submit a single-field form on Enter for an
+      // <input type=date> (it does for text). Submit the form explicitly.
+      await page.evaluate(() => {
+        const i = document.querySelector('input[type=date]') as HTMLInputElement | null;
+        i?.form?.requestSubmit();
+      });
       await expect(page).toHaveURL(/[?&]updated_since=/);
       await shot(page, 'filter-updated-since');
     });
@@ -354,29 +401,36 @@ test.describe('Filters + Kanban', () => {
       await shot(page, 'kanban-board');
     });
 
+    // Group/Sort menuitems live in a Radix popover (role=dialog). Both menus
+    // contain a "Status"/"Title" item, so scope picks to the open popover.
+    const popover = () => page.getByRole('dialog');
+
     await test.step('kanban: group-by dropdown changes grouping', async () => {
       await page.getByRole('button', { name: /^Group:/ }).click();
-      await page.getByRole('menuitem', { name: 'Priority' }).click();
+      await popover().getByRole('menuitem', { name: 'Priority' }).click();
       await expect(page.getByRole('button', { name: /^Group:.*Priority/ })).toBeVisible();
       await shot(page, 'kanban-group-by');
     });
 
     await test.step('kanban: sort dropdown + direction toggle', async () => {
       await page.getByRole('button', { name: /^Sort:/ }).click();
-      await page.getByRole('menuitem', { name: 'Title' }).click();
+      await popover().getByRole('menuitem', { name: 'Title' }).click();
       await expect(page.getByRole('button', { name: /^Sort:.*Title ↑/ })).toBeVisible();
       await shot(page, 'kanban-sort-asc');
       // Re-pick Title to toggle direction.
       await page.getByRole('button', { name: /^Sort:/ }).click();
-      await page.getByRole('menuitem', { name: 'Title' }).click();
+      await popover().getByRole('menuitem', { name: 'Title' }).click();
       await expect(page.getByRole('button', { name: /^Sort:.*Title ↓/ })).toBeVisible();
       await shot(page, 'kanban-sort-desc');
     });
 
     await test.step('kanban: card drag (degrades to Track B if unstable)', async () => {
-      // Group back by status so there are multiple destination columns.
+      // Group back by status so there are multiple destination columns. Close
+      // any lingering popover first, then pick Status from the freshly-opened
+      // group menu (scoped to the last/visible dialog to avoid a stale one).
+      await page.keyboard.press('Escape');
       await page.getByRole('button', { name: /^Group:/ }).click();
-      await page.getByRole('menuitem', { name: 'Status' }).click();
+      await popover().last().getByRole('menuitem', { name: 'Status', exact: true }).click();
       note(
         'Kanban: card drag-between-columns is a headless-fragile pointer interaction — verify a card drag persists its new column manually.',
       );
@@ -400,13 +454,13 @@ test.describe('Views + Cmd-K', () => {
     await test.step('view: ?view= hydrates a saved filter', async () => {
       // Add a status filter, save it as a view, then assert reload hydrates it.
       await page.getByTestId('filter-bar').getByRole('button').last().click();
-      await page.getByRole('button', { name: 'Status' }).click();
       await page
-        .getByRole('button', { name: /To ?do|Todo|todo/i })
-        .first()
+        .getByRole('dialog')
+        .getByRole('button', { name: /^Status/ })
         .click();
+      await page.getByRole('dialog').getByRole('button').first().click();
       await expect(page).toHaveURL(/[?&]status=/);
-      const tableRow = railRow(page, 'Work items');
+      const tableRow = railRow(page, 'Work Items');
       if (await tableRow.count()) {
         await tableRow.hover();
         await tableRow.getByRole('button', { name: 'New view' }).click();
@@ -422,7 +476,7 @@ test.describe('Views + Cmd-K', () => {
     });
 
     await test.step('cmd-k: opens with Meta+K', async () => {
-      await page.keyboard.press('Meta+k');
+      await page.keyboard.press('Control+k');
       await expect(page.getByPlaceholder('Type a command…')).toBeVisible();
       await shot(page, 'cmdk-open');
     });
@@ -435,7 +489,7 @@ test.describe('Views + Cmd-K', () => {
     });
 
     await test.step('cmd-k: switch workspace', async () => {
-      await page.keyboard.press('Meta+k');
+      await page.keyboard.press('Control+k');
       await page.getByPlaceholder('Type a command…').fill('OtherWS');
       await page.getByRole('option', { name: /OtherWS/ }).click();
       await expect(page).toHaveURL(/\/w\/other-ws/);
@@ -444,7 +498,10 @@ test.describe('Views + Cmd-K', () => {
 
     await test.step('cmd-k: create new work item', async () => {
       await page.goto('/w/cmd-ws/p/one/work-items');
-      await page.keyboard.press('Meta+k');
+      // Wait for the app to mount (the palette's global keydown listener
+      // attaches on mount) before firing Control+k.
+      await expect(page.getByTestId('filter-bar')).toBeVisible();
+      await page.keyboard.press('Control+k');
       await page.getByPlaceholder('Type a command…').fill('New work item');
       await page.getByRole('option', { name: 'New work item' }).click();
       await expect(page).toHaveURL(/[?&]doc=/);

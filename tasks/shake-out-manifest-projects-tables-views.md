@@ -59,11 +59,42 @@ nothing to check by hand.)
 
 ## Status
 
-- [ ] First run executed (PNGs captured)
-- [ ] PNGs eyeballed
-- [ ] Track B items manually verified
-- [ ] Bugs (if any) logged below
+- [x] First run executed — **4/4 surface tests PASS, 37 PNGs captured** (2026-06-02)
+- [ ] PNGs eyeballed (your step)
+- [ ] Track B items manually verified (the 2 drag ops below)
+- [x] Spec-build bugs found + fixed (see Findings)
+
+After the run, Track B prints exactly:
+
+```
+[shakeout] Track B — 2 option(s) need a human eyeball:
+  - Table: column drag-reorder did not change column order under headless Playwright — verify drag-to-reorder manually.
+  - Kanban: card drag-between-columns is a headless-fragile pointer interaction — verify a card drag persists its new column manually.
+```
+
+Both are the *designed* degradations (headless drag is unreliable) — not product bugs.
 
 ## Findings
 
-_(none yet — shakeout not run)_
+### Environment fix (blocker) — e2e registration was 403
+Phase A gated first-user registration behind `FOLIO_ALLOW_BOOTSTRAP_REGISTRATION`.
+The Playwright API server didn't set it, so every test's `signUpFresh` got 403 on
+a wiped DB. **Fixed** in `playwright.config.ts` (test-only flag). This fixes ALL
+e2e specs (smoke included), not just this shakeout.
+
+### Selector lessons baked into the spec (so a re-run stays green)
+- Column-header sort buttons' accessible name is the **UPPERCASE** label text
+  (`TITLE`), not the `title=` tooltip — matched case-insensitively, scoped to
+  `table-scroll`.
+- Filter / kanban popover picks collide by name with column headers → scoped to
+  the Radix popover (`role=dialog`).
+- The default table is named **"Work Items"** (capital I) in the rail.
+- `<input type=date>` does NOT submit on Enter in headless Chrome → submit via
+  `form.requestSubmit()`.
+- Cmd-K uses `ctrlKey` on Linux → `Control+k`, not `Meta+k`.
+- Picker checkboxes are label-wrapped → `click({ force: true })`, assert by the
+  column appearing/disappearing rather than checkbox state.
+- Add-row opens a `?doc=` slideover over the table → Escape before editing a cell.
+
+No product bugs found in the driven options. The only items needing your eyes are
+the 2 drag interactions (Track B) and a scroll through the 37 PNGs.

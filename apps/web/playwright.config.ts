@@ -44,6 +44,10 @@ export default defineConfig({
         DATABASE_URL: `file:${E2E_DB}`,
         // Test-only fixed value. Never use in production.
         FOLIO_MASTER_KEY: '0000000000000000000000000000000000000000000000000000000000000001',
+        // Phase A gated first-user registration behind this flag. The e2e
+        // fixtures register a fresh owner per run against a wiped DB, so the
+        // harness needs the bootstrap path open. Test-only — never on a deploy.
+        FOLIO_ALLOW_BOOTSTRAP_REGISTRATION: 'true',
         NODE_ENV: 'development',
       },
       port: API_PORT,
