@@ -84,7 +84,7 @@ export function SettingsPage({ wslug, initialTab }: { wslug: string; initialTab?
           <h2 className="text-sm font-medium">System Library</h2>
           <p className="mt-0.5 text-xs text-fg-2">
             Curate the shared library agents and triggers that any workspace can
-            run. Opens the {SYSTEM_WORKSPACE_SLUG} workspace's automation page.
+            run. Opens the System Library's automation page.
           </p>
           <Link
             to="/w/$wslug/agents"
