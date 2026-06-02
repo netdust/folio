@@ -2,9 +2,16 @@ import { slugify } from '@folio/shared';
 import { and, eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import type { DB } from '../db/client.ts';
-import { documents, memberships, projects, workspaces } from '../db/schema.ts';
+import { documents, memberships, projects, users, workspaces } from '../db/schema.ts';
+import { createDocument } from '../services/documents.ts';
 import { HTTPError } from './http.ts';
-import { FOLIO_SKILL_BODY, SETUP_PROJECT_REF_BODY } from './system-skills.ts';
+import {
+  FOLIO_SKILL_BODY,
+  OPERATOR_AGENT_TITLE,
+  OPERATOR_PROMPT,
+  OPERATOR_TOOLS,
+  SETUP_PROJECT_REF_BODY,
+} from './system-skills.ts';
 
 /** The single reserved library workspace. Underscore-prefixed slugs are a
  *  reserved namespace users cannot create (the workspace create/rename regex
@@ -159,4 +166,145 @@ export async function bootstrapSystemWorkspace(db: DB): Promise<void> {
     'Set up a project',
     SETUP_PROJECT_REF_BODY,
   );
+}
+
+/**
+ * Resolve the __system workspace by slug for the post-bootstrap steps. Unlike
+ * `resolveSystemWorkspace` (which CREATES + asserts provenance at bootstrap),
+ * this asserts the workspace already exists — the caller bootstraps first. An
+ * absent __system here is a programming error (bootstrap was skipped).
+ */
+async function requireSystemWorkspace(db: DB) {
+  const sys = await db.query.workspaces.findFirst({
+    where: eq(workspaces.slug, SYSTEM_WORKSPACE_SLUG),
+  });
+  if (!sys) {
+    throw new HTTPError(
+      'SYSTEM_WORKSPACE_MISSING',
+      '__system not found; bootstrapSystemWorkspace must run before owner designation',
+      500,
+    );
+  }
+  return sys;
+}
+
+/**
+ * Grant the `__system` workspace `owner` membership to the user with `email`.
+ *
+ * First-wins idempotent (fix #2): if `__system` ALREADY has an `owner`
+ * membership we no-op — a re-grant for a different email is IGNORED, never
+ * replacing the existing owner (the owner is the instance admin; silently
+ * swapping it would be an escalation). Independent of `ensureOperatorAgent`:
+ * neither hides behind the other's early-return, so a re-run after a mid-failure
+ * repairs whichever step is missing.
+ *
+ * Throws INSTANCE_OWNER_NOT_FOUND (404) when no user has that email.
+ */
+export async function grantOwner(db: DB, email: string): Promise<void> {
+  const sys = await requireSystemWorkspace(db);
+
+  const existingOwner = await db.query.memberships.findFirst({
+    where: and(eq(memberships.workspaceId, sys.id), eq(memberships.role, 'owner')),
+  });
+  if (existingOwner) return; // first-wins; do NOT replace
+
+  const user = await db.query.users.findFirst({ where: eq(users.email, email) });
+  if (!user) {
+    throw new HTTPError(
+      'INSTANCE_OWNER_NOT_FOUND',
+      `INSTANCE_OWNER_NOT_FOUND: no user with email ${email}`,
+      404,
+    );
+  }
+
+  await db
+    .insert(memberships)
+    .values({ workspaceId: sys.id, userId: user.id, role: 'owner' });
+}
+
+/**
+ * Seed the operator AGENT into `__system`, idempotently and INDEPENDENTLY of
+ * `grantOwner` (fix #2). The operator is identified by being THE agent document
+ * in `__system` (workspaceId=__system, type='agent') — NOT a magic slug. If one
+ * already exists we no-op.
+ *
+ * Otherwise the agent doc is created via `createDocument`, which (for
+ * type='agent') auto-mints + inserts its bearer token (scopes = tools→scopes,
+ * workspaceId = __system). We do NOT hand-roll the token; the returned plaintext
+ * is discarded (only the hash persists). `actorUserId` supplies the agent doc's
+ * `createdBy` actor — it must be an existing user.
+ */
+export async function ensureOperatorAgent(
+  db: DB,
+  actorUserId: string,
+): Promise<void> {
+  const sys = await requireSystemWorkspace(db);
+
+  const existingAgent = await db.query.documents.findFirst({
+    where: and(eq(documents.workspaceId, sys.id), eq(documents.type, 'agent')),
+  });
+  if (existingAgent) return; // idempotent: the operator already exists
+
+  const actor = await db.query.users.findFirst({ where: eq(users.id, actorUserId) });
+  if (!actor) {
+    throw new HTTPError(
+      'OPERATOR_ACTOR_NOT_FOUND',
+      `no user with id ${actorUserId} to act as the operator's creator`,
+      500,
+    );
+  }
+
+  await createDocument({
+    workspace: sys,
+    project: null, // agent ⇒ project_id IS NULL (createDocument enforces)
+    table: null,
+    actor,
+    token: null,
+    input: {
+      type: 'agent',
+      title: OPERATOR_AGENT_TITLE,
+      body: OPERATOR_PROMPT,
+      status: null,
+      frontmatter: {
+        provider: 'anthropic',
+        model: 'claude-sonnet-4-6', // required for API providers (agentFrontmatterSchema)
+        tools: [...OPERATOR_TOOLS],
+        projects: ['*'],
+        requires_approval: false,
+      },
+    },
+  });
+}
+
+/**
+ * Designate the instance owner: a thin orchestrator over the two independently
+ * idempotent steps. Grants owner, then seeds the operator agent. Because each
+ * step is independently idempotent, a re-run after ANY mid-failure repairs the
+ * missing piece (e.g. owner inserted but agent seed threw → re-run no-ops the
+ * grant and seeds the agent).
+ */
+export async function designateInstanceOwner(db: DB, email: string): Promise<void> {
+  await grantOwner(db, email);
+
+  const owner = await db.query.users.findFirst({ where: eq(users.email, email) });
+  if (!owner) {
+    // grantOwner just succeeded (or no-op'd onto a pre-existing owner). If the
+    // email no longer resolves, the pre-existing owner was designated under a
+    // different email; resolve the actor from the membership instead.
+    const sys = await requireSystemWorkspace(db);
+    const ownerMembership = await db.query.memberships.findFirst({
+      where: and(eq(memberships.workspaceId, sys.id), eq(memberships.role, 'owner')),
+    });
+    if (!ownerMembership) {
+      throw new HTTPError(
+        'INSTANCE_OWNER_NOT_FOUND',
+        `no owner resolvable for ${email}`,
+        404,
+      );
+    }
+    await ensureOperatorAgent(db, ownerMembership.userId);
+    return;
+  }
+
+  await ensureOperatorAgent(db, owner.id);
 }

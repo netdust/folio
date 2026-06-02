@@ -1,11 +1,15 @@
 import { describe, expect, test } from 'bun:test';
 import { and, eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
-import { documents, memberships, projects, workspaces } from '../db/schema.ts';
+import { apiTokens, documents, memberships, projects, users, workspaces } from '../db/schema.ts';
 import { makeTestApp } from '../test/harness.ts';
+import { hashPassword } from './auth.ts';
 import {
   SYSTEM_WORKSPACE_SLUG,
   bootstrapSystemWorkspace,
+  designateInstanceOwner,
+  ensureOperatorAgent,
+  grantOwner,
   isReservedSlug,
 } from './system-workspace.ts';
 
@@ -92,5 +96,82 @@ describe('bootstrapSystemWorkspace (M4/M8)', () => {
     const { db } = await makeTestApp();
     await bootstrapSystemWorkspace(db); // creates it, no membership
     await expect(bootstrapSystemWorkspace(db)).resolves.toBeUndefined(); // clean, no throw
+  });
+});
+
+describe('grantOwner + ensureOperatorAgent + designateInstanceOwner (M5/M8)', () => {
+  test('grantOwner grants __system owner to an existing user, first-wins idempotent (M5)', async () => {
+    const { db } = await makeTestApp();
+    await bootstrapSystemWorkspace(db);
+    const a = nanoid();
+    const b = nanoid();
+    await db
+      .insert(users)
+      .values({ id: a, email: 'a@x.com', name: 'A', passwordHash: await hashPassword('password123') });
+    await db
+      .insert(users)
+      .values({ id: b, email: 'b@x.com', name: 'B', passwordHash: await hashPassword('password123') });
+    await grantOwner(db, 'a@x.com');
+    await grantOwner(db, 'a@x.com'); // re-run same: still one
+    await grantOwner(db, 'b@x.com'); // different user: must NOT replace a
+    const sys = await db.query.workspaces.findFirst({
+      where: eq(workspaces.slug, SYSTEM_WORKSPACE_SLUG),
+    });
+    const owners = await db.query.memberships.findMany({
+      where: and(eq(memberships.workspaceId, sys!.id), eq(memberships.role, 'owner')),
+    });
+    expect(owners.length).toBe(1);
+    expect(owners[0]!.userId).toBe(a); // first-wins
+  });
+
+  test('grantOwner throws a clear error for an unknown email (M5)', async () => {
+    const { db } = await makeTestApp();
+    await bootstrapSystemWorkspace(db);
+    await expect(grantOwner(db, 'nobody@x.com')).rejects.toThrow(/INSTANCE_OWNER_NOT_FOUND/);
+  });
+
+  test('ensureOperatorAgent seeds the operator (with a user actor) idempotently (M8)', async () => {
+    const { db } = await makeTestApp();
+    await bootstrapSystemWorkspace(db);
+    const uid = nanoid();
+    await db
+      .insert(users)
+      .values({ id: uid, email: 'o@x.com', name: 'O', passwordHash: await hashPassword('password123') });
+    await ensureOperatorAgent(db, uid);
+    await ensureOperatorAgent(db, uid); // re-run: still ONE agent + ONE token
+    const sys = await db.query.workspaces.findFirst({
+      where: eq(workspaces.slug, SYSTEM_WORKSPACE_SLUG),
+    });
+    const agents = await db.query.documents.findMany({
+      where: and(eq(documents.workspaceId, sys!.id), eq(documents.type, 'agent')),
+    });
+    expect(agents.length).toBe(1);
+    expect((agents[0]!.frontmatter as { provider?: string }).provider).toBe('anthropic');
+    const toks = await db.query.apiTokens.findMany({
+      where: eq(apiTokens.agentId, agents[0]!.id),
+    });
+    expect(toks.length).toBe(1);
+  });
+
+  test('a failed agent seed is RECOVERED on the next designate run (fix #2)', async () => {
+    const { db } = await makeTestApp();
+    await bootstrapSystemWorkspace(db);
+    const uid = nanoid();
+    await db
+      .insert(users)
+      .values({ id: uid, email: 'r@x.com', name: 'R', passwordHash: await hashPassword('password123') });
+    await grantOwner(db, 'r@x.com'); // owner inserted, agent NOT yet
+    const sys = await db.query.workspaces.findFirst({
+      where: eq(workspaces.slug, SYSTEM_WORKSPACE_SLUG),
+    });
+    let agent = await db.query.documents.findFirst({
+      where: and(eq(documents.workspaceId, sys!.id), eq(documents.type, 'agent')),
+    });
+    expect(agent).toBeUndefined();
+    await designateInstanceOwner(db, 'r@x.com'); // re-run repairs: grantOwner no-ops, ensureOperatorAgent seeds
+    agent = await db.query.documents.findFirst({
+      where: and(eq(documents.workspaceId, sys!.id), eq(documents.type, 'agent')),
+    });
+    expect(agent).toBeDefined();
   });
 });
