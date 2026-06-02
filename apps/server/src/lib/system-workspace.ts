@@ -103,6 +103,11 @@ async function ensureSystemPage(
   title: string,
   body: string,
 ): Promise<void> {
+  // Idempotency keys on title (not the DB unique column slug). Safe for the
+  // seeded set: the two fixed titles slugify to distinct slugs in distinct
+  // projects, so title-uniqueness implies slug-uniqueness here. A future caller
+  // passing two titles that slugify identically into one project would miss this
+  // guard and hit the (project_id, slug) UNIQUE on insert — fail-loud, not silent.
   const existing = await db.query.documents.findFirst({
     where: and(
       eq(documents.workspaceId, workspaceId),
