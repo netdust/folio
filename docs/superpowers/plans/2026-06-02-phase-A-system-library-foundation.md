@@ -51,7 +51,7 @@
 5. **M5 → one idempotent owner-designation path that works on any install age.** A `designateInstanceOwner` operation (CLI/boot): if `FOLIO_INSTANCE_OWNER=<email>` is set and that user exists and `__system` has no `owner` membership yet, grant them `__system` owner. Idempotent: a no-op if `__system` already has an owner. Works on fresh AND existing installs (existing-install promote = the same path). A test: existing install (users present, `__system` has no member), set `FOLIO_INSTANCE_OWNER` to an existing email, run → that user is `__system` owner; re-run → still exactly one owner (no double).
 6. **M6 → `__system` content is membership-gated like any workspace.** No special exposure: the generic document/list routes already require workspace membership via `resolveWorkspace` + `requireResource`/session — a non-member of `__system` gets the standard 403/empty. Phase A adds NO read path that bypasses membership (the definitional skill-load exemption is Phase B, explicitly NOT in Phase A). A test: a user who is NOT a `__system` member cannot GET a `__system` document (403/404 per the existing membership gate).
 7. **M7 → workspace create stays session-only; agents cannot create `__system`.** Confirm (no code change expected, but a test) that `POST /workspaces` is `requireSessionUser` (agent bearers rejected), and that `folio_api` (config:write) cannot reach workspace-create (it's not under the `config:write` routes — workspace create/rename/delete are session-only per the Phase-2 decision). A test: an agent bearer POSTing `/workspaces` with slug `__system` is rejected by `requireSessionUser` (401/403), never reaching the slug check.
-8. **M8 → bootstrap + seed are idempotent.** `bootstrapSystemWorkspace` creates `__system` + `Skills`/`Reference` + the operator agent + skill/ref docs ONLY if absent (per-entity `WHERE NOT EXISTS` / findFirst guards), and `designateInstanceOwner` is a no-op if an owner exists. A test: run bootstrap twice → exactly one `__system`, one operator agent, one of each seeded doc, one owner.
+8. **M8 → bootstrap + seed are idempotent, backed by the slug UNIQUE constraint.** `bootstrapSystemWorkspace` creates `__system` (relying on the `workspaces.slug` UNIQUE constraint as the real backstop, not just a findFirst guard) + `Skills`/`Reference` + skill/ref docs ONLY if absent. The operator agent + the owner grant are each INDEPENDENTLY idempotent (`ensureOperatorAgent` / `grantOwner`) so a re-run after a mid-failure repairs the missing piece (they are NOT nested behind one early-return — see Task 5). A test: run bootstrap twice → exactly one `__system`, one of each seeded doc, two projects; run designate twice → one owner, one operator agent, one token.
 
 ### Out of scope (explicit deferrals)
 
@@ -74,7 +74,7 @@
 
 | File | Responsibility | Change |
 |---|---|---|
-| `apps/server/src/lib/system-workspace.ts` | NEW — `SYSTEM_WORKSPACE_SLUG`, `isReservedSlug(slug)`, `bootstrapSystemWorkspace(db)` (create `__system` + `Skills`/`Reference` projects + seed operator agent + skill/ref docs, idempotent), `designateInstanceOwner(db, email)` (idempotent owner grant). | Create |
+| `apps/server/src/lib/system-workspace.ts` | NEW — `SYSTEM_WORKSPACE_SLUG`, `isReservedSlug(slug)`, `bootstrapSystemWorkspace(db)` (create `__system` + `Skills`/`Reference` projects + skill/ref content docs, idempotent, provenance-asserting, grants NO membership), `grantOwner(db, email)` (idempotent owner grant), `ensureOperatorAgent(db, actorUserId)` (idempotent agent seed), `designateInstanceOwner(db, email)` (thin: grantOwner + ensureOperatorAgent). | Create |
 | `apps/server/src/lib/system-skills.ts` | NEW — the `folio` skill body + the reference-doc bodies as exported string constants (the content seeded into `__system`). Keeps content out of the bootstrap logic. | Create |
 | `apps/server/src/routes/workspaces.ts` | Add `isReservedSlug` reject to CREATE (line ~62) + RENAME (PATCH, line ~100). | Modify |
 | `apps/server/src/routes/auth.ts` | Gate `POST /register` (M1): first-user-becomes-owner only behind `FOLIO_ALLOW_BOOTSTRAP_REGISTRATION`; otherwise reject first registration with the FOLIO_INSTANCE_OWNER hint. | Modify |
@@ -221,7 +221,15 @@ export function assertSlugAllowed(slug: string): void {
 }
 ```
 
-Call `assertSlugAllowed(explicit)` in the CREATE handler right after reading `explicit` (before the uniqueness check), and `assertSlugAllowed(explicit)` in the PATCH handler the same way. Only call it when an explicit slug is provided (auto-slugify never produces underscores).
+**Assert on the FINAL resolved slug, BOTH branches (fix #1).** Do NOT guard only the explicit-slug path. In the CREATE handler, after `slug` is resolved — whether from `explicit` OR from `slugify(name)`/`slugUniqueInWorkspaces` — call `assertSlugAllowed(slug)` on that final value, before the insert. Same in the PATCH handler on its final resolved slug. Rationale: relying on "auto-slugify never produces an underscore" is an unverified invariant resting on the current `slugify` impl; asserting the final slug makes the reserved-namespace guarantee independent of slugify's behavior. (Verified for the plan: `slugify` does `.replace(/[^a-z0-9]+/g, '-')`, so it currently can't emit `_` — but the guard must not DEPEND on that; assert the final slug regardless.)
+
+```typescript
+// CREATE — after `slug` is fully resolved (explicit or slugified), before insert:
+assertSlugAllowed(slug);
+// PATCH — after the rename target slug is resolved, before update:
+assertSlugAllowed(slug);
+```
+Add a test that a workspace whose NAME slugifies to something starting with `_` (if ever possible) is rejected — OR, since slugify can't produce that today, assert the final-slug guard via the unit test on `assertSlugAllowed` directly (Step 1's note) so the both-branches guarantee is pinned even though the regex/ slugify currently block the input.
 
 - [ ] **Step 4: Run to verify pass + tsc** — PASS + clean.
 
@@ -246,7 +254,8 @@ git commit -m "phase-A: reject reserved __ slugs on workspace create + rename (M
 
 ```typescript
 import { describe, expect, test } from 'bun:test';
-import { FOLIO_SKILL_SLUG, FOLIO_SKILL_BODY, OPERATOR_AGENT_SLUG, OPERATOR_PROMPT, SETUP_PROJECT_REF_BODY } from './system-skills.ts';
+import { FOLIO_SKILL_SLUG, FOLIO_SKILL_BODY, OPERATOR_AGENT_TITLE, OPERATOR_PROMPT, OPERATOR_TOOLS, SETUP_PROJECT_REF_BODY } from './system-skills.ts';
+import { V1_MCP_TOOLS } from '@folio/shared';
 
 describe('system skill + reference content', () => {
   test('the folio skill body is substantial and accurate', () => {
@@ -255,10 +264,14 @@ describe('system skill + reference content', () => {
     expect(FOLIO_SKILL_BODY).toContain('folio_api');
     expect(FOLIO_SKILL_BODY).toContain('config:write');
   });
-  test('the operator prompt references the folio skill by slug + is non-empty', () => {
-    expect(OPERATOR_AGENT_SLUG).toBe('__folio_operator');
+  test('the operator prompt references the folio skill + is non-empty', () => {
+    // The operator is identified by being THE agent in __system, NOT a magic slug.
+    expect(OPERATOR_AGENT_TITLE.length).toBeGreaterThan(0);
     expect(OPERATOR_PROMPT.length).toBeGreaterThan(200);
-    expect(OPERATOR_PROMPT).toContain(FOLIO_SKILL_SLUG);
+    expect(OPERATOR_PROMPT).toContain(FOLIO_SKILL_SLUG); // references the skill by its slug 'folio'
+  });
+  test('every operator tool is a real V1_MCP_TOOLS member', () => {
+    for (const t of OPERATOR_TOOLS) expect(V1_MCP_TOOLS).toContain(t);
   });
   test('the setup-a-project reference is non-empty', () => {
     expect(SETUP_PROJECT_REF_BODY.length).toBeGreaterThan(200);
@@ -270,7 +283,7 @@ describe('system skill + reference content', () => {
 
 - [ ] **Step 3: Implement** — author the content. Reuse the already-reviewed `folio` skill body shape from the archived work (tag `archive/phase-op-3-seeded-bot`, file `seed-operator.ts` had a reviewed `SKILL_BODY` + `OPERATOR_PROMPT`) as the STARTING POINT, but adjust: the operator now lives in `__system` and reads its skill from there (Phase A keeps it membership-gated; Phase B adds the definitional read). Export:
   - `FOLIO_SKILL_SLUG = 'folio'`, `FOLIO_SKILL_BODY` (the API manual: resource→route→scope table for tables/fields/views/statuses/projects = `config:write`+dryRun and documents = `documents:read|write` via narrow tools; the `folio_api`/`folio_api_get` split; schema conventions; the risk-gate protocol; the governing principle "the API is the source of truth").
-  - `OPERATOR_AGENT_SLUG = '__folio_operator'`, `OPERATOR_PROMPT` (body-as-prompt: role, read the `folio` skill, use folio_api_get for reads / folio_api for writes, authority = agent ∩ caller, high-risk refused-with-plan).
+  - `OPERATOR_AGENT_TITLE = 'folio-operator'` (the agent's title; createDocument derives its slug via `slugify` → `folio-operator`. There is NO `__`-prefixed doc slug — fix #4. The operator is identified by `(workspace=__system, type='agent')`, not a slug constant). `OPERATOR_PROMPT` (body-as-prompt: role, read the `folio` skill by slug, use folio_api_get for reads / folio_api for writes, authority = agent ∩ caller, high-risk refused-with-plan).
   - `SETUP_PROJECT_REF_BODY` ("how to set up a project" — the worked POST sequence: project → tables → fields → statuses → views).
   - `OPERATOR_TOOLS = ['folio_api','folio_api_get','list_documents','get_document','create_document','update_document','list_projects','run_view']` (all in `V1_MCP_TOOLS`).
 
@@ -302,18 +315,20 @@ import { eq, and } from 'drizzle-orm';
 import { documents, memberships, projects, workspaces } from '../db/schema.ts';
 import { bootstrapSystemWorkspace, SYSTEM_WORKSPACE_SLUG } from './system-workspace.ts';
 
-test('bootstrap creates __system + Skills/Reference projects + operator agent + seeded docs (M8)', async () => {
+test('bootstrap creates __system + Skills/Reference projects + skill/ref content (M8)', async () => {
   const { db } = await makeTestApp(); // makeTestApp seeds a normal ws 'acme'; __system absent
   await bootstrapSystemWorkspace(db);
   const sys = await db.query.workspaces.findFirst({ where: eq(workspaces.slug, SYSTEM_WORKSPACE_SLUG) });
   expect(sys).toBeDefined();
   const projs = await db.query.projects.findMany({ where: eq(projects.workspaceId, sys!.id) });
   expect(projs.map((p) => p.slug).sort()).toEqual(['reference', 'skills']); // or your chosen slugs
-  const operator = await db.query.documents.findFirst({ where: and(eq(documents.workspaceId, sys!.id), eq(documents.type, 'agent')) });
-  expect(operator).toBeDefined();
-  expect((operator!.frontmatter as any).provider).toBe('anthropic');
-  const skill = await db.query.documents.findFirst({ where: and(eq(documents.workspaceId, sys!.id), eq(documents.slug, 'folio')) });
+  // The folio skill doc lives in the Skills project (slug derived from its title via slugify).
+  const skill = await db.query.documents.findFirst({ where: and(eq(documents.workspaceId, sys!.id), eq(documents.type, 'page'), eq(documents.title, 'folio')) });
   expect(skill).toBeDefined();
+  // NOTE: the OPERATOR AGENT is NOT seeded by bootstrap (it needs a user actor for its
+  // token's createdBy). It is seeded by ensureOperatorAgent at owner-designation (Task 5).
+  const operator = await db.query.documents.findFirst({ where: and(eq(documents.workspaceId, sys!.id), eq(documents.type, 'agent')) });
+  expect(operator).toBeUndefined(); // no agent until an owner exists
 });
 
 test('bootstrap is idempotent — running twice yields one of each (M8)', async () => {
@@ -322,35 +337,41 @@ test('bootstrap is idempotent — running twice yields one of each (M8)', async 
   await bootstrapSystemWorkspace(db);
   const sys = await db.query.workspaces.findMany({ where: eq(workspaces.slug, SYSTEM_WORKSPACE_SLUG) });
   expect(sys.length).toBe(1);
-  const agents = await db.query.documents.findMany({ where: and(eq(documents.workspaceId, sys[0]!.id), eq(documents.type, 'agent')) });
-  expect(agents.length).toBe(1);
+  const projs = await db.query.projects.findMany({ where: eq(projects.workspaceId, sys[0]!.id) });
+  expect(projs.length).toBe(2); // skills + reference, not duplicated
 });
 
-test('bootstrap does NOT adopt a pre-existing foreign __system membership (M4)', async () => {
+test('bootstrap FAILS LOUD on a pre-existing __system that carries ANY membership (M4)', async () => {
   const { db, seed } = await makeTestApp();
-  // simulate a hijack: a __system workspace already exists with a NON-owner foreign membership.
-  // (In reality M2/M3 prevent users creating it, but bootstrap must not trust an existing row's memberships.)
-  // Insert a __system workspace + a foreign membership directly:
-  // ... insert workspace slug __system id 'sys_foreign' ; insert membership (sys_foreign, seed.user.id, 'owner')
-  await bootstrapSystemWorkspace(db);
-  // bootstrap must NOT have granted instance-ownership off the foreign row; assert the foreign membership
-  // did not become an instance-owner grant the system relies on (i.e. designateInstanceOwner is the ONLY
-  // owner-granting path; bootstrap itself grants NO membership). See M4/M5 split.
-  // Concretely: bootstrap creates structure but assigns NO owner membership; owner comes only via Task 5.
+  // Simulate the (per M2/M3, supposedly-impossible) hijack: a __system workspace exists
+  // already AND carries a membership. Because ANY __system membership = instance admin,
+  // bootstrap must NOT adopt it — it asserts a clean (member-less) __system and throws.
+  const foreignId = nanoid();
+  await db.insert(workspaces).values({ id: foreignId, slug: SYSTEM_WORKSPACE_SLUG, name: 'Hijack' });
+  await db.insert(memberships).values({ workspaceId: foreignId, userId: seed.user.id, role: 'owner' });
+  await expect(bootstrapSystemWorkspace(db)).rejects.toThrow(/SYSTEM_WORKSPACE_TAINTED|membership/i);
+  // And it did NOT silently treat the foreign user as instance owner (the membership is untouched / the throw blocks boot — operator must investigate).
+});
+
+test('bootstrap ACCEPTS a pre-existing system-made __system with zero memberships (re-run after a clean prior bootstrap) (M4/M8)', async () => {
+  const { db } = await makeTestApp();
+  await bootstrapSystemWorkspace(db); // first run: creates it, no membership
+  await expect(bootstrapSystemWorkspace(db)).resolves.toBeUndefined(); // second run: clean, no throw
 });
 ```
 
-> **Design note (M4):** to keep provenance simple and safe, **`bootstrapSystemWorkspace` grants NO membership** — it only creates the workspace + projects + agent + docs (structure). The OWNER is granted exclusively by `designateInstanceOwner` (Task 5) / the gated registration (Task 6). So even if a foreign `__system` row somehow existed, bootstrap would not turn a foreign membership into instance-ownership (ownership has one source). And because M2/M3 make `__system` uncreatable by users, in practice the row is always system-made. The third test encodes "bootstrap grants no membership."
+> **Design note (M4 — match the threat model exactly: verify provenance, fail loud, never adopt).** `bootstrapSystemWorkspace` grants NO membership — owner comes ONLY from `grantOwner` (Task 5) / gated registration (Task 6). Provenance is asserted, not assumed: **on finding an existing `__system`, bootstrap asserts it has ZERO memberships** (a clean, system-made `__system` never has any until an owner is designated). If it finds a `__system` WITH a membership, that can only be a tainted/foreign row (since a clean bootstrap grants none and M2/M3 stop users creating it), so it **THROWS** (`SYSTEM_WORKSPACE_TAINTED`) and refuses to proceed — it does NOT adopt-and-repair. This closes A4: an adopted foreign membership would be a silent instance-admin escalation. The unforgeable-slug invariant (users can't make `__system`) plus the zero-membership assertion together give provenance without a marker column (fix #3 + the spec's Component-2 decision).
 
 - [ ] **Step 2: Run to verify fail** — FAIL.
 
-- [ ] **Step 3: Implement `bootstrapSystemWorkspace(db)`** — idempotent, structure-only:
-  - If a `__system` workspace exists, use it; else insert one (direct insert, `id = nanoid()`, slug `SYSTEM_WORKSPACE_SLUG`, name e.g. 'System Library'). (Wrap creation in `txWithEvents` to honor the event invariant, OR document why boot-time seeding emits no bus events — the dispatcher isn't running yet at boot, mirror how `seedProjectDefaults` is used. Prefer `txWithEvents` for consistency.)
-  - Ensure the `Skills` + `Reference` projects exist (findFirst-by-slug-in-ws, else insert via the same path `seedProjectDefaults` uses — but these don't need default tables; a bare project is fine, so insert the project row directly).
-  - Ensure the operator agent exists: if absent, create it via `createDocument` (so it gets its auto-minted token + `api_token_id` — reuse the established path, do NOT hand-roll the token) with `type:'agent'`, slug `OPERATOR_AGENT_SLUG`, body `OPERATOR_PROMPT`, frontmatter `{ provider:'anthropic', model:'claude-sonnet-4-6', tools: OPERATOR_TOOLS, projects:['*'], requires_approval:false }`. **NOTE:** `createDocument` requires a `user` actor for `createdBy`; at boot there may be no user yet. Resolve: pass a system actor — either the first `__system` owner once designated, OR allow a null/`system` createdBy for boot-seeded docs. DECIDE in implementation: simplest is to run the agent-seed LAZILY (when the owner is designated, Task 5) rather than at pure boot, OR seed with `createdBy = null` if the schema allows (documents.created_by is nullable). Prefer: seed structure (ws + projects + skill/ref docs with createdBy null) at boot; seed the OPERATOR AGENT when an owner exists (it needs an actor for its token's createdBy). Document the split in a comment.
-  - Ensure the skill doc (`folio` in `Skills`) + the setup-project ref (in `Reference`) exist: insert `page` docs with the bodies from `system-skills.ts` if absent (createdBy null acceptable for content).
+- [ ] **Step 3: Implement `bootstrapSystemWorkspace(db)`** — idempotent, structure-only, provenance-asserting:
+  - **Find `__system` by slug.** If it EXISTS: query its memberships; if it has ANY membership → `throw new HTTPError('SYSTEM_WORKSPACE_TAINTED', '__system carries an unexpected membership; refusing to bootstrap onto it', 500)` (fix #3 / M4 — fail loud, never adopt). If it exists with zero memberships → it's a clean prior bootstrap; proceed to ensure-structure (idempotent).
+  - **If absent, insert it** (direct insert, `id = nanoid()`, slug `SYSTEM_WORKSPACE_SLUG`, name 'System Library'). Rely on the **`workspaces.slug` UNIQUE constraint** as the real idempotency backstop (fix #5): wrap the insert so a unique-violation (a concurrent double-bootstrap) is caught and treated as "already exists, re-resolve" rather than crashing — the findFirst guard alone is TOCTOU-racy; the constraint is the guarantee. (Verified: `workspaces.slug` is `.notNull().unique()`.)
+  - **Ensure the `Skills` + `Reference` projects exist** (findFirst-by-slug-in-`__system`, else direct insert — bare projects, no default tables needed). `projects.slug` is NOT globally unique (per-workspace), so the findFirst-then-insert guard is the idempotency mechanism here; keep both bootstrap calls single-threaded at boot (they are — boot is sequential).
+  - **Ensure the skill + reference content docs exist** (the `folio` skill page in `Skills`, the setup-project ref page in `Reference`): findFirst-by-(workspace,project,title), else create. These are `page` docs with `createdBy = null` (boot has no user actor; `documents.created_by` is nullable — confirm). The skill doc's SLUG is `slugify(title)` (createDocument-style) — there is NO reserved `__`-slug for documents (fix #4: document slugs derive from title via slugify and aren't a reserved namespace; the operator/skill are identified by (workspace=`__system`, type/title), not by a magic slug).
+  - **Does NOT seed the operator agent** — that needs a user actor for its token's `createdBy`, so it's done in `ensureOperatorAgent` at owner-designation (Task 5). A comment states this split.
 
-> This task has a real decision (boot-time actor for the agent's token). The plan's recommended resolution: **structure + content at boot (createdBy null); operator agent seeded by `designateInstanceOwner` (Task 5) using the owner as actor.** That keeps the token's `createdBy` FK-valid. The implementer confirms `documents.created_by` + `api_tokens.created_by` nullability and picks the clean split; tests assert the agent exists AFTER an owner is designated.
+> **Resolved decisions baked in:** (a) boot-time actor — structure + content at boot (`createdBy null`); the agent at owner-designation (real actor). (b) Operator identity (fix #4) — derived slug via createDocument, identified by `(workspace=__system, type='agent')`, NOT a `__`-prefixed doc slug (createDocument slugifies the title + slugify strips underscores, so a `__`-doc-slug is impossible via that path anyway). (c) Idempotency backstop (fix #5) — the `workspaces.slug` UNIQUE constraint, not just findFirst. The implementer confirms `documents.created_by` nullability before relying on `createdBy: null`.
 
 - [ ] **Step 4: Run to verify pass + tsc** — PASS + clean.
 
@@ -363,73 +384,89 @@ git commit -m "phase-A: bootstrapSystemWorkspace — create __system + projects 
 
 ---
 
-## Task 5: `designateInstanceOwner` — idempotent owner grant (+ seed the operator agent)
+## Task 5: `grantOwner` + `ensureOperatorAgent` — two independently-idempotent steps
 
-**Mitigations: M5, M8.**
+**Mitigations: M5, M8.** **Split into two functions (fix #2):** owner-grant and agent-seed must each be independently idempotent, NOT one behind the other's early-return. The failure that motivates the split: if a single `designateInstanceOwner` inserts the membership then THROWS on the agent seed, a re-run hits the "owner exists → no-op" early return and the operator agent is NEVER created → an instance with an owner but no operator, and no recovery. Two idempotent functions + a thin `designateInstanceOwner` that calls both means a re-run repairs whichever step is missing.
 
 **Files:**
-- Modify: `apps/server/src/lib/system-workspace.ts` (add `designateInstanceOwner`)
+- Modify: `apps/server/src/lib/system-workspace.ts` (add `grantOwner`, `ensureOperatorAgent`, and a thin `designateInstanceOwner` that calls both)
 - Test: `apps/server/src/lib/system-workspace.test.ts` (extend)
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Write the failing tests**
 
 ```typescript
 import { hashPassword } from './auth.ts';
 
-test('designateInstanceOwner grants __system owner to an existing user, idempotently (M5/M8)', async () => {
-  const { db } = await makeTestApp();
-  await bootstrapSystemWorkspace(db);
-  // create a user (existing-install case)
-  const uid = nanoid();
-  await db.insert(users).values({ id: uid, email: 'owner@x.com', name: 'Owner', passwordHash: await hashPassword('password123') });
-  await designateInstanceOwner(db, 'owner@x.com');
-  const sys = await db.query.workspaces.findFirst({ where: eq(workspaces.slug, SYSTEM_WORKSPACE_SLUG) });
-  const m = await db.query.memberships.findMany({ where: and(eq(memberships.workspaceId, sys!.id), eq(memberships.role, 'owner')) });
-  expect(m.length).toBe(1);
-  expect(m[0]!.userId).toBe(uid);
-  // idempotent
-  await designateInstanceOwner(db, 'owner@x.com');
-  const m2 = await db.query.memberships.findMany({ where: and(eq(memberships.workspaceId, sys!.id), eq(memberships.role, 'owner')) });
-  expect(m2.length).toBe(1);
-});
-
-test('designateInstanceOwner also ensures the operator agent exists (seeded with the owner as actor)', async () => {
-  const { db } = await makeTestApp();
-  await bootstrapSystemWorkspace(db);
-  const uid = nanoid();
-  await db.insert(users).values({ id: uid, email: 'o2@x.com', name: 'O2', passwordHash: await hashPassword('password123') });
-  await designateInstanceOwner(db, 'o2@x.com');
-  const sys = await db.query.workspaces.findFirst({ where: eq(workspaces.slug, SYSTEM_WORKSPACE_SLUG) });
-  const agent = await db.query.documents.findFirst({ where: and(eq(documents.workspaceId, sys!.id), eq(documents.type, 'agent')) });
-  expect(agent).toBeDefined();
-  // its auto-minted token exists (createdBy = the owner)
-  const tok = await db.query.apiTokens.findFirst({ where: eq(apiTokens.agentId, agent!.id) });
-  expect(tok).toBeDefined();
-});
-
-test('designateInstanceOwner is a no-op if an owner already exists (M5)', async () => {
+test('grantOwner grants __system owner to an existing user, first-wins idempotent (M5)', async () => {
   const { db } = await makeTestApp();
   await bootstrapSystemWorkspace(db);
   const a = nanoid(); const b = nanoid();
   await db.insert(users).values({ id: a, email: 'a@x.com', name: 'A', passwordHash: await hashPassword('password123') });
   await db.insert(users).values({ id: b, email: 'b@x.com', name: 'B', passwordHash: await hashPassword('password123') });
-  await designateInstanceOwner(db, 'a@x.com');
-  await designateInstanceOwner(db, 'b@x.com'); // must NOT replace a with b
+  await grantOwner(db, 'a@x.com');
+  await grantOwner(db, 'a@x.com'); // re-run same: still one
+  await grantOwner(db, 'b@x.com'); // different user: must NOT replace a
   const sys = await db.query.workspaces.findFirst({ where: eq(workspaces.slug, SYSTEM_WORKSPACE_SLUG) });
   const owners = await db.query.memberships.findMany({ where: and(eq(memberships.workspaceId, sys!.id), eq(memberships.role, 'owner')) });
   expect(owners.length).toBe(1);
-  expect(owners[0]!.userId).toBe(a); // first designation wins
+  expect(owners[0]!.userId).toBe(a); // first-wins
+});
+
+test('grantOwner throws a clear error for an unknown email (M5)', async () => {
+  const { db } = await makeTestApp();
+  await bootstrapSystemWorkspace(db);
+  await expect(grantOwner(db, 'nobody@x.com')).rejects.toThrow(/INSTANCE_OWNER_NOT_FOUND/);
+});
+
+test('ensureOperatorAgent seeds the operator (with a user actor) idempotently (M8)', async () => {
+  const { db } = await makeTestApp();
+  await bootstrapSystemWorkspace(db);
+  const uid = nanoid();
+  await db.insert(users).values({ id: uid, email: 'o@x.com', name: 'O', passwordHash: await hashPassword('password123') });
+  await ensureOperatorAgent(db, uid);
+  await ensureOperatorAgent(db, uid); // re-run: still ONE agent + ONE token
+  const sys = await db.query.workspaces.findFirst({ where: eq(workspaces.slug, SYSTEM_WORKSPACE_SLUG) });
+  const agents = await db.query.documents.findMany({ where: and(eq(documents.workspaceId, sys!.id), eq(documents.type, 'agent')) });
+  expect(agents.length).toBe(1);
+  expect((agents[0]!.frontmatter as any).provider).toBe('anthropic');
+  const toks = await db.query.apiTokens.findMany({ where: eq(apiTokens.agentId, agents[0]!.id) });
+  expect(toks.length).toBe(1); // createdBy = the owner actor
+});
+
+test('a failed agent seed is RECOVERED on the next designate run (the fix #2 failure mode)', async () => {
+  // Prove the split: grant the owner, then (separately) ensure the agent — a re-run after a
+  // hypothetical mid-failure repairs the missing agent because grantOwner's no-op does NOT
+  // gate ensureOperatorAgent.
+  const { db } = await makeTestApp();
+  await bootstrapSystemWorkspace(db);
+  const uid = nanoid();
+  await db.insert(users).values({ id: uid, email: 'r@x.com', name: 'R', passwordHash: await hashPassword('password123') });
+  await grantOwner(db, 'r@x.com');          // owner inserted
+  // (simulate: ensureOperatorAgent was never reached on the first attempt — agent absent)
+  const sys = await db.query.workspaces.findFirst({ where: eq(workspaces.slug, SYSTEM_WORKSPACE_SLUG) });
+  let agent = await db.query.documents.findFirst({ where: and(eq(documents.workspaceId, sys!.id), eq(documents.type, 'agent')) });
+  expect(agent).toBeUndefined();
+  await designateInstanceOwner(db, 'r@x.com'); // re-run repairs: grantOwner no-ops, ensureOperatorAgent seeds
+  agent = await db.query.documents.findFirst({ where: and(eq(documents.workspaceId, sys!.id), eq(documents.type, 'agent')) });
+  expect(agent).toBeDefined();
 });
 ```
 
 - [ ] **Step 2: Run to verify fail** — FAIL.
 
-- [ ] **Step 3: Implement `designateInstanceOwner(db, email)`:**
-  - Resolve `__system` (must exist — call `bootstrapSystemWorkspace` first or assert). 
-  - If `__system` already has an `owner` membership → return (no-op, first-wins).
-  - Look up the user by email; if absent → throw a clear `INSTANCE_OWNER_NOT_FOUND` (the email must be a registered user).
+- [ ] **Step 3: Implement the three functions:**
+
+  `grantOwner(db, email)` — owner grant, first-wins idempotent:
+  - Resolve `__system` (assert it exists — caller bootstraps first).
+  - If `__system` already has an `owner` membership → return (no-op, first-wins; a re-grant for a different email is ignored).
+  - Look up the user by email; if absent → `throw new HTTPError('INSTANCE_OWNER_NOT_FOUND', ...)`.
   - Insert membership `(systemWs.id, user.id, 'owner')`.
-  - Ensure the operator agent exists (the boot path left it unseeded — createdBy needs an actor): if absent, `createDocument({ type:'agent', slug: OPERATOR_AGENT_SLUG, ... }, { user })` so the agent + its token are created with the owner as `createdBy`. Idempotent (skip if the agent already exists).
+
+  `ensureOperatorAgent(db, actorUserId)` — agent seed, idempotent, INDEPENDENT of grantOwner:
+  - Resolve `__system`. If an `(workspace=__system, type='agent')` document already exists → return (no-op). (The operator is identified by being THE agent in `__system`, NOT by a magic slug — fix #4. createDocument derives the doc slug from `slugify(title)`; underscores are stripped, so there is no `__`-prefixed doc slug, and that's fine.)
+  - Else `createDocument({ type:'agent', title:'folio-operator' (slugifies to 'folio-operator'), body: OPERATOR_PROMPT, frontmatter:{ provider:'anthropic', model:'claude-sonnet-4-6', tools: OPERATOR_TOOLS, projects:['*'], requires_approval:false } }, { user: <the actorUserId's user> })` so the agent + its auto-minted token are created with the owner as `createdBy` (reuses the established token path — do NOT hand-roll the token; the seeded-bot attempt's hand-rolled token was the bug the final review caught).
+
+  `designateInstanceOwner(db, email)` — thin orchestrator: `await grantOwner(db, email)`, then resolve the owner's user id, then `await ensureOperatorAgent(db, ownerUserId)`. Because each is independently idempotent, a re-run after ANY mid-failure repairs the missing piece (the fix #2 recovery property; the 4th test pins it).
 
 - [ ] **Step 4: Run to verify pass + tsc** — PASS + clean.
 
@@ -437,7 +474,7 @@ test('designateInstanceOwner is a no-op if an owner already exists (M5)', async 
 
 ```bash
 git add apps/server/src/lib/system-workspace.ts apps/server/src/lib/system-workspace.test.ts
-git commit -m "phase-A: designateInstanceOwner — idempotent owner grant + operator agent seed (M5/M8)"
+git commit -m "phase-A: split grantOwner + ensureOperatorAgent (each idempotent, recoverable) (M5/M8)"
 ```
 
 ---
@@ -551,11 +588,11 @@ git commit -m "phase-A: wire bootstrapSystemWorkspace + designateInstanceOwner a
 
 ## Self-Review (run before dispatch)
 
-**Spec coverage:** `__system` reserved + creation-protected (Tasks 1,2 — M2/M3), bootstrap create+seed idempotent + provenance-safe (Task 4 — M4/M8), owner designation on any install age (Task 5 — M5), gated first-registration (Task 6 — M1), boot wiring (Task 7), membership-gate + agent-can't-create confirmation (Task 8 — M6/M7), the `folio` skill + reference docs + operator agent in `__system` (Tasks 3,4,5). Cross-workspace execution + the definitional skill-load exemption are explicitly Phase B (not here). ✅
+**Spec coverage:** `__system` reserved + creation-protected (Tasks 1,2 — M2/M3, final-slug guard both branches), bootstrap create + skill/ref content, idempotent + fail-loud provenance, grants NO membership (Task 4 — M4/M8), owner designation on any install age via split idempotent `grantOwner`/`ensureOperatorAgent` (Task 5 — M5/M8), gated first-registration (Task 6 — M1), boot wiring (Task 7), membership-gate + agent-can't-create confirmation (Task 8 — M6/M7), the `folio` skill + reference content (Task 3), the operator AGENT seeded at owner-designation not bootstrap (Task 5, identified by (workspace=__system,type=agent)). Cross-workspace execution + the definitional skill-load exemption are explicitly Phase B (not here). ✅
 
 **Placeholder scan:** the test bodies have a few `// ... insert ...` / `...` markers where the implementer fills in the seeded rows from the named tables — these are deliberate "use the real schema imports" pointers, not TBDs; the surrounding assertions are concrete. The one real decision (boot-time actor for the agent's token, Task 4) is resolved with a recommended split (structure at boot, agent at owner-designation) + the implementer confirms nullability.
 
-**Type consistency:** `SYSTEM_WORKSPACE_SLUG`, `isReservedSlug`, `assertSlugAllowed`, `bootstrapSystemWorkspace(db)`, `designateInstanceOwner(db, email)`, `runBootTasks(db, env)`, `OPERATOR_AGENT_SLUG`, `OPERATOR_TOOLS`, `FOLIO_SKILL_SLUG`/`_BODY` used consistently across tasks. The operator agent is created via `createDocument` (reuses the auto-minted token), NOT a hand-rolled token — consistent with the kept design.
+**Type consistency:** `SYSTEM_WORKSPACE_SLUG`, `isReservedSlug`, `assertSlugAllowed`, `bootstrapSystemWorkspace(db)`, `grantOwner(db, email)`, `ensureOperatorAgent(db, actorUserId)`, `designateInstanceOwner(db, email)` (= grantOwner + ensureOperatorAgent), `runBootTasks(db, env)`, `OPERATOR_AGENT_TITLE`, `OPERATOR_TOOLS`, `FOLIO_SKILL_SLUG`/`_BODY` used consistently across tasks. The operator agent is created via `createDocument` (reuses the auto-minted token), NOT a hand-rolled token — consistent with the kept design; it is identified by `(workspace=__system, type='agent')`, not a magic slug (fix #4). The five review fixes (final-slug guard both branches, split idempotent owner/agent, fail-loud provenance, derived operator slug, UNIQUE-constraint backstop) are baked into Tasks 2, 4, 5.
 
 **Biggest risk flagged:** the boot-time actor for the operator agent's token (Task 4/5). Resolved: seed the agent at owner-designation (real actor), not at pure boot. If the implementer finds `documents.created_by`/`api_tokens.created_by` are NON-nullable, the agent-at-owner-designation split is REQUIRED (not optional) — confirm first.
 
