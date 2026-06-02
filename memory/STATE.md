@@ -1747,3 +1747,4 @@ See `docs/PHASES.md` for the canonical phase list (above-section mirrors it). Lo
 
 **Decisions**
 - drop the auth-level rollback test (no clean deterministic trigger exists; the tainted case is provably unreachable for first-users), and instead leave a code comment explaining the rollback is defense against transient failures. The compensating delete is still correct and worth keeping. Let me remove the test.
+[2026-06-02] — session ended (no significant changes captured)
