@@ -1365,3 +1365,51 @@ test('D3: non-member direct GET /w/__system/documents?type=agent is 403 FORBIDDE
   expect(body.error.code).toBe('FORBIDDEN');
   expect(body.error.message).toBe('not a member');
 });
+
+// Phase D D4 — the cross-workspace agent listing unions in `__system` library
+// agents so they appear in B's pickers, but a non-`__system`-member must see
+// ONLY the INVOKABLE fields of a library agent (id/slug/title/library:true) —
+// NEVER its prompt (`body`, post the Phase-3 body-as-prompt change) or any
+// legacy `frontmatter.system_prompt`. The picker only needs name/slug/id to
+// invoke it. Cross-tenant content (the operator's instructions) must not leak.
+// Redaction is LIBRARY-ROWS-ONLY: the workspace's OWN agents keep their body
+// (the member legitimately authored + edits them).
+test('D4: cross-workspace agent list exposes only invokable fields of a __system agent, not its prompt', async () => {
+  const { app, seed } = await makeTestApp();
+  // A workspace-local agent — its body MUST survive (redaction is library-only).
+  await postWorkspaceDoc(app, seed.sessionCookie, {
+    type: 'agent', title: 'Local Helper', body: 'Local agent prompt body.',
+    frontmatter: { system_prompt: 'local sp', model: 'm', provider: 'anthropic', tools: [] },
+  });
+  // The library agent — seeded with body 'Library operator.' + system_prompt
+  // 'You are the operator.' (see seedSystemLibraryAgent). The test FAILS if
+  // either leaks through the cross-workspace listing.
+  await seedSystemLibraryAgent(seed.user.id, 'operator');
+
+  const res = await app.request(`${WS_PATH}?type=agent`, { headers: { Cookie: seed.sessionCookie } });
+  const data = (await res.json()).data as Array<{
+    slug: string;
+    id: string;
+    title: string;
+    body: string;
+    library?: boolean;
+    frontmatter: Record<string, unknown>;
+  }>;
+
+  const library = data.find((d) => d.slug === 'operator');
+  // Invokable fields present.
+  expect(library).toBeDefined();
+  expect(library?.library).toBe(true);
+  expect(library?.id).toBeTruthy();
+  expect(library?.title).toBe('operator');
+  // Prompt redacted: body emptied, frontmatter.system_prompt removed.
+  expect(library?.body).toBe('');
+  expect(library?.frontmatter.system_prompt).toBeUndefined();
+
+  // The workspace's OWN agent keeps its body + system_prompt (library-only redaction).
+  const local = data.find((d) => d.slug === 'local-helper');
+  expect(local).toBeDefined();
+  expect(local?.library).toBe(false);
+  expect(local?.body).toBe('Local agent prompt body.');
+  expect(local?.frontmatter.system_prompt).toBe('local sp');
+});

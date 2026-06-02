@@ -1226,6 +1226,23 @@ export async function getWorkspaceDocument(
 }
 
 /** List workspace-scoped agents/triggers, optionally narrowed to those allow-listed for a project. */
+/**
+ * Phase D D4 — strip a `__system` (library) agent's instructions before it is
+ * unioned into a NON-library workspace's agent listing. Mirrors
+ * `redactRunForApi` (agent-runs.ts): clones the frontmatter and removes the
+ * legacy `system_prompt`, and ALSO empties `body` (the agent's prompt, post the
+ * Phase-3 body-as-prompt change). Keeps every INVOKABLE field — id / slug /
+ * title / type / workspaceId / model / provider / tools / projects — so the run
+ * launcher / assign / mention pickers still work. Does NOT mutate the input;
+ * returns a shallow-cloned row. Apply ONLY to library rows: the workspace's OWN
+ * agents must keep their body (the member authored + edits them).
+ */
+export function redactLibraryAgentForList(row: Document): Document {
+  const fm = { ...(row.frontmatter as Record<string, unknown>) };
+  delete fm.system_prompt;
+  return { ...row, body: '', frontmatter: fm };
+}
+
 export async function listWorkspaceDocuments(opts: {
   workspaceId: string;
   type: 'agent' | 'trigger';
@@ -1268,7 +1285,20 @@ export async function listWorkspaceDocuments(opts: {
         where: and(eq(documents.workspaceId, systemId), eq(documents.type, 'agent')),
       });
       const localSlugs = new Set(rows.map((d) => d.slug));
-      merged = [...rows, ...systemAgents.filter((d) => !localSlugs.has(d.slug))];
+      // Phase D D4 — REDACT the unioned `__system` (library) rows before they
+      // leave this loader. A non-`__system`-member of B receives a library
+      // agent purely to INVOKE it from a picker (id/slug/title/etc.); its PROMPT
+      // (`body`, post the Phase-3 body-as-prompt change) and any legacy
+      // `frontmatter.system_prompt` are cross-tenant content that must NOT leak.
+      // We strip HERE, at the loader's union point (NOT in the route), so every
+      // present + future consumer of listWorkspaceDocuments inherits the strip —
+      // the "redact at the loader, not the handler" lesson (system_prompt leaked
+      // 3× when redaction was per-handler). The workspace's OWN agents (in
+      // `rows`) are untouched: a member legitimately authored + edits them.
+      const redactedSystemAgents = systemAgents
+        .filter((d) => !localSlugs.has(d.slug))
+        .map(redactLibraryAgentForList);
+      merged = [...rows, ...redactedSystemAgents];
     }
   }
 
