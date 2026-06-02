@@ -414,10 +414,19 @@ async function main(): Promise<void> {
       legit.run?.status === 'completed' && !!legitResult
         ? true
         : `run status=${legit.run?.status}, result=${!!legitResult}`;
+    // The run's home MUST be the __system workspace id (B2: stamped from the
+    // resolved library agent's workspace). Assert it equals __system, not just
+    // "non-empty" — a non-empty home that happened to be B would be a B1 leak.
+    const systemWsId =
+      (
+        sqlite
+          .query(`SELECT id FROM workspaces WHERE slug = '__system'`)
+          .get() as { id: string } | null
+      )?.id ?? null;
     results['S2-home-is-system'] =
-      typeof legitHome === 'string' && legitHome.length > 0
-        ? `home=${legitHome}`
-        : 'home NOT stamped';
+      typeof legitHome === 'string' && legitHome === systemWsId
+        ? true
+        : `home=${legitHome} expected __system=${systemWsId}`;
     if (legitResult) console.log(`[legit] result: ${truncate(legitResult.body)}`);
 
     // -----------------------------------------------------------------------
