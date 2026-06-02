@@ -241,8 +241,22 @@ async function resolveTargetAgentSlug(
   }
   const raw = typeof payload.target_agent === 'string' ? payload.target_agent : undefined;
   if (!raw) return undefined;
-  const agent = await resolveAgentForRun(db, workspaceId, normalizeAgentSlug(raw));
-  return agent?.slug;
+  const slug = normalizeAgentSlug(raw);
+  const agent = await resolveAgentForRun(db, workspaceId, slug);
+  if (agent) return agent.slug;
+  // review-fix #3 — the agent doc no longer resolves under {eventWs, __system}
+  // (deleted, or renamed away). Fall back to the normalized bare slug VERBATIM
+  // so an awaiting_approval run whose FROZEN `frontmatter.agent_slug` is this
+  // slug can still be rejected/resumed instead of being stranded forever (no
+  // sweeper touches awaiting_approval). This is SAFE for the approval/rejection
+  // path even though it skips the home predicate: the slug flows only into
+  // `getPendingApprovalRun({ parentId, agentSlug })`, which is scoped by the
+  // parent (already in eventWs) — so it can only select an EXISTING in-workspace
+  // pending run. A slug naming a THIRD-workspace agent matches no run under this
+  // parent → benign no-op. The authority boundary is the in-workspace pending
+  // RUN, not the slug. (The FIRE path, maybeCreateRun, deliberately does NOT use
+  // this fallback: there a missing agent SHOULD skip — no run to strand.)
+  return slug;
 }
 
 async function handleInternalAction(action: string, event: ReactorEvent): Promise<void> {

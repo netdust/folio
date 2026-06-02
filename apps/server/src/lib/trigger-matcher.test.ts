@@ -1095,6 +1095,125 @@ test('resolveTargetAgentSlug rejects a target_agent_id pointing at a THIRD works
   expect(run?.status).toBe('awaiting_approval'); // untouched
 });
 
+// ----- review-fix #3: approval/rejection falls back to the run's FROZEN
+// agent_slug when the agent doc has been DELETED -----
+//
+// Phase C routed resolveTargetAgentSlug's STRING fallback through
+// resolveAgentForRun, which requires the agent doc to still EXIST in {eventWs,
+// __system}. But the approval/rejection path's real key is the run's FROZEN
+// `frontmatter.agent_slug` (what getPendingApprovalRun matches), NOT the live
+// agent doc. If the agent doc is deleted after its run reaches
+// awaiting_approval, a human's reject/resume comment (carrying
+// `target_agent: '<slug>'`, no id) could no longer resolve → the run was
+// STRANDED forever (no sweeper touches awaiting_approval). The fix: when
+// resolveAgentForRun finds nothing, fall back to the normalized bare slug
+// verbatim so the EXISTING in-workspace pending run stays actionable.
+
+test('reject_run resolves via the run\'s FROZEN agent_slug even after the agent doc is DELETED (review-fix #3)', async () => {
+  // RED before the fix: resolveAgentForRun returns undefined for the deleted
+  // agent → resolveTargetAgentSlug returns undefined → handleInternalAction
+  // skips → the awaiting_approval run is stranded (never rejected).
+  const { db, seed } = await makeTestApp();
+  await seedTriggers(db, seed.workspace.id, seed.user.id);
+  const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+  const wiTable = await getWorkItemsTable(db, seed.project.id);
+  const wi = await seedWorkItem(db, seed.workspace, seed.project, wiTable, seed.user);
+  const runsTable = await ensureRunsTableFor(db, seed);
+  const runId = await seedAwaitingApprovalRun(
+    db,
+    seed.workspace,
+    seed.project,
+    runsTable,
+    agent,
+    wi,
+    seed.user,
+  );
+
+  // The agent doc is DELETED after the run reached awaiting_approval.
+  await db.delete(documents).where(eq(documents.id, agent.id));
+
+  await triggerMatcher.react(
+    commentCreatedEvent({
+      seed,
+      parentId: wi.id,
+      agentSlug: 'helper',
+      kind: 'rejection',
+      actor: seed.user.id,
+      // bare slug only, no id-handle — the realistic stranded-run shape.
+    }),
+  );
+
+  // The frozen agent_slug ('helper') still selects the pending run → rejected.
+  const run = await db.query.documents.findFirst({ where: eq(documents.id, runId) });
+  expect(run?.status).toBe('rejected');
+});
+
+test('reject_run still resolves the live agent in the normal case (no regression)', async () => {
+  // The verbatim fallback must NOT change the normal path: an existing agent
+  // resolves via resolveAgentForRun → its slug → the pending run rejects.
+  const { db, seed } = await makeTestApp();
+  await seedTriggers(db, seed.workspace.id, seed.user.id);
+  const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+  const wiTable = await getWorkItemsTable(db, seed.project.id);
+  const wi = await seedWorkItem(db, seed.workspace, seed.project, wiTable, seed.user);
+  const runsTable = await ensureRunsTableFor(db, seed);
+  const runId = await seedAwaitingApprovalRun(
+    db,
+    seed.workspace,
+    seed.project,
+    runsTable,
+    agent,
+    wi,
+    seed.user,
+  );
+
+  await triggerMatcher.react(
+    commentCreatedEvent({
+      seed,
+      parentId: wi.id,
+      agentSlug: 'helper',
+      kind: 'rejection',
+      actor: seed.user.id,
+    }),
+  );
+
+  const run = await db.query.documents.findFirst({ where: eq(documents.id, runId) });
+  expect(run?.status).toBe('rejected');
+});
+
+test('the verbatim fallback does NOT reach a THIRD-workspace agent — benign no-op (review-fix #3 security)', async () => {
+  // The verbatim fallback returns a bare slug naming an agent that lives ONLY in
+  // a third workspace C. That slug flows into getPendingApprovalRun({ parentId,
+  // agentSlug }), which is scoped by parentId (the parent lives in eventWs B).
+  // There is NO awaiting_approval run for that slug under THIS parent → nothing
+  // matches → no run is rejected, no cross-workspace effect. Proves the verbatim
+  // fallback didn't re-open the C1 third-workspace risk: the authority boundary
+  // is the pending RUN (already in-workspace), not the slug.
+  const { db, seed } = await makeTestApp();
+  await seedTriggers(db, seed.workspace.id, seed.user.id);
+  await bootstrapSystem(db); // __system seeded but holds no 'phantom' agent
+  const wsC = await seedWorkspaceC(db);
+  // 'phantom' exists ONLY in C. B has NO agent + NO pending run by that slug.
+  await seedAgent(db, wsC, seed.user, 'phantom');
+  const wiTable = await getWorkItemsTable(db, seed.project.id);
+  const wi = await seedWorkItem(db, seed.workspace, seed.project, wiTable, seed.user);
+  await ensureRunsTableFor(db, seed);
+
+  await triggerMatcher.react(
+    commentCreatedEvent({
+      seed,
+      parentId: wi.id,
+      agentSlug: 'phantom',
+      kind: 'rejection',
+      actor: seed.user.id,
+    }),
+  );
+
+  // No pending run under this B parent for 'phantom' → nothing matched, nothing
+  // rejected. Benign no-op — the verbatim slug couldn't reach C's agent.
+  expect(await countRuns(db, wi.id, 'phantom')).toBe(0);
+});
+
 // ----- Phase C C2: skip the allow-list fire-gate for library agents -----
 //
 // A library agent (home __system) carries `projects` describing __system's
