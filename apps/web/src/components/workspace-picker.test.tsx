@@ -11,6 +11,7 @@ import {
   RouterProvider,
 } from '@tanstack/react-router';
 import { WorkspacePicker } from './workspace-picker.tsx';
+import { SYSTEM_WORKSPACE_SLUG } from '../lib/api/workspaces.ts';
 
 function mockWorkspaces(items: { id: string; slug: string; name: string }[]) {
   vi.stubGlobal(
@@ -115,5 +116,33 @@ describe('WorkspacePicker', () => {
     expect(screen.getByText('Beta')).toBeInTheDocument();
     expect(screen.getByText('/acme')).toBeInTheDocument();
     expect(screen.getByText('/beta')).toBeInTheDocument();
+  });
+
+  // Phase D D1 — the picker never lists the reserved `__system` library
+  // workspace. The real feeder, `useWorkspaces()`, is server-filtered as of
+  // Task 1 (commit bd1e631) so `__system` never reaches the client: this pins
+  // that the picker renders exactly the memberships it is given (no `__system`
+  // row materializes from the server-filtered list).
+  it('D1: does not list the reserved __system workspace (mirrors the server-filtered feed)', async () => {
+    // The server filter strips `__system`, so the client receives only real
+    // member workspaces.
+    mockWorkspaces([
+      { id: 'ws-1', slug: 'acme', name: 'Acme' },
+      { id: 'ws-2', slug: 'beta', name: 'Beta' },
+    ]);
+    const { router, queryClient } = makeRouter(vi.fn());
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByText('Acme')).toBeInTheDocument());
+    // No __system entry — neither by name nor by its `/__system` slug line.
+    expect(screen.queryByText('/__system')).not.toBeInTheDocument();
+    expect(screen.queryByText(SYSTEM_WORKSPACE_SLUG)).not.toBeInTheDocument();
+    // Exactly the two member workspaces rendered.
+    expect(screen.getAllByRole('link')).toHaveLength(2);
   });
 });

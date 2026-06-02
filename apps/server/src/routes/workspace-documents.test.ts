@@ -1336,3 +1336,32 @@ test('listing __system itself does not double-union its own agents', async () =>
   // sanity: db handle is the same realDb proxy the route uses
   expect(db).toBeDefined();
 });
+
+// Phase D D3 (inherited Phase A M6) — a non-`__system`-member's DIRECT request
+// for `__system` content is 403'd by the membership gate in `resolveWorkspace`
+// (apps/server/src/middleware/scope.ts). The seed user is a member of `acme`
+// only; `seedSystemLibraryAgent` creates the `__system` workspace + a library
+// agent but adds NO membership for the seed user. So a direct GET on a
+// `__system` content route must fail closed with FORBIDDEN 'not a member'.
+// This is the server-side floor under D1's switcher filter: even if a client
+// hand-crafted the URL, the content stays gated.
+test('D3: non-member direct GET /w/__system/documents?type=agent is 403 FORBIDDEN (not a member)', async () => {
+  const { app, seed } = await makeTestApp();
+  await seedSystemLibraryAgent(seed.user.id, 'operator');
+
+  // Sanity: the same user CAN reach their own workspace's content (the gate
+  // is membership, not a blanket block on the route).
+  const okRes = await app.request('/api/v1/w/acme/documents?type=agent', {
+    headers: { Cookie: seed.sessionCookie },
+  });
+  expect(okRes.status).toBe(200);
+
+  // The boundary: a non-member of `__system` hits the membership gate.
+  const res = await app.request(`/api/v1/w/${SYSTEM_WORKSPACE_SLUG}/documents?type=agent`, {
+    headers: { Cookie: seed.sessionCookie },
+  });
+  expect(res.status).toBe(403);
+  const body = await res.json();
+  expect(body.error.code).toBe('FORBIDDEN');
+  expect(body.error.message).toBe('not a member');
+});
