@@ -2,8 +2,8 @@ import { and, eq } from 'drizzle-orm';
 import { expect, test } from 'bun:test';
 import { memberships, users, workspaces } from '../db/schema.ts';
 import { env } from '../env.ts';
-import { SYSTEM_WORKSPACE_SLUG } from '../lib/system-workspace.ts';
-import { makeBareTestDb } from '../test/harness.ts';
+import { bootstrapSystemWorkspace, SYSTEM_WORKSPACE_SLUG } from '../lib/system-workspace.ts';
+import { makeBareTestDb, makeTestApp } from '../test/harness.ts';
 
 test('first registration is rejected when bootstrap registration is off (M1)', async () => {
   const { app, db } = await makeBareTestDb(); // zero users, flag default false
@@ -112,4 +112,40 @@ test('first registration that SUCCEEDS persists the user + one owner; rollback-o
     (env as { FOLIO_ALLOW_BOOTSTRAP_REGISTRATION: boolean }).FOLIO_ALLOW_BOOTSTRAP_REGISTRATION =
       prev;
   }
+});
+
+// --- D2: server-authoritative is_system_member on /auth/me ---
+
+test('GET /auth/me reports is_system_member: true for a __system member (D2)', async () => {
+  const { app, db, seed } = await makeTestApp();
+  // Make the seed user a member of the curated __system library workspace.
+  await bootstrapSystemWorkspace(db);
+  const sys = await db.query.workspaces.findFirst({
+    where: eq(workspaces.slug, SYSTEM_WORKSPACE_SLUG),
+  });
+  await db.insert(memberships).values({
+    workspaceId: sys!.id,
+    userId: seed.user.id,
+    role: 'owner',
+  });
+
+  const res = await app.request('/api/v1/auth/me', {
+    headers: { cookie: seed.sessionCookie },
+  });
+  expect(res.status).toBe(200);
+  const { data } = await res.json();
+  expect(data.user.id).toBe(seed.user.id);
+  expect(data.is_system_member).toBe(true);
+});
+
+test('GET /auth/me reports is_system_member: false for a non-member (D2)', async () => {
+  const { app, seed } = await makeTestApp();
+  // The seeded user belongs only to "acme", never to __system.
+  const res = await app.request('/api/v1/auth/me', {
+    headers: { cookie: seed.sessionCookie },
+  });
+  expect(res.status).toBe(200);
+  const { data } = await res.json();
+  expect(data.user.id).toBe(seed.user.id);
+  expect(data.is_system_member).toBe(false);
 });

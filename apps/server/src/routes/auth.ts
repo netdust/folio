@@ -19,6 +19,7 @@ import {
 import { sendMagicLink } from '../lib/email.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
 import { type AuthContext, getUser, requireUser } from '../middleware/auth.ts';
+import { isSystemMember } from '../services/workspaces.ts';
 
 const auth = new Hono<AuthContext>();
 
@@ -119,9 +120,16 @@ auth.post('/logout', async (c) => {
   return jsonOk(c, { ok: true });
 });
 
-auth.get('/me', requireUser, (c) => {
+auth.get('/me', requireUser, async (c) => {
   const u = getUser(c);
-  return jsonOk(c, { user: { id: u.id, email: u.email, name: u.name } });
+  // D2: server-authoritative __system membership signal. Computed from
+  // membership (never client-derived) so the web "System Library" settings
+  // entry can gate on it without trusting the client. Top-level on the payload
+  // because it is a property of the boot identity, not of the user record.
+  return jsonOk(c, {
+    user: { id: u.id, email: u.email, name: u.name },
+    is_system_member: await isSystemMember(u.id),
+  });
 });
 
 // --- Magic link ---
