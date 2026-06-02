@@ -515,31 +515,33 @@ describe('runAgent pre-flight checks', () => {
     expect(control.called).toBe(0);
   });
 
-  test('claude-code — no ai_key row and no provider health check fire (neither no_ai_key nor provider_error)', async () => {
-    // claude-code is keyless/local. A run with provider='claude-code' and NO
-    // ai_keys row must NOT be killed at step 1 (no_ai_key) or step 5
-    // (provider_error). Wire a no-op spawn override so ccExecute terminates
-    // cleanly without spawning a real process. The ONLY meaningful assertions
-    // are about the two preflight reasons.
-    // Task 4: FOLIO_CLAUDE_CODE_ENABLED must be on for this test — the new
-    // step-0 gate would otherwise short-circuit with claude_code_disabled before
-    // reaching the key/health checks this test targets.
+  test('claude-code — HARD-DISABLED: still fails at preflight even when FOLIO_CLAUDE_CODE_ENABLED is TRUE', async () => {
+    // Phase C shake-out: claude-code is hard-disabled at the runner preflight.
+    // The cc path spawns a CLI that re-enters via /mcp UNAWARE of run-derived
+    // authority, so the C3 unattended floor + the agent∩caller scope ceiling are
+    // both bypassed on that path (security gaps S-1/S-2). The env flag no longer
+    // enables execution — ANY claude-code run is refused at preflight step 0,
+    // before ccExecute can be reached. This is the decisive hard-disable proof:
+    // with the flag ON, the OLD code would proceed to ccExecute; now it must not.
     const { db, run } = await scaffold({
       withAiKey: false,
       agentOverrides: { provider: 'claude-code' },
       runOverrides: { provider: 'claude-code' },
     });
 
+    let spawned = false;
     const prevCcEnabled = env.FOLIO_CLAUDE_CODE_ENABLED;
     (env as { FOLIO_CLAUDE_CODE_ENABLED: boolean }).FOLIO_CLAUDE_CODE_ENABLED = true;
-    // Wire a stub spawn that exits 0 so ccExecute completes normally without
-    // spawning the real claude CLI (Task 7: ccExecute is now the execution path).
-    __setCcSpawnForTest(() => ({
-      stdoutText: async () => 'ok',
-      stderrText: async () => '',
-      exited: Promise.resolve(0),
-      kill: () => {},
-    }));
+    // If preflight let the run through, this spawn would fire — it must NOT.
+    __setCcSpawnForTest(() => {
+      spawned = true;
+      return {
+        stdoutText: async () => 'ok',
+        stderrText: async () => '',
+        exited: Promise.resolve(0),
+        kill: () => {},
+      };
+    });
     try {
       await runAgent({ runId: run.id });
     } finally {
@@ -548,76 +550,41 @@ describe('runAgent pre-flight checks', () => {
     }
 
     const fm = await readRun(db, run.id);
-    expect(fm.error_reason).not.toBe('no_ai_key');
-    expect(fm.error_reason).not.toBe('provider_error');
+    expect(fm.status).toBe('failed');
+    expect(fm.error_reason).toBe('claude_code_disabled');
+    // ccExecute was never reached — the CLI was never spawned.
+    expect(spawned).toBe(false);
   });
 
-  test('claude-code — the CLI prompt carries the task + parent context, not just the system prompt', async () => {
-    // BUG: ccExecute spawned `claude -p <systemPrompt>` with ONLY the agent's
-    // standing instructions — the per-run task (the input comment) and the
-    // parent work-item body never reached the CLI, so a claude-code agent was
-    // blind to what it was acting on. The API-provider path builds this context
-    // via buildInitialMessages; the cc path must include it too.
-    const { db, workspace, project, user, agent, parent, run } = await scaffold({
-      agentOverrides: { provider: 'claude-code' },
-      runOverrides: { provider: 'claude-code' },
-      parentBody: 'Migrate billing emails to the new 2026 template.',
-    });
-    // The per-run task, exactly as POST /runs persists it: a kind=comment on the
-    // parent authored by the firing user. Insert directly to mirror the stored
-    // row without coupling to createComment's full validation surface.
-    await db.insert(documents).values({
-      id: nanoid(),
-      workspaceId: workspace.id,
-      projectId: project.id,
-      tableId: null,
-      type: 'comment',
-      slug: `c-${nanoid(8)}`,
-      title: '',
-      status: null,
-      body: 'Summarize this work item into frontmatter.summary.',
-      frontmatter: { author: `user:${user.id}`, kind: 'comment', visibility: 'normal' },
-      parentId: parent.id,
-      createdBy: user.id,
-      updatedBy: user.id,
-    });
+  test('anthropic — an API-provider run is UNAFFECTED by the cc hard-disable (passes preflight)', async () => {
+    // No-regression guard: the cc hard-disable at preflight step 0 keys ONLY on
+    // provider === 'claude-code'. An anthropic run must sail past step 0 and reach
+    // the provider stream — even with FOLIO_CLAUDE_CODE_ENABLED toggled either way.
+    const { db, run } = await scaffold(); // default provider = anthropic, with key
+    const control: StubControl = {
+      rounds: [[{ type: 'text', delta: 'done.' }, { type: 'done', reason: 'stop' }]],
+      called: 0,
+    };
+    installProviderStub(control);
 
-    let capturedPrompt = '';
     const prevCcEnabled = env.FOLIO_CLAUDE_CODE_ENABLED;
     (env as { FOLIO_CLAUDE_CODE_ENABLED: boolean }).FOLIO_CLAUDE_CODE_ENABLED = true;
-    __setCcSpawnForTest((args) => {
-      const i = args.argv.indexOf('-p');
-      capturedPrompt = i >= 0 ? (args.argv[i + 1] ?? '') : '';
-      return { stdoutText: async () => 'done', stderrText: async () => '', exited: Promise.resolve(0), kill: () => {} };
-    });
     try {
       await runAgent({ runId: run.id });
     } finally {
-      __setCcSpawnForTest(undefined);
       (env as { FOLIO_CLAUDE_CODE_ENABLED: boolean }).FOLIO_CLAUDE_CODE_ENABLED = prevCcEnabled;
     }
 
-    // System prompt (identity) still present (scaffold's default run prompt):
-    expect(capturedPrompt).toContain('You are a helper.');
-    // AND the per-run task reached the CLI:
-    expect(capturedPrompt).toContain('Summarize this work item into frontmatter.summary.');
-    // AND the parent work-item context reached the CLI:
-    expect(capturedPrompt).toContain('Migrate billing emails to the new 2026 template.');
-    // FIX #4: the untrusted task/context is fenced in an explicit DATA envelope
-    // so the model is told not to follow instructions inside it.
-    expect(capturedPrompt).toContain('===== BEGIN CONTEXT =====');
-    expect(capturedPrompt).toContain('===== END CONTEXT =====');
-    // The system prompt stays ABOVE/outside the envelope (identity comes before
-    // the BEGIN marker; untrusted text comes after it).
-    expect(capturedPrompt.indexOf('You are a helper.')).toBeLessThan(
-      capturedPrompt.indexOf('===== BEGIN CONTEXT ====='),
-    );
+    const fm = await readRun(db, run.id);
+    expect(fm.error_reason).not.toBe('claude_code_disabled');
+    // The provider stream was reached — preflight let it through.
+    expect(control.called).toBeGreaterThan(0);
   });
 
   test('claude-code — fails with claude_code_disabled when FOLIO_CLAUDE_CODE_ENABLED is off', async () => {
-    // Preflight step 0: if a run names the claude-code backend but the operator
-    // flag is off, the run must fail immediately with claude_code_disabled —
-    // before any DB work, key checks, or provider calls.
+    // Preflight step 0: a run naming the claude-code backend fails immediately
+    // with claude_code_disabled — before any DB work, key checks, or provider
+    // calls. Unchanged behavior when the flag is off (now also true when ON).
     const { db, run } = await scaffold({
       withAiKey: false,
       agentOverrides: { provider: 'claude-code' },
@@ -1863,11 +1830,14 @@ describe('runAgentResume', () => {
     expect(control.called).toBe(0);
   });
 
-  test('FIX #8 — a claude-code resume branches to ccExecute and completes (no "Unknown AI provider")', async () => {
-    // REGRESSION: runAgentResume always called runLoop → getProvider('claude-code'),
-    // which throws "Unknown AI provider" (claude-code is intentionally absent from
-    // the REGISTRY). A resumed claude-code run must mirror runAgent's branch and
-    // delegate to ccExecute instead of crashing.
+  test('HARD-DISABLE — a claude-code RESUME is refused at preflight (never reaches ccExecute), flag ON', async () => {
+    // Phase C shake-out: runAgentResume calls the SAME preflight before its
+    // cc branch (runner.ts:287, before the ccExecute at :293). Like runAgent, a
+    // resumed claude-code run is now refused with claude_code_disabled regardless
+    // of the env flag — ccExecute is unreachable from BOTH entry points, so the
+    // cc-path floor/ceiling bypass (S-1/S-2) cannot be reached via resume either.
+    // (Historically this test asserted the resume branched to ccExecute and
+    // completed — FIX #8; that path is now hard-disabled.)
     const { db, workspace, project, user, agent, parent, run } = await scaffold({
       withAiKey: false,
       agentOverrides: { provider: 'claude-code', requires_approval: false },
@@ -1907,14 +1877,14 @@ describe('runAgentResume', () => {
       (env as { FOLIO_CLAUDE_CODE_ENABLED: boolean }).FOLIO_CLAUDE_CODE_ENABLED = prevCc;
     }
 
-    // The cc spawn was reached (proving the cc branch ran, not runLoop)...
-    expect(spawned).toBe(true);
-    // ...and the resume completed rather than crashing on "Unknown AI provider".
+    // ccExecute was NEVER reached — the CLI was never spawned on the resume path.
+    expect(spawned).toBe(false);
+    // The resume failed at preflight with the hard-disable reason.
     const fm = await readRun(db, run.id);
-    expect(fm.status).toBe('completed');
-    expect(fm.error_reason).toBeFalsy();
+    expect(fm.status).toBe('failed');
+    expect(fm.error_reason).toBe('claude_code_disabled');
     const results = await listKind(db, parent.id, 'result');
-    expect(results.length).toBe(1);
+    expect(results.length).toBe(0);
   });
 });
 
@@ -2004,77 +1974,54 @@ describe('rejectRun', () => {
 // ==========================================================================
 
 describe('runAgent claude-code branch', () => {
-  test('claude-code run: end-to-end completes, posts result, stores transcript', async () => {
+  test('claude-code run: refused at preflight — ccExecute never runs, no transcript/result, flag ON', async () => {
+    // Phase C shake-out: ccExecute is UNREACHABLE from runAgent (preflight step 0
+    // refuses before the branch at runner.ts:209). The CLI is never spawned, no
+    // transcript is captured, and no kind=result comment is posted — the run
+    // simply fails with claude_code_disabled. (Historically this asserted an
+    // end-to-end cc completion that posted a result + stored the transcript.)
     const { db, workspace, project, user, agent, parent, run } = await scaffold({
       withAiKey: false,
       agentOverrides: { provider: 'claude-code', requires_approval: false },
       runOverrides: { provider: 'claude-code' },
     });
 
+    let spawned = false;
     const prevCc = env.FOLIO_CLAUDE_CODE_ENABLED;
     (env as { FOLIO_CLAUDE_CODE_ENABLED: boolean }).FOLIO_CLAUDE_CODE_ENABLED = true;
-    __setCcSpawnForTest(() => ({
-      stdoutText: async () => 'did health check\nALL GOOD',
-      stderrText: async () => '',
-      exited: Promise.resolve(0),
-      kill: () => {},
-    }));
+    __setCcSpawnForTest(() => {
+      spawned = true;
+      return {
+        stdoutText: async () => 'did health check\nALL GOOD',
+        stderrText: async () => '',
+        exited: Promise.resolve(0),
+        kill: () => {},
+      };
+    });
     try {
       await runAgent({ runId: run.id });
 
-      // status=completed
+      // Refused at preflight, not executed.
       const fm = await readRun(db, run.id);
-      expect(fm.status).toBe('completed');
+      expect(fm.status).toBe('failed');
+      expect(fm.error_reason).toBe('claude_code_disabled');
+      expect(spawned).toBe(false);
 
-      // body holds transcript
+      // No transcript captured (ccExecute never ran).
       const runRow = await db.query.documents.findFirst({
         where: and(eq(documents.id, run.id), eq(documents.type, 'agent_run')),
       });
-      expect(runRow!.body).toContain('did health check');
+      expect(runRow!.body).not.toContain('did health check');
 
-      // a kind=result comment exists on the parent with the final result
+      // No kind=result comment posted.
       const results = await listKind(db, parent.id, 'result');
-      expect(results.length).toBeGreaterThan(0);
-      expect(results[0]!.body).toContain('ALL GOOD');
+      expect(results.length).toBe(0);
 
       // keep TypeScript happy — suppress unused variable warnings
       expect(workspace.id).toBeTruthy();
       expect(project.id).toBeTruthy();
       expect(user.id).toBeTruthy();
       expect(agent.id).toBeTruthy();
-    } finally {
-      __setCcSpawnForTest(undefined);
-      (env as { FOLIO_CLAUDE_CODE_ENABLED: boolean }).FOLIO_CLAUDE_CODE_ENABLED = prevCc;
-    }
-  });
-
-  test('claude-code run: failed executor transitions run to failed', async () => {
-    const { db, run } = await scaffold({
-      withAiKey: false,
-      agentOverrides: { provider: 'claude-code', requires_approval: false },
-      runOverrides: { provider: 'claude-code' },
-    });
-
-    const prevCc = env.FOLIO_CLAUDE_CODE_ENABLED;
-    (env as { FOLIO_CLAUDE_CODE_ENABLED: boolean }).FOLIO_CLAUDE_CODE_ENABLED = true;
-    __setCcSpawnForTest(() => ({
-      stdoutText: async () => 'error: something went wrong',
-      stderrText: async () => '',
-      exited: Promise.resolve(1),
-      kill: () => {},
-    }));
-    try {
-      await runAgent({ runId: run.id });
-
-      const fm = await readRun(db, run.id);
-      expect(fm.status).toBe('failed');
-      expect(fm.error_reason).toBe('provider_error');
-
-      // FIX 4 — transcript must be persisted even on failure
-      const runRow = await db.query.documents.findFirst({
-        where: and(eq(documents.id, run.id), eq(documents.type, 'agent_run')),
-      });
-      expect(runRow!.body).toContain('error: something went wrong');
     } finally {
       __setCcSpawnForTest(undefined);
       (env as { FOLIO_CLAUDE_CODE_ENABLED: boolean }).FOLIO_CLAUDE_CODE_ENABLED = prevCc;
@@ -2122,9 +2069,12 @@ describe('runAgent claude-code branch', () => {
     }
   });
 
-  test('claude-code run: cc-run token minted before spawn and revoked after completion', async () => {
-    // Verifies the mint-token-→-pass-to-CC-→-revoke lifecycle (Task 7b).
-    // We assert that AFTER runAgent returns, no cc-run:<runId> token row remains.
+  test('claude-code run: cc-run token is NEVER minted — refused before the mint (flag ON)', async () => {
+    // Phase C shake-out: the ephemeral cc-run:<runId> token used to be minted
+    // inside ccExecute, just before the spawn. ccExecute is now unreachable
+    // (preflight refuses first), so no such token is ever created — there is
+    // nothing to revoke. (Historically two tests verified the mint→revoke
+    // lifecycle on both the success and failure paths.)
     const { db, run } = await scaffold({
       withAiKey: false,
       agentOverrides: { provider: 'claude-code', requires_approval: false },
@@ -2142,37 +2092,10 @@ describe('runAgent claude-code branch', () => {
     try {
       await runAgent({ runId: run.id });
 
-      // After completion the ephemeral token must be gone (revoked in finally).
-      const leftover = await db.query.apiTokens.findFirst({
-        where: (t, { like }) => like(t.name, `cc-run:${run.id}`),
-      });
-      expect(leftover).toBeUndefined();
-    } finally {
-      __setCcSpawnForTest(undefined);
-      (env as { FOLIO_CLAUDE_CODE_ENABLED: boolean }).FOLIO_CLAUDE_CODE_ENABLED = prevCc;
-    }
-  });
-
-  test('claude-code run: cc-run token revoked even when executor fails', async () => {
-    // Verifies the finally-revoke path on failure.
-    const { db, run } = await scaffold({
-      withAiKey: false,
-      agentOverrides: { provider: 'claude-code', requires_approval: false },
-      runOverrides: { provider: 'claude-code' },
-    });
-
-    const prevCc = env.FOLIO_CLAUDE_CODE_ENABLED;
-    (env as { FOLIO_CLAUDE_CODE_ENABLED: boolean }).FOLIO_CLAUDE_CODE_ENABLED = true;
-    __setCcSpawnForTest(() => ({
-      stdoutText: async () => 'error output',
-      stderrText: async () => '',
-      exited: Promise.resolve(1),
-      kill: () => {},
-    }));
-    try {
-      await runAgent({ runId: run.id });
-
-      // Run failed, but token must still be cleaned up.
+      // The run failed at preflight...
+      const fm = await readRun(db, run.id);
+      expect(fm.error_reason).toBe('claude_code_disabled');
+      // ...and no cc-run token was ever minted.
       const leftover = await db.query.apiTokens.findFirst({
         where: (t, { like }) => like(t.name, `cc-run:${run.id}`),
       });
@@ -2669,13 +2592,14 @@ describe('Phase B — API-provider injection fence (B10a) + skill wiring (B3)', 
     expect(parentIdx).toBeGreaterThan(0);
   });
 
-  test('cc path folds skills into the TRUSTED system prompt, NOT the untrusted DATA envelope (B3/B10a)', async () => {
-    // Regression for the cc-path trust trap: buildInitialMessages prepends the
-    // trusted skills block, and ccExecute used to flatten buildInitialMessages
-    // into its "treat as untrusted DATA" envelope — which would mislabel a
-    // claude-code agent's OWN skill as untrusted. The fix splits skills (→ system
-    // prompt, trusted) from parent/comments (→ envelope, untrusted). Dormant in
-    // v1 (the operator is provider:anthropic) but a trap for the next cc agent.
+  test('cc path prompt-building is UNREACHABLE — a skill-bearing cc run is refused before any spawn (flag ON)', async () => {
+    // Historically this verified the cc-path trust-envelope split (skills →
+    // trusted system prompt; parent/comments → untrusted DATA envelope, B3/B10a)
+    // by capturing the spawned `claude -p <prompt>` argument. Phase C shake-out:
+    // ccExecute (where that prompt is built + the CLI spawned) is now unreachable
+    // — preflight refuses the cc run first — so the prompt is never built and the
+    // CLI is never spawned. The trust-split logic still lives in ccExecute for the
+    // eventual cc-path-authority revival, but it cannot be exercised via the runner.
     const scaffolded = await scaffold({
       agentOverrides: { provider: 'claude-code' },
       runOverrides: { provider: 'claude-code' },
@@ -2689,10 +2613,12 @@ describe('Phase B — API-provider injection fence (B10a) + skill wiring (B3)', 
       .set({ frontmatter: sql`json_set(${documents.frontmatter}, '$.provider', 'claude-code')` })
       .where(and(eq(documents.workspaceId, systemId), eq(documents.type, 'agent')));
 
+    let spawned = false;
     let capturedPrompt = '';
     const prevCcEnabled = env.FOLIO_CLAUDE_CODE_ENABLED;
     (env as { FOLIO_CLAUDE_CODE_ENABLED: boolean }).FOLIO_CLAUDE_CODE_ENABLED = true;
     __setCcSpawnForTest((args) => {
+      spawned = true;
       const i = args.argv.indexOf('-p');
       capturedPrompt = i >= 0 ? (args.argv[i + 1] ?? '') : '';
       return {
@@ -2709,16 +2635,12 @@ describe('Phase B — API-provider injection fence (B10a) + skill wiring (B3)', 
       (env as { FOLIO_CLAUDE_CODE_ENABLED: boolean }).FOLIO_CLAUDE_CODE_ENABLED = prevCcEnabled;
     }
 
-    // The skill body is present...
-    expect(capturedPrompt).toContain('Folio skill — the API manual');
-    // ...and it appears BEFORE the untrusted DATA envelope (i.e. in the trusted
-    // system-prompt region, NOT inside ===== BEGIN CONTEXT =====).
-    const beginIdx = capturedPrompt.indexOf('===== BEGIN CONTEXT =====');
-    expect(beginIdx).toBeGreaterThan(-1); // the parent body still gets fenced
-    expect(capturedPrompt.indexOf('Folio skill — the API manual')).toBeLessThan(beginIdx);
-    // The untrusted parent body IS inside the envelope (after BEGIN).
-    expect(capturedPrompt.indexOf('Migrate billing emails to the 2026 template.')).toBeGreaterThan(
-      beginIdx,
-    );
+    // The CLI was never spawned and no prompt was built.
+    expect(spawned).toBe(false);
+    expect(capturedPrompt).toBe('');
+    // The run was refused at preflight.
+    const fm = await readRun(db, scaffolded.run.id);
+    expect(fm.status).toBe('failed');
+    expect(fm.error_reason).toBe('claude_code_disabled');
   });
 });

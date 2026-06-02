@@ -6,7 +6,6 @@ import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import { db } from '../db/client.ts';
 import { documents, memberships, workspaces } from '../db/schema.ts';
-import { env } from '../env.ts';
 import { seedBuiltinTriggers } from '../lib/builtin-triggers.ts';
 import { emitEvent, txWithEvents } from '../lib/events.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
@@ -107,7 +106,10 @@ workspacesRoute.post(
 const workspaceItemRoute = new Hono<AuthContext & ScopeContext>();
 
 workspaceItemRoute.get('/', (c) =>
-  jsonOk(c, { ...getWorkspace(c), role: getRole(c), claude_code_enabled: env.FOLIO_CLAUDE_CODE_ENABLED }),
+  // claude-code is hard-disabled at the runner preflight — never advertise it as
+  // selectable; the env flag (env.FOLIO_CLAUDE_CODE_ENABLED) no longer enables
+  // execution, so showing the cc provider option in the UI would be a footgun.
+  jsonOk(c, { ...getWorkspace(c), role: getRole(c), claude_code_enabled: false }),
 );
 
 workspaceItemRoute.patch(

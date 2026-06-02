@@ -538,14 +538,23 @@ async function preflight(ctx: RunContext, excludeRunId?: string): Promise<boolea
   const { run, fm, agent, agentFm } = ctx;
   const runId = run.id;
 
-  // 0 — claude-code backend gate. Refuse to spawn a local CLI unless explicitly
-  // enabled for this install (spawns `claude` with host SSH/file access; unsafe
-  // on shared/hosted deployments). Cheapest check — runs before any DB work.
-  if (ctx.fm.provider === 'claude-code' && !env.FOLIO_CLAUDE_CODE_ENABLED) {
+  // 0 — claude-code backend gate. HARD-DISABLED (Phase C shake-out): ANY
+  // claude-code run is refused here, regardless of FOLIO_CLAUDE_CODE_ENABLED.
+  // WHY: the cc path spawns the `claude` CLI, which re-enters Folio via /mcp
+  // UNAWARE of run-derived authority — so the C3 unattended floor AND the
+  // agent∩caller scope ceiling are both bypassed on that path (security gaps
+  // S-1/S-2 from the Phase C shake-out). cc stays hard-disabled until the
+  // cc-path authority is threaded through the CLI re-entry. Because this gate
+  // fires before runAgent/runAgentResume branch to ccExecute (runner.ts:209/293),
+  // ccExecute is now UNREACHABLE — which makes S-1/S-2 unreachable by
+  // construction. The env flag is left parsed (env.ts) for deploy-config
+  // compatibility but NO LONGER enables execution. Cheapest check — runs before
+  // any DB work.
+  if (ctx.fm.provider === 'claude-code') {
     await failRun(
       ctx,
       runErrorReasonSchema.enum.claude_code_disabled,
-      'The claude-code backend is disabled. Set FOLIO_CLAUDE_CODE_ENABLED=true to enable it.',
+      'The claude-code backend is disabled in this build (refused at preflight). Use an API provider (anthropic/openai/openrouter/ollama).',
     );
     return true;
   }
@@ -554,9 +563,10 @@ async function preflight(ctx: RunContext, excludeRunId?: string): Promise<boolea
   // the key into ctx.apiKey (empty string when absent — a missing key is a
   // pre-flight failure, not a load failure). Derive presence from that instead
   // of a second ai_keys query.
-  // claude-code is a keyless local backend — it spawns the `claude` CLI, which
-  // authenticates itself. Skip the BYOK key requirement for it.
-  if (ctx.fm.provider !== 'claude-code' && !ctx.apiKey) {
+  // (claude-code — the only keyless/local backend — can no longer reach here: it
+  // is hard-refused at step 0, so every provider past this point is a keyed API
+  // provider and the BYOK key requirement always applies.)
+  if (!ctx.apiKey) {
     await failRun(
       ctx,
       runErrorReasonSchema.enum.no_ai_key,
@@ -611,9 +621,10 @@ async function preflight(ctx: RunContext, excludeRunId?: string): Promise<boolea
     return true;
   }
 
-  // 5 — provider health. Skip for claude-code: it is keyless/local with no
-  // tracked health state (and `ProviderName` excludes it).
-  if (ctx.fm.provider !== 'claude-code') {
+  // 5 — provider health. (claude-code, the only backend without tracked health
+  // state, can no longer reach here — it is hard-refused at step 0 — so the
+  // provider is always a keyed API provider `ProviderName` includes.)
+  {
     const health = await checkProviderHealth({
       workspaceId: run.workspaceId,
       provider: fm.provider as ProviderName,
@@ -1049,6 +1060,13 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
 // ---------------------------------------------------------------------------
 
 /**
+ * UNREACHABLE as of the Phase C shake-out — preflight refuses ALL claude-code
+ * runs (step 0, runner.ts), so neither runAgent nor runAgentResume ever branch
+ * into this function. Kept (not deleted) for the eventual cc-path-authority
+ * revival, when the CLI re-entry is taught about run-derived authority. See the
+ * security gaps S-1 (C3 unattended floor bypass) and S-2 (agent∩caller scope
+ * ceiling bypass) — both live ONLY on this path.
+ *
  * claude-code execution branch. CC runs its own agentic loop to completion;
  * we capture the transcript onto the run body, post the final result as a
  * kind=result comment, and transition the run. Pre-run approval
