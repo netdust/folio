@@ -129,3 +129,20 @@ export async function makeTestApp(opts: HarnessOptions = {}): Promise<{
     },
   };
 }
+
+/**
+ * A migrated, EMPTY in-memory db wired to the app's db proxy — no seeded user,
+ * workspace, or project. For tests that need the zero-users state (e.g. the
+ * first-user registration gate). Mirrors makeTestApp's db wiring without the seed.
+ */
+export async function makeBareTestDb(): Promise<{ app: ServerApp; db: DB }> {
+  const sqlite = new Database(':memory:');
+  sqlite.exec('PRAGMA foreign_keys = ON');
+  sqlite.exec('PRAGMA busy_timeout = 5000');
+  const db = drizzle(sqlite, { schema });
+  migrate(db, { migrationsFolder: MIGRATIONS_DIR });
+  globalThis.__folioTestDb = db;
+  __resetDbForTests();
+  const { app } = await import('../app.ts');
+  return { app, db };
+}
