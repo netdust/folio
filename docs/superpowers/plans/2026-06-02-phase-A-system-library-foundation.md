@@ -168,8 +168,15 @@ git commit -m "phase-A: reserved-slug helper + bootstrap env flags (M1/M2/M3/M5)
 
 **Mitigations: M2, M3.**
 
+> **⚠️ PLAN-CORRECTION 2026-06-02 (controller ground-truth at dispatch — `routes/workspaces.ts` read at HEAD).** The plan assumed `PATCH /w/:slug` accepts a `slug` rename field. **It does NOT** — `workspaceItemRoute.patch` (line 100-125) validates ONLY `{ name: z.string()... }`; the workspace **slug is immutable** in the current code (there is no rename-the-slug path; DELETE/recreate is the only way to change it). Consequences for M3:
+> - There is no PATCH-slug code path to guard, so adding an `assertSlugAllowed` call to PATCH would be **dead code**. Do NOT add it.
+> - **M3 is satisfied structurally** by slug-immutability: a user cannot rename ANY workspace to `__system` because they cannot rename a slug at all. The test must assert THIS reality (PATCH with a `slug` field is ignored/rejected by the `{name}`-only zod schema → slug unchanged), not a `RESERVED_SLUG` 400 that the code never emits.
+> - The CREATE guard (M2) is real and stands as written below. Only the RENAME half changed shape.
+>
+> So Task 2 = (a) CREATE guard `assertSlugAllowed` on the final resolved slug (M2, real), (b) the exported `assertSlugAllowed` unit-tested directly (M2/M3 logic pinned independent of routes), (c) an M3 test asserting slug-immutability blocks rename-to-`__system` (the PATCH `{name}`-only schema strips an attempted `slug`). NO PATCH guard code.
+
 **Files:**
-- Modify: `apps/server/src/routes/workspaces.ts` (CREATE ~line 62, RENAME/PATCH ~line 100)
+- Modify: `apps/server/src/routes/workspaces.ts` (CREATE ~line 62; export `assertSlugAllowed`; NO PATCH change — slug is immutable)
 - Test: `apps/server/src/routes/workspaces.test.ts` (extend)
 
 - [ ] **Step 1: Write the failing tests** (read the file first for the session-cookie test pattern):
