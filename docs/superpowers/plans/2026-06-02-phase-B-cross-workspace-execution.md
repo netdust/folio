@@ -259,6 +259,8 @@ git commit -m "phase-B: loadContext resolves agent by home gated by {run-ws, __s
 
 **Mitigations: B3, B4, B9, B10(a).**
 
+> **⚠️ PLAN-CORRECTION PC-2 (2026-06-02, Step-2.5 ground-truth at Task 4 dispatch):** the plan assumed the agent DECLARES its skills in `frontmatter.skills` (`['folio']`) and the runner materializes them at load. Ground-truthing the SHIPPED Phase-A code found a fork: `agentFrontmatterSchema` (`lib/agent-schema.ts`) is `.strict()` with **NO `skills` field**, and the Phase-A operator uses a DIFFERENT model — its `OPERATOR_PROMPT` (`lib/system-skills.ts`) tells it to read the `folio` skill at RUNTIME via `get_document` at slug `folio`. The two are incompatible (a `skills` key would fail `.strict()`), and the runtime `get_document` read of a `__system` doc from a caller-bounded B-run is the exact B3/B4 un-runnable risk. **Stefan's decision (surfaced with the consequence per `feedback_state-consequences-and-dont-flatter`): adopt the DEFINITIONAL-LOAD model the plan + threat model were written for.** So Task 4 now ALSO: (a) adds `skills: z.array(z.string()).optional()` to `agentFrontmatterSchema`; (b) sets `frontmatter.skills = [FOLIO_SKILL_SLUG]` on the seeded operator in `ensureOperatorAgent`; (c) updates `OPERATOR_PROMPT` to DROP the "read the folio skill via `get_document`" instruction (the skill is now materialized into context at load). The narrow internal SYSTEM-auth read (`loadAgentDefinition`) + the API-path injection fence are unchanged from the plan below.
+
 **Files:**
 - Modify: `apps/server/src/lib/runner.ts` (add `loadAgentDefinition`, call it in `loadContext`; verify/add the DATA fence on the API-provider `buildInitialMessages` path)
 - Test: `apps/server/src/lib/runner.test.ts`
