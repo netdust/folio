@@ -1224,3 +1224,115 @@ test('I1 regression: a SESSION (human) request to the list still returns ALL age
   const trigRes = await app.request(`${WS_PATH}?type=trigger`, { headers: { Cookie: seed.sessionCookie } });
   expect((await trigRes.json()).data).toHaveLength(1);
 });
+
+// ---------------------------------------------------------------------------
+// Phase B B8 — __system library agents surface (badged library:true) in every
+// workspace's agent listing.
+// ---------------------------------------------------------------------------
+
+import { SYSTEM_WORKSPACE_SLUG } from '../lib/system-workspace.ts';
+import { listWorkspaceDocuments as listWorkspaceDocsService } from '../services/documents.ts';
+import { workspaces as realWorkspaces } from '../db/schema.ts';
+
+/** Seed the __system workspace + a library agent directly (bypasses bootstrap). */
+async function seedSystemLibraryAgent(workspaceUserId: string, slug: string): Promise<string> {
+  const systemId = nanoid();
+  await realDb.insert(realWorkspaces).values({
+    id: systemId,
+    slug: SYSTEM_WORKSPACE_SLUG,
+    name: 'System Library',
+  });
+  const agentId = nanoid();
+  await realDb.insert(documentsTable).values({
+    id: agentId,
+    workspaceId: systemId,
+    projectId: null,
+    tableId: null,
+    type: 'agent',
+    slug,
+    title: slug,
+    status: null,
+    body: 'Library operator.',
+    frontmatter: {
+      system_prompt: 'You are the operator.',
+      model: 'claude-sonnet-4-6',
+      provider: 'anthropic',
+      tools: [],
+      projects: ['*'],
+    },
+    createdBy: workspaceUserId,
+    updatedBy: workspaceUserId,
+  });
+  return systemId;
+}
+
+test('GET /w/:wslug/documents?type=agent includes __system library agents badged library:true (B8 listing)', async () => {
+  const { app, seed } = await makeTestApp();
+  await postWorkspaceDoc(app, seed.sessionCookie, {
+    type: 'agent', title: 'Local Helper',
+    frontmatter: { system_prompt: 'x', model: 'm', provider: 'anthropic', tools: [] },
+  });
+  await seedSystemLibraryAgent(seed.user.id, 'operator');
+
+  const res = await app.request(`${WS_PATH}?type=agent`, { headers: { Cookie: seed.sessionCookie } });
+  const data = (await res.json()).data as Array<{ slug: string; library?: boolean }>;
+  expect(data).toHaveLength(2);
+  const local = data.find((d) => d.slug === 'local-helper');
+  const library = data.find((d) => d.slug === 'operator');
+  expect(local?.library).toBe(false);
+  expect(library?.library).toBe(true);
+});
+
+test('a workspace-local agent shadows a __system agent of the same slug in the listing (local wins)', async () => {
+  const { app, seed } = await makeTestApp();
+  await postWorkspaceDoc(app, seed.sessionCookie, {
+    type: 'agent', title: 'dup',
+    frontmatter: { system_prompt: 'local', model: 'm', provider: 'anthropic', tools: [] },
+  });
+  await seedSystemLibraryAgent(seed.user.id, 'dup');
+
+  const res = await app.request(`${WS_PATH}?type=agent`, { headers: { Cookie: seed.sessionCookie } });
+  const data = (await res.json()).data as Array<{ slug: string; workspaceId: string; library?: boolean }>;
+  const dups = data.filter((d) => d.slug === 'dup');
+  expect(dups).toHaveLength(1);
+  // The local one wins → not badged library, and homed in the workspace.
+  expect(dups[0]?.library).toBe(false);
+  expect(dups[0]?.workspaceId).toBe(seed.workspace.id);
+});
+
+test('an agent-bound token still sees only itself, not __system library agents (I1 guard preserved)', async () => {
+  const { app, seed } = await makeTestApp();
+  const parentRes = await postWorkspaceDoc(app, seed.sessionCookie, {
+    type: 'agent', title: 'Self Agent',
+    frontmatter: { system_prompt: 'x', model: 'm', provider: 'anthropic', tools: [], projects: ['*'] },
+  });
+  const parent = (await parentRes.json()).data as { id: string };
+  await seedSystemLibraryAgent(seed.user.id, 'operator');
+
+  const { token, hash } = newApiToken();
+  await realDb.insert(apiTokens).values({
+    id: nanoid(),
+    workspaceId: seed.workspace.id,
+    name: 'self-bound',
+    tokenHash: hash,
+    scopes: ['documents:read'],
+    createdBy: seed.user.id,
+    agentId: parent.id,
+  });
+
+  const res = await app.request(`${WS_PATH}?type=agent`, { headers: { Authorization: `Bearer ${token}` } });
+  const data = (await res.json()).data as Array<{ id: string }>;
+  expect(data).toHaveLength(1);
+  expect(data[0]?.id).toBe(parent.id);
+});
+
+test('listing __system itself does not double-union its own agents', async () => {
+  const { db, seed } = await makeTestApp();
+  const systemId = await seedSystemLibraryAgent(seed.user.id, 'operator');
+
+  const rows = await listWorkspaceDocsService({ workspaceId: systemId, type: 'agent' });
+  expect(rows.filter((r) => r.slug === 'operator')).toHaveLength(1);
+  expect(rows).toHaveLength(1);
+  // sanity: db handle is the same realDb proxy the route uses
+  expect(db).toBeDefined();
+});

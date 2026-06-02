@@ -244,6 +244,19 @@ export async function getSystemWorkspaceId(db: DB): Promise<string> {
 }
 
 /**
+ * SOFT variant of `getSystemWorkspaceId` (Phase B B8 listing/mention surfaces).
+ * Returns the `__system` workspace id, or `undefined` when the library has not
+ * been bootstrapped. Listing/mention-resolution call sites must degrade to "no
+ * library agents" rather than 500 the whole agent picker / comment write when
+ * `__system` is absent — unlike the post-bootstrap paths, an absent library
+ * here is a legitimate runtime state (fresh install before boot tasks ran).
+ */
+export async function findSystemWorkspaceId(db: DB): Promise<string | undefined> {
+  const sys = await findSystemWorkspace(db);
+  return sys?.id;
+}
+
+/**
  * Resolve an agent document for a RUN in workspace `workspaceId`, gated by the
  * home predicate {run-ws, __system} (B1, the create-path security boundary).
  *

@@ -43,6 +43,7 @@ import { newApiToken } from '../lib/auth.ts';
 import { walkParentChain } from '../lib/delegation-guard.ts';
 import { compileFilterToWhere } from '../lib/filter-to-drizzle.ts';
 import { slugUniqueInDocuments, slugUniqueInWorkspaceDocuments } from '../lib/slug-unique.ts';
+import { findSystemWorkspaceId } from '../lib/system-workspace.ts';
 
 // ----- shared types & helpers (kept service-private; routes don't import) -----
 
@@ -1237,13 +1238,47 @@ export async function listWorkspaceDocuments(opts: {
       eq(documents.type, opts.type),
     ),
   });
-  if (!opts.projectFilter) return rows;
+
+  // Phase B B8 (listing surface) — UNION the `__system` library's agents into
+  // every NON-system workspace's agent listing so library agents (the operator)
+  // appear in the run launcher / assign picker / @-mention picker. The run-CREATE
+  // path already resolves + home-stamps `__system` agents (resolveAgentForRun,
+  // createRun); this is the convenience LISTING, NOT the security boundary (B8
+  // is enforced server-side at createRun).
+  //
+  // DOCUMENTED DECISION (plan fix #4): this unions ALL `__system` type='agent'
+  // docs with NO published/internal flag — so any agent created in `__system` is
+  // instantly invokable by every customer workspace. ACCEPTABLE for v1 because
+  // `__system` holds exactly ONE intended agent (the operator), curated only by
+  // instance admins. A future INTERNAL `__system` agent would need a
+  // `frontmatter.published` filter — that's the OP-LIB-1 follow-up.
+  //
+  // The union is SOFT (no `__system` → just the local agents, no throw) and is
+  // SKIPPED when the request IS for `__system` itself (the workspace already IS
+  // the library — no self-union / double-listing). Local agents SHADOW a library
+  // agent of the same slug (dedupe by slug, local wins — mirrors the run-create
+  // precedence in resolveAgentForRun).
+  let merged = rows;
+  if (opts.type === 'agent') {
+    const systemId = await findSystemWorkspaceId(db);
+    if (systemId && systemId !== opts.workspaceId) {
+      // TODO(library-visibility): filter the __system union on frontmatter.published
+      // when a non-public __system agent is needed (OP-LIB-1)
+      const systemAgents = await db.query.documents.findMany({
+        where: and(eq(documents.workspaceId, systemId), eq(documents.type, 'agent')),
+      });
+      const localSlugs = new Set(rows.map((d) => d.slug));
+      merged = [...rows, ...systemAgents.filter((d) => !localSlugs.has(d.slug))];
+    }
+  }
+
+  if (!opts.projectFilter) return merged;
   // BUG-018 — route through resolveAgentProjects so legacy / hand-edited
   // rows missing `frontmatter.projects` fall back to ['*'] (workspace-wide)
   // instead of being silently dropped. Mirrors the contract that bearer,
   // SSE, mention-parser, and the reconciler all share.
   const target = opts.projectFilter;
-  return rows.filter((d) => {
+  return merged.filter((d) => {
     const projs = resolveAgentProjects(d);
     return projs.includes('*') || projs.includes(target);
   });

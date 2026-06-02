@@ -42,7 +42,7 @@ function stubFetch(handlers: Record<string, () => Response>) {
 }
 
 // Helper to build an agent DocumentSummary
-function makeAgent(slug: string, title: string, id = slug) {
+function makeAgent(slug: string, title: string, id = slug, library = false) {
   return {
     id,
     slug,
@@ -50,6 +50,7 @@ function makeAgent(slug: string, title: string, id = slug) {
     title,
     status: null,
     parentId: null,
+    library,
     frontmatter: { projects: ['*'] },
     createdAt: '2026-05-26T00:00:00.000Z',
     updatedAt: '2026-05-26T00:00:00.000Z',
@@ -466,6 +467,34 @@ describe('MentionPicker', () => {
     fireEvent.click(btn);
 
     expect(onSelect).toHaveBeenCalledWith({ type: 'agent', value: 'drafter' });
+  });
+
+  it('shows a "library" marker next to a __system agent and not next to a local one (B8)', async () => {
+    const qc = makeQC();
+    stubFetch({
+      '/documents?type=agent': makeAgentsResponse([
+        makeAgent('drafter', 'Reply Drafter'),
+        makeAgent('operator', 'Operator', 'op', true),
+      ]),
+      '/members': makeMembersResponse(defaultMembers),
+    });
+
+    render(
+      <MentionPicker
+        workspaceSlug="acme"
+        projectId="pid-1"
+        query=""
+        onSelect={vi.fn()}
+        onClose={vi.fn()}
+      />,
+      { wrapper: wrap(qc) },
+    );
+
+    // The library agent's row carries the marker; the local agent's row does not.
+    const libRow = await screen.findByRole('option', { name: /Operator/i });
+    expect(libRow).toHaveTextContent('library');
+    const localRow = screen.getByRole('option', { name: /Reply Drafter/i });
+    expect(localRow).not.toHaveTextContent('library');
   });
 
   it('clicking a member row calls onSelect with type=user', async () => {
