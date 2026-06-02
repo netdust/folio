@@ -1786,3 +1786,9 @@ See `docs/PHASES.md` for the canonical phase list (above-section mirrors it). Lo
 
 **Decisions**
 - **fold `is_system_member` into `GET /auth/me`** (the per-user boot payload), not `/workspaces` (avoids the array→object envelope change, and membership-of-`__system` is a user property). `useMe()` already provides it to the whole app; `useIsSystemMember()` reads from there. Dispatching Task 2.
+
+---
+### 2026-06-02 — tagged capture
+
+**Decisions**
+- **fold `is_system_member` into `GET /auth/me`** (the per-user boot payload), not `/workspaces` (avoids the array→object envelope change, and membership-of-`__system` is a user property). `useMe()` already provides it to the whole app; `useIsSystemMember()` reads from there. Dispatching Task 2.
