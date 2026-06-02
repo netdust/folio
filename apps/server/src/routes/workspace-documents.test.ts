@@ -1259,6 +1259,11 @@ async function seedSystemLibraryAgent(workspaceUserId: string, slug: string): Pr
       provider: 'anthropic',
       tools: [],
       projects: ['*'],
+      // CR-F1 — server-managed fields injected at run-create. These MUST be
+      // stripped before a cross-tenant member sees the library row (api_token_id
+      // is the operator's bearer-token id; parent_agent is delegation lineage).
+      api_token_id: 'tok_secret_123',
+      parent_agent: 'parent-operator',
     },
     createdBy: workspaceUserId,
     updatedBy: workspaceUserId,
@@ -1443,6 +1448,16 @@ test('D4: cross-workspace agent list exposes only invokable fields of a __system
   // Prompt redacted: body emptied, frontmatter.system_prompt removed.
   expect(library?.body).toBe('');
   expect(library?.frontmatter.system_prompt).toBeUndefined();
+  // CR-F1 — the LIVE leak: the old 2-key denylist passed every other key
+  // through, exposing the operator's bearer-token id + delegation lineage to a
+  // cross-tenant member. The allow-list must drop both.
+  expect(library?.frontmatter.api_token_id).toBeUndefined();
+  expect(library?.frontmatter.parent_agent).toBeUndefined();
+  // Invokable frontmatter the picker / run launcher reads MUST survive.
+  expect(library?.frontmatter.model).toBe('claude-sonnet-4-6');
+  expect(library?.frontmatter.provider).toBe('anthropic');
+  expect(library?.frontmatter.tools).toEqual([]);
+  expect(library?.frontmatter.projects).toEqual(['*']);
 
   // The workspace's OWN agent keeps its body + system_prompt (library-only redaction).
   const local = data.find((d) => d.slug === 'local-helper');

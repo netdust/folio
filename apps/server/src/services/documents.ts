@@ -1225,22 +1225,81 @@ export async function getWorkspaceDocument(
   return row ?? null;
 }
 
-/** List workspace-scoped agents/triggers, optionally narrowed to those allow-listed for a project. */
 /**
- * Phase D D4 — strip a `__system` (library) agent's instructions before it is
- * unioned into a NON-library workspace's agent listing. Mirrors
- * `redactRunForApi` (agent-runs.ts): clones the frontmatter and removes the
- * legacy `system_prompt`, and ALSO empties `body` (the agent's prompt, post the
- * Phase-3 body-as-prompt change). Keeps every INVOKABLE field — id / slug /
- * title / type / workspaceId / model / provider / tools / projects — so the run
- * launcher / assign / mention pickers still work. Does NOT mutate the input;
- * returns a shallow-cloned row. Apply ONLY to library rows: the workspace's OWN
- * agents must keep their body (the member authored + edits them).
+ * Frontmatter keys a cross-tenant member legitimately needs to INVOKE a
+ * `__system` (library) agent from a picker / run launcher: model + provider +
+ * tools + skills + projects (resolve which projects it can touch) +
+ * requires_approval (the picker can show the approval marker) +
+ * max_delegation_depth + max_tokens_per_run (run-shape budget the launcher may
+ * surface). This is the full PUBLIC agent-frontmatter set from
+ * `agentFrontmatterSchema` (lib/agent-schema.ts) MINUS the sensitive
+ * `system_prompt` and the server-managed `api_token_id` / `parent_agent`.
+ *
+ * We use a POSITIVE ALLOW-LIST (not a denylist) so a future sensitive
+ * frontmatter key is DROPPED by default — fail-closed. The old 2-key denylist
+ * LIVE-leaked `frontmatter.api_token_id` (the operator's bearer-token id,
+ * server-injected at documents.ts createRun) to any non-`__system` member of B.
+ */
+const LIBRARY_AGENT_PUBLIC_FRONTMATTER_KEYS = [
+  'model',
+  'provider',
+  'tools',
+  'skills',
+  'projects',
+  'requires_approval',
+  'max_delegation_depth',
+  'max_tokens_per_run',
+] as const;
+
+/**
+ * Phase D D4 / CR-F1+F2 — strip a `__system` (library) agent down to its
+ * INVOKABLE surface before it is unioned into a NON-library workspace's
+ * listing. A cross-tenant member receives a library agent purely to INVOKE it
+ * from a picker; its PROMPT (`body`, post the Phase-3 body-as-prompt change),
+ * legacy `frontmatter.system_prompt`, and the server-managed
+ * `frontmatter.api_token_id` (the operator's bearer-token id) are cross-tenant
+ * content that must NOT leak.
+ *
+ * Frontmatter is rebuilt from a POSITIVE ALLOW-LIST
+ * (`LIBRARY_AGENT_PUBLIC_FRONTMATTER_KEYS`) so any key NOT explicitly invokable
+ * is dropped — closing the prior denylist's live `api_token_id` leak AND any
+ * FUTURE sensitive key by construction. Top-level Document columns (id / slug /
+ * title / type / workspaceId / …) are kept verbatim — the run launcher / assign
+ * / mention pickers + the downstream `library:true` badge
+ * (workspace-documents.ts) read those. Does NOT mutate the input; `body: ''`.
+ *
+ * Apply ONLY to rows whose provenance is `__system` (see the provenance-keyed
+ * union below): the workspace's OWN agents must keep body + full frontmatter
+ * (a member authored + edits them).
  */
 export function redactLibraryAgentForList(row: Document): Document {
-  const fm = { ...(row.frontmatter as Record<string, unknown>) };
-  delete fm.system_prompt;
+  const src = (row.frontmatter ?? {}) as Record<string, unknown>;
+  const fm: Record<string, unknown> = {};
+  for (const k of LIBRARY_AGENT_PUBLIC_FRONTMATTER_KEYS) {
+    if (k in src) fm[k] = src[k];
+  }
   return { ...row, body: '', frontmatter: fm };
+}
+
+/**
+ * CR-F2 — merge `__system` (library) rows into a customer workspace's local
+ * listing with the security-critical steps a `__system` union MUST apply:
+ *   1. SLUG DEDUPE: local rows SHADOW a library row of the same slug (local
+ *      wins — mirrors resolveAgentForRun's run-create precedence).
+ *   2. PROVENANCE-KEYED REDACTION: every surviving library row is stripped to
+ *      its invokable surface (redactLibraryAgentForList) — its body /
+ *      system_prompt / api_token_id are cross-tenant content that must not leak.
+ *
+ * Factored out so a SECOND `__system` union site (a future `__system` TRIGGER
+ * union, OP-LIB-1) reuses the same merge instead of re-deriving the redaction
+ * from the type branch. `local` rows are returned untouched.
+ */
+function unionSystemRows(local: Document[], systemRows: Document[]): Document[] {
+  const localSlugs = new Set(local.map((d) => d.slug));
+  const redacted = systemRows
+    .filter((d) => !localSlugs.has(d.slug))
+    .map(redactLibraryAgentForList);
+  return [...local, ...redacted];
 }
 
 export async function listWorkspaceDocuments(opts: {
@@ -1284,21 +1343,23 @@ export async function listWorkspaceDocuments(opts: {
       const systemAgents = await db.query.documents.findMany({
         where: and(eq(documents.workspaceId, systemId), eq(documents.type, 'agent')),
       });
-      const localSlugs = new Set(rows.map((d) => d.slug));
-      // Phase D D4 — REDACT the unioned `__system` (library) rows before they
-      // leave this loader. A non-`__system`-member of B receives a library
-      // agent purely to INVOKE it from a picker (id/slug/title/etc.); its PROMPT
-      // (`body`, post the Phase-3 body-as-prompt change) and any legacy
-      // `frontmatter.system_prompt` are cross-tenant content that must NOT leak.
-      // We strip HERE, at the loader's union point (NOT in the route), so every
-      // present + future consumer of listWorkspaceDocuments inherits the strip —
-      // the "redact at the loader, not the handler" lesson (system_prompt leaked
-      // 3× when redaction was per-handler). The workspace's OWN agents (in
-      // `rows`) are untouched: a member legitimately authored + edits them.
-      const redactedSystemAgents = systemAgents
-        .filter((d) => !localSlugs.has(d.slug))
-        .map(redactLibraryAgentForList);
-      merged = [...rows, ...redactedSystemAgents];
+      // Phase D D4 / CR-F2 — dedupe-then-REDACT every row that came from
+      // `__system`. The redaction is keyed on PROVENANCE (the row's
+      // workspaceId === systemId), NOT on the type branch: it strips a library
+      // row down to its invokable surface (see redactLibraryAgentForList)
+      // BECAUSE the row is cross-tenant content, regardless of WHICH union
+      // surfaced it. We strip HERE, at the loader's union point (NOT in the
+      // route), so every present + future consumer of listWorkspaceDocuments
+      // inherits the strip — the "redact at the loader, not the handler" lesson
+      // (system_prompt leaked 3× when redaction was per-handler). The
+      // workspace's OWN agents (in `rows`, workspaceId === opts.workspaceId)
+      // are untouched: a member legitimately authored + edits them.
+      //
+      // INVARIANT for OP-LIB-1: ANY future `__system` union into a customer
+      // workspace (e.g. a `__system` TRIGGER union) MUST route its rows through
+      // unionSystemRows below so it inherits the same provenance-keyed redaction
+      // and slug-dedupe — do not re-implement the merge inline.
+      merged = unionSystemRows(rows, systemAgents);
     }
   }
 
