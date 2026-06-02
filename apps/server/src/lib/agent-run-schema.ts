@@ -72,6 +72,13 @@ export const agentRunFrontmatterSchema = z
     status: runStatusSchema,
 
     agent_slug: z.string().regex(/^[a-z0-9-]+$/),
+
+    // Server-stamped at createRun from where the agent was RESOLVED (B's own
+    // workspace, or `__system` for a library agent) — NEVER client-supplied
+    // (B2). Absent ⇒ home = run.workspaceId (local agent, backward-compatible).
+    // No migration: the field is JSON in the frontmatter column.
+    agent_home_workspace_id: z.string().optional(),
+
     provider: providerSchema,
     model: z.string().default(''),
     system_prompt: z.string(),

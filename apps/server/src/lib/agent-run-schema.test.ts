@@ -155,6 +155,22 @@ describe('agentRunFrontmatterSchema', () => {
     const { caller_scopes: _omit, ...withoutCallerScopes } = valid;
     expect(() => agentRunFrontmatterSchema.parse(withoutCallerScopes)).toThrow();
   });
+
+  // Phase B (B2) — agent_home_workspace_id is server-stamped at createRun from
+  // where the agent was RESOLVED (B's own workspace, or __system for a library
+  // agent). Optional: existing runs predate it; absent ⇒ home = run.workspaceId.
+  test('accepts agent_home_workspace_id', () => {
+    const parsed = agentRunFrontmatterSchema.parse({
+      ...valid,
+      agent_home_workspace_id: 'ws_abc',
+    });
+    expect(parsed.agent_home_workspace_id).toBe('ws_abc');
+  });
+
+  test('still validates a run WITHOUT agent_home_workspace_id (backward compat)', () => {
+    const parsed = agentRunFrontmatterSchema.parse(valid);
+    expect(parsed.agent_home_workspace_id).toBeUndefined();
+  });
 });
 
 describe('runDoneReasonSchema', () => {

@@ -9,6 +9,7 @@ import {
   bootstrapSystemWorkspace,
   designateInstanceOwner,
   ensureOperatorAgent,
+  getSystemWorkspaceId,
   grantOwner,
   isReservedSlug,
   runBootTasks,
@@ -271,6 +272,25 @@ describe('grantOwner + ensureOperatorAgent + designateInstanceOwner (M5/M8)', ()
       where: and(eq(documents.workspaceId, sys!.id), eq(documents.type, 'agent')),
     });
     expect(agent).toBeDefined();
+  });
+});
+
+describe('getSystemWorkspaceId (Phase B B2 — cross-workspace resolution)', () => {
+  test('returns the bootstrapped __system id', async () => {
+    const { db } = await makeTestApp();
+    await bootstrapSystemWorkspace(db);
+    const id = await getSystemWorkspaceId(db);
+    const sys = await db.query.workspaces.findFirst({
+      where: eq(workspaces.slug, SYSTEM_WORKSPACE_SLUG),
+    });
+    expect(id).toBe(sys!.id);
+  });
+
+  test('throws SYSTEM_WORKSPACE_MISSING before bootstrap', async () => {
+    const { db } = await makeTestApp();
+    await expect(getSystemWorkspaceId(db)).rejects.toThrow(
+      /SYSTEM_WORKSPACE_MISSING|__system/,
+    );
   });
 });
 
