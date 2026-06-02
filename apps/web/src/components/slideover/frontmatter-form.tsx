@@ -12,6 +12,7 @@ import { FieldRenderer } from './field-renderer.tsx';
 import { BacklinksPanel } from './backlinks-panel.tsx';
 import type { RelationCandidate } from '../relations/relation-picker.tsx';
 import { AssigneePicker } from '../assignee/assignee-picker.tsx';
+import { TriggerAgentField } from '../triggers/trigger-agent-field.tsx';
 import { ProjectsField } from '../inline/projects-field.tsx';
 import { ToolsField } from '../inline/tools-field.tsx';
 import { ProviderModelField } from '../inline/provider-model-field.tsx';
@@ -167,6 +168,10 @@ export function FrontmatterForm({
         // The `provider` key on agents renders a paired editor that owns both
         // `provider` and `model` (model has been filtered out of orderedKeys).
         const isProvider = key === 'provider' && type === 'agent';
+        // Phase C: a trigger's `agent` key references the agent it fires by bare
+        // slug. Render an agent picker that offers workspace agents PLUS __system
+        // library agents (badged), instead of a plain text input.
+        const isTriggerAgent = key === 'agent' && type === 'trigger';
         // Phase 3.x: relation fields in the project slideover (docSlug set) get
         // an editable picker fed by candidate documents. Without docSlug they
         // fall through to FieldRenderer, which renders read-only chips.
@@ -211,6 +216,12 @@ export function FrontmatterForm({
                 <AssigneePicker
                   wslug={wslug}
                   pslug={pslug}
+                  value={typeof value === 'string' ? value : ''}
+                  onChange={(next) => onFrontmatterCommit({ [key]: next })}
+                />
+              ) : isTriggerAgent ? (
+                <TriggerAgentField
+                  wslug={wslug}
                   value={typeof value === 'string' ? value : ''}
                   onChange={(next) => onFrontmatterCommit({ [key]: next })}
                 />
