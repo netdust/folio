@@ -204,18 +204,26 @@ git commit -m "phase-C: forbid caller-less library targets + pin autonomy/caller
 
 ## Task 3.5: Floor MEDIUM on the unattended (trigger-fired) path
 
-**Mitigations: C3.** The deterministic bound — config writes refuse on the fired path.
+**Mitigations: C3.** The deterministic bound — config writes refuse on the fired path. ⚠️ **CORRECTED 2026-06-02 (orchestration-layer audit PC-2): the original file list was INCOMPLETE and would 500 every fired run.** Two real gaps the audit found: (i) `createRun` runs `agentRunFrontmatterSchema.parse(runFm)` under `.strict()` (`agent-runs.ts:227`) — an unschema'd `unattended` key THROWS, so the schema MUST gain the field first; (ii) `ToolContext` (`agent-tools.ts:25`) carries ONLY `token`/`actor`/`tx`/`callerScopes` — NOT run frontmatter — so the `folio_api` handler CANNOT read `unattended` without threading it through `executeTool` (a convergence point). The corrected file list + steps below.
 
 **Files:**
-- Modify: `apps/server/src/services/agent-runs.ts` (`createRun` stamps `frontmatter.unattended`), `apps/server/src/lib/folio-api-tool.ts` (MEDIUM refuses when `unattended`)
-- Test: `apps/server/src/lib/folio-api-tool.test.ts` + `apps/server/src/services/agent-runs.test.ts`
+- Modify: `apps/server/src/lib/agent-run-schema.ts` (**add `unattended: z.boolean().optional()` to the `.strict()` run frontmatter schema — REQUIRED FIRST, or `createRun`'s parse throws**)
+- Modify: `apps/server/src/services/agent-runs.ts` (`createRun` stamps `frontmatter.unattended`, derived from `triggerId !== null && !resumeOf`)
+- Modify: `apps/server/src/lib/agent-tools.ts` (**extend `ToolContext` + `executeTool` to carry an `unattended` flag — the same way `callerScopes` is threaded — this is the central executeTool gate, flag for `/code-review`**)
+- Modify: `apps/server/src/lib/runner.ts` (**pass `fm.unattended` at the `executeTool` call site, mirroring how `fm.caller_scopes` is passed at `runner.ts:~389`**)
+- Modify: `apps/server/src/lib/folio-api-tool.ts` (MEDIUM refuses when `ctx.unattended`)
+- Test: `apps/server/src/lib/agent-run-schema.test.ts` + `apps/server/src/lib/folio-api-tool.test.ts` + `apps/server/src/services/agent-runs.test.ts`
 
 - [ ] **Step 1: Write the failing tests**
 
 ```typescript
+test('agentRunFrontmatterSchema accepts unattended (optional) — createRun parse does not throw', () => {
+  // .strict() schema: parsing a run fm with unattended:true must NOT throw (the field is in the schema)
+});
 test('createRun stamps frontmatter.unattended=true for a trigger-fired run, false/absent for a human-invoked run (C3)', async () => {
-  // ground-truth the discriminator (firedBy / actor type). A matcher-fired createRun → unattended:true;
-  // a direct human run-launch → unattended absent/false.
+  // discriminator = triggerId !== null && !resumeOf (NOT firedBy — firedBy is a free-form provenance string).
+  // a matcher-fired createRun (triggerId set) → unattended:true; a direct human run-launch (triggerId null) → absent/false;
+  // a resume (resumeOf set) → NOT unattended (it's a continuation of a human-approved run).
 });
 test('folio_api MEDIUM refuses-with-plan on an unattended run, but applies on an attended (human) run (C3)', async () => {
   // unattended run: POST /tables (MEDIUM) → refused:true, plan defined, no mutation.
@@ -225,15 +233,20 @@ test('folio_api MEDIUM refuses-with-plan on an unattended run, but applies on an
 
 - [ ] **Step 2: Run to verify fail** — FAIL.
 
-- [ ] **Step 3: Implement** — (a) in `createRun`, stamp `frontmatter.unattended = true` when the run is trigger-fired (derive from the existing discriminator — `firedBy` / the actor being a trigger event, ground-truthed in Task 1c; do NOT invent a new input, derive it server-side). (b) in the `folio_api` write tool, the risk branch: if the run is `unattended` AND `tier === 'medium'`, treat it like HIGH (refuse-with-plan, return the structured plan, no dispatch). LOW still auto-applies (the only auto tier on the fired path); HIGH already refuses. The tool reads `unattended` from the run context (`ctx`/the run frontmatter — thread it through how `ctx` already carries run state). Add a comment: "fired-path MEDIUM floor (C3) — config writes need a human invoker; this is the DETERMINISTIC bound on the unattended injection chain, the B10 fence is best-effort for LOW only."
+- [ ] **Step 3: Implement (ORDER MATTERS — schema first):**
+  1. **`agent-run-schema.ts`:** add `unattended: z.boolean().optional()` to `agentRunFrontmatterSchema` (mirror Phase B Task 1's `agent_home_workspace_id`; the schema is `.strict()`, so this is the hard prerequisite — without it `createRun`'s `.parse()` throws on every stamp).
+  2. **`createRun` (`agent-runs.ts`):** stamp `frontmatter.unattended = (input.triggerId != null && input.resumeOf == null)` — derive it server-side from the CLEAN signal (`triggerId` is on `CreateRunInput`; a trigger fire passes it, a human launch passes null, a resume passes `resumeOf`). Do NOT key off `firedBy` (a free-form string).
+  3. **`agent-tools.ts` (the convergence point):** add `unattended?: boolean` to `ToolContext`; thread it through `executeTool` the SAME way `callerScopes` is — via the `caller` param (it already carries the run-derived `callerScopes`). Comment that this is the second run-derived field on the gate.
+  4. **`runner.ts`:** at the `executeTool` call (~line 389, where `fm.caller_scopes` is already read), pass `fm.unattended`. MCP-path callers (no run fm) pass undefined → treated as attended (a human-invoked MCP `folio_api` is not a fired run).
+  5. **`folio-api-tool.ts` write handler:** if `ctx.unattended === true && tier === 'medium'`, treat like HIGH (refuse-with-plan, structured plan, no dispatch). LOW still auto-applies; HIGH already refuses. Comment: "fired-path MEDIUM floor (C3) — DETERMINISTIC bound on the unattended injection chain; the B10 fence is best-effort for LOW only."
 
-- [ ] **Step 4: Run to verify pass + tsc** — PASS + clean.
+- [ ] **Step 4: Run to verify pass + tsc** — PASS + clean. (The `executeTool`/`ToolContext` change touches a convergence point — run the FULL server suite; existing agent-tools/mcp tests must stay green.)
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add apps/server/src/services/agent-runs.ts apps/server/src/lib/folio-api-tool.ts apps/server/src/lib/folio-api-tool.test.ts apps/server/src/services/agent-runs.test.ts
-git commit -m "phase-C: floor MEDIUM on the unattended trigger-fired path (C3)"
+git add apps/server/src/lib/agent-run-schema.ts apps/server/src/services/agent-runs.ts apps/server/src/lib/agent-tools.ts apps/server/src/lib/runner.ts apps/server/src/lib/folio-api-tool.ts <test files>
+git commit -m "phase-C: floor MEDIUM on the unattended fired path — schema field + executeTool threading (C3, PC-2 audit fix)"
 ```
 
 ---

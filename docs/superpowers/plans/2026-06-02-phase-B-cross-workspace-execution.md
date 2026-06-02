@@ -172,6 +172,46 @@ git commit -m "phase-B: createRun stamps agent_home_workspace_id server-side (B2
 
 ---
 
+## Task 2.5: Resolve the agent at the run-CREATE paths by home `{run-ws, __system}` (the un-runnable-library-agent fix)
+
+**Mitigations: B1 (at the create surface).** ⚠️ **ADDED 2026-06-02 (orchestration-layer audit PC-1).** Without this task the library operator is UN-RUNNABLE: Task 3 changes `loadContext` resolution, but the agent doc is gated EARLIER — at the run-CREATE paths — which hard-code the run's workspace. A user picking a library agent POSTs `agent_slug` and gets a 404 BEFORE `createRun`/`loadContext` are ever reached. This is the exact seeded-bot failure mode ("green unit tests, 404 at the real run"). The trigger path gets this in Phase C (`resolveTriggerAgent`); the human-invocation path needs it HERE.
+
+**Files:**
+- Modify: `apps/server/src/routes/runs.ts` (the HTTP run-create agent resolution, ~line 64/95) + `apps/server/src/lib/agent-tools-registry.ts` (the MCP `run_agent` tool's agent resolution)
+- Test: `apps/server/src/routes/runs.test.ts` + `apps/server/src/routes/mcp.test.ts` (or the registry test)
+
+- [ ] **Step 1: Ground-truth** — both create-path resolution sites at HEAD (audit found `routes/runs.ts:362-368` and `agent-tools-registry.ts:1660-1664` both `findFirst(and(eq(documents.workspaceId, ws.id), eq(documents.slug, agent_slug), eq(documents.type,'agent')))` — re-grep, they shift). Confirm both 404 a `__system` agent today.
+
+- [ ] **Step 2: Write the failing test**
+
+```typescript
+test('POST /runs resolves a __system library agent by slug for a run in B (B1, create path)', async () => {
+  // bootstrap __system + a library agent slug 'folio-operator'; POST a run in B targeting it →
+  // the run is created (NOT 404), with agent_home_workspace_id = __system (Task 2 stamps it).
+});
+test('POST /runs still 404s an agent that exists only in a third workspace C (B1)', async () => {
+  // agent_slug only present in C → 404 (home predicate rejects, not just "found anywhere").
+});
+test('the MCP run_agent tool resolves a __system library agent (B1, create path)', async () => {
+  // same via executeTool('run_agent', ...) — both create faces fixed in parallel.
+});
+```
+
+- [ ] **Step 3: Run to verify fail** — FAIL (today both 404 the `__system` agent).
+
+- [ ] **Step 4: Implement** — at BOTH create-path resolution sites, change `eq(documents.workspaceId, ws.id)` to resolve where `documents.workspaceId IN (ws.id, getSystemWorkspaceId())`, then ASSERT the resolved agent's `workspaceId ∈ {ws.id, systemId}` (a third-workspace agent never resolves — fail-closed). Prefer a B-LOCAL agent when both a local and a library agent share the slug (local shadows library — same precedence the trigger path uses; document it). The resolved agent flows into `createRun`, which (Task 2) stamps `agent_home_workspace_id` from `resolvedAgent.workspaceId`. **Consider extracting a shared `resolveAgentForRun(db, workspaceId, slug)` doc-returning helper used by BOTH create faces** (mirror of Phase C's `resolveTriggerAgent`) so the home predicate lives in one place.
+
+- [ ] **Step 5: Run to verify pass + tsc** — PASS + clean.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add apps/server/src/routes/runs.ts apps/server/src/lib/agent-tools-registry.ts apps/server/src/routes/runs.test.ts apps/server/src/routes/mcp.test.ts
+git commit -m "phase-B: resolve __system library agents at the run-create paths (B1, PC-1 audit fix)"
+```
+
+---
+
 ## Task 3: `loadContext` — resolve by home gated by `{run-ws, __system}`
 
 **Mitigations: B1.** The security boundary.
@@ -342,7 +382,7 @@ git commit -m "phase-B: pin the interim HIGH-refuses-regardless-of-caller floor 
 
 - [ ] **Step 1: Write the failing test** — the run/assign picker in workspace B shows B's own agents PLUS the `__system` library agents; selecting a library agent creates a run with the server resolving `agent_home_workspace_id = __system`.
 
-> Ground-truth (Task 1b) the exact surface. The server change is likely: the agents-list endpoint a workspace's run/assign UI reads should UNION the workspace's own `type='agent'` docs with `__system`'s `type='agent'` docs (clearly marked as library agents so the UI can badge them). The run-create path already resolves the agent + stamps home server-side (Task 2), so the UI just needs to OFFER them.
+> Ground-truth (Task 1b) the exact surface. The server change is likely: the agents-list endpoint a workspace's run/assign UI reads should UNION the workspace's own `type='agent'` docs with `__system`'s `type='agent'` docs (clearly marked as library agents so the UI can badge them). The run-create path resolves a `__system` agent (Task 2.5 — added by the audit; the home predicate) + stamps home server-side (Task 2), so the UI just needs to OFFER them. **(Correction: an earlier draft said "the run-create path already resolves the agent" — it did NOT until Task 2.5; that gap was the un-runnable-library-agent bug PC-1 fixes.)**
 
 - [ ] **Step 2: Run to verify fail** — FAIL.
 
