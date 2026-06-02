@@ -333,10 +333,12 @@ export async function loadContext(runId: string): Promise<RunContext | null> {
   // Task 2.5's resolveAgentForRun; resolution here trusts the create-time stamp
   // rather than re-deriving local-shadows-library precedence.
   const home = fm.agent_home_workspace_id ?? run.workspaceId;
+  let isLibraryAgent = false;
   if (home !== run.workspaceId) {
     // Only a library (or forged-third-ws) run needs the __system id to gate.
     const systemId = await getSystemWorkspaceId(db);
     if (home !== systemId) return null; // third-workspace C ⇒ fail-closed (B1)
+    isLibraryAgent = true; // home === systemId
   }
   const agent = await db.query.documents.findFirst({
     where: and(
@@ -380,9 +382,17 @@ export async function loadContext(runId: string): Promise<RunContext | null> {
   // in executeTool. caller_project_ids null = owner/no-narrowing (intersect
   // returns the token list unchanged); an explicit list narrows; [] denies.
   const callerProjectIds = (fm.caller_project_ids as string[] | null) ?? null;
+  // B5 — a LIBRARY agent's authority DEFERS to the caller: the agent side is `['*']`
+  // so the caller's project set is the SOLE ceiling. (A library agent's token is
+  // scoped to __system's projects; intersecting those against B's caller projects
+  // would wrongly deny-all — __system ids never match B ids.) A LOCAL agent keeps
+  // its own token's project reach (agent ∩ token ∩ caller). The SCOPE ceiling is
+  // unchanged: executeTool still does token.scopes ∩ callerScopes — the agent's
+  // tool-derived scopes are its CAPABILITY, the caller scopes are the AUTHORITY.
+  const agentProjectSide = isLibraryAgent ? ['*'] : (token.projectIds ?? ['*']);
   const narrowedToken = {
     ...token,
-    projectIds: intersectAgentProjects(token.projectIds ?? ['*'], callerProjectIds),
+    projectIds: intersectAgentProjects(agentProjectSide, callerProjectIds),
   };
 
   const actor = `agent:${agent.slug}`;
@@ -411,6 +421,9 @@ export async function loadContext(runId: string): Promise<RunContext | null> {
   // pre-flight check is a pure read. Carry undefined through when missing.
   // claude-code has no API key row; cast is safe — the DB column only holds
   // the 4 API providers, so the query simply returns undefined for claude-code.
+  // B6: BYOK is ALWAYS the run's workspace (= B) key — never the agent's home
+  // (`__system`). A library agent uses the CUSTOMER's key; missing → no_ai_key
+  // pre-flight (no __system fallback).
   const keyRow = await db.query.aiKeys.findFirst({
     where: and(eq(aiKeys.workspaceId, run.workspaceId), eq(aiKeys.provider, fm.provider as ProviderName)),
   });

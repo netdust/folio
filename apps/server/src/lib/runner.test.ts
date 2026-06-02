@@ -34,7 +34,7 @@ import { toolsToScopes } from './agent-schema.ts';
 import type { AIProvider, ProviderEvent } from './ai/provider.ts';
 import { __INTERNAL_TEST_ONLY__ as providerTestHatch } from './ai/provider.ts';
 import { newApiToken } from './auth.ts';
-import { encryptSecret } from './crypto.ts';
+import { decryptSecret, encryptSecret } from './crypto.ts';
 import { HTTPError } from './http.ts';
 import { mcpInvalidParams } from './mcp-errors.ts';
 import { __setCcSpawnForTest, loadContext, rejectRun, runAgent, runAgentResume } from './runner.ts';
@@ -2237,6 +2237,118 @@ describe('loadContext: central caller-project clamp fold', () => {
     const ctx = await loadContext(run.id);
     expect(ctx).not.toBeNull();
     expect(ctx!.token.projectIds).toEqual([]);
+  });
+});
+
+// ==========================================================================
+// Phase B Task 5 — a LIBRARY agent's project authority DEFERS to the caller
+// (B5), and BYOK always resolves the run's workspace (= B) key, never the
+// agent's home `__system` (B6). seedLibraryAgentWithSkills stamps the run's
+// agent_home_workspace_id = __system; the helper lives below at ~2340.
+// ==========================================================================
+
+describe('loadContext: library-agent authority defers to caller (B5/B6)', () => {
+  test('a library agent projects:[*] does not exceed the caller project set in B (B5)', async () => {
+    // A run in B for the __system library agent, caller a MEMBER clamped to a
+    // single B project (P1). The library agent's token is projects:['*'] (the
+    // seed default), so the defer collapses agent ∩ caller to exactly the
+    // caller's set — NOT __system's projects, and crucially NOT deny-all [].
+    const scaffolded = await scaffold();
+    const { db, project, run } = scaffolded;
+    await seedLibraryAgentWithSkills(scaffolded, ['folio']);
+
+    await db
+      .update(documents)
+      .set({
+        frontmatter: sql`json_set(${documents.frontmatter}, '$.caller_project_ids', json(${JSON.stringify(
+          [project.id],
+        )}))`,
+      })
+      .where(eq(documents.id, run.id));
+
+    const ctx = await loadContext(run.id);
+    expect(ctx).not.toBeNull();
+    expect(ctx!.token.projectIds).toEqual([project.id]); // the caller's B set
+  });
+
+  test('a library agent whose token is scoped to a __system project still gets the caller set, not deny-all (B5 robustness)', async () => {
+    // Pin the library agent's TOKEN to a concrete __system project id (NOT '*').
+    // Without the isLibraryAgent defer, intersect(['<sys-proj>'], ['<B-proj>'])
+    // → [] (the __system id ∉ the caller's B set) — the agent would be locked
+    // out of every B project despite the caller having access. The defer makes
+    // the agent side ['*'], so the result is the caller's set.
+    const scaffolded = await scaffold();
+    const { db, project, run } = scaffolded;
+    const { libraryAgent, systemId } = await seedLibraryAgentWithSkills(scaffolded, ['folio']);
+
+    // A real __system project, and the library agent's token narrowed to it.
+    const sysProjId = nanoid();
+    await db.insert(projects).values({
+      id: sysProjId,
+      workspaceId: systemId,
+      slug: 'sys-proj',
+      name: 'Sys Proj',
+    });
+    await db
+      .update(apiTokens)
+      .set({ projectIds: [sysProjId] })
+      .where(eq(apiTokens.agentId, libraryAgent.id));
+
+    // Caller (MEMBER) clamped to a single B project.
+    await db
+      .update(documents)
+      .set({
+        frontmatter: sql`json_set(${documents.frontmatter}, '$.caller_project_ids', json(${JSON.stringify(
+          [project.id],
+        )}))`,
+      })
+      .where(eq(documents.id, run.id));
+
+    const ctx = await loadContext(run.id);
+    expect(ctx).not.toBeNull();
+    expect(ctx!.token.projectIds).toEqual([project.id]); // defer worked
+    expect(ctx!.token.projectIds).not.toEqual([]); // NOT the old deny-all
+  });
+
+  test('a library-agent run resolves B BYOK key, never __system (B6)', async () => {
+    // B has its OWN anthropic key (seeded by scaffold). Seed a DIFFERENT key in
+    // __system. The library-agent run in B must decrypt B's key, proving the
+    // BYOK lookup keys off run.workspaceId (= B), never the agent home.
+    const scaffolded = await scaffold(); // scaffold seeds B's key = 'sk-test-fake-key'
+    const { db, run } = scaffolded;
+    const { systemId } = await seedLibraryAgentWithSkills(scaffolded, ['folio']);
+
+    // A distinct key in __system — must NOT be the one resolved.
+    await db.insert(aiKeys).values({
+      id: nanoid(),
+      workspaceId: systemId,
+      provider: 'anthropic',
+      label: 'system-key',
+      encryptedKey: encryptSecret('sk-SYSTEM-must-not-leak'),
+    });
+
+    const ctx = await loadContext(run.id);
+    expect(ctx).not.toBeNull();
+    expect(ctx!.apiKey).toBe('sk-test-fake-key'); // B's key
+    expect(decryptSecret(encryptSecret('sk-SYSTEM-must-not-leak'))).not.toBe(ctx!.apiKey);
+  });
+
+  test('a library-agent run with NO key in B fails no_ai_key even when __system HAS one (B6)', async () => {
+    // B has no key; __system does. No __system fallback ⇒ pre-flight no_ai_key.
+    const scaffolded = await scaffold({ withAiKey: false });
+    const { db, run } = scaffolded;
+    const { systemId } = await seedLibraryAgentWithSkills(scaffolded, ['folio']);
+    await db.insert(aiKeys).values({
+      id: nanoid(),
+      workspaceId: systemId,
+      provider: 'anthropic',
+      label: 'system-key',
+      encryptedKey: encryptSecret('sk-SYSTEM-must-not-leak'),
+    });
+
+    const ctx = await loadContext(run.id);
+    expect(ctx).not.toBeNull();
+    expect(ctx!.apiKey).toBe(''); // missing → empty ⇒ no_ai_key pre-flight, no fallback
   });
 });
 
