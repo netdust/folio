@@ -6,10 +6,23 @@ import { startEventDispatcher } from './lib/event-dispatcher.ts';
 import { sweepOrphanedFolioApiTokens } from './lib/folio-api-tool.ts';
 import { startRunnerPoller } from './lib/poller.ts';
 import { reconcileAllowLists } from './lib/reconciler.ts';
+import { runBootTasks } from './lib/system-workspace.ts';
 
 // Phase 3 A-0: apply any pending migrations at boot so dev environments never
 // serve traffic against a stale schema. No-op in NODE_ENV=test.
 runMigrationsOnBoot(db);
+
+// Phase A (M4/M5/M8): bootstrap the __system library workspace and, if
+// FOLIO_INSTANCE_OWNER resolves to an existing user, designate the instance
+// owner. Async + fire-and-log (the module body isn't async), mirroring the
+// folio_api token sweep below. Test-gated like the timer-starters so importing
+// index.ts in tests does NOT trigger a real bootstrap; runBootTasks itself is
+// invoked directly against a test db by its unit tests.
+if (env.NODE_ENV !== 'test') {
+  void runBootTasks(db, env).catch((err) =>
+    console.error('[folio] boot tasks failed', err),
+  );
+}
 
 // Backstop for dispatchAsCaller's minted tokens: clear any left live by a
 // crash/revoke-failure on a prior run. These are per-request ephemerals.

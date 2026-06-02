@@ -3,6 +3,7 @@ import { and, eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import type { DB } from '../db/client.ts';
 import { documents, memberships, projects, users, workspaces } from '../db/schema.ts';
+import type { Env } from '../env.ts';
 import { createDocument } from '../services/documents.ts';
 import { HTTPError } from './http.ts';
 import {
@@ -307,4 +308,40 @@ export async function designateInstanceOwner(db: DB, email: string): Promise<voi
   }
 
   await ensureOperatorAgent(db, owner.id);
+}
+
+/**
+ * Boot-time orchestrator (M4/M5/M8): always bootstraps the `__system` library
+ * workspace, then — only when `FOLIO_INSTANCE_OWNER` is set AND that user
+ * already exists — designates the instance owner (grants owner membership +
+ * seeds the operator agent).
+ *
+ * A misconfigured owner email must NOT take the server down: if the email is
+ * unset we skip designation; if it is set but no such user exists we log a
+ * clear warning and skip — never crash boot. This function ALWAYS does the real
+ * work (no test self-skip); `index.ts` gates the call to non-test so importing
+ * the module in tests does not trigger a real bootstrap.
+ */
+export async function runBootTasks(
+  db: DB,
+  env: Pick<Env, 'FOLIO_INSTANCE_OWNER'>,
+): Promise<void> {
+  await bootstrapSystemWorkspace(db);
+
+  const ownerEmail = env.FOLIO_INSTANCE_OWNER;
+  if (!ownerEmail) return; // M8: no owner configured → bootstrap only
+
+  // Pre-check the user exists so a misconfigured email is a warning, not a
+  // crash — and so we never swallow a genuine (non-not-found) designate error.
+  const user = await db.query.users.findFirst({
+    where: eq(users.email, ownerEmail),
+  });
+  if (!user) {
+    console.warn(
+      `[folio] FOLIO_INSTANCE_OWNER ${ownerEmail} not found; skipping owner designation`,
+    );
+    return;
+  }
+
+  await designateInstanceOwner(db, ownerEmail);
 }

@@ -11,6 +11,7 @@ import {
   ensureOperatorAgent,
   grantOwner,
   isReservedSlug,
+  runBootTasks,
 } from './system-workspace.ts';
 
 describe('reserved slug (M2/M3)', () => {
@@ -176,5 +177,40 @@ describe('grantOwner + ensureOperatorAgent + designateInstanceOwner (M5/M8)', ()
       where: and(eq(documents.workspaceId, sys!.id), eq(documents.type, 'agent')),
     });
     expect(agent).toBeDefined();
+  });
+});
+
+describe('runBootTasks (M4/M5/M8 boot wiring)', () => {
+  test('runBootTasks creates __system and designates the env owner (M4/M5)', async () => {
+    const { db } = await makeTestApp();
+    const uid = nanoid();
+    await db.insert(users).values({ id: uid, email: 'env-owner@x.com', name: 'EO', passwordHash: await hashPassword('password123') });
+    await runBootTasks(db, { FOLIO_INSTANCE_OWNER: 'env-owner@x.com' });
+    const sys = await db.query.workspaces.findFirst({ where: eq(workspaces.slug, SYSTEM_WORKSPACE_SLUG) });
+    expect(sys).toBeDefined();
+    const owner = await db.query.memberships.findFirst({ where: and(eq(memberships.workspaceId, sys!.id), eq(memberships.role, 'owner')) });
+    expect(owner!.userId).toBe(uid);
+    // operator agent seeded too (designate calls ensureOperatorAgent)
+    const agent = await db.query.documents.findFirst({ where: and(eq(documents.workspaceId, sys!.id), eq(documents.type, 'agent')) });
+    expect(agent).toBeDefined();
+  });
+
+  test('runBootTasks bootstraps __system but skips designation when no owner env is set (M8)', async () => {
+    const { db } = await makeTestApp();
+    await runBootTasks(db, { FOLIO_INSTANCE_OWNER: undefined });
+    const sys = await db.query.workspaces.findFirst({ where: eq(workspaces.slug, SYSTEM_WORKSPACE_SLUG) });
+    expect(sys).toBeDefined();
+    // no owner, no agent (designation didn't run)
+    const owner = await db.query.memberships.findFirst({ where: and(eq(memberships.workspaceId, sys!.id), eq(memberships.role, 'owner')) });
+    expect(owner).toBeUndefined();
+  });
+
+  test('runBootTasks does NOT crash when FOLIO_INSTANCE_OWNER points to a missing user (M5)', async () => {
+    const { db } = await makeTestApp();
+    await expect(runBootTasks(db, { FOLIO_INSTANCE_OWNER: 'nobody@x.com' })).resolves.toBeUndefined();
+    const sys = await db.query.workspaces.findFirst({ where: eq(workspaces.slug, SYSTEM_WORKSPACE_SLUG) });
+    expect(sys).toBeDefined(); // bootstrap still happened
+    const owner = await db.query.memberships.findFirst({ where: and(eq(memberships.workspaceId, sys!.id), eq(memberships.role, 'owner')) });
+    expect(owner).toBeUndefined(); // no owner granted (user absent), but no crash
   });
 });
