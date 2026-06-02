@@ -1,6 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { client } from './client.ts';
 
+/**
+ * The reserved system-library workspace slug. Mirrors the server constant
+ * `SYSTEM_WORKSPACE_SLUG` in `apps/server/src/lib/system-workspace.ts`. The web
+ * side has no shared source for it, so this is the single web-side literal —
+ * import it wherever the UI links into `__system` rather than hard-coding the
+ * magic string.
+ */
+export const SYSTEM_WORKSPACE_SLUG = '__system';
+
 export type WorkspaceRole = 'owner' | 'admin' | 'member';
 
 export interface Workspace {
