@@ -2,6 +2,7 @@ import { slugify } from '@folio/shared';
 import { and, eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import type { DB } from '../db/client.ts';
+import type { Document } from '../db/schema.ts';
 import { documents, memberships, projects, users, workspaces } from '../db/schema.ts';
 import type { Env } from '../env.ts';
 import { createDocument } from '../services/documents.ts';
@@ -228,6 +229,54 @@ async function requireSystemWorkspace(db: DB) {
 export async function getSystemWorkspaceId(db: DB): Promise<string> {
   const sys = await requireSystemWorkspace(db);
   return sys.id;
+}
+
+/**
+ * Resolve an agent document for a RUN in workspace `workspaceId`, gated by the
+ * home predicate {run-ws, __system} (B1, the create-path security boundary).
+ *
+ * An agent may be defined in the run's own workspace (a local agent) OR in the
+ * `__system` library (a library agent like the operator). A B-LOCAL agent
+ * SHADOWS a library agent of the same slug (local precedence — the same
+ * precedence the Phase C trigger path uses). An agent that exists ONLY in a
+ * third workspace C never resolves (the predicate rejects it — fail-closed):
+ * we query only (workspaceId, __system) and assert the result's home ∈ that set.
+ *
+ * Returns the resolved agent Document, or undefined if no agent with that slug
+ * exists in {workspaceId, __system}.
+ */
+export async function resolveAgentForRun(
+  db: DB,
+  workspaceId: string,
+  slug: string,
+): Promise<Document | undefined> {
+  // Prefer a LOCAL agent (run-ws) over a library agent of the same slug.
+  const local = await db.query.documents.findFirst({
+    where: and(
+      eq(documents.workspaceId, workspaceId),
+      eq(documents.slug, slug),
+      eq(documents.type, 'agent'),
+    ),
+  });
+  if (local) return local;
+  // Fall back to the __system library. Resolve __system SOFTLY (not via the
+  // throwing getSystemWorkspaceId): a missing library must NOT 500 a run that
+  // could still resolve a local agent — and when __system is absent the home
+  // predicate simply degrades to {run-ws}, so no library candidate exists. In
+  // production bootstrap always seeds __system; this guard keeps the create
+  // path robust if it hasn't (and keeps the helper independent of boot order).
+  const system = await db.query.workspaces.findFirst({
+    where: eq(workspaces.slug, SYSTEM_WORKSPACE_SLUG),
+  });
+  if (!system) return undefined;
+  const library = await db.query.documents.findFirst({
+    where: and(
+      eq(documents.workspaceId, system.id),
+      eq(documents.slug, slug),
+      eq(documents.type, 'agent'),
+    ),
+  });
+  return library; // undefined if not in {workspaceId, __system} — third-ws C never matches
 }
 
 /**

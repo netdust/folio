@@ -20,6 +20,11 @@ import { makeTestApp } from '../test/harness.ts';
 import { createRun, ensureRunsTable, nextChainId } from '../services/agent-runs.ts';
 import { listComments } from '../services/comments.ts';
 import { type ToolDef, executeTool, listToolDefs, registerTool } from './agent-tools.ts';
+import {
+  SYSTEM_WORKSPACE_SLUG,
+  bootstrapSystemWorkspace,
+} from './system-workspace.ts';
+import { workspaces } from '../db/schema.ts';
 import { intersectAgentProjects } from './agent-projects.ts';
 import { newApiToken } from './auth.ts';
 
@@ -784,6 +789,16 @@ async function seedRunRow(
   return document;
 }
 
+/** Bootstrap __system + return its id, for seeding a library agent (B1). */
+async function seedSystemWorkspaceForRun(db: DB): Promise<{ id: string }> {
+  await bootstrapSystemWorkspace(db);
+  const sys = await db.query.workspaces.findFirst({
+    where: eq(workspaces.slug, SYSTEM_WORKSPACE_SLUG),
+  });
+  if (!sys) throw new Error('test setup: __system did not bootstrap');
+  return { id: sys.id };
+}
+
 /** Parse the textResult JSON envelope the run tools return. */
 function parseText<T>(out: unknown): T {
   return JSON.parse((out as { content: { text: string }[] }).content[0]!.text) as T;
@@ -805,6 +820,27 @@ describe('D-4: run-management MCP tools', () => {
     const row = await db.query.documents.findFirst({ where: eq(documents.id, res.run_id) });
     expect(row?.type).toBe('agent_run');
     expect(row?.status).toBe('planning');
+  });
+
+  it('run_agent resolves a __system library agent (B1, create path)', async () => {
+    const { db, seed } = await makeTestApp();
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, seed.user);
+    const sys = await seedSystemWorkspaceForRun(db);
+    // Library agent lives in __system; the human PAT is scoped to the run-ws (acme).
+    await seedRunAgent(db, sys.id, seed.user.id, 'operator');
+    const { token } = await seedRunAgent(db, seed.workspace.id, seed.user.id, 'caller');
+
+    const out = await exec(token, seed.user.id, 'run_agent', {
+      workspace_slug: 'acme',
+      agent_slug: 'operator',
+      parent_slug: parent.slug,
+    });
+    const res = parseText<{ run_id: string; status: string }>(out);
+    expect(res.status).toBe('planning');
+    const row = await db.query.documents.findFirst({ where: eq(documents.id, res.run_id) });
+    expect(row?.type).toBe('agent_run');
+    // Home is stamped from the agent's workspace → __system, not the run-ws.
+    expect((row?.frontmatter as Record<string, unknown>).agent_home_workspace_id).toBe(sys.id);
   });
 
   it('run_agent with input posts a comment to the parent (mit 59)', async () => {

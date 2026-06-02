@@ -92,6 +92,7 @@ import {
 import { serializeMarkdown } from './frontmatter.ts';
 import { HTTPError } from './http.ts';
 import { mcpInvalidParams, mcpRejectHumanPat, rethrowAgentGuardAsMcp } from './mcp-errors.ts';
+import { resolveAgentForRun } from './system-workspace.ts';
 
 // ---------------------------------------------------------------------------
 // Result envelopes — verbatim from routes/mcp.ts.
@@ -1655,14 +1656,11 @@ export function registerRealTools(): void {
         });
       }
 
-      // 4. Resolve agent doc.
-      const agent = await db.query.documents.findFirst({
-        where: and(
-          eq(documents.workspaceId, ws.id),
-          eq(documents.slug, agentSlug),
-          eq(documents.type, 'agent'),
-        ),
-      });
+      // 4. Resolve agent doc — gated by the home predicate {run-ws, __system}
+      //    (B1): a B-local agent OR a __system library agent (local shadows
+      //    library); an agent that lives only in a third workspace never
+      //    resolves (fail-closed). HTTP-twin parity with routes/runs.ts.
+      const agent = await resolveAgentForRun(db, ws.id, agentSlug);
       if (!agent) {
         throw mcpInvalidParams(`agent "${agentSlug}" not found`, {
           reason: 'agent_not_found',

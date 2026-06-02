@@ -34,6 +34,7 @@ import { runStatusSchema } from '../lib/agent-run-schema.ts';
 import { emitChainSuppressed } from '../lib/autonomy-gate.ts';
 import { HTTPError } from '../lib/http.ts';
 import { jsonOk } from '../lib/http.ts';
+import { resolveAgentForRun } from '../lib/system-workspace.ts';
 import type { AuthContext } from '../middleware/auth.ts';
 import { requireScope } from '../middleware/bearer.ts';
 import { type ScopeContext, getProject, getWorkspace } from '../middleware/scope.ts';
@@ -358,14 +359,10 @@ runsRoute.post('/', requireScope('agents:write'), async (c) => {
     throw new HTTPError('FORBIDDEN_RESOURCE', 'not allow-listed for that project', 403);
   }
 
-  // 4. Resolve agent doc.
-  const agent = await db.query.documents.findFirst({
-    where: and(
-      eq(documents.workspaceId, ws.id),
-      eq(documents.slug, body.agent_slug),
-      eq(documents.type, 'agent'),
-    ),
-  });
+  // 4. Resolve agent doc — gated by the home predicate {run-ws, __system} (B1):
+  //    a B-local agent OR a __system library agent (local shadows library); an
+  //    agent that lives only in a third workspace never resolves (fail-closed).
+  const agent = await resolveAgentForRun(db, ws.id, body.agent_slug);
   if (!agent) {
     throw new HTTPError('AGENT_NOT_FOUND', `agent "${body.agent_slug}" not found`, 404);
   }
