@@ -62,3 +62,17 @@ _Written 2026-06-02. Phase D is the FINAL phase of the cross-workspace operator:
 - Phase A/B/C plans + handoffs: `docs/superpowers/{plans,handoffs}/2026-06-02-phase-{A,B,C}-*.md`
 - Carried follow-ups (`tasks/retro-follow-ups.md`): OP-LIB-1 (the `frontmatter.published` library-agent visibility filter — still deferred; D surfaces ALL `__system` agents to MEMBERS for curation, which is correct).
 - **D is the LAST plan.** After it merges, the cross-workspace operator (A→D) is complete; the `/evaluate` close-out retro on the arc is the final step.
+
+---
+
+## State as of Phase C close (appended 2026-06-02, end of the Phase C session — READ THIS, the handoff above predates Phase C execution)
+
+**Phase C is BUILT + fully reviewed + shaken-out on `phase-op-3/the-agent` — NOT merged.** So when D starts, A+B+C are all on the branch, none merged (they merge to local main TOGETHER with D, as the handoff says). Confirm the branch first (`git branch --show-current` → `phase-op-3/the-agent`).
+
+- **Gates at Phase C close (verified):** server **1260**/1-skip/0, shared **63**/0, web **750**/8-skip/0, tsc clean ×3, NO migration. D builds on this.
+- **Phase C did `/code-review high` (3 findings fixed) + `/shakeout` (clean after 1 fix).** Two outcomes D should know so it doesn't re-discover or worry about them:
+  1. **The C3 unattended floor now lives at the `executeTool` CONVERGENCE POINT** (`agent-tools.ts` `UNATTENDED_FLOORED_SCOPES`), not just in `folio_api`. This STRENGTHENS invariant 2 — D's T5 redaction work is unrelated to it, but if D touches any tool/auth path, the floor is already central.
+  2. **`claude-code` is HARD-DISABLED** (`runner.ts` preflight refuses ALL cc runs regardless of `FOLIO_CLAUDE_CODE_ENABLED`; `ccExecute` is unreachable). The shake-out found the cc path bypassed the floor + the caller-scope ceiling (S-1/S-2); Stefan's call was to disable it. **The provider enum still includes `claude-code`** (historical rows parse). `routes/workspaces.ts` reports `claude_code_enabled: false` always, so the provider picker won't offer it. D does NOT touch this — just don't be surprised that cc is dead. Revival gate = `CC-DISABLED-1` in `tasks/retro-follow-ups.md`.
+- **D's T5 (the one real security check) is unchanged + still the priority** — the cross-workspace agent-union endpoint (`routes/workspace-documents.ts`, Phase B B8) must expose name/slug/id/`library:true` to a non-member, NEVER the agent `body`/`system_prompt`. Phase C added a `TriggerAgentField` web picker (`apps/web/src/components/triggers/trigger-agent-field.tsx`) that ALSO consumes that union list (badged `library`) — so when D verifies/redacts the endpoint, confirm BOTH the assignee picker AND the trigger picker consume the redacted shape (one more consumer than the handoff names). The `redact-at-the-loader` lesson applies: redact at the endpoint/serializer, not per-picker.
+- **The Phase C real-key trigger-fired shake-out harness exists** (`apps/server/scripts/shakeout-cross-ws-triggers.ts`) — D doesn't need a real-key run (UI + filter only), but if D wants to sanity-check the operator still fires cross-workspace after its changes, that harness is the tool.
+- **Memory:** `project_phase-C-cross-workspace-triggers-shipped` (auto-memory) has the full Phase C record; `memory/STATE.md` top entry is Phase C. Read those for the live state, not just this handoff.
