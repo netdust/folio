@@ -213,6 +213,24 @@ async function requireSystemWorkspace(db: DB) {
 }
 
 /**
+ * Resolve the `__system` workspace id by slug (Phase B B2 — cross-workspace
+ * execution resolves library agents against `__system`). Mirrors
+ * `requireSystemWorkspace`: an absent `__system` is a programming error
+ * (bootstrap must have run first) → throws the same SYSTEM_WORKSPACE_MISSING
+ * (500).
+ *
+ * DELIBERATELY NOT memoized: a single indexed findFirst on the UNIQUE
+ * `workspaces.slug` column is cheap, and a per-process id cache would leak
+ * across the in-memory test DBs that `__resetDbForTests()` swaps in
+ * (cross-test contamination). The plan explicitly permits skipping the cache
+ * — this is that choice.
+ */
+export async function getSystemWorkspaceId(db: DB): Promise<string> {
+  const sys = await requireSystemWorkspace(db);
+  return sys.id;
+}
+
+/**
  * Grant the `__system` workspace `owner` membership to the user with `email`,
  * and return the resolved instance-owner's user id (whether this call granted it
  * or a prior one did — review fix #8: the caller reuses this id instead of
@@ -225,12 +243,12 @@ async function requireSystemWorkspace(db: DB) {
  * `ensureOperatorAgent`: neither hides behind the other's early-return, so a
  * re-run after a mid-failure repairs whichever step is missing.
  *
- * Race-safe (review fix #5): the check-then-insert runs in a `db.transaction`
- * with the owner re-check INSIDE the tx. SQLite serializes write transactions,
- * so two concurrent grants (e.g. two simultaneous first-user registrations on a
- * fresh instance) cannot both pass the "no owner yet" check and insert two owner
- * rows. The memberships PK is (workspace_id, user_id), so without this the second
- * grant of a DIFFERENT user would silently create a second instance admin.
+ * NOT self-serializing: `grantOwner` is lock-free and assumes its sole caller
+ * (`designateInstanceOwner`) holds the process-wide `withDesignationLock` (review
+ * fix #5) — that mutex, not a DB transaction, is what prevents two concurrent
+ * grants from both passing the "no owner yet" check and inserting two owner rows
+ * (the memberships PK (workspace_id, user_id) would allow two DIFFERENT users to
+ * both become owner). Do NOT call `grantOwner` concurrently outside that lock.
  *
  * Throws INSTANCE_OWNER_NOT_FOUND (404) when no user has that email.
  */
