@@ -200,6 +200,8 @@ export async function createRun(
     assignee: `agent:${agent.slug}`,
     status: 'planning',
     agent_slug: agent.slug,
+    // B2/B8: stamped from the RESOLVED agent's home workspace (B for a local agent, `__system` for a library agent), server-side — never client-supplied. `loadContext` (Task 3) gates resolution on `home ∈ {run.workspaceId, __system}`.
+    agent_home_workspace_id: agent.workspaceId,
     provider,
     model,
     system_prompt: systemPrompt,

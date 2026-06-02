@@ -489,6 +489,38 @@ describe('createRun', () => {
     expect(fm.caller_project_ids).not.toContain('*');
   });
 
+  test('stamps agent_home_workspace_id from the resolved agent workspace, not from input (B2)', async () => {
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+
+    const result = await createRun({
+      workspace: seed.workspace,
+      project: seed.project,
+      runsTable,
+      agent,
+      actor: seed.user,
+      input: {
+        parentDocumentId: parent.id,
+        firedBy: 'agent.task.assigned',
+        chainId: crypto.randomUUID(),
+        triggerId: null,
+        // CreateRunInput has no agent_home_workspace_id field; cast through
+        // unknown to prove even a smuggled payload can't influence the stamp.
+        ...({ agent_home_workspace_id: 'attacker-supplied-ws' } as unknown as Record<string, never>),
+      },
+    });
+
+    const fm = result.document.frontmatter as AgentRunFrontmatter;
+    // Stamped server-side from the RESOLVED agent doc's own workspace, never
+    // from input — for this B-local agent that is B's (seed) workspace id.
+    expect(fm.agent_home_workspace_id).toBe(agent.workspaceId);
+    expect(fm.agent_home_workspace_id).toBe(seed.workspace.id);
+    expect(fm.agent_home_workspace_id).not.toBe('attacker-supplied-ws');
+  });
+
   test('resume INHERITS the original run caller snapshot — does not re-derive from the resume actor (D6)', async () => {
     const { db, seed } = await makeTestApp();
     const table = await getWorkItemsTable(db, seed.project.id);
