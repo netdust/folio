@@ -1140,6 +1140,10 @@ test('a LOCAL agent still respects its allow-list fire-gate (no regression)', as
   const agent = await seedAgent(db, seed.workspace, seed.user, 'helper', [
     'a-different-b-project-id',
   ]);
+  // Seed __system so findSystemWorkspaceId returns a real id — this forces
+  // isLibraryAgent through the genuine `agent.workspaceId === systemId`
+  // comparison (home = B ≠ __system → false), not the unseeded shortcut.
+  await bootstrapSystem(db);
   const wiTable = await getWorkItemsTable(db, seed.project.id);
   const wi = await seedWorkItem(db, seed.workspace, seed.project, wiTable, seed.user);
 
