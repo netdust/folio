@@ -2493,4 +2493,57 @@ describe('Phase B — API-provider injection fence (B10a) + skill wiring (B3)', 
     );
     expect(parentIdx).toBeGreaterThan(0);
   });
+
+  test('cc path folds skills into the TRUSTED system prompt, NOT the untrusted DATA envelope (B3/B10a)', async () => {
+    // Regression for the cc-path trust trap: buildInitialMessages prepends the
+    // trusted skills block, and ccExecute used to flatten buildInitialMessages
+    // into its "treat as untrusted DATA" envelope — which would mislabel a
+    // claude-code agent's OWN skill as untrusted. The fix splits skills (→ system
+    // prompt, trusted) from parent/comments (→ envelope, untrusted). Dormant in
+    // v1 (the operator is provider:anthropic) but a trap for the next cc agent.
+    const scaffolded = await scaffold({
+      agentOverrides: { provider: 'claude-code' },
+      runOverrides: { provider: 'claude-code' },
+      parentBody: 'Migrate billing emails to the 2026 template.',
+    });
+    // Make the library 'operator' agent + the run claude-code, with skills=['folio'].
+    const { systemId } = await seedLibraryAgentWithSkills(scaffolded, ['folio']);
+    const { db } = scaffolded;
+    await db
+      .update(documents)
+      .set({ frontmatter: sql`json_set(${documents.frontmatter}, '$.provider', 'claude-code')` })
+      .where(and(eq(documents.workspaceId, systemId), eq(documents.type, 'agent')));
+
+    let capturedPrompt = '';
+    const prevCcEnabled = env.FOLIO_CLAUDE_CODE_ENABLED;
+    (env as { FOLIO_CLAUDE_CODE_ENABLED: boolean }).FOLIO_CLAUDE_CODE_ENABLED = true;
+    __setCcSpawnForTest((args) => {
+      const i = args.argv.indexOf('-p');
+      capturedPrompt = i >= 0 ? (args.argv[i + 1] ?? '') : '';
+      return {
+        stdoutText: async () => 'done',
+        stderrText: async () => '',
+        exited: Promise.resolve(0),
+        kill: () => {},
+      };
+    });
+    try {
+      await runAgent({ runId: scaffolded.run.id });
+    } finally {
+      __setCcSpawnForTest(undefined);
+      (env as { FOLIO_CLAUDE_CODE_ENABLED: boolean }).FOLIO_CLAUDE_CODE_ENABLED = prevCcEnabled;
+    }
+
+    // The skill body is present...
+    expect(capturedPrompt).toContain('Folio skill — the API manual');
+    // ...and it appears BEFORE the untrusted DATA envelope (i.e. in the trusted
+    // system-prompt region, NOT inside ===== BEGIN CONTEXT =====).
+    const beginIdx = capturedPrompt.indexOf('===== BEGIN CONTEXT =====');
+    expect(beginIdx).toBeGreaterThan(-1); // the parent body still gets fenced
+    expect(capturedPrompt.indexOf('Folio skill — the API manual')).toBeLessThan(beginIdx);
+    // The untrusted parent body IS inside the envelope (after BEGIN).
+    expect(capturedPrompt.indexOf('Migrate billing emails to the 2026 template.')).toBeGreaterThan(
+      beginIdx,
+    );
+  });
 });
