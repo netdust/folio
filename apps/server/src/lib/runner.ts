@@ -62,6 +62,7 @@ import { sanitizeProviderError } from './ai/sanitize-error.ts';
 import { newApiToken } from './auth.ts';
 import { decryptSecret } from './crypto.ts';
 import { HTTPError } from './http.ts';
+import { getSystemWorkspaceId } from './system-workspace.ts';
 
 /**
  * Hard cap on outer provider rounds (one provider call + one tool-result
@@ -293,10 +294,29 @@ export async function loadContext(runId: string): Promise<RunContext | null> {
   });
   if (!parent) return null;
 
-  // The agent is resolved by slug within the run's workspace.
+  // The agent's HOME is where it is DEFINED — the run's own workspace for a
+  // local agent, or `__system` for a library agent (Phase B B1). It was stamped
+  // server-side at createRun (fm.agent_home_workspace_id); absent ⇒ home =
+  // run.workspaceId (a pre-Phase-B run, backward-compatible). The home predicate
+  // `home ∈ {run.workspaceId, __system}` is THE cross-tenant boundary: a run
+  // whose stamped home is a THIRD workspace C resolves to null (fail-closed — no
+  // cross-tenant capability borrowing).
+  //
+  // SHORT-CIRCUIT: a local agent (home === run.workspaceId) never calls the
+  // throwing getSystemWorkspaceId — so it neither needs nor depends on `__system`
+  // being bootstrapped (in-memory test DBs and pre-Phase-B runs may lack it).
+  // Only a stamped library/foreign home triggers the gate, where the throw is
+  // acceptable (production always bootstraps `__system`). Mirrors the
+  // soft-resolve reasoning from Task 2.5's resolveAgentForRun.
+  const home = fm.agent_home_workspace_id ?? run.workspaceId;
+  if (home !== run.workspaceId) {
+    // Only a library (or forged-third-ws) run needs the __system id to gate.
+    const systemId = await getSystemWorkspaceId(db);
+    if (home !== systemId) return null; // third-workspace C ⇒ fail-closed (B1)
+  }
   const agent = await db.query.documents.findFirst({
     where: and(
-      eq(documents.workspaceId, run.workspaceId),
+      eq(documents.workspaceId, home),
       eq(documents.type, 'agent'),
       eq(documents.slug, fm.agent_slug),
     ),

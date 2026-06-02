@@ -38,6 +38,8 @@ import { encryptSecret } from './crypto.ts';
 import { HTTPError } from './http.ts';
 import { mcpInvalidParams } from './mcp-errors.ts';
 import { __setCcSpawnForTest, loadContext, rejectRun, runAgent, runAgentResume } from './runner.ts';
+import { bootstrapSystemWorkspace, getSystemWorkspaceId } from './system-workspace.ts';
+import { workspaces } from '../db/schema.ts';
 
 type TestDB = Awaited<ReturnType<typeof makeTestApp>>['db'];
 
@@ -2235,5 +2237,90 @@ describe('loadContext: central caller-project clamp fold', () => {
     const ctx = await loadContext(run.id);
     expect(ctx).not.toBeNull();
     expect(ctx!.token.projectIds).toEqual([]);
+  });
+});
+
+// ==========================================================================
+// Cross-workspace agent resolution — the home predicate {run-ws, __system} (B1).
+//
+// loadContext resolves the agent by its STAMPED home workspace
+// (fm.agent_home_workspace_id), gated by `home ∈ {run.workspaceId, __system}`.
+// This is THE run-side cross-tenant boundary: a __system library agent's run
+// acting in B resolves; a run whose stamped home is a THIRD workspace C is
+// rejected (fail-closed); and a pre-Phase-B run with NO stamp falls back to the
+// run's own workspace WITHOUT requiring __system to exist (the short-circuit).
+// ==========================================================================
+
+describe('loadContext: home-gated agent resolution (B1)', () => {
+  test('resolves a __system library agent for a run acting in B', async () => {
+    const { db, workspace, project, parent, run } = await scaffold();
+    // Bootstrap the library workspace and seed a library agent in __system.
+    await bootstrapSystemWorkspace(db);
+    const systemId = await getSystemWorkspaceId(db);
+    const systemWs = (await db.query.workspaces.findFirst({
+      where: eq(workspaces.id, systemId),
+    }))!;
+    // The agent's createdBy must be an FK-valid user; reuse the run's owner so
+    // both the doc and its token reference a real user.
+    const libraryAgent = await seedAgent(db, systemWs, run.createdBy
+      ? ({ id: run.createdBy } as User)
+      : ({ id: parent.createdBy } as User),
+      'operator');
+
+    // Stamp the run: its agent is the __system library 'operator' agent.
+    await db
+      .update(documents)
+      .set({
+        frontmatter: sql`json_set(${documents.frontmatter},
+          '$.agent_slug', 'operator',
+          '$.agent_home_workspace_id', ${systemId})`,
+      })
+      .where(eq(documents.id, run.id));
+
+    const ctx = await loadContext(run.id);
+    expect(ctx).not.toBeNull();
+    // The resolved agent is the __system one; the workspace stays B.
+    expect(ctx!.agent.id).toBe(libraryAgent.id);
+    expect(ctx!.agent.workspaceId).toBe(systemId);
+    expect(ctx!.workspace.id).toBe(workspace.id);
+    expect(ctx!.workspace.id).not.toBe(systemId);
+  });
+
+  test('REJECTS a run whose agent_home is a third workspace C', async () => {
+    const { db, run } = await scaffold();
+    await bootstrapSystemWorkspace(db);
+    // A real third workspace C, neither B nor __system.
+    const thirdWsId = nanoid();
+    await db.insert(workspaces).values({ id: thirdWsId, slug: 'charlie', name: 'Charlie' });
+    // Stamp the run's home to C — even though the agent_slug ('helper') exists in
+    // B, the home predicate gates resolution off the STAMP, not the slug.
+    await db
+      .update(documents)
+      .set({
+        frontmatter: sql`json_set(${documents.frontmatter},
+          '$.agent_home_workspace_id', ${thirdWsId})`,
+      })
+      .where(eq(documents.id, run.id));
+
+    const ctx = await loadContext(run.id);
+    expect(ctx).toBeNull(); // fail-closed — no cross-tenant capability borrowing
+  });
+
+  test('backward-compatible: absent agent_home → home = run workspace (no __system needed)', async () => {
+    // scaffold() does NOT bootstrap __system, so this exercises the short-circuit:
+    // a local agent (home === run.workspaceId) must resolve WITHOUT the throwing
+    // getSystemWorkspaceId ever being called (it would 500 on this un-bootstrapped DB).
+    const { db, agent, run } = await scaffold();
+    // Defense: prove __system really is absent here.
+    const sys = await db.query.workspaces.findFirst({ where: eq(workspaces.slug, '__system') });
+    expect(sys).toBeUndefined();
+    // seedRunningRun stamps NO agent_home_workspace_id by default.
+    const fm = await readRun(db, run.id);
+    expect(fm.agent_home_workspace_id).toBeUndefined();
+
+    const ctx = await loadContext(run.id);
+    expect(ctx).not.toBeNull();
+    expect(ctx!.agent.id).toBe(agent.id);
+    expect(ctx!.agent.workspaceId).toBe(run.workspaceId);
   });
 });
