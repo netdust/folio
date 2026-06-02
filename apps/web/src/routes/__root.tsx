@@ -4,7 +4,7 @@ import { TanStackRouterDevtools } from '@tanstack/router-devtools';
 import { Toaster } from '../components/ui/toast.tsx';
 import { CommandPalette } from '../components/command-palette.tsx';
 import { ApiError, client } from '../lib/api/client.ts';
-import { authKeys, type SessionUser } from '../lib/api/auth.ts';
+import { authKeys, type MeResponse } from '../lib/api/auth.ts';
 
 interface RouterContext {
   queryClient: QueryClient;
@@ -18,7 +18,7 @@ export const Route = createRootRouteWithContext<RouterContext>()({
     try {
       await context.queryClient.fetchQuery({
         queryKey: authKeys.me,
-        queryFn: () => client.get<{ user: SessionUser }>('/api/v1/auth/me'),
+        queryFn: () => client.get<MeResponse>('/api/v1/auth/me'),
         staleTime: 60_000,
       });
     } catch (err) {

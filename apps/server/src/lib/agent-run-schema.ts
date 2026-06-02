@@ -72,6 +72,21 @@ export const agentRunFrontmatterSchema = z
     status: runStatusSchema,
 
     agent_slug: z.string().regex(/^[a-z0-9-]+$/),
+
+    // Server-stamped at createRun from where the agent was RESOLVED (B's own
+    // workspace, or `__system` for a library agent) — NEVER client-supplied
+    // (B2). Absent ⇒ home = run.workspaceId (local agent, backward-compatible).
+    // No migration: the field is JSON in the frontmatter column.
+    agent_home_workspace_id: z.string().optional(),
+
+    // Phase C C3 — set ONLY on a FRESH trigger-fired run (no human in the loop
+    // at invocation). The folio_api write handler reads this to FLOOR
+    // MEDIUM-risk config writes to refuse-with-plan on the unattended path,
+    // exactly like HIGH. Derived server-side at createRun from (triggerId set
+    // AND no resumeOf) — NEVER client-supplied. Omitted entirely (not false)
+    // for attended runs so the `.strict()` optional holds (mirror resume_of).
+    unattended: z.boolean().optional(),
+
     provider: providerSchema,
     model: z.string().default(''),
     system_prompt: z.string(),

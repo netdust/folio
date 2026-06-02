@@ -1224,3 +1224,245 @@ test('I1 regression: a SESSION (human) request to the list still returns ALL age
   const trigRes = await app.request(`${WS_PATH}?type=trigger`, { headers: { Cookie: seed.sessionCookie } });
   expect((await trigRes.json()).data).toHaveLength(1);
 });
+
+// ---------------------------------------------------------------------------
+// Phase B B8 — __system library agents surface (badged library:true) in every
+// workspace's agent listing.
+// ---------------------------------------------------------------------------
+
+import { SYSTEM_WORKSPACE_SLUG } from '../lib/system-workspace.ts';
+import { listWorkspaceDocuments as listWorkspaceDocsService } from '../services/documents.ts';
+import { workspaces as realWorkspaces, memberships } from '../db/schema.ts';
+
+/** Seed the __system workspace + a library agent directly (bypasses bootstrap). */
+async function seedSystemLibraryAgent(workspaceUserId: string, slug: string): Promise<string> {
+  const systemId = nanoid();
+  await realDb.insert(realWorkspaces).values({
+    id: systemId,
+    slug: SYSTEM_WORKSPACE_SLUG,
+    name: 'System Library',
+  });
+  const agentId = nanoid();
+  await realDb.insert(documentsTable).values({
+    id: agentId,
+    workspaceId: systemId,
+    projectId: null,
+    tableId: null,
+    type: 'agent',
+    slug,
+    title: slug,
+    status: null,
+    body: 'Library operator.',
+    frontmatter: {
+      system_prompt: 'You are the operator.',
+      model: 'claude-sonnet-4-6',
+      provider: 'anthropic',
+      tools: [],
+      projects: ['*'],
+      // CR-F1 — server-managed fields injected at run-create. These MUST be
+      // stripped before a cross-tenant member sees the library row (api_token_id
+      // is the operator's bearer-token id; parent_agent is delegation lineage).
+      api_token_id: 'tok_secret_123',
+      parent_agent: 'parent-operator',
+    },
+    createdBy: workspaceUserId,
+    updatedBy: workspaceUserId,
+  });
+  return systemId;
+}
+
+test('GET /w/:wslug/documents?type=agent includes __system library agents badged library:true (B8 listing)', async () => {
+  const { app, seed } = await makeTestApp();
+  await postWorkspaceDoc(app, seed.sessionCookie, {
+    type: 'agent', title: 'Local Helper',
+    frontmatter: { system_prompt: 'x', model: 'm', provider: 'anthropic', tools: [] },
+  });
+  await seedSystemLibraryAgent(seed.user.id, 'operator');
+
+  const res = await app.request(`${WS_PATH}?type=agent`, { headers: { Cookie: seed.sessionCookie } });
+  const data = (await res.json()).data as Array<{ slug: string; library?: boolean }>;
+  expect(data).toHaveLength(2);
+  const local = data.find((d) => d.slug === 'local-helper');
+  const library = data.find((d) => d.slug === 'operator');
+  expect(local?.library).toBe(false);
+  expect(library?.library).toBe(true);
+});
+
+test('a workspace-local agent shadows a __system agent of the same slug in the listing (local wins)', async () => {
+  const { app, seed } = await makeTestApp();
+  await postWorkspaceDoc(app, seed.sessionCookie, {
+    type: 'agent', title: 'dup',
+    frontmatter: { system_prompt: 'local', model: 'm', provider: 'anthropic', tools: [] },
+  });
+  await seedSystemLibraryAgent(seed.user.id, 'dup');
+
+  const res = await app.request(`${WS_PATH}?type=agent`, { headers: { Cookie: seed.sessionCookie } });
+  const data = (await res.json()).data as Array<{ slug: string; workspaceId: string; library?: boolean }>;
+  const dups = data.filter((d) => d.slug === 'dup');
+  expect(dups).toHaveLength(1);
+  // The local one wins → not badged library, and homed in the workspace.
+  expect(dups[0]?.library).toBe(false);
+  expect(dups[0]?.workspaceId).toBe(seed.workspace.id);
+});
+
+test('an agent-bound token still sees only itself, not __system library agents (I1 guard preserved)', async () => {
+  const { app, seed } = await makeTestApp();
+  const parentRes = await postWorkspaceDoc(app, seed.sessionCookie, {
+    type: 'agent', title: 'Self Agent',
+    frontmatter: { system_prompt: 'x', model: 'm', provider: 'anthropic', tools: [], projects: ['*'] },
+  });
+  const parent = (await parentRes.json()).data as { id: string };
+  await seedSystemLibraryAgent(seed.user.id, 'operator');
+
+  const { token, hash } = newApiToken();
+  await realDb.insert(apiTokens).values({
+    id: nanoid(),
+    workspaceId: seed.workspace.id,
+    name: 'self-bound',
+    tokenHash: hash,
+    scopes: ['documents:read'],
+    createdBy: seed.user.id,
+    agentId: parent.id,
+  });
+
+  const res = await app.request(`${WS_PATH}?type=agent`, { headers: { Authorization: `Bearer ${token}` } });
+  const data = (await res.json()).data as Array<{ id: string }>;
+  expect(data).toHaveLength(1);
+  expect(data[0]?.id).toBe(parent.id);
+});
+
+test('listing __system itself does not double-union its own agents', async () => {
+  const { db, seed } = await makeTestApp();
+  const systemId = await seedSystemLibraryAgent(seed.user.id, 'operator');
+
+  const rows = await listWorkspaceDocsService({ workspaceId: systemId, type: 'agent' });
+  expect(rows.filter((r) => r.slug === 'operator')).toHaveLength(1);
+  expect(rows).toHaveLength(1);
+  // sanity: db handle is the same realDb proxy the route uses
+  expect(db).toBeDefined();
+});
+
+// Phase D D3 (inherited Phase A M6) — a non-`__system`-member's DIRECT request
+// for `__system` content is 403'd by the membership gate in `resolveWorkspace`
+// (apps/server/src/middleware/scope.ts). The seed user is a member of `acme`
+// only; `seedSystemLibraryAgent` creates the `__system` workspace + a library
+// agent but adds NO membership for the seed user. So a direct GET on a
+// `__system` content route must fail closed with FORBIDDEN 'not a member'.
+// This is the server-side floor under D1's switcher filter: even if a client
+// hand-crafted the URL, the content stays gated.
+test('D3: non-member direct GET /w/__system/documents?type=agent is 403 FORBIDDEN (not a member)', async () => {
+  const { app, seed } = await makeTestApp();
+  await seedSystemLibraryAgent(seed.user.id, 'operator');
+
+  // Sanity: the same user CAN reach their own workspace's content (the gate
+  // is membership, not a blanket block on the route).
+  const okRes = await app.request('/api/v1/w/acme/documents?type=agent', {
+    headers: { Cookie: seed.sessionCookie },
+  });
+  expect(okRes.status).toBe(200);
+
+  // The boundary: a non-member of `__system` hits the membership gate.
+  const res = await app.request(`/api/v1/w/${SYSTEM_WORKSPACE_SLUG}/documents?type=agent`, {
+    headers: { Cookie: seed.sessionCookie },
+  });
+  expect(res.status).toBe(403);
+  const body = await res.json();
+  expect(body.error.code).toBe('FORBIDDEN');
+  expect(body.error.message).toBe('not a member');
+});
+
+// Phase D D2-vs-D4 crux — the COUNTERPART to D4's redaction: a `__system`
+// MEMBER (the library curator) listing `__system`'s OWN agents must see the
+// FULL prompt — the request IS for `__system`, so the cross-workspace D4
+// redaction branch is skipped and the curator can read/edit the agent. This
+// pins that the library's own members are NOT redacted against themselves
+// (without it, tightening D4 redaction could silently blind curators).
+test('D2: a __system member listing __system\'s OWN agents sees un-redacted body + system_prompt', async () => {
+  const { app, seed } = await makeTestApp();
+  // seedSystemLibraryAgent creates __system + an agent with a recognizable
+  // non-empty body ('Library operator.') + system_prompt ('You are the
+  // operator.'). Make the seed user a __system member so the direct request
+  // passes the membership gate.
+  const systemId = await seedSystemLibraryAgent(seed.user.id, 'operator');
+  await realDb.insert(memberships).values({
+    workspaceId: systemId,
+    userId: seed.user.id,
+    role: 'member',
+  });
+
+  const res = await app.request(
+    `/api/v1/w/${SYSTEM_WORKSPACE_SLUG}/documents?type=agent`,
+    { headers: { Cookie: seed.sessionCookie } },
+  );
+  expect(res.status).toBe(200);
+  const data = (await res.json()).data as Array<{
+    slug: string;
+    body: string;
+    library?: boolean;
+    frontmatter: Record<string, unknown>;
+  }>;
+  const operator = data.find((d) => d.slug === 'operator');
+  expect(operator).toBeDefined();
+  // Request IS for __system → self-list, NOT a cross-workspace union → D4
+  // redaction does NOT fire. The curator sees the full prompt to edit it.
+  expect(operator?.body).toBe('Library operator.');
+  expect(operator?.frontmatter.system_prompt).toBe('You are the operator.');
+});
+
+// Phase D D4 — the cross-workspace agent listing unions in `__system` library
+// agents so they appear in B's pickers, but a non-`__system`-member must see
+// ONLY the INVOKABLE fields of a library agent (id/slug/title/library:true) —
+// NEVER its prompt (`body`, post the Phase-3 body-as-prompt change) or any
+// legacy `frontmatter.system_prompt`. The picker only needs name/slug/id to
+// invoke it. Cross-tenant content (the operator's instructions) must not leak.
+// Redaction is LIBRARY-ROWS-ONLY: the workspace's OWN agents keep their body
+// (the member legitimately authored + edits them).
+test('D4: cross-workspace agent list exposes only invokable fields of a __system agent, not its prompt', async () => {
+  const { app, seed } = await makeTestApp();
+  // A workspace-local agent — its body MUST survive (redaction is library-only).
+  await postWorkspaceDoc(app, seed.sessionCookie, {
+    type: 'agent', title: 'Local Helper', body: 'Local agent prompt body.',
+    frontmatter: { system_prompt: 'local sp', model: 'm', provider: 'anthropic', tools: [] },
+  });
+  // The library agent — seeded with body 'Library operator.' + system_prompt
+  // 'You are the operator.' (see seedSystemLibraryAgent). The test FAILS if
+  // either leaks through the cross-workspace listing.
+  await seedSystemLibraryAgent(seed.user.id, 'operator');
+
+  const res = await app.request(`${WS_PATH}?type=agent`, { headers: { Cookie: seed.sessionCookie } });
+  const data = (await res.json()).data as Array<{
+    slug: string;
+    id: string;
+    title: string;
+    body: string;
+    library?: boolean;
+    frontmatter: Record<string, unknown>;
+  }>;
+
+  const library = data.find((d) => d.slug === 'operator');
+  // Invokable fields present.
+  expect(library).toBeDefined();
+  expect(library?.library).toBe(true);
+  expect(library?.id).toBeTruthy();
+  expect(library?.title).toBe('operator');
+  // Prompt redacted: body emptied, frontmatter.system_prompt removed.
+  expect(library?.body).toBe('');
+  expect(library?.frontmatter.system_prompt).toBeUndefined();
+  // CR-F1 — the LIVE leak: the old 2-key denylist passed every other key
+  // through, exposing the operator's bearer-token id + delegation lineage to a
+  // cross-tenant member. The allow-list must drop both.
+  expect(library?.frontmatter.api_token_id).toBeUndefined();
+  expect(library?.frontmatter.parent_agent).toBeUndefined();
+  // Invokable frontmatter the picker / run launcher reads MUST survive.
+  expect(library?.frontmatter.model).toBe('claude-sonnet-4-6');
+  expect(library?.frontmatter.provider).toBe('anthropic');
+  expect(library?.frontmatter.tools).toEqual([]);
+  expect(library?.frontmatter.projects).toEqual(['*']);
+
+  // The workspace's OWN agent keeps its body + system_prompt (library-only redaction).
+  const local = data.find((d) => d.slug === 'local-helper');
+  expect(local).toBeDefined();
+  expect(local?.library).toBe(false);
+  expect(local?.body).toBe('Local agent prompt body.');
+  expect(local?.frontmatter.system_prompt).toBe('local sp');
+});

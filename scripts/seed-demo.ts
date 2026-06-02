@@ -8,6 +8,8 @@
  *
  * Usage:
  *   API must be running on $API (default http://localhost:3001).
+ *   On a FRESH instance, start the API with FOLIO_ALLOW_BOOTSTRAP_REGISTRATION=true
+ *   so the first registration (this script's EMAIL) becomes the instance owner.
  *   bun run scripts/seed-demo.ts
  *
  * Env overrides:
@@ -52,6 +54,17 @@ async function register() {
     if (String(err).includes('EMAIL_TAKEN') || String(err).includes('already registered')) {
       await api('POST', '/api/v1/auth/login', { email: EMAIL, password: PASSWORD });
       console.log(`✓ Logged in ${EMAIL}`);
+    } else if (String(err).includes('REGISTRATION_CLOSED')) {
+      // Phase A gate (M1): on a FRESH instance the first registration only
+      // becomes the instance owner when the server was started with
+      // FOLIO_ALLOW_BOOTSTRAP_REGISTRATION=true (or the owner was set via
+      // FOLIO_INSTANCE_OWNER). The seed drives the public API, so it can't flip
+      // the server's env — surface an actionable instruction instead of a raw 403.
+      throw new Error(
+        `Registration is closed on a fresh instance. Start the API with ` +
+          `FOLIO_ALLOW_BOOTSTRAP_REGISTRATION=true (so the first user becomes the ` +
+          `instance owner), then re-run this seed. Original error: ${String(err)}`,
+      );
     } else {
       throw err;
     }

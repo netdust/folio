@@ -489,6 +489,38 @@ describe('createRun', () => {
     expect(fm.caller_project_ids).not.toContain('*');
   });
 
+  test('stamps agent_home_workspace_id from the resolved agent workspace, not from input (B2)', async () => {
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+
+    const result = await createRun({
+      workspace: seed.workspace,
+      project: seed.project,
+      runsTable,
+      agent,
+      actor: seed.user,
+      input: {
+        parentDocumentId: parent.id,
+        firedBy: 'agent.task.assigned',
+        chainId: crypto.randomUUID(),
+        triggerId: null,
+        // CreateRunInput has no agent_home_workspace_id field; cast through
+        // unknown to prove even a smuggled payload can't influence the stamp.
+        ...({ agent_home_workspace_id: 'attacker-supplied-ws' } as unknown as Record<string, never>),
+      },
+    });
+
+    const fm = result.document.frontmatter as AgentRunFrontmatter;
+    // Stamped server-side from the RESOLVED agent doc's own workspace, never
+    // from input — for this B-local agent that is B's (seed) workspace id.
+    expect(fm.agent_home_workspace_id).toBe(agent.workspaceId);
+    expect(fm.agent_home_workspace_id).toBe(seed.workspace.id);
+    expect(fm.agent_home_workspace_id).not.toBe('attacker-supplied-ws');
+  });
+
   test('resume INHERITS the original run caller snapshot — does not re-derive from the resume actor (D6)', async () => {
     const { db, seed } = await makeTestApp();
     const table = await getWorkItemsTable(db, seed.project.id);
@@ -550,6 +582,105 @@ describe('createRun', () => {
     expect(resumeFm.caller_scopes).not.toContain('documents:delete');
     expect(resumeFm.caller_scopes).not.toContain('agents:write');
     expect(resumeFm.caller_project_ids).toEqual(origFm.caller_project_ids);
+  });
+
+  // Phase C C3 — the `unattended` marker is derived server-side from
+  // (triggerId set AND no resumeOf): a FRESH trigger fire has no human in the
+  // loop. A direct human run-launch (triggerId:null) and a resume (a
+  // continuation of a human-approved run) are both ATTENDED and omit the flag.
+  test('stamps unattended:true for a fresh trigger-fired run (triggerId set, no resumeOf)', async () => {
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+
+    const result = await createRun({
+      workspace: seed.workspace,
+      project: seed.project,
+      runsTable,
+      agent,
+      actor: seed.user,
+      input: {
+        parentDocumentId: parent.id,
+        firedBy: 'trigger:builtin-on-assignment',
+        chainId: crypto.randomUUID(),
+        triggerId: nanoid(),
+      },
+    });
+
+    const fm = result.document.frontmatter as AgentRunFrontmatter;
+    expect(fm.unattended).toBe(true);
+  });
+
+  test('omits unattended for a human run-launch (triggerId:null)', async () => {
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+
+    const result = await createRun({
+      workspace: seed.workspace,
+      project: seed.project,
+      runsTable,
+      agent,
+      actor: seed.user,
+      input: {
+        parentDocumentId: parent.id,
+        firedBy: 'manual',
+        chainId: crypto.randomUUID(),
+        triggerId: null,
+      },
+    });
+
+    const fm = result.document.frontmatter as AgentRunFrontmatter;
+    // `.strict()` optional held: the key is absent, not false. Either is "not true".
+    expect(fm.unattended).not.toBe(true);
+    expect('unattended' in fm).toBe(false);
+  });
+
+  test('omits unattended for a resume even when triggerId is set (resume is attended)', async () => {
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+
+    const original = await createRun({
+      workspace: seed.workspace,
+      project: seed.project,
+      runsTable,
+      agent,
+      actor: seed.user,
+      input: {
+        parentDocumentId: parent.id,
+        firedBy: 'manual',
+        chainId: crypto.randomUUID(),
+        triggerId: null,
+      },
+    });
+    const origFm = original.document.frontmatter as AgentRunFrontmatter;
+
+    const resume = await createRun({
+      workspace: seed.workspace,
+      project: seed.project,
+      runsTable,
+      agent,
+      actor: seed.user,
+      input: {
+        parentDocumentId: parent.id,
+        firedBy: 'manual',
+        chainId: origFm.chain_id,
+        // triggerId set AND resumeOf set → the resumeOf guard wins → attended.
+        triggerId: nanoid(),
+        resumeOf: original.document.id,
+      },
+    });
+
+    const resumeFm = resume.document.frontmatter as AgentRunFrontmatter;
+    expect(resumeFm.unattended).not.toBe(true);
+    expect('unattended' in resumeFm).toBe(false);
   });
 });
 

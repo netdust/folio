@@ -228,6 +228,8 @@ describe('V1_MCP_TOOLS', () => {
       'run_view',
       // Phase 2.6 sub-phase D — agent lifecycle tools.
       'create_agent', 'update_agent', 'delete_agent', 'get_agent_self',
+      // Phase-op-3 — operator REST bridge (folio_api_get reads, folio_api writes).
+      'folio_api_get', 'folio_api',
       // search_documents deferred to v1.1
     ] as const);
   });

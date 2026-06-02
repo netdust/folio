@@ -107,6 +107,9 @@ export const memberships = sqliteTable(
   },
   (t) => ({
     pk: primaryKey({ columns: [t.workspaceId, t.userId] }),
+    // CR-F4 — listWorkspaces + isSystemMember filter by userId, the NON-leading
+    // column of the composite PK, so they full-scan. Index userId for a seek.
+    userIdx: index('memberships_user_idx').on(t.userId),
   }),
 );
 

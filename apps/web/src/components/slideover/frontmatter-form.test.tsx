@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { FrontmatterForm } from './frontmatter-form.tsx';
 
 describe('FrontmatterForm', () => {
@@ -97,6 +98,46 @@ describe('FrontmatterForm', () => {
     ).toBeNull();
     // sanity: the form did render its curated fields.
     expect(screen.getByText('max_tokens_per_run')).toBeInTheDocument();
+  });
+
+  it('renders a TriggerAgentField for a trigger\'s agent key, committing the bare slug', async () => {
+    const stub = () =>
+      new Response(
+        JSON.stringify({
+          data: [
+            {
+              id: 'op', slug: 'operator', type: 'agent', title: 'Operator',
+              status: null, parentId: null, library: true, frontmatter: { projects: ['*'] },
+              createdAt: '', updatedAt: '', lastTouchedAt: null,
+            },
+          ],
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    vi.stubGlobal('fetch', vi.fn(async () => stub()));
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const onCommit = vi.fn();
+    render(
+      <QueryClientProvider client={qc}>
+        <FrontmatterForm
+          wslug="acme"
+          pslug=""
+          type="trigger"
+          status={null}
+          statuses={[]}
+          frontmatter={{ agent: '' }}
+          pinnedFields={[]}
+          onStatusCommit={() => {}}
+          onFrontmatterCommit={onCommit}
+        />
+      </QueryClientProvider>,
+    );
+    // Not a plain text input — opening the picker reveals the agent and commits
+    // the BARE slug (not `agent:operator`).
+    await userEvent.click(screen.getByRole('button', { name: /pick an agent/i }));
+    await userEvent.click(await screen.findByRole('button', { name: /Operator/i }));
+    expect(onCommit).toHaveBeenCalledWith({ agent: 'operator' });
+    vi.unstubAllGlobals();
   });
 
   it('a pinned field type overrides inference', () => {

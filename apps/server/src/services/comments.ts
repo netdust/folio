@@ -32,6 +32,7 @@ import {
   documents,
   memberships,
   users,
+  workspaces,
 } from '../db/schema.ts';
 import type {
   Document,
@@ -49,6 +50,7 @@ import {
 import { parseMentions } from '../lib/mention-parser.ts';
 import { authorString as sharedAuthorString } from '@folio/shared';
 import { resolveAgentProjects } from '../lib/agent-projects.ts';
+import { SYSTEM_WORKSPACE_SLUG } from '../lib/system-workspace.ts';
 
 const MAX_BODY_BYTES = 64 * 1024;
 
@@ -212,11 +214,36 @@ async function loadWorkspaceAgents(
     .select({ id: documents.id, slug: documents.slug, frontmatter: documents.frontmatter })
     .from(documents)
     .where(and(eq(documents.workspaceId, workspaceId), eq(documents.type, 'agent')));
+
+  // Phase B B8 — UNION the `__system` library's agents so an @-mention of a
+  // library agent (`@agent:<library-slug>`) RESOLVES in any workspace's
+  // comments. Library agents are mentionable instance-wide. The union is SOFT
+  // (no `__system` → local agents only, no throw) and SKIPPED when the comment's
+  // workspace IS `__system` (no self-union). A workspace-local agent SHADOWS a
+  // library agent of the same slug (dedupe by slug, local wins — mirrors the
+  // run-create precedence). Resolution still flows through the same allow-list
+  // gate (resolveAgentProjects + caller's allowed-project set) downstream.
+  let merged = rows;
+  const systemRow = await tx
+    .select({ id: workspaces.id })
+    .from(workspaces)
+    .where(eq(workspaces.slug, SYSTEM_WORKSPACE_SLUG))
+    .limit(1);
+  const systemId = systemRow[0]?.id;
+  if (systemId && systemId !== workspaceId) {
+    const systemRows = await tx
+      .select({ id: documents.id, slug: documents.slug, frontmatter: documents.frontmatter })
+      .from(documents)
+      .where(and(eq(documents.workspaceId, systemId), eq(documents.type, 'agent')));
+    const localSlugs = new Set(rows.map((r) => r.slug));
+    merged = [...rows, ...systemRows.filter((r) => !localSlugs.has(r.slug))];
+  }
+
   // S1: resolveAgentProjects centralizes the fail-closed wildcard collapse
   // and the missing/malformed → ['*'] back-compat default. Three call sites
   // (this loader, SSE replay, bearer middleware) previously each parsed
   // `agent.frontmatter.projects` by hand and drifted (G11).
-  return rows.map((r) => ({
+  return merged.map((r) => ({
     id: r.id,
     slug: r.slug,
     allowedProjectIds: resolveAgentProjects(r),

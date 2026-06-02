@@ -1,7 +1,8 @@
-import { createFileRoute } from '@tanstack/react-router';
+import { createFileRoute, Link } from '@tanstack/react-router';
 import { useState } from 'react';
 import { z } from 'zod';
-import { useWorkspace } from '../lib/api/workspaces.ts';
+import { SYSTEM_WORKSPACE_SLUG, useWorkspace } from '../lib/api/workspaces.ts';
+import { useIsSystemMember } from '../lib/api/auth.ts';
 import { TokensTab } from '../components/settings/tokens-tab.tsx';
 import { AiTab } from '../components/settings/ai-tab.tsx';
 import { Tabs } from '../components/ui/tabs.tsx';
@@ -35,6 +36,7 @@ type TabKey = 'tokens' | 'ai';
 
 export function SettingsPage({ wslug, initialTab }: { wslug: string; initialTab?: TabKey }) {
   const workspace = useWorkspace(wslug);
+  const isSystemMember = useIsSystemMember();
   const [tab, setTab] = useState<TabKey>(initialTab ?? 'tokens');
 
   return (
@@ -62,6 +64,36 @@ export function SettingsPage({ wslug, initialTab }: { wslug: string; initialTab?
       ) : null}
       {tab === 'ai' && workspace.data ? (
         <AiTab wslug={wslug} workspaceId={workspace.data.id} />
+      ) : null}
+
+      {/*
+        D2: System Library entry, gated on `__system` membership. It's a link
+        SECTION, not a third tab, because it NAVIGATES to the existing
+        per-workspace agents/automation surface pointed at `__system` rather
+        than rendering tab content here — a tab that immediately navigates away
+        is worse UX than a clearly-labeled link. Rendered below the tabs so it's
+        always visible to a member regardless of which tab is active.
+
+        FOLLOW-UP: this is an instance-level surface temporarily living in
+        per-workspace settings. Move it to a global/account settings surface
+        when one lands. No new management UI is built — Skills/Reference docs are
+        reachable via the `__system` workspace's wiki/document views.
+      */}
+      {isSystemMember ? (
+        <section className="mt-8 rounded-md border border-border-light bg-shell p-4">
+          <h2 className="text-sm font-medium">System Library</h2>
+          <p className="mt-0.5 text-xs text-fg-2">
+            Curate the shared library agents and triggers that any workspace can
+            run. Opens the System Library's automation page.
+          </p>
+          <Link
+            to="/w/$wslug/agents"
+            params={{ wslug: SYSTEM_WORKSPACE_SLUG }}
+            className="mt-3 inline-block text-sm text-fg-2 hover:text-fg"
+          >
+            Open System Library →
+          </Link>
+        </section>
       ) : null}
     </div>
   );

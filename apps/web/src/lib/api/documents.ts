@@ -29,6 +29,10 @@ export interface DocumentSummary {
   // rows un-projected); the type historically under-declared it. Widening
   // here makes node.doc.body available for card excerpts.
   body: string;
+  // Phase B B8 — true when this agent belongs to the `__system` library (vs the
+  // workspace's own agents). Only set on type='agent' rows from the workspace
+  // agent-listing endpoint. UX badge only — NOT an authorization signal.
+  library?: boolean;
 }
 
 export type Document = DocumentSummary;

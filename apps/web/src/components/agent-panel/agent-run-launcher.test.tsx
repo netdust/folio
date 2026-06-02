@@ -60,4 +60,22 @@ describe('AgentRunLauncher', () => {
     wrap(<AgentRunLauncher wslug="acme" onLaunched={vi.fn()} />);
     expect(screen.getByRole('button', { name: /run agent/i })).toBeDisabled();
   });
+
+  test('the run launcher shows a library marker for __system agents (B8)', async () => {
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () => {
+      return new Response(
+        JSON.stringify({
+          data: [
+            { id: 'a1', slug: 'bot', type: 'agent', title: 'Reply Bot', library: false, frontmatter: {}, status: null, parentId: null, createdAt: '', updatedAt: '', lastTouchedAt: null },
+            { id: 'op', slug: 'operator', type: 'agent', title: 'Operator', library: true, frontmatter: {}, status: null, parentId: null, createdAt: '', updatedAt: '', lastTouchedAt: null },
+          ],
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    }));
+    wrap(<AgentRunLauncher wslug="acme" onLaunched={vi.fn()} />);
+    // The library agent's option is labelled with the marker; the local one is not.
+    await screen.findByRole('option', { name: /Operator \(library\)/i });
+    expect(screen.getByRole('option', { name: /^Reply Bot$/ })).toBeInTheDocument();
+  });
 });

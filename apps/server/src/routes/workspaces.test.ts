@@ -1,9 +1,16 @@
 import { expect, test } from 'bun:test';
 import { and, eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
-import { apiTokens, documents } from '../db/schema.ts';
+import { apiTokens, documents, users, workspaces } from '../db/schema.ts';
 import { newApiToken } from '../lib/auth.ts';
+import {
+  SYSTEM_WORKSPACE_SLUG,
+  bootstrapSystemWorkspace,
+  grantOwner,
+} from '../lib/system-workspace.ts';
+import { isSystemMember, listWorkspaces } from '../services/workspaces.ts';
 import { makeTestApp } from '../test/harness.ts';
+import { assertSlugAllowed } from './workspaces.ts';
 
 test('GET /api/v1/workspaces lists user workspaces', async () => {
   const { app, seed } = await makeTestApp();
@@ -94,6 +101,52 @@ test('POST with explicit slug; second use is 409', async () => {
   expect((await dupe.json()).error.code).toBe('SLUG_CONFLICT');
 });
 
+// Phase A (M2/M3) — reserved (underscore-prefixed) slugs cannot be created.
+// The create zod regex `^[a-z0-9-]+$` rejects underscores at validation (422);
+// assertSlugAllowed is defense-in-depth on the FINAL resolved slug (both the
+// explicit and the auto-derived branch) so loosening that regex can never
+// silently reopen the system-workspace hijack.
+test('POST /api/v1/workspaces rejects reserved __system slug; nothing created', async () => {
+  const { app, seed, db } = await makeTestApp();
+  const res = await app.request('/api/v1/workspaces', {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Hijack', slug: '__system' }),
+  });
+  // 422 from the create regex; the explicit assertSlugAllowed guard sits below it.
+  expect([400, 422]).toContain(res.status);
+  const row = await db.query.workspaces.findFirst({
+    where: eq(workspaces.slug, '__system'),
+  });
+  expect(row).toBeUndefined();
+});
+
+// Unit-exercise the exported guard directly — this is what observably proves
+// the reserved-slug logic independent of the zod regex (the both-branches
+// final-slug assertion in the CREATE handler).
+test('assertSlugAllowed throws on reserved slugs, passes normal ones', () => {
+  expect(() => assertSlugAllowed('__system')).toThrow();
+  expect(() => assertSlugAllowed('_x')).toThrow();
+  expect(() => assertSlugAllowed('acme')).not.toThrow();
+});
+
+// M3 satisfied structurally by slug immutability — the PATCH zod schema is
+// `{ name }`-only, so a stray `slug` is stripped and the slug cannot be
+// renamed to a reserved value. Pin this contract.
+test('PATCH /api/v1/w/:wslug ignores a stray slug field; slug stays acme', async () => {
+  const { app, seed, db } = await makeTestApp();
+  const res = await app.request('/api/v1/w/acme', {
+    method: 'PATCH',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Renamed', slug: '__system' }),
+  });
+  expect(res.status).toBe(200);
+  const row = await db.query.workspaces.findFirst({
+    where: eq(workspaces.id, seed.workspace.id),
+  });
+  expect(row?.slug).toBe('acme');
+});
+
 test('GET /api/v1/workspaces/:wslug returns workspace + role', async () => {
   const { app, seed } = await makeTestApp();
   const res = await app.request('/api/v1/w/acme', {
@@ -103,6 +156,27 @@ test('GET /api/v1/workspaces/:wslug returns workspace + role', async () => {
   const body = await res.json();
   expect(body.data.slug).toBe('acme');
   expect(body.data.role).toBe('owner');
+});
+
+test('GET /api/v1/w/:wslug reports claude_code_enabled:false even when FOLIO_CLAUDE_CODE_ENABLED is true', async () => {
+  // Phase C shake-out: claude-code is hard-disabled at the runner preflight, so
+  // the workspace endpoint must NEVER advertise it as selectable — even when the
+  // env flag is on. The flag no longer enables execution; surfacing it would let
+  // the web UI offer a provider option that always fails.
+  const { env } = await import('../env.ts');
+  const prev = env.FOLIO_CLAUDE_CODE_ENABLED;
+  (env as { FOLIO_CLAUDE_CODE_ENABLED: boolean }).FOLIO_CLAUDE_CODE_ENABLED = true;
+  try {
+    const { app, seed } = await makeTestApp();
+    const res = await app.request('/api/v1/w/acme', {
+      headers: { Cookie: seed.sessionCookie },
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.data.claude_code_enabled).toBe(false);
+  } finally {
+    (env as { FOLIO_CLAUDE_CODE_ENABLED: boolean }).FOLIO_CLAUDE_CODE_ENABLED = prev;
+  }
 });
 
 test('PATCH /api/v1/workspaces/:wslug renames (owner)', async () => {
@@ -366,4 +440,133 @@ test('DELETE /api/v1/w/:wslug rejects bearer + garbage cookie with 403', async (
   expect(res.status).toBe(403);
   const body = await res.json();
   expect(body.error.code).toBe('FORBIDDEN');
+});
+
+// --- Phase A: __system is membership-gated like any workspace (M6) + workspace
+// create stays session-only so agents can't reach __system (M7). These pin the
+// boundary; Phase A adds NO __system read path that bypasses membership (the
+// definitional skill-load exemption is Phase B).
+
+test('M6: a non-__system member cannot read a __system workspace (membership gate)', async () => {
+  const { app, db, seed } = await makeTestApp();
+  // seed.user (alice) is a member of 'acme', NOT of __system.
+  await bootstrapSystemWorkspace(db);
+  // Reach __system as alice's session — resolveWorkspace's membership check fires.
+  const res = await app.request('/api/v1/w/__system', {
+    headers: { Cookie: seed.sessionCookie },
+  });
+  expect(res.status).toBe(403);
+  expect((await res.json()).error.code).toBe('FORBIDDEN');
+});
+
+test('M6: a non-__system member cannot read a __system page document', async () => {
+  const { app, db, seed } = await makeTestApp();
+  await bootstrapSystemWorkspace(db);
+  // The seeded folio skill page lives in __system/skills. Alice (non-member)
+  // is blocked at resolveWorkspace before reaching the document.
+  const res = await app.request('/api/v1/w/__system/p/skills/documents/folio', {
+    headers: { Cookie: seed.sessionCookie },
+  });
+  // 403 (not a member) — never 200/leaked content.
+  expect([403, 404]).toContain(res.status);
+  expect(res.status).not.toBe(200);
+});
+
+test('M7/M2: an agent bearer cannot create a __system workspace (session-only)', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const { token, hash } = newApiToken();
+  await db.insert(apiTokens).values({
+    id: nanoid(),
+    workspaceId: seed.workspace.id,
+    name: 'agent-tries-system-create',
+    tokenHash: hash,
+    scopes: ['documents:read'],
+    createdBy: seed.user.id,
+  });
+  const res = await app.request('/api/v1/workspaces', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Sneaky', slug: '__system' }),
+  });
+  // requireSessionUser rejects the bearer (401/403) before the slug check; either
+  // way no __system workspace is created.
+  expect([401, 403]).toContain(res.status);
+  const sys = await db.query.workspaces.findFirst({
+    where: eq(workspaces.slug, '__system'),
+  });
+  expect(sys).toBeUndefined();
+});
+
+// --- Phase D (D1): __system is excluded from the AMBIENT workspace list (the
+// switcher) but stays reachable by direct slug navigation for a member. The
+// library is curated through its own settings entry, not the workspace pin
+// switcher — so a __system membership must not surface as a switchable row.
+
+test('listWorkspaces excludes __system from the ambient list (D1)', async () => {
+  const { db, seed } = await makeTestApp();
+  await bootstrapSystemWorkspace(db);
+  // Make the seed user (alice) the __system instance owner.
+  await grantOwner(db, seed.user.email);
+
+  const rows = await listWorkspaces(seed.user.id);
+  // alice's own 'acme' workspace is present; __system is filtered out.
+  expect(rows.some((r) => r.workspace.slug === 'acme')).toBe(true);
+  expect(rows.some((r) => r.workspace.slug === SYSTEM_WORKSPACE_SLUG)).toBe(false);
+});
+
+test('isSystemMember is true for a __system member, false otherwise (D1)', async () => {
+  const { app, db, seed } = await makeTestApp();
+  await bootstrapSystemWorkspace(db);
+
+  // Before designation alice is not a __system member.
+  expect(await isSystemMember(seed.user.id)).toBe(false);
+
+  await grantOwner(db, seed.user.email);
+  expect(await isSystemMember(seed.user.id)).toBe(true);
+
+  // A wholly unrelated user (not in __system) reads false.
+  const res = await app.request('/api/v1/auth/register', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      email: 'bob@test.local',
+      name: 'Bob',
+      password: 'password123',
+    }),
+  });
+  // Registration may or may not be open in this harness; fall back to a direct
+  // insert if the route declines, so the assertion stays deterministic.
+  let bobId: string;
+  if (res.status === 200 || res.status === 201) {
+    const bob = await db.query.users.findFirst({
+      where: eq(users.email, 'bob@test.local'),
+    });
+    bobId = bob!.id;
+  } else {
+    bobId = nanoid();
+    await db.insert(users).values({
+      id: bobId,
+      email: 'bob2@test.local',
+      name: 'Bob',
+      passwordHash: 'x',
+    });
+  }
+  expect(await isSystemMember(bobId)).toBe(false);
+});
+
+test('GET /api/v1/w/__system still resolves the workspace for a member (filter does not break navigation) (D1)', async () => {
+  const { app, db, seed } = await makeTestApp();
+  await bootstrapSystemWorkspace(db);
+  await grantOwner(db, seed.user.email);
+
+  // Direct slug navigation to __system must still return 200 for a MEMBER even
+  // though listWorkspaces excludes it. The detail route is membership-gated via
+  // resolveWorkspace — NOT via listWorkspaces — so the ambient filter cannot
+  // break navigation.
+  const res = await app.request(`/api/v1/w/${SYSTEM_WORKSPACE_SLUG}`, {
+    headers: { Cookie: seed.sessionCookie },
+  });
+  expect(res.status).toBe(200);
+  const body = await res.json();
+  expect(body.data.slug).toBe(SYSTEM_WORKSPACE_SLUG);
 });

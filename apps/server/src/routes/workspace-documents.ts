@@ -33,6 +33,7 @@ import {
   updateDocument,
   type DocumentType,
 } from '../services/documents.ts';
+import { findSystemWorkspaceId } from '../lib/system-workspace.ts';
 
 export const workspaceDocumentsRoute = new Hono<AuthContext & ScopeContext>();
 
@@ -125,11 +126,24 @@ workspaceDocumentsRoute.get('/', async (c) => {
   // Non-agent tokens (session, human PAT) bypass.
   const token = c.get('token') ?? null;
   if (token?.agentId) {
+    // The I1 narrow runs AFTER the __system union (built inside
+    // listWorkspaceDocuments) and filters by id — so a library agent in the
+    // union is filtered out for an agent-bound token (it never matches the
+    // token's own agentId). The agent still sees only itself. Library badging
+    // is moot here (the union is filtered away), so no `library` flag is added
+    // on this path.
     return c.json({
       data: rows.filter((r) => r.type === 'agent' && r.id === token.agentId),
     });
   }
-  return c.json({ data: rows });
+  // Phase B B8 — badge each agent row with `library: true` when it belongs to
+  // the `__system` library (vs the workspace's own agents). The web pickers use
+  // this purely as a UX marker; it is NOT an authorization signal.
+  const systemId = type === 'agent' ? await findSystemWorkspaceId(db) : undefined;
+  const data = rows.map((r) =>
+    r.type === 'agent' ? { ...r, library: systemId !== undefined && r.workspaceId === systemId } : r,
+  );
+  return c.json({ data });
 });
 
 workspaceDocumentsRoute.get('/:slug', async (c) => {

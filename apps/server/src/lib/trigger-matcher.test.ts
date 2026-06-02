@@ -26,16 +26,21 @@ import {
   type Workspace,
   apiTokens,
   documents,
+  memberships as schemaMemberships,
+  projects as schemaProjects,
   tables,
+  workspaces as schemaWorkspaces,
 } from '../db/schema.ts';
 import { env } from '../env.ts';
 import { makeTestApp } from '../test/harness.ts';
 import type { TestSeed } from '../test/harness.ts';
-import { toolsToScopes } from './agent-schema.ts';
+import { callerProjectsFor } from './agent-projects.ts';
+import { roleToScopes, toolsToScopes } from './agent-schema.ts';
 import { newApiToken } from './auth.ts';
 import { seedBuiltinTriggers } from './builtin-triggers.ts';
 import { eventBus } from './event-bus.ts';
 import type { BusEvent } from './event-bus.ts';
+import { SYSTEM_WORKSPACE_SLUG, bootstrapSystemWorkspace } from './system-workspace.ts';
 import { triggerMatcher } from './trigger-matcher.ts';
 
 type TestDB = Awaited<ReturnType<typeof makeTestApp>>['db'];
@@ -243,9 +248,16 @@ function commentCreatedEvent(args: {
    * Override the literal `target_agent` payload value. Defaults to
    * `args.agentSlug` (the bare slug). Pass `agent:<slug>` to exercise the
    * PREFIXED form that the cancel route + clients can emit (see
-   * comments.ts "three forms" — Finding 1).
+   * comments.ts "three forms" — Finding 1). Pass `null` to OMIT `target_agent`
+   * entirely (isolating the `target_agent_id` id-handle path — C1).
    */
-  targetAgent?: string;
+  targetAgent?: string | null;
+  /**
+   * The immutable `target_agent_id` doc-id handle (BUG-013). When present, the
+   * matcher resolves the agent doc by id and asserts its home ∈ {eventWs,
+   * __system} before trusting it. Omitted by default.
+   */
+  targetAgentId?: string;
 }): BusEvent & { seq: number } {
   const commentId = args.commentId ?? `comment-${nanoid(6)}`;
   return {
@@ -260,7 +272,11 @@ function commentCreatedEvent(args: {
       parent_id: args.parentId,
       author: args.actor,
       kind: args.kind,
-      target_agent: args.targetAgent ?? args.agentSlug,
+      // `null` → omit the literal target_agent (isolate the id-handle path).
+      ...(args.targetAgent === null
+        ? {}
+        : { target_agent: args.targetAgent ?? args.agentSlug }),
+      ...(args.targetAgentId ? { target_agent_id: args.targetAgentId } : {}),
     },
     createdAt: Date.now(),
     seq: 1,
@@ -907,4 +923,588 @@ test('resume_run resolves a PREFIXED target_agent (agent:<slug>) and creates the
   });
   expect(resumeRow).toBeTruthy();
   expect((resumeRow?.frontmatter as Record<string, unknown>).resume_of).toBe(originalId);
+});
+
+// ----- Phase C C1: home-predicate slug resolution {eventWs, __system} -----
+//
+// Phase A built a reserved `__system` library workspace; Phase B made library
+// agents (e.g. the operator) runnable against any customer workspace B via the
+// home predicate `home ∈ {run-ws, __system}` (resolveAgentForRun). C1 extends
+// that predicate into the trigger-matcher: a B trigger naming a `__system`
+// library agent by slug must FIRE it (local-shadows-library), while a slug that
+// exists only in a THIRD workspace C must NOT resolve (fail-closed).
+
+/** Bootstrap `__system` and return its Workspace row (for seeding library agents). */
+async function bootstrapSystem(db: TestDB): Promise<Workspace> {
+  await bootstrapSystemWorkspace(db);
+  const sys = await db.query.workspaces.findFirst({
+    where: eq(schemaWorkspaces.slug, SYSTEM_WORKSPACE_SLUG),
+  });
+  if (!sys) throw new Error('test setup: __system did not bootstrap');
+  return sys;
+}
+
+/** Seed a bare (third) workspace C — no membership, no projects. */
+async function seedWorkspaceC(db: TestDB): Promise<Workspace> {
+  const id = nanoid();
+  await db.insert(schemaWorkspaces).values({ id, slug: `c-${nanoid(6)}`, name: 'Workspace C' });
+  const row = await db.query.workspaces.findFirst({ where: eq(schemaWorkspaces.id, id) });
+  if (!row) throw new Error('test setup: workspace C insert did not round-trip');
+  return row;
+}
+
+test('a B trigger targeting a __system library agent by slug FIRES it (C1)', async () => {
+  const { db, seed } = await makeTestApp();
+  // B has its builtin-on-assignment trigger (agent: '$event.agent') but NO local 'ops'.
+  await seedTriggers(db, seed.workspace.id, seed.user.id);
+  // __system holds the library agent 'ops' (home = __system).
+  const sys = await bootstrapSystem(db);
+  const libraryAgent = await seedAgent(db, sys, seed.user, 'ops');
+  const wiTable = await getWorkItemsTable(db, seed.project.id);
+  const wi = await seedWorkItem(db, seed.workspace, seed.project, wiTable, seed.user);
+
+  // Drive the triggering event in B as a HUMAN. fm.agent='$event.agent' →
+  // payload.agent='ops' → resolves the __system library agent via the home predicate.
+  await triggerMatcher.react(
+    assignmentEvent({
+      seed,
+      workItem: wi,
+      agentSlug: 'ops',
+      agentId: libraryAgent.id,
+      actor: seed.user.id,
+    }),
+  );
+
+  expect(await countRuns(db, wi.id, 'ops')).toBe(1);
+  const run = await db.query.documents.findFirst({
+    where: and(eq(documents.type, 'agent_run'), eq(documents.parentId, wi.id)),
+  });
+  expect(run?.status).toBe('planning');
+  // The run is home-stamped to __system (the resolved agent's home workspace).
+  expect((run?.frontmatter as Record<string, unknown>).agent_home_workspace_id).toBe(sys.id);
+});
+
+test('a B-LOCAL agent of the same slug SHADOWS the library agent (local wins — C1)', async () => {
+  const { db, seed } = await makeTestApp();
+  await seedTriggers(db, seed.workspace.id, seed.user.id);
+  // Both __system and B define 'ops'. Local (B) must win.
+  const sys = await bootstrapSystem(db);
+  await seedAgent(db, sys, seed.user, 'ops');
+  const localAgent = await seedAgent(db, seed.workspace, seed.user, 'ops');
+  const wiTable = await getWorkItemsTable(db, seed.project.id);
+  const wi = await seedWorkItem(db, seed.workspace, seed.project, wiTable, seed.user);
+
+  await triggerMatcher.react(
+    assignmentEvent({
+      seed,
+      workItem: wi,
+      agentSlug: 'ops',
+      agentId: localAgent.id,
+      actor: seed.user.id,
+    }),
+  );
+
+  expect(await countRuns(db, wi.id, 'ops')).toBe(1);
+  const run = await db.query.documents.findFirst({
+    where: and(eq(documents.type, 'agent_run'), eq(documents.parentId, wi.id)),
+  });
+  // Resolved the B-LOCAL agent → home-stamped to B, NOT __system.
+  expect((run?.frontmatter as Record<string, unknown>).agent_home_workspace_id).toBe(
+    seed.workspace.id,
+  );
+  expect((run?.frontmatter as Record<string, unknown>).agent_home_workspace_id).not.toBe(sys.id);
+});
+
+test('a slug that exists ONLY in a third workspace C does NOT resolve → no run (C1)', async () => {
+  const { db, seed } = await makeTestApp();
+  await seedTriggers(db, seed.workspace.id, seed.user.id);
+  // __system exists but has no 'ops'; the only 'ops' lives in a third workspace C.
+  await bootstrapSystem(db);
+  const wsC = await seedWorkspaceC(db);
+  const cAgent = await seedAgent(db, wsC, seed.user, 'ops');
+  const wiTable = await getWorkItemsTable(db, seed.project.id);
+  const wi = await seedWorkItem(db, seed.workspace, seed.project, wiTable, seed.user);
+
+  // B trigger fires for 'ops', but it resolves only against {B, __system} — C is
+  // outside the home predicate → resolveAgentForRun returns undefined → no run.
+  await triggerMatcher.react(
+    assignmentEvent({
+      seed,
+      workItem: wi,
+      agentSlug: 'ops',
+      agentId: cAgent.id,
+      actor: seed.user.id,
+    }),
+  );
+
+  expect(await countRuns(db, wi.id, 'ops')).toBe(0);
+});
+
+test('resolveTargetAgentSlug rejects a target_agent_id pointing at a THIRD workspace agent (C1 id-handle home assertion)', async () => {
+  // The SLUG fire path (maybeCreateRun) is covered by the three C1 tests above.
+  // This pins the SECOND resolution surface: the id-handle branch in
+  // resolveTargetAgentSlug, reached via the internal_action (approval/rejection)
+  // path. A comment.created approval carries `target_agent_id` = the doc id of an
+  // agent that lives ONLY in a third workspace C (not B, not __system). The home
+  // assertion (agentDoc.workspaceId ∈ {eventWs, __system}) must reject that id so
+  // the approval can NOT reach C's agent — observably, B's awaiting_approval run
+  // is left UNTOUCHED and no resume row is created.
+  const { db, seed } = await makeTestApp();
+  await seedTriggers(db, seed.workspace.id, seed.user.id);
+  // __system exists but holds no agent here; the id-handle points at C.
+  await bootstrapSystem(db);
+  const wsC = await seedWorkspaceC(db);
+  // B has a real awaiting_approval run for a B-LOCAL agent named 'helper'. The
+  // attack: a payload whose id-handle points at C's agent, which DELIBERATELY
+  // shares the slug 'helper'. If the home assertion leaked, the id-handle would
+  // resolve to slug 'helper', find B's pending run, and create a resume row.
+  // The assertion rejects the C id; with the literal target_agent OMITTED (null)
+  // the fallback also resolves nothing → genuine no-op. (Sharing the slug is
+  // what makes the RED meaningful — a non-matching slug would no-op anyway.)
+  const cAgent = await seedAgent(db, wsC, seed.user, 'helper');
+  const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+  const wiTable = await getWorkItemsTable(db, seed.project.id);
+  const wi = await seedWorkItem(db, seed.workspace, seed.project, wiTable, seed.user);
+  const runsTable = await ensureRunsTableFor(db, seed);
+  const originalId = await seedAwaitingApprovalRun(
+    db,
+    seed.workspace,
+    seed.project,
+    runsTable,
+    agent,
+    wi,
+    seed.user,
+  );
+
+  await triggerMatcher.react(
+    commentCreatedEvent({
+      seed,
+      parentId: wi.id,
+      agentSlug: 'helper',
+      targetAgent: null, // omit the literal slug → isolate the id-handle path
+      targetAgentId: cAgent.id, // points at a THIRD workspace (C) agent
+      kind: 'approval',
+      actor: seed.user.id,
+    }),
+  );
+
+  // The id-handle was rejected → resolveTargetAgentSlug returned undefined →
+  // handleInternalAction skipped: no resume row, original run untouched.
+  expect(await countRuns(db, wi.id, 'helper')).toBe(1); // only the original, no resume
+  const run = await db.query.documents.findFirst({ where: eq(documents.id, originalId) });
+  expect(run?.status).toBe('awaiting_approval'); // untouched
+});
+
+// ----- review-fix #3: approval/rejection falls back to the run's FROZEN
+// agent_slug when the agent doc has been DELETED -----
+//
+// Phase C routed resolveTargetAgentSlug's STRING fallback through
+// resolveAgentForRun, which requires the agent doc to still EXIST in {eventWs,
+// __system}. But the approval/rejection path's real key is the run's FROZEN
+// `frontmatter.agent_slug` (what getPendingApprovalRun matches), NOT the live
+// agent doc. If the agent doc is deleted after its run reaches
+// awaiting_approval, a human's reject/resume comment (carrying
+// `target_agent: '<slug>'`, no id) could no longer resolve → the run was
+// STRANDED forever (no sweeper touches awaiting_approval). The fix: when
+// resolveAgentForRun finds nothing, fall back to the normalized bare slug
+// verbatim so the EXISTING in-workspace pending run stays actionable.
+
+test('reject_run resolves via the run\'s FROZEN agent_slug even after the agent doc is DELETED (review-fix #3)', async () => {
+  // RED before the fix: resolveAgentForRun returns undefined for the deleted
+  // agent → resolveTargetAgentSlug returns undefined → handleInternalAction
+  // skips → the awaiting_approval run is stranded (never rejected).
+  const { db, seed } = await makeTestApp();
+  await seedTriggers(db, seed.workspace.id, seed.user.id);
+  const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+  const wiTable = await getWorkItemsTable(db, seed.project.id);
+  const wi = await seedWorkItem(db, seed.workspace, seed.project, wiTable, seed.user);
+  const runsTable = await ensureRunsTableFor(db, seed);
+  const runId = await seedAwaitingApprovalRun(
+    db,
+    seed.workspace,
+    seed.project,
+    runsTable,
+    agent,
+    wi,
+    seed.user,
+  );
+
+  // The agent doc is DELETED after the run reached awaiting_approval.
+  await db.delete(documents).where(eq(documents.id, agent.id));
+
+  await triggerMatcher.react(
+    commentCreatedEvent({
+      seed,
+      parentId: wi.id,
+      agentSlug: 'helper',
+      kind: 'rejection',
+      actor: seed.user.id,
+      // bare slug only, no id-handle — the realistic stranded-run shape.
+    }),
+  );
+
+  // The frozen agent_slug ('helper') still selects the pending run → rejected.
+  const run = await db.query.documents.findFirst({ where: eq(documents.id, runId) });
+  expect(run?.status).toBe('rejected');
+});
+
+test('reject_run still resolves the live agent in the normal case (no regression)', async () => {
+  // The verbatim fallback must NOT change the normal path: an existing agent
+  // resolves via resolveAgentForRun → its slug → the pending run rejects.
+  const { db, seed } = await makeTestApp();
+  await seedTriggers(db, seed.workspace.id, seed.user.id);
+  const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+  const wiTable = await getWorkItemsTable(db, seed.project.id);
+  const wi = await seedWorkItem(db, seed.workspace, seed.project, wiTable, seed.user);
+  const runsTable = await ensureRunsTableFor(db, seed);
+  const runId = await seedAwaitingApprovalRun(
+    db,
+    seed.workspace,
+    seed.project,
+    runsTable,
+    agent,
+    wi,
+    seed.user,
+  );
+
+  await triggerMatcher.react(
+    commentCreatedEvent({
+      seed,
+      parentId: wi.id,
+      agentSlug: 'helper',
+      kind: 'rejection',
+      actor: seed.user.id,
+    }),
+  );
+
+  const run = await db.query.documents.findFirst({ where: eq(documents.id, runId) });
+  expect(run?.status).toBe('rejected');
+});
+
+test('the verbatim fallback does NOT reach a THIRD-workspace agent — benign no-op (review-fix #3 security)', async () => {
+  // The verbatim fallback returns a bare slug naming an agent that lives ONLY in
+  // a third workspace C. That slug flows into getPendingApprovalRun({ parentId,
+  // agentSlug }), which is scoped by parentId (the parent lives in eventWs B).
+  // There is NO awaiting_approval run for that slug under THIS parent → nothing
+  // matches → no run is rejected, no cross-workspace effect. Proves the verbatim
+  // fallback didn't re-open the C1 third-workspace risk: the authority boundary
+  // is the pending RUN (already in-workspace), not the slug.
+  const { db, seed } = await makeTestApp();
+  await seedTriggers(db, seed.workspace.id, seed.user.id);
+  await bootstrapSystem(db); // __system seeded but holds no 'phantom' agent
+  const wsC = await seedWorkspaceC(db);
+  // 'phantom' exists ONLY in C. B has NO agent + NO pending run by that slug.
+  await seedAgent(db, wsC, seed.user, 'phantom');
+  const wiTable = await getWorkItemsTable(db, seed.project.id);
+  const wi = await seedWorkItem(db, seed.workspace, seed.project, wiTable, seed.user);
+  await ensureRunsTableFor(db, seed);
+
+  await triggerMatcher.react(
+    commentCreatedEvent({
+      seed,
+      parentId: wi.id,
+      agentSlug: 'phantom',
+      kind: 'rejection',
+      actor: seed.user.id,
+    }),
+  );
+
+  // No pending run under this B parent for 'phantom' → nothing matched, nothing
+  // rejected. Benign no-op — the verbatim slug couldn't reach C's agent.
+  expect(await countRuns(db, wi.id, 'phantom')).toBe(0);
+});
+
+// ----- Phase C C2: skip the allow-list fire-gate for library agents -----
+//
+// A library agent (home __system) carries `projects` describing __system's
+// projects, NOT workspace B's — so it is NOT a meaningful B-fire-gate. The
+// firing decision for a library agent is purely "does this trigger target it";
+// its AUTHORITY in B is bounded at run time by loadContext's caller-sole
+// narrowing (Phase B B5). So the matcher SKIPS the allow-list for a library
+// agent, while a LOCAL agent keeps its allow-list gate unchanged.
+
+test('the allow-list fire-gate is SKIPPED for a library agent (C2)', async () => {
+  const { db, seed } = await makeTestApp();
+  await seedTriggers(db, seed.workspace.id, seed.user.id);
+  // __system holds the library agent 'ops' whose `projects` is narrowed to an id
+  // that is NOT B's project. resolveAgentProjects would exclude B's project P, so
+  // WITHOUT the C2 skip the allow-list gate would return (zero runs).
+  const sys = await bootstrapSystem(db);
+  await seedAgent(db, sys, seed.user, 'ops', ['some-other-__system-project-id']);
+  const wiTable = await getWorkItemsTable(db, seed.project.id);
+  const wi = await seedWorkItem(db, seed.workspace, seed.project, wiTable, seed.user);
+
+  await triggerMatcher.react(
+    assignmentEvent({
+      seed,
+      workItem: wi,
+      agentSlug: 'ops',
+      agentId: (await db.query.documents.findFirst({
+        where: and(eq(documents.workspaceId, sys.id), eq(documents.slug, 'ops')),
+      }))?.id as string,
+      actor: seed.user.id,
+    }),
+  );
+
+  // The library agent fired despite its narrowed (__system) project list — its
+  // projects are NOT a B-fire-gate.
+  expect(await countRuns(db, wi.id, 'ops')).toBe(1);
+});
+
+test('a LOCAL agent still respects its allow-list fire-gate (no regression)', async () => {
+  const { db, seed } = await makeTestApp();
+  await seedTriggers(db, seed.workspace.id, seed.user.id);
+  // A B-LOCAL agent whose allow-list names a DIFFERENT B project (not this
+  // event's project) → the local-agent gate still applies → no run.
+  const agent = await seedAgent(db, seed.workspace, seed.user, 'helper', [
+    'a-different-b-project-id',
+  ]);
+  // Seed __system so findSystemWorkspaceId returns a real id — this forces
+  // isLibraryAgent through the genuine `agent.workspaceId === systemId`
+  // comparison (home = B ≠ __system → false), not the unseeded shortcut.
+  await bootstrapSystem(db);
+  const wiTable = await getWorkItemsTable(db, seed.project.id);
+  const wi = await seedWorkItem(db, seed.workspace, seed.project, wiTable, seed.user);
+
+  await triggerMatcher.react(
+    assignmentEvent({
+      seed,
+      workItem: wi,
+      agentSlug: 'helper',
+      agentId: agent.id,
+      actor: seed.user.id,
+    }),
+  );
+
+  // Local agent's allow-list excludes this project → gate unchanged → zero runs.
+  expect(await countRuns(db, wi.id, 'helper')).toBe(0);
+});
+
+test('the fired library-agent run is still caller-bounded in B (C2 → inherited B5)', async () => {
+  const { db, seed } = await makeTestApp();
+  await seedTriggers(db, seed.workspace.id, seed.user.id);
+  // Library agent with a wildcard authority claim — its `projects` is ['*'] so
+  // its OWN reach is "all". If authority leaked from the agent, the run would
+  // carry the agent's wildcard. It must instead carry the EVENT-HUMAN's B
+  // membership snapshot (the actor is seed.user, an OWNER of B).
+  const sys = await bootstrapSystem(db);
+  const libraryAgent = await seedAgent(db, sys, seed.user, 'ops', ['*']);
+  const wiTable = await getWorkItemsTable(db, seed.project.id);
+  const wi = await seedWorkItem(db, seed.workspace, seed.project, wiTable, seed.user);
+
+  await triggerMatcher.react(
+    assignmentEvent({
+      seed,
+      workItem: wi,
+      agentSlug: 'ops',
+      agentId: libraryAgent.id,
+      actor: seed.user.id,
+    }),
+  );
+
+  expect(await countRuns(db, wi.id, 'ops')).toBe(1);
+  const run = await db.query.documents.findFirst({
+    where: and(eq(documents.type, 'agent_run'), eq(documents.parentId, wi.id)),
+  });
+  const fm = run?.frontmatter as Record<string, unknown>;
+
+  // Derive what the EVENT-HUMAN (seed.user) would get from their B membership:
+  // the harness seeds seed.user as an OWNER of B → all document scopes, and
+  // callerProjectsFor(owner) === null (no project narrowing). Authority is the
+  // CALLER's, NOT the agent's ['*'] claim.
+  const membership = await db.query.memberships.findFirst({
+    where: and(
+      eq(schemaMemberships.workspaceId, seed.workspace.id),
+      eq(schemaMemberships.userId, seed.user.id),
+    ),
+  });
+  const role = membership?.role as 'owner' | 'admin' | 'member';
+  const memberProjectIds =
+    role === 'member'
+      ? (
+          await db.query.projects.findMany({
+            where: eq(schemaProjects.workspaceId, seed.workspace.id),
+            columns: { id: true },
+          })
+        ).map((p) => p.id)
+      : [];
+
+  expect(fm.caller_scopes).toEqual(roleToScopes(role));
+  expect(fm.caller_project_ids).toEqual(callerProjectsFor({ role, projectIds: memberProjectIds }));
+});
+
+// ----- Phase C C4/C5/C6: autonomy-gate suppression + caller resolution +
+// forbid caller-less library targets, on the cross-workspace fired path -----
+//
+// C4 (autonomy gate, UNCHANGED): an agent-ORIGINATED event targeting a library
+//     agent is RESOLVED first (home predicate + C2 allow-list skip), THEN
+//     suppressed by the autonomy gate — proving the gate covers the
+//     library→library cross-workspace chain hop, not just local agents.
+// C5 (caller resolution, UNCHANGED): a HUMAN-caused trigger fires a library
+//     agent OWNED by that human (createdBy === the event-human's user id), never
+//     a system actor and never the agent itself.
+// C6 (NEW guard): a caller-less trigger (event.actor resolves to no human) must
+//     NOT fire a library agent — a library run with no caller has no authority
+//     bound (Phase B: a library agent's authority is the caller's, sole), so it
+//     would be unbounded. The C6 guard skips it EARLY (before the autonomy gate),
+//     making the library-specific invariant explicit and resistant to a future
+//     loosening of the general step-6 owner guard.
+
+test('a LIBRARY agent output firing ANOTHER library agent is suppressed with chains off (C4)', async () => {
+  const { db, seed } = await makeTestApp();
+  (env as Record<string, unknown>)[flagKey] = false; // default; explicit for clarity
+  await seedTriggers(db, seed.workspace.id, seed.user.id);
+  // __system holds the target library agent 'ops' (home = __system).
+  const sys = await bootstrapSystem(db);
+  const libraryAgent = await seedAgent(db, sys, seed.user, 'ops');
+  const wiTable = await getWorkItemsTable(db, seed.project.id);
+  const wi = await seedWorkItem(db, seed.workspace, seed.project, wiTable, seed.user);
+
+  const suppressed: string[] = [];
+  const unsub = eventBus.subscribe(seed.workspace.id, undefined, (e) => {
+    if (e.kind === 'agent.chain.suppressed') suppressed.push(e.kind);
+  });
+  // actor = 'agent:<another library agent>' → agent-originated. The event
+  // targets the library agent 'ops'; resolution + the C2 allow-list skip both
+  // succeed, then the autonomy gate suppresses the cross-workspace chain hop.
+  await triggerMatcher.react(
+    assignmentEvent({
+      seed,
+      workItem: wi,
+      agentSlug: 'ops',
+      agentId: libraryAgent.id,
+      actor: 'agent:librarian',
+    }),
+  );
+  unsub();
+
+  // Zero runs created; exactly one suppression signal (the gate ran AFTER
+  // resolution and suppressed — it did not silently drop pre-resolution).
+  expect(await countRuns(db, wi.id, 'ops')).toBe(0);
+  expect(suppressed.length).toBe(1);
+});
+
+test('a trigger-fired library-agent run uses the event-human as caller, not a system actor (C5)', async () => {
+  const { db, seed } = await makeTestApp();
+  await seedTriggers(db, seed.workspace.id, seed.user.id);
+  // Library agent in __system; the firing event is caused by a real human (an
+  // OWNER of B). The fired run must be OWNED by that human — not a 'system:'
+  // actor (which would violate the documents.created_by → users.id FK) and not
+  // the agent. (The caller_scopes angle is pinned by the C2→B5 test above; here
+  // we pin createdBy distinctly to C5.)
+  const sys = await bootstrapSystem(db);
+  const libraryAgent = await seedAgent(db, sys, seed.user, 'ops');
+  const wiTable = await getWorkItemsTable(db, seed.project.id);
+  const wi = await seedWorkItem(db, seed.workspace, seed.project, wiTable, seed.user);
+
+  await triggerMatcher.react(
+    assignmentEvent({
+      seed,
+      workItem: wi,
+      agentSlug: 'ops',
+      agentId: libraryAgent.id,
+      actor: seed.user.id, // a real users.id (session path)
+    }),
+  );
+
+  expect(await countRuns(db, wi.id, 'ops')).toBe(1);
+  const run = await db.query.documents.findFirst({
+    where: and(eq(documents.type, 'agent_run'), eq(documents.parentId, wi.id)),
+  });
+  // The caller is the event-human (resolveOwnerUser(event.actor)), NOT a
+  // system actor and NOT the agent.
+  expect(run?.createdBy).toBe(seed.user.id);
+});
+
+test('a caller-less (actor-less / agent-only) trigger does NOT fire a library agent (C6)', async () => {
+  const { db, seed } = await makeTestApp();
+  (env as Record<string, unknown>)[flagKey] = false;
+  await seedTriggers(db, seed.workspace.id, seed.user.id);
+  // __system holds the target library agent 'ops'.
+  const sys = await bootstrapSystem(db);
+  const libraryAgent = await seedAgent(db, sys, seed.user, 'ops');
+  const wiTable = await getWorkItemsTable(db, seed.project.id);
+  const wi = await seedWorkItem(db, seed.workspace, seed.project, wiTable, seed.user);
+
+  const suppressed: string[] = [];
+  const unsub = eventBus.subscribe(seed.workspace.id, undefined, (e) => {
+    if (e.kind === 'agent.chain.suppressed') suppressed.push(e.kind);
+  });
+
+  // ISOLATION: to prove the C6 guard (not the autonomy gate, not the step-6
+  // owner guard) is what skips, the actor is a NON-agent, UNRESOLVABLE id — it
+  // does NOT start with 'agent:' (so isAgentOriginated is false → the autonomy
+  // gate does NOT fire and emits NO agent.chain.suppressed) and it resolves to
+  // no users.id and no human PAT (so resolveOwnerUser → null). With chains OFF,
+  // a non-agent unresolvable actor reaches the C6 guard, which skips because no
+  // human caller resolves behind a library target → an unbounded library run is
+  // forbidden. (Scheduled/cron — Phase 3.5 — is the canonical caller-less case;
+  // this stand-in models any actor-less / unresolvable-actor event.)
+  //
+  // The step-6 owner guard ALSO skips a caller-less run (defense-in-depth), so a
+  // bare "no run" assertion can't distinguish the two paths. We capture console
+  // logs and assert the EARLY, LIBRARY-SPECIFIC C6 message fired — the only
+  // signal that proves the C6 guard (not step-6) made the call. This is the
+  // assertion that goes RED before the guard exists.
+  const logs: string[] = [];
+  const origLog = console.log;
+  console.log = (...args: unknown[]) => {
+    logs.push(args.map(String).join(' '));
+  };
+  try {
+    await triggerMatcher.react(
+      assignmentEvent({
+        seed,
+        workItem: wi,
+        agentSlug: 'ops',
+        agentId: libraryAgent.id,
+        actor: `ghost-${nanoid(8)}`, // non-agent, unresolvable
+      }),
+    );
+  } finally {
+    console.log = origLog;
+  }
+  unsub();
+
+  // C6: no run created for the library target.
+  expect(await countRuns(db, wi.id, 'ops')).toBe(0);
+  // And it was a PLAIN skip, not an autonomy suppression — proving the gate did
+  // NOT fire.
+  expect(suppressed.length).toBe(0);
+  // The EARLY C6 guard logged its library-specific skip. This is what fails
+  // before the guard exists (step-6 logs a different, generic message).
+  expect(logs.some((l) => l.includes('no resolvable human caller') && l.includes('C6'))).toBe(true);
+});
+
+test('the same caller-less trigger targeting a LOCAL agent is also a plain no-run (C6 — local unchanged)', async () => {
+  const { db, seed } = await makeTestApp();
+  (env as Record<string, unknown>)[flagKey] = false;
+  await seedTriggers(db, seed.workspace.id, seed.user.id);
+  // A B-LOCAL agent (NOT a library agent). The C6 guard does NOT apply to local
+  // agents; the EXISTING step-6 owner guard skips a caller-less run for them
+  // too, so behavior is unchanged: no run, no suppression.
+  await bootstrapSystem(db); // forces isLibraryAgent through the real comparison
+  const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+  const wiTable = await getWorkItemsTable(db, seed.project.id);
+  const wi = await seedWorkItem(db, seed.workspace, seed.project, wiTable, seed.user);
+
+  const suppressed: string[] = [];
+  const unsub = eventBus.subscribe(seed.workspace.id, undefined, (e) => {
+    if (e.kind === 'agent.chain.suppressed') suppressed.push(e.kind);
+  });
+  await triggerMatcher.react(
+    assignmentEvent({
+      seed,
+      workItem: wi,
+      agentSlug: 'helper',
+      agentId: agent.id,
+      actor: `ghost-${nanoid(8)}`, // non-agent, unresolvable
+    }),
+  );
+  unsub();
+
+  // Local agent: step-6 owner guard skips a caller-less run → no run, no
+  // suppression (unchanged by C6).
+  expect(await countRuns(db, wi.id, 'helper')).toBe(0);
+  expect(suppressed.length).toBe(0);
 });

@@ -106,6 +106,9 @@ export function MentionPicker({
               <div className="font-medium">
                 <span aria-hidden="true">🤖 </span>
                 {a.title}
+                {a.library ? (
+                  <span className="ml-1.5 text-[10px] font-normal text-fg-3">library</span>
+                ) : null}
               </div>
               <div className="text-[10px] font-mono text-fg-3">{`agent:${a.slug}`}</div>
             </button>

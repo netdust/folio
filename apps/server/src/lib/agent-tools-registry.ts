@@ -82,6 +82,7 @@ import { assertAgentAllowListWidening, assertAgentToolsWidening } from './agent-
 import { intersectAgentProjects, resolveAgentProjects } from './agent-projects.ts';
 import { registerTool } from './agent-tools.ts';
 import type { ToolContext } from './agent-tools.ts';
+import { registerFolioApiTools } from './folio-api-tool.ts';
 import {
   type CommentKind,
   type CommentVisibility,
@@ -91,6 +92,7 @@ import {
 import { serializeMarkdown } from './frontmatter.ts';
 import { HTTPError } from './http.ts';
 import { mcpInvalidParams, mcpRejectHumanPat, rethrowAgentGuardAsMcp } from './mcp-errors.ts';
+import { resolveAgentForRun } from './system-workspace.ts';
 
 // ---------------------------------------------------------------------------
 // Result envelopes — verbatim from routes/mcp.ts.
@@ -1654,14 +1656,11 @@ export function registerRealTools(): void {
         });
       }
 
-      // 4. Resolve agent doc.
-      const agent = await db.query.documents.findFirst({
-        where: and(
-          eq(documents.workspaceId, ws.id),
-          eq(documents.slug, agentSlug),
-          eq(documents.type, 'agent'),
-        ),
-      });
+      // 4. Resolve agent doc — gated by the home predicate {run-ws, __system}
+      //    (B1): a B-local agent OR a __system library agent (local shadows
+      //    library); an agent that lives only in a third workspace never
+      //    resolves (fail-closed). HTTP-twin parity with routes/runs.ts.
+      const agent = await resolveAgentForRun(db, ws.id, agentSlug);
       if (!agent) {
         throw mcpInvalidParams(`agent "${agentSlug}" not found`, {
           reason: 'agent_not_found',
@@ -1820,13 +1819,10 @@ export function registerRealTools(): void {
       if (!parent) {
         throw mcpInvalidParams('parent missing', { reason: 'agent_run_not_found' });
       }
-      const agent = await db.query.documents.findFirst({
-        where: and(
-          eq(documents.workspaceId, ws.id),
-          eq(documents.slug, agentSlug),
-          eq(documents.type, 'agent'),
-        ),
-      });
+      // Resolve through the home-gated helper {ws, __system} so a __system library
+      // agent's run (agent lives in __system, not ws) re-resolves on retry instead
+      // of 404ing. createRun re-stamps agent_home_workspace_id from agent.workspaceId.
+      const agent = await resolveAgentForRun(db, ws.id, agentSlug);
       if (!agent) {
         throw mcpInvalidParams(`agent "${agentSlug}" not found`, {
           reason: 'agent_not_found',
@@ -1865,4 +1861,10 @@ export function registerRealTools(): void {
       return textResult({ run_id: document.id, status: 'planning' });
     },
   });
+
+  // Phase-op-3: the operator agent's general REST bridge. folio_api_get (reads,
+  // GET-forced) registers here; the write tool folio_api is added in Task 5.
+  // Registered last, and in its own module, to keep this file's tool defs and
+  // the bridge's mint/dispatch core (folio-api-tool.ts) separate.
+  registerFolioApiTools();
 } // end registerRealTools

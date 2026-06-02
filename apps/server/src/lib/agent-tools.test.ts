@@ -20,6 +20,11 @@ import { makeTestApp } from '../test/harness.ts';
 import { createRun, ensureRunsTable, nextChainId } from '../services/agent-runs.ts';
 import { listComments } from '../services/comments.ts';
 import { type ToolDef, executeTool, listToolDefs, registerTool } from './agent-tools.ts';
+import {
+  SYSTEM_WORKSPACE_SLUG,
+  bootstrapSystemWorkspace,
+} from './system-workspace.ts';
+import { workspaces } from '../db/schema.ts';
 import { intersectAgentProjects } from './agent-projects.ts';
 import { newApiToken } from './auth.ts';
 
@@ -263,6 +268,128 @@ describe('config:write delegate ceiling (Phase 2 / P2-1, P2-2)', () => {
         callerScopes: ['config:write'],
       }),
     ).rejects.toThrow('forbidden: scope config:write missing');
+  });
+});
+
+describe('unattended floor at the convergence point (Phase C C3 review-fix #1)', () => {
+  // HIGH-risk NATIVE tools requiring `agents:write` mint/modify standing agent
+  // bearer tokens. On an unattended (trigger-fired) run, executeTool must REFUSE
+  // them centrally — folio_api only floors its OWN config:write path-tier, so a
+  // seedable custom agent declaring a native agents:write tool would otherwise
+  // bypass the deterministic bound entirely.
+
+  it('agents:write tool on an UNATTENDED run → refused before dispatch (no handler run)', async () => {
+    let invoked = false;
+    registerThrowaway({
+      name: '__agents_write_probe',
+      requiredScope: 'agents:write',
+      schema: z.object({}).strict(),
+      handler: async () => {
+        invoked = true;
+        return { ok: true };
+      },
+    });
+
+    const token = makeToken({ scopes: ['agents:write'] });
+    await expect(
+      executeTool(token, 'agent:custom', '__agents_write_probe', {}, undefined, {
+        callerScopes: ['agents:write'],
+        unattended: true,
+      }),
+    ).rejects.toThrow('forbidden: __agents_write_probe is refused on an unattended');
+    expect(invoked).toBe(false);
+  });
+
+  it('agents:write tool with unattended FALSEY (attended) → dispatches normally', async () => {
+    let invoked = false;
+    registerThrowaway({
+      name: '__agents_write_probe_attended',
+      requiredScope: 'agents:write',
+      schema: z.object({}).strict(),
+      handler: async () => {
+        invoked = true;
+        return { ok: true };
+      },
+    });
+
+    const token = makeToken({ scopes: ['agents:write'] });
+    // unattended omitted (undefined) → attended path, unchanged.
+    const out = await executeTool(
+      token,
+      'agent:custom',
+      '__agents_write_probe_attended',
+      {},
+      undefined,
+      { callerScopes: ['agents:write'] },
+    );
+    expect(out).toEqual({ ok: true });
+    expect(invoked).toBe(true);
+
+    // explicit unattended: false → also attended.
+    invoked = false;
+    const out2 = await executeTool(
+      token,
+      'agent:custom',
+      '__agents_write_probe_attended',
+      {},
+      undefined,
+      { callerScopes: ['agents:write'], unattended: false },
+    );
+    expect(out2).toEqual({ ok: true });
+    expect(invoked).toBe(true);
+  });
+
+  it('documents:write tool on an UNATTENDED run → STILL dispatches (LOW = accepted residual)', async () => {
+    let invoked = false;
+    registerThrowaway({
+      name: '__doc_write_probe_unattended',
+      requiredScope: 'documents:write',
+      schema: z.object({}).strict(),
+      handler: async () => {
+        invoked = true;
+        return { ok: true };
+      },
+    });
+
+    const token = makeToken({ scopes: ['documents:write'] });
+    const out = await executeTool(
+      token,
+      'agent:custom',
+      '__doc_write_probe_unattended',
+      {},
+      undefined,
+      { callerScopes: ['documents:write'], unattended: true },
+    );
+    expect(out).toEqual({ ok: true });
+    expect(invoked).toBe(true);
+  });
+
+  it('config:write tool on an UNATTENDED run is NOT double-floored by this set (folio_api owns its tier)', async () => {
+    // config:write is deliberately absent from UNATTENDED_FLOORED_SCOPES — the
+    // convergence floor must not fire for it; folio_api's own MEDIUM path-tier
+    // is the single owner of config-write flooring.
+    let invoked = false;
+    registerThrowaway({
+      name: '__config_write_probe_unattended',
+      requiredScope: 'config:write',
+      schema: z.object({}).strict(),
+      handler: async () => {
+        invoked = true;
+        return { ok: true };
+      },
+    });
+
+    const token = makeToken({ scopes: ['config:write'] });
+    const out = await executeTool(
+      token,
+      'agent:op',
+      '__config_write_probe_unattended',
+      {},
+      undefined,
+      { callerScopes: ['config:write'], unattended: true },
+    );
+    expect(out).toEqual({ ok: true });
+    expect(invoked).toBe(true);
   });
 });
 
@@ -784,6 +911,16 @@ async function seedRunRow(
   return document;
 }
 
+/** Bootstrap __system + return its id, for seeding a library agent (B1). */
+async function seedSystemWorkspaceForRun(db: DB): Promise<{ id: string }> {
+  await bootstrapSystemWorkspace(db);
+  const sys = await db.query.workspaces.findFirst({
+    where: eq(workspaces.slug, SYSTEM_WORKSPACE_SLUG),
+  });
+  if (!sys) throw new Error('test setup: __system did not bootstrap');
+  return { id: sys.id };
+}
+
 /** Parse the textResult JSON envelope the run tools return. */
 function parseText<T>(out: unknown): T {
   return JSON.parse((out as { content: { text: string }[] }).content[0]!.text) as T;
@@ -805,6 +942,27 @@ describe('D-4: run-management MCP tools', () => {
     const row = await db.query.documents.findFirst({ where: eq(documents.id, res.run_id) });
     expect(row?.type).toBe('agent_run');
     expect(row?.status).toBe('planning');
+  });
+
+  it('run_agent resolves a __system library agent (B1, create path)', async () => {
+    const { db, seed } = await makeTestApp();
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, seed.user);
+    const sys = await seedSystemWorkspaceForRun(db);
+    // Library agent lives in __system; the human PAT is scoped to the run-ws (acme).
+    await seedRunAgent(db, sys.id, seed.user.id, 'operator');
+    const { token } = await seedRunAgent(db, seed.workspace.id, seed.user.id, 'caller');
+
+    const out = await exec(token, seed.user.id, 'run_agent', {
+      workspace_slug: 'acme',
+      agent_slug: 'operator',
+      parent_slug: parent.slug,
+    });
+    const res = parseText<{ run_id: string; status: string }>(out);
+    expect(res.status).toBe('planning');
+    const row = await db.query.documents.findFirst({ where: eq(documents.id, res.run_id) });
+    expect(row?.type).toBe('agent_run');
+    // Home is stamped from the agent's workspace → __system, not the run-ws.
+    expect((row?.frontmatter as Record<string, unknown>).agent_home_workspace_id).toBe(sys.id);
   });
 
   it('run_agent with input posts a comment to the parent (mit 59)', async () => {
@@ -936,6 +1094,36 @@ describe('D-4: run-management MCP tools', () => {
     expect(res.run_id).not.toBe(run.id);
     const rows = await db.query.documents.findMany({ where: eq(documents.type, 'agent_run') });
     expect(rows.length).toBe(2);
+  });
+
+  it('retry_run of a __system library-agent run re-resolves the library agent (not 404) (B1, retry path)', async () => {
+    const { db, seed } = await makeTestApp();
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, seed.user);
+    const sys = await seedSystemWorkspaceForRun(db);
+    // Library agent lives in __system; the human PAT is scoped to the run-ws (acme).
+    const { agent } = await seedRunAgent(db, sys.id, seed.user.id, 'operator');
+    const { token } = await seedRunAgent(db, seed.workspace.id, seed.user.id, 'caller');
+    // createRun (B's create path) stamps agent_home_workspace_id = __system.
+    const run = await seedRunRow(db, seed.workspace, seed.project, agent, seed.user, parent);
+    expect((run.frontmatter as Record<string, unknown>).agent_home_workspace_id).toBe(sys.id);
+    await db
+      .update(documents)
+      .set({
+        status: 'failed',
+        frontmatter: { ...(run.frontmatter as Record<string, unknown>), status: 'failed' },
+      })
+      .where(eq(documents.id, run.id));
+
+    // RED before the fix: agent_not_found (re-resolve was eq(workspaceId, ws.id) only).
+    const res = parseText<{ run_id: string; status: string }>(
+      await exec(token, seed.user.id, 'retry_run', {
+        workspace_slug: 'acme',
+        run_id: run.id,
+      }),
+    );
+    expect(res.status).toBe('planning');
+    const fresh = await db.query.documents.findFirst({ where: eq(documents.id, res.run_id) });
+    expect((fresh!.frontmatter as Record<string, unknown>).agent_home_workspace_id).toBe(sys.id);
   });
 
   it('retry_run while original still active → RUN_ALREADY_ACTIVE (mit 63)', async () => {

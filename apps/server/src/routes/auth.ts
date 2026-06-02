@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { db } from '../db/client.ts';
 import { magicLinks, users } from '../db/schema.ts';
 import { env } from '../env.ts';
+import { bootstrapSystemWorkspace, designateInstanceOwner } from '../lib/system-workspace.ts';
 import {
   createSession,
   deleteSession,
@@ -18,6 +19,7 @@ import {
 import { sendMagicLink } from '../lib/email.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
 import { type AuthContext, getUser, requireUser } from '../middleware/auth.ts';
+import { isSystemMember } from '../services/workspaces.ts';
 
 const auth = new Hono<AuthContext>();
 
@@ -43,12 +45,46 @@ auth.post(
   ),
   async (c) => {
     const { email, password, name } = c.req.valid('json');
+
+    // M1 — close the registration race (A1): the FIRST user becomes the instance
+    // owner, but only behind the bootstrap flag. Read the flag LIVE (the env
+    // singleton is mutated by tests; never destructure at module load).
+    const anyUser = await db.query.users.findFirst({});
+    const isFirstUser = !anyUser;
+    if (isFirstUser && !env.FOLIO_ALLOW_BOOTSTRAP_REGISTRATION) {
+      throw new HTTPError(
+        'REGISTRATION_CLOSED',
+        'instance owner must be set via FOLIO_INSTANCE_OWNER or enable FOLIO_ALLOW_BOOTSTRAP_REGISTRATION',
+        403,
+      );
+    }
+
     const existing = await db.query.users.findFirst({ where: eq(users.email, email) });
     if (existing) throw new HTTPError('EMAIL_TAKEN', 'email already registered', 400);
 
     const id = nanoid();
     const passwordHash = await hashPassword(password);
     await db.insert(users).values({ id, email, passwordHash, name });
+
+    // First registrant (flag on) becomes the instance owner of the __system
+    // library workspace.
+    //
+    // Atomicity (review fix #3): the user row is committed before bootstrap, but
+    // createDocument (inside designateInstanceOwner) uses its own transaction on
+    // the module db proxy, so we cannot wrap all three in one outer tx. Instead,
+    // if bootstrap/designate throws we COMPENSATE by deleting the just-created
+    // user, returning the instance to the zero-users state. Without this, a
+    // mid-failure would leave a committed user → isFirstUser=false forever +
+    // EMAIL_TAKEN on retry → the instance is permanently ownerless via register.
+    if (isFirstUser) {
+      try {
+        await bootstrapSystemWorkspace(db);
+        await designateInstanceOwner(db, email);
+      } catch (err) {
+        await db.delete(users).where(eq(users.id, id)); // roll back the user
+        throw err;
+      }
+    }
 
     const session = await createSession(id);
     setCookie(c, SESSION_COOKIE, session.id, { ...cookieOpts, expires: session.expiresAt });
@@ -84,9 +120,16 @@ auth.post('/logout', async (c) => {
   return jsonOk(c, { ok: true });
 });
 
-auth.get('/me', requireUser, (c) => {
+auth.get('/me', requireUser, async (c) => {
   const u = getUser(c);
-  return jsonOk(c, { user: { id: u.id, email: u.email, name: u.name } });
+  // D2: server-authoritative __system membership signal. Computed from
+  // membership (never client-derived) so the web "System Library" settings
+  // entry can gate on it without trusting the client. Top-level on the payload
+  // because it is a property of the boot identity, not of the user record.
+  return jsonOk(c, {
+    user: { id: u.id, email: u.email, name: u.name },
+    is_system_member: await isSystemMember(u.id),
+  });
 });
 
 // --- Magic link ---

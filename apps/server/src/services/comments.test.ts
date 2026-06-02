@@ -20,12 +20,14 @@ import {
   memberships,
   tables,
   users,
+  workspaces,
   type Document,
   type User,
   type Workspace,
   type Project,
   type TableEntity,
 } from '../db/schema.ts';
+import { SYSTEM_WORKSPACE_SLUG } from '../lib/system-workspace.ts';
 import { newApiToken } from '../lib/auth.ts';
 import { toolsToScopes } from '../lib/agent-schema.ts';
 import {
@@ -1096,4 +1098,70 @@ test('listComments since filter excludes earlier rows', async () => {
   const list = await listComments({ parentId: parent.id, since: cutoff });
   expect(list.length).toBe(1);
   expect(list[0]!.id).toBe(c2.id);
+});
+
+// -----------------------------------------------------------------------------
+// Phase B B8 — @-mention of a __system library agent resolves (loadWorkspaceAgents
+// unions __system).
+// -----------------------------------------------------------------------------
+
+/** Seed the __system workspace + a library agent (bypasses bootstrap). */
+async function seedSystemLibraryAgent(
+  db: TestDB,
+  user: User,
+  slug: string,
+): Promise<{ systemId: string; agentId: string }> {
+  const systemId = nanoid();
+  await db.insert(workspaces).values({
+    id: systemId,
+    slug: SYSTEM_WORKSPACE_SLUG,
+    name: 'System Library',
+  });
+  const agentId = nanoid();
+  await db.insert(documents).values({
+    id: agentId,
+    workspaceId: systemId,
+    projectId: null,
+    tableId: null,
+    type: 'agent',
+    slug,
+    title: slug,
+    status: null,
+    body: '',
+    frontmatter: {
+      system_prompt: 'operator',
+      model: 'claude-sonnet-4-6',
+      provider: 'anthropic',
+      tools: ['list_documents'],
+      projects: ['*'],
+    },
+    createdBy: user.id,
+    updatedBy: user.id,
+  });
+  return { systemId, agentId };
+}
+
+test('an @-mention of a __system library agent resolves (loadWorkspaceAgents unions __system)', async () => {
+  const { db, seed } = await makeTestApp();
+  const table = await getWorkItemsTable(db, seed.project.id);
+  const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+  const { agentId } = await seedSystemLibraryAgent(db, seed.user, 'operator');
+
+  const comment = await createComment({
+    workspace: seed.workspace,
+    project: seed.project,
+    parent,
+    authorContext: userContext(seed.user),
+    actor: seed.user.id,
+    body: 'cc @operator please',
+  });
+
+  // The mention resolved → one comment.mentioned event for the library agent.
+  const rows = await db.query.events.findMany({
+    where: and(eq(events.documentId, comment.id), eq(events.kind, 'comment.mentioned')),
+  });
+  expect(rows.length).toBe(1);
+  const payload = rows[0]!.payload as Record<string, unknown>;
+  expect(payload.agent_slug).toBe('operator');
+  expect(payload.agent_id).toBe(agentId);
 });
