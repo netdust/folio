@@ -66,6 +66,18 @@ export const envSchema = z.object({
     .enum(['true', 'false'])
     .default('false')
     .transform((v) => v === 'true'),
+  // Phase A: first-user-becomes-instance-owner is allowed ONLY when this is
+  // true (default false on a hardened deploy) — closes the registration race
+  // (threat model A1/M1). Otherwise the owner is set via FOLIO_INSTANCE_OWNER.
+  // z.enum(['true','false']) form (not z.coerce.boolean, which mis-coerces
+  // 'false'→true) — matches FOLIO_AGENT_CHAINS_ENABLED / FOLIO_CLAUDE_CODE_ENABLED.
+  FOLIO_ALLOW_BOOTSTRAP_REGISTRATION: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  // Phase A: designate the instance owner (the first `__system` member) by
+  // email on any install age (M5). Optional; idempotent when applied.
+  FOLIO_INSTANCE_OWNER: z.string().email().optional(),
 });
 
 export const env = envSchema.parse(process.env);
