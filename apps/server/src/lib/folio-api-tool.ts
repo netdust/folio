@@ -1,26 +1,12 @@
 /**
- * folio_api / folio_api_get — operator-agent in-process REST bridge.
+ * folio_api / folio_api_get — the operator agent's general in-process REST
+ * bridge. The operator is an AGENT with the same caller-bounded reach the
+ * outside agent (Claude Code over MCP) has — these two tools let it call any
+ * token-scoped /api/v1 route in-process, gated by the risk classifier and the
+ * Phase-1 `agent ∩ caller` ceiling. NOT a per-workspace seeded bot.
  *
- * Ground-truth recorded for later Phase-op-3 tasks (verified 2026-06-02 on
- * branch phase-op-3/the-agent — do not trust blindly, re-confirm if stale):
- *
- *  - `listDocuments(opts: ListDocumentsOptions): Promise<{ data: Document[];
- *    nextCursor: string | null }>` lives at apps/server/src/services/documents.ts:201.
- *    Its options interface `ListDocumentsOptions` is at line 179 (projectId,
- *    type?, limit?, cursor?, filter?, statusValues?, assignee?, titleQuery?,
- *    updatedSince?, staleFor?, sort?, dir?, activeTableId?). NO `includeSystem`
- *    field yet — a later task adds it for the folio_system filter.
- *  - `json_extract` is ALREADY used in services/documents.ts (lines 121/123/133/
- *    139/271). The later folio_system frontmatter filter should match this house
- *    style (e.g. json_extract(documents.frontmatter, '$.folio_system')).
- *  - Seed helpers (used by later tasks, not this one):
- *      seedBuiltinTriggers — apps/server/src/lib/builtin-triggers.ts:106
- *      seedProjectDefaults — apps/server/src/lib/seed-project-defaults.ts:7
- *  - `app` is exported at apps/server/src/app.ts:34
- *    (`export const app = new Hono<AuthContext & ScopeContext>()`). Later tasks
- *    import it into lib/ to dispatch in-process; if a static import cycles,
- *    lazy-import inside the handler: `const { app } = await import('../app.ts')`.
- *    Task 1 does NOT import app.
+ * `app` is exported at app.ts:34; a static import of it into lib/ cycles
+ * (app → routes → lib), so dispatchAsCaller lazy-imports it inside the handler.
  */
 
 import { eq, like } from 'drizzle-orm';
