@@ -194,15 +194,26 @@ export async function bootstrapSystemWorkspace(db: DB): Promise<void> {
 }
 
 /**
+ * Resolve the `__system` workspace by slug, or `undefined` if it doesn't exist
+ * yet (NON-throwing). The single source of the slug→workspace lookup, shared by
+ * the throwing `requireSystemWorkspace` (post-bootstrap steps that treat absence
+ * as a programming error) and the soft `resolveAgentForRun` (run-create paths
+ * that must degrade to {run-ws} rather than 500 when the library isn't seeded).
+ */
+async function findSystemWorkspace(db: DB) {
+  return db.query.workspaces.findFirst({
+    where: eq(workspaces.slug, SYSTEM_WORKSPACE_SLUG),
+  });
+}
+
+/**
  * Resolve the __system workspace by slug for the post-bootstrap steps. Unlike
  * `resolveSystemWorkspace` (which CREATES + asserts provenance at bootstrap),
  * this asserts the workspace already exists — the caller bootstraps first. An
  * absent __system here is a programming error (bootstrap was skipped).
  */
 async function requireSystemWorkspace(db: DB) {
-  const sys = await db.query.workspaces.findFirst({
-    where: eq(workspaces.slug, SYSTEM_WORKSPACE_SLUG),
-  });
+  const sys = await findSystemWorkspace(db);
   if (!sys) {
     throw new HTTPError(
       'SYSTEM_WORKSPACE_MISSING',
@@ -259,15 +270,13 @@ export async function resolveAgentForRun(
     ),
   });
   if (local) return local;
-  // Fall back to the __system library. Resolve __system SOFTLY (not via the
-  // throwing getSystemWorkspaceId): a missing library must NOT 500 a run that
-  // could still resolve a local agent — and when __system is absent the home
+  // Fall back to the __system library. Resolve __system SOFTLY (findSystemWorkspace,
+  // not the throwing getSystemWorkspaceId): a missing library must NOT 500 a run
+  // that could still resolve a local agent — and when __system is absent the home
   // predicate simply degrades to {run-ws}, so no library candidate exists. In
   // production bootstrap always seeds __system; this guard keeps the create
   // path robust if it hasn't (and keeps the helper independent of boot order).
-  const system = await db.query.workspaces.findFirst({
-    where: eq(workspaces.slug, SYSTEM_WORKSPACE_SLUG),
-  });
+  const system = await findSystemWorkspace(db);
   if (!system) return undefined;
   const library = await db.query.documents.findFirst({
     where: and(
