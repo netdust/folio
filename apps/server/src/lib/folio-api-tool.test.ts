@@ -3,6 +3,7 @@ import { eq } from 'drizzle-orm';
 import { db } from '../db/client.ts';
 import { apiTokens, type ApiToken, workspaces } from '../db/schema.ts';
 import { makeTestApp } from '../test/harness.ts';
+import { roleToScopes } from './agent-schema.ts';
 import { executeTool } from './agent-tools.ts';
 import { registerRealTools } from './agent-tools-registry.ts';
 import {
@@ -455,5 +456,43 @@ describe('folio_api write tool (P3-6/7)', () => {
     expect(out.plan.method).toBe('DELETE');
     expect((await testDb.select().from(workspaces)).length).toBe(before); // no mutation
     expect(await countTokens()).toBe(tokensBefore); // high branch did NOT mint
+  });
+
+  test('HIGH-risk refuses-with-plan REGARDLESS of caller privilege (B7)', async () => {
+    // Interim HIGH-tier floor (threat model B7): an owner/admin — the MOST
+    // privileged caller, carrying every delegatable scope via roleToScopes —
+    // gets the SAME refuse-with-plan a member gets. There is deliberately NO
+    // owner/admin auto-apply path until the approval-gate ships. This pins that
+    // the high branch never consults caller role/privilege.
+    const { seed, db: testDb } = await makeTestApp();
+    const owner = callerToken({
+      workspaceId: seed.workspace.id,
+      scopes: roleToScopes('owner'), // all scopes — the highest-privilege caller
+      createdBy: seed.user.id,
+    });
+    const before = (await testDb.select().from(workspaces)).length;
+    const tokensBefore = await countTokens();
+    // POST /w/:slug/tokens (token mint) — classifies HIGH. The most destructive
+    // standing-credential op; an owner must STILL be refused.
+    const out = (await executeTool(
+      owner,
+      'agent:op',
+      'folio_api',
+      {
+        method: 'POST',
+        path: `/api/v1/w/${seed.workspace.slug}/tokens`,
+        body: { name: 'minted-by-agent', scopes: ['documents:read'] },
+      },
+      undefined,
+      { callerScopes: owner.scopes },
+    )) as { refused: boolean; plan: { risk: string; method: string; path: string } };
+    // Identical outcome to the member-caller refuse above: refused, with a plan,
+    // and NO dispatch (no token minted, no workspace mutated).
+    expect(out.refused).toBe(true);
+    expect(out.plan).toBeDefined();
+    expect(out.plan.risk).toBe('high');
+    expect(out.plan.method).toBe('POST');
+    expect((await testDb.select().from(workspaces)).length).toBe(before); // no mutation
+    expect(await countTokens()).toBe(tokensBefore); // high branch did NOT mint/dispatch
   });
 });

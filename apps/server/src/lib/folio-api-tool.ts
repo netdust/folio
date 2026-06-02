@@ -231,6 +231,10 @@ export function registerFolioApiTools(): void {
       const body = args.body ?? {};
       const tier = classifyRisk(args.method, args.path, body);
       if (tier === 'high') {
+        // INTERIM FLOOR (Phase B / threat model B7): HIGH refuses regardless of caller
+        // privilege — there is deliberately NO owner/admin auto-apply path. Do NOT add a
+        // caller-privilege bypass here without the approval-gate (it would put a
+        // destructive cross-tenant action one prompt-injection away).
         // REFUSE high-risk WITHOUT dispatching (P3-7). High-risk routes are
         // session-only + dryRun-less, so we never attempt them — we return a
         // structured plan describing the proposed action for human review.
