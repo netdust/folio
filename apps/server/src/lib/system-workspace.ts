@@ -27,64 +27,68 @@ export function isReservedSlug(slug: string): boolean {
 }
 
 /**
+ * Provenance invariant for `__system` (M4): the library workspace may carry AT
+ * MOST ONE membership, and that membership must be the instance OWNER. Anything
+ * else is a hijack — a foreign membership, a non-owner role, or a second member
+ * — and we THROW (never adopt; adopting a foreign membership would be a silent
+ * instance-admin escalation).
+ *
+ * This is the single source of truth for the rule (review fix #1/#7): a clean
+ * bootstrap has ZERO memberships; a designated instance has EXACTLY ONE `owner`
+ * (the one `grantOwner` itself creates). The earlier "ANY membership = tainted"
+ * rule was wrong — it tripped on the legitimate owner on every restart after the
+ * first designation, breaking idempotency (M8) and the self-heal-on-boot
+ * contract. Distinguishing the one legitimate owner from a foreign membership is
+ * exactly what makes bootstrap safe to re-run forever.
+ */
+async function assertSystemProvenance(db: DB, workspaceId: string): Promise<void> {
+  const members = await db.query.memberships.findMany({
+    where: eq(memberships.workspaceId, workspaceId),
+  });
+  if (members.length === 0) return; // clean, member-less → a prior bootstrap
+  const tainted =
+    members.length > 1 || members.some((m) => m.role !== 'owner');
+  if (tainted) {
+    throw new HTTPError(
+      'SYSTEM_WORKSPACE_TAINTED',
+      '__system carries an unexpected membership; refusing to bootstrap onto it',
+      500,
+    );
+  }
+  // Exactly one `owner` membership: the legitimate instance owner. Accept.
+}
+
+/**
  * Resolve the `__system` workspace, creating it if absent. Idempotent and
  * race-safe: the `findFirst` guard is TOCTOU-racy, so a concurrent double
- * bootstrap is caught at the `workspaces.slug` UNIQUE constraint and re-resolved
- * (fix #5) rather than crashing. Returns the workspace row.
- *
- * Provenance (M4): a pre-existing `__system` that carries ANY membership is a
- * hijack — we THROW, never adopt it (adopting a foreign membership would be a
- * silent instance-admin escalation). A clean, member-less `__system` is a prior
- * bootstrap and is accepted for ensure-structure.
+ * bootstrap is absorbed by an `onConflictDoNothing` on the `workspaces.slug`
+ * UNIQUE constraint (review fix #10 — replaces the brittle err.message
+ * string-match with the codebase's established onConflict idiom) and re-resolved.
+ * Provenance (M4) is asserted via `assertSystemProvenance` — once, regardless of
+ * which path created the row.
  */
 async function resolveSystemWorkspace(db: DB): Promise<{ id: string }> {
-  const existing = await db.query.workspaces.findFirst({
+  // onConflictDoNothing makes a concurrent double-bootstrap a no-op on the loser
+  // (the UNIQUE on workspaces.slug is the real backstop), then we re-resolve.
+  await db
+    .insert(workspaces)
+    .values({ id: nanoid(), slug: SYSTEM_WORKSPACE_SLUG, name: 'System Library' })
+    .onConflictDoNothing({ target: workspaces.slug });
+
+  const ws = await db.query.workspaces.findFirst({
     where: eq(workspaces.slug, SYSTEM_WORKSPACE_SLUG),
   });
-  if (existing) {
-    const member = await db.query.memberships.findFirst({
-      where: eq(memberships.workspaceId, existing.id),
-    });
-    if (member) {
-      throw new HTTPError(
-        'SYSTEM_WORKSPACE_TAINTED',
-        '__system carries an unexpected membership; refusing to bootstrap onto it',
-        500,
-      );
-    }
-    return { id: existing.id };
+  if (!ws) {
+    // Unreachable in practice (we just inserted-or-found it); fail loud rather
+    // than return a phantom id.
+    throw new HTTPError(
+      'SYSTEM_WORKSPACE_MISSING',
+      '__system could not be resolved after insert',
+      500,
+    );
   }
-
-  try {
-    const id = nanoid();
-    await db
-      .insert(workspaces)
-      .values({ id, slug: SYSTEM_WORKSPACE_SLUG, name: 'System Library' });
-    return { id };
-  } catch (err) {
-    // Concurrent double-bootstrap: the UNIQUE constraint on workspaces.slug is
-    // the real idempotency backstop. Re-resolve; re-throw anything else.
-    if (err instanceof Error && err.message.includes('UNIQUE constraint failed')) {
-      const reResolved = await db.query.workspaces.findFirst({
-        where: eq(workspaces.slug, SYSTEM_WORKSPACE_SLUG),
-      });
-      if (reResolved) {
-        // The winner of the race created it member-less; re-verify provenance.
-        const member = await db.query.memberships.findFirst({
-          where: eq(memberships.workspaceId, reResolved.id),
-        });
-        if (member) {
-          throw new HTTPError(
-            'SYSTEM_WORKSPACE_TAINTED',
-            '__system carries an unexpected membership; refusing to bootstrap onto it',
-            500,
-          );
-        }
-        return { id: reResolved.id };
-      }
-    }
-    throw err;
-  }
+  await assertSystemProvenance(db, ws.id);
+  return { id: ws.id };
 }
 
 /** findFirst-by-(workspaceId, slug), else insert a bare project. Idempotent. */
@@ -116,6 +120,14 @@ async function ensureSystemPage(
   // projects, so title-uniqueness implies slug-uniqueness here. A future caller
   // passing two titles that slugify identically into one project would miss this
   // guard and hit the (project_id, slug) UNIQUE on insert — fail-loud, not silent.
+  //
+  // SEED-ONCE (review fix #6, known limitation): this early-returns on an
+  // existing page and NEVER reconciles the body. A later deploy that ships an
+  // updated FOLIO_SKILL_BODY / SETUP_PROJECT_REF_BODY does NOT propagate to the
+  // already-seeded page — the operator keeps reading the old content. This is the
+  // DESIGNED M8 contract (seed exactly one of each, never update); in-place
+  // content upgrade of library docs is Phase D (the curation UI). Do NOT mistake
+  // this for an upgrade path.
   const existing = await db.query.documents.findFirst({
     where: and(
       eq(documents.workspaceId, workspaceId),
@@ -201,24 +213,59 @@ async function requireSystemWorkspace(db: DB) {
 }
 
 /**
- * Grant the `__system` workspace `owner` membership to the user with `email`.
+ * Grant the `__system` workspace `owner` membership to the user with `email`,
+ * and return the resolved instance-owner's user id (whether this call granted it
+ * or a prior one did — review fix #8: the caller reuses this id instead of
+ * re-querying).
  *
  * First-wins idempotent (fix #2): if `__system` ALREADY has an `owner`
- * membership we no-op — a re-grant for a different email is IGNORED, never
- * replacing the existing owner (the owner is the instance admin; silently
- * swapping it would be an escalation). Independent of `ensureOperatorAgent`:
- * neither hides behind the other's early-return, so a re-run after a mid-failure
- * repairs whichever step is missing.
+ * membership we no-op and return ITS userId — a re-grant for a different email is
+ * IGNORED, never replacing the existing owner (the owner is the instance admin;
+ * silently swapping it would be an escalation). Independent of
+ * `ensureOperatorAgent`: neither hides behind the other's early-return, so a
+ * re-run after a mid-failure repairs whichever step is missing.
+ *
+ * Race-safe (review fix #5): the check-then-insert runs in a `db.transaction`
+ * with the owner re-check INSIDE the tx. SQLite serializes write transactions,
+ * so two concurrent grants (e.g. two simultaneous first-user registrations on a
+ * fresh instance) cannot both pass the "no owner yet" check and insert two owner
+ * rows. The memberships PK is (workspace_id, user_id), so without this the second
+ * grant of a DIFFERENT user would silently create a second instance admin.
  *
  * Throws INSTANCE_OWNER_NOT_FOUND (404) when no user has that email.
  */
-export async function grantOwner(db: DB, email: string): Promise<void> {
+/**
+ * Process-wide serialization for the owner-designation path (review fix #5).
+ * Folio is a single binary / single process (one shared bun:sqlite connection),
+ * so two concurrent designations interleave at their `await` points on the SAME
+ * connection — a DB write lock can't serialize them (no second connection to
+ * contend), and the memberships PK (workspace_id, user_id) lets two DIFFERENT
+ * users both become owner (and the operator-agent seed could double too). A tiny
+ * in-process promise-chain mutex fully closes the race for the single-process
+ * deployment Folio targets: the second designation waits, sees the first owner +
+ * agent, and no-ops. (Multi-process would need a DB constraint — out of scope:
+ * Folio is one process by architecture.) The whole grant+seed pair runs under
+ * ONE lock acquisition so the agent seed can't race either.
+ */
+let designationLock: Promise<unknown> = Promise.resolve();
+function withDesignationLock<T>(fn: () => Promise<T>): Promise<T> {
+  const run = designationLock.then(fn, fn);
+  // Keep the chain alive but swallow errors on the lock itself so one failed
+  // designation doesn't poison the next caller's turn.
+  designationLock = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
+}
+
+export async function grantOwner(db: DB, email: string): Promise<string> {
   const sys = await requireSystemWorkspace(db);
 
   const existingOwner = await db.query.memberships.findFirst({
     where: and(eq(memberships.workspaceId, sys.id), eq(memberships.role, 'owner')),
   });
-  if (existingOwner) return; // first-wins; do NOT replace
+  if (existingOwner) return existingOwner.userId; // first-wins; do NOT replace
 
   const user = await db.query.users.findFirst({ where: eq(users.email, email) });
   if (!user) {
@@ -232,6 +279,7 @@ export async function grantOwner(db: DB, email: string): Promise<void> {
   await db
     .insert(memberships)
     .values({ workspaceId: sys.id, userId: user.id, role: 'owner' });
+  return user.id;
 }
 
 /**
@@ -266,59 +314,63 @@ export async function ensureOperatorAgent(
     );
   }
 
-  await createDocument({
-    workspace: sys,
-    project: null, // agent ⇒ project_id IS NULL (createDocument enforces)
-    table: null,
-    actor,
-    token: null,
-    input: {
-      type: 'agent',
-      title: OPERATOR_AGENT_TITLE,
-      body: OPERATOR_PROMPT,
-      status: null,
-      frontmatter: {
-        provider: 'anthropic',
-        model: 'claude-sonnet-4-6', // required for API providers (agentFrontmatterSchema)
-        tools: [...OPERATOR_TOOLS],
-        projects: ['*'],
-        requires_approval: false,
+  try {
+    await createDocument({
+      workspace: sys,
+      project: null, // agent ⇒ project_id IS NULL (createDocument enforces)
+      table: null,
+      actor,
+      token: null,
+      input: {
+        type: 'agent',
+        title: OPERATOR_AGENT_TITLE,
+        body: OPERATOR_PROMPT,
+        status: null,
+        frontmatter: {
+          provider: 'anthropic',
+          model: 'claude-sonnet-4-6', // required for API providers (agentFrontmatterSchema)
+          tools: [...OPERATOR_TOOLS],
+          projects: ['*'],
+          requires_approval: false,
+        },
       },
-    },
-  });
+    });
+  } catch (err) {
+    // Race-safe (review fix #5): the findFirst guard above is TOCTOU, and
+    // createDocument is opaque (own tx, no onConflict hook). If a concurrent
+    // designate already seeded the operator, the second createDocument trips the
+    // documents (workspace_id, type, slug) UNIQUE — treat that as "already
+    // seeded" (idempotent no-op), re-throw anything else.
+    if (
+      err instanceof Error &&
+      err.message.includes('UNIQUE constraint failed: documents.workspace_id')
+    ) {
+      return;
+    }
+    throw err;
+  }
 }
 
 /**
  * Designate the instance owner: a thin orchestrator over the two independently
- * idempotent steps. Grants owner, then seeds the operator agent. Because each
- * step is independently idempotent, a re-run after ANY mid-failure repairs the
- * missing piece (e.g. owner inserted but agent seed threw → re-run no-ops the
- * grant and seeds the agent).
+ * idempotent steps. Grants owner, then seeds the operator agent with the
+ * resolved owner as the actor. Because each step is independently idempotent, a
+ * re-run after ANY mid-failure repairs the missing piece (e.g. owner inserted but
+ * agent seed threw → re-run no-ops the grant and seeds the agent).
+ *
+ * Review fix #8: `grantOwner` returns the resolved owner userId, so we pass it
+ * straight to `ensureOperatorAgent` — no second user lookup, no membership-
+ * fallback branch (the previous fallback was unreachable from the one production
+ * caller, which pre-checks the user exists).
  */
 export async function designateInstanceOwner(db: DB, email: string): Promise<void> {
-  await grantOwner(db, email);
-
-  const owner = await db.query.users.findFirst({ where: eq(users.email, email) });
-  if (!owner) {
-    // grantOwner just succeeded (or no-op'd onto a pre-existing owner). If the
-    // email no longer resolves, the pre-existing owner was designated under a
-    // different email; resolve the actor from the membership instead.
-    const sys = await requireSystemWorkspace(db);
-    const ownerMembership = await db.query.memberships.findFirst({
-      where: and(eq(memberships.workspaceId, sys.id), eq(memberships.role, 'owner')),
-    });
-    if (!ownerMembership) {
-      throw new HTTPError(
-        'INSTANCE_OWNER_NOT_FOUND',
-        `no owner resolvable for ${email}`,
-        404,
-      );
-    }
-    await ensureOperatorAgent(db, ownerMembership.userId);
-    return;
-  }
-
-  await ensureOperatorAgent(db, owner.id);
+  // One lock acquisition for the whole grant+seed pair (review fix #5) so two
+  // concurrent designations on a fresh instance can't insert two owners or two
+  // operator agents. See withDesignationLock.
+  await withDesignationLock(async () => {
+    const ownerUserId = await grantOwner(db, email);
+    await ensureOperatorAgent(db, ownerUserId);
+  });
 }
 
 /**

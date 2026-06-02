@@ -75,7 +75,7 @@ describe('bootstrapSystemWorkspace (M4/M8)', () => {
     expect(skillDocs.length).toBe(1);
   });
 
-  test('bootstrap FAILS LOUD on a pre-existing __system that carries ANY membership (M4)', async () => {
+  test('bootstrap FAILS LOUD on a pre-existing __system with a NON-owner membership (M4)', async () => {
     const { db, seed } = await makeTestApp();
     const foreignId = nanoid();
     await db.insert(workspaces).values({
@@ -83,11 +83,36 @@ describe('bootstrapSystemWorkspace (M4/M8)', () => {
       slug: SYSTEM_WORKSPACE_SLUG,
       name: 'Hijack',
     });
+    // A 'member'-role membership is never legitimate on __system → tainted.
     await db.insert(memberships).values({
       workspaceId: foreignId,
       userId: seed.user.id,
-      role: 'owner',
+      role: 'member',
     });
+    await expect(bootstrapSystemWorkspace(db)).rejects.toThrow(
+      /SYSTEM_WORKSPACE_TAINTED|membership/i,
+    );
+  });
+
+  test('bootstrap FAILS LOUD on a pre-existing __system with MORE THAN ONE membership (M4)', async () => {
+    const { db, seed } = await makeTestApp();
+    const foreignId = nanoid();
+    await db.insert(workspaces).values({
+      id: foreignId,
+      slug: SYSTEM_WORKSPACE_SLUG,
+      name: 'Hijack',
+    });
+    const other = nanoid();
+    await db.insert(users).values({
+      id: other,
+      email: 'other@x.com',
+      name: 'Other',
+      passwordHash: await hashPassword('password123'),
+    });
+    // Two memberships (even if both owner-ish) is never the legitimate shape
+    // (exactly one owner) → tainted.
+    await db.insert(memberships).values({ workspaceId: foreignId, userId: seed.user.id, role: 'owner' });
+    await db.insert(memberships).values({ workspaceId: foreignId, userId: other, role: 'owner' });
     await expect(bootstrapSystemWorkspace(db)).rejects.toThrow(
       /SYSTEM_WORKSPACE_TAINTED|membership/i,
     );
@@ -97,6 +122,34 @@ describe('bootstrapSystemWorkspace (M4/M8)', () => {
     const { db } = await makeTestApp();
     await bootstrapSystemWorkspace(db); // creates it, no membership
     await expect(bootstrapSystemWorkspace(db)).resolves.toBeUndefined(); // clean, no throw
+  });
+
+  test('bootstrap ACCEPTS a __system carrying its single legitimate owner — idempotent across restarts (M4/M8, review fix #1)', async () => {
+    const { db } = await makeTestApp();
+    await bootstrapSystemWorkspace(db);
+    const uid = nanoid();
+    await db.insert(users).values({
+      id: uid,
+      email: 'owner@x.com',
+      name: 'Owner',
+      passwordHash: await hashPassword('password123'),
+    });
+    await designateInstanceOwner(db, 'owner@x.com'); // grants the single owner + seeds the agent
+    // A SUBSEQUENT boot must NOT throw TAINTED on its own legitimate owner.
+    await expect(bootstrapSystemWorkspace(db)).resolves.toBeUndefined();
+    // And re-designating is still idempotent (one owner, one agent).
+    await expect(designateInstanceOwner(db, 'owner@x.com')).resolves.toBeUndefined();
+    const sys = await db.query.workspaces.findFirst({
+      where: eq(workspaces.slug, SYSTEM_WORKSPACE_SLUG),
+    });
+    const owners = await db.query.memberships.findMany({
+      where: and(eq(memberships.workspaceId, sys!.id), eq(memberships.role, 'owner')),
+    });
+    expect(owners.length).toBe(1);
+    const agents = await db.query.documents.findMany({
+      where: and(eq(documents.workspaceId, sys!.id), eq(documents.type, 'agent')),
+    });
+    expect(agents.length).toBe(1);
   });
 });
 
@@ -123,6 +176,47 @@ describe('grantOwner + ensureOperatorAgent + designateInstanceOwner (M5/M8)', ()
     });
     expect(owners.length).toBe(1);
     expect(owners[0]!.userId).toBe(a); // first-wins
+  });
+
+  test('grantOwner returns the resolved owner userId (review fix #8)', async () => {
+    const { db } = await makeTestApp();
+    await bootstrapSystemWorkspace(db);
+    const a = nanoid();
+    await db
+      .insert(users)
+      .values({ id: a, email: 'a@x.com', name: 'A', passwordHash: await hashPassword('password123') });
+    expect(await grantOwner(db, 'a@x.com')).toBe(a); // granted now
+    expect(await grantOwner(db, 'a@x.com')).toBe(a); // first-wins no-op returns the same id
+  });
+
+  test('concurrent designateInstanceOwner yields exactly ONE owner + ONE agent (review fix #5 — race)', async () => {
+    const { db } = await makeTestApp();
+    await bootstrapSystemWorkspace(db);
+    const a = nanoid();
+    const b = nanoid();
+    await db
+      .insert(users)
+      .values({ id: a, email: 'a@x.com', name: 'A', passwordHash: await hashPassword('password123') });
+    await db
+      .insert(users)
+      .values({ id: b, email: 'b@x.com', name: 'B', passwordHash: await hashPassword('password123') });
+    // Two simultaneous first-user designations (different emails). The
+    // transactional first-wins guard in grantOwner must prevent two owner rows.
+    await Promise.all([
+      designateInstanceOwner(db, 'a@x.com'),
+      designateInstanceOwner(db, 'b@x.com'),
+    ]);
+    const sys = await db.query.workspaces.findFirst({
+      where: eq(workspaces.slug, SYSTEM_WORKSPACE_SLUG),
+    });
+    const owners = await db.query.memberships.findMany({
+      where: and(eq(memberships.workspaceId, sys!.id), eq(memberships.role, 'owner')),
+    });
+    expect(owners.length).toBe(1); // NOT two instance admins
+    const agents = await db.query.documents.findMany({
+      where: and(eq(documents.workspaceId, sys!.id), eq(documents.type, 'agent')),
+    });
+    expect(agents.length).toBe(1); // NOT two operator agents
   });
 
   test('grantOwner throws a clear error for an unknown email (M5)', async () => {

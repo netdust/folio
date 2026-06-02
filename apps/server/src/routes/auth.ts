@@ -67,9 +67,22 @@ auth.post(
 
     // First registrant (flag on) becomes the instance owner of the __system
     // library workspace.
+    //
+    // Atomicity (review fix #3): the user row is committed before bootstrap, but
+    // createDocument (inside designateInstanceOwner) uses its own transaction on
+    // the module db proxy, so we cannot wrap all three in one outer tx. Instead,
+    // if bootstrap/designate throws we COMPENSATE by deleting the just-created
+    // user, returning the instance to the zero-users state. Without this, a
+    // mid-failure would leave a committed user → isFirstUser=false forever +
+    // EMAIL_TAKEN on retry → the instance is permanently ownerless via register.
     if (isFirstUser) {
-      await bootstrapSystemWorkspace(db);
-      await designateInstanceOwner(db, email);
+      try {
+        await bootstrapSystemWorkspace(db);
+        await designateInstanceOwner(db, email);
+      } catch (err) {
+        await db.delete(users).where(eq(users.id, id)); // roll back the user
+        throw err;
+      }
     }
 
     const session = await createSession(id);

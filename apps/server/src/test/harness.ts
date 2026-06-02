@@ -50,27 +50,38 @@ export interface HarnessOptions {
   seedProjectDefaults?: boolean;
 }
 
-export async function makeTestApp(opts: HarnessOptions = {}): Promise<{
-  app: ServerApp;
-  db: DB;
-  seed: TestSeed;
-}> {
+/**
+ * Shared db wiring for both harness entrypoints (review fix #9): a fresh migrated
+ * in-memory db installed into the app's `db` proxy, returning `{ app, db }`. The
+ * two PRAGMAs are load-bearing — `busy_timeout` (R9) mirrors production
+ * lock-waiting so race tests reproduce real SQLITE_BUSY semantics (would
+ * otherwise mask F1/F14 fixes); `foreign_keys = ON` enforces FK cascades. Both
+ * `makeTestApp` (seeds on top) and `makeBareTestDb` (no seed) build on this so
+ * the wiring can't silently diverge.
+ */
+async function setupTestDb(): Promise<{ app: ServerApp; db: DB }> {
   const sqlite = new Database(':memory:');
   sqlite.exec('PRAGMA foreign_keys = ON');
-  // R9 — mirror the production busy_timeout so race tests reproduce
-  // production lock-waiting behavior rather than SQLITE_BUSY-immediately
-  // semantics that would mask F1 / F14 race fixes.
   sqlite.exec('PRAGMA busy_timeout = 5000');
   const db = drizzle(sqlite, { schema });
   migrate(db, { migrationsFolder: MIGRATIONS_DIR });
 
   // Install the fresh DB and reset the proxy's resolution cache so route
   // handlers that hold a reference to the `db` proxy will see THIS db, not the
-  // one resolved on a previous `makeTestApp()` call in the same file.
+  // one resolved on a previous setup call in the same file.
   globalThis.__folioTestDb = db;
   __resetDbForTests();
 
   const { app } = await import('../app.ts');
+  return { app, db };
+}
+
+export async function makeTestApp(opts: HarnessOptions = {}): Promise<{
+  app: ServerApp;
+  db: DB;
+  seed: TestSeed;
+}> {
+  const { app, db } = await setupTestDb();
 
   const userId = nanoid();
   const passwordHash = await hashPassword('password123');
@@ -133,16 +144,9 @@ export async function makeTestApp(opts: HarnessOptions = {}): Promise<{
 /**
  * A migrated, EMPTY in-memory db wired to the app's db proxy — no seeded user,
  * workspace, or project. For tests that need the zero-users state (e.g. the
- * first-user registration gate). Mirrors makeTestApp's db wiring without the seed.
+ * first-user registration gate). Shares makeTestApp's db wiring via setupTestDb,
+ * minus the seed.
  */
 export async function makeBareTestDb(): Promise<{ app: ServerApp; db: DB }> {
-  const sqlite = new Database(':memory:');
-  sqlite.exec('PRAGMA foreign_keys = ON');
-  sqlite.exec('PRAGMA busy_timeout = 5000');
-  const db = drizzle(sqlite, { schema });
-  migrate(db, { migrationsFolder: MIGRATIONS_DIR });
-  globalThis.__folioTestDb = db;
-  __resetDbForTests();
-  const { app } = await import('../app.ts');
-  return { app, db };
+  return setupTestDb();
 }

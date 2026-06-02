@@ -77,7 +77,13 @@ export const envSchema = z.object({
     .transform((v) => v === 'true'),
   // Phase A: designate the instance owner (the first `__system` member) by
   // email on any install age (M5). Optional; idempotent when applied.
-  FOLIO_INSTANCE_OWNER: z.string().email().optional(),
+  //
+  // NOT `.email()` (review fix #2): env is parsed eagerly at module load, so a
+  // strict email validator would CRASH the whole server at boot on a typo'd
+  // value — contradicting runBootTasks' contract that a misconfigured owner
+  // email must never take the server down. A malformed value simply matches no
+  // user, and runBootTasks logs a clear warning and skips. Plain optional string.
+  FOLIO_INSTANCE_OWNER: z.string().optional(),
 });
 
 export const env = envSchema.parse(process.env);

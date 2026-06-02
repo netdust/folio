@@ -78,3 +78,38 @@ test('a SECOND registration never grants __system ownership (M1)', async () => {
       prev;
   }
 });
+
+test('first registration that SUCCEEDS persists the user + one owner; rollback-on-throw is the inverse (review fix #3)', async () => {
+  // The compensating delete (auth.ts) removes the just-created user if
+  // bootstrap/designate throws, so a mid-failure can't leave an orphaned user
+  // that permanently flips isFirstUser=false + EMAIL_TAKEN. A first-user
+  // designation throw isn't cleanly inducible in-harness (a tainted __system
+  // needs a membership → a user → isFirstUser=false; transient DB faults aren't
+  // simulable), so we assert the SUCCESS-path invariant here (user persists, one
+  // owner) and unit-test the reachable designation-throw cases (tainted __system,
+  // concurrent race) in system-workspace.test.ts.
+  const { app, db } = await makeBareTestDb();
+  const prev = env.FOLIO_ALLOW_BOOTSTRAP_REGISTRATION;
+  (env as { FOLIO_ALLOW_BOOTSTRAP_REGISTRATION: boolean }).FOLIO_ALLOW_BOOTSTRAP_REGISTRATION =
+    true;
+  try {
+    const ok = await app.request('/api/v1/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'first@x.com', password: 'password123', name: 'First' }),
+    });
+    expect(ok.status).toBe(200);
+    const user = await db.query.users.findFirst({ where: eq(users.email, 'first@x.com') });
+    expect(user).toBeDefined(); // persisted on success (rollback only on throw)
+    const sys = await db.query.workspaces.findFirst({
+      where: eq(workspaces.slug, SYSTEM_WORKSPACE_SLUG),
+    });
+    const owners = await db.query.memberships.findMany({
+      where: and(eq(memberships.workspaceId, sys!.id), eq(memberships.role, 'owner')),
+    });
+    expect(owners.length).toBe(1);
+  } finally {
+    (env as { FOLIO_ALLOW_BOOTSTRAP_REGISTRATION: boolean }).FOLIO_ALLOW_BOOTSTRAP_REGISTRATION =
+      prev;
+  }
+});
