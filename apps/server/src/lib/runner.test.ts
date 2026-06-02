@@ -1334,6 +1334,48 @@ describe('runAgent stream loop', () => {
     expect(control.called).toBe(1);
   });
 
+  // Phase C C3 review-fix #1 — the unattended FLOOR is fatal: a HIGH-risk native
+  // tool (agents:write) on a fired (unattended) run terminates the run as
+  // provider_error, no feed-back round. The agent's token HOLDS agents:write
+  // (granted via the create_agent tool) so it clears the scope check; the floor
+  // is what refuses it. Proves the model cannot loop-retry around the floor.
+  test('D-9.2 fatal — agents:write tool on an UNATTENDED run is floored, terminates provider_error', async () => {
+    // tools:['create_agent'] grants the token agents:write (toolsToScopes);
+    // runOverrides.unattended marks the run fired → ctx.unattended === true.
+    const { db, run } = await scaffold({
+      tools: ['create_agent'],
+      runOverrides: { unattended: true },
+    });
+    const { registerTool } = await import('./agent-tools.ts');
+    const flooredName = `__test_floored_${nanoid(6)}`;
+    registerTool({
+      name: flooredName,
+      requiredScope: 'agents:write', // token HOLDS this — scope check passes
+      schema: z.object({}).strict(),
+      handler: async () => ({ ok: true }),
+    });
+    registeredTools.push(flooredName);
+
+    const control: StubControl = {
+      rounds: [
+        [
+          { type: 'tool_call', id: 'tc-1', name: flooredName, arguments: {} },
+          { type: 'done', reason: 'tool_use' },
+        ],
+      ],
+      called: 0,
+    };
+    installProviderStub(control);
+
+    await runAgent({ runId: run.id });
+
+    const fm = await readRun(db, run.id);
+    expect(fm.status).toBe('failed');
+    expect(fm.error_reason).toBe('provider_error');
+    // No feed-back round — the provider was called exactly once.
+    expect(control.called).toBe(1);
+  });
+
   // Mitigation 65 — a recoverable handler throw whose message embeds a secret
   // and an attacker URL: the fed-back tool message contains NEITHER.
   test('D-9.2 sanitization — secret + URL never reach the fed-back message', async () => {

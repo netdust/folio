@@ -1290,17 +1290,25 @@ function safeToolErrorMessage(err: unknown, providerLabel: string): string {
 }
 
 /**
- * D-9.2 — a FATAL tool error terminates the run (no feed-back). Two classes:
+ * D-9.2 — a FATAL tool error terminates the run (no feed-back). Three classes:
  *   - scope-denied: executeTool throws `forbidden: scope <s> missing` when the
  *     agent's token lacks the tool's required scope (mitigation 66).
+ *   - unattended-floored: executeTool throws `forbidden: <name> is refused on an
+ *     unattended (trigger-fired) run` for a HIGH-risk native tool on a fired run
+ *     (Phase C C3 review-fix #1). The model must NOT retry around the floor, so
+ *     it terminates the run like a scope denial.
  *   - unknown tool: executeTool throws `method not found: <name>` for a tool
  *     not in the registry (or the test-only `__echo` outside NODE_ENV=test).
  * Everything else (handler throws, MCP_INVALID_ARGS) is recoverable.
+ *
+ * The `forbidden:` prefix (not `forbidden: scope`) catches BOTH forbidden
+ * classes — every refusal executeTool surfaces with `forbidden:` is a hard deny
+ * the model cannot self-correct, so all are fatal by construction.
  */
 function isFatalToolError(err: unknown): err is Error {
   return (
     err instanceof Error &&
-    (err.message.startsWith('forbidden: scope') || err.message.startsWith('method not found'))
+    (err.message.startsWith('forbidden:') || err.message.startsWith('method not found'))
   );
 }
 

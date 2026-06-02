@@ -271,6 +271,128 @@ describe('config:write delegate ceiling (Phase 2 / P2-1, P2-2)', () => {
   });
 });
 
+describe('unattended floor at the convergence point (Phase C C3 review-fix #1)', () => {
+  // HIGH-risk NATIVE tools requiring `agents:write` mint/modify standing agent
+  // bearer tokens. On an unattended (trigger-fired) run, executeTool must REFUSE
+  // them centrally — folio_api only floors its OWN config:write path-tier, so a
+  // seedable custom agent declaring a native agents:write tool would otherwise
+  // bypass the deterministic bound entirely.
+
+  it('agents:write tool on an UNATTENDED run → refused before dispatch (no handler run)', async () => {
+    let invoked = false;
+    registerThrowaway({
+      name: '__agents_write_probe',
+      requiredScope: 'agents:write',
+      schema: z.object({}).strict(),
+      handler: async () => {
+        invoked = true;
+        return { ok: true };
+      },
+    });
+
+    const token = makeToken({ scopes: ['agents:write'] });
+    await expect(
+      executeTool(token, 'agent:custom', '__agents_write_probe', {}, undefined, {
+        callerScopes: ['agents:write'],
+        unattended: true,
+      }),
+    ).rejects.toThrow('forbidden: __agents_write_probe is refused on an unattended');
+    expect(invoked).toBe(false);
+  });
+
+  it('agents:write tool with unattended FALSEY (attended) → dispatches normally', async () => {
+    let invoked = false;
+    registerThrowaway({
+      name: '__agents_write_probe_attended',
+      requiredScope: 'agents:write',
+      schema: z.object({}).strict(),
+      handler: async () => {
+        invoked = true;
+        return { ok: true };
+      },
+    });
+
+    const token = makeToken({ scopes: ['agents:write'] });
+    // unattended omitted (undefined) → attended path, unchanged.
+    const out = await executeTool(
+      token,
+      'agent:custom',
+      '__agents_write_probe_attended',
+      {},
+      undefined,
+      { callerScopes: ['agents:write'] },
+    );
+    expect(out).toEqual({ ok: true });
+    expect(invoked).toBe(true);
+
+    // explicit unattended: false → also attended.
+    invoked = false;
+    const out2 = await executeTool(
+      token,
+      'agent:custom',
+      '__agents_write_probe_attended',
+      {},
+      undefined,
+      { callerScopes: ['agents:write'], unattended: false },
+    );
+    expect(out2).toEqual({ ok: true });
+    expect(invoked).toBe(true);
+  });
+
+  it('documents:write tool on an UNATTENDED run → STILL dispatches (LOW = accepted residual)', async () => {
+    let invoked = false;
+    registerThrowaway({
+      name: '__doc_write_probe_unattended',
+      requiredScope: 'documents:write',
+      schema: z.object({}).strict(),
+      handler: async () => {
+        invoked = true;
+        return { ok: true };
+      },
+    });
+
+    const token = makeToken({ scopes: ['documents:write'] });
+    const out = await executeTool(
+      token,
+      'agent:custom',
+      '__doc_write_probe_unattended',
+      {},
+      undefined,
+      { callerScopes: ['documents:write'], unattended: true },
+    );
+    expect(out).toEqual({ ok: true });
+    expect(invoked).toBe(true);
+  });
+
+  it('config:write tool on an UNATTENDED run is NOT double-floored by this set (folio_api owns its tier)', async () => {
+    // config:write is deliberately absent from UNATTENDED_FLOORED_SCOPES — the
+    // convergence floor must not fire for it; folio_api's own MEDIUM path-tier
+    // is the single owner of config-write flooring.
+    let invoked = false;
+    registerThrowaway({
+      name: '__config_write_probe_unattended',
+      requiredScope: 'config:write',
+      schema: z.object({}).strict(),
+      handler: async () => {
+        invoked = true;
+        return { ok: true };
+      },
+    });
+
+    const token = makeToken({ scopes: ['config:write'] });
+    const out = await executeTool(
+      token,
+      'agent:op',
+      '__config_write_probe_unattended',
+      {},
+      undefined,
+      { callerScopes: ['config:write'], unattended: true },
+    );
+    expect(out).toEqual({ ok: true });
+    expect(invoked).toBe(true);
+  });
+});
+
 describe('registerTool', () => {
   it('registerTool throws on duplicate name', () => {
     registerThrowaway({

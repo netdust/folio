@@ -71,6 +71,34 @@ export interface ToolListEntry {
 
 const registry = new Map<string, ToolDef>();
 
+/**
+ * Phase C C3 (review-fix #1) — the unattended floor at the CONVERGENCE POINT.
+ *
+ * On an unattended (trigger-fired, no-human-in-the-loop) run, any tool whose
+ * `requiredScope` is in this set is REFUSED before dispatch. This is the central
+ * twin of folio_api's own path-based tier floor: folio_api floors its MEDIUM
+ * config:write paths inside its handler; THIS floors HIGH-risk NATIVE tools that
+ * never route through folio_api's classifier.
+ *
+ * Why `agents:write` is here: the six native lifecycle tools
+ * (create_agent / update_agent / delete_agent / run_agent / cancel_run /
+ * retry_run) MINT or MODIFY standing agent bearer tokens — HIGH-risk. Minting a
+ * token unattended with no human floor is exactly what C3 forbids. Putting the
+ * check here (not in each handler) means every present and future agents:write
+ * tool inherits the floor — the "redact at the loader, not the handler" lesson.
+ *
+ * Why `documents:write` / `documents:delete` are NOT here: LOW-risk document
+ * writes are the DOCUMENTED ACCEPTED RESIDUAL of C3 — an unattended run is meant
+ * to auto-apply document edits. Flooring them would break the design.
+ *
+ * Why `config:write` (folio_api) is NOT here: folio_api does its OWN granular
+ * path-based tiering (MEDIUM paths floored, LOW paths auto). Adding config:write
+ * here too would double-handle it — redundant-but-harmless, but it muddies
+ * ownership. DECISION: folio_api owns config-write flooring; this set owns the
+ * native HIGH-risk scopes folio_api can't see.
+ */
+const UNATTENDED_FLOORED_SCOPES = new Set<string>(['agents:write']);
+
 // Test-only teardown hook so test files can delete throwaway registrations
 // without reaching into module internals (registry is module-global, so leaked
 // registrations would break sibling tests — see the mock-module-leak lesson).
@@ -164,6 +192,17 @@ export async function executeTool(
   // both hold the scope (mitigation D3). Name-only error (mitigation D7).
   if (!token.scopes.includes(def.requiredScope) || !callerScopes.includes(def.requiredScope)) {
     throw new Error(`forbidden: scope ${def.requiredScope} missing`);
+  }
+
+  // Phase C C3 (review-fix #1) — the unattended floor at the CONVERGENCE POINT.
+  // folio_api floors its own MEDIUM config:write path-tier; this floors HIGH-risk
+  // NATIVE tools (agents:write = agent/token lifecycle) that don't route through
+  // folio_api's classifier. LOW document writes (documents:write/delete) stay
+  // auto — the accepted residual. The model must NOT be able to retry around
+  // this, so the message is shaped `forbidden: …` to match runner.ts
+  // `isFatalToolError` (which terminates the run, like a scope denial).
+  if (caller?.unattended === true && UNATTENDED_FLOORED_SCOPES.has(def.requiredScope)) {
+    throw new Error(`forbidden: ${name} is refused on an unattended (trigger-fired) run`);
   }
 
   // No agent-lifecycle self/peer gate here. The dispatcher is transport +
