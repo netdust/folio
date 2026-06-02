@@ -212,7 +212,7 @@ export async function grantOwner(db: DB, email: string): Promise<void> {
   if (!user) {
     throw new HTTPError(
       'INSTANCE_OWNER_NOT_FOUND',
-      `INSTANCE_OWNER_NOT_FOUND: no user with email ${email}`,
+      `no user with email ${email}`,
       404,
     );
   }

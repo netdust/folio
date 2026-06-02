@@ -127,7 +127,10 @@ describe('grantOwner + ensureOperatorAgent + designateInstanceOwner (M5/M8)', ()
   test('grantOwner throws a clear error for an unknown email (M5)', async () => {
     const { db } = await makeTestApp();
     await bootstrapSystemWorkspace(db);
-    await expect(grantOwner(db, 'nobody@x.com')).rejects.toThrow(/INSTANCE_OWNER_NOT_FOUND/);
+    // Assert on the error CODE (convention-correct), not the message wording.
+    await expect(grantOwner(db, 'nobody@x.com')).rejects.toMatchObject({
+      code: 'INSTANCE_OWNER_NOT_FOUND',
+    });
   });
 
   test('ensureOperatorAgent seeds the operator (with a user actor) idempotently (M8)', async () => {
