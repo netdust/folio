@@ -3,6 +3,7 @@ import { and, eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { apiTokens, documents, workspaces } from '../db/schema.ts';
 import { newApiToken } from '../lib/auth.ts';
+import { bootstrapSystemWorkspace } from '../lib/system-workspace.ts';
 import { makeTestApp } from '../test/harness.ts';
 import { assertSlugAllowed } from './workspaces.ts';
 
@@ -413,4 +414,59 @@ test('DELETE /api/v1/w/:wslug rejects bearer + garbage cookie with 403', async (
   expect(res.status).toBe(403);
   const body = await res.json();
   expect(body.error.code).toBe('FORBIDDEN');
+});
+
+// --- Phase A: __system is membership-gated like any workspace (M6) + workspace
+// create stays session-only so agents can't reach __system (M7). These pin the
+// boundary; Phase A adds NO __system read path that bypasses membership (the
+// definitional skill-load exemption is Phase B).
+
+test('M6: a non-__system member cannot read a __system workspace (membership gate)', async () => {
+  const { app, db, seed } = await makeTestApp();
+  // seed.user (alice) is a member of 'acme', NOT of __system.
+  await bootstrapSystemWorkspace(db);
+  // Reach __system as alice's session — resolveWorkspace's membership check fires.
+  const res = await app.request('/api/v1/w/__system', {
+    headers: { Cookie: seed.sessionCookie },
+  });
+  expect(res.status).toBe(403);
+  expect((await res.json()).error.code).toBe('FORBIDDEN');
+});
+
+test('M6: a non-__system member cannot read a __system page document', async () => {
+  const { app, db, seed } = await makeTestApp();
+  await bootstrapSystemWorkspace(db);
+  // The seeded folio skill page lives in __system/skills. Alice (non-member)
+  // is blocked at resolveWorkspace before reaching the document.
+  const res = await app.request('/api/v1/w/__system/p/skills/documents/folio', {
+    headers: { Cookie: seed.sessionCookie },
+  });
+  // 403 (not a member) — never 200/leaked content.
+  expect([403, 404]).toContain(res.status);
+  expect(res.status).not.toBe(200);
+});
+
+test('M7/M2: an agent bearer cannot create a __system workspace (session-only)', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const { token, hash } = newApiToken();
+  await db.insert(apiTokens).values({
+    id: nanoid(),
+    workspaceId: seed.workspace.id,
+    name: 'agent-tries-system-create',
+    tokenHash: hash,
+    scopes: ['documents:read'],
+    createdBy: seed.user.id,
+  });
+  const res = await app.request('/api/v1/workspaces', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Sneaky', slug: '__system' }),
+  });
+  // requireSessionUser rejects the bearer (401/403) before the slug check; either
+  // way no __system workspace is created.
+  expect([401, 403]).toContain(res.status);
+  const sys = await db.query.workspaces.findFirst({
+    where: eq(workspaces.slug, '__system'),
+  });
+  expect(sys).toBeUndefined();
 });
