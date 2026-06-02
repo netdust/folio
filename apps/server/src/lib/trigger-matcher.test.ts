@@ -26,13 +26,16 @@ import {
   type Workspace,
   apiTokens,
   documents,
+  memberships as schemaMemberships,
+  projects as schemaProjects,
   tables,
   workspaces as schemaWorkspaces,
 } from '../db/schema.ts';
 import { env } from '../env.ts';
 import { makeTestApp } from '../test/harness.ts';
 import type { TestSeed } from '../test/harness.ts';
-import { toolsToScopes } from './agent-schema.ts';
+import { callerProjectsFor } from './agent-projects.ts';
+import { roleToScopes, toolsToScopes } from './agent-schema.ts';
 import { newApiToken } from './auth.ts';
 import { seedBuiltinTriggers } from './builtin-triggers.ts';
 import { eventBus } from './event-bus.ts';
@@ -1090,4 +1093,119 @@ test('resolveTargetAgentSlug rejects a target_agent_id pointing at a THIRD works
   expect(await countRuns(db, wi.id, 'helper')).toBe(1); // only the original, no resume
   const run = await db.query.documents.findFirst({ where: eq(documents.id, originalId) });
   expect(run?.status).toBe('awaiting_approval'); // untouched
+});
+
+// ----- Phase C C2: skip the allow-list fire-gate for library agents -----
+//
+// A library agent (home __system) carries `projects` describing __system's
+// projects, NOT workspace B's — so it is NOT a meaningful B-fire-gate. The
+// firing decision for a library agent is purely "does this trigger target it";
+// its AUTHORITY in B is bounded at run time by loadContext's caller-sole
+// narrowing (Phase B B5). So the matcher SKIPS the allow-list for a library
+// agent, while a LOCAL agent keeps its allow-list gate unchanged.
+
+test('the allow-list fire-gate is SKIPPED for a library agent (C2)', async () => {
+  const { db, seed } = await makeTestApp();
+  await seedTriggers(db, seed.workspace.id, seed.user.id);
+  // __system holds the library agent 'ops' whose `projects` is narrowed to an id
+  // that is NOT B's project. resolveAgentProjects would exclude B's project P, so
+  // WITHOUT the C2 skip the allow-list gate would return (zero runs).
+  const sys = await bootstrapSystem(db);
+  await seedAgent(db, sys, seed.user, 'ops', ['some-other-__system-project-id']);
+  const wiTable = await getWorkItemsTable(db, seed.project.id);
+  const wi = await seedWorkItem(db, seed.workspace, seed.project, wiTable, seed.user);
+
+  await triggerMatcher.react(
+    assignmentEvent({
+      seed,
+      workItem: wi,
+      agentSlug: 'ops',
+      agentId: (await db.query.documents.findFirst({
+        where: and(eq(documents.workspaceId, sys.id), eq(documents.slug, 'ops')),
+      }))?.id as string,
+      actor: seed.user.id,
+    }),
+  );
+
+  // The library agent fired despite its narrowed (__system) project list — its
+  // projects are NOT a B-fire-gate.
+  expect(await countRuns(db, wi.id, 'ops')).toBe(1);
+});
+
+test('a LOCAL agent still respects its allow-list fire-gate (no regression)', async () => {
+  const { db, seed } = await makeTestApp();
+  await seedTriggers(db, seed.workspace.id, seed.user.id);
+  // A B-LOCAL agent whose allow-list names a DIFFERENT B project (not this
+  // event's project) → the local-agent gate still applies → no run.
+  const agent = await seedAgent(db, seed.workspace, seed.user, 'helper', [
+    'a-different-b-project-id',
+  ]);
+  const wiTable = await getWorkItemsTable(db, seed.project.id);
+  const wi = await seedWorkItem(db, seed.workspace, seed.project, wiTable, seed.user);
+
+  await triggerMatcher.react(
+    assignmentEvent({
+      seed,
+      workItem: wi,
+      agentSlug: 'helper',
+      agentId: agent.id,
+      actor: seed.user.id,
+    }),
+  );
+
+  // Local agent's allow-list excludes this project → gate unchanged → zero runs.
+  expect(await countRuns(db, wi.id, 'helper')).toBe(0);
+});
+
+test('the fired library-agent run is still caller-bounded in B (C2 → inherited B5)', async () => {
+  const { db, seed } = await makeTestApp();
+  await seedTriggers(db, seed.workspace.id, seed.user.id);
+  // Library agent with a wildcard authority claim — its `projects` is ['*'] so
+  // its OWN reach is "all". If authority leaked from the agent, the run would
+  // carry the agent's wildcard. It must instead carry the EVENT-HUMAN's B
+  // membership snapshot (the actor is seed.user, an OWNER of B).
+  const sys = await bootstrapSystem(db);
+  const libraryAgent = await seedAgent(db, sys, seed.user, 'ops', ['*']);
+  const wiTable = await getWorkItemsTable(db, seed.project.id);
+  const wi = await seedWorkItem(db, seed.workspace, seed.project, wiTable, seed.user);
+
+  await triggerMatcher.react(
+    assignmentEvent({
+      seed,
+      workItem: wi,
+      agentSlug: 'ops',
+      agentId: libraryAgent.id,
+      actor: seed.user.id,
+    }),
+  );
+
+  expect(await countRuns(db, wi.id, 'ops')).toBe(1);
+  const run = await db.query.documents.findFirst({
+    where: and(eq(documents.type, 'agent_run'), eq(documents.parentId, wi.id)),
+  });
+  const fm = run?.frontmatter as Record<string, unknown>;
+
+  // Derive what the EVENT-HUMAN (seed.user) would get from their B membership:
+  // the harness seeds seed.user as an OWNER of B → all document scopes, and
+  // callerProjectsFor(owner) === null (no project narrowing). Authority is the
+  // CALLER's, NOT the agent's ['*'] claim.
+  const membership = await db.query.memberships.findFirst({
+    where: and(
+      eq(schemaMemberships.workspaceId, seed.workspace.id),
+      eq(schemaMemberships.userId, seed.user.id),
+    ),
+  });
+  const role = membership?.role as 'owner' | 'admin' | 'member';
+  const memberProjectIds =
+    role === 'member'
+      ? (
+          await db.query.projects.findMany({
+            where: eq(schemaProjects.workspaceId, seed.workspace.id),
+            columns: { id: true },
+          })
+        ).map((p) => p.id)
+      : [];
+
+  expect(fm.caller_scopes).toEqual(roleToScopes(role));
+  expect(fm.caller_project_ids).toEqual(callerProjectsFor({ role, projectIds: memberProjectIds }));
 });

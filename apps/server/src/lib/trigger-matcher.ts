@@ -432,9 +432,19 @@ async function maybeCreateRun(
   //    collapses mixed ['proj','*'] → ['*'] — none of which the old `as
   //    string[]` cast did (a string `projects` would substring-match). Skip
   //    (zero runs) when the list is narrowed and excludes this event's project.
-  const allowList = resolveAgentProjects(agent);
-  if (!allowList.includes('*') && (!event.projectId || !allowList.includes(event.projectId))) {
-    return;
+  // C2 — a library agent's `projects` describe __system, not B, so they are NOT a
+  // B-fire-gate. Skip the allow-list for a library agent (home __system); its
+  // AUTHORITY in B is bounded at run time by loadContext's caller-sole narrowing
+  // (Phase B B5), not at the fire decision. A LOCAL agent keeps the gate. (When
+  // __system is unseeded, systemId is undefined and `agent.workspaceId ===
+  // undefined` is false for every real agent, so the gate still applies.)
+  const systemId = await findSystemWorkspaceId(db);
+  const isLibraryAgent = systemId !== undefined && agent.workspaceId === systemId;
+  if (!isLibraryAgent) {
+    const allowList = resolveAgentProjects(agent);
+    if (!allowList.includes('*') && (!event.projectId || !allowList.includes(event.projectId))) {
+      return;
+    }
   }
 
   // 4. Autonomy gate (mitigation 51). With the flag OFF, an agent-originated
