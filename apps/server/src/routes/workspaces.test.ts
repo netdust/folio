@@ -1,9 +1,10 @@
 import { expect, test } from 'bun:test';
 import { and, eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
-import { apiTokens, documents } from '../db/schema.ts';
+import { apiTokens, documents, workspaces } from '../db/schema.ts';
 import { newApiToken } from '../lib/auth.ts';
 import { makeTestApp } from '../test/harness.ts';
+import { assertSlugAllowed } from './workspaces.ts';
 
 test('GET /api/v1/workspaces lists user workspaces', async () => {
   const { app, seed } = await makeTestApp();
@@ -92,6 +93,52 @@ test('POST with explicit slug; second use is 409', async () => {
   });
   expect(dupe.status).toBe(409);
   expect((await dupe.json()).error.code).toBe('SLUG_CONFLICT');
+});
+
+// Phase A (M2/M3) — reserved (underscore-prefixed) slugs cannot be created.
+// The create zod regex `^[a-z0-9-]+$` rejects underscores at validation (422);
+// assertSlugAllowed is defense-in-depth on the FINAL resolved slug (both the
+// explicit and the auto-derived branch) so loosening that regex can never
+// silently reopen the system-workspace hijack.
+test('POST /api/v1/workspaces rejects reserved __system slug; nothing created', async () => {
+  const { app, seed, db } = await makeTestApp();
+  const res = await app.request('/api/v1/workspaces', {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Hijack', slug: '__system' }),
+  });
+  // 422 from the create regex; the explicit assertSlugAllowed guard sits below it.
+  expect([400, 422]).toContain(res.status);
+  const row = await db.query.workspaces.findFirst({
+    where: eq(workspaces.slug, '__system'),
+  });
+  expect(row).toBeUndefined();
+});
+
+// Unit-exercise the exported guard directly — this is what observably proves
+// the reserved-slug logic independent of the zod regex (the both-branches
+// final-slug assertion in the CREATE handler).
+test('assertSlugAllowed throws on reserved slugs, passes normal ones', () => {
+  expect(() => assertSlugAllowed('__system')).toThrow();
+  expect(() => assertSlugAllowed('_x')).toThrow();
+  expect(() => assertSlugAllowed('acme')).not.toThrow();
+});
+
+// M3 satisfied structurally by slug immutability — the PATCH zod schema is
+// `{ name }`-only, so a stray `slug` is stripped and the slug cannot be
+// renamed to a reserved value. Pin this contract.
+test('PATCH /api/v1/w/:wslug ignores a stray slug field; slug stays acme', async () => {
+  const { app, seed, db } = await makeTestApp();
+  const res = await app.request('/api/v1/w/acme', {
+    method: 'PATCH',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Renamed', slug: '__system' }),
+  });
+  expect(res.status).toBe(200);
+  const row = await db.query.workspaces.findFirst({
+    where: eq(workspaces.id, seed.workspace.id),
+  });
+  expect(row?.slug).toBe('acme');
 });
 
 test('GET /api/v1/workspaces/:wslug returns workspace + role', async () => {

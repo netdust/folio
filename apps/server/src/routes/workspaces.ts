@@ -11,6 +11,7 @@ import { seedBuiltinTriggers } from '../lib/builtin-triggers.ts';
 import { emitEvent, txWithEvents } from '../lib/events.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
 import { slugUniqueInWorkspaces } from '../lib/slug-unique.ts';
+import { isReservedSlug } from '../lib/system-workspace.ts';
 import { listWorkspaces } from '../services/workspaces.ts';
 import {
   type AuthContext,
@@ -19,6 +20,14 @@ import {
   requireUser,
 } from '../middleware/auth.ts';
 import { type ScopeContext, getRole, getWorkspace } from '../middleware/scope.ts';
+
+/** Throw if a slug is reserved (underscore-prefixed). Defense-in-depth beyond
+ *  the create zod regex (threat model M2/M3). Exported for unit test. */
+export function assertSlugAllowed(slug: string): void {
+  if (isReservedSlug(slug)) {
+    throw new HTTPError('RESERVED_SLUG', `slug "${slug}" is reserved`, 400);
+  }
+}
 
 const workspacesRoute = new Hono<AuthContext & ScopeContext>();
 
@@ -69,6 +78,10 @@ workspacesRoute.post(
     } else {
       slug = await slugUniqueInWorkspaces(db, baseSlug || 'workspace');
     }
+
+    // Assert the FINAL resolved slug on both branches (M2/M3) — never depend on
+    // slugify/regex behavior to keep the reserved namespace closed.
+    assertSlugAllowed(slug);
 
     await txWithEvents(db, async (tx) => {
       await tx.insert(workspaces).values({ id, slug, name });
