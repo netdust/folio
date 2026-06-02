@@ -38,7 +38,7 @@
 
 ### Mitigations required
 
-1. **D1 → `listWorkspaces` EXCLUDES `__system` from the ambient list; a SEPARATE signal exposes membership for Settings.** `listWorkspaces(userId)` filters out the workspace whose slug is `SYSTEM_WORKSPACE_SLUG` (the ambient switcher + workspace picker never show it). A small read — `isSystemMember(userId)` (or an `is_system_member` boolean on the user/session payload) — tells the client whether to show the Settings entry. A test: a `__system` member's `GET /workspaces` does NOT include `__system`; `isSystemMember` is true for them, false for a non-member.
+1. **D1 → `listWorkspaces` EXCLUDES `__system` from the ambient list; a SEPARATE signal exposes membership for Settings. CRITICAL: the exclusion must NOT break navigating INTO `__system`.** `listWorkspaces(userId)` filters out `SYSTEM_WORKSPACE_SLUG` (the ambient switcher + workspace picker never show it). A small read — `isSystemMember(userId)` (or an `is_system_member` boolean on the user/session payload) — tells the client whether to show the Settings entry. **Verified-safe invariant (ground-truthed this session, MUST hold):** `/w/:wslug` resolves its active workspace via `useWorkspace(wslug)` → `GET /api/v1/w/:wslug` (a BY-SLUG, membership-gated fetch — `w.$wslug.tsx:76`), and its "Workspace not found" guard (`w.$wslug.tsx:260`) keys on THAT, NOT on the filtered `useWorkspaces` list (which it uses only to build the switcher entries, `w.$wslug.tsx:249`). So a `__system` member navigating to `/w/__system/agents` resolves fine even though `__system` is absent from `listWorkspaces`. **The implementer MUST NOT add any list-based guard** (e.g. "redirect if wslug ∉ useWorkspaces") that would re-break this — and MUST keep the exclusion server-side in `listWorkspaces` (so it's one filtered feeder), NOT scattered as ad-hoc client filters that could diverge. Tests: (a) `listWorkspaces` for a `__system` member excludes `__system`; (b) `isSystemMember` true for a member / false otherwise; (c) **a `__system` member can navigate to `/w/__system` and the route resolves the workspace (not "not found")** — the by-slug path is independent of the filtered list.
 2. **D2 → the Settings → System Library entry renders ONLY when the authoritative membership signal is true.** The entry is gated on the server-provided `isSystemMember` (not a client guess); a non-member's settings page has no such entry. A test: the entry is absent for a non-`__system` member, present for a member.
 3. **D3 → direct access is gated SERVER-SIDE (inherited Phase A M6), and Phase D confirms it.** Navigating to `/w/__system/...` as a non-member hits the existing `resolveWorkspace` + membership gate → 403/empty (Phase A M6). Phase D adds NO new route that bypasses this; a test confirms a non-member's request for a `__system` agents/documents endpoint is 403/empty (the UI hide is convenience; the server is the control).
 4. **D4 → the cross-workspace agent picker (Phase B Task 7) exposes only the INVOKABLE NAME of a `__system` agent, never its prompt/skill body, to a non-member.** Confirm the union endpoint Phase B added returns only the agent's id/slug/name/`library:true` (the fields needed to INVOKE it), NOT its `body` (prompt) or frontmatter `system_prompt`. A test: the cross-workspace agent list a non-`__system`-member receives contains the library agent's name but NOT its body/prompt. (If Phase B already redacts this, Phase D pins it; if not, Phase D adds the redaction — flag at Task 1 ground-truth.)
@@ -64,11 +64,13 @@
 | `apps/server/src/services/workspaces.ts` | `listWorkspaces` excludes `SYSTEM_WORKSPACE_SLUG`; add `isSystemMember(userId)` (or fold an `is_system_member` flag into the session/user payload). | Modify |
 | `apps/server/src/routes/workspaces.ts` (or auth/session payload) | Expose `isSystemMember` to the client (a field on `GET /workspaces` response or the session bootstrap). | Modify |
 | `apps/web/src/lib/api/workspaces.ts` | `useWorkspaces` no longer receives `__system` (server-filtered); add an `useIsSystemMember()` (or read the flag from the session/me payload). | Modify |
-| `apps/web/src/components/settings/...` + `routes/w.$wslug.settings.tsx` | A "System Library" settings entry (gated on `isSystemMember`) that links into `/w/__system/agents` (the existing automation/agents UI). | Modify |
+| The chosen settings surface (per-workspace `routes/w.$wslug.settings.tsx`, OR a global/account settings route if one exists — Task 3 placement decision) + `components/settings/system-library-tab.tsx` | A "System Library" entry (gated on `isSystemMember`) that links into `/w/__system/agents` (the existing automation/agents UI). The library is INSTANCE-level, so prefer global/account settings; fall back to per-workspace settings if that's all that exists. | Modify |
 | `apps/web/src/components/shell/workspace-switcher.tsx` + `components/workspace-picker.tsx` | Confirm `__system` is absent (server-filtered) — likely no change beyond a test, OR a defensive client filter. | Modify (likely test-only) |
 | Tests per file | TDD | Create |
 
-> **Open ground-truth the implementer MUST resolve in Task 1:** (a) confirm `listWorkspaces` (`services/workspaces.ts:13`) is the SOLE feeder of the switcher + workspace picker (so filtering there covers all ambient surfaces); (b) where to put the `isSystemMember` signal (a field on `GET /workspaces`, the session `me` payload, or a tiny dedicated endpoint — pick the one the client already fetches at boot); (c) confirm the Phase-B cross-workspace agent-union endpoint returns only invokable fields (name/slug/id/library), NOT the agent body/prompt (D4 — redact if not); (d) the settings-tab registration pattern (`components/settings/*-tab.tsx` + the `Tabs` in `w.$wslug.settings.tsx`) — to add the System Library entry; (e) does the System Library entry NAVIGATE to `/w/__system/agents` (the existing page) or EMBED it? Recommended: navigate (reuse the existing route + page wholesale; `__system` is a normal workspace so its `/w/__system/agents` route already works for a member).
+> **VERIFIED THIS SESSION (the load-bearing D1 invariant — confirm still true at HEAD, build to it):** `/w/:wslug` resolves its workspace via `useWorkspace(wslug)` → `GET /api/v1/w/:wslug` (BY-SLUG, membership-gated, `w.$wslug.tsx:76`), and the "Workspace not found" guard (`w.$wslug.tsx:260`) keys on THAT by-slug result — NOT on `useWorkspaces` (the list, used only for the switcher entries at `w.$wslug.tsx:249`). So filtering `__system` out of `listWorkspaces` does NOT break navigating into `/w/__system`. **Do NOT add a list-based "redirect if wslug ∉ useWorkspaces" guard.**
+>
+> **Open ground-truth the implementer MUST resolve in Task 1:** (a) confirm `listWorkspaces` (`services/workspaces.ts:13`) is the SOLE feeder of the switcher + workspace picker (so filtering there covers all ambient surfaces) AND re-confirm the by-slug navigation invariant above at HEAD; (b) where to put the `isSystemMember` signal (a field on `GET /workspaces`, the session `me` payload, or a tiny dedicated endpoint — pick the one the client already fetches at boot); (c) confirm the Phase-B cross-workspace agent-union endpoint returns only invokable fields (name/slug/id/library), NOT the agent body/prompt (D4 — redact if not); (d) the settings-tab registration pattern (`components/settings/*-tab.tsx` + the `Tabs` in `w.$wslug.settings.tsx`) — to add the System Library entry; (e) does the System Library entry NAVIGATE to `/w/__system/agents` (the existing page) or EMBED it? Recommended: navigate (reuse the existing route + page wholesale; `__system` is a normal workspace so its `/w/__system/agents` route already works for a member).
 
 ---
 
@@ -97,11 +99,22 @@ test('listWorkspaces excludes __system from the ambient list (D1)', async () => 
 test('isSystemMember is true for a __system member, false otherwise (D1)', async () => {
   // a __system member → true; a user with no __system membership → false
 });
+
+test('GET /api/v1/w/__system still resolves the workspace for a member (filter does not break navigation) (D1)', async () => {
+  // the by-slug detail fetch (what /w/__system route uses) must still return the workspace for a
+  // __system MEMBER even though listWorkspaces excludes it — proving the exclusion is switcher-only,
+  // not a reachability filter. (A non-member still gets 403/empty — that's D3.)
+  const { app, db, seed } = await makeTestApp();
+  await bootstrapSystemWorkspace(db);
+  await grantOwner(db, /* seed user's email */);
+  const res = await app.request(`/api/v1/w/${SYSTEM_WORKSPACE_SLUG}`, { headers: { Cookie: seed.sessionCookie } });
+  expect(res.status).toBe(200); // by-slug resolves; navigation into the library works
+});
 ```
 
 - [ ] **Step 3: Run to verify fail** — FAIL.
 
-- [ ] **Step 4: Implement** — in `listWorkspaces`, add a `where` clause excluding `workspaces.slug = SYSTEM_WORKSPACE_SLUG` (the ambient list never includes it). Add `isSystemMember(userId): Promise<boolean>` — a findFirst on `(memberships.userId = userId AND the workspace is __system)`. (Import `SYSTEM_WORKSPACE_SLUG` from Phase A's `lib/system-workspace.ts`.)
+- [ ] **Step 4: Implement** — in `listWorkspaces`, add a `where` clause excluding `workspaces.slug = SYSTEM_WORKSPACE_SLUG` (the ambient list never includes it). Add `isSystemMember(userId): Promise<boolean>` — a findFirst on `(memberships.userId = userId AND the workspace is __system)`. (Import `SYSTEM_WORKSPACE_SLUG` from Phase A's `lib/system-workspace.ts`.) **Do NOT touch the by-slug `GET /w/:wslug` detail route or `getWorkspace` — the exclusion is ONLY in `listWorkspaces` (the ambient list), so navigation by-slug into `__system` stays intact (the navigation test above pins this).**
 
 - [ ] **Step 5: Run to verify pass + tsc** — PASS + clean.
 
@@ -147,15 +160,19 @@ git commit -m "phase-D: expose server-authoritative is_system_member to the clie
 
 ---
 
-## Task 3: The Settings → System Library entry (member-gated, links into the library)
+## Task 3: The System Library entry (member-gated, links into the library)
 
 **Mitigations: D2.**
 
-**Files:**
-- Modify: `apps/web/src/routes/w.$wslug.settings.tsx` + a small `components/settings/system-library-tab.tsx` (or a link entry)
-- Test: `apps/web/src/routes/w.$wslug.settings.test.tsx`
+> **PLACEMENT DECISION (resolve in Step 1):** the System Library is an INSTANCE-level surface (one library for the whole instance), but Folio's existing Settings is PER-WORKSPACE (`/w/:wslug/settings`). Putting an instance-level entry inside per-workspace settings is a slight mismatch — it would render on EVERY workspace's settings (gated on `isSystemMember`), which is acceptable (a member sees it everywhere they go) but conceptually odd. Ground-truth whether an ACCOUNT/GLOBAL settings surface exists (e.g. a `/settings` or `/account` route, a user-menu, a profile page). **Prefer global/account settings if one exists**; if Folio has ONLY per-workspace settings today, place it there (gated on `isSystemMember`) for v1 and note the "move to global settings when an account-settings surface lands" as a follow-up — do NOT build a new account-settings shell just for this entry. State the chosen placement + rationale in a comment.
 
-- [ ] **Step 1: Write the failing test** — the System Library entry is PRESENT in settings for a `__system` member, ABSENT for a non-member; clicking it navigates to `/w/__system/agents`.
+**Files:**
+- Modify: the chosen settings surface (`apps/web/src/routes/w.$wslug.settings.tsx` per-workspace, OR a global/account settings route if one exists) + a small `components/settings/system-library-tab.tsx` (or a link entry)
+- Test: the corresponding settings test file
+
+- [ ] **Step 1: Ground-truth the placement** — does an account/global settings surface exist? Pick per the PLACEMENT DECISION above; record the choice + why.
+
+- [ ] **Step 2: Write the failing test** — the System Library entry is PRESENT in settings for a `__system` member, ABSENT for a non-member; clicking it navigates to `/w/__system/agents`.
 
 ```typescript
 test('Settings shows a System Library entry only to a __system member (D2)', () => {
@@ -166,17 +183,17 @@ test('the System Library entry links to the __system agents/automation page', ()
 });
 ```
 
-- [ ] **Step 2: Run to verify fail** — FAIL.
+- [ ] **Step 3: Run to verify fail** — FAIL.
 
-- [ ] **Step 3: Implement** — add a "System Library" entry to the settings surface (a tab or a link section), rendered ONLY when `useIsSystemMember()` is true. It NAVIGATES to `/w/__system/agents` (the existing `workspace-automation-page` — agents | triggers tabs — which already works for `__system` as a normal workspace; the Skills/Reference docs are reachable via that workspace's wiki/document views). Do NOT build a new management UI — reuse the existing per-workspace surfaces pointed at `__system`. A short intro line ("Curate the agents, triggers, and skills available across all workspaces") + the link.
+- [ ] **Step 4: Implement** — add a "System Library" entry to the chosen settings surface (a tab or a link section), rendered ONLY when `useIsSystemMember()` is true. It NAVIGATES to `/w/__system/agents` (the existing `workspace-automation-page` — agents | triggers tabs — which already works for `__system` as a normal workspace; the Skills/Reference docs are reachable via that workspace's wiki/document views). Do NOT build a new management UI — reuse the existing per-workspace surfaces pointed at `__system`. A short intro line ("Curate the agents, triggers, and skills available across all workspaces") + the link.
 
-- [ ] **Step 4: Run to verify pass + tsc** — PASS + clean.
+- [ ] **Step 5: Run to verify pass + tsc** — PASS + clean.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add apps/web/src/routes/w.$wslug.settings.tsx apps/web/src/components/settings/system-library-tab.tsx apps/web/src/routes/w.$wslug.settings.test.tsx
-git commit -m "phase-D: Settings → System Library entry, member-gated, links into the library UI (D2)"
+git add apps/web/src/... apps/web/src/components/settings/system-library-tab.tsx <the settings test file>
+git commit -m "phase-D: System Library settings entry, member-gated, links into the library UI (D2)"
 ```
 
 ---
@@ -252,7 +269,10 @@ git commit -m "phase-D: cross-workspace agent list exposes invokable fields only
 - [ ] **Step 1: Full suites** — server (`cd apps/server && bun test`, 0 fail), shared, web (`npx vitest run`). tsc per app.
 - [ ] **Step 2: A manual/headless walk-through** — as a `__system` member: Settings shows System Library → click → land on `/w/__system/agents` → see/edit the operator agent, the skills, the reference docs. As a non-member: no System Library entry, `__system` absent from the switcher, direct `/w/__system/...` is 403/empty.
 - [ ] **Step 3: `/integration`** then `/code-review` (medium — UI + one server filter; D1–D4 as input), then merge. **This completes the cross-workspace operator (A→D); merge the full arc to main if not already.**
-- [ ] **Step 4: Commit** any gate-fix; `/evaluate` the A→D arc (the operator build's close-out retro).
+- [ ] **Step 4: Commit** any gate-fix; run **`/evaluate` on the A→D arc** (the operator build's close-out retro). The retro MUST produce, as EXPLICIT named outputs (not "consider later"):
+  1. **Orchestration-layer reconciliation — a VERDICT, not a deferral.** The cross-workspace operator (A→D) introduced a new orchestration layer (`__system` library + cross-workspace resolution + the fired-path floor) that overlaps earlier operator machinery and the DROPPED seeded-bot model (tag `archive/phase-op-3-seeded-bot`). For EACH overlapping piece, the retro records ONE of: **(a) SUPERSEDED → delete** (name the files/commits/tag to remove), or **(b) KEPT-SEPARATE because X** (name the reason it coexists). Specifically reconcile: the archived seeded-bot tag (delete the tag once A→D is merged + proven? or keep as historical trace?); any `seedOperator`/`folio_system`/0021-backfill remnants (should be fully gone post-reset — confirm none leaked back); the relationship between the operator's `folio_api` surface and the pre-existing MCP/agent-tools surface (one tool registry, two faces — confirm still true). Output: a reconciliation table in the retro. Without this, the dead layer lingers indefinitely.
+  2. The carried follow-ups disposition (OP-LIB-1, OP3-F1, the fired-path LOW residual) — keep / close / re-scope.
+  3. The wrong-model-reset lesson (already in memory `project_operator-is-an-agent-not-a-seeded-bot`) — confirm captured + any process change (e.g. "verify the agent can RUN end-to-end before declaring a phase done" — the gap the final review caught).
 
 ---
 
@@ -264,7 +284,9 @@ git commit -m "phase-D: cross-workspace agent list exposes invokable fields only
 
 **Type consistency:** `SYSTEM_WORKSPACE_SLUG` (Phase A), `isSystemMember(userId)` / `is_system_member` / `useIsSystemMember()`, the existing `/w/:wslug/agents` route reused for `__system` — consistent. No new agent/run/auth types.
 
-**Biggest risk flagged:** D4 (the cross-workspace agent list leaking the prompt/skill body to a non-member) is the only real CONTENT-leak risk — verify the Phase-B union endpoint projects invokable fields only (redact if not). Everything else is visibility-hiding (D1/D2) over a server boundary that already holds (D3, Phase A M6) — the UI hide must never be mistaken for the control.
+**The three pre-dispatch review fixes (Stefan) are baked in:** (1) the D1 filter is switcher/list-ONLY — navigation into `/w/__system` uses the by-slug `useWorkspace`/`GET /w/:wslug` (membership-gated), NOT the filtered list; a navigation-resolves test pins it and the impl note forbids a list-based redirect guard; (2) the orchestration-layer reconciliation is now an EXPLICIT named output of the A→D `/evaluate` close-out (a verdict per overlapping piece: superseded→delete or kept-separate-because-X), not an indefinite deferral; (3) the System Library entry's placement is flagged as an instance-level-surface-in-per-workspace-settings mismatch — Task 3 ground-truths whether a global/account settings surface exists and prefers it.
+
+**Biggest risk flagged:** D4 (the cross-workspace agent list leaking the prompt/skill body to a non-member) is the only real CONTENT-leak risk — verify the Phase-B union endpoint projects invokable fields only (redact if not). The D1-filter-breaks-navigation trap (fix #1) is the subtlest correctness risk — the filter must be switcher-only; the navigation test guards it. Everything else is visibility-hiding over a server boundary that already holds (D3, Phase A M6) — the UI hide must never be mistaken for the control.
 
 ---
 
