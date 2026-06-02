@@ -27,6 +27,7 @@ import {
   apiTokens,
   documents,
   tables,
+  workspaces as schemaWorkspaces,
 } from '../db/schema.ts';
 import { env } from '../env.ts';
 import { makeTestApp } from '../test/harness.ts';
@@ -36,6 +37,7 @@ import { newApiToken } from './auth.ts';
 import { seedBuiltinTriggers } from './builtin-triggers.ts';
 import { eventBus } from './event-bus.ts';
 import type { BusEvent } from './event-bus.ts';
+import { SYSTEM_WORKSPACE_SLUG, bootstrapSystemWorkspace } from './system-workspace.ts';
 import { triggerMatcher } from './trigger-matcher.ts';
 
 type TestDB = Awaited<ReturnType<typeof makeTestApp>>['db'];
@@ -907,4 +909,119 @@ test('resume_run resolves a PREFIXED target_agent (agent:<slug>) and creates the
   });
   expect(resumeRow).toBeTruthy();
   expect((resumeRow?.frontmatter as Record<string, unknown>).resume_of).toBe(originalId);
+});
+
+// ----- Phase C C1: home-predicate slug resolution {eventWs, __system} -----
+//
+// Phase A built a reserved `__system` library workspace; Phase B made library
+// agents (e.g. the operator) runnable against any customer workspace B via the
+// home predicate `home ∈ {run-ws, __system}` (resolveAgentForRun). C1 extends
+// that predicate into the trigger-matcher: a B trigger naming a `__system`
+// library agent by slug must FIRE it (local-shadows-library), while a slug that
+// exists only in a THIRD workspace C must NOT resolve (fail-closed).
+
+/** Bootstrap `__system` and return its Workspace row (for seeding library agents). */
+async function bootstrapSystem(db: TestDB): Promise<Workspace> {
+  await bootstrapSystemWorkspace(db);
+  const sys = await db.query.workspaces.findFirst({
+    where: eq(schemaWorkspaces.slug, SYSTEM_WORKSPACE_SLUG),
+  });
+  if (!sys) throw new Error('test setup: __system did not bootstrap');
+  return sys;
+}
+
+/** Seed a bare (third) workspace C — no membership, no projects. */
+async function seedWorkspaceC(db: TestDB): Promise<Workspace> {
+  const id = nanoid();
+  await db.insert(schemaWorkspaces).values({ id, slug: `c-${nanoid(6)}`, name: 'Workspace C' });
+  const row = await db.query.workspaces.findFirst({ where: eq(schemaWorkspaces.id, id) });
+  if (!row) throw new Error('test setup: workspace C insert did not round-trip');
+  return row;
+}
+
+test('a B trigger targeting a __system library agent by slug FIRES it (C1)', async () => {
+  const { db, seed } = await makeTestApp();
+  // B has its builtin-on-assignment trigger (agent: '$event.agent') but NO local 'ops'.
+  await seedTriggers(db, seed.workspace.id, seed.user.id);
+  // __system holds the library agent 'ops' (home = __system).
+  const sys = await bootstrapSystem(db);
+  const libraryAgent = await seedAgent(db, sys, seed.user, 'ops');
+  const wiTable = await getWorkItemsTable(db, seed.project.id);
+  const wi = await seedWorkItem(db, seed.workspace, seed.project, wiTable, seed.user);
+
+  // Drive the triggering event in B as a HUMAN. fm.agent='$event.agent' →
+  // payload.agent='ops' → resolves the __system library agent via the home predicate.
+  await triggerMatcher.react(
+    assignmentEvent({
+      seed,
+      workItem: wi,
+      agentSlug: 'ops',
+      agentId: libraryAgent.id,
+      actor: seed.user.id,
+    }),
+  );
+
+  expect(await countRuns(db, wi.id, 'ops')).toBe(1);
+  const run = await db.query.documents.findFirst({
+    where: and(eq(documents.type, 'agent_run'), eq(documents.parentId, wi.id)),
+  });
+  expect(run?.status).toBe('planning');
+  // The run is home-stamped to __system (the resolved agent's home workspace).
+  expect((run?.frontmatter as Record<string, unknown>).agent_home_workspace_id).toBe(sys.id);
+});
+
+test('a B-LOCAL agent of the same slug SHADOWS the library agent (local wins — C1)', async () => {
+  const { db, seed } = await makeTestApp();
+  await seedTriggers(db, seed.workspace.id, seed.user.id);
+  // Both __system and B define 'ops'. Local (B) must win.
+  const sys = await bootstrapSystem(db);
+  await seedAgent(db, sys, seed.user, 'ops');
+  const localAgent = await seedAgent(db, seed.workspace, seed.user, 'ops');
+  const wiTable = await getWorkItemsTable(db, seed.project.id);
+  const wi = await seedWorkItem(db, seed.workspace, seed.project, wiTable, seed.user);
+
+  await triggerMatcher.react(
+    assignmentEvent({
+      seed,
+      workItem: wi,
+      agentSlug: 'ops',
+      agentId: localAgent.id,
+      actor: seed.user.id,
+    }),
+  );
+
+  expect(await countRuns(db, wi.id, 'ops')).toBe(1);
+  const run = await db.query.documents.findFirst({
+    where: and(eq(documents.type, 'agent_run'), eq(documents.parentId, wi.id)),
+  });
+  // Resolved the B-LOCAL agent → home-stamped to B, NOT __system.
+  expect((run?.frontmatter as Record<string, unknown>).agent_home_workspace_id).toBe(
+    seed.workspace.id,
+  );
+  expect((run?.frontmatter as Record<string, unknown>).agent_home_workspace_id).not.toBe(sys.id);
+});
+
+test('a slug that exists ONLY in a third workspace C does NOT resolve → no run (C1)', async () => {
+  const { db, seed } = await makeTestApp();
+  await seedTriggers(db, seed.workspace.id, seed.user.id);
+  // __system exists but has no 'ops'; the only 'ops' lives in a third workspace C.
+  await bootstrapSystem(db);
+  const wsC = await seedWorkspaceC(db);
+  const cAgent = await seedAgent(db, wsC, seed.user, 'ops');
+  const wiTable = await getWorkItemsTable(db, seed.project.id);
+  const wi = await seedWorkItem(db, seed.workspace, seed.project, wiTable, seed.user);
+
+  // B trigger fires for 'ops', but it resolves only against {B, __system} — C is
+  // outside the home predicate → resolveAgentForRun returns undefined → no run.
+  await triggerMatcher.react(
+    assignmentEvent({
+      seed,
+      workItem: wi,
+      agentSlug: 'ops',
+      agentId: cAgent.id,
+      actor: seed.user.id,
+    }),
+  );
+
+  expect(await countRuns(db, wi.id, 'ops')).toBe(0);
 });

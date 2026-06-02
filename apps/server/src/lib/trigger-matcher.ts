@@ -42,6 +42,7 @@ import {
   transitionRun,
 } from '../services/agent-runs.ts';
 import { resolveAgentProjects } from './agent-projects.ts';
+import { findSystemWorkspaceId, resolveAgentForRun } from './system-workspace.ts';
 import type { AgentRunFrontmatter } from './agent-run-schema.ts';
 import type { BusEvent } from './event-bus.ts';
 import type { Reactor } from './event-dispatcher.ts';
@@ -221,20 +222,27 @@ async function resolveTargetAgentSlug(
   workspaceId: string,
   payload: Record<string, unknown>,
 ): Promise<string | undefined> {
+  // Home predicate {eventWs, __system}, local-shadows-library — Phase C C1;
+  // reuses Phase B resolveAgentForRun. The id-handle branch resolves by doc id
+  // (immutable, survives renames) but must assert the resolved agent's home ∈
+  // {eventWs, __system} so a comment can't reach an agent in a THIRD workspace.
   const targetAgentId =
     typeof payload.target_agent_id === 'string' ? payload.target_agent_id : undefined;
   if (targetAgentId) {
     const agentDoc = await db.query.documents.findFirst({
-      where: and(
-        eq(documents.id, targetAgentId),
-        eq(documents.workspaceId, workspaceId),
-        eq(documents.type, 'agent'),
-      ),
+      where: and(eq(documents.id, targetAgentId), eq(documents.type, 'agent')),
     });
-    if (agentDoc) return agentDoc.slug;
+    if (agentDoc) {
+      const systemId = await findSystemWorkspaceId(db); // undefined when __system unseeded
+      if (agentDoc.workspaceId === workspaceId || agentDoc.workspaceId === systemId) {
+        return agentDoc.slug;
+      }
+    }
   }
   const raw = typeof payload.target_agent === 'string' ? payload.target_agent : undefined;
-  return raw ? normalizeAgentSlug(raw) : undefined;
+  if (!raw) return undefined;
+  const agent = await resolveAgentForRun(db, workspaceId, normalizeAgentSlug(raw));
+  return agent?.slug;
 }
 
 async function handleInternalAction(action: string, event: ReactorEvent): Promise<void> {
@@ -315,14 +323,11 @@ async function handleResumeRun(
     return;
   }
 
-  // Resolve the agent doc within the event's workspace.
-  const agent = await db.query.documents.findFirst({
-    where: and(
-      eq(documents.workspaceId, workspaceId),
-      eq(documents.type, 'agent'),
-      eq(documents.slug, agentSlug),
-    ),
-  });
+  // Resolve the agent doc under the home predicate {eventWs, __system},
+  // local-shadows-library — Phase C C1; reuses Phase B resolveAgentForRun. A
+  // resume of a __system library agent's run resolves the same way the fresh
+  // path does.
+  const agent = await resolveAgentForRun(db, workspaceId, agentSlug);
   if (!agent) {
     console.log(`[trigger-matcher] resume_run: agent '${agentSlug}' not found; skipping`);
     return;
@@ -412,16 +417,12 @@ async function maybeCreateRun(
   const parentId = resolveParentId(event);
   if (!parentId) return;
 
-  // 2. Resolve the agent doc by slug within the event's workspace. An
-  //    unresolved slug is a legitimate UX (a human typed a speculative slug);
-  //    just don't fire.
-  const agent = await db.query.documents.findFirst({
-    where: and(
-      eq(documents.workspaceId, workspaceId),
-      eq(documents.type, 'agent'),
-      eq(documents.slug, agentSlug),
-    ),
-  });
+  // 2. Resolve the agent doc by slug under the home predicate {eventWs,
+  //    __system}, local-shadows-library — Phase C C1; reuses Phase B
+  //    resolveAgentForRun. A B trigger can thus fire a __system library agent
+  //    (e.g. the operator); a B-local agent of the same slug wins. An unresolved
+  //    slug is legitimate UX (a human typed a speculative slug) — just don't fire.
+  const agent = await resolveAgentForRun(db, workspaceId, agentSlug);
   if (!agent) return;
 
   // 3. Allow-list (mitigation 50). Reuse the canonical `resolveAgentProjects`
