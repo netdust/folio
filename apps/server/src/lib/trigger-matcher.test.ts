@@ -1213,3 +1213,179 @@ test('the fired library-agent run is still caller-bounded in B (C2 → inherited
   expect(fm.caller_scopes).toEqual(roleToScopes(role));
   expect(fm.caller_project_ids).toEqual(callerProjectsFor({ role, projectIds: memberProjectIds }));
 });
+
+// ----- Phase C C4/C5/C6: autonomy-gate suppression + caller resolution +
+// forbid caller-less library targets, on the cross-workspace fired path -----
+//
+// C4 (autonomy gate, UNCHANGED): an agent-ORIGINATED event targeting a library
+//     agent is RESOLVED first (home predicate + C2 allow-list skip), THEN
+//     suppressed by the autonomy gate — proving the gate covers the
+//     library→library cross-workspace chain hop, not just local agents.
+// C5 (caller resolution, UNCHANGED): a HUMAN-caused trigger fires a library
+//     agent OWNED by that human (createdBy === the event-human's user id), never
+//     a system actor and never the agent itself.
+// C6 (NEW guard): a caller-less trigger (event.actor resolves to no human) must
+//     NOT fire a library agent — a library run with no caller has no authority
+//     bound (Phase B: a library agent's authority is the caller's, sole), so it
+//     would be unbounded. The C6 guard skips it EARLY (before the autonomy gate),
+//     making the library-specific invariant explicit and resistant to a future
+//     loosening of the general step-6 owner guard.
+
+test('a LIBRARY agent output firing ANOTHER library agent is suppressed with chains off (C4)', async () => {
+  const { db, seed } = await makeTestApp();
+  (env as Record<string, unknown>)[flagKey] = false; // default; explicit for clarity
+  await seedTriggers(db, seed.workspace.id, seed.user.id);
+  // __system holds the target library agent 'ops' (home = __system).
+  const sys = await bootstrapSystem(db);
+  const libraryAgent = await seedAgent(db, sys, seed.user, 'ops');
+  const wiTable = await getWorkItemsTable(db, seed.project.id);
+  const wi = await seedWorkItem(db, seed.workspace, seed.project, wiTable, seed.user);
+
+  const suppressed: string[] = [];
+  const unsub = eventBus.subscribe(seed.workspace.id, undefined, (e) => {
+    if (e.kind === 'agent.chain.suppressed') suppressed.push(e.kind);
+  });
+  // actor = 'agent:<another library agent>' → agent-originated. The event
+  // targets the library agent 'ops'; resolution + the C2 allow-list skip both
+  // succeed, then the autonomy gate suppresses the cross-workspace chain hop.
+  await triggerMatcher.react(
+    assignmentEvent({
+      seed,
+      workItem: wi,
+      agentSlug: 'ops',
+      agentId: libraryAgent.id,
+      actor: 'agent:librarian',
+    }),
+  );
+  unsub();
+
+  // Zero runs created; exactly one suppression signal (the gate ran AFTER
+  // resolution and suppressed — it did not silently drop pre-resolution).
+  expect(await countRuns(db, wi.id, 'ops')).toBe(0);
+  expect(suppressed.length).toBe(1);
+});
+
+test('a trigger-fired library-agent run uses the event-human as caller, not a system actor (C5)', async () => {
+  const { db, seed } = await makeTestApp();
+  await seedTriggers(db, seed.workspace.id, seed.user.id);
+  // Library agent in __system; the firing event is caused by a real human (an
+  // OWNER of B). The fired run must be OWNED by that human — not a 'system:'
+  // actor (which would violate the documents.created_by → users.id FK) and not
+  // the agent. (The caller_scopes angle is pinned by the C2→B5 test above; here
+  // we pin createdBy distinctly to C5.)
+  const sys = await bootstrapSystem(db);
+  const libraryAgent = await seedAgent(db, sys, seed.user, 'ops');
+  const wiTable = await getWorkItemsTable(db, seed.project.id);
+  const wi = await seedWorkItem(db, seed.workspace, seed.project, wiTable, seed.user);
+
+  await triggerMatcher.react(
+    assignmentEvent({
+      seed,
+      workItem: wi,
+      agentSlug: 'ops',
+      agentId: libraryAgent.id,
+      actor: seed.user.id, // a real users.id (session path)
+    }),
+  );
+
+  expect(await countRuns(db, wi.id, 'ops')).toBe(1);
+  const run = await db.query.documents.findFirst({
+    where: and(eq(documents.type, 'agent_run'), eq(documents.parentId, wi.id)),
+  });
+  // The caller is the event-human (resolveOwnerUser(event.actor)), NOT a
+  // system actor and NOT the agent.
+  expect(run?.createdBy).toBe(seed.user.id);
+});
+
+test('a caller-less (actor-less / agent-only) trigger does NOT fire a library agent (C6)', async () => {
+  const { db, seed } = await makeTestApp();
+  (env as Record<string, unknown>)[flagKey] = false;
+  await seedTriggers(db, seed.workspace.id, seed.user.id);
+  // __system holds the target library agent 'ops'.
+  const sys = await bootstrapSystem(db);
+  const libraryAgent = await seedAgent(db, sys, seed.user, 'ops');
+  const wiTable = await getWorkItemsTable(db, seed.project.id);
+  const wi = await seedWorkItem(db, seed.workspace, seed.project, wiTable, seed.user);
+
+  const suppressed: string[] = [];
+  const unsub = eventBus.subscribe(seed.workspace.id, undefined, (e) => {
+    if (e.kind === 'agent.chain.suppressed') suppressed.push(e.kind);
+  });
+
+  // ISOLATION: to prove the C6 guard (not the autonomy gate, not the step-6
+  // owner guard) is what skips, the actor is a NON-agent, UNRESOLVABLE id — it
+  // does NOT start with 'agent:' (so isAgentOriginated is false → the autonomy
+  // gate does NOT fire and emits NO agent.chain.suppressed) and it resolves to
+  // no users.id and no human PAT (so resolveOwnerUser → null). With chains OFF,
+  // a non-agent unresolvable actor reaches the C6 guard, which skips because no
+  // human caller resolves behind a library target → an unbounded library run is
+  // forbidden. (Scheduled/cron — Phase 3.5 — is the canonical caller-less case;
+  // this stand-in models any actor-less / unresolvable-actor event.)
+  //
+  // The step-6 owner guard ALSO skips a caller-less run (defense-in-depth), so a
+  // bare "no run" assertion can't distinguish the two paths. We capture console
+  // logs and assert the EARLY, LIBRARY-SPECIFIC C6 message fired — the only
+  // signal that proves the C6 guard (not step-6) made the call. This is the
+  // assertion that goes RED before the guard exists.
+  const logs: string[] = [];
+  const origLog = console.log;
+  console.log = (...args: unknown[]) => {
+    logs.push(args.map(String).join(' '));
+  };
+  try {
+    await triggerMatcher.react(
+      assignmentEvent({
+        seed,
+        workItem: wi,
+        agentSlug: 'ops',
+        agentId: libraryAgent.id,
+        actor: `ghost-${nanoid(8)}`, // non-agent, unresolvable
+      }),
+    );
+  } finally {
+    console.log = origLog;
+  }
+  unsub();
+
+  // C6: no run created for the library target.
+  expect(await countRuns(db, wi.id, 'ops')).toBe(0);
+  // And it was a PLAIN skip, not an autonomy suppression — proving the gate did
+  // NOT fire.
+  expect(suppressed.length).toBe(0);
+  // The EARLY C6 guard logged its library-specific skip. This is what fails
+  // before the guard exists (step-6 logs a different, generic message).
+  expect(logs.some((l) => l.includes('no resolvable human caller') && l.includes('C6'))).toBe(true);
+});
+
+test('the same caller-less trigger targeting a LOCAL agent is also a plain no-run (C6 — local unchanged)', async () => {
+  const { db, seed } = await makeTestApp();
+  (env as Record<string, unknown>)[flagKey] = false;
+  await seedTriggers(db, seed.workspace.id, seed.user.id);
+  // A B-LOCAL agent (NOT a library agent). The C6 guard does NOT apply to local
+  // agents; the EXISTING step-6 owner guard skips a caller-less run for them
+  // too, so behavior is unchanged: no run, no suppression.
+  await bootstrapSystem(db); // forces isLibraryAgent through the real comparison
+  const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+  const wiTable = await getWorkItemsTable(db, seed.project.id);
+  const wi = await seedWorkItem(db, seed.workspace, seed.project, wiTable, seed.user);
+
+  const suppressed: string[] = [];
+  const unsub = eventBus.subscribe(seed.workspace.id, undefined, (e) => {
+    if (e.kind === 'agent.chain.suppressed') suppressed.push(e.kind);
+  });
+  await triggerMatcher.react(
+    assignmentEvent({
+      seed,
+      workItem: wi,
+      agentSlug: 'helper',
+      agentId: agent.id,
+      actor: `ghost-${nanoid(8)}`, // non-agent, unresolvable
+    }),
+  );
+  unsub();
+
+  // Local agent: step-6 owner guard skips a caller-less run → no run, no
+  // suppression (unchanged by C6).
+  expect(await countRuns(db, wi.id, 'helper')).toBe(0);
+  expect(suppressed.length).toBe(0);
+});

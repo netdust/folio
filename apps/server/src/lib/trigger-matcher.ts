@@ -447,9 +447,41 @@ async function maybeCreateRun(
     }
   }
 
-  // 4. Autonomy gate (mitigation 51). With the flag OFF, an agent-originated
-  //    event creates ZERO runs and emits exactly one durable
-  //    `agent.chain.suppressed`. Human-originated events fall through.
+  // C6 — a LIBRARY agent's authority is the caller's, sole (Phase B). A
+  // caller-less trigger (no resolvable human behind event.actor) would leave a
+  // library run unbounded — so forbid library targets when no human caller
+  // resolves. LOCAL agents keep their existing owner-guard behavior (step 6).
+  // (Scheduled/cron triggers — Phase 3.5 — are the canonical caller-less case;
+  // any actor-less or agent-only event is caught here for a library target.)
+  // Defense-in-depth: the general owner guard at step 6 ALSO skips a caller-less
+  // run, but C6 makes the library-specific invariant EXPLICIT and EARLY, so a
+  // future loosening of step 6 can't silently let an unbounded caller-less
+  // library run through. The double resolveOwnerUser call (here + step 6) is
+  // acceptable — gated behind a matched trigger fire, small indexed lookups.
+  //
+  // C6 deliberately EXCLUDES agent-originated events: those are the autonomy
+  // gate's domain (C4 — they must be SUPPRESSED with a durable
+  // agent.chain.suppressed signal, not silently skipped here). An `agent:` actor
+  // never resolves to a human, so without this exclusion C6 would shadow the
+  // gate and swallow the suppression signal. C6 thus targets the genuinely
+  // caller-less, NON-agent case (actor-less / unresolvable human — the Phase 3.5
+  // scheduled/cron shape).
+  if (isLibraryAgent && !isAgentOriginated(event)) {
+    const caller = await resolveOwnerUser(event.actor);
+    if (!caller) {
+      console.log(
+        `[trigger-matcher] library agent '${agent.slug}' target has no resolvable human caller; skipping (a caller-less library run would be unbounded — C6)`,
+      );
+      return;
+    }
+  }
+
+  // 4. Autonomy gate (mitigation 51). ORDER: resolve → allow-list → gate. The
+  //    gate runs AFTER resolution and SUPPRESSES an agent-originated event
+  //    (emits agent.chain.suppressed, zero runs) — it is NOT a pre-resolution
+  //    filter. Correct because no run is created; do not reorder. With the flag
+  //    OFF, an agent-originated event creates ZERO runs and emits exactly one
+  //    durable `agent.chain.suppressed`. Human-originated events fall through.
   if (isAgentOriginated(event) && !env.FOLIO_AGENT_CHAINS_ENABLED) {
     await emitChainSuppressed(db, {
       workspaceId,
