@@ -40,6 +40,7 @@ import { listComments } from '../services/comments.ts';
 import {
   SYSTEM_WORKSPACE_SLUG,
   bootstrapSystemWorkspace,
+  getSystemWorkspaceId,
 } from '../lib/system-workspace.ts';
 import { makeTestApp } from '../test/harness.ts';
 
@@ -854,6 +855,44 @@ test('retry a terminal run creates a fresh planning run → 201 (m63 happy)', as
 
   const runs = await db.query.documents.findMany({ where: eq(documents.type, 'agent_run') });
   expect(runs.length).toBe(2);
+});
+
+test('retry of a __system library-agent run re-resolves the library agent (not 404) (B1, retry path)', async () => {
+  // A library-agent run lives in B but its agent is in __system. The retry path
+  // must re-resolve the agent through resolveAgentForRun (home ∈ {ws, __system}),
+  // not eq(workspaceId, ws.id) only. RED before the fix: AGENT_NOT_FOUND 404.
+  const { app, db, seed } = await makeTestApp();
+  await bootstrapSystemWorkspace(db);
+  const systemId = await getSystemWorkspaceId(db);
+  const systemWs = (await db.query.workspaces.findFirst({
+    where: eq(workspaces.id, systemId),
+  }))!;
+  const table = await getWorkItemsTable(db, seed.project.id);
+  const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+  // The agent is a __system library agent, created with the run's owner (FK-valid).
+  const { agent } = await seedAgent(db, systemWs, seed.user, 'operator');
+  // createRun (B's create path) stamps the run's agent_home_workspace_id = __system.
+  const run = await seedRun(db, seed.workspace, seed.project, agent, seed.user, parent);
+  expect((run.frontmatter as Record<string, unknown>).agent_home_workspace_id).toBe(systemId);
+  // Terminalize so idempotency doesn't block the retry.
+  await db
+    .update(documents)
+    .set({
+      status: 'failed',
+      frontmatter: { ...(run.frontmatter as Record<string, unknown>), status: 'failed' },
+    })
+    .where(eq(documents.id, run.id));
+
+  const res = await app.request(`/api/v1/w/acme/runs/${run.id}/retry`, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie },
+  });
+  expect(res.status).toBe(201);
+  const { data } = await res.json();
+  expect(data.status).toBe('planning');
+  // The fresh run re-stamps the library agent's home.
+  const fresh = await db.query.documents.findFirst({ where: eq(documents.id, data.run_id) });
+  expect((fresh!.frontmatter as Record<string, unknown>).agent_home_workspace_id).toBe(systemId);
 });
 
 test('retry while original still active → 409 RUN_ALREADY_ACTIVE (m63)', async () => {

@@ -1819,13 +1819,10 @@ export function registerRealTools(): void {
       if (!parent) {
         throw mcpInvalidParams('parent missing', { reason: 'agent_run_not_found' });
       }
-      const agent = await db.query.documents.findFirst({
-        where: and(
-          eq(documents.workspaceId, ws.id),
-          eq(documents.slug, agentSlug),
-          eq(documents.type, 'agent'),
-        ),
-      });
+      // Resolve through the home-gated helper {ws, __system} so a __system library
+      // agent's run (agent lives in __system, not ws) re-resolves on retry instead
+      // of 404ing. createRun re-stamps agent_home_workspace_id from agent.workspaceId.
+      const agent = await resolveAgentForRun(db, ws.id, agentSlug);
       if (!agent) {
         throw mcpInvalidParams(`agent "${agentSlug}" not found`, {
           reason: 'agent_not_found',

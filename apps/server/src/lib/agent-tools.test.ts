@@ -974,6 +974,36 @@ describe('D-4: run-management MCP tools', () => {
     expect(rows.length).toBe(2);
   });
 
+  it('retry_run of a __system library-agent run re-resolves the library agent (not 404) (B1, retry path)', async () => {
+    const { db, seed } = await makeTestApp();
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, seed.user);
+    const sys = await seedSystemWorkspaceForRun(db);
+    // Library agent lives in __system; the human PAT is scoped to the run-ws (acme).
+    const { agent } = await seedRunAgent(db, sys.id, seed.user.id, 'operator');
+    const { token } = await seedRunAgent(db, seed.workspace.id, seed.user.id, 'caller');
+    // createRun (B's create path) stamps agent_home_workspace_id = __system.
+    const run = await seedRunRow(db, seed.workspace, seed.project, agent, seed.user, parent);
+    expect((run.frontmatter as Record<string, unknown>).agent_home_workspace_id).toBe(sys.id);
+    await db
+      .update(documents)
+      .set({
+        status: 'failed',
+        frontmatter: { ...(run.frontmatter as Record<string, unknown>), status: 'failed' },
+      })
+      .where(eq(documents.id, run.id));
+
+    // RED before the fix: agent_not_found (re-resolve was eq(workspaceId, ws.id) only).
+    const res = parseText<{ run_id: string; status: string }>(
+      await exec(token, seed.user.id, 'retry_run', {
+        workspace_slug: 'acme',
+        run_id: run.id,
+      }),
+    );
+    expect(res.status).toBe('planning');
+    const fresh = await db.query.documents.findFirst({ where: eq(documents.id, res.run_id) });
+    expect((fresh!.frontmatter as Record<string, unknown>).agent_home_workspace_id).toBe(sys.id);
+  });
+
   it('retry_run while original still active → RUN_ALREADY_ACTIVE (mit 63)', async () => {
     const { db, seed } = await makeTestApp();
     const parent = await seedWorkItem(db, seed.workspace, seed.project, seed.user);

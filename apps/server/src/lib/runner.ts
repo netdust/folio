@@ -392,6 +392,15 @@ export async function loadContext(runId: string): Promise<RunContext | null> {
   const agentProjectSide = isLibraryAgent ? ['*'] : (token.projectIds ?? ['*']);
   const narrowedToken = {
     ...token,
+    // B5 (completion) — a library agent's auto-minted token is bound to its HOME
+    // (__system); the RUN executes in run.workspaceId (= B). Rebind the run token's
+    // workspace to B so its tool calls (dispatchAsCaller mint + the cc MCP mint, both
+    // copying ctx.token.workspaceId) resolve B, not __system. SAFE: authority stays
+    // caller-bounded — scopes ∩ callerScopes (executeTool) and projectIds ∩ caller
+    // (below) are unchanged; this only lets the already-bounded run ACT in its own
+    // target workspace. A LOCAL agent's token is already bound to run.workspaceId, so
+    // this is a no-op for it (home === run.workspaceId).
+    workspaceId: isLibraryAgent ? run.workspaceId : token.workspaceId,
     projectIds: intersectAgentProjects(agentProjectSide, callerProjectIds),
   };
 

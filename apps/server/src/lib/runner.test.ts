@@ -2353,6 +2353,24 @@ describe('loadContext: library-agent authority defers to caller (B5/B6)', () => 
     expect(ctx).not.toBeNull();
     expect(ctx!.apiKey).toBe(''); // missing → empty ⇒ no_ai_key pre-flight, no fallback
   });
+
+  test('a library-agent run token is bound to B, so its tool calls resolve B not __system (B5 completion)', async () => {
+    // The load-bearing assertion the per-task tests missed: a library agent's
+    // auto-minted token is bound to its HOME (__system); the RUN executes in B.
+    // Both delegate-mint paths (dispatchAsCaller in folio-api-tool, the cc MCP
+    // mint in runner) copy ctx.token.workspaceId, and resolveWorkspace 403s when
+    // token.workspaceId (__system) !== ws.id (B). So the run token MUST be bound
+    // to B. RED before the fix: ctx.token.workspaceId === __system.
+    const scaffolded = await scaffold();
+    const { run, workspace } = scaffolded;
+    const { systemId } = await seedLibraryAgentWithSkills(scaffolded, ['folio']);
+
+    const ctx = await loadContext(run.id);
+    expect(ctx).not.toBeNull();
+    // The run token is bound to the RUN's workspace (B), NOT the agent's home.
+    expect(ctx!.token.workspaceId).toBe(workspace.id);
+    expect(ctx!.token.workspaceId).not.toBe(systemId);
+  });
 });
 
 // ==========================================================================
