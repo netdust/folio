@@ -245,9 +245,16 @@ function commentCreatedEvent(args: {
    * Override the literal `target_agent` payload value. Defaults to
    * `args.agentSlug` (the bare slug). Pass `agent:<slug>` to exercise the
    * PREFIXED form that the cancel route + clients can emit (see
-   * comments.ts "three forms" — Finding 1).
+   * comments.ts "three forms" — Finding 1). Pass `null` to OMIT `target_agent`
+   * entirely (isolating the `target_agent_id` id-handle path — C1).
    */
-  targetAgent?: string;
+  targetAgent?: string | null;
+  /**
+   * The immutable `target_agent_id` doc-id handle (BUG-013). When present, the
+   * matcher resolves the agent doc by id and asserts its home ∈ {eventWs,
+   * __system} before trusting it. Omitted by default.
+   */
+  targetAgentId?: string;
 }): BusEvent & { seq: number } {
   const commentId = args.commentId ?? `comment-${nanoid(6)}`;
   return {
@@ -262,7 +269,11 @@ function commentCreatedEvent(args: {
       parent_id: args.parentId,
       author: args.actor,
       kind: args.kind,
-      target_agent: args.targetAgent ?? args.agentSlug,
+      // `null` → omit the literal target_agent (isolate the id-handle path).
+      ...(args.targetAgent === null
+        ? {}
+        : { target_agent: args.targetAgent ?? args.agentSlug }),
+      ...(args.targetAgentId ? { target_agent_id: args.targetAgentId } : {}),
     },
     createdAt: Date.now(),
     seq: 1,
@@ -1024,4 +1035,59 @@ test('a slug that exists ONLY in a third workspace C does NOT resolve → no run
   );
 
   expect(await countRuns(db, wi.id, 'ops')).toBe(0);
+});
+
+test('resolveTargetAgentSlug rejects a target_agent_id pointing at a THIRD workspace agent (C1 id-handle home assertion)', async () => {
+  // The SLUG fire path (maybeCreateRun) is covered by the three C1 tests above.
+  // This pins the SECOND resolution surface: the id-handle branch in
+  // resolveTargetAgentSlug, reached via the internal_action (approval/rejection)
+  // path. A comment.created approval carries `target_agent_id` = the doc id of an
+  // agent that lives ONLY in a third workspace C (not B, not __system). The home
+  // assertion (agentDoc.workspaceId ∈ {eventWs, __system}) must reject that id so
+  // the approval can NOT reach C's agent — observably, B's awaiting_approval run
+  // is left UNTOUCHED and no resume row is created.
+  const { db, seed } = await makeTestApp();
+  await seedTriggers(db, seed.workspace.id, seed.user.id);
+  // __system exists but holds no agent here; the id-handle points at C.
+  await bootstrapSystem(db);
+  const wsC = await seedWorkspaceC(db);
+  // B has a real awaiting_approval run for a B-LOCAL agent named 'helper'. The
+  // attack: a payload whose id-handle points at C's agent, which DELIBERATELY
+  // shares the slug 'helper'. If the home assertion leaked, the id-handle would
+  // resolve to slug 'helper', find B's pending run, and create a resume row.
+  // The assertion rejects the C id; with the literal target_agent OMITTED (null)
+  // the fallback also resolves nothing → genuine no-op. (Sharing the slug is
+  // what makes the RED meaningful — a non-matching slug would no-op anyway.)
+  const cAgent = await seedAgent(db, wsC, seed.user, 'helper');
+  const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+  const wiTable = await getWorkItemsTable(db, seed.project.id);
+  const wi = await seedWorkItem(db, seed.workspace, seed.project, wiTable, seed.user);
+  const runsTable = await ensureRunsTableFor(db, seed);
+  const originalId = await seedAwaitingApprovalRun(
+    db,
+    seed.workspace,
+    seed.project,
+    runsTable,
+    agent,
+    wi,
+    seed.user,
+  );
+
+  await triggerMatcher.react(
+    commentCreatedEvent({
+      seed,
+      parentId: wi.id,
+      agentSlug: 'helper',
+      targetAgent: null, // omit the literal slug → isolate the id-handle path
+      targetAgentId: cAgent.id, // points at a THIRD workspace (C) agent
+      kind: 'approval',
+      actor: seed.user.id,
+    }),
+  );
+
+  // The id-handle was rejected → resolveTargetAgentSlug returned undefined →
+  // handleInternalAction skipped: no resume row, original run untouched.
+  expect(await countRuns(db, wi.id, 'helper')).toBe(1); // only the original, no resume
+  const run = await db.query.documents.findFirst({ where: eq(documents.id, originalId) });
+  expect(run?.status).toBe('awaiting_approval'); // untouched
 });
