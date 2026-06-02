@@ -1,14 +1,14 @@
+import { SYSTEM_WORKSPACE_SLUG } from '@folio/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { client } from './client.ts';
 
 /**
- * The reserved system-library workspace slug. Mirrors the server constant
- * `SYSTEM_WORKSPACE_SLUG` in `apps/server/src/lib/system-workspace.ts`. The web
- * side has no shared source for it, so this is the single web-side literal —
- * import it wherever the UI links into `__system` rather than hard-coding the
- * magic string.
+ * The reserved system-library workspace slug, sourced from `@folio/shared` (one
+ * source for server + web). Re-exported here so existing web importers keep
+ * their `from '.../lib/api/workspaces'` path; import from `@folio/shared`
+ * directly in new code.
  */
-export const SYSTEM_WORKSPACE_SLUG = '__system';
+export { SYSTEM_WORKSPACE_SLUG };
 
 export type WorkspaceRole = 'owner' | 'admin' | 'member';
 

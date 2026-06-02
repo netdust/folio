@@ -1,3 +1,11 @@
+/**
+ * The single reserved system-library workspace slug. Underscore-prefixed slugs
+ * are a reserved namespace users cannot create (the workspace create/rename
+ * regex `^[a-z0-9-]+$` blocks underscores). Shared between server + web so both
+ * link into `__system` off one source instead of mirroring the literal.
+ */
+export const SYSTEM_WORKSPACE_SLUG = '__system';
+
 export type DocumentType = 'work_item' | 'page';
 export type ViewType = 'list' | 'kanban';
 export type AiProvider = 'anthropic' | 'openai' | 'openrouter' | 'ollama';

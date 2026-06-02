@@ -1,4 +1,4 @@
-import { slugify } from '@folio/shared';
+import { SYSTEM_WORKSPACE_SLUG, slugify } from '@folio/shared';
 import { and, eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import type { DB } from '../db/client.ts';
@@ -20,8 +20,10 @@ import {
  *  reserved namespace users cannot create (the workspace create/rename regex
  *  `^[a-z0-9-]+$` already blocks underscores; isReservedSlug is the explicit
  *  defense-in-depth so loosening that regex can never silently reopen the
- *  hijack — see Phase A threat model M2/M3). */
-export const SYSTEM_WORKSPACE_SLUG = '__system';
+ *  hijack — see Phase A threat model M2/M3). The slug lives in `@folio/shared`
+ *  (one source for server + web); re-exported here so existing server importers
+ *  keep their `from '.../lib/system-workspace'` path. */
+export { SYSTEM_WORKSPACE_SLUG };
 
 /** True for any reserved (underscore-prefixed) workspace slug. */
 export function isReservedSlug(slug: string): boolean {
