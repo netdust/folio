@@ -1,9 +1,14 @@
 import { expect, test } from 'bun:test';
 import { and, eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
-import { apiTokens, documents, workspaces } from '../db/schema.ts';
+import { apiTokens, documents, users, workspaces } from '../db/schema.ts';
 import { newApiToken } from '../lib/auth.ts';
-import { bootstrapSystemWorkspace } from '../lib/system-workspace.ts';
+import {
+  SYSTEM_WORKSPACE_SLUG,
+  bootstrapSystemWorkspace,
+  grantOwner,
+} from '../lib/system-workspace.ts';
+import { isSystemMember, listWorkspaces } from '../services/workspaces.ts';
 import { makeTestApp } from '../test/harness.ts';
 import { assertSlugAllowed } from './workspaces.ts';
 
@@ -490,4 +495,78 @@ test('M7/M2: an agent bearer cannot create a __system workspace (session-only)',
     where: eq(workspaces.slug, '__system'),
   });
   expect(sys).toBeUndefined();
+});
+
+// --- Phase D (D1): __system is excluded from the AMBIENT workspace list (the
+// switcher) but stays reachable by direct slug navigation for a member. The
+// library is curated through its own settings entry, not the workspace pin
+// switcher — so a __system membership must not surface as a switchable row.
+
+test('listWorkspaces excludes __system from the ambient list (D1)', async () => {
+  const { db, seed } = await makeTestApp();
+  await bootstrapSystemWorkspace(db);
+  // Make the seed user (alice) the __system instance owner.
+  await grantOwner(db, seed.user.email);
+
+  const rows = await listWorkspaces(seed.user.id);
+  // alice's own 'acme' workspace is present; __system is filtered out.
+  expect(rows.some((r) => r.workspace.slug === 'acme')).toBe(true);
+  expect(rows.some((r) => r.workspace.slug === SYSTEM_WORKSPACE_SLUG)).toBe(false);
+});
+
+test('isSystemMember is true for a __system member, false otherwise (D1)', async () => {
+  const { app, db, seed } = await makeTestApp();
+  await bootstrapSystemWorkspace(db);
+
+  // Before designation alice is not a __system member.
+  expect(await isSystemMember(seed.user.id)).toBe(false);
+
+  await grantOwner(db, seed.user.email);
+  expect(await isSystemMember(seed.user.id)).toBe(true);
+
+  // A wholly unrelated user (not in __system) reads false.
+  const res = await app.request('/api/v1/auth/register', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      email: 'bob@test.local',
+      name: 'Bob',
+      password: 'password123',
+    }),
+  });
+  // Registration may or may not be open in this harness; fall back to a direct
+  // insert if the route declines, so the assertion stays deterministic.
+  let bobId: string;
+  if (res.status === 200 || res.status === 201) {
+    const bob = await db.query.users.findFirst({
+      where: eq(users.email, 'bob@test.local'),
+    });
+    bobId = bob!.id;
+  } else {
+    bobId = nanoid();
+    await db.insert(users).values({
+      id: bobId,
+      email: 'bob2@test.local',
+      name: 'Bob',
+      passwordHash: 'x',
+    });
+  }
+  expect(await isSystemMember(bobId)).toBe(false);
+});
+
+test('GET /api/v1/w/__system still resolves the workspace for a member (filter does not break navigation) (D1)', async () => {
+  const { app, db, seed } = await makeTestApp();
+  await bootstrapSystemWorkspace(db);
+  await grantOwner(db, seed.user.email);
+
+  // Direct slug navigation to __system must still return 200 for a MEMBER even
+  // though listWorkspaces excludes it. The detail route is membership-gated via
+  // resolveWorkspace — NOT via listWorkspaces — so the ambient filter cannot
+  // break navigation.
+  const res = await app.request(`/api/v1/w/${SYSTEM_WORKSPACE_SLUG}`, {
+    headers: { Cookie: seed.sessionCookie },
+  });
+  expect(res.status).toBe(200);
+  const body = await res.json();
+  expect(body.data.slug).toBe(SYSTEM_WORKSPACE_SLUG);
 });
