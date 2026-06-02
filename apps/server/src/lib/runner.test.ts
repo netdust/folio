@@ -2250,9 +2250,12 @@ describe('loadContext: central caller-project clamp fold', () => {
 describe('loadContext: library-agent authority defers to caller (B5/B6)', () => {
   test('a library agent projects:[*] does not exceed the caller project set in B (B5)', async () => {
     // A run in B for the __system library agent, caller a MEMBER clamped to a
-    // single B project (P1). The library agent's token is projects:['*'] (the
-    // seed default), so the defer collapses agent ∩ caller to exactly the
-    // caller's set — NOT __system's projects, and crucially NOT deny-all [].
+    // single B project (P1). Here the agent token's projectIds is NULL (seedAgent
+    // sets none), so this is the HAPPY-PATH assertion that effective === caller's
+    // set — it does NOT distinguish the defer branch (NULL ?? ['*'] and the
+    // forced ['*'] both collapse to the caller's set). The REGRESSION that the
+    // isLibraryAgent defer actually prevents deny-all is the next test (a
+    // concrete __system project id on the token).
     const scaffolded = await scaffold();
     const { db, project, run } = scaffolded;
     await seedLibraryAgentWithSkills(scaffolded, ['folio']);
