@@ -307,7 +307,9 @@ export async function loadContext(runId: string): Promise<RunContext | null> {
   // being bootstrapped (in-memory test DBs and pre-Phase-B runs may lack it).
   // Only a stamped library/foreign home triggers the gate, where the throw is
   // acceptable (production always bootstraps `__system`). Mirrors the
-  // soft-resolve reasoning from Task 2.5's resolveAgentForRun.
+  // soft-resolve *safety* reasoning (don't throw when `__system` is absent) from
+  // Task 2.5's resolveAgentForRun; resolution here trusts the create-time stamp
+  // rather than re-deriving local-shadows-library precedence.
   const home = fm.agent_home_workspace_id ?? run.workspaceId;
   if (home !== run.workspaceId) {
     // Only a library (or forged-third-ws) run needs the __system id to gate.
