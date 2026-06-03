@@ -379,18 +379,20 @@ describe('folio_api_get tool (P3-4/6)', () => {
       scopes: ['documents:read'],
       createdBy: seed.user.id,
     });
-    // ai-keys GET is mounted at /settings/:workspaceId/ai-keys under wScope; the
-    // handler strips encryptedKey from every row. Hitting the real handler (200,
-    // keys:[] when none seeded) proves the redaction, not a 404 vacuous pass.
+    // UPDATED 2026-06-03: AI-key CRUD moved to the INSTANCE route
+    // /api/v1/instance/ai-keys (session-only, __system-admin gated, mounted on v1
+    // where attachToken never runs). An agent token can therefore NEVER reach the
+    // key store at all — strictly stronger than the old per-workspace redaction
+    // (M1/M4). Assert the agent is blocked (401/403), and that no secret leaks.
     const out = (await executeTool(
       tok,
       'agent:op',
       'folio_api_get',
-      { path: `/api/v1/w/${seed.workspace.slug}/settings/${seed.workspace.id}/ai-keys` },
+      { path: `/api/v1/instance/ai-keys` },
       undefined,
       { callerScopes: tok.scopes },
     )) as { status: number; body: unknown };
-    expect(out.status).toBe(200); // hit the real handler, not a 404
+    expect([401, 403]).toContain(out.status); // unreachable by an agent token
     expect(JSON.stringify(out)).not.toMatch(/encrypted_?[Kk]ey/);
   });
 });
