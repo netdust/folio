@@ -436,16 +436,21 @@ export async function loadContext(runId: string): Promise<RunContext | null> {
     agentId: agent.id,
   };
 
-  // BYOK key for the run's snapshotted provider. Absent key is a pre-flight
-  // failure (no_ai_key), not a load failure — but resolve it here so the
-  // pre-flight check is a pure read. Carry undefined through when missing.
-  // claude-code has no API key row; cast is safe — the DB column only holds
-  // the 4 API providers, so the query simply returns undefined for claude-code.
-  // B6: BYOK is ALWAYS the run's workspace (= B) key — never the agent's home
-  // (`__system`). A library agent uses the CUSTOMER's key; missing → no_ai_key
-  // pre-flight (no __system fallback).
+  // AI key resolution: by (provider, ai_key_label) — an INSTANCE credential,
+  // with NO workspace tie (this replaces the B6 run-workspace lookup — B6
+  // reversal/M6). The secret is read here with system authority and injected
+  // into the provider call ONLY; it never reaches a token, tool, response, or
+  // the run messages (M1/M2). The worker token's document reach is UNCHANGED —
+  // this only changes how the key is resolved, not what the run can touch.
+  // Absent key is a pre-flight failure (no_ai_key), not a load failure — resolve
+  // it here so the pre-flight check stays a pure read. claude-code has no API
+  // key row; the (provider,label) query simply returns undefined for it.
+  const aiKeyLabel = (fm.ai_key_label as string | undefined) ?? 'default';
   const keyRow = await db.query.aiKeys.findFirst({
-    where: and(eq(aiKeys.workspaceId, run.workspaceId), eq(aiKeys.provider, fm.provider as ProviderName)),
+    where: and(
+      eq(aiKeys.provider, fm.provider as ProviderName),
+      eq(aiKeys.label, aiKeyLabel),
+    ),
   });
   const apiKey = keyRow ? decryptSecret(keyRow.encryptedKey) : '';
   const baseUrl = keyRow?.baseUrl ?? undefined;
