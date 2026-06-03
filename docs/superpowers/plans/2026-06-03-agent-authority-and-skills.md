@@ -936,13 +936,23 @@ git commit -m "phase-auth A10: instance bearer with workspace:admin can create w
 
 - [ ] **Step 1: Write the failing test**
 
+**Unit test verifies:** the reach control is admin-gated AND (per testing-workflow "no UI assertion without a data check") selecting "instance" actually reaches the create mutation as `workspaceId: null` — render + submit, not render alone.
+
 ```tsx
-test('shows a "Whole instance" reach option only for a __system owner/admin', () => {
-  // render with an isInstanceAdmin=true prop → the instance radio is present + enabled.
-  // render with isInstanceAdmin=false → instance option hidden/disabled.
+// HAPPY: admin can pick instance → it reaches the mutation as null.
+test('selecting "Whole instance" submits workspaceId:null to the create mutation', async () => {
+  const mutate = vi.fn();
+  // render isInstanceAdmin=true, mutation mocked. Pick instance radio, name, a scope, submit.
+  expect(mutate).toHaveBeenCalledWith(expect.objectContaining({ workspaceId: null }));
 });
+// EDGE: non-admin has no instance option → default submit omits workspaceId (pins to URL ws).
+test('non-admin: instance option absent; submit omits workspaceId', async () => {
+  const mutate = vi.fn();
+  expect(mutate).toHaveBeenCalledWith(expect.not.objectContaining({ workspaceId: null }));
+});
+// HAPPY: admin scopes are ticks, never in a preset.
 test('admin scopes are offered as checkboxes but not bundled into a preset', () => {
-  // settings:write / members:write / workspace:admin appear as ticks; no preset includes them.
+  // settings:write / members:write / workspace:admin appear as ticks; assert NO PRESETS entry contains them.
 });
 ```
 
@@ -1373,9 +1383,146 @@ git commit -m "phase-skills B5: MCP initialize instructions pointer (get_skill d
 
 ---
 
+## Phase Gate A — Piece A integration + acceptance (run after A1–A12, before merge)
+
+> Per `netdust-core:testing-workflow` phase-complete: cross-task INTEGRATION scenarios (real HTTP, real DB), not just a regression run. Each scenario asserts BOTH the response AND persisted state. Then a smoke checklist for the user.
+
+- [ ] **Integration scenario 1 — the load-bearing privilege-borrow guard (spans A7+A8+A9)**
+
+```
+SCENARIO: a member-triggered operator run cannot reach a third workspace
+  GIVEN: workspaces B and C; user M is a member of B only (not C, not __system);
+         the operator is provisioned (A9, reach=null, createdBy null).
+  WHEN:  M triggers an operator run whose target is B; mid-run the agent attempts a
+         tool call against workspace C (real executeTool through the run's narrowed token).
+  THEN:  - the C tool call is REFUSED ('workspace not accessible')
+         - the SAME call against B SUCCEEDS
+         - DB: no agent_run side effect landed in C (assert no documents/events written to C)
+```
+Implement as an integration test driving `loadContext` + a real tool dispatch (not mocked). This is the T4 regression that must never silently pass.
+
+- [ ] **Integration scenario 2 — instance admin cross-workspace, via real HTTP (spans A4+A7)**
+
+```
+SCENARIO: an instance bearer reads + writes a workspace it isn't a member of
+  GIVEN: an instance-admin human mints a reach=null token with config:write (A7);
+         workspace B exists; the token's creator has NO membership in B.
+  WHEN:  curl-equivalent GET /api/v1/w/<B>/documents then POST a config write to B
+         using that bearer (real Hono request, not a direct handler call).
+  THEN:  - GET → 200; POST → applies (200/201)
+         - DB: the written row exists in B
+         - a member PAT (pinned to A) doing the same against B → 403 (control)
+```
+(Mock-the-wire discipline: at least one REAL request per server-filtered surface — do not assert against a pre-filtered mock.)
+
+- [ ] **Integration scenario 3 — secret + default-deny floor holds for the most-privileged token (spans A6)**
+
+```
+SCENARIO: even a full-scope instance token cannot mint secrets or hit unmapped writes
+  GIVEN: instance token with ALL scopes incl workspace:admin.
+  WHEN:  folio_api POST /api/v1/w/<B>/tokens ; folio_api POST .../ai-keys ;
+         folio_api POST an invented unmapped write path.
+  THEN:  - all three REFUSED (secret-refuse ×2, default-deny ×1)
+         - DB: no token row, no ai_keys row, no write from the unmapped path
+```
+
+- [ ] **Acceptance (browser, A11) — happy / error / edge, UI + persistence**
+
+```
+HAPPY: an instance-admin opens Settings → Tokens, picks "Whole instance", creates a token.
+  THEN browser shows the one-time token AND GET instance-token list shows it with workspace_id null.
+ERROR: a member opens the same modal → the "Whole instance" option is absent; creating a token
+  pins it to the current workspace (assert the created row's workspace_id === current ws).
+EDGE:  ticking workspace:admin as a member is impossible (scope not offered to their role); if forced
+  via the API, POST /tokens → 403 (already covered in A7 — assert the UI never surfaces it).
+```
+Run: `cd apps/web && npx playwright test <token-flow spec>` (if a Playwright config exists; else assert the create-mutation payload + a follow-up GET in a vitest integration test).
+
+- [ ] **Phase A gate: full regression + static analysis + invariant audit**
+
+Run, all must be green:
+```bash
+cd apps/server && bun test && bun x tsc --noEmit
+cd ../web && npx vitest run && bun x tsc --noEmit
+cd ../../packages/shared && bun test && bun x tsc --noEmit
+```
+Then `/shakeout` (or `/integration`) on the Piece-A diff — the invariant-auditor must confirm: no resolver reads raw `token.workspaceId` on a run path (T4), every folio_api write maps to a scope (T5).
+
+- [ ] **Smoke test checklist (hand to the user before merge)**
+
+```markdown
+## Smoke Test — Piece A
+- [ ] Settings → Tokens (as instance admin): "Whole instance" option visible. Create one.
+      Expected: token shown once; appears in the instance-token list with no workspace.
+- [ ] Settings → Tokens (as a plain member): no "Whole instance" option.
+      Expected: any token created is pinned to the current workspace.
+- [ ] Use an instance token (curl) against a workspace you're not a member of:
+      Expected: reads/writes work; a pinned member token gets 403 on the same.
+- [ ] Ask the operator (in-app) to do something in another workspace, triggered by a member.
+      Expected: it acts only within that member's reach — not instance-wide.
+- [ ] Console: DevTools > Console on the Tokens page. Expected: no red errors.
+```
+
+---
+
+## Phase Gate B — Piece B integration + acceptance (run after B1–B5, before merge)
+
+- [ ] **Integration scenario 1 — worker pulls + pushes a __system skill (spans B1+B2)**
+
+```
+SCENARIO: a worker agent in workspace B uses a __system skill it doesn't own
+  GIVEN: __system/skills/'seo' (trusted:true). A worker agent in B with skills:['seo']
+         and a worker token pinned to B.
+  WHEN:  (push) start a run → loadAgentDefinition; (pull) call get_skill('seo') with the worker token.
+  THEN:  - push: the seo body is in the run's TRUSTED system channel
+         - pull: get_skill returns the seo body
+         - NEGATIVE: get_skill('<a __system agent slug>') → not found; get_skill('<a B-only doc>') → not found
+```
+
+- [ ] **Integration scenario 2 — trust separation of duties end-to-end (spans B3)**
+
+```
+SCENARIO: MCP authors a skill, cannot bless it; operator can; unblessed loads as DATA
+  GIVEN: an MCP admin PAT (createdBy = a human) and the operator token (createdBy null).
+  WHEN:  MCP creates __system/skills/'evil' with trusted-in-body; then MCP calls set_skill_trust('evil', true);
+         then the operator calls set_skill_trust('evil', true).
+  THEN:  - the create lands trusted:false (server-managed; body cannot self-bless)
+         - MCP set_skill_trust → REFUSED (createdBy = human)
+         - operator set_skill_trust → applied; a skill.trust.changed event is emitted (assert the event row)
+         - a run loading 'evil' BEFORE blessing gets it as untrusted DATA (not instructions)
+```
+
+- [ ] **Acceptance — happy / error / edge**
+
+```
+HAPPY: operator run with skills:['folio'] (trusted) → folio guidance is in the system channel; the run uses it.
+ERROR: a worker declares skills:['does-not-exist'] → run fails MISSING_SKILL with a clear message (not a 500 leak).
+EDGE:  get_skill from an outside MCP PAT works (read), but set_skill_trust from it is refused.
+```
+
+- [ ] **Phase B gate: full regression + static analysis + invariant audit**
+
+Same commands as Phase A. The invariant-auditor confirms: get_skill reads only `(__system, skills, type=page)` (T7); set_skill_trust gates on system origin (T8); `skill.trust.changed` flows through the one event path (architecture-invariant 4).
+
+- [ ] **Smoke test checklist (hand to the user before merge)**
+
+```markdown
+## Smoke Test — Piece B
+- [ ] Give a worker agent (any workspace) a research/SEO skill via frontmatter; run it.
+      Expected: the skill's guidance is in effect (no MISSING_SKILL).
+- [ ] As the outside MCP agent: get_skill("folio") → returns the manual.
+      As the outside MCP agent: try to mark a skill trusted → refused.
+- [ ] As the operator (in-app) or as yourself in the browser: mark a skill trusted → succeeds.
+- [ ] Author a new skill via MCP, don't bless it, have an agent load it.
+      Expected: it informs but cannot override the agent's instructions (untrusted).
+```
+
+---
+
 ## Self-review notes (for the executor)
 
 - **T1–T8 coverage:** A7 (T1 creation gate, T2 immutability), A9 (T3 combo invariant on operator), A8 (T4 per-run reach — the load-bearing one), A6 (T5 default-deny, T6 secret-refuse), B2 (T7 get_skill narrow), B3 (T8 bless origin).
 - **Seed-once caveat:** B4's frontmatter + the operator-token re-provision (A9) reach FRESH installs. A LIVE `__system` keeps old seeded rows — the executor must, on a live install, (a) re-provision the operator token (A9's `ensureOperatorToken` is idempotent on the system-origin token, so it mints if absent), and (b) `set_skill_trust('folio', true)` once. Note this in the merge/deploy step.
 - **Run from `apps/server`** for all server tests (root-cwd triggers a spurious init cascade). Web tests: `npx vitest run`. tsc per-app.
-- **Order dependency:** A1→A2→(A3,A4,A5)→A6→A7→A8→A9→A10→A11→A12, then B1→B2→B3→B4→B5. A8 depends on A2 (effectiveReach) + A9's operator reach; A9 depends on A1 (nullable) + A5 (full scopes). B3 depends on A9 (createdBy-null operator) for the bless test.
+- **Order dependency:** A1→A2→(A3,A4,A5)→A6→A7→A8→A9→A10→A11→A12, then Phase Gate A, then B1→B2→B3→B4→B5, then Phase Gate B. A8 depends on A2 (effectiveReach) + A9's operator reach; A9 depends on A1 (nullable) + A5 (full scopes). B3 depends on A9 (createdBy-null operator) for the bless test.
+- **testing-workflow conformance:** Per `netdust-core:testing-workflow`: (1) every TASK = unit tests, RED→GREEN, derived from the spec's acceptance criteria (not the code) — each subagent runs `task-complete` (file test green + full suite green + tsc clean) before reporting done. (2) every PHASE = the Phase Gate sections above — cross-task INTEGRATION scenarios (real HTTP/DB, assert response AND persistence), happy/error/edge ACCEPTANCE, full regression, and a SMOKE checklist handed to the user. (3) Anti-patterns avoided: no UI-assertion-without-data-check (A11 asserts the mutation payload; Phase A acceptance asserts the persisted row); mock-the-wire (Phase gates use at least one real request per server-filtered surface, not pre-filtered mocks); happy+error+edge on every unit (negative cases are explicit in A6/A10/B2/B3). (4) Stack = TypeScript → Vitest unit (`bun test` server / `npx vitest run` web) + Playwright acceptance where a config exists.
