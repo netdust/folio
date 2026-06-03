@@ -19,6 +19,7 @@ import {
 import { sendMagicLink } from '../lib/email.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
 import { type AuthContext, getUser, requireUser } from '../middleware/auth.ts';
+import { isInstanceAdmin } from '../lib/system-workspace.ts';
 import { isSystemMember } from '../services/workspaces.ts';
 
 const auth = new Hono<AuthContext>();
@@ -126,9 +127,14 @@ auth.get('/me', requireUser, async (c) => {
   // membership (never client-derived) so the web "System Library" settings
   // entry can gate on it without trusting the client. Top-level on the payload
   // because it is a property of the boot identity, not of the user record.
+  // is_instance_admin: server-authoritative owner/admin-of-__system signal,
+  // mirroring requireInstanceAdmin EXACTLY so the web can gate the instance
+  // AI-key UI to the same role the route enforces (no 403 papercut). Distinct
+  // from is_system_member (any __system membership). Non-throwing.
   return jsonOk(c, {
     user: { id: u.id, email: u.email, name: u.name },
     is_system_member: await isSystemMember(u.id),
+    is_instance_admin: await isInstanceAdmin(db, u.id),
   });
 });
 

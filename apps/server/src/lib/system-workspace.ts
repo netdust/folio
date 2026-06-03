@@ -298,6 +298,26 @@ export async function requireInstanceAdmin(
 }
 
 /**
+ * Non-throwing boolean mirror of `requireInstanceAdmin` for read-only signals
+ * (e.g. the `/auth/me` `is_instance_admin` flag the web uses to GATE the instance
+ * AI-key UI to exactly the role the route enforces). Returns false — never throws
+ * — when `__system` is not bootstrapped or the user is not an owner/admin, so a
+ * pre-bootstrap instance simply reports "not an admin". The route's own
+ * `requireInstanceAdmin` remains the authoritative gate; this is a UI hint only.
+ */
+export async function isInstanceAdmin(db: DB, userId: string): Promise<boolean> {
+  const sys = await db.query.workspaces.findFirst({
+    where: eq(workspaces.slug, SYSTEM_WORKSPACE_SLUG),
+    columns: { id: true },
+  });
+  if (!sys) return false;
+  const m = await db.query.memberships.findFirst({
+    where: and(eq(memberships.workspaceId, sys.id), eq(memberships.userId, userId)),
+  });
+  return m?.role === 'owner' || m?.role === 'admin';
+}
+
+/**
  * The single `__system` OWNER's user id (CR#2). A designated instance has
  * exactly one owner; an operator-provisioned workspace is owned by that human.
  * Returns undefined if no owner exists yet (pre-designation).

@@ -136,6 +136,8 @@ test('GET /auth/me reports is_system_member: true for a __system member (D2)', a
   const { data } = await res.json();
   expect(data.user.id).toBe(seed.user.id);
   expect(data.is_system_member).toBe(true);
+  // An OWNER of __system is also an instance admin.
+  expect(data.is_instance_admin).toBe(true);
 });
 
 test('GET /auth/me reports is_system_member: false for a non-member (D2)', async () => {
@@ -148,4 +150,28 @@ test('GET /auth/me reports is_system_member: false for a non-member (D2)', async
   const { data } = await res.json();
   expect(data.user.id).toBe(seed.user.id);
   expect(data.is_system_member).toBe(false);
+  // A non-member is not an instance admin either.
+  expect(data.is_instance_admin).toBe(false);
+});
+
+test('GET /auth/me: a plain __system MEMBER is system_member but NOT instance_admin', async () => {
+  const { app, db, seed } = await makeTestApp();
+  await bootstrapSystemWorkspace(db);
+  const sys = await db.query.workspaces.findFirst({
+    where: eq(workspaces.slug, SYSTEM_WORKSPACE_SLUG),
+  });
+  // role 'member' — a __system member who is NOT owner/admin.
+  await db.insert(memberships).values({
+    workspaceId: sys!.id,
+    userId: seed.user.id,
+    role: 'member',
+  });
+  const res = await app.request('/api/v1/auth/me', {
+    headers: { cookie: seed.sessionCookie },
+  });
+  expect(res.status).toBe(200);
+  const { data } = await res.json();
+  expect(data.is_system_member).toBe(true);
+  // The distinction the instance AI-key UI gate relies on: member ≠ admin.
+  expect(data.is_instance_admin).toBe(false);
 });
