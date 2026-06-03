@@ -77,6 +77,7 @@ The implementer MUST route through these convergence points, not around them:
 11. **Conversation cross-read.** User B reads user A's thread or markdown export via a missing `created_by` predicate.
 12. **Interrupted-run silent destruction.** An act-then-report turn crashes mid-run with workspace changes applied and no completion message → the human never learns what was done.
 13. **New unmapped destructive op slips the gate.** A future high-authority op is added without being caught by the confirm criterion → it acts without confirmation (fail-open).
+14. **Concurrent turn execution (the double-click race).** Two `POST …/messages` for one conversation both read `active_run_id = null` and both start a run → two operator runs interleave writes into the same thread → duplicated/garbled turns + a broken `seq` invariant. The client-side composer block (T11) does NOT prevent this; it must be enforced server-side.
 
 ### Mitigations required
 
@@ -95,6 +96,7 @@ Numbered to match attacks. Each is code-checkable.
 11. **Conversation reads are `created_by`-scoped.** Every conversation/message/export route filters by the session user = `created_by`; a foreign user gets 404/403. A test asserts user B cannot read user A's thread or `.md` export.
 12. **Interrupted-turn terminal summary.** Boot recovery (Task 8) clears a stale `active_run_id` AND writes a terminal `text` message summarizing completed `tool_step` rows ("previous turn interrupted; completed: …"). A test simulates a crashed run with applied tool_steps and asserts the summary message appears.
 13. **Fail-closed gate criterion (no allowlist drift).** The confirm criterion is a `CONFIRM_REQUIRED_SCOPES` set keyed on `requiredScope` (sibling to `UNATTENDED_FLOORED_SCOPES`), default-deny by construction: a high-authority scope (`workspace:admin`, `members:write`, plus destructive `config:write`/`documents:delete` per the set) requires confirmation in a conversation. A NEW destructive op carries one of these scopes ⇒ caught automatically. A test classifies a synthetic op with a confirm-required scope and asserts it confirms; the set lives next to the scope where risk is already decided, reviewed there.
+14. **Atomic single-active-turn (compare-and-set).** A turn may start ONLY by atomically acquiring the conversation's run slot: `UPDATE conversations SET active_run_id = :newRunId WHERE id = :id AND active_run_id IS NULL`, then verify exactly one row changed. The loser of a double-send is rejected (409 / "operator is busy"), NOT queued, NOT run. The CAS happens in `POST …/messages` (Task 6) BEFORE `createRun` kicks the runner; on any run-start failure the slot is released (`active_run_id = NULL`). A test fires two concurrent posts and asserts exactly one run starts and the other is rejected. This single mitigation also dissolves attack-class adjacent to it: because only one run is ever active, the `max(seq)+1` allocator (Task 2) cannot race, and a recovered run cannot collide with a resume — recovery MUST clear `active_run_id` before any new turn can acquire it (sequencing, not a new mechanism).
 
 ### Out of scope (explicit deferrals)
 
@@ -105,11 +107,13 @@ Numbered to match attacks. Each is code-checkable.
 - **claude-code provider** — stays hard-disabled (CC-DISABLED-1).
 - **DNS rebinding / SSRF on BYOK** — inherited from the authority/BYOK threat model, unchanged.
 - **Insider with stolen owner credentials** — acknowledged, not defended (instance-wide assumption).
+- **Mid-turn cancellation ("stop")** — NOT built in v1. But the data model RESERVES it: `conversations.active_run_id` is the slot; a future cancel flips a run state. Do NOT model active/idle as a boolean — `active_run_id` (nullable id) already encodes "running = id present" and leaves room for a `cancelling` run-status later without a migration. Reserved, not built.
+- **Operator versioning on resume** — NOT built. A *resumed* run already pins behavior (the run's `system_prompt` is snapshotted at `createRun`). What's unpinned is a NEW turn on an old conversation picking up a newer operator. Recording an `operator_version` is cheap debugging insurance for later; deferred. (The `operator_agent_id` binding — see Inv/T1 — is the durable identity anchor and is NOT to be collapsed to a generic `agent_id`; conversations are bound to an operator identity by design, leaving room for future Researcher/Builder agent surfaces.)
 
 ### How to use this section
 
-- **Controller pre-flight (Stage 2.5):** verify M1–M13 are reflected in each task's plan-supplied code before dispatch; confirm M-V3/M-V4 against the merged authority layer at execution start.
-- **`/code-review`:** "Verify against the threat model. Check each mitigation M1–M13; report in-place / missing / out-of-scope per the deferrals."
+- **Controller pre-flight (Stage 2.5):** verify M1–M14 are reflected in each task's plan-supplied code before dispatch; confirm M-V3/M-V4 against the merged authority layer at execution start.
+- **`/code-review`:** "Verify against the threat model. Check each mitigation M1–M14; report in-place / missing / out-of-scope per the deferrals."
 - **`/evaluate`:** any unimplemented mitigation = a plan-correction defect.
 - **Downstream:** the file-export spec cross-references M-deferrals; do not re-litigate the walled-off / caller-floor decisions.
 
@@ -246,11 +250,13 @@ export const pendingOps = sqliteTable('pending_ops', {
   conversationId: text('conversation_id').notNull(),
   callerId: text('caller_id').notNull(),
   op: text('op').notNull(),
-  params: text('params').notNull(),
+  params: text('params').notNull(), // immutable once recorded — executed verbatim
   target: text('target').notNull(),
-  status: text('status').notNull().default('pending'),
+  status: text('status').notNull().default('pending'), // 'pending'|'confirmed'|'executed'|'rejected'|'expired'
   createdAt: text('created_at').notNull(),
   expiresAt: text('expires_at').notNull(),
+  executedAt: text('executed_at'), // audit (#5): when the destructive op actually ran
+  executedBy: text('executed_by'), // audit (#5): who confirmed it
 });
 ```
 
@@ -294,7 +300,9 @@ CREATE TABLE `pending_ops` (
   `target` text NOT NULL,
   `status` text DEFAULT 'pending' NOT NULL,
   `created_at` text NOT NULL,
-  `expires_at` text NOT NULL
+  `expires_at` text NOT NULL,
+  `executed_at` text,
+  `executed_by` text
 );
 ```
 
@@ -467,12 +475,12 @@ import { describe, expect, test } from 'bun:test';
 import { linkPanelSchema, choiceCardSchema } from './ui-tool.ts';
 
 describe('ui tool schemas', () => {
-  test('link_panel accepts a valid target', () => {
-    const r = linkPanelSchema.safeParse({ target: { kind: 'document', wslug: 'acme', ref: 'onboard-acme' }, title: 'Onboard Acme' });
+  test('link_panel accepts a valid entity target', () => {
+    const r = linkPanelSchema.safeParse({ target: { entityType: 'document', entityId: 'onboard-acme', wslug: 'acme' }, title: 'Onboard Acme' });
     expect(r.success).toBe(true);
   });
-  test('link_panel rejects an unknown target kind', () => {
-    const r = linkPanelSchema.safeParse({ target: { kind: 'galaxy', wslug: 'acme', ref: 'x' }, title: 'X' });
+  test('link_panel rejects an unknown entityType', () => {
+    const r = linkPanelSchema.safeParse({ target: { entityType: 'galaxy', entityId: 'x', wslug: 'acme' }, title: 'X' });
     expect(r.success).toBe(false);
   });
   test('ask_choice requires at least two options each with an id+label', () => {
@@ -491,11 +499,17 @@ Run: `cd apps/server && bun test src/lib/ui-tool.test.ts` → FAIL (module not f
 ```ts
 import { z } from 'zod';
 
+// Extensible-but-CLOSED entity reference (NOT a free-form route — a model-authored
+// route string would be an open-navigation surface, exactly what the closed `ui`
+// tool avoids). `entityType` is an enum the FRONTEND resolves to a route (frontend
+// owns routing, not the model); adding a new entity type later widens the enum on
+// both sides — no schema-shape churn, no raw routes. wslug scopes the reference.
+export const ENTITY_TYPES = ['document', 'project', 'view', 'work_item', 'agent', 'run', 'conversation'] as const;
 export const linkPanelSchema = z.object({
   target: z.object({
-    kind: z.enum(['document', 'project', 'view']),
+    entityType: z.enum(ENTITY_TYPES),
+    entityId: z.string().min(1),
     wslug: z.string().min(1),
-    ref: z.string().min(1),
   }),
   title: z.string().min(1),
   subtitle: z.string().optional(),
@@ -594,8 +608,14 @@ git commit -m "phase-chat T4: source/sink adapter seam (conversation thread reus
 
 ### Task 5: Run-create wiring — chat run threads the caller (M1/M2) [WIRING TASK — end-to-end assertion]
 
+**Authority-over-time (Option A — resolve fresh per turn; state this explicitly).** A conversation has ONE immutable identity (`created_by`) but its authority is resolved FRESH at every turn's run-create from the owner's CURRENT membership:
+- Owner promoted (viewer → admin) between turns → the next turn GAINS the new ability. Owner demoted → the next turn LOSES it. This is the natural model and matches per-run derivation.
+- Owner removed from the target workspace → the existing `RUN_OWNER_NOT_A_MEMBER` fail-loud already covers it (the turn refuses).
+- Owner's user deleted → the conversation is orphaned: reads 404 (no live owner to authorize a turn). No silent fallback to operator authority.
+- The authority snapshot is NOT frozen at conversation creation (that would surprise users); a *resumed* run still inherits its OWN original snapshot per the existing resume rule, but a NEW turn always re-derives.
+
 **Files:**
-- Modify: `apps/server/src/services/agent-runs.ts` (`createRun` accepts `conversationId` + chat caller; stamps `conversation_id`, `agent_home_workspace_id = __system`, caller scopes from `created_by`)
+- Modify: `apps/server/src/services/agent-runs.ts` (`createRun` accepts `conversationId` + chat caller; stamps `conversation_id`, `agent_home_workspace_id = __system`, caller scopes from `created_by`'s CURRENT membership)
 - Test: `apps/server/src/services/chat-run-create.test.ts`
 
 - [ ] **Step 1: Write the failing test** (the must-pass authority assertion: a chat run is authorized as the conversation owner; no caller ⇒ deny)
@@ -608,7 +628,7 @@ git commit -m "phase-chat T4: source/sink adapter seam (conversation thread reus
 // the STAMP is correct — the floor enforcement is executeTool's, already tested.)
 ```
 
-Write concrete assertions against `createRun`'s output frontmatter: `caller_scopes` equals `roleToScopes(ownerRole)`, `caller_project_ids` matches the owner's reach, `conversation_id` is set, `unattended` is UNSET (a human is present), `agent_home_workspace_id` is the operator's home.
+Write concrete assertions against `createRun`'s output frontmatter: `caller_scopes` equals `roleToScopes(ownerRole)`, `caller_project_ids` matches the owner's reach, `conversation_id` is set, `unattended` is UNSET (a human is present), `agent_home_workspace_id` is the operator's home. PLUS an authority-over-time case: create a conversation as a viewer (read-only scopes stamped), promote the owner to admin, create a SECOND turn, assert the second run's `caller_scopes` now reflect admin (fresh per-turn, Option A) — and a removed-owner turn hits `RUN_OWNER_NOT_A_MEMBER`.
 
 - [ ] **Step 2: Run to verify it fails** → FAIL
 
@@ -634,22 +654,33 @@ git commit -m "phase-chat T5: chat run-create threads conversation owner as call
 - Modify: route index / `app.ts` (mount `/conversations`)
 - Test: `apps/server/src/routes/conversations.test.ts`
 
-- [ ] **Step 1: Write the failing test** (create conversation; post a message starts a run + stamps active_run_id; thread read is `created_by`-scoped — M11; .md export 404s for a foreign user)
+- [ ] **Step 1: Write the failing test** (post starts a run + stamps active_run_id; `created_by`-scoped reads — M11; .md export 404s for a foreign user; **the M14 double-send race: two concurrent posts → exactly one run starts**)
 
-Concrete cases: `POST /conversations` returns a conversation owned by the session user; `POST /conversations/:id/messages` inserts a user `text` row, creates a run (mock the runner entry), sets `active_run_id`; `GET /conversations/:id` for a FOREIGN user → 404 (M11); `GET /conversations/:id.md` for the owner returns markdown, for a foreign user → 404.
+Concrete cases: `POST /conversations` returns a conversation owned by the session user; `POST /conversations/:id/messages` inserts a user `text` row, ACQUIRES the run slot atomically, creates a run (mock the runner entry), returns the run id; `GET /conversations/:id` for a FOREIGN user → 404 (M11); `GET /conversations/:id.md` for the owner returns markdown, for a foreign user → 404. **M14 case:** fire two `POST …/messages` concurrently against a conversation with `active_run_id IS NULL`; assert exactly ONE succeeds (creates a run) and the other returns 409 (operator busy) — assert only one run was created (mock counts calls).
 
 - [ ] **Step 2: Run to verify it fails** → FAIL
 
-- [ ] **Step 3: Implement the routes** — session-gated (`requireSessionUser` — these are human-only surfaces, Inv 4; a bearer token does NOT drive the cockpit). All reads filter `conversations.createdBy === sessionUser.id` (M11). `POST …/messages`: append user message → `createRun({conversationId, …})` (T5) → set `active_run_id` → kick the runner (the existing async run-start) → return the run id. `GET …/:id.md`: `serializeThreadMarkdown`, `Content-Type: text/markdown`.
+- [ ] **Step 3: Implement the routes** — session-gated (`requireSessionUser` — these are human-only surfaces, Inv 4; a bearer token does NOT drive the cockpit). All reads filter `conversations.createdBy === sessionUser.id` (M11). `POST …/messages`:
+  1. append the user `text` message;
+  2. **ATOMICALLY acquire the run slot (M14)** — generate `newRunId`, then `UPDATE conversations SET active_run_id = :newRunId WHERE id = :id AND active_run_id IS NULL`; if `rowsChanged !== 1` → return **409 `OPERATOR_BUSY`** (the loser of a double-send; do NOT queue, do NOT start a run);
+  3. `createRun({ conversationId, runId: newRunId, … })` (T5) using the pre-acquired id;
+  4. kick the runner (the existing async run-start). On ANY failure between acquire and kick, RELEASE the slot (`active_run_id = NULL`) so the conversation isn't wedged;
+  5. return the run id.
+
+  `GET …/:id.md`: `serializeThreadMarkdown`, `Content-Type: text/markdown`.
+
+  **Button-click endpoint** `POST …/messages/:messageId/click { optionId }` (owner-scoped): validate `optionId` ∈ the component's recorded `options[].id` (M8 — reject out-of-set); PATCH the message `payload.chosen`; then branch:
+  - **ordinary choice card** → start a NEW turn (same atomic-acquire + createRun path as a typed message — re-fires the caller floor, M1; subject to the same M14 CAS);
+  - **confirmation card** (the `optionId` is a `pending_ops.id`, "yes") → `confirmPendingOp(id, sessionUser.id)` (single-use, caller-bound, M7), then start a turn that re-invokes the recorded op so `executeTool` finds the confirmed pending op and executes the RECORDED params (M6). A "no"/expiry → mark `rejected`/`expired`, no turn.
 
 - [ ] **Step 4–5: Run + commit**
 
 ```bash
-git commit -m "phase-chat T6: conversation routes (create/post/get/.md), created_by-scoped (M11)"
+git commit -m "phase-chat T6: conversation routes + atomic single-turn CAS (M11/M14)"
 ```
 
-**Unit test:** post starts a run + stamps active_run_id; foreign-user read 404 (M11).
-**Sibling-site audit:** confirm `requireSessionUser` is the right guard (Inv 4 — session-only, reject tokens). Mount path registered in the route index.
+**Unit test:** post starts a run + stamps active_run_id; foreign-user read 404 (M11); **two concurrent posts → exactly one run, other 409 (M14)**.
+**Sibling-site audit:** confirm `requireSessionUser` is the right guard (Inv 4 — session-only, reject tokens). Mount path registered in the route index. The slot-release-on-failure path must run on every error branch between acquire and runner-kick (else a conversation wedges with a stale `active_run_id` until boot recovery — T8).
 
 ---
 
@@ -688,27 +719,35 @@ if (caller?.conversationId && CONFIRM_REQUIRED_SCOPES.has(def.requiredScope)) {
   });
   if (!confirmed) {
     // Record the pending op + raise a choice_card via the conversation sink, then refuse.
-    await recordPendingOp(tx, { conversationId: caller.conversationId, callerId: actor, op: name, params: parsed, target: deriveTarget(name, parsed) });
-    // emit the choice_card component via ctx sink (the run surfaces it, then ends the turn)
+    const pending = await recordPendingOp(tx, { conversationId: caller.conversationId, callerId: actor, op: name, params: parsed, target: deriveTarget(name, parsed) });
+    // (a) emit the choice_card component via ctx sink (the run surfaces it, then ends the turn)
+    // (b) ALSO emit an assistant-VISIBLE synthetic result so the NEXT turn's history
+    //     (replayed by the source adapter) shows the confirmation was requested — the
+    //     agent's continuation doesn't depend purely on server orchestration (#4):
+    //     a `tool_step` row { tool: name, summary: 'confirmation required', status: 'pending', pending_op: pending.id }.
     throw new Error(`forbidden: ${name} requires confirmation`); // fatal — matches isFatalToolError
   }
-  // confirmed: fall through and execute with the RECORDED params (M6) — i.e. use
-  // `confirmed.params`, not a turn-2 re-read.
+  // confirmed: execute with the RECORDED params (M6) — use `confirmed.params`, NOT the
+  // turn-2 re-read. On success, MARK the pending op executed (audit trail #5):
+  //   markExecuted(tx, confirmed.id, actor)  → status:'executed', executed_at, executed_by.
 }
 ```
 
-Implement `pending-ops.ts`: `recordPendingOp`, `getConfirmedPendingOp` (matches conversationId+op+params, status `confirmed`, not expired), `confirmPendingOp(id, callerId)` (single-use flip, caller-bound), `expireStale`. Plain db (Inv 5 exception — gate state, no events).
+Implement `pending-ops.ts`:
+- `recordPendingOp` (returns the row incl. its id), `getConfirmedPendingOp` (matches conversationId+op+params, status `confirmed`, not expired), `confirmPendingOp(id, callerId)` (single-use flip pending→confirmed, caller-bound), `expireStale`.
+- **`markExecuted(id, executedBy)` (audit trail, #5)** — flips status `confirmed→executed`, stamps `executed_at` + `executed_by`, leaves `params` immutable. This is the durable "what destructive op ran, with what params, confirmed by whom, when" record for the "why was this workspace deleted?" support path. (Adds `executed_at`/`executed_by` columns to `pending_ops` in T1's migration — UPDATE T1 to include them; `status` gains the `executed` value.)
+- Plain db (Inv 5 exception — gate state, no events).
 
-- [ ] **Step 4: Run to verify it passes** → PASS (all 6 cases)
+- [ ] **Step 4: Run to verify it passes** → PASS (all 6 cases + an executed-status audit assertion)
 - [ ] **Step 5: Commit**
 
 ```bash
 git add apps/server/src/lib/agent-tools.ts apps/server/src/services/pending-ops.ts apps/server/src/lib/confirm-gate.test.ts
-git commit -m "phase-chat T7: hard irreversible-op gate at executeTool (M4-M7,M13) — conversation-scoped"
+git commit -m "phase-chat T7: hard irreversible-op gate at executeTool (M4-M7,M13) + executed audit + visible confirm-request"
 ```
 
-**Unit test:** the 6-case must-be-hard set (refuse-unconfirmed, injection-skip, recorded-params, single-use/caller-bound, fail-closed, headless-not-gated).
-**Sibling-site audit:** the gate MUST be inside `executeTool` (Inv 2), after the scope + unattended checks, before `def.handler`. Confirm `isFatalToolError` in `runner.ts` matches the `forbidden:` prefix so the model can't retry around it.
+**Unit test:** the 6-case must-be-hard set + (7) confirming flips status→executed with executed_at/executed_by and immutable params; (8) a refused op leaves a visible `tool_step` confirm-request row the source replays.
+**Sibling-site audit:** the gate MUST be inside `executeTool` (Inv 2), after the scope + unattended checks, before `def.handler`. Confirm `isFatalToolError` in `runner.ts` matches the `forbidden:` prefix so the model can't retry around it. (`pending_ops.executed_at`/`executed_by` + the `executed` status are already in T1's migration — no migration change needed here.)
 
 ---
 
@@ -757,7 +796,7 @@ Run: `cd apps/web && npx vitest run src/lib/api/conversations.test.ts`
 
 - [ ] **Step 1: Failing tests** — `message-text` renders markdown; `tool_step` renders summary+status; `link_panel` click NAVIGATES (TanStack Router) and the cockpit stays open; `choice_card` click sends the option `id` (M8) and locks (others disabled) on `chosen`.
 - [ ] **Step 2: vitest → FAIL**
-- [ ] **Step 3: Implement** the five components; `link_panel` uses the router to push the target route by `target.kind`; `choice_card` calls `useButtonClick` with the option `id`.
+- [ ] **Step 3: Implement** the five components; `link_panel` resolves `target.{entityType, entityId, wslug}` to a route via a single frontend `entityRoute(target)` helper (the ONE place entityType→route lives — a new entity type extends it here + the server enum) and pushes it with the router; `choice_card` calls `useButtonClick` with the option `id`.
 - [ ] **Step 4: → PASS** [ ] **Step 5: Commit** `phase-chat T10: web message renderers`
 
 **Unit test (vitest):** per-kind render + the two click behaviors (navigate vs send-id).
@@ -828,7 +867,7 @@ Run: `cd apps/web && npx vitest run src/lib/api/conversations.test.ts`
 ## Phase close (Stage 3 — after all tasks)
 
 1. `/integration` (or `testing-workflow` phase-complete).
-2. `/shakeout` — re-runs integration + dispatches reviewers (incl. `invariant-auditor` against the new deliberate exceptions, and `security-sentinel` against the threat model M1–M13). Real-BYOK shake-out: "create a workspace and set up a CRM project" → assert tool_steps stream, a link_panel resolves, a choice_card round-trips, and a destructive op REFUSES until confirmed (M4–M7). Confirm headless runs unaffected (M-deferral).
+2. `/shakeout` — re-runs integration + dispatches reviewers (incl. `invariant-auditor` against the new deliberate exceptions, and `security-sentinel` against the threat model M1–M14). Real-BYOK shake-out: "create a workspace and set up a CRM project" → assert tool_steps stream, a link_panel resolves, a choice_card round-trips, and a destructive op REFUSES until confirmed (M4–M7). Confirm headless runs unaffected (M-deferral).
 3. `superpowers:finishing-a-development-branch`.
 
 ---
@@ -841,4 +880,6 @@ Run: `cd apps/web && npx vitest run src/lib/api/conversations.test.ts`
 
 **Type consistency:** `appendMessage`/`getThread`/`serializeThreadMarkdown` (T2) are reused verbatim by T4/T6/T8; `CONFIRM_REQUIRED_SCOPES`/`pending-ops.ts` (T7) named consistently; `conversationsKeys`/`useConversation`/`useButtonClick` (T9) reused by T10/T11.
 
-**Open risk carried to execution:** the runner's parent-coupling (T4) is the highest-uncertainty task — `grep ctx.parent runner.ts` at 2.5 to enumerate every parent-coupled path before implementing the conversation-run branch.
+**Review-driven additions (remote-control review, 2026-06-03):** M14 atomic single-turn CAS (T6) — the one real correctness hole, a server-side fix for the double-send race (the client block alone was insufficient); authority-over-time made explicit as Option A / fresh-per-turn (T5); executed-ops audit trail (`executed_at`/`executed_by`/`executed` status on `pending_ops`, T1+T7) for the "why was this deleted?" path; a visible synthetic confirm-request `tool_step` so the agent's next turn sees the confirmation was asked (T7); `link_panel` target generalized to a closed-but-extensible `{entityType, entityId, wslug}` entity ref with a single frontend `entityRoute` resolver (T3/T10) — NOT a free-form route (avoids a model-authored navigation surface); cancellation + operator-versioning RESERVED in the deferrals (data model leaves room; nothing built). The seq-after-crash concern dissolves under M14 (single active turn ⇒ no allocator race) — recorded inline in M14.
+
+**Open risk carried to execution:** TWO highest-uncertainty tasks — (a) the runner's parent-coupling (T4): `grep ctx.parent runner.ts` at 2.5 to enumerate every parent-coupled path before the conversation-run branch; (b) the M14 CAS + slot-release-on-failure (T6): the race is correctness-critical and easy to get subtly wrong (the release path must cover every error branch between acquire and runner-kick, or a conversation wedges until boot recovery).
