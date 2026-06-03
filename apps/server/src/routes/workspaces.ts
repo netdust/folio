@@ -19,6 +19,7 @@ import {
   requireUser,
 } from '../middleware/auth.ts';
 import { type ScopeContext, getRole, getWorkspace } from '../middleware/scope.ts';
+import { attachToken } from '../middleware/bearer.ts';
 
 /** Throw if a slug is reserved (underscore-prefixed). Defense-in-depth beyond
  *  the create zod regex (threat model M2/M3). Exported for unit test. */
@@ -30,6 +31,13 @@ export function assertSlugAllowed(slug: string): void {
 
 const workspacesRoute = new Hono<AuthContext & ScopeContext>();
 
+// This route mounts on v1 (not wScope), where attachToken does NOT run — so a
+// bearer would otherwise be invisible here. attachToken runs FIRST so the
+// bearer (and any user it hydrates from createdBy) is visible to requireUser
+// and to the per-route composite gate on POST (A10). attachToken is a no-op
+// when no Authorization header is present, so session-only callers are
+// unaffected.
+workspacesRoute.use('*', attachToken);
 workspacesRoute.use('*', requireUser);
 
 // --- collection ---
@@ -41,15 +49,42 @@ workspacesRoute.get('/', async (c) => {
 
 workspacesRoute.post(
   '/',
-  // Round 7 #21 — explicit session-only gate. The route was previously
-  // session-only by virtue of being mounted on v1 (not wScope) — attachToken
-  // never runs at that mount level, so `authMethod` stays undefined and the
-  // upstream `requireUser` rejects bearer-only callers. That's a routing
-  // topology, not a contract. A future middleware consolidation that mounts
-  // attachToken at app root would silently turn this bearer-reachable.
-  // Pin the contract with the explicit composite. No-op for current
-  // production but the test below asserts the gate fires.
-  requireSessionUser,
+  // A10 — workspace creation accepts EITHER a session user OR an instance-reach
+  // bearer (workspaceId null) holding `workspace:admin`, so the operator / an
+  // instance admin's automation can provision workspaces. attachToken already
+  // ran at the route level, so the bearer is visible here.
+  //
+  // Composite gate. Allow:
+  //   - a session user (no bearer)                              → pass
+  //   - an instance bearer (workspaceId null) with              → pass
+  //     workspace:admin
+  // Reject (M7 preserved):
+  //   - a pinned/agent bearer, or an instance bearer lacking
+  //     workspace:admin → 403
+  //   - no auth at all → 401
+  // The reserved-slug guard in the handler (assertSlugAllowed) is independent
+  // of auth — even an authorized instance bearer cannot create a reserved slug.
+  async (c, next) => {
+    const token = c.get('token');
+    const user = c.get('user');
+    const instanceBearer =
+      !!token && token.workspaceId === null && token.scopes.includes('workspace:admin');
+    if (!user && !instanceBearer) {
+      throw new HTTPError('UNAUTHENTICATED', 'login required', 401);
+    }
+    // A bearer-authenticated request that is NOT an authorized instance bearer
+    // (pinned, or missing workspace:admin) is rejected rather than falling
+    // through on a hydrated user. A session request with a stray bearer is
+    // fine — only reject when the request authenticated AS a token.
+    if (token && !instanceBearer && c.get('authMethod') === 'token') {
+      throw new HTTPError(
+        'FORBIDDEN',
+        'this bearer may not create workspaces; an instance bearer with workspace:admin or a session is required',
+        403,
+      );
+    }
+    return next();
+  },
   zValidator(
     'json',
     z.object({

@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { and, eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
-import { apiTokens, documents, users, workspaces } from '../db/schema.ts';
+import { apiTokens, documents, memberships, users, workspaces } from '../db/schema.ts';
 import { newApiToken } from '../lib/auth.ts';
 import {
   SYSTEM_WORKSPACE_SLUG,
@@ -569,4 +569,115 @@ test('GET /api/v1/w/__system still resolves the workspace for a member (filter d
   expect(res.status).toBe(200);
   const body = await res.json();
   expect(body.data.slug).toBe(SYSTEM_WORKSPACE_SLUG);
+});
+
+// --- A10: instance bearer (workspaceId null + workspace:admin) can create
+// workspaces. The operator / an instance admin's automation can now provision
+// workspaces; a pinned/agent bearer, or an instance bearer lacking
+// workspace:admin, stays rejected (M7 preserved). The reserved-slug guard in
+// the handler is independent of auth.
+
+test('A10: an instance bearer with workspace:admin creates a workspace (201)', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const { token, hash } = newApiToken();
+  await db.insert(apiTokens).values({
+    id: nanoid(),
+    workspaceId: null,
+    name: 'inst-admin',
+    tokenHash: hash,
+    scopes: ['workspace:admin', 'documents:read'],
+    createdBy: seed.user.id,
+  });
+  const res = await app.request('/api/v1/workspaces', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'New WS' }),
+  });
+  expect(res.status).toBe(201);
+  const body = await res.json();
+  const wsId = body.data.id;
+  const row = await db.query.workspaces.findFirst({ where: eq(workspaces.id, wsId) });
+  expect(row).toBeDefined();
+  // Owner membership is created against the token's createdBy (the human admin
+  // hydrated by attachToken) — A7.
+  const owner = await db.query.memberships.findFirst({
+    where: and(eq(memberships.workspaceId, wsId), eq(memberships.role, 'owner')),
+  });
+  expect(owner?.userId).toBe(seed.user.id);
+});
+
+test('A10: a pinned member bearer cannot create a workspace (403)', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const { token, hash } = newApiToken();
+  await db.insert(apiTokens).values({
+    id: nanoid(),
+    workspaceId: seed.workspace.id,
+    name: 'pinned-member',
+    tokenHash: hash,
+    scopes: ['documents:read'],
+    createdBy: seed.user.id,
+  });
+  const res = await app.request('/api/v1/workspaces', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Nope' }),
+  });
+  expect(res.status).toBe(403);
+});
+
+test('A10: an instance bearer WITHOUT workspace:admin cannot create (403)', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const { token, hash } = newApiToken();
+  await db.insert(apiTokens).values({
+    id: nanoid(),
+    workspaceId: null,
+    name: 'inst-no-admin',
+    tokenHash: hash,
+    scopes: ['documents:read'],
+    createdBy: seed.user.id,
+  });
+  const res = await app.request('/api/v1/workspaces', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Nope' }),
+  });
+  expect(res.status).toBe(403);
+});
+
+test('A10: an instance bearer cannot create a reserved __system slug (400)', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const { token, hash } = newApiToken();
+  await db.insert(apiTokens).values({
+    id: nanoid(),
+    workspaceId: null,
+    name: 'inst-admin-reserved',
+    tokenHash: hash,
+    scopes: ['workspace:admin', 'documents:read'],
+    createdBy: seed.user.id,
+  });
+  const res = await app.request('/api/v1/workspaces', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'x', slug: '__system' }),
+  });
+  // The reserved-slug guard is independent of auth. An explicit `__system`
+  // slug is rejected at the create-zod regex (`^[a-z0-9-]+$` forbids the
+  // leading underscore → 400 ZodError); assertSlugAllowed in the handler is
+  // defense-in-depth on the FINAL resolved slug below that layer. Either way
+  // an authorized instance bearer creates NO __system workspace.
+  expect([400, 422]).toContain(res.status);
+  const sys = await db.query.workspaces.findFirst({
+    where: eq(workspaces.slug, '__system'),
+  });
+  expect(sys).toBeUndefined();
+});
+
+test('A10: session user still creates a workspace (regression)', async () => {
+  const { app, seed } = await makeTestApp();
+  const res = await app.request('/api/v1/workspaces', {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'A10 Session' }),
+  });
+  expect(res.status).toBe(201);
 });
