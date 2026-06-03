@@ -63,6 +63,7 @@ import { newApiToken } from './auth.ts';
 import { decryptSecret } from './crypto.ts';
 import { HTTPError } from './http.ts';
 import { getSystemWorkspaceId } from './system-workspace.ts';
+import { effectiveReach } from './token-reach.ts';
 
 /**
  * Hard cap on outer provider rounds (one provider call + one tool-result
@@ -397,17 +398,20 @@ export async function loadContext(runId: string): Promise<RunContext | null> {
   // unchanged: executeTool still does token.scopes ∩ callerScopes — the agent's
   // tool-derived scopes are its CAPABILITY, the caller scopes are the AUTHORITY.
   const agentProjectSide = isLibraryAgent ? ['*'] : (token.projectIds ?? ['*']);
+  // Per-run workspace floor (T4): the run token's reach = token reach ∩ caller
+  // reach, where caller reach is the run's target (run.workspaceId, itself
+  // caller-clamped at run-creation). A LIBRARY agent's token is bound to its
+  // home (__system) but acts in run.workspaceId by contract, so its token reach
+  // is treated as instance (null) here — effectiveReach(null, run.workspaceId)
+  // = run.workspaceId, preserving the B5/B6 rebind. A LOCAL agent keeps its own
+  // reach: effectiveReach(B, B) = B (a no-op). The resolver reads THIS narrowed
+  // reach, never token.workspaceId — replaces the old line-410 rebind.
+  const tokenReach = isLibraryAgent ? null : token.workspaceId;
+  const reach = effectiveReach(tokenReach, run.workspaceId);
+  if (!reach.ok) return null; // token pin excludes the run's target — fail closed (return-null contract)
   const narrowedToken = {
     ...token,
-    // B5 (completion) — a library agent's auto-minted token is bound to its HOME
-    // (__system); the RUN executes in run.workspaceId (= B). Rebind the run token's
-    // workspace to B so its tool calls (dispatchAsCaller mint + the cc MCP mint, both
-    // copying ctx.token.workspaceId) resolve B, not __system. SAFE: authority stays
-    // caller-bounded — scopes ∩ callerScopes (executeTool) and projectIds ∩ caller
-    // (below) are unchanged; this only lets the already-bounded run ACT in its own
-    // target workspace. A LOCAL agent's token is already bound to run.workspaceId, so
-    // this is a no-op for it (home === run.workspaceId).
-    workspaceId: isLibraryAgent ? run.workspaceId : token.workspaceId,
+    workspaceId: reach.workspaceId,
     projectIds: intersectAgentProjects(agentProjectSide, callerProjectIds),
   };
 

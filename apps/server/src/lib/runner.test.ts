@@ -39,6 +39,7 @@ import { HTTPError } from './http.ts';
 import { mcpInvalidParams } from './mcp-errors.ts';
 import { __setCcSpawnForTest, loadContext, rejectRun, runAgent, runAgentResume } from './runner.ts';
 import { bootstrapSystemWorkspace, getSystemWorkspaceId } from './system-workspace.ts';
+import { effectiveReach } from './token-reach.ts';
 import { workspaces } from '../db/schema.ts';
 
 type TestDB = Awaited<ReturnType<typeof makeTestApp>>['db'];
@@ -2335,6 +2336,78 @@ describe('loadContext: library-agent authority defers to caller (B5/B6)', () => 
     // The run token is bound to the RUN's workspace (B), NOT the agent's home.
     expect(ctx!.token.workspaceId).toBe(workspace.id);
     expect(ctx!.token.workspaceId).not.toBe(systemId);
+  });
+});
+
+// ==========================================================================
+// Task A8 / T4 — per-run effective-reach intersection. The old line-410
+// workspace REBIND is replaced by `effectiveReach(tokenReach, run.workspaceId)`
+// so the narrowed run token's reach = token reach ∩ caller reach, and the
+// resolver reads THIS narrowed reach (never the raw token field). A library
+// agent's token reach is treated as INSTANCE (null) because it acts in
+// run.workspaceId by contract; a local agent keeps its own token reach.
+// effectiveReach(null, B) = B (library) and effectiveReach(B, B) = B (local),
+// so this is behaviourally identical to the old rebind for both branches while
+// flowing through the central helper (the T4 invariant + A9-robustness).
+// ==========================================================================
+
+describe('loadContext: per-run effective-reach (A8 / T4)', () => {
+  test('a library-agent run narrowed token reaches run.workspaceId, not __system (T4 + B5 preservation)', async () => {
+    const scaffolded = await scaffold();
+    const { run, workspace } = scaffolded;
+    const { systemId } = await seedLibraryAgentWithSkills(scaffolded, ['folio']);
+
+    // The library agent's token is bound to __system (its home), but the run
+    // acts in B. The effective reach = effectiveReach(null, B) = B.
+    expect(effectiveReach(null, run.workspaceId)).toEqual({
+      ok: true,
+      workspaceId: run.workspaceId,
+    });
+
+    const ctx = await loadContext(run.id);
+    expect(ctx).not.toBeNull();
+    // The narrowed reach is the run's target B — never the __system home.
+    expect(ctx!.token.workspaceId).toBe(run.workspaceId);
+    expect(ctx!.token.workspaceId).toBe(workspace.id);
+    expect(ctx!.token.workspaceId).not.toBe(systemId);
+  });
+
+  test('a local-agent run narrowed token keeps its own workspace (no-op intersection)', async () => {
+    // A normal (non-library) run: scaffold seeds a local agent in `workspace`,
+    // the run targets the same workspace. The agent token is bound to B, so the
+    // intersection is effectiveReach(B, B) = B (a no-op).
+    const { run, workspace } = await scaffold();
+
+    expect(effectiveReach(workspace.id, run.workspaceId)).toEqual({
+      ok: true,
+      workspaceId: run.workspaceId,
+    });
+
+    const ctx = await loadContext(run.id);
+    expect(ctx).not.toBeNull();
+    expect(ctx!.token.workspaceId).toBe(run.workspaceId);
+    expect(ctx!.token.workspaceId).toBe(workspace.id);
+  });
+
+  test('a forged third-workspace home still fails closed (T4 upstream guard)', async () => {
+    // The home gate (home !== systemId ⇒ return null) prevents any reach to a
+    // third workspace C before the intersection is even reached. This guards the
+    // T4 invariant at its upstream gate: a member-triggered run cannot be made to
+    // act in a third workspace by forging agent_home_workspace_id.
+    const { db, run } = await scaffold();
+    await bootstrapSystemWorkspace(db);
+    const thirdWsId = nanoid();
+    await db.insert(workspaces).values({ id: thirdWsId, slug: 'delta', name: 'Delta' });
+    await db
+      .update(documents)
+      .set({
+        frontmatter: sql`json_set(${documents.frontmatter},
+          '$.agent_home_workspace_id', ${thirdWsId})`,
+      })
+      .where(eq(documents.id, run.id));
+
+    const ctx = await loadContext(run.id);
+    expect(ctx).toBeNull();
   });
 });
 
