@@ -58,6 +58,9 @@ const READ_TOOLS: ReadonlySet<string> = new Set([
   // so the run's read scope gates it (the write tool folio_api → config:write
   // lives in CONFIG_WRITE_TOOLS below).
   'folio_api_get',
+  // Piece B — narrow __system skills-page read. Maps to documents:read; reaches
+  // only (__system, skills, type=page) by construction (see agent-tools-registry).
+  'get_skill',
 ]);
 const WRITE_TOOLS: ReadonlySet<string> = new Set(['create_document', 'update_document']);
 const DELETE_TOOLS: ReadonlySet<string> = new Set(['delete_document']);

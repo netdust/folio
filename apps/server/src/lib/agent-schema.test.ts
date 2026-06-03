@@ -257,6 +257,8 @@ describe('V1_MCP_TOOLS', () => {
       'create_agent', 'update_agent', 'delete_agent', 'get_agent_self',
       // Phase-op-3 — operator REST bridge (folio_api_get reads, folio_api writes).
       'folio_api_get', 'folio_api',
+      // Piece B — narrow __system skills-page read (T7).
+      'get_skill',
       // search_documents deferred to v1.1
     ] as const);
   });

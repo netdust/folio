@@ -23,6 +23,7 @@ import { type ToolDef, executeTool, listToolDefs, registerTool } from './agent-t
 import {
   SYSTEM_WORKSPACE_SLUG,
   bootstrapSystemWorkspace,
+  getSystemWorkspaceId,
   isReservedSlug,
 } from './system-workspace.ts';
 import { workspaces } from '../db/schema.ts';
@@ -1834,5 +1835,105 @@ describe('A3: instance reach in resolvers', () => {
     await expect(
       exec(pinnedTok, seed.user.id, 'list_projects', { workspace_slug: 'beta' }),
     ).rejects.toThrow('workspace not accessible');
+  });
+});
+
+describe('B2: get_skill narrow __system read (T7)', () => {
+  /**
+   * Insert a `page` into the __system Skills project with explicit frontmatter.
+   * Bootstraps __system first so the Skills project exists.
+   */
+  async function seedSystemSkillPage(
+    db: DB,
+    slug: string,
+    body: string,
+    frontmatter: Record<string, unknown>,
+  ): Promise<string> {
+    await bootstrapSystemWorkspace(db);
+    const systemId = await getSystemWorkspaceId(db);
+    const skillsProject = (await db.query.projects.findFirst({
+      where: and(eq(projects.workspaceId, systemId), eq(projects.slug, 'skills')),
+    }))!;
+    await db.insert(documents).values({
+      id: nanoid(),
+      workspaceId: systemId,
+      projectId: skillsProject.id,
+      type: 'page',
+      title: slug,
+      slug,
+      body,
+      status: null,
+      frontmatter,
+      createdBy: null,
+    });
+    return systemId;
+  }
+
+  it('returns a __system skill body for a WORKER token pinned to B', async () => {
+    const { db, seed } = await makeTestApp();
+    await seedSystemSkillPage(db, 'seo', 'SEO-BODY', { trusted: true });
+    // Token pinned to workspace B (the regular seed workspace), NOT __system.
+    const token = makeToken({ workspaceId: seed.workspace.id, scopes: ['documents:read'] });
+    const res = (await exec(token, 'tester', 'get_skill', { slug: 'seo' })) as {
+      content: { text: string }[];
+    };
+    const payload = JSON.parse(res.content[0]!.text) as { body: string; trusted: boolean };
+    expect(payload.body).toContain('SEO-BODY');
+    expect(payload.trusted).toBe(true);
+  });
+
+  it('CANNOT read a non-skill __system doc (e.g. an agent) (T7)', async () => {
+    const { db, seed } = await makeTestApp();
+    await bootstrapSystemWorkspace(db);
+    const systemId = await getSystemWorkspaceId(db);
+    // Seed a __system AGENT doc (type=agent, NOT a type=page under skills).
+    await db.insert(documents).values({
+      id: nanoid(),
+      workspaceId: systemId,
+      projectId: null,
+      type: 'agent',
+      title: 'operator',
+      slug: 'operator',
+      body: 'help',
+      status: null,
+      frontmatter: { system_prompt: 'x' },
+      createdBy: null,
+    });
+    const token = makeToken({ workspaceId: seed.workspace.id, scopes: ['documents:read'] });
+    await expect(exec(token, 'tester', 'get_skill', { slug: 'operator' })).rejects.toThrow(
+      'skill not found',
+    );
+  });
+
+  it("cannot read another workspace's doc (T7)", async () => {
+    const { db, seed } = await makeTestApp();
+    await bootstrapSystemWorkspace(db);
+    // A page in workspace B (NOT __system/skills) with slug 'bdoc'.
+    await db.insert(documents).values({
+      id: nanoid(),
+      workspaceId: seed.workspace.id,
+      projectId: seed.project.id,
+      type: 'page',
+      title: 'bdoc',
+      slug: 'bdoc',
+      body: 'B-WORKSPACE-BODY',
+      status: null,
+      frontmatter: {},
+      createdBy: null,
+    });
+    const token = makeToken({ workspaceId: seed.workspace.id, scopes: ['documents:read'] });
+    await expect(exec(token, 'tester', 'get_skill', { slug: 'bdoc' })).rejects.toThrow(
+      'skill not found',
+    );
+  });
+
+  it('requires documents:read', async () => {
+    const { db } = await makeTestApp();
+    await seedSystemSkillPage(db, 'seo', 'SEO-BODY', { trusted: true });
+    await expect(
+      executeTool(makeToken({ scopes: [] }), 'tester', 'get_skill', { slug: 'seo' }, undefined, {
+        callerScopes: [],
+      }),
+    ).rejects.toThrow(/scope/);
   });
 });

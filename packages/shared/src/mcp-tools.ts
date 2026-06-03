@@ -31,6 +31,10 @@ export const V1_MCP_TOOLS = [
   // refuse-with-plan, maps to config:write — registered server-side in Task 5).
   'folio_api_get',
   'folio_api',
+  // Piece B — narrow __system skills-page read. Reaches ONLY (__system, skills,
+  // type=page) by construction; maps to documents:read. Any agent can PULL a
+  // skill before shaping a workspace.
+  'get_skill',
 ] as const;
 
 export type McpTool = (typeof V1_MCP_TOOLS)[number];
@@ -53,6 +57,7 @@ export const MCP_TOOL_GROUPS: { label: string; tools: McpTool[] }[] = [
       'list_fields',
       'list_views',
       'run_view',
+      'get_skill',
     ],
   },
   {

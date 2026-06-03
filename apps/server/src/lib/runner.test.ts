@@ -2737,16 +2737,18 @@ describe('Phase B — loadAgentDefinition (definitional skill load)', () => {
     expect(err!.code).toBe('MISSING_SKILL');
   });
 
-  // B4 — the definitional read is NOT a tool. Structural property: there is no
+  // B4 — the DEFINITIONAL read is NOT a tool. Structural property: there is no
   // skill-read / loadAgentDefinition tool in the registry, so a model (and thus
-  // an untrusted caller) can never invoke it. executeTool throws on an unknown
-  // tool name.
+  // an untrusted caller) can never invoke the definitional skill load. executeTool
+  // throws on an unknown tool name. NOTE: `get_skill` is now a REAL registered
+  // tool (B2 — a deliberate NARROW __system skills-page pull, T7), so it is NOT in
+  // this must-throw set; only the definitional loaders remain non-tools.
   test('the definitional read is NOT reachable as a tool (B4)', async () => {
     const { db, run } = await scaffold({ tools: ['list_documents'] });
     const ctx = await loadContext(run.id);
     expect(ctx).not.toBeNull();
     const { executeTool } = await import('./agent-tools.ts');
-    for (const name of ['loadAgentDefinition', 'load_agent_definition', 'read_skill', 'get_skill']) {
+    for (const name of ['loadAgentDefinition', 'load_agent_definition', 'read_skill']) {
       await expect(
         executeTool(ctx!.token, ctx!.actor, name, {}, undefined, { callerScopes: ctx!.callerScopes }),
       ).rejects.toThrow(/method not found/);

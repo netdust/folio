@@ -66,9 +66,11 @@ test('MCP tools/list returns the v1 tools including comment + agent-lifecycle to
   const body = (await res.json()) as { result: { tools: { name: string }[] } };
   // 12 original + 4 comment tools + 4 agent-lifecycle tools + 5 run-management
   // tools (D-4) + 1 find_documents tool + 1 describe_workspace tool + 1
-  // folio_api_get (Phase-op-3 T4 reads) + 1 folio_api (Phase-op-3 T5 writes) = 29.
-  expect(body.result.tools.length).toBe(29);
+  // folio_api_get (Phase-op-3 T4 reads) + 1 folio_api (Phase-op-3 T5 writes) + 1
+  // get_skill (Piece B — narrow __system skills read) = 30.
+  expect(body.result.tools.length).toBe(30);
   const names = body.result.tools.map((t) => t.name);
+  expect(names).toContain('get_skill');
   expect(names).toContain('folio_api_get');
   expect(names).toContain('folio_api'); // T5 registers the write tool
   expect(names).toContain('find_documents');

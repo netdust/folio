@@ -45,6 +45,8 @@ export const OPERATOR_TOOLS = [
   'update_document',
   'list_projects',
   'run_view',
+  // Piece B — pull a skill from the __system library before shaping a workspace.
+  'get_skill',
 ] as const;
 
 // Compile-time guard: every OPERATOR_TOOLS member is a real MCP tool. Mirrors the

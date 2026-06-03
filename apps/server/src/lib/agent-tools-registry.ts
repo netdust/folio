@@ -93,7 +93,7 @@ import {
 import { serializeMarkdown } from './frontmatter.ts';
 import { HTTPError } from './http.ts';
 import { mcpInvalidParams, mcpRejectHumanPat, rethrowAgentGuardAsMcp } from './mcp-errors.ts';
-import { isReservedSlug, resolveAgentForRun } from './system-workspace.ts';
+import { getSystemWorkspaceId, isReservedSlug, resolveAgentForRun } from './system-workspace.ts';
 
 // ---------------------------------------------------------------------------
 // Result envelopes — verbatim from routes/mcp.ts.
@@ -364,6 +364,53 @@ export function registerRealTools(): void {
             .then((ws) => (ws ? [ws] : []));
       return textResult({
         workspaces: all.map((ws) => ({ id: ws.id, slug: ws.slug, name: ws.name })),
+      });
+    },
+  });
+
+  registerTool({
+    name: 'get_skill',
+    description:
+      'Load a skill from the __system library by slug. Read-only; reaches only __system skills pages — use before shaping a workspace or adding a provider.',
+    requiredScope: 'documents:read',
+    schema: z.object({ slug: z.string() }).strict(),
+    inputSchema: {
+      type: 'object',
+      properties: {
+        slug: { type: 'string', description: 'The skill slug to load from the __system library.' },
+      },
+      required: ['slug'],
+    },
+    handler: async (args: { slug: string }, _ctx) => {
+      // Hard-wired NARROW read (T7): __system workspace + skills project +
+      // type=page ONLY. Ignores the token's reach by construction (it reaches
+      // nothing else in __system); still gated by the documents:read
+      // requiredScope above (executeTool checks it against token + caller).
+      const systemId = await getSystemWorkspaceId(db);
+      const skillsProject = await db.query.projects.findFirst({
+        where: and(eq(projects.workspaceId, systemId), eq(projects.slug, 'skills')),
+      });
+      if (!skillsProject) throw new Error('skills library not found');
+      const doc = await db.query.documents.findFirst({
+        where: and(
+          eq(documents.workspaceId, systemId),
+          eq(documents.projectId, skillsProject.id),
+          eq(documents.slug, args.slug),
+          eq(documents.type, 'page'),
+        ),
+      });
+      if (!doc) throw new Error('skill not found');
+      const sfm = (doc.frontmatter ?? {}) as {
+        trusted?: boolean;
+        description?: string;
+        when_to_use?: string;
+      };
+      return textResult({
+        slug: args.slug,
+        body: doc.body ?? '',
+        trusted: sfm.trusted === true,
+        description: sfm.description,
+        when_to_use: sfm.when_to_use,
       });
     },
   });
