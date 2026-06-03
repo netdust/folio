@@ -1,18 +1,19 @@
 import { useRef, useState } from 'react';
 import { toast } from 'sonner';
+import type { AiProvider } from '../../lib/api/settings.ts';
 import {
-  type AiProvider,
-  useWorkspaceAiKeys,
-  useUpsertAiKey,
-  useDeleteAiKey,
-} from '../../lib/api/settings.ts';
+  useDeleteInstanceAiKey,
+  useInstanceAiKeys,
+  useUpsertInstanceAiKey,
+} from '../../lib/api/instance-ai-keys.ts';
 import { useTestKey } from '../../lib/api/ai-test-key.ts';
 import { formatApiError } from '../../lib/api/index.ts';
 import { Button } from '../ui/button.tsx';
 
 interface Props {
+  // wslug is still needed for the per-workspace /ai/test-key route (unchanged
+  // this phase). AI-key CRUD is instance-level — no workspaceId.
   wslug: string;
-  workspaceId: string;
 }
 
 const PROVIDERS: AiProvider[] = ['anthropic', 'openai', 'openrouter', 'ollama'];
@@ -24,16 +25,17 @@ const KNOWN_MODELS: Record<AiProvider, readonly [string, ...string[]]> = {
   ollama: ['llama3.1', 'qwen2.5'],
 };
 
-export function AiTab({ wslug, workspaceId }: Props) {
+export function AiTab({ wslug }: Props) {
   const [provider, setProvider] = useState<AiProvider>('anthropic');
   const [model, setModel] = useState<string>(KNOWN_MODELS.anthropic[0]);
+  const [label, setLabel] = useState('default');
   const [apiKey, setApiKey] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
   const [testResult, setTestResult] = useState<null | { ok: boolean; reason?: string }>(null);
 
-  const keysQuery = useWorkspaceAiKeys(wslug, workspaceId);
-  const upsertKey = useUpsertAiKey(wslug, workspaceId);
-  const deleteKey = useDeleteAiKey(wslug, workspaceId);
+  const keysQuery = useInstanceAiKeys();
+  const upsertKey = useUpsertInstanceAiKey();
+  const deleteKey = useDeleteInstanceAiKey();
   const testKey = useTestKey();
 
   // B round 3 fix #9 — replace the round-2 providerRef + useEffect pattern
@@ -52,6 +54,7 @@ export function AiTab({ wslug, workspaceId }: Props) {
   function onProviderChange(next: AiProvider) {
     setProvider(next);
     setModel(KNOWN_MODELS[next][0]);
+    setLabel('default');
     setApiKey('');
     setBaseUrl('');
     setTestResult(null);
@@ -126,12 +129,13 @@ export function AiTab({ wslug, workspaceId }: Props) {
     // from the user is a lie. Whether the user sees the result or not is
     // not the same as whether the side effect happened.
     const providerAtClick = provider;
+    const labelAtClick = label.trim() || 'default';
     const seq = ++saveSeqRef.current;
     try {
-      await upsertKey.mutateAsync({
+      const res = await upsertKey.mutateAsync({
         provider: providerAtClick,
         apiKey,
-        label: 'default',
+        label: labelAtClick,
         baseUrl: baseUrl || undefined,
       });
       if (seq !== saveSeqRef.current) {
@@ -140,7 +144,16 @@ export function AiTab({ wslug, workspaceId }: Props) {
         toast.info(`Save completed for previous provider (${providerAtClick})`);
         return;
       }
-      toast.success(`Saved ${providerAtClick} key`);
+      toast.success(`Saved ${providerAtClick} key (${labelAtClick})`);
+      // M8: a paid provider key makes the denial-of-wallet residual live (no
+      // per-key caps yet). Surface it so the admin knows any workspace can now
+      // draw on this shared instance key.
+      if (res.paid_residual_live) {
+        toast.warning(
+          'This is a paid provider key shared across the whole instance. ' +
+            'Usage is metered but not capped — any workspace can draw on it.',
+        );
+      }
       setApiKey('');
       setBaseUrl('');
       setTestResult(null);
@@ -162,10 +175,12 @@ export function AiTab({ wslug, workspaceId }: Props) {
   return (
     <div className="space-y-6">
       <section>
-        <h2 className="text-sm font-medium">AI Provider</h2>
+        <h2 className="text-sm font-medium">AI Provider (instance-wide)</h2>
         <p className="mt-0.5 text-xs text-fg-2">
-          Configure a provider key so agents in this workspace can talk to an LLM.
-          Keys are encrypted at rest. Bring-your-own-key — Folio never holds a default.
+          Configure a provider key so agents across the whole instance can talk to
+          an LLM. Keys are encrypted at rest and shared by every workspace —
+          bring-your-own-key, Folio never holds a default. Each agent selects a key
+          by its <code>ai_key_label</code> in frontmatter.
         </p>
 
         <div className="mt-4 grid max-w-md gap-3">
@@ -197,6 +212,21 @@ export function AiTab({ wslug, workspaceId }: Props) {
                 <option key={m} value={m} />
               ))}
             </datalist>
+          </label>
+
+          <label className="block">
+            <span className="block text-xs font-medium text-fg-2">Label</span>
+            <input
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              aria-label="Label"
+              placeholder="default"
+              className={inputClass}
+            />
+            <span className="mt-1 block text-xs text-fg-3">
+              Agents reference a key by this label. Use <code>default</code> unless
+              you keep more than one key per LLM service.
+            </span>
           </label>
 
           <label className="block">
@@ -310,19 +340,34 @@ export function AiTab({ wslug, workspaceId }: Props) {
                 {otherRows.length > 0 ? (
                   <div className="mt-1 text-xs text-fg-2">
                     {otherRows.length} other label
-                    {otherRows.length === 1 ? '' : 's'} (managed via API):
+                    {otherRows.length === 1 ? '' : 's'}:
                     {/*
-                      B round 3 fix #14 — surface baseUrl alongside the label for
-                      ollama rows. An admin who pinned an internal-only host via
-                      API needs to see it; the row was previously a bare label.
+                      Surface baseUrl alongside the label for ollama rows, and make
+                      every labelled key deletable (instance keys can hold multiple
+                      labels per provider; all are managed here now).
                     */}
                     <ul className="mt-0.5 space-y-0.5">
                       {otherRows.map((r) => (
-                        <li key={r.id} className="font-mono text-fg-2">
-                          {r.label}
-                          {r.baseUrl ? (
-                            <span className="ml-2 text-fg-3">→ {r.baseUrl}</span>
-                          ) : null}
+                        <li
+                          key={r.id}
+                          className="flex items-center justify-between font-mono text-fg-2"
+                        >
+                          <span>
+                            {r.label}
+                            {r.baseUrl ? (
+                              <span className="ml-2 text-fg-3">→ {r.baseUrl}</span>
+                            ) : null}
+                          </span>
+                          <Button
+                            variant="ghost"
+                            onClick={() =>
+                              deleteKey
+                                .mutateAsync(r.id)
+                                .catch((err) => toast.error(formatApiError(err)))
+                            }
+                          >
+                            Remove
+                          </Button>
                         </li>
                       ))}
                     </ul>

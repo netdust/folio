@@ -2,7 +2,7 @@ import { createFileRoute, Link } from '@tanstack/react-router';
 import { useState } from 'react';
 import { z } from 'zod';
 import { SYSTEM_WORKSPACE_SLUG, useWorkspace } from '../lib/api/workspaces.ts';
-import { useIsSystemMember } from '../lib/api/auth.ts';
+import { useIsInstanceAdmin, useIsSystemMember } from '../lib/api/auth.ts';
 import { TokensTab } from '../components/settings/tokens-tab.tsx';
 import { AiTab } from '../components/settings/ai-tab.tsx';
 import { Tabs } from '../components/ui/tabs.tsx';
@@ -37,7 +37,18 @@ type TabKey = 'tokens' | 'ai';
 export function SettingsPage({ wslug, initialTab }: { wslug: string; initialTab?: TabKey }) {
   const workspace = useWorkspace(wslug);
   const isSystemMember = useIsSystemMember();
+  // AI keys are instance-level + admin-gated. Only an instance admin (owner/admin
+  // of __system) sees the AI tab — mirrors the route's requireInstanceAdmin gate
+  // so a non-admin never lands on a tab whose writes would 403.
+  const isInstanceAdmin = useIsInstanceAdmin();
   const [tab, setTab] = useState<TabKey>(initialTab ?? 'tokens');
+  // If a deep-link (?tab=ai) lands a non-admin on the AI tab, fall back to tokens.
+  const activeTab: TabKey = tab === 'ai' && !isInstanceAdmin ? 'tokens' : tab;
+
+  const tabItems = [
+    { value: 'tokens' as const, label: 'API tokens' },
+    ...(isInstanceAdmin ? [{ value: 'ai' as const, label: 'AI' }] : []),
+  ];
 
   return (
     <div className="mx-auto max-w-3xl px-6 py-8">
@@ -49,22 +60,13 @@ export function SettingsPage({ wslug, initialTab }: { wslug: string; initialTab?
       </header>
 
       <div className="mb-5">
-        <Tabs<TabKey>
-          value={tab}
-          onChange={setTab}
-          items={[
-            { value: 'tokens', label: 'API tokens' },
-            { value: 'ai', label: 'AI' },
-          ]}
-        />
+        <Tabs<TabKey> value={activeTab} onChange={setTab} items={tabItems} />
       </div>
 
-      {tab === 'tokens' && workspace.data ? (
+      {activeTab === 'tokens' && workspace.data ? (
         <TokensTab wslug={wslug} workspaceId={workspace.data.id} />
       ) : null}
-      {tab === 'ai' && workspace.data ? (
-        <AiTab wslug={wslug} workspaceId={workspace.data.id} />
-      ) : null}
+      {activeTab === 'ai' && isInstanceAdmin ? <AiTab wslug={wslug} /> : null}
 
       {/*
         D2: System Library entry, gated on `__system` membership. It's a link
