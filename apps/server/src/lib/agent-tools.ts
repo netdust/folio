@@ -53,6 +53,17 @@ export interface ToolDef<TArgs = unknown, TOut = unknown> {
   schema: z.ZodSchema<TArgs>;
   handler: (args: TArgs, ctx: ToolContext) => Promise<TOut>;
   /**
+   * C3 unattended floor (per-tool). When true, this tool is REFUSED on an
+   * unattended (trigger-fired, no-human) run — a tool-name-keyed floor for ops
+   * the scope-keyed `UNATTENDED_FLOORED_SCOPES` can't express. Used by
+   * `set_skill_trust`: it shares `config:write` with `folio_api`, but `folio_api`
+   * applies its OWN finer floor (config-class paths refuse, document paths stay
+   * allowed unattended — the accepted LOW residual), so a scope-level floor would
+   * wrongly kill folio_api's allowed unattended document writes. Flooring by tool
+   * name floors trust-elevation without touching that residual.
+   */
+  unattendedFloor?: boolean;
+  /**
    * D-2: MCP-transport metadata. Carried verbatim from the legacy mcp.ts
    * `ToolDef` so D-3's `tools/list` can read it via `listToolDefs()`. The
    * runner ignores these; `executeTool` never touches them.
@@ -201,7 +212,15 @@ export async function executeTool(
   // auto — the accepted residual. The model must NOT be able to retry around
   // this, so the message is shaped `forbidden: …` to match runner.ts
   // `isFatalToolError` (which terminates the run, like a scope denial).
-  if (caller?.unattended === true && UNATTENDED_FLOORED_SCOPES.has(def.requiredScope)) {
+  // Scope-keyed floor (agents:write) OR per-tool floor (def.unattendedFloor —
+  // set_skill_trust: trust-elevation must not happen on a no-human run over
+  // attacker-supplied content; see ToolDef.unattendedFloor). /shakeout 2026-06-03
+  // (security + invariant-auditor): without this, a Phase-C trigger firing the
+  // operator unattended could bless a planted skill into the trusted channel.
+  if (
+    caller?.unattended === true &&
+    (UNATTENDED_FLOORED_SCOPES.has(def.requiredScope) || def.unattendedFloor === true)
+  ) {
     throw new Error(`forbidden: ${name} is refused on an unattended (trigger-fired) run`);
   }
 

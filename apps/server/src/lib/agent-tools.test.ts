@@ -394,6 +394,58 @@ describe('unattended floor at the convergence point (Phase C C3 review-fix #1)',
     expect(out).toEqual({ ok: true });
     expect(invoked).toBe(true);
   });
+
+  // /shakeout 2026-06-03 (security + invariant-auditor): a tool with the per-tool
+  // `unattendedFloor` flag (set_skill_trust) IS refused on an unattended run, even
+  // though its scope (config:write) is NOT in UNATTENDED_FLOORED_SCOPES. This floors
+  // trust-elevation by tool name without re-flooring folio_api's allowed unattended
+  // document writes (the generic config:write test directly above still dispatches).
+  it('a tool with unattendedFloor:true on an UNATTENDED run → refused before dispatch', async () => {
+    let invoked = false;
+    registerThrowaway({
+      name: '__floored_config_probe',
+      requiredScope: 'config:write',
+      unattendedFloor: true,
+      schema: z.object({}).strict(),
+      handler: async () => {
+        invoked = true;
+        return { ok: true };
+      },
+    });
+    const token = makeToken({ scopes: ['config:write'] });
+    await expect(
+      executeTool(token, 'agent:op', '__floored_config_probe', {}, undefined, {
+        callerScopes: ['config:write'],
+        unattended: true,
+      }),
+    ).rejects.toThrow('forbidden: __floored_config_probe is refused on an unattended');
+    expect(invoked).toBe(false);
+  });
+
+  it('a tool with unattendedFloor:true on an ATTENDED run → dispatches normally', async () => {
+    let invoked = false;
+    registerThrowaway({
+      name: '__floored_config_probe_attended',
+      requiredScope: 'config:write',
+      unattendedFloor: true,
+      schema: z.object({}).strict(),
+      handler: async () => {
+        invoked = true;
+        return { ok: true };
+      },
+    });
+    const token = makeToken({ scopes: ['config:write'] });
+    const out = await executeTool(
+      token,
+      'agent:op',
+      '__floored_config_probe_attended',
+      {},
+      undefined,
+      { callerScopes: ['config:write'], unattended: false },
+    );
+    expect(out).toEqual({ ok: true });
+    expect(invoked).toBe(true);
+  });
 });
 
 describe('registerTool', () => {

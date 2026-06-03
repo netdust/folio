@@ -421,6 +421,13 @@ export function registerRealTools(): void {
     description:
       'Bless or unbless a __system skill (set its trusted flag). Restricted to the system operator or a session user.',
     requiredScope: 'config:write', // a privileged config-class op
+    // C3 (/shakeout 2026-06-03): trust-elevation is refused on an unattended
+    // (trigger-fired) run. The operator token is createdBy-null so canBlessSkill
+    // would otherwise pass even on a no-human run over attacker-supplied content,
+    // letting an injection bless a planted skill into the trusted channel. Floored
+    // by tool name (not scope) so folio_api's allowed unattended document writes
+    // are unaffected.
+    unattendedFloor: true,
     schema: z.object({ slug: z.string(), trusted: z.boolean() }).strict(),
     inputSchema: {
       type: 'object',
