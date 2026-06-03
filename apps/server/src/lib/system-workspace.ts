@@ -513,6 +513,12 @@ export async function ensureOperatorAgent(
         frontmatter: {
           provider: 'anthropic',
           model: 'claude-sonnet-4-6', // required for API providers (agentFrontmatterSchema)
+          // Which instance AI key (by label) the operator resolves. The runner
+          // reads the KEY MATERIAL by (provider, ai_key_label). provider/model/
+          // ai_key_label are the SEED defaults only — all three are UI-editable
+          // post-seed (Settings → operator surface). A live install's already-
+          // seeded operator keeps its existing fm; the UI is how it's changed.
+          ai_key_label: 'default',
           tools: [...OPERATOR_TOOLS],
           projects: ['*'],
           requires_approval: false,
