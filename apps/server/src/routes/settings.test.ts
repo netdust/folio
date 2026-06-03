@@ -1,6 +1,7 @@
-import { describe, expect, test } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { nanoid } from 'nanoid';
 import { apiTokens } from '../db/schema.ts';
+import { env } from '../env.ts';
 import { newApiToken } from '../lib/auth.ts';
 import { makeTestApp } from '../test/harness.ts';
 
@@ -12,6 +13,21 @@ import { makeTestApp } from '../test/harness.ts';
 describe('POST /api/v1/w/:wslug/settings/:workspaceId/ai-keys', () => {
   const path = (wslug: string, workspaceId: string) =>
     `/api/v1/w/${wslug}/settings/${workspaceId}/ai-keys`;
+
+  // HERMETIC: these assert the SSRF guard's DEFAULT-CLOSED behavior (loopback
+  // rejected). Pin FOLIO_ALLOW_LOOPBACK_AI=false so a dev with the loopback
+  // escape-hatch enabled in their .env (self-hosted Ollama) doesn't get false
+  // failures — the route reads the frozen `env` object, so we pin it here and
+  // restore. (Test-isolation fix, 2026-06-03 — the hatch is exercised
+  // explicitly in url-allow-list.test.ts with allowLoopback:true.)
+  let prevLoopback: boolean;
+  beforeAll(() => {
+    prevLoopback = env.FOLIO_ALLOW_LOOPBACK_AI;
+    (env as { FOLIO_ALLOW_LOOPBACK_AI: boolean }).FOLIO_ALLOW_LOOPBACK_AI = false;
+  });
+  afterAll(() => {
+    (env as { FOLIO_ALLOW_LOOPBACK_AI: boolean }).FOLIO_ALLOW_LOOPBACK_AI = prevLoopback;
+  });
 
   // Fix #3 — baseUrl pointing at loopback must be rejected by the persistence
   // route. Previously it would have been encrypted and stored, then fetched by

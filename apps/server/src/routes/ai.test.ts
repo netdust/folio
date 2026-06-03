@@ -1,6 +1,7 @@
-import { describe, expect, mock, test } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, mock, test } from 'bun:test';
 import { nanoid } from 'nanoid';
 import { apiTokens } from '../db/schema.ts';
+import { env } from '../env.ts';
 import { newApiToken } from '../lib/auth.ts';
 
 // Mock at the provider-factory boundary so the route sees a stubbed testKey
@@ -31,6 +32,19 @@ mock.module('../lib/ai/provider.ts', () => ({
 import { makeTestApp } from '../test/harness.ts';
 
 describe('POST /api/v1/w/:wslug/ai/test-key', () => {
+  // HERMETIC: the loopback-rejection tests below assert the SSRF guard's
+  // DEFAULT-CLOSED behavior. Pin FOLIO_ALLOW_LOOPBACK_AI=false so a dev with the
+  // escape-hatch enabled in .env (self-hosted Ollama) doesn't get false failures.
+  // (Test-isolation fix, 2026-06-03.)
+  let prevLoopback: boolean;
+  beforeAll(() => {
+    prevLoopback = env.FOLIO_ALLOW_LOOPBACK_AI;
+    (env as { FOLIO_ALLOW_LOOPBACK_AI: boolean }).FOLIO_ALLOW_LOOPBACK_AI = false;
+  });
+  afterAll(() => {
+    (env as { FOLIO_ALLOW_LOOPBACK_AI: boolean }).FOLIO_ALLOW_LOOPBACK_AI = prevLoopback;
+  });
+
   test('returns ok:true for a happy-path mocked provider', async () => {
     const { app, seed } = await makeTestApp();
     const res = await app.request(`/api/v1/w/${seed.workspace.slug}/ai/test-key`, {
