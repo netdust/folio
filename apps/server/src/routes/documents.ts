@@ -22,6 +22,7 @@ import {
   maybeReslugPlaceholder,
   updateDocument,
   stripReservedFrontmatter,
+  stripManagedSkillTrust,
   type DocumentType,
 } from '../services/documents.ts';
 import { findBacklinks } from '../services/backlinks.ts';
@@ -350,12 +351,26 @@ documentsRoute.patch('/:slug', requireScope('documents:write'), async (c) => {
       parsed.title !== existing.title
         ? await maybeReslugPlaceholder(p.id, existing.slug, existing.title, parsed.title)
         : null;
+    // T8 — `trusted` is server-managed on __system skills pages; only
+    // setSkillTrust may change it. The JSON PATCH path strips it in
+    // updateDocument; this markdown path bypasses that service AND does a
+    // WHOLESALE frontmatter replace, so it must (a) strip the incoming key and
+    // (b) re-carry the EXISTING server-set value so a markdown write neither
+    // sets nor clears the flag.
+    const mdFrontmatter = (() => {
+      const stripped = stripManagedSkillTrust(parsed.frontmatter, ws, p, existing.type);
+      const existingFm = (existing.frontmatter ?? {}) as Record<string, unknown>;
+      if (stripped !== parsed.frontmatter && 'trusted' in existingFm) {
+        return { ...stripped, trusted: existingFm.trusted };
+      }
+      return stripped;
+    })();
     const updated = {
       ...existing,
       title: parsed.title,
       ...(nextSlug ? { slug: nextSlug } : {}),
       body: parsed.body,
-      frontmatter: parsed.frontmatter,
+      frontmatter: mdFrontmatter,
       status: parsed.status,
       updatedBy: user.id,
       updatedAt: new Date(),

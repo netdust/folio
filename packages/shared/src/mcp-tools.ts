@@ -35,6 +35,11 @@ export const V1_MCP_TOOLS = [
   // type=page) by construction; maps to documents:read. Any agent can PULL a
   // skill before shaping a workspace.
   'get_skill',
+  // Piece B (T8) — bless/unbless a __system skill (set its trusted flag). Maps
+  // to config:write; the actual T8 separation-of-duties gate (canBlessSkill)
+  // lives in setSkillTrust — an MCP admin PAT (human createdBy) is refused, only
+  // the system operator (createdBy null) or a session user may flip the flag.
+  'set_skill_trust',
 ] as const;
 
 export type McpTool = (typeof V1_MCP_TOOLS)[number];

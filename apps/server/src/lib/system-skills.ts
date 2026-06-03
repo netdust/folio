@@ -47,6 +47,9 @@ export const OPERATOR_TOOLS = [
   'run_view',
   // Piece B — pull a skill from the __system library before shaping a workspace.
   'get_skill',
+  // Piece B (T8) — the operator is the system-origin (createdBy null) principal,
+  // so it is the live blesser for __system skills. canBlessSkill gates the flip.
+  'set_skill_trust',
 ] as const;
 
 // Compile-time guard: every OPERATOR_TOOLS member is a real MCP tool. Mirrors the

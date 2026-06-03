@@ -40,7 +40,11 @@ export type EventKind =
   // Emitted when the trigger-matcher reactor declines to fan out an
   // agent-originated chain because FOLIO_AGENT_CHAINS_ENABLED is off (V1
   // autonomy gate). Workspace-scoped, durable.
-  | 'agent.chain.suppressed';
+  | 'agent.chain.suppressed'
+  // Piece B (T8) — emitted by setSkillTrust when a __system skill's `trusted`
+  // flag is flipped. The flag is server-managed; this is the single audit
+  // signal for a bless/unbless. Scoped to (__system, skills project, skill doc).
+  | 'skill.trust.changed';
 
 /** Source-of-truth list. Keep in sync with EventKind above. */
 export const KNOWN_EVENT_KINDS: readonly EventKind[] = [
@@ -72,4 +76,6 @@ export const KNOWN_EVENT_KINDS: readonly EventKind[] = [
   'reactor.recovered',
   // Phase 3 C-11 — autonomy-gate suppression signal (trigger-matcher).
   'agent.chain.suppressed',
+  // Piece B (T8) — skill bless/unbless audit signal.
+  'skill.trust.changed',
 ];

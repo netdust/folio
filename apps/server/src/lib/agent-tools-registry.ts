@@ -94,6 +94,7 @@ import { serializeMarkdown } from './frontmatter.ts';
 import { HTTPError } from './http.ts';
 import { mcpInvalidParams, mcpRejectHumanPat, rethrowAgentGuardAsMcp } from './mcp-errors.ts';
 import { getSystemWorkspaceId, isReservedSlug, resolveAgentForRun } from './system-workspace.ts';
+import { setSkillTrust } from './skill-trust.ts';
 
 // ---------------------------------------------------------------------------
 // Result envelopes — verbatim from routes/mcp.ts.
@@ -412,6 +413,42 @@ export function registerRealTools(): void {
         description: sfm.description,
         when_to_use: sfm.when_to_use,
       });
+    },
+  });
+
+  registerTool({
+    name: 'set_skill_trust',
+    description:
+      'Bless or unbless a __system skill (set its trusted flag). Restricted to the system operator or a session user.',
+    requiredScope: 'config:write', // a privileged config-class op
+    schema: z.object({ slug: z.string(), trusted: z.boolean() }).strict(),
+    inputSchema: {
+      type: 'object',
+      properties: { slug: { type: 'string' }, trusted: { type: 'boolean' } },
+      required: ['slug', 'trusted'],
+    },
+    handler: async (args: { slug: string; trusted: boolean }, ctx) => {
+      // T8 gate lives in setSkillTrust(canBlessSkill). The tool caller is always
+      // a token; sessionUser is null on the tool path (the operator's
+      // createdBy-null token is the live blesser — an MCP admin PAT carries a
+      // human createdBy and is refused). Returns the refusal as a structured
+      // result if not allowed instead of throwing through the tool envelope.
+      try {
+        await setSkillTrust(db, {
+          slug: args.slug,
+          trusted: args.trusted,
+          token: ctx.token,
+          sessionUser: null,
+          actor: ctx.actor,
+        });
+        return textResult({ slug: args.slug, trusted: args.trusted, ok: true });
+      } catch (e) {
+        return textResult({
+          slug: args.slug,
+          refused: true,
+          reason: e instanceof Error ? e.message : 'refused',
+        });
+      }
     },
   });
 

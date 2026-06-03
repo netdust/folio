@@ -74,7 +74,10 @@ const AGENT_WRITE_TOOLS: ReadonlySet<string> = new Set([
 // (Phase 3), gated on the new canonical config:write scope. Registered here so
 // toolsToScopes is consistent the moment folio_api is added; owner/admin gets
 // config:write via ALL_DOCUMENT_SCOPES in roleToScopes.
-const CONFIG_WRITE_TOOLS: ReadonlySet<string> = new Set(['folio_api']);
+// set_skill_trust (Piece B, T8) is a privileged config-class op — maps to
+// config:write here; the actual bless gate (canBlessSkill) is enforced inside
+// setSkillTrust, not by the scope alone.
+const CONFIG_WRITE_TOOLS: ReadonlySet<string> = new Set(['folio_api', 'set_skill_trust']);
 
 /**
  * The complete set of scopes a fully-privileged caller (owner/admin) may

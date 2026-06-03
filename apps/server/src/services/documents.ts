@@ -18,6 +18,7 @@ import {
   slugify,
   filterCompile,
   FilterCompileError,
+  SYSTEM_WORKSPACE_SLUG,
 } from '@folio/shared';
 import { db } from '../db/client.ts';
 import {
@@ -65,6 +66,33 @@ export function stripReservedFrontmatter(
     out[k] = v;
   }
   return out;
+}
+
+/**
+ * T8 — `trusted` is server-managed on __system skills pages. A normal
+ * create/update_document (or folio_api) write to such a page must NOT be able to
+ * set or flip `trusted`; only setSkillTrust (skill-trust.ts) may. Strip the key
+ * ONLY when the target is a __system skills page (workspace=__system, project
+ * slug='skills', type=page) — a regular document elsewhere may legitimately carry
+ * a `trusted` frontmatter field, so this is NOT a global RESERVED key.
+ */
+function isSystemSkillPage(
+  ws: Pick<Workspace, 'slug'>,
+  project: Pick<Project, 'slug'> | null,
+  type: DocumentType | string,
+): boolean {
+  return ws.slug === SYSTEM_WORKSPACE_SLUG && project?.slug === 'skills' && type === 'page';
+}
+
+export function stripManagedSkillTrust(
+  fm: Record<string, unknown>,
+  ws: Pick<Workspace, 'slug'>,
+  project: Pick<Project, 'slug'> | null,
+  type: DocumentType | string,
+): Record<string, unknown> {
+  if (!isSystemSkillPage(ws, project, type)) return fm;
+  const { trusted: _managed, ...rest } = fm;
+  return rest;
 }
 
 export function getAssignee(fm: unknown): string | null {
@@ -503,7 +531,11 @@ export async function createDocument(
   const { workspace: ws, project: p, actor: user, token } = args;
   const input: CreateDocumentInput = {
     ...args.input,
-    frontmatter: stripReservedFrontmatter(args.input.frontmatter ?? {}),
+    // T8 — strip server-managed `trusted` first when this is a __system skills
+    // page (only setSkillTrust may set it), then strip the always-reserved keys.
+    frontmatter: stripReservedFrontmatter(
+      stripManagedSkillTrust(args.input.frontmatter ?? {}, ws, p, args.input.type),
+    ),
   };
 
   // G15: comments are created through createComment (services/comments.ts),
@@ -910,7 +942,12 @@ export async function updateDocument(
     const merged: Record<string, unknown> = {
       ...(existing.frontmatter as Record<string, unknown>),
     };
-    for (const [k, v] of Object.entries(patch.frontmatter)) {
+    // T8 — `trusted` is server-managed on __system skills pages. Drop it from the
+    // incoming PATCH so a normal update_document/folio_api write can't flip it;
+    // only setSkillTrust may. The EXISTING trusted value (set by setSkillTrust)
+    // is preserved via the `...existing` spread above.
+    const patchFm = stripManagedSkillTrust(patch.frontmatter, ws, p, existing.type);
+    for (const [k, v] of Object.entries(patchFm)) {
       if ((RESERVED_FRONTMATTER_KEYS as readonly string[]).includes(k)) continue;
       // Folio's "empty means absent" contract: both `null` and '' clear the key.
       // The agent form commits `model: ''` when switching to the modelless

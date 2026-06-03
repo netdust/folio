@@ -259,6 +259,8 @@ describe('V1_MCP_TOOLS', () => {
       'folio_api_get', 'folio_api',
       // Piece B — narrow __system skills-page read (T7).
       'get_skill',
+      // Piece B (T8) — bless/unbless a __system skill (set its trusted flag).
+      'set_skill_trust',
       // search_documents deferred to v1.1
     ] as const);
   });
