@@ -289,15 +289,17 @@ async function main(): Promise<void> {
     if (!inbox) throw new Error(`inbox project not found in list: ${truncate(projects)}`);
     const inboxId = inbox.id;
 
-    // 4) BYOK Anthropic key. settings.ts POST body shape:
-    //    { provider, apiKey, label?, baseUrl? }  (NO `default`/`model` field).
+    // 4) INSTANCE AI key (anthropic). AI keys are instance-level now —
+    //    POST /api/v1/instance/ai-keys (session-only + __system admin). Body:
+    //    { provider, apiKey, label?, baseUrl? }. The registering user is the
+    //    first user → instance owner, so the session cookie can write it.
     assert2xx(
-      await api('POST', `/api/v1/w/${WS_SLUG}/settings/${workspaceId}/ai-keys`, {
+      await api('POST', `/api/v1/instance/ai-keys`, {
         provider: 'anthropic',
         apiKey: ANTHROPIC_KEY,
         label: 'default',
       }),
-      'store ai-key (anthropic)',
+      'store instance ai-key (anthropic)',
     );
 
     // 5) Agent (workspace-scoped; POST /api/v1/w/:wslug/documents). tools:[] →
