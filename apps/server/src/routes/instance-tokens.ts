@@ -26,8 +26,12 @@ import { type AuthContext, getUser, requireSessionUser } from '../middleware/aut
  */
 const instanceTokensRoute = new Hono<AuthContext>();
 
-// Session-only: requireSessionUser rejects authMethod === 'token' (bearers) with
-// 403 even when attachToken hydrated c.user from token.createdBy.
+// Session-only. This route mounts on v1 (not wScope), where attachToken does
+// NOT run — so a Bearer is never parsed here and `c.get('user')` is set only by
+// a valid session cookie (attachUser). requireSessionUser's `!user → 401` is
+// therefore the operative gate: a bearer-only request has no user and is
+// rejected. (requireSessionUser also rejects authMethod==='token' as
+// defense-in-depth, but that branch is unreachable at this mount.)
 instanceTokensRoute.use('*', requireSessionUser);
 
 instanceTokensRoute.get('/', async (c) => {

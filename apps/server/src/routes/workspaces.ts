@@ -11,6 +11,7 @@ import { emitEvent, txWithEvents } from '../lib/events.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
 import { slugUniqueInWorkspaces } from '../lib/slug-unique.ts';
 import { isReservedSlug } from '../lib/system-workspace.ts';
+import { isInstanceReach } from '../lib/token-reach.ts';
 import { listWorkspaces } from '../services/workspaces.ts';
 import {
   type AuthContext,
@@ -68,7 +69,7 @@ workspacesRoute.post(
     const token = c.get('token');
     const user = c.get('user');
     const instanceBearer =
-      !!token && token.workspaceId === null && token.scopes.includes('workspace:admin');
+      !!token && isInstanceReach(token) && token.scopes.includes('workspace:admin');
     if (!user && !instanceBearer) {
       throw new HTTPError('UNAUTHENTICATED', 'login required', 401);
     }
