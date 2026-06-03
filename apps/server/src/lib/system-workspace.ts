@@ -3,9 +3,10 @@ import { and, eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import type { DB } from '../db/client.ts';
 import type { Document } from '../db/schema.ts';
-import { documents, memberships, projects, users, workspaces } from '../db/schema.ts';
+import { apiTokens, documents, memberships, projects, users, workspaces } from '../db/schema.ts';
 import type { Env } from '../env.ts';
 import { createDocument } from '../services/documents.ts';
+import { roleToScopes } from './agent-schema.ts';
 import { HTTPError } from './http.ts';
 import {
   FOLIO_SKILL_BODY,
@@ -386,6 +387,26 @@ export async function grantOwner(db: DB, email: string): Promise<string> {
  * is discarded (only the hash persists). `actorUserId` supplies the agent doc's
  * `createdBy` actor — it must be an existing user.
  */
+/**
+ * Re-provision the operator's auto-minted token into its SYSTEM-ORIGIN INSTANCE
+ * form (A9): workspaceId null (instance reach), createdBy null (the unforgeable
+ * T8 bless marker — POST /tokens always stamps a human createdBy, so null can
+ * only arise from code provisioning), full owner scopes. `agentId` is KEPT (a
+ * documented T3 carve-out: the runner loads the operator token by agentId, and
+ * the operator legitimately IS instance-reach AND agent-bound). Idempotent.
+ */
+async function ensureOperatorToken(db: DB): Promise<void> {
+  const sys = await requireSystemWorkspace(db);
+  const operator = await db.query.documents.findFirst({
+    where: and(eq(documents.workspaceId, sys.id), eq(documents.type, 'agent')),
+  });
+  if (!operator) return; // no operator yet — nothing to re-provision
+  await db
+    .update(apiTokens)
+    .set({ workspaceId: null, createdBy: null, scopes: roleToScopes('owner') })
+    .where(eq(apiTokens.agentId, operator.id));
+}
+
 export async function ensureOperatorAgent(
   db: DB,
   actorUserId: string,
@@ -395,7 +416,12 @@ export async function ensureOperatorAgent(
   const existingAgent = await db.query.documents.findFirst({
     where: and(eq(documents.workspaceId, sys.id), eq(documents.type, 'agent')),
   });
-  if (existingAgent) return; // idempotent: the operator already exists
+  if (existingAgent) {
+    // Already seeded: still re-provision the token so a pre-A9 operator (or a
+    // re-run) converges to the system-origin instance form. Idempotent.
+    await ensureOperatorToken(db);
+    return;
+  }
 
   const actor = await db.query.users.findFirst({ where: eq(users.id, actorUserId) });
   if (!actor) {
@@ -440,10 +466,17 @@ export async function ensureOperatorAgent(
       err instanceof Error &&
       err.message.includes('UNIQUE constraint failed: documents.workspace_id')
     ) {
+      // A concurrent designate already seeded the operator — converge its token.
+      await ensureOperatorToken(db);
       return;
     }
     throw err;
   }
+
+  // Success path: the operator was just created with its auto-minted token in
+  // the (workspaceId=__system, createdBy=actor) form. Re-provision it into the
+  // system-origin instance form (A9).
+  await ensureOperatorToken(db);
 }
 
 /**

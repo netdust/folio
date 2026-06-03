@@ -3,6 +3,7 @@ import { and, eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { apiTokens, documents, memberships, projects, users, workspaces } from '../db/schema.ts';
 import { makeTestApp } from '../test/harness.ts';
+import { roleToScopes } from './agent-schema.ts';
 import { hashPassword } from './auth.ts';
 import {
   SYSTEM_WORKSPACE_SLUG,
@@ -275,6 +276,79 @@ describe('grantOwner + ensureOperatorAgent + designateInstanceOwner (M5/M8)', ()
       where: and(eq(documents.workspaceId, sys!.id), eq(documents.type, 'agent')),
     });
     expect(agent).toBeDefined();
+  });
+});
+
+describe('A9: operator instance token (T8 origin, T3 carve-out)', () => {
+  async function seedOwnerAndDesignate(db: Awaited<ReturnType<typeof makeTestApp>>['db']) {
+    await bootstrapSystemWorkspace(db);
+    const uid = nanoid();
+    await db.insert(users).values({
+      id: uid,
+      email: 'op-owner@x.com',
+      name: 'OpOwner',
+      passwordHash: await hashPassword('password123'),
+    });
+    await designateInstanceOwner(db, 'op-owner@x.com');
+    return uid;
+  }
+
+  async function findOperatorAndToken(
+    db: Awaited<ReturnType<typeof makeTestApp>>['db'],
+  ) {
+    const systemId = await getSystemWorkspaceId(db);
+    const operator = await db.query.documents.findFirst({
+      where: and(eq(documents.workspaceId, systemId), eq(documents.type, 'agent')),
+    });
+    expect(operator).toBeDefined();
+    const token = await db.query.apiTokens.findFirst({
+      where: eq(apiTokens.agentId, operator!.id),
+    });
+    expect(token).toBeDefined();
+    return { operator: operator!, token: token! };
+  }
+
+  test('operator token is provisioned instance-wide with system origin', async () => {
+    const { db } = await makeTestApp();
+    await seedOwnerAndDesignate(db);
+    const { operator, token } = await findOperatorAndToken(db);
+    // Instance reach (T8) + unforgeable system-origin marker:
+    expect(token.workspaceId).toBeNull();
+    expect(token.createdBy).toBeNull();
+    // T3 carve-out: agentId is KEPT (runner loads the operator token by agentId).
+    expect(token.agentId).toBe(operator.id);
+    // Full owner scopes.
+    const owner = roleToScopes('owner');
+    expect(owner.every((s) => token.scopes.includes(s))).toBe(true);
+  });
+
+  test('operator token is NOT mintable via POST /tokens (system origin is code-only)', async () => {
+    const { db } = await makeTestApp();
+    await seedOwnerAndDesignate(db);
+    // T8: createdBy:null is an unforgeable marker — POST /tokens (A7) always
+    // stamps a human createdBy, so a createdBy:null token can only arise from
+    // code provisioning. Exactly the operator carries it.
+    const allTokens = await db.query.apiTokens.findMany();
+    const systemOrigin = allTokens.filter((t) => t.createdBy === null);
+    expect(systemOrigin.length).toBe(1);
+    const { operator } = await findOperatorAndToken(db);
+    expect(systemOrigin[0]!.agentId).toBe(operator.id);
+    expect(systemOrigin[0]!.workspaceId).toBeNull();
+  });
+
+  test('re-running ensureOperatorAgent is idempotent and keeps the instance token', async () => {
+    const { db } = await makeTestApp();
+    const ownerUserId = await seedOwnerAndDesignate(db);
+    await ensureOperatorAgent(db, ownerUserId); // re-run
+    const systemId = await getSystemWorkspaceId(db);
+    const agents = await db.query.documents.findMany({
+      where: and(eq(documents.workspaceId, systemId), eq(documents.type, 'agent')),
+    });
+    expect(agents.length).toBe(1); // still exactly one operator
+    const { operator, token } = await findOperatorAndToken(db);
+    expect(token.workspaceId).toBeNull();
+    expect(token.createdBy).toBeNull();
+    expect(token.agentId).toBe(operator.id);
   });
 });
 
