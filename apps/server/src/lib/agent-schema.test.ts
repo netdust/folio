@@ -40,6 +40,22 @@ describe('agentFrontmatterSchema', () => {
     }
   });
 
+  test('ai_key_label defaults to "default" and accepts an explicit label', () => {
+    const fm = agentFrontmatterSchema.parse({
+      provider: 'ollama',
+      model: 'qwen2.5-coder:7b',
+      tools: [],
+    });
+    expect(fm.ai_key_label).toBe('default');
+    const fm2 = agentFrontmatterSchema.parse({
+      provider: 'ollama',
+      model: 'm',
+      tools: [],
+      ai_key_label: 'cheap',
+    });
+    expect(fm2.ai_key_label).toBe('cheap');
+  });
+
   test('rejects max_delegation_depth > 5', () => {
     const r = agentFrontmatterSchema.safeParse({
       system_prompt: 'x', model: 'x', provider: 'anthropic', tools: [], max_delegation_depth: 6,
