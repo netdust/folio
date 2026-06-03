@@ -327,3 +327,90 @@ describe('tokens.ts A7 instance reach gate (T1/T2)', () => {
     expect([404, 405].includes(res.status)).toBe(true);
   });
 });
+
+// A12 — instance-token listing surface. The per-workspace list filters
+// `WHERE workspace_id = <id>`, which EXCLUDES instance (null) tokens, leaving
+// them invisible to management. GET /api/v1/instance/tokens lists them, gated to
+// a __system owner/admin SESSION (T1 parity with the A7 mint gate). Never returns
+// tokenHash.
+describe('A12: instance-token listing surface', () => {
+  const instancePath = '/api/v1/instance/tokens';
+
+  test('a __system owner lists instance tokens (and per-workspace tokens are excluded)', async () => {
+    const { app, db, seed } = await makeTestApp();
+    await bootstrapSystemWorkspace(db);
+    const systemId = await getSystemWorkspaceId(db);
+    // Make seed.user (who already has a session cookie) a __system owner.
+    await db.insert(schema.memberships).values({
+      workspaceId: systemId,
+      userId: seed.user.id,
+      role: 'owner',
+    });
+
+    // An INSTANCE token (workspaceId null) + a normal acme-pinned token.
+    const inst = newApiToken();
+    await db.insert(apiTokens).values({
+      id: nanoid(),
+      workspaceId: null,
+      name: 'inst',
+      tokenHash: inst.hash,
+      scopes: ['documents:read'],
+      createdBy: seed.user.id,
+    });
+    const pinned = newApiToken();
+    await db.insert(apiTokens).values({
+      id: nanoid(),
+      workspaceId: seed.workspace.id,
+      name: 'pinned',
+      tokenHash: pinned.hash,
+      scopes: ['documents:read'],
+      createdBy: seed.user.id,
+    });
+
+    const res = await app.request(instancePath, {
+      headers: { Cookie: seed.sessionCookie },
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    const names = body.data.tokens.map((t: { name: string }) => t.name);
+    expect(names).toContain('inst');
+    expect(names).not.toContain('pinned');
+    // The instance token carries a null workspace_id.
+    const instRow = body.data.tokens.find((t: { name: string }) => t.name === 'inst');
+    expect(instRow.workspaceId).toBeNull();
+    // Never leak tokenHash.
+    for (const t of body.data.tokens) {
+      expect('tokenHash' in t).toBe(false);
+    }
+  });
+
+  test('a non-__system user is forbidden from the instance-token list (403)', async () => {
+    const { app, db, seed } = await makeTestApp();
+    await bootstrapSystemWorkspace(db);
+    // seed.user is owner of acme but NOT a __system member.
+    const res = await app.request(instancePath, {
+      headers: { Cookie: seed.sessionCookie },
+    });
+    expect(res.status).toBe(403);
+    const body = await res.json();
+    expect(body.error.code).toBe('FORBIDDEN');
+  });
+
+  test('a bearer cannot reach the instance-token list (session-only)', async () => {
+    const { app, db, seed } = await makeTestApp();
+    await bootstrapSystemWorkspace(db);
+    const { token, hash } = newApiToken();
+    await db.insert(apiTokens).values({
+      id: nanoid(),
+      workspaceId: seed.workspace.id,
+      name: 'bearer',
+      tokenHash: hash,
+      scopes: ['documents:read'],
+      createdBy: seed.user.id,
+    });
+    const res = await app.request(instancePath, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect([401, 403]).toContain(res.status);
+  });
+});

@@ -20,6 +20,7 @@ import { documentsRoute } from './routes/documents.ts';
 import { eventsRoute } from './routes/events.ts';
 import { fieldsRoute } from './routes/fields.ts';
 import { healthRoute } from './routes/health.ts';
+import { instanceTokensRoute } from './routes/instance-tokens.ts';
 import { mcpRoute } from './routes/mcp.ts';
 import { projectItemRoute, projectsRoute } from './routes/projects.ts';
 import { providerHealthRoute, runsListRoute, runsRoute } from './routes/runs.ts';
@@ -44,6 +45,10 @@ app.use('*', attachUser);
 const v1 = new Hono<AuthContext & ScopeContext>();
 v1.route('/auth', auth);
 v1.route('/workspaces', workspacesRoute);
+// A12: instance-token administration. Session-only + __system owner/admin gate.
+// Mounted on v1 (NOT under wScope) because instance tokens are not workspace-
+// scoped — their workspace_id is null. attachUser (app-wide) supplies the session.
+v1.route('/instance/tokens', instanceTokensRoute);
 
 const wScope = new Hono<AuthContext & ScopeContext>();
 wScope.use('*', attachToken, requireUserOrToken, resolveWorkspace);
