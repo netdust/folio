@@ -23,6 +23,7 @@ import { type ToolDef, executeTool, listToolDefs, registerTool } from './agent-t
 import {
   SYSTEM_WORKSPACE_SLUG,
   bootstrapSystemWorkspace,
+  isReservedSlug,
 } from './system-workspace.ts';
 import { workspaces } from '../db/schema.ts';
 import { intersectAgentProjects } from './agent-projects.ts';
@@ -1781,6 +1782,32 @@ describe('A3: instance reach in resolvers', () => {
     };
     expect(out.workspaces).toHaveLength(1);
     expect(out.workspaces[0]!.slug).toBe('acme');
+  });
+
+  // CR#4 — an instance token enumerates every workspace EXCEPT the reserved
+  // __system library (other surfaces hide it via isReservedSlug; list_workspaces
+  // must not leak the reserved namespace).
+  it('CR#4: list_workspaces for an instance token excludes the reserved __system workspace', async () => {
+    const { db, seed } = await makeTestApp();
+    // Bootstrap so a reserved __system workspace exists, plus a normal B.
+    await bootstrapSystemWorkspace(db);
+    const bId = nanoid();
+    await db.insert(workspaces).values({ id: bId, slug: 'beta', name: 'Beta' });
+
+    const token = makeToken({ workspaceId: null, scopes: ['documents:read'] });
+    const res = (await exec(token, seed.user.id, 'list_workspaces', {})) as {
+      content: { text: string }[];
+    };
+    const out = JSON.parse(res.content[0]!.text) as {
+      workspaces: { slug: string }[];
+    };
+    const slugs = out.workspaces.map((w) => w.slug);
+    // Normal workspaces are listed...
+    expect(slugs).toContain('acme');
+    expect(slugs).toContain('beta');
+    // ...but the reserved __system library is filtered out.
+    expect(slugs).not.toContain(SYSTEM_WORKSPACE_SLUG);
+    expect(out.workspaces.some((w) => isReservedSlug(w.slug))).toBe(false);
   });
 
   it('instance token resolves a non-home workspace via a resolver tool', async () => {

@@ -259,6 +259,49 @@ export async function findSystemWorkspaceId(db: DB): Promise<string | undefined>
   return sys?.id;
 }
 
+/** A __system membership role that may administer the instance. */
+export type InstanceAdminRole = 'owner' | 'admin';
+
+/**
+ * The SINGLE instance-admin gate (CR#6). A user may administer instance-level
+ * surfaces (mint a reach=null token, list/revoke instance tokens) iff they are
+ * an owner/admin of `__system`. Returns their `__system` role (callers use it as
+ * the scope ceiling for a reach=null mint); throws 403 otherwise. Both the A7
+ * token-mint reach gate and the instance-token routes route through this so the
+ * instance-admin boundary lives in one place.
+ */
+export async function requireInstanceAdmin(
+  db: DB,
+  userId: string,
+): Promise<InstanceAdminRole> {
+  const systemId = await getSystemWorkspaceId(db);
+  const m = await db.query.memberships.findFirst({
+    where: and(eq(memberships.workspaceId, systemId), eq(memberships.userId, userId)),
+  });
+  if (m?.role !== 'owner' && m?.role !== 'admin') {
+    throw new HTTPError(
+      'FORBIDDEN',
+      'instance administration requires a __system owner/admin',
+      403,
+    );
+  }
+  return m.role;
+}
+
+/**
+ * The single `__system` OWNER's user id (CR#2). A designated instance has
+ * exactly one owner; an operator-provisioned workspace is owned by that human.
+ * Returns undefined if no owner exists yet (pre-designation).
+ */
+export async function findSystemOwnerId(db: DB): Promise<string | undefined> {
+  const systemId = await findSystemWorkspaceId(db);
+  if (!systemId) return undefined;
+  const owner = await db.query.memberships.findFirst({
+    where: and(eq(memberships.workspaceId, systemId), eq(memberships.role, 'owner')),
+  });
+  return owner?.userId;
+}
+
 /**
  * Resolve an agent document for a RUN in workspace `workspaceId`, gated by the
  * home predicate {run-ws, __system} (B1, the create-path security boundary).
@@ -401,9 +444,23 @@ async function ensureOperatorToken(db: DB): Promise<void> {
     where: and(eq(documents.workspaceId, sys.id), eq(documents.type, 'agent')),
   });
   if (!operator) return; // no operator yet — nothing to re-provision
+  const token = await db.query.apiTokens.findFirst({
+    where: eq(apiTokens.agentId, operator.id),
+  });
+  if (!token) return; // operator doc exists but its auto-minted token is gone
+  // CR#9 — skip the write when the token is ALREADY in system-origin instance
+  // form (the steady-state boot path). Only UPDATE when something differs, so a
+  // re-run / concurrent-create / every boot isn't a needless row write.
+  const wantScopes = roleToScopes('owner');
+  const alreadyProvisioned =
+    token.workspaceId === null &&
+    token.createdBy === null &&
+    token.scopes.length === wantScopes.length &&
+    wantScopes.every((s) => token.scopes.includes(s));
+  if (alreadyProvisioned) return;
   await db
     .update(apiTokens)
-    .set({ workspaceId: null, createdBy: null, scopes: roleToScopes('owner') })
+    .set({ workspaceId: null, createdBy: null, scopes: wantScopes })
     .where(eq(apiTokens.agentId, operator.id));
 }
 

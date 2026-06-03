@@ -6,8 +6,11 @@ import { newApiToken } from '../lib/auth.ts';
 import {
   SYSTEM_WORKSPACE_SLUG,
   bootstrapSystemWorkspace,
+  designateInstanceOwner,
+  findSystemOwnerId,
   grantOwner,
 } from '../lib/system-workspace.ts';
+import { describe } from 'bun:test';
 import { isSystemMember, listWorkspaces } from '../services/workspaces.ts';
 import { makeTestApp } from '../test/harness.ts';
 import { assertSlugAllowed } from './workspaces.ts';
@@ -680,4 +683,57 @@ test('A10: session user still creates a workspace (regression)', async () => {
     body: JSON.stringify({ name: 'A10 Session' }),
   });
   expect(res.status).toBe(201);
+});
+
+// --- CR#2: the OPERATOR (the user-less instance bearer, createdBy=null) can
+// create a workspace, owned by the __system owner. The existing A10 test above
+// covers a human-minted instance bearer (createdBy=<user>) whose owner is the
+// hydrated user; this exercises the DISTINCT createdBy=null path where there is
+// NO hydrated user and the handler must fall back to findSystemOwnerId(db).
+describe('CR#2: operator/instance-bearer workspace create', () => {
+  test('operator token (createdBy=null) with workspace:admin creates a workspace owned by the __system owner', async () => {
+    const { app, db, seed } = await makeTestApp();
+    // Bootstrap __system and designate seed.user (alice) as the instance owner —
+    // this is what gives findSystemOwnerId a single owner to resolve.
+    await bootstrapSystemWorkspace(db);
+    await designateInstanceOwner(db, seed.user.email);
+    const systemOwnerId = await findSystemOwnerId(db);
+    expect(systemOwnerId).toBe(seed.user.id);
+
+    // Mint the OPERATOR-shaped token: instance reach (workspaceId null), NO
+    // human creator (createdBy null — the unforgeable system-origin marker),
+    // owner-equivalent admin scope. NO cookie: the user-less bearer path.
+    const { token, hash } = newApiToken();
+    await db.insert(apiTokens).values({
+      id: nanoid(),
+      workspaceId: null,
+      name: 'operator-style',
+      tokenHash: hash,
+      scopes: ['workspace:admin', 'documents:read'],
+      createdBy: null,
+    });
+
+    const res = await app.request('/api/v1/workspaces', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Op WS' }),
+    });
+    expect(res.status).toBe(201);
+    const wsId = (await res.json()).data.id as string;
+
+    // The workspace row exists...
+    const row = await db.query.workspaces.findFirst({ where: eq(workspaces.id, wsId) });
+    expect(row).toBeDefined();
+
+    // ...and its owner membership is assigned to the __system owner (alice),
+    // NOT to a (non-existent) hydrated user — proving the findSystemOwnerId
+    // fallback fired.
+    const owner = await db.query.memberships.findFirst({
+      where: and(eq(memberships.workspaceId, wsId), eq(memberships.role, 'owner')),
+    });
+    expect(owner).toBeDefined();
+    // systemOwnerId === seed.user.id (asserted above); compare to the definite
+    // string so the assertion stays well-typed.
+    expect(owner!.userId).toBe(seed.user.id);
+  });
 });

@@ -29,3 +29,16 @@ export function effectiveReach(
   }
   return { ok: false };
 }
+
+/** An api_token row with the secret hash removed, safe to return over HTTP. */
+export type PublicApiToken = Omit<ApiToken, 'tokenHash'>;
+
+/**
+ * The SINGLE redacting serializer for api_token rows on any listing surface
+ * (CR#7 — "redact at the loader, not the handler"). Strips `tokenHash` so a new
+ * token-listing route cannot leak the secret by re-implementing the strip.
+ * Route both the per-workspace list and the instance-token list through this.
+ */
+export function serializeApiToken({ tokenHash: _omit, ...rest }: ApiToken): PublicApiToken {
+  return rest;
+}

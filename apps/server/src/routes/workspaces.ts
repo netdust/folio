@@ -10,7 +10,7 @@ import { seedBuiltinTriggers } from '../lib/builtin-triggers.ts';
 import { emitEvent, txWithEvents } from '../lib/events.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
 import { slugUniqueInWorkspaces } from '../lib/slug-unique.ts';
-import { isReservedSlug } from '../lib/system-workspace.ts';
+import { findSystemOwnerId, isReservedSlug } from '../lib/system-workspace.ts';
 import { isInstanceReach } from '../lib/token-reach.ts';
 import { listWorkspaces } from '../services/workspaces.ts';
 import {
@@ -39,26 +39,30 @@ const workspacesRoute = new Hono<AuthContext & ScopeContext>();
 // when no Authorization header is present, so session-only callers are
 // unaffected.
 workspacesRoute.use('*', attachToken);
-workspacesRoute.use('*', requireUser);
 
 // --- collection ---
 
-workspacesRoute.get('/', async (c) => {
+// GET requires a resolved user (session, or a human PAT whose createdBy
+// hydrates one) — listWorkspaces is per-user. The user-less operator token has
+// no per-user workspace list, so requireUser (401 on no user) is correct here.
+workspacesRoute.get('/', requireUser, async (c) => {
   const user = getUser(c);
   return jsonOk(c, await listWorkspaces(user.id));
 });
 
 workspacesRoute.post(
   '/',
-  // A10 — workspace creation accepts EITHER a session user OR an instance-reach
-  // bearer (workspaceId null) holding `workspace:admin`, so the operator / an
-  // instance admin's automation can provision workspaces. attachToken already
-  // ran at the route level, so the bearer is visible here.
+  // A10/CR#2 — workspace creation accepts EITHER a session user OR an
+  // instance-reach bearer (workspaceId null) holding `workspace:admin`, so the
+  // operator / an instance admin's automation can provision workspaces.
+  // attachToken already ran at the route level. This composite is the SOLE auth
+  // gate for POST (there is no route-level requireUser — it would 401 the
+  // user-less operator bearer before this runs).
   //
-  // Composite gate. Allow:
+  // Allow:
   //   - a session user (no bearer)                              → pass
   //   - an instance bearer (workspaceId null) with              → pass
-  //     workspace:admin
+  //     workspace:admin (incl. the user-less operator token)
   // Reject (M7 preserved):
   //   - a pinned/agent bearer, or an instance bearer lacking
   //     workspace:admin → 403
@@ -99,7 +103,19 @@ workspacesRoute.post(
     }),
   ),
   async (c) => {
-    const user = getUser(c);
+    // The OWNER of the new workspace: the request's hydrated user (session or a
+    // human PAT), or — for the user-less operator token (createdBy null) — the
+    // single __system owner (CR#2). A designated instance always has one; if it
+    // somehow doesn't, fail closed rather than create an ownerless workspace.
+    const requestUser = c.get('user');
+    const ownerUserId = requestUser?.id ?? (await findSystemOwnerId(db));
+    if (!ownerUserId) {
+      throw new HTTPError(
+        'FORBIDDEN',
+        'no owner to assign — an instance owner must be designated first',
+        403,
+      );
+    }
     const { name, slug: explicit } = c.req.valid('json');
     const id = nanoid();
 
@@ -120,15 +136,15 @@ workspacesRoute.post(
 
     await txWithEvents(db, async (tx) => {
       await tx.insert(workspaces).values({ id, slug, name });
-      await tx.insert(memberships).values({ workspaceId: id, userId: user.id, role: 'owner' });
+      await tx.insert(memberships).values({ workspaceId: id, userId: ownerUserId, role: 'owner' });
       // Phase 2.6 sub-phase D — seed the 4 builtin triggers transactionally
       // with the workspace itself. Future refactor may move workspace create
       // into services/workspaces.ts::createWorkspace.
-      await seedBuiltinTriggers(tx, id, user.id);
+      await seedBuiltinTriggers(tx, id, ownerUserId);
       await emitEvent(tx, {
         workspaceId: id,
         kind: 'workspace.created',
-        actor: user.id,
+        actor: ownerUserId,
         payload: { slug, name },
       });
     });

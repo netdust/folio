@@ -8,7 +8,8 @@ import { apiTokens, memberships } from '../db/schema.ts';
 import { newApiToken } from '../lib/auth.ts';
 import { roleToScopes } from '../lib/agent-schema.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
-import { getSystemWorkspaceId } from '../lib/system-workspace.ts';
+import { requireInstanceAdmin } from '../lib/system-workspace.ts';
+import { serializeApiToken } from '../lib/token-reach.ts';
 import {
   type AuthContext,
   getUser,
@@ -30,7 +31,7 @@ tokensRoute.get('/:workspaceId', async (c) => {
     where: eq(apiTokens.workspaceId, workspaceId),
   });
   return jsonOk(c, {
-    tokens: rows.map(({ tokenHash: _omit, ...t }) => t),
+    tokens: rows.map(serializeApiToken),
   });
 });
 
@@ -68,23 +69,11 @@ tokensRoute.post(
     let reach: string | null = workspaceId;
     let ceilingRole = m.role;
     if (requestedReach === null) {
-      const systemId = await getSystemWorkspaceId(db);
-      const sysMembership = await db.query.memberships.findFirst({
-        where: and(eq(memberships.workspaceId, systemId), eq(memberships.userId, user.id)),
-      });
-      const isInstanceAdmin =
-        sysMembership?.role === 'owner' || sysMembership?.role === 'admin';
-      if (!isInstanceAdmin) {
-        throw new HTTPError(
-          'FORBIDDEN',
-          'only an instance admin may mint an instance-wide (reach=null) token',
-          403,
-        );
-      }
+      // Instance reach is gated on the __system owner/admin boundary (CR#6 — the
+      // shared gate). It returns the caller's __system role, which becomes the
+      // scope ceiling for the instance token (not their URL-workspace role).
+      ceilingRole = await requireInstanceAdmin(db, user.id);
       reach = null;
-      // The ceiling for an instance token is the caller's __system role, not their
-      // URL-workspace role.
-      ceilingRole = sysMembership.role;
     } else if (typeof requestedReach === 'string' && requestedReach !== workspaceId) {
       // Don't allow minting a token pinned to a DIFFERENT workspace via this URL.
       throw new HTTPError(

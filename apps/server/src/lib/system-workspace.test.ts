@@ -10,6 +10,7 @@ import {
   bootstrapSystemWorkspace,
   designateInstanceOwner,
   ensureOperatorAgent,
+  findSystemOwnerId,
   getSystemWorkspaceId,
   grantOwner,
   isReservedSlug,
@@ -349,6 +350,37 @@ describe('A9: operator instance token (T8 origin, T3 carve-out)', () => {
     expect(token.workspaceId).toBeNull();
     expect(token.createdBy).toBeNull();
     expect(token.agentId).toBe(operator.id);
+  });
+
+  // CR#9 — ensureOperatorToken skips the UPDATE when the token is ALREADY in
+  // system-origin instance form. The observable contract is: a double-designate
+  // leaves the token byte-for-byte unchanged (workspaceId null, createdBy null,
+  // owner scopes, agentId kept). We assert correctness-after-double-call AND
+  // capture the full row before/after to prove the "no needless write" path
+  // didn't mutate anything.
+  test('CR#9: a second ensureOperatorAgent leaves the already-provisioned token unchanged', async () => {
+    const { db } = await makeTestApp();
+    const ownerUserId = await seedOwnerAndDesignate(db);
+    // First designate already provisioned the token into system-origin form.
+    const before = await findOperatorAndToken(db);
+    // Sanity: it IS already in the provisioned shape (so the early-return fires).
+    expect(before.token.workspaceId).toBeNull();
+    expect(before.token.createdBy).toBeNull();
+    const ownerScopes = roleToScopes('owner');
+    expect(ownerScopes.every((s) => before.token.scopes.includes(s))).toBe(true);
+
+    // Re-run: ensureOperatorToken should hit the alreadyProvisioned early-return.
+    await ensureOperatorAgent(db, ownerUserId);
+
+    const after = await findOperatorAndToken(db);
+    // Same row (matched by agentId), still correct + unchanged.
+    expect(after.token.id).toBe(before.token.id);
+    expect(after.token.workspaceId).toBeNull();
+    expect(after.token.createdBy).toBeNull();
+    expect(after.token.agentId).toBe(after.operator.id);
+    expect(after.token.scopes.sort()).toEqual(before.token.scopes.sort());
+    // Full-row equality: the idempotent path mutated NOTHING.
+    expect(after.token).toEqual(before.token);
   });
 });
 

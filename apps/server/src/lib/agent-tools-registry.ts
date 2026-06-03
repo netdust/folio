@@ -93,7 +93,7 @@ import {
 import { serializeMarkdown } from './frontmatter.ts';
 import { HTTPError } from './http.ts';
 import { mcpInvalidParams, mcpRejectHumanPat, rethrowAgentGuardAsMcp } from './mcp-errors.ts';
-import { resolveAgentForRun } from './system-workspace.ts';
+import { isReservedSlug, resolveAgentForRun } from './system-workspace.ts';
 
 // ---------------------------------------------------------------------------
 // Result envelopes — verbatim from routes/mcp.ts.
@@ -355,7 +355,10 @@ export function registerRealTools(): void {
     schema: z.object({}).strict(),
     handler: async (_args, ctx) => {
       const all = isInstanceReach(ctx.token)
-        ? await db.query.workspaces.findMany()
+        ? // CR#4 — an instance token enumerates every workspace EXCEPT the
+          // reserved __system library (other surfaces hide it via isReservedSlug;
+          // list_workspaces must not leak the reserved namespace).
+          (await db.query.workspaces.findMany()).filter((ws) => !isReservedSlug(ws.slug))
         : await db.query.workspaces
             .findFirst({ where: eq(workspaces.id, ctx.token.workspaceId!) })
             .then((ws) => (ws ? [ws] : []));
