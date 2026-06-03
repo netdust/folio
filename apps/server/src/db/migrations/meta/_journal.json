@@ -162,6 +162,13 @@
       "when": 1780960000000,
       "tag": "0021_memberships_user_idx",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "6",
+      "when": 1780970000000,
+      "tag": "0022_nullable_token_workspace",
+      "breakpoints": true
     }
   ]
 }
