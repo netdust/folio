@@ -156,6 +156,55 @@ describe('bootstrapSystemWorkspace (M4/M8)', () => {
   });
 });
 
+describe('B4: seeded folio skill is blessed', () => {
+  test('seeded folio skill carries trusted:true + description + when_to_use', async () => {
+    const { db } = await makeTestApp();
+    await bootstrapSystemWorkspace(db);
+    const sys = await db.query.workspaces.findFirst({
+      where: eq(workspaces.slug, SYSTEM_WORKSPACE_SLUG),
+    });
+    const skillsProject = await db.query.projects.findFirst({
+      where: and(eq(projects.workspaceId, sys!.id), eq(projects.slug, 'skills')),
+    });
+    const folio = await db.query.documents.findFirst({
+      where: and(
+        eq(documents.workspaceId, sys!.id),
+        eq(documents.projectId, skillsProject!.id),
+        eq(documents.title, 'folio'),
+      ),
+    });
+    expect(folio).toBeDefined();
+    const fm = folio!.frontmatter as {
+      trusted?: unknown;
+      description?: unknown;
+      when_to_use?: unknown;
+    };
+    expect(fm.trusted).toBe(true);
+    expect(typeof fm.description).toBe('string');
+    expect((fm.description as string).length).toBeGreaterThan(0);
+    expect(typeof fm.when_to_use).toBe('string');
+    expect((fm.when_to_use as string).length).toBeGreaterThan(0);
+  });
+
+  test('the setup-project-ref page still has empty frontmatter (the default arg, not blessed)', async () => {
+    const { db } = await makeTestApp();
+    await bootstrapSystemWorkspace(db);
+    const sys = await db.query.workspaces.findFirst({
+      where: eq(workspaces.slug, SYSTEM_WORKSPACE_SLUG),
+    });
+    const ref = await db.query.documents.findFirst({
+      where: and(
+        eq(documents.workspaceId, sys!.id),
+        eq(documents.type, 'page'),
+        eq(documents.title, 'Set up a project'),
+      ),
+    });
+    expect(ref).toBeDefined();
+    const fm = ref!.frontmatter as Record<string, unknown>;
+    expect('trusted' in fm).toBe(false);
+  });
+});
+
 describe('grantOwner + ensureOperatorAgent + designateInstanceOwner (M5/M8)', () => {
   test('grantOwner grants __system owner to an existing user, first-wins idempotent (M5)', async () => {
     const { db } = await makeTestApp();

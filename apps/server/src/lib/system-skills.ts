@@ -25,6 +25,20 @@ import { V1_MCP_TOOLS } from '@folio/shared';
 export const FOLIO_SKILL_SLUG = 'folio';
 
 /**
+ * Frontmatter the seeder stamps on the `folio` skill page (Piece B, B4). `trusted:
+ * true` routes it through the TRUSTED skill-load channel (B1); `description` /
+ * `when_to_use` are surfaced by `get_skill`. Blessed at SEED time only (M8
+ * seed-once); fresh installs get a trusted-channel `folio` skill.
+ */
+export const FOLIO_SKILL_FRONTMATTER = {
+  trusted: true,
+  description:
+    'Folio API manual — drive projects, tables, fields, views, statuses, providers.',
+  when_to_use:
+    'Before shaping a workspace or adding a provider; whenever you need the resource→route→scope map or the risk-gate protocol.',
+} as const;
+
+/**
  * The operator agent's TITLE. createDocument slugifies it to 'folio-operator'.
  * There is NO reserved doc slug — the operator is identified by
  * (workspace=__system, type='agent').

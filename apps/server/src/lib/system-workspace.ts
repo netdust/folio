@@ -10,6 +10,7 @@ import { roleToScopes } from './agent-schema.ts';
 import { HTTPError } from './http.ts';
 import {
   FOLIO_SKILL_BODY,
+  FOLIO_SKILL_FRONTMATTER,
   FOLIO_SKILL_SLUG,
   OPERATOR_AGENT_TITLE,
   OPERATOR_PROMPT,
@@ -119,6 +120,7 @@ async function ensureSystemPage(
   projectId: string,
   title: string,
   body: string,
+  frontmatter: Record<string, unknown> = {},
 ): Promise<void> {
   // Idempotency keys on title (not the DB unique column slug). Safe for the
   // seeded set: the two fixed titles slugify to distinct slugs in distinct
@@ -150,7 +152,7 @@ async function ensureSystemPage(
     slug: slugify(title),
     body,
     status: null,
-    frontmatter: {},
+    frontmatter,
     createdBy: null, // structure-only; no user actor at bootstrap
   });
 }
@@ -187,7 +189,14 @@ export async function bootstrapSystemWorkspace(db: DB): Promise<void> {
     'Reference',
   );
 
-  await ensureSystemPage(db, sys.id, skillsProject.id, 'folio', FOLIO_SKILL_BODY);
+  await ensureSystemPage(
+    db,
+    sys.id,
+    skillsProject.id,
+    'folio',
+    FOLIO_SKILL_BODY,
+    FOLIO_SKILL_FRONTMATTER,
+  );
   await ensureSystemPage(
     db,
     sys.id,
