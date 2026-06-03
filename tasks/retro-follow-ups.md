@@ -249,3 +249,15 @@ A real cold external agent oriented on the live instance over MCP in **2 tool ca
 ---
 
 - **C3-CC-1 SUPERSEDED → CC-DISABLED-1: claude-code HARD-DISABLED (Phase C shake-out, `a5d0966`).** The Phase C shake-out (security-sentinel) found the cc provider path bypassed BOTH the C3 unattended floor (S-1) AND the agent∩caller scope ceiling (S-2): cc spawns the `claude` CLI, which re-enters via `/mcp` (`routes/mcp.ts:185` passes `callerScopes: token.scopes` → a no-op intersect; no `unattended` flag), so a trigger-fired cc library agent runs unfloored + with the agent's FULL scopes (not caller-bounded). **Stefan's call: "claude-code doesn't work, hard-disable it."** FIXED by making `runner.ts` preflight refuse ANY `claude-code` run regardless of `FOLIO_CLAUDE_CODE_ENABLED` → `ccExecute` is unreachable from both `runAgent` + `runAgentResume` → S-1/S-2 unreachable BY CONSTRUCTION. `claude_code_enabled` is reported `false` to the UI always. The provider enum stays valid (historical rows parse; they fail at preflight). **REVIVAL GATE (do NOT re-enable cc until done):** thread run-derived authority (`unattended` + caller-narrowed scopes) onto the `cc-run:` minted token so the `/mcp` re-entry enforces the floor + the agent∩caller ceiling — OR keep cc dead. Re-enabling without this reopens S-1/S-2 (CRITICAL). The earlier accepted residual C3-CC-1 (cc-path MEDIUM floor gap) is rolled into this — the gap is no longer reachable, so C3-CC-1 is closed-by-disable. (Source: Phase C shake-out, 2026-06-02.)
+
+## 2026-06-03 — Ollama provider setup (ad-hoc, no plan)
+
+- **Finding:** Provider config (e.g. adding Ollama) has no operator path that works end-to-end. The Settings → AI UI can't express a keyless provider or a loopback base_url, so an AI/human asked to "add a provider" falls back to direct DB seeding.
+  **Decision (YES/NO):** Do we scope a product fix so "add/remove a provider" is a routine UI (or agent-drivable API/MCP) operation — covering keyless-provider state, a loopback affordance gated on `FOLIO_ALLOW_LOOPBACK_AI`, and the provider→agent model binding?
+  **Changes if YES:** `apps/web/src/components/settings/ai-tab.tsx` (keyless + conditional loopback help), a documented settings/`folio_api` route for agents, and a place that ties `ai_keys.provider` to an agent's `frontmatter.model`.
+  (surfaced by docs/superpowers/retros/2026-06-03-ollama-provider-setup-retro.md)
+
+- **Finding:** The AI tab hardcodes "Loopback addresses (localhost, 127.0.0.1, private ranges) are rejected" even on a self-hosted install where the env flag now permits loopback for Ollama — the UI lies to the operator.
+  **Decision (YES/NO):** Make that help text conditional on `FOLIO_ALLOW_LOOPBACK_AI` (server-exposed to the client) instead of a hardcoded dead-end?
+  **Changes if YES:** `apps/web/src/components/settings/ai-tab.tsx:233` + a small server-config endpoint exposing the flag.
+  (surfaced by docs/superpowers/retros/2026-06-03-ollama-provider-setup-retro.md)

@@ -446,3 +446,13 @@ Rules:
 2. **When a UI bug only reproduces live (not in jsdom tests), instrument the actual render and read the runtime values** before theorizing — `Object.toString`/key-counts logged per render exposed the oscillation in one repro that four rounds of source-reading missed. Unit tests passed throughout because jsdom doesn't reproduce React Query's refetch toggling. Reinforces [[measure-dom-for-layout-bugs]] generalized to state bugs.
 3. **Round-tripping a server object back to its own PATCH endpoint fails if the server injects managed fields.** Agent/trigger frontmatter carries server-owned keys (`api_token_id`, `last_fired_at`, …) under `.strict()` schemas. A whole-object buffered save echoes them → 422. Strip server-managed keys (one shared `SERVER_MANAGED_FRONTMATTER_KEYS` list) before diffing/sending. The old per-key auto-save never hit this because it only sent the touched field. Reinforces [[mock-the-wire-not-the-response]].
 4. After 3+ fixes fail on the SAME mechanism, STOP and question the architecture (the debugging skill's Phase 4.5) — I should have abandoned in-place re-seed after attempt 2 instead of 3.
+
+---
+
+## 2026-06-03 — Security-boundary edits need threat-modeling even with no plan
+
+**Context:** "set up ollama" required editing `validatePublicUrl` (the SSRF guard) to add a loopback escape hatch. The edit was sound, but `netdust-core:threat-modeling` never fired — its CLAUDE.md trigger is keyed to *writing a plan*, and this was a direct ad-hoc task on `main`.
+
+**Rule:** When a task — planned OR ad-hoc — edits a named security-boundary file (`apps/server/src/lib/url-allow-list.ts`, auth/session/token surfaces, `apps/server/src/lib/crypto.ts`), invoke `netdust-core:threat-modeling` on the diff before committing, even absent a plan. The guard held this time by reading-the-mitigations luck, not by a harness gate.
+
+**Also (product, not discipline):** "Add a provider" should be trivial but isn't — the Settings → AI UI rejects keyless providers (Save disabled without an apiKey) and loopback base_urls (hardcoded "rejected" help text), so the only way to add Ollama was a direct DB seed. See [[project_provider-setup-gap]] and tasks/retro-follow-ups.md.
