@@ -1747,3 +1747,65 @@ describe('describe_workspace: one-call orientation, allow-list enforced', () => 
     expect(out.projects.map((p) => p.slug).sort()).toEqual(['web']); // 'ops' absent
   });
 });
+
+describe('A3: instance reach in resolvers', () => {
+  it('list_workspaces returns ALL workspaces for an instance token', async () => {
+    const { db, seed } = await makeTestApp();
+    const bId = nanoid();
+    await db.insert(workspaces).values({ id: bId, slug: 'beta', name: 'Beta' });
+
+    const token = makeToken({ workspaceId: null, scopes: ['documents:read'] });
+    const res = (await exec(token, seed.user.id, 'list_workspaces', {})) as {
+      content: { text: string }[];
+    };
+    const out = JSON.parse(res.content[0]!.text) as {
+      workspaces: { slug: string }[];
+    };
+    const slugs = out.workspaces.map((w) => w.slug);
+    expect(out.workspaces.length).toBeGreaterThanOrEqual(2);
+    expect(slugs).toContain('acme');
+    expect(slugs).toContain('beta');
+  });
+
+  it('list_workspaces returns only its own for a pinned token', async () => {
+    const { db, seed } = await makeTestApp();
+    const bId = nanoid();
+    await db.insert(workspaces).values({ id: bId, slug: 'beta', name: 'Beta' });
+
+    const token = makeToken({ workspaceId: seed.workspace.id, scopes: ['documents:read'] });
+    const res = (await exec(token, seed.user.id, 'list_workspaces', {})) as {
+      content: { text: string }[];
+    };
+    const out = JSON.parse(res.content[0]!.text) as {
+      workspaces: { slug: string }[];
+    };
+    expect(out.workspaces).toHaveLength(1);
+    expect(out.workspaces[0]!.slug).toBe('acme');
+  });
+
+  it('instance token resolves a non-home workspace via a resolver tool', async () => {
+    const { db, seed } = await makeTestApp();
+    const bId = nanoid();
+    await db.insert(workspaces).values({ id: bId, slug: 'beta', name: 'Beta' });
+    await db
+      .insert(projects)
+      .values({ id: nanoid(), workspaceId: bId, slug: 'site', name: 'Site' });
+
+    // Instance token reaches workspace B's projects without throwing.
+    const instanceTok = makeToken({ workspaceId: null, scopes: ['documents:read'] });
+    const res = (await exec(instanceTok, seed.user.id, 'list_projects', {
+      workspace_slug: 'beta',
+    })) as { content: { text: string }[] };
+    const out = JSON.parse(res.content[0]!.text) as { projects: unknown[] };
+    expect(Array.isArray(out.projects)).toBe(true);
+
+    // CONTROL: a pinned-to-acme token must NOT reach workspace B.
+    const pinnedTok = makeToken({
+      workspaceId: seed.workspace.id,
+      scopes: ['documents:read'],
+    });
+    await expect(
+      exec(pinnedTok, seed.user.id, 'list_projects', { workspace_slug: 'beta' }),
+    ).rejects.toThrow('workspace not accessible');
+  });
+});

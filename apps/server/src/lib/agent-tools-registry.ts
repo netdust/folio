@@ -46,6 +46,7 @@ import {
   workspaces,
 } from '../db/schema.ts';
 import { emitChainSuppressed } from './autonomy-gate.ts';
+import { isInstanceReach } from './token-reach.ts';
 import type { AgentRunFrontmatter, RunStatus } from './agent-run-schema.ts';
 import { runStatusSchema } from './agent-run-schema.ts';
 import { createRunForParent, loadRunScopedByToken } from '../routes/runs.ts';
@@ -152,7 +153,12 @@ async function resolveWorkspaceForToken(
   const ws = await db.query.workspaces.findFirst({
     where: eq(workspaces.slug, slug),
   });
-  if (!ws || ws.id !== token.workspaceId) {
+  if (!ws) throw new Error('workspace not accessible');
+  // Instance-reach token (workspaceId null) reaches any existing workspace; a
+  // pinned token must match its own. NOTE: during an agent RUN the token passed
+  // here is the NARROWED run token (effective reach, Task A8), so this also
+  // enforces the per-run floor.
+  if (!isInstanceReach(token) && ws.id !== token.workspaceId) {
     throw new Error('workspace not accessible');
   }
   return ws;
@@ -348,11 +354,13 @@ export function registerRealTools(): void {
     requiredScope: 'documents:read',
     schema: z.object({}).strict(),
     handler: async (_args, ctx) => {
-      const ws = await db.query.workspaces.findFirst({
-        where: eq(workspaces.id, ctx.token.workspaceId),
-      });
+      const all = isInstanceReach(ctx.token)
+        ? await db.query.workspaces.findMany()
+        : await db.query.workspaces
+            .findFirst({ where: eq(workspaces.id, ctx.token.workspaceId!) })
+            .then((ws) => (ws ? [ws] : []));
       return textResult({
-        workspaces: ws ? [{ id: ws.id, slug: ws.slug, name: ws.name }] : [],
+        workspaces: all.map((ws) => ({ id: ws.id, slug: ws.slug, name: ws.name })),
       });
     },
   });
