@@ -52,7 +52,7 @@ Net-new surface, deliberately small: **2 tables, 1 tool, 2 thin adapters, a hand
 |---|---|---|
 | Chat model | Multi-turn (operator holds the thread) | "Talk to the operator and it does everything" needs conversation memory. |
 | Topic fence | Prompt nudge + tool boundary (advisory) | The tool surface is already the real boundary; a hard classifier would misfire + cost a model call. Advisory is correct for an internal tool (user is the customer, not an adversary). |
-| Consequential actions | Act, then report (default); confirm-in-chat carve-out for the irreversible subset | Matches the agent-is-power-user / human-is-reviewer thesis. Lean on visibility + links. The destructive 1% (delete ws/project, remove member, bulk delete) confirms via `choice_card`, admin/owner-only (Authority §). |
+| Consequential actions | Act, then report (default); HARD tool-boundary gate for HIGH-tier (irreversible) ops | Matches the agent-is-power-user / human-is-reviewer thesis. Lean on visibility + links. The destructive 1% (HIGH-tier) is gated structurally at `executeTool` — recorded-pending-op + confirm, NOT a prompt rule (injection-proof, fail-closed by risk tier). See Irreversible-op gate §. |
 | Run authority | Conversation's `created_by` threaded as caller, per turn; `effective = operator ∩ caller` | The chat is a trigger surface that INHERITS the floor, never forks it. Token = identity/capability; caller = authority. Holds for the low-privilege majority (the primary path). |
 | Placement | Replaces the cockpit panel; open by default; closeable = human-only mode | Cockpit IS the agent surface; closing it = pure-human Folio. |
 | Conversation storage | Dedicated conversations/messages tables, walled off like `agent_run` | Avoids the "every write emits an event" flood + accidental trigger firing (invariant 4). Markdown-as-truth preserved via on-demand export. |
@@ -111,6 +111,21 @@ No `workspace_id` — the operator is instance-reach, so a conversation isn't pi
 
 **Indexes:** `messages (conversation_id, seq)` (thread reads); `conversations (created_by, updated_at)` (recent-chat ordering).
 
+**`pending_ops`** (backs the irreversible-op hard gate — see Irreversible-op gate §). A HIGH-tier op is recorded here BEFORE it applies; the destructive handler executes the recorded row on confirmation, never the operator's re-interpretation.
+
+| column | type | notes |
+|---|---|---|
+| `id` | text (uuidv7) | PK; this is the value the `choice_card` "yes" option carries |
+| `conversation_id` | text | FK; the card lives here |
+| `caller_id` | text | the conversation's `created_by` — ONLY this user may confirm |
+| `op` | text | the tool/op name (HIGH-tier) |
+| `params` | text (JSON) | the EXACT recorded args — executed verbatim on confirm |
+| `target` | text | resolved target (ws/project/member/id set) for display + execution |
+| `status` | text | `pending` \| `confirmed` \| `rejected` \| `expired`; single-use |
+| `created_at` / `expires_at` | text | ISO; expiry discards an unconfirmed op |
+
+Single-use, caller-bound, expiring. A confirmation that doesn't match a `pending` row for this exact `id` + `caller_id` is refused.
+
 **Markdown export (on demand only):** `GET /conversations/:id.md` renders the thread from the tables at request time — turns as sections, tool steps as a bulleted log, components as readable lines (`[link: Onboard Acme]`, `Q: Which template? → Leads`). Preserves markdown-as-truth; never a stored write.
 
 ### Authority — the chat INHERITS the floor, never forks it (CRITICAL)
@@ -130,14 +145,24 @@ This is WIRE, not new authority: route chat-run creation through the identical c
 - A run created with no caller threaded is impossible or refused.
 - Two users running turns concurrently in separate conversations never cross authority boundaries (A's run cannot read/write B's workspaces).
 
-### Irreversible-op carve-out under act-then-report (DECIDE → confirm-in-chat)
+### Irreversible-op gate — a HARD gate at the tool boundary (not a prompt rule)
 
-Act-then-report is the default and is correct: the operator does the thing and reports it. Caller-bounding already shrinks the blast radius (a viewer's operator can't delete anything). But an **admin/owner** caller's operator holds delete/remove, applied before the human sees the report — a misread instruction (or a content injection, see the verify gate) could irreversibly destroy before review.
+Act-then-report is the default and is correct: the operator does the thing and reports it. Caller-bounding already shrinks the blast radius (a viewer's operator can't delete anything). But an **admin/owner** caller's operator holds delete/remove, applied before the human sees the report — a misread instruction, or a **content injection** (VERIFY #4), could irreversibly destroy before review.
 
-**Carve-out:** a named **destructive subset** — `delete workspace`, `delete project`, `remove member`, `bulk delete` — must **confirm in chat** before applying. The operator proposes the action and waits for a yes, **reusing the `choice_card` path** (it is not a new mechanism — it's a rule about WHEN the operator must use confirm-via-card). Everything else stays act-then-report.
+**This gate is the one place the chat MUST be hard, so it is NOT a behavioral rule.** A prompt rule ("operator, ask first") cannot defend against injection: the same injection that steers the operator to delete also steers it to skip the confirm. The control would be bypassable by the exact threat it names. So the gate lives at the **tool boundary** (`executeTool` — the same convergence point the authority floor already lives at), enforced structurally, server-side. This applies the two lessons the authority spec already uses — **default-deny by construction** and **a deterministic bound must name its execution path** — that the earlier draft of this section violated.
 
-- The carve-out fires ONLY for callers whose authority includes the op (admin/owner) — a viewer's operator never reaches these ops anyway, so no friction is added for the majority. Narrow addition, not a blanket gate. Same spirit as the secret floor: 99% acts; the irreversible 1% gets a gate.
-- The destructive subset is a named, testable set (a constant), so a future destructive op added without being added to the set fails OPEN to act-then-report — the set must be reviewed when new delete/remove ops land. (A test asserts each member of the set routes through confirm.)
+**The gate (three structural properties):**
+
+1. **Fail-closed by RISK TIER, no allowlist.** Confirmation requirement rides on the EXISTING risk classifier (already at the tool boundary, already computes a tier per op). **A HIGH-tier op requires a recorded confirmation by default.** An op opts OUT of confirm only by being explicitly classified BELOW HIGH — the same deliberate, reviewed act that already lowers its risk treatment. A NEW destructive op inherits HIGH from the classifier ⇒ confirmed automatically. There is NO separate destructive-allowlist to remember to extend (the earlier draft's named-set was itself fail-OPEN — this dissolves it). Forget to classify → it stays HIGH → it confirms.
+
+2. **Execution binds to a SERVER-RECORDED pending op (op + params + target), not a re-read "yes".** Because `choice_card` completes the run and the destructive op executes on the NEXT turn, a "yes" the operator re-reads from context is vulnerable to **turn-2 drift / injection** executing a DIFFERENT action than the one shown on the card. So:
+   - The operator's HIGH-tier tool call does NOT apply. Instead the server **records a pending op** — the exact `{op, params, target, caller, conversation_id}` — and surfaces a `choice_card` describing it.
+   - On a valid "yes" `id` (validated against the presented set, #6), the destructive handler **executes the RECORDED pending op — params and all — NOT the operator's turn-2 re-interpretation.** "Confirmed X, executed X" is structural, not trusted.
+   - A pending op is single-use, caller-bound (only the conversation's `created_by` can confirm it), and expires; a "no"/timeout discards it.
+
+3. **The handler refuses by construction when unconfirmed.** A HIGH-tier op with no matching recorded confirmation for THIS exact pending action is REFUSED at `executeTool` (terminal, like the secret carve-out and the unattended floor — the model can't retry around it). The `choice_card` path is reused as the confirmation UI, but the ENFORCEMENT is the handler refusing to apply, never the prompt.
+
+The gate fires only for callers whose authority includes the op (a viewer's operator never reaches a HIGH op anyway — the caller floor already refused it), so no friction is added for the low-privilege majority. The prompt (`agent.md`) still TELLS the operator to propose-then-confirm — but that is UX so the flow feels intentional, NOT the security control. If the prompt and the gate ever disagree, the gate wins.
 
 ### Turn lifecycle
 
@@ -157,7 +182,10 @@ A turn is: **user message → operator run (reusing the 25-round loop) → strea
 
 5. **Interactive continuation.**
    - **`link_panel` click** → frontend navigates the main area to the target; cockpit stays open; NO run. Pure navigation (a smart link).
-   - **`choice_card` button click** → the click sends the chosen **option `id`** (NOT the label text — the label is operator-authored text and must not re-enter as free user input). The server **validates the id against the set the operator presented** for that card; an id not in the presented set is rejected. On a valid id: `PATCH` the message to set `chosen` (locks the card), then START A NEW TURN through the **identical run-creation path** as a typed message — so it **re-fires the caller floor** (Authority §, #1) with the conversation's `created_by`; the PATCH-then-new-turn path must NOT shortcut run creation. The operator resumes with full context (the resume includes the card + the choice). The action goes THROUGH the operator (preserving multi-turn memory + caller-bounding), which is correct for an operator meant to drive. (A test asserts an out-of-set id is rejected and that the new turn re-computes the floor.)
+   - **`choice_card` button click** → the click sends the chosen **option `id`** (NOT the label text — the label is operator-authored text and must not re-enter as free user input). The server **validates the id against the set the operator presented** for that card; an id not in the presented set is rejected. On a valid id: `PATCH` the message to set `chosen` (locks the card). Then ONE of two paths:
+     - **Ordinary choice card** (a fork the operator asked about, e.g. "which template?") → START A NEW TURN through the **identical run-creation path** as a typed message — so it **re-fires the caller floor** (Authority §, #1) with the conversation's `created_by`; the PATCH-then-new-turn path must NOT shortcut run creation. The operator resumes with full context (the resume includes the card + the choice). The action goes THROUGH the operator (preserving multi-turn memory + caller-bounding).
+     - **Irreversible-op confirmation card** (the card was raised by the HIGH-tier gate, Irreversible-op gate §) → the "yes" `id` IS a `pending_ops.id`. The server marks it `confirmed` and the destructive handler **executes the RECORDED pending op (op + params + target) directly** — it does NOT hand turn-2 back to the operator to re-decide what to delete. This is what makes confirm injection-proof: there is no turn-2 re-interpretation to drift. A "no"/timeout marks the pending op `rejected`/`expired`. (A new turn may still run AFTER, to report the outcome.)
+   - (A test asserts an out-of-set id is rejected, an ordinary card re-computes the floor on its new turn, and a confirmation card executes the recorded params — not a re-read — and is single-use + caller-bound.)
 
 6. **Concurrency.** One active run per conversation. While `active_run_id` is set, the composer shows "operator is working…" and blocks a second send. (Single active thread → simple.)
 
@@ -222,8 +250,13 @@ Behavior: thread reads from `messages (conversation_id, seq)` then live-tails th
   - A chat-triggered run is authorized IDENTICALLY to the same human performing the action directly (assert effective authority matches).
   - A run created with no caller threaded is impossible or refused.
   - Two users running turns concurrently in separate conversations never cross authority boundaries (A's run cannot read/write B's workspaces) — the shared-token isolation test.
-  - Each member of the destructive subset (delete ws/project, remove member, bulk delete) routes through confirm-in-chat for an admin caller; act-then-report applies to everything else.
-  - `choice_card`: an out-of-set option id is rejected; a valid id starts a new turn through the identical run-creation path that RE-fires the caller floor (no shortcut).
+  - **Irreversible-op hard gate (the must-be-hard set):**
+    - A HIGH-tier op with NO matching recorded confirmation is REFUSED at `executeTool` (terminal — the model can't retry around it). Test with a destructive op the operator calls directly without a pending record.
+    - **Injection-skip test:** a turn whose content tries to make the operator delete-without-confirm still cannot apply — no `pending_ops` row exists, so the handler refuses. (The gate defends against the threat its rationale names.)
+    - **No-allowlist / fail-closed:** an op classified HIGH but never named anywhere still requires confirmation (the gate keys on tier, not a set). A test classifies a synthetic HIGH op and asserts it confirms.
+    - **Recorded-params execution:** confirming executes the RECORDED `{op, params, target}`, not a re-read — assert that mutating context between propose and confirm does NOT change what executes.
+    - **Single-use + caller-bound:** a confirmation id is rejected on re-use, after expiry, and when sent by a user other than the conversation's `created_by`.
+  - `choice_card`: an out-of-set option id is rejected; a valid ORDINARY id starts a new turn through the identical run-creation path that RE-fires the caller floor (no shortcut); a valid CONFIRMATION id executes the recorded pending op.
 - **Server unit** — conversation/message CRUD + `seq` ordering; the inbound adapter (thread → runner `messages[]`, including a `choice_card` + `chosen` in history); the outbound adapter (tool call → `tool_step`; `ui` call → validated `component`); the markdown serializer; `active_run_id` lifecycle + boot recovery (incl. the interrupted-turn terminal summary from `tool_step` rows, #8); the `ui` tool's Zod validation (reject malformed).
 - **The wiring assertion (the one that matters — per `end-to-end-assertion-at-wiring-task`):** ONE test running a full turn through the REAL runner loop — user message → operator calls a real Folio tool (authorized as the caller) → `tool_step` row → operator calls `ask_choice` → `choice_card` row → simulate a button click (by id) → new turn resumes with the choice in history AND re-computes the caller floor. Seam-only tests miss feature-nullifying integration bugs (and miss a forked authority path).
 - **Web (vitest, NOT bun test):** message renderers per kind; `link_panel` click navigates + cockpit stays open; `choice_card` click locks + sends a turn; composer blocks while a run is active; default-open-on-load + respect-last-closed.
@@ -237,7 +270,7 @@ Behavior: thread reads from `messages (conversation_id, seq)` then live-tails th
 - **Multi-thread list / thread switcher** — v1 is a single active thread + resume; the table is modeled for many threads (no rework). The list is a fast follow-up.
 - **Component types beyond `link_panel` + `choice_card`** — the `ui` tool is a closed set; new types are a small server+web change later (forms, tables-in-chat, charts, etc.).
 - **claude-code provider** — stays hard-disabled (CC-DISABLED-1).
-- **General confirm-gate flow** — act-then-report stays the default; there is NO blanket confirm gate. The ONE exception is the irreversible-op carve-out (delete workspace/project, remove member, bulk delete → confirm-in-chat, see Authority §) — narrow, admin/owner-only, reusing the `choice_card` path.
+- **General confirm-gate flow** — act-then-report stays the default; there is NO blanket confirm gate. The ONE exception is the HARD irreversible-op gate at the tool boundary (HIGH-tier ops → recorded-pending-op + confirm, see Irreversible-op gate §) — keyed on risk tier (no allowlist), enforced server-side (not a prompt rule), narrow (HIGH-tier only, admin/owner reach), reusing the `choice_card` UI.
 - **File generation (PDF / HTML / Excel)** — a required Folio platform capability the operator will invoke as a tool, specced + planned SEPARATELY (see Reports & file export §). Not designed here.
 - **`agent.md` / `soul.md` / reference-file PROSE** — authored as content, separate from this engineering plan.
 
@@ -256,7 +289,7 @@ Behavior: thread reads from `messages (conversation_id, seq)` then live-tails th
 - **Pre-build VERIFY gates against the merged branch:** #3 operation-axis role bounding + #4 untrusted envelope on read content (see Plan-time obligations). If either fails, fix in the AUTHORITY layer first.
 - **Inherits (does not fork):** the per-run caller floor — chat runs thread the conversation's `created_by` as caller, `effective = operator ∩ caller`.
 - **Related separate work:** file generation (PDF/HTML/Excel) — its own spec + plan; the operator gains an export tool when it lands.
-- Reuses: `runner.ts` core loop, `handleResumeRun`, `postAgentComment` sink, the tool registry + boundary, the SSE/event stream + `useEventStream`, the authority/risk floor + caller-threading, BYOK key resolution, the `AgentCockpitPanel` shell + bus + `useResizableWidth`, the `choice_card` path (also reused for the irreversible-op confirm), the seeded `__system` operator skill + reference docs.
+- Reuses: `runner.ts` core loop, `handleResumeRun`, `postAgentComment` sink, the tool registry + boundary (`executeTool` — where the irreversible-op gate + caller floor + secret carve-out all live), **the existing risk classifier** (drives the HIGH-tier ⇒ confirm gate — no new tiering), the SSE/event stream + `useEventStream`, the authority/risk floor + caller-threading, BYOK key resolution, the `AgentCockpitPanel` shell + bus + `useResizableWidth`, the `choice_card` path (also the confirmation UI for the irreversible-op gate), the seeded `__system` operator skill + reference docs.
 
 ---
 
@@ -274,4 +307,4 @@ These are properties of the *existing* authority layer that the chat now depends
 ### Required skills
 
 - **threat-modeling** — REQUIRED. This touches: instance-reach token authority in a new surface (the chat is the PRIMARY trigger surface, open by default for every user, on a SHARED operator token — caller-bounding + cross-user isolation per Authority §); untrusted parsing (`ui` tool payloads; `choice_card` button input — must be a validated option id, not label text, #6; content the operator READS, VERIFY #4); the multi-tenancy boundary (one instance-reach operator acting across workspaces from one conversation, concurrent users); irreversible-op exposure on admin callers (the carve-out, #5). Produce the inline `## Threat model` section before task breakdown.
-- **architecture-invariants** — REQUIRED. Cite the convergence points this routes through (runner loop, typed-output sink, event stream, tool boundary, authorization/risk floor) and assert no bypass — especially that the chat run path goes THROUGH the authority/risk floor, not around it (the cc fork lesson from Phase C: a "deterministic bound" must name which execution path enforces it).
+- **architecture-invariants** — REQUIRED. Cite the convergence points this routes through (runner loop, typed-output sink, event stream, tool boundary, authorization/risk floor) and assert no bypass — especially that the chat run path goes THROUGH the authority/risk floor, not around it (the cc fork lesson from Phase C: a "deterministic bound" must name which execution path enforces it). **The irreversible-op gate is exactly such a bound — its enforcement path is `executeTool` refusing a HIGH-tier op without a matching `pending_ops` confirmation; the plan must state this and a test must prove the prompt rule is NOT the enforcer (gate holds with an adversarial/injected prompt).**
