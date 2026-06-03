@@ -65,14 +65,14 @@ export function AiTab({ wslug }: Props) {
   }
 
   // B round 4 fix #5 — honest toast wording. The client.post does NOT accept
-  // an AbortSignal, and useUpsertAiKey's mutationFn doesn't forward one
+  // an AbortSignal, and useUpsertInstanceAiKey's mutationFn doesn't forward one
   // either, so the server-side write CANNOT be aborted from the UI once
   // dispatched. The round-3 seq-id guard suppressed the toast but the row
   // was already committed for the OLD provider. Replacing the silent
   // suppression with a truthful info-toast: "Save completed for previous
   // provider" — the user sees what actually happened, no lie.
   //
-  // Long-term: thread an AbortSignal through client.post + useUpsertAiKey
+  // Long-term: thread an AbortSignal through client.post + useUpsertInstanceAiKey
   // so the fetch is actually canceled. Deferred per "Out of scope" in the
   // plan's threat model (mitigation 17).
 

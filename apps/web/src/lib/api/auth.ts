@@ -22,6 +22,10 @@ export interface MeResponse {
   // flag reads false. Mirrors the route's requireInstanceAdmin gate EXACTLY, so
   // the instance AI-key UI shows only to users who can actually write keys.
   is_instance_admin?: boolean;
+  // Presence-only: does ANY instance AI key exist? Readable by every user (no
+  // admin gate, no key material), it drives the body editor's AI slash commands.
+  // The key LIST is admin-gated; this is just "is an LLM reachable at all".
+  ai_configured?: boolean;
 }
 
 export const authKeys = {

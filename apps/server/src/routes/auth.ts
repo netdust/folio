@@ -131,10 +131,19 @@ auth.get('/me', requireUser, async (c) => {
   // mirroring requireInstanceAdmin EXACTLY so the web can gate the instance
   // AI-key UI to the same role the route enforces (no 403 papercut). Distinct
   // from is_system_member (any __system membership). Non-throwing.
+  //
+  // ai_configured: a PRESENCE-only boolean — does ANY instance AI key exist?
+  // Readable by every authenticated user (no admin gate, no key material), it
+  // drives the body editor's AI slash commands (`/ai`, `/draft`, …). The actual
+  // key LIST is admin-gated at /instance/ai-keys; this is just "is an LLM
+  // reachable at all". Replaces the old per-workspace key-list presence check the
+  // editor used (which broke when AI keys went instance-level).
+  const anyAiKey = await db.query.aiKeys.findFirst({ columns: { id: true } });
   return jsonOk(c, {
     user: { id: u.id, email: u.email, name: u.name },
     is_system_member: await isSystemMember(u.id),
     is_instance_admin: await isInstanceAdmin(db, u.id),
+    ai_configured: anyAiKey !== undefined,
   });
 });
 
