@@ -201,6 +201,13 @@ export function registerFolioApiTools(): void {
       'Read any Folio resource by GET. path is a relative /api/v1/... path. Read-only — use folio_api for writes.',
     requiredScope: 'documents:read',
     schema: z.object({ path: z.string() }).strict(), // P3-6: no method field
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Relative /api/v1/... path to GET.' },
+      },
+      required: ['path'],
+    },
     handler: async (args: { path: string }, ctx: ToolContext) => {
       const res = await dispatchAsCaller(ctx.token, 'GET', args.path, undefined); // P3-6: GET forced
       const json = await res.json().catch(() => null);
@@ -224,6 +231,19 @@ export function registerFolioApiTools(): void {
         body: z.record(z.unknown()).optional(),
       })
       .strict(),
+    inputSchema: {
+      type: 'object',
+      properties: {
+        method: {
+          type: 'string',
+          enum: ['POST', 'PATCH', 'PUT', 'DELETE'],
+          description: 'Write method. GET is not allowed — use folio_api_get for reads.',
+        },
+        path: { type: 'string', description: 'Relative /api/v1/... path to write.' },
+        body: { type: 'object', description: 'Request body.' },
+      },
+      required: ['method', 'path'],
+    },
     handler: async (
       args: { method: string; path: string; body?: Record<string, unknown> },
       ctx: ToolContext,
