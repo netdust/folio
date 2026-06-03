@@ -8,13 +8,11 @@ import {
   type User,
   type Workspace,
   aiKeys,
-  aiUsage,
   apiTokens,
   documents,
   tables,
 } from '../db/schema.ts';
 import { decryptSecret } from '../lib/crypto.ts';
-import { recordAiUsage } from '../lib/ai-usage.ts';
 import { newApiToken } from '../lib/auth.ts';
 import { toolsToScopes } from '../lib/agent-schema.ts';
 import { loadContext } from '../lib/runner.ts';
@@ -183,20 +181,25 @@ describe('phase gate — instance AI config (cross-cutting)', () => {
     const { apiKey: _omitSecret, ...ctxWithoutKey } = ctx!;
     expect(JSON.stringify(ctxWithoutKey)).not.toContain(SECRET);
 
-    // --- metering (M8): a completed run's usage attributes to the run workspace ---
-    await recordAiUsage(db, {
-      workspaceId: runDoc.workspaceId,
-      runId: runDoc.id,
-      provider: 'ollama',
-      label: 'default',
-      tokensIn: 42,
-      tokensOut: 17,
-    });
-    const usage = await db.query.aiUsage.findMany({ where: eq(aiUsage.runId, runDoc.id) });
-    expect(usage.length).toBe(1);
-    expect(usage[0]!.workspaceId).toBe(runDoc.workspaceId); // attributed to B
-    expect(usage[0]!.tokensIn).toBe(42);
-    expect(usage[0]!.tokensOut).toBe(17);
+    // --- metering (M8): the RUN DOCUMENT is the meter. It carries workspace_id +
+    //     provider + ai_key_label + tokens_in/out (the latter written by
+    //     incrementTokens on every path), so usage is attributable to the run's
+    //     workspace by aggregating runs — no separate ai_usage table. Assert the
+    //     run doc carries the attribution fields a "spend per workspace" view reads. ---
+    const persisted = (await db.query.documents.findFirst({
+      where: eq(documents.id, runDoc.id),
+    }))!;
+    expect(persisted.workspaceId).toBe(runDoc.workspaceId); // attributable to B
+    const persistedFm = persisted.frontmatter as {
+      provider: string;
+      ai_key_label: string;
+      tokens_in: number;
+      tokens_out: number;
+    };
+    expect(persistedFm.provider).toBe('ollama');
+    expect(persistedFm.ai_key_label).toBe('default');
+    expect(typeof persistedFm.tokens_in).toBe('number'); // the meter field
+    expect(typeof persistedFm.tokens_out).toBe('number');
   });
 
   test('a non-__system session is forbidden on GET /instance/ai-keys (M4)', async () => {

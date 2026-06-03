@@ -14,14 +14,4 @@ INSERT INTO `__new_ai_keys`("id", "provider", "label", "encrypted_key", "base_ur
 DROP TABLE `ai_keys`;--> statement-breakpoint
 ALTER TABLE `__new_ai_keys` RENAME TO `ai_keys`;--> statement-breakpoint
 PRAGMA foreign_keys=ON;--> statement-breakpoint
-CREATE UNIQUE INDEX `ai_keys_provider_label_idx` ON `ai_keys` (`provider`, `label`);--> statement-breakpoint
-CREATE TABLE `ai_usage` (
-	`id` text PRIMARY KEY NOT NULL,
-	`workspace_id` text NOT NULL,
-	`run_id` text NOT NULL,
-	`provider` text NOT NULL,
-	`label` text NOT NULL,
-	`tokens_in` integer DEFAULT 0 NOT NULL,
-	`tokens_out` integer DEFAULT 0 NOT NULL,
-	`created_at` integer DEFAULT (unixepoch() * 1000) NOT NULL
-);
+CREATE UNIQUE INDEX `ai_keys_provider_label_idx` ON `ai_keys` (`provider`, `label`);

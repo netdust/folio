@@ -372,22 +372,14 @@ export const aiKeys = sqliteTable(
   }),
 );
 
-/** Per-run AI usage record (M8 metering — record, do NOT enforce). Attributes
- *  shared-instance-key usage to the workspace that incurred it, so the
- *  denial-of-wallet residual is detectable + attributable. Per-key caps are a
- *  deferred phase; this table makes the residual observable in the meantime. */
-export const aiUsage = sqliteTable('ai_usage', {
-  id: text('id').primaryKey(),
-  workspaceId: text('workspace_id').notNull(), // the RUN's target workspace (attribution)
-  runId: text('run_id').notNull(),
-  provider: text('provider').notNull(),
-  label: text('label').notNull(),
-  tokensIn: integer('tokens_in').notNull().default(0),
-  tokensOut: integer('tokens_out').notNull().default(0),
-  createdAt: integer('created_at', { mode: 'timestamp_ms' })
-    .notNull()
-    .default(sql`(unixepoch() * 1000)`),
-});
+/* M8 metering note: per-run AI usage is NOT a separate table. Each `agent_run`
+ * document already records `tokens_in`/`tokens_out` (written by incrementTokens
+ * on every path — success, error, or resume) alongside its `workspace_id`,
+ * `provider`, and `ai_key_label`. The run row IS the always-recorded, attributable
+ * meter; the shared-instance-key denial-of-wallet residual is observable by
+ * aggregating runs per workspace. Per-key enforcement caps are a deferred phase.
+ * (A dedicated ai_usage table was dropped at /shakeout as redundant — it only
+ * re-copied fields already on the run row, and only on the success path.) */
 
 /** Append-only event log. SSE channel + agent webhooks both read from here. */
 export const events = sqliteTable(
@@ -454,6 +446,5 @@ export type Field = typeof fields.$inferSelect;
 export type View = typeof views.$inferSelect;
 export type ApiToken = typeof apiTokens.$inferSelect;
 export type AiKey = typeof aiKeys.$inferSelect;
-export type AiUsage = typeof aiUsage.$inferSelect;
 export type Event = typeof events.$inferSelect;
 export type ReactorCursor = typeof reactorCursors.$inferSelect;

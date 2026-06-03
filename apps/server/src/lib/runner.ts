@@ -27,7 +27,6 @@ import { and, eq, sql } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { type DB, db } from '../db/client.ts';
 import { env } from '../env.ts';
-import { recordAiUsage } from './ai-usage.ts';
 import {
   type ApiToken,
   type Document,
@@ -213,25 +212,6 @@ export async function runAgent(args: { runId: string }): Promise<void> {
       const messages = await buildInitialMessages(ctx);
       await runLoop(ctx, messages);
     }
-
-    // M8 metering (record, not enforce): attribute this run's token usage to its
-    // target workspace so the shared-instance-key denial-of-wallet residual is
-    // observable. Read the FINAL persisted totals (the loop wrote them via
-    // incrementTokens). Best-effort — recordAiUsage swallows its own failures and
-    // never throws onto the run's path.
-    const finalRow = await db.query.documents.findFirst({
-      where: eq(documents.id, runId),
-      columns: { frontmatter: true },
-    });
-    const finalFm = (finalRow?.frontmatter ?? {}) as Partial<AgentRunFrontmatter>;
-    await recordAiUsage(db, {
-      workspaceId: ctx.run.workspaceId,
-      runId,
-      provider: ctx.fm.provider,
-      label: ctx.fm.ai_key_label ?? 'default',
-      tokensIn: finalFm.tokens_in ?? 0,
-      tokensOut: finalFm.tokens_out ?? 0,
-    });
   } catch (err) {
     // Top-level containment. Any unhandled throw → fail the run with a
     // sanitized detail. If the last-resort transition itself races (run

@@ -35,34 +35,31 @@ describe('migration 0023 — ai_keys drops workspace_id', () => {
     );
   });
 
-  test('ai_usage metering table is created (T2 — record-only usage)', () => {
-    const sqlite = setup();
-    const tbl = sqlite
-      .query("SELECT name FROM sqlite_master WHERE type='table' AND name='ai_usage'")
-      .get() as { name: string } | null;
-    expect(tbl?.name).toBe('ai_usage');
-    sqlite.exec(
-      `INSERT INTO ai_usage (id, workspace_id, run_id, provider, label, tokens_in, tokens_out)
-       VALUES ('u1','w','r','ollama','default',10,5)`,
-    );
-    const row = sqlite
-      .query("SELECT tokens_in, tokens_out FROM ai_usage WHERE id='u1'")
-      .get() as { tokens_in: number; tokens_out: number };
-    expect(row.tokens_in).toBe(10);
-    expect(row.tokens_out).toBe(5);
-  });
-
   test('FAIL LOUD: a pre-existing ai_keys row makes the migration abort (no silent resolve)', () => {
-    // Full chain → 0023 already applied on the empty table: OK. Then seed a row and
-    // re-exec the 0023 SQL directly to prove the guard SQL aborts on a non-empty table.
-    const sqlite = setup();
+    // Exercise the guard the way drizzle's migrate() runs it: build the PRE-0023
+    // ai_keys shape (with workspace_id), seed a row, then run 0023 STATEMENT-BY-
+    // STATEMENT split on `--> statement-breakpoint` (migrate's exact semantics).
+    // NOTE: a single sqlite.exec(wholeFile) does NOT exercise the guard —
+    // bun:sqlite's .exec mishandles the `--> statement-breakpoint` comment markers
+    // and silently no-ops the guard, giving a FALSE pass. Splitting first is what
+    // proves the CHECK-constraint guard actually aborts on a non-empty table.
+    const sqlite = new Database(':memory:');
     sqlite.exec(
-      `INSERT INTO ai_keys (id, provider, label, encrypted_key) VALUES ('pre','anthropic','default','z')`,
+      `CREATE TABLE ai_keys (id text PRIMARY KEY, workspace_id text NOT NULL, provider text NOT NULL, label text DEFAULT 'default' NOT NULL, encrypted_key text NOT NULL, base_url text, created_at integer)`,
+    );
+    sqlite.exec(
+      `INSERT INTO ai_keys (id, workspace_id, provider, label, encrypted_key) VALUES ('pre','w','anthropic','default','z')`,
     );
     const sql = readFileSync(
       path.join(MIGRATIONS_FOLDER, '0023_ai_keys_drop_workspace.sql'),
       'utf8',
     );
-    expect(() => sqlite.exec(sql)).toThrow(); // guard aborts because a row exists
+    const statements = sql
+      .split('--> statement-breakpoint')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    expect(() => {
+      for (const stmt of statements) sqlite.exec(stmt);
+    }).toThrow(/CHECK constraint failed/); // the guard aborts because a row exists
   });
 });
