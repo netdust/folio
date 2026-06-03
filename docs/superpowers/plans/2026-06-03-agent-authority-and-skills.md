@@ -8,7 +8,7 @@
 
 **Tech Stack:** Bun, Hono, Drizzle (SQLite), Zod. Tests: `bun test` (run from `apps/server`). Source spec: `docs/superpowers/specs/2026-06-03-agent-authority-and-skill-disclosure-design.md`.
 
-**Threat model:** Inherited from the spec's `## Threat model` section. Key invariants enforced by tasks below: (T1) only an instance-admin human mints reach=null (creation gate); (T2) reach is immutable after mint; (T3) `workspaceId===null ⟹ agentId===null`; (T4) the per-run resolver reads the *narrowed effective reach*, never the raw token field; (T5) every `folio_api` write maps to a scope or to secret-refuse — unmapped ⇒ refuse (default-deny); (T6) `/tokens` + `/ai-keys` writes refuse for every token; (T7) `get_skill` reads only `(__system, skills, type=page)`; (T8) skill blessing requires system-origin (`createdBy IS NULL`) or session — never an MCP PAT.
+**Threat model:** See the full `## Threat model` section below (after File Structure) — 6 assets, 7 actor classes with IN/OUT markers, 14 attacks paired 1:1 with code-checkable mitigations, explicit deferrals. The T1–T8 invariants referenced in task bodies map into it: T1→mitigation 1, T2→3, T3→12 (operator combo invariant), T4→4 (load-bearing), T5→8, T6→7, T7→9, T8→12.
 
 **Architecture invariants touched** (from `ARCHITECTURE-INVARIANTS.md`): authorization convergence (the reach + scope gates), data-access (resolvers), event emission (`skill.trust.changed`). The invariant-auditor verifies no resolver reads the raw `token.workspaceId` on a run path (T4) and every write path maps to a scope (T5).
 
@@ -37,6 +37,80 @@
 
 **UI (Piece A, after server):**
 - `apps/web/src/components/settings/token-create-modal.tsx` (modify) — reach toggle + new scope checkboxes.
+
+---
+
+## Threat model
+
+> For the agent-authority + skill-reach feature (2026-06-03). This feature WIDENS the multi-tenancy boundary — it lets a token reach across workspaces and lets agents reach the `__system` library. That is the highest-stakes surface in Folio, so this section is the convergence target: `/code-review` verifies against the numbered mitigations instead of re-discovering them. It INHERITS the Phase A/B/C baseline (system-library + cross-workspace execution + caller-delegation threat models) and extends it; do not re-litigate inherited mitigations, extend them. Written at plan time (retrospectively, after task breakdown — the section header in the spec was a placeholder; this is the real one).
+
+### What we're defending
+
+1. **The instance-reach token** — an `api_tokens` row with `workspace_id IS NULL` + full scopes. A single such token is near-total instance authority (all workspaces, create/read/write). Its `token_hash` (sha256) is the bearer; leaking the plaintext = instance takeover (minus secrets).
+2. **The operator token specifically** — the code-provisioned instance token with `created_by IS NULL` (system origin). Its null `created_by` is BOTH its bless capability (T8) and a value no API call can produce — so it is an unforgeable privilege marker that must never be settable through any route.
+3. **Workspace isolation** — the integrity property that a workspace's documents/config are reachable only by tokens authorized for that workspace. The whole feature relaxes this *for admin tokens by design*; the defense is that the relaxation is exactly bounded (reach field + creation gate + per-run floor), never broader.
+4. **The `__system` skill TRUSTED channel** — a skill page with `trusted: true` is loaded as system-prompt instructions into every run that declares/pulls it. This is persistent, cross-agent, trusted instruction — the same class as a credential. Its integrity (who can make a skill trusted) is an asset.
+5. **BYOK secrets** (`ai_keys.encrypted_key`) + **standing credentials** (`api_tokens`) — inherited from Phase 3. The feature must NOT open their creation to any agent (the one hard carve-out).
+6. **The per-run authority floor** — the property that a run is bounded to `min(token, caller)`. The feature replaces the mechanism enforcing it (line-410 → effectiveReach); the asset is that the floor still holds.
+
+### Who we're defending against
+
+- **External attacker, no account** — IN scope. (Can't mint tokens; can only attack via a leaked token or an injection path.)
+- **Authenticated member without instance-admin** — IN scope. Must NOT be able to mint a reach=null token or grant themselves admin scopes.
+- **A prompt-injected MCP admin agent** — IN scope. Holds instance reach + write scopes; the danger is it plants a trusted skill or escalates. The most externally-reachable steerable actor.
+- **A prompt-injected operator** — IN scope but NARROWER. Internal, not directly externally-reachable; can author AND bless skills (accepted residual, see deferrals).
+- **A worker agent (pinned token) trying to cross its workspace or the `__system` boundary** — IN scope.
+- **An insider with a stolen instance/operator token** — OUT of scope (a leaked near-omnipotent credential is game-over by design; the secret carve-out limits blast radius by preventing NEW credential minting, but we do not defend against the leak itself).
+- **DNS-rebinding / TOCTOU on workspace existence** — OUT of scope (reach checks resolve by id at call time; no remote URL fetch is added by THIS feature).
+
+### Attacks to defend against
+
+1. **Privilege escalation at mint — a member mints a reach=null token.** A non-admin sets `workspaceId: null` on `POST /tokens` and gains instance authority.
+2. **Scope escalation at mint — a member mints `workspace:admin`/`settings:write`/`members:write`.** A low-priv human grants their own token admin scopes it then uses directly.
+3. **Reach mutation after mint.** Any edit path that flips a pinned token's `workspace_id` to `null` (or to a different workspace) bypasses the creation gate entirely.
+4. **Per-run privilege borrow (T4 — the load-bearing one).** A member triggers the operator (reach=null); if the resolver reads the raw token field (null = any workspace) instead of the narrowed effective reach, the run acts in a THIRD workspace the member can't reach. Deleting line-410 without the intersection causes exactly this.
+5. **Run-target rubber-stamp.** If a run can DECLARE a target workspace outside the caller's authority, `token ∩ target` rubber-stamps it (the intersection is only safe if `caller_reach` is the caller's clamped authority, not a free declaration).
+6. **Worker reaches another workspace.** A pinned worker token names a different `workspace_slug` and the resolver fails to reject it.
+7. **Secret minting by an agent.** An admin agent uses `folio_api` to `POST /tokens` or `/ai-keys` — minting a credential (persistence / exfil).
+8. **Default-allow on an unmapped write.** A future `folio_api` write route with no path→scope entry slips through as low-risk and applies without a scope check.
+9. **`get_skill` as a general cross-workspace read primitive.** An agent uses `get_skill` to read a non-skill `__system` doc (an agent's prompt, settings) or a doc in another workspace, bypassing its reach.
+10. **Stored trusted-channel injection (skill supply-chain).** A prompt-injected MCP agent writes a poisoned `__system` skill and marks it `trusted`; it then executes as system instructions in every worker that loads it.
+11. **Self-bless via a normal write.** An agent sets `trusted: true` as a side-effect of a normal `create_document`/`update_document`/`folio_api` write to a skill page (no separate, gated action required).
+12. **Operator-marker forgery.** A human-minted token obtains `created_by: null` (the bless/system marker) through some route — gaining operator-equivalent trust.
+13. **Instance token leaks via per-workspace read surfaces (or the inverse — vanishes from management).** A null-`workspace_id` token either leaks into a per-workspace listing it shouldn't, or (the real risk) silently drops out of EVERY management/audit surface so it can never be revoked.
+14. **Workspace-create by a non-admin bearer.** A pinned/member bearer reaches `POST /workspaces` after the gate is loosened for instance bearers.
+
+### Mitigations required (numbered to match attacks)
+
+1. **Creation capability gate (Task A7).** `POST /tokens` permits `workspaceId: null` ONLY when the caller holds `owner`/`admin` membership in `__system`. Else 403. Single evaluation point; checkable in `tokens.ts`.
+2. **Scope ceiling extended (A5 + A7).** `roleToScopes` grants admin scopes ONLY to owner/admin; `POST /tokens` rejects any scope outside `roleToScopes(callerRole)`. `toolsToScopes` (worker path) NEVER yields admin scopes. Test: member minting `workspace:admin` → 403.
+3. **Reach immutability (A7).** No route updates `api_tokens.workspace_id` (tokens are mint+revoke only). A test asserts no PATCH path alters reach. `grep` for `update(apiTokens)` touching `workspace_id` must return nothing.
+4. **Per-run effective-reach written into the narrowed token (A8).** `effectiveReach(token.workspaceId, run.workspaceId)` is computed once and stored as `narrowedToken.workspaceId`; every resolver reads the NARROWED token, never the raw field. The invariant-auditor verifies no resolver reads raw `token.workspaceId` on a run path. Integration scenario (Phase Gate A #1) is the regression test.
+5. **`caller_reach` is the caller-clamped target (A8 precondition).** Run-creation routes through the same reach/scope gate (`scope.ts` + `requireScope`), so a caller cannot create a run targeting a workspace it can't reach. Test: a member cannot create-and-target a run in a non-member workspace.
+6. **`resolveWorkspaceForToken` rejects non-matching pinned reach (A3).** `isInstanceReach(token) || ws.id === token.workspaceId`, else throw. Pinned worker → its workspace only.
+7. **Secret carve-out (A6).** `isSecretWrite(method, path)` → `/tokens` + `/ai-keys` writes return refused for EVERY token, no scope grants them. Checkable in `folio-api-tool.ts`.
+8. **Default-deny on unmapped (A6).** `pathToScope` returns `'UNMAPPED'` for any unrecognized write; the handler refuses on `'UNMAPPED'`. No "else apply". Test: invented path → refused.
+9. **`get_skill` narrow exemption (B2).** Hard-wired to `(workspace=__system, project=skills, type=page)`; does NOT call `resolveWorkspaceForToken`, cannot name another workspace or a non-skill doc. Tests: a `__system` agent doc / a B-only doc → not found.
+10. **Author/bless separation + unblessed-as-data (B1+B3).** A written skill lands `trusted:false`; loaded as untrusted DATA (the BEGIN/END envelope), inert as instructions. Blessing is a separate `set_skill_trust` call (mitigation 11), denied to MCP (mitigation 12). So a planted skill cannot self-execute.
+11. **`trusted` is server-managed on writes (B3).** `create_document`/`update_document`/`folio_api` STRIP `trusted` from incoming frontmatter for skill pages (reserved-key handling). Only `set_skill_trust` flips it. Test: a normal update cannot set `trusted:true`.
+12. **Bless gated on system origin (B3).** `canBlessSkill` = `(session) OR (token.createdBy === null)`. `POST /tokens` ALWAYS stamps `createdBy: <human>` (tokens.ts:82), so no API-minted token can be null-`createdBy`. The operator is the ONLY null-`createdBy` token, code-provisioned (A9). Test: MCP PAT (createdBy human) → set_skill_trust refused; a human-minted token can never be null-createdBy.
+13. **Read-site audit + instance-token listing (A12).** Every per-workspace `api_tokens`/`events` query is audited for null-`workspace_id` behavior; a dedicated instance-token listing surface (gated to `__system` admins) ensures instance tokens are revocable. Test: instance token absent from per-workspace list, present in instance list.
+14. **Workspace-create gate (A10).** `POST /workspaces` allows a bearer ONLY when `token.workspaceId === null AND token.scopes.includes('workspace:admin')`; else session user. Test: pinned/member bearer → 403.
+
+### Out of scope (explicit deferrals)
+
+- **A leaked instance/operator token.** A near-omnipotent credential, once stolen, is game-over by design. We bound the blast radius (no NEW secret minting — mitigation 7) but do not defend against the leak itself. Mitigated operationally (token rotation, the instance-token listing for revocation).
+- **Operator self-bless.** The operator can author AND bless a skill, so an injection that specifically steers the operator could self-bless (mitigation 10/12 stop the EXTERNAL MCP path, not the internal operator). Accepted residual; narrower (internal); audited via `skill.trust.changed`. Future tightening to human-only blessing is a localized `set_skill_trust` change.
+- **Progressive disclosure / context-cost of whole-body skill push.** A scaling concern, not a security one; deferred.
+- **DNS-rebinding / remote-fetch SSRF.** This feature adds NO outbound-URL fetch; the Phase 3 baseUrl SSRF mitigations are unchanged and inherited.
+- **Cross-workspace cache-key collisions.** Inherited concern; this feature does not add new caches keyed on workspace.
+
+### How to use this section
+
+- **Controller pre-flight (before dispatching tasks):** verify each mitigation 1–14 has a home in the plan's task code; a mitigation with no task is a plan gap.
+- **`/code-review` on the implementing diff:** "Verify the code against the threat model. Each numbered mitigation (1–14) should be checked: in place / missing / out-of-scope per the deferrals. Flag any bypass of a named convergence point." Expect ONE convergence round, not three.
+- **`/evaluate` retro:** list any mitigation that shipped unimplemented as a plan-correction defect; if a NEW critical-class attack emerges that's not numbered here, the threat model was too shallow — extend it.
+- **Downstream / future work:** cross-reference, don't re-litigate. The instance-reach token + the trusted-skill channel are the two surfaces most likely to grow — extend mitigations 1–4 and 10–12 if they do.
 
 ---
 
