@@ -116,6 +116,10 @@ export async function createRun(
   const agentFm = agent.frontmatter as Record<string, unknown>;
   const provider = agentFm.provider as AgentRunFrontmatter['provider'];
   const model = (agentFm.model as string | undefined) ?? '';
+  // Snapshot which instance AI key (by label) this run resolves against, so a
+  // later agent edit doesn't change a historical run's key. The runner reads the
+  // KEY MATERIAL by (provider, ai_key_label); this label is non-secret.
+  const aiKeyLabel = (agentFm.ai_key_label as string | undefined) ?? 'default';
   // The agent's BODY is its system prompt (the markdown editor is the prompt
   // surface). Snapshot it onto the run at create-time so a later edit of the
   // agent body doesn't mutate historical runs (mitigation 23). `system_prompt`
@@ -204,6 +208,7 @@ export async function createRun(
     agent_home_workspace_id: agent.workspaceId,
     provider,
     model,
+    ai_key_label: aiKeyLabel,
     system_prompt: systemPrompt,
     max_tokens: maxTokens,
     tokens_in: 0,
