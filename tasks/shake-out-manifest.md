@@ -58,6 +58,17 @@ smoke tooling and will fail if run.
 - `ai-tab.tsx` / `provider-model-field.tsx` import only the `AiProvider` TYPE from
   settings.ts — legitimate, keep.
 
+## Reviewer-pass findings (post-shakeout, 5 agents) — all triaged + addressed
+- **#1+#2 (security+simplicity+architecture):** metering missed error/resume paths AND
+  ai_usage duplicated run-row data → DROPPED the ai_usage table; the agent_run doc is the
+  always-recorded meter (tokens written on every path). Closed both. Also fixed a
+  false-passing migration guard test (exposed by the removal).
+- **#3+#4 (performance+architecture):** /me folded 4 serial queries → 2 concurrent
+  (getSystemRole resolves __system once); isInstanceAdmin de-duped onto it.
+- **#5 (architecture):** instance AI config moved to a dedicated /settings route (was in
+  per-workspace settings, "lied about scope").
+- 0 BLOCKERS from any reviewer. security: all M1–M8 hold. invariant-auditor: 0 bypasses.
+
 ## Status
 - [x] A1 — CRITICAL — FIXED. Root cause: editor's aiConfigured read the admin-gated
       key LIST via a deleted route. Fix: added presence-only `ai_configured` boolean to
