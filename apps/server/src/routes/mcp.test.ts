@@ -50,9 +50,31 @@ test('MCP initialize returns serverInfo + protocolVersion', async () => {
     }),
   });
   expect(res.status).toBe(200);
-  const body = (await res.json()) as { result: { serverInfo: { name: string }; protocolVersion: string } };
+  const body = (await res.json()) as {
+    result: { serverInfo: { name: string }; protocolVersion: string; instructions?: string };
+  };
   expect(body.result.serverInfo.name).toBe('folio');
   expect(body.result.protocolVersion).toBeTruthy();
+});
+
+test('MCP initialize returns an instructions pointer mentioning get_skill (B5)', async () => {
+  const { app, seed } = await makeTestApp();
+  const token = await setupToken(seed.workspace.id, seed.user.id, ['documents:read']);
+  const res = await app.request('/mcp', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'test', version: '1' } },
+    }),
+  });
+  expect(res.status).toBe(200);
+  const body = (await res.json()) as { result: { instructions?: string } };
+  expect(typeof body.result.instructions).toBe('string');
+  expect(body.result.instructions).toMatch(/get_skill/);
+  expect(body.result.instructions).toMatch(/skill/i);
 });
 
 test('MCP tools/list returns the v1 tools including comment + agent-lifecycle tools', async () => {
