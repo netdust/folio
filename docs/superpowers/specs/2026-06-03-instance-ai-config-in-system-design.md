@@ -130,7 +130,7 @@ So their AI key is looked up from the *workspace they happen to act in*. **Delet
 
 - **Key string never appears** in the assembled run messages / system prompt / tool envelopes (mitigation 2).
 - **Non-admin → 403** on EVERY key-store route, GET included (mitigation 4).
-- **Post-migration:** no row carries `workspace_id` (column gone); unique is `(provider, label)`; (dead-guard) a synthetic collision logs + newest-wins.
+- **Post-migration:** no row carries `workspace_id` (column gone); unique is `(provider, label)`. **Fail-loud guard:** a synthetic NON-EMPTY `ai_keys` table → the migration THROWS + logs the offending rows, and assert it does NOT resolve a winner (no newest-wins, no row silently dropped). The empty-table path applies the schema change cleanly.
 - **Invert the B6 tests — do NOT delete them.** Find every test asserting the OLD rule ("library agent uses the run-workspace key, never `__system`") and FLIP it to assert the new `(provider, label)` resolution. A test left asserting the old rule will either fail or get silently "fixed" to assert the wrong thing (the verify-claims discipline). Grep: `runner.test.ts` B5/B6 key-resolution tests, the cross-workspace operator tests, `phase-gate-b.integration.test.ts`.
 - **`label` disambiguation:** two `__system` keys for one provider (e.g. two ollama labels) resolve distinctly; an agent referencing `ai_key_label: 'X'` gets X's key, not the other.
 - **T6 secret-refuse re-verified** on the re-scoped `/ai-keys` route (still SECRET → refused for every token after the move to `requireInstanceAdmin`).
