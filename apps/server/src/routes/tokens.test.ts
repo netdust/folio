@@ -4,6 +4,7 @@ import { nanoid } from 'nanoid';
 import * as schema from '../db/schema.ts';
 import { apiTokens } from '../db/schema.ts';
 import { createSession, newApiToken } from '../lib/auth.ts';
+import { bootstrapSystemWorkspace, getSystemWorkspaceId } from '../lib/system-workspace.ts';
 import { makeTestApp } from '../test/harness.ts';
 
 /**
@@ -237,5 +238,92 @@ describe('tokens.ts POST scope ceiling (no minting above your role)', () => {
       body: JSON.stringify({ name: 'owner-config', scopes: ['documents:read', 'config:write'] }),
     });
     expect(res.status).toBe(201);
+  });
+});
+
+// A7 — instance reach gate. api_tokens.workspace_id is nullable (null = instance
+// reach). Only an instance admin (owner/admin of __system) may mint a reach=null
+// token (T1). A normal mint pins to the URL workspace (back-compat). Reach is
+// immutable — there is no route that mutates an existing token's workspace_id (T2).
+describe('tokens.ts A7 instance reach gate (T1/T2)', () => {
+  const tokensPath = (wslug: string, workspaceId: string) =>
+    `/api/v1/w/${wslug}/tokens/${workspaceId}`;
+
+  test('instance-admin (owner of __system) mints a reach=null token', async () => {
+    const { app, db } = await makeTestApp();
+    await bootstrapSystemWorkspace(db);
+    const systemId = await getSystemWorkspaceId(db);
+    // Make a NEW user U an owner of __system.
+    const userId = nanoid();
+    await db.insert(schema.users).values({
+      id: userId,
+      email: `${userId}@test.local`,
+      name: 'inst-admin',
+    });
+    await db.insert(schema.memberships).values({
+      workspaceId: systemId,
+      userId,
+      role: 'owner',
+    });
+    const session = await createSession(userId);
+    const cookie = `folio_session=${session.id}`;
+
+    const res = await app.request(tokensPath('__system', systemId), {
+      method: 'POST',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'inst', scopes: ['documents:read'], workspaceId: null }),
+    });
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body.data.instance).toBe(true);
+
+    const row = await db.query.apiTokens.findFirst({
+      where: eq(apiTokens.id, body.data.id),
+    });
+    expect(row).toBeDefined();
+    expect(row?.workspaceId).toBeNull();
+  });
+
+  test('a non-admin (member, not __system owner) requesting workspaceId:null → 403', async () => {
+    const { app, db, seed } = await makeTestApp();
+    await bootstrapSystemWorkspace(db);
+    // A member of acme who is NOT a __system member.
+    const memberCookie = await seedMemberSession(db, seed.workspace.id, 'member');
+    const res = await app.request(tokensPath('acme', seed.workspace.id), {
+      method: 'POST',
+      headers: { Cookie: memberCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'x', scopes: ['documents:read'], workspaceId: null }),
+    });
+    expect(res.status).toBe(403);
+    const body = await res.json();
+    expect(body.error.code).toBe('FORBIDDEN');
+    // No instance-reach token was minted.
+    const rows = await db.query.apiTokens.findMany();
+    expect(rows.filter((r) => r.workspaceId === null).length).toBe(0);
+  });
+
+  test('omitting workspaceId pins to the URL workspace (back-compat)', async () => {
+    const { app, db, seed } = await makeTestApp();
+    const res = await app.request(tokensPath('acme', seed.workspace.id), {
+      method: 'POST',
+      headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'pinned', scopes: ['documents:read'] }),
+    });
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    const row = await db.query.apiTokens.findFirst({
+      where: eq(apiTokens.id, body.data.id),
+    });
+    expect(row?.workspaceId).toBe(seed.workspace.id);
+  });
+
+  test('reach is immutable — no PATCH route (T2)', async () => {
+    const { app, seed } = await makeTestApp();
+    const res = await app.request(`${tokensPath('acme', seed.workspace.id)}/sometoken`, {
+      method: 'PATCH',
+      headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workspaceId: null }),
+    });
+    expect([404, 405].includes(res.status)).toBe(true);
   });
 });
