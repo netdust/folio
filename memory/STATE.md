@@ -332,3 +332,4 @@ See `docs/PHASES.md` for the canonical phase list (above-section mirrors it). Lo
 - `bun dev` from repo root starts both via workspace filter.
 - API has no `/` or `/health` route → expect 404 on root; the auth probe at `/api/v1/auth/me` is the right liveness signal.
 [2026-06-03] — session ended (no significant changes captured)
+[2026-06-03] — session ended (no significant changes captured)
