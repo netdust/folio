@@ -170,13 +170,32 @@ folio_api  POST /api/v1/w/<wslug>/p/marketing/views
 
 Preview first if unsure — add \`"dryRun": true\` to the body and read back \`would\`.
 
+### Add an AI provider (BYOK — you GUIDE, the human enters the key)
+
+A provider's API key is a human-held secret. You **cannot** write it: \`ai-keys\` is a HIGH-risk, session-only route (§6) — correct by design, so a prompt-injected run can't add an attacker's key or point Folio at an attacker's host. Your job is to GUIDE the human and then VERIFY, not to write the key. The recipe:
+
+1. **Tell the human exactly what to do in the UI.** "Open **Settings → AI**, choose the provider (\`anthropic\`, \`openai\`, \`openrouter\`, or \`ollama\`), paste your API key, and click **Save key**." If they don't have a key yet: "Create one in the provider's dashboard, name it whatever you like, then paste it here."
+2. **Ollama (local, keyless) is special.** It needs no API key, but it DOES need a base URL — \`http://localhost:11434\` for a local install. The UI rejects loopback base URLs unless the operator set \`FOLIO_ALLOW_LOOPBACK_AI=true\` in the server env; if Save fails on "loopback rejected," tell them to set that flag and restart. The model (e.g. \`qwen2.5-coder:7b\`) is NOT entered here — see step 4.
+3. **Verify it landed.** After they save, confirm with a read — the key metadata (provider, label, base_url — never the secret) is visible. Note this route's second segment is the workspace **id**, not the slug (resolve it from \`list_workspaces\` if you only have the slug):
+   \`\`\`
+   folio_api_get  GET /api/v1/w/<wslug>/settings/<workspace_id>/ai-keys
+   \`\`\`
+4. **Bind the provider to an agent — this is the step everyone forgets.** Configuring the key does NOT make any agent use it. The model is chosen PER AGENT in the agent's frontmatter, not on the key. For an agent to run on this provider, set its frontmatter \`provider:\` and \`model:\`, e.g.:
+   \`\`\`
+   provider: ollama
+   model: qwen2.5-coder:7b
+   \`\`\`
+   Use \`update_document\` (or \`update_agent\`) on the agent to set these. Without both keys the run falls back to the workspace default.
+
+So: **you guide the key entry, you verify it, and you wire \`provider\`+\`model\` into the agent.** The only part you can't do is type the secret — everything around it is yours.
+
 ## 6. The risk-gate protocol
 
 Every write is classified into a tier:
 
 - **LOW** — document writes (\`create_document\` / \`update_document\`). Auto-applied.
 - **MEDIUM** — config writes to tables / fields / views / statuses / projects. Auto-applied; \`dryRun\` is available as an undo-preview before you commit.
-- **HIGH** — token mint/revoke, AI keys, workspace delete/rename, member changes, bulk operations. **Refused-with-plan**: instead of executing, you produce a clear plan of what you WOULD do and let a human apply it. (These are session-only routes you can't reach anyway; the gate refuses them regardless.)
+- **HIGH** — token mint/revoke, AI keys, workspace delete/rename, member changes, bulk operations. **Refused-with-plan**: instead of executing, you produce a clear plan of what you WOULD do and let a human apply it. (These are session-only routes you can't reach anyway; the gate refuses them regardless.) "Can't write it" does NOT mean "can't help" — for AI keys, GUIDE the human through the UI and verify the result (see §5 "Add an AI provider"); the same guide-then-verify pattern applies to the other HIGH-risk actions.
 
 To preview a config write before applying, pass \`dryRun: true\` (POST/PATCH body) or \`?dryRun=true\` (DELETE query). You get \`{ dry_run, would, resource }\` with zero writes — use this to confirm a change is what you intend.
 

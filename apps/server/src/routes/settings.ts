@@ -5,6 +5,7 @@ import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import { db } from '../db/client.ts';
 import { aiKeys, memberships } from '../db/schema.ts';
+import { env } from '../env.ts';
 import { encryptSecret } from '../lib/crypto.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
 import { validatePublicUrl } from '../lib/url-allow-list.ts';
@@ -93,7 +94,12 @@ settingsRoute.post(
     // could pin baseUrl=http://127.0.0.1:11434 or AWS metadata, and the
     // agent runner (Sub-phase C) would fetch it. Same rule as /ai/test-key.
     if (baseUrl !== undefined) {
-      const v = validatePublicUrl(baseUrl);
+      // LOOPBACK ESCAPE HATCH: self-hosted Ollama runs on the same box, so
+      // localhost/127.x must be permitted — but ONLY for the ollama provider
+      // AND ONLY when the operator opted in via FOLIO_ALLOW_LOOPBACK_AI. Off by
+      // default → every normal deploy keeps the SSRF guard fully closed.
+      const allowLoopback = provider === 'ollama' && env.FOLIO_ALLOW_LOOPBACK_AI;
+      const v = validatePublicUrl(baseUrl, { allowLoopback });
       if (!v.ok) {
         throw new HTTPError('INVALID_BODY', v.reason, 422);
       }
