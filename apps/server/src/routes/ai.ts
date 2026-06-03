@@ -1,6 +1,7 @@
 import { zValidator } from '@hono/zod-validator';
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { env } from '../env.ts';
 import { providerSchema } from '../lib/agent-run-schema.ts';
 import { getProvider } from '../lib/ai/provider.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
@@ -71,7 +72,11 @@ aiRoute.post('/test-key', zValidator('json', TestKeyBody), async (c) => {
   }
 
   if (base_url !== undefined) {
-    const v = validatePublicUrl(base_url);
+    // LOOPBACK ESCAPE HATCH — mirrors POST /ai-keys. Permit localhost/127.x
+    // ONLY for ollama AND only when FOLIO_ALLOW_LOOPBACK_AI=1. Lets a self-
+    // hosted operator test their local Ollama; closed by default otherwise.
+    const allowLoopback = provider === 'ollama' && env.FOLIO_ALLOW_LOOPBACK_AI;
+    const v = validatePublicUrl(base_url, { allowLoopback });
     if (!v.ok) {
       throw new HTTPError('INVALID_BODY', v.reason, 422);
     }

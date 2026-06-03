@@ -214,3 +214,56 @@ describe('EXPANDED_IPV6_UNSPECIFIED regex (direct, defense-in-depth)', () => {
     expect(EXPANDED_IPV6_UNSPECIFIED.test('0:0:0:0:0:0:0:1')).toBe(false);
   });
 });
+
+describe('validatePublicUrl loopback escape hatch (allowLoopback)', () => {
+  const hatch = { allowLoopback: true };
+
+  test('allows localhost when opted in', () => {
+    expect(validatePublicUrl('http://localhost:11434', hatch).ok).toBe(true);
+  });
+
+  test('allows 127.0.0.1 when opted in', () => {
+    expect(validatePublicUrl('http://127.0.0.1:11434', hatch).ok).toBe(true);
+  });
+
+  test('allows 127.x.x.x anywhere in 127/8 when opted in', () => {
+    expect(validatePublicUrl('http://127.5.6.7', hatch).ok).toBe(true);
+  });
+
+  test('allows IPv6 loopback [::1] when opted in', () => {
+    expect(validatePublicUrl('http://[::1]:11434', hatch).ok).toBe(true);
+  });
+
+  test('allows expanded IPv6 loopback when opted in', () => {
+    expect(validatePublicUrl('http://[0:0:0:0:0:0:0:1]/', hatch).ok).toBe(true);
+  });
+
+  test('allows IPv4-mapped loopback [::ffff:127.0.0.1] when opted in', () => {
+    expect(validatePublicUrl('http://[::ffff:127.0.0.1]/', hatch).ok).toBe(true);
+  });
+
+  test('still blocks 10.0.0.5 even with hatch open (not loopback)', () => {
+    expect(validatePublicUrl('http://10.0.0.5', hatch).ok).toBe(false);
+  });
+
+  test('still blocks 192.168.1.1 even with hatch open', () => {
+    expect(validatePublicUrl('http://192.168.1.1', hatch).ok).toBe(false);
+  });
+
+  test('still blocks AWS metadata 169.254.169.254 even with hatch open', () => {
+    expect(validatePublicUrl('http://169.254.169.254/', hatch).ok).toBe(false);
+  });
+
+  test('still blocks file:// scheme even with hatch open', () => {
+    expect(validatePublicUrl('file:///etc/passwd', hatch).ok).toBe(false);
+  });
+
+  test('still blocks empty/bare-dot host even with hatch open', () => {
+    expect(validatePublicUrl('http://./', hatch).ok).toBe(false);
+  });
+
+  test('default (no opts) still blocks localhost — hatch is opt-in only', () => {
+    expect(validatePublicUrl('http://localhost:11434').ok).toBe(false);
+    expect(validatePublicUrl('http://127.0.0.1').ok).toBe(false);
+  });
+});

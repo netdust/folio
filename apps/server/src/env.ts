@@ -75,6 +75,17 @@ export const envSchema = z.object({
     .enum(['true', 'false'])
     .default('false')
     .transform((v) => v === 'true'),
+  // Loopback escape hatch for local Ollama. When 'true', the AI-config routes
+  // (POST /ai/test-key, POST /ai-keys) permit a loopback base_url (localhost /
+  // 127.x / ::1) — but ONLY for the `ollama` provider. Off by default so the
+  // SSRF guard stays fully closed on any hosted/shared deploy; flip to 'true'
+  // only on a self-hosted install running Ollama on the same box. Same explicit
+  // string→boolean transform as the other boolean gates (z.coerce.boolean
+  // mis-coerces 'false'→true).
+  FOLIO_ALLOW_LOOPBACK_AI: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
   // Phase A: designate the instance owner (the first `__system` member) by
   // email on any install age (M5). Optional; idempotent when applied.
   //

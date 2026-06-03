@@ -8,8 +8,24 @@
  * is NOT blocked here. Defending against DNS-rebinding requires async lookup
  * + revalidation at fetch time. Logged as a follow-up; the easy-attack
  * surface (typing 127.0.0.1, localhost, 169.254.169.254 directly) is closed.
+ *
+ * LOOPBACK ESCAPE HATCH (`opts.allowLoopback`): self-hosted / dev installs run
+ * Ollama on the same box, so `http://localhost:11434` (and 127.0.0.1) is the
+ * canonical base_url — exactly what the SSRF guard otherwise blocks. The two
+ * AI-config call sites (POST /ai/test-key, POST /ai-keys) pass `allowLoopback`
+ * ONLY when BOTH the `FOLIO_ALLOW_LOOPBACK_AI` env flag is set AND the provider
+ * is `ollama`. The flag is unset in any normal deploy, so the guard stays fully
+ * closed by default. When the hatch is open it permits loopback (localhost,
+ * 127/8, ::1, and the IPv4-mapped loopback forms) ONLY — every other private /
+ * link-local / metadata range (10/8, 192.168/16, 169.254/16, …) stays blocked,
+ * since those are the genuine SSRF targets and a local Ollama never needs them.
  */
 export type UrlValidationResult = { ok: true } | { ok: false; reason: string };
+
+export type UrlValidationOpts = {
+  /** Permit loopback-only hosts. See the LOOPBACK ESCAPE HATCH note above. */
+  allowLoopback?: boolean;
+};
 
 /**
  * B round 5 #11 — exported as named symbols so the regex itself can be
@@ -48,7 +64,34 @@ function looksLikeIpv4(host: string): boolean {
   return /^\d{1,3}(\.\d{1,3}){3}$/.test(host);
 }
 
-export function validatePublicUrl(input: string): UrlValidationResult {
+/**
+ * Loopback-only matcher for the escape hatch. A strict SUBSET of the blocked
+ * set — waives ONLY 127/8, localhost, ::1 (canonical + expanded), and the
+ * IPv4-mapped-IPv6 loopback forms. The broader private/link-local/metadata
+ * ranges (10/8, 192.168/16, 169.254/16, ::, fc00::/7, …) are NOT loopback and
+ * stay blocked even when the hatch is open. `host` is the already-canonicalized
+ * (lowercased, bracket-stripped, trailing-dot-stripped) hostname.
+ */
+function isLoopbackHost(host: string): boolean {
+  if (host === 'localhost' || host.endsWith('.localhost')) return true;
+  if (/^127\./.test(host)) return true; // 127.0.0.0/8
+  if (/^::1$/.test(host) || EXPANDED_IPV6_LOOPBACK.test(host)) return true;
+  // IPv4-mapped IPv6 loopback: ::ffff:7f00:x (hex) + expanded form.
+  const mapped =
+    host.match(/^::ffff:([0-9a-f]{1,4}):[0-9a-f]{1,4}$/i) ??
+    host.match(/^(?:0:){5}ffff:([0-9a-f]{1,4}):[0-9a-f]{1,4}$/i);
+  if (mapped && ((Number.parseInt(mapped[1] ?? '0', 16) >> 8) & 0xff) === 127) return true;
+  // Dotted IPv4-mapped form ::ffff:127.x.x.x (canonical + expanded).
+  return (
+    /^::ffff:127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/i.test(host) ||
+    /^(?:0:){5}ffff:127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/i.test(host)
+  );
+}
+
+export function validatePublicUrl(
+  input: string,
+  opts?: UrlValidationOpts,
+): UrlValidationResult {
   let parsed: URL;
   try {
     parsed = new URL(input);
@@ -84,6 +127,16 @@ export function validatePublicUrl(input: string): UrlValidationResult {
   // re-open the SSRF round 3 was supposed to close. Threat mitigation 18.
   if (host === '') {
     return { ok: false, reason: 'base_url host is empty' };
+  }
+
+  // LOOPBACK ESCAPE HATCH — see the module header. When the caller opts in
+  // (FOLIO_ALLOW_LOOPBACK_AI + ollama provider), waive ONLY loopback hosts.
+  // Placed AFTER scheme/empty-host validation so non-http and bare-dot inputs
+  // still reject; placed BEFORE the loopback + private blocks so localhost /
+  // 127.x / ::1 pass. Broader private/link-local ranges fall through to the
+  // blocks below and stay rejected even with the hatch open.
+  if (opts?.allowLoopback && isLoopbackHost(host)) {
+    return { ok: true };
   }
 
   if (host === 'localhost' || host.endsWith('.localhost')) {
