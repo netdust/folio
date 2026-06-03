@@ -561,6 +561,8 @@ git commit -m "phase-auth A5: settings:write/members:write/workspace:admin scope
 - Modify: `apps/server/src/lib/folio-api-tool.ts` (`classifyRisk` → replace with `pathToScope` + `isSecretWrite`; the handler)
 - Test: `apps/server/src/lib/folio-api-tool.test.ts`
 
+> **PLAN CORRECTION (2026-06-03, ground-truth at dispatch).** The original A6 snippet replaced `classifyRisk` wholesale and **dropped the Phase-C C3 unattended MEDIUM floor** that the live handler enforces (folio-api-tool.ts:269-279 + its tests at folio-api-tool.test.ts:407/436). Removing it is a SECURITY REGRESSION: a trigger-fired (unattended, no-human) run could perform config-class writes. **The new scope model MUST preserve the C3 floor:** when `ctx.unattended === true`, ANY config-class write — `config:write`, `settings:write`, `members:write`, `workspace:admin` — refuses-with-plan, regardless of scope possession. (Secret writes already refuse for everyone; document writes stay LOW/allowed even unattended, matching the existing "B10 fence is best-effort for LOW only" residual.) This keeps the C3 deterministic bound the threat model relies on. The corrected handler logic is in Step 4 below.
+
 - [ ] **Step 1: Write the failing test**
 
 Add to `apps/server/src/lib/folio-api-tool.test.ts`:
