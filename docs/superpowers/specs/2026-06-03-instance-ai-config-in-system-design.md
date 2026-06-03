@@ -1,8 +1,9 @@
 # Instance AI Config in `__system` — Design Spec
 
 **Date:** 2026-06-03
-**Status:** Design — approved in brainstorming, pending spec review → plan.
+**Status:** Design — corrections folded in (2026-06-03 handoff); ready for spec review → plan.
 **Supersedes:** the run-time B6 rule ("a library agent uses the run-workspace's BYOK key, never `__system`") from the cross-workspace operator arc (`runner.ts` loadContext, ~line 444).
+**Context:** `main` is local-only / pre-production; this migration runs ONCE, now, on a local DB that currently holds ZERO `ai_keys` rows (verified). The migration is therefore a pure schema change — see "Data model".
 
 ---
 
@@ -23,7 +24,7 @@ So their AI key is looked up from the *workspace they happen to act in*. **Delet
 
 ### Core model
 
-1. **Storage.** `ai_keys` rows belong to `__system`. The libsodium-encrypted secret lives there only, never copied into a normal (deletable) workspace. (Mechanically: route all key reads/writes at `__system`; `workspace_id` continues to point at the `__system` workspace id. No nullable-column change is required — `__system` IS the instance scope expressed as a workspace. See "Data model" for why this beats a nullable column.)
+1. **Storage.** AI keys are **workspace-independent instance credentials** — a standalone `ai_keys` row with **no workspace tie at all**, identified by `(provider, label)`. The libsodium-encrypted secret lives once, never copied. (CORRECTED from the original "point `workspace_id` at `__system`" — see "Data model": the column is DROPPED, not sentineled. Conceptually these are instance-authority config under `__system`'s administration, but the *row* carries no `workspace_id`.)
 
 2. **Agents reference, never copy.** Each agent's frontmatter carries `provider` + `model` + a reference to a `__system` key (by provider; `label` if multiple). The secret is never in frontmatter, never in a tool result, never in an API response.
    - **Admin agents** (operator/production + outside/MCP): use `__system` keys directly — they are instance-level actors.
@@ -35,7 +36,7 @@ So their AI key is looked up from the *workspace they happen to act in*. **Delet
    - **Direct `__system` access** — System Library members edit the operator's provider/model via its agent slideover, and manage the key store via `__system` AI settings. (Reuses the hidden, member-gated System Library entry shipped in Phase D.)
    - **A dedicated Settings screen** — a friendlier front-end that **writes to the same `__system` docs/keys**. NOT a second data store; just a nicer surface over the same writes.
 
-5. **Migration.** Existing per-workspace `ai_keys` rows consolidate into `__system`. Tie-break when two workspaces hold a key for the same provider: **newest-`created_at` wins** (deterministic, no prompt); the losers are dropped with a one-line migration log naming what was dropped (no silent truncation — see `[[feedback_mock-the-wire-not-the-response]]`/no-silent-caps discipline). On a fresh install there are no keys to migrate.
+5. **Migration (trivial — one-time, local, empty table).** The local DB holds ZERO `ai_keys` rows (verified), and this runs once pre-production. So the migration is a **pure schema change**: rebuild `ai_keys` WITHOUT `workspace_id`, with unique `(provider, label)`. No consolidation, no validation, no network, no admin-prompt — there is nothing to migrate. Keep ONE dead-path guard purely for correctness if rows ever existed: newest-`created_at` wins on a `(provider, label)` collision, log every dropped row (provider, label, source workspace) — a path this run will never hit. (CORRECTED from the original validate/surface-to-admin tie-break, which solved a collision case that cannot occur here. `base_url` would be part of collision identity IF the guard ever fired.)
 
 ### Consequence (conscious, accepted)
 
@@ -47,16 +48,26 @@ So their AI key is looked up from the *workspace they happen to act in*. **Delet
 
 `ai_keys` today: `(id, workspace_id NOT NULL → workspaces, provider, label, encrypted_key, base_url, created_at)`, unique `(workspace_id, provider, label)`.
 
-**Decision: keep `workspace_id NOT NULL` and point it at the `__system` workspace id** — do NOT make it nullable. Rationale: `__system` already exists as the instance-scope-as-a-workspace; pointing keys at it needs no schema change to the column, no nullable-handling across consumers, and reuses the existing FK + unique index unchanged. (Contrast the api_tokens nullable-reach pattern: tokens needed nullable because an instance token must reach ANY workspace; an AI key needs only to LIVE at the instance, which `__system` already models. Reuse the existing scope concept rather than add a second one.)
+**Decision (CORRECTED): DROP `workspace_id` (and its FK).** Keys are workspace-independent, so model that directly:
+- Drop `workspace_id` + the FK to `workspaces`.
+- New unique index: `(provider, label)`.
+- Why drop, not sentinel: a `__system`-pointed `workspace_id` encodes a workspace coupling that no longer exists, forces every key read to resolve the `__system` id first, and leaves an invisible special case in a credentials table. Dropping makes the lookup pure `(provider, label)` — no workspace dimension at any call site — and the "instance resource" fact is enforced by the schema, not convention.
+- Column-drop mechanics: **confirm the engine first** (modern `bun:sqlite` `ALTER TABLE DROP COLUMN` vs. a table-rebuild migration like the existing `0006`/`0022` rebuilds; trivial on Postgres). The table is empty, so a rebuild is cheap.
 
-**Agent frontmatter:** `provider` + `model` stay as today. A worker that picks a non-default key adds a key reference (e.g. `ai_key_label`, default `'default'`); the resolver uses `(provider, label)` against `__system`. Admin agents reference `(provider, label)` the same way. (Frontmatter-is-schema — invariant 10; no new table for the reference.)
+**`label` is load-bearing.** The unique key is `(provider, label)`, so `__system` MAY hold multiple keys per provider. The resolver, the worker-create form, AND the operator slideover must all disambiguate by `label`, never assume one-key-per-provider. Default `'default'`.
+
+**Agent frontmatter:** `provider` + `model` stay as today; add a key reference (`ai_key_label`, default `'default'`). The resolver looks up `(provider, ai_key_label)`. Admin and worker agents reference identically. (Frontmatter-is-schema — invariant 10; no new table for the reference. The reference is a non-secret label — never the key.)
+
+## Worker / admin split (the security boundary — do not blur)
+
+`__system` homes **providers, keys, and admin/library agents ONLY** (operator/production + outside/MCP). **Worker agents are NOT moved into `__system`** — they stay in their own workspaces and merely *reference* a key by `(provider, label)` in frontmatter. Moving workers into `__system` would forfeit the workspace-pinning that stops a prompt-injected worker from reaching instance config. The key MATERIAL is read only by the runner (system authority); the worker token's reach is unchanged.
 
 ### Consumers to change (full blast radius, grepped)
 
-- `apps/server/src/lib/runner.ts:447-448` — the key lookup. Change `eq(aiKeys.workspaceId, run.workspaceId)` → resolve the `__system` workspace id and look up `(systemId, provider, label)`. **This is the B6 reversal.** Pre-flight `no_ai_key` semantics unchanged (missing `__system` key → no_ai_key).
-- `apps/server/src/routes/settings.ts:31-32, 111-114, 135-136` — the AI-key CRUD (GET list, POST upsert, DELETE). Re-scope to `__system` + gate to System Library admin (the instance-admin boundary, `requireInstanceAdmin` from the auth work). Today these are keyed to the URL workspace + that workspace's membership; they move to the `__system` store.
-- The web AI surfaces (`apps/web/src/components/settings/ai-tab.tsx`, `apps/web/src/lib/api/settings.ts`) — repoint at the `__system` store; add the dedicated production-agent Settings screen + the operator-slideover provider/model assignment.
-- The agent-create form — offer the `__system` provider/key list when creating a worker.
+- `apps/server/src/lib/runner.ts:447-448` — the key lookup. Change `eq(aiKeys.workspaceId, run.workspaceId)` → a pure `(provider, ai_key_label)` lookup with NO workspace predicate (no `__system` id resolution; the column is gone). **This is the B6 reversal.** Pre-flight `no_ai_key` semantics unchanged (no matching `(provider, label)` → no_ai_key).
+- `apps/server/src/routes/settings.ts:31-32, 111-114, 135-136` — the AI-key CRUD (GET list, POST upsert, DELETE). DROP the `workspace_id` predicate; re-gate from per-workspace membership to `requireInstanceAdmin` (the shared instance-admin gate from the auth work). GET list is admin-only too — instance config, not per-workspace data. (The route path keeps `:workspaceId` for now or moves to an instance path — plan-time UI decision; either way the gate is `requireInstanceAdmin` and the query has no workspace predicate.)
+- The web AI surfaces (`apps/web/src/components/settings/ai-tab.tsx`, `apps/web/src/lib/api/settings.ts`) — repoint at the global key store; add the dedicated production-agent Settings screen + the operator-slideover provider/model/`ai_key_label` assignment. (Two surfaces, one store — both write the same rows.)
+- The agent-create form — offer the global `(provider, label)` list when creating a worker.
 
 ---
 
@@ -85,7 +96,9 @@ So their AI key is looked up from the *workspace they happen to act in*. **Delet
 4. **Non-admin reads/writes the `__system` key store.** → The re-scoped AI-key routes gate on `requireInstanceAdmin` (the shared instance-admin gate from the auth work) — session user who is owner/admin of `__system`. A normal workspace owner is refused (403). The GET list is admin-only too (the store is instance-level config, not per-workspace data).
 5. **Worker references a key it shouldn't (no allow-list by design).** → ACCEPTED RESIDUAL: any `__system` key is selectable at worker creation (the agreed model). Mitigation is that creation is itself an `agents:write` op (gated) and the reference is just a label — the worker still never sees the secret. If per-workspace key restriction is wanted later, add an allow-list (out of scope here).
 6. **B6 reversal opens a cross-tenant key path.** → The runner reads the key from `__system` for ALL agents now. Confirm this does NOT let a worker's RUN read another *workspace's* data — the key is instance config, not workspace data; the run's document reach is still bounded by the narrowed token (T4) + project ceiling (invariant 3). The key change is orthogonal to document authority.
-7. **Migration leaks/duplicates a key into a deletable place.** → The migration MOVES per-workspace rows into `__system` (re-points `workspace_id`), it does not copy. After migration no normal workspace holds an `ai_keys` row. Newest-wins on provider collision; dropped rows are logged.
+7. **Migration leaks/duplicates a key into a deletable place.** → The migration DROPS `workspace_id` entirely; after it, no row carries any workspace tie (the table is empty here regardless). A test asserts no `ai_keys` row has a `workspace_id` column post-migration.
+
+8. **Denial-of-wallet / shared-credential abuse (NEW — introduced by consolidation).** All agents now draw on the shared `__system` keys, so a prompt-injected worker in ANY workspace can exhaust rate limits or run up spend across the whole instance (the per-workspace blast radius is gone). This is a CONSEQUENCE of consolidation, not a reason against it. → Mitigation: per-key usage metering + optional caps. **At minimum, meter usage per workspace for visibility** even though billing is consolidated, so abuse is attributable. If caps aren't built this phase, record as an EXPLICIT residual (it is currently free under Ollama, but a paid `__system` key makes it live). DECISION NEEDED at plan time: caps in-phase vs. metered-residual — note the worker "any key, no allow-list" choice (attack 5) sharpens this, since any worker can reach the expensive key.
 
 ### Out of scope (explicit)
 
@@ -97,7 +110,7 @@ So their AI key is looked up from the *workspace they happen to act in*. **Delet
 ### How to use this section
 
 - Controller pre-flight: verify each mitigation is in the plan's task code before dispatch.
-- `/code-review` + `/shakeout` (invariant-auditor + security-sentinel): verify the diff against mitigations 1–7; the load-bearing checks are #1/#2 (no key leak path) and #4 (admin-only store).
+- `/code-review` + `/shakeout` (invariant-auditor + security-sentinel): verify the diff against mitigations 1–8; the load-bearing checks are #1/#2 (no key leak path) and #4 (admin-only store); #8 (denial-of-wallet) is the consolidation-introduced residual to confirm metered-or-capped.
 - `/evaluate` retro: any missing mitigation = a plan-correction defect.
 
 ---
@@ -113,6 +126,23 @@ So their AI key is looked up from the *workspace they happen to act in*. **Delet
 - The dedicated production-agent **Settings screen** may ship as a thin first cut (assign provider/model/key for the operator) with the direct-`__system` surfaces as the fallback; full UI polish can follow.
 - No change to the provider SDKs, the streaming loop, or the run lifecycle.
 
+## Tests to add / keep
+
+- **Key string never appears** in the assembled run messages / system prompt / tool envelopes (mitigation 2).
+- **Non-admin → 403** on EVERY key-store route, GET included (mitigation 4).
+- **Post-migration:** no row carries `workspace_id` (column gone); unique is `(provider, label)`; (dead-guard) a synthetic collision logs + newest-wins.
+- **Invert the B6 tests — do NOT delete them.** Find every test asserting the OLD rule ("library agent uses the run-workspace key, never `__system`") and FLIP it to assert the new `(provider, label)` resolution. A test left asserting the old rule will either fail or get silently "fixed" to assert the wrong thing (the verify-claims discipline). Grep: `runner.test.ts` B5/B6 key-resolution tests, the cross-workspace operator tests, `phase-gate-b.integration.test.ts`.
+- **`label` disambiguation:** two `__system` keys for one provider (e.g. two ollama labels) resolve distinctly; an agent referencing `ai_key_label: 'X'` gets X's key, not the other.
+- **T6 secret-refuse re-verified** on the re-scoped `/ai-keys` route (still SECRET → refused for every token after the move to `requireInstanceAdmin`).
+
+## Non-goals / do not build
+
+- **No multi-tenant / DB-per-tenant work.** Tenancy is a future instance-level concern (a separate database, not a workspace). Do NOT add a tenant router or connection routing here. Only constraint: don't introduce a NEW hardcoded global `db` singleton.
+- **Provider/key split is OUT of scope** unless explicitly requested. Keep provider config + secret in the one `ai_keys` row this phase. (Splitting non-secret provider config from the secret is a clean future refinement, not part of this.)
+- **Triggers are not part of this spec.** If encountered, apply the scope test (instance-level trigger → `__system`; workspace trigger → its workspace); do NOT blanket-home them into `__system`.
+
 ## Open detail to settle in the plan
 
-- The exact frontmatter key for the reference (`ai_key_label` vs reusing `label`), and whether admin agents need a reference at all or just `provider` (if `__system` has one key per provider, `provider` alone resolves it). Lean: `provider` + optional `label` (default `'default'`), so single-key-per-provider needs no extra field.
+- The exact frontmatter key for the reference — lean `ai_key_label` (default `'default'`); whether admin agents need it or just `provider` (single key per provider → `provider` alone resolves, label defaults). The `label` is load-bearing regardless (multi-key-per-provider is allowed).
+- **Confirm the column-drop mechanic for `bun:sqlite`** (native `DROP COLUMN` vs. table-rebuild) before writing the migration — the table is empty so either is cheap, but the SQL differs.
+- **Denial-of-wallet (attack 8):** caps in-phase vs. metered-residual.
