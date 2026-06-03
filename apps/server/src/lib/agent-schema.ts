@@ -88,12 +88,18 @@ const ALL_DOCUMENT_SCOPES = [
   'config:write',
 ] as const;
 
+/** Admin-only scopes — gate the HIGH-privilege folio_api write surfaces
+ *  (workspace settings, membership changes, workspace rename/delete). Granted
+ *  to owner/admin membership roles ONLY; never to `member`, and never derived
+ *  from an agent's tool whitelist (workers stay document-scoped). */
+export const ADMIN_SCOPES = ['settings:write', 'members:write', 'workspace:admin'] as const;
+
 /** Human analog of toolsToScopes: map a workspace membership role to the scope
  *  set a delegated run may use on that caller's behalf (Phase 1 delegation).
  *  owner/admin → all scopes; member → day-to-day read+write (NOT delete, NOT
  *  agents:write). The run's effective authority is still agent ∩ caller. */
 export function roleToScopes(role: 'owner' | 'admin' | 'member'): string[] {
-  if (role === 'owner' || role === 'admin') return [...ALL_DOCUMENT_SCOPES];
+  if (role === 'owner' || role === 'admin') return [...ALL_DOCUMENT_SCOPES, ...ADMIN_SCOPES];
   return ['documents:read', 'documents:write'];
 }
 

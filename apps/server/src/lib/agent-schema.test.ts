@@ -218,6 +218,33 @@ describe('config:write scope', () => {
   });
 });
 
+describe('admin scopes (A5)', () => {
+  test('roleToScopes(owner) includes the admin scopes', () => {
+    const s = roleToScopes('owner');
+    expect(s).toContain('settings:write');
+    expect(s).toContain('members:write');
+    expect(s).toContain('workspace:admin');
+  });
+  test('roleToScopes(admin) includes the admin scopes', () => {
+    const s = roleToScopes('admin');
+    expect(s).toContain('settings:write');
+    expect(s).toContain('members:write');
+    expect(s).toContain('workspace:admin');
+  });
+  test('roleToScopes(member) excludes admin scopes', () => {
+    const s = roleToScopes('member');
+    expect(s).not.toContain('settings:write');
+    expect(s).not.toContain('members:write');
+    expect(s).not.toContain('workspace:admin');
+  });
+  test('toolsToScopes never yields admin scopes (workers stay document-scoped)', () => {
+    const s = toolsToScopes(['create_document', 'update_document', 'create_agent', 'folio_api']);
+    expect(s).not.toContain('settings:write');
+    expect(s).not.toContain('members:write');
+    expect(s).not.toContain('workspace:admin');
+  });
+});
+
 describe('V1_MCP_TOOLS', () => {
   test('contains the v1 tools including agent-lifecycle tools', () => {
     expect(V1_MCP_TOOLS).toEqual([
