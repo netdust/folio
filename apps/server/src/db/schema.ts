@@ -349,14 +349,14 @@ export const apiTokens = sqliteTable(
   }),
 );
 
-/** Encrypted BYOK AI provider credentials, per workspace. */
+/** Encrypted BYOK AI provider credentials — INSTANCE-level (workspace-independent).
+ *  A key is identified by (provider, label); the runner resolves an agent's key
+ *  by (provider, ai_key_label) with no workspace tie (the B6 reversal). The
+ *  secret never leaves a server-side provider call. */
 export const aiKeys = sqliteTable(
   'ai_keys',
   {
     id: text('id').primaryKey(),
-    workspaceId: text('workspace_id')
-      .notNull()
-      .references(() => workspaces.id, { onDelete: 'cascade' }),
     provider: text('provider', {
       enum: ['anthropic', 'openai', 'openrouter', 'ollama'],
     }).notNull(),
@@ -368,13 +368,26 @@ export const aiKeys = sqliteTable(
       .default(sql`(unixepoch() * 1000)`),
   },
   (t) => ({
-    workspaceProviderIdx: uniqueIndex('ai_keys_workspace_provider_idx').on(
-      t.workspaceId,
-      t.provider,
-      t.label,
-    ),
+    providerLabelIdx: uniqueIndex('ai_keys_provider_label_idx').on(t.provider, t.label),
   }),
 );
+
+/** Per-run AI usage record (M8 metering — record, do NOT enforce). Attributes
+ *  shared-instance-key usage to the workspace that incurred it, so the
+ *  denial-of-wallet residual is detectable + attributable. Per-key caps are a
+ *  deferred phase; this table makes the residual observable in the meantime. */
+export const aiUsage = sqliteTable('ai_usage', {
+  id: text('id').primaryKey(),
+  workspaceId: text('workspace_id').notNull(), // the RUN's target workspace (attribution)
+  runId: text('run_id').notNull(),
+  provider: text('provider').notNull(),
+  label: text('label').notNull(),
+  tokensIn: integer('tokens_in').notNull().default(0),
+  tokensOut: integer('tokens_out').notNull().default(0),
+  createdAt: integer('created_at', { mode: 'timestamp_ms' })
+    .notNull()
+    .default(sql`(unixepoch() * 1000)`),
+});
 
 /** Append-only event log. SSE channel + agent webhooks both read from here. */
 export const events = sqliteTable(
@@ -441,5 +454,6 @@ export type Field = typeof fields.$inferSelect;
 export type View = typeof views.$inferSelect;
 export type ApiToken = typeof apiTokens.$inferSelect;
 export type AiKey = typeof aiKeys.$inferSelect;
+export type AiUsage = typeof aiUsage.$inferSelect;
 export type Event = typeof events.$inferSelect;
 export type ReactorCursor = typeof reactorCursors.$inferSelect;
