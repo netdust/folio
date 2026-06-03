@@ -14,6 +14,7 @@ import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import { db } from '../db/client.ts';
 import { apiTokens, type ApiToken } from '../db/schema.ts';
+import { ADMIN_SCOPES } from './agent-schema.ts'; // CR#3: derive the C3 config floor
 import { registerTool, type ToolContext } from './agent-tools.ts';
 import { newApiToken } from './auth.ts';
 
@@ -59,19 +60,41 @@ export function validateApiPath(path: string): string {
 
 export type ScopeTarget = string | 'SECRET' | 'UNMAPPED' | null;
 
+/**
+ * A document/comment/run write lives under the documents|comments|runs route
+ * mount, whose TRAILING segment is an arbitrary user SLUG (or run id) that can
+ * equal a config/secret route keyword ('tokens','ai-keys','members','settings',
+ * 'tables',...). The keyword checks below match a keyword ANYWHERE in the path,
+ * so a document slugged 'tokens' at `/documents/tokens` would otherwise be
+ * mis-classified SECRET and permanently refused (CR#1, fail-closed bug).
+ *
+ * This anchor matches the documents|comments|runs keyword only where the REAL
+ * route mounts produce it — directly under `/w/<ws>`, or under `/w/<ws>/p/<proj>`,
+ * or under `/w/<ws>/p/<proj>/t/<tslug>` (verified against app.ts mounts:
+ * wScope `/documents` + `/runs`, pScope `/documents`+`/comments`+`/runs`,
+ * tScope `/t/:tslug/documents`). A doc slug is a single `[^/]+` segment and so
+ * can never inject a fake `documents/` deeper in the path. Classify this
+ * sub-resource FIRST so its trailing slug never reaches the keyword branches.
+ */
+const DOC_SUBRESOURCE =
+  /^\/api\/v1\/w\/[^/]+(?:\/p\/[^/]+(?:\/t\/[^/]+)?)?\/(documents|comments|runs)(\/|$)/;
+
 /** Secret-class writes: never grantable to any token (T6). */
 export function isSecretWrite(method: string, path: string): boolean {
   if (method.toUpperCase() === 'GET') return false;
+  // A document slugged 'tokens'/'ai-keys' is NOT a secret route — exclude the
+  // documents/comments/runs sub-resource before matching the secret keywords (CR#1).
+  if (DOC_SUBRESOURCE.test(path)) return false;
   return /\/tokens(\/|$)/.test(path) || /\/ai-keys(\/|$)/.test(path);
 }
 
-/** Config-class scopes — these refuse on an UNATTENDED run (C3 floor). */
-const CONFIG_CLASS_SCOPES = new Set<string>([
-  'config:write',
-  'settings:write',
-  'members:write',
-  'workspace:admin',
-]);
+/**
+ * Config-class scopes — these refuse on an UNATTENDED run (C3 floor).
+ * CR#3: derived from ADMIN_SCOPES so a NEW admin scope is floored by
+ * construction, not by remembering to edit a hand-typed list. The resulting set
+ * equals {config:write, settings:write, members:write, workspace:admin}.
+ */
+const CONFIG_CLASS_SCOPES = new Set<string>(['config:write', ...ADMIN_SCOPES]);
 
 /**
  * Map a write to its required scope. Reads (GET) → null (gated elsewhere by the
@@ -79,21 +102,34 @@ const CONFIG_CLASS_SCOPES = new Set<string>([
  * write path with NO mapping → 'UNMAPPED' (handler refuses — default-deny, T5).
  * Every NEW write route MUST add a branch here or it fails closed.
  *
- * Order matters: secret first, then workspace-terminus, members, settings,
- * structure-config, project collection/item, then documents (incl. comments/
- * runs sub-resources), then UNMAPPED.
+ * NOTE (CR#8): this map is a fail-closed PRE-CHECK only. The dispatched route's
+ * own requireScope/requireSessionUser (run via app.request in dispatchAsCaller)
+ * is the authoritative gate. The members:write and settings:write branches here
+ * are DEFENSIVE, not authoritative — no agent-writable route currently uses
+ * them (members has no write route, only GET /members; settings writes are
+ * session-only at /settings/:ws/ai-keys, which is also SECRET-classified). They
+ * stay so any future workspace-level path that DID land there fails closed to
+ * the right scope rather than UNMAPPED.
+ *
+ * Order matters: documents/comments/runs FIRST (CR#1 — their trailing slug is
+ * arbitrary and must never be matched by the config/secret keyword branches),
+ * then secret, workspace-terminus, members, settings, structure-config, project
+ * collection/item, then UNMAPPED.
  */
 export function pathToScope(method: string, path: string): ScopeTarget {
   const m = method.toUpperCase();
   if (m === 'GET') return null;
+  // CR#1: documents/comments/runs first — their trailing slug is arbitrary and
+  // must never be matched by the config/secret keyword branches below.
+  if (DOC_SUBRESOURCE.test(path)) return 'documents:write';
   if (isSecretWrite(m, path)) return 'SECRET';
   if (/^\/api\/v1\/w\/[^/]+$/.test(path)) return 'workspace:admin'; // rename/delete workspace
-  if (/\/members?(\/|$)/.test(path)) return 'members:write';
-  if (/\/settings(\/|$)/.test(path)) return 'settings:write';
-  if (/\/(tables|fields|views|statuses)(\/|$)/.test(path)) return 'config:write';
+  if (/^\/api\/v1\/w\/[^/]+\/members?(\/|$)/.test(path)) return 'members:write';
+  if (/^\/api\/v1\/w\/[^/]+\/settings(\/|$)/.test(path)) return 'settings:write';
+  if (/^\/api\/v1\/w\/[^/]+\/p\/[^/]+(?:\/t\/[^/]+)?\/(tables|fields|views|statuses)(\/|$)/.test(path))
+    return 'config:write';
   if (/^\/api\/v1\/w\/[^/]+\/projects(\/[^/]+)?$/.test(path)) return 'config:write';
   if (/^\/api\/v1\/w\/[^/]+\/p\/[^/]+$/.test(path)) return 'config:write'; // bare project item
-  if (/\/(documents|comments|runs)(\/|$)/.test(path)) return 'documents:write';
   return 'UNMAPPED';
 }
 

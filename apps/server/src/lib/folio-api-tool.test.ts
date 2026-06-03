@@ -86,6 +86,66 @@ describe('pathToScope + isSecretWrite (A6 scope gate, T5/T6)', () => {
     expect(isSecretWrite('PATCH', '/api/v1/w/acme/settings/x')).toBe(false); // settings != secret
     expect(isSecretWrite('GET', '/api/v1/w/acme/tokens')).toBe(false); // read
   });
+
+  // CR#1 — a document addressed by a slug that EQUALS a route keyword must NOT
+  // collide with the config/secret keyword branches. A doc titled "Tokens"
+  // (slug 'tokens') → PATCH .../documents/tokens must classify documents:write,
+  // never SECRET. Same for 'members','settings','tables','ai-keys', etc.
+  describe('CR#1 — document slug never collides with a route keyword', () => {
+    const slugs = ['tokens', 'ai-keys', 'members', 'settings', 'tables', 'fields', 'views', 'statuses', 'projects'];
+    for (const slug of slugs) {
+      test(`document slug '${slug}' → documents:write, not SECRET/config (project-level)`, () => {
+        const path = `/api/v1/w/acme/p/proj/documents/${slug}`;
+        expect(isSecretWrite('PATCH', path)).toBe(false);
+        expect(pathToScope('PATCH', path)).toBe('documents:write');
+      });
+      test(`document slug '${slug}' → documents:write (workspace-level docs)`, () => {
+        const path = `/api/v1/w/acme/documents/${slug}`;
+        expect(isSecretWrite('PATCH', path)).toBe(false);
+        expect(pathToScope('PATCH', path)).toBe('documents:write');
+      });
+      test(`document slug '${slug}' → documents:write (table-scoped docs)`, () => {
+        const path = `/api/v1/w/acme/p/proj/t/work-items/documents/${slug}`;
+        expect(isSecretWrite('PATCH', path)).toBe(false);
+        expect(pathToScope('PATCH', path)).toBe('documents:write');
+      });
+    }
+
+    test('comment under a doc slugged like a keyword → documents:write', () => {
+      expect(pathToScope('POST', '/api/v1/w/acme/p/proj/documents/tokens/comments')).toBe(
+        'documents:write',
+      );
+      expect(isSecretWrite('POST', '/api/v1/w/acme/p/proj/documents/tokens/comments')).toBe(false);
+    });
+
+    test('comment item slugged like a keyword → documents:write', () => {
+      expect(pathToScope('PATCH', '/api/v1/w/acme/p/proj/comments/settings')).toBe(
+        'documents:write',
+      );
+    });
+
+    test('run id-addressed writes → documents:write (workspace + project runs)', () => {
+      expect(pathToScope('POST', '/api/v1/w/acme/runs/run123/cancel')).toBe('documents:write');
+      expect(pathToScope('POST', '/api/v1/w/acme/p/proj/runs')).toBe('documents:write');
+    });
+
+    // Regression: the REAL config/secret routes still map to the SAME scope as
+    // before the anchoring — no route is downgraded.
+    test('real routes still classify correctly (no regression)', () => {
+      expect(pathToScope('POST', '/api/v1/w/acme/tokens')).toBe('SECRET');
+      expect(pathToScope('PATCH', '/api/v1/w/acme/settings/x/ai-keys')).toBe('SECRET');
+      expect(pathToScope('PATCH', '/api/v1/w/acme')).toBe('workspace:admin');
+      expect(pathToScope('DELETE', '/api/v1/w/acme')).toBe('workspace:admin');
+      expect(pathToScope('POST', '/api/v1/w/acme/members')).toBe('members:write');
+      expect(pathToScope('PATCH', '/api/v1/w/acme/settings/x')).toBe('settings:write');
+      expect(pathToScope('POST', '/api/v1/w/acme/p/x/tables')).toBe('config:write');
+      expect(pathToScope('POST', '/api/v1/w/acme/p/x/t/work-items/fields')).toBe('config:write');
+      expect(pathToScope('POST', '/api/v1/w/acme/projects')).toBe('config:write');
+      expect(pathToScope('PATCH', '/api/v1/w/acme/p/x')).toBe('config:write');
+      expect(pathToScope('POST', '/api/v1/w/acme/p/x/documents')).toBe('documents:write');
+      expect(pathToScope('PATCH', '/api/v1/w/acme/p/x/documents/normal')).toBe('documents:write');
+    });
+  });
 });
 
 function callerToken(over: Partial<ApiToken>): ApiToken {
