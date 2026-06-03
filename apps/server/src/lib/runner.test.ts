@@ -178,13 +178,20 @@ async function seedAgent(
   return (await db.query.documents.findFirst({ where: eq(documents.id, id) }))!;
 }
 
-async function seedAiKey(db: TestDB, workspaceId: string): Promise<void> {
+// INVERTED 2026-06-03: AI keys are INSTANCE-scoped by (provider, label), not the
+// run workspace (B6 reversed). The legacy `workspaceId` arg is kept for call-site
+// compatibility but ignored — the key is resolved by (provider, ai_key_label).
+async function seedAiKey(
+  db: TestDB,
+  _workspaceId: string,
+  opts: { label?: string; key?: string; baseUrl?: string } = {},
+): Promise<void> {
   await db.insert(aiKeys).values({
     id: nanoid(),
-    workspaceId,
     provider: 'anthropic',
-    label: 'default',
-    encryptedKey: encryptSecret('sk-test-fake-key'),
+    label: opts.label ?? 'default',
+    encryptedKey: encryptSecret(opts.key ?? 'sk-test-fake-key'),
+    baseUrl: opts.baseUrl,
   });
 }
 
@@ -230,6 +237,7 @@ async function seedRunningRun(
     agent_slug: agent.slug,
     provider: 'anthropic',
     model: 'claude-sonnet-4-6',
+    ai_key_label: 'default',
     system_prompt: 'You are a helper.',
     max_tokens: 12_345,
     tokens_in: 0,
@@ -2279,45 +2287,68 @@ describe('loadContext: library-agent authority defers to caller (B5/B6)', () => 
     expect(ctx!.token.projectIds).not.toEqual([]); // NOT the old deny-all
   });
 
-  test('a library-agent run resolves B BYOK key, never __system (B6)', async () => {
-    // B has its OWN anthropic key (seeded by scaffold). Seed a DIFFERENT key in
-    // __system. The library-agent run in B must decrypt B's key, proving the
-    // BYOK lookup keys off run.workspaceId (= B), never the agent home.
-    const scaffolded = await scaffold(); // scaffold seeds B's key = 'sk-test-fake-key'
-    const { db, run } = scaffolded;
-    const { systemId } = await seedLibraryAgentWithSkills(scaffolded, ['folio']);
-
-    // A distinct key in __system — must NOT be the one resolved.
-    await db.insert(aiKeys).values({
-      id: nanoid(),
-      workspaceId: systemId,
-      provider: 'anthropic',
-      label: 'system-key',
-      encryptedKey: encryptSecret('sk-SYSTEM-must-not-leak'),
-    });
+  test('loadContext resolves the AI key by (provider, ai_key_label), no workspace tie (B6 reversal)', async () => {
+    // The instance key (provider:anthropic, label:default) is seeded with NO
+    // workspace. A library-agent run in B (which has no workspace-scoped key by
+    // construction) resolves it by (provider, label), NOT by run.workspaceId.
+    const scaffolded = await scaffold(); // seeds the INSTANCE 'default' key now (workspaceId ignored)
+    const { run } = scaffolded;
+    await seedLibraryAgentWithSkills(scaffolded, ['folio']);
 
     const ctx = await loadContext(run.id);
     expect(ctx).not.toBeNull();
-    expect(ctx!.apiKey).toBe('sk-test-fake-key'); // B's key
-    expect(decryptSecret(encryptSecret('sk-SYSTEM-must-not-leak'))).not.toBe(ctx!.apiKey);
+    expect(ctx!.apiKey).toBe('sk-test-fake-key'); // resolved by (provider, label), no workspace predicate
   });
 
-  test('a library-agent run with NO key in B fails no_ai_key even when __system HAS one (B6)', async () => {
-    // B has no key; __system does. No __system fallback ⇒ pre-flight no_ai_key.
+  test('loadContext picks the labelled key when ai_key_label != default (label disambiguation)', async () => {
+    // Two anthropic keys differing only by label. The run's agent fm pins
+    // ai_key_label='cheap' → loadContext must decrypt the 'cheap' key, proving
+    // the label disambiguates within a provider.
     const scaffolded = await scaffold({ withAiKey: false });
     const { db, run } = scaffolded;
-    const { systemId } = await seedLibraryAgentWithSkills(scaffolded, ['folio']);
-    await db.insert(aiKeys).values({
-      id: nanoid(),
-      workspaceId: systemId,
-      provider: 'anthropic',
-      label: 'system-key',
-      encryptedKey: encryptSecret('sk-SYSTEM-must-not-leak'),
-    });
+    await seedAiKey(db, 'ignored', { label: 'default', key: 'sk-DEFAULT' });
+    await seedAiKey(db, 'ignored', { label: 'cheap', key: 'sk-CHEAP' });
+    await seedLibraryAgentWithSkills(scaffolded, ['folio']);
+    // Pin the run's snapshotted ai_key_label to 'cheap'.
+    await db
+      .update(documents)
+      .set({
+        frontmatter: sql`json_set(${documents.frontmatter}, '$.ai_key_label', 'cheap')`,
+      })
+      .where(eq(documents.id, run.id));
 
     const ctx = await loadContext(run.id);
     expect(ctx).not.toBeNull();
-    expect(ctx!.apiKey).toBe(''); // missing → empty ⇒ no_ai_key pre-flight, no fallback
+    expect(ctx!.apiKey).toBe('sk-CHEAP'); // the labelled key, not 'default'
+  });
+
+  test('a library-agent run resolves the instance key by (provider,label), not the run workspace (B6 — INVERTED)', async () => {
+    // INVERTED 2026-06-03: AI key is instance-scoped by (provider,label), not the
+    // run workspace (B6 reversed). Previously this asserted "B's BYOK key, never
+    // __system". Now there is no per-workspace key: the single instance 'default'
+    // anthropic key resolves regardless of which workspace the run targets.
+    const scaffolded = await scaffold(); // seeds the instance 'default' key
+    const { run } = scaffolded;
+    await seedLibraryAgentWithSkills(scaffolded, ['folio']);
+
+    const ctx = await loadContext(run.id);
+    expect(ctx).not.toBeNull();
+    expect(ctx!.apiKey).toBe('sk-test-fake-key'); // the instance default key
+  });
+
+  test('a run with NO matching (provider,label) key fails no_ai_key (B6 — INVERTED)', async () => {
+    // INVERTED 2026-06-03: there is no __system-vs-workspace distinction anymore.
+    // No instance key at the run's (provider, ai_key_label) ⇒ empty apiKey ⇒
+    // no_ai_key pre-flight. (Previously: "no key in B even when __system has one".)
+    const scaffolded = await scaffold({ withAiKey: false });
+    const { db, run } = scaffolded;
+    await seedLibraryAgentWithSkills(scaffolded, ['folio']);
+    // An instance key under a DIFFERENT label — must NOT satisfy label 'default'.
+    await seedAiKey(db, 'ignored', { label: 'some-other-label', key: 'sk-OTHER' });
+
+    const ctx = await loadContext(run.id);
+    expect(ctx).not.toBeNull();
+    expect(ctx!.apiKey).toBe(''); // no (anthropic, default) row ⇒ no_ai_key pre-flight
   });
 
   test('a library-agent run token is bound to B, so its tool calls resolve B not __system (B5 completion)', async () => {
