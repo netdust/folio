@@ -5,6 +5,23 @@ export function isInstanceReach(token: Pick<ApiToken, 'workspaceId'>): boolean {
   return token.workspaceId === null;
 }
 
+/**
+ * The system-origin OPERATOR token: instance reach + system origin (createdBy
+ * null) — code-provisioned by ensureOperatorToken, never mintable via POST
+ * /tokens (which always stamps a human createdBy). This is the SINGLE named
+ * definition of "the user-less operator principal"; consumers that branch on
+ * "no hydrated user ⟹ act as the instance" (e.g. workspace-create owner
+ * resolution) check this rather than re-inferring it from `createdBy === null`
+ * scattered across files. A human-minted instance PAT has createdBy set, so it
+ * is NOT an operator token — it hydrates a real user and never takes the
+ * operator fallback path.
+ */
+export function isOperatorToken(
+  token: Pick<ApiToken, 'workspaceId' | 'createdBy'>,
+): boolean {
+  return token.workspaceId === null && token.createdBy === null;
+}
+
 export type EffectiveReach =
   | { ok: true; workspaceId: string | null }
   | { ok: false };

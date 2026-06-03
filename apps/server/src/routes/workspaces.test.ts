@@ -737,3 +737,59 @@ describe('CR#2: operator/instance-bearer workspace create', () => {
     expect(owner!.userId).toBe(seed.user.id);
   });
 });
+
+describe('CR#3/CR-followup: workspace-create gate contract', () => {
+  test('a present-but-unauthorized bearer returns 403 (not 401)', async () => {
+    // A pinned agent bearer (createdBy=null so NO user is hydrated, no
+    // workspace:admin). Pre-fix this returned 401 (the no-auth branch fired
+    // first); the contract is 403 — the credential exists but may not create.
+    const { app, db, seed } = await makeTestApp();
+    const { token, hash } = newApiToken();
+    await db.insert(apiTokens).values({
+      id: nanoid(),
+      workspaceId: seed.workspace.id,
+      name: 'pinned-no-user',
+      tokenHash: hash,
+      scopes: ['documents:read'],
+      createdBy: null, // user-less bearer
+    });
+    const res = await app.request('/api/v1/workspaces', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Nope' }),
+    });
+    expect(res.status).toBe(403);
+  });
+
+  test('no credential at all still returns 401', async () => {
+    const { app } = await makeTestApp();
+    const res = await app.request('/api/v1/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Nope' }),
+    });
+    expect(res.status).toBe(401);
+  });
+
+  test('operator instance bearer with NO designated owner fails closed (403)', async () => {
+    // __system bootstrapped but NO owner membership → the operator path has no
+    // owner to assign → 403 (never an ownerless workspace).
+    const { app, db } = await makeTestApp();
+    await bootstrapSystemWorkspace(db);
+    const { token, hash } = newApiToken();
+    await db.insert(apiTokens).values({
+      id: nanoid(),
+      workspaceId: null,
+      name: 'operator-no-owner',
+      tokenHash: hash,
+      scopes: ['workspace:admin', 'documents:read'],
+      createdBy: null,
+    });
+    const res = await app.request('/api/v1/workspaces', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'No Owner' }),
+    });
+    expect(res.status).toBe(403);
+  });
+});

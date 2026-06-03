@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { effectiveReach, isInstanceReach } from './token-reach.ts';
+import { effectiveReach, isInstanceReach, isOperatorToken } from './token-reach.ts';
 
 describe('isInstanceReach', () => {
   test('null workspaceId is instance reach', () => {
@@ -7,6 +7,21 @@ describe('isInstanceReach', () => {
   });
   test('concrete workspaceId is pinned', () => {
     expect(isInstanceReach({ workspaceId: 'w1' } as any)).toBe(false);
+  });
+});
+
+describe('isOperatorToken (system-origin operator: instance reach + createdBy null)', () => {
+  test('instance reach + createdBy null IS the operator', () => {
+    expect(isOperatorToken({ workspaceId: null, createdBy: null } as any)).toBe(true);
+  });
+  test('instance reach + a human createdBy is NOT the operator (human instance PAT)', () => {
+    expect(isOperatorToken({ workspaceId: null, createdBy: 'u1' } as any)).toBe(false);
+  });
+  test('pinned + createdBy null is NOT the operator', () => {
+    expect(isOperatorToken({ workspaceId: 'w1', createdBy: null } as any)).toBe(false);
+  });
+  test('pinned + human createdBy is NOT the operator', () => {
+    expect(isOperatorToken({ workspaceId: 'w1', createdBy: 'u1' } as any)).toBe(false);
   });
 });
 

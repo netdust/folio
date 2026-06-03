@@ -11,7 +11,7 @@ import { emitEvent, txWithEvents } from '../lib/events.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
 import { slugUniqueInWorkspaces } from '../lib/slug-unique.ts';
 import { findSystemOwnerId, isReservedSlug } from '../lib/system-workspace.ts';
-import { isInstanceReach } from '../lib/token-reach.ts';
+import { isInstanceReach, isOperatorToken } from '../lib/token-reach.ts';
 import { listWorkspaces } from '../services/workspaces.ts';
 import {
   type AuthContext,
@@ -74,19 +74,21 @@ workspacesRoute.post(
     const user = c.get('user');
     const instanceBearer =
       !!token && isInstanceReach(token) && token.scopes.includes('workspace:admin');
-    if (!user && !instanceBearer) {
-      throw new HTTPError('UNAUTHENTICATED', 'login required', 401);
-    }
-    // A bearer-authenticated request that is NOT an authorized instance bearer
-    // (pinned, or missing workspace:admin) is rejected rather than falling
-    // through on a hydrated user. A session request with a stray bearer is
-    // fine — only reject when the request authenticated AS a token.
-    if (token && !instanceBearer && c.get('authMethod') === 'token') {
+    // A bearer that is present but NOT an authorized instance bearer (pinned, or
+    // an instance bearer lacking workspace:admin — whether or not it hydrated a
+    // user from createdBy) is FORBIDDEN, not merely unauthenticated. Check this
+    // before the no-auth 401 so a present-but-unauthorized credential reports 403
+    // (the contract), not 401. A session request without a bearer skips this.
+    if (token && !instanceBearer) {
       throw new HTTPError(
         'FORBIDDEN',
         'this bearer may not create workspaces; an instance bearer with workspace:admin or a session is required',
         403,
       );
+    }
+    // No authorized credential at all (no session user, no instance bearer).
+    if (!user && !instanceBearer) {
+      throw new HTTPError('UNAUTHENTICATED', 'login required', 401);
     }
     return next();
   },
@@ -103,18 +105,31 @@ workspacesRoute.post(
     }),
   ),
   async (c) => {
-    // The OWNER of the new workspace: the request's hydrated user (session or a
-    // human PAT), or — for the user-less operator token (createdBy null) — the
-    // single __system owner (CR#2). A designated instance always has one; if it
-    // somehow doesn't, fail closed rather than create an ownerless workspace.
+    // The OWNER of the new workspace. A request with a hydrated user (session or
+    // a human instance PAT) owns what it creates. A USER-LESS request can only
+    // be the system-origin operator token (isOperatorToken — the single named
+    // definition of that principal); it provisions the workspace on behalf of
+    // the instance, so the single __system owner becomes the owner (CR#2). Any
+    // OTHER user-less credential is rejected here — a future user-less token type
+    // must NOT silently inherit __system-owner authorship.
     const requestUser = c.get('user');
-    const ownerUserId = requestUser?.id ?? (await findSystemOwnerId(db));
+    const token = c.get('token');
+    let ownerUserId: string | undefined = requestUser?.id;
     if (!ownerUserId) {
-      throw new HTTPError(
-        'FORBIDDEN',
-        'no owner to assign — an instance owner must be designated first',
-        403,
-      );
+      if (!token || !isOperatorToken(token)) {
+        throw new HTTPError('FORBIDDEN', 'no owner to assign for this credential', 403);
+      }
+      // Operator (user-less, system-origin) → the designated instance owner.
+      // A designated instance always has one; fail closed rather than create an
+      // ownerless workspace if it somehow doesn't.
+      ownerUserId = await findSystemOwnerId(db);
+      if (!ownerUserId) {
+        throw new HTTPError(
+          'FORBIDDEN',
+          'no owner to assign — an instance owner must be designated first',
+          403,
+        );
+      }
     }
     const { name, slug: explicit } = c.req.valid('json');
     const id = nanoid();

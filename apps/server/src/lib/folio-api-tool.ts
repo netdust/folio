@@ -272,24 +272,24 @@ export function registerFolioApiTools(): void {
       ctx: ToolContext,
     ) => {
       const body = args.body ?? {};
+      // Single refuse-with-plan envelope (CR cleanup) — every gate below returns
+      // the SAME shape, so a future change to the contract (e.g. add a field the
+      // cockpit UI keys on) lands in one place, not four.
+      const refuse = (reason: string) => ({
+        refused: true,
+        reason,
+        plan: { method: args.method, path: args.path, body },
+      });
       const scopeTarget = pathToScope(args.method, args.path);
       // T5 default-deny: an unmapped write path is refused by construction. Every
       // NEW write route must add a branch to pathToScope or it fails closed here.
       if (scopeTarget === 'UNMAPPED') {
-        return {
-          refused: true,
-          reason: 'no scope mapping for this write path; refused',
-          plan: { method: args.method, path: args.path, body },
-        };
+        return refuse('no scope mapping for this write path; refused');
       }
       // T6 secret-refuse: tokens/ai-keys writes are NEVER applied by an agent —
       // for EVERY token, including a full-scope instance bearer. No bypass.
       if (scopeTarget === 'SECRET') {
-        return {
-          refused: true,
-          reason: 'secret-class write (tokens/ai-keys) is never applied by an agent',
-          plan: { method: args.method, path: args.path, body },
-        };
+        return refuse('secret-class write (tokens/ai-keys) is never applied by an agent');
       }
       // T-scope double-gate (agent ∩ caller): the run token AND the caller must
       // both hold the mapped scope. Missing on either → refuse.
@@ -297,11 +297,7 @@ export function registerFolioApiTools(): void {
         scopeTarget !== null &&
         (!ctx.token.scopes.includes(scopeTarget) || !ctx.callerScopes.includes(scopeTarget))
       ) {
-        return {
-          refused: true,
-          reason: `missing scope ${scopeTarget}; refused`,
-          plan: { method: args.method, path: args.path, body },
-        };
+        return refuse(`missing scope ${scopeTarget}; refused`);
       }
       // C3 unattended config floor — DETERMINISTIC bound on the unattended
       // injection chain: a trigger-fired (no-human) run cannot do config-class
@@ -309,11 +305,9 @@ export function registerFolioApiTools(): void {
       // (documents:write) stay allowed unattended (the B10 fence is best-effort
       // for LOW only). Secret writes already refuse for everyone above.
       if (ctx.unattended === true && scopeTarget !== null && CONFIG_CLASS_SCOPES.has(scopeTarget)) {
-        return {
-          refused: true,
-          reason: `config-class write (${scopeTarget}) refused on an unattended (trigger-fired) run; not applied`,
-          plan: { method: args.method, path: args.path, body },
-        };
+        return refuse(
+          `config-class write (${scopeTarget}) refused on an unattended (trigger-fired) run; not applied`,
+        );
       }
       const res = await dispatchAsCaller(ctx.token, args.method, args.path, body);
       const json = await res.json().catch(() => null);
