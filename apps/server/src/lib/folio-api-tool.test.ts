@@ -87,6 +87,18 @@ describe('pathToScope + isSecretWrite (A6 scope gate, T5/T6)', () => {
     expect(isSecretWrite('GET', '/api/v1/w/acme/tokens')).toBe(false); // read
   });
 
+  test('the INSTANCE AI-key route is SECRET-classed (T8/M1 — never agent-writable)', () => {
+    // AI-key CRUD moved to /api/v1/instance/ai-keys (T7). The `/ai-keys` keyword
+    // branch must still classify it SECRET so the fail-closed pre-check refuses
+    // any agent that somehow targets it (defense-in-depth behind the route's own
+    // session-only gate). Guard test — keeps the new path covered.
+    expect(pathToScope('POST', '/api/v1/instance/ai-keys')).toBe('SECRET');
+    expect(pathToScope('DELETE', '/api/v1/instance/ai-keys/k1')).toBe('SECRET');
+    expect(isSecretWrite('POST', '/api/v1/instance/ai-keys')).toBe(true);
+    expect(isSecretWrite('DELETE', '/api/v1/instance/ai-keys/k1')).toBe(true);
+    expect(isSecretWrite('GET', '/api/v1/instance/ai-keys')).toBe(false); // read not a secret-WRITE
+  });
+
   // CR#1 — a document addressed by a slug that EQUALS a route keyword must NOT
   // collide with the config/secret keyword branches. A doc titled "Tokens"
   // (slug 'tokens') → PATCH .../documents/tokens must classify documents:write,
