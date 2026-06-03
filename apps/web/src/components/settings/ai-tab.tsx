@@ -11,9 +11,12 @@ import { formatApiError } from '../../lib/api/index.ts';
 import { Button } from '../ui/button.tsx';
 
 interface Props {
-  // wslug is still needed for the per-workspace /ai/test-key route (unchanged
-  // this phase). AI-key CRUD is instance-level — no workspaceId.
-  wslug: string;
+  // AI-key CRUD is instance-level — no workspaceId. `wslug` is OPTIONAL and only
+  // powers the pre-save "Test" button (the /ai/test-key route is still
+  // workspace-scoped). On the instance settings page there's no workspace
+  // context, so the Test button hides; keys can still be saved + validated by a
+  // real run.
+  wslug?: string;
 }
 
 const PROVIDERS: AiProvider[] = ['anthropic', 'openai', 'openrouter', 'ollama'];
@@ -89,6 +92,7 @@ export function AiTab({ wslug }: Props) {
   // the click-time provider. Whether the user sees the result rendered in
   // the chip is not the same as whether the side effect happened.
   async function onTest() {
+    if (!wslug) return; // the Test button only renders when a workspace is in scope
     setTestResult(null);
     const providerAtClick = provider;
     const seq = ++testSeqRef.current;
@@ -266,13 +270,19 @@ export function AiTab({ wslug }: Props) {
           ) : null}
 
           <div className="mt-1 flex gap-2">
-            <Button
-              variant="secondary"
-              onClick={onTest}
-              disabled={!apiKey || testKey.isPending}
-            >
-              {testKey.isPending ? 'Testing…' : 'Test'}
-            </Button>
+            {/* The pre-save Test button needs a workspace (the /ai/test-key route
+                is workspace-scoped). On the instance settings page there's no
+                workspace in scope, so it hides; the key still saves + validates on
+                a real run. */}
+            {wslug ? (
+              <Button
+                variant="secondary"
+                onClick={onTest}
+                disabled={!apiKey || testKey.isPending}
+              >
+                {testKey.isPending ? 'Testing…' : 'Test'}
+              </Button>
+            ) : null}
             <Button onClick={onSave} disabled={!apiKey || upsertKey.isPending}>
               {upsertKey.isPending ? 'Saving…' : 'Save key'}
             </Button>
