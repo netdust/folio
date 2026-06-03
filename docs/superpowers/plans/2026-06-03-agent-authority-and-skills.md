@@ -882,6 +882,8 @@ git commit -m "phase-auth A8: per-run effective-reach intersection (T4) — repl
 
 > Spec: the operator token is `workspaceId: null, agentId: null, createdBy: null, full scopes`. The `createdBy: null` is the bless marker (T8). Today the operator-agent token is owner-stamped + workspace-bound — this changes it.
 
+> **PLAN CORRECTION (2026-06-03, ground-truth + design decision with Stefan).** Ground-truthing showed the runner loads the operator's token via `eq(apiTokens.agentId, agent.id)` (runner.ts:380), the SHARED resolution path for every library-agent run. Setting `agentId: null` (full T3) would force rewiring that security-critical shared lookup (the file A8 just hardened for T4) — large blast radius, to satisfy an invariant that doesn't apply to the operator. **Decision: KEEP `agentId` = the operator doc; null only `workspaceId` (→ instance reach) + `createdBy` (→ T8 bless marker).** This is a documented **T3 carve-out for the operator only**: T3 ("instance reach ⟹ agentId null") exists to stop a *worker* token from secretly holding instance reach; the operator is the one agent that LEGITIMATELY has instance reach and IS agent-bound, so the binding is correct, not an escalation. The security-load-bearing property (T8 bless = `createdBy IS NULL`) holds identically. The runner lookup stays unchanged. A9 below: change the operator token's `workspaceId` + `createdBy` to null at provisioning, NOT `agentId`. Keep the A9 idempotency + "is NOT mintable via POST /tokens" assertions. Drop the T3-on-operator assertion; replace with "operator token has `workspaceId === null && createdBy === null && agentId === <operator doc id>`".
+
 - [ ] **Step 1: Write the failing test**
 
 ```ts
