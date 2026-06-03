@@ -2518,6 +2518,31 @@ async function seedLibraryAgentWithSkills(
   const systemWs = (await db.query.workspaces.findFirst({
     where: eq(workspaces.id, systemId),
   }))!;
+  // B1: skills route by `frontmatter.trusted`. The seeded `folio` page ships
+  // with `frontmatter:{}` (B4 blesses it later). These existing-behavior tests
+  // exercise the TRUSTED channel, so bless the named __system skill pages here
+  // — mirroring what B4 will persist. Without this, folio would resolve as
+  // untrusted and correctly route OUT of the trusted reference block.
+  const skillsProject = await db.query.projects.findFirst({
+    where: and(eq(projects.workspaceId, systemId), eq(projects.slug, 'skills')),
+  });
+  if (skillsProject) {
+    for (const slug of skillSlugs) {
+      await db
+        .update(documents)
+        .set({
+          frontmatter: sql`json_set(coalesce(${documents.frontmatter}, json('{}')), '$.trusted', json('true'))`,
+        })
+        .where(
+          and(
+            eq(documents.workspaceId, systemId),
+            eq(documents.projectId, skillsProject.id),
+            eq(documents.slug, slug),
+            eq(documents.type, 'page'),
+          ),
+        );
+    }
+  }
   const libraryAgent = await seedAgent(
     db,
     systemWs,
@@ -2537,6 +2562,140 @@ async function seedLibraryAgentWithSkills(
     .where(eq(documents.id, run.id));
   return { systemId, libraryAgent };
 }
+
+/**
+ * Insert a `page` into the __system Skills project with an explicit `trusted`
+ * frontmatter flag (B1 — trust-channel routing). Bootstraps __system first so
+ * the Skills project exists, then inserts directly under it.
+ */
+async function seedSystemSkillPage(
+  db: TestDB,
+  slug: string,
+  body: string,
+  trusted: boolean,
+): Promise<string> {
+  await bootstrapSystemWorkspace(db);
+  const systemId = await getSystemWorkspaceId(db);
+  const skillsProject = (await db.query.projects.findFirst({
+    where: and(eq(projects.workspaceId, systemId), eq(projects.slug, 'skills')),
+  }))!;
+  await db.insert(documents).values({
+    id: nanoid(),
+    workspaceId: systemId,
+    projectId: skillsProject.id,
+    type: 'page',
+    title: slug,
+    slug,
+    body,
+    status: null,
+    frontmatter: { trusted },
+    createdBy: null,
+  });
+  return systemId;
+}
+
+/**
+ * Like seedLibraryAgentWithSkills, but the agent's HOME is a REGULAR workspace
+ * (the scaffold's run workspace, NOT __system) — a worker agent in workspace B
+ * that declares skills which live ONLY in __system. Proves the resolver reads
+ * skills from __system, not the worker's home (B1 push).
+ */
+async function seedWorkerAgentWithSkills(
+  ctx: Awaited<ReturnType<typeof scaffold>>,
+  skillSlugs: string[],
+): Promise<{ systemId: string; workerAgent: Document }> {
+  const { db, run, workspace, user } = ctx;
+  await bootstrapSystemWorkspace(db);
+  const systemId = await getSystemWorkspaceId(db);
+  // The worker agent's home is the REGULAR run workspace.
+  const workerAgent = await seedAgent(db, workspace, user, 'worker', ['list_documents'], {
+    skills: skillSlugs,
+  });
+  // Stamp the run: its agent is the worker, home = the run's own (regular) workspace.
+  await db
+    .update(documents)
+    .set({
+      frontmatter: sql`json_set(${documents.frontmatter},
+        '$.agent_slug', 'worker',
+        '$.agent_home_workspace_id', ${workspace.id})`,
+    })
+    .where(eq(documents.id, run.id));
+  return { systemId, workerAgent };
+}
+
+describe('Phase B1 — __system skill resolution + trust channel', () => {
+  test('a worker agent in workspace B loads a __system skill (push)', async () => {
+    const scaffolded = await scaffold();
+    // The skill lives ONLY in __system; the worker's home is the regular ws.
+    await seedSystemSkillPage(scaffolded.db, 'seo', 'SEO guidance', true);
+    await seedWorkerAgentWithSkills(scaffolded, ['seo']);
+
+    const ctx = await loadContext(scaffolded.run.id);
+    expect(ctx).not.toBeNull();
+    // Resolved from __system (NOT the worker's home, where 'seo' does not exist).
+    expect(ctx!.agentSkills.length).toBe(1);
+    expect(ctx!.agentSkills[0]!.slug).toBe('seo');
+    expect(ctx!.agentSkills[0]!.body).toBe('SEO guidance');
+    expect(ctx!.agentSkills[0]!.trusted).toBe(true);
+  });
+
+  test('an unblessed (trusted:false) skill loads as trusted:false', async () => {
+    const scaffolded = await scaffold();
+    await seedSystemSkillPage(scaffolded.db, 'draft', 'Draft guidance', false);
+    await seedWorkerAgentWithSkills(scaffolded, ['draft']);
+
+    const ctx = await loadContext(scaffolded.run.id);
+    expect(ctx).not.toBeNull();
+    expect(ctx!.agentSkills.length).toBe(1);
+    expect(ctx!.agentSkills[0]!.slug).toBe('draft');
+    expect(ctx!.agentSkills[0]!.trusted).toBe(false);
+  });
+
+  test('a trusted skill rides the TRUSTED channel; an untrusted skill does NOT', async () => {
+    const scaffolded = await scaffold({ parentBody: 'Do the task.' });
+    await seedSystemSkillPage(scaffolded.db, 'blessed', 'TRUSTED-SKILL-BODY', true);
+    await seedSystemSkillPage(scaffolded.db, 'unblessed', 'UNVERIFIED-SKILL-BODY', false);
+    await seedWorkerAgentWithSkills(scaffolded, ['blessed', 'unblessed']);
+
+    let capturedMessages: import('./ai/provider.ts').Message[] | undefined;
+    const stub: AIProvider = {
+      async *stream(opts) {
+        capturedMessages = opts.messages;
+        yield { type: 'text', delta: 'ok' } as ProviderEvent;
+        yield { type: 'done', reason: 'stop' } as ProviderEvent;
+      },
+      async testKey() {
+        return { ok: true as const };
+      },
+    };
+    providerTestHatch.overrideRegistry('anthropic', async () => stub);
+
+    await runAgent({ runId: scaffolded.run.id });
+
+    expect(capturedMessages).toBeDefined();
+    // The leading trusted reference block carries ONLY the blessed skill.
+    const trustedMsg = capturedMessages!.find((m) => m.content.includes('reference skills'));
+    expect(trustedMsg).toBeDefined();
+    expect(trustedMsg!.content).toContain('TRUSTED-SKILL-BODY');
+    // SECURITY INVARIANT: the unblessed skill must NEVER appear in the trusted block.
+    expect(trustedMsg!.content).not.toContain('UNVERIFIED-SKILL-BODY');
+
+    // The unblessed skill body appears only in a non-trusted message (untrusted
+    // DATA envelope), if at all — never in the trusted reference block.
+    const blessedMsgs = capturedMessages!.filter((m) => m.content.includes('TRUSTED-SKILL-BODY'));
+    for (const m of blessedMsgs) {
+      // every message carrying the blessed body is the trusted block
+      expect(m.content).toContain('reference skills');
+    }
+    const unblessedMsgs = capturedMessages!.filter((m) =>
+      m.content.includes('UNVERIFIED-SKILL-BODY'),
+    );
+    for (const m of unblessedMsgs) {
+      // every message carrying the unblessed body is NOT the trusted block
+      expect(m.content).not.toContain('reference skills');
+    }
+  });
+});
 
 describe('Phase B — loadAgentDefinition (definitional skill load)', () => {
   test('reads the agent body + frontmatter-named skills from __system Skills (B3)', async () => {
