@@ -7,8 +7,9 @@ import { roleToScopes } from './agent-schema.ts';
 import { executeTool } from './agent-tools.ts';
 import { registerRealTools } from './agent-tools-registry.ts';
 import {
-  classifyRisk,
   dispatchAsCaller,
+  isSecretWrite,
+  pathToScope,
   sweepOrphanedFolioApiTokens,
   validateApiPath,
 } from './folio-api-tool.ts';
@@ -60,53 +61,90 @@ describe('validateApiPath (P3-5)', () => {
   });
 });
 
-describe('classifyRisk (P3-7, v1 resource-type proxy)', () => {
-  test('document writes are low', () => {
-    expect(classifyRisk('POST', '/api/v1/w/a/p/b/documents', {})).toBe('low');
+describe('pathToScope + isSecretWrite (A6 scope gate, T5/T6)', () => {
+  test('pathToScope maps the write surfaces', () => {
+    expect(pathToScope('PATCH', '/api/v1/w/acme/settings/x/ai-keys')).toBe('SECRET');
+    expect(pathToScope('POST',  '/api/v1/w/acme/tokens')).toBe('SECRET');
+    expect(pathToScope('PATCH', '/api/v1/w/acme')).toBe('workspace:admin');
+    expect(pathToScope('DELETE','/api/v1/w/acme')).toBe('workspace:admin');
+    expect(pathToScope('POST',  '/api/v1/w/acme/members')).toBe('members:write');
+    expect(pathToScope('PATCH', '/api/v1/w/acme/settings/x')).toBe('settings:write');
+    expect(pathToScope('POST',  '/api/v1/w/acme/p/x/tables')).toBe('config:write');
+    expect(pathToScope('DELETE','/api/v1/w/acme/p/x/views/v1')).toBe('config:write');
+    expect(pathToScope('POST',  '/api/v1/w/acme/projects')).toBe('config:write');
+    expect(pathToScope('PATCH', '/api/v1/w/acme/p/x')).toBe('config:write');
+    expect(pathToScope('POST',  '/api/v1/w/acme/p/x/documents')).toBe('documents:write');
+    expect(pathToScope('POST',  '/api/v1/w/acme/p/x/comments')).toBe('documents:write');
+    expect(pathToScope('GET',   '/api/v1/w/acme/p/x/tables')).toBe(null); // reads not gated here
   });
-  test('config writes (tables/fields/views/statuses/projects) are medium', () => {
-    expect(classifyRisk('POST', '/api/v1/w/a/p/b/tables', {})).toBe('medium');
-    expect(classifyRisk('DELETE', '/api/v1/w/a/p/b/views/v1', {})).toBe('medium');
+  test('an UNMAPPED write path returns UNMAPPED (default-deny signal, T5)', () => {
+    expect(pathToScope('POST', '/api/v1/w/acme/p/x/some-future-route')).toBe('UNMAPPED');
   });
-  test('membership/role + workspace delete + explicit bulk are high', () => {
-    expect(classifyRisk('DELETE', '/api/v1/w/a', {})).toBe('high'); // workspace delete
-    expect(classifyRisk('POST', '/api/v1/w/a/members', {})).toBe('high'); // future
-    expect(classifyRisk('PATCH', '/api/v1/w/a/p/b/documents', { bulk: true })).toBe('high');
-  });
-
-  // Pin tests (P3-7): the project-config rule must NOT swallow document/comment/run
-  // sub-resources mounted under /p/:slug. Document writes stay low; the projects
-  // COLLECTION and the project ITEM route are the only project-config medium paths.
-  test('document write under a project is low, project create/rename are medium', () => {
-    expect(classifyRisk('POST', '/api/v1/w/a/p/b/documents', {})).toBe('low'); // sub-resource
-    expect(classifyRisk('POST', '/api/v1/w/a/p/b/comments', {})).toBe('low'); // sub-resource
-    expect(classifyRisk('GET', '/api/v1/w/a/p/b/runs', {})).toBe('low'); // read, sub-resource
-    expect(classifyRisk('POST', '/api/v1/w/a/projects', {})).toBe('medium'); // create project
-    expect(classifyRisk('PATCH', '/api/v1/w/a/projects/b', {})).toBe('medium'); // rename project
-    expect(classifyRisk('DELETE', '/api/v1/w/a/projects/b', {})).toBe('medium'); // delete project
-    // Plan's spec example also pins the bare project-item form as medium:
-    expect(classifyRisk('PATCH', '/api/v1/w/a/p/b', {})).toBe('medium'); // project item (no sub-resource)
+  test('isSecretWrite is true only for tokens + ai-keys writes (T6)', () => {
+    expect(isSecretWrite('POST', '/api/v1/w/acme/tokens')).toBe(true);
+    expect(isSecretWrite('PATCH', '/api/v1/w/acme/settings/x/ai-keys')).toBe(true);
+    expect(isSecretWrite('PATCH', '/api/v1/w/acme/settings/x')).toBe(false); // settings != secret
+    expect(isSecretWrite('GET', '/api/v1/w/acme/tokens')).toBe(false); // read
   });
 
-  test('token mint/revoke routes are high (P3-7 hardening)', () => {
-    expect(classifyRisk('POST', '/api/v1/w/a/tokens', {})).toBe('high');
-    expect(classifyRisk('DELETE', '/api/v1/w/a/tokens/tok1', {})).toBe('high');
-    expect(classifyRisk('GET', '/api/v1/w/a/tokens', {})).not.toBe('high'); // read doesn't gate
-  });
-  test('BYOK key / settings writes are high (P3-7 hardening)', () => {
-    expect(classifyRisk('POST', '/api/v1/w/a/settings/ws1/ai-keys', {})).toBe('high');
-    expect(classifyRisk('DELETE', '/api/v1/w/a/settings/ws1/ai-keys/k1', {})).toBe('high');
-  });
-  test('workspace rename + delete are high; project sub-resources unaffected', () => {
-    expect(classifyRisk('PATCH', '/api/v1/w/a', {})).toBe('high'); // rename
-    expect(classifyRisk('DELETE', '/api/v1/w/a', {})).toBe('high'); // delete
-    expect(classifyRisk('POST', '/api/v1/w/a/p/b/documents', {})).toBe('low'); // regression guard
-  });
-  test('method case is normalized', () => {
-    expect(classifyRisk('delete', '/api/v1/w/a', {})).toBe('high');
-  });
-  test('members read does not classify high (symmetry)', () => {
-    expect(classifyRisk('GET', '/api/v1/w/a/members', {})).not.toBe('high');
+  // CR#1 — a document addressed by a slug that EQUALS a route keyword must NOT
+  // collide with the config/secret keyword branches. A doc titled "Tokens"
+  // (slug 'tokens') → PATCH .../documents/tokens must classify documents:write,
+  // never SECRET. Same for 'members','settings','tables','ai-keys', etc.
+  describe('CR#1 — document slug never collides with a route keyword', () => {
+    const slugs = ['tokens', 'ai-keys', 'members', 'settings', 'tables', 'fields', 'views', 'statuses', 'projects'];
+    for (const slug of slugs) {
+      test(`document slug '${slug}' → documents:write, not SECRET/config (project-level)`, () => {
+        const path = `/api/v1/w/acme/p/proj/documents/${slug}`;
+        expect(isSecretWrite('PATCH', path)).toBe(false);
+        expect(pathToScope('PATCH', path)).toBe('documents:write');
+      });
+      test(`document slug '${slug}' → documents:write (workspace-level docs)`, () => {
+        const path = `/api/v1/w/acme/documents/${slug}`;
+        expect(isSecretWrite('PATCH', path)).toBe(false);
+        expect(pathToScope('PATCH', path)).toBe('documents:write');
+      });
+      test(`document slug '${slug}' → documents:write (table-scoped docs)`, () => {
+        const path = `/api/v1/w/acme/p/proj/t/work-items/documents/${slug}`;
+        expect(isSecretWrite('PATCH', path)).toBe(false);
+        expect(pathToScope('PATCH', path)).toBe('documents:write');
+      });
+    }
+
+    test('comment under a doc slugged like a keyword → documents:write', () => {
+      expect(pathToScope('POST', '/api/v1/w/acme/p/proj/documents/tokens/comments')).toBe(
+        'documents:write',
+      );
+      expect(isSecretWrite('POST', '/api/v1/w/acme/p/proj/documents/tokens/comments')).toBe(false);
+    });
+
+    test('comment item slugged like a keyword → documents:write', () => {
+      expect(pathToScope('PATCH', '/api/v1/w/acme/p/proj/comments/settings')).toBe(
+        'documents:write',
+      );
+    });
+
+    test('run id-addressed writes → documents:write (workspace + project runs)', () => {
+      expect(pathToScope('POST', '/api/v1/w/acme/runs/run123/cancel')).toBe('documents:write');
+      expect(pathToScope('POST', '/api/v1/w/acme/p/proj/runs')).toBe('documents:write');
+    });
+
+    // Regression: the REAL config/secret routes still map to the SAME scope as
+    // before the anchoring — no route is downgraded.
+    test('real routes still classify correctly (no regression)', () => {
+      expect(pathToScope('POST', '/api/v1/w/acme/tokens')).toBe('SECRET');
+      expect(pathToScope('PATCH', '/api/v1/w/acme/settings/x/ai-keys')).toBe('SECRET');
+      expect(pathToScope('PATCH', '/api/v1/w/acme')).toBe('workspace:admin');
+      expect(pathToScope('DELETE', '/api/v1/w/acme')).toBe('workspace:admin');
+      expect(pathToScope('POST', '/api/v1/w/acme/members')).toBe('members:write');
+      expect(pathToScope('PATCH', '/api/v1/w/acme/settings/x')).toBe('settings:write');
+      expect(pathToScope('POST', '/api/v1/w/acme/p/x/tables')).toBe('config:write');
+      expect(pathToScope('POST', '/api/v1/w/acme/p/x/t/work-items/fields')).toBe('config:write');
+      expect(pathToScope('POST', '/api/v1/w/acme/projects')).toBe('config:write');
+      expect(pathToScope('PATCH', '/api/v1/w/acme/p/x')).toBe('config:write');
+      expect(pathToScope('POST', '/api/v1/w/acme/p/x/documents')).toBe('documents:write');
+      expect(pathToScope('PATCH', '/api/v1/w/acme/p/x/documents/normal')).toBe('documents:write');
+    });
   });
 });
 
@@ -424,10 +462,10 @@ describe('folio_api write tool (P3-6/7)', () => {
       undefined,
       // The run-derived second field: a fired run has no human in the loop.
       { callerScopes: tok.scopes, unattended: true },
-    )) as { refused: boolean; plan: { risk: string; method: string; path: string } };
+    )) as { refused: boolean; reason: string; plan: { method: string; path: string } };
     expect(out.refused).toBe(true);
     expect(out.plan).toBeDefined();
-    expect(out.plan.risk).toBe('medium');
+    expect(out.reason).toMatch(/config-class write \(config:write\)/);
     expect(out.plan.method).toBe('POST');
     // No dispatch: the tables count is unchanged (refuse-with-plan, not applied).
     expect((await testDb.query.tables.findMany()).length).toBe(tablesBefore);
@@ -487,8 +525,10 @@ describe('folio_api write tool (P3-6/7)', () => {
     expect(out.refused).toBeUndefined(); // low tier does not refuse
   });
 
-  test('folio_api high-risk REFUSES without dispatching or mutating (P3-7)', async () => {
+  test('folio_api workspace-delete REFUSES on a token lacking workspace:admin (T-scope)', async () => {
     const { seed, db: testDb } = await makeTestApp();
+    // DELETE /w/:slug maps to workspace:admin; this token does not hold it →
+    // refuse via the double-gate, no dispatch.
     const tok = callerToken({
       workspaceId: seed.workspace.id,
       scopes: ['config:write', 'documents:read'],
@@ -503,21 +543,44 @@ describe('folio_api write tool (P3-6/7)', () => {
       { method: 'DELETE', path: `/api/v1/w/${seed.workspace.slug}`, body: {} },
       undefined,
       { callerScopes: tok.scopes },
-    )) as { refused: boolean; plan: { risk: string; method: string; path: string } };
+    )) as { refused: boolean; reason: string; plan: { method: string; path: string } };
     expect(out.refused).toBe(true);
     expect(out.plan).toBeDefined();
-    expect(out.plan.risk).toBe('high');
+    expect(out.reason).toMatch(/missing scope workspace:admin/);
     expect(out.plan.method).toBe('DELETE');
     expect((await testDb.select().from(workspaces)).length).toBe(before); // no mutation
-    expect(await countTokens()).toBe(tokensBefore); // high branch did NOT mint
+    expect(await countTokens()).toBe(tokensBefore); // refuse branch did NOT mint
   });
 
-  test('HIGH-risk refuses-with-plan REGARDLESS of caller privilege (B7)', async () => {
-    // Interim HIGH-tier floor (threat model B7): an owner/admin — the MOST
-    // privileged caller, carrying every delegatable scope via roleToScopes —
-    // gets the SAME refuse-with-plan a member gets. There is deliberately NO
-    // owner/admin auto-apply path until the approval-gate ships. This pins that
-    // the high branch never consults caller role/privilege.
+  test('UNMAPPED write path REFUSES (default-deny, T5)', async () => {
+    const { seed, db: testDb } = await makeTestApp();
+    const tok = callerToken({
+      workspaceId: seed.workspace.id,
+      scopes: roleToScopes('owner'), // even a full-scope caller is refused
+      createdBy: seed.user.id,
+    });
+    const tokensBefore = await countTokens();
+    const out = (await executeTool(
+      tok,
+      'agent:op',
+      'folio_api',
+      {
+        method: 'POST',
+        path: `/api/v1/w/${seed.workspace.slug}/p/${seed.project.slug}/some-future-route`,
+        body: {},
+      },
+      undefined,
+      { callerScopes: tok.scopes },
+    )) as { refused: boolean; reason: string; plan: { method: string; path: string } };
+    expect(out.refused).toBe(true);
+    expect(out.reason).toMatch(/no scope mapping/);
+    expect(out.plan.method).toBe('POST');
+    expect(await countTokens()).toBe(tokensBefore); // default-deny did NOT mint/dispatch
+  });
+
+  test('secret write (POST /tokens) REFUSES even for a full-scope instance-style token (T6)', async () => {
+    // T6: secret-class writes are NEVER applied by an agent — for the MOST
+    // privileged caller (every scope incl. workspace:admin). No bypass.
     const { seed, db: testDb } = await makeTestApp();
     const owner = callerToken({
       workspaceId: seed.workspace.id,
@@ -526,8 +589,6 @@ describe('folio_api write tool (P3-6/7)', () => {
     });
     const before = (await testDb.select().from(workspaces)).length;
     const tokensBefore = await countTokens();
-    // POST /w/:slug/tokens (token mint) — classifies HIGH. The most destructive
-    // standing-credential op; an owner must STILL be refused.
     const out = (await executeTool(
       owner,
       'agent:op',
@@ -539,14 +600,12 @@ describe('folio_api write tool (P3-6/7)', () => {
       },
       undefined,
       { callerScopes: owner.scopes },
-    )) as { refused: boolean; plan: { risk: string; method: string; path: string } };
-    // Identical outcome to the member-caller refuse above: refused, with a plan,
-    // and NO dispatch (no token minted, no workspace mutated).
+    )) as { refused: boolean; reason: string; plan: { method: string; path: string } };
     expect(out.refused).toBe(true);
     expect(out.plan).toBeDefined();
-    expect(out.plan.risk).toBe('high');
+    expect(out.reason).toMatch(/secret-class write/);
     expect(out.plan.method).toBe('POST');
     expect((await testDb.select().from(workspaces)).length).toBe(before); // no mutation
-    expect(await countTokens()).toBe(tokensBefore); // high branch did NOT mint/dispatch
+    expect(await countTokens()).toBe(tokensBefore); // secret branch did NOT mint/dispatch
   });
 });

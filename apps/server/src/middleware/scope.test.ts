@@ -3,6 +3,8 @@ import { Hono } from 'hono';
 import { makeTestApp } from '../test/harness.ts';
 import { registerErrorHandler } from '../lib/http.ts';
 import { requireUser, attachUser, type AuthContext } from './auth.ts';
+import { attachToken } from './bearer.ts';
+import { newApiToken } from '../lib/auth.ts';
 import {
   resolveWorkspace,
   resolveProject,
@@ -46,6 +48,77 @@ test('resolveWorkspace attaches workspace + role', async () => {
   const res = await app.request('/acme', { headers: { Cookie: seed.sessionCookie } });
   expect(res.status).toBe(200);
   expect(await res.json()).toEqual({ name: 'Acme', role: 'owner' });
+});
+
+test('instance token (workspaceId null) passes resolveWorkspace for a non-member workspace', async () => {
+  const { db, seed } = await makeTestApp();
+  const { workspaces, apiTokens } = await import('../db/schema.ts');
+  const { nanoid } = await import('nanoid');
+  // Workspace B 'beta', no membership for seed.user (who is owner of 'acme').
+  await db.insert(workspaces).values({ id: nanoid(), slug: 'beta', name: 'Beta' });
+  const { token, hash } = newApiToken();
+  await db.insert(apiTokens).values({
+    id: nanoid(),
+    workspaceId: null,
+    name: 'inst',
+    tokenHash: hash,
+    scopes: ['documents:read'],
+    createdBy: seed.user.id,
+  });
+  const app = new Hono<AuthContext & ScopeContext>();
+  registerErrorHandler(app);
+  app.use('/:wslug', attachUser, attachToken, resolveWorkspace);
+  app.get('/:wslug', (c) => c.json({ name: getWorkspace(c).name, role: getRole(c) }));
+  const res = await app.request('/beta', { headers: { Authorization: `Bearer ${token}` } });
+  expect(res.status).toBe(200);
+  expect(await res.json()).toEqual({ name: 'Beta', role: 'owner' });
+});
+
+test('instance token pinned token still 403 on a non-matching workspace (TM1)', async () => {
+  const { db, seed } = await makeTestApp();
+  const { workspaces, apiTokens } = await import('../db/schema.ts');
+  const { nanoid } = await import('nanoid');
+  await db.insert(workspaces).values({ id: nanoid(), slug: 'beta', name: 'Beta' });
+  const { token, hash } = newApiToken();
+  // Pinned to 'acme'.
+  await db.insert(apiTokens).values({
+    id: nanoid(),
+    workspaceId: seed.workspace.id,
+    name: 'pinned',
+    tokenHash: hash,
+    scopes: ['documents:read'],
+    createdBy: seed.user.id,
+  });
+  const app = new Hono<AuthContext & ScopeContext>();
+  registerErrorHandler(app);
+  app.use('/:wslug', attachUser, attachToken, resolveWorkspace);
+  app.get('/:wslug', (c) => c.json({ ok: true }));
+  const res = await app.request('/beta', { headers: { Authorization: `Bearer ${token}` } });
+  expect(res.status).toBe(403);
+  expect((await res.json()).error.message).toBe('token does not belong to this workspace');
+});
+
+test('instance token with no resolvable user still 401 (TM2)', async () => {
+  const { db } = await makeTestApp();
+  const { apiTokens } = await import('../db/schema.ts');
+  const { nanoid } = await import('nanoid');
+  const { token, hash } = newApiToken();
+  // createdBy null → attachToken cannot hydrate a user. No session cookie.
+  await db.insert(apiTokens).values({
+    id: nanoid(),
+    workspaceId: null,
+    name: 'inst-nouser',
+    tokenHash: hash,
+    scopes: ['documents:read'],
+    createdBy: null,
+  });
+  const app = new Hono<AuthContext & ScopeContext>();
+  registerErrorHandler(app);
+  app.use('/:wslug', attachUser, attachToken, resolveWorkspace);
+  app.get('/:wslug', (c) => c.json({ ok: true }));
+  const res = await app.request('/acme', { headers: { Authorization: `Bearer ${token}` } });
+  expect(res.status).toBe(401);
+  expect((await res.json()).error.message).toBe('login required');
 });
 
 test('resolveProject loads project scoped to workspace', async () => {

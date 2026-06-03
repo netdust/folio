@@ -14,6 +14,7 @@ import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import { db } from '../db/client.ts';
 import { apiTokens, type ApiToken } from '../db/schema.ts';
+import { ADMIN_SCOPES } from './agent-schema.ts'; // CR#3: derive the C3 config floor
 import { registerTool, type ToolContext } from './agent-tools.ts';
 import { newApiToken } from './auth.ts';
 
@@ -57,57 +58,79 @@ export function validateApiPath(path: string): string {
   return path;
 }
 
-export type RiskTier = 'low' | 'medium' | 'high';
+export type ScopeTarget = string | 'SECRET' | 'UNMAPPED' | null;
 
 /**
- * v1 risk proxy by resource type (mitigation P3-7). The real scorer (objects /
- * reversibility / workspace-wide / permissions) drops in here later without
- * re-plumbing — every mutation already routes through dryRun→render→apply.
+ * A document/comment/run write lives under the documents|comments|runs route
+ * mount, whose TRAILING segment is an arbitrary user SLUG (or run id) that can
+ * equal a config/secret route keyword ('tokens','ai-keys','members','settings',
+ * 'tables',...). The keyword checks below match a keyword ANYWHERE in the path,
+ * so a document slugged 'tokens' at `/documents/tokens` would otherwise be
+ * mis-classified SECRET and permanently refused (CR#1, fail-closed bug).
  *
- * Rule order (first match wins):
- *  1. HIGH  — token mint/revoke, BYOK/settings writes, workspace-terminus
- *     rename/delete, permission/membership routes, explicit bulk. These create or
- *     destroy standing credentials, AI keys, memberships, or the workspace itself,
- *     so they REFUSE-with-plan rather than auto-apply. Reads (GET) never gate high.
- *  2. MEDIUM — structure config (tables/fields/views/statuses), the projects
- *     COLLECTION (/projects, /projects/:slug), and the bare project ITEM route
- *     (/p/:slug with NO further sub-resource segment). Reads (GET) are never medium.
- *  3. LOW   — everything else token-scoped, incl. document/comment/run writes that
- *     live UNDER a project (/p/:slug/<sub-resource>).
- *
- * The project-config rule is deliberately anchored to /projects(/:slug)? and to a
- * /p/:slug TERMINUS — it must NOT swallow /p/:slug/documents, /comments, /runs, etc.
+ * This anchor matches the documents|comments|runs keyword only where the REAL
+ * route mounts produce it — directly under `/w/<ws>`, or under `/w/<ws>/p/<proj>`,
+ * or under `/w/<ws>/p/<proj>/t/<tslug>` (verified against app.ts mounts:
+ * wScope `/documents` + `/runs`, pScope `/documents`+`/comments`+`/runs`,
+ * tScope `/t/:tslug/documents`). A doc slug is a single `[^/]+` segment and so
+ * can never inject a fake `documents/` deeper in the path. Classify this
+ * sub-resource FIRST so its trailing slug never reaches the keyword branches.
  */
-export function classifyRisk(
-  method: string,
-  path: string,
-  body: Record<string, unknown>,
-): RiskTier {
-  // Normalize method case (defense-in-depth: a lowercase 'delete' still gates).
+const DOC_SUBRESOURCE =
+  /^\/api\/v1\/w\/[^/]+(?:\/p\/[^/]+(?:\/t\/[^/]+)?)?\/(documents|comments|runs)(\/|$)/;
+
+/** Secret-class writes: never grantable to any token (T6). */
+export function isSecretWrite(method: string, path: string): boolean {
+  if (method.toUpperCase() === 'GET') return false;
+  // A document slugged 'tokens'/'ai-keys' is NOT a secret route — exclude the
+  // documents/comments/runs sub-resource before matching the secret keywords (CR#1).
+  if (DOC_SUBRESOURCE.test(path)) return false;
+  return /\/tokens(\/|$)/.test(path) || /\/ai-keys(\/|$)/.test(path);
+}
+
+/**
+ * Config-class scopes — these refuse on an UNATTENDED run (C3 floor).
+ * CR#3: derived from ADMIN_SCOPES so a NEW admin scope is floored by
+ * construction, not by remembering to edit a hand-typed list. The resulting set
+ * equals {config:write, settings:write, members:write, workspace:admin}.
+ */
+const CONFIG_CLASS_SCOPES = new Set<string>(['config:write', ...ADMIN_SCOPES]);
+
+/**
+ * Map a write to its required scope. Reads (GET) → null (gated elsewhere by the
+ * token's documents:read). Secret writes → 'SECRET' (always refused, T6). A
+ * write path with NO mapping → 'UNMAPPED' (handler refuses — default-deny, T5).
+ * Every NEW write route MUST add a branch here or it fails closed.
+ *
+ * NOTE (CR#8): this map is a fail-closed PRE-CHECK only. The dispatched route's
+ * own requireScope/requireSessionUser (run via app.request in dispatchAsCaller)
+ * is the authoritative gate. The members:write and settings:write branches here
+ * are DEFENSIVE, not authoritative — no agent-writable route currently uses
+ * them (members has no write route, only GET /members; settings writes are
+ * session-only at /settings/:ws/ai-keys, which is also SECRET-classified). They
+ * stay so any future workspace-level path that DID land there fails closed to
+ * the right scope rather than UNMAPPED.
+ *
+ * Order matters: documents/comments/runs FIRST (CR#1 — their trailing slug is
+ * arbitrary and must never be matched by the config/secret keyword branches),
+ * then secret, workspace-terminus, members, settings, structure-config, project
+ * collection/item, then UNMAPPED.
+ */
+export function pathToScope(method: string, path: string): ScopeTarget {
   const m = method.toUpperCase();
-
-  // 1. High: credential/membership/workspace-terminus writes, or explicit bulk.
-  if (/\/tokens(\/|$)/.test(path) && m !== 'GET') return 'high'; // mint/revoke standing credentials
-  if (/\/(settings|ai-keys)(\/|$)/.test(path) && m !== 'GET') return 'high'; // BYOK key / settings (credential ops)
-  if (/^\/api\/v1\/w\/[^/]+$/.test(path) && m !== 'GET') return 'high'; // workspace rename or delete
-  if (/\/members?(\/|$)/.test(path) && m !== 'GET') return 'high';
-  if (body && body.bulk === true) return 'high';
-
-  // 2. Medium: structure/config writes.
-  if (/\/(tables|fields|views|statuses)(\/|$)/.test(path)) return 'medium';
-  // Project config: the projects collection / project item (real route shape),
-  // OR the bare /p/:slug terminus (plan spec shape). Anchored to end-of-path so
-  // sub-resources like /p/:slug/documents fall through to low.
-  if (
-    m !== 'GET' &&
-    (/^\/api\/v1\/w\/[^/]+\/projects(\/[^/]+)?$/.test(path) ||
-      /^\/api\/v1\/w\/[^/]+\/p\/[^/]+$/.test(path))
-  ) {
-    return 'medium';
-  }
-
-  // 3. Low: document writes + everything else token-scoped.
-  return 'low';
+  if (m === 'GET') return null;
+  // CR#1: documents/comments/runs first — their trailing slug is arbitrary and
+  // must never be matched by the config/secret keyword branches below.
+  if (DOC_SUBRESOURCE.test(path)) return 'documents:write';
+  if (isSecretWrite(m, path)) return 'SECRET';
+  if (/^\/api\/v1\/w\/[^/]+$/.test(path)) return 'workspace:admin'; // rename/delete workspace
+  if (/^\/api\/v1\/w\/[^/]+\/members?(\/|$)/.test(path)) return 'members:write';
+  if (/^\/api\/v1\/w\/[^/]+\/settings(\/|$)/.test(path)) return 'settings:write';
+  if (/^\/api\/v1\/w\/[^/]+\/p\/[^/]+(?:\/t\/[^/]+)?\/(tables|fields|views|statuses)(\/|$)/.test(path))
+    return 'config:write';
+  if (/^\/api\/v1\/w\/[^/]+\/projects(\/[^/]+)?$/.test(path)) return 'config:write';
+  if (/^\/api\/v1\/w\/[^/]+\/p\/[^/]+$/.test(path)) return 'config:write'; // bare project item
+  return 'UNMAPPED';
 }
 
 /**
@@ -221,8 +244,8 @@ export function registerFolioApiTools(): void {
     name: 'folio_api',
     description:
       'Write a Folio resource. method ∈ POST|PATCH|PUT|DELETE; path is a relative /api/v1/... path. ' +
-      'High-risk actions are NOT applied automatically — the proposed plan is returned for approval. ' +
-      'Use folio_api_get for reads.',
+      'Each write path maps to a required scope; secret-class writes (tokens/ai-keys) and unmapped ' +
+      'paths are never applied — the proposed plan is returned instead. Use folio_api_get for reads.',
     requiredScope: 'config:write',
     schema: z
       .object({
@@ -249,33 +272,42 @@ export function registerFolioApiTools(): void {
       ctx: ToolContext,
     ) => {
       const body = args.body ?? {};
-      const tier = classifyRisk(args.method, args.path, body);
-      if (tier === 'high') {
-        // INTERIM FLOOR (Phase B / threat model B7): HIGH refuses regardless of caller
-        // privilege — there is deliberately NO owner/admin auto-apply path. Do NOT add a
-        // caller-privilege bypass here without the approval-gate (it would put a
-        // destructive cross-tenant action one prompt-injection away).
-        // REFUSE high-risk WITHOUT dispatching (P3-7). High-risk routes are
-        // session-only + dryRun-less, so we never attempt them — we return a
-        // structured plan describing the proposed action for human review.
-        // TODO(approval-gate): replace refuse with request_approval +
-        // running→awaiting_approval once the PAUSE side lands (localized swap).
-        return {
-          refused: true,
-          reason: 'high-risk action requires human approval; not applied',
-          plan: { risk: tier, method: args.method, path: args.path, body },
-        };
+      // Single refuse-with-plan envelope (CR cleanup) — every gate below returns
+      // the SAME shape, so a future change to the contract (e.g. add a field the
+      // cockpit UI keys on) lands in one place, not four.
+      const refuse = (reason: string) => ({
+        refused: true,
+        reason,
+        plan: { method: args.method, path: args.path, body },
+      });
+      const scopeTarget = pathToScope(args.method, args.path);
+      // T5 default-deny: an unmapped write path is refused by construction. Every
+      // NEW write route must add a branch to pathToScope or it fails closed here.
+      if (scopeTarget === 'UNMAPPED') {
+        return refuse('no scope mapping for this write path; refused');
       }
-      if (tier === 'medium' && ctx.unattended === true) {
-        // Fired-path MEDIUM floor (C3) — DETERMINISTIC bound on the unattended
-        // injection chain: a trigger-fired run has no human in the loop, so config
-        // writes refuse-with-plan exactly like HIGH. The B10 fence is best-effort
-        // for LOW only. An ATTENDED (human-invoked) run keeps MEDIUM (Phase B).
-        return {
-          refused: true,
-          reason: 'medium-risk config write refused on an unattended (trigger-fired) run; not applied',
-          plan: { risk: tier, method: args.method, path: args.path, body },
-        };
+      // T6 secret-refuse: tokens/ai-keys writes are NEVER applied by an agent —
+      // for EVERY token, including a full-scope instance bearer. No bypass.
+      if (scopeTarget === 'SECRET') {
+        return refuse('secret-class write (tokens/ai-keys) is never applied by an agent');
+      }
+      // T-scope double-gate (agent ∩ caller): the run token AND the caller must
+      // both hold the mapped scope. Missing on either → refuse.
+      if (
+        scopeTarget !== null &&
+        (!ctx.token.scopes.includes(scopeTarget) || !ctx.callerScopes.includes(scopeTarget))
+      ) {
+        return refuse(`missing scope ${scopeTarget}; refused`);
+      }
+      // C3 unattended config floor — DETERMINISTIC bound on the unattended
+      // injection chain: a trigger-fired (no-human) run cannot do config-class
+      // writes, refuse-with-plan regardless of scope possession. Document writes
+      // (documents:write) stay allowed unattended (the B10 fence is best-effort
+      // for LOW only). Secret writes already refuse for everyone above.
+      if (ctx.unattended === true && scopeTarget !== null && CONFIG_CLASS_SCOPES.has(scopeTarget)) {
+        return refuse(
+          `config-class write (${scopeTarget}) refused on an unattended (trigger-fired) run; not applied`,
+        );
       }
       const res = await dispatchAsCaller(ctx.token, args.method, args.path, body);
       const json = await res.json().catch(() => null);

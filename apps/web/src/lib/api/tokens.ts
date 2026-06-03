@@ -19,6 +19,13 @@ export interface ApiTokenCreateResponse {
 export interface TokenCreate {
   name: string;
   scopes: string[];
+  /**
+   * Agent-authority phase A: reach selector. Omit entirely to pin the token to
+   * the URL workspace (back-compat). Pass `null` (instance admins only) to mint
+   * a reach=null instance-wide token. The server (A7) enforces the real
+   * owner/admin-of-__system check.
+   */
+  workspaceId?: string | null;
 }
 
 export const tokensKeys = {

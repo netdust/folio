@@ -11,6 +11,7 @@ import {
   type Workspace,
   apiTokens,
   documents,
+  events,
   projects,
   tables as tablesTable,
 } from '../db/schema.ts';
@@ -23,6 +24,8 @@ import { type ToolDef, executeTool, listToolDefs, registerTool } from './agent-t
 import {
   SYSTEM_WORKSPACE_SLUG,
   bootstrapSystemWorkspace,
+  getSystemWorkspaceId,
+  isReservedSlug,
 } from './system-workspace.ts';
 import { workspaces } from '../db/schema.ts';
 import { intersectAgentProjects } from './agent-projects.ts';
@@ -387,6 +390,58 @@ describe('unattended floor at the convergence point (Phase C C3 review-fix #1)',
       {},
       undefined,
       { callerScopes: ['config:write'], unattended: true },
+    );
+    expect(out).toEqual({ ok: true });
+    expect(invoked).toBe(true);
+  });
+
+  // /shakeout 2026-06-03 (security + invariant-auditor): a tool with the per-tool
+  // `unattendedFloor` flag (set_skill_trust) IS refused on an unattended run, even
+  // though its scope (config:write) is NOT in UNATTENDED_FLOORED_SCOPES. This floors
+  // trust-elevation by tool name without re-flooring folio_api's allowed unattended
+  // document writes (the generic config:write test directly above still dispatches).
+  it('a tool with unattendedFloor:true on an UNATTENDED run → refused before dispatch', async () => {
+    let invoked = false;
+    registerThrowaway({
+      name: '__floored_config_probe',
+      requiredScope: 'config:write',
+      unattendedFloor: true,
+      schema: z.object({}).strict(),
+      handler: async () => {
+        invoked = true;
+        return { ok: true };
+      },
+    });
+    const token = makeToken({ scopes: ['config:write'] });
+    await expect(
+      executeTool(token, 'agent:op', '__floored_config_probe', {}, undefined, {
+        callerScopes: ['config:write'],
+        unattended: true,
+      }),
+    ).rejects.toThrow('forbidden: __floored_config_probe is refused on an unattended');
+    expect(invoked).toBe(false);
+  });
+
+  it('a tool with unattendedFloor:true on an ATTENDED run → dispatches normally', async () => {
+    let invoked = false;
+    registerThrowaway({
+      name: '__floored_config_probe_attended',
+      requiredScope: 'config:write',
+      unattendedFloor: true,
+      schema: z.object({}).strict(),
+      handler: async () => {
+        invoked = true;
+        return { ok: true };
+      },
+    });
+    const token = makeToken({ scopes: ['config:write'] });
+    const out = await executeTool(
+      token,
+      'agent:op',
+      '__floored_config_probe_attended',
+      {},
+      undefined,
+      { callerScopes: ['config:write'], unattended: false },
     );
     expect(out).toEqual({ ok: true });
     expect(invoked).toBe(true);
@@ -1745,5 +1800,284 @@ describe('describe_workspace: one-call orientation, allow-list enforced', () => 
     })) as { content: { text: string }[] };
     const out = JSON.parse(res.content[0]!.text) as { projects: { slug: string }[] };
     expect(out.projects.map((p) => p.slug).sort()).toEqual(['web']); // 'ops' absent
+  });
+});
+
+describe('A3: instance reach in resolvers', () => {
+  it('list_workspaces returns ALL workspaces for an instance token', async () => {
+    const { db, seed } = await makeTestApp();
+    const bId = nanoid();
+    await db.insert(workspaces).values({ id: bId, slug: 'beta', name: 'Beta' });
+
+    const token = makeToken({ workspaceId: null, scopes: ['documents:read'] });
+    const res = (await exec(token, seed.user.id, 'list_workspaces', {})) as {
+      content: { text: string }[];
+    };
+    const out = JSON.parse(res.content[0]!.text) as {
+      workspaces: { slug: string }[];
+    };
+    const slugs = out.workspaces.map((w) => w.slug);
+    expect(out.workspaces.length).toBeGreaterThanOrEqual(2);
+    expect(slugs).toContain('acme');
+    expect(slugs).toContain('beta');
+  });
+
+  it('list_workspaces returns only its own for a pinned token', async () => {
+    const { db, seed } = await makeTestApp();
+    const bId = nanoid();
+    await db.insert(workspaces).values({ id: bId, slug: 'beta', name: 'Beta' });
+
+    const token = makeToken({ workspaceId: seed.workspace.id, scopes: ['documents:read'] });
+    const res = (await exec(token, seed.user.id, 'list_workspaces', {})) as {
+      content: { text: string }[];
+    };
+    const out = JSON.parse(res.content[0]!.text) as {
+      workspaces: { slug: string }[];
+    };
+    expect(out.workspaces).toHaveLength(1);
+    expect(out.workspaces[0]!.slug).toBe('acme');
+  });
+
+  // CR#4 — an instance token enumerates every workspace EXCEPT the reserved
+  // __system library (other surfaces hide it via isReservedSlug; list_workspaces
+  // must not leak the reserved namespace).
+  it('CR#4: list_workspaces for an instance token excludes the reserved __system workspace', async () => {
+    const { db, seed } = await makeTestApp();
+    // Bootstrap so a reserved __system workspace exists, plus a normal B.
+    await bootstrapSystemWorkspace(db);
+    const bId = nanoid();
+    await db.insert(workspaces).values({ id: bId, slug: 'beta', name: 'Beta' });
+
+    const token = makeToken({ workspaceId: null, scopes: ['documents:read'] });
+    const res = (await exec(token, seed.user.id, 'list_workspaces', {})) as {
+      content: { text: string }[];
+    };
+    const out = JSON.parse(res.content[0]!.text) as {
+      workspaces: { slug: string }[];
+    };
+    const slugs = out.workspaces.map((w) => w.slug);
+    // Normal workspaces are listed...
+    expect(slugs).toContain('acme');
+    expect(slugs).toContain('beta');
+    // ...but the reserved __system library is filtered out.
+    expect(slugs).not.toContain(SYSTEM_WORKSPACE_SLUG);
+    expect(out.workspaces.some((w) => isReservedSlug(w.slug))).toBe(false);
+  });
+
+  it('instance token resolves a non-home workspace via a resolver tool', async () => {
+    const { db, seed } = await makeTestApp();
+    const bId = nanoid();
+    await db.insert(workspaces).values({ id: bId, slug: 'beta', name: 'Beta' });
+    await db
+      .insert(projects)
+      .values({ id: nanoid(), workspaceId: bId, slug: 'site', name: 'Site' });
+
+    // Instance token reaches workspace B's projects without throwing.
+    const instanceTok = makeToken({ workspaceId: null, scopes: ['documents:read'] });
+    const res = (await exec(instanceTok, seed.user.id, 'list_projects', {
+      workspace_slug: 'beta',
+    })) as { content: { text: string }[] };
+    const out = JSON.parse(res.content[0]!.text) as { projects: unknown[] };
+    expect(Array.isArray(out.projects)).toBe(true);
+
+    // CONTROL: a pinned-to-acme token must NOT reach workspace B.
+    const pinnedTok = makeToken({
+      workspaceId: seed.workspace.id,
+      scopes: ['documents:read'],
+    });
+    await expect(
+      exec(pinnedTok, seed.user.id, 'list_projects', { workspace_slug: 'beta' }),
+    ).rejects.toThrow('workspace not accessible');
+  });
+});
+
+describe('B2: get_skill narrow __system read (T7)', () => {
+  /**
+   * Insert a `page` into the __system Skills project with explicit frontmatter.
+   * Bootstraps __system first so the Skills project exists.
+   */
+  async function seedSystemSkillPage(
+    db: DB,
+    slug: string,
+    body: string,
+    frontmatter: Record<string, unknown>,
+  ): Promise<string> {
+    await bootstrapSystemWorkspace(db);
+    const systemId = await getSystemWorkspaceId(db);
+    const skillsProject = (await db.query.projects.findFirst({
+      where: and(eq(projects.workspaceId, systemId), eq(projects.slug, 'skills')),
+    }))!;
+    await db.insert(documents).values({
+      id: nanoid(),
+      workspaceId: systemId,
+      projectId: skillsProject.id,
+      type: 'page',
+      title: slug,
+      slug,
+      body,
+      status: null,
+      frontmatter,
+      createdBy: null,
+    });
+    return systemId;
+  }
+
+  it('returns a __system skill body for a WORKER token pinned to B', async () => {
+    const { db, seed } = await makeTestApp();
+    await seedSystemSkillPage(db, 'seo', 'SEO-BODY', { trusted: true });
+    // Token pinned to workspace B (the regular seed workspace), NOT __system.
+    const token = makeToken({ workspaceId: seed.workspace.id, scopes: ['documents:read'] });
+    const res = (await exec(token, 'tester', 'get_skill', { slug: 'seo' })) as {
+      content: { text: string }[];
+    };
+    const payload = JSON.parse(res.content[0]!.text) as { body: string; trusted: boolean };
+    expect(payload.body).toContain('SEO-BODY');
+    expect(payload.trusted).toBe(true);
+  });
+
+  it('CANNOT read a non-skill __system doc (e.g. an agent) (T7)', async () => {
+    const { db, seed } = await makeTestApp();
+    await bootstrapSystemWorkspace(db);
+    const systemId = await getSystemWorkspaceId(db);
+    // Seed a __system AGENT doc (type=agent, NOT a type=page under skills).
+    await db.insert(documents).values({
+      id: nanoid(),
+      workspaceId: systemId,
+      projectId: null,
+      type: 'agent',
+      title: 'operator',
+      slug: 'operator',
+      body: 'help',
+      status: null,
+      frontmatter: { system_prompt: 'x' },
+      createdBy: null,
+    });
+    const token = makeToken({ workspaceId: seed.workspace.id, scopes: ['documents:read'] });
+    await expect(exec(token, 'tester', 'get_skill', { slug: 'operator' })).rejects.toThrow(
+      'skill not found',
+    );
+  });
+
+  it("cannot read another workspace's doc (T7)", async () => {
+    const { db, seed } = await makeTestApp();
+    await bootstrapSystemWorkspace(db);
+    // A page in workspace B (NOT __system/skills) with slug 'bdoc'.
+    await db.insert(documents).values({
+      id: nanoid(),
+      workspaceId: seed.workspace.id,
+      projectId: seed.project.id,
+      type: 'page',
+      title: 'bdoc',
+      slug: 'bdoc',
+      body: 'B-WORKSPACE-BODY',
+      status: null,
+      frontmatter: {},
+      createdBy: null,
+    });
+    const token = makeToken({ workspaceId: seed.workspace.id, scopes: ['documents:read'] });
+    await expect(exec(token, 'tester', 'get_skill', { slug: 'bdoc' })).rejects.toThrow(
+      'skill not found',
+    );
+  });
+
+  it('requires documents:read', async () => {
+    const { db } = await makeTestApp();
+    await seedSystemSkillPage(db, 'seo', 'SEO-BODY', { trusted: true });
+    await expect(
+      executeTool(makeToken({ scopes: [] }), 'tester', 'get_skill', { slug: 'seo' }, undefined, {
+        callerScopes: [],
+      }),
+    ).rejects.toThrow(/scope/);
+  });
+});
+
+describe('B3: set_skill_trust (T8 separation of duties)', () => {
+  /** Insert a __system Skills page; returns the systemId + skills project + doc id. */
+  async function seedSkill(
+    db: DB,
+    slug: string,
+    frontmatter: Record<string, unknown>,
+  ): Promise<{ systemId: string; skillsProjectId: string; docId: string }> {
+    await bootstrapSystemWorkspace(db);
+    const systemId = await getSystemWorkspaceId(db);
+    const skillsProject = (await db.query.projects.findFirst({
+      where: and(eq(projects.workspaceId, systemId), eq(projects.slug, 'skills')),
+    }))!;
+    const docId = nanoid();
+    await db.insert(documents).values({
+      id: docId,
+      workspaceId: systemId,
+      projectId: skillsProject.id,
+      type: 'page',
+      title: slug,
+      slug,
+      body: 'BODY',
+      status: null,
+      frontmatter,
+      createdBy: null,
+    });
+    return { systemId, skillsProjectId: skillsProject.id, docId };
+  }
+
+  it('an MCP PAT (createdBy = a human) is REFUSED and trusted stays false', async () => {
+    const { db } = await makeTestApp();
+    const { docId } = await seedSkill(db, 'evil', { trusted: false });
+    // An MCP admin PAT: a human createdBy + config:write scope. By T8 it may NOT bless.
+    const token = makeToken({ createdBy: 'u-human', scopes: ['config:write', 'documents:read'] });
+    const res = (await exec(token, 'u-human', 'set_skill_trust', {
+      slug: 'evil',
+      trusted: true,
+    })) as { content: { text: string }[] };
+    const payload = JSON.parse(res.content[0]!.text) as { refused?: boolean };
+    expect(payload.refused).toBe(true);
+    const doc = await db.query.documents.findFirst({ where: eq(documents.id, docId) });
+    expect((doc!.frontmatter as Record<string, unknown>).trusted).toBe(false);
+  });
+
+  it('the operator token (createdBy null) flips trusted + emits skill.trust.changed', async () => {
+    const { db } = await makeTestApp();
+    const { docId } = await seedSkill(db, 'evil', { trusted: false });
+    // Operator token: createdBy null (system origin) + config:write.
+    const token = makeToken({ createdBy: null, scopes: ['config:write', 'documents:read'] });
+    const res = (await exec(token, 'operator', 'set_skill_trust', {
+      slug: 'evil',
+      trusted: true,
+    })) as { content: { text: string }[] };
+    const payload = JSON.parse(res.content[0]!.text) as { ok?: boolean; refused?: boolean };
+    expect(payload.ok).toBe(true);
+    expect(payload.refused).toBeUndefined();
+    const doc = await db.query.documents.findFirst({ where: eq(documents.id, docId) });
+    expect((doc!.frontmatter as Record<string, unknown>).trusted).toBe(true);
+    const evts = await db.query.events.findMany({
+      where: eq(events.kind, 'skill.trust.changed'),
+    });
+    expect(evts.length).toBeGreaterThanOrEqual(1);
+    expect(evts.some((e) => (e.payload as { slug?: string }).slug === 'evil')).toBe(true);
+  });
+
+  it('a normal update_document to a __system skill page CANNOT set trusted (strip)', async () => {
+    const { db, seed } = await makeTestApp();
+    const { systemId, skillsProjectId, docId } = await seedSkill(db, 'evil', { trusted: false });
+    const ws = (await db.query.workspaces.findFirst({ where: eq(workspaces.id, systemId) }))!;
+    const project = (await db.query.projects.findFirst({
+      where: eq(projects.id, skillsProjectId),
+    }))!;
+    const existing = (await db.query.documents.findFirst({ where: eq(documents.id, docId) }))!;
+    const user = seed.user; // a real user row (FK on documents.updated_by)
+    // A write that TRIES to flip trusted via the generic document path. The key
+    // must be stripped — trusted stays false (only setSkillTrust may change it).
+    const { updateDocument } = await import('../services/documents.ts');
+    await updateDocument({
+      workspace: ws,
+      project,
+      existing,
+      actor: user,
+      fallbackTable: null,
+      patch: { frontmatter: { trusted: true, note: 'kept' } },
+    });
+    const after = (await db.query.documents.findFirst({ where: eq(documents.id, docId) }))!;
+    const fm = after.frontmatter as Record<string, unknown>;
+    expect(fm.trusted).toBe(false); // stripped — unchanged
+    expect(fm.note).toBe('kept'); // a non-managed key still persists
   });
 });

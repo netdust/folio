@@ -145,6 +145,13 @@ mcpRoute.post('/', async (c) => {
         protocolVersion: '2024-11-05',
         serverInfo: { name: 'folio', version: '0.1.0' },
         capabilities: { tools: {} },
+        // B5 — discovery pointer for the outside agent (Claude Code over MCP):
+        // Folio is markdown-native + agent-first, with a skill library in __system.
+        // get_skill(slug) pulls a skill body before shaping a workspace.
+        instructions:
+          'Folio is markdown-native and agent-first. A skill library lives in the __system workspace. ' +
+          'Call get_skill(slug) to load a skill body (e.g. get_skill("folio") for the API manual) ' +
+          'before shaping projects, tables, views, or adding a provider. Reads via folio_api_get; writes via folio_api.',
       },
     });
   }

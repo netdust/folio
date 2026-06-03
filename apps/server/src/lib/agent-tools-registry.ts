@@ -46,6 +46,7 @@ import {
   workspaces,
 } from '../db/schema.ts';
 import { emitChainSuppressed } from './autonomy-gate.ts';
+import { isInstanceReach } from './token-reach.ts';
 import type { AgentRunFrontmatter, RunStatus } from './agent-run-schema.ts';
 import { runStatusSchema } from './agent-run-schema.ts';
 import { createRunForParent, loadRunScopedByToken } from '../routes/runs.ts';
@@ -92,7 +93,8 @@ import {
 import { serializeMarkdown } from './frontmatter.ts';
 import { HTTPError } from './http.ts';
 import { mcpInvalidParams, mcpRejectHumanPat, rethrowAgentGuardAsMcp } from './mcp-errors.ts';
-import { resolveAgentForRun } from './system-workspace.ts';
+import { getSystemWorkspaceId, isReservedSlug, resolveAgentForRun } from './system-workspace.ts';
+import { setSkillTrust } from './skill-trust.ts';
 
 // ---------------------------------------------------------------------------
 // Result envelopes — verbatim from routes/mcp.ts.
@@ -152,7 +154,12 @@ async function resolveWorkspaceForToken(
   const ws = await db.query.workspaces.findFirst({
     where: eq(workspaces.slug, slug),
   });
-  if (!ws || ws.id !== token.workspaceId) {
+  if (!ws) throw new Error('workspace not accessible');
+  // Instance-reach token (workspaceId null) reaches any existing workspace; a
+  // pinned token must match its own. NOTE: during an agent RUN the token passed
+  // here is the NARROWED run token (effective reach, Task A8), so this also
+  // enforces the per-run floor.
+  if (!isInstanceReach(token) && ws.id !== token.workspaceId) {
     throw new Error('workspace not accessible');
   }
   return ws;
@@ -348,12 +355,107 @@ export function registerRealTools(): void {
     requiredScope: 'documents:read',
     schema: z.object({}).strict(),
     handler: async (_args, ctx) => {
-      const ws = await db.query.workspaces.findFirst({
-        where: eq(workspaces.id, ctx.token.workspaceId),
-      });
+      const all = isInstanceReach(ctx.token)
+        ? // CR#4 — an instance token enumerates every workspace EXCEPT the
+          // reserved __system library (other surfaces hide it via isReservedSlug;
+          // list_workspaces must not leak the reserved namespace).
+          (await db.query.workspaces.findMany()).filter((ws) => !isReservedSlug(ws.slug))
+        : await db.query.workspaces
+            .findFirst({ where: eq(workspaces.id, ctx.token.workspaceId!) })
+            .then((ws) => (ws ? [ws] : []));
       return textResult({
-        workspaces: ws ? [{ id: ws.id, slug: ws.slug, name: ws.name }] : [],
+        workspaces: all.map((ws) => ({ id: ws.id, slug: ws.slug, name: ws.name })),
       });
+    },
+  });
+
+  registerTool({
+    name: 'get_skill',
+    description:
+      'Load a skill from the __system library by slug. Read-only; reaches only __system skills pages — use before shaping a workspace or adding a provider.',
+    requiredScope: 'documents:read',
+    schema: z.object({ slug: z.string() }).strict(),
+    inputSchema: {
+      type: 'object',
+      properties: {
+        slug: { type: 'string', description: 'The skill slug to load from the __system library.' },
+      },
+      required: ['slug'],
+    },
+    handler: async (args: { slug: string }, _ctx) => {
+      // Hard-wired NARROW read (T7): __system workspace + skills project +
+      // type=page ONLY. Ignores the token's reach by construction (it reaches
+      // nothing else in __system); still gated by the documents:read
+      // requiredScope above (executeTool checks it against token + caller).
+      const systemId = await getSystemWorkspaceId(db);
+      const skillsProject = await db.query.projects.findFirst({
+        where: and(eq(projects.workspaceId, systemId), eq(projects.slug, 'skills')),
+      });
+      if (!skillsProject) throw new Error('skills library not found');
+      const doc = await db.query.documents.findFirst({
+        where: and(
+          eq(documents.workspaceId, systemId),
+          eq(documents.projectId, skillsProject.id),
+          eq(documents.slug, args.slug),
+          eq(documents.type, 'page'),
+        ),
+      });
+      if (!doc) throw new Error('skill not found');
+      const sfm = (doc.frontmatter ?? {}) as {
+        trusted?: boolean;
+        description?: string;
+        when_to_use?: string;
+      };
+      return textResult({
+        slug: args.slug,
+        body: doc.body ?? '',
+        trusted: sfm.trusted === true,
+        description: sfm.description,
+        when_to_use: sfm.when_to_use,
+      });
+    },
+  });
+
+  registerTool({
+    name: 'set_skill_trust',
+    description:
+      'Bless or unbless a __system skill (set its trusted flag). Restricted to the system operator or a session user.',
+    requiredScope: 'config:write', // a privileged config-class op
+    // C3 (/shakeout 2026-06-03): trust-elevation is refused on an unattended
+    // (trigger-fired) run. The operator token is createdBy-null so canBlessSkill
+    // would otherwise pass even on a no-human run over attacker-supplied content,
+    // letting an injection bless a planted skill into the trusted channel. Floored
+    // by tool name (not scope) so folio_api's allowed unattended document writes
+    // are unaffected.
+    unattendedFloor: true,
+    schema: z.object({ slug: z.string(), trusted: z.boolean() }).strict(),
+    inputSchema: {
+      type: 'object',
+      properties: { slug: { type: 'string' }, trusted: { type: 'boolean' } },
+      required: ['slug', 'trusted'],
+    },
+    handler: async (args: { slug: string; trusted: boolean }, ctx) => {
+      // T8 gate lives in setSkillTrust(canBlessSkill). The tool caller is always
+      // a token; sessionUser is null on the tool path (the operator's
+      // createdBy-null token is the live blesser — an MCP admin PAT carries a
+      // human createdBy and is refused). Returns the refusal as a structured
+      // result if not allowed instead of throwing through the tool envelope.
+      try {
+        await setSkillTrust(db, {
+          slug: args.slug,
+          trusted: args.trusted,
+          token: ctx.token,
+          sessionUser: null,
+          actor: ctx.actor,
+        });
+        return textResult({ slug: args.slug, trusted: args.trusted, ok: true });
+      } catch (e) {
+        return textResult({
+          slug: args.slug,
+          refused: true,
+          reason: e instanceof Error ? e.message : 'refused',
+        });
+      }
     },
   });
 

@@ -261,3 +261,27 @@ A real cold external agent oriented on the live instance over MCP in **2 tool ca
   **Decision (YES/NO):** Make that help text conditional on `FOLIO_ALLOW_LOOPBACK_AI` (server-exposed to the client) instead of a hardcoded dead-end?
   **Changes if YES:** `apps/web/src/components/settings/ai-tab.tsx:233` + a small server-config endpoint exposing the flag.
   (surfaced by docs/superpowers/retros/2026-06-03-ollama-provider-setup-retro.md)
+
+## 2026-06-03 — agent-authority+skills /shakeout deferred cleanups (SHOULD/NICE, non-blocking)
+
+Reviewer pass (5 agents) on `8a6e79c..HEAD`. The one SECURITY finding (set_skill_trust
+unattended-floor gap) was FIXED in `a20c882`. These remain, deferred with user OK:
+
+- **Skill-resolution triplication** (simplicity + architecture, SHOULD): the
+  `(__system, skills project, type=page)` resolve is hand-written in 3 places —
+  `loadAgentDefinition` (runner.ts), `get_skill` (agent-tools-registry.ts),
+  `setSkillTrust` (skill-trust.ts). Invariant 11's safety argument rests on them
+  matching "exactly" — currently reviewer-enforced, not code. Extract
+  `resolveSystemSkillDoc(db, slug)`. Promote the `'skills'` project slug to a const.
+- **Operator agentId-under-null-reach carve-out not asserted** (security + arch, SHOULD):
+  `(workspaceId null, agentId set, createdBy null)` holds by construction but no guard
+  enforces it. Consider a boot-time/DB assertion `agentId NOT NULL AND workspace_id
+  NULL ⟹ created_by NULL`. (Doc note added to invariant 11 area.)
+- **markdown-PATCH duplicates trusted-preservation** (simplicity, SHOULD): the inline
+  strip+re-carry in routes/documents.ts mirrors updateDocument's logic — drift hazard.
+  Route markdown PATCH through updateDocument OR a shared mergeManagedSkillTrust helper.
+- **pathToScope regex-shadow → dispatch-through-route** (the standing deferred refactor):
+  when it lands, drop the dead members:write/settings:write branches rather than porting.
+- **api_tokens.agent_id index** (perf, NICE): unindexed findFirst by agentId at boot +
+  per operator-run. Trivial at single-team scale.
+- **zod schema ↔ hand-written inputSchema duplication** (NICE): consider zod-to-json-schema.

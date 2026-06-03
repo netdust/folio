@@ -23,6 +23,12 @@ const ALL_SCOPES = [
   // Phase 2.6 sub-phase D — required for MCP agent-lifecycle tools
   // (create_agent / update_agent / delete_agent).
   'agents:write',
+  // Agent-authority phase A5 — instance/admin scopes. Like agents:write
+  // (BUG-007) these are NEVER bundled into a preset; users tick them
+  // explicitly. settings:write / members:write / workspace:admin.
+  'settings:write',
+  'members:write',
+  'workspace:admin',
 ] as const;
 
 type Scope = (typeof ALL_SCOPES)[number];
@@ -54,14 +60,27 @@ const PRESETS: { label: string; scopes: Scope[]; tone?: PresetTone }[] = [
 interface Props {
   wslug: string;
   workspaceId: string;
+  /**
+   * When true, the modal offers a "Whole instance" reach option that mints a
+   * reach=null (instance-wide) token. Gated on __system membership; the server
+   * (A7) enforces the real owner/admin-of-__system check on create.
+   */
+  isInstanceAdmin?: boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
 
-export function TokenCreateModal({ wslug, workspaceId, open, onOpenChange }: Props) {
+export function TokenCreateModal({
+  wslug,
+  workspaceId,
+  isInstanceAdmin = false,
+  open,
+  onOpenChange,
+}: Props) {
   const create = useCreateToken(wslug, workspaceId);
   const [name, setName] = useState('');
   const [scopes, setScopes] = useState<Set<Scope>>(new Set());
+  const [reach, setReach] = useState<'workspace' | 'instance'>('workspace');
   const [revealed, setRevealed] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
@@ -70,6 +89,7 @@ export function TokenCreateModal({ wslug, workspaceId, open, onOpenChange }: Pro
   function reset() {
     setName('');
     setScopes(new Set());
+    setReach('workspace');
     setRevealed(null);
     setCopied(false);
   }
@@ -82,7 +102,11 @@ export function TokenCreateModal({ wslug, workspaceId, open, onOpenChange }: Pro
   async function onSubmit() {
     if (!canSubmit) return;
     try {
-      const res = await create.mutateAsync({ name: name.trim(), scopes: Array.from(scopes) });
+      const res = await create.mutateAsync({
+        name: name.trim(),
+        scopes: Array.from(scopes),
+        ...(reach === 'instance' ? { workspaceId: null } : {}),
+      });
       setRevealed(res.token);
     } catch (err) {
       toast.error(formatApiError(err));
@@ -122,6 +146,37 @@ export function TokenCreateModal({ wslug, workspaceId, open, onOpenChange }: Pro
                   className="mt-1 block w-full rounded-md border border-border-light bg-content px-2 py-1.5 text-sm"
                 />
               </label>
+
+              {isInstanceAdmin ? (
+                <fieldset>
+                  <legend className="text-xs font-medium text-fg-2">Reach</legend>
+                  <div className="mt-1 flex gap-4">
+                    <label className="flex items-center gap-2 text-sm">
+                      <input
+                        type="radio"
+                        name="reach"
+                        aria-label="This workspace"
+                        checked={reach === 'workspace'}
+                        onChange={() => setReach('workspace')}
+                      />
+                      <span>This workspace</span>
+                    </label>
+                    <label className="flex items-center gap-2 text-sm">
+                      <input
+                        type="radio"
+                        name="reach"
+                        aria-label="Whole instance"
+                        checked={reach === 'instance'}
+                        onChange={() => setReach('instance')}
+                      />
+                      <span>Whole instance</span>
+                    </label>
+                  </div>
+                  <p className="mt-1 text-[11px] text-fg-3">
+                    Whole instance — all workspaces (instance admins only)
+                  </p>
+                </fieldset>
+              ) : null}
 
               <fieldset>
                 <legend className="text-xs font-medium text-fg-2">Scopes</legend>

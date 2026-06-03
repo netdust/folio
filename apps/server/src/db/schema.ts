@@ -325,9 +325,9 @@ export const apiTokens = sqliteTable(
   'api_tokens',
   {
     id: text('id').primaryKey(),
-    workspaceId: text('workspace_id')
-      .notNull()
-      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    workspaceId: text('workspace_id').references(() => workspaces.id, {
+      onDelete: 'cascade',
+    }),
     name: text('name').notNull(),
     tokenHash: text('token_hash').notNull(), // sha256 of the bearer token
     scopes: text('scopes', { mode: 'json' }).$type<string[]>().notNull().default([]),

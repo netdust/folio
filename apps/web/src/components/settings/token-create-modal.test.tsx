@@ -197,11 +197,16 @@ describe('TokenCreateModal', () => {
     // No warning before any preset is clicked.
     expect(screen.queryByRole('alert')).toBeNull();
     // Full access alone is not enough — BUG-007 drops agents:write from
-    // the preset, so the user-visible state is "every scope except agents:write".
+    // the preset, and A11 adds three admin scopes that no preset bundles, so
+    // the user-visible state is "every scope except agents:write + admin".
     await user.click(screen.getByRole('button', { name: /full access/i }));
     expect(screen.queryByRole('alert')).toBeNull();
-    // Manually ticking agents:write tips it into "every scope" → warning.
+    // Manually ticking the remaining non-preset scopes tips it into "every
+    // scope" → warning.
     await user.click(screen.getByLabelText('agents:write'));
+    await user.click(screen.getByLabelText('settings:write'));
+    await user.click(screen.getByLabelText('members:write'));
+    await user.click(screen.getByLabelText('workspace:admin'));
     const alert = screen.getByRole('alert');
     expect(alert.textContent).toMatch(/every scope|root-level|trusted/i);
   });
@@ -215,9 +220,118 @@ describe('TokenCreateModal', () => {
     );
     await user.click(screen.getByRole('button', { name: /full access/i }));
     await user.click(screen.getByLabelText('agents:write'));
+    await user.click(screen.getByLabelText('settings:write'));
+    await user.click(screen.getByLabelText('members:write'));
+    await user.click(screen.getByLabelText('workspace:admin'));
     expect(screen.getByRole('alert')).toBeInTheDocument();
     // Uncheck one scope — warning should disappear because it's no longer "every scope".
     await user.click(screen.getByLabelText('config:write'));
     expect(screen.queryByRole('alert')).toBeNull();
+  });
+});
+
+describe('A11: reach toggle + admin scopes', () => {
+  const ADMIN_SCOPES = ['settings:write', 'members:write', 'workspace:admin'] as const;
+
+  function stubCreateFetch() {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: {
+              id: 'tok_1',
+              name: 'CI',
+              token: 'folio_pat_x',
+              scopes: ['documents:read'],
+            },
+          }),
+          { status: 201, headers: { 'content-type': 'application/json' } },
+        ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    return fetchMock;
+  }
+
+  it('admin: selecting "Whole instance" submits workspaceId:null', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const fetchMock = stubCreateFetch();
+    const user = userEvent.setup();
+    render(
+      <TokenCreateModal
+        wslug="acme"
+        workspaceId="ws-1"
+        isInstanceAdmin
+        open
+        onOpenChange={() => {}}
+      />,
+      { wrapper: wrap(qc) },
+    );
+    await user.type(screen.getByLabelText(/^name$/i), 'CI');
+    await user.click(screen.getByLabelText('documents:read'));
+    await user.click(screen.getByLabelText(/whole instance/i));
+    await user.click(screen.getByRole('button', { name: /create/i }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    expect(body.workspaceId).toBe(null);
+  });
+
+  it('admin: default reach ("This workspace") submits WITHOUT workspaceId (pins to URL ws)', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const fetchMock = stubCreateFetch();
+    const user = userEvent.setup();
+    render(
+      <TokenCreateModal
+        wslug="acme"
+        workspaceId="ws-1"
+        isInstanceAdmin
+        open
+        onOpenChange={() => {}}
+      />,
+      { wrapper: wrap(qc) },
+    );
+    await user.type(screen.getByLabelText(/^name$/i), 'CI');
+    await user.click(screen.getByLabelText('documents:read'));
+    await user.click(screen.getByRole('button', { name: /create/i }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    expect(body).not.toHaveProperty('workspaceId');
+  });
+
+  it('non-admin: the "Whole instance" option is absent', () => {
+    const qc = new QueryClient();
+    render(
+      <TokenCreateModal wslug="acme" workspaceId="ws-1" open onOpenChange={() => {}} />,
+      { wrapper: wrap(qc) },
+    );
+    expect(screen.queryByText(/whole instance/i)).toBeNull();
+    expect(screen.queryByLabelText(/whole instance/i)).toBeNull();
+  });
+
+  it('the three admin scopes are offered as checkboxes', () => {
+    const qc = new QueryClient();
+    render(
+      <TokenCreateModal wslug="acme" workspaceId="ws-1" open onOpenChange={() => {}} />,
+      { wrapper: wrap(qc) },
+    );
+    for (const scope of ADMIN_SCOPES) {
+      expect(screen.getByLabelText(scope)).toBeInTheDocument();
+    }
+  });
+
+  it('no preset bundles an admin scope', async () => {
+    const qc = new QueryClient();
+    const user = userEvent.setup();
+    render(
+      <TokenCreateModal wslug="acme" workspaceId="ws-1" open onOpenChange={() => {}} />,
+      { wrapper: wrap(qc) },
+    );
+    for (const presetName of [/^read-only$/i, /read \+ write/i, /full access/i]) {
+      await user.click(screen.getByRole('button', { name: presetName }));
+      for (const scope of ADMIN_SCOPES) {
+        expect((screen.getByLabelText(scope) as HTMLInputElement).checked).toBe(false);
+      }
+    }
   });
 });

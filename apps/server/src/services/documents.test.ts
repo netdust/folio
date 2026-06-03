@@ -20,9 +20,46 @@ import {
   findDocumentsInProjects,
   getDocument,
   listDocuments,
+  stripManagedSkillTrust,
   updateDocument,
 } from './documents.ts';
 import { eventBus } from '../lib/event-bus.ts';
+
+// T8 — `trusted` is server-managed ONLY on __system skills pages. The helper is
+// the single chokepoint both createDocument/updateDocument AND the markdown PATCH
+// route call to strip an incoming `trusted` so only setSkillTrust can flip it.
+test('stripManagedSkillTrust strips trusted on a __system skills page', () => {
+  const out = stripManagedSkillTrust(
+    { trusted: true, note: 'kept' },
+    { slug: '__system' },
+    { slug: 'skills' },
+    'page',
+  );
+  expect('trusted' in out).toBe(false);
+  expect(out.note).toBe('kept');
+});
+
+test('stripManagedSkillTrust preserves trusted on a NON-skill doc elsewhere', () => {
+  // A regular page in a regular workspace may legitimately carry `trusted`.
+  const out = stripManagedSkillTrust(
+    { trusted: true },
+    { slug: 'acme' },
+    { slug: 'web' },
+    'page',
+  );
+  expect(out.trusted).toBe(true);
+});
+
+test('stripManagedSkillTrust ignores a __system skills doc that is not a page', () => {
+  // type=agent in __system is not a skill page; trusted is not server-managed.
+  const out = stripManagedSkillTrust(
+    { trusted: true },
+    { slug: '__system' },
+    { slug: 'skills' },
+    'agent',
+  );
+  expect(out.trusted).toBe(true);
+});
 
 async function getWorkItemsTable(
   db: Awaited<ReturnType<typeof makeTestApp>>['db'],

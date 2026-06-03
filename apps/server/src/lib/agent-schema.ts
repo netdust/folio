@@ -58,6 +58,9 @@ const READ_TOOLS: ReadonlySet<string> = new Set([
   // so the run's read scope gates it (the write tool folio_api → config:write
   // lives in CONFIG_WRITE_TOOLS below).
   'folio_api_get',
+  // Piece B — narrow __system skills-page read. Maps to documents:read; reaches
+  // only (__system, skills, type=page) by construction (see agent-tools-registry).
+  'get_skill',
 ]);
 const WRITE_TOOLS: ReadonlySet<string> = new Set(['create_document', 'update_document']);
 const DELETE_TOOLS: ReadonlySet<string> = new Set(['delete_document']);
@@ -71,7 +74,10 @@ const AGENT_WRITE_TOOLS: ReadonlySet<string> = new Set([
 // (Phase 3), gated on the new canonical config:write scope. Registered here so
 // toolsToScopes is consistent the moment folio_api is added; owner/admin gets
 // config:write via ALL_DOCUMENT_SCOPES in roleToScopes.
-const CONFIG_WRITE_TOOLS: ReadonlySet<string> = new Set(['folio_api']);
+// set_skill_trust (Piece B, T8) is a privileged config-class op — maps to
+// config:write here; the actual bless gate (canBlessSkill) is enforced inside
+// setSkillTrust, not by the scope alone.
+const CONFIG_WRITE_TOOLS: ReadonlySet<string> = new Set(['folio_api', 'set_skill_trust']);
 
 /**
  * The complete set of scopes a fully-privileged caller (owner/admin) may
@@ -88,12 +94,18 @@ const ALL_DOCUMENT_SCOPES = [
   'config:write',
 ] as const;
 
+/** Admin-only scopes — gate the HIGH-privilege folio_api write surfaces
+ *  (workspace settings, membership changes, workspace rename/delete). Granted
+ *  to owner/admin membership roles ONLY; never to `member`, and never derived
+ *  from an agent's tool whitelist (workers stay document-scoped). */
+export const ADMIN_SCOPES = ['settings:write', 'members:write', 'workspace:admin'] as const;
+
 /** Human analog of toolsToScopes: map a workspace membership role to the scope
  *  set a delegated run may use on that caller's behalf (Phase 1 delegation).
  *  owner/admin → all scopes; member → day-to-day read+write (NOT delete, NOT
  *  agents:write). The run's effective authority is still agent ∩ caller. */
 export function roleToScopes(role: 'owner' | 'admin' | 'member'): string[] {
-  if (role === 'owner' || role === 'admin') return [...ALL_DOCUMENT_SCOPES];
+  if (role === 'owner' || role === 'admin') return [...ALL_DOCUMENT_SCOPES, ...ADMIN_SCOPES];
   return ['documents:read', 'documents:write'];
 }
 

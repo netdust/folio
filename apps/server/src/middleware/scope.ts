@@ -5,6 +5,7 @@ import { memberships, projects, tables, workspaces } from '../db/schema.ts';
 import type { Project, TableEntity, Workspace } from '../db/schema.ts';
 import type { AuthContext } from './auth.ts';
 import { HTTPError } from '../lib/http.ts';
+import { isInstanceReach } from '../lib/token-reach.ts';
 
 export type Role = 'owner' | 'admin' | 'member';
 
@@ -27,22 +28,33 @@ export const resolveWorkspace: MiddlewareHandler<AuthContext & ScopeContext> = a
   const user = c.get('user');
   const token = c.get('token');
 
-  // Bearer tokens are pinned to a single workspace at mint time. Reject the
-  // request early if the URL workspace doesn't match the token's workspace,
-  // even if the token's creator happens to be a member of the URL workspace.
-  if (token && token.workspaceId !== ws.id) {
+  // Instance-reach token (workspaceId null) may target any workspace; a pinned
+  // token must match its own. (During an agent RUN the NARROWED run token is
+  // passed, so this also enforces the per-run floor — runner.ts Task A8.)
+  if (token && !isInstanceReach(token) && token.workspaceId !== ws.id) {
     throw new HTTPError('FORBIDDEN', 'token does not belong to this workspace', 403);
   }
 
+  // Authentication is still required — an instance token bypasses MEMBERSHIP,
+  // not auth. A human-minted instance token's creator is hydrated into `user`
+  // by attachToken; the system operator token (createdBy null) never reaches
+  // this REST path.
   if (!user) throw new HTTPError('UNAUTHENTICATED', 'login required', 401);
 
-  const m = await db.query.memberships.findFirst({
-    where: and(eq(memberships.workspaceId, ws.id), eq(memberships.userId, user.id)),
-  });
-  if (!m) throw new HTTPError('FORBIDDEN', 'not a member', 403);
+  if (token && isInstanceReach(token)) {
+    // Instance token: owner-equivalent by capability, not per-workspace
+    // membership. Skip the membership requirement; role is owner for downstream
+    // getRole() consumers (config gates etc.).
+    c.set('role', 'owner');
+  } else {
+    const m = await db.query.memberships.findFirst({
+      where: and(eq(memberships.workspaceId, ws.id), eq(memberships.userId, user.id)),
+    });
+    if (!m) throw new HTTPError('FORBIDDEN', 'not a member', 403);
+    c.set('role', m.role as Role);
+  }
 
   c.set('workspace', ws);
-  c.set('role', m.role as Role);
   return next();
 };
 

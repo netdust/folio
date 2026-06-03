@@ -50,9 +50,31 @@ test('MCP initialize returns serverInfo + protocolVersion', async () => {
     }),
   });
   expect(res.status).toBe(200);
-  const body = (await res.json()) as { result: { serverInfo: { name: string }; protocolVersion: string } };
+  const body = (await res.json()) as {
+    result: { serverInfo: { name: string }; protocolVersion: string; instructions?: string };
+  };
   expect(body.result.serverInfo.name).toBe('folio');
   expect(body.result.protocolVersion).toBeTruthy();
+});
+
+test('MCP initialize returns an instructions pointer mentioning get_skill (B5)', async () => {
+  const { app, seed } = await makeTestApp();
+  const token = await setupToken(seed.workspace.id, seed.user.id, ['documents:read']);
+  const res = await app.request('/mcp', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'test', version: '1' } },
+    }),
+  });
+  expect(res.status).toBe(200);
+  const body = (await res.json()) as { result: { instructions?: string } };
+  expect(typeof body.result.instructions).toBe('string');
+  expect(body.result.instructions).toMatch(/get_skill/);
+  expect(body.result.instructions).toMatch(/skill/i);
 });
 
 test('MCP tools/list returns the v1 tools including comment + agent-lifecycle tools', async () => {
@@ -66,9 +88,13 @@ test('MCP tools/list returns the v1 tools including comment + agent-lifecycle to
   const body = (await res.json()) as { result: { tools: { name: string }[] } };
   // 12 original + 4 comment tools + 4 agent-lifecycle tools + 5 run-management
   // tools (D-4) + 1 find_documents tool + 1 describe_workspace tool + 1
-  // folio_api_get (Phase-op-3 T4 reads) + 1 folio_api (Phase-op-3 T5 writes) = 29.
-  expect(body.result.tools.length).toBe(29);
+  // folio_api_get (Phase-op-3 T4 reads) + 1 folio_api (Phase-op-3 T5 writes) + 1
+  // get_skill (Piece B — narrow __system skills read) + 1 set_skill_trust
+  // (Piece B T8 — bless/unbless a __system skill) = 31.
+  expect(body.result.tools.length).toBe(31);
   const names = body.result.tools.map((t) => t.name);
+  expect(names).toContain('get_skill');
+  expect(names).toContain('set_skill_trust');
   expect(names).toContain('folio_api_get');
   expect(names).toContain('folio_api'); // T5 registers the write tool
   expect(names).toContain('find_documents');

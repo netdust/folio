@@ -3,12 +3,14 @@ import { and, eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import type { DB } from '../db/client.ts';
 import type { Document } from '../db/schema.ts';
-import { documents, memberships, projects, users, workspaces } from '../db/schema.ts';
+import { apiTokens, documents, memberships, projects, users, workspaces } from '../db/schema.ts';
 import type { Env } from '../env.ts';
 import { createDocument } from '../services/documents.ts';
+import { roleToScopes } from './agent-schema.ts';
 import { HTTPError } from './http.ts';
 import {
   FOLIO_SKILL_BODY,
+  FOLIO_SKILL_FRONTMATTER,
   FOLIO_SKILL_SLUG,
   OPERATOR_AGENT_TITLE,
   OPERATOR_PROMPT,
@@ -118,6 +120,7 @@ async function ensureSystemPage(
   projectId: string,
   title: string,
   body: string,
+  frontmatter: Record<string, unknown> = {},
 ): Promise<void> {
   // Idempotency keys on title (not the DB unique column slug). Safe for the
   // seeded set: the two fixed titles slugify to distinct slugs in distinct
@@ -149,7 +152,7 @@ async function ensureSystemPage(
     slug: slugify(title),
     body,
     status: null,
-    frontmatter: {},
+    frontmatter,
     createdBy: null, // structure-only; no user actor at bootstrap
   });
 }
@@ -186,7 +189,14 @@ export async function bootstrapSystemWorkspace(db: DB): Promise<void> {
     'Reference',
   );
 
-  await ensureSystemPage(db, sys.id, skillsProject.id, 'folio', FOLIO_SKILL_BODY);
+  await ensureSystemPage(
+    db,
+    sys.id,
+    skillsProject.id,
+    'folio',
+    FOLIO_SKILL_BODY,
+    FOLIO_SKILL_FRONTMATTER,
+  );
   await ensureSystemPage(
     db,
     sys.id,
@@ -256,6 +266,49 @@ export async function getSystemWorkspaceId(db: DB): Promise<string> {
 export async function findSystemWorkspaceId(db: DB): Promise<string | undefined> {
   const sys = await findSystemWorkspace(db);
   return sys?.id;
+}
+
+/** A __system membership role that may administer the instance. */
+export type InstanceAdminRole = 'owner' | 'admin';
+
+/**
+ * The SINGLE instance-admin gate (CR#6). A user may administer instance-level
+ * surfaces (mint a reach=null token, list/revoke instance tokens) iff they are
+ * an owner/admin of `__system`. Returns their `__system` role (callers use it as
+ * the scope ceiling for a reach=null mint); throws 403 otherwise. Both the A7
+ * token-mint reach gate and the instance-token routes route through this so the
+ * instance-admin boundary lives in one place.
+ */
+export async function requireInstanceAdmin(
+  db: DB,
+  userId: string,
+): Promise<InstanceAdminRole> {
+  const systemId = await getSystemWorkspaceId(db);
+  const m = await db.query.memberships.findFirst({
+    where: and(eq(memberships.workspaceId, systemId), eq(memberships.userId, userId)),
+  });
+  if (m?.role !== 'owner' && m?.role !== 'admin') {
+    throw new HTTPError(
+      'FORBIDDEN',
+      'instance administration requires a __system owner/admin',
+      403,
+    );
+  }
+  return m.role;
+}
+
+/**
+ * The single `__system` OWNER's user id (CR#2). A designated instance has
+ * exactly one owner; an operator-provisioned workspace is owned by that human.
+ * Returns undefined if no owner exists yet (pre-designation).
+ */
+export async function findSystemOwnerId(db: DB): Promise<string | undefined> {
+  const systemId = await findSystemWorkspaceId(db);
+  if (!systemId) return undefined;
+  const owner = await db.query.memberships.findFirst({
+    where: and(eq(memberships.workspaceId, systemId), eq(memberships.role, 'owner')),
+  });
+  return owner?.userId;
 }
 
 /**
@@ -386,6 +439,40 @@ export async function grantOwner(db: DB, email: string): Promise<string> {
  * is discarded (only the hash persists). `actorUserId` supplies the agent doc's
  * `createdBy` actor — it must be an existing user.
  */
+/**
+ * Re-provision the operator's auto-minted token into its SYSTEM-ORIGIN INSTANCE
+ * form (A9): workspaceId null (instance reach), createdBy null (the unforgeable
+ * T8 bless marker — POST /tokens always stamps a human createdBy, so null can
+ * only arise from code provisioning), full owner scopes. `agentId` is KEPT (a
+ * documented T3 carve-out: the runner loads the operator token by agentId, and
+ * the operator legitimately IS instance-reach AND agent-bound). Idempotent.
+ */
+async function ensureOperatorToken(db: DB): Promise<void> {
+  const sys = await requireSystemWorkspace(db);
+  const operator = await db.query.documents.findFirst({
+    where: and(eq(documents.workspaceId, sys.id), eq(documents.type, 'agent')),
+  });
+  if (!operator) return; // no operator yet — nothing to re-provision
+  const token = await db.query.apiTokens.findFirst({
+    where: eq(apiTokens.agentId, operator.id),
+  });
+  if (!token) return; // operator doc exists but its auto-minted token is gone
+  // CR#9 — skip the write when the token is ALREADY in system-origin instance
+  // form (the steady-state boot path). Only UPDATE when something differs, so a
+  // re-run / concurrent-create / every boot isn't a needless row write.
+  const wantScopes = roleToScopes('owner');
+  const alreadyProvisioned =
+    token.workspaceId === null &&
+    token.createdBy === null &&
+    token.scopes.length === wantScopes.length &&
+    wantScopes.every((s) => token.scopes.includes(s));
+  if (alreadyProvisioned) return;
+  await db
+    .update(apiTokens)
+    .set({ workspaceId: null, createdBy: null, scopes: wantScopes })
+    .where(eq(apiTokens.agentId, operator.id));
+}
+
 export async function ensureOperatorAgent(
   db: DB,
   actorUserId: string,
@@ -395,7 +482,12 @@ export async function ensureOperatorAgent(
   const existingAgent = await db.query.documents.findFirst({
     where: and(eq(documents.workspaceId, sys.id), eq(documents.type, 'agent')),
   });
-  if (existingAgent) return; // idempotent: the operator already exists
+  if (existingAgent) {
+    // Already seeded: still re-provision the token so a pre-A9 operator (or a
+    // re-run) converges to the system-origin instance form. Idempotent.
+    await ensureOperatorToken(db);
+    return;
+  }
 
   const actor = await db.query.users.findFirst({ where: eq(users.id, actorUserId) });
   if (!actor) {
@@ -440,10 +532,17 @@ export async function ensureOperatorAgent(
       err instanceof Error &&
       err.message.includes('UNIQUE constraint failed: documents.workspace_id')
     ) {
+      // A concurrent designate already seeded the operator — converge its token.
+      await ensureOperatorToken(db);
       return;
     }
     throw err;
   }
+
+  // Success path: the operator was just created with its auto-minted token in
+  // the (workspaceId=__system, createdBy=actor) form. Re-provision it into the
+  // system-origin instance form (A9).
+  await ensureOperatorToken(db);
 }
 
 /**
