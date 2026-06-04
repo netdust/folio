@@ -839,7 +839,12 @@ test('project-only invitee receives only their granted project events from /even
 >
 > Goal: delete DEAD cross-workspace machinery; rehome MIGRATE content (folio skill → `instance_skills`; operator → runtime singleton); collapse `resolveAgentForRun` across the 3 D11 paths keeping both ceilings; re-point skill-trust at the typed column; reconcile owner-designation; THEN author the contract migrations (`__system` teardown, drop `memberships`). Verdicts per spec §4.4.
 >
-> **Integration gate:** server suite green; `grep -rn "__system\|getSystemWorkspaceId\|findSystemWorkspaceId\|resolveAgentForRun\|bootstrapSystemWorkspace\|library" apps/server/src --include=*.ts | grep -v "\.test\."` returns only intentional survivors (isReservedSlug, the SYSTEM_WORKSPACE_SLUG constant used by the teardown migration). The agent-run-authority §8.1 test green. `memberships` no longer in schema.
+> **PLAN CORRECTION (2026-06-05) — Phase 4 is 7 tasks (largest, riskiest phase). One end-of-phase review over a 7-task `__system`-teardown diff is too coarse: the irreversible contract migrations would be reviewed in the same pass as refactors. Phase 4 is split into THREE review clusters, each a STOP-AND-REVIEW boundary. The executing agent MUST halt at each `── REVIEW GATE ──` marker, hand back for `/integration` + `/code-review` on that cluster's diff, and NOT begin the next cluster until review is clear:**
+> - **Cluster 4a — skill-source migration (Tasks 14-15):** load + trust re-point onto `instance_skills`. (Reviews the ~4 rewritten skill/trust tests.)
+> - **Cluster 4b — operator + collapse + delete (Tasks 16-18):** operator runtime singleton, `resolveAgentForRun` collapse (7 call sites, D-C), delete dead `__system` machinery.
+> - **Cluster 4c — owner reconciliation + IRREVERSIBLE contract migrations (Tasks 19-20):** the `__system` teardown + `memberships` drop. Highest-stakes, hardest-to-undo — gets its own dedicated review. Run `/security-review` here too, not just `/code-review`.
+>
+> **Integration gate (Phase 4 close — after cluster 4c):** server suite green; `grep -rn "__system\|getSystemWorkspaceId\|findSystemWorkspaceId\|resolveAgentForRun\|bootstrapSystemWorkspace\|library" apps/server/src --include=*.ts | grep -v "\.test\."` returns only intentional survivors (isReservedSlug, the SYSTEM_WORKSPACE_SLUG constant used by the teardown migration). The agent-run-authority §8.1 test green. `memberships` no longer in schema.
 
 ### Task 14: Instance-skills seeder + loader; re-point `loadAgentDefinition`
 
@@ -909,6 +914,9 @@ test('an import/edit payload carrying trusted:true cannot set instance_skills.tr
 - [ ] **Step 4: Run, verify pass.**
 
 - [ ] **Step 5: Typecheck + commit.** `git commit -m "phase-4: skill-trust on instance_skills.trusted typed column (T-E closed)"`
+
+> **── REVIEW GATE 4a (STOP — cluster 4a complete: Tasks 14-15) ──**
+> Commit 14 + 15, then HALT. Run `/integration` on the `14-15` diff, then `/code-review` (this cluster rewrote ~4 skill/trust tests — verify the denials still bite: MCP-PAT-cannot-bless, the typed-`trusted`-column-can't-be-forged, MISSING_SKILL fail-closed). Optionally run `test-effectiveness` (Situation A) on the diff first. **Do NOT start Task 16 until this cluster's review is clear.**
 
 ### Task 16: Operator runtime singleton (`operator.ts`) — OQ-1 (d), unspoofable
 
@@ -982,6 +990,9 @@ test('operator is a code singleton; a user agent cannot impersonate it', async (
 - [ ] **Step 3: Run the server suite** — green (deletions shouldn't break anything if Tasks 14-17 rewired the live consumers). Fix any straggler import.
 
 - [ ] **Step 4: Typecheck + commit.** `git commit -m "phase-4: delete DEAD __system machinery (bootstrap, union, library badging, operator-seed)"`
+
+> **── REVIEW GATE 4b (STOP — cluster 4b complete: Tasks 16-18) ──**
+> Commit 16-18, then HALT. Run `/integration` on the `16-18` diff, then `/code-review` (focus: the `resolveAgentForRun` collapse touched 7 call sites across 3 files (D-C) — confirm all rewired, both ceilings intact; and the dead-machinery deletion left no live consumer). **Do NOT start Task 19 (the irreversible migrations) until this cluster's review is clear.**
 
 ### Task 19: Owner-designation reconciliation in boot tasks (fix #3)
 
