@@ -28,7 +28,8 @@ const projectsRoute = new Hono<AuthContext & ScopeContext>();
 
 projectsRoute.get('/', async (c) => {
   const ws = getWorkspace(c);
-  return jsonOk(c, await listProjects(ws.id));
+  const user = getUser(c);
+  return jsonOk(c, await listProjects(ws.id, user.id));
 });
 
 projectsRoute.post(
