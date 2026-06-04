@@ -450,11 +450,14 @@ test('DELETE /api/v1/w/:wslug rejects bearer + garbage cookie with 403', async (
 // boundary; Phase A adds NO __system read path that bypasses membership (the
 // definitional skill-load exemption is Phase B).
 
-test('M6: a non-__system member cannot read a __system workspace (membership gate)', async () => {
+test('M6: a non-__system member cannot read a __system workspace (access gate)', async () => {
   const { app, db, seed } = await makeTestApp();
-  // seed.user (alice) is a member of 'acme', NOT of __system.
+  // Post-tenancy: alice has a workspace_access grant on 'acme' but NONE on
+  // __system. Demote her from the harness instance-owner default to a plain
+  // member so owner-bypass doesn't mask the gate.
+  await db.update(users).set({ role: 'member' }).where(eq(users.id, seed.user.id));
   await bootstrapSystemWorkspace(db);
-  // Reach __system as alice's session — resolveWorkspace's membership check fires.
+  // Reach __system as alice's session — resolveWorkspace's access check fires.
   const res = await app.request('/api/v1/w/__system', {
     headers: { Cookie: seed.sessionCookie },
   });
@@ -464,13 +467,15 @@ test('M6: a non-__system member cannot read a __system workspace (membership gat
 
 test('M6: a non-__system member cannot read a __system page document', async () => {
   const { app, db, seed } = await makeTestApp();
+  // Demote alice to a plain member (no __system grant) — see the ws-gate test.
+  await db.update(users).set({ role: 'member' }).where(eq(users.id, seed.user.id));
   await bootstrapSystemWorkspace(db);
-  // The seeded folio skill page lives in __system/skills. Alice (non-member)
+  // The seeded folio skill page lives in __system/skills. Alice (no grant)
   // is blocked at resolveWorkspace before reaching the document.
   const res = await app.request('/api/v1/w/__system/p/skills/documents/folio', {
     headers: { Cookie: seed.sessionCookie },
   });
-  // 403 (not a member) — never 200/leaked content.
+  // 403 (no access) — never 200/leaked content.
   expect([403, 404]).toContain(res.status);
   expect(res.status).not.toBe(200);
 });

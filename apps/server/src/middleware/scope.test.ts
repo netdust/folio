@@ -26,17 +26,96 @@ test('resolveWorkspace 404 on unknown slug', async () => {
   expect(res.status).toBe(404);
 });
 
-test('resolveWorkspace 403 when not member', async () => {
+test('resolveWorkspace 403 when no grant (member, post-tenancy)', async () => {
+  // A member with no workspace_access and no project_access in this ws is denied.
+  // (The seeded user is `owner` of 'acme'; this targets a different workspace so
+  // owner-bypass doesn't apply.)
   const { db, seed } = await makeTestApp();
-  const { workspaces } = await import('../db/schema.ts');
+  const { workspaces, users } = await import('../db/schema.ts');
+  const { eq } = await import('drizzle-orm');
   const { nanoid } = await import('nanoid');
   await db.insert(workspaces).values({ id: nanoid(), slug: 'other', name: 'Other' });
+  // Demote the seeded user to a plain member so owner-bypass cannot mask the
+  // missing-grant case.
+  await db.update(users).set({ role: 'member' }).where(eq(users.id, seed.user.id));
   const app = new Hono<AuthContext & ScopeContext>();
   registerErrorHandler(app);
   app.use('/:wslug', attachUser, requireUser, resolveWorkspace);
   app.get('/:wslug', (c) => c.json({ ok: true }));
   const res = await app.request('/other', { headers: { Cookie: seed.sessionCookie } });
   expect(res.status).toBe(403);
+  expect((await res.json()).error.message).toBe('no access to this workspace');
+});
+
+test('resolveWorkspace 200 for a member WITH a workspace_access grant', async () => {
+  const { db, seed } = await makeTestApp();
+  const { workspaces, workspaceAccess, users } = await import('../db/schema.ts');
+  const { eq } = await import('drizzle-orm');
+  const { nanoid } = await import('nanoid');
+  const wsId = nanoid();
+  await db.insert(workspaces).values({ id: wsId, slug: 'granted', name: 'Granted' });
+  // Plain member, but with an explicit workspace_access grant on this ws.
+  await db.update(users).set({ role: 'member' }).where(eq(users.id, seed.user.id));
+  await db.insert(workspaceAccess).values({ userId: seed.user.id, workspaceId: wsId });
+  const app = new Hono<AuthContext & ScopeContext>();
+  registerErrorHandler(app);
+  app.use('/:wslug', attachUser, requireUser, resolveWorkspace);
+  app.get('/:wslug', (c) => c.json({ name: getWorkspace(c).name, role: getRole(c) }));
+  const res = await app.request('/granted', { headers: { Cookie: seed.sessionCookie } });
+  expect(res.status).toBe(200);
+  expect(await res.json()).toEqual({ name: 'Granted', role: 'member' });
+});
+
+test('project_access-only user traverses resolveWorkspace but resolveProject gates per-project', async () => {
+  // A member granted access to ONLY p1 (no workspace_access): the TRAVERSE clause
+  // lets them past resolveWorkspace, resolveProject 200s on p1, but 404s (not 403,
+  // no existence leak) on the sibling p2 they were never granted.
+  const { db, seed } = await makeTestApp();
+  const { workspaces, projects, projectAccess, users } = await import('../db/schema.ts');
+  const { eq } = await import('drizzle-orm');
+  const { nanoid } = await import('nanoid');
+  const wsId = nanoid();
+  await db.insert(workspaces).values({ id: wsId, slug: 'beta', name: 'Beta' });
+  const p1 = nanoid();
+  const p2 = nanoid();
+  await db.insert(projects).values({ id: p1, workspaceId: wsId, slug: 'p1', name: 'P1' });
+  await db.insert(projects).values({ id: p2, workspaceId: wsId, slug: 'p2', name: 'P2' });
+  await db.update(users).set({ role: 'member' }).where(eq(users.id, seed.user.id));
+  await db.insert(projectAccess).values({ userId: seed.user.id, projectId: p1 });
+
+  const app = new Hono<AuthContext & ScopeContext>();
+  registerErrorHandler(app);
+  app.use('/:wslug/p/:pslug/*', attachUser, requireUser, resolveWorkspace, resolveProject);
+  app.get('/:wslug/p/:pslug', (c) => c.json({ slug: getProject(c).slug }));
+
+  // Granted project: 200 (traverse let them past the ws gate, project grant passes).
+  const ok = await app.request('/beta/p/p1', { headers: { Cookie: seed.sessionCookie } });
+  expect(ok.status).toBe(200);
+  expect(await ok.json()).toEqual({ slug: 'p1' });
+
+  // Ungranted sibling project: 404 (existence-preserving denial), NOT 403.
+  const denied = await app.request('/beta/p/p2', { headers: { Cookie: seed.sessionCookie } });
+  expect(denied.status).toBe(404);
+  expect((await denied.json()).error.code).toBe('PROJECT_NOT_FOUND');
+});
+
+test('owner (users.role) passes resolveWorkspace + resolveProject with no grant', async () => {
+  // Seeded user IS owner; target a fresh workspace/project with NO grants to prove
+  // owner-bypass works without any workspace_access/project_access row.
+  const { db, seed } = await makeTestApp();
+  const { workspaces, projects } = await import('../db/schema.ts');
+  const { nanoid } = await import('nanoid');
+  const wsId = nanoid();
+  await db.insert(workspaces).values({ id: wsId, slug: 'gamma', name: 'Gamma' });
+  const pId = nanoid();
+  await db.insert(projects).values({ id: pId, workspaceId: wsId, slug: 'proj', name: 'Proj' });
+  const app = new Hono<AuthContext & ScopeContext>();
+  registerErrorHandler(app);
+  app.use('/:wslug/p/:pslug/*', attachUser, requireUser, resolveWorkspace, resolveProject);
+  app.get('/:wslug/p/:pslug', (c) => c.json({ slug: getProject(c).slug, role: getRole(c) }));
+  const res = await app.request('/gamma/p/proj', { headers: { Cookie: seed.sessionCookie } });
+  expect(res.status).toBe(200);
+  expect(await res.json()).toEqual({ slug: 'proj', role: 'owner' });
 });
 
 test('resolveWorkspace attaches workspace + role', async () => {

@@ -24,7 +24,13 @@ async function seedMemberSession(
     email: `${userId}@test.local`,
     name: role,
   });
+  // Post-tenancy: resolveWorkspace gates on workspace_access, so the seeded
+  // session user needs a grant to REACH the route. The memberships row is
+  // retained because tokens.ts still derives its scope ceiling from `m.role`
+  // (a separate membership read rewired in a later task); users.role stays the
+  // default 'member' for getRole() consumers.
   await db.insert(schema.memberships).values({ workspaceId, userId, role });
+  await db.insert(schema.workspaceAccess).values({ userId, workspaceId });
   const session = await createSession(userId);
   return `folio_session=${session.id}`;
 }
@@ -265,6 +271,10 @@ describe('tokens.ts A7 instance reach gate (T1/T2)', () => {
       userId,
       role: 'owner',
     });
+    // Post-tenancy: resolveWorkspace on /w/__system gates on workspace_access.
+    // Grant it so the instance-admin reaches the route; requireInstanceAdmin
+    // (the scope-ceiling gate inside tokens.ts) still reads __system membership.
+    await db.insert(schema.workspaceAccess).values({ userId, workspaceId: systemId });
     const session = await createSession(userId);
     const cookie = `folio_session=${session.id}`;
 

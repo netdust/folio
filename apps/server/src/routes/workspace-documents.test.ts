@@ -1342,33 +1342,38 @@ test('listing __system itself does not double-union its own agents', async () =>
   expect(db).toBeDefined();
 });
 
-// Phase D D3 (inherited Phase A M6) — a non-`__system`-member's DIRECT request
-// for `__system` content is 403'd by the membership gate in `resolveWorkspace`
-// (apps/server/src/middleware/scope.ts). The seed user is a member of `acme`
-// only; `seedSystemLibraryAgent` creates the `__system` workspace + a library
-// agent but adds NO membership for the seed user. So a direct GET on a
-// `__system` content route must fail closed with FORBIDDEN 'not a member'.
-// This is the server-side floor under D1's switcher filter: even if a client
-// hand-crafted the URL, the content stays gated.
-test('D3: non-member direct GET /w/__system/documents?type=agent is 403 FORBIDDEN (not a member)', async () => {
-  const { app, seed } = await makeTestApp();
+// Phase D D3 (inherited Phase A M6) — a user with NO access to `__system` making
+// a DIRECT request for `__system` content is 403'd by the access gate in
+// `resolveWorkspace` (apps/server/src/middleware/scope.ts). Post-tenancy: the
+// seed user is demoted to a plain member with a grant on `acme` only (the
+// harness grant); `seedSystemLibraryAgent` creates the `__system` workspace +
+// a library agent but adds NO grant for the seed user. So a direct GET on a
+// `__system` content route must fail closed with FORBIDDEN. This is the
+// server-side floor under D1's switcher filter: even if a client hand-crafted
+// the URL, the content stays gated. (An instance OWNER, post-tenancy, can see
+// every workspace including __system — so the user must be a non-owner here.)
+test('D3: a no-access user direct GET /w/__system/documents?type=agent is 403 FORBIDDEN', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const { users } = await import('../db/schema.ts');
+  const { eq } = await import('drizzle-orm');
+  await db.update(users).set({ role: 'member' }).where(eq(users.id, seed.user.id));
   await seedSystemLibraryAgent(seed.user.id, 'operator');
 
   // Sanity: the same user CAN reach their own workspace's content (the gate
-  // is membership, not a blanket block on the route).
+  // is per-workspace access, not a blanket block on the route).
   const okRes = await app.request('/api/v1/w/acme/documents?type=agent', {
     headers: { Cookie: seed.sessionCookie },
   });
   expect(okRes.status).toBe(200);
 
-  // The boundary: a non-member of `__system` hits the membership gate.
+  // The boundary: a user with no grant on `__system` hits the access gate.
   const res = await app.request(`/api/v1/w/${SYSTEM_WORKSPACE_SLUG}/documents?type=agent`, {
     headers: { Cookie: seed.sessionCookie },
   });
   expect(res.status).toBe(403);
   const body = await res.json();
   expect(body.error.code).toBe('FORBIDDEN');
-  expect(body.error.message).toBe('not a member');
+  expect(body.error.message).toBe('no access to this workspace');
 });
 
 // Phase D D2-vs-D4 crux — the COUNTERPART to D4's redaction: a `__system`

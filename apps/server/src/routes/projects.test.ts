@@ -167,12 +167,12 @@ test('DELETE project scrubs its id from workspace agent.frontmatter.projects', a
 test('DELETE project — non-owner returns 403 without scrubbing', async () => {
   const { app, db, seed } = await makeTestApp();
   // Demote seed user to member (so we have a non-owner trying to delete).
-  const { memberships } = await import('../db/schema.ts');
-  const { eq, and } = await import('drizzle-orm');
-  await db
-    .update(memberships)
-    .set({ role: 'member' })
-    .where(and(eq(memberships.workspaceId, seed.workspace.id), eq(memberships.userId, seed.user.id)));
+  // Post-tenancy: per-request `role` comes from users.role (not memberships), so
+  // demote there. The user keeps its workspace_access grant from the harness, so
+  // it still passes resolveWorkspace and reaches the handler's owner-only gate.
+  const { users } = await import('../db/schema.ts');
+  const { eq } = await import('drizzle-orm');
+  await db.update(users).set({ role: 'member' }).where(eq(users.id, seed.user.id));
 
   const agent = await createAgentWithProjects(app, seed.sessionCookie, 'Specific', [seed.project.id]);
 
