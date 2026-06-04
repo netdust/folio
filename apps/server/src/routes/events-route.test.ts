@@ -962,6 +962,114 @@ test('CR-7: project-only invitee with a human PAT does NOT receive sibling-proje
   expect(text).not.toContain('OPS');
 });
 
+// CR-8 + CR-11 (round-2 code-review): workspace-level rows (projectId === null)
+// were NOT narrowed for a project-only human — both filters only dropped rows
+// where `projectId !== null`, and isAgentEventVisible returns true for any
+// non-agent caller. So a project-only invitee received the GRANT ROSTER
+// (access.granted/revoked) and instance ROLE CHANGES (user.role.changed) —
+// instance-admin-only facts. A non-whole-ws human must see NO workspace-level
+// rows (there is no class of workspace-level event a project-only invitee
+// legitimately needs; their interest is entirely project-scoped). CR-11 is the
+// role-change instance of this same leak and is closed here.
+test('CR-8/CR-11: project-only invitee does NOT receive workspace-level rows (grant roster, role changes)', async () => {
+  const { app, db: testDb, seed } = await makeTestApp();
+
+  // Project-only invitee: project_access to 'web' ONLY, no workspace_access.
+  const inviteeId = nanoid();
+  await testDb.insert(users).values({
+    id: inviteeId, email: 'wlinvitee@test.local', name: 'WL Invitee', role: 'member',
+  });
+  await testDb.insert(projectAccess).values({ userId: inviteeId, projectId: seed.project.id });
+
+  // A third user the grant/role events are ABOUT (not the invitee).
+  const thirdId = nanoid();
+  await testDb.insert(users).values({
+    id: thirdId, email: 'third@test.local', name: 'Third', role: 'member',
+  });
+
+  const { events } = await import('../db/schema.ts');
+  await testDb.insert(events).values([
+    {
+      id: 'cr8-anchor', workspaceId: seed.workspace.id, projectId: null, documentId: null,
+      kind: 'workspace.created', actor: seed.user.id, payload: {},
+      createdAt: new Date(Date.now() - 90_000), seq: 8300,
+    },
+    // Positive control: a project-scoped event in the GRANTED project — must arrive.
+    {
+      id: 'cr8-WEB-event', workspaceId: seed.workspace.id, projectId: seed.project.id, documentId: null,
+      kind: 'document.created', actor: seed.user.id, payload: { marker: 'WEB' },
+      createdAt: new Date(Date.now() - 70_000), seq: 8301,
+    },
+    // Workspace-level grant roster — about the THIRD user. MUST NOT leak.
+    {
+      id: 'cr8-grant-event', workspaceId: seed.workspace.id, projectId: null, documentId: null,
+      kind: 'access.granted', actor: seed.user.id,
+      payload: { userId: thirdId, workspaceId: seed.workspace.id },
+      createdAt: new Date(Date.now() - 60_000), seq: 8302,
+    },
+    // Workspace-level role change — about the THIRD user. MUST NOT leak (CR-11).
+    {
+      id: 'cr8-role-event', workspaceId: seed.workspace.id, projectId: null, documentId: null,
+      kind: 'user.role.changed', actor: seed.user.id,
+      payload: { userId: thirdId, role: 'admin', previousRole: 'member' },
+      createdAt: new Date(Date.now() - 30_000), seq: 8303,
+    },
+  ]);
+
+  // Drive as the invitee's session.
+  const session = await createSession(inviteeId);
+  const res = await app.request('/api/v1/w/acme/events', {
+    headers: { Cookie: `folio_session=${session.id}`, 'Last-Event-Id': 'cr8-anchor' },
+  });
+  expect(res.status).toBe(200);
+  const text = await drainReplay(res);
+
+  // Positive control: granted project's event arrives.
+  expect(text).toContain('cr8-WEB-event');
+  // Workspace-level rows MUST NOT leak — neither the grant roster nor the role change.
+  expect(text).not.toContain('cr8-grant-event');
+  expect(text).not.toContain('cr8-role-event');
+  // And the third user's id (the leaked subject) must not appear at all.
+  expect(text).not.toContain(thirdId);
+});
+
+test('CR-8: a workspace_access grant holder STILL receives workspace-level rows (no over-narrowing)', async () => {
+  const { app, db: testDb, seed } = await makeTestApp();
+
+  // A whole-ws principal: instance member WITH a workspace_access grant (not owner).
+  const wsMemberId = nanoid();
+  await testDb.insert(users).values({
+    id: wsMemberId, email: 'wsmember@test.local', name: 'WS Member', role: 'member',
+  });
+  const { workspaceAccess } = await import('../db/schema.ts');
+  await testDb.insert(workspaceAccess).values({ userId: wsMemberId, workspaceId: seed.workspace.id });
+
+  const { events } = await import('../db/schema.ts');
+  await testDb.insert(events).values([
+    {
+      id: 'cr8w-anchor', workspaceId: seed.workspace.id, projectId: null, documentId: null,
+      kind: 'workspace.created', actor: seed.user.id, payload: {},
+      createdAt: new Date(Date.now() - 90_000), seq: 8400,
+    },
+    {
+      id: 'cr8w-grant-event', workspaceId: seed.workspace.id, projectId: null, documentId: null,
+      kind: 'access.granted', actor: seed.user.id,
+      payload: { userId: wsMemberId, workspaceId: seed.workspace.id },
+      createdAt: new Date(Date.now() - 30_000), seq: 8401,
+    },
+  ]);
+
+  const session = await createSession(wsMemberId);
+  const res = await app.request('/api/v1/w/acme/events', {
+    headers: { Cookie: `folio_session=${session.id}`, 'Last-Event-Id': 'cr8w-anchor' },
+  });
+  expect(res.status).toBe(200);
+  const text = await drainReplay(res);
+
+  // A whole-ws principal is NOT narrowed at workspace level — the grant event arrives.
+  expect(text).toContain('cr8w-grant-event');
+});
+
 test('fix#2: workspace owner still receives ALL project events via /events replay (no over-narrowing)', async () => {
   const { app, db: testDb, seed } = await makeTestApp();
 

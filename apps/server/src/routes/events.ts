@@ -111,6 +111,16 @@ eventsRoute.get('/', async (c) => {
   // RESTRICTS, so applying both would be safe, but it'd be redundant work).
   const user = c.get('user');
   let userVisibleProjects: Set<string> | null = null; // null === unrestricted
+  // CR-8: a project-only human (narrowed) must ALSO be denied workspace-level
+  // (projectId === null) rows — the grant roster (access.granted/revoked),
+  // instance role changes (user.role.changed), workspace lifecycle, agent
+  // metadata. There is no class of workspace-level event a project-only invitee
+  // legitimately needs (their interest is entirely project-scoped, handled by
+  // userVisibleProjects). A whole-ws principal keeps the old "sees everything"
+  // behavior. Mirrors how isAgentEventVisible denies a narrowed agent that owns
+  // no matching subject — but for a human the answer is simply "deny all
+  // workspace-level", since a human has no agent-subject to match.
+  let humanNarrowed = false;
   // A human principal — session OR a human PAT (token with no agentId). Agent
   // tokens (token.agentId != null) are bounded by the F3 allow-list above and
   // skip this. The bearer middleware hydrates a token's CREATOR into
@@ -120,9 +130,11 @@ eventsRoute.get('/', async (c) => {
     // Whole-ws principals (owner / workspace_access grant) need no narrowing —
     // canManageWorkspace is owner || ws-grant (NO traverse), exactly the
     // "sees every project in the ws" predicate. Only a project-only (traverse)
-    // invitee is narrowed to the projects they hold a direct grant to.
+    // invitee is narrowed: to their granted projects (project-scoped rows) AND
+    // out of every workspace-level row (humanNarrowed).
     if (!(await canManageWorkspace(db, user.id, ws.id))) {
       userVisibleProjects = await visibleProjectIds(db, user.id, ws.id);
+      humanNarrowed = true;
     }
   }
 
@@ -177,15 +189,18 @@ eventsRoute.get('/', async (c) => {
             if (agentAllowList && row.projectId !== null && !agentAllowList.includes(row.projectId)) {
               continue;
             }
-            // fix #2: per-user visibility narrows project-scoped rows for a
+            // fix #2: per-user visibility narrows PROJECT-SCOPED rows for a
             // human who can't see the whole workspace (traverse-only invitee).
-            // Workspace-level rows (projectId=null) fall through to the
-            // isAgentEventVisible subject rule below — unchanged.
             if (userVisibleProjects && row.projectId !== null && !userVisibleProjects.has(row.projectId)) {
               continue;
             }
+            // CR-8: that same narrowed human is denied WORKSPACE-LEVEL rows
+            // (projectId=null) — grant roster, role changes, ws lifecycle, agent
+            // metadata. (A whole-ws principal has humanNarrowed=false and keeps
+            // receiving them.)
+            if (humanNarrowed && row.projectId === null) continue;
             // H1/H2: workspace-level (projectId=null) events filtered through
-            // the subject-based visibility predicate.
+            // the subject-based visibility predicate (the AGENT narrowing).
             if (
               !isAgentEventVisible(agentEventCtx, {
                 kind: row.kind as EventKind,
@@ -275,12 +290,15 @@ eventsRoute.get('/', async (c) => {
         ) {
           return;
         }
-        // fix #2: per-user visibility — drop project-scoped events for a human
+        // fix #2: per-user visibility — drop PROJECT-SCOPED events for a human
         // who can't see the whole workspace (traverse-only invitee). Mirrors
         // the replay-loop check above so live + replay narrow identically.
         if (userVisibleProjects && e.projectId != null && !userVisibleProjects.has(e.projectId)) {
           return;
         }
+        // CR-8: that same narrowed human is denied WORKSPACE-LEVEL events
+        // (projectId null/undefined). Mirrors the replay-loop check.
+        if (humanNarrowed && e.projectId == null) return;
         // H1/H2: subject-based visibility (see replay loop above).
         if (
           !isAgentEventVisible(agentEventCtx, {

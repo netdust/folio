@@ -3,6 +3,7 @@ import { and, eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import * as schema from '../db/schema.ts';
 import { createSession, newApiToken } from '../lib/auth.ts';
+import { SYSTEM_WORKSPACE_SLUG, bootstrapSystemWorkspace } from '../lib/system-workspace.ts';
 import { makeTestApp } from '../test/harness.ts';
 
 /**
@@ -259,6 +260,55 @@ describe('POST /api/v1/instance/access — grant', () => {
     const body = (await res.json()) as { error: { code: string } };
     expect(body.error.code).toBe('PROJECT_NOT_FOUND');
     expect(await projAccessCount(db, target, ghostProj)).toBe(0);
+  });
+
+  // CR-11 defense-in-depth: the __system library workspace must NOT be a grant
+  // target. The invite-target PICKER already excludes it, but a direct
+  // grant-by-id bypassed the picker — and a __system project_access grant lets a
+  // plain member traverse into ?workspace=__system and (pre-CR-8) receive
+  // instance role-change events. CR-8 stops the leak; this blocks the grant
+  // itself so the reserved library can't be invited into at all.
+  test('grant to the __system workspace → rejected (reserved, not a grant target)', async () => {
+    const { app, db, seed } = await makeTestApp();
+    await bootstrapSystemWorkspace(db);
+    const target = await seedUser(db);
+    const sys = await db.query.workspaces.findFirst({
+      where: eq(schema.workspaces.slug, SYSTEM_WORKSPACE_SLUG),
+    });
+    expect(sys).toBeTruthy();
+
+    const res = await app.request('/api/v1/instance/access', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie: seed.sessionCookie },
+      body: JSON.stringify({ userId: target, workspaceId: sys!.id }),
+    });
+
+    expect(res.status).toBe(403);
+    expect(await wsAccessCount(db, target, sys!.id)).toBe(0);
+  });
+
+  test('grant to a project IN __system → rejected (reserved, not a grant target)', async () => {
+    const { app, db, seed } = await makeTestApp();
+    await bootstrapSystemWorkspace(db);
+    const target = await seedUser(db);
+    const sys = await db.query.workspaces.findFirst({
+      where: eq(schema.workspaces.slug, SYSTEM_WORKSPACE_SLUG),
+    });
+    expect(sys).toBeTruthy();
+    // A project inside __system (mirrors its seeded Skills/Reference projects).
+    const sysProj = nanoid();
+    await db
+      .insert(schema.projects)
+      .values({ id: sysProj, workspaceId: sys!.id, slug: 'sys-proj', name: 'Sys' });
+
+    const res = await app.request('/api/v1/instance/access', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie: seed.sessionCookie },
+      body: JSON.stringify({ userId: target, projectId: sysProj }),
+    });
+
+    expect(res.status).toBe(403);
+    expect(await projAccessCount(db, target, sysProj)).toBe(0);
   });
 
   test('re-granting an existing workspace grant is idempotent → 201, still one row', async () => {

@@ -6,7 +6,7 @@ import { db } from '../db/client.ts';
 import { projectAccess, projects, users, workspaceAccess, workspaces } from '../db/schema.ts';
 import { emitEvent, txWithEvents } from '../lib/events.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
-import { requireInstanceAdmin } from '../lib/system-workspace.ts';
+import { SYSTEM_WORKSPACE_SLUG, requireInstanceAdmin } from '../lib/system-workspace.ts';
 import { type AuthContext, getUser, requireSessionUser } from '../middleware/auth.ts';
 
 /**
@@ -81,6 +81,12 @@ async function resolveGrant(body: {
     if (!ws) {
       throw new HTTPError('WORKSPACE_NOT_FOUND', `no workspace with id ${body.workspaceId}`, 404);
     }
+    // CR-11 defense-in-depth: the reserved __system library is NOT a grant
+    // target. The invite-target picker already hides it, but a direct
+    // grant-by-id bypassed the picker — and a __system grant lets a plain member
+    // traverse into the library. 403 (it exists, but is not grantable), distinct
+    // from the 404 for a non-existent ws.
+    assertNotReservedTarget(ws.slug);
     return { kind: 'workspace', userId: body.userId, workspaceId: ws.id };
   }
 
@@ -91,6 +97,12 @@ async function resolveGrant(body: {
   if (!proj) {
     throw new HTTPError('PROJECT_NOT_FOUND', `no project with id ${body.projectId}`, 404);
   }
+  // A project IN __system is likewise not a grant target (its Skills/Reference
+  // projects must not be invited into). Resolve the parent ws slug to check.
+  const parentWs = await db.query.workspaces.findFirst({
+    where: eq(workspaces.id, proj.workspaceId),
+  });
+  assertNotReservedTarget(parentWs?.slug);
   return {
     kind: 'project',
     userId: body.userId,
@@ -98,6 +110,17 @@ async function resolveGrant(body: {
     // The event needs a workspaceId; a project's workspace scopes its event.
     workspaceId: proj.workspaceId,
   };
+}
+
+/** Reject a grant whose (parent) workspace is the reserved __system library. */
+function assertNotReservedTarget(workspaceSlug: string | undefined): void {
+  if (workspaceSlug === SYSTEM_WORKSPACE_SLUG) {
+    throw new HTTPError(
+      'RESERVED_WORKSPACE',
+      'the __system library is reserved and cannot be a grant target',
+      403,
+    );
+  }
 }
 
 instanceAccessRoute.post('/', zValidator('json', accessBody), async (c) => {
