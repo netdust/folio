@@ -2,9 +2,10 @@ import { Hono } from 'hono';
 import { streamSSE } from 'hono/streaming';
 import { and, eq, gt } from 'drizzle-orm';
 import { db } from '../db/client.ts';
-import { documents, events } from '../db/schema.ts';
+import { documents, events, projects as projectsTable } from '../db/schema.ts';
 import type { AuthContext } from '../middleware/auth.ts';
 import { requireUserOrToken } from '../middleware/bearer.ts';
+import { canSeeProject, hasWorkspaceAccess, userRole } from '../lib/access.ts';
 import { intersectAgentProjects, resolveAgentProjects } from '../lib/agent-projects.ts';
 import { getWorkspace, type ScopeContext } from '../middleware/scope.ts';
 import { eventBus, type BusEvent } from '../lib/event-bus.ts';
@@ -88,6 +89,42 @@ eventsRoute.get('/', async (c) => {
     }
   }
 
+  // Per-user project visibility (drop-workspace-tenancy, fix #2). Under the old
+  // model any workspace member could see every project in the workspace, so a
+  // human session needed no per-project narrowing. Post-tenancy a user invited
+  // to ONLY one project can TRAVERSE the workspace (canSeeWorkspace's
+  // project_access clause) to reach it — and would otherwise receive events for
+  // EVERY project in the workspace, including ones they were never granted.
+  //
+  // A human who can see the WHOLE workspace (instance owner, or a
+  // workspace_access grant holder) needs no narrowing: userVisibleProjects
+  // stays null === unrestricted, mirroring the agentAllowList convention. Only
+  // a project-scoped invitee is narrowed to the set of projects they can see.
+  //
+  // Computed only for SESSION auth (token === null). Agent tokens are already
+  // bounded by the F3 allow-list above; the bearer middleware also hydrates the
+  // token's CREATOR into `c.get('user')`, so computing this for an agent
+  // request would narrow by the creator's grants — extra work that the F3 path
+  // already covers. Narrowing only ever RESTRICTS, so even if both applied it
+  // would be safe, but we skip it for agents to avoid the redundant queries.
+  const user = c.get('user');
+  let userVisibleProjects: Set<string> | null = null; // null === unrestricted
+  if (user && token === null) {
+    const role = await userRole(db, user.id);
+    const seesWholeWs = role === 'owner' || (await hasWorkspaceAccess(db, user.id, ws.id));
+    if (!seesWholeWs) {
+      const all = await db
+        .select({ id: projectsTable.id })
+        .from(projectsTable)
+        .where(eq(projectsTable.workspaceId, ws.id));
+      const visible = new Set<string>();
+      for (const p of all) {
+        if (await canSeeProject(db, user.id, p.id)) visible.add(p.id);
+      }
+      userVisibleProjects = visible;
+    }
+  }
+
   return streamSSE(c, async (stream) => {
     // Replay from the durable event log when Last-Event-Id is present.
     // nanoid is NOT time-sortable, so we look up the anchor row and use its
@@ -137,6 +174,13 @@ eventsRoute.get('/', async (c) => {
             if (projectId && row.projectId !== null && row.projectId !== projectId) continue;
             // F3: agent allow-list narrows project-scoped rows.
             if (agentAllowList && row.projectId !== null && !agentAllowList.includes(row.projectId)) {
+              continue;
+            }
+            // fix #2: per-user visibility narrows project-scoped rows for a
+            // human who can't see the whole workspace (traverse-only invitee).
+            // Workspace-level rows (projectId=null) fall through to the
+            // isAgentEventVisible subject rule below — unchanged.
+            if (userVisibleProjects && row.projectId !== null && !userVisibleProjects.has(row.projectId)) {
               continue;
             }
             // H1/H2: workspace-level (projectId=null) events filtered through
@@ -228,6 +272,12 @@ eventsRoute.get('/', async (c) => {
           e.projectId != null &&
           !agentAllowList.includes(e.projectId)
         ) {
+          return;
+        }
+        // fix #2: per-user visibility — drop project-scoped events for a human
+        // who can't see the whole workspace (traverse-only invitee). Mirrors
+        // the replay-loop check above so live + replay narrow identically.
+        if (userVisibleProjects && e.projectId != null && !userVisibleProjects.has(e.projectId)) {
           return;
         }
         // H1/H2: subject-based visibility (see replay loop above).

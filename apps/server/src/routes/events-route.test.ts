@@ -172,7 +172,8 @@ test.skip('Last-Event-Id replay: events from the table flow before live events',
 // allow-list narrowing never fired.
 // ---------------------------------------------------------------------------
 
-import { documents, projects } from '../db/schema.ts';
+import { documents, projectAccess, projects, users } from '../db/schema.ts';
+import { createSession } from '../lib/auth.ts';
 
 async function seedSecondProject(seedWorkspaceId: string): Promise<string> {
   const id = nanoid();
@@ -793,6 +794,163 @@ test('F3: agent allow-list narrows server-side replay filter (foreign projectId 
 
   expect(text).toContain('evt-a-allowed');
   expect(text).not.toContain('evt-b-leaked');
+});
+
+// ---------------------------------------------------------------------------
+// Fix #2 (drop-workspace-tenancy) — /events narrows by PER-USER project
+// visibility, not just by the agent allow-list.
+//
+// Post-tenancy, a user invited to ONLY one project can TRAVERSE the workspace
+// (canSeeWorkspace's project_access clause) to reach that project — so they now
+// pass resolveWorkspace and can hit /events. The old F3 narrowing only bounds
+// AGENT tokens; a human session was unbounded because, under the OLD model,
+// any workspace member could see every project in the workspace. That is no
+// longer true. Without per-user narrowing, this project-only invitee receives
+// events for EVERY project in the workspace — including ones they were never
+// granted.
+//
+// NOTE: the naive "a user with NO grant to ws B gets zero B events" test does
+// NOT catch this — this user DOES have a grant (a project-level one), and so
+// legitimately traverses to the workspace. The leak is the SIBLING project's
+// events. This test exercises exactly that traverse case on the deterministic
+// REPLAY path (a session cookie + Last-Event-Id anchor).
+// ---------------------------------------------------------------------------
+
+test('fix#2: project-only invitee does NOT receive sibling-project events via /events replay', async () => {
+  const { app, db: testDb, seed } = await makeTestApp();
+
+  // Second project 'ops' in acme — the invitee is NOT granted this one.
+  const opsId = nanoid();
+  await testDb.insert(projects).values({
+    id: opsId, workspaceId: seed.workspace.id, slug: 'ops', name: 'Ops',
+  });
+
+  // A project-only invitee: instance role 'member', a project_access grant to
+  // 'web' (seed.project) ONLY, and crucially NO workspace_access grant. This
+  // user reaches the workspace solely via the traverse clause.
+  const inviteeId = nanoid();
+  await testDb.insert(users).values({
+    id: inviteeId, email: 'invitee@test.local', name: 'Invitee', role: 'member',
+  });
+  await testDb.insert(projectAccess).values({ userId: inviteeId, projectId: seed.project.id });
+
+  // Three events: an anchor (workspace-level), one in 'web' (granted), one in
+  // 'ops' (NOT granted). Direct insert with explicit seq mirrors the F3 replay
+  // test above so the replay cursor is deterministic.
+  const { events } = await import('../db/schema.ts');
+  await testDb.insert(events).values([
+    {
+      id: 'fix2-anchor',
+      workspaceId: seed.workspace.id,
+      projectId: null,
+      documentId: null,
+      kind: 'workspace.created',
+      actor: seed.user.id,
+      payload: {},
+      createdAt: new Date(Date.now() - 90_000),
+      seq: 8000,
+    },
+    {
+      id: 'fix2-WEB-event',
+      workspaceId: seed.workspace.id,
+      projectId: seed.project.id, // granted project
+      documentId: null,
+      kind: 'document.created',
+      actor: seed.user.id,
+      payload: { marker: 'WEB' },
+      createdAt: new Date(Date.now() - 60_000),
+      seq: 8001,
+    },
+    {
+      id: 'fix2-OPS-event',
+      workspaceId: seed.workspace.id,
+      projectId: opsId, // sibling project — NOT granted to the invitee
+      documentId: null,
+      kind: 'document.created',
+      actor: seed.user.id,
+      payload: { marker: 'OPS' },
+      createdAt: new Date(Date.now() - 30_000),
+      seq: 8002,
+    },
+  ]);
+
+  // Drive as the invitee's SESSION (not an agent token) so the F3 path is a
+  // no-op and only the per-user narrowing governs the result.
+  const session = await createSession(inviteeId);
+  const res = await app.request('/api/v1/w/acme/events', {
+    headers: {
+      Cookie: `folio_session=${session.id}`,
+      'Last-Event-Id': 'fix2-anchor',
+    },
+  });
+  expect(res.status).toBe(200);
+  const text = await drainReplay(res);
+
+  // The granted project's event MUST be delivered.
+  expect(text).toContain('fix2-WEB-event');
+  expect(text).toContain('WEB');
+  // The sibling project's event MUST NOT leak.
+  expect(text).not.toContain('fix2-OPS-event');
+  expect(text).not.toContain('OPS');
+});
+
+test('fix#2: workspace owner still receives ALL project events via /events replay (no over-narrowing)', async () => {
+  const { app, db: testDb, seed } = await makeTestApp();
+
+  // Second project the owner has no DIRECT project grant to — but owner sees
+  // the whole workspace, so userVisibleProjects must stay unrestricted (null).
+  const opsId = nanoid();
+  await testDb.insert(projects).values({
+    id: opsId, workspaceId: seed.workspace.id, slug: 'ops', name: 'Ops',
+  });
+
+  const { events } = await import('../db/schema.ts');
+  await testDb.insert(events).values([
+    {
+      id: 'fix2o-anchor',
+      workspaceId: seed.workspace.id,
+      projectId: null,
+      documentId: null,
+      kind: 'workspace.created',
+      actor: seed.user.id,
+      payload: {},
+      createdAt: new Date(Date.now() - 90_000),
+      seq: 8100,
+    },
+    {
+      id: 'fix2o-WEB-event',
+      workspaceId: seed.workspace.id,
+      projectId: seed.project.id,
+      documentId: null,
+      kind: 'document.created',
+      actor: seed.user.id,
+      payload: { marker: 'WEB' },
+      createdAt: new Date(Date.now() - 60_000),
+      seq: 8101,
+    },
+    {
+      id: 'fix2o-OPS-event',
+      workspaceId: seed.workspace.id,
+      projectId: opsId,
+      documentId: null,
+      kind: 'document.created',
+      actor: seed.user.id,
+      payload: { marker: 'OPS' },
+      createdAt: new Date(Date.now() - 30_000),
+      seq: 8102,
+    },
+  ]);
+
+  // Owner session (seed.user is the instance owner with workspace_access).
+  const res = await app.request('/api/v1/w/acme/events', {
+    headers: { Cookie: seed.sessionCookie, 'Last-Event-Id': 'fix2o-anchor' },
+  });
+  expect(res.status).toBe(200);
+  const text = await drainReplay(res);
+
+  // Owner sees BOTH projects — narrowing must not have fired.
+  expect(text).toContain('fix2o-WEB-event');
+  expect(text).toContain('fix2o-OPS-event');
 });
 
 // ---------------------------------------------------------------------------
