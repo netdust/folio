@@ -13,6 +13,7 @@ import {
   apiTokens,
   documents,
   events,
+  projectAccess,
   projects as schemaProjects,
   tables,
   users,
@@ -405,6 +406,67 @@ describe('createRun', () => {
     // Member → explicit list of THIS workspace's project ids, never '*'.
     expect(fm.caller_project_ids).not.toBe(null);
     expect(fm.caller_project_ids).toContain(seed.project.id);
+    expect(fm.caller_project_ids).not.toContain('*');
+  });
+
+  test('member with a project_access grant to ONLY p1 → caller_project_ids is [p1], NOT every ws project (T-C narrowing)', async () => {
+    // Caller-bounded authority (T-C): post-tenancy a member may hold a
+    // project_access grant to a SUBSET of the workspace's projects and reach the
+    // workspace only via the traverse clause. The run-ceiling must clamp to the
+    // projects the caller can ACTUALLY SEE (canSeeProject), NOT every project in
+    // the workspace — otherwise the run borrows reach to sibling projects the
+    // caller can't see (privilege widening). seed.project is p1; seed a sibling
+    // p2 the member is NOT granted, then assert p2 is absent from the ceiling.
+    const { db, seed } = await makeTestApp();
+
+    // A second project in the SAME workspace that the member cannot see.
+    const p2Id = nanoid();
+    await db.insert(schemaProjects).values({
+      id: p2Id,
+      workspaceId: seed.workspace.id,
+      slug: 'p2',
+      name: 'P2',
+    });
+
+    // A plain member (instance role `member`, the users default) holding ONLY a
+    // project_access grant to p1 (= seed.project) — NO workspace_access. The
+    // traverse clause lets them through canSeeWorkspace; canSeeProject is true
+    // for p1 and FALSE for p2.
+    const memberId = nanoid();
+    await db.insert(users).values({
+      id: memberId,
+      email: 'carol@test.local',
+      name: 'Carol',
+      passwordHash: 'x',
+    });
+    await db.insert(projectAccess).values({ userId: memberId, projectId: seed.project.id });
+    const [member] = await db.select().from(users).where(eq(users.id, memberId));
+
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    // Parent the run in p1 — the project the member can see.
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+
+    const result = await createRun({
+      workspace: seed.workspace,
+      project: seed.project,
+      runsTable,
+      agent,
+      actor: member!,
+      input: {
+        parentDocumentId: parent.id,
+        firedBy: 'manual',
+        chainId: crypto.randomUUID(),
+        triggerId: null,
+      },
+    });
+
+    const fm = result.document.frontmatter as AgentRunFrontmatter;
+    expect(fm.caller_project_ids).not.toBe(null);
+    // Only the project the caller can SEE — never the sibling p2.
+    expect(fm.caller_project_ids).toContain(seed.project.id);
+    expect(fm.caller_project_ids).not.toContain(p2Id);
     expect(fm.caller_project_ids).not.toContain('*');
   });
 

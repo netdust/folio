@@ -35,7 +35,7 @@ import {
 } from '../db/schema.ts';
 import { roleToScopes } from '../lib/agent-schema.ts';
 import { callerProjectsFor } from '../lib/agent-projects.ts';
-import { canSeeWorkspace, userRole } from '../lib/access.ts';
+import { canSeeProject, canSeeWorkspace, userRole } from '../lib/access.ts';
 
 // Drizzle tx and DB share the same query API. Mirrored verbatim from
 // `services/comments.ts` so read helpers can be called from inside a tx.
@@ -180,20 +180,29 @@ export async function createRun(
     }
     const callerRole = await userRole(db, actor.id);
     callerScopes = roleToScopes(callerRole);
-    // Project membership in Folio is WORKSPACE-LEVEL only — there is no
-    // per-project membership table, so a workspace member can see every
-    // project in that workspace. owner/admin → null (no narrowing, via
-    // callerProjectsFor); a member is clamped to the EXPLICIT list of this
-    // workspace's project ids — NOT wildcard (D5), so the snapshot can never
-    // borrow an agent's broader cross-workspace reach. An owner/admin passes
-    // an empty projectIds list (unused on the null branch).
+    // Post-tenancy (drop workspace-as-tenancy-boundary): there is no per-project
+    // membership table. A member's run-ceiling is the projects they can ACTUALLY
+    // SEE in this workspace (canSeeProject) — their project_access grants, plus
+    // ALL ws projects if they hold a workspace_access grant. NOT every workspace
+    // project: a project-only invitee reaches the workspace via the traverse
+    // clause but canSeeProject is false for the sibling projects, so the run must
+    // not borrow reach to projects the caller can't see. (Caller-bounded
+    // authority — the run never exceeds its caller.) owner/admin → null (no
+    // narrowing, via callerProjectsFor); a ws-grant member → canSeeProject is
+    // true for every ws project, so `visible` = all (the old behavior is
+    // preserved for that case). owner/admin passes an empty projectIds list
+    // (unused on the null branch).
     let memberProjectIds: string[] = [];
     if (callerRole === 'member') {
       const wsProjects = await db.query.projects.findMany({
         where: eq(projects.workspaceId, workspace.id),
         columns: { id: true },
       });
-      memberProjectIds = wsProjects.map((p) => p.id);
+      const visible: string[] = [];
+      for (const p of wsProjects) {
+        if (await canSeeProject(db, actor.id, p.id)) visible.push(p.id);
+      }
+      memberProjectIds = visible;
     }
     callerProjectIds = callerProjectsFor({ role: callerRole, projectIds: memberProjectIds });
   }
