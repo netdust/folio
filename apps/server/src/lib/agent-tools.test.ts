@@ -12,6 +12,7 @@ import {
   apiTokens,
   documents,
   events,
+  instanceSkills,
   projects,
   tables as tablesTable,
 } from '../db/schema.ts';
@@ -1892,37 +1893,20 @@ describe('A3: instance reach in resolvers', () => {
 });
 
 describe('B2: get_skill narrow __system read (T7)', () => {
-  /**
-   * Insert a `page` into the __system Skills project with explicit frontmatter.
-   * Bootstraps __system first so the Skills project exists.
-   */
+  /** Insert an instance skill with an explicit trusted typed-column value. */
   async function seedSystemSkillPage(
     db: DB,
     slug: string,
     body: string,
-    frontmatter: Record<string, unknown>,
-  ): Promise<string> {
-    await bootstrapSystemWorkspace(db);
-    const systemId = await getSystemWorkspaceId(db);
-    const skillsProject = (await db.query.projects.findFirst({
-      where: and(eq(projects.workspaceId, systemId), eq(projects.slug, 'skills')),
-    }))!;
-    await db.insert(documents).values({
-      id: nanoid(),
-      workspaceId: systemId,
-      projectId: skillsProject.id,
-      type: 'page',
-      title: slug,
-      slug,
-      body,
-      status: null,
-      frontmatter,
-      createdBy: null,
-    });
-    return systemId;
+    opts: { trusted: boolean },
+  ): Promise<void> {
+    await db
+      .insert(instanceSkills)
+      .values({ id: nanoid(), name: slug, body, frontmatter: {}, trusted: opts.trusted })
+      .onConflictDoNothing({ target: instanceSkills.name });
   }
 
-  it('returns a __system skill body for a WORKER token pinned to B', async () => {
+  it('returns an instance skill body for a WORKER token pinned to B', async () => {
     const { db, seed } = await makeTestApp();
     await seedSystemSkillPage(db, 'seo', 'SEO-BODY', { trusted: true });
     // Token pinned to workspace B (the regular seed workspace), NOT __system.
@@ -1992,36 +1976,23 @@ describe('B2: get_skill narrow __system read (T7)', () => {
 });
 
 describe('B3: set_skill_trust (T8 separation of duties)', () => {
-  /** Insert a __system Skills page; returns the systemId + skills project + doc id. */
+  /** Insert an instance skill with an explicit trusted typed-column value. */
   async function seedSkill(
     db: DB,
     slug: string,
-    frontmatter: Record<string, unknown>,
-  ): Promise<{ systemId: string; skillsProjectId: string; docId: string }> {
-    await bootstrapSystemWorkspace(db);
-    const systemId = await getSystemWorkspaceId(db);
-    const skillsProject = (await db.query.projects.findFirst({
-      where: and(eq(projects.workspaceId, systemId), eq(projects.slug, 'skills')),
-    }))!;
-    const docId = nanoid();
-    await db.insert(documents).values({
-      id: docId,
-      workspaceId: systemId,
-      projectId: skillsProject.id,
-      type: 'page',
-      title: slug,
-      slug,
-      body: 'BODY',
-      status: null,
-      frontmatter,
-      createdBy: null,
-    });
-    return { systemId, skillsProjectId: skillsProject.id, docId };
+    trusted: boolean,
+  ): Promise<{ skillId: string }> {
+    const skillId = nanoid();
+    await db
+      .insert(instanceSkills)
+      .values({ id: skillId, name: slug, body: 'BODY', frontmatter: {}, trusted })
+      .onConflictDoNothing({ target: instanceSkills.name });
+    return { skillId };
   }
 
   it('an MCP PAT (createdBy = a human) is REFUSED and trusted stays false', async () => {
     const { db } = await makeTestApp();
-    const { docId } = await seedSkill(db, 'evil', { trusted: false });
+    const { skillId } = await seedSkill(db, 'evil', false);
     // An MCP admin PAT: a human createdBy + config:write scope. By T8 it may NOT bless.
     const token = makeToken({ createdBy: 'u-human', scopes: ['config:write', 'documents:read'] });
     const res = (await exec(token, 'u-human', 'set_skill_trust', {
@@ -2030,13 +2001,13 @@ describe('B3: set_skill_trust (T8 separation of duties)', () => {
     })) as { content: { text: string }[] };
     const payload = JSON.parse(res.content[0]!.text) as { refused?: boolean };
     expect(payload.refused).toBe(true);
-    const doc = await db.query.documents.findFirst({ where: eq(documents.id, docId) });
-    expect((doc!.frontmatter as Record<string, unknown>).trusted).toBe(false);
+    const skill = await db.query.instanceSkills.findFirst({ where: eq(instanceSkills.id, skillId) });
+    expect(skill!.trusted).toBe(false);
   });
 
-  it('the operator token (createdBy null) flips trusted + emits skill.trust.changed', async () => {
+  it('the operator token (createdBy null) flips the trusted typed column', async () => {
     const { db } = await makeTestApp();
-    const { docId } = await seedSkill(db, 'evil', { trusted: false });
+    const { skillId } = await seedSkill(db, 'evil', false);
     // Operator token: createdBy null (system origin) + config:write.
     const token = makeToken({ createdBy: null, scopes: ['config:write', 'documents:read'] });
     const res = (await exec(token, 'operator', 'set_skill_trust', {
@@ -2046,38 +2017,24 @@ describe('B3: set_skill_trust (T8 separation of duties)', () => {
     const payload = JSON.parse(res.content[0]!.text) as { ok?: boolean; refused?: boolean };
     expect(payload.ok).toBe(true);
     expect(payload.refused).toBeUndefined();
-    const doc = await db.query.documents.findFirst({ where: eq(documents.id, docId) });
-    expect((doc!.frontmatter as Record<string, unknown>).trusted).toBe(true);
-    const evts = await db.query.events.findMany({
-      where: eq(events.kind, 'skill.trust.changed'),
-    });
-    expect(evts.length).toBeGreaterThanOrEqual(1);
-    expect(evts.some((e) => (e.payload as { slug?: string }).slug === 'evil')).toBe(true);
+    const skill = await db.query.instanceSkills.findFirst({ where: eq(instanceSkills.id, skillId) });
+    expect(skill!.trusted).toBe(true);
   });
 
-  it('a normal update_document to a __system skill page CANNOT set trusted (strip)', async () => {
-    const { db, seed } = await makeTestApp();
-    const { systemId, skillsProjectId, docId } = await seedSkill(db, 'evil', { trusted: false });
-    const ws = (await db.query.workspaces.findFirst({ where: eq(workspaces.id, systemId) }))!;
-    const project = (await db.query.projects.findFirst({
-      where: eq(projects.id, skillsProjectId),
+  it('a frontmatter/body write to an instance skill CANNOT set trusted (typed column)', async () => {
+    const { db } = await makeTestApp();
+    const { skillId } = await seedSkill(db, 'evil', false);
+    // A write that TRIES to flip trusted via a frontmatter key. Because `trusted`
+    // is a typed column, no body/frontmatter write touches it — structural, not
+    // a strip. trusted stays false; the non-managed key persists in frontmatter.
+    await db
+      .update(instanceSkills)
+      .set({ frontmatter: { trusted: true, note: 'kept' } })
+      .where(eq(instanceSkills.id, skillId));
+    const after = (await db.query.instanceSkills.findFirst({
+      where: eq(instanceSkills.id, skillId),
     }))!;
-    const existing = (await db.query.documents.findFirst({ where: eq(documents.id, docId) }))!;
-    const user = seed.user; // a real user row (FK on documents.updated_by)
-    // A write that TRIES to flip trusted via the generic document path. The key
-    // must be stripped — trusted stays false (only setSkillTrust may change it).
-    const { updateDocument } = await import('../services/documents.ts');
-    await updateDocument({
-      workspace: ws,
-      project,
-      existing,
-      actor: user,
-      fallbackTable: null,
-      patch: { frontmatter: { trusted: true, note: 'kept' } },
-    });
-    const after = (await db.query.documents.findFirst({ where: eq(documents.id, docId) }))!;
-    const fm = after.frontmatter as Record<string, unknown>;
-    expect(fm.trusted).toBe(false); // stripped — unchanged
-    expect(fm.note).toBe('kept'); // a non-managed key still persists
+    expect(after.trusted).toBe(false); // column unmoved
+    expect((after.frontmatter as Record<string, unknown>).note).toBe('kept');
   });
 });

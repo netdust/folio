@@ -50,6 +50,7 @@ import {
 } from '../services/agent-runs.ts';
 import { runClaudeCode, type SpawnFn } from './cc-executor.ts';
 import { intersectAgentProjects } from './agent-projects.ts';
+import { getInstanceSkill } from './instance-skills.ts';
 import { type AuthorContext, createComment, listComments } from '../services/comments.ts';
 import {
   type AgentRunFrontmatter,
@@ -501,32 +502,17 @@ async function loadAgentDefinition(
   const fm = agent.frontmatter as { skills?: string[] };
   const slugs = fm.skills ?? [];
   if (slugs.length === 0) return { prompt: agent.body ?? '', skills: [] };
-  // B1: skills live ONLY in the `__system` Skills project — NEVER the agent's
-  // home workspace. A worker agent in workspace B that declares skills resolves
-  // them from __system (its home has no Skills project). For the operator (home
-  // IS __system) this is the same project; for a worker it crosses workspaces.
-  const systemId = await getSystemWorkspaceId(db);
-  const skillsProject = await db.query.projects.findFirst({
-    where: and(eq(projectsTable.workspaceId, systemId), eq(projectsTable.slug, 'skills')),
-  });
-  if (!skillsProject) throw new HTTPError('MISSING_SKILL', '__system Skills project not found', 500);
+  // Phase 4 (drop-workspace-tenancy): skills live in the `instance_skills` table,
+  // resolved by name — NO `__system` workspace, NO Skills project. Same no-broad-
+  // fallback guarantee: a declared-but-absent skill throws MISSING_SKILL.
   const skills: Array<{ slug: string; body: string; trusted: boolean }> = [];
   for (const slug of slugs) {
-    const doc = await db.query.documents.findFirst({
-      where: and(
-        eq(documents.workspaceId, systemId),
-        eq(documents.projectId, skillsProject.id),
-        eq(documents.slug, slug),
-        eq(documents.type, 'page'),
-      ),
-    });
-    if (!doc) throw new HTTPError('MISSING_SKILL', `skill "${slug}" not found in the Skills project`, 500);
-    // B1 trust channel: a skill is TRUSTED only if it has been explicitly
-    // blessed (`frontmatter.trusted === true`). Any other value — including an
-    // absent key (the pre-B4 seeded state) — routes the skill as untrusted
-    // DATA, never into the trusted instruction/reference channel.
-    const sfm = (doc.frontmatter ?? {}) as { trusted?: boolean };
-    skills.push({ slug, body: doc.body ?? '', trusted: sfm.trusted === true });
+    const skill = await getInstanceSkill(db, slug);
+    if (!skill) throw new HTTPError('MISSING_SKILL', `skill "${slug}" not found in instance skills`, 500);
+    // Trust channel (invariant 11): `trusted` is the TYPED COLUMN — a skill routes
+    // into the trusted instruction/reference channel only when the column is true.
+    // Any other state routes it as untrusted DATA. Import/edit can't forge it.
+    skills.push({ slug, body: skill.body, trusted: skill.trusted === true });
   }
   return { prompt: agent.body ?? '', skills };
 }

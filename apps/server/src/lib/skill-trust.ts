@@ -1,9 +1,7 @@
-import { and, eq } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import type { ApiToken, User } from '../db/schema.ts';
-import { documents, projects } from '../db/schema.ts';
+import { instanceSkills } from '../db/schema.ts';
 import type { DB } from '../db/client.ts';
-import { emitEvent, txWithEvents } from './events.ts';
-import { getSystemWorkspaceId } from './system-workspace.ts';
 
 /**
  * Skill-blessing separation of duties (T8). Authoring a skill is open; flipping
@@ -33,49 +31,30 @@ export interface SetSkillTrustArgs {
 }
 
 /**
- * Flip the `trusted` flag on a __system skills page — the ONLY path that may
- * change it (normal create/update_document writes to a __system skills page
- * strip `trusted`; see services/documents.ts). T8 gate is enforced via
- * canBlessSkill; everything else throws so the tool/route layer surfaces it as
- * a refusal. Emits `skill.trust.changed` through the single event path.
+ * Flip the `trusted` TYPED COLUMN on an instance skill — the ONLY path that may
+ * change it (invariant 11). Because `trusted` is a column, no body/frontmatter
+ * write (import, restore, update_skill) can set it: the forging path is closed
+ * STRUCTURALLY, not by stripping. T8 gate enforced via canBlessSkill; everything
+ * else throws so the tool/route layer surfaces it as a refusal.
+ *
+ * NOTE (Phase 4): the prior `skill.trust.changed` event was emitted scoped to
+ * `__system` (which is being torn down). It had no consumer; the emit is dropped
+ * with the `__system` teardown (consistent with the `user.role.changed` decision).
+ * The trust flip is still the single sanctioned mutator of the column.
  */
 export async function setSkillTrust(db: DB, args: SetSkillTrustArgs): Promise<void> {
-  const { slug, trusted, token, sessionUser, actor } = args;
+  const { slug, trusted, token, sessionUser } = args;
   if (!canBlessSkill(token, sessionUser)) {
     throw new Error('forbidden: skill blessing requires a session user or the system operator');
   }
 
-  const systemId = await getSystemWorkspaceId(db);
-  const skillsProject = await db.query.projects.findFirst({
-    where: and(eq(projects.workspaceId, systemId), eq(projects.slug, 'skills')),
+  const skill = await db.query.instanceSkills.findFirst({
+    where: eq(instanceSkills.name, slug),
   });
-  if (!skillsProject) throw new Error('skills library not found');
+  if (!skill) throw new Error('skill not found');
 
-  const doc = await db.query.documents.findFirst({
-    where: and(
-      eq(documents.workspaceId, systemId),
-      eq(documents.projectId, skillsProject.id),
-      eq(documents.slug, slug),
-      eq(documents.type, 'page'),
-    ),
-  });
-  if (!doc) throw new Error('skill not found');
-
-  const existingFm = (doc.frontmatter ?? {}) as Record<string, unknown>;
-  const nextFm = { ...existingFm, trusted };
-
-  await txWithEvents(db, async (tx) => {
-    await tx
-      .update(documents)
-      .set({ frontmatter: nextFm, updatedAt: new Date() })
-      .where(eq(documents.id, doc.id));
-    await emitEvent(tx, {
-      workspaceId: systemId,
-      projectId: skillsProject.id,
-      documentId: doc.id,
-      kind: 'skill.trust.changed',
-      actor,
-      payload: { slug, trusted },
-    });
-  });
+  await db
+    .update(instanceSkills)
+    .set({ trusted })
+    .where(eq(instanceSkills.id, skill.id));
 }

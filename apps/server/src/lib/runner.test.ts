@@ -22,6 +22,7 @@ import {
   apiTokens,
   documents,
   events,
+  instanceSkills,
   projects,
   tables,
 } from '../db/schema.ts';
@@ -38,6 +39,7 @@ import { decryptSecret, encryptSecret } from './crypto.ts';
 import { HTTPError } from './http.ts';
 import { mcpInvalidParams } from './mcp-errors.ts';
 import { __setCcSpawnForTest, loadContext, rejectRun, runAgent, runAgentResume } from './runner.ts';
+import { seedInstanceSkills } from './instance-skills.ts';
 import { bootstrapSystemWorkspace, getSystemWorkspaceId } from './system-workspace.ts';
 import { effectiveReach } from './token-reach.ts';
 import { workspaces } from '../db/schema.ts';
@@ -2518,31 +2520,11 @@ async function seedLibraryAgentWithSkills(
   const systemWs = (await db.query.workspaces.findFirst({
     where: eq(workspaces.id, systemId),
   }))!;
-  // B1: skills route by `frontmatter.trusted`. The seeded `folio` page ships
-  // with `frontmatter:{}` (B4 blesses it later). These existing-behavior tests
-  // exercise the TRUSTED channel, so bless the named __system skill pages here
-  // — mirroring what B4 will persist. Without this, folio would resolve as
-  // untrusted and correctly route OUT of the trusted reference block.
-  const skillsProject = await db.query.projects.findFirst({
-    where: and(eq(projects.workspaceId, systemId), eq(projects.slug, 'skills')),
-  });
-  if (skillsProject) {
-    for (const slug of skillSlugs) {
-      await db
-        .update(documents)
-        .set({
-          frontmatter: sql`json_set(coalesce(${documents.frontmatter}, json('{}')), '$.trusted', json('true'))`,
-        })
-        .where(
-          and(
-            eq(documents.workspaceId, systemId),
-            eq(documents.projectId, skillsProject.id),
-            eq(documents.slug, slug),
-            eq(documents.type, 'page'),
-          ),
-        );
-    }
-  }
+  // Phase 4: skills resolve from `instance_skills` by name (typed `trusted`
+  // column). Seed only the canonical folio skill. Tests that need OTHER named
+  // skills seed them explicitly via seedSystemSkillPage; tests that assert
+  // fail-closed (MISSING_SKILL) deliberately leave the slug unseeded.
+  await seedInstanceSkills(db);
   const libraryAgent = await seedAgent(
     db,
     systemWs,
@@ -2564,9 +2546,9 @@ async function seedLibraryAgentWithSkills(
 }
 
 /**
- * Insert a `page` into the __system Skills project with an explicit `trusted`
- * frontmatter flag (B1 — trust-channel routing). Bootstraps __system first so
- * the Skills project exists, then inserts directly under it.
+ * Insert an instance skill with an explicit `trusted` typed-column value
+ * (invariant 11 — trust-channel routing). Phase 4: skills live in
+ * `instance_skills` by name, not the (removed) __system Skills project.
  */
 async function seedSystemSkillPage(
   db: TestDB,
@@ -2574,24 +2556,14 @@ async function seedSystemSkillPage(
   body: string,
   trusted: boolean,
 ): Promise<string> {
+  await db
+    .insert(instanceSkills)
+    .values({ id: nanoid(), name: slug, body, frontmatter: {}, trusted })
+    .onConflictDoNothing({ target: instanceSkills.name });
+  // Returned for callers that still want a __system id (library-agent stamping,
+  // removed in Task 17). Bootstrap so the id is resolvable until then.
   await bootstrapSystemWorkspace(db);
-  const systemId = await getSystemWorkspaceId(db);
-  const skillsProject = (await db.query.projects.findFirst({
-    where: and(eq(projects.workspaceId, systemId), eq(projects.slug, 'skills')),
-  }))!;
-  await db.insert(documents).values({
-    id: nanoid(),
-    workspaceId: systemId,
-    projectId: skillsProject.id,
-    type: 'page',
-    title: slug,
-    slug,
-    body,
-    status: null,
-    frontmatter: { trusted },
-    createdBy: null,
-  });
-  return systemId;
+  return getSystemWorkspaceId(db);
 }
 
 /**
@@ -2708,12 +2680,14 @@ describe('Phase B — loadAgentDefinition (definitional skill load)', () => {
     expect(loaded!.agentSkills.length).toBe(1);
     expect(loaded!.agentSkills[0]!.slug).toBe('folio');
     expect(loaded!.agentSkills[0]!.body).toContain('Folio skill — the API manual');
+    // Phase 4: the seeded folio instance skill is trusted via the typed column.
+    expect(loaded!.agentSkills[0]!.trusted).toBe(true);
   });
 
-  test('CANNOT read a non-Skills __system doc via a skill slug (B3/B9)', async () => {
-    // The Reference project holds 'Set up a project' (slug 'set-up-a-project') —
-    // a `page` in a DIFFERENT __system project. A skill slug naming it must NOT
-    // resolve: the read is fenced to the Skills project only → MISSING_SKILL.
+  test('CANNOT read a non-skill via a skill slug (fail-closed)', async () => {
+    // 'set-up-a-project' is reference content, never seeded into instance_skills.
+    // A skill slug naming it must NOT resolve — only instance_skills rows are
+    // skills → MISSING_SKILL (no broad fallback).
     const scaffolded = await scaffold();
     await seedLibraryAgentWithSkills(scaffolded, ['set-up-a-project']);
 

@@ -8,6 +8,7 @@ import type { Env } from '../env.ts';
 import { createDocument } from '../services/documents.ts';
 import { userRole } from './access.ts';
 import { roleToScopes } from './agent-schema.ts';
+import { seedInstanceSkills } from './instance-skills.ts';
 import { HTTPError } from './http.ts';
 import {
   FOLIO_SKILL_BODY,
@@ -616,6 +617,9 @@ export async function runBootTasks(
   env: Pick<Env, 'FOLIO_INSTANCE_OWNER'>,
 ): Promise<void> {
   await bootstrapSystemWorkspace(db);
+  // Phase 4: instance skills seeded at boot (idempotent). Task 19 restructures
+  // runBootTasks to drop bootstrapSystemWorkspace; the seeder call stays.
+  await seedInstanceSkills(db);
 
   const ownerEmail = env.FOLIO_INSTANCE_OWNER;
   if (!ownerEmail) return; // M8: no owner configured → bootstrap only

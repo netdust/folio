@@ -26,8 +26,17 @@
 import { describe, expect, test } from 'bun:test';
 import { and, eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
-import { aiKeys, apiTokens, documents, events, projects, tables } from '../db/schema.ts';
+import {
+  aiKeys,
+  apiTokens,
+  documents,
+  events,
+  instanceSkills,
+  projects,
+  tables,
+} from '../db/schema.ts';
 import type { ApiToken, Document, User } from '../db/schema.ts';
+import { seedInstanceSkills } from '../lib/instance-skills.ts';
 import { newApiToken } from '../lib/auth.ts';
 import { encryptSecret } from '../lib/crypto.ts';
 import { executeTool } from '../lib/agent-tools.ts';
@@ -58,9 +67,10 @@ function toolPayload<T>(out: unknown): T {
 }
 
 /**
- * Insert a `page` into the __system Skills project with an explicit `trusted`
- * frontmatter flag (B1 trust-channel routing). Bootstraps __system first so the
- * Skills project exists. Mirrors runner.test.ts::seedSystemSkillPage.
+ * Seed an instance skill with an explicit `trusted` typed-column value
+ * (invariant 11 trust-channel routing). Phase 4: skills live in `instance_skills`
+ * by name, not the (removed) __system Skills project. Returns the __system id
+ * (still bootstrapped) for callers that stamp library-agent home until Task 17.
  */
 async function seedSystemSkillPage(
   db: TestDB,
@@ -68,24 +78,12 @@ async function seedSystemSkillPage(
   body: string,
   trusted: boolean,
 ): Promise<string> {
+  await db
+    .insert(instanceSkills)
+    .values({ id: nanoid(), name: slug, body, frontmatter: {}, trusted })
+    .onConflictDoNothing({ target: instanceSkills.name });
   await bootstrapSystemWorkspace(db);
-  const systemId = await getSystemWorkspaceId(db);
-  const skillsProject = (await db.query.projects.findFirst({
-    where: and(eq(projects.workspaceId, systemId), eq(projects.slug, 'skills')),
-  }))!;
-  await db.insert(documents).values({
-    id: nanoid(),
-    workspaceId: systemId,
-    projectId: skillsProject.id,
-    type: 'page',
-    title: slug,
-    slug,
-    body,
-    status: null,
-    frontmatter: { trusted },
-    createdBy: null,
-  });
-  return systemId;
+  return getSystemWorkspaceId(db);
 }
 
 /** Resolve the __system Skills project row (assumes __system bootstrapped). */
@@ -333,20 +331,14 @@ describe('S1: worker in B pulls + pushes a __system skill (B1 + B2)', () => {
     expect(ctx!.agentSkills.length).toBe(1);
     expect(ctx!.agentSkills[0]!.slug).toBe('seo');
     expect(ctx!.agentSkills[0]!.trusted).toBe(true);
-    // Body came from the __system page — B has no Skills project at all.
+    // Body came from the instance skill — B has no skill of its own.
     expect(ctx!.agentSkills[0]!.body).toBe('SEO-GUIDANCE');
-    // Prove provenance: the seo page lives under __system's skills project.
-    const seoPage = await db.query.documents.findFirst({
-      where: and(
-        eq(documents.workspaceId, systemId),
-        eq(documents.projectId, skillsProject.id),
-        eq(documents.slug, 'seo'),
-        eq(documents.type, 'page'),
-      ),
+    // Prove provenance: the seo skill is an instance_skills row (not a B doc).
+    const seoSkill = await db.query.instanceSkills.findFirst({
+      where: eq(instanceSkills.name, 'seo'),
     });
-    expect(seoPage).toBeDefined();
-    expect(seoPage!.workspaceId).toBe(systemId);
-    expect(seoPage!.workspaceId).not.toBe(bWorkspaceId);
+    expect(seoSkill).toBeDefined();
+    expect(seoSkill!.trusted).toBe(true);
 
     // --- PULL: get_skill with the B-pinned worker token returns the seo body. ---
     const pulled = toolPayload<{ slug: string; body: string; trusted: boolean }>(
@@ -393,21 +385,13 @@ describe('S2: trust separation of duties end-to-end (B3 + B1)', () => {
     const bProjectId = seed.project.id;
     await seedAiKey(db, bWorkspaceId);
 
-    // `evil` seeded trusted:false (a normal create — body cannot self-bless).
-    const systemId = await seedSystemSkillPage(db, 'evil', 'EVIL-SKILL-BODY', false);
-    const skillsProject = await getSkillsProject(db, systemId);
-    const systemWs = (await db.query.workspaces.findFirst({
-      where: (w, { eq: e }) => e(w.id, systemId),
+    // `evil` seeded trusted:false (a fresh import — the typed column is the only
+    // trust source; nothing in a body/frontmatter write can set it).
+    await seedSystemSkillPage(db, 'evil', 'EVIL-SKILL-BODY', false);
+    const before = (await db.query.instanceSkills.findFirst({
+      where: eq(instanceSkills.name, 'evil'),
     }))!;
-    const evilDoc = (await db.query.documents.findFirst({
-      where: and(
-        eq(documents.workspaceId, systemId),
-        eq(documents.projectId, skillsProject.id),
-        eq(documents.slug, 'evil'),
-        eq(documents.type, 'page'),
-      ),
-    }))!;
-    expect((evilDoc.frontmatter as { trusted?: boolean }).trusted).toBe(false);
+    expect(before.trusted).toBe(false);
 
     // --- A worker run that loads `evil` BEFORE any bless. Worker home = B. ---
     await seedAgent(
@@ -433,29 +417,25 @@ describe('S2: trust separation of duties end-to-end (B3 + B1)', () => {
     // SECURITY: an unblessed skill rides the UNTRUSTED channel.
     expect(preCtx!.agentSkills[0]!.trusted).toBe(false);
 
-    // --- A normal update_document with frontmatter{trusted:true} must NOT flip
-    //     it (stripManagedSkillTrust on the service layer). ---
-    await updateDocument({
-      workspace: systemWs,
-      project: skillsProject,
-      fallbackTable: null,
-      actor: { id: seed.user.id } as User,
-      existing: evilDoc,
-      patch: { frontmatter: { trusted: true, note: 'sneaky' } },
-    });
-    const afterNormal = (await db.query.documents.findFirst({
-      where: eq(documents.id, evilDoc.id),
+    // --- Forging via a body/frontmatter write is structurally impossible:
+    //     `trusted` is a typed column, never a frontmatter key. A write that
+    //     sets frontmatter.trusted leaves the column untouched. ---
+    await db
+      .update(instanceSkills)
+      .set({ frontmatter: { trusted: true, note: 'sneaky' } })
+      .where(eq(instanceSkills.id, before.id));
+    const afterForge = (await db.query.instanceSkills.findFirst({
+      where: eq(instanceSkills.id, before.id),
     }))!;
-    // trusted stayed false (stripped); the non-managed key persisted.
-    expect((afterNormal.frontmatter as { trusted?: boolean }).trusted).toBe(false);
-    expect((afterNormal.frontmatter as { note?: string }).note).toBe('sneaky');
+    expect(afterForge.trusted).toBe(false); // column unmoved
+    expect((afterForge.frontmatter as { note?: string }).note).toBe('sneaky');
 
     // --- MCP admin PAT: createdBy = a human user, scopes incl config:write. ---
     const { token: patRaw, hash: patHash } = newApiToken();
     const patId = nanoid();
     await db.insert(apiTokens).values({
       id: patId,
-      workspaceId: systemId,
+      workspaceId: bWorkspaceId,
       name: 'mcp-admin-pat',
       tokenHash: patHash,
       scopes: ['documents:read', 'config:write'],
@@ -480,10 +460,10 @@ describe('S2: trust separation of duties end-to-end (B3 + B1)', () => {
     expect(patOut.refused).toBe(true);
     expect(patOut.ok).toBeUndefined();
     // DB: still false after the refused PAT attempt.
-    const afterPat = (await db.query.documents.findFirst({
-      where: eq(documents.id, evilDoc.id),
-    }))!;
-    expect((afterPat.frontmatter as { trusted?: boolean }).trusted).toBe(false);
+    expect(
+      (await db.query.instanceSkills.findFirst({ where: eq(instanceSkills.id, before.id) }))!
+        .trusted,
+    ).toBe(false);
 
     // --- Operator token: createdBy null, scopes incl config:write. ---
     const { hash: opHash } = newApiToken();
@@ -500,7 +480,7 @@ describe('S2: trust separation of duties end-to-end (B3 + B1)', () => {
       where: eq(apiTokens.id, opId),
     }))!;
 
-    // (b) operator set_skill_trust → applied.
+    // (b) operator set_skill_trust → applied (flips the typed column).
     const opOut = toolPayload<{ refused?: boolean; ok?: boolean; trusted?: boolean }>(
       await executeTool(
         opToken,
@@ -514,21 +494,11 @@ describe('S2: trust separation of duties end-to-end (B3 + B1)', () => {
     expect(opOut.ok).toBe(true);
     expect(opOut.refused).toBeUndefined();
 
-    // DB: trusted is now true.
-    const afterOp = (await db.query.documents.findFirst({
-      where: eq(documents.id, evilDoc.id),
-    }))!;
-    expect((afterOp.frontmatter as { trusted?: boolean }).trusted).toBe(true);
-
-    // A skill.trust.changed event was emitted through the single event path.
-    const trustEvents = await db
-      .select()
-      .from(events)
-      .where(eq(events.kind, 'skill.trust.changed'));
-    expect(trustEvents.length).toBe(1);
-    expect(trustEvents[0]!.documentId).toBe(evilDoc.id);
-    expect((trustEvents[0]!.payload as { slug?: string; trusted?: boolean }).slug).toBe('evil');
-    expect((trustEvents[0]!.payload as { slug?: string; trusted?: boolean }).trusted).toBe(true);
+    // DB: the typed column is now true.
+    expect(
+      (await db.query.instanceSkills.findFirst({ where: eq(instanceSkills.id, before.id) }))!
+        .trusted,
+    ).toBe(true);
   });
 });
 
@@ -547,19 +517,15 @@ describe('Acceptance: skills load happy + error paths', () => {
     // (trusted:true). Bootstrap, then assert + ensure the trusted flag is set.
     await bootstrapSystemWorkspace(db);
     const systemId = await getSystemWorkspaceId(db);
-    const skillsProject = await getSkillsProject(db, systemId);
-    const folio = await db.query.documents.findFirst({
-      where: and(
-        eq(documents.workspaceId, systemId),
-        eq(documents.projectId, skillsProject.id),
-        eq(documents.slug, 'folio'),
-        eq(documents.type, 'page'),
-      ),
+    // Phase 4: the folio skill is an instance_skills row, seeded trusted.
+    await seedInstanceSkills(db);
+    const folio = await db.query.instanceSkills.findFirst({
+      where: eq(instanceSkills.name, 'folio'),
     });
     expect(folio).toBeDefined();
-    // B4 ships folio trusted:true. Assert the seeded state (the gate's HAPPY
-    // contract). If the seed ever regresses, this fails RED.
-    expect((folio!.frontmatter as { trusted?: boolean }).trusted).toBe(true);
+    // seedInstanceSkills ships folio trusted:true via the typed column. If the
+    // seed ever regresses, this fails RED.
+    expect(folio!.trusted).toBe(true);
 
     // An operator agent whose home IS __system, declaring skills:['folio'].
     await db.insert(documents).values({
