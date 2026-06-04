@@ -20,6 +20,7 @@ import { documentsRoute } from './routes/documents.ts';
 import { eventsRoute } from './routes/events.ts';
 import { fieldsRoute } from './routes/fields.ts';
 import { healthRoute } from './routes/health.ts';
+import { instanceAccessRoute } from './routes/instance-access.ts';
 import { instanceTokensRoute } from './routes/instance-tokens.ts';
 import { mcpRoute } from './routes/mcp.ts';
 import { projectItemRoute, projectsRoute } from './routes/projects.ts';
@@ -49,6 +50,10 @@ v1.route('/workspaces', workspacesRoute);
 // Mounted on v1 (NOT under wScope) because instance tokens are not workspace-
 // scoped — their workspace_id is null. attachUser (app-wide) supplies the session.
 v1.route('/instance/tokens', instanceTokensRoute);
+// Task 11 (T-B): invitation routes — grant/revoke workspace_access/project_access.
+// Session-only + owner/admin gate. Mounted on v1 (NOT under wScope) so attachToken
+// never runs and a stolen Bearer cannot grant access; attachUser supplies the session.
+v1.route('/instance/access', instanceAccessRoute);
 
 const wScope = new Hono<AuthContext & ScopeContext>();
 wScope.use('*', attachToken, requireUserOrToken, resolveWorkspace);

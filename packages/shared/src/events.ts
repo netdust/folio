@@ -44,7 +44,13 @@ export type EventKind =
   // Piece B (T8) — emitted by setSkillTrust when a __system skill's `trusted`
   // flag is flipped. The flag is server-managed; this is the single audit
   // signal for a bless/unbless. Scoped to (__system, skills project, skill doc).
-  | 'skill.trust.changed';
+  | 'skill.trust.changed'
+  // Drop-workspace-tenancy Task 11 — emitted when an owner/admin grants or
+  // revokes an explicit workspace_access / project_access row (the invitation
+  // routes). Honors rule #4 (every write emits an event) for the access tables.
+  // Workspace-scoped (for a project grant, the project's workspace).
+  | 'access.granted'
+  | 'access.revoked';
 
 /** Source-of-truth list. Keep in sync with EventKind above. */
 export const KNOWN_EVENT_KINDS: readonly EventKind[] = [
@@ -78,4 +84,7 @@ export const KNOWN_EVENT_KINDS: readonly EventKind[] = [
   'agent.chain.suppressed',
   // Piece B (T8) — skill bless/unbless audit signal.
   'skill.trust.changed',
+  // Drop-workspace-tenancy Task 11 — access grant/revoke audit signal.
+  'access.granted',
+  'access.revoked',
 ];
