@@ -120,6 +120,52 @@ export const memberships = sqliteTable(
   }),
 );
 
+// --- Per-user access grants (invitation-based, replacing workspace tenancy) ---
+//
+// Step 2 of dropping workspace-as-tenancy-boundary (one instance = one team).
+// Access to a specific workspace or project becomes an explicit grant rather
+// than implied by membership. Composite PK = (user, scope) so a grant is unique
+// per pair; the reverse index seeks by scope ("who can see this workspace?").
+// Additive only: nothing reads these tables yet — readers land in later tasks.
+
+export const workspaceAccess = sqliteTable(
+  'workspace_access',
+  {
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' })
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.userId, t.workspaceId] }),
+    wsIdx: index('workspace_access_ws_idx').on(t.workspaceId),
+  }),
+);
+
+export const projectAccess = sqliteTable(
+  'project_access',
+  {
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    projectId: text('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' })
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.userId, t.projectId] }),
+    projIdx: index('project_access_proj_idx').on(t.projectId),
+  }),
+);
+
 export const projects = sqliteTable(
   'projects',
   {
