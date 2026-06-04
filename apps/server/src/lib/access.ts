@@ -109,3 +109,37 @@ export async function canSeeProject(
   if (!proj) return false;
   return hasWorkspaceAccess(db, userId, proj.workspaceId);
 }
+
+/**
+ * The set of project ids IN `workspaceId` that `userId` holds a DIRECT
+ * `project_access` grant to — the batched, set-based form of the per-item
+ * `canSeeProject` loop a non-whole-ws caller used to run (one join query instead
+ * of N+1).
+ *
+ * CR-10 convergence helper. The "visible project set for a user in a workspace"
+ * is the run ceiling (agent-runs), the SSE filter (events), AND the project list
+ * (listProjects) — three security-relevant surfaces. It was hand-rolled (and
+ * re-ran `userRole` per row) in all three; this is the single place it now
+ * lives.
+ *
+ * IMPORTANT — this deliberately does NOT short-circuit owner / `workspace_access`
+ * holders (whole-ws callers). Each caller handles the whole-ws branch
+ * differently (events → unrestricted/null, listProjects → all rows, agent-runs →
+ * null reach), so the whole-ws decision stays with the caller via
+ * `canManageWorkspace`. This helper answers only "which projects in this ws does
+ * this user have a direct grant to" — call it ONLY after `canManageWorkspace`
+ * returns false (else a ws-grant holder would wrongly narrow to their direct
+ * grants, which may be none).
+ */
+export async function visibleProjectIds(
+  db: DB,
+  userId: string,
+  workspaceId: string,
+): Promise<Set<string>> {
+  const rows = await db
+    .select({ id: projectAccess.projectId })
+    .from(projectAccess)
+    .innerJoin(projects, eq(projects.id, projectAccess.projectId))
+    .where(and(eq(projectAccess.userId, userId), eq(projects.workspaceId, workspaceId)));
+  return new Set(rows.map((r) => r.id));
+}

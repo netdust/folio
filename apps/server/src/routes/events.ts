@@ -2,10 +2,10 @@ import { Hono } from 'hono';
 import { streamSSE } from 'hono/streaming';
 import { and, eq, gt } from 'drizzle-orm';
 import { db } from '../db/client.ts';
-import { documents, events, projects as projectsTable } from '../db/schema.ts';
+import { documents, events } from '../db/schema.ts';
 import type { AuthContext } from '../middleware/auth.ts';
 import { requireUserOrToken } from '../middleware/bearer.ts';
-import { canSeeProject, hasWorkspaceAccess, userRole } from '../lib/access.ts';
+import { canManageWorkspace, visibleProjectIds } from '../lib/access.ts';
 import { intersectAgentProjects, resolveAgentProjects } from '../lib/agent-projects.ts';
 import { getWorkspace, type ScopeContext } from '../middleware/scope.ts';
 import { eventBus, type BusEvent } from '../lib/event-bus.ts';
@@ -109,19 +109,18 @@ eventsRoute.get('/', async (c) => {
   // would be safe, but we skip it for agents to avoid the redundant queries.
   const user = c.get('user');
   let userVisibleProjects: Set<string> | null = null; // null === unrestricted
-  if (user && token === null) {
-    const role = await userRole(db, user.id);
-    const seesWholeWs = role === 'owner' || (await hasWorkspaceAccess(db, user.id, ws.id));
-    if (!seesWholeWs) {
-      const all = await db
-        .select({ id: projectsTable.id })
-        .from(projectsTable)
-        .where(eq(projectsTable.workspaceId, ws.id));
-      const visible = new Set<string>();
-      for (const p of all) {
-        if (await canSeeProject(db, user.id, p.id)) visible.add(p.id);
-      }
-      userVisibleProjects = visible;
+  // A human principal — session OR a human PAT (token with no agentId). Agent
+  // tokens (token.agentId != null) are bounded by the F3 allow-list above and
+  // skip this. The bearer middleware hydrates a token's CREATOR into
+  // `c.get('user')`, so a human PAT has `user` set + `token.agentId === null`.
+  const isHumanPrincipal = user && (token === null || token.agentId == null);
+  if (isHumanPrincipal) {
+    // Whole-ws principals (owner / workspace_access grant) need no narrowing —
+    // canManageWorkspace is owner || ws-grant (NO traverse), exactly the
+    // "sees every project in the ws" predicate. Only a project-only (traverse)
+    // invitee is narrowed to the projects they hold a direct grant to.
+    if (!(await canManageWorkspace(db, user.id, ws.id))) {
+      userVisibleProjects = await visibleProjectIds(db, user.id, ws.id);
     }
   }
 

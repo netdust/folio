@@ -2,7 +2,7 @@ import { eq } from 'drizzle-orm';
 import { db } from '../db/client.ts';
 import { projects } from '../db/schema.ts';
 import type { Project } from '../db/schema.ts';
-import { type Role, canSeeProject, hasWorkspaceAccess, userRole } from '../lib/access.ts';
+import { type Role, hasWorkspaceAccess, userRole, visibleProjectIds } from '../lib/access.ts';
 
 /**
  * MCP-relevant service for listing projects in a workspace, filtered to what the
@@ -12,8 +12,8 @@ import { type Role, canSeeProject, hasWorkspaceAccess, userRole } from '../lib/a
  * - a project-only (traverse) caller → ONLY the projects they hold a direct
  *   `project_access` grant to. The traverse clause lets them PAST the workspace
  *   gate (so they can navigate to their project), but it is strictly weaker than
- *   a workspace grant: they must NOT receive the sibling projects. Filtering
- *   per-item through `canSeeProject` here is what closes that leak.
+ *   a workspace grant: they must NOT receive the sibling projects. Narrowing to
+ *   `visibleProjectIds` (their direct grants in this ws) is what closes that leak.
  *
  * CR-5: `effectiveRole` lets the caller override the per-user derivation with
  * the CONTEXT role. An instance-reach token (reach=null) is owner-EQUIVALENT by
@@ -33,13 +33,13 @@ export async function listProjects(
     where: eq(projects.workspaceId, workspaceId),
   });
   // owner (or owner-equivalent context) / ws-grant holder sees everything.
+  // (Kept inline rather than canManageWorkspace: the CR-5 `effectiveRole`
+  // override carries instance-token owner-equivalence that re-deriving the role
+  // would lose.)
   const role = effectiveRole ?? (await userRole(db, userId));
   if (role === 'owner' || (await hasWorkspaceAccess(db, userId, workspaceId))) return all;
-  // Otherwise filter to projects the caller can see (direct project grant). The
-  // per-project loop is acceptable: project counts per workspace are small.
-  const visible: Project[] = [];
-  for (const p of all) {
-    if (await canSeeProject(db, userId, p.id)) visible.push(p);
-  }
-  return visible;
+  // Otherwise narrow to the projects the caller holds a direct grant to in this
+  // ws (CR-10 batched helper — was a per-item canSeeProject loop).
+  const visible = await visibleProjectIds(db, userId, workspaceId);
+  return all.filter((p) => visible.has(p.id));
 }

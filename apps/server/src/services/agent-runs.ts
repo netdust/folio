@@ -35,7 +35,7 @@ import {
 } from '../db/schema.ts';
 import { roleToScopes } from '../lib/agent-schema.ts';
 import { callerProjectsFor } from '../lib/agent-projects.ts';
-import { canSeeProject, canSeeWorkspace, userRole } from '../lib/access.ts';
+import { canManageWorkspace, canSeeWorkspace, userRole, visibleProjectIds } from '../lib/access.ts';
 
 // Drizzle tx and DB share the same query API. Mirrored verbatim from
 // `services/comments.ts` so read helpers can be called from inside a tx.
@@ -192,20 +192,24 @@ export async function createRun(
     // true for every ws project, so `visible` = all (the old behavior is
     // preserved for that case). owner/admin passes an empty projectIds list
     // (unused on the null branch).
-    // CR-1: any NON-owner caller (admin + member) is clamped to their
-    // canSeeProject-visible projects — only `owner` bypasses grants under the
-    // post-tenancy model. callerProjectsFor returns null only for owner.
+    // CR-1: any NON-owner caller (admin + member) is clamped to the projects
+    // they can ACTUALLY SEE — only `owner` bypasses grants under the post-tenancy
+    // model. callerProjectsFor returns null only for owner.
+    // CR-10: routed through the shared visibility helpers (was a per-item
+    // canSeeProject loop). A ws-grant holder (canManageWorkspace) sees every ws
+    // project, so their ceiling = all ws project ids (old behavior preserved). A
+    // project-only invitee is clamped to their direct grants (visibleProjectIds).
     let memberProjectIds: string[] = [];
     if (callerRole !== 'owner') {
-      const wsProjects = await db.query.projects.findMany({
-        where: eq(projects.workspaceId, workspace.id),
-        columns: { id: true },
-      });
-      const visible: string[] = [];
-      for (const p of wsProjects) {
-        if (await canSeeProject(db, actor.id, p.id)) visible.push(p.id);
+      if (await canManageWorkspace(db, actor.id, workspace.id)) {
+        const wsProjects = await db.query.projects.findMany({
+          where: eq(projects.workspaceId, workspace.id),
+          columns: { id: true },
+        });
+        memberProjectIds = wsProjects.map((p) => p.id);
+      } else {
+        memberProjectIds = [...(await visibleProjectIds(db, actor.id, workspace.id))];
       }
-      memberProjectIds = visible;
     }
     callerProjectIds = callerProjectsFor({ role: callerRole, projectIds: memberProjectIds });
   }
