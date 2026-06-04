@@ -26,10 +26,14 @@ import {
   apiTokens,
   documents,
   memberships,
+  projectAccess,
   projects,
   tables,
+  users,
+  workspaceAccess,
   workspaces,
 } from '../db/schema.ts';
+import { createSession } from '../lib/auth.ts';
 import { env } from '../env.ts';
 import { toolsToScopes } from '../lib/agent-schema.ts';
 import { newApiToken } from '../lib/auth.ts';
@@ -754,6 +758,100 @@ test('GET workspace-scoped list → 422 INVALID_QUERY on unknown status enum val
   });
   expect(res.status).toBe(422);
   expect((await res.json()).error.code).toBe('INVALID_QUERY');
+});
+
+// CR-9 (round-2 code-review): the ws-scoped runs list (and single-run-by-id
+// load) narrowed only by the AGENT allow-list (null for session/human PAT). The
+// traverse clause now lets a project-only invitee reach these wScope surfaces,
+// so they leaked sibling-project runs (titles, agent slugs, status). The fix
+// routes both surfaces through the caller's visibleProjectIds (CR-10 helper) for
+// a non-whole-ws human, mirroring /events.
+//
+// Seeds a SECOND project 'ops' in acme + a run in each; the invitee is granted
+// ONLY 'web'. Uses one shared setup helper for the three assertions below.
+async function seedTwoProjectRuns(
+  db: DB,
+  seed: Awaited<ReturnType<typeof makeTestApp>>['seed'],
+) {
+  // 'web' = seed.project (the invitee's granted project). Run #1 there.
+  const webTable = await getWorkItemsTable(db, seed.project.id);
+  const webParent = await seedWorkItem(db, seed.workspace, seed.project, webTable, seed.user);
+  const { agent } = await seedAgent(db, seed.workspace, seed.user, 'helper');
+  const webRun = await seedRun(db, seed.workspace, seed.project, agent, seed.user, webParent);
+
+  // 'ops' = a second project in the SAME workspace. Run #2 there.
+  const opsId = nanoid();
+  await db.insert(projects).values({ id: opsId, workspaceId: seed.workspace.id, slug: 'ops', name: 'Ops' });
+  await seedProjectDefaults(db, opsId);
+  const [opsProject] = await db.select().from(projects).where(eq(projects.id, opsId));
+  const opsTable = await getWorkItemsTable(db, opsId);
+  const opsParent = await seedWorkItem(db, seed.workspace, opsProject!, opsTable, seed.user);
+  const opsRun = await seedRun(db, seed.workspace, opsProject!, agent, seed.user, opsParent);
+
+  return { webRun, opsRun, opsProject: opsProject! };
+}
+
+test('CR-9: project-only invitee ws-scoped runs list excludes sibling-project runs', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const { webRun, opsRun } = await seedTwoProjectRuns(db, seed);
+
+  // Project-only invitee: project_access to 'web' ONLY, no workspace_access.
+  const inviteeId = nanoid();
+  await db.insert(users).values({
+    id: inviteeId, email: 'runinvitee@test.local', name: 'Run Invitee', role: 'member',
+  });
+  await db.insert(projectAccess).values({ userId: inviteeId, projectId: seed.project.id });
+  const session = await createSession(inviteeId);
+
+  const res = await app.request('/api/v1/w/acme/runs', {
+    headers: { Cookie: `folio_session=${session.id}` },
+  });
+  expect(res.status).toBe(200);
+  const { data } = await res.json();
+  const ids = data.map((r: Document) => r.id);
+  expect(ids).toContain(webRun.id); // granted project's run
+  expect(ids).not.toContain(opsRun.id); // sibling project's run MUST NOT leak
+});
+
+test('CR-9: project-only invitee CANNOT load a sibling-project run by id (404)', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const { webRun, opsRun } = await seedTwoProjectRuns(db, seed);
+
+  const inviteeId = nanoid();
+  await db.insert(users).values({
+    id: inviteeId, email: 'runinvitee2@test.local', name: 'Run Invitee 2', role: 'member',
+  });
+  await db.insert(projectAccess).values({ userId: inviteeId, projectId: seed.project.id });
+  const session = await createSession(inviteeId);
+  const cookie = `folio_session=${session.id}`;
+
+  // The granted project's run loads fine.
+  const ok = await app.request(`/api/v1/w/acme/runs/${webRun.id}`, { headers: { Cookie: cookie } });
+  expect(ok.status).toBe(200);
+  // The sibling project's run by id → 404 (not confirmed to exist).
+  const leaked = await app.request(`/api/v1/w/acme/runs/${opsRun.id}`, { headers: { Cookie: cookie } });
+  expect(leaked.status).toBe(404);
+});
+
+test('CR-9: a workspace_access grant holder STILL sees all project runs (no over-narrowing)', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const { webRun, opsRun } = await seedTwoProjectRuns(db, seed);
+
+  // Whole-ws principal: member WITH a workspace_access grant (not owner).
+  const wsMemberId = nanoid();
+  await db.insert(users).values({
+    id: wsMemberId, email: 'wsrunmember@test.local', name: 'WS Run Member', role: 'member',
+  });
+  await db.insert(workspaceAccess).values({ userId: wsMemberId, workspaceId: seed.workspace.id });
+  const session = await createSession(wsMemberId);
+
+  const res = await app.request('/api/v1/w/acme/runs', {
+    headers: { Cookie: `folio_session=${session.id}` },
+  });
+  expect(res.status).toBe(200);
+  const ids = (await res.json()).data.map((r: Document) => r.id);
+  expect(ids).toContain(webRun.id);
+  expect(ids).toContain(opsRun.id); // whole-ws principal sees BOTH
 });
 
 // ----- POST /runs/:runId/cancel -----
