@@ -10,6 +10,10 @@
 
 **Spec:** `docs/superpowers/specs/2026-06-04-drop-workspace-tenancy-design.md` — read it first. Threat model = §7 (T-A…T-F), mandatory boundary tests = §8.1, invariants = §6, decisions = §2 (incl. OQ-1 = (d) runtime singleton, OQ-3 = owner-only role changes).
 
+> **PLAN CORRECTION (discovered at T1 execution, 2026-06-04): HAND-AUTHOR all migrations; do NOT run `bun run db:generate`.** The on-disk drizzle snapshot chain is stale (lags at idx 0006 on this branch — migrations 0007..0022 were all hand-authored). `db:generate` therefore diffs against the 0006 baseline and emits a **destructive recreate-everything** migration (recreates `api_tokens`, re-adds `board_position`/`events.seq`/`provider_health`, etc.) which would double-apply on any real DB. Every migration task below that says "generate the migration" is OVERRIDDEN: write the `.sql` by hand (a single focused statement set), hand-register it in `meta/_journal.json` (idx = next, tag = filename), number it as the next integer after the highest EXISTING `.sql` on THIS branch. The migration TEST (runs all migrations in the folder via `migrate()`) is the correctness check.
+
+> **BRANCH BASELINE (verified at execution):** off `main`, the suite is **server 1391 / shared 63 / web 762**, all green. Measure deltas from these, NOT the plan's earlier "~1011" estimate. T1 landed `0023_add_user_role.sql` (server now 1392). `0023_ai_keys_drop_workspace.sql` + the instance-AI feature are NOT on this branch.
+
 ---
 
 ## Threat model (inherited from spec §7 — the /code-review convergence target)
