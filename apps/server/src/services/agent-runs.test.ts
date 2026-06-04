@@ -13,10 +13,10 @@ import {
   apiTokens,
   documents,
   events,
-  memberships,
   projects as schemaProjects,
   tables,
   users,
+  workspaceAccess,
   workspaces,
   type Document,
   type Project,
@@ -373,11 +373,10 @@ describe('createRun', () => {
       name: 'Bob',
       passwordHash: 'x',
     });
-    await db.insert(memberships).values({
-      workspaceId: seed.workspace.id,
-      userId: memberId,
-      role: 'member',
-    });
+    // Post-tenancy: a plain member is a user at instance role `member` (the
+    // users default) holding a workspace_access grant. createRun's fresh-run
+    // path requires canSeeWorkspace (the grant) and reads role from users.role.
+    await db.insert(workspaceAccess).values({ userId: memberId, workspaceId: seed.workspace.id });
     const [member] = await db.select().from(users).where(eq(users.id, memberId));
 
     const table = await getWorkItemsTable(db, seed.project.id);
@@ -409,13 +408,16 @@ describe('createRun', () => {
     expect(fm.caller_project_ids).not.toContain('*');
   });
 
-  test('fails LOUDLY (Finding 6) when the run owner has NO membership in the workspace', async () => {
+  test('fails LOUDLY (Finding 6) when the run owner has NO access to the workspace', async () => {
     // Was: silently stamped caller_scopes:[] → the run is created but DENIES
     // every tool on the first call, with no visible cause. Finding 6 made this
     // throw at create time so the misconfiguration is loud, not a mute
     // first-tool 'forbidden'.
+    // Post-tenancy: the deny condition is "cannot SEE the workspace" — a user at
+    // the default instance role `member` with NO workspace_access grant (and no
+    // project grant to traverse). Same RUN_OWNER_NOT_A_MEMBER / 403 as before.
     const { db, seed } = await makeTestApp();
-    // A user with NO membership row for this workspace.
+    // A user with NO access grant (and not the instance owner) for this workspace.
     const strangerId = nanoid();
     await db.insert(users).values({
       id: strangerId,
@@ -468,11 +470,8 @@ describe('createRun', () => {
       name: 'Mallory',
       passwordHash: 'x',
     });
-    await db.insert(memberships).values({
-      workspaceId: seed.workspace.id,
-      userId: memberId,
-      role: 'member',
-    });
+    // Post-tenancy: member = users.role default + workspace_access grant.
+    await db.insert(workspaceAccess).values({ userId: memberId, workspaceId: seed.workspace.id });
     const [member] = await db.select().from(users).where(eq(users.id, memberId));
 
     const result = await createRun({
@@ -545,11 +544,8 @@ describe('createRun', () => {
       name: 'Carol',
       passwordHash: 'x',
     });
-    await db.insert(memberships).values({
-      workspaceId: seed.workspace.id,
-      userId: memberId,
-      role: 'member',
-    });
+    // Post-tenancy: member = users.role default + workspace_access grant.
+    await db.insert(workspaceAccess).values({ userId: memberId, workspaceId: seed.workspace.id });
     const [member] = await db.select().from(users).where(eq(users.id, memberId));
 
     const original = await createRun({

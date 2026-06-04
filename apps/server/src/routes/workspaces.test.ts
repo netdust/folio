@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { and, eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
-import { apiTokens, documents, memberships, users, workspaces } from '../db/schema.ts';
+import { apiTokens, documents, users, workspaceAccess, workspaces } from '../db/schema.ts';
 import { newApiToken } from '../lib/auth.ts';
 import {
   SYSTEM_WORKSPACE_SLUG,
@@ -606,12 +606,16 @@ test('A10: an instance bearer with workspace:admin creates a workspace (201)', a
   const wsId = body.data.id;
   const row = await db.query.workspaces.findFirst({ where: eq(workspaces.id, wsId) });
   expect(row).toBeDefined();
-  // Owner membership is created against the token's createdBy (the human admin
-  // hydrated by attachToken) — A7.
-  const owner = await db.query.memberships.findFirst({
-    where: and(eq(memberships.workspaceId, wsId), eq(memberships.role, 'owner')),
+  // Post-tenancy: the creator gets a workspace_access GRANT (not an owner
+  // membership row). The grant is created against the token's createdBy (the
+  // human admin hydrated by attachToken) — A7. Owner-ness is users.role.
+  const grant = await db.query.workspaceAccess.findFirst({
+    where: and(
+      eq(workspaceAccess.workspaceId, wsId),
+      eq(workspaceAccess.userId, seed.user.id),
+    ),
   });
-  expect(owner?.userId).toBe(seed.user.id);
+  expect(grant).toBeDefined();
 });
 
 test('A10: a pinned member bearer cannot create a workspace (403)', async () => {
@@ -730,16 +734,20 @@ describe('CR#2: operator/instance-bearer workspace create', () => {
     const row = await db.query.workspaces.findFirst({ where: eq(workspaces.id, wsId) });
     expect(row).toBeDefined();
 
-    // ...and its owner membership is assigned to the __system owner (alice),
+    // ...and its access grant is assigned to the __system owner (alice),
     // NOT to a (non-existent) hydrated user — proving the findSystemOwnerId
-    // fallback fired.
-    const owner = await db.query.memberships.findFirst({
-      where: and(eq(memberships.workspaceId, wsId), eq(memberships.role, 'owner')),
+    // fallback fired. Post-tenancy: the creator gets a workspace_access grant
+    // (not an owner membership row); owner-ness is users.role.
+    const grant = await db.query.workspaceAccess.findFirst({
+      where: and(
+        eq(workspaceAccess.workspaceId, wsId),
+        eq(workspaceAccess.userId, seed.user.id),
+      ),
     });
-    expect(owner).toBeDefined();
+    expect(grant).toBeDefined();
     // systemOwnerId === seed.user.id (asserted above); compare to the definite
     // string so the assertion stays well-typed.
-    expect(owner!.userId).toBe(seed.user.id);
+    expect(grant!.userId).toBe(seed.user.id);
   });
 });
 

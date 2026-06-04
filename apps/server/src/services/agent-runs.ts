@@ -22,7 +22,6 @@ import { nanoid } from 'nanoid';
 import { db, type DB } from '../db/client.ts';
 import {
   documents,
-  memberships,
   projects,
   statuses,
   tables,
@@ -36,6 +35,7 @@ import {
 } from '../db/schema.ts';
 import { roleToScopes } from '../lib/agent-schema.ts';
 import { callerProjectsFor } from '../lib/agent-projects.ts';
+import { canSeeWorkspace, userRole } from '../lib/access.ts';
 
 // Drizzle tx and DB share the same query API. Mirrored verbatim from
 // `services/comments.ts` so read helpers can be called from inside a tx.
@@ -159,25 +159,27 @@ export async function createRun(
     callerScopes = origFm?.caller_scopes ?? [];
     callerProjectIds = origFm?.caller_project_ids ?? null;
   } else {
-    // Fresh run: derive from the AUTHENTICATED actor's workspace membership.
-    const membership = await db.query.memberships.findFirst({
-      where: and(
-        eq(memberships.workspaceId, workspace.id),
-        eq(memberships.userId, actor.id),
-      ),
-    });
-    const callerRole = membership?.role;
-    if (!callerRole) {
-      // Finding 6: a run whose owner has no membership in the run's workspace
+    // Fresh run: derive from the AUTHENTICATED actor.
+    //
+    // Post-tenancy (drop workspace-as-tenancy-boundary): role is INSTANCE-level
+    // (users.role), and workspace participation is an explicit access grant —
+    // not a per-workspace membership row. The actor must still be able to SEE
+    // the run's workspace (owner | workspace grant | project-grant traverse);
+    // their instance role then bounds the run's authority ceiling.
+    if (!(await canSeeWorkspace(db, actor.id, workspace.id))) {
+      // Finding 6 (preserved): a run whose owner can't see the run's workspace
       // would get caller_scopes:[] and silently deny every tool. Fail loudly at
       // create time so the cause is visible, not a mute first-tool 'forbidden'.
+      // Same error code + 403 as the pre-tenancy "not a member" deny so callers
+      // and tests that key on RUN_OWNER_NOT_A_MEMBER keep working.
       throw new HTTPError(
         'RUN_OWNER_NOT_A_MEMBER',
-        'The run owner is not a member of this workspace; cannot establish caller authority.',
+        'The run owner has no access to this workspace; cannot establish caller authority.',
         403,
       );
     }
-    callerScopes = roleToScopes(callerRole); // callerRole now non-null
+    const callerRole = await userRole(db, actor.id);
+    callerScopes = roleToScopes(callerRole);
     // Project membership in Folio is WORKSPACE-LEVEL only — there is no
     // per-project membership table, so a workspace member can see every
     // project in that workspace. owner/admin → null (no narrowing, via

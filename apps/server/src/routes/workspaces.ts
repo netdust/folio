@@ -5,7 +5,7 @@ import { Hono } from 'hono';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import { db } from '../db/client.ts';
-import { documents, memberships, workspaces } from '../db/schema.ts';
+import { documents, users, workspaceAccess, workspaces } from '../db/schema.ts';
 import { seedBuiltinTriggers } from '../lib/builtin-triggers.ts';
 import { emitEvent, txWithEvents } from '../lib/events.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
@@ -151,7 +151,11 @@ workspacesRoute.post(
 
     await txWithEvents(db, async (tx) => {
       await tx.insert(workspaces).values({ id, slug, name });
-      await tx.insert(memberships).values({ workspaceId: id, userId: ownerUserId, role: 'owner' });
+      // Post-tenancy (drop workspace-as-tenancy-boundary): the creator gets an
+      // explicit workspace_access GRANT to the workspace they created. Their
+      // INSTANCE role (users.role) is a separate axis and is unchanged here —
+      // creating a workspace does not promote anyone's instance role.
+      await tx.insert(workspaceAccess).values({ userId: ownerUserId, workspaceId: id });
       // Phase 2.6 sub-phase D — seed the 4 builtin triggers transactionally
       // with the workspace itself. Future refactor may move workspace create
       // into services/workspaces.ts::createWorkspace.
@@ -252,13 +256,13 @@ workspaceItemRoute.get('/members', async (c) => {
     }
   }
 
+  // Post-tenancy (drop workspace-as-tenancy-boundary): a workspace's "members"
+  // are the holders of a `workspace_access` grant on it; each member's `role` is
+  // their INSTANCE role (users.role), no longer a per-workspace membership role.
   const rows = await db
-    .select({
-      userId: memberships.userId,
-      role: memberships.role,
-    })
-    .from(memberships)
-    .where(eq(memberships.workspaceId, ws.id));
+    .select({ userId: workspaceAccess.userId })
+    .from(workspaceAccess)
+    .where(eq(workspaceAccess.workspaceId, ws.id));
   const ids = rows.map((r) => r.userId);
   const userRows = ids.length
     ? await db.query.users.findMany({
@@ -270,7 +274,8 @@ workspaceItemRoute.get('/members', async (c) => {
     .map((r) => {
       const u = byId.get(r.userId);
       if (!u) return null;
-      return { id: u.id, email: u.email, name: u.name, role: r.role };
+      // role now comes from users.role (instance role), not a membership row.
+      return { id: u.id, email: u.email, name: u.name, role: u.role ?? 'member' };
     })
     .filter((m): m is NonNullable<typeof m> => m !== null);
   return jsonOk(c, { members });

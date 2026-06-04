@@ -17,9 +17,9 @@ import {
   apiTokens,
   documents,
   events,
-  memberships,
   tables,
   users,
+  workspaceAccess,
   workspaces,
   type Document,
   type User,
@@ -132,12 +132,11 @@ async function seedMember(
   name: string,
 ): Promise<User> {
   const id = nanoid();
+  // Post-tenancy: a "member" is a user (default instance role `member`) holding
+  // a `workspace_access` grant. loadWorkspaceMembers reads grant-holders, so the
+  // @-mention resolution tests need the grant — not a legacy memberships row.
   await db.insert(users).values({ id, email, name, passwordHash: null });
-  await db.insert(memberships).values({
-    workspaceId: workspace.id,
-    userId: id,
-    role: 'member',
-  });
+  await db.insert(workspaceAccess).values({ userId: id, workspaceId: workspace.id });
   const row = await db.query.users.findFirst({ where: eq(users.id, id) });
   return row!;
 }

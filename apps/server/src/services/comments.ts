@@ -30,8 +30,8 @@ import type { DB } from '../db/client.ts';
 type DBOrTx = DB | Parameters<Parameters<DB['transaction']>[0]>[0];
 import {
   documents,
-  memberships,
   users,
+  workspaceAccess,
   workspaces,
 } from '../db/schema.ts';
 import type {
@@ -250,13 +250,19 @@ async function loadWorkspaceAgents(
   }));
 }
 
-/** Load workspace members (id + email) for parseMentions's member resolution. */
+/**
+ * Load workspace members (id + email) for parseMentions's member resolution.
+ *
+ * Post-tenancy (drop workspace-as-tenancy-boundary): "members" = the holders of
+ * a `workspace_access` grant on this workspace, not rows in the legacy
+ * `memberships` table. @-mention name→user resolution lists exactly those users.
+ */
 async function loadWorkspaceMembers(workspaceId: string): Promise<MemberForParser[]> {
   const rows = await db
     .select({ id: users.id, email: users.email })
-    .from(memberships)
-    .innerJoin(users, eq(memberships.userId, users.id))
-    .where(eq(memberships.workspaceId, workspaceId));
+    .from(workspaceAccess)
+    .innerJoin(users, eq(workspaceAccess.userId, users.id))
+    .where(eq(workspaceAccess.workspaceId, workspaceId));
   return rows;
 }
 

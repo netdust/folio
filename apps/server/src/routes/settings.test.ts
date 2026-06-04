@@ -1,9 +1,28 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { nanoid } from 'nanoid';
-import { apiTokens } from '../db/schema.ts';
+import { apiTokens, users, workspaceAccess } from '../db/schema.ts';
 import { env } from '../env.ts';
-import { newApiToken } from '../lib/auth.ts';
+import { createSession, newApiToken } from '../lib/auth.ts';
 import { makeTestApp } from '../test/harness.ts';
+
+/**
+ * Seed a SECOND user with the default instance role `member` and a
+ * workspace_access grant on the seed workspace, then return a session cookie
+ * for them. Such a user passes the wScope visibility gate (the grant) but is
+ * NOT an instance owner/admin — the exact principal the AI-key write gate must
+ * reject (post-tenancy: role lives on users.role, not a membership row).
+ */
+async function seedMemberSession(
+  db: Awaited<ReturnType<typeof makeTestApp>>['db'],
+  workspaceId: string,
+): Promise<{ cookie: string; userId: string }> {
+  const id = nanoid();
+  // No explicit role → defaults to 'member' (users.role default).
+  await db.insert(users).values({ id, email: `member-${id}@test.local`, name: 'Member', passwordHash: null });
+  await db.insert(workspaceAccess).values({ userId: id, workspaceId });
+  const session = await createSession(id);
+  return { cookie: `folio_session=${session.id}`, userId: id };
+}
 
 // POST /api/v1/w/:wslug/settings/:workspaceId/ai-keys
 // Mount path: wScope.route('/settings', settingsRoute) — the route file
@@ -343,6 +362,63 @@ describe('POST /api/v1/w/:wslug/settings/:workspaceId/ai-keys', () => {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${token}` },
       },
+    );
+    expect(res.status).toBe(403);
+    const body = await res.json();
+    expect(body.error.code).toBe('FORBIDDEN');
+  });
+
+  // Post-tenancy access/role gate (Task P2.T8.5) — the write gate moved off the
+  // legacy memberships role onto the INSTANCE role (users.role). A user who CAN
+  // see the workspace (has a workspace_access grant, so wScope passes) but is a
+  // plain instance `member` must be REJECTED on POST/DELETE, while READ stays
+  // access-only. These exercise the migrated gate directly (the prior tests only
+  // covered the session-only/SSRF gates, not the role gate).
+  test('POST /ai-keys: member with ws access but NOT instance-admin → 403 (role gate)', async () => {
+    const { app, db, seed } = await makeTestApp();
+    const { cookie } = await seedMemberSession(db, seed.workspace.id);
+    const res = await app.request(path(seed.workspace.slug, seed.workspace.id), {
+      method: 'POST',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider: 'anthropic', apiKey: 'sk-mock', label: 'default' }),
+    });
+    expect(res.status).toBe(403);
+    const body = await res.json();
+    expect(body.error.code).toBe('FORBIDDEN');
+  });
+
+  test('GET /ai-keys: member with ws access → 200 (read is access-only, not role-gated)', async () => {
+    const { app, db, seed } = await makeTestApp();
+    const { cookie } = await seedMemberSession(db, seed.workspace.id);
+    const res = await app.request(path(seed.workspace.slug, seed.workspace.id), {
+      method: 'GET',
+      headers: { Cookie: cookie },
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(Array.isArray(body.data.keys)).toBe(true);
+  });
+
+  test('DELETE /ai-keys/:keyId: member with ws access but NOT instance-admin → 403 (role gate)', async () => {
+    const { app, db, seed } = await makeTestApp();
+    // Owner seeds a key via the session POST.
+    const postRes = await app.request(path(seed.workspace.slug, seed.workspace.id), {
+      method: 'POST',
+      headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider: 'anthropic', apiKey: 'sk-mock', label: 'default' }),
+    });
+    expect(postRes.status).toBe(200);
+    const listRes = await app.request(path(seed.workspace.slug, seed.workspace.id), {
+      method: 'GET',
+      headers: { Cookie: seed.sessionCookie },
+    });
+    const keyId = (await listRes.json()).data.keys[0]?.id as string;
+    expect(typeof keyId).toBe('string');
+
+    const { cookie } = await seedMemberSession(db, seed.workspace.id);
+    const res = await app.request(
+      `${path(seed.workspace.slug, seed.workspace.id)}/${keyId}`,
+      { method: 'DELETE', headers: { Cookie: cookie } },
     );
     expect(res.status).toBe(403);
     const body = await res.json();

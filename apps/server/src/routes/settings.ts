@@ -4,8 +4,9 @@ import { Hono } from 'hono';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import { db } from '../db/client.ts';
-import { aiKeys, memberships } from '../db/schema.ts';
+import { aiKeys } from '../db/schema.ts';
 import { env } from '../env.ts';
+import { canSeeWorkspace, userRole } from '../lib/access.ts';
 import { encryptSecret } from '../lib/crypto.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
 import { validatePublicUrl } from '../lib/url-allow-list.ts';
@@ -23,10 +24,12 @@ settingsRoute.use('*', requireUser);
 settingsRoute.get('/:workspaceId/ai-keys', async (c) => {
   const user = getUser(c);
   const workspaceId = c.req.param('workspaceId');
-  const m = await db.query.memberships.findFirst({
-    where: and(eq(memberships.workspaceId, workspaceId), eq(memberships.userId, user.id)),
-  });
-  if (!m) throw new HTTPError('FORBIDDEN', 'not a member', 403);
+  // Post-tenancy (drop workspace-as-tenancy-boundary): READ access to a
+  // workspace's AI-key metadata gates on canSeeWorkspace (owner | workspace
+  // grant | project-grant traverse), not a per-workspace membership row.
+  if (!(await canSeeWorkspace(db, user.id, workspaceId))) {
+    throw new HTTPError('FORBIDDEN', 'no access to this workspace', 403);
+  }
 
   const rows = await db.query.aiKeys.findMany({
     where: eq(aiKeys.workspaceId, workspaceId),
@@ -69,10 +72,14 @@ settingsRoute.post(
   async (c) => {
     const user = getUser(c);
     const workspaceId = c.req.param('workspaceId');
-    const m = await db.query.memberships.findFirst({
-      where: and(eq(memberships.workspaceId, workspaceId), eq(memberships.userId, user.id)),
-    });
-    if (!m || (m.role !== 'owner' && m.role !== 'admin')) {
+    // Post-tenancy: WRITE requires BOTH access to the workspace AND an admin
+    // INSTANCE role (users.role: owner|admin) — the per-workspace membership
+    // role is gone. Access first so a no-access caller can't probe role.
+    if (!(await canSeeWorkspace(db, user.id, workspaceId))) {
+      throw new HTTPError('FORBIDDEN', 'no access to this workspace', 403);
+    }
+    const role = await userRole(db, user.id);
+    if (role !== 'owner' && role !== 'admin') {
       throw new HTTPError('FORBIDDEN', 'forbidden', 403);
     }
     const { provider, apiKey, label, baseUrl } = c.req.valid('json');
@@ -125,10 +132,13 @@ settingsRoute.delete('/:workspaceId/ai-keys/:keyId', requireSessionUser, async (
   const user = getUser(c);
   const workspaceId = c.req.param('workspaceId');
   const keyId = c.req.param('keyId');
-  const m = await db.query.memberships.findFirst({
-    where: and(eq(memberships.workspaceId, workspaceId), eq(memberships.userId, user.id)),
-  });
-  if (!m || (m.role !== 'owner' && m.role !== 'admin')) {
+  // Post-tenancy: WRITE requires BOTH access to the workspace AND an admin
+  // INSTANCE role (users.role: owner|admin). Access first (no role probing).
+  if (!(await canSeeWorkspace(db, user.id, workspaceId))) {
+    throw new HTTPError('FORBIDDEN', 'no access to this workspace', 403);
+  }
+  const role = await userRole(db, user.id);
+  if (role !== 'owner' && role !== 'admin') {
     throw new HTTPError('FORBIDDEN', 'forbidden', 403);
   }
   await db
