@@ -470,6 +470,64 @@ describe('createRun', () => {
     expect(fm.caller_project_ids).not.toContain('*');
   });
 
+  test('ADMIN with a project_access grant to ONLY p1 → caller_project_ids is [p1], NOT every ws project (CR-1 admin clamp)', async () => {
+    // CR-1: instance `admin` does NOT bypass grants under the post-tenancy model
+    // (only `owner` does). An admin holding only a project_access grant reaches
+    // the workspace via traverse; their run-ceiling must clamp to the projects
+    // they can ACTUALLY SEE (canSeeProject) — NOT null/wildcard over every
+    // project in the workspace. Mirrors the member T-C narrowing test, but with
+    // an instance-`admin` actor.
+    const { db, seed } = await makeTestApp();
+
+    // A second project in the SAME workspace that the admin cannot see.
+    const p2Id = nanoid();
+    await db.insert(schemaProjects).values({
+      id: p2Id,
+      workspaceId: seed.workspace.id,
+      slug: 'p2',
+      name: 'P2',
+    });
+
+    // An instance `admin` holding ONLY a project_access grant to p1 — NO
+    // workspace_access. Pre-CR-1 callerProjectsFor(admin) → null (unrestricted);
+    // post-CR-1 admin is clamped to canSeeProject-visible projects.
+    const adminId = nanoid();
+    await db.insert(users).values({
+      id: adminId,
+      email: 'dave-admin@test.local',
+      name: 'Dave',
+      passwordHash: 'x',
+      role: 'admin',
+    });
+    await db.insert(projectAccess).values({ userId: adminId, projectId: seed.project.id });
+    const [admin] = await db.select().from(users).where(eq(users.id, adminId));
+
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper-admin');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+
+    const result = await createRun({
+      workspace: seed.workspace,
+      project: seed.project,
+      runsTable,
+      agent,
+      actor: admin!,
+      input: {
+        parentDocumentId: parent.id,
+        firedBy: 'manual',
+        chainId: crypto.randomUUID(),
+        triggerId: null,
+      },
+    });
+
+    const fm = result.document.frontmatter as AgentRunFrontmatter;
+    expect(fm.caller_project_ids).not.toBe(null);
+    expect(fm.caller_project_ids).toContain(seed.project.id);
+    expect(fm.caller_project_ids).not.toContain(p2Id);
+    expect(fm.caller_project_ids).not.toContain('*');
+  });
+
   test('fails LOUDLY (Finding 6) when the run owner has NO access to the workspace', async () => {
     // Was: silently stamped caller_scopes:[] → the run is created but DENIES
     // every tool on the first call, with no visible cause. Finding 6 made this

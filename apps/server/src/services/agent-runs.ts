@@ -192,8 +192,11 @@ export async function createRun(
     // true for every ws project, so `visible` = all (the old behavior is
     // preserved for that case). owner/admin passes an empty projectIds list
     // (unused on the null branch).
+    // CR-1: any NON-owner caller (admin + member) is clamped to their
+    // canSeeProject-visible projects — only `owner` bypasses grants under the
+    // post-tenancy model. callerProjectsFor returns null only for owner.
     let memberProjectIds: string[] = [];
-    if (callerRole === 'member') {
+    if (callerRole !== 'owner') {
       const wsProjects = await db.query.projects.findMany({
         where: eq(projects.workspaceId, workspace.id),
         columns: { id: true },
