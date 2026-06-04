@@ -3,6 +3,7 @@ import { expect, test } from 'bun:test';
 import { nanoid } from 'nanoid';
 import { memberships, users, workspaces } from '../db/schema.ts';
 import { env } from '../env.ts';
+import { userRole } from '../lib/access.ts';
 import { createSession } from '../lib/auth.ts';
 import { bootstrapSystemWorkspace, SYSTEM_WORKSPACE_SLUG } from '../lib/system-workspace.ts';
 import { makeBareTestDb, makeTestApp } from '../test/harness.ts';
@@ -42,6 +43,11 @@ test('first registration becomes __system owner when the flag is on (M1)', async
     });
     const firstUser = await db.query.users.findFirst({ where: eq(users.email, 'first@x.com') });
     expect(owner!.userId).toBe(firstUser!.id);
+    // CR-6: the first registrant must be ADMINISTRABLE — users.role is the
+    // instance-admin gates' source of truth (register inserts the user with the
+    // default 'member'; grantOwner promotes it). A __system membership alone is
+    // not enough post-drop-workspace-tenancy.
+    expect(await userRole(db, firstUser!.id)).toBe('owner');
   } finally {
     (env as { FOLIO_ALLOW_BOOTSTRAP_REGISTRATION: boolean }).FOLIO_ALLOW_BOOTSTRAP_REGISTRATION =
       prev;

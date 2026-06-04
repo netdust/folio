@@ -3,6 +3,7 @@ import { and, eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { apiTokens, documents, memberships, projects, users, workspaces } from '../db/schema.ts';
 import { makeTestApp } from '../test/harness.ts';
+import { userRole } from './access.ts';
 import { roleToScopes } from './agent-schema.ts';
 import { hashPassword } from './auth.ts';
 import {
@@ -14,6 +15,7 @@ import {
   getSystemWorkspaceId,
   grantOwner,
   isReservedSlug,
+  requireInstanceOwner,
   runBootTasks,
 } from './system-workspace.ts';
 
@@ -241,6 +243,53 @@ describe('grantOwner + ensureOperatorAgent + designateInstanceOwner (M5/M8)', ()
     expect(await grantOwner(db, 'a@x.com')).toBe(a); // first-wins no-op returns the same id
   });
 
+  // CR-6 (round-2 code-review): the boot/register owner-designation path must
+  // leave the designated owner ADMINISTRABLE. grantOwner used to insert only a
+  // __system membership, but the instance-admin gates were refactored to read
+  // users.role (default 'member') — so a fresh install's owner was locked out of
+  // every instance-admin surface (and the only users.role='owner' writer, PATCH
+  // /instance/users/:id/role, is itself owner-gated → un-administrable from
+  // boot). This drives the REAL designation path (NOT the harness shortcut at
+  // harness.ts:112 which sets users.role directly and masks the bug) and asserts
+  // the owner is actually administrable end-to-end.
+  test('CR-6: designateInstanceOwner makes the owner administrable (users.role + requireInstanceOwner)', async () => {
+    const { db } = await makeTestApp();
+    await bootstrapSystemWorkspace(db);
+    const a = nanoid();
+    await db
+      .insert(users)
+      .values({ id: a, email: 'a@x.com', name: 'A', passwordHash: await hashPassword('password123') });
+    // Fresh install: the user starts as a plain member (schema default).
+    expect(await userRole(db, a)).toBe('member');
+
+    await designateInstanceOwner(db, 'a@x.com');
+
+    // The designated owner must now BE an instance owner by the gate's own source
+    // of truth (users.role), not merely hold a __system membership.
+    expect(await userRole(db, a)).toBe('owner');
+    await expect(requireInstanceOwner(db, a)).resolves.toBe('owner');
+  });
+
+  test('CR-6: grantOwner sets users.role=owner directly (the single fresh-owner writer)', async () => {
+    const { db } = await makeTestApp();
+    await bootstrapSystemWorkspace(db);
+    const a = nanoid();
+    await db
+      .insert(users)
+      .values({ id: a, email: 'a@x.com', name: 'A', passwordHash: await hashPassword('password123') });
+    await grantOwner(db, 'a@x.com');
+    expect(await userRole(db, a)).toBe('owner');
+    // first-wins: a second different user does NOT become owner, and the first
+    // user keeps the role.
+    const b = nanoid();
+    await db
+      .insert(users)
+      .values({ id: b, email: 'b@x.com', name: 'B', passwordHash: await hashPassword('password123') });
+    await grantOwner(db, 'b@x.com');
+    expect(await userRole(db, a)).toBe('owner'); // unchanged
+    expect(await userRole(db, b)).toBe('member'); // NOT promoted
+  });
+
   test('concurrent designateInstanceOwner yields exactly ONE owner + ONE agent (review fix #5 — race)', async () => {
     const { db } = await makeTestApp();
     await bootstrapSystemWorkspace(db);
@@ -462,6 +511,10 @@ describe('runBootTasks (M4/M5/M8 boot wiring)', () => {
     expect(sys).toBeDefined();
     const owner = await db.query.memberships.findFirst({ where: and(eq(memberships.workspaceId, sys!.id), eq(memberships.role, 'owner')) });
     expect(owner!.userId).toBe(uid);
+    // CR-6: the boot-designated owner must be ADMINISTRABLE — users.role is the
+    // gate's source of truth (a __system membership alone is not enough).
+    expect(await userRole(db, uid)).toBe('owner');
+    await expect(requireInstanceOwner(db, uid)).resolves.toBe('owner');
     // operator agent seeded too (designate calls ensureOperatorAgent)
     const agent = await db.query.documents.findFirst({ where: and(eq(documents.workspaceId, sys!.id), eq(documents.type, 'agent')) });
     expect(agent).toBeDefined();

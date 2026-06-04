@@ -441,9 +441,21 @@ export async function grantOwner(db: DB, email: string): Promise<string> {
     );
   }
 
-  await db
-    .insert(memberships)
-    .values({ workspaceId: sys.id, userId: user.id, role: 'owner' });
+  // CR-6: set users.role='owner' — the INSTANCE-admin gates
+  // (requireInstanceAdmin / requireInstanceOwner / userRole) read users.role,
+  // NOT a __system membership, post-drop-workspace-tenancy. Without this a fresh
+  // install's designated owner stays role='member' and is locked out of every
+  // instance-admin surface (the only other users.role writer, PATCH
+  // /instance/users/:id/role, is itself owner-gated → un-administrable).
+  // The legacy __system membership insert stays for the migration-interim
+  // (Phase 4 drops it; the 0026 backfill covers UPGRADED instances). Both writes
+  // in one tx so a partial designation can't leave the two sources disagreeing.
+  await db.transaction(async (tx) => {
+    await tx.update(users).set({ role: 'owner' }).where(eq(users.id, user.id));
+    await tx
+      .insert(memberships)
+      .values({ workspaceId: sys.id, userId: user.id, role: 'owner' });
+  });
   return user.id;
 }
 
