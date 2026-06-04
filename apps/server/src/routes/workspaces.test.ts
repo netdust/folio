@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { and, eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { apiTokens, documents, users, workspaceAccess, workspaces } from '../db/schema.ts';
-import { newApiToken } from '../lib/auth.ts';
+import { createSession, newApiToken } from '../lib/auth.ts';
 import {
   SYSTEM_WORKSPACE_SLUG,
   bootstrapSystemWorkspace,
@@ -200,6 +200,64 @@ test('DELETE /api/v1/workspaces/:wslug 204 (owner)', async () => {
     headers: { Cookie: seed.sessionCookie },
   });
   expect(res.status).toBe(204);
+});
+
+// CR-2/3: management of a workspace = instance owner OR a real workspace_access
+// grant. The pre-fix gate was getRole==='owner' (instance owner ONLY) — which
+// regressed the workspace creator (now an instance-member holding a ws grant)
+// out of renaming/deleting their own workspace.
+
+/** Seed a second user with the given instance role + a forged session cookie. */
+async function seedSessionUser(
+  db: Parameters<typeof grantOwner>[0],
+  role: 'owner' | 'admin' | 'member',
+  email: string,
+): Promise<{ userId: string; cookie: string }> {
+  const userId = nanoid();
+  await db.insert(users).values({ id: userId, email, name: email, passwordHash: 'x', role });
+  const session = await createSession(userId);
+  return { userId, cookie: `folio_session=${session.id}` };
+}
+
+test('CR-2/3: a workspace_access holder (instance-member) can rename the workspace (PATCH 200)', async () => {
+  const { app, db } = await makeTestApp();
+  const { userId, cookie } = await seedSessionUser(db, 'member', 'bob-member@test.local');
+  const [ws] = await db.select().from(workspaces).where(eq(workspaces.slug, 'acme'));
+  await db.insert(workspaceAccess).values({ userId, workspaceId: ws!.id });
+
+  const res = await app.request('/api/v1/w/acme', {
+    method: 'PATCH',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Renamed By Member' }),
+  });
+  expect(res.status).toBe(200);
+  expect((await res.json()).data.name).toBe('Renamed By Member');
+});
+
+test('CR-2/3: a workspace_access holder (instance-member) can DELETE the workspace (204)', async () => {
+  const { app, db } = await makeTestApp();
+  const { userId, cookie } = await seedSessionUser(db, 'member', 'bob2-member@test.local');
+  const [ws] = await db.select().from(workspaces).where(eq(workspaces.slug, 'acme'));
+  await db.insert(workspaceAccess).values({ userId, workspaceId: ws!.id });
+
+  const res = await app.request('/api/v1/w/acme', {
+    method: 'DELETE',
+    headers: { Cookie: cookie },
+  });
+  expect(res.status).toBe(204);
+});
+
+test('CR-2/3: a stranger (no grant, instance-member) cannot manage the workspace', async () => {
+  const { app, db } = await makeTestApp();
+  const { cookie } = await seedSessionUser(db, 'member', 'stranger@test.local');
+  // No workspace_access, no project_access → resolveWorkspace 403s them first,
+  // which is the correct "cannot manage" outcome.
+  const res = await app.request('/api/v1/w/acme', {
+    method: 'PATCH',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Hijacked' }),
+  });
+  expect(res.status).toBe(403);
 });
 
 test('GET /api/v1/w/:wslug/members returns id/name/email/role for each membership', async () => {

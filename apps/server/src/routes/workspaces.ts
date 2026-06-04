@@ -6,6 +6,7 @@ import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import { db } from '../db/client.ts';
 import { documents, users, workspaceAccess, workspaces } from '../db/schema.ts';
+import { canManageWorkspace } from '../lib/access.ts';
 import { seedBuiltinTriggers } from '../lib/builtin-triggers.ts';
 import { emitEvent, txWithEvents } from '../lib/events.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
@@ -192,8 +193,18 @@ workspaceItemRoute.patch(
   requireSessionUser,
   zValidator('json', z.object({ name: z.string().min(1).max(80) })),
   async (c) => {
-    if (getRole(c) !== 'owner') throw new HTTPError('FORBIDDEN', 'owner only', 403);
     const ws = getWorkspace(c);
+    // CR-2/3: management = instance owner OR a real workspace_access grant
+    // (NOT mere traverse-visibility). getRole returns the INSTANCE role, so the
+    // pre-fix owner-only gate locked out the workspace creator (now an
+    // instance-member with a grant). Route through canManageWorkspace.
+    if (!(await canManageWorkspace(db, getUser(c).id, ws.id))) {
+      throw new HTTPError(
+        'FORBIDDEN',
+        'workspace management requires owner or workspace access',
+        403,
+      );
+    }
     const { name } = c.req.valid('json');
     const user = getUser(c);
     const now = new Date();
@@ -215,8 +226,15 @@ workspaceItemRoute.patch(
 // Threat model mitigation 11.
 // Round 6 #6 — composite swap (was `requireSession`).
 workspaceItemRoute.delete('/', requireSessionUser, async (c) => {
-  if (getRole(c) !== 'owner') throw new HTTPError('FORBIDDEN', 'owner only', 403);
   const ws = getWorkspace(c);
+  // CR-2/3: management = instance owner OR a real workspace_access grant.
+  if (!(await canManageWorkspace(db, getUser(c).id, ws.id))) {
+    throw new HTTPError(
+      'FORBIDDEN',
+      'workspace management requires owner or workspace access',
+      403,
+    );
+  }
   await db.delete(workspaces).where(eq(workspaces.id, ws.id));
   return c.body(null, 204);
 });

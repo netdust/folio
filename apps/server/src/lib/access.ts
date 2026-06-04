@@ -83,6 +83,20 @@ export async function canSeeWorkspace(
   return traverse.length > 0;
 }
 
+// owner || workspace_access (NO traverse). Management of a workspace (rename /
+// delete) requires a REAL workspace grant, not mere traverse-visibility: a
+// project-only invitee can SEE the workspace (canSeeWorkspace traverse clause)
+// to navigate to their project, but must NOT be able to manage the workspace.
+// Distinct from canSeeWorkspace precisely because it OMITS the traverse clause.
+export async function canManageWorkspace(
+  db: DB,
+  userId: string,
+  workspaceId: string,
+): Promise<boolean> {
+  if ((await userRole(db, userId)) === 'owner') return true;
+  return hasWorkspaceAccess(db, userId, workspaceId);
+}
+
 // owner || direct project_access || workspace_access on the parent ws
 export async function canSeeProject(
   db: DB,

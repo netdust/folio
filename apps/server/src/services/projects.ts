@@ -2,7 +2,7 @@ import { eq } from 'drizzle-orm';
 import { db } from '../db/client.ts';
 import { projects } from '../db/schema.ts';
 import type { Project } from '../db/schema.ts';
-import { canSeeProject, hasWorkspaceAccess, userRole } from '../lib/access.ts';
+import { type Role, canSeeProject, hasWorkspaceAccess, userRole } from '../lib/access.ts';
 
 /**
  * MCP-relevant service for listing projects in a workspace, filtered to what the
@@ -14,13 +14,26 @@ import { canSeeProject, hasWorkspaceAccess, userRole } from '../lib/access.ts';
  *   gate (so they can navigate to their project), but it is strictly weaker than
  *   a workspace grant: they must NOT receive the sibling projects. Filtering
  *   per-item through `canSeeProject` here is what closes that leak.
+ *
+ * CR-5: `effectiveRole` lets the caller override the per-user derivation with
+ * the CONTEXT role. An instance-reach token (reach=null) is owner-EQUIVALENT by
+ * capability — resolveWorkspace sets `c.get('role')==='owner'` — yet `userId` is
+ * the token CREATOR (possibly an instance-member with no grant), so re-deriving
+ * from the creator would wrongly narrow to []. The route passes `getRole(c)`; an
+ * 'owner' effective role returns ALL projects (correct for both an instance
+ * token and an actual owner). For non-owner sessions getRole is the real role
+ * and the existing per-user filter applies.
  */
-export async function listProjects(workspaceId: string, userId: string): Promise<Project[]> {
+export async function listProjects(
+  workspaceId: string,
+  userId: string,
+  effectiveRole?: Role,
+): Promise<Project[]> {
   const all = await db.query.projects.findMany({
     where: eq(projects.workspaceId, workspaceId),
   });
-  // owner / ws-grant holder sees everything in the workspace.
-  const role = await userRole(db, userId);
+  // owner (or owner-equivalent context) / ws-grant holder sees everything.
+  const role = effectiveRole ?? (await userRole(db, userId));
   if (role === 'owner' || (await hasWorkspaceAccess(db, userId, workspaceId))) return all;
   // Otherwise filter to projects the caller can see (direct project grant). The
   // per-project loop is acceptable: project counts per workspace are small.

@@ -10,6 +10,7 @@ import { emitEvent, txWithEvents } from '../lib/events.ts';
 import { dryRunResult, isDryRun, isDryRunDelete } from '../lib/dry-run.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
 import { requireScope } from '../middleware/bearer.ts';
+import { canSeeProject } from '../lib/access.ts';
 import { resolveAgentProjects } from '../lib/agent-projects.ts';
 import { seedProjectDefaults } from '../lib/seed-project-defaults.ts';
 import { slugUniqueInProjects } from '../lib/slug-unique.ts';
@@ -29,7 +30,11 @@ const projectsRoute = new Hono<AuthContext & ScopeContext>();
 projectsRoute.get('/', async (c) => {
   const ws = getWorkspace(c);
   const user = getUser(c);
-  return jsonOk(c, await listProjects(ws.id, user.id));
+  // CR-5: pass the CONTEXT role. An instance-reach token is owner-equivalent
+  // (resolveWorkspace sets role='owner') even though getUser is the token
+  // creator — passing getRole(c) makes listProjects return all projects for
+  // such tokens instead of narrowing to the creator's grants.
+  return jsonOk(c, await listProjects(ws.id, user.id, getRole(c)));
 });
 
 projectsRoute.post(
@@ -128,9 +133,17 @@ projectItemRoute.patch(
 );
 
 projectItemRoute.delete('/', requireScope('config:write'), async (c) => {
-  if (getRole(c) !== 'owner') throw new HTTPError('FORBIDDEN', 'owner only', 403);
   const p = getProject(c);
   const ws = getWorkspace(c);
+  // CR-2/3: project-delete authority = canSeeProject (owner || ws-grant ||
+  // project-grant). getRole returns the INSTANCE role, so the pre-fix owner-only
+  // gate locked out grant holders. Under the current model management ==
+  // visibility — resolveProject (pScope) already enforced canSeeProject for a
+  // 404, so a caller reaching here can already see the project; keep this
+  // explicit authority check for defense-in-depth and intent clarity.
+  if (!(await canSeeProject(db, getUser(c).id, p.id))) {
+    throw new HTTPError('FORBIDDEN', 'project management requires access to the project', 403);
+  }
 
   if (isDryRunDelete(c)) {
     return jsonOk(c, dryRunResult('delete', { id: p.id, slug: p.slug, name: p.name }));

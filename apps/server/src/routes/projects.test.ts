@@ -1,6 +1,6 @@
 import { test, expect } from 'bun:test';
 import { makeTestApp } from '../test/harness.ts';
-import { newApiToken } from '../lib/auth.ts';
+import { createSession, newApiToken } from '../lib/auth.ts';
 
 test('GET /w/:wslug/projects lists projects in workspace', async () => {
   const { app, seed } = await makeTestApp();
@@ -164,28 +164,75 @@ test('DELETE project scrubs its id from workspace agent.frontmatter.projects', a
   expect((a2Row!.frontmatter as { projects: string[] }).projects).toEqual(['*']);
 });
 
-test('DELETE project — non-owner returns 403 without scrubbing', async () => {
+test('CR-2/3: DELETE project — an instance-member with a workspace_access grant CAN delete (204)', async () => {
+  // Pre-fix the handler gated `getRole(c)==='owner'`, so any non-instance-owner
+  // (incl. the workspace creator, now an instance-member holding a ws grant) was
+  // 403'd. The decision: project-delete authority = canSeeProject (owner ||
+  // ws-grant || project-grant). Demote the harness owner to a plain member; it
+  // KEEPS its harness workspace_access grant → canSeeProject true → succeeds.
   const { app, db, seed } = await makeTestApp();
-  // Demote seed user to member (so we have a non-owner trying to delete).
-  // Post-tenancy: per-request `role` comes from users.role (not memberships), so
-  // demote there. The user keeps its workspace_access grant from the harness, so
-  // it still passes resolveWorkspace and reaches the handler's owner-only gate.
   const { users } = await import('../db/schema.ts');
   const { eq } = await import('drizzle-orm');
   await db.update(users).set({ role: 'member' }).where(eq(users.id, seed.user.id));
-
-  const agent = await createAgentWithProjects(app, seed.sessionCookie, 'Specific', [seed.project.id]);
 
   const res = await app.request(`/api/v1/w/acme/p/${seed.project.slug}`, {
     method: 'DELETE',
     headers: { Cookie: seed.sessionCookie },
   });
-  // Member-tier permission rejection — actual code is whatever scope.ts emits;
-  // common Folio convention is 403 FORBIDDEN.
-  expect(res.status).toBe(403);
+  expect(res.status).toBe(204);
+});
 
-  // The agent's frontmatter is untouched because the transaction never ran.
+test('CR-2/3: DELETE project — an instance-member with ONLY a project_access grant CAN delete (204)', async () => {
+  // A project-grant holder (no ws grant) reaches the project via canSeeProject's
+  // direct-project clause; under the decision (delete == canSeeProject) they may
+  // delete it. Set up a fresh member who holds only project_access on p1.
+  const { app, db, seed } = await makeTestApp();
+  const { users, projectAccess } = await import('../db/schema.ts');
+  const memberId = nanoid();
+  await db.insert(users).values({
+    id: memberId,
+    email: 'pgrant@test.local',
+    name: 'PGrant',
+    passwordHash: 'x',
+    role: 'member',
+  });
+  await db.insert(projectAccess).values({ userId: memberId, projectId: seed.project.id });
+  const session = await createSession(memberId);
+
+  const res = await app.request(`/api/v1/w/acme/p/${seed.project.slug}`, {
+    method: 'DELETE',
+    headers: { Cookie: `folio_session=${session.id}` },
+  });
+  expect(res.status).toBe(204);
+});
+
+test('CR-2/3: DELETE project — a non-grantee (stranger member) cannot delete (403/404, no scrub)', async () => {
+  // A member with NO grant of any kind is blocked at resolveProject (visibility),
+  // which is the correct "cannot manage" outcome — the cascade never runs.
+  const { app, db, seed } = await makeTestApp();
+  const { users } = await import('../db/schema.ts');
+  const strangerId = nanoid();
+  await db.insert(users).values({
+    id: strangerId,
+    email: 'nogrant@test.local',
+    name: 'NoGrant',
+    passwordHash: 'x',
+    role: 'member',
+  });
+  const session = await createSession(strangerId);
+
+  const agent = await createAgentWithProjects(app, seed.sessionCookie, 'Specific', [seed.project.id]);
+
+  const res = await app.request(`/api/v1/w/acme/p/${seed.project.slug}`, {
+    method: 'DELETE',
+    headers: { Cookie: `folio_session=${session.id}` },
+  });
+  expect(res.status).not.toBe(204);
+  expect([403, 404]).toContain(res.status);
+
+  // The agent's frontmatter is untouched because the cascade never ran.
   const { documents } = await import('../db/schema.ts');
+  const { eq } = await import('drizzle-orm');
   const row = await db.query.documents.findFirst({ where: eq(documents.id, agent.id) });
   expect((row!.frontmatter as { projects: string[] }).projects).toEqual([seed.project.id]);
 });
@@ -248,6 +295,52 @@ test('POST /projects: documents:write token cannot create a project (403)', asyn
     body: JSON.stringify({ name: 'Mobile' }),
   });
   expect(res.status).toBe(403);
+});
+
+test('CR-5: an instance-reach token minted by a grant-less member sees ALL projects in a workspace', async () => {
+  // GET /w/W/projects with an instance-reach token (workspaceId=null) whose
+  // CREATOR is an instance-member with NO grant in W. The token is
+  // owner-equivalent (resolveWorkspace sets role='owner'), so listProjects must
+  // return ALL projects in W — NOT [] (which the pre-fix re-derivation from the
+  // grant-less creator produced).
+  const { app, db, seed } = await makeTestApp();
+  const { apiTokens, users, projects: projectsTbl } = await import('../db/schema.ts');
+
+  // A second project in W (the harness seeds one: 'web').
+  await db.insert(projectsTbl).values({
+    id: nanoid(),
+    workspaceId: seed.workspace.id,
+    slug: 'mobile',
+    name: 'Mobile',
+  });
+
+  // The token creator: an instance-member with NO grant anywhere.
+  const creatorId = nanoid();
+  await db.insert(users).values({
+    id: creatorId,
+    email: 'instance-creator@test.local',
+    name: 'InstanceCreator',
+    passwordHash: 'x',
+    role: 'member',
+  });
+
+  // Instance-reach token: workspaceId null, human createdBy (hydrates creator).
+  const tok = newApiToken();
+  await db.insert(apiTokens).values({
+    id: nanoid(),
+    workspaceId: null,
+    name: 'instance-read',
+    tokenHash: tok.hash,
+    scopes: ['documents:read'],
+    createdBy: creatorId,
+  });
+
+  const res = await app.request('/api/v1/w/acme/projects', {
+    headers: { Authorization: `Bearer ${tok.token}` },
+  });
+  expect(res.status).toBe(200);
+  const slugs = ((await res.json()).data as { slug: string }[]).map((p) => p.slug).sort();
+  expect(slugs).toEqual(['mobile', 'web']);
 });
 
 test('POST /projects: dryRun create does not mutate', async () => {
