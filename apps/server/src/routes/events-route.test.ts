@@ -894,6 +894,74 @@ test('fix#2: project-only invitee does NOT receive sibling-project events via /e
   expect(text).not.toContain('OPS');
 });
 
+// CR-7 (round-2 code-review): the per-user narrowing originally fired ONLY for
+// session auth (`token === null`). A project-only invitee can mint a
+// WORKSPACE-PINNED human PAT (POST /w/:wslug/tokens is gated only by
+// canSeeWorkspace, which they pass via traverse) — and a human PAT skips BOTH
+// the F3 agent allow-list (no agentId) AND the (old) session-only narrowing, so
+// it received every project's events. This test pins the PAT path: the narrowing
+// now applies to any HUMAN principal (session OR token with agentId===null).
+test('CR-7: project-only invitee with a human PAT does NOT receive sibling-project events', async () => {
+  const { app, db: testDb, seed } = await makeTestApp();
+
+  // Sibling project 'ops' the invitee is NOT granted.
+  const opsId = nanoid();
+  await testDb.insert(projects).values({
+    id: opsId, workspaceId: seed.workspace.id, slug: 'ops', name: 'Ops',
+  });
+
+  // Project-only invitee: member, project_access to 'web' ONLY, no workspace_access.
+  const inviteeId = nanoid();
+  await testDb.insert(users).values({
+    id: inviteeId, email: 'patinvitee@test.local', name: 'PAT Invitee', role: 'member',
+  });
+  await testDb.insert(projectAccess).values({ userId: inviteeId, projectId: seed.project.id });
+
+  // A WORKSPACE-PINNED HUMAN PAT created by the invitee (agentId null → human).
+  // This is exactly the token POST /w/acme/tokens mints for them (canSeeWorkspace
+  // passes via traverse). We mint it directly to keep the test deterministic.
+  const { token, hash } = newApiToken();
+  await testDb.insert(apiTokens).values({
+    id: nanoid(),
+    workspaceId: seed.workspace.id, // pinned to the whole workspace
+    name: 'invitee-pat',
+    tokenHash: hash,
+    scopes: ['documents:read'],
+    // agentId omitted → NULL → human PAT (not agent-bound).
+    createdBy: inviteeId,
+  });
+
+  const { events } = await import('../db/schema.ts');
+  await testDb.insert(events).values([
+    {
+      id: 'cr7-anchor', workspaceId: seed.workspace.id, projectId: null, documentId: null,
+      kind: 'workspace.created', actor: seed.user.id, payload: {},
+      createdAt: new Date(Date.now() - 90_000), seq: 8200,
+    },
+    {
+      id: 'cr7-WEB-event', workspaceId: seed.workspace.id, projectId: seed.project.id, documentId: null,
+      kind: 'document.created', actor: seed.user.id, payload: { marker: 'WEB' },
+      createdAt: new Date(Date.now() - 60_000), seq: 8201,
+    },
+    {
+      id: 'cr7-OPS-event', workspaceId: seed.workspace.id, projectId: opsId, documentId: null,
+      kind: 'document.created', actor: seed.user.id, payload: { marker: 'OPS' },
+      createdAt: new Date(Date.now() - 30_000), seq: 8202,
+    },
+  ]);
+
+  const res = await app.request('/api/v1/w/acme/events', {
+    headers: { Authorization: `Bearer ${token}`, 'Last-Event-Id': 'cr7-anchor' },
+  });
+  expect(res.status).toBe(200);
+  const text = await drainReplay(res);
+
+  // Granted project's event delivered; sibling project's event MUST NOT leak.
+  expect(text).toContain('cr7-WEB-event');
+  expect(text).not.toContain('cr7-OPS-event');
+  expect(text).not.toContain('OPS');
+});
+
 test('fix#2: workspace owner still receives ALL project events via /events replay (no over-narrowing)', async () => {
   const { app, db: testDb, seed } = await makeTestApp();
 

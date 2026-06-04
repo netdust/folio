@@ -61,8 +61,8 @@ eventsRoute.get('/', async (c) => {
   // pScope), so resolveProject + requireResource never run. We resolve the
   // calling agent's effective allow-list here and narrow both the ?project=
   // gate AND the replay/live filter accordingly. Human PATs and session auth
-  // bypass (token === null OR token.agentId === null). Phase 3+ adds per-PAT
-  // narrowing once a UI exists for it.
+  // bypass THIS (agent) gate (token === null OR token.agentId === null) — they
+  // get the per-user project narrowing below instead (CR-7).
   const token = c.get('token') ?? null;
   let agentAllowList: string[] | null = null; // null === unrestricted
   let agentEventCtx: AgentEventContext = { agentId: null, agentSlug: null };
@@ -101,12 +101,14 @@ eventsRoute.get('/', async (c) => {
   // stays null === unrestricted, mirroring the agentAllowList convention. Only
   // a project-scoped invitee is narrowed to the set of projects they can see.
   //
-  // Computed only for SESSION auth (token === null). Agent tokens are already
-  // bounded by the F3 allow-list above; the bearer middleware also hydrates the
-  // token's CREATOR into `c.get('user')`, so computing this for an agent
-  // request would narrow by the creator's grants — extra work that the F3 path
-  // already covers. Narrowing only ever RESTRICTS, so even if both applied it
-  // would be safe, but we skip it for agents to avoid the redundant queries.
+  // Computed for any HUMAN principal — a session OR a human PAT (a token with
+  // no agentId). CR-7: a project-only invitee can mint a workspace-pinned human
+  // PAT (POST /w/:wslug/tokens is gated only by canSeeWorkspace, which they pass
+  // via traverse); that PAT is NOT bounded by the F3 allow-list (no agentId), so
+  // it MUST get the same per-user narrowing a session does — otherwise it leaks
+  // every project's events. AGENT tokens (token.agentId != null) skip this:
+  // they're already bounded by the F3 allow-list above (narrowing only ever
+  // RESTRICTS, so applying both would be safe, but it'd be redundant work).
   const user = c.get('user');
   let userVisibleProjects: Set<string> | null = null; // null === unrestricted
   // A human principal — session OR a human PAT (token with no agentId). Agent
