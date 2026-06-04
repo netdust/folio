@@ -14,6 +14,8 @@
 
 > **BRANCH BASELINE (verified at execution):** off `main`, the suite is **server 1391 / shared 63 / web 762**, all green. Measure deltas from these, NOT the plan's earlier "~1011" estimate. T1 landed `0023_add_user_role.sql` (server now 1392). `0023_ai_keys_drop_workspace.sql` + the instance-AI feature are NOT on this branch.
 
+> **PLAN CORRECTION (discovered at Phase-2 gate, 2026-06-04): the live `memberships`-reader set was UNDER-ENUMERATED.** §8's sibling-sweep named these abstractly; the Phase-2 gate grep found a concrete cluster that MUST migrate before Phase 4 drops `memberships`. Added **Task 8.5** (below, Phase 2) to migrate them. The full live-reader set (excluding the transitional harness insert + the system-workspace.ts functions Phase 4 deletes): `services/workspaces.ts` (listWorkspaces + isSystemMember — handled by Task 9), `services/comments.ts` (loadWorkspaceMembers), `services/agent-runs.ts:163` (caller-role derivation), `routes/workspaces.ts` (create-seeds-membership + member-list), `routes/settings.ts` (3 per-workspace AI-key gates — this is the on-branch per-workspace AI-keys route, NOT the instance-AI route from the other branch). The Phase-4 drop test will FAIL if any of these still reads `memberships` — Task 8.5 + Task 9 must clear them all.
+
 ---
 
 ## Threat model (inherited from spec §7 — the /code-review convergence target)
@@ -600,7 +602,22 @@ git add apps/server/src/lib/system-workspace.ts apps/server/src/middleware/auth.
 git commit -m "phase-2: instance-admin/owner gates + token ceiling read users.role"
 ```
 
-**Phase 2 integration gate:** server suite green; the live-`memberships`-read grep is clean. The auth convergence points (1/4/7) now route through `users.role` + `access.ts`. Proceed to Phase 3.
+### Task 8.5: Migrate the remaining live `memberships` readers (the under-enumerated cluster)
+
+**Files (each has a live `memberships` read that must move to the new model BEFORE Phase 4 drops the table):**
+- `apps/server/src/services/comments.ts` (`loadWorkspaceMembers`) — "who's in this workspace" for @mention parsing → join `workspace_access` to `users` instead (a user can be @mentioned if they have access to the ws; owner sees all but isn't in `workspace_access` — for mention-resolution, listing grant-holders is correct; the operator/owner-mention path is handled elsewhere). Replace the `memberships` join with a `workspaceAccess` join.
+- `apps/server/src/services/agent-runs.ts:163` (fresh-run caller-role derivation) — `const membership = ...memberships.findFirst(...); const callerRole = membership?.role` → `const callerRole = await userRole(db, actor.id)` (the caller's INSTANCE role now bounds run authority; this is the per-run caller ceiling). Verify the downstream `if (!callerRole)` deny-path still behaves (userRole never returns undefined — it defaults 'member'; so adapt the guard: a user with no access to the run's workspace should still be denied — gate on `canSeeWorkspace(db, actor.id, workspace.id)` before deriving the role, deny if they can't see it).
+- `apps/server/src/routes/workspaces.ts:154` (create seeds a `memberships` owner row) → seed a `workspace_access(ownerUserId, id)` grant instead (the creator gets access to the workspace they made). The creator's instance role is separate (already on users.role). Keep it inside the same `txWithEvents`.
+- `apps/server/src/routes/workspaces.ts:260` (workspace member list) → list `workspace_access` holders joined to `users` (+ their instance `users.role`).
+- `apps/server/src/routes/settings.ts` (3 reads — the per-workspace AI-keys GET/POST/DELETE gates) → replace each `memberships.findFirst` + `if (!m) 403` with `canSeeWorkspace`; the POST/DELETE admin check (`m.role !== 'owner' && m.role !== 'admin'`) → `userRole(db, user.id)` admin check. (This is the on-branch per-workspace AI-keys route; it stays per-workspace on this branch.)
+
+> NOTE: `services/workspaces.ts` (`listWorkspaces` + `isSystemMember`) is migrated by **Task 9**, not here — don't double-do it. `system-workspace.ts`'s `findSystemOwnerId`/`grantOwner`/`resolveAgentForRun`/provenance reads + the transitional `harness.ts` insert are **Phase 4** teardown — leave them.
+
+**Approach:** TDD per site where behavior is testable (settings access gate, workspaces create→grant, agent-runs caller ceiling). For each: write/adjust a test proving the new-model behavior (a user with a grant passes; without, 403/denied; the run caller ceiling = instance role), watch it fail, migrate the read, watch it pass. Run the full server suite after each file; keep it green. Commit per file or as one cohesive commit `phase-2: migrate remaining live memberships readers to users.role + access`.
+
+**Gate:** after this task, `grep -rn "memberships" apps/server/src --include=*.ts | grep -v "\.test\." | grep -v "/migrations/" | grep -v "system-workspace.ts" | grep -v "test/harness.ts" | grep -v "services/workspaces.ts"` returns NOTHING. (The remaining allowed refs: system-workspace.ts + harness.ts → Phase 4; services/workspaces.ts → Task 9.)
+
+**Phase 2 integration gate:** server suite green; the live-`memberships`-read grep is clean except the Phase-4/Task-9 deferrals named above. The auth convergence points (1/4/7) now route through `users.role` + `access.ts`. Proceed to Phase 3.
 
 ---
 
