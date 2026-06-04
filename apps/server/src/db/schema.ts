@@ -27,6 +27,13 @@ export const users = sqliteTable('users', {
   email: text('email').notNull().unique(),
   passwordHash: text('password_hash'), // nullable -> magic-link-only users
   name: text('name').notNull(),
+  // Instance-level role. Roles live here (one instance = one team) rather than
+  // on `memberships` (which is workspace-scoped and slated for removal as the
+  // workspace tenancy boundary is dropped). Additive for now — nothing reads
+  // this yet; backfill + readers land in later tasks.
+  role: text('role', { enum: ['owner', 'admin', 'member'] })
+    .notNull()
+    .default('member'),
   createdAt: integer('created_at', { mode: 'timestamp_ms' })
     .notNull()
     .default(sql`(unixepoch() * 1000)`),
