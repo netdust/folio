@@ -6,6 +6,7 @@ import type { Document } from '../db/schema.ts';
 import { apiTokens, documents, memberships, projects, users, workspaces } from '../db/schema.ts';
 import type { Env } from '../env.ts';
 import { createDocument } from '../services/documents.ts';
+import { userRole } from './access.ts';
 import { roleToScopes } from './agent-schema.ts';
 import { HTTPError } from './http.ts';
 import {
@@ -268,33 +269,52 @@ export async function findSystemWorkspaceId(db: DB): Promise<string | undefined>
   return sys?.id;
 }
 
-/** A __system membership role that may administer the instance. */
+/** An instance role (users.role) that may administer the instance. */
 export type InstanceAdminRole = 'owner' | 'admin';
 
 /**
  * The SINGLE instance-admin gate (CR#6). A user may administer instance-level
- * surfaces (mint a reach=null token, list/revoke instance tokens) iff they are
- * an owner/admin of `__system`. Returns their `__system` role (callers use it as
- * the scope ceiling for a reach=null mint); throws 403 otherwise. Both the A7
- * token-mint reach gate and the instance-token routes route through this so the
- * instance-admin boundary lives in one place.
+ * surfaces (mint a reach=null token, list/revoke instance tokens) iff their
+ * INSTANCE role (`users.role`) is owner or admin. Returns that role (callers use
+ * it as the scope ceiling for a reach=null mint); throws 403 otherwise. Both the
+ * A7 token-mint reach gate and the instance-token routes route through this so
+ * the instance-admin boundary lives in one place.
+ *
+ * Post-tenancy (drop-workspace-tenancy Task 8): the source of the role is now
+ * `users.role` via `userRole`, NOT a `__system` membership. One instance = one
+ * team; roles live on the user.
  */
 export async function requireInstanceAdmin(
   db: DB,
   userId: string,
 ): Promise<InstanceAdminRole> {
-  const systemId = await getSystemWorkspaceId(db);
-  const m = await db.query.memberships.findFirst({
-    where: and(eq(memberships.workspaceId, systemId), eq(memberships.userId, userId)),
-  });
-  if (m?.role !== 'owner' && m?.role !== 'admin') {
+  const role = await userRole(db, userId);
+  if (role !== 'owner' && role !== 'admin') {
     throw new HTTPError(
       'FORBIDDEN',
-      'instance administration requires a __system owner/admin',
+      'instance administration requires owner or admin',
       403,
     );
   }
-  return m.role;
+  return role;
+}
+
+/**
+ * The instance-OWNER gate. Stricter than `requireInstanceAdmin`: only the single
+ * instance owner (`users.role === 'owner'`) passes; an admin is rejected.
+ * For owner-only surfaces such as the role-change route (a later task). Reads
+ * `users.role` via `userRole`.
+ */
+export async function requireInstanceOwner(db: DB, userId: string): Promise<'owner'> {
+  const role = await userRole(db, userId);
+  if (role !== 'owner') {
+    throw new HTTPError(
+      'FORBIDDEN',
+      'this action requires the instance owner',
+      403,
+    );
+  }
+  return 'owner';
 }
 
 /**

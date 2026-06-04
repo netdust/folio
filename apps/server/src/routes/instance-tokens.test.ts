@@ -1,10 +1,33 @@
 import { describe, expect, test } from 'bun:test';
 import { eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
+import * as schema from '../db/schema.ts';
 import { apiTokens } from '../db/schema.ts';
-import { newApiToken } from '../lib/auth.ts';
+import { createSession, newApiToken } from '../lib/auth.ts';
 import { bootstrapSystemWorkspace, grantOwner } from '../lib/system-workspace.ts';
 import { makeTestApp } from '../test/harness.ts';
+
+/**
+ * Seed a fresh user with the given INSTANCE role (users.role) and return their
+ * session cookie. Post-tenancy, requireInstanceAdmin reads users.role — so a
+ * 'member' here is a genuine non-instance-admin (the forbidden case). The route
+ * is session-only (mounted on v1, no wScope), so no workspace_access grant is
+ * needed to reach it.
+ */
+async function seedRoleSession(
+  db: Awaited<ReturnType<typeof makeTestApp>>['db'],
+  role: 'owner' | 'admin' | 'member',
+): Promise<string> {
+  const userId = nanoid();
+  await db.insert(schema.users).values({
+    id: userId,
+    email: `${userId}@test.local`,
+    name: role,
+    role,
+  });
+  const session = await createSession(userId);
+  return `folio_session=${session.id}`;
+}
 
 /**
  * A12 / CR#5 — instance-token administration surface (list + revoke).
@@ -89,15 +112,18 @@ describe('CR#5: DELETE /api/v1/instance/tokens/:id (revoke instance token)', () 
     expect(row).toBeDefined();
   });
 
-  test('a non-__system user cannot revoke (403)', async () => {
+  test('a non-instance-admin (users.role member) cannot revoke (403)', async () => {
     const { app, db, seed } = await makeTestApp();
     await bootstrapSystemWorkspace(db);
-    // seed.user is NOT made a __system member (no grantOwner).
+    // A genuine non-admin: users.role 'member'. (seed.user is the instance owner
+    // now, so it can't stand in for the forbidden case — we use a member-role
+    // session to preserve the security intent.)
+    const memberCookie = await seedRoleSession(db, 'member');
     const tokId = await seedInstanceToken(db, seed.user.id);
 
     const res = await app.request(`/api/v1/instance/tokens/${tokId}`, {
       method: 'DELETE',
-      headers: { Cookie: seed.sessionCookie },
+      headers: { Cookie: memberCookie },
     });
     expect(res.status).toBe(403);
 
@@ -160,12 +186,13 @@ describe('A12: GET /api/v1/instance/tokens (list instance tokens)', () => {
     }
   });
 
-  test('a non-__system user cannot list (403)', async () => {
-    const { app, db, seed } = await makeTestApp();
+  test('a non-instance-admin (users.role member) cannot list (403)', async () => {
+    const { app, db } = await makeTestApp();
     await bootstrapSystemWorkspace(db);
-    // No grantOwner — alice is not a __system member.
+    // A genuine non-admin: users.role 'member' (seed.user is the instance owner).
+    const memberCookie = await seedRoleSession(db, 'member');
     const res = await app.request('/api/v1/instance/tokens', {
-      headers: { Cookie: seed.sessionCookie },
+      headers: { Cookie: memberCookie },
     });
     expect(res.status).toBe(403);
   });

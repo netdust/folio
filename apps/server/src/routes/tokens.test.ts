@@ -247,6 +247,92 @@ describe('tokens.ts POST scope ceiling (no minting above your role)', () => {
   });
 });
 
+// Post-tenancy access gate (drop-workspace-tenancy Task 8): a user may manage a
+// workspace's tokens iff they can SEE that workspace (the access.ts convergence
+// point), replacing the old `memberships`-row check. The handler gates on the
+// `:workspaceId` PATH PARAM directly (it does not run resolveWorkspace on that
+// param — resolveWorkspace keys off `:wslug`). These tests target the HANDLER's
+// own canSeeWorkspace(:workspaceId) guard by pointing `:workspaceId` at a
+// workspace B the caller cannot see, while `:wslug` is a workspace they CAN see
+// (so resolveWorkspace passes and the handler guard is the operative gate).
+describe('tokens.ts access gate: managing a workspace needs canSeeWorkspace (:workspaceId)', () => {
+  const tokensPath = (wslug: string, workspaceId: string) =>
+    `/api/v1/w/${wslug}/tokens/${workspaceId}`;
+
+  // A member who can see `acme` (via workspace_access) but NOT workspace B.
+  async function seedMemberAndUnseenWorkspace(
+    db: Awaited<ReturnType<typeof makeTestApp>>['db'],
+    seenWorkspaceId: string,
+  ): Promise<{ cookie: string; unseenWorkspaceId: string }> {
+    const cookie = await seedMemberSession(db, seenWorkspaceId, 'member');
+    const unseenWorkspaceId = nanoid();
+    await db.insert(schema.workspaces).values({
+      id: unseenWorkspaceId,
+      slug: `unseen-${unseenWorkspaceId}`,
+      name: 'Unseen',
+    });
+    return { cookie, unseenWorkspaceId };
+  }
+
+  test('GET /tokens/:workspaceId → 403 when the caller cannot see :workspaceId', async () => {
+    const { app, db, seed } = await makeTestApp();
+    const { cookie, unseenWorkspaceId } = await seedMemberAndUnseenWorkspace(
+      db,
+      seed.workspace.id,
+    );
+    const res = await app.request(tokensPath(seed.workspace.slug, unseenWorkspaceId), {
+      headers: { Cookie: cookie },
+    });
+    expect(res.status).toBe(403);
+    expect((await res.json()).error.code).toBe('FORBIDDEN');
+  });
+
+  test('POST /tokens/:workspaceId → 403 when the caller cannot see :workspaceId (nothing minted)', async () => {
+    const { app, db, seed } = await makeTestApp();
+    const { cookie, unseenWorkspaceId } = await seedMemberAndUnseenWorkspace(
+      db,
+      seed.workspace.id,
+    );
+    const res = await app.request(tokensPath(seed.workspace.slug, unseenWorkspaceId), {
+      method: 'POST',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'x', scopes: ['documents:read'] }),
+    });
+    expect(res.status).toBe(403);
+    expect((await res.json()).error.code).toBe('FORBIDDEN');
+    const rows = await db.query.apiTokens.findMany({
+      where: eq(apiTokens.workspaceId, unseenWorkspaceId),
+    });
+    expect(rows.length).toBe(0);
+  });
+
+  test('DELETE /tokens/:workspaceId/:tokenId → 403 when the caller cannot see :workspaceId (peer survives)', async () => {
+    const { app, db, seed } = await makeTestApp();
+    const { cookie, unseenWorkspaceId } = await seedMemberAndUnseenWorkspace(
+      db,
+      seed.workspace.id,
+    );
+    // A peer token pinned to the unseen workspace.
+    const peerId = nanoid();
+    await db.insert(apiTokens).values({
+      id: peerId,
+      workspaceId: unseenWorkspaceId,
+      name: 'peer',
+      tokenHash: 'peer-hash',
+      scopes: ['documents:read'],
+      createdBy: seed.user.id,
+    });
+    const res = await app.request(
+      `${tokensPath(seed.workspace.slug, unseenWorkspaceId)}/${peerId}`,
+      { method: 'DELETE', headers: { Cookie: cookie } },
+    );
+    expect(res.status).toBe(403);
+    // The peer token still exists — the no-access caller could not revoke it.
+    const row = await db.query.apiTokens.findFirst({ where: eq(apiTokens.id, peerId) });
+    expect(row).toBeDefined();
+  });
+});
+
 // A7 — instance reach gate. api_tokens.workspace_id is nullable (null = instance
 // reach). Only an instance admin (owner/admin of __system) may mint a reach=null
 // token (T1). A normal mint pins to the URL workspace (back-compat). Reach is
@@ -255,25 +341,21 @@ describe('tokens.ts A7 instance reach gate (T1/T2)', () => {
   const tokensPath = (wslug: string, workspaceId: string) =>
     `/api/v1/w/${wslug}/tokens/${workspaceId}`;
 
-  test('instance-admin (owner of __system) mints a reach=null token', async () => {
+  test('instance-admin (users.role owner) mints a reach=null token', async () => {
     const { app, db } = await makeTestApp();
     await bootstrapSystemWorkspace(db);
     const systemId = await getSystemWorkspaceId(db);
-    // Make a NEW user U an owner of __system.
+    // Make a NEW user U an instance owner (users.role).
     const userId = nanoid();
     await db.insert(schema.users).values({
       id: userId,
       email: `${userId}@test.local`,
       name: 'inst-admin',
-    });
-    await db.insert(schema.memberships).values({
-      workspaceId: systemId,
-      userId,
       role: 'owner',
     });
     // Post-tenancy: resolveWorkspace on /w/__system gates on workspace_access.
     // Grant it so the instance-admin reaches the route; requireInstanceAdmin
-    // (the scope-ceiling gate inside tokens.ts) still reads __system membership.
+    // (the scope-ceiling gate inside tokens.ts) reads users.role.
     await db.insert(schema.workspaceAccess).values({ userId, workspaceId: systemId });
     const session = await createSession(userId);
     const cookie = `folio_session=${session.id}`;
@@ -346,16 +428,11 @@ describe('tokens.ts A7 instance reach gate (T1/T2)', () => {
 describe('A12: instance-token listing surface', () => {
   const instancePath = '/api/v1/instance/tokens';
 
-  test('a __system owner lists instance tokens (and per-workspace tokens are excluded)', async () => {
+  test('an instance owner lists instance tokens (and per-workspace tokens are excluded)', async () => {
     const { app, db, seed } = await makeTestApp();
     await bootstrapSystemWorkspace(db);
-    const systemId = await getSystemWorkspaceId(db);
-    // Make seed.user (who already has a session cookie) a __system owner.
-    await db.insert(schema.memberships).values({
-      workspaceId: systemId,
-      userId: seed.user.id,
-      role: 'owner',
-    });
+    // seed.user is the instance owner (users.role = 'owner', set by the harness),
+    // which is what requireInstanceAdmin now reads.
 
     // An INSTANCE token (workspaceId null) + a normal acme-pinned token.
     const inst = newApiToken();
@@ -394,12 +471,15 @@ describe('A12: instance-token listing surface', () => {
     }
   });
 
-  test('a non-__system user is forbidden from the instance-token list (403)', async () => {
+  test('a non-instance-admin (users.role member) is forbidden from the instance-token list (403)', async () => {
     const { app, db, seed } = await makeTestApp();
     await bootstrapSystemWorkspace(db);
-    // seed.user is owner of acme but NOT a __system member.
+    // A genuine non-admin: users.role defaults to 'member'. (seed.user is the
+    // instance owner now, so it can't stand in for the forbidden case anymore —
+    // we mint a fresh member-role session to preserve the security intent.)
+    const memberCookie = await seedMemberSession(db, seed.workspace.id, 'member');
     const res = await app.request(instancePath, {
-      headers: { Cookie: seed.sessionCookie },
+      headers: { Cookie: memberCookie },
     });
     expect(res.status).toBe(403);
     const body = await res.json();

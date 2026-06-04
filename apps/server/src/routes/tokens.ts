@@ -4,7 +4,8 @@ import { Hono } from 'hono';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import { db } from '../db/client.ts';
-import { apiTokens, memberships } from '../db/schema.ts';
+import { apiTokens } from '../db/schema.ts';
+import { canSeeWorkspace, userRole } from '../lib/access.ts';
 import { newApiToken } from '../lib/auth.ts';
 import { roleToScopes } from '../lib/agent-schema.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
@@ -23,10 +24,11 @@ tokensRoute.use('*', requireUser);
 tokensRoute.get('/:workspaceId', async (c) => {
   const user = getUser(c);
   const workspaceId = c.req.param('workspaceId');
-  const m = await db.query.memberships.findFirst({
-    where: and(eq(memberships.workspaceId, workspaceId), eq(memberships.userId, user.id)),
-  });
-  if (!m) throw new HTTPError('FORBIDDEN', 'not a member', 403);
+  // Post-tenancy: a user may manage a workspace's tokens iff they can SEE the
+  // workspace (the access.ts convergence point), not via a membership row.
+  if (!(await canSeeWorkspace(db, user.id, workspaceId))) {
+    throw new HTTPError('FORBIDDEN', 'no access to this workspace', 403);
+  }
   const rows = await db.query.apiTokens.findMany({
     where: eq(apiTokens.workspaceId, workspaceId),
   });
@@ -55,10 +57,10 @@ tokensRoute.post(
   async (c) => {
     const user = getUser(c);
     const workspaceId = c.req.param('workspaceId');
-    const m = await db.query.memberships.findFirst({
-      where: and(eq(memberships.workspaceId, workspaceId), eq(memberships.userId, user.id)),
-    });
-    if (!m) throw new HTTPError('FORBIDDEN', 'not a member', 403);
+    // Post-tenancy: managing a workspace's tokens requires SEEING it.
+    if (!(await canSeeWorkspace(db, user.id, workspaceId))) {
+      throw new HTTPError('FORBIDDEN', 'no access to this workspace', 403);
+    }
 
     const { name, scopes, workspaceId: requestedReach } = c.req.valid('json');
 
@@ -67,11 +69,13 @@ tokensRoute.post(
     // — T1. Reach is immutable after mint (no PATCH route, T2): this is the only
     // place a token's workspace_id is ever set.
     let reach: string | null = workspaceId;
-    let ceilingRole = m.role;
+    // Post-tenancy: the scope ceiling is the caller's INSTANCE role (users.role),
+    // not a per-workspace membership role.
+    let ceilingRole = await userRole(db, user.id);
     if (requestedReach === null) {
-      // Instance reach is gated on the __system owner/admin boundary (CR#6 — the
-      // shared gate). It returns the caller's __system role, which becomes the
-      // scope ceiling for the instance token (not their URL-workspace role).
+      // Instance reach is gated on the instance owner/admin boundary (CR#6 — the
+      // shared gate, now reading users.role). It returns the caller's instance
+      // role, which becomes the scope ceiling for the instance token.
       ceilingRole = await requireInstanceAdmin(db, user.id);
       reach = null;
     } else if (typeof requestedReach === 'string' && requestedReach !== workspaceId) {
@@ -120,10 +124,10 @@ tokensRoute.delete('/:workspaceId/:tokenId', requireSessionUser, async (c) => {
   const user = getUser(c);
   const workspaceId = c.req.param('workspaceId');
   const tokenId = c.req.param('tokenId');
-  const m = await db.query.memberships.findFirst({
-    where: and(eq(memberships.workspaceId, workspaceId), eq(memberships.userId, user.id)),
-  });
-  if (!m) throw new HTTPError('FORBIDDEN', 'not a member', 403);
+  // Post-tenancy: managing a workspace's tokens requires SEEING it.
+  if (!(await canSeeWorkspace(db, user.id, workspaceId))) {
+    throw new HTTPError('FORBIDDEN', 'no access to this workspace', 403);
+  }
   await db
     .delete(apiTokens)
     .where(and(eq(apiTokens.id, tokenId), eq(apiTokens.workspaceId, workspaceId)));
