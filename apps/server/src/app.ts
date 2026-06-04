@@ -22,6 +22,7 @@ import { fieldsRoute } from './routes/fields.ts';
 import { healthRoute } from './routes/health.ts';
 import { instanceAccessRoute } from './routes/instance-access.ts';
 import { instanceTokensRoute } from './routes/instance-tokens.ts';
+import { instanceUsersRoute } from './routes/instance-users.ts';
 import { mcpRoute } from './routes/mcp.ts';
 import { projectItemRoute, projectsRoute } from './routes/projects.ts';
 import { providerHealthRoute, runsListRoute, runsRoute } from './routes/runs.ts';
@@ -54,6 +55,11 @@ v1.route('/instance/tokens', instanceTokensRoute);
 // Session-only + owner/admin gate. Mounted on v1 (NOT under wScope) so attachToken
 // never runs and a stolen Bearer cannot grant access; attachUser supplies the session.
 v1.route('/instance/access', instanceAccessRoute);
+// Task 12: instance-user administration — PATCH /instance/users/:id/role (OWNER-only),
+// GET /instance/users + GET /instance/invite-targets (owner+admin enumeration). Mounted
+// at /instance (NOT /instance/users) because invite-targets is a SIBLING of users, not a
+// child — see the route file's mount note. Session-only (no wScope → no attachToken).
+v1.route('/instance', instanceUsersRoute);
 
 const wScope = new Hono<AuthContext & ScopeContext>();
 wScope.use('*', attachToken, requireUserOrToken, resolveWorkspace);
