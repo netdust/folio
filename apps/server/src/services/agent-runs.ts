@@ -218,8 +218,10 @@ export async function createRun(
     assignee: `agent:${agent.slug}`,
     status: 'planning',
     agent_slug: agent.slug,
-    // B2/B8: stamped from the RESOLVED agent's home workspace (B for a local agent, `__system` for a library agent), server-side — never client-supplied. `loadContext` (Task 3) gates resolution on `home ∈ {run.workspaceId, __system}`.
-    agent_home_workspace_id: agent.workspaceId,
+    // Phase 4: no longer read by loadContext (agent resolves instance-wide by
+    // slug). Retained for backward-compat of the optional schema field + old
+    // rows; undefined for the operator singleton (sentinel workspace).
+    agent_home_workspace_id: agent.workspaceId || undefined,
     provider,
     model,
     system_prompt: systemPrompt,

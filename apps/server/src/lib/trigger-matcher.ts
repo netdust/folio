@@ -42,7 +42,7 @@ import {
   transitionRun,
 } from '../services/agent-runs.ts';
 import { resolveAgentProjects } from './agent-projects.ts';
-import { findSystemWorkspaceId, resolveAgentForRun } from './system-workspace.ts';
+import { resolveAgentForRun } from './agent-resolver.ts';
 import type { AgentRunFrontmatter } from './agent-run-schema.ts';
 import type { BusEvent } from './event-bus.ts';
 import type { Reactor } from './event-dispatcher.ts';
@@ -222,40 +222,30 @@ async function resolveTargetAgentSlug(
   workspaceId: string,
   payload: Record<string, unknown>,
 ): Promise<string | undefined> {
-  // Home predicate {eventWs, __system}, local-shadows-library — Phase C C1;
-  // reuses Phase B resolveAgentForRun. The id-handle branch resolves by doc id
-  // (immutable, survives renames) but must assert the resolved agent's home ∈
-  // {eventWs, __system} so a comment can't reach an agent in a THIRD workspace.
+  // Phase 4: no tenancy boundary — an agent resolves instance-wide. The
+  // id-handle branch (BUG-013's immutable doc-id, survives renames) resolves by
+  // id; the slug branch by resolveAgentForRun. No home predicate remains.
   const targetAgentId =
     typeof payload.target_agent_id === 'string' ? payload.target_agent_id : undefined;
   if (targetAgentId) {
     const agentDoc = await db.query.documents.findFirst({
       where: and(eq(documents.id, targetAgentId), eq(documents.type, 'agent')),
     });
-    if (agentDoc) {
-      const systemId = await findSystemWorkspaceId(db); // undefined when __system unseeded
-      if (agentDoc.workspaceId === workspaceId || agentDoc.workspaceId === systemId) {
-        return agentDoc.slug;
-      }
-    }
+    if (agentDoc) return agentDoc.slug;
   }
   const raw = typeof payload.target_agent === 'string' ? payload.target_agent : undefined;
   if (!raw) return undefined;
   const slug = normalizeAgentSlug(raw);
-  const agent = await resolveAgentForRun(db, workspaceId, slug);
+  const agent = await resolveAgentForRun(db, slug);
   if (agent) return agent.slug;
-  // review-fix #3 — the agent doc no longer resolves under {eventWs, __system}
-  // (deleted, or renamed away). Fall back to the normalized bare slug VERBATIM
-  // so an awaiting_approval run whose FROZEN `frontmatter.agent_slug` is this
-  // slug can still be rejected/resumed instead of being stranded forever (no
-  // sweeper touches awaiting_approval). This is SAFE for the approval/rejection
-  // path even though it skips the home predicate: the slug flows only into
-  // `getPendingApprovalRun({ parentId, agentSlug })`, which is scoped by the
-  // parent (already in eventWs) — so it can only select an EXISTING in-workspace
-  // pending run. A slug naming a THIRD-workspace agent matches no run under this
-  // parent → benign no-op. The authority boundary is the in-workspace pending
-  // RUN, not the slug. (The FIRE path, maybeCreateRun, deliberately does NOT use
-  // this fallback: there a missing agent SHOULD skip — no run to strand.)
+  // The agent doc no longer resolves (deleted, or renamed away). Fall back to
+  // the normalized bare slug VERBATIM so an awaiting_approval run whose FROZEN
+  // `frontmatter.agent_slug` is this slug can still be rejected/resumed instead
+  // of being stranded forever. SAFE: the slug flows only into
+  // `getPendingApprovalRun({ parentId, agentSlug })`, scoped by the parent — so
+  // it selects only an EXISTING pending run under that parent. (The FIRE path,
+  // maybeCreateRun, deliberately does NOT use this fallback: a missing agent
+  // SHOULD skip — no run to strand.)
   return slug;
 }
 
@@ -341,7 +331,7 @@ async function handleResumeRun(
   // local-shadows-library — Phase C C1; reuses Phase B resolveAgentForRun. A
   // resume of a __system library agent's run resolves the same way the fresh
   // path does.
-  const agent = await resolveAgentForRun(db, workspaceId, agentSlug);
+  const agent = await resolveAgentForRun(db, agentSlug);
   if (!agent) {
     console.log(`[trigger-matcher] resume_run: agent '${agentSlug}' not found; skipping`);
     return;
@@ -431,12 +421,10 @@ async function maybeCreateRun(
   const parentId = resolveParentId(event);
   if (!parentId) return;
 
-  // 2. Resolve the agent doc by slug under the home predicate {eventWs,
-  //    __system}, local-shadows-library — Phase C C1; reuses Phase B
-  //    resolveAgentForRun. A B trigger can thus fire a __system library agent
-  //    (e.g. the operator); a B-local agent of the same slug wins. An unresolved
-  //    slug is legitimate UX (a human typed a speculative slug) — just don't fire.
-  const agent = await resolveAgentForRun(db, workspaceId, agentSlug);
+  // 2. Resolve the agent doc by slug, instance-wide (Phase 4 — no tenancy
+  //    boundary). An unresolved slug is legitimate UX (a human typed a
+  //    speculative slug) — just don't fire.
+  const agent = await resolveAgentForRun(db, agentSlug);
   if (!agent) return;
 
   // 3. Allow-list (mitigation 50). Reuse the canonical `resolveAgentProjects`
@@ -446,48 +434,12 @@ async function maybeCreateRun(
   //    collapses mixed ['proj','*'] → ['*'] — none of which the old `as
   //    string[]` cast did (a string `projects` would substring-match). Skip
   //    (zero runs) when the list is narrowed and excludes this event's project.
-  // C2 — a library agent's `projects` describe __system, not B, so they are NOT a
-  // B-fire-gate. Skip the allow-list for a library agent (home __system); its
-  // AUTHORITY in B is bounded at run time by loadContext's caller-sole narrowing
-  // (Phase B B5), not at the fire decision. A LOCAL agent keeps the gate. (When
-  // __system is unseeded, systemId is undefined and `agent.workspaceId ===
-  // undefined` is false for every real agent, so the gate still applies.)
-  const systemId = await findSystemWorkspaceId(db);
-  const isLibraryAgent = systemId !== undefined && agent.workspaceId === systemId;
-  if (!isLibraryAgent) {
-    const allowList = resolveAgentProjects(agent);
-    if (!allowList.includes('*') && (!event.projectId || !allowList.includes(event.projectId))) {
-      return;
-    }
-  }
-
-  // C6 — a LIBRARY agent's authority is the caller's, sole (Phase B). A
-  // caller-less trigger (no resolvable human behind event.actor) would leave a
-  // library run unbounded — so forbid library targets when no human caller
-  // resolves. LOCAL agents keep their existing owner-guard behavior (step 6).
-  // (Scheduled/cron triggers — Phase 3.5 — are the canonical caller-less case;
-  // any actor-less or agent-only event is caught here for a library target.)
-  // Defense-in-depth: the general owner guard at step 6 ALSO skips a caller-less
-  // run, but C6 makes the library-specific invariant EXPLICIT and EARLY, so a
-  // future loosening of step 6 can't silently let an unbounded caller-less
-  // library run through. The double resolveOwnerUser call (here + step 6) is
-  // acceptable — gated behind a matched trigger fire, small indexed lookups.
-  //
-  // C6 deliberately EXCLUDES agent-originated events: those are the autonomy
-  // gate's domain (C4 — they must be SUPPRESSED with a durable
-  // agent.chain.suppressed signal, not silently skipped here). An `agent:` actor
-  // never resolves to a human, so without this exclusion C6 would shadow the
-  // gate and swallow the suppression signal. C6 thus targets the genuinely
-  // caller-less, NON-agent case (actor-less / unresolvable human — the Phase 3.5
-  // scheduled/cron shape).
-  if (isLibraryAgent && !isAgentOriginated(event)) {
-    const caller = await resolveOwnerUser(event.actor);
-    if (!caller) {
-      console.log(
-        `[trigger-matcher] library agent '${agent.slug}' target has no resolvable human caller; skipping (a caller-less library run would be unbounded — C6)`,
-      );
-      return;
-    }
+  // The allow-list ALWAYS gates (invariant 3 project ceiling). Phase 4: no
+  // library agents exist, so the old `__system`-home skip is gone — every agent
+  // is bounded to its `frontmatter.projects` at the fire decision.
+  const allowList = resolveAgentProjects(agent);
+  if (!allowList.includes('*') && (!event.projectId || !allowList.includes(event.projectId))) {
+    return;
   }
 
   // 4. Autonomy gate (mitigation 51). ORDER: resolve → allow-list → gate. The

@@ -63,7 +63,7 @@ import { sanitizeProviderError } from './ai/sanitize-error.ts';
 import { newApiToken } from './auth.ts';
 import { decryptSecret } from './crypto.ts';
 import { HTTPError } from './http.ts';
-import { getSystemWorkspaceId } from './system-workspace.ts';
+import { resolveAgentForRun } from './agent-resolver.ts';
 import { effectiveReach } from './token-reach.ts';
 
 /**
@@ -325,37 +325,12 @@ export async function loadContext(runId: string): Promise<RunContext | null> {
   });
   if (!parent) return null;
 
-  // The agent's HOME is where it is DEFINED — the run's own workspace for a
-  // local agent, or `__system` for a library agent (Phase B B1). It was stamped
-  // server-side at createRun (fm.agent_home_workspace_id); absent ⇒ home =
-  // run.workspaceId (a pre-Phase-B run, backward-compatible). The home predicate
-  // `home ∈ {run.workspaceId, __system}` is THE cross-tenant boundary: a run
-  // whose stamped home is a THIRD workspace C resolves to null (fail-closed — no
-  // cross-tenant capability borrowing).
-  //
-  // SHORT-CIRCUIT: a local agent (home === run.workspaceId) never calls the
-  // throwing getSystemWorkspaceId — so it neither needs nor depends on `__system`
-  // being bootstrapped (in-memory test DBs and pre-Phase-B runs may lack it).
-  // Only a stamped library/foreign home triggers the gate, where the throw is
-  // acceptable (production always bootstraps `__system`). Mirrors the
-  // soft-resolve *safety* reasoning (don't throw when `__system` is absent) from
-  // Task 2.5's resolveAgentForRun; resolution here trusts the create-time stamp
-  // rather than re-deriving local-shadows-library precedence.
-  const home = fm.agent_home_workspace_id ?? run.workspaceId;
-  let isLibraryAgent = false;
-  if (home !== run.workspaceId) {
-    // Only a library (or forged-third-ws) run needs the __system id to gate.
-    const systemId = await getSystemWorkspaceId(db);
-    if (home !== systemId) return null; // third-workspace C ⇒ fail-closed (B1)
-    isLibraryAgent = true; // home === systemId
-  }
-  const agent = await db.query.documents.findFirst({
-    where: and(
-      eq(documents.workspaceId, home),
-      eq(documents.type, 'agent'),
-      eq(documents.slug, fm.agent_slug),
-    ),
-  });
+  // Phase 4 (drop-workspace-tenancy): no tenancy boundary. The agent is
+  // resolved by slug INSTANCE-WIDE (resolveAgentForRun). The old home-predicate
+  // gate `home ∈ {run-ws, __system}` and the library-agent fork are GONE.
+  // Confidentiality is enforced downstream by the project ceiling (invariant 3)
+  // and the caller-bounded authority clamp, not a workspace wall.
+  const agent = await resolveAgentForRun(db, fm.agent_slug);
   if (!agent) return null;
   const agentFm = agent.frontmatter as Record<string, unknown>;
 
@@ -391,24 +366,19 @@ export async function loadContext(runId: string): Promise<RunContext | null> {
   // in executeTool. caller_project_ids null = owner/no-narrowing (intersect
   // returns the token list unchanged); an explicit list narrows; [] denies.
   const callerProjectIds = (fm.caller_project_ids as string[] | null) ?? null;
-  // B5 — a LIBRARY agent's authority DEFERS to the caller: the agent side is `['*']`
-  // so the caller's project set is the SOLE ceiling. (A library agent's token is
-  // scoped to __system's projects; intersecting those against B's caller projects
-  // would wrongly deny-all — __system ids never match B ids.) A LOCAL agent keeps
-  // its own token's project reach (agent ∩ token ∩ caller). The SCOPE ceiling is
-  // unchanged: executeTool still does token.scopes ∩ callerScopes — the agent's
-  // tool-derived scopes are its CAPABILITY, the caller scopes are the AUTHORITY.
-  const agentProjectSide = isLibraryAgent ? ['*'] : (token.projectIds ?? ['*']);
+  // The PROJECT ceiling (invariant 3): agent ∩ token ∩ caller. The agent keeps
+  // its own token's project reach; the caller's project set narrows it further.
+  // The SCOPE ceiling is unchanged: executeTool does token.scopes ∩ callerScopes
+  // — the agent's tool-derived scopes are its CAPABILITY, the caller scopes the
+  // AUTHORITY.
+  const agentProjectSide = token.projectIds ?? ['*'];
   // Per-run workspace floor (T4): the run token's reach = token reach ∩ caller
-  // reach, where caller reach is the run's target (run.workspaceId, itself
-  // caller-clamped at run-creation). A LIBRARY agent's token is bound to its
-  // home (__system) but acts in run.workspaceId by contract, so its token reach
-  // is treated as instance (null) here — effectiveReach(null, run.workspaceId)
-  // = run.workspaceId, preserving the B5/B6 rebind. A LOCAL agent keeps its own
-  // reach: effectiveReach(B, B) = B (a no-op). The resolver reads THIS narrowed
-  // reach, never token.workspaceId — replaces the old line-410 rebind.
-  const tokenReach = isLibraryAgent ? null : token.workspaceId;
-  const reach = effectiveReach(tokenReach, run.workspaceId);
+  // reach (the run's target, itself caller-clamped at run-creation). With the
+  // library fork gone, every agent keeps its own token reach:
+  // effectiveReach(B, B) = B (no-op); an instance-reach token narrows to the
+  // run's workspace. The resolver reads THIS narrowed reach, never raw
+  // token.workspaceId.
+  const reach = effectiveReach(token.workspaceId, run.workspaceId);
   if (!reach.ok) return null; // token pin excludes the run's target — fail closed (return-null contract)
   const narrowedToken = {
     ...token,

@@ -35,7 +35,7 @@ import { runStatusSchema } from '../lib/agent-run-schema.ts';
 import { emitChainSuppressed } from '../lib/autonomy-gate.ts';
 import { HTTPError } from '../lib/http.ts';
 import { jsonOk } from '../lib/http.ts';
-import { resolveAgentForRun } from '../lib/system-workspace.ts';
+import { resolveAgentForRun } from '../lib/agent-resolver.ts';
 import type { AuthContext } from '../middleware/auth.ts';
 import { requireScope } from '../middleware/bearer.ts';
 import { type ScopeContext, getProject, getWorkspace } from '../middleware/scope.ts';
@@ -384,7 +384,7 @@ runsRoute.post('/', requireScope('agents:write'), async (c) => {
   // 4. Resolve agent doc — gated by the home predicate {run-ws, __system} (B1):
   //    a B-local agent OR a __system library agent (local shadows library); an
   //    agent that lives only in a third workspace never resolves (fail-closed).
-  const agent = await resolveAgentForRun(db, ws.id, body.agent_slug);
+  const agent = await resolveAgentForRun(db, body.agent_slug);
   if (!agent) {
     throw new HTTPError('AGENT_NOT_FOUND', `agent "${body.agent_slug}" not found`, 404);
   }
@@ -502,7 +502,7 @@ runsRoute.post('/:runId/retry', requireScope('agents:write'), async (c) => {
   // Resolve through the home-gated helper {ws, __system} so a __system library
   // agent's run (agent lives in __system, not ws) re-resolves on retry instead of
   // 404ing. createRun re-stamps agent_home_workspace_id from agent.workspaceId.
-  const agent = await resolveAgentForRun(db, ws.id, agentSlug);
+  const agent = await resolveAgentForRun(db, agentSlug);
   if (!agent) {
     throw new HTTPError('AGENT_NOT_FOUND', `agent "${agentSlug}" not found`, 404);
   }

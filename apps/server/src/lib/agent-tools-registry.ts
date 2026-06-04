@@ -93,7 +93,8 @@ import {
 import { serializeMarkdown } from './frontmatter.ts';
 import { HTTPError } from './http.ts';
 import { mcpInvalidParams, mcpRejectHumanPat, rethrowAgentGuardAsMcp } from './mcp-errors.ts';
-import { getSystemWorkspaceId, isReservedSlug, resolveAgentForRun } from './system-workspace.ts';
+import { getSystemWorkspaceId, isReservedSlug } from './system-workspace.ts';
+import { resolveAgentForRun } from './agent-resolver.ts';
 import { getInstanceSkill } from './instance-skills.ts';
 import { setSkillTrust } from './skill-trust.ts';
 
@@ -1749,7 +1750,7 @@ export function registerRealTools(): void {
       //    (B1): a B-local agent OR a __system library agent (local shadows
       //    library); an agent that lives only in a third workspace never
       //    resolves (fail-closed). HTTP-twin parity with routes/runs.ts.
-      const agent = await resolveAgentForRun(db, ws.id, agentSlug);
+      const agent = await resolveAgentForRun(db, agentSlug);
       if (!agent) {
         throw mcpInvalidParams(`agent "${agentSlug}" not found`, {
           reason: 'agent_not_found',
@@ -1911,7 +1912,7 @@ export function registerRealTools(): void {
       // Resolve through the home-gated helper {ws, __system} so a __system library
       // agent's run (agent lives in __system, not ws) re-resolves on retry instead
       // of 404ing. createRun re-stamps agent_home_workspace_id from agent.workspaceId.
-      const agent = await resolveAgentForRun(db, ws.id, agentSlug);
+      const agent = await resolveAgentForRun(db, agentSlug);
       if (!agent) {
         throw mcpInvalidParams(`agent "${agentSlug}" not found`, {
           reason: 'agent_not_found',
