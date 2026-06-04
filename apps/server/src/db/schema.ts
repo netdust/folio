@@ -429,6 +429,43 @@ export const aiKeys = sqliteTable(
   }),
 );
 
+/**
+ * Instance-level agent skills. A skill is a markdown body + frontmatter; when
+ * `trusted` is set, the runner loads its body as TRUSTED INSTRUCTIONS into an
+ * agent's system prompt (otherwise it loads as untrusted DATA).
+ *
+ * SECURITY: `trusted` is a TYPED FIRST-CLASS COLUMN, never a key inside the
+ * `frontmatter` JSON blob. A `trusted:true` skill becomes trusted instructions
+ * in an agent prompt, so trust is privilege. If `trusted` rode in the JSON blob,
+ * any wholesale-frontmatter write (skill edit, bulk import, restore) could forge
+ * `trusted:true`. As its own column, import/restore — which write body +
+ * frontmatter — physically cannot reach it; only a dedicated mutator can. That
+ * is what makes the trust-forging attack structurally impossible.
+ *
+ * Additive only: nothing reads or seeds this table yet (the loader + seeder land
+ * in a later task).
+ */
+export const instanceSkills = sqliteTable(
+  'instance_skills',
+  {
+    id: text('id').primaryKey(),
+    name: text('name').notNull(),
+    body: text('body').notNull(),
+    frontmatter: text('frontmatter', { mode: 'json' })
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default({}),
+    // SECURITY: typed column, never a frontmatter key — see the table doc above.
+    trusted: integer('trusted', { mode: 'boolean' }).notNull().default(false),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' })
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+  },
+  (t) => ({
+    nameIdx: uniqueIndex('instance_skills_name_idx').on(t.name),
+  }),
+);
+
 /** Append-only event log. SSE channel + agent webhooks both read from here. */
 export const events = sqliteTable(
   'events',
@@ -494,5 +531,6 @@ export type Field = typeof fields.$inferSelect;
 export type View = typeof views.$inferSelect;
 export type ApiToken = typeof apiTokens.$inferSelect;
 export type AiKey = typeof aiKeys.$inferSelect;
+export type InstanceSkill = typeof instanceSkills.$inferSelect;
 export type Event = typeof events.$inferSelect;
 export type ReactorCursor = typeof reactorCursors.$inferSelect;
