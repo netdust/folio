@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { db } from '../db/client.ts';
 import { magicLinks, users } from '../db/schema.ts';
 import { env } from '../env.ts';
+import { userRole } from '../lib/access.ts';
 import { bootstrapSystemWorkspace, designateInstanceOwner } from '../lib/system-workspace.ts';
 import {
   createSession,
@@ -122,13 +123,19 @@ auth.post('/logout', async (c) => {
 
 auth.get('/me', requireUser, async (c) => {
   const u = getUser(c);
-  // D2: server-authoritative __system membership signal. Computed from
-  // membership (never client-derived) so the web "System Library" settings
-  // entry can gate on it without trusting the client. Top-level on the payload
-  // because it is a property of the boot identity, not of the user record.
+  // Post-tenancy boot identity. `role` is the caller's INSTANCE role
+  // (users.role; one instance = one team), server-authoritative so the web
+  // boots its identity without re-deriving authority client-side.
+  // `is_instance_admin` is the derived owner||admin signal. `is_system_member`
+  // is TRANSITIONAL — it still drives the web "System Library" entry and is
+  // removed in a later phase when __system is torn down. All three are top-level
+  // because they are properties of the boot identity, not of the user record.
+  const role = await userRole(db, u.id);
   return jsonOk(c, {
     user: { id: u.id, email: u.email, name: u.name },
-    is_system_member: await isSystemMember(u.id),
+    role, // instance role (owner|admin|member)
+    is_instance_admin: role === 'owner' || role === 'admin',
+    is_system_member: await isSystemMember(u.id), // transitional — removed with __system teardown
   });
 });
 

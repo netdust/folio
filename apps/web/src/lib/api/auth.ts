@@ -8,15 +8,21 @@ export interface SessionUser {
 }
 
 /**
- * D2: the boot identity payload. `is_system_member` is server-authoritative
- * (computed from `__system` membership) and OPTIONAL on the type because the
- * login/register responses seed the `me` cache with only `{ user }` — a missing
- * flag must read as `false`, never crash. `useIsSystemMember()` enforces that
- * default. The flag refreshes on the next `useMe` fetch after login/register.
+ * The boot identity payload. `role` is the caller's instance role and
+ * `is_instance_admin` the derived owner||admin signal (one instance = one team).
+ * `is_system_member` is server-authoritative (computed from `__system`
+ * membership) and TRANSITIONAL — removed in a later phase with the __system
+ * teardown. All three are OPTIONAL because the login/register responses seed the
+ * `me` cache with only `{ user }` — a missing field must read as a safe default
+ * (`false` / undefined role), never crash. `useIsInstanceAdmin()` /
+ * `useIsSystemMember()` enforce that default. The fields refresh on the next
+ * `useMe` fetch after login/register.
  */
 export interface MeResponse {
   user: SessionUser;
-  is_system_member?: boolean;
+  role?: 'owner' | 'admin' | 'member';
+  is_instance_admin?: boolean;
+  is_system_member?: boolean; // transitional, still present
 }
 
 export const authKeys = {
@@ -39,6 +45,15 @@ export function useMe() {
  */
 export function useIsSystemMember(): boolean {
   return useMe().data?.is_system_member ?? false;
+}
+
+/**
+ * Whether the current user is an instance admin (owner||admin). Reads the
+ * server-authoritative `is_instance_admin` off the cached `/me` payload; a stale
+ * or partial cache (e.g. the post-login `{ user }`-only seed) reads `false`.
+ */
+export function useIsInstanceAdmin(): boolean {
+  return useMe().data?.is_instance_admin ?? false;
 }
 
 export function useLogin() {

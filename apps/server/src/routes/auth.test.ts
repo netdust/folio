@@ -1,7 +1,9 @@
 import { and, eq } from 'drizzle-orm';
 import { expect, test } from 'bun:test';
+import { nanoid } from 'nanoid';
 import { memberships, users, workspaces } from '../db/schema.ts';
 import { env } from '../env.ts';
+import { createSession } from '../lib/auth.ts';
 import { bootstrapSystemWorkspace, SYSTEM_WORKSPACE_SLUG } from '../lib/system-workspace.ts';
 import { makeBareTestDb, makeTestApp } from '../test/harness.ts';
 
@@ -148,4 +150,69 @@ test('GET /auth/me reports is_system_member: false for a non-member (D2)', async
   const { data } = await res.json();
   expect(data.user.id).toBe(seed.user.id);
   expect(data.is_system_member).toBe(false);
+});
+
+// --- Post-tenancy: instance role signals on /auth/me ---
+// One instance = one team; roles live on users.role. /me surfaces the caller's
+// instance role + a derived is_instance_admin so the web boots its identity
+// without re-deriving authority client-side. is_system_member is KEPT
+// (transitional — removed with the __system teardown in a later phase).
+
+test('GET /auth/me reports role + is_instance_admin: true for an instance owner', async () => {
+  const { app, seed } = await makeTestApp();
+  // The harness seeds the user with users.role = 'owner'.
+  const res = await app.request('/api/v1/auth/me', {
+    headers: { cookie: seed.sessionCookie },
+  });
+  expect(res.status).toBe(200);
+  const { data } = await res.json();
+  expect(data.user.id).toBe(seed.user.id);
+  expect(data.role).toBe('owner');
+  expect(data.is_instance_admin).toBe(true);
+  // Transitional flag is still present (not removed by this change).
+  expect(data.is_system_member).toBe(false);
+});
+
+test('GET /auth/me reports role: member + is_instance_admin: false for a member', async () => {
+  const { app, db } = await makeTestApp();
+  // A fresh user whose instance role is the default 'member'.
+  const memberId = nanoid();
+  await db.insert(users).values({
+    id: memberId,
+    email: `${memberId}@test.local`,
+    name: 'Member',
+    role: 'member',
+  });
+  const session = await createSession(memberId);
+
+  const res = await app.request('/api/v1/auth/me', {
+    headers: { cookie: `folio_session=${session.id}` },
+  });
+  expect(res.status).toBe(200);
+  const { data } = await res.json();
+  expect(data.user.id).toBe(memberId);
+  expect(data.role).toBe('member');
+  expect(data.is_instance_admin).toBe(false);
+  expect(data.is_system_member).toBe(false);
+});
+
+test('GET /auth/me reports is_instance_admin: true for an instance admin', async () => {
+  const { app, db } = await makeTestApp();
+  // role 'admin' is also an instance admin (owner || admin).
+  const adminId = nanoid();
+  await db.insert(users).values({
+    id: adminId,
+    email: `${adminId}@test.local`,
+    name: 'Admin',
+    role: 'admin',
+  });
+  const session = await createSession(adminId);
+
+  const res = await app.request('/api/v1/auth/me', {
+    headers: { cookie: `folio_session=${session.id}` },
+  });
+  expect(res.status).toBe(200);
+  const { data } = await res.json();
+  expect(data.role).toBe('admin');
+  expect(data.is_instance_admin).toBe(true);
 });
