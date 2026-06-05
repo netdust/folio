@@ -8,7 +8,7 @@ import { db } from '../db/client.ts';
 import { magicLinks, users } from '../db/schema.ts';
 import { env } from '../env.ts';
 import { userRole } from '../lib/access.ts';
-import { bootstrapSystemWorkspace, designateInstanceOwner } from '../lib/system-workspace.ts';
+import { designateInstanceOwner } from '../lib/system-workspace.ts';
 import {
   createSession,
   deleteSession,
@@ -20,7 +20,6 @@ import {
 import { sendMagicLink } from '../lib/email.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
 import { type AuthContext, getUser, requireUser } from '../middleware/auth.ts';
-import { isSystemMember } from '../services/workspaces.ts';
 
 const auth = new Hono<AuthContext>();
 
@@ -67,19 +66,15 @@ auth.post(
     const passwordHash = await hashPassword(password);
     await db.insert(users).values({ id, email, passwordHash, name });
 
-    // First registrant (flag on) becomes the instance owner of the __system
-    // library workspace.
+    // First registrant becomes the instance owner (users.role='owner').
     //
-    // Atomicity (review fix #3): the user row is committed before bootstrap, but
-    // createDocument (inside designateInstanceOwner) uses its own transaction on
-    // the module db proxy, so we cannot wrap all three in one outer tx. Instead,
-    // if bootstrap/designate throws we COMPENSATE by deleting the just-created
-    // user, returning the instance to the zero-users state. Without this, a
-    // mid-failure would leave a committed user → isFirstUser=false forever +
-    // EMAIL_TAKEN on retry → the instance is permanently ownerless via register.
+    // Atomicity: the user row is committed before designation. If designate
+    // throws we COMPENSATE by deleting the just-created user, returning the
+    // instance to the zero-users state. Without this, a mid-failure would leave
+    // a committed user → isFirstUser=false forever + EMAIL_TAKEN on retry → the
+    // instance is permanently ownerless via register.
     if (isFirstUser) {
       try {
-        await bootstrapSystemWorkspace(db);
         await designateInstanceOwner(db, email);
       } catch (err) {
         await db.delete(users).where(eq(users.id, id)); // roll back the user
@@ -126,16 +121,13 @@ auth.get('/me', requireUser, async (c) => {
   // Post-tenancy boot identity. `role` is the caller's INSTANCE role
   // (users.role; one instance = one team), server-authoritative so the web
   // boots its identity without re-deriving authority client-side.
-  // `is_instance_admin` is the derived owner||admin signal. `is_system_member`
-  // is TRANSITIONAL — it still drives the web "System Library" entry and is
-  // removed in a later phase when __system is torn down. All three are top-level
+  // `is_instance_admin` is the derived owner||admin signal. Both are top-level
   // because they are properties of the boot identity, not of the user record.
   const role = await userRole(db, u.id);
   return jsonOk(c, {
     user: { id: u.id, email: u.email, name: u.name },
     role, // instance role (owner|admin|member)
     is_instance_admin: role === 'owner' || role === 'admin',
-    is_system_member: await isSystemMember(u.id), // transitional — removed with __system teardown
   });
 });
 

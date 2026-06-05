@@ -4,11 +4,9 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { db } from '../db/client.ts';
 import { projects, users, workspaces } from '../db/schema.ts';
-import { emitEvent, txWithEvents } from '../lib/events.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
 import {
   SYSTEM_WORKSPACE_SLUG,
-  getSystemWorkspaceId,
   requireInstanceAdmin,
   requireInstanceOwner,
 } from '../lib/system-workspace.ts';
@@ -101,20 +99,12 @@ instanceUsersRoute.patch('/users/:id/role', zValidator('json', roleBody), async 
     }
   }
 
-  // Resolve the __system workspace to scope the audit event. In production this
-  // always exists (runBootTasks bootstraps it every boot); an absent __system is
-  // a programming error (getSystemWorkspaceId throws SYSTEM_WORKSPACE_MISSING).
-  const systemWorkspaceId = await getSystemWorkspaceId(db);
-
-  await txWithEvents(db, async (tx) => {
-    await tx.update(users).set({ role }).where(eq(users.id, targetId));
-    await emitEvent(tx, {
-      workspaceId: systemWorkspaceId,
-      kind: 'user.role.changed',
-      actor,
-      payload: { userId: targetId, role, previousRole: target.role },
-    });
-  });
+  // Phase 4 (D-B): the role write is the side effect; the prior
+  // `user.role.changed` event was scoped to `__system` (now torn down) and had
+  // NO consumer beyond SSE — it is dropped (this also closes CR-11, the
+  // __system-grantee role-change leak, by construction). Clients learn a role
+  // change on their next /auth/me refetch.
+  await db.update(users).set({ role }).where(eq(users.id, targetId));
 
   return jsonOk(c, { id: targetId, role });
 });

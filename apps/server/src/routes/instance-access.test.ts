@@ -3,7 +3,7 @@ import { and, eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import * as schema from '../db/schema.ts';
 import { createSession, newApiToken } from '../lib/auth.ts';
-import { SYSTEM_WORKSPACE_SLUG, bootstrapSystemWorkspace } from '../lib/system-workspace.ts';
+import { SYSTEM_WORKSPACE_SLUG } from '../lib/system-workspace.ts';
 import { makeTestApp } from '../test/harness.ts';
 
 /**
@@ -268,34 +268,34 @@ describe('POST /api/v1/instance/access — grant', () => {
   // plain member traverse into ?workspace=__system and (pre-CR-8) receive
   // instance role-change events. CR-8 stops the leak; this blocks the grant
   // itself so the reserved library can't be invited into at all.
-  test('grant to the __system workspace → rejected (reserved, not a grant target)', async () => {
+  test('grant to a reserved (__-prefixed) workspace → rejected (not a grant target)', async () => {
     const { app, db, seed } = await makeTestApp();
-    await bootstrapSystemWorkspace(db);
     const target = await seedUser(db);
-    const sys = await db.query.workspaces.findFirst({
-      where: eq(schema.workspaces.slug, SYSTEM_WORKSPACE_SLUG),
-    });
-    expect(sys).toBeTruthy();
+    // A reserved-slug workspace (the guard is by slug prefix, isReservedSlug).
+    const sysId = nanoid();
+    await db
+      .insert(schema.workspaces)
+      .values({ id: sysId, slug: SYSTEM_WORKSPACE_SLUG, name: 'Reserved' });
 
     const res = await app.request('/api/v1/instance/access', {
       method: 'POST',
       headers: { 'content-type': 'application/json', cookie: seed.sessionCookie },
-      body: JSON.stringify({ userId: target, workspaceId: sys!.id }),
+      body: JSON.stringify({ userId: target, workspaceId: sysId }),
     });
 
     expect(res.status).toBe(403);
-    expect(await wsAccessCount(db, target, sys!.id)).toBe(0);
+    expect(await wsAccessCount(db, target, sysId)).toBe(0);
   });
 
-  test('grant to a project IN __system → rejected (reserved, not a grant target)', async () => {
+  test('grant to a project IN a reserved workspace → rejected (not a grant target)', async () => {
     const { app, db, seed } = await makeTestApp();
-    await bootstrapSystemWorkspace(db);
     const target = await seedUser(db);
-    const sys = await db.query.workspaces.findFirst({
-      where: eq(schema.workspaces.slug, SYSTEM_WORKSPACE_SLUG),
-    });
-    expect(sys).toBeTruthy();
-    // A project inside __system (mirrors its seeded Skills/Reference projects).
+    const sysId = nanoid();
+    await db
+      .insert(schema.workspaces)
+      .values({ id: sysId, slug: SYSTEM_WORKSPACE_SLUG, name: 'Reserved' });
+    const sys = { id: sysId };
+    // A project inside the reserved workspace.
     const sysProj = nanoid();
     await db
       .insert(schema.projects)

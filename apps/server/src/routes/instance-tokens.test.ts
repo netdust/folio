@@ -4,7 +4,7 @@ import { nanoid } from 'nanoid';
 import * as schema from '../db/schema.ts';
 import { apiTokens } from '../db/schema.ts';
 import { createSession, newApiToken } from '../lib/auth.ts';
-import { bootstrapSystemWorkspace, grantOwner } from '../lib/system-workspace.ts';
+import { grantOwner } from '../lib/system-workspace.ts';
 import { makeTestApp } from '../test/harness.ts';
 
 /**
@@ -79,7 +79,6 @@ async function seedPinnedToken(
 describe('CR#5: DELETE /api/v1/instance/tokens/:id (revoke instance token)', () => {
   test('a __system owner revokes an instance token (200) and the row is gone', async () => {
     const { app, db, seed } = await makeTestApp();
-    await bootstrapSystemWorkspace(db);
     await grantOwner(db, seed.user.email); // alice becomes the __system owner
     const tokId = await seedInstanceToken(db, seed.user.id);
 
@@ -95,7 +94,6 @@ describe('CR#5: DELETE /api/v1/instance/tokens/:id (revoke instance token)', () 
 
   test('revoke refuses to delete a WORKSPACE-scoped token (404); the row survives', async () => {
     const { app, db, seed } = await makeTestApp();
-    await bootstrapSystemWorkspace(db);
     await grantOwner(db, seed.user.email);
     // A pinned (non-null workspace) token — the isNull(workspaceId) guard means
     // the DELETE WHERE never matches it.
@@ -114,7 +112,6 @@ describe('CR#5: DELETE /api/v1/instance/tokens/:id (revoke instance token)', () 
 
   test('a non-instance-admin (users.role member) cannot revoke (403)', async () => {
     const { app, db, seed } = await makeTestApp();
-    await bootstrapSystemWorkspace(db);
     // A genuine non-admin: users.role 'member'. (seed.user is the instance owner
     // now, so it can't stand in for the forbidden case — we use a member-role
     // session to preserve the security intent.)
@@ -134,7 +131,6 @@ describe('CR#5: DELETE /api/v1/instance/tokens/:id (revoke instance token)', () 
 
   test('a bearer cannot revoke (session-only)', async () => {
     const { app, db, seed } = await makeTestApp();
-    await bootstrapSystemWorkspace(db);
     await grantOwner(db, seed.user.email);
     const tokId = await seedInstanceToken(db, seed.user.id);
 
@@ -164,7 +160,6 @@ describe('CR#5: DELETE /api/v1/instance/tokens/:id (revoke instance token)', () 
 describe('A12: GET /api/v1/instance/tokens (list instance tokens)', () => {
   test('a __system owner lists null-workspace tokens, excludes pinned, never leaks tokenHash', async () => {
     const { app, db, seed } = await makeTestApp();
-    await bootstrapSystemWorkspace(db);
     await grantOwner(db, seed.user.email);
     const instId = await seedInstanceToken(db, seed.user.id);
     const pinnedId = await seedPinnedToken(db, seed.workspace.id, seed.user.id);
@@ -188,7 +183,6 @@ describe('A12: GET /api/v1/instance/tokens (list instance tokens)', () => {
 
   test('a non-instance-admin (users.role member) cannot list (403)', async () => {
     const { app, db } = await makeTestApp();
-    await bootstrapSystemWorkspace(db);
     // A genuine non-admin: users.role 'member' (seed.user is the instance owner).
     const memberCookie = await seedRoleSession(db, 'member');
     const res = await app.request('/api/v1/instance/tokens', {

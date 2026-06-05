@@ -40,7 +40,6 @@ import { HTTPError } from './http.ts';
 import { mcpInvalidParams } from './mcp-errors.ts';
 import { __setCcSpawnForTest, loadContext, rejectRun, runAgent, runAgentResume } from './runner.ts';
 import { seedInstanceSkills } from './instance-skills.ts';
-import { bootstrapSystemWorkspace, getSystemWorkspaceId } from './system-workspace.ts';
 import { effectiveReach } from './token-reach.ts';
 import { workspaces } from '../db/schema.ts';
 
@@ -2356,35 +2355,28 @@ async function seedSystemSkillPage(
   slug: string,
   body: string,
   trusted: boolean,
-): Promise<string> {
+): Promise<void> {
   await db
     .insert(instanceSkills)
     .values({ id: nanoid(), name: slug, body, frontmatter: {}, trusted })
     .onConflictDoNothing({ target: instanceSkills.name });
-  // Returned for callers that still want a __system id (library-agent stamping,
-  // removed in Task 17). Bootstrap so the id is resolvable until then.
-  await bootstrapSystemWorkspace(db);
-  return getSystemWorkspaceId(db);
 }
 
 /**
- * Like seedLibraryAgentWithSkills, but the agent's HOME is a REGULAR workspace
- * (the scaffold's run workspace, NOT __system) — a worker agent in workspace B
- * that declares skills which live ONLY in __system. Proves the resolver reads
- * skills from __system, not the worker's home (B1 push).
+ * Like seedLibraryAgentWithSkills, but seeds a worker agent in the scaffold's
+ * run workspace that declares skills which live in `instance_skills`. Proves the
+ * resolver reads skills from `instance_skills`, not the worker's workspace.
  */
 async function seedWorkerAgentWithSkills(
   ctx: Awaited<ReturnType<typeof scaffold>>,
   skillSlugs: string[],
-): Promise<{ systemId: string; workerAgent: Document }> {
+): Promise<{ workerAgent: Document }> {
   const { db, run, workspace, user } = ctx;
-  await bootstrapSystemWorkspace(db);
-  const systemId = await getSystemWorkspaceId(db);
-  // The worker agent's home is the REGULAR run workspace.
+  // The worker agent's home is the run workspace.
   const workerAgent = await seedAgent(db, workspace, user, 'worker', ['list_documents'], {
     skills: skillSlugs,
   });
-  // Stamp the run: its agent is the worker, home = the run's own (regular) workspace.
+  // Stamp the run: its agent is the worker, home = the run's own workspace.
   await db
     .update(documents)
     .set({
@@ -2393,7 +2385,7 @@ async function seedWorkerAgentWithSkills(
         '$.agent_home_workspace_id', ${workspace.id})`,
     })
     .where(eq(documents.id, run.id));
-  return { systemId, workerAgent };
+  return { workerAgent };
 }
 
 describe('Phase B1 — __system skill resolution + trust channel', () => {

@@ -1,26 +1,21 @@
 /**
- * Phase Gate B — cross-task integration scenarios for the "skills" feature
- * (Piece B, B1–B5). These exercise the REAL DB, the REAL runner `loadContext`
- * (which calls module-private `loadAgentDefinition`), the REAL `get_skill` /
- * `set_skill_trust` TOOL handlers via `executeTool`, and the REAL `setSkillTrust`
- * trust gate + `updateDocument` strip — asserting BOTH behaviour AND persisted
- * state. They catch paths that compose across tasks B1–B5 that the per-task
- * unit tests in `runner.test.ts` / `skill-trust.test.ts` exercise in isolation.
+ * Phase Gate B (Phase 4 — skills on instance_skills) — cross-task integration
+ * scenarios for the "skills" feature. These exercise the REAL DB, the REAL
+ * runner `loadContext` (which calls module-private `loadAgentDefinition`), the
+ * REAL `get_skill` / `set_skill_trust` TOOL handlers via `executeTool`, and the
+ * REAL `setSkillTrust` trust gate — asserting BOTH behaviour AND persisted state.
  *
- * Scenario coverage:
- *  - S1 (B1 + B2) — a worker agent in workspace B pulls + pushes a __system
- *    skill: loadContext resolves the skill from __system (not B), and get_skill
- *    returns the same body via a B-pinned documents:read token. Negatives prove
- *    the type=page T7 fence (a __system AGENT slug, a B-only doc → not-found).
- *  - S2 (B3 + B1) — trust separation of duties end-to-end: a normal create/update
- *    cannot self-bless; an MCP admin PAT (createdBy = human) is REFUSED at
- *    set_skill_trust; the operator token (createdBy null) blesses; the bless
- *    emits a skill.trust.changed event; and a run loading the skill BEFORE the
- *    bless sees it as untrusted.
- *  - Acceptance — HAPPY (operator run with the seeded trusted `folio` skill →
- *    trusted), ERROR (a missing skill slug → clean MISSING_SKILL, not a 500
- *    internals leak), EDGE (get_skill works for documents:read but set_skill_trust
- *    from an MCP PAT is refused — folded into S1/S2).
+ * Scenario coverage (post-tenancy-drop model):
+ *  - S1 — a worker agent loads + pulls an instance skill: loadContext resolves
+ *    the skill from `instance_skills`, and get_skill returns the same body via a
+ *    documents:read token. Negatives prove only instance_skills rows are skills.
+ *  - S2 — trust separation of duties end-to-end: a body/frontmatter write CANNOT
+ *    forge the `trusted` typed column (structural); an MCP admin PAT (createdBy =
+ *    human) is REFUSED at set_skill_trust; the operator token (createdBy null)
+ *    flips the typed column; a run loading the skill BEFORE the bless sees it
+ *    untrusted.
+ *  - Acceptance — HAPPY (a run with the seeded trusted `folio` skill → trusted),
+ *    ERROR (a missing skill slug → clean MISSING_SKILL), EDGE (folded into S1/S2).
  */
 
 import { describe, expect, test } from 'bun:test';
@@ -30,10 +25,10 @@ import {
   aiKeys,
   apiTokens,
   documents,
-  events,
   instanceSkills,
   projects,
   tables,
+  workspaces,
 } from '../db/schema.ts';
 import type { ApiToken, Document, User } from '../db/schema.ts';
 import { seedInstanceSkills } from '../lib/instance-skills.ts';
@@ -42,11 +37,6 @@ import { encryptSecret } from '../lib/crypto.ts';
 import { executeTool } from '../lib/agent-tools.ts';
 import { registerRealTools } from '../lib/agent-tools-registry.ts';
 import { loadContext } from '../lib/runner.ts';
-import { updateDocument } from '../services/documents.ts';
-import {
-  bootstrapSystemWorkspace,
-  getSystemWorkspaceId,
-} from '../lib/system-workspace.ts';
 import { makeTestApp } from '../test/harness.ts';
 
 // folio_api / get_skill / set_skill_trust are registered via registerRealTools().
@@ -68,29 +58,26 @@ function toolPayload<T>(out: unknown): T {
 
 /**
  * Seed an instance skill with an explicit `trusted` typed-column value
- * (invariant 11 trust-channel routing). Phase 4: skills live in `instance_skills`
- * by name, not the (removed) __system Skills project. Returns the __system id
- * (still bootstrapped) for callers that stamp library-agent home until Task 17.
+ * (invariant 11 trust-channel routing). Skills live in `instance_skills` by name.
  */
 async function seedSystemSkillPage(
   db: TestDB,
   slug: string,
   body: string,
   trusted: boolean,
-): Promise<string> {
+): Promise<void> {
   await db
     .insert(instanceSkills)
     .values({ id: nanoid(), name: slug, body, frontmatter: {}, trusted })
     .onConflictDoNothing({ target: instanceSkills.name });
-  await bootstrapSystemWorkspace(db);
-  return getSystemWorkspaceId(db);
 }
 
-/** Resolve the __system Skills project row (assumes __system bootstrapped). */
-async function getSkillsProject(db: TestDB, systemId: string) {
-  return (await db.query.projects.findFirst({
-    where: and(eq(projects.workspaceId, systemId), eq(projects.slug, 'skills')),
-  }))!;
+/** Seed a SECOND regular workspace + return its id (for an agent that lives in
+ *  a different workspace than the caller; agents resolve by slug instance-wide). */
+async function seedOtherWorkspace(db: TestDB): Promise<string> {
+  const id = nanoid();
+  await db.insert(workspaces).values({ id, slug: `other-${id}`, name: 'Other' });
+  return id;
 }
 
 /**
@@ -267,14 +254,14 @@ describe('S1: worker in B pulls + pushes a __system skill (B1 + B2)', () => {
     const bProjectId = seed.project.id;
     await seedAiKey(db, bWorkspaceId);
 
-    // __system skill `seo` (trusted), and a __system AGENT `operator` (a non-page
-    // doc the type=page fence must NOT return).
-    const systemId = await seedSystemSkillPage(db, 'seo', 'SEO-GUIDANCE', true);
-    const skillsProject = await getSkillsProject(db, systemId);
-    // Seed a __system agent (type='agent') named 'operator' under __system.
+    // instance skill `seo` (trusted), and an AGENT `operator` (a non-skill doc
+    // that get_skill must NOT return — it reads instance_skills only).
+    await seedSystemSkillPage(db, 'seo', 'SEO-GUIDANCE', true);
+    const otherWsId = await seedOtherWorkspace(db);
+    // Seed an agent (type='agent') named 'operator' in another workspace.
     await db.insert(documents).values({
       id: nanoid(),
-      workspaceId: systemId,
+      workspaceId: otherWsId,
       projectId: null,
       type: 'agent',
       slug: 'operator',
@@ -513,11 +500,7 @@ describe('Acceptance: skills load happy + error paths', () => {
     const bProjectId = seed.project.id;
     await seedAiKey(db, bWorkspaceId);
 
-    // bootstrapSystemWorkspace seeds the `folio` skill; B4 blesses it
-    // (trusted:true). Bootstrap, then assert + ensure the trusted flag is set.
-    await bootstrapSystemWorkspace(db);
-    const systemId = await getSystemWorkspaceId(db);
-    // Phase 4: the folio skill is an instance_skills row, seeded trusted.
+    // The folio skill is an instance_skills row, seeded trusted (B4).
     await seedInstanceSkills(db);
     const folio = await db.query.instanceSkills.findFirst({
       where: eq(instanceSkills.name, 'folio'),
@@ -527,7 +510,8 @@ describe('Acceptance: skills load happy + error paths', () => {
     // seed ever regresses, this fails RED.
     expect(folio!.trusted).toBe(true);
 
-    // An operator agent whose home IS __system, declaring skills:['folio'].
+    // An operator agent living in another workspace, declaring skills:['folio'].
+    const systemId = await seedOtherWorkspace(db);
     await db.insert(documents).values({
       id: nanoid(),
       workspaceId: systemId,
@@ -566,7 +550,7 @@ describe('Acceptance: skills load happy + error paths', () => {
       projectId: bProjectId,
       userId: seed.user.id,
       agentSlug: 'operator',
-      agentHomeWorkspaceId: systemId, // library agent home = __system
+      agentHomeWorkspaceId: systemId, // agent home = the other workspace
     });
 
     const ctx = await loadContext(run.id);
@@ -581,7 +565,6 @@ describe('Acceptance: skills load happy + error paths', () => {
     const bWorkspaceId = seed.workspace.id;
     const bProjectId = seed.project.id;
     await seedAiKey(db, bWorkspaceId);
-    await bootstrapSystemWorkspace(db); // Skills project exists; the slug does not.
 
     await seedAgent(
       db,

@@ -22,12 +22,7 @@ import { makeTestApp } from '../test/harness.ts';
 import { createRun, ensureRunsTable, nextChainId } from '../services/agent-runs.ts';
 import { listComments } from '../services/comments.ts';
 import { type ToolDef, executeTool, listToolDefs, registerTool } from './agent-tools.ts';
-import {
-  SYSTEM_WORKSPACE_SLUG,
-  bootstrapSystemWorkspace,
-  getSystemWorkspaceId,
-  isReservedSlug,
-} from './system-workspace.ts';
+import { SYSTEM_WORKSPACE_SLUG, isReservedSlug } from './system-workspace.ts';
 import { workspaces } from '../db/schema.ts';
 import { intersectAgentProjects } from './agent-projects.ts';
 import { newApiToken } from './auth.ts';
@@ -967,14 +962,13 @@ async function seedRunRow(
   return document;
 }
 
-/** Bootstrap __system + return its id, for seeding a library agent (B1). */
-async function seedSystemWorkspaceForRun(db: DB): Promise<{ id: string }> {
-  await bootstrapSystemWorkspace(db);
-  const sys = await db.query.workspaces.findFirst({
-    where: eq(workspaces.slug, SYSTEM_WORKSPACE_SLUG),
-  });
-  if (!sys) throw new Error('test setup: __system did not bootstrap');
-  return { id: sys.id };
+/** Seed a SECOND regular workspace + return its id, for seeding an agent that
+ *  lives in a different workspace than the caller (agents resolve by slug
+ *  instance-wide; agent_home_workspace_id is stamped from the agent's ws). */
+async function seedOtherWorkspaceForRun(db: DB): Promise<{ id: string }> {
+  const id = nanoid();
+  await db.insert(workspaces).values({ id, slug: `other-${id}`, name: 'Other' });
+  return { id };
 }
 
 /** Parse the textResult JSON envelope the run tools return. */
@@ -1000,12 +994,12 @@ describe('D-4: run-management MCP tools', () => {
     expect(row?.status).toBe('planning');
   });
 
-  it('run_agent resolves a __system library agent (B1, create path)', async () => {
+  it('run_agent resolves an agent that lives in another workspace by slug (create path)', async () => {
     const { db, seed } = await makeTestApp();
     const parent = await seedWorkItem(db, seed.workspace, seed.project, seed.user);
-    const sys = await seedSystemWorkspaceForRun(db);
-    // Library agent lives in __system; the human PAT is scoped to the run-ws (acme).
-    await seedRunAgent(db, sys.id, seed.user.id, 'operator');
+    const other = await seedOtherWorkspaceForRun(db);
+    // Agent lives in another workspace; the human PAT is scoped to the run-ws (acme).
+    await seedRunAgent(db, other.id, seed.user.id, 'operator');
     const { token } = await seedRunAgent(db, seed.workspace.id, seed.user.id, 'caller');
 
     const out = await exec(token, seed.user.id, 'run_agent', {
@@ -1017,8 +1011,8 @@ describe('D-4: run-management MCP tools', () => {
     expect(res.status).toBe('planning');
     const row = await db.query.documents.findFirst({ where: eq(documents.id, res.run_id) });
     expect(row?.type).toBe('agent_run');
-    // Home is stamped from the agent's workspace → __system, not the run-ws.
-    expect((row?.frontmatter as Record<string, unknown>).agent_home_workspace_id).toBe(sys.id);
+    // Home is stamped from the agent's workspace → the other ws, not the run-ws.
+    expect((row?.frontmatter as Record<string, unknown>).agent_home_workspace_id).toBe(other.id);
   });
 
   it('run_agent with input posts a comment to the parent (mit 59)', async () => {
@@ -1152,16 +1146,16 @@ describe('D-4: run-management MCP tools', () => {
     expect(rows.length).toBe(2);
   });
 
-  it('retry_run of a __system library-agent run re-resolves the library agent (not 404) (B1, retry path)', async () => {
+  it('retry_run of a cross-workspace-agent run re-resolves the agent (not 404) (retry path)', async () => {
     const { db, seed } = await makeTestApp();
     const parent = await seedWorkItem(db, seed.workspace, seed.project, seed.user);
-    const sys = await seedSystemWorkspaceForRun(db);
-    // Library agent lives in __system; the human PAT is scoped to the run-ws (acme).
-    const { agent } = await seedRunAgent(db, sys.id, seed.user.id, 'operator');
+    const other = await seedOtherWorkspaceForRun(db);
+    // Agent lives in another workspace; the human PAT is scoped to the run-ws (acme).
+    const { agent } = await seedRunAgent(db, other.id, seed.user.id, 'operator');
     const { token } = await seedRunAgent(db, seed.workspace.id, seed.user.id, 'caller');
-    // createRun (B's create path) stamps agent_home_workspace_id = __system.
+    // createRun stamps agent_home_workspace_id = the agent's workspace.
     const run = await seedRunRow(db, seed.workspace, seed.project, agent, seed.user, parent);
-    expect((run.frontmatter as Record<string, unknown>).agent_home_workspace_id).toBe(sys.id);
+    expect((run.frontmatter as Record<string, unknown>).agent_home_workspace_id).toBe(other.id);
     await db
       .update(documents)
       .set({
@@ -1179,7 +1173,7 @@ describe('D-4: run-management MCP tools', () => {
     );
     expect(res.status).toBe('planning');
     const fresh = await db.query.documents.findFirst({ where: eq(documents.id, res.run_id) });
-    expect((fresh!.frontmatter as Record<string, unknown>).agent_home_workspace_id).toBe(sys.id);
+    expect((fresh!.frontmatter as Record<string, unknown>).agent_home_workspace_id).toBe(other.id);
   });
 
   it('retry_run while original still active → RUN_ALREADY_ACTIVE (mit 63)', async () => {
@@ -1842,10 +1836,12 @@ describe('A3: instance reach in resolvers', () => {
   // CR#4 — an instance token enumerates every workspace EXCEPT the reserved
   // __system library (other surfaces hide it via isReservedSlug; list_workspaces
   // must not leak the reserved namespace).
-  it('CR#4: list_workspaces for an instance token excludes the reserved __system workspace', async () => {
+  it('CR#4: list_workspaces for an instance token excludes a reserved (__-prefixed) workspace', async () => {
     const { db, seed } = await makeTestApp();
-    // Bootstrap so a reserved __system workspace exists, plus a normal B.
-    await bootstrapSystemWorkspace(db);
+    // A reserved-slug workspace exists, plus a normal B.
+    await db
+      .insert(workspaces)
+      .values({ id: nanoid(), slug: SYSTEM_WORKSPACE_SLUG, name: 'Reserved' });
     const bId = nanoid();
     await db.insert(workspaces).values({ id: bId, slug: 'beta', name: 'Beta' });
 
@@ -1919,14 +1915,13 @@ describe('B2: get_skill narrow __system read (T7)', () => {
     expect(payload.trusted).toBe(true);
   });
 
-  it('CANNOT read a non-skill __system doc (e.g. an agent) (T7)', async () => {
+  it('CANNOT read a non-skill doc (e.g. an agent) via get_skill (T7)', async () => {
     const { db, seed } = await makeTestApp();
-    await bootstrapSystemWorkspace(db);
-    const systemId = await getSystemWorkspaceId(db);
-    // Seed a __system AGENT doc (type=agent, NOT a type=page under skills).
+    // Seed an AGENT doc (type=agent). get_skill reads instance_skills only, so a
+    // document of any kind must never satisfy a skill lookup.
     await db.insert(documents).values({
       id: nanoid(),
-      workspaceId: systemId,
+      workspaceId: seed.workspace.id,
       projectId: null,
       type: 'agent',
       title: 'operator',
@@ -1944,8 +1939,7 @@ describe('B2: get_skill narrow __system read (T7)', () => {
 
   it("cannot read another workspace's doc (T7)", async () => {
     const { db, seed } = await makeTestApp();
-    await bootstrapSystemWorkspace(db);
-    // A page in workspace B (NOT __system/skills) with slug 'bdoc'.
+    // A page in workspace B (NOT an instance skill) with slug 'bdoc'.
     await db.insert(documents).values({
       id: nanoid(),
       workspaceId: seed.workspace.id,

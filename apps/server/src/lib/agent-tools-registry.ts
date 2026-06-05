@@ -93,7 +93,7 @@ import {
 import { serializeMarkdown } from './frontmatter.ts';
 import { HTTPError } from './http.ts';
 import { mcpInvalidParams, mcpRejectHumanPat, rethrowAgentGuardAsMcp } from './mcp-errors.ts';
-import { getSystemWorkspaceId, isReservedSlug } from './system-workspace.ts';
+import { isReservedSlug } from './system-workspace.ts';
 import { resolveAgentForRun } from './agent-resolver.ts';
 import { getInstanceSkill } from './instance-skills.ts';
 import { setSkillTrust } from './skill-trust.ts';

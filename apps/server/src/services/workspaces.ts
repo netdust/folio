@@ -1,6 +1,6 @@
 import { and, eq, inArray, ne } from 'drizzle-orm';
 import { db } from '../db/client.ts';
-import { memberships, projectAccess, projects, workspaceAccess, workspaces } from '../db/schema.ts';
+import { projectAccess, projects, workspaceAccess, workspaces } from '../db/schema.ts';
 import type { Workspace } from '../db/schema.ts';
 import { userRole } from '../lib/access.ts';
 import { SYSTEM_WORKSPACE_SLUG } from '../lib/system-workspace.ts';
@@ -60,25 +60,4 @@ export async function listWorkspaces(
   }
 
   return rows.map((workspace) => ({ workspace, role }));
-}
-
-/**
- * Phase D (D1): whether `userId` is a member of the `__system` library
- * workspace. Drives the "System Library" settings entry, which is gated to
- * members only (the library is excluded from the ambient switcher). A single
- * join on the UNIQUE `workspaces.slug` column keeps this a one-shot lookup.
- */
-export async function isSystemMember(userId: string): Promise<boolean> {
-  const row = await db
-    .select({ userId: memberships.userId })
-    .from(memberships)
-    .innerJoin(workspaces, eq(workspaces.id, memberships.workspaceId))
-    .where(
-      and(
-        eq(memberships.userId, userId),
-        eq(workspaces.slug, SYSTEM_WORKSPACE_SLUG),
-      ),
-    )
-    .limit(1);
-  return row.length > 0;
 }

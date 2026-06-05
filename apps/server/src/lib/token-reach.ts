@@ -7,7 +7,7 @@ export function isInstanceReach(token: Pick<ApiToken, 'workspaceId'>): boolean {
 
 /**
  * The system-origin OPERATOR token: instance reach + system origin (createdBy
- * null) — code-provisioned by ensureOperatorToken, never mintable via POST
+ * null) — code-provisioned for the operator, never mintable via POST
  * /tokens (which always stamps a human createdBy). This is the SINGLE named
  * definition of "the user-less operator principal"; consumers that branch on
  * "no hydrated user ⟹ act as the instance" (e.g. workspace-create owner

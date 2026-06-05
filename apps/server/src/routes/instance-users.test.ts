@@ -3,7 +3,6 @@ import { eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import * as schema from '../db/schema.ts';
 import { createSession, newApiToken } from '../lib/auth.ts';
-import { bootstrapSystemWorkspace } from '../lib/system-workspace.ts';
 import { makeTestApp } from '../test/harness.ts';
 
 /**
@@ -91,7 +90,6 @@ async function roleOf(db: DB, userId: string): Promise<string | undefined> {
 describe('PATCH /api/v1/instance/users/:id/role — role change (owner-only)', () => {
   test('owner promotes a member → admin → 200, role updated', async () => {
     const { app, db, seed } = await makeTestApp();
-    await bootstrapSystemWorkspace(db); // event scopes to __system
     const target = await seedUser(db, 'member');
 
     const res = await app.request(`/api/v1/instance/users/${target}/role`, {
@@ -106,7 +104,6 @@ describe('PATCH /api/v1/instance/users/:id/role — role change (owner-only)', (
 
   test('ADMIN changing a role → 403 (requireInstanceOwner rejects admin) — escalation guard', async () => {
     const { app, db } = await makeTestApp();
-    await bootstrapSystemWorkspace(db);
     const admin = await seedRoleSession(db, 'admin');
     const target = await seedUser(db, 'member');
 
@@ -123,7 +120,6 @@ describe('PATCH /api/v1/instance/users/:id/role — role change (owner-only)', (
 
   test('member changing a role → 403', async () => {
     const { app, db } = await makeTestApp();
-    await bootstrapSystemWorkspace(db);
     const member = await seedRoleSession(db, 'member');
     const target = await seedUser(db, 'member');
 
@@ -139,7 +135,6 @@ describe('PATCH /api/v1/instance/users/:id/role — role change (owner-only)', (
 
   test('PATCH a non-existent user id → 404 USER_NOT_FOUND', async () => {
     const { app, db, seed } = await makeTestApp();
-    await bootstrapSystemWorkspace(db);
     const ghost = nanoid();
 
     const res = await app.request(`/api/v1/instance/users/${ghost}/role`, {
@@ -155,7 +150,6 @@ describe('PATCH /api/v1/instance/users/:id/role — role change (owner-only)', (
 
   test('invalid role value → 400 (Zod enum)', async () => {
     const { app, db, seed } = await makeTestApp();
-    await bootstrapSystemWorkspace(db);
     const target = await seedUser(db, 'member');
 
     const res = await app.request(`/api/v1/instance/users/${target}/role`, {
@@ -170,7 +164,6 @@ describe('PATCH /api/v1/instance/users/:id/role — role change (owner-only)', (
 
   test('last-owner guard: demoting the only owner → 409 LAST_OWNER, role unchanged', async () => {
     const { app, db, seed } = await makeTestApp();
-    await bootstrapSystemWorkspace(db);
     // seed.user is the only owner (harness sets users.role='owner').
     const res = await app.request(`/api/v1/instance/users/${seed.user.id}/role`, {
       method: 'PATCH',
@@ -186,7 +179,6 @@ describe('PATCH /api/v1/instance/users/:id/role — role change (owner-only)', (
 
   test('with a SECOND owner, the first owner CAN be demoted → 200', async () => {
     const { app, db, seed } = await makeTestApp();
-    await bootstrapSystemWorkspace(db);
     // A second owner exists, so demoting the first leaves an owner.
     await seedUser(db, 'owner');
 
@@ -204,7 +196,6 @@ describe('PATCH /api/v1/instance/users/:id/role — role change (owner-only)', (
     // The guard only triggers when the NEW role is non-owner. Setting the only
     // owner back to 'owner' must not trip LAST_OWNER.
     const { app, db, seed } = await makeTestApp();
-    await bootstrapSystemWorkspace(db);
 
     const res = await app.request(`/api/v1/instance/users/${seed.user.id}/role`, {
       method: 'PATCH',
@@ -218,7 +209,6 @@ describe('PATCH /api/v1/instance/users/:id/role — role change (owner-only)', (
 
   test('a Bearer token (not session) → rejected (session-only)', async () => {
     const { app, db, seed } = await makeTestApp();
-    await bootstrapSystemWorkspace(db);
     const token = await seedInstanceToken(db, seed.user.id);
     const target = await seedUser(db, 'member');
 
@@ -288,9 +278,16 @@ describe('GET /api/v1/instance/invite-targets — enumeration (owner+admin)', ()
     expect(data.workspaces.map((w) => w.id)).toContain(ws);
   });
 
-  test('EXCLUDES the __system workspace', async () => {
+  test('EXCLUDES a reserved (__-prefixed) workspace', async () => {
     const { app, db, seed } = await makeTestApp();
-    await bootstrapSystemWorkspace(db); // creates __system + its Skills/Reference projects
+    // A reserved-slug workspace + a project in it (the exclude is by slug prefix).
+    const sysId = nanoid();
+    await db
+      .insert(schema.workspaces)
+      .values({ id: sysId, slug: '__system', name: 'Reserved' });
+    await db
+      .insert(schema.projects)
+      .values({ id: nanoid(), workspaceId: sysId, slug: 'skills', name: 'Skills' });
 
     const res = await app.request('/api/v1/instance/invite-targets', {
       headers: { cookie: seed.sessionCookie },
@@ -303,15 +300,10 @@ describe('GET /api/v1/instance/invite-targets — enumeration (owner+admin)', ()
         projects: Array<{ workspaceId: string }>;
       };
     };
-    // __system must not appear as a workspace…
+    // the reserved workspace must not appear…
     expect(data.workspaces.some((w) => w.slug === '__system')).toBe(false);
-    // …nor must its projects (Skills/Reference) leak via the projects list.
-    const systemWs = await db.query.workspaces.findFirst({
-      where: eq(schema.workspaces.slug, '__system'),
-    });
-    expect(systemWs).toBeDefined();
-    const systemWsId = systemWs?.id;
-    expect(data.projects.some((p) => p.workspaceId === systemWsId)).toBe(false);
+    // …nor must its projects leak via the projects list.
+    expect(data.projects.some((p) => p.workspaceId === sysId)).toBe(false);
   });
 
   test('member → 403', async () => {

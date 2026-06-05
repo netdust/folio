@@ -4,7 +4,6 @@ import { nanoid } from 'nanoid';
 import * as schema from '../db/schema.ts';
 import { apiTokens } from '../db/schema.ts';
 import { createSession, newApiToken } from '../lib/auth.ts';
-import { bootstrapSystemWorkspace, getSystemWorkspaceId } from '../lib/system-workspace.ts';
 import { makeTestApp } from '../test/harness.ts';
 
 /**
@@ -342,10 +341,8 @@ describe('tokens.ts A7 instance reach gate (T1/T2)', () => {
     `/api/v1/w/${wslug}/tokens/${workspaceId}`;
 
   test('instance-admin (users.role owner) mints a reach=null token', async () => {
-    const { app, db } = await makeTestApp();
-    await bootstrapSystemWorkspace(db);
-    const systemId = await getSystemWorkspaceId(db);
-    // Make a NEW user U an instance owner (users.role).
+    const { app, db, seed } = await makeTestApp();
+    // Make a NEW user U an instance owner (users.role) with access to acme.
     const userId = nanoid();
     await db.insert(schema.users).values({
       id: userId,
@@ -353,14 +350,14 @@ describe('tokens.ts A7 instance reach gate (T1/T2)', () => {
       name: 'inst-admin',
       role: 'owner',
     });
-    // Post-tenancy: resolveWorkspace on /w/__system gates on workspace_access.
-    // Grant it so the instance-admin reaches the route; requireInstanceAdmin
-    // (the scope-ceiling gate inside tokens.ts) reads users.role.
-    await db.insert(schema.workspaceAccess).values({ userId, workspaceId: systemId });
+    // resolveWorkspace on /w/acme gates on workspace_access. Grant it so the
+    // instance-admin reaches the route; requireInstanceAdmin (the scope-ceiling
+    // gate inside tokens.ts) reads users.role.
+    await db.insert(schema.workspaceAccess).values({ userId, workspaceId: seed.workspace.id });
     const session = await createSession(userId);
     const cookie = `folio_session=${session.id}`;
 
-    const res = await app.request(tokensPath('__system', systemId), {
+    const res = await app.request(tokensPath('acme', seed.workspace.id), {
       method: 'POST',
       headers: { Cookie: cookie, 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: 'inst', scopes: ['documents:read'], workspaceId: null }),
@@ -376,10 +373,9 @@ describe('tokens.ts A7 instance reach gate (T1/T2)', () => {
     expect(row?.workspaceId).toBeNull();
   });
 
-  test('a non-admin (member, not __system owner) requesting workspaceId:null → 403', async () => {
+  test('a non-admin (member) requesting workspaceId:null → 403', async () => {
     const { app, db, seed } = await makeTestApp();
-    await bootstrapSystemWorkspace(db);
-    // A member of acme who is NOT a __system member.
+    // A member of acme who is NOT an instance admin.
     const memberCookie = await seedMemberSession(db, seed.workspace.id, 'member');
     const res = await app.request(tokensPath('acme', seed.workspace.id), {
       method: 'POST',
@@ -430,7 +426,6 @@ describe('A12: instance-token listing surface', () => {
 
   test('an instance owner lists instance tokens (and per-workspace tokens are excluded)', async () => {
     const { app, db, seed } = await makeTestApp();
-    await bootstrapSystemWorkspace(db);
     // seed.user is the instance owner (users.role = 'owner', set by the harness),
     // which is what requireInstanceAdmin now reads.
 
@@ -473,7 +468,6 @@ describe('A12: instance-token listing surface', () => {
 
   test('a non-instance-admin (users.role member) is forbidden from the instance-token list (403)', async () => {
     const { app, db, seed } = await makeTestApp();
-    await bootstrapSystemWorkspace(db);
     // A genuine non-admin: users.role defaults to 'member'. (seed.user is the
     // instance owner now, so it can't stand in for the forbidden case anymore —
     // we mint a fresh member-role session to preserve the security intent.)
@@ -488,7 +482,6 @@ describe('A12: instance-token listing surface', () => {
 
   test('a bearer cannot reach the instance-token list (session-only)', async () => {
     const { app, db, seed } = await makeTestApp();
-    await bootstrapSystemWorkspace(db);
     const { token, hash } = newApiToken();
     await db.insert(apiTokens).values({
       id: nanoid(),
