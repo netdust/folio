@@ -56,7 +56,8 @@ export const resolveWorkspace: MiddlewareHandler<AuthContext & ScopeContext> = a
     // project-only invitee can navigate to their project). The user's instance
     // role becomes the per-request `role` for downstream getRole() consumers.
     const role = await userRole(db, user.id);
-    if (role !== 'owner' && !(await canSeeWorkspace(db, user.id, ws.id))) {
+    // Pass the pre-resolved role so canSeeWorkspace doesn't re-query userRole.
+    if (role !== 'owner' && !(await canSeeWorkspace(db, user.id, ws.id, role))) {
       throw new HTTPError('FORBIDDEN', 'no access to this workspace', 403);
     }
     c.set('role', role);
@@ -84,7 +85,8 @@ export const resolveProject: MiddlewareHandler<AuthContext & ScopeContext> = asy
   const role = c.get('role');
   if (role !== 'owner') {
     const user = getUser(c);
-    if (!(await canSeeProject(db, user.id, p.id))) {
+    // Pass the role already resolved by resolveWorkspace (avoids a 3rd userRole read).
+    if (!(await canSeeProject(db, user.id, p.id, role))) {
       throw new HTTPError('PROJECT_NOT_FOUND', `project "${pslug}" not found`, 404);
     }
   }

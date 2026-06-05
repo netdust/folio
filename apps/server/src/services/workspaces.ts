@@ -1,8 +1,8 @@
-import { and, eq, inArray, ne } from 'drizzle-orm';
+import { and, inArray, ne } from 'drizzle-orm';
 import { db } from '../db/client.ts';
-import { projectAccess, projects, workspaceAccess, workspaces } from '../db/schema.ts';
+import { workspaces } from '../db/schema.ts';
 import type { Workspace } from '../db/schema.ts';
-import { userRole } from '../lib/access.ts';
+import { userRole, visibleWorkspaceIds } from '../lib/access.ts';
 import { SYSTEM_WORKSPACE_SLUG } from '../lib/system-workspace.ts';
 
 /**
@@ -41,17 +41,9 @@ export async function listWorkspaces(
       where: ne(workspaces.slug, SYSTEM_WORKSPACE_SLUG),
     });
   } else {
-    // visible = direct ws grants UNION ws of any project grant (traverse).
-    const direct = await db
-      .select({ id: workspaceAccess.workspaceId })
-      .from(workspaceAccess)
-      .where(eq(workspaceAccess.userId, userId));
-    const viaProject = await db
-      .select({ id: projects.workspaceId })
-      .from(projectAccess)
-      .innerJoin(projects, eq(projects.id, projectAccess.projectId))
-      .where(eq(projectAccess.userId, userId));
-    const ids = [...new Set([...direct.map((r) => r.id), ...viaProject.map((r) => r.id)])];
+    // The "which workspaces may this user see" rule lives in access.ts
+    // (invariant 4a) — shared with the per-request canSeeWorkspace gate.
+    const ids = [...(await visibleWorkspaceIds(db, userId))];
     rows = ids.length
       ? await db.query.workspaces.findMany({
           where: and(inArray(workspaces.id, ids), ne(workspaces.slug, SYSTEM_WORKSPACE_SLUG)),

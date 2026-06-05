@@ -66,13 +66,16 @@ export async function hasProjectAccess(
   return r !== undefined;
 }
 
-// owner || workspace_access || project_access to some project in this ws (TRAVERSE)
+// owner || workspace_access || project_access to some project in this ws (TRAVERSE).
+// `role` may be passed pre-resolved (e.g. from the scope middleware that already
+// read it) to skip the redundant userRole query on the hot path.
 export async function canSeeWorkspace(
   db: DB,
   userId: string,
   workspaceId: string,
+  role?: Role,
 ): Promise<boolean> {
-  if ((await userRole(db, userId)) === 'owner') return true;
+  if ((role ?? (await userRole(db, userId))) === 'owner') return true;
   if (await hasWorkspaceAccess(db, userId, workspaceId)) return true;
   const traverse = await db
     .select({ id: projectAccess.projectId })
@@ -92,9 +95,34 @@ export async function canManageWorkspace(
   db: DB,
   userId: string,
   workspaceId: string,
+  role?: Role,
 ): Promise<boolean> {
-  if ((await userRole(db, userId)) === 'owner') return true;
+  if ((role ?? (await userRole(db, userId))) === 'owner') return true;
   return hasWorkspaceAccess(db, userId, workspaceId);
+}
+
+/**
+ * The set of workspace ids a NON-owner user can see: direct `workspace_access`
+ * grants UNION the workspaces of any `project_access` grant (the traverse). The
+ * workspace-level analog of `visibleProjectIds` — the single place the "which
+ * workspaces may this user see" rule lives (invariant 4a), so the switcher list
+ * and the per-request `canSeeWorkspace` gate share one definition. Owners are
+ * unrestricted (callers short-circuit on role before calling this). The two
+ * independent reads run concurrently.
+ */
+export async function visibleWorkspaceIds(db: DB, userId: string): Promise<Set<string>> {
+  const [direct, viaProject] = await Promise.all([
+    db
+      .select({ id: workspaceAccess.workspaceId })
+      .from(workspaceAccess)
+      .where(eq(workspaceAccess.userId, userId)),
+    db
+      .select({ id: projects.workspaceId })
+      .from(projectAccess)
+      .innerJoin(projects, eq(projects.id, projectAccess.projectId))
+      .where(eq(projectAccess.userId, userId)),
+  ]);
+  return new Set([...direct.map((r) => r.id), ...viaProject.map((r) => r.id)]);
 }
 
 // owner || direct project_access || workspace_access on the parent ws
@@ -102,8 +130,9 @@ export async function canSeeProject(
   db: DB,
   userId: string,
   projectId: string,
+  role?: Role,
 ): Promise<boolean> {
-  if ((await userRole(db, userId)) === 'owner') return true;
+  if ((role ?? (await userRole(db, userId))) === 'owner') return true;
   if (await hasProjectAccess(db, userId, projectId)) return true;
   const proj = await db.query.projects.findFirst({ where: eq(projects.id, projectId) });
   if (!proj) return false;

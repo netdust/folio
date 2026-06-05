@@ -39,13 +39,6 @@ export const FOLIO_SKILL_FRONTMATTER = {
 } as const;
 
 /**
- * The operator agent's TITLE. createDocument slugifies it to 'folio-operator'.
- * There is NO reserved doc slug — the operator is identified by
- * (workspace=__system, type='agent').
- */
-export const OPERATOR_AGENT_TITLE = 'folio-operator';
-
-/**
  * The operator's tool whitelist (becomes the agent's frontmatter.tools). Exported
  * so the seeder, the token-scope computation, and the tests share ONE source of
  * truth. Every member MUST be a V1_MCP_TOOLS entry (enforced by the test).
@@ -228,49 +221,3 @@ Authority and safety:
 - Your effective authority is always your own scopes intersected with the caller's — you can never exceed the person who started the run.
 - High-risk actions (token mint/revoke, AI keys, workspace delete/rename, member changes, bulk operations) are refused-with-plan: instead of executing, you produce a clear plan describing what you WOULD do, and let a human apply it.
 - A refusal you receive is real; do not retry it as a different shape.`;
-
-/**
- * SETUP_PROJECT_REF_BODY — a standalone "how to set up a project" reference page.
- * The core is §5 "Set up a project" from the skill, framed as a worked POST
- * sequence: project → table → fields → statuses → views.
- */
-export const SETUP_PROJECT_REF_BODY = `# Reference: set up a project
-
-A worked POST sequence for standing up a new project end-to-end. All config writes go through \`folio_api\`; reads through \`folio_api_get\`. Substitute \`<wslug>\` with the workspace slug. Pass \`"dryRun": true\` in any POST/PATCH body (or \`?dryRun=true\` on DELETE) to preview a write with zero side effects.
-
-## 1. Create the project
-
-\`\`\`
-folio_api  POST /api/v1/w/<wslug>/projects
-  { "name": "Marketing", "slug": "marketing" }
-\`\`\`
-
-## 2. Add a table to hold work items
-
-\`\`\`
-folio_api  POST /api/v1/w/<wslug>/p/marketing/tables
-  { "name": "Tasks" }
-\`\`\`
-
-## 3. Pin field types (optional — otherwise inferred from values)
-
-\`\`\`
-folio_api  POST /api/v1/w/<wslug>/p/marketing/fields
-  { "key": "priority", "type": "select", "options": ["low","med","high"] }
-\`\`\`
-
-## 4. Define the project's status set
-
-\`\`\`
-folio_api  POST /api/v1/w/<wslug>/p/marketing/statuses
-  { "name": "In progress", "color": "blue" }
-\`\`\`
-
-## 5. Author a view over the table
-
-\`\`\`
-folio_api  POST /api/v1/w/<wslug>/p/marketing/views
-  { "name": "Board", "type": "kanban" }
-\`\`\`
-
-Then create work items as documents via the narrow tools (\`create_document\`), and read everything back with \`folio_api_get\` to confirm.`;

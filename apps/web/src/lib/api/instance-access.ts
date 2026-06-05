@@ -4,10 +4,9 @@ import { instanceUsersKeys } from './instance-users.ts';
 
 /**
  * Instance access grants — invitation-based workspace/project visibility
- * (replaces the dropped `memberships`). The server exposes grant (POST) +
- * revoke (DELETE) only; there is no list-grants endpoint (the Invitations UI
- * grants/revokes against the invite-targets enumeration, it does not render an
- * existing-grants roster). Exactly ONE of workspaceId | projectId per grant.
+ * (replaces the dropped `memberships`). The server exposes list (GET, the grant
+ * roster — `useInstanceAccess`), grant (POST), and revoke (DELETE). Exactly ONE
+ * of workspaceId | projectId per grant.
  */
 
 export interface AccessGrantVars {

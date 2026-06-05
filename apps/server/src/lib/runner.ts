@@ -455,20 +455,17 @@ export async function loadContext(runId: string): Promise<RunContext | null> {
 
 /**
  * Materialize an agent's DEFINITION: its body (the prompt — already in hand) plus
- * the bodies of the `page` docs named in `frontmatter.skills`, read from the
- * agent's HOME `__system` `skills` project with SYSTEM authority (B3/B4/B9).
+ * the named `frontmatter.skills`, read from the `instance_skills` table by name
+ * with SYSTEM authority (Phase 4 — was the `__system` Skills project; skills are
+ * now instance-level rows).
  *
- * This is the ONE narrow definitional-read exemption: it is internal-only (called
- * solely by loadContext), NOT registered in agent-tools-registry, NOT a route — a
- * caller can NEVER reach it. It reads EXACTLY (workspaceId=systemId,
- * projectId=<Skills project>, slug=<exact slug from frontmatter.skills>,
- * type='page'). A skill slug that does NOT resolve to a doc IN the Skills project
- * → throws MISSING_SKILL (no broader fallback — so a slug crafted to match an
- * agent doc, a Reference doc, or any non-Skills __system content can NOT be read).
- *
- * Only library agents (home === __system) carry __system skills; for a LOCAL
- * agent whose home is its own workspace, the same narrow read applies to THAT
- * workspace if it ever declares skills (v1: only the operator declares any).
+ * This is the ONE narrow definitional-read exemption (ARCHITECTURE-INVARIANTS,
+ * Deliberate exceptions): internal-only (called solely by loadContext), NOT
+ * registered in agent-tools-registry, NOT a route — a caller can NEVER reach it.
+ * It matches an instance skill by EXACT frontmatter-named slug; a slug that does
+ * not resolve throws MISSING_SKILL (no broader fallback). Each skill's `trusted`
+ * typed column routes it into the trusted instruction channel vs the untrusted
+ * DATA envelope (invariant 11).
  */
 async function loadAgentDefinition(
   db: DB,

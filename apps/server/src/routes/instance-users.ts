@@ -101,7 +101,7 @@ instanceUsersRoute.patch('/users/:id/role', zValidator('json', roleBody), async 
 
   // Last-owner guard: never demote the only instance owner. Fires only when the
   // target is CURRENTLY an owner AND the new role drops them out of owner; a
-  // no-op owner→owner is fine. Count via the indexed users.role.
+  // no-op owner→owner is fine. Count owners via users.role (rare write path).
   if (target.role === 'owner' && role !== 'owner') {
     const [{ n: ownerCount } = { n: 0 }] = await db
       .select({ n: count() })

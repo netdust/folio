@@ -439,7 +439,7 @@ export function registerRealTools(): void {
   registerTool({
     name: 'set_skill_trust',
     description:
-      'Bless or unbless a __system skill (set its trusted flag). Restricted to the system operator or a session user.',
+      'Bless or unbless an instance skill (set its trusted flag). Restricted to the system operator or a session user.',
     requiredScope: 'config:write', // a privileged config-class op
     // C3 (/shakeout 2026-06-03): trust-elevation is refused on an unattended
     // (trigger-fired) run. The operator token is createdBy-null so canBlessSkill
