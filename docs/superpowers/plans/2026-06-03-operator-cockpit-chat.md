@@ -815,9 +815,23 @@ git commit -m "phase-chat T7: hard irreversible-op gate at executeTool (M4-M7,M1
 **END OF CLUSTER 4 (T7–T8).** HALT. Commit T7–T8, run `/integration`, hand to human for `/code-review` AND `/security-review`. T7 is THE security-boundary task — the `riskTier` irreversible-op gate at `executeTool`. Review must verify the must-be-hard set M4–M7+M13 (gate is structural not prompt; recorded-params execution; single-use/caller-bound/expiry; fail-closed default-to-high; headless not gated). Do NOT begin T9 until both reviews clear.
 ──────────────────────────────────────────────────────────
 
-### Task 9: Web — conversations API client + hooks (+ SSE live-tail reusing the activity-feed shape)
+### Task 9: Web — conversations API client + hooks (+ live-tail via a DEDICATED conversation SSE)
+
+> **⚠️ PLAN-CORRECTION (2026-06-05, Step 2.5 — supersedes "reuse `useEventStream` verbatim").** The spec/plan assumed the chat live-tail reuses the existing `useEventStream` + `/events` SSE channel. Ground-truth falsifies the premise:
+> - `useEventStream` is bound to `/api/v1/w/:wslug/events` — WORKSPACE-scoped. Conversations are INSTANCE-level (no workspace).
+> - The `/events` bus is the **trigger/document plane**: its consumer is the **trigger-matcher reactor** (`trigger-matcher.ts`) that fires agents on document events. Routing chat through it would (a) require chat to emit `events` rows — which M10 deliberately forbids (`events.workspace_id` is `NOT NULL` + every row fans to the trigger-matcher) and (b) spawn agents off chat turns. The M10 walling is NOT a tenancy artifact; it survives single-team intact (chat must not fire triggers).
+> - (NOTE — a real but OUT-OF-SCOPE smell, flagged by Stefan 2026-06-05: the `/events` channel keying everything on `workspace_id` is leftover-tenancy-shaped under one-instance=one-team. It's the pre-existing document/SSE plane; refactoring it is NOT this feature's job. Tracked in memory `[[feedback_events-workspace-keying-is-leftover-tenancy]]`.)
+>
+> **CORRECTED DESIGN (user-decided): a DEDICATED conversation SSE channel, instance-level + owner-scoped, structurally separate from the trigger plane.** This adds a small SERVER piece to T9 (it is no longer web-only):
+> - **NEW `GET /conversations/:id/stream`** (in `routes/conversations.ts`) — `requireSessionUser`, owner-scoped (`createdBy === sessionUser.id`, 404 else), `streamSSE` (hono/streaming, same as `routes/events.ts:141`). Subscribes to a NEW tiny in-process **conversation bus** keyed by `conversationId` (NOT workspace), unsub on disconnect.
+> - **NEW conversation bus** (`lib/conversation-bus.ts`) — a minimal pub/sub: `subscribe(conversationId, cb)` / `publish(conversationId, messageRow)`. ~the events bus MINUS the workspace key MINUS reactors/replay. The message SINK (`chat-thread-sink.ts`, Cluster 2) publishes each appended row to it. NO events-table row, NO trigger-matcher reach.
+> - **Web** mirrors `useActivityFeed`'s seed-history-then-live-tail shape but points a raw `EventSource` (or a tiny `useConversationStream` hook) at `/conversations/:id/stream` — NOT `useEventStream` (which is workspace-bound). The thread seeds from `GET /conversations/:id` then layers live rows (live wins on merge by message id/seq).
+>
+> So T9 = (T9a server: the SSE route + bus + sink publish) + (T9b web: api client + hooks + live-tail hook). The "reuse useEventStream"/Inv-8 citations below mean "reuse the SEED-THEN-TAIL PATTERN", not the workspace hook.
 
 **Files:**
+- Create: `apps/server/src/lib/conversation-bus.ts` (the per-conversation in-process pub/sub), `apps/server/src/lib/conversation-bus.test.ts`
+- Modify: `apps/server/src/routes/conversations.ts` (the `GET /:id/stream` SSE route), `apps/server/src/lib/chat-thread-sink.ts` (publish each appended row to the bus)
 - Create: `apps/web/src/lib/api/conversations.ts`
 - Test: `apps/web/src/lib/api/conversations.test.ts`
 
