@@ -58,6 +58,8 @@ import {
   runErrorReasonSchema,
 } from './agent-run-schema.ts';
 import { executeTool } from './agent-tools.ts';
+import type { ConversationSink } from './chat-thread-sink.ts';
+import { buildConversationMessages } from './chat-thread-source.ts';
 import { type Message, type ToolDef, getProvider } from './ai/provider.ts';
 import { sanitizeProviderError } from './ai/sanitize-error.ts';
 import { newApiToken } from './auth.ts';
@@ -178,6 +180,22 @@ export interface RunContext {
    * refuse-with-plan. Default false for attended runs / pre-C3 rows.
    */
   unattended?: boolean;
+  /**
+   * Operator cockpit chat (Task 4) — the conversation-thread output sink. Set
+   * by `loadContext` ONLY on a conversation-backed run (Task 5 stamps
+   * `conversation_id` on the run fm + populates this); absent on every
+   * document-thread / headless run. When present, the runner routes output
+   * through it (`postAgentComment` → `ctx.sink.text`) and threads it into
+   * `executeTool` so the `ui` tools can emit `component` rows. A conversation
+   * run has NO `ctx.parent`; the parent-coupled helpers guard on `ctx.sink`.
+   */
+  sink?: ConversationSink;
+  /**
+   * Operator cockpit chat (Task 4) — the active conversation id, threaded into
+   * `executeTool` so the irreversible-op confirm gate (Task 7) can scope a
+   * `pending_ops` row. Set alongside `sink` on a conversation run.
+   */
+  conversationId?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -210,7 +228,14 @@ export async function runAgent(args: { runId: string }): Promise<void> {
     if (ctx.fm.provider === 'claude-code') {
       await ccExecute(ctx);
     } else {
-      const messages = await buildInitialMessages(ctx);
+      // Operator cockpit chat (Task 4) — a conversation-backed run (ctx.sink set
+      // by loadContext when the run fm carries conversation_id, Task 5) replays
+      // the TRUSTED conversation thread as its message source; a document-thread
+      // run keeps buildInitialMessages (parent body + comments, fenced as
+      // untrusted). claude-code stays hard-disabled, so this branch is API-only.
+      const messages = ctx.sink
+        ? await buildConversationMessages(db, ctx.conversationId ?? '')
+        : await buildInitialMessages(ctx);
       await runLoop(ctx, messages);
     }
   } catch (err) {
@@ -297,7 +322,12 @@ export async function runAgentResume(args: { runId: string }): Promise<void> {
     }
 
     // Build the resume message history, then delegate to the SHARED loop.
-    const messages = await buildResumeMessages(ctx);
+    // A conversation-backed resume (ctx.sink set, Task 5) replays the thread as
+    // its source — the persisted messages already include the prior turns, so a
+    // resume re-reads the same trusted history a fresh turn does.
+    const messages = ctx.sink
+      ? await buildConversationMessages(db, ctx.conversationId ?? '')
+      : await buildResumeMessages(ctx);
     await runLoop(ctx, messages);
   } catch (err) {
     await failRunLastResort(runId, providerLabel, err);
@@ -928,10 +958,28 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
             // Phase C C3 — the fired-path marker. Lets the folio_api write
             // handler floor MEDIUM config writes on an unattended run.
             unattended: ctx.unattended,
+            // Operator cockpit chat (Task 4) — thread the conversation sink + id
+            // so the `ui` tools can emit `component` rows and the confirm gate
+            // (Task 7) can scope a pending_ops row. Undefined on document-thread
+            // runs → no behavior change to the existing path.
+            conversationId: ctx.conversationId,
+            conversationSink: ctx.sink,
           });
           const resultString = typeof result === 'string' ? result : JSON.stringify(result);
           toolResultMsgs.push({ role: 'tool', tool_use_id: tc.id, content: resultString });
           roundHadSuccess = true;
+          // Operator cockpit chat (Task 4) — on a conversation run, record a
+          // `tool_step` row so the thread shows what the operator did this turn.
+          // The `ui` tools already emit their own `component` row via the sink;
+          // a tool_step for them too is harmless context but redundant, so skip
+          // the chat-only ui tools here.
+          if (ctx.sink && tc.name !== 'show_link_panel' && tc.name !== 'ask_choice') {
+            await ctx.sink.toolStep({
+              tool: tc.name,
+              summary: summarizeToolResult(tc.name, result),
+              status: 'ok',
+            });
+          }
         } catch (err) {
           if (isFatalToolError(err)) {
             // FATAL — scope-denied / unknown tool. Abort the whole round
@@ -1219,11 +1267,41 @@ async function postResultAndComplete(
  * does accept a `run_id` input as of E-4b; that capability exists for the
  * plan-comment path posted via the API, not this one.)
  */
+/**
+ * Operator cockpit chat (Task 4) — a short, human-facing one-liner for a
+ * `tool_step` row's `summary`. Tool results are JSON-ish; the thread shows the
+ * tool name + a truncated rendering rather than the raw payload. Best-effort —
+ * never throws (a tool_step is observability, not the run's correctness).
+ */
+function summarizeToolResult(tool: string, result: unknown): string {
+  let rendered: string;
+  try {
+    rendered = typeof result === 'string' ? result : JSON.stringify(result);
+  } catch {
+    rendered = '';
+  }
+  const trimmed = rendered.length > 120 ? `${rendered.slice(0, 117)}…` : rendered;
+  return trimmed.length > 0 ? `${tool}: ${trimmed}` : tool;
+}
+
+/**
+ * Post a turn's output. Generalized over the two output sinks (Task 4):
+ *   - conversation thread (ctx.sink set) → write a `text` message row. A
+ *     conversation run has NO `ctx.parent`, so it MUST NOT call createComment.
+ *   - document thread (no sink) → the existing `createComment` on the parent.
+ *
+ * `kind` is meaningful only for the document thread (comment vs result); the
+ * conversation thread has a single `text` message kind.
+ */
 async function postAgentComment(
   ctx: RunContext,
   body: string,
   kind: 'result' | 'comment',
 ): Promise<void> {
+  if (ctx.sink) {
+    await ctx.sink.text(body);
+    return;
+  }
   await createComment({
     workspace: ctx.workspace,
     project: ctx.project,
@@ -1245,6 +1323,12 @@ async function postAgentComment(
  * post-start rejection on the parent as the cancel trigger.
  */
 async function wasCancelled(ctx: RunContext): Promise<boolean> {
+  // Operator cockpit chat (Task 4) — a conversation-backed run has NO
+  // `ctx.parent` (cancel-via-rejection-comment is a document-thread mechanism).
+  // Mid-turn cancel for chat is a deliberate v1 deferral (threat model
+  // "Out of scope: mid-turn cancellation"); a conversation run is never
+  // cancelled this way, so report false instead of dereferencing a null parent.
+  if (ctx.sink) return false;
   // FIX #1 — INCLUSIVE boundary (createdAt >= started_at). listComments' `since`
   // filter is strict `>` (gt), which drops a rejection stamped in the SAME
   // millisecond as started_at — a real mid-run cancel that races the run's own
