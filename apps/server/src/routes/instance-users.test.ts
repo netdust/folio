@@ -162,9 +162,12 @@ describe('PATCH /api/v1/instance/users/:id/role — role change (owner-only)', (
     expect(await roleOf(db, target)).toBe('member');
   });
 
-  test('last-owner guard: demoting the only owner → 409 LAST_OWNER, role unchanged', async () => {
+  test('the only owner cannot demote themselves → 409 (self-demote guard), role unchanged', async () => {
     const { app, db, seed } = await makeTestApp();
-    // seed.user is the only owner (harness sets users.role='owner').
+    // seed.user is the only owner. Demoting the only owner is necessarily a
+    // SELF-demotion (only an owner may demote, and there's no other owner to act),
+    // so the self-demote guard fires first — a clearer message for the same
+    // protection. The LAST_OWNER guard remains a defense-in-depth backstop.
     const res = await app.request(`/api/v1/instance/users/${seed.user.id}/role`, {
       method: 'PATCH',
       headers: { 'content-type': 'application/json', cookie: seed.sessionCookie },
@@ -173,13 +176,29 @@ describe('PATCH /api/v1/instance/users/:id/role — role change (owner-only)', (
 
     expect(res.status).toBe(409);
     const body = (await res.json()) as { error: { code: string } };
-    expect(body.error.code).toBe('LAST_OWNER');
+    expect(body.error.code).toBe('CANNOT_SELF_DEMOTE');
     expect(await roleOf(db, seed.user.id)).toBe('owner');
   });
 
-  test('with a SECOND owner, the first owner CAN be demoted → 200', async () => {
+  test('a DIFFERENT owner can demote another owner (when >1 owner) → 200', async () => {
     const { app, db, seed } = await makeTestApp();
-    // A second owner exists, so demoting the first leaves an owner.
+    // A second owner acts; they demote the FIRST owner (not themselves) → allowed.
+    const other = await seedRoleSession(db, 'owner');
+
+    const res = await app.request(`/api/v1/instance/users/${seed.user.id}/role`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json', cookie: other.cookie },
+      body: JSON.stringify({ role: 'member' }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(await roleOf(db, seed.user.id)).toBe('member');
+  });
+
+  test('self-demotion is REFUSED even with another owner present → 409 CANNOT_SELF_DEMOTE', async () => {
+    const { app, db, seed } = await makeTestApp();
+    // A second owner exists, so this is NOT the last-owner case — the refusal is
+    // specifically the self-demotion guard, not LAST_OWNER.
     await seedUser(db, 'owner');
 
     const res = await app.request(`/api/v1/instance/users/${seed.user.id}/role`, {
@@ -188,8 +207,10 @@ describe('PATCH /api/v1/instance/users/:id/role — role change (owner-only)', (
       body: JSON.stringify({ role: 'member' }),
     });
 
-    expect(res.status).toBe(200);
-    expect(await roleOf(db, seed.user.id)).toBe('member');
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe('CANNOT_SELF_DEMOTE');
+    expect(await roleOf(db, seed.user.id)).toBe('owner');
   });
 
   test('owner → owner (no-op same role) on the only owner is allowed → 200', async () => {

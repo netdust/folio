@@ -93,16 +93,20 @@ instanceAiKeysRoute.post(
       );
     }
 
-    const id = nanoid();
     const encryptedKey = encryptSecret(apiKey);
-    await db
+    // `.returning` gives the ACTUAL row id: on an INSERT it's the new id; on a
+    // conflict-UPDATE (same provider+label) it's the EXISTING row's id (the
+    // update sets only encryptedKey/baseUrl, never id). Returning the pre-
+    // generated nanoid would lie on the update path (response.id ≠ DB id).
+    const [row] = await db
       .insert(aiKeys)
-      .values({ id, provider, label, encryptedKey, baseUrl })
+      .values({ id: nanoid(), provider, label, encryptedKey, baseUrl })
       .onConflictDoUpdate({
         target: [aiKeys.provider, aiKeys.label],
         set: { encryptedKey, baseUrl },
-      });
-    return jsonOk(c, { id, provider, label, paid_residual_live: paidResidualLive }, 201);
+      })
+      .returning({ id: aiKeys.id });
+    return jsonOk(c, { id: row!.id, provider, label, paid_residual_live: paidResidualLive }, 201);
   },
 );
 

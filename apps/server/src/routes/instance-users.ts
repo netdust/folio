@@ -86,6 +86,18 @@ instanceUsersRoute.patch('/users/:id/role', zValidator('json', roleBody), async 
     throw new HTTPError('USER_NOT_FOUND', `no user with id ${targetId}`, 404);
   }
 
+  // Self-demotion guard: an owner cannot strip their OWN owner role. It is a
+  // silent footgun (one click and you lose every owner-only surface, including
+  // the one you'd use to undo it). Promoting yourself is impossible anyway (you
+  // are already owner). A different owner must demote you.
+  if (targetId === actor && target.role === 'owner' && role !== 'owner') {
+    throw new HTTPError(
+      'CANNOT_SELF_DEMOTE',
+      'you cannot remove your own owner role; another owner must do it',
+      409,
+    );
+  }
+
   // Last-owner guard: never demote the only instance owner. Fires only when the
   // target is CURRENTLY an owner AND the new role drops them out of owner; a
   // no-op owner→owner is fine. Count via the indexed users.role.

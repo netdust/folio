@@ -36,19 +36,39 @@ function stubUsers() {
   );
 }
 
+/** Mock useMe to identify the current user (drives the own-row read-only guard). */
+function mockMe(userId: string) {
+  vi.spyOn(auth, 'useMe').mockReturnValue({
+    data: { user: { id: userId, email: 'me@x', name: 'Me' } },
+  } as unknown as ReturnType<typeof auth.useMe>);
+}
+
 describe('RolesTab', () => {
-  it('an OWNER sees an editable role select per user', async () => {
+  it('an OWNER sees an editable role select for OTHER users', async () => {
     vi.spyOn(auth, 'useIsInstanceOwner').mockReturnValue(true);
+    mockMe('someone-else'); // current user is neither u1 nor u2 → both rows editable
     stubUsers();
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<RolesTab />, { wrapper: wrap(qc) });
     expect(await screen.findByText('Alice')).toBeInTheDocument();
-    // Two users → two role <select>s (combobox role).
+    // Both users are OTHER users → two role <select>s.
     expect(screen.getAllByRole('combobox')).toHaveLength(2);
+  });
+
+  it("an owner's OWN row is read-only — cannot self-demote (mirrors the server guard)", async () => {
+    vi.spyOn(auth, 'useIsInstanceOwner').mockReturnValue(true);
+    mockMe('u1'); // current user IS Alice (u1, an owner)
+    stubUsers();
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<RolesTab />, { wrapper: wrap(qc) });
+    expect(await screen.findByText('Alice')).toBeInTheDocument();
+    // Only Bob (u2) gets a select; Alice's own row is read-only → exactly one.
+    expect(screen.getAllByRole('combobox')).toHaveLength(1);
   });
 
   it('a non-owner (admin) sees roles READ-ONLY — no select, mirrors the owner-only server gate', async () => {
     vi.spyOn(auth, 'useIsInstanceOwner').mockReturnValue(false);
+    mockMe('u1');
     stubUsers();
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<RolesTab />, { wrapper: wrap(qc) });

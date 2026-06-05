@@ -1,6 +1,6 @@
 import { toast } from 'sonner';
 import { useInstanceUsers, useSetUserRole } from '../../lib/api/instance-users.ts';
-import { useIsInstanceOwner } from '../../lib/api/auth.ts';
+import { useIsInstanceOwner, useMe } from '../../lib/api/auth.ts';
 import { formatApiError } from '../../lib/api/index.ts';
 
 const ROLES = ['owner', 'admin', 'member'] as const;
@@ -13,6 +13,7 @@ const ROLES = ['owner', 'admin', 'member'] as const;
  */
 export function RolesTab() {
   const isOwner = useIsInstanceOwner();
+  const myId = useMe().data?.user?.id;
   const usersQuery = useInstanceUsers();
   const setRole = useSetUserRole();
 
@@ -42,7 +43,7 @@ export function RolesTab() {
               <div className="truncate text-sm">{u.name}</div>
               <div className="truncate text-xs text-fg-3">{u.email}</div>
             </div>
-            {isOwner ? (
+            {isOwner && u.id !== myId ? (
               <select
                 className="rounded border border-border-light bg-shell px-2 py-1 text-xs"
                 value={u.role}
@@ -56,6 +57,9 @@ export function RolesTab() {
                 ))}
               </select>
             ) : (
+              // Your own row is read-only: an owner can't strip their own role
+              // (the server refuses self-demotion too). Non-owners see all roles
+              // read-only.
               <span className="text-xs text-fg-2">{u.role}</span>
             )}
           </li>

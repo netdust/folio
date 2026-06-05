@@ -57,6 +57,10 @@ describe('Instance settings page', () => {
   it('shows AI, Roles, and Invitations sections to an instance admin', async () => {
     vi.spyOn(auth, 'useIsInstanceAdmin').mockReturnValue(true);
     vi.spyOn(auth, 'useIsInstanceOwner').mockReturnValue(true);
+    // RolesTab reads useMe().data.user.id for the own-row self-demote guard.
+    vi.spyOn(auth, 'useMe').mockReturnValue({
+      data: { user: { id: 'me', email: 'me@x', name: 'Me' } },
+    } as unknown as ReturnType<typeof auth.useMe>);
     renderPage(newQc());
     expect(await screen.findByText(/instance settings/i)).toBeInTheDocument();
     expect(await screen.findByRole('heading', { name: /^AI providers$/i })).toBeInTheDocument();

@@ -1,29 +1,20 @@
 import { createFileRoute } from '@tanstack/react-router';
-import { z } from 'zod';
 import { useWorkspace } from '../lib/api/workspaces.ts';
 import { TokensTab } from '../components/settings/tokens-tab.tsx';
-import { Tabs } from '../components/ui/tabs.tsx';
-
-const settingsSearchSchema = z.object({
-  // Deep-link target tab. AI keys moved to the instance settings page (/settings);
-  // this page is workspace-scoped settings only (API tokens today).
-  tab: z.enum(['tokens']).optional(),
-});
 
 export const Route = createFileRoute('/w/$wslug/settings')({
-  validateSearch: settingsSearchSchema,
   component: RouteComponent,
 });
 
 function RouteComponent() {
   const { wslug } = Route.useParams();
-  const { tab } = Route.useSearch();
-  return <SettingsPage wslug={wslug} initialTab={tab} />;
+  return <SettingsPage wslug={wslug} />;
 }
 
-type TabKey = 'tokens';
-
-export function SettingsPage({ wslug, initialTab }: { wslug: string; initialTab?: TabKey }) {
+// Workspace-scoped settings. AI keys moved to the instance /settings page; the
+// only workspace setting today is API tokens, so this renders TokensTab directly
+// (a single-tab Tabs wrapper was dead UI — removed).
+export function SettingsPage({ wslug }: { wslug: string }) {
   const workspace = useWorkspace(wslug);
 
   return (
@@ -33,15 +24,8 @@ export function SettingsPage({ wslug, initialTab }: { wslug: string; initialTab?
           {workspace.data?.name ?? ''}
         </div>
         <h1 className="text-lg font-medium tracking-tight">Workspace settings</h1>
+        <p className="mt-1 text-xs text-fg-2">API tokens for this workspace.</p>
       </header>
-
-      <div className="mb-5">
-        <Tabs<TabKey>
-          value={initialTab ?? 'tokens'}
-          onChange={() => {}}
-          items={[{ value: 'tokens', label: 'API tokens' }]}
-        />
-      </div>
 
       {workspace.data ? <TokensTab wslug={wslug} workspaceId={workspace.data.id} /> : null}
     </div>

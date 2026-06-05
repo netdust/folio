@@ -133,6 +133,31 @@ describe('POST /api/v1/instance/ai-keys', () => {
     expect('workspaceId' in rows[0]!).toBe(false);
   });
 
+  test('upserting an existing (provider,label) returns the EXISTING row id, not a new one', async () => {
+    const { app, db, seed } = await makeTestApp();
+    const first = await post(app, seed.sessionCookie, {
+      provider: 'anthropic',
+      apiKey: 'sk-one',
+      label: 'default',
+    });
+    const firstId = (await first.json()).data.id as string;
+
+    // Re-save the SAME provider+label (an update via onConflictDoUpdate).
+    const second = await post(app, seed.sessionCookie, {
+      provider: 'anthropic',
+      apiKey: 'sk-two',
+      label: 'default',
+    });
+    const secondId = (await second.json()).data.id as string;
+
+    // The response id must be the EXISTING row id (the update keeps it), not a
+    // freshly-generated nanoid — otherwise a delete-by-response-id would 404.
+    expect(secondId).toBe(firstId);
+    const rows = await db.query.aiKeys.findMany();
+    expect(rows.length).toBe(1); // upsert, not a duplicate insert
+    expect(rows[0]!.id).toBe(firstId);
+  });
+
   test('rejects ollama baseUrl pointing at loopback IPv4 (422)', async () => {
     const harness = await makeTestApp(); // seed.user is already an instance owner
     const res = await post(harness.app, harness.seed.sessionCookie, {
@@ -176,6 +201,38 @@ describe('POST /api/v1/instance/ai-keys', () => {
       baseUrl: 'https://evil.example.com',
     });
     expect(res.status).toBe(400);
+  });
+
+  test('rejects baseUrl when provider is anthropic (refine → 400)', async () => {
+    const harness = await makeTestApp(); // seed.user is already an instance owner
+    const res = await post(harness.app, harness.seed.sessionCookie, {
+      provider: 'anthropic',
+      apiKey: 'sk-mock',
+      label: 'default',
+      baseUrl: 'https://evil.example.com',
+    });
+    expect(res.status).toBe(400);
+  });
+
+  test('a bearer cannot reach the POST route (session-only — secret store unwritable by token)', async () => {
+    const { app, db, seed } = await makeTestApp();
+    const { token, hash } = newApiToken();
+    await db.insert(apiTokens).values({
+      id: nanoid(),
+      workspaceId: seed.workspace.id,
+      name: 'bearer',
+      tokenHash: hash,
+      scopes: ['documents:write'],
+      createdBy: seed.user.id,
+    });
+    const res = await app.request(PATH, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider: 'anthropic', apiKey: 'sk-x', label: 'default' }),
+    });
+    expect([401, 403]).toContain(res.status);
+    expect(res.status).not.toBe(201);
+    expect((await db.query.aiKeys.findMany()).length).toBe(0);
   });
 
   test('rejects ollama without baseUrl (422 — persistence symmetry)', async () => {
@@ -252,5 +309,27 @@ describe('DELETE /api/v1/instance/ai-keys/:keyId', () => {
       headers: { Cookie: memberCookie },
     });
     expect(res.status).toBe(403);
+  });
+
+  test('a bearer cannot reach the DELETE route (session-only)', async () => {
+    const { app, db, seed } = await makeTestApp();
+    const id = nanoid();
+    await db.insert(aiKeys).values({ id, provider: 'anthropic', label: 'default', encryptedKey: 'x' });
+    const { token, hash } = newApiToken();
+    await db.insert(apiTokens).values({
+      id: nanoid(),
+      workspaceId: seed.workspace.id,
+      name: 'bearer',
+      tokenHash: hash,
+      scopes: ['documents:delete'],
+      createdBy: seed.user.id,
+    });
+    const res = await app.request(`${PATH}/${id}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect([401, 403]).toContain(res.status);
+    // The key must survive a bearer DELETE.
+    expect((await db.query.aiKeys.findMany({ where: eq(aiKeys.id, id) })).length).toBe(1);
   });
 });

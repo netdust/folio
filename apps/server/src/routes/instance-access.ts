@@ -136,32 +136,34 @@ function assertNotReservedTarget(workspaceSlug: string | undefined): void {
 instanceAccessRoute.get('/', async (c) => {
   await requireInstanceAdmin(db, getUser(c).id);
 
-  const wsRows = await db
-    .select({
-      userId: workspaceAccess.userId,
-      userEmail: users.email,
-      userName: users.name,
-      workspaceId: workspaceAccess.workspaceId,
-      workspaceSlug: workspaces.slug,
-      workspaceName: workspaces.name,
-    })
-    .from(workspaceAccess)
-    .innerJoin(users, eq(users.id, workspaceAccess.userId))
-    .innerJoin(workspaces, eq(workspaces.id, workspaceAccess.workspaceId));
-
-  const projRows = await db
-    .select({
-      userId: projectAccess.userId,
-      userEmail: users.email,
-      userName: users.name,
-      projectId: projectAccess.projectId,
-      projectSlug: projects.slug,
-      projectName: projects.name,
-      workspaceId: projects.workspaceId,
-    })
-    .from(projectAccess)
-    .innerJoin(users, eq(users.id, projectAccess.userId))
-    .innerJoin(projects, eq(projects.id, projectAccess.projectId));
+  // The two roster queries are independent — run them concurrently.
+  const [wsRows, projRows] = await Promise.all([
+    db
+      .select({
+        userId: workspaceAccess.userId,
+        userEmail: users.email,
+        userName: users.name,
+        workspaceId: workspaceAccess.workspaceId,
+        workspaceSlug: workspaces.slug,
+        workspaceName: workspaces.name,
+      })
+      .from(workspaceAccess)
+      .innerJoin(users, eq(users.id, workspaceAccess.userId))
+      .innerJoin(workspaces, eq(workspaces.id, workspaceAccess.workspaceId)),
+    db
+      .select({
+        userId: projectAccess.userId,
+        userEmail: users.email,
+        userName: users.name,
+        projectId: projectAccess.projectId,
+        projectSlug: projects.slug,
+        projectName: projects.name,
+        workspaceId: projects.workspaceId,
+      })
+      .from(projectAccess)
+      .innerJoin(users, eq(users.id, projectAccess.userId))
+      .innerJoin(projects, eq(projects.id, projectAccess.projectId)),
+  ]);
 
   const grants = [
     ...wsRows.map((r) => ({ kind: 'workspace' as const, ...r })),
