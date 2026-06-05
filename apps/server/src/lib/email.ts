@@ -18,21 +18,50 @@ function getTransporter(): nodemailer.Transporter | null {
   return transporter;
 }
 
-export async function sendMagicLink(email: string, token: string): Promise<void> {
-  const url = `${env.PUBLIC_URL}/auth/magic-link/consume?token=${token}`;
-  const subject = 'Sign in to Folio';
-  const text = `Click to sign in to Folio: ${url}\n\nThis link expires in 15 minutes.`;
+function magicLinkUrl(token: string): string {
+  return `${env.PUBLIC_URL}/auth/magic-link/consume?token=${token}`;
+}
 
+// Shared send (or dev-console fallback when no SMTP is configured). Returns
+// nothing — in dev the link is logged so it can be copy-pasted.
+async function deliver(email: string, subject: string, text: string, devLabel: string): Promise<void> {
   const t = getTransporter();
   if (!t) {
-    // Dev mode - log the link to the server console so you can copy-paste it.
-    console.log(`\n[folio] Magic link for ${email}:\n  ${url}\n`);
+    console.log(`\n[folio] ${devLabel} for ${email}:\n  ${magicLinkUrl(extractToken(text))}\n`);
     return;
   }
-  await t.sendMail({
-    to: email,
-    from: env.SMTP_FROM,
-    subject,
-    text,
-  });
+  await t.sendMail({ to: email, from: env.SMTP_FROM, subject, text });
+}
+
+// The dev-console fallback re-derives the URL from the token; pull it back out of
+// the message body so deliver() stays message-agnostic.
+function extractToken(text: string): string {
+  const m = text.match(/consume\?token=([^\s]+)/);
+  return m ? m[1]! : '';
+}
+
+export async function sendMagicLink(email: string, token: string): Promise<void> {
+  const url = magicLinkUrl(token);
+  await deliver(
+    email,
+    'Sign in to Folio',
+    `Click to sign in to Folio: ${url}\n\nThis link expires in 15 minutes.`,
+    'Magic link',
+  );
+}
+
+/**
+ * Admin-initiated invite. Same magic-link mechanism as sign-in (the consume path
+ * upserts the user as a plain member), but invite-worded so the recipient knows
+ * they're being added to the team rather than signing in to an existing account.
+ */
+export async function sendInvite(email: string, token: string, inviterName: string): Promise<void> {
+  const url = magicLinkUrl(token);
+  await deliver(
+    email,
+    "You've been invited to Folio",
+    `${inviterName} invited you to join their Folio workspace.\n\n` +
+      `Click to accept and sign in: ${url}\n\nThis link expires in 15 minutes.`,
+    'Invite link',
+  );
 }

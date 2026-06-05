@@ -24,7 +24,10 @@ function stubApi(calls: { url: string; method: string; body: unknown }[]) {
       const method = init?.method ?? 'GET';
       const body = init?.body ? JSON.parse(init.body as string) : undefined;
       let data: unknown = {};
-      if (url.includes('/instance/users')) data = { users: [{ id: 'u1', email: 'a@x', name: 'Alice', role: 'member' }] };
+      if (url.includes('/instance/invites')) {
+        calls.push({ url, method, body });
+        data = { ok: true };
+      } else if (url.includes('/instance/users')) data = { users: [{ id: 'u1', email: 'a@x', name: 'Alice', role: 'member' }] };
       else if (url.includes('/instance/invite-targets'))
         data = { workspaces: [{ id: 'w1', slug: 'acme', name: 'Acme' }], projects: [{ id: 'p1', slug: 'web', name: 'Web', workspaceId: 'w1' }] };
       else if (url.includes('/instance/access')) {
@@ -61,6 +64,22 @@ describe('InvitationsTab', () => {
     expect(calls[0]!.method).toBe('POST');
     // The kind is encoded in the target value → routed to projectId, NOT workspaceId.
     expect(calls[0]!.body).toEqual({ userId: 'u1', projectId: 'p1' });
+  });
+
+  it('invites a NEW member by email → POST /instance/invites with the email', async () => {
+    const calls: { url: string; method: string; body: unknown }[] = [];
+    stubApi(calls);
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const user = userEvent.setup();
+    render(<InvitationsTab />, { wrapper: wrap(qc) });
+
+    await user.type(screen.getByPlaceholderText(/teammate@example/i), 'newhire@acme.test');
+    await user.click(screen.getByRole('button', { name: /send invite/i }));
+
+    await waitFor(() => expect(calls.length).toBe(1));
+    expect(calls[0]!.url).toContain('/instance/invites');
+    expect(calls[0]!.method).toBe('POST');
+    expect(calls[0]!.body).toEqual({ email: 'newhire@acme.test' });
   });
 
   it('grants a WORKSPACE access with workspaceId when a workspace target is picked', async () => {

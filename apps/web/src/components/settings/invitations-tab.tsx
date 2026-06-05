@@ -6,7 +6,11 @@ import {
   useInstanceAccess,
   useRevokeAccess,
 } from '../../lib/api/instance-access.ts';
-import { useInstanceUsers, useInviteTargets } from '../../lib/api/instance-users.ts';
+import {
+  useInstanceUsers,
+  useInviteTargets,
+  useInviteByEmail,
+} from '../../lib/api/instance-users.ts';
 import { formatApiError } from '../../lib/api/index.ts';
 import { Button } from '../ui/button.tsx';
 
@@ -41,7 +45,9 @@ export function InvitationsTab() {
   const grantsQuery = useInstanceAccess();
   const grant = useGrantAccess();
   const revoke = useRevokeAccess();
+  const invite = useInviteByEmail();
 
+  const [inviteEmail, setInviteEmail] = useState('');
   const [userId, setUserId] = useState('');
   const [target, setTarget] = useState(''); // 'w:<id>' | 'p:<id>'
 
@@ -62,6 +68,18 @@ export function InvitationsTab() {
     }
   }
 
+  async function onInvite() {
+    const email = inviteEmail.trim();
+    if (!email) return;
+    try {
+      await invite.mutateAsync({ email });
+      toast.success(`Invite sent to ${email}`);
+      setInviteEmail('');
+    } catch (e) {
+      toast.error(formatApiError(e));
+    }
+  }
+
   async function onRevoke(g: (typeof grants)[number]) {
     try {
       await revoke.mutateAsync(
@@ -77,7 +95,35 @@ export function InvitationsTab() {
 
   return (
     <div className="space-y-4">
-      {/* Grant form */}
+      {/* Invite a NEW person by email — they're created (as a member) when they
+          click the magic link, then appear in the grant picker below. */}
+      <div>
+        <h3 className="mb-1 text-xs font-medium text-fg-2">Invite a new member</h3>
+        <div className="flex flex-wrap items-end gap-2">
+          <label className="flex flex-col gap-1 text-xs">
+            <span className="text-fg-3">Email</span>
+            <input
+              type="email"
+              className="rounded border border-border-light bg-shell px-2 py-1 text-xs"
+              placeholder="teammate@example.com"
+              value={inviteEmail}
+              onChange={(e) => setInviteEmail(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void onInvite();
+              }}
+            />
+          </label>
+          <Button onClick={onInvite} disabled={!inviteEmail.trim() || invite.isPending}>
+            Send invite
+          </Button>
+        </div>
+        <p className="mt-1 text-[11px] text-fg-3">
+          We email a sign-in link. They join as a member; grant workspace/project
+          access below once they appear.
+        </p>
+      </div>
+
+      {/* Grant access to an EXISTING user */}
       <div className="flex flex-wrap items-end gap-2">
         <label className="flex flex-col gap-1 text-xs">
           <span className="text-fg-3">User</span>

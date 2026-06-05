@@ -44,6 +44,18 @@ export function useInviteTargets(opts: { enabled?: boolean } = {}) {
   });
 }
 
+/**
+ * POST /instance/invites — invite a NEW person by email (owner+admin). Sends a
+ * magic link; the user is created (as a member) when they click it. Distinct from
+ * granting access (useGrantAccess), which targets an already-existing user.
+ */
+export function useInviteByEmail() {
+  return useMutation({
+    mutationFn: (vars: { email: string }) =>
+      client.post<{ ok: boolean }>('/api/v1/instance/invites', vars),
+  });
+}
+
 /** PATCH /instance/users/:id/role — OWNER-only instance role change. */
 export function useSetUserRole() {
   const qc = useQueryClient();

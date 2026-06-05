@@ -413,3 +413,76 @@ describe('GET /api/v1/instance/users — user+role list (owner+admin)', () => {
     expect([401, 403]).toContain(res.status);
   });
 });
+
+describe('POST /api/v1/instance/invites (admin invite by email)', () => {
+  test('an owner invites by email → 200 + a magic link row is created for that email', async () => {
+    const { app, db } = await makeTestApp();
+    const { cookie } = await seedRoleSession(db, 'owner');
+
+    const res = await app.request('/api/v1/instance/invites', {
+      method: 'POST',
+      headers: { Cookie: cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ email: 'newhire@acme.test' }),
+    });
+    expect(res.status).toBe(200);
+
+    // A magic link was minted for the invited email (consume will upsert them).
+    const link = await db.query.magicLinks.findFirst({
+      where: eq(schema.magicLinks.email, 'newhire@acme.test'),
+    });
+    expect(link).toBeDefined();
+    // No user is created at invite time — only on consume.
+    const user = await db.query.users.findFirst({
+      where: eq(schema.users.email, 'newhire@acme.test'),
+    });
+    expect(user).toBeUndefined();
+  });
+
+  test('an admin may also invite (200)', async () => {
+    const { app, db } = await makeTestApp();
+    const { cookie } = await seedRoleSession(db, 'admin');
+    const res = await app.request('/api/v1/instance/invites', {
+      method: 'POST',
+      headers: { Cookie: cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ email: 'x@acme.test' }),
+    });
+    expect(res.status).toBe(200);
+  });
+
+  test('a member CANNOT invite (403) — no magic link minted', async () => {
+    const { app, db } = await makeTestApp();
+    const { cookie } = await seedRoleSession(db, 'member');
+    const res = await app.request('/api/v1/instance/invites', {
+      method: 'POST',
+      headers: { Cookie: cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ email: 'nope@acme.test' }),
+    });
+    expect(res.status).toBe(403);
+    const link = await db.query.magicLinks.findFirst({
+      where: eq(schema.magicLinks.email, 'nope@acme.test'),
+    });
+    expect(link).toBeUndefined();
+  });
+
+  test('a bearer CANNOT invite (session-only)', async () => {
+    const { app, db, seed } = await makeTestApp();
+    const token = await seedInstanceToken(db, seed.user.id);
+    const res = await app.request('/api/v1/instance/invites', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ email: 'bearer@acme.test' }),
+    });
+    expect([401, 403]).toContain(res.status);
+  });
+
+  test('a malformed email is rejected (400)', async () => {
+    const { app, db } = await makeTestApp();
+    const { cookie } = await seedRoleSession(db, 'owner');
+    const res = await app.request('/api/v1/instance/invites', {
+      method: 'POST',
+      headers: { Cookie: cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ email: 'not-an-email' }),
+    });
+    expect(res.status).toBe(400);
+  });
+});

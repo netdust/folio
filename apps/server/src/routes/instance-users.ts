@@ -1,9 +1,12 @@
 import { zValidator } from '@hono/zod-validator';
 import { count, eq, ne } from 'drizzle-orm';
 import { Hono } from 'hono';
+import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import { db } from '../db/client.ts';
-import { projects, users, workspaces } from '../db/schema.ts';
+import { magicLinks, projects, users, workspaces } from '../db/schema.ts';
+import { hashToken, newMagicToken } from '../lib/auth.ts';
+import { sendInvite } from '../lib/email.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
 import {
   SYSTEM_WORKSPACE_SLUG,
@@ -173,5 +176,49 @@ instanceUsersRoute.get('/users', async (c) => {
 
   return jsonOk(c, { users: rows });
 });
+
+/**
+ * POST /instance/invites — admin-initiated invite by email (owner+admin).
+ *
+ * The gap this closes: an owner could previously only GRANT access to a user who
+ * had ALREADY self-registered — there was no way to bring in a teammate who isn't
+ * here yet. This issues a magic link to the email (same machinery as sign-in;
+ * `magic-link/consume` upserts the user as a plain MEMBER on click), invite-worded.
+ *
+ * SECURITY (threat model):
+ *  - T1 admin-gate: session-only mount + requireInstanceAdmin. No bearer can
+ *    invite (no user at this mount), no member can invite.
+ *  - T2 no role escalation: the invite carries NO role; consume creates 'member'
+ *    only. Promotion stays the owner-only PATCH above. v1 attaches NO grant — the
+ *    admin grants access from the Invitations list once the user appears (the
+ *    user doesn't exist until consume, so there's nothing to grant to yet).
+ *  - T3 link integrity: reuses the existing single-use, 15-min, server-hashed
+ *    magic-link/consume — no new consume path, no open-redirect surface.
+ *  - Already-a-user: if the email already has a user, this is just a (re)send of a
+ *    sign-in link — harmless, and we don't leak whether they existed (always 200).
+ *  - T5 (deferred): no per-admin invite rate-limit in v1 — bounded by the admin
+ *    gate; revisit if abused.
+ */
+instanceUsersRoute.post(
+  '/invites',
+  zValidator('json', z.object({ email: z.string().email() })),
+  async (c) => {
+    const inviter = getUser(c);
+    await requireInstanceAdmin(db, inviter.id);
+    const { email } = c.req.valid('json');
+
+    const token = newMagicToken();
+    await db.insert(magicLinks).values({
+      id: nanoid(),
+      email,
+      tokenHash: hashToken(token),
+      expiresAt: new Date(Date.now() + 1000 * 60 * 15), // 15 min, matches sign-in
+    });
+    await sendInvite(email, token, inviter.name ?? 'A teammate');
+
+    // Always 200 — never disclose whether the email already had an account.
+    return jsonOk(c, { ok: true });
+  },
+);
 
 export { instanceUsersRoute };

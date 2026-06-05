@@ -71,7 +71,7 @@ export function InstanceSettingsBody() {
 
           <SettingsSection
             title="Invitations"
-            desc="Grant a user access to a workspace or project, or revoke it."
+            desc="Invite a new member by email, then grant them access to a workspace or project (or revoke it)."
           >
             <InvitationsTab />
           </SettingsSection>
