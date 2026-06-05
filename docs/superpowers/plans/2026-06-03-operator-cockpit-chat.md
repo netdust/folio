@@ -630,6 +630,23 @@ git commit -m "phase-chat T4: source/sink adapter seam (conversation thread reus
 
 ### Task 5: Run-create wiring — chat run threads the caller (M1/M2) [WIRING TASK — end-to-end assertion]
 
+> **⚠️ PLAN-CORRECTION (2026-06-05, Step 2.5 — supersedes the original T5 below).** The original T5 ("add `conversationId` to `createRun`; stamp `agent_home_workspace_id = __system`; reuse membership lookup") is NOT VIABLE against merged main, for three ground-truthed reasons:
+> 1. **`createRun` hard-refuses the operator** (`if (isOperator(agent.slug)) throw OPERATOR_RUN_UNSUPPORTED`, agent-runs.ts:119) — deliberately, since the operator has no token row.
+> 2. **`createRun` + the `agent_run` document require a parent + project + runsTable + a persisted token row** — a conversation run has NONE of these. Forcing it through would mean faking a parent/project and writing conversation runs into the `agent_run`/documents space — the exact event/trigger surface invariant 10 + the walled-off conversations tables exist to AVOID.
+> 3. `__system` is gone; the operator is a CODE SINGLETON (`lib/operator.ts`, no token, `projects:['*']`, `tools:OPERATOR_TOOLS`).
+>
+> **CORRECTED DESIGN (user-decided 2026-06-05): a SEPARATE conversation-run path, walled off like the conversation tables themselves.**
+> - **NEW `createConversationRun(db, { conversation, callerUser })`** (in agent-runs.ts or a new conversations-run module) — does NOT write an `agent_run` document, does NOT touch parent/project/runsTable. It:
+>   - resolves the caller = `conversation.created_by` (the human), reads their CURRENT `users.role` (`userRole`) — fresh per turn (Authority-over-time Option A below still holds).
+>   - computes the operator's effective authority = **`toolsToScopes(OPERATOR_TOOLS) ∩ roleToScopes(callerRole)`** for scopes (the agent∩caller floor, M1/M2 — a viewer's operator is read-only); **project ceiling** = `callerProjectsFor({role, projectIds})` where for a non-owner the projectIds are the caller's visible projects (a flat snapshot — the SAME established pattern createRun already uses for `caller_project_ids`; owner → null = no narrowing → operator `['*']` stands). Because the operator is instance-reach and a conversation isn't ws-pinned, the non-owner snapshot is the UNION of `visibleProjectIds` across the caller's `visibleWorkspaceIds` (each project id is globally unique, so a flat union is a safe ceiling; the "projects created later aren't included" tradeoff is identical to today's createRun snapshot).
+>   - mints an **EPHEMERAL in-memory operator token** `{ scopes, projectIds, agentId: OPERATOR_SLUG-resolved-id-or-sentinel }` — NOT persisted to `apiTokens` (no token row pollution; mirrors how ccExecute mints ephemeral tokens). The conversation `active_run_id` slot (M14 CAS, T6) tracks liveness; the "run id" is a generated id, not a document id.
+>   - returns the data `loadContext`'s conversation branch needs (or directly builds the `RunContext`).
+> - **`loadContext` gains a conversation branch** — when invoked for a conversation run (keyed on the run carrying `conversation_id` / being a conversation-run id), it SKIPS the `run.parentId`/`parent`/`run.projectId`/`project`/token-row lookups and instead builds `RunContext` with: `sink = makeConversationSink(...)`, `conversationId`, the ephemeral token, NO `parent`, the operator definition (`getOperatorDefinition`/`getOperatorDocument`) as `agent`. The parent-coupled helpers already guard on `ctx.sink` (Cluster 2).
+> - **`createRun` keeps throwing `OPERATOR_RUN_UNSUPPORTED`** — unchanged. Triggers/MCP still cannot run the operator. Only the cockpit path (createConversationRun) can.
+> - **Authority test (M1/M2) is unchanged in spirit:** assert `toolsToScopes(OPERATOR_TOOLS) ∩ roleToScopes(viewer)` yields read-only (no documents:write); owner yields full; the floor is the same `agent ∩ caller`.
+>
+> The "Authority-over-time Option A" + "Files"/"Steps" below are RESHAPED by this correction — read them through this lens (createConversationRun, not createRun-extension; ephemeral token, not a stamped agent_run doc; users.role, not membership).
+
 **Authority-over-time (Option A — resolve fresh per turn; state this explicitly).** A conversation has ONE immutable identity (`created_by`) but its authority is resolved FRESH at every turn's run-create from the owner's CURRENT membership:
 - Owner promoted (viewer → admin) between turns → the next turn GAINS the new ability. Owner demoted → the next turn LOSES it. This is the natural model and matches per-run derivation.
 - Owner removed from the target workspace → the existing `RUN_OWNER_NOT_A_MEMBER` fail-loud already covers it (the turn refuses).
