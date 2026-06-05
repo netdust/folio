@@ -68,3 +68,17 @@ export function useSetUserRole() {
     onSuccess: () => qc.invalidateQueries({ queryKey: instanceUsersKeys.all }),
   });
 }
+
+/**
+ * DELETE /instance/users/:id — OWNER-only hard delete (offboarding). Removes the
+ * account and cascades sessions/grants; tokens they minted are revoked. The
+ * counterpart to inviting a member.
+ */
+export function useDeleteUser() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (userId: string) =>
+      client.delete<{ ok: boolean; id: string }>(`/api/v1/instance/users/${userId}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: instanceUsersKeys.all }),
+  });
+}

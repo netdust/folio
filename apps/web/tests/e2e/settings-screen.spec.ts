@@ -121,6 +121,62 @@ test.describe('Settings screen — full smoke', () => {
     expect(res.ok(), `invite → ${res.status()}`).toBe(true);
   });
 
+  test('owner: remove a member (the offboarding flow)', async ({ owner, browser }) => {
+    const { page } = owner;
+    // Register a second user (a plain member) so the owner has someone to remove.
+    const victimCtx = await browser.newContext();
+    const victimPage = await victimCtx.newPage();
+    const victimEmail = `e2e-victim-${Date.now()}@folio.test`;
+    const reg = await victimPage.request.post('/api/v1/auth/register', {
+      data: { email: victimEmail, password: E2E_PASSWORD, name: 'Victim' },
+    });
+    expect(reg.ok()).toBe(true);
+    await victimCtx.close();
+
+    await page.goto('/w/acme/instance-settings');
+    // The victim shows up in the Roles list with a Remove button.
+    const row = page.locator('li', { hasText: victimEmail });
+    await expect(row).toBeVisible();
+    await row.getByRole('button', { name: /^Remove$/ }).click();
+
+    // Confirm dialog → danger Remove.
+    const dialog = page.getByRole('dialog');
+    await expect(dialog.getByText(new RegExp(`Remove ${victimEmail}`, 'i'))).toBeVisible();
+    await dialog.getByRole('button', { name: /^Remove$/ }).click();
+
+    // Toast + the row is gone from the roster.
+    await expect(page.getByText(new RegExp(`Removed ${victimEmail}`, 'i'))).toBeVisible();
+    await expect(page.locator('li', { hasText: victimEmail })).toHaveCount(0);
+    await shot(page, 'member-removed');
+  });
+
+  test('the removal is real: the removed user can no longer authenticate', async ({
+    owner,
+    browser,
+  }) => {
+    const { page } = owner;
+    // Register, confirm they can hit an authed endpoint, remove them, confirm 401.
+    const victimCtx = await browser.newContext();
+    const victimPage = await victimCtx.newPage();
+    const email = `e2e-gone-${Date.now()}@folio.test`;
+    await victimPage.request.post('/api/v1/auth/register', {
+      data: { email, password: E2E_PASSWORD, name: 'Gone' },
+    });
+    // Their session works pre-removal.
+    const before = await victimPage.request.get('/api/v1/auth/me');
+    expect(before.ok()).toBe(true);
+    const victimId = ((await before.json()) as { data: { user: { id: string } } }).data.user.id;
+
+    // Owner removes them.
+    const del = await page.request.delete(`/api/v1/instance/users/${victimId}`);
+    expect(del.ok(), `delete → ${del.status()}`).toBe(true);
+
+    // Their session is now dead (cascade-deleted) → /auth/me 401.
+    const after = await victimPage.request.get('/api/v1/auth/me');
+    expect(after.status()).toBe(401);
+    await victimCtx.close();
+  });
+
   test('owner: create an Instance API token end-to-end (the new POST surface)', async ({
     owner,
   }) => {

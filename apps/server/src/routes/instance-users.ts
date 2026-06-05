@@ -4,7 +4,7 @@ import { Hono } from 'hono';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import { db } from '../db/client.ts';
-import { magicLinks, projects, users, workspaces } from '../db/schema.ts';
+import { apiTokens, documents, magicLinks, projects, users, workspaces } from '../db/schema.ts';
 import { hashToken, newMagicToken } from '../lib/auth.ts';
 import { sendInvite } from '../lib/email.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
@@ -123,6 +123,71 @@ instanceUsersRoute.patch('/users/:id/role', zValidator('json', roleBody), async 
   await db.update(users).set({ role }).where(eq(users.id, targetId));
 
   return jsonOk(c, { id: targetId, role });
+});
+
+/**
+ * DELETE /instance/users/:id — OWNER-ONLY hard delete (offboarding).
+ *
+ * Closes the symmetric gap to invites: an owner could ADD a member but never
+ * REMOVE one — a demoted ex-teammate kept a login and could be re-granted access.
+ * This removes the account and everything that authenticates as / was minted by
+ * them, fully locking them out.
+ *
+ * SECURITY (threat model):
+ *  - T1 owner-gate: session-only mount + requireInstanceOwner (removing a user is
+ *    at least as sensitive as re-roling one — admin/member/bearer cannot).
+ *  - T2 no self-delete: CANNOT_SELF_DELETE (409) — a one-click instance lockout.
+ *  - T3 no last-owner delete: LAST_OWNER (409) — never leave the instance ownerless.
+ *  - T4 no residual access: auth_sessions + workspace_access + project_access
+ *    CASCADE on the users delete; api_tokens the user MINTED are deleted in-txn
+ *    (NOT nulled — a live token with no owner would be an orphaned credential).
+ *  - T5 atomic: one db.transaction — all-or-nothing.
+ *  - T6 FK RESTRICT: documents.created_by/updated_by have NO onDelete (RESTRICT),
+ *    so the raw user delete would THROW once they've authored anything. Null those
+ *    refs in-txn first — authored content survives, only its author ref is cleared.
+ */
+instanceUsersRoute.delete('/users/:id', async (c) => {
+  const actorId = getUser(c).id;
+  await requireInstanceOwner(db, actorId);
+
+  const targetId = c.req.param('id');
+  const target = await db.query.users.findFirst({ where: eq(users.id, targetId) });
+  if (!target) {
+    throw new HTTPError('USER_NOT_FOUND', `no user with id ${targetId}`, 404);
+  }
+
+  // T2: you cannot delete yourself (instant lockout footgun).
+  if (targetId === actorId) {
+    throw new HTTPError('CANNOT_SELF_DELETE', 'you cannot delete your own account', 409);
+  }
+
+  // T3: never delete the only owner.
+  if (target.role === 'owner') {
+    const [{ n: ownerCount } = { n: 0 }] = await db
+      .select({ n: count() })
+      .from(users)
+      .where(eq(users.role, 'owner'));
+    if (ownerCount <= 1) {
+      throw new HTTPError('LAST_OWNER', 'cannot delete the only instance owner', 409);
+    }
+  }
+
+  // One transaction: clear RESTRICT refs (T6), revoke minted tokens (T4), then
+  // delete the user (cascades sessions + grants).
+  db.transaction((tx) => {
+    // T6: documents.created_by / updated_by are RESTRICT — null them so the user
+    // delete doesn't throw; authored documents are preserved (author ref cleared).
+    tx.update(documents).set({ createdBy: null }).where(eq(documents.createdBy, targetId)).run();
+    tx.update(documents).set({ updatedBy: null }).where(eq(documents.updatedBy, targetId)).run();
+    // T4: tokens MINTED by this user are revoked (deleting the user would otherwise
+    // hit the api_tokens.created_by RESTRICT, and a nulled-owner live token is an
+    // orphaned credential). Agent-bound tokens already cascade via their agentId.
+    tx.delete(apiTokens).where(eq(apiTokens.createdBy, targetId)).run();
+    // The user delete cascades auth_sessions + workspace_access + project_access.
+    tx.delete(users).where(eq(users.id, targetId)).run();
+  });
+
+  return jsonOk(c, { ok: true, id: targetId });
 });
 
 /**

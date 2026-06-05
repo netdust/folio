@@ -486,3 +486,133 @@ describe('POST /api/v1/instance/invites (admin invite by email)', () => {
     expect(res.status).toBe(400);
   });
 });
+
+describe('DELETE /api/v1/instance/users/:id (owner-only hard delete)', () => {
+  /** Seed a page document authored by `userId` (exercises the created_by RESTRICT
+   *  path). A `page` requires a non-null project_id per the documents CHECK. */
+  async function seedDocument(
+    db: DB,
+    workspaceId: string,
+    projectId: string,
+    userId: string,
+  ): Promise<string> {
+    const id = nanoid();
+    await db.insert(schema.documents).values({
+      id,
+      workspaceId,
+      projectId,
+      type: 'page',
+      slug: `doc-${id}`,
+      title: 'Authored',
+      createdBy: userId,
+      updatedBy: userId,
+    });
+    return id;
+  }
+
+  test('an owner deletes a member → 200, and sessions/grants/tokens are gone; authored docs survive (author nulled)', async () => {
+    const { app, db, seed } = await makeTestApp();
+
+    // A member with a session, a workspace grant, a minted token, and an authored doc.
+    const { userId: victimId } = await seedRoleSession(db, 'member');
+    const ws = await seedWorkspace(db);
+    const proj = await seedProject(db, ws);
+    await db.insert(schema.workspaceAccess).values({ userId: victimId, workspaceId: ws });
+    await db.insert(schema.apiTokens).values({
+      id: nanoid(), workspaceId: ws, name: 'victim-tok',
+      tokenHash: newApiToken().hash, scopes: ['documents:read'], createdBy: victimId,
+    });
+    const docId = await seedDocument(db, ws, proj, victimId);
+
+    const res = await app.request(`/api/v1/instance/users/${victimId}`, {
+      method: 'DELETE',
+      headers: { Cookie: seed.sessionCookie },
+    });
+    expect(res.status).toBe(200);
+
+    // User gone.
+    expect(await db.query.users.findFirst({ where: eq(schema.users.id, victimId) })).toBeUndefined();
+    // Sessions + grants cascaded.
+    expect(
+      await db.query.authSessions.findFirst({ where: eq(schema.authSessions.userId, victimId) }),
+    ).toBeUndefined();
+    expect(
+      await db.query.workspaceAccess.findFirst({ where: eq(schema.workspaceAccess.userId, victimId) }),
+    ).toBeUndefined();
+    // Tokens they minted are revoked (no orphan live credential).
+    expect(
+      await db.query.apiTokens.findFirst({ where: eq(schema.apiTokens.createdBy, victimId) }),
+    ).toBeUndefined();
+    // Authored document SURVIVES, author ref nulled.
+    const doc = await db.query.documents.findFirst({ where: eq(schema.documents.id, docId) });
+    expect(doc).toBeDefined();
+    expect(doc!.createdBy).toBeNull();
+    expect(doc!.updatedBy).toBeNull();
+  });
+
+  test('an admin CANNOT delete a user (owner-only, 403)', async () => {
+    const { app, db } = await makeTestApp();
+    const { cookie } = await seedRoleSession(db, 'admin');
+    const victim = await seedUser(db, 'member');
+    const res = await app.request(`/api/v1/instance/users/${victim}`, {
+      method: 'DELETE', headers: { Cookie: cookie },
+    });
+    expect(res.status).toBe(403);
+    expect(await db.query.users.findFirst({ where: eq(schema.users.id, victim) })).toBeDefined();
+  });
+
+  test('cannot delete YOURSELF (409 CANNOT_SELF_DELETE)', async () => {
+    const { app, db, seed } = await makeTestApp();
+    const res = await app.request(`/api/v1/instance/users/${seed.user.id}`, {
+      method: 'DELETE', headers: { Cookie: seed.sessionCookie },
+    });
+    expect(res.status).toBe(409);
+    expect(await db.query.users.findFirst({ where: eq(schema.users.id, seed.user.id) })).toBeDefined();
+  });
+
+  test('a second owner CAN be deleted (2→1 allowed); the last owner cannot (self-delete 409)', async () => {
+    const { app, db, seed } = await makeTestApp();
+    // seed.user is already the instance owner (makeTestApp seeds role=owner)
+    const ownerB = await seedUser(db, 'owner'); // owner B (no session)
+
+    // Deleting B while A remains is fine — owner count drops 2→1, never below 1.
+    const okRes = await app.request(`/api/v1/instance/users/${ownerB}`, {
+      method: 'DELETE',
+      headers: { Cookie: seed.sessionCookie },
+    });
+    expect(okRes.status).toBe(200);
+    expect(await db.query.users.findFirst({ where: eq(schema.users.id, ownerB) })).toBeUndefined();
+
+    // Now A is the only owner. No path removes the last owner: A deleting A hits the
+    // self-delete guard (409). (LAST_OWNER on delete is a defensive backstop — a
+    // different actor can't reach it, since being a session owner makes the count
+    // ≥2; self-delete is the reachable last-owner protection.)
+    const selfRes = await app.request(`/api/v1/instance/users/${seed.user.id}`, {
+      method: 'DELETE',
+      headers: { Cookie: seed.sessionCookie },
+    });
+    expect(selfRes.status).toBe(409);
+    expect(
+      await db.query.users.findFirst({ where: eq(schema.users.id, seed.user.id) }),
+    ).toBeDefined();
+  });
+
+  test('a bearer CANNOT delete a user (session-only)', async () => {
+    const { app, db, seed } = await makeTestApp();
+    const token = await seedInstanceToken(db, seed.user.id);
+    const victim = await seedUser(db, 'member');
+    const res = await app.request(`/api/v1/instance/users/${victim}`, {
+      method: 'DELETE', headers: { Authorization: `Bearer ${token}` },
+    });
+    expect([401, 403]).toContain(res.status);
+    expect(await db.query.users.findFirst({ where: eq(schema.users.id, victim) })).toBeDefined();
+  });
+
+  test('deleting a non-existent user → 404', async () => {
+    const { app, db, seed } = await makeTestApp();
+    const res = await app.request('/api/v1/instance/users/nonexistent-id', {
+      method: 'DELETE', headers: { Cookie: seed.sessionCookie },
+    });
+    expect(res.status).toBe(404);
+  });
+});
