@@ -469,34 +469,6 @@ describe('MentionPicker', () => {
     expect(onSelect).toHaveBeenCalledWith({ type: 'agent', value: 'drafter' });
   });
 
-  it('shows a "library" marker next to a __system agent and not next to a local one (B8)', async () => {
-    const qc = makeQC();
-    stubFetch({
-      '/documents?type=agent': makeAgentsResponse([
-        makeAgent('drafter', 'Reply Drafter'),
-        makeAgent('operator', 'Operator', 'op', true),
-      ]),
-      '/members': makeMembersResponse(defaultMembers),
-    });
-
-    render(
-      <MentionPicker
-        workspaceSlug="acme"
-        projectId="pid-1"
-        query=""
-        onSelect={vi.fn()}
-        onClose={vi.fn()}
-      />,
-      { wrapper: wrap(qc) },
-    );
-
-    // The library agent's row carries the marker; the local agent's row does not.
-    const libRow = await screen.findByRole('option', { name: /Operator/i });
-    expect(libRow).toHaveTextContent('library');
-    const localRow = screen.getByRole('option', { name: /Reply Drafter/i });
-    expect(localRow).not.toHaveTextContent('library');
-  });
-
   it('clicking a member row calls onSelect with type=user', async () => {
     const onSelect = vi.fn();
     const qc = makeQC();

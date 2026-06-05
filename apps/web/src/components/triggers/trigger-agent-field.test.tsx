@@ -31,20 +31,19 @@ function stubFetch(handlers: Record<string, () => Response>) {
   );
 }
 
-// A workspace-B agent AND a __system library agent (badged library: true).
-// This mirrors what the server's unioned /documents?type=agent endpoint returns.
+// Two agents from the instance-wide /documents?type=agent listing.
 const mixedAgents = () =>
   new Response(
     JSON.stringify({
       data: [
         {
           id: 'd1', slug: 'ops', type: 'agent', title: 'Ops Bot',
-          status: null, parentId: null, library: false, frontmatter: { projects: ['*'] },
+          status: null, parentId: null, frontmatter: { projects: ['*'] },
           createdAt: '', updatedAt: '', lastTouchedAt: null,
         },
         {
           id: 'op', slug: 'operator', type: 'agent', title: 'Operator',
-          status: null, parentId: null, library: true, frontmatter: { projects: ['*'] },
+          status: null, parentId: null, frontmatter: { projects: ['*'] },
           createdAt: '', updatedAt: '', lastTouchedAt: null,
         },
       ],
@@ -53,7 +52,7 @@ const mixedAgents = () =>
   );
 
 describe('TriggerAgentField', () => {
-  it('lists both a workspace agent and a library agent, badging the library one', async () => {
+  it('lists every agent the workspace endpoint returns', async () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     stubFetch({ '/documents?type=agent': mixedAgents });
     render(<TriggerAgentField wslug="acme" value="" onChange={() => {}} />, {
@@ -61,12 +60,8 @@ describe('TriggerAgentField', () => {
     });
     await userEvent.click(screen.getByRole('button', { name: /pick an agent/i }));
 
-    const wsRow = await screen.findByRole('button', { name: /Ops Bot/i });
-    expect(wsRow).toBeInTheDocument();
-    expect(within(wsRow).queryByText('library')).not.toBeInTheDocument();
-
-    const libRow = screen.getByRole('button', { name: /Operator/i });
-    expect(within(libRow).getByText('library')).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /Ops Bot/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Operator/i })).toBeInTheDocument();
   });
 
   it('clicking an agent calls onChange with the BARE slug (no agent: prefix)', async () => {

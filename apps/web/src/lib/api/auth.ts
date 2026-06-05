@@ -8,15 +8,13 @@ export interface SessionUser {
 }
 
 /**
- * The boot identity payload. `role` is the caller's instance role and
- * `is_instance_admin` the derived owner||admin signal (one instance = one team).
- * `is_system_member` is server-authoritative (computed from `__system`
- * membership) and TRANSITIONAL — removed in a later phase with the __system
- * teardown. All three are OPTIONAL because the login/register responses seed the
- * `me` cache with only `{ user }` — a missing field must read as a safe default
- * (`false` / undefined role), never crash. `useIsInstanceAdmin()` /
- * `useIsSystemMember()` enforce that default. The fields refresh on the next
- * `useMe` fetch after login/register.
+ * The boot identity payload. `role` is the caller's instance role,
+ * `is_instance_admin` the derived owner||admin signal, `ai_configured` whether
+ * any instance AI key exists (one instance = one team). All are OPTIONAL because
+ * the login/register responses seed the `me` cache with only `{ user }` — a
+ * missing field must read as a safe default (`false` / undefined role), never
+ * crash. `useIsInstanceAdmin()` / `useIsInstanceOwner()` enforce that default.
+ * The fields refresh on the next `useMe` fetch after login/register.
  */
 export interface MeResponse {
   user: SessionUser;
@@ -47,20 +45,6 @@ export function useMe() {
   });
 }
 
-/**
- * Whether the current user is a member of the `__system` library workspace.
- * Reads the server-authoritative flag off the cached `/me` payload; a stale or
- * partial cache (e.g. the post-login `{ user }`-only seed) reads `false`.
- */
-/**
- * @deprecated The `__system` library workspace was removed in Phase 4
- * (drop-workspace-tenancy). There are no "system members" anymore — this always
- * returns false. Callers are being migrated off it (Phase 5 / Task 23); the
- * stub keeps them compiling until then.
- */
-export function useIsSystemMember(): boolean {
-  return false;
-}
 
 /**
  * Whether the current user is an instance admin (owner||admin) — the role that

@@ -4,7 +4,7 @@ import { useQueries, useQueryClient } from '@tanstack/react-query';
 import { Search } from 'lucide-react';
 import { z } from 'zod';
 import { toast } from 'sonner';
-import { useIsInstanceAdmin, useIsSystemMember, useLogout, useMe } from '../lib/api/auth.ts';
+import { useIsInstanceAdmin, useLogout, useMe } from '../lib/api/auth.ts';
 import { useProjects, useUpdateProject, useDeleteProject, projectsKeys } from '../lib/api/projects.ts';
 import { type Table, tablesKeys } from '../lib/api/tables.ts';
 import { type View, viewsKeys } from '../lib/api/views.ts';
@@ -73,12 +73,12 @@ function WorkspaceLayout() {
   const navigate = useNavigate();
   const routerState = useRouterState();
   const { data: me } = useMe();
-  // Show the "Instance settings" menu entry only to users with an instance-level
-  // surface to manage (shared AI keys → instance admin; System Library → system
-  // member), matching what /settings actually renders.
+  // Show the "Instance settings" menu entry only to instance admins (the
+  // surfaces /settings renders — AI keys, roles, invitations — are all
+  // instance-admin gated). The __system "System Library" entry was removed in
+  // Phase 4 (drop-workspace-tenancy).
   const isInstanceAdmin = useIsInstanceAdmin();
-  const isSystemMember = useIsSystemMember();
-  const hasInstanceSettings = isInstanceAdmin || isSystemMember;
+  const hasInstanceSettings = isInstanceAdmin;
   const { data: workspace, isLoading } = useWorkspace(wslug);
   const { data: workspaces } = useWorkspaces();
   const { data: projects } = useProjects(wslug);

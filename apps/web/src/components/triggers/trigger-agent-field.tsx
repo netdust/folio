@@ -9,17 +9,15 @@ interface Props {
 }
 
 /**
- * Phase C: agent picker for a trigger's `agent` frontmatter field. Unlike the
+ * Agent picker for a trigger's `agent` frontmatter field. Unlike the
  * AssigneePicker, this offers agents only (no members), commits the BARE slug
  * (triggers reference agents by slug, not the `agent:` assignee prefix), and is
- * workspace-scoped with NO project filter — a trigger isn't project-scoped, and
- * __system library agents must appear regardless of any project allow-list,
- * consistent with the server's C2 fire-gate skip. The current value may also be
- * a `$event.<key>` placeholder, which we display verbatim.
+ * workspace-scoped with NO project filter — a trigger isn't project-scoped. The
+ * current value may also be a `$event.<key>` placeholder, which we display
+ * verbatim.
  */
 export function TriggerAgentField({ wslug, value, onChange }: Props) {
-  // No project filter: a trigger is workspace-level. Library (__system) agents
-  // are unioned + badged (library: true) by the server already (Phase B B8).
+  // No project filter: a trigger is workspace-level.
   const agents = useWorkspaceAgents(wslug);
   const agentList = agents.data ?? [];
 
@@ -55,7 +53,6 @@ export function TriggerAgentField({ wslug, value, onChange }: Props) {
           <div className="px-2 py-1 text-[10px] uppercase tracking-wide text-fg-3">
             Agents
           </div>
-          {/* TODO(library-visibility): all __system agents are currently customer-visible; a frontmatter.published filter is the future edit (OP-LIB-1). */}
           {agentList.length === 0 ? (
             <div className="px-2 py-1 text-xs text-fg-3">No agents yet</div>
           ) : (
@@ -66,12 +63,7 @@ export function TriggerAgentField({ wslug, value, onChange }: Props) {
                 onClick={() => onChange(a.slug)}
                 className="block w-full rounded-md px-2 py-1.5 text-left text-sm hover:bg-card"
               >
-                <div className="font-medium">
-                  {a.title}
-                  {a.library ? (
-                    <span className="ml-1.5 text-[10px] font-normal text-fg-3">library</span>
-                  ) : null}
-                </div>
+                <div className="font-medium">{a.title}</div>
                 <div className="text-[10px] font-mono text-fg-3">{a.slug}</div>
               </button>
             ))

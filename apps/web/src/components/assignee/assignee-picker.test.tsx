@@ -132,42 +132,6 @@ describe('AssigneePicker', () => {
     expect(onChange).toHaveBeenCalledWith('agent:triage-bot');
   });
 
-  it('shows a "library" marker next to a __system agent (B8)', async () => {
-    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    const mixedAgents = () =>
-      new Response(
-        JSON.stringify({
-          data: [
-            {
-              id: 'd1', slug: 'triage-bot', type: 'agent', title: 'Triage Bot',
-              status: null, parentId: null, library: false, frontmatter: { projects: ['*'] },
-              createdAt: '', updatedAt: '', lastTouchedAt: null,
-            },
-            {
-              id: 'op', slug: 'operator', type: 'agent', title: 'Operator',
-              status: null, parentId: null, library: true, frontmatter: { projects: ['*'] },
-              createdAt: '', updatedAt: '', lastTouchedAt: null,
-            },
-          ],
-        }),
-        { status: 200, headers: { 'content-type': 'application/json' } },
-      );
-    stubFetch({
-      '/documents?type=agent': mixedAgents,
-      '/projects': projectsResponse,
-      '/members': memberResponse,
-    });
-    render(
-      <AssigneePicker wslug="acme" pslug="web" value="" onChange={() => {}} />,
-      { wrapper: wrap(qc) },
-    );
-    await userEvent.click(screen.getByRole('button', { name: /unassigned/i }));
-    const libRow = await screen.findByRole('button', { name: /Operator/i });
-    expect(within(libRow).getByText('library')).toBeInTheDocument();
-    const localRow = screen.getByRole('button', { name: /Triage Bot/i });
-    expect(within(localRow).queryByText('library')).not.toBeInTheDocument();
-  });
-
   it('shows the current value in the trigger label', async () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     stubFetch({
