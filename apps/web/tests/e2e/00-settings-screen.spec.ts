@@ -1,4 +1,4 @@
-import { test as base, expect, createWorkspace, shot } from './fixtures.ts';
+import { test as base, expect, shot } from './fixtures.ts';
 import type { BrowserContext, Page } from '@playwright/test';
 
 /**
@@ -27,8 +27,13 @@ import type { BrowserContext, Page } from '@playwright/test';
 const OWNER_NAME = 'Settings Owner';
 const E2E_PASSWORD = 'test-password-123';
 
-// One owner + context for the whole file.
-const test = base.extend<{ owner: { context: BrowserContext; page: Page; email: string } }>({
+// One owner + context + workspace for the whole file. The workspace slug is
+// UNIQUE per run — a fixed slug (e.g. 'acme') collides with sibling specs under
+// the shared e2e DB (409 on create), which only surfaces in a full-suite run.
+const WSLUG = `set-${Date.now()}`;
+const test = base.extend<{
+  owner: { context: BrowserContext; page: Page; email: string; wslug: string };
+}>({
   owner: [
     async ({ browser }, use) => {
       const context = await browser.newContext();
@@ -39,7 +44,24 @@ const test = base.extend<{ owner: { context: BrowserContext; page: Page; email: 
         data: { email, password: E2E_PASSWORD, name: OWNER_NAME },
       });
       expect(res.ok(), `register owner ${email} → ${res.status()}`).toBe(true);
-      await use({ context, page, email });
+      // This file is named 00- so it runs FIRST against the wiped e2e DB, making
+      // its user the genuine bootstrap instance owner. Assert that — if a sibling
+      // ever registers first this fails LOUD with a clear message instead of a
+      // 30s timeout when the owner-gated Settings sections never render. (The
+      // whole file needs owner powers: tokens/invite/remove/roles.)
+      const me = (await (await page.request.get('/api/v1/auth/me')).json()) as {
+        data: { role: string };
+      };
+      expect(
+        me.data.role,
+        `settings spec must run first to own the bootstrap; got role=${me.data.role}`,
+      ).toBe('owner');
+      // Create the shared workspace once for the file (unique slug).
+      const ws = await page.request.post('/api/v1/workspaces', {
+        data: { name: 'Settings WS', slug: WSLUG },
+      });
+      expect(ws.ok(), `create workspace ${WSLUG} → ${ws.status()}`).toBe(true);
+      await use({ context, page, email, wslug: WSLUG });
       await context.close();
     },
     { scope: 'worker' },
@@ -50,17 +72,16 @@ test.describe.configure({ mode: 'serial' });
 
 test.describe('Settings screen — full smoke', () => {
   test('owner: Settings opens in the rail with all four sections', async ({ owner }) => {
-    const { page } = owner;
-    await createWorkspace(page, 'Acme', 'acme');
-    await page.goto('/w/acme');
+    const { page, wslug } = owner;
+    await page.goto(`/w/${wslug}`);
 
     // Open the user menu → "Settings" (instance settings, renamed + gear icon).
     await page.getByRole('button', { name: OWNER_NAME }).click();
     await page.getByRole('button', { name: /^Settings$/ }).click();
 
     // Opens the in-workspace instance-settings route (rail kept).
-    await expect(page).toHaveURL(/\/w\/acme\/instance-settings/);
-    await expect(page.getByRole('button', { name: /Acme/ })).toBeVisible();
+    await expect(page).toHaveURL(new RegExp(`/w/${wslug}/instance-settings`));
+    await expect(page.getByRole('button', { name: /Settings WS/ })).toBeVisible();
 
     // All four sections present (use section headings; scope to avoid the
     // duplicate <h2> the InstanceTokensTab renders inside its section).
@@ -78,8 +99,8 @@ test.describe('Settings screen — full smoke', () => {
   test('owner: each section is wired (AI / Roles / Invitations render their controls)', async ({
     owner,
   }) => {
-    const { page, email } = owner;
-    await page.goto('/w/acme/instance-settings');
+    const { page, email, wslug } = owner;
+    await page.goto(`/w/${wslug}/instance-settings`);
 
     // AI: the instance-wide AI provider config renders.
     await expect(page.getByRole('heading', { name: /^AI providers$/ })).toBeVisible();
@@ -93,8 +114,8 @@ test.describe('Settings screen — full smoke', () => {
   });
 
   test('owner: invite a new member by email (the add-member flow)', async ({ owner }) => {
-    const { page } = owner;
-    await page.goto('/w/acme/instance-settings');
+    const { page, wslug } = owner;
+    await page.goto(`/w/${wslug}/instance-settings`);
 
     // The Invitations section has an "Invite a new member" email form (this is
     // the path to add someone who hasn't registered yet — the grant picker only
@@ -114,7 +135,7 @@ test.describe('Settings screen — full smoke', () => {
     // The whole point of the invite: a NOT-yet-registered email gets a working
     // sign-in link. Drive it through the API (the UI form posts the same), then
     // confirm the magic-link request succeeds for a brand-new email.
-    const { page } = owner;
+    const { page, wslug } = owner;
     const res = await page.request.post('/api/v1/instance/invites', {
       data: { email: 'fresh-invitee@folio.test' },
     });
@@ -122,7 +143,7 @@ test.describe('Settings screen — full smoke', () => {
   });
 
   test('owner: remove a member (the offboarding flow)', async ({ owner, browser }) => {
-    const { page } = owner;
+    const { page, wslug } = owner;
     // Register a second user (a plain member) so the owner has someone to remove.
     const victimCtx = await browser.newContext();
     const victimPage = await victimCtx.newPage();
@@ -133,7 +154,7 @@ test.describe('Settings screen — full smoke', () => {
     expect(reg.ok()).toBe(true);
     await victimCtx.close();
 
-    await page.goto('/w/acme/instance-settings');
+    await page.goto(`/w/${wslug}/instance-settings`);
     // The victim shows up in the Roles list with a Remove button.
     const row = page.locator('li', { hasText: victimEmail });
     await expect(row).toBeVisible();
@@ -154,7 +175,7 @@ test.describe('Settings screen — full smoke', () => {
     owner,
     browser,
   }) => {
-    const { page } = owner;
+    const { page, wslug } = owner;
     // Register, confirm they can hit an authed endpoint, remove them, confirm 401.
     const victimCtx = await browser.newContext();
     const victimPage = await victimCtx.newPage();
@@ -180,8 +201,8 @@ test.describe('Settings screen — full smoke', () => {
   test('owner: create an Instance API token end-to-end (the new POST surface)', async ({
     owner,
   }) => {
-    const { page } = owner;
-    await page.goto('/w/acme/instance-settings');
+    const { page, wslug } = owner;
+    await page.goto(`/w/${wslug}/instance-settings`);
 
     await page.getByRole('button', { name: /\+ Create token/i }).click();
     const dialog = page.getByRole('dialog');
@@ -204,7 +225,7 @@ test.describe('Settings screen — full smoke', () => {
   test('the Instance token actually works: it creates a workspace via the API', async ({
     owner,
   }) => {
-    const { page } = owner;
+    const { page, wslug } = owner;
     // Mint through the real HTTP surface as the owner session...
     const mint = await page.request.post('/api/v1/instance/tokens', {
       data: { name: 'admin-bot', scopes: ['workspace:admin'] },
@@ -225,8 +246,8 @@ test.describe('Settings screen — full smoke', () => {
   test('per-workspace API tokens live on Agents & Triggers → API (the other half)', async ({
     owner,
   }) => {
-    const { page } = owner;
-    await page.goto('/w/acme/agents?tab=api');
+    const { page, wslug } = owner;
+    await page.goto(`/w/${wslug}/agents?tab=api`);
 
     await expect(page.getByText(/API tokens/i).first()).toBeVisible();
     await expect(page.getByText(/this workspace/i).first()).toBeVisible();
@@ -246,8 +267,8 @@ test.describe('Settings screen — full smoke', () => {
   test('removed surfaces are gone: no "Workspace settings", no standalone "Triggers"', async ({
     owner,
   }) => {
-    const { page } = owner;
-    await page.goto('/w/acme');
+    const { page, wslug } = owner;
+    await page.goto(`/w/${wslug}`);
 
     // User menu: "Settings" present, "Workspace settings" gone. Scope to the open
     // popover dialog so assertions don't catch a sibling menu's buttons.
@@ -260,7 +281,7 @@ test.describe('Settings screen — full smoke', () => {
 
     // Workspace dropdown: "Agents & Triggers" present, standalone "Triggers" gone,
     // "Create workspace" present, "Workspace settings" gone. Scope to the dialog.
-    await page.getByRole('button', { name: /Acme/ }).click();
+    await page.getByRole('button', { name: /Settings WS/ }).click();
     const wsMenu = page.getByRole('dialog');
     await expect(wsMenu.getByRole('button', { name: /Agents & Triggers/i })).toBeVisible();
     await expect(wsMenu.getByRole('button', { name: /^Triggers$/ })).toHaveCount(0);
