@@ -1,8 +1,9 @@
-import { createFileRoute, Link } from '@tanstack/react-router';
+import { createFileRoute } from '@tanstack/react-router';
 import { z } from 'zod';
-import { SYSTEM_WORKSPACE_SLUG } from '../lib/api/workspaces.ts';
-import { useIsInstanceAdmin, useIsSystemMember } from '../lib/api/auth.ts';
+import { useIsInstanceAdmin } from '../lib/api/auth.ts';
 import { AiTab } from '../components/settings/ai-tab.tsx';
+import { RolesTab } from '../components/settings/roles-tab.tsx';
+import { InvitationsTab } from '../components/settings/invitations-tab.tsx';
 
 const settingsSearchSchema = z.object({
   // Deep-link target. The provider-health banner's "Check key →" lands here.
@@ -19,8 +20,21 @@ export const Route = createFileRoute('/settings')({
   component: InstanceSettingsPage,
 });
 
+function SettingsSection({ title, desc, children }: {
+  title: string;
+  desc: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="mb-8">
+      <h2 className="text-sm font-medium">{title}</h2>
+      <p className="mb-3 mt-0.5 text-xs text-fg-2">{desc}</p>
+      {children}
+    </section>
+  );
+}
+
 function InstanceSettingsPage() {
-  const isSystemMember = useIsSystemMember();
   const isInstanceAdmin = useIsInstanceAdmin();
 
   return (
@@ -33,38 +47,35 @@ function InstanceSettingsPage() {
         </p>
       </header>
 
-      {/* AI provider keys — instance-wide, instance-admin only. */}
       {isInstanceAdmin ? (
-        <section className="mb-8">
-          <AiTab />
-        </section>
-      ) : null}
-
-      {/* System Library — any __system member. */}
-      {isSystemMember ? (
-        <section className="rounded-md border border-border-light bg-shell p-4">
-          <h2 className="text-sm font-medium">System Library</h2>
-          <p className="mt-0.5 text-xs text-fg-2">
-            Curate the shared library agents and triggers that any workspace can
-            run. Opens the System Library's automation page.
-          </p>
-          <Link
-            to="/w/$wslug/agents"
-            params={{ wslug: SYSTEM_WORKSPACE_SLUG }}
-            className="mt-3 inline-block text-sm text-fg-2 hover:text-fg"
+        <>
+          <SettingsSection
+            title="AI providers"
+            desc="Instance-wide AI keys. The runner resolves an agent's key by provider + label."
           >
-            Open System Library →
-          </Link>
-        </section>
-      ) : null}
+            <AiTab />
+          </SettingsSection>
 
-      {/* Neither an instance admin nor a __system member — nothing to manage. */}
-      {!isInstanceAdmin && !isSystemMember ? (
+          <SettingsSection
+            title="Roles"
+            desc="Each user's instance role. Owner and admin can administer the instance."
+          >
+            <RolesTab />
+          </SettingsSection>
+
+          <SettingsSection
+            title="Invitations"
+            desc="Grant a user access to a workspace or project, or revoke it."
+          >
+            <InvitationsTab />
+          </SettingsSection>
+        </>
+      ) : (
         <p className="text-sm text-fg-3">
           You don't have access to any instance-level settings. Workspace settings
           live under each workspace.
         </p>
-      ) : null}
+      )}
     </div>
   );
 }

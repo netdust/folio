@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { renderHook } from '@testing-library/react';
+import { renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
-import { useGrantAccess, useRevokeAccess } from './instance-access.ts';
+import { useGrantAccess, useInstanceAccess, useRevokeAccess } from './instance-access.ts';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -30,6 +30,27 @@ function stubFetch(calls: { url: string; method: string; body: unknown }[]) {
     }),
   );
 }
+
+describe('useInstanceAccess', () => {
+  it('GETs /api/v1/instance/access and unwraps the grant roster', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const calls: { url: string; method: string; body: unknown }[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo, init?: RequestInit) => {
+        calls.push({ url: String(input), method: init?.method ?? 'GET', body: undefined });
+        return new Response(
+          JSON.stringify({ data: { grants: [{ kind: 'workspace', userId: 'u1' }] } }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }),
+    );
+    const { result } = renderHook(() => useInstanceAccess(), { wrapper: wrap(qc) });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(calls[0]!.url).toContain('/api/v1/instance/access');
+    expect(result.current.data).toEqual([{ kind: 'workspace', userId: 'u1' }]);
+  });
+});
 
 describe('useGrantAccess', () => {
   it('POSTs /api/v1/instance/access with a workspace grant', async () => {

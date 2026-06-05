@@ -422,3 +422,56 @@ describe('DELETE /api/v1/instance/access — revoke', () => {
     expect(await wsAccessCount(db, target, ws)).toBe(1);
   });
 });
+
+describe('GET /api/v1/instance/access — grant roster (owner+admin only)', () => {
+  test('an instance admin lists workspace + project grants with user + resource names', async () => {
+    const { app, db, seed } = await makeTestApp();
+    const target = await seedUser(db);
+    const ws = await seedWorkspace(db);
+    const proj = await seedProject(db, ws);
+    await db.insert(schema.workspaceAccess).values({ userId: target, workspaceId: ws });
+    await db.insert(schema.projectAccess).values({ userId: target, projectId: proj });
+
+    const res = await app.request('/api/v1/instance/access', {
+      headers: { cookie: seed.sessionCookie },
+    });
+    expect(res.status).toBe(200);
+    const { data } = await res.json();
+    // Roster carries the user + the resource for display — no secrets.
+    const wsGrant = data.grants.find(
+      (g: { kind: string; workspaceId?: string }) => g.kind === 'workspace' && g.workspaceId === ws,
+    );
+    expect(wsGrant).toBeDefined();
+    expect(wsGrant.userId).toBe(target);
+    expect(wsGrant.userEmail).toContain('@');
+    const projGrant = data.grants.find(
+      (g: { kind: string; projectId?: string }) => g.kind === 'project' && g.projectId === proj,
+    );
+    expect(projGrant).toBeDefined();
+    expect(projGrant.userId).toBe(target);
+  });
+
+  test('a member is FORBIDDEN (403) — the grant roster is an instance-admin fact', async () => {
+    const { app, db } = await makeTestApp();
+    const member = await seedRoleSession(db, 'member');
+    const target = await seedUser(db);
+    const ws = await seedWorkspace(db);
+    await db.insert(schema.workspaceAccess).values({ userId: target, workspaceId: ws });
+
+    const res = await app.request('/api/v1/instance/access', {
+      headers: { cookie: member.cookie },
+    });
+    expect(res.status).toBe(403);
+  });
+
+  test('a Bearer token (not session) is rejected — never reaches the roster', async () => {
+    const { app, db, seed } = await makeTestApp();
+    const token = await seedInstanceToken(db, seed.user.id);
+
+    const res = await app.request('/api/v1/instance/access', {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.status).not.toBe(200);
+    expect([401, 403]).toContain(res.status);
+  });
+});

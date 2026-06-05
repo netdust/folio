@@ -72,6 +72,15 @@ export function useIsInstanceAdmin(): boolean {
   return useMe().data?.is_instance_admin ?? false;
 }
 
+/**
+ * Whether the current user is the instance OWNER — stricter than admin. Mirrors
+ * the server's owner-only gates (e.g. PATCH /instance/users/:id/role). A
+ * stale/partial cache reads `false`.
+ */
+export function useIsInstanceOwner(): boolean {
+  return useMe().data?.role === 'owner';
+}
+
 export function useLogin() {
   const qc = useQueryClient();
   return useMutation({

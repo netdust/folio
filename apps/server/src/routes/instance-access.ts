@@ -123,6 +123,53 @@ function assertNotReservedTarget(workspaceSlug: string | undefined): void {
   }
 }
 
+/**
+ * GET /instance/access — the grant roster (owner+admin). Lists every
+ * workspace_access + project_access row joined to the user + the resource for
+ * display. Drives the Invitations UI's "who has access" view.
+ *
+ * Security: the roster is an INSTANCE-ADMIN fact (who-can-see-what). Same gate
+ * as grant/revoke — session-only (v1 mount, no attachToken → a bearer never
+ * reaches it) + requireInstanceAdmin (403 for a member). SELECTs only display
+ * columns (user id/email/name + resource id/slug/name); no secrets.
+ */
+instanceAccessRoute.get('/', async (c) => {
+  await requireInstanceAdmin(db, getUser(c).id);
+
+  const wsRows = await db
+    .select({
+      userId: workspaceAccess.userId,
+      userEmail: users.email,
+      userName: users.name,
+      workspaceId: workspaceAccess.workspaceId,
+      workspaceSlug: workspaces.slug,
+      workspaceName: workspaces.name,
+    })
+    .from(workspaceAccess)
+    .innerJoin(users, eq(users.id, workspaceAccess.userId))
+    .innerJoin(workspaces, eq(workspaces.id, workspaceAccess.workspaceId));
+
+  const projRows = await db
+    .select({
+      userId: projectAccess.userId,
+      userEmail: users.email,
+      userName: users.name,
+      projectId: projectAccess.projectId,
+      projectSlug: projects.slug,
+      projectName: projects.name,
+      workspaceId: projects.workspaceId,
+    })
+    .from(projectAccess)
+    .innerJoin(users, eq(users.id, projectAccess.userId))
+    .innerJoin(projects, eq(projects.id, projectAccess.projectId));
+
+  const grants = [
+    ...wsRows.map((r) => ({ kind: 'workspace' as const, ...r })),
+    ...projRows.map((r) => ({ kind: 'project' as const, ...r })),
+  ];
+  return jsonOk(c, { grants });
+});
+
 instanceAccessRoute.post('/', zValidator('json', accessBody), async (c) => {
   await requireInstanceAdmin(db, getUser(c).id);
   const actor = getUser(c).id;
