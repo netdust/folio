@@ -94,6 +94,7 @@ import { serializeMarkdown } from './frontmatter.ts';
 import { HTTPError } from './http.ts';
 import { mcpInvalidParams, mcpRejectHumanPat, rethrowAgentGuardAsMcp } from './mcp-errors.ts';
 import { isReservedSlug } from './system-workspace.ts';
+import { canManageWorkspace, canSeeProject, visibleProjectIds } from './access.ts';
 import { resolveAgentForRun } from './agent-resolver.ts';
 import { getInstanceSkill } from './instance-skills.ts';
 import { setSkillTrust } from './skill-trust.ts';
@@ -167,6 +168,27 @@ async function resolveWorkspaceForToken(
   return ws;
 }
 
+/**
+ * The project ceiling for a HUMAN PAT on the MCP surface. Mirrors the HTTP
+ * `resolveCallerProjectAllowList` (runs.ts): a human PAT whose owner is NOT a
+ * whole-workspace principal (owner / workspace_access) is a project-only
+ * invitee and must be narrowed to exactly their `project_access` grants. Returns
+ * `null` = UNRESTRICTED (agent-bound token — bounded separately by the agent
+ * allow-list; system-origin token with no createdBy; or a whole-ws human). A
+ * Set = the only project ids this human PAT may reach. This closes the CR-7/CR-9
+ * cross-project leak on the MCP layer (the per-user narrowing the HTTP routes
+ * got but the tools did not).
+ */
+async function humanPatProjectCeiling(
+  ws: Workspace,
+  token: ApiToken,
+): Promise<Set<string> | null> {
+  if (token.agentId) return null; // agent-bound: agent allow-list governs, not this
+  if (!token.createdBy) return null; // system-origin (operator): no human narrowing
+  if (await canManageWorkspace(db, token.createdBy, ws.id)) return null; // whole-ws human
+  return visibleProjectIds(db, token.createdBy, ws.id); // project-only invitee
+}
+
 async function resolveProjectInWorkspace(
   ws: Workspace,
   token: ApiToken,
@@ -207,6 +229,16 @@ async function resolveProjectInWorkspace(
         reason: 'agent_not_in_allow_list',
         project_slug: slug,
         agent_slug: agent.slug,
+      });
+    }
+  } else if (token.createdBy && !(await canManageWorkspace(db, token.createdBy, ws.id))) {
+    // Human PAT, project-only invitee: reject a project they have no grant to.
+    // (A whole-ws human / agent token short-circuits above.) Closes the CR-7/CR-9
+    // cross-project leak on the MCP single-project resolver.
+    if (!(await canSeeProject(db, token.createdBy, p.id))) {
+      throw mcpInvalidParams(`not granted access to project ${slug}`, {
+        reason: 'no_project_access',
+        project_slug: slug,
       });
     }
   }
@@ -464,8 +496,12 @@ export function registerRealTools(): void {
         where: eq(projects.workspaceId, ws.id),
       });
       if (!token.agentId) {
+        // Human PAT: narrow a project-only invitee to their visible projects
+        // (null = whole-ws human / system-origin → unrestricted).
+        const ceiling = await humanPatProjectCeiling(ws, token);
+        const visible = ceiling === null ? all : all.filter((p) => ceiling.has(p.id));
         return textResult({
-          projects: all.map((p) => ({ id: p.id, slug: p.slug, name: p.name })),
+          projects: visible.map((p) => ({ id: p.id, slug: p.slug, name: p.name })),
         });
       }
       const agent = await db.query.documents.findFirst({
@@ -590,7 +626,10 @@ export function registerRealTools(): void {
         const p = await resolveProjectInWorkspace(ws, token, args); // enforces allow-list
         projectIds = [p.id];
       } else if (!token.agentId) {
-        projectIds = all.map((p) => p.id);
+        // Human PAT: a project-only invitee sees only their granted projects.
+        const ceiling = await humanPatProjectCeiling(ws, token);
+        projectIds =
+          ceiling === null ? all.map((p) => p.id) : all.filter((p) => ceiling.has(p.id)).map((p) => p.id);
       } else {
         const agent = await db.query.documents.findFirst({
           where: and(eq(documents.id, token.agentId), eq(documents.type, 'agent')),
@@ -648,6 +687,10 @@ export function registerRealTools(): void {
         const agentProjects = agent ? resolveAgentProjects(agent) : ['*'];
         const effective = intersectAgentProjects(agentProjects, token.projectIds ?? null);
         visible = effective.includes('*') ? all : all.filter((p) => effective.includes(p.id));
+      } else {
+        // Human PAT: narrow a project-only invitee to their visible projects.
+        const ceiling = await humanPatProjectCeiling(ws, token);
+        if (ceiling !== null) visible = all.filter((p) => ceiling.has(p.id));
       }
 
       const projectsOut = [];

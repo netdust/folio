@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'bun:test';
 import { and, eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
@@ -13,8 +13,10 @@ import {
   documents,
   events,
   instanceSkills,
+  projectAccess,
   projects,
   tables as tablesTable,
+  users,
 } from '../db/schema.ts';
 import { env } from '../env.ts';
 import { seedProjectDefaults } from './seed-project-defaults.ts';
@@ -22,6 +24,7 @@ import { makeTestApp } from '../test/harness.ts';
 import { createRun, ensureRunsTable, nextChainId } from '../services/agent-runs.ts';
 import { listComments } from '../services/comments.ts';
 import { type ToolDef, executeTool, listToolDefs, registerTool } from './agent-tools.ts';
+import { registerRealTools } from './agent-tools-registry.ts';
 import { SYSTEM_WORKSPACE_SLUG, isReservedSlug } from './system-workspace.ts';
 import { workspaces } from '../db/schema.ts';
 import { intersectAgentProjects } from './agent-projects.ts';
@@ -2032,3 +2035,96 @@ describe('B3: set_skill_trust (T8 separation of duties)', () => {
     expect((after.frontmatter as Record<string, unknown>).note).toBe('kept');
   });
 });
+
+// ===========================================================================
+// Shake-out B1: a project-only invitee's HUMAN PAT must NOT reach sibling
+// projects via the MCP tool layer (the CR-7/CR-9 narrowing applies to the MCP
+// surface too, not just HTTP). The harness seeds `seed.user`=owner + project
+// `web`; we add a SECOND user (member) granted access to a SECOND project only,
+// mint them a workspace-pinned PAT, and assert they cannot see/resolve `web`.
+// ===========================================================================
+describe('B1: MCP human-PAT project narrowing (no cross-project leak)', () => {
+  beforeAll(() => {
+    // The real MCP tools are module-global; register them so these tests don't
+    // depend on a sibling test file registering first (registry-leak order).
+    registerRealTools();
+  });
+
+  async function seedInvitee(db: DB, seed: Awaited<ReturnType<typeof makeTestApp>>['seed']) {
+    // A second project the invitee will NOT be granted.
+    // (seed.project = 'web' belongs to the owner.) Add a project the invitee IS granted.
+    const inviteeId = nanoid();
+    await db.insert(users).values({
+      id: inviteeId,
+      email: `${inviteeId}@t.local`,
+      name: 'Invitee',
+      role: 'member',
+    });
+    const grantedProjId = nanoid();
+    await db.insert(projects).values({
+      id: grantedProjId,
+      workspaceId: seed.workspace.id,
+      slug: 'granted',
+      name: 'Granted',
+    });
+    await db.insert(projectAccess).values({ userId: inviteeId, projectId: grantedProjId });
+    // A workspace-pinned human PAT owned by the invitee (agentId null).
+    const { hash } = newApiToken();
+    const tokId = nanoid();
+    await db.insert(apiTokens).values({
+      id: tokId,
+      workspaceId: seed.workspace.id,
+      name: 'invitee-pat',
+      tokenHash: hash,
+      scopes: ['documents:read', 'documents:write'],
+      createdBy: inviteeId,
+    });
+    const [token] = await db.select().from(apiTokens).where(eq(apiTokens.id, tokId));
+    return { token: token!, inviteeId, grantedProjId };
+  }
+
+  it('find_documents does NOT return docs from a project the invitee was not granted', async () => {
+    const { db, seed } = await makeTestApp();
+    // Put a doc in the owner's `web` project (the sibling the invitee must NOT see).
+    const webTable = (await db.query.tables.findFirst({
+      where: (t, { eq: e, and: a }) => a(e(t.projectId, seed.project.id), e(t.slug, 'work-items')),
+    }))!;
+    await db.insert(documents).values({
+      id: nanoid(), workspaceId: seed.workspace.id, projectId: seed.project.id,
+      tableId: webTable.id, type: 'work_item', slug: 'secret-web-item', title: 'SECRET WEB ITEM',
+      status: 'todo', body: '', frontmatter: {}, createdBy: seed.user.id,
+    });
+    const { token } = await seedInvitee(db, seed);
+    const out = (await exec(token, 'invitee', 'find_documents', {
+      workspace_slug: 'acme',
+      query: 'SECRET',
+    })) as { content: { text: string }[] };
+    const parsed = JSON.parse(out.content[0]!.text) as { documents: { title: string }[] };
+    // The invitee (granted only `granted`) must NOT see the owner's `web` doc.
+    expect(parsed.documents.some((d) => d.title === 'SECRET WEB ITEM')).toBe(false);
+  });
+
+  it('list_projects does NOT enumerate a project the invitee was not granted', async () => {
+    const { db, seed } = await makeTestApp();
+    const { token } = await seedInvitee(db, seed);
+    const out = (await exec(token, 'invitee', 'list_projects', {
+      workspace_slug: 'acme',
+    })) as { content: { text: string }[] };
+    const parsed = JSON.parse(out.content[0]!.text) as { projects: { slug: string }[] };
+    const slugs = parsed.projects.map((p) => p.slug);
+    expect(slugs).toContain('granted'); // its own grant
+    expect(slugs).not.toContain('web'); // the owner's project — leak if present
+  });
+
+  it('get_document on an ungranted project is rejected (resolveProjectInWorkspace)', async () => {
+    const { db, seed } = await makeTestApp();
+    const { token } = await seedInvitee(db, seed);
+    await expect(
+      exec(token, 'invitee', 'get_document', {
+        workspace_slug: 'acme',
+        project_slug: 'web', // not granted
+        slug: 'anything',
+      }),
+    ).rejects.toThrow(/access|not granted|forbidden|not found/i);
+  });
+})
