@@ -98,6 +98,7 @@ import { canManageWorkspace, canSeeProject, visibleProjectIds } from './access.t
 import { resolveAgentForRun } from './agent-resolver.ts';
 import { getInstanceSkill } from './instance-skills.ts';
 import { setSkillTrust } from './skill-trust.ts';
+import { choiceCardSchema, linkPanelSchema } from './ui-tool.ts';
 
 // ---------------------------------------------------------------------------
 // Result envelopes — verbatim from routes/mcp.ts.
@@ -1990,6 +1991,90 @@ export function registerRealTools(): void {
         firedBy: `retry-of:${runId}`,
       });
       return textResult({ run_id: document.id, status: 'planning' });
+    },
+  });
+
+  // --- Operator cockpit chat (Task 3) — the `ui` tool surface ---
+  //
+  // Two CHAT-ONLY tools. Both map to `documents:read` (emitting UI is not a
+  // privileged op; the underlying action carries the risk, gated in T7). Each
+  // handler emits a `component` message through `ctx.conversationSink`. If the
+  // sink is absent — a non-chat run (document-thread / MCP / headless) called a
+  // chat-only tool — the handler throws `forbidden:` so `isFatalToolError`
+  // (runner.ts) terminates the run (fail-closed; ui tools are chat-only).
+
+  registerTool({
+    name: 'show_link_panel',
+    description:
+      'Render a clickable reference to an entity in the chat. Chat-only. The frontend resolves entityType → route; you do not author URLs.',
+    requiredScope: 'documents:read',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        target: {
+          type: 'object',
+          properties: {
+            entityType: {
+              type: 'string',
+              enum: ['document', 'project', 'view', 'work_item', 'agent', 'run', 'conversation'],
+            },
+            entityId: { type: 'string' },
+            wslug: { type: 'string' },
+          },
+          required: ['entityType', 'entityId', 'wslug'],
+        },
+        title: { type: 'string' },
+        subtitle: { type: 'string' },
+      },
+      required: ['target', 'title'],
+    },
+    schema: linkPanelSchema,
+    handler: async (args, ctx) => {
+      if (!ctx.conversationSink) {
+        throw new Error('forbidden: ui tools require a conversation context');
+      }
+      await ctx.conversationSink.component({
+        type: 'link_panel',
+        target: args.target,
+        title: args.title,
+        ...(args.subtitle !== undefined ? { subtitle: args.subtitle } : {}),
+      });
+      return textResult({ ok: true });
+    },
+  });
+
+  registerTool({
+    name: 'ask_choice',
+    description:
+      'Present a multi-option choice card in the chat and pause for the user to pick. Chat-only. At least two options, each with a stable id.',
+    requiredScope: 'documents:read',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        prompt: { type: 'string' },
+        options: {
+          type: 'array',
+          minItems: 2,
+          items: {
+            type: 'object',
+            properties: { id: { type: 'string' }, label: { type: 'string' } },
+            required: ['id', 'label'],
+          },
+        },
+      },
+      required: ['prompt', 'options'],
+    },
+    schema: choiceCardSchema,
+    handler: async (args, ctx) => {
+      if (!ctx.conversationSink) {
+        throw new Error('forbidden: ui tools require a conversation context');
+      }
+      await ctx.conversationSink.component({
+        type: 'choice_card',
+        prompt: args.prompt,
+        options: args.options,
+      });
+      return textResult({ ok: true });
     },
   });
 

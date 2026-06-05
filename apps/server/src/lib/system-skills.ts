@@ -57,6 +57,10 @@ export const OPERATOR_TOOLS = [
   // Piece B (T8) — the operator is the system-origin (createdBy null) principal,
   // so it is the live blesser for __system skills. canBlessSkill gates the flip.
   'set_skill_trust',
+  // Operator cockpit chat (Task 3) — the `ui` tool surface. The operator renders
+  // structured components (link panel / choice card) into the conversation thread.
+  'show_link_panel',
+  'ask_choice',
 ] as const;
 
 // Compile-time guard: every OPERATOR_TOOLS member is a real MCP tool. Mirrors the

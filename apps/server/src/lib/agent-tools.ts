@@ -16,6 +16,7 @@
 import { z } from 'zod';
 import type { DB } from '../db/client.ts';
 import type { ApiToken } from '../db/schema.ts';
+import type { ConversationSink } from './chat-thread-sink.ts';
 
 // Drizzle transaction handles share the query API with DB; one shape works for
 // both. Mirrors the (non-exported) `DBOrTx` in lib/events.ts — re-declared here
@@ -44,6 +45,22 @@ export interface ToolContext {
    *  MEDIUM-risk config writes to refuse-with-plan. Undefined on non-run
    *  callers (MCP/human) → treated as attended. */
   unattended?: boolean;
+  /**
+   * Operator cockpit chat (Task 4) — the conversation-thread output sink.
+   * Present ONLY on a conversation-backed run (the runner sets it from
+   * `makeConversationSink`). The `ui` tools (`show_link_panel`/`ask_choice`)
+   * emit a `component` message through this; absent ⇒ a non-chat run called a
+   * chat-only tool and the handler fails closed. Undefined on every document-
+   * thread / MCP / headless call — zero regression to the existing path.
+   */
+  conversationSink?: ConversationSink;
+  /**
+   * Operator cockpit chat (Task 4) — the active conversation id, threaded so
+   * the irreversible-op confirm gate (Task 7, Cluster 4) can scope a
+   * `pending_ops` row to it. T4 only PLUMBS this; the gate that consumes it
+   * lands later. Undefined on non-conversation calls.
+   */
+  conversationId?: string;
 }
 
 export interface ToolDef<TArgs = unknown, TOut = unknown> {
@@ -178,7 +195,17 @@ export async function executeTool(
   name: string,
   args: unknown,
   tx?: DBOrTx,
-  caller?: { callerScopes: string[]; unattended?: boolean },
+  caller?: {
+    callerScopes: string[];
+    unattended?: boolean;
+    /** Operator cockpit chat (Task 4) — threaded so a conversation-scoped tool
+     *  (the `ui` tools today; the confirm gate in Task 7) can reach the active
+     *  conversation. The runner supplies it on a conversation-backed run only. */
+    conversationId?: string;
+    /** Operator cockpit chat (Task 4) — the conversation output sink, threaded
+     *  from the runner so the `ui` tool handlers can emit `component` rows. */
+    conversationSink?: ConversationSink;
+  },
 ): Promise<unknown> {
   const def = registry.get(name);
   if (!def) throw new Error(`method not found: ${name}`);
@@ -253,6 +280,11 @@ export async function executeTool(
     // Phase C C3 — flow the run-derived fired marker into ToolContext. Undefined
     // on non-run (MCP/human) callers → the folio_api handler treats it attended.
     unattended: caller?.unattended,
+    // Operator cockpit chat (Task 4) — flow the conversation sink + id into
+    // ToolContext so the `ui` tool handlers can emit `component` rows. Undefined
+    // on every non-conversation call → the `ui` tools fail closed (T3 handler).
+    conversationSink: caller?.conversationSink,
+    conversationId: caller?.conversationId,
   });
 }
 
