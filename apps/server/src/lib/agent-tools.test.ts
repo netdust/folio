@@ -1347,13 +1347,13 @@ describe('D-4: run-management MCP tools', () => {
   it('mit 58: get_run for a run id from ANOTHER workspace → AGENT_RUN_NOT_FOUND', async () => {
     const { db, seed } = await makeTestApp();
     // Build a second workspace + project + run inside it.
-    const { workspaces, projects, memberships } = await import('../db/schema.ts');
+    const { workspaces, projects, workspaceAccess } = await import('../db/schema.ts');
     const { seedProjectDefaults } = await import('./seed-project-defaults.ts');
     const otherWsId = nanoid();
     await db.insert(workspaces).values({ id: otherWsId, slug: 'other', name: 'Other' });
-    await db
-      .insert(memberships)
-      .values({ workspaceId: otherWsId, userId: seed.user.id, role: 'owner' });
+    // seed.user is the instance owner (users.role='owner', set by the harness); a
+    // workspace_access grant gives explicit visibility to this second workspace.
+    await db.insert(workspaceAccess).values({ userId: seed.user.id, workspaceId: otherWsId });
     const otherProjectId = nanoid();
     await db
       .insert(projects)

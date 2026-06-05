@@ -64,7 +64,8 @@ describe('S2: instance bearer crosses workspaces over real HTTP (A4 + A7)', () =
     const { app, db, seed } = await makeTestApp();
 
     // --- Seed workspace B ('beta') with a project + default table. seed.user is
-    //     owner of acme but is deliberately NOT made a member of B. ---
+    //     the instance owner but is deliberately NOT given a workspace_access
+    //     grant to B (the post-tenancy equivalent of "not a member of B"). ---
     const bId = nanoid();
     await db.insert(workspaces).values({ id: bId, slug: 'beta', name: 'Beta' });
     const bProjectId = nanoid();
@@ -73,11 +74,11 @@ describe('S2: instance bearer crosses workspaces over real HTTP (A4 + A7)', () =
       .values({ id: bProjectId, workspaceId: bId, slug: 'site', name: 'Site' });
     await seedProjectDefaults(db, bProjectId);
 
-    // Sanity: the bearer's creator has no membership in B.
-    const bMemberships = await db.query.memberships.findMany({
-      where: (m, { eq: e, and: a }) => a(e(m.workspaceId, bId), e(m.userId, seed.user.id)),
+    // Sanity: the bearer's creator has no workspace_access grant to B.
+    const bAccess = await db.query.workspaceAccess.findMany({
+      where: (wa, { eq: e, and: a }) => a(e(wa.workspaceId, bId), e(wa.userId, seed.user.id)),
     });
-    expect(bMemberships.length).toBe(0);
+    expect(bAccess.length).toBe(0);
 
     // --- Instance bearer: workspaceId null = instance reach. createdBy hydrates
     //     the user in attachToken so resolveWorkspace can run the reach bypass. ---

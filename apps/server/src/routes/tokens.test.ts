@@ -22,13 +22,12 @@ async function seedMemberSession(
     id: userId,
     email: `${userId}@test.local`,
     name: role,
+    // Post-tenancy: tokens.ts derives its scope ceiling from the caller's
+    // INSTANCE role (users.role via userRole), so set it here.
+    role,
   });
-  // Post-tenancy: resolveWorkspace gates on workspace_access, so the seeded
-  // session user needs a grant to REACH the route. The memberships row is
-  // retained because tokens.ts still derives its scope ceiling from `m.role`
-  // (a separate membership read rewired in a later task); users.role stays the
-  // default 'member' for getRole() consumers.
-  await db.insert(schema.memberships).values({ workspaceId, userId, role });
+  // resolveWorkspace gates on workspace_access, so the seeded session user also
+  // needs a grant to REACH the route.
   await db.insert(schema.workspaceAccess).values({ userId, workspaceId });
   const session = await createSession(userId);
   return `folio_session=${session.id}`;

@@ -25,7 +25,6 @@ import {
   type Workspace,
   apiTokens,
   documents,
-  memberships,
   projectAccess,
   projects,
   tables,
@@ -543,13 +542,13 @@ test('m58: narrowed agent bearer GET of disallowed-project run → 404', async (
 test('m58: GET/cancel/retry a run id from ANOTHER workspace → 404 (workspace boundary)', async () => {
   const { app, db, seed } = await makeTestApp();
 
-  // Build a SECOND workspace + membership for the seeded user + project, then a
-  // real agent_run row inside it via the production createRun path.
+  // Build a SECOND workspace + access grant for the seeded user + project, then a
+  // real agent_run row inside it via the production createRun path. seed.user is
+  // the instance owner (users.role='owner'); a workspace_access grant gives the
+  // explicit visibility createRun's canSeeWorkspace check requires.
   const otherWsId = nanoid();
   await db.insert(workspaces).values({ id: otherWsId, slug: 'other', name: 'Other' });
-  await db
-    .insert(memberships)
-    .values({ workspaceId: otherWsId, userId: seed.user.id, role: 'owner' });
+  await db.insert(workspaceAccess).values({ userId: seed.user.id, workspaceId: otherWsId });
   const otherProjectId = nanoid();
   await db
     .insert(projects)

@@ -27,10 +27,10 @@ export const users = sqliteTable('users', {
   email: text('email').notNull().unique(),
   passwordHash: text('password_hash'), // nullable -> magic-link-only users
   name: text('name').notNull(),
-  // Instance-level role. Roles live here (one instance = one team) rather than
-  // on `memberships` (which is workspace-scoped and slated for removal as the
-  // workspace tenancy boundary is dropped). Additive for now — nothing reads
-  // this yet; backfill + readers land in later tasks.
+  // Instance-level role (one instance = one team). The single source of instance
+  // authority — the legacy workspace-scoped `memberships` table was dropped in
+  // Phase 4 (migration 0028). owner/admin gate the instance-admin surfaces;
+  // visibility is by `workspace_access`/`project_access` grant.
   role: text('role', { enum: ['owner', 'admin', 'member'] })
     .notNull()
     .default('member'),
@@ -96,29 +96,10 @@ export const workspaces = sqliteTable('workspaces', {
     .default({}),
 });
 
-export const memberships = sqliteTable(
-  'memberships',
-  {
-    workspaceId: text('workspace_id')
-      .notNull()
-      .references(() => workspaces.id, { onDelete: 'cascade' }),
-    userId: text('user_id')
-      .notNull()
-      .references(() => users.id, { onDelete: 'cascade' }),
-    role: text('role', { enum: ['owner', 'admin', 'member'] })
-      .notNull()
-      .default('member'),
-    createdAt: integer('created_at', { mode: 'timestamp_ms' })
-      .notNull()
-      .default(sql`(unixepoch() * 1000)`),
-  },
-  (t) => ({
-    pk: primaryKey({ columns: [t.workspaceId, t.userId] }),
-    // CR-F4 — membership lookups filter by userId, the NON-leading column of the
-    // composite PK, so they full-scan. Index userId for a seek.
-    userIdx: index('memberships_user_idx').on(t.userId),
-  }),
-);
+// `memberships` was the legacy workspace-scoped role table. Phase 4 dropped it
+// (migration 0028 — drop-workspace-tenancy): instance authority moved to
+// `users.role`, visibility to `workspace_access`/`project_access`. One instance
+// = one team; there is no per-workspace membership.
 
 // --- Per-user access grants (invitation-based, replacing workspace tenancy) ---
 //

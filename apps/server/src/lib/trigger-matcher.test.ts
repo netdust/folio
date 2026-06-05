@@ -26,7 +26,6 @@ import {
   type Workspace,
   apiTokens,
   documents,
-  memberships as schemaMemberships,
   projects as schemaProjects,
   tables,
   workspaces as schemaWorkspaces,
@@ -34,6 +33,7 @@ import {
 import { env } from '../env.ts';
 import { makeTestApp } from '../test/harness.ts';
 import type { TestSeed } from '../test/harness.ts';
+import { canManageWorkspace, userRole, visibleProjectIds } from './access.ts';
 import { callerProjectsFor } from './agent-projects.ts';
 import { roleToScopes, toolsToScopes } from './agent-schema.ts';
 import { newApiToken } from './auth.ts';
@@ -1184,26 +1184,25 @@ test('a fired run is caller-bounded — authority is the event-human, not the ag
   });
   const fm = run?.frontmatter as Record<string, unknown>;
 
-  // Derive what the EVENT-HUMAN (seed.user) would get from their B membership:
-  // the harness seeds seed.user as an OWNER of B → all document scopes, and
-  // callerProjectsFor(owner) === null (no project narrowing). Authority is the
-  // CALLER's, NOT the agent's ['*'] claim.
-  const membership = await db.query.memberships.findFirst({
-    where: and(
-      eq(schemaMemberships.workspaceId, seed.workspace.id),
-      eq(schemaMemberships.userId, seed.user.id),
-    ),
-  });
-  const role = membership?.role as 'owner' | 'admin' | 'member';
-  const memberProjectIds =
-    role === 'member'
-      ? (
-          await db.query.projects.findMany({
-            where: eq(schemaProjects.workspaceId, seed.workspace.id),
-            columns: { id: true },
-          })
-        ).map((p) => p.id)
-      : [];
+  // Derive what the EVENT-HUMAN (seed.user) would get under the post-tenancy
+  // model — mirroring services/agent-runs.ts: role comes from users.role
+  // (userRole), and the project set from the SAME visibility helpers the
+  // production path uses. The harness seeds seed.user as the INSTANCE OWNER →
+  // all document scopes, and callerProjectsFor(owner) === null (no project
+  // narrowing). Authority is the CALLER's, NOT the agent's ['*'] claim.
+  const role = await userRole(db, seed.user.id);
+  let memberProjectIds: string[] = [];
+  if (role !== 'owner') {
+    if (await canManageWorkspace(db, seed.user.id, seed.workspace.id)) {
+      const wsProjects = await db.query.projects.findMany({
+        where: eq(schemaProjects.workspaceId, seed.workspace.id),
+        columns: { id: true },
+      });
+      memberProjectIds = wsProjects.map((p) => p.id);
+    } else {
+      memberProjectIds = [...(await visibleProjectIds(db, seed.user.id, seed.workspace.id))];
+    }
+  }
 
   expect(fm.caller_scopes).toEqual(roleToScopes(role));
   expect(fm.caller_project_ids).toEqual(callerProjectsFor({ role, projectIds: memberProjectIds }));

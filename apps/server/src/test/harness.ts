@@ -98,17 +98,9 @@ export async function makeTestApp(opts: HarnessOptions = {}): Promise<{
     slug: 'acme',
     name: 'Acme',
   });
-  await db.insert(schema.memberships).values({
-    workspaceId,
-    userId,
-    role: 'owner',
-  });
-
-  // Tenancy-removal transition: the test user is the instance OWNER (users.role)
-  // with an explicit workspace_access grant — the post-memberships model.
-  // The memberships insert above is RETAINED transitionally because
-  // resolveWorkspace still reads memberships until the Phase 2 auth rewrite;
-  // a later task removes the memberships insert once that read is gone.
+  // Post-tenancy model: the test user is the instance OWNER (users.role) with an
+  // explicit workspace_access grant. The legacy `memberships` table was dropped
+  // in Phase 4 (migration 0028).
   await db.update(schema.users).set({ role: 'owner' }).where(eq(schema.users.id, userId));
   await db.insert(schema.workspaceAccess).values({ userId, workspaceId });
 

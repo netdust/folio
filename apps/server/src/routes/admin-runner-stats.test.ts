@@ -18,7 +18,6 @@ import { makeTestApp } from '../test/harness.ts';
 import {
   documents,
   events,
-  memberships,
   projects,
   tables,
   users,
@@ -133,7 +132,8 @@ async function seedFailedEvent(
   });
 }
 
-/** Seed a second, fully-isolated workspace with its own owner membership. */
+/** Seed a second, fully-isolated workspace. Its user is only a document author
+ * (createdBy/updatedBy) — never authenticated — so it needs no authority grant. */
 async function seedSecondWorkspace(
   db: TestDB,
 ): Promise<{ workspace: Workspace; project: Project; runsTable: TableEntity; userId: string }> {
@@ -146,7 +146,6 @@ async function seedSecondWorkspace(
   });
   const wsId = nanoid();
   await db.insert(workspaces).values({ id: wsId, slug: `other-${nanoid(6)}`, name: 'Other' });
-  await db.insert(memberships).values({ workspaceId: wsId, userId, role: 'owner' });
   const projId = nanoid();
   await db.insert(projects).values({ id: projId, workspaceId: wsId, slug: 'other-web', name: 'OW' });
   const workspace = (await db.query.workspaces.findFirst({ where: eq(workspaces.id, wsId) }))!;
@@ -167,7 +166,6 @@ async function seedMemberUser(db: TestDB, workspaceId: string): Promise<string> 
   // Post-tenancy: a workspace_access grant lets this member PAST resolveWorkspace
   // so the test exercises the handler's admin-only gate (not the ws gate). role
   // stays the users.role default 'member', so the handler still 403s.
-  await db.insert(memberships).values({ workspaceId, userId, role: 'member' });
   await db.insert(workspaceAccess).values({ userId, workspaceId });
   const session = await createSession(userId);
   return `folio_session=${session.id}`;
@@ -215,7 +213,6 @@ describe('GET /admin/runner-stats', () => {
       passwordHash: await hashPassword('password123'),
       role: 'admin',
     });
-    await db.insert(memberships).values({ workspaceId: seed.workspace.id, userId, role: 'admin' });
     await db.insert(workspaceAccess).values({ userId, workspaceId: seed.workspace.id });
     const session = await createSession(userId);
 

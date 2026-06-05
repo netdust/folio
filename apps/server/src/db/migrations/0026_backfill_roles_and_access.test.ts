@@ -41,6 +41,23 @@ function setup(): Database {
   const sqlite = new Database(':memory:');
   migrate(drizzle(sqlite), { migrationsFolder: MIGRATIONS_FOLDER });
 
+  // The legacy `memberships` table is dropped by migration 0028 (the final
+  // migration of drop-workspace-tenancy), which `migrate()` above applies. This
+  // test exercises the EARLIER 0026 backfill, which reads `memberships`, so
+  // re-create it here (original 0000 DDL) to seed the pre-backfill rows. We are
+  // testing 0026 in isolation against its expected input, not the full chain.
+  sqlite.run(
+    `CREATE TABLE IF NOT EXISTS memberships (
+       workspace_id text NOT NULL,
+       user_id text NOT NULL,
+       role text DEFAULT 'member' NOT NULL,
+       created_at integer DEFAULT (unixepoch() * 1000) NOT NULL,
+       PRIMARY KEY (workspace_id, user_id),
+       FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE cascade,
+       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE cascade
+     )`,
+  );
+
   sqlite.run(
     `INSERT INTO workspaces (id, slug, name, created_at, updated_at)
      VALUES ('sysws','__system','System', 0, 0),
