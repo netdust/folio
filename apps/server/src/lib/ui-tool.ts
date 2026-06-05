@@ -36,8 +36,16 @@ export const linkPanelSchema = z
         entityType: z.enum(ENTITY_TYPES),
         entityId: z.string().min(1),
         wslug: z.string().min(1),
+        // The project slug — REQUIRED for project-scoped entities
+        // (document/work_item open at /w/<wslug>/p/<pslug>/...?doc=<entityId>).
+        // Optional for workspace-level entities (agent/trigger open via ?wdoc=).
+        pslug: z.string().min(1).optional(),
       })
-      .strict(),
+      .strict()
+      .refine((t) => !(t.entityType === 'document' || t.entityType === 'work_item') || !!t.pslug, {
+        message: 'pslug is required for a document/work_item target',
+        path: ['pslug'],
+      }),
     title: z.string().min(1),
     subtitle: z.string().optional(),
   })

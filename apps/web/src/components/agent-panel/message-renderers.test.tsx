@@ -96,13 +96,23 @@ describe('MessageToolStep', () => {
 // entityRoute (the single resolver)
 // ---------------------------------------------------------------------------
 describe('entityRoute', () => {
-  // Cluster-5 /code-review fix #1: document/work_item/run/conversation have NO
-  // reachable by-id workspace-layout surface from the target alone (the ?wdoc=
-  // slideover only resolves agent/trigger; work_items need a project slug the
-  // target doesn't carry). They degrade to the workspace ROOT — never a ?wdoc=
-  // link that would 404. Bites: the old code emitted search:{wdoc:id} here.
-  test('document-shaped targets degrade to the workspace root (no 404 wdoc)', () => {
-    for (const entityType of ['document', 'work_item', 'run', 'conversation'] as const) {
+  // document/work_item open the project DocumentSlideover at the project route
+  // via ?doc=<slug> — the SAME surface a manual browser nav hits. The target
+  // carries the project slug (pslug) so the route is fully resolvable.
+  test('document/work_item route to the project slideover via ?doc=', () => {
+    for (const entityType of ['document', 'work_item'] as const) {
+      expect(
+        entityRoute({ entityType, entityId: 'untitled-4', wslug: 'netdust', pslug: 'client-website' }),
+      ).toEqual({
+        to: '/w/$wslug/p/$pslug/work-items',
+        params: { wslug: 'netdust', pslug: 'client-website' },
+        search: { doc: 'untitled-4' },
+      });
+    }
+  });
+  // run/conversation have no by-id slideover yet → degrade to the workspace root.
+  test('run/conversation degrade to the workspace root (no slideover yet)', () => {
+    for (const entityType of ['run', 'conversation'] as const) {
       expect(entityRoute({ entityType, entityId: 'x', wslug: 'acme' })).toEqual({
         to: '/w/$wslug',
         params: { wslug: 'acme' },

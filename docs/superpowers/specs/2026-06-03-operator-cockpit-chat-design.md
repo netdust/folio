@@ -67,7 +67,7 @@ Net-new surface, deliberately small: **3 tables (conversations, messages, pendin
 
 ## Architecture
 
-### Data model — new relational tables, NOT document rows
+### Data model — new relational tables, NOT documentabout th rows
 
 Chat turns live in their OWN tables, never in `documents`: they never hit the `/documents` endpoint, never emit document events, never fire triggers. (This is the OPPOSITE of `agent_run`, which IS a `documents.type` and therefore does emit events — the original draft's "same separation as `agent_run`" was backwards. The whole point of new tables is to escape the document event/trigger surface that `agent_run` rows sit on.) Latest migration on `main` is `0029_drop_memberships`; these tables are `0030`+.
 

@@ -98,7 +98,7 @@ import { canManageWorkspace, canSeeProject, visibleProjectIds } from './access.t
 import { resolveAgentForRun } from './agent-resolver.ts';
 import { getInstanceSkill } from './instance-skills.ts';
 import { setSkillTrust } from './skill-trust.ts';
-import { choiceCardSchema, linkPanelSchema } from './ui-tool.ts';
+import { choiceCardSchema, ENTITY_TYPES, linkPanelSchema } from './ui-tool.ts';
 
 // ---------------------------------------------------------------------------
 // Result envelopes — verbatim from routes/mcp.ts.
@@ -2027,10 +2027,15 @@ export function registerRealTools(): void {
           properties: {
             entityType: {
               type: 'string',
-              enum: ['document', 'project', 'view', 'work_item', 'agent', 'run', 'conversation'],
+              enum: [...ENTITY_TYPES],
             },
             entityId: { type: 'string' },
             wslug: { type: 'string' },
+            pslug: {
+              type: 'string',
+              description:
+                'The project slug. REQUIRED for document/work_item (they open at the project route); omit for agent/trigger.',
+            },
           },
           required: ['entityType', 'entityId', 'wslug'],
         },
