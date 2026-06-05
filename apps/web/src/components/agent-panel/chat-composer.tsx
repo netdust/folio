@@ -14,7 +14,7 @@ export function ChatComposer({
   onSubmit,
   busy,
 }: {
-  onSubmit: (text: string) => void;
+  onSubmit: (text: string) => void | Promise<void>;
   busy: boolean;
 }) {
   const [value, setValue] = useState('');
@@ -24,8 +24,12 @@ export function ChatComposer({
     if (busy) return;
     const text = value.trim();
     if (!text) return;
-    onSubmit(text);
+    // Optimistically clear; if onSubmit rejects (post/create failed), RESTORE the
+    // text so it isn't silently lost (review #3/#7).
     setValue('');
+    void Promise.resolve()
+      .then(() => onSubmit(text))
+      .catch(() => setValue((cur) => (cur.length === 0 ? text : cur)));
   };
 
   return (
@@ -50,7 +54,9 @@ export function ChatComposer({
           placeholder="Ask the operator…"
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
+            // Ignore Enter while an IME composition is active — pressing Enter to
+            // CONFIRM a CJK/accent candidate must not submit (review #6).
+            if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault();
               submit();
             }

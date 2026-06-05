@@ -9,7 +9,7 @@ vi.mock('../../lib/api/conversations.ts', async (importOriginal) => {
     ...actual,
     useConversation: () => ({ thread: undefined, messages: [], isLoading: false }),
     useCreateConversation: () => ({ mutateAsync: vi.fn(), isPending: false }),
-    usePostMessage: () => ({ mutate: vi.fn(), isPending: false }),
+    usePostMessage: () => ({ mutateAsync: vi.fn(), isPending: false }),
   };
 });
 

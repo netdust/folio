@@ -2029,7 +2029,11 @@ export function registerRealTools(): void {
               type: 'string',
               enum: [...ENTITY_TYPES],
             },
-            entityId: { type: 'string' },
+            entityId: {
+              type: 'string',
+              description:
+                "The entity's SLUG (the human slug, NOT its UUID id). For a document/work_item the server validates it exists in pslug and rejects the link otherwise.",
+            },
             wslug: { type: 'string' },
             pslug: {
               type: 'string',
@@ -2049,9 +2053,31 @@ export function registerRealTools(): void {
       if (!ctx.conversationSink) {
         throw new Error('forbidden: ui tools require a conversation context');
       }
+      // Server-VALIDATE + CANONICALIZE the target before storing it, so the
+      // rendered link can never dead-end (review #1/#4/#5). For a project-scoped
+      // entity (document/work_item) we resolve it via the caller-scoped
+      // (workspace, project, slug) lookup and write back the entity's REAL slug
+      // — catching an id-as-entityId (UUID won't resolve by slug) and a wrong
+      // pslug (won't resolve in that project). A miss is a normal tool error the
+      // operator can correct (NOT a fatal forbidden:): it just couldn't link.
+      const target = { ...args.target };
+      if (target.entityType === 'document' || target.entityType === 'work_item') {
+        const ws = await resolveWorkspaceForToken(ctx.token, { workspace_slug: target.wslug });
+        const p = await resolveProjectInWorkspace(ws, ctx.token, { project_slug: target.pslug });
+        const doc = await getDocument(p.id, target.entityId);
+        if (!doc) {
+          throw new Error(
+            `link target not found: no ${target.entityType} "${target.entityId}" in ${target.wslug}/${target.pslug}. ` +
+              'Pass the document SLUG (not its id) as entityId, and the correct project slug as pslug.',
+          );
+        }
+        // Canonicalize: store the real slug + the resolved project slug.
+        target.entityId = doc.slug;
+        target.pslug = p.slug;
+      }
       await ctx.conversationSink.component({
         type: 'link_panel',
-        target: args.target,
+        target,
         title: args.title,
         ...(args.subtitle !== undefined ? { subtitle: args.subtitle } : {}),
       });

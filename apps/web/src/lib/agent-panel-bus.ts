@@ -11,22 +11,16 @@
 // until they reopen it. Guarded for environments without localStorage (tests via
 // resetModules, SSR) — accessors no-op there.
 
+import { getStoredItem, removeStoredItem, setStoredItem } from './safe-storage.ts';
+
 const STORAGE_KEY = 'folio:cockpit-closed';
 
 export interface AgentPanelState {
   open: boolean;
 }
 
-function safeStorage(): Storage | null {
-  try {
-    return globalThis.localStorage ?? null;
-  } catch {
-    return null;
-  }
-}
-
 function persistedClosed(): boolean {
-  return safeStorage()?.getItem(STORAGE_KEY) === '1';
+  return getStoredItem(STORAGE_KEY) === '1';
 }
 
 type Listener = (s: AgentPanelState) => void;
@@ -41,12 +35,12 @@ function emit() {
 
 export const agentPanelBus = {
   open() {
-    safeStorage()?.removeItem(STORAGE_KEY);
+    removeStoredItem(STORAGE_KEY);
     state = { open: true };
     emit();
   },
   close() {
-    safeStorage()?.setItem(STORAGE_KEY, '1');
+    setStoredItem(STORAGE_KEY, '1');
     state = { open: false };
     emit();
   },

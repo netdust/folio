@@ -18,7 +18,7 @@ vi.mock('../../lib/api/conversations.ts', async (importOriginal) => {
     ...actual,
     useConversation: () => conversationState,
     useCreateConversation: () => ({ mutateAsync: createMutate, isPending: false }),
-    usePostMessage: () => ({ mutate: postMutate, isPending: false }),
+    usePostMessage: () => ({ mutateAsync: postMutate, isPending: false }),
   };
 });
 
@@ -28,6 +28,7 @@ beforeEach(() => {
   createMutate.mockReset();
   postMutate.mockReset();
   createMutate.mockResolvedValue({ id: 'new-conv' });
+  postMutate.mockResolvedValue({ runId: 'run-1' });
   conversationState = { thread: undefined, messages: [], isLoading: false };
 });
 
@@ -39,15 +40,46 @@ describe('CockpitChat', () => {
     expect(screen.getByRole('textbox')).toBeInTheDocument();
   });
 
-  test('first message with no conversation: creates one, then posts to it', async () => {
+  test('first message with no conversation: creates one, then posts to the new id', async () => {
     const user = userEvent.setup();
     render(<CockpitChat />);
     await user.type(screen.getByRole('textbox'), 'set up a CRM');
     await user.keyboard('{Enter}');
-    // Create resolves first, then the post targets the created conversation.
+    // Create resolves first, then the post targets the CREATED conversation id
+    // (passed as a mutate variable — review #2/#3/#8, no ref/effect bridge).
     expect(createMutate).toHaveBeenCalledTimes(1);
-    // post is fired (the mocked hook is bound to the created id by the component).
-    expect(postMutate).toHaveBeenCalledWith({ text: 'set up a CRM' });
+    await vi.waitFor(() =>
+      expect(postMutate).toHaveBeenCalledWith({ id: 'new-conv', text: 'set up a CRM' }),
+    );
+  });
+
+  test('optimistically shows the just-sent message (no empty-state flash)', async () => {
+    const user = userEvent.setup();
+    render(<CockpitChat conversationId="c1" />);
+    await user.type(screen.getByRole('textbox'), 'hello there');
+    await user.keyboard('{Enter}');
+    // The user's text appears immediately, before any seed/live row arrives
+    // (review #7). The empty-state greeting is gone.
+    expect(await screen.findByText('hello there')).toBeInTheDocument();
+    expect(screen.queryByText(/how can the operator help/i)).toBeNull();
+  });
+
+  test('a fast double-send does NOT create two conversations (busy guard, review #2)', async () => {
+    const user = userEvent.setup();
+    // Hold the create open so the second Enter lands while the first is in flight.
+    let resolveCreate: (v: { id: string }) => void = () => {};
+    createMutate.mockImplementation(
+      () => new Promise<{ id: string }>((r) => { resolveCreate = r; }),
+    );
+    render(<CockpitChat />);
+    const box = screen.getByRole('textbox');
+    await user.type(box, 'first');
+    await user.keyboard('{Enter}');
+    await user.type(box, 'second');
+    await user.keyboard('{Enter}');
+    resolveCreate({ id: 'new-conv' });
+    // Only ONE create fired despite two Enters — the second was blocked by busy.
+    expect(createMutate).toHaveBeenCalledTimes(1);
   });
 
   test('renders the thread + blocks the composer while a run is active', () => {

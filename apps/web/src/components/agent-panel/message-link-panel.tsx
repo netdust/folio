@@ -51,7 +51,11 @@ export function MessageLinkPanel({ message }: { message: ConversationMessage }) 
     !target.entityType ||
     !target.entityId ||
     !target.wslug ||
-    !KNOWN_ENTITY_TYPES.has(target.entityType)
+    !KNOWN_ENTITY_TYPES.has(target.entityType) ||
+    // document/work_item need pslug to resolve (they open at the project route);
+    // a pslug-less such row would navigate to the workspace root — degrade to no
+    // card instead (review #5; mirrors the server schema's pslug requirement).
+    ((target.entityType === 'document' || target.entityType === 'work_item') && !target.pslug)
   ) {
     return null;
   }

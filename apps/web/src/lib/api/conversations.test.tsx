@@ -166,12 +166,12 @@ function captureFetch(): { calls: { url: string; body: unknown }[] } {
 }
 
 describe('mutations go through the client', () => {
-  test('usePostMessage POSTs {text} to the messages route', async () => {
+  test('usePostMessage POSTs {text} to the messages route (id is a mutate var)', async () => {
     const qc = new QueryClient();
     const { calls } = captureFetch();
-    const { result } = renderHook(() => usePostMessage('c1'), { wrapper: wrap(qc) });
+    const { result } = renderHook(() => usePostMessage(), { wrapper: wrap(qc) });
     await act(async () => {
-      await result.current.mutateAsync({ text: 'set up a project' });
+      await result.current.mutateAsync({ id: 'c1', text: 'set up a project' });
     });
     expect(calls[0]?.url).toContain('/api/v1/conversations/c1/messages');
     expect(calls[0]?.body).toEqual({ text: 'set up a project' });

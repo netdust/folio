@@ -1,85 +1,107 @@
-import { useEffect, useRef, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { MessagesSquare } from 'lucide-react';
+import { toast } from 'sonner';
 import {
   useConversation,
   useCreateConversation,
   usePostMessage,
+  type ConversationMessage,
 } from '../../lib/api/conversations.ts';
+import { formatApiError } from '../../lib/api/index.ts';
+import { EmptyState } from '../views/empty-state.tsx';
 import { MessageList } from './message-list.tsx';
 import { ChatComposer } from './chat-composer.tsx';
 
 /**
  * The cockpit chat body (T11): the operator conversation surface rendered inside
  * the layout-level panel. Owns "the current conversation":
- *   - empty state (no conversation): a centered greeting + a "Recent chat"
- *     affordance; the FIRST message creates a conversation, then posts to it.
- *   - active conversation: the thread (seed + dedicated-SSE live-tail via
- *     useConversation) + a composer blocked while a run is active (M14).
+ *   - empty state (no conversation): a centered greeting; the FIRST message
+ *     creates a conversation, then posts to it — one linear async handler.
+ *   - active conversation: the thread (seed + dedicated-SSE live-tail) + a
+ *     composer blocked while a run is active (M14) or a send is in flight.
  *
- * `conversationId` may be supplied (e.g. resuming a recent chat); otherwise it
- * starts empty and is set once the first message creates a conversation.
+ * `conversationId` may be supplied (resuming a recent chat); otherwise it starts
+ * empty and is set once the first message creates a conversation.
+ *
+ * The id is passed to usePostMessage at MUTATE time, so a freshly-created
+ * conversation is posted to in the same handler — no ref/effect bridge (the old
+ * create-then-post race + lost-first-message bugs are gone, review #2/#3/#8).
  */
 export function CockpitChat({ conversationId }: { conversationId?: string }) {
   const [activeId, setActiveId] = useState<string | undefined>(conversationId);
   const { thread, messages } = useConversation(activeId);
 
   const createConversation = useCreateConversation();
-  // Always bound to the current active id. `usePostMessage('')` is inert (never
-  // fired) until a conversation exists; once `activeId` is set the hook re-binds
-  // to it on the next render, and the queued first message flushes via effect.
-  const postMessage = usePostMessage(activeId ?? '');
+  const postMessage = usePostMessage();
 
-  // A first message typed before any conversation exists is queued here; the
-  // effect below flushes it once `activeId` is set (so the post targets the
-  // freshly-created conversation through the re-bound usePostMessage).
-  const pendingFirst = useRef<string | null>(null);
+  // A send in flight (create + post). Blocks the composer so a second Enter can't
+  // double-create a conversation or race the first post (review #2).
+  const [sending, setSending] = useState(false);
+  // The just-sent user text, shown OPTIMISTICALLY until the seed/live-tail
+  // carries the real row — so the message never disappears into the empty state
+  // (review #7). Cleared once the real row (same body) lands.
+  const [optimistic, setOptimistic] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (activeId && pendingFirst.current !== null) {
-      const text = pendingFirst.current;
-      pendingFirst.current = null;
-      postMessage.mutate({ text });
+  const busy = sending || thread?.activeRunId != null;
+
+  const handleSubmit = async (text: string) => {
+    if (busy) return;
+    setSending(true);
+    setOptimistic(text);
+    try {
+      let id = activeId;
+      if (!id) {
+        const created = await createConversation.mutateAsync();
+        id = created.id;
+        setActiveId(id);
+      }
+      await postMessage.mutateAsync({ id, text });
+    } catch (err) {
+      // Surface the failure and restore the text so it isn't silently lost.
+      toast.error(formatApiError(err));
+      setOptimistic(null);
+      throw err; // let the composer keep the text (it restores on a rejected submit)
+    } finally {
+      setSending(false);
     }
-    // postMessage is re-created each render; gating on activeId + the ref keeps
-    // this to a single flush per created conversation.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeId]);
-
-  const busy = thread?.activeRunId != null;
-
-  const handleSubmit = (text: string) => {
-    if (activeId) {
-      postMessage.mutate({ text });
-      return;
-    }
-    // No conversation yet — create one, queue the first message, set the id; the
-    // effect flushes the queued message once the hook re-binds to the new id.
-    pendingFirst.current = text;
-    void createConversation.mutateAsync().then((created) => {
-      setActiveId(created.id);
-    });
   };
+
+  // Drop the optimistic row once the real one (same body, user role) is present.
+  const optimisticRows = useMemo<ConversationMessage[]>(() => {
+    if (optimistic === null) return [];
+    const landed = messages.some((m) => m.role === 'user' && m.body === optimistic);
+    if (landed) return [];
+    return [
+      {
+        id: '__optimistic__',
+        conversationId: activeId ?? '',
+        seq: Number.MAX_SAFE_INTEGER,
+        role: 'user',
+        kind: 'text',
+        body: optimistic,
+        payload: null,
+        runId: null,
+        createdAt: Date.now(),
+      },
+    ];
+  }, [optimistic, messages, activeId]);
+
+  const shown = useMemo(() => [...messages, ...optimisticRows], [messages, optimisticRows]);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {activeId && messages.length > 0 ? (
-          <MessageList messages={messages} conversationId={activeId} />
+        {shown.length > 0 ? (
+          <MessageList messages={shown} conversationId={activeId ?? ''} />
         ) : (
-          <EmptyState />
+          <EmptyState
+            icon={<MessagesSquare className="size-5" aria-hidden="true" />}
+            title="How can the operator help?"
+            description="Recent chat appears here."
+          />
         )}
       </div>
       <ChatComposer onSubmit={handleSubmit} busy={busy} />
-    </div>
-  );
-}
-
-function EmptyState() {
-  return (
-    <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
-      <MessagesSquare className="size-8 text-fg-3" aria-hidden="true" />
-      <p className="text-sm text-fg-2">How can the operator help?</p>
-      <p className="text-xs text-fg-3">Recent chat appears here.</p>
     </div>
   );
 }

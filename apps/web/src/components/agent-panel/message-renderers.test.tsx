@@ -151,7 +151,7 @@ describe('MessageLinkPanel', () => {
           kind: 'component',
           payload: JSON.stringify({
             type: 'link_panel',
-            target: { entityType: 'document', entityId: 'onboard-acme', wslug: 'acme' },
+            target: { entityType: 'work_item', entityId: 'onboard-acme', wslug: 'acme', pslug: 'web' },
             title: 'Onboard Acme',
           }),
         })}
@@ -163,8 +163,28 @@ describe('MessageLinkPanel', () => {
     // panel component is unaffected; only the router destination changes).
     expect(navigateMock).toHaveBeenCalledTimes(1);
     expect(navigateMock).toHaveBeenCalledWith(
-      entityRoute({ entityType: 'document', entityId: 'onboard-acme', wslug: 'acme' }),
+      entityRoute({ entityType: 'work_item', entityId: 'onboard-acme', wslug: 'acme', pslug: 'web' }),
     );
+  });
+
+  // Review #5: a document/work_item target missing pslug renders NO card (it
+  // would otherwise navigate to the workspace root, not the entity). Mirrors the
+  // server schema's pslug requirement as the tolerant last line of defense.
+  test('a document/work_item target without pslug renders nothing', () => {
+    const { container } = render(
+      <MessageLinkPanel
+        message={msg({
+          kind: 'component',
+          payload: JSON.stringify({
+            type: 'link_panel',
+            target: { entityType: 'work_item', entityId: 'x', wslug: 'acme' }, // no pslug
+            title: 'No project',
+          }),
+        })}
+      />,
+    );
+    expect(container).toBeEmptyDOMElement();
+    expect(screen.queryByText('No project')).toBeNull();
   });
 
   // Cluster-5 /code-review fix: a malformed/incomplete target (here: missing

@@ -213,13 +213,17 @@ export interface PostMessageResult {
   runId: string;
 }
 
-export function usePostMessage(id: string) {
+// The conversation id is a MUTATION VARIABLE, not a hook argument — so one hook
+// instance posts to any conversation, including one just created in the same
+// handler (review #2/#3/#8: removes the create-then-post ref+effect bridge that
+// existed only because the id was bound at hook-call time).
+export function usePostMessage() {
   const qc = useQueryClient();
-  return useMutation<PostMessageResult, ApiError, { text: string }>({
-    mutationFn: (vars) =>
-      client.post<PostMessageResult>(`/api/v1/conversations/${id}/messages`, vars),
-    onSettled: () => {
-      qc.invalidateQueries({ queryKey: conversationsKeys.detail(id) });
+  return useMutation<PostMessageResult, ApiError, { id: string; text: string }>({
+    mutationFn: ({ id, text }) =>
+      client.post<PostMessageResult>(`/api/v1/conversations/${id}/messages`, { text }),
+    onSettled: (_data, _err, vars) => {
+      qc.invalidateQueries({ queryKey: conversationsKeys.detail(vars.id) });
     },
   });
 }

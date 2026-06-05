@@ -203,7 +203,7 @@ export function CommandPalette() {
             ) : null}
 
             <CommandGroup heading="Tools">
-              {matches({ label: 'Toggle operator' }, query) ? (
+              {ctx.workspaceSlug && matches({ label: 'Toggle operator' }, query) ? (
                 <CommandItem
                   onSelect={() => {
                     close();
