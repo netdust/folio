@@ -4,6 +4,7 @@ import { useIsInstanceAdmin } from '../lib/api/auth.ts';
 import { AiTab } from '../components/settings/ai-tab.tsx';
 import { RolesTab } from '../components/settings/roles-tab.tsx';
 import { InvitationsTab } from '../components/settings/invitations-tab.tsx';
+import { InstanceTokensTab } from '../components/settings/instance-tokens-tab.tsx';
 
 const settingsSearchSchema = z.object({
   // Deep-link target. The provider-health banner's "Check key →" lands here.
@@ -73,6 +74,13 @@ export function InstanceSettingsBody() {
             desc="Grant a user access to a workspace or project, or revoke it."
           >
             <InvitationsTab />
+          </SettingsSection>
+
+          <SettingsSection
+            title="Instance API tokens"
+            desc="Cross-workspace tokens for operator/admin automation (per-workspace tokens live under each workspace's Agents & Triggers → API)."
+          >
+            <InstanceTokensTab />
           </SettingsSection>
         </>
       ) : (

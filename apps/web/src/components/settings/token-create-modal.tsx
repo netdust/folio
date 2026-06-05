@@ -60,27 +60,18 @@ const PRESETS: { label: string; scopes: Scope[]; tone?: PresetTone }[] = [
 interface Props {
   wslug: string;
   workspaceId: string;
-  /**
-   * When true, the modal offers a "Whole instance" reach option that mints a
-   * reach=null (instance-wide) token. Gated on __system membership; the server
-   * (A7) enforces the real owner/admin-of-__system check on create.
-   */
-  isInstanceAdmin?: boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
 
-export function TokenCreateModal({
-  wslug,
-  workspaceId,
-  isInstanceAdmin = false,
-  open,
-  onOpenChange,
-}: Props) {
+// Per-workspace token creation. Instance-wide (reach=null) tokens are minted on
+// the instance Settings page (InstanceTokensTab), NOT here — this modal always
+// pins to the current workspace, so an instance token is never created from
+// inside a single workspace.
+export function TokenCreateModal({ wslug, workspaceId, open, onOpenChange }: Props) {
   const create = useCreateToken(wslug, workspaceId);
   const [name, setName] = useState('');
   const [scopes, setScopes] = useState<Set<Scope>>(new Set());
-  const [reach, setReach] = useState<'workspace' | 'instance'>('workspace');
   const [revealed, setRevealed] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
@@ -89,7 +80,6 @@ export function TokenCreateModal({
   function reset() {
     setName('');
     setScopes(new Set());
-    setReach('workspace');
     setRevealed(null);
     setCopied(false);
   }
@@ -105,7 +95,6 @@ export function TokenCreateModal({
       const res = await create.mutateAsync({
         name: name.trim(),
         scopes: Array.from(scopes),
-        ...(reach === 'instance' ? { workspaceId: null } : {}),
       });
       setRevealed(res.token);
     } catch (err) {
@@ -146,37 +135,6 @@ export function TokenCreateModal({
                   className="mt-1 block w-full rounded-md border border-border-light bg-content px-2 py-1.5 text-sm"
                 />
               </label>
-
-              {isInstanceAdmin ? (
-                <fieldset>
-                  <legend className="text-xs font-medium text-fg-2">Reach</legend>
-                  <div className="mt-1 flex gap-4">
-                    <label className="flex items-center gap-2 text-sm">
-                      <input
-                        type="radio"
-                        name="reach"
-                        aria-label="This workspace"
-                        checked={reach === 'workspace'}
-                        onChange={() => setReach('workspace')}
-                      />
-                      <span>This workspace</span>
-                    </label>
-                    <label className="flex items-center gap-2 text-sm">
-                      <input
-                        type="radio"
-                        name="reach"
-                        aria-label="Whole instance"
-                        checked={reach === 'instance'}
-                        onChange={() => setReach('instance')}
-                      />
-                      <span>Whole instance</span>
-                    </label>
-                  </div>
-                  <p className="mt-1 text-[11px] text-fg-3">
-                    Whole instance — all workspaces (instance admins only)
-                  </p>
-                </fieldset>
-              ) : null}
 
               <fieldset>
                 <legend className="text-xs font-medium text-fg-2">Scopes</legend>

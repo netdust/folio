@@ -8,10 +8,11 @@ interface UserMenuProps {
   email?: string;
   onSignOut: () => void;
   onCreateWorkspace?: () => void;
-  onOpenSettings?: () => void;
   // Instance-level settings (shared AI keys, roles, invitations) — labeled
   // simply "Settings". Only provided to users who have an instance-level surface
-  // to manage (instance admin), so the entry hides for everyone else.
+  // to manage (instance admin), so the entry hides for everyone else. (There is
+  // no longer a workspace-settings entry: per-workspace API tokens moved to the
+  // Agents & Triggers → API tab.)
   onOpenInstanceSettings?: () => void;
 }
 
@@ -20,7 +21,6 @@ export function UserMenu({
   email,
   onSignOut,
   onCreateWorkspace,
-  onOpenSettings,
   onOpenInstanceSettings,
 }: UserMenuProps) {
   return (
@@ -39,15 +39,6 @@ export function UserMenu({
             className="block w-full rounded-md px-2 py-1.5 text-left text-sm text-fg-2 hover:bg-card hover:text-fg"
           >
             + Create workspace
-          </button>
-        ) : null}
-        {onOpenSettings ? (
-          <button
-            type="button"
-            onClick={onOpenSettings}
-            className="block w-full rounded-md px-2 py-1.5 text-left text-sm text-fg-2 hover:bg-card hover:text-fg"
-          >
-            Workspace settings
           </button>
         ) : null}
         {onOpenInstanceSettings ? (

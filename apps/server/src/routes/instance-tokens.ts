@@ -1,7 +1,12 @@
+import { zValidator } from '@hono/zod-validator';
 import { and, eq, isNull } from 'drizzle-orm';
 import { Hono } from 'hono';
+import { nanoid } from 'nanoid';
+import { z } from 'zod';
 import { db } from '../db/client.ts';
 import { apiTokens } from '../db/schema.ts';
+import { roleToScopes } from '../lib/agent-schema.ts';
+import { newApiToken } from '../lib/auth.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
 import { requireInstanceAdmin } from '../lib/system-workspace.ts';
 import { serializeApiToken } from '../lib/token-reach.ts';
@@ -42,6 +47,57 @@ instanceTokensRoute.get('/', async (c) => {
   });
   return jsonOk(c, { tokens: rows.map(serializeApiToken) });
 });
+
+// Mint an instance (reach=null) token from the instance surface, so an admin
+// never has to mint a cross-workspace token from inside a single workspace (the
+// only prior path was POST /w/:wslug/tokens with body workspaceId:null, which
+// the UI couldn't reach without first picking an arbitrary workspace).
+//
+// Same guarantees as the workspace POST, minus the workspace: session-only mount
+// (no bearer can self-mint a peer — a stolen instance bearer is owner-equivalent),
+// requireInstanceAdmin (only an owner/admin mints instance reach), and the SAME
+// roleToScopes ceiling (the caller's instance role can't mint scopes it lacks).
+// reach is hard-wired null — this route NEVER mints a workspace-pinned token.
+instanceTokensRoute.post(
+  '/',
+  zValidator(
+    'json',
+    z.object({
+      name: z.string().min(1).max(80),
+      scopes: z.array(z.string()).default(['documents:read', 'documents:write']),
+    }),
+  ),
+  async (c) => {
+    const user = getUser(c);
+    // Returns the caller's instance role — the scope ceiling for this token.
+    const ceilingRole = await requireInstanceAdmin(db, user.id);
+    const { name, scopes } = c.req.valid('json');
+
+    const allowed = roleToScopes(ceilingRole);
+    const over = scopes.filter((s) => !allowed.includes(s));
+    if (over.length > 0) {
+      throw new HTTPError(
+        'FORBIDDEN_SCOPE',
+        `role '${ceilingRole}' cannot mint a token with scope(s): ${over.join(', ')}`,
+        403,
+      );
+    }
+
+    const { token, hash } = newApiToken();
+    const id = nanoid();
+    await db.insert(apiTokens).values({
+      id,
+      workspaceId: null, // instance reach — never pinned
+      name,
+      tokenHash: hash,
+      scopes,
+      createdBy: user.id,
+    });
+    // Plaintext token returned EXACTLY ONCE. `instance: true` mirrors the
+    // workspace POST's reach flag.
+    return jsonOk(c, { id, name, token, scopes, instance: true }, 201);
+  },
+);
 
 // CR#5 — revoke an instance token. The per-workspace DELETE can't reach a
 // null-workspace row (its `eq(workspaceId, <id>)` never matches null), so an

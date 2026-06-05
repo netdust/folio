@@ -4,22 +4,6 @@ import userEvent from '@testing-library/user-event';
 import { UserMenu } from './user-menu.tsx';
 
 describe('UserMenu', () => {
-  it('renders a Workspace settings item when onOpenSettings is provided and fires it on click', async () => {
-    const onOpenSettings = vi.fn();
-    const user = userEvent.setup();
-    render(
-      <UserMenu
-        trigger={<button type="button">Open menu</button>}
-        email="stefan@x"
-        onSignOut={() => {}}
-        onOpenSettings={onOpenSettings}
-      />,
-    );
-    await user.click(screen.getByRole('button', { name: /open menu/i }));
-    await user.click(await screen.findByRole('button', { name: /workspace settings/i }));
-    expect(onOpenSettings).toHaveBeenCalledTimes(1);
-  });
-
   it('renders the instance "Settings" item when onOpenInstanceSettings is provided and fires it', async () => {
     const onOpenInstanceSettings = vi.fn();
     const user = userEvent.setup();

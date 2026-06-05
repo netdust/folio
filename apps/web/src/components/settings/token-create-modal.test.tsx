@@ -230,7 +230,7 @@ describe('TokenCreateModal', () => {
   });
 });
 
-describe('A11: reach toggle + admin scopes', () => {
+describe('per-workspace reach + admin scopes', () => {
   const ADMIN_SCOPES = ['settings:write', 'members:write', 'workspace:admin'] as const;
 
   function stubCreateFetch() {
@@ -252,44 +252,22 @@ describe('A11: reach toggle + admin scopes', () => {
     return fetchMock;
   }
 
-  it('admin: selecting "Whole instance" submits workspaceId:null', async () => {
+  it('ALWAYS pins to the URL workspace — no workspaceId in the body, no reach option', async () => {
+    // Instance (reach=null) tokens moved to the Settings page; this modal can no
+    // longer mint one. There is no reach toggle, and the create body never carries
+    // workspaceId (the server pins to the URL workspace).
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const fetchMock = stubCreateFetch();
     const user = userEvent.setup();
     render(
-      <TokenCreateModal
-        wslug="acme"
-        workspaceId="ws-1"
-        isInstanceAdmin
-        open
-        onOpenChange={() => {}}
-      />,
+      <TokenCreateModal wslug="acme" workspaceId="ws-1" open onOpenChange={() => {}} />,
       { wrapper: wrap(qc) },
     );
-    await user.type(screen.getByLabelText(/^name$/i), 'CI');
-    await user.click(screen.getByLabelText('documents:read'));
-    await user.click(screen.getByLabelText(/whole instance/i));
-    await user.click(screen.getByRole('button', { name: /create/i }));
+    // No reach UI at all.
+    expect(screen.queryByText(/whole instance/i)).toBeNull();
+    expect(screen.queryByLabelText(/whole instance/i)).toBeNull();
+    expect(screen.queryByText(/^reach$/i)).toBeNull();
 
-    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
-    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
-    expect(body.workspaceId).toBe(null);
-  });
-
-  it('admin: default reach ("This workspace") submits WITHOUT workspaceId (pins to URL ws)', async () => {
-    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    const fetchMock = stubCreateFetch();
-    const user = userEvent.setup();
-    render(
-      <TokenCreateModal
-        wslug="acme"
-        workspaceId="ws-1"
-        isInstanceAdmin
-        open
-        onOpenChange={() => {}}
-      />,
-      { wrapper: wrap(qc) },
-    );
     await user.type(screen.getByLabelText(/^name$/i), 'CI');
     await user.click(screen.getByLabelText('documents:read'));
     await user.click(screen.getByRole('button', { name: /create/i }));
@@ -297,16 +275,6 @@ describe('A11: reach toggle + admin scopes', () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
     const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
     expect(body).not.toHaveProperty('workspaceId');
-  });
-
-  it('non-admin: the "Whole instance" option is absent', () => {
-    const qc = new QueryClient();
-    render(
-      <TokenCreateModal wslug="acme" workspaceId="ws-1" open onOpenChange={() => {}} />,
-      { wrapper: wrap(qc) },
-    );
-    expect(screen.queryByText(/whole instance/i)).toBeNull();
-    expect(screen.queryByLabelText(/whole instance/i)).toBeNull();
   });
 
   it('the three admin scopes are offered as checkboxes', () => {

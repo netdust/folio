@@ -191,3 +191,78 @@ describe('A12: GET /api/v1/instance/tokens (list instance tokens)', () => {
     expect(res.status).toBe(403);
   });
 });
+
+describe('POST /api/v1/instance/tokens (mint an instance-reach token)', () => {
+  test('an owner mints a reach=null token; plaintext returned once, row has workspaceId null', async () => {
+    const { app, db, seed } = await makeTestApp();
+    await grantOwner(db, seed.user.email);
+
+    const res = await app.request('/api/v1/instance/tokens', {
+      method: 'POST',
+      headers: { Cookie: seed.sessionCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'operator', scopes: ['documents:read', 'workspace:admin'] }),
+    });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as {
+      data: { id: string; token: string; instance: boolean; scopes: string[] };
+    };
+    expect(body.data.instance).toBe(true);
+    expect(body.data.token).toBeTruthy(); // plaintext returned exactly once
+    expect(body.data.scopes).toEqual(['documents:read', 'workspace:admin']);
+
+    const row = await db.query.apiTokens.findFirst({
+      where: eq(apiTokens.id, body.data.id),
+    });
+    expect(row).toBeDefined();
+    expect(row!.workspaceId).toBeNull(); // instance reach, never pinned
+    expect('token' in (row as object)).toBe(false); // only the hash is stored
+  });
+
+  test('scope ceiling: an admin cannot mint a scope its role lacks (403)', async () => {
+    // An 'admin' role whose roleToScopes does NOT include the owner-only scope is
+    // refused — the mint can never exceed the caller's instance role.
+    const { app, db } = await makeTestApp();
+    const adminCookie = await seedRoleSession(db, 'admin');
+    const res = await app.request('/api/v1/instance/tokens', {
+      method: 'POST',
+      headers: { Cookie: adminCookie, 'content-type': 'application/json' },
+      // a deliberately bogus scope the role cannot grant
+      body: JSON.stringify({ name: 'overreach', scopes: ['definitely:not-a-real-scope'] }),
+    });
+    expect(res.status).toBe(403);
+    // Nothing minted.
+    const rows = await db.query.apiTokens.findMany();
+    expect(rows.every((r) => r.name !== 'overreach')).toBe(true);
+  });
+
+  test('a non-instance-admin (member) cannot mint (403)', async () => {
+    const { app, db } = await makeTestApp();
+    const memberCookie = await seedRoleSession(db, 'member');
+    const res = await app.request('/api/v1/instance/tokens', {
+      method: 'POST',
+      headers: { Cookie: memberCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'nope', scopes: ['documents:read'] }),
+    });
+    expect(res.status).toBe(403);
+  });
+
+  test('a bearer cannot mint (session-only)', async () => {
+    const { app, db, seed } = await makeTestApp();
+    await grantOwner(db, seed.user.email);
+    const { token, hash } = newApiToken();
+    await db.insert(apiTokens).values({
+      id: nanoid(),
+      workspaceId: null,
+      name: 'peer-bearer',
+      tokenHash: hash,
+      scopes: ['workspace:admin'],
+      createdBy: seed.user.id,
+    });
+    const res = await app.request('/api/v1/instance/tokens', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'self-mint', scopes: ['documents:read'] }),
+    });
+    expect([401, 403]).toContain(res.status);
+  });
+});
