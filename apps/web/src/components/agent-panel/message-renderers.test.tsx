@@ -96,16 +96,35 @@ describe('MessageToolStep', () => {
 // entityRoute (the single resolver)
 // ---------------------------------------------------------------------------
 describe('entityRoute', () => {
-  test('document-shaped targets open the workspace slideover via wdoc', () => {
-    expect(
-      entityRoute({ entityType: 'document', entityId: 'onboard-acme', wslug: 'acme' }),
-    ).toEqual({ to: '/w/$wslug', params: { wslug: 'acme' }, search: { wdoc: 'onboard-acme' } });
+  // Cluster-5 /code-review fix #1: document/work_item/run/conversation have NO
+  // reachable by-id workspace-layout surface from the target alone (the ?wdoc=
+  // slideover only resolves agent/trigger; work_items need a project slug the
+  // target doesn't carry). They degrade to the workspace ROOT — never a ?wdoc=
+  // link that would 404. Bites: the old code emitted search:{wdoc:id} here.
+  test('document-shaped targets degrade to the workspace root (no 404 wdoc)', () => {
+    for (const entityType of ['document', 'work_item', 'run', 'conversation'] as const) {
+      expect(entityRoute({ entityType, entityId: 'x', wslug: 'acme' })).toEqual({
+        to: '/w/$wslug',
+        params: { wslug: 'acme' },
+      });
+    }
   });
-  test('agent targets route to the agents surface', () => {
+  test('project/view targets degrade to the workspace root', () => {
+    expect(entityRoute({ entityType: 'project', entityId: 'p', wslug: 'acme' })).toEqual({
+      to: '/w/$wslug',
+      params: { wslug: 'acme' },
+    });
+  });
+  test('agent + trigger targets route to the agents slideover (the resolvable types)', () => {
     expect(entityRoute({ entityType: 'agent', entityId: 'op', wslug: 'acme' })).toEqual({
       to: '/w/$wslug/agents',
       params: { wslug: 'acme' },
       search: { wdoc: 'op' },
+    });
+    expect(entityRoute({ entityType: 'trigger', entityId: 'nightly', wslug: 'acme' })).toEqual({
+      to: '/w/$wslug/agents',
+      params: { wslug: 'acme' },
+      search: { wdoc: 'nightly' },
     });
   });
 });
@@ -159,6 +178,27 @@ describe('MessageLinkPanel', () => {
     expect(container).toBeEmptyDOMElement();
     expect(screen.queryByText('Broken')).toBeNull();
   });
+
+  // Cluster-5 /code-review fix #10: a target whose entityType is NOT a known
+  // type (corrupt / forward-compat row) must render nothing — presence ≠ validity.
+  // Bites: against a presence-only guard this renders a card whose click hits
+  // entityRoute's default branch and navigates somewhere wrong.
+  test('a link_panel with an unknown entityType renders nothing', () => {
+    const { container } = render(
+      <MessageLinkPanel
+        message={msg({
+          kind: 'component',
+          payload: JSON.stringify({
+            type: 'link_panel',
+            target: { entityType: 'milestone', entityId: 'x', wslug: 'acme' }, // unknown type
+            title: 'Future',
+          }),
+        })}
+      />,
+    );
+    expect(container).toBeEmptyDOMElement();
+    expect(screen.queryByText('Future')).toBeNull();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -210,5 +250,30 @@ describe('MessageChoiceCard', () => {
     expect(support).toBeDisabled();
     expect(leads).toHaveAttribute('aria-pressed', 'true');
     expect(support).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  // Cluster-5 /code-review fix #10: malformed option entries (non-objects /
+  // missing id|label) are filtered out — no broken buttons rendered. Bites:
+  // against `p.options ?? []` (no shape filter) the bad entries render as
+  // empty/garbage buttons.
+  test('drops malformed option entries (keeps only well-formed {id,label})', () => {
+    const bad = msg({
+      id: 'card-2',
+      kind: 'component',
+      payload: JSON.stringify({
+        type: 'choice_card',
+        prompt: 'Pick',
+        options: [
+          { id: 'ok', label: 'Good' },
+          null,
+          { id: 'noLabel' },
+          'nonsense',
+        ],
+      }),
+    });
+    render(<MessageChoiceCard message={bad} conversationId="c1" />);
+    expect(screen.getByText('Good')).toBeInTheDocument();
+    // Exactly one valid button rendered.
+    expect(screen.getAllByRole('button')).toHaveLength(1);
   });
 });

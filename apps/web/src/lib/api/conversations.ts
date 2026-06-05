@@ -5,7 +5,9 @@ import { client, type ApiError } from './client.ts';
 // ---------------------------------------------------------------------------
 // Wire types — mirror apps/server/src/db/schema.ts (Message) + the
 // GET /conversations/:id response shape (routes/conversations.ts). `createdAt`
-// is a unix-ms number over the wire (timestamp_ms column serialized as a number).
+// is a unix-ms number over the wire: the server's `serializeMessage` converts
+// the timestamp_ms Date → number at BOTH wire surfaces (seed + SSE frame), so
+// this type is true for every real row (Cluster-5 /code-review fix, finding #3).
 // ---------------------------------------------------------------------------
 
 export type MessageRole = 'user' | 'operator';
@@ -85,16 +87,18 @@ export function useConversationStream(
   useEffect(() => {
     if (!id) return;
     const es = new EventSource(`/api/v1/conversations/${id}/stream`, { withCredentials: true });
-    // Cluster-5 /code-review fix: the channel has NO replay (deliberate — the
-    // thread seeds from REST). So a reconnect (laptop sleep, proxy timeout, the
-    // ping gap) can miss rows written during the dead window. EventSource fires
-    // `open` on EVERY (re)connect; the FIRST open is the initial connect, every
-    // SUBSEQUENT open is a reconnect → backfill by refetching the seed. Without
-    // this the live-tail silently holes on reconnect.
-    let opened = false;
+    // The channel has NO replay (deliberate — the thread seeds from REST). So
+    // ANY connect can miss rows written outside the live window:
+    //   - the FIRST open: a row published in the gap between the seed's DB
+    //     snapshot and this client's subscribe landing (seed/subscribe race);
+    //   - a SUBSEQUENT open (reconnect after laptop sleep / proxy timeout / a
+    //     ping gap): rows written during the dead window.
+    // EventSource fires `open` on EVERY (re)connect, so we backfill on EVERY
+    // open by refetching the seed (Cluster-5 /code-review fix #4 — the earlier
+    // first-open-skip left the initial seed/subscribe race uncovered). Cheap
+    // and idempotent: the refetch reconciles against the live Map by id.
     const onOpen = () => {
-      if (opened) onReconnectRef.current?.();
-      opened = true;
+      onReconnectRef.current?.();
     };
     const handle = (e: MessageEvent) => {
       if (!e.data) return; // ping heartbeats carry empty data
@@ -144,16 +148,43 @@ export function useConversation(id: string | undefined): {
         return next;
       });
     },
-    // On reconnect, refetch the seed to backfill any rows missed during the gap
-    // (the channel has no replay). Cheap; closes the no-replay live-tail's only hole.
+    // On every (re)connect, refetch the seed to backfill any rows missed outside
+    // the live window (the channel has no replay). Cheap; closes the live-tail's
+    // only hole. The prune effect below keeps `live` from growing unbounded.
     () => {
       if (id) void queryClient.invalidateQueries({ queryKey: conversationsKeys.detail(id) });
     },
   );
 
+  // Cluster-5 /code-review fix (#5): prune `live` of rows the refreshed seed now
+  // carries, so the Map doesn't grow unbounded across a session AND so a STALE
+  // live row never supersedes a newer seed row by id. The seed is authoritative
+  // once it includes a row; a copy-on-write Map that only ever grows would keep
+  // an early `chosen`-less choice_card winning over the seed's `chosen` row
+  // forever. Drop any live id present in the seed (the seed wins post-refetch).
+  const seedMessages = query.data?.messages;
+  useEffect(() => {
+    if (!seedMessages || seedMessages.length === 0) return;
+    setLive((prev) => {
+      if (prev.size === 0) return prev;
+      const seedIds = new Set(seedMessages.map((m) => m.id));
+      let changed = false;
+      const next = new Map(prev);
+      for (const liveId of prev.keys()) {
+        if (seedIds.has(liveId)) {
+          next.delete(liveId);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [seedMessages]);
+
+  // Seed is authoritative for any id it carries (post-refetch it reflects the
+  // latest server state); live supplies only rows the seed hasn't caught up to.
   const messages = useMemo(
-    () => mergeMessages(query.data?.messages ?? [], live),
-    [query.data?.messages, live],
+    () => mergeMessages(seedMessages ?? [], live),
+    [seedMessages, live],
   );
 
   return { thread: query.data, messages, isLoading: query.isLoading };
@@ -217,14 +248,4 @@ export function useButtonClick(id: string) {
       qc.invalidateQueries({ queryKey: conversationsKeys.detail(id) });
     },
   });
-}
-
-/**
- * Confirm a pending (HIGH-tier) op via its confirmation card. Same wire shape as
- * useButtonClick — a confirmation card IS a choice card whose "yes" option id
- * equals the pending_op id (server contract). Kept as a named hook so the
- * confirm flow reads intentfully at call sites; delegates to the click route.
- */
-export function useConfirmPending(id: string) {
-  return useButtonClick(id);
 }

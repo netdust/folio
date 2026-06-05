@@ -1,8 +1,11 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import type { Message } from '../db/schema.ts';
 import { conversationBus } from './conversation-bus.ts';
+import type { SerializedMessage } from '../services/conversations.ts';
 
-function fakeRow(conversationId: string, body: string): Message {
+// The bus carries the WIRE shape (createdAt as a unix-ms NUMBER, what the SSE
+// route stringifies) — NOT the DB Message (createdAt: Date). Fixture mirrors the
+// real publish path (the sink serializes before publishing).
+function fakeRow(conversationId: string, body: string): SerializedMessage {
   return {
     id: crypto.randomUUID(),
     conversationId,
@@ -12,8 +15,8 @@ function fakeRow(conversationId: string, body: string): Message {
     body,
     payload: null,
     runId: null,
-    createdAt: new Date(),
-  } as Message;
+    createdAt: 1_700_000_000_000,
+  };
 }
 
 describe('conversation bus', () => {
@@ -22,7 +25,7 @@ describe('conversation bus', () => {
   });
 
   test('subscribe → publish delivers the row to the subscriber', () => {
-    const received: Message[] = [];
+    const received: SerializedMessage[] = [];
     conversationBus.subscribe('c1', (row) => received.push(row));
     const row = fakeRow('c1', 'hello');
     conversationBus.publish('c1', row);
@@ -31,8 +34,8 @@ describe('conversation bus', () => {
   });
 
   test('publish is scoped by conversationId (no cross-delivery)', () => {
-    const a: Message[] = [];
-    const b: Message[] = [];
+    const a: SerializedMessage[] = [];
+    const b: SerializedMessage[] = [];
     conversationBus.subscribe('cA', (row) => a.push(row));
     conversationBus.subscribe('cB', (row) => b.push(row));
     conversationBus.publish('cA', fakeRow('cA', 'for-a'));
@@ -41,7 +44,7 @@ describe('conversation bus', () => {
   });
 
   test('unsubscribe stops further delivery', () => {
-    const received: Message[] = [];
+    const received: SerializedMessage[] = [];
     const unsub = conversationBus.subscribe('c1', (row) => received.push(row));
     conversationBus.publish('c1', fakeRow('c1', 'first'));
     unsub();
@@ -51,7 +54,7 @@ describe('conversation bus', () => {
   });
 
   test('a throwing subscriber does not break delivery to siblings', () => {
-    const good: Message[] = [];
+    const good: SerializedMessage[] = [];
     conversationBus.subscribe('c1', () => {
       throw new Error('bad handler');
     });

@@ -1,8 +1,9 @@
 import { useNavigate } from '@tanstack/react-router';
-import { Bot, FileText, FolderKanban, ListChecks, MessageSquare, Play, Table2 } from 'lucide-react';
+import { Bot, FileText, FolderKanban, ListChecks, MessageSquare, Play, Table2, Zap } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
+import { ENTITY_TYPES, type EntityType } from '@folio/shared';
 import type { ConversationMessage } from '../../lib/api/conversations.ts';
-import { entityRoute, type EntityTarget, type EntityType } from './entity-route.ts';
+import { entityRoute, type EntityTarget } from './entity-route.ts';
 import { parseMessagePayload } from './payload.ts';
 
 interface LinkPanelPayload {
@@ -18,9 +19,15 @@ const ENTITY_ICON: Record<EntityType, LucideIcon> = {
   view: Table2,
   work_item: ListChecks,
   agent: Bot,
+  trigger: Zap,
   run: Play,
   conversation: MessageSquare,
 };
+
+// The shared closed enum as a runtime Set — the renderer rejects a target whose
+// entityType is not a KNOWN type (a corrupt/forward-compat row), not just an
+// absent one (finding #10: presence ≠ validity).
+const KNOWN_ENTITY_TYPES = new Set<string>(ENTITY_TYPES);
 
 /**
  * A `link_panel` component: a clickable card referencing an entity. Clicking
@@ -32,12 +39,22 @@ export function MessageLinkPanel({ message }: { message: ConversationMessage }) 
   const navigate = useNavigate();
   const p = parseMessagePayload<LinkPanelPayload>(message.payload);
   const target = p.target;
-  // Cluster-5 /code-review fix: guard the COMPLETENESS of target, not just its
-  // presence. A truthy-but-incomplete target (missing entityType/entityId/wslug —
-  // a malformed/corrupt row) would otherwise navigate to `/w/undefined`. The
-  // tolerant-render contract is "one bad row never breaks the thread", so a
-  // malformed link_panel degrades to no card rather than a broken navigation.
-  if (!target || !target.entityType || !target.entityId || !target.wslug) return null;
+  // Cluster-5 /code-review fix: guard the VALIDITY of target, not just its
+  // presence. (1) all three fields must be present (an incomplete target would
+  // navigate to `/w/undefined`); (2) entityType must be a KNOWN type — a corrupt
+  // or forward-compat entityType ('milestone') would otherwise render a
+  // FileText card that navigates somewhere wrong via entityRoute's default
+  // branch. The tolerant-render contract is "one bad/unknown row never breaks
+  // the thread": a malformed link_panel degrades to no card.
+  if (
+    !target ||
+    !target.entityType ||
+    !target.entityId ||
+    !target.wslug ||
+    !KNOWN_ENTITY_TYPES.has(target.entityType)
+  ) {
+    return null;
+  }
 
   const Icon = ENTITY_ICON[target.entityType] ?? FileText;
 

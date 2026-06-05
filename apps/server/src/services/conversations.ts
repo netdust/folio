@@ -15,6 +15,7 @@
  */
 
 import { and, eq, max } from 'drizzle-orm';
+import { parseMessagePayload } from '@folio/shared';
 import type { DB } from '../db/client.ts';
 import { conversations, messages, type Message } from '../db/schema.ts';
 
@@ -82,6 +83,32 @@ export async function getThread(db: DB, conversationId: string): Promise<Message
 }
 
 /**
+ * The wire shape of a message row: identical to the DB `Message` EXCEPT
+ * `createdAt` is a unix-ms `number`, not a `Date`.
+ *
+ * Cluster-5 /code-review fix (finding #3): `messages.created_at` is a
+ * `timestamp_ms` column, so Drizzle hands back a JS `Date`. Serializing a `Date`
+ * via `c.json` / `JSON.stringify` yields an ISO STRING — but the web wire type
+ * declares `createdAt: number`. `serializeMessage` is the ONE conversion point
+ * (Date → unix-ms number) so the seed AND the SSE frame agree with the declared
+ * type. Both surfaces MUST serialize through this — never emit a raw `Message`.
+ */
+export type SerializedMessage = Omit<Message, 'createdAt'> & { createdAt: number };
+
+export function serializeMessage(row: Message): SerializedMessage {
+  return { ...row, createdAt: row.createdAt.getTime() };
+}
+
+/** A thread of wire-shaped messages (createdAt as unix-ms number). */
+export async function getThreadSerialized(
+  db: DB,
+  conversationId: string,
+): Promise<SerializedMessage[]> {
+  const rows = await getThread(db, conversationId);
+  return rows.map(serializeMessage);
+}
+
+/**
  * Load a single `component` message belonging to a conversation, or undefined.
  * Used by the button-click route (Task 7) to validate an `optionId` against the
  * card's RECORDED `options[].id` set (M8 — the click sends an id, never label
@@ -122,20 +149,15 @@ export async function setMessageChosen(
  * writer) must NOT abort the whole thread export — markdown-as-source-of-truth
  * is wedge-critical, so one bad row degrades to `{}` (an empty line) rather
  * than throwing out of the serializer. Flagged Cluster-1 /code-review 2026-06-05.
+ *
+ * Cluster-5 /code-review fix: the tolerant parser now lives ONCE in
+ * `@folio/shared` (was byte-duplicated server↔web); this is a thin
+ * `Record<string, unknown>` re-typing for the server's existing callers. The
+ * shared version also excludes arrays (`typeof [] === 'object'` trap) — closing
+ * the latent `setMessageChosen` array-mutation path.
  */
 export function parsePayload<T extends Record<string, unknown>>(payload: string | null): T {
-  if (!payload) return {} as T;
-  try {
-    const parsed = JSON.parse(payload);
-    // Cluster-5 /code-review fix: guard valid-JSON-but-non-object values
-    // ('42', '"hi"', 'null'). Without this, a `null`/primitive payload makes a
-    // downstream `p.tool`/`p.type` access throw out of serializeThreadMarkdown,
-    // aborting the WHOLE .md export (the wedge-critical surface this guard exists
-    // to protect). Mirrors the web parseMessagePayload tolerance exactly.
-    return parsed && typeof parsed === 'object' ? (parsed as T) : ({} as T);
-  } catch {
-    return {} as T;
-  }
+  return parseMessagePayload<T>(payload);
 }
 
 export async function serializeThreadMarkdown(

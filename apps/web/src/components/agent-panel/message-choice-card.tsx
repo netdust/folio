@@ -35,7 +35,16 @@ export function MessageChoiceCard({
   const p = parseMessagePayload<ChoiceCardPayload>(message.payload);
   const click = useButtonClick(conversationId);
 
-  const options = p.options ?? [];
+  // Cluster-5 /code-review fix (finding #10): the payload is tolerantly parsed
+  // (any field may be malformed), so validate the options shape rather than
+  // trusting it — keep only well-formed {id, label} entries. A corrupt options
+  // array (non-objects, missing id/label) renders no broken buttons.
+  const options = Array.isArray(p.options)
+    ? p.options.filter(
+        (o): o is ChoiceOption =>
+          !!o && typeof o === 'object' && typeof o.id === 'string' && typeof o.label === 'string',
+      )
+    : [];
   // Locked if the server recorded a choice OR a click is in flight/succeeded.
   const chosenId = p.chosen ?? (click.isSuccess ? click.variables?.optionId : undefined);
   const locked = chosenId !== undefined || click.isPending;

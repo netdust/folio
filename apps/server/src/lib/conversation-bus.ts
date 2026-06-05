@@ -19,9 +19,13 @@
  * enforced at the SSE route (owner-scoped 404), not in the bus.
  */
 
-import type { Message } from '../db/schema.ts';
+import type { SerializedMessage } from '../services/conversations.ts';
 
-type MessageHandler = (row: Message) => void;
+// The bus carries the WIRE shape (createdAt as unix-ms number), not the raw DB
+// `Message` (createdAt as Date) — Cluster-5 /code-review fix (finding #3): the
+// SSE route JSON.stringifies whatever the bus delivers, so the conversion to the
+// declared wire type must happen at publish, once, not per consumer.
+type MessageHandler = (row: SerializedMessage) => void;
 
 class ConversationBus {
   private subs = new Map<string, Set<MessageHandler>>();
@@ -43,8 +47,8 @@ class ConversationBus {
     };
   }
 
-  /** Deliver one appended message row to every live subscriber of its conversation. */
-  publish(conversationId: string, row: Message): void {
+  /** Deliver one wire-shaped message row to every live subscriber of its conversation. */
+  publish(conversationId: string, row: SerializedMessage): void {
     const set = this.subs.get(conversationId);
     if (!set) return;
     for (const cb of set) {

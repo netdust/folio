@@ -52,6 +52,11 @@ export {
 export { nextFires, validateCronShape, type CronShapeResult } from './cron.ts';
 export { type EventKind, KNOWN_EVENT_KINDS } from './events.ts';
 export {
+  ENTITY_TYPES,
+  type EntityType,
+  parseMessagePayload,
+} from './conversation-payload.ts';
+export {
   AUTHOR_KINDS,
   AUTHOR_REF_RE,
   type AuthorKind,

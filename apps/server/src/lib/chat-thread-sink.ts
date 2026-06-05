@@ -14,7 +14,7 @@
  */
 
 import type { DB } from '../db/client.ts';
-import { appendMessage } from '../services/conversations.ts';
+import { appendMessage, serializeMessage } from '../services/conversations.ts';
 import { conversationBus } from './conversation-bus.ts';
 
 /**
@@ -47,7 +47,7 @@ export function makeConversationSink(
   return {
     async text(body: string): Promise<void> {
       const row = await appendMessage(db, { conversationId, role: 'operator', kind: 'text', body, runId });
-      conversationBus.publish(conversationId, row);
+      conversationBus.publish(conversationId, serializeMessage(row));
     },
     async toolStep(step: { tool: string; summary: string; status: 'ok' | 'error' }): Promise<void> {
       const row = await appendMessage(db, {
@@ -57,7 +57,7 @@ export function makeConversationSink(
         payload: step,
         runId,
       });
-      conversationBus.publish(conversationId, row);
+      conversationBus.publish(conversationId, serializeMessage(row));
     },
     async component(payload: Record<string, unknown>): Promise<void> {
       const row = await appendMessage(db, {
@@ -67,7 +67,7 @@ export function makeConversationSink(
         payload,
         runId,
       });
-      conversationBus.publish(conversationId, row);
+      conversationBus.publish(conversationId, serializeMessage(row));
     },
   };
 }

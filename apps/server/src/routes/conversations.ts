@@ -25,8 +25,9 @@ import { streamSSE } from 'hono/streaming';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import { db } from '../db/client.ts';
-import { conversations, type Message } from '../db/schema.ts';
+import { conversations } from '../db/schema.ts';
 import { conversationBus } from '../lib/conversation-bus.ts';
+import { runSseLoop } from '../lib/sse-loop.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
 import { runAgent as realRunAgent } from '../lib/runner.ts';
 import { type AuthContext, getUser, requireSessionUser } from '../middleware/auth.ts';
@@ -36,10 +37,12 @@ import {
   appendMessage,
   createConversation,
   getMessage,
-  getThread,
+  getThreadSerialized,
   parsePayload,
+  serializeMessage,
   serializeThreadMarkdown,
   setMessageChosen,
+  type SerializedMessage,
 } from '../services/conversations.ts';
 import { confirmPendingOp, rejectPendingOp } from '../services/pending-ops.ts';
 
@@ -124,12 +127,17 @@ async function startTurn(
   // a try; release on throw.
   try {
     // The winner appends the user prompt (now race-free — it holds the slot).
-    await appendMessage(db, {
+    // Cluster-5 /code-review fix (finding #2): publish the user row to the bus
+    // too, so the live-tail carries BOTH sides of the thread. Without this only
+    // operator rows (published by the sink) ride the channel, and a second
+    // subscribed tab/device would see operator replies with no preceding prompt.
+    const userRow = await appendMessage(db, {
       conversationId: conv.id,
       role: 'user',
       kind: 'text',
       body: userText,
     });
+    conversationBus.publish(conv.id, serializeMessage(userRow));
     await createConversationRun(db, {
       conversation: { id: conv.id, createdBy: conv.createdBy },
       runId: newRunId,
@@ -300,54 +308,16 @@ conversationsRoute.get('/:id/stream', async (c) => {
   // Owner-gate FIRST — 404 for a foreign user before we ever subscribe.
   const conv = await loadOwnedConversation(user.id, id);
 
-  return streamSSE(c, async (stream) => {
-    // Event-driven delivery (mirrors routes/events.ts): a queue + a waiter the
-    // bus handler resolves on push and the abort handler resolves on abort, so
-    // an idle stream does zero polling work.
-    const queue: Message[] = [];
-    let wake!: () => void;
-    let waiter = new Promise<void>((r) => {
-      wake = r;
-    });
-    const renewWaiter = () => {
-      waiter = new Promise<void>((r) => {
-        wake = r;
-      });
-    };
-
-    const unsub = conversationBus.subscribe(conv.id, (row) => {
-      queue.push(row);
-      wake();
-    });
-
-    let aborted = false;
-    stream.onAbort(() => {
-      aborted = true;
-      wake();
-    });
-
-    // Heartbeat every 30s; `ping` frames carry empty data so the client ignores
-    // them via the default EventSource onmessage handler.
-    const heartbeat = setInterval(() => {
-      void stream.writeSSE({ event: 'ping', data: '' });
-    }, 30_000);
-
-    try {
-      while (!aborted && !stream.aborted) {
-        while (queue.length > 0) {
-          const row = queue.shift()!;
-          await stream.writeSSE({ id: row.id, event: 'message', data: JSON.stringify(row) });
-          if (stream.aborted) break;
-        }
-        if (aborted || stream.aborted) break;
-        await waiter;
-        renewWaiter();
-      }
-    } finally {
-      clearInterval(heartbeat);
-      unsub();
-    }
-  });
+  return streamSSE(c, (stream) =>
+    // Shared event-driven loop (lib/sse-loop.ts) — same plumbing as routes/events.ts.
+    // Each row is published already wire-shaped (SerializedMessage) by the sink /
+    // the user-message publish; one fixed `message` frame per row.
+    runSseLoop<SerializedMessage>(
+      stream,
+      (onRow) => conversationBus.subscribe(conv.id, onRow),
+      (row) => ({ id: row.id, event: 'message', data: JSON.stringify(row) }),
+    ),
+  );
 });
 
 // GET /conversations/:id  AND  GET /conversations/:id.md
@@ -372,7 +342,7 @@ conversationsRoute.get('/:id', async (c) => {
     return c.body(md);
   }
 
-  const messages = await getThread(db, conv.id);
+  const messages = await getThreadSerialized(db, conv.id);
   return jsonOk(c, {
     id: conv.id,
     title: conv.title,

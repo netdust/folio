@@ -14,6 +14,7 @@
  */
 
 import { z } from 'zod';
+import { ENTITY_TYPES } from '@folio/shared';
 
 /**
  * Extensible-but-CLOSED entity reference (NOT a free-form route — a model-
@@ -21,17 +22,12 @@ import { z } from 'zod';
  * closed `ui` tool avoids). `entityType` is an enum the FRONTEND resolves to a
  * route (frontend owns routing, not the model); adding a new entity type later
  * widens the enum on both sides — no schema-shape churn, no raw routes. `wslug`
- * scopes the reference.
+ * scopes the reference. The enum is the SINGLE shared source in
+ * `@folio/shared` (Cluster-5 /code-review fix — was hand-mirrored web↔server),
+ * so the web `entityRoute` switch's exhaustiveness guard fires at compile time
+ * when this widens. Re-exported for existing server importers.
  */
-export const ENTITY_TYPES = [
-  'document',
-  'project',
-  'view',
-  'work_item',
-  'agent',
-  'run',
-  'conversation',
-] as const;
+export { ENTITY_TYPES };
 
 export const linkPanelSchema = z
   .object({

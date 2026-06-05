@@ -1,16 +1,11 @@
 /**
  * Parse a message's `payload` (a JSON string for tool_step/component rows, null
- * for text). Tolerant by design — a malformed payload returns `{}` rather than
- * throwing, so one bad row never breaks the whole thread render (markdown-as-
- * source-of-truth: a thread always renders). Mirrors the server-side
- * `parsePayload` tolerance in services/conversations.ts.
+ * for text). Tolerant by design — a malformed / valid-JSON-but-non-object value
+ * degrades to `{}` rather than throwing, so one bad row never breaks the thread
+ * render (markdown-as-source-of-truth: a thread always renders).
+ *
+ * Cluster-5 /code-review fix: the parser is the SINGLE shared implementation in
+ * `@folio/shared` (was byte-duplicated with the server's `parsePayload`). This
+ * module re-exports it so existing renderer imports stay stable.
  */
-export function parseMessagePayload<T extends object>(payload: string | null): T {
-  if (!payload) return {} as T;
-  try {
-    const parsed = JSON.parse(payload);
-    return (parsed && typeof parsed === 'object' ? parsed : {}) as T;
-  } catch {
-    return {} as T;
-  }
-}
+export { parseMessagePayload } from '@folio/shared';
