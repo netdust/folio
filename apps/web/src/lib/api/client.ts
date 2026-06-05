@@ -53,4 +53,7 @@ export const client = {
   patch: <T>(path: string, body?: unknown) => request<T>('PATCH', path, body),
   patchMd: <T>(path: string, md: string) => request<T>('PATCH', path, md, 'text/markdown'),
   delete: <T = void>(path: string) => request<T>('DELETE', path),
+  // DELETE with a JSON body — some routes (e.g. /instance/access revoke) identify
+  // the target in the body rather than the path.
+  deleteWithBody: <T = void>(path: string, body: unknown) => request<T>('DELETE', path, body),
 };
