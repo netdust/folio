@@ -24,7 +24,7 @@
  * re-proposed, never silently executed with drifted params).
  */
 
-import { and, eq, lt } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import type { DB } from '../db/client.ts';
 import { type PendingOp, pendingOps } from '../db/schema.ts';
 
@@ -197,15 +197,4 @@ export async function rejectPendingOp(db: DBOrTx, id: string, callerId: string):
         eq(pendingOps.status, 'pending'),
       ),
     );
-}
-
-/** Sweep stale pending ops to 'expired' (defense-in-depth; the match already
- *  excludes expired rows). Returns the count expired. */
-export async function expireStale(db: DBOrTx): Promise<number> {
-  const expired = await db
-    .update(pendingOps)
-    .set({ status: 'expired' })
-    .where(and(eq(pendingOps.status, 'pending'), lt(pendingOps.expiresAt, new Date())))
-    .returning({ id: pendingOps.id });
-  return expired.length;
 }

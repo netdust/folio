@@ -5,7 +5,7 @@ import { migrate } from 'drizzle-orm/bun-sqlite/migrator';
 import { resolve } from 'node:path';
 import * as schema from '../db/schema.ts';
 import { appendMessage, createConversation, getThread } from '../services/conversations.ts';
-import { buildConversationMessages } from './chat-thread-source.ts';
+import { buildConversationMessages, CONVERSATION_HISTORY_WINDOW } from './chat-thread-source.ts';
 import { makeConversationSink } from './chat-thread-sink.ts';
 
 function makeDb() {
@@ -48,6 +48,26 @@ describe('chat adapter', () => {
     );
     // the chosen option appears so the operator sees the user's pick on resume
     expect(msgs.some((m) => String(m.content).includes('leads'))).toBe(true);
+  });
+
+  test('source windows to the last N rows (bounded BYOK replay, Cluster-6 perf fix)', async () => {
+    const db = makeDb();
+    const c = await createConversation(db, {
+      createdBy: 'u1',
+      operatorAgentId: 'op1',
+      title: 'Untitled',
+    });
+    // Write more rows than the window; each body is uniquely identifiable.
+    const N = CONVERSATION_HISTORY_WINDOW + 10;
+    for (let i = 0; i < N; i++) {
+      await appendMessage(db, { conversationId: c.id, role: 'user', kind: 'text', body: `msg-${i}` });
+    }
+    const msgs = await buildConversationMessages(db, c.id);
+    // Bounded: never more than the window, regardless of thread length.
+    expect(msgs.length).toBeLessThanOrEqual(CONVERSATION_HISTORY_WINDOW);
+    // The OLDEST rows are dropped, the most RECENT kept (tail window).
+    expect(msgs.some((m) => String(m.content) === 'msg-0')).toBe(false);
+    expect(msgs.some((m) => String(m.content) === `msg-${N - 1}`)).toBe(true);
   });
 
   test('sink writes a tool_step message row', async () => {

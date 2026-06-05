@@ -24,17 +24,15 @@
  * names an entity by type, and the FRONTEND owns the type→route resolution.
  * Widening this enum is the ONLY way to add a navigable entity type, and it
  * widens both sides at once (server Zod + web resolver) off this single list.
+ *
+ * Only the types with a REACHABLE destination are listed (Cluster-6 review): a
+ * document/work_item opens the project slideover (?doc=), an agent/trigger opens
+ * the workspace slideover (?wdoc=). project/view/run/conversation were dropped —
+ * they had no resolvable destination and degraded to the workspace root, i.e.
+ * non-functional enum surface. The web resolver's exhaustiveness `never` guard
+ * makes re-adding one trivial once it has a real destination.
  */
-export const ENTITY_TYPES = [
-  'document',
-  'project',
-  'view',
-  'work_item',
-  'agent',
-  'trigger',
-  'run',
-  'conversation',
-] as const;
+export const ENTITY_TYPES = ['document', 'work_item', 'agent', 'trigger'] as const;
 
 export type EntityType = (typeof ENTITY_TYPES)[number];
 

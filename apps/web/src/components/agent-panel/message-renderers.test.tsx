@@ -110,21 +110,6 @@ describe('entityRoute', () => {
       });
     }
   });
-  // run/conversation have no by-id slideover yet → degrade to the workspace root.
-  test('run/conversation degrade to the workspace root (no slideover yet)', () => {
-    for (const entityType of ['run', 'conversation'] as const) {
-      expect(entityRoute({ entityType, entityId: 'x', wslug: 'acme' })).toEqual({
-        to: '/w/$wslug',
-        params: { wslug: 'acme' },
-      });
-    }
-  });
-  test('project/view targets degrade to the workspace root', () => {
-    expect(entityRoute({ entityType: 'project', entityId: 'p', wslug: 'acme' })).toEqual({
-      to: '/w/$wslug',
-      params: { wslug: 'acme' },
-    });
-  });
   test('agent + trigger targets route to the agents slideover (the resolvable types)', () => {
     expect(entityRoute({ entityType: 'agent', entityId: 'op', wslug: 'acme' })).toEqual({
       to: '/w/$wslug/agents',

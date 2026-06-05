@@ -51,16 +51,15 @@
 import { nanoid } from 'nanoid';
 import { eq } from 'drizzle-orm';
 import { type DB } from '../db/client.ts';
-import { type ApiToken, projects } from '../db/schema.ts';
+import { type ApiToken } from '../db/schema.ts';
 import {
   callerProjectsFor,
   intersectAgentProjects,
 } from '../lib/agent-projects.ts';
 import { roleToScopes, toolsToScopes } from '../lib/agent-schema.ts';
 import {
-  canManageWorkspace,
+  projectIdsVisibleInWorkspace,
   userRole,
-  visibleProjectIds,
   visibleWorkspaceIds,
 } from '../lib/access.ts';
 import { OPERATOR_SLUG } from '../lib/operator.ts';
@@ -159,27 +158,16 @@ export async function createConversationRun(
   // non-owner → the flat union of visible projects across visible workspaces.
   let callerProjectIds: string[] = [];
   if (callerRole !== 'owner') {
+    // Instance-wide union of the ws-grant-aware ceiling across every visible
+    // workspace (the operator is instance-reach; a conversation isn't ws-pinned).
+    // The per-workspace decision is the shared convergence helper
+    // (projectIdsVisibleInWorkspace) — same logic the agent-run ceiling uses, so
+    // the two can't drift (Cluster-6 architecture review).
     const wsIds = await visibleWorkspaceIds(db, callerUserId);
     const projectIdSet = new Set<string>();
     for (const wsId of wsIds) {
-      // Cluster-3 /code-review fix: mirror the canonical agent-runs.ts ceiling.
-      // A WORKSPACE-grant holder (canManageWorkspace) can SEE every project in
-      // that workspace, so their ceiling there is ALL ws projects — NOT just their
-      // direct project_access grants. visibleProjectIds returns only direct grants
-      // (its own header warns: call it only AFTER canManageWorkspace is false,
-      // else a ws-grant holder wrongly narrows to their direct grants, which may
-      // be none). Without this branch, a whole-workspace invitee with no per-project
-      // grants got [] = deny-all and their operator could write NOWHERE.
-      if (await canManageWorkspace(db, callerUserId, wsId, callerRole)) {
-        const wsProjects = await db.query.projects.findMany({
-          where: eq(projects.workspaceId, wsId),
-          columns: { id: true },
-        });
-        for (const p of wsProjects) projectIdSet.add(p.id);
-      } else {
-        for (const pid of await visibleProjectIds(db, callerUserId, wsId)) {
-          projectIdSet.add(pid);
-        }
+      for (const pid of await projectIdsVisibleInWorkspace(db, callerUserId, wsId, callerRole)) {
+        projectIdSet.add(pid);
       }
     }
     callerProjectIds = [...projectIdSet];

@@ -12,6 +12,15 @@ test('ENTITY_TYPES includes every navigable type incl. trigger', () => {
   expect(ENTITY_TYPES).toContain('work_item');
 });
 
+test('ENTITY_TYPES excludes types with no resolvable destination', () => {
+  // project/view/run/conversation were dropped (Cluster-6 review) — they had no
+  // reachable destination and degraded to the workspace root. Lock the trim so
+  // they aren't re-added without a real route.
+  for (const dropped of ['project', 'view', 'run', 'conversation']) {
+    expect(ENTITY_TYPES as readonly string[]).not.toContain(dropped);
+  }
+});
+
 // parseMessagePayload — tolerant: degrade to {} on every non-object input.
 test('parseMessagePayload returns {} for null/empty', () => {
   expect(parseMessagePayload(null)).toEqual({});

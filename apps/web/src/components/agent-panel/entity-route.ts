@@ -57,14 +57,6 @@ export function entityRoute(target: EntityTarget): NavigateOptions {
     case 'trigger':
       // The types the workspace ?wdoc= slideover resolves (by slug).
       return { to: '/w/$wslug/agents', params: { wslug }, search: { wdoc: entityId } };
-    case 'run':
-    case 'conversation':
-    case 'project':
-    case 'view':
-      // No by-id/by-slug surface from the target alone → land on the workspace
-      // root (reachable from anywhere); the user picks from the rail. Degrade,
-      // never 404.
-      return { to: '/w/$wslug', params: { wslug } };
     default: {
       // Exhaustiveness guard — a new EntityType must be handled above. Fires at
       // COMPILE time because EntityType is the shared single source.

@@ -22,7 +22,6 @@ import { nanoid } from 'nanoid';
 import { db, type DB } from '../db/client.ts';
 import {
   documents,
-  projects,
   statuses,
   tables,
   views,
@@ -35,7 +34,7 @@ import {
 } from '../db/schema.ts';
 import { roleToScopes } from '../lib/agent-schema.ts';
 import { callerProjectsFor } from '../lib/agent-projects.ts';
-import { canManageWorkspace, canSeeWorkspace, userRole, visibleProjectIds } from '../lib/access.ts';
+import { canSeeWorkspace, projectIdsVisibleInWorkspace, userRole } from '../lib/access.ts';
 
 // Drizzle tx and DB share the same query API. Mirrored verbatim from
 // `services/comments.ts` so read helpers can be called from inside a tx.
@@ -217,18 +216,13 @@ export async function createRun(
     // canSeeProject loop). A ws-grant holder (canManageWorkspace) sees every ws
     // project, so their ceiling = all ws project ids (old behavior preserved). A
     // project-only invitee is clamped to their direct grants (visibleProjectIds).
-    let memberProjectIds: string[] = [];
-    if (callerRole !== 'owner') {
-      if (await canManageWorkspace(db, actor.id, workspace.id)) {
-        const wsProjects = await db.query.projects.findMany({
-          where: eq(projects.workspaceId, workspace.id),
-          columns: { id: true },
-        });
-        memberProjectIds = wsProjects.map((p) => p.id);
-      } else {
-        memberProjectIds = [...(await visibleProjectIds(db, actor.id, workspace.id))];
-      }
-    }
+    // CR-10: the ws-grant-aware ceiling within this workspace — the shared
+    // convergence helper (same logic the operator conversation-run ceiling uses,
+    // so they can't drift, Cluster-6 architecture review).
+    const memberProjectIds =
+      callerRole === 'owner'
+        ? []
+        : await projectIdsVisibleInWorkspace(db, actor.id, workspace.id);
     callerProjectIds = callerProjectsFor({ role: callerRole, projectIds: memberProjectIds });
   }
 

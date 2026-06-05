@@ -1,5 +1,5 @@
 import { useNavigate } from '@tanstack/react-router';
-import { Bot, FileText, FolderKanban, ListChecks, MessageSquare, Play, Table2, Zap } from 'lucide-react';
+import { Bot, FileText, ListChecks, Zap } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { ENTITY_TYPES, type EntityType } from '@folio/shared';
 import type { ConversationMessage } from '../../lib/api/conversations.ts';
@@ -15,13 +15,9 @@ interface LinkPanelPayload {
 
 const ENTITY_ICON: Record<EntityType, LucideIcon> = {
   document: FileText,
-  project: FolderKanban,
-  view: Table2,
   work_item: ListChecks,
   agent: Bot,
   trigger: Zap,
-  run: Play,
-  conversation: MessageSquare,
 };
 
 // The shared closed enum as a runtime Set — the renderer rejects a target whose

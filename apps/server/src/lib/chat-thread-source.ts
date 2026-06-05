@@ -52,6 +52,17 @@ function summarizeComponent(payload: string | null): string {
 }
 
 /**
+ * The most-recent N message rows replayed into the model each turn. The thread
+ * is the model's only memory for a conversation run (the walled-off path has no
+ * agent_run token ceiling), so an UNBOUNDED replay would grow BYOK input tokens
+ * (the customer pays per turn) and turn latency linearly with chat length
+ * (Cluster-6 perf review). A tail window bounds both: the operator is turn-based
+ * and the recent turns carry the working context; older history is dropped.
+ * Generous enough that normal "set up a project" sessions replay in full.
+ */
+export const CONVERSATION_HISTORY_WINDOW = 60;
+
+/**
  * Build the runner's provider `Message[]` from a conversation thread. Mirrors
  * the shape `buildInitialMessages` returns so `runLoop` consumes it unchanged.
  *
@@ -60,13 +71,20 @@ function summarizeComponent(payload: string | null): string {
  *   - `tool_step`                 → `{ role:'assistant', content: '<ran tool: …>' }`
  *   - `component`                 → `{ role:'assistant', content: '<asked: … (user chose: …)>' }`
  *
- * Empty bodies are dropped (a provider rejects an empty-content message).
+ * Empty bodies are dropped (a provider rejects an empty-content message). Only
+ * the last `CONVERSATION_HISTORY_WINDOW` rows are replayed (bounded cost).
  */
 export async function buildConversationMessages(
   db: DB,
   conversationId: string,
 ): Promise<Message[]> {
-  const rows: MessageRow[] = await getThread(db, conversationId);
+  const all: MessageRow[] = await getThread(db, conversationId);
+  // Tail window: keep the most recent rows (getThread is seq-ascending, so the
+  // window is the END of the array — preserving chronological order).
+  const rows =
+    all.length > CONVERSATION_HISTORY_WINDOW
+      ? all.slice(all.length - CONVERSATION_HISTORY_WINDOW)
+      : all;
   const out: Message[] = [];
   for (const m of rows) {
     if (m.kind === 'text') {
