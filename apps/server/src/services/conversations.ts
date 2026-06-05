@@ -126,7 +126,13 @@ export async function setMessageChosen(
 export function parsePayload<T extends Record<string, unknown>>(payload: string | null): T {
   if (!payload) return {} as T;
   try {
-    return JSON.parse(payload) as T;
+    const parsed = JSON.parse(payload);
+    // Cluster-5 /code-review fix: guard valid-JSON-but-non-object values
+    // ('42', '"hi"', 'null'). Without this, a `null`/primitive payload makes a
+    // downstream `p.tool`/`p.type` access throw out of serializeThreadMarkdown,
+    // aborting the WHOLE .md export (the wedge-critical surface this guard exists
+    // to protect). Mirrors the web parseMessagePayload tolerance exactly.
+    return parsed && typeof parsed === 'object' ? (parsed as T) : ({} as T);
   } catch {
     return {} as T;
   }

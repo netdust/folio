@@ -32,7 +32,12 @@ export function MessageLinkPanel({ message }: { message: ConversationMessage }) 
   const navigate = useNavigate();
   const p = parseMessagePayload<LinkPanelPayload>(message.payload);
   const target = p.target;
-  if (!target) return null;
+  // Cluster-5 /code-review fix: guard the COMPLETENESS of target, not just its
+  // presence. A truthy-but-incomplete target (missing entityType/entityId/wslug —
+  // a malformed/corrupt row) would otherwise navigate to `/w/undefined`. The
+  // tolerant-render contract is "one bad row never breaks the thread", so a
+  // malformed link_panel degrades to no card rather than a broken navigation.
+  if (!target || !target.entityType || !target.entityId || !target.wslug) return null;
 
   const Icon = ENTITY_ICON[target.entityType] ?? FileText;
 

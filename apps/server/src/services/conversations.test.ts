@@ -141,4 +141,34 @@ describe('conversation service', () => {
     expect(md).toContain('before');
     expect(md).toContain('after');
   });
+
+  // Cluster-5 /code-review fix: a valid-JSON-but-NON-OBJECT payload ('null', '42')
+  // must also degrade to {} — not throw. Before the guard, JSON.parse('null') → null,
+  // then `p.type` deref threw out of the whole serializer (one bad row breaks the
+  // wedge-critical .md export). Bites: against `JSON.parse(payload) as T` (no guard)
+  // the 'null' component row throws and this test fails.
+  test('serializeThreadMarkdown tolerates a valid-JSON-but-null payload row (fix)', async () => {
+    const db = makeDb();
+    const c = await createConversation(db, {
+      createdBy: 'u1',
+      operatorAgentId: 'op1',
+      title: 'Untitled',
+    });
+    await appendMessage(db, { conversationId: c.id, role: 'user', kind: 'text', body: 'before' });
+    db.insert(messages)
+      .values({
+        id: crypto.randomUUID(),
+        conversationId: c.id,
+        seq: 2,
+        role: 'operator',
+        kind: 'component',
+        body: '',
+        payload: 'null', // valid JSON, but not an object
+      })
+      .run();
+    await appendMessage(db, { conversationId: c.id, role: 'operator', kind: 'text', body: 'after' });
+    const md = await serializeThreadMarkdown(db, c.id);
+    expect(md).toContain('before');
+    expect(md).toContain('after');
+  });
 });

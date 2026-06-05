@@ -75,13 +75,27 @@ export function mergeMessages(
 export function useConversationStream(
   id: string | undefined,
   onRow: (row: ConversationMessage) => void,
+  onReconnect?: () => void,
 ): void {
   const onRowRef = useRef(onRow);
   onRowRef.current = onRow;
+  const onReconnectRef = useRef(onReconnect);
+  onReconnectRef.current = onReconnect;
 
   useEffect(() => {
     if (!id) return;
     const es = new EventSource(`/api/v1/conversations/${id}/stream`, { withCredentials: true });
+    // Cluster-5 /code-review fix: the channel has NO replay (deliberate — the
+    // thread seeds from REST). So a reconnect (laptop sleep, proxy timeout, the
+    // ping gap) can miss rows written during the dead window. EventSource fires
+    // `open` on EVERY (re)connect; the FIRST open is the initial connect, every
+    // SUBSEQUENT open is a reconnect → backfill by refetching the seed. Without
+    // this the live-tail silently holes on reconnect.
+    let opened = false;
+    const onOpen = () => {
+      if (opened) onReconnectRef.current?.();
+      opened = true;
+    };
     const handle = (e: MessageEvent) => {
       if (!e.data) return; // ping heartbeats carry empty data
       try {
@@ -90,8 +104,10 @@ export function useConversationStream(
         // Malformed frame — ignore; the seed/refetch reconciles.
       }
     };
+    es.addEventListener('open', onOpen);
     es.addEventListener('message', handle);
     return () => {
+      es.removeEventListener('open', onOpen);
       es.removeEventListener('message', handle);
       es.close();
     };
@@ -118,13 +134,22 @@ export function useConversation(id: string | undefined): {
   // Live deltas arriving after mount, keyed by message id (live wins on merge).
   const [live, setLive] = useState<Map<string, ConversationMessage>>(new Map());
 
-  useConversationStream(id, (row) => {
-    setLive((prev) => {
-      const next = new Map(prev);
-      next.set(row.id, row);
-      return next;
-    });
-  });
+  const queryClient = useQueryClient();
+  useConversationStream(
+    id,
+    (row) => {
+      setLive((prev) => {
+        const next = new Map(prev);
+        next.set(row.id, row);
+        return next;
+      });
+    },
+    // On reconnect, refetch the seed to backfill any rows missed during the gap
+    // (the channel has no replay). Cheap; closes the no-replay live-tail's only hole.
+    () => {
+      if (id) void queryClient.invalidateQueries({ queryKey: conversationsKeys.detail(id) });
+    },
+  );
 
   const messages = useMemo(
     () => mergeMessages(query.data?.messages ?? [], live),

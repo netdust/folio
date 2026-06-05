@@ -137,6 +137,28 @@ describe('MessageLinkPanel', () => {
       entityRoute({ entityType: 'document', entityId: 'onboard-acme', wslug: 'acme' }),
     );
   });
+
+  // Cluster-5 /code-review fix: a malformed/incomplete target (here: missing
+  // `wslug`) must NOT render a clickable card that would navigate to /w/undefined.
+  // The tolerant-render contract — one bad row degrades to nothing, never breaks
+  // the thread or navigates broken. Bites: against the old `if (!target) return`
+  // this renders a card whose click navigates with wslug:undefined.
+  test('a link_panel with an incomplete target renders nothing (no broken nav)', () => {
+    const { container } = render(
+      <MessageLinkPanel
+        message={msg({
+          kind: 'component',
+          payload: JSON.stringify({
+            type: 'link_panel',
+            target: { entityType: 'document', entityId: 'x' }, // no wslug
+            title: 'Broken',
+          }),
+        })}
+      />,
+    );
+    expect(container).toBeEmptyDOMElement();
+    expect(screen.queryByText('Broken')).toBeNull();
+  });
 });
 
 // ---------------------------------------------------------------------------
