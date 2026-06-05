@@ -34,6 +34,7 @@ import {
   type Workspace,
   aiKeys,
   apiTokens,
+  conversations,
   documents,
   projects as projectsTable,
   workspaces,
@@ -60,6 +61,12 @@ import {
 import { executeTool } from './agent-tools.ts';
 import type { ConversationSink } from './chat-thread-sink.ts';
 import { buildConversationMessages } from './chat-thread-source.ts';
+import { makeConversationSink } from './chat-thread-sink.ts';
+import {
+  OPERATOR_MAX_TOKENS,
+  takePendingConversationRun,
+} from '../services/conversation-runs.ts';
+import { getOperatorDefinition, getOperatorDocument } from './operator.ts';
 import { type Message, type ToolDef, getProvider } from './ai/provider.ts';
 import { sanitizeProviderError } from './ai/sanitize-error.ts';
 import { newApiToken } from './auth.ts';
@@ -234,7 +241,11 @@ export async function runAgent(args: { runId: string }): Promise<void> {
     providerLabel = PROVIDER_LABELS[ctx.fm.provider as ProviderName] ?? 'Claude Code';
 
     // --- pre-flight checks (cheapest first); each returns true if it BLOCKED.
-    if (await preflight(ctx)) return;
+    // Operator cockpit chat (Task 5) — a conversation run has NO `agent_run`
+    // document, so the document-keyed preflight (depth/rate/idempotency, all
+    // querying agent_run rows + getActiveRun({parentId})) does not apply. Run the
+    // minimal conversation preflight (key presence) instead.
+    if (ctx.sink ? await conversationPreflight(ctx) : await preflight(ctx)) return;
 
     // --- stream consumption (outer round-loop). buildInitialMessages is
     // called HERE (not inside runLoop) so runLoop is reusable by
@@ -250,7 +261,16 @@ export async function runAgent(args: { runId: string }): Promise<void> {
       const messages = ctx.sink
         ? await buildConversationMessages(db, requireConversationId(ctx))
         : await buildInitialMessages(ctx);
-      await runLoop(ctx, messages);
+      try {
+        await runLoop(ctx, messages);
+      } finally {
+        // Operator cockpit chat (Task 5) — release the conversation's
+        // single-active-turn slot (M14 CAS) on EVERY terminal path (success,
+        // fail, throw, budget-block) so the conversation isn't wedged. The slot
+        // (`active_run_id`), not an `agent_run` status, is the conversation run's
+        // liveness record. No-op for document runs (no conversationId).
+        if (ctx.conversationId) await clearConversationSlot(ctx.conversationId, runId);
+      }
     }
   } catch (err) {
     // Top-level containment. Any unhandled throw → fail the run with a
@@ -258,6 +278,21 @@ export async function runAgent(args: { runId: string }): Promise<void> {
     // already terminal), swallow + return. Never propagate to the poller.
     await failRunLastResort(runId, providerLabel, err);
   }
+}
+
+/**
+ * Operator cockpit chat (Task 5) — release the conversation's single-active-turn
+ * slot, but ONLY if it still points at THIS run (compare-and-clear). The
+ * compare guards against a stale clear racing a newer turn that has already
+ * acquired the slot (it never can under the CAS, but the conditional clear keeps
+ * the operation idempotent + safe if recovery and a new turn ever overlap). Plain
+ * `db` update (invariant 5 deliberate exception — conversation state, no events).
+ */
+async function clearConversationSlot(conversationId: string, runId: string): Promise<void> {
+  await db
+    .update(conversations)
+    .set({ activeRunId: null })
+    .where(and(eq(conversations.id, conversationId), eq(conversations.activeRunId, runId)));
 }
 
 /**
@@ -355,6 +390,16 @@ export async function runAgentResume(args: { runId: string }): Promise<void> {
 // Exported for the delegation fold regression tests (runner.test.ts asserts
 // ctx.token.projectIds is caller-narrowed). Not part of the public runner API.
 export async function loadContext(runId: string): Promise<RunContext | null> {
+  // Operator cockpit chat (Task 5) — the conversation-run branch, checked BEFORE
+  // the documents lookup. A conversation run has NO `agent_run` document; its
+  // context was registered by `createConversationRun` and is read (+ consumed)
+  // out-of-band from the pending registry. This SKIPS the
+  // parent/project/token-row lookups entirely (plan-correction 2026-06-05).
+  const convPending = takePendingConversationRun(runId);
+  if (convPending) {
+    return loadConversationContext(runId, convPending);
+  }
+
   const run = await db.query.documents.findFirst({
     where: and(eq(documents.id, runId), eq(documents.type, 'agent_run')),
   });
@@ -494,6 +539,104 @@ export async function loadContext(runId: string): Promise<RunContext | null> {
     // Phase C C3 — fired-path marker, read from the run fm. Default false
     // (attended) for runs created before C3 or launched by a human.
     unattended: fm.unattended === true,
+  };
+}
+
+/**
+ * Operator cockpit chat (Task 5) — build a `RunContext` for a conversation run
+ * from its pending-registry entry, WITHOUT any documents/parent/project/token-row
+ * lookups. A conversation run is walled off from the `agent_run`/documents space
+ * (invariant 10), so:
+ *   - `run` / `parent` / `workspace` / `project` are SYNTHETIC sentinels. They
+ *     are never read on the conversation path: `postAgentComment` + `wasCancelled`
+ *     short-circuit on `ctx.sink`, the runner skips `preflight` (a document-row
+ *     check) for conversation runs, and the run-document lifecycle helpers
+ *     (`transitionRun` / `incrementTokens` / `setRunBody`) are likewise guarded
+ *     on `ctx.sink` (they no-op — the conversation `active_run_id` slot, not an
+ *     `agent_run` status, tracks liveness). The sentinels exist only to satisfy
+ *     the non-null `RunContext` shape without widening the type for one branch.
+ *   - `token` is the EPHEMERAL operator token from the registry (operator ∩
+ *     caller). `callerScopes` equals `token.scopes` so the `executeTool`
+ *     double-membership check holds (M1/M2).
+ *   - `agent` is the operator's synthetic document; `agentFm` carries its tools
+ *     so `buildToolDefs` exposes exactly the operator's whitelist.
+ *   - `sink` + `conversationId` route output to the conversation thread; there is
+ *     NO `parent`, so the document-thread comment path is never taken.
+ *   - `unattended` is false — a human is present (the cockpit is interactive).
+ */
+async function loadConversationContext(
+  runId: string,
+  convPending: import('../services/conversation-runs.ts').PendingConversationRun,
+): Promise<RunContext> {
+  const def = getOperatorDefinition();
+  const agent = getOperatorDocument();
+  const agentFm = agent.frontmatter as Record<string, unknown>;
+  const startedAt = new Date().toISOString();
+
+  // Synthetic run frontmatter — only the provider-loop fields are read by
+  // runLoop (provider/model/system_prompt/max_tokens/started_at); the rest carry
+  // the caller snapshot for consistency + debugging. NOT persisted, NOT
+  // schema-validated against the agent_run shape (this is not an agent_run).
+  const fm = {
+    assignee: `agent:${def.slug}`,
+    status: 'running' as const,
+    agent_slug: def.slug,
+    provider: def.provider,
+    model: def.model,
+    ai_key_label: 'default',
+    system_prompt: def.prompt,
+    max_tokens: OPERATOR_MAX_TOKENS,
+    tokens_in: 0,
+    tokens_out: 0,
+    started_at: startedAt,
+    caller_scopes: convPending.callerScopes,
+    caller_project_ids: convPending.token.projectIds ?? null,
+  } as unknown as AgentRunFrontmatter;
+
+  // Synthetic non-null sentinels for the RunContext shape (never dereferenced on
+  // the sink path — see the helper header). `run.id` is the conversation run id
+  // so any incidental id-keyed write (guarded no-op for conversation runs) is at
+  // least self-consistent.
+  const run = { ...agent, id: runId, type: 'agent_run' } as Document;
+  const parent = agent;
+  const workspace = { id: '', slug: '', name: '' } as unknown as Workspace;
+  const project = { id: '', workspaceId: '', slug: '', name: '' } as unknown as Project;
+
+  // AI key resolution — same (provider, label) instance-credential path as a
+  // document run (B6 reversal). Absent key is a pre-flight failure (no_ai_key).
+  const keyRow = await db.query.aiKeys.findFirst({
+    where: and(eq(aiKeys.provider, def.provider as ProviderName), eq(aiKeys.label, 'default')),
+  });
+  const apiKey = keyRow ? decryptSecret(keyRow.encryptedKey) : '';
+  const baseUrl = keyRow?.baseUrl ?? undefined;
+
+  return {
+    run,
+    fm,
+    // `parentId` is non-null on the type; a conversation run has no parent, so
+    // it points at the synthetic agent doc id. Never used (no document-thread
+    // helper is reached on the sink path).
+    parentId: parent.id,
+    parent,
+    agent,
+    agentFm,
+    // The operator's definitional skills are loaded the same way a document run
+    // loads them — by frontmatter.skills against instance_skills.
+    agentSkills: (await loadAgentDefinition(db, agent)).skills,
+    workspace,
+    project,
+    token: convPending.token,
+    actor: `agent:${def.slug}`,
+    // FK-valid actor for any incidental provenance write — the conversation owner.
+    transitionActor: convPending.callerUserId,
+    authorContext: { type: 'agent', agentSlug: def.slug, agentId: agent.id },
+    apiKey,
+    baseUrl,
+    callerScopes: convPending.callerScopes,
+    // A human is present in the cockpit — never the unattended floor.
+    unattended: false,
+    sink: makeConversationSink(db, convPending.conversationId, runId),
+    conversationId: convPending.conversationId,
   };
 }
 
@@ -682,6 +825,43 @@ async function preflight(ctx: RunContext, excludeRunId?: string): Promise<boolea
   return false;
 }
 
+/**
+ * Operator cockpit chat (Task 5) — the minimal preflight for a conversation run.
+ * A conversation run has no `agent_run` row, so the document-keyed checks
+ * (depth/rate/idempotency, all querying agent_run rows) do not apply. The only
+ * gate that DOES apply is BYOK key presence. On a missing key, surface a turn
+ * text message (the human is watching the thread) and block — `failRun`'s
+ * agent_run transition is a no-op here, so the thread message IS the failure
+ * report. The conversation's `active_run_id` slot is cleared by the runAgent
+ * conversation finally (see runAgent) regardless of which path blocks.
+ */
+async function conversationPreflight(ctx: RunContext): Promise<boolean> {
+  if (!ctx.apiKey) {
+    if (ctx.sink) {
+      await ctx.sink.text(
+        'No AI key is configured for this provider. Ask an instance admin to add one in Settings → AI, then try again.',
+      );
+    }
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Operator cockpit chat (Task 5) — accumulate per-turn token usage in memory for
+ * a conversation run (no `agent_run` row to persist into). Returns the running
+ * post-increment totals so the budget cap check is identical to the document path.
+ */
+function trackConversationTokens(
+  acc: { in: number; out: number },
+  addIn: number,
+  addOut: number,
+): { tokens_in: number; tokens_out: number } {
+  acc.in += addIn;
+  acc.out += addOut;
+  return { tokens_in: acc.in, tokens_out: acc.out };
+}
+
 // ---------------------------------------------------------------------------
 // Message-history construction (mitigation 25 — literal text only)
 // ---------------------------------------------------------------------------
@@ -864,6 +1044,10 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
 
   const tools = buildToolDefs(ctx.agentFm);
 
+  // Operator cockpit chat (Task 5) — in-memory token accumulator for a
+  // conversation run (no agent_run row to persist into). Unused on document runs.
+  const conversationTokens = { in: 0, out: 0 };
+
   let round = 0;
   // Mitigation 64 — consecutive all-error rounds (no successful tool result).
   // Reset to 0 whenever a round makes progress; failRun(tool_error) when it
@@ -900,10 +1084,14 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
       } else if (ev.type === 'tokens') {
         // FIX #10 — incrementTokens returns the post-increment totals atomically;
         // use them directly instead of a redundant read-back SELECT.
-        const { tokens_in: usedIn, tokens_out: usedOut } = await incrementTokens(runId, {
-          in: ev.tokens_in,
-          out: ev.tokens_out,
-        });
+        // Operator cockpit chat (Task 5) — a conversation run has NO `agent_run`
+        // document, so `incrementTokens` (an UPDATE-then-read-or-throw keyed on
+        // an agent_run row) cannot persist. Track the budget in-memory instead:
+        // the conversation `active_run_id` slot, not an agent_run row, is the
+        // durable liveness record. The budget cap still applies per turn.
+        const { tokens_in: usedIn, tokens_out: usedOut } = ctx.sink
+          ? trackConversationTokens(conversationTokens, ev.tokens_in, ev.tokens_out)
+          : await incrementTokens(runId, { in: ev.tokens_in, out: ev.tokens_out });
         if (usedIn + usedOut > fm.max_tokens) {
           await postAgentComment(
             ctx,
@@ -1278,6 +1466,13 @@ async function postResultAndComplete(
   const finalText = textBuf.trim().length > 0 ? textBuf : '(no output)';
   await postAgentComment(ctx, finalText, 'result');
 
+  // Operator cockpit chat (Task 5) — a conversation run has NO `agent_run` row,
+  // so `transitionRun` (which throws AGENT_RUN_NOT_FOUND on a missing row) does
+  // not apply. The result text already streamed to the thread via the sink above;
+  // the conversation's `active_run_id` slot is the liveness record, cleared by the
+  // runAgent conversation finally.
+  if (ctx.sink) return;
+
   // transitionRun owns its own txWithEvents; done_reason rides inside it.
   await transitionRun(runId, {
     newStatus: 'completed',
@@ -1476,6 +1671,14 @@ async function failRun(
   errorReason: NonNullable<AgentRunFrontmatter['error_reason']>,
   errorDetail: string,
 ): Promise<void> {
+  // Operator cockpit chat (Task 5) — a conversation run has no `agent_run` row to
+  // transition (transitionRun would throw AGENT_RUN_NOT_FOUND). Surface the
+  // failure as a turn text message so the human watching the thread sees it; the
+  // `active_run_id` slot is cleared by the runAgent conversation finally.
+  if (ctx.sink) {
+    await ctx.sink.text(`The operator could not finish this turn (${errorReason}).`);
+    return;
+  }
   // transitionRun owns its own `txWithEvents` (UPDATE + event emit commit
   // atomically). Call it directly — no outer wrapper (which would nest an
   // empty db.transaction whose fn never emits).
