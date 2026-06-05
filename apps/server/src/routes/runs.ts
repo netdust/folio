@@ -381,9 +381,10 @@ runsRoute.post('/', requireScope('agents:write'), async (c) => {
     throw new HTTPError('FORBIDDEN_RESOURCE', 'not allow-listed for that project', 403);
   }
 
-  // 4. Resolve agent doc — gated by the home predicate {run-ws, __system} (B1):
-  //    a B-local agent OR a __system library agent (local shadows library); an
-  //    agent that lives only in a third workspace never resolves (fail-closed).
+  // 4. Resolve the agent by slug, INSTANCE-WIDE (Phase 4 — no workspace/tenancy
+  //    gate; one instance = one team). Confidentiality is enforced downstream by
+  //    the project ceiling (agent ∩ caller) + caller-bounded authority at run
+  //    time, NOT by a workspace wall here.
   const agent = await resolveAgentForRun(db, body.agent_slug);
   if (!agent) {
     throw new HTTPError('AGENT_NOT_FOUND', `agent "${body.agent_slug}" not found`, 404);

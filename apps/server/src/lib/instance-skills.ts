@@ -12,7 +12,7 @@
  * (Task 15) flips the column.
  */
 
-import { eq } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { type DB } from '../db/client.ts';
 import { instanceSkills, type InstanceSkill } from '../db/schema.ts';
@@ -70,4 +70,20 @@ export async function getInstanceSkill(
   return db.query.instanceSkills.findFirst({
     where: eq(instanceSkills.name, name),
   });
+}
+
+/**
+ * Resolve many instance skills in ONE query (avoids the per-skill N+1 in the
+ * runner's skill-load loop). Returns a name→row map; callers detect a
+ * declared-but-absent skill by a missing key.
+ */
+export async function getInstanceSkillsByNames(
+  db: DB,
+  names: string[],
+): Promise<Map<string, InstanceSkill>> {
+  if (names.length === 0) return new Map();
+  const rows = await db.query.instanceSkills.findMany({
+    where: inArray(instanceSkills.name, names),
+  });
+  return new Map(rows.map((r) => [r.name, r]));
 }

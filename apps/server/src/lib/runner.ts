@@ -50,7 +50,7 @@ import {
 } from '../services/agent-runs.ts';
 import { runClaudeCode, type SpawnFn } from './cc-executor.ts';
 import { intersectAgentProjects } from './agent-projects.ts';
-import { getInstanceSkill } from './instance-skills.ts';
+import { getInstanceSkillsByNames } from './instance-skills.ts';
 import { type AuthorContext, createComment, listComments } from '../services/comments.ts';
 import {
   type AgentRunFrontmatter,
@@ -480,9 +480,12 @@ async function loadAgentDefinition(
   // Phase 4 (drop-workspace-tenancy): skills live in the `instance_skills` table,
   // resolved by name — NO `__system` workspace, NO Skills project. Same no-broad-
   // fallback guarantee: a declared-but-absent skill throws MISSING_SKILL.
+  // Batch-load all declared skills in ONE query (no per-skill N+1), then walk the
+  // declared order so MISSING_SKILL still fires on the first absent one.
+  const byName = await getInstanceSkillsByNames(db, slugs);
   const skills: Array<{ slug: string; body: string; trusted: boolean }> = [];
   for (const slug of slugs) {
-    const skill = await getInstanceSkill(db, slug);
+    const skill = byName.get(slug);
     if (!skill) throw new HTTPError('MISSING_SKILL', `skill "${slug}" not found in instance skills`, 500);
     // Trust channel (invariant 11): `trusted` is the TYPED COLUMN — a skill routes
     // into the trusted instruction/reference channel only when the column is true.

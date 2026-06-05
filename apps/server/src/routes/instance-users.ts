@@ -66,11 +66,12 @@ const roleBody = z.object({
 /**
  * PATCH /instance/users/:id/role — OWNER-ONLY instance role change.
  *
- * The role write goes through `txWithEvents` + `emitEvent('user.role.changed')`
- * (rule #4: every write emits an event). The event is an INSTANCE-level concern
- * with no natural workspace, so it is scoped to the `__system` workspace (the
- * instance's home workspace, always bootstrapped at boot) because the events
- * model requires a non-null workspace_id.
+ * The role write is a plain `users.role` UPDATE. The prior `user.role.changed`
+ * event was scoped to `__system` (events require a non-null workspace_id) and
+ * had NO consumer beyond SSE; it was DROPPED with the `__system` teardown
+ * (Phase 4, D-B — this also closed the __system-grantee role-change leak,
+ * CR-11). Clients learn a role change on their next /auth/me refetch. Guarded:
+ * self-demotion (CANNOT_SELF_DEMOTE) + last-owner (LAST_OWNER) refused.
  */
 instanceUsersRoute.patch('/users/:id/role', zValidator('json', roleBody), async (c) => {
   const actor = getUser(c).id;

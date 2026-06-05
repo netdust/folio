@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { nanoid } from 'nanoid';
 import { makeTestApp } from '../test/harness.ts';
-import { documents } from '../db/schema.ts';
+import { documents, workspaces } from '../db/schema.ts';
 import { resolveAgentForRun } from './agent-resolver.ts';
 import { OPERATOR_SLUG } from './operator.ts';
 import { resolveAgentProjects, intersectAgentProjects } from './agent-projects.ts';
@@ -104,5 +104,39 @@ describe('§8.1 agent-run-authority (resolver collapse)', () => {
     expect(agent?.slug).toBe('researcher');
     // A speculative slug doesn't resolve.
     expect(await resolveAgentForRun(db, 'no-such-agent')).toBeUndefined();
+  });
+
+  test('a cross-workspace slug collision still resolves (first match) + warns', async () => {
+    const { db, seed } = await makeTestApp();
+    // Two workspaces each define an agent with the SAME slug (DB only enforces
+    // per-workspace slug uniqueness). Resolution must still return an agent (not
+    // crash), and warn that the slug is ambiguous.
+    const otherWs = nanoid();
+    await db.insert(workspaces).values({ id: otherWs, slug: `other-${otherWs}`, name: 'Other' });
+    const mk = (wsId: string) => ({
+      id: nanoid(),
+      workspaceId: wsId,
+      projectId: null,
+      type: 'agent' as const,
+      slug: 'dupe',
+      title: 'dupe',
+      status: null,
+      body: 'x',
+      frontmatter: { projects: ['*'] },
+      createdBy: seed.user.id,
+    });
+    await db.insert(documents).values(mk(seed.workspace.id));
+    await db.insert(documents).values(mk(otherWs));
+
+    const warnings: string[] = [];
+    const origWarn = console.warn;
+    console.warn = (...a: unknown[]) => warnings.push(a.map(String).join(' '));
+    try {
+      const agent = await resolveAgentForRun(db, 'dupe');
+      expect(agent?.slug).toBe('dupe'); // resolves, doesn't crash
+    } finally {
+      console.warn = origWarn;
+    }
+    expect(warnings.some((w) => /more than one workspace|instance-global/i.test(w))).toBe(true);
   });
 });

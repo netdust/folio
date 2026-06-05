@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { toast } from 'sonner';
 import {
+  type AccessGrantVars,
   useGrantAccess,
   useInstanceAccess,
   useRevokeAccess,
@@ -16,9 +17,24 @@ import { Button } from '../ui/button.tsx';
  * current grants come from the roster (GET /instance/access). Server enforces
  * the admin gate; this is the affordance.
  *
- * A target value encodes its kind: `w:<id>` for a workspace, `p:<id>` for a
- * project — so one <select> covers both and the grant call routes correctly.
+ * One <select> covers both workspaces and projects: each option's value encodes
+ * its kind via `encodeTarget` (`w:<id>` / `p:<id>`); `parseTarget` decodes it
+ * back to a typed grant — split on the FIRST `:` so ids containing `:` survive,
+ * and validate the prefix so a malformed value routes nowhere instead of
+ * silently granting the wrong entity.
  */
+const encodeTarget = (kind: 'w' | 'p', id: string) => `${kind}:${id}`;
+
+function parseTarget(userId: string, target: string): AccessGrantVars | null {
+  const sep = target.indexOf(':');
+  if (sep < 1) return null;
+  const kind = target.slice(0, sep);
+  const id = target.slice(sep + 1);
+  if (!id) return null;
+  if (kind === 'w') return { userId, workspaceId: id };
+  if (kind === 'p') return { userId, projectId: id };
+  return null;
+}
 export function InvitationsTab() {
   const usersQuery = useInstanceUsers();
   const targetsQuery = useInviteTargets();
@@ -35,11 +51,10 @@ export function InvitationsTab() {
 
   async function onGrant() {
     if (!userId || !target) return;
-    const [kind, id] = [target[0], target.slice(2)];
+    const grantVars = parseTarget(userId, target);
+    if (!grantVars) return; // malformed target — ignore (the picker only emits valid ones)
     try {
-      await grant.mutateAsync(
-        kind === 'w' ? { userId, workspaceId: id } : { userId, projectId: id },
-      );
+      await grant.mutateAsync(grantVars);
       toast.success('Access granted');
       setTarget('');
     } catch (e) {
@@ -89,14 +104,14 @@ export function InvitationsTab() {
             <option value="">Select a target…</option>
             <optgroup label="Workspaces">
               {targets.workspaces.map((w) => (
-                <option key={w.id} value={`w:${w.id}`}>
+                <option key={w.id} value={encodeTarget('w', w.id)}>
                   {w.name}
                 </option>
               ))}
             </optgroup>
             <optgroup label="Projects">
               {targets.projects.map((p) => (
-                <option key={p.id} value={`p:${p.id}`}>
+                <option key={p.id} value={encodeTarget('p', p.id)}>
                   {p.name}
                 </option>
               ))}
