@@ -50,7 +50,6 @@ describe('setSkillTrust on instance_skills.trusted (T-E / invariant 11)', () => 
       trusted: true,
       token: { createdBy: null } as any, // operator (system-origin)
       sessionUser: null,
-      actor: 'test',
     });
     expect((await getInstanceSkill(db, 'folio'))?.trusted).toBe(true);
   });
@@ -64,7 +63,6 @@ describe('setSkillTrust on instance_skills.trusted (T-E / invariant 11)', () => 
         trusted: false,
         token: { createdBy: 'u-human' } as any, // MCP PAT — refused
         sessionUser: null,
-        actor: 'test',
       }),
     ).rejects.toThrow(/forbidden/);
   });
@@ -78,7 +76,6 @@ describe('setSkillTrust on instance_skills.trusted (T-E / invariant 11)', () => 
         trusted: true,
         token: { createdBy: null } as any,
         sessionUser: null,
-        actor: 'test',
       }),
     ).rejects.toThrow(/not found/);
   });

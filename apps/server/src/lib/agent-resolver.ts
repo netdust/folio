@@ -22,55 +22,22 @@
 import { and, eq } from 'drizzle-orm';
 import type { DB } from '../db/client.ts';
 import { documents, type Document } from '../db/schema.ts';
-import { getOperatorDefinition, isOperator } from './operator.ts';
+import { getOperatorDocument, isOperator } from './operator.ts';
 
 /**
- * Build the synthetic, agent-shaped Document for the operator singleton. Not
- * persisted; carries the code-defined prompt (body), tools/model/provider/skills
- * (frontmatter), and `projects:['*']`. `workspaceId`/`projectId`/`id` are
- * sentinels — the operator has no row and no token (cockpit-gated run path).
- */
-function operatorAsDocument(): Document {
-  const def = getOperatorDefinition();
-  return {
-    id: `operator:${def.slug}`,
-    workspaceId: '',
-    projectId: null,
-    tableId: null,
-    parentId: null,
-    type: 'agent',
-    slug: def.slug,
-    title: def.slug,
-    status: null,
-    body: def.prompt,
-    frontmatter: {
-      provider: def.provider,
-      model: def.model,
-      tools: [...def.tools],
-      skills: [...def.skills],
-      projects: [...def.projects],
-      requires_approval: false,
-    },
-    boardPosition: null,
-    createdBy: null,
-    updatedBy: null,
-    lastTouchedAt: null,
-    createdAt: new Date(0),
-    updatedAt: new Date(0),
-  } as Document;
-}
-
-/**
- * Resolve an agent by slug for a run/trigger/mention. Operator → code singleton.
- * Custom agent → the instance-wide `documents` row of type 'agent' with that
- * slug (no workspace predicate — single-team model). Returns undefined if no
- * such agent exists (a speculative slug just doesn't fire).
+ * Resolve an agent by slug for a run/trigger/mention. Operator → code singleton
+ * (`getOperatorDocument`, never a row — anti-impersonation). Custom agent → the
+ * instance-wide `documents` row of type 'agent' with that slug (no workspace
+ * predicate — single-team model). Returns undefined if no such agent exists (a
+ * speculative slug just doesn't fire). NOTE: an operator run is refused at
+ * `createRun` (its run path is cockpit-gated); the resolver returns its identity
+ * so trigger/mention resolution + anti-impersonation hold.
  */
 export async function resolveAgentForRun(
   db: DB,
   slug: string,
 ): Promise<Document | undefined> {
-  if (isOperator(slug)) return operatorAsDocument();
+  if (isOperator(slug)) return getOperatorDocument();
   return db.query.documents.findFirst({
     where: and(eq(documents.slug, slug), eq(documents.type, 'agent')),
   });

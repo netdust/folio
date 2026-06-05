@@ -434,7 +434,6 @@ export function registerRealTools(): void {
           trusted: args.trusted,
           token: ctx.token,
           sessionUser: null,
-          actor: ctx.actor,
         });
         return textResult({ slug: args.slug, trusted: args.trusted, ok: true });
       } catch (e) {
@@ -1909,9 +1908,8 @@ export function registerRealTools(): void {
       if (!parent) {
         throw mcpInvalidParams('parent missing', { reason: 'agent_run_not_found' });
       }
-      // Resolve through the home-gated helper {ws, __system} so a __system library
-      // agent's run (agent lives in __system, not ws) re-resolves on retry instead
-      // of 404ing. createRun re-stamps agent_home_workspace_id from agent.workspaceId.
+      // Resolve the agent by slug, instance-wide (Phase 4 — no tenancy boundary)
+      // so a retry re-resolves instead of 404ing.
       const agent = await resolveAgentForRun(db, agentSlug);
       if (!agent) {
         throw mcpInvalidParams(`agent "${agentSlug}" not found`, {

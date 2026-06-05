@@ -26,8 +26,6 @@ export interface SetSkillTrustArgs {
   token: Pick<ApiToken, 'createdBy'> | null;
   /** The hydrated session user, or null on the token path. */
   sessionUser: Pick<User, 'id'> | null;
-  /** Audit actor string for the emitted event. */
-  actor: string;
 }
 
 /**

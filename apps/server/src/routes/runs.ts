@@ -499,9 +499,8 @@ runsRoute.post('/:runId/retry', requireScope('agents:write'), async (c) => {
   if (!parent) {
     throw new HTTPError('AGENT_RUN_NOT_FOUND', 'parent missing', 404);
   }
-  // Resolve through the home-gated helper {ws, __system} so a __system library
-  // agent's run (agent lives in __system, not ws) re-resolves on retry instead of
-  // 404ing. createRun re-stamps agent_home_workspace_id from agent.workspaceId.
+  // Resolve the agent by slug, instance-wide (Phase 4 — no tenancy boundary) so
+  // a retry re-resolves instead of 404ing.
   const agent = await resolveAgentForRun(db, agentSlug);
   if (!agent) {
     throw new HTTPError('AGENT_NOT_FOUND', `agent "${agentSlug}" not found`, 404);

@@ -26,6 +26,8 @@ import {
   type Workspace,
 } from '../db/schema.ts';
 import { seedProjectDefaults } from '../lib/seed-project-defaults.ts';
+import { resolveAgentForRun } from '../lib/agent-resolver.ts';
+import { OPERATOR_SLUG } from '../lib/operator.ts';
 import { newApiToken } from '../lib/auth.ts';
 import { toolsToScopes } from '../lib/agent-schema.ts';
 import type { AgentRunFrontmatter } from '../lib/agent-run-schema.ts';
@@ -321,6 +323,39 @@ describe('createRun', () => {
         },
       }),
     ).rejects.toThrow(/empty|prompt/i);
+  });
+
+  test('rejects the operator singleton — its run path is cockpit-only (no stranded runs)', async () => {
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+    // The operator resolves to the code singleton (no token row) — createRun must
+    // refuse it rather than insert a run that strands forever at loadContext.
+    const operator = (await resolveAgentForRun(db, OPERATOR_SLUG))!;
+    expect(operator).toBeDefined();
+
+    await expect(
+      createRun({
+        workspace: seed.workspace,
+        project: seed.project,
+        runsTable,
+        agent: operator,
+        actor: seed.user,
+        input: {
+          parentDocumentId: parent.id,
+          firedBy: 'agent.task.assigned',
+          chainId: crypto.randomUUID(),
+          triggerId: null,
+        },
+      }),
+    ).rejects.toThrow(/operator|cockpit/i);
+
+    // No run row was inserted (no strand).
+    const runs = await db.query.documents.findMany({
+      where: and(eq(documents.type, 'agent_run'), eq(documents.parentId, parent.id)),
+    });
+    expect(runs.length).toBe(0);
   });
 
   // ----- Phase 1 caller-delegation snapshot (D1, D2, D6) -----

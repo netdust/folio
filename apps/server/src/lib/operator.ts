@@ -13,6 +13,7 @@
  * (re-exported from system-skills.ts), so there is one source of truth.
  */
 
+import type { Document } from '../db/schema.ts';
 import {
   FOLIO_SKILL_SLUG,
   OPERATOR_PROMPT,
@@ -47,7 +48,7 @@ export function isOperator(slug: string): boolean {
 
 /**
  * The operator's definition, materialized from code. Stable across calls; the
- * resolver (Task 17) returns this for `isOperator(slug)` rather than a row.
+ * resolver returns this for `isOperator(slug)` rather than a row.
  */
 export function getOperatorDefinition(): OperatorDefinition {
   return {
@@ -59,4 +60,43 @@ export function getOperatorDefinition(): OperatorDefinition {
     provider: OPERATOR_PROVIDER,
     projects: ['*'],
   };
+}
+
+/**
+ * The operator as a synthetic, agent-shaped `Document` — the single place that
+ * owns both the operator's definition AND its Document shape, so a new field on
+ * OperatorDefinition can't silently drift from the materialized row. NOT
+ * persisted: `id`/`workspaceId` are sentinels (the operator has no row and no
+ * token; its run path is cockpit-gated and refused at createRun). The resolver
+ * returns this for the operator slug so trigger/mention resolution +
+ * anti-impersonation hold without ever reading a `documents` row.
+ */
+export function getOperatorDocument(): Document {
+  const def = getOperatorDefinition();
+  return {
+    id: `operator:${def.slug}`,
+    workspaceId: '',
+    projectId: null,
+    tableId: null,
+    parentId: null,
+    type: 'agent',
+    slug: def.slug,
+    title: def.slug,
+    status: null,
+    body: def.prompt,
+    frontmatter: {
+      provider: def.provider,
+      model: def.model,
+      tools: [...def.tools],
+      skills: [...def.skills],
+      projects: [...def.projects],
+      requires_approval: false,
+    },
+    boardPosition: null,
+    createdBy: null,
+    updatedBy: null,
+    lastTouchedAt: null,
+    createdAt: new Date(0),
+    updatedAt: new Date(0),
+  } as Document;
 }

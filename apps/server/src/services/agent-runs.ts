@@ -41,6 +41,7 @@ import { canManageWorkspace, canSeeWorkspace, userRole, visibleProjectIds } from
 // `services/comments.ts` so read helpers can be called from inside a tx.
 type DBOrTx = DB | Parameters<Parameters<DB['transaction']>[0]>[0];
 import { HTTPError } from '../lib/http.ts';
+import { isOperator } from '../lib/operator.ts';
 import { emitEvent, txWithEvents, type EventKind } from '../lib/events.ts';
 import {
   agentRunFrontmatterSchema,
@@ -109,6 +110,19 @@ export async function createRun(
   args: CreateRunArgs,
 ): Promise<CreateRunResult> {
   const { workspace, project, runsTable, agent, actor, input } = args;
+
+  // The operator is a code singleton with no token row (its run path is gated to
+  // the cockpit chat, D10). Resolving it for a trigger/POST-runs would insert a
+  // run that strands forever at loadContext (no token → null context, silent).
+  // Refuse it here, at the single run-creation convergence point, with a clear
+  // error rather than a dead run.
+  if (isOperator(agent.slug)) {
+    throw new HTTPError(
+      'OPERATOR_RUN_UNSUPPORTED',
+      'The operator can only be run from the cockpit chat, not via triggers or the runs API.',
+      422,
+    );
+  }
 
   // Snapshot provider/model/max_tokens from the agent frontmatter + the prompt
   // from the agent body at run-create time so a later edit of the agent doesn't
