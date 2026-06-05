@@ -17,6 +17,8 @@ import * as schema from '../db/schema.ts';
 import { createSession } from '../lib/auth.ts';
 import { FOLIO_SKILL_BODY, FOLIO_SKILL_SLUG } from '../lib/system-skills.ts';
 import { __setRunAgentForTest } from './conversations.ts';
+import { appendMessage } from '../services/conversations.ts';
+import { recordPendingOp } from '../services/pending-ops.ts';
 
 let runAgentCalls: string[] = [];
 
@@ -146,6 +148,173 @@ describe('M14 — single-active-turn CAS (the double-send race)', () => {
     expect(statuses).toEqual([200, 409]);
     // And the runner was kicked EXACTLY once (the loser never starts a run).
     expect(runAgentCalls.length).toBe(1);
+  });
+});
+
+describe('POST .../messages/:messageId/click — choice-card button (M7/M8)', () => {
+  async function makeCardConversation(
+    app: Awaited<ReturnType<typeof setup>>['app'],
+    db: Awaited<ReturnType<typeof setup>>['db'],
+    cookie: string,
+  ): Promise<string> {
+    const create = await app.request('/api/v1/conversations', {
+      method: 'POST',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    const { data: conv } = await create.json();
+    return conv.id;
+  }
+
+  test('M8: an out-of-set optionId is rejected (400)', async () => {
+    const { app, db, seed } = await setup();
+    const convId = await makeCardConversation(app, db, seed.sessionCookie);
+    const card = await appendMessage(db, {
+      conversationId: convId,
+      role: 'operator',
+      kind: 'component',
+      payload: { type: 'choice_card', prompt: 'Which?', options: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }] },
+    });
+    const res = await app.request(`/api/v1/conversations/${convId}/messages/${card.id}/click`, {
+      method: 'POST',
+      headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ optionId: 'NOT_IN_SET' }),
+    });
+    expect(res.status).toBe(400);
+    expect(runAgentCalls.length).toBe(0);
+  });
+
+  test('confirmation "yes" confirms the pending op and starts a turn', async () => {
+    const { app, db, seed } = await setup();
+    const convId = await makeCardConversation(app, db, seed.sessionCookie);
+    const pending = await recordPendingOp(db, {
+      conversationId: convId,
+      callerId: seed.user.id,
+      op: 'delete_document',
+      params: { slug: 'acme' },
+      target: 'acme',
+    });
+    const card = await appendMessage(db, {
+      conversationId: convId,
+      role: 'operator',
+      kind: 'component',
+      payload: {
+        type: 'choice_card',
+        prompt: 'Confirm delete_document?',
+        options: [{ id: pending.id, label: 'Yes, do it' }, { id: 'cancel', label: 'Cancel' }],
+        pending_op: pending.id,
+      },
+    });
+    const res = await app.request(`/api/v1/conversations/${convId}/messages/${card.id}/click`, {
+      method: 'POST',
+      headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ optionId: pending.id }),
+    });
+    expect(res.status).toBe(200);
+    const { data } = await res.json();
+    expect(data.confirmed).toBe(true);
+    expect(typeof data.runId).toBe('string');
+    // The pending op is now confirmed (single-use flip).
+    const row = await db.query.pendingOps.findFirst({
+      where: eq(schema.pendingOps.id, pending.id),
+    });
+    expect(row?.status).toBe('confirmed');
+    expect(runAgentCalls.length).toBe(1);
+  });
+
+  test('M7 foreign-user: user B cannot confirm user A pending op (404 conversation)', async () => {
+    const { app, db, seed } = await setup();
+    const convId = await makeCardConversation(app, db, seed.sessionCookie);
+    const pending = await recordPendingOp(db, {
+      conversationId: convId,
+      callerId: seed.user.id,
+      op: 'delete_document',
+      params: { slug: 'acme' },
+      target: 'acme',
+    });
+    const card = await appendMessage(db, {
+      conversationId: convId,
+      role: 'operator',
+      kind: 'component',
+      payload: {
+        type: 'choice_card',
+        prompt: 'Confirm?',
+        options: [{ id: pending.id, label: 'Yes' }, { id: 'cancel', label: 'Cancel' }],
+        pending_op: pending.id,
+      },
+    });
+    const b = await seedRoleSession(db, 'member');
+    const res = await app.request(`/api/v1/conversations/${convId}/messages/${card.id}/click`, {
+      method: 'POST',
+      headers: { Cookie: b.cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ optionId: pending.id }),
+    });
+    // Foreign user can't even see the conversation → 404, no confirm, no turn.
+    expect(res.status).toBe(404);
+    const row = await db.query.pendingOps.findFirst({
+      where: eq(schema.pendingOps.id, pending.id),
+    });
+    expect(row?.status).toBe('pending');
+    expect(runAgentCalls.length).toBe(0);
+  });
+
+  test('cancel on a confirmation card rejects the pending op, no turn', async () => {
+    const { app, db, seed } = await setup();
+    const convId = await makeCardConversation(app, db, seed.sessionCookie);
+    const pending = await recordPendingOp(db, {
+      conversationId: convId,
+      callerId: seed.user.id,
+      op: 'delete_document',
+      params: { slug: 'acme' },
+      target: 'acme',
+    });
+    const card = await appendMessage(db, {
+      conversationId: convId,
+      role: 'operator',
+      kind: 'component',
+      payload: {
+        type: 'choice_card',
+        prompt: 'Confirm?',
+        options: [{ id: pending.id, label: 'Yes' }, { id: 'cancel', label: 'Cancel' }],
+        pending_op: pending.id,
+      },
+    });
+    const res = await app.request(`/api/v1/conversations/${convId}/messages/${card.id}/click`, {
+      method: 'POST',
+      headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ optionId: 'cancel' }),
+    });
+    expect(res.status).toBe(200);
+    const { data } = await res.json();
+    expect(data.confirmed).toBe(false);
+    const row = await db.query.pendingOps.findFirst({
+      where: eq(schema.pendingOps.id, pending.id),
+    });
+    expect(row?.status).toBe('rejected');
+    expect(runAgentCalls.length).toBe(0);
+  });
+
+  test('a card already chosen rejects a second click (409)', async () => {
+    const { app, db, seed } = await setup();
+    const convId = await makeCardConversation(app, db, seed.sessionCookie);
+    const card = await appendMessage(db, {
+      conversationId: convId,
+      role: 'operator',
+      kind: 'component',
+      payload: { type: 'choice_card', prompt: 'Which?', options: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }] },
+    });
+    const first = await app.request(`/api/v1/conversations/${convId}/messages/${card.id}/click`, {
+      method: 'POST',
+      headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ optionId: 'a' }),
+    });
+    expect(first.status).toBe(200);
+    const second = await app.request(`/api/v1/conversations/${convId}/messages/${card.id}/click`, {
+      method: 'POST',
+      headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ optionId: 'b' }),
+    });
+    expect(second.status).toBe(409);
   });
 });
 

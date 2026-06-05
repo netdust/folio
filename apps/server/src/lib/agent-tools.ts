@@ -14,8 +14,14 @@
  */
 
 import { z } from 'zod';
+import { db } from '../db/client.ts';
 import type { DB } from '../db/client.ts';
 import type { ApiToken } from '../db/schema.ts';
+import {
+  getConfirmedPendingOp,
+  markExecuted,
+  recordPendingOp,
+} from '../services/pending-ops.ts';
 import type { ConversationSink } from './chat-thread-sink.ts';
 
 // Drizzle transaction handles share the query API with DB; one shape works for
@@ -81,6 +87,26 @@ export interface ToolDef<TArgs = unknown, TOut = unknown> {
    */
   unattendedFloor?: boolean;
   /**
+   * Operator cockpit chat (Task 7) — the irreversible-op confirm gate's risk
+   * tier. Drives the HARD, conversation-scoped confirm gate in `executeTool`
+   * (spec: Irreversible-op gate §; threat model M4–M7, M13).
+   *
+   * FAIL-CLOSED by construction: a tool's EFFECTIVE tier is
+   *   `def.riskTier ?? (isWriteOrDeleteScope(def.requiredScope) ? 'high' : 'normal')`
+   * So EVERY write/delete-scoped tool DEFAULTS to `high` and confirms in a
+   * conversation. A tool opts DOWN to `normal` only by an explicit, reviewed
+   * `riskTier: 'normal'` (the same deliberate act that lowers `unattendedFloor`).
+   * A NEW unclassified write/delete tool stays `high` → confirms automatically;
+   * there is NO destructive-allowlist to remember to extend.
+   *
+   * NOTE — `folio_api` is special-cased OUT of the dispatcher gate (it carries
+   * `config:write` but multiplexes many routes at many tiers). It owns its OWN
+   * per-path tiering INSIDE its handler (see folio-api-tool.ts). It is tagged
+   * `riskTier: 'normal'` here purely so the dispatcher does not blanket-gate it;
+   * its handler raises the SAME pending-op gate for its config-class paths.
+   */
+  riskTier?: 'high' | 'normal';
+  /**
    * D-2: MCP-transport metadata. Carried verbatim from the legacy mcp.ts
    * `ToolDef` so D-3's `tools/list` can read it via `listToolDefs()`. The
    * runner ignores these; `executeTool` never touches them.
@@ -126,6 +152,56 @@ const registry = new Map<string, ToolDef>();
  * native HIGH-risk scopes folio_api can't see.
  */
 const UNATTENDED_FLOORED_SCOPES = new Set<string>(['agents:write']);
+
+/**
+ * Operator cockpit chat (Task 7) — the fail-closed risk classifier the confirm
+ * gate keys on. A scope ending in `:write` or `:delete` is a mutating scope, so
+ * a tool requiring it DEFAULTS to `high` (confirm-in-conversation) unless its def
+ * explicitly opts down to `riskTier: 'normal'`. Read scopes (`documents:read`,
+ * `…:read`) → `normal`. There is NO allowlist: classification is structural.
+ * (spec: Irreversible-op gate § — `effectiveTier = def.riskTier ?? (isWriteOrDeleteScope ? 'high' : 'normal')`.)
+ */
+export function isWriteOrDeleteScope(scope: string): boolean {
+  return scope.endsWith(':write') || scope.endsWith(':delete');
+}
+
+/**
+ * The single name special-cased OUT of the dispatcher-level confirm gate.
+ * `folio_api` carries `config:write` (a write scope) but multiplexes MANY routes
+ * at MANY tiers — blanket-gating it at the dispatcher would gate every document
+ * write routed through it. So it OWNS its own per-path tiering inside its handler
+ * (folio-api-tool.ts), which raises the SAME pending-op gate for its config-class
+ * paths. Both enforcement points are named so neither is a bypass ("a
+ * deterministic bound must name its execution path" — TWO paths here).
+ */
+const CONFIRM_GATE_SELF_TIERED_TOOLS = new Set<string>(['folio_api']);
+
+/**
+ * Resolve a tool's EFFECTIVE confirm-gate risk tier (fail-closed default-to-high
+ * for write/delete scopes). The ONE place the tier is decided so the dispatcher
+ * gate and any test agree on the rule.
+ */
+export function effectiveRiskTier(def: ToolDef): 'high' | 'normal' {
+  return def.riskTier ?? (isWriteOrDeleteScope(def.requiredScope) ? 'high' : 'normal');
+}
+
+/**
+ * Best-effort human-readable target for the audit `pending_ops.target` column
+ * (the "what was this?" support-path label). NON-load-bearing: the SECURITY
+ * binding is the recorded params (M6), not this string. So a heuristic over the
+ * common identifier arg keys is fine; it falls back to the op name. It NEVER
+ * affects whether the gate fires or what executes.
+ */
+export function deriveConfirmTarget(name: string, args: unknown): string {
+  if (args && typeof args === 'object') {
+    const a = args as Record<string, unknown>;
+    for (const key of ['slug', 'wslug', 'document_slug', 'id', 'path', 'agent_slug', 'run_id']) {
+      const v = a[key];
+      if (typeof v === 'string' && v.length > 0) return v;
+    }
+  }
+  return name;
+}
 
 // Test-only teardown hook so test files can delete throwaway registrations
 // without reaching into module internals (registry is module-global, so leaked
@@ -272,7 +348,93 @@ export async function executeTool(
     throw err;
   }
 
-  return def.handler(parsed as never, {
+  // Operator cockpit chat (Task 7) — the HARD irreversible-op confirm gate at the
+  // CONVERGENCE POINT (Inv 2), a sibling of the unattended floor above. NOT a
+  // prompt rule (spec: Irreversible-op gate §; threat model M4–M7, M13).
+  //
+  // Engages ONLY with a conversation context (`caller.conversationId`) — a
+  // `pending_ops` row's `conversation_id` is non-null by construction, so the gate
+  // is conversation-scoped BY DESIGN. A headless `high`-tier run (trigger / MCP
+  // admin) has no `conversationId` → the gate is SKIPPED → it falls back to the
+  // existing authority treatment (in-scope → applies). NO regression (M-deferral).
+  //
+  // TWO enforcement paths (both named — "a deterministic bound names its path"):
+  //   1. THIS dispatcher gate covers NATIVE high-tier tools (delete_document,
+  //      delete_comment, the agents:write lifecycle, plus any future write/delete
+  //      tool that didn't opt down to `riskTier:'normal'`).
+  //   2. folio_api owns its OWN per-path gate inside its handler (folio-api-tool.ts)
+  //      — it is special-cased OUT here (CONFIRM_GATE_SELF_TIERED_TOOLS) so its
+  //      document-write paths aren't blanket-gated by its config:write scope.
+  //
+  // The parsed args (`parsed`) are the gate's match key. On confirm, the handler
+  // runs the RECORDED params (`confirmed.params`), NOT this turn-2 re-read — that
+  // is what makes confirm injection-proof (M6).
+  let handlerArgs: unknown = parsed;
+  if (
+    caller?.conversationId &&
+    !CONFIRM_GATE_SELF_TIERED_TOOLS.has(name) &&
+    effectiveRiskTier(def) === 'high'
+  ) {
+    const gateDb = tx ?? db;
+    const confirmed = await getConfirmedPendingOp(gateDb, {
+      conversationId: caller.conversationId,
+      op: name,
+      params: parsed,
+    });
+    if (!confirmed) {
+      // Record the exact pending action + surface a choice_card, then REFUSE.
+      const pending = await recordPendingOp(gateDb, {
+        conversationId: caller.conversationId,
+        callerId: actor,
+        op: name,
+        params: parsed,
+        target: deriveConfirmTarget(name, parsed),
+      });
+      if (caller.conversationSink) {
+        // (a) the confirm card — the "yes" id IS the pending_ops.id (M7/M8).
+        await caller.conversationSink.component({
+          type: 'choice_card',
+          prompt: `Confirm ${name}? This is an irreversible action and will not run until you approve it.`,
+          options: [
+            { id: pending.id, label: 'Yes, do it' },
+            { id: 'cancel', label: 'Cancel' },
+          ],
+          pending_op: pending.id,
+        });
+        // (b) a VISIBLE tool_step so the NEXT turn's replayed history shows the
+        //     confirmation was requested — continuation doesn't depend purely on
+        //     server orchestration (threat model attack #4 follow-up).
+        await caller.conversationSink.toolStep({
+          tool: name,
+          summary: 'confirmation required',
+          status: 'error',
+        });
+      }
+      // FATAL — shaped `forbidden:` so isFatalToolError terminates the run; the
+      // model cannot retry around the gate.
+      throw new Error(`forbidden: ${name} requires confirmation`);
+    }
+    // Confirmed: execute the RECORDED params (M6), NOT the turn-2 re-read. Re-parse
+    // the stored JSON through the SAME schema so the handler still receives a
+    // schema-typed value (and a tampered stored row would fail closed).
+    handlerArgs = def.schema.parse(JSON.parse(confirmed.params));
+    // Mark the audit trail AFTER the handler succeeds (below) — do it here so a
+    // handler throw leaves the row 'confirmed' (re-confirm not required; a retry
+    // re-runs the same recorded op). Bind the closure to mark on success.
+    const result = await def.handler(handlerArgs as never, {
+      token,
+      actor,
+      tx,
+      callerScopes,
+      unattended: caller?.unattended,
+      conversationSink: caller?.conversationSink,
+      conversationId: caller?.conversationId,
+    });
+    await markExecuted(gateDb, confirmed.id, actor);
+    return result;
+  }
+
+  return def.handler(handlerArgs as never, {
     token,
     actor,
     tx,

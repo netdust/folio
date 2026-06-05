@@ -17,6 +17,11 @@ import { apiTokens, type ApiToken } from '../db/schema.ts';
 import { ADMIN_SCOPES } from './agent-schema.ts'; // CR#3: derive the C3 config floor
 import { registerTool, type ToolContext } from './agent-tools.ts';
 import { newApiToken } from './auth.ts';
+import {
+  getConfirmedPendingOp,
+  markExecuted,
+  recordPendingOp,
+} from '../services/pending-ops.ts';
 
 /**
  * Validate the `path` arg of folio_api/folio_api_get (mitigation P3-5).
@@ -309,6 +314,64 @@ export function registerFolioApiTools(): void {
         return refuse(
           `config-class write (${scopeTarget}) refused on an unattended (trigger-fired) run; not applied`,
         );
+      }
+      // T7 confirm gate — folio_api OWNS its own per-path tier (it is special-cased
+      // out of the dispatcher-level `riskTier` gate so its document-write paths
+      // aren't blanket-gated by its `config:write` scope). Mirror the unattended
+      // floor's structure: in a CONVERSATION, a config-class write is HIGH-tier and
+      // must be confirmed via a recorded pending_ops row. The gate's match key is
+      // the FULL request {method, path, body} so confirming executes the RECORDED
+      // request, not a turn-2 re-read (M6). Document-write paths (documents:write)
+      // are NOT config-class → not gated here (act-then-report majority).
+      if (
+        ctx.conversationId &&
+        scopeTarget !== null &&
+        CONFIG_CLASS_SCOPES.has(scopeTarget)
+      ) {
+        const gateParams = { method: args.method, path: args.path, body };
+        const confirmed = await getConfirmedPendingOp(ctx.tx ?? db, {
+          conversationId: ctx.conversationId,
+          op: 'folio_api',
+          params: gateParams,
+        });
+        if (!confirmed) {
+          const pending = await recordPendingOp(ctx.tx ?? db, {
+            conversationId: ctx.conversationId,
+            callerId: ctx.actor,
+            op: 'folio_api',
+            params: gateParams,
+            target: `${args.method} ${args.path}`,
+          });
+          if (ctx.conversationSink) {
+            await ctx.conversationSink.component({
+              type: 'choice_card',
+              prompt: `Confirm ${args.method} ${args.path}? This is a configuration change and will not run until you approve it.`,
+              options: [
+                { id: pending.id, label: 'Yes, do it' },
+                { id: 'cancel', label: 'Cancel' },
+              ],
+              pending_op: pending.id,
+            });
+            await ctx.conversationSink.toolStep({
+              tool: 'folio_api',
+              summary: `confirmation required: ${args.method} ${args.path}`,
+              status: 'error',
+            });
+          }
+          // FATAL — shaped `forbidden:` so the runner's isFatalToolError ends the
+          // turn; the model cannot retry around the gate.
+          throw new Error(`forbidden: ${args.method} ${args.path} requires confirmation`);
+        }
+        // Confirmed: execute the RECORDED request, not the turn-2 re-read (M6).
+        const recorded = JSON.parse(confirmed.params) as {
+          method: string;
+          path: string;
+          body: unknown;
+        };
+        const cres = await dispatchAsCaller(ctx.token, recorded.method, recorded.path, recorded.body);
+        const cjson = await cres.json().catch(() => null);
+        await markExecuted(ctx.tx ?? db, confirmed.id, ctx.actor);
+        return { status: cres.status, body: cjson };
       }
       const res = await dispatchAsCaller(ctx.token, args.method, args.path, body);
       const json = await res.json().catch(() => null);

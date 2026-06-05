@@ -816,6 +816,11 @@ export function registerRealTools(): void {
       required: ['workspace_slug', 'project_slug', 'type', 'title'],
     },
     requiredScope: 'documents:write',
+    // T7 confirm gate: a routine content write — reversible-ish, the act-then-
+    // report majority. Opt DOWN to 'normal' so it does NOT require confirmation in
+    // a conversation. (Destructive ops — delete_* / agents:write lifecycle — keep
+    // the fail-closed 'high' default.)
+    riskTier: 'normal',
     schema: z
       .object({
         workspace_slug: z.string(),
@@ -893,6 +898,8 @@ export function registerRealTools(): void {
       required: ['workspace_slug', 'project_slug', 'slug'],
     },
     requiredScope: 'documents:write',
+    // T7 confirm gate: routine reversible content update — opt down to 'normal'.
+    riskTier: 'normal',
     schema: z
       .object({
         workspace_slug: z.string(),
@@ -1181,6 +1188,8 @@ export function registerRealTools(): void {
       required: ['workspace_slug', 'project_slug', 'parent_slug', 'body'],
     },
     requiredScope: 'documents:write',
+    // T7 confirm gate: routine reversible content write — opt down to 'normal'.
+    riskTier: 'normal',
     schema: z
       .object({
         workspace_slug: z.string(),
@@ -1307,6 +1316,8 @@ export function registerRealTools(): void {
       required: ['workspace_slug', 'project_slug', 'slug'],
     },
     requiredScope: 'documents:write',
+    // T7 confirm gate: routine reversible content update — opt down to 'normal'.
+    riskTier: 'normal',
     schema: z
       .object({
         workspace_slug: z.string(),

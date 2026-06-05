@@ -14,7 +14,7 @@
  * allocator is correct within that model.
  */
 
-import { eq, max } from 'drizzle-orm';
+import { and, eq, max } from 'drizzle-orm';
 import type { DB } from '../db/client.ts';
 import { conversations, messages, type Message } from '../db/schema.ts';
 
@@ -79,6 +79,41 @@ export async function getThread(db: DB, conversationId: string): Promise<Message
     where: eq(messages.conversationId, conversationId),
     orderBy: (m, { asc }) => [asc(m.seq)],
   });
+}
+
+/**
+ * Load a single `component` message belonging to a conversation, or undefined.
+ * Used by the button-click route (Task 7) to validate an `optionId` against the
+ * card's RECORDED `options[].id` set (M8 — the click sends an id, never label
+ * text, and an out-of-set id is rejected). Scoped by conversation id so a click
+ * cannot reach another conversation's card.
+ */
+export async function getMessage(
+  db: DB,
+  conversationId: string,
+  messageId: string,
+): Promise<Message | undefined> {
+  return db.query.messages.findFirst({
+    where: and(eq(messages.conversationId, conversationId), eq(messages.id, messageId)),
+  });
+}
+
+/**
+ * Lock a `choice_card` to the chosen option (sets `payload.chosen`). The card is
+ * single-use UI: once chosen, the renderer disables the other options. Returns
+ * the updated payload. Owner-scoping is the caller's responsibility (the route
+ * loads the message via the owned conversation first).
+ */
+export async function setMessageChosen(
+  db: DB,
+  messageId: string,
+  chosen: string,
+): Promise<void> {
+  const row = await db.query.messages.findFirst({ where: eq(messages.id, messageId) });
+  if (!row) return;
+  const payload = parsePayload<Record<string, unknown>>(row.payload);
+  payload.chosen = chosen;
+  await db.update(messages).set({ payload: JSON.stringify(payload) }).where(eq(messages.id, messageId));
 }
 
 /**

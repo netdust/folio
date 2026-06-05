@@ -33,9 +33,13 @@ import { createConversationRun } from '../services/conversation-runs.ts';
 import {
   appendMessage,
   createConversation,
+  getMessage,
   getThread,
+  parsePayload,
   serializeThreadMarkdown,
+  setMessageChosen,
 } from '../services/conversations.ts';
+import { confirmPendingOp, rejectPendingOp } from '../services/pending-ops.ts';
 
 /**
  * The runner kick — fire-and-forget like the poller's `void run(...).catch(...)`.
@@ -180,6 +184,100 @@ conversationsRoute.post(
     // Acquire the slot (M14) THEN append + kick — see startTurn for why the CAS
     // precedes the append (seq-allocator race). A loser double-send throws 409.
     const runId = await startTurn(conv, text);
+    return jsonOk(c, { runId });
+  },
+);
+
+// POST /conversations/:id/messages/:messageId/click — a choice_card button click.
+//
+// The click sends the chosen option ID (NEVER label text — the label is operator-
+// authored and must not re-enter as trusted user input, M8). The server validates
+// the id against the card's RECORDED options[].id set; an out-of-set id is rejected.
+// Then ONE of three branches:
+//   - CANCEL → reject any backing pending_op; no turn.
+//   - CONFIRMATION card (the id IS a pending_ops.id, "yes") → confirmPendingOp
+//     (single-use, caller-bound, M7), then start a turn so the operator re-issues
+//     the action; executeTool finds the confirmed pending_op and executes the
+//     RECORDED params (M6).
+//   - ORDINARY card → start a NEW turn through the SAME run-creation path as a typed
+//     message (re-fires the caller floor, M1; subject to the same M14 CAS).
+conversationsRoute.post(
+  '/:id/messages/:messageId/click',
+  zValidator('json', z.object({ optionId: z.string().min(1) })),
+  async (c) => {
+    const user = getUser(c);
+    const id = c.req.param('id');
+    const messageId = c.req.param('messageId');
+    const { optionId } = c.req.valid('json');
+
+    const conv = await loadOwnedConversation(user.id, id);
+    const msg = await getMessage(db, conv.id, messageId);
+    if (!msg || msg.kind !== 'component') {
+      throw new HTTPError('COMPONENT_NOT_FOUND', 'component not found', 404);
+    }
+    const payload = parsePayload<{
+      type?: string;
+      options?: { id: string; label: string }[];
+      pending_op?: string;
+      chosen?: string;
+    }>(msg.payload);
+    if (payload.type !== 'choice_card' || !Array.isArray(payload.options)) {
+      throw new HTTPError('NOT_A_CHOICE_CARD', 'message is not a choice card', 400);
+    }
+    // Already chosen — single-use UI; reject a second click (idempotency + no
+    // double-fire of a confirmation).
+    if (typeof payload.chosen === 'string') {
+      throw new HTTPError('ALREADY_CHOSEN', 'this card has already been answered', 409);
+    }
+    // M8 — validate the id against the PRESENTED set. Out-of-set → reject.
+    const presented = new Set(payload.options.map((o) => o.id));
+    if (!presented.has(optionId)) {
+      throw new HTTPError('OPTION_NOT_IN_SET', 'option is not in the presented set', 400);
+    }
+
+    // Is this a confirmation card? A confirmation card carries `pending_op` (the
+    // id of the recorded HIGH-tier op). The "yes" option's id EQUALS that
+    // pending_op id; any other in-set id (e.g. 'cancel') is a "no".
+    const isConfirmationCard = typeof payload.pending_op === 'string';
+    const isConfirmYes = isConfirmationCard && optionId === payload.pending_op;
+    const isCancel = optionId === 'cancel';
+
+    // Lock the card to the chosen option (M8 — others disabled in the renderer).
+    await setMessageChosen(db, messageId, optionId);
+
+    if (isConfirmationCard && !isConfirmYes) {
+      // A "no"/cancel on a confirmation card → reject the pending op; NO turn.
+      await rejectPendingOp(db, payload.pending_op as string, user.id);
+      return jsonOk(c, { confirmed: false });
+    }
+
+    if (isConfirmYes) {
+      // Single-use, caller-bound confirm (M7). Throws on replay / foreign-user /
+      // expiry — surface a clean 4xx rather than start a turn on a stale token.
+      try {
+        await confirmPendingOp(db, payload.pending_op as string, user.id);
+      } catch (err) {
+        const code = err instanceof Error ? err.message : 'PENDING_OP_NOT_CONFIRMABLE';
+        const status = code === 'PENDING_OP_EXPIRED' ? 410 : 409;
+        throw new HTTPError(code, 'this confirmation can no longer be applied', status);
+      }
+      // Start a turn so the operator re-issues the now-confirmed action; the gate
+      // finds the confirmed pending_op and executes the RECORDED params (M6). The
+      // turn also lets the operator REPORT the outcome (act-then-report).
+      const runId = await startTurn(conv, 'Confirmed. Proceed with the action.');
+      return jsonOk(c, { confirmed: true, runId });
+    }
+
+    if (isCancel) {
+      // Cancel on an ORDINARY card → just lock it; no turn.
+      return jsonOk(c, { confirmed: false });
+    }
+
+    // ORDINARY card → start a new turn reflecting the choice (re-fires the caller
+    // floor + M14 CAS via startTurn). Send the option LABEL as context to the
+    // operator, but the AUTHORITY decision is the id we validated above.
+    const chosenOpt = payload.options.find((o) => o.id === optionId);
+    const runId = await startTurn(conv, `I chose: ${chosenOpt?.label ?? optionId}`);
     return jsonOk(c, { runId });
   },
 );
