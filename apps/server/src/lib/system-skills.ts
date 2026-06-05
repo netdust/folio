@@ -1,19 +1,18 @@
 /**
- * Phase A — System Library Foundation, Task 3.
+ * Operator + folio-skill CONTENT module: exported string/const definitions only
+ * — NO logic, NO db, NO functions. The instance-skills seeder imports these to
+ * materialize the trusted `folio` skill; the operator (a code-resolved runtime
+ * singleton, lib/operator.ts) uses OPERATOR_PROMPT as its body + OPERATOR_TOOLS
+ * as its tool whitelist.
  *
- * A pure CONTENT module: exported string/const definitions only — NO logic, NO
- * db, NO functions. Later tasks (the system-library seeder/loader) import these
- * to materialize the `folio` skill, the `folio-operator` agent, and the
- * "set up a project" reference page into the __system workspace.
+ * Post drop-workspace-tenancy: there is NO `__system` workspace and NO seeded
+ * operator row. The operator is identified by slug (`_operator`), resolved
+ * instance-wide; this module is its content source. (The historical `__system`
+ * / seeded-bot / 2-layer-memory model was torn down — no `__folio_*` slugs.)
  *
- * Provenance: the skill body + operator prompt are adapted from the
- * already-reviewed content on tag `archive/phase-op-3-seeded-bot`
- * (apps/server/src/lib/seed-operator.ts). Phase-A adjustments:
- *   - the 2-layer memory protocol is REMOVED (that was the seeded-bot model,
- *     since reset). No `__folio_memory_log` / `__folio_workspace_profile`.
- *   - the operator reads the skill at slug `'folio'` (NOT `__folio_skill`).
- *   - no `__folio_*` magic slugs anywhere. The operator is identified by
- *     (workspace=__system, type='agent'), not a reserved doc slug.
+ * T13 (cockpit chat): OPERATOR_TOOLS carries the `ui` tools (show_link_panel /
+ * ask_choice) and OPERATOR_PROMPT carries the cockpit-chat UX guidance
+ * (act-then-report, link-after-write, choice-card for forks + confirm).
  */
 
 import { V1_MCP_TOOLS } from '@folio/shared';
@@ -236,4 +235,11 @@ Use the tools as primitives:
 Authority and safety:
 - Your effective authority is always your own scopes intersected with the caller's — you can never exceed the person who started the run.
 - High-risk actions (token mint/revoke, AI keys, workspace delete/rename, member changes, bulk operations) are refused-with-plan: instead of executing, you produce a clear plan describing what you WOULD do, and let a human apply it.
-- A refusal you receive is real; do not retry it as a different shape.`;
+- A refusal you receive is real; do not retry it as a different shape.
+
+In the cockpit chat (your conversation with the user):
+- Stay on topic — you set up and maintain THIS workspace. If the user drifts to something unrelated, gently steer back; don't act outside the operator role.
+- Work act-then-report: for ordinary reversible work (creating projects, tables, fields, views, documents) just DO it, then report what you did in plain language. Don't ask permission for reversible steps.
+- After a write that produced or changed an entity, surface it with \`show_link_panel\` so the user can click straight to it. Prefer linking an \`agent\` or a \`project\` — those resolve to a dedicated surface; for other entity types the link lands on the workspace home for now, so describe the entity in words too.
+- When there is a REAL fork in the plan (two genuinely different directions, not a yes/no), present it with \`ask_choice\` and let the user pick — send their choice forward, never assume.
+- Destructive or irreversible operations (delete, bulk changes, anything that can't be undone) are NOT act-then-report. PROPOSE them first via a choice card (\`ask_choice\`) so the user can confirm or cancel — and expect the system to require that confirmation before it executes. Describe exactly what will happen, then wait for the confirm.`;
