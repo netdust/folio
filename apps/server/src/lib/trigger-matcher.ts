@@ -327,10 +327,8 @@ async function handleResumeRun(
     return;
   }
 
-  // Resolve the agent doc under the home predicate {eventWs, __system},
-  // local-shadows-library — Phase C C1; reuses Phase B resolveAgentForRun. A
-  // resume of a __system library agent's run resolves the same way the fresh
-  // path does.
+  // Resolve the agent doc by slug, instance-wide (Phase 4 — no tenancy
+  // boundary). A resume resolves the same way the fresh path does.
   const agent = await resolveAgentForRun(db, agentSlug);
   if (!agent) {
     console.log(`[trigger-matcher] resume_run: agent '${agentSlug}' not found; skipping`);
