@@ -33,9 +33,14 @@ const AGENT_FIELDS: AgentFieldMeta[] = [
   // (rendered by the body editor on the Fields tab), not a frontmatter field.
   {
     key: 'provider',
-    description: 'AI provider + model. Needs a configured API key in workspace settings.',
+    description: 'AI provider + model. Needs a configured instance AI key (Settings → AI).',
   },
   // `model` is rendered inside the paired provider row — no standalone entry.
+  {
+    key: 'ai_key_label',
+    description:
+      'Which instance AI key to use, by label (default "default"). The runner resolves the key by (provider, ai_key_label) — set this only if the instance holds multiple keys for the provider.',
+  },
   {
     key: 'tools',
     description: 'MCP tools this agent can call. Read tools list/get; write tools create/update; delete removes documents.',

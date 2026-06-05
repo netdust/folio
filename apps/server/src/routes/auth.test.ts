@@ -1,7 +1,7 @@
 import { eq } from 'drizzle-orm';
 import { expect, test } from 'bun:test';
 import { nanoid } from 'nanoid';
-import { users } from '../db/schema.ts';
+import { aiKeys, users } from '../db/schema.ts';
 import { env } from '../env.ts';
 import { userRole } from '../lib/access.ts';
 import { createSession } from '../lib/auth.ts';
@@ -161,4 +161,24 @@ test('GET /auth/me reports is_instance_admin: true for an instance admin', async
   const { data } = await res.json();
   expect(data.role).toBe('admin');
   expect(data.is_instance_admin).toBe(true);
+});
+
+test('GET /auth/me: ai_configured reflects instance AI-key presence (readable by ANY member)', async () => {
+  const { app, db, seed } = await makeTestApp();
+  // seed.user is a plain member; ai_configured must be readable by them (drives
+  // the body editor's AI slash commands), even though the admin-gated key LIST
+  // is not.
+  const before = await app.request('/api/v1/auth/me', { headers: { cookie: seed.sessionCookie } });
+  expect((await before.json()).data.ai_configured).toBe(false);
+
+  // Add an INSTANCE key (no workspace tie).
+  await db.insert(aiKeys).values({
+    id: 'k-1',
+    provider: 'ollama',
+    label: 'default',
+    encryptedKey: 'x',
+  });
+
+  const after = await app.request('/api/v1/auth/me', { headers: { cookie: seed.sessionCookie } });
+  expect((await after.json()).data.ai_configured).toBe(true);
 });

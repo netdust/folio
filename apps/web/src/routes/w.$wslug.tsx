@@ -4,7 +4,7 @@ import { useQueries, useQueryClient } from '@tanstack/react-query';
 import { Search } from 'lucide-react';
 import { z } from 'zod';
 import { toast } from 'sonner';
-import { useLogout, useMe } from '../lib/api/auth.ts';
+import { useIsInstanceAdmin, useIsSystemMember, useLogout, useMe } from '../lib/api/auth.ts';
 import { useProjects, useUpdateProject, useDeleteProject, projectsKeys } from '../lib/api/projects.ts';
 import { type Table, tablesKeys } from '../lib/api/tables.ts';
 import { type View, viewsKeys } from '../lib/api/views.ts';
@@ -73,6 +73,12 @@ function WorkspaceLayout() {
   const navigate = useNavigate();
   const routerState = useRouterState();
   const { data: me } = useMe();
+  // Show the "Instance settings" menu entry only to users with an instance-level
+  // surface to manage (shared AI keys → instance admin; System Library → system
+  // member), matching what /settings actually renders.
+  const isInstanceAdmin = useIsInstanceAdmin();
+  const isSystemMember = useIsSystemMember();
+  const hasInstanceSettings = isInstanceAdmin || isSystemMember;
   const { data: workspace, isLoading } = useWorkspace(wslug);
   const { data: workspaces } = useWorkspaces();
   const { data: projects } = useProjects(wslug);
@@ -360,6 +366,11 @@ function WorkspaceLayout() {
                   onCreateWorkspace={onCreateWorkspace}
                   onOpenSettings={() =>
                     void navigate({ to: '/w/$wslug/settings', params: { wslug } })
+                  }
+                  onOpenInstanceSettings={
+                    hasInstanceSettings
+                      ? () => void navigate({ to: '/settings' })
+                      : undefined
                   }
                 />
               ),

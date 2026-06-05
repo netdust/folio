@@ -3,31 +3,31 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { AiTab } from './ai-tab.tsx';
 import {
-  useWorkspaceAiKeys,
-  useUpsertAiKey,
-  useDeleteAiKey,
-} from '../../lib/api/settings.ts';
+  useInstanceAiKeys,
+  useUpsertInstanceAiKey,
+  useDeleteInstanceAiKey,
+} from '../../lib/api/instance-ai-keys.ts';
 
 const mockTestMutate = vi.fn(async () => ({ ok: true } as const));
 vi.mock('../../lib/api/ai-test-key.ts', () => ({
   useTestKey: () => ({ mutateAsync: mockTestMutate, isPending: false }),
 }));
 
-vi.mock('../../lib/api/settings.ts', () => ({
-  useWorkspaceAiKeys: vi.fn(() => ({ data: [], isLoading: false })),
-  useUpsertAiKey: vi.fn(() => ({ mutateAsync: vi.fn(), isPending: false })),
-  useDeleteAiKey: vi.fn(() => ({ mutateAsync: vi.fn(), isPending: false })),
+vi.mock('../../lib/api/instance-ai-keys.ts', () => ({
+  useInstanceAiKeys: vi.fn(() => ({ data: [], isLoading: false })),
+  useUpsertInstanceAiKey: vi.fn(() => ({ mutateAsync: vi.fn(), isPending: false })),
+  useDeleteInstanceAiKey: vi.fn(() => ({ mutateAsync: vi.fn(), isPending: false })),
 }));
 
 vi.mock('sonner', () => ({
-  toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() },
+  toast: { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() },
 }));
 
 function renderTab() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
-      <AiTab wslug="acme" workspaceId="ws_1" />
+      <AiTab wslug="acme" />
     </QueryClientProvider>,
   );
 }
@@ -35,12 +35,12 @@ function renderTab() {
 describe('AiTab', () => {
   beforeEach(() => {
     mockTestMutate.mockClear();
-    vi.mocked(useWorkspaceAiKeys).mockReturnValue({ data: [], isLoading: false } as never);
-    vi.mocked(useUpsertAiKey).mockReturnValue({
-      mutateAsync: vi.fn(async () => ({ ok: true })),
+    vi.mocked(useInstanceAiKeys).mockReturnValue({ data: [], isLoading: false } as never);
+    vi.mocked(useUpsertInstanceAiKey).mockReturnValue({
+      mutateAsync: vi.fn(async () => ({ id: 'k', provider: 'anthropic', label: 'default', paid_residual_live: false })),
       isPending: false,
     } as never);
-    vi.mocked(useDeleteAiKey).mockReturnValue({
+    vi.mocked(useDeleteInstanceAiKey).mockReturnValue({
       mutateAsync: vi.fn(async () => ({ ok: true })),
       isPending: false,
     } as never);
@@ -121,7 +121,7 @@ describe('AiTab', () => {
 
   test('upsert passes label="default" to the mutation', async () => {
     const upsertSpy = vi.fn(async () => ({ ok: true }));
-    vi.mocked(useUpsertAiKey).mockReturnValue({
+    vi.mocked(useUpsertInstanceAiKey).mockReturnValue({
       mutateAsync: upsertSpy,
       isPending: false,
     } as never);
@@ -142,7 +142,7 @@ describe('AiTab', () => {
   // hard-coded label='default' and ignored anything else; agents pinning a
   // 'prod' key would run while the Settings tab claimed 'not configured'.
   test('configured keys list shows non-default labels as managed-via-API', () => {
-    vi.mocked(useWorkspaceAiKeys).mockReturnValue({
+    vi.mocked(useInstanceAiKeys).mockReturnValue({
       data: [
         {
           id: 'k1',
@@ -190,8 +190,12 @@ describe('AiTab', () => {
     // never appears.
     expect(openaiRow?.textContent).toMatch(/configured via API/i);
     expect(openaiRow?.textContent).not.toMatch(/not configured/);
-    expect(openaiRow?.textContent).toMatch(/managed via API/i);
+    // UPDATED 2026-06-03: the footer no longer says "managed via API" — instance
+    // keys of every label are now listed AND deletable in the UI (each labelled
+    // row has its own Remove). The label + a Remove control are the assertion.
+    expect(openaiRow?.textContent).toMatch(/other label/i);
     expect(openaiRow?.textContent).toMatch(/prod/);
+    expect(openaiRow?.textContent).toMatch(/Remove/);
   });
 
   // B round 3 fix #7 — Save toast must name the provider the user selected at
@@ -209,7 +213,7 @@ describe('AiTab', () => {
     const upsertSpy = vi.fn(
       () => new Promise<{ ok: true }>((res) => { resolveSave = res; }),
     );
-    vi.mocked(useUpsertAiKey).mockReturnValue({
+    vi.mocked(useUpsertInstanceAiKey).mockReturnValue({
       mutateAsync: upsertSpy,
       isPending: false,
     } as never);
@@ -285,7 +289,7 @@ describe('AiTab', () => {
   // points at an internal host. Surface it so an admin auditing the workspace
   // can see what's wired up.
   test('non-default ollama row shows the baseUrl alongside the label', () => {
-    vi.mocked(useWorkspaceAiKeys).mockReturnValue({
+    vi.mocked(useInstanceAiKeys).mockReturnValue({
       data: [
         {
           id: 'k1',

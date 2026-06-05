@@ -36,6 +36,12 @@ export const agentFrontmatterSchema = z.object({
   max_delegation_depth: z.number().int().min(0).max(5).default(2),
   max_tokens_per_run: z.number().int().min(1).max(100_000).default(10_000),
   requires_approval: z.boolean().default(false),
+  // Which instance AI key this agent uses, by (provider, label). The `provider`
+  // field above selects the provider; this selects the key label (the instance
+  // may hold multiple keys per provider). Default 'default'. The reference is a
+  // non-secret label — the key MATERIAL is read server-side by the runner only
+  // (see runner.ts AI-key resolution; the secret never reaches frontmatter).
+  ai_key_label: z.string().min(1).default('default'),
   // Server-managed fields rejected on client input.
   api_token_id: z.undefined(),
   parent_agent: z.undefined(),

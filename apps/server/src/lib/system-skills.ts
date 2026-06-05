@@ -172,22 +172,20 @@ Preview first if unsure — add \`"dryRun": true\` to the body and read back \`w
 
 ### Add an AI provider (BYOK — you GUIDE, the human enters the key)
 
-A provider's API key is a human-held secret. You **cannot** write it: \`ai-keys\` is a HIGH-risk, session-only route (§6) — correct by design, so a prompt-injected run can't add an attacker's key or point Folio at an attacker's host. Your job is to GUIDE the human and then VERIFY, not to write the key. The recipe:
+A provider's API key is a human-held secret. AI keys are **instance-level** (one store for the whole install, not per-workspace) and live behind a session-only, \`__system\`-admin-gated route (§6). You **cannot** write OR read it — \`/instance/ai-keys\` is unreachable by any agent token, correct by design, so a prompt-injected run can't add an attacker's key, point Folio at an attacker's host, or exfiltrate a stored key. Your job is to GUIDE the human and then VERIFY indirectly, not to touch the key. The recipe:
 
-1. **Tell the human exactly what to do in the UI.** "Open **Settings → AI**, choose the provider (\`anthropic\`, \`openai\`, \`openrouter\`, or \`ollama\`), paste your API key, and click **Save key**." If they don't have a key yet: "Create one in the provider's dashboard, name it whatever you like, then paste it here."
+1. **Tell the human exactly what to do in the UI.** "Open **Settings → AI** (you must be an instance admin), choose the provider (\`anthropic\`, \`openai\`, \`openrouter\`, or \`ollama\`), paste your API key, give it a **label** (default \`default\`), and click **Save key**." If they don't have a key yet: "Create one in the provider's dashboard, then paste it here." Keys are shared across every workspace on this instance.
 2. **Ollama (local, keyless) is special.** It needs no API key, but it DOES need a base URL — \`http://localhost:11434\` for a local install. The UI rejects loopback base URLs unless the operator set \`FOLIO_ALLOW_LOOPBACK_AI=true\` in the server env; if Save fails on "loopback rejected," tell them to set that flag and restart. The model (e.g. \`qwen2.5-coder:7b\`) is NOT entered here — see step 4.
-3. **Verify it landed.** After they save, confirm with a read — the key metadata (provider, label, base_url — never the secret) is visible. Note this route's second segment is the workspace **id**, not the slug (resolve it from \`list_workspaces\` if you only have the slug):
-   \`\`\`
-   folio_api_get  GET /api/v1/w/<wslug>/settings/<workspace_id>/ai-keys
-   \`\`\`
-4. **Bind the provider to an agent — this is the step everyone forgets.** Configuring the key does NOT make any agent use it. The model is chosen PER AGENT in the agent's frontmatter, not on the key. For an agent to run on this provider, set its frontmatter \`provider:\` and \`model:\`, e.g.:
+3. **Verify it landed — indirectly.** You can't read the key store (it's session-only). Confirm instead by binding an agent to the new \`(provider, label)\` and doing a small test run; if it doesn't fail \`no_ai_key\`, the key resolved. (The human can see the key metadata — provider, label, base_url, never the secret — in **Settings → AI**.)
+4. **Bind the provider+label to an agent — this is the step everyone forgets.** Configuring the key does NOT make any agent use it. Each agent picks its key by frontmatter \`provider:\` + \`ai_key_label:\`, and its \`model:\`. For an agent to run on this provider/key, set:
    \`\`\`
    provider: ollama
    model: qwen2.5-coder:7b
+   ai_key_label: default
    \`\`\`
-   Use \`update_document\` (or \`update_agent\`) on the agent to set these. Without both keys the run falls back to the workspace default.
+   Use \`update_document\` (or \`update_agent\`) on the agent to set these. \`ai_key_label\` defaults to \`default\` when omitted; set it only when the instance holds multiple keys per provider. The runner resolves the key by \`(provider, ai_key_label)\` — no workspace tie.
 
-So: **you guide the key entry, you verify it, and you wire \`provider\`+\`model\` into the agent.** The only part you can't do is type the secret — everything around it is yours.
+So: **you guide the key entry, you verify by binding+running, and you wire \`provider\`+\`model\`+\`ai_key_label\` into the agent.** The only parts you can't do are type or read the secret — everything around it is yours.
 
 ## 6. The risk-gate protocol
 

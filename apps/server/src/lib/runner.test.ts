@@ -179,10 +179,12 @@ async function seedAgent(
   return (await db.query.documents.findFirst({ where: eq(documents.id, id) }))!;
 }
 
-async function seedAiKey(db: TestDB, workspaceId: string): Promise<void> {
+// AI keys are instance-level (instance-ai-config) — resolved by (provider,
+// label), no workspace tie. The param is retained for call-site compatibility
+// but no longer scopes the key.
+async function seedAiKey(db: TestDB, _workspaceId?: string): Promise<void> {
   await db.insert(aiKeys).values({
     id: nanoid(),
-    workspaceId,
     provider: 'anthropic',
     label: 'default',
     encryptedKey: encryptSecret('sk-test-fake-key'),
@@ -231,6 +233,7 @@ async function seedRunningRun(
     agent_slug: agent.slug,
     provider: 'anthropic',
     model: 'claude-sonnet-4-6',
+    ai_key_label: 'default',
     system_prompt: 'You are a helper.',
     max_tokens: 12_345,
     tokens_in: 0,

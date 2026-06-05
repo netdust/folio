@@ -16,7 +16,7 @@ const MIGRATIONS_FOLDER = path.resolve(import.meta.dir);
  */
 function execMigrationByStatements(sqlite: Database): void {
   const sql = readFileSync(
-    path.join(MIGRATIONS_FOLDER, '0026_backfill_roles_and_access.sql'),
+    path.join(MIGRATIONS_FOLDER, '0027_backfill_roles_and_access.sql'),
     'utf8',
   );
   for (const stmt of sql.split('--> statement-breakpoint')) {

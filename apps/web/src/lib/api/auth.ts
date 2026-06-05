@@ -20,9 +20,18 @@ export interface SessionUser {
  */
 export interface MeResponse {
   user: SessionUser;
+  // Server-authoritative INSTANCE role (users.role; one instance = one team).
+  // OPTIONAL — login/register seed only `{ user }`; a missing flag reads as the
+  // safe default.
   role?: 'owner' | 'admin' | 'member';
+  // owner||admin signal. Mirrors the route's requireInstanceAdmin gate EXACTLY,
+  // so the instance AI-key / admin UI shows only to users who can actually use
+  // it. Missing → false.
   is_instance_admin?: boolean;
-  is_system_member?: boolean; // transitional, still present
+  // Presence-only: does ANY instance AI key exist? Readable by every user (no
+  // admin gate, no key material), it drives the body editor's AI slash commands.
+  // The key LIST is admin-gated; this is just "is an LLM reachable at all".
+  ai_configured?: boolean;
 }
 
 export const authKeys = {
@@ -43,14 +52,21 @@ export function useMe() {
  * Reads the server-authoritative flag off the cached `/me` payload; a stale or
  * partial cache (e.g. the post-login `{ user }`-only seed) reads `false`.
  */
+/**
+ * @deprecated The `__system` library workspace was removed in Phase 4
+ * (drop-workspace-tenancy). There are no "system members" anymore — this always
+ * returns false. Callers are being migrated off it (Phase 5 / Task 23); the
+ * stub keeps them compiling until then.
+ */
 export function useIsSystemMember(): boolean {
-  return useMe().data?.is_system_member ?? false;
+  return false;
 }
 
 /**
- * Whether the current user is an instance admin (owner||admin). Reads the
- * server-authoritative `is_instance_admin` off the cached `/me` payload; a stale
- * or partial cache (e.g. the post-login `{ user }`-only seed) reads `false`.
+ * Whether the current user is an instance admin (owner||admin) — the role that
+ * may administer instance-level surfaces (AI keys, instance tokens, roles,
+ * invitations). Mirrors the server's requireInstanceAdmin gate so the UI never
+ * offers a control the route would 403. A stale/partial cache reads `false`.
  */
 export function useIsInstanceAdmin(): boolean {
   return useMe().data?.is_instance_admin ?? false;

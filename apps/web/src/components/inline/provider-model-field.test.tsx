@@ -48,7 +48,7 @@ function stubFetch(opts: { providersWithKeys: string[]; claudeCodeEnabled?: bool
           { status: 200, headers: { 'content-type': 'application/json' } },
         );
       }
-      if (url.pathname === '/api/v1/w/ws/settings/w1/ai-keys') {
+      if (url.pathname === '/api/v1/instance/ai-keys') {
         return new Response(JSON.stringify({ data: { keys } }), {
           status: 200, headers: { 'content-type': 'application/json' },
         });

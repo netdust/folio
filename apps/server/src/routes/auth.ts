@@ -118,16 +118,24 @@ auth.post('/logout', async (c) => {
 
 auth.get('/me', requireUser, async (c) => {
   const u = getUser(c);
-  // Post-tenancy boot identity. `role` is the caller's INSTANCE role
-  // (users.role; one instance = one team), server-authoritative so the web
-  // boots its identity without re-deriving authority client-side.
-  // `is_instance_admin` is the derived owner||admin signal. Both are top-level
-  // because they are properties of the boot identity, not of the user record.
-  const role = await userRole(db, u.id);
+  // Post-tenancy boot identity, all server-authoritative. Two independent reads
+  // run concurrently:
+  //   - userRole: the caller's INSTANCE role (users.role; one instance = one
+  //     team). `is_instance_admin` is the derived owner||admin signal. Both are
+  //     top-level — properties of the boot identity, not the user record.
+  //   - ai_configured: PRESENCE-only — does ANY instance AI key exist? Readable
+  //     by every user (no admin gate, no key material); drives the body editor's
+  //     AI slash commands. The key LIST is admin-gated; this is just "is an LLM
+  //     reachable". (is_system_member is GONE — Phase 4 dropped __system.)
+  const [role, anyAiKey] = await Promise.all([
+    userRole(db, u.id),
+    db.query.aiKeys.findFirst({ columns: { id: true } }),
+  ]);
   return jsonOk(c, {
     user: { id: u.id, email: u.email, name: u.name },
     role, // instance role (owner|admin|member)
     is_instance_admin: role === 'owner' || role === 'admin',
+    ai_configured: anyAiKey !== undefined,
   });
 });
 

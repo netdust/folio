@@ -70,7 +70,7 @@ describe('Phase 4 contract migrations — __system teardown + drop memberships',
     sqlite.exec(`INSERT INTO memberships (workspace_id, user_id, role) VALUES ('sys', 'u1', 'owner')`);
 
     // Run ONLY the 0027 teardown SQL (split on the breakpoint, like migrate()).
-    applyMigration(sqlite, '0027_drop_system_workspace.sql');
+    applyMigration(sqlite, '0028_drop_system_workspace.sql');
 
     // __system cluster GONE.
     const sysWs = sqlite.query(`SELECT id FROM workspaces WHERE slug='__system'`).all();
@@ -89,7 +89,7 @@ describe('Phase 4 contract migrations — __system teardown + drop memberships',
     expect(sqlite.query(`SELECT id FROM documents WHERE id='cd'`).all().length).toBe(1);
 
     // Idempotent: re-running the teardown on the now-clean DB is a harmless no-op.
-    applyMigration(sqlite, '0027_drop_system_workspace.sql');
+    applyMigration(sqlite, '0028_drop_system_workspace.sql');
     expect(sqlite.query(`SELECT id FROM workspaces WHERE slug='acme'`).all().length).toBe(1);
   });
 });

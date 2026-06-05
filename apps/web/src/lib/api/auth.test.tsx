@@ -26,27 +26,13 @@ function stubMe(is_system_member: boolean) {
   );
 }
 
-describe('useIsSystemMember', () => {
-  it('returns true when /auth/me reports is_system_member: true', async () => {
+describe('useIsSystemMember (deprecated — __system removed in Phase 4)', () => {
+  // The __system library workspace was torn down; there are no "system members"
+  // anymore. The helper is a deprecated stub that always returns false until its
+  // callers are migrated off (Phase 5 / Task 23).
+  it('always returns false, regardless of /me (deprecated stub)', () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    stubMe(true);
-    const { result } = renderHook(() => useIsSystemMember(), { wrapper: wrap(qc) });
-    await waitFor(() => expect(result.current).toBe(true));
-  });
-
-  it('returns false when /auth/me reports is_system_member: false', async () => {
-    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    stubMe(false);
-    const { result } = renderHook(() => useIsSystemMember(), { wrapper: wrap(qc) });
-    // settle the query, then assert the mapped flag
-    await waitFor(() => expect(qc.getQueryData(['auth', 'me'])).toBeDefined());
-    expect(result.current).toBe(false);
-  });
-
-  it('returns false while /me is loading/absent (missing flag reads false)', () => {
-    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    // never resolve — the hook must default to false, not crash on undefined data
-    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => {})));
+    stubMe(true); // even if /me somehow reported a truthy flag, the stub ignores it
     const { result } = renderHook(() => useIsSystemMember(), { wrapper: wrap(qc) });
     expect(result.current).toBe(false);
   });

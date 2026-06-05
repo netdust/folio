@@ -7,6 +7,10 @@ interface UserMenuProps {
   onSignOut: () => void;
   onCreateWorkspace?: () => void;
   onOpenSettings?: () => void;
+  // Instance-level settings (shared AI keys, System Library). Only provided to
+  // users who have any instance-level surface to manage (instance admin / system
+  // member), so the entry simply hides for everyone else.
+  onOpenInstanceSettings?: () => void;
 }
 
 export function UserMenu({
@@ -15,6 +19,7 @@ export function UserMenu({
   onSignOut,
   onCreateWorkspace,
   onOpenSettings,
+  onOpenInstanceSettings,
 }: UserMenuProps) {
   return (
     <Popover>
@@ -40,7 +45,16 @@ export function UserMenu({
             onClick={onOpenSettings}
             className="block w-full rounded-md px-2 py-1.5 text-left text-sm text-fg-2 hover:bg-card hover:text-fg"
           >
-            Settings
+            Workspace settings
+          </button>
+        ) : null}
+        {onOpenInstanceSettings ? (
+          <button
+            type="button"
+            onClick={onOpenInstanceSettings}
+            className="block w-full rounded-md px-2 py-1.5 text-left text-sm text-fg-2 hover:bg-card hover:text-fg"
+          >
+            Instance settings
           </button>
         ) : null}
         <div className="my-1 h-px bg-border-light" />

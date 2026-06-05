@@ -173,6 +173,7 @@ async function seedRunningRun(
     agent_slug: agent.slug,
     provider: 'anthropic',
     model: 'claude-sonnet-4-6',
+    ai_key_label: 'default',
     system_prompt: 'You are a helper.',
     max_tokens: 12_345,
     tokens_in: 0,
@@ -265,6 +266,59 @@ describe('createRun', () => {
     expect(runStartedEvents[0]!.documentId).toBe(result.document.id);
     expect(runStartedEvents[0]!.workspaceId).toBe(seed.workspace.id);
     expect(runStartedEvents[0]!.projectId).toBe(seed.project.id);
+  });
+
+  test('snapshots ai_key_label from the agent frontmatter (default when absent)', async () => {
+    const { db, seed } = await makeTestApp();
+    const runsTable = await seedRunsTable(db, seed.project.id);
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+
+    // Agent A: no ai_key_label → run fm defaults to 'default'.
+    const agentDefault = await seedAgent(db, seed.workspace, seed.user, 'helper-default');
+    const runDefault = await createRun({
+      workspace: seed.workspace,
+      project: seed.project,
+      runsTable,
+      agent: agentDefault,
+      actor: seed.user,
+      input: {
+        parentDocumentId: parent.id,
+        firedBy: 'agent.task.assigned',
+        chainId: crypto.randomUUID(),
+        triggerId: null,
+      },
+    });
+    expect((runDefault.document.frontmatter as AgentRunFrontmatter).ai_key_label).toBe('default');
+
+    // Agent B: ai_key_label='cheap' in frontmatter → run fm carries 'cheap'.
+    const agentCheap = await seedAgent(db, seed.workspace, seed.user, 'helper-cheap');
+    await db
+      .update(documents)
+      .set({
+        frontmatter: {
+          ...(agentCheap.frontmatter as Record<string, unknown>),
+          ai_key_label: 'cheap',
+        },
+      })
+      .where(eq(documents.id, agentCheap.id));
+    const agentCheapRow = (await db.query.documents.findFirst({
+      where: eq(documents.id, agentCheap.id),
+    }))!;
+    const runCheap = await createRun({
+      workspace: seed.workspace,
+      project: seed.project,
+      runsTable,
+      agent: agentCheapRow,
+      actor: seed.user,
+      input: {
+        parentDocumentId: parent.id,
+        firedBy: 'agent.task.assigned',
+        chainId: crypto.randomUUID(),
+        triggerId: null,
+      },
+    });
+    expect((runCheap.document.frontmatter as AgentRunFrontmatter).ai_key_label).toBe('cheap');
   });
 
   test('snapshots the agent BODY as the run system prompt (not frontmatter.system_prompt)', async () => {
@@ -1485,6 +1539,7 @@ async function seedRunAt(
     agent_slug: agent.slug,
     provider: 'anthropic',
     model: 'claude-sonnet-4-6',
+    ai_key_label: 'default',
     system_prompt: 'You are a helper.',
     max_tokens: 12_345,
     tokens_in: overrides.tokensIn ?? 0,
@@ -2736,6 +2791,7 @@ async function seedTerminalRunEvent(
     agent_slug: args.agent.slug,
     provider: args.provider,
     model: 'claude-sonnet-4-6',
+    ai_key_label: 'default',
     system_prompt: 'x',
     max_tokens: 1000,
     tokens_in: 0,

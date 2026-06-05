@@ -87,6 +87,18 @@ describe('pathToScope + isSecretWrite (A6 scope gate, T5/T6)', () => {
     expect(isSecretWrite('GET', '/api/v1/w/acme/tokens')).toBe(false); // read
   });
 
+  test('the INSTANCE AI-key route is SECRET-classed (T8/M1 — never agent-writable)', () => {
+    // AI-key CRUD moved to /api/v1/instance/ai-keys (T7). The `/ai-keys` keyword
+    // branch must still classify it SECRET so the fail-closed pre-check refuses
+    // any agent that somehow targets it (defense-in-depth behind the route's own
+    // session-only gate). Guard test — keeps the new path covered.
+    expect(pathToScope('POST', '/api/v1/instance/ai-keys')).toBe('SECRET');
+    expect(pathToScope('DELETE', '/api/v1/instance/ai-keys/k1')).toBe('SECRET');
+    expect(isSecretWrite('POST', '/api/v1/instance/ai-keys')).toBe(true);
+    expect(isSecretWrite('DELETE', '/api/v1/instance/ai-keys/k1')).toBe(true);
+    expect(isSecretWrite('GET', '/api/v1/instance/ai-keys')).toBe(false); // read not a secret-WRITE
+  });
+
   // CR#1 — a document addressed by a slug that EQUALS a route keyword must NOT
   // collide with the config/secret keyword branches. A doc titled "Tokens"
   // (slug 'tokens') → PATCH .../documents/tokens must classify documents:write,
@@ -379,18 +391,20 @@ describe('folio_api_get tool (P3-4/6)', () => {
       scopes: ['documents:read'],
       createdBy: seed.user.id,
     });
-    // ai-keys GET is mounted at /settings/:workspaceId/ai-keys under wScope; the
-    // handler strips encryptedKey from every row. Hitting the real handler (200,
-    // keys:[] when none seeded) proves the redaction, not a 404 vacuous pass.
+    // UPDATED 2026-06-03: AI-key CRUD moved to the INSTANCE route
+    // /api/v1/instance/ai-keys (session-only, __system-admin gated, mounted on v1
+    // where attachToken never runs). An agent token can therefore NEVER reach the
+    // key store at all — strictly stronger than the old per-workspace redaction
+    // (M1/M4). Assert the agent is blocked (401/403), and that no secret leaks.
     const out = (await executeTool(
       tok,
       'agent:op',
       'folio_api_get',
-      { path: `/api/v1/w/${seed.workspace.slug}/settings/${seed.workspace.id}/ai-keys` },
+      { path: `/api/v1/instance/ai-keys` },
       undefined,
       { callerScopes: tok.scopes },
     )) as { status: number; body: unknown };
-    expect(out.status).toBe(200); // hit the real handler, not a 404
+    expect([401, 403]).toContain(out.status); // unreachable by an agent token
     expect(JSON.stringify(out)).not.toMatch(/encrypted_?[Kk]ey/);
   });
 });
