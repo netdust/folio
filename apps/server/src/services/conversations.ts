@@ -184,29 +184,48 @@ export async function recoverInterruptedConversations(db: DB): Promise<number> {
   const stale = await db.query.conversations.findMany({
     where: (c, { isNotNull }) => isNotNull(c.activeRunId),
   });
+  let recovered = 0;
   for (const conv of stale) {
-    // Summarize the tool steps the interrupted run persisted. Match by the run id
-    // the conversation was holding so the summary reflects THAT turn only.
-    const stepRows = await db.query.messages.findMany({
-      where: and(eq(messages.conversationId, conv.id), eq(messages.runId, conv.activeRunId!)),
-      orderBy: (m, { asc }) => [asc(m.seq)],
-    });
-    const steps = stepRows.filter((m) => m.kind === 'tool_step');
-    const completed = steps
-      .map((m) => {
-        const p = parsePayload<{ tool?: string; summary?: string; status?: string }>(m.payload);
-        return `${p.tool ?? 'tool'} (${p.status ?? 'unknown'})`;
-      })
-      .join(', ');
-    const body =
-      completed.length > 0
-        ? `The previous turn was interrupted. Completed: ${completed}.`
-        : 'The previous turn was interrupted before any tools ran.';
-    await appendMessage(db, { conversationId: conv.id, role: 'operator', kind: 'text', body });
-    await db
-      .update(conversations)
-      .set({ activeRunId: null })
-      .where(eq(conversations.id, conv.id));
+    // Cluster-4 /code-review fix: each conversation is recovered INDEPENDENTLY
+    // (per-conv try/catch) so one malformed conversation can't abort the whole
+    // sweep and leave later conversations wedged. The slot-clear is the
+    // load-bearing unwedge; the summary is best-effort. We clear the slot LAST
+    // and only after a successful summary append — BUT if the summary throws, we
+    // STILL clear the slot in the catch (unwedging beats a perfect summary). The
+    // clear is idempotent (already-null rows aren't re-swept), so a re-sweep after
+    // a crash between append+clear at worst appends one duplicate summary — never
+    // a permanent wedge.
+    try {
+      // Summarize the tool steps the interrupted run persisted. Match by the run
+      // id the conversation was holding so the summary reflects THAT turn only.
+      const stepRows = await db.query.messages.findMany({
+        where: and(eq(messages.conversationId, conv.id), eq(messages.runId, conv.activeRunId!)),
+        orderBy: (m, { asc }) => [asc(m.seq)],
+      });
+      const completed = stepRows
+        .filter((m) => m.kind === 'tool_step')
+        .map((m) => {
+          const p = parsePayload<{ tool?: string; status?: string }>(m.payload);
+          return `${p.tool ?? 'tool'} (${p.status ?? 'unknown'})`;
+        })
+        .join(', ');
+      const body =
+        completed.length > 0
+          ? `The previous turn was interrupted. Completed: ${completed}.`
+          : 'The previous turn was interrupted before any tools ran.';
+      await appendMessage(db, { conversationId: conv.id, role: 'operator', kind: 'text', body });
+      await db.update(conversations).set({ activeRunId: null }).where(eq(conversations.id, conv.id));
+      recovered += 1;
+    } catch (err) {
+      // The summary failed — still UNWEDGE the conversation (the composer must not
+      // stay locked). Without this, a single bad conversation wedges forever.
+      console.error(`[recovery] conversation ${conv.id} summary failed; clearing slot anyway`, err);
+      await db
+        .update(conversations)
+        .set({ activeRunId: null })
+        .where(eq(conversations.id, conv.id))
+        .catch(() => {});
+    }
   }
-  return stale.length;
+  return recovered;
 }

@@ -67,6 +67,13 @@ export interface ToolContext {
    * lands later. Undefined on non-conversation calls.
    */
   conversationId?: string;
+  /**
+   * Operator cockpit chat (Task 7, Cluster-4 BLOCKER fix) — the HUMAN confirmer
+   * (conversation owner's user id). folio_api owns its OWN confirm gate and must
+   * record pending_ops.caller_id with this (the id the confirm route confirms
+   * with), NOT `actor` (= agent:_operator). Undefined on non-conversation calls.
+   */
+  confirmerId?: string;
 }
 
 export interface ToolDef<TArgs = unknown, TOut = unknown> {
@@ -155,14 +162,21 @@ const UNATTENDED_FLOORED_SCOPES = new Set<string>(['agents:write']);
 
 /**
  * Operator cockpit chat (Task 7) — the fail-closed risk classifier the confirm
- * gate keys on. A scope ending in `:write` or `:delete` is a mutating scope, so
- * a tool requiring it DEFAULTS to `high` (confirm-in-conversation) unless its def
- * explicitly opts down to `riskTier: 'normal'`. Read scopes (`documents:read`,
- * `…:read`) → `normal`. There is NO allowlist: classification is structural.
- * (spec: Irreversible-op gate § — `effectiveTier = def.riskTier ?? (isWriteOrDeleteScope ? 'high' : 'normal')`.)
+ * gate keys on. A MUTATING scope makes a tool DEFAULT to `high`
+ * (confirm-in-conversation) unless its def explicitly opts down to
+ * `riskTier: 'normal'`. There is NO allowlist: classification is structural.
+ *
+ * Cluster-4 /code-review fix: the rule is "mutating UNLESS it ends in `:read`",
+ * NOT just `:write`/`:delete`. The earlier suffix check missed admin-class scopes
+ * that don't follow the `:write` convention — notably `workspace:admin` (and a
+ * hypothetical future `admin:purge` / `documents:archive`) would have classified
+ * `normal` and SKIPPED the gate. Defaulting everything non-`:read` to mutating is
+ * strictly MORE fail-closed: a new mutating scope confirms unless deliberately
+ * named `…:read` or opted down. (spec: Irreversible-op gate § —
+ * `effectiveTier = def.riskTier ?? (isWriteOrDeleteScope ? 'high' : 'normal')`.)
  */
 export function isWriteOrDeleteScope(scope: string): boolean {
-  return scope.endsWith(':write') || scope.endsWith(':delete');
+  return !scope.endsWith(':read');
 }
 
 /**
@@ -281,6 +295,14 @@ export async function executeTool(
     /** Operator cockpit chat (Task 4) — the conversation output sink, threaded
      *  from the runner so the `ui` tool handlers can emit `component` rows. */
     conversationSink?: ConversationSink;
+    /** Operator cockpit chat (Task 7, Cluster-4 /code-review BLOCKER fix) — the
+     *  HUMAN who can confirm a pending_op (the conversation owner's user id =
+     *  `RunContext.transitionActor`). `actor` is the AGENT identity (`agent:_operator`)
+     *  for audit/event purposes, but the confirm ROUTE confirms with the session
+     *  user's id, so the pending_op's `caller_id` MUST be recorded with this human
+     *  id — not `actor` — or `confirmPendingOp`'s caller-bound WHERE never matches
+     *  and every confirmation fails closed (the gate becomes unconfirmable). */
+    confirmerId?: string;
   },
 ): Promise<unknown> {
   const def = registry.get(name);
@@ -383,9 +405,17 @@ export async function executeTool(
     });
     if (!confirmed) {
       // Record the exact pending action + surface a choice_card, then REFUSE.
+      // The HUMAN confirmer (conversation owner) — NOT `actor` (= agent:_operator).
+      // The confirm route confirms with the session user's id; caller_id MUST match
+      // it or confirmPendingOp's caller-bound WHERE never matches and the gate is
+      // unconfirmable (Cluster-4 BLOCKER fix). A conversation gate with no confirmer
+      // is a wiring bug — fail LOUD rather than record an unconfirmable op.
+      if (!caller.confirmerId) {
+        throw new Error('forbidden: confirm gate reached without a confirmer id');
+      }
       const pending = await recordPendingOp(gateDb, {
         conversationId: caller.conversationId,
-        callerId: actor,
+        callerId: caller.confirmerId,
         op: name,
         params: parsed,
         target: deriveConfirmTarget(name, parsed),
@@ -429,6 +459,7 @@ export async function executeTool(
       unattended: caller?.unattended,
       conversationSink: caller?.conversationSink,
       conversationId: caller?.conversationId,
+      confirmerId: caller?.confirmerId,
     });
     await markExecuted(gateDb, confirmed.id, actor);
     return result;
@@ -447,6 +478,7 @@ export async function executeTool(
     // on every non-conversation call → the `ui` tools fail closed (T3 handler).
     conversationSink: caller?.conversationSink,
     conversationId: caller?.conversationId,
+    confirmerId: caller?.confirmerId,
   });
 }
 

@@ -335,9 +335,17 @@ export function registerFolioApiTools(): void {
           params: gateParams,
         });
         if (!confirmed) {
+          // Cluster-4 BLOCKER fix: record caller_id with the HUMAN confirmer
+          // (conversation owner), the value the confirm route confirms with — NOT
+          // ctx.actor (= agent:_operator), which would make every confirm fail
+          // closed. Fail LOUD if absent (a conversation gate without a confirmer
+          // is a wiring bug) rather than record an unconfirmable op.
+          if (!ctx.confirmerId) {
+            throw new Error('forbidden: confirm gate reached without a confirmer id');
+          }
           const pending = await recordPendingOp(ctx.tx ?? db, {
             conversationId: ctx.conversationId,
-            callerId: ctx.actor,
+            callerId: ctx.confirmerId,
             op: 'folio_api',
             params: gateParams,
             target: `${args.method} ${args.path}`,

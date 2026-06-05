@@ -1177,6 +1177,10 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
             // runs → no behavior change to the existing path.
             conversationId: ctx.conversationId,
             conversationSink: ctx.sink,
+            // Cluster-4 BLOCKER fix: the confirm gate records pending_ops.caller_id
+            // with the HUMAN owner (transitionActor = conversation.created_by), the
+            // value the confirm route confirms with — NOT ctx.actor (agent:_operator).
+            confirmerId: ctx.transitionActor,
           });
           const resultString = typeof result === 'string' ? result : JSON.stringify(result);
           toolResultMsgs.push({ role: 'tool', tool_use_id: tc.id, content: resultString });

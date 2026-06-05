@@ -113,6 +113,7 @@ describe('irreversible-op confirm gate (executeTool)', () => {
         callerScopes: ['documents:delete'],
         conversationId: convId,
         conversationSink: sink,
+        confirmerId: 'user-1',
       }),
     ).rejects.toThrow(/^forbidden: __danger requires confirmation$/);
 
@@ -158,6 +159,47 @@ describe('irreversible-op confirm gate (executeTool)', () => {
     expect(JSON.parse(row.params).slug).toBe('acme');
   });
 
+  it('BLOCKER (caller_id namespace): gate-record uses the HUMAN confirmerId, NOT the agent actor — so the confirm round-trip actually works', async () => {
+    // This is the end-to-end wiring assertion the per-task tests missed: a
+    // conversation run's executeTool actor is `agent:_operator`, but the confirm
+    // route confirms with the HUMAN owner's user id. If the gate records caller_id
+    // from `actor`, confirmPendingOp's caller-bound WHERE never matches → every
+    // confirm fails closed (the gate is unconfirmable). Drive the REAL gate with a
+    // distinct agent actor + a human confirmerId, then confirm as the human.
+    registerHighTool();
+    const convId = await makeConversation();
+    const sink = makeRecordingSink();
+    const AGENT_ACTOR = 'agent:_operator';
+    const HUMAN = 'user-1'; // the conversation owner (makeConversation seeds this)
+
+    // Turn 1: the operator (agent actor) proposes a HIGH op. Gate records + refuses.
+    await expect(
+      executeTool(makeToken(['documents:delete']), AGENT_ACTOR, '__danger', { slug: 'acme' }, undefined, {
+        callerScopes: ['documents:delete'],
+        conversationId: convId,
+        conversationSink: sink,
+        confirmerId: HUMAN, // ← the human owner, threaded by the runner as transitionActor
+      }),
+    ).rejects.toThrow(/requires confirmation/);
+
+    // The recorded pending_op's caller_id MUST be the HUMAN, not the agent actor.
+    const rows = await db.select().from(pendingOps).where(eq(pendingOps.conversationId, convId));
+    expect(rows.length).toBe(1);
+    expect(rows[0]!.callerId).toBe(HUMAN); // ← the BLOCKER: was AGENT_ACTOR before the fix
+    const pendingId = rows[0]!.id;
+
+    // The HUMAN confirms (as the route does, with the session user id) — succeeds.
+    await confirmPendingOp(db, pendingId, HUMAN);
+
+    // Turn 2: the operator re-invokes; the gate finds the confirmed row + executes.
+    await executeTool(makeToken(['documents:delete']), AGENT_ACTOR, '__danger', { slug: 'acme' }, undefined, {
+      callerScopes: ['documents:delete'],
+      conversationId: convId,
+      confirmerId: HUMAN,
+    });
+    expect(applied.count).toBe(1); // the destructive op finally applied — gate is confirmable
+  });
+
   it('M6 (mutation guard): a confirmed op for slug A does NOT match a turn calling slug B → refuses', async () => {
     registerHighTool();
     const convId = await makeConversation();
@@ -176,6 +218,7 @@ describe('irreversible-op confirm gate (executeTool)', () => {
       executeTool(makeToken(['documents:delete']), 'user-1', '__danger', { slug: 'evil' }, undefined, {
         callerScopes: ['documents:delete'],
         conversationId: convId,
+        confirmerId: 'user-1',
       }),
     ).rejects.toThrow(/requires confirmation/);
     expect(applied.count).toBe(0);
@@ -271,6 +314,7 @@ describe('irreversible-op confirm gate (executeTool)', () => {
       executeTool(makeToken(['documents:write']), 'user-1', '__synth_write', {}, undefined, {
         callerScopes: ['documents:write'],
         conversationId: convId,
+        confirmerId: 'user-1',
       }),
     ).rejects.toThrow(/requires confirmation/);
   });
@@ -331,6 +375,7 @@ describe('irreversible-op confirm gate (executeTool)', () => {
           callerScopes: ['config:write', 'documents:write', 'documents:read'],
           conversationId: convId,
           conversationSink: sink,
+          confirmerId: 'user-1',
         },
       ),
     ).rejects.toThrow(/requires confirmation/);
@@ -338,6 +383,8 @@ describe('irreversible-op confirm gate (executeTool)', () => {
     const rows = await db.select().from(pendingOps).where(eq(pendingOps.conversationId, convId));
     expect(rows.length).toBe(1);
     expect(rows[0]!.op).toBe('folio_api');
+    // BLOCKER fix: caller_id is the HUMAN confirmer, not the agent actor.
+    expect(rows[0]!.callerId).toBe('user-1');
     expect(sink.components.some((c) => c.type === 'choice_card')).toBe(true);
   });
 
