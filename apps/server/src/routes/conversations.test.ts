@@ -341,6 +341,36 @@ describe('M11 — owner-scoped reads (foreign user → 404)', () => {
     expect(ownerRes.status).toBe(200);
   });
 
+  test('GET /:id/stream is owner-scoped — foreign user → 404 before subscribing', async () => {
+    const { app, seed, db } = await setup();
+    const create = await app.request('/api/v1/conversations', {
+      method: 'POST',
+      headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    const { data: conv } = await create.json();
+
+    // Foreign user — 404 (owner-gate fires before any conversationBus.subscribe).
+    const b = await seedRoleSession(db, 'member');
+    const foreign = await app.request(`/api/v1/conversations/${conv.id}/stream`, {
+      headers: { Cookie: b.cookie },
+    });
+    expect(foreign.status).toBe(404);
+
+    // Owner — 200 SSE. Open with an abort controller and tear it down at once so
+    // the long-lived stream doesn't hang the test (live delivery is covered by
+    // the conversation-bus + web tests, not this in-process SSE read).
+    const ac = new AbortController();
+    const owner = await app.request(`/api/v1/conversations/${conv.id}/stream`, {
+      headers: { Cookie: seed.sessionCookie, Accept: 'text/event-stream' },
+      signal: ac.signal,
+    });
+    expect(owner.status).toBe(200);
+    expect(owner.headers.get('content-type')).toContain('text/event-stream');
+    ac.abort();
+    await owner.body?.cancel().catch(() => {});
+  });
+
   test('user B cannot GET user A .md export; owner can', async () => {
     const { app, seed, db } = await setup();
     const create = await app.request('/api/v1/conversations', {

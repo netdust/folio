@@ -21,10 +21,12 @@
 import { zValidator } from '@hono/zod-validator';
 import { and, eq, isNull } from 'drizzle-orm';
 import { Hono } from 'hono';
+import { streamSSE } from 'hono/streaming';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import { db } from '../db/client.ts';
-import { conversations } from '../db/schema.ts';
+import { conversations, type Message } from '../db/schema.ts';
+import { conversationBus } from '../lib/conversation-bus.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
 import { runAgent as realRunAgent } from '../lib/runner.ts';
 import { type AuthContext, getUser, requireSessionUser } from '../middleware/auth.ts';
@@ -281,6 +283,72 @@ conversationsRoute.post(
     return jsonOk(c, { runId });
   },
 );
+
+// GET /conversations/:id/stream — the DEDICATED conversation live-tail SSE (T9a).
+//
+// Instance-level + OWNER-SCOPED (M11): a foreign user gets 404 via
+// loadOwnedConversation BEFORE any subscription. This is structurally separate
+// from the workspace `/events` plane — it rides `conversationBus` (no events
+// rows, no trigger-matcher reach, M10). Each appended message row (published by
+// the sink) is written as a single `message` frame carrying the row; the web
+// side reads one EventSource and routes by the row's `kind`. No replay /
+// Last-Event-Id: the thread SEEDS from GET /conversations/:id, this is live-only.
+conversationsRoute.get('/:id/stream', async (c) => {
+  const user = getUser(c);
+  const id = c.req.param('id');
+
+  // Owner-gate FIRST — 404 for a foreign user before we ever subscribe.
+  const conv = await loadOwnedConversation(user.id, id);
+
+  return streamSSE(c, async (stream) => {
+    // Event-driven delivery (mirrors routes/events.ts): a queue + a waiter the
+    // bus handler resolves on push and the abort handler resolves on abort, so
+    // an idle stream does zero polling work.
+    const queue: Message[] = [];
+    let wake!: () => void;
+    let waiter = new Promise<void>((r) => {
+      wake = r;
+    });
+    const renewWaiter = () => {
+      waiter = new Promise<void>((r) => {
+        wake = r;
+      });
+    };
+
+    const unsub = conversationBus.subscribe(conv.id, (row) => {
+      queue.push(row);
+      wake();
+    });
+
+    let aborted = false;
+    stream.onAbort(() => {
+      aborted = true;
+      wake();
+    });
+
+    // Heartbeat every 30s; `ping` frames carry empty data so the client ignores
+    // them via the default EventSource onmessage handler.
+    const heartbeat = setInterval(() => {
+      void stream.writeSSE({ event: 'ping', data: '' });
+    }, 30_000);
+
+    try {
+      while (!aborted && !stream.aborted) {
+        while (queue.length > 0) {
+          const row = queue.shift()!;
+          await stream.writeSSE({ id: row.id, event: 'message', data: JSON.stringify(row) });
+          if (stream.aborted) break;
+        }
+        if (aborted || stream.aborted) break;
+        await waiter;
+        renewWaiter();
+      }
+    } finally {
+      clearInterval(heartbeat);
+      unsub();
+    }
+  });
+});
 
 // GET /conversations/:id  AND  GET /conversations/:id.md
 //

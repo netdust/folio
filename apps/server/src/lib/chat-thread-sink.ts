@@ -15,6 +15,7 @@
 
 import type { DB } from '../db/client.ts';
 import { appendMessage } from '../services/conversations.ts';
+import { conversationBus } from './conversation-bus.ts';
 
 /**
  * The conversation-thread output abstraction. Each method appends one message
@@ -45,25 +46,28 @@ export function makeConversationSink(
 ): ConversationSink {
   return {
     async text(body: string): Promise<void> {
-      await appendMessage(db, { conversationId, role: 'operator', kind: 'text', body, runId });
+      const row = await appendMessage(db, { conversationId, role: 'operator', kind: 'text', body, runId });
+      conversationBus.publish(conversationId, row);
     },
     async toolStep(step: { tool: string; summary: string; status: 'ok' | 'error' }): Promise<void> {
-      await appendMessage(db, {
+      const row = await appendMessage(db, {
         conversationId,
         role: 'operator',
         kind: 'tool_step',
         payload: step,
         runId,
       });
+      conversationBus.publish(conversationId, row);
     },
     async component(payload: Record<string, unknown>): Promise<void> {
-      await appendMessage(db, {
+      const row = await appendMessage(db, {
         conversationId,
         role: 'operator',
         kind: 'component',
         payload,
         runId,
       });
+      conversationBus.publish(conversationId, row);
     },
   };
 }
