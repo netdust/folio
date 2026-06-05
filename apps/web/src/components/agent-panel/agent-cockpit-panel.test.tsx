@@ -1,122 +1,51 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
-import { render, screen, act, fireEvent, waitFor } from '@testing-library/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import {
-  createMemoryHistory,
-  createRootRoute,
-  createRoute,
-  createRouter,
-  Outlet,
-  RouterProvider,
-} from '@tanstack/react-router';
-import { z } from 'zod';
+import { render, screen, act, fireEvent } from '@testing-library/react';
+
+// The panel renders CockpitChat, which uses the conversations API. Mock it so
+// the panel test doesn't need a real EventSource / server.
+vi.mock('../../lib/api/conversations.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../lib/api/conversations.ts')>();
+  return {
+    ...actual,
+    useConversation: () => ({ thread: undefined, messages: [], isLoading: false }),
+    useCreateConversation: () => ({ mutateAsync: vi.fn(), isPending: false }),
+    usePostMessage: () => ({ mutate: vi.fn(), isPending: false }),
+  };
+});
+
 import { AgentCockpitPanel } from './agent-cockpit-panel.tsx';
 import { agentPanelBus } from '../../lib/agent-panel-bus.ts';
 
-// The Activity screen (useActivityFeed) and the run launcher's RunsHistory
-// hooks may open an EventSource; jsdom has none, so stub a no-op constructor.
-class NoopEventSource {
-  constructor(_url: string) {}
-  addEventListener() {}
-  removeEventListener() {}
-  close() {}
-}
-
-function setup() {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  });
-  // The panel's child screens navigate via TanStack hooks (AgentList uses
-  // useNavigate). Mount under a memory router with the layout search schema.
-  const rootRoute = createRootRoute({ component: () => <Outlet /> });
-  const workspace = createRoute({
-    getParentRoute: () => rootRoute,
-    path: '/w/$wslug',
-    validateSearch: z.object({
-      wdoc: z.string().optional(),
-      tab: z.enum(['fields', 'activity', 'runs']).optional(),
-    }),
-    component: () => <AgentCockpitPanel wslug="main" />,
-  });
-  const router = createRouter({
-    routeTree: rootRoute.addChildren([workspace]),
-    history: createMemoryHistory({ initialEntries: ['/w/main'] }),
-  });
-  return { queryClient, router };
-}
-
-async function renderPanel() {
-  const { queryClient, router } = setup();
-  render(
-    <QueryClientProvider client={queryClient}>
-      <RouterProvider router={router} />
-    </QueryClientProvider>,
-  );
-  // RouterProvider mounts (and thus subscribes the panel to the bus)
-  // asynchronously. Wait until the route component is live before driving
-  // the bus, otherwise open() fires before the subscription exists.
-  await waitFor(() => expect(router.state.isLoading).toBe(false));
-}
-
 describe('AgentCockpitPanel', () => {
   beforeEach(() => {
+    // Start each test from a known-closed state (clears any default-open).
     agentPanelBus.close();
-    vi.stubGlobal('EventSource', NoopEventSource as unknown as typeof EventSource);
-    vi.stubGlobal(
-      'fetch',
-      vi.fn<typeof fetch>(
-        async () =>
-          new Response(JSON.stringify({ data: [] }), {
-            status: 200,
-            headers: { 'content-type': 'application/json' },
-          }),
-      ),
-    );
   });
   afterEach(() => {
     agentPanelBus.close();
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
   });
 
-  it('renders null when the bus is closed', async () => {
-    await renderPanel();
-    // The PanelHeader Close button is the unambiguous "panel is open" marker.
+  it('renders null when the bus is closed', () => {
+    render(<AgentCockpitPanel />);
     expect(screen.queryByRole('button', { name: 'Close' })).toBeNull();
   });
 
-  it('opens on the Run screen when the bus opens to run', async () => {
-    await renderPanel();
-    act(() => agentPanelBus.open('run'));
-    expect(await screen.findByRole('button', { name: 'Close' })).toBeInTheDocument();
-    // Run launcher renders its submit button.
-    expect(screen.getByRole('button', { name: /Run agent/ })).toBeInTheDocument();
+  it('renders the operator CHAT (composer) when open — not Activity/Run tabs', async () => {
+    render(<AgentCockpitPanel />);
+    act(() => agentPanelBus.open());
+    // The cockpit body is the chat: a composer textbox is present.
+    expect(await screen.findByRole('textbox')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Close' })).toBeInTheDocument();
+    // No tab buttons from the deleted Activity/Run surfaces.
+    expect(screen.queryByRole('button', { name: /^activity$/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^run$/i })).toBeNull();
   });
 
-  it('switches to the Activity screen', async () => {
-    await renderPanel();
-    act(() => agentPanelBus.open('run'));
-    expect(await screen.findByRole('button', { name: /Run agent/ })).toBeInTheDocument();
-
-    act(() => agentPanelBus.open('activity'));
-    // Empty activity feed shows its placeholder; Run launcher is gone.
-    expect(await screen.findByText('No recent agent activity.')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /Run agent/ })).toBeNull();
-  });
-
-  it('closes again when the Close button is clicked', async () => {
-    await renderPanel();
-    act(() => agentPanelBus.open('activity'));
+  it('closes when the Close button is clicked', async () => {
+    render(<AgentCockpitPanel />);
+    act(() => agentPanelBus.open());
     const closeBtn = await screen.findByRole('button', { name: 'Close' });
     fireEvent.click(closeBtn);
     expect(screen.queryByRole('button', { name: 'Close' })).toBeNull();
-  });
-
-  it('exposes only Activity + Run tabs (no agents-management screen)', async () => {
-    await renderPanel();
-    act(() => agentPanelBus.open('activity'));
-    expect(await screen.findByRole('button', { name: /activity/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /run/i })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /^agents$/i })).not.toBeInTheDocument();
   });
 });
