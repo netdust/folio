@@ -17,6 +17,7 @@ import { aiRoute } from './routes/ai.ts';
 import { auth } from './routes/auth.ts';
 import { commentsRoute } from './routes/comments.ts';
 import { documentsRoute } from './routes/documents.ts';
+import { conversationsRoute } from './routes/conversations.ts';
 import { eventsRoute } from './routes/events.ts';
 import { fieldsRoute } from './routes/fields.ts';
 import { healthRoute } from './routes/health.ts';
@@ -65,6 +66,12 @@ v1.route('/instance', instanceUsersRoute);
 // the runner resolves an agent's key by (provider, ai_key_label). Mounted on v1
 // (NOT wScope) so no bearer/agent token can reach the secret store (M4).
 v1.route('/instance/ai-keys', instanceAiKeysRoute);
+// Operator cockpit chat (Task 6) — conversation surface. Session-only (invariant
+// 4: a bearer does NOT drive the cockpit) + owner-scoped reads (M11). Mounted on
+// v1 (NOT wScope) because conversations are instance-level, not workspace-scoped,
+// and attachToken must never run here. The single-active-turn CAS (M14) lives in
+// the route's startTurn.
+v1.route('/conversations', conversationsRoute);
 
 const wScope = new Hono<AuthContext & ScopeContext>();
 wScope.use('*', attachToken, requireUserOrToken, resolveWorkspace);
