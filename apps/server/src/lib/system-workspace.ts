@@ -298,6 +298,38 @@ export async function requireInstanceAdmin(
 }
 
 /**
+ * The user's role in `__system`, or null if they aren't a member (or `__system`
+ * isn't bootstrapped). The SINGLE non-throwing membership read both `/auth/me`
+ * signals derive from: `is_system_member` = role !== null, `is_instance_admin` =
+ * role ∈ {owner, admin}. Folding the lookup here means `/me` resolves the
+ * `__system` workspace + the membership ONCE instead of three times.
+ */
+export async function getSystemRole(db: DB, userId: string): Promise<InstanceAdminRole | 'member' | null> {
+  const sys = await db.query.workspaces.findFirst({
+    where: eq(workspaces.slug, SYSTEM_WORKSPACE_SLUG),
+    columns: { id: true },
+  });
+  if (!sys) return null;
+  const m = await db.query.memberships.findFirst({
+    where: and(eq(memberships.workspaceId, sys.id), eq(memberships.userId, userId)),
+  });
+  return m?.role ?? null;
+}
+
+/**
+ * Non-throwing boolean mirror of `requireInstanceAdmin` for read-only signals
+ * (e.g. the `/auth/me` `is_instance_admin` flag the web uses to GATE the instance
+ * AI-key UI to exactly the role the route enforces). Returns false — never throws
+ * — when `__system` is not bootstrapped or the user is not an owner/admin. The
+ * route's own `requireInstanceAdmin` remains the authoritative gate; this is a UI
+ * hint only. Delegates to `getSystemRole` so the role predicate lives in one place.
+ */
+export async function isInstanceAdmin(db: DB, userId: string): Promise<boolean> {
+  const role = await getSystemRole(db, userId);
+  return role === 'owner' || role === 'admin';
+}
+
+/**
  * The single `__system` OWNER's user id (CR#2). A designated instance has
  * exactly one owner; an operator-provisioned workspace is owned by that human.
  * Returns undefined if no owner exists yet (pre-designation).
@@ -513,6 +545,12 @@ export async function ensureOperatorAgent(
         frontmatter: {
           provider: 'anthropic',
           model: 'claude-sonnet-4-6', // required for API providers (agentFrontmatterSchema)
+          // Which instance AI key (by label) the operator resolves. The runner
+          // reads the KEY MATERIAL by (provider, ai_key_label). provider/model/
+          // ai_key_label are the SEED defaults only — all three are UI-editable
+          // post-seed (Settings → operator surface). A live install's already-
+          // seeded operator keeps its existing fm; the UI is how it's changed.
+          ai_key_label: 'default',
           tools: [...OPERATOR_TOOLS],
           projects: ['*'],
           requires_approval: false,

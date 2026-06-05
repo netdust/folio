@@ -1,18 +1,8 @@
 import { describe, expect, it, vi, afterEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { render, screen } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import {
-  createMemoryHistory,
-  createRootRoute,
-  createRoute,
-  createRouter,
-  Outlet,
-  RouterProvider,
-} from '@tanstack/react-router';
 import type { ReactNode } from 'react';
 import { SettingsPage } from './w.$wslug.settings.tsx';
-import * as auth from '../lib/api/auth.ts';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -89,41 +79,9 @@ describe('SettingsPage', () => {
     render(<SettingsPage wslug="acme" />, { wrapper: wrap(qc) });
     expect(await screen.findByText('Acme')).toBeInTheDocument();
   });
-});
 
-// D2: the System Library entry needs a router context because it renders a
-// TanStack <Link>. Mount SettingsPage under a memory router whose route tree
-// declares the `/w/$wslug/agents` target so the Link resolves to a real href.
-function renderWithRouter(qc: QueryClient) {
-  const rootRoute = createRootRoute({ component: () => <Outlet /> });
-  const settingsRoute = createRoute({
-    getParentRoute: () => rootRoute,
-    path: '/',
-    component: () => <SettingsPage wslug="acme" />,
-  });
-  const agentsRoute = createRoute({
-    getParentRoute: () => rootRoute,
-    path: '/w/$wslug/agents',
-    component: () => <div>agents page</div>,
-  });
-  const router = createRouter({
-    routeTree: rootRoute.addChildren([settingsRoute, agentsRoute]),
-    history: createMemoryHistory({ initialEntries: ['/'] }),
-  });
-  return render(
-    <QueryClientProvider client={qc}>
-      <RouterProvider router={router} />
-    </QueryClientProvider>,
-  );
-}
-
-describe('SettingsPage — System Library (D2)', () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-  });
-
-  function stubWorkspace() {
+  it('does NOT render AI or System Library here — those moved to /settings', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     stubFetch({
       '/api/v1/w/acme': () =>
         new Response(
@@ -140,40 +98,10 @@ describe('SettingsPage — System Library (D2)', () => {
           { status: 200, headers: { 'content-type': 'application/json' } },
         ),
     });
-  }
-
-  it('shows a System Library entry only to a __system member', async () => {
-    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    stubWorkspace();
-    vi.spyOn(auth, 'useIsSystemMember').mockReturnValue(true);
-
-    renderWithRouter(qc);
-
-    expect(
-      await screen.findByRole('heading', { name: /system library/i }),
-    ).toBeInTheDocument();
-  });
-
-  it('hides the System Library entry from a non-member', async () => {
-    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    stubWorkspace();
-    vi.spyOn(auth, 'useIsSystemMember').mockReturnValue(false);
-
-    renderWithRouter(qc);
-
-    // Wait for the page to settle, then assert the entry is absent.
+    render(<SettingsPage wslug="acme" />, { wrapper: wrap(qc) });
     expect(await screen.findByText(/workspace settings/i)).toBeInTheDocument();
+    // Only the Tokens tab remains; AI keys + System Library are instance-level.
+    expect(screen.queryByRole('tab', { name: /^AI$/i })).not.toBeInTheDocument();
     expect(screen.queryByText(/system library/i)).not.toBeInTheDocument();
-  });
-
-  it('links the System Library entry to the __system agents page', async () => {
-    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    stubWorkspace();
-    vi.spyOn(auth, 'useIsSystemMember').mockReturnValue(true);
-
-    renderWithRouter(qc);
-
-    const link = await screen.findByRole('link', { name: /system library/i });
-    expect(link).toHaveAttribute('href', '/w/__system/agents');
   });
 });

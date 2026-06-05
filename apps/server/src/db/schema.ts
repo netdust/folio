@@ -349,14 +349,14 @@ export const apiTokens = sqliteTable(
   }),
 );
 
-/** Encrypted BYOK AI provider credentials, per workspace. */
+/** Encrypted BYOK AI provider credentials — INSTANCE-level (workspace-independent).
+ *  A key is identified by (provider, label); the runner resolves an agent's key
+ *  by (provider, ai_key_label) with no workspace tie (the B6 reversal). The
+ *  secret never leaves a server-side provider call. */
 export const aiKeys = sqliteTable(
   'ai_keys',
   {
     id: text('id').primaryKey(),
-    workspaceId: text('workspace_id')
-      .notNull()
-      .references(() => workspaces.id, { onDelete: 'cascade' }),
     provider: text('provider', {
       enum: ['anthropic', 'openai', 'openrouter', 'ollama'],
     }).notNull(),
@@ -368,13 +368,18 @@ export const aiKeys = sqliteTable(
       .default(sql`(unixepoch() * 1000)`),
   },
   (t) => ({
-    workspaceProviderIdx: uniqueIndex('ai_keys_workspace_provider_idx').on(
-      t.workspaceId,
-      t.provider,
-      t.label,
-    ),
+    providerLabelIdx: uniqueIndex('ai_keys_provider_label_idx').on(t.provider, t.label),
   }),
 );
+
+/* M8 metering note: per-run AI usage is NOT a separate table. Each `agent_run`
+ * document already records `tokens_in`/`tokens_out` (written by incrementTokens
+ * on every path — success, error, or resume) alongside its `workspace_id`,
+ * `provider`, and `ai_key_label`. The run row IS the always-recorded, attributable
+ * meter; the shared-instance-key denial-of-wallet residual is observable by
+ * aggregating runs per workspace. Per-key enforcement caps are a deferred phase.
+ * (A dedicated ai_usage table was dropped at /shakeout as redundant — it only
+ * re-copied fields already on the run row, and only on the success path.) */
 
 /** Append-only event log. SSE channel + agent webhooks both read from here. */
 export const events = sqliteTable(

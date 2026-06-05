@@ -19,7 +19,7 @@ import {
 import { sendMagicLink } from '../lib/email.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
 import { type AuthContext, getUser, requireUser } from '../middleware/auth.ts';
-import { isSystemMember } from '../services/workspaces.ts';
+import { getSystemRole } from '../lib/system-workspace.ts';
 
 const auth = new Hono<AuthContext>();
 
@@ -122,13 +122,25 @@ auth.post('/logout', async (c) => {
 
 auth.get('/me', requireUser, async (c) => {
   const u = getUser(c);
-  // D2: server-authoritative __system membership signal. Computed from
-  // membership (never client-derived) so the web "System Library" settings
-  // entry can gate on it without trusting the client. Top-level on the payload
-  // because it is a property of the boot identity, not of the user record.
+  // Boot-identity signals, all server-authoritative (membership-derived, never
+  // client-trusted). Two independent reads run concurrently:
+  //   - getSystemRole: the user's __system role, resolved ONCE. is_system_member =
+  //     any membership; is_instance_admin = owner/admin (mirrors requireInstanceAdmin
+  //     EXACTLY so the web gates the instance AI-key UI to the role the route enforces
+  //     — no 403 papercut). Folds what was 3 queries (isSystemMember + isInstanceAdmin's
+  //     two reads) into 1.
+  //   - ai_configured: PRESENCE-only — does ANY instance AI key exist? Readable by
+  //     every user (no admin gate, no key material); drives the body editor's AI slash
+  //     commands. The key LIST is admin-gated; this is just "is an LLM reachable".
+  const [systemRole, anyAiKey] = await Promise.all([
+    getSystemRole(db, u.id),
+    db.query.aiKeys.findFirst({ columns: { id: true } }),
+  ]);
   return jsonOk(c, {
     user: { id: u.id, email: u.email, name: u.name },
-    is_system_member: await isSystemMember(u.id),
+    is_system_member: systemRole !== null,
+    is_instance_admin: systemRole === 'owner' || systemRole === 'admin',
+    ai_configured: anyAiKey !== undefined,
   });
 });
 

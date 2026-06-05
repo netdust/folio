@@ -297,6 +297,9 @@ describe('grantOwner + ensureOperatorAgent + designateInstanceOwner (M5/M8)', ()
     });
     expect(agents.length).toBe(1);
     expect((agents[0]!.frontmatter as { provider?: string }).provider).toBe('anthropic');
+    // The operator carries ai_key_label so the runner resolves its instance key
+    // by (provider, label). Seed default is 'default'; UI-editable post-seed.
+    expect((agents[0]!.frontmatter as { ai_key_label?: string }).ai_key_label).toBe('default');
     // Phase B: the operator declares its `folio` skill in frontmatter (the runner
     // materializes it at load via loadAgentDefinition, not a runtime get_document).
     expect((agents[0]!.frontmatter as { skills?: string[] }).skills).toEqual(['folio']);

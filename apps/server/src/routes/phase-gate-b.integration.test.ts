@@ -235,11 +235,12 @@ async function seedRunForAgent(
   return (await db.query.documents.findFirst({ where: eq(documents.id, runId) }))!;
 }
 
-/** Seed an ai key for a workspace so the runner pre-flight doesn't block. */
-async function seedAiKey(db: TestDB, workspaceId: string): Promise<void> {
+/** Seed an INSTANCE ai key so the runner pre-flight doesn't block. INVERTED
+ *  2026-06-03: keys are instance-scoped by (provider, label), not per workspace
+ *  (B6 reversed). The legacy workspaceId arg is ignored. */
+async function seedAiKey(db: TestDB, _workspaceId: string): Promise<void> {
   await db.insert(aiKeys).values({
     id: nanoid(),
-    workspaceId,
     provider: 'anthropic',
     label: 'default',
     encryptedKey: encryptSecret('sk-test-fake-key'),

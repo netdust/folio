@@ -89,6 +89,11 @@ export const agentRunFrontmatterSchema = z
 
     provider: providerSchema,
     model: z.string().default(''),
+    // Snapshotted from the agent frontmatter at createRun (like provider/model)
+    // so a later agent edit doesn't change which instance key a historical run
+    // resolved. The runner reads the KEY MATERIAL by (provider, ai_key_label);
+    // this label is non-secret.
+    ai_key_label: z.string().min(1).default('default'),
     system_prompt: z.string(),
     max_tokens: z.number().int().positive(),
 

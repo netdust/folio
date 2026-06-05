@@ -424,12 +424,12 @@ async function main(): Promise<void> {
     );
 
     assert2xx(
-      await api('POST', `/api/v1/w/${WS_SLUG}/settings/${workspaceId}/ai-keys`, {
+      await api('POST', `/api/v1/instance/ai-keys`, {
         provider: 'anthropic',
         apiKey: ANTHROPIC_KEY,
         label: 'default',
       }),
-      'store B BYOK anthropic key',
+      'store instance anthropic key (resolved cross-workspace by (provider,label))',
     );
 
     // 3) THE TRIGGER: every workspace is BORN with the builtin trigger

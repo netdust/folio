@@ -17,6 +17,15 @@ export interface SessionUser {
 export interface MeResponse {
   user: SessionUser;
   is_system_member?: boolean;
+  // Server-authoritative owner/admin-of-__system signal. OPTIONAL for the same
+  // reason as is_system_member (login/register seed only `{ user }`); a missing
+  // flag reads false. Mirrors the route's requireInstanceAdmin gate EXACTLY, so
+  // the instance AI-key UI shows only to users who can actually write keys.
+  is_instance_admin?: boolean;
+  // Presence-only: does ANY instance AI key exist? Readable by every user (no
+  // admin gate, no key material), it drives the body editor's AI slash commands.
+  // The key LIST is admin-gated; this is just "is an LLM reachable at all".
+  ai_configured?: boolean;
 }
 
 export const authKeys = {
@@ -39,6 +48,16 @@ export function useMe() {
  */
 export function useIsSystemMember(): boolean {
   return useMe().data?.is_system_member ?? false;
+}
+
+/**
+ * Whether the current user is an owner/admin of `__system` — the role that may
+ * administer instance-level surfaces (AI keys, instance tokens). Mirrors the
+ * server's requireInstanceAdmin gate so the UI never offers a control the route
+ * would 403. A stale/partial cache reads `false`.
+ */
+export function useIsInstanceAdmin(): boolean {
+  return useMe().data?.is_instance_admin ?? false;
 }
 
 export function useLogin() {

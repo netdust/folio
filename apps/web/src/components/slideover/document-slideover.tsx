@@ -30,7 +30,6 @@ import { useFields } from '../../lib/api/fields.ts';
 import { formatApiError } from '../../lib/api/index.ts';
 import { useWorkspace } from '../../lib/api/workspaces.ts';
 import { useProject } from '../../lib/api/projects.ts';
-import { useWorkspaceAiKeys } from '../../lib/api/settings.ts';
 import { useComments } from '../../lib/api/comments.ts';
 import { useMembers } from '../../lib/api/members.ts';
 import { useMe } from '../../lib/api/auth.ts';
@@ -575,16 +574,18 @@ function SlideoverBody({
   // Documents list — same listParams as the inner's useUpdateDocument so React
   // Query dedupes the key. Feeds the body editor's slash-menu document links.
   const { data: docPage } = useDocuments(wslug, pslug, listParams, { enabled: true });
-  // AI key presence — drives the slash menu's aiConfigured flag
   const { data: workspace } = useWorkspace(wslug);
   const { data: project } = useProject(wslug, pslug);
-  const { data: aiKeys } = useWorkspaceAiKeys(wslug, workspace?.id ?? '');
-  const aiConfigured = (aiKeys ?? []).length > 0;
 
   // Comments + members + current user — for the Comments tab (work_item/page
   // only). The hook is gated on doc.slug so it idles until the doc resolves.
   const { data: members } = useMembers(wslug);
   const { data: me } = useMe();
+
+  // AI key presence — drives the slash menu's aiConfigured flag. AI keys are
+  // instance-level now; presence is a boot-identity boolean on /me, readable by
+  // every member (the key LIST is admin-gated, but "is an LLM reachable" is not).
+  const aiConfigured = me?.ai_configured ?? false;
 
   // Wiki pages are "just a markdown file" — no status, no pinned fields,
   // no inferred frontmatter, no slug pill. Work items keep the full

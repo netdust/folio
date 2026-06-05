@@ -61,10 +61,10 @@ describe('ProviderHealthBanner', () => {
 
     const link = screen.getByRole('button', { name: /check key/i });
     link.click();
+    // AI keys moved to the instance settings page (instance-wide store).
     expect(navigateMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        to: '/w/$wslug/settings',
-        params: { wslug: 'acme' },
+        to: '/settings',
         search: { tab: 'ai', provider: 'anthropic' },
       }),
     );

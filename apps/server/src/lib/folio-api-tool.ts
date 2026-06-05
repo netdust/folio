@@ -106,8 +106,9 @@ const CONFIG_CLASS_SCOPES = new Set<string>(['config:write', ...ADMIN_SCOPES]);
  * own requireScope/requireSessionUser (run via app.request in dispatchAsCaller)
  * is the authoritative gate. The members:write and settings:write branches here
  * are DEFENSIVE, not authoritative — no agent-writable route currently uses
- * them (members has no write route, only GET /members; settings writes are
- * session-only at /settings/:ws/ai-keys, which is also SECRET-classified). They
+ * them (members has no write route, only GET /members; AI-key writes are
+ * session-only + __system-admin-gated at /instance/ai-keys, which is also
+ * SECRET-classified and unreachable by any agent token). They
  * stay so any future workspace-level path that DID land there fails closed to
  * the right scope rather than UNMAPPED.
  *

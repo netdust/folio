@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { AiProvider } from '../../lib/api/settings.ts';
 import { useWorkspace } from '../../lib/api/workspaces.ts';
-import { useWorkspaceAiKeys } from '../../lib/api/settings.ts';
+import { useInstanceAiKeys } from '../../lib/api/instance-ai-keys.ts';
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
 
 interface Props {
@@ -50,9 +50,11 @@ const CLAUDE_CODE_PROVIDER: ProviderInfo = {
  * select scoped to PROVIDERS; model is either a select (if the provider has
  * a known model list) or a free-text input (for OpenRouter / Ollama).
  *
- * The provider list annotates each entry with whether the workspace has a
+ * The provider list annotates each entry with whether the INSTANCE has a
  * configured AI key for it — agents pointing at a provider with no key will
- * silently fail at runtime, so surface that here.
+ * silently fail at runtime, so surface that here. (Keys are instance-level now;
+ * a non-admin can't see the key list, in which case nothing is annotated — the
+ * agent still runs if a key exists, the runner resolves it server-side.)
  *
  * When `claude_code_enabled` is set on the workspace, a `claude-code` provider
  * is appended. It is keyless by design — a "no key needed" chip replaces the
@@ -60,7 +62,7 @@ const CLAUDE_CODE_PROVIDER: ProviderInfo = {
  */
 export function ProviderModelField({ wslug, provider, model, onChange }: Props) {
   const { data: workspace } = useWorkspace(wslug);
-  const { data: aiKeys } = useWorkspaceAiKeys(wslug, workspace?.id ?? '');
+  const { data: aiKeys } = useInstanceAiKeys();
   const configuredProviders = new Set((aiKeys ?? []).map((k) => k.provider));
 
   const claudeCodeEnabled =
