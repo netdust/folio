@@ -198,6 +198,20 @@ export interface RunContext {
   conversationId?: string;
 }
 
+/**
+ * Cluster-2 /code-review fix: a conversation-backed run (ctx.sink set) MUST carry
+ * a conversationId — they are stamped together by loadContext (Task 5). Fail LOUD
+ * on the invariant violation instead of `?? ''`, which would silently run
+ * buildConversationMessages against an empty thread (operator "forgets" everything,
+ * surfaced only as an opaque downstream provider error).
+ */
+function requireConversationId(ctx: RunContext): string {
+  if (!ctx.conversationId) {
+    throw new Error('conversation run is missing conversationId (sink set without id)');
+  }
+  return ctx.conversationId;
+}
+
 // ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
@@ -234,7 +248,7 @@ export async function runAgent(args: { runId: string }): Promise<void> {
       // run keeps buildInitialMessages (parent body + comments, fenced as
       // untrusted). claude-code stays hard-disabled, so this branch is API-only.
       const messages = ctx.sink
-        ? await buildConversationMessages(db, ctx.conversationId ?? '')
+        ? await buildConversationMessages(db, requireConversationId(ctx))
         : await buildInitialMessages(ctx);
       await runLoop(ctx, messages);
     }
@@ -326,7 +340,7 @@ export async function runAgentResume(args: { runId: string }): Promise<void> {
     // its source — the persisted messages already include the prior turns, so a
     // resume re-reads the same trusted history a fresh turn does.
     const messages = ctx.sink
-      ? await buildConversationMessages(db, ctx.conversationId ?? '')
+      ? await buildConversationMessages(db, requireConversationId(ctx))
       : await buildResumeMessages(ctx);
     await runLoop(ctx, messages);
   } catch (err) {
@@ -1007,6 +1021,17 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
               tool_use_id: tc.id,
               content: `Tool '${tc.name}' rejected the arguments. Invalid fields: ${paths}. Fix and retry.`,
             });
+            // Cluster-2 /code-review fix: record a FAILED tool_step too, so the
+            // conversation thread (and T8's interrupted-turn summary) reflect that
+            // a tool was attempted and failed — not only successes. "The steps ARE
+            // the report" (spec). ui tools emit their own component row, so skip them.
+            if (ctx.sink && tc.name !== 'show_link_panel' && tc.name !== 'ask_choice') {
+              await ctx.sink.toolStep({
+                tool: tc.name,
+                summary: `rejected arguments: ${paths}`,
+                status: 'error',
+              });
+            }
             roundHadRecoverableError = true;
             continue;
           }
@@ -1021,6 +1046,14 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
             tool_use_id: tc.id,
             content: `Tool '${tc.name}' failed: ${safeToolErrorMessage(err, providerLabel)}. Adjust and retry.`,
           });
+          // Cluster-2 /code-review fix: record the failed tool_step (see above).
+          if (ctx.sink && tc.name !== 'show_link_panel' && tc.name !== 'ask_choice') {
+            await ctx.sink.toolStep({
+              tool: tc.name,
+              summary: safeToolErrorMessage(err, providerLabel),
+              status: 'error',
+            });
+          }
           roundHadRecoverableError = true;
         }
       }

@@ -63,4 +63,27 @@ describe('chat adapter', () => {
     expect(thread.at(-1)?.kind).toBe('tool_step');
     expect(thread.at(-1)?.runId).toBe('run-1');
   });
+
+  // Cluster-2 /code-review fix: a FAILED tool_step (status:'error') must persist and
+  // replay, so the thread + T8 recovery summary reflect failed attempts, not only
+  // successes. The runner now emits these in its recoverable-error branches; this
+  // asserts the durable round-trip (write status:'error' -> getThread -> source
+  // replays it with the error status visible).
+  test('a failed tool_step (status:error) persists and is replayed by the source', async () => {
+    const db = makeDb();
+    const c = await createConversation(db, {
+      createdBy: 'u1',
+      operatorAgentId: 'op1',
+      title: 'Untitled',
+    });
+    const sink = makeConversationSink(db, c.id, 'run-1');
+    await sink.toolStep({ tool: 'update_document', summary: 'document not found', status: 'error' });
+    const thread = await getThread(db, c.id);
+    const row = thread.at(-1);
+    expect(row?.kind).toBe('tool_step');
+    expect(JSON.parse(row!.payload!).status).toBe('error');
+    // the source replays the failed step (so the model/human sees it on resume)
+    const msgs = await buildConversationMessages(db, c.id);
+    expect(msgs.some((m) => String(m.content).includes('error'))).toBe(true);
+  });
 });

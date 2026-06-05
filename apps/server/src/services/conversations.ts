@@ -88,7 +88,7 @@ export async function getThread(db: DB, conversationId: string): Promise<Message
  * is wedge-critical, so one bad row degrades to `{}` (an empty line) rather
  * than throwing out of the serializer. Flagged Cluster-1 /code-review 2026-06-05.
  */
-function parsePayload<T extends Record<string, unknown>>(payload: string | null): T {
+export function parsePayload<T extends Record<string, unknown>>(payload: string | null): T {
   if (!payload) return {} as T;
   try {
     return JSON.parse(payload) as T;

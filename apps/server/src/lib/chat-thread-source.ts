@@ -20,19 +20,9 @@
 import { type Message as MessageRow } from '../db/schema.ts';
 import type { DB } from '../db/client.ts';
 import { type Message } from './ai/provider.ts';
-import { getThread } from '../services/conversations.ts';
-
-/** Defensive parse of a stored `payload` (free `text` column). A malformed row
- *  degrades to `{}` rather than throwing out of the whole replay — the thread
- *  must always be reconstructable (same posture as the markdown serializer). */
-function parsePayload<T extends Record<string, unknown>>(payload: string | null): T {
-  if (!payload) return {} as T;
-  try {
-    return JSON.parse(payload) as T;
-  } catch {
-    return {} as T;
-  }
-}
+// parsePayload is shared with the markdown serializer (one guard, one degrade
+// policy — deduped per Cluster-2 /code-review).
+import { getThread, parsePayload } from '../services/conversations.ts';
 
 /** Compact a `tool_step` row into a single assistant line so the model sees what
  *  it already did this conversation without re-streaming a full tool round-trip. */
