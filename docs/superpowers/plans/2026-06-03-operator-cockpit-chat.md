@@ -163,6 +163,14 @@ Numbered to match attacks. Each is code-checkable.
 
 > Sequencing: data layer (T1) → service (T2) → ui tool (T3) → adapters (T4) → run-create wiring (T5) → routes (T6) → the hard gate (T7) → recovery (T8) → web (T9–T13) → cleanup (T14). T7 (the gate) and T5 (caller threading) are the security-critical wiring tasks — each carries an end-to-end assertion (per `feedback_end-to-end-assertion-at-wiring-task`).
 
+> **Review clusters (added 2026-06-05 per harnessed-development 1f — ~3–4 tasks/cluster; migration + security-gate isolated).** The executor HALTS at each `── REVIEW GATE ──` for `/integration` on that cluster's diff + a `/code-review` (and `/security-review` where marked) before starting the next cluster. Do NOT run past a gate.
+> - **Cluster 1 — data + service foundation (T1–T2)** — T1 is a migration; ground-truth the migration number (0030, not 0023) first.
+> - **Cluster 2 — tool surface + adapter seam (T3–T4)** — touches `runner.ts` + `ToolContext`.
+> - **Cluster 3 — authority wiring (T5–T6)** — security-critical (M1/M2/M11/M14); `/code-review` MUST verify the caller-threading + CAS mitigations.
+> - **Cluster 4 — the hard gate + recovery (T7–T8)** — T7 is THE security-boundary task (the `riskTier` irreversible-op gate). This cluster gets `/code-review` **AND `/security-review`**.
+> - **Cluster 5 — web data + renderers (T9–T10).**
+> - **Cluster 6 — web shell + operator content + cleanup (T11–T14).**
+
 ### Task 1: Schema + migration for `conversations`, `messages`, `pending_ops`
 
 **Files:**
@@ -467,6 +475,10 @@ git commit -m "phase-chat T2: conversation service (seq, no-events, markdown ser
 
 ---
 
+─────────────────── ── REVIEW GATE ── ───────────────────
+**END OF CLUSTER 1 (T1–T2).** HALT. Commit T1–T2, run `/integration` on the cluster diff, hand to human for `/code-review`. T1 is a migration — confirm the journal entry + that it applies once. Do NOT begin T3 until review is clear.
+──────────────────────────────────────────────────────────
+
 ### Task 3: The `ui` tool (`show_link_panel`, `ask_choice`) with Zod validation
 
 **Files:**
@@ -612,6 +624,10 @@ git commit -m "phase-chat T4: source/sink adapter seam (conversation thread reus
 
 ---
 
+─────────────────── ── REVIEW GATE ── ───────────────────
+**END OF CLUSTER 2 (T3–T4).** HALT. Commit T3–T4, run `/integration`, hand to human for `/code-review` (focus: the runner source/sink seam + `ToolContext` extension — verify no regression to the document-thread path). Do NOT begin T5 until clear.
+──────────────────────────────────────────────────────────
+
 ### Task 5: Run-create wiring — chat run threads the caller (M1/M2) [WIRING TASK — end-to-end assertion]
 
 **Authority-over-time (Option A — resolve fresh per turn; state this explicitly).** A conversation has ONE immutable identity (`created_by`) but its authority is resolved FRESH at every turn's run-create from the owner's CURRENT membership:
@@ -689,6 +705,10 @@ git commit -m "phase-chat T6: conversation routes + atomic single-turn CAS (M11/
 **Sibling-site audit:** confirm `requireSessionUser` is the right guard (Inv 4 — session-only, reject tokens). Mount path registered in the route index. The slot-release-on-failure path must run on every error branch between acquire and runner-kick (else a conversation wedges with a stale `active_run_id` until boot recovery — T8).
 
 ---
+
+─────────────────── ── REVIEW GATE ── ───────────────────
+**END OF CLUSTER 3 (T5–T6).** HALT. Commit T5–T6, run `/integration`, hand to human for `/code-review` against M1/M2/M11/M14 (caller threading, conversation `created_by` scoping, the atomic single-turn CAS). This is security-critical authority wiring. Do NOT begin T7 until clear.
+──────────────────────────────────────────────────────────
 
 ### Task 7: The hard irreversible-op gate at `executeTool` [WIRING TASK — end-to-end assertion]
 
@@ -774,6 +794,10 @@ git commit -m "phase-chat T7: hard irreversible-op gate at executeTool (M4-M7,M1
 
 ---
 
+─────────────── ── REVIEW GATE (+ /security-review) ── ───────────────
+**END OF CLUSTER 4 (T7–T8).** HALT. Commit T7–T8, run `/integration`, hand to human for `/code-review` AND `/security-review`. T7 is THE security-boundary task — the `riskTier` irreversible-op gate at `executeTool`. Review must verify the must-be-hard set M4–M7+M13 (gate is structural not prompt; recorded-params execution; single-use/caller-bound/expiry; fail-closed default-to-high; headless not gated). Do NOT begin T9 until both reviews clear.
+──────────────────────────────────────────────────────────
+
 ### Task 9: Web — conversations API client + hooks (+ SSE live-tail reusing the activity-feed shape)
 
 **Files:**
@@ -809,6 +833,10 @@ Run: `cd apps/web && npx vitest run src/lib/api/conversations.test.ts`
 **Sibling-site audit:** `choice_card` MUST send `id`, never `label` (M8).
 
 ---
+
+─────────────────── ── REVIEW GATE ── ───────────────────
+**END OF CLUSTER 5 (T9–T10).** HALT. Commit T9–T10, run web tests (`npx vitest run`), hand to human for `/code-review` (focus: SSE live-tail reuses the ratified `useActivityFeed` shape — Inv 8; `choice_card` sends id not label — M8). Do NOT begin T11 until clear.
+──────────────────────────────────────────────────────────
 
 ### Task 11: Web — chat composer + the cockpit-chat body
 
