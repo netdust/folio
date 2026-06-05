@@ -58,7 +58,7 @@ import {
   type RunDoneReason,
   runErrorReasonSchema,
 } from './agent-run-schema.ts';
-import { executeTool } from './agent-tools.ts';
+import { executeTool, listToolDefs } from './agent-tools.ts';
 import type { ConversationSink } from './chat-thread-sink.ts';
 import { buildConversationMessages } from './chat-thread-source.ts';
 import { makeConversationSink } from './chat-thread-sink.ts';
@@ -1030,18 +1030,26 @@ async function buildResumeMessages(ctx: RunContext): Promise<Message[]> {
 }
 
 /** Translate the agent's tool whitelist into provider-side ToolDefs. */
-function buildToolDefs(agentFm: Record<string, unknown>): ToolDef[] {
+export function buildToolDefs(agentFm: Record<string, unknown>): ToolDef[] {
   const tools = Array.isArray(agentFm.tools) ? (agentFm.tools as string[]) : [];
-  // Provider-side ToolDef carries the JSON-schema input contract. C-8 ships
-  // the runner skeleton; the real per-tool input schemas are wired with the
-  // tool handlers in D-3. Until then, advertise an open object schema so the
-  // provider accepts the tool name and the dispatcher (executeTool) does the
-  // authoritative Zod validation on the args.
-  return tools.map((name) => ({
-    name,
-    description: name,
-    input_schema: { type: 'object', additionalProperties: true },
-  }));
+  // Advertise each tool's REAL description + JSON-schema input contract from the
+  // registry, so the model knows the tool's purpose AND its required argument
+  // names. Previously this advertised an empty `{type:'object',
+  // additionalProperties:true}` with the tool name as its own description, which
+  // gave the model NO signal about required args — it then guessed arg shapes
+  // that the dispatcher's `.strict()` Zod re-validation rejected (e.g.
+  // list_projects/get_skill "rejected arguments"). The dispatcher (executeTool)
+  // is STILL the authoritative validator; this just stops starving the model.
+  const registry = new Map(listToolDefs().map((d) => [d.name, d]));
+  return tools.map((name) => {
+    const def = registry.get(name);
+    return {
+      name,
+      description: def?.description ?? name,
+      // Fall back to an open schema only for an unknown/unschematized tool name.
+      input_schema: def?.inputSchema ?? { type: 'object', additionalProperties: true },
+    };
+  });
 }
 
 // ---------------------------------------------------------------------------

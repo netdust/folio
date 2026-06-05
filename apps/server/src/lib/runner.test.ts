@@ -38,7 +38,7 @@ import { newApiToken } from './auth.ts';
 import { decryptSecret, encryptSecret } from './crypto.ts';
 import { HTTPError } from './http.ts';
 import { mcpInvalidParams } from './mcp-errors.ts';
-import { __setCcSpawnForTest, loadContext, rejectRun, runAgent, runAgentResume } from './runner.ts';
+import { __setCcSpawnForTest, buildToolDefs, loadContext, rejectRun, runAgent, runAgentResume } from './runner.ts';
 import { seedInstanceSkills } from './instance-skills.ts';
 import { effectiveReach } from './token-reach.ts';
 import { workspaces } from '../db/schema.ts';
@@ -2646,5 +2646,33 @@ describe('Phase B — API-provider injection fence (B10a) + skill wiring (B3)', 
     const fm = await readRun(db, scaffolded.run.id);
     expect(fm.status).toBe('failed');
     expect(fm.error_reason).toBe('claude_code_disabled');
+  });
+});
+
+describe('buildToolDefs advertises the registry schema (not an empty object)', () => {
+  // Root cause of the operator's "rejected arguments: workspace_slug / slug"
+  // failures: the model was handed an empty `{type:'object',
+  // additionalProperties:true}` schema per tool, so it guessed arg shapes the
+  // dispatcher's `.strict()` Zod then rejected. buildToolDefs must surface each
+  // tool's REAL inputSchema + description from the registry.
+  test('a known tool carries its real required args + a real description', () => {
+    const defs = buildToolDefs({ tools: ['list_projects', 'get_skill'] });
+    const lp = defs.find((d) => d.name === 'list_projects');
+    expect(lp).toBeDefined();
+    // Real schema: workspace_slug is a required property — NOT an empty object.
+    expect(lp!.input_schema).toMatchObject({
+      properties: { workspace_slug: { type: 'string' } },
+      required: ['workspace_slug'],
+    });
+    // Description is the tool's real one, not just the tool name echoed back.
+    expect(lp!.description).not.toBe('list_projects');
+
+    const gs = defs.find((d) => d.name === 'get_skill');
+    expect(gs!.input_schema).toMatchObject({ required: ['slug'] });
+  });
+
+  test('an unknown tool name falls back to an open schema (no crash)', () => {
+    const defs = buildToolDefs({ tools: ['__not_a_real_tool'] });
+    expect(defs[0]!.input_schema).toEqual({ type: 'object', additionalProperties: true });
   });
 });
