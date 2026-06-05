@@ -414,3 +414,9 @@ See `docs/PHASES.md` for the canonical phase list (above-section mirrors it). Lo
 [2026-06-05] — session ended (no significant changes captured)
 [2026-06-05] — session ended (no significant changes captured)
 [2026-06-05] — session ended (no significant changes captured)
+
+---
+### 2026-06-05 — tagged capture
+
+**Decisions**
+- **API tab on Agents & Triggers**, and **delete the standalone Workspace-settings page entirely**. This consolidates everything:
