@@ -4,6 +4,7 @@ import { db } from './db/client.ts';
 import { env } from './env.ts';
 import { startEventDispatcher } from './lib/event-dispatcher.ts';
 import { sweepOrphanedFolioApiTokens } from './lib/folio-api-tool.ts';
+import { recoverInterruptedConversations } from './services/conversations.ts';
 import { startRunnerPoller } from './lib/poller.ts';
 import { reconcileAllowLists } from './lib/reconciler.ts';
 import { runBootTasks } from './lib/system-workspace.ts';
@@ -31,6 +32,16 @@ void sweepOrphanedFolioApiTokens(db)
     if (n > 0) console.log(`[folio] swept ${n} orphaned folio_api token(s)`);
   })
   .catch((err) => console.error('[folio] folio_api token sweep failed', err));
+
+// Operator cockpit chat (Task 8, M12): clear dangling conversation run slots from
+// a crash/restart and append an interrupted-turn summary. A conversation run has
+// no agent_run row, so the runner's orphaned-run recovery never reaches it — this
+// is the dedicated sweep. Fire-and-log like the token sweep above.
+void recoverInterruptedConversations(db)
+  .then((n) => {
+    if (n > 0) console.log(`[folio] recovered ${n} interrupted conversation turn(s)`);
+  })
+  .catch((err) => console.error('[folio] conversation recovery failed', err));
 
 console.log(`[folio] listening on http://localhost:${env.PORT}`);
 

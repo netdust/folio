@@ -160,3 +160,53 @@ export async function serializeThreadMarkdown(
   }
   return lines.join('\n');
 }
+
+/**
+ * Operator cockpit chat (Task 8) — boot recovery for interrupted turns (M12).
+ *
+ * THE Cluster-3 review gap: a conversation run has NO `agent_run` row (it is the
+ * walled-off, ephemeral-token path), so the runner's existing orphaned-run boot
+ * recovery (recoverOrphanRuns) can NEVER clear a dangling `conversations.active_run_id`.
+ * After a restart, EVERY in-memory conversation run is gone, so ANY surviving
+ * `active_run_id` is by definition orphaned (same self-healing argument as the
+ * orphan-token sweep). This sweep:
+ *   1. clears every non-null `active_run_id` (unwedges the composer), AND
+ *   2. for each cleared conversation, appends a terminal `text` message
+ *      summarizing the persisted `tool_step` rows from the interrupted run — so a
+ *      crash mid act-then-report never leaves the human blind to what was applied
+ *      (the tool_step rows ARE the audit trail; this surfaces them).
+ *
+ * Plain `db`, no events (Inv 5 deliberate exception — same as the rest of this
+ * file). Idempotent + cheap; safe to run on every boot. Returns the count of
+ * conversations recovered (for logging/tests).
+ */
+export async function recoverInterruptedConversations(db: DB): Promise<number> {
+  const stale = await db.query.conversations.findMany({
+    where: (c, { isNotNull }) => isNotNull(c.activeRunId),
+  });
+  for (const conv of stale) {
+    // Summarize the tool steps the interrupted run persisted. Match by the run id
+    // the conversation was holding so the summary reflects THAT turn only.
+    const stepRows = await db.query.messages.findMany({
+      where: and(eq(messages.conversationId, conv.id), eq(messages.runId, conv.activeRunId!)),
+      orderBy: (m, { asc }) => [asc(m.seq)],
+    });
+    const steps = stepRows.filter((m) => m.kind === 'tool_step');
+    const completed = steps
+      .map((m) => {
+        const p = parsePayload<{ tool?: string; summary?: string; status?: string }>(m.payload);
+        return `${p.tool ?? 'tool'} (${p.status ?? 'unknown'})`;
+      })
+      .join(', ');
+    const body =
+      completed.length > 0
+        ? `The previous turn was interrupted. Completed: ${completed}.`
+        : 'The previous turn was interrupted before any tools ran.';
+    await appendMessage(db, { conversationId: conv.id, role: 'operator', kind: 'text', body });
+    await db
+      .update(conversations)
+      .set({ activeRunId: null })
+      .where(eq(conversations.id, conv.id));
+  }
+  return stale.length;
+}
