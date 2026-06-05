@@ -240,37 +240,41 @@ export async function runAgent(args: { runId: string }): Promise<void> {
     }
     providerLabel = PROVIDER_LABELS[ctx.fm.provider as ProviderName] ?? 'Claude Code';
 
-    // --- pre-flight checks (cheapest first); each returns true if it BLOCKED.
-    // Operator cockpit chat (Task 5) — a conversation run has NO `agent_run`
-    // document, so the document-keyed preflight (depth/rate/idempotency, all
-    // querying agent_run rows + getActiveRun({parentId})) does not apply. Run the
-    // minimal conversation preflight (key presence) instead.
-    if (ctx.sink ? await conversationPreflight(ctx) : await preflight(ctx)) return;
+    // Operator cockpit chat (Task 5) — release the conversation's single-active-turn
+    // slot (M14 CAS) on EVERY terminal path of a conversation run. This finally
+    // MUST wrap the WHOLE post-context body (Cluster-3 /code-review fix): a
+    // blocking conversationPreflight (no AI key) `return`s, buildConversationMessages
+    // can throw, and an unhandled throw is caught below by failRunLastResort —
+    // which only knows `agent_run` rows and CANNOT clear the slot. Before this
+    // wrapping, those early exits left the conversation wedged at 409 OPERATOR_BUSY
+    // until reboot (T8 recovery also only sweeps agent_run docs). The slot
+    // (`active_run_id`), not an `agent_run` status, is the conversation run's
+    // liveness record. No-op for document runs (no conversationId).
+    try {
+      // --- pre-flight checks (cheapest first); each returns true if it BLOCKED.
+      // A conversation run has NO `agent_run` document, so the document-keyed
+      // preflight (depth/rate/idempotency, all querying agent_run rows +
+      // getActiveRun({parentId})) does not apply. Run the minimal conversation
+      // preflight (key presence) instead.
+      if (ctx.sink ? await conversationPreflight(ctx) : await preflight(ctx)) return;
 
-    // --- stream consumption (outer round-loop). buildInitialMessages is
-    // called HERE (not inside runLoop) so runLoop is reusable by
-    // runAgentResume, which builds a different message history.
-    if (ctx.fm.provider === 'claude-code') {
-      await ccExecute(ctx);
-    } else {
-      // Operator cockpit chat (Task 4) — a conversation-backed run (ctx.sink set
-      // by loadContext when the run fm carries conversation_id, Task 5) replays
-      // the TRUSTED conversation thread as its message source; a document-thread
-      // run keeps buildInitialMessages (parent body + comments, fenced as
-      // untrusted). claude-code stays hard-disabled, so this branch is API-only.
-      const messages = ctx.sink
-        ? await buildConversationMessages(db, requireConversationId(ctx))
-        : await buildInitialMessages(ctx);
-      try {
+      // --- stream consumption (outer round-loop). buildInitialMessages is
+      // called HERE (not inside runLoop) so runLoop is reusable by
+      // runAgentResume, which builds a different message history.
+      if (ctx.fm.provider === 'claude-code') {
+        await ccExecute(ctx);
+      } else {
+        // A conversation-backed run (ctx.sink set by loadContext, Task 5) replays
+        // the TRUSTED conversation thread as its message source; a document-thread
+        // run keeps buildInitialMessages (parent body + comments, fenced as
+        // untrusted). claude-code stays hard-disabled, so this branch is API-only.
+        const messages = ctx.sink
+          ? await buildConversationMessages(db, requireConversationId(ctx))
+          : await buildInitialMessages(ctx);
         await runLoop(ctx, messages);
-      } finally {
-        // Operator cockpit chat (Task 5) — release the conversation's
-        // single-active-turn slot (M14 CAS) on EVERY terminal path (success,
-        // fail, throw, budget-block) so the conversation isn't wedged. The slot
-        // (`active_run_id`), not an `agent_run` status, is the conversation run's
-        // liveness record. No-op for document runs (no conversationId).
-        if (ctx.conversationId) await clearConversationSlot(ctx.conversationId, runId);
       }
+    } finally {
+      if (ctx.conversationId) await clearConversationSlot(ctx.conversationId, runId);
     }
   } catch (err) {
     // Top-level containment. Any unhandled throw → fail the run with a
@@ -604,6 +608,13 @@ async function loadConversationContext(
 
   // AI key resolution — same (provider, label) instance-credential path as a
   // document run (B6 reversal). Absent key is a pre-flight failure (no_ai_key).
+  // DEFERRED (Cluster-3 /code-review, lower severity): the label is hardcoded
+  // 'default'. The operator is a fixed singleton with no `ai_key_label` config
+  // field, so it always uses the instance's DEFAULT key. If an instance stores its
+  // provider key under a non-'default' label (a known provider-setup quirk), the
+  // operator chat blocks with no_ai_key despite a working key existing. Giving the
+  // operator a configurable label is a PRODUCT decision (where does the user set
+  // it?), not a correctness fix — tracked, not fixed here.
   const keyRow = await db.query.aiKeys.findFirst({
     where: and(eq(aiKeys.provider, def.provider as ProviderName), eq(aiKeys.label, 'default')),
   });

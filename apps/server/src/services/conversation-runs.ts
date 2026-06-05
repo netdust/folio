@@ -49,14 +49,16 @@
  */
 
 import { nanoid } from 'nanoid';
+import { eq } from 'drizzle-orm';
 import { type DB } from '../db/client.ts';
-import type { ApiToken } from '../db/schema.ts';
+import { type ApiToken, projects } from '../db/schema.ts';
 import {
   callerProjectsFor,
   intersectAgentProjects,
 } from '../lib/agent-projects.ts';
 import { roleToScopes, toolsToScopes } from '../lib/agent-schema.ts';
 import {
+  canManageWorkspace,
   userRole,
   visibleProjectIds,
   visibleWorkspaceIds,
@@ -160,8 +162,24 @@ export async function createConversationRun(
     const wsIds = await visibleWorkspaceIds(db, callerUserId);
     const projectIdSet = new Set<string>();
     for (const wsId of wsIds) {
-      for (const pid of await visibleProjectIds(db, callerUserId, wsId)) {
-        projectIdSet.add(pid);
+      // Cluster-3 /code-review fix: mirror the canonical agent-runs.ts ceiling.
+      // A WORKSPACE-grant holder (canManageWorkspace) can SEE every project in
+      // that workspace, so their ceiling there is ALL ws projects — NOT just their
+      // direct project_access grants. visibleProjectIds returns only direct grants
+      // (its own header warns: call it only AFTER canManageWorkspace is false,
+      // else a ws-grant holder wrongly narrows to their direct grants, which may
+      // be none). Without this branch, a whole-workspace invitee with no per-project
+      // grants got [] = deny-all and their operator could write NOWHERE.
+      if (await canManageWorkspace(db, callerUserId, wsId, callerRole)) {
+        const wsProjects = await db.query.projects.findMany({
+          where: eq(projects.workspaceId, wsId),
+          columns: { id: true },
+        });
+        for (const p of wsProjects) projectIdSet.add(p.id);
+      } else {
+        for (const pid of await visibleProjectIds(db, callerUserId, wsId)) {
+          projectIdSet.add(pid);
+        }
       }
     }
     callerProjectIds = [...projectIdSet];

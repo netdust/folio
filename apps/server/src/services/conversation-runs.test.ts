@@ -15,16 +15,25 @@
  */
 
 import { describe, expect, test } from 'bun:test';
+import { eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { makeTestApp } from '../test/harness.ts';
-import { instanceSkills, projectAccess, projects, users, workspaces } from '../db/schema.ts';
+import {
+  conversations,
+  instanceSkills,
+  projectAccess,
+  projects,
+  users,
+  workspaceAccess,
+  workspaces,
+} from '../db/schema.ts';
 import { roleToScopes, toolsToScopes } from '../lib/agent-schema.ts';
 import {
   FOLIO_SKILL_BODY,
   FOLIO_SKILL_SLUG,
   OPERATOR_TOOLS,
 } from '../lib/system-skills.ts';
-import { loadContext } from '../lib/runner.ts';
+import { loadContext, runAgent } from '../lib/runner.ts';
 import {
   __dropPendingConversationRunForTest,
   createConversationRun,
@@ -183,6 +192,40 @@ describe('createConversationRun — M1/M2 authority floor', () => {
     // The ceiling = exactly the granted project; the ungranted sibling is excluded.
     expect(memberCtx!.token.projectIds).toEqual([grantedProject]);
   });
+
+  // Cluster-3 /code-review fix: a WORKSPACE-grant holder (no per-project grants)
+  // can see EVERY project in that workspace, so their operator's ceiling = all ws
+  // projects — NOT deny-all. Before the canManageWorkspace branch, visibleProjectIds
+  // (direct grants only) returned [], wedging the operator to write NOWHERE.
+  // Bite: against the pre-fix loop this asserts [] and FAILS.
+  test('a workspace-grant holder (no project grants) gets ALL workspace projects, not deny-all', async () => {
+    const { db } = await setup();
+    const memberId = await seedUser(db, 'member');
+    const ws = nanoid();
+    await db.insert(workspaces).values({ id: ws, slug: 'gamma', name: 'Gamma' });
+    const p1 = nanoid();
+    const p2 = nanoid();
+    await db.insert(projects).values([
+      { id: p1, workspaceId: ws, slug: 'p1', name: 'P1' },
+      { id: p2, workspaceId: ws, slug: 'p2', name: 'P2' },
+    ]);
+    // Whole-workspace grant, NO project_access rows.
+    await db.insert(workspaceAccess).values({ userId: memberId, workspaceId: ws });
+
+    const conv = await createConversation(db, {
+      createdBy: memberId,
+      operatorAgentId: '_operator',
+      title: 'Untitled',
+    });
+    const runId = nanoid();
+    await createConversationRun(db, {
+      conversation: { id: conv.id, createdBy: memberId },
+      runId,
+    });
+    const ctx = await loadContext(runId);
+    // Both ws projects are in the ceiling (order-independent); NOT [] (the bug).
+    expect(new Set(ctx!.token.projectIds)).toEqual(new Set([p1, p2]));
+  });
 });
 
 describe('createConversationRun → loadContext — end-to-end wiring (seam)', () => {
@@ -236,6 +279,38 @@ describe('createConversationRun → loadContext — end-to-end wiring (seam)', (
     const second = await loadContext(runId);
     expect(second).toBeNull();
     __dropPendingConversationRunForTest(runId); // no-op (already consumed); hygiene
+  });
+});
+
+// Cluster-3 /code-review fix: the single-active-turn slot MUST be released on
+// EVERY terminal path of a conversation run — including a blocking preflight
+// (no AI key), which `return`s BEFORE the inner try/finally in the pre-fix code.
+// setup() seeds NO ai_keys row, so the real runAgent hits conversationPreflight's
+// no_ai_key block. Bite: against the pre-fix early-return the slot stays set and
+// this assertion (activeRunId === null) FAILS — wedging the conversation at 409.
+describe('conversation run — slot released on every terminal path (M14 wedge fix)', () => {
+  test('a no-AI-key preflight block still clears active_run_id (not wedged)', async () => {
+    const { db, seed } = await setup(); // no ai_keys seeded
+    const conv = await createConversation(db, {
+      createdBy: seed.user.id,
+      operatorAgentId: '_operator',
+      title: 'Untitled',
+    });
+    const runId = nanoid();
+    await createConversationRun(db, {
+      conversation: { id: conv.id, createdBy: seed.user.id },
+      runId,
+    });
+    // Simulate the route's CAS acquire: the slot points at this run.
+    await db.update(conversations).set({ activeRunId: runId }).where(eq(conversations.id, conv.id));
+
+    // Real runAgent: loadContext (conversation branch) → conversationPreflight
+    // blocks on the absent key → early return. The wrapping finally must still
+    // clear the slot.
+    await runAgent({ runId });
+
+    const row = await db.query.conversations.findFirst({ where: eq(conversations.id, conv.id) });
+    expect(row?.activeRunId).toBeNull(); // released — the conversation is NOT wedged
   });
 });
 
