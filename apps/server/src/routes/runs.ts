@@ -28,13 +28,14 @@ import { db } from '../db/client.ts';
 import { documents, projects } from '../db/schema.ts';
 import type { Document, Project, User, Workspace } from '../db/schema.ts';
 import { env } from '../env.ts';
+import { canManageWorkspace, visibleProjectIds } from '../lib/access.ts';
 import { intersectAgentProjects, resolveAgentProjects } from '../lib/agent-projects.ts';
 import type { AgentRunFrontmatter, RunStatus } from '../lib/agent-run-schema.ts';
 import { runStatusSchema } from '../lib/agent-run-schema.ts';
 import { emitChainSuppressed } from '../lib/autonomy-gate.ts';
 import { HTTPError } from '../lib/http.ts';
 import { jsonOk } from '../lib/http.ts';
-import { resolveAgentForRun } from '../lib/system-workspace.ts';
+import { resolveAgentForRun } from '../lib/agent-resolver.ts';
 import type { AuthContext } from '../middleware/auth.ts';
 import { requireScope } from '../middleware/bearer.ts';
 import { type ScopeContext, getProject, getWorkspace } from '../middleware/scope.ts';
@@ -84,23 +85,44 @@ function resolveActor(c: Context<AuthContext & ScopeContext>): string {
 }
 
 /**
- * Resolve the calling agent-bound bearer's effective project allow-list.
- * Returns `null` when there is no narrowing (session, human PAT, or wildcard
- * agent). Verbatim shape from routes/events.ts.
+ * Resolve the calling principal's effective project allow-list for the HTTP run
+ * surfaces (the ws-scoped list AND single-run-by-id loads). Returns `null` when
+ * there is no narrowing (owner / workspace_access holder / wildcard agent); a
+ * `string[]` (possibly empty) when the caller is narrowed.
+ *
+ * Two narrowed principals, mirroring routes/events.ts:
+ *  - AGENT-bound token → its effective project allow-list (agent ∩ token).
+ *  - a project-only HUMAN (session OR human PAT, no agentId, NOT owner/ws-grant)
+ *    → the projects they hold a direct grant to (CR-9). Without this, the
+ *    traverse clause lets a project-only invitee reach the ws-scoped runs list
+ *    (and load any run by id) and see sibling-project runs. An EMPTY list is a
+ *    real narrowing (listRuns + loadRunScopedByToken short-circuit `[]` → deny).
  */
-async function resolveAgentAllowList(
+async function resolveCallerProjectAllowList(
   c: Context<AuthContext & ScopeContext>,
 ): Promise<string[] | null> {
   const token = c.get('token') ?? null;
-  if (!token?.agentId) return null;
-  const agent = await db.query.documents.findFirst({
-    where: eq(documents.id, token.agentId),
-  });
-  if (!agent || agent.type !== 'agent') {
-    throw new HTTPError('FORBIDDEN_RESOURCE', 'agent for this token no longer exists', 403);
+  // Agent-bound token: narrow by the agent's effective allow-list.
+  if (token?.agentId) {
+    const agent = await db.query.documents.findFirst({
+      where: eq(documents.id, token.agentId),
+    });
+    if (!agent || agent.type !== 'agent') {
+      throw new HTTPError('FORBIDDEN_RESOURCE', 'agent for this token no longer exists', 403);
+    }
+    const effective = intersectAgentProjects(resolveAgentProjects(agent), token.projectIds ?? null);
+    return effective.includes('*') ? null : effective;
   }
-  const effective = intersectAgentProjects(resolveAgentProjects(agent), token.projectIds ?? null);
-  return effective.includes('*') ? null : effective;
+  // Human principal (session or human PAT). A whole-ws principal (owner /
+  // workspace_access) is unrestricted; only a project-only invitee is narrowed.
+  const user = c.get('user');
+  if (user) {
+    const ws = getWorkspace(c);
+    if (!(await canManageWorkspace(db, user.id, ws.id))) {
+      return [...(await visibleProjectIds(db, user.id, ws.id))];
+    }
+  }
+  return null;
 }
 
 /**
@@ -148,7 +170,7 @@ async function loadRunScoped(
   runId: string,
 ): Promise<Document> {
   const ws = getWorkspace(c);
-  const allowList = await resolveAgentAllowList(c);
+  const allowList = await resolveCallerProjectAllowList(c);
   return loadRunScopedByToken(runId, { workspaceId: ws.id, allowList });
 }
 
@@ -237,7 +259,7 @@ export const runsListRoute = new Hono<AuthContext & ScopeContext>();
 
 runsListRoute.get('/', requireScope('documents:read'), async (c) => {
   const project = getProject(c);
-  const allowList = await resolveAgentAllowList(c);
+  const allowList = await resolveCallerProjectAllowList(c);
 
   const statusRaw = c.req.query('status');
   const agent = c.req.query('agent');
@@ -278,7 +300,7 @@ export const runsRoute = new Hono<AuthContext & ScopeContext>();
 // Registered BEFORE `GET /:runId` so the root path resolves distinctly.
 runsRoute.get('/', requireScope('documents:read'), async (c) => {
   const ws = getWorkspace(c);
-  const allowList = await resolveAgentAllowList(c);
+  const allowList = await resolveCallerProjectAllowList(c);
 
   const statusRaw = c.req.query('status');
   let status: RunStatus | undefined;
@@ -354,15 +376,16 @@ runsRoute.post('/', requireScope('agents:write'), async (c) => {
 
   // 3. Allow-list (mitigation 55) — parent.projectId must be in the caller's
   //    allowed projects. BEFORE the input comment (mitigation 59 ordering).
-  const allowList = await resolveAgentAllowList(c);
+  const allowList = await resolveCallerProjectAllowList(c);
   if (allowList !== null && (parent.projectId === null || !allowList.includes(parent.projectId))) {
     throw new HTTPError('FORBIDDEN_RESOURCE', 'not allow-listed for that project', 403);
   }
 
-  // 4. Resolve agent doc — gated by the home predicate {run-ws, __system} (B1):
-  //    a B-local agent OR a __system library agent (local shadows library); an
-  //    agent that lives only in a third workspace never resolves (fail-closed).
-  const agent = await resolveAgentForRun(db, ws.id, body.agent_slug);
+  // 4. Resolve the agent by slug, INSTANCE-WIDE (Phase 4 — no workspace/tenancy
+  //    gate; one instance = one team). Confidentiality is enforced downstream by
+  //    the project ceiling (agent ∩ caller) + caller-bounded authority at run
+  //    time, NOT by a workspace wall here.
+  const agent = await resolveAgentForRun(db, body.agent_slug);
   if (!agent) {
     throw new HTTPError('AGENT_NOT_FOUND', `agent "${body.agent_slug}" not found`, 404);
   }
@@ -477,10 +500,9 @@ runsRoute.post('/:runId/retry', requireScope('agents:write'), async (c) => {
   if (!parent) {
     throw new HTTPError('AGENT_RUN_NOT_FOUND', 'parent missing', 404);
   }
-  // Resolve through the home-gated helper {ws, __system} so a __system library
-  // agent's run (agent lives in __system, not ws) re-resolves on retry instead of
-  // 404ing. createRun re-stamps agent_home_workspace_id from agent.workspaceId.
-  const agent = await resolveAgentForRun(db, ws.id, agentSlug);
+  // Resolve the agent by slug, instance-wide (Phase 4 — no tenancy boundary) so
+  // a retry re-resolves instead of 404ing.
+  const agent = await resolveAgentForRun(db, agentSlug);
   if (!agent) {
     throw new HTTPError('AGENT_NOT_FOUND', `agent "${agentSlug}" not found`, 404);
   }

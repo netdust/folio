@@ -18,10 +18,10 @@ import { makeTestApp } from '../test/harness.ts';
 import {
   documents,
   events,
-  memberships,
   projects,
   tables,
   users,
+  workspaceAccess,
   workspaces,
   type Project,
   type TableEntity,
@@ -132,7 +132,8 @@ async function seedFailedEvent(
   });
 }
 
-/** Seed a second, fully-isolated workspace with its own owner membership. */
+/** Seed a second, fully-isolated workspace. Its user is only a document author
+ * (createdBy/updatedBy) — never authenticated — so it needs no authority grant. */
 async function seedSecondWorkspace(
   db: TestDB,
 ): Promise<{ workspace: Workspace; project: Project; runsTable: TableEntity; userId: string }> {
@@ -145,7 +146,6 @@ async function seedSecondWorkspace(
   });
   const wsId = nanoid();
   await db.insert(workspaces).values({ id: wsId, slug: `other-${nanoid(6)}`, name: 'Other' });
-  await db.insert(memberships).values({ workspaceId: wsId, userId, role: 'owner' });
   const projId = nanoid();
   await db.insert(projects).values({ id: projId, workspaceId: wsId, slug: 'other-web', name: 'OW' });
   const workspace = (await db.query.workspaces.findFirst({ where: eq(workspaces.id, wsId) }))!;
@@ -163,7 +163,10 @@ async function seedMemberUser(db: TestDB, workspaceId: string): Promise<string> 
     name: 'Member',
     passwordHash: await hashPassword('password123'),
   });
-  await db.insert(memberships).values({ workspaceId, userId, role: 'member' });
+  // Post-tenancy: a workspace_access grant lets this member PAST resolveWorkspace
+  // so the test exercises the handler's admin-only gate (not the ws gate). role
+  // stays the users.role default 'member', so the handler still 403s.
+  await db.insert(workspaceAccess).values({ userId, workspaceId });
   const session = await createSession(userId);
   return `folio_session=${session.id}`;
 }
@@ -199,15 +202,18 @@ describe('GET /admin/runner-stats', () => {
 
   test('admin role → 200', async () => {
     const { app, db, seed } = await makeTestApp();
-    // Promote a fresh user to admin in the seeded workspace.
+    // Promote a fresh user to admin. Post-tenancy: the admin gate reads
+    // users.role, so set the INSTANCE role to 'admin'; a workspace_access grant
+    // lets it past resolveWorkspace.
     const userId = nanoid();
     await db.insert(users).values({
       id: userId,
       email: `a-${nanoid(6)}@test.local`,
       name: 'Admin',
       passwordHash: await hashPassword('password123'),
+      role: 'admin',
     });
-    await db.insert(memberships).values({ workspaceId: seed.workspace.id, userId, role: 'admin' });
+    await db.insert(workspaceAccess).values({ userId, workspaceId: seed.workspace.id });
     const session = await createSession(userId);
 
     const res = await app.request(URL, {

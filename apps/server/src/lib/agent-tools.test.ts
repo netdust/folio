@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'bun:test';
 import { and, eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
@@ -12,8 +12,11 @@ import {
   apiTokens,
   documents,
   events,
+  instanceSkills,
+  projectAccess,
   projects,
   tables as tablesTable,
+  users,
 } from '../db/schema.ts';
 import { env } from '../env.ts';
 import { seedProjectDefaults } from './seed-project-defaults.ts';
@@ -21,12 +24,8 @@ import { makeTestApp } from '../test/harness.ts';
 import { createRun, ensureRunsTable, nextChainId } from '../services/agent-runs.ts';
 import { listComments } from '../services/comments.ts';
 import { type ToolDef, executeTool, listToolDefs, registerTool } from './agent-tools.ts';
-import {
-  SYSTEM_WORKSPACE_SLUG,
-  bootstrapSystemWorkspace,
-  getSystemWorkspaceId,
-  isReservedSlug,
-} from './system-workspace.ts';
+import { registerRealTools } from './agent-tools-registry.ts';
+import { SYSTEM_WORKSPACE_SLUG, isReservedSlug } from './system-workspace.ts';
 import { workspaces } from '../db/schema.ts';
 import { intersectAgentProjects } from './agent-projects.ts';
 import { newApiToken } from './auth.ts';
@@ -966,14 +965,13 @@ async function seedRunRow(
   return document;
 }
 
-/** Bootstrap __system + return its id, for seeding a library agent (B1). */
-async function seedSystemWorkspaceForRun(db: DB): Promise<{ id: string }> {
-  await bootstrapSystemWorkspace(db);
-  const sys = await db.query.workspaces.findFirst({
-    where: eq(workspaces.slug, SYSTEM_WORKSPACE_SLUG),
-  });
-  if (!sys) throw new Error('test setup: __system did not bootstrap');
-  return { id: sys.id };
+/** Seed a SECOND regular workspace + return its id, for seeding an agent that
+ *  lives in a different workspace than the caller (agents resolve by slug
+ *  instance-wide; agent_home_workspace_id is stamped from the agent's ws). */
+async function seedOtherWorkspaceForRun(db: DB): Promise<{ id: string }> {
+  const id = nanoid();
+  await db.insert(workspaces).values({ id, slug: `other-${id}`, name: 'Other' });
+  return { id };
 }
 
 /** Parse the textResult JSON envelope the run tools return. */
@@ -999,12 +997,12 @@ describe('D-4: run-management MCP tools', () => {
     expect(row?.status).toBe('planning');
   });
 
-  it('run_agent resolves a __system library agent (B1, create path)', async () => {
+  it('run_agent resolves an agent that lives in another workspace by slug (create path)', async () => {
     const { db, seed } = await makeTestApp();
     const parent = await seedWorkItem(db, seed.workspace, seed.project, seed.user);
-    const sys = await seedSystemWorkspaceForRun(db);
-    // Library agent lives in __system; the human PAT is scoped to the run-ws (acme).
-    await seedRunAgent(db, sys.id, seed.user.id, 'operator');
+    const other = await seedOtherWorkspaceForRun(db);
+    // Agent lives in another workspace; the human PAT is scoped to the run-ws (acme).
+    await seedRunAgent(db, other.id, seed.user.id, 'operator');
     const { token } = await seedRunAgent(db, seed.workspace.id, seed.user.id, 'caller');
 
     const out = await exec(token, seed.user.id, 'run_agent', {
@@ -1016,8 +1014,8 @@ describe('D-4: run-management MCP tools', () => {
     expect(res.status).toBe('planning');
     const row = await db.query.documents.findFirst({ where: eq(documents.id, res.run_id) });
     expect(row?.type).toBe('agent_run');
-    // Home is stamped from the agent's workspace → __system, not the run-ws.
-    expect((row?.frontmatter as Record<string, unknown>).agent_home_workspace_id).toBe(sys.id);
+    // Home is stamped from the agent's workspace → the other ws, not the run-ws.
+    expect((row?.frontmatter as Record<string, unknown>).agent_home_workspace_id).toBe(other.id);
   });
 
   it('run_agent with input posts a comment to the parent (mit 59)', async () => {
@@ -1151,16 +1149,16 @@ describe('D-4: run-management MCP tools', () => {
     expect(rows.length).toBe(2);
   });
 
-  it('retry_run of a __system library-agent run re-resolves the library agent (not 404) (B1, retry path)', async () => {
+  it('retry_run of a cross-workspace-agent run re-resolves the agent (not 404) (retry path)', async () => {
     const { db, seed } = await makeTestApp();
     const parent = await seedWorkItem(db, seed.workspace, seed.project, seed.user);
-    const sys = await seedSystemWorkspaceForRun(db);
-    // Library agent lives in __system; the human PAT is scoped to the run-ws (acme).
-    const { agent } = await seedRunAgent(db, sys.id, seed.user.id, 'operator');
+    const other = await seedOtherWorkspaceForRun(db);
+    // Agent lives in another workspace; the human PAT is scoped to the run-ws (acme).
+    const { agent } = await seedRunAgent(db, other.id, seed.user.id, 'operator');
     const { token } = await seedRunAgent(db, seed.workspace.id, seed.user.id, 'caller');
-    // createRun (B's create path) stamps agent_home_workspace_id = __system.
+    // createRun stamps agent_home_workspace_id = the agent's workspace.
     const run = await seedRunRow(db, seed.workspace, seed.project, agent, seed.user, parent);
-    expect((run.frontmatter as Record<string, unknown>).agent_home_workspace_id).toBe(sys.id);
+    expect((run.frontmatter as Record<string, unknown>).agent_home_workspace_id).toBe(other.id);
     await db
       .update(documents)
       .set({
@@ -1178,7 +1176,7 @@ describe('D-4: run-management MCP tools', () => {
     );
     expect(res.status).toBe('planning');
     const fresh = await db.query.documents.findFirst({ where: eq(documents.id, res.run_id) });
-    expect((fresh!.frontmatter as Record<string, unknown>).agent_home_workspace_id).toBe(sys.id);
+    expect((fresh!.frontmatter as Record<string, unknown>).agent_home_workspace_id).toBe(other.id);
   });
 
   it('retry_run while original still active → RUN_ALREADY_ACTIVE (mit 63)', async () => {
@@ -1352,13 +1350,13 @@ describe('D-4: run-management MCP tools', () => {
   it('mit 58: get_run for a run id from ANOTHER workspace → AGENT_RUN_NOT_FOUND', async () => {
     const { db, seed } = await makeTestApp();
     // Build a second workspace + project + run inside it.
-    const { workspaces, projects, memberships } = await import('../db/schema.ts');
+    const { workspaces, projects, workspaceAccess } = await import('../db/schema.ts');
     const { seedProjectDefaults } = await import('./seed-project-defaults.ts');
     const otherWsId = nanoid();
     await db.insert(workspaces).values({ id: otherWsId, slug: 'other', name: 'Other' });
-    await db
-      .insert(memberships)
-      .values({ workspaceId: otherWsId, userId: seed.user.id, role: 'owner' });
+    // seed.user is the instance owner (users.role='owner', set by the harness); a
+    // workspace_access grant gives explicit visibility to this second workspace.
+    await db.insert(workspaceAccess).values({ userId: seed.user.id, workspaceId: otherWsId });
     const otherProjectId = nanoid();
     await db
       .insert(projects)
@@ -1841,10 +1839,12 @@ describe('A3: instance reach in resolvers', () => {
   // CR#4 — an instance token enumerates every workspace EXCEPT the reserved
   // __system library (other surfaces hide it via isReservedSlug; list_workspaces
   // must not leak the reserved namespace).
-  it('CR#4: list_workspaces for an instance token excludes the reserved __system workspace', async () => {
+  it('CR#4: list_workspaces for an instance token excludes a reserved (__-prefixed) workspace', async () => {
     const { db, seed } = await makeTestApp();
-    // Bootstrap so a reserved __system workspace exists, plus a normal B.
-    await bootstrapSystemWorkspace(db);
+    // A reserved-slug workspace exists, plus a normal B.
+    await db
+      .insert(workspaces)
+      .values({ id: nanoid(), slug: SYSTEM_WORKSPACE_SLUG, name: 'Reserved' });
     const bId = nanoid();
     await db.insert(workspaces).values({ id: bId, slug: 'beta', name: 'Beta' });
 
@@ -1892,37 +1892,20 @@ describe('A3: instance reach in resolvers', () => {
 });
 
 describe('B2: get_skill narrow __system read (T7)', () => {
-  /**
-   * Insert a `page` into the __system Skills project with explicit frontmatter.
-   * Bootstraps __system first so the Skills project exists.
-   */
+  /** Insert an instance skill with an explicit trusted typed-column value. */
   async function seedSystemSkillPage(
     db: DB,
     slug: string,
     body: string,
-    frontmatter: Record<string, unknown>,
-  ): Promise<string> {
-    await bootstrapSystemWorkspace(db);
-    const systemId = await getSystemWorkspaceId(db);
-    const skillsProject = (await db.query.projects.findFirst({
-      where: and(eq(projects.workspaceId, systemId), eq(projects.slug, 'skills')),
-    }))!;
-    await db.insert(documents).values({
-      id: nanoid(),
-      workspaceId: systemId,
-      projectId: skillsProject.id,
-      type: 'page',
-      title: slug,
-      slug,
-      body,
-      status: null,
-      frontmatter,
-      createdBy: null,
-    });
-    return systemId;
+    opts: { trusted: boolean },
+  ): Promise<void> {
+    await db
+      .insert(instanceSkills)
+      .values({ id: nanoid(), name: slug, body, frontmatter: {}, trusted: opts.trusted })
+      .onConflictDoNothing({ target: instanceSkills.name });
   }
 
-  it('returns a __system skill body for a WORKER token pinned to B', async () => {
+  it('returns an instance skill body for a WORKER token pinned to B', async () => {
     const { db, seed } = await makeTestApp();
     await seedSystemSkillPage(db, 'seo', 'SEO-BODY', { trusted: true });
     // Token pinned to workspace B (the regular seed workspace), NOT __system.
@@ -1935,14 +1918,13 @@ describe('B2: get_skill narrow __system read (T7)', () => {
     expect(payload.trusted).toBe(true);
   });
 
-  it('CANNOT read a non-skill __system doc (e.g. an agent) (T7)', async () => {
+  it('CANNOT read a non-skill doc (e.g. an agent) via get_skill (T7)', async () => {
     const { db, seed } = await makeTestApp();
-    await bootstrapSystemWorkspace(db);
-    const systemId = await getSystemWorkspaceId(db);
-    // Seed a __system AGENT doc (type=agent, NOT a type=page under skills).
+    // Seed an AGENT doc (type=agent). get_skill reads instance_skills only, so a
+    // document of any kind must never satisfy a skill lookup.
     await db.insert(documents).values({
       id: nanoid(),
-      workspaceId: systemId,
+      workspaceId: seed.workspace.id,
       projectId: null,
       type: 'agent',
       title: 'operator',
@@ -1960,8 +1942,7 @@ describe('B2: get_skill narrow __system read (T7)', () => {
 
   it("cannot read another workspace's doc (T7)", async () => {
     const { db, seed } = await makeTestApp();
-    await bootstrapSystemWorkspace(db);
-    // A page in workspace B (NOT __system/skills) with slug 'bdoc'.
+    // A page in workspace B (NOT an instance skill) with slug 'bdoc'.
     await db.insert(documents).values({
       id: nanoid(),
       workspaceId: seed.workspace.id,
@@ -1992,36 +1973,23 @@ describe('B2: get_skill narrow __system read (T7)', () => {
 });
 
 describe('B3: set_skill_trust (T8 separation of duties)', () => {
-  /** Insert a __system Skills page; returns the systemId + skills project + doc id. */
+  /** Insert an instance skill with an explicit trusted typed-column value. */
   async function seedSkill(
     db: DB,
     slug: string,
-    frontmatter: Record<string, unknown>,
-  ): Promise<{ systemId: string; skillsProjectId: string; docId: string }> {
-    await bootstrapSystemWorkspace(db);
-    const systemId = await getSystemWorkspaceId(db);
-    const skillsProject = (await db.query.projects.findFirst({
-      where: and(eq(projects.workspaceId, systemId), eq(projects.slug, 'skills')),
-    }))!;
-    const docId = nanoid();
-    await db.insert(documents).values({
-      id: docId,
-      workspaceId: systemId,
-      projectId: skillsProject.id,
-      type: 'page',
-      title: slug,
-      slug,
-      body: 'BODY',
-      status: null,
-      frontmatter,
-      createdBy: null,
-    });
-    return { systemId, skillsProjectId: skillsProject.id, docId };
+    trusted: boolean,
+  ): Promise<{ skillId: string }> {
+    const skillId = nanoid();
+    await db
+      .insert(instanceSkills)
+      .values({ id: skillId, name: slug, body: 'BODY', frontmatter: {}, trusted })
+      .onConflictDoNothing({ target: instanceSkills.name });
+    return { skillId };
   }
 
   it('an MCP PAT (createdBy = a human) is REFUSED and trusted stays false', async () => {
     const { db } = await makeTestApp();
-    const { docId } = await seedSkill(db, 'evil', { trusted: false });
+    const { skillId } = await seedSkill(db, 'evil', false);
     // An MCP admin PAT: a human createdBy + config:write scope. By T8 it may NOT bless.
     const token = makeToken({ createdBy: 'u-human', scopes: ['config:write', 'documents:read'] });
     const res = (await exec(token, 'u-human', 'set_skill_trust', {
@@ -2030,13 +1998,13 @@ describe('B3: set_skill_trust (T8 separation of duties)', () => {
     })) as { content: { text: string }[] };
     const payload = JSON.parse(res.content[0]!.text) as { refused?: boolean };
     expect(payload.refused).toBe(true);
-    const doc = await db.query.documents.findFirst({ where: eq(documents.id, docId) });
-    expect((doc!.frontmatter as Record<string, unknown>).trusted).toBe(false);
+    const skill = await db.query.instanceSkills.findFirst({ where: eq(instanceSkills.id, skillId) });
+    expect(skill!.trusted).toBe(false);
   });
 
-  it('the operator token (createdBy null) flips trusted + emits skill.trust.changed', async () => {
+  it('the operator token (createdBy null) flips the trusted typed column', async () => {
     const { db } = await makeTestApp();
-    const { docId } = await seedSkill(db, 'evil', { trusted: false });
+    const { skillId } = await seedSkill(db, 'evil', false);
     // Operator token: createdBy null (system origin) + config:write.
     const token = makeToken({ createdBy: null, scopes: ['config:write', 'documents:read'] });
     const res = (await exec(token, 'operator', 'set_skill_trust', {
@@ -2046,38 +2014,117 @@ describe('B3: set_skill_trust (T8 separation of duties)', () => {
     const payload = JSON.parse(res.content[0]!.text) as { ok?: boolean; refused?: boolean };
     expect(payload.ok).toBe(true);
     expect(payload.refused).toBeUndefined();
-    const doc = await db.query.documents.findFirst({ where: eq(documents.id, docId) });
-    expect((doc!.frontmatter as Record<string, unknown>).trusted).toBe(true);
-    const evts = await db.query.events.findMany({
-      where: eq(events.kind, 'skill.trust.changed'),
-    });
-    expect(evts.length).toBeGreaterThanOrEqual(1);
-    expect(evts.some((e) => (e.payload as { slug?: string }).slug === 'evil')).toBe(true);
+    const skill = await db.query.instanceSkills.findFirst({ where: eq(instanceSkills.id, skillId) });
+    expect(skill!.trusted).toBe(true);
   });
 
-  it('a normal update_document to a __system skill page CANNOT set trusted (strip)', async () => {
-    const { db, seed } = await makeTestApp();
-    const { systemId, skillsProjectId, docId } = await seedSkill(db, 'evil', { trusted: false });
-    const ws = (await db.query.workspaces.findFirst({ where: eq(workspaces.id, systemId) }))!;
-    const project = (await db.query.projects.findFirst({
-      where: eq(projects.id, skillsProjectId),
+  it('a frontmatter/body write to an instance skill CANNOT set trusted (typed column)', async () => {
+    const { db } = await makeTestApp();
+    const { skillId } = await seedSkill(db, 'evil', false);
+    // A write that TRIES to flip trusted via a frontmatter key. Because `trusted`
+    // is a typed column, no body/frontmatter write touches it — structural, not
+    // a strip. trusted stays false; the non-managed key persists in frontmatter.
+    await db
+      .update(instanceSkills)
+      .set({ frontmatter: { trusted: true, note: 'kept' } })
+      .where(eq(instanceSkills.id, skillId));
+    const after = (await db.query.instanceSkills.findFirst({
+      where: eq(instanceSkills.id, skillId),
     }))!;
-    const existing = (await db.query.documents.findFirst({ where: eq(documents.id, docId) }))!;
-    const user = seed.user; // a real user row (FK on documents.updated_by)
-    // A write that TRIES to flip trusted via the generic document path. The key
-    // must be stripped — trusted stays false (only setSkillTrust may change it).
-    const { updateDocument } = await import('../services/documents.ts');
-    await updateDocument({
-      workspace: ws,
-      project,
-      existing,
-      actor: user,
-      fallbackTable: null,
-      patch: { frontmatter: { trusted: true, note: 'kept' } },
-    });
-    const after = (await db.query.documents.findFirst({ where: eq(documents.id, docId) }))!;
-    const fm = after.frontmatter as Record<string, unknown>;
-    expect(fm.trusted).toBe(false); // stripped — unchanged
-    expect(fm.note).toBe('kept'); // a non-managed key still persists
+    expect(after.trusted).toBe(false); // column unmoved
+    expect((after.frontmatter as Record<string, unknown>).note).toBe('kept');
   });
 });
+
+// ===========================================================================
+// Shake-out B1: a project-only invitee's HUMAN PAT must NOT reach sibling
+// projects via the MCP tool layer (the CR-7/CR-9 narrowing applies to the MCP
+// surface too, not just HTTP). The harness seeds `seed.user`=owner + project
+// `web`; we add a SECOND user (member) granted access to a SECOND project only,
+// mint them a workspace-pinned PAT, and assert they cannot see/resolve `web`.
+// ===========================================================================
+describe('B1: MCP human-PAT project narrowing (no cross-project leak)', () => {
+  beforeAll(() => {
+    // The real MCP tools are module-global; register them so these tests don't
+    // depend on a sibling test file registering first (registry-leak order).
+    registerRealTools();
+  });
+
+  async function seedInvitee(db: DB, seed: Awaited<ReturnType<typeof makeTestApp>>['seed']) {
+    // A second project the invitee will NOT be granted.
+    // (seed.project = 'web' belongs to the owner.) Add a project the invitee IS granted.
+    const inviteeId = nanoid();
+    await db.insert(users).values({
+      id: inviteeId,
+      email: `${inviteeId}@t.local`,
+      name: 'Invitee',
+      role: 'member',
+    });
+    const grantedProjId = nanoid();
+    await db.insert(projects).values({
+      id: grantedProjId,
+      workspaceId: seed.workspace.id,
+      slug: 'granted',
+      name: 'Granted',
+    });
+    await db.insert(projectAccess).values({ userId: inviteeId, projectId: grantedProjId });
+    // A workspace-pinned human PAT owned by the invitee (agentId null).
+    const { hash } = newApiToken();
+    const tokId = nanoid();
+    await db.insert(apiTokens).values({
+      id: tokId,
+      workspaceId: seed.workspace.id,
+      name: 'invitee-pat',
+      tokenHash: hash,
+      scopes: ['documents:read', 'documents:write'],
+      createdBy: inviteeId,
+    });
+    const [token] = await db.select().from(apiTokens).where(eq(apiTokens.id, tokId));
+    return { token: token!, inviteeId, grantedProjId };
+  }
+
+  it('find_documents does NOT return docs from a project the invitee was not granted', async () => {
+    const { db, seed } = await makeTestApp();
+    // Put a doc in the owner's `web` project (the sibling the invitee must NOT see).
+    const webTable = (await db.query.tables.findFirst({
+      where: (t, { eq: e, and: a }) => a(e(t.projectId, seed.project.id), e(t.slug, 'work-items')),
+    }))!;
+    await db.insert(documents).values({
+      id: nanoid(), workspaceId: seed.workspace.id, projectId: seed.project.id,
+      tableId: webTable.id, type: 'work_item', slug: 'secret-web-item', title: 'SECRET WEB ITEM',
+      status: 'todo', body: '', frontmatter: {}, createdBy: seed.user.id,
+    });
+    const { token } = await seedInvitee(db, seed);
+    const out = (await exec(token, 'invitee', 'find_documents', {
+      workspace_slug: 'acme',
+      query: 'SECRET',
+    })) as { content: { text: string }[] };
+    const parsed = JSON.parse(out.content[0]!.text) as { documents: { title: string }[] };
+    // The invitee (granted only `granted`) must NOT see the owner's `web` doc.
+    expect(parsed.documents.some((d) => d.title === 'SECRET WEB ITEM')).toBe(false);
+  });
+
+  it('list_projects does NOT enumerate a project the invitee was not granted', async () => {
+    const { db, seed } = await makeTestApp();
+    const { token } = await seedInvitee(db, seed);
+    const out = (await exec(token, 'invitee', 'list_projects', {
+      workspace_slug: 'acme',
+    })) as { content: { text: string }[] };
+    const parsed = JSON.parse(out.content[0]!.text) as { projects: { slug: string }[] };
+    const slugs = parsed.projects.map((p) => p.slug);
+    expect(slugs).toContain('granted'); // its own grant
+    expect(slugs).not.toContain('web'); // the owner's project — leak if present
+  });
+
+  it('get_document on an ungranted project is rejected (resolveProjectInWorkspace)', async () => {
+    const { db, seed } = await makeTestApp();
+    const { token } = await seedInvitee(db, seed);
+    await expect(
+      exec(token, 'invitee', 'get_document', {
+        workspace_slug: 'acme',
+        project_slug: 'web', // not granted
+        slug: 'anything',
+      }),
+    ).rejects.toThrow(/access|not granted|forbidden|not found/i);
+  });
+})

@@ -69,16 +69,20 @@ export function intersectAgentProjects(
 
 /**
  * Map an authenticated caller to the project set the delegate ceiling clamps
- * against (mitigation D5). Owners/admins have full project access → null
- * (wildcard; `intersectAgentProjects` treats null as "no narrowing"). A regular
- * member is clamped to their EXPLICIT project membership list — never wildcard,
- * so a member can never borrow an agent's broader project reach. An empty
- * membership list stays [] (deny), never coerced to wildcard (mitigation D9).
+ * against (mitigation D5). Post-tenancy (drop workspace-as-tenancy-boundary)
+ * ONLY `owner` bypasses access grants → null (wildcard; `intersectAgentProjects`
+ * treats null as "no narrowing"). `admin` does NOT bypass grants (CR-1): an
+ * instance admin holding only a project_access grant reaches a workspace via
+ * traverse but must NOT borrow reach to sibling projects, so admin is clamped to
+ * their EXPLICIT visible-project list exactly like a member. A `member` is
+ * likewise clamped — never wildcard, so neither admin nor member can borrow an
+ * agent's broader project reach. An empty list stays [] (deny), never coerced to
+ * wildcard (mitigation D9).
  */
 export function callerProjectsFor(actor: {
   role: 'owner' | 'admin' | 'member';
   projectIds: string[];
 }): string[] | null {
-  if (actor.role === 'owner' || actor.role === 'admin') return null;
+  if (actor.role === 'owner') return null;
   return actor.projectIds;
 }

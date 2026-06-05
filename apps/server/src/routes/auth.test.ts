@@ -1,8 +1,10 @@
-import { and, eq } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { expect, test } from 'bun:test';
-import { aiKeys, memberships, users, workspaces } from '../db/schema.ts';
+import { nanoid } from 'nanoid';
+import { aiKeys, users } from '../db/schema.ts';
 import { env } from '../env.ts';
-import { bootstrapSystemWorkspace, SYSTEM_WORKSPACE_SLUG } from '../lib/system-workspace.ts';
+import { userRole } from '../lib/access.ts';
+import { createSession } from '../lib/auth.ts';
 import { makeBareTestDb, makeTestApp } from '../test/harness.ts';
 
 test('first registration is rejected when bootstrap registration is off (M1)', async () => {
@@ -19,7 +21,7 @@ test('first registration is rejected when bootstrap registration is off (M1)', a
   expect(created).toBeUndefined();
 });
 
-test('first registration becomes __system owner when the flag is on (M1)', async () => {
+test('first registration becomes instance owner (users.role) when the flag is on (M1)', async () => {
   const { app, db } = await makeBareTestDb();
   const prev = env.FOLIO_ALLOW_BOOTSTRAP_REGISTRATION;
   (env as { FOLIO_ALLOW_BOOTSTRAP_REGISTRATION: boolean }).FOLIO_ALLOW_BOOTSTRAP_REGISTRATION =
@@ -31,22 +33,19 @@ test('first registration becomes __system owner when the flag is on (M1)', async
       body: JSON.stringify({ email: 'first@x.com', password: 'password123', name: 'First' }),
     });
     expect(res.status).toBe(200);
-    const sys = await db.query.workspaces.findFirst({
-      where: eq(workspaces.slug, SYSTEM_WORKSPACE_SLUG),
-    });
-    expect(sys).toBeDefined();
-    const owner = await db.query.memberships.findFirst({
-      where: and(eq(memberships.workspaceId, sys!.id), eq(memberships.role, 'owner')),
-    });
     const firstUser = await db.query.users.findFirst({ where: eq(users.email, 'first@x.com') });
-    expect(owner!.userId).toBe(firstUser!.id);
+    expect(firstUser).toBeDefined();
+    // The first registrant must be the instance owner + ADMINISTRABLE — users.role
+    // is the instance-admin gates' source of truth (single-team model: no __system
+    // membership, the role lives on the user row).
+    expect(await userRole(db, firstUser!.id)).toBe('owner');
   } finally {
     (env as { FOLIO_ALLOW_BOOTSTRAP_REGISTRATION: boolean }).FOLIO_ALLOW_BOOTSTRAP_REGISTRATION =
       prev;
   }
 });
 
-test('a SECOND registration never grants __system ownership (M1)', async () => {
+test('a SECOND registration never grants instance ownership (M1)', async () => {
   const { app, db } = await makeBareTestDb();
   const prev = env.FOLIO_ALLOW_BOOTSTRAP_REGISTRATION;
   (env as { FOLIO_ALLOW_BOOTSTRAP_REGISTRATION: boolean }).FOLIO_ALLOW_BOOTSTRAP_REGISTRATION =
@@ -63,31 +62,25 @@ test('a SECOND registration never grants __system ownership (M1)', async () => {
       body: JSON.stringify({ email: 'second@x.com', password: 'password123', name: 'Second' }),
     });
     expect(second.status).toBe(200);
-    const sys = await db.query.workspaces.findFirst({
-      where: eq(workspaces.slug, SYSTEM_WORKSPACE_SLUG),
-    });
+    const firstUser = await db.query.users.findFirst({ where: eq(users.email, 'first@x.com') });
     const secondUser = await db.query.users.findFirst({ where: eq(users.email, 'second@x.com') });
-    const ownerMems = await db.query.memberships.findMany({
-      where: and(eq(memberships.workspaceId, sys!.id), eq(memberships.role, 'owner')),
-    });
-    // exactly one owner, and it is NOT the second user
-    expect(ownerMems.length).toBe(1);
-    expect(ownerMems[0]!.userId).not.toBe(secondUser!.id);
+    // exactly one owner, and it is the FIRST user — not the second.
+    const owners = await db.query.users.findMany({ where: eq(users.role, 'owner') });
+    expect(owners.length).toBe(1);
+    expect(owners[0]!.id).toBe(firstUser!.id);
+    expect(await userRole(db, secondUser!.id)).toBe('member');
   } finally {
     (env as { FOLIO_ALLOW_BOOTSTRAP_REGISTRATION: boolean }).FOLIO_ALLOW_BOOTSTRAP_REGISTRATION =
       prev;
   }
 });
 
-test('first registration that SUCCEEDS persists the user + one owner; rollback-on-throw is the inverse (review fix #3)', async () => {
-  // The compensating delete (auth.ts) removes the just-created user if
-  // bootstrap/designate throws, so a mid-failure can't leave an orphaned user
-  // that permanently flips isFirstUser=false + EMAIL_TAKEN. A first-user
-  // designation throw isn't cleanly inducible in-harness (a tainted __system
-  // needs a membership → a user → isFirstUser=false; transient DB faults aren't
-  // simulable), so we assert the SUCCESS-path invariant here (user persists, one
-  // owner) and unit-test the reachable designation-throw cases (tainted __system,
-  // concurrent race) in system-workspace.test.ts.
+test('first registration that SUCCEEDS persists the user + one owner; rollback-on-throw is the inverse', async () => {
+  // The compensating delete (auth.ts) removes the just-created user if designate
+  // throws, so a mid-failure can't leave an orphaned user that permanently flips
+  // isFirstUser=false + EMAIL_TAKEN. We assert the SUCCESS-path invariant here
+  // (user persists, one owner); the designation-throw cases (owner conflict) are
+  // unit-tested in system-workspace.test.ts.
   const { app, db } = await makeBareTestDb();
   const prev = env.FOLIO_ALLOW_BOOTSTRAP_REGISTRATION;
   (env as { FOLIO_ALLOW_BOOTSTRAP_REGISTRATION: boolean }).FOLIO_ALLOW_BOOTSTRAP_REGISTRATION =
@@ -101,12 +94,7 @@ test('first registration that SUCCEEDS persists the user + one owner; rollback-o
     expect(ok.status).toBe(200);
     const user = await db.query.users.findFirst({ where: eq(users.email, 'first@x.com') });
     expect(user).toBeDefined(); // persisted on success (rollback only on throw)
-    const sys = await db.query.workspaces.findFirst({
-      where: eq(workspaces.slug, SYSTEM_WORKSPACE_SLUG),
-    });
-    const owners = await db.query.memberships.findMany({
-      where: and(eq(memberships.workspaceId, sys!.id), eq(memberships.role, 'owner')),
-    });
+    const owners = await db.query.users.findMany({ where: eq(users.role, 'owner') });
     expect(owners.length).toBe(1);
   } finally {
     (env as { FOLIO_ALLOW_BOOTSTRAP_REGISTRATION: boolean }).FOLIO_ALLOW_BOOTSTRAP_REGISTRATION =
@@ -114,73 +102,72 @@ test('first registration that SUCCEEDS persists the user + one owner; rollback-o
   }
 });
 
-// --- D2: server-authoritative is_system_member on /auth/me ---
+// --- Post-tenancy: instance role signals on /auth/me ---
+// One instance = one team; roles live on users.role. /me surfaces the caller's
+// instance role + a derived is_instance_admin so the web boots its identity
+// without re-deriving authority client-side.
 
-test('GET /auth/me reports is_system_member: true for a __system member (D2)', async () => {
-  const { app, db, seed } = await makeTestApp();
-  // Make the seed user a member of the curated __system library workspace.
-  await bootstrapSystemWorkspace(db);
-  const sys = await db.query.workspaces.findFirst({
-    where: eq(workspaces.slug, SYSTEM_WORKSPACE_SLUG),
-  });
-  await db.insert(memberships).values({
-    workspaceId: sys!.id,
-    userId: seed.user.id,
-    role: 'owner',
-  });
-
+test('GET /auth/me reports role + is_instance_admin: true for an instance owner', async () => {
+  const { app, seed } = await makeTestApp();
+  // The harness seeds the user with users.role = 'owner'.
   const res = await app.request('/api/v1/auth/me', {
     headers: { cookie: seed.sessionCookie },
   });
   expect(res.status).toBe(200);
   const { data } = await res.json();
   expect(data.user.id).toBe(seed.user.id);
-  expect(data.is_system_member).toBe(true);
-  // An OWNER of __system is also an instance admin.
+  expect(data.role).toBe('owner');
   expect(data.is_instance_admin).toBe(true);
 });
 
-test('GET /auth/me reports is_system_member: false for a non-member (D2)', async () => {
-  const { app, seed } = await makeTestApp();
-  // The seeded user belongs only to "acme", never to __system.
+test('GET /auth/me reports role: member + is_instance_admin: false for a member', async () => {
+  const { app, db } = await makeTestApp();
+  // A fresh user whose instance role is the default 'member'.
+  const memberId = nanoid();
+  await db.insert(users).values({
+    id: memberId,
+    email: `${memberId}@test.local`,
+    name: 'Member',
+    role: 'member',
+  });
+  const session = await createSession(memberId);
+
   const res = await app.request('/api/v1/auth/me', {
-    headers: { cookie: seed.sessionCookie },
+    headers: { cookie: `folio_session=${session.id}` },
   });
   expect(res.status).toBe(200);
   const { data } = await res.json();
-  expect(data.user.id).toBe(seed.user.id);
-  expect(data.is_system_member).toBe(false);
-  // A non-member is not an instance admin either.
+  expect(data.user.id).toBe(memberId);
+  expect(data.role).toBe('member');
   expect(data.is_instance_admin).toBe(false);
 });
 
-test('GET /auth/me: a plain __system MEMBER is system_member but NOT instance_admin', async () => {
-  const { app, db, seed } = await makeTestApp();
-  await bootstrapSystemWorkspace(db);
-  const sys = await db.query.workspaces.findFirst({
-    where: eq(workspaces.slug, SYSTEM_WORKSPACE_SLUG),
+test('GET /auth/me reports is_instance_admin: true for an instance admin', async () => {
+  const { app, db } = await makeTestApp();
+  // role 'admin' is also an instance admin (owner || admin).
+  const adminId = nanoid();
+  await db.insert(users).values({
+    id: adminId,
+    email: `${adminId}@test.local`,
+    name: 'Admin',
+    role: 'admin',
   });
-  // role 'member' — a __system member who is NOT owner/admin.
-  await db.insert(memberships).values({
-    workspaceId: sys!.id,
-    userId: seed.user.id,
-    role: 'member',
-  });
+  const session = await createSession(adminId);
+
   const res = await app.request('/api/v1/auth/me', {
-    headers: { cookie: seed.sessionCookie },
+    headers: { cookie: `folio_session=${session.id}` },
   });
   expect(res.status).toBe(200);
   const { data } = await res.json();
-  expect(data.is_system_member).toBe(true);
-  // The distinction the instance AI-key UI gate relies on: member ≠ admin.
-  expect(data.is_instance_admin).toBe(false);
+  expect(data.role).toBe('admin');
+  expect(data.is_instance_admin).toBe(true);
 });
 
 test('GET /auth/me: ai_configured reflects instance AI-key presence (readable by ANY member)', async () => {
   const { app, db, seed } = await makeTestApp();
-  // seed.user is a plain member of "acme", NOT a __system admin. ai_configured
-  // must be readable by them (drives the body editor's AI slash commands), even
-  // though the admin-gated key LIST is not.
+  // seed.user is a plain member; ai_configured must be readable by them (drives
+  // the body editor's AI slash commands), even though the admin-gated key LIST
+  // is not.
   const before = await app.request('/api/v1/auth/me', { headers: { cookie: seed.sessionCookie } });
   expect((await before.json()).data.ai_configured).toBe(false);
 

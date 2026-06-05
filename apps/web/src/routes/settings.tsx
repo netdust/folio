@@ -1,8 +1,10 @@
-import { createFileRoute, Link } from '@tanstack/react-router';
+import { createFileRoute } from '@tanstack/react-router';
 import { z } from 'zod';
-import { SYSTEM_WORKSPACE_SLUG } from '../lib/api/workspaces.ts';
-import { useIsInstanceAdmin, useIsSystemMember } from '../lib/api/auth.ts';
+import { useIsInstanceAdmin } from '../lib/api/auth.ts';
 import { AiTab } from '../components/settings/ai-tab.tsx';
+import { RolesTab } from '../components/settings/roles-tab.tsx';
+import { InvitationsTab } from '../components/settings/invitations-tab.tsx';
+import { InstanceTokensTab } from '../components/settings/instance-tokens-tab.tsx';
 
 const settingsSearchSchema = z.object({
   // Deep-link target. The provider-health banner's "Check key →" lands here.
@@ -16,11 +18,29 @@ const settingsSearchSchema = z.object({
 // Workspace-scoped settings (API tokens) stay at /w/:wslug/settings.
 export const Route = createFileRoute('/settings')({
   validateSearch: settingsSearchSchema,
-  component: InstanceSettingsPage,
+  component: InstanceSettingsBody,
 });
 
-function InstanceSettingsPage() {
-  const isSystemMember = useIsSystemMember();
+export function SettingsSection({ title, desc, children }: {
+  title: string;
+  desc: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="mb-8">
+      <h2 className="text-sm font-medium">{title}</h2>
+      <p className="mb-3 mt-0.5 text-xs text-fg-2">{desc}</p>
+      {children}
+    </section>
+  );
+}
+
+// Body of the instance-settings page, sans route shell. The standalone
+// `/settings` route renders it bare; the in-workspace `/w/:wslug/instance-settings`
+// route renders it INSIDE the workspace Shell+Rail (so it opens with the same
+// chrome as workspace settings). Same content either way — instance settings are
+// not workspace-scoped; the workspace only provides the rail context.
+export function InstanceSettingsBody() {
   const isInstanceAdmin = useIsInstanceAdmin();
 
   return (
@@ -33,38 +53,42 @@ function InstanceSettingsPage() {
         </p>
       </header>
 
-      {/* AI provider keys — instance-wide, instance-admin only. */}
       {isInstanceAdmin ? (
-        <section className="mb-8">
-          <AiTab />
-        </section>
-      ) : null}
-
-      {/* System Library — any __system member. */}
-      {isSystemMember ? (
-        <section className="rounded-md border border-border-light bg-shell p-4">
-          <h2 className="text-sm font-medium">System Library</h2>
-          <p className="mt-0.5 text-xs text-fg-2">
-            Curate the shared library agents and triggers that any workspace can
-            run. Opens the System Library's automation page.
-          </p>
-          <Link
-            to="/w/$wslug/agents"
-            params={{ wslug: SYSTEM_WORKSPACE_SLUG }}
-            className="mt-3 inline-block text-sm text-fg-2 hover:text-fg"
+        <>
+          <SettingsSection
+            title="AI providers"
+            desc="Instance-wide AI keys. The runner resolves an agent's key by provider + label."
           >
-            Open System Library →
-          </Link>
-        </section>
-      ) : null}
+            <AiTab />
+          </SettingsSection>
 
-      {/* Neither an instance admin nor a __system member — nothing to manage. */}
-      {!isInstanceAdmin && !isSystemMember ? (
+          <SettingsSection
+            title="Roles"
+            desc="Each user's instance role. Owner and admin can administer the instance."
+          >
+            <RolesTab />
+          </SettingsSection>
+
+          <SettingsSection
+            title="Invitations"
+            desc="Invite a new member by email, then grant them access to a workspace or project (or revoke it)."
+          >
+            <InvitationsTab />
+          </SettingsSection>
+
+          <SettingsSection
+            title="Instance API tokens"
+            desc="Cross-workspace tokens for operator/admin automation (per-workspace tokens live under each workspace's Agents & Triggers → API)."
+          >
+            <InstanceTokensTab />
+          </SettingsSection>
+        </>
+      ) : (
         <p className="text-sm text-fg-3">
           You don't have access to any instance-level settings. Workspace settings
           live under each workspace.
         </p>
-      ) : null}
+      )}
     </div>
   );
 }

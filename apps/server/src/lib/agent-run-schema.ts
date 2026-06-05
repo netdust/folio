@@ -73,10 +73,11 @@ export const agentRunFrontmatterSchema = z
 
     agent_slug: z.string().regex(/^[a-z0-9-]+$/),
 
-    // Server-stamped at createRun from where the agent was RESOLVED (B's own
-    // workspace, or `__system` for a library agent) — NEVER client-supplied
-    // (B2). Absent ⇒ home = run.workspaceId (local agent, backward-compatible).
-    // No migration: the field is JSON in the frontmatter column.
+    // LEGACY (Phase 4): server-stamped at createRun from the resolved agent's
+    // workspace, but NO LONGER READ — loadContext resolves agents instance-wide
+    // by slug now (the old `home ∈ {run-ws, __system}` predicate is gone). Kept
+    // optional so historical run rows that carry it still validate; new rows
+    // still stamp it harmlessly. Never client-supplied.
     agent_home_workspace_id: z.string().optional(),
 
     // Phase C C3 — set ONLY on a FRESH trigger-fired run (no human in the loop

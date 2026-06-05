@@ -30,9 +30,8 @@ import type { DB } from '../db/client.ts';
 type DBOrTx = DB | Parameters<Parameters<DB['transaction']>[0]>[0];
 import {
   documents,
-  memberships,
   users,
-  workspaces,
+  workspaceAccess,
 } from '../db/schema.ts';
 import type {
   Document,
@@ -50,7 +49,6 @@ import {
 import { parseMentions } from '../lib/mention-parser.ts';
 import { authorString as sharedAuthorString } from '@folio/shared';
 import { resolveAgentProjects } from '../lib/agent-projects.ts';
-import { SYSTEM_WORKSPACE_SLUG } from '../lib/system-workspace.ts';
 
 const MAX_BODY_BYTES = 64 * 1024;
 
@@ -201,43 +199,23 @@ interface MemberForParser {
  * window where an agent could be deleted between snapshot and insert (H9).
  */
 async function loadWorkspaceAgents(
-  workspaceId: string,
+  _workspaceId: string,
   tx: DBOrTx = db,
 ): Promise<AgentForParser[]> {
-  // S4: narrow projection — pull only the columns the parser needs (id, slug,
-  // frontmatter for resolveAgentProjects). The previous findMany loaded the
-  // full row including the agent body (potentially many KB of markdown
-  // instructions per agent). Mention parsing runs on every comment write;
-  // dragging multi-KB bodies through the parser path was wasted I/O + JSON
-  // (de)serialization at scale.
-  const rows = await tx
+  // Phase 4 (drop-workspace-tenancy): agents resolve INSTANCE-WIDE by slug —
+  // matching the runs/trigger paths (resolveAgentForRun, no workspace predicate).
+  // So an `@agent:<slug>` mention resolves the same agent regardless of which
+  // workspace the comment is in; confidentiality stays downstream (the allow-list
+  // gate via resolveAgentProjects + the commenter's allowed-project set). The
+  // old workspace-scoped query + `__system` library union is gone (the union was
+  // dead after the teardown AND made mentions inconsistent with run resolution).
+  //
+  // S4: narrow projection — only id/slug/frontmatter (resolveAgentProjects); never
+  // the multi-KB agent body, since mention parsing runs on every comment write.
+  const merged = await tx
     .select({ id: documents.id, slug: documents.slug, frontmatter: documents.frontmatter })
     .from(documents)
-    .where(and(eq(documents.workspaceId, workspaceId), eq(documents.type, 'agent')));
-
-  // Phase B B8 — UNION the `__system` library's agents so an @-mention of a
-  // library agent (`@agent:<library-slug>`) RESOLVES in any workspace's
-  // comments. Library agents are mentionable instance-wide. The union is SOFT
-  // (no `__system` → local agents only, no throw) and SKIPPED when the comment's
-  // workspace IS `__system` (no self-union). A workspace-local agent SHADOWS a
-  // library agent of the same slug (dedupe by slug, local wins — mirrors the
-  // run-create precedence). Resolution still flows through the same allow-list
-  // gate (resolveAgentProjects + caller's allowed-project set) downstream.
-  let merged = rows;
-  const systemRow = await tx
-    .select({ id: workspaces.id })
-    .from(workspaces)
-    .where(eq(workspaces.slug, SYSTEM_WORKSPACE_SLUG))
-    .limit(1);
-  const systemId = systemRow[0]?.id;
-  if (systemId && systemId !== workspaceId) {
-    const systemRows = await tx
-      .select({ id: documents.id, slug: documents.slug, frontmatter: documents.frontmatter })
-      .from(documents)
-      .where(and(eq(documents.workspaceId, systemId), eq(documents.type, 'agent')));
-    const localSlugs = new Set(rows.map((r) => r.slug));
-    merged = [...rows, ...systemRows.filter((r) => !localSlugs.has(r.slug))];
-  }
+    .where(eq(documents.type, 'agent'));
 
   // S1: resolveAgentProjects centralizes the fail-closed wildcard collapse
   // and the missing/malformed → ['*'] back-compat default. Three call sites
@@ -250,13 +228,19 @@ async function loadWorkspaceAgents(
   }));
 }
 
-/** Load workspace members (id + email) for parseMentions's member resolution. */
+/**
+ * Load workspace members (id + email) for parseMentions's member resolution.
+ *
+ * Post-tenancy (drop workspace-as-tenancy-boundary): "members" = the holders of
+ * a `workspace_access` grant on this workspace, not rows in the legacy
+ * `memberships` table. @-mention name→user resolution lists exactly those users.
+ */
 async function loadWorkspaceMembers(workspaceId: string): Promise<MemberForParser[]> {
   const rows = await db
     .select({ id: users.id, email: users.email })
-    .from(memberships)
-    .innerJoin(users, eq(memberships.userId, users.id))
-    .where(eq(memberships.workspaceId, workspaceId));
+    .from(workspaceAccess)
+    .innerJoin(users, eq(workspaceAccess.userId, users.id))
+    .where(eq(workspaceAccess.workspaceId, workspaceId));
   return rows;
 }
 

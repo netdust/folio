@@ -49,6 +49,36 @@ interface JsonRpcResponse {
 }
 
 /**
+ * Normalize a tool handler's return value into the MCP `tools/call` result
+ * shape `{ content: [{ type: 'text', text }] }`.
+ *
+ * MCP requires every `tools/call` result to carry a `content` array; a bare
+ * object in the JSON-RPC `result` field is rendered as NOTHING by the client.
+ * Most registry handlers already return the shaped form (via `textResult`), but
+ * the general bridge tools `folio_api`/`folio_api_get` deliberately return a
+ * bare `{ status, body }` — that envelope is correct for the IN-PROCESS agent
+ * runner (which JSON.stringifies any non-string tool return), but over the MCP
+ * wire it must be wrapped here, at the single transport convergence point,
+ * rather than re-shaped in each handler. (A bare `{status, body}` from
+ * `folio_api_get` previously reached the MCP client as empty output — the HTTP
+ * call succeeded but its body never rendered.)
+ *
+ * Already-shaped results (any object with a `content` array) pass through
+ * verbatim so the `textResult` handlers are never double-wrapped.
+ */
+export function toMcpToolResult(result: unknown): { content: { type: 'text'; text: string }[] } {
+  if (
+    result !== null &&
+    typeof result === 'object' &&
+    Array.isArray((result as { content?: unknown }).content)
+  ) {
+    return result as { content: { type: 'text'; text: string }[] };
+  }
+  const text = typeof result === 'string' ? result : JSON.stringify(result);
+  return { content: [{ type: 'text', text }] };
+}
+
+/**
  * Translate an error thrown by `executeTool` (or a handler it called) into a
  * JSON-RPC error response. Mitigation 61: only PATHS are serialized for invalid
  * args — the rejected arg VALUE is never placed in the response.
@@ -145,11 +175,11 @@ mcpRoute.post('/', async (c) => {
         protocolVersion: '2024-11-05',
         serverInfo: { name: 'folio', version: '0.1.0' },
         capabilities: { tools: {} },
-        // B5 — discovery pointer for the outside agent (Claude Code over MCP):
-        // Folio is markdown-native + agent-first, with a skill library in __system.
+        // Discovery pointer for the outside agent (Claude Code over MCP): Folio
+        // is markdown-native + agent-first, with an instance skill library.
         // get_skill(slug) pulls a skill body before shaping a workspace.
         instructions:
-          'Folio is markdown-native and agent-first. A skill library lives in the __system workspace. ' +
+          'Folio is markdown-native and agent-first. Instance skills are available via get_skill. ' +
           'Call get_skill(slug) to load a skill body (e.g. get_skill("folio") for the API manual) ' +
           'before shaping projects, tables, views, or adding a provider. Reads via folio_api_get; writes via folio_api.',
       },
@@ -192,7 +222,10 @@ mcpRoute.post('/', async (c) => {
           callerScopes: token.scopes,
         },
       );
-      return c.json<JsonRpcResponse>({ jsonrpc: '2.0', id, result });
+      // Normalize to the MCP `content` shape at this single transport point —
+      // bare `{status,body}` returns (folio_api/_get) would otherwise render as
+      // empty output in the client; `textResult` handlers pass through verbatim.
+      return c.json<JsonRpcResponse>({ jsonrpc: '2.0', id, result: toMcpToolResult(result) });
     } catch (err) {
       return c.json<JsonRpcResponse>(mapToolErrorToJsonRpc(err, id));
     }

@@ -39,13 +39,6 @@ export const FOLIO_SKILL_FRONTMATTER = {
 } as const;
 
 /**
- * The operator agent's TITLE. createDocument slugifies it to 'folio-operator'.
- * There is NO reserved doc slug — the operator is identified by
- * (workspace=__system, type='agent').
- */
-export const OPERATOR_AGENT_TITLE = 'folio-operator';
-
-/**
  * The operator's tool whitelist (becomes the agent's frontmatter.tools). Exported
  * so the seeder, the token-scope computation, and the tests share ONE source of
  * truth. Every member MUST be a V1_MCP_TOOLS entry (enforced by the test).
@@ -108,16 +101,22 @@ Paths are relative and validated — no scheme, no \`..\` traversal, no SSE \`/e
 
 ## 3. Resource → route → scope
 
-| Resource | Path | Verbs | Scope | dryRun |
-|----------|------|-------|-------|--------|
-| projects | \`/api/v1/w/<wslug>/projects\` | GET, POST, PATCH, DELETE | GET=read · write=\`config:write\` | yes |
-| tables | \`/api/v1/w/<wslug>/p/<pslug>/tables\` | GET, POST, PATCH, DELETE | GET=read · write=\`config:write\` | yes |
-| fields | \`/api/v1/w/<wslug>/p/<pslug>/fields\` | GET, POST, PATCH, DELETE | GET=read · write=\`config:write\` | yes |
-| views | \`/api/v1/w/<wslug>/p/<pslug>/views\` | GET, POST, PATCH, DELETE | GET=read · write=\`config:write\` | yes |
-| statuses | \`/api/v1/w/<wslug>/p/<pslug>/statuses\` | GET, POST, PATCH, DELETE | GET=read · write=\`config:write\` | yes |
-| documents | (use the narrow tools) | get/list/create/update | \`documents:read\` / \`documents:write\` | n/a |
+Each resource has a COLLECTION path (GET list / POST create) and an ITEM path
+(PATCH update / DELETE) — the item path adds the id (or, for a project, its
+slug). The collection path does NOT accept PATCH/DELETE.
+
+| Resource | Collection (GET, POST) | Item (PATCH, DELETE) | Scope | dryRun |
+|----------|------------------------|----------------------|-------|--------|
+| projects | \`/api/v1/w/<wslug>/projects\` | \`/api/v1/w/<wslug>/p/<pslug>\` | GET=read · write=\`config:write\` | yes |
+| tables | \`/api/v1/w/<wslug>/p/<pslug>/tables\` | \`…/tables/<id>\` | GET=read · write=\`config:write\` | yes |
+| fields | \`/api/v1/w/<wslug>/p/<pslug>/fields\` | \`…/fields/<id>\` | GET=read · write=\`config:write\` | yes |
+| views | \`/api/v1/w/<wslug>/p/<pslug>/views\` | \`…/views/<id>\` | GET=read · write=\`config:write\` | yes |
+| statuses | \`/api/v1/w/<wslug>/p/<pslug>/statuses\` | \`…/statuses/<id>\` | GET=read · write=\`config:write\` | yes |
+| documents | (use the narrow tools) | (use the narrow tools) | \`documents:read\` / \`documents:write\` | n/a |
 
 - Config **reads** go through \`folio_api_get\`; config **writes** through \`folio_api\`.
+- **Deleting a PROJECT uses the bare project-item path** \`DELETE /api/v1/w/<wslug>/p/<pslug>\` — NOT \`…/projects/<slug>\` (that path 404s). PATCH a project at the same item path.
+- **The default table is \`work-items\`.** tables/fields/views/statuses paths target the project's \`work-items\` table unless you insert \`/t/<tslug>\` before the resource (e.g. \`…/p/<pslug>/t/<tslug>/statuses\`). Create a second table only if you truly need one — a stray table means later writes (which default to \`work-items\`) and reads can disagree about which table they hit.
 - **dryRun** on config writes: POST/PATCH pass \`"dryRun": true\` in the body; DELETE passes \`?dryRun=true\` in the query. You get back \`{ dry_run, would, resource }\` with ZERO writes.
 - Documents are read/written via the narrow tools, never \`folio_api\`.
 
@@ -136,11 +135,15 @@ Paths are relative and validated — no scheme, no \`..\` traversal, no SSE \`/e
 ### Set up a project
 
 \`\`\`
-# 1. Create the project
+# 1. Create the project. This AUTO-SEEDS a default \`work-items\` table, the four
+#    default statuses (backlog/todo/in_progress/done), and two views (a list +
+#    a kanban board). You usually do NOT need to create a table at all.
 folio_api  POST /api/v1/w/<wslug>/projects
   { "name": "Marketing", "slug": "marketing" }
 
-# 2. A table to hold work items
+# 2. (Optional) a SECOND table, only if one project must hold two distinct
+#    work-item sets. Skip this for the common case — the seeded \`work-items\`
+#    table is the default target of every fields/views/statuses write below.
 folio_api  POST /api/v1/w/<wslug>/p/marketing/tables
   { "name": "Tasks" }
 
@@ -148,9 +151,11 @@ folio_api  POST /api/v1/w/<wslug>/p/marketing/tables
 folio_api  POST /api/v1/w/<wslug>/p/marketing/fields
   { "key": "priority", "type": "select", "options": ["low","med","high"] }
 
-# 4. The project's status set
+# 4. The project's status set — \`key\` (a-z0-9_- slug) and \`name\` are REQUIRED;
+#    \`color\` and \`category\` (backlog|unstarted|started|completed|cancelled,
+#    default unstarted) are optional.
 folio_api  POST /api/v1/w/<wslug>/p/marketing/statuses
-  { "name": "In progress", "color": "blue" }
+  { "key": "in_progress", "name": "In progress", "color": "blue", "category": "started" }
 
 # 5. A view over the table
 folio_api  POST /api/v1/w/<wslug>/p/marketing/views
@@ -228,49 +233,3 @@ Authority and safety:
 - Your effective authority is always your own scopes intersected with the caller's — you can never exceed the person who started the run.
 - High-risk actions (token mint/revoke, AI keys, workspace delete/rename, member changes, bulk operations) are refused-with-plan: instead of executing, you produce a clear plan describing what you WOULD do, and let a human apply it.
 - A refusal you receive is real; do not retry it as a different shape.`;
-
-/**
- * SETUP_PROJECT_REF_BODY — a standalone "how to set up a project" reference page.
- * The core is §5 "Set up a project" from the skill, framed as a worked POST
- * sequence: project → table → fields → statuses → views.
- */
-export const SETUP_PROJECT_REF_BODY = `# Reference: set up a project
-
-A worked POST sequence for standing up a new project end-to-end. All config writes go through \`folio_api\`; reads through \`folio_api_get\`. Substitute \`<wslug>\` with the workspace slug. Pass \`"dryRun": true\` in any POST/PATCH body (or \`?dryRun=true\` on DELETE) to preview a write with zero side effects.
-
-## 1. Create the project
-
-\`\`\`
-folio_api  POST /api/v1/w/<wslug>/projects
-  { "name": "Marketing", "slug": "marketing" }
-\`\`\`
-
-## 2. Add a table to hold work items
-
-\`\`\`
-folio_api  POST /api/v1/w/<wslug>/p/marketing/tables
-  { "name": "Tasks" }
-\`\`\`
-
-## 3. Pin field types (optional — otherwise inferred from values)
-
-\`\`\`
-folio_api  POST /api/v1/w/<wslug>/p/marketing/fields
-  { "key": "priority", "type": "select", "options": ["low","med","high"] }
-\`\`\`
-
-## 4. Define the project's status set
-
-\`\`\`
-folio_api  POST /api/v1/w/<wslug>/p/marketing/statuses
-  { "name": "In progress", "color": "blue" }
-\`\`\`
-
-## 5. Author a view over the table
-
-\`\`\`
-folio_api  POST /api/v1/w/<wslug>/p/marketing/views
-  { "name": "Board", "type": "kanban" }
-\`\`\`
-
-Then create work items as documents via the narrow tools (\`create_document\`), and read everything back with \`folio_api_get\` to confirm.`;

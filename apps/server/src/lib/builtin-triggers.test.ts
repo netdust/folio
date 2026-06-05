@@ -9,7 +9,7 @@
 import { test, expect } from 'bun:test';
 import { and, eq, inArray } from 'drizzle-orm';
 import { makeTestApp } from '../test/harness.ts';
-import { events, workspaces, memberships } from '../db/schema.ts';
+import { events, workspaces, workspaceAccess } from '../db/schema.ts';
 import { emitEvent, txWithEvents } from './events.ts';
 import { BUILTIN_TRIGGER_DEFS, seedBuiltinTriggers } from './builtin-triggers.ts';
 import { nanoid } from 'nanoid';
@@ -54,7 +54,9 @@ test('B2: seedBuiltinTriggers emits a document.created event per inserted row', 
   const { db, seed } = await makeTestApp();
   const wsId = nanoid();
   await db.insert(workspaces).values({ id: wsId, slug: `ws-b2-${wsId.slice(0, 6)}`, name: 'ws-b2' });
-  await db.insert(memberships).values({ workspaceId: wsId, userId: seed.user.id, role: 'owner' });
+  // seed.user is the instance owner (users.role='owner', set by the harness); a
+  // workspace_access grant gives explicit visibility to this fresh workspace.
+  await db.insert(workspaceAccess).values({ userId: seed.user.id, workspaceId: wsId });
 
   await txWithEvents(db, async (tx) => {
     await seedBuiltinTriggers(tx, wsId, seed.user.id);

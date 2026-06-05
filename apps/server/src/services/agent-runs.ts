@@ -22,7 +22,6 @@ import { nanoid } from 'nanoid';
 import { db, type DB } from '../db/client.ts';
 import {
   documents,
-  memberships,
   projects,
   statuses,
   tables,
@@ -36,11 +35,13 @@ import {
 } from '../db/schema.ts';
 import { roleToScopes } from '../lib/agent-schema.ts';
 import { callerProjectsFor } from '../lib/agent-projects.ts';
+import { canManageWorkspace, canSeeWorkspace, userRole, visibleProjectIds } from '../lib/access.ts';
 
 // Drizzle tx and DB share the same query API. Mirrored verbatim from
 // `services/comments.ts` so read helpers can be called from inside a tx.
 type DBOrTx = DB | Parameters<Parameters<DB['transaction']>[0]>[0];
 import { HTTPError } from '../lib/http.ts';
+import { isOperator } from '../lib/operator.ts';
 import { emitEvent, txWithEvents, type EventKind } from '../lib/events.ts';
 import {
   agentRunFrontmatterSchema,
@@ -110,6 +111,19 @@ export async function createRun(
 ): Promise<CreateRunResult> {
   const { workspace, project, runsTable, agent, actor, input } = args;
 
+  // The operator is a code singleton with no token row (its run path is gated to
+  // the cockpit chat, D10). Resolving it for a trigger/POST-runs would insert a
+  // run that strands forever at loadContext (no token → null context, silent).
+  // Refuse it here, at the single run-creation convergence point, with a clear
+  // error rather than a dead run.
+  if (isOperator(agent.slug)) {
+    throw new HTTPError(
+      'OPERATOR_RUN_UNSUPPORTED',
+      'The operator can only be run from the cockpit chat, not via triggers or the runs API.',
+      422,
+    );
+  }
+
   // Snapshot provider/model/max_tokens from the agent frontmatter + the prompt
   // from the agent body at run-create time so a later edit of the agent doesn't
   // mutate historical runs (mitigation 23 — the run is its own scope).
@@ -163,39 +177,57 @@ export async function createRun(
     callerScopes = origFm?.caller_scopes ?? [];
     callerProjectIds = origFm?.caller_project_ids ?? null;
   } else {
-    // Fresh run: derive from the AUTHENTICATED actor's workspace membership.
-    const membership = await db.query.memberships.findFirst({
-      where: and(
-        eq(memberships.workspaceId, workspace.id),
-        eq(memberships.userId, actor.id),
-      ),
-    });
-    const callerRole = membership?.role;
-    if (!callerRole) {
-      // Finding 6: a run whose owner has no membership in the run's workspace
+    // Fresh run: derive from the AUTHENTICATED actor.
+    //
+    // Post-tenancy (drop workspace-as-tenancy-boundary): role is INSTANCE-level
+    // (users.role), and workspace participation is an explicit access grant —
+    // not a per-workspace membership row. The actor must still be able to SEE
+    // the run's workspace (owner | workspace grant | project-grant traverse);
+    // their instance role then bounds the run's authority ceiling.
+    if (!(await canSeeWorkspace(db, actor.id, workspace.id))) {
+      // Finding 6 (preserved): a run whose owner can't see the run's workspace
       // would get caller_scopes:[] and silently deny every tool. Fail loudly at
       // create time so the cause is visible, not a mute first-tool 'forbidden'.
+      // Same error code + 403 as the pre-tenancy "not a member" deny so callers
+      // and tests that key on RUN_OWNER_NOT_A_MEMBER keep working.
       throw new HTTPError(
         'RUN_OWNER_NOT_A_MEMBER',
-        'The run owner is not a member of this workspace; cannot establish caller authority.',
+        'The run owner has no access to this workspace; cannot establish caller authority.',
         403,
       );
     }
-    callerScopes = roleToScopes(callerRole); // callerRole now non-null
-    // Project membership in Folio is WORKSPACE-LEVEL only — there is no
-    // per-project membership table, so a workspace member can see every
-    // project in that workspace. owner/admin → null (no narrowing, via
-    // callerProjectsFor); a member is clamped to the EXPLICIT list of this
-    // workspace's project ids — NOT wildcard (D5), so the snapshot can never
-    // borrow an agent's broader cross-workspace reach. An owner/admin passes
-    // an empty projectIds list (unused on the null branch).
+    const callerRole = await userRole(db, actor.id);
+    callerScopes = roleToScopes(callerRole);
+    // Post-tenancy (drop workspace-as-tenancy-boundary): there is no per-project
+    // membership table. A member's run-ceiling is the projects they can ACTUALLY
+    // SEE in this workspace (canSeeProject) — their project_access grants, plus
+    // ALL ws projects if they hold a workspace_access grant. NOT every workspace
+    // project: a project-only invitee reaches the workspace via the traverse
+    // clause but canSeeProject is false for the sibling projects, so the run must
+    // not borrow reach to projects the caller can't see. (Caller-bounded
+    // authority — the run never exceeds its caller.) owner/admin → null (no
+    // narrowing, via callerProjectsFor); a ws-grant member → canSeeProject is
+    // true for every ws project, so `visible` = all (the old behavior is
+    // preserved for that case). owner/admin passes an empty projectIds list
+    // (unused on the null branch).
+    // CR-1: any NON-owner caller (admin + member) is clamped to the projects
+    // they can ACTUALLY SEE — only `owner` bypasses grants under the post-tenancy
+    // model. callerProjectsFor returns null only for owner.
+    // CR-10: routed through the shared visibility helpers (was a per-item
+    // canSeeProject loop). A ws-grant holder (canManageWorkspace) sees every ws
+    // project, so their ceiling = all ws project ids (old behavior preserved). A
+    // project-only invitee is clamped to their direct grants (visibleProjectIds).
     let memberProjectIds: string[] = [];
-    if (callerRole === 'member') {
-      const wsProjects = await db.query.projects.findMany({
-        where: eq(projects.workspaceId, workspace.id),
-        columns: { id: true },
-      });
-      memberProjectIds = wsProjects.map((p) => p.id);
+    if (callerRole !== 'owner') {
+      if (await canManageWorkspace(db, actor.id, workspace.id)) {
+        const wsProjects = await db.query.projects.findMany({
+          where: eq(projects.workspaceId, workspace.id),
+          columns: { id: true },
+        });
+        memberProjectIds = wsProjects.map((p) => p.id);
+      } else {
+        memberProjectIds = [...(await visibleProjectIds(db, actor.id, workspace.id))];
+      }
     }
     callerProjectIds = callerProjectsFor({ role: callerRole, projectIds: memberProjectIds });
   }
@@ -204,8 +236,10 @@ export async function createRun(
     assignee: `agent:${agent.slug}`,
     status: 'planning',
     agent_slug: agent.slug,
-    // B2/B8: stamped from the RESOLVED agent's home workspace (B for a local agent, `__system` for a library agent), server-side — never client-supplied. `loadContext` (Task 3) gates resolution on `home ∈ {run.workspaceId, __system}`.
-    agent_home_workspace_id: agent.workspaceId,
+    // Phase 4: no longer read by loadContext (agent resolves instance-wide by
+    // slug). Retained for backward-compat of the optional schema field + old
+    // rows; undefined for the operator singleton (sentinel workspace).
+    agent_home_workspace_id: agent.workspaceId || undefined,
     provider,
     model,
     ai_key_label: aiKeyLabel,

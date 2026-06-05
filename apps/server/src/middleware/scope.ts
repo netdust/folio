@@ -1,11 +1,13 @@
 import type { Context, MiddlewareHandler } from 'hono';
 import { and, eq } from 'drizzle-orm';
 import { db } from '../db/client.ts';
-import { memberships, projects, tables, workspaces } from '../db/schema.ts';
+import { projects, tables, workspaces } from '../db/schema.ts';
 import type { Project, TableEntity, Workspace } from '../db/schema.ts';
 import type { AuthContext } from './auth.ts';
+import { getUser } from './auth.ts';
 import { HTTPError } from '../lib/http.ts';
 import { isInstanceReach } from '../lib/token-reach.ts';
+import { canSeeProject, canSeeWorkspace, userRole } from '../lib/access.ts';
 
 export type Role = 'owner' | 'admin' | 'member';
 
@@ -43,15 +45,22 @@ export const resolveWorkspace: MiddlewareHandler<AuthContext & ScopeContext> = a
 
   if (token && isInstanceReach(token)) {
     // Instance token: owner-equivalent by capability, not per-workspace
-    // membership. Skip the membership requirement; role is owner for downstream
+    // membership. Skip the access check; role is owner for downstream
     // getRole() consumers (config gates etc.).
     c.set('role', 'owner');
   } else {
-    const m = await db.query.memberships.findFirst({
-      where: and(eq(memberships.workspaceId, ws.id), eq(memberships.userId, user.id)),
-    });
-    if (!m) throw new HTTPError('FORBIDDEN', 'not a member', 403);
-    c.set('role', m.role as Role);
+    // Post-tenancy: workspace visibility flows through the access convergence
+    // point (lib/access.ts), not a memberships row. `owner` (users.role) is
+    // unrestricted; everyone else needs a workspace_access grant OR a
+    // project_access grant to some project in this ws (the TRAVERSE clause, so a
+    // project-only invitee can navigate to their project). The user's instance
+    // role becomes the per-request `role` for downstream getRole() consumers.
+    const role = await userRole(db, user.id);
+    // Pass the pre-resolved role so canSeeWorkspace doesn't re-query userRole.
+    if (role !== 'owner' && !(await canSeeWorkspace(db, user.id, ws.id, role))) {
+      throw new HTTPError('FORBIDDEN', 'no access to this workspace', 403);
+    }
+    c.set('role', role);
   }
 
   c.set('workspace', ws);
@@ -68,6 +77,19 @@ export const resolveProject: MiddlewareHandler<AuthContext & ScopeContext> = asy
   });
   if (!p) throw new HTTPError('PROJECT_NOT_FOUND', `project "${pslug}" not found`, 404);
   c.set('project', p);
+
+  // Per-project visibility (post-tenancy). owner is unrestricted; otherwise the
+  // user needs a project grant OR a workspace grant on the parent. A traverse-only
+  // user (project grant, no ws grant) passed resolveWorkspace but must be 404'd on
+  // a project they weren't granted — 404 (not 403) so we don't leak existence.
+  const role = c.get('role');
+  if (role !== 'owner') {
+    const user = getUser(c);
+    // Pass the role already resolved by resolveWorkspace (avoids a 3rd userRole read).
+    if (!(await canSeeProject(db, user.id, p.id, role))) {
+      throw new HTTPError('PROJECT_NOT_FOUND', `project "${pslug}" not found`, 404);
+    }
+  }
 
   // Always look up the project's default "Work Items" table and attach it.
   // On /p/:pslug/* legacy routes, this is the only table the handlers can see.

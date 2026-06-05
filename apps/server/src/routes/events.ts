@@ -5,6 +5,7 @@ import { db } from '../db/client.ts';
 import { documents, events } from '../db/schema.ts';
 import type { AuthContext } from '../middleware/auth.ts';
 import { requireUserOrToken } from '../middleware/bearer.ts';
+import { canManageWorkspace, visibleProjectIds } from '../lib/access.ts';
 import { intersectAgentProjects, resolveAgentProjects } from '../lib/agent-projects.ts';
 import { getWorkspace, type ScopeContext } from '../middleware/scope.ts';
 import { eventBus, type BusEvent } from '../lib/event-bus.ts';
@@ -60,8 +61,8 @@ eventsRoute.get('/', async (c) => {
   // pScope), so resolveProject + requireResource never run. We resolve the
   // calling agent's effective allow-list here and narrow both the ?project=
   // gate AND the replay/live filter accordingly. Human PATs and session auth
-  // bypass (token === null OR token.agentId === null). Phase 3+ adds per-PAT
-  // narrowing once a UI exists for it.
+  // bypass THIS (agent) gate (token === null OR token.agentId === null) — they
+  // get the per-user project narrowing below instead (CR-7).
   const token = c.get('token') ?? null;
   let agentAllowList: string[] | null = null; // null === unrestricted
   let agentEventCtx: AgentEventContext = { agentId: null, agentSlug: null };
@@ -85,6 +86,55 @@ eventsRoute.get('/', async (c) => {
           403,
         );
       }
+    }
+  }
+
+  // Per-user project visibility (drop-workspace-tenancy, fix #2). Under the old
+  // model any workspace member could see every project in the workspace, so a
+  // human session needed no per-project narrowing. Post-tenancy a user invited
+  // to ONLY one project can TRAVERSE the workspace (canSeeWorkspace's
+  // project_access clause) to reach it — and would otherwise receive events for
+  // EVERY project in the workspace, including ones they were never granted.
+  //
+  // A human who can see the WHOLE workspace (instance owner, or a
+  // workspace_access grant holder) needs no narrowing: userVisibleProjects
+  // stays null === unrestricted, mirroring the agentAllowList convention. Only
+  // a project-scoped invitee is narrowed to the set of projects they can see.
+  //
+  // Computed for any HUMAN principal — a session OR a human PAT (a token with
+  // no agentId). CR-7: a project-only invitee can mint a workspace-pinned human
+  // PAT (POST /w/:wslug/tokens is gated only by canSeeWorkspace, which they pass
+  // via traverse); that PAT is NOT bounded by the F3 allow-list (no agentId), so
+  // it MUST get the same per-user narrowing a session does — otherwise it leaks
+  // every project's events. AGENT tokens (token.agentId != null) skip this:
+  // they're already bounded by the F3 allow-list above (narrowing only ever
+  // RESTRICTS, so applying both would be safe, but it'd be redundant work).
+  const user = c.get('user');
+  let userVisibleProjects: Set<string> | null = null; // null === unrestricted
+  // CR-8: a project-only human (narrowed) must ALSO be denied workspace-level
+  // (projectId === null) rows — the grant roster (access.granted/revoked),
+  // instance role changes (user.role.changed), workspace lifecycle, agent
+  // metadata. There is no class of workspace-level event a project-only invitee
+  // legitimately needs (their interest is entirely project-scoped, handled by
+  // userVisibleProjects). A whole-ws principal keeps the old "sees everything"
+  // behavior. Mirrors how isAgentEventVisible denies a narrowed agent that owns
+  // no matching subject — but for a human the answer is simply "deny all
+  // workspace-level", since a human has no agent-subject to match.
+  let humanNarrowed = false;
+  // A human principal — session OR a human PAT (token with no agentId). Agent
+  // tokens (token.agentId != null) are bounded by the F3 allow-list above and
+  // skip this. The bearer middleware hydrates a token's CREATOR into
+  // `c.get('user')`, so a human PAT has `user` set + `token.agentId === null`.
+  const isHumanPrincipal = user && (token === null || token.agentId == null);
+  if (isHumanPrincipal) {
+    // Whole-ws principals (owner / workspace_access grant) need no narrowing —
+    // canManageWorkspace is owner || ws-grant (NO traverse), exactly the
+    // "sees every project in the ws" predicate. Only a project-only (traverse)
+    // invitee is narrowed: to their granted projects (project-scoped rows) AND
+    // out of every workspace-level row (humanNarrowed).
+    if (!(await canManageWorkspace(db, user.id, ws.id))) {
+      userVisibleProjects = await visibleProjectIds(db, user.id, ws.id);
+      humanNarrowed = true;
     }
   }
 
@@ -139,8 +189,18 @@ eventsRoute.get('/', async (c) => {
             if (agentAllowList && row.projectId !== null && !agentAllowList.includes(row.projectId)) {
               continue;
             }
+            // fix #2: per-user visibility narrows PROJECT-SCOPED rows for a
+            // human who can't see the whole workspace (traverse-only invitee).
+            if (userVisibleProjects && row.projectId !== null && !userVisibleProjects.has(row.projectId)) {
+              continue;
+            }
+            // CR-8: that same narrowed human is denied WORKSPACE-LEVEL rows
+            // (projectId=null) — grant roster, role changes, ws lifecycle, agent
+            // metadata. (A whole-ws principal has humanNarrowed=false and keeps
+            // receiving them.)
+            if (humanNarrowed && row.projectId === null) continue;
             // H1/H2: workspace-level (projectId=null) events filtered through
-            // the subject-based visibility predicate.
+            // the subject-based visibility predicate (the AGENT narrowing).
             if (
               !isAgentEventVisible(agentEventCtx, {
                 kind: row.kind as EventKind,
@@ -230,6 +290,15 @@ eventsRoute.get('/', async (c) => {
         ) {
           return;
         }
+        // fix #2: per-user visibility — drop PROJECT-SCOPED events for a human
+        // who can't see the whole workspace (traverse-only invitee). Mirrors
+        // the replay-loop check above so live + replay narrow identically.
+        if (userVisibleProjects && e.projectId != null && !userVisibleProjects.has(e.projectId)) {
+          return;
+        }
+        // CR-8: that same narrowed human is denied WORKSPACE-LEVEL events
+        // (projectId null/undefined). Mirrors the replay-loop check.
+        if (humanNarrowed && e.projectId == null) return;
         // H1/H2: subject-based visibility (see replay loop above).
         if (
           !isAgentEventVisible(agentEventCtx, {

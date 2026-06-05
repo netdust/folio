@@ -27,6 +27,13 @@ export const users = sqliteTable('users', {
   email: text('email').notNull().unique(),
   passwordHash: text('password_hash'), // nullable -> magic-link-only users
   name: text('name').notNull(),
+  // Instance-level role (one instance = one team). The single source of instance
+  // authority — the legacy workspace-scoped `memberships` table was dropped in
+  // Phase 4 (migration 0028). owner/admin gate the instance-admin surfaces;
+  // visibility is by `workspace_access`/`project_access` grant.
+  role: text('role', { enum: ['owner', 'admin', 'member'] })
+    .notNull()
+    .default('member'),
   createdAt: integer('created_at', { mode: 'timestamp_ms' })
     .notNull()
     .default(sql`(unixepoch() * 1000)`),
@@ -89,27 +96,54 @@ export const workspaces = sqliteTable('workspaces', {
     .default({}),
 });
 
-export const memberships = sqliteTable(
-  'memberships',
+// `memberships` was the legacy workspace-scoped role table. Phase 4 dropped it
+// (migration 0028 — drop-workspace-tenancy): instance authority moved to
+// `users.role`, visibility to `workspace_access`/`project_access`. One instance
+// = one team; there is no per-workspace membership.
+
+// --- Per-user access grants (invitation-based, replacing workspace tenancy) ---
+//
+// Step 2 of dropping workspace-as-tenancy-boundary (one instance = one team).
+// Access to a specific workspace or project becomes an explicit grant rather
+// than implied by membership. Composite PK = (user, scope) so a grant is unique
+// per pair; the reverse index seeks by scope ("who can see this workspace?").
+// Additive only: nothing reads these tables yet — readers land in later tasks.
+
+export const workspaceAccess = sqliteTable(
+  'workspace_access',
   {
-    workspaceId: text('workspace_id')
-      .notNull()
-      .references(() => workspaces.id, { onDelete: 'cascade' }),
     userId: text('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
-    role: text('role', { enum: ['owner', 'admin', 'member'] })
+    workspaceId: text('workspace_id')
       .notNull()
-      .default('member'),
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
     createdAt: integer('created_at', { mode: 'timestamp_ms' })
       .notNull()
       .default(sql`(unixepoch() * 1000)`),
   },
   (t) => ({
-    pk: primaryKey({ columns: [t.workspaceId, t.userId] }),
-    // CR-F4 — listWorkspaces + isSystemMember filter by userId, the NON-leading
-    // column of the composite PK, so they full-scan. Index userId for a seek.
-    userIdx: index('memberships_user_idx').on(t.userId),
+    pk: primaryKey({ columns: [t.userId, t.workspaceId] }),
+    wsIdx: index('workspace_access_ws_idx').on(t.workspaceId),
+  }),
+);
+
+export const projectAccess = sqliteTable(
+  'project_access',
+  {
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    projectId: text('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' })
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.userId, t.projectId] }),
+    projIdx: index('project_access_proj_idx').on(t.projectId),
   }),
 );
 
@@ -381,6 +415,43 @@ export const aiKeys = sqliteTable(
  * (A dedicated ai_usage table was dropped at /shakeout as redundant — it only
  * re-copied fields already on the run row, and only on the success path.) */
 
+/**
+ * Instance-level agent skills. A skill is a markdown body + frontmatter; when
+ * `trusted` is set, the runner loads its body as TRUSTED INSTRUCTIONS into an
+ * agent's system prompt (otherwise it loads as untrusted DATA).
+ *
+ * SECURITY: `trusted` is a TYPED FIRST-CLASS COLUMN, never a key inside the
+ * `frontmatter` JSON blob. A `trusted:true` skill becomes trusted instructions
+ * in an agent prompt, so trust is privilege. If `trusted` rode in the JSON blob,
+ * any wholesale-frontmatter write (skill edit, bulk import, restore) could forge
+ * `trusted:true`. As its own column, import/restore — which write body +
+ * frontmatter — physically cannot reach it; only a dedicated mutator can. That
+ * is what makes the trust-forging attack structurally impossible.
+ *
+ * Additive only: nothing reads or seeds this table yet (the loader + seeder land
+ * in a later task).
+ */
+export const instanceSkills = sqliteTable(
+  'instance_skills',
+  {
+    id: text('id').primaryKey(),
+    name: text('name').notNull(),
+    body: text('body').notNull(),
+    frontmatter: text('frontmatter', { mode: 'json' })
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default({}),
+    // SECURITY: typed column, never a frontmatter key — see the table doc above.
+    trusted: integer('trusted', { mode: 'boolean' }).notNull().default(false),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' })
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+  },
+  (t) => ({
+    nameIdx: uniqueIndex('instance_skills_name_idx').on(t.name),
+  }),
+);
+
 /** Append-only event log. SSE channel + agent webhooks both read from here. */
 export const events = sqliteTable(
   'events',
@@ -446,5 +517,6 @@ export type Field = typeof fields.$inferSelect;
 export type View = typeof views.$inferSelect;
 export type ApiToken = typeof apiTokens.$inferSelect;
 export type AiKey = typeof aiKeys.$inferSelect;
+export type InstanceSkill = typeof instanceSkills.$inferSelect;
 export type Event = typeof events.$inferSelect;
 export type ReactorCursor = typeof reactorCursors.$inferSelect;

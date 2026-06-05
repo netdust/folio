@@ -5,7 +5,7 @@ import { WorkspaceAutomationPage, type AutomationTab } from '../components/views
 export const Route = createFileRoute('/w/$wslug/agents')({
   validateSearch: z.object({
     wdoc: z.string().optional(),
-    tab: z.enum(['agents', 'triggers']).optional(),
+    tab: z.enum(['agents', 'triggers', 'api']).optional(),
   }),
   component: AgentsRoute,
 });

@@ -50,6 +50,7 @@ import {
 } from '../services/agent-runs.ts';
 import { runClaudeCode, type SpawnFn } from './cc-executor.ts';
 import { intersectAgentProjects } from './agent-projects.ts';
+import { getInstanceSkillsByNames } from './instance-skills.ts';
 import { type AuthorContext, createComment, listComments } from '../services/comments.ts';
 import {
   type AgentRunFrontmatter,
@@ -62,7 +63,7 @@ import { sanitizeProviderError } from './ai/sanitize-error.ts';
 import { newApiToken } from './auth.ts';
 import { decryptSecret } from './crypto.ts';
 import { HTTPError } from './http.ts';
-import { getSystemWorkspaceId } from './system-workspace.ts';
+import { resolveAgentForRun } from './agent-resolver.ts';
 import { effectiveReach } from './token-reach.ts';
 
 /**
@@ -324,37 +325,12 @@ export async function loadContext(runId: string): Promise<RunContext | null> {
   });
   if (!parent) return null;
 
-  // The agent's HOME is where it is DEFINED — the run's own workspace for a
-  // local agent, or `__system` for a library agent (Phase B B1). It was stamped
-  // server-side at createRun (fm.agent_home_workspace_id); absent ⇒ home =
-  // run.workspaceId (a pre-Phase-B run, backward-compatible). The home predicate
-  // `home ∈ {run.workspaceId, __system}` is THE cross-tenant boundary: a run
-  // whose stamped home is a THIRD workspace C resolves to null (fail-closed — no
-  // cross-tenant capability borrowing).
-  //
-  // SHORT-CIRCUIT: a local agent (home === run.workspaceId) never calls the
-  // throwing getSystemWorkspaceId — so it neither needs nor depends on `__system`
-  // being bootstrapped (in-memory test DBs and pre-Phase-B runs may lack it).
-  // Only a stamped library/foreign home triggers the gate, where the throw is
-  // acceptable (production always bootstraps `__system`). Mirrors the
-  // soft-resolve *safety* reasoning (don't throw when `__system` is absent) from
-  // Task 2.5's resolveAgentForRun; resolution here trusts the create-time stamp
-  // rather than re-deriving local-shadows-library precedence.
-  const home = fm.agent_home_workspace_id ?? run.workspaceId;
-  let isLibraryAgent = false;
-  if (home !== run.workspaceId) {
-    // Only a library (or forged-third-ws) run needs the __system id to gate.
-    const systemId = await getSystemWorkspaceId(db);
-    if (home !== systemId) return null; // third-workspace C ⇒ fail-closed (B1)
-    isLibraryAgent = true; // home === systemId
-  }
-  const agent = await db.query.documents.findFirst({
-    where: and(
-      eq(documents.workspaceId, home),
-      eq(documents.type, 'agent'),
-      eq(documents.slug, fm.agent_slug),
-    ),
-  });
+  // Phase 4 (drop-workspace-tenancy): no tenancy boundary. The agent is
+  // resolved by slug INSTANCE-WIDE (resolveAgentForRun). The old home-predicate
+  // gate `home ∈ {run-ws, __system}` and the library-agent fork are GONE.
+  // Confidentiality is enforced downstream by the project ceiling (invariant 3)
+  // and the caller-bounded authority clamp, not a workspace wall.
+  const agent = await resolveAgentForRun(db, fm.agent_slug);
   if (!agent) return null;
   const agentFm = agent.frontmatter as Record<string, unknown>;
 
@@ -390,24 +366,19 @@ export async function loadContext(runId: string): Promise<RunContext | null> {
   // in executeTool. caller_project_ids null = owner/no-narrowing (intersect
   // returns the token list unchanged); an explicit list narrows; [] denies.
   const callerProjectIds = (fm.caller_project_ids as string[] | null) ?? null;
-  // B5 — a LIBRARY agent's authority DEFERS to the caller: the agent side is `['*']`
-  // so the caller's project set is the SOLE ceiling. (A library agent's token is
-  // scoped to __system's projects; intersecting those against B's caller projects
-  // would wrongly deny-all — __system ids never match B ids.) A LOCAL agent keeps
-  // its own token's project reach (agent ∩ token ∩ caller). The SCOPE ceiling is
-  // unchanged: executeTool still does token.scopes ∩ callerScopes — the agent's
-  // tool-derived scopes are its CAPABILITY, the caller scopes are the AUTHORITY.
-  const agentProjectSide = isLibraryAgent ? ['*'] : (token.projectIds ?? ['*']);
+  // The PROJECT ceiling (invariant 3): agent ∩ token ∩ caller. The agent keeps
+  // its own token's project reach; the caller's project set narrows it further.
+  // The SCOPE ceiling is unchanged: executeTool does token.scopes ∩ callerScopes
+  // — the agent's tool-derived scopes are its CAPABILITY, the caller scopes the
+  // AUTHORITY.
+  const agentProjectSide = token.projectIds ?? ['*'];
   // Per-run workspace floor (T4): the run token's reach = token reach ∩ caller
-  // reach, where caller reach is the run's target (run.workspaceId, itself
-  // caller-clamped at run-creation). A LIBRARY agent's token is bound to its
-  // home (__system) but acts in run.workspaceId by contract, so its token reach
-  // is treated as instance (null) here — effectiveReach(null, run.workspaceId)
-  // = run.workspaceId, preserving the B5/B6 rebind. A LOCAL agent keeps its own
-  // reach: effectiveReach(B, B) = B (a no-op). The resolver reads THIS narrowed
-  // reach, never token.workspaceId — replaces the old line-410 rebind.
-  const tokenReach = isLibraryAgent ? null : token.workspaceId;
-  const reach = effectiveReach(tokenReach, run.workspaceId);
+  // reach (the run's target, itself caller-clamped at run-creation). With the
+  // library fork gone, every agent keeps its own token reach:
+  // effectiveReach(B, B) = B (no-op); an instance-reach token narrows to the
+  // run's workspace. The resolver reads THIS narrowed reach, never raw
+  // token.workspaceId.
+  const reach = effectiveReach(token.workspaceId, run.workspaceId);
   if (!reach.ok) return null; // token pin excludes the run's target — fail closed (return-null contract)
   const narrowedToken = {
     ...token,
@@ -484,20 +455,17 @@ export async function loadContext(runId: string): Promise<RunContext | null> {
 
 /**
  * Materialize an agent's DEFINITION: its body (the prompt — already in hand) plus
- * the bodies of the `page` docs named in `frontmatter.skills`, read from the
- * agent's HOME `__system` `skills` project with SYSTEM authority (B3/B4/B9).
+ * the named `frontmatter.skills`, read from the `instance_skills` table by name
+ * with SYSTEM authority (Phase 4 — was the `__system` Skills project; skills are
+ * now instance-level rows).
  *
- * This is the ONE narrow definitional-read exemption: it is internal-only (called
- * solely by loadContext), NOT registered in agent-tools-registry, NOT a route — a
- * caller can NEVER reach it. It reads EXACTLY (workspaceId=systemId,
- * projectId=<Skills project>, slug=<exact slug from frontmatter.skills>,
- * type='page'). A skill slug that does NOT resolve to a doc IN the Skills project
- * → throws MISSING_SKILL (no broader fallback — so a slug crafted to match an
- * agent doc, a Reference doc, or any non-Skills __system content can NOT be read).
- *
- * Only library agents (home === __system) carry __system skills; for a LOCAL
- * agent whose home is its own workspace, the same narrow read applies to THAT
- * workspace if it ever declares skills (v1: only the operator declares any).
+ * This is the ONE narrow definitional-read exemption (ARCHITECTURE-INVARIANTS,
+ * Deliberate exceptions): internal-only (called solely by loadContext), NOT
+ * registered in agent-tools-registry, NOT a route — a caller can NEVER reach it.
+ * It matches an instance skill by EXACT frontmatter-named slug; a slug that does
+ * not resolve throws MISSING_SKILL (no broader fallback). Each skill's `trusted`
+ * typed column routes it into the trusted instruction channel vs the untrusted
+ * DATA envelope (invariant 11).
  */
 async function loadAgentDefinition(
   db: DB,
@@ -506,32 +474,20 @@ async function loadAgentDefinition(
   const fm = agent.frontmatter as { skills?: string[] };
   const slugs = fm.skills ?? [];
   if (slugs.length === 0) return { prompt: agent.body ?? '', skills: [] };
-  // B1: skills live ONLY in the `__system` Skills project — NEVER the agent's
-  // home workspace. A worker agent in workspace B that declares skills resolves
-  // them from __system (its home has no Skills project). For the operator (home
-  // IS __system) this is the same project; for a worker it crosses workspaces.
-  const systemId = await getSystemWorkspaceId(db);
-  const skillsProject = await db.query.projects.findFirst({
-    where: and(eq(projectsTable.workspaceId, systemId), eq(projectsTable.slug, 'skills')),
-  });
-  if (!skillsProject) throw new HTTPError('MISSING_SKILL', '__system Skills project not found', 500);
+  // Phase 4 (drop-workspace-tenancy): skills live in the `instance_skills` table,
+  // resolved by name — NO `__system` workspace, NO Skills project. Same no-broad-
+  // fallback guarantee: a declared-but-absent skill throws MISSING_SKILL.
+  // Batch-load all declared skills in ONE query (no per-skill N+1), then walk the
+  // declared order so MISSING_SKILL still fires on the first absent one.
+  const byName = await getInstanceSkillsByNames(db, slugs);
   const skills: Array<{ slug: string; body: string; trusted: boolean }> = [];
   for (const slug of slugs) {
-    const doc = await db.query.documents.findFirst({
-      where: and(
-        eq(documents.workspaceId, systemId),
-        eq(documents.projectId, skillsProject.id),
-        eq(documents.slug, slug),
-        eq(documents.type, 'page'),
-      ),
-    });
-    if (!doc) throw new HTTPError('MISSING_SKILL', `skill "${slug}" not found in the Skills project`, 500);
-    // B1 trust channel: a skill is TRUSTED only if it has been explicitly
-    // blessed (`frontmatter.trusted === true`). Any other value — including an
-    // absent key (the pre-B4 seeded state) — routes the skill as untrusted
-    // DATA, never into the trusted instruction/reference channel.
-    const sfm = (doc.frontmatter ?? {}) as { trusted?: boolean };
-    skills.push({ slug, body: doc.body ?? '', trusted: sfm.trusted === true });
+    const skill = byName.get(slug);
+    if (!skill) throw new HTTPError('MISSING_SKILL', `skill "${slug}" not found in instance skills`, 500);
+    // Trust channel (invariant 11): `trusted` is the TYPED COLUMN — a skill routes
+    // into the trusted instruction/reference channel only when the column is true.
+    // Any other state routes it as untrusted DATA. Import/edit can't forge it.
+    skills.push({ slug, body: skill.body, trusted: skill.trusted === true });
   }
   return { prompt: agent.body ?? '', skills };
 }

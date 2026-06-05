@@ -973,7 +973,7 @@ These are explicitly *not* in v1. Don't build them. Note them so they're visible
 
 | Term | Meaning |
 |------|---------|
-| **Workspace** | The top-level container inside an instance. A customer might have one workspace ("Main") or several ("Galleries", "Stride", "Operations"). |
+| **Workspace** | A top-level ORGANIZATIONAL FOLDER inside an instance — NOT a security/tenancy boundary (one instance = one team). A customer might have one workspace ("Main") or several ("Galleries", "Stride", "Operations"). Visibility into a specific workspace/project is an explicit invitation-based grant (`workspace_access`/`project_access`); instance authority is the user's `role` (owner/admin/member). *(The `memberships` table + reserved `__system` workspace were removed in the drop-workspace-tenancy refactor, 2026-06.)* |
 | **Project** | A folder inside a workspace. Holds work items, pages, and configuration (statuses, fields, views). |
 | **Document** | The unified term for work items, pages, agents, and triggers. Same table, different `type`. |
 | **Work item** | A document with `type = 'work_item'`. Shows up on boards. Has a status. |

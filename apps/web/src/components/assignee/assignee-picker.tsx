@@ -89,12 +89,7 @@ export function AssigneePicker({ wslug, pslug, value, onChange }: Props) {
                 onClick={() => onChange(`agent:${a.slug}`)}
                 className="block w-full rounded-md px-2 py-1.5 text-left text-sm hover:bg-card"
               >
-                <div className="font-medium">
-                  {a.title}
-                  {a.library ? (
-                    <span className="ml-1.5 text-[10px] font-normal text-fg-3">library</span>
-                  ) : null}
-                </div>
+                <div className="font-medium">{a.title}</div>
                 <div className="text-[10px] font-mono text-fg-3">agent:{a.slug}</div>
               </button>
             ))

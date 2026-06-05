@@ -31,8 +31,8 @@ For the originating PRD: `docs/FOLIO-BRIEFING.md`. For phase-level commitments: 
 - **SQLite for queues** if queues are ever needed (cron table + interval polling). Stays inside the one-binary commitment.
 - **Frontmatter is the schema.** Only `title`, `status`, `body` are columns on `documents`. Everything else lives in `documents.frontmatter` JSON column. UI infers type from values; per-project `fields` table pins types explicitly.
 - **Every write emits an event.** Inserts to `events` table + pushes to SSE on the same transaction. Agents subscribe to this. Never bypass.
-- **BYOK only.** Server never holds a default AI key. Workspaces without a key configured hide AI features.
-- **Multi-tenancy is out of scope.** One instance = one team. Workspaces live inside an instance.
+- **BYOK only.** Server never holds a default AI key. AI keys are INSTANCE-level (one store, resolved by `(provider, ai_key_label)`, admin-gated at `/instance/ai-keys`) — NOT per-workspace (the `ai_keys.workspace_id` column was dropped). If no key is configured, AI features hide.
+- **Multi-tenancy is out of scope. One instance = one team.** **Workspaces are ORGANIZATIONAL FOLDERS, not a security/tenancy boundary (drop-workspace-tenancy refactor, 2026-06):** the `memberships` table + the `__system` reserved workspace were DROPPED. Instance authority = `users.role` (owner/admin/member); per-workspace/project visibility = invitation-based `workspace_access`/`project_access` grants, decided in `lib/access.ts` (single convergence point, invariant 4a). The operator is a code runtime singleton (`_operator`), not a seeded doc. Skills live in `instance_skills` (typed `trusted` column). Agents resolve by slug instance-wide; execution bounded by project ceiling + caller authority. **This SUPERSEDES the earlier "agents live at workspace level / workspace-as-tenant" decisions below** (the cross-workspace-agent-identity exclusion is now the intended model, not a cracked invariant).
 
 ## v1 scope inclusions & exclusions
 

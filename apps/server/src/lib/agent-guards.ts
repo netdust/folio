@@ -42,8 +42,10 @@ export function assertAgentScope(
 
 /**
  * For agent-bound tokens, ensure the proposed `frontmatter.projects` does not
- * widen the target beyond the caller's own allow-list. Human PATs (no
- * agent_id) are unrestricted in v1 — Phase 3+ adds per-PAT narrowing UI.
+ * widen the target beyond the caller's own allow-list. Human PATs (no agent_id)
+ * have no agent allow-list to widen, so this WRITE guard doesn't apply to them.
+ * (Distinct from the per-PAT *read*-visibility narrowing in events.ts/runs.ts,
+ * which DOES bound a human PAT's project reach — CR-7/CR-9.)
  *
  * G4: the `op` parameter distinguishes create vs patch semantics for the
  * missing-`projects` case:

@@ -8,16 +8,33 @@
  * workspace.provider.{degraded,recovered}.
  */
 export type EventKind =
-  | 'document.created' | 'document.updated' | 'document.deleted'
-  | 'status.created'   | 'status.updated'   | 'status.deleted'
-  | 'field.created'    | 'field.updated'    | 'field.deleted'
-  | 'view.created'     | 'view.updated'     | 'view.deleted'
-  | 'table.created'    | 'table.updated'    | 'table.deleted'
-  | 'project.created'  | 'project.updated'  | 'project.deleted'
-  | 'workspace.created' | 'workspace.updated'
+  | 'document.created'
+  | 'document.updated'
+  | 'document.deleted'
+  | 'status.created'
+  | 'status.updated'
+  | 'status.deleted'
+  | 'field.created'
+  | 'field.updated'
+  | 'field.deleted'
+  | 'view.created'
+  | 'view.updated'
+  | 'view.deleted'
+  | 'table.created'
+  | 'table.updated'
+  | 'table.deleted'
+  | 'project.created'
+  | 'project.updated'
+  | 'project.deleted'
+  | 'workspace.created'
+  | 'workspace.updated'
   | 'activity.logged'
-  | 'agent.created'    | 'agent.deleted'   | 'agent.task.assigned'
-  | 'comment.created'  | 'comment.mentioned' | 'comment.deleted'
+  | 'agent.created'
+  | 'agent.deleted'
+  | 'agent.task.assigned'
+  | 'comment.created'
+  | 'comment.mentioned'
+  | 'comment.deleted'
   | 'agent.allow_list.reconciled'
   // Phase 3:
   | 'agent.run.started'
@@ -44,20 +61,49 @@ export type EventKind =
   // Piece B (T8) — emitted by setSkillTrust when a __system skill's `trusted`
   // flag is flipped. The flag is server-managed; this is the single audit
   // signal for a bless/unbless. Scoped to (__system, skills project, skill doc).
-  | 'skill.trust.changed';
+  | 'skill.trust.changed'
+  // Drop-workspace-tenancy Task 11 — emitted when an owner/admin grants or
+  // revokes an explicit workspace_access / project_access row (the invitation
+  // routes). Honors rule #4 (every write emits an event) for the access tables.
+  // Workspace-scoped (for a project grant, the project's workspace).
+  | 'access.granted'
+  | 'access.revoked'
+  // Drop-workspace-tenancy Task 12 — emitted when the instance OWNER changes a
+  // user's instance role (users.role) via PATCH /instance/users/:id/role. Honors
+  // rule #4 for the role write. Instance-level concern → scoped to the __system
+  // workspace (the instance's home workspace, always bootstrapped), since the
+  // events model requires a non-null workspace_id.
+  | 'user.role.changed';
 
 /** Source-of-truth list. Keep in sync with EventKind above. */
 export const KNOWN_EVENT_KINDS: readonly EventKind[] = [
-  'document.created', 'document.updated', 'document.deleted',
-  'status.created',   'status.updated',   'status.deleted',
-  'field.created',    'field.updated',    'field.deleted',
-  'view.created',     'view.updated',     'view.deleted',
-  'table.created',    'table.updated',    'table.deleted',
-  'project.created',  'project.updated',  'project.deleted',
-  'workspace.created','workspace.updated',
+  'document.created',
+  'document.updated',
+  'document.deleted',
+  'status.created',
+  'status.updated',
+  'status.deleted',
+  'field.created',
+  'field.updated',
+  'field.deleted',
+  'view.created',
+  'view.updated',
+  'view.deleted',
+  'table.created',
+  'table.updated',
+  'table.deleted',
+  'project.created',
+  'project.updated',
+  'project.deleted',
+  'workspace.created',
+  'workspace.updated',
   'activity.logged',
-  'agent.created',    'agent.deleted',   'agent.task.assigned',
-  'comment.created',  'comment.mentioned', 'comment.deleted',
+  'agent.created',
+  'agent.deleted',
+  'agent.task.assigned',
+  'comment.created',
+  'comment.mentioned',
+  'comment.deleted',
   'agent.allow_list.reconciled',
   // Phase 3:
   'agent.run.started',
@@ -78,4 +124,9 @@ export const KNOWN_EVENT_KINDS: readonly EventKind[] = [
   'agent.chain.suppressed',
   // Piece B (T8) — skill bless/unbless audit signal.
   'skill.trust.changed',
+  // Drop-workspace-tenancy Task 11 — access grant/revoke audit signal.
+  'access.granted',
+  'access.revoked',
+  // Drop-workspace-tenancy Task 12 — instance-role-change audit signal.
+  'user.role.changed',
 ];

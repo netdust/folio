@@ -19,17 +19,17 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-// The page renders a TanStack <Link> (System Library → __system agents) + the
-// AiTab (which fetches instance keys), so mount under a memory router + stub fetch.
+// The page mounts AiTab + RolesTab + InvitationsTab, which fetch instance keys /
+// users / invite-targets / grants. Stub fetch to a benign empty payload for all.
 function renderPage(qc: QueryClient) {
   vi.stubGlobal(
     'fetch',
     vi.fn(
       async () =>
-        new Response(JSON.stringify({ data: { keys: [] } }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        }),
+        new Response(
+          JSON.stringify({ data: { keys: [], users: [], workspaces: [], projects: [], grants: [] } }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        ),
     ),
   );
   const rootRoute = createRootRoute({ component: () => <Outlet /> });
@@ -38,13 +38,8 @@ function renderPage(qc: QueryClient) {
     path: '/',
     component: () => <InstanceSettingsPage />,
   });
-  const agentsRoute = createRoute({
-    getParentRoute: () => rootRoute,
-    path: '/w/$wslug/agents',
-    component: () => <div>agents page</div>,
-  });
   const router = createRouter({
-    routeTree: rootRoute.addChildren([indexRoute, agentsRoute]),
+    routeTree: rootRoute.addChildren([indexRoute]),
     history: createMemoryHistory({ initialEntries: ['/'] }),
   });
   return render(
@@ -59,37 +54,28 @@ function newQc() {
 }
 
 describe('Instance settings page', () => {
-  it('shows the AI provider section to an instance admin', async () => {
+  it('shows AI, Roles, and Invitations sections to an instance admin', async () => {
     vi.spyOn(auth, 'useIsInstanceAdmin').mockReturnValue(true);
-    vi.spyOn(auth, 'useIsSystemMember').mockReturnValue(true);
+    vi.spyOn(auth, 'useIsInstanceOwner').mockReturnValue(true);
+    // RolesTab reads useMe().data.user.id for the own-row self-demote guard.
+    vi.spyOn(auth, 'useMe').mockReturnValue({
+      data: { user: { id: 'me', email: 'me@x', name: 'Me' } },
+    } as unknown as ReturnType<typeof auth.useMe>);
     renderPage(newQc());
     expect(await screen.findByText(/instance settings/i)).toBeInTheDocument();
-    // AiTab's heading.
-    expect(await screen.findByText(/AI Provider/i)).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: /^AI providers$/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /^Roles$/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /^Invitations$/i })).toBeInTheDocument();
   });
 
-  it('hides the AI provider section from a non-admin', async () => {
+  it('shows a no-access state to a non-admin (no instance surfaces)', async () => {
     vi.spyOn(auth, 'useIsInstanceAdmin').mockReturnValue(false);
-    vi.spyOn(auth, 'useIsSystemMember').mockReturnValue(true);
-    renderPage(newQc());
-    expect(await screen.findByText(/instance settings/i)).toBeInTheDocument();
-    expect(screen.queryByText(/AI Provider/i)).not.toBeInTheDocument();
-  });
-
-  it('links the System Library entry to the __system agents page (system member)', async () => {
-    vi.spyOn(auth, 'useIsInstanceAdmin').mockReturnValue(false);
-    vi.spyOn(auth, 'useIsSystemMember').mockReturnValue(true);
-    renderPage(newQc());
-    const link = await screen.findByRole('link', { name: /system library/i });
-    expect(link).toHaveAttribute('href', '/w/__system/agents');
-  });
-
-  it('shows a no-access state to a plain user (no instance surfaces)', async () => {
-    vi.spyOn(auth, 'useIsInstanceAdmin').mockReturnValue(false);
-    vi.spyOn(auth, 'useIsSystemMember').mockReturnValue(false);
+    vi.spyOn(auth, 'useIsInstanceOwner').mockReturnValue(false);
     renderPage(newQc());
     expect(await screen.findByText(/don't have access/i)).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: /^AI providers$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: /^Roles$/i })).not.toBeInTheDocument();
+    // The dead __system "System Library" entry is gone.
     expect(screen.queryByText(/system library/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/AI Provider/i)).not.toBeInTheDocument();
   });
 });

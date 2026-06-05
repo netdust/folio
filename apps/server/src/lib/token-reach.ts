@@ -1,4 +1,10 @@
-import type { ApiToken } from '../db/schema.ts';
+import { nanoid } from 'nanoid';
+import type { DB } from '../db/client.ts';
+import { apiTokens, type ApiToken } from '../db/schema.ts';
+import type { Role } from './access.ts';
+import { roleToScopes } from './agent-schema.ts';
+import { newApiToken } from './auth.ts';
+import { HTTPError } from './http.ts';
 
 /** A token with null workspaceId reaches every workspace (instance-wide). */
 export function isInstanceReach(token: Pick<ApiToken, 'workspaceId'>): boolean {
@@ -7,7 +13,7 @@ export function isInstanceReach(token: Pick<ApiToken, 'workspaceId'>): boolean {
 
 /**
  * The system-origin OPERATOR token: instance reach + system origin (createdBy
- * null) — code-provisioned by ensureOperatorToken, never mintable via POST
+ * null) — code-provisioned for the operator, never mintable via POST
  * /tokens (which always stamps a human createdBy). This is the SINGLE named
  * definition of "the user-less operator principal"; consumers that branch on
  * "no hydrated user ⟹ act as the instance" (e.g. workspace-create owner
@@ -58,4 +64,52 @@ export type PublicApiToken = Omit<ApiToken, 'tokenHash'>;
  */
 export function serializeApiToken({ tokenHash: _omit, ...rest }: ApiToken): PublicApiToken {
   return rest;
+}
+
+/** The plaintext-bearing result of a mint — returned to the caller EXACTLY ONCE. */
+export interface MintedToken {
+  id: string;
+  name: string;
+  token: string;
+  scopes: string[];
+  instance: boolean;
+}
+
+/**
+ * THE single token-mint convergence point. Both POST surfaces (per-workspace
+ * `tokens.ts` and instance `instance-tokens.ts`) route through here so the scope
+ * ceiling + insert + reveal-once shape can never drift apart — a past CRITICAL
+ * (privilege escalation, 9f75c40) was a mint path that skipped the ceiling.
+ *
+ * The ceiling: a caller may only mint scopes their OWN instance role already
+ * grants (`roleToScopes` — the same ceiling the runner enforces at execution
+ * time). `reach` is the token's workspace_id (null = instance-wide); the caller's
+ * authority to choose that reach is decided by the ROUTE before calling this
+ * (a per-ws route passes the URL workspace; the instance route requires admin
+ * and passes null). Throws FORBIDDEN_SCOPE (403) on an over-scope request.
+ */
+export async function mintToken(
+  db: DB,
+  args: { ceilingRole: Role; scopes: string[]; reach: string | null; name: string; createdBy: string },
+): Promise<MintedToken> {
+  const allowed = roleToScopes(args.ceilingRole);
+  const over = args.scopes.filter((s) => !allowed.includes(s));
+  if (over.length > 0) {
+    throw new HTTPError(
+      'FORBIDDEN_SCOPE',
+      `role '${args.ceilingRole}' cannot mint a token with scope(s): ${over.join(', ')}`,
+      403,
+    );
+  }
+  const { token, hash } = newApiToken();
+  const id = nanoid();
+  await db.insert(apiTokens).values({
+    id,
+    workspaceId: args.reach,
+    name: args.name,
+    tokenHash: hash,
+    scopes: args.scopes,
+    createdBy: args.createdBy,
+  });
+  return { id, name: args.name, token, scopes: args.scopes, instance: args.reach === null };
 }

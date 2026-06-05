@@ -1,15 +1,5 @@
-import { useState } from 'react';
-import { Check, Copy } from 'lucide-react';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogTitle,
-} from '../ui/dialog.tsx';
-import { Button } from '../ui/button.tsx';
 import { useCreateToken } from '../../lib/api/tokens.ts';
-import { formatApiError } from '../../lib/api/index.ts';
-import { toast } from 'sonner';
+import { TokenCreateDialog, type ScopePreset } from './token-create-dialog.tsx';
 
 const ALL_SCOPES = [
   'documents:read',
@@ -17,39 +7,21 @@ const ALL_SCOPES = [
   'documents:delete',
   // Phase 2 consolidated the four granular config scopes
   // (fields/views/tables/statuses:write) into one canonical config:write.
-  // The granular scopes can no longer be minted (the POST /tokens ceiling
-  // rejects them), so the modal no longer offers them.
   'config:write',
-  // Phase 2.6 sub-phase D — required for MCP agent-lifecycle tools
-  // (create_agent / update_agent / delete_agent).
+  // Phase 2.6 sub-phase D — required for MCP agent-lifecycle tools.
   'agents:write',
-  // Agent-authority phase A5 — instance/admin scopes. Like agents:write
-  // (BUG-007) these are NEVER bundled into a preset; users tick them
-  // explicitly. settings:write / members:write / workspace:admin.
+  // Agent-authority phase A5 — instance/admin scopes. NEVER bundled into a
+  // preset (BUG-007); users tick them explicitly.
   'settings:write',
   'members:write',
   'workspace:admin',
 ] as const;
 
-type Scope = (typeof ALL_SCOPES)[number];
-
-// Presets mirror the conceptual groups used by agent-schema's toolsToScopes
-// (read tools → documents:read; write tools → write + read; delete → +read).
-// "Read + write" adds config:write (the consolidated fields/views/tables/
-// statuses scope). Full access also adds the destructive delete op.
-//
-// BUG-007: agents:write is deliberately NOT in ANY preset. Human PATs bypass
-// assertAgentAllowListWidening / assertAgentToolsWidening, so bundling
-// agents:write into a "Read + write" preset silently grants workspace-wide
-// agent-management capability (mint, widen, delete). Users who actually
-// need it tick the box explicitly.
-type PresetTone = 'default' | 'danger';
-const PRESETS: { label: string; scopes: Scope[]; tone?: PresetTone }[] = [
+// BUG-007: agents:write + admin scopes are deliberately NOT in any preset —
+// bundling them would silently grant agent-management / instance authority.
+const PRESETS: ScopePreset[] = [
   { label: 'Read-only', scopes: ['documents:read'] },
-  {
-    label: 'Read + write',
-    scopes: ['documents:read', 'documents:write', 'config:write'],
-  },
+  { label: 'Read + write', scopes: ['documents:read', 'documents:write', 'config:write'] },
   {
     label: 'Full access',
     tone: 'danger',
@@ -60,219 +32,26 @@ const PRESETS: { label: string; scopes: Scope[]; tone?: PresetTone }[] = [
 interface Props {
   wslug: string;
   workspaceId: string;
-  /**
-   * When true, the modal offers a "Whole instance" reach option that mints a
-   * reach=null (instance-wide) token. Gated on __system membership; the server
-   * (A7) enforces the real owner/admin-of-__system check on create.
-   */
-  isInstanceAdmin?: boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
 
-export function TokenCreateModal({
-  wslug,
-  workspaceId,
-  isInstanceAdmin = false,
-  open,
-  onOpenChange,
-}: Props) {
+// Per-workspace token creation. Instance-wide (reach=null) tokens are minted on
+// the instance Settings page (InstanceTokensTab), NOT here — this modal always
+// pins to the current workspace. Thin wrapper over the shared TokenCreateDialog.
+export function TokenCreateModal({ wslug, workspaceId, open, onOpenChange }: Props) {
   const create = useCreateToken(wslug, workspaceId);
-  const [name, setName] = useState('');
-  const [scopes, setScopes] = useState<Set<Scope>>(new Set());
-  const [reach, setReach] = useState<'workspace' | 'instance'>('workspace');
-  const [revealed, setRevealed] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
-
-  const canSubmit = name.trim().length > 0 && scopes.size > 0 && !create.isPending;
-
-  function reset() {
-    setName('');
-    setScopes(new Set());
-    setReach('workspace');
-    setRevealed(null);
-    setCopied(false);
-  }
-
-  function handleOpenChange(next: boolean) {
-    if (!next) reset();
-    onOpenChange(next);
-  }
-
-  async function onSubmit() {
-    if (!canSubmit) return;
-    try {
-      const res = await create.mutateAsync({
-        name: name.trim(),
-        scopes: Array.from(scopes),
-        ...(reach === 'instance' ? { workspaceId: null } : {}),
-      });
-      setRevealed(res.token);
-    } catch (err) {
-      toast.error(formatApiError(err));
-    }
-  }
-
-  async function onCopy() {
-    if (!revealed) return;
-    try {
-      await navigator.clipboard.writeText(revealed);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      toast.error('Copy failed — select the token manually');
-    }
-  }
-
   return (
-    <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent>
-        {revealed === null ? (
-          <>
-            <DialogTitle>Create API token</DialogTitle>
-            <DialogDescription>
-              Tokens authenticate agents and external integrations. Scopes are enforced
-              on every write.
-            </DialogDescription>
-
-            <div className="mt-4 space-y-3">
-              <label className="block">
-                <span className="block text-xs font-medium text-fg-2">Name</span>
-                <input
-                  type="text"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="e.g. CI bot"
-                  className="mt-1 block w-full rounded-md border border-border-light bg-content px-2 py-1.5 text-sm"
-                />
-              </label>
-
-              {isInstanceAdmin ? (
-                <fieldset>
-                  <legend className="text-xs font-medium text-fg-2">Reach</legend>
-                  <div className="mt-1 flex gap-4">
-                    <label className="flex items-center gap-2 text-sm">
-                      <input
-                        type="radio"
-                        name="reach"
-                        aria-label="This workspace"
-                        checked={reach === 'workspace'}
-                        onChange={() => setReach('workspace')}
-                      />
-                      <span>This workspace</span>
-                    </label>
-                    <label className="flex items-center gap-2 text-sm">
-                      <input
-                        type="radio"
-                        name="reach"
-                        aria-label="Whole instance"
-                        checked={reach === 'instance'}
-                        onChange={() => setReach('instance')}
-                      />
-                      <span>Whole instance</span>
-                    </label>
-                  </div>
-                  <p className="mt-1 text-[11px] text-fg-3">
-                    Whole instance — all workspaces (instance admins only)
-                  </p>
-                </fieldset>
-              ) : null}
-
-              <fieldset>
-                <legend className="text-xs font-medium text-fg-2">Scopes</legend>
-                <div className="mt-1 mb-2 flex flex-wrap gap-1.5">
-                  {PRESETS.map((preset) => {
-                    const isDanger = preset.tone === 'danger';
-                    return (
-                      <button
-                        key={preset.label}
-                        type="button"
-                        data-tone={preset.tone ?? 'default'}
-                        onClick={() => setScopes(new Set(preset.scopes))}
-                        className={
-                          isDanger
-                            ? 'rounded-sm border border-danger/40 bg-bg-danger px-2 py-0.5 text-[11px] text-danger hover:bg-danger hover:text-fg-on-primary'
-                            : 'rounded-sm bg-card px-2 py-0.5 text-[11px] text-fg-2 hover:bg-shell hover:text-fg'
-                        }
-                      >
-                        {preset.label}
-                      </button>
-                    );
-                  })}
-                </div>
-                {scopes.size === ALL_SCOPES.length ? (
-                  <div
-                    role="alert"
-                    className="mb-2 rounded-sm border border-danger/40 bg-bg-danger px-2 py-1.5 text-[11px] text-danger"
-                  >
-                    This token will have <strong>every scope</strong> on this workspace —
-                    root-level access including destructive operations. Use for trusted
-                    agents only.
-                  </div>
-                ) : null}
-                <div className="grid grid-cols-2 gap-x-3 gap-y-1.5">
-                  {ALL_SCOPES.map((scope) => (
-                    <label key={scope} className="flex items-center gap-2 text-sm">
-                      <input
-                        type="checkbox"
-                        aria-label={scope}
-                        checked={scopes.has(scope)}
-                        onChange={(e) => {
-                          setScopes((prev) => {
-                            const next = new Set(prev);
-                            if (e.target.checked) next.add(scope);
-                            else next.delete(scope);
-                            return next;
-                          });
-                        }}
-                      />
-                      <span className="font-mono text-xs">{scope}</span>
-                    </label>
-                  ))}
-                </div>
-              </fieldset>
-            </div>
-
-            <div className="mt-6 flex justify-end gap-2">
-              <Button variant="ghost" onClick={() => handleOpenChange(false)}>
-                Cancel
-              </Button>
-              <Button onClick={onSubmit} disabled={!canSubmit} loading={create.isPending}>
-                Create
-              </Button>
-            </div>
-          </>
-        ) : (
-          <>
-            <DialogTitle>Token created</DialogTitle>
-            <DialogDescription>
-              This is the only time you&apos;ll see this token. Copy it now and store it
-              somewhere safe.
-            </DialogDescription>
-
-            <div className="mt-4 rounded-md border border-border-light bg-shell p-2">
-              <code className="block break-all font-mono text-xs text-fg">{revealed}</code>
-            </div>
-
-            <div className="mt-6 flex justify-end gap-2">
-              <Button variant="secondary" onClick={onCopy}>
-                {copied ? (
-                  <>
-                    <Check size={14} />
-                    Copied
-                  </>
-                ) : (
-                  <>
-                    <Copy size={14} />
-                    Copy
-                  </>
-                )}
-              </Button>
-              <Button onClick={() => handleOpenChange(false)}>Done</Button>
-            </div>
-          </>
-        )}
-      </DialogContent>
-    </Dialog>
+    <TokenCreateDialog
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Create API token"
+      description="Tokens authenticate agents and external integrations. Scopes are enforced on every write."
+      allScopes={ALL_SCOPES}
+      presets={PRESETS}
+      allScopesWarning="This token will have every scope on this workspace — root-level access including destructive operations. Use for trusted agents only."
+      mutate={(vars) => create.mutateAsync(vars)}
+      isPending={create.isPending}
+    />
   );
 }

@@ -172,7 +172,8 @@ test.skip('Last-Event-Id replay: events from the table flow before live events',
 // allow-list narrowing never fired.
 // ---------------------------------------------------------------------------
 
-import { documents, projects } from '../db/schema.ts';
+import { documents, projectAccess, projects, users } from '../db/schema.ts';
+import { createSession } from '../lib/auth.ts';
 
 async function seedSecondProject(seedWorkspaceId: string): Promise<string> {
   const id = nanoid();
@@ -793,6 +794,339 @@ test('F3: agent allow-list narrows server-side replay filter (foreign projectId 
 
   expect(text).toContain('evt-a-allowed');
   expect(text).not.toContain('evt-b-leaked');
+});
+
+// ---------------------------------------------------------------------------
+// Fix #2 (drop-workspace-tenancy) — /events narrows by PER-USER project
+// visibility, not just by the agent allow-list.
+//
+// Post-tenancy, a user invited to ONLY one project can TRAVERSE the workspace
+// (canSeeWorkspace's project_access clause) to reach that project — so they now
+// pass resolveWorkspace and can hit /events. The old F3 narrowing only bounds
+// AGENT tokens; a human session was unbounded because, under the OLD model,
+// any workspace member could see every project in the workspace. That is no
+// longer true. Without per-user narrowing, this project-only invitee receives
+// events for EVERY project in the workspace — including ones they were never
+// granted.
+//
+// NOTE: the naive "a user with NO grant to ws B gets zero B events" test does
+// NOT catch this — this user DOES have a grant (a project-level one), and so
+// legitimately traverses to the workspace. The leak is the SIBLING project's
+// events. This test exercises exactly that traverse case on the deterministic
+// REPLAY path (a session cookie + Last-Event-Id anchor).
+// ---------------------------------------------------------------------------
+
+test('fix#2: project-only invitee does NOT receive sibling-project events via /events replay', async () => {
+  const { app, db: testDb, seed } = await makeTestApp();
+
+  // Second project 'ops' in acme — the invitee is NOT granted this one.
+  const opsId = nanoid();
+  await testDb.insert(projects).values({
+    id: opsId, workspaceId: seed.workspace.id, slug: 'ops', name: 'Ops',
+  });
+
+  // A project-only invitee: instance role 'member', a project_access grant to
+  // 'web' (seed.project) ONLY, and crucially NO workspace_access grant. This
+  // user reaches the workspace solely via the traverse clause.
+  const inviteeId = nanoid();
+  await testDb.insert(users).values({
+    id: inviteeId, email: 'invitee@test.local', name: 'Invitee', role: 'member',
+  });
+  await testDb.insert(projectAccess).values({ userId: inviteeId, projectId: seed.project.id });
+
+  // Three events: an anchor (workspace-level), one in 'web' (granted), one in
+  // 'ops' (NOT granted). Direct insert with explicit seq mirrors the F3 replay
+  // test above so the replay cursor is deterministic.
+  const { events } = await import('../db/schema.ts');
+  await testDb.insert(events).values([
+    {
+      id: 'fix2-anchor',
+      workspaceId: seed.workspace.id,
+      projectId: null,
+      documentId: null,
+      kind: 'workspace.created',
+      actor: seed.user.id,
+      payload: {},
+      createdAt: new Date(Date.now() - 90_000),
+      seq: 8000,
+    },
+    {
+      id: 'fix2-WEB-event',
+      workspaceId: seed.workspace.id,
+      projectId: seed.project.id, // granted project
+      documentId: null,
+      kind: 'document.created',
+      actor: seed.user.id,
+      payload: { marker: 'WEB' },
+      createdAt: new Date(Date.now() - 60_000),
+      seq: 8001,
+    },
+    {
+      id: 'fix2-OPS-event',
+      workspaceId: seed.workspace.id,
+      projectId: opsId, // sibling project — NOT granted to the invitee
+      documentId: null,
+      kind: 'document.created',
+      actor: seed.user.id,
+      payload: { marker: 'OPS' },
+      createdAt: new Date(Date.now() - 30_000),
+      seq: 8002,
+    },
+  ]);
+
+  // Drive as the invitee's SESSION (not an agent token) so the F3 path is a
+  // no-op and only the per-user narrowing governs the result.
+  const session = await createSession(inviteeId);
+  const res = await app.request('/api/v1/w/acme/events', {
+    headers: {
+      Cookie: `folio_session=${session.id}`,
+      'Last-Event-Id': 'fix2-anchor',
+    },
+  });
+  expect(res.status).toBe(200);
+  const text = await drainReplay(res);
+
+  // The granted project's event MUST be delivered.
+  expect(text).toContain('fix2-WEB-event');
+  expect(text).toContain('WEB');
+  // The sibling project's event MUST NOT leak.
+  expect(text).not.toContain('fix2-OPS-event');
+  expect(text).not.toContain('OPS');
+});
+
+// CR-7 (round-2 code-review): the per-user narrowing originally fired ONLY for
+// session auth (`token === null`). A project-only invitee can mint a
+// WORKSPACE-PINNED human PAT (POST /w/:wslug/tokens is gated only by
+// canSeeWorkspace, which they pass via traverse) — and a human PAT skips BOTH
+// the F3 agent allow-list (no agentId) AND the (old) session-only narrowing, so
+// it received every project's events. This test pins the PAT path: the narrowing
+// now applies to any HUMAN principal (session OR token with agentId===null).
+test('CR-7: project-only invitee with a human PAT does NOT receive sibling-project events', async () => {
+  const { app, db: testDb, seed } = await makeTestApp();
+
+  // Sibling project 'ops' the invitee is NOT granted.
+  const opsId = nanoid();
+  await testDb.insert(projects).values({
+    id: opsId, workspaceId: seed.workspace.id, slug: 'ops', name: 'Ops',
+  });
+
+  // Project-only invitee: member, project_access to 'web' ONLY, no workspace_access.
+  const inviteeId = nanoid();
+  await testDb.insert(users).values({
+    id: inviteeId, email: 'patinvitee@test.local', name: 'PAT Invitee', role: 'member',
+  });
+  await testDb.insert(projectAccess).values({ userId: inviteeId, projectId: seed.project.id });
+
+  // A WORKSPACE-PINNED HUMAN PAT created by the invitee (agentId null → human).
+  // This is exactly the token POST /w/acme/tokens mints for them (canSeeWorkspace
+  // passes via traverse). We mint it directly to keep the test deterministic.
+  const { token, hash } = newApiToken();
+  await testDb.insert(apiTokens).values({
+    id: nanoid(),
+    workspaceId: seed.workspace.id, // pinned to the whole workspace
+    name: 'invitee-pat',
+    tokenHash: hash,
+    scopes: ['documents:read'],
+    // agentId omitted → NULL → human PAT (not agent-bound).
+    createdBy: inviteeId,
+  });
+
+  const { events } = await import('../db/schema.ts');
+  await testDb.insert(events).values([
+    {
+      id: 'cr7-anchor', workspaceId: seed.workspace.id, projectId: null, documentId: null,
+      kind: 'workspace.created', actor: seed.user.id, payload: {},
+      createdAt: new Date(Date.now() - 90_000), seq: 8200,
+    },
+    {
+      id: 'cr7-WEB-event', workspaceId: seed.workspace.id, projectId: seed.project.id, documentId: null,
+      kind: 'document.created', actor: seed.user.id, payload: { marker: 'WEB' },
+      createdAt: new Date(Date.now() - 60_000), seq: 8201,
+    },
+    {
+      id: 'cr7-OPS-event', workspaceId: seed.workspace.id, projectId: opsId, documentId: null,
+      kind: 'document.created', actor: seed.user.id, payload: { marker: 'OPS' },
+      createdAt: new Date(Date.now() - 30_000), seq: 8202,
+    },
+  ]);
+
+  const res = await app.request('/api/v1/w/acme/events', {
+    headers: { Authorization: `Bearer ${token}`, 'Last-Event-Id': 'cr7-anchor' },
+  });
+  expect(res.status).toBe(200);
+  const text = await drainReplay(res);
+
+  // Granted project's event delivered; sibling project's event MUST NOT leak.
+  expect(text).toContain('cr7-WEB-event');
+  expect(text).not.toContain('cr7-OPS-event');
+  expect(text).not.toContain('OPS');
+});
+
+// CR-8 + CR-11 (round-2 code-review): workspace-level rows (projectId === null)
+// were NOT narrowed for a project-only human — both filters only dropped rows
+// where `projectId !== null`, and isAgentEventVisible returns true for any
+// non-agent caller. So a project-only invitee received the GRANT ROSTER
+// (access.granted/revoked) and instance ROLE CHANGES (user.role.changed) —
+// instance-admin-only facts. A non-whole-ws human must see NO workspace-level
+// rows (there is no class of workspace-level event a project-only invitee
+// legitimately needs; their interest is entirely project-scoped). CR-11 is the
+// role-change instance of this same leak and is closed here.
+test('CR-8/CR-11: project-only invitee does NOT receive workspace-level rows (grant roster, role changes)', async () => {
+  const { app, db: testDb, seed } = await makeTestApp();
+
+  // Project-only invitee: project_access to 'web' ONLY, no workspace_access.
+  const inviteeId = nanoid();
+  await testDb.insert(users).values({
+    id: inviteeId, email: 'wlinvitee@test.local', name: 'WL Invitee', role: 'member',
+  });
+  await testDb.insert(projectAccess).values({ userId: inviteeId, projectId: seed.project.id });
+
+  // A third user the grant/role events are ABOUT (not the invitee).
+  const thirdId = nanoid();
+  await testDb.insert(users).values({
+    id: thirdId, email: 'third@test.local', name: 'Third', role: 'member',
+  });
+
+  const { events } = await import('../db/schema.ts');
+  await testDb.insert(events).values([
+    {
+      id: 'cr8-anchor', workspaceId: seed.workspace.id, projectId: null, documentId: null,
+      kind: 'workspace.created', actor: seed.user.id, payload: {},
+      createdAt: new Date(Date.now() - 90_000), seq: 8300,
+    },
+    // Positive control: a project-scoped event in the GRANTED project — must arrive.
+    {
+      id: 'cr8-WEB-event', workspaceId: seed.workspace.id, projectId: seed.project.id, documentId: null,
+      kind: 'document.created', actor: seed.user.id, payload: { marker: 'WEB' },
+      createdAt: new Date(Date.now() - 70_000), seq: 8301,
+    },
+    // Workspace-level grant roster — about the THIRD user. MUST NOT leak.
+    {
+      id: 'cr8-grant-event', workspaceId: seed.workspace.id, projectId: null, documentId: null,
+      kind: 'access.granted', actor: seed.user.id,
+      payload: { userId: thirdId, workspaceId: seed.workspace.id },
+      createdAt: new Date(Date.now() - 60_000), seq: 8302,
+    },
+    // Workspace-level role change — about the THIRD user. MUST NOT leak (CR-11).
+    {
+      id: 'cr8-role-event', workspaceId: seed.workspace.id, projectId: null, documentId: null,
+      kind: 'user.role.changed', actor: seed.user.id,
+      payload: { userId: thirdId, role: 'admin', previousRole: 'member' },
+      createdAt: new Date(Date.now() - 30_000), seq: 8303,
+    },
+  ]);
+
+  // Drive as the invitee's session.
+  const session = await createSession(inviteeId);
+  const res = await app.request('/api/v1/w/acme/events', {
+    headers: { Cookie: `folio_session=${session.id}`, 'Last-Event-Id': 'cr8-anchor' },
+  });
+  expect(res.status).toBe(200);
+  const text = await drainReplay(res);
+
+  // Positive control: granted project's event arrives.
+  expect(text).toContain('cr8-WEB-event');
+  // Workspace-level rows MUST NOT leak — neither the grant roster nor the role change.
+  expect(text).not.toContain('cr8-grant-event');
+  expect(text).not.toContain('cr8-role-event');
+  // And the third user's id (the leaked subject) must not appear at all.
+  expect(text).not.toContain(thirdId);
+});
+
+test('CR-8: a workspace_access grant holder STILL receives workspace-level rows (no over-narrowing)', async () => {
+  const { app, db: testDb, seed } = await makeTestApp();
+
+  // A whole-ws principal: instance member WITH a workspace_access grant (not owner).
+  const wsMemberId = nanoid();
+  await testDb.insert(users).values({
+    id: wsMemberId, email: 'wsmember@test.local', name: 'WS Member', role: 'member',
+  });
+  const { workspaceAccess } = await import('../db/schema.ts');
+  await testDb.insert(workspaceAccess).values({ userId: wsMemberId, workspaceId: seed.workspace.id });
+
+  const { events } = await import('../db/schema.ts');
+  await testDb.insert(events).values([
+    {
+      id: 'cr8w-anchor', workspaceId: seed.workspace.id, projectId: null, documentId: null,
+      kind: 'workspace.created', actor: seed.user.id, payload: {},
+      createdAt: new Date(Date.now() - 90_000), seq: 8400,
+    },
+    {
+      id: 'cr8w-grant-event', workspaceId: seed.workspace.id, projectId: null, documentId: null,
+      kind: 'access.granted', actor: seed.user.id,
+      payload: { userId: wsMemberId, workspaceId: seed.workspace.id },
+      createdAt: new Date(Date.now() - 30_000), seq: 8401,
+    },
+  ]);
+
+  const session = await createSession(wsMemberId);
+  const res = await app.request('/api/v1/w/acme/events', {
+    headers: { Cookie: `folio_session=${session.id}`, 'Last-Event-Id': 'cr8w-anchor' },
+  });
+  expect(res.status).toBe(200);
+  const text = await drainReplay(res);
+
+  // A whole-ws principal is NOT narrowed at workspace level — the grant event arrives.
+  expect(text).toContain('cr8w-grant-event');
+});
+
+test('fix#2: workspace owner still receives ALL project events via /events replay (no over-narrowing)', async () => {
+  const { app, db: testDb, seed } = await makeTestApp();
+
+  // Second project the owner has no DIRECT project grant to — but owner sees
+  // the whole workspace, so userVisibleProjects must stay unrestricted (null).
+  const opsId = nanoid();
+  await testDb.insert(projects).values({
+    id: opsId, workspaceId: seed.workspace.id, slug: 'ops', name: 'Ops',
+  });
+
+  const { events } = await import('../db/schema.ts');
+  await testDb.insert(events).values([
+    {
+      id: 'fix2o-anchor',
+      workspaceId: seed.workspace.id,
+      projectId: null,
+      documentId: null,
+      kind: 'workspace.created',
+      actor: seed.user.id,
+      payload: {},
+      createdAt: new Date(Date.now() - 90_000),
+      seq: 8100,
+    },
+    {
+      id: 'fix2o-WEB-event',
+      workspaceId: seed.workspace.id,
+      projectId: seed.project.id,
+      documentId: null,
+      kind: 'document.created',
+      actor: seed.user.id,
+      payload: { marker: 'WEB' },
+      createdAt: new Date(Date.now() - 60_000),
+      seq: 8101,
+    },
+    {
+      id: 'fix2o-OPS-event',
+      workspaceId: seed.workspace.id,
+      projectId: opsId,
+      documentId: null,
+      kind: 'document.created',
+      actor: seed.user.id,
+      payload: { marker: 'OPS' },
+      createdAt: new Date(Date.now() - 30_000),
+      seq: 8102,
+    },
+  ]);
+
+  // Owner session (seed.user is the instance owner with workspace_access).
+  const res = await app.request('/api/v1/w/acme/events', {
+    headers: { Cookie: seed.sessionCookie, 'Last-Event-Id': 'fix2o-anchor' },
+  });
+  expect(res.status).toBe(200);
+  const text = await drainReplay(res);
+
+  // Owner sees BOTH projects — narrowing must not have fired.
+  expect(text).toContain('fix2o-WEB-event');
+  expect(text).toContain('fix2o-OPS-event');
 });
 
 // ---------------------------------------------------------------------------

@@ -61,10 +61,12 @@ describe('ProviderHealthBanner', () => {
 
     const link = screen.getByRole('button', { name: /check key/i });
     link.click();
-    // AI keys moved to the instance settings page (instance-wide store).
+    // AI keys live on the instance settings page; the banner deep-links to the
+    // in-workspace route so the rail stays mounted.
     expect(navigateMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        to: '/settings',
+        to: '/w/$wslug/instance-settings',
+        params: { wslug: 'acme' },
         search: { tab: 'ai', provider: 'anthropic' },
       }),
     );

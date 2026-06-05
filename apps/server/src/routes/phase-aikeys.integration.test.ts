@@ -13,20 +13,38 @@ import {
   tables,
 } from '../db/schema.ts';
 import { decryptSecret } from '../lib/crypto.ts';
-import { newApiToken } from '../lib/auth.ts';
+import { createSession, newApiToken } from '../lib/auth.ts';
 import { toolsToScopes } from '../lib/agent-schema.ts';
 import { loadContext } from '../lib/runner.ts';
-import { bootstrapSystemWorkspace, grantOwner } from '../lib/system-workspace.ts';
+import * as schema from '../db/schema.ts';
 import { createRun } from '../services/agent-runs.ts';
 import { makeTestApp } from '../test/harness.ts';
 
 // ===========================================================================
-// Phase gate — instance AI config in __system. One scenario exercises the whole
-// chain: an instance key resolved by (provider, label) with no workspace tie,
-// the admin-gated route, secret-never-leaks (M2), and metering attribution.
+// Phase gate — instance AI config. One scenario exercises the whole chain: an
+// instance key resolved by (provider, label) with no workspace tie, the
+// admin-gated route, secret-never-leaks (M2), and metering attribution.
+//
+// Post-tenancy: instance authority is `users.role` (the single source). The
+// harness seeds `seed.user` as `users.role='owner'`, so seed.user is ALREADY an
+// instance admin — the admin scenario uses seed.sessionCookie directly. The 403
+// case drives a fresh `users.role='member'` session (a genuine non-admin).
 // ===========================================================================
 
 type TestDB = Awaited<ReturnType<typeof makeTestApp>>['db'];
+
+/** Seed a fresh `users.role='member'` user and return their session cookie. */
+async function seedMemberSession(db: TestDB): Promise<string> {
+  const userId = nanoid();
+  await db.insert(schema.users).values({
+    id: userId,
+    email: `${userId}@test.local`,
+    name: 'member',
+    role: 'member',
+  });
+  const session = await createSession(userId);
+  return `folio_session=${session.id}`;
+}
 
 const AI_KEYS_PATH = '/api/v1/instance/ai-keys';
 const SECRET = 'sk-INSTANCE-must-never-leak-into-messages';
@@ -117,11 +135,9 @@ async function seedOllamaAgent(
 describe('phase gate — instance AI config (cross-cutting)', () => {
   test('an instance key resolves by (provider,label) with no workspace tie; admin-gated; secret never leaks; metered', async () => {
     const harness = await makeTestApp();
-    const { app, db, seed } = harness;
-    await bootstrapSystemWorkspace(db);
-    await grantOwner(db, seed.user.email); // seed.user becomes the __system admin
+    const { app, db, seed } = harness; // seed.user is already an instance owner
 
-    // --- create the instance key over real HTTP, as the __system admin ---
+    // --- create the instance key over real HTTP, as the instance admin ---
     const createRes = await app.request(AI_KEYS_PATH, {
       method: 'POST',
       headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
@@ -202,11 +218,13 @@ describe('phase gate — instance AI config (cross-cutting)', () => {
     expect(typeof persistedFm.tokens_out).toBe('number');
   });
 
-  test('a non-__system session is forbidden on GET /instance/ai-keys (M4)', async () => {
-    const harness = await makeTestApp();
-    const { app, db, seed } = harness;
-    await bootstrapSystemWorkspace(db); // do NOT grantOwner — seed.user is not an instance admin
-    const res = await app.request(AI_KEYS_PATH, { headers: { Cookie: seed.sessionCookie } });
+  test('a non-admin session (users.role member) is forbidden on GET /instance/ai-keys (M4)', async () => {
+    const { app, db } = await makeTestApp();
+    // seed.user is now an instance owner, so drive a genuine member-role session
+    // to preserve the security intent: the 403 proves requireInstanceAdmin rejects
+    // a non-admin.
+    const memberCookie = await seedMemberSession(db);
+    const res = await app.request(AI_KEYS_PATH, { headers: { Cookie: memberCookie } });
     expect(res.status).toBe(403);
   });
 });

@@ -1,17 +1,14 @@
 import { expect, test } from 'bun:test';
 import { and, eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
-import { apiTokens, documents, memberships, users, workspaces } from '../db/schema.ts';
-import { newApiToken } from '../lib/auth.ts';
+import { apiTokens, documents, users, workspaceAccess, workspaces } from '../db/schema.ts';
+import { createSession, newApiToken } from '../lib/auth.ts';
 import {
   SYSTEM_WORKSPACE_SLUG,
-  bootstrapSystemWorkspace,
-  designateInstanceOwner,
   findSystemOwnerId,
-  grantOwner,
 } from '../lib/system-workspace.ts';
 import { describe } from 'bun:test';
-import { isSystemMember, listWorkspaces } from '../services/workspaces.ts';
+import { listWorkspaces } from '../services/workspaces.ts';
 import { makeTestApp } from '../test/harness.ts';
 import { assertSlugAllowed } from './workspaces.ts';
 
@@ -200,6 +197,64 @@ test('DELETE /api/v1/workspaces/:wslug 204 (owner)', async () => {
     headers: { Cookie: seed.sessionCookie },
   });
   expect(res.status).toBe(204);
+});
+
+// CR-2/3: management of a workspace = instance owner OR a real workspace_access
+// grant. The pre-fix gate was getRole==='owner' (instance owner ONLY) — which
+// regressed the workspace creator (now an instance-member holding a ws grant)
+// out of renaming/deleting their own workspace.
+
+/** Seed a second user with the given instance role + a forged session cookie. */
+async function seedSessionUser(
+  db: Awaited<ReturnType<typeof makeTestApp>>['db'],
+  role: 'owner' | 'admin' | 'member',
+  email: string,
+): Promise<{ userId: string; cookie: string }> {
+  const userId = nanoid();
+  await db.insert(users).values({ id: userId, email, name: email, passwordHash: 'x', role });
+  const session = await createSession(userId);
+  return { userId, cookie: `folio_session=${session.id}` };
+}
+
+test('CR-2/3: a workspace_access holder (instance-member) can rename the workspace (PATCH 200)', async () => {
+  const { app, db } = await makeTestApp();
+  const { userId, cookie } = await seedSessionUser(db, 'member', 'bob-member@test.local');
+  const [ws] = await db.select().from(workspaces).where(eq(workspaces.slug, 'acme'));
+  await db.insert(workspaceAccess).values({ userId, workspaceId: ws!.id });
+
+  const res = await app.request('/api/v1/w/acme', {
+    method: 'PATCH',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Renamed By Member' }),
+  });
+  expect(res.status).toBe(200);
+  expect((await res.json()).data.name).toBe('Renamed By Member');
+});
+
+test('CR-2/3: a workspace_access holder (instance-member) can DELETE the workspace (204)', async () => {
+  const { app, db } = await makeTestApp();
+  const { userId, cookie } = await seedSessionUser(db, 'member', 'bob2-member@test.local');
+  const [ws] = await db.select().from(workspaces).where(eq(workspaces.slug, 'acme'));
+  await db.insert(workspaceAccess).values({ userId, workspaceId: ws!.id });
+
+  const res = await app.request('/api/v1/w/acme', {
+    method: 'DELETE',
+    headers: { Cookie: cookie },
+  });
+  expect(res.status).toBe(204);
+});
+
+test('CR-2/3: a stranger (no grant, instance-member) cannot manage the workspace', async () => {
+  const { app, db } = await makeTestApp();
+  const { cookie } = await seedSessionUser(db, 'member', 'stranger@test.local');
+  // No workspace_access, no project_access → resolveWorkspace 403s them first,
+  // which is the correct "cannot manage" outcome.
+  const res = await app.request('/api/v1/w/acme', {
+    method: 'PATCH',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Hijacked' }),
+  });
+  expect(res.status).toBe(403);
 });
 
 test('GET /api/v1/w/:wslug/members returns id/name/email/role for each membership', async () => {
@@ -445,35 +500,10 @@ test('DELETE /api/v1/w/:wslug rejects bearer + garbage cookie with 403', async (
   expect(body.error.code).toBe('FORBIDDEN');
 });
 
-// --- Phase A: __system is membership-gated like any workspace (M6) + workspace
-// create stays session-only so agents can't reach __system (M7). These pin the
-// boundary; Phase A adds NO __system read path that bypasses membership (the
-// definitional skill-load exemption is Phase B).
-
-test('M6: a non-__system member cannot read a __system workspace (membership gate)', async () => {
-  const { app, db, seed } = await makeTestApp();
-  // seed.user (alice) is a member of 'acme', NOT of __system.
-  await bootstrapSystemWorkspace(db);
-  // Reach __system as alice's session — resolveWorkspace's membership check fires.
-  const res = await app.request('/api/v1/w/__system', {
-    headers: { Cookie: seed.sessionCookie },
-  });
-  expect(res.status).toBe(403);
-  expect((await res.json()).error.code).toBe('FORBIDDEN');
-});
-
-test('M6: a non-__system member cannot read a __system page document', async () => {
-  const { app, db, seed } = await makeTestApp();
-  await bootstrapSystemWorkspace(db);
-  // The seeded folio skill page lives in __system/skills. Alice (non-member)
-  // is blocked at resolveWorkspace before reaching the document.
-  const res = await app.request('/api/v1/w/__system/p/skills/documents/folio', {
-    headers: { Cookie: seed.sessionCookie },
-  });
-  // 403 (not a member) — never 200/leaked content.
-  expect([403, 404]).toContain(res.status);
-  expect(res.status).not.toBe(200);
-});
+// --- Workspace create stays session-only / instance-admin-gated so agents
+// can't create a reserved __system slug (M7/M2). The single-team model has no
+// __system library workspace at runtime; the reserved-slug guard remains as
+// defense-in-depth.
 
 test('M7/M2: an agent bearer cannot create a __system workspace (session-only)', async () => {
   const { app, db, seed } = await makeTestApp();
@@ -498,80 +528,6 @@ test('M7/M2: an agent bearer cannot create a __system workspace (session-only)',
     where: eq(workspaces.slug, '__system'),
   });
   expect(sys).toBeUndefined();
-});
-
-// --- Phase D (D1): __system is excluded from the AMBIENT workspace list (the
-// switcher) but stays reachable by direct slug navigation for a member. The
-// library is curated through its own settings entry, not the workspace pin
-// switcher — so a __system membership must not surface as a switchable row.
-
-test('listWorkspaces excludes __system from the ambient list (D1)', async () => {
-  const { db, seed } = await makeTestApp();
-  await bootstrapSystemWorkspace(db);
-  // Make the seed user (alice) the __system instance owner.
-  await grantOwner(db, seed.user.email);
-
-  const rows = await listWorkspaces(seed.user.id);
-  // alice's own 'acme' workspace is present; __system is filtered out.
-  expect(rows.some((r) => r.workspace.slug === 'acme')).toBe(true);
-  expect(rows.some((r) => r.workspace.slug === SYSTEM_WORKSPACE_SLUG)).toBe(false);
-});
-
-test('isSystemMember is true for a __system member, false otherwise (D1)', async () => {
-  const { app, db, seed } = await makeTestApp();
-  await bootstrapSystemWorkspace(db);
-
-  // Before designation alice is not a __system member.
-  expect(await isSystemMember(seed.user.id)).toBe(false);
-
-  await grantOwner(db, seed.user.email);
-  expect(await isSystemMember(seed.user.id)).toBe(true);
-
-  // A wholly unrelated user (not in __system) reads false.
-  const res = await app.request('/api/v1/auth/register', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      email: 'bob@test.local',
-      name: 'Bob',
-      password: 'password123',
-    }),
-  });
-  // Registration may or may not be open in this harness; fall back to a direct
-  // insert if the route declines, so the assertion stays deterministic.
-  let bobId: string;
-  if (res.status === 200 || res.status === 201) {
-    const bob = await db.query.users.findFirst({
-      where: eq(users.email, 'bob@test.local'),
-    });
-    bobId = bob!.id;
-  } else {
-    bobId = nanoid();
-    await db.insert(users).values({
-      id: bobId,
-      email: 'bob2@test.local',
-      name: 'Bob',
-      passwordHash: 'x',
-    });
-  }
-  expect(await isSystemMember(bobId)).toBe(false);
-});
-
-test('GET /api/v1/w/__system still resolves the workspace for a member (filter does not break navigation) (D1)', async () => {
-  const { app, db, seed } = await makeTestApp();
-  await bootstrapSystemWorkspace(db);
-  await grantOwner(db, seed.user.email);
-
-  // Direct slug navigation to __system must still return 200 for a MEMBER even
-  // though listWorkspaces excludes it. The detail route is membership-gated via
-  // resolveWorkspace — NOT via listWorkspaces — so the ambient filter cannot
-  // break navigation.
-  const res = await app.request(`/api/v1/w/${SYSTEM_WORKSPACE_SLUG}`, {
-    headers: { Cookie: seed.sessionCookie },
-  });
-  expect(res.status).toBe(200);
-  const body = await res.json();
-  expect(body.data.slug).toBe(SYSTEM_WORKSPACE_SLUG);
 });
 
 // --- A10: instance bearer (workspaceId null + workspace:admin) can create
@@ -601,12 +557,16 @@ test('A10: an instance bearer with workspace:admin creates a workspace (201)', a
   const wsId = body.data.id;
   const row = await db.query.workspaces.findFirst({ where: eq(workspaces.id, wsId) });
   expect(row).toBeDefined();
-  // Owner membership is created against the token's createdBy (the human admin
-  // hydrated by attachToken) — A7.
-  const owner = await db.query.memberships.findFirst({
-    where: and(eq(memberships.workspaceId, wsId), eq(memberships.role, 'owner')),
+  // Post-tenancy: the creator gets a workspace_access GRANT (not an owner
+  // membership row). The grant is created against the token's createdBy (the
+  // human admin hydrated by attachToken) — A7. Owner-ness is users.role.
+  const grant = await db.query.workspaceAccess.findFirst({
+    where: and(
+      eq(workspaceAccess.workspaceId, wsId),
+      eq(workspaceAccess.userId, seed.user.id),
+    ),
   });
-  expect(owner?.userId).toBe(seed.user.id);
+  expect(grant).toBeDefined();
 });
 
 test('A10: a pinned member bearer cannot create a workspace (403)', async () => {
@@ -691,12 +651,10 @@ test('A10: session user still creates a workspace (regression)', async () => {
 // hydrated user; this exercises the DISTINCT createdBy=null path where there is
 // NO hydrated user and the handler must fall back to findSystemOwnerId(db).
 describe('CR#2: operator/instance-bearer workspace create', () => {
-  test('operator token (createdBy=null) with workspace:admin creates a workspace owned by the __system owner', async () => {
+  test('operator token (createdBy=null) with workspace:admin creates a workspace owned by the instance owner', async () => {
     const { app, db, seed } = await makeTestApp();
-    // Bootstrap __system and designate seed.user (alice) as the instance owner —
-    // this is what gives findSystemOwnerId a single owner to resolve.
-    await bootstrapSystemWorkspace(db);
-    await designateInstanceOwner(db, seed.user.email);
+    // The harness seed user is the instance owner (users.role='owner') — this is
+    // what gives findSystemOwnerId a single owner to resolve.
     const systemOwnerId = await findSystemOwnerId(db);
     expect(systemOwnerId).toBe(seed.user.id);
 
@@ -725,16 +683,20 @@ describe('CR#2: operator/instance-bearer workspace create', () => {
     const row = await db.query.workspaces.findFirst({ where: eq(workspaces.id, wsId) });
     expect(row).toBeDefined();
 
-    // ...and its owner membership is assigned to the __system owner (alice),
+    // ...and its access grant is assigned to the __system owner (alice),
     // NOT to a (non-existent) hydrated user — proving the findSystemOwnerId
-    // fallback fired.
-    const owner = await db.query.memberships.findFirst({
-      where: and(eq(memberships.workspaceId, wsId), eq(memberships.role, 'owner')),
+    // fallback fired. Post-tenancy: the creator gets a workspace_access grant
+    // (not an owner membership row); owner-ness is users.role.
+    const grant = await db.query.workspaceAccess.findFirst({
+      where: and(
+        eq(workspaceAccess.workspaceId, wsId),
+        eq(workspaceAccess.userId, seed.user.id),
+      ),
     });
-    expect(owner).toBeDefined();
+    expect(grant).toBeDefined();
     // systemOwnerId === seed.user.id (asserted above); compare to the definite
     // string so the assertion stays well-typed.
-    expect(owner!.userId).toBe(seed.user.id);
+    expect(grant!.userId).toBe(seed.user.id);
   });
 });
 
@@ -772,10 +734,10 @@ describe('CR#3/CR-followup: workspace-create gate contract', () => {
   });
 
   test('operator instance bearer with NO designated owner fails closed (403)', async () => {
-    // __system bootstrapped but NO owner membership → the operator path has no
-    // owner to assign → 403 (never an ownerless workspace).
-    const { app, db } = await makeTestApp();
-    await bootstrapSystemWorkspace(db);
+    // No user with role='owner' → the operator path has no owner to assign →
+    // 403 (never an ownerless workspace). Demote the harness seed owner.
+    const { app, db, seed } = await makeTestApp();
+    await db.update(users).set({ role: 'member' }).where(eq(users.id, seed.user.id));
     const { token, hash } = newApiToken();
     await db.insert(apiTokens).values({
       id: nanoid(),

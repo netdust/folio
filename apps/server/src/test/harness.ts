@@ -98,11 +98,11 @@ export async function makeTestApp(opts: HarnessOptions = {}): Promise<{
     slug: 'acme',
     name: 'Acme',
   });
-  await db.insert(schema.memberships).values({
-    workspaceId,
-    userId,
-    role: 'owner',
-  });
+  // Post-tenancy model: the test user is the instance OWNER (users.role) with an
+  // explicit workspace_access grant. The legacy `memberships` table was dropped
+  // in Phase 4 (migration 0028).
+  await db.update(schema.users).set({ role: 'owner' }).where(eq(schema.users.id, userId));
+  await db.insert(schema.workspaceAccess).values({ userId, workspaceId });
 
   const projectId = nanoid();
   await db.insert(schema.projects).values({

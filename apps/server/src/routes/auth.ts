@@ -7,7 +7,8 @@ import { z } from 'zod';
 import { db } from '../db/client.ts';
 import { magicLinks, users } from '../db/schema.ts';
 import { env } from '../env.ts';
-import { bootstrapSystemWorkspace, designateInstanceOwner } from '../lib/system-workspace.ts';
+import { userRole } from '../lib/access.ts';
+import { designateInstanceOwner } from '../lib/system-workspace.ts';
 import {
   createSession,
   deleteSession,
@@ -19,7 +20,6 @@ import {
 import { sendMagicLink } from '../lib/email.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
 import { type AuthContext, getUser, requireUser } from '../middleware/auth.ts';
-import { getSystemRole } from '../lib/system-workspace.ts';
 
 const auth = new Hono<AuthContext>();
 
@@ -66,19 +66,15 @@ auth.post(
     const passwordHash = await hashPassword(password);
     await db.insert(users).values({ id, email, passwordHash, name });
 
-    // First registrant (flag on) becomes the instance owner of the __system
-    // library workspace.
+    // First registrant becomes the instance owner (users.role='owner').
     //
-    // Atomicity (review fix #3): the user row is committed before bootstrap, but
-    // createDocument (inside designateInstanceOwner) uses its own transaction on
-    // the module db proxy, so we cannot wrap all three in one outer tx. Instead,
-    // if bootstrap/designate throws we COMPENSATE by deleting the just-created
-    // user, returning the instance to the zero-users state. Without this, a
-    // mid-failure would leave a committed user → isFirstUser=false forever +
-    // EMAIL_TAKEN on retry → the instance is permanently ownerless via register.
+    // Atomicity: the user row is committed before designation. If designate
+    // throws we COMPENSATE by deleting the just-created user, returning the
+    // instance to the zero-users state. Without this, a mid-failure would leave
+    // a committed user → isFirstUser=false forever + EMAIL_TAKEN on retry → the
+    // instance is permanently ownerless via register.
     if (isFirstUser) {
       try {
-        await bootstrapSystemWorkspace(db);
         await designateInstanceOwner(db, email);
       } catch (err) {
         await db.delete(users).where(eq(users.id, id)); // roll back the user
@@ -122,24 +118,23 @@ auth.post('/logout', async (c) => {
 
 auth.get('/me', requireUser, async (c) => {
   const u = getUser(c);
-  // Boot-identity signals, all server-authoritative (membership-derived, never
-  // client-trusted). Two independent reads run concurrently:
-  //   - getSystemRole: the user's __system role, resolved ONCE. is_system_member =
-  //     any membership; is_instance_admin = owner/admin (mirrors requireInstanceAdmin
-  //     EXACTLY so the web gates the instance AI-key UI to the role the route enforces
-  //     — no 403 papercut). Folds what was 3 queries (isSystemMember + isInstanceAdmin's
-  //     two reads) into 1.
-  //   - ai_configured: PRESENCE-only — does ANY instance AI key exist? Readable by
-  //     every user (no admin gate, no key material); drives the body editor's AI slash
-  //     commands. The key LIST is admin-gated; this is just "is an LLM reachable".
-  const [systemRole, anyAiKey] = await Promise.all([
-    getSystemRole(db, u.id),
+  // Post-tenancy boot identity, all server-authoritative. Two independent reads
+  // run concurrently:
+  //   - userRole: the caller's INSTANCE role (users.role; one instance = one
+  //     team). `is_instance_admin` is the derived owner||admin signal. Both are
+  //     top-level — properties of the boot identity, not the user record.
+  //   - ai_configured: PRESENCE-only — does ANY instance AI key exist? Readable
+  //     by every user (no admin gate, no key material); drives the body editor's
+  //     AI slash commands. The key LIST is admin-gated; this is just "is an LLM
+  //     reachable". (is_system_member is GONE — Phase 4 dropped __system.)
+  const [role, anyAiKey] = await Promise.all([
+    userRole(db, u.id),
     db.query.aiKeys.findFirst({ columns: { id: true } }),
   ]);
   return jsonOk(c, {
     user: { id: u.id, email: u.email, name: u.name },
-    is_system_member: systemRole !== null,
-    is_instance_admin: systemRole === 'owner' || systemRole === 'admin',
+    role, // instance role (owner|admin|member)
+    is_instance_admin: role === 'owner' || role === 'admin',
     ai_configured: anyAiKey !== undefined,
   });
 });

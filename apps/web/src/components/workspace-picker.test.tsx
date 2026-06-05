@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -9,9 +9,10 @@ import {
   createRouter,
   Outlet,
   RouterProvider,
+  useParams,
 } from '@tanstack/react-router';
 import { WorkspacePicker } from './workspace-picker.tsx';
-import { SYSTEM_WORKSPACE_SLUG } from '../lib/api/workspaces.ts';
+import { setLastWorkspaceSlug } from '../lib/last-workspace.ts';
 
 function mockWorkspaces(items: { id: string; slug: string; name: string }[]) {
   vi.stubGlobal(
@@ -48,7 +49,11 @@ function makeRouter(onCreate: () => void) {
   const workspaceRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: '/w/$wslug',
-    component: () => <div>workspace page</div>,
+    // Render the slug so tests can assert WHICH workspace it landed on.
+    component: function WorkspacePage() {
+      const { wslug } = useParams({ strict: false }) as { wslug: string };
+      return <div>workspace page: {wslug}</div>;
+    },
   });
 
   const router = createRouter({
@@ -60,9 +65,13 @@ function makeRouter(onCreate: () => void) {
 }
 
 describe('WorkspacePicker', () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+    localStorage.clear();
   });
 
   it('shows empty state and calls onCreate when button is clicked', async () => {
@@ -95,11 +104,11 @@ describe('WorkspacePicker', () => {
     );
 
     await waitFor(() =>
-      expect(screen.getByText('workspace page')).toBeInTheDocument(),
+      expect(screen.getByText('workspace page: acme')).toBeInTheDocument(),
     );
   });
 
-  it('renders a card grid when there are multiple workspaces', async () => {
+  it('redirects to the FIRST workspace when nothing was last opened', async () => {
     mockWorkspaces([
       { id: 'ws-1', slug: 'acme', name: 'Acme' },
       { id: 'ws-2', slug: 'beta', name: 'Beta' },
@@ -112,20 +121,15 @@ describe('WorkspacePicker', () => {
       </QueryClientProvider>,
     );
 
-    await waitFor(() => expect(screen.getByText('Acme')).toBeInTheDocument());
-    expect(screen.getByText('Beta')).toBeInTheDocument();
-    expect(screen.getByText('/acme')).toBeInTheDocument();
-    expect(screen.getByText('/beta')).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByText('workspace page: acme')).toBeInTheDocument(),
+    );
+    // The all-workspaces grid is gone — no "Your workspaces" heading.
+    expect(screen.queryByText(/your workspaces/i)).not.toBeInTheDocument();
   });
 
-  // Phase D D1 — the picker never lists the reserved `__system` library
-  // workspace. The real feeder, `useWorkspaces()`, is server-filtered as of
-  // Task 1 (commit bd1e631) so `__system` never reaches the client: this pins
-  // that the picker renders exactly the memberships it is given (no `__system`
-  // row materializes from the server-filtered list).
-  it('D1: does not list the reserved __system workspace (mirrors the server-filtered feed)', async () => {
-    // The server filter strips `__system`, so the client receives only real
-    // member workspaces.
+  it('redirects to the LAST-OPENED workspace when one is remembered', async () => {
+    setLastWorkspaceSlug('beta');
     mockWorkspaces([
       { id: 'ws-1', slug: 'acme', name: 'Acme' },
       { id: 'ws-2', slug: 'beta', name: 'Beta' },
@@ -138,11 +142,27 @@ describe('WorkspacePicker', () => {
       </QueryClientProvider>,
     );
 
-    await waitFor(() => expect(screen.getByText('Acme')).toBeInTheDocument());
-    // No __system entry — neither by name nor by its `/__system` slug line.
-    expect(screen.queryByText('/__system')).not.toBeInTheDocument();
-    expect(screen.queryByText(SYSTEM_WORKSPACE_SLUG)).not.toBeInTheDocument();
-    // Exactly the two member workspaces rendered.
-    expect(screen.getAllByRole('link')).toHaveLength(2);
+    await waitFor(() =>
+      expect(screen.getByText('workspace page: beta')).toBeInTheDocument(),
+    );
+  });
+
+  it('falls back to the first workspace when the remembered one is gone', async () => {
+    setLastWorkspaceSlug('deleted-ws');
+    mockWorkspaces([
+      { id: 'ws-1', slug: 'acme', name: 'Acme' },
+      { id: 'ws-2', slug: 'beta', name: 'Beta' },
+    ]);
+    const { router, queryClient } = makeRouter(vi.fn());
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText('workspace page: acme')).toBeInTheDocument(),
+    );
   });
 });

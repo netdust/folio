@@ -25,11 +25,14 @@ import {
   type Workspace,
   apiTokens,
   documents,
-  memberships,
+  projectAccess,
   projects,
   tables,
+  users,
+  workspaceAccess,
   workspaces,
 } from '../db/schema.ts';
+import { createSession } from '../lib/auth.ts';
 import { env } from '../env.ts';
 import { toolsToScopes } from '../lib/agent-schema.ts';
 import { newApiToken } from '../lib/auth.ts';
@@ -37,11 +40,6 @@ import { eventBus } from '../lib/event-bus.ts';
 import { seedProjectDefaults } from '../lib/seed-project-defaults.ts';
 import { createRun, ensureRunsTable, nextChainId } from '../services/agent-runs.ts';
 import { listComments } from '../services/comments.ts';
-import {
-  SYSTEM_WORKSPACE_SLUG,
-  bootstrapSystemWorkspace,
-  getSystemWorkspaceId,
-} from '../lib/system-workspace.ts';
 import { makeTestApp } from '../test/harness.ts';
 
 type DB = Awaited<ReturnType<typeof makeTestApp>>['db'];
@@ -544,13 +542,13 @@ test('m58: narrowed agent bearer GET of disallowed-project run → 404', async (
 test('m58: GET/cancel/retry a run id from ANOTHER workspace → 404 (workspace boundary)', async () => {
   const { app, db, seed } = await makeTestApp();
 
-  // Build a SECOND workspace + membership for the seeded user + project, then a
-  // real agent_run row inside it via the production createRun path.
+  // Build a SECOND workspace + access grant for the seeded user + project, then a
+  // real agent_run row inside it via the production createRun path. seed.user is
+  // the instance owner (users.role='owner'); a workspace_access grant gives the
+  // explicit visibility createRun's canSeeWorkspace check requires.
   const otherWsId = nanoid();
   await db.insert(workspaces).values({ id: otherWsId, slug: 'other', name: 'Other' });
-  await db
-    .insert(memberships)
-    .values({ workspaceId: otherWsId, userId: seed.user.id, role: 'owner' });
+  await db.insert(workspaceAccess).values({ userId: seed.user.id, workspaceId: otherWsId });
   const otherProjectId = nanoid();
   await db
     .insert(projects)
@@ -756,6 +754,100 @@ test('GET workspace-scoped list → 422 INVALID_QUERY on unknown status enum val
   expect((await res.json()).error.code).toBe('INVALID_QUERY');
 });
 
+// CR-9 (round-2 code-review): the ws-scoped runs list (and single-run-by-id
+// load) narrowed only by the AGENT allow-list (null for session/human PAT). The
+// traverse clause now lets a project-only invitee reach these wScope surfaces,
+// so they leaked sibling-project runs (titles, agent slugs, status). The fix
+// routes both surfaces through the caller's visibleProjectIds (CR-10 helper) for
+// a non-whole-ws human, mirroring /events.
+//
+// Seeds a SECOND project 'ops' in acme + a run in each; the invitee is granted
+// ONLY 'web'. Uses one shared setup helper for the three assertions below.
+async function seedTwoProjectRuns(
+  db: DB,
+  seed: Awaited<ReturnType<typeof makeTestApp>>['seed'],
+) {
+  // 'web' = seed.project (the invitee's granted project). Run #1 there.
+  const webTable = await getWorkItemsTable(db, seed.project.id);
+  const webParent = await seedWorkItem(db, seed.workspace, seed.project, webTable, seed.user);
+  const { agent } = await seedAgent(db, seed.workspace, seed.user, 'helper');
+  const webRun = await seedRun(db, seed.workspace, seed.project, agent, seed.user, webParent);
+
+  // 'ops' = a second project in the SAME workspace. Run #2 there.
+  const opsId = nanoid();
+  await db.insert(projects).values({ id: opsId, workspaceId: seed.workspace.id, slug: 'ops', name: 'Ops' });
+  await seedProjectDefaults(db, opsId);
+  const [opsProject] = await db.select().from(projects).where(eq(projects.id, opsId));
+  const opsTable = await getWorkItemsTable(db, opsId);
+  const opsParent = await seedWorkItem(db, seed.workspace, opsProject!, opsTable, seed.user);
+  const opsRun = await seedRun(db, seed.workspace, opsProject!, agent, seed.user, opsParent);
+
+  return { webRun, opsRun, opsProject: opsProject! };
+}
+
+test('CR-9: project-only invitee ws-scoped runs list excludes sibling-project runs', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const { webRun, opsRun } = await seedTwoProjectRuns(db, seed);
+
+  // Project-only invitee: project_access to 'web' ONLY, no workspace_access.
+  const inviteeId = nanoid();
+  await db.insert(users).values({
+    id: inviteeId, email: 'runinvitee@test.local', name: 'Run Invitee', role: 'member',
+  });
+  await db.insert(projectAccess).values({ userId: inviteeId, projectId: seed.project.id });
+  const session = await createSession(inviteeId);
+
+  const res = await app.request('/api/v1/w/acme/runs', {
+    headers: { Cookie: `folio_session=${session.id}` },
+  });
+  expect(res.status).toBe(200);
+  const { data } = await res.json();
+  const ids = data.map((r: Document) => r.id);
+  expect(ids).toContain(webRun.id); // granted project's run
+  expect(ids).not.toContain(opsRun.id); // sibling project's run MUST NOT leak
+});
+
+test('CR-9: project-only invitee CANNOT load a sibling-project run by id (404)', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const { webRun, opsRun } = await seedTwoProjectRuns(db, seed);
+
+  const inviteeId = nanoid();
+  await db.insert(users).values({
+    id: inviteeId, email: 'runinvitee2@test.local', name: 'Run Invitee 2', role: 'member',
+  });
+  await db.insert(projectAccess).values({ userId: inviteeId, projectId: seed.project.id });
+  const session = await createSession(inviteeId);
+  const cookie = `folio_session=${session.id}`;
+
+  // The granted project's run loads fine.
+  const ok = await app.request(`/api/v1/w/acme/runs/${webRun.id}`, { headers: { Cookie: cookie } });
+  expect(ok.status).toBe(200);
+  // The sibling project's run by id → 404 (not confirmed to exist).
+  const leaked = await app.request(`/api/v1/w/acme/runs/${opsRun.id}`, { headers: { Cookie: cookie } });
+  expect(leaked.status).toBe(404);
+});
+
+test('CR-9: a workspace_access grant holder STILL sees all project runs (no over-narrowing)', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const { webRun, opsRun } = await seedTwoProjectRuns(db, seed);
+
+  // Whole-ws principal: member WITH a workspace_access grant (not owner).
+  const wsMemberId = nanoid();
+  await db.insert(users).values({
+    id: wsMemberId, email: 'wsrunmember@test.local', name: 'WS Run Member', role: 'member',
+  });
+  await db.insert(workspaceAccess).values({ userId: wsMemberId, workspaceId: seed.workspace.id });
+  const session = await createSession(wsMemberId);
+
+  const res = await app.request('/api/v1/w/acme/runs', {
+    headers: { Cookie: `folio_session=${session.id}` },
+  });
+  expect(res.status).toBe(200);
+  const ids = (await res.json()).data.map((r: Document) => r.id);
+  expect(ids).toContain(webRun.id);
+  expect(ids).toContain(opsRun.id); // whole-ws principal sees BOTH
+});
+
 // ----- POST /runs/:runId/cancel -----
 
 test('cancel a planning run → failed', async () => {
@@ -857,44 +949,6 @@ test('retry a terminal run creates a fresh planning run → 201 (m63 happy)', as
   expect(runs.length).toBe(2);
 });
 
-test('retry of a __system library-agent run re-resolves the library agent (not 404) (B1, retry path)', async () => {
-  // A library-agent run lives in B but its agent is in __system. The retry path
-  // must re-resolve the agent through resolveAgentForRun (home ∈ {ws, __system}),
-  // not eq(workspaceId, ws.id) only. RED before the fix: AGENT_NOT_FOUND 404.
-  const { app, db, seed } = await makeTestApp();
-  await bootstrapSystemWorkspace(db);
-  const systemId = await getSystemWorkspaceId(db);
-  const systemWs = (await db.query.workspaces.findFirst({
-    where: eq(workspaces.id, systemId),
-  }))!;
-  const table = await getWorkItemsTable(db, seed.project.id);
-  const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
-  // The agent is a __system library agent, created with the run's owner (FK-valid).
-  const { agent } = await seedAgent(db, systemWs, seed.user, 'operator');
-  // createRun (B's create path) stamps the run's agent_home_workspace_id = __system.
-  const run = await seedRun(db, seed.workspace, seed.project, agent, seed.user, parent);
-  expect((run.frontmatter as Record<string, unknown>).agent_home_workspace_id).toBe(systemId);
-  // Terminalize so idempotency doesn't block the retry.
-  await db
-    .update(documents)
-    .set({
-      status: 'failed',
-      frontmatter: { ...(run.frontmatter as Record<string, unknown>), status: 'failed' },
-    })
-    .where(eq(documents.id, run.id));
-
-  const res = await app.request(`/api/v1/w/acme/runs/${run.id}/retry`, {
-    method: 'POST',
-    headers: { Cookie: seed.sessionCookie },
-  });
-  expect(res.status).toBe(201);
-  const { data } = await res.json();
-  expect(data.status).toBe('planning');
-  // The fresh run re-stamps the library agent's home.
-  const fresh = await db.query.documents.findFirst({ where: eq(documents.id, data.run_id) });
-  expect((fresh!.frontmatter as Record<string, unknown>).agent_home_workspace_id).toBe(systemId);
-});
-
 test('retry while original still active → 409 RUN_ALREADY_ACTIVE (m63)', async () => {
   const { app, db, seed } = await makeTestApp();
   const table = await getWorkItemsTable(db, seed.project.id);
@@ -982,37 +1036,28 @@ test('Finding 2: agent-bound bearer retry with chains ON → 201 (gate only bloc
   expect(runs.length).toBe(2);
 });
 
-// ----- B1: __system library agent resolution at the create path -----
-// `acme` (the seeded workspace) is the RUN workspace (= "B"). A library agent
-// lives in `__system`; a third workspace "C" is created standalone to prove the
-// home predicate {run-ws, __system} rejects an agent that lives only in C.
+// ----- Phase 4: instance-wide agent resolution at the create path -----
+// Tenancy is dropped: POST /runs resolves an agent by slug INSTANCE-WIDE, even
+// when the agent doc physically lives in a different workspace. There is no
+// `__system` library and no third-workspace fail-closed wall.
 
-/** Bootstrap __system + return its Workspace row, for seeding a library agent. */
-async function seedSystemWorkspace(db: DB): Promise<Workspace> {
-  await bootstrapSystemWorkspace(db);
-  const sys = await db.query.workspaces.findFirst({
-    where: eq(workspaces.slug, SYSTEM_WORKSPACE_SLUG),
-  });
-  if (!sys) throw new Error('test setup: __system did not bootstrap');
-  return sys;
-}
-
-/** Create a bare third workspace C (no membership needed — never the run-ws). */
-async function seedThirdWorkspace(db: DB): Promise<Workspace> {
+/** Create a bare second workspace (no membership needed — never the run-ws). */
+async function seedOtherWorkspace(db: DB): Promise<Workspace> {
   const id = nanoid();
   await db.insert(workspaces).values({ id, slug: 'cee', name: 'Cee' });
   const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, id) });
-  if (!ws) throw new Error('test setup: workspace C insert did not round-trip');
+  if (!ws) throw new Error('test setup: other workspace insert did not round-trip');
   return ws;
 }
 
-test('POST /runs resolves a __system library agent by slug for a run in B (B1, create path)', async () => {
+test('POST /runs resolves an agent by slug even when it lives in another workspace (instance-wide, no tenancy wall)', async () => {
   const { app, db, seed } = await makeTestApp();
   const table = await getWorkItemsTable(db, seed.project.id);
   const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
-  const sys = await seedSystemWorkspace(db);
-  // Library agent lives in __system, NOT in acme (B).
-  await seedAgent(db, sys, seed.user, 'operator');
+  const other = await seedOtherWorkspace(db);
+  // Agent lives in another workspace, NOT in acme (the run workspace). With
+  // tenancy dropped, the slug still resolves instance-wide → 201.
+  await seedAgent(db, other, seed.user, 'operator');
 
   const res = await app.request('/api/v1/w/acme/runs', {
     method: 'POST',
@@ -1022,46 +1067,5 @@ test('POST /runs resolves a __system library agent by slug for a run in B (B1, c
   expect(res.status).toBe(201);
   const runId = (await res.json()).data.run_id;
   const run = await db.query.documents.findFirst({ where: eq(documents.id, runId) });
-  const fm = run?.frontmatter as Record<string, unknown>;
-  // The run's home is stamped from the agent's workspace → __system, not B.
-  expect(fm.agent_home_workspace_id).toBe(sys.id);
-});
-
-test('POST /runs still 404s an agent that exists only in a third workspace C (B1)', async () => {
-  const { app, db, seed } = await makeTestApp();
-  const table = await getWorkItemsTable(db, seed.project.id);
-  const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
-  await seedSystemWorkspace(db); // __system exists but has no 'cagent'
-  const cee = await seedThirdWorkspace(db);
-  await seedAgent(db, cee, seed.user, 'cagent'); // agent lives ONLY in C
-
-  const res = await app.request('/api/v1/w/acme/runs', {
-    method: 'POST',
-    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ agent_slug: 'cagent', parent_slug: parent.slug }),
-  });
-  expect(res.status).toBe(404);
-  expect((await res.json()).error.code).toBe('AGENT_NOT_FOUND');
-});
-
-test('POST /runs prefers a B-local agent over a __system agent of the same slug (local shadows library)', async () => {
-  const { app, db, seed } = await makeTestApp();
-  const table = await getWorkItemsTable(db, seed.project.id);
-  const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
-  const sys = await seedSystemWorkspace(db);
-  // Same slug 'dup' in BOTH __system AND acme (B).
-  await seedAgent(db, sys, seed.user, 'dup');
-  await seedAgent(db, seed.workspace, seed.user, 'dup');
-
-  const res = await app.request('/api/v1/w/acme/runs', {
-    method: 'POST',
-    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ agent_slug: 'dup', parent_slug: parent.slug }),
-  });
-  expect(res.status).toBe(201);
-  const runId = (await res.json()).data.run_id;
-  const run = await db.query.documents.findFirst({ where: eq(documents.id, runId) });
-  const fm = run?.frontmatter as Record<string, unknown>;
-  // Local B agent wins → home is B's id, not __system.
-  expect(fm.agent_home_workspace_id).toBe(seed.workspace.id);
+  expect(run?.status).toBe('planning');
 });

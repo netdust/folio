@@ -13,10 +13,11 @@ import {
   apiTokens,
   documents,
   events,
-  memberships,
+  projectAccess,
   projects as schemaProjects,
   tables,
   users,
+  workspaceAccess,
   workspaces,
   type Document,
   type Project,
@@ -25,6 +26,8 @@ import {
   type Workspace,
 } from '../db/schema.ts';
 import { seedProjectDefaults } from '../lib/seed-project-defaults.ts';
+import { resolveAgentForRun } from '../lib/agent-resolver.ts';
+import { OPERATOR_SLUG } from '../lib/operator.ts';
 import { newApiToken } from '../lib/auth.ts';
 import { toolsToScopes } from '../lib/agent-schema.ts';
 import type { AgentRunFrontmatter } from '../lib/agent-run-schema.ts';
@@ -376,6 +379,39 @@ describe('createRun', () => {
     ).rejects.toThrow(/empty|prompt/i);
   });
 
+  test('rejects the operator singleton — its run path is cockpit-only (no stranded runs)', async () => {
+    const { db, seed } = await makeTestApp();
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+    // The operator resolves to the code singleton (no token row) — createRun must
+    // refuse it rather than insert a run that strands forever at loadContext.
+    const operator = (await resolveAgentForRun(db, OPERATOR_SLUG))!;
+    expect(operator).toBeDefined();
+
+    await expect(
+      createRun({
+        workspace: seed.workspace,
+        project: seed.project,
+        runsTable,
+        agent: operator,
+        actor: seed.user,
+        input: {
+          parentDocumentId: parent.id,
+          firedBy: 'agent.task.assigned',
+          chainId: crypto.randomUUID(),
+          triggerId: null,
+        },
+      }),
+    ).rejects.toThrow(/operator|cockpit/i);
+
+    // No run row was inserted (no strand).
+    const runs = await db.query.documents.findMany({
+      where: and(eq(documents.type, 'agent_run'), eq(documents.parentId, parent.id)),
+    });
+    expect(runs.length).toBe(0);
+  });
+
   // ----- Phase 1 caller-delegation snapshot (D1, D2, D6) -----
 
   test('stamps caller_scopes/caller_project_ids from the actor membership role (owner → all scopes, no project narrowing)', async () => {
@@ -427,11 +463,10 @@ describe('createRun', () => {
       name: 'Bob',
       passwordHash: 'x',
     });
-    await db.insert(memberships).values({
-      workspaceId: seed.workspace.id,
-      userId: memberId,
-      role: 'member',
-    });
+    // Post-tenancy: a plain member is a user at instance role `member` (the
+    // users default) holding a workspace_access grant. createRun's fresh-run
+    // path requires canSeeWorkspace (the grant) and reads role from users.role.
+    await db.insert(workspaceAccess).values({ userId: memberId, workspaceId: seed.workspace.id });
     const [member] = await db.select().from(users).where(eq(users.id, memberId));
 
     const table = await getWorkItemsTable(db, seed.project.id);
@@ -463,13 +498,135 @@ describe('createRun', () => {
     expect(fm.caller_project_ids).not.toContain('*');
   });
 
-  test('fails LOUDLY (Finding 6) when the run owner has NO membership in the workspace', async () => {
+  test('member with a project_access grant to ONLY p1 → caller_project_ids is [p1], NOT every ws project (T-C narrowing)', async () => {
+    // Caller-bounded authority (T-C): post-tenancy a member may hold a
+    // project_access grant to a SUBSET of the workspace's projects and reach the
+    // workspace only via the traverse clause. The run-ceiling must clamp to the
+    // projects the caller can ACTUALLY SEE (canSeeProject), NOT every project in
+    // the workspace — otherwise the run borrows reach to sibling projects the
+    // caller can't see (privilege widening). seed.project is p1; seed a sibling
+    // p2 the member is NOT granted, then assert p2 is absent from the ceiling.
+    const { db, seed } = await makeTestApp();
+
+    // A second project in the SAME workspace that the member cannot see.
+    const p2Id = nanoid();
+    await db.insert(schemaProjects).values({
+      id: p2Id,
+      workspaceId: seed.workspace.id,
+      slug: 'p2',
+      name: 'P2',
+    });
+
+    // A plain member (instance role `member`, the users default) holding ONLY a
+    // project_access grant to p1 (= seed.project) — NO workspace_access. The
+    // traverse clause lets them through canSeeWorkspace; canSeeProject is true
+    // for p1 and FALSE for p2.
+    const memberId = nanoid();
+    await db.insert(users).values({
+      id: memberId,
+      email: 'carol@test.local',
+      name: 'Carol',
+      passwordHash: 'x',
+    });
+    await db.insert(projectAccess).values({ userId: memberId, projectId: seed.project.id });
+    const [member] = await db.select().from(users).where(eq(users.id, memberId));
+
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
+    // Parent the run in p1 — the project the member can see.
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+
+    const result = await createRun({
+      workspace: seed.workspace,
+      project: seed.project,
+      runsTable,
+      agent,
+      actor: member!,
+      input: {
+        parentDocumentId: parent.id,
+        firedBy: 'manual',
+        chainId: crypto.randomUUID(),
+        triggerId: null,
+      },
+    });
+
+    const fm = result.document.frontmatter as AgentRunFrontmatter;
+    expect(fm.caller_project_ids).not.toBe(null);
+    // Only the project the caller can SEE — never the sibling p2.
+    expect(fm.caller_project_ids).toContain(seed.project.id);
+    expect(fm.caller_project_ids).not.toContain(p2Id);
+    expect(fm.caller_project_ids).not.toContain('*');
+  });
+
+  test('ADMIN with a project_access grant to ONLY p1 → caller_project_ids is [p1], NOT every ws project (CR-1 admin clamp)', async () => {
+    // CR-1: instance `admin` does NOT bypass grants under the post-tenancy model
+    // (only `owner` does). An admin holding only a project_access grant reaches
+    // the workspace via traverse; their run-ceiling must clamp to the projects
+    // they can ACTUALLY SEE (canSeeProject) — NOT null/wildcard over every
+    // project in the workspace. Mirrors the member T-C narrowing test, but with
+    // an instance-`admin` actor.
+    const { db, seed } = await makeTestApp();
+
+    // A second project in the SAME workspace that the admin cannot see.
+    const p2Id = nanoid();
+    await db.insert(schemaProjects).values({
+      id: p2Id,
+      workspaceId: seed.workspace.id,
+      slug: 'p2',
+      name: 'P2',
+    });
+
+    // An instance `admin` holding ONLY a project_access grant to p1 — NO
+    // workspace_access. Pre-CR-1 callerProjectsFor(admin) → null (unrestricted);
+    // post-CR-1 admin is clamped to canSeeProject-visible projects.
+    const adminId = nanoid();
+    await db.insert(users).values({
+      id: adminId,
+      email: 'dave-admin@test.local',
+      name: 'Dave',
+      passwordHash: 'x',
+      role: 'admin',
+    });
+    await db.insert(projectAccess).values({ userId: adminId, projectId: seed.project.id });
+    const [admin] = await db.select().from(users).where(eq(users.id, adminId));
+
+    const table = await getWorkItemsTable(db, seed.project.id);
+    const agent = await seedAgent(db, seed.workspace, seed.user, 'helper-admin');
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+    const runsTable = await seedRunsTable(db, seed.project.id);
+
+    const result = await createRun({
+      workspace: seed.workspace,
+      project: seed.project,
+      runsTable,
+      agent,
+      actor: admin!,
+      input: {
+        parentDocumentId: parent.id,
+        firedBy: 'manual',
+        chainId: crypto.randomUUID(),
+        triggerId: null,
+      },
+    });
+
+    const fm = result.document.frontmatter as AgentRunFrontmatter;
+    expect(fm.caller_project_ids).not.toBe(null);
+    expect(fm.caller_project_ids).toContain(seed.project.id);
+    expect(fm.caller_project_ids).not.toContain(p2Id);
+    expect(fm.caller_project_ids).not.toContain('*');
+  });
+
+  test('fails LOUDLY (Finding 6) when the run owner has NO access to the workspace', async () => {
     // Was: silently stamped caller_scopes:[] → the run is created but DENIES
     // every tool on the first call, with no visible cause. Finding 6 made this
     // throw at create time so the misconfiguration is loud, not a mute
     // first-tool 'forbidden'.
+    // Post-tenancy: the deny condition is "cannot SEE the workspace" — a user at
+    // the default instance role `member` with NO workspace_access grant (and no
+    // project grant to traverse). Same RUN_OWNER_NOT_A_MEMBER / 403 as before.
     const { db, seed } = await makeTestApp();
-    // A user with NO membership row for this workspace.
+    // A user with NO access grant (and not the instance owner) for this workspace.
     const strangerId = nanoid();
     await db.insert(users).values({
       id: strangerId,
@@ -522,11 +679,8 @@ describe('createRun', () => {
       name: 'Mallory',
       passwordHash: 'x',
     });
-    await db.insert(memberships).values({
-      workspaceId: seed.workspace.id,
-      userId: memberId,
-      role: 'member',
-    });
+    // Post-tenancy: member = users.role default + workspace_access grant.
+    await db.insert(workspaceAccess).values({ userId: memberId, workspaceId: seed.workspace.id });
     const [member] = await db.select().from(users).where(eq(users.id, memberId));
 
     const result = await createRun({
@@ -599,11 +753,8 @@ describe('createRun', () => {
       name: 'Carol',
       passwordHash: 'x',
     });
-    await db.insert(memberships).values({
-      workspaceId: seed.workspace.id,
-      userId: memberId,
-      role: 'member',
-    });
+    // Post-tenancy: member = users.role default + workspace_access grant.
+    await db.insert(workspaceAccess).values({ userId: memberId, workspaceId: seed.workspace.id });
     const [member] = await db.select().from(users).where(eq(users.id, memberId));
 
     const original = await createRun({

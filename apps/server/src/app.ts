@@ -20,8 +20,10 @@ import { documentsRoute } from './routes/documents.ts';
 import { eventsRoute } from './routes/events.ts';
 import { fieldsRoute } from './routes/fields.ts';
 import { healthRoute } from './routes/health.ts';
+import { instanceAccessRoute } from './routes/instance-access.ts';
 import { instanceAiKeysRoute } from './routes/instance-ai-keys.ts';
 import { instanceTokensRoute } from './routes/instance-tokens.ts';
+import { instanceUsersRoute } from './routes/instance-users.ts';
 import { mcpRoute } from './routes/mcp.ts';
 import { projectItemRoute, projectsRoute } from './routes/projects.ts';
 import { providerHealthRoute, runsListRoute, runsRoute } from './routes/runs.ts';
@@ -49,7 +51,16 @@ v1.route('/workspaces', workspacesRoute);
 // Mounted on v1 (NOT under wScope) because instance tokens are not workspace-
 // scoped — their workspace_id is null. attachUser (app-wide) supplies the session.
 v1.route('/instance/tokens', instanceTokensRoute);
-// Instance AI-key administration. Session-only + __system owner/admin gate
+// Task 11 (T-B): invitation routes — grant/revoke workspace_access/project_access.
+// Session-only + owner/admin gate. Mounted on v1 (NOT under wScope) so attachToken
+// never runs and a stolen Bearer cannot grant access; attachUser supplies the session.
+v1.route('/instance/access', instanceAccessRoute);
+// Task 12: instance-user administration — PATCH /instance/users/:id/role (OWNER-only),
+// GET /instance/users + GET /instance/invite-targets (owner+admin enumeration). Mounted
+// at /instance (NOT /instance/users) because invite-targets is a SIBLING of users, not a
+// child — see the route file's mount note. Session-only (no wScope → no attachToken).
+v1.route('/instance', instanceUsersRoute);
+// Instance AI-key administration. Session-only + instance owner/admin gate
 // (requireInstanceAdmin). AI credentials are instance-level (workspace-free):
 // the runner resolves an agent's key by (provider, ai_key_label). Mounted on v1
 // (NOT wScope) so no bearer/agent token can reach the secret store (M4).

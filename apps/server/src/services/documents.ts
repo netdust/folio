@@ -18,7 +18,6 @@ import {
   slugify,
   filterCompile,
   FilterCompileError,
-  SYSTEM_WORKSPACE_SLUG,
 } from '@folio/shared';
 import { db } from '../db/client.ts';
 import {
@@ -44,7 +43,6 @@ import { newApiToken } from '../lib/auth.ts';
 import { walkParentChain } from '../lib/delegation-guard.ts';
 import { compileFilterToWhere } from '../lib/filter-to-drizzle.ts';
 import { slugUniqueInDocuments, slugUniqueInWorkspaceDocuments } from '../lib/slug-unique.ts';
-import { findSystemWorkspaceId } from '../lib/system-workspace.ts';
 
 // ----- shared types & helpers (kept service-private; routes don't import) -----
 
@@ -66,33 +64,6 @@ export function stripReservedFrontmatter(
     out[k] = v;
   }
   return out;
-}
-
-/**
- * T8 — `trusted` is server-managed on __system skills pages. A normal
- * create/update_document (or folio_api) write to such a page must NOT be able to
- * set or flip `trusted`; only setSkillTrust (skill-trust.ts) may. Strip the key
- * ONLY when the target is a __system skills page (workspace=__system, project
- * slug='skills', type=page) — a regular document elsewhere may legitimately carry
- * a `trusted` frontmatter field, so this is NOT a global RESERVED key.
- */
-function isSystemSkillPage(
-  ws: Pick<Workspace, 'slug'>,
-  project: Pick<Project, 'slug'> | null,
-  type: DocumentType | string,
-): boolean {
-  return ws.slug === SYSTEM_WORKSPACE_SLUG && project?.slug === 'skills' && type === 'page';
-}
-
-export function stripManagedSkillTrust(
-  fm: Record<string, unknown>,
-  ws: Pick<Workspace, 'slug'>,
-  project: Pick<Project, 'slug'> | null,
-  type: DocumentType | string,
-): Record<string, unknown> {
-  if (!isSystemSkillPage(ws, project, type)) return fm;
-  const { trusted: _managed, ...rest } = fm;
-  return rest;
 }
 
 export function getAssignee(fm: unknown): string | null {
@@ -531,11 +502,7 @@ export async function createDocument(
   const { workspace: ws, project: p, actor: user, token } = args;
   const input: CreateDocumentInput = {
     ...args.input,
-    // T8 — strip server-managed `trusted` first when this is a __system skills
-    // page (only setSkillTrust may set it), then strip the always-reserved keys.
-    frontmatter: stripReservedFrontmatter(
-      stripManagedSkillTrust(args.input.frontmatter ?? {}, ws, p, args.input.type),
-    ),
+    frontmatter: stripReservedFrontmatter(args.input.frontmatter ?? {}),
   };
 
   // G15: comments are created through createComment (services/comments.ts),
@@ -942,11 +909,7 @@ export async function updateDocument(
     const merged: Record<string, unknown> = {
       ...(existing.frontmatter as Record<string, unknown>),
     };
-    // T8 — `trusted` is server-managed on __system skills pages. Drop it from the
-    // incoming PATCH so a normal update_document/folio_api write can't flip it;
-    // only setSkillTrust may. The EXISTING trusted value (set by setSkillTrust)
-    // is preserved via the `...existing` spread above.
-    const patchFm = stripManagedSkillTrust(patch.frontmatter, ws, p, existing.type);
+    const patchFm = patch.frontmatter;
     for (const [k, v] of Object.entries(patchFm)) {
       if ((RESERVED_FRONTMATTER_KEYS as readonly string[]).includes(k)) continue;
       // Folio's "empty means absent" contract: both `null` and '' clear the key.
@@ -1262,83 +1225,6 @@ export async function getWorkspaceDocument(
   return row ?? null;
 }
 
-/**
- * Frontmatter keys a cross-tenant member legitimately needs to INVOKE a
- * `__system` (library) agent from a picker / run launcher: model + provider +
- * tools + skills + projects (resolve which projects it can touch) +
- * requires_approval (the picker can show the approval marker) +
- * max_delegation_depth + max_tokens_per_run (run-shape budget the launcher may
- * surface). This is the full PUBLIC agent-frontmatter set from
- * `agentFrontmatterSchema` (lib/agent-schema.ts) MINUS the sensitive
- * `system_prompt` and the server-managed `api_token_id` / `parent_agent`.
- *
- * We use a POSITIVE ALLOW-LIST (not a denylist) so a future sensitive
- * frontmatter key is DROPPED by default — fail-closed. The old 2-key denylist
- * LIVE-leaked `frontmatter.api_token_id` (the operator's bearer-token id,
- * server-injected at documents.ts createRun) to any non-`__system` member of B.
- */
-const LIBRARY_AGENT_PUBLIC_FRONTMATTER_KEYS = [
-  'model',
-  'provider',
-  'tools',
-  'skills',
-  'projects',
-  'requires_approval',
-  'max_delegation_depth',
-  'max_tokens_per_run',
-] as const;
-
-/**
- * Phase D D4 / CR-F1+F2 — strip a `__system` (library) agent down to its
- * INVOKABLE surface before it is unioned into a NON-library workspace's
- * listing. A cross-tenant member receives a library agent purely to INVOKE it
- * from a picker; its PROMPT (`body`, post the Phase-3 body-as-prompt change),
- * legacy `frontmatter.system_prompt`, and the server-managed
- * `frontmatter.api_token_id` (the operator's bearer-token id) are cross-tenant
- * content that must NOT leak.
- *
- * Frontmatter is rebuilt from a POSITIVE ALLOW-LIST
- * (`LIBRARY_AGENT_PUBLIC_FRONTMATTER_KEYS`) so any key NOT explicitly invokable
- * is dropped — closing the prior denylist's live `api_token_id` leak AND any
- * FUTURE sensitive key by construction. Top-level Document columns (id / slug /
- * title / type / workspaceId / …) are kept verbatim — the run launcher / assign
- * / mention pickers + the downstream `library:true` badge
- * (workspace-documents.ts) read those. Does NOT mutate the input; `body: ''`.
- *
- * Apply ONLY to rows whose provenance is `__system` (see the provenance-keyed
- * union below): the workspace's OWN agents must keep body + full frontmatter
- * (a member authored + edits them).
- */
-export function redactLibraryAgentForList(row: Document): Document {
-  const src = (row.frontmatter ?? {}) as Record<string, unknown>;
-  const fm: Record<string, unknown> = {};
-  for (const k of LIBRARY_AGENT_PUBLIC_FRONTMATTER_KEYS) {
-    if (k in src) fm[k] = src[k];
-  }
-  return { ...row, body: '', frontmatter: fm };
-}
-
-/**
- * CR-F2 — merge `__system` (library) rows into a customer workspace's local
- * listing with the security-critical steps a `__system` union MUST apply:
- *   1. SLUG DEDUPE: local rows SHADOW a library row of the same slug (local
- *      wins — mirrors resolveAgentForRun's run-create precedence).
- *   2. PROVENANCE-KEYED REDACTION: every surviving library row is stripped to
- *      its invokable surface (redactLibraryAgentForList) — its body /
- *      system_prompt / api_token_id are cross-tenant content that must not leak.
- *
- * Factored out so a SECOND `__system` union site (a future `__system` TRIGGER
- * union, OP-LIB-1) reuses the same merge instead of re-deriving the redaction
- * from the type branch. `local` rows are returned untouched.
- */
-function unionSystemRows(local: Document[], systemRows: Document[]): Document[] {
-  const localSlugs = new Set(local.map((d) => d.slug));
-  const redacted = systemRows
-    .filter((d) => !localSlugs.has(d.slug))
-    .map(redactLibraryAgentForList);
-  return [...local, ...redacted];
-}
-
 export async function listWorkspaceDocuments(opts: {
   workspaceId: string;
   type: 'agent' | 'trigger';
@@ -1352,53 +1238,10 @@ export async function listWorkspaceDocuments(opts: {
     ),
   });
 
-  // Phase B B8 (listing surface) — UNION the `__system` library's agents into
-  // every NON-system workspace's agent listing so library agents (the operator)
-  // appear in the run launcher / assign picker / @-mention picker. The run-CREATE
-  // path already resolves + home-stamps `__system` agents (resolveAgentForRun,
-  // createRun); this is the convenience LISTING, NOT the security boundary (B8
-  // is enforced server-side at createRun).
-  //
-  // DOCUMENTED DECISION (plan fix #4): this unions ALL `__system` type='agent'
-  // docs with NO published/internal flag — so any agent created in `__system` is
-  // instantly invokable by every customer workspace. ACCEPTABLE for v1 because
-  // `__system` holds exactly ONE intended agent (the operator), curated only by
-  // instance admins. A future INTERNAL `__system` agent would need a
-  // `frontmatter.published` filter — that's the OP-LIB-1 follow-up.
-  //
-  // The union is SOFT (no `__system` → just the local agents, no throw) and is
-  // SKIPPED when the request IS for `__system` itself (the workspace already IS
-  // the library — no self-union / double-listing). Local agents SHADOW a library
-  // agent of the same slug (dedupe by slug, local wins — mirrors the run-create
-  // precedence in resolveAgentForRun).
-  let merged = rows;
-  if (opts.type === 'agent') {
-    const systemId = await findSystemWorkspaceId(db);
-    if (systemId && systemId !== opts.workspaceId) {
-      // TODO(library-visibility): filter the __system union on frontmatter.published
-      // when a non-public __system agent is needed (OP-LIB-1)
-      const systemAgents = await db.query.documents.findMany({
-        where: and(eq(documents.workspaceId, systemId), eq(documents.type, 'agent')),
-      });
-      // Phase D D4 / CR-F2 — dedupe-then-REDACT every row that came from
-      // `__system`. The redaction is keyed on PROVENANCE (the row's
-      // workspaceId === systemId), NOT on the type branch: it strips a library
-      // row down to its invokable surface (see redactLibraryAgentForList)
-      // BECAUSE the row is cross-tenant content, regardless of WHICH union
-      // surfaced it. We strip HERE, at the loader's union point (NOT in the
-      // route), so every present + future consumer of listWorkspaceDocuments
-      // inherits the strip — the "redact at the loader, not the handler" lesson
-      // (system_prompt leaked 3× when redaction was per-handler). The
-      // workspace's OWN agents (in `rows`, workspaceId === opts.workspaceId)
-      // are untouched: a member legitimately authored + edits them.
-      //
-      // INVARIANT for OP-LIB-1: ANY future `__system` union into a customer
-      // workspace (e.g. a `__system` TRIGGER union) MUST route its rows through
-      // unionSystemRows below so it inherits the same provenance-keyed redaction
-      // and slug-dedupe — do not re-implement the merge inline.
-      merged = unionSystemRows(rows, systemAgents);
-    }
-  }
+  // Single-team model: there is no `__system` library workspace to union in —
+  // the operator is a code singleton (lib/operator.ts) and skills live in
+  // `instance_skills`. The listing is exactly the workspace's own agents/triggers.
+  const merged = rows;
 
   if (!opts.projectFilter) return merged;
   // BUG-018 — route through resolveAgentProjects so legacy / hand-edited

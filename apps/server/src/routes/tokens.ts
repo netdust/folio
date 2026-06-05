@@ -1,15 +1,12 @@
 import { zValidator } from '@hono/zod-validator';
 import { and, eq } from 'drizzle-orm';
 import { Hono } from 'hono';
-import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import { db } from '../db/client.ts';
-import { apiTokens, memberships } from '../db/schema.ts';
-import { newApiToken } from '../lib/auth.ts';
-import { roleToScopes } from '../lib/agent-schema.ts';
+import { apiTokens } from '../db/schema.ts';
+import { canSeeWorkspace, userRole } from '../lib/access.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
-import { requireInstanceAdmin } from '../lib/system-workspace.ts';
-import { serializeApiToken } from '../lib/token-reach.ts';
+import { mintToken, serializeApiToken } from '../lib/token-reach.ts';
 import {
   type AuthContext,
   getUser,
@@ -23,10 +20,11 @@ tokensRoute.use('*', requireUser);
 tokensRoute.get('/:workspaceId', async (c) => {
   const user = getUser(c);
   const workspaceId = c.req.param('workspaceId');
-  const m = await db.query.memberships.findFirst({
-    where: and(eq(memberships.workspaceId, workspaceId), eq(memberships.userId, user.id)),
-  });
-  if (!m) throw new HTTPError('FORBIDDEN', 'not a member', 403);
+  // Post-tenancy: a user may manage a workspace's tokens iff they can SEE the
+  // workspace (the access.ts convergence point), not via a membership row.
+  if (!(await canSeeWorkspace(db, user.id, workspaceId))) {
+    throw new HTTPError('FORBIDDEN', 'no access to this workspace', 403);
+  }
   const rows = await db.query.apiTokens.findMany({
     where: eq(apiTokens.workspaceId, workspaceId),
   });
@@ -48,67 +46,31 @@ tokensRoute.post(
     z.object({
       name: z.string().min(1).max(80),
       scopes: z.array(z.string()).default(['documents:read', 'documents:write']),
-      // null = instance-wide reach (capability-gated below); omitted = pin to URL ws.
-      workspaceId: z.string().nullable().optional(),
     }),
   ),
   async (c) => {
     const user = getUser(c);
     const workspaceId = c.req.param('workspaceId');
-    const m = await db.query.memberships.findFirst({
-      where: and(eq(memberships.workspaceId, workspaceId), eq(memberships.userId, user.id)),
-    });
-    if (!m) throw new HTTPError('FORBIDDEN', 'not a member', 403);
-
-    const { name, scopes, workspaceId: requestedReach } = c.req.valid('json');
-
-    // Reach: omitted → pin to the URL workspace (back-compat). Explicit null →
-    // instance reach, allowed ONLY for an instance-admin (owner/admin of __system)
-    // — T1. Reach is immutable after mint (no PATCH route, T2): this is the only
-    // place a token's workspace_id is ever set.
-    let reach: string | null = workspaceId;
-    let ceilingRole = m.role;
-    if (requestedReach === null) {
-      // Instance reach is gated on the __system owner/admin boundary (CR#6 — the
-      // shared gate). It returns the caller's __system role, which becomes the
-      // scope ceiling for the instance token (not their URL-workspace role).
-      ceilingRole = await requireInstanceAdmin(db, user.id);
-      reach = null;
-    } else if (typeof requestedReach === 'string' && requestedReach !== workspaceId) {
-      // Don't allow minting a token pinned to a DIFFERENT workspace via this URL.
-      throw new HTTPError(
-        'FORBIDDEN',
-        'workspaceId must be null (instance) or match the URL workspace',
-        403,
-      );
+    // Post-tenancy: managing a workspace's tokens requires SEEING it.
+    if (!(await canSeeWorkspace(db, user.id, workspaceId))) {
+      throw new HTTPError('FORBIDDEN', 'no access to this workspace', 403);
     }
 
-    // Scope ceiling: a caller may only mint a token carrying scopes their own
-    // role already grants (the SAME roleToScopes ceiling the runner enforces at
-    // execution time). Without this, a member mints a config:write/agents:write
-    // token and uses it directly against owner-only routes — escalating past the
-    // agent∩caller ceiling at the one place a human creates raw authority.
-    const allowed = roleToScopes(ceilingRole);
-    const over = scopes.filter((s) => !allowed.includes(s));
-    if (over.length > 0) {
-      throw new HTTPError(
-        'FORBIDDEN_SCOPE',
-        `role '${ceilingRole}' cannot mint a token with scope(s): ${over.join(', ')}`,
-        403,
-      );
-    }
-    const { token, hash } = newApiToken();
-    const id = nanoid();
-    await db.insert(apiTokens).values({
-      id,
-      workspaceId: reach,
-      name,
-      tokenHash: hash,
+    const { name, scopes } = c.req.valid('json');
+    // This route ALWAYS pins to the URL workspace. Instance (reach=null) tokens
+    // are minted ONLY via POST /instance/tokens (the prior reach=null branch here
+    // was dead — no caller passed it — and was a duplicate instance-mint path).
+    // Scope ceiling = the caller's instance role; mintToken enforces it + inserts
+    // + returns the plaintext exactly once (the single mint convergence point).
+    const ceilingRole = await userRole(db, user.id);
+    const minted = await mintToken(db, {
+      ceilingRole,
       scopes,
+      reach: workspaceId,
+      name,
       createdBy: user.id,
     });
-    // Return the plaintext token EXACTLY ONCE. `instance` flags reach=null.
-    return jsonOk(c, { id, name, token, scopes, instance: reach === null }, 201);
+    return jsonOk(c, minted, 201);
   },
 );
 
@@ -120,10 +82,10 @@ tokensRoute.delete('/:workspaceId/:tokenId', requireSessionUser, async (c) => {
   const user = getUser(c);
   const workspaceId = c.req.param('workspaceId');
   const tokenId = c.req.param('tokenId');
-  const m = await db.query.memberships.findFirst({
-    where: and(eq(memberships.workspaceId, workspaceId), eq(memberships.userId, user.id)),
-  });
-  if (!m) throw new HTTPError('FORBIDDEN', 'not a member', 403);
+  // Post-tenancy: managing a workspace's tokens requires SEEING it.
+  if (!(await canSeeWorkspace(db, user.id, workspaceId))) {
+    throw new HTTPError('FORBIDDEN', 'no access to this workspace', 403);
+  }
   await db
     .delete(apiTokens)
     .where(and(eq(apiTokens.id, tokenId), eq(apiTokens.workspaceId, workspaceId)));

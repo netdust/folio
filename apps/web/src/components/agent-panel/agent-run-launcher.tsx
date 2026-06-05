@@ -55,7 +55,7 @@ export function AgentRunLauncher({ wslug, onLaunched }: AgentRunLauncherProps) {
           <option value="">Select an agent…</option>
           {agents.map((a) => (
             <option key={a.slug} value={a.slug}>
-              {a.library ? `${a.title} (library)` : a.title}
+              {a.title}
             </option>
           ))}
         </select>

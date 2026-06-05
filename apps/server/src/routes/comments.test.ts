@@ -43,7 +43,7 @@ async function createAgentAtWorkspace(
 async function makeSecondUser(app: AppShape, workspaceId: string): Promise<string> {
   const { nanoid } = await import('nanoid');
   const { db } = await import('../db/client.ts');
-  const { users, memberships } = await import('../db/schema.ts');
+  const { users, workspaceAccess } = await import('../db/schema.ts');
   const { createSession, hashPassword } = await import('../lib/auth.ts');
   const userId = nanoid();
   const passwordHash = await hashPassword('password123');
@@ -53,7 +53,10 @@ async function makeSecondUser(app: AppShape, workspaceId: string): Promise<strin
     name: 'Bob',
     passwordHash,
   });
-  await db.insert(memberships).values({ workspaceId, userId, role: 'member' });
+  // Post-tenancy: a plain member of the workspace is one with a workspace_access
+  // grant (resolveWorkspace reads the grant). role stays the users.role default
+  // 'member'.
+  await db.insert(workspaceAccess).values({ userId, workspaceId });
   const session = await createSession(userId);
   return `folio_session=${session.id}`;
 }

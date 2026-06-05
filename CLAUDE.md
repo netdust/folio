@@ -131,8 +131,8 @@ docker build -f docker/Dockerfile -t folio:dev .
 - Auth: email-password + magic-link in v1. No SSO/OIDC in v1.
 - Status field: per-project configurable (not hard-coded states).
 - Field rendering: type inferred from value on read; per-project `fields` table overrides inference with explicit type pins.
-- AI cost model: BYOK only. Server never holds a default key.
-- Multi-tenancy: out of scope. One instance = one team. Workspaces are inside an instance.
+- AI cost model: BYOK only. Server never holds a default key. **AI keys are INSTANCE-level** (one store per instance, resolved by `(provider, ai_key_label)` — no per-workspace key), admin-gated at `/api/v1/instance/ai-keys`.
+- Multi-tenancy: out of scope. **One instance = one team. Workspaces are ORGANIZATIONAL FOLDERS, NOT a security/tenancy boundary** (the `memberships` table + `__system` reserved workspace were dropped in the drop-workspace-tenancy refactor, 2026-06). Instance authority lives on `users.role` (owner/admin/member); per-workspace/project visibility is an explicit invitation-based grant (`workspace_access` / `project_access`), decided in `lib/access.ts` (the single who-can-see-what convergence point — invariant 4a). The operator is a code-resolved runtime singleton (`lib/operator.ts`, slug `_operator`), not a seeded row. Agents resolve by slug INSTANCE-WIDE (no workspace wall); execution is bound by the project ceiling + caller authority.
 - Search: not in v1. sqlite-fts5 in v1.1.
 - Comments / attachments / email notifications: not in v1.
 - Real-time collab on a single document: not in v1. Last-write-wins with `updated_at` check.

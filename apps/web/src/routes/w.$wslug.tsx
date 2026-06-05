@@ -4,7 +4,7 @@ import { useQueries, useQueryClient } from '@tanstack/react-query';
 import { Search } from 'lucide-react';
 import { z } from 'zod';
 import { toast } from 'sonner';
-import { useIsInstanceAdmin, useIsSystemMember, useLogout, useMe } from '../lib/api/auth.ts';
+import { useIsInstanceAdmin, useLogout, useMe } from '../lib/api/auth.ts';
 import { useProjects, useUpdateProject, useDeleteProject, projectsKeys } from '../lib/api/projects.ts';
 import { type Table, tablesKeys } from '../lib/api/tables.ts';
 import { type View, viewsKeys } from '../lib/api/views.ts';
@@ -26,6 +26,7 @@ import { ProviderHealthBanner } from '../components/shell/provider-health-banner
 import { ReactorHaltBanner } from '../components/shell/reactor-halt-banner.tsx';
 import { modKeyHint } from '../lib/platform.ts';
 import { buildRailTree, type RailTreeHandlers } from '../lib/rail-tree.ts';
+import { setLastWorkspaceSlug } from '../lib/last-workspace.ts';
 import { agentPanelBus } from '../lib/agent-panel-bus.ts';
 import { AgentCockpitPanel } from '../components/agent-panel/agent-cockpit-panel.tsx';
 import { WorkspaceDocumentSlideover } from '../components/slideover/workspace-document-slideover.tsx';
@@ -73,12 +74,12 @@ function WorkspaceLayout() {
   const navigate = useNavigate();
   const routerState = useRouterState();
   const { data: me } = useMe();
-  // Show the "Instance settings" menu entry only to users with an instance-level
-  // surface to manage (shared AI keys → instance admin; System Library → system
-  // member), matching what /settings actually renders.
+  // Show the "Instance settings" menu entry only to instance admins (the
+  // surfaces /settings renders — AI keys, roles, invitations — are all
+  // instance-admin gated). The __system "System Library" entry was removed in
+  // Phase 4 (drop-workspace-tenancy).
   const isInstanceAdmin = useIsInstanceAdmin();
-  const isSystemMember = useIsSystemMember();
-  const hasInstanceSettings = isInstanceAdmin || isSystemMember;
+  const hasInstanceSettings = isInstanceAdmin;
   const { data: workspace, isLoading } = useWorkspace(wslug);
   const { data: workspaces } = useWorkspaces();
   const { data: projects } = useProjects(wslug);
@@ -93,6 +94,13 @@ function WorkspaceLayout() {
     | { kind: 'view'; pslug: string; tslug: string; viewId: string; name: string }
     | null
   >(null);
+
+  // Remember the workspace the user is in, so the root landing route reopens it
+  // next launch instead of the all-workspaces grid. Only persist once the
+  // workspace actually resolved — never store a slug that 404s.
+  useEffect(() => {
+    if (workspace) setLastWorkspaceSlug(wslug);
+  }, [workspace, wslug]);
 
   const qc = useQueryClient();
   const updateProject = useUpdateProject(wslug);
@@ -343,13 +351,6 @@ function WorkspaceLayout() {
                   onOpenAgents={() =>
                     void navigate({ to: '/w/$wslug/agents', params: { wslug } })
                   }
-                  onOpenTriggers={() =>
-                    void navigate({
-                      to: '/w/$wslug/agents',
-                      params: { wslug },
-                      search: { tab: 'triggers' },
-                    })
-                  }
                   onWorkWithAgent={() => agentPanelBus.toggle()}
                 />
               ),
@@ -364,12 +365,13 @@ function WorkspaceLayout() {
                   email={me?.user.email}
                   onSignOut={onSignOut}
                   onCreateWorkspace={onCreateWorkspace}
-                  onOpenSettings={() =>
-                    void navigate({ to: '/w/$wslug/settings', params: { wslug } })
-                  }
                   onOpenInstanceSettings={
                     hasInstanceSettings
-                      ? () => void navigate({ to: '/settings' })
+                      ? () =>
+                          void navigate({
+                            to: '/w/$wslug/instance-settings',
+                            params: { wslug },
+                          })
                       : undefined
                   }
                 />

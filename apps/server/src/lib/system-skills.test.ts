@@ -3,10 +3,8 @@ import { V1_MCP_TOOLS } from '@folio/shared';
 import {
   FOLIO_SKILL_BODY,
   FOLIO_SKILL_SLUG,
-  OPERATOR_AGENT_TITLE,
   OPERATOR_PROMPT,
   OPERATOR_TOOLS,
-  SETUP_PROJECT_REF_BODY,
 } from './system-skills.ts';
 
 describe('system skill + reference content', () => {
@@ -17,14 +15,10 @@ describe('system skill + reference content', () => {
     expect(FOLIO_SKILL_BODY).toContain('config:write');
   });
   test('the operator prompt references the folio skill + is non-empty', () => {
-    expect(OPERATOR_AGENT_TITLE.length).toBeGreaterThan(0);
     expect(OPERATOR_PROMPT.length).toBeGreaterThan(200);
     expect(OPERATOR_PROMPT).toContain(FOLIO_SKILL_SLUG);
   });
   test('every operator tool is a real V1_MCP_TOOLS member', () => {
     for (const t of OPERATOR_TOOLS) expect(V1_MCP_TOOLS).toContain(t);
-  });
-  test('the setup-a-project reference is non-empty', () => {
-    expect(SETUP_PROJECT_REF_BODY.length).toBeGreaterThan(200);
   });
 });

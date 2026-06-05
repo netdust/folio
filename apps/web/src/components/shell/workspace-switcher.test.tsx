@@ -9,12 +9,11 @@ const baseProps = {
   onSelectWorkspace: vi.fn(),
 };
 
-describe('WorkspaceSwitcher — Phase 2.5 Agents + Triggers entries', () => {
-  it('omits Agents + Triggers when handlers are not provided', () => {
+describe('WorkspaceSwitcher — Agents entry + create footer', () => {
+  it('omits Agents when its handler is not provided', () => {
     render(<WorkspaceSwitcher {...baseProps} />);
     fireEvent.click(screen.getByText('open'));
     expect(screen.queryByText('Agents & Triggers')).not.toBeInTheDocument();
-    expect(screen.queryByText('Triggers')).not.toBeInTheDocument();
     expect(screen.queryByText('Work with an agent')).not.toBeInTheDocument();
   });
 
@@ -28,25 +27,35 @@ describe('WorkspaceSwitcher — Phase 2.5 Agents + Triggers entries', () => {
     expect(onOpenAgents).toHaveBeenCalledTimes(1);
   });
 
-  it('renders Triggers entry when onOpenTriggers is provided; click fires the handler', () => {
-    const onOpenTriggers = vi.fn();
-    render(<WorkspaceSwitcher {...baseProps} onOpenTriggers={onOpenTriggers} />);
+  it('has NO standalone Triggers entry — triggers live as a tab on the agents page', () => {
+    render(<WorkspaceSwitcher {...baseProps} onOpenAgents={vi.fn()} />);
     fireEvent.click(screen.getByText('open'));
-    const triggers = screen.getByText('Triggers');
-    expect(triggers).toBeInTheDocument();
-    fireEvent.click(triggers);
-    expect(onOpenTriggers).toHaveBeenCalledTimes(1);
+    // "Agents & Triggers" is the only entry naming triggers; there is no bare
+    // "Triggers" button (the duplicate route surface was removed).
+    expect(
+      screen.queryByRole('button', { name: /^triggers$/i }),
+    ).not.toBeInTheDocument();
   });
 
-  it('renders Agents + Triggers above the existing footer when both are provided', () => {
+  it('has NO Workspace settings entry — it lives in the user menu', () => {
+    render(
+      <WorkspaceSwitcher
+        {...baseProps}
+        onCreateProject={vi.fn()}
+        onCreateWorkspace={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByText('open'));
+    expect(screen.queryByText('Workspace settings')).not.toBeInTheDocument();
+  });
+
+  it('footer = New project then Create workspace, with Agents above it', () => {
     render(
       <WorkspaceSwitcher
         {...baseProps}
         onOpenAgents={vi.fn()}
-        onOpenTriggers={vi.fn()}
         onCreateProject={vi.fn()}
         onCreateWorkspace={vi.fn()}
-        onOpenSettings={vi.fn()}
       />,
     );
     fireEvent.click(screen.getByText('open'));
@@ -54,20 +63,12 @@ describe('WorkspaceSwitcher — Phase 2.5 Agents + Triggers entries', () => {
       .getAllByRole('button')
       .map((el) => (el.textContent ?? '').trim())
       .filter((text) =>
-        [
-          'Agents & Triggers',
-          'Triggers',
-          '+ New project',
-          '+ Create workspace',
-          'Workspace settings',
-        ].includes(text),
+        ['Agents & Triggers', '+ New project', '+ Create workspace'].includes(text),
       );
     expect(labels).toEqual([
       'Agents & Triggers',
-      'Triggers',
       '+ New project',
       '+ Create workspace',
-      'Workspace settings',
     ]);
   });
 

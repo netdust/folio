@@ -6,7 +6,6 @@ import {
   useTokens,
 } from '../../lib/api/tokens.ts';
 import { formatApiError } from '../../lib/api/index.ts';
-import { useIsSystemMember } from '../../lib/api/auth.ts';
 import { Button } from '../ui/button.tsx';
 import {
   Dialog,
@@ -33,7 +32,6 @@ function relativeOrAbsolute(iso: string | null): string {
 }
 
 export function TokensTab({ wslug, workspaceId }: Props) {
-  const isInstanceAdmin = useIsSystemMember();
   const tokensQuery = useTokens(wslug, workspaceId);
   const deleteToken = useDeleteToken(wslug, workspaceId);
   const [createOpen, setCreateOpen] = useState(false);
@@ -115,7 +113,6 @@ export function TokensTab({ wslug, workspaceId }: Props) {
       <TokenCreateModal
         wslug={wslug}
         workspaceId={workspaceId}
-        isInstanceAdmin={isInstanceAdmin}
         open={createOpen}
         onOpenChange={setCreateOpen}
       />
