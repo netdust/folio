@@ -1,5 +1,7 @@
 import type { ReactNode } from 'react';
+import { Settings } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
+import { Icon } from '../ui/icon.tsx';
 
 interface UserMenuProps {
   trigger: ReactNode;
@@ -7,9 +9,9 @@ interface UserMenuProps {
   onSignOut: () => void;
   onCreateWorkspace?: () => void;
   onOpenSettings?: () => void;
-  // Instance-level settings (shared AI keys, System Library). Only provided to
-  // users who have any instance-level surface to manage (instance admin / system
-  // member), so the entry simply hides for everyone else.
+  // Instance-level settings (shared AI keys, roles, invitations) — labeled
+  // simply "Settings". Only provided to users who have an instance-level surface
+  // to manage (instance admin), so the entry hides for everyone else.
   onOpenInstanceSettings?: () => void;
 }
 
@@ -52,9 +54,10 @@ export function UserMenu({
           <button
             type="button"
             onClick={onOpenInstanceSettings}
-            className="block w-full rounded-md px-2 py-1.5 text-left text-sm text-fg-2 hover:bg-card hover:text-fg"
+            className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-fg-2 hover:bg-card hover:text-fg"
           >
-            Instance settings
+            <Icon icon={Settings} size={14} />
+            Settings
           </button>
         ) : null}
         <div className="my-1 h-px bg-border-light" />

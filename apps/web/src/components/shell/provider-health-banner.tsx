@@ -40,9 +40,12 @@ export function ProviderHealthBanner({ wslug }: Props) {
         variant="ghost"
         size="sm"
         onClick={() =>
-          // AI keys moved to the instance settings page (instance-wide store).
+          // AI keys live on the instance settings page (instance-wide store).
+          // Use the in-workspace route so the rail stays mounted — same chrome
+          // as opening Settings from the user menu.
           void navigate({
-            to: '/settings',
+            to: '/w/$wslug/instance-settings',
+            params: { wslug },
             search: { tab: 'ai', provider: first },
           })
         }

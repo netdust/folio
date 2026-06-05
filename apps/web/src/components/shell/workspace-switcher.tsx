@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { Bot, Zap, Play } from 'lucide-react';
+import { Bot, Play } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
 import { Icon } from '../ui/icon.tsx';
 import { cn } from '../ui/cn.ts';
@@ -18,11 +18,10 @@ interface WorkspaceSwitcherProps {
   onSelectWorkspace: (workspaceId: string) => void;
   onCreateWorkspace?: () => void;
   onCreateProject?: () => void;
-  onOpenSettings?: () => void;
   // Phase 2.5: agents + triggers are workspace-scoped, surfaced here instead of
-  // under each project in the rail.
+  // under each project in the rail. Triggers are reached as a tab on the agents
+  // page (no standalone switcher entry — it was a duplicate route surface).
   onOpenAgents?: () => void;
-  onOpenTriggers?: () => void;
   onWorkWithAgent?: () => void;
 }
 
@@ -32,9 +31,7 @@ export function WorkspaceSwitcher({
   onSelectWorkspace,
   onCreateWorkspace,
   onCreateProject,
-  onOpenSettings,
   onOpenAgents,
-  onOpenTriggers,
   onWorkWithAgent,
 }: WorkspaceSwitcherProps) {
   return (
@@ -64,7 +61,7 @@ export function WorkspaceSwitcher({
             </button>
           ))}
         </div>
-        {(onOpenAgents || onOpenTriggers || onWorkWithAgent) && (
+        {(onOpenAgents || onWorkWithAgent) && (
           <div className="border-t border-border-light p-1">
             {onOpenAgents ? (
               <button
@@ -74,16 +71,6 @@ export function WorkspaceSwitcher({
               >
                 <Icon icon={Bot} size={14} />
                 Agents & Triggers
-              </button>
-            ) : null}
-            {onOpenTriggers ? (
-              <button
-                type="button"
-                onClick={onOpenTriggers}
-                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-fg-2 hover:bg-card hover:text-fg"
-              >
-                <Icon icon={Zap} size={14} />
-                Triggers
               </button>
             ) : null}
             {onWorkWithAgent ? (
@@ -115,15 +102,6 @@ export function WorkspaceSwitcher({
               className="block w-full rounded-md px-2 py-1.5 text-left text-sm text-fg-2 hover:bg-card hover:text-fg"
             >
               + Create workspace
-            </button>
-          ) : null}
-          {onOpenSettings ? (
-            <button
-              type="button"
-              onClick={onOpenSettings}
-              className="block w-full rounded-md px-2 py-1.5 text-left text-sm text-fg-2 hover:bg-card hover:text-fg"
-            >
-              Workspace settings
             </button>
           ) : null}
         </div>

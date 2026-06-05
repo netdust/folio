@@ -17,10 +17,10 @@ const settingsSearchSchema = z.object({
 // Workspace-scoped settings (API tokens) stay at /w/:wslug/settings.
 export const Route = createFileRoute('/settings')({
   validateSearch: settingsSearchSchema,
-  component: InstanceSettingsPage,
+  component: InstanceSettingsBody,
 });
 
-function SettingsSection({ title, desc, children }: {
+export function SettingsSection({ title, desc, children }: {
   title: string;
   desc: string;
   children: React.ReactNode;
@@ -34,7 +34,12 @@ function SettingsSection({ title, desc, children }: {
   );
 }
 
-function InstanceSettingsPage() {
+// Body of the instance-settings page, sans route shell. The standalone
+// `/settings` route renders it bare; the in-workspace `/w/:wslug/instance-settings`
+// route renders it INSIDE the workspace Shell+Rail (so it opens with the same
+// chrome as workspace settings). Same content either way — instance settings are
+// not workspace-scoped; the workspace only provides the rail context.
+export function InstanceSettingsBody() {
   const isInstanceAdmin = useIsInstanceAdmin();
 
   return (

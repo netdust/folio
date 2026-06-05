@@ -26,6 +26,7 @@ import { ProviderHealthBanner } from '../components/shell/provider-health-banner
 import { ReactorHaltBanner } from '../components/shell/reactor-halt-banner.tsx';
 import { modKeyHint } from '../lib/platform.ts';
 import { buildRailTree, type RailTreeHandlers } from '../lib/rail-tree.ts';
+import { setLastWorkspaceSlug } from '../lib/last-workspace.ts';
 import { agentPanelBus } from '../lib/agent-panel-bus.ts';
 import { AgentCockpitPanel } from '../components/agent-panel/agent-cockpit-panel.tsx';
 import { WorkspaceDocumentSlideover } from '../components/slideover/workspace-document-slideover.tsx';
@@ -93,6 +94,13 @@ function WorkspaceLayout() {
     | { kind: 'view'; pslug: string; tslug: string; viewId: string; name: string }
     | null
   >(null);
+
+  // Remember the workspace the user is in, so the root landing route reopens it
+  // next launch instead of the all-workspaces grid. Only persist once the
+  // workspace actually resolved — never store a slug that 404s.
+  useEffect(() => {
+    if (workspace) setLastWorkspaceSlug(wslug);
+  }, [workspace, wslug]);
 
   const qc = useQueryClient();
   const updateProject = useUpdateProject(wslug);
@@ -343,13 +351,6 @@ function WorkspaceLayout() {
                   onOpenAgents={() =>
                     void navigate({ to: '/w/$wslug/agents', params: { wslug } })
                   }
-                  onOpenTriggers={() =>
-                    void navigate({
-                      to: '/w/$wslug/agents',
-                      params: { wslug },
-                      search: { tab: 'triggers' },
-                    })
-                  }
                   onWorkWithAgent={() => agentPanelBus.toggle()}
                 />
               ),
@@ -369,7 +370,11 @@ function WorkspaceLayout() {
                   }
                   onOpenInstanceSettings={
                     hasInstanceSettings
-                      ? () => void navigate({ to: '/settings' })
+                      ? () =>
+                          void navigate({
+                            to: '/w/$wslug/instance-settings',
+                            params: { wslug },
+                          })
                       : undefined
                   }
                 />
