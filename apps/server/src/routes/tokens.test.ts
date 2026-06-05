@@ -335,58 +335,30 @@ describe('tokens.ts access gate: managing a workspace needs canSeeWorkspace (:wo
 // reach). Only an instance admin (owner/admin of __system) may mint a reach=null
 // token (T1). A normal mint pins to the URL workspace (back-compat). Reach is
 // immutable — there is no route that mutates an existing token's workspace_id (T2).
-describe('tokens.ts A7 instance reach gate (T1/T2)', () => {
+describe('tokens.ts — per-workspace mint always pins to the URL workspace', () => {
   const tokensPath = (wslug: string, workspaceId: string) =>
     `/api/v1/w/${wslug}/tokens/${workspaceId}`;
 
-  test('instance-admin (users.role owner) mints a reach=null token', async () => {
+  // The prior reach=null-via-this-route capability was REMOVED (it was a
+  // duplicate instance-mint path). Instance (reach=null) tokens are now minted
+  // ONLY via POST /instance/tokens — see instance-tokens.test.ts for the
+  // owner-201 / member-403 / bearer-401 coverage. This route always pins.
+  test('a stray workspaceId:null in the body is IGNORED — token still pins to the URL ws', async () => {
     const { app, db, seed } = await makeTestApp();
-    // Make a NEW user U an instance owner (users.role) with access to acme.
-    const userId = nanoid();
-    await db.insert(schema.users).values({
-      id: userId,
-      email: `${userId}@test.local`,
-      name: 'inst-admin',
-      role: 'owner',
-    });
-    // resolveWorkspace on /w/acme gates on workspace_access. Grant it so the
-    // instance-admin reaches the route; requireInstanceAdmin (the scope-ceiling
-    // gate inside tokens.ts) reads users.role.
-    await db.insert(schema.workspaceAccess).values({ userId, workspaceId: seed.workspace.id });
-    const session = await createSession(userId);
-    const cookie = `folio_session=${session.id}`;
-
     const res = await app.request(tokensPath('acme', seed.workspace.id), {
       method: 'POST',
-      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: 'inst', scopes: ['documents:read'], workspaceId: null }),
+      headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+      // workspaceId is no longer a recognized field; Zod strips it. The token
+      // must pin to the URL workspace, never become instance-reach.
+      body: JSON.stringify({ name: 'x', scopes: ['documents:read'], workspaceId: null }),
     });
     expect(res.status).toBe(201);
     const body = await res.json();
-    expect(body.data.instance).toBe(true);
-
+    expect(body.data.instance).toBe(false);
     const row = await db.query.apiTokens.findFirst({
       where: eq(apiTokens.id, body.data.id),
     });
-    expect(row).toBeDefined();
-    expect(row?.workspaceId).toBeNull();
-  });
-
-  test('a non-admin (member) requesting workspaceId:null → 403', async () => {
-    const { app, db, seed } = await makeTestApp();
-    // A member of acme who is NOT an instance admin.
-    const memberCookie = await seedMemberSession(db, seed.workspace.id, 'member');
-    const res = await app.request(tokensPath('acme', seed.workspace.id), {
-      method: 'POST',
-      headers: { Cookie: memberCookie, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: 'x', scopes: ['documents:read'], workspaceId: null }),
-    });
-    expect(res.status).toBe(403);
-    const body = await res.json();
-    expect(body.error.code).toBe('FORBIDDEN');
-    // No instance-reach token was minted.
-    const rows = await db.query.apiTokens.findMany();
-    expect(rows.filter((r) => r.workspaceId === null).length).toBe(0);
+    expect(row?.workspaceId).toBe(seed.workspace.id); // pinned, NOT null
   });
 
   test('omitting workspaceId pins to the URL workspace (back-compat)', async () => {

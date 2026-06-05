@@ -1,16 +1,12 @@
 import { zValidator } from '@hono/zod-validator';
 import { and, eq } from 'drizzle-orm';
 import { Hono } from 'hono';
-import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import { db } from '../db/client.ts';
 import { apiTokens } from '../db/schema.ts';
 import { canSeeWorkspace, userRole } from '../lib/access.ts';
-import { newApiToken } from '../lib/auth.ts';
-import { roleToScopes } from '../lib/agent-schema.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
-import { requireInstanceAdmin } from '../lib/system-workspace.ts';
-import { serializeApiToken } from '../lib/token-reach.ts';
+import { mintToken, serializeApiToken } from '../lib/token-reach.ts';
 import {
   type AuthContext,
   getUser,
@@ -50,8 +46,6 @@ tokensRoute.post(
     z.object({
       name: z.string().min(1).max(80),
       scopes: z.array(z.string()).default(['documents:read', 'documents:write']),
-      // null = instance-wide reach (capability-gated below); omitted = pin to URL ws.
-      workspaceId: z.string().nullable().optional(),
     }),
   ),
   async (c) => {
@@ -62,57 +56,21 @@ tokensRoute.post(
       throw new HTTPError('FORBIDDEN', 'no access to this workspace', 403);
     }
 
-    const { name, scopes, workspaceId: requestedReach } = c.req.valid('json');
-
-    // Reach: omitted → pin to the URL workspace (back-compat). Explicit null →
-    // instance reach, allowed ONLY for an instance-admin (owner/admin of __system)
-    // — T1. Reach is immutable after mint (no PATCH route, T2): this is the only
-    // place a token's workspace_id is ever set.
-    let reach: string | null = workspaceId;
-    // Post-tenancy: the scope ceiling is the caller's INSTANCE role (users.role),
-    // not a per-workspace membership role.
-    let ceilingRole = await userRole(db, user.id);
-    if (requestedReach === null) {
-      // Instance reach is gated on the instance owner/admin boundary (CR#6 — the
-      // shared gate, now reading users.role). It returns the caller's instance
-      // role, which becomes the scope ceiling for the instance token.
-      ceilingRole = await requireInstanceAdmin(db, user.id);
-      reach = null;
-    } else if (typeof requestedReach === 'string' && requestedReach !== workspaceId) {
-      // Don't allow minting a token pinned to a DIFFERENT workspace via this URL.
-      throw new HTTPError(
-        'FORBIDDEN',
-        'workspaceId must be null (instance) or match the URL workspace',
-        403,
-      );
-    }
-
-    // Scope ceiling: a caller may only mint a token carrying scopes their own
-    // role already grants (the SAME roleToScopes ceiling the runner enforces at
-    // execution time). Without this, a member mints a config:write/agents:write
-    // token and uses it directly against owner-only routes — escalating past the
-    // agent∩caller ceiling at the one place a human creates raw authority.
-    const allowed = roleToScopes(ceilingRole);
-    const over = scopes.filter((s) => !allowed.includes(s));
-    if (over.length > 0) {
-      throw new HTTPError(
-        'FORBIDDEN_SCOPE',
-        `role '${ceilingRole}' cannot mint a token with scope(s): ${over.join(', ')}`,
-        403,
-      );
-    }
-    const { token, hash } = newApiToken();
-    const id = nanoid();
-    await db.insert(apiTokens).values({
-      id,
-      workspaceId: reach,
-      name,
-      tokenHash: hash,
+    const { name, scopes } = c.req.valid('json');
+    // This route ALWAYS pins to the URL workspace. Instance (reach=null) tokens
+    // are minted ONLY via POST /instance/tokens (the prior reach=null branch here
+    // was dead — no caller passed it — and was a duplicate instance-mint path).
+    // Scope ceiling = the caller's instance role; mintToken enforces it + inserts
+    // + returns the plaintext exactly once (the single mint convergence point).
+    const ceilingRole = await userRole(db, user.id);
+    const minted = await mintToken(db, {
+      ceilingRole,
       scopes,
+      reach: workspaceId,
+      name,
       createdBy: user.id,
     });
-    // Return the plaintext token EXACTLY ONCE. `instance` flags reach=null.
-    return jsonOk(c, { id, name, token, scopes, instance: reach === null }, 201);
+    return jsonOk(c, minted, 201);
   },
 );
 

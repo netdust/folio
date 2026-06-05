@@ -1,15 +1,12 @@
 import { zValidator } from '@hono/zod-validator';
 import { and, eq, isNull } from 'drizzle-orm';
 import { Hono } from 'hono';
-import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import { db } from '../db/client.ts';
 import { apiTokens } from '../db/schema.ts';
-import { roleToScopes } from '../lib/agent-schema.ts';
-import { newApiToken } from '../lib/auth.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
 import { requireInstanceAdmin } from '../lib/system-workspace.ts';
-import { serializeApiToken } from '../lib/token-reach.ts';
+import { mintToken, serializeApiToken } from '../lib/token-reach.ts';
 import { type AuthContext, getUser, requireSessionUser } from '../middleware/auth.ts';
 
 /**
@@ -69,33 +66,20 @@ instanceTokensRoute.post(
   ),
   async (c) => {
     const user = getUser(c);
-    // Returns the caller's instance role — the scope ceiling for this token.
+    // requireInstanceAdmin returns the caller's instance role — the scope ceiling.
     const ceilingRole = await requireInstanceAdmin(db, user.id);
     const { name, scopes } = c.req.valid('json');
-
-    const allowed = roleToScopes(ceilingRole);
-    const over = scopes.filter((s) => !allowed.includes(s));
-    if (over.length > 0) {
-      throw new HTTPError(
-        'FORBIDDEN_SCOPE',
-        `role '${ceilingRole}' cannot mint a token with scope(s): ${over.join(', ')}`,
-        403,
-      );
-    }
-
-    const { token, hash } = newApiToken();
-    const id = nanoid();
-    await db.insert(apiTokens).values({
-      id,
-      workspaceId: null, // instance reach — never pinned
-      name,
-      tokenHash: hash,
+    // reach hard-wired null (instance) — this route NEVER pins to a workspace.
+    // mintToken is the shared convergence point (ceiling-check + insert +
+    // reveal-once) also used by the per-workspace POST, so the two can't drift.
+    const minted = await mintToken(db, {
+      ceilingRole,
       scopes,
+      reach: null,
+      name,
       createdBy: user.id,
     });
-    // Plaintext token returned EXACTLY ONCE. `instance: true` mirrors the
-    // workspace POST's reach flag.
-    return jsonOk(c, { id, name, token, scopes, instance: true }, 201);
+    return jsonOk(c, minted, 201);
   },
 );
 

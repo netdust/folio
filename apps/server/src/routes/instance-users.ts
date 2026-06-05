@@ -1,10 +1,10 @@
 import { zValidator } from '@hono/zod-validator';
-import { count, eq, ne } from 'drizzle-orm';
+import { eq, ne } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import { db } from '../db/client.ts';
-import { apiTokens, documents, magicLinks, projects, users, workspaces } from '../db/schema.ts';
+import { magicLinks, projects, users, workspaces } from '../db/schema.ts';
 import { hashToken, newMagicToken } from '../lib/auth.ts';
 import { sendInvite } from '../lib/email.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
@@ -13,6 +13,7 @@ import {
   requireInstanceAdmin,
   requireInstanceOwner,
 } from '../lib/system-workspace.ts';
+import { assertNotLastOwner, deleteUserCascade } from '../lib/user-lifecycle.ts';
 import { type AuthContext, getUser, requireSessionUser } from '../middleware/auth.ts';
 
 /**
@@ -102,25 +103,22 @@ instanceUsersRoute.patch('/users/:id/role', zValidator('json', roleBody), async 
     );
   }
 
-  // Last-owner guard: never demote the only instance owner. Fires only when the
-  // target is CURRENTLY an owner AND the new role drops them out of owner; a
-  // no-op owner→owner is fine. Count owners via users.role (rare write path).
-  if (target.role === 'owner' && role !== 'owner') {
-    const [{ n: ownerCount } = { n: 0 }] = await db
-      .select({ n: count() })
-      .from(users)
-      .where(eq(users.role, 'owner'));
-    if (ownerCount <= 1) {
-      throw new HTTPError('LAST_OWNER', 'cannot demote the only instance owner', 409);
-    }
-  }
-
+  // Last-owner guard + the role write, in ONE transaction so the count and the
+  // update are atomic (no TOCTOU between two concurrent demotions). The guard
+  // fires only when the target is CURRENTLY an owner AND the new role drops them
+  // out of owner; a no-op owner→owner is fine.
+  //
   // Phase 4 (D-B): the role write is the side effect; the prior
   // `user.role.changed` event was scoped to `__system` (now torn down) and had
   // NO consumer beyond SSE — it is dropped (this also closes CR-11, the
   // __system-grantee role-change leak, by construction). Clients learn a role
   // change on their next /auth/me refetch.
-  await db.update(users).set({ role }).where(eq(users.id, targetId));
+  await db.transaction(async (tx) => {
+    if (target.role === 'owner' && role !== 'owner') {
+      await assertNotLastOwner(tx, 'demote');
+    }
+    await tx.update(users).set({ role }).where(eq(users.id, targetId));
+  });
 
   return jsonOk(c, { id: targetId, role });
 });
@@ -161,30 +159,14 @@ instanceUsersRoute.delete('/users/:id', async (c) => {
     throw new HTTPError('CANNOT_SELF_DELETE', 'you cannot delete your own account', 409);
   }
 
-  // T3: never delete the only owner.
-  if (target.role === 'owner') {
-    const [{ n: ownerCount } = { n: 0 }] = await db
-      .select({ n: count() })
-      .from(users)
-      .where(eq(users.role, 'owner'));
-    if (ownerCount <= 1) {
-      throw new HTTPError('LAST_OWNER', 'cannot delete the only instance owner', 409);
-    }
-  }
-
-  // One transaction: clear RESTRICT refs (T6), revoke minted tokens (T4), then
-  // delete the user (cascades sessions + grants).
-  db.transaction((tx) => {
-    // T6: documents.created_by / updated_by are RESTRICT — null them so the user
-    // delete doesn't throw; authored documents are preserved (author ref cleared).
-    tx.update(documents).set({ createdBy: null }).where(eq(documents.createdBy, targetId)).run();
-    tx.update(documents).set({ updatedBy: null }).where(eq(documents.updatedBy, targetId)).run();
-    // T4: tokens MINTED by this user are revoked (deleting the user would otherwise
-    // hit the api_tokens.created_by RESTRICT, and a nulled-owner live token is an
-    // orphaned credential). Agent-bound tokens already cascade via their agentId.
-    tx.delete(apiTokens).where(eq(apiTokens.createdBy, targetId)).run();
-    // The user delete cascades auth_sessions + workspace_access + project_access.
-    tx.delete(users).where(eq(users.id, targetId)).run();
+  // T3 + T4 + T5 + T6, atomically: the last-owner count + the FK-safe cascade run
+  // in ONE transaction so the count and the delete can't race (no TOCTOU), and a
+  // mid-way throw rolls everything back. assertNotLastOwner + deleteUserCascade
+  // are the shared helpers (lib/user-lifecycle.ts) — the same last-owner guard the
+  // role-change path uses, and the single home of the users.id FK-handling order.
+  await db.transaction(async (tx) => {
+    if (target.role === 'owner') await assertNotLastOwner(tx, 'delete');
+    deleteUserCascade(tx, targetId);
   });
 
   return jsonOk(c, { ok: true, id: targetId });

@@ -19,13 +19,9 @@ export interface ApiTokenCreateResponse {
 export interface TokenCreate {
   name: string;
   scopes: string[];
-  /**
-   * Agent-authority phase A: reach selector. Omit entirely to pin the token to
-   * the URL workspace (back-compat). Pass `null` (instance admins only) to mint
-   * a reach=null instance-wide token. The server (A7) enforces the real
-   * owner/admin-of-__system check.
-   */
-  workspaceId?: string | null;
+  // Reach is no longer chosen here — the per-workspace POST always pins to the
+  // URL workspace; instance (reach=null) tokens are minted via the dedicated
+  // /instance/tokens surface.
 }
 
 export const tokensKeys = {
