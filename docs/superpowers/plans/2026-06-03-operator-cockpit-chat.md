@@ -10,11 +10,17 @@
 
 ---
 
-## ⚠️ BUILD PRECONDITION (do not execute until satisfied)
+## ⚠️ BUILD PRECONDITION (SATISFIED) — but the plan was authored against a now-superseded model; Stage 2.5 MUST reconcile
 
-This plan is **authored now, executed AFTER `spec/agent-authority-and-skills` is merged.** As of authoring (2026-06-03) that branch is at `phase-skills B5` — Piece A reach (migration `0022_nullable_token_workspace` landed) and Piece B skills (`loadAgentDefinition` reads `__system`, `get_skill`, `set_skill_trust`) are substantially in but the other session is still finishing + writing tests. Do NOT dispatch Task 1 until the branch is merged and green.
+> **2026-06-05 reconciliation note (read before executing).** The build gate is CLEARED: `spec/agent-authority-and-skills` was superseded and corrected by `spec/drop-workspace-tenancy`, which is MERGED to `main` and pushed (tip `633aec5`). **BUT this plan's task bodies were authored against the OLD `__system`-workspace tenancy model that drop-tenancy tore down.** The spec was reconciled on 2026-06-05 (`docs/superpowers/specs/2026-06-03-operator-cockpit-chat-design.md` — read its reconciliation callouts FIRST). The Stage 2.5 ground-truth pass is now the load-bearing step that re-aligns each task. KNOWN drifts the executor MUST plan-correct (not exhaustive — 2.5 verifies all):
+> - **Migration number:** T1 says `0023` / journal idx 24. WRONG — latest on `main` is `0029_drop_memberships`; the new migration is **`0030_conversations`**, journal idx 30. Hard conflict — fix before T1.
+> - **`__system` is GONE.** T5's `agent_home_workspace_id = __system`, T13's `ensureOperatorAgent` / `__system` content seeding, and every "membership"-based caller derivation are stale. The operator is a CODE SINGLETON (`lib/operator.ts`, slug `_operator`, resolved by `resolveAgentForRun`); it currently CANNOT run (`createRun` throws `OPERATOR_RUN_UNSUPPORTED`) — wiring its runnable token-in-`loadContext` path (the deferred "D10") is part of this work. Caller authority derives from `users.role` (`roleToScopes`), NOT `memberships`. Visibility = `lib/access.ts` grants.
+> - **The confirm gate keys on a NEW `riskTier` field on `ToolDef`, NOT `CONFIRM_REQUIRED_SCOPES`** (decided 2026-06-05; see spec Irreversible-op gate §). There is no existing risk classifier to reuse. Default-to-`high` for unclassified write/delete tools (fail-closed). T7 must be re-grounded on this. `folio_api` keeps owning its own per-path tiering (don't blanket-gate it by `def.riskTier`).
+> - **Operator content** (`agent.md`/`soul.md`/reference files in T13) lives as inline constants in `lib/system-skills.ts` (`OPERATOR_PROMPT`, `FOLIO_SKILL_BODY`) seeded into `instance_skills` — NOT `__system` docs. 2.5 must confirm whether `SETUP_PROJECT_REF_BODY` survived the teardown.
+>
+> Everything else (the 14-task structure, the threat model M1–M14, the ONE-flow constraint, the M14 CAS) survives — it is model-agnostic. Reconcile, don't rewrite.
 
-**At execution start, re-run the Stage 2.5 ground-truth (per `harnessed-development`) — these signatures were verified at authoring against an UNMERGED tree and may have drifted:**
+**At execution start, re-run the Stage 2.5 ground-truth (per `harnessed-development`) — these signatures were verified at authoring against an UNMERGED + since-superseded tree and HAVE drifted:**
 
 - `executeTool(token, actor, name, args, tx?, caller?)` at `apps/server/src/lib/agent-tools.ts:164` — confirm the `caller?: { callerScopes, unattended }` shape (the confirm gate EXTENDS this param).
 - `UNATTENDED_FLOORED_SCOPES` at `agent-tools.ts:100` — confirm the floored-scope pattern (the confirm gate is its sibling).
