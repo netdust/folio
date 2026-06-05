@@ -518,6 +518,13 @@ export const reactorCursors = sqliteTable('reactor_cursors', {
  * `active_run_id` (nullable) is the single-active-turn slot (threat model M14):
  * "running = id present". Modeled as a nullable id, NOT a boolean, so a future
  * `cancelling` run-status fits without a migration.
+ *
+ * NO foreign keys — deliberate, tracking the event-plane seam (`events.documentId`,
+ * `reactor_cursors` likewise omit FKs): these are walled off from the cascade-managed
+ * entity core. CONSEQUENCE for whoever ships conversation-delete (deferred to v1.1
+ * multi-thread management): there is NO DB cascade, so that delete MUST manually GC the
+ * conversation's `messages` + `pending_ops` rows (and a dangling `pending_ops` row could
+ * otherwise still be confirmed by the T7 gate). Flagged Cluster-1 /code-review 2026-06-05.
  */
 export const conversations = sqliteTable(
   'conversations',
@@ -555,7 +562,12 @@ export const messages = sqliteTable(
       .default(sql`(unixepoch() * 1000)`),
   },
   (t) => ({
-    byConvSeq: index('messages_conv_seq_idx').on(t.conversationId, t.seq),
+    // UNIQUE — the structural backstop for the MAX(seq)+1 allocator in
+    // conversations.ts (mirrors events.seq's uniqueIndex). The single-active-turn
+    // CAS (M14, T6) is the primary guarantee against concurrent appends; this index
+    // is defense-in-depth: if that CAS is ever bypassed, a duplicate seq fails LOUD
+    // (constraint violation) instead of silently corrupting thread order.
+    byConvSeq: uniqueIndex('messages_conv_seq_idx').on(t.conversationId, t.seq),
   }),
 );
 

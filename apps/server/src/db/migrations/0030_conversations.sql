@@ -50,7 +50,7 @@ CREATE TABLE `messages` (
 	`created_at` integer DEFAULT (unixepoch() * 1000) NOT NULL
 );
 --> statement-breakpoint
-CREATE INDEX `messages_conv_seq_idx` ON `messages` (`conversation_id`,`seq`);
+CREATE UNIQUE INDEX `messages_conv_seq_idx` ON `messages` (`conversation_id`,`seq`);
 --> statement-breakpoint
 CREATE TABLE `pending_ops` (
 	`id` text PRIMARY KEY NOT NULL,

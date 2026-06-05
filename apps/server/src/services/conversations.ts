@@ -46,11 +46,11 @@ export async function appendMessage(
   },
 ): Promise<Message> {
   return db.transaction(async (tx) => {
-    const [row] = await tx
+    const [maxRow] = await tx
       .select({ value: max(messages.seq) })
       .from(messages)
       .where(eq(messages.conversationId, input.conversationId));
-    const seq = (row?.value ?? 0) + 1;
+    const seq = (maxRow?.value ?? 0) + 1;
     const inserted = {
       id: crypto.randomUUID(),
       conversationId: input.conversationId,
@@ -61,14 +61,16 @@ export async function appendMessage(
       payload: input.payload === undefined ? null : JSON.stringify(input.payload),
       runId: input.runId ?? null,
     };
-    await tx.insert(messages).values(inserted);
+    // `.returning()` yields the full row WITH the SQL-defaulted created_at in one
+    // round-trip (verified on bun:sqlite + drizzle; pattern used in agent-runs.ts),
+    // avoiding a re-read SELECT and an unsafe `as Message` cast.
+    const [row] = await tx.insert(messages).values(inserted).returning();
+    if (!row) throw new Error('appendMessage: insert returned no row');
     await tx
       .update(conversations)
       .set({ updatedAt: new Date() })
       .where(eq(conversations.id, input.conversationId));
-    return (await tx.query.messages.findFirst({
-      where: eq(messages.id, inserted.id),
-    })) as Message;
+    return row;
   });
 }
 
@@ -77,6 +79,22 @@ export async function getThread(db: DB, conversationId: string): Promise<Message
     where: eq(messages.conversationId, conversationId),
     orderBy: (m, { asc }) => [asc(m.seq)],
   });
+}
+
+/**
+ * Parse a stored message `payload` defensively. `payload` is a free `text`
+ * column; a malformed/non-JSON value (DB corruption, hand-edit, or a future
+ * writer) must NOT abort the whole thread export — markdown-as-source-of-truth
+ * is wedge-critical, so one bad row degrades to `{}` (an empty line) rather
+ * than throwing out of the serializer. Flagged Cluster-1 /code-review 2026-06-05.
+ */
+function parsePayload<T extends Record<string, unknown>>(payload: string | null): T {
+  if (!payload) return {} as T;
+  try {
+    return JSON.parse(payload) as T;
+  } catch {
+    return {} as T;
+  }
 }
 
 export async function serializeThreadMarkdown(
@@ -89,19 +107,15 @@ export async function serializeThreadMarkdown(
     if (m.kind === 'text') {
       lines.push(`### ${m.role === 'user' ? 'User' : 'Operator'}\n\n${m.body}\n`);
     } else if (m.kind === 'tool_step') {
-      const p = (m.payload ? JSON.parse(m.payload) : {}) as {
-        tool?: string;
-        summary?: string;
-        status?: string;
-      };
+      const p = parsePayload<{ tool?: string; summary?: string; status?: string }>(m.payload);
       lines.push(`- \`${p.tool ?? ''}\` — ${p.summary ?? ''} (${p.status ?? ''})`);
     } else if (m.kind === 'component') {
-      const p = (m.payload ? JSON.parse(m.payload) : {}) as {
+      const p = parsePayload<{
         type?: string;
         title?: string;
         prompt?: string;
         chosen?: string;
-      };
+      }>(m.payload);
       if (p.type === 'link_panel') {
         lines.push(`- [link: ${p.title ?? ''}]`);
       } else if (p.type === 'choice_card') {
