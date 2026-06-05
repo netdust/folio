@@ -59,6 +59,21 @@ _None in the cockpit-chat changeset._
   concurrent-409 path is covered by the unit test (`conversations.test.ts` M14,
   mocked slow runner). Not exercisable via HTTP without a slow/real run.
 
+## Reviewer pass (4 agents) — RESOLVED
+
+0 BLOCKERS. Security: clean (all M1–M14 verified in-place; the new deep-link
+server-derive is caller-scoped, no leak). 4 SHOULD-FIX, all fixed in `be2970f`:
+- perf: thread-replay windowing (`CONVERSATION_HISTORY_WINDOW=60`).
+- simplicity: deleted dead `expireStale()`.
+- simplicity: trimmed `ENTITY_TYPES` to the 4 resolvable types.
+- architecture: extracted `projectIdsVisibleInWorkspace()` (dedup the ceiling).
+
+NICE-TO-HAVE (deferred, recorded in memory/STATE.md): pending-op TTL-from-confirm;
+sse-loop unbounded live queue (pre-existing, shared); per-render MessageRow memo;
+conversation-runs ceiling N+1 memo; payload.ts re-export indirection; discriminated
+RunContext union; confirm-gate two-path DRY; finish safe-storage migration of the
+other localStorage callers.
+
 ## Track B — manual checks for the human (model-dependent; the real-key gate)
 
 The keystone real-BYOK flow CANNOT run autonomously (no Ollama up, no Anthropic
