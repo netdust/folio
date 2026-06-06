@@ -642,6 +642,38 @@ describe('folio_api write tool (P3-6/7)', () => {
     expect(await countTokens()).toBe(tokensBefore); // default-deny did NOT mint/dispatch
   });
 
+  // Operator self-correction: the real-world UNMAPPED cause is a WRONG PATH SHAPE
+  // (the operator guessed a bare `/api/v1/views/<id>` instead of the project-scoped
+  // `/api/v1/w/<wslug>/p/<pslug>/views/<id>`, and dead-ended on a bare refusal,
+  // reporting "not permitted" to the user). The refusal must carry the same
+  // shape-correcting `pathHint` the GET 404 path attaches, so the operator retries
+  // the correct path instead of giving up.
+  test('UNMAPPED write refusal carries a corrective pathHint (operator self-correction)', async () => {
+    const { seed, db: testDb } = await makeTestApp();
+    const tok = callerToken({
+      workspaceId: seed.workspace.id,
+      scopes: roleToScopes('owner'),
+      createdBy: seed.user.id,
+    });
+    const out = (await executeTool(
+      tok,
+      'agent:op',
+      'folio_api',
+      // The exact mis-shape the operator built in the cockpit: a bare, NON-project-
+      // scoped views delete. pathToScope → UNMAPPED (the project-scoped views branch
+      // requires the /w/<ws>/p/<ps>/ prefix).
+      { method: 'DELETE', path: '/api/v1/views/Gqiv9zQwdK6-KkQR6gAal', body: {} },
+      undefined,
+      { callerScopes: tok.scopes },
+    )) as { refused: boolean; reason: string; hint?: string };
+    expect(out.refused).toBe(true);
+    expect(out.reason).toMatch(/no scope mapping/);
+    // The hint names the project-scoped shape so the operator can retry correctly.
+    expect(out.hint).toBeTruthy();
+    expect(out.hint).toMatch(/PROJECT-scoped/);
+    expect(out.hint).toMatch(/w\/<wslug>\/p\/<pslug>/);
+  });
+
   test('secret write (POST /tokens) REFUSES even for a full-scope instance-style token (T6)', async () => {
     // T6: secret-class writes are NEVER applied by an agent — for the MOST
     // privileged caller (every scope incl. workspace:admin). No bypass.

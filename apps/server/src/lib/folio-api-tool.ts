@@ -335,16 +335,23 @@ export function registerFolioApiTools(): void {
       // Single refuse-with-plan envelope (CR cleanup) — every gate below returns
       // the SAME shape, so a future change to the contract (e.g. add a field the
       // cockpit UI keys on) lands in one place, not four.
-      const refuse = (reason: string) => ({
+      const refuse = (reason: string, hint?: string) => ({
         refused: true,
         reason,
         plan: { method: args.method, path: args.path, body },
+        ...(hint ? { hint } : {}),
       });
       const scopeTarget = pathToScope(args.method, args.path);
       // T5 default-deny: an unmapped write path is refused by construction. Every
       // NEW write route must add a branch to pathToScope or it fails closed here.
+      // The overwhelmingly common cause is a WRONG PATH SHAPE, not a genuinely
+      // unsupported route (e.g. the operator guessing a bare `/api/v1/views/<id>`
+      // instead of the project-scoped `/api/v1/w/<wslug>/p/<pslug>/views/<id>`).
+      // Attach the same shape-correcting `pathHint` the GET 404 path uses so the
+      // operator SELF-CORRECTS to the right path and retries, instead of dead-
+      // ending on a bare refusal and reporting "not permitted" to the user.
       if (scopeTarget === 'UNMAPPED') {
-        return refuse('no scope mapping for this write path; refused');
+        return refuse('no scope mapping for this write path; refused', pathHint(args.path));
       }
       // T6 secret-refuse: tokens/ai-keys writes are NEVER applied by an agent —
       // for EVERY token, including a full-scope instance bearer. No bypass.
