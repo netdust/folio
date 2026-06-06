@@ -5,6 +5,7 @@ import { aiKeys, apiTokens } from '../db/schema.ts';
 import * as schema from '../db/schema.ts';
 import { env } from '../env.ts';
 import { createSession, newApiToken } from '../lib/auth.ts';
+import { encryptSecret } from '../lib/crypto.ts';
 import { makeTestApp } from '../test/harness.ts';
 
 // Instance AI-key administration — /api/v1/instance/ai-keys (session-only,
@@ -288,7 +289,7 @@ describe('DELETE /api/v1/instance/ai-keys/:keyId', () => {
       id,
       provider: 'anthropic',
       label: 'default',
-      encryptedKey: 'x',
+      encryptedKey: encryptSecret(''),
     });
     const res = await app.request(`${PATH}/${id}`, {
       method: 'DELETE',
@@ -303,7 +304,7 @@ describe('DELETE /api/v1/instance/ai-keys/:keyId', () => {
     const { app, db } = await makeTestApp();
     const memberCookie = await seedMemberSession(db); // genuine non-admin
     const id = nanoid();
-    await db.insert(aiKeys).values({ id, provider: 'anthropic', label: 'default', encryptedKey: 'x' });
+    await db.insert(aiKeys).values({ id, provider: 'anthropic', label: 'default', encryptedKey: encryptSecret('') });
     const res = await app.request(`${PATH}/${id}`, {
       method: 'DELETE',
       headers: { Cookie: memberCookie },
@@ -314,7 +315,7 @@ describe('DELETE /api/v1/instance/ai-keys/:keyId', () => {
   test('a bearer cannot reach the DELETE route (session-only)', async () => {
     const { app, db, seed } = await makeTestApp();
     const id = nanoid();
-    await db.insert(aiKeys).values({ id, provider: 'anthropic', label: 'default', encryptedKey: 'x' });
+    await db.insert(aiKeys).values({ id, provider: 'anthropic', label: 'default', encryptedKey: encryptSecret('') });
     const { token, hash } = newApiToken();
     await db.insert(apiTokens).values({
       id: nanoid(),
@@ -367,7 +368,7 @@ describe('PUT /api/v1/instance/ai-keys/operator-model', () => {
       id: nanoid(),
       provider: 'ollama',
       label: 'default',
-      encryptedKey: 'x',
+      encryptedKey: encryptSecret(''),
       baseUrl: 'https://ollama.example.com',
     });
     const res = await app.request(OM, {

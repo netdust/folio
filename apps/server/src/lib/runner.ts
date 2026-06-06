@@ -204,6 +204,14 @@ export interface RunContext {
    * `pending_ops` row. Set alongside `sink` on a conversation run.
    */
   conversationId?: string;
+  /**
+   * Operator conversation run only: true when the configured operator key row was
+   * NOT found (a dangling operator_model reference — the key was deleted after
+   * selection). The conversation preflight blocks loudly for EVERY provider when
+   * set, so a dangling ollama ref can't silently fall back to the localhost
+   * DEFAULT_BASE (security review #1). Absent/false on document runs.
+   */
+  keyRowMissing?: boolean;
 }
 
 /**
@@ -621,15 +629,33 @@ async function loadConversationContext(
   // fm.provider/ai_key_label come from opModel would fetch the wrong credential
   // (e.g. the anthropic key for an ollama run) and never use the configured
   // row's validated baseUrl — threat-model M2. Absent key is a pre-flight failure
-  // (no_ai_key), EXCEPT for ollama, which is legitimately keyless (see preflight).
+  // (no_ai_key), EXCEPT for ollama, which is legitimately keyless. The operator
+  // ALWAYS expects a configured key ROW (the PUT /operator-model referential
+  // check guarantees one at set-time). A MISSING row at run-time means a dangling
+  // reference (the key was deleted after selection) — block loudly for EVERY
+  // provider, incl. ollama, so a dangling ollama ref can't silently fall back to
+  // the localhost DEFAULT_BASE (a loopback fetch that skipped validatePublicUrl —
+  // security review #1). `keyRowMissing` drives the conversation preflight below.
   const keyRow = await db.query.aiKeys.findFirst({
     where: and(
       eq(aiKeys.provider, opModel.provider as ProviderName),
       eq(aiKeys.label, opModel.aiKeyLabel),
     ),
   });
-  const apiKey = keyRow ? decryptSecret(keyRow.encryptedKey) : '';
+  // Decrypt defensively: a malformed/corrupt encryptedKey (direct DB seeding;
+  // the route always writes valid ciphertext incl. encryptSecret('') for ollama)
+  // must degrade to "no key" — NOT abort loadConversationContext with a 500
+  // (security review #2; mirrors the tolerant posture of M7).
+  let apiKey = '';
+  if (keyRow) {
+    try {
+      apiKey = decryptSecret(keyRow.encryptedKey);
+    } catch {
+      apiKey = '';
+    }
+  }
   const baseUrl = keyRow?.baseUrl ?? undefined;
+  const keyRowMissing = !keyRow;
 
   return {
     run,
@@ -658,6 +684,7 @@ async function loadConversationContext(
     unattended: false,
     sink: makeConversationSink(db, convPending.conversationId, runId),
     conversationId: convPending.conversationId,
+    keyRowMissing,
   };
 }
 
@@ -857,12 +884,13 @@ async function preflight(ctx: RunContext, excludeRunId?: string): Promise<boolea
  * conversation finally (see runAgent) regardless of which path blocks.
  */
 async function conversationPreflight(ctx: RunContext): Promise<boolean> {
-  // Ollama is legitimately KEYLESS (local) — its ai_keys row stores an empty
-  // ciphertext, so apiKey==='' is EXPECTED, not "no key configured". Only gate on
-  // a missing key for providers that actually require one; otherwise a correctly
-  // configured ollama operator would be wrongly blocked here (review #2).
+  // Block when the operator's configured key ROW is missing — for EVERY provider
+  // (security review #1). A dangling reference (key deleted after selection) must
+  // not let ollama silently fall back to the localhost DEFAULT_BASE. Otherwise:
+  // ollama is legitimately KEYLESS (its row stores an empty ciphertext, so
+  // apiKey==='' is EXPECTED) — only a key-REQUIRING provider with no apiKey blocks.
   const requiresKey = ctx.fm.provider !== 'ollama';
-  if (requiresKey && !ctx.apiKey) {
+  if (ctx.keyRowMissing || (requiresKey && !ctx.apiKey)) {
     if (ctx.sink) {
       await ctx.sink.text(
         'No AI key is configured for this provider. Ask an instance admin to add one in Settings → AI, then try again.',

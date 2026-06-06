@@ -21,6 +21,7 @@ import { makeTestApp } from '../test/harness.ts';
 import {
   aiKeys,
   conversations,
+  messages,
   instanceSkills,
   projectAccess,
   projects,
@@ -327,6 +328,35 @@ describe('createConversationRun → loadContext — end-to-end wiring (seam)', (
     // ...AND the key+baseUrl are resolved from THAT row (the #1 fix). baseUrl
     // from the ollama 'local' row — NOT undefined (which the wrong-row lookup gave).
     expect(ctx!.baseUrl).toBe('https://ollama.example.com');
+    // The configured key ROW exists → not a dangling reference.
+    expect(ctx!.keyRowMissing).toBe(false);
+  });
+
+  // security review #1: a DANGLING operator_model reference (the configured key
+  // was deleted after selection) must be flagged so the preflight blocks loudly
+  // for EVERY provider — incl. ollama, which would otherwise fall back to the
+  // localhost DEFAULT_BASE (a loopback fetch that skipped validatePublicUrl).
+  test('a dangling operator_model reference (key deleted) flags keyRowMissing', async () => {
+    const { db, seed } = await setup();
+    await setOperatorModelSetting(db, {
+      provider: 'ollama',
+      model: 'llama3.1:8b',
+      aiKeyLabel: 'local',
+    });
+    // NO ollama 'local' key row exists (it was deleted / never persisted).
+    const conv = await createConversation(db, {
+      createdBy: seed.user.id,
+      operatorAgentId: '_operator',
+      title: 'Untitled',
+    });
+    const runId = nanoid();
+    await createConversationRun(db, {
+      conversation: { id: conv.id, createdBy: seed.user.id },
+      runId,
+    });
+    const ctx = await loadContext(runId);
+    expect(ctx!.keyRowMissing).toBe(true);
+    expect(ctx!.baseUrl).toBeUndefined(); // no row → no (unvalidated) baseUrl used
   });
 
   test('with NO operator_model setting, the operator falls back to the anthropic default', async () => {
@@ -376,6 +406,43 @@ describe('conversation run — slot released on every terminal path (M14 wedge f
 
     const row = await db.query.conversations.findFirst({ where: eq(conversations.id, conv.id) });
     expect(row?.activeRunId).toBeNull(); // released — the conversation is NOT wedged
+  });
+
+  // security review #1 (behavior half): a DANGLING ollama operator_model (setting
+  // → ollama, but no key row) must BLOCK at preflight — NOT silently stream to the
+  // localhost DEFAULT_BASE. Ollama is normally keyless-exempt, so this proves the
+  // preflight acts on keyRowMissing (not just on apiKey). Bite: revert the
+  // `ctx.keyRowMissing ||` guard and ollama passes preflight → NO block message.
+  test('a dangling ollama operator_model BLOCKS at preflight (no silent localhost fallback)', async () => {
+    const { db, seed } = await setup();
+    await setOperatorModelSetting(db, {
+      provider: 'ollama',
+      model: 'llama3.1:8b',
+      aiKeyLabel: 'local',
+    });
+    // NO ollama 'local' row.
+    const conv = await createConversation(db, {
+      createdBy: seed.user.id,
+      operatorAgentId: '_operator',
+      title: 'Untitled',
+    });
+    const runId = nanoid();
+    await createConversationRun(db, {
+      conversation: { id: conv.id, createdBy: seed.user.id },
+      runId,
+    });
+    await db.update(conversations).set({ activeRunId: runId }).where(eq(conversations.id, conv.id));
+
+    await runAgent({ runId });
+
+    // The preflight blocked: the thread carries the "No AI key" message and NO
+    // operator turn streamed (a dangling ollama did NOT reach the provider).
+    const msgs = await db.query.messages.findMany({ where: eq(messages.conversationId, conv.id) });
+    const blocked = msgs.some((m) => m.role === 'operator' && m.body.includes('No AI key is configured'));
+    expect(blocked).toBe(true);
+    // Slot released (not wedged), same M14 invariant.
+    const row = await db.query.conversations.findFirst({ where: eq(conversations.id, conv.id) });
+    expect(row?.activeRunId).toBeNull();
   });
 });
 
