@@ -1276,6 +1276,15 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
       let roundHadSuccess = false;
       let roundHadRecoverableError = false;
       let fatalReturned = false;
+      // Operator cockpit chat — `ask_choice` is a TURN-TERMINATING tool. When the
+      // operator successfully emits a choice card this round, the turn must END
+      // CLEANLY (status `completed`) so the run releases its slot and waits; the
+      // user's button click then starts a FRESH turn (startTurn). Set ONLY on the
+      // success branch below (never on a recoverable/fatal error), and acted on
+      // only when `ctx.sink` is set (a conversation run) — on document/MCP/
+      // headless runs the handler throws `forbidden:` (fatal) and never reaches
+      // success, so this stays false there.
+      let askedChoice = false;
 
       for (const tc of collectedToolCalls) {
         try {
@@ -1302,6 +1311,8 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
           const resultString = typeof result === 'string' ? result : JSON.stringify(result);
           toolResultMsgs.push({ role: 'tool', tool_use_id: tc.id, content: resultString });
           roundHadSuccess = true;
+          // A successful `ask_choice` ends the turn cleanly (see askedChoice decl).
+          if (tc.name === 'ask_choice') askedChoice = true;
           // Operator cockpit chat (Task 4) — on a conversation run, record a
           // `tool_step` row so the thread shows what the operator did this turn.
           // The `ui` tools already emit their own `component` row via the sink;
@@ -1405,6 +1416,26 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
           );
           return;
         }
+      }
+
+      // Operator cockpit chat — TURN-TERMINATING `ask_choice`. A successful choice
+      // card on a conversation run is a CLEAN turn boundary, not an error: stop
+      // looping and complete the turn the same way a normal stop does, preserving
+      // any assistant preamble (textBuf) as the operator's message. The run flips
+      // to `completed`, the slot releases, and the user's button click starts a
+      // FRESH turn. Structural enforcement — the runner ends the turn regardless
+      // of what the model would have done next (no reliance on the prompt). Guard
+      // on `ctx.sink` so only conversation runs are affected; askedChoice can only
+      // be true on a successful handler call, which on non-conversation runs throws
+      // `forbidden:` (fatal) and never sets it. Cancel check first, mirroring the
+      // terminal path below.
+      if (ctx.sink && askedChoice) {
+        if (await wasCancelled(ctx)) {
+          await handleCancel(ctx);
+          return;
+        }
+        await postResultAndComplete(ctx, textBuf, 'stop');
+        return;
       }
 
       continue; // next round

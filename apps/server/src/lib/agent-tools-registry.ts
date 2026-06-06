@@ -2116,7 +2116,9 @@ export function registerRealTools(): void {
         prompt: args.prompt,
         options: args.options,
       });
-      return textResult({ ok: true });
+      // The runner enforces the stop STRUCTURALLY (a successful ask_choice ends
+      // the turn cleanly regardless of this text) — see runner.ts askedChoice.
+      return textResult({ ok: true, note: 'choice card shown; this turn ends — the user will pick' });
     },
   });
 

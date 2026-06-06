@@ -41,7 +41,9 @@ import { mcpInvalidParams } from './mcp-errors.ts';
 import { __setCcSpawnForTest, buildToolDefs, loadContext, rejectRun, resolveOperatorRunModel, runAgent, runAgentResume } from './runner.ts';
 import { seedInstanceSkills } from './instance-skills.ts';
 import { effectiveReach } from './token-reach.ts';
-import { workspaces } from '../db/schema.ts';
+import { conversations, messages, workspaces } from '../db/schema.ts';
+import { createConversation } from '../services/conversations.ts';
+import { createConversationRun } from '../services/conversation-runs.ts';
 
 type TestDB = Awaited<ReturnType<typeof makeTestApp>>['db'];
 
@@ -2743,5 +2745,112 @@ describe('resolveOperatorRunModel — configured operator model over the default
     expect(
       resolveOperatorRunModel({ provider: 'ollama', model: 'llama3.1:8b', aiKeyLabel: 'local' }, def),
     ).toEqual({ provider: 'ollama', model: 'llama3.1:8b', aiKeyLabel: 'local' });
+  });
+});
+
+// ===========================================================================
+// Operator cockpit chat — `ask_choice` ends the turn CLEANLY (turn-terminating).
+//
+// The operator chat is turn-based: a tool that asks the user a question must
+// emit its card and END THE TURN cleanly, so the run completes and waits; the
+// button click starts a FRESH turn. Before the fix, `ask_choice`'s handler
+// returned success, so the runner's tool loop KEPT LOOPING in the same turn —
+// the model rambled / re-asked, and the slot stayed held (409 OPERATOR_BUSY on
+// the click). This proves the runner now structurally ends the turn after a
+// successful choice card (no reliance on the prompt).
+//
+// RED proof (pre-fix runner): the loop continues → the stub is pulled a SECOND
+// time → control.called === 2 (the round-2 text-stop) instead of 1.
+// ===========================================================================
+describe('ask_choice — turn-terminating clean stop (operator cockpit)', () => {
+  test('a successful ask_choice ends the turn after ONE round; status completed; card row appended', async () => {
+    const { db, seed } = await makeTestApp();
+    // The operator's definitional `folio` skill must be present (loadContext
+    // hard-fails MISSING_SKILL otherwise — invariant 11).
+    await seedInstanceSkills(db);
+    // A real anthropic 'default' key so conversationPreflight passes (the network
+    // is stubbed; only key PRESENCE matters here).
+    await db.insert(aiKeys).values({
+      id: nanoid(),
+      provider: 'anthropic',
+      label: 'default',
+      encryptedKey: encryptSecret('sk-test-fake-key'),
+    });
+
+    // A conversation-backed run authorized as the owner (full operator reach).
+    const conv = await createConversation(db, {
+      createdBy: seed.user.id,
+      operatorAgentId: '_operator',
+      title: 'Untitled',
+    });
+    const runId = nanoid();
+    await createConversationRun(db, {
+      conversation: { id: conv.id, createdBy: seed.user.id },
+      runId,
+    });
+    // Mirror the route's CAS acquire so we can assert the slot is RELEASED after.
+    await db.update(conversations).set({ activeRunId: runId }).where(eq(conversations.id, conv.id));
+
+    // Provider stub: round 1 emits a single ask_choice tool_call (valid args)
+    // then done(tool_use). Records every pull — a SECOND pull means the loop did
+    // NOT terminate (the bug).
+    const control: StubControl = {
+      rounds: [
+        [
+          { type: 'text', delta: 'Sure — which one?' },
+          {
+            type: 'tool_call',
+            id: 'tc-1',
+            name: 'ask_choice',
+            arguments: {
+              prompt: 'Pick a project',
+              options: [
+                { id: 'a', label: 'Alpha' },
+                { id: 'b', label: 'Beta' },
+              ],
+            },
+          },
+          { type: 'done', reason: 'tool_use' },
+        ],
+        // Round 2 should NEVER be pulled. If the (pre-fix) loop continues, this
+        // is what it would get — a text stop with the tell-tale ramble.
+        [
+          { type: 'text', delta: "It seems the choice card response isn't being captured." },
+          { type: 'done', reason: 'stop' },
+        ],
+      ],
+      called: 0,
+    };
+    installProviderStub(control);
+
+    await runAgent({ runId });
+
+    // 1) The turn ended after exactly ONE round — the runner stopped at the card.
+    expect(control.called).toBe(1);
+
+    // 2) The choice_card component row was appended to the thread.
+    const msgs = await db.query.messages.findMany({
+      where: eq(messages.conversationId, conv.id),
+    });
+    const cards = msgs.filter((m) => m.kind === 'component');
+    expect(cards.length).toBe(1);
+    const payload = JSON.parse(cards[0]!.payload ?? '{}') as { type?: string };
+    expect(payload.type).toBe('choice_card');
+
+    // 3) The turn completed CLEANLY — no failure / ramble text leaked into the
+    // thread (the pre-fix round-2 text-stop would append that string).
+    const operatorText = msgs
+      .filter((m) => m.role === 'operator' && m.kind === 'text')
+      .map((m) => m.body)
+      .join('\n');
+    expect(operatorText).not.toContain("isn't being captured");
+    // The preamble before the card is preserved as the operator's message.
+    expect(operatorText).toContain('which one?');
+
+    // 4) The run released its single-active-turn slot (NOT wedged at 409).
+    const row = await db.query.conversations.findFirst({
+      where: eq(conversations.id, conv.id),
+    });
+    expect(row?.activeRunId).toBeNull();
   });
 });
