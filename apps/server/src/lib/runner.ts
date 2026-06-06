@@ -1361,6 +1361,12 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
           // the model can self-correct, falling back to the status-sanitized
           // phrase for unknown throws (mitigation 65 — never a raw SDK string /
           // key / baseUrl / arg value / message body).
+          // Log the RAW error server-side (never surfaced — mitigation 5): the
+          // user/model only get the sanitized phrase, so without this a tool that
+          // throws a statusless error shows the opaque "Network error or
+          // unreachable host." with the real cause lost (the same diagnostics
+          // black hole as failRunLastResort — this is the recoverable-path twin).
+          console.error(`[runner] tool '${tc.name}' threw (recoverable):`, err);
           toolResultMsgs.push({
             role: 'tool',
             tool_use_id: tc.id,
