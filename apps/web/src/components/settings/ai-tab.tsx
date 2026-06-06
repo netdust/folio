@@ -4,6 +4,8 @@ import type { AiProvider } from '../../lib/api/settings.ts';
 import {
   useDeleteInstanceAiKey,
   useInstanceAiKeys,
+  useOperatorModel,
+  useSetOperatorModel,
   useUpsertInstanceAiKey,
 } from '../../lib/api/instance-ai-keys.ts';
 import { useTestKey } from '../../lib/api/ai-test-key.ts';
@@ -35,11 +37,18 @@ export function AiTab({ wslug }: Props) {
   const [apiKey, setApiKey] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
   const [testResult, setTestResult] = useState<null | { ok: boolean; reason?: string }>(null);
+  // Per-provider model the admin will assign to the operator (a key has no model
+  // of its own); defaults to the provider's first known model, editable per row.
+  const [operatorModelByProvider, setOperatorModelByProvider] = useState<
+    Partial<Record<AiProvider, string>>
+  >({});
 
   const keysQuery = useInstanceAiKeys();
   const upsertKey = useUpsertInstanceAiKey();
   const deleteKey = useDeleteInstanceAiKey();
   const testKey = useTestKey();
+  const operatorModel = useOperatorModel();
+  const setOperatorModel = useSetOperatorModel();
 
   // B round 3 fix #9 — replace the round-2 providerRef + useEffect pattern
   // with monotonically-incrementing sequence ids per inflight operation.
@@ -169,6 +178,23 @@ export function AiTab({ wslug }: Props) {
         toast.info(`Save failed for previous provider (${providerAtClick})`);
         return;
       }
+      toast.error(formatApiError(err));
+    }
+  }
+
+  // T5: mark a configured (provider, default-label) key as the operator's model.
+  // A KEY carries no model, so default to the provider's first known model; the
+  // admin can refine the exact model in the per-row input before marking. The
+  // server validates the (provider, aiKeyLabel) references a real key (422 else).
+  async function onUseForOperator(p: AiProvider, modelForOperator: string) {
+    try {
+      await setOperatorModel.mutateAsync({
+        provider: p,
+        model: modelForOperator,
+        aiKeyLabel: 'default',
+      });
+      toast.success(`Operator now uses ${p} / ${modelForOperator}`);
+    } catch (err) {
       toast.error(formatApiError(err));
     }
   }
@@ -314,6 +340,10 @@ export function AiTab({ wslug }: Props) {
             const defaultRow = rows.find((k) => k.label === 'default');
             const otherRows = rows.filter((k) => k.label !== 'default');
             const noRows = rows.length === 0;
+            // T5: is THIS provider's default key the one the operator runs on?
+            const om = operatorModel.data;
+            const isOperatorKey = om?.provider === p && om?.aiKeyLabel === 'default';
+            const rowModel = operatorModelByProvider[p] ?? KNOWN_MODELS[p][0];
             return (
               <li
                 key={p}
@@ -333,6 +363,11 @@ export function AiTab({ wslug }: Props) {
                         configured via API (no default-label key)
                       </span>
                     )}
+                    {isOperatorKey ? (
+                      <span className="ml-2 rounded bg-primary/10 px-1.5 py-0.5 text-xs font-medium text-primary">
+                        operator{om?.model ? ` · ${om.model}` : ''}
+                      </span>
+                    ) : null}
                   </span>
                   {defaultRow ? (
                     <Button
@@ -347,6 +382,33 @@ export function AiTab({ wslug }: Props) {
                     </Button>
                   ) : null}
                 </div>
+                {/* T5: assign this provider's default key as the operator's model.
+                    A key carries no model, so the admin picks one here. */}
+                {defaultRow ? (
+                  <div className="mt-1.5 flex items-center gap-2">
+                    <input
+                      value={rowModel}
+                      onChange={(e) =>
+                        setOperatorModelByProvider((prev) => ({ ...prev, [p]: e.target.value }))
+                      }
+                      list={`operator-models-${p}`}
+                      aria-label={`Operator model for ${p}`}
+                      className="w-48 rounded-md border border-border-light bg-content px-2 py-1 text-xs"
+                    />
+                    <datalist id={`operator-models-${p}`}>
+                      {KNOWN_MODELS[p].map((m) => (
+                        <option key={m} value={m} />
+                      ))}
+                    </datalist>
+                    <Button
+                      variant="secondary"
+                      disabled={setOperatorModel.isPending || !rowModel.trim()}
+                      onClick={() => onUseForOperator(p, rowModel.trim())}
+                    >
+                      {isOperatorKey ? 'Update operator model' : 'Use for operator'}
+                    </Button>
+                  </div>
+                ) : null}
                 {otherRows.length > 0 ? (
                   <div className="mt-1 text-xs text-fg-2">
                     {otherRows.length} other label

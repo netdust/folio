@@ -6,6 +6,8 @@ import {
   useInstanceAiKeys,
   useUpsertInstanceAiKey,
   useDeleteInstanceAiKey,
+  useOperatorModel,
+  useSetOperatorModel,
 } from '../../lib/api/instance-ai-keys.ts';
 
 const mockTestMutate = vi.fn(async () => ({ ok: true } as const));
@@ -17,6 +19,8 @@ vi.mock('../../lib/api/instance-ai-keys.ts', () => ({
   useInstanceAiKeys: vi.fn(() => ({ data: [], isLoading: false })),
   useUpsertInstanceAiKey: vi.fn(() => ({ mutateAsync: vi.fn(), isPending: false })),
   useDeleteInstanceAiKey: vi.fn(() => ({ mutateAsync: vi.fn(), isPending: false })),
+  useOperatorModel: vi.fn(() => ({ data: null, isLoading: false })),
+  useSetOperatorModel: vi.fn(() => ({ mutateAsync: vi.fn(), isPending: false })),
 }));
 
 vi.mock('sonner', () => ({
@@ -41,6 +45,11 @@ describe('AiTab', () => {
       isPending: false,
     } as never);
     vi.mocked(useDeleteInstanceAiKey).mockReturnValue({
+      mutateAsync: vi.fn(async () => ({ ok: true })),
+      isPending: false,
+    } as never);
+    vi.mocked(useOperatorModel).mockReturnValue({ data: null, isLoading: false } as never);
+    vi.mocked(useSetOperatorModel).mockReturnValue({
       mutateAsync: vi.fn(async () => ({ ok: true })),
       isPending: false,
     } as never);
@@ -309,5 +318,57 @@ describe('AiTab', () => {
     );
     expect(ollamaRow?.textContent).toMatch(/prod/);
     expect(ollamaRow?.textContent).toMatch(/ollama\.internal\.example/);
+  });
+
+  describe('operator model selection (T5)', () => {
+    function seedAnthropicDefaultKey() {
+      vi.mocked(useInstanceAiKeys).mockReturnValue({
+        data: [
+          {
+            id: 'k1',
+            provider: 'anthropic',
+            label: 'default',
+            baseUrl: null,
+            createdAt: '2026-01-01T00:00:00Z',
+          },
+        ],
+        isLoading: false,
+      } as never);
+    }
+
+    test('a configured key shows a "Use for operator" control', () => {
+      seedAnthropicDefaultKey();
+      renderTab();
+      expect(screen.getByRole('button', { name: /use for operator/i })).toBeInTheDocument();
+    });
+
+    test('clicking "Use for operator" sends {provider, model, aiKeyLabel}', async () => {
+      seedAnthropicDefaultKey();
+      const setMutate = vi.fn(async () => ({ ok: true }));
+      vi.mocked(useSetOperatorModel).mockReturnValue({ mutateAsync: setMutate, isPending: false } as never);
+      renderTab();
+      fireEvent.click(screen.getByRole('button', { name: /use for operator/i }));
+      await waitFor(() => expect(setMutate).toHaveBeenCalledTimes(1));
+      const arg = setMutate.mock.calls[0]![0] as { provider: string; model: string; aiKeyLabel: string };
+      expect(arg.provider).toBe('anthropic');
+      expect(arg.aiKeyLabel).toBe('default');
+      expect(typeof arg.model).toBe('string');
+      expect(arg.model.length).toBeGreaterThan(0);
+    });
+
+    test('the active operator key is marked', () => {
+      seedAnthropicDefaultKey();
+      vi.mocked(useOperatorModel).mockReturnValue({
+        data: { provider: 'anthropic', model: 'claude-sonnet-4-6', aiKeyLabel: 'default' },
+        isLoading: false,
+      } as never);
+      const { container } = renderTab();
+      const rows = container.querySelectorAll('ul > li');
+      const anthropicRow = Array.from(rows).find(
+        (li) => li.querySelector('span.font-medium')?.textContent === 'anthropic',
+      );
+      // The operator badge marks the active provider's row.
+      expect(anthropicRow?.textContent).toMatch(/operator/i);
+    });
   });
 });

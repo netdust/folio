@@ -50,6 +50,7 @@ export const client = {
   getRaw: (path: string) => request<string>('GET', path),
   post: <T>(path: string, body?: unknown) => request<T>('POST', path, body),
   postMd: <T>(path: string, md: string) => request<T>('POST', path, md, 'text/markdown'),
+  put: <T>(path: string, body?: unknown) => request<T>('PUT', path, body),
   patch: <T>(path: string, body?: unknown) => request<T>('PATCH', path, body),
   patchMd: <T>(path: string, md: string) => request<T>('PATCH', path, md, 'text/markdown'),
   delete: <T = void>(path: string) => request<T>('DELETE', path),

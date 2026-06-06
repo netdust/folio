@@ -5,6 +5,8 @@ import type { ReactNode } from 'react';
 import {
   useDeleteInstanceAiKey,
   useInstanceAiKeys,
+  useOperatorModel,
+  useSetOperatorModel,
   useUpsertInstanceAiKey,
 } from './instance-ai-keys.ts';
 
@@ -45,6 +47,73 @@ describe('useInstanceAiKeys', () => {
     vi.stubGlobal('fetch', fetchMock);
     renderHook(() => useInstanceAiKeys({ enabled: false }), { wrapper: wrap(qc) });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('useOperatorModel', () => {
+  it('projects operator_model from the same GET (no extra fetch)', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            data: {
+              keys: [],
+              operator_model: { provider: 'ollama', model: 'llama3.1:8b', aiKeyLabel: 'local' },
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        ),
+      ),
+    );
+    const { result } = renderHook(() => useOperatorModel(), { wrapper: wrap(qc) });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toEqual({ provider: 'ollama', model: 'llama3.1:8b', aiKeyLabel: 'local' });
+  });
+
+  it('is null when no operator model is set', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        new Response(JSON.stringify({ data: { keys: [], operator_model: null } }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      ),
+    );
+    const { result } = renderHook(() => useOperatorModel(), { wrapper: wrap(qc) });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toBeNull();
+  });
+});
+
+describe('useSetOperatorModel', () => {
+  it('PUTs /api/v1/instance/ai-keys/operator-model with {provider, model, aiKeyLabel}', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const calls: { url: string; method?: string; body?: unknown }[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo, init?: RequestInit) => {
+        calls.push({
+          url: String(input),
+          method: init?.method,
+          body: init?.body ? JSON.parse(String(init.body)) : undefined,
+        });
+        return new Response(
+          JSON.stringify({
+            data: { ok: true, operator_model: { provider: 'ollama', model: 'llama3.1:8b', aiKeyLabel: 'local' } },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }),
+    );
+    const { result } = renderHook(() => useSetOperatorModel(), { wrapper: wrap(qc) });
+    await result.current.mutateAsync({ provider: 'ollama', model: 'llama3.1:8b', aiKeyLabel: 'local' });
+    expect(calls[0]!.url).toContain('/api/v1/instance/ai-keys/operator-model');
+    expect(calls[0]!.method).toBe('PUT');
+    expect(calls[0]!.body).toEqual({ provider: 'ollama', model: 'llama3.1:8b', aiKeyLabel: 'local' });
   });
 });
 
