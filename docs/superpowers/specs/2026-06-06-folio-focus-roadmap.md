@@ -9,7 +9,9 @@
 > §3.5 within it is the source-grounded structural-debt assessment (the four "weak/risky" points
 > checked against code). §1 is the strategic thesis. §2 is what's already done (so we don't rebuild
 > it). §4 is the two external reports' verbatim signal + how it reconciles. §5 is the open
-> brainstorm questions to bring to the working session.
+> brainstorm questions to bring to the working session. **§6 is the sequence & gates — the
+> "what we do and when": the discrete shippable chunks, their order, and dependencies (this is
+> NOT one build plan).** §7 is the one-screen priority summary.
 >
 > Sibling docs: `2026-06-06-multica-architecture-study.md`, `2026-06-06-multica-agent-layer-gap-map.md`,
 > `ARCHITECTURE-INVARIANTS.md` (the convergence-point contract), `tasks/retro-follow-ups.md`
@@ -382,7 +384,44 @@ and then.
 
 ---
 
-## 6. Priority summary (the one-screen version)
+## 6. Sequence & gates — what we do and when
+
+This doc covers everything at once because strategy needs the whole picture — but **we do NOT build
+it as one plan.** Forcing all of §3 into a single build plan is exactly the complexity-creep the
+doc warns against (§3.4). Instead the work is a SEQUENCE of discrete, independently-shippable chunks,
+each its own harness cycle (brainstorm → plan + gates → execute → shake-out → ship). You finish and
+ship one before the next is even planned. Each chunk's design questions (§5) get answered when you
+REACH it — not all upfront.
+
+**This section is the sequencing layer between strategy (§1–§5) and tasks. It names the chunks,
+their order, and their dependencies. It is NOT a task breakdown — those come per-chunk, at brainstorm
+time.**
+
+| # | Chunk | Depends on | Why this slot | Rough size |
+|---|---|---|---|---|
+| **0** | **Merge what's in flight** — the operator cockpit chat + the in-tree invariant checker (`scripts/check-invariants.ts`), off `spec/operator-cockpit-chat` | — | Clean base. New work can't start cleanly on a branch carrying two unrelated in-progress features. Each later chunk branches from a clean `main`. | small |
+| **1** | **Work-item state machine** (§3.1) | clean `main` | The differentiator; earns the word "stateful." Everything downstream leans on it (audit records its transitions; the operator reasons about state). Build FIRST. Build as ONE convergence point (a transition guard) + a new named invariant. | large |
+| **2** | **Audit-trail enrichment** (§3.2) — actor-type + why; unified with events | #1 (transitions are the richest thing to audit, and #3 needs it) | Smaller — the event backbone already fires on every write. Slots naturally once state transitions exist to record. Keep unified with `events`; do NOT fork a parallel audit path. | medium |
+| **3** | **Operator depth** (§3.3) — Understand → Decide → Execute | #1 + #2 (it reads work-item state + the audit trail) | Product depth on a working substrate. The floor (state + audit) must exist before the operator can reason over it. The unique position, but it stands on #1/#2. | large |
+| **—** | **Steal-from-Multica** (§4a) — versioned playbooks (Phase 2.7 parked), agent visibility, runtime abstraction | independent of #1–#3 | NOT on the critical path. Parallel / opportunistic — sequence one in when it's wanted (e.g. versioned playbooks if a customer demo needs them). Don't let them displace the #1→#3 spine. | varies |
+
+**The gates between chunks (non-negotiable, per CLAUDE.md harness):**
+- Each chunk is entered via `harnessed-development` — brainstorm its §5 questions, THEN plan.
+- A chunk touching a security boundary (the state machine touches authorization-adjacent transition
+  rules; audit touches actor identity) fires the **threat-modeling** gate at plan time.
+- Each chunk that introduces a convergence point (#1's transition guard especially) adds a named
+  invariant to `ARCHITECTURE-INVARIANTS.md` — and where feasible makes it *structural*, not
+  trust-based (§3.5 rung 1, not rung 3).
+- A chunk ships via `/shakeout` + `/finish-branch` before the next is planned. No overlapping
+  half-built chunks (that's the §0/#0 lesson restated).
+
+**What "continue building" means concretely:** do chunk 0 (merge), then START chunk 1 by brainstorming
+its §5 state-machine questions — NOT by writing a combined task list for 1+2+3. The sequence is the
+plan-of-plans; each chunk gets its real plan when reached.
+
+---
+
+## 7. Priority summary (the one-screen version)
 
 1. **Work-item state machine** — the differentiator; earns "stateful." Build as ONE convergence
    point. *(❌ genuine gap)*
