@@ -3,62 +3,45 @@
  *
  * Currently holds the `operator_model` setting: which configured provider+model
  * the operator runs on (replacing the hardcoded default in lib/operator.ts).
- * Reads are TOLERANT — a missing or corrupt/wrong-shape row degrades to `null`
- * so the consumer (getOperatorDefinition) falls back to the default rather than
- * crashing every operator run (threat model M7). The setter is upsert-by-key.
+ * Reads AND writes validate through the ONE shared `operatorModelSettingSchema`
+ * (@folio/shared) — so the route validator, the setter, and the tolerant reader
+ * can't drift. The read is tolerant (a missing/corrupt/wrong-shape row → null
+ * via safeParse) so the consumer (loadConversationContext) falls back to the
+ * default rather than crashing every operator run (threat model M7). The setter
+ * also validates (M6) so the write and read paths agree.
  */
 
 import { eq } from 'drizzle-orm';
+import { operatorModelSettingSchema, type OperatorModelSetting } from '@folio/shared';
 import type { DB } from '../db/client.ts';
 import { instanceSettings } from '../db/schema.ts';
 
 const OPERATOR_MODEL_KEY = 'operator_model';
 
-/** A configured provider — the closed set, kept in lockstep with ai_keys.provider. */
-const PROVIDERS = new Set(['anthropic', 'openai', 'openrouter', 'ollama']);
-
-export interface OperatorModelSetting {
-  provider: 'anthropic' | 'openai' | 'openrouter' | 'ollama';
-  model: string;
-  aiKeyLabel: string;
-}
+export type { OperatorModelSetting };
 
 /**
  * Read the operator-model setting, tolerant of a missing/corrupt/wrong-shape row
- * (→ null). Validates the provider against the closed enum (M6) and that
- * model/aiKeyLabel are non-empty strings — a row failing any check degrades to
- * null, never throws.
+ * (→ null). One shared schema (`safeParse`) is the validator — unknown provider,
+ * empty model/label, non-object value all degrade to null, never throw.
  */
 export async function getOperatorModelSetting(db: DB): Promise<OperatorModelSetting | null> {
   const row = await db.query.instanceSettings.findFirst({
     where: eq(instanceSettings.key, OPERATOR_MODEL_KEY),
   });
   if (!row) return null;
-  const v = row.value as Record<string, unknown> | null | undefined;
-  if (
-    !v ||
-    typeof v !== 'object' ||
-    typeof v.provider !== 'string' ||
-    !PROVIDERS.has(v.provider) ||
-    typeof v.model !== 'string' ||
-    v.model.length === 0 ||
-    typeof v.aiKeyLabel !== 'string' ||
-    v.aiKeyLabel.length === 0
-  ) {
-    return null;
-  }
-  return {
-    provider: v.provider as OperatorModelSetting['provider'],
-    model: v.model,
-    aiKeyLabel: v.aiKeyLabel,
-  };
+  const parsed = operatorModelSettingSchema.safeParse(row.value);
+  return parsed.success ? parsed.data : null;
 }
 
-/** Upsert the operator-model setting (one row, keyed by `operator_model`). */
+/**
+ * Upsert the operator-model setting (one row, keyed by `operator_model`).
+ * Validates through the shared schema (M6) so a caller can't persist a value the
+ * reader would reject — write and read agree. Throws on an invalid value.
+ */
 export async function setOperatorModelSetting(db: DB, v: OperatorModelSetting): Promise<void> {
-  // The JSON `value` column is typed Record<string, unknown>; OperatorModelSetting
-  // is an interface (no index signature), so widen at the boundary.
-  const value = { ...v } as Record<string, unknown>;
+  // Validate + normalize (applies the aiKeyLabel default) before persisting.
+  const value = operatorModelSettingSchema.parse(v) as Record<string, unknown>;
   await db
     .insert(instanceSettings)
     .values({ key: OPERATOR_MODEL_KEY, value, updatedAt: new Date() })

@@ -67,7 +67,7 @@ import {
   takePendingConversationRun,
 } from '../services/conversation-runs.ts';
 import { getOperatorDefinition, getOperatorDocument } from './operator.ts';
-import { getOperatorModelSetting } from '../services/instance-settings.ts';
+import { getOperatorModelSetting, type OperatorModelSetting } from '../services/instance-settings.ts';
 import { type Message, type ToolDef, getProvider } from './ai/provider.ts';
 import { sanitizeProviderError } from './ai/sanitize-error.ts';
 import { newApiToken } from './auth.ts';
@@ -615,16 +615,18 @@ async function loadConversationContext(
   const project = { id: '', workspaceId: '', slug: '', name: '' } as unknown as Project;
 
   // AI key resolution — same (provider, label) instance-credential path as a
-  // document run (B6 reversal). Absent key is a pre-flight failure (no_ai_key).
-  // DEFERRED (Cluster-3 /code-review, lower severity): the label is hardcoded
-  // 'default'. The operator is a fixed singleton with no `ai_key_label` config
-  // field, so it always uses the instance's DEFAULT key. If an instance stores its
-  // provider key under a non-'default' label (a known provider-setup quirk), the
-  // operator chat blocks with no_ai_key despite a working key existing. Giving the
-  // operator a configurable label is a PRODUCT decision (where does the user set
-  // it?), not a correctness fix — tracked, not fixed here.
+  // document run (B6 reversal). The key MUST be resolved against the SAME
+  // (provider, aiKeyLabel) the run streams on (opModel) — not the operator's
+  // hardcoded default. Resolving against def.provider/'default' here while
+  // fm.provider/ai_key_label come from opModel would fetch the wrong credential
+  // (e.g. the anthropic key for an ollama run) and never use the configured
+  // row's validated baseUrl — threat-model M2. Absent key is a pre-flight failure
+  // (no_ai_key), EXCEPT for ollama, which is legitimately keyless (see preflight).
   const keyRow = await db.query.aiKeys.findFirst({
-    where: and(eq(aiKeys.provider, def.provider as ProviderName), eq(aiKeys.label, 'default')),
+    where: and(
+      eq(aiKeys.provider, opModel.provider as ProviderName),
+      eq(aiKeys.label, opModel.aiKeyLabel),
+    ),
   });
   const apiKey = keyRow ? decryptSecret(keyRow.encryptedKey) : '';
   const baseUrl = keyRow?.baseUrl ?? undefined;
@@ -855,7 +857,12 @@ async function preflight(ctx: RunContext, excludeRunId?: string): Promise<boolea
  * conversation finally (see runAgent) regardless of which path blocks.
  */
 async function conversationPreflight(ctx: RunContext): Promise<boolean> {
-  if (!ctx.apiKey) {
+  // Ollama is legitimately KEYLESS (local) — its ai_keys row stores an empty
+  // ciphertext, so apiKey==='' is EXPECTED, not "no key configured". Only gate on
+  // a missing key for providers that actually require one; otherwise a correctly
+  // configured ollama operator would be wrongly blocked here (review #2).
+  const requiresKey = ctx.fm.provider !== 'ollama';
+  if (requiresKey && !ctx.apiKey) {
     if (ctx.sink) {
       await ctx.sink.text(
         'No AI key is configured for this provider. Ask an instance admin to add one in Settings → AI, then try again.',
@@ -1037,15 +1044,15 @@ async function buildResumeMessages(ctx: RunContext): Promise<Message[]> {
   return messages;
 }
 
-/** Translate the agent's tool whitelist into provider-side ToolDefs. */
 /**
  * Resolve the operator run's provider/model/ai_key_label: the configured
  * `operator_model` setting if present, else the operator def's defaults
  * (anthropic/claude-sonnet-4-6, ai_key_label 'default'). Pure + exported so the
- * fallback logic is unit-tested without a DB.
+ * fallback logic is unit-tested without a DB. Typed with the shared
+ * OperatorModelSetting (closed-enum provider — not a widened `string`).
  */
 export function resolveOperatorRunModel(
-  setting: { provider: string; model: string; aiKeyLabel: string } | null,
+  setting: OperatorModelSetting | null,
   def: { provider: string; model: string },
 ): { provider: string; model: string; aiKeyLabel: string } {
   if (setting) {

@@ -19,6 +19,7 @@ import { eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { makeTestApp } from '../test/harness.ts';
 import {
+  aiKeys,
   conversations,
   instanceSkills,
   projectAccess,
@@ -27,6 +28,8 @@ import {
   workspaceAccess,
   workspaces,
 } from '../db/schema.ts';
+import { encryptSecret } from '../lib/crypto.ts';
+import { setOperatorModelSetting } from './instance-settings.ts';
 import { roleToScopes, toolsToScopes } from '../lib/agent-schema.ts';
 import {
   FOLIO_SKILL_BODY,
@@ -279,6 +282,68 @@ describe('createConversationRun → loadContext — end-to-end wiring (seam)', (
     const second = await loadContext(runId);
     expect(second).toBeNull();
     __dropPendingConversationRunForTest(runId); // no-op (already consumed); hygiene
+  });
+
+  // review #8 (the BLOCKER #1 wiring test): the configured operator_model must
+  // drive BOTH the streamed provider/model AND the AI-key + baseUrl resolution.
+  // The pre-fix code set fm.provider/model from the setting but resolved the key
+  // from the hardcoded (def.provider='anthropic', label='default') — so an ollama
+  // operator fetched the anthropic credential and never used the ollama row's
+  // baseUrl (threat-model M2). Bite: against the pre-fix lookup ctx.baseUrl is
+  // undefined (anthropic row, or no row) and ctx.fm.ai_key_label is 'default'.
+  test('the configured operator model drives provider/model AND the key+baseUrl lookup', async () => {
+    const { db, seed } = await setup();
+    // Seed an ollama key under a NON-'default' label with a (validated) baseUrl.
+    await db.insert(aiKeys).values({
+      id: nanoid(),
+      provider: 'ollama',
+      label: 'local',
+      encryptedKey: encryptSecret(''), // ollama is keyless
+      baseUrl: 'https://ollama.example.com',
+    });
+    await setOperatorModelSetting(db, {
+      provider: 'ollama',
+      model: 'llama3.1:8b',
+      aiKeyLabel: 'local',
+    });
+
+    const conv = await createConversation(db, {
+      createdBy: seed.user.id,
+      operatorAgentId: '_operator',
+      title: 'Untitled',
+    });
+    const runId = nanoid();
+    await createConversationRun(db, {
+      conversation: { id: conv.id, createdBy: seed.user.id },
+      runId,
+    });
+
+    const ctx = await loadContext(runId);
+    expect(ctx).not.toBeNull();
+    // Provider/model/label come from the setting...
+    expect(ctx!.fm.provider).toBe('ollama');
+    expect(ctx!.fm.model).toBe('llama3.1:8b');
+    expect(ctx!.fm.ai_key_label).toBe('local');
+    // ...AND the key+baseUrl are resolved from THAT row (the #1 fix). baseUrl
+    // from the ollama 'local' row — NOT undefined (which the wrong-row lookup gave).
+    expect(ctx!.baseUrl).toBe('https://ollama.example.com');
+  });
+
+  test('with NO operator_model setting, the operator falls back to the anthropic default', async () => {
+    const { db, seed } = await setup();
+    const conv = await createConversation(db, {
+      createdBy: seed.user.id,
+      operatorAgentId: '_operator',
+      title: 'Untitled',
+    });
+    const runId = nanoid();
+    await createConversationRun(db, {
+      conversation: { id: conv.id, createdBy: seed.user.id },
+      runId,
+    });
+    const ctx = await loadContext(runId);
+    expect(ctx!.fm.provider).toBe('anthropic');
+    expect(ctx!.fm.ai_key_label).toBe('default');
   });
 });
 

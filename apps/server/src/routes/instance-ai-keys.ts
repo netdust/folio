@@ -1,8 +1,9 @@
 import { zValidator } from '@hono/zod-validator';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
+import { operatorModelSettingSchema } from '@folio/shared';
 import { db } from '../db/client.ts';
 import { aiKeys } from '../db/schema.ts';
 import { env } from '../env.ts';
@@ -47,26 +48,27 @@ instanceAiKeysRoute.get('/', async (c) => {
 // Admin-gated (M3), session-only (M4 — inherited from the route mount). The
 // setting references an existing ai_keys row by (provider, ai_key_label); it
 // carries NO baseUrl, so it cannot introduce an unvalidated outbound host (M2) —
-// the operator can only use a baseUrl already validated at key-creation.
-instanceAiKeysRoute.put(
-  '/operator-model',
-  zValidator(
-    'json',
-    z
-      .object({
-        provider: z.enum(['anthropic', 'openai', 'openrouter', 'ollama']),
-        model: z.string().min(1),
-        aiKeyLabel: z.string().min(1).default('default'),
-      })
-      .strict(),
-  ),
-  async (c) => {
-    await requireInstanceAdmin(db, getUser(c).id);
-    const v = c.req.valid('json');
-    await setOperatorModelSetting(db, v);
-    return jsonOk(c, { ok: true, operator_model: v });
-  },
-);
+// the operator can only use a baseUrl already validated at key-creation. The
+// (provider, ai_key_label) MUST name an existing key (review #4): saving a
+// selection that resolves to no key would only surface at chat time, far from
+// the action.
+instanceAiKeysRoute.put('/operator-model', zValidator('json', operatorModelSettingSchema), async (c) => {
+  await requireInstanceAdmin(db, getUser(c).id);
+  const v = c.req.valid('json');
+  // Referential check: the selection must point at a configured key (#4).
+  const keyRow = await db.query.aiKeys.findFirst({
+    where: and(eq(aiKeys.provider, v.provider), eq(aiKeys.label, v.aiKeyLabel)),
+  });
+  if (!keyRow) {
+    throw new HTTPError(
+      'INVALID_BODY',
+      `no AI key configured for ${v.provider}/${v.aiKeyLabel} — add it in Settings → AI first`,
+      422,
+    );
+  }
+  await setOperatorModelSetting(db, v);
+  return jsonOk(c, { ok: true, operator_model: v });
+});
 
 instanceAiKeysRoute.post(
   '/',
@@ -88,8 +90,9 @@ instanceAiKeysRoute.post(
         message: 'baseUrl is only allowed for the ollama provider',
         path: ['baseUrl'],
       })
-      // apiKey is REQUIRED for every PAID provider (M5) — only ollama is keyless.
-      .refine((b) => b.provider === 'ollama' || (b.apiKey !== undefined && b.apiKey.length > 0), {
+      // apiKey is REQUIRED + NON-BLANK for every PAID provider (M5, #9) — only
+      // ollama is keyless. Trim so a whitespace-only key can't masquerade as set.
+      .refine((b) => b.provider === 'ollama' || (b.apiKey !== undefined && b.apiKey.trim().length > 0), {
         message: 'apiKey is required for this provider',
         path: ['apiKey'],
       }),

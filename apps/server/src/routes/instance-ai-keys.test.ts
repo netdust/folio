@@ -361,7 +361,15 @@ describe('PUT /api/v1/instance/ai-keys/operator-model', () => {
   const OM = `${PATH}/operator-model`;
 
   test('an instance admin can set the operator model (200) + GET surfaces it', async () => {
-    const { app, seed } = await makeTestApp();
+    const { app, db, seed } = await makeTestApp();
+    // #4: the selection must reference an EXISTING key — seed it first.
+    await db.insert(aiKeys).values({
+      id: nanoid(),
+      provider: 'ollama',
+      label: 'default',
+      encryptedKey: 'x',
+      baseUrl: 'https://ollama.example.com',
+    });
     const res = await app.request(OM, {
       method: 'PUT',
       headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
@@ -371,6 +379,17 @@ describe('PUT /api/v1/instance/ai-keys/operator-model', () => {
     const get = await app.request(PATH, { headers: { Cookie: seed.sessionCookie } });
     const body = (await get.json()) as { data: { operator_model: unknown } };
     expect(body.data.operator_model).toEqual({ provider: 'ollama', model: 'llama3.1:8b', aiKeyLabel: 'default' });
+  });
+
+  test('setting an operator model with NO matching key is rejected (422, #4)', async () => {
+    const { app, seed } = await makeTestApp();
+    // No ai_keys row for openai/default → the selection cannot resolve a key.
+    const res = await app.request(OM, {
+      method: 'PUT',
+      headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider: 'openai', model: 'gpt-4o', aiKeyLabel: 'default' }),
+    });
+    expect(res.status).toBe(422);
   });
 
   test('a non-admin member is forbidden (403, M3)', async () => {
