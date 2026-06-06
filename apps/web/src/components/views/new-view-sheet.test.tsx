@@ -14,9 +14,10 @@ import { NewViewSheet } from './new-view-sheet.tsx';
 
 interface SetupOpts {
   currentSearch?: Record<string, unknown>;
+  currentColumns?: { visibleFields: string[] | null; columnOrder: string[] | null };
 }
 
-function setup({ currentSearch }: SetupOpts = {}) {
+function setup({ currentSearch, currentColumns }: SetupOpts = {}) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
@@ -31,6 +32,7 @@ function setup({ currentSearch }: SetupOpts = {}) {
         wslug="main"
         pslug="acme"
         currentSearch={currentSearch ?? {}}
+        currentColumns={currentColumns}
       />
     ),
   });
@@ -138,6 +140,52 @@ describe('NewViewSheet', () => {
       filters: { status: 'In Progress' },
       sort: [{ key: 'title', dir: 'desc' }],
     });
+  });
+
+  it('captures the current columns (visibleFields + columnOrder) in the payload', async () => {
+    // V2 (views UX shake-out): the sheet copy promises "Captures the current …
+    // columns", but buildPayload omitted visibleFields/columnOrder → the server
+    // stored []. Now the caller passes the active view's columns and they ride the
+    // payload, so a new view starts as a copy of what the user is looking at.
+    const fetchMock = mockFetch();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { queryClient, router } = setup({
+      currentColumns: {
+        visibleFields: ['title', 'status', 'assignee'],
+        columnOrder: ['status', 'title', 'assignee'],
+      },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    await userEvent.type(await screen.findByLabelText(/Name/), 'Cols');
+    await userEvent.click(screen.getByRole('button', { name: /Create view/i }));
+    await waitFor(() => expect(screen.getByText('navigated to work-items')).toBeInTheDocument());
+
+    const body = findPostBody(fetchMock) as Record<string, unknown>;
+    expect(body.visibleFields).toEqual(['title', 'status', 'assignee']);
+    expect(body.columnOrder).toEqual(['status', 'title', 'assignee']);
+  });
+
+  it('omits column keys when no current columns are provided (server defaults)', async () => {
+    const fetchMock = mockFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    const { queryClient, router } = setup();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await userEvent.type(await screen.findByLabelText(/Name/), 'X');
+    await userEvent.click(screen.getByRole('button', { name: /Create view/i }));
+    await waitFor(() => expect(screen.getByText('navigated to work-items')).toBeInTheDocument());
+    const body = findPostBody(fetchMock) as Record<string, unknown>;
+    expect(body).not.toHaveProperty('visibleFields');
+    expect(body).not.toHaveProperty('columnOrder');
   });
 
   it('navigates to /work-items with ?view=<id> on mutation success', async () => {

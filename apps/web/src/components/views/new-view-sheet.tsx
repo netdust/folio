@@ -16,11 +16,23 @@ export interface NewViewSheetProps {
   // capture, pass `{}` explicitly rather than letting it default — that
   // intentionality prevents silent loss of URL state at the call site.
   currentSearch: Record<string, unknown>;
+  // V2 (views UX shake-out): the active view's current columns, so the new view
+  // CAPTURES them (the copy promises "the current … columns"). Omit / undefined
+  // when there's no active view → the server defaults the columns. A null inside
+  // means "no explicit column state on the active view" → also omitted.
+  currentColumns?: { visibleFields: string[] | null; columnOrder: string[] | null };
 }
 
 const FILTER_KEYS = ['status', 'priority', 'assignee', 'labels', 'updated_since'] as const;
 
-export function NewViewSheet({ open, onOpenChange, wslug, pslug, currentSearch }: NewViewSheetProps) {
+export function NewViewSheet({
+  open,
+  onOpenChange,
+  wslug,
+  pslug,
+  currentSearch,
+  currentColumns,
+}: NewViewSheetProps) {
   const navigate = useNavigate();
   const create = useCreateView(wslug, pslug);
   const [name, setName] = useState('');
@@ -45,7 +57,14 @@ export function NewViewSheet({ open, onOpenChange, wslug, pslug, currentSearch }
       typeof sortKey === 'string' && sortKey
         ? [{ key: sortKey, dir: sortDir === 'desc' ? 'desc' : 'asc' }]
         : [];
-    return { name: trimmed, type: 'list', filters, sort };
+    const payload: ViewCreate = { name: trimmed, type: 'list', filters, sort };
+    // V2: capture the current columns so the new view starts as a copy of what the
+    // user is looking at (the sheet copy's promise). Only include keys that have a
+    // value — a null on the active view means "no explicit column state", so we
+    // omit it and let the server default rather than persist an empty/null.
+    if (currentColumns?.visibleFields != null) payload.visibleFields = currentColumns.visibleFields;
+    if (currentColumns?.columnOrder != null) payload.columnOrder = currentColumns.columnOrder;
+    return payload;
   }
 
   async function onSubmit(e: FormEvent) {
