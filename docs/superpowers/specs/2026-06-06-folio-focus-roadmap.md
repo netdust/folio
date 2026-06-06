@@ -1,6 +1,6 @@
 # Folio — Focus Roadmap (the coming weeks)
 
-> **Status:** planning reference, NOT a plan yet. Authored 2026-06-06 to consolidate two external
+> **Status:** planning reference, NOT a plan yet. Authored 2026-06-06 to consolidate three external
 > evaluations (Multica architecture comparison + a codebase/security quality review) with a
 > ground-truth audit of the current codebase. Purpose: a single accurate document to brainstorm
 > from later, so the right things — and only the right things — get built.
@@ -8,7 +8,7 @@
 > **How to use this:** read §3 (the gap map) first — it's the part that decides where weeks go;
 > §3.5 within it is the source-grounded structural-debt assessment (the four "weak/risky" points
 > checked against code). §1 is the strategic thesis. §2 is what's already done (so we don't rebuild
-> it). §4 is the two external reports' verbatim signal + how it reconciles. §5 is the open
+> it). §4 is the three external reports' verbatim signal + how it reconciles. §5 is the open
 > brainstorm questions to bring to the working session. **§6 is the sequence & gates — the
 > "what we do and when": the discrete shippable chunks, their order, and dependencies (this is
 > NOT one build plan).** §7 is the one-screen priority summary.
@@ -21,7 +21,7 @@
 
 ## 0. TL;DR
 
-- **Folio's strength is confirmed twice over** (Multica comparison + quality review): the auth /
+- **Folio's security strength is confirmed twice over** (Multica comparison + quality review): the auth /
   authorization / event-integrity core is enterprise-grade (security scored 9/10), built on
   centralized convergence points and intersection-based authorization. Two independent
   evaluations land on the same conclusion the project already believed.
@@ -33,10 +33,20 @@
      guards. This is the *differentiator* (it's what makes "stateful work items" literally true).
   2. **Audit trail** — `events.actor` exists but captures no actor-TYPE (human/operator/Claude/
      external-MCP) and no "why"/reason; no unified audit view.
-- **The real long-term risk is not insecurity — it is complexity.** The quality review's
-  one-sentence verdict: *"Folio is not at risk of being insecure — it is at risk of becoming too
-  powerful for its own complexity to remain safely reasoned about."* Both the state-machine work
-  and the invariants work must be done in a way that REDUCES cognitive load, not adds to it.
+- **The sharpest framing of what Folio IS** (control-plane-OS evaluation, the third report): *a
+  stateful artifact-production system where agents generate evolving outputs and humans steer,
+  evaluate, and trigger progression through a governed control plane.* The core primitive is
+  **Artifact + State + Lineage** — not the work-item, not the agent. **Caveat (source-verified):
+  that evaluation wrongly claims these foundations already exist** — artifact identity is partial,
+  and artifact lineage / agent re-entry / derivation are ABSENT. Right destination, wrong position
+  estimate; reaching it is an additive data-model reshape (§1, §3.1a).
+- **The real long-term risk is not insecurity — it is complexity, from BOTH ends.** The quality
+  review's verdict (developer-side): *"Folio is not at risk of being insecure — it is at risk of
+  becoming too powerful for its own complexity to remain safely reasoned about."* The
+  control-plane-OS evaluation's twin (user-side): *the control plane must stay invisible until
+  needed — the default flow must feel like "AI produces good stuff fast," not "I manage a lifecycle
+  system."* Every chunk must REDUCE cognitive load (dev) and keep the simple path frictionless
+  (user), not add to either (§3.4).
 
 ---
 
@@ -63,6 +73,43 @@ The quality review independently classifies the codebase the same way:
 > functional/UI/feature-driven. That's why the code "feels dense."
 
 That density is a *consequence of the thesis*, not a defect — but it is the thing to manage (§3.4).
+
+**Refinement (2026-06-06, the "control-plane OS" evaluation — a third report).** When Stefan
+described the product from the user's side — *agents produce content (research, articles, leads);
+humans evaluate, steer, and trigger more work; the system preserves state + lineage; repeat until
+an output is shippable (SEO pages, a blog, newsletters, PDF dossiers, a build plan…)* — a third
+evaluation sharpened the thesis further. The precise mental model underneath "work OS" is:
+
+> **A stateful artifact-production system where agents generate evolving outputs and humans
+> continuously steer, evaluate, and trigger progression through a governed control plane.**
+> Short form: *a control plane for evolving human + AI produced artifacts.*
+
+The key insight worth absorbing: **the core primitive is "Artifact + State + Lineage" — not the
+work-item, and not the agent.** A work-item is *execution scaffolding*; the **artifact** (the
+evolving article / dossier / SEO page / plan) is what the human actually cares about and what
+accumulates value over weeks (an SEO page improved 12 times, not regenerated). The system's job is
+not to *do* work — it is to **govern how work evolves**: generation (agents) → evaluation (humans)
+→ steering (control plane) → memory (state + lineage), looping until shippable. That is a more
+specific category than "task execution" or "agent orchestration": **iterative artifact refinement
+with governance.**
+
+**BUT — one load-bearing correction to that evaluation (verified against source 2026-06-06).** The
+report claims these foundations *already exist* ("you are not inventing missing foundations, just
+connecting existing ones"). **That is the one wrong sentence in it.** Of the five pillars the
+artifact model rests on, source says: human-intervention substrate ✅ exists (the operator);
+artifact *identity* ⚠️ partial (outputs are scattered across a run transcript + a result comment on
+the parent — no independent, re-targetable artifact); **lineage of artifacts ❌ absent** (lineage
+exists for *events*, but there is NO `derived_from` link — a newsletter cannot declare it came from
+a blog post); **agent re-entry ❌ absent** (agents create new *sibling runs on a parent*; you
+cannot say "improve THIS article"); **derivation/fan-out ❌ absent** (no one-source → blog +
+newsletter + PDF mechanism). So the *destination* is right and worth steering by; the *position
+estimate* is wrong — building toward it is a **data-model reshape** (additive: `derived_from`
+links, run-targets-a-document re-entry, multi-output derivation), NOT a wiring job over existing
+foundations. The control FLOW (event-driven, transactional, the runner) is solid and stays; the
+DATA MODEL grows. Take the destination, reject the "you already have it" optimism — believing the
+foundations exist is exactly how chunk 1 gets badly under-scoped. *(This evaluation, like the
+quality review, is an LLM's elegant systematization of Stefan's own pitch — coherent ≠ built,
+coherent ≠ simple. Useful north star; not a position report.)*
 
 ---
 
@@ -121,6 +168,35 @@ event), the agent runner (an agent run is bound to a work item's state), and the
 **What's left:** essentially all of it — schema for allowed transitions, a transition-guard
 convergence point, the configurable-transition UI, agent/runner integration, events on transition.
 
+#### 3.1a — The artifact refinement (from the control-plane-OS evaluation — decide this FIRST in the chunk-1 brainstorm)
+
+The §1 refinement reshapes what chunk 1 actually is. The state machine described above is framed
+as state over **work-item status**. The control-plane-OS evaluation argues the primitive the user
+cares about is the **artifact** (the evolving article / dossier / page), with the work-item as
+*orchestration around it*. That changes the chunk-1 design question from "what's the status
+state-machine?" to **"is the state machine over work-item STATUS, over ARTIFACT state, or both —
+and how do they relate?"** This is the first thing to settle in the brainstorm, because it decides
+the schema.
+
+Two **absent primitives** (source-verified — see §1) belong on the chunk-1 table, because they are
+what make this a *production* system rather than a status tracker — and they interact directly with
+the state machine:
+- **Agent re-entry** — today agents create new *sibling runs on a parent*; there is no "improve THIS
+  artifact." A state machine over artifacts implies a run can TARGET a document and advance its
+  state (draft → improved → review), not just append a comment. Decide whether re-entry is part of
+  chunk 1 or the chunk immediately after — but don't design the state machine blind to it.
+- **Derived-from lineage** — no `derived_from` link exists (one source → blog + newsletter + PDF is
+  absent). This is arguably its own chunk, but the state machine's schema should not foreclose it
+  (e.g. leave room for a document to reference a source artifact + the run that derived it).
+
+**Do NOT silently expand chunk 1 to include re-entry + derivation** — that would be the
+complexity-creep §3.4 warns against. The point is narrower: **bring these to the chunk-1 brainstorm
+as explicit scope decisions** (in §5), so the state-machine schema is chosen knowing they're coming,
+rather than being re-cut later. The likely outcome: chunk 1 = state machine (status and/or artifact
+state) built to *not foreclose* re-entry/derivation; re-entry + derivation become their own
+sequenced chunks (candidates to slot into §6 between the state machine and operator depth, pending
+the brainstorm).
+
 ---
 
 ### 3.2 — Audit trail enrichment  🟠 PARTIAL — **second; smaller than it looks**
@@ -172,10 +248,13 @@ decision support, cross-entity reasoning. Lower urgency, higher ceiling.
 
 ---
 
-### 3.4 — The cross-cutting constraint: contain complexity, don't add to it
+### 3.4 — The cross-cutting constraint: contain complexity, don't add to it (developer-side AND user-side)
 
 This is not a feature — it's a *how* that applies to all three items above, and it's the real
-long-term risk both evaluations flag.
+long-term risk **all three** evaluations flag — from two directions. The quality review names the
+**developer-side** cost (cognitive load to reason about the system safely); the control-plane-OS
+evaluation names the **user-side** twin (the product feeling like a lifecycle system to operate
+rather than a way to produce output fast). They are the same constraint seen from two ends.
 
 **The quality review's central finding:** the codebase is at "platform-kernel complexity in
 application code." Symptoms: many layered authorization rules, intersecting scope systems
@@ -201,6 +280,19 @@ compiler-enforced).
 - **The bar for new work: does it lower the cognitive load of reasoning about the system, or
   raise it?** A feature that adds a fourth access model or a fifth execution path needs to justify
   the cognitive cost, not just the functional benefit.
+
+**The user-side twin — "the control plane must stay invisible until needed" (control-plane-OS
+evaluation §10).** The risk on the product side is *over-control-plane-ing*: too many states, too
+many transitions, too much governance per artifact, friction in simple flows — until users feel
+like they are *operating a system* instead of *producing output*. The default flow must feel like
+**"AI produces good stuff fast,"** not **"I manage a lifecycle system."** This is a direct
+acceptance criterion for chunk 1 (§3.1): the state machine must be *progressive* — invisible/zero-
+friction for the simple "agent makes a thing, human approves it" path, and only surfacing states +
+transitions + governance when the work genuinely needs them. A v1 default state set that forces
+every artifact through draft → ready → running → blocked → review → completed would FAIL this test.
+The state machine earns "stateful" (§1) only if statefulness is *available*, not *imposed*. Treat
+"does the simple path stay frictionless?" as co-equal with "does the state machine work at all?"
+when shaking out chunk 1.
 
 §3.5 below is the source-grounded breakdown of the four specific structural-debt symptoms behind
 this constraint — confirming each against the code and showing how three of the four collapse into
@@ -289,7 +381,7 @@ ladder-climb as something to do opportunistically while building §3.1 and §3.2
 
 ---
 
-## 4. The two external evaluations — signal + reconciliation
+## 4. The three external evaluations — signal + reconciliation
 
 ### 4a. Multica architecture comparison (the first report)
 
@@ -345,6 +437,44 @@ AutoGen — your advantage is simplicity"). All three align with decisions alrea
 (`FOLIO_AGENT_CHAINS_ENABLED` gated off; work-item-attached not agent-attached). So this list is
 *confirmation* of existing direction, and it directly reinforces §3.4 (simplicity is the moat).
 
+### 4d. Control-plane-OS evaluation (the third report — new, 2026-06-06)
+
+Triggered by Stefan describing the product from the user's side: *agents produce content (research,
+articles, leads); humans evaluate, steer, trigger more work; the system preserves state + lineage;
+repeat until shippable (SEO pages, blog, newsletters, PDF dossiers, a build plan…)*. The evaluation
+asked: "is this a control-plane-OS-type app, and are we heading the right way?"
+
+**Verdict: direction RIGHT, position estimate WRONG.** The framing is the sharpest yet (folded into
+§1): the core primitive is **Artifact + State + Lineage**; the system *governs how work evolves*
+(generate → evaluate → steer → remember, looping until shippable) — "iterative artifact refinement
+with governance." That's a more precise category than "work OS" and worth steering by.
+
+**The one load-bearing error (source-verified 2026-06-06, the reason this isn't pure validation):**
+the evaluation claims the foundations *already exist* — they largely do NOT. Of the five pillars:
+
+| Pillar | Eval claims | Source reality |
+|---|---|---|
+| Human intervention (operator) | ✔ have it | ✅ EXISTS — the substrate is real |
+| State | ✔ have it | ⚠️ only RUN-lifecycle state; ARTIFACT state is chunk 1, unbuilt |
+| Lineage | ✔ strong (txWithEvents) | ⚠️ EVENT lineage yes; ARTIFACT lineage (`derived_from`) ABSENT |
+| Agent re-entry ("improve THIS artifact") | ✔ "missing in most frameworks, you have it" | ❌ ABSENT — runs are new siblings on a parent |
+| Derivation (one source → blog/newsletter/PDF) | ✔ implied natural | ❌ ABSENT — no transform/fan-out |
+
+So three of five pillars are absent or partial. The evaluation's §9 ("not inventing missing
+foundations, just connecting existing ones") is **the one wrong sentence** — building toward the
+artifact model is an additive DATA-MODEL reshape (`derived_from` links, run-targets-a-document
+re-entry, multi-output derivation), not a wiring job. The control FLOW (event-driven, transactional,
+runner) is solid and stays. **Take the destination; reject "you already have it" — believing it is
+how chunk 1 gets under-scoped.** (Like the quality review, this is an LLM's elegant systematization
+of Stefan's own pitch: coherent ≠ built, coherent ≠ simple. North star, not a position report.)
+
+**What it concretely changed:** NOT the §6 sequence. It sharpened chunk 1's inputs — see §3.1a (the
+state machine is plausibly state-over-ARTIFACTS, and re-entry + derivation are explicit scope
+decisions for the brainstorm) and §3.4 (the user-side "invisible until needed" acceptance criterion).
+
+**Its one risk worth pinning (§10):** *over-control-plane-ing* — folded into §3.4 as the user-side
+twin of the complexity constraint.
+
 ---
 
 ## 5. Open questions for the brainstorm (do NOT answer here)
@@ -352,14 +482,25 @@ AutoGen — your advantage is simplicity"). All three align with decisions alrea
 These are the decisions to bring to the working session. Listed so nothing gets lost between now
 and then.
 
-**State machine (§3.1):**
+**State machine (§3.1) — and the §3.1a artifact refinement (decide FIRST):**
+- **State over WHAT?** Work-item STATUS, ARTIFACT state, or both — and how do they relate? (This is
+  the §3.1a question that decides the schema; settle it before the rest.)
 - How do configurable-per-project statuses coexist with transition rules? (configurable
   transitions over configurable statuses? a default transition graph projects can edit?)
 - Where does the transition-guard convergence point live, and what's its bypass-is-a-bug rule
   (for the new invariant)?
 - What states are the v1 default set, and are `blocked` / `cancelled` first-class or just statuses?
-- How does an agent run bind to / drive a work-item transition? (the collaboration primitive)
+- How does an agent run bind to / drive a transition? (the collaboration primitive)
 - What events does a transition emit, and how does the audit trail capture who/why?
+- **Scope decision — agent re-entry (§3.1a):** is "an agent run TARGETS a document and advances its
+  state (improve THIS article)" part of chunk 1, or the chunk right after? Design the state machine
+  so it doesn't foreclose it either way.
+- **Scope decision — derived-from lineage (§3.1a):** likely its own chunk, but does the
+  state-machine / document schema leave room for a `derived_from` (source artifact + deriving run)
+  link, so one source → blog/newsletter/PDF stays buildable later?
+- **Acceptance criterion (§3.4 user-side):** does the SIMPLE path ("agent makes a thing, human
+  approves it") stay zero-friction and invisible-by-default? A v1 that forces every artifact through
+  the full state graph fails this. Statefulness must be *available*, not *imposed*.
 
 **Audit (§3.2):**
 - Does audit stay unified with `events`, or get a purpose-built read projection?
