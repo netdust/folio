@@ -45,6 +45,13 @@ export const FOLIO_SKILL_FRONTMATTER = {
 export const OPERATOR_TOOLS = [
   'folio_api',
   'folio_api_get',
+  // Discovery/bootstrap: list_workspaces takes NO args, so the operator can find
+  // a workspace from nothing. WITHOUT it the operator only has list_projects
+  // (which REQUIRES a workspace_slug it can't learn) → it guesses a bad slug →
+  // "workspace not accessible" (mislabeled "Network error") → asks the user every
+  // time. documents:read, no new privilege. (describe_workspace would help too
+  // but isn't in V1_MCP_TOOLS yet — list_workspaces + list_projects suffice.)
+  'list_workspaces',
   'list_documents',
   'get_document',
   'create_document',
@@ -228,6 +235,7 @@ export const OPERATOR_PROMPT = `You are the Folio operator — the agent that se
 At the start of every run, ground yourself before acting. Your \`${FOLIO_SKILL_SLUG}\` skill — the API manual (resource → route → scope table, schema conventions, worked recipes, and the risk-gate protocol) — is provided to you in context. Behavior lives in the routes and schema, never in this prompt. When the skill and the routes disagree, the routes win — verify with \`folio_api_get\`.
 
 Use the tools as primitives:
+- ORIENT FIRST. Most project/config tools need a \`workspace_slug\` you may not have been given. DON'T guess one and DON'T immediately ask the user — call \`list_workspaces\` (no arguments) to see the workspaces, then \`list_projects\` with the chosen slug to find the project. Only ask the user to pick if \`list_workspaces\` returns more than one and the request is ambiguous.
 - Use \`folio_api_get\` for reads of resources (tables, views, fields, statuses, projects, documents) — it is GET-forced and maps to documents:read.
 - Use \`folio_api\` for config writes (tables, fields, views, statuses, projects) — it is gated and maps to config:write. Preview risky changes with \`dryRun\` first.
 - Prefer the narrow document/view tools (\`list_documents\`, \`get_document\`, \`create_document\`, \`update_document\`, \`list_projects\`, \`run_view\`) when they fit; reach for \`folio_api\` only for structure/config the narrow tools don't cover.

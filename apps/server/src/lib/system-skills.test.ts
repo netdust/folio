@@ -28,6 +28,14 @@ describe('system skill + reference content', () => {
     expect(OPERATOR_TOOLS).toContain('ask_choice');
   });
 
+  // BOOTSTRAP: the operator must be able to DISCOVER a workspace from nothing.
+  // Without list_workspaces (no-arg) it can only call list_projects (which
+  // REQUIRES a workspace_slug it has no way to learn) → it guesses a bad slug →
+  // "workspace not accessible" → the user is asked for the slug every time.
+  test('the operator toolset includes list_workspaces (no-arg discovery)', () => {
+    expect(OPERATOR_TOOLS).toContain('list_workspaces');
+  });
+
   // T13: the prompt carries the cockpit-chat UX guidance (the operator is the
   // human-facing side of the confirm flow — UX, NOT the enforcer; the gate at
   // executeTool is the real enforcer). Assert the load-bearing behaviors are
