@@ -53,13 +53,15 @@ test('workspace agents flow: create narrowed agent, assignee picker filters by p
   });
   expect(wiInbox.ok()).toBe(true);
 
-  // Seed the work item with an empty assignee so FrontmatterForm renders the
-  // AssigneePicker row (the form is key-driven — no key, no picker). PATCH
-  // BEFORE the first navigation so we don't have to reload + reopen.
+  // FrontmatterForm is key-driven (no `assignee` key → no picker), and the
+  // workspace slideover pins no fields. An empty-string assignee is STRIPPED on
+  // write (documents.ts: `'' → clear`), so seed a NON-EMPTY placeholder value so
+  // the key persists and the AssigneePicker renders. PATCH before navigating so
+  // we don't have to reload + reopen.
   const wiInboxDoc = await wiInbox.json();
   const inboxSlug = wiInboxDoc.data.slug as string;
   await page.request.patch(`/api/v1/w/p25/p/inbox/documents/${inboxSlug}`, {
-    data: { frontmatter: { assignee: '' } },
+    data: { frontmatter: { assignee: 'unset' } },
   });
 
   // Open the slideover via the row's accessible "Open <title>" button —
@@ -67,21 +69,21 @@ test('workspace agents flow: create narrowed agent, assignee picker filters by p
   await page.goto('/w/p25/p/inbox/work-items');
   await page.getByRole('button', { name: 'Open Sample inbox item' }).click();
 
-  // The slideover's assignee row opens a Popover containing Members + Agents.
-  // The button labels itself "Unassigned" before a value is chosen.
+  // The assignee row's button shows the current value ('unset') and opens a
+  // Popover with Members + Agents. Open it.
   const dialog = page.locator('[role="dialog"]');
-  await dialog.getByRole('button', { name: /unassigned/i }).click();
+  await dialog.getByRole('button', { name: 'unset', exact: true }).click();
   // Agent IS allow-listed for inbox → it should appear in the Agents section.
   await expect(page.getByText('Inbox Triager').last()).toBeVisible({ timeout: 5_000 });
 
   // Project B (Website): the agent must NOT appear.
   const wiWebsite = await page.request.post('/api/v1/w/p25/p/website/documents', {
-    data: { type: 'work_item', title: 'Sample website item', frontmatter: { assignee: '' } },
+    data: { type: 'work_item', title: 'Sample website item', frontmatter: { assignee: 'unset' } },
   });
   expect(wiWebsite.ok()).toBe(true);
   await page.goto('/w/p25/p/website/work-items');
   await page.getByRole('button', { name: 'Open Sample website item' }).click();
-  await page.locator('[role="dialog"]').getByRole('button', { name: /unassigned/i }).click();
+  await page.locator('[role="dialog"]').getByRole('button', { name: 'unset', exact: true }).click();
   // The agent should not be in the picker for website.
   await expect(page.getByText('Inbox Triager')).toHaveCount(0);
 });
