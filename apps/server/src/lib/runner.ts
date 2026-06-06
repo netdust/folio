@@ -286,7 +286,7 @@ export async function runAgent(args: { runId: string }): Promise<void> {
         // run keeps buildInitialMessages (parent body + comments, fenced as
         // untrusted). claude-code stays hard-disabled, so this branch is API-only.
         const messages = ctx.sink
-          ? await buildConversationMessages(db, requireConversationId(ctx))
+          ? await buildConversationMessages(db, requireConversationId(ctx), ctx.agentSkills)
           : await buildInitialMessages(ctx);
         await runLoop(ctx, messages);
       }
