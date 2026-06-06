@@ -452,6 +452,21 @@ export const instanceSkills = sqliteTable(
   }),
 );
 
+/**
+ * Generic instance-level key/value config store. One row per setting (`key`
+ * PK), `value` a JSON blob. Home for instance-wide settings that aren't worth a
+ * dedicated table — e.g. `operator_model` ({provider, model, ai_key_label}: which
+ * configured provider+model the operator runs on). Read defensively (a corrupt
+ * value degrades to the default at the consumer, not a crash).
+ */
+export const instanceSettings = sqliteTable('instance_settings', {
+  key: text('key').primaryKey(),
+  value: text('value', { mode: 'json' }).$type<Record<string, unknown>>().notNull(),
+  updatedAt: integer('updated_at', { mode: 'timestamp_ms' })
+    .notNull()
+    .default(sql`(unixepoch() * 1000)`),
+});
+
 /** Append-only event log. SSE channel + agent webhooks both read from here. */
 export const events = sqliteTable(
   'events',
