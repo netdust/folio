@@ -2148,8 +2148,8 @@ describe('B1: MCP human-PAT project narrowing (no cross-project leak)', () => {
   }
 
   it('operator token resolves a project (get_document), NOT agent_missing', async () => {
-    const { db, seed } = await makeTestApp();
-    const err = await exec(operatorToken(seed, ['documents:read']), 'operator', 'get_document', {
+    const { seed } = await makeTestApp();
+    const err = await exec(operatorToken(seed, ['documents:read']), 'agent:_operator', 'get_document', {
       workspace_slug: 'acme',
       project_slug: 'web',
       slug: 'does-not-exist',
@@ -2161,27 +2161,48 @@ describe('B1: MCP human-PAT project narrowing (no cross-project leak)', () => {
     if (err) expect(String(err.message)).not.toMatch(/agent for this token no longer exists/i);
   });
 
-  it('operator token resolves comment-author context (create_comment), NOT agent_missing', async () => {
+  it('operator token resolves comment-author context (create_comment) on a real parent', async () => {
     const { db, seed } = await makeTestApp();
-    // resolveAuthorContextForToken runs BEFORE the parent lookup, so the operator
-    // agent-resolution failure (agent_missing) fires even with a missing parent.
-    // The fix must let it past that throw; a missing parent then yields a
-    // not-found, NOT agent_missing.
-    const err = await exec(
+    // create_comment order is resolveProjectInWorkspace → parent lookup →
+    // resolveAuthorContextForToken (LAST). A MISSING parent throws before the
+    // author resolver, so it would NOT cover the operator author-context
+    // conversion (the /code-review miss). Seed a REAL parent so execution reaches
+    // resolveAuthorContextForToken — the operator must resolve there, not throw
+    // agent_missing, and the comment must actually be created.
+    const table = await db.query.tables.findFirst({
+      where: eq(schemaTables.projectId, seed.project.id),
+    });
+    const parentId = nanoid();
+    await db.insert(documents).values({
+      id: parentId,
+      workspaceId: seed.workspace.id,
+      projectId: seed.project.id,
+      tableId: table!.id,
+      type: 'work_item',
+      slug: 'op-comment-parent',
+      title: 'Op comment parent',
+      status: 'todo',
+      body: '',
+      frontmatter: {},
+      createdBy: seed.user.id,
+      updatedBy: seed.user.id,
+    });
+    const result = await exec(
       operatorToken(seed, ['documents:read', 'documents:write']),
-      'operator',
+      'agent:_operator',
       'create_comment',
       {
         workspace_slug: 'acme',
         project_slug: 'web',
-        parent_slug: 'no-such-parent',
+        parent_slug: 'op-comment-parent',
         body: 'operator comment',
       },
-    ).then(
-      () => null,
-      (e) => e as Error & { data?: { reason?: string } },
     );
-    expect(err?.data?.reason).not.toBe('agent_missing');
+    // The comment was created (the author-context resolution succeeded — the
+    // operator's createdBy is null-FK'd, not agent_missing).
+    expect(result).toBeTruthy();
+    const comments = await listComments({ parentId });
+    expect(comments.some((c) => (c.body ?? '').includes('operator comment'))).toBe(true);
   });
 
   // RCA 2026-06-06 (same clean-DB repro, second bug): serviceActor returned
@@ -2248,5 +2269,51 @@ describe('B1: MCP human-PAT project narrowing (no cross-project leak)', () => {
       (e) => e as Error & { data?: { reason?: string } },
     );
     expect(err?.data?.reason).toBe('agent_missing');
+  });
+
+  // /code-review convergence completion: list_projects + find_documents + get_agent_self
+  // + resolveAgentAllowListForToken were left open-coding the agent lookup (the
+  // helper's "ONE place" claim was false). Now all route through
+  // resolveAgentDocForToken. These pin the operator-resolves + ghost-throws
+  // behavior at the newly-converged sites.
+  it('operator token resolves list_projects (newly converged), NOT agent_missing', async () => {
+    const { seed } = await makeTestApp();
+    const result = (await exec(
+      operatorToken(seed, ['documents:read']),
+      'agent:_operator',
+      'list_projects',
+      { workspace_slug: 'acme' },
+    )) as { content: { text: string }[] };
+    // The operator (projects ['*']) sees the seeded project — not agent_missing.
+    expect(JSON.stringify(result)).toContain('web');
+  });
+
+  it('a GHOST agent token now throws agent_missing on list_projects (was silent ["*"] degrade)', async () => {
+    const { seed } = await makeTestApp();
+    const ghost = makeToken({
+      workspaceId: null,
+      createdBy: seed.user.id,
+      agentId: 'ghost-agent-id-that-has-no-row',
+      projectIds: null,
+      scopes: ['documents:read'],
+    });
+    const err = await exec(ghost, 'ghost', 'list_projects', { workspace_slug: 'acme' }).then(
+      () => null,
+      (e) => e as Error & { data?: { reason?: string } },
+    );
+    // Fail-closed: a deleted real agent is denied, NOT silently shown every project.
+    expect(err?.data?.reason).toBe('agent_missing');
+  });
+
+  it('operator get_agent_self returns its own code-singleton doc, NOT agent_missing', async () => {
+    const { seed } = await makeTestApp();
+    const result = (await exec(
+      operatorToken(seed, ['documents:read']),
+      'agent:_operator',
+      'get_agent_self',
+      {},
+    )) as { content: { text: string }[] };
+    // Returns the operator's own doc (slug _operator), not an agent_missing throw.
+    expect(JSON.stringify(result)).toContain('_operator');
   });
 })

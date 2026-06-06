@@ -322,7 +322,19 @@ async function resolveTableForArgs(
  * agent-chain autonomy gate (isAgentOriginated → `agent:` actor) is unaffected.
  */
 function serviceActor(ctx: ToolContext): User {
-  return { id: ctx.confirmerId ?? ctx.token.createdBy ?? ctx.actor } as User;
+  const id = ctx.confirmerId ?? ctx.token.createdBy ?? ctx.actor;
+  // Defense-in-depth (mirrors runner.ts FIX #9): the resolved id MUST be a real
+  // users.id. The third fallback (`ctx.actor`) is FK-valid only on the legacy
+  // human-MCP path (actor === the authenticated user). If a future caller reaches
+  // it on an AGENT run, `ctx.actor` is the slug `agent:<slug>` — which would
+  // silently re-introduce the FK-787 this split removed. An empty string would do
+  // the same. Fail loud instead of writing a bad FK or fabricating provenance.
+  if (!id || id.startsWith('agent:')) {
+    throw mcpInvalidParams('cannot resolve an FK-valid actor for this write', {
+      reason: 'unresolved_actor',
+    });
+  }
+  return { id } as User;
 }
 
 // ---------------------------------------------------------------------------
@@ -338,12 +350,9 @@ function serviceActor(ctx: ToolContext): User {
  */
 async function resolveAgentAllowListForToken(token: ApiToken): Promise<string[] | null> {
   if (!token.agentId) return null;
-  const agent = await db.query.documents.findFirst({
-    where: and(eq(documents.id, token.agentId), eq(documents.type, 'agent')),
-  });
-  if (!agent) {
-    throw mcpInvalidParams('agent for this token no longer exists', { reason: 'agent_missing' });
-  }
+  // Convergence point (resolveAgentDocForToken): resolves the operator sentinel
+  // to its code-singleton doc; a real-but-missing agent still throws agent_missing.
+  const agent = await resolveAgentDocForToken(token);
   const effective = intersectAgentProjects(resolveAgentProjects(agent), token.projectIds ?? null);
   return effective.includes('*') ? null : effective;
 }
@@ -530,11 +539,11 @@ export function registerRealTools(): void {
           projects: visible.map((p) => ({ id: p.id, slug: p.slug, name: p.name })),
         });
       }
-      const agent = await db.query.documents.findFirst({
-        where: and(eq(documents.id, token.agentId), eq(documents.type, 'agent')),
-      });
-      const agentProjects = agent ? resolveAgentProjects(agent) : ['*'];
-      const effective = intersectAgentProjects(agentProjects, token.projectIds ?? null);
+      // Convergence point (resolveAgentDocForToken): operator → code singleton;
+      // a real-but-missing agent throws agent_missing (NOT the prior silent ['*']
+      // degrade, which would have shown a ghost-token EVERY project).
+      const agent = await resolveAgentDocForToken(token);
+      const effective = intersectAgentProjects(resolveAgentProjects(agent), token.projectIds ?? null);
       const filtered = effective.includes('*') ? all : all.filter((p) => effective.includes(p.id));
       return textResult({
         projects: filtered.map((p) => ({ id: p.id, slug: p.slug, name: p.name })),
@@ -657,11 +666,12 @@ export function registerRealTools(): void {
         projectIds =
           ceiling === null ? all.map((p) => p.id) : all.filter((p) => ceiling.has(p.id)).map((p) => p.id);
       } else {
-        const agent = await db.query.documents.findFirst({
-          where: and(eq(documents.id, token.agentId), eq(documents.type, 'agent')),
-        });
-        const agentProjects = agent ? resolveAgentProjects(agent) : ['*'];
-        const effective = intersectAgentProjects(agentProjects, token.projectIds ?? null);
+        // Convergence point (resolveAgentDocForToken): operator → code singleton;
+        // a real-but-missing agent throws agent_missing (NOT the prior silent
+        // ['*'] degrade, which would have searched a ghost-token across EVERY
+        // project).
+        const agent = await resolveAgentDocForToken(token);
+        const effective = intersectAgentProjects(resolveAgentProjects(agent), token.projectIds ?? null);
         projectIds = effective.includes('*')
           ? all.map((p) => p.id)
           : all.filter((p) => effective.includes(p.id)).map((p) => p.id);
@@ -1655,14 +1665,10 @@ export function registerRealTools(): void {
           reason: 'no_agent_bound_to_token',
         });
       }
-      const agent = await db.query.documents.findFirst({
-        where: and(eq(documents.id, token.agentId), eq(documents.type, 'agent')),
-      });
-      if (!agent) {
-        throw mcpInvalidParams('agent for this token no longer exists', {
-          reason: 'agent_missing',
-        });
-      }
+      // Convergence point (resolveAgentDocForToken): the operator gets its own
+      // code-singleton doc (the correct "what am I" answer); a real-but-missing
+      // agent still throws agent_missing.
+      const agent = await resolveAgentDocForToken(token);
       return textResult(agent);
     },
   });
