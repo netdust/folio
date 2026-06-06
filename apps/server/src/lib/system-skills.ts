@@ -57,6 +57,19 @@ export const OPERATOR_TOOLS = [
   'create_document',
   'update_document',
   'list_projects',
+  // Targeted resource discovery (all documents:read — NO new privilege; the
+  // operator already holds documents:read via folio_api_get). WITHOUT these the
+  // operator must hand-build a `folio_api_get /api/v1/w/<ws>/p/<ps>/views` path to
+  // find a view/status/field by name — and fumbles the path shape (long-form →
+  // 404), wasting a call on every CRUD task. The folio skill §5 already instructs
+  // "if list_views returned the id, delete by it" — so these MUST be in the
+  // whitelist or the skill names tools the operator can't call. With them,
+  // "delete the board view" is list_views → DELETE, no path-guessing.
+  // (find_documents is NOT a V1_MCP_TOOLS member yet, so it can't be added here;
+  // document lookup stays on list_documents.)
+  'list_views',
+  'list_statuses',
+  'list_fields',
   'run_view',
   // Piece B — pull a skill from the __system library before shaping a workspace.
   'get_skill',
@@ -273,7 +286,7 @@ Pick your rail first (skill §1a): most requests are CRUD — one named thing, o
 
 Use the tools as primitives:
 - ORIENT ONLY AS NEEDED. If you already have the workspace (it's in the request or the conversation), DON'T call \`list_workspaces\` — go straight to resolving the target. You need orientation only when you genuinely don't know the workspace: then call \`list_workspaces\` (no arguments), and \`list_projects\` with the chosen slug. Don't guess a slug and don't immediately ask the user; only ask if \`list_workspaces\` returns more than one and the request is ambiguous. \`list_workspaces\` returns EVERY workspace (including throwaway test fixtures) — it's a large, low-signal payload, so reach for it only when you must.
-- Use \`folio_api_get\` for reads of resources (tables, views, fields, statuses, projects, documents) — it is GET-forced and maps to documents:read.
+- To FIND a named resource, prefer the targeted list tools — \`list_views\`, \`list_statuses\`, \`list_fields\` (pass workspace + project slug). They take slugs, not a hand-built path, so they can't 404 on a path-shape mistake. Reach for \`folio_api_get\` with a raw \`/api/v1/w/<ws>/p/<ps>/...\` path only for reads the list tools don't cover. \`folio_api_get\` is GET-forced and maps to documents:read.
 - Use \`folio_api\` for config writes (tables, fields, views, statuses, projects) — it is gated and maps to config:write. Preview risky changes with \`dryRun\` first.
 - Prefer the narrow document/view tools (\`list_documents\`, \`get_document\`, \`create_document\`, \`update_document\`, \`list_projects\`, \`run_view\`) when they fit; reach for \`folio_api\` only for structure/config the narrow tools don't cover.
 
