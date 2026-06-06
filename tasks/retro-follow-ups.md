@@ -2,6 +2,12 @@
 
 Created 2026-05-28 by `/evaluate` after Phase 3 Sub-phase A. One bullet per item.
 
+- **[2026-06-06, from Multica agent-layer study] BUG — the cockpit operator never receives the `folio` skill body. Fix it.**
+  Source-verified root cause of "the operator doesn't know how to use Folio / skill not followed." The conversation/cockpit run forks at `runner.ts:288-290` to `buildConversationMessages`, which does NOT inject the skill. `buildSkillsPreamble` (`runner.ts:992`) is called only by `buildInitialMessages` (document path) and `ccExecute` (disabled). So the cockpit system channel is `OPERATOR_PROMPT` only (`runner.ts:1200`) — which falsely claims "your folio skill is provided to you in context" (`system-skills.ts:283`). `ctx.agentSkills` is loaded (`runner.ts:700`) then read by nobody. Bug of omission; the skill IS correctly `trusted:true` (not a fence/mislabel), and tool schemas are fine (da9ac23). The path/scope/dryRun grammar lives only in `FOLIO_SKILL_BODY`.
+  **This is a bugfix, not a decision** — but flagged here because it touches the agent instruction channel + the untrusted-data fence, so it should go through the harness with a `## Threat model` note.
+  **Fix (Step 1):** fold `buildSkillsPreamble(ctx)` into the system channel for conversation runs, mirroring `ccExecute` (`runner.ts:1579-1583`). **Step 2:** regression test asserting the folio skill body appears in the operator's first conversation turn (Tier A seam — the missing test that let prose & delivery diverge). **Step 3:** fail-loud if the operator's skill doesn't resolve (`runner.ts:700`).
+  **Source:** `docs/superpowers/specs/2026-06-06-multica-agent-layer-gap-map.md` (full gap-map + punch-list).
+
 - **[2026-06-06, from Multica study] Build a content-based output-secret redactor at the model-output seam?**
   Folio's secret defenses are all *structural* (BYOK keys encrypted + injected to provider call only; minted token revoked at run end; `redactRunForApi` strips `system_prompt`). Nothing scans what the model itself PRINTS. `runner.ts:1601` (`setRunBody`) and `:1636`/`:1693` (`postAgentComment`) persist + SSE-broadcast model output verbatim. Because `ccToken` is minted live (`:1528`) and revoked only in the `finally` (`:1614`), an agent that echoes its own `folio_pat_` token leaks a *usable* credential into a comment + the live stream.
   **Decision needed:** BUILD NOW / DEFER.

@@ -568,3 +568,16 @@ Studied multica-ai/multica (mature Go+Postgres+Next agent platform; product peer
 **Caveat:** verification ran under API rate-limiting; the 3 deltas are hand-verified + 2-pass-converged, but the §6 "already-handled" list is high-confidence-not-exhaustively-re-verified.
 [2026-06-06] — session ended (no significant changes captured)
 [2026-06-06] — session ended (no significant changes captured)
+
+## [2026-06-06] ROOT CAUSE FOUND: cockpit operator never receives the `folio` skill
+
+Focused Multica study (agent-layer: chat-loop/skills/orchestration) → source-verified WHY the operator "doesn't know how to use Folio / skill not followed." Doc: `docs/superpowers/specs/2026-06-06-multica-agent-layer-gap-map.md`.
+
+**Bug of OMISSION (not design, small fix):** the conversation/cockpit run forks at `runner.ts:288-290` to `buildConversationMessages` — which does NOT inject the skill. `buildSkillsPreamble` (`runner.ts:992`, the only API-path emitter of the trusted skill body) is called ONLY by `buildInitialMessages` (document path, `:1061`) and `ccExecute` (disabled, `:1579`). So the cockpit's system channel = `OPERATOR_PROMPT` only (`:1200`), which LITERALLY claims "your folio skill is provided to you in context" (`system-skills.ts:283`) — a promise the code doesn't keep. `ctx.agentSkills` is loaded (`:700`) then read by nobody = dead context (why it LOOKS wired). Hand-verified the fork myself.
+
+**RULED OUT:** (a) trust-mislabel — folio skill IS correctly `trusted:true`, just absent not fenced; (b) thin tool schemas — `da9ac23` fixed, schemas rich, but path/scope/dryRun grammar lives ONLY in FOLIO_SKILL_BODY (`system-skills.ts:139-267`).
+
+**FIX (Step 1, all 3 Multica readers + diagnosis converged):** fold `buildSkillsPreamble(ctx)` into the system channel for conversation runs, mirroring `ccExecute` (`:1579-1583`). Trusted skill → system channel is correct home. Then Step 2: regression test asserting folio skill body in operator's FIRST turn (the missing test that let prose & delivery diverge — Tier A seam). Step 3: fail-loud if operator skill doesn't resolve (`:700`). Touches instruction channel + untrusted fence → fire threat-modeling gate. Logged in tasks/retro-follow-ups.md.
+
+**Reframe:** the chat layer is ~90% wired; one injection bug on one path makes it look broken. NOT far away.
+[2026-06-06] — session ended (no significant changes captured)
