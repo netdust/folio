@@ -359,6 +359,42 @@ describe('createConversationRun → loadContext — end-to-end wiring (seam)', (
     expect(ctx!.baseUrl).toBeUndefined(); // no row → no (unvalidated) baseUrl used
   });
 
+  // test-effectiveness audit (security review #2, was BLIND): a CORRUPT
+  // encryptedKey (direct DB seeding / a key-rotation glitch) must degrade to
+  // "no key" — loadContext must NOT throw out (a 500 that aborts the run).
+  // Bite: remove the decrypt try/catch in loadConversationContext and this throws.
+  test('a corrupt operator encryptedKey degrades to no-key (decrypt is guarded)', async () => {
+    const { db, seed } = await setup();
+    await setOperatorModelSetting(db, {
+      provider: 'anthropic',
+      model: 'claude-sonnet-4-6',
+      aiKeyLabel: 'default',
+    });
+    // A row EXISTS (so keyRowMissing is false) but its ciphertext is garbage —
+    // decryptSecret throws on it; the guard must swallow that to apiKey:''.
+    await db.insert(aiKeys).values({
+      id: nanoid(),
+      provider: 'anthropic',
+      label: 'default',
+      encryptedKey: 'not-valid-ciphertext',
+    });
+    const conv = await createConversation(db, {
+      createdBy: seed.user.id,
+      operatorAgentId: '_operator',
+      title: 'Untitled',
+    });
+    const runId = nanoid();
+    await createConversationRun(db, {
+      conversation: { id: conv.id, createdBy: seed.user.id },
+      runId,
+    });
+    // Must NOT throw (the pre-guard code aborted here with a decrypt error).
+    const ctx = await loadContext(runId);
+    expect(ctx).not.toBeNull();
+    expect(ctx!.apiKey).toBe(''); // degraded, not crashed
+    expect(ctx!.keyRowMissing).toBe(false); // the row existed; only its key was bad
+  });
+
   test('with NO operator_model setting, the operator falls back to the anthropic default', async () => {
     const { db, seed } = await setup();
     const conv = await createConversation(db, {

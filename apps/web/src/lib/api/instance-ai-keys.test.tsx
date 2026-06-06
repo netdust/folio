@@ -21,21 +21,34 @@ function wrap(qc: QueryClient) {
 }
 
 describe('useInstanceAiKeys', () => {
-  it('GETs /api/v1/instance/ai-keys (no workspaceId)', async () => {
+  it('GETs /api/v1/instance/ai-keys (no workspaceId) and projects .data to the keys ARRAY', async () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const calls: string[] = [];
     vi.stubGlobal(
       'fetch',
       vi.fn(async (input: RequestInfo) => {
         calls.push(String(input));
-        return new Response(JSON.stringify({ data: { keys: [] } }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        });
+        // The new wire shape is {keys, operator_model}; the hook's `select` must
+        // project .data back to the bare keys ARRAY so existing consumers (ai-tab,
+        // provider-model-field) are unchanged (test-effectiveness: was blind — the
+        // old test used an empty payload and never asserted the projected shape).
+        return new Response(
+          JSON.stringify({
+            data: {
+              keys: [{ id: 'k1', provider: 'anthropic', label: 'default', baseUrl: null, createdAt: '2026-01-01T00:00:00Z' }],
+              operator_model: { provider: 'anthropic', model: 'claude-sonnet-4-6', aiKeyLabel: 'default' },
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
       }),
     );
     const { result } = renderHook(() => useInstanceAiKeys(), { wrapper: wrap(qc) });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    // .data is the ARRAY (not the {keys, operator_model} envelope).
+    expect(Array.isArray(result.current.data)).toBe(true);
+    expect(result.current.data).toHaveLength(1);
+    expect(result.current.data?.[0]?.provider).toBe('anthropic');
     expect(calls[0]).toContain('/api/v1/instance/ai-keys');
     expect(calls[0]).not.toContain('/w/');
     expect(calls[0]).not.toContain('settings');
