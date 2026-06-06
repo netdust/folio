@@ -120,3 +120,72 @@ the unique-order + column-capture regressions are NOW covered). Edges not yet dr
 create-from-filtered-table (V2 should capture filters too — already did per buildPayload),
 drag-reorder VIEWS, delete-active-view landing, auto-save bleed between views — candidates
 for a follow-up acceptance pass if more view UX work is wanted.
+
+## ROUND 2 — `fix/views-ux-round2` (2026-06-07): the remaining edges
+
+Drove the leftover F4/F5/F3 edges in the browser. The **auto-save bleed** edge surfaced
+a real DATA-LOSS bug (V4) as a side effect — the others are clean.
+
+### ❌ BUG V4 — toggling one column silently DESTROYS unpinned visible fields  [confirmed, DB + UI; FIXED]
+**Repro (browser, View B):** View B's `visibleFields` =
+`["title","status","priority","assignee","due_date","updated_at"]`. Open the Columns
+picker → uncheck *Status* only → DB persists `["title","updated_at"]`. Three keys
+(`priority`,`assignee`,`due_date`) vanished from one unrelated toggle.
+
+**ROOT (`columns.ts` `effectiveVisibleKeys` + `mergeColumns`):** `allColumns` = built-ins
++ *pinned* Fields (the `fields` table). The `fields` table is **empty** in a normal
+install — `priority`/`assignee`/`due_date` live only in document frontmatter, never pinned.
+`effectiveVisibleKeys` **intersects** `visibleFields` down to `allColumns` keys → drops the
+3 unpinned keys → the picker only ever sees the 3 built-ins. `ColumnPicker.toggle` then
+recomputes from that already-truncated set and `onVisibilityChange` **persists the truncated
+list**, permanently destroying the unpinned keys. Same root cause as the user's "columns are
+not shown" report: an unpinned visible key has no Column → renders blank (`table-cell.tsx:98`
+returns null without a `fieldType`) AND can't round-trip.
+
+**FIX (`columns.ts` `mergeColumns` now takes `docs?`):** synthesize a `source:'field'` Column
+for any `visibleFields` key that is (a) not already a built-in/pinned column AND (b) present
+in the sampled docs' frontmatter — inferring its `fieldType` (reused `inferType` from
+`column-suggestions.ts`) so the cell renders. A key absent from BOTH fields and data is a
+genuinely deleted field → still dropped (existing `GONE`-drop test preserved). Wired
+`page?.data` into the `allColumns` memo (`table-view.tsx:194`). **Live verify:** toggling
+*Priority* off on View B now persists `["title","status","updated_at"]` (only priority
+removed; status/title/updated_at preserved); View A UNCHANGED (no bleed). Tests:
+`columns.test.ts` "synthetic columns for unpinned visible fields" (6 cases, RED→GREEN).
+
+### ❌ BUG V4b — synthesized column ALSO appeared as a "Suggested from your data" row (duplicate)  [confirmed, UI; FIXED]
+Once `priority` synthesized as a column, the picker's "Suggested from your data" section
+STILL listed `priority` — a duplicate you could "pin" onto a key that's already a column.
+`columnSuggestions` excludes only *pinned Fields*, not synthesized columns. **FIX
+(`table-view.tsx:356`):** filter suggestions against `allColumns` keys (the real predicate is
+"already a column", which now covers built-ins + pinned + synthesized). Live: priority no
+longer appears as a suggestion once it's a column.
+
+### ✅ F4 auto-save does NOT bleed across views — NOT a bug
+Changing View B's columns auto-saves to View B's row only (gated on `?view=<id>` ===
+`activeView.id`, `table-view.tsx:240/263/290/298`). View A / default / Board all stayed
+byte-identical through the toggle. Confirmed in DB.
+
+### ✅ F5 delete-active-view lands cleanly — NOT a bug
+`w.$wslug.tsx:338-341` drops `?view=` on delete of the active view → TableView's
+`activeView` fallback picks the default. (Source-confirmed; the seeded default is never
+deletable-to-zero in this flow.)
+
+### 🟡 F3 drag-reorder VIEWS — NO UI EXISTS (capability gap, not a bug)
+`buildViewMenu` (rail) has only **Delete** — no reorder affordance, and the rail tree has no
+view-level drag. Views order by `order` (now unique post-V1) but the user **cannot reorder
+them** from the UI. Not a regression (never existed); flag for a product decision: do we want
+view-reorder (drag in rail, or up/down in the `…` menu)? Deferred — needs user sign-off
+before building an unprompted feature.
+
+### Follow-up (logged, not fixed)
+`newViewCurrentColumns` (`w.$wslug.tsx:177`) captures the active view's **raw** stored
+`visibleFields`, not the `effectiveVisibleKeys`-resolved (data-backed) set — so a new view
+can inherit stale dataless keys. Harmless now (V4 fix makes them round-trip if data exists,
+drop cleanly if not), but capturing the *effective* set would birth new views cleaner. Minor.
+
+## ✅ ROUND 2 FIXED + VERIFIED LIVE (2026-06-07)
+- **V4** column data-loss: `columns.ts` synthesizes columns for data-backed unpinned visible
+  keys; `table-view.tsx` feeds docs in. Live-verified no-loss + no-bleed.
+- **V4b** suggestion duplicate: `table-view.tsx` filters suggestions by existing column keys.
+Gates: web 816/0 (+6 synthetic-column cases), tsc clean. No import cycle (columns←suggestions
+one-way). F4/F5 verified non-bugs; F3 view-reorder = a flagged capability gap (await user).

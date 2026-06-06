@@ -51,6 +51,65 @@ describe('mergeColumns', () => {
     const cols = mergeColumns(unsorted, null);
     expect(cols.slice(3).map((c) => c.key)).toEqual(['early', 'middle', 'late']);
   });
+
+  // Views-UX round 2 (data-loss bug): a view's visibleFields can reference
+  // frontmatter keys that were never PINNED as Fields (the `fields` table is
+  // commonly empty — priority/assignee/due_date live only in document
+  // frontmatter). Those keys MUST become synthetic columns, or
+  // effectiveVisibleKeys drops them and the next column-toggle persists the
+  // truncated set, silently destroying them. They also rendered blank
+  // (table-cell returns null without a fieldType). The fix: synthesize a
+  // column for any visible key present in the sampled docs, with an inferred
+  // type so it renders.
+  describe('synthetic columns for unpinned visible fields', () => {
+    const docs = [
+      { frontmatter: { priority: 'high', assignee: 'u1', due_date: '2026-01-01', score: 5 } },
+    ];
+
+    it('synthesizes a field column for a visible key present in docs but not pinned', () => {
+      const view = { visibleFields: ['title', 'priority', 'assignee'] } as unknown as View;
+      const cols = mergeColumns([], view, docs);
+      const keys = cols.map((c) => c.key);
+      expect(keys).toContain('priority');
+      expect(keys).toContain('assignee');
+      const pri = cols.find((c) => c.key === 'priority')!;
+      expect(pri.source).toBe('field');
+    });
+
+    it('infers a renderable fieldType for the synthetic column (so the cell is not blank)', () => {
+      const view = { visibleFields: ['due_date', 'score'] } as unknown as View;
+      const cols = mergeColumns([], view, docs);
+      expect(cols.find((c) => c.key === 'due_date')!.fieldType).toBe('date');
+      expect(cols.find((c) => c.key === 'score')!.fieldType).toBe('number');
+    });
+
+    it('does NOT synthesize a column for a visible key absent from both fields and docs (deleted field)', () => {
+      const view = { visibleFields: ['title', 'GONE'] } as unknown as View;
+      const cols = mergeColumns([], view, docs);
+      expect(cols.map((c) => c.key)).not.toContain('GONE');
+    });
+
+    it('prefers a pinned Field over synthesizing (no duplicate column)', () => {
+      const view = { visibleFields: ['due_date'] } as unknown as View;
+      const cols = mergeColumns(fields, view, docs); // `fields` pins due_date as a `date`
+      const dueCols = cols.filter((c) => c.key === 'due_date');
+      expect(dueCols).toHaveLength(1);
+      expect(dueCols[0].label).toBe('Due'); // the pinned field's label, not a synthesized one
+    });
+
+    it('round-trips unpinned visible keys through effectiveVisibleKeys (no silent drop)', () => {
+      const view = { visibleFields: ['title', 'priority', 'assignee', 'due_date'] } as unknown as View;
+      const cols = mergeColumns([], view, docs);
+      // The whole point: these survive instead of collapsing to just the built-ins.
+      expect(effectiveVisibleKeys(cols, view)).toEqual(['title', 'priority', 'assignee', 'due_date']);
+    });
+
+    it('is a no-op when docs are omitted (back-compat for callers without data)', () => {
+      const view = { visibleFields: ['title', 'priority'] } as unknown as View;
+      const cols = mergeColumns([], view);
+      expect(cols.map((c) => c.key)).toEqual(['title', 'status', 'updated_at']);
+    });
+  });
 });
 
 describe('applyColumnOrder', () => {

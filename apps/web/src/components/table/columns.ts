@@ -1,5 +1,18 @@
 import type { Field, FieldType } from '../../lib/api/fields.ts';
 import type { View } from '../../lib/api/views.ts';
+import { inferType } from './column-suggestions.ts';
+
+interface DocLike {
+  frontmatter: unknown;
+}
+
+function titleizeKey(key: string): string {
+  return key
+    .split('_')
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ');
+}
 
 export interface Column {
   key: string;
@@ -17,7 +30,7 @@ const BUILTIN_COLUMNS: Column[] = [
 
 const DEFAULT_VISIBLE_KEYS = BUILTIN_COLUMNS.map((c) => c.key);
 
-export function mergeColumns(fields: Field[], _view: View | null): Column[] {
+export function mergeColumns(fields: Field[], view: View | null, docs?: DocLike[]): Column[] {
   const fieldCols: Column[] = [...fields]
     .sort((a, b) => a.order - b.order)
     .map((f) => ({
@@ -27,7 +40,47 @@ export function mergeColumns(fields: Field[], _view: View | null): Column[] {
       fieldType: f.type,
       fieldOptions: f.options,
     }));
-  return [...BUILTIN_COLUMNS, ...fieldCols];
+  const base = [...BUILTIN_COLUMNS, ...fieldCols];
+
+  // Views-UX round 2 (data-loss fix): a view's visibleFields can name
+  // frontmatter keys that were never PINNED as Fields (the `fields` table is
+  // commonly empty — priority/assignee/due_date live only in document
+  // frontmatter). Without a Column for them, effectiveVisibleKeys would drop
+  // them and the next column-toggle would persist the truncated set, silently
+  // destroying them — and they'd render blank meanwhile. So synthesize a field
+  // column for any visible key that is (a) not already covered above and (b)
+  // actually present in the sampled docs (a key absent from BOTH fields and
+  // data is a genuinely deleted field → still drop). Type is inferred from a
+  // sample value so the cell renders instead of returning null.
+  if (docs && docs.length > 0 && view?.visibleFields && view.visibleFields.length > 0) {
+    const covered = new Set(base.map((c) => c.key));
+    const samples = new Map<string, unknown>();
+    for (const d of docs) {
+      const fm = (d.frontmatter ?? {}) as Record<string, unknown>;
+      for (const [k, v] of Object.entries(fm)) {
+        // First non-null sample wins; fall back to a null sample if that's all
+        // we ever see (mirrors columnSuggestions so inference matches the
+        // "Suggested from your data" rows the picker shows for the same keys).
+        if (v != null && samples.get(k) == null) samples.set(k, v);
+        else if (!samples.has(k)) samples.set(k, v);
+      }
+    }
+    const synthetic: Column[] = [];
+    for (const key of view.visibleFields) {
+      if (covered.has(key) || !samples.has(key)) continue;
+      covered.add(key);
+      synthetic.push({
+        key,
+        label: titleizeKey(key),
+        source: 'field',
+        fieldType: inferType(samples.get(key)),
+        fieldOptions: null,
+      });
+    }
+    return [...base, ...synthetic];
+  }
+
+  return base;
 }
 
 export function applyColumnOrder(cols: Column[], order: string[] | null): Column[] {
