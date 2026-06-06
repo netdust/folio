@@ -243,7 +243,9 @@ export async function setOperatorModelSetting(db: DB, v: OperatorModelSetting): 
 
 ---
 
-## Task 3: getOperatorDefinition reads the setting
+> **⚠️ PLAN-CORRECTION (2026-06-06, Step 2.5).** Ground-truth: `getOperatorDefinition()` AND `getOperatorDocument()` are sync + parameterless, and `getOperatorDocument` (→ resolver `resolveAgentForRun`, 7 call sites, anti-impersonation identity) calls the former. Making `getOperatorDefinition` async ripples through the whole resolver chain for a field only the RUN needs. BETTER: the operator run's `provider`/`model`/`ai_key_label` are consumed in ONE place — `loadConversationContext` (runner.ts:~575-590), which is ALREADY async. Read `getOperatorModelSetting(db)` THERE and override the synthetic run fm's provider/model/ai_key_label; leave `getOperatorDefinition`/`getOperatorDocument` sync (identity unchanged). One file, no resolver-chain churn. Task 3 below is rewritten to this.
+
+## Task 3: loadConversationContext applies the configured operator model
 
 **Files:**
 - Modify: `apps/server/src/lib/operator.ts` (make `getOperatorDefinition` async; read the setting)

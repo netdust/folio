@@ -38,7 +38,7 @@ import { newApiToken } from './auth.ts';
 import { decryptSecret, encryptSecret } from './crypto.ts';
 import { HTTPError } from './http.ts';
 import { mcpInvalidParams } from './mcp-errors.ts';
-import { __setCcSpawnForTest, buildToolDefs, loadContext, rejectRun, runAgent, runAgentResume } from './runner.ts';
+import { __setCcSpawnForTest, buildToolDefs, loadContext, rejectRun, resolveOperatorRunModel, runAgent, runAgentResume } from './runner.ts';
 import { seedInstanceSkills } from './instance-skills.ts';
 import { effectiveReach } from './token-reach.ts';
 import { workspaces } from '../db/schema.ts';
@@ -2674,5 +2674,23 @@ describe('buildToolDefs advertises the registry schema (not an empty object)', (
   test('an unknown tool name falls back to an open schema (no crash)', () => {
     const defs = buildToolDefs({ tools: ['__not_a_real_tool'] });
     expect(defs[0]!.input_schema).toEqual({ type: 'object', additionalProperties: true });
+  });
+});
+
+describe('resolveOperatorRunModel — configured operator model over the default', () => {
+  const def = { provider: 'anthropic', model: 'claude-sonnet-4-6' };
+
+  test('no setting → the def default + ai_key_label "default"', () => {
+    expect(resolveOperatorRunModel(null, def)).toEqual({
+      provider: 'anthropic',
+      model: 'claude-sonnet-4-6',
+      aiKeyLabel: 'default',
+    });
+  });
+
+  test('a setting → its provider/model/aiKeyLabel verbatim', () => {
+    expect(
+      resolveOperatorRunModel({ provider: 'ollama', model: 'llama3.1:8b', aiKeyLabel: 'local' }, def),
+    ).toEqual({ provider: 'ollama', model: 'llama3.1:8b', aiKeyLabel: 'local' });
   });
 });

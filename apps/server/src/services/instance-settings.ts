@@ -56,11 +56,14 @@ export async function getOperatorModelSetting(db: DB): Promise<OperatorModelSett
 
 /** Upsert the operator-model setting (one row, keyed by `operator_model`). */
 export async function setOperatorModelSetting(db: DB, v: OperatorModelSetting): Promise<void> {
+  // The JSON `value` column is typed Record<string, unknown>; OperatorModelSetting
+  // is an interface (no index signature), so widen at the boundary.
+  const value = { ...v } as Record<string, unknown>;
   await db
     .insert(instanceSettings)
-    .values({ key: OPERATOR_MODEL_KEY, value: v, updatedAt: new Date() })
+    .values({ key: OPERATOR_MODEL_KEY, value, updatedAt: new Date() })
     .onConflictDoUpdate({
       target: instanceSettings.key,
-      set: { value: v, updatedAt: new Date() },
+      set: { value, updatedAt: new Date() },
     });
 }

@@ -67,6 +67,7 @@ import {
   takePendingConversationRun,
 } from '../services/conversation-runs.ts';
 import { getOperatorDefinition, getOperatorDocument } from './operator.ts';
+import { getOperatorModelSetting } from '../services/instance-settings.ts';
 import { type Message, type ToolDef, getProvider } from './ai/provider.ts';
 import { sanitizeProviderError } from './ai/sanitize-error.ts';
 import { newApiToken } from './auth.ts';
@@ -577,6 +578,13 @@ async function loadConversationContext(
   const agentFm = agent.frontmatter as Record<string, unknown>;
   const startedAt = new Date().toISOString();
 
+  // The operator's provider/model is configurable per-instance (Settings → AI →
+  // "Use for operator"); the def's provider/model are the fallback default. The
+  // setting is read HERE — the one async run-create consumer — so the synthetic
+  // operator identity (getOperatorDefinition/Document, used by the resolver for
+  // anti-impersonation) stays sync. A tolerant read (corrupt row → null → default).
+  const opModel = resolveOperatorRunModel(await getOperatorModelSetting(db), def);
+
   // Synthetic run frontmatter — only the provider-loop fields are read by
   // runLoop (provider/model/system_prompt/max_tokens/started_at); the rest carry
   // the caller snapshot for consistency + debugging. NOT persisted, NOT
@@ -585,9 +593,9 @@ async function loadConversationContext(
     assignee: `agent:${def.slug}`,
     status: 'running' as const,
     agent_slug: def.slug,
-    provider: def.provider,
-    model: def.model,
-    ai_key_label: 'default',
+    provider: opModel.provider,
+    model: opModel.model,
+    ai_key_label: opModel.aiKeyLabel,
     system_prompt: def.prompt,
     max_tokens: OPERATOR_MAX_TOKENS,
     tokens_in: 0,
@@ -1030,6 +1038,22 @@ async function buildResumeMessages(ctx: RunContext): Promise<Message[]> {
 }
 
 /** Translate the agent's tool whitelist into provider-side ToolDefs. */
+/**
+ * Resolve the operator run's provider/model/ai_key_label: the configured
+ * `operator_model` setting if present, else the operator def's defaults
+ * (anthropic/claude-sonnet-4-6, ai_key_label 'default'). Pure + exported so the
+ * fallback logic is unit-tested without a DB.
+ */
+export function resolveOperatorRunModel(
+  setting: { provider: string; model: string; aiKeyLabel: string } | null,
+  def: { provider: string; model: string },
+): { provider: string; model: string; aiKeyLabel: string } {
+  if (setting) {
+    return { provider: setting.provider, model: setting.model, aiKeyLabel: setting.aiKeyLabel };
+  }
+  return { provider: def.provider, model: def.model, aiKeyLabel: 'default' };
+}
+
 export function buildToolDefs(agentFm: Record<string, unknown>): ToolDef[] {
   const tools = Array.isArray(agentFm.tools) ? (agentFm.tools as string[]) : [];
   // Advertise each tool's REAL description + JSON-schema input contract from the
