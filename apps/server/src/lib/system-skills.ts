@@ -109,6 +109,8 @@ Paths are relative and validated — no scheme, no \`..\` traversal, no SSE \`/e
 /api/v1/w/<wslug>/p/<pslug>/<resource>
 \`\`\`
 
+**Use the \`/w/\` + \`/p/\` SHORTHAND — not the long form.** Only \`/w/<wslug>/...\` and \`/p/<pslug>/...\` are mapped to scopes. The tempting long forms \`/api/v1/workspaces/<wslug>/...\` and \`.../projects/<pslug>/...\` are NOT write paths — they come back \`{ refused: true, reason: "no scope mapping for this write path" }\` and waste a call. If a write is refused for "no scope mapping," your first suspect is a long-form path: rewrite it to \`/w/\` + \`/p/\` before anything else.
+
 ## 3. Resource → route → scope
 
 Each resource has a COLLECTION path (GET list / POST create) and an ITEM path
@@ -141,6 +143,27 @@ slug). The collection path does NOT accept PATCH/DELETE.
 - **Slugs are immutable** for \`work_item\` and \`page\` documents once created — pick carefully; never try to "rename" a slug.
 
 ## 5. Worked recipes
+
+**Spend the fewest calls.** The cheap path is *locate → act → verify*, not *list-everything → guess*. Three habits keep a task tight:
+- **Resolve names with a targeted lookup, not a full dump.** To find a document by title use \`find_documents\` (substring match, workspace-wide). To find a project, you already know its workspace → \`list_projects(workspace_slug)\`. Reach for \`list_workspaces\` (which returns EVERY workspace, including throwaway test fixtures — a large, low-signal payload) only when you genuinely don't know the workspace.
+- **dryRun only when you're unsure.** A preview is a second round-trip. For a delete where you've already confirmed the target id/name in a prior read, just delete — the read already told you what you'd remove. Use dryRun when the write is shaped from guesswork.
+- **Don't re-read what you just listed.** If \`list_views\` already returned the id and name, delete by that id and verify with ONE follow-up list — don't re-fetch the item in between.
+
+### Locate a resource by name
+
+You're usually given a human name ("the Priority view in Client Website"), not slugs/ids. Resolve it in as few calls as possible:
+
+\`\`\`
+# A view (or table/field/status): you need the project's slug first, then list.
+folio_api_get  /api/v1/w/<wslug>/p/<pslug>/views      # find the view's id + name here
+# then act on the ITEM path with that id:
+folio_api  DELETE /api/v1/w/<wslug>/p/<pslug>/views/<id>
+
+# A document by title — skip paging list_documents entirely:
+find_documents  { workspace_slug, query: "Priority", project_slug }   # → slug
+\`\`\`
+
+Note: "group by priority" on a view (\`groupBy\`) is NOT the same thing as a saved view *named* "priority" — read the view list and match on what the user meant before deleting.
 
 ### Set up a project
 
