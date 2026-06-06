@@ -1,5 +1,5 @@
 import { zValidator } from '@hono/zod-validator';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, max } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
@@ -54,6 +54,20 @@ viewsRoute.post('/', requireScope('config:write'), zValidator('json', baseSchema
   const input = c.req.valid('json');
   validateFilters(input.filters);
 
+  // V1 (views UX shake-out): assign a UNIQUE order when the caller omits one —
+  // `max(order for this table) + 10`, NOT 0. A 0-default collided with the seeded
+  // default view (order 0) + every other custom view, giving the rail an unstable
+  // sort that reads as "views duplicated". The New-view sheet never sends `order`,
+  // so this is the common path. (Gapless ids aren't needed — only strict ordering.)
+  let resolvedOrder = input.order;
+  if (resolvedOrder === undefined) {
+    const [maxRow] = await db
+      .select({ max: max(views.order) })
+      .from(views)
+      .where(eq(views.tableId, t.id));
+    resolvedOrder = (maxRow?.max ?? -10) + 10;
+  }
+
   const id = nanoid();
   const row = {
     id,
@@ -66,7 +80,7 @@ viewsRoute.post('/', requireScope('config:write'), zValidator('json', baseSchema
     groupBy: input.groupBy ?? null,
     visibleFields: input.visibleFields ?? [],
     columnOrder: input.columnOrder ?? null,
-    order: input.order ?? 0,
+    order: resolvedOrder,
     isDefault: input.isDefault ?? false,
   };
   if (isDryRun(input)) {

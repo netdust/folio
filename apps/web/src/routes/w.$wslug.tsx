@@ -170,6 +170,20 @@ function WorkspaceLayout() {
     return map;
   }, [projectList, tablesByProject, viewQueries]);
 
+  // V2 (views UX shake-out): the columns the user is CURRENTLY looking at, so the
+  // New-view sheet captures them. The active view (by `?view=`, else the table's
+  // default) holds the live visibleFields/columnOrder (column tweaks auto-save to
+  // it). Scoped to the project the sheet was opened for.
+  const newViewCurrentColumns = useMemo(() => {
+    if (!newViewSheet) return undefined;
+    const tables = tablesByProject[newViewSheet.pslug] ?? [];
+    const views = viewsByTable[tables[0]?.id ?? ''] ?? [];
+    const active =
+      views.find((v) => v.id === activeViewId) ?? views.find((v) => v.isDefault) ?? views[0];
+    if (!active) return undefined;
+    return { visibleFields: active.visibleFields, columnOrder: active.columnOrder };
+  }, [newViewSheet, tablesByProject, viewsByTable, activeViewId]);
+
   const activePslug = currentPath.match(/\/p\/([^/]+)/)?.[1];
 
   const handlers = useMemo<RailTreeHandlers>(
@@ -414,6 +428,7 @@ function WorkspaceLayout() {
           wslug={wslug}
           pslug={newViewSheet.pslug}
           currentSearch={currentSearch}
+          currentColumns={newViewCurrentColumns}
         />
       )}
       <Dialog open={!!confirmDelete} onOpenChange={(open) => { if (!open) setConfirmDelete(null); }}>

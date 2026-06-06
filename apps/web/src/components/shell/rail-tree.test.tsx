@@ -46,6 +46,32 @@ describe('RailTree', () => {
     expect(localStorage.getItem('folio:rail-expanded:parent')).not.toBe('0');
   });
 
+  it('a `table:`-prefixed node defaults EXPANDED so its views are visible (V3 views UX)', () => {
+    // V3: previously only depth-0 (projects) auto-expanded; a table (depth 1) sat
+    // collapsed, so a just-created view (its child) "vanished". Table nodes now
+    // default open even nested under a project.
+    render(
+      <RailTree
+        items={[
+          {
+            id: 'project:demo',
+            label: 'Demo',
+            children: [
+              {
+                id: 'table:demo:work-items',
+                label: 'Work Items',
+                children: [{ id: 'view:1', label: 'My Todos' }],
+              },
+            ],
+          },
+        ]}
+      />,
+    );
+    // The table is depth-1 but `table:`-prefixed → expanded → its view child shows
+    // WITHOUT any chevron click.
+    expect(screen.getByText('My Todos')).toBeInTheDocument();
+  });
+
   it('clicking the chevron toggles expansion without firing item.onClick', async () => {
     const onParentClick = vi.fn();
     render(

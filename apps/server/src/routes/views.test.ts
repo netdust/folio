@@ -38,6 +38,31 @@ test('POST creates a list view with filters', async () => {
   expect(res.status).toBe(201);
 });
 
+test('POST without an explicit order assigns a UNIQUE order (max+10), not 0', async () => {
+  // V1 (views UX shake-out): a created view defaulted to order:0, colliding with
+  // the default view (order 0) + every other custom view → unstable rail sort that
+  // reads as "views duplicated". A new view must get an order BELOW none of the
+  // existing ones. Seeded: "All work items"=0, "Board"=10 → new view should be 20.
+  const { app, seed } = await makeTestApp();
+  const create = async (name: string) => {
+    const res = await app.request(path, {
+      method: 'POST',
+      headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, type: 'list' }),
+    });
+    expect(res.status).toBe(201);
+    return (await res.json()).data.view as { id: string; order: number };
+  };
+  const a = await create('First');
+  expect(a.order).toBe(20); // max(0,10)+10
+  const b = await create('Second');
+  expect(b.order).toBe(30); // max(0,10,20)+10 — strictly increasing, no collision
+  // No two views share an order.
+  const all = await app.request(path, { headers: { Cookie: seed.sessionCookie } });
+  const orders = (await all.json()).data.map((v: { order: number }) => v.order);
+  expect(new Set(orders).size).toBe(orders.length);
+});
+
 test('POST 422 INVALID_FILTER on bad operator', async () => {
   const { app, seed } = await makeTestApp();
   const res = await app.request(path, {
@@ -294,8 +319,11 @@ test('POST /views: dryRun resource matches the live created view (minus id)', as
   ).json();
 
   // P2-3: the dryRun resource equals the live success `data` (same wrapper key),
-  // minus the volatile id. Proves the preview shape matches the real response.
-  const { id: _liveId, ...liveRow } = live.data.view;
-  const { id: _dryId, ...dryRow } = dry.data.resource.view;
+  // minus the volatile fields. Proves the preview SHAPE matches the real response.
+  // `order` is excluded alongside `id`: it's now state-dependent (max+10, V1 fix),
+  // so the dryRun AFTER the live create predicts the NEXT order (the live row bumped
+  // the max) — correct behavior, but not a parity field across two sequential calls.
+  const { id: _liveId, order: _liveOrder, ...liveRow } = live.data.view;
+  const { id: _dryId, order: _dryOrder, ...dryRow } = dry.data.resource.view;
   expect(dryRow).toEqual(liveRow);
 });

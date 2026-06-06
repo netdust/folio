@@ -30,7 +30,13 @@ export function RailTree({ items, depth = 0 }: { items: NavItem[]; depth?: numbe
 
 function RailTreeNode({ item, depth }: { item: NavItem; depth: number }) {
   const hasChildren = !!item.children && item.children.length > 0;
-  const [expanded, setExpanded] = useExpanded(item.id, depth === 0);
+  // V3 (views UX shake-out): default-open projects (depth 0) AND table nodes, so a
+  // table's saved VIEWS are visible by default. Previously only depth-0 auto-opened,
+  // so the table sat collapsed and a freshly-created view "vanished" (it was a
+  // hidden child) → read as "create didn't work". Table ids are `table:`-prefixed
+  // (buildRailTree). Still user-overridable + persisted via localStorage.
+  const defaultOpen = depth === 0 || item.id.startsWith('table:');
+  const [expanded, setExpanded] = useExpanded(item.id, defaultOpen);
   const [renaming, setRenaming] = useState(false);
 
   // Label click only navigates. Toggling children is the chevron's job —
