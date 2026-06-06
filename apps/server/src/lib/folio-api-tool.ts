@@ -17,6 +17,7 @@ import { apiTokens, type ApiToken } from '../db/schema.ts';
 import { ADMIN_SCOPES } from './agent-schema.ts'; // CR#3: derive the C3 config floor
 import { registerTool, type ToolContext } from './agent-tools.ts';
 import { newApiToken } from './auth.ts';
+import { OPERATOR_AGENT_ID } from './operator.ts';
 import {
   getConfirmedPendingOp,
   markExecuted,
@@ -161,13 +162,23 @@ export async function dispatchAsCaller(
   const validPath = validateApiPath(path);
   const { token: plaintext, hash } = newApiToken();
   const mintedId = nanoid();
+  // The operator is a code singleton with NO `documents` row; its ephemeral token
+  // carries the synthetic agentId `operator:_operator`, which would violate the
+  // api_tokens.agent_id → documents.id FK on this persisted mint. Null it for the
+  // operator. Authority-equivalent: the operator's project reach is already clamped
+  // to agent ∩ caller upstream (createConversationRun), and the null-agentId auth
+  // path re-checks the conversation owner's grants (humanPatProjectCeiling, which
+  // names the operator case) — so reach is preserved and nothing widens. A real
+  // workspace agent keeps its agentId (a valid FK + its allow-list governs).
+  const mintedAgentId =
+    caller.agentId === OPERATOR_AGENT_ID ? null : caller.agentId;
   await db.insert(apiTokens).values({
     id: mintedId,
     workspaceId: caller.workspaceId,
     name: `folio_api:${mintedId}`,
     tokenHash: hash,
     scopes: caller.scopes,
-    agentId: caller.agentId,
+    agentId: mintedAgentId,
     projectIds: caller.projectIds,
     createdBy: caller.createdBy,
   });

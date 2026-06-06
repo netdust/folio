@@ -62,7 +62,7 @@ import {
   userRole,
   visibleWorkspaceIds,
 } from '../lib/access.ts';
-import { OPERATOR_SLUG } from '../lib/operator.ts';
+import { OPERATOR_AGENT_ID } from '../lib/operator.ts';
 import { OPERATOR_TOOLS } from '../lib/system-skills.ts';
 
 /**
@@ -72,7 +72,7 @@ import { OPERATOR_TOOLS } from '../lib/system-skills.ts';
  * ephemeral token is held directly by the run (the conversation registry), never
  * looked up by hash, so the id need only be stable + non-colliding.
  */
-const OPERATOR_AGENT_SENTINEL_ID = `operator:${OPERATOR_SLUG}`;
+const OPERATOR_AGENT_SENTINEL_ID = OPERATOR_AGENT_ID;
 
 /**
  * Per-turn token budget for the operator (cumulative input + output across the

@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { eq } from 'drizzle-orm';
 import { db } from '../db/client.ts';
 import { apiTokens, type ApiToken, workspaces } from '../db/schema.ts';
+import { OPERATOR_AGENT_SENTINEL_ID } from '../services/conversation-runs.ts';
 import { makeTestApp } from '../test/harness.ts';
 import { roleToScopes } from './agent-schema.ts';
 import { executeTool } from './agent-tools.ts';
@@ -260,6 +261,30 @@ describe('dispatchAsCaller (P3-1/2/3/4)', () => {
     );
     const text = await res.clone().text();
     expect(text).not.toMatch(/folio_pat_/);
+  });
+
+  // The operator is a CODE SINGLETON with no `documents` row; its ephemeral
+  // token carries the synthetic agentId `operator:_operator`. Minting a persisted
+  // api_tokens row with that agentId violates the api_tokens.agent_id →
+  // documents.id FK (errno 787). dispatchAsCaller must null the agentId for the
+  // operator (its reach is already clamped to agent ∩ caller upstream; the
+  // null-agentId authority path re-checks the owner's grants). Regression for the
+  // first-real-use FK crash on folio_api_get during a cockpit turn.
+  test('operator caller (synthetic agentId) does not violate the agent_id FK (instance reach)', async () => {
+    const { seed } = await makeTestApp();
+    const operator = callerToken({
+      workspaceId: null, // instance reach (operator is instance-wide)
+      scopes: ['config:write', 'documents:read'],
+      createdBy: seed.user.id,
+      agentId: OPERATOR_AGENT_SENTINEL_ID, // synthetic — NO documents row
+    });
+    const res = await dispatchAsCaller(
+      operator,
+      'GET',
+      `/api/v1/w/${seed.workspace.slug}/p/${seed.project.slug}/views`,
+      undefined,
+    );
+    expect(res.status).toBe(200); // not a 500 from the FK crash
   });
 
   test('minted token inherits caller config:write — POST succeeds for owner (P3-1)', async () => {

@@ -26,6 +26,17 @@ import {
  */
 export const OPERATOR_SLUG = '_operator';
 
+/**
+ * The operator's synthetic document id. The operator is a CODE SINGLETON with NO
+ * `documents` row, so this id is never a real FK — it is the stable, non-colliding
+ * sentinel stamped on the operator's ephemeral token (`agentId`) and returned by
+ * `getOperatorDocument()`. Single source of truth: any code that needs to detect
+ * "is this caller the operator?" compares against this, and any persistence path
+ * (e.g. `dispatchAsCaller`'s token mint) that hits the `api_tokens.agent_id →
+ * documents.id` FK MUST null it for this id rather than persist it.
+ */
+export const OPERATOR_AGENT_ID = `operator:${OPERATOR_SLUG}`;
+
 // The operator's model + provider — hardcoded for now. Proper follow-up: make
 // these env-configurable (FOLIO_OPERATOR_PROVIDER / FOLIO_OPERATOR_MODEL) so a
 // self-hoster can point the operator at local Ollama without a code edit. NOTE
@@ -79,7 +90,7 @@ export function getOperatorDefinition(): OperatorDefinition {
 export function getOperatorDocument(): Document {
   const def = getOperatorDefinition();
   return {
-    id: `operator:${def.slug}`,
+    id: OPERATOR_AGENT_ID,
     workspaceId: '',
     projectId: null,
     tableId: null,
