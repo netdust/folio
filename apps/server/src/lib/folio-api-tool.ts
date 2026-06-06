@@ -67,6 +67,43 @@ export function validateApiPath(path: string): string {
 export type ScopeTarget = string | 'SECRET' | 'UNMAPPED' | null;
 
 /**
+ * A 404 from `dispatchAsCaller` has TWO causes the model must tell apart:
+ *   1. NO ROUTE MATCHED — a malformed path (long-form `/workspaces/`/`/projects/`,
+ *      a collection/item mix-up, a missing `/w/` or `/p/` segment). Hono's default
+ *      404 has a plain-text body, so the tool's `res.json().catch(()=>null)` yields
+ *      `body: null`. The model gets NO correction signal → it re-guesses the path,
+ *      burning calls until it stalls (the live failure that motivated this).
+ *   2. ROUTE MATCHED, RESOURCE ABSENT — `HTTPError(..,404)` with a
+ *      `{error:{code,message}}` body that already explains itself.
+ *
+ * This helper produces the missing correction for case 1 ONLY: a one-line hint
+ * naming the right path shape. The caller attaches it solely when `body === null`
+ * (case 1); a non-null error body (case 2) passes through untouched. Returns a
+ * generic shape reminder when no specific mis-shape is recognized — still better
+ * than a bare null. PURE: no I/O, route-shape knowledge only.
+ */
+export function pathHint(path: string): string {
+  const SHAPE =
+    'Folio paths use the SHORTHAND /api/v1/w/<wslug>/p/<pslug>/<resource>. ' +
+    'Collections (GET list / POST) are bare (…/views); items (PATCH / DELETE) add the id (…/views/<id>).';
+  // Long-form is the single most common mis-shape — it never maps to a route.
+  if (/\/api\/v1\/workspaces(\/|$)/.test(path)) {
+    return `No route matched. "/workspaces/<slug>" is not a route — use the shorthand "/w/<wslug>". ${SHAPE}`;
+  }
+  if (/\/projects\/[^/]+/.test(path)) {
+    return `No route matched. A project ITEM is "/w/<wslug>/p/<pslug>" (bare, NOT "/projects/<slug>"); the projects COLLECTION is "/w/<wslug>/projects". ${SHAPE}`;
+  }
+  // Missing the /p/ segment for a project-scoped resource (tables/fields/views/statuses).
+  if (
+    /\/(tables|fields|views|statuses)(\/|$)/.test(path) &&
+    !/\/p\/[^/]+\//.test(path)
+  ) {
+    return `No route matched. tables/fields/views/statuses are PROJECT-scoped — the path needs "…/w/<wslug>/p/<pslug>/<resource>". ${SHAPE}`;
+  }
+  return `No route matched — the path shape is wrong. ${SHAPE}`;
+}
+
+/**
  * A document/comment/run write lives under the documents|comments|runs route
  * mount, whose TRAILING segment is an arbitrary user SLUG (or run id) that can
  * equal a config/secret route keyword ('tokens','ai-keys','members','settings',
@@ -254,6 +291,12 @@ export function registerFolioApiTools(): void {
       // Deliberate {status, body} envelope (NOT the MCP textResult shape): the
       // runner JSON.stringifies any non-string tool return (runner.ts), so the
       // model sees the HTTP status + parsed body. Do not "fix" into textResult.
+      // A 404 with a NULL body = no route matched (malformed path) — attach a
+      // shape hint so the model corrects instead of re-guessing into a stall. A
+      // 404 WITH an error body (route matched, resource absent) passes through.
+      if (res.status === 404 && json === null) {
+        return { status: 404, body: null, hint: pathHint(args.path) };
+      }
       return { status: res.status, body: json };
     },
   });
@@ -390,10 +433,18 @@ export function registerFolioApiTools(): void {
         const cres = await dispatchAsCaller(ctx.token, recorded.method, recorded.path, recorded.body);
         const cjson = await cres.json().catch(() => null);
         await markExecuted(ctx.tx ?? db, confirmed.id, ctx.actor);
+        if (cres.status === 404 && cjson === null) {
+          return { status: 404, body: null, hint: pathHint(recorded.path) };
+        }
         return { status: cres.status, body: cjson };
       }
       const res = await dispatchAsCaller(ctx.token, args.method, args.path, body);
       const json = await res.json().catch(() => null);
+      // A 404 with a null body = no route matched (malformed path). Attach a shape
+      // hint, same as folio_api_get. A 404 with an error body passes through.
+      if (res.status === 404 && json === null) {
+        return { status: 404, body: null, hint: pathHint(args.path) };
+      }
       return { status: res.status, body: json };
     },
   });
