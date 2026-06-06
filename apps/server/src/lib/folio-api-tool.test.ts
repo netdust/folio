@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { eq } from 'drizzle-orm';
 import { db } from '../db/client.ts';
 import { apiTokens, type ApiToken, workspaces } from '../db/schema.ts';
-import { OPERATOR_AGENT_SENTINEL_ID } from '../services/conversation-runs.ts';
+import { OPERATOR_AGENT_ID } from './operator.ts';
 import { makeTestApp } from '../test/harness.ts';
 import { roleToScopes } from './agent-schema.ts';
 import { executeTool } from './agent-tools.ts';
@@ -277,7 +277,7 @@ describe('dispatchAsCaller (P3-1/2/3/4)', () => {
       workspaceId: null, // instance reach (operator is instance-wide)
       scopes: ['config:write', 'documents:read'],
       createdBy: seed.user.id,
-      agentId: OPERATOR_AGENT_SENTINEL_ID, // synthetic — NO documents row
+      agentId: OPERATOR_AGENT_ID, // synthetic — NO documents row
     });
     const res = await dispatchAsCaller(
       operator,

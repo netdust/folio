@@ -232,6 +232,13 @@
       "when": 1780988000000,
       "tag": "0031_instance_settings",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "6",
+      "when": 1780989000000,
+      "tag": "0032_pending_ops_index",
+      "breakpoints": true
     }
   ]
 }

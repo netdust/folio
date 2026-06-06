@@ -586,21 +586,28 @@ export const messages = sqliteTable(
   }),
 );
 
-export const pendingOps = sqliteTable('pending_ops', {
-  id: text('id').primaryKey(),
-  conversationId: text('conversation_id').notNull(),
-  callerId: text('caller_id').notNull(),
-  op: text('op').notNull(),
-  params: text('params').notNull(), // immutable once recorded — executed verbatim
-  target: text('target').notNull(),
-  status: text('status').notNull().default('pending'), // 'pending'|'confirmed'|'executed'|'rejected'|'expired'
-  createdAt: integer('created_at', { mode: 'timestamp_ms' })
-    .notNull()
-    .default(sql`(unixepoch() * 1000)`),
-  expiresAt: integer('expires_at', { mode: 'timestamp_ms' }).notNull(),
-  executedAt: integer('executed_at', { mode: 'timestamp_ms' }), // audit (T7): when the destructive op ran
-  executedBy: text('executed_by'), // audit (T7): who confirmed it
-});
+export const pendingOps = sqliteTable(
+  'pending_ops',
+  {
+    id: text('id').primaryKey(),
+    conversationId: text('conversation_id').notNull(),
+    callerId: text('caller_id').notNull(),
+    op: text('op').notNull(),
+    params: text('params').notNull(), // immutable once recorded — executed verbatim
+    target: text('target').notNull(),
+    status: text('status').notNull().default('pending'), // 'pending'|'confirmed'|'executed'|'rejected'|'expired'
+    createdAt: integer('created_at', { mode: 'timestamp_ms' })
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+    expiresAt: integer('expires_at', { mode: 'timestamp_ms' }).notNull(),
+    executedAt: integer('executed_at', { mode: 'timestamp_ms' }), // audit (T7): when the destructive op ran
+    executedBy: text('executed_by'), // audit (T7): who confirmed it
+  },
+  // getConfirmedPendingOp scans (conversation_id, op, status) on EVERY effective-
+  // high-tier tool call (most operator writes); without this it's a full scan and
+  // pending_ops only grows (rows are status-flipped, never deleted). (perf shake-out)
+  (t) => ({ lookupIdx: index('pending_ops_lookup_idx').on(t.conversationId, t.op, t.status) }),
+);
 
 // --- Type exports ---
 

@@ -37,12 +37,13 @@ export const OPERATOR_SLUG = '_operator';
  */
 export const OPERATOR_AGENT_ID = `operator:${OPERATOR_SLUG}`;
 
-// The operator's model + provider — hardcoded for now. Proper follow-up: make
-// these env-configurable (FOLIO_OPERATOR_PROVIDER / FOLIO_OPERATOR_MODEL) so a
-// self-hoster can point the operator at local Ollama without a code edit. NOTE
-// (2026-06-06): small local models tested via Ollama (qwen2.5-coder 7b/14b,
-// llama3.1:8b) do NOT reliably drive the operator's structured tool calls — the
-// autonomous flow needs a tool-call-capable model. See memory.
+// The operator's DEFAULT model + provider — overridden at runtime by the
+// `operator_model` instance setting (Settings → AI "Use for operator", via
+// getOperatorModelSetting/resolveOperatorRunModel); these back getOperatorDefinition()
+// only when no setting row exists. NOTE (2026-06-06): small local models tested
+// via Ollama (qwen2.5-coder 7b/14b, llama3.1:8b) do NOT reliably drive the
+// operator's structured tool calls — the autonomous flow needs a tool-call-capable
+// model. See memory.
 export const OPERATOR_MODEL = 'claude-sonnet-4-6';
 export const OPERATOR_PROVIDER = 'anthropic';
 

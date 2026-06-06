@@ -490,11 +490,14 @@ export function registerRealTools(): void {
       required: ['slug', 'trusted'],
     },
     handler: async (args: { slug: string; trusted: boolean }, ctx) => {
-      // T8 gate lives in setSkillTrust(canBlessSkill). The tool caller is always
-      // a token; sessionUser is null on the tool path (the operator's
-      // createdBy-null token is the live blesser — an MCP admin PAT carries a
-      // human createdBy and is refused). Returns the refusal as a structured
-      // result if not allowed instead of throwing through the tool envelope.
+      // T8 gate lives in setSkillTrust(canBlessSkill), which blesses iff the
+      // caller is a session user OR a system-origin (createdBy-null) token. On the
+      // tool path sessionUser is always null, and the COCKPIT operator token
+      // carries the caller's createdBy (non-null) — so the operator is REFUSED
+      // here (fail-closed): blessing a skill requires a real session admin, not a
+      // chat turn. (Only a hypothetical createdBy-null token would bless via this
+      // tool — there is none on the conversation path.) Returns the refusal as a
+      // structured result instead of throwing through the tool envelope.
       try {
         await setSkillTrust(db, {
           slug: args.slug,
@@ -1920,13 +1923,15 @@ export function registerRealTools(): void {
       const status = run.status as RunStatus;
 
       if (status === 'planning' || status === 'awaiting_approval') {
-        // transitionRun writes `updatedBy` (FK → users.id), so the actor must
-        // be an FK-valid user id — `ctx.actor` (the MCP route / runner supplies
-        // the authenticated user id), NOT `token.id`. Mirrors D-2's serviceActor
-        // convention.
+        // transitionRun writes `updatedBy` (FK → users.id), so the actor MUST be
+        // an FK-valid user id. Route through serviceActor (NOT raw ctx.actor,
+        // which is the slug `agent:<slug>` on an agent run → errno 787);
+        // serviceActor resolves confirmerId/token.createdBy and fails loud on a
+        // non-FK id. (architecture shake-out: actually single-source the D-2
+        // convention this comment claimed.)
         await transitionRun(run.id, {
           newStatus: 'failed',
-          actor: ctx.actor,
+          actor: serviceActor(ctx).id,
           errorReason: 'cancelled',
         });
         return textResult({ run_id: run.id, status: 'failed' });

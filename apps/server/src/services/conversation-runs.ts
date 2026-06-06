@@ -65,14 +65,6 @@ import {
 import { OPERATOR_AGENT_ID } from '../lib/operator.ts';
 import { OPERATOR_TOOLS } from '../lib/system-skills.ts';
 
-/**
- * The sentinel agent id stamped on the ephemeral operator token. The operator
- * has no `documents` row (it is a code singleton), so this is the synthetic id
- * from `getOperatorDocument()` (`operator:_operator`) — never a real FK. The
- * ephemeral token is held directly by the run (the conversation registry), never
- * looked up by hash, so the id need only be stable + non-colliding.
- */
-const OPERATOR_AGENT_SENTINEL_ID = OPERATOR_AGENT_ID;
 
 /**
  * Per-turn token budget for the operator (cumulative input + output across the
@@ -202,7 +194,11 @@ export async function createConversationRun(
     name: `operator-conversation:${conversation.id}`,
     tokenHash: `ephemeral:${nanoid()}`,
     scopes,
-    agentId: OPERATOR_AGENT_SENTINEL_ID,
+    // The operator is a code singleton (no `documents` row), so its ephemeral
+    // token carries the synthetic OPERATOR_AGENT_ID (`operator:_operator`) — never
+    // a real FK. The token is held directly by the run (the conversation registry),
+    // never looked up by hash. resolveAgentDocForToken resolves this sentinel.
+    agentId: OPERATOR_AGENT_ID,
     projectIds: projectIds.includes('*') ? null : projectIds,
     createdBy: callerUserId,
     lastUsedAt: null,
@@ -223,4 +219,4 @@ export async function createConversationRun(
   return { runId };
 }
 
-export { OPERATOR_MAX_TOKENS, OPERATOR_AGENT_SENTINEL_ID };
+export { OPERATOR_MAX_TOKENS };
