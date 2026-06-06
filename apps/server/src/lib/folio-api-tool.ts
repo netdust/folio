@@ -15,7 +15,7 @@ import { z } from 'zod';
 import { db } from '../db/client.ts';
 import { apiTokens, type ApiToken } from '../db/schema.ts';
 import { ADMIN_SCOPES } from './agent-schema.ts'; // CR#3: derive the C3 config floor
-import { registerTool, type ToolContext } from './agent-tools.ts';
+import { AwaitingConfirmationError, registerTool, type ToolContext } from './agent-tools.ts';
 import { newApiToken } from './auth.ts';
 import { OPERATOR_AGENT_ID } from './operator.ts';
 import {
@@ -427,9 +427,10 @@ export function registerFolioApiTools(): void {
               status: 'error',
             });
           }
-          // FATAL — shaped `forbidden:` so the runner's isFatalToolError ends the
-          // turn; the model cannot retry around the gate.
-          throw new Error(`forbidden: ${args.method} ${args.path} requires confirmation`);
+          // PAUSE — not a failure. Card emitted + pending_op recorded; signal the
+          // runner to end the turn cleanly and await the user's approval (like
+          // ask_choice), NOT failRun. The model cannot retry around the gate.
+          throw new AwaitingConfirmationError(`${args.method} ${args.path} requires confirmation`);
         }
         // Confirmed: execute the RECORDED request, not the turn-2 re-read (M6).
         const recorded = JSON.parse(confirmed.params) as {

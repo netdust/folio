@@ -41,7 +41,7 @@ import { mcpInvalidParams } from './mcp-errors.ts';
 import { __setCcSpawnForTest, buildToolDefs, loadContext, rejectRun, resolveOperatorRunModel, runAgent, runAgentResume } from './runner.ts';
 import { seedInstanceSkills } from './instance-skills.ts';
 import { effectiveReach } from './token-reach.ts';
-import { conversations, messages, workspaces } from '../db/schema.ts';
+import { conversations, messages, pendingOps, workspaces } from '../db/schema.ts';
 import { createConversation } from '../services/conversations.ts';
 import { createConversationRun } from '../services/conversation-runs.ts';
 
@@ -2856,6 +2856,99 @@ describe('ask_choice — turn-terminating clean stop (operator cockpit)', () => 
     const row = await db.query.conversations.findFirst({
       where: eq(conversations.id, conv.id),
     });
+    expect(row?.activeRunId).toBeNull();
+  });
+});
+
+// Operator cockpit chat — the irreversible-op confirm gate is ALSO a clean turn
+// boundary, not a failure. Before the fix the gate threw `forbidden: … requires
+// confirmation` which isFatalToolError classified FATAL → failRun(provider_error),
+// so the cockpit showed "operator could not finish this turn" right after asking
+// the user to confirm (found in the 2026-06-06 real-BYOK "set up a CRM" smoke).
+// Now it throws AwaitingConfirmationError → the runner ends the turn cleanly,
+// records the pending_op + card, and the user's "Yes" starts a fresh turn.
+describe('confirm gate — clean pause for approval (operator cockpit)', () => {
+  test('a high-tier tool call pauses the turn (completed, NOT provider_error); pending_op + card recorded; slot released', async () => {
+    const { db, seed } = await makeTestApp();
+    await seedInstanceSkills(db);
+    await db.insert(aiKeys).values({
+      id: nanoid(),
+      provider: 'anthropic',
+      label: 'default',
+      encryptedKey: encryptSecret('sk-test-fake-key'),
+    });
+
+    const conv = await createConversation(db, {
+      createdBy: seed.user.id,
+      operatorAgentId: '_operator',
+      title: 'Untitled',
+    });
+    const runId = nanoid();
+    await createConversationRun(db, {
+      conversation: { id: conv.id, createdBy: seed.user.id },
+      runId,
+    });
+    await db.update(conversations).set({ activeRunId: runId }).where(eq(conversations.id, conv.id));
+
+    // Round 1 emits a config-write folio_api call (high-tier → confirm gate) —
+    // exactly the POST .../projects the CRM smoke hit. Round 2 must NEVER be
+    // pulled: the turn ends at the confirm card.
+    const control: StubControl = {
+      rounds: [
+        [
+          { type: 'text', delta: 'Creating the CRM project — please confirm.' },
+          {
+            type: 'tool_call',
+            id: 'tc-1',
+            name: 'folio_api',
+            arguments: {
+              method: 'POST',
+              path: `/api/v1/w/${seed.workspace.slug}/projects`,
+              body: { name: 'CRM' },
+            },
+          },
+          { type: 'done', reason: 'tool_use' },
+        ],
+        [
+          { type: 'text', delta: 'This should never be reached.' },
+          { type: 'done', reason: 'stop' },
+        ],
+      ],
+      called: 0,
+    };
+    installProviderStub(control);
+
+    await runAgent({ runId });
+
+    // 1) The turn ended after ONE round — the runner paused at the card (a
+    //    conversation run tracks state via the thread + slot, not an agent_run doc).
+    expect(control.called).toBe(1);
+
+    // 2) NOT a failure: no provider_error / "could not finish" text leaked into
+    //    the thread (the pre-fix failRun path posted that), and the assistant
+    //    preamble before the card is preserved as the operator's message.
+    const msgs = await db.query.messages.findMany({ where: eq(messages.conversationId, conv.id) });
+    const operatorText = msgs
+      .filter((m) => m.role === 'operator' && m.kind === 'text')
+      .map((m) => m.body)
+      .join('\n');
+    expect(operatorText).not.toMatch(/could not finish|provider_error|never be reached/i);
+    expect(operatorText).toContain('please confirm');
+
+    // 3) A pending_ops row was recorded (the config-write awaits approval) and a
+    //    choice_card was emitted to the thread.
+    const pos = await db.select().from(pendingOps).where(eq(pendingOps.conversationId, conv.id));
+    expect(pos.length).toBe(1);
+    expect(pos[0]!.status).toBe('pending');
+    expect(msgs.filter((m) => m.kind === 'component').length).toBe(1);
+
+    // 4) The CRM project was NOT created (gate held).
+    const projs = await db.query.projects.findMany();
+    expect(projs.some((p) => p.slug === 'crm')).toBe(false);
+
+    // 5) Slot released (clean turn-end, NOT wedged) — the user's "Yes" can start a
+    //    fresh turn.
+    const row = await db.query.conversations.findFirst({ where: eq(conversations.id, conv.id) });
     expect(row?.activeRunId).toBeNull();
   });
 });

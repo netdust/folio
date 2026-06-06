@@ -16,7 +16,7 @@ import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { conversations, pendingOps, type ApiToken } from '../db/schema.ts';
 import { makeBareTestDb } from '../test/harness.ts';
-import { type ToolDef, executeTool, registerTool } from './agent-tools.ts';
+import { type ToolDef, executeTool, isAwaitingConfirmation, registerTool } from './agent-tools.ts';
 import type { ConversationSink } from './chat-thread-sink.ts';
 import {
   confirmPendingOp,
@@ -103,19 +103,31 @@ describe('irreversible-op confirm gate (executeTool)', () => {
     });
   }
 
-  it('M4/M5: a HIGH op in a conversation with NO matching pending_op is REFUSED (forbidden, fatal) — regardless of prompt', async () => {
+  it('M4/M5: a HIGH op in a conversation with NO matching pending_op PAUSES for confirmation (AwaitingConfirmationError) — regardless of prompt', async () => {
     registerHighTool();
     const convId = await makeConversation();
     const sink = makeRecordingSink();
 
-    await expect(
-      executeTool(makeToken(['documents:delete']), 'user-1', '__danger', { slug: 'acme' }, undefined, {
+    // The gate throws a typed AwaitingConfirmationError (a clean-pause signal the
+    // runner routes to a turn-end), NOT a `forbidden:` fatal — but it STILL
+    // refuses to apply the op until confirmed.
+    const err = await executeTool(
+      makeToken(['documents:delete']),
+      'user-1',
+      '__danger',
+      { slug: 'acme' },
+      undefined,
+      {
         callerScopes: ['documents:delete'],
         conversationId: convId,
         conversationSink: sink,
         confirmerId: 'user-1',
-      }),
-    ).rejects.toThrow(/^forbidden: __danger requires confirmation$/);
+      },
+    ).then(
+      () => null,
+      (e) => e as Error,
+    );
+    expect(isAwaitingConfirmation(err)).toBe(true);
 
     // The op did NOT apply (the gate refused before dispatch).
     expect(applied.count).toBe(0);
