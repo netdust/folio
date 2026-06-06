@@ -29,6 +29,30 @@ import type { ConversationSink } from './chat-thread-sink.ts';
 // rather than imported because events.ts does not export it.
 type DBOrTx = DB | Parameters<Parameters<DB['transaction']>[0]>[0];
 
+/**
+ * Thrown by the irreversible-op confirm gate after it records the pending_op and
+ * emits the confirmation choice_card. It is NOT a failure: it signals the runner
+ * to END THE TURN CLEANLY and wait for the user's approval (the same clean-pause
+ * `ask_choice` gets), instead of failing the run. A non-conversation caller (no
+ * sink to render the card) never reaches the gate's card path, so this only
+ * surfaces on a conversation run where a clean pause is the right outcome.
+ *
+ * Distinct TYPE (not a `forbidden:` message prefix) so the runner can route it
+ * to the clean-pause branch BEFORE `isFatalToolError` — a true scope denial stays
+ * fatal; "needs your approval" pauses. `isAwaitingConfirmation` is the guard.
+ */
+export class AwaitingConfirmationError extends Error {
+  readonly awaitingConfirmation = true as const;
+  constructor(message: string) {
+    super(message);
+    this.name = 'AwaitingConfirmationError';
+  }
+}
+
+export function isAwaitingConfirmation(err: unknown): err is AwaitingConfirmationError {
+  return err instanceof AwaitingConfirmationError;
+}
+
 export interface ToolContext {
   /** The authority — scopes + agent binding. */
   token: ApiToken;
@@ -440,9 +464,11 @@ export async function executeTool(
           status: 'error',
         });
       }
-      // FATAL — shaped `forbidden:` so isFatalToolError terminates the run; the
-      // model cannot retry around the gate.
-      throw new Error(`forbidden: ${name} requires confirmation`);
+      // PAUSE — not a failure. The card is emitted + the pending_op recorded;
+      // signal the runner to end the turn cleanly and await the user's approval
+      // (clean-pause, like ask_choice), NOT failRun. The model cannot retry around
+      // the gate (the throw unwinds the tool call regardless).
+      throw new AwaitingConfirmationError(`${name} requires confirmation`);
     }
     // Confirmed: execute the RECORDED params (M6), NOT the turn-2 re-read. Re-parse
     // the stored JSON through the SAME schema so the handler still receives a

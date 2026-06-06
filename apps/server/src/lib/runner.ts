@@ -58,7 +58,7 @@ import {
   type RunDoneReason,
   runErrorReasonSchema,
 } from './agent-run-schema.ts';
-import { executeTool, listToolDefs } from './agent-tools.ts';
+import { executeTool, isAwaitingConfirmation, listToolDefs } from './agent-tools.ts';
 import type { ConversationSink } from './chat-thread-sink.ts';
 import { buildConversationMessages } from './chat-thread-source.ts';
 import {
@@ -1304,6 +1304,11 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
       // headless runs the handler throws `forbidden:` (fatal) and never reaches
       // success, so this stays false there.
       let askedChoice = false;
+      // Operator cockpit chat — the irreversible-op confirm gate emitted a
+      // confirmation card and threw AwaitingConfirmationError. Like askedChoice,
+      // this is a CLEAN turn boundary (await the user's approval), NOT a failure.
+      // Set in the catch below; acted on after the loop, guarded on `ctx.sink`.
+      let awaitingConfirmation = false;
 
       for (const tc of collectedToolCalls) {
         try {
@@ -1351,6 +1356,17 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
             });
           }
         } catch (err) {
+          if (isAwaitingConfirmation(err)) {
+            // CLEAN PAUSE — the confirm gate emitted its card + recorded the
+            // pending_op, and is waiting for the user's approval. This is NOT a
+            // failure (do NOT failRun → no "provider_error"): end the turn cleanly
+            // like askedChoice. Only reachable on a conversation run (the gate's
+            // card path needs a sink). Stop the round; the post-loop branch
+            // completes the turn and releases the slot. The user's "Yes, do it"
+            // click starts a fresh turn that re-runs the recorded op.
+            awaitingConfirmation = true;
+            break;
+          }
           if (isFatalToolError(err)) {
             // FATAL — scope-denied / unknown tool. Abort the whole round
             // immediately; do NOT commit a half-round or feed back (decision 5,
@@ -1421,6 +1437,21 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
       }
 
       if (fatalReturned) return;
+
+      // Operator cockpit chat — the confirm gate paused for approval. END THE TURN
+      // CLEANLY (status `completed`), same as a turn-terminating ask_choice: the
+      // card + pending_op are already persisted, so the run releases its slot and
+      // the user's "Yes, do it" click starts a FRESH turn that re-runs the recorded
+      // op. NOT a failure — do not failRun. Preserve any assistant preamble
+      // (textBuf) as the operator's message. Cancel check first, mirroring below.
+      if (ctx.sink && awaitingConfirmation) {
+        if (await wasCancelled(ctx)) {
+          await handleCancel(ctx);
+          return;
+        }
+        await postResultAndComplete(ctx, textBuf, 'stop');
+        return;
+      }
 
       // Commit the balanced round-trip atomically (success + recoverable-error
       // results together).
