@@ -66,10 +66,14 @@ test('sign up → create workspace → create project → land on work-items', a
 
   await createProjectViaSheet(page, `Click Proj ${Date.now()}`);
   await expect(page).toHaveURL(/\/w\/click-ws-[^/]+\/p\/click-proj-[^/]+\/work-items/);
-  // Three frame tabs visible.
+  // The frame tab bar holds the two TABLE views (Work items + Board). Wiki is NOT
+  // a frame tab — it lives in the left rail as a project child (a button). This is
+  // a product invariant pinned by w.$wslug.p.$pslug.test.tsx ("no Wiki tab").
   await expect(page.getByRole('tab', { name: 'Work items', exact: true })).toBeVisible();
   await expect(page.getByRole('tab', { name: 'Board', exact: true })).toBeVisible();
-  await expect(page.getByRole('tab', { name: 'Wiki', exact: true })).toBeVisible();
+  await expect(page.getByRole('tab', { name: 'Wiki', exact: true })).toHaveCount(0);
+  // Wiki is reachable from the rail (a button), not the tab bar.
+  await expect(page.getByRole('button', { name: 'Wiki', exact: true })).toBeVisible();
 });
 
 test('kanban + per-column create + inline title edit persists (regression: no UntitledX corruption)', async ({ page }) => {
@@ -326,7 +330,8 @@ test('wiki: new page + title edit shows in tree without a reload (regression)', 
   await createWorkspaceViaSheet(page, `Wiki WS ${Date.now()}`);
   await createProjectViaSheet(page, `Wiki Proj ${Date.now()}`);
 
-  await page.getByRole('tab', { name: 'Wiki', exact: true }).click();
+  // Wiki is a left-rail project child (a button), not a frame tab.
+  await page.getByRole('button', { name: 'Wiki', exact: true }).click();
   // Empty state CTA name was renamed to disambiguate from the MainFrame
   // action button (both used to be "New page" — collision).
   await page.getByRole('button', { name: /Create your first page/ }).click();
