@@ -617,3 +617,13 @@ Reseeded dev DB (scripts/reseed-dev.ts — the old DB had 57x test detritus, a R
 [2026-06-06] — session ended (no significant changes captured)
 [2026-06-06] — session ended (no significant changes captured)
 [2026-06-06] — session ended (no significant changes captured)
+
+## [2026-06-06] 🚢 OPERATOR COCKPIT-CHAT MERGED TO main + PUSHED
+
+`spec/operator-cockpit-chat` (149 commits) merged `--no-ff` into main (merge commit `919e9a1`) and PUSHED to `origin/main` (`2a43109..919e9a1`, clean fast-forward). Safety tag `pre-merge/main-before-cockpit-chat`=`811676e` (pushed) = escape hatch. Feature branch KEPT (not deleted).
+
+Includes: the full cockpit feature (conversations/messages/pending_ops, dedicated SSE bus, ephemeral-token run path, irreversible-op confirm gate) + THIS session's additions: trusted-skill injection into the conversation path (the "operator doesn't follow its folio skill" fix), operator synthetic-identity resolution (resolveAgentDocForToken convergence — invariant 13), the FK-actor/event-actor split (invariant 15), skill-rendering convergence (invariant 14), and the /shakeout fixes (tool-result untrusted-DATA fencing = spec VERIFY #4, pending_ops_lookup_idx migration 0032, convergence completion in agent-guards + transitionRun).
+
+Gates before merge: full stack green (server 1609 / shared 70 / web 807, tsc x3); /shakeout 4-reviewer panel 0 BLOCKERS (security CLEAN — my changes introduced no autonomy-gate/trust-channel weakening); two /code-review rounds on the session's diff (max-effort, all findings fixed). e2e 39-pass; the 3 failures (click-through Wiki-tab + phase-2-5 picker) are PRE-EXISTING (spec files byte-identical to main, surfaces untouched — NOT regressions).
+
+REMAINING (the two things to look at NOW, post-merge): (1) the 3 PRE-EXISTING e2e failures (core signup/wiki/agent-picker flows — worth a real look since they're on main); (2) real-BYOK end-to-end smoke (configure AI key + "set up a CRM" — the one path no automated test covers). Operator native write path verified working live this session (agent_missing + FK both fixed, clean run). Follow-ups logged in tasks/retro-follow-ups.md: confirm-gate proposePendingOp dedup, pending_ops reaper, headless-MCP confirm-gate bypass (invariant 12 KNOWN GAP).
