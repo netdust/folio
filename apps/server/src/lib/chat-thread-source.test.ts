@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { rowsToMessages, skillsToMessages } from './chat-thread-source.ts';
+import { mergeAdjacent, rowsToMessages, skillsToMessages } from './chat-thread-source.ts';
 import type { Message as MessageRow } from '../db/schema.ts';
 
 // Minimal row factory — only the fields rowsToMessages reads.
@@ -128,18 +128,15 @@ describe('skillsToMessages — the operator must RECEIVE its skills (the cockpit
   test('prepended skills coalesce with the first user row — NO "roles must alternate" regression', () => {
     // The 151b827 constraint: the trusted preamble is a USER message; the first
     // replayed conversation row is ALSO user. They must merge into one user turn,
-    // never produce two consecutive user messages (Anthropic 400).
+    // never produce two consecutive user messages (Anthropic 400). Compose through
+    // mergeAdjacent — the EXACT function buildConversationMessages uses — not a
+    // re-wrap through rowsToMessages (which would test the wrong coalescer).
     const preamble = skillsToMessages([{ slug: 'folio', body: 'MANUAL', trusted: true }]);
     const replayed = rowsToMessages([
       row({ role: 'user', kind: 'text', body: 'remove the board view' }),
       row({ role: 'operator', kind: 'text', body: 'Done.' }),
     ]);
-    // Compose the way buildConversationMessages will: run BOTH through coalescing.
-    const out = rowsToMessages([
-      ...preamble.map((m) => row({ role: m.role === 'user' ? 'user' : 'operator', kind: 'text', body: m.content })),
-      row({ role: 'user', kind: 'text', body: 'remove the board view' }),
-      row({ role: 'operator', kind: 'text', body: 'Done.' }),
-    ]);
+    const out = mergeAdjacent([...preamble, ...replayed]);
     // Strict alternation holds; the skill+first-user-message become one user turn.
     for (let i = 1; i < out.length; i++) {
       expect(out[i]!.role).not.toBe(out[i - 1]!.role);
@@ -147,6 +144,5 @@ describe('skillsToMessages — the operator must RECEIVE its skills (the cockpit
     expect(out[0]!.role).toBe('user');
     expect(out[0]!.content).toContain('MANUAL');
     expect(out[0]!.content).toContain('remove the board view');
-    void replayed;
   });
 });

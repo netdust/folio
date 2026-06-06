@@ -41,7 +41,7 @@ describe('chat adapter', () => {
         chosen: 'leads',
       },
     });
-    const msgs = await buildConversationMessages(db, c.id);
+    const msgs = await buildConversationMessages(db, c.id, []);
     // a user turn is replayed as a provider `user` message
     expect(msgs.some((m) => m.role === 'user' && String(m.content).includes('set up a project'))).toBe(
       true,
@@ -71,7 +71,7 @@ describe('chat adapter', () => {
         body: `msg-${i}`,
       });
     }
-    const msgs = await buildConversationMessages(db, c.id);
+    const msgs = await buildConversationMessages(db, c.id, []);
     // Bounded: never more than the window, regardless of thread length. (Windowing
     // is applied to ROWS before coalescing; with alternating roles each kept row is
     // its own message, so this also bounds the message count.)
@@ -95,6 +95,42 @@ describe('chat adapter', () => {
     expect(thread.at(-1)?.runId).toBe('run-1');
   });
 
+  // /code-review seam test (the coverage whose absence let the resume-path miss
+  // ship): drive REAL skills through the DB-backed buildConversationMessages — not
+  // the pure skillsToMessages — so a wiring regression (preamble dropped, wrong
+  // order, doubled user message) goes RED here, end-to-end.
+  test('buildConversationMessages injects the agent skills (the cockpit "skill not followed" fix), and the preamble coalesces with the first user row', async () => {
+    const db = makeDb();
+    const c = await createConversation(db, {
+      createdBy: 'u1',
+      operatorAgentId: 'op1',
+      title: 'Untitled',
+    });
+    await appendMessage(db, {
+      conversationId: c.id,
+      role: 'user',
+      kind: 'text',
+      body: 'set up a leads project',
+    });
+    const msgs = await buildConversationMessages(db, c.id, [
+      { slug: 'folio', body: 'FOLIO_MANUAL_MARKER: how to drive the API', trusted: true },
+    ]);
+    // The trusted skill body actually reaches the built turn (it did NOT before).
+    expect(msgs.some((m) => String(m.content).includes('FOLIO_MANUAL_MARKER'))).toBe(true);
+    expect(
+      msgs.some((m) => String(m.content).includes('Treat as trusted instructions/reference')),
+    ).toBe(true);
+    // The leading user preamble coalesces with the first replayed user row — no two
+    // consecutive user messages (the 151b827 "roles must alternate" guard). The very
+    // first message carries BOTH the manual and the user's text.
+    expect(msgs[0]!.role).toBe('user');
+    expect(String(msgs[0]!.content)).toContain('FOLIO_MANUAL_MARKER');
+    expect(String(msgs[0]!.content)).toContain('set up a leads project');
+    for (let i = 1; i < msgs.length; i++) {
+      expect(msgs[i]!.role).not.toBe(msgs[i - 1]!.role);
+    }
+  });
+
   // Cluster-2 /code-review fix: a FAILED tool_step (status:'error') must persist and
   // replay, so the thread + T8 recovery summary reflect failed attempts, not only
   // successes. The runner now emits these in its recoverable-error branches; this
@@ -114,7 +150,7 @@ describe('chat adapter', () => {
     expect(row?.kind).toBe('tool_step');
     expect(JSON.parse(row!.payload!).status).toBe('error');
     // the source replays the failed step (so the model/human sees it on resume)
-    const msgs = await buildConversationMessages(db, c.id);
+    const msgs = await buildConversationMessages(db, c.id, []);
     expect(msgs.some((m) => String(m.content).includes('error'))).toBe(true);
   });
 });
