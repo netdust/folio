@@ -26,14 +26,14 @@ import {
  */
 export const OPERATOR_SLUG = '_operator';
 
-// The operator's model + provider.
-// ⚠️ LOCAL-TESTING OVERRIDE (2026-06-06): pointed at local Ollama so cockpit
-// test turns don't hit the PAID Anthropic API. REVERT to anthropic /
-// claude-sonnet-4-6 before any paid/prod deploy — or make these env-configurable
-// (FOLIO_OPERATOR_PROVIDER/MODEL) as the proper fix. Requires `ollama serve` +
-// `ollama pull qwen2.5-coder:7b` running locally.
-export const OPERATOR_MODEL = 'qwen2.5-coder:7b';
-export const OPERATOR_PROVIDER = 'ollama';
+// The operator's model + provider — hardcoded for now. Proper follow-up: make
+// these env-configurable (FOLIO_OPERATOR_PROVIDER / FOLIO_OPERATOR_MODEL) so a
+// self-hoster can point the operator at local Ollama without a code edit. NOTE
+// (2026-06-06): small local models tested via Ollama (qwen2.5-coder 7b/14b,
+// llama3.1:8b) do NOT reliably drive the operator's structured tool calls — the
+// autonomous flow needs a tool-call-capable model. See memory.
+export const OPERATOR_MODEL = 'claude-sonnet-4-6';
+export const OPERATOR_PROVIDER = 'anthropic';
 
 export interface OperatorDefinition {
   slug: string;
