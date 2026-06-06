@@ -298,3 +298,47 @@ unattended-floor gap) was FIXED in `a20c882`. These remain, deferred with user O
 - **api_tokens.agent_id index** (perf, NICE): unindexed findFirst by agentId at boot +
   per operator-run. Trivial at single-team scale.
 - **zod schema ↔ hand-written inputSchema duplication** (NICE): consider zod-to-json-schema.
+
+## 2026-06-06 — Multica-evaluation security audit (ARCHITECTURE-INVARIANTS sharpening)
+
+Triggered by an external architecture evaluation (Folio vs Multica). The evaluation's
+security recommendations mostly described Folio's EXISTING model (scoped capability tokens,
+per-agent identity, unified MCP↔REST authorization — all already enforced). An SSE+MCP
+authorization audit narrowed it to two real residual items, both now NAMED in
+ARCHITECTURE-INVARIANTS.md (invariant 12 + sharpened invariant 5; MCP-credential watch-item
+in gaps). These are the close-tracking entries the doc points to:
+
+- **Finding (invariant 12 — irreversible-op confirm gate is surface-coupled):** the Task-7
+  confirmation gate (`effectiveRiskTier` + `pending_ops` + choice_card at `executeTool`)
+  engages ONLY when `caller.conversationId` is set (cockpit chat). A headless MCP
+  `tools/call` carries no conversationId → the gate is SKIPPED → high-risk ops fall back to
+  scope-only authority (invariants 2 + 7). Acceptable for trusted first-party admin
+  automation today; the property should be owned by the OPERATION's risk tier on every path.
+  **Decision (YES/NO):** make `effectiveRiskTier` the sole decider on every path
+  (conversation / headless MCP / trigger-fired), with a needed-but-impossible confirmation
+  (no human present) becoming a fail-closed REFUSAL — the way `unattendedFloor` already
+  refuses trust-elevation (invariant 11) — instead of a silent fall-through to scope-only?
+  **Changes if YES:** `apps/server/src/lib/agent-tools.ts` Task-7 gate — decouple from
+  `caller.conversationId`; add a no-human refusal branch for high-tier ops on headless/
+  trigger paths; threat-model the change (security boundary). `routes/mcp.ts` carries no
+  conversation context, so the refusal (not a fall-through) is the headless contract.
+  (surfaced by the 2026-06-06 SSE+MCP authorization audit.)
+
+- **Finding (invariant 5 — emit-label fidelity):** `emitEvent` trusts each mutation handler
+  to pass the correct `workspaceId`/`projectId`. Subscription-time filtering (`routes/events.ts`)
+  blocks the LEAK but a mislabeled event is durably stored + replayed under the wrong scope.
+  Residual is LOW; the check belongs at every `emitEvent` call site, not only at subscription.
+  **Decision (YES/NO):** audit all ~16 `emitEvent` call sites to confirm the emitted scope
+  label is derived from the same `requireResource`/`canSeeProject` decision that authorized
+  the write (not a re-supplied/stale/null value), and/or assert it structurally in
+  `txWithEvents`?
+  **Changes if YES:** grep every `emitEvent`/`txWithEvents` caller; where the label is a free
+  variable, derive it from the authorized resource. Optionally a dev-mode invariant in
+  `lib/events.ts` that the event's scope matches the row's scope.
+  (surfaced by the 2026-06-06 SSE+MCP authorization audit.)
+
+- **Watch-item (MCP credential lifecycle — NOT a fix-now):** MCP auth is a static long-lived
+  bearer token; no OAuth-style / capability-handshake / short-lived-grant flow. Enforcement
+  is fine (scopes route through `executeTool`); lifecycle is the gap. Revisit when MCP usage
+  broadens beyond trusted first-party clients. Recorded as a gap in ARCHITECTURE-INVARIANTS.md,
+  no decision pending.
