@@ -370,5 +370,40 @@ describe('AiTab', () => {
       // The operator badge marks the active provider's row.
       expect(anthropicRow?.textContent).toMatch(/operator/i);
     });
+
+    test('the operator-model input is SEEDED from the configured model, not the first known model (review #1)', () => {
+      seedAnthropicDefaultKey();
+      // Operator runs on claude-sonnet-4-6; KNOWN_MODELS.anthropic[0] is a
+      // different id. The input must show the CONFIGURED model so clicking the
+      // button untouched can't silently switch it.
+      vi.mocked(useOperatorModel).mockReturnValue({
+        data: { provider: 'anthropic', model: 'claude-haiku-4-5', aiKeyLabel: 'default' },
+        isLoading: false,
+      } as never);
+      renderTab();
+      const input = screen.getByLabelText(/operator model for anthropic/i) as HTMLInputElement;
+      expect(input.value).toBe('claude-haiku-4-5');
+    });
+
+    test('a non-default operator label still shows the badge (review #2)', () => {
+      // Operator points at an ollama key under a non-default label.
+      vi.mocked(useInstanceAiKeys).mockReturnValue({
+        data: [
+          { id: 'k1', provider: 'ollama', label: 'local', baseUrl: 'https://o.example', createdAt: '2026-01-01T00:00:00Z' },
+        ],
+        isLoading: false,
+      } as never);
+      vi.mocked(useOperatorModel).mockReturnValue({
+        data: { provider: 'ollama', model: 'llama3.1:8b', aiKeyLabel: 'local' },
+        isLoading: false,
+      } as never);
+      const { container } = renderTab();
+      const rows = container.querySelectorAll('ul > li');
+      const ollamaRow = Array.from(rows).find(
+        (li) => li.querySelector('span.font-medium')?.textContent === 'ollama',
+      );
+      expect(ollamaRow?.textContent).toMatch(/operator/i);
+      expect(ollamaRow?.textContent).toMatch(/local/); // the non-default label is shown
+    });
   });
 });

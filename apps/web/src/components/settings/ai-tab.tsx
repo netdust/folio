@@ -23,8 +23,13 @@ interface Props {
 
 const PROVIDERS: AiProvider[] = ['anthropic', 'openai', 'openrouter', 'ollama'];
 
+// The FIRST entry per provider is the suggested default. anthropic leads with
+// claude-sonnet-4-6 to match the server's operator fallback (OPERATOR_MODEL in
+// apps/server/src/lib/operator.ts) — so the "Use for operator" pre-fill agrees
+// with the operator's actual default instead of silently proposing a different
+// model (review #1/#3).
 const KNOWN_MODELS: Record<AiProvider, readonly [string, ...string[]]> = {
-  anthropic: ['claude-opus-4-7', 'claude-sonnet-4-6', 'claude-haiku-4-5'],
+  anthropic: ['claude-sonnet-4-6', 'claude-opus-4-7', 'claude-haiku-4-5'],
   openai: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo'],
   openrouter: ['anthropic/claude-haiku-4-5', 'openai/gpt-4o-mini'],
   ollama: ['llama3.1', 'qwen2.5'],
@@ -340,10 +345,18 @@ export function AiTab({ wslug }: Props) {
             const defaultRow = rows.find((k) => k.label === 'default');
             const otherRows = rows.filter((k) => k.label !== 'default');
             const noRows = rows.length === 0;
-            // T5: is THIS provider's default key the one the operator runs on?
+            // T5: is the operator running on a key of THIS provider? Match by
+            // provider only (any label) so a non-default operator label still
+            // shows its badge (review #2 — the server supports any aiKeyLabel).
             const om = operatorModel.data;
-            const isOperatorKey = om?.provider === p && om?.aiKeyLabel === 'default';
-            const rowModel = operatorModelByProvider[p] ?? KNOWN_MODELS[p][0];
+            const isOperatorProvider = om?.provider === p;
+            // Seed the operator-model input from the LIVE configured value when
+            // this provider is the operator's (review #1 — was always
+            // KNOWN_MODELS[p][0], so clicking the button untouched silently
+            // switched the model). Else the provider's suggested default.
+            const rowModel =
+              operatorModelByProvider[p] ??
+              (isOperatorProvider && om?.model ? om.model : KNOWN_MODELS[p][0]);
             return (
               <li
                 key={p}
@@ -363,9 +376,10 @@ export function AiTab({ wslug }: Props) {
                         configured via API (no default-label key)
                       </span>
                     )}
-                    {isOperatorKey ? (
+                    {isOperatorProvider ? (
                       <span className="ml-2 rounded bg-primary/10 px-1.5 py-0.5 text-xs font-medium text-primary">
                         operator{om?.model ? ` · ${om.model}` : ''}
+                        {om && om.aiKeyLabel !== 'default' ? ` (${om.aiKeyLabel})` : ''}
                       </span>
                     ) : null}
                   </span>
@@ -382,8 +396,10 @@ export function AiTab({ wslug }: Props) {
                     </Button>
                   ) : null}
                 </div>
-                {/* T5: assign this provider's default key as the operator's model.
-                    A key carries no model, so the admin picks one here. */}
+                {/* T5: assign this provider's DEFAULT key as the operator's model
+                    (a key carries no model, so the admin picks one here). v1 sets
+                    the default-label key; a non-default operator label set via API
+                    still DISPLAYS its badge above but isn't settable from this row. */}
                 {defaultRow ? (
                   <div className="mt-1.5 flex items-center gap-2">
                     <input
@@ -405,7 +421,9 @@ export function AiTab({ wslug }: Props) {
                       disabled={setOperatorModel.isPending || !rowModel.trim()}
                       onClick={() => onUseForOperator(p, rowModel.trim())}
                     >
-                      {isOperatorKey ? 'Update operator model' : 'Use for operator'}
+                      {isOperatorProvider && om?.aiKeyLabel === 'default'
+                        ? 'Update operator model'
+                        : 'Use for operator'}
                     </Button>
                   </div>
                 ) : null}

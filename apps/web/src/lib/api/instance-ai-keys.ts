@@ -55,7 +55,10 @@ export function useInstanceAiKeys(opts: { enabled?: boolean } = {}) {
 export function useOperatorModel(opts: { enabled?: boolean } = {}) {
   return useQuery({
     ...aiKeysQueryOptions(opts.enabled ?? true),
-    select: (r: InstanceAiKeysPayload) => r.operator_model,
+    // Normalize a missing field to null (review #4): an older/variant server that
+    // omits operator_model would otherwise yield `undefined`, silently hiding the
+    // badge with no error.
+    select: (r: InstanceAiKeysPayload) => r.operator_model ?? null,
   });
 }
 
@@ -69,7 +72,15 @@ export function useSetOperatorModel() {
         `${BASE}/operator-model`,
         vars,
       ),
-    onSuccess: () => qc.invalidateQueries({ queryKey: instanceAiKeysKeys.all }),
+    onSuccess: (res) => {
+      // Write the server's authoritative echo into the cache so the operator
+      // badge updates SYNCHRONOUSLY (no stale-model flash while the refetch is in
+      // flight — review #5), then invalidate to reconcile keys + setting.
+      qc.setQueryData<InstanceAiKeysPayload>(instanceAiKeysKeys.list(), (prev) =>
+        prev ? { ...prev, operator_model: res.operator_model } : prev,
+      );
+      qc.invalidateQueries({ queryKey: instanceAiKeysKeys.all });
+    },
   });
 }
 
