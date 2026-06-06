@@ -192,8 +192,11 @@ export function TableView({ wslug, pslug, tslug }: Props) {
   }, [activeView, urlViewId, navigate, search]);
 
   const allColumns: Column[] = useMemo(
-    () => mergeColumns(fields ?? [], activeView),
-    [fields, activeView],
+    // Pass the loaded docs so mergeColumns can synthesize columns for visible
+    // frontmatter keys that aren't pinned Fields — else effectiveVisibleKeys
+    // drops them and a column-toggle silently destroys them (views-UX round 2).
+    () => mergeColumns(fields ?? [], activeView, page?.data ?? []),
+    [fields, activeView, page?.data],
   );
   const orderedColumns: Column[] = useMemo(
     () => applyColumnOrder(allColumns, activeView?.columnOrder ?? null),
@@ -350,10 +353,15 @@ export function TableView({ wslug, pslug, tslug }: Props) {
     return (slug: string) => map.get(slug) ?? null;
   }, [relPages, relItems]);
 
-  const suggestions = useMemo(
-    () => columnSuggestions(docs, fields ?? []),
-    [docs, fields],
-  );
+  const suggestions = useMemo(() => {
+    // Exclude any key already represented as a column — that now includes
+    // SYNTHESIZED columns (visible frontmatter keys that aren't pinned Fields).
+    // Without this, a synthesized column like `priority` would also appear as a
+    // "Suggested from your data" row, i.e. a duplicate the user could "pin"
+    // onto a key that's already a column (views-UX round 2).
+    const columnKeys = new Set(allColumns.map((c) => c.key));
+    return columnSuggestions(docs, fields ?? []).filter((s) => !columnKeys.has(s.key));
+  }, [docs, fields, allColumns]);
 
   // Build the per-column menu. Builtins (title/status/updated_at) intentionally
   // skip the menu — they're not deletable. For pinned fields we surface the

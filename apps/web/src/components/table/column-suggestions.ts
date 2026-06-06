@@ -12,7 +12,7 @@ interface DocLike {
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}(T.*)?$/;
 
-function inferType(value: unknown): FieldType {
+export function inferType(value: unknown): FieldType {
   if (Array.isArray(value)) return 'multi_select';
   if (typeof value === 'number') return 'number';
   if (typeof value === 'boolean') return 'boolean';
