@@ -19,6 +19,7 @@ import {
   users,
 } from '../db/schema.ts';
 import { env } from '../env.ts';
+import { OPERATOR_AGENT_ID } from './operator.ts';
 import { seedProjectDefaults } from './seed-project-defaults.ts';
 import { makeTestApp } from '../test/harness.ts';
 import { createRun, ensureRunsTable, nextChainId } from '../services/agent-runs.ts';
@@ -26,7 +27,7 @@ import { listComments } from '../services/comments.ts';
 import { type ToolDef, executeTool, listToolDefs, registerTool } from './agent-tools.ts';
 import { registerRealTools } from './agent-tools-registry.ts';
 import { SYSTEM_WORKSPACE_SLUG, isReservedSlug } from './system-workspace.ts';
-import { workspaces } from '../db/schema.ts';
+import { workspaces, tables as schemaTables } from '../db/schema.ts';
 import { intersectAgentProjects } from './agent-projects.ts';
 import { newApiToken } from './auth.ts';
 
@@ -2126,5 +2127,126 @@ describe('B1: MCP human-PAT project narrowing (no cross-project leak)', () => {
         slug: 'anything',
       }),
     ).rejects.toThrow(/access|not granted|forbidden|not found/i);
+  });
+
+  // RCA 2026-06-06 (clean-DB repro): the operator's EPHEMERAL conversation token
+  // (createConversationRun) carries agentId=OPERATOR_AGENT_ID (the code-singleton
+  // sentinel, which has NO documents row) AND createdBy=<the caller user>. Every
+  // agent-doc resolution from token.agentId (resolveProjectInWorkspace,
+  // resolveAuthorContextForToken, describe_workspace) did findFirst({id}) → no row
+  // → agent_missing, blocking EVERY project-scoped operator tool + comment. This
+  // is the REAL token shape (createdBy is the user, so isOperatorToken is FALSE —
+  // the discriminant must be the sentinel agentId itself, a server-set constant).
+  function operatorToken(seed: { user: { id: string } }, scopes: string[]): ApiToken {
+    return makeToken({
+      workspaceId: null,
+      createdBy: seed.user.id, // operator token carries the CALLER's createdBy
+      agentId: OPERATOR_AGENT_ID, // the synthetic sentinel — no documents row
+      projectIds: null, // owner caller → unbounded → operator ['*'] stands
+      scopes,
+    });
+  }
+
+  it('operator token resolves a project (get_document), NOT agent_missing', async () => {
+    const { db, seed } = await makeTestApp();
+    const err = await exec(operatorToken(seed, ['documents:read']), 'operator', 'get_document', {
+      workspace_slug: 'acme',
+      project_slug: 'web',
+      slug: 'does-not-exist',
+    }).then(
+      () => null,
+      (e) => e as Error & { data?: { reason?: string } },
+    );
+    expect(err?.data?.reason).not.toBe('agent_missing');
+    if (err) expect(String(err.message)).not.toMatch(/agent for this token no longer exists/i);
+  });
+
+  it('operator token resolves comment-author context (create_comment), NOT agent_missing', async () => {
+    const { db, seed } = await makeTestApp();
+    // resolveAuthorContextForToken runs BEFORE the parent lookup, so the operator
+    // agent-resolution failure (agent_missing) fires even with a missing parent.
+    // The fix must let it past that throw; a missing parent then yields a
+    // not-found, NOT agent_missing.
+    const err = await exec(
+      operatorToken(seed, ['documents:read', 'documents:write']),
+      'operator',
+      'create_comment',
+      {
+        workspace_slug: 'acme',
+        project_slug: 'web',
+        parent_slug: 'no-such-parent',
+        body: 'operator comment',
+      },
+    ).then(
+      () => null,
+      (e) => e as Error & { data?: { reason?: string } },
+    );
+    expect(err?.data?.reason).not.toBe('agent_missing');
+  });
+
+  // RCA 2026-06-06 (same clean-DB repro, second bug): serviceActor returned
+  // `{ id: ctx.actor }`, and ctx.actor for a runner-driven operator turn is the
+  // SLUG `agent:_operator` (runner.ts) — NOT a users.id. documents.updated_by
+  // FK-references users.id, so an operator update_document/create_document threw
+  // SQLITE_CONSTRAINT_FOREIGNKEY (787). The actor for a write must be an FK-valid
+  // users.id — the run's caller (token.createdBy), mirroring the runner's
+  // transitionActor lesson. (The operator falls back to folio_api REST today, so
+  // the task still completes — but the native write path must not FK-fail.)
+  it('operator update_document attributes to the caller user, NOT an FK violation', async () => {
+    const { db, seed } = await makeTestApp();
+    const table = await db.query.tables.findFirst({
+      where: eq(schemaTables.projectId, seed.project.id),
+    });
+    // Seed a work item to update (created by the owner).
+    const docId = nanoid();
+    await db.insert(documents).values({
+      id: docId,
+      workspaceId: seed.workspace.id,
+      projectId: seed.project.id,
+      tableId: table!.id,
+      type: 'work_item',
+      slug: 'op-update-target',
+      title: 'Op update target',
+      status: 'todo',
+      body: '',
+      frontmatter: {},
+      createdBy: seed.user.id,
+      updatedBy: seed.user.id,
+    });
+    // Operator token: agentId=sentinel, createdBy=caller user; actor=the slug.
+    const opTok = operatorToken(seed, ['documents:read', 'documents:write']);
+    const result = await exec(opTok, 'agent:_operator', 'update_document', {
+      workspace_slug: 'acme',
+      project_slug: 'web',
+      slug: 'op-update-target',
+      status: 'in_progress',
+    });
+    expect(result).toBeTruthy();
+    // The write landed and updated_by is the FK-valid caller user (not the slug).
+    const row = await db.query.documents.findFirst({ where: eq(documents.id, docId) });
+    expect(row?.status).toBe('in_progress');
+    expect(row?.updatedBy).toBe(seed.user.id);
+  });
+
+  it('a real agent id that does NOT exist still throws agent_missing (guard intact)', async () => {
+    const { db, seed } = await makeTestApp();
+    // A non-operator agent-bound token whose agent row was deleted must STILL be
+    // denied — the operator special-case must not weaken the real guard.
+    const ghost = makeToken({
+      workspaceId: null,
+      createdBy: seed.user.id,
+      agentId: 'ghost-agent-id-that-has-no-row',
+      projectIds: null,
+      scopes: ['documents:read'],
+    });
+    const err = await exec(ghost, 'ghost', 'get_document', {
+      workspace_slug: 'acme',
+      project_slug: 'web',
+      slug: 'x',
+    }).then(
+      () => null,
+      (e) => e as Error & { data?: { reason?: string } },
+    );
+    expect(err?.data?.reason).toBe('agent_missing');
   });
 })

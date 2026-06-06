@@ -479,6 +479,12 @@ export interface CreateDocumentArgs {
   /** Required when input.type === 'work_item'. Null for non-table types. */
   table: TableEntity | null;
   actor: User;
+  /**
+   * EVENT actor string when it must differ from the FK-write actor (`actor.id`).
+   * See UpdateDocumentArgs.eventActor — preserves the agent-chain autonomy gate
+   * for agent/operator writes. Defaults to `actor.id`.
+   */
+  eventActor?: string;
   /** The bearer token for the request, or null for session-auth. Used by delegation guard. */
   token: ApiToken | null;
   /**
@@ -500,6 +506,7 @@ export async function createDocument(
   args: CreateDocumentArgs,
 ): Promise<CreateDocumentResult> {
   const { workspace: ws, project: p, actor: user, token } = args;
+  const eventActor = args.eventActor ?? user.id;
   const input: CreateDocumentInput = {
     ...args.input,
     frontmatter: stripReservedFrontmatter(args.input.frontmatter ?? {}),
@@ -708,7 +715,7 @@ export async function createDocument(
         projectId: p?.id ?? null,
         documentId: id,
         kind: 'agent.created',
-        actor: user.id,
+        actor: eventActor,
         payload: { slug, api_token_id: agentApiTokenId },
       });
     }
@@ -717,7 +724,7 @@ export async function createDocument(
       projectId: p?.id ?? null,
       documentId: id,
       kind: 'document.created',
-      actor: user.id,
+      actor: eventActor,
       payload: { slug, type: input.type },
     });
     if (input.type === 'work_item' && p) {
@@ -743,7 +750,7 @@ export async function createDocument(
           projectId: p.id,
           documentId: id,
           kind: 'agent.task.assigned',
-          actor: user.id,
+          actor: eventActor,
           payload: {
             slug,
             agent: agentSlug,
@@ -775,6 +782,14 @@ export interface UpdateDocumentArgs {
   /** Required when existing.type === 'work_item' and existing.tableId is null. */
   fallbackTable: TableEntity | null;
   actor: User;
+  /**
+   * The EVENT actor string, when it must differ from the FK-write actor
+   * (`actor.id`). For an agent/operator run the FK write goes to the real human
+   * (`actor.id`, an FK-valid users.id) while the event actor stays the agent slug
+   * `agent:<slug>` so the agent-chain autonomy gate (isAgentOriginated) is
+   * preserved. Defaults to `actor.id` (human-MCP path — actor IS the user).
+   */
+  eventActor?: string;
   existing: Document;
   patch: DocumentPatch;
 }
@@ -815,6 +830,7 @@ export async function updateDocument(
   args: UpdateDocumentArgs,
 ): Promise<Document> {
   const { workspace: ws, project: p, actor: user, existing, patch } = args;
+  const eventActor = args.eventActor ?? user.id;
 
   // G5 — comments must be mutated through update_comment (services/comments.ts),
   // which enforces author-only, kind-immutable, edited_at, and soft-delete
@@ -1004,7 +1020,7 @@ export async function updateDocument(
       projectId: p?.id ?? null,
       documentId: existing.id,
       kind: 'document.updated',
-      actor: user.id,
+      actor: eventActor,
       payload: {
         changes: [
           ...Object.keys(patch),
@@ -1033,7 +1049,7 @@ export async function updateDocument(
           projectId: p.id,
           documentId: existing.id,
           kind: 'agent.task.assigned',
-          actor: user.id,
+          actor: eventActor,
           payload: {
             slug: updated.slug,
             agent: agentSlug,
@@ -1055,11 +1071,19 @@ export interface DeleteDocumentArgs {
   /** Null for agent/trigger (workspace-scoped) — Phase 2.5. */
   project: Project | null;
   actor: User;
+  /**
+   * EVENT actor string when it must differ from `actor.id` — keeps the agent
+   * slug as the `document.deleted` event actor (autonomy gate). Defaults to
+   * `actor.id`. (delete writes no FK column, but symmetry keeps suppression
+   * consistent across create/update/delete.)
+   */
+  eventActor?: string;
   existing: Document;
 }
 
 export async function deleteDocument(args: DeleteDocumentArgs): Promise<void> {
   const { workspace: ws, project: p, actor: user, existing } = args;
+  const eventActor = args.eventActor ?? user.id;
 
   // G5 — comments must be deleted through delete_comment for soft-delete +
   // author-only semantics. Reject at the service layer.
@@ -1154,7 +1178,7 @@ export async function deleteDocument(args: DeleteDocumentArgs): Promise<void> {
               projectId: p?.id ?? null,
               documentId: d.id,
               kind: 'comment.deleted',
-              actor: user.id,
+              actor: eventActor,
               payload: { document_id: d.id, parent_id: d.parent_id, author },
             });
           } else {
@@ -1163,7 +1187,7 @@ export async function deleteDocument(args: DeleteDocumentArgs): Promise<void> {
               projectId: p?.id ?? null,
               documentId: d.id,
               kind: 'document.deleted',
-              actor: user.id,
+              actor: eventActor,
               payload: { id: d.id, slug: d.slug, type: d.type, title: d.title },
             });
           }
@@ -1187,7 +1211,7 @@ export async function deleteDocument(args: DeleteDocumentArgs): Promise<void> {
         projectId: p?.id ?? null,
         documentId: existing.id,
         kind: 'agent.deleted',
-        actor: user.id,
+        actor: eventActor,
         payload: { slug: existing.slug },
       });
     }
@@ -1196,7 +1220,7 @@ export async function deleteDocument(args: DeleteDocumentArgs): Promise<void> {
       projectId: p?.id ?? null,
       documentId: existing.id,
       kind: 'document.deleted',
-      actor: user.id,
+      actor: eventActor,
       payload: {
         id: existing.id,
         slug: existing.slug,
