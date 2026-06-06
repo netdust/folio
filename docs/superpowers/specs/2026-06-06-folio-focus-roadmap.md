@@ -5,10 +5,11 @@
 > ground-truth audit of the current codebase. Purpose: a single accurate document to brainstorm
 > from later, so the right things — and only the right things — get built.
 >
-> **How to use this:** read §3 (the gap map) first — it's the part that decides where weeks go.
-> §1 is the strategic thesis. §2 is what's already done (so we don't rebuild it). §4 is the two
-> external reports' verbatim signal + how it reconciles. §5 is the open brainstorm questions to
-> bring to the working session.
+> **How to use this:** read §3 (the gap map) first — it's the part that decides where weeks go;
+> §3.5 within it is the source-grounded structural-debt assessment (the four "weak/risky" points
+> checked against code). §1 is the strategic thesis. §2 is what's already done (so we don't rebuild
+> it). §4 is the two external reports' verbatim signal + how it reconciles. §5 is the open
+> brainstorm questions to bring to the working session.
 >
 > Sibling docs: `2026-06-06-multica-architecture-study.md`, `2026-06-06-multica-agent-layer-gap-map.md`,
 > `ARCHITECTURE-INVARIANTS.md` (the convergence-point contract), `tasks/retro-follow-ups.md`
@@ -199,6 +200,91 @@ compiler-enforced).
   raise it?** A feature that adds a fourth access model or a fifth execution path needs to justify
   the cognitive cost, not just the functional benefit.
 
+§3.5 below is the source-grounded breakdown of the four specific structural-debt symptoms behind
+this constraint — confirming each against the code and showing how three of the four collapse into
+work already on this roadmap.
+
+---
+
+### 3.5 — Structural-debt assessment (the quality review's four "weak/risky" points, ground-truthed)
+
+The codebase quality review (§4b) named four concrete structural-debt symptoms. Each was checked
+against source on 2026-06-06. **All four are REAL — none is a surprise — but they are not equal:
+two are active design targets already in motion, and three of the four collapse into work already
+on this roadmap.** The value of the source check is that a reviewer working from architecture
+*description* can name the *shape* of a risk but not see how far the mitigation already is.
+
+| Point | Real? | Status |
+|---|---|---|
+| #1 Complexity density | ✅ Yes | **The meta-risk** — already the governing constraint (§3.4) |
+| #2 Documentation-first invariants | ✅ Yes | **Actively closing** — a traceability checker just landed in-tree |
+| #3 Event/state coupling | ✅ Yes | **Resolved by the state machine** (§3.1) — not separate work |
+| #4 Agent "infra-visible" | ✅ Yes, smallest | **Two narrow carve-outs**, possibly irreducible |
+
+**#1 — Complexity density → REAL; it IS the meta-risk (already §3.4).**
+Every symptom is literally true in source: `role ∩ token ∩ agent ∩ resource` intersection (invariants
+2/3/7), three access models (workspace/project/instance via `lib/access.ts`), four execution paths
+(MCP / REST / runner / SSE). **But most of that density is intentional and load-bearing** — it's the
+cost of being a control plane, not a CRUD app (the review itself says "closer to Kubernetes/Stripe/
+Temporal"). The risk is not that the complexity *exists* but that it stops being *reasoned-about*. So
+the mitigation is NOT "simplify the auth model" (that would weaken the 9/10 security) — it's the two
+moves already in flight: (a) name the convergence points (DONE — `ARCHITECTURE-INVARIANTS.md`), and
+(b) make them mechanically checkable (in progress — see #2). This is the lens §3.4 applies to every
+other item.
+
+**#2 — "Documentation-first correctness" → REAL, but actively closing; sharper than the review states.**
+There is NEW tooling in the working tree: `scripts/check-invariants.ts` (225 lines) + a pre-commit
+hook (`scripts/hooks/pre-commit-invariants.sh`), wired via `scripts/hooks/install.sh` and the
+`check:invariants` package script. **But the precise truth is sharper than "not all invariants are
+mechanically enforced":** that checker verifies **traceability, NOT enforcement.** Its own header
+says so — it confirms each invariant's `Converges on` clause cites a real file/symbol (errors on a
+dead citation, warns on line-drift), so the doc can't rot off its anchors. It does NOT verify the
+code *obeys* the invariant. The enforcement ladder therefore has three rungs:
+
+  1. **Structural** (bypass is *physically impossible*) — e.g. `instance_skills.trusted` as a typed
+     column (invariant 11): a frontmatter write *cannot* reach the trust flag. The strongest rung.
+  2. **Mechanical-traceability** (NEW) — `check-invariants.ts` pre-commit: the doc's citations can't
+     silently drift off the code. Non-blocking by design (advisory drift shouldn't train `--no-verify`).
+  3. **Discipline + review** — the `invariant-auditor` agent at `/shakeout` + `/code-review` must
+     *find* a bypass; nothing *prevents* one.
+
+The review's claim is TRUE: most invariants are still rung 3 (auditor-found, not prevented); only a
+few are rung-1 structural. **The trajectory is exactly right** — the §3.4 prescription "promote
+trust-based invariants to structural when you're in the relevant code" is the move that walks
+invariants UP this ladder. The new checker added rung 2 beneath rung 3; the standing work is moving
+more invariants to rung 1.
+
+**#3 — Event/state coupling "transition-state architecture" → REAL; the state machine resolves it.**
+True and already mapped. `txWithEvents` is universal on the *write* side (invariant 5), but the
+*read/UI* side is mixed: SSE-teaches-refetch is the default (invariant 8) with TWO ratified exceptions
+that build UI state directly from events (`useReactorHealth`, `useActivityFeed`). That mixedness is
+the "not uniformly modeled" the review sees. **The deeper version: today the event stream records
+*that* things changed, but state itself has no model** — work-item status is a bare label (§3.1).
+What converges event + state into one uniformly-modeled system is **the work-item state machine**:
+once a transition is an explicit, guarded, event-emitting operation, the event stream and the state
+model stop being two loosely-coupled things. So #3 is not separate work — **it is the downstream
+benefit of building §3.1.**
+
+**#4 — Agent layer "infra-visible" → REAL but the smallest; two narrow carve-outs, possibly irreducible.**
+For its actual *work*, the agent is ALREADY "just another scoped API consumer": the runner mints a
+real scoped token (`token.scopes ∩ callerScopes`, `runner.ts` ~492–509), routes every tool through
+the same `executeTool` gate as MCP/REST, and revokes the token in `finally`. No god-mode path. The
+"infra-visible" surface is exactly **TWO** documented system-authority reads a normal client can't do
+(both already in `ARCHITECTURE-INVARIANTS.md` Deliberate exceptions):
+  1. `loadAgentDefinition` — reads the agent's own body + named skills to materialize its prompt.
+  2. the AI-key decrypt in `loadContext` (`runner.ts` ~414–429) — reads+decrypts the BYOK secret for
+     the provider call only.
+Both are **module-private, not registered as tools, not routable** — a caller physically cannot invoke
+them, and they're bounded (exact-slug match, throw-on-miss, no fallback). They are the *irreducible
+minimum*: an executor must be able to load its own definition and the credential it runs under. So
+"close to unifying, not fully there" is accurate — but the remaining gap may be **inherent**, not debt
+to pay down. This is the smallest of the four and arguably not actionable.
+
+**Net:** all four valid, none surprising. #1 is the lens; #3 is a *benefit* of §3.1, not separate;
+#2 is mid-flight (the in-tree checker proves it); only #4 is standalone, and it's the smallest and
+possibly irreducible. The brainstorm should weigh #1 as the governing constraint and treat #2's
+ladder-climb as something to do opportunistically while building §3.1 and §3.2 — not as its own phase.
+
 ---
 
 ## 4. The two external evaluations — signal + reconciliation
@@ -234,18 +320,15 @@ stabilization-vs-complexity-containment phase").
   event spoofing, missing audit).
 
 **Named risks** (all reconcile with what we already know — none contradicts):
-1. **Complexity density** = the main issue → addressed as the §3.4 constraint above.
-2. **"Documentation-first correctness"** — not all invariants mechanically enforced; some rely on
-   discipline → this is *why `ARCHITECTURE-INVARIANTS.md` + `/code-review` + `/shakeout` exist*;
-   the prescription is to keep converting trust-based invariants to structural ones (§3.4).
-3. **Event/state coupling still evolving** — some flows event-driven, some request-driven, some
-   hybrid; a "transition-state architecture" → the state machine (§3.1) + keeping audit unified
-   (§3.2) are the moves that converge this.
-4. **Agent layer still "infra-visible"** — agents are partially special execution contexts, not
-   fully indistinguishable from API clients → this is the "make agents boring" direction both the
-   roadmap and the Multica comparison push; it's a known target, not a surprise.
-5. **MCP / external boundary evolving** (static tokens, no full OAuth lifecycle) → already recorded
-   as the MCP-credential watch-item in `ARCHITECTURE-INVARIANTS.md` gaps + `tasks/retro-follow-ups.md`.
+- The review's **four structural-debt symptoms** (complexity density; documentation-first invariants;
+  event/state coupling; agent infra-visibility) are checked against source and reconciled in **§3.5**
+  above — don't duplicate them here. Net of that section: all four real, #1 is the governing lens,
+  #3 is a benefit of building §3.1, #2 is mid-flight (the in-tree invariant checker), and #4 is the
+  smallest (two possibly-irreducible carve-outs).
+- The one risk §3.5 does NOT cover: **MCP / external boundary evolving** (static tokens, no full OAuth
+  lifecycle) → already recorded as the MCP-credential watch-item in `ARCHITECTURE-INVARIANTS.md` gaps
+  + `tasks/retro-follow-ups.md`. Enforcement is fine (scopes route through `executeTool`); it's the
+  credential *lifecycle* that's the watch-item.
 
 **The one-sentence verdict, worth pinning:**
 > *Folio is not at risk of being insecure — it is at risk of becoming too powerful for its own
