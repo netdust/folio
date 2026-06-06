@@ -2,6 +2,13 @@
 
 Created 2026-05-28 by `/evaluate` after Phase 3 Sub-phase A. One bullet per item.
 
+- **[2026-06-06, from Multica study] Build a content-based output-secret redactor at the model-output seam?**
+  Folio's secret defenses are all *structural* (BYOK keys encrypted + injected to provider call only; minted token revoked at run end; `redactRunForApi` strips `system_prompt`). Nothing scans what the model itself PRINTS. `runner.ts:1601` (`setRunBody`) and `:1636`/`:1693` (`postAgentComment`) persist + SSE-broadcast model output verbatim. Because `ccToken` is minted live (`:1528`) and revoked only in the `finally` (`:1614`), an agent that echoes its own `folio_pat_` token leaks a *usable* credential into a comment + the live stream.
+  **Decision needed:** BUILD NOW / DEFER.
+  **What changes if BUILD:** one small redactor placed AT THE LOADER (the `system_prompt`-leaked-3× lesson — not per-handler), wrapping `postAgentComment` + `setRunBody` before persist/broadcast. Scope tight: `folio_pat_[A-Za-z0-9_-]{40}` (best: the exact known minted-token string) + `Bearer <token>` + `sk-...` + DB conn strings → fixed sentinel. Do NOT port Multica's full AWS/GitHub/Slack/JWT bank (BYOK keys are structurally out of the message stream). Touches token + BYOK surfaces → **fire the threat-modeling gate** (`## Threat model` section in the plan).
+  **Why MEDIUM not HIGH:** the cc path (where `cat .env` is most plausible) is disabled; the minted token is short-lived; BYOK keys never enter the message stream by construction. Live window = the API path echoing its own still-valid token into a comment.
+  **Source:** `docs/superpowers/specs/2026-06-06-multica-architecture-study.md` §3.1.
+
 **Resolved:**
 - 2026-05-28: `ProviderEvent.done.reason` widened to `'stop' | 'tool_use' | 'max_tokens' | 'refusal' | 'pause_turn'`. Anthropic maps `refusal` + `pause_turn` explicitly; OpenAI `content_filter` → `refusal`. Shipped as B fix #10.
 

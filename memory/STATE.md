@@ -550,3 +550,20 @@ See `docs/PHASES.md` for the canonical phase list (above-section mirrors it). Lo
 [2026-06-06] — session ended (no significant changes captured)
 [2026-06-06] — session ended (no significant changes captured)
 [2026-06-06] — session ended (no significant changes captured)
+
+## [2026-06-06] Multica architecture study — Folio validated, 3 narrow deltas
+
+Studied multica-ai/multica (mature Go+Postgres+Next agent platform; product peer NOT stack twin) to harden Folio + pressure-test the agent model. Multi-agent workflow (5 readers → adversarial verify vs real Folio source → synth, 2 passes converged). Doc: `docs/superpowers/specs/2026-06-06-multica-architecture-study.md`.
+
+**Verdict: Folio is in good shape and AHEAD of a mature peer on the load-bearing properties.** Multica's agent token is owner-equivalent-within-workspace; Folio's `agent ∩ token ∩ caller` + fail-closed `effectiveReach` is stricter. Folio also ahead on at-rest secrets (Multica stores provider keys plaintext in `custom_env`) and skill trust (forge-proof typed column vs RBAC-only).
+
+**Only 3 real deltas, all low/medium, all bounded by single-team model:**
+- **3.1 (MEDIUM, actionable):** no content-based output redactor — `runner.ts:1601` (`setRunBody`) / `:1636`/`:1693` (`postAgentComment`) persist+broadcast model output RAW. `ccToken` is live-then-revoked (`:1528`/`:1614`) so an agent echoing its own `folio_pat_` token leaks a USABLE credential to a comment+SSE. Fix = small redactor AT THE LOADER (system_prompt-leaked-3× lesson), scoped to `folio_pat_` shape + a few patterns. Touches token+BYOK → needs threat-model. Logged to `tasks/retro-follow-ups.md`.
+- **3.2 (LOW):** no sweep-on-revoke for in-flight runs (frozen authority snapshot, never re-checks `access.ts` mid-loop).
+- **3.3 (idea-only):** name `token-reach.ts` as a convergence point in ARCHITECTURE-INVARIANTS.md if that doc is open.
+
+**Steal (non-security, fit the wedge):** trigger discipline — skip-vs-fail classification, per-trigger `concurrency: skip|queue|replace` frontmatter, webhook payload as fenced untrusted data.
+**Doc cleanups noted:** stale "v1 passes no MCP token" at `runner.ts:1516`; unused `SESSION_SECRET`.
+**cc-CLI dead-code cluster** (unfiltered child env incl FOLIO_MASTER_KEY, etc.) = real but unreachable behind preflight gate `runner.ts:791` → fold into S-1/S-2 cc-revival, not standalone.
+**Caveat:** verification ran under API rate-limiting; the 3 deltas are hand-verified + 2-pass-converged, but the §6 "already-handled" list is high-confidence-not-exhaustively-re-verified.
+[2026-06-06] — session ended (no significant changes captured)
