@@ -333,3 +333,73 @@ describe('DELETE /api/v1/instance/ai-keys/:keyId', () => {
     expect((await db.query.aiKeys.findMany({ where: eq(aiKeys.id, id) })).length).toBe(1);
   });
 });
+
+describe('POST /api/v1/instance/ai-keys — apiKey optional for ollama (M5)', () => {
+  test('ollama key WITHOUT apiKey is accepted (keyless, 201)', async () => {
+    const { app, seed } = await makeTestApp();
+    const res = await app.request(PATH, {
+      method: 'POST',
+      headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+      // loopback baseUrl needs the env flag; use a public host to isolate the apiKey rule.
+      body: JSON.stringify({ provider: 'ollama', label: 'local', baseUrl: 'https://ollama.example.com' }),
+    });
+    expect(res.status).toBe(201);
+  });
+
+  test('a PAID provider WITHOUT apiKey is rejected (422)', async () => {
+    const { app, seed } = await makeTestApp();
+    const res = await app.request(PATH, {
+      method: 'POST',
+      headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider: 'anthropic', label: 'default' }),
+    });
+    expect(res.status).toBe(400); // zValidator → 400 on the refine failure
+  });
+});
+
+describe('PUT /api/v1/instance/ai-keys/operator-model', () => {
+  const OM = `${PATH}/operator-model`;
+
+  test('an instance admin can set the operator model (200) + GET surfaces it', async () => {
+    const { app, seed } = await makeTestApp();
+    const res = await app.request(OM, {
+      method: 'PUT',
+      headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider: 'ollama', model: 'llama3.1:8b', aiKeyLabel: 'default' }),
+    });
+    expect(res.status).toBe(200);
+    const get = await app.request(PATH, { headers: { Cookie: seed.sessionCookie } });
+    const body = (await get.json()) as { data: { operator_model: unknown } };
+    expect(body.data.operator_model).toEqual({ provider: 'ollama', model: 'llama3.1:8b', aiKeyLabel: 'default' });
+  });
+
+  test('a non-admin member is forbidden (403, M3)', async () => {
+    const { app, db } = await makeTestApp();
+    const memberCookie = await seedMemberSession(db);
+    const res = await app.request(OM, {
+      method: 'PUT',
+      headers: { Cookie: memberCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider: 'ollama', model: 'llama3.1:8b', aiKeyLabel: 'default' }),
+    });
+    expect(res.status).toBe(403);
+  });
+
+  test('a bearer token cannot reach the operator-model write (M4)', async () => {
+    const { app, db, seed } = await makeTestApp();
+    const { token, hash } = newApiToken();
+    await db.insert(apiTokens).values({
+      id: nanoid(),
+      workspaceId: seed.workspace.id,
+      name: 'bearer',
+      tokenHash: hash,
+      scopes: ['documents:write'],
+      createdBy: seed.user.id,
+    });
+    const res = await app.request(OM, {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider: 'ollama', model: 'llama3.1:8b', aiKeyLabel: 'default' }),
+    });
+    expect([401, 403]).toContain(res.status);
+  });
+});
