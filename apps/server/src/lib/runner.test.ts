@@ -363,6 +363,31 @@ describe('runAgent pre-flight checks', () => {
     expect(parent.id).toBeTruthy();
   });
 
+  // A key ROW exists but its ciphertext can't be decrypted (wrong
+  // FOLIO_MASTER_KEY). The run must fail with the HONEST key_decrypt_failed
+  // reason — NOT no_ai_key (a key IS configured) and NOT provider_error /
+  // "Network error" (the pre-fix unguarded decrypt threw → sanitized to that).
+  // Bite: without the preflight key_decrypt_failed branch this is no_ai_key
+  // (or, without the loadContext guard, provider_error from the sanitized throw).
+  test('key_decrypt_failed — a row exists but its ciphertext is undecryptable', async () => {
+    const { db, run } = await scaffold({ withAiKey: false });
+    const control: StubControl = { rounds: [], called: 0 };
+    installProviderStub(control);
+    await db.insert(aiKeys).values({
+      id: nanoid(),
+      provider: 'anthropic',
+      label: 'default',
+      encryptedKey: 'not-valid-ciphertext-under-this-master-key',
+    });
+
+    await runAgent({ runId: run.id });
+
+    const fm = await readRun(db, run.id);
+    expect(fm.status).toBe('failed');
+    expect(fm.error_reason).toBe('key_decrypt_failed');
+    expect(control.called).toBe(0); // never reached the provider
+  });
+
   test('depth_exceeded — chain of 4 runs with max_delegation_depth=2 blocks', async () => {
     const { db, workspace, project, user, agent, parent, run } = await scaffold({
       agentOverrides: { max_delegation_depth: 2 },
@@ -2260,6 +2285,32 @@ describe('loadContext: caller-bounded authority (invariant 3)', () => {
     const ctx = await loadContext(run.id);
     expect(ctx).not.toBeNull();
     expect(ctx!.apiKey).toBe(''); // missing → empty ⇒ no_ai_key pre-flight
+  });
+
+  // A key ROW exists but its ciphertext can't be decrypted (the stored key was
+  // encrypted under a DIFFERENT FOLIO_MASTER_KEY — key rotation, a DB copied
+  // from another env). decryptSecret throws; loadContext must NOT abort the run
+  // (which got sanitized to a misleading "Network error or unreachable host").
+  // Instead it degrades to apiKey:'' + flags keyDecryptFailed so the preflight
+  // can report the HONEST reason. Bite: against the unguarded `keyRow ?
+  // decryptSecret(...) : ''` this THROWS out of loadContext.
+  test('a corrupt (undecryptable) key row degrades to no-key + flags keyDecryptFailed', async () => {
+    const scaffolded = await scaffold({ withAiKey: false });
+    const { db, run } = scaffolded;
+    await seedLibraryAgentWithSkills(scaffolded, ['folio']);
+    // A row exists for the run's (provider, default) but the ciphertext is junk.
+    await db.insert(aiKeys).values({
+      id: nanoid(),
+      provider: 'anthropic',
+      label: 'default',
+      encryptedKey: 'not-valid-ciphertext-under-this-master-key',
+    });
+
+    // Must NOT throw (the pre-fix unguarded decrypt aborted here).
+    const ctx = await loadContext(run.id);
+    expect(ctx).not.toBeNull();
+    expect(ctx!.apiKey).toBe(''); // decrypt failed → degraded, not crashed
+    expect(ctx!.keyDecryptFailed).toBe(true); // distinct from a missing key
   });
 });
 

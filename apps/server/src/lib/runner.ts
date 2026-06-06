@@ -212,6 +212,14 @@ export interface RunContext {
    * DEFAULT_BASE (security review #1). Absent/false on document runs.
    */
   keyRowMissing?: boolean;
+  /**
+   * True when a key ROW exists but its ciphertext could not be DECRYPTED (stored
+   * under a different FOLIO_MASTER_KEY). loadContext degrades apiKey to '' and
+   * sets this so the preflight reports `key_decrypt_failed` ("re-enter the key")
+   * instead of the misleading `no_ai_key` / sanitized "Network error". Set on
+   * BOTH the document and conversation paths.
+   */
+  keyDecryptFailed?: boolean;
 }
 
 /**
@@ -396,6 +404,28 @@ export async function runAgentResume(args: { runId: string }): Promise<void> {
   }
 }
 
+/**
+ * Resolve a key row to its decrypted secret, TOLERANT of a row whose ciphertext
+ * can't be decrypted (encrypted under a different FOLIO_MASTER_KEY — rotation, a
+ * cross-env DB copy). The decrypt MUST NOT abort run loading (the pre-fix
+ * unguarded `decryptSecret` threw → sanitized to a misleading "Network error").
+ *   - no row            → { apiKey:'', decryptFailed:false }  (→ no_ai_key)
+ *   - row, decrypts     → { apiKey:<secret>, decryptFailed:false }
+ *   - row, undecryptable→ { apiKey:'', decryptFailed:true }    (→ key_decrypt_failed)
+ * The raw decrypt error is swallowed (NEVER surfaced — it can embed key bytes,
+ * threat-model mitigation 5); the distinction is carried by the flag, not the msg.
+ */
+function resolveKeyMaterial(
+  keyRow: { encryptedKey: string } | null | undefined,
+): { apiKey: string; decryptFailed: boolean } {
+  if (!keyRow) return { apiKey: '', decryptFailed: false };
+  try {
+    return { apiKey: decryptSecret(keyRow.encryptedKey), decryptFailed: false };
+  } catch {
+    return { apiKey: '', decryptFailed: true };
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Context loading
 // ---------------------------------------------------------------------------
@@ -525,7 +555,9 @@ export async function loadContext(runId: string): Promise<RunContext | null> {
       eq(aiKeys.label, aiKeyLabel),
     ),
   });
-  const apiKey = keyRow ? decryptSecret(keyRow.encryptedKey) : '';
+  const decrypted = resolveKeyMaterial(keyRow);
+  const apiKey = decrypted.apiKey;
+  const keyDecryptFailed = decrypted.decryptFailed;
   const baseUrl = keyRow?.baseUrl ?? undefined;
 
   return {
@@ -544,6 +576,7 @@ export async function loadContext(runId: string): Promise<RunContext | null> {
     authorContext,
     apiKey,
     baseUrl,
+    keyDecryptFailed,
     // Phase 1 delegation (D1, D8): read the caller scope snapshot from the run
     // fm. FAIL CLOSED — a run lacking it denies (empty scopes) rather than
     // inheriting the agent's full authority. The caller PROJECT narrowing was
@@ -646,14 +679,9 @@ async function loadConversationContext(
   // the route always writes valid ciphertext incl. encryptSecret('') for ollama)
   // must degrade to "no key" — NOT abort loadConversationContext with a 500
   // (security review #2; mirrors the tolerant posture of M7).
-  let apiKey = '';
-  if (keyRow) {
-    try {
-      apiKey = decryptSecret(keyRow.encryptedKey);
-    } catch {
-      apiKey = '';
-    }
-  }
+  const decrypted = resolveKeyMaterial(keyRow);
+  const apiKey = decrypted.apiKey;
+  const keyDecryptFailed = decrypted.decryptFailed;
   const baseUrl = keyRow?.baseUrl ?? undefined;
   const keyRowMissing = !keyRow;
 
@@ -685,6 +713,7 @@ async function loadConversationContext(
     sink: makeConversationSink(db, convPending.conversationId, runId),
     conversationId: convPending.conversationId,
     keyRowMissing,
+    keyDecryptFailed,
   };
 }
 
@@ -775,6 +804,17 @@ async function preflight(ctx: RunContext, excludeRunId?: string): Promise<boolea
   // (claude-code — the only keyless/local backend — can no longer reach here: it
   // is hard-refused at step 0, so every provider past this point is a keyed API
   // provider and the BYOK key requirement always applies.)
+  // A key ROW exists but its ciphertext couldn't be decrypted (wrong
+  // FOLIO_MASTER_KEY) — distinct from a missing key. Honest, actionable message
+  // (re-enter the key), NOT the misleading no_ai_key / sanitized "Network error".
+  if (ctx.keyDecryptFailed) {
+    await failRun(
+      ctx,
+      runErrorReasonSchema.enum.key_decrypt_failed,
+      'The stored AI key could not be decrypted (the server encryption key may have changed). Re-enter the key in Settings → AI.',
+    );
+    return true;
+  }
   if (!ctx.apiKey) {
     await failRun(
       ctx,
@@ -889,6 +929,16 @@ async function conversationPreflight(ctx: RunContext): Promise<boolean> {
   // not let ollama silently fall back to the localhost DEFAULT_BASE. Otherwise:
   // ollama is legitimately KEYLESS (its row stores an empty ciphertext, so
   // apiKey==='' is EXPECTED) — only a key-REQUIRING provider with no apiKey blocks.
+  // A key ROW exists but its ciphertext couldn't be decrypted (wrong
+  // FOLIO_MASTER_KEY) — honest, actionable message, distinct from "no key".
+  if (ctx.keyDecryptFailed) {
+    if (ctx.sink) {
+      await ctx.sink.text(
+        'The stored AI key could not be decrypted (the server encryption key may have changed). Ask an instance admin to re-enter it in Settings → AI.',
+      );
+    }
+    return true;
+  }
   const requiresKey = ctx.fm.provider !== 'ollama';
   if (ctx.keyRowMissing || (requiresKey && !ctx.apiKey)) {
     if (ctx.sink) {
@@ -1783,6 +1833,13 @@ async function failRunLastResort(
   providerLabel: string,
   err: unknown,
 ): Promise<void> {
+  // Log the RAW error server-side (never surfaced to the user — mitigation 5
+  // keeps the user-facing detail sanitized). Without this, a statusless throw
+  // (a decrypt failure, a malformed request, a real network drop) is collapsed
+  // by sanitizeProviderError into one opaque "Network error or unreachable host."
+  // and the actual cause is lost — a diagnostics black hole. The log is the only
+  // place an operator can see WHY a run died.
+  console.error(`[runner] last-resort failure for run ${runId}:`, err);
   const runRow = await db.query.documents.findFirst({
     where: and(eq(documents.id, runId), eq(documents.type, 'agent_run')),
   });
