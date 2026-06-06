@@ -19,12 +19,6 @@ export interface RunsFilter {
   since?: string; // ISO
 }
 
-export interface CreateRunVars {
-  agent_slug: string;
-  parent_slug: string;
-  input?: string;
-}
-
 export interface RunMutationResult {
   run_id: string;
   status: string;
@@ -78,16 +72,6 @@ export function useRun(wslug: string, runId: string | undefined) {
     queryFn: () => client.get<AgentRunDoc>(`/api/v1/w/${wslug}/runs/${runId}`),
     staleTime: 10_000,
     enabled: !!wslug && !!runId,
-  });
-}
-
-export function useCreateRun(wslug: string) {
-  const qc = useQueryClient();
-  return useMutation<RunMutationResult, ApiError, CreateRunVars>({
-    mutationFn: (vars) => client.post<RunMutationResult>(`/api/v1/w/${wslug}/runs`, vars),
-    onSettled: () => {
-      qc.invalidateQueries({ queryKey: runsKeys.all });
-    },
   });
 }
 

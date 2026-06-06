@@ -1,8 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import type { OperatorModelSetting } from '@folio/shared';
 import { client } from './client.ts';
 import type { AiProvider } from './settings.ts';
 
-export type { AiProvider };
+export type { AiProvider, OperatorModelSetting };
 
 /** Instance-level AI key (workspace-independent). Identified by (provider, label).
  *  No workspaceId — these are one store for the whole instance. */
@@ -21,18 +22,65 @@ export const instanceAiKeysKeys = {
 
 const BASE = '/api/v1/instance/ai-keys';
 
+/** The GET /instance/ai-keys payload: the key roster + the current operator-model
+ *  selection (which configured provider+model the operator runs on). */
+interface InstanceAiKeysPayload {
+  keys: InstanceAiKey[];
+  operator_model: OperatorModelSetting | null;
+}
+
+/** Shared query options — ONE fetch backs both the keys list and the operator
+ *  model (each hook projects its slice via `select`, so no double fetch). */
+function aiKeysQueryOptions(enabled: boolean) {
+  return {
+    queryKey: instanceAiKeysKeys.list(),
+    queryFn: () => client.get<InstanceAiKeysPayload>(BASE),
+    staleTime: 60_000,
+    enabled,
+  };
+}
+
 /** List instance AI keys (metadata only — the server never returns the secret).
- *  Gated server-side on __system owner/admin; pass `enabled` to skip the fetch for
+ *  Gated server-side on instance owner/admin; pass `enabled` to skip the fetch for
  *  non-admins. */
 export function useInstanceAiKeys(opts: { enabled?: boolean } = {}) {
   return useQuery({
-    queryKey: instanceAiKeysKeys.list(),
-    queryFn: async () => {
-      const wrapped = await client.get<{ keys: InstanceAiKey[] }>(BASE);
-      return wrapped.keys;
+    ...aiKeysQueryOptions(opts.enabled ?? true),
+    select: (r: InstanceAiKeysPayload) => r.keys,
+  });
+}
+
+/** The current operator-model selection ({provider, model, aiKeyLabel} or null),
+ *  projected from the same GET as the keys list (no extra fetch). */
+export function useOperatorModel(opts: { enabled?: boolean } = {}) {
+  return useQuery({
+    ...aiKeysQueryOptions(opts.enabled ?? true),
+    // Normalize a missing field to null (review #4): an older/variant server that
+    // omits operator_model would otherwise yield `undefined`, silently hiding the
+    // badge with no error.
+    select: (r: InstanceAiKeysPayload) => r.operator_model ?? null,
+  });
+}
+
+/** Set which configured provider+model the operator runs on (admin-gated route).
+ *  The {provider, aiKeyLabel} must reference an existing key (server 422 if not). */
+export function useSetOperatorModel() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: OperatorModelSetting) =>
+      client.put<{ ok: true; operator_model: OperatorModelSetting }>(
+        `${BASE}/operator-model`,
+        vars,
+      ),
+    onSuccess: (res) => {
+      // Write the server's authoritative echo into the cache so the operator
+      // badge updates SYNCHRONOUSLY (no stale-model flash while the refetch is in
+      // flight — review #5), then invalidate to reconcile keys + setting.
+      qc.setQueryData<InstanceAiKeysPayload>(instanceAiKeysKeys.list(), (prev) =>
+        prev ? { ...prev, operator_model: res.operator_model } : prev,
+      );
+      qc.invalidateQueries({ queryKey: instanceAiKeysKeys.all });
     },
-    staleTime: 60_000,
-    enabled: opts.enabled ?? true,
   });
 }
 

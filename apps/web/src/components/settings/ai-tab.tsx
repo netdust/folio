@@ -4,6 +4,8 @@ import type { AiProvider } from '../../lib/api/settings.ts';
 import {
   useDeleteInstanceAiKey,
   useInstanceAiKeys,
+  useOperatorModel,
+  useSetOperatorModel,
   useUpsertInstanceAiKey,
 } from '../../lib/api/instance-ai-keys.ts';
 import { useTestKey } from '../../lib/api/ai-test-key.ts';
@@ -21,8 +23,13 @@ interface Props {
 
 const PROVIDERS: AiProvider[] = ['anthropic', 'openai', 'openrouter', 'ollama'];
 
+// The FIRST entry per provider is the suggested default. anthropic leads with
+// claude-sonnet-4-6 to match the server's operator fallback (OPERATOR_MODEL in
+// apps/server/src/lib/operator.ts) — so the "Use for operator" pre-fill agrees
+// with the operator's actual default instead of silently proposing a different
+// model (review #1/#3).
 const KNOWN_MODELS: Record<AiProvider, readonly [string, ...string[]]> = {
-  anthropic: ['claude-opus-4-7', 'claude-sonnet-4-6', 'claude-haiku-4-5'],
+  anthropic: ['claude-sonnet-4-6', 'claude-opus-4-7', 'claude-haiku-4-5'],
   openai: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo'],
   openrouter: ['anthropic/claude-haiku-4-5', 'openai/gpt-4o-mini'],
   ollama: ['llama3.1', 'qwen2.5'],
@@ -35,11 +42,18 @@ export function AiTab({ wslug }: Props) {
   const [apiKey, setApiKey] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
   const [testResult, setTestResult] = useState<null | { ok: boolean; reason?: string }>(null);
+  // Per-provider model the admin will assign to the operator (a key has no model
+  // of its own); defaults to the provider's first known model, editable per row.
+  const [operatorModelByProvider, setOperatorModelByProvider] = useState<
+    Partial<Record<AiProvider, string>>
+  >({});
 
   const keysQuery = useInstanceAiKeys();
   const upsertKey = useUpsertInstanceAiKey();
   const deleteKey = useDeleteInstanceAiKey();
   const testKey = useTestKey();
+  const operatorModel = useOperatorModel();
+  const setOperatorModel = useSetOperatorModel();
 
   // B round 3 fix #9 — replace the round-2 providerRef + useEffect pattern
   // with monotonically-incrementing sequence ids per inflight operation.
@@ -169,6 +183,23 @@ export function AiTab({ wslug }: Props) {
         toast.info(`Save failed for previous provider (${providerAtClick})`);
         return;
       }
+      toast.error(formatApiError(err));
+    }
+  }
+
+  // T5: mark a configured (provider, default-label) key as the operator's model.
+  // A KEY carries no model, so default to the provider's first known model; the
+  // admin can refine the exact model in the per-row input before marking. The
+  // server validates the (provider, aiKeyLabel) references a real key (422 else).
+  async function onUseForOperator(p: AiProvider, modelForOperator: string) {
+    try {
+      await setOperatorModel.mutateAsync({
+        provider: p,
+        model: modelForOperator,
+        aiKeyLabel: 'default',
+      });
+      toast.success(`Operator now uses ${p} / ${modelForOperator}`);
+    } catch (err) {
       toast.error(formatApiError(err));
     }
   }
@@ -314,6 +345,18 @@ export function AiTab({ wslug }: Props) {
             const defaultRow = rows.find((k) => k.label === 'default');
             const otherRows = rows.filter((k) => k.label !== 'default');
             const noRows = rows.length === 0;
+            // T5: is the operator running on a key of THIS provider? Match by
+            // provider only (any label) so a non-default operator label still
+            // shows its badge (review #2 — the server supports any aiKeyLabel).
+            const om = operatorModel.data;
+            const isOperatorProvider = om?.provider === p;
+            // Seed the operator-model input from the LIVE configured value when
+            // this provider is the operator's (review #1 — was always
+            // KNOWN_MODELS[p][0], so clicking the button untouched silently
+            // switched the model). Else the provider's suggested default.
+            const rowModel =
+              operatorModelByProvider[p] ??
+              (isOperatorProvider && om?.model ? om.model : KNOWN_MODELS[p][0]);
             return (
               <li
                 key={p}
@@ -333,6 +376,12 @@ export function AiTab({ wslug }: Props) {
                         configured via API (no default-label key)
                       </span>
                     )}
+                    {isOperatorProvider ? (
+                      <span className="ml-2 rounded bg-primary/10 px-1.5 py-0.5 text-xs font-medium text-primary">
+                        operator{om?.model ? ` · ${om.model}` : ''}
+                        {om && om.aiKeyLabel !== 'default' ? ` (${om.aiKeyLabel})` : ''}
+                      </span>
+                    ) : null}
                   </span>
                   {defaultRow ? (
                     <Button
@@ -347,6 +396,37 @@ export function AiTab({ wslug }: Props) {
                     </Button>
                   ) : null}
                 </div>
+                {/* T5: assign this provider's DEFAULT key as the operator's model
+                    (a key carries no model, so the admin picks one here). v1 sets
+                    the default-label key; a non-default operator label set via API
+                    still DISPLAYS its badge above but isn't settable from this row. */}
+                {defaultRow ? (
+                  <div className="mt-1.5 flex items-center gap-2">
+                    <input
+                      value={rowModel}
+                      onChange={(e) =>
+                        setOperatorModelByProvider((prev) => ({ ...prev, [p]: e.target.value }))
+                      }
+                      list={`operator-models-${p}`}
+                      aria-label={`Operator model for ${p}`}
+                      className="w-48 rounded-md border border-border-light bg-content px-2 py-1 text-xs"
+                    />
+                    <datalist id={`operator-models-${p}`}>
+                      {KNOWN_MODELS[p].map((m) => (
+                        <option key={m} value={m} />
+                      ))}
+                    </datalist>
+                    <Button
+                      variant="secondary"
+                      disabled={setOperatorModel.isPending || !rowModel.trim()}
+                      onClick={() => onUseForOperator(p, rowModel.trim())}
+                    >
+                      {isOperatorProvider && om?.aiKeyLabel === 'default'
+                        ? 'Update operator model'
+                        : 'Use for operator'}
+                    </Button>
+                  </div>
+                ) : null}
                 {otherRows.length > 0 ? (
                   <div className="mt-1 text-xs text-fg-2">
                     {otherRows.length} other label

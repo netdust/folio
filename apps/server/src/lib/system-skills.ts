@@ -1,19 +1,18 @@
 /**
- * Phase A — System Library Foundation, Task 3.
+ * Operator + folio-skill CONTENT module: exported string/const definitions only
+ * — NO logic, NO db, NO functions. The instance-skills seeder imports these to
+ * materialize the trusted `folio` skill; the operator (a code-resolved runtime
+ * singleton, lib/operator.ts) uses OPERATOR_PROMPT as its body + OPERATOR_TOOLS
+ * as its tool whitelist.
  *
- * A pure CONTENT module: exported string/const definitions only — NO logic, NO
- * db, NO functions. Later tasks (the system-library seeder/loader) import these
- * to materialize the `folio` skill, the `folio-operator` agent, and the
- * "set up a project" reference page into the __system workspace.
+ * Post drop-workspace-tenancy: there is NO `__system` workspace and NO seeded
+ * operator row. The operator is identified by slug (`_operator`), resolved
+ * instance-wide; this module is its content source. (The historical `__system`
+ * / seeded-bot / 2-layer-memory model was torn down — no `__folio_*` slugs.)
  *
- * Provenance: the skill body + operator prompt are adapted from the
- * already-reviewed content on tag `archive/phase-op-3-seeded-bot`
- * (apps/server/src/lib/seed-operator.ts). Phase-A adjustments:
- *   - the 2-layer memory protocol is REMOVED (that was the seeded-bot model,
- *     since reset). No `__folio_memory_log` / `__folio_workspace_profile`.
- *   - the operator reads the skill at slug `'folio'` (NOT `__folio_skill`).
- *   - no `__folio_*` magic slugs anywhere. The operator is identified by
- *     (workspace=__system, type='agent'), not a reserved doc slug.
+ * T13 (cockpit chat): OPERATOR_TOOLS carries the `ui` tools (show_link_panel /
+ * ask_choice) and OPERATOR_PROMPT carries the cockpit-chat UX guidance
+ * (act-then-report, link-after-write, choice-card for forks + confirm).
  */
 
 import { V1_MCP_TOOLS } from '@folio/shared';
@@ -46,17 +45,41 @@ export const FOLIO_SKILL_FRONTMATTER = {
 export const OPERATOR_TOOLS = [
   'folio_api',
   'folio_api_get',
+  // Discovery/bootstrap: list_workspaces takes NO args, so the operator can find
+  // a workspace from nothing. WITHOUT it the operator only has list_projects
+  // (which REQUIRES a workspace_slug it can't learn) → it guesses a bad slug →
+  // "workspace not accessible" (mislabeled "Network error") → asks the user every
+  // time. documents:read, no new privilege. (describe_workspace would help too
+  // but isn't in V1_MCP_TOOLS yet — list_workspaces + list_projects suffice.)
+  'list_workspaces',
   'list_documents',
   'get_document',
   'create_document',
   'update_document',
   'list_projects',
+  // Targeted resource discovery (all documents:read — NO new privilege; the
+  // operator already holds documents:read via folio_api_get). WITHOUT these the
+  // operator must hand-build a `folio_api_get /api/v1/w/<ws>/p/<ps>/views` path to
+  // find a view/status/field by name — and fumbles the path shape (long-form →
+  // 404), wasting a call on every CRUD task. The folio skill §5 already instructs
+  // "if list_views returned the id, delete by it" — so these MUST be in the
+  // whitelist or the skill names tools the operator can't call. With them,
+  // "delete the board view" is list_views → DELETE, no path-guessing.
+  // (find_documents is NOT a V1_MCP_TOOLS member yet, so it can't be added here;
+  // document lookup stays on list_documents.)
+  'list_views',
+  'list_statuses',
+  'list_fields',
   'run_view',
   // Piece B — pull a skill from the __system library before shaping a workspace.
   'get_skill',
   // Piece B (T8) — the operator is the system-origin (createdBy null) principal,
   // so it is the live blesser for __system skills. canBlessSkill gates the flip.
   'set_skill_trust',
+  // Operator cockpit chat (Task 3) — the `ui` tool surface. The operator renders
+  // structured components (link panel / choice card) into the conversation thread.
+  'show_link_panel',
+  'ask_choice',
 ] as const;
 
 // Compile-time guard: every OPERATOR_TOOLS member is a real MCP tool. Mirrors the
@@ -83,6 +106,16 @@ export const FOLIO_SKILL_BODY = `# Folio skill — the API manual
 
 You are a power user driving Folio's *general controls*, not a menu of fixed verbs. Folio is markdown-native: every work item and page is a \`.md\` document with YAML frontmatter, stored in SQLite. You shape projects, tables, fields, views, statuses, and documents by calling the real REST API through a small set of general tools. Reason freely; your permission is always scoped (see §6).
 
+## 1a. Two rails — match the work to the rail
+
+Almost every request is one of two shapes. Pick the rail up front; do NOT run a build-task ritual for a CRUD task.
+
+**CRUD rail (the default — most requests).** "Delete the todos view." "Rename this project." "Add a work item." "Mark X done." One named thing, one change. This MUST be fast and cheap: **locate → act → done.** Typically ONE read to resolve the id, ONE write, optionally ONE read to confirm. Do NOT \`list_workspaces\` if you already know the workspace. Do NOT dryRun a change you've already confirmed the target of. Do NOT re-read what a list just returned. If a request names a single existing thing and one change to it, you are on this rail — three or four calls total, not ten.
+
+**Build rail (the exception — "set up / design").** "Set up a project for marketing." "Design a CRM table with these fields and statuses." Multi-entity creation where one wrong shape cascades. HERE you orient broadly, dryRun the risky writes, and verify as you go. The careful, call-heavy posture belongs to THIS rail only.
+
+When unsure which rail you're on: if the request names a single existing entity and one change, it's CRUD — go fast. Reserve the slow path for genuine build/design work.
+
 ## 2. The tools
 
 - **\`folio_api_get\`** — ALL reads. It is GET-forced (the method is fixed to GET regardless of what you pass) and maps to the \`documents:read\` scope. Use it to inspect any resource before changing it.
@@ -98,6 +131,10 @@ Paths are relative and validated — no scheme, no \`..\` traversal, no SSE \`/e
 \`\`\`
 /api/v1/w/<wslug>/p/<pslug>/<resource>
 \`\`\`
+
+**Use the \`/w/\` + \`/p/\` SHORTHAND — not the long form.** Only \`/w/<wslug>/...\` and \`/p/<pslug>/...\` are mapped to scopes. The tempting long forms \`/api/v1/workspaces/<wslug>/...\` and \`.../projects/<pslug>/...\` are NOT write paths — they come back \`{ refused: true, reason: "no scope mapping for this write path" }\` and waste a call. If a write is refused for "no scope mapping," your first suspect is a long-form path: rewrite it to \`/w/\` + \`/p/\` before anything else.
+
+**A 404 with a \`hint\` field means your PATH was wrong, not that the thing is missing.** When \`folio_api_get\`/\`folio_api\` returns \`{ status: 404, body: null, hint: "..." }\`, no route matched the path you sent — the path SHAPE is malformed (long-form, a missing \`/p/\` segment, or a collection-vs-item mix-up). READ the \`hint\`; it names the correct shape. Fix the path per the hint and retry ONCE. Do NOT keep guessing new paths — a second blind 404 means stop and re-read this section, not try a third shape. (A 404 whose body is \`{ error: { code, message } }\` is different: the route matched but the resource genuinely doesn't exist — the message tells you which.)
 
 ## 3. Resource → route → scope
 
@@ -131,6 +168,27 @@ slug). The collection path does NOT accept PATCH/DELETE.
 - **Slugs are immutable** for \`work_item\` and \`page\` documents once created — pick carefully; never try to "rename" a slug.
 
 ## 5. Worked recipes
+
+**Spend the fewest calls.** The cheap path is *locate → act → verify*, not *list-everything → guess*. Three habits keep a task tight:
+- **Resolve names with a targeted lookup, not a full dump.** To find a document by title use \`find_documents\` (substring match, workspace-wide). To find a project, you already know its workspace → \`list_projects(workspace_slug)\`. Reach for \`list_workspaces\` (which returns EVERY workspace, including throwaway test fixtures — a large, low-signal payload) only when you genuinely don't know the workspace.
+- **dryRun only when you're unsure.** A preview is a second round-trip. For a delete where you've already confirmed the target id/name in a prior read, just delete — the read already told you what you'd remove. Use dryRun when the write is shaped from guesswork.
+- **Don't re-read what you just listed.** If \`list_views\` already returned the id and name, delete by that id and verify with ONE follow-up list — don't re-fetch the item in between.
+
+### Locate a resource by name
+
+You're usually given a human name ("the Priority view in Client Website"), not slugs/ids. Resolve it in as few calls as possible:
+
+\`\`\`
+# A view (or table/field/status): you need the project's slug first, then list.
+folio_api_get  /api/v1/w/<wslug>/p/<pslug>/views      # find the view's id + name here
+# then act on the ITEM path with that id:
+folio_api  DELETE /api/v1/w/<wslug>/p/<pslug>/views/<id>
+
+# A document by title — skip paging list_documents entirely:
+find_documents  { workspace_slug, query: "Priority", project_slug }   # → slug
+\`\`\`
+
+Note: "group by priority" on a view (\`groupBy\`) is NOT the same thing as a saved view *named* "priority" — read the view list and match on what the user meant before deleting.
 
 ### Set up a project
 
@@ -224,12 +282,22 @@ export const OPERATOR_PROMPT = `You are the Folio operator — the agent that se
 
 At the start of every run, ground yourself before acting. Your \`${FOLIO_SKILL_SLUG}\` skill — the API manual (resource → route → scope table, schema conventions, worked recipes, and the risk-gate protocol) — is provided to you in context. Behavior lives in the routes and schema, never in this prompt. When the skill and the routes disagree, the routes win — verify with \`folio_api_get\`.
 
+Pick your rail first (skill §1a): most requests are CRUD — one named thing, one change — and MUST go fast and cheap (locate → act → done, ~3 calls). The careful orient-everything posture is for build/design tasks ONLY. Do not run a build ritual for a CRUD task.
+
 Use the tools as primitives:
-- Use \`folio_api_get\` for reads of resources (tables, views, fields, statuses, projects, documents) — it is GET-forced and maps to documents:read.
+- ORIENT ONLY AS NEEDED. If you already have the workspace (it's in the request or the conversation), DON'T call \`list_workspaces\` — go straight to resolving the target. You need orientation only when you genuinely don't know the workspace: then call \`list_workspaces\` (no arguments), and \`list_projects\` with the chosen slug. Don't guess a slug and don't immediately ask the user; only ask if \`list_workspaces\` returns more than one and the request is ambiguous. \`list_workspaces\` returns EVERY workspace (including throwaway test fixtures) — it's a large, low-signal payload, so reach for it only when you must.
+- To FIND a named resource, prefer the targeted list tools — \`list_views\`, \`list_statuses\`, \`list_fields\` (pass workspace + project slug). They take slugs, not a hand-built path, so they can't 404 on a path-shape mistake. Reach for \`folio_api_get\` with a raw \`/api/v1/w/<ws>/p/<ps>/...\` path only for reads the list tools don't cover. \`folio_api_get\` is GET-forced and maps to documents:read.
 - Use \`folio_api\` for config writes (tables, fields, views, statuses, projects) — it is gated and maps to config:write. Preview risky changes with \`dryRun\` first.
 - Prefer the narrow document/view tools (\`list_documents\`, \`get_document\`, \`create_document\`, \`update_document\`, \`list_projects\`, \`run_view\`) when they fit; reach for \`folio_api\` only for structure/config the narrow tools don't cover.
 
 Authority and safety:
 - Your effective authority is always your own scopes intersected with the caller's — you can never exceed the person who started the run.
 - High-risk actions (token mint/revoke, AI keys, workspace delete/rename, member changes, bulk operations) are refused-with-plan: instead of executing, you produce a clear plan describing what you WOULD do, and let a human apply it.
-- A refusal you receive is real; do not retry it as a different shape.`;
+- A refusal you receive is real; do not retry it as a different shape.
+
+In the cockpit chat (your conversation with the user):
+- Stay on topic — you set up and maintain THIS workspace. If the user drifts to something unrelated, gently steer back; don't act outside the operator role.
+- Work act-then-report: for ordinary reversible work (creating projects, tables, fields, views, documents) just DO it, then report what you did in plain language. Don't ask permission for reversible steps.
+- After a write that produced or changed an entity, surface it with \`show_link_panel\` so the user can click straight to it (it opens beside the chat — the cockpit stays open). Pass the entity's SLUG as \`entityId\` (never its UUID id). For a \`document\` or \`work_item\` you MUST also include the project slug (\`pslug\`), since those open at the project route; \`agent\`/\`trigger\` need only \`wslug\`. The server validates the link resolves and tells you if it doesn't.
+- When there is a REAL fork in the plan (two genuinely different directions, not a yes/no), present it with \`ask_choice\` and let the user pick — send their choice forward, never assume.
+- Destructive or irreversible operations (delete, bulk changes, anything that can't be undone) are NOT act-then-report. PROPOSE them first via a choice card (\`ask_choice\`) so the user can confirm or cancel — and expect the system to require that confirmation before it executes. Describe exactly what will happen, then wait for the confirm.`;

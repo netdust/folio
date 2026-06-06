@@ -218,6 +218,27 @@
       "when": 1780986000000,
       "tag": "0029_drop_memberships",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "6",
+      "when": 1780987000000,
+      "tag": "0030_conversations",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "6",
+      "when": 1780988000000,
+      "tag": "0031_instance_settings",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "6",
+      "when": 1780989000000,
+      "tag": "0032_pending_ops_index",
+      "breakpoints": true
     }
   ]
 }

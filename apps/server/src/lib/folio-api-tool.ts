@@ -17,6 +17,12 @@ import { apiTokens, type ApiToken } from '../db/schema.ts';
 import { ADMIN_SCOPES } from './agent-schema.ts'; // CR#3: derive the C3 config floor
 import { registerTool, type ToolContext } from './agent-tools.ts';
 import { newApiToken } from './auth.ts';
+import { OPERATOR_AGENT_ID } from './operator.ts';
+import {
+  getConfirmedPendingOp,
+  markExecuted,
+  recordPendingOp,
+} from '../services/pending-ops.ts';
 
 /**
  * Validate the `path` arg of folio_api/folio_api_get (mitigation P3-5).
@@ -59,6 +65,43 @@ export function validateApiPath(path: string): string {
 }
 
 export type ScopeTarget = string | 'SECRET' | 'UNMAPPED' | null;
+
+/**
+ * A 404 from `dispatchAsCaller` has TWO causes the model must tell apart:
+ *   1. NO ROUTE MATCHED — a malformed path (long-form `/workspaces/`/`/projects/`,
+ *      a collection/item mix-up, a missing `/w/` or `/p/` segment). Hono's default
+ *      404 has a plain-text body, so the tool's `res.json().catch(()=>null)` yields
+ *      `body: null`. The model gets NO correction signal → it re-guesses the path,
+ *      burning calls until it stalls (the live failure that motivated this).
+ *   2. ROUTE MATCHED, RESOURCE ABSENT — `HTTPError(..,404)` with a
+ *      `{error:{code,message}}` body that already explains itself.
+ *
+ * This helper produces the missing correction for case 1 ONLY: a one-line hint
+ * naming the right path shape. The caller attaches it solely when `body === null`
+ * (case 1); a non-null error body (case 2) passes through untouched. Returns a
+ * generic shape reminder when no specific mis-shape is recognized — still better
+ * than a bare null. PURE: no I/O, route-shape knowledge only.
+ */
+export function pathHint(path: string): string {
+  const SHAPE =
+    'Folio paths use the SHORTHAND /api/v1/w/<wslug>/p/<pslug>/<resource>. ' +
+    'Collections (GET list / POST) are bare (…/views); items (PATCH / DELETE) add the id (…/views/<id>).';
+  // Long-form is the single most common mis-shape — it never maps to a route.
+  if (/\/api\/v1\/workspaces(\/|$)/.test(path)) {
+    return `No route matched. "/workspaces/<slug>" is not a route — use the shorthand "/w/<wslug>". ${SHAPE}`;
+  }
+  if (/\/projects\/[^/]+/.test(path)) {
+    return `No route matched. A project ITEM is "/w/<wslug>/p/<pslug>" (bare, NOT "/projects/<slug>"); the projects COLLECTION is "/w/<wslug>/projects". ${SHAPE}`;
+  }
+  // Missing the /p/ segment for a project-scoped resource (tables/fields/views/statuses).
+  if (
+    /\/(tables|fields|views|statuses)(\/|$)/.test(path) &&
+    !/\/p\/[^/]+\//.test(path)
+  ) {
+    return `No route matched. tables/fields/views/statuses are PROJECT-scoped — the path needs "…/w/<wslug>/p/<pslug>/<resource>". ${SHAPE}`;
+  }
+  return `No route matched — the path shape is wrong. ${SHAPE}`;
+}
 
 /**
  * A document/comment/run write lives under the documents|comments|runs route
@@ -156,13 +199,23 @@ export async function dispatchAsCaller(
   const validPath = validateApiPath(path);
   const { token: plaintext, hash } = newApiToken();
   const mintedId = nanoid();
+  // The operator is a code singleton with NO `documents` row; its ephemeral token
+  // carries the synthetic agentId `operator:_operator`, which would violate the
+  // api_tokens.agent_id → documents.id FK on this persisted mint. Null it for the
+  // operator. Authority-equivalent: the operator's project reach is already clamped
+  // to agent ∩ caller upstream (createConversationRun), and the null-agentId auth
+  // path re-checks the conversation owner's grants (humanPatProjectCeiling, which
+  // names the operator case) — so reach is preserved and nothing widens. A real
+  // workspace agent keeps its agentId (a valid FK + its allow-list governs).
+  const mintedAgentId =
+    caller.agentId === OPERATOR_AGENT_ID ? null : caller.agentId;
   await db.insert(apiTokens).values({
     id: mintedId,
     workspaceId: caller.workspaceId,
     name: `folio_api:${mintedId}`,
     tokenHash: hash,
     scopes: caller.scopes,
-    agentId: caller.agentId,
+    agentId: mintedAgentId,
     projectIds: caller.projectIds,
     createdBy: caller.createdBy,
   });
@@ -238,6 +291,12 @@ export function registerFolioApiTools(): void {
       // Deliberate {status, body} envelope (NOT the MCP textResult shape): the
       // runner JSON.stringifies any non-string tool return (runner.ts), so the
       // model sees the HTTP status + parsed body. Do not "fix" into textResult.
+      // A 404 with a NULL body = no route matched (malformed path) — attach a
+      // shape hint so the model corrects instead of re-guessing into a stall. A
+      // 404 WITH an error body (route matched, resource absent) passes through.
+      if (res.status === 404 && json === null) {
+        return { status: 404, body: null, hint: pathHint(args.path) };
+      }
       return { status: res.status, body: json };
     },
   });
@@ -276,16 +335,23 @@ export function registerFolioApiTools(): void {
       // Single refuse-with-plan envelope (CR cleanup) — every gate below returns
       // the SAME shape, so a future change to the contract (e.g. add a field the
       // cockpit UI keys on) lands in one place, not four.
-      const refuse = (reason: string) => ({
+      const refuse = (reason: string, hint?: string) => ({
         refused: true,
         reason,
         plan: { method: args.method, path: args.path, body },
+        ...(hint ? { hint } : {}),
       });
       const scopeTarget = pathToScope(args.method, args.path);
       // T5 default-deny: an unmapped write path is refused by construction. Every
       // NEW write route must add a branch to pathToScope or it fails closed here.
+      // The overwhelmingly common cause is a WRONG PATH SHAPE, not a genuinely
+      // unsupported route (e.g. the operator guessing a bare `/api/v1/views/<id>`
+      // instead of the project-scoped `/api/v1/w/<wslug>/p/<pslug>/views/<id>`).
+      // Attach the same shape-correcting `pathHint` the GET 404 path uses so the
+      // operator SELF-CORRECTS to the right path and retries, instead of dead-
+      // ending on a bare refusal and reporting "not permitted" to the user.
       if (scopeTarget === 'UNMAPPED') {
-        return refuse('no scope mapping for this write path; refused');
+        return refuse('no scope mapping for this write path; refused', pathHint(args.path));
       }
       // T6 secret-refuse: tokens/ai-keys writes are NEVER applied by an agent —
       // for EVERY token, including a full-scope instance bearer. No bypass.
@@ -310,8 +376,82 @@ export function registerFolioApiTools(): void {
           `config-class write (${scopeTarget}) refused on an unattended (trigger-fired) run; not applied`,
         );
       }
+      // T7 confirm gate — folio_api OWNS its own per-path tier (it is special-cased
+      // out of the dispatcher-level `riskTier` gate so its document-write paths
+      // aren't blanket-gated by its `config:write` scope). Mirror the unattended
+      // floor's structure: in a CONVERSATION, a config-class write is HIGH-tier and
+      // must be confirmed via a recorded pending_ops row. The gate's match key is
+      // the FULL request {method, path, body} so confirming executes the RECORDED
+      // request, not a turn-2 re-read (M6). Document-write paths (documents:write)
+      // are NOT config-class → not gated here (act-then-report majority).
+      if (
+        ctx.conversationId &&
+        scopeTarget !== null &&
+        CONFIG_CLASS_SCOPES.has(scopeTarget)
+      ) {
+        const gateParams = { method: args.method, path: args.path, body };
+        const confirmed = await getConfirmedPendingOp(ctx.tx ?? db, {
+          conversationId: ctx.conversationId,
+          op: 'folio_api',
+          params: gateParams,
+        });
+        if (!confirmed) {
+          // Cluster-4 BLOCKER fix: record caller_id with the HUMAN confirmer
+          // (conversation owner), the value the confirm route confirms with — NOT
+          // ctx.actor (= agent:_operator), which would make every confirm fail
+          // closed. Fail LOUD if absent (a conversation gate without a confirmer
+          // is a wiring bug) rather than record an unconfirmable op.
+          if (!ctx.confirmerId) {
+            throw new Error('forbidden: confirm gate reached without a confirmer id');
+          }
+          const pending = await recordPendingOp(ctx.tx ?? db, {
+            conversationId: ctx.conversationId,
+            callerId: ctx.confirmerId,
+            op: 'folio_api',
+            params: gateParams,
+            target: `${args.method} ${args.path}`,
+          });
+          if (ctx.conversationSink) {
+            await ctx.conversationSink.component({
+              type: 'choice_card',
+              prompt: `Confirm ${args.method} ${args.path}? This is a configuration change and will not run until you approve it.`,
+              options: [
+                { id: pending.id, label: 'Yes, do it' },
+                { id: 'cancel', label: 'Cancel' },
+              ],
+              pending_op: pending.id,
+            });
+            await ctx.conversationSink.toolStep({
+              tool: 'folio_api',
+              summary: `confirmation required: ${args.method} ${args.path}`,
+              status: 'error',
+            });
+          }
+          // FATAL — shaped `forbidden:` so the runner's isFatalToolError ends the
+          // turn; the model cannot retry around the gate.
+          throw new Error(`forbidden: ${args.method} ${args.path} requires confirmation`);
+        }
+        // Confirmed: execute the RECORDED request, not the turn-2 re-read (M6).
+        const recorded = JSON.parse(confirmed.params) as {
+          method: string;
+          path: string;
+          body: unknown;
+        };
+        const cres = await dispatchAsCaller(ctx.token, recorded.method, recorded.path, recorded.body);
+        const cjson = await cres.json().catch(() => null);
+        await markExecuted(ctx.tx ?? db, confirmed.id, ctx.actor);
+        if (cres.status === 404 && cjson === null) {
+          return { status: 404, body: null, hint: pathHint(recorded.path) };
+        }
+        return { status: cres.status, body: cjson };
+      }
       const res = await dispatchAsCaller(ctx.token, args.method, args.path, body);
       const json = await res.json().catch(() => null);
+      // A 404 with a null body = no route matched (malformed path). Attach a shape
+      // hint, same as folio_api_get. A 404 with an error body passes through.
+      if (res.status === 404 && json === null) {
+        return { status: 404, body: null, hint: pathHint(args.path) };
+      }
       return { status: res.status, body: json };
     },
   });

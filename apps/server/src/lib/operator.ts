@@ -26,7 +26,24 @@ import {
  */
 export const OPERATOR_SLUG = '_operator';
 
-/** The operator's model + provider — unchanged from the seeded-agent era. */
+/**
+ * The operator's synthetic document id. The operator is a CODE SINGLETON with NO
+ * `documents` row, so this id is never a real FK — it is the stable, non-colliding
+ * sentinel stamped on the operator's ephemeral token (`agentId`) and returned by
+ * `getOperatorDocument()`. Single source of truth: any code that needs to detect
+ * "is this caller the operator?" compares against this, and any persistence path
+ * (e.g. `dispatchAsCaller`'s token mint) that hits the `api_tokens.agent_id →
+ * documents.id` FK MUST null it for this id rather than persist it.
+ */
+export const OPERATOR_AGENT_ID = `operator:${OPERATOR_SLUG}`;
+
+// The operator's DEFAULT model + provider — overridden at runtime by the
+// `operator_model` instance setting (Settings → AI "Use for operator", via
+// getOperatorModelSetting/resolveOperatorRunModel); these back getOperatorDefinition()
+// only when no setting row exists. NOTE (2026-06-06): small local models tested
+// via Ollama (qwen2.5-coder 7b/14b, llama3.1:8b) do NOT reliably drive the
+// operator's structured tool calls — the autonomous flow needs a tool-call-capable
+// model. See memory.
 export const OPERATOR_MODEL = 'claude-sonnet-4-6';
 export const OPERATOR_PROVIDER = 'anthropic';
 
@@ -74,7 +91,7 @@ export function getOperatorDefinition(): OperatorDefinition {
 export function getOperatorDocument(): Document {
   const def = getOperatorDefinition();
   return {
-    id: `operator:${def.slug}`,
+    id: OPERATOR_AGENT_ID,
     workspaceId: '',
     projectId: null,
     tableId: null,

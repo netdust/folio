@@ -67,6 +67,11 @@ const READ_TOOLS: ReadonlySet<string> = new Set([
   // Piece B — narrow __system skills-page read. Maps to documents:read; reaches
   // only (__system, skills, type=page) by construction (see agent-tools-registry).
   'get_skill',
+  // Operator cockpit chat (Task 3) — the `ui` tool surface. Emitting UI is not a
+  // privileged op; both map to documents:read (the underlying action carries the
+  // risk and is gated separately in T7).
+  'show_link_panel',
+  'ask_choice',
 ]);
 const WRITE_TOOLS: ReadonlySet<string> = new Set(['create_document', 'update_document']);
 const DELETE_TOOLS: ReadonlySet<string> = new Set(['delete_document']);

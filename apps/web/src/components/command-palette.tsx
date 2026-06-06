@@ -203,14 +203,14 @@ export function CommandPalette() {
             ) : null}
 
             <CommandGroup heading="Tools">
-              {ctx.workspaceSlug && matches({ label: 'Run agent…' }, query) ? (
+              {ctx.workspaceSlug && matches({ label: 'Toggle operator' }, query) ? (
                 <CommandItem
                   onSelect={() => {
                     close();
-                    agentPanelBus.open('run');
+                    agentPanelBus.toggle();
                   }}
                 >
-                  Run agent…
+                  Toggle operator
                 </CommandItem>
               ) : null}
               {matches({ label: 'Toggle theme' }, query) ? (

@@ -78,4 +78,20 @@ describe('ToolsField', () => {
     expect(screen.getByText('Write')).toBeInTheDocument();
     expect(screen.getByText('Delete')).toBeInTheDocument();
   });
+
+  // Cluster-2 /code-review fix: a selected tool that is in NO UI group (operator-
+  // only tools like show_link_panel / ask_choice / set_skill_trust) must SURVIVE
+  // toggling an unrelated grouped tool. Before the fix, toggleTool rebuilt the
+  // array from MCP_TOOL_GROUPS alone and silently dropped ungrouped selections —
+  // editing the operator's tools would strip its chat-UI + skill-trust tools.
+  it('preserves an ungrouped selected tool when toggling a grouped one', async () => {
+    const onChange = vi.fn();
+    render(<Host initial={['show_link_panel']} onChange={onChange} />);
+    // open the popover (the chip shows the ungrouped tool's name)
+    await userEvent.click(screen.getByText('show_link_panel'));
+    await userEvent.click(screen.getByRole('checkbox', { name: 'list_documents' }));
+    const lastArg = onChange.mock.calls.at(-1)?.[0] as string[];
+    expect(lastArg).toContain('show_link_panel'); // NOT dropped
+    expect(lastArg).toContain('list_documents');
+  });
 });

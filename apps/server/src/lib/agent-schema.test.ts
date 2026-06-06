@@ -277,6 +277,8 @@ describe('V1_MCP_TOOLS', () => {
       'get_skill',
       // Piece B (T8) — bless/unbless a __system skill (set its trusted flag).
       'set_skill_trust',
+      // Operator cockpit chat (Task 3) — the `ui` tool surface.
+      'show_link_panel', 'ask_choice',
       // search_documents deferred to v1.1
     ] as const);
   });

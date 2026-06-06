@@ -8,7 +8,9 @@ export const SYSTEM_WORKSPACE_SLUG = '__system';
 
 export type DocumentType = 'work_item' | 'page';
 export type ViewType = 'list' | 'kanban';
-export type AiProvider = 'anthropic' | 'openai' | 'openrouter' | 'ollama';
+// The closed AI-provider set lives in a leaf module (no cycle with the schema
+// that consumes it); re-exported here so `@folio/shared` stays the one import.
+export { AI_PROVIDERS, type AiProvider } from './ai-providers.ts';
 
 export type FieldType =
   | 'string'
@@ -40,6 +42,10 @@ export { slugify } from './slug.ts';
 export { rankBetween } from './board-rank.ts';
 export { ErrorCode, type ErrorCode as ErrorCodeType } from './error-codes.ts';
 export * from './document-schema.ts';
+export {
+  operatorModelSettingSchema,
+  type OperatorModelSetting,
+} from './operator-model-schema.ts';
 export { V1_MCP_TOOLS, MCP_TOOL_GROUPS, type McpTool } from './mcp-tools.ts';
 export { inferFieldType, type InferContext } from './field-infer.ts';
 export {
@@ -51,6 +57,11 @@ export {
 } from './filter-compile.ts';
 export { nextFires, validateCronShape, type CronShapeResult } from './cron.ts';
 export { type EventKind, KNOWN_EVENT_KINDS } from './events.ts';
+export {
+  ENTITY_TYPES,
+  type EntityType,
+  parseMessagePayload,
+} from './conversation-payload.ts';
 export {
   AUTHOR_KINDS,
   AUTHOR_REF_RE,

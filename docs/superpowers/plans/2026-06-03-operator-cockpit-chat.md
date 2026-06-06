@@ -10,11 +10,17 @@
 
 ---
 
-## ⚠️ BUILD PRECONDITION (do not execute until satisfied)
+## ⚠️ BUILD PRECONDITION (SATISFIED) — but the plan was authored against a now-superseded model; Stage 2.5 MUST reconcile
 
-This plan is **authored now, executed AFTER `spec/agent-authority-and-skills` is merged.** As of authoring (2026-06-03) that branch is at `phase-skills B5` — Piece A reach (migration `0022_nullable_token_workspace` landed) and Piece B skills (`loadAgentDefinition` reads `__system`, `get_skill`, `set_skill_trust`) are substantially in but the other session is still finishing + writing tests. Do NOT dispatch Task 1 until the branch is merged and green.
+> **2026-06-05 reconciliation note (read before executing).** The build gate is CLEARED: `spec/agent-authority-and-skills` was superseded and corrected by `spec/drop-workspace-tenancy`, which is MERGED to `main` and pushed (tip `633aec5`). **BUT this plan's task bodies were authored against the OLD `__system`-workspace tenancy model that drop-tenancy tore down.** The spec was reconciled on 2026-06-05 (`docs/superpowers/specs/2026-06-03-operator-cockpit-chat-design.md` — read its reconciliation callouts FIRST). The Stage 2.5 ground-truth pass is now the load-bearing step that re-aligns each task. KNOWN drifts the executor MUST plan-correct (not exhaustive — 2.5 verifies all):
+> - **Migration number:** T1 says `0023` / journal idx 24. WRONG — latest on `main` is `0029_drop_memberships`; the new migration is **`0030_conversations`**, journal idx 30. Hard conflict — fix before T1.
+> - **`__system` is GONE.** T5's `agent_home_workspace_id = __system`, T13's `ensureOperatorAgent` / `__system` content seeding, and every "membership"-based caller derivation are stale. The operator is a CODE SINGLETON (`lib/operator.ts`, slug `_operator`, resolved by `resolveAgentForRun`); it currently CANNOT run (`createRun` throws `OPERATOR_RUN_UNSUPPORTED`) — wiring its runnable token-in-`loadContext` path (the deferred "D10") is part of this work. Caller authority derives from `users.role` (`roleToScopes`), NOT `memberships`. Visibility = `lib/access.ts` grants.
+> - **The confirm gate keys on a NEW `riskTier` field on `ToolDef`, NOT `CONFIRM_REQUIRED_SCOPES`** (decided 2026-06-05; see spec Irreversible-op gate §). There is no existing risk classifier to reuse. Default-to-`high` for unclassified write/delete tools (fail-closed). T7 must be re-grounded on this. `folio_api` keeps owning its own per-path tiering (don't blanket-gate it by `def.riskTier`).
+> - **Operator content** (`agent.md`/`soul.md`/reference files in T13) lives as inline constants in `lib/system-skills.ts` (`OPERATOR_PROMPT`, `FOLIO_SKILL_BODY`) seeded into `instance_skills` — NOT `__system` docs. 2.5 must confirm whether `SETUP_PROJECT_REF_BODY` survived the teardown.
+>
+> Everything else (the 14-task structure, the threat model M1–M14, the ONE-flow constraint, the M14 CAS) survives — it is model-agnostic. Reconcile, don't rewrite.
 
-**At execution start, re-run the Stage 2.5 ground-truth (per `harnessed-development`) — these signatures were verified at authoring against an UNMERGED tree and may have drifted:**
+**At execution start, re-run the Stage 2.5 ground-truth (per `harnessed-development`) — these signatures were verified at authoring against an UNMERGED + since-superseded tree and HAVE drifted:**
 
 - `executeTool(token, actor, name, args, tx?, caller?)` at `apps/server/src/lib/agent-tools.ts:164` — confirm the `caller?: { callerScopes, unattended }` shape (the confirm gate EXTENDS this param).
 - `UNATTENDED_FLOORED_SCOPES` at `agent-tools.ts:100` — confirm the floored-scope pattern (the confirm gate is its sibling).
@@ -156,6 +162,14 @@ Numbered to match attacks. Each is code-checkable.
 ## Tasks
 
 > Sequencing: data layer (T1) → service (T2) → ui tool (T3) → adapters (T4) → run-create wiring (T5) → routes (T6) → the hard gate (T7) → recovery (T8) → web (T9–T13) → cleanup (T14). T7 (the gate) and T5 (caller threading) are the security-critical wiring tasks — each carries an end-to-end assertion (per `feedback_end-to-end-assertion-at-wiring-task`).
+
+> **Review clusters (added 2026-06-05 per harnessed-development 1f — ~3–4 tasks/cluster; migration + security-gate isolated).** The executor HALTS at each `── REVIEW GATE ──` for `/integration` on that cluster's diff + a `/code-review` (and `/security-review` where marked) before starting the next cluster. Do NOT run past a gate.
+> - **Cluster 1 — data + service foundation (T1–T2)** — T1 is a migration; ground-truth the migration number (0030, not 0023) first.
+> - **Cluster 2 — tool surface + adapter seam (T3–T4)** — touches `runner.ts` + `ToolContext`.
+> - **Cluster 3 — authority wiring (T5–T6)** — security-critical (M1/M2/M11/M14); `/code-review` MUST verify the caller-threading + CAS mitigations.
+> - **Cluster 4 — the hard gate + recovery (T7–T8)** — T7 is THE security-boundary task (the `riskTier` irreversible-op gate). This cluster gets `/code-review` **AND `/security-review`**.
+> - **Cluster 5 — web data + renderers (T9–T10).**
+> - **Cluster 6 — web shell + operator content + cleanup (T11–T14).**
 
 ### Task 1: Schema + migration for `conversations`, `messages`, `pending_ops`
 
@@ -461,6 +475,10 @@ git commit -m "phase-chat T2: conversation service (seq, no-events, markdown ser
 
 ---
 
+─────────────────── ── REVIEW GATE ── ───────────────────
+**END OF CLUSTER 1 (T1–T2).** HALT. Commit T1–T2, run `/integration` on the cluster diff, hand to human for `/code-review`. T1 is a migration — confirm the journal entry + that it applies once. Do NOT begin T3 until review is clear.
+──────────────────────────────────────────────────────────
+
 ### Task 3: The `ui` tool (`show_link_panel`, `ask_choice`) with Zod validation
 
 **Files:**
@@ -606,7 +624,28 @@ git commit -m "phase-chat T4: source/sink adapter seam (conversation thread reus
 
 ---
 
+─────────────────── ── REVIEW GATE ── ───────────────────
+**END OF CLUSTER 2 (T3–T4).** HALT. Commit T3–T4, run `/integration`, hand to human for `/code-review` (focus: the runner source/sink seam + `ToolContext` extension — verify no regression to the document-thread path). Do NOT begin T5 until clear.
+──────────────────────────────────────────────────────────
+
 ### Task 5: Run-create wiring — chat run threads the caller (M1/M2) [WIRING TASK — end-to-end assertion]
+
+> **⚠️ PLAN-CORRECTION (2026-06-05, Step 2.5 — supersedes the original T5 below).** The original T5 ("add `conversationId` to `createRun`; stamp `agent_home_workspace_id = __system`; reuse membership lookup") is NOT VIABLE against merged main, for three ground-truthed reasons:
+> 1. **`createRun` hard-refuses the operator** (`if (isOperator(agent.slug)) throw OPERATOR_RUN_UNSUPPORTED`, agent-runs.ts:119) — deliberately, since the operator has no token row.
+> 2. **`createRun` + the `agent_run` document require a parent + project + runsTable + a persisted token row** — a conversation run has NONE of these. Forcing it through would mean faking a parent/project and writing conversation runs into the `agent_run`/documents space — the exact event/trigger surface invariant 10 + the walled-off conversations tables exist to AVOID.
+> 3. `__system` is gone; the operator is a CODE SINGLETON (`lib/operator.ts`, no token, `projects:['*']`, `tools:OPERATOR_TOOLS`).
+>
+> **CORRECTED DESIGN (user-decided 2026-06-05): a SEPARATE conversation-run path, walled off like the conversation tables themselves.**
+> - **NEW `createConversationRun(db, { conversation, callerUser })`** (in agent-runs.ts or a new conversations-run module) — does NOT write an `agent_run` document, does NOT touch parent/project/runsTable. It:
+>   - resolves the caller = `conversation.created_by` (the human), reads their CURRENT `users.role` (`userRole`) — fresh per turn (Authority-over-time Option A below still holds).
+>   - computes the operator's effective authority = **`toolsToScopes(OPERATOR_TOOLS) ∩ roleToScopes(callerRole)`** for scopes (the agent∩caller floor, M1/M2 — a viewer's operator is read-only); **project ceiling** = `callerProjectsFor({role, projectIds})` where for a non-owner the projectIds are the caller's visible projects (a flat snapshot — the SAME established pattern createRun already uses for `caller_project_ids`; owner → null = no narrowing → operator `['*']` stands). Because the operator is instance-reach and a conversation isn't ws-pinned, the non-owner snapshot is the UNION of `visibleProjectIds` across the caller's `visibleWorkspaceIds` (each project id is globally unique, so a flat union is a safe ceiling; the "projects created later aren't included" tradeoff is identical to today's createRun snapshot).
+>   - mints an **EPHEMERAL in-memory operator token** `{ scopes, projectIds, agentId: OPERATOR_SLUG-resolved-id-or-sentinel }` — NOT persisted to `apiTokens` (no token row pollution; mirrors how ccExecute mints ephemeral tokens). The conversation `active_run_id` slot (M14 CAS, T6) tracks liveness; the "run id" is a generated id, not a document id.
+>   - returns the data `loadContext`'s conversation branch needs (or directly builds the `RunContext`).
+> - **`loadContext` gains a conversation branch** — when invoked for a conversation run (keyed on the run carrying `conversation_id` / being a conversation-run id), it SKIPS the `run.parentId`/`parent`/`run.projectId`/`project`/token-row lookups and instead builds `RunContext` with: `sink = makeConversationSink(...)`, `conversationId`, the ephemeral token, NO `parent`, the operator definition (`getOperatorDefinition`/`getOperatorDocument`) as `agent`. The parent-coupled helpers already guard on `ctx.sink` (Cluster 2).
+> - **`createRun` keeps throwing `OPERATOR_RUN_UNSUPPORTED`** — unchanged. Triggers/MCP still cannot run the operator. Only the cockpit path (createConversationRun) can.
+> - **Authority test (M1/M2) is unchanged in spirit:** assert `toolsToScopes(OPERATOR_TOOLS) ∩ roleToScopes(viewer)` yields read-only (no documents:write); owner yields full; the floor is the same `agent ∩ caller`.
+>
+> The "Authority-over-time Option A" + "Files"/"Steps" below are RESHAPED by this correction — read them through this lens (createConversationRun, not createRun-extension; ephemeral token, not a stamped agent_run doc; users.role, not membership).
 
 **Authority-over-time (Option A — resolve fresh per turn; state this explicitly).** A conversation has ONE immutable identity (`created_by`) but its authority is resolved FRESH at every turn's run-create from the owner's CURRENT membership:
 - Owner promoted (viewer → admin) between turns → the next turn GAINS the new ability. Owner demoted → the next turn LOSES it. This is the natural model and matches per-run derivation.
@@ -683,6 +722,10 @@ git commit -m "phase-chat T6: conversation routes + atomic single-turn CAS (M11/
 **Sibling-site audit:** confirm `requireSessionUser` is the right guard (Inv 4 — session-only, reject tokens). Mount path registered in the route index. The slot-release-on-failure path must run on every error branch between acquire and runner-kick (else a conversation wedges with a stale `active_run_id` until boot recovery — T8).
 
 ---
+
+─────────────────── ── REVIEW GATE ── ───────────────────
+**END OF CLUSTER 3 (T5–T6).** HALT. Commit T5–T6, run `/integration`, hand to human for `/code-review` against M1/M2/M11/M14 (caller threading, conversation `created_by` scoping, the atomic single-turn CAS). This is security-critical authority wiring. Do NOT begin T7 until clear.
+──────────────────────────────────────────────────────────
 
 ### Task 7: The hard irreversible-op gate at `executeTool` [WIRING TASK — end-to-end assertion]
 
@@ -768,9 +811,27 @@ git commit -m "phase-chat T7: hard irreversible-op gate at executeTool (M4-M7,M1
 
 ---
 
-### Task 9: Web — conversations API client + hooks (+ SSE live-tail reusing the activity-feed shape)
+─────────────── ── REVIEW GATE (+ /security-review) ── ───────────────
+**END OF CLUSTER 4 (T7–T8).** HALT. Commit T7–T8, run `/integration`, hand to human for `/code-review` AND `/security-review`. T7 is THE security-boundary task — the `riskTier` irreversible-op gate at `executeTool`. Review must verify the must-be-hard set M4–M7+M13 (gate is structural not prompt; recorded-params execution; single-use/caller-bound/expiry; fail-closed default-to-high; headless not gated). Do NOT begin T9 until both reviews clear.
+──────────────────────────────────────────────────────────
+
+### Task 9: Web — conversations API client + hooks (+ live-tail via a DEDICATED conversation SSE)
+
+> **⚠️ PLAN-CORRECTION (2026-06-05, Step 2.5 — supersedes "reuse `useEventStream` verbatim").** The spec/plan assumed the chat live-tail reuses the existing `useEventStream` + `/events` SSE channel. Ground-truth falsifies the premise:
+> - `useEventStream` is bound to `/api/v1/w/:wslug/events` — WORKSPACE-scoped. Conversations are INSTANCE-level (no workspace).
+> - The `/events` bus is the **trigger/document plane**: its consumer is the **trigger-matcher reactor** (`trigger-matcher.ts`) that fires agents on document events. Routing chat through it would (a) require chat to emit `events` rows — which M10 deliberately forbids (`events.workspace_id` is `NOT NULL` + every row fans to the trigger-matcher) and (b) spawn agents off chat turns. The M10 walling is NOT a tenancy artifact; it survives single-team intact (chat must not fire triggers).
+> - (NOTE — a real but OUT-OF-SCOPE smell, flagged by Stefan 2026-06-05: the `/events` channel keying everything on `workspace_id` is leftover-tenancy-shaped under one-instance=one-team. It's the pre-existing document/SSE plane; refactoring it is NOT this feature's job. Tracked in memory `[[feedback_events-workspace-keying-is-leftover-tenancy]]`.)
+>
+> **CORRECTED DESIGN (user-decided): a DEDICATED conversation SSE channel, instance-level + owner-scoped, structurally separate from the trigger plane.** This adds a small SERVER piece to T9 (it is no longer web-only):
+> - **NEW `GET /conversations/:id/stream`** (in `routes/conversations.ts`) — `requireSessionUser`, owner-scoped (`createdBy === sessionUser.id`, 404 else), `streamSSE` (hono/streaming, same as `routes/events.ts:141`). Subscribes to a NEW tiny in-process **conversation bus** keyed by `conversationId` (NOT workspace), unsub on disconnect.
+> - **NEW conversation bus** (`lib/conversation-bus.ts`) — a minimal pub/sub: `subscribe(conversationId, cb)` / `publish(conversationId, messageRow)`. ~the events bus MINUS the workspace key MINUS reactors/replay. The message SINK (`chat-thread-sink.ts`, Cluster 2) publishes each appended row to it. NO events-table row, NO trigger-matcher reach.
+> - **Web** mirrors `useActivityFeed`'s seed-history-then-live-tail shape but points a raw `EventSource` (or a tiny `useConversationStream` hook) at `/conversations/:id/stream` — NOT `useEventStream` (which is workspace-bound). The thread seeds from `GET /conversations/:id` then layers live rows (live wins on merge by message id/seq).
+>
+> So T9 = (T9a server: the SSE route + bus + sink publish) + (T9b web: api client + hooks + live-tail hook). The "reuse useEventStream"/Inv-8 citations below mean "reuse the SEED-THEN-TAIL PATTERN", not the workspace hook.
 
 **Files:**
+- Create: `apps/server/src/lib/conversation-bus.ts` (the per-conversation in-process pub/sub), `apps/server/src/lib/conversation-bus.test.ts`
+- Modify: `apps/server/src/routes/conversations.ts` (the `GET /:id/stream` SSE route), `apps/server/src/lib/chat-thread-sink.ts` (publish each appended row to the bus)
 - Create: `apps/web/src/lib/api/conversations.ts`
 - Test: `apps/web/src/lib/api/conversations.test.ts`
 
@@ -803,6 +864,10 @@ Run: `cd apps/web && npx vitest run src/lib/api/conversations.test.ts`
 **Sibling-site audit:** `choice_card` MUST send `id`, never `label` (M8).
 
 ---
+
+─────────────────── ── REVIEW GATE ── ───────────────────
+**END OF CLUSTER 5 (T9–T10).** HALT. Commit T9–T10, run web tests (`npx vitest run`), hand to human for `/code-review` (focus: SSE live-tail reuses the ratified `useActivityFeed` shape — Inv 8; `choice_card` sends id not label — M8). Do NOT begin T11 until clear.
+──────────────────────────────────────────────────────────
 
 ### Task 11: Web — chat composer + the cockpit-chat body
 

@@ -62,8 +62,9 @@ const TOOLS: NavItem[] = [
     kbd: modKeyHint('K'),
     onClick: openCommandPalette,
   },
-  // The agent cockpit panel is toggled from the workspace dropdown ("Agents")
-  // and Cmd-K ("Run agent…") — no rail tool, to avoid a redundant entry.
+  // The operator cockpit panel is open by default and toggled from the
+  // workspace dropdown ("Agents") and Cmd-K ("Toggle operator") — no rail tool,
+  // to avoid a redundant entry.
 ];
 
 function WorkspaceLayout() {
@@ -392,7 +393,7 @@ function WorkspaceLayout() {
             </div>
           </div>
         }
-        panel={<AgentCockpitPanel wslug={wslug} />}
+        panel={<AgentCockpitPanel />}
       />
       <WorkspaceCreate open={creatingWorkspace} onOpenChange={setCreatingWorkspace} />
       <ProjectCreate wslug={wslug} open={creatingProject} onOpenChange={setCreatingProject} />

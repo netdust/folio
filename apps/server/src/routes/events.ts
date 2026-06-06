@@ -9,6 +9,7 @@ import { canManageWorkspace, visibleProjectIds } from '../lib/access.ts';
 import { intersectAgentProjects, resolveAgentProjects } from '../lib/agent-projects.ts';
 import { getWorkspace, type ScopeContext } from '../middleware/scope.ts';
 import { eventBus, type BusEvent } from '../lib/event-bus.ts';
+import { runSseLoop } from '../lib/sse-loop.ts';
 import type { EventKind } from '../lib/events.ts';
 import { HTTPError } from '../lib/http.ts';
 import { isAgentEventVisible, type AgentEventContext } from '../lib/agent-event-visibility.ts';
@@ -255,33 +256,25 @@ eventsRoute.get('/', async (c) => {
       }
     }
 
-    // Subscribe to live events. The bus filter mirrors the replay filter so
-    // both paths honor `kinds` and `project` query params identically.
-    //
-    // BUG-006 (shake-out): the consumer awaits a `waiter` promise that the
-    // bus handler resolves on push and the abort handler resolves on abort.
-    // The previous 100ms-poll wasted ~10 wakeups/sec per open connection on
-    // an idle workspace; this gives event-driven latency with zero idle work.
-    const queue: BusEvent[] = [];
-    let wake!: () => void;
-    let waiter = new Promise<void>((r) => {
-      wake = r;
-    });
-    const renewWaiter = () => {
-      waiter = new Promise<void>((r) => {
-        wake = r;
-      });
-    };
-
-    const unsub = eventBus.subscribe(
-      ws.id,
-      {
-        kinds: kinds as EventKind[] | undefined,
-        projectId,
-        parentId,
-        runId,
-      },
-      (e) => {
+    // Subscribe to live events through the shared SSE loop (lib/sse-loop.ts —
+    // the same plumbing the conversation stream uses). The bus filter mirrors
+    // the replay filter so both paths honor `kinds` and `project` query params
+    // identically; the per-subscriber visibility filters (F3 / fix-#2 / CR-8 /
+    // H1-H2 / D-7) stay in the subscribe callback, AND-combined (they only
+    // narrow). The loop owns the queue + waiter + heartbeat + drain (BUG-006:
+    // event-driven, zero idle polling).
+    await runSseLoop<BusEvent>(
+      stream,
+      (onRow) =>
+        eventBus.subscribe(
+          ws.id,
+          {
+            kinds: kinds as EventKind[] | undefined,
+            projectId,
+            parentId,
+            runId,
+          },
+          (e) => {
         // F3: drop project-scoped events outside the agent's allow-list.
         if (
           agentAllowList &&
@@ -323,42 +316,14 @@ eventsRoute.get('/', async (c) => {
           const t = (e.payload as Record<string, unknown> | undefined)?.table_id;
           if (t !== tableFilter) return;
         }
-        queue.push(e);
-        wake();
+        onRow(e);
       },
+    ),
+      // Per-event frame: the events channel names each frame by the event kind
+      // (the conversation channel uses a fixed `message` — that's the only shape
+      // difference between the two routes).
+      (e) => ({ id: e.id, event: e.kind, data: JSON.stringify(e) }),
     );
-
-    let aborted = false;
-    stream.onAbort(() => {
-      aborted = true;
-      wake();
-    });
-
-    // Heartbeat every 30s. Uses the `ping` event name so clients can ignore
-    // it via the EventSource onmessage default handler.
-    const heartbeat = setInterval(() => {
-      void stream.writeSSE({ event: 'ping', data: '' });
-    }, 30_000);
-
-    try {
-      while (!aborted && !stream.aborted) {
-        while (queue.length > 0) {
-          const e = queue.shift()!;
-          await stream.writeSSE({
-            id: e.id,
-            event: e.kind,
-            data: JSON.stringify(e),
-          });
-          if (stream.aborted) break;
-        }
-        if (aborted || stream.aborted) break;
-        await waiter;
-        renewWaiter();
-      }
-    } finally {
-      clearInterval(heartbeat);
-      unsub();
-    }
   });
 });
 

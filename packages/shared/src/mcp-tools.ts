@@ -40,6 +40,11 @@ export const V1_MCP_TOOLS = [
   // lives in setSkillTrust — an MCP admin PAT (human createdBy) is refused, only
   // the system operator (createdBy null) or a session user may flip the flag.
   'set_skill_trust',
+  // Operator cockpit chat (Task 3) — the `ui` tool surface. Chat-only tools that
+  // render structured components (link panel / choice card) into the conversation
+  // thread; both map to documents:read (emitting UI is not a privileged op).
+  'show_link_panel',
+  'ask_choice',
 ] as const;
 
 export type McpTool = (typeof V1_MCP_TOOLS)[number];

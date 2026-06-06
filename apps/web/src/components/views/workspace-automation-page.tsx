@@ -1,10 +1,11 @@
 import { WorkspaceAgentsTab } from './workspace-agents-tab.tsx';
 import { WorkspaceTriggersPage } from './workspace-triggers-page.tsx';
+import { WorkspaceActivityTab } from './workspace-activity-tab.tsx';
 import { TokensTab } from '../settings/tokens-tab.tsx';
 import { useWorkspace } from '../../lib/api/workspaces.ts';
 import { Tabs } from '../ui/tabs.tsx';
 
-export type AutomationTab = 'agents' | 'triggers' | 'api';
+export type AutomationTab = 'agents' | 'triggers' | 'api' | 'activity';
 
 interface Props {
   wslug: string;
@@ -16,6 +17,7 @@ const TABS: { value: AutomationTab; label: string }[] = [
   { value: 'agents', label: 'Agents' },
   { value: 'triggers', label: 'Triggers' },
   { value: 'api', label: 'API' },
+  { value: 'activity', label: 'Activity' },
 ];
 
 /**
@@ -48,6 +50,8 @@ export function WorkspaceAutomationPage({ wslug, tab, onTabChange }: Props) {
         <WorkspaceAgentsTab wslug={wslug} />
       ) : tab === 'triggers' ? (
         <WorkspaceTriggersPage wslug={wslug} />
+      ) : tab === 'activity' ? (
+        <WorkspaceActivityTab wslug={wslug} />
       ) : workspace.data ? (
         <TokensTab wslug={wslug} workspaceId={workspace.data.id} />
       ) : null}

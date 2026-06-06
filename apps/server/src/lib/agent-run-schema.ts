@@ -14,6 +14,12 @@ export const runErrorReasonSchema = z.enum([
   'budget_exceeded',
   'depth_exceeded',
   'no_ai_key',
+  // A key ROW exists for (provider, ai_key_label) but its ciphertext can't be
+  // decrypted — the stored key was encrypted under a DIFFERENT FOLIO_MASTER_KEY
+  // (key rotation, a DB copied across environments). A config/ops error the
+  // operator must fix (re-enter the key), NOT a retryable provider fault and
+  // NOT 'no_ai_key' (a key IS configured). Distinct so the message can be honest.
+  'key_decrypt_failed',
   // The run names the claude-code backend but FOLIO_CLAUDE_CODE_ENABLED is off
   // for this install. An operator-config gate, not a retryable fault.
   'claude_code_disabled',

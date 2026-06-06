@@ -7,11 +7,12 @@ interface Props {
   wslug: string;
 }
 
-// ⚡ Activity screen: a live, workspace-wide tail of agent runs driven entirely
-// by SSE (no workspace-wide runs-list endpoint exists). Each row links to the
-// agent's slideover Runs tab — the parent work-item isn't in the run event
-// payload yet, so navigating to the parent+comments is deferred (E-FOLLOWUP).
-export function ActivityFeedScreen({ wslug }: Props) {
+// ⚡ Activity tab: a live, workspace-wide tail of agent runs driven entirely by
+// SSE (no workspace-wide runs-list endpoint exists). Lives on the Agents &
+// Triggers automation page (it moved here when the cockpit became chat-only).
+// Each row opens the agent's slideover on its Runs tab; the parent work-item
+// isn't in the run event payload yet, so navigating to the parent is deferred.
+export function WorkspaceActivityTab({ wslug }: Props) {
   const { items } = useActivityFeed(wslug);
   const navigate = useNavigate();
 
@@ -20,8 +21,12 @@ export function ActivityFeedScreen({ wslug }: Props) {
   }
 
   const openAgentRuns = (item: ActivityItem) => {
+    // Open the agent's config slideover (layout-mounted, via ?wdoc=) on its Runs
+    // sub-tab. `tab` is the slideover's OWN sub-tab param (fields|activity|runs),
+    // shared across this layout — here it selects the slideover's Runs view.
     void navigate({
-      to: '.',
+      to: '/w/$wslug/agents',
+      params: { wslug },
       search: (prev) => ({ ...(prev as Record<string, unknown>), wdoc: item.agent, tab: 'runs' }),
     });
   };

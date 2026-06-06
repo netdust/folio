@@ -16,8 +16,29 @@
  */
 import { and, eq } from 'drizzle-orm';
 import { db } from '../db/client.ts';
-import { type ApiToken, documents } from '../db/schema.ts';
+import { type ApiToken, type Document, documents } from '../db/schema.ts';
 import { HTTPError } from './http.ts';
+import { OPERATOR_AGENT_ID, getOperatorDocument } from './operator.ts';
+
+/**
+ * Resolve the CALLING agent's doc for the widening guards. The operator is a
+ * code singleton: its token carries the synthetic OPERATOR_AGENT_ID (no row), so
+ * a raw findFirst returns undefined → the guards' fail-closed fallback ([] allow-
+ * list / [] tools) would mis-deny the operator from granting ANY project/tool to
+ * a child agent — even though its real definition is projects:['*'] + full tools.
+ * Resolve the sentinel to its code-singleton doc; a real-but-missing agent still
+ * returns undefined (the guards keep their fail-closed handling for that case).
+ * (architecture shake-out: extends the resolveAgentDocForToken convergence —
+ * implemented locally because agent-tools-registry.ts imports THIS file, so
+ * importing its helper back would cycle.)
+ */
+async function resolveCallingAgent(token: ApiToken): Promise<Document | undefined> {
+  if (token.agentId === OPERATOR_AGENT_ID) return getOperatorDocument();
+  if (!token.agentId) return undefined; // not agent-bound — guards fail-closed on undefined
+  return db.query.documents.findFirst({
+    where: and(eq(documents.id, token.agentId), eq(documents.type, 'agent')),
+  });
+}
 
 /**
  * Reject if the token cannot write to the target type. Routes already check
@@ -80,9 +101,7 @@ export async function assertAgentAllowListWidening(
   // surface the validation error.
   if (!Array.isArray(nextProjects)) return;
 
-  const callingAgent = await db.query.documents.findFirst({
-    where: and(eq(documents.id, token.agentId), eq(documents.type, 'agent')),
-  });
+  const callingAgent = await resolveCallingAgent(token);
   const callingProjectsRaw = (callingAgent?.frontmatter as { projects?: unknown } | undefined)
     ?.projects;
 
@@ -154,9 +173,7 @@ export async function assertAgentToolsWidening(
   const nextTools = (nextFrontmatter as Record<string, unknown>)['tools'];
   if (!Array.isArray(nextTools)) return; // let Zod surface the type error
 
-  const callingAgent = await db.query.documents.findFirst({
-    where: and(eq(documents.id, token.agentId), eq(documents.type, 'agent')),
-  });
+  const callingAgent = await resolveCallingAgent(token);
   const callingToolsRaw = (callingAgent?.frontmatter as { tools?: unknown } | undefined)
     ?.tools;
 

@@ -1,0 +1,1 @@
+CREATE INDEX `pending_ops_lookup_idx` ON `pending_ops` (`conversation_id`,`op`,`status`);

@@ -1,5 +1,9 @@
 # Folio — STATE
 
+_**✅ OPERATOR COCKPIT-CHAT — ALL TASKS BUILT + `/shakeout` DONE (0 blockers) on `spec/operator-cockpit-chat`, NOT merged. ONLY GATE LEFT: real-key end-to-end + merge. 2026-06-05.** The whole spec (T1–T14, 6 review clusters) is built, twice-reviewed, and shaken out. Multi-turn operator chat in the cockpit panel: conversations/messages/pending_ops data layer (inv-5 deliberate exception — walled off from events/trigger plane, M10), a dedicated per-conversation SSE bus + shared `runSseLoop`, an ephemeral-token conversation-run path (authority = agent ∩ caller, M1/M2), the hard irreversible-op confirm gate at executeTool (M4–M7, single-use/caller-bound/expiring), web chat UI (composer + cockpit-chat body + message renderers), link_panel/choice_card ui tools with a single frontend `entityRoute` resolver. **`/shakeout`: integration green (server 1562/1-skip/0, web 799/8-skip/0, shared 70/0, tsc ×3); e2e 38-pass/4-fail (the 4 are PRE-EXISTING — spec files + their surfaces byte-identical to main, branch touched none; click-through/manual-qa/phase-2-5, NOT cockpit regressions); Track-A real-HTTP sweep against a FRESH-migrated DB proved createdAt-is-number, user-msg-published, SSE live frames, M11 foreign-404 on conv/.md/stream, graceful no-key failure, seq integrity; 4-reviewer panel 0 BLOCKERS + security CLEAN, all 4 SHOULD-FIX fixed (`be2970f`: thread-replay windowing CONVERSATION_HISTORY_WINDOW=60, deleted dead expireStale, trimmed ENTITY_TYPES to 4 resolvable types, extracted projectIdsVisibleInWorkspace dedup).** Two `/code-review` rounds before shakeout fixed 20 findings (Cluster-5 + Cluster-6); the deep-link dead-end was un-deferred (server-derives slug+pslug). **REMAINING (yours): (1) real-BYOK end-to-end — configure an AI key (Settings → AI; Ollama needs `FOLIO_ALLOW_LOOPBACK_AI`) then run "set up a CRM" and verify Track-B checks in `tasks/shake-out-manifest-cockpit-chat.md` (tool_steps stream, link_panel resolves, choice_card round-trips, destructive-op refuses-until-confirm, 2-tab live-tail); (2) `/code-review --base=main --effort=high` final pass; (3) merge. NICE-TO-HAVE deferred (recorded below).** **DEV-DB NOTE: local `apps/server/folio.db` is on a STALE divergent chain (33 migs vs 32, old ai_keys shape) — re-migrate/reset before local use; the fresh chain applies cleanly (swept against a fresh DB).**_
+
+_**Cockpit-chat deferred NICE-TO-HAVE (from the shakeout reviewer panel, none blocking):** pending-op TTL measured from create not confirm (fail-closed UX papercut on slow turns); `sse-loop.ts` live queue unbounded under backpressure (PRE-EXISTING — old events loop same; now shared by both routes); `MessageRow` unmemoized + re-parses payload per render; conversation-runs ceiling N+1 over visible workspaces recomputed per turn (Option-A by-design); `payload.ts` one-line re-export indirection; synthetic-sentinel RunContext → discriminated union when a 3rd run-shape appears; confirm-gate mechanics duplicated across dispatcher + folio_api self-tiered path (two-path split is intentional, only the ~40-line mechanics could DRY); finish migrating the other localStorage callers (theme/rail/comment-composer/use-resizable-width) to `lib/safe-storage.ts`. Also: malformed-JSON body → 500 not 400 is GLOBAL/pre-existing (all routes), not cockpit — track separately._
+
 _**🚢 DROP-WORKSPACE-TENANCY MERGED TO MAIN + PUSHED. 2026-06-05.** The entire drop-tenancy arc (single-team model: workspaces = folders not tenancy; `__system` + `memberships` torn down; instance authority on `users.role`; visibility via invitation grants in `lib/access.ts`) PLUS this session's additions (marker below) are merged `--no-ff` into `main` (merge commit `e33898a`) and PUSHED to `origin/main` (tip `633aec5`). `/shakeout` ran the FULL gate before merge: integration green (server 1498/0, web 779/0, shared 63/0, tsc ×3); e2e 39-pass (3 PRE-EXISTING click-through/phase-2-5 Wiki-tab failures, byte-identical to main — NOT regressions); live QA sweep 0 bugs; 4-reviewer panel 0 BLOCKERS + all 5 SHOULD-FIX addressed (`d18a1e6`: mintToken convergence + dead reach-branch removal from tokens.ts, assertNotLastOwner + deleteUserCascade in lib/user-lifecycle.ts, shared TokenCreateDialog). Fixed `0023` carried (main no longer bricks upgrades). Post-merge main re-verified: server 1498/0, tsc ×3 clean. **Safety net: tag `pre-merge/main-before-drop-tenancy`=`4ddf8f6` (pushed) = escape hatch; `spec/drop-workspace-tenancy` branch still exists local (unmerged-delete safe now).** **REMAINING (yours, pre-customer gates — neither blocked merge): (1) real-key end-to-end on a prod-shaped DB — the one path no test covers, incl. the OWNER-LESS-UPGRADE check (a backfill sourcing authority only from deleted `__system` can leave an instance owner-less — [[feedback_fail-loud-migration-guards-brick-upgrades]] corollary); (2) configure SMTP or invite emails only log to console. DOCUMENTED-not-fixed: 3 AI-tab UX gaps (Test button hidden at instance-level; Ollama loopback needs `FOLIO_ALLOW_LOOPBACK_AI`, no UI hint; edit/rotate label ambiguity).** Markers below are as-of-the-moment history (they say "NOT merged" — true when written; this marker supersedes)._
 
 _**🧭 POST-TENANCY SETTINGS/UX PASS + 3 CAPABILITY GAPS CLOSED — [SUPERSEDED → MERGED, see top] on `spec/drop-workspace-tenancy`, tree CLEAN + green, NOT merged. NEXT: user runs `/shakeout` → real-key check → merge. 2026-06-05 (same day as the 0023 fix below).** A design-review + exploratory-e2e session (Stefan driving) reshaped the Settings/nav surfaces and found real capability gaps that green per-task tests had missed. **Nav cleanup (`94ad52e`):** workspace dropdown lost the duplicate "Workspace settings" + standalone "Triggers" entries (triggers stay a tab on the agents page); user-menu "Instance settings"→"Settings" + gear icon, opens IN the workspace rail via new `/w/$wslug/instance-settings` child route (mirrors how ws-settings keeps the rail) NOT the bare `/settings`; landing route `/` now redirects to last-opened (localStorage `lib/last-workspace.ts`)→first workspace, grid GONE (only zero-ws users see a screen). **AI provider selection is ALREADY instance-level** (the 0023 refactor) — no per-ws provider UI exists; nothing to change there (confirmed, not a gap). **Token split (`cc716ec`):** the two "API" things were conflated — AI provider KEYS (instance, on Settings) vs API TOKENS (inbound auth for agents/MCP). Per-workspace tokens → Agents & Triggers→API tab (TokensTab moved there); standalone ws-settings PAGE deleted; instance (reach=null) tokens → NEW "Instance API tokens" section on Settings + NEW `POST /api/v1/instance/tokens` (the create path was missing — list/revoke already existed); removed the confusing "Whole instance" reach toggle from the per-ws modal. **Invite-by-email (`6fea8ad`):** GAP #1 — Invitations tab could only GRANT to EXISTING users, no way to add a new person. NEW `POST /api/v1/instance/invites` (owner/admin, session-only) issues a magic link (consume upserts as MEMBER; reuses the hardened consume path), invite-worded `sendInvite()`; "Invite a new member" email form. v1 = invite-only, grant after they appear. **Remove-member (`e146555`):** GAP #2 (the mirror) — owner could ADD but never REMOVE a member (a demoted ex-teammate kept a login). NEW `DELETE /api/v1/instance/users/:id` (owner-only, one txn): cascades sessions/grants, REVOKES tokens they minted (FK is RESTRICT — nulled-owner live token = orphan credential), NULLS documents.created_by/updated_by (RESTRICT — else delete throws), preserves authored docs; guards CANNOT_SELF_DELETE + LAST_OWNER; "Remove" button + confirm in Roles tab. **MCP fix from a PARALLEL session, now committed here (`b278fb0`):** `toMcpToolResult()` wraps bare `{status,body}` returns (folio_api/_get) into the MCP `content` shape at the single transport point — they were rendering as EMPTY output in the MCP client; +operator ref-doc edits in system-skills.ts. **Each feature is threat-modeled (auth/onboarding surfaces) + RED-first tested incl. denial paths.** All e2e via NEW `apps/web/tests/e2e/settings-screen.spec.ts` (10 tests — Settings opens in rail, all 4 sections wired, invite real→magic link, remove real→removed user's session 401s, instance token creates a workspace, ws-token on API tab, removed surfaces gone). **Gates: server 1499/1-skip/0, web 779/8-skip/0, tsc clean ×3, settings e2e 10/10.** **REMAINING AI-tab gaps DOCUMENTED not fixed (lower severity): Test button hides at instance-level (no wslug); Ollama loopback needs `FOLIO_ALLOW_LOOPBACK_AI` env with no UI hint; edit/rotate label ambiguity.** **⚠️ SMTP must be configured for invites to actually send (else magic link only logs to console — dev fallback).** **Process notes: the auto-memory session hook bundled 2 feature commits under "memory:auto-capture" msgs (verified files landed, amended one); the 0023 fix is carried on this branch but `main` still has the broken guard — merge MUST carry it. The drop-tenancy branch is now ~133 commits ahead of main; `/shakeout` (last run BEFORE all the above) MUST be re-run before merge.**_
@@ -493,3 +497,123 @@ See `docs/PHASES.md` for the canonical phase list (above-section mirrors it). Lo
 **Decisions**
 - **API tab on Agents & Triggers**, and **delete the standalone Workspace-settings page entirely**. This consolidates everything:
 [2026-06-05] — session ended (no significant changes captured)
+[2026-06-05] — session ended (no significant changes captured)
+[2026-06-05] — session ended (no significant changes captured)
+[2026-06-05] — session ended (no significant changes captured)
+[2026-06-05] — session ended (no significant changes captured)
+[2026-06-05] — session ended (no significant changes captured)
+[2026-06-05] — session ended (no significant changes captured)
+[2026-06-05] — session ended (no significant changes captured)
+[2026-06-05] — session ended (no significant changes captured)
+[2026-06-05] — session ended (no significant changes captured)
+[2026-06-05] — session ended (no significant changes captured)
+[2026-06-05] — session ended (no significant changes captured)
+[2026-06-05] — session ended (no significant changes captured)
+[2026-06-05] — session ended (no significant changes captured)
+[2026-06-05] — session ended (no significant changes captured)
+[2026-06-05] — session ended (no significant changes captured)
+[2026-06-05] — session ended (no significant changes captured)
+[2026-06-05] — session ended (no significant changes captured)
+[2026-06-05] — session ended (no significant changes captured)
+[2026-06-05] — session ended (no significant changes captured)
+[2026-06-05] — session ended (no significant changes captured)
+[2026-06-05] — session ended (no significant changes captured)
+[2026-06-05] — session ended (no significant changes captured)
+[2026-06-06] — session ended (no significant changes captured)
+[2026-06-06] — session ended (no significant changes captured)
+[2026-06-06] — session ended (no significant changes captured)
+[2026-06-06] — session ended (no significant changes captured)
+[2026-06-06] — session ended (no significant changes captured)
+[2026-06-06] — session ended (no significant changes captured)
+[2026-06-06] — session ended (no significant changes captured)
+[2026-06-06] — session ended (no significant changes captured)
+[2026-06-06] — session ended (no significant changes captured)
+[2026-06-06] — session ended (no significant changes captured)
+[2026-06-06] — session ended (no significant changes captured)
+[2026-06-06] — session ended (no significant changes captured)
+[2026-06-06] — session ended (no significant changes captured)
+[2026-06-06] — session ended (no significant changes captured)
+[2026-06-06] — session ended (no significant changes captured)
+[2026-06-06] — session ended (no significant changes captured)
+[2026-06-06] — session ended (no significant changes captured)
+[2026-06-06] — session ended (no significant changes captured)
+[2026-06-06] — session ended (no significant changes captured)
+[2026-06-06] — session ended (no significant changes captured)
+[2026-06-06] — session ended (no significant changes captured)
+[2026-06-06] — session ended (no significant changes captured)
+[2026-06-06] — session ended (no significant changes captured)
+[2026-06-06] — session ended (no significant changes captured)
+[2026-06-06] — session ended (no significant changes captured)
+[2026-06-06] — session ended (no significant changes captured)
+[2026-06-06] — session ended (no significant changes captured)
+[2026-06-06] — session ended (no significant changes captured)
+[2026-06-06] — session ended (no significant changes captured)
+[2026-06-06] — session ended (no significant changes captured)
+[2026-06-06] — session ended (no significant changes captured)
+
+## [2026-06-06] Multica architecture study — Folio validated, 3 narrow deltas
+
+Studied multica-ai/multica (mature Go+Postgres+Next agent platform; product peer NOT stack twin) to harden Folio + pressure-test the agent model. Multi-agent workflow (5 readers → adversarial verify vs real Folio source → synth, 2 passes converged). Doc: `docs/superpowers/specs/2026-06-06-multica-architecture-study.md`.
+
+**Verdict: Folio is in good shape and AHEAD of a mature peer on the load-bearing properties.** Multica's agent token is owner-equivalent-within-workspace; Folio's `agent ∩ token ∩ caller` + fail-closed `effectiveReach` is stricter. Folio also ahead on at-rest secrets (Multica stores provider keys plaintext in `custom_env`) and skill trust (forge-proof typed column vs RBAC-only).
+
+**Only 3 real deltas, all low/medium, all bounded by single-team model:**
+- **3.1 (MEDIUM, actionable):** no content-based output redactor — `runner.ts:1601` (`setRunBody`) / `:1636`/`:1693` (`postAgentComment`) persist+broadcast model output RAW. `ccToken` is live-then-revoked (`:1528`/`:1614`) so an agent echoing its own `folio_pat_` token leaks a USABLE credential to a comment+SSE. Fix = small redactor AT THE LOADER (system_prompt-leaked-3× lesson), scoped to `folio_pat_` shape + a few patterns. Touches token+BYOK → needs threat-model. Logged to `tasks/retro-follow-ups.md`.
+- **3.2 (LOW):** no sweep-on-revoke for in-flight runs (frozen authority snapshot, never re-checks `access.ts` mid-loop).
+- **3.3 (idea-only):** name `token-reach.ts` as a convergence point in ARCHITECTURE-INVARIANTS.md if that doc is open.
+
+**Steal (non-security, fit the wedge):** trigger discipline — skip-vs-fail classification, per-trigger `concurrency: skip|queue|replace` frontmatter, webhook payload as fenced untrusted data.
+**Doc cleanups noted:** stale "v1 passes no MCP token" at `runner.ts:1516`; unused `SESSION_SECRET`.
+**cc-CLI dead-code cluster** (unfiltered child env incl FOLIO_MASTER_KEY, etc.) = real but unreachable behind preflight gate `runner.ts:791` → fold into S-1/S-2 cc-revival, not standalone.
+**Caveat:** verification ran under API rate-limiting; the 3 deltas are hand-verified + 2-pass-converged, but the §6 "already-handled" list is high-confidence-not-exhaustively-re-verified.
+[2026-06-06] — session ended (no significant changes captured)
+[2026-06-06] — session ended (no significant changes captured)
+
+## [2026-06-06] ROOT CAUSE FOUND: cockpit operator never receives the `folio` skill
+
+Focused Multica study (agent-layer: chat-loop/skills/orchestration) → source-verified WHY the operator "doesn't know how to use Folio / skill not followed." Doc: `docs/superpowers/specs/2026-06-06-multica-agent-layer-gap-map.md`.
+
+**Bug of OMISSION (not design, small fix):** the conversation/cockpit run forks at `runner.ts:288-290` to `buildConversationMessages` — which does NOT inject the skill. `buildSkillsPreamble` (`runner.ts:992`, the only API-path emitter of the trusted skill body) is called ONLY by `buildInitialMessages` (document path, `:1061`) and `ccExecute` (disabled, `:1579`). So the cockpit's system channel = `OPERATOR_PROMPT` only (`:1200`), which LITERALLY claims "your folio skill is provided to you in context" (`system-skills.ts:283`) — a promise the code doesn't keep. `ctx.agentSkills` is loaded (`:700`) then read by nobody = dead context (why it LOOKS wired). Hand-verified the fork myself.
+
+**RULED OUT:** (a) trust-mislabel — folio skill IS correctly `trusted:true`, just absent not fenced; (b) thin tool schemas — `da9ac23` fixed, schemas rich, but path/scope/dryRun grammar lives ONLY in FOLIO_SKILL_BODY (`system-skills.ts:139-267`).
+
+**FIX (Step 1, all 3 Multica readers + diagnosis converged):** fold `buildSkillsPreamble(ctx)` into the system channel for conversation runs, mirroring `ccExecute` (`:1579-1583`). Trusted skill → system channel is correct home. Then Step 2: regression test asserting folio skill body in operator's FIRST turn (the missing test that let prose & delivery diverge — Tier A seam). Step 3: fail-loud if operator skill doesn't resolve (`:700`). Touches instruction channel + untrusted fence → fire threat-modeling gate. Logged in tasks/retro-follow-ups.md.
+
+**Reframe:** the chat layer is ~90% wired; one injection bug on one path makes it look broken. NOT far away.
+[2026-06-06] — session ended (no significant changes captured)
+[2026-06-06] — session ended (no significant changes captured)
+[2026-06-06] — session ended (no significant changes captured)
+[2026-06-06] — session ended (no significant changes captured)
+[2026-06-06] — session ended (no significant changes captured)
+[2026-06-06] — session ended (no significant changes captured)
+[2026-06-06] — session ended (no significant changes captured)
+[2026-06-06] — session ended (no significant changes captured)
+[2026-06-06] — session ended (no significant changes captured)
+[2026-06-06] — session ended (no significant changes captured)
+[2026-06-06] — session ended (no significant changes captured)
+[2026-06-06] — session ended (no significant changes captured)
+[2026-06-06] — session ended (no significant changes captured)
+[2026-06-06] — session ended (no significant changes captured)
+[2026-06-06] — session ended (no significant changes captured)
+[2026-06-06] — session ended (no significant changes captured)
+[2026-06-06] — session ended (no significant changes captured)
+[2026-06-06] — session ended (no significant changes captured)
+[2026-06-06] — session ended (no significant changes captured)
+[2026-06-06] — session ended (no significant changes captured)
+[2026-06-06] — session ended (no significant changes captured)
+
+## [2026-06-06] Operator FULLY WORKS — fixed agent_missing + FK (both verified clean, live)
+
+Reseeded dev DB (scripts/reseed-dev.ts — the old DB had 57x test detritus, a RED HERRING) and root-caused why operator project-scoped tools failed. TWO bugs, ONE root cause (the operator's synthetic identity leaking where a real DB row/user is expected). Commit d35c067. Both fixes VERIFIED end-to-end on a clean DB: live cockpit turn → agent_missing=0, FK=0, recoverable-errors=0, task actually changed, native update_document path used.
+
+**Bug 1 — agent_missing:** operator's ephemeral conv token (createConversationRun:205) carries agentId=OPERATOR_AGENT_ID (sentinel, NO documents row) + createdBy=<caller user>. 3 sites did findFirst({id:token.agentId})→miss→agent_missing on every project-scoped tool. FIX: one helper resolveAgentDocForToken (operator→getOperatorDocument; else DB lookup+guard). Gated on the SENTINEL VALUE (un-forgeable), NOT isOperatorToken (createdBy is the USER not null — the mistake in my reverted eb981bf).
+
+**Bug 2 — SQLITE FK 787:** serviceActor returned {id: ctx.actor}=slug `agent:_operator` (not a users.id) → violated documents.updated_by FK. FIX: serviceActor→FK-valid real user (ctx.confirmerId=transitionActor=run.created_by); EVENT actor threaded separately via new `eventActor` arg (=ctx.actor slug) so the agent-chain autonomy gate (isAgentOriginated→`agent:` actor) is UNCHANGED. This is the documented c13 pattern. Applied to create/update/deleteDocument; createComment already null-FKs.
+
+**Autonomy gate intact:** 29 trigger-matcher + c13 suppression tests pass.
+**The operator DID work before via folio_api REST fallback** — these fixes make the NATIVE MCP write path work (no wasted retries).
+[2026-06-06] — session ended (no significant changes captured)
+[2026-06-06] — session ended (no significant changes captured)
+[2026-06-06] — session ended (no significant changes captured)
+[2026-06-06] — session ended (no significant changes captured)
+[2026-06-06] — session ended (no significant changes captured)

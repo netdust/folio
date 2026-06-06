@@ -1,14 +1,16 @@
 import { zValidator } from '@hono/zod-validator';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
+import { operatorModelSettingSchema } from '@folio/shared';
 import { db } from '../db/client.ts';
 import { aiKeys } from '../db/schema.ts';
 import { env } from '../env.ts';
 import { encryptSecret } from '../lib/crypto.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
 import { requireInstanceAdmin } from '../lib/system-workspace.ts';
+import { getOperatorModelSetting, setOperatorModelSetting } from '../services/instance-settings.ts';
 import { validatePublicUrl } from '../lib/url-allow-list.ts';
 import { type AuthContext, getUser, requireSessionUser } from '../middleware/auth.ts';
 
@@ -34,7 +36,38 @@ instanceAiKeysRoute.get('/', async (c) => {
   await requireInstanceAdmin(db, getUser(c).id);
   const rows = await db.query.aiKeys.findMany();
   // M1/M3 — strip the secret; the GET surface returns metadata only.
-  return jsonOk(c, { keys: rows.map(({ encryptedKey: _omit, ...k }) => k) });
+  // Also surface the current operator-model selection so the AI tab can mark it.
+  const operatorModel = await getOperatorModelSetting(db);
+  return jsonOk(c, {
+    keys: rows.map(({ encryptedKey: _omit, ...k }) => k),
+    operator_model: operatorModel,
+  });
+});
+
+// PUT /operator-model — set which configured provider+model the operator runs on.
+// Admin-gated (M3), session-only (M4 — inherited from the route mount). The
+// setting references an existing ai_keys row by (provider, ai_key_label); it
+// carries NO baseUrl, so it cannot introduce an unvalidated outbound host (M2) —
+// the operator can only use a baseUrl already validated at key-creation. The
+// (provider, ai_key_label) MUST name an existing key (review #4): saving a
+// selection that resolves to no key would only surface at chat time, far from
+// the action.
+instanceAiKeysRoute.put('/operator-model', zValidator('json', operatorModelSettingSchema), async (c) => {
+  await requireInstanceAdmin(db, getUser(c).id);
+  const v = c.req.valid('json');
+  // Referential check: the selection must point at a configured key (#4).
+  const keyRow = await db.query.aiKeys.findFirst({
+    where: and(eq(aiKeys.provider, v.provider), eq(aiKeys.label, v.aiKeyLabel)),
+  });
+  if (!keyRow) {
+    throw new HTTPError(
+      'INVALID_BODY',
+      `no AI key configured for ${v.provider}/${v.aiKeyLabel} — add it in Settings → AI first`,
+      422,
+    );
+  }
+  await setOperatorModelSetting(db, v);
+  return jsonOk(c, { ok: true, operator_model: v });
 });
 
 instanceAiKeysRoute.post(
@@ -44,7 +77,9 @@ instanceAiKeysRoute.post(
     z
       .object({
         provider: z.enum(['anthropic', 'openai', 'openrouter', 'ollama']),
-        apiKey: z.string().min(1),
+        // Optional: Ollama is KEYLESS (local). Required for paid providers via the
+        // refine below — so a paid key can't be saved without its credential (M5).
+        apiKey: z.string().min(1).optional(),
         label: z.string().min(1).default('default'),
         baseUrl: z.string().url().optional(),
       })
@@ -54,6 +89,12 @@ instanceAiKeysRoute.post(
       .refine((b) => b.baseUrl === undefined || b.provider === 'ollama', {
         message: 'baseUrl is only allowed for the ollama provider',
         path: ['baseUrl'],
+      })
+      // apiKey is REQUIRED + NON-BLANK for every PAID provider (M5, #9) — only
+      // ollama is keyless. Trim so a whitespace-only key can't masquerade as set.
+      .refine((b) => b.provider === 'ollama' || (b.apiKey !== undefined && b.apiKey.trim().length > 0), {
+        message: 'apiKey is required for this provider',
+        path: ['apiKey'],
       }),
   ),
   async (c) => {
@@ -76,7 +117,16 @@ instanceAiKeysRoute.post(
     if (baseUrl !== undefined) {
       const allowLoopback = provider === 'ollama' && env.FOLIO_ALLOW_LOOPBACK_AI;
       const v = validatePublicUrl(baseUrl, { allowLoopback });
-      if (!v.ok) throw new HTTPError('INVALID_BODY', v.reason, 422);
+      if (!v.ok) {
+        // UX hint (project_provider-setup-gap): a self-hoster pointing at a local
+        // Ollama hits the loopback block with no clue about the env opt-in. When
+        // the rejection is loopback-on-ollama and the flag is off, say how to fix it.
+        const hint =
+          provider === 'ollama' && !env.FOLIO_ALLOW_LOOPBACK_AI
+            ? ' (set FOLIO_ALLOW_LOOPBACK_AI=true on the server to allow a localhost Ollama base URL)'
+            : '';
+        throw new HTTPError('INVALID_BODY', `${v.reason}${hint}`, 422);
+      }
     }
 
     // M8 fail-loud trigger: a PAID provider makes the denial-of-wallet residual
@@ -93,7 +143,9 @@ instanceAiKeysRoute.post(
       );
     }
 
-    const encryptedKey = encryptSecret(apiKey);
+    // Ollama is keyless → store empty ciphertext; paid providers always have a
+    // key here (the schema refine guarantees it).
+    const encryptedKey = encryptSecret(apiKey ?? '');
     // `.returning` gives the ACTUAL row id: on an INSERT it's the new id; on a
     // conflict-UPDATE (same provider+label) it's the EXISTING row's id (the
     // update sets only encryptedKey/baseUrl, never id). Returning the pre-

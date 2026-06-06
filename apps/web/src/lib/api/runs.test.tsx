@@ -2,7 +2,7 @@ import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { renderHook, act, waitFor } from '@testing-library/react';
 import React from 'react';
-import { useRuns, useCreateRun, useCancelRun, useRunsLiveSync, runsKeys } from './runs.ts';
+import { useRuns, useCancelRun, useRunsLiveSync, runsKeys } from './runs.ts';
 
 class MockEventSource {
   static instances: MockEventSource[] = [];
@@ -65,14 +65,6 @@ describe('runs hooks', () => {
     expect(result.current.data![0].id).toBe('r1');
     const call = (fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.find((c) => String(c[0]).includes('/runs'));
     expect(String(call![0])).toBe('/api/v1/w/acme/p/web/runs?status=running');
-  });
-
-  test('useCreateRun POSTs and returns {run_id,status}', async () => {
-    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    const { result } = renderHook(() => useCreateRun('acme'), { wrapper: wrapperOf(qc) });
-    let resp: { run_id: string; status: string } | undefined;
-    await act(async () => { resp = await result.current.mutateAsync({ agent_slug: 'bot', parent_slug: 'task-1' }); });
-    expect(resp).toEqual({ run_id: 'r1', status: 'planning' });
   });
 
   test('useCancelRun POSTs to the cancel path', async () => {

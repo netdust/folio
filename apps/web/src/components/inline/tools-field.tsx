@@ -30,6 +30,14 @@ export function ToolsField({ value, onChange }: Props) {
     for (const group of MCP_TOOL_GROUPS) {
       for (const t of group.tools) if (next.has(t)) ordered.push(t);
     }
+    // Cluster-2 /code-review fix: PRESERVE any selected tool that is in no UI
+    // group (e.g. show_link_panel / ask_choice / set_skill_trust — operator-only
+    // tools the picker doesn't surface). Without this, toggling any checkbox
+    // rebuilds the array from groups alone and SILENTLY DROPS ungrouped tools an
+    // agent (notably the operator) carries in its frontmatter. Append them after
+    // the grouped tools, preserving their incoming relative order.
+    const grouped = new Set(ordered);
+    for (const t of next) if (!grouped.has(t)) ordered.push(t);
     onChange(ordered);
   }
 

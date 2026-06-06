@@ -452,6 +452,21 @@ export const instanceSkills = sqliteTable(
   }),
 );
 
+/**
+ * Generic instance-level key/value config store. One row per setting (`key`
+ * PK), `value` a JSON blob. Home for instance-wide settings that aren't worth a
+ * dedicated table — e.g. `operator_model` ({provider, model, ai_key_label}: which
+ * configured provider+model the operator runs on). Read defensively (a corrupt
+ * value degrades to the default at the consumer, not a crash).
+ */
+export const instanceSettings = sqliteTable('instance_settings', {
+  key: text('key').primaryKey(),
+  value: text('value', { mode: 'json' }).$type<Record<string, unknown>>().notNull(),
+  updatedAt: integer('updated_at', { mode: 'timestamp_ms' })
+    .notNull()
+    .default(sql`(unixepoch() * 1000)`),
+});
+
 /** Append-only event log. SSE channel + agent webhooks both read from here. */
 export const events = sqliteTable(
   'events',
@@ -505,6 +520,95 @@ export const reactorCursors = sqliteTable('reactor_cursors', {
     .default(sql`(unixepoch() * 1000)`),
 });
 
+/**
+ * Operator cockpit chat — `conversations`, `messages`, `pending_ops`.
+ *
+ * DELIBERATE EXCEPTION to invariants 5 + 10 (see ARCHITECTURE-INVARIANTS.md
+ * "Deliberate exceptions"). These are NOT document types and their writes MUST
+ * NOT go through `txWithEvents`: a conversation must never appear in `/documents`,
+ * and emitting an event per chat turn would flood the SSE stream + fire the
+ * trigger-matcher on document-watching triggers. Chat persistence uses plain
+ * `db` transactions, no `emitEvent` (`apps/server/src/services/conversations.ts`).
+ *
+ * `active_run_id` (nullable) is the single-active-turn slot (threat model M14):
+ * "running = id present". Modeled as a nullable id, NOT a boolean, so a future
+ * `cancelling` run-status fits without a migration.
+ *
+ * NO foreign keys — deliberate, tracking the event-plane seam (`events.documentId`,
+ * `reactor_cursors` likewise omit FKs): these are walled off from the cascade-managed
+ * entity core. CONSEQUENCE for whoever ships conversation-delete (deferred to v1.1
+ * multi-thread management): there is NO DB cascade, so that delete MUST manually GC the
+ * conversation's `messages` + `pending_ops` rows (and a dangling `pending_ops` row could
+ * otherwise still be confirmed by the T7 gate). Flagged Cluster-1 /code-review 2026-06-05.
+ */
+export const conversations = sqliteTable(
+  'conversations',
+  {
+    id: text('id').primaryKey(),
+    title: text('title').notNull(),
+    createdBy: text('created_by').notNull(),
+    operatorAgentId: text('operator_agent_id').notNull(),
+    activeRunId: text('active_run_id'),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' })
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' })
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+  },
+  (t) => ({
+    byUser: index('conversations_user_idx').on(t.createdBy, t.updatedAt),
+  }),
+);
+
+export const messages = sqliteTable(
+  'messages',
+  {
+    id: text('id').primaryKey(),
+    conversationId: text('conversation_id').notNull(),
+    seq: integer('seq').notNull(),
+    role: text('role').notNull(), // 'user' | 'operator'
+    kind: text('kind').notNull(), // 'text' | 'tool_step' | 'component'
+    body: text('body').notNull().default(''),
+    payload: text('payload'), // JSON for tool_step/component
+    runId: text('run_id'),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' })
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+  },
+  (t) => ({
+    // UNIQUE — the structural backstop for the MAX(seq)+1 allocator in
+    // conversations.ts (mirrors events.seq's uniqueIndex). The single-active-turn
+    // CAS (M14, T6) is the primary guarantee against concurrent appends; this index
+    // is defense-in-depth: if that CAS is ever bypassed, a duplicate seq fails LOUD
+    // (constraint violation) instead of silently corrupting thread order.
+    byConvSeq: uniqueIndex('messages_conv_seq_idx').on(t.conversationId, t.seq),
+  }),
+);
+
+export const pendingOps = sqliteTable(
+  'pending_ops',
+  {
+    id: text('id').primaryKey(),
+    conversationId: text('conversation_id').notNull(),
+    callerId: text('caller_id').notNull(),
+    op: text('op').notNull(),
+    params: text('params').notNull(), // immutable once recorded — executed verbatim
+    target: text('target').notNull(),
+    status: text('status').notNull().default('pending'), // 'pending'|'confirmed'|'executed'|'rejected'|'expired'
+    createdAt: integer('created_at', { mode: 'timestamp_ms' })
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+    expiresAt: integer('expires_at', { mode: 'timestamp_ms' }).notNull(),
+    executedAt: integer('executed_at', { mode: 'timestamp_ms' }), // audit (T7): when the destructive op ran
+    executedBy: text('executed_by'), // audit (T7): who confirmed it
+  },
+  // getConfirmedPendingOp scans (conversation_id, op, status) on EVERY effective-
+  // high-tier tool call (most operator writes); without this it's a full scan and
+  // pending_ops only grows (rows are status-flipped, never deleted). (perf shake-out)
+  (t) => ({ lookupIdx: index('pending_ops_lookup_idx').on(t.conversationId, t.op, t.status) }),
+);
+
 // --- Type exports ---
 
 export type User = typeof users.$inferSelect;
@@ -520,3 +624,6 @@ export type AiKey = typeof aiKeys.$inferSelect;
 export type InstanceSkill = typeof instanceSkills.$inferSelect;
 export type Event = typeof events.$inferSelect;
 export type ReactorCursor = typeof reactorCursors.$inferSelect;
+export type Conversation = typeof conversations.$inferSelect;
+export type Message = typeof messages.$inferSelect;
+export type PendingOp = typeof pendingOps.$inferSelect;

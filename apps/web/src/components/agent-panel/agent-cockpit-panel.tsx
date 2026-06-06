@@ -1,39 +1,38 @@
 import { useSyncExternalStore } from 'react';
-import { Activity, Play } from 'lucide-react';
-import { agentPanelBus, type AgentPanelScreen, type AgentPanelState } from '../../lib/agent-panel-bus.ts';
-import { PanelHeader, type PanelTab } from './panel-header.tsx';
-import { ActivityFeedScreen } from './activity-feed-screen.tsx';
-import { AgentRunLauncher } from './agent-run-launcher.tsx';
+import { X } from 'lucide-react';
+import { agentPanelBus, type AgentPanelState } from '../../lib/agent-panel-bus.ts';
+import { Icon } from '../ui/icon.tsx';
+import { CockpitChat } from './cockpit-chat.tsx';
 
-const TABS: PanelTab<AgentPanelScreen>[] = [
-  { value: 'activity', icon: Activity, label: 'Activity' },
-  { value: 'run', icon: Play, label: 'Run' },
-];
-
-export function AgentCockpitPanel({ wslug }: { wslug: string }) {
-  // useSyncExternalStore subscribes synchronously and re-reads the snapshot, so
-  // an emit that lands in the render→effect gap on first mount (e.g. a Cmd-K
-  // "Run agent…" racing the panel's mount) is never missed (no external-store
-  // tearing). The bus replaces `state` with a new object per change, so the
-  // snapshot identity is stable between renders (no render loop).
+/**
+ * The layout-level operator cockpit panel (T12). Renders the operator CHAT —
+ * the Activity/Run tab surfaces are gone (deleted in T14). Open/closed is driven
+ * by `agentPanelBus` (default-open, respect-last-closed). It is a panel, NOT a
+ * modal: the main area stays interactive behind it and a link_panel click
+ * navigates the main area without closing the cockpit.
+ *
+ * useSyncExternalStore subscribes synchronously and re-reads the snapshot, so an
+ * emit that lands in the render→effect gap on first mount is never missed (no
+ * external-store tearing); the bus replaces `state` per change so the snapshot
+ * identity is stable between renders (no render loop).
+ */
+export function AgentCockpitPanel() {
   const state: AgentPanelState = useSyncExternalStore(agentPanelBus.subscribe, agentPanelBus.get);
   if (!state.open) return null;
-  const setScreen = (screen: AgentPanelScreen) => agentPanelBus.open(screen);
   return (
     <div className="flex w-[360px] shrink-0 flex-col rounded-md border border-border-light bg-content">
-      <PanelHeader
-        title="Agents"
-        tabs={TABS}
-        active={state.screen}
-        onTab={setScreen}
-        onClose={() => agentPanelBus.close()}
-      />
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        {state.screen === 'activity' ? <ActivityFeedScreen wslug={wslug} /> : null}
-        {state.screen === 'run' ? (
-          <AgentRunLauncher wslug={wslug} onLaunched={() => agentPanelBus.open('activity')} />
-        ) : null}
+      <div className="flex items-center gap-2 border-b border-border-light px-3 py-2.5">
+        <strong className="flex-1 truncate text-fg">Operator</strong>
+        <button
+          type="button"
+          aria-label="Close"
+          onClick={() => agentPanelBus.close()}
+          className="grid h-6 w-6 place-items-center rounded text-fg-3 hover:bg-card hover:text-fg"
+        >
+          <Icon icon={X} size={16} />
+        </button>
       </div>
+      <CockpitChat />
     </div>
   );
 }

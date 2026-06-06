@@ -90,8 +90,9 @@ test('MCP tools/list returns the v1 tools including comment + agent-lifecycle to
   // tools (D-4) + 1 find_documents tool + 1 describe_workspace tool + 1
   // folio_api_get (Phase-op-3 T4 reads) + 1 folio_api (Phase-op-3 T5 writes) + 1
   // get_skill (Piece B — narrow __system skills read) + 1 set_skill_trust
-  // (Piece B T8 — bless/unbless a __system skill) = 31.
-  expect(body.result.tools.length).toBe(31);
+  // (Piece B T8 — bless/unbless a __system skill) + 2 ui tools (operator cockpit
+  // chat T3 — show_link_panel + ask_choice) = 33.
+  expect(body.result.tools.length).toBe(33);
   const names = body.result.tools.map((t) => t.name);
   expect(names).toContain('get_skill');
   expect(names).toContain('set_skill_trust');
@@ -112,6 +113,8 @@ test('MCP tools/list returns the v1 tools including comment + agent-lifecycle to
   expect(names).toContain('run_agent');
   expect(names).toContain('cancel_run');
   expect(names).toContain('retry_run');
+  expect(names).toContain('show_link_panel'); // operator cockpit chat T3
+  expect(names).toContain('ask_choice'); // operator cockpit chat T3
 });
 
 test('MCP tools/call list_workspaces returns the workspaces visible to the token', async () => {

@@ -456,3 +456,10 @@ Rules:
 **Rule:** When a task — planned OR ad-hoc — edits a named security-boundary file (`apps/server/src/lib/url-allow-list.ts`, auth/session/token surfaces, `apps/server/src/lib/crypto.ts`), invoke `netdust-core:threat-modeling` on the diff before committing, even absent a plan. The guard held this time by reading-the-mitigations luck, not by a harness gate.
 
 **Also (product, not discipline):** "Add a provider" should be trivial but isn't — the Settings → AI UI rejects keyless providers (Save disabled without an apiKey) and loopback base_urls (hardcoded "rejected" help text), so the only way to add Ollama was a direct DB seed. See [[project_provider-setup-gap]] and tasks/retro-follow-ups.md.
+
+## 2026-06-06 — Reseed FIRST when a bug might be data-vs-code; verify the real shape before fixing
+
+Debugging the operator's `agent_missing`: I twice built fixes on UNVERIFIED assumptions about the operator's token shape (reverted eb981bf gated on isOperatorToken — but the operator token's createdBy is the USER, not null). The unit test "passed" only because I constructed an unrealistic token (test-world≠real-world). 
+- **Lesson 1:** when a live bug could be data-corruption OR code, RESEED to a clean state FIRST — it removes the variable in one move. The 57 duplicate operator rows were a total red herring; the bug reproduced cleanly on a fresh DB, proving it was code. I wasted effort theorizing about the corruption.
+- **Lesson 2:** before writing a fix that gates on a token/identity shape, CAPTURE the real shape (instrument the failure point, or read the mint code to ground truth) — do NOT infer it. The fix's discriminant must match production, not a plausible-looking test fixture.
+- **Lesson 3:** when a fix touches a value used for TWO things (here serviceActor's id = FK column AND event actor), check BOTH consumers before changing it. The naive fix (actor→real user) would have silently broken the agent-chain autonomy gate. The split (eventActor) preserved it.

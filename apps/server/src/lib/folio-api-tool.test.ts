@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { eq } from 'drizzle-orm';
 import { db } from '../db/client.ts';
 import { apiTokens, type ApiToken, workspaces } from '../db/schema.ts';
+import { OPERATOR_AGENT_ID } from './operator.ts';
 import { makeTestApp } from '../test/harness.ts';
 import { roleToScopes } from './agent-schema.ts';
 import { executeTool } from './agent-tools.ts';
@@ -9,6 +10,7 @@ import { registerRealTools } from './agent-tools-registry.ts';
 import {
   dispatchAsCaller,
   isSecretWrite,
+  pathHint,
   pathToScope,
   sweepOrphanedFolioApiTokens,
   validateApiPath,
@@ -260,6 +262,54 @@ describe('dispatchAsCaller (P3-1/2/3/4)', () => {
     );
     const text = await res.clone().text();
     expect(text).not.toMatch(/folio_pat_/);
+  });
+
+  // The operator is a CODE SINGLETON with no `documents` row; its ephemeral
+  // token carries the synthetic agentId `operator:_operator`. Minting a persisted
+  // api_tokens row with that agentId violates the api_tokens.agent_id →
+  // documents.id FK (errno 787). dispatchAsCaller must null the agentId for the
+  // operator (its reach is already clamped to agent ∩ caller upstream; the
+  // null-agentId authority path re-checks the owner's grants). Regression for the
+  // first-real-use FK crash on folio_api_get during a cockpit turn.
+  test('operator caller (synthetic agentId) does not violate the agent_id FK (instance reach)', async () => {
+    const { seed } = await makeTestApp();
+    const operator = callerToken({
+      workspaceId: null, // instance reach (operator is instance-wide)
+      scopes: ['config:write', 'documents:read'],
+      createdBy: seed.user.id,
+      agentId: OPERATOR_AGENT_ID, // synthetic — NO documents row
+    });
+    const res = await dispatchAsCaller(
+      operator,
+      'GET',
+      `/api/v1/w/${seed.workspace.slug}/p/${seed.project.slug}/views`,
+      undefined,
+    );
+    expect(res.status).toBe(200); // not a 500 from the FK crash
+  });
+
+  // The 404 self-correction discriminator: a malformed (no-route-matched) path
+  // produces Hono's default 404 whose body is NOT JSON, so the tool's
+  // `res.json().catch(()=>null)` yields `body:null`. Prove that holds against the
+  // REAL app (not just asserted abstractly) so the `status===404 && json===null`
+  // branch that attaches pathHint actually fires for the live failure mode.
+  test('no-route-matched 404 has a non-JSON body → tool sees body:null (hint branch fires)', async () => {
+    const { seed } = await makeTestApp();
+    const owner = callerToken({
+      workspaceId: seed.workspace.id,
+      scopes: ['config:write', 'documents:read'],
+      createdBy: seed.user.id,
+    });
+    // Long-form path — the exact mis-shape from the live stall. No route matches.
+    const res = await dispatchAsCaller(
+      owner,
+      'GET',
+      `/api/v1/workspaces/${seed.workspace.slug}/p/${seed.project.slug}/views`,
+      undefined,
+    );
+    expect(res.status).toBe(404);
+    const json = await res.json().catch(() => null);
+    expect(json).toBeNull(); // → handler returns { status:404, body:null, hint: pathHint(path) }
   });
 
   test('minted token inherits caller config:write — POST succeeds for owner (P3-1)', async () => {
@@ -592,6 +642,38 @@ describe('folio_api write tool (P3-6/7)', () => {
     expect(await countTokens()).toBe(tokensBefore); // default-deny did NOT mint/dispatch
   });
 
+  // Operator self-correction: the real-world UNMAPPED cause is a WRONG PATH SHAPE
+  // (the operator guessed a bare `/api/v1/views/<id>` instead of the project-scoped
+  // `/api/v1/w/<wslug>/p/<pslug>/views/<id>`, and dead-ended on a bare refusal,
+  // reporting "not permitted" to the user). The refusal must carry the same
+  // shape-correcting `pathHint` the GET 404 path attaches, so the operator retries
+  // the correct path instead of giving up.
+  test('UNMAPPED write refusal carries a corrective pathHint (operator self-correction)', async () => {
+    const { seed, db: testDb } = await makeTestApp();
+    const tok = callerToken({
+      workspaceId: seed.workspace.id,
+      scopes: roleToScopes('owner'),
+      createdBy: seed.user.id,
+    });
+    const out = (await executeTool(
+      tok,
+      'agent:op',
+      'folio_api',
+      // The exact mis-shape the operator built in the cockpit: a bare, NON-project-
+      // scoped views delete. pathToScope → UNMAPPED (the project-scoped views branch
+      // requires the /w/<ws>/p/<ps>/ prefix).
+      { method: 'DELETE', path: '/api/v1/views/Gqiv9zQwdK6-KkQR6gAal', body: {} },
+      undefined,
+      { callerScopes: tok.scopes },
+    )) as { refused: boolean; reason: string; hint?: string };
+    expect(out.refused).toBe(true);
+    expect(out.reason).toMatch(/no scope mapping/);
+    // The hint names the project-scoped shape so the operator can retry correctly.
+    expect(out.hint).toBeTruthy();
+    expect(out.hint).toMatch(/PROJECT-scoped/);
+    expect(out.hint).toMatch(/w\/<wslug>\/p\/<pslug>/);
+  });
+
   test('secret write (POST /tokens) REFUSES even for a full-scope instance-style token (T6)', async () => {
     // T6: secret-class writes are NEVER applied by an agent — for the MOST
     // privileged caller (every scope incl. workspace:admin). No bypass.
@@ -621,5 +703,27 @@ describe('folio_api write tool (P3-6/7)', () => {
     expect(out.plan.method).toBe('POST');
     expect((await testDb.select().from(workspaces)).length).toBe(before); // no mutation
     expect(await countTokens()).toBe(tokensBefore); // secret branch did NOT mint/dispatch
+  });
+});
+
+describe('pathHint (404 self-correction)', () => {
+  test('long-form /workspaces/ → names the /w/ shorthand', () => {
+    const h = pathHint('/api/v1/workspaces/acme/p/sales/views');
+    expect(h).toContain('/w/<wslug>');
+    expect(h).toContain('not a route');
+  });
+  test('long-form /projects/<slug> → names the bare project item path', () => {
+    const h = pathHint('/api/v1/w/acme/projects/sales');
+    expect(h).toContain('/w/<wslug>/p/<pslug>');
+    expect(h).toContain('NOT "/projects/<slug>"');
+  });
+  test('project-scoped resource missing the /p/ segment → says project-scoped', () => {
+    const h = pathHint('/api/v1/w/acme/views');
+    expect(h).toContain('PROJECT-scoped');
+  });
+  test('unrecognized mis-shape → generic shape reminder, never empty', () => {
+    const h = pathHint('/api/v1/w/acme/p/sales/nonsense');
+    expect(h.length).toBeGreaterThan(0);
+    expect(h).toContain('/api/v1/w/<wslug>/p/<pslug>/<resource>');
   });
 });

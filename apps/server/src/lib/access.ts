@@ -172,3 +172,32 @@ export async function visibleProjectIds(
     .where(and(eq(projectAccess.userId, userId), eq(projects.workspaceId, workspaceId)));
   return new Set(rows.map((r) => r.id));
 }
+
+/**
+ * The project ids a user can SEE in ONE workspace, ws-grant aware — the single
+ * place the "ceiling within a workspace" decision lives. A whole-workspace grant
+ * holder (`canManageWorkspace`) sees EVERY project in the workspace; a
+ * project-only invitee is clamped to their direct grants (`visibleProjectIds`).
+ *
+ * This folds the `canManageWorkspace ? all-ws-projects : visibleProjectIds`
+ * branch that the agent-run ceiling (agent-runs.ts) and the operator
+ * conversation-run ceiling (conversation-runs.ts) both need, so the two can't
+ * drift (Cluster-6 architecture review). The owner-bypass (role → null reach)
+ * stays with the caller, since each composes it differently (per-workspace here
+ * vs the instance-wide union the operator builds across visibleWorkspaceIds).
+ */
+export async function projectIdsVisibleInWorkspace(
+  db: DB,
+  userId: string,
+  workspaceId: string,
+  role?: Role,
+): Promise<string[]> {
+  if (await canManageWorkspace(db, userId, workspaceId, role)) {
+    const rows = await db
+      .select({ id: projects.id })
+      .from(projects)
+      .where(eq(projects.workspaceId, workspaceId));
+    return rows.map((r) => r.id);
+  }
+  return [...(await visibleProjectIds(db, userId, workspaceId))];
+}

@@ -2,6 +2,19 @@
 
 Created 2026-05-28 by `/evaluate` after Phase 3 Sub-phase A. One bullet per item.
 
+- **[2026-06-06, from Multica agent-layer study] BUG — the cockpit operator never receives the `folio` skill body. Fix it.**
+  Source-verified root cause of "the operator doesn't know how to use Folio / skill not followed." The conversation/cockpit run forks at `runner.ts:288-290` to `buildConversationMessages`, which does NOT inject the skill. `buildSkillsPreamble` (`runner.ts:992`) is called only by `buildInitialMessages` (document path) and `ccExecute` (disabled). So the cockpit system channel is `OPERATOR_PROMPT` only (`runner.ts:1200`) — which falsely claims "your folio skill is provided to you in context" (`system-skills.ts:283`). `ctx.agentSkills` is loaded (`runner.ts:700`) then read by nobody. Bug of omission; the skill IS correctly `trusted:true` (not a fence/mislabel), and tool schemas are fine (da9ac23). The path/scope/dryRun grammar lives only in `FOLIO_SKILL_BODY`.
+  **This is a bugfix, not a decision** — but flagged here because it touches the agent instruction channel + the untrusted-data fence, so it should go through the harness with a `## Threat model` note.
+  **Fix (Step 1):** fold `buildSkillsPreamble(ctx)` into the system channel for conversation runs, mirroring `ccExecute` (`runner.ts:1579-1583`). **Step 2:** regression test asserting the folio skill body appears in the operator's first conversation turn (Tier A seam — the missing test that let prose & delivery diverge). **Step 3:** fail-loud if the operator's skill doesn't resolve (`runner.ts:700`).
+  **Source:** `docs/superpowers/specs/2026-06-06-multica-agent-layer-gap-map.md` (full gap-map + punch-list).
+
+- **[2026-06-06, from Multica study] Build a content-based output-secret redactor at the model-output seam?**
+  Folio's secret defenses are all *structural* (BYOK keys encrypted + injected to provider call only; minted token revoked at run end; `redactRunForApi` strips `system_prompt`). Nothing scans what the model itself PRINTS. `runner.ts:1601` (`setRunBody`) and `:1636`/`:1693` (`postAgentComment`) persist + SSE-broadcast model output verbatim. Because `ccToken` is minted live (`:1528`) and revoked only in the `finally` (`:1614`), an agent that echoes its own `folio_pat_` token leaks a *usable* credential into a comment + the live stream.
+  **Decision needed:** BUILD NOW / DEFER.
+  **What changes if BUILD:** one small redactor placed AT THE LOADER (the `system_prompt`-leaked-3× lesson — not per-handler), wrapping `postAgentComment` + `setRunBody` before persist/broadcast. Scope tight: `folio_pat_[A-Za-z0-9_-]{40}` (best: the exact known minted-token string) + `Bearer <token>` + `sk-...` + DB conn strings → fixed sentinel. Do NOT port Multica's full AWS/GitHub/Slack/JWT bank (BYOK keys are structurally out of the message stream). Touches token + BYOK surfaces → **fire the threat-modeling gate** (`## Threat model` section in the plan).
+  **Why MEDIUM not HIGH:** the cc path (where `cat .env` is most plausible) is disabled; the minted token is short-lived; BYOK keys never enter the message stream by construction. Live window = the API path echoing its own still-valid token into a comment.
+  **Source:** `docs/superpowers/specs/2026-06-06-multica-architecture-study.md` §3.1.
+
 **Resolved:**
 - 2026-05-28: `ProviderEvent.done.reason` widened to `'stop' | 'tool_use' | 'max_tokens' | 'refusal' | 'pause_turn'`. Anthropic maps `refusal` + `pause_turn` explicitly; OpenAI `content_filter` → `refusal`. Shipped as B fix #10.
 
@@ -285,3 +298,68 @@ unattended-floor gap) was FIXED in `a20c882`. These remain, deferred with user O
 - **api_tokens.agent_id index** (perf, NICE): unindexed findFirst by agentId at boot +
   per operator-run. Trivial at single-team scale.
 - **zod schema ↔ hand-written inputSchema duplication** (NICE): consider zod-to-json-schema.
+
+## 2026-06-06 — Multica-evaluation security audit (ARCHITECTURE-INVARIANTS sharpening)
+
+Triggered by an external architecture evaluation (Folio vs Multica). The evaluation's
+security recommendations mostly described Folio's EXISTING model (scoped capability tokens,
+per-agent identity, unified MCP↔REST authorization — all already enforced). An SSE+MCP
+authorization audit narrowed it to two real residual items, both now NAMED in
+ARCHITECTURE-INVARIANTS.md (invariant 12 + sharpened invariant 5; MCP-credential watch-item
+in gaps). These are the close-tracking entries the doc points to:
+
+- **Finding (invariant 12 — irreversible-op confirm gate is surface-coupled):** the Task-7
+  confirmation gate (`effectiveRiskTier` + `pending_ops` + choice_card at `executeTool`)
+  engages ONLY when `caller.conversationId` is set (cockpit chat). A headless MCP
+  `tools/call` carries no conversationId → the gate is SKIPPED → high-risk ops fall back to
+  scope-only authority (invariants 2 + 7). Acceptable for trusted first-party admin
+  automation today; the property should be owned by the OPERATION's risk tier on every path.
+  **Decision (YES/NO):** make `effectiveRiskTier` the sole decider on every path
+  (conversation / headless MCP / trigger-fired), with a needed-but-impossible confirmation
+  (no human present) becoming a fail-closed REFUSAL — the way `unattendedFloor` already
+  refuses trust-elevation (invariant 11) — instead of a silent fall-through to scope-only?
+  **Changes if YES:** `apps/server/src/lib/agent-tools.ts` Task-7 gate — decouple from
+  `caller.conversationId`; add a no-human refusal branch for high-tier ops on headless/
+  trigger paths; threat-model the change (security boundary). `routes/mcp.ts` carries no
+  conversation context, so the refusal (not a fall-through) is the headless contract.
+  (surfaced by the 2026-06-06 SSE+MCP authorization audit.)
+
+- **Finding (invariant 5 — emit-label fidelity):** `emitEvent` trusts each mutation handler
+  to pass the correct `workspaceId`/`projectId`. Subscription-time filtering (`routes/events.ts`)
+  blocks the LEAK but a mislabeled event is durably stored + replayed under the wrong scope.
+  Residual is LOW; the check belongs at every `emitEvent` call site, not only at subscription.
+  **Decision (YES/NO):** audit all ~16 `emitEvent` call sites to confirm the emitted scope
+  label is derived from the same `requireResource`/`canSeeProject` decision that authorized
+  the write (not a re-supplied/stale/null value), and/or assert it structurally in
+  `txWithEvents`?
+  **Changes if YES:** grep every `emitEvent`/`txWithEvents` caller; where the label is a free
+  variable, derive it from the authorized resource. Optionally a dev-mode invariant in
+  `lib/events.ts` that the event's scope matches the row's scope.
+  (surfaced by the 2026-06-06 SSE+MCP authorization audit.)
+
+- **Watch-item (MCP credential lifecycle — NOT a fix-now):** MCP auth is a static long-lived
+  bearer token; no OAuth-style / capability-handshake / short-lived-grant flow. Enforcement
+  is fine (scopes route through `executeTool`); lifecycle is the gap. Revisit when MCP usage
+  broadens beyond trusted first-party clients. Recorded as a gap in ARCHITECTURE-INVARIANTS.md,
+  no decision pending.
+
+- **[2026-06-06, from /code-review on operator fixes d35c067] HTTP-route autonomy-gate gap (PRE-EXISTING, design decision).**
+  routes/documents.ts (JSON + markdown PATCH) and routes/workspace-documents.ts (PATCH/DELETE) call create/update/deleteDocument with `actor: user` and NO `eventActor`. These routes are agent-PAT-reachable; for a bearer agent token `attachUser` sets `user` = token.createdBy (a human), so the events emit a HUMAN actor → `isAgentOriginated` (trigger-matcher.ts:153, keys on `agent:` prefix) is FALSE → the autonomy gate does NOT suppress an agent's HTTP-driven write. NOT introduced by d35c067 (which only touched the runner/MCP plane); the HTTP plane has always had this shape. The markdown PATCH path open-codes the update + emitEvent (never hits the service layer), so threading eventActor into the service wouldn't even cover it.
+  **Decision needed:** should HTTP agent-PAT writes be chain-suppressed at all? If YES → thread eventActor through these routes (and the markdown branch) OR reject agent PATs on them. If NO (agents are expected to drive via MCP only) → document the boundary. Same locked-`FOLIO_AGENT_CHAINS_ENABLED` question — don't fix blind.
+  **Source:** /code-review (max effort) on d35c067, finding #4.
+
+- **[2026-06-06, from /code-review] Structural: `eventActor` optional-with-human-default is a silent-omission trap.**
+  The FK-actor vs event-actor split is an optional `eventActor?: string` defaulting to `actor.id`, threaded through 3 service signatures + 6 call sites + ~9 emitEvent lines with no enforcement. A FUTURE write service (or new call site) that forgets `eventActor` defaults to the FK-valid human → the autonomy gate silently stops firing for that agent path, no compile error. **Better shape:** a single richer actor object carrying both `fkId` and `eventIdentity`, derived once at the registry boundary, so omission is impossible. Worth doing before a 4th write service inherits the default.
+  **Source:** /code-review finding #7.
+
+- **[2026-06-06, from /code-review] ROOT (architectural): the operator's synthetic identity lives in an FK-shaped field.**
+  `OPERATOR_AGENT_ID` ('operator:_operator') is a non-UUID sentinel deliberately stored in `token.agentId` (FK-shaped), forcing every consumer to special-case it (d35c067's resolveAgentDocForToken) OR null it (dispatchAsCaller, 9a72162). TWO remediations for one design choice, in two files — the fork widens with every new `agentId` consumer. **Highest-leverage follow-up:** decide the operator's token identity in ONE place — either null the agentId everywhere + an explicit `isOperator`/operator-marker on the token, OR resolve the sentinel once at mint/loadContext so no downstream consumer ever sees a non-FK agentId. Collapses the whole class.
+  **Source:** /code-review finding #8 (altitude).
+
+- **[2026-06-06, /shakeout simplicity finding] Dedup the confirm-gate "propose" half across `agent-tools.ts` ⟷ `folio-api-tool.ts`.**
+  The record-pending-op → emit confirmation `choice_card` → emit "confirmation required" `tool_step` → `throw forbidden` block (incl. the `if (!ctx.confirmerId) throw` guard + the two-option Yes/cancel card) is copy-pasted verbatim across the native-tool gate and the folio_api gate; only the prompt/op/target differ (already values). A future M7 hardening of the confirm card must be made twice and can drift. Extract one `proposePendingOp(sink, {conversationId, confirmerId, op, params, target, prompt})` helper returning the `forbidden:` throw; both sites call it. The *execute-recorded* half legitimately differs (handler vs HTTP re-dispatch) — leave it. Not done in the shake-out pass (it touches the confirm-gate trust flow → wants its own focused change + threat-model note).
+  **Source:** /shakeout simplicity reviewer, SHOULD-FIX.
+
+- **[2026-06-06, /shakeout perf finding] Add a reaper for terminal `pending_ops` rows.**
+  The `pending_ops_lookup_idx` (added in the shake-out, migration 0032) closes the hot-path scan cost, but `expired`/`rejected`/`executed` rows still accumulate forever (only status-flipped, never deleted) — the table and disk grow unbounded. Add a boot-time or reconciler-piggybacked `DELETE FROM pending_ops WHERE status != 'pending' AND created_at < now()-Nd` (mirror `sweepOrphanedFolioApiTokens`). Deferred — the index alone keeps the lookup O(matching-conversation-rows) regardless of dead-row count, so this is disk-hygiene not a perf cliff.
+  **Source:** /shakeout perf reviewer, NICE-TO-HAVE.

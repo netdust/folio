@@ -47,6 +47,7 @@ import {
 } from '../db/schema.ts';
 import { emitChainSuppressed } from './autonomy-gate.ts';
 import { isInstanceReach } from './token-reach.ts';
+import { OPERATOR_AGENT_ID, getOperatorDocument } from './operator.ts';
 import type { AgentRunFrontmatter, RunStatus } from './agent-run-schema.ts';
 import { runStatusSchema } from './agent-run-schema.ts';
 import { createRunForParent, loadRunScopedByToken } from '../routes/runs.ts';
@@ -98,6 +99,7 @@ import { canManageWorkspace, canSeeProject, visibleProjectIds } from './access.t
 import { resolveAgentForRun } from './agent-resolver.ts';
 import { getInstanceSkill } from './instance-skills.ts';
 import { setSkillTrust } from './skill-trust.ts';
+import { choiceCardSchema, ENTITY_TYPES, linkPanelSchema } from './ui-tool.ts';
 
 // ---------------------------------------------------------------------------
 // Result envelopes — verbatim from routes/mcp.ts.
@@ -189,6 +191,34 @@ async function humanPatProjectCeiling(
   return visibleProjectIds(db, token.createdBy, ws.id); // project-only invitee
 }
 
+/**
+ * Resolve the agent `Document` an agent-bound token points at — the ONE place
+ * `token.agentId → agent doc` is decided (the convergence point three call sites
+ * — project-resolve, comment-author, describe_workspace — previously open-coded).
+ *
+ * The OPERATOR is a code singleton: its ephemeral conversation token
+ * (createConversationRun) carries `agentId = OPERATOR_AGENT_ID`, a server-set
+ * constant that has NO `documents` row by design. Resolve it from
+ * getOperatorDocument() rather than a DB lookup that always misses. The check is
+ * on the sentinel VALUE alone (not isOperatorToken): `OPERATOR_AGENT_ID` is
+ * `operator:_operator`, never a real agent's UUID, and is set server-side at mint
+ * — a client cannot inject it (a persisted PAT's agent_id FK-references
+ * documents.id, which this value is not, so it can't be stored). For any other
+ * agentId, a missing row STILL throws `agent_missing` (the real guard, intact).
+ */
+async function resolveAgentDocForToken(token: ApiToken): Promise<Document> {
+  if (token.agentId === OPERATOR_AGENT_ID) return getOperatorDocument();
+  const agent = await db.query.documents.findFirst({
+    where: and(eq(documents.id, token.agentId!), eq(documents.type, 'agent')),
+  });
+  if (!agent) {
+    throw mcpInvalidParams('agent for this token no longer exists', {
+      reason: 'agent_missing',
+    });
+  }
+  return agent;
+}
+
 async function resolveProjectInWorkspace(
   ws: Workspace,
   token: ApiToken,
@@ -207,14 +237,7 @@ async function resolveProjectInWorkspace(
   // loadContext (the central clamp), so this single intersect now enforces
   // agent ∩ token ∩ caller — no per-site caller param needed.
   if (token.agentId) {
-    const agent = await db.query.documents.findFirst({
-      where: and(eq(documents.id, token.agentId), eq(documents.type, 'agent')),
-    });
-    if (!agent) {
-      throw mcpInvalidParams('agent for this token no longer exists', {
-        reason: 'agent_missing',
-      });
-    }
+    const agent = await resolveAgentDocForToken(token);
     const agentProjects = resolveAgentProjects(agent);
     const effective = intersectAgentProjects(agentProjects, token.projectIds ?? null);
     if (!effective.includes('*') && !effective.includes(p.id)) {
@@ -252,14 +275,7 @@ async function resolveProjectInWorkspace(
  */
 async function resolveAuthorContextForToken(token: ApiToken): Promise<AuthorContext> {
   if (token.agentId) {
-    const agent = await db.query.documents.findFirst({
-      where: and(eq(documents.id, token.agentId), eq(documents.type, 'agent')),
-    });
-    if (!agent) {
-      throw mcpInvalidParams('agent for this token no longer exists', {
-        reason: 'agent_missing',
-      });
-    }
+    const agent = await resolveAgentDocForToken(token);
     return { type: 'agent', agentSlug: agent.slug, agentId: token.agentId };
   }
   if (!token.createdBy) {
@@ -294,9 +310,31 @@ async function resolveTableForArgs(
   return t;
 }
 
-/** Wrap the string actor as the `{ id }`-shaped value the service layer reads. */
-function serviceActor(ctx: ToolContext): never {
-  return { id: ctx.actor } as never;
+/**
+ * The FK-valid `users.id` for createdBy/updatedBy writes. `ctx.actor` is the
+ * AUDIT/event identity — for an agent run (incl. the operator) that is the slug
+ * `agent:<slug>`, which is NOT a `users.id` and violates the documents.updated_by
+ * FK (errno 787). The run's real human owner is `ctx.confirmerId` (= the runner's
+ * transitionActor = run.created_by) or, for a human-PAT MCP call, `token.createdBy`.
+ * Fall back to `ctx.actor` only when neither is set AND actor is already a real
+ * user id (the legacy human-MCP path, where actor === the authenticated user id).
+ * The EVENT actor stays the slug (threaded separately as `eventActor`) so the
+ * agent-chain autonomy gate (isAgentOriginated → `agent:` actor) is unaffected.
+ */
+function serviceActor(ctx: ToolContext): User {
+  const id = ctx.confirmerId ?? ctx.token.createdBy ?? ctx.actor;
+  // Defense-in-depth (mirrors runner.ts FIX #9): the resolved id MUST be a real
+  // users.id. The third fallback (`ctx.actor`) is FK-valid only on the legacy
+  // human-MCP path (actor === the authenticated user). If a future caller reaches
+  // it on an AGENT run, `ctx.actor` is the slug `agent:<slug>` — which would
+  // silently re-introduce the FK-787 this split removed. An empty string would do
+  // the same. Fail loud instead of writing a bad FK or fabricating provenance.
+  if (!id || id.startsWith('agent:')) {
+    throw mcpInvalidParams('cannot resolve an FK-valid actor for this write', {
+      reason: 'unresolved_actor',
+    });
+  }
+  return { id } as User;
 }
 
 // ---------------------------------------------------------------------------
@@ -312,12 +350,9 @@ function serviceActor(ctx: ToolContext): never {
  */
 async function resolveAgentAllowListForToken(token: ApiToken): Promise<string[] | null> {
   if (!token.agentId) return null;
-  const agent = await db.query.documents.findFirst({
-    where: and(eq(documents.id, token.agentId), eq(documents.type, 'agent')),
-  });
-  if (!agent) {
-    throw mcpInvalidParams('agent for this token no longer exists', { reason: 'agent_missing' });
-  }
+  // Convergence point (resolveAgentDocForToken): resolves the operator sentinel
+  // to its code-singleton doc; a real-but-missing agent still throws agent_missing.
+  const agent = await resolveAgentDocForToken(token);
   const effective = intersectAgentProjects(resolveAgentProjects(agent), token.projectIds ?? null);
   return effective.includes('*') ? null : effective;
 }
@@ -455,11 +490,14 @@ export function registerRealTools(): void {
       required: ['slug', 'trusted'],
     },
     handler: async (args: { slug: string; trusted: boolean }, ctx) => {
-      // T8 gate lives in setSkillTrust(canBlessSkill). The tool caller is always
-      // a token; sessionUser is null on the tool path (the operator's
-      // createdBy-null token is the live blesser — an MCP admin PAT carries a
-      // human createdBy and is refused). Returns the refusal as a structured
-      // result if not allowed instead of throwing through the tool envelope.
+      // T8 gate lives in setSkillTrust(canBlessSkill), which blesses iff the
+      // caller is a session user OR a system-origin (createdBy-null) token. On the
+      // tool path sessionUser is always null, and the COCKPIT operator token
+      // carries the caller's createdBy (non-null) — so the operator is REFUSED
+      // here (fail-closed): blessing a skill requires a real session admin, not a
+      // chat turn. (Only a hypothetical createdBy-null token would bless via this
+      // tool — there is none on the conversation path.) Returns the refusal as a
+      // structured result instead of throwing through the tool envelope.
       try {
         await setSkillTrust(db, {
           slug: args.slug,
@@ -504,11 +542,11 @@ export function registerRealTools(): void {
           projects: visible.map((p) => ({ id: p.id, slug: p.slug, name: p.name })),
         });
       }
-      const agent = await db.query.documents.findFirst({
-        where: and(eq(documents.id, token.agentId), eq(documents.type, 'agent')),
-      });
-      const agentProjects = agent ? resolveAgentProjects(agent) : ['*'];
-      const effective = intersectAgentProjects(agentProjects, token.projectIds ?? null);
+      // Convergence point (resolveAgentDocForToken): operator → code singleton;
+      // a real-but-missing agent throws agent_missing (NOT the prior silent ['*']
+      // degrade, which would have shown a ghost-token EVERY project).
+      const agent = await resolveAgentDocForToken(token);
+      const effective = intersectAgentProjects(resolveAgentProjects(agent), token.projectIds ?? null);
       const filtered = effective.includes('*') ? all : all.filter((p) => effective.includes(p.id));
       return textResult({
         projects: filtered.map((p) => ({ id: p.id, slug: p.slug, name: p.name })),
@@ -631,11 +669,12 @@ export function registerRealTools(): void {
         projectIds =
           ceiling === null ? all.map((p) => p.id) : all.filter((p) => ceiling.has(p.id)).map((p) => p.id);
       } else {
-        const agent = await db.query.documents.findFirst({
-          where: and(eq(documents.id, token.agentId), eq(documents.type, 'agent')),
-        });
-        const agentProjects = agent ? resolveAgentProjects(agent) : ['*'];
-        const effective = intersectAgentProjects(agentProjects, token.projectIds ?? null);
+        // Convergence point (resolveAgentDocForToken): operator → code singleton;
+        // a real-but-missing agent throws agent_missing (NOT the prior silent
+        // ['*'] degrade, which would have searched a ghost-token across EVERY
+        // project).
+        const agent = await resolveAgentDocForToken(token);
+        const effective = intersectAgentProjects(resolveAgentProjects(agent), token.projectIds ?? null);
         projectIds = effective.includes('*')
           ? all.map((p) => p.id)
           : all.filter((p) => effective.includes(p.id)).map((p) => p.id);
@@ -681,10 +720,12 @@ export function registerRealTools(): void {
 
       let visible = all;
       if (token.agentId) {
-        const agent = await db.query.documents.findFirst({
-          where: and(eq(documents.id, token.agentId), eq(documents.type, 'agent')),
-        });
-        const agentProjects = agent ? resolveAgentProjects(agent) : ['*'];
+        // Convergence point (resolveAgentDocForToken): the operator resolves to
+        // its code-singleton doc (projects ['*']); a real-but-missing agent throws
+        // agent_missing — instead of the prior silent `: ['*']` degrade that would
+        // have shown a ghost-token EVERY project.
+        const agent = await resolveAgentDocForToken(token);
+        const agentProjects = resolveAgentProjects(agent);
         const effective = intersectAgentProjects(agentProjects, token.projectIds ?? null);
         visible = effective.includes('*') ? all : all.filter((p) => effective.includes(p.id));
       } else {
@@ -815,6 +856,11 @@ export function registerRealTools(): void {
       required: ['workspace_slug', 'project_slug', 'type', 'title'],
     },
     requiredScope: 'documents:write',
+    // T7 confirm gate: a routine content write — reversible-ish, the act-then-
+    // report majority. Opt DOWN to 'normal' so it does NOT require confirmation in
+    // a conversation. (Destructive ops — delete_* / agents:write lifecycle — keep
+    // the fail-closed 'high' default.)
+    riskTier: 'normal',
     schema: z
       .object({
         workspace_slug: z.string(),
@@ -862,6 +908,7 @@ export function registerRealTools(): void {
         project: p,
         table,
         actor: serviceActor(ctx),
+        eventActor: ctx.actor, // agent slug as EVENT actor (autonomy gate)
         token,
         isTableScopedUrl: false,
         input: { type, title, body, frontmatter, status: statusArg },
@@ -892,6 +939,8 @@ export function registerRealTools(): void {
       required: ['workspace_slug', 'project_slug', 'slug'],
     },
     requiredScope: 'documents:write',
+    // T7 confirm gate: routine reversible content update — opt down to 'normal'.
+    riskTier: 'normal',
     schema: z
       .object({
         workspace_slug: z.string(),
@@ -952,6 +1001,7 @@ export function registerRealTools(): void {
         project: p,
         fallbackTable,
         actor: serviceActor(ctx),
+        eventActor: ctx.actor, // keep the agent slug as the EVENT actor
         existing,
         patch,
       });
@@ -1001,6 +1051,7 @@ export function registerRealTools(): void {
         workspace: ws,
         project: p,
         actor: serviceActor(ctx),
+        eventActor: ctx.actor, // agent slug as EVENT actor (autonomy gate)
         existing,
       });
       return textResult({ ok: true, slug });
@@ -1180,6 +1231,8 @@ export function registerRealTools(): void {
       required: ['workspace_slug', 'project_slug', 'parent_slug', 'body'],
     },
     requiredScope: 'documents:write',
+    // T7 confirm gate: routine reversible content write — opt down to 'normal'.
+    riskTier: 'normal',
     schema: z
       .object({
         workspace_slug: z.string(),
@@ -1306,6 +1359,8 @@ export function registerRealTools(): void {
       required: ['workspace_slug', 'project_slug', 'slug'],
     },
     requiredScope: 'documents:write',
+    // T7 confirm gate: routine reversible content update — opt down to 'normal'.
+    riskTier: 'normal',
     schema: z
       .object({
         workspace_slug: z.string(),
@@ -1462,6 +1517,7 @@ export function registerRealTools(): void {
         project: null,
         table: null,
         actor: serviceActor(ctx),
+        eventActor: ctx.actor, // agent slug as EVENT actor (autonomy gate)
         token,
         isTableScopedUrl: false,
         input: { type: 'agent', title, body, frontmatter, status: null },
@@ -1538,6 +1594,7 @@ export function registerRealTools(): void {
         project: null,
         fallbackTable: null,
         actor: serviceActor(ctx),
+        eventActor: ctx.actor, // agent slug as EVENT actor (autonomy gate)
         existing,
         patch,
       });
@@ -1590,6 +1647,7 @@ export function registerRealTools(): void {
         workspace: ws,
         project: null,
         actor: serviceActor(ctx),
+        eventActor: ctx.actor, // agent slug as EVENT actor (autonomy gate)
         existing,
       });
       return textResult({ ok: true, slug });
@@ -1610,14 +1668,10 @@ export function registerRealTools(): void {
           reason: 'no_agent_bound_to_token',
         });
       }
-      const agent = await db.query.documents.findFirst({
-        where: and(eq(documents.id, token.agentId), eq(documents.type, 'agent')),
-      });
-      if (!agent) {
-        throw mcpInvalidParams('agent for this token no longer exists', {
-          reason: 'agent_missing',
-        });
-      }
+      // Convergence point (resolveAgentDocForToken): the operator gets its own
+      // code-singleton doc (the correct "what am I" answer); a real-but-missing
+      // agent still throws agent_missing.
+      const agent = await resolveAgentDocForToken(token);
       return textResult(agent);
     },
   });
@@ -1869,13 +1923,15 @@ export function registerRealTools(): void {
       const status = run.status as RunStatus;
 
       if (status === 'planning' || status === 'awaiting_approval') {
-        // transitionRun writes `updatedBy` (FK → users.id), so the actor must
-        // be an FK-valid user id — `ctx.actor` (the MCP route / runner supplies
-        // the authenticated user id), NOT `token.id`. Mirrors D-2's serviceActor
-        // convention.
+        // transitionRun writes `updatedBy` (FK → users.id), so the actor MUST be
+        // an FK-valid user id. Route through serviceActor (NOT raw ctx.actor,
+        // which is the slug `agent:<slug>` on an agent run → errno 787);
+        // serviceActor resolves confirmerId/token.createdBy and fails loud on a
+        // non-FK id. (architecture shake-out: actually single-source the D-2
+        // convention this comment claimed.)
         await transitionRun(run.id, {
           newStatus: 'failed',
-          actor: ctx.actor,
+          actor: serviceActor(ctx).id,
           errorReason: 'cancelled',
         });
         return textResult({ run_id: run.id, status: 'failed' });
@@ -1990,6 +2046,123 @@ export function registerRealTools(): void {
         firedBy: `retry-of:${runId}`,
       });
       return textResult({ run_id: document.id, status: 'planning' });
+    },
+  });
+
+  // --- Operator cockpit chat (Task 3) — the `ui` tool surface ---
+  //
+  // Two CHAT-ONLY tools. Both map to `documents:read` (emitting UI is not a
+  // privileged op; the underlying action carries the risk, gated in T7). Each
+  // handler emits a `component` message through `ctx.conversationSink`. If the
+  // sink is absent — a non-chat run (document-thread / MCP / headless) called a
+  // chat-only tool — the handler throws `forbidden:` so `isFatalToolError`
+  // (runner.ts) terminates the run (fail-closed; ui tools are chat-only).
+
+  registerTool({
+    name: 'show_link_panel',
+    description:
+      'Render a clickable reference to an entity in the chat. Chat-only. The frontend resolves entityType → route; you do not author URLs.',
+    requiredScope: 'documents:read',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        target: {
+          type: 'object',
+          properties: {
+            entityType: {
+              type: 'string',
+              enum: [...ENTITY_TYPES],
+            },
+            entityId: {
+              type: 'string',
+              description:
+                "The entity's SLUG (the human slug, NOT its UUID id). For a document/work_item the server validates it exists in pslug and rejects the link otherwise.",
+            },
+            wslug: { type: 'string' },
+            pslug: {
+              type: 'string',
+              description:
+                'The project slug. REQUIRED for document/work_item (they open at the project route); omit for agent/trigger.',
+            },
+          },
+          required: ['entityType', 'entityId', 'wslug'],
+        },
+        title: { type: 'string' },
+        subtitle: { type: 'string' },
+      },
+      required: ['target', 'title'],
+    },
+    schema: linkPanelSchema,
+    handler: async (args, ctx) => {
+      if (!ctx.conversationSink) {
+        throw new Error('forbidden: ui tools require a conversation context');
+      }
+      // Server-VALIDATE + CANONICALIZE the target before storing it, so the
+      // rendered link can never dead-end (review #1/#4/#5). For a project-scoped
+      // entity (document/work_item) we resolve it via the caller-scoped
+      // (workspace, project, slug) lookup and write back the entity's REAL slug
+      // — catching an id-as-entityId (UUID won't resolve by slug) and a wrong
+      // pslug (won't resolve in that project). A miss is a normal tool error the
+      // operator can correct (NOT a fatal forbidden:): it just couldn't link.
+      const target = { ...args.target };
+      if (target.entityType === 'document' || target.entityType === 'work_item') {
+        const ws = await resolveWorkspaceForToken(ctx.token, { workspace_slug: target.wslug });
+        const p = await resolveProjectInWorkspace(ws, ctx.token, { project_slug: target.pslug });
+        const doc = await getDocument(p.id, target.entityId);
+        if (!doc) {
+          throw new Error(
+            `link target not found: no ${target.entityType} "${target.entityId}" in ${target.wslug}/${target.pslug}. ` +
+              'Pass the document SLUG (not its id) as entityId, and the correct project slug as pslug.',
+          );
+        }
+        // Canonicalize: store the real slug + the resolved project slug.
+        target.entityId = doc.slug;
+        target.pslug = p.slug;
+      }
+      await ctx.conversationSink.component({
+        type: 'link_panel',
+        target,
+        title: args.title,
+        ...(args.subtitle !== undefined ? { subtitle: args.subtitle } : {}),
+      });
+      return textResult({ ok: true });
+    },
+  });
+
+  registerTool({
+    name: 'ask_choice',
+    description:
+      'Present a multi-option choice card in the chat and pause for the user to pick. Chat-only. At least two options, each with a stable id.',
+    requiredScope: 'documents:read',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        prompt: { type: 'string' },
+        options: {
+          type: 'array',
+          minItems: 2,
+          items: {
+            type: 'object',
+            properties: { id: { type: 'string' }, label: { type: 'string' } },
+            required: ['id', 'label'],
+          },
+        },
+      },
+      required: ['prompt', 'options'],
+    },
+    schema: choiceCardSchema,
+    handler: async (args, ctx) => {
+      if (!ctx.conversationSink) {
+        throw new Error('forbidden: ui tools require a conversation context');
+      }
+      await ctx.conversationSink.component({
+        type: 'choice_card',
+        prompt: args.prompt,
+        options: args.options,
+      });
+      // The runner enforces the stop STRUCTURALLY (a successful ask_choice ends
+      // the turn cleanly regardless of this text) — see runner.ts askedChoice.
+      return textResult({ ok: true, note: 'choice card shown; this turn ends — the user will pick' });
     },
   });
 
