@@ -601,3 +601,14 @@ Focused Multica study (agent-layer: chat-loop/skills/orchestration) → source-v
 [2026-06-06] — session ended (no significant changes captured)
 [2026-06-06] — session ended (no significant changes captured)
 [2026-06-06] — session ended (no significant changes captured)
+
+## [2026-06-06] Operator FULLY WORKS — fixed agent_missing + FK (both verified clean, live)
+
+Reseeded dev DB (scripts/reseed-dev.ts — the old DB had 57x test detritus, a RED HERRING) and root-caused why operator project-scoped tools failed. TWO bugs, ONE root cause (the operator's synthetic identity leaking where a real DB row/user is expected). Commit d35c067. Both fixes VERIFIED end-to-end on a clean DB: live cockpit turn → agent_missing=0, FK=0, recoverable-errors=0, task actually changed, native update_document path used.
+
+**Bug 1 — agent_missing:** operator's ephemeral conv token (createConversationRun:205) carries agentId=OPERATOR_AGENT_ID (sentinel, NO documents row) + createdBy=<caller user>. 3 sites did findFirst({id:token.agentId})→miss→agent_missing on every project-scoped tool. FIX: one helper resolveAgentDocForToken (operator→getOperatorDocument; else DB lookup+guard). Gated on the SENTINEL VALUE (un-forgeable), NOT isOperatorToken (createdBy is the USER not null — the mistake in my reverted eb981bf).
+
+**Bug 2 — SQLITE FK 787:** serviceActor returned {id: ctx.actor}=slug `agent:_operator` (not a users.id) → violated documents.updated_by FK. FIX: serviceActor→FK-valid real user (ctx.confirmerId=transitionActor=run.created_by); EVENT actor threaded separately via new `eventActor` arg (=ctx.actor slug) so the agent-chain autonomy gate (isAgentOriginated→`agent:` actor) is UNCHANGED. This is the documented c13 pattern. Applied to create/update/deleteDocument; createComment already null-FKs.
+
+**Autonomy gate intact:** 29 trigger-matcher + c13 suppression tests pass.
+**The operator DID work before via folio_api REST fallback** — these fixes make the NATIVE MCP write path work (no wasted retries).
