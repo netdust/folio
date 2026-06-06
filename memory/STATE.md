@@ -582,3 +582,4 @@ Focused Multica study (agent-layer: chat-loop/skills/orchestration) → source-v
 **Reframe:** the chat layer is ~90% wired; one injection bug on one path makes it look broken. NOT far away.
 [2026-06-06] — session ended (no significant changes captured)
 [2026-06-06] — session ended (no significant changes captured)
+[2026-06-06] — session ended (no significant changes captured)
