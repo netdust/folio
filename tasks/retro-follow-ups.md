@@ -342,3 +342,16 @@ in gaps). These are the close-tracking entries the doc points to:
   is fine (scopes route through `executeTool`); lifecycle is the gap. Revisit when MCP usage
   broadens beyond trusted first-party clients. Recorded as a gap in ARCHITECTURE-INVARIANTS.md,
   no decision pending.
+
+- **[2026-06-06, from /code-review on operator fixes d35c067] HTTP-route autonomy-gate gap (PRE-EXISTING, design decision).**
+  routes/documents.ts (JSON + markdown PATCH) and routes/workspace-documents.ts (PATCH/DELETE) call create/update/deleteDocument with `actor: user` and NO `eventActor`. These routes are agent-PAT-reachable; for a bearer agent token `attachUser` sets `user` = token.createdBy (a human), so the events emit a HUMAN actor → `isAgentOriginated` (trigger-matcher.ts:153, keys on `agent:` prefix) is FALSE → the autonomy gate does NOT suppress an agent's HTTP-driven write. NOT introduced by d35c067 (which only touched the runner/MCP plane); the HTTP plane has always had this shape. The markdown PATCH path open-codes the update + emitEvent (never hits the service layer), so threading eventActor into the service wouldn't even cover it.
+  **Decision needed:** should HTTP agent-PAT writes be chain-suppressed at all? If YES → thread eventActor through these routes (and the markdown branch) OR reject agent PATs on them. If NO (agents are expected to drive via MCP only) → document the boundary. Same locked-`FOLIO_AGENT_CHAINS_ENABLED` question — don't fix blind.
+  **Source:** /code-review (max effort) on d35c067, finding #4.
+
+- **[2026-06-06, from /code-review] Structural: `eventActor` optional-with-human-default is a silent-omission trap.**
+  The FK-actor vs event-actor split is an optional `eventActor?: string` defaulting to `actor.id`, threaded through 3 service signatures + 6 call sites + ~9 emitEvent lines with no enforcement. A FUTURE write service (or new call site) that forgets `eventActor` defaults to the FK-valid human → the autonomy gate silently stops firing for that agent path, no compile error. **Better shape:** a single richer actor object carrying both `fkId` and `eventIdentity`, derived once at the registry boundary, so omission is impossible. Worth doing before a 4th write service inherits the default.
+  **Source:** /code-review finding #7.
+
+- **[2026-06-06, from /code-review] ROOT (architectural): the operator's synthetic identity lives in an FK-shaped field.**
+  `OPERATOR_AGENT_ID` ('operator:_operator') is a non-UUID sentinel deliberately stored in `token.agentId` (FK-shaped), forcing every consumer to special-case it (d35c067's resolveAgentDocForToken) OR null it (dispatchAsCaller, 9a72162). TWO remediations for one design choice, in two files — the fork widens with every new `agentId` consumer. **Highest-leverage follow-up:** decide the operator's token identity in ONE place — either null the agentId everywhere + an explicit `isOperator`/operator-marker on the token, OR resolve the sentinel once at mint/loadContext so no downstream consumer ever sees a non-FK agentId. Collapses the whole class.
+  **Source:** /code-review finding #8 (altitude).
