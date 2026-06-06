@@ -614,3 +614,4 @@ Reseeded dev DB (scripts/reseed-dev.ts — the old DB had 57x test detritus, a R
 **The operator DID work before via folio_api REST fallback** — these fixes make the NATIVE MCP write path work (no wasted retries).
 [2026-06-06] — session ended (no significant changes captured)
 [2026-06-06] — session ended (no significant changes captured)
+[2026-06-06] — session ended (no significant changes captured)
