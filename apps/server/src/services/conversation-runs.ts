@@ -74,10 +74,18 @@ import { OPERATOR_TOOLS } from '../lib/system-skills.ts';
  */
 const OPERATOR_AGENT_SENTINEL_ID = `operator:${OPERATOR_SLUG}`;
 
-/** Default per-turn token budget for the operator (mirrors the agent-schema
- *  `max_tokens_per_run` default). The conversation run has no agent row to read
- *  it from, so it is fixed here. */
-const OPERATOR_MAX_TOKENS = 10_000;
+/**
+ * Per-turn token budget for the operator (cumulative input + output across the
+ * turn's rounds). The conversation run has no agent row to read max_tokens from,
+ * so it is fixed here. It is BOTH a runaway-loop / denial-of-wallet bound AND a
+ * floor for real work: a multi-step task (orient via list_workspaces →
+ * list_projects → read → mutate) re-sends the growing message history each round,
+ * so the old 10k was exhausted mid-task (a 3-tool "remove a view" hit ~16.5k).
+ * 100k comfortably covers multi-step operator tasks while still bounding a
+ * runaway. FOLLOW-UP: make this env-configurable (FOLIO_OPERATOR_MAX_TOKENS),
+ * alongside the deferred FOLIO_OPERATOR_PROVIDER/MODEL.
+ */
+const OPERATOR_MAX_TOKENS = 100_000;
 
 /**
  * Everything `loadContext`'s conversation branch needs to build a `RunContext`
