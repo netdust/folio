@@ -647,3 +647,4 @@ Both follow-up fixes merged `--no-ff` into main + pushed (`919e9a1..28ef69f`, or
 Gates on merged main: tsc x3 clean, server 1610/0, the 3 e2e specs pass. **origin/main = 28ef69f.** Safety tag from the cockpit merge still stands (pre-merge/main-before-cockpit-chat).
 
 REMAINING (lower priority, logged in tasks/retro-follow-ups.md): confirm-gate proposePendingOp dedup; pending_ops reaper; cockpit doesn't auto-resume an in-progress conversation on reload (bug b — compounds nothing now that the happy path works, but worth doing); headless-MCP confirm-gate bypass (invariant 12 KNOWN GAP). The eventActor-optional structural risk + the sentinel-in-FK-field root remain as architectural follow-ups.
+[2026-06-06] — session ended (no significant changes captured)
