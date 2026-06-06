@@ -19,7 +19,6 @@ import {
   users,
 } from '../db/schema.ts';
 import { env } from '../env.ts';
-import { OPERATOR_AGENT_ID } from './operator.ts';
 import { seedProjectDefaults } from './seed-project-defaults.ts';
 import { makeTestApp } from '../test/harness.ts';
 import { createRun, ensureRunsTable, nextChainId } from '../services/agent-runs.ts';
@@ -2127,62 +2126,5 @@ describe('B1: MCP human-PAT project narrowing (no cross-project leak)', () => {
         slug: 'anything',
       }),
     ).rejects.toThrow(/access|not granted|forbidden|not found/i);
-  });
-
-  // The operator token is system-origin (workspaceId=null, createdBy=null) and
-  // carries the SYNTHETIC agentId OPERATOR_AGENT_ID — which has no `documents`
-  // row by design (the operator is a code singleton). resolveProjectInWorkspace
-  // must resolve the operator from getOperatorDocument(), NOT a DB lookup that
-  // throws `agent_missing` and blocks EVERY project-scoped operator tool call.
-  it('operator token resolves a project via the code singleton, NOT agent_missing', async () => {
-    const { db, seed } = await makeTestApp();
-    const opToken = makeToken({
-      workspaceId: null,
-      createdBy: null,
-      agentId: OPERATOR_AGENT_ID,
-      projectIds: null, // unbounded caller ceiling for this test
-      scopes: ['documents:read'],
-    });
-    // A project-scoped tool (get_document) on the seeded `web` project. With the
-    // bug it throws agent_missing; fixed, it resolves the project and reaches a
-    // normal not-found for the bogus slug — NEVER agent_missing.
-    const err = await exec(opToken, 'operator', 'get_document', {
-      workspace_slug: 'acme',
-      project_slug: 'web',
-      slug: 'does-not-exist',
-    }).then(
-      () => null,
-      (e) => e as Error & { data?: { reason?: string } },
-    );
-    // It may reject (not found) — but the reason must NOT be agent_missing.
-    expect(err?.data?.reason).not.toBe('agent_missing');
-    if (err) expect(String(err.message)).not.toMatch(/agent for this token no longer exists/i);
-  });
-
-  // The fix must gate on isOperatorToken (workspaceId=null AND createdBy=null),
-  // NOT merely agentId===OPERATOR_AGENT_ID — so a token that FORGES the synthetic
-  // agentId but carries a real createdBy can't take the operator code-path. Such
-  // a token has createdBy set, so it falls through to the normal DB lookup and is
-  // denied agent_missing (no row for the synthetic id). Authority is preserved.
-  it('a token forging the operator agentId but with a real createdBy does NOT take the operator path', async () => {
-    const { db, seed } = await makeTestApp();
-    const forged = makeToken({
-      workspaceId: null,
-      createdBy: seed.user.id, // real human → NOT an operator token
-      agentId: OPERATOR_AGENT_ID, // forged synthetic id
-      projectIds: null,
-      scopes: ['documents:read'],
-    });
-    const err = await exec(forged, 'forger', 'get_document', {
-      workspace_slug: 'acme',
-      project_slug: 'web',
-      slug: 'x',
-    }).then(
-      () => null,
-      (e) => e as Error & { data?: { reason?: string } },
-    );
-    // Forged operator id + real createdBy → normal DB lookup → agent_missing (no
-    // row for the synthetic id). It must NOT silently get operator authority.
-    expect(err?.data?.reason).toBe('agent_missing');
   });
 })

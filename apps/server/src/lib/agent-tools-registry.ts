@@ -46,8 +46,7 @@ import {
   workspaces,
 } from '../db/schema.ts';
 import { emitChainSuppressed } from './autonomy-gate.ts';
-import { isInstanceReach, isOperatorToken } from './token-reach.ts';
-import { OPERATOR_AGENT_ID, getOperatorDocument } from './operator.ts';
+import { isInstanceReach } from './token-reach.ts';
 import type { AgentRunFrontmatter, RunStatus } from './agent-run-schema.ts';
 import { runStatusSchema } from './agent-run-schema.ts';
 import { createRunForParent, loadRunScopedByToken } from '../routes/runs.ts';
@@ -209,21 +208,9 @@ async function resolveProjectInWorkspace(
   // loadContext (the central clamp), so this single intersect now enforces
   // agent ∩ token ∩ caller — no per-site caller param needed.
   if (token.agentId) {
-    // The operator is a CODE SINGLETON: its token carries the synthetic
-    // OPERATOR_AGENT_ID, which by design has no `documents` row. Resolve it from
-    // getOperatorDocument() instead of a DB lookup that would always throw
-    // `agent_missing` and block every project-scoped operator tool call. Gate on
-    // isOperatorToken (workspaceId=null AND createdBy=null), NOT on the agentId
-    // value alone — a token with a real createdBy that forges the synthetic id
-    // must still fall through to the DB lookup (and be denied), so operator
-    // authority can't be assumed by forging an id. The project-ceiling check
-    // below (intersectAgentProjects ∩ token.projectIds) runs UNCHANGED either way.
-    const agent =
-      isOperatorToken(token) && token.agentId === OPERATOR_AGENT_ID
-        ? getOperatorDocument()
-        : await db.query.documents.findFirst({
-            where: and(eq(documents.id, token.agentId), eq(documents.type, 'agent')),
-          });
+    const agent = await db.query.documents.findFirst({
+      where: and(eq(documents.id, token.agentId), eq(documents.type, 'agent')),
+    });
     if (!agent) {
       throw mcpInvalidParams('agent for this token no longer exists', {
         reason: 'agent_missing',
