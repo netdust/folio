@@ -58,12 +58,23 @@ describe('chat adapter', () => {
       title: 'Untitled',
     });
     // Write more rows than the window; each body is uniquely identifiable.
+    // ALTERNATE roles (user/operator) — a realistic thread, so the message-level
+    // coalescing (which merges consecutive same-role rows, see rowsToMessages) is
+    // a no-op here and the windowing assertion stays meaningful. An all-same-role
+    // fixture would collapse to a single coalesced message and mask windowing.
     const N = CONVERSATION_HISTORY_WINDOW + 10;
     for (let i = 0; i < N; i++) {
-      await appendMessage(db, { conversationId: c.id, role: 'user', kind: 'text', body: `msg-${i}` });
+      await appendMessage(db, {
+        conversationId: c.id,
+        role: i % 2 === 0 ? 'user' : 'operator',
+        kind: 'text',
+        body: `msg-${i}`,
+      });
     }
     const msgs = await buildConversationMessages(db, c.id);
-    // Bounded: never more than the window, regardless of thread length.
+    // Bounded: never more than the window, regardless of thread length. (Windowing
+    // is applied to ROWS before coalescing; with alternating roles each kept row is
+    // its own message, so this also bounds the message count.)
     expect(msgs.length).toBeLessThanOrEqual(CONVERSATION_HISTORY_WINDOW);
     // The OLDEST rows are dropped, the most RECENT kept (tail window).
     expect(msgs.some((m) => String(m.content) === 'msg-0')).toBe(false);

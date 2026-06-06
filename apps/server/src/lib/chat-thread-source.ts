@@ -73,7 +73,43 @@ export const CONVERSATION_HISTORY_WINDOW = 60;
  *
  * Empty bodies are dropped (a provider rejects an empty-content message). Only
  * the last `CONVERSATION_HISTORY_WINDOW` rows are replayed (bounded cost).
+ *
+ * CRITICAL — roles MUST alternate. A single operator turn becomes MANY rows
+ * (a `tool_step` per tool call + a `component` per card + the final `text`),
+ * which all map to `assistant`. The Anthropic Messages API rejects consecutive
+ * same-role messages with a 400 ("roles must alternate"), and our provider
+ * adapter maps rows 1:1 (it does NOT merge). So a turn with several tool steps
+ * replays as `user, assistant, assistant, …` and the NEXT turn's request 400s →
+ * the run fails with `provider_error`. This bit the confirm-resume path: after a
+ * HIGH-tier card the thread had 7+ consecutive assistant rows, so the resume
+ * turn could never reach the model. `rowsToMessages` COALESCES consecutive
+ * same-role messages into one (joining content with blank lines) so the replayed
+ * sequence always alternates. Pure + exported for unit testing without a DB.
  */
+export function rowsToMessages(rows: readonly MessageRow[]): Message[] {
+  const out: Message[] = [];
+  const pushCoalesced = (role: 'user' | 'assistant', content: string) => {
+    const last = out[out.length - 1];
+    if (last && last.role === role) {
+      // Same role as the previous message → merge, so the sequence alternates.
+      last.content = `${last.content}\n\n${content}`;
+      return;
+    }
+    out.push({ role, content });
+  };
+  for (const m of rows) {
+    if (m.kind === 'text') {
+      if (!m.body || m.body.trim().length === 0) continue;
+      pushCoalesced(m.role === 'user' ? 'user' : 'assistant', m.body);
+    } else if (m.kind === 'tool_step') {
+      pushCoalesced('assistant', summarizeToolStep(m.payload));
+    } else if (m.kind === 'component') {
+      pushCoalesced('assistant', summarizeComponent(m.payload));
+    }
+  }
+  return out;
+}
+
 export async function buildConversationMessages(
   db: DB,
   conversationId: string,
@@ -85,20 +121,5 @@ export async function buildConversationMessages(
     all.length > CONVERSATION_HISTORY_WINDOW
       ? all.slice(all.length - CONVERSATION_HISTORY_WINDOW)
       : all;
-  const out: Message[] = [];
-  for (const m of rows) {
-    if (m.kind === 'text') {
-      if (!m.body || m.body.trim().length === 0) continue;
-      out.push(
-        m.role === 'user'
-          ? { role: 'user', content: m.body }
-          : { role: 'assistant', content: m.body },
-      );
-    } else if (m.kind === 'tool_step') {
-      out.push({ role: 'assistant', content: summarizeToolStep(m.payload) });
-    } else if (m.kind === 'component') {
-      out.push({ role: 'assistant', content: summarizeComponent(m.payload) });
-    }
-  }
-  return out;
+  return rowsToMessages(rows);
 }
