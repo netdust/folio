@@ -648,3 +648,4 @@ Gates on merged main: tsc x3 clean, server 1610/0, the 3 e2e specs pass. **origi
 
 REMAINING (lower priority, logged in tasks/retro-follow-ups.md): confirm-gate proposePendingOp dedup; pending_ops reaper; cockpit doesn't auto-resume an in-progress conversation on reload (bug b — compounds nothing now that the happy path works, but worth doing); headless-MCP confirm-gate bypass (invariant 12 KNOWN GAP). The eventActor-optional structural risk + the sentinel-in-FK-field root remain as architectural follow-ups.
 [2026-06-06] — session ended (no significant changes captured)
+[2026-06-07] — session ended (no significant changes captured)
