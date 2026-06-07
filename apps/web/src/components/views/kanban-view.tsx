@@ -10,7 +10,6 @@ import {
   useSensors,
   type DragEndEvent,
   type DragStartEvent,
-  type DropAnimation,
 } from '@dnd-kit/core';
 import { toast } from 'sonner';
 import { useCreateDocument, useDocuments, useUpdateDocument, type DocumentSummary } from '../../lib/api/documents.ts';
@@ -32,20 +31,18 @@ interface Props {
   tslug: string;
 }
 
-// ISSUE 2 fix — DragOverlay drop animation. dnd-kit's DEFAULT keyframes animate
-// the overlay's transform from its drop position back to the SOURCE card's
-// original rect (`active.rect`). On a cross-column move that source node hasn't
-// moved yet (React state / refetch hasn't repositioned it), so the overlay
-// visibly slides back toward the origin — reading as a snap-back. We override
-// `keyframes` to fade the overlay OUT in place at the drop point (no transform
-// translation), so the gesture reads as "landed where dropped" while the
-// re-render places the real card at the destination. Short duration so the
-// fade-out doesn't linger over the freshly-positioned card.
-const DROP_ANIMATION: DropAnimation = {
-  duration: 180,
-  easing: 'ease-out',
-  keyframes: () => [{ opacity: 1 }, { opacity: 0 }],
-};
+// DragOverlay drop animation is DISABLED (dropAnimation={null}). Why: the
+// optimistic re-sort (useUpdateDocument.onMutate) places the REAL card in its
+// final slot on the same frame the drag releases. ANY drop animation keeps the
+// overlay clone alive on top of that already-placed card for its duration — so
+// the dragged card renders TWICE for ~Nms (a fading ghost + the real card),
+// which on a DOWNWARD reorder (where the passed cards also reflow up) reads as a
+// flicker: cards appear to vanish and reappear. dnd-kit's default keyframes are
+// even worse (they slide the overlay back toward the source rect = snap-back).
+// With no drop animation the overlay vanishes instantly on release and only the
+// optimistically-placed card remains — no duplicate, no flicker. (Verified via
+// live DOM frame-sampling 2026-06-08: the 180ms fade was the duplicate-card
+// window.)
 
 export function KanbanView({ wslug, pslug, tslug }: Props) {
   const navigate = useNavigate();
@@ -338,7 +335,7 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
       {/* The dragged card's visible clone. DragOverlay portals to the body, so
           it escapes each column's `overflow-y-auto` clip and paints on top —
           the original in-place card hides (opacity 0) while this shows. */}
-      <DragOverlay dropAnimation={DROP_ANIMATION}>
+      <DragOverlay dropAnimation={null}>
         {activeDoc ? <KanbanCard doc={activeDoc} onOpen={openDoc} overlay /> : null}
       </DragOverlay>
     </DndContext>
