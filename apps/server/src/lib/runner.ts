@@ -445,7 +445,7 @@ export async function runAgentResume(args: { runId: string }): Promise<void> {
  * The raw decrypt error is swallowed (NEVER surfaced — it can embed key bytes,
  * threat-model mitigation 5); the distinction is carried by the flag, not the msg.
  */
-function resolveKeyMaterial(
+export function resolveKeyMaterial(
   keyRow: { encryptedKey: string } | null | undefined,
 ): { apiKey: string; decryptFailed: boolean } {
   if (!keyRow) return { apiKey: '', decryptFailed: false };

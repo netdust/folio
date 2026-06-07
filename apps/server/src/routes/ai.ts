@@ -8,12 +8,11 @@ import { env } from '../env.ts';
 import { providerSchema } from '../lib/agent-run-schema.ts';
 import { buildCompletionPrompt } from '../lib/ai-complete.ts';
 import { getProvider } from '../lib/ai/provider.ts';
-import { decryptSecret } from '../lib/crypto.ts';
 import { sanitizeProviderError } from '../lib/ai/sanitize-error.ts';
 import type { ProviderName } from '../services/agent-runs.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
 import { getOperatorDefinition } from '../lib/operator.ts';
-import { resolveOperatorRunModel } from '../lib/runner.ts';
+import { resolveKeyMaterial, resolveOperatorRunModel } from '../lib/runner.ts';
 import { validatePublicUrl } from '../lib/url-allow-list.ts';
 import { getOperatorModelSetting } from '../services/instance-settings.ts';
 import { type AuthContext, requireSessionUser } from '../middleware/auth.ts';
@@ -170,12 +169,12 @@ aiRoute.post('/complete', zValidator('json', CompleteBody), async (c) => {
   if (!keyRow) {
     throw new HTTPError('AI_NOT_CONFIGURED', 'No AI key is configured for this instance.', 409);
   }
-  let apiKey = '';
-  try {
-    apiKey = decryptSecret(keyRow.encryptedKey);
-  } catch {
-    // The raw decrypt error can embed key bytes — swallow it (mitigation 6) and
-    // degrade to the not-configured response rather than surfacing a 500.
+  // Delegate the decrypt-swallow to the runner's shared primitive so the
+  // "a decrypt error must NOT leak key bytes" mitigation lives in ONE place
+  // (threat-model mitigation 6 / runner's mitigation 5). A decryptFailed flag
+  // here → the same not-configured 409, never the raw error.
+  const { apiKey, decryptFailed } = resolveKeyMaterial(keyRow);
+  if (decryptFailed) {
     throw new HTTPError('AI_NOT_CONFIGURED', 'The configured AI key could not be decrypted.', 409);
   }
   // A non-ollama provider with an empty key is not usable.
