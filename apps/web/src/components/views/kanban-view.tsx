@@ -1,6 +1,15 @@
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { useMemo, useState, useSyncExternalStore } from 'react';
-import { DndContext, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
+import {
+  DndContext,
+  DragOverlay,
+  PointerSensor,
+  closestCorners,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+  type DragStartEvent,
+} from '@dnd-kit/core';
 import { toast } from 'sonner';
 import { useCreateDocument, useDocuments, useUpdateDocument, type DocumentSummary } from '../../lib/api/documents.ts';
 import { useStatuses } from '../../lib/api/statuses.ts';
@@ -29,6 +38,10 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
   const { data: fields } = useFields(wslug, pslug, tslug);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
   const [pendingSlugs, setPendingSlugs] = useState<Set<string>>(new Set());
+  // The card currently being dragged. Drives the <DragOverlay> clone (which
+  // portals above everything so the dragged card isn't clipped by a column's
+  // overflow). Set on drag start, cleared on end/cancel.
+  const [activeId, setActiveId] = useState<string | null>(null);
 
   const urlViewId = typeof search.view === 'string' ? search.view : undefined;
   const activeView = useMemo(() => {
@@ -144,7 +157,16 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
   const slotPosition = (col: { docIds: string[] }, activeId: string, overDocId: string | null): string =>
     dropSlotPosition(col.docIds, (id) => docsById.get(id)?.boardPosition ?? null, activeId, overDocId);
 
+  const onDragStart = (event: DragStartEvent) => {
+    setActiveId(String(event.active.id));
+  };
+
+  const onDragCancel = () => {
+    setActiveId(null);
+  };
+
   const onDragEnd = async (event: DragEndEvent) => {
+    setActiveId(null);
     const { active, over } = event;
     if (!over) return;
     const overId = String(over.id);
@@ -209,8 +231,21 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
     );
   }
 
+  const activeDoc = activeId ? docsById.get(activeId) ?? null : null;
+
   return (
-    <DndContext sensors={sensors} onDragEnd={onDragEnd}>
+    <DndContext
+      sensors={sensors}
+      // closestCorners returns the nearest droppable by corner distance: a CARD
+      // when the pointer is over a card (→ within-column reorder registers as
+      // reorder, not the column), the COLUMN when over its whitespace (→ empty-
+      // column regroup still wins). The default rectIntersection favored the big
+      // column droppable, so card-over-card drops reported col-* and no-op'd.
+      collisionDetection={closestCorners}
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+      onDragCancel={onDragCancel}
+    >
       <div className="flex h-full min-h-0 flex-col">
         {/* MainFrame's children container already supplies px-[22px] py-2; don't double it up. */}
         <div className="flex min-h-0 flex-1 items-stretch gap-3 overflow-x-auto">
@@ -243,6 +278,12 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
           ))}
         </div>
       </div>
+      {/* The dragged card's visible clone. DragOverlay portals to the body, so
+          it escapes each column's `overflow-y-auto` clip and paints on top —
+          the original in-place card hides (opacity 0) while this shows. */}
+      <DragOverlay>
+        {activeDoc ? <KanbanCard doc={activeDoc} onOpen={openDoc} overlay /> : null}
+      </DragOverlay>
     </DndContext>
   );
 }

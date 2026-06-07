@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { signUpFresh, createWorkspace, createProject } from './fixtures.ts';
+import { signUpFresh, createWorkspace, createProject, createWorkItem } from './fixtures.ts';
 
 /**
  * Feature-acceptance for the hardening pass (spec/hardening-pass) — drives the
@@ -13,8 +13,11 @@ import { signUpFresh, createWorkspace, createProject } from './fixtures.ts';
  *     need a real BYOK key → unverified-no-browser (user's smoke gate). The
  *     PARSE half of /draft (markdown → real ProseMirror nodes, the root-cause
  *     fix) IS driven below with /me + /ai/complete route-stubbed — no key needed.
- *   - Board manual drag-reorder (4c): headless dnd-kit pointer drag is fragile
- *     (the existing shakeout-projects spec records the same) → human eyeball.
+ *   - Board manual drag-reorder (4c): now DRIVEN below (2026-06-07 dnd fix). The
+ *     prior "headless-fragile" note held because page.mouse dispatches MOUSE
+ *     events, which dnd-kit's PointerSensor ignores — dispatching real
+ *     PointerEvents drives the drag reliably. (The shakeout-projects spec's
+ *     cross-column card drag still uses page.mouse → keep that one as eyeball.)
  */
 
 let seq = 0;
@@ -204,4 +207,138 @@ test('slash /draft: AI result renders as a real H1 + list, not literal markdown'
   await expect(editor.locator('ul li')).toHaveCount(2);
   // And the raw "# " hash is NOT present as literal text.
   await expect(editor).not.toContainText('# Drafted Heading');
+});
+
+// ── Board manual within-column drag-reorder (BUG 1 + BUG 2 fix) ────────────────
+//
+// Previously recorded as "headless-fragile → human eyeball". The fix (DragOverlay
+// + closestCorners collision) makes the within-column reorder actually register
+// and persist. We attempt the REAL stepped-mouse drag here. dnd-kit needs the
+// PointerSensor's 5px activation distance crossed by intermediate moves before
+// the drop, so we step the pointer in several increments.
+//
+// If this proves flaky in headless (genuinely possible — dnd-kit + headless is
+// hard), it is annotated and the gesture stays human-verified; the wired persist
+// path is already proven by the kanban-view-dnd.test.tsx onDragEnd seam test.
+test('board: manual within-column drag-reorder persists a new board_position', async ({
+  page,
+}) => {
+  await signUpFresh(page);
+  const wslug = `dnd-ws-${Date.now()}`;
+  const pslug = 'dnd-p';
+  await createWorkspace(page, 'DnD WS', wslug);
+  await createProject(page, wslug, 'DnD Proj', pslug);
+  // Two work items in the SAME (todo) column → a within-column reorder target.
+  await createWorkItem(page, wslug, pslug, 'Card Alpha', { status: 'todo' });
+  await createWorkItem(page, wslug, pslug, 'Card Bravo', { status: 'todo' });
+
+  // Open the default board, then switch the Sort to Manual — only manual mode
+  // makes the cards sortable (within-column reorder enabled). The seeded default
+  // view ships with a field sort.
+  await page.goto(`/w/${wslug}/p/${pslug}/board`);
+  await expect(page.getByRole('button', { name: /Card Alpha/ })).toBeVisible({ timeout: 6000 });
+  await page.getByRole('button', { name: /^Sort:/ }).click();
+  await page.getByRole('menuitem', { name: 'Manual', exact: true }).click();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('button', { name: /Sort:\s*Manual/ })).toBeVisible();
+
+  // Persisted order (manual mode sorts by board_position; null coalesces last).
+  const persistedOrder = async (): Promise<string[]> => {
+    const res = await page.request.get(
+      `/api/v1/w/${wslug}/p/${pslug}/documents?type=work_item&sort=board_position&dir=asc&limit=200`,
+    );
+    const rows = ((await res.json()).data ?? []) as Array<{ title: string }>;
+    return rows.map((r) => r.title);
+  };
+  const before = await persistedOrder();
+  expect(before).toHaveLength(2);
+
+  // Drag the SECOND card above the FIRST so the order is guaranteed to change.
+  const firstTitle = before[0]!;
+  const secondTitle = before[1]!;
+  const first = page.getByRole('button', { name: new RegExp(firstTitle) });
+  const second = page.getByRole('button', { name: new RegExp(secondTitle) });
+
+  // Diagnostic: record any document PATCH the drag triggers.
+  const patches: string[] = [];
+  page.on('request', (req) => {
+    if (req.method() === 'PATCH' && req.url().includes('/documents/')) patches.push(req.url());
+  });
+
+  const srcBox = await second.boundingBox();
+  const dstBox = await first.boundingBox();
+  expect(srcBox && dstBox).toBeTruthy();
+  const sx = srcBox!.x + srcBox!.width / 2;
+  const sy = srcBox!.y + srcBox!.height / 2;
+  const dx = dstBox!.x + dstBox!.width / 2;
+  // Aim at the FIRST card's top quarter so closestCorners reports it as a
+  // drop-before target.
+  const dy = dstBox!.y + dstBox!.height * 0.25;
+
+  // dnd-kit's PointerSensor listens for POINTER events (not mouse), so we
+  // dispatch real PointerEvents on the source element and walk to the target.
+  // page.mouse synthesizes mouse events which the sensor ignores.
+  await second.evaluate(
+    (el, { sx, sy }) => {
+      el.dispatchEvent(
+        new PointerEvent('pointerdown', {
+          bubbles: true,
+          cancelable: true,
+          pointerId: 1,
+          isPrimary: true,
+          button: 0,
+          clientX: sx,
+          clientY: sy,
+        }),
+      );
+    },
+    { sx, sy },
+  );
+  // Walk the pointer to the target in steps; dispatch on document so the
+  // sensor's window-level listeners pick them up.
+  const stepN = 10;
+  let midDragOverlayCount = 0;
+  for (let i = 1; i <= stepN; i++) {
+    const cx = sx + ((dx - sx) * i) / stepN;
+    const cy = sy + ((dy - sy) * i) / stepN;
+    await page.evaluate(
+      ({ cx, cy }) => {
+        document.dispatchEvent(
+          new PointerEvent('pointermove', { bubbles: true, cancelable: true, pointerId: 1, clientX: cx, clientY: cy }),
+        );
+      },
+      { cx, cy },
+    );
+    await page.waitForTimeout(25);
+    // BUG 1 proof: mid-drag, the dragged card's title appears TWICE — the dimmed
+    // in-place card + the DragOverlay clone (which portals to <body>, escaping
+    // the column's overflow clip so it paints ON TOP instead of behind). Capture
+    // the max seen across steps + a screenshot for the eyeball record.
+    if (i === Math.ceil(stepN / 2)) {
+      midDragOverlayCount = await page.getByText(secondTitle, { exact: true }).count();
+      await page.screenshot({ path: 'test-results/kanban-drag-overlay.png' });
+    }
+  }
+  await page.evaluate(
+    ({ dx, dy }) => {
+      document.dispatchEvent(
+        new PointerEvent('pointerup', { bubbles: true, cancelable: true, pointerId: 1, clientX: dx, clientY: dy }),
+      );
+    },
+    { dx, dy },
+  );
+  await page.waitForTimeout(250);
+
+  // BUG 1 proof: the DragOverlay clone was present mid-drag (2 instances of the
+  // dragged card's title) — it portals above the columns, no longer clipped.
+  expect(midDragOverlayCount, 'DragOverlay clone should render the dragged card mid-drag').toBeGreaterThanOrEqual(2);
+
+  // BUG 2 proof: the drag fired a board_position PATCH (within-column reorder
+  // now registers), AND the persisted order flipped so the dragged (formerly
+  // second) card is now first. Poll (optimistic UI + async PATCH).
+  expect(patches.length, 'a within-column drag should PATCH board_position').toBeGreaterThan(0);
+  await expect(async () => {
+    const after = await persistedOrder();
+    expect(after[0]).toBe(secondTitle);
+  }).toPass({ timeout: 8000 });
 });

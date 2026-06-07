@@ -17,6 +17,10 @@ interface Props {
   // reordered within a column. Otherwise they are plain draggables (cross-
   // column regroup only).
   sortable?: boolean;
+  // When true, render a non-interactive presentational clone with NO dnd hook
+  // (used inside <DragOverlay>). The overlay portals to the body so it escapes
+  // the column's `overflow-y-auto` clip and paints above the sibling columns.
+  overlay?: boolean;
 }
 
 const LABEL_HUES = [
@@ -124,31 +128,48 @@ function CardBody({ doc, onOpen, isPending, dnd }: { doc: DocumentSummary; onOpe
   );
 }
 
-function DraggableCard({ doc, onOpen, isPending }: Omit<Props, 'sortable'>) {
-  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
+function DraggableCard({ doc, onOpen, isPending }: Omit<Props, 'sortable' | 'overlay'>) {
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: doc.id,
     data: { slug: doc.slug, currentStatus: doc.status },
   });
-  const style: CSSProperties | undefined = transform
-    ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)`, zIndex: isDragging ? 50 : undefined }
-    : undefined;
+  // The dragged card is rendered by <DragOverlay> (portaled above everything so
+  // it escapes the column's overflow clip), so the in-place node hides while
+  // dragging — otherwise two cards would show. No transform/zIndex needed here.
+  const style: CSSProperties | undefined = isDragging ? { opacity: 0 } : undefined;
   return <CardBody doc={doc} onOpen={onOpen} isPending={isPending} dnd={{ setNodeRef, attributes, listeners, style, isDragging }} />;
 }
 
-function SortableCard({ doc, onOpen, isPending }: Omit<Props, 'sortable'>) {
+function SortableCard({ doc, onOpen, isPending }: Omit<Props, 'sortable' | 'overlay'>) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: doc.id,
     data: { slug: doc.slug, currentStatus: doc.status },
   });
+  // Keep the sortable transform so the OTHER cards shift to make room, but hide
+  // the dragged card itself (the DragOverlay clone is the visible one).
   const style: CSSProperties = {
     transform: CSS.Transform.toString(transform),
     transition,
-    zIndex: isDragging ? 50 : undefined,
+    opacity: isDragging ? 0 : undefined,
   };
   return <CardBody doc={doc} onOpen={onOpen} isPending={isPending} dnd={{ setNodeRef, attributes, listeners, style, isDragging }} />;
 }
 
-export function KanbanCard({ doc, onOpen, isPending, sortable }: Props) {
+// Presentational clone for <DragOverlay> — no dnd hook, not interactive. It just
+// needs to LOOK like the card; the overlay handles positioning + z-stacking.
+function OverlayCard({ doc, isPending }: Pick<Props, 'doc' | 'isPending'>) {
+  return (
+    <CardBody
+      doc={doc}
+      onOpen={() => {}}
+      isPending={isPending}
+      dnd={{ setNodeRef: () => {}, attributes: {} as DraggableAttributes, listeners: undefined, style: undefined, isDragging: true }}
+    />
+  );
+}
+
+export function KanbanCard({ doc, onOpen, isPending, sortable, overlay }: Props) {
+  if (overlay) return <OverlayCard doc={doc} isPending={isPending} />;
   return sortable ? (
     <SortableCard doc={doc} onOpen={onOpen} isPending={isPending} />
   ) : (
