@@ -189,7 +189,13 @@ aiRoute.post('/complete', zValidator('json', CompleteBody), async (c) => {
   // One-shot: there is no non-streaming provider method, so accumulate every
   // `text` delta into a single string and return it. No tools (read-only — the
   // model cannot act, only transform). The key goes ONLY into this call.
+  //
+  // The terminal `done` event carries the stop reason — we MUST honor it.
+  // Accumulating only `text` and ignoring `done` would return `{ text: '' }`
+  // for a refusal or an empty stop, which the editor then inserts silently as
+  // a no-op (findings 189/466). Track the reason and fail loudly on those.
   let text = '';
+  let doneReason: 'stop' | 'tool_use' | 'max_tokens' | 'refusal' | 'pause_turn' | undefined;
   try {
     for await (const ev of getProvider(provider).stream({
       system,
@@ -201,11 +207,26 @@ aiRoute.post('/complete', zValidator('json', CompleteBody), async (c) => {
       baseUrl,
     })) {
       if (ev.type === 'text') text += ev.delta;
+      else if (ev.type === 'done') doneReason = ev.reason;
     }
   } catch (err) {
     // sanitize: a provider SDK error string can embed partial credentials or the
     // upstream URL. Never echo it; surface only the whitelisted status line.
     throw new HTTPError('AI_ERROR', sanitizeProviderError(err, PROVIDER_LABEL[provider]), 502);
+  }
+
+  // Refusal wins regardless of any partial text — the model declined the
+  // request, so there is nothing useful to insert.
+  if (doneReason === 'refusal') {
+    throw new HTTPError('AI_REFUSED', 'The AI declined to complete this request.', 422);
+  }
+
+  // An empty (or whitespace-only) accumulation would insert nothing — surface a
+  // clear error instead of a silent no-op. `max_tokens`/`pause_turn` truncation
+  // that still produced text falls through and returns the partial draft (200):
+  // a truncated draft is still useful for v1.
+  if (text.trim().length === 0) {
+    throw new HTTPError('AI_EMPTY_RESPONSE', 'The AI returned an empty response.', 422);
   }
 
   return jsonOk(c, { text });

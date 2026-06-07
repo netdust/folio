@@ -12,7 +12,9 @@ import { SlashMenu } from './slash-menu.tsx';
 import { WikiMenu } from './wiki-menu.tsx';
 import { BodyToolbar } from './body-toolbar.tsx';
 import { matchWikiTrigger, replaceWikiToken } from '../../lib/wiki-trigger.ts';
+import { applyAtCapturedRange, captureSlashToken } from '../../lib/slash-capture.ts';
 import { type CompletionAction, completeAi } from '../../lib/api/ai-complete.ts';
+import { ApiError } from '../../lib/api/client.ts';
 import type { DocumentSummary } from '../../lib/api/documents.ts';
 import type { SlashContext } from '../../lib/slash-registry.ts';
 
@@ -158,6 +160,10 @@ function MilkdownEditor({
   const getProseDOM = () =>
     (wrapperRef.current?.querySelector('.ProseMirror') as HTMLElement | null) ?? null;
 
+  // Guards against a double-fire of the async AI completion (finding 193): the
+  // slash menu can re-invoke `aiComplete` while a request is still in flight.
+  const aiInFlightRef = useRef(false);
+
   const slashCtx: SlashContext = {
     get documents() { return documentsRef.current; },
     get aiConfigured() { return aiConfiguredRef.current; },
@@ -196,23 +202,67 @@ function MilkdownEditor({
         toast.warning('AI is not available here');
         return;
       }
+      // Single-flight guard (finding 193): the slash menu can re-fire while a
+      // request is still streaming. Ignore the second invocation.
+      if (aiInFlightRef.current) {
+        toast.info('AI is already working…');
+        return;
+      }
+
+      // POSITION CAPTURE (findings 210/201/211/171). Unlike the synchronous
+      // `/link` path, `aiComplete` awaits the provider for SECONDS, during which
+      // the user can move the caret, type, or delete the `/draft` token. We must
+      // therefore snapshot the slash-token's DOM Range NOW — before the await —
+      // and replace THAT captured span on resolve, not a fresh live selection
+      // (which would land the text at the moved caret or silently no-op when
+      // `lastIndexOf('/')` returns -1). See lib/slash-capture.ts.
+      const dom = getProseDOM();
+      const captured = captureSlashToken(window.getSelection());
+
+      // Replace the captured slash-token span (empty `text` deletes it). Returns
+      // false when the captured node was detached (user deleted the block).
+      const placeResult = (text: string): boolean => {
+        const ok = applyAtCapturedRange(captured, text);
+        // Fire input so Milkdown picks up the change.
+        if (ok && dom) dom.dispatchEvent(new InputEvent('input', { bubbles: true }));
+        return ok;
+      };
+
       // Capture the body BEFORE the slash token is mutated. `/draft` works from
       // the title even when the body is empty; the others transform the body.
       const content = valueRef.current;
       const verb = action === 'decompose' ? 'Decomposing' : action === 'summarize' ? 'Summarizing' : 'Drafting';
       const dismiss = toast.loading(`${verb}…`);
+      aiInFlightRef.current = true;
       try {
         const { text } = await completeAi(ws, {
           action,
           content,
           title: titleRef.current,
         });
-        // Replace the slash token with the generated markdown.
-        slashCtx.replace(text);
         toast.dismiss(dismiss);
-      } catch {
+        // Replace the CAPTURED slash token with the generated markdown. If the
+        // captured node was detached (user deleted the block), warn rather than
+        // silently dropping the result.
+        const placed = placeResult(text);
+        if (!placed) toast.warning("Couldn't place the AI result — the text moved.");
+      } catch (err) {
         toast.dismiss(dismiss);
-        toast.warning('AI request failed');
+        // Remove the orphaned slash token (finding 213) so the editor isn't left
+        // with a stray `/draft`, consistent with the success path.
+        placeResult('');
+        const code =
+          err instanceof ApiError &&
+          err.body &&
+          typeof err.body === 'object' &&
+          'error' in err.body
+            ? (err.body as { error?: { code?: string } }).error?.code
+            : undefined;
+        if (code === 'AI_REFUSED') toast.warning('The AI declined to complete this request.');
+        else if (code === 'AI_EMPTY_RESPONSE') toast.warning('The AI returned an empty response.');
+        else toast.warning('AI request failed');
+      } finally {
+        aiInFlightRef.current = false;
       }
     },
   };

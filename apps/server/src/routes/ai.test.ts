@@ -589,4 +589,97 @@ describe('POST /api/v1/w/:wslug/ai/complete', () => {
     });
     expect(res.status).toBe(400);
   });
+
+  // done.reason handling (findings 189/466). The stream-accumulation loop must
+  // honor the terminal `done` event, not just `text` deltas: a refusal or an
+  // empty normal-stop is NOT a successful `{ text: '' }`.
+  test('model refusal (done.reason=refusal) → 422 AI_REFUSED, not an empty success', async () => {
+    streamOverride = async function* (_opts: StreamOpts): AsyncIterable<StreamEvent> {
+      // Model declined: it may emit no text, just the terminal refusal.
+      yield { type: 'done', reason: 'refusal' } as const;
+    };
+    const { app, db, seed } = await makeTestApp();
+    await seedAnthropicKey(db, 'sk-test-key');
+    const res = await app.request(`/api/v1/w/${seed.workspace.slug}/ai/complete`, {
+      method: 'POST',
+      headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'draft', content: 'do something disallowed' }),
+    });
+    expect(res.status).toBe(422);
+    const body = await res.json();
+    expect(body.error.code).toBe('AI_REFUSED');
+    streamOverride = undefined;
+  });
+
+  test('refusal wins even if some partial text was emitted before the refusal', async () => {
+    streamOverride = async function* (_opts: StreamOpts): AsyncIterable<StreamEvent> {
+      yield { type: 'text', delta: 'I cannot' } as const;
+      yield { type: 'done', reason: 'refusal' } as const;
+    };
+    const { app, db, seed } = await makeTestApp();
+    await seedAnthropicKey(db, 'sk-test-key');
+    const res = await app.request(`/api/v1/w/${seed.workspace.slug}/ai/complete`, {
+      method: 'POST',
+      headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'draft', content: 'x' }),
+    });
+    expect(res.status).toBe(422);
+    const body = await res.json();
+    expect(body.error.code).toBe('AI_REFUSED');
+    streamOverride = undefined;
+  });
+
+  test('empty text on a normal stop → 422 AI_EMPTY_RESPONSE, not an empty success', async () => {
+    streamOverride = async function* (_opts: StreamOpts): AsyncIterable<StreamEvent> {
+      // Normal stop but the model produced nothing usable.
+      yield { type: 'done', reason: 'stop' } as const;
+    };
+    const { app, db, seed } = await makeTestApp();
+    await seedAnthropicKey(db, 'sk-test-key');
+    const res = await app.request(`/api/v1/w/${seed.workspace.slug}/ai/complete`, {
+      method: 'POST',
+      headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'summarize', content: 'x' }),
+    });
+    expect(res.status).toBe(422);
+    const body = await res.json();
+    expect(body.error.code).toBe('AI_EMPTY_RESPONSE');
+    streamOverride = undefined;
+  });
+
+  test('whitespace-only text on a normal stop → 422 AI_EMPTY_RESPONSE', async () => {
+    streamOverride = async function* (_opts: StreamOpts): AsyncIterable<StreamEvent> {
+      yield { type: 'text', delta: '   \n  ' } as const;
+      yield { type: 'done', reason: 'stop' } as const;
+    };
+    const { app, db, seed } = await makeTestApp();
+    await seedAnthropicKey(db, 'sk-test-key');
+    const res = await app.request(`/api/v1/w/${seed.workspace.slug}/ai/complete`, {
+      method: 'POST',
+      headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'summarize', content: 'x' }),
+    });
+    expect(res.status).toBe(422);
+    const body = await res.json();
+    expect(body.error.code).toBe('AI_EMPTY_RESPONSE');
+    streamOverride = undefined;
+  });
+
+  test('truncation (done.reason=max_tokens) returns the partial text with 200 — a draft is still useful', async () => {
+    streamOverride = async function* (_opts: StreamOpts): AsyncIterable<StreamEvent> {
+      yield { type: 'text', delta: 'A long draft that got cut' } as const;
+      yield { type: 'done', reason: 'max_tokens' } as const;
+    };
+    const { app, db, seed } = await makeTestApp();
+    await seedAnthropicKey(db, 'sk-test-key');
+    const res = await app.request(`/api/v1/w/${seed.workspace.slug}/ai/complete`, {
+      method: 'POST',
+      headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'draft', content: 'x' }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.data.text).toBe('A long draft that got cut');
+    streamOverride = undefined;
+  });
 });
