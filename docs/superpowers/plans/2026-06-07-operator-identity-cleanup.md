@@ -5,7 +5,7 @@
 **Goal:** Collapse two pieces of operator-identity debt — the operator's synthetic FK-shaped `agentId` sentinel (finding #8) and the silent-omission `eventActor` default (finding #7) — into structural shapes where the class of bug cannot recur.
 
 **Architecture:** Two independent refactors of the Folio server authority/event surfaces, executed as two review clusters.
-- **Finding #8 (Shape B):** The operator's ephemeral conversation token stops carrying `OPERATOR_AGENT_ID` in `token.agentId`; it gets `agentId: null` instead. The operator is re-discriminated from a human PAT by the EXISTING `isOperatorToken(token)` marker (`workspaceId === null && createdBy === null`). A new `isAgentBound(token)` helper (`token.agentId !== null || isOperatorToken(token)`) replaces every `if (token.agentId)` agent-vs-human branch. `resolveAgentDocForToken` / `resolveCallingAgent` check `isOperatorToken` first. The `OPERATOR_AGENT_ID` FK-shaped sentinel is deleted; the `dispatchAsCaller` null-hack disappears.
+- **Finding #8 (Shape B′ — CORRECTED 2026-06-07, see the correction block at Cluster 2):** The operator's ephemeral conversation token stops carrying `OPERATOR_AGENT_ID` in `token.agentId`; it gets `agentId: null` PLUS an explicit `isOperator: true` marker on the in-memory token (a superset type, NOT a DB column → structurally un-persistable → stronger anti-impersonation than the sentinel). A new `isAgentBound(token)` helper (`token.agentId !== null || token.isOperator === true`) replaces every `if (token.agentId)` agent-vs-human branch. `resolveAgentDocForToken` / `resolveCallingAgent` check `token.isOperator` first. The `OPERATOR_AGENT_ID` FK-shaped sentinel is deleted; the `dispatchAsCaller` null-hack disappears. **`createdBy` stays the caller (UNTOUCHED — load-bearing for FK-787 / serviceActor / invariant 15).**
 - **Finding #7:** `eventActor?: string` → `eventActor: string` (required) on `create/update/deleteDocument`. Omission becomes a compile error, not a silent autonomy-gate disable. The FK-actor (`serviceActor`) split is untouched.
 
 These close the documented residuals on ARCHITECTURE-INVARIANTS.md invariants 13 (operator sentinel resolution) and 15 (eventActor default).
@@ -38,7 +38,9 @@ These close the documented residuals on ARCHITECTURE-INVARIANTS.md invariants 13
 - 6 caller sites in `agent-tools-registry.ts`: `:911`, `:1004`, `:1054`, `:1520`, `:1597`, `:1650` (all pass `eventActor: ctx.actor`).
 - HTTP/human-MCP callers that DON'T currently pass eventActor (rely on the `?? user.id` default) — these become compile errors and must be made explicit. **Task 1's first step is to grep them ALL.**
 
-**Marker helper (already exists, REUSED):** `apps/server/src/lib/token-reach.ts:25` — `isOperatorToken(token) = token.workspaceId === null && token.createdBy === null`. Verified: the ONLY token with this shape is the operator conversation token (`conversation-runs.ts:193-201`). A human instance PAT goes through `mintToken` which always stamps `createdBy` (token-reach.ts:113), so it is never `isOperatorToken`. The helper is currently used only at `routes/workspaces.ts:120`.
+**Marker (CORRECTED 2026-06-07 — my original premise was FALSE):** I originally planned to reuse `isOperatorToken(token) = ws===null && createdBy===null`. **That is wrong:** the operator conversation token is minted with `createdBy: callerUserId` (NON-null — `conversation-runs.ts:203`, the caller is the conversation owner; it's load-bearing for the operator's FK-valid write actor via `serviceActor`). So `isOperatorToken` is FALSE for the operator, and once its `agentId` is nulled the operator token becomes field-identical to a human instance PAT (`{ws:null, agentId:null, createdBy:<user>}`) — `isOperatorToken` cannot discriminate them. Caught by the Task-6 implementer via Step 2.5 (5 failing tests + the explicit RCA comment at `agent-tools.test.ts:2138`). **CORRECT marker = a NEW explicit `isOperator: true` field on the operator's in-memory ephemeral token** (`createConversationRun` only). It is NOT a `api_tokens` column, so a persisted/forged token cannot carry it — a STRONGER anti-impersonation guarantee than the FK-sentinel had. `isOperatorToken` (the createdBy-based helper) is UNRELATED and stays as-is (workspace-create owner resolution).
+
+**`dispatchAsCaller` round-trip semantics (verified — important):** when the operator calls `folio_api`, `dispatchAsCaller` persists a NEW token from `caller` and the operator re-enters via bearer auth. That round-tripped token is a real DB row → it CANNOT carry `isOperator` (not a column) → post-round-trip the operator is treated as a human-shaped token bounded by the copied `scopes`/`projectIds` clamp. **This is the EXISTING, reviewed behavior** (the operator's `folio_api` calls were already `agentId:null`-nulled and human-clamped — see the comment at `folio-api-tool.ts:202-209`). So the `isOperator` marker is needed ONLY on the direct (native-tool) path, NOT across `dispatchAsCaller`. Nothing regresses: the marker scopes operator privilege to the in-process ephemeral token (correct), and the round-trip clamp is unchanged.
 
 ---
 
@@ -241,66 +243,109 @@ Expected: ZERO matches (all required now).
 
 ---
 
-## ── CLUSTER 2: Finding #8 — Shape B (operator agentId → null + marker) ──
+## ── CLUSTER 2: Finding #8 — Shape B′ (operator agentId → null + explicit isOperator marker) ──
 
+> **PLAN-CORRECTION 2026-06-07 (Step 2.5):** the original Cluster 2 keyed the operator off `isOperatorToken` (createdBy-based). That is FALSE — the operator token's `createdBy` is the caller (non-null), so `isOperatorToken` can't discriminate it from a human instance PAT once `agentId` is null. See the corrected "Marker" + "dispatchAsCaller round-trip" notes in the ground-truth surface above. The fix: an explicit `isOperator: true` field on the operator's in-memory ephemeral token. Tasks 4.5–9 below are the CORRECTED versions. **Task 5 was already committed (`7d7a541`) with the WRONG `isOperatorToken`-based body — Task 5 below now FIXES it to use `token.isOperator`.**
+>
 > This is the subtler cluster (authority branches). Each task is one site; the Sibling-site audit (Task 8b) is mandatory before the mint flip ships. STOP-AND-REVIEW after Task 8b.
 
-### Task 5: Add the `isAgentBound` helper (RED-first)
+### Task 4.5: Define the `EphemeralToken` superset type + `isOperator` marker (NEW — do FIRST)
 
 **Files:**
-- Modify: `apps/server/src/lib/token-reach.ts` (add `isAgentBound`)
-- Test: `apps/server/src/lib/token-reach.test.ts`
+- Modify: `apps/server/src/db/schema.ts` (export an `EphemeralToken` type next to `ApiToken`) OR a small types module if schema.ts shouldn't carry it — prefer schema.ts since `ApiToken` lives there.
+- Test: type-level (tsc) — no runtime test needed (Tier B, a type definition).
 
-- [ ] **Step 1: Write the failing test.**
+- [ ] **Step 1:** After `export type ApiToken = typeof apiTokens.$inferSelect;` (schema.ts:622), add:
+
+```typescript
+/**
+ * The operator's IN-MEMORY ephemeral token carries an `isOperator` marker that is
+ * NOT an `api_tokens` column — so it can NEVER be persisted or forged by a DB row
+ * (stronger anti-impersonation than the old FK-shaped `OPERATOR_AGENT_ID` sentinel,
+ * which had to be nulled before persist). Set ONCE, in `createConversationRun`.
+ * Every other token (human PAT, workspace agent, the dispatchAsCaller mint) omits
+ * it (⟹ undefined ⟹ not the operator). The field is OPTIONAL so the wide existing
+ * `ApiToken` param surface compiles unchanged; only the operator-discriminating
+ * sites read it.
+ */
+export type EphemeralToken = ApiToken & { isOperator?: true };
+```
+
+- [ ] **Step 2:** Run `cd apps/server && bun x tsc --noEmit` — clean (additive type, no consumer yet).
+
+- [ ] **Step 3: Commit.**
+
+```bash
+git add apps/server/src/db/schema.ts
+git commit -m "phase-op: add EphemeralToken type with non-persistable isOperator marker"
+```
+
+> Test-evidence: Tier B (type definition only). `no unit test: Tier B, a type alias — tsc is the gate`.
+
+### Task 5 (CORRECTED): Fix `isAgentBound` to key on `token.isOperator` (RED-first)
+
+**Files:**
+- Modify: `apps/server/src/lib/token-reach.ts` (the `isAgentBound` committed in `7d7a541` — change its body + signature)
+- Test: `apps/server/src/lib/token-reach.test.ts` (the tests from `7d7a541` — the `createdBy: null`-operator test must be REWRITTEN to the real operator shape)
+
+- [ ] **Step 1: Rewrite the failing tests** for the REAL operator shape (the `7d7a541` test asserted `{agentId:null, ws:null, createdBy:null}` → that's a human-instance-PAT shape under the correction, NOT the operator). Correct tests:
 
 ```typescript
 import { isAgentBound } from './token-reach.ts';
-test('isAgentBound: operator token (ws null, createdBy null, agentId null) is agent-bound', () => {
-  expect(isAgentBound({ agentId: null, workspaceId: null, createdBy: null })).toBe(true);
+// operator = the explicit marker, createdBy is the CALLER (non-null)
+test('isAgentBound: operator ephemeral token (isOperator:true, agentId null, createdBy=caller) is agent-bound', () => {
+  expect(isAgentBound({ agentId: null, isOperator: true, workspaceId: null, createdBy: 'caller-1' })).toBe(true);
 });
-test('isAgentBound: human instance PAT (createdBy set) is NOT agent-bound', () => {
+test('isAgentBound: human instance PAT (agentId null, NO isOperator, createdBy set) is NOT agent-bound', () => {
   expect(isAgentBound({ agentId: null, workspaceId: null, createdBy: 'user-123' })).toBe(false);
+});
+test('isAgentBound: human workspace PAT (agentId null, ws set, createdBy set) is NOT agent-bound', () => {
+  expect(isAgentBound({ agentId: null, workspaceId: 'ws-1', createdBy: 'user-1' })).toBe(false);
 });
 test('isAgentBound: workspace agent token (agentId UUID) is agent-bound', () => {
   expect(isAgentBound({ agentId: 'doc-uuid', workspaceId: 'ws-1', createdBy: 'user-1' })).toBe(true);
 });
 ```
 
-- [ ] **Step 2: Run to confirm FAIL** (`isAgentBound` not exported).
+- [ ] **Step 2: Run to confirm FAIL** — the `7d7a541` body is `agentId !== null || isOperatorToken(token)`; for the operator (`isOperator:true, createdBy:'caller-1'`) `isOperatorToken` is FALSE → returns false → the first test FAILS. That's your RED.
 
-```bash
-cd apps/server && bun test src/lib/token-reach.test.ts
-```
-Expected: FAIL — `isAgentBound is not a function`.
-
-- [ ] **Step 3: Implement.**
+- [ ] **Step 3: Implement the corrected body** in `token-reach.ts`:
 
 ```typescript
 /**
- * True iff this token acts as an AGENT (its own allow-list/identity governs),
- * vs a human PAT (the human's grants govern). The operator is agent-bound but
- * carries NO agentId (it is a code singleton; its conversation token has
- * agentId null) — it is identified by isOperatorToken. A human instance PAT has
- * createdBy set, so it is NOT agent-bound. THE single discriminator for every
- * "agent path vs human path" branch (replaces scattered `if (token.agentId)`).
+ * True iff this token acts as an AGENT (its own allow-list/identity governs the
+ * authority decision), vs a human PAT (the human creator's grants govern). The
+ * operator is agent-bound but carries NO agentId (Shape B′: no FK sentinel) — it
+ * is identified by the explicit `isOperator` marker on its ephemeral token
+ * (createConversationRun only; NOT a DB column). A human PAT has no marker, so it
+ * is NOT agent-bound. THE single discriminator for every "agent path vs human
+ * path" branch — replacing scattered `if (token.agentId)` checks, which
+ * mis-classify the operator once its agentId is null.
+ * NOTE: keyed on `isOperator`, NOT `isOperatorToken` (the createdBy-based helper)
+ * — the operator's createdBy is the CALLER (non-null), so isOperatorToken is false
+ * for it. The two are unrelated.
  */
 export function isAgentBound(
-  token: Pick<ApiToken, 'agentId' | 'workspaceId' | 'createdBy'>,
+  token: Pick<EphemeralToken, 'agentId' | 'isOperator'>,
 ): boolean {
-  return token.agentId !== null || isOperatorToken(token);
+  return token.agentId !== null || token.isOperator === true;
 }
 ```
+Import `EphemeralToken` from `../db/schema.ts`. Remove the now-unused dependence on `isOperatorToken` inside `isAgentBound` (keep `isOperatorToken` itself — other code uses it).
 
-- [ ] **Step 4: Run to confirm PASS.**
+- [ ] **Step 4: Run to confirm PASS** + tsc + full suite.
 
 ```bash
-cd apps/server && bun test src/lib/token-reach.test.ts
+cd apps/server && bun test src/lib/token-reach.test.ts && bun x tsc --noEmit
 ```
 
 - [ ] **Step 5: Commit.**
 
 ```bash
-git add -A && git commit -m "phase-op: add isAgentBound helper (operator = agent-bound via isOperatorToken)"
+git add apps/server/src/lib/token-reach.ts apps/server/src/lib/token-reach.test.ts
+git commit -m "phase-op: fix isAgentBound to key on explicit isOperator marker (not createdBy-based isOperatorToken)
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 ```
 
 ### Task 6: `resolveAgentDocForToken` + `resolveCallingAgent` resolve the operator via `isOperatorToken` (RED-first)
@@ -310,28 +355,28 @@ git add -A && git commit -m "phase-op: add isAgentBound helper (operator = agent
 - Modify: `apps/server/src/lib/agent-guards.ts:35-41` (`resolveCallingAgent`)
 - Test: `apps/server/src/lib/agent-tools.test.ts` (or the resolver's existing test) + `agent-guards` test
 
-- [ ] **Step 1: Write the failing tests.** Operator token (ws null, createdBy null, **agentId null**) → `getOperatorDocument()` (slug `_operator`), no DB read. A human PAT (createdBy set, agentId null) → does NOT return the operator doc. A real agent UUID → its row. A missing agent UUID → throws `agent_missing`.
+- [ ] **Step 1: Write the failing tests.** Operator ephemeral token (**`isOperator: true`, agentId null, createdBy = caller**) → `getOperatorDocument()` (slug `_operator`), no DB read. A human PAT (createdBy set, NO marker, agentId null) → does NOT return the operator doc. A real agent UUID → its row. A missing agent UUID → throws `agent_missing`. (Reuse the existing `operatorToken()` fixture in `agent-tools.test.ts:2140` as the template, but ADD `isOperator: true` and DROP the sentinel `agentId` — i.e. build the Task-8 future shape explicitly so this resolver test is independent of the mint flip.)
 
 ```typescript
-test('resolveAgentDocForToken: operator token (agentId null) resolves the operator singleton', async () => {
-  const doc = await resolveAgentDocForToken({ agentId: null, workspaceId: null, createdBy: null, /* ...rest ApiToken... */ } as ApiToken);
+test('resolveAgentDocForToken: operator ephemeral token (isOperator marker) resolves the operator singleton', async () => {
+  const doc = await resolveAgentDocForToken({ agentId: null, isOperator: true, workspaceId: null, createdBy: 'caller-1', /* ...rest ApiToken... */ } as EphemeralToken);
   expect(doc.slug).toBe('_operator');
 });
-test('resolveAgentDocForToken: human PAT (agentId null, createdBy set) is NOT the operator', async () => {
+test('resolveAgentDocForToken: human PAT (agentId null, NO marker, createdBy set) is NOT the operator', async () => {
   // a human PAT should never reach resolveAgentDocForToken for an agent doc — but if it does, it must not be the operator
-  await expect(resolveAgentDocForToken({ agentId: null, workspaceId: null, createdBy: 'u1', /* ... */ } as ApiToken))
-    .rejects.toThrow(/agent/i); // agentId null + not operator → no agent doc
+  await expect(resolveAgentDocForToken({ agentId: null, workspaceId: null, createdBy: 'u1', /* ... */ } as EphemeralToken))
+    .rejects.toThrow(/not agent-bound|agent/i); // agentId null + no marker → not_agent_bound
 });
 ```
 
-- [ ] **Step 2: Run to confirm FAIL** (current code checks `=== OPERATOR_AGENT_ID`, so an `agentId: null` operator token currently falls to `findFirst({id: null})` → miss → `agent_missing`; the operator test FAILS).
+- [ ] **Step 2: Run to confirm FAIL** (current code checks `=== OPERATOR_AGENT_ID`; a token with `isOperator:true` but `agentId:null` falls to `findFirst({id: null})` → miss → `agent_missing`; the operator test FAILS until you key on `token.isOperator`).
 
-- [ ] **Step 3: Implement — check `isOperatorToken` first in BOTH twins.**
+- [ ] **Step 3: Implement — check `token.isOperator` first in BOTH twins** (CORRECTED — the marker, NOT `isOperatorToken`). NOTE: the param type widens to `EphemeralToken` (so `.isOperator` is readable). `ApiToken` is assignable to `EphemeralToken` (the marker is optional), so existing callers passing an `ApiToken` still compile.
 
 `resolveAgentDocForToken` (registry):
 ```typescript
-async function resolveAgentDocForToken(token: ApiToken): Promise<Document> {
-  if (isOperatorToken(token)) return getOperatorDocument();
+async function resolveAgentDocForToken(token: EphemeralToken): Promise<Document> {
+  if (token.isOperator) return getOperatorDocument();
   if (!token.agentId) {
     throw mcpInvalidParams('token is not agent-bound', { reason: 'not_agent_bound' });
   }
@@ -345,8 +390,8 @@ async function resolveAgentDocForToken(token: ApiToken): Promise<Document> {
 
 `resolveCallingAgent` (agent-guards, cycle-bound twin):
 ```typescript
-async function resolveCallingAgent(token: ApiToken): Promise<Document | undefined> {
-  if (isOperatorToken(token)) return getOperatorDocument();
+async function resolveCallingAgent(token: EphemeralToken): Promise<Document | undefined> {
+  if (token.isOperator) return getOperatorDocument();
   if (!token.agentId) return undefined; // not agent-bound — guards fail-closed
   return db.query.documents.findFirst({
     where: and(eq(documents.id, token.agentId), eq(documents.type, 'agent')),
@@ -354,7 +399,7 @@ async function resolveCallingAgent(token: ApiToken): Promise<Document | undefine
 }
 ```
 
-Import `isOperatorToken` from `token-reach.ts` in both files. Update each function's doc comment to the new resolution rule (invariant 13).
+Import `EphemeralToken` from `../db/schema.ts` in both files. Update each function's doc comment to the new resolution rule (invariant 13): operator resolved via the `isOperator` marker, NOT an FK sentinel; un-forgeable because `isOperator` is not a column (a persisted token can't carry it). Keep the `OPERATOR_AGENT_ID` import ONLY if still referenced (it isn't, after this — remove it if tsc/biome flags it; the sentinel is fully retired in Task 9). CAUTION: the operator token at this point STILL has the sentinel agentId (mint flips in Task 8), but it does NOT yet have `isOperator: true` (that's also Task 8) — so the RED test in Step 1 must construct a token with `isOperator: true` explicitly to prove the resolver path; the live operator becomes correct only after Task 8 stamps the marker. To avoid an inter-task gap where the operator resolves wrong, **Task 8 (mint flip + marker stamp) must land before any operator run is exercised end-to-end** — the cluster's tests use explicit `isOperator:true` tokens until then.
 
 - [ ] **Step 4: Run the resolver tests + the agent-guards tests to confirm PASS.**
 
@@ -380,7 +425,7 @@ git add -A && git commit -m "phase-op: resolve operator via isOperatorToken, not
 
 - [ ] **Step 3: Implement — replace `if (token.agentId)` / `if (!token.agentId)` with `isAgentBound(token)` at the 4 sites.**
 
-  - `:188` `humanPatProjectCeiling`: `if (isAgentBound(token)) return null;` (drop the now-redundant `!token.createdBy` operator special-case OR keep it — VERIFY both give `null` for the operator; prefer the single `isAgentBound` line + a comment).
+  - `:188-189` `humanPatProjectCeiling`: VERIFIED current code is `if (token.agentId) return null; // agent-bound` then `if (!token.createdBy) return null; // system-origin (operator): no human narrowing`. The line-189 comment "(operator)" is STALE/misleading — the operator's `createdBy` is the caller (non-null), so the operator NEVER matched line 189; it matched line 188 via the truthy sentinel. Under B′ the operator's agentId is null, so it would fall PAST both lines to `visibleProjectIds(caller)` — which is incidentally caller-correct but ACCIDENTAL. Make it deliberate: change line 188 to `if (isAgentBound(token)) return null; // agent-bound (incl. operator via isOperator marker): agent allow-list / caller-clamp governs, not this`. KEEP line 189 `if (!token.createdBy) return null;` but FIX its comment to its real meaning (a createdBy-null token = a genuinely owner-less token, defensive — NOT the operator, whose createdBy is the caller). VERIFY: operator (marker) returns at the new line 188; a real project-only human invitee (no marker, createdBy set) still reaches `visibleProjectIds`.
   - `:239` `resolveProjectInWorkspace`: `if (isAgentBound(token)) { ...allow-list (resolveAgentDocForToken) ... } else if (token.createdBy && ...) { ...human invitee... }`.
   - `:277` `resolveAuthorContextForToken`: `if (isAgentBound(token)) { const agent = await resolveAgentDocForToken(token); return { type: 'agent', agentSlug: agent.slug, agentId: token.agentId ?? agent.id }; }` — NOTE: `agentId` field on the author context was `token.agentId`; for the operator that's now null, so fall back to `agent.id` (the synthetic display id) to keep the field populated. VERIFY consumers of `AuthorContext.agentId` tolerate the operator's display id (grep them).
   - `:352` `resolveAgentAllowListForToken`: `if (!isAgentBound(token)) return null;` then resolve doc → `['*']` → `null`.
@@ -393,23 +438,23 @@ git add -A && git commit -m "phase-op: resolve operator via isOperatorToken, not
 git add -A && git commit -m "phase-op: route agent-vs-human branches through isAgentBound (operator agentId null)"
 ```
 
-### Task 8: Flip the mint to `agentId: null` + delete the `dispatchAsCaller` null-hack
+### Task 8: Flip the mint to `agentId: null` + stamp `isOperator: true` + delete the `dispatchAsCaller` null-hack
 
 **Files:**
-- Modify: `apps/server/src/services/conversation-runs.ts:201` (mint)
+- Modify: `apps/server/src/services/conversation-runs.ts:191-206` (mint — null agentId, ADD `isOperator: true`, type the local as `EphemeralToken`)
 - Modify: `apps/server/src/lib/folio-api-tool.ts:210-218` (delete the `=== OPERATOR_AGENT_ID ? null` hack)
 - Test: `conversation-runs.test.ts` + `folio-api-tool.test.ts`
 
 - [ ] **Step 1: Write the failing tests.**
-  - `createConversationRun` → the minted token has `agentId === null` AND `isOperatorToken(token) === true`.
-  - `dispatchAsCaller` with the operator token persists a minted token with `agentId: null` (already true under Shape B — but now WITHOUT the conditional; assert the minted row's agentId is null and no FK error).
-  - `folio-api-tool.test.ts:5` import of `OPERATOR_AGENT_ID` is removed; update any test that asserted the nulling behavior to assert "operator token already has null agentId."
+  - `createConversationRun` → the minted token has `agentId === null` AND `isOperator === true` (the new marker). (`isOperatorToken(token)` stays FALSE — createdBy is the caller — and we do NOT assert it; that helper is unrelated.)
+  - `dispatchAsCaller` with the operator token persists a minted token with `agentId: null` and NO `isOperator` reaching the DB row (the marker is not a column; the insert object must not try to write it — confirm the persisted row is a plain human-shaped token, the existing reviewed behavior). Assert no FK error.
+  - `folio-api-tool.test.ts:5` import of `OPERATOR_AGENT_ID` is removed; update any test that asserted the `=== OPERATOR_AGENT_ID ? null` nulling to assert "operator caller already has null agentId, so the mint copies null directly."
 
-- [ ] **Step 2: Run to confirm RED** (mint still stamps the sentinel).
+- [ ] **Step 2: Run to confirm RED** (mint still stamps the sentinel + has no marker).
 
 - [ ] **Step 3: Implement.**
-  - conversation-runs.ts: `agentId: null,` (replace `OPERATOR_AGENT_ID`); update the inline comment ("operator is identified by isOperatorToken, not an agentId sentinel"). Remove the `OPERATOR_AGENT_ID` import.
-  - folio-api-tool.ts: replace `const mintedAgentId = caller.agentId === OPERATOR_AGENT_ID ? null : caller.agentId;` + `agentId: mintedAgentId,` with `agentId: caller.agentId,` (the operator's is already null). Remove the now-dead comment block + the `OPERATOR_AGENT_ID` import.
+  - conversation-runs.ts: type the local `const token: EphemeralToken = { ... }`; set `agentId: null,` (replace `OPERATOR_AGENT_ID`) and ADD `isOperator: true,`. Rewrite the inline comment: "operator is identified by the explicit `isOperator` marker (un-forgeable — not a DB column), NOT an FK-shaped agentId sentinel; `createdBy` stays the caller for the FK-valid write actor." Remove the `OPERATOR_AGENT_ID` import.
+  - folio-api-tool.ts: replace `const mintedAgentId = caller.agentId === OPERATOR_AGENT_ID ? null : caller.agentId;` + `agentId: mintedAgentId,` with `agentId: caller.agentId,` (the operator's caller.agentId is now already null from the mint flip; a real workspace agent keeps its FK). The insert object writes only DB columns, so the `isOperator` marker is naturally dropped on persist — add a one-line comment noting the operator becomes a human-clamped token across this round-trip (intended; bounded by the copied scopes/projectIds). Remove the now-dead comment block + the `OPERATOR_AGENT_ID` import.
 
 - [ ] **Step 4: Run the tests + full suite + tsc.**
 
@@ -430,12 +475,12 @@ The operator's `agentId` flips from `'operator:_operator'` (truthy) to `null`. E
 
 | Site | Old (sentinel truthy) | New (null) | Action |
 |---|---|---|---|
-| `agent-tools-registry.ts:212` | `token.agentId!` after sentinel resolved — operator never reached it (returned at :210) | operator returns at isOperatorToken check (Task 6) | ✅ unaffected — verify |
+| `agent-tools-registry.ts:212` | `token.agentId!` after sentinel resolved — operator never reached it (returned at :210) | operator returns at the `token.isOperator` check (Task 6) | ✅ unaffected — verify |
 | `agent-tools-registry.ts:536/:666/:722/:1640/:1666/:1819` | each: confirm what it does with agentId | — | AUDIT each: is it agent-vs-human, or lookup? If branch → isAgentBound; if lookup → confirm operator's null is handled |
-| `agent-guards.ts:37/:85/:167/:215/:250` | guards fail-closed on undefined doc | operator resolves at :36 (Task 6) → real doc | AUDIT: do the widening guards behave correctly with the operator's `['*']` doc? |
-| `routes/comments.ts:91/:100` | `if (token?.agentId)` | operator agentId null → takes the else | AUDIT: is the operator reachable here? (cockpit comments) — confirm the comment-author resolution still gets `_operator` |
-| `routes/workspaces.ts:261/:263` | `if (token?.agentId)` | — | AUDIT: workspace-create owner uses `isOperatorToken` (`:120`) already — confirm agentId branch isn't the operator path |
-| `trigger-matcher.ts:176` | `token.agentId === null && token.createdBy` | operator: agentId null + createdBy null → `&& token.createdBy` is false → skips | AUDIT: confirm operator isn't expected here (trigger-fired ≠ operator conversation) |
+| `agent-guards.ts:37/:85/:167/:215/:250` | guards fail-closed on undefined doc | operator resolves at :36 via `token.isOperator` (Task 6) → real doc | AUDIT: do the widening guards behave correctly with the operator's `['*']` doc? |
+| `routes/comments.ts:91/:100` | `if (token?.agentId)` | operator agentId null → takes the else (human author by createdBy=caller) | AUDIT: is the operator reachable here? (cockpit comments go via the runner's `postAgentComment`/`executeTool`, NOT this route — confirm). If reachable, the operator would be authored as the caller-human, losing the `agent:_operator` author — VERIFY the operator's comments don't flow through this route. |
+| `routes/workspaces.ts:261/:263` | `if (token?.agentId)` | — | AUDIT: workspace-create owner uses `isOperatorToken` (createdBy-based, `:120`) already — confirm the agentId branch isn't the operator path; note the operator's createdBy is the caller (so `isOperatorToken` there is FALSE for an operator conversation token — but the operator doesn't create workspaces via this route, so confirm unreachable) |
+| `trigger-matcher.ts:176` | `token.agentId === null && token.createdBy` | operator: agentId null + **createdBy = caller (non-null!)** → `&& token.createdBy` is TRUE → takes the human-PAT branch | AUDIT: confirm the operator isn't reached here (trigger-fired runs ≠ operator conversation runs). NOTE the CORRECTED createdBy: the operator's createdBy is the caller, NOT null — so any site assuming operator⟹createdBy-null is wrong. If the operator COULD reach this, it'd be mis-classified as a human PAT (which may be benign here since it's a human-owned run, but VERIFY). |
 | `mcp-errors.ts:55` | `if (!token.agentId)` | — | AUDIT: error-shaping only — confirm benign |
 
 - [ ] **Step 1:** For each row, Read the site, classify (agent-vs-human branch / pure lookup / nullable-guard), and confirm the operator's null gives the correct result. Where a row is an agent-vs-human branch missed by Task 7, route it through `isAgentBound` with a RED-first test.
@@ -465,7 +510,7 @@ Expected: only `operator.ts` (its own `getOperatorDocument().id` use, if kept). 
 
 - [ ] **Step 2: Make the change** (delete the export or demote+rename). Run tsc.
 
-- [ ] **Step 3: Rewrite invariant 13** in `ARCHITECTURE-INVARIANTS.md`: the operator is resolved via `isOperatorToken(token)` (ws-null + createdBy-null), NOT an FK-shaped agentId sentinel; the un-forgeability argument is "that token shape is minted ONLY in `createConversationRun`, never via any `POST /tokens` route (which always stamps `createdBy`)." Keep the cycle-bound-twin note (both resolvers check `isOperatorToken` first). Add a dated `*(sharpened 2026-06-07 — Shape B: sentinel removed from the FK field)*`.
+- [ ] **Step 3: Rewrite invariant 13** in `ARCHITECTURE-INVARIANTS.md`: the operator is resolved via the explicit `token.isOperator` marker on its in-memory ephemeral token (an `EphemeralToken` field, NOT a `api_tokens` column), NOT an FK-shaped agentId sentinel and NOT `isOperatorToken` (the unrelated createdBy-based helper — the operator's createdBy is the caller). The un-forgeability argument: `isOperator` is not a column, so NO persisted/forged DB token can carry it; it is set ONLY in `createConversationRun`. Keep the cycle-bound-twin note (both `resolveAgentDocForToken` + `resolveCallingAgent` check `token.isOperator` first). Note the `dispatchAsCaller` round-trip: across it the operator becomes a human-clamped persisted token (the marker can't survive a non-column) — intended + reviewed, reach preserved by the copied scopes/projectIds clamp. Add a dated `*(sharpened 2026-06-07 — Shape B′: FK sentinel removed; operator identity = the non-persistable isOperator marker)*`.
 
 - [ ] **Step 4: Update invariant 15:** the residual ("optional `eventActor` defaults to `actor.id` → a future write service that forgets it re-collapses the two") is CLOSED — `eventActor` is a REQUIRED param on `create/update/deleteDocument`, so omission is a compile error. Add `*(residual closed 2026-06-07)*`.
 
