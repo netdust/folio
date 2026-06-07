@@ -17,7 +17,6 @@ import { apiTokens, type ApiToken } from '../db/schema.ts';
 import { ADMIN_SCOPES } from './agent-schema.ts'; // CR#3: derive the C3 config floor
 import { AwaitingConfirmationError, registerTool, type ToolContext } from './agent-tools.ts';
 import { newApiToken } from './auth.ts';
-import { OPERATOR_AGENT_ID } from './operator.ts';
 import {
   getConfirmedPendingOp,
   markExecuted,
@@ -199,23 +198,19 @@ export async function dispatchAsCaller(
   const validPath = validateApiPath(path);
   const { token: plaintext, hash } = newApiToken();
   const mintedId = nanoid();
-  // The operator is a code singleton with NO `documents` row; its ephemeral token
-  // carries the synthetic agentId `operator:_operator`, which would violate the
-  // api_tokens.agent_id → documents.id FK on this persisted mint. Null it for the
-  // operator. Authority-equivalent: the operator's project reach is already clamped
-  // to agent ∩ caller upstream (createConversationRun), and the null-agentId auth
-  // path re-checks the conversation owner's grants (humanPatProjectCeiling, which
-  // names the operator case) — so reach is preserved and nothing widens. A real
-  // workspace agent keeps its agentId (a valid FK + its allow-list governs).
-  const mintedAgentId =
-    caller.agentId === OPERATOR_AGENT_ID ? null : caller.agentId;
+  // The operator's ephemeral marker token has `agentId: null` already (Shape B′);
+  // a real workspace agent has its FK agentId. The `isOperator` marker is NOT a
+  // column, so it's naturally dropped on this persist — the operator becomes a
+  // human-clamped persisted token across this round-trip (intended; bounded by
+  // the copied scopes/projectIds + the null-agentId owner-grant re-check). The
+  // agentId copies straight through with no operator-specific null-hack.
   await db.insert(apiTokens).values({
     id: mintedId,
     workspaceId: caller.workspaceId,
     name: `folio_api:${mintedId}`,
     tokenHash: hash,
     scopes: caller.scopes,
-    agentId: mintedAgentId,
+    agentId: caller.agentId,
     projectIds: caller.projectIds,
     createdBy: caller.createdBy,
   });

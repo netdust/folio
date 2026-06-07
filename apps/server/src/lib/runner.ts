@@ -30,6 +30,7 @@ import { env } from '../env.ts';
 import {
   type ApiToken,
   type Document,
+  type EphemeralToken,
   type Project,
   type Workspace,
   aiKeys,
@@ -177,7 +178,13 @@ export interface RunContext {
   agentSkills: Array<{ slug: string; body: string; trusted: boolean }>;
   workspace: Workspace;
   project: Project;
-  token: ApiToken;
+  /**
+   * Typed as `EphemeralToken` (not `ApiToken`) so the operator's `isOperator`
+   * marker is TYPE-VISIBLE on this seam — a future refactor that spreads/
+   * reconstructs the token (e.g. `{...token}`) drops the marker as a compile
+   * error rather than silently. Non-operator runs simply leave it undefined.
+   */
+  token: EphemeralToken;
   /** `agent:<slug>` — used for executeTool + createComment event actors. */
   actor: string;
   /**
@@ -535,7 +542,12 @@ export async function loadContext(runId: string): Promise<RunContext | null> {
   // token.workspaceId.
   const reach = effectiveReach(token.workspaceId, run.workspaceId);
   if (!reach.ok) return null; // token pin excludes the run's target — fail closed (return-null contract)
-  const narrowedToken = {
+  // Document-run path only — the operator never reaches loadContext (its run is
+  // conversation-backed). `token` here is a real `ApiToken` row (no `isOperator`),
+  // so this spread correctly yields `isOperator: undefined`. No defensive
+  // `isOperator: token.isOperator` is added (and couldn't be — `token` is
+  // `ApiToken`-typed here, which has no such field).
+  const narrowedToken: EphemeralToken = {
     ...token,
     workspaceId: reach.workspaceId,
     projectIds: intersectAgentProjects(agentProjectSide, callerProjectIds),

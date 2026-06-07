@@ -620,6 +620,17 @@ export type Status = typeof statuses.$inferSelect;
 export type Field = typeof fields.$inferSelect;
 export type View = typeof views.$inferSelect;
 export type ApiToken = typeof apiTokens.$inferSelect;
+/**
+ * The operator's IN-MEMORY ephemeral token carries an `isOperator` marker that is
+ * NOT an `api_tokens` column — so it can NEVER be persisted or forged by a DB row
+ * (stronger anti-impersonation than the old FK-shaped `OPERATOR_AGENT_ID` sentinel,
+ * which had to be nulled before persist). Set ONCE, in `createConversationRun`.
+ * Every other token (human PAT, workspace agent, the dispatchAsCaller mint) omits
+ * it (⟹ undefined ⟹ not the operator). The field is OPTIONAL so the wide existing
+ * `ApiToken` param surface compiles unchanged; only the operator-discriminating
+ * sites read it.
+ */
+export type EphemeralToken = ApiToken & { isOperator?: true };
 export type AiKey = typeof aiKeys.$inferSelect;
 export type InstanceSkill = typeof instanceSkills.$inferSelect;
 export type Event = typeof events.$inferSelect;

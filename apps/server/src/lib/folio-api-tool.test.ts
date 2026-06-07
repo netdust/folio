@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'bun:test';
 import { eq } from 'drizzle-orm';
+import { nanoid } from 'nanoid';
 import { db } from '../db/client.ts';
 import { apiTokens, type ApiToken, workspaces } from '../db/schema.ts';
-import { OPERATOR_AGENT_ID } from './operator.ts';
 import { makeTestApp } from '../test/harness.ts';
 import { roleToScopes } from './agent-schema.ts';
 import { executeTool } from './agent-tools.ts';
@@ -264,20 +264,22 @@ describe('dispatchAsCaller (P3-1/2/3/4)', () => {
     expect(text).not.toMatch(/folio_pat_/);
   });
 
-  // The operator is a CODE SINGLETON with no `documents` row; its ephemeral
-  // token carries the synthetic agentId `operator:_operator`. Minting a persisted
-  // api_tokens row with that agentId violates the api_tokens.agent_id →
-  // documents.id FK (errno 787). dispatchAsCaller must null the agentId for the
-  // operator (its reach is already clamped to agent ∩ caller upstream; the
-  // null-agentId authority path re-checks the owner's grants). Regression for the
-  // first-real-use FK crash on folio_api_get during a cockpit turn.
-  test('operator caller (synthetic agentId) does not violate the agent_id FK (instance reach)', async () => {
+  // Shape B′ (Task 8): the operator's ephemeral token now carries `agentId: null`
+  // already (the isOperator marker — NOT a column — identifies it; no FK-shaped
+  // sentinel). dispatchAsCaller copies caller.agentId straight through; for the
+  // operator that copy is null, so the persisted mint is FK-valid with NO special
+  // null-hack. The marker is dropped on persist (not a column), so the operator
+  // becomes a human-clamped persisted token across this round-trip (intended;
+  // bounded by the copied scopes/projectIds + the null-agentId owner-grant re-check).
+  // Regression for the first-real-use FK crash on folio_api_get during a cockpit turn.
+  test('operator caller (agentId null, Shape B′) mints an FK-valid persisted token', async () => {
     const { seed } = await makeTestApp();
+    const before = await countTokens();
     const operator = callerToken({
       workspaceId: null, // instance reach (operator is instance-wide)
       scopes: ['config:write', 'documents:read'],
       createdBy: seed.user.id,
-      agentId: OPERATOR_AGENT_ID, // synthetic — NO documents row
+      agentId: null, // Shape B′: operator carries NO FK sentinel
     });
     const res = await dispatchAsCaller(
       operator,
@@ -285,7 +287,56 @@ describe('dispatchAsCaller (P3-1/2/3/4)', () => {
       `/api/v1/w/${seed.workspace.slug}/p/${seed.project.slug}/views`,
       undefined,
     );
-    expect(res.status).toBe(200); // not a 500 from the FK crash
+    expect(res.status).toBe(200); // not a 500 from an FK crash
+    // The mint is revoked in finally → token count is back to baseline (no leak).
+    expect(await countTokens()).toBe(before);
+  });
+
+  // Shape B′ CORE SAFETY CLAIM (path 7 — marker non-persistability). The
+  // operator's authority hinges on the `isOperator` marker, which the resolvers
+  // (resolveAgentDocForToken / resolveCallingAgent) key on directly. The entire
+  // anti-impersonation argument is that this marker is UN-FORGEABLE because it is
+  // NOT an `api_tokens` column — so no persisted (or attacker-crafted) DB row can
+  // carry it, and the auth path (bearer middleware → `db.query.apiTokens.findFirst`)
+  // can never load a token that resolves as the operator. This was only ARGUED in
+  // the dispatchAsCaller docstring, never pinned. Here we PIN it: even when a row
+  // is inserted with an `isOperator` field set (mirroring an attacker who got a
+  // write into `api_tokens`), reloading it through the SAME query the auth path
+  // uses yields a token with NO `isOperator` marker. Bite: if `isOperator` were
+  // ever promoted to a real persisted column, the reload would carry it and this
+  // goes RED — the moment the marker becomes forgeable via a DB row.
+  test('the isOperator marker can NEVER survive a DB round-trip (un-forgeable via api_tokens)', async () => {
+    const { seed } = await makeTestApp();
+    const rowId = nanoid();
+    // Insert an operator-SHAPED row, attempting to smuggle the marker onto it.
+    // The values object is built with the marker and cast to the insert type:
+    // `isOperator` is NOT an api_tokens column, so the persistence layer has
+    // nowhere to put it — modeling the strongest attacker (a direct INSERT that
+    // tries to set the marker). The cast is the test's whole point: the field is
+    // structurally un-persistable.
+    const attackerRow = {
+      id: rowId,
+      workspaceId: null,
+      name: 'attacker-operator-shaped',
+      tokenHash: `hash-${rowId}`,
+      scopes: ['config:write'],
+      agentId: null,
+      projectIds: null,
+      createdBy: seed.user.id,
+      isOperator: true,
+    } as unknown as typeof apiTokens.$inferInsert;
+    await db.insert(apiTokens).values(attackerRow);
+    // Reload through the SAME query the bearer middleware uses to build the token.
+    const reloaded = await db.query.apiTokens.findFirst({
+      where: eq(apiTokens.id, rowId),
+    });
+    expect(reloaded).toBeDefined();
+    // The marker did NOT survive — a persisted row can never resolve as operator.
+    expect((reloaded as { isOperator?: unknown }).isOperator).toBeUndefined();
+    expect('isOperator' in (reloaded as object)).toBe(false);
+    // Sanity: the rest of the row is intact (we really did round-trip a row).
+    expect(reloaded!.agentId).toBeNull();
+    await db.delete(apiTokens).where(eq(apiTokens.id, rowId));
   });
 
   // The 404 self-correction discriminator: a malformed (no-route-matched) path

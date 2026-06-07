@@ -27,13 +27,23 @@ import {
 export const OPERATOR_SLUG = '_operator';
 
 /**
- * The operator's synthetic document id. The operator is a CODE SINGLETON with NO
- * `documents` row, so this id is never a real FK — it is the stable, non-colliding
- * sentinel stamped on the operator's ephemeral token (`agentId`) and returned by
- * `getOperatorDocument()`. Single source of truth: any code that needs to detect
- * "is this caller the operator?" compares against this, and any persistence path
- * (e.g. `dispatchAsCaller`'s token mint) that hits the `api_tokens.agent_id →
- * documents.id` FK MUST null it for this id rather than persist it.
+ * The operator's synthetic DOCUMENT id — the stable, non-colliding id returned by
+ * `getOperatorDocument().id`. The operator is a CODE SINGLETON with NO `documents`
+ * row, so this is never a real FK value.
+ *
+ * Shape B′ (2026-06-07): this id is NO LONGER stamped on any token. The operator's
+ * ephemeral token carries `agentId: null` + the un-forgeable `isOperator` marker
+ * (see `EphemeralToken` in schema.ts). The old FK-null-hack in `dispatchAsCaller`
+ * is gone — there is no longer a persistence path that would try to write this id.
+ *
+ * Its ONLY remaining job is author attribution: `resolveAuthorContextForToken`
+ * reads `getOperatorDocument().id` so the operator's authored comments/events get a
+ * stable, non-null author string. It is never an `api_tokens.agent_id` FK value.
+ *
+ * NAME KEPT (not renamed to OPERATOR_DOC_ID): two test files import it precisely as
+ * "the old sentinel value" to assert the FK back-door stays closed
+ * (agent-tools.test.ts, conversation-runs.test.ts) — renaming would muddy that
+ * intent. The docstring above is the source of truth on what it now means.
  */
 export const OPERATOR_AGENT_ID = `operator:${OPERATOR_SLUG}`;
 

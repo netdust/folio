@@ -34,6 +34,7 @@ import { env } from '../env.ts';
 import {
   type ApiToken,
   type Document,
+  type EphemeralToken,
   type Project,
   type TableEntity,
   type User,
@@ -46,8 +47,8 @@ import {
   workspaces,
 } from '../db/schema.ts';
 import { emitChainSuppressed } from './autonomy-gate.ts';
-import { isInstanceReach } from './token-reach.ts';
-import { OPERATOR_AGENT_ID, getOperatorDocument } from './operator.ts';
+import { isAgentBound, isInstanceReach } from './token-reach.ts';
+import { getOperatorDocument } from './operator.ts';
 import type { AgentRunFrontmatter, RunStatus } from './agent-run-schema.ts';
 import { runStatusSchema } from './agent-run-schema.ts';
 import { createRunForParent, loadRunScopedByToken } from '../routes/runs.ts';
@@ -185,8 +186,8 @@ async function humanPatProjectCeiling(
   ws: Workspace,
   token: ApiToken,
 ): Promise<Set<string> | null> {
-  if (token.agentId) return null; // agent-bound: agent allow-list governs, not this
-  if (!token.createdBy) return null; // system-origin (operator): no human narrowing
+  if (isAgentBound(token)) return null; // agent-bound (incl. operator): agent allow-list governs, not this
+  if (!token.createdBy) return null; // system-origin: no human narrowing
   if (await canManageWorkspace(db, token.createdBy, ws.id)) return null; // whole-ws human
   return visibleProjectIds(db, token.createdBy, ws.id); // project-only invitee
 }
@@ -196,20 +197,25 @@ async function humanPatProjectCeiling(
  * `token.agentId → agent doc` is decided (the convergence point three call sites
  * — project-resolve, comment-author, describe_workspace — previously open-coded).
  *
- * The OPERATOR is a code singleton: its ephemeral conversation token
- * (createConversationRun) carries `agentId = OPERATOR_AGENT_ID`, a server-set
- * constant that has NO `documents` row by design. Resolve it from
- * getOperatorDocument() rather than a DB lookup that always misses. The check is
- * on the sentinel VALUE alone (not isOperatorToken): `OPERATOR_AGENT_ID` is
- * `operator:_operator`, never a real agent's UUID, and is set server-side at mint
- * — a client cannot inject it (a persisted PAT's agent_id FK-references
- * documents.id, which this value is not, so it can't be stored). For any other
- * agentId, a missing row STILL throws `agent_missing` (the real guard, intact).
+ * The OPERATOR is a code singleton (invariant 13): its ephemeral conversation
+ * token (createConversationRun) carries the explicit, NON-persistable
+ * `isOperator: true` marker and `agentId = null` (Shape B′ — no FK sentinel).
+ * Resolve it from getOperatorDocument() rather than a DB lookup that always
+ * misses. The discriminant is the marker — un-forgeable because it is NOT a
+ * `documents`/`api_tokens` column (set only server-side at mint, never read from
+ * a persisted row), NOT the createdBy-based isOperatorToken (the operator's
+ * createdBy is the CALLER, non-null), and NOT an agentId FK sentinel. For any
+ * other token, a null agentId means "not agent-bound" (a human PAT — callers
+ * gate it out upstream); a non-null agentId whose row is missing STILL throws
+ * `agent_missing` (the real guard, intact).
  */
-async function resolveAgentDocForToken(token: ApiToken): Promise<Document> {
-  if (token.agentId === OPERATOR_AGENT_ID) return getOperatorDocument();
+async function resolveAgentDocForToken(token: EphemeralToken): Promise<Document> {
+  if (token.isOperator) return getOperatorDocument();
+  if (!token.agentId) {
+    throw mcpInvalidParams('token is not agent-bound', { reason: 'not_agent_bound' });
+  }
   const agent = await db.query.documents.findFirst({
-    where: and(eq(documents.id, token.agentId!), eq(documents.type, 'agent')),
+    where: and(eq(documents.id, token.agentId), eq(documents.type, 'agent')),
   });
   if (!agent) {
     throw mcpInvalidParams('agent for this token no longer exists', {
@@ -236,7 +242,7 @@ async function resolveProjectInWorkspace(
   // caller's project set is ALREADY folded into `token.projectIds` upstream in
   // loadContext (the central clamp), so this single intersect now enforces
   // agent ∩ token ∩ caller — no per-site caller param needed.
-  if (token.agentId) {
+  if (isAgentBound(token)) {
     const agent = await resolveAgentDocForToken(token);
     const agentProjects = resolveAgentProjects(agent);
     const effective = intersectAgentProjects(agentProjects, token.projectIds ?? null);
@@ -273,10 +279,14 @@ async function resolveProjectInWorkspace(
  * - Agent-bound token → `{ type: 'agent', agentSlug, agentId }`.
  * - Otherwise → `{ type: 'user', userId: token.createdBy }`.
  */
-async function resolveAuthorContextForToken(token: ApiToken): Promise<AuthorContext> {
-  if (token.agentId) {
+async function resolveAuthorContextForToken(token: EphemeralToken): Promise<AuthorContext> {
+  if (isAgentBound(token)) {
     const agent = await resolveAgentDocForToken(token);
-    return { type: 'agent', agentSlug: agent.slug, agentId: token.agentId };
+    // Identity comes from the RESOLVED doc, not token.agentId: the operator
+    // carries agentId=null (Shape B′) but resolves to its code-singleton id, so
+    // its comment author is attributed correctly (and authorString's "missing
+    // agentId" fail-loud never fires for it).
+    return { type: 'agent', agentSlug: agent.slug, agentId: agent.id };
   }
   if (!token.createdBy) {
     throw mcpInvalidParams('token has no owner; cannot resolve comment author', {
@@ -348,10 +358,11 @@ function serviceActor(ctx: ToolContext): User {
  * `resolveAgentAllowList` in routes/runs.ts — same `resolveAgentProjects` +
  * `intersectAgentProjects` shape.
  */
-async function resolveAgentAllowListForToken(token: ApiToken): Promise<string[] | null> {
-  if (!token.agentId) return null;
-  // Convergence point (resolveAgentDocForToken): resolves the operator sentinel
-  // to its code-singleton doc; a real-but-missing agent still throws agent_missing.
+async function resolveAgentAllowListForToken(token: EphemeralToken): Promise<string[] | null> {
+  if (!isAgentBound(token)) return null;
+  // Convergence point (resolveAgentDocForToken): resolves the operator via its
+  // isOperator marker to the code-singleton doc; a real-but-missing agent still
+  // throws agent_missing.
   const agent = await resolveAgentDocForToken(token);
   const effective = intersectAgentProjects(resolveAgentProjects(agent), token.projectIds ?? null);
   return effective.includes('*') ? null : effective;
@@ -533,7 +544,7 @@ export function registerRealTools(): void {
       const all = await db.query.projects.findMany({
         where: eq(projects.workspaceId, ws.id),
       });
-      if (!token.agentId) {
+      if (!isAgentBound(token)) {
         // Human PAT: narrow a project-only invitee to their visible projects
         // (null = whole-ws human / system-origin → unrestricted).
         const ceiling = await humanPatProjectCeiling(ws, token);
@@ -542,9 +553,10 @@ export function registerRealTools(): void {
           projects: visible.map((p) => ({ id: p.id, slug: p.slug, name: p.name })),
         });
       }
-      // Convergence point (resolveAgentDocForToken): operator → code singleton;
-      // a real-but-missing agent throws agent_missing (NOT the prior silent ['*']
-      // degrade, which would have shown a ghost-token EVERY project).
+      // Convergence point (resolveAgentDocForToken): operator → code singleton
+      // (via the isOperator marker); a real-but-missing agent throws agent_missing
+      // (NOT the prior silent ['*'] degrade, which would have shown a ghost-token
+      // EVERY project).
       const agent = await resolveAgentDocForToken(token);
       const effective = intersectAgentProjects(resolveAgentProjects(agent), token.projectIds ?? null);
       const filtered = effective.includes('*') ? all : all.filter((p) => effective.includes(p.id));
@@ -663,7 +675,7 @@ export function registerRealTools(): void {
       if (projectSlug) {
         const p = await resolveProjectInWorkspace(ws, token, args); // enforces allow-list
         projectIds = [p.id];
-      } else if (!token.agentId) {
+      } else if (!isAgentBound(token)) {
         // Human PAT: a project-only invitee sees only their granted projects.
         const ceiling = await humanPatProjectCeiling(ws, token);
         projectIds =
@@ -719,11 +731,11 @@ export function registerRealTools(): void {
       const all = await db.query.projects.findMany({ where: eq(projects.workspaceId, ws.id) });
 
       let visible = all;
-      if (token.agentId) {
-        // Convergence point (resolveAgentDocForToken): the operator resolves to
-        // its code-singleton doc (projects ['*']); a real-but-missing agent throws
-        // agent_missing — instead of the prior silent `: ['*']` degrade that would
-        // have shown a ghost-token EVERY project.
+      if (isAgentBound(token)) {
+        // Convergence point (resolveAgentDocForToken): the operator resolves (via
+        // its isOperator marker) to its code-singleton doc (projects ['*']); a
+        // real-but-missing agent throws agent_missing — instead of the prior silent
+        // `: ['*']` degrade that would have shown a ghost-token EVERY project.
         const agent = await resolveAgentDocForToken(token);
         const agentProjects = resolveAgentProjects(agent);
         const effective = intersectAgentProjects(agentProjects, token.projectIds ?? null);
@@ -1637,6 +1649,7 @@ export function registerRealTools(): void {
       // Self-delete guard: kept inline (not `assertNotSelfDelete`) because the
       // HTTP and MCP layers throw different error shapes — HTTPError vs
       // mcpInvalidParams — and the helper hardcodes HTTPError.
+      // operator (agentId null) bypasses this — intentional + unreachable: the operator is a code singleton with no documents row, so it can never resolve its own doc to self-target.
       if (token.agentId && existing.id === token.agentId) {
         throw mcpInvalidParams('agent cannot delete itself via MCP', {
           reason: 'cannot_delete_self',
@@ -1663,7 +1676,7 @@ export function registerRealTools(): void {
     schema: z.object({}).strict(),
     handler: async (_args, ctx) => {
       const { token } = ctx;
-      if (!token.agentId) {
+      if (!isAgentBound(token)) {
         throw mcpInvalidParams('get_agent_self requires an agent-bound token', {
           reason: 'no_agent_bound_to_token',
         });
@@ -1815,8 +1828,11 @@ export function registerRealTools(): void {
 
       // 2. Autonomy gate (mit 54) — an agent-bound bearer create is an
       //    agent-ORIGINATED chain hop; gate behind FOLIO_AGENT_CHAINS_ENABLED.
-      //    Human PATs (agentId null) are always allowed.
-      const agentOriginated = !!token.agentId;
+      //    Human PATs (not agent-bound) are always allowed. The operator is
+      //    agent-bound via its isOperator marker (agentId null under Shape B′),
+      //    so isAgentBound — not token.agentId — keeps an operator-spawned hop
+      //    gated (token.agentId would mis-classify it as a human PAT and bypass).
+      const agentOriginated = isAgentBound(token);
       if (agentOriginated && !env.FOLIO_AGENT_CHAINS_ENABLED) {
         await emitChainSuppressed(db, {
           workspaceId: ws.id,
@@ -2020,8 +2036,11 @@ export function registerRealTools(): void {
       // Autonomy gate (mit 54) — a retry SPAWNS a fresh planning run, so an
       // agent-bound bearer retry is an agent-ORIGINATED chain hop and must be
       // gated identically to run_agent. Without this, an agent could retry a run
-      // in its allow-list with chains OFF and bypass the gate (Finding 2).
-      if (token.agentId && !env.FOLIO_AGENT_CHAINS_ENABLED) {
+      // in its allow-list with chains OFF and bypass the gate (Finding 2). Keyed
+      // on isAgentBound (not token.agentId) so an operator retry — agent-bound via
+      // its marker, agentId null under Shape B′ — stays gated, not mis-classified
+      // as a human PAT.
+      if (isAgentBound(token) && !env.FOLIO_AGENT_CHAINS_ENABLED) {
         await emitChainSuppressed(db, {
           workspaceId: ws.id,
           projectId: parent.projectId ?? null,

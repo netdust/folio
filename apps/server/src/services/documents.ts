@@ -480,11 +480,19 @@ export interface CreateDocumentArgs {
   table: TableEntity | null;
   actor: User;
   /**
-   * EVENT actor string when it must differ from the FK-write actor (`actor.id`).
-   * See UpdateDocumentArgs.eventActor — preserves the agent-chain autonomy gate
-   * for agent/operator writes. Defaults to `actor.id`.
+   * The EVENT actor string. See UpdateDocumentArgs.eventActor — preserves the
+   * agent-chain autonomy gate for agent/operator writes (FK write → `actor.id`,
+   * event actor → `agent:<slug>`).
+   *
+   * REQUIRED (was optional with a `?? actor.id` default). Omission would
+   * silently re-collapse the FK-actor/event-actor split and disable the
+   * autonomy gate for an agent write — a caller that forgot it would make an
+   * AGENT create emit a HUMAN-actored event. Making it required turns omission
+   * into a tsc compile error so the choice is always explicit at the call site.
+   * Human-MCP/HTTP callers pass `actor.id`; agent callers pass `agent:<slug>`.
+   * Invariant 15 (ARCHITECTURE-INVARIANTS.md).
    */
-  eventActor?: string;
+  eventActor: string;
   /** The bearer token for the request, or null for session-auth. Used by delegation guard. */
   token: ApiToken | null;
   /**
@@ -506,7 +514,7 @@ export async function createDocument(
   args: CreateDocumentArgs,
 ): Promise<CreateDocumentResult> {
   const { workspace: ws, project: p, actor: user, token } = args;
-  const eventActor = args.eventActor ?? user.id;
+  const eventActor = args.eventActor;
   const input: CreateDocumentInput = {
     ...args.input,
     frontmatter: stripReservedFrontmatter(args.input.frontmatter ?? {}),
@@ -783,13 +791,20 @@ export interface UpdateDocumentArgs {
   fallbackTable: TableEntity | null;
   actor: User;
   /**
-   * The EVENT actor string, when it must differ from the FK-write actor
-   * (`actor.id`). For an agent/operator run the FK write goes to the real human
-   * (`actor.id`, an FK-valid users.id) while the event actor stays the agent slug
-   * `agent:<slug>` so the agent-chain autonomy gate (isAgentOriginated) is
-   * preserved. Defaults to `actor.id` (human-MCP path — actor IS the user).
+   * The EVENT actor string. For an agent/operator run the FK write goes to the
+   * real human (`actor.id`, an FK-valid users.id) while the event actor stays
+   * the agent slug `agent:<slug>` so the agent-chain autonomy gate
+   * (isAgentOriginated) is preserved.
+   *
+   * REQUIRED (was optional with a `?? actor.id` default). Omission would
+   * silently re-collapse the FK-actor/event-actor split and disable the
+   * autonomy gate for an agent write — a caller that forgot it would make an
+   * AGENT write emit a HUMAN-actored event. Making it required turns omission
+   * into a tsc compile error so the choice is always explicit at the call site.
+   * Human-MCP/HTTP callers pass `actor.id`; agent callers pass `agent:<slug>`.
+   * Invariant 15 (ARCHITECTURE-INVARIANTS.md).
    */
-  eventActor?: string;
+  eventActor: string;
   existing: Document;
   patch: DocumentPatch;
 }
@@ -830,7 +845,7 @@ export async function updateDocument(
   args: UpdateDocumentArgs,
 ): Promise<Document> {
   const { workspace: ws, project: p, actor: user, existing, patch } = args;
-  const eventActor = args.eventActor ?? user.id;
+  const eventActor = args.eventActor;
 
   // G5 — comments must be mutated through update_comment (services/comments.ts),
   // which enforces author-only, kind-immutable, edited_at, and soft-delete
@@ -1072,18 +1087,25 @@ export interface DeleteDocumentArgs {
   project: Project | null;
   actor: User;
   /**
-   * EVENT actor string when it must differ from `actor.id` — keeps the agent
-   * slug as the `document.deleted` event actor (autonomy gate). Defaults to
-   * `actor.id`. (delete writes no FK column, but symmetry keeps suppression
-   * consistent across create/update/delete.)
+   * The EVENT actor string — keeps the agent slug as the `document.deleted`
+   * event actor (autonomy gate). Delete writes no FK column, but the symmetry
+   * keeps suppression consistent across create/update/delete.
+   *
+   * REQUIRED (was optional with a `?? actor.id` default). Omission would
+   * silently re-collapse the FK-actor/event-actor split and disable the
+   * autonomy gate for an agent delete — a caller that forgot it would make an
+   * AGENT delete emit a HUMAN-actored event. Making it required turns omission
+   * into a tsc compile error so the choice is always explicit at the call site.
+   * Human-MCP/HTTP callers pass `actor.id`; agent callers pass `agent:<slug>`.
+   * Invariant 15 (ARCHITECTURE-INVARIANTS.md).
    */
-  eventActor?: string;
+  eventActor: string;
   existing: Document;
 }
 
 export async function deleteDocument(args: DeleteDocumentArgs): Promise<void> {
   const { workspace: ws, project: p, actor: user, existing } = args;
-  const eventActor = args.eventActor ?? user.id;
+  const eventActor = args.eventActor;
 
   // G5 — comments must be deleted through delete_comment for soft-delete +
   // author-only semantics. Reject at the service layer.

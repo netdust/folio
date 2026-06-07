@@ -95,6 +95,8 @@ workspaceDocumentsRoute.post('/', requireScope('documents:write'), async (c) => 
     project: null,
     table: null,
     actor: user,
+    // eventActor = the human user: HTTP writes are NOT chain-suppressed (agent PAT over HTTP resolves getUser → its human creator). See tasks/retro-follow-ups.md 2026-06-06 (deferred). Explicit, not defaulted, so the choice is visible.
+    eventActor: user.id,
     token: c.get('token'),
     isTableScopedUrl: false,
     input: { type: v.type, title: v.title, body: v.body, frontmatter: fmRest, status: fmStatus },
@@ -199,6 +201,8 @@ workspaceDocumentsRoute.patch('/:slug', requireScope('documents:write'), async (
     project: null,
     fallbackTable: null,
     actor: user,
+    // eventActor = the human user: HTTP writes are NOT chain-suppressed (agent PAT over HTTP resolves getUser → its human creator). See tasks/retro-follow-ups.md 2026-06-06 (deferred). Explicit, not defaulted, so the choice is visible.
+    eventActor: user.id,
     existing,
     patch: parsed.data,
   });
@@ -222,7 +226,14 @@ workspaceDocumentsRoute.delete('/:slug', requireScope('documents:delete'), async
     assertNotSelfDelete(token, existing.id);
   }
 
-  await deleteDocument({ workspace: ws, project: null, actor: user, existing });
+  await deleteDocument({
+    workspace: ws,
+    project: null,
+    actor: user,
+    // eventActor = the human user: HTTP writes are NOT chain-suppressed (agent PAT over HTTP resolves getUser → its human creator). See tasks/retro-follow-ups.md 2026-06-06 (deferred). Explicit, not defaulted, so the choice is visible.
+    eventActor: user.id,
+    existing,
+  });
   return c.body(null, 204);
 });
 

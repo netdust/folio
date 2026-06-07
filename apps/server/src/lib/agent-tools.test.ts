@@ -6,6 +6,7 @@ import type { DB } from '../db/client.ts';
 import {
   type ApiToken,
   type Document,
+  type EphemeralToken,
   type Project,
   type User,
   type Workspace,
@@ -2129,22 +2130,26 @@ describe('B1: MCP human-PAT project narrowing (no cross-project leak)', () => {
     ).rejects.toThrow(/access|not granted|forbidden|not found/i);
   });
 
-  // RCA 2026-06-06 (clean-DB repro): the operator's EPHEMERAL conversation token
-  // (createConversationRun) carries agentId=OPERATOR_AGENT_ID (the code-singleton
-  // sentinel, which has NO documents row) AND createdBy=<the caller user>. Every
-  // agent-doc resolution from token.agentId (resolveProjectInWorkspace,
-  // resolveAuthorContextForToken, describe_workspace) did findFirst({id}) → no row
-  // → agent_missing, blocking EVERY project-scoped operator tool + comment. This
-  // is the REAL token shape (createdBy is the user, so isOperatorToken is FALSE —
-  // the discriminant must be the sentinel agentId itself, a server-set constant).
-  function operatorToken(seed: { user: { id: string } }, scopes: string[]): ApiToken {
-    return makeToken({
-      workspaceId: null,
-      createdBy: seed.user.id, // operator token carries the CALLER's createdBy
-      agentId: OPERATOR_AGENT_ID, // the synthetic sentinel — no documents row
-      projectIds: null, // owner caller → unbounded → operator ['*'] stands
-      scopes,
-    });
+  // RCA 2026-06-06 (clean-DB repro), Shape B′ (Finding #8, 2026-06-07): the
+  // operator's EPHEMERAL conversation token (createConversationRun) carries
+  // createdBy=<the caller user> (NON-null), so isOperatorToken is FALSE for it.
+  // The discriminant is the explicit, NON-persistable `isOperator: true` marker —
+  // NOT an FK-shaped agentId sentinel (Shape B′ drops the sentinel: agentId is
+  // null, the marker identifies the operator). The two resolver twins
+  // (resolveAgentDocForToken / resolveCallingAgent) and every operator-reach
+  // call-site key on the marker (via isAgentBound), so an `agentId:null,
+  // isOperator:true` token resolves the operator code-singleton — NOT agent_missing.
+  function operatorToken(seed: { user: { id: string } }, scopes: string[]): EphemeralToken {
+    return {
+      ...makeToken({
+        workspaceId: null,
+        createdBy: seed.user.id, // operator token carries the CALLER's createdBy
+        agentId: null, // Shape B′: NO FK sentinel — the marker identifies the operator
+        projectIds: null, // owner caller → unbounded → operator ['*'] stands
+        scopes,
+      }),
+      isOperator: true, // the un-forgeable marker (set only at mint, never a column)
+    };
   }
 
   it('operator token resolves a project (get_document), NOT agent_missing', async () => {
@@ -2315,5 +2320,173 @@ describe('B1: MCP human-PAT project narrowing (no cross-project leak)', () => {
     )) as { content: { text: string }[] };
     // Returns the operator's own doc (slug _operator), not an agent_missing throw.
     expect(JSON.stringify(result)).toContain('_operator');
+  });
+
+  // --- Shape B′ (Finding #8): resolve via the isOperator MARKER, not the agentId
+  // sentinel. These pin BOTH the success path (operator marker → code singleton)
+  // and the DENIAL path (a human PAT — no marker, agentId null — must NOT resolve
+  // to the operator) at both resolver twins (resolveAgentDocForToken via tools;
+  // resolveCallingAgent via the create_agent widening guards).
+
+  it('DENIAL: a human PAT (no isOperator marker, agentId null) does NOT resolve to the operator', async () => {
+    const { seed } = await makeTestApp();
+    // Same fields as the operator token EXCEPT the marker — proving the marker, not
+    // workspaceId/createdBy/agentId, is the discriminant. get_agent_self routes
+    // through resolveAgentDocForToken via isAgentBound: no marker → not agent-bound
+    // → no_agent_bound_to_token (NOT _operator, NOT agent_missing-as-operator).
+    const humanPat = makeToken({
+      workspaceId: null,
+      createdBy: seed.user.id,
+      agentId: null,
+      projectIds: null,
+      scopes: ['documents:read'],
+    }); // NOTE: no isOperator marker
+    const err = await exec(humanPat, seed.user.id, 'get_agent_self', {}).then(
+      () => null,
+      (e) => e as Error & { data?: { reason?: string } },
+    );
+    expect(err?.data?.reason).toBe('no_agent_bound_to_token');
+    expect(JSON.stringify(err ?? {})).not.toContain('_operator');
+  });
+
+  it('a token whose agentId equals OPERATOR_AGENT_ID but lacks the marker is NOT the operator (no FK-sentinel back door)', async () => {
+    const { seed } = await makeTestApp();
+    // Shape B′ closes the sentinel back door: even if a token carried the old
+    // OPERATOR_AGENT_ID value in agentId, WITHOUT the marker it is treated as an
+    // ordinary (ghost) agent — findFirst misses → agent_missing — NOT the operator.
+    const sentinelOnly = makeToken({
+      workspaceId: null,
+      createdBy: seed.user.id,
+      agentId: OPERATOR_AGENT_ID, // the old sentinel value, but NO marker
+      projectIds: null,
+      scopes: ['documents:read'],
+    });
+    const err = await exec(sentinelOnly, 'sentinel', 'get_agent_self', {}).then(
+      () => null,
+      (e) => e as Error & { data?: { reason?: string } },
+    );
+    expect(err?.data?.reason).toBe('agent_missing');
+    expect(JSON.stringify(err ?? {})).not.toContain('_operator');
+  });
+
+  it('resolveCallingAgent: the operator (marker) grants ["*"] — create_agent widening is NOT forbidden', async () => {
+    // Drives resolveCallingAgent (agent-guards) via the create_agent allow-list +
+    // tools widening guards. The operator resolves to its code singleton
+    // (projects ['*'] + full tools), so creating a wildcard child is allowed — it
+    // does NOT fail-close to [] (which would throw allow_list/tools_widening_forbidden).
+    const { seed } = await makeTestApp();
+    const op = operatorToken(seed, ['agents:write', 'documents:read']);
+    const result = await exec(op, 'agent:_operator', 'create_agent', {
+      workspace_slug: 'acme',
+      title: 'Operator child',
+      frontmatter: {
+        system_prompt: 'x',
+        model: 'm',
+        provider: 'anthropic',
+        projects: ['*'], // wildcard — only allowed if the caller resolves to ['*']
+        tools: ['list_documents', 'get_document'], // a subset of OPERATOR_TOOLS
+      },
+    });
+    expect(result).toBeTruthy();
+  });
+
+  it('DENIAL: a narrow agent (NOT the operator) is still blocked from wildcard widening (guard intact)', async () => {
+    // Symmetric to the operator-allowed case: a real agent with a narrow allow-list
+    // resolved by resolveCallingAgent fail-closes correctly — the operator special
+    // case must not weaken the guard for everyone else.
+    const { db, seed } = await makeTestApp();
+    const { token, agentSlug } = await seedAgent(db, seed.workspace.id, seed.user.id, {
+      projects: [seed.project.id],
+      scopes: ['agents:write', 'documents:read'],
+    });
+    const err = await exec(token, `agent:${agentSlug}`, 'create_agent', {
+      workspace_slug: 'acme',
+      title: 'Wide child',
+      frontmatter: {
+        system_prompt: 'x',
+        model: 'm',
+        provider: 'anthropic',
+        projects: ['*'],
+      },
+    }).then(
+      () => null,
+      (e) => e as Error & { data?: { reason?: string } },
+    );
+    expect(err?.data?.reason).toBe('allow_list_widening_forbidden');
+  });
+
+  // --- Shape B′ (Finding #8) AUTONOMY GATE: an operator-spawned hop must stay
+  // gated. The gate keys on isAgentBound(token), NOT token.agentId. Under Shape B′
+  // the operator's agentId is null, so a regression to `!!token.agentId` would
+  // mis-classify the operator as a human PAT and BYPASS the gate — letting an
+  // operator chain-spawn a run with chains OFF (security-critical: the gate is the
+  // single thing stopping unattended agent-chains). These pin the operator case
+  // specifically; the existing mit-54 tests use real agent tokens (agentId
+  // non-null) and would NOT bite that regression.
+
+  it('mit 54 (operator): operator run_agent with chains OFF is suppressed (gate keys on the marker, not agentId)', async () => {
+    const { db, seed } = await makeTestApp();
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, seed.user);
+    // Seed the TARGET agent the operator would spawn.
+    await seedRunAgent(db, seed.workspace.id, seed.user.id, 'helper', { agentBound: false });
+    const op = operatorToken(seed, ['agents:write', 'documents:read']);
+
+    const prev = env.FOLIO_AGENT_CHAINS_ENABLED;
+    env.FOLIO_AGENT_CHAINS_ENABLED = false;
+    let thrown: unknown;
+    try {
+      await exec(op, 'agent:_operator', 'run_agent', {
+        workspace_slug: 'acme',
+        agent_slug: 'helper',
+        parent_slug: parent.slug,
+      });
+    } catch (err) {
+      thrown = err;
+    } finally {
+      env.FOLIO_AGENT_CHAINS_ENABLED = prev;
+    }
+    const e = thrown as { code?: number; data?: { reason?: string } };
+    // The operator IS agent-bound (via its marker) → the gate fires.
+    expect(e?.data?.reason).toBe('agent_chains_disabled');
+    // And ZERO runs were created (the gate blocked before run-create).
+    const rows = await db.query.documents.findMany({ where: eq(documents.type, 'agent_run') });
+    expect(rows.length).toBe(0);
+  });
+
+  it('mit 54 (operator): operator retry_run with chains OFF is suppressed (gate keys on the marker, not agentId)', async () => {
+    const { db, seed } = await makeTestApp();
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, seed.user);
+    const { agent } = await seedRunAgent(db, seed.workspace.id, seed.user.id, 'helper', {
+      agentBound: false,
+    });
+    const run = await seedRunRow(db, seed.workspace, seed.project, agent, seed.user, parent);
+    // Terminalize so idempotency would NOT block — the gate must.
+    await db
+      .update(documents)
+      .set({
+        status: 'failed',
+        frontmatter: { ...(run.frontmatter as Record<string, unknown>), status: 'failed' },
+      })
+      .where(eq(documents.id, run.id));
+    const op = operatorToken(seed, ['agents:write', 'documents:read']);
+
+    const prev = env.FOLIO_AGENT_CHAINS_ENABLED;
+    env.FOLIO_AGENT_CHAINS_ENABLED = false;
+    let thrown: unknown;
+    try {
+      await exec(op, 'agent:_operator', 'retry_run', {
+        workspace_slug: 'acme',
+        run_id: run.id,
+      });
+    } catch (err) {
+      thrown = err;
+    } finally {
+      env.FOLIO_AGENT_CHAINS_ENABLED = prev;
+    }
+    const e = thrown as { code?: number; data?: { reason?: string } };
+    expect(e?.data?.reason).toBe('agent_chains_disabled');
+    // Only the seeded (failed) original; no fresh planning run spawned.
+    const rows = await db.query.documents.findMany({ where: eq(documents.type, 'agent_run') });
+    expect(rows.length).toBe(1);
   });
 })

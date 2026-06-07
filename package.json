@@ -13,6 +13,7 @@
     "db:migrate": "bun run --filter @folio/server db:migrate",
     "db:studio": "bun run --filter @folio/server db:studio",
     "test": "bun test",
+    "check:invariants": "bun run scripts/check-invariants.ts",
     "lint": "biome check .",
     "format": "biome format --write ."
   },
