@@ -16,24 +16,29 @@
  */
 import { and, eq } from 'drizzle-orm';
 import { db } from '../db/client.ts';
-import { type ApiToken, type Document, documents } from '../db/schema.ts';
+import { type ApiToken, type Document, type EphemeralToken, documents } from '../db/schema.ts';
 import { HTTPError } from './http.ts';
-import { OPERATOR_AGENT_ID, getOperatorDocument } from './operator.ts';
+import { getOperatorDocument } from './operator.ts';
+import { isAgentBound } from './token-reach.ts';
 
 /**
- * Resolve the CALLING agent's doc for the widening guards. The operator is a
- * code singleton: its token carries the synthetic OPERATOR_AGENT_ID (no row), so
- * a raw findFirst returns undefined → the guards' fail-closed fallback ([] allow-
- * list / [] tools) would mis-deny the operator from granting ANY project/tool to
- * a child agent — even though its real definition is projects:['*'] + full tools.
- * Resolve the sentinel to its code-singleton doc; a real-but-missing agent still
+ * Resolve the CALLING agent's doc for the widening guards (invariant 13). The
+ * operator is a code singleton: its ephemeral token carries the explicit,
+ * NON-persistable `isOperator: true` marker and `agentId = null` (Shape B′ — no
+ * FK sentinel). A raw findFirst on a null/absent agentId returns undefined → the
+ * guards' fail-closed fallback ([] allow-list / [] tools) would mis-deny the
+ * operator from granting ANY project/tool to a child agent — even though its real
+ * definition is projects:['*'] + full tools. Resolve via the marker to the
+ * code-singleton doc; a real-but-missing agent (non-null agentId, no row) still
  * returns undefined (the guards keep their fail-closed handling for that case).
- * (architecture shake-out: extends the resolveAgentDocForToken convergence —
- * implemented locally because agent-tools-registry.ts imports THIS file, so
- * importing its helper back would cycle.)
+ * The discriminant is the un-forgeable marker — NOT an agentId FK sentinel, NOT
+ * the createdBy-based isOperatorToken (the operator's createdBy is the caller,
+ * non-null). (architecture shake-out: extends the resolveAgentDocForToken
+ * convergence — implemented locally because agent-tools-registry.ts imports THIS
+ * file, so importing its helper back would cycle.)
  */
-async function resolveCallingAgent(token: ApiToken): Promise<Document | undefined> {
-  if (token.agentId === OPERATOR_AGENT_ID) return getOperatorDocument();
+async function resolveCallingAgent(token: EphemeralToken): Promise<Document | undefined> {
+  if (token.isOperator) return getOperatorDocument();
   if (!token.agentId) return undefined; // not agent-bound — guards fail-closed on undefined
   return db.query.documents.findFirst({
     where: and(eq(documents.id, token.agentId), eq(documents.type, 'agent')),
@@ -78,11 +83,14 @@ export function assertAgentScope(
  * as no projects) rather than fail open (the prior `?? ['*']` default).
  */
 export async function assertAgentAllowListWidening(
-  token: ApiToken | null,
+  token: EphemeralToken | null,
   nextFrontmatter: Record<string, unknown> | undefined,
   op: 'create' | 'patch',
 ): Promise<void> {
-  if (!token || !token.agentId) return;
+  // isAgentBound (not token.agentId) so the operator — agent-bound via its
+  // isOperator marker, agentId null under Shape B′ — is NOT skipped here; it must
+  // reach resolveCallingAgent to be granted its ['*'] (else it fail-closes to []).
+  if (!token || !isAgentBound(token)) return;
 
   const hasProjectsKey =
     nextFrontmatter !== undefined && 'projects' in nextFrontmatter;
@@ -160,11 +168,13 @@ export async function assertAgentAllowListWidening(
  *   - Calling-agent malformed/missing `tools` field → fail closed (treat as []).
  */
 export async function assertAgentToolsWidening(
-  token: ApiToken | null,
+  token: EphemeralToken | null,
   nextFrontmatter: Record<string, unknown> | undefined,
   op: 'create' | 'patch',
 ): Promise<void> {
-  if (!token || !token.agentId) return;
+  // isAgentBound (not token.agentId): the operator must reach resolveCallingAgent
+  // to be granted its full tool set, not skipped (Shape B′ — agentId null).
+  if (!token || !isAgentBound(token)) return;
 
   const hasToolsKey =
     nextFrontmatter !== undefined && 'tools' in nextFrontmatter;

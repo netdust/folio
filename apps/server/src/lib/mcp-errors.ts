@@ -13,8 +13,9 @@
  * both files.
  */
 
-import type { ApiToken } from '../db/schema.ts';
+import type { EphemeralToken } from '../db/schema.ts';
 import { HTTPError } from './http.ts';
+import { isAgentBound } from './token-reach.ts';
 
 /**
  * MCP JSON-RPC "invalid params" error (-32602). Carries structured `data` so the
@@ -51,8 +52,11 @@ export function mcpInvalidParams(message: string, data: Record<string, unknown>)
  * `data` on this code, so the downstream
  * `data.reason: 'human_pat_rejected_on_agent_lifecycle'` stays addressable.
  */
-export function mcpRejectHumanPat(token: ApiToken): void {
-  if (!token.agentId) {
+export function mcpRejectHumanPat(token: EphemeralToken): void {
+  // isAgentBound (not token.agentId): the operator is agent-bound via its
+  // isOperator marker (agentId null under Shape B′), so it legitimately reaches
+  // the agent-lifecycle tools — token.agentId would mis-reject it as a human PAT.
+  if (!isAgentBound(token)) {
     const err = new Error(
       'agent-lifecycle tools require an agent-bound bearer; human PATs are rejected',
     ) as Error & { code: number; data: Record<string, unknown> };
