@@ -47,25 +47,43 @@ export function TokensTab({ wslug, workspaceId }: Props) {
     }
   }
 
-  // Rotate = revoke the old token, then mint a new one with the same name +
-  // scopes, and reveal the new secret once. We can't recompute the original
-  // expiry window (only the absolute expiresAt is stored), so a rotated token
-  // defaults to never-expires; the operator can re-create with an expiry if
-  // they need one.
+  // Rotate = mint a new token FIRST (same name + scopes), then revoke the old
+  // one only after the new mint succeeds. Ordering matters for safety: if the
+  // mint fails the old token is still valid (nothing lost); if the revoke fails
+  // after a successful mint the worst case is two live tokens — the user has the
+  // new secret and can revoke the old one manually, which is strictly safer than
+  // being left with zero tokens.
   async function confirmRotate() {
     if (!pendingRotate) return;
     const target = pendingRotate;
     setRotating(true);
+    // The token row carries only the absolute expiresAt, not the original day
+    // window. Approximate it: keep the rotated token alive for the days
+    // remaining until the original expiry (floored at 1). Null = forever, omit.
+    const expires_in_days =
+      target.expiresAt !== null
+        ? Math.max(1, Math.ceil((Date.parse(target.expiresAt) - Date.now()) / 86_400_000))
+        : undefined;
+    let minted = false;
     try {
-      await deleteToken.mutateAsync(target.id);
       const res = await createToken.mutateAsync({
         name: target.name,
         scopes: target.scopes,
+        ...(expires_in_days !== undefined ? { expires_in_days } : {}),
       });
+      minted = true;
+      await deleteToken.mutateAsync(target.id);
       setRotatedSecret(res.token);
       setPendingRotate(null);
     } catch (err) {
-      toast.error(formatApiError(err));
+      // Close the dialog so it can't reference a token whose state is now
+      // ambiguous, and tell the user exactly which step failed.
+      setPendingRotate(null);
+      toast.error(
+        minted
+          ? `New token created but the old one could not be revoked — revoke "${target.name}" manually. (${formatApiError(err)})`
+          : `Rotation failed; your existing token is unchanged. (${formatApiError(err)})`,
+      );
     } finally {
       setRotating(false);
     }
@@ -195,9 +213,9 @@ export function TokensTab({ wslug, workspaceId }: Props) {
         <DialogContent>
           <DialogTitle>Rotate &quot;{pendingRotate?.name}&quot;?</DialogTitle>
           <DialogDescription>
-            This revokes the current secret and issues a new one with the same name
-            and scopes. Anything using the old token loses access immediately. The
-            rotated token does not carry over an expiry.
+            This issues a new secret with the same name and scopes, then revokes
+            the current one. Anything using the old token loses access immediately.
+            If the old token had an expiry, the new one keeps a comparable window.
           </DialogDescription>
           <div className="mt-6 flex justify-end gap-2">
             <Button variant="ghost" onClick={() => setPendingRotate(null)}>

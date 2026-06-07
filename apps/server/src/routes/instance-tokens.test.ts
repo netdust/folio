@@ -238,7 +238,7 @@ describe('POST /api/v1/instance/tokens (mint an instance-reach token)', () => {
     });
     expect(list.status).toBe(200);
     const body = (await list.json()) as {
-      data: { tokens: { id: string; expiresAt: number | null }[] };
+      data: { tokens: { id: string; expiresAt: string | null }[] };
     };
     const row = body.data.tokens.find((t) => t.id === created.data.id);
     expect(row).toBeDefined();
@@ -260,7 +260,7 @@ describe('POST /api/v1/instance/tokens (mint an instance-reach token)', () => {
       headers: { Cookie: seed.sessionCookie },
     });
     const body = (await list.json()) as {
-      data: { tokens: { id: string; expiresAt: number | null }[] };
+      data: { tokens: { id: string; expiresAt: string | null }[] };
     };
     const row = body.data.tokens.find((t) => t.id === created.data.id);
     expect(row).toBeDefined();

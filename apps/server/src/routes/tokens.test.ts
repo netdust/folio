@@ -394,7 +394,7 @@ describe('tokens.ts — per-workspace mint always pins to the URL workspace', ()
     });
     expect(list.status).toBe(200);
     const body = (await list.json()) as {
-      data: { tokens: { id: string; expiresAt: number | null }[] };
+      data: { tokens: { id: string; expiresAt: string | null }[] };
     };
     const row = body.data.tokens.find((t) => t.id === created.data.id);
     expect(row).toBeDefined();
@@ -416,7 +416,7 @@ describe('tokens.ts — per-workspace mint always pins to the URL workspace', ()
       headers: { Cookie: seed.sessionCookie },
     });
     const body = (await list.json()) as {
-      data: { tokens: { id: string; expiresAt: number | null }[] };
+      data: { tokens: { id: string; expiresAt: string | null }[] };
     };
     const row = body.data.tokens.find((t) => t.id === created.data.id);
     expect(row).toBeDefined();

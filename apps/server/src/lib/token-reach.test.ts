@@ -110,4 +110,23 @@ describe('mintToken expiresInDays (optional token expiry)', () => {
     expect(row).toBeDefined();
     expect(row!.expiresAt).toBeNull();
   });
+
+  // Defense-in-depth (Finding 5): a 0 (or negative) day-count must NOT mint an
+  // already-expired token. mintToken is the security primitive — Zod guards the
+  // routes, but the primitive guards itself too. expiresInDays:0 ⟹ null (forever),
+  // not an expiresAt at-or-before now (which the bearer middleware rejects on first use).
+  test('expiresInDays: 0 → expiresAt null (no already-expired token minted)', async () => {
+    const { db, seed } = await makeTestApp();
+    const minted = await mintToken(db, {
+      ceilingRole: 'owner',
+      scopes: ['documents:read'],
+      reach: seed.workspace.id,
+      name: 'zero-days',
+      createdBy: seed.user.id,
+      expiresInDays: 0,
+    });
+    const row = await db.query.apiTokens.findFirst({ where: eq(apiTokens.id, minted.id) });
+    expect(row).toBeDefined();
+    expect(row!.expiresAt).toBeNull();
+  });
 });

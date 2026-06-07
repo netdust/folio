@@ -81,23 +81,40 @@ export function InstanceTokensTab() {
     }
   }
 
-  // Rotate = revoke old + mint new (same name + scopes), reveal the new secret
-  // once. The original expiry window can't be recomputed from the stored
-  // absolute expiresAt, so a rotated instance token defaults to never-expires.
+  // Rotate = mint new (same name + scopes) FIRST, then revoke the old one only
+  // after the mint succeeds. If the mint fails the old token is untouched; if
+  // the revoke fails after a successful mint the worst case is two live tokens
+  // (the user has the new secret and can revoke the old one manually) — strictly
+  // safer than being left with zero tokens.
   async function confirmRotate() {
     if (!pendingRotate) return;
     const target = pendingRotate;
     setRotating(true);
+    // Only the absolute expiresAt is stored, not the original day window.
+    // Approximate it: keep the rotated token alive for the days remaining until
+    // the original expiry (floored at 1). Null = forever, omit the key.
+    const expires_in_days =
+      target.expiresAt !== null
+        ? Math.max(1, Math.ceil((Date.parse(target.expiresAt) - Date.now()) / 86_400_000))
+        : undefined;
+    let minted = false;
     try {
-      await deleteToken.mutateAsync(target.id);
       const res = await createToken.mutateAsync({
         name: target.name,
         scopes: target.scopes,
+        ...(expires_in_days !== undefined ? { expires_in_days } : {}),
       });
+      minted = true;
+      await deleteToken.mutateAsync(target.id);
       setRotatedSecret(res.token);
       setPendingRotate(null);
     } catch (err) {
-      toast.error(formatApiError(err));
+      setPendingRotate(null);
+      toast.error(
+        minted
+          ? `New token created but the old one could not be revoked — revoke "${target.name}" manually. (${formatApiError(err)})`
+          : `Rotation failed; your existing token is unchanged. (${formatApiError(err)})`,
+      );
     } finally {
       setRotating(false);
     }
@@ -213,9 +230,10 @@ export function InstanceTokensTab() {
         <DialogContent>
           <DialogTitle>Rotate &quot;{pendingRotate?.name}&quot;?</DialogTitle>
           <DialogDescription>
-            This revokes the current secret and issues a new one with the same name
-            and scopes across every workspace. Anything using the old token loses
-            access immediately. The rotated token does not carry over an expiry.
+            This issues a new secret with the same name and scopes across every
+            workspace, then revokes the current one. Anything using the old token
+            loses access immediately. If the old token had an expiry, the new one
+            keeps a comparable window.
           </DialogDescription>
           <div className="mt-6 flex justify-end gap-2">
             <Button variant="ghost" onClick={() => setPendingRotate(null)}>

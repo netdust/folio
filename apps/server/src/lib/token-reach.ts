@@ -137,8 +137,13 @@ export async function mintToken(
     tokenHash: hash,
     scopes: args.scopes,
     createdBy: args.createdBy,
+    // Defense-in-depth: only treat expiresInDays as an expiry when > 0. A 0 (or
+    // negative) would mint an already-expired token; the Zod route schemas guard
+    // this, but mintToken is the security primitive so it guards itself too.
     expiresAt:
-      args.expiresInDays != null ? new Date(Date.now() + args.expiresInDays * 86_400_000) : null,
+      args.expiresInDays != null && args.expiresInDays > 0
+        ? new Date(Date.now() + args.expiresInDays * 86_400_000)
+        : null,
   });
   return { id, name: args.name, token, scopes: args.scopes, instance: args.reach === null };
 }

@@ -10,7 +10,7 @@ export function lastUsedLabel(iso: string | null): string {
 /** "Expires 7/1/2026" / "Never expires" — shared by both token list tabs. */
 export function expiresLabel(iso: string | null): string {
   if (!iso) return 'Never expires';
-  const ms = new Date(iso).getTime();
-  if (Number.isNaN(ms)) return 'Never expires';
-  return `Expires ${new Date(iso).toLocaleDateString()}`;
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return 'Never expires';
+  return `Expires ${date.toLocaleDateString()}`;
 }

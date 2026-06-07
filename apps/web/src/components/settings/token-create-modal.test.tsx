@@ -295,6 +295,53 @@ describe('per-workspace reach + admin scopes', () => {
     expect(body.expires_in_days).toBe(30);
   });
 
+  it('blocks a decimal expiry (3.5) — Create disabled + inline hint, no POST', async () => {
+    // Finding 3: the server validates with z.number().int(); a decimal passed a
+    // naive client check and came back as an opaque 400. The dialog must reject
+    // it client-side instead.
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const fetchMock = stubCreateFetch();
+    const user = userEvent.setup();
+    render(
+      <TokenCreateModal wslug="acme" workspaceId="ws-1" open onOpenChange={() => {}} />,
+      { wrapper: wrap(qc) },
+    );
+    await user.type(screen.getByLabelText(/^name$/i), 'CI');
+    await user.click(screen.getByLabelText('documents:read'));
+    await user.type(screen.getByLabelText(/expires in/i), '3.5');
+
+    // Inline hint appears and Create is blocked.
+    expect(screen.getByRole('alert').textContent).toMatch(/whole number/i);
+    expect(screen.getByRole('button', { name: /^create$/i })).toBeDisabled();
+
+    // Even if the disabled button is force-clicked, no POST fires.
+    await user.click(screen.getByRole('button', { name: /^create$/i }));
+    expect(
+      fetchMock.mock.calls.find((c) => (c[1] as RequestInit)?.method === 'POST'),
+    ).toBeUndefined();
+  });
+
+  it('accepts a whole-number expiry and clears the hint', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const fetchMock = stubCreateFetch();
+    const user = userEvent.setup();
+    render(
+      <TokenCreateModal wslug="acme" workspaceId="ws-1" open onOpenChange={() => {}} />,
+      { wrapper: wrap(qc) },
+    );
+    await user.type(screen.getByLabelText(/^name$/i), 'CI');
+    await user.click(screen.getByLabelText('documents:read'));
+    await user.type(screen.getByLabelText(/expires in/i), '7');
+
+    expect(screen.queryByRole('alert')).toBeNull();
+    await user.click(screen.getByRole('button', { name: /^create$/i }));
+    await waitFor(() => {
+      const post = fetchMock.mock.calls.find((c) => (c[1] as RequestInit)?.method === 'POST');
+      expect(post).toBeDefined();
+      expect(JSON.parse((post![1] as RequestInit).body as string).expires_in_days).toBe(7);
+    });
+  });
+
   it('OMITS expires_in_days when the expiry field is left blank', async () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const fetchMock = stubCreateFetch();

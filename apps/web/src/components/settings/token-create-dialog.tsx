@@ -66,7 +66,16 @@ export function TokenCreateDialog({
   const [revealed, setRevealed] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
-  const canSubmit = name.trim().length > 0 && scopes.size > 0 && !isPending;
+  // Expiry must be a whole number of days. The server validates with
+  // z.number().int(), so a decimal like `3.5` would pass a naive client check
+  // and come back as an opaque 400. Catch it here and show an inline hint.
+  const expiryTrimmed = expiresInDays.trim();
+  const expiryParsed = expiryTrimmed === '' ? null : Number(expiryTrimmed);
+  const expiryInvalid =
+    expiryParsed !== null && (!Number.isInteger(expiryParsed) || expiryParsed <= 0);
+
+  const canSubmit =
+    name.trim().length > 0 && scopes.size > 0 && !isPending && !expiryInvalid;
 
   function reset() {
     setName('');
@@ -82,12 +91,13 @@ export function TokenCreateDialog({
 
   async function onSubmit() {
     if (!canSubmit) return;
-    // Blank/empty/non-positive = never expires → omit the key entirely so the
-    // server stores a null expiresAt.
-    const trimmed = expiresInDays.trim();
-    const parsed = trimmed === '' ? null : Number(trimmed);
+    // Blank/empty = never expires → omit the key entirely so the server stores a
+    // null expiresAt. Only send a positive INTEGER (the server's z.number().int()
+    // rejects decimals); canSubmit already blocks a non-integer/non-positive value.
     const expires_in_days =
-      parsed !== null && Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+      expiryParsed !== null && Number.isInteger(expiryParsed) && expiryParsed > 0
+        ? expiryParsed
+        : undefined;
     try {
       const res = await mutate({
         name: name.trim(),
@@ -196,9 +206,15 @@ export function TokenCreateDialog({
                   placeholder="Leave blank to never expire"
                   className="mt-1 block w-full rounded-md border border-border-light bg-content px-2 py-1.5 text-sm"
                 />
-                <span className="mt-1 block text-[11px] text-fg-3">
-                  Blank = never expires. The token is rejected after this many days.
-                </span>
+                {expiryInvalid ? (
+                  <span role="alert" className="mt-1 block text-[11px] text-danger">
+                    Expiry must be a whole number of days greater than zero.
+                  </span>
+                ) : (
+                  <span className="mt-1 block text-[11px] text-fg-3">
+                    Blank = never expires. The token is rejected after this many days.
+                  </span>
+                )}
               </label>
             </div>
 
