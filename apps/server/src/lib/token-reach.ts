@@ -109,7 +109,15 @@ export interface MintedToken {
  */
 export async function mintToken(
   db: DB,
-  args: { ceilingRole: Role; scopes: string[]; reach: string | null; name: string; createdBy: string },
+  args: {
+    ceilingRole: Role;
+    scopes: string[];
+    reach: string | null;
+    name: string;
+    createdBy: string;
+    /** Optional lifetime in days; omitted/undefined ⟹ a never-expiring token. */
+    expiresInDays?: number;
+  },
 ): Promise<MintedToken> {
   const allowed = roleToScopes(args.ceilingRole);
   const over = args.scopes.filter((s) => !allowed.includes(s));
@@ -129,6 +137,8 @@ export async function mintToken(
     tokenHash: hash,
     scopes: args.scopes,
     createdBy: args.createdBy,
+    expiresAt:
+      args.expiresInDays != null ? new Date(Date.now() + args.expiresInDays * 86_400_000) : null,
   });
   return { id, name: args.name, token, scopes: args.scopes, instance: args.reach === null };
 }

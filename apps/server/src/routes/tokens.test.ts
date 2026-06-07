@@ -376,6 +376,53 @@ describe('tokens.ts — per-workspace mint always pins to the URL workspace', ()
     expect(row?.workspaceId).toBe(seed.workspace.id);
   });
 
+  // Task 1.3 seam: create-with-expires_in_days flows through the real route →
+  // mintToken → DB, and the GET list surfaces the non-null expiry. Proves the
+  // Zod field is actually wired (omitting it would leave expiresAt null in the list).
+  test('POST with expires_in_days → GET list shows a non-null expiresAt for that token', async () => {
+    const { app, seed } = await makeTestApp();
+    const post = await app.request(tokensPath('acme', seed.workspace.id), {
+      method: 'POST',
+      headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'expiring', scopes: ['documents:read'], expires_in_days: 30 }),
+    });
+    expect(post.status).toBe(201);
+    const created = (await post.json()) as { data: { id: string } };
+
+    const list = await app.request(tokensPath('acme', seed.workspace.id), {
+      headers: { Cookie: seed.sessionCookie },
+    });
+    expect(list.status).toBe(200);
+    const body = (await list.json()) as {
+      data: { tokens: { id: string; expiresAt: number | null }[] };
+    };
+    const row = body.data.tokens.find((t) => t.id === created.data.id);
+    expect(row).toBeDefined();
+    expect(row!.expiresAt).not.toBeNull();
+  });
+
+  // Negative: NO expires_in_days → the listed token's expiresAt is null (forever).
+  test('POST without expires_in_days → GET list shows expiresAt null (forever token)', async () => {
+    const { app, seed } = await makeTestApp();
+    const post = await app.request(tokensPath('acme', seed.workspace.id), {
+      method: 'POST',
+      headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'forever', scopes: ['documents:read'] }),
+    });
+    expect(post.status).toBe(201);
+    const created = (await post.json()) as { data: { id: string } };
+
+    const list = await app.request(tokensPath('acme', seed.workspace.id), {
+      headers: { Cookie: seed.sessionCookie },
+    });
+    const body = (await list.json()) as {
+      data: { tokens: { id: string; expiresAt: number | null }[] };
+    };
+    const row = body.data.tokens.find((t) => t.id === created.data.id);
+    expect(row).toBeDefined();
+    expect(row!.expiresAt).toBeNull();
+  });
+
   test('reach is immutable — no PATCH route (T2)', async () => {
     const { app, seed } = await makeTestApp();
     const res = await app.request(`${tokensPath('acme', seed.workspace.id)}/sometoken`, {

@@ -1,5 +1,14 @@
 import { describe, expect, test } from 'bun:test';
-import { effectiveReach, isAgentBound, isInstanceReach, isOperatorToken } from './token-reach.ts';
+import { eq } from 'drizzle-orm';
+import { apiTokens } from '../db/schema.ts';
+import { makeTestApp } from '../test/harness.ts';
+import {
+  effectiveReach,
+  isAgentBound,
+  isInstanceReach,
+  isOperatorToken,
+  mintToken,
+} from './token-reach.ts';
 
 describe('isInstanceReach', () => {
   test('null workspaceId is instance reach', () => {
@@ -63,5 +72,42 @@ describe('effectiveReach (tokenReach ∩ callerReach)', () => {
   });
   test('pinned B ∩ C = DENY', () => {
     expect(effectiveReach('B', 'C')).toEqual({ ok: false });
+  });
+});
+
+// Task 1.3 — mintToken stamps an optional expiry. The column (Task 1.1) is
+// enforced at the bearer middleware (Task 1.2); this proves the mint WRITES it.
+describe('mintToken expiresInDays (optional token expiry)', () => {
+  test('expiresInDays: 30 → the inserted row has expiresAt ~30 days out', async () => {
+    const { db, seed } = await makeTestApp();
+    const before = Date.now();
+    const minted = await mintToken(db, {
+      ceilingRole: 'owner',
+      scopes: ['documents:read'],
+      reach: seed.workspace.id,
+      name: 'expiring',
+      createdBy: seed.user.id,
+      expiresInDays: 30,
+    });
+    const row = await db.query.apiTokens.findFirst({ where: eq(apiTokens.id, minted.id) });
+    expect(row).toBeDefined();
+    expect(row!.expiresAt).not.toBeNull();
+    // ~30 days out: strictly past 29 days, and not absurdly far (sanity ceiling).
+    expect(row!.expiresAt!.getTime()).toBeGreaterThan(before + 29 * 86_400_000);
+    expect(row!.expiresAt!.getTime()).toBeLessThan(before + 31 * 86_400_000);
+  });
+
+  test('no expiresInDays → the inserted row has expiresAt null (forever token, default unchanged)', async () => {
+    const { db, seed } = await makeTestApp();
+    const minted = await mintToken(db, {
+      ceilingRole: 'owner',
+      scopes: ['documents:read'],
+      reach: seed.workspace.id,
+      name: 'forever',
+      createdBy: seed.user.id,
+    });
+    const row = await db.query.apiTokens.findFirst({ where: eq(apiTokens.id, minted.id) });
+    expect(row).toBeDefined();
+    expect(row!.expiresAt).toBeNull();
   });
 });

@@ -46,6 +46,8 @@ tokensRoute.post(
     z.object({
       name: z.string().min(1).max(80),
       scopes: z.array(z.string()).default(['documents:read', 'documents:write']),
+      // Optional lifetime in days (≤10y). Omitted ⟹ a never-expiring token.
+      expires_in_days: z.number().int().positive().max(3650).optional(),
     }),
   ),
   async (c) => {
@@ -56,7 +58,7 @@ tokensRoute.post(
       throw new HTTPError('FORBIDDEN', 'no access to this workspace', 403);
     }
 
-    const { name, scopes } = c.req.valid('json');
+    const { name, scopes, expires_in_days } = c.req.valid('json');
     // This route ALWAYS pins to the URL workspace. Instance (reach=null) tokens
     // are minted ONLY via POST /instance/tokens (the prior reach=null branch here
     // was dead — no caller passed it — and was a duplicate instance-mint path).
@@ -69,6 +71,7 @@ tokensRoute.post(
       reach: workspaceId,
       name,
       createdBy: user.id,
+      expiresInDays: expires_in_days,
     });
     return jsonOk(c, minted, 201);
   },

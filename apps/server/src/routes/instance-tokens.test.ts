@@ -218,6 +218,55 @@ describe('POST /api/v1/instance/tokens (mint an instance-reach token)', () => {
     expect('token' in (row as object)).toBe(false); // only the hash is stored
   });
 
+  // Task 1.3 seam: an instance mint carrying expires_in_days flows through the
+  // real route → mintToken → DB, and the GET instance-list surfaces the non-null
+  // expiry. The omit case (next test's tokens) would list expiresAt null.
+  test('POST with expires_in_days → GET instance list shows a non-null expiresAt', async () => {
+    const { app, seed } = await makeTestApp();
+    // seed.user is already the instance owner (harness sets users.role = 'owner'),
+    // which is what requireInstanceAdmin reads — no extra grant needed.
+    const post = await app.request('/api/v1/instance/tokens', {
+      method: 'POST',
+      headers: { Cookie: seed.sessionCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'expiring-inst', scopes: ['documents:read'], expires_in_days: 7 }),
+    });
+    expect(post.status).toBe(201);
+    const created = (await post.json()) as { data: { id: string } };
+
+    const list = await app.request('/api/v1/instance/tokens', {
+      headers: { Cookie: seed.sessionCookie },
+    });
+    expect(list.status).toBe(200);
+    const body = (await list.json()) as {
+      data: { tokens: { id: string; expiresAt: number | null }[] };
+    };
+    const row = body.data.tokens.find((t) => t.id === created.data.id);
+    expect(row).toBeDefined();
+    expect(row!.expiresAt).not.toBeNull();
+  });
+
+  // Negative: NO expires_in_days → listed instance token has expiresAt null.
+  test('POST without expires_in_days → GET instance list shows expiresAt null', async () => {
+    const { app, seed } = await makeTestApp();
+    const post = await app.request('/api/v1/instance/tokens', {
+      method: 'POST',
+      headers: { Cookie: seed.sessionCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'forever-inst', scopes: ['documents:read'] }),
+    });
+    expect(post.status).toBe(201);
+    const created = (await post.json()) as { data: { id: string } };
+
+    const list = await app.request('/api/v1/instance/tokens', {
+      headers: { Cookie: seed.sessionCookie },
+    });
+    const body = (await list.json()) as {
+      data: { tokens: { id: string; expiresAt: number | null }[] };
+    };
+    const row = body.data.tokens.find((t) => t.id === created.data.id);
+    expect(row).toBeDefined();
+    expect(row!.expiresAt).toBeNull();
+  });
+
   test('scope ceiling: an admin cannot mint a scope its role lacks (403)', async () => {
     // An 'admin' role whose roleToScopes does NOT include the owner-only scope is
     // refused — the mint can never exceed the caller's instance role.
