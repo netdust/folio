@@ -1,10 +1,11 @@
-import { Editor, rootCtx, defaultValueCtx, editorViewOptionsCtx } from '@milkdown/core';
-import { Milkdown, MilkdownProvider, useEditor } from '@milkdown/react';
+import { Editor, rootCtx, defaultValueCtx, editorViewCtx, editorViewOptionsCtx } from '@milkdown/core';
+import { Milkdown, MilkdownProvider, useEditor, useInstance } from '@milkdown/react';
 import { commonmark } from '@milkdown/preset-commonmark';
 import { gfm } from '@milkdown/preset-gfm';
 import { history } from '@milkdown/plugin-history';
 import { listener, listenerCtx } from '@milkdown/plugin-listener';
 import { clipboard } from '@milkdown/plugin-clipboard';
+import { insert, replaceRange } from '@milkdown/utils';
 import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { debounce } from '../../lib/debounce.ts';
@@ -12,7 +13,7 @@ import { SlashMenu } from './slash-menu.tsx';
 import { WikiMenu } from './wiki-menu.tsx';
 import { BodyToolbar } from './body-toolbar.tsx';
 import { matchWikiTrigger, replaceWikiToken } from '../../lib/wiki-trigger.ts';
-import { applyAtCapturedRange, captureSlashToken } from '../../lib/slash-capture.ts';
+import { captureSlashTokenRange, replaceCapturedRange } from '../../lib/slash-capture.ts';
 import { type CompletionAction, completeAi } from '../../lib/api/ai-complete.ts';
 import { ApiError } from '../../lib/api/client.ts';
 import type { DocumentSummary } from '../../lib/api/documents.ts';
@@ -70,6 +71,11 @@ function MilkdownEditor({
   // `[[` wiki-link trigger — independent of the `/` slash trigger (different
   // chars, mutually exclusive in practice). Mirrors the slash machinery.
   const [wiki, setWiki] = useState<SlashState>({ open: false, query: '', rect: { top: 0, left: 0 } });
+
+  // The live Editor instance — resolved inside MilkdownProvider exactly as
+  // BodyToolbar does. Used by the AI slash path to PARSE the result through the
+  // editor (replaceRange) instead of poking raw markdown into a DOM text node.
+  const [editorLoading, getEditor] = useInstance();
 
   useEditor((root) =>
     Editor.make()
@@ -160,6 +166,39 @@ function MilkdownEditor({
   const getProseDOM = () =>
     (wrapperRef.current?.querySelector('.ProseMirror') as HTMLElement | null) ?? null;
 
+  // Read the live ProseMirror view out of the editor instance (the same ctx
+  // BodyToolbar reaches via callCommand). Returns null before the editor is
+  // ready or if the view ctx isn't populated yet. The captured-range logic in
+  // lib/slash-capture.ts only reads `state.selection` + `state.doc`.
+  const getEditorView = (
+    editor: ReturnType<typeof getEditor> | null,
+  ): import('../../lib/slash-capture.ts').SlashTokenView | null => {
+    if (!editor) return null;
+    try {
+      return editor.ctx.get(editorViewCtx) as import('../../lib/slash-capture.ts').SlashTokenView;
+    } catch {
+      return null;
+    }
+  };
+
+  // Editor ACTION factory: PARSE `markdown` through the editor and place it
+  // over the captured ProseMirror `{from, to}` range. Composed from two
+  // @milkdown/utils macros inside ONE editor action (no new deps, one ctx):
+  //
+  //   1. replaceRange('', range) — delete the `/draft` token, collapsing the
+  //      selection onto `range.from`. (Empty markdown ⇒ this is the whole op:
+  //      orphaned-token cleanup, finding 213.)
+  //   2. insert(markdown) — insert at the now-collapsed cursor. With a collapsed
+  //      selection `insert` uses a CLOSED slice, so a leading `# Heading` lands
+  //      as a real H1 block instead of flattening into the host paragraph the
+  //      token lived in (the bug `replaceRange` alone would reintroduce).
+  const parseInsertOverRange =
+    (markdown: string, range: { from: number; to: number }) =>
+    (ctx: Parameters<ReturnType<typeof replaceRange>>[0]) => {
+      replaceRange('', range)(ctx);
+      if (markdown.length > 0) insert(markdown)(ctx);
+    };
+
   // Guards against a double-fire of the async AI completion (finding 193): the
   // slash menu can re-invoke `aiComplete` while a request is still in flight.
   const aiInFlightRef = useRef(false);
@@ -211,22 +250,22 @@ function MilkdownEditor({
 
       // POSITION CAPTURE (findings 210/201/211/171). Unlike the synchronous
       // `/link` path, `aiComplete` awaits the provider for SECONDS, during which
-      // the user can move the caret, type, or delete the `/draft` token. We must
-      // therefore snapshot the slash-token's DOM Range NOW — before the await —
-      // and replace THAT captured span on resolve, not a fresh live selection
-      // (which would land the text at the moved caret or silently no-op when
-      // `lastIndexOf('/')` returns -1). See lib/slash-capture.ts.
-      const dom = getProseDOM();
-      const captured = captureSlashToken(window.getSelection());
+      // the user can move the caret, type, or delete the `/draft` token. We
+      // therefore snapshot the slash-token's ProseMirror position RANGE NOW —
+      // before the await — and replace THAT captured range on resolve, not a
+      // fresh live selection (which would land the text at the moved caret or
+      // silently no-op). See lib/slash-capture.ts.
+      const editor = editorLoading ? null : getEditor();
+      const captured = captureSlashTokenRange(getEditorView(editor));
 
-      // Replace the captured slash-token span (empty `text` deletes it). Returns
-      // false when the captured node was detached (user deleted the block).
-      const placeResult = (text: string): boolean => {
-        const ok = applyAtCapturedRange(captured, text);
-        // Fire input so Milkdown picks up the change.
-        if (ok && dom) dom.dispatchEvent(new InputEvent('input', { bubbles: true }));
-        return ok;
-      };
+      // Replace the captured slash-token range with PARSED markdown via the
+      // editor's `replaceRange` action (empty `markdown` deletes the token).
+      // `replaceRange` runs the markdown through the editor's parser, so `#`,
+      // lists and paragraphs become real ProseMirror nodes instead of literal
+      // text (the root-cause fix). Returns false when the captured range no
+      // longer fits the (edited) document — e.g. the user deleted the block.
+      const placeResult = (markdown: string): boolean =>
+        replaceCapturedRange(editor, getEditorView(editor), captured, markdown, parseInsertOverRange);
 
       // Capture the body BEFORE the slash token is mutated. `/draft` works from
       // the title even when the body is empty; the others transform the body.

@@ -9,8 +9,10 @@ import { signUpFresh, createWorkspace, createProject } from './fixtures.ts';
  * route tests; this spec is the UI half.
  *
  * NOT driven here (recorded as residual in the shake-out manifest, not green):
- *   - AI slash commands (/draft, /decompose, /summarize): need a real BYOK key
- *     configured → unverified-no-browser (user's smoke gate).
+ *   - AI slash commands against a REAL provider (/draft, /decompose, /summarize):
+ *     need a real BYOK key → unverified-no-browser (user's smoke gate). The
+ *     PARSE half of /draft (markdown → real ProseMirror nodes, the root-cause
+ *     fix) IS driven below with /me + /ai/complete route-stubbed — no key needed.
  *   - Board manual drag-reorder (4c): headless dnd-kit pointer drag is fragile
  *     (the existing shakeout-projects spec records the same) → human eyeball.
  */
@@ -136,4 +138,70 @@ test('board: changing group-by on the default board persists across a reload', a
   await expect(page.getByRole('button', { name: /Group:\s*Priority/i })).toBeVisible({
     timeout: 6000,
   });
+});
+
+// ── AI slash result PARSES as markdown (root-cause fix, this bugfix) ───────────
+//
+// The slash-insert path used to poke the AI's raw markdown string into a single
+// ProseMirror text node (`#` stayed literal, `\n` collapsed). The fix routes the
+// result through the editor's `replaceRange` action, which PARSES it. jsdom
+// can't render a real ProseMirror tree, so this is the only place the parse is
+// provable. We stub /me (→ ai_configured) and /ai/complete (→ markdown) so no
+// real BYOK key is needed; the assertion is a REAL <h1> in the editor DOM, not
+// a literal "#".
+test('slash /draft: AI result renders as a real H1 + list, not literal markdown', async ({
+  page,
+}) => {
+  await signUpFresh(page);
+  const { wslug, pslug } = freshSlugs();
+  await createWorkspace(page, `HP ${seq}`, wslug);
+  await createProject(page, wslug, `Proj ${seq}`, pslug);
+
+  // Stub the boot identity so the AI slash commands are enabled WITHOUT a key.
+  await page.route('**/api/v1/auth/me', async (route) => {
+    const res = await route.fetch();
+    const json = (await res.json()) as { data?: Record<string, unknown> };
+    await route.fulfill({
+      response: res,
+      json: { ...json, data: { ...(json.data ?? {}), ai_configured: true } },
+    });
+  });
+  // Stub the AI completion: multi-block markdown that MUST parse (H1 + list).
+  const aiMarkdown = '# Drafted Heading\n\nA paragraph.\n\n- first\n- second';
+  await page.route('**/api/v1/w/*/ai/complete', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ data: { text: aiMarkdown } }),
+    });
+  });
+
+  // Seed an EMPTY work item so the editor starts blank, then open it.
+  const create = await page.request.post(
+    `/api/v1/w/${wslug}/p/${pslug}/documents`,
+    { data: { type: 'work_item', title: 'Draft me', body: '' } },
+  );
+  expect(create.ok(), `seed ${create.status()}: ${await create.text()}`).toBe(true);
+  const slug = (await create.json()).data.slug as string;
+
+  await page.goto(`/w/${wslug}/p/${pslug}/work-items?doc=${slug}`);
+  const editor = page.locator('[role="dialog"] .ProseMirror');
+  await expect(editor).toBeVisible({ timeout: 6000 });
+
+  // Type the slash trigger into the editor. The leading space satisfies the
+  // `(?:^|\s)\/` trigger regex the editor listens for.
+  await editor.click();
+  await page.keyboard.type(' /draft');
+
+  // The slash menu is a fixed-position listbox rendered outside the dialog.
+  const draftOption = page.getByRole('option', { name: /Draft body/i });
+  await expect(draftOption).toBeVisible({ timeout: 4000 });
+  await draftOption.click();
+
+  // THE PROOF: the markdown parsed into real nodes. A literal-text bug would
+  // render "# Drafted Heading" inside a paragraph with a literal "#".
+  await expect(editor.locator('h1')).toHaveText(/Drafted Heading/, { timeout: 6000 });
+  await expect(editor.locator('ul li')).toHaveCount(2);
+  // And the raw "# " hash is NOT present as literal text.
+  await expect(editor).not.toContainText('# Drafted Heading');
 });
