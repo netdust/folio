@@ -370,6 +370,67 @@ describe('CommentsTab', () => {
     });
   });
 
+  // ---------- Retry wiring (error comment → useRetryRun) --------------
+  it('clicking Retry on an error comment POSTs to the run retry endpoint with the run id', async () => {
+    const errorComment = makeComment({
+      id: 'c-err',
+      slug: 'comment-c-err',
+      body: 'Run blew up',
+      frontmatter: {
+        author: 'agent:drafter',
+        kind: 'error',
+        visibility: 'normal',
+        mentions: [],
+        run_id: 'run-fail9999',
+      },
+    });
+    stubFetchList([errorComment]);
+    renderTab();
+    await waitFor(() => screen.getByText('Run blew up'));
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /retry/i }));
+    });
+
+    // Seam: assert the un-mocked client→react-query→useRetryRun chain hit the
+    // real wire — a POST to /runs/<runId>/retry. No mock of the hook itself.
+    await waitFor(() => {
+      const fetchMock = vi.mocked(fetch);
+      const retryCall = fetchMock.mock.calls.find(([url, init]) => {
+        const u = typeof url === 'string' ? url : (url as URL).toString();
+        return (
+          (init as RequestInit)?.method?.toUpperCase() === 'POST' &&
+          u.includes('/runs/run-fail9999/retry')
+        );
+      });
+      expect(retryCall).toBeDefined();
+    });
+  });
+
+  it('error comment WITHOUT a run_id renders no Retry button and fires no retry POST', async () => {
+    const errorComment = makeComment({
+      id: 'c-err2',
+      slug: 'comment-c-err2',
+      body: 'No run to retry',
+      frontmatter: {
+        author: 'agent:drafter',
+        kind: 'error',
+        visibility: 'normal',
+        mentions: [],
+      },
+    });
+    stubFetchList([errorComment]);
+    renderTab();
+    await waitFor(() => screen.getByText('No run to retry'));
+
+    expect(screen.queryByRole('button', { name: /retry/i })).not.toBeInTheDocument();
+    const retryCall = vi.mocked(fetch).mock.calls.find(([url]) => {
+      const u = typeof url === 'string' ? url : (url as URL).toString();
+      return u.includes('/retry');
+    });
+    expect(retryCall).toBeUndefined();
+  });
+
   // BUG-017 — handleSaveEdit / handleDeleteConfirm closed the editor/dialog
   // in `finally`, unconditionally. On PATCH/DELETE failure, the optimistic
   // rollback restored the original body, the editor was gone, and the user's

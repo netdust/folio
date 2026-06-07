@@ -28,6 +28,10 @@ export interface CommentRowProps {
   workspaceAgents?: AgentRef[];
   onEdit?: (slug: string) => void;
   onDelete?: (slug: string) => void;
+  /** Re-run the failed agent run that produced this error comment. Wired by the
+   *  parent to useRetryRun; only meaningful on kind=error comments that carry a
+   *  run_id. */
+  onRetry?: (runId: string) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -210,6 +214,7 @@ export function CommentRow({
   workspaceAgents,
   onEdit,
   onDelete,
+  onRetry,
 }: CommentRowProps) {
   const { frontmatter: fm, body, slug, createdAt } = comment;
   const [copyError, setCopyError] = useState<string | null>(null);
@@ -306,14 +311,14 @@ export function CommentRow({
             </button>
           )}
 
-          {/* Error kind: disabled Retry (Phase 3) */}
-          {fm.kind === 'error' && (
+          {/* Error kind: Retry the failed run (needs a run_id to target). */}
+          {fm.kind === 'error' && fm.run_id && (
             <button
               type="button"
-              disabled
               aria-label="Retry"
-              title="Phase 3 wires this to the agent runner"
-              className="rounded px-1.5 py-0.5 text-xs text-fg-3 opacity-40 cursor-not-allowed"
+              title="Re-run the failed agent run"
+              onClick={() => onRetry?.(fm.run_id!)}
+              className="rounded px-1.5 py-0.5 text-xs text-fg-3 hover:bg-border-light hover:text-fg transition-colors"
             >
               Retry
             </button>

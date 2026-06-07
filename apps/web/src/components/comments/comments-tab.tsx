@@ -10,7 +10,10 @@ import {
   type CommentVisibility,
 } from '../../lib/api/comments.ts';
 import { useWorkspaceAgents } from '../../lib/api/workspace-documents.ts';
+import { useRetryRun } from '../../lib/api/runs.ts';
 import { useEventStream } from '../../lib/api/event-stream.ts';
+import { formatApiError } from '../../lib/api/index.ts';
+import { toast } from 'sonner';
 import type { AgentRef } from '../../lib/author-ref.ts';
 import { Button } from '../ui/button.tsx';
 import {
@@ -251,6 +254,18 @@ export function CommentsTab({
   const createComment = useCreateComment(workspaceSlug, projectSlug, parentSlug);
   const updateComment = useUpdateComment(workspaceSlug, projectSlug);
   const deleteComment = useDeleteComment(workspaceSlug, projectSlug);
+  const retryRun = useRetryRun(workspaceSlug);
+
+  function handleRetry(runId: string) {
+    if (retryRun.isPending) return; // guard against double-fire mid-request
+    retryRun.mutate(
+      { runId },
+      {
+        onSuccess: () => toast.success('Run re-queued'),
+        onError: (err) => toast.error(formatApiError(err)),
+      },
+    );
+  }
 
   // ---------- Inline edit state ----------------------------------------
   const [editingSlug, setEditingSlug] = useState<string | null>(null);
@@ -402,6 +417,7 @@ export function CommentsTab({
                   workspaceAgents={workspaceAgents}
                   onEdit={handleEdit}
                   onDelete={handleDeleteRequest}
+                  onRetry={handleRetry}
                 />
               )}
 
