@@ -4,7 +4,7 @@
  * re-export from apps/server/src/lib/events.ts for source-compat with the
  * existing many `EventKind` import sites.
  *
- * Phase 3 (Task A-1): added agent.run.*, ai.action, runs_table.lazy_seeded,
+ * Phase 3 (Task A-1): added agent.run.*, runs_table.lazy_seeded,
  * workspace.provider.{degraded,recovered}.
  */
 export type EventKind =
@@ -38,17 +38,18 @@ export type EventKind =
   | 'agent.allow_list.reconciled'
   // Phase 3:
   | 'agent.run.started'
+  // reserved for the deferred model-initiated approval gate (not dead — not yet entered in production).
   | 'agent.run.awaiting_approval'
   | 'agent.run.running'
   | 'agent.run.completed'
   | 'agent.run.failed'
+  // reserved for the deferred model-initiated approval gate (not dead — not yet entered in production).
   | 'agent.run.rejected'
   // Phase 3.x — emitted when a claude-code run's full session transcript is
   // persisted onto the run document body (setRunBody). Honors rule #4: the
   // body write is never eventless, and transcript consumers get a dedicated
   // signal independent of the terminal transitionRun event.
   | 'agent.run.transcript'
-  | 'ai.action'
   | 'runs_table.lazy_seeded'
   | 'workspace.provider.degraded'
   | 'workspace.provider.recovered'
@@ -58,10 +59,6 @@ export type EventKind =
   // agent-originated chain because FOLIO_AGENT_CHAINS_ENABLED is off (V1
   // autonomy gate). Workspace-scoped, durable.
   | 'agent.chain.suppressed'
-  // Piece B (T8) — emitted by setSkillTrust when a __system skill's `trusted`
-  // flag is flipped. The flag is server-managed; this is the single audit
-  // signal for a bless/unbless. Scoped to (__system, skills project, skill doc).
-  | 'skill.trust.changed'
   // Drop-workspace-tenancy Task 11 — emitted when an owner/admin grants or
   // revokes an explicit workspace_access / project_access row (the invitation
   // routes). Honors rule #4 (every write emits an event) for the access tables.
@@ -107,13 +104,14 @@ export const KNOWN_EVENT_KINDS: readonly EventKind[] = [
   'agent.allow_list.reconciled',
   // Phase 3:
   'agent.run.started',
+  // reserved for the deferred model-initiated approval gate (not dead — not yet entered in production).
   'agent.run.awaiting_approval',
   'agent.run.running',
   'agent.run.completed',
   'agent.run.failed',
+  // reserved for the deferred model-initiated approval gate (not dead — not yet entered in production).
   'agent.run.rejected',
   'agent.run.transcript',
-  'ai.action',
   'runs_table.lazy_seeded',
   'workspace.provider.degraded',
   'workspace.provider.recovered',
@@ -122,8 +120,6 @@ export const KNOWN_EVENT_KINDS: readonly EventKind[] = [
   'reactor.recovered',
   // Phase 3 C-11 — autonomy-gate suppression signal (trigger-matcher).
   'agent.chain.suppressed',
-  // Piece B (T8) — skill bless/unbless audit signal.
-  'skill.trust.changed',
   // Drop-workspace-tenancy Task 11 — access grant/revoke audit signal.
   'access.granted',
   'access.revoked',
