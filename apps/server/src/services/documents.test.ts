@@ -7,11 +7,11 @@
  */
 
 import { test, expect } from 'bun:test';
-import { and, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { makeTestApp } from '../test/harness.ts';
 import { seedProjectDefaults } from '../lib/seed-project-defaults.ts';
-import { apiTokens, documents, projects, tables } from '../db/schema.ts';
+import { apiTokens, documents, events, projects, tables } from '../db/schema.ts';
 import type { Document } from '../db/schema.ts';
 import { HTTPError } from '../lib/http.ts';
 import {
@@ -89,11 +89,62 @@ test('retitling a work_item does NOT change its slug (slugs are immutable)', asy
     project: seed.project,
     fallbackTable: table,
     actor: seed.user,
+    eventActor: seed.user.id,
     existing: document,
     patch: { title: 'Fix the login bug completely' },
   });
   expect(updated.title).toBe('Fix the login bug completely');
   expect(updated.slug).toBe('fix-login-bug');
+});
+
+// Invariant 15 — the required `eventActor` param keeps the FK-write actor
+// (the FK-valid human in `actor.id`) separate from the EVENT actor. When an
+// agent run passes `eventActor: 'agent:<slug>'`, the emitted `document.updated`
+// event must carry the AGENT slug, NOT the human id — that is the exact signal
+// the agent-chain autonomy gate (isAgentOriginated) keys on. If a caller's
+// agent write silently emitted a human-actored event, the gate would be
+// disabled. This test pins the property the now-required param protects.
+test('updateDocument with an agent eventActor emits an agent-actored event (autonomy gate preserved)', async () => {
+  const { db, seed } = await makeTestApp();
+  const table = await getWorkItemsTable(db, seed.project.id);
+  const { document } = await createDocument({
+    workspace: seed.workspace,
+    project: seed.project,
+    table,
+    actor: seed.user,
+    token: null,
+    input: {
+      type: 'work_item',
+      title: 'Agent-touched item',
+      body: '',
+      frontmatter: {},
+      status: null,
+    },
+  });
+
+  await updateDocument({
+    workspace: seed.workspace,
+    project: seed.project,
+    fallbackTable: table,
+    actor: seed.user,
+    // The FK write still goes to the human (actor.id); the EVENT actor is the agent.
+    eventActor: 'agent:_operator',
+    existing: document,
+    patch: { title: 'Agent retitled this' },
+  });
+
+  const latest = await db.query.events.findFirst({
+    where: and(
+      eq(events.documentId, document.id),
+      eq(events.kind, 'document.updated'),
+    ),
+    orderBy: [desc(events.seq)],
+  });
+  expect(latest).toBeTruthy();
+  // The property the required param protects: event actor is the agent slug,
+  // NOT the human user id (which still owns the FK write).
+  expect(latest!.actor).toBe('agent:_operator');
+  expect(latest!.actor).not.toBe(seed.user.id);
 });
 
 test('retitling an UNTITLED placeholder DOES re-slug (first real name wins, once)', async () => {
@@ -108,6 +159,7 @@ test('retitling an UNTITLED placeholder DOES re-slug (first real name wins, once
   // First real title: placeholder slug adopts it.
   const named = await updateDocument({
     workspace: seed.workspace, project: seed.project, fallbackTable: table, actor: seed.user,
+    eventActor: seed.user.id,
     existing: document, patch: { title: 'Onboard new client' },
   });
   expect(named.slug).toBe('onboard-new-client');
@@ -115,6 +167,7 @@ test('retitling an UNTITLED placeholder DOES re-slug (first real name wins, once
   // Second rename: now it's a real slug → immutable, does NOT change again.
   const renamed = await updateDocument({
     workspace: seed.workspace, project: seed.project, fallbackTable: table, actor: seed.user,
+    eventActor: seed.user.id,
     existing: named, patch: { title: 'Onboard the new client properly' },
   });
   expect(renamed.slug).toBe('onboard-new-client');
@@ -136,6 +189,7 @@ test('retitling an untitled-N collision placeholder also re-slugs', async () => 
 
   const named = await updateDocument({
     workspace: seed.workspace, project: seed.project, fallbackTable: table, actor: seed.user,
+    eventActor: seed.user.id,
     existing: second, patch: { title: 'Real Title' },
   });
   expect(named.slug).toBe('real-title');
@@ -214,6 +268,7 @@ test('deleteDocument (workspace-scoped) on agent revokes its api token via casca
     workspace: seed.workspace,
     project: null,
     actor: seed.user,
+    eventActor: seed.user.id,
     existing: document,
   });
 
@@ -264,6 +319,7 @@ test('updateDocument blocks PATCH on builtin trigger fields other than enabled',
       project: null,
       fallbackTable: null,
       actor: seed.user,
+      eventActor: seed.user.id,
       existing: trig,
       patch: { frontmatter: { event_filter: { kind: 'foo' } } },
     }),
@@ -278,6 +334,7 @@ test('updateDocument allows PATCH on enabled for builtin trigger', async () => {
     project: null,
     fallbackTable: null,
     actor: seed.user,
+    eventActor: seed.user.id,
     existing: trig,
     patch: { frontmatter: { enabled: false } },
   });
@@ -298,6 +355,7 @@ test('updateDocument allows full-frontmatter PATCH on builtin trigger if only en
     project: null,
     fallbackTable: null,
     actor: seed.user,
+    eventActor: seed.user.id,
     existing: trig,
     patch: {
       frontmatter: {
@@ -321,6 +379,7 @@ test('updateDocument blocks PATCH on builtin trigger title change', async () => 
       project: null,
       fallbackTable: null,
       actor: seed.user,
+      eventActor: seed.user.id,
       existing: trig,
       patch: { title: 'Renamed' },
     }),
@@ -336,6 +395,7 @@ test('updateDocument blocks PATCH on builtin trigger body change', async () => {
       project: null,
       fallbackTable: null,
       actor: seed.user,
+      eventActor: seed.user.id,
       existing: trig,
       patch: { body: 'New body' },
     }),
@@ -350,6 +410,7 @@ test('updateDocument allows full patch on non-builtin trigger', async () => {
     project: null,
     fallbackTable: null,
     actor: seed.user,
+    eventActor: seed.user.id,
     existing: trig,
     patch: { frontmatter: { event_filter: { kind: 'foo' } } },
   });
@@ -396,6 +457,7 @@ test('BUG-016: PATCH that clears schedule on schedule-only trigger rejects with 
       project: null,
       fallbackTable: null,
       actor: seed.user,
+      eventActor: seed.user.id,
       existing: trig,
       patch: { frontmatter: { schedule: null } },
     }),
@@ -431,6 +493,7 @@ test('BUG-016: PATCH that clears on_event on event-only trigger rejects with INV
       project: null,
       fallbackTable: null,
       actor: seed.user,
+      eventActor: seed.user.id,
       existing: trig,
       patch: { frontmatter: { on_event: null } },
     }),
@@ -468,6 +531,7 @@ test('BUG-016: switching from schedule-only to event-only (one valid → another
     project: null,
     fallbackTable: null,
     actor: seed.user,
+    eventActor: seed.user.id,
     existing: trig,
     patch: { frontmatter: { schedule: null, on_event: 'comment.created' } },
   });
@@ -485,6 +549,7 @@ test('deleteDocument blocks delete on builtin trigger', async () => {
       workspace: seed.workspace,
       project: null,
       actor: seed.user,
+      eventActor: seed.user.id,
       existing: trig,
     });
   } catch (err) {
@@ -507,6 +572,7 @@ test('deleteDocument allows delete on non-builtin trigger', async () => {
     workspace: seed.workspace,
     project: null,
     actor: seed.user,
+    eventActor: seed.user.id,
     existing: trig,
   });
   const gone = await db.query.documents.findFirst({
@@ -570,6 +636,7 @@ test('F8: deleteDocument(work_item) cascades to remove its comment children', as
     workspace: seed.workspace,
     project: seed.project,
     actor: seed.user,
+    eventActor: seed.user.id,
     existing: parent.document,
   });
 
@@ -632,6 +699,7 @@ test('H8: deleteDocument(page) cascades GRANDCHILDREN recursively (3 levels deep
   // Delete A. Recursive cascade should remove B, C, and the comment.
   await deleteDocument({
     workspace: seed.workspace, project: seed.project, actor: seed.user,
+    eventActor: seed.user.id,
     existing: a.document,
   });
 
@@ -672,6 +740,7 @@ test('G8: deleteDocument(page) cascades nested page children too', async () => {
 
   await deleteDocument({
     workspace: seed.workspace, project: seed.project, actor: seed.user,
+    eventActor: seed.user.id,
     existing: parent.document,
   });
 
@@ -749,6 +818,7 @@ test('BUG-010: cascade emits per-descendant events (comment.deleted + document.d
 
   await deleteDocument({
     workspace: seed.workspace, project: seed.project, actor: seed.user,
+    eventActor: seed.user.id,
     existing: parent.document,
   });
   unsub();
@@ -813,6 +883,7 @@ test('F8: deleting a non-parent doc does not collateral-delete unrelated comment
   // Delete A. B's comment must survive.
   await deleteDocument({
     workspace: seed.workspace, project: seed.project, actor: seed.user,
+    eventActor: seed.user.id,
     existing: parentA.document,
   });
   const stillThere = await db.query.documents.findFirst({ where: eq(documents.id, commentB) });
@@ -836,6 +907,7 @@ test("PATCH agent with model: '' clears the key (does not persist empty string)"
   });
   const updated = await updateDocument({
     workspace: seed.workspace, project: null, fallbackTable: null, actor: seed.user,
+    eventActor: seed.user.id,
     existing: document,
     // Switch to the modelless claude-code provider AND clear the model together,
     // so the post-merge superRefine (FIX #1) is satisfied.
@@ -865,6 +937,7 @@ test('FIX#1: PATCH clearing model on an API-provider agent rejects with INVALID_
   await expect(
     updateDocument({
       workspace: seed.workspace, project: null, fallbackTable: null, actor: seed.user,
+      eventActor: seed.user.id,
       existing: document,
       patch: { frontmatter: { model: null } },
     }),
@@ -885,6 +958,7 @@ test('FIX#1: PATCH clearing model on a claude-code agent succeeds (no model requ
   });
   const updated = await updateDocument({
     workspace: seed.workspace, project: null, fallbackTable: null, actor: seed.user,
+    eventActor: seed.user.id,
     existing: document,
     patch: { frontmatter: { model: null } },
   });
@@ -922,6 +996,7 @@ test('FIX#3: a placeholder-SHAPED slug with a real (non-seed) title does NOT re-
 
   const updated = await updateDocument({
     workspace: seed.workspace, project: seed.project, fallbackTable: table, actor: seed.user,
+    eventActor: seed.user.id,
     existing,
     patch: { title: 'Whatever' },
   });

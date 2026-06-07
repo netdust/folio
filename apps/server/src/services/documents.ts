@@ -783,13 +783,20 @@ export interface UpdateDocumentArgs {
   fallbackTable: TableEntity | null;
   actor: User;
   /**
-   * The EVENT actor string, when it must differ from the FK-write actor
-   * (`actor.id`). For an agent/operator run the FK write goes to the real human
-   * (`actor.id`, an FK-valid users.id) while the event actor stays the agent slug
-   * `agent:<slug>` so the agent-chain autonomy gate (isAgentOriginated) is
-   * preserved. Defaults to `actor.id` (human-MCP path — actor IS the user).
+   * The EVENT actor string. For an agent/operator run the FK write goes to the
+   * real human (`actor.id`, an FK-valid users.id) while the event actor stays
+   * the agent slug `agent:<slug>` so the agent-chain autonomy gate
+   * (isAgentOriginated) is preserved.
+   *
+   * REQUIRED (was optional with a `?? actor.id` default). Omission would
+   * silently re-collapse the FK-actor/event-actor split and disable the
+   * autonomy gate for an agent write — a caller that forgot it would make an
+   * AGENT write emit a HUMAN-actored event. Making it required turns omission
+   * into a tsc compile error so the choice is always explicit at the call site.
+   * Human-MCP/HTTP callers pass `actor.id`; agent callers pass `agent:<slug>`.
+   * Invariant 15 (ARCHITECTURE-INVARIANTS.md).
    */
-  eventActor?: string;
+  eventActor: string;
   existing: Document;
   patch: DocumentPatch;
 }
@@ -830,7 +837,7 @@ export async function updateDocument(
   args: UpdateDocumentArgs,
 ): Promise<Document> {
   const { workspace: ws, project: p, actor: user, existing, patch } = args;
-  const eventActor = args.eventActor ?? user.id;
+  const eventActor = args.eventActor;
 
   // G5 — comments must be mutated through update_comment (services/comments.ts),
   // which enforces author-only, kind-immutable, edited_at, and soft-delete

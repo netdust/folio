@@ -199,6 +199,8 @@ workspaceDocumentsRoute.patch('/:slug', requireScope('documents:write'), async (
     project: null,
     fallbackTable: null,
     actor: user,
+    // eventActor = the human user: HTTP writes are NOT chain-suppressed (agent PAT over HTTP resolves getUser → its human creator). See tasks/retro-follow-ups.md 2026-06-06 (deferred). Explicit, not defaulted, so the choice is visible.
+    eventActor: user.id,
     existing,
     patch: parsed.data,
   });
