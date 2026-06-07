@@ -29,8 +29,15 @@ interface Props {
   presets: ScopePreset[];
   /** Optional warning shown when ALL scopes are selected (root-access alert). */
   allScopesWarning?: string;
-  /** The create mutation — returns the once-only plaintext token. */
-  mutate: (vars: { name: string; scopes: string[] }) => Promise<{ token: string }>;
+  /**
+   * The create mutation — returns the once-only plaintext token. `expires_in_days`
+   * is omitted entirely when the expiry field is left blank (never expires).
+   */
+  mutate: (vars: {
+    name: string;
+    scopes: string[];
+    expires_in_days?: number;
+  }) => Promise<{ token: string }>;
   isPending: boolean;
 }
 
@@ -55,6 +62,7 @@ export function TokenCreateDialog({
 }: Props) {
   const [name, setName] = useState('');
   const [scopes, setScopes] = useState<Set<string>>(new Set());
+  const [expiresInDays, setExpiresInDays] = useState('');
   const [revealed, setRevealed] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
@@ -63,6 +71,7 @@ export function TokenCreateDialog({
   function reset() {
     setName('');
     setScopes(new Set());
+    setExpiresInDays('');
     setRevealed(null);
     setCopied(false);
   }
@@ -73,8 +82,18 @@ export function TokenCreateDialog({
 
   async function onSubmit() {
     if (!canSubmit) return;
+    // Blank/empty/non-positive = never expires → omit the key entirely so the
+    // server stores a null expiresAt.
+    const trimmed = expiresInDays.trim();
+    const parsed = trimmed === '' ? null : Number(trimmed);
+    const expires_in_days =
+      parsed !== null && Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
     try {
-      const res = await mutate({ name: name.trim(), scopes: Array.from(scopes) });
+      const res = await mutate({
+        name: name.trim(),
+        scopes: Array.from(scopes),
+        ...(expires_in_days !== undefined ? { expires_in_days } : {}),
+      });
       setRevealed(res.token);
     } catch (err) {
       toast.error(formatApiError(err));
@@ -163,6 +182,24 @@ export function TokenCreateDialog({
                   ))}
                 </div>
               </fieldset>
+
+              <label className="block">
+                <span className="block text-xs font-medium text-fg-2">
+                  Expires in (days)
+                </span>
+                <input
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={expiresInDays}
+                  onChange={(e) => setExpiresInDays(e.target.value)}
+                  placeholder="Leave blank to never expire"
+                  className="mt-1 block w-full rounded-md border border-border-light bg-content px-2 py-1.5 text-sm"
+                />
+                <span className="mt-1 block text-[11px] text-fg-3">
+                  Blank = never expires. The token is rejected after this many days.
+                </span>
+              </label>
             </div>
 
             <div className="mt-6 flex justify-end gap-2">

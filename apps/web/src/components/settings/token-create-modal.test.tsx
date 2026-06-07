@@ -277,6 +277,41 @@ describe('per-workspace reach + admin scopes', () => {
     expect(body).not.toHaveProperty('workspaceId');
   });
 
+  it('includes expires_in_days in the POST body when the expiry field is filled', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const fetchMock = stubCreateFetch();
+    const user = userEvent.setup();
+    render(
+      <TokenCreateModal wslug="acme" workspaceId="ws-1" open onOpenChange={() => {}} />,
+      { wrapper: wrap(qc) },
+    );
+    await user.type(screen.getByLabelText(/^name$/i), 'CI');
+    await user.click(screen.getByLabelText('documents:read'));
+    await user.type(screen.getByLabelText(/expires in/i), '30');
+    await user.click(screen.getByRole('button', { name: /^create$/i }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    expect(body.expires_in_days).toBe(30);
+  });
+
+  it('OMITS expires_in_days when the expiry field is left blank', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const fetchMock = stubCreateFetch();
+    const user = userEvent.setup();
+    render(
+      <TokenCreateModal wslug="acme" workspaceId="ws-1" open onOpenChange={() => {}} />,
+      { wrapper: wrap(qc) },
+    );
+    await user.type(screen.getByLabelText(/^name$/i), 'CI');
+    await user.click(screen.getByLabelText('documents:read'));
+    await user.click(screen.getByRole('button', { name: /^create$/i }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    expect(body).not.toHaveProperty('expires_in_days');
+  });
+
   it('the three admin scopes are offered as checkboxes', () => {
     const qc = new QueryClient();
     render(

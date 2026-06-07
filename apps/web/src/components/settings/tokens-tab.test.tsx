@@ -54,6 +54,96 @@ describe('TokensTab', () => {
     expect(screen.getByText(/never used/i)).toBeInTheDocument();
   });
 
+  it('shows "Never expires" for a null expiresAt and a date for a non-null one', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        mockListResponse([
+          {
+            id: 'tok_1',
+            name: 'Forever',
+            scopes: ['documents:read'],
+            createdAt: '2026-05-25T00:00:00.000Z',
+            lastUsedAt: null,
+            expiresAt: null,
+          },
+          {
+            id: 'tok_2',
+            name: 'Temp',
+            scopes: ['documents:read'],
+            createdAt: '2026-05-25T00:00:00.000Z',
+            lastUsedAt: null,
+            expiresAt: '2027-01-01T00:00:00.000Z',
+          },
+        ]),
+      ),
+    );
+    render(<TokensTab wslug="acme" workspaceId="ws-1" />, { wrapper: wrap(qc) });
+
+    const foreverRow = (await screen.findByText('Forever')).closest('li')!;
+    expect(within(foreverRow).getByText(/never expires/i)).toBeInTheDocument();
+
+    const tempRow = (await screen.findByText('Temp')).closest('li')!;
+    // Date is locale-formatted; assert the prefix + the year are present.
+    expect(within(tempRow).getByText(/expires/i).textContent).toMatch(/2027/);
+  });
+
+  it('Rotate fires DELETE then POST (revoke old, mint new) in order', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const calls: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo, init?: RequestInit) => {
+        const method = init?.method ?? 'GET';
+        if (method === 'DELETE') {
+          calls.push('DELETE');
+          return new Response(JSON.stringify({ data: { ok: true } }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
+        if (method === 'POST') {
+          calls.push('POST');
+          return new Response(
+            JSON.stringify({
+              data: {
+                id: 'tok_new',
+                name: 'CI',
+                token: 'folio_pat_rotated',
+                scopes: ['documents:read'],
+              },
+            }),
+            { status: 201, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        return mockListResponse([
+          {
+            id: 'tok_1',
+            name: 'CI',
+            scopes: ['documents:read'],
+            createdAt: '2026-05-25T00:00:00.000Z',
+            lastUsedAt: null,
+            expiresAt: null,
+          },
+        ]);
+      }),
+    );
+
+    const user = userEvent.setup();
+    render(<TokensTab wslug="acme" workspaceId="ws-1" />, { wrapper: wrap(qc) });
+    const row = (await screen.findByText('CI')).closest('li')!;
+    await user.click(within(row).getByRole('button', { name: /rotate/i }));
+
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: /^rotate$/i }));
+
+    // New secret revealed once.
+    await waitFor(() => expect(screen.getByText('folio_pat_rotated')).toBeInTheDocument());
+    // Delete-then-create, in that order.
+    expect(calls).toEqual(['DELETE', 'POST']);
+  });
+
   it('shows an empty state with a Create button when there are no tokens', async () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     vi.stubGlobal('fetch', vi.fn(async () => mockListResponse([])));

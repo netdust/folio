@@ -1,7 +1,9 @@
 import { useState } from 'react';
+import { Check, Copy } from 'lucide-react';
 import { toast } from 'sonner';
 import {
   type ApiToken,
+  useCreateToken,
   useDeleteToken,
   useTokens,
 } from '../../lib/api/tokens.ts';
@@ -14,28 +16,23 @@ import {
   DialogTitle,
 } from '../ui/dialog.tsx';
 import { TokenCreateModal } from './token-create-modal.tsx';
+import { lastUsedLabel, expiresLabel } from './token-meta.ts';
 
 interface Props {
   wslug: string;
   workspaceId: string;
 }
 
-function relativeOrAbsolute(iso: string | null): string {
-  if (!iso) return 'Never used';
-  const then = new Date(iso).getTime();
-  const now = Date.now();
-  const seconds = Math.max(1, Math.round((now - then) / 1000));
-  if (seconds < 60) return `${seconds}s ago`;
-  if (seconds < 3600) return `${Math.round(seconds / 60)}m ago`;
-  if (seconds < 86_400) return `${Math.round(seconds / 3600)}h ago`;
-  return `${Math.round(seconds / 86_400)}d ago`;
-}
-
 export function TokensTab({ wslug, workspaceId }: Props) {
   const tokensQuery = useTokens(wslug, workspaceId);
+  const createToken = useCreateToken(wslug, workspaceId);
   const deleteToken = useDeleteToken(wslug, workspaceId);
   const [createOpen, setCreateOpen] = useState(false);
   const [pendingRevoke, setPendingRevoke] = useState<ApiToken | null>(null);
+  const [pendingRotate, setPendingRotate] = useState<ApiToken | null>(null);
+  const [rotating, setRotating] = useState(false);
+  const [rotatedSecret, setRotatedSecret] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
 
   const tokens = tokensQuery.data ?? [];
 
@@ -47,6 +44,41 @@ export function TokensTab({ wslug, workspaceId }: Props) {
       setPendingRevoke(null);
     } catch (err) {
       toast.error(formatApiError(err));
+    }
+  }
+
+  // Rotate = revoke the old token, then mint a new one with the same name +
+  // scopes, and reveal the new secret once. We can't recompute the original
+  // expiry window (only the absolute expiresAt is stored), so a rotated token
+  // defaults to never-expires; the operator can re-create with an expiry if
+  // they need one.
+  async function confirmRotate() {
+    if (!pendingRotate) return;
+    const target = pendingRotate;
+    setRotating(true);
+    try {
+      await deleteToken.mutateAsync(target.id);
+      const res = await createToken.mutateAsync({
+        name: target.name,
+        scopes: target.scopes,
+      });
+      setRotatedSecret(res.token);
+      setPendingRotate(null);
+    } catch (err) {
+      toast.error(formatApiError(err));
+    } finally {
+      setRotating(false);
+    }
+  }
+
+  async function copySecret() {
+    if (!rotatedSecret) return;
+    try {
+      await navigator.clipboard.writeText(rotatedSecret);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      toast.error('Copy failed — select the token manually');
     }
   }
 
@@ -97,7 +129,17 @@ export function TokensTab({ wslug, workspaceId }: Props) {
                   ))}
                 </div>
               </div>
-              <div className="text-xs text-fg-3">{relativeOrAbsolute(t.lastUsedAt)}</div>
+              <div className="text-right text-xs text-fg-3">
+                <div>{expiresLabel(t.expiresAt)}</div>
+                <div>{lastUsedLabel(t.lastUsedAt)}</div>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setPendingRotate(t)}
+              >
+                Rotate
+              </Button>
               <Button
                 variant="ghost"
                 size="sm"
@@ -139,6 +181,76 @@ export function TokensTab({ wslug, workspaceId }: Props) {
               loading={deleteToken.isPending}
             >
               Revoke
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={pendingRotate !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingRotate(null);
+        }}
+      >
+        <DialogContent>
+          <DialogTitle>Rotate &quot;{pendingRotate?.name}&quot;?</DialogTitle>
+          <DialogDescription>
+            This revokes the current secret and issues a new one with the same name
+            and scopes. Anything using the old token loses access immediately. The
+            rotated token does not carry over an expiry.
+          </DialogDescription>
+          <div className="mt-6 flex justify-end gap-2">
+            <Button variant="ghost" onClick={() => setPendingRotate(null)}>
+              Cancel
+            </Button>
+            <Button onClick={confirmRotate} loading={rotating}>
+              Rotate
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={rotatedSecret !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setRotatedSecret(null);
+            setCopied(false);
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogTitle>Token rotated</DialogTitle>
+          <DialogDescription>
+            This is the only time you&apos;ll see this token. Copy it now and store it
+            somewhere safe.
+          </DialogDescription>
+          <div className="mt-4 rounded-md border border-border-light bg-shell p-2">
+            <code className="block break-all font-mono text-xs text-fg">
+              {rotatedSecret}
+            </code>
+          </div>
+          <div className="mt-6 flex justify-end gap-2">
+            <Button variant="secondary" onClick={copySecret}>
+              {copied ? (
+                <>
+                  <Check size={14} />
+                  Copied
+                </>
+              ) : (
+                <>
+                  <Copy size={14} />
+                  Copy
+                </>
+              )}
+            </Button>
+            <Button
+              onClick={() => {
+                setRotatedSecret(null);
+                setCopied(false);
+              }}
+            >
+              Done
             </Button>
           </div>
         </DialogContent>
