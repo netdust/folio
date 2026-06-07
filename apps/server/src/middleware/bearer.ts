@@ -23,6 +23,17 @@ export const attachToken: MiddlewareHandler<AuthContext> = async (c, next) => {
   const row = await db.query.apiTokens.findFirst({
     where: eq(apiTokens.tokenHash, hashToken(raw)),
   });
+  // Expiry enforcement (invariant 1 — the ONE bearer convergence point). An
+  // expired token is treated as if it had never matched: token=null, no
+  // last_used bump, no creator resolution. By collapsing to the unknown-token
+  // path it produces the route's normal 401 with NO expired-vs-unknown oracle.
+  // The operator's in-memory EphemeralToken never reaches here (it is minted in
+  // services/conversation-runs.ts, not via this DB lookup), so this cannot gate
+  // it; the gate keys on the DB `row` only.
+  if (row && row.expiresAt != null && row.expiresAt.getTime() < Date.now()) {
+    c.set('token', null);
+    return next();
+  }
   c.set('token', row ?? null);
   // Best-effort lastUsedAt bump; failure must not block the request.
   //
@@ -33,17 +44,24 @@ export const attachToken: MiddlewareHandler<AuthContext> = async (c, next) => {
   // have a grep target. Failure still must not block — UPDATE is async-
   // fire-and-forget; we never await it.
   if (row) {
-    Promise.resolve(
-      db
-        .update(apiTokens)
-        .set({ lastUsedAt: new Date() })
-        .where(eq(apiTokens.id, row.id)),
-    ).catch((err: unknown) => {
-      console.warn(
-        '[bearer] lastUsedAt bump failed:',
-        err instanceof Error ? err.message : err,
-      );
-    });
+    // Coarse last_used stamp. The bump previously fired on EVERY request, a
+    // write-per-request amplification on a hot path. Now it only fires when the
+    // stamp is unset or older than 60s — enough resolution for the AI tab's
+    // "last used N ago" without writing on every call. Still fire-and-forget.
+    const lastUsed = row.lastUsedAt;
+    if (lastUsed == null || Date.now() - lastUsed.getTime() > 60_000) {
+      Promise.resolve(
+        db
+          .update(apiTokens)
+          .set({ lastUsedAt: new Date() })
+          .where(eq(apiTokens.id, row.id)),
+      ).catch((err: unknown) => {
+        console.warn(
+          '[bearer] lastUsedAt bump failed:',
+          err instanceof Error ? err.message : err,
+        );
+      });
+    }
 
     // When the request has no session user yet, resolve the token's creator
     // into the user context. Downstream handlers (createdBy, updatedBy, event
