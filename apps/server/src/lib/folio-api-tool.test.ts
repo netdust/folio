@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { eq } from 'drizzle-orm';
+import { nanoid } from 'nanoid';
 import { db } from '../db/client.ts';
 import { apiTokens, type ApiToken, workspaces } from '../db/schema.ts';
 import { makeTestApp } from '../test/harness.ts';
@@ -289,6 +290,53 @@ describe('dispatchAsCaller (P3-1/2/3/4)', () => {
     expect(res.status).toBe(200); // not a 500 from an FK crash
     // The mint is revoked in finally → token count is back to baseline (no leak).
     expect(await countTokens()).toBe(before);
+  });
+
+  // Shape B′ CORE SAFETY CLAIM (path 7 — marker non-persistability). The
+  // operator's authority hinges on the `isOperator` marker, which the resolvers
+  // (resolveAgentDocForToken / resolveCallingAgent) key on directly. The entire
+  // anti-impersonation argument is that this marker is UN-FORGEABLE because it is
+  // NOT an `api_tokens` column — so no persisted (or attacker-crafted) DB row can
+  // carry it, and the auth path (bearer middleware → `db.query.apiTokens.findFirst`)
+  // can never load a token that resolves as the operator. This was only ARGUED in
+  // the dispatchAsCaller docstring, never pinned. Here we PIN it: even when a row
+  // is inserted with an `isOperator` field set (mirroring an attacker who got a
+  // write into `api_tokens`), reloading it through the SAME query the auth path
+  // uses yields a token with NO `isOperator` marker. Bite: if `isOperator` were
+  // ever promoted to a real persisted column, the reload would carry it and this
+  // goes RED — the moment the marker becomes forgeable via a DB row.
+  test('the isOperator marker can NEVER survive a DB round-trip (un-forgeable via api_tokens)', async () => {
+    const { seed } = await makeTestApp();
+    const rowId = nanoid();
+    // Insert an operator-SHAPED row, attempting to smuggle the marker onto it.
+    // The values object is built with the marker and cast to the insert type:
+    // `isOperator` is NOT an api_tokens column, so the persistence layer has
+    // nowhere to put it — modeling the strongest attacker (a direct INSERT that
+    // tries to set the marker). The cast is the test's whole point: the field is
+    // structurally un-persistable.
+    const attackerRow = {
+      id: rowId,
+      workspaceId: null,
+      name: 'attacker-operator-shaped',
+      tokenHash: `hash-${rowId}`,
+      scopes: ['config:write'],
+      agentId: null,
+      projectIds: null,
+      createdBy: seed.user.id,
+      isOperator: true,
+    } as unknown as typeof apiTokens.$inferInsert;
+    await db.insert(apiTokens).values(attackerRow);
+    // Reload through the SAME query the bearer middleware uses to build the token.
+    const reloaded = await db.query.apiTokens.findFirst({
+      where: eq(apiTokens.id, rowId),
+    });
+    expect(reloaded).toBeDefined();
+    // The marker did NOT survive — a persisted row can never resolve as operator.
+    expect((reloaded as { isOperator?: unknown }).isOperator).toBeUndefined();
+    expect('isOperator' in (reloaded as object)).toBe(false);
+    // Sanity: the rest of the row is intact (we really did round-trip a row).
+    expect(reloaded!.agentId).toBeNull();
+    await db.delete(apiTokens).where(eq(apiTokens.id, rowId));
   });
 
   // The 404 self-correction discriminator: a malformed (no-route-matched) path

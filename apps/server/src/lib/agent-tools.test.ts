@@ -2414,4 +2414,79 @@ describe('B1: MCP human-PAT project narrowing (no cross-project leak)', () => {
     );
     expect(err?.data?.reason).toBe('allow_list_widening_forbidden');
   });
+
+  // --- Shape B′ (Finding #8) AUTONOMY GATE: an operator-spawned hop must stay
+  // gated. The gate keys on isAgentBound(token), NOT token.agentId. Under Shape B′
+  // the operator's agentId is null, so a regression to `!!token.agentId` would
+  // mis-classify the operator as a human PAT and BYPASS the gate — letting an
+  // operator chain-spawn a run with chains OFF (security-critical: the gate is the
+  // single thing stopping unattended agent-chains). These pin the operator case
+  // specifically; the existing mit-54 tests use real agent tokens (agentId
+  // non-null) and would NOT bite that regression.
+
+  it('mit 54 (operator): operator run_agent with chains OFF is suppressed (gate keys on the marker, not agentId)', async () => {
+    const { db, seed } = await makeTestApp();
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, seed.user);
+    // Seed the TARGET agent the operator would spawn.
+    await seedRunAgent(db, seed.workspace.id, seed.user.id, 'helper', { agentBound: false });
+    const op = operatorToken(seed, ['agents:write', 'documents:read']);
+
+    const prev = env.FOLIO_AGENT_CHAINS_ENABLED;
+    env.FOLIO_AGENT_CHAINS_ENABLED = false;
+    let thrown: unknown;
+    try {
+      await exec(op, 'agent:_operator', 'run_agent', {
+        workspace_slug: 'acme',
+        agent_slug: 'helper',
+        parent_slug: parent.slug,
+      });
+    } catch (err) {
+      thrown = err;
+    } finally {
+      env.FOLIO_AGENT_CHAINS_ENABLED = prev;
+    }
+    const e = thrown as { code?: number; data?: { reason?: string } };
+    // The operator IS agent-bound (via its marker) → the gate fires.
+    expect(e?.data?.reason).toBe('agent_chains_disabled');
+    // And ZERO runs were created (the gate blocked before run-create).
+    const rows = await db.query.documents.findMany({ where: eq(documents.type, 'agent_run') });
+    expect(rows.length).toBe(0);
+  });
+
+  it('mit 54 (operator): operator retry_run with chains OFF is suppressed (gate keys on the marker, not agentId)', async () => {
+    const { db, seed } = await makeTestApp();
+    const parent = await seedWorkItem(db, seed.workspace, seed.project, seed.user);
+    const { agent } = await seedRunAgent(db, seed.workspace.id, seed.user.id, 'helper', {
+      agentBound: false,
+    });
+    const run = await seedRunRow(db, seed.workspace, seed.project, agent, seed.user, parent);
+    // Terminalize so idempotency would NOT block — the gate must.
+    await db
+      .update(documents)
+      .set({
+        status: 'failed',
+        frontmatter: { ...(run.frontmatter as Record<string, unknown>), status: 'failed' },
+      })
+      .where(eq(documents.id, run.id));
+    const op = operatorToken(seed, ['agents:write', 'documents:read']);
+
+    const prev = env.FOLIO_AGENT_CHAINS_ENABLED;
+    env.FOLIO_AGENT_CHAINS_ENABLED = false;
+    let thrown: unknown;
+    try {
+      await exec(op, 'agent:_operator', 'retry_run', {
+        workspace_slug: 'acme',
+        run_id: run.id,
+      });
+    } catch (err) {
+      thrown = err;
+    } finally {
+      env.FOLIO_AGENT_CHAINS_ENABLED = prev;
+    }
+    const e = thrown as { code?: number; data?: { reason?: string } };
+    expect(e?.data?.reason).toBe('agent_chains_disabled');
+    // Only the seeded (failed) original; no fresh planning run spawned.
+    const rows = await db.query.documents.findMany({ where: eq(documents.type, 'agent_run') });
+    expect(rows.length).toBe(1);
+  });
 })
