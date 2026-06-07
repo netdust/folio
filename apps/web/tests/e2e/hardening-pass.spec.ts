@@ -333,6 +333,25 @@ test('board: manual within-column drag-reorder persists a new board_position', a
   // dragged card's title) — it portals above the columns, no longer clipped.
   expect(midDragOverlayCount, 'DragOverlay clone should render the dragged card mid-drag').toBeGreaterThanOrEqual(2);
 
+  // OPTIMISTIC-ORDER proof (the snap-back fix, 2026-06-07): immediately after
+  // drop — BEFORE the onSettled refetch lands (~400ms) — the ON-SCREEN card
+  // order must already show the dragged card first. Previously the optimistic
+  // cache patched the card in place WITHOUT re-sorting, so the card sat in its
+  // old slot (and its underlying node animated back to origin) until the refetch
+  // re-ordered it. We read the DOM order of the card buttons and poll a SHORT
+  // window — this would still be the OLD order at this point without Fix B.
+  const onScreenOrder = async (): Promise<string[]> =>
+    page.evaluate(() =>
+      Array.from(document.querySelectorAll('[role="button"]'))
+        .map((el) => (el.textContent ?? '').trim())
+        .filter((t) => t === 'Card Alpha' || t === 'Card Bravo'),
+    );
+  await expect(async () => {
+    const order = await onScreenOrder();
+    // The dragged (formerly second) card now renders first, optimistically.
+    expect(order[0]).toBe(secondTitle);
+  }).toPass({ timeout: 1500 });
+
   // BUG 2 proof: the drag fired a board_position PATCH (within-column reorder
   // now registers), AND the persisted order flipped so the dragged (formerly
   // second) card is now first. Poll (optimistic UI + async PATCH).

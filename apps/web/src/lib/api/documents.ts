@@ -120,6 +120,29 @@ export type DocumentPatch = Partial<{
   boardPosition: string | null;
 }>;
 
+// Server null-sentinel for board_position sort: the server coalesces a null
+// board_position to U+FFFF (max BMP codepoint) so unranked cards sort LAST in
+// the same ORDER BY / keyset predicate. The optimistic re-sort must mirror that
+// sentinel byte-for-byte or the optimistic order diverges from the refetch.
+// Mirrors apps/server/src/services/documents.ts NULL_SENTINEL.
+const BOARD_POSITION_NULL_SENTINEL = '￿';
+
+/**
+ * Sort a list of documents by board_position ascending, nulls last — matching
+ * the server's `coalesce(board_position, U+FFFF)` ORDER BY. Returns a NEW array
+ * (does not mutate the input). board_position values are sortable rank strings
+ * produced by rankBetween, so a plain lexicographic compare is correct.
+ */
+export function sortByBoardPosition(rows: DocumentSummary[]): DocumentSummary[] {
+  return [...rows].sort((a, b) => {
+    const av = a.boardPosition ?? BOARD_POSITION_NULL_SENTINEL;
+    const bv = b.boardPosition ?? BOARD_POSITION_NULL_SENTINEL;
+    if (av < bv) return -1;
+    if (av > bv) return 1;
+    return 0;
+  });
+}
+
 // Merge a frontmatter patch the same way the server does: undefined/null
 // values DELETE the key (not "store null"). Optimistic UI must mirror this or
 // the cleared field briefly renders as a ghost null before onSettled refetch.
@@ -156,17 +179,28 @@ export function useUpdateDocument(wslug: string, pslug: string, listParams: Docu
         });
       }
       if (prevList) {
+        const patched = prevList.data.map((d) =>
+          d.slug === slug
+            ? {
+                ...d,
+                ...patch,
+                frontmatter: mergeFrontmatter(d.frontmatter, patch.frontmatter),
+              }
+            : d,
+        );
+        // Bug 2 (2026-06-07): a board_position patch on a board_position-sorted
+        // list must RE-SORT optimistically. Otherwise the moved card keeps its
+        // old array slot until onSettled's refetch lands (~400ms), so it visibly
+        // sits in the wrong place (and the dragged-card animation looks like a
+        // snap-back). Re-sort ONLY when this is a board_position change on the
+        // manual-sort query — list-view / field-sorted queries derive their
+        // order from a DIFFERENT server key, so a status/title patch (or any
+        // patch on a non-board_position list) must NOT reorder.
+        const isBoardPositionReorder =
+          patch.boardPosition !== undefined && listParams.sort === 'board_position';
         qc.setQueryData<DocumentListPage>(listKey, {
           ...prevList,
-          data: prevList.data.map((d) =>
-            d.slug === slug
-              ? {
-                  ...d,
-                  ...patch,
-                  frontmatter: mergeFrontmatter(d.frontmatter, patch.frontmatter),
-                }
-              : d,
-          ),
+          data: isBoardPositionReorder ? sortByBoardPosition(patched) : patched,
         });
       }
       return { prevDetail, prevList, detailKey };

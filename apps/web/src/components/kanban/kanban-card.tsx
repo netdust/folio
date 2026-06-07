@@ -144,14 +144,22 @@ function SortableCard({ doc, onOpen, isPending }: Omit<Props, 'sortable' | 'over
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: doc.id,
     data: { slug: doc.slug, currentStatus: doc.status },
+    // Bug 1 (2026-06-07): the dropped card visibly slid BACK toward its origin
+    // slot. After release dnd-kit briefly keeps a transform on the just-dropped
+    // item and its `transition` animates it home (matrix(…,-68px) → 0 over
+    // ~200ms). The DragOverlay clone is the visible drag element, so the
+    // underlying node must NOT also animate. Disable layout-change animation for
+    // THIS item — other cards still animate their shift-to-make-room (they call
+    // useSortable independently with the default animateLayoutChanges).
+    animateLayoutChanges: () => false,
   });
-  // Keep the sortable transform so the OTHER cards shift to make room, but hide
-  // the dragged card itself (the DragOverlay clone is the visible one).
-  const style: CSSProperties = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-    opacity: isDragging ? 0 : undefined,
-  };
+  // Keep the sortable transform so the OTHER cards shift to make room. The
+  // dragged card itself is hidden (the DragOverlay clone is the visible one) AND
+  // kept inert: while dragging, drop the leftover transform + transition so the
+  // in-place node never animates back to origin on drop.
+  const style: CSSProperties = isDragging
+    ? { opacity: 0, transition: 'none', transform: undefined }
+    : { transform: CSS.Transform.toString(transform), transition };
   return <CardBody doc={doc} onOpen={onOpen} isPending={isPending} dnd={{ setNodeRef, attributes, listeners, style, isDragging }} />;
 }
 

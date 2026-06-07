@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { DndContext } from '@dnd-kit/core';
 import type { DocumentSummary } from '../../lib/api/documents.ts';
@@ -85,5 +85,79 @@ describe('KanbanCard', () => {
       </DndContext>,
     );
     expect(screen.getByRole('button', { name: /Card A/ })).toBeTruthy();
+  });
+});
+
+// Bug 1 (2026-06-07): after a within-column drop the dragged card visibly slid
+// BACK toward its origin slot. Root cause: SortableCard always applied
+// dnd-kit's leftover transform + `transition`, so on drop the transition
+// animated the in-place node home (the DragOverlay clone is the visible one, so
+// the underlying node should be inert). The fix gates the dragged item's
+// transform/transition behind isDragging. jsdom can't run a real drag, so we
+// mock useSortable to return the dragging shape and assert the rendered node
+// carries NO animating transition (and no leftover transform to animate FROM).
+describe('SortableCard dragged-node inertness (no animate-back)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.resetModules();
+  });
+
+  it('renders the dragged in-place node with transition:none and no transform', async () => {
+    vi.resetModules();
+    vi.doMock('@dnd-kit/sortable', () => ({
+      useSortable: () => ({
+        attributes: {},
+        listeners: {},
+        setNodeRef: () => {},
+        // A leftover transform + transition like dnd-kit keeps post-drop —
+        // exactly the pair that animated the card home before the fix.
+        transform: { x: 0, y: -68, scaleX: 1, scaleY: 1 },
+        transition: 'transform 200ms ease',
+        isDragging: true,
+      }),
+      SortableContext: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+      verticalListSortingStrategy: undefined,
+    }));
+    const { KanbanCard: MockedCard } = await import('./kanban-card.tsx');
+    render(
+      <DndContext>
+        <MockedCard doc={sampleDoc()} onOpen={() => {}} sortable />
+      </DndContext>,
+    );
+    const card = screen.getByRole('button', { name: /Card A/ });
+    // The leftover 'transform 200ms' transition is what slid the card back.
+    expect(card.style.transition === 'none' || card.style.transition === '').toBe(true);
+    expect(card.style.transition).not.toContain('200ms');
+    // No leftover transform on the in-place node → nothing to animate FROM.
+    expect(card.style.transform === '' || card.style.transform == null).toBe(true);
+    // It is hidden — the DragOverlay clone is the visible drag element.
+    expect(card.style.opacity).toBe('0');
+  });
+
+  it('keeps a non-dragging sortable card animating its shift-to-make-room', async () => {
+    vi.resetModules();
+    vi.doMock('@dnd-kit/sortable', () => ({
+      useSortable: () => ({
+        attributes: {},
+        listeners: {},
+        setNodeRef: () => {},
+        transform: { x: 0, y: 40, scaleX: 1, scaleY: 1 },
+        transition: 'transform 200ms ease',
+        isDragging: false,
+      }),
+      SortableContext: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+      verticalListSortingStrategy: undefined,
+    }));
+    const { KanbanCard: MockedCard } = await import('./kanban-card.tsx');
+    render(
+      <DndContext>
+        <MockedCard doc={sampleDoc()} onOpen={() => {}} sortable />
+      </DndContext>,
+    );
+    const card = screen.getByRole('button', { name: /Card A/ });
+    // Other (non-dragged) cards SHOULD still animate their shift to make room.
+    expect(card.style.transition).toContain('200ms');
+    expect(card.style.transform).toContain('translate');
+    expect(card.style.opacity).not.toBe('0');
   });
 });
