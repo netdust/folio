@@ -62,9 +62,27 @@ export function dropSlotPosition(
   overDocId: string | null,
 ): string {
   const idsWithoutActive = orderedDocIds.filter((id) => id !== activeId);
-  const idx = overDocId === null ? idsWithoutActive.length : idsWithoutActive.indexOf(overDocId);
-  const targetIndex = idx === -1 ? idsWithoutActive.length : idx;
   const positions = idsWithoutActive.map((id) => positionOf(id) ?? null);
+
+  // Append when dropping on column whitespace.
+  if (overDocId === null) return computeReorderPosition(positions, idsWithoutActive.length);
+
+  const overIdx = idsWithoutActive.indexOf(overDocId);
+  if (overIdx === -1) return computeReorderPosition(positions, idsWithoutActive.length);
+
+  // DIRECTION-AWARE drop slot. computeReorderPosition inserts BEFORE targetIndex.
+  // - Dragging a card UP (its original index is AFTER the over-card): "drop on
+  //   the over-card" means land ABOVE it → targetIndex = overIdx (drop-before). ✓
+  // - Dragging a card DOWN (its original index is BEFORE the over-card): "drop on
+  //   the over-card" means land BELOW it → targetIndex = overIdx + 1 (drop-AFTER).
+  // Without the +1, a down-by-one drop computes a rank before the over-card —
+  // i.e. the slot the card already occupied — so it never moves (it "only works
+  // if you move 2+ positions"). The active card's ORIGINAL index decides
+  // direction, so read it from orderedDocIds (before the active was filtered).
+  const activeOrigIdx = orderedDocIds.indexOf(activeId);
+  const overOrigIdx = orderedDocIds.indexOf(overDocId);
+  const movingDown = activeOrigIdx !== -1 && overOrigIdx !== -1 && activeOrigIdx < overOrigIdx;
+  const targetIndex = movingDown ? overIdx + 1 : overIdx;
   return computeReorderPosition(positions, targetIndex);
 }
 

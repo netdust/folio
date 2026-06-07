@@ -61,28 +61,44 @@ describe('resolveDrop', () => {
   });
 });
 
-// 4c: dropSlotPosition is the reorder-ranking seam KanbanView calls on a
-// within-column drop. The active card is excluded from the neighbor positions,
-// and the slot is resolved by the over-card's id (drop-before; null = append).
+// dropSlotPosition is the reorder-ranking seam KanbanView calls on a
+// within-column drop. The active card is excluded from the neighbor positions.
+// The slot is DIRECTION-AWARE: dropping on the over-card lands ABOVE it when
+// moving up (drop-before) and BELOW it when moving down (drop-after). Without
+// the drop-after on a downward move, a down-by-one drop lands in the card's own
+// slot and "never moves" (only worked when moving 2+ positions).
 describe('dropSlotPosition', () => {
   const positions: Record<string, string | null> = { x: 'a', y: 'c', z: 'e' };
   const posOf = (id: string) => positions[id] ?? null;
 
-  test('dropping before a middle card yields a rank between its neighbors', () => {
-    // Column display order x(a) y(c) z(e); drag x to land before z → between y(c) and z(e).
-    const pos = dropSlotPosition(['x', 'y', 'z'], posOf, 'x', 'z');
+  test('down-by-one: dragging a card onto the NEXT card lands it AFTER that card', () => {
+    // Display order x(a) y(c) z(e); drag x DOWN onto y → x must land between
+    // y(c) and z(e) (after y), NOT back above y. This is the regression: the old
+    // drop-before put x before y = its own slot = no move.
+    const pos = dropSlotPosition(['x', 'y', 'z'], posOf, 'x', 'y');
     expect('c' < pos && pos < 'e').toBe(true);
   });
 
-  test('null overDocId appends after the last remaining card', () => {
-    // Drag x to the end (overDocId null) → after z(e).
-    const pos = dropSlotPosition(['x', 'y', 'z'], posOf, 'x', null);
+  test('down onto the LAST card appends after it', () => {
+    // Drag x DOWN onto z (the last card) → land after z(e).
+    const pos = dropSlotPosition(['x', 'y', 'z'], posOf, 'x', 'z');
     expect(pos > 'e').toBe(true);
   });
 
-  test('dropping before the first card yields a rank before it', () => {
+  test('up: dragging a card onto an earlier card lands it BEFORE that card', () => {
+    // Drag z UP onto y → land between x(a) and y(c) (above y, drop-before).
+    const pos = dropSlotPosition(['x', 'y', 'z'], posOf, 'z', 'y');
+    expect('a' < pos && pos < 'c').toBe(true);
+  });
+
+  test('up onto the FIRST card yields a rank before it', () => {
     const pos = dropSlotPosition(['x', 'y', 'z'], posOf, 'z', 'x');
     expect(pos < 'a').toBe(true);
+  });
+
+  test('null overDocId appends after the last remaining card', () => {
+    const pos = dropSlotPosition(['x', 'y', 'z'], posOf, 'x', null);
+    expect(pos > 'e').toBe(true);
   });
 
   test('an unranked (null board_position) neighbor is treated as an open end', () => {
