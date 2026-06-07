@@ -35,6 +35,7 @@ function ownerToken(): ApiToken {
     projectIds: null,
     createdBy: null,
     lastUsedAt: null,
+    expiresAt: null,
     createdAt: new Date(),
   };
 }

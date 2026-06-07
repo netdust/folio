@@ -50,6 +50,7 @@ function makeToken(scopes: string[]): ApiToken {
     projectIds: null,
     createdBy: null,
     lastUsedAt: null,
+    expiresAt: null,
     createdAt: new Date(),
   };
 }

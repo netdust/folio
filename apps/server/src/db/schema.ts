@@ -373,6 +373,9 @@ export const apiTokens = sqliteTable(
     projectIds: text('project_ids', { mode: 'json' }).$type<string[] | null>(),
     createdBy: text('created_by').references(() => users.id),
     lastUsedAt: integer('last_used_at', { mode: 'timestamp_ms' }),
+    // Optional expiry. null = never expires (existing tokens grandfathered).
+    // Enforced at middleware/bearer.ts attachToken (invariant 1).
+    expiresAt: integer('expires_at', { mode: 'timestamp_ms' }),
     createdAt: integer('created_at', { mode: 'timestamp_ms' })
       .notNull()
       .default(sql`(unixepoch() * 1000)`),
