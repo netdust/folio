@@ -2,7 +2,6 @@ import { describe, expect, test } from 'bun:test';
 import { eq } from 'drizzle-orm';
 import { db } from '../db/client.ts';
 import { apiTokens, type ApiToken, workspaces } from '../db/schema.ts';
-import { OPERATOR_AGENT_ID } from './operator.ts';
 import { makeTestApp } from '../test/harness.ts';
 import { roleToScopes } from './agent-schema.ts';
 import { executeTool } from './agent-tools.ts';
@@ -264,20 +263,22 @@ describe('dispatchAsCaller (P3-1/2/3/4)', () => {
     expect(text).not.toMatch(/folio_pat_/);
   });
 
-  // The operator is a CODE SINGLETON with no `documents` row; its ephemeral
-  // token carries the synthetic agentId `operator:_operator`. Minting a persisted
-  // api_tokens row with that agentId violates the api_tokens.agent_id →
-  // documents.id FK (errno 787). dispatchAsCaller must null the agentId for the
-  // operator (its reach is already clamped to agent ∩ caller upstream; the
-  // null-agentId authority path re-checks the owner's grants). Regression for the
-  // first-real-use FK crash on folio_api_get during a cockpit turn.
-  test('operator caller (synthetic agentId) does not violate the agent_id FK (instance reach)', async () => {
+  // Shape B′ (Task 8): the operator's ephemeral token now carries `agentId: null`
+  // already (the isOperator marker — NOT a column — identifies it; no FK-shaped
+  // sentinel). dispatchAsCaller copies caller.agentId straight through; for the
+  // operator that copy is null, so the persisted mint is FK-valid with NO special
+  // null-hack. The marker is dropped on persist (not a column), so the operator
+  // becomes a human-clamped persisted token across this round-trip (intended;
+  // bounded by the copied scopes/projectIds + the null-agentId owner-grant re-check).
+  // Regression for the first-real-use FK crash on folio_api_get during a cockpit turn.
+  test('operator caller (agentId null, Shape B′) mints an FK-valid persisted token', async () => {
     const { seed } = await makeTestApp();
+    const before = await countTokens();
     const operator = callerToken({
       workspaceId: null, // instance reach (operator is instance-wide)
       scopes: ['config:write', 'documents:read'],
       createdBy: seed.user.id,
-      agentId: OPERATOR_AGENT_ID, // synthetic — NO documents row
+      agentId: null, // Shape B′: operator carries NO FK sentinel
     });
     const res = await dispatchAsCaller(
       operator,
@@ -285,7 +286,9 @@ describe('dispatchAsCaller (P3-1/2/3/4)', () => {
       `/api/v1/w/${seed.workspace.slug}/p/${seed.project.slug}/views`,
       undefined,
     );
-    expect(res.status).toBe(200); // not a 500 from the FK crash
+    expect(res.status).toBe(200); // not a 500 from an FK crash
+    // The mint is revoked in finally → token count is back to baseline (no leak).
+    expect(await countTokens()).toBe(before);
   });
 
   // The 404 self-correction discriminator: a malformed (no-route-matched) path

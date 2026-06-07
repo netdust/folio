@@ -32,6 +32,9 @@ import {
 import { encryptSecret } from '../lib/crypto.ts';
 import { setOperatorModelSetting } from './instance-settings.ts';
 import { roleToScopes, toolsToScopes } from '../lib/agent-schema.ts';
+import { type EphemeralToken } from '../db/schema.ts';
+import { isAgentBound } from '../lib/token-reach.ts';
+import { OPERATOR_AGENT_ID } from '../lib/operator.ts';
 import {
   FOLIO_SKILL_BODY,
   FOLIO_SKILL_SLUG,
@@ -41,6 +44,7 @@ import { loadContext, runAgent } from '../lib/runner.ts';
 import {
   __dropPendingConversationRunForTest,
   createConversationRun,
+  takePendingConversationRun,
 } from './conversation-runs.ts';
 import { createConversation } from './conversations.ts';
 
@@ -232,6 +236,69 @@ describe('createConversationRun — M1/M2 authority floor', () => {
   });
 });
 
+// Task 8 (Shape B′ — the live mint flip). The REAL mint path (createConversationRun)
+// must produce a token the cea45c3 resolvers accept: agentId null (no FK sentinel)
+// + the un-forgeable isOperator marker. The pre-flip mint stamped OPERATOR_AGENT_ID
+// and set NO marker, so the live operator resolved to agent_missing — the half-landed
+// state a security reviewer flagged. These RED-first tests assert the real-mint shape
+// directly (not via the hand-built operatorToken() fixture), closing the
+// test-world≠real-world gap.
+describe('createConversationRun — the live operator token mint (Shape B′)', () => {
+  test('the minted token has agentId null + isOperator marker + NO sentinel', async () => {
+    const { db, seed } = await setup();
+    const conv = await createConversation(db, {
+      createdBy: seed.user.id,
+      operatorAgentId: '_operator',
+      title: 'Untitled',
+    });
+    const runId = nanoid();
+    await createConversationRun(db, {
+      conversation: { id: conv.id, createdBy: seed.user.id },
+      runId,
+    });
+
+    // Inspect the REAL minted token via the pending registry (consumes it).
+    const minted = takePendingConversationRun(runId);
+    expect(minted).toBeDefined();
+    const token = minted!.token as EphemeralToken;
+    // Shape B′: no FK-shaped sentinel; the un-forgeable marker identifies it.
+    expect(token.agentId).toBeNull();
+    expect(token.agentId).not.toBe(OPERATOR_AGENT_ID);
+    expect(token.isOperator).toBe(true);
+  });
+
+  // The reviewer-required END-TO-END seam: the token the REAL mint produces must be
+  // one the resolvers accept as agent-bound. isAgentBound (the single agent-vs-human
+  // discriminator the resolvers key on) returning true on the live-minted token is
+  // the floor proof that the operator reaches the agent path, not the human-PAT path.
+  // Bite: against the pre-flip mint (agentId = OPERATOR_AGENT_ID, isOperator unset),
+  // isAgentBound was true ONLY because agentId was non-null — but that non-null was
+  // an FK-invalid sentinel the resolvers had STOPPED keying on (cea45c3), so the
+  // operator resolved to agent_missing. With agentId null + isOperator true,
+  // isAgentBound is true via the marker — the path the resolvers now follow.
+  test('the live-minted token is agent-bound (resolver-acceptable) AND a human PAT is not', async () => {
+    const { db, seed } = await setup();
+    const conv = await createConversation(db, {
+      createdBy: seed.user.id,
+      operatorAgentId: '_operator',
+      title: 'Untitled',
+    });
+    const runId = nanoid();
+    await createConversationRun(db, {
+      conversation: { id: conv.id, createdBy: seed.user.id },
+      runId,
+    });
+
+    const minted = takePendingConversationRun(runId);
+    expect(minted).toBeDefined();
+    // Positive: the REAL mint is agent-bound via the isOperator marker.
+    expect(isAgentBound(minted!.token as EphemeralToken)).toBe(true);
+    // Negative: a human PAT (agentId null, NO marker) is NOT agent-bound — it must
+    // never accidentally reach the operator/agent resolver path.
+    expect(isAgentBound({ agentId: null })).toBe(false);
+  });
+});
+
 describe('createConversationRun → loadContext — end-to-end wiring (seam)', () => {
   test('a conversation run is loadable: RunContext has sink, conversationId, ephemeral token, NO parent', async () => {
     const { db, seed } = await setup();
@@ -251,8 +318,10 @@ describe('createConversationRun → loadContext — end-to-end wiring (seam)', (
     // Sink + conversationId wired (the conversation output path).
     expect(ctx!.sink).toBeDefined();
     expect(ctx!.conversationId).toBe(conv.id);
-    // Ephemeral operator token — never persisted; agentId is the synthetic id.
-    expect(ctx!.token.agentId).toBe('operator:_operator');
+    // Ephemeral operator token — never persisted. Shape B′: agentId is null (no
+    // FK sentinel) and the un-forgeable isOperator marker identifies the operator.
+    expect(ctx!.token.agentId).toBeNull();
+    expect((ctx!.token as EphemeralToken).isOperator).toBe(true);
     expect(ctx!.token.tokenHash.startsWith('ephemeral:')).toBe(true);
     // unattended is false — a human is present.
     expect(ctx!.unattended).toBe(false);

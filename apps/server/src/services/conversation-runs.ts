@@ -51,7 +51,7 @@
 import { nanoid } from 'nanoid';
 import { eq } from 'drizzle-orm';
 import { type DB } from '../db/client.ts';
-import { type ApiToken } from '../db/schema.ts';
+import { type EphemeralToken } from '../db/schema.ts';
 import {
   callerProjectsFor,
   intersectAgentProjects,
@@ -62,7 +62,6 @@ import {
   userRole,
   visibleWorkspaceIds,
 } from '../lib/access.ts';
-import { OPERATOR_AGENT_ID } from '../lib/operator.ts';
 import { OPERATOR_TOOLS } from '../lib/system-skills.ts';
 
 
@@ -87,8 +86,9 @@ const OPERATOR_MAX_TOKENS = 100_000;
 export interface PendingConversationRun {
   runId: string;
   conversationId: string;
-  /** The ephemeral, in-memory operator token (NOT persisted). */
-  token: ApiToken;
+  /** The ephemeral, in-memory operator token (NOT persisted). Carries the
+   *  un-forgeable `isOperator` marker (Shape B′) — agentId is null. */
+  token: EphemeralToken;
   /** The agent ∩ caller scope floor — identical to `token.scopes`. */
   callerScopes: string[];
   /** The conversation owner's user id — FK-valid actor for any provenance write. */
@@ -188,17 +188,19 @@ export async function createConversationRun(
   // run holds it directly (via the registry → loadContext), so `tokenHash` is a
   // sentinel that is never looked up. `workspaceId: null` = instance reach (the
   // operator is instance-wide); the project ceiling above is the real bound.
-  const token: ApiToken = {
+  const token: EphemeralToken = {
     id: `convrun-token:${runId}`,
     workspaceId: null,
     name: `operator-conversation:${conversation.id}`,
     tokenHash: `ephemeral:${nanoid()}`,
     scopes,
-    // The operator is a code singleton (no `documents` row), so its ephemeral
-    // token carries the synthetic OPERATOR_AGENT_ID (`operator:_operator`) — never
-    // a real FK. The token is held directly by the run (the conversation registry),
-    // never looked up by hash. resolveAgentDocForToken resolves this sentinel.
-    agentId: OPERATOR_AGENT_ID,
+    // The operator is identified by the explicit `isOperator` marker (un-forgeable
+    // — NOT a DB column, so no persisted/forged token can carry it), NOT an
+    // FK-shaped agentId sentinel. The resolvers (resolveAgentDocForToken /
+    // resolveCallingAgent, cea45c3) key on this marker. `createdBy` stays the
+    // caller (FK-valid write actor via serviceActor).
+    agentId: null,
+    isOperator: true,
     projectIds: projectIds.includes('*') ? null : projectIds,
     createdBy: callerUserId,
     lastUsedAt: null,
