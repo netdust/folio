@@ -16,7 +16,7 @@
 import { z } from 'zod';
 import { db } from '../db/client.ts';
 import type { DB } from '../db/client.ts';
-import type { ApiToken } from '../db/schema.ts';
+import type { ApiToken, EphemeralToken } from '../db/schema.ts';
 import {
   getConfirmedPendingOp,
   markExecuted,
@@ -54,8 +54,12 @@ export function isAwaitingConfirmation(err: unknown): err is AwaitingConfirmatio
 }
 
 export interface ToolContext {
-  /** The authority — scopes + agent binding. */
-  token: ApiToken;
+  /**
+   * The authority — scopes + agent binding. Typed `EphemeralToken` (not
+   * `ApiToken`) so the operator's `isOperator` marker stays TYPE-VISIBLE across
+   * this seam: a refactor that reconstructs the token can't silently drop it.
+   */
+  token: EphemeralToken;
   /**
    * The caller's identity for audit/event-actor purposes. For agent callers
    * this is the agent's slug (optionally `agent:<slug>`-prefixed); the runner
@@ -304,7 +308,7 @@ export function listToolDefs(): ToolListEntry[] {
  * Zod re-validation → handler.
  */
 export async function executeTool(
-  token: ApiToken,
+  token: EphemeralToken,
   actor: string,
   name: string,
   args: unknown,

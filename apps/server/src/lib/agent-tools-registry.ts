@@ -1649,6 +1649,7 @@ export function registerRealTools(): void {
       // Self-delete guard: kept inline (not `assertNotSelfDelete`) because the
       // HTTP and MCP layers throw different error shapes — HTTPError vs
       // mcpInvalidParams — and the helper hardcodes HTTPError.
+      // operator (agentId null) bypasses this — intentional + unreachable: the operator is a code singleton with no documents row, so it can never resolve its own doc to self-target.
       if (token.agentId && existing.id === token.agentId) {
         throw mcpInvalidParams('agent cannot delete itself via MCP', {
           reason: 'cannot_delete_self',
