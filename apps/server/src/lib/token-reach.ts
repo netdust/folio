@@ -1,6 +1,6 @@
 import { nanoid } from 'nanoid';
 import type { DB } from '../db/client.ts';
-import { apiTokens, type ApiToken } from '../db/schema.ts';
+import { apiTokens, type ApiToken, type EphemeralToken } from '../db/schema.ts';
 import type { Role } from './access.ts';
 import { roleToScopes } from './agent-schema.ts';
 import { newApiToken } from './auth.ts';
@@ -31,18 +31,20 @@ export function isOperatorToken(
 /**
  * True iff this token acts as an AGENT (its own allow-list/identity governs the
  * authority decision), vs a human PAT (the human creator's grants govern). The
- * operator is agent-bound but carries NO agentId — it is a CODE SINGLETON whose
- * conversation token has `agentId: null` (Shape B: no FK-shaped sentinel), so it
- * is identified by isOperatorToken (workspaceId null + createdBy null). A human
- * instance PAT has createdBy set, so it is NOT agent-bound. THIS is the single
- * discriminator for every "agent path vs human path" branch — replacing the
- * scattered `if (token.agentId)` checks, which mis-classify the operator once its
- * agentId is null.
+ * operator is agent-bound but carries NO agentId (Shape B′: no FK sentinel) — it
+ * is identified by the explicit `isOperator` marker on its ephemeral token
+ * (createConversationRun only; NOT a DB column). A human PAT has no marker, so it
+ * is NOT agent-bound. THE single discriminator for every "agent path vs human
+ * path" branch — replacing scattered `if (token.agentId)` checks, which
+ * mis-classify the operator once its agentId is null.
+ * NOTE: keyed on `isOperator`, NOT `isOperatorToken` (the createdBy-based helper)
+ * — the operator's createdBy is the CALLER (non-null), so isOperatorToken is false
+ * for it. The two are unrelated.
  */
 export function isAgentBound(
-  token: Pick<ApiToken, 'agentId' | 'workspaceId' | 'createdBy'>,
+  token: Pick<EphemeralToken, 'agentId' | 'isOperator'>,
 ): boolean {
-  return token.agentId !== null || isOperatorToken(token);
+  return token.agentId !== null || token.isOperator === true;
 }
 
 export type EffectiveReach =

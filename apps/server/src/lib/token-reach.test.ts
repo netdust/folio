@@ -26,10 +26,12 @@ describe('isOperatorToken (system-origin operator: instance reach + createdBy nu
 });
 
 describe('isAgentBound (the single agent-path-vs-human-path discriminator)', () => {
-  test('operator token (agentId null, ws null, createdBy null) is agent-bound', () => {
-    expect(isAgentBound({ agentId: null, workspaceId: null, createdBy: null } as any)).toBe(true);
+  test('operator ephemeral token (isOperator:true, agentId null, createdBy=caller) is agent-bound', () => {
+    expect(
+      isAgentBound({ agentId: null, isOperator: true, workspaceId: null, createdBy: 'caller-1' } as any),
+    ).toBe(true);
   });
-  test('human instance PAT (agentId null, createdBy set) is NOT agent-bound', () => {
+  test('human instance PAT (agentId null, NO isOperator, createdBy set) is NOT agent-bound', () => {
     expect(
       isAgentBound({ agentId: null, workspaceId: null, createdBy: 'user-123' } as any),
     ).toBe(false);
