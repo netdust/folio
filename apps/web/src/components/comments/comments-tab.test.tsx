@@ -29,6 +29,25 @@ vi.mock('../../lib/api/event-stream.ts', () => ({
 }));
 
 // ---------------------------------------------------------------------------
+// runs.ts mock — defaults to the REAL module so the existing live-wire retry
+// test (POST /runs/<id>/retry through useRetryRun) keeps exercising the actual
+// chain. A single test overrides `useRetryRunOverride` to simulate the
+// isPending:true branch (the double-fire guard) without faking the rest.
+// ---------------------------------------------------------------------------
+const runsMock = vi.hoisted(() => ({
+  useRetryRunOverride: null as null | (() => { mutate: ReturnType<typeof vi.fn>; isPending: boolean }),
+}));
+
+vi.mock('../../lib/api/runs.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../lib/api/runs.ts')>();
+  return {
+    ...actual,
+    useRetryRun: (wslug: string) =>
+      runsMock.useRetryRunOverride ? runsMock.useRetryRunOverride() : actual.useRetryRun(wslug),
+  };
+});
+
+// ---------------------------------------------------------------------------
 // Fixtures
 // ---------------------------------------------------------------------------
 
@@ -163,6 +182,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  runsMock.useRetryRunOverride = null;
   try {
     localStorage.clear();
   } catch {
@@ -405,6 +425,40 @@ describe('CommentsTab', () => {
       });
       expect(retryCall).toBeDefined();
     });
+  });
+
+  // Blind-spot close (hardening): handleRetry guards with
+  // `if (retryRun.isPending) return` so an impatient second click mid-request
+  // can't fire a duplicate retry POST (which would re-queue the same run twice).
+  // The happy-path retry test never exercised the guard. Here we drive the
+  // isPending:true branch directly (mocking useRetryRun to report a pending
+  // mutation) and assert clicking Retry does NOT call mutate.
+  it('does NOT fire a second retry when a retry is already pending (double-fire guard)', async () => {
+    const mutateSpy = vi.fn();
+    runsMock.useRetryRunOverride = () => ({ mutate: mutateSpy, isPending: true });
+
+    const errorComment = makeComment({
+      id: 'c-err-pending',
+      slug: 'comment-c-err-pending',
+      body: 'Run still retrying',
+      frontmatter: {
+        author: 'agent:drafter',
+        kind: 'error',
+        visibility: 'normal',
+        mentions: [],
+        run_id: 'run-pending1',
+      },
+    });
+    stubFetchList([errorComment]);
+    renderTab();
+    await waitFor(() => screen.getByText('Run still retrying'));
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /retry/i }));
+    });
+
+    // The guard short-circuits before reaching retryRun.mutate.
+    expect(mutateSpy).not.toHaveBeenCalled();
   });
 
   it('error comment WITHOUT a run_id renders no Retry button and fires no retry POST', async () => {

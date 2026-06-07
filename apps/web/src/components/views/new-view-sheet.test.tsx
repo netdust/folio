@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
@@ -285,6 +285,51 @@ describe('NewViewSheet', () => {
     const body = findPostBody(fetchMock) as Record<string, unknown>;
     expect(body.type).toBe('kanban');
     expect(body.groupBy).toBeNull();
+  });
+
+  // Blind-spot close (hardening): new-view-sheet filters multi_select fields out
+  // of the kanban group-by options (`fields.filter((f) => f.type !== 'multi_select')`),
+  // mirroring what the board can actually group by. No test pinned that
+  // exclusion — a regression that dropped the filter would offer an
+  // ungroupable multi_select field, producing a board the server can't render.
+  // Assert the multi_select field is absent from the <select> while a
+  // non-multi_select field is present.
+  it('excludes multi_select fields from the kanban group-by options', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (url, init) => {
+      const u = String(url);
+      if (u.endsWith('/api/v1/w/main/p/acme/views') && init?.method === 'POST') {
+        return new Response('{}', { status: 201, headers: { 'content-type': 'application/json' } });
+      }
+      if (u.includes('/t/work-items/fields')) {
+        return new Response(
+          JSON.stringify({
+            data: [
+              { id: 'f1', key: 'priority', type: 'select', label: 'Priority', options: ['Low', 'High'], required: false, order: 1 },
+              { id: 'f2', key: 'labels', type: 'multi_select', label: 'Labels', options: ['bug', 'feat'], required: false, order: 2 },
+            ],
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { queryClient, router } = setup();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    await userEvent.type(await screen.findByLabelText(/Name/), 'Grouped board');
+    await userEvent.click(await screen.findByRole('radio', { name: /Kanban/i }));
+    const groupBy = await screen.findByLabelText(/Group by/i);
+
+    // The non-multi_select field IS offered as a group-by option…
+    expect(within(groupBy).getByRole('option', { name: 'Priority' })).toBeInTheDocument();
+    // …but the multi_select field is NOT.
+    expect(within(groupBy).queryByRole('option', { name: 'Labels' })).toBeNull();
   });
 
   // 4a: a kanban view navigates to /board, not /work-items.

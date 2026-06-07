@@ -70,6 +70,42 @@ test('BUG-021: projectId filter still admits workspace-level events (projectId=n
   unsub();
 });
 
+// Blind-spot close (hardening): projects.ts emits `project.deleted` with
+// projectId:null (a workspace-level TOMBSTONE — the project row is gone, so the
+// event can't carry its id). projects.test.ts asserts the emission shape and the
+// BUG-021 test above proves the filter admits projectId:null generically, but NO
+// test wired a `project.deleted` tombstone THROUGH the ?project=X filter to a
+// subscriber. A `?project=X` SSE client (e.g. a Kanban board scoped to project X)
+// MUST receive its own deletion notice — if the filter dropped projectId:null
+// tombstones, the board would never learn it was deleted and would hang on a
+// dead project. This pins that delivery, keyed to the real event kind.
+test('project.deleted tombstone (projectId:null) reaches a ?project=X subscriber', () => {
+  const received: BusEvent[] = [];
+  const unsub = eventBus.subscribe('ws-1', { projectId: 'proj-X' }, (e) => received.push(e));
+
+  // The tombstone for the very project this subscriber is filtered to. The row
+  // is gone, so projectId is null (workspace-level), not 'proj-X'.
+  eventBus.publish({
+    workspaceId: 'ws-1',
+    projectId: null,
+    kind: 'project.deleted',
+    payload: { slug: 'proj-x', name: 'Project X' },
+  });
+  // A DIFFERENT project's document event must still be filtered OUT — proves the
+  // null short-circuit didn't accidentally open the gate to all events.
+  eventBus.publish({
+    workspaceId: 'ws-1',
+    projectId: 'proj-Y',
+    kind: 'document.created',
+    payload: {},
+  });
+
+  expect(received.length).toBe(1);
+  expect(received[0]!.kind).toBe('project.deleted');
+  expect(received[0]!.projectId).toBeNull();
+  unsub();
+});
+
 test('unsubscribe stops receiving events', () => {
   const received: BusEvent[] = [];
   const unsub = eventBus.subscribe('ws-1', undefined, (e) => received.push(e));

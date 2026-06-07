@@ -284,6 +284,36 @@ describe('POST /api/v1/instance/tokens (mint an instance-reach token)', () => {
     expect(rows.every((r) => r.name !== 'overreach')).toBe(true);
   });
 
+  // Blind-spot close (hardening): the instance mint route bounds expires_in_days
+  // with `z.number().int().positive().max(3650).optional()`. The happy-path seam
+  // tests (POST 7 → non-null expiry) never exercised REJECTION, so a regression
+  // dropping the bounds would have shipped green. zValidator → 400 on the schema
+  // failure; assert nothing was minted (the apiTokens table holds no overreach row).
+  test('POST rejects expires_in_days bounds violations at the schema layer (400, nothing minted)', async () => {
+    const { app, db, seed } = await makeTestApp();
+    // seed.user is already the instance owner (harness sets users.role = 'owner'),
+    // so a schema rejection here is the operative gate (not the admin gate).
+    for (const bad of [
+      { label: 'negative', expires_in_days: -1 },
+      { label: 'over max (3651 > 3650)', expires_in_days: 3651 },
+      { label: 'non-integer', expires_in_days: 1.5 },
+    ]) {
+      const res = await app.request('/api/v1/instance/tokens', {
+        method: 'POST',
+        headers: { Cookie: seed.sessionCookie, 'content-type': 'application/json' },
+        body: JSON.stringify({
+          name: `bad-${bad.label}`,
+          scopes: ['documents:read'],
+          expires_in_days: bad.expires_in_days,
+        }),
+      });
+      expect(res.status).toBe(400); // zValidator → 400 on the bounds failure
+    }
+    // No instance token escaped the schema gate.
+    const rows = await db.query.apiTokens.findMany();
+    expect(rows.every((r) => !r.name.startsWith('bad-'))).toBe(true);
+  });
+
   test('a non-instance-admin (member) cannot mint (403)', async () => {
     const { app, db } = await makeTestApp();
     const memberCookie = await seedRoleSession(db, 'member');
