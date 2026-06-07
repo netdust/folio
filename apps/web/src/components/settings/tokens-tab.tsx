@@ -1,5 +1,4 @@
 import { useState } from 'react';
-import { Check, Copy } from 'lucide-react';
 import { toast } from 'sonner';
 import {
   type ApiToken,
@@ -16,6 +15,8 @@ import {
   DialogTitle,
 } from '../ui/dialog.tsx';
 import { TokenCreateModal } from './token-create-modal.tsx';
+import { RevealSecretDialog } from './reveal-secret-dialog.tsx';
+import { useTokenRotate } from './use-token-rotate.ts';
 import { lastUsedLabel, expiresLabel } from './token-meta.ts';
 
 interface Props {
@@ -29,10 +30,14 @@ export function TokensTab({ wslug, workspaceId }: Props) {
   const deleteToken = useDeleteToken(wslug, workspaceId);
   const [createOpen, setCreateOpen] = useState(false);
   const [pendingRevoke, setPendingRevoke] = useState<ApiToken | null>(null);
-  const [pendingRotate, setPendingRotate] = useState<ApiToken | null>(null);
-  const [rotating, setRotating] = useState(false);
-  const [rotatedSecret, setRotatedSecret] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
+  const {
+    pendingRotate,
+    setPendingRotate,
+    rotating,
+    rotatedSecret,
+    setRotatedSecret,
+    confirmRotate,
+  } = useTokenRotate({ createToken, deleteToken });
 
   const tokens = tokensQuery.data ?? [];
 
@@ -44,59 +49,6 @@ export function TokensTab({ wslug, workspaceId }: Props) {
       setPendingRevoke(null);
     } catch (err) {
       toast.error(formatApiError(err));
-    }
-  }
-
-  // Rotate = mint a new token FIRST (same name + scopes), then revoke the old
-  // one only after the new mint succeeds. Ordering matters for safety: if the
-  // mint fails the old token is still valid (nothing lost); if the revoke fails
-  // after a successful mint the worst case is two live tokens — the user has the
-  // new secret and can revoke the old one manually, which is strictly safer than
-  // being left with zero tokens.
-  async function confirmRotate() {
-    if (!pendingRotate) return;
-    const target = pendingRotate;
-    setRotating(true);
-    // The token row carries only the absolute expiresAt, not the original day
-    // window. Approximate it: keep the rotated token alive for the days
-    // remaining until the original expiry (floored at 1). Null = forever, omit.
-    const expires_in_days =
-      target.expiresAt !== null
-        ? Math.max(1, Math.ceil((Date.parse(target.expiresAt) - Date.now()) / 86_400_000))
-        : undefined;
-    let minted = false;
-    try {
-      const res = await createToken.mutateAsync({
-        name: target.name,
-        scopes: target.scopes,
-        ...(expires_in_days !== undefined ? { expires_in_days } : {}),
-      });
-      minted = true;
-      await deleteToken.mutateAsync(target.id);
-      setRotatedSecret(res.token);
-      setPendingRotate(null);
-    } catch (err) {
-      // Close the dialog so it can't reference a token whose state is now
-      // ambiguous, and tell the user exactly which step failed.
-      setPendingRotate(null);
-      toast.error(
-        minted
-          ? `New token created but the old one could not be revoked — revoke "${target.name}" manually. (${formatApiError(err)})`
-          : `Rotation failed; your existing token is unchanged. (${formatApiError(err)})`,
-      );
-    } finally {
-      setRotating(false);
-    }
-  }
-
-  async function copySecret() {
-    if (!rotatedSecret) return;
-    try {
-      await navigator.clipboard.writeText(rotatedSecret);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      toast.error('Copy failed — select the token manually');
     }
   }
 
@@ -228,51 +180,7 @@ export function TokensTab({ wslug, workspaceId }: Props) {
         </DialogContent>
       </Dialog>
 
-      <Dialog
-        open={rotatedSecret !== null}
-        onOpenChange={(open) => {
-          if (!open) {
-            setRotatedSecret(null);
-            setCopied(false);
-          }
-        }}
-      >
-        <DialogContent>
-          <DialogTitle>Token rotated</DialogTitle>
-          <DialogDescription>
-            This is the only time you&apos;ll see this token. Copy it now and store it
-            somewhere safe.
-          </DialogDescription>
-          <div className="mt-4 rounded-md border border-border-light bg-shell p-2">
-            <code className="block break-all font-mono text-xs text-fg">
-              {rotatedSecret}
-            </code>
-          </div>
-          <div className="mt-6 flex justify-end gap-2">
-            <Button variant="secondary" onClick={copySecret}>
-              {copied ? (
-                <>
-                  <Check size={14} />
-                  Copied
-                </>
-              ) : (
-                <>
-                  <Copy size={14} />
-                  Copy
-                </>
-              )}
-            </Button>
-            <Button
-              onClick={() => {
-                setRotatedSecret(null);
-                setCopied(false);
-              }}
-            >
-              Done
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+      <RevealSecretDialog secret={rotatedSecret} onClose={() => setRotatedSecret(null)} />
     </div>
   );
 }
