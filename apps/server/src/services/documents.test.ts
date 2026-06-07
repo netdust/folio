@@ -43,6 +43,7 @@ test('listDocuments returns docs for the given project', async () => {
     project: seed.project,
     table,
     actor: seed.user,
+    eventActor: seed.user.id,
     token: null,
     input: {
       type: 'work_item',
@@ -73,6 +74,7 @@ test('retitling a work_item does NOT change its slug (slugs are immutable)', asy
     project: seed.project,
     table,
     actor: seed.user,
+    eventActor: seed.user.id,
     token: null,
     input: {
       type: 'work_item',
@@ -112,6 +114,7 @@ test('updateDocument with an agent eventActor emits an agent-actored event (auto
     project: seed.project,
     table,
     actor: seed.user,
+    eventActor: seed.user.id,
     token: null,
     input: {
       type: 'work_item',
@@ -147,11 +150,90 @@ test('updateDocument with an agent eventActor emits an agent-actored event (auto
   expect(latest!.actor).not.toBe(seed.user.id);
 });
 
+// Invariant 15 (create) — same FK-actor/event-actor split as update. An agent
+// create passes `eventActor: 'agent:<slug>'`; the FK write goes to the human
+// (actor.id) but the `document.created` event must carry the AGENT slug so the
+// autonomy gate keys on it. Required param turns omission into a tsc error.
+test('createDocument with an agent eventActor emits an agent-actored event (autonomy gate preserved)', async () => {
+  const { db, seed } = await makeTestApp();
+  const table = await getWorkItemsTable(db, seed.project.id);
+  const { document } = await createDocument({
+    workspace: seed.workspace,
+    project: seed.project,
+    table,
+    actor: seed.user,
+    // FK write → human (actor.id); EVENT actor → agent slug.
+    eventActor: 'agent:_operator',
+    token: null,
+    input: {
+      type: 'work_item',
+      title: 'Agent-created item',
+      body: '',
+      frontmatter: {},
+      status: null,
+    },
+  });
+
+  const latest = await db.query.events.findFirst({
+    where: and(
+      eq(events.documentId, document.id),
+      eq(events.kind, 'document.created'),
+    ),
+    orderBy: [desc(events.seq)],
+  });
+  expect(latest).toBeTruthy();
+  expect(latest!.actor).toBe('agent:_operator');
+  expect(latest!.actor).not.toBe(seed.user.id);
+});
+
+// Invariant 15 (delete) — delete writes no FK column, but the symmetry keeps
+// suppression consistent: an agent delete must emit a `document.deleted` event
+// actored by the agent slug, not the human id, so the autonomy gate stays live.
+test('deleteDocument with an agent eventActor emits an agent-actored event (autonomy gate preserved)', async () => {
+  const { db, seed } = await makeTestApp();
+  const table = await getWorkItemsTable(db, seed.project.id);
+  const { document } = await createDocument({
+    workspace: seed.workspace,
+    project: seed.project,
+    table,
+    actor: seed.user,
+    eventActor: seed.user.id,
+    token: null,
+    input: {
+      type: 'work_item',
+      title: 'Agent-deleted item',
+      body: '',
+      frontmatter: {},
+      status: null,
+    },
+  });
+
+  await deleteDocument({
+    workspace: seed.workspace,
+    project: seed.project,
+    actor: seed.user,
+    // FK write is irrelevant for delete; EVENT actor → agent slug.
+    eventActor: 'agent:_operator',
+    existing: document,
+  });
+
+  const latest = await db.query.events.findFirst({
+    where: and(
+      eq(events.documentId, document.id),
+      eq(events.kind, 'document.deleted'),
+    ),
+    orderBy: [desc(events.seq)],
+  });
+  expect(latest).toBeTruthy();
+  expect(latest!.actor).toBe('agent:_operator');
+  expect(latest!.actor).not.toBe(seed.user.id);
+});
+
 test('retitling an UNTITLED placeholder DOES re-slug (first real name wins, once)', async () => {
   const { db, seed } = await makeTestApp();
   const table = await getWorkItemsTable(db, seed.project.id);
   const { document } = await createDocument({
-    workspace: seed.workspace, project: seed.project, table, actor: seed.user, token: null,
+    workspace: seed.workspace, project: seed.project, table, actor: seed.user, eventActor: seed.user.id, token: null,
     input: { type: 'work_item', title: 'Untitled', body: '', frontmatter: {}, status: null },
   });
   expect(document.slug).toBe('untitled');
@@ -178,11 +260,11 @@ test('retitling an untitled-N collision placeholder also re-slugs', async () => 
   const table = await getWorkItemsTable(db, seed.project.id);
   // First Untitled → 'untitled'; second → 'untitled-2' (collision form is still a placeholder).
   await createDocument({
-    workspace: seed.workspace, project: seed.project, table, actor: seed.user, token: null,
+    workspace: seed.workspace, project: seed.project, table, actor: seed.user, eventActor: seed.user.id, token: null,
     input: { type: 'work_item', title: 'Untitled', body: '', frontmatter: {}, status: null },
   });
   const { document: second } = await createDocument({
-    workspace: seed.workspace, project: seed.project, table, actor: seed.user, token: null,
+    workspace: seed.workspace, project: seed.project, table, actor: seed.user, eventActor: seed.user.id, token: null,
     input: { type: 'work_item', title: 'Untitled', body: '', frontmatter: {}, status: null },
   });
   expect(second.slug).toBe('untitled-2');
@@ -208,6 +290,7 @@ test('createDocument (workspace-scoped) mints + persists an agent token bound to
     project: null,
     table: null,
     actor: seed.user,
+    eventActor: seed.user.id,
     token: null,
     input: {
       type: 'agent',
@@ -242,6 +325,7 @@ test('deleteDocument (workspace-scoped) on agent revokes its api token via casca
     project: null,
     table: null,
     actor: seed.user,
+    eventActor: seed.user.id,
     token: null,
     input: {
       type: 'agent',
@@ -599,6 +683,7 @@ test('F8: deleteDocument(work_item) cascades to remove its comment children', as
     project: seed.project,
     table,
     actor: seed.user,
+    eventActor: seed.user.id,
     token: null,
     isTableScopedUrl: false,
     input: { type: 'work_item', title: 'Parent', body: '', frontmatter: {}, status: null },
@@ -665,7 +750,7 @@ test('H8: deleteDocument(page) cascades GRANDCHILDREN recursively (3 levels deep
 
   // Build A → B → C
   const a = await createDocument({
-    workspace: seed.workspace, project: seed.project, table, actor: seed.user, token: null,
+    workspace: seed.workspace, project: seed.project, table, actor: seed.user, eventActor: seed.user.id, token: null,
     isTableScopedUrl: false,
     input: { type: 'page', title: 'A', body: '', frontmatter: {}, status: null },
   });
@@ -715,7 +800,7 @@ test('G8: deleteDocument(page) cascades nested page children too', async () => {
 
   // Parent page.
   const parent = await createDocument({
-    workspace: seed.workspace, project: seed.project, table, actor: seed.user, token: null,
+    workspace: seed.workspace, project: seed.project, table, actor: seed.user, eventActor: seed.user.id, token: null,
     isTableScopedUrl: false,
     input: { type: 'page', title: 'Parent Page', body: '', frontmatter: {}, status: null },
   });
@@ -767,7 +852,7 @@ test('BUG-010: cascade emits per-descendant events (comment.deleted + document.d
   const otherAuthor = 'user:u-other';
 
   const parent = await createDocument({
-    workspace: seed.workspace, project: seed.project, table, actor: seed.user, token: null,
+    workspace: seed.workspace, project: seed.project, table, actor: seed.user, eventActor: seed.user.id, token: null,
     isTableScopedUrl: false,
     input: { type: 'work_item', title: 'Parent', body: '', frontmatter: {}, status: null },
   });
@@ -854,12 +939,12 @@ test('F8: deleting a non-parent doc does not collateral-delete unrelated comment
 
   // Two unrelated parents, each with its own comment.
   const parentA = await createDocument({
-    workspace: seed.workspace, project: seed.project, table, actor: seed.user, token: null,
+    workspace: seed.workspace, project: seed.project, table, actor: seed.user, eventActor: seed.user.id, token: null,
     isTableScopedUrl: false,
     input: { type: 'work_item', title: 'A', body: '', frontmatter: {}, status: null },
   });
   const parentB = await createDocument({
-    workspace: seed.workspace, project: seed.project, table, actor: seed.user, token: null,
+    workspace: seed.workspace, project: seed.project, table, actor: seed.user, eventActor: seed.user.id, token: null,
     isTableScopedUrl: false,
     input: { type: 'work_item', title: 'B', body: '', frontmatter: {}, status: null },
   });
@@ -896,7 +981,7 @@ test('F8: deleting a non-parent doc does not collateral-delete unrelated comment
 test("PATCH agent with model: '' clears the key (does not persist empty string)", async () => {
   const { seed } = await makeTestApp();
   const { document } = await createDocument({
-    workspace: seed.workspace, project: null, table: null, actor: seed.user, token: null,
+    workspace: seed.workspace, project: null, table: null, actor: seed.user, eventActor: seed.user.id, token: null,
     input: {
       type: 'agent', title: 'EmptyModel', body: '', status: null,
       frontmatter: {
@@ -925,7 +1010,7 @@ test("PATCH agent with model: '' clears the key (does not persist empty string)"
 test('FIX#1: PATCH clearing model on an API-provider agent rejects with INVALID_PATCH', async () => {
   const { seed } = await makeTestApp();
   const { document } = await createDocument({
-    workspace: seed.workspace, project: null, table: null, actor: seed.user, token: null,
+    workspace: seed.workspace, project: null, table: null, actor: seed.user, eventActor: seed.user.id, token: null,
     input: {
       type: 'agent', title: 'ApiAgent', body: '', status: null,
       frontmatter: {
@@ -947,7 +1032,7 @@ test('FIX#1: PATCH clearing model on an API-provider agent rejects with INVALID_
 test('FIX#1: PATCH clearing model on a claude-code agent succeeds (no model required)', async () => {
   const { seed } = await makeTestApp();
   const { document } = await createDocument({
-    workspace: seed.workspace, project: null, table: null, actor: seed.user, token: null,
+    workspace: seed.workspace, project: null, table: null, actor: seed.user, eventActor: seed.user.id, token: null,
     input: {
       type: 'agent', title: 'CcAgent', body: '', status: null,
       frontmatter: {
@@ -1012,6 +1097,7 @@ test('listDocuments titleQuery matches title substring, case-insensitive', async
     project: seed.project,
     table,
     actor: seed.user,
+    eventActor: seed.user.id,
     token: null,
     input: {
       type: 'work_item',
@@ -1026,6 +1112,7 @@ test('listDocuments titleQuery matches title substring, case-insensitive', async
     project: seed.project,
     table,
     actor: seed.user,
+    eventActor: seed.user.id,
     token: null,
     input: {
       type: 'work_item',
@@ -1053,6 +1140,7 @@ test('listDocuments with no type excludes comment and agent_run', async () => {
     project: seed.project,
     table,
     actor: seed.user,
+    eventActor: seed.user.id,
     token: null,
     input: { type: 'work_item', title: 'Task one', body: '', frontmatter: {}, status: null },
   });
@@ -1125,6 +1213,7 @@ test('findDocumentsInProjects searches only the given project ids', async () => 
     project: seed.project,
     table: tableA,
     actor: seed.user,
+    eventActor: seed.user.id,
     token: null,
     input: { type: 'work_item', title: 'Combell hosting', body: '', frontmatter: {}, status: null },
   });
@@ -1133,6 +1222,7 @@ test('findDocumentsInProjects searches only the given project ids', async () => 
     project: projectB,
     table: tableB,
     actor: seed.user,
+    eventActor: seed.user.id,
     token: null,
     input: { type: 'work_item', title: 'Combell billing', body: '', frontmatter: {}, status: null },
   });

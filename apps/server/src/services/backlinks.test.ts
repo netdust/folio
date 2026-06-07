@@ -35,6 +35,7 @@ test('findBacklinks matches single-string and array-element links, excludes non-
       project: seed.project,
       table,
       actor: seed.user,
+      eventActor: seed.user.id,
       token: null,
       input: { type: 'work_item', title, body: '', frontmatter, status: null },
     });
@@ -71,6 +72,7 @@ test('GET /documents/:slug/backlinks returns linking docs', async () => {
     project: seed.project,
     table,
     actor: seed.user,
+    eventActor: seed.user.id,
     token: null,
     input: { type: 'work_item', title: 'People: Ada', body: '', frontmatter: {}, status: null },
   });
@@ -81,6 +83,7 @@ test('GET /documents/:slug/backlinks returns linking docs', async () => {
     project: seed.project,
     table,
     actor: seed.user,
+    eventActor: seed.user.id,
     token: null,
     input: {
       type: 'work_item',

@@ -117,6 +117,8 @@ documentsRoute.post('/', requireScope('documents:write'), async (c) => {
     project: p,
     table,
     actor: user,
+    // eventActor = the human user: HTTP writes are NOT chain-suppressed (agent PAT over HTTP resolves getUser → its human creator). See tasks/retro-follow-ups.md 2026-06-06 (deferred). Explicit, not defaulted, so the choice is visible.
+    eventActor: user.id,
     token: c.get('token'),
     isTableScopedUrl: Boolean(c.req.param('tslug')),
     input,
@@ -422,7 +424,14 @@ documentsRoute.delete('/:slug', requireScope('documents:delete'), async (c) => {
   const slug = c.req.param('slug');
   const existing = await getDocument(p.id, slug);
   if (!existing) throw new HTTPError('DOCUMENT_NOT_FOUND', `document "${slug}" not found`, 404);
-  await deleteDocument({ workspace: ws, project: p, actor: user, existing });
+  await deleteDocument({
+    workspace: ws,
+    project: p,
+    actor: user,
+    // eventActor = the human user: HTTP writes are NOT chain-suppressed (agent PAT over HTTP resolves getUser → its human creator). See tasks/retro-follow-ups.md 2026-06-06 (deferred). Explicit, not defaulted, so the choice is visible.
+    eventActor: user.id,
+    existing,
+  });
   return c.body(null, 204);
 });
 
