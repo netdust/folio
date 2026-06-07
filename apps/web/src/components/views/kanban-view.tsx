@@ -191,6 +191,15 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
     dropSlotPosition(col.docIds, (id) => docsById.get(id)?.boardPosition ?? null, activeId, overDocId);
 
   const onDragStart = (event: DragStartEvent) => {
+    // Don't start a drag on a card whose PRIOR move is still in flight. A
+    // cross-column move (regroup-reorder) holds the card in `pendingSlugs` until
+    // its mutation settles (~one refetch); reordering it during that window
+    // races two mutations on the same card against an optimistic-vs-server order
+    // mismatch, so the second drag silently lands wrong or no-ops (the
+    // "can't reorder a just-moved card" bug). The card already shows the pending
+    // (opacity-60) state, so a brief un-draggable beat reads as "settling".
+    const slug = (event.active.data.current as { slug?: string } | undefined)?.slug;
+    if (slug && pendingSlugs.has(slug)) return;
     setActiveId(String(event.active.id));
   };
 
@@ -206,6 +215,11 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
     const activeId = String(active.id);
     const slug = (active.data.current as { slug?: string } | undefined)?.slug;
     if (!slug) return;
+    // Defense in depth for the onDragStart guard: if a drag somehow began while
+    // this card's prior move is still in flight, drop it rather than compute a
+    // position against optimistic state the server hasn't applied yet (the
+    // race that caused the "can't reorder a just-moved card" bug).
+    if (pendingSlugs.has(slug)) return;
 
     const overIsColumn = overId.startsWith('col-');
     // Destination column: either the col-* droppable, or the column owning the
