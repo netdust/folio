@@ -480,7 +480,7 @@ export const events = sqliteTable(
       .references(() => workspaces.id, { onDelete: 'cascade' }),
     projectId: text('project_id').references(() => projects.id, { onDelete: 'cascade' }),
     documentId: text('document_id'),
-    kind: text('kind').notNull(), // document.created, document.updated, status.changed, ...
+    kind: text('kind').notNull(), // document.created, document.updated, status.updated, project.deleted, agent.run.*, ... (see @folio/shared KNOWN_EVENT_KINDS)
     actor: text('actor'), // user_id or api_token_id
     payload: text('payload', { mode: 'json' }).$type<unknown>().notNull().default({}),
     createdAt: integer('created_at', { mode: 'timestamp_ms' })

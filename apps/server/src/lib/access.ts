@@ -4,7 +4,8 @@
  * Step 3 of dropping workspace-as-tenancy-boundary (one instance = one team).
  * This is the SINGLE source of truth for "can this user SEE this workspace /
  * project?" — every route and service routes its visibility decision through
- * these functions (callers are rewired in later tasks; nothing reads this yet).
+ * these functions (invariant 4a). The callers ARE wired (drop-tenancy merged):
+ * it is read by the /events SSE narrowing, the runs list, and the project list.
  *
  * The rules (security-critical — implement EXACTLY):
  *
