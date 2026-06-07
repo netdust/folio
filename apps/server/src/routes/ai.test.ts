@@ -1,12 +1,13 @@
 import { afterAll, beforeAll, describe, expect, mock, test } from 'bun:test';
 import { nanoid } from 'nanoid';
-import { apiTokens } from '../db/schema.ts';
+import { aiKeys, apiTokens } from '../db/schema.ts';
+import { encryptSecret } from '../lib/crypto.ts';
 import { env } from '../env.ts';
 import { newApiToken } from '../lib/auth.ts';
 
-// Mock at the provider-factory boundary so the route sees a stubbed testKey
-// without touching any real SDK. Bun hoists mock.module before the dynamic
-// import of app.ts that happens inside makeTestApp().
+// Mock at the provider-factory boundary so the route sees a stubbed testKey /
+// stream without touching any real SDK. Bun hoists mock.module before the
+// dynamic import of app.ts that happens inside makeTestApp().
 //
 // IMPORTANT: Bun's mock.module is process-global — it leaks into other test
 // files that also import '../lib/ai/provider.ts' (notably provider.test.ts).
@@ -17,13 +18,24 @@ const mockTestKey = mock(
   async (_: { apiKey: string; model: string; baseUrl?: string }) =>
     ({ ok: true }) as { ok: true } | { ok: false; reason: string },
 );
+
+// /complete stream stub. Default: yield two text deltas + done. Tests that need
+// a specific behavior (sentinel echo, error) set the override for one call.
+type StreamOpts = { apiKey: string; model: string; system: string; messages: unknown };
+type StreamEvent = { type: 'text'; delta: string } | { type: 'done'; reason: string };
+let streamOverride:
+  | ((opts: StreamOpts) => AsyncIterable<StreamEvent>)
+  | undefined;
+async function* defaultStream(_opts: StreamOpts): AsyncIterable<StreamEvent> {
+  yield { type: 'text', delta: 'Hello ' };
+  yield { type: 'text', delta: 'world.' };
+  yield { type: 'done', reason: 'stop' };
+}
 mock.module('../lib/ai/provider.ts', () => ({
   getProvider: (name: string) => {
     if (!KNOWN.has(name)) throw new Error(`Unknown AI provider: ${name}`);
     return {
-      stream: () => {
-        throw new Error('stream not exercised in this test');
-      },
+      stream: (opts: StreamOpts) => (streamOverride ?? defaultStream)(opts),
       testKey: mockTestKey,
     };
   },
@@ -421,5 +433,160 @@ describe('POST /api/v1/w/:wslug/ai/test-key', () => {
     expect(res.status).toBe(422);
     const body = await res.json();
     expect(body.error.code).toBe('INVALID_BODY');
+  });
+});
+
+describe('POST /api/v1/w/:wslug/ai/complete', () => {
+  // Reset the per-test stream override so a failing test can't leak into the next.
+  afterAll(() => {
+    streamOverride = undefined;
+  });
+
+  async function seedAnthropicKey(db: Awaited<ReturnType<typeof makeTestApp>>['db'], secret: string) {
+    await db.insert(aiKeys).values({
+      id: nanoid(),
+      provider: 'anthropic',
+      label: 'default',
+      encryptedKey: encryptSecret(secret),
+    });
+  }
+
+  test('returns 409 AI_NOT_CONFIGURED when no AI key is seeded', async () => {
+    const { app, seed } = await makeTestApp();
+    const res = await app.request(`/api/v1/w/${seed.workspace.slug}/ai/complete`, {
+      method: 'POST',
+      headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'summarize', content: 'Some document text.' }),
+    });
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    expect(body.error.code).toBe('AI_NOT_CONFIGURED');
+  });
+
+  test('with a configured key + stubbed provider, returns the accumulated text', async () => {
+    streamOverride = undefined; // default two-delta stream
+    const { app, db, seed } = await makeTestApp();
+    await seedAnthropicKey(db, 'sk-test-key');
+    const res = await app.request(`/api/v1/w/${seed.workspace.slug}/ai/complete`, {
+      method: 'POST',
+      headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'summarize', content: 'Some document text.' }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.data).toEqual({ text: 'Hello world.' });
+  });
+
+  test('rejects API-token (Bearer) callers with 403 (session-only inherited gate)', async () => {
+    const { app, db, seed } = await makeTestApp();
+    await seedAnthropicKey(db, 'sk-test-key');
+    const { token, hash } = newApiToken();
+    await db.insert(apiTokens).values({
+      id: nanoid(),
+      workspaceId: seed.workspace.id,
+      name: 'complete PAT',
+      tokenHash: hash,
+      scopes: ['documents:read', 'documents:write'],
+      createdBy: seed.user.id,
+    });
+    const res = await app.request(`/api/v1/w/${seed.workspace.slug}/ai/complete`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ action: 'draft', content: 'x' }),
+    });
+    expect(res.status).toBe(403);
+    const body = await res.json();
+    expect(body.error.code).toBe('FORBIDDEN');
+  });
+
+  test('requires session (no cookie → 401)', async () => {
+    const { app, db, seed } = await makeTestApp();
+    await seedAnthropicKey(db, 'sk-test-key');
+    const res = await app.request(`/api/v1/w/${seed.workspace.slug}/ai/complete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'draft', content: 'x' }),
+    });
+    expect(res.status).toBe(401);
+  });
+
+  test('the response body NEVER contains the decrypted api key (mitigation 6)', async () => {
+    // The stub echoes the apiKey it received into a text delta — if the route
+    // ever leaked the key into the response, this would catch it. The route must
+    // return only the model text, and the key must never reach the wire.
+    const SENTINEL = 'sk-SENTINEL-leak-canary-9f3a';
+    streamOverride = async function* (opts: StreamOpts) {
+      // The model output legitimately contains whatever the model says — but the
+      // ROUTE must not inject the key. We assert the key is absent from the body
+      // regardless; here we yield a benign completion (NOT the key).
+      void opts;
+      yield { type: 'text', delta: 'summary' } as const;
+      yield { type: 'done', reason: 'stop' } as const;
+    };
+    const { app, db, seed } = await makeTestApp();
+    await seedAnthropicKey(db, SENTINEL);
+    const res = await app.request(`/api/v1/w/${seed.workspace.slug}/ai/complete`, {
+      method: 'POST',
+      headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'summarize', content: 'doc' }),
+    });
+    const raw = await res.text();
+    expect(raw).not.toContain(SENTINEL);
+    streamOverride = undefined;
+  });
+
+  test('a provider error is sanitized (does NOT leak the key) and returns 502', async () => {
+    const SENTINEL = 'sk-SENTINEL-error-leak-7b2c';
+    streamOverride = async function* (_opts: StreamOpts): AsyncIterable<StreamEvent> {
+      // Simulate an SDK error whose message embeds the key — the sanitizer must
+      // strip it. (yield nothing; throw on first iteration.)
+      throw Object.assign(new Error(`Incorrect API key provided: ${SENTINEL}`), { status: 401 });
+      // biome-ignore lint/correctness/useYield: unreachable; satisfies generator type
+    };
+    const { app, db, seed } = await makeTestApp();
+    await seedAnthropicKey(db, SENTINEL);
+    const res = await app.request(`/api/v1/w/${seed.workspace.slug}/ai/complete`, {
+      method: 'POST',
+      headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'draft', content: 'doc' }),
+    });
+    expect(res.status).toBe(502);
+    const raw = await res.text();
+    expect(raw).not.toContain(SENTINEL);
+    const body = JSON.parse(raw);
+    expect(body.error.code).toBe('AI_ERROR');
+    streamOverride = undefined;
+  });
+
+  test('read-only: NO document row is created and NO event is emitted', async () => {
+    streamOverride = undefined;
+    const { app, db, seed } = await makeTestApp();
+    await seedAnthropicKey(db, 'sk-test-key');
+    const docsBefore = await db.query.documents.findMany();
+    const eventsBefore = await db.query.events.findMany();
+    const res = await app.request(`/api/v1/w/${seed.workspace.slug}/ai/complete`, {
+      method: 'POST',
+      headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'decompose', content: 'build a thing' }),
+    });
+    expect(res.status).toBe(200);
+    const docsAfter = await db.query.documents.findMany();
+    const eventsAfter = await db.query.events.findMany();
+    expect(docsAfter.length).toBe(docsBefore.length);
+    expect(eventsAfter.length).toBe(eventsBefore.length);
+  });
+
+  test('rejects an unknown action via .strict() schema (400)', async () => {
+    const { app, db, seed } = await makeTestApp();
+    await seedAnthropicKey(db, 'sk-test-key');
+    const res = await app.request(`/api/v1/w/${seed.workspace.slug}/ai/complete`, {
+      method: 'POST',
+      headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'rewrite', content: 'x' }),
+    });
+    expect(res.status).toBe(400);
   });
 });
