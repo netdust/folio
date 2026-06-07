@@ -65,10 +65,10 @@ describe('KanbanCard', () => {
     expect(screen.getByRole('button', { name: /Card A/ })).toBeTruthy();
   });
 
-  it('column wraps cards in a sortable context when reorder is enabled', () => {
+  it('column wraps cards in a sortable context when sortable', () => {
     render(
       <DndContext>
-        <KanbanColumn value="todo" label="Todo" count={1} docIds={['d1']} reorderEnabled>
+        <KanbanColumn value="todo" label="Todo" count={1} docIds={['d1']} sortable>
           <KanbanCard doc={sampleDoc()} onOpen={() => {}} sortable />
         </KanbanColumn>
       </DndContext>,
@@ -76,10 +76,10 @@ describe('KanbanCard', () => {
     expect(screen.getByRole('button', { name: /Card A/ })).toBeTruthy();
   });
 
-  it('column renders cards directly when reorder is disabled (sort active)', () => {
+  it('column renders cards directly when not sortable', () => {
     render(
       <DndContext>
-        <KanbanColumn value="todo" label="Todo" count={1} docIds={['d1']} reorderEnabled={false}>
+        <KanbanColumn value="todo" label="Todo" count={1} docIds={['d1']} sortable={false}>
           <KanbanCard doc={sampleDoc()} onOpen={() => {}} />
         </KanbanColumn>
       </DndContext>,

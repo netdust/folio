@@ -4,7 +4,12 @@ export type DropAction =
   | { kind: 'none' }
   | { kind: 'reorder' }
   | { kind: 'regroup' }
-  | { kind: 'regroup-reorder' };
+  | { kind: 'regroup-reorder' }
+  // Sorted mode (reorderEnabled=false): the user dropped a card ON another card
+  // in the SAME column — a hand-reorder intent the active sort can't express.
+  // The view responds by switching Sort→Manual (bus + persist) AND applying the
+  // board_position reorder, so the card lands where dropped.
+  | { kind: 'auto-manual-reorder' };
 
 interface DropCtx {
   reorderEnabled: boolean;
@@ -16,11 +21,17 @@ interface DropCtx {
 /**
  * Decide what a drag-end gesture means on the board, independent of dnd-kit.
  *
- * In MANUAL mode cards live inside per-column SortableContexts, so dropping on
- * a card reports the over-card's doc id rather than `col-*`. We therefore can't
- * infer intent from the droppable id alone — we compare the dragged card's
- * current group to the destination column. A card dropped on a card in another
- * column is a cross-column move (regroup + reorder), not a pure reorder.
+ * Cards live inside per-column SortableContexts in BOTH modes (always sortable),
+ * so dropping on a card reports the over-card's doc id rather than `col-*`. We
+ * therefore can't infer intent from the droppable id alone — we compare the
+ * dragged card's current group to the destination column. A card dropped on a
+ * card in another column is a cross-column move (regroup), not a pure reorder.
+ *
+ * In SORTED mode (reorderEnabled=false) a same-column card-over-card drop is a
+ * hand-reorder intent the active sort can't express → `auto-manual-reorder`:
+ * the view flips Sort→Manual and applies the board_position reorder so the card
+ * lands where dropped. A cross-column card drop in sorted mode is a plain
+ * regroup (the destination order is still sort-derived, so no board_position).
  */
 export function resolveDrop(ctx: DropCtx): DropAction {
   const sameGroup = ctx.activeGroupValue === ctx.destColumnValue;
@@ -29,7 +40,11 @@ export function resolveDrop(ctx: DropCtx): DropAction {
     return sameGroup ? { kind: 'none' } : { kind: 'regroup' };
   }
   // dropped on a card
-  if (!ctx.reorderEnabled) return { kind: 'none' }; // sorted mode: card-over-card does nothing
+  if (!ctx.reorderEnabled) {
+    // sorted mode: same-column card drop = reorder intent → switch to manual;
+    // cross-column card drop = regroup (order stays sort-derived).
+    return sameGroup ? { kind: 'auto-manual-reorder' } : { kind: 'regroup' };
+  }
   return sameGroup ? { kind: 'reorder' } : { kind: 'regroup-reorder' };
 }
 

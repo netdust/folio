@@ -342,3 +342,111 @@ test('board: manual within-column drag-reorder persists a new board_position', a
     expect(after[0]).toBe(secondTitle);
   }).toPass({ timeout: 8000 });
 });
+
+// ── ISSUE 1: auto-switch to Manual on a sorted-mode reorder-intent drag ────────
+//
+// The board DEFAULTS to a field sort (e.g. Updated ↓). A within-column card-over-
+// card drag is a hand-reorder intent the sort can't express, and previously did
+// NOTHING (no PATCH, no feedback). The fix: such a drop flips Sort→Manual (live
+// bus + persisted sort:[]) AND applies the board_position reorder. This drives
+// the FULL flow in the real browser — NO manual Sort switch first.
+test('board: a sorted-mode within-column drag auto-switches Sort to Manual and reorders', async ({
+  page,
+}) => {
+  await signUpFresh(page);
+  const wslug = `auto-ws-${Date.now()}`;
+  const pslug = 'auto-p';
+  await createWorkspace(page, 'Auto WS', wslug);
+  await createProject(page, wslug, 'Auto Proj', pslug);
+  await createWorkItem(page, wslug, pslug, 'Card Alpha', { status: 'todo' });
+  await createWorkItem(page, wslug, pslug, 'Card Bravo', { status: 'todo' });
+
+  // Open the DEFAULT board — do NOT switch to Manual. The seeded default view
+  // ships with a non-null (field) sort, so the board starts in sorted mode.
+  await page.goto(`/w/${wslug}/p/${pslug}/board`);
+  await expect(page.getByRole('button', { name: /Card Alpha/ })).toBeVisible({ timeout: 6000 });
+  // Precondition: the Sort is NOT already Manual.
+  await expect(page.getByRole('button', { name: /^Sort:/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Sort:\s*Manual/ })).toHaveCount(0);
+
+  // Record document PATCHes (the reorder) and view PATCHes (the auto-switch persist).
+  const docPatches: string[] = [];
+  const viewPatches: string[] = [];
+  page.on('request', (req) => {
+    if (req.method() !== 'PATCH') return;
+    if (req.url().includes('/documents/')) docPatches.push(req.url());
+    if (req.url().includes('/views/')) viewPatches.push(req.url());
+  });
+
+  // Drag the SECOND card onto the FIRST — a same-column card-over-card reorder
+  // intent. dnd-kit's PointerSensor listens for POINTER events, so dispatch real
+  // PointerEvents (page.mouse synthesizes mouse events the sensor ignores).
+  const second = page.getByRole('button', { name: /Card Bravo/ });
+  const first = page.getByRole('button', { name: /Card Alpha/ });
+  const srcBox = await second.boundingBox();
+  const dstBox = await first.boundingBox();
+  expect(srcBox && dstBox).toBeTruthy();
+  const sx = srcBox!.x + srcBox!.width / 2;
+  const sy = srcBox!.y + srcBox!.height / 2;
+  const dx = dstBox!.x + dstBox!.width / 2;
+  const dy = dstBox!.y + dstBox!.height * 0.25;
+
+  await second.evaluate(
+    (el, { sx, sy }) => {
+      el.dispatchEvent(
+        new PointerEvent('pointerdown', {
+          bubbles: true,
+          cancelable: true,
+          pointerId: 1,
+          isPrimary: true,
+          button: 0,
+          clientX: sx,
+          clientY: sy,
+        }),
+      );
+    },
+    { sx, sy },
+  );
+  const stepN = 10;
+  for (let i = 1; i <= stepN; i++) {
+    const cx = sx + ((dx - sx) * i) / stepN;
+    const cy = sy + ((dy - sy) * i) / stepN;
+    await page.evaluate(
+      ({ cx, cy }) => {
+        document.dispatchEvent(
+          new PointerEvent('pointermove', { bubbles: true, cancelable: true, pointerId: 1, clientX: cx, clientY: cy }),
+        );
+      },
+      { cx, cy },
+    );
+    await page.waitForTimeout(25);
+  }
+  await page.evaluate(
+    ({ dx, dy }) => {
+      document.dispatchEvent(
+        new PointerEvent('pointerup', { bubbles: true, cancelable: true, pointerId: 1, clientX: dx, clientY: dy }),
+      );
+    },
+    { dx, dy },
+  );
+  await page.waitForTimeout(250);
+
+  // (a) the toolbar Sort label flipped to Manual (the bus override the auto-
+  // switch set is read by the toolbar). This is the user-visible feedback that
+  // was MISSING before.
+  await expect(page.getByRole('button', { name: /Sort:\s*Manual/ })).toBeVisible({ timeout: 6000 });
+
+  // (b) the auto-switch was PERSISTED (a view PATCH fired) AND the reorder was
+  // applied (a board_position document PATCH fired).
+  expect(viewPatches.length, 'auto-switch should persist sort:[] via a view PATCH').toBeGreaterThan(0);
+  expect(docPatches.length, 'reorder should PATCH board_position').toBeGreaterThan(0);
+
+  // (c) the persisted order flipped — the dragged (formerly second) card lands first.
+  await expect(async () => {
+    const res = await page.request.get(
+      `/api/v1/w/${wslug}/p/${pslug}/documents?type=work_item&sort=board_position&dir=asc&limit=200`,
+    );
+    const rows = ((await res.json()).data ?? []) as Array<{ title: string }>;
+    expect(rows[0]?.title).toBe('Card Bravo');
+  }).toPass({ timeout: 8000 });
+});

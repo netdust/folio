@@ -9,11 +9,12 @@ import {
   useSensors,
   type DragEndEvent,
   type DragStartEvent,
+  type DropAnimation,
 } from '@dnd-kit/core';
 import { toast } from 'sonner';
 import { useCreateDocument, useDocuments, useUpdateDocument, type DocumentSummary } from '../../lib/api/documents.ts';
 import { useStatuses } from '../../lib/api/statuses.ts';
-import { useViews } from '../../lib/api/views.ts';
+import { useViews, useUpdateView } from '../../lib/api/views.ts';
 import { useFields } from '../../lib/api/fields.ts';
 import { formatApiError } from '../../lib/api/index.ts';
 import { KanbanColumn } from '../kanban/kanban-column.tsx';
@@ -29,6 +30,21 @@ interface Props {
   pslug: string;
   tslug: string;
 }
+
+// ISSUE 2 fix — DragOverlay drop animation. dnd-kit's DEFAULT keyframes animate
+// the overlay's transform from its drop position back to the SOURCE card's
+// original rect (`active.rect`). On a cross-column move that source node hasn't
+// moved yet (React state / refetch hasn't repositioned it), so the overlay
+// visibly slides back toward the origin — reading as a snap-back. We override
+// `keyframes` to fade the overlay OUT in place at the drop point (no transform
+// translation), so the gesture reads as "landed where dropped" while the
+// re-render places the real card at the destination. Short duration so the
+// fade-out doesn't linger over the freshly-positioned card.
+const DROP_ANIMATION: DropAnimation = {
+  duration: 180,
+  easing: 'ease-out',
+  keyframes: () => [{ opacity: 1 }, { opacity: 0 }],
+};
 
 export function KanbanView({ wslug, pslug, tslug }: Props) {
   const navigate = useNavigate();
@@ -93,6 +109,21 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
   const { data: page, isLoading, error } = useDocuments(wslug, pslug, listParams);
   const update = useUpdateDocument(wslug, pslug, listParams);
   const create = useCreateDocument(wslug, pslug);
+  const updateView = useUpdateView(wslug, pslug);
+
+  // Switch Sort→Manual the SAME way board-controls.tsx onSortChange does: set
+  // the live bus override to null (manual) AND persist `sort: []` (empty array =
+  // manual / board_position) on the active view so it survives a reload. Reused
+  // by the auto-switch-on-reorder path (ISSUE 1) — keep in lockstep with the
+  // toolbar's writer so the two never diverge.
+  const persistManualSort = () => {
+    if (!activeView) return;
+    boardControlsBus.setSort(activeView.id, null);
+    updateView.mutate(
+      { id: activeView.id, patch: { sort: [] } },
+      { onError: (err) => toast.error(formatApiError(err)) },
+    );
+  };
 
   const groupBy = (override?.groupBy ?? activeView?.groupBy ?? 'status') || 'status';
   const groupField = groupBy === 'status' ? null : (fields ?? []).find((f) => f.key === groupBy) ?? null;
@@ -136,11 +167,13 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
     return String(v);
   };
 
-  // Manual mode (no field sort) is the only mode where within-column
-  // drag-reorder is allowed; a field-sort active means the order is derived,
-  // so reordering would be meaningless. A null effectiveSort = manual mode →
-  // cards become sortable and a within-column drop writes board_position via
-  // rankBetween. Cross-column regroup (writes status) works in either mode.
+  // Manual mode (no field sort) is where within-column drag-reorder writes
+  // board_position directly. A null effectiveSort = manual mode. In SORTED mode
+  // a within-column card-over-card drop is a hand-reorder INTENT that the active
+  // sort can't express — onDragEnd auto-switches the view to Manual and applies
+  // the reorder (the `auto-manual-reorder` action). Cards are sortable in BOTH
+  // modes so dnd-kit reports the over-CARD (not just the column) and we can
+  // resolve the slot to drop into; only the PERSIST behavior is mode-gated.
   const reorderEnabled = effectiveSort === null;
 
   // Builds the grouping-field patch for moving a card into `colValue`.
@@ -193,10 +226,19 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
 
     const action = resolveDrop({ reorderEnabled, overIsColumn, activeGroupValue, destColumnValue });
     if (action.kind === 'none') return;
-    if (action.kind === 'reorder' && activeId === overId) return;
+    if ((action.kind === 'reorder' || action.kind === 'auto-manual-reorder') && activeId === overId) return;
 
     let patch: Record<string, unknown>;
     if (action.kind === 'reorder') {
+      patch = { boardPosition: slotPosition(destCol, activeId, overId) };
+    } else if (action.kind === 'auto-manual-reorder') {
+      // Sorted mode + same-column card drop = hand-reorder intent. Flip the view
+      // to Manual (live bus + persisted `sort: []`) so board_position becomes the
+      // ordering, THEN apply the reorder patch so the card lands where dropped.
+      // The bus flip re-derives effectiveSort=null → reorderEnabled=true and the
+      // board re-queries by board_position; the toolbar Sort label reads the same
+      // bus override, so it updates to "Manual" automatically.
+      persistManualSort();
       patch = { boardPosition: slotPosition(destCol, activeId, overId) };
     } else if (action.kind === 'regroup') {
       patch = groupingPatch(destColumnValue);
@@ -259,7 +301,11 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
             onAdd={col.value === null ? undefined : () => onCreateInColumn(col.value)}
             isAddPending={create.isPending}
             docIds={col.docIds}
-            reorderEnabled={reorderEnabled}
+            // Always wrap in a SortableContext so a card-over-card drop reports
+            // the over-CARD even in sorted mode (lets onDragEnd resolve the slot
+            // for the auto-switch-to-Manual reorder). The PERSIST gate is
+            // reorderEnabled, handled in onDragEnd — not here.
+            sortable
           >
             {col.docIds.map((id) => {
               const doc = docsById.get(id);
@@ -270,7 +316,9 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
                   doc={doc}
                   onOpen={openDoc}
                   isPending={pendingSlugs.has(doc.slug)}
-                  sortable={reorderEnabled}
+                  // Always sortable (both modes) so over.id is a card on a
+                  // card-over-card drop — see KanbanColumn `sortable` note.
+                  sortable
                 />
               );
             })}
@@ -281,7 +329,7 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
       {/* The dragged card's visible clone. DragOverlay portals to the body, so
           it escapes each column's `overflow-y-auto` clip and paints on top —
           the original in-place card hides (opacity 0) while this shows. */}
-      <DragOverlay>
+      <DragOverlay dropAnimation={DROP_ANIMATION}>
         {activeDoc ? <KanbanCard doc={activeDoc} onOpen={openDoc} overlay /> : null}
       </DragOverlay>
     </DndContext>

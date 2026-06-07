@@ -12,16 +12,18 @@ interface Props {
   count: number;
   onAdd?: () => void;
   isAddPending?: boolean;
-  // Doc ids in this column, display order. Used as the SortableContext items
-  // when manual reorder is enabled.
+  // Doc ids in this column, display order. Used as the SortableContext items.
   docIds: string[];
-  // When true (manual board mode), wrap cards in a SortableContext so they can
-  // be reordered within the column.
-  reorderEnabled: boolean;
+  // When true, wrap cards in a SortableContext so a card-over-card drop reports
+  // the over-CARD (not just the column droppable). The board now passes this in
+  // BOTH modes — sorted-mode card drops trigger the auto-switch-to-Manual
+  // reorder, which needs the card-level `over`. The reorder PERSIST gate lives
+  // in KanbanView.onDragEnd, not here.
+  sortable: boolean;
   children: ReactNode;
 }
 
-export function KanbanColumn({ value, label, color, count, onAdd, isAddPending, docIds, reorderEnabled, children }: Props) {
+export function KanbanColumn({ value, label, color, count, onAdd, isAddPending, docIds, sortable, children }: Props) {
   const colId = `col-${value ?? '__unset__'}`;
   const { setNodeRef, isOver } = useDroppable({ id: colId, data: { columnValue: value } });
   return (
@@ -57,7 +59,7 @@ export function KanbanColumn({ value, label, color, count, onAdd, isAddPending, 
           isOver ? 'bg-card' : 'bg-[rgb(0_0_0_/_0.025)] dark:bg-[rgb(255_255_255_/_0.03)]',
         )}
       >
-        {reorderEnabled ? (
+        {sortable ? (
           <SortableContext items={docIds} strategy={verticalListSortingStrategy}>
             {children}
           </SortableContext>

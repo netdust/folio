@@ -25,10 +25,20 @@ describe('coerceGroupValue', () => {
 
 describe('resolveDrop', () => {
   // resolveDrop({ reorderEnabled, overIsColumn, activeGroupValue, destColumnValue }) → action
-  test('sorted mode, drop on a card → no-op (reorder disabled)', () => {
+  test('sorted mode, drop on a card in the SAME column → auto-switch to manual + reorder', () => {
+    // A within-column card-over-card drop while a sort is active = hand-reorder
+    // intent the sort can't express. The view flips to Manual and applies the
+    // board_position reorder (ISSUE 1 fix). Previously this returned {none}.
+    expect(
+      resolveDrop({ reorderEnabled: false, overIsColumn: false, activeGroupValue: 'a', destColumnValue: 'a' }).kind,
+    ).toBe('auto-manual-reorder');
+  });
+  test('sorted mode, drop on a card in a DIFFERENT column → regroup (no reorder)', () => {
+    // Cross-column card drop in sorted mode is a plain status/group change; the
+    // destination order stays sort-derived, so no board_position is written.
     expect(
       resolveDrop({ reorderEnabled: false, overIsColumn: false, activeGroupValue: 'a', destColumnValue: 'b' }).kind,
-    ).toBe('none');
+    ).toBe('regroup');
   });
   test('manual mode, same column card drop → reorder only', () => {
     expect(

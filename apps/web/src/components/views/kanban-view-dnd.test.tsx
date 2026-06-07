@@ -314,6 +314,103 @@ describe('KanbanView DnD', () => {
     expect(patches.length).toBe(0);
   });
 
+  // ── ISSUE 1 seam (2026-06-07): auto-switch to Manual on a sorted-mode reorder ─
+  //
+  // A board defaulting to a field sort (e.g. title) renders cards as plain
+  // draggables historically; a same-column card-over-card drop resolved to
+  // {kind:'none'} → nothing happened, with no feedback. The fix: cards are
+  // always sortable (so over.id is a CARD), and a same-column card drop in
+  // sorted mode = `auto-manual-reorder` → onDragEnd (a) flips Sort→Manual via
+  // the bus + persists `sort: []` on the active view, AND (b) writes the
+  // boardPosition reorder so the card lands where dropped.
+
+  // A SORTED board (title asc) with two cards in the SAME (todo) column.
+  // Records BOTH the view PATCH (the auto-switch persist) and the document
+  // PATCH (the reorder), keyed by url.
+  function setupSortedTwoCardBoard() {
+    const viewPatches: Array<{ id: string; body: unknown }> = [];
+    const docPatches: Array<{ slug: string; body: unknown }> = [];
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async (url, init) => {
+      const u = String(url);
+      const method = (init?.method ?? 'GET').toUpperCase();
+      if (method === 'PATCH' && u.includes('/views/')) {
+        const id = u.split('/views/')[1]?.split(/[?#]/)[0] ?? '';
+        viewPatches.push({ id, body: init?.body ? JSON.parse(String(init.body)) : null });
+        return new Response(JSON.stringify({ data: { view: { id } } }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (method === 'PATCH' && u.includes('/documents/')) {
+        const slug = u.split('/documents/')[1]?.split(/[?#]/)[0] ?? '';
+        docPatches.push({ slug, body: init?.body ? JSON.parse(String(init.body)) : null });
+        return new Response(JSON.stringify({ data: { slug } }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (u.includes('/statuses')) {
+        return new Response(
+          JSON.stringify({ data: [{ id: 's1', key: 'todo', name: 'Todo', color: '#6EAFFF', category: 'unstarted', order: 1 }] }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      if (u.includes('/views')) {
+        // A NON-null sort → sorted mode → reorderEnabled is false.
+        return new Response(
+          JSON.stringify({ data: [{ id: 'v1', name: 'Board', type: 'kanban', filters: {}, sort: [{ key: 'title', dir: 'asc' }], groupBy: null, visibleFields: null, columnOrder: null, isDefault: true, order: 1 }] }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      if (u.includes('/documents')) {
+        return new Response(
+          JSON.stringify({
+            data: {
+              data: [
+                { id: 'd1', slug: 'alpha', type: 'work_item', title: 'Alpha Task', status: 'todo', parentId: null, boardPosition: 'a', frontmatter: {}, createdAt: '', updatedAt: new Date().toISOString() },
+                { id: 'd2', slug: 'bravo', type: 'work_item', title: 'Bravo Task', status: 'todo', parentId: null, boardPosition: 'c', frontmatter: {}, createdAt: '', updatedAt: new Date().toISOString() },
+              ],
+              nextCursor: null,
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      return new Response('{"data":[]}', { status: 200, headers: { 'content-type': 'application/json' } });
+    }));
+    return { viewPatches, docPatches };
+  }
+
+  it('sorted-mode same-column card drop auto-switches to Manual (persists sort:[]) AND writes a boardPosition patch', async () => {
+    const { viewPatches, docPatches } = setupSortedTwoCardBoard();
+    const { queryClient, router } = setup();
+    render(<QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider>);
+    await waitFor(() => expect(screen.getByText('Alpha Task')).toBeInTheDocument());
+    await waitFor(() => expect(captured.props?.onDragEnd).toBeTypeOf('function'));
+
+    // Drag Bravo (d2) onto Alpha (d1) — a same-column card-over-card drop while a
+    // field sort (title) is active. over.id is the over-CARD's id (cards are
+    // always sortable now). Old behavior: resolveDrop → {none}, no PATCH at all.
+    const event = {
+      active: { id: 'd2', data: { current: { slug: 'bravo', currentStatus: 'todo' } } },
+      over: { id: 'd1' },
+    } as unknown as DragEndEvent;
+    await act(async () => {
+      await captured.props?.onDragEnd?.(event);
+    });
+
+    // (a) the active view was flipped to Manual: persisted sort is the empty
+    // array (board-controls' "manual" convention).
+    await waitFor(() => expect(viewPatches.length).toBeGreaterThan(0));
+    expect(viewPatches[0]?.id).toBe('v1');
+    expect(viewPatches[0]?.body).toMatchObject({ sort: [] });
+
+    // (b) the reorder was applied: a boardPosition patch on the dragged card.
+    await waitFor(() => expect(docPatches.length).toBeGreaterThan(0));
+    expect(docPatches[0]?.slug).toBe('bravo');
+    expect(docPatches[0]?.body).toMatchObject({ boardPosition: expect.any(String) });
+  });
+
   // BUG 1: a DragOverlay renders the active card clone once a drag starts. The
   // overlay portals above the columns (escaping their overflow clip), fixing the
   // "card renders behind the columns" bug. Driven via onDragStart → re-render.
