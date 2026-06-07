@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { effectiveReach, isInstanceReach, isOperatorToken } from './token-reach.ts';
+import { effectiveReach, isAgentBound, isInstanceReach, isOperatorToken } from './token-reach.ts';
 
 describe('isInstanceReach', () => {
   test('null workspaceId is instance reach', () => {
@@ -22,6 +22,27 @@ describe('isOperatorToken (system-origin operator: instance reach + createdBy nu
   });
   test('pinned + human createdBy is NOT the operator', () => {
     expect(isOperatorToken({ workspaceId: 'w1', createdBy: 'u1' } as any)).toBe(false);
+  });
+});
+
+describe('isAgentBound (the single agent-path-vs-human-path discriminator)', () => {
+  test('operator token (agentId null, ws null, createdBy null) is agent-bound', () => {
+    expect(isAgentBound({ agentId: null, workspaceId: null, createdBy: null } as any)).toBe(true);
+  });
+  test('human instance PAT (agentId null, createdBy set) is NOT agent-bound', () => {
+    expect(
+      isAgentBound({ agentId: null, workspaceId: null, createdBy: 'user-123' } as any),
+    ).toBe(false);
+  });
+  test('human workspace PAT (agentId null, ws set, createdBy set) is NOT agent-bound', () => {
+    expect(isAgentBound({ agentId: null, workspaceId: 'ws-1', createdBy: 'user-1' } as any)).toBe(
+      false,
+    );
+  });
+  test('workspace agent token (agentId UUID) is agent-bound', () => {
+    expect(isAgentBound({ agentId: 'doc-uuid', workspaceId: 'ws-1', createdBy: 'user-1' } as any)).toBe(
+      true,
+    );
   });
 });
 

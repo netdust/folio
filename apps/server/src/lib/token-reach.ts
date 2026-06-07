@@ -28,6 +28,23 @@ export function isOperatorToken(
   return token.workspaceId === null && token.createdBy === null;
 }
 
+/**
+ * True iff this token acts as an AGENT (its own allow-list/identity governs the
+ * authority decision), vs a human PAT (the human creator's grants govern). The
+ * operator is agent-bound but carries NO agentId — it is a CODE SINGLETON whose
+ * conversation token has `agentId: null` (Shape B: no FK-shaped sentinel), so it
+ * is identified by isOperatorToken (workspaceId null + createdBy null). A human
+ * instance PAT has createdBy set, so it is NOT agent-bound. THIS is the single
+ * discriminator for every "agent path vs human path" branch — replacing the
+ * scattered `if (token.agentId)` checks, which mis-classify the operator once its
+ * agentId is null.
+ */
+export function isAgentBound(
+  token: Pick<ApiToken, 'agentId' | 'workspaceId' | 'createdBy'>,
+): boolean {
+  return token.agentId !== null || isOperatorToken(token);
+}
+
 export type EffectiveReach =
   | { ok: true; workspaceId: string | null }
   | { ok: false };
