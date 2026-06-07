@@ -74,6 +74,27 @@ test('DELETE /w/:wslug/projects/:pslug (owner) returns 204', async () => {
   expect(res.status).toBe(204);
 });
 
+test('DELETE project emits a project.deleted event (actor = deleter, ws-scoped tombstone carrying the project id/slug)', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const { events } = await import('../db/schema.ts');
+  const { eq } = await import('drizzle-orm');
+
+  const res = await app.request('/api/v1/w/acme/p/web', {
+    method: 'DELETE',
+    headers: { Cookie: seed.sessionCookie },
+  });
+  expect(res.status).toBe(204);
+
+  const rows = await db.select().from(events).where(eq(events.kind, 'project.deleted'));
+  expect(rows).toHaveLength(1);
+  expect(rows[0]!.actor).toBe(seed.user.id);
+  expect(rows[0]!.workspaceId).toBe(seed.workspace.id);
+  // events.project_id cascades on project delete → the tombstone is ws-scoped
+  // with the id/slug in the payload (the project row no longer exists).
+  expect(rows[0]!.projectId).toBeNull();
+  expect(rows[0]!.payload).toMatchObject({ id: seed.project.id, slug: seed.project.slug });
+});
+
 test('GET unknown project → 404 PROJECT_NOT_FOUND', async () => {
   const { app, seed } = await makeTestApp();
   const res = await app.request('/api/v1/w/acme/p/nope', {

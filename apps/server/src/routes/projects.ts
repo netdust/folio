@@ -135,13 +135,14 @@ projectItemRoute.patch(
 projectItemRoute.delete('/', requireScope('config:write'), async (c) => {
   const p = getProject(c);
   const ws = getWorkspace(c);
+  const user = getUser(c);
   // CR-2/3: project-delete authority = canSeeProject (owner || ws-grant ||
   // project-grant). getRole returns the INSTANCE role, so the pre-fix owner-only
   // gate locked out grant holders. Under the current model management ==
   // visibility — resolveProject (pScope) already enforced canSeeProject for a
   // 404, so a caller reaching here can already see the project; keep this
   // explicit authority check for defense-in-depth and intent clarity.
-  if (!(await canSeeProject(db, getUser(c).id, p.id))) {
+  if (!(await canSeeProject(db, user.id, p.id))) {
     throw new HTTPError('FORBIDDEN', 'project management requires access to the project', 403);
   }
 
@@ -178,6 +179,18 @@ projectItemRoute.delete('/', requireScope('config:write'), async (c) => {
     }
 
     await tx.delete(projects).where(eq(projects.id, p.id));
+    // events.project_id is `onDelete: 'cascade'` → keying this event to p.id
+    // would (a) violate the FK (the row is gone in this same tx) and (b) be
+    // self-cancelling even if it didn't (the cascade would delete it). Scope it
+    // to the workspace and carry the id/slug in the payload, mirroring how a
+    // tombstone outlives the entity it announces.
+    await emitEvent(tx, {
+      workspaceId: ws.id,
+      projectId: null,
+      kind: 'project.deleted',
+      actor: user.id,
+      payload: { id: p.id, slug: p.slug },
+    });
   });
 
   return c.body(null, 204);
