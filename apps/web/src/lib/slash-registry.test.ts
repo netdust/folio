@@ -8,6 +8,7 @@ function ctxFor(overrides: Partial<SlashContext> = {}): SlashContext {
     insert: vi.fn(),
     replace: vi.fn(),
     notify: vi.fn(),
+    aiComplete: vi.fn(async () => {}),
     ...overrides,
   };
 }
@@ -51,5 +52,24 @@ describe('slash registry', () => {
     const draft = slashRegistry.find((i) => i.id === 'draft')!;
     expect(draft.isEnabled!(ctxFor({ aiConfigured: false }))).toBe(false);
     expect(draft.isEnabled!(ctxFor({ aiConfigured: true }))).toBe(true);
+  });
+
+  it.each(['draft', 'decompose', 'summarize'] as const)(
+    '/%s delegates to ctx.aiComplete with its own action (no more Phase-3 stub toast)',
+    (id) => {
+      const item = slashRegistry.find((i) => i.id === id)!;
+      const aiComplete = vi.fn(async () => {});
+      const ctx = ctxFor({ aiConfigured: true, aiComplete });
+      item.onSelect(ctx, '');
+      expect(aiComplete).toHaveBeenCalledWith(id);
+      // The old stub toast must be gone.
+      expect(ctx.notify).not.toHaveBeenCalled();
+    },
+  );
+
+  it('AI items no-op safely when no aiComplete capability is wired', () => {
+    const summarize = slashRegistry.find((i) => i.id === 'summarize')!;
+    const ctx = ctxFor({ aiConfigured: true, aiComplete: undefined });
+    expect(() => summarize.onSelect(ctx, '')).not.toThrow();
   });
 });

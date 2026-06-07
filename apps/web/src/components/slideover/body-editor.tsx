@@ -12,6 +12,7 @@ import { SlashMenu } from './slash-menu.tsx';
 import { WikiMenu } from './wiki-menu.tsx';
 import { BodyToolbar } from './body-toolbar.tsx';
 import { matchWikiTrigger, replaceWikiToken } from '../../lib/wiki-trigger.ts';
+import { type CompletionAction, completeAi } from '../../lib/api/ai-complete.ts';
 import type { DocumentSummary } from '../../lib/api/documents.ts';
 import type { SlashContext } from '../../lib/slash-registry.ts';
 
@@ -21,6 +22,12 @@ interface Props {
   readOnly?: boolean;
   documents?: DocumentSummary[];
   aiConfigured?: boolean;
+  /** Workspace slug — required for the AI slash commands (`/draft` etc.). When
+   *  absent the AI commands stay inert (the registry already gates on
+   *  aiConfigured). */
+  wslug?: string;
+  /** Current document title — passed to /draft so it can draft from the title. */
+  title?: string;
   /** When true, render the formatting toolbar above the editor. Used for
    *  wiki pages where the slideover doesn't carry a frontmatter form. */
   showToolbar?: boolean;
@@ -38,10 +45,18 @@ function MilkdownEditor({
   readOnly,
   documents = [],
   aiConfigured = false,
+  wslug,
+  title,
   wrapperRef,
 }: Props & { wrapperRef: React.RefObject<HTMLDivElement | null> }) {
   const valueRef = useRef(value);
   valueRef.current = value;
+  // Keep wslug/title current without re-creating slashCtx (getter-backed, like
+  // documents/aiConfigured).
+  const wslugRef = useRef(wslug);
+  wslugRef.current = wslug;
+  const titleRef = useRef(title);
+  titleRef.current = title;
 
   // useRef-stable debounce: stable across renders, doesn't recreate on onChange change
   const onChangeRef = useRef(onChange);
@@ -174,6 +189,31 @@ function MilkdownEditor({
     notify: (msg, kind = 'info') => {
       if (kind === 'warning') toast.warning(msg);
       else toast.info(msg);
+    },
+    aiComplete: async (action: CompletionAction) => {
+      const ws = wslugRef.current;
+      if (!ws) {
+        toast.warning('AI is not available here');
+        return;
+      }
+      // Capture the body BEFORE the slash token is mutated. `/draft` works from
+      // the title even when the body is empty; the others transform the body.
+      const content = valueRef.current;
+      const verb = action === 'decompose' ? 'Decomposing' : action === 'summarize' ? 'Summarizing' : 'Drafting';
+      const dismiss = toast.loading(`${verb}…`);
+      try {
+        const { text } = await completeAi(ws, {
+          action,
+          content,
+          title: titleRef.current,
+        });
+        // Replace the slash token with the generated markdown.
+        slashCtx.replace(text);
+        toast.dismiss(dismiss);
+      } catch {
+        toast.dismiss(dismiss);
+        toast.warning('AI request failed');
+      }
     },
   };
 
