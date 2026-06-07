@@ -13,15 +13,15 @@ describe('BoardToolbar', () => {
     expect(onGroupByChange).toHaveBeenCalledWith('priority');
   });
 
-  // Manual (drag) sort is PARKED — the Sort menu no longer offers a "Manual"
-  // item. It must still offer the built-in sorts + the project's fields, and
-  // selecting one fires onSortChange with the field's key (ascending first).
-  test('sort control does NOT offer Manual but offers built-in + field sorts and fires onSortChange(key,dir)', () => {
+  // 4c: Manual (drag) sort is UN-PARKED — the Sort menu offers a "Manual" item
+  // again, alongside the built-in sorts + the project's fields. Selecting a
+  // field fires onSortChange with the field's key (ascending first).
+  test('sort control offers Manual + built-in + field sorts and fires onSortChange(key,dir)', () => {
     const onSortChange = vi.fn();
     render(<BoardToolbar groupBy="status" sort={{ key: 'updated_at', dir: 'desc' }} fields={fields as never} onGroupByChange={() => {}} onSortChange={onSortChange} />);
     fireEvent.click(screen.getByRole('button', { name: /sort/i }));
-    // Parked option is gone…
-    expect(screen.queryByRole('menuitem', { name: /^manual$/i })).toBeNull();
+    // Manual is back…
+    expect(screen.getByRole('menuitem', { name: /^manual$/i })).toBeInTheDocument();
     // …while the built-in sorts and the seeded field remain selectable.
     expect(screen.getByRole('menuitem', { name: 'Title' })).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: 'Status' })).toBeInTheDocument();
@@ -30,6 +30,15 @@ describe('BoardToolbar', () => {
     // Selecting a fresh field starts ascending.
     fireEvent.click(screen.getByRole('menuitem', { name: 'Title' }));
     expect(onSortChange).toHaveBeenCalledWith({ key: 'title', dir: 'asc' });
+  });
+
+  // 4c: selecting Manual fires onSortChange(null) — null = board_position order.
+  test('selecting Manual fires onSortChange(null)', () => {
+    const onSortChange = vi.fn();
+    render(<BoardToolbar groupBy="status" sort={{ key: 'title', dir: 'asc' }} fields={fields as never} onGroupByChange={() => {}} onSortChange={onSortChange} />);
+    fireEvent.click(screen.getByRole('button', { name: /sort/i }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /^manual$/i }));
+    expect(onSortChange).toHaveBeenCalledWith(null);
   });
 
   test('selecting a sort field fires onSortChange with key+dir', () => {

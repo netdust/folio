@@ -31,8 +31,8 @@ function fieldLabel(f: Field): string {
 }
 
 function sortLabel(sort: BoardSort | null, fields: Field[]): string {
-  // Manual sort is parked; a null sort now shows the effective default order.
-  if (!sort) return 'Updated ↓';
+  // A null sort = Manual (hand-ranked board_position order).
+  if (!sort) return 'Manual';
   const field = fields.find((f) => f.key === sort.key);
   const builtin = BUILTIN_SORTS.find((b) => b.key === sort.key);
   const label = field ? fieldLabel(field) : builtin?.label ?? sort.key;
@@ -72,6 +72,12 @@ export function BoardToolbar({ groupBy, sort, fields, onGroupByChange, onSortCha
     onSortChange({ key, dir: 'asc' });
   };
 
+  const pickManual = () => {
+    setSortOpen(false);
+    // null = manual (board_position) hand-ranked order.
+    onSortChange(null);
+  };
+
   return (
     <div className="flex flex-shrink-0 items-center gap-2">
       <Popover open={groupOpen} onOpenChange={setGroupOpen}>
@@ -109,11 +115,11 @@ export function BoardToolbar({ groupBy, sort, fields, onGroupByChange, onSortCha
           </button>
         </PopoverTrigger>
         <PopoverContent align="start" className="w-[200px] p-1">
-          {/* Manual (drag) sort is PARKED — the option is hidden from the menu
-              while the persistence path is reworked. The board_position code
-              path stays dormant in KanbanView; re-add this item to restore it.
-            <button type="button" role="menuitem" className={itemClass} onClick={pickManual}>Manual</button>
-          */}
+          {/* Manual (drag) sort: a null sort puts the board in hand-ranked
+              board_position order, where within-column drag-reorder is enabled. */}
+          <button type="button" role="menuitem" className={itemClass} onClick={pickManual}>
+            Manual
+          </button>
           {BUILTIN_SORTS.map((b) => (
             <button
               key={b.key}

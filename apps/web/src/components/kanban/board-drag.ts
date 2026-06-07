@@ -1,3 +1,5 @@
+import { computeReorderPosition } from './board-reorder.ts';
+
 export type DropAction =
   | { kind: 'none' }
   | { kind: 'reorder' }
@@ -29,6 +31,26 @@ export function resolveDrop(ctx: DropCtx): DropAction {
   // dropped on a card
   if (!ctx.reorderEnabled) return { kind: 'none' }; // sorted mode: card-over-card does nothing
   return sameGroup ? { kind: 'reorder' } : { kind: 'regroup-reorder' };
+}
+
+/**
+ * Compute the board_position for dropping the active card into a column whose
+ * current cards (active card already removed) have positions `orderedPositions`,
+ * at the slot occupied by `overDocId` (drop-before). A `null` overDocId appends.
+ * Pure mirror of KanbanView.dropSlotPosition so the reorder ranking is testable
+ * without simulating a dnd-kit pointer drag.
+ */
+export function dropSlotPosition(
+  orderedDocIds: string[],
+  positionOf: (id: string) => string | null,
+  activeId: string,
+  overDocId: string | null,
+): string {
+  const idsWithoutActive = orderedDocIds.filter((id) => id !== activeId);
+  const idx = overDocId === null ? idsWithoutActive.length : idsWithoutActive.indexOf(overDocId);
+  const targetIndex = idx === -1 ? idsWithoutActive.length : idx;
+  const positions = idsWithoutActive.map((id) => positionOf(id) ?? null);
+  return computeReorderPosition(positions, targetIndex);
 }
 
 /**

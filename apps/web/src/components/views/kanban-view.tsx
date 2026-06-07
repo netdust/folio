@@ -11,8 +11,7 @@ import { KanbanColumn } from '../kanban/kanban-column.tsx';
 import { KanbanCard } from '../kanban/kanban-card.tsx';
 import { boardControlsBus, type BoardSort } from '../../lib/board-controls-bus.ts';
 import { buildColumns } from '../kanban/board-grouping.ts';
-import { computeReorderPosition } from '../kanban/board-reorder.ts';
-import { resolveDrop, coerceGroupValue } from '../kanban/board-drag.ts';
+import { resolveDrop, coerceGroupValue, dropSlotPosition } from '../kanban/board-drag.ts';
 import { EmptyState } from './empty-state.tsx';
 import { KanbanSkeleton } from './kanban-skeleton.tsx';
 
@@ -70,10 +69,11 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
     () =>
       effectiveSort
         ? { type: 'work_item' as const, sort: effectiveSort.key, dir: effectiveSort.dir, limit: 200 }
-        // Manual (board_position) order is PARKED — a null sort defaults to
-        // updated_at desc. Restore `sort: 'board_position'` here when manual
-        // drag-sort is un-parked.
-        : { type: 'work_item' as const, sort: 'updated_at', dir: 'desc' as const, limit: 200 },
+        // Manual mode (null sort): query by board_position ascending. The server
+        // coalesces a null board_position to a high sentinel, so unranked cards
+        // (never dragged) sort LAST — deterministic and stable. The first drag
+        // assigns a rank via rankBetween, lifting the card out of the unranked tail.
+        : { type: 'work_item' as const, sort: 'board_position', dir: 'asc' as const, limit: 200 },
     [effectiveSort],
   );
 
@@ -125,11 +125,10 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
 
   // Manual mode (no field sort) is the only mode where within-column
   // drag-reorder is allowed; a field-sort active means the order is derived,
-  // so reordering would be meaningless.
-  // Manual drag-reorder is PARKED (board_position sort hidden from the toolbar).
-  // Force it off so cards are plain draggables (cross-column regroup still works)
-  // and no board_position is written. Restore `effectiveSort === null` to un-park.
-  const reorderEnabled = false;
+  // so reordering would be meaningless. A null effectiveSort = manual mode →
+  // cards become sortable and a within-column drop writes board_position via
+  // rankBetween. Cross-column regroup (writes status) works in either mode.
+  const reorderEnabled = effectiveSort === null;
 
   // Builds the grouping-field patch for moving a card into `colValue`.
   // Status grouping writes the status column directly; field grouping coerces
@@ -142,13 +141,8 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
 
   // Computes the board_position for dropping the active card into `col` at the
   // slot occupied by `overDocId` (drop-before). `null` overDocId appends.
-  const dropSlotPosition = (col: { docIds: string[] }, activeId: string, overDocId: string | null): string => {
-    const idsWithoutActive = col.docIds.filter((id) => id !== activeId);
-    const idx = overDocId === null ? idsWithoutActive.length : idsWithoutActive.indexOf(overDocId);
-    const targetIndex = idx === -1 ? idsWithoutActive.length : idx;
-    const positions = idsWithoutActive.map((id) => docsById.get(id)?.boardPosition ?? null);
-    return computeReorderPosition(positions, targetIndex);
-  };
+  const slotPosition = (col: { docIds: string[] }, activeId: string, overDocId: string | null): string =>
+    dropSlotPosition(col.docIds, (id) => docsById.get(id)?.boardPosition ?? null, activeId, overDocId);
 
   const onDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event;
@@ -181,13 +175,13 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
 
     let patch: Record<string, unknown>;
     if (action.kind === 'reorder') {
-      patch = { boardPosition: dropSlotPosition(destCol, activeId, overId) };
+      patch = { boardPosition: slotPosition(destCol, activeId, overId) };
     } else if (action.kind === 'regroup') {
       patch = groupingPatch(destColumnValue);
     } else {
       // regroup-reorder: land the card where dropped in the destination column.
       const overDocId = overIsColumn ? null : overId;
-      patch = { ...groupingPatch(destColumnValue), boardPosition: dropSlotPosition(destCol, activeId, overDocId) };
+      patch = { ...groupingPatch(destColumnValue), boardPosition: slotPosition(destCol, activeId, overDocId) };
     }
 
     setPendingSlugs((p) => new Set(p).add(slug));
