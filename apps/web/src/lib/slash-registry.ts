@@ -1,3 +1,4 @@
+import type { CompletionAction } from './api/ai-complete.ts';
 import type { DocumentSummary } from './api/documents.ts';
 
 export interface SlashContext {
@@ -11,6 +12,14 @@ export interface SlashContext {
   replace: (markdown: string) => void;
   /** Surface a toast or hint banner. */
   notify: (msg: string, kind?: 'info' | 'warning') => void;
+  /**
+   * Run a one-shot AI completion (the `/draft`, `/summarize`, `/decompose`
+   * commands) against the current body and apply the result into the editor.
+   * Provided by the body editor (where the body + wslug + title are in scope);
+   * absent when no editor capability is wired (the items disable on
+   * `aiConfigured` so this is reached only when it should exist).
+   */
+  aiComplete?: (action: CompletionAction) => Promise<void>;
 }
 
 export interface SlashItem {
@@ -50,7 +59,7 @@ export const slashRegistry: SlashItem[] = [
     group: 'ai',
     isEnabled: (ctx) => ctx.aiConfigured,
     disabledHint: () => 'Configure an AI provider in workspace settings',
-    onSelect: (ctx) => ctx.notify('Phase 3 wires this up', 'info'),
+    onSelect: (ctx) => void ctx.aiComplete?.('draft'),
   },
   {
     id: 'decompose',
@@ -59,7 +68,7 @@ export const slashRegistry: SlashItem[] = [
     group: 'ai',
     isEnabled: (ctx) => ctx.aiConfigured,
     disabledHint: () => 'Configure an AI provider in workspace settings',
-    onSelect: (ctx) => ctx.notify('Phase 3 wires this up', 'info'),
+    onSelect: (ctx) => void ctx.aiComplete?.('decompose'),
   },
   {
     id: 'summarize',
@@ -68,7 +77,7 @@ export const slashRegistry: SlashItem[] = [
     group: 'ai',
     isEnabled: (ctx) => ctx.aiConfigured,
     disabledHint: () => 'Configure an AI provider in workspace settings',
-    onSelect: (ctx) => ctx.notify('Phase 3 wires this up', 'info'),
+    onSelect: (ctx) => void ctx.aiComplete?.('summarize'),
   },
 ];
 

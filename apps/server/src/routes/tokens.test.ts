@@ -376,6 +376,86 @@ describe('tokens.ts — per-workspace mint always pins to the URL workspace', ()
     expect(row?.workspaceId).toBe(seed.workspace.id);
   });
 
+  // Task 1.3 seam: create-with-expires_in_days flows through the real route →
+  // mintToken → DB, and the GET list surfaces the non-null expiry. Proves the
+  // Zod field is actually wired (omitting it would leave expiresAt null in the list).
+  test('POST with expires_in_days → GET list shows a non-null expiresAt for that token', async () => {
+    const { app, seed } = await makeTestApp();
+    const post = await app.request(tokensPath('acme', seed.workspace.id), {
+      method: 'POST',
+      headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'expiring', scopes: ['documents:read'], expires_in_days: 30 }),
+    });
+    expect(post.status).toBe(201);
+    const created = (await post.json()) as { data: { id: string } };
+
+    const list = await app.request(tokensPath('acme', seed.workspace.id), {
+      headers: { Cookie: seed.sessionCookie },
+    });
+    expect(list.status).toBe(200);
+    const body = (await list.json()) as {
+      data: { tokens: { id: string; expiresAt: string | null }[] };
+    };
+    const row = body.data.tokens.find((t) => t.id === created.data.id);
+    expect(row).toBeDefined();
+    expect(row!.expiresAt).not.toBeNull();
+  });
+
+  // Negative: NO expires_in_days → the listed token's expiresAt is null (forever).
+  test('POST without expires_in_days → GET list shows expiresAt null (forever token)', async () => {
+    const { app, seed } = await makeTestApp();
+    const post = await app.request(tokensPath('acme', seed.workspace.id), {
+      method: 'POST',
+      headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'forever', scopes: ['documents:read'] }),
+    });
+    expect(post.status).toBe(201);
+    const created = (await post.json()) as { data: { id: string } };
+
+    const list = await app.request(tokensPath('acme', seed.workspace.id), {
+      headers: { Cookie: seed.sessionCookie },
+    });
+    const body = (await list.json()) as {
+      data: { tokens: { id: string; expiresAt: string | null }[] };
+    };
+    const row = body.data.tokens.find((t) => t.id === created.data.id);
+    expect(row).toBeDefined();
+    expect(row!.expiresAt).toBeNull();
+  });
+
+  // Blind-spot close (hardening): the create route bounds expires_in_days with
+  // `z.number().int().positive().max(3650).optional()`. The happy-path seam
+  // tests above (POST 30 → non-null expiry) never exercised REJECTION, so a
+  // regression that dropped the bounds (e.g. allowing a negative/huge/fractional
+  // day count to flow into mintToken's date arithmetic) would have shipped green.
+  // zValidator surfaces a schema failure as 400 (verified for @hono/zod-validator
+  // in ai.test.ts). Each case must be refused at the schema layer with NOTHING
+  // minted — assert both the status and that the apiTokens table stays empty.
+  test('POST rejects expires_in_days bounds violations at the schema layer (400, nothing minted)', async () => {
+    const { app, db, seed } = await makeTestApp();
+    for (const bad of [
+      { label: 'negative', expires_in_days: -1 },
+      { label: 'over max (3651 > 3650)', expires_in_days: 3651 },
+      { label: 'non-integer', expires_in_days: 1.5 },
+    ]) {
+      const res = await app.request(tokensPath('acme', seed.workspace.id), {
+        method: 'POST',
+        headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: `bad-${bad.label}`,
+          scopes: ['documents:read'],
+          expires_in_days: bad.expires_in_days,
+        }),
+      });
+      expect(res.status).toBe(400); // zValidator → 400 on the bounds failure
+    }
+    // No token escaped the schema gate.
+    const rows = await db.query.apiTokens.findMany({
+      where: eq(apiTokens.workspaceId, seed.workspace.id),
+    });
+    expect(rows.length).toBe(0);
+  });
+
   test('reach is immutable — no PATCH route (T2)', async () => {
     const { app, seed } = await makeTestApp();
     const res = await app.request(`${tokensPath('acme', seed.workspace.id)}/sometoken`, {

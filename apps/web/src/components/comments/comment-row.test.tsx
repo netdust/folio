@@ -173,7 +173,8 @@ describe('CommentRow', () => {
     expect(screen.getByText('plan')).toBeInTheDocument();
   });
 
-  it('renders red-tinted error chip + disabled Retry button for kind=error', () => {
+  it('renders error chip but NO Retry button for kind=error without a run_id', () => {
+    // No run_id → nothing to retry against, so the button must not render.
     const errorComment: Comment = {
       ...baseComment,
       frontmatter: { ...baseComment.frontmatter, kind: 'error' },
@@ -186,9 +187,33 @@ describe('CommentRow', () => {
       />,
     );
     expect(screen.getByText('error')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /retry/i })).not.toBeInTheDocument();
+  });
+
+  it('renders an ENABLED Retry button on a kind=error comment with a run_id and fires onRetry(run_id)', () => {
+    const onRetry = vi.fn();
+    const errorComment: Comment = {
+      ...baseComment,
+      frontmatter: {
+        ...baseComment.frontmatter,
+        author: 'agent:drafter',
+        kind: 'error',
+        run_id: 'run-fail9999',
+      },
+    };
+    render(
+      <CommentRow
+        comment={errorComment}
+        currentUserId="u-1"
+        workspaceMembers={members}
+        onRetry={onRetry}
+      />,
+    );
     const retryBtn = screen.getByRole('button', { name: /retry/i });
-    expect(retryBtn).toBeDisabled();
-    expect(retryBtn).toHaveAttribute('title');
+    expect(retryBtn).toBeEnabled();
+    fireEvent.click(retryBtn);
+    expect(onRetry).toHaveBeenCalledTimes(1);
+    expect(onRetry).toHaveBeenCalledWith('run-fail9999');
   });
 
   it('renders run-id badge for agent-written with run_id set', () => {

@@ -7,6 +7,7 @@ export interface ApiToken {
   scopes: string[];
   createdAt: string;
   lastUsedAt: string | null;
+  expiresAt: string | null;
 }
 
 export interface ApiTokenCreateResponse {
@@ -19,6 +20,10 @@ export interface ApiTokenCreateResponse {
 export interface TokenCreate {
   name: string;
   scopes: string[];
+  // Optional expiry: number of days from now after which the bearer middleware
+  // rejects the token. Omitted entirely = never expires (the server treats a
+  // missing key as a null expiresAt).
+  expires_in_days?: number;
   // Reach is no longer chosen here — the per-workspace POST always pins to the
   // URL workspace; instance (reach=null) tokens are minted via the dedicated
   // /instance/tokens surface.
@@ -85,7 +90,7 @@ export function useInstanceTokens() {
 export function useCreateInstanceToken() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (payload: { name: string; scopes: string[] }) =>
+    mutationFn: (payload: { name: string; scopes: string[]; expires_in_days?: number }) =>
       client.post<ApiTokenCreateResponse>('/api/v1/instance/tokens', payload),
     onSuccess: () => qc.invalidateQueries({ queryKey: instanceTokensKeys.list }),
   });

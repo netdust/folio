@@ -29,8 +29,15 @@ interface Props {
   presets: ScopePreset[];
   /** Optional warning shown when ALL scopes are selected (root-access alert). */
   allScopesWarning?: string;
-  /** The create mutation — returns the once-only plaintext token. */
-  mutate: (vars: { name: string; scopes: string[] }) => Promise<{ token: string }>;
+  /**
+   * The create mutation — returns the once-only plaintext token. `expires_in_days`
+   * is omitted entirely when the expiry field is left blank (never expires).
+   */
+  mutate: (vars: {
+    name: string;
+    scopes: string[];
+    expires_in_days?: number;
+  }) => Promise<{ token: string }>;
   isPending: boolean;
 }
 
@@ -55,14 +62,25 @@ export function TokenCreateDialog({
 }: Props) {
   const [name, setName] = useState('');
   const [scopes, setScopes] = useState<Set<string>>(new Set());
+  const [expiresInDays, setExpiresInDays] = useState('');
   const [revealed, setRevealed] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
-  const canSubmit = name.trim().length > 0 && scopes.size > 0 && !isPending;
+  // Expiry must be a whole number of days. The server validates with
+  // z.number().int(), so a decimal like `3.5` would pass a naive client check
+  // and come back as an opaque 400. Catch it here and show an inline hint.
+  const expiryTrimmed = expiresInDays.trim();
+  const expiryParsed = expiryTrimmed === '' ? null : Number(expiryTrimmed);
+  const expiryInvalid =
+    expiryParsed !== null && (!Number.isInteger(expiryParsed) || expiryParsed <= 0);
+
+  const canSubmit =
+    name.trim().length > 0 && scopes.size > 0 && !isPending && !expiryInvalid;
 
   function reset() {
     setName('');
     setScopes(new Set());
+    setExpiresInDays('');
     setRevealed(null);
     setCopied(false);
   }
@@ -73,8 +91,19 @@ export function TokenCreateDialog({
 
   async function onSubmit() {
     if (!canSubmit) return;
+    // Blank/empty = never expires → omit the key entirely so the server stores a
+    // null expiresAt. Only send a positive INTEGER (the server's z.number().int()
+    // rejects decimals); canSubmit already blocks a non-integer/non-positive value.
+    const expires_in_days =
+      expiryParsed !== null && Number.isInteger(expiryParsed) && expiryParsed > 0
+        ? expiryParsed
+        : undefined;
     try {
-      const res = await mutate({ name: name.trim(), scopes: Array.from(scopes) });
+      const res = await mutate({
+        name: name.trim(),
+        scopes: Array.from(scopes),
+        ...(expires_in_days !== undefined ? { expires_in_days } : {}),
+      });
       setRevealed(res.token);
     } catch (err) {
       toast.error(formatApiError(err));
@@ -163,6 +192,30 @@ export function TokenCreateDialog({
                   ))}
                 </div>
               </fieldset>
+
+              <label className="block">
+                <span className="block text-xs font-medium text-fg-2">
+                  Expires in (days)
+                </span>
+                <input
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={expiresInDays}
+                  onChange={(e) => setExpiresInDays(e.target.value)}
+                  placeholder="Leave blank to never expire"
+                  className="mt-1 block w-full rounded-md border border-border-light bg-content px-2 py-1.5 text-sm"
+                />
+                {expiryInvalid ? (
+                  <span role="alert" className="mt-1 block text-[11px] text-danger">
+                    Expiry must be a whole number of days greater than zero.
+                  </span>
+                ) : (
+                  <span className="mt-1 block text-[11px] text-fg-3">
+                    Blank = never expires. The token is rejected after this many days.
+                  </span>
+                )}
+              </label>
             </div>
 
             <div className="mt-6 flex justify-end gap-2">

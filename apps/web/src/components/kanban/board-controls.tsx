@@ -54,32 +54,29 @@ export function BoardControls({ wslug, pslug, tslug }: Props) {
 
   const effectiveGroupBy = (override?.groupBy ?? activeView?.groupBy ?? 'status') || 'status';
 
-  // Persistence to the stored view follows the consent gate: only write when
-  // the user explicitly opened the view via `?view=<id>`.
-  const isActiveViewUrlPinned = !!urlViewId && !!activeView && activeView.id === urlViewId;
-
+  // 4b: persist whenever there IS a resolved active view — including the seeded
+  // DEFAULT board reached without `?view=`. The default view is the user's real
+  // working view, so its group-by/sort must survive a reload; the old `?view=`
+  // gate dropped those changes on the floor. The bus is updated first (live UI),
+  // then the change is written to the active view.
   const onGroupByChange = (gb: string) => {
     if (!activeView) return;
     boardControlsBus.setGroupBy(activeView.id, gb);
-    if (isActiveViewUrlPinned) {
-      // Store 'status' as null per the column's "defaults to status" convention.
-      updateView.mutate(
-        { id: activeView.id, patch: { groupBy: gb === 'status' ? null : gb } },
-        { onError: (err) => toast.error(formatApiError(err)) },
-      );
-    }
+    // Store 'status' as null per the column's "defaults to status" convention.
+    updateView.mutate(
+      { id: activeView.id, patch: { groupBy: gb === 'status' ? null : gb } },
+      { onError: (err) => toast.error(formatApiError(err)) },
+    );
   };
 
   const onSortChange = (s: BoardSort | null) => {
     if (!activeView) return;
     boardControlsBus.setSort(activeView.id, s);
-    if (isActiveViewUrlPinned) {
-      // Empty array = manual (board_position) ordering.
-      updateView.mutate(
-        { id: activeView.id, patch: { sort: s ? [{ key: s.key, dir: s.dir }] : [] } },
-        { onError: (err) => toast.error(formatApiError(err)) },
-      );
-    }
+    // Empty array = manual (board_position) ordering.
+    updateView.mutate(
+      { id: activeView.id, patch: { sort: s ? [{ key: s.key, dir: s.dir }] : [] } },
+      { onError: (err) => toast.error(formatApiError(err)) },
+    );
   };
 
   if (!activeView) return null;

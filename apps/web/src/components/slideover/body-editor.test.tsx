@@ -20,4 +20,19 @@ describe('BodyEditor', () => {
     // round-trip is exercised in Task 19.
     expect(onChange).not.toHaveBeenCalled();
   });
+
+  it('mounts cleanly with the AI slash props wired (aiConfigured + wslug)', () => {
+    // Seam: the AI slash path (aiComplete closure) only builds when the editor
+    // is given a workspace slug + aiConfigured. This asserts the wiring doesn't
+    // throw at construction. The async position-capture LOGIC is covered
+    // un-mocked in lib/slash-capture.test.ts; the double-fire guard and the
+    // error-toast branching live in the aiComplete closure, which requires a
+    // live ProseMirror selection to invoke — deferred to the Playwright/Chrome
+    // shake-out (jsdom can't drive the contenteditable selection movement).
+    const onChange = vi.fn();
+    render(
+      <BodyEditor value="hi" onChange={onChange} aiConfigured wslug="acme" title="Doc" />,
+    );
+    expect(onChange).not.toHaveBeenCalled();
+  });
 });

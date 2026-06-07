@@ -218,6 +218,55 @@ describe('POST /api/v1/instance/tokens (mint an instance-reach token)', () => {
     expect('token' in (row as object)).toBe(false); // only the hash is stored
   });
 
+  // Task 1.3 seam: an instance mint carrying expires_in_days flows through the
+  // real route → mintToken → DB, and the GET instance-list surfaces the non-null
+  // expiry. The omit case (next test's tokens) would list expiresAt null.
+  test('POST with expires_in_days → GET instance list shows a non-null expiresAt', async () => {
+    const { app, seed } = await makeTestApp();
+    // seed.user is already the instance owner (harness sets users.role = 'owner'),
+    // which is what requireInstanceAdmin reads — no extra grant needed.
+    const post = await app.request('/api/v1/instance/tokens', {
+      method: 'POST',
+      headers: { Cookie: seed.sessionCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'expiring-inst', scopes: ['documents:read'], expires_in_days: 7 }),
+    });
+    expect(post.status).toBe(201);
+    const created = (await post.json()) as { data: { id: string } };
+
+    const list = await app.request('/api/v1/instance/tokens', {
+      headers: { Cookie: seed.sessionCookie },
+    });
+    expect(list.status).toBe(200);
+    const body = (await list.json()) as {
+      data: { tokens: { id: string; expiresAt: string | null }[] };
+    };
+    const row = body.data.tokens.find((t) => t.id === created.data.id);
+    expect(row).toBeDefined();
+    expect(row!.expiresAt).not.toBeNull();
+  });
+
+  // Negative: NO expires_in_days → listed instance token has expiresAt null.
+  test('POST without expires_in_days → GET instance list shows expiresAt null', async () => {
+    const { app, seed } = await makeTestApp();
+    const post = await app.request('/api/v1/instance/tokens', {
+      method: 'POST',
+      headers: { Cookie: seed.sessionCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'forever-inst', scopes: ['documents:read'] }),
+    });
+    expect(post.status).toBe(201);
+    const created = (await post.json()) as { data: { id: string } };
+
+    const list = await app.request('/api/v1/instance/tokens', {
+      headers: { Cookie: seed.sessionCookie },
+    });
+    const body = (await list.json()) as {
+      data: { tokens: { id: string; expiresAt: string | null }[] };
+    };
+    const row = body.data.tokens.find((t) => t.id === created.data.id);
+    expect(row).toBeDefined();
+    expect(row!.expiresAt).toBeNull();
+  });
+
   test('scope ceiling: an admin cannot mint a scope its role lacks (403)', async () => {
     // An 'admin' role whose roleToScopes does NOT include the owner-only scope is
     // refused — the mint can never exceed the caller's instance role.
@@ -233,6 +282,36 @@ describe('POST /api/v1/instance/tokens (mint an instance-reach token)', () => {
     // Nothing minted.
     const rows = await db.query.apiTokens.findMany();
     expect(rows.every((r) => r.name !== 'overreach')).toBe(true);
+  });
+
+  // Blind-spot close (hardening): the instance mint route bounds expires_in_days
+  // with `z.number().int().positive().max(3650).optional()`. The happy-path seam
+  // tests (POST 7 → non-null expiry) never exercised REJECTION, so a regression
+  // dropping the bounds would have shipped green. zValidator → 400 on the schema
+  // failure; assert nothing was minted (the apiTokens table holds no overreach row).
+  test('POST rejects expires_in_days bounds violations at the schema layer (400, nothing minted)', async () => {
+    const { app, db, seed } = await makeTestApp();
+    // seed.user is already the instance owner (harness sets users.role = 'owner'),
+    // so a schema rejection here is the operative gate (not the admin gate).
+    for (const bad of [
+      { label: 'negative', expires_in_days: -1 },
+      { label: 'over max (3651 > 3650)', expires_in_days: 3651 },
+      { label: 'non-integer', expires_in_days: 1.5 },
+    ]) {
+      const res = await app.request('/api/v1/instance/tokens', {
+        method: 'POST',
+        headers: { Cookie: seed.sessionCookie, 'content-type': 'application/json' },
+        body: JSON.stringify({
+          name: `bad-${bad.label}`,
+          scopes: ['documents:read'],
+          expires_in_days: bad.expires_in_days,
+        }),
+      });
+      expect(res.status).toBe(400); // zValidator → 400 on the bounds failure
+    }
+    // No instance token escaped the schema gate.
+    const rows = await db.query.apiTokens.findMany();
+    expect(rows.every((r) => !r.name.startsWith('bad-'))).toBe(true);
   });
 
   test('a non-instance-admin (member) cannot mint (403)', async () => {

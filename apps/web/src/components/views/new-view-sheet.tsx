@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { toast } from 'sonner';
 import { useCreateView, type ViewCreate } from '../../lib/api/views.ts';
+import { useFields } from '../../lib/api/fields.ts';
 import { formatApiError } from '../../lib/api/index.ts';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetFooter } from '../ui/sheet.tsx';
 import { Button } from '../ui/button.tsx';
@@ -35,11 +36,27 @@ export function NewViewSheet({
 }: NewViewSheetProps) {
   const navigate = useNavigate();
   const create = useCreateView(wslug, pslug);
+  // The sheet is per-project on the work-items table; mirror how list-view /
+  // document-slideover call useFields with the literal 'work-items' tslug. The
+  // field keys populate the Kanban group-by options (same source as BoardToolbar).
+  const { data: fields } = useFields(wslug, pslug, 'work-items');
   const [name, setName] = useState('');
+  const [type, setType] = useState<'list' | 'kanban'>('list');
+  // Group-by for kanban. 'status' is the default; selecting it stores null on
+  // the view per the "defaults to status" convention (see board-controls).
+  const [groupBy, setGroupBy] = useState('status');
 
   useEffect(() => {
-    if (!open) setName('');
+    if (!open) {
+      setName('');
+      setType('list');
+      setGroupBy('status');
+    }
   }, [open]);
+
+  // BoardToolbar excludes multi_select fields from grouping; mirror that here so
+  // the offered options match what the board can actually group by.
+  const groupableFields = (fields ?? []).filter((f) => f.type !== 'multi_select');
 
   function buildPayload(): ViewCreate {
     const trimmed = name.trim();
@@ -57,7 +74,13 @@ export function NewViewSheet({
       typeof sortKey === 'string' && sortKey
         ? [{ key: sortKey, dir: sortDir === 'desc' ? 'desc' : 'asc' }]
         : [];
-    const payload: ViewCreate = { name: trimmed, type: 'list', filters, sort };
+    const payload: ViewCreate = { name: trimmed, type, filters, sort };
+    // 4a: a kanban view carries its group-by. 'status' is the default and is
+    // stored as null (the "defaults to status" convention from board-controls);
+    // a field key is stored verbatim. A list view omits groupBy entirely.
+    if (type === 'kanban') {
+      payload.groupBy = groupBy === 'status' ? null : groupBy;
+    }
     // V2: capture the current columns so the new view starts as a copy of what the
     // user is looking at (the sheet copy's promise). Only include keys that have a
     // value — a null on the active view means "no explicit column state", so we
@@ -73,8 +96,13 @@ export function NewViewSheet({
       const view = await create.mutateAsync(buildPayload());
       onOpenChange(false);
       toast.success('View created');
+      // Mirror the rail's onViewClick: kanban views open on the board surface,
+      // list views on work-items.
       void navigate({
-        to: '/w/$wslug/p/$pslug/work-items',
+        to:
+          view.type === 'kanban'
+            ? '/w/$wslug/p/$pslug/board'
+            : '/w/$wslug/p/$pslug/work-items',
         params: { wslug, pslug },
         search: { view: view.id },
       });
@@ -108,6 +136,53 @@ export function NewViewSheet({
                 Captures the current filters, sort, and columns. Future changes auto-save.
               </p>
             </div>
+
+            <fieldset>
+              <legend className="block text-sm font-medium text-fg">Type</legend>
+              <div className="mt-1 flex gap-4">
+                <label className="flex items-center gap-2 text-sm text-fg-1">
+                  <input
+                    type="radio"
+                    name="view-type"
+                    value="list"
+                    checked={type === 'list'}
+                    onChange={() => setType('list')}
+                  />
+                  List
+                </label>
+                <label className="flex items-center gap-2 text-sm text-fg-1">
+                  <input
+                    type="radio"
+                    name="view-type"
+                    value="kanban"
+                    checked={type === 'kanban'}
+                    onChange={() => setType('kanban')}
+                  />
+                  Kanban
+                </label>
+              </div>
+            </fieldset>
+
+            {type === 'kanban' && (
+              <div>
+                <label htmlFor="view-group-by" className="block text-sm font-medium text-fg">
+                  Group by
+                </label>
+                <select
+                  id="view-group-by"
+                  className="mt-1 block w-full rounded-md border border-border-light bg-shell px-3 py-2 text-fg input-focus"
+                  value={groupBy}
+                  onChange={(e) => setGroupBy(e.target.value)}
+                >
+                  <option value="status">Status</option>
+                  {groupableFields.map((f) => (
+                    <option key={f.key} value={f.key}>
+                      {f.label ?? f.key}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
           </div>
           <SheetFooter>
             <Button type="button" variant="secondary" onClick={() => onOpenChange(false)}>

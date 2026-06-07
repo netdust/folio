@@ -182,6 +182,7 @@ function fullScopeToken(over: Partial<ApiToken>): ApiToken {
     projectIds: null,
     createdBy: null,
     lastUsedAt: null,
+    expiresAt: null,
     createdAt: new Date(),
     ...over,
   };

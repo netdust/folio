@@ -373,6 +373,9 @@ export const apiTokens = sqliteTable(
     projectIds: text('project_ids', { mode: 'json' }).$type<string[] | null>(),
     createdBy: text('created_by').references(() => users.id),
     lastUsedAt: integer('last_used_at', { mode: 'timestamp_ms' }),
+    // Optional expiry. null = never expires (existing tokens grandfathered).
+    // Enforced at middleware/bearer.ts attachToken (invariant 1).
+    expiresAt: integer('expires_at', { mode: 'timestamp_ms' }),
     createdAt: integer('created_at', { mode: 'timestamp_ms' })
       .notNull()
       .default(sql`(unixepoch() * 1000)`),
@@ -477,7 +480,7 @@ export const events = sqliteTable(
       .references(() => workspaces.id, { onDelete: 'cascade' }),
     projectId: text('project_id').references(() => projects.id, { onDelete: 'cascade' }),
     documentId: text('document_id'),
-    kind: text('kind').notNull(), // document.created, document.updated, status.changed, ...
+    kind: text('kind').notNull(), // document.created, document.updated, status.updated, project.deleted, agent.run.*, ... (see @folio/shared KNOWN_EVENT_KINDS)
     actor: text('actor'), // user_id or api_token_id
     payload: text('payload', { mode: 'json' }).$type<unknown>().notNull().default({}),
     createdAt: integer('created_at', { mode: 'timestamp_ms' })

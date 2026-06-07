@@ -11,8 +11,12 @@ describe('KNOWN_EVENT_KINDS — Phase 3 additions', () => {
     expect(KNOWN_EVENT_KINDS).toContain('agent.run.rejected');
   });
 
-  test('includes ai.action audit event', () => {
-    expect(KNOWN_EVENT_KINDS).toContain('ai.action');
+  test('excludes the dead event kinds (no emitters, no consumers)', () => {
+    // ai.action was never emitted; skill.trust.changed was intentionally
+    // dropped in Phase 4 (see lib/skill-trust.ts). Both removed in the
+    // hardening pass — assert they stay gone so they cannot creep back.
+    expect(KNOWN_EVENT_KINDS as readonly string[]).not.toContain('ai.action');
+    expect(KNOWN_EVENT_KINDS as readonly string[]).not.toContain('skill.trust.changed');
   });
 
   test('includes runs_table.lazy_seeded event', () => {

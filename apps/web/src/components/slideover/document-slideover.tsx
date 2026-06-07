@@ -651,6 +651,8 @@ function SlideoverBody({
                 onChange={(body) => setBody(body)}
                 documents={docPage?.data ?? []}
                 aiConfigured={aiConfigured}
+                wslug={wslug}
+                title={doc.title}
                 showToolbar={isPage}
           />
             ) : (

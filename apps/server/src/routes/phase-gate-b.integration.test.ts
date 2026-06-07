@@ -361,9 +361,11 @@ describe('S1: worker in B pulls + pushes a __system skill (B1 + B2)', () => {
 // SCENARIO: an MCP admin PAT (createdBy = a human user) and the operator token
 //   (createdBy null) both attempt to bless a __system `evil` skill seeded
 //   trusted:false. A normal update_document with frontmatter{trusted:true} must
-//   NOT flip it. Only the operator may bless; the bless emits a
-//   skill.trust.changed event. A run loading `evil` BEFORE the bless gets it as
-//   untrusted (would ride the untrusted DATA envelope, not the trusted channel).
+//   NOT flip it. Only the operator may bless (the bless no longer emits a
+//   dedicated event — the skill.trust.changed kind was dropped in Phase 4 with
+//   the __system teardown; see lib/skill-trust.ts). A run loading `evil` BEFORE
+//   the bless gets it as untrusted (rides the untrusted DATA envelope, not the
+//   trusted channel).
 // ===========================================================================
 
 describe('S2: trust separation of duties end-to-end (B3 + B1)', () => {

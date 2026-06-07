@@ -204,6 +204,8 @@ export async function createConversationRun(
     projectIds: projectIds.includes('*') ? null : projectIds,
     createdBy: callerUserId,
     lastUsedAt: null,
+    // Ephemeral operator token — never persisted, never expires (grandfathered).
+    expiresAt: null,
     createdAt: new Date(),
   };
 

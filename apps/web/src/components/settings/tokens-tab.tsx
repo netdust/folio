@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { toast } from 'sonner';
 import {
   type ApiToken,
+  useCreateToken,
   useDeleteToken,
   useTokens,
 } from '../../lib/api/tokens.ts';
@@ -14,28 +15,29 @@ import {
   DialogTitle,
 } from '../ui/dialog.tsx';
 import { TokenCreateModal } from './token-create-modal.tsx';
+import { RevealSecretDialog } from './reveal-secret-dialog.tsx';
+import { useTokenRotate } from './use-token-rotate.ts';
+import { lastUsedLabel, expiresLabel } from './token-meta.ts';
 
 interface Props {
   wslug: string;
   workspaceId: string;
 }
 
-function relativeOrAbsolute(iso: string | null): string {
-  if (!iso) return 'Never used';
-  const then = new Date(iso).getTime();
-  const now = Date.now();
-  const seconds = Math.max(1, Math.round((now - then) / 1000));
-  if (seconds < 60) return `${seconds}s ago`;
-  if (seconds < 3600) return `${Math.round(seconds / 60)}m ago`;
-  if (seconds < 86_400) return `${Math.round(seconds / 3600)}h ago`;
-  return `${Math.round(seconds / 86_400)}d ago`;
-}
-
 export function TokensTab({ wslug, workspaceId }: Props) {
   const tokensQuery = useTokens(wslug, workspaceId);
+  const createToken = useCreateToken(wslug, workspaceId);
   const deleteToken = useDeleteToken(wslug, workspaceId);
   const [createOpen, setCreateOpen] = useState(false);
   const [pendingRevoke, setPendingRevoke] = useState<ApiToken | null>(null);
+  const {
+    pendingRotate,
+    setPendingRotate,
+    rotating,
+    rotatedSecret,
+    setRotatedSecret,
+    confirmRotate,
+  } = useTokenRotate({ createToken, deleteToken });
 
   const tokens = tokensQuery.data ?? [];
 
@@ -97,7 +99,17 @@ export function TokensTab({ wslug, workspaceId }: Props) {
                   ))}
                 </div>
               </div>
-              <div className="text-xs text-fg-3">{relativeOrAbsolute(t.lastUsedAt)}</div>
+              <div className="text-right text-xs text-fg-3">
+                <div>{expiresLabel(t.expiresAt)}</div>
+                <div>{lastUsedLabel(t.lastUsedAt)}</div>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setPendingRotate(t)}
+              >
+                Rotate
+              </Button>
               <Button
                 variant="ghost"
                 size="sm"
@@ -143,6 +155,32 @@ export function TokensTab({ wslug, workspaceId }: Props) {
           </div>
         </DialogContent>
       </Dialog>
+
+      <Dialog
+        open={pendingRotate !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingRotate(null);
+        }}
+      >
+        <DialogContent>
+          <DialogTitle>Rotate &quot;{pendingRotate?.name}&quot;?</DialogTitle>
+          <DialogDescription>
+            This issues a new secret with the same name and scopes, then revokes
+            the current one. Anything using the old token loses access immediately.
+            If the old token had an expiry, the new one keeps a comparable window.
+          </DialogDescription>
+          <div className="mt-6 flex justify-end gap-2">
+            <Button variant="ghost" onClick={() => setPendingRotate(null)}>
+              Cancel
+            </Button>
+            <Button onClick={confirmRotate} loading={rotating}>
+              Rotate
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <RevealSecretDialog secret={rotatedSecret} onClose={() => setRotatedSecret(null)} />
     </div>
   );
 }

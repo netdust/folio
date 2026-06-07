@@ -62,13 +62,15 @@ instanceTokensRoute.post(
     z.object({
       name: z.string().min(1).max(80),
       scopes: z.array(z.string()).default(['documents:read', 'documents:write']),
+      // Optional lifetime in days (≤10y). Omitted ⟹ a never-expiring token.
+      expires_in_days: z.number().int().positive().max(3650).optional(),
     }),
   ),
   async (c) => {
     const user = getUser(c);
     // requireInstanceAdmin returns the caller's instance role — the scope ceiling.
     const ceilingRole = await requireInstanceAdmin(db, user.id);
-    const { name, scopes } = c.req.valid('json');
+    const { name, scopes, expires_in_days } = c.req.valid('json');
     // reach hard-wired null (instance) — this route NEVER pins to a workspace.
     // mintToken is the shared convergence point (ceiling-check + insert +
     // reveal-once) also used by the per-workspace POST, so the two can't drift.
@@ -78,6 +80,7 @@ instanceTokensRoute.post(
       reach: null,
       name,
       createdBy: user.id,
+      expiresInDays: expires_in_days,
     });
     return jsonOk(c, minted, 201);
   },

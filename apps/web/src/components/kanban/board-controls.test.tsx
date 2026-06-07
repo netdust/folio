@@ -34,9 +34,8 @@ function setup() {
 }
 
 function stubFetch() {
-  vi.stubGlobal(
-    'fetch',
-    vi.fn<typeof fetch>(async (url) => {
+  const fn = vi.fn<typeof fetch>(async (url) => {
+    {
       const u = String(url);
       if (u.includes('/views')) {
         return new Response(
@@ -70,8 +69,18 @@ function stubFetch() {
         );
       }
       return new Response('{"data":[]}', { status: 200, headers: { 'content-type': 'application/json' } });
-    }),
-  );
+    }
+  });
+  vi.stubGlobal('fetch', fn);
+  return fn;
+}
+
+// Finds the PATCH call to the active view (the persist write), or undefined.
+function findViewPatch(fetchMock: ReturnType<typeof vi.fn>, viewId = 'v1') {
+  return fetchMock.mock.calls.find(
+    ([url, init]) =>
+      String(url).includes(`/views/${viewId}`) && (init as RequestInit | undefined)?.method === 'PATCH',
+  ) as [string, RequestInit] | undefined;
 }
 
 describe('BoardControls', () => {
@@ -100,5 +109,44 @@ describe('BoardControls', () => {
     await userEvent.click(screen.getByText('Group:'));
     await userEvent.click(await screen.findByText('Priority'));
     await waitFor(() => expect(boardControlsBus.get('v1')?.groupBy).toBe('priority'));
+  });
+
+  // 4b: on the seeded DEFAULT board (no `?view=`), the active view IS the user's
+  // real working view, so a group-by change must PERSIST to it — not just live in
+  // the bus and vanish on reload. Previously the persist was gated behind
+  // ?view=<id> so this PATCH never fired on the default board.
+  it('persists a group-by change to the default view even without ?view= (PATCH fires)', async () => {
+    const fetchMock = stubFetch();
+    const { queryClient, router } = setup();
+    render(<QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider>);
+    await screen.findByText('Group:');
+    // No ?view= in the URL — the default board.
+    expect(router.state.location.search).toEqual({});
+    await userEvent.click(screen.getByText('Group:'));
+    await userEvent.click(await screen.findByText('Priority'));
+    // The bus update is the live UI (already asserted above); the NEW behavior is
+    // that the change is ALSO written to the active view.
+    await waitFor(() => {
+      const patch = findViewPatch(fetchMock);
+      expect(patch).toBeDefined();
+      expect(JSON.parse(patch![1].body as string)).toEqual({ groupBy: 'priority' });
+    });
+  });
+
+  // 4b: a Sort change on the default board persists too — the sort JSON array is
+  // written to the active view.
+  it('persists a sort change to the default view even without ?view=', async () => {
+    const fetchMock = stubFetch();
+    const { queryClient, router } = setup();
+    render(<QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider>);
+    await screen.findByText('Sort:');
+    expect(router.state.location.search).toEqual({});
+    await userEvent.click(screen.getByText('Sort:'));
+    await userEvent.click(await screen.findByText('Title'));
+    await waitFor(() => {
+      const patch = findViewPatch(fetchMock);
+      expect(patch).toBeDefined();
+      expect(JSON.parse(patch![1].body as string)).toEqual({ sort: [{ key: 'title', dir: 'asc' }] });
+    });
   });
 });
