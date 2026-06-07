@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach, vi, beforeEach } from 'vitest';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { closestCorners } from '@dnd-kit/core';
+import { closestCorners, MeasuringStrategy } from '@dnd-kit/core';
 import type { DndContextProps, DragEndEvent, DragStartEvent } from '@dnd-kit/core';
 import {
   createMemoryHistory,
@@ -314,51 +314,20 @@ describe('KanbanView DnD', () => {
     expect(patches.length).toBe(0);
   });
 
-  // Race guard (2026-06-07): you can't reorder a card whose PRIOR move is still
-  // in flight. A cross-column move holds the card in pendingSlugs until its
-  // mutation settles; a second drag during that window raced two mutations on
-  // the same card against an optimistic-vs-server order mismatch and silently
-  // landed wrong (the "can't reorder a just-moved card" bug). onDragEnd now
-  // returns early when the active card's slug is in pendingSlugs.
-  it('onDragEnd is a no-op while the dragged card has a prior move in flight', async () => {
-    // A fetch whose PATCH never resolves, so the card stays in pendingSlugs.
-    const patches: string[] = [];
-    let releaseFirst: (() => void) | undefined;
-    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async (url, init) => {
-      const u = String(url);
-      const method = (init?.method ?? 'GET').toUpperCase();
-      if (method === 'PATCH' && u.includes('/documents/')) {
-        const slug = u.split('/documents/')[1]?.split(/[?#]/)[0] ?? '';
-        patches.push(slug);
-        // Block the FIRST patch (bravo) until we release it — keeps bravo pending.
-        if (slug === 'bravo' && !releaseFirst) {
-          await new Promise<void>((res) => { releaseFirst = res; });
-        }
-        return new Response(JSON.stringify({ data: { slug } }), { status: 200, headers: { 'content-type': 'application/json' } });
-      }
-      if (u.includes('/statuses')) return new Response(JSON.stringify({ data: [{ id: 's1', key: 'todo', name: 'Todo', color: '#6EAFFF', category: 'unstarted', order: 1 }] }), { status: 200, headers: { 'content-type': 'application/json' } });
-      if (u.includes('/views')) return new Response(JSON.stringify({ data: [{ id: 'v1', name: 'Board', type: 'kanban', filters: {}, sort: null, groupBy: null, visibleFields: null, columnOrder: null, isDefault: true, order: 1 }] }), { status: 200, headers: { 'content-type': 'application/json' } });
-      if (u.includes('/documents')) return new Response(JSON.stringify({ data: { data: [
-        { id: 'd1', slug: 'alpha', type: 'work_item', title: 'Alpha Task', status: 'todo', parentId: null, boardPosition: 'a', frontmatter: {}, createdAt: '', updatedAt: new Date().toISOString() },
-        { id: 'd2', slug: 'bravo', type: 'work_item', title: 'Bravo Task', status: 'todo', parentId: null, boardPosition: 'c', frontmatter: {}, createdAt: '', updatedAt: new Date().toISOString() },
-      ], nextCursor: null } }), { status: 200, headers: { 'content-type': 'application/json' } });
-      return new Response('{"data":[]}', { status: 200, headers: { 'content-type': 'application/json' } });
-    }));
-
+  // Stale-measurement fix (2026-06-08): after a cross-column move, the just-moved
+  // card's column had a STALE dnd-kit rect (measured at drag-start), so no gap
+  // opened and it couldn't be reordered until another drag forced a re-measure
+  // ("I first have to move another item"). The DndContext now sets
+  // measuring.droppable.strategy = Always so droppables re-measure every render
+  // during a drag. (The visible gap + re-measure are real-layout behaviors jsdom
+  // can't render; this asserts the config is wired — the actual gap is e2e/human-
+  // verified in the browser.)
+  it('configures Always droppable measuring so a just-moved card re-measures', async () => {
+    setupTwoCardBoard();
     const { queryClient, router } = setup();
     render(<QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider>);
     await waitFor(() => expect(screen.getByText('Alpha Task')).toBeInTheDocument());
-    await waitFor(() => expect(captured.props?.onDragEnd).toBeTypeOf('function'));
-
-    const reorder = { active: { id: 'd2', data: { current: { slug: 'bravo', currentStatus: 'todo' } } }, over: { id: 'd1' } } as unknown as DragEndEvent;
-    // First drag: fires a PATCH that we hold open → bravo stays in pendingSlugs.
-    void captured.props?.onDragEnd?.(reorder);
-    await waitFor(() => expect(patches.length).toBe(1)); // bravo's first patch in flight
-    // Second drag on the SAME (still-pending) card must be blocked by the guard.
-    await act(async () => { await captured.props?.onDragEnd?.(reorder); });
-    await new Promise((r) => setTimeout(r, 20));
-    expect(patches.length).toBe(1); // no second patch — the guard held
-    releaseFirst?.(); // unblock so the test can settle cleanly
+    expect(captured.props?.measuring?.droppable?.strategy).toBe(MeasuringStrategy.Always);
   });
 
   // ── ISSUE 1 seam (2026-06-07): auto-switch to Manual on a sorted-mode reorder ─
