@@ -293,6 +293,26 @@ test('M-MCP-3 — a valid string id still round-trips unchanged', async () => {
   expect(body.id).toBe('req-42');
 });
 
+test('M-MCP-3 — a valid NUMBER id round-trips unchanged (not coerced to null)', async () => {
+  const { app, seed } = await makeTestApp();
+  const token = await setupToken(seed.workspace.id, seed.user.id, ['documents:read']);
+  const res = await postRaw(app, token, JSON.stringify({ jsonrpc: '2.0', id: 4242, method: 'ping' }));
+  const body = (await res.json()) as { id?: unknown };
+  // The coercion is `string||number ? rawId : null`; a number must survive.
+  expect(body.id).toBe(4242);
+});
+
+test('M-MCP-3 — an explicit id:null is preserved (it is a valid JSON-RPC id)', async () => {
+  const { app, seed } = await makeTestApp();
+  const token = await setupToken(seed.workspace.id, seed.user.id, ['documents:read']);
+  const res = await postRaw(app, token, JSON.stringify({ jsonrpc: '2.0', id: null, method: 'ping' }));
+  const body = (await res.json()) as { id?: unknown; result?: unknown };
+  // null is valid; the request still processes and echoes id:null (not a crash,
+  // not coerced to 0/undefined).
+  expect(body.id).toBeNull();
+  expect(body.result).toBeDefined();
+});
+
 // Coverage hardening (shakeout test-effectiveness) — the parse / dispatch guards
 // the auditor flagged as blind.
 test('malformed JSON body returns -32700 parse error', async () => {
