@@ -1201,7 +1201,7 @@ describe('runAgent stream loop', () => {
   // 'pause_turn' must not run client tools + loop (wrong continuation protocol).
   for (const reason of ['refusal', 'pause_turn'] as const) {
     test(`GAP — a collected tool_call with done.reason=${reason} does NOT run the tool`, async () => {
-      const { db, run } = await scaffold({ tools: ['list_documents'] });
+      const { db, run, parent } = await scaffold({ tools: ['list_documents'] });
       const { registerTool } = await import('./agent-tools.ts');
       const okName = `__test_${reason}_${nanoid(6)}`;
       let handlerRan = false;
@@ -1237,7 +1237,7 @@ describe('runAgent stream loop', () => {
       const fm = await readRun(db, run.id);
       expect(fm.status).toBe('completed');
       // ...AND the dropped-intent is surfaced in a comment, not silently lost.
-      const comments = await listKind(db, run.parentId, 'comment');
+      const comments = await listKind(db, parent.id, 'comment');
       expect(comments.some((c) => /tool call was pending/.test(c.body ?? ''))).toBe(true);
     });
   }
