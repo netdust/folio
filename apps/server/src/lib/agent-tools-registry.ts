@@ -127,7 +127,10 @@ function markdownResult(md: string): { content: { type: 'text'; text: string }[]
 function requireString(args: Record<string, unknown>, key: string): string {
   const v = args[key];
   if (typeof v !== 'string' || v.length === 0) {
-    throw mcpInvalidParams(`missing or invalid argument: `, { reason: 'invalid_argument', argument: key });
+    throw mcpInvalidParams(`missing or invalid argument: ${key}`, {
+      reason: 'invalid_argument',
+      argument: key,
+    });
   }
   return v;
 }

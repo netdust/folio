@@ -399,3 +399,10 @@ test('BUG-1 — a forbidden: authority message is KEPT (not sanitized), preservi
   expect(body.error!.message).not.toBe('internal error');
   expect(body.error!.message).toMatch(/forbidden: ui tools/i);
 });
+
+// NOTE: requireString is a defense-in-depth backstop almost always pre-empted by
+// the tool's Zod schema (which rejects a missing required field as -32602 'invalid
+// arguments' first), so it is not reachable through the live wire for the standard
+// tools. The line-130 message fix (restore the `${key}` interpolation the perl
+// conversion dropped) is verified by the code + the security/architecture reviewers
+// (the argument NAME is safe to surface). No wire test added for an unreachable path.
