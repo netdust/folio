@@ -730,3 +730,4 @@ REMAINING (lower priority, logged in tasks/retro-follow-ups.md): confirm-gate pr
 - **most-recent conversation, always** — `GET /conversations/recent` → `{ id }` | `{ id: null }`, scoped to `created_by = session user`, `ORDER BY updated_at DESC LIMIT 1`. Simplest contract, covers the confirm-card case (a paused conversation is the most recent), and the existing `conversations_user_idx (created_by, updated_at)` index serves it perfectly.
 [2026-06-08] — session ended (no significant changes captured)
 [2026-06-08] — session ended (no significant changes captured)
+[2026-06-08] — session ended (no significant changes captured)
