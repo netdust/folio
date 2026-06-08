@@ -59,6 +59,8 @@ interface RailProps {
   tools?: NavItem[];
   account?: NavItem[];
   user: UserConfig;
+  /** Reorder a draggable view row within its sortable group (owning table id). */
+  onReorder?: (group: string, activeId: string, overId: string) => void;
 }
 
 export function useRailCollapsed(): [boolean, (v: boolean) => void] {
@@ -72,11 +74,11 @@ export function useRailCollapsed(): [boolean, (v: boolean) => void] {
   return [collapsed, setCollapsed];
 }
 
-export function Rail({ brand, workspace, primary, tools, account, user }: RailProps) {
+export function Rail({ brand, workspace, primary, tools, account, user, onReorder }: RailProps) {
   const [collapsed, setCollapsed] = useRailCollapsed();
   return collapsed
-    ? <RailCollapsed brand={brand} workspace={workspace} primary={primary} tools={tools} account={account} user={user} onToggle={() => setCollapsed(false)} />
-    : <RailExpanded brand={brand} workspace={workspace} primary={primary} tools={tools} account={account} user={user} onToggle={() => setCollapsed(true)} />;
+    ? <RailCollapsed brand={brand} workspace={workspace} primary={primary} tools={tools} account={account} user={user} onReorder={onReorder} onToggle={() => setCollapsed(false)} />
+    : <RailExpanded brand={brand} workspace={workspace} primary={primary} tools={tools} account={account} user={user} onReorder={onReorder} onToggle={() => setCollapsed(true)} />;
 }
 
 function WorkspaceButton({ workspace }: { workspace: WorkspaceConfig }) {
@@ -96,7 +98,7 @@ function WorkspaceButton({ workspace }: { workspace: WorkspaceConfig }) {
   return workspace.switcher ? <>{workspace.switcher(trigger)}</> : trigger;
 }
 
-function RailExpanded({ brand, workspace, primary, tools, account, user, onToggle }: RailProps & { onToggle: () => void }) {
+function RailExpanded({ brand, workspace, primary, tools, account, user, onReorder, onToggle }: RailProps & { onToggle: () => void }) {
   return (
     <aside className="flex w-[200px] flex-col rounded-xl bg-content shadow-surface px-3 py-3.5">
       <div className="px-2 mb-3 text-[11px] font-medium tracking-wide text-fg-3 uppercase">
@@ -106,7 +108,7 @@ function RailExpanded({ brand, workspace, primary, tools, account, user, onToggl
       <WorkspaceButton workspace={workspace} />
 
       <Divider />
-      <NavList items={primary} expanded />
+      <NavList items={primary} expanded onReorder={onReorder} />
 
       <div className="flex-1" />
 
@@ -280,7 +282,7 @@ function CollapsedNavButton({ item }: { item: NavItem }) {
   );
 }
 
-function NavList({ items, expanded }: { items: NavItem[]; expanded: boolean }) {
+function NavList({ items, expanded, onReorder }: { items: NavItem[]; expanded: boolean; onReorder?: (group: string, activeId: string, overId: string) => void }) {
   if (!expanded) {
     return (
       <div className="flex w-full flex-col items-center gap-0.5">
@@ -294,7 +296,7 @@ function NavList({ items, expanded }: { items: NavItem[]; expanded: boolean }) {
     <div className="flex flex-col gap-0.5">
       {items.map((item) => {
         if (item.children && item.children.length > 0) {
-          return <RailTree key={item.id} items={[item]} />;
+          return <RailTree key={item.id} items={[item]} onReorder={onReorder} />;
         }
         return (
           <button
