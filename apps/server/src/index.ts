@@ -7,6 +7,7 @@ import { sweepOrphanedFolioApiTokens } from './lib/folio-api-tool.ts';
 import { recoverInterruptedConversations } from './services/conversations.ts';
 import { startRunnerPoller } from './lib/poller.ts';
 import { reconcileAllowLists } from './lib/reconciler.ts';
+import { reapStalePendingOps } from './services/pending-ops.ts';
 import { runBootTasks } from './lib/system-workspace.ts';
 
 // Phase 3 A-0: apply any pending migrations at boot so dev environments never
@@ -43,6 +44,15 @@ void recoverInterruptedConversations(db)
   })
   .catch((err) => console.error('[folio] conversation recovery failed', err));
 
+// pending_ops disk hygiene: the confirm-gate flips status but never deletes, so the
+// table only grows. Reap terminal/abandoned rows past the retention window. Live
+// (pending-within-TTL / confirmed) rows are never touched. Fire-and-log like above.
+void reapStalePendingOps(db)
+  .then((n) => {
+    if (n > 0) console.log(`[folio] reaped ${n} stale pending_ops row(s)`);
+  })
+  .catch((err) => console.error('[folio] pending_ops reap failed', err));
+
 console.log(`[folio] listening on http://localhost:${env.PORT}`);
 
 // Phase 2.6 sub-phase E1: periodic allow-list reconciler. Scrubs orphan
@@ -59,6 +69,15 @@ if (env.NODE_ENV !== 'test') {
   }, env.FOLIO_RECONCILER_INTERVAL_MS);
 } else {
   console.log('[folio] reconciler disabled (test mode)');
+}
+
+// pending_ops reaper interval (slow hygiene loop). Skipped in test mode (timer leaks).
+if (env.NODE_ENV !== 'test') {
+  setInterval(() => {
+    reapStalePendingOps(db).catch((err) =>
+      console.error('[folio] pending_ops reaper error', err),
+    );
+  }, env.FOLIO_RECONCILER_INTERVAL_MS);
 }
 
 // Phase 3 C-10b: durable event dispatcher (Reaction Plane). Polls the events
