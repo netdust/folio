@@ -489,3 +489,27 @@ gates were the gap.
 - **Lesson 3:** "I loaded a skill" ≠ "I ran the harness." Single skills cover single stages;
   the harness sequences ALL gates so none gets silently skipped. Don't let good local discipline
   mask a skipped global gate.
+
+---
+
+## 2026-06-08 — A fix-round "done" can introduce a worse bug than it fixed; gap-hunt before declaring victory
+
+After fixing /code-review findings on the provider streaming seam, I declared the round done.
+A follow-up gap-hunt (parallel deep-dive agents over the whole provider→runner boundary) found
+that my OWN altitude fix had introduced a SAFETY regression: the gate
+`collectedToolCalls.length > 0 && doneReason !== 'max_tokens'` was a blacklist excluding only
+max_tokens, so a 'refusal' carrying a tool call now EXECUTED the tool (a refused action acting).
+Plus it silently completed truncated (max_tokens) tool turns as success.
+
+- **Lesson 1:** when a fix changes a GATE/guard condition, enumerate EVERY value the guarded
+  variable can take and ask "is the new behavior correct for each?" — not just the one case you
+  were fixing. doneReason has 5 values (stop/tool_use/max_tokens/refusal/pause_turn + unknown);
+  my fix only reasoned about stop vs max_tokens and got refusal/pause_turn wrong.
+- **Lesson 2:** prefer a WHITELIST (fail-closed) over a blacklist for safety-relevant gates. "Run
+  tools only on stop|tool_use" is safe against a new/unknown reason; "run unless max_tokens" is
+  fail-open — any reason I didn't think of executes the tool.
+- **Lesson 3:** a seam that has produced bugs in N consecutive rounds is SYSTEMATICALLY
+  under-tested, not unlucky. Run a dedicated gap-hunt (adversarial agents per gap class) over the
+  WHOLE seam before calling it done — it found 6 more pre-existing bugs (FIX#2 defeated by
+  default-'stop', budget-meter-zero, empty tool-call id, ollama deref, anthropic server_tool_use)
+  filed at tasks/followup-provider-seam-hardening.md.
