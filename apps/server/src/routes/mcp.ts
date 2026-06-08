@@ -129,6 +129,16 @@ function mapToolErrorToJsonRpc(err: unknown, id: JsonRpcId): JsonRpcResponse {
     };
   }
 
+  // Other `forbidden:` authority refusals (e.g. 'forbidden: ui tools require a
+  // conversation context', the unattended-floor refusals). These are DELIBERATE,
+  // safe authority messages — keep them (the agent needs to know it's not allowed
+  // here), while preserving the `forbidden:` prefix the runner uses to classify the
+  // throw as FATAL (isFatalToolError). So we KEEP the message rather than convert
+  // the throw to a non-forbidden shape (which would flip fatal→recoverable).
+  if (msg.startsWith('forbidden:')) {
+    return { jsonrpc: '2.0', id, error: { code: -32603, message: msg } };
+  }
+
   // executeTool: Zod rejection. `issues` is [{ path }] — PATHS only, never the
   // rejected value (mitigation 61).
   if (msg === 'MCP_INVALID_ARGS') {

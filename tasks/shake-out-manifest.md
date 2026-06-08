@@ -1,42 +1,66 @@
-# Shake-out manifest — fix/thinking-model-tool-calls
+# Shake-out manifest — fix/mcp-error-leak-and-auth
 
-**Date:** 2026-06-08
-**Branch:** `fix/thinking-model-tool-calls` (provider seam: thinking-model tool calls,
-IPv6 loopback, review fixes, whitelist-gate regression fix)
-**Range:** `c871060..HEAD` | Type: Bun/TS monorepo (server + web SPA)
+**Date:** 2026-06-09 | Type: Bun/TS monorepo (server + web SPA)
+**Range:** `e962a72..HEAD` (the 4 MCP transport fixes + audit tests)
 
 ## Phase 1 — SWEEP results
 
-| # | Check | Expected | Actual | Severity |
-|---|-------|----------|--------|----------|
-| 1 | Smoke: server `/healthz` + operator_model resolves | 200, key resolves | 200; `ollama/qwen3:8b base=127.0.0.1` resolves | — PASS |
-| 2 | Error-sanitization no-leak (sanitize-error suite) | no baseUrl/key/model echo | green | — PASS |
-| 3 | Run error-surfacing → conversation (a461d44) | failures surface, sanitized | green (4 tests) | — PASS |
-| 4 | Conversation/operator integration | runs work | green | — PASS |
-| 5 | `done.reason` consumers consistent with the whitelist gate change | FIX#2/#3 still key correctly | confirmed (FIX#3 keys tool_use+zero; distinct) | — PASS |
-| 6/7 | No stale `tool_use` assumption after adapter relabel deletion | adapters report honest reason | confirmed | — PASS |
-| 8 | Biome lint on touched files | clean | 5 errors — **ALL PRE-EXISTING** (present in `c871060` base via `git show`; my diff added none) | — NOT THIS BRANCH |
-| — | Feature-acceptance: cockpit via real browser + backend wire | tool runs, real answer, no `(no output)`/network error | PASS (drove "how many work items" → `list_documents` ran → answered) | — PASS |
-| — | Full suites | green | server 1695 / shared 70 / web 902, 0 fail; tsc clean | — PASS |
+| # | Check | Result |
+|---|-------|--------|
+| 1 | Smoke: all 4 MCP methods (initialize/ping/tools-list/tools-call) | PASS |
+| 2 | Cross-transport: registry change is MCP/runner-only (HTTP uses its own service errors) | PASS (verified — documents.ts route doesn't import the registry) |
+| 3 | Runner suite (registry's other consumer, recoverable-error path) | PASS |
+| 4 | agent-tools (executeTool) suite | PASS |
+| 5 | MCP test trio (route + error-mapping + result-shape) | PASS |
+| — | Feature-acceptance: MCP wire, 6 edge classes + happy path | PASS (7/7, un-mocked wire) |
+| — | Full server suite | 1712 pass, tsc clean |
 
 ## Phase 2 — MANIFEST
 
-**Bugs found in this branch's changeset: ZERO.**
+### BUG-1 — [IMPORTANT] Agent-facing validation messages lost to `internal error` (M-MCP-1 side-effect)
 
-The only sweep flag (biome, SWEEP 8) is pre-existing lint debt in `openai.ts`
-(`noImplicitAnyLet` line 66, `noAssignInExpressions` line 132) — verified present in
-the pre-branch base, not introduced here. Out of scope for this branch (would be a
-codebase-wide lint cleanup).
+**Symptom:** an agent calling `list_documents` (and many tools) with a wrong
+`project_slug` / `workspace_slug` now gets `{ code: -32603, message: "internal error" }`
+instead of the useful `"project not found"` / `"workspace not accessible"`. VERIFIED live:
+`list_documents` + `list_views` on a bad project both return `internal error`.
 
-The earlier-session gap-hunt already found + fixed the bugs this branch *could* have
-shipped (the refusal/pause_turn tool-execution regression, silent max_tokens
-truncation, reasoning leak, altitude divergence) — all committed with RED-on-revert
-tests BEFORE this shake-out. The test-effectiveness audit (Step 0) closed 2 blind
-paths (fail-closed + the dropped-intent comment). Pre-existing provider-seam bugs
-(G1–G6) are filed for a separate branch at `tasks/followup-provider-seam-hardening.md`.
+**Root cause:** M-MCP-1 correctly sanitizes raw `Error`s (no leak), but ~10 AGENT-FACING
+VALIDATION throws in `agent-tools-registry.ts` were never shaped:
+- line 163/169 `workspace not accessible`
+- line 237 `project not found`
+- line 312 `table not found`, 319 `project has no tables`
+- line 470 `skill not found`
+- line 1208 `view not found`
+- line 1399/1458 `comment not found`
+These reach the catch-all → sanitized → the agent CANNOT self-correct (can't tell a typo'd
+slug from a server fault). Degrades the core agent-first UX of the entire MCP surface.
+
+**NOT a leak / crash** — the messages are safe + deliberate; the fix is to SHAPE them
+(mcpInvalidParams, -32602 + a reason) so they survive the keep/sanitize split, exactly like
+the `document not found` / `parent not found` throws already shaped in M-MCP-1.
+
+**Cluster:** one root cause, one fix (shape the validation throws). The genuinely-internal
+throws (`frontmatter must be an object`, `missing or invalid argument`) — decide per case;
+`missing/invalid argument` is also agent-facing (shape it), `frontmatter must be an object`
+is borderline (a type-guard, shape it for consistency).
 
 ## Phase 3 — FIX
 
-No bugs to fix (manifest empty). Skipped per shake-out protocol.
+**BUG-1 RESOLVED** (via systematic-debugging). Root cause: M-MCP-1 sanitizes raw `Error`s,
+but ~17 agent-facing validation/routing throws in the registry were never shaped.
 
-## Status: CLEAN — proceed to the reviewer pass.
+Fix (one root cause): converted all 15 agent-facing raw `throw new Error(<message>)` to
+`mcpInvalidParams(<message>, { reason })` so they survive the keep/sanitize split with a
+`reason` code for programmatic branching — workspace/project/table/view/skill/comment
+not-found, the agent_run routing hints, frontmatter type-guard, missing-argument, and the
+link-target hint. The 2 `forbidden: ui tools` throws were KEPT as raw `Error('forbidden: …')`
+(the runner uses the `forbidden:` prefix to classify them FATAL — converting them would flip
+fatal→recoverable) and the MCP mapper gained a `forbidden:` branch that keeps the safe
+authority message instead of sanitizing it.
+
+Live re-sweep: `project not found`, `workspace not accessible`, `view not found`,
+`forbidden: ui tools …` all surface with actionable messages (was `internal error`).
+RED-on-revert proven. Full server suite: 1715 pass, tsc clean. No collateral (runner /
+agent-tools / HTTP consumers unaffected — the throws are registry-internal, MCP/runner-only).
+
+## Status: 1 IMPORTANT finding — RESOLVED. Shake-out CLEAN.

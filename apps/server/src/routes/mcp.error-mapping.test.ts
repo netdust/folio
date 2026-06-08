@@ -345,3 +345,57 @@ test('tools/call with a missing tool name maps to -32601 (empty name → method 
   const body = (await res.json()) as { error?: { code: number } };
   expect(body.error?.code).toBe(-32601);
 });
+
+// SHAKEOUT BUG-1 — agent-facing VALIDATION messages must survive the M-MCP-1
+// keep/sanitize split. ~17 raw `throw new Error(<deliberate agent message>)` in the
+// registry ('project not found', 'workspace not accessible', 'view not found', the
+// agent_run routing hints, the link-target hint, …) were being sanitized to
+// 'internal error', so an agent could not tell a typo'd slug from a server fault and
+// could not self-correct. They must be SHAPED (mcpInvalidParams) so the actionable
+// message is preserved while genuinely-unexpected errors still sanitize.
+test('BUG-1 — list_documents on a bad project returns an ACTIONABLE message, not internal error', async () => {
+  const { app, seed } = await makeTestApp();
+  const token = await setupToken(seed.workspace.id, seed.user.id, ['documents:read']);
+  const res = await callTool(app, token, 'list_documents', {
+    workspace_slug: 'acme',
+    project_slug: 'nonexistent-project',
+  });
+  const body = (await res.json()) as { error?: { code: number; message: string } };
+  expect(body.error).toBeDefined();
+  // The agent must learn WHAT was wrong — 'project not found', NOT 'internal error'.
+  expect(body.error!.message).not.toBe('internal error');
+  expect(body.error!.message).toMatch(/project not found/i);
+});
+
+test('BUG-1 — a bad workspace slug returns an actionable message, not internal error', async () => {
+  const { app, seed } = await makeTestApp();
+  const token = await setupToken(seed.workspace.id, seed.user.id, ['documents:read']);
+  const res = await callTool(app, token, 'list_documents', {
+    workspace_slug: 'no-such-workspace',
+    project_slug: 'web',
+  });
+  const body = (await res.json()) as { error?: { code: number; message: string } };
+  expect(body.error!.message).not.toBe('internal error');
+  expect(body.error!.message).toMatch(/workspace not accessible/i);
+});
+
+test('BUG-1 — a forbidden: authority message is KEPT (not sanitized), preserving fatal semantics', async () => {
+  const { app, seed } = await makeTestApp();
+  const token = await setupToken(seed.workspace.id, seed.user.id, ['documents:read', 'documents:write']);
+  // ask_choice over MCP has no conversation sink → 'forbidden: ui tools require a
+  // conversation context'. The mapper keeps `forbidden:` messages (runner uses the
+  // prefix to classify FATAL; the message is a safe authority statement).
+  // Valid Zod args (prompt + ≥2 {id,label} options) so we reach the sink check, not
+  // a Zod reject. ask_choice IS MCP-callable (a V1_MCP_TOOLS member) but requires a
+  // conversation sink, which an MCP call never has.
+  const res = await callTool(app, token, 'ask_choice', {
+    prompt: 'pick one',
+    options: [
+      { id: 'a', label: 'A' },
+      { id: 'b', label: 'B' },
+    ],
+  });
+  const body = (await res.json()) as { error?: { code: number; message: string } };
+  expect(body.error!.message).not.toBe('internal error');
+  expect(body.error!.message).toMatch(/forbidden: ui tools/i);
+});

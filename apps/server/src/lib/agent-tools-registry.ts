@@ -127,7 +127,7 @@ function markdownResult(md: string): { content: { type: 'text'; text: string }[]
 function requireString(args: Record<string, unknown>, key: string): string {
   const v = args[key];
   if (typeof v !== 'string' || v.length === 0) {
-    throw new Error(`missing or invalid argument: ${key}`);
+    throw mcpInvalidParams(`missing or invalid argument: `, { reason: 'invalid_argument', argument: key });
   }
   return v;
 }
@@ -160,13 +160,13 @@ async function resolveWorkspaceForToken(
   const ws = await db.query.workspaces.findFirst({
     where: eq(workspaces.slug, slug),
   });
-  if (!ws) throw new Error('workspace not accessible');
+  if (!ws) throw mcpInvalidParams('workspace not accessible', { reason: 'workspace_not_accessible' });
   // Instance-reach token (workspaceId null) reaches any existing workspace; a
   // pinned token must match its own. NOTE: during an agent RUN the token passed
   // here is the NARROWED run token (effective reach, Task A8), so this also
   // enforces the per-run floor.
   if (!isInstanceReach(token) && ws.id !== token.workspaceId) {
-    throw new Error('workspace not accessible');
+    throw mcpInvalidParams('workspace not accessible', { reason: 'workspace_not_accessible' });
   }
   return ws;
 }
@@ -234,7 +234,7 @@ async function resolveProjectInWorkspace(
   const p = await db.query.projects.findFirst({
     where: and(eq(projects.workspaceId, ws.id), eq(projects.slug, slug)),
   });
-  if (!p) throw new Error('project not found');
+  if (!p) throw mcpInvalidParams('project not found', { reason: 'project_not_found' });
 
   // Phase 2.5: agent-bound tokens intersect the agent's frontmatter.projects
   // with the token's optional projectIds narrowing; reject if the requested
@@ -309,14 +309,14 @@ async function resolveTableForArgs(
     const t = await db.query.tables.findFirst({
       where: and(eq(tablesTable.projectId, p.id), eq(tablesTable.slug, slug)),
     });
-    if (!t) throw new Error('table not found');
+    if (!t) throw mcpInvalidParams('table not found', { reason: 'table_not_found' });
     return t;
   }
   const t = await db.query.tables.findFirst({
     where: eq(tablesTable.projectId, p.id),
     orderBy: (col, { asc }) => [asc(col.order)],
   });
-  if (!t) throw new Error('project has no tables');
+  if (!t) throw mcpInvalidParams('project has no tables', { reason: 'no_tables' });
   return t;
 }
 
@@ -467,7 +467,7 @@ export function registerRealTools(): void {
       // typed column; description/when_to_use ride frontmatter. Gated by the
       // documents:read requiredScope above (executeTool checks token + caller).
       const skill = await getInstanceSkill(db, args.slug);
-      if (!skill) throw new Error('skill not found');
+      if (!skill) throw mcpInvalidParams('skill not found', { reason: 'skill_not_found' });
       const sfm = (skill.frontmatter ?? {}) as {
         description?: string;
         when_to_use?: string;
@@ -600,8 +600,9 @@ export function registerRealTools(): void {
       const p = await resolveProjectInWorkspace(ws, ctx.token, args);
       const type = optionalString(args, 'type');
       if (type === 'agent_run') {
-        throw new Error(
+        throw mcpInvalidParams(
           'agent_run documents must be listed via the runs endpoints (Sub-phase D), not list_documents',
+          { reason: 'agent_run_wrong_endpoint' },
         );
       }
       let activeTableId: string | null = null;
@@ -797,8 +798,9 @@ export function registerRealTools(): void {
       const doc = await getDocument(p.id, slug);
       if (!doc) throw mcpInvalidParams('document not found', { reason: 'document_not_found' });
       if (doc.type === 'agent_run') {
-        throw new Error(
+        throw mcpInvalidParams(
           'agent_run documents must be read via the runs endpoints (Sub-phase D), not get_document',
+          { reason: 'agent_run_wrong_endpoint' },
         );
       }
       return textResult(doc);
@@ -832,8 +834,9 @@ export function registerRealTools(): void {
       const doc = await getDocument(p.id, slug);
       if (!doc) throw mcpInvalidParams('document not found', { reason: 'document_not_found' });
       if (doc.type === 'agent_run') {
-        throw new Error(
+        throw mcpInvalidParams(
           'agent_run documents must be read via the runs endpoints (Sub-phase D), not get_document_markdown',
+          { reason: 'agent_run_wrong_endpoint' },
         );
       }
       const userFm = stripReservedFrontmatter((doc.frontmatter as Record<string, unknown>) ?? {});
@@ -1003,7 +1006,7 @@ export function registerRealTools(): void {
       const fmArg = args['frontmatter'];
       if (fmArg !== undefined) {
         if (!fmArg || typeof fmArg !== 'object' || Array.isArray(fmArg)) {
-          throw new Error('frontmatter must be an object');
+          throw mcpInvalidParams('frontmatter must be an object', { reason: 'invalid_frontmatter' });
         }
         patch.frontmatter = fmArg as Record<string, unknown>;
       }
@@ -1205,7 +1208,7 @@ export function registerRealTools(): void {
           where: and(eq(viewsTable.tableId, t.id), eq(viewsTable.isDefault, true)),
         });
       }
-      if (!view) throw new Error('view not found');
+      if (!view) throw mcpInvalidParams('view not found', { reason: 'view_not_found' });
       const limit = typeof args['limit'] === 'number' ? (args['limit'] as number) : 50;
       const docs = await runView({
         view,
@@ -1396,7 +1399,7 @@ export function registerRealTools(): void {
       const project = await resolveProjectInWorkspace(ws, token, args);
       const slug = requireString(args, 'slug');
       const existing = await getCommentScoped(ws.id, project.id, slug);
-      if (!existing) throw new Error('comment not found');
+      if (!existing) throw mcpInvalidParams('comment not found', { reason: 'comment_not_found' });
 
       const authorContext = await resolveAuthorContextForToken(token);
       const visibilityRaw = optionalString(args, 'visibility');
@@ -1455,7 +1458,7 @@ export function registerRealTools(): void {
       const project = await resolveProjectInWorkspace(ws, token, args);
       const slug = requireString(args, 'slug');
       const existing = await getCommentScoped(ws.id, project.id, slug);
-      if (!existing) throw new Error('comment not found');
+      if (!existing) throw mcpInvalidParams('comment not found', { reason: 'comment_not_found' });
 
       const authorContext = await resolveAuthorContextForToken(token);
 
@@ -2137,9 +2140,10 @@ export function registerRealTools(): void {
         const p = await resolveProjectInWorkspace(ws, ctx.token, { project_slug: target.pslug });
         const doc = await getDocument(p.id, target.entityId);
         if (!doc) {
-          throw new Error(
+          throw mcpInvalidParams(
             `link target not found: no ${target.entityType} "${target.entityId}" in ${target.wslug}/${target.pslug}. ` +
               'Pass the document SLUG (not its id) as entityId, and the correct project slug as pslug.',
+            { reason: 'link_target_not_found' },
           );
         }
         // Canonicalize: store the real slug + the resolved project slug.
