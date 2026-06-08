@@ -229,4 +229,35 @@ describe('operator-run error surfacing', () => {
     expect(opText.length).toBe(1);
     expect(opText[0]!.body ?? '').toMatch(/could not finish this turn/i);
   });
+
+  // code-review (re-review sibling) — the MID-STREAM budget-cap path is the same
+  // double-post mode as #4: a conversation run that exceeds max_tokens mid-stream
+  // posted postAgentComment (→sink.text) AND failRun (→sink.text). Unlike
+  // handleCancel this IS reachable on the conversation path (budget tracking runs
+  // for sink runs). Must post exactly ONE thread message.
+  test('a conversation run that exceeds the mid-stream budget cap posts exactly ONE thread message', async () => {
+    const { db, seed } = await makeTestApp();
+    // Stream a tokens event over the operator's 100k cap → mid-stream budget break.
+    const stub: AIProvider = {
+      async *stream() {
+        yield { type: 'text', delta: 'working' } as const;
+        yield { type: 'tokens', tokens_in: 60_000, tokens_out: 60_000 } as const;
+        yield { type: 'done', reason: 'stop' } as const;
+      },
+      async testKey() {
+        return { ok: true as const };
+      },
+    };
+    providerTestHatch.overrideRegistry('anthropic', async () => stub);
+
+    const { convId } = await driveConversationRun(db, seed.user.id);
+
+    const rows = await db.query.messages.findMany({
+      where: eq(messages.conversationId, convId),
+      orderBy: (m, { asc }) => [asc(m.seq)],
+    });
+    const opText = rows.filter((r) => r.role === 'operator' && r.kind === 'text');
+    expect(opText.length).toBe(1);
+    expect(opText[0]!.body ?? '').toMatch(/could not finish this turn/i);
+  });
 });

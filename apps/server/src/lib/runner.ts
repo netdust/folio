@@ -1262,15 +1262,22 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
           ? trackConversationTokens(conversationTokens, ev.tokens_in, ev.tokens_out)
           : await incrementTokens(runId, { in: ev.tokens_in, out: ev.tokens_out });
         if (usedIn + usedOut > fm.max_tokens) {
-          await postAgentComment(
-            ctx,
-            `Budget cap exceeded after ${usedIn + usedOut} tokens — partial work above.`,
-            'comment',
-          );
+          // On the CONVERSATION (sink) path, postAgentComment + failRun both write
+          // sink.text — calling both double-posts on the cockpit thread (same mode
+          // as the dropped-call fix, code-review #4). failRun is the single surface
+          // there; fold the partial-work note into its message. On the document
+          // path, both are wanted (a partial-work comment PLUS the failed transition).
+          if (!ctx.sink) {
+            await postAgentComment(
+              ctx,
+              `Budget cap exceeded after ${usedIn + usedOut} tokens — partial work above.`,
+              'comment',
+            );
+          }
           await failRun(
             ctx,
             runErrorReasonSchema.enum.budget_exceeded,
-            `Token budget ${fm.max_tokens} exceeded (${usedIn + usedOut} used).`,
+            `Token budget ${fm.max_tokens} exceeded (${usedIn + usedOut} used) — partial work above.`,
           );
           terminated = true;
           break;
