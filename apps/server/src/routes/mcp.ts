@@ -28,7 +28,7 @@
 import { Hono } from 'hono';
 import { executeTool, listToolDefs } from '../lib/agent-tools.ts';
 import { HTTPError } from '../lib/http.ts';
-import { type AuthContext, getUser } from '../middleware/auth.ts';
+import type { AuthContext } from '../middleware/auth.ts';
 import { attachToken, getToken, requireToken } from '../middleware/bearer.ts';
 
 // --- JSON-RPC types ---
@@ -184,7 +184,11 @@ mcpRoute.post('/', async (c) => {
 
   const id = body.id;
   const token = getToken(c);
-  const actor = getUser(c);
+  // M-MCP-2 — do NOT resolve the user up-front. getUser(c) THROWS when no user is
+  // hydrated (a valid token with a null/dangling createdBy), and calling it before
+  // method routing crashed EVERY method (incl. ping/initialize/tools/list, which
+  // need no user) with a raw Hono 500. The actor is resolved fail-closed inside
+  // tools/call (the only method that needs it).
 
   if (body.method === 'initialize') {
     return c.json<JsonRpcResponse>({
@@ -220,6 +224,18 @@ mcpRoute.post('/', async (c) => {
   }
 
   if (body.method === 'tools/call') {
+    // M-MCP-2 — resolve the actor fail-closed (getUser throws if unhydrated). A
+    // valid token whose creator can't be resolved gets a clean sanitized JSON-RPC
+    // error, NOT a raw 500.
+    const actorUser = c.get('user');
+    if (!actorUser) {
+      console.error(`[mcp] tools/call with a token that has no resolvable user (token ${token.id})`);
+      return c.json<JsonRpcResponse>({
+        jsonrpc: '2.0',
+        id,
+        error: { code: -32603, message: 'internal error' },
+      });
+    }
     const params = (body.params ?? {}) as {
       name?: string;
       arguments?: Record<string, unknown>;
@@ -227,7 +243,7 @@ mcpRoute.post('/', async (c) => {
     try {
       const result = await executeTool(
         token,
-        actor.id,
+        actorUser.id,
         params.name ?? '',
         params.arguments ?? {},
         undefined,

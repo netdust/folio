@@ -191,3 +191,46 @@ test('M-MCP-1 — a plain Error-throwing tool also returns the sanitized interna
   expect(body.error!.message).toBe('internal error');
   expect(JSON.stringify(body)).not.toContain(SECRET);
 });
+
+// M-MCP-2 — a VALID token whose creator can't be hydrated (createdBy null/dangling)
+// must NOT crash the endpoint with a raw 500. getUser(c) was called unconditionally
+// at the top of the handler, before method routing and outside the try, so EVERY
+// method (incl. ping/initialize/tools/list, which need no user) threw a raw Hono 500.
+async function userlessToken(workspaceId: string): Promise<string> {
+  const { token, hash } = newApiToken();
+  await db.insert(apiTokens).values({
+    id: nanoid(),
+    workspaceId,
+    name: 'mcp-userless',
+    tokenHash: hash,
+    scopes: ['documents:read'],
+    createdBy: null, // no hydratable creator → no user attached
+  });
+  return token;
+}
+
+test('M-MCP-2 — a userless token does NOT 500 on ping (no user needed)', async () => {
+  const { app, seed } = await makeTestApp();
+  const token = await userlessToken(seed.workspace.id);
+  const res = await app.request('/mcp', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }),
+  });
+  expect(res.status).toBe(200);
+  const body = (await res.json()) as { result?: unknown; error?: unknown };
+  expect(body.result).toBeDefined();
+  expect(body.error).toBeUndefined();
+});
+
+test('M-MCP-2 — a userless token gets a clean JSON-RPC error on tools/call, not a 500', async () => {
+  const { app, seed } = await makeTestApp();
+  const token = await userlessToken(seed.workspace.id);
+  const res = await callTool(app, token, 'list_workspaces', {});
+  // A clean JSON-RPC error envelope (sanitized), NOT a raw 500.
+  expect(res.status).toBe(200);
+  const body = (await res.json()) as { error?: { code: number; message: string } };
+  expect(body.error).toBeDefined();
+  expect(body.error!.code).toBe(-32603);
+  expect(body.error!.message).toBe('internal error');
+});
