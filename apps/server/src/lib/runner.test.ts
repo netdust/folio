@@ -1104,6 +1104,92 @@ describe('runAgent stream loop', () => {
     expect(results.length).toBe(0);
   });
 
+  // ALTITUDE FIX (code-review #2/#3/#4) — the runner runs the tool round whenever
+  // tool calls were COLLECTED and the turn was not truncated, regardless of the
+  // adapter's done.reason label. Thinking models (qwen3/deepseek-r1) emit a real
+  // tool_call but finish with reason:'stop' (not 'tool_use'); the runner must NOT
+  // silently drop the collected call on the terminal path. This is the single
+  // convergence point — adapters no longer relabel 'stop'→'tool_use'.
+  test('ALTITUDE — a collected tool_call with done.reason=stop still runs the tool round', async () => {
+    const { db, run } = await scaffold({ tools: ['list_documents'] });
+    const { registerTool } = await import('./agent-tools.ts');
+    const okName = `__test_stoptool_${nanoid(6)}`;
+    let handlerRan = false;
+    registerTool({
+      name: okName,
+      requiredScope: 'documents:read',
+      schema: z.object({}).strict(),
+      handler: async () => {
+        handlerRan = true;
+        return { ok: true };
+      },
+    });
+    registeredTools.push(okName);
+
+    const stub: AIProvider = {
+      async *stream(opts) {
+        const hasToolResult = opts.messages.some((m) => m.role === 'tool');
+        if (!hasToolResult) {
+          // Thinking-model shape: a real tool_call but reason:'stop', NOT 'tool_use'.
+          yield { type: 'tool_call', id: 'tc-1', name: okName, arguments: {} } as ProviderEvent;
+          yield { type: 'done', reason: 'stop' } as ProviderEvent;
+        } else {
+          yield { type: 'text', delta: 'all done' } as ProviderEvent;
+          yield { type: 'done', reason: 'stop' } as ProviderEvent;
+        }
+      },
+      async testKey() {
+        return { ok: true as const };
+      },
+    };
+    providerTestHatch.overrideRegistry('anthropic', async () => stub);
+
+    await runAgent({ runId: run.id });
+
+    const fm = await readRun(db, run.id);
+    // The tool round ran (handler executed) and the run completed via the
+    // follow-up round — NOT dropped on the terminal path.
+    expect(handlerRan).toBe(true);
+    expect(fm.status).toBe('completed');
+  });
+
+  // ALTITUDE FIX (code-review #4) — truncation still wins: a tool call cut off by
+  // max_tokens is unusable and must NOT run. The runner excludes done.reason
+  // 'max_tokens' from the collected-calls tool-round gate.
+  test('ALTITUDE — a collected tool_call with done.reason=max_tokens does NOT run (truncation wins)', async () => {
+    const { db, run } = await scaffold({ tools: ['list_documents'] });
+    const { registerTool } = await import('./agent-tools.ts');
+    const okName = `__test_trunctool_${nanoid(6)}`;
+    let handlerRan = false;
+    registerTool({
+      name: okName,
+      requiredScope: 'documents:read',
+      schema: z.object({}).strict(),
+      handler: async () => {
+        handlerRan = true;
+        return { ok: true };
+      },
+    });
+    registeredTools.push(okName);
+
+    const stub: AIProvider = {
+      async *stream() {
+        // A truncated tool call: streamed, but the turn hit the token cap.
+        yield { type: 'tool_call', id: 'tc-1', name: okName, arguments: {} } as ProviderEvent;
+        yield { type: 'done', reason: 'max_tokens' } as ProviderEvent;
+      },
+      async testKey() {
+        return { ok: true as const };
+      },
+    };
+    providerTestHatch.overrideRegistry('anthropic', async () => stub);
+
+    await runAgent({ runId: run.id });
+
+    // The truncated call must NOT have executed (terminal completion instead).
+    expect(handlerRan).toBe(false);
+  });
+
   // D-9.2 (was FIX #7, part a) — a multi-tool round where BOTH calls are
   // recoverable (success + handler-throw) FEEDS BOTH results back and continues
   // (mitigations 64-66). The round-trip is committed atomically and the model

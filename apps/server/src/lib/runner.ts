@@ -1292,7 +1292,18 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
 
     // Tool round — execute collected calls, append the round-trip messages,
     // loop again.
-    if (doneReason === 'tool_use' && collectedToolCalls.length > 0) {
+    //
+    // CONVERGENCE POINT (code-review #2/#3/#4) — "tool calls streamed ⟹ run them"
+    // is decided HERE, the single done.reason consumer, NOT re-derived per adapter.
+    // A thinking model (qwen3/deepseek-r1) emits a real tool_call but finishes with
+    // reason:'stop' (not 'tool_use'); keying the round on reason==='tool_use' alone
+    // silently dropped those calls on the terminal path below. Gate on the calls
+    // we actually collected instead — done.reason is advisory for tool detection.
+    // EXCEPTION: 'max_tokens' (truncation) still excludes — a tool call cut off
+    // mid-stream is unusable and must NOT run. This made the adapters' per-provider
+    // sawToolCall relabel redundant (deleted), which also closed the divergence
+    // (#3) and the dropped-marker phantom-tool_use escalation (#4).
+    if (collectedToolCalls.length > 0 && doneReason !== 'max_tokens') {
       // D-9.2 — RECOVERABLE tool errors are FED BACK to the model instead of
       // terminating the run (mitigations 64-66). We accumulate the assistant
       // tool_calls message + per-call tool-result messages in LOCALS:

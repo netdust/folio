@@ -1,11 +1,20 @@
 /**
  * DEV-ONLY seed: wire the local Ollama qwen3:8b as the operator model.
  *
- * Mirrors exactly what Settings → AI would write, but bypasses the session-admin
- * gate (the instance/ai-keys route is session-only by design — M4 — so no token,
- * including MCP, can reach it). Run from apps/server so it loads the server's
- * own .env (same FOLIO_MASTER_KEY + same folio.db) and the ciphertext it writes
- * is decryptable by the running server.
+ * Writes the SAME two rows the Settings → AI flow produces (an ai_keys row + the
+ * operator_model setting), bypassing the session-admin gate (the instance/ai-keys
+ * route is session-only by design — M4 — so no token, incl. MCP, can reach it).
+ *
+ * IMPORTANT — this is NOT a faithful mirror of the route's WRITE PATH: it does NOT
+ * run the route's SSRF guard (`validatePublicUrl(baseUrl, { allowLoopback })`,
+ * instance-ai-keys.ts), which 422-rejects a loopback baseUrl unless
+ * FOLIO_ALLOW_LOOPBACK_AI=true. Safe here because the target IS loopback by design,
+ * but do NOT generalize this seed to a non-loopback / paid baseUrl without routing
+ * it through validatePublicUrl first — it would store an unvalidated outbound host
+ * the route would have blocked.
+ *
+ * Run from apps/server so it loads the server's own .env (same FOLIO_MASTER_KEY +
+ * same folio.db) and the ciphertext it writes is decryptable by the running server.
  *
  *   cd apps/server && bun run scripts/seed-ollama-operator.ts
  *

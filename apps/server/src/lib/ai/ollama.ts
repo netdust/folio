@@ -21,10 +21,6 @@ type ParserState = {
   tokensIn: number;
   tokensOut: number;
   stopReason: 'stop' | 'tool_use' | 'max_tokens';
-  // Whether ANY tool call streamed this turn. Thinking models (qwen3) emit a
-  // tool_calls chunk but finish with done_reason: 'stop' (not 'tool_calls'),
-  // so the done_reason label alone can't decide tool_use — track it directly.
-  sawToolCall: boolean;
 };
 
 /**
@@ -46,7 +42,6 @@ function* handleOllamaChunk(
   if (msg?.content) yield { type: 'text', delta: msg.content };
   if (msg?.tool_calls) {
     for (const tc of msg.tool_calls) {
-      state.sawToolCall = true;
       yield {
         type: 'tool_call',
         id: crypto.randomUUID(),
@@ -84,12 +79,10 @@ function* handleOllamaChunk(
     const reason = chunk.done_reason as string | undefined;
     if (reason === 'length') state.stopReason = 'max_tokens';
     else if (reason === 'tool_calls') state.stopReason = 'tool_use';
-    // qwen3 + other thinking models stream a tool_calls chunk but finish with
-    // done_reason: 'stop'. If a tool call actually streamed, the turn IS a
-    // tool-use turn — the runner gates execution on reason==='tool_use', so
-    // without this the tool round is skipped and the run yields "(no output)".
-    // 'length' (truncation) wins: a tool call cut off mid-stream isn't usable.
-    else if (state.sawToolCall) state.stopReason = 'tool_use';
+    // NOTE: a thinking model (qwen3) emits a tool_call but finishes with
+    // done_reason: 'stop'. We report that HONESTLY as 'stop' — the runner derives
+    // "run the tool round" from the collected tool calls, not from this label
+    // (the convergence point in runner.ts). The adapter no longer relabels.
   }
 }
 
@@ -184,12 +177,7 @@ export const ollama: AIProvider = {
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
-    const state: ParserState = {
-      tokensIn: 0,
-      tokensOut: 0,
-      stopReason: 'stop',
-      sawToolCall: false,
-    };
+    const state: ParserState = { tokensIn: 0, tokensOut: 0, stopReason: 'stop' };
 
     // Round 7 #8 — try/finally ensures the reader is cancelled + released
     // when the consumer breaks out of the for-await early (timeout, runner

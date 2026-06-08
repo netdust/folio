@@ -458,7 +458,7 @@ describe('openai provider', () => {
   // path; those models emit tool calls with finish_reason 'stop' and stream
   // their visible turn under `reasoning`. ---
 
-  test("stream() reports tool_use when a tool_call streamed but finish_reason is 'stop'", async () => {
+  test("stream() surfaces the tool_call and reports the honest finish_reason 'stop' (no relabel)", async () => {
     mockCreate.mockImplementationOnce((async (_opts: { stream?: boolean }) => {
       return (async function* () {
         // tool_call arrives across deltas (id first, then args)...
@@ -482,8 +482,10 @@ describe('openai provider', () => {
     })) {
       events.push(ev);
     }
+    // The call surfaces (what the runner gates the round on); done.reason is the
+    // HONEST 'stop' the model reported — the adapter no longer relabels it.
     expect(events).toContainEqual({ type: 'tool_call', id: 'call_1', name: 'list_workspaces', arguments: {} });
-    expect(events).toContainEqual({ type: 'done', reason: 'tool_use' });
+    expect(events).toContainEqual({ type: 'done', reason: 'stop' });
   });
 
   test("stream() prefers max_tokens over tool_use when a tool call is truncated ('length')", async () => {
@@ -511,12 +513,22 @@ describe('openai provider', () => {
     expect(events).not.toContainEqual({ type: 'done', reason: 'tool_use' });
   });
 
-  test('stream() surfaces reasoning tokens as text when content is empty (reasoning-only turn)', async () => {
+  // code-review #1 — reasoning/reasoning_content must NEVER be surfaced as `text`.
+  // The runner accumulates every text event into textBuf, which is BOTH shown to
+  // the user AND replayed as the assistant's prior content next round. On the normal
+  // interleaved turn (reasoning deltas THEN content deltas, in SEPARATE chunks), an
+  // earlier "surface reasoning as text" fix leaked the model's chain-of-thought into
+  // the visible reply and the history. We match the Anthropic adapter: reasoning is
+  // dropped (only `text_delta`/`content` becomes text). A reasoning-only turn with
+  // no content + no tool call is honestly empty → "(no output)".
+  test('stream() does NOT surface reasoning as text on a normal interleaved turn (content only)', async () => {
     mockCreate.mockImplementationOnce((async (_opts: { stream?: boolean }) => {
       return (async function* () {
-        // A reasoning model streams its visible turn under `reasoning`, content empty.
-        yield { choices: [{ delta: { reasoning: 'The answer is ' } }] };
-        yield { choices: [{ delta: { reasoning: '42.' } }] };
+        // Normal interleaving: reasoning deltas (content empty) THEN content deltas.
+        yield { choices: [{ delta: { reasoning: 'Let me think, the user wants ' } }] };
+        yield { choices: [{ delta: { reasoning: 'the capital.' } }] };
+        yield { choices: [{ delta: { content: 'Paris' } }] };
+        yield { choices: [{ delta: { content: '.' } }] };
         yield {
           choices: [{ delta: {}, finish_reason: 'stop' }],
           usage: { prompt_tokens: 3, completion_tokens: 4, total_tokens: 7 },
@@ -534,18 +546,18 @@ describe('openai provider', () => {
     })) {
       events.push(ev);
     }
-    // Without the reasoning fallback this turn would yield ZERO text events → blank reply.
-    expect(events).toContainEqual({ type: 'text', delta: 'The answer is ' });
-    expect(events).toContainEqual({ type: 'text', delta: '42.' });
+    const texts = events.filter((e) => (e as { type: string }).type === 'text');
+    // ONLY the content surfaces as text — the reasoning trace is dropped.
+    expect(texts).toEqual([
+      { type: 'text', delta: 'Paris' },
+      { type: 'text', delta: '.' },
+    ]);
   });
 
-  test('stream() prefers content over reasoning when BOTH are present in one delta (no double-emit)', async () => {
-    // Defensive: a delta carrying both content and reasoning must emit ONLY the
-    // content (the visible answer) — not both, which would duplicate the turn's
-    // text. Guards the `else if` ordering of content → reasoning → reasoning_content.
+  test('stream() yields no text for a reasoning-only turn (honestly empty, not the chain-of-thought)', async () => {
     mockCreate.mockImplementationOnce((async (_opts: { stream?: boolean }) => {
       return (async function* () {
-        yield { choices: [{ delta: { content: 'real answer', reasoning: 'scratch work' } }] };
+        yield { choices: [{ delta: { reasoning: 'thinking...' } }] };
         yield {
           choices: [{ delta: {}, finish_reason: 'stop' }],
           usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
@@ -563,15 +575,14 @@ describe('openai provider', () => {
     })) {
       events.push(ev);
     }
-    const texts = events.filter((e) => (e as { type: string }).type === 'text');
-    expect(texts).toEqual([{ type: 'text', delta: 'real answer' }]);
-    expect(texts).not.toContainEqual({ type: 'text', delta: 'scratch work' });
+    expect(events.filter((e) => (e as { type: string }).type === 'text')).toHaveLength(0);
   });
 
   test('stream() handles two CONCURRENT streams without state bleed (separate tool_use vs stop)', async () => {
-    // The streamer keeps per-call state (stopReason, sawToolCall, toolCallsByIndex).
-    // Two streams driven concurrently must not cross-contaminate: a tool turn and a
-    // tool-less turn running at once must each report their OWN done reason.
+    // The streamer keeps per-call state (stopReason, toolCallsByIndex). Two streams
+    // driven concurrently must not cross-contaminate: the tool turn surfaces its call,
+    // the plain turn surfaces none, both report the honest 'stop' (the runner decides
+    // the tool round from the collected calls, not from the done.reason label).
     const toolGen = async function* () {
       yield { choices: [{ delta: { tool_calls: [{ index: 0, id: 'c1', function: { name: 'f', arguments: '{}' } }] } }] };
       yield { choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1 } };
@@ -598,11 +609,10 @@ describe('openai provider', () => {
 
     // Run both at once (interleaved by the event loop).
     const [a, b] = await Promise.all([drain('qwen/qwen3-8b'), drain('gpt-4o-mini')]);
-    // The tool stream (first create call) → tool_use; the plain stream → stop.
-    expect(a).toContainEqual({ type: 'done', reason: 'tool_use' });
+    // Tool stream surfaces its call; plain stream surfaces none. Both honest 'stop'.
     expect(a).toContainEqual({ type: 'tool_call', id: 'c1', name: 'f', arguments: {} });
+    expect(a).toContainEqual({ type: 'done', reason: 'stop' });
     expect(b).toContainEqual({ type: 'done', reason: 'stop' });
-    expect(b).not.toContainEqual({ type: 'done', reason: 'tool_use' });
     expect(b.filter((e) => e.type === 'tool_call')).toHaveLength(0);
     mockCreate.mockImplementation((async (opts: { stream?: boolean }) => {
       if (opts.stream) return defaultStream();

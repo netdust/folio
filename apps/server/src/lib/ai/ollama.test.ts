@@ -353,12 +353,13 @@ describe('ollama provider', () => {
   });
 
   // qwen3 (and other thinking models) emit a `tool_calls` chunk but then finish
-  // the stream with `done_reason: 'stop'` (NOT 'tool_calls') — all reasoning went
-  // to `message.thinking`, `content` is empty. Keying tool_use SOLELY on
-  // done_reason==='tool_calls' lost the tool round: the runner gates execution on
-  // reason==='tool_use', skipped it, and wrote "(no output)". The adapter must
-  // report tool_use when it actually STREAMED tool calls, regardless of the label.
-  test("stream() reports tool_use when a tool_call streamed even if done_reason is 'stop'", async () => {
+  // the stream with `done_reason: 'stop'` (NOT 'tool_calls') — reasoning went to
+  // `message.thinking`, `content` is empty. The adapter SURFACES the tool_call and
+  // reports the HONEST done.reason ('stop'); the runner derives "run the tool round"
+  // from the collected call, not from this label (the convergence point lives in
+  // runner.ts — see runner.test.ts "ALTITUDE — a collected tool_call with
+  // done.reason=stop still runs the tool round"). The adapter does NOT relabel.
+  test("stream() surfaces the tool_call and reports the honest done.reason 'stop' (no relabel)", async () => {
     global.fetch = mock(
       async () =>
         new Response(
@@ -400,15 +401,16 @@ describe('ollama provider', () => {
     })) {
       events.push(ev);
     }
-    // The tool call must surface...
+    // The tool call must surface (this is what the runner gates the round on)...
     expect(events).toContainEqual({
       type: 'tool_call',
       id: expect.any(String),
       name: 'list_workspaces',
       arguments: {},
     });
-    // ...AND the done reason must be tool_use so the runner runs the tool round.
-    expect(events).toContainEqual({ type: 'done', reason: 'tool_use' });
+    // ...AND the done.reason is the HONEST 'stop' the model reported — the adapter
+    // no longer relabels it to tool_use (the runner derives that from the call).
+    expect(events).toContainEqual({ type: 'done', reason: 'stop' });
   });
 
   // --- Hardening: the REQUEST body (think:false + tool_calls echo) was wholly
@@ -527,10 +529,10 @@ describe('ollama provider', () => {
     expect(events).not.toContainEqual({ type: 'done', reason: 'tool_use' });
   });
 
-  test('stream() does NOT leak tool_use across calls — a tool-less turn after a tool turn reports stop', async () => {
-    // sawToolCall lives in per-call state. If it were module-level (or not reset),
-    // a tool turn would poison the NEXT turn into a phantom tool_use → the runner
-    // tries a tool round with zero calls and fails. This guards the reset.
+  test('stream() does NOT leak tool_call events across calls — a tool-less turn after a tool turn emits no calls', async () => {
+    // The adapter emits tool_call events per-stream. A tool turn must not bleed its
+    // tool_call event into a later tool-less turn. (done.reason is the honest 'stop'
+    // for both — the runner decides the tool round from the collected calls.)
     const toolStream = () =>
       new Response(
         jsonl([
@@ -552,22 +554,22 @@ describe('ollama provider', () => {
       baseUrl: 'http://localhost:11434',
     };
 
-    // Turn 1: a tool turn → tool_use.
+    // Turn 1: a tool turn → surfaces the call, honest 'stop' reason.
     global.fetch = mock(async () => toolStream()) as never;
-    const r1: unknown[] = [];
+    const r1: any[] = [];
     for await (const ev of ollama.stream(baseArgs)) r1.push(ev);
-    expect(r1).toContainEqual({ type: 'done', reason: 'tool_use' });
+    expect(r1.filter((e) => e.type === 'tool_call')).toHaveLength(1);
+    expect(r1).toContainEqual({ type: 'done', reason: 'stop' });
 
-    // Turn 2 (fresh call): plain text, NO tool call → must report stop, not a
-    // leaked tool_use from turn 1.
+    // Turn 2 (fresh call): plain text, NO tool call → ZERO tool_call events, 'stop'.
     global.fetch = mock(async () => plainStream()) as never;
-    const r2: unknown[] = [];
+    const r2: any[] = [];
     for await (const ev of ollama.stream(baseArgs)) r2.push(ev);
+    expect(r2.filter((e) => e.type === 'tool_call')).toHaveLength(0);
     expect(r2).toContainEqual({ type: 'done', reason: 'stop' });
-    expect(r2).not.toContainEqual({ type: 'done', reason: 'tool_use' });
   });
 
-  test('stream() surfaces MULTIPLE tool calls in one chunk and reports tool_use', async () => {
+  test('stream() surfaces MULTIPLE tool calls in one chunk (honest done.reason stop)', async () => {
     global.fetch = mock(
       async () =>
         new Response(
@@ -605,14 +607,13 @@ describe('ollama provider', () => {
     }
     const calls = events.filter((e) => e.type === 'tool_call').map((e) => e.name);
     expect(calls).toEqual(['list_workspaces', 'list_projects']);
-    expect(events).toContainEqual({ type: 'done', reason: 'tool_use' });
+    // Honest done.reason — the runner runs the round from the two collected calls.
+    expect(events).toContainEqual({ type: 'done', reason: 'stop' });
   });
 
-  test("stream() still reports tool_use on an EXPLICIT done_reason 'tool_calls' (not shadowed by sawToolCall)", async () => {
-    // The new sawToolCall branch is an `else if` AFTER the explicit label check, so
-    // a well-behaved (non-thinking) model that DOES send done_reason 'tool_calls'
-    // must still map to tool_use via the original path. Guards against the new
-    // branch accidentally shadowing the explicit one.
+  test("stream() maps an EXPLICIT done_reason 'tool_calls' to tool_use", async () => {
+    // A well-behaved (non-thinking) model that DOES send done_reason 'tool_calls'
+    // maps to tool_use via the explicit label path — unchanged by the altitude fix.
     global.fetch = mock(
       async () =>
         new Response(
@@ -682,9 +683,9 @@ describe('ollama provider', () => {
   });
 
   test('stream() handles two CONCURRENT streams without state bleed', async () => {
-    // sawToolCall/stopReason live in a per-call `const state`. Two streams driven
-    // concurrently must each report their own done reason — a tool turn and a
-    // tool-less turn at once must not cross-contaminate.
+    // `stopReason` + the tool_call emission live in a per-call `const state`. Two
+    // streams driven concurrently must not cross-contaminate: the tool turn surfaces
+    // its call, the plain turn surfaces none, both report the honest 'stop'.
     const toolBody = () =>
       new Response(
         jsonl([
@@ -711,10 +712,12 @@ describe('ollama provider', () => {
       return evs;
     };
     const [a, b] = await Promise.all([drain(), drain()]);
-    // First fetch → tool turn → tool_use; second → plain → stop. No bleed.
-    expect(a).toContainEqual({ type: 'done', reason: 'tool_use' });
+    // First fetch → tool turn → surfaces its call; second → plain → no calls.
+    // Both report honest 'stop'. No tool_call bleed between the concurrent streams.
+    expect(a.filter((e) => e.type === 'tool_call')).toHaveLength(1);
+    expect(b.filter((e) => e.type === 'tool_call')).toHaveLength(0);
+    expect(a).toContainEqual({ type: 'done', reason: 'stop' });
     expect(b).toContainEqual({ type: 'done', reason: 'stop' });
-    expect(b).not.toContainEqual({ type: 'done', reason: 'tool_use' });
   });
 
   // B round 6 #3 — `Number.isFinite(Number(x))` regression: ''/null/false/[]
