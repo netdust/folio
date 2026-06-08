@@ -264,30 +264,22 @@ describe('view reorder menu', () => {
     expect(menuLabels(last)).not.toContain('Move down');
   });
 
-  it('Move down on first view swaps with the next view', () => {
+  it("Move down on first view calls onMoveView with the next view's order and 'down'", () => {
     const onMoveView = vi.fn();
     const handlers: RailTreeHandlers = { ...noopHandlers, onMoveView };
     const [first] = viewNodesOf(buildWith(threeViews(), handlers));
     invokeMenu(first, 'Move down');
-    expect(onMoveView).toHaveBeenCalledWith(
-      'sales',
-      'work-items',
-      { id: 'v0', order: 0 },
-      { id: 'v1', order: 10 },
-    );
+    // moved view v0, neighbor = next view's order (10), direction 'down'.
+    expect(onMoveView).toHaveBeenCalledWith('sales', 'work-items', 'v0', 10, 'down');
   });
 
-  it('Move up on last view swaps with the previous view', () => {
+  it("Move up on last view calls onMoveView with the prev view's order and 'up'", () => {
     const onMoveView = vi.fn();
     const handlers: RailTreeHandlers = { ...noopHandlers, onMoveView };
     const last = viewNodesOf(buildWith(threeViews(), handlers))[2];
     invokeMenu(last, 'Move up');
-    expect(onMoveView).toHaveBeenCalledWith(
-      'sales',
-      'work-items',
-      { id: 'v2', order: 20 },
-      { id: 'v1', order: 10 },
-    );
+    // moved view v2, neighbor = prev view's order (10), direction 'up'.
+    expect(onMoveView).toHaveBeenCalledWith('sales', 'work-items', 'v2', 10, 'up');
   });
 
   it('single-view table has neither Move up nor Move down', () => {

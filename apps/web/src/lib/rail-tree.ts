@@ -58,13 +58,16 @@ export interface RailTreeHandlers {
   onRenameProject?: (pslug: string, next: string) => void;
   onDeleteProject?: (pslug: string, name: string) => void;
   onRenameTable?: (pslug: string, tslug: string, next: string) => void;
-  /** Swap two adjacent views' `order` (reorder in the rail). `a`/`b` are {id, order};
-   *  the handler persists both. */
+  /** Reorder a view one slot in the rail. `viewId` is the moved view; `neighborOrder`
+   *  is the `order` of the adjacent view it's moving past (prev for 'up', next for
+   *  'down'). The handler reseats the moved view to one side of the neighbor — a
+   *  single direction-aware write, correct even when the two share an `order`. */
   onMoveView?: (
     pslug: string,
     tslug: string,
-    a: { id: string; order: number },
-    b: { id: string; order: number },
+    viewId: string,
+    neighborOrder: number,
+    direction: 'up' | 'down',
   ) => void;
   onDeleteTable?: (pslug: string, tslug: string, name: string) => void;
   onRenameView?: (pslug: string, tslug: string, viewId: string, next: string) => void;
@@ -196,15 +199,13 @@ function buildViewMenu(
   if (h.onMoveView && prev) {
     items.push({
       label: 'Move up',
-      onSelect: () =>
-        h.onMoveView!(pslug, tslug, { id: view.id, order: view.order }, { id: prev.id, order: prev.order }),
+      onSelect: () => h.onMoveView!(pslug, tslug, view.id, prev.order, 'up'),
     });
   }
   if (h.onMoveView && next) {
     items.push({
       label: 'Move down',
-      onSelect: () =>
-        h.onMoveView!(pslug, tslug, { id: view.id, order: view.order }, { id: next.id, order: next.order }),
+      onSelect: () => h.onMoveView!(pslug, tslug, view.id, next.order, 'down'),
     });
   }
   if (h.onDeleteView) items.push({ label: 'Delete', destructive: true, onSelect: () => h.onDeleteView!(pslug, tslug, view.id, view.name) });

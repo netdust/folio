@@ -252,17 +252,15 @@ function WorkspaceLayout() {
         } catch (err) { toast.error(formatApiError(err)); }
       },
       onDeleteView: (pslug, tslug, viewId, name) => setConfirmDelete({ kind: 'view', pslug, tslug, viewId, name }),
-      onMoveView: async (pslug, _tslug, a, b) => {
+      onMoveView: async (pslug, _tslug, viewId, neighborOrder, direction) => {
         try {
-          if (a.order === b.order) {
-            // Degenerate: equal orders → a value-swap is a no-op. Nudge `a` past `b`
-            // so the move actually takes effect (rare; only from hand-edited/seeded data).
-            await client.patch(`/api/v1/w/${wslug}/p/${pslug}/views/${a.id}`, { order: b.order + 1 });
-          } else {
-            // swap orders: a takes b's order, b takes a's.
-            await client.patch(`/api/v1/w/${wslug}/p/${pslug}/views/${a.id}`, { order: b.order });
-            await client.patch(`/api/v1/w/${wslug}/p/${pslug}/views/${b.id}`, { order: a.order });
-          }
+          // Single direction-aware reseat: move the view to just past its neighbor
+          // (down → neighbor+1, up → neighbor-1). One write, atomic, and correct
+          // even when the two share an `order` — unlike a value-swap, which no-ops
+          // on ties. The rail sorts by `order`, so ±1 always lands the view on the
+          // right side of the neighbor.
+          const target = direction === 'down' ? neighborOrder + 1 : neighborOrder - 1;
+          await client.patch(`/api/v1/w/${wslug}/p/${pslug}/views/${viewId}`, { order: target });
           await qc.invalidateQueries({ queryKey: viewsKeys.list(wslug, pslug) });
         } catch (err) {
           toast.error(formatApiError(err));
