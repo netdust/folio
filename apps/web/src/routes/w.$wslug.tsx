@@ -1,5 +1,5 @@
 import { createFileRoute, Outlet, useNavigate, useParams, useRouterState } from '@tanstack/react-router';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQueries, useQueryClient } from '@tanstack/react-query';
 import { Search } from 'lucide-react';
 import { z } from 'zod';
@@ -26,6 +26,7 @@ import { ProviderHealthBanner } from '../components/shell/provider-health-banner
 import { ReactorHaltBanner } from '../components/shell/reactor-halt-banner.tsx';
 import { modKeyHint } from '../lib/platform.ts';
 import { buildRailTree, type RailTreeHandlers } from '../lib/rail-tree.ts';
+import { reorderViewIds, spacedOrders } from '../lib/view-reorder.ts';
 import { setLastWorkspaceSlug } from '../lib/last-workspace.ts';
 import { agentPanelBus } from '../lib/agent-panel-bus.ts';
 import { AgentCockpitPanel } from '../components/agent-panel/agent-cockpit-panel.tsx';
@@ -266,6 +267,24 @@ function WorkspaceLayout() {
           toast.error(formatApiError(err));
         }
       },
+      onReorderViews: async (pslug, _tslug, orderedViewIds) => {
+        try {
+          // Reassign gap-spaced (0,10,20,…) orders by the new position and PATCH
+          // every view. Re-setting a view to the order it already has is a harmless
+          // no-op write, so we don't need the current orders here — which keeps this
+          // handler (and the whole rail tree) free of a viewsByTable dependency.
+          // The new ordered ids come from the `onReorder` callback near <Rail>,
+          // which DOES have the live ordering.
+          await Promise.all(
+            spacedOrders(orderedViewIds).map((n) =>
+              client.patch(`/api/v1/w/${wslug}/p/${pslug}/views/${n.id}`, { order: n.order }),
+            ),
+          );
+          await qc.invalidateQueries({ queryKey: viewsKeys.list(wslug, pslug) });
+        } catch (err) {
+          toast.error(formatApiError(err));
+        }
+      },
     }),
     [navigate, wslug, qc, updateProject],
   );
@@ -285,6 +304,38 @@ function WorkspaceLayout() {
         handlers,
       }),
     [projectList, tablesByProject, viewsByTable, wslug, activePslug, activeViewId, currentPath, handlers],
+  );
+
+  // Reverse lookup: a rail sortable group is a TABLE ID (see rail-tree.ts
+  // `sortableGroup: table.id`). Resolve it back to (pslug, tslug) so the
+  // drag-reorder can hit the per-project views PATCH route.
+  const tableIndex = useMemo(() => {
+    const idx = new Map<string, { pslug: string; tslug: string }>();
+    for (const p of projectList) {
+      for (const t of tablesByProject[p.slug] ?? []) idx.set(t.id, { pslug: p.slug, tslug: t.slug });
+    }
+    return idx;
+  }, [projectList, tablesByProject]);
+
+  const onReorder = useCallback(
+    (group: string, activeId: string, overId: string) => {
+      const loc = tableIndex.get(group);
+      if (!loc) return;
+      // active/over ids are the rail NavItem ids: `view:${tableId}:${viewId}`.
+      // Strip the `view:<tableId>:` prefix to recover the raw view id (slice(2)
+      // + join handles a view id that itself contains ':').
+      const toViewId = (navId: string) => navId.split(':').slice(2).join(':');
+      // Match the rail's DISPLAY order (rail-tree.ts sorts by `order`, then default
+      // first on ties) so reorderViewIds computes against the same baseline the user
+      // dragged within — the raw API order can differ.
+      const currentIds = [...(viewsByTable[group] ?? [])]
+        .sort((a, b) => (a.order !== b.order ? a.order - b.order : Number(b.isDefault) - Number(a.isDefault)))
+        .map((v) => v.id);
+      const newIds = reorderViewIds(currentIds, toViewId(activeId), toViewId(overId));
+      if (newIds === currentIds) return; // reorderViewIds returns same ref on no-op
+      handlers.onReorderViews?.(loc.pslug, loc.tslug, newIds);
+    },
+    [tableIndex, viewsByTable, handlers],
   );
 
   const switcherEntries = useMemo(
@@ -385,6 +436,7 @@ function WorkspaceLayout() {
               ),
             }}
             primary={primary}
+            onReorder={onReorder}
             tools={TOOLS}
             user={{
               name: userName,

@@ -1,9 +1,21 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { ChevronRight, MoreHorizontal, Plus } from 'lucide-react';
+import {
+  DndContext,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core';
+import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import { Icon } from '../ui/icon.tsx';
 import { cn } from '../ui/cn.ts';
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
 import type { NavItem, RowMenuItem } from './rail.tsx';
+
+type ReorderFn = (group: string, activeId: string, overId: string) => void;
 
 function useExpanded(id: string, defaultOpen = false): [boolean, (v: boolean) => void] {
   const key = `folio:rail-expanded:${id}`;
@@ -18,17 +30,59 @@ function useExpanded(id: string, defaultOpen = false): [boolean, (v: boolean) =>
   return [open, setOpen];
 }
 
-export function RailTree({ items, depth = 0 }: { items: NavItem[]; depth?: number }) {
-  return (
+export function RailTree({
+  items,
+  depth = 0,
+  onReorder,
+}: {
+  items: NavItem[];
+  depth?: number;
+  onReorder?: ReorderFn;
+}) {
+  // Only draggable siblings (views) participate in a SortableContext; everything
+  // else (projects/tables/wiki) renders as today.
+  const draggableIds = items.filter((i) => i.draggable).map((i) => i.id);
+
+  let list = (
     <ul className="flex flex-col gap-0.5">
       {items.map((item) => (
-        <RailTreeNode key={item.id} item={item} depth={depth} />
+        <RailTreeNode key={item.id} item={item} depth={depth} onReorder={onReorder} />
       ))}
     </ul>
   );
+
+  if (draggableIds.length > 0) {
+    list = (
+      <SortableContext items={draggableIds} strategy={verticalListSortingStrategy}>
+        {list}
+      </SortableContext>
+    );
+  }
+
+  // Only the root instance owns the DndContext; recursive child RailTree calls
+  // pass onReorder down but must NOT each create their own context.
+  if (depth === 0) {
+    return <RailDndRoot onReorder={onReorder}>{list}</RailDndRoot>;
+  }
+  return list;
 }
 
-function RailTreeNode({ item, depth }: { item: NavItem; depth: number }) {
+function RailDndRoot({ children, onReorder }: { children: React.ReactNode; onReorder?: ReorderFn }) {
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
+  const onDragEnd = (e: DragEndEvent) => {
+    const active = String(e.active.id);
+    const over = e.over ? String(e.over.id) : null;
+    const group = (e.active.data.current as { sortableGroup?: string } | undefined)?.sortableGroup;
+    if (over && group && active !== over) onReorder?.(group, active, over);
+  };
+  return (
+    <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
+      {children}
+    </DndContext>
+  );
+}
+
+function RailTreeNode({ item, depth, onReorder }: { item: NavItem; depth: number; onReorder?: ReorderFn }) {
   const hasChildren = !!item.children && item.children.length > 0;
   // V3 (views UX shake-out): default-open projects (depth 0) AND table nodes, so a
   // table's saved VIEWS are visible by default. Previously only depth-0 auto-opened,
@@ -38,6 +92,25 @@ function RailTreeNode({ item, depth }: { item: NavItem; depth: number }) {
   const defaultOpen = depth === 0 || item.id.startsWith('table:');
   const [expanded, setExpanded] = useExpanded(item.id, defaultOpen);
   const [renaming, setRenaming] = useState(false);
+
+  // Hook order must stay stable: always call useSortable, but disable it for
+  // non-draggable nodes (projects/tables/wiki). Only view rows opt in.
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: item.id,
+    disabled: !item.draggable,
+    data: { sortableGroup: item.sortableGroup },
+  });
+  // Drag props apply to the row only when this node is draggable — the 5px
+  // activation constraint keeps a click (onLabelClick) working. Non-draggable
+  // nodes get NO ref/listeners/style so they render exactly as before.
+  const dragProps = item.draggable
+    ? {
+        ref: setNodeRef,
+        style: { transform: CSS.Transform.toString(transform), transition },
+        ...attributes,
+        ...listeners,
+      }
+    : {};
 
   // Label click only navigates. Toggling children is the chevron's job —
   // mixing the two made "collapse without navigating" impossible.
@@ -50,7 +123,7 @@ function RailTreeNode({ item, depth }: { item: NavItem; depth: number }) {
   };
 
   return (
-    <li>
+    <li {...dragProps} className={cn(item.draggable && isDragging && 'opacity-50')}>
       <div
         className={cn(
           'group/row flex items-center gap-1.5 rounded-md px-2 py-1 text-xs transition-colors duration-fast',
@@ -138,7 +211,7 @@ function RailTreeNode({ item, depth }: { item: NavItem; depth: number }) {
         })()}
       </div>
 
-      {hasChildren && expanded ? <RailTree items={item.children ?? []} depth={depth + 1} /> : null}
+      {hasChildren && expanded ? <RailTree items={item.children ?? []} depth={depth + 1} onReorder={onReorder} /> : null}
     </li>
   );
 }

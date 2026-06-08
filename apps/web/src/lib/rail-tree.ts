@@ -69,6 +69,9 @@ export interface RailTreeHandlers {
     neighborOrder: number,
     direction: 'up' | 'down',
   ) => void;
+  /** Persist a drag-reorder: `orderedViewIds` is the table's full view list in its
+   *  NEW order. The handler reassigns spaced orders + PATCHes the changed views. */
+  onReorderViews?: (pslug: string, tslug: string, orderedViewIds: string[]) => void;
   onDeleteTable?: (pslug: string, tslug: string, name: string) => void;
   onRenameView?: (pslug: string, tslug: string, viewId: string, next: string) => void;
   onDeleteView?: (pslug: string, tslug: string, viewId: string, name: string) => void;
@@ -105,6 +108,8 @@ export function buildRailTree(input: RailTreeInput): NavItem[] {
         onRename: handlers.onRenameView
           ? (next) => handlers.onRenameView!(project.slug, table.slug, view.id, next)
           : undefined,
+        draggable: handlers.onReorderViews ? true : undefined,
+        sortableGroup: handlers.onReorderViews ? table.id : undefined,
         menuItems: buildViewMenu(handlers, project.slug, table.slug, view, arr[idx - 1], arr[idx + 1]),
       }));
 

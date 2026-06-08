@@ -300,3 +300,50 @@ describe('view reorder menu', () => {
     expect(menuLabels(middle)).toContain('Delete');
   });
 });
+
+describe('view drag fields', () => {
+  const viewNodesOf = (tree: ReturnType<typeof buildRailTree>) =>
+    tree[0].children![0].children!;
+
+  const twoViews = () => [
+    { id: 'v0', name: 'First',  type: 'list' as const, isDefault: false, order: 0 },
+    { id: 'v1', name: 'Second', type: 'list' as const, isDefault: false, order: 10 },
+  ];
+
+  const buildWith = (handlers: RailTreeHandlers) =>
+    buildRailTree({
+      projects: [{ slug: 'sales', name: 'Acme Sales' }],
+      tablesByProject: { sales: [{ id: 't1', slug: 'work-items', name: 'Work Items' }] },
+      viewsByTable: { t1: twoViews() },
+      currentRoute: { wslug: 'acme' },
+      handlers,
+    });
+
+  it('view nodes are draggable and grouped by their owning table id when onReorderViews is set', () => {
+    const handlers: RailTreeHandlers = { ...noopHandlers, onReorderViews: vi.fn() };
+    const views = viewNodesOf(buildWith(handlers));
+    expect(views).toHaveLength(2);
+    for (const view of views) {
+      expect(view.draggable).toBe(true);
+      expect(view.sortableGroup).toBe('t1');
+    }
+  });
+
+  it('view nodes are not draggable when onReorderViews is absent (graceful degrade)', () => {
+    const handlers: RailTreeHandlers = { ...noopHandlers };
+    const views = viewNodesOf(buildWith(handlers));
+    for (const view of views) {
+      expect(view.draggable).toBeFalsy();
+      expect(view.sortableGroup).toBeUndefined();
+    }
+  });
+
+  it('project and table nodes are never draggable', () => {
+    const handlers: RailTreeHandlers = { ...noopHandlers, onReorderViews: vi.fn() };
+    const tree = buildWith(handlers);
+    const projectNode = tree[0];
+    const tableNode = projectNode.children![0];
+    expect(projectNode.draggable).not.toBe(true);
+    expect(tableNode.draggable).not.toBe(true);
+  });
+});
