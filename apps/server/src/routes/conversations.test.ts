@@ -318,6 +318,96 @@ describe('POST .../messages/:messageId/click — choice-card button (M7/M8)', ()
   });
 });
 
+describe('GET /conversations/recent — most-recent id for auto-resume', () => {
+  test('returns the session user most-recent conversation id (newer wins)', async () => {
+    const { app, db, seed } = await setup();
+    const older = await app.request('/api/v1/conversations', {
+      method: 'POST',
+      headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'older' }),
+    });
+    const { data: a } = await older.json();
+    const newer = await app.request('/api/v1/conversations', {
+      method: 'POST',
+      headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'newer' }),
+    });
+    const { data: b } = await newer.json();
+
+    // Force a deterministic ordering — the two creates can land in the same ms.
+    await db
+      .update(schema.conversations)
+      .set({ updatedAt: new Date(1000) })
+      .where(eq(schema.conversations.id, a.id));
+    await db
+      .update(schema.conversations)
+      .set({ updatedAt: new Date(2000) })
+      .where(eq(schema.conversations.id, b.id));
+
+    const res = await app.request('/api/v1/conversations/recent', {
+      headers: { Cookie: seed.sessionCookie },
+    });
+    expect(res.status).toBe(200);
+    const { data } = await res.json();
+    expect(data.id).toBe(b.id);
+  });
+
+  test('M11: does NOT return another user newer conversation (owner-scoped)', async () => {
+    const { app, db, seed } = await setup();
+    // User A creates one (older).
+    const aCreate = await app.request('/api/v1/conversations', {
+      method: 'POST',
+      headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'A own' }),
+    });
+    const { data: aConv } = await aCreate.json();
+
+    // User B creates one that is GLOBALLY newer.
+    const b = await seedRoleSession(db, 'member');
+    const bCreate = await app.request('/api/v1/conversations', {
+      method: 'POST',
+      headers: { Cookie: b.cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'B own' }),
+    });
+    const { data: bConv } = await bCreate.json();
+
+    await db
+      .update(schema.conversations)
+      .set({ updatedAt: new Date(1000) })
+      .where(eq(schema.conversations.id, aConv.id));
+    await db
+      .update(schema.conversations)
+      .set({ updatedAt: new Date(9999) })
+      .where(eq(schema.conversations.id, bConv.id));
+
+    // A's /recent returns A's OWN conversation, never B's globally-newer one.
+    const res = await app.request('/api/v1/conversations/recent', {
+      headers: { Cookie: seed.sessionCookie },
+    });
+    expect(res.status).toBe(200);
+    const { data } = await res.json();
+    expect(data.id).toBe(aConv.id);
+    expect(data.id).not.toBe(bConv.id);
+  });
+
+  test('returns { id: null } when the user has no conversation', async () => {
+    const { app, db } = await setup();
+    const fresh = await seedRoleSession(db, 'member');
+    const res = await app.request('/api/v1/conversations/recent', {
+      headers: { Cookie: fresh.cookie },
+    });
+    expect(res.status).toBe(200);
+    const { data } = await res.json();
+    expect(data.id).toBe(null);
+  });
+
+  test('session-only — no cookie → 401', async () => {
+    const { app } = await setup();
+    const res = await app.request('/api/v1/conversations/recent');
+    expect(res.status).toBe(401);
+  });
+});
+
 describe('M11 — owner-scoped reads (foreign user → 404)', () => {
   test('user B cannot GET user A conversation', async () => {
     const { app, seed, db } = await setup();

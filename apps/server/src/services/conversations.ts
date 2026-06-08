@@ -14,7 +14,7 @@
  * allocator is correct within that model.
  */
 
-import { and, eq, max } from 'drizzle-orm';
+import { and, desc, eq, max } from 'drizzle-orm';
 import { parseMessagePayload } from '@folio/shared';
 import type { DB } from '../db/client.ts';
 import { conversations, messages, type Message } from '../db/schema.ts';
@@ -73,6 +73,26 @@ export async function appendMessage(
       .where(eq(conversations.id, input.conversationId));
     return row;
   });
+}
+
+/**
+ * The session user's most-recent conversation id, or null if they have none.
+ * Owner-scoped (M11): the `created_by = userId` predicate is the SAME
+ * owner-scoping decision `loadOwnedConversation` makes — this is a SECOND M11
+ * site (it FINDS the newest id rather than loading one BY id). Served by the
+ * existing `conversations_user_idx (created_by, updated_at)` index. Used by
+ * `GET /conversations/recent` for cockpit auto-resume.
+ */
+export async function getMostRecentConversationId(
+  db: DB,
+  userId: string,
+): Promise<string | null> {
+  const row = await db.query.conversations.findFirst({
+    where: eq(conversations.createdBy, userId),
+    orderBy: desc(conversations.updatedAt),
+    columns: { id: true },
+  });
+  return row?.id ?? null;
 }
 
 export async function getThread(db: DB, conversationId: string): Promise<Message[]> {

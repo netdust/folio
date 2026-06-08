@@ -37,6 +37,7 @@ import {
   appendMessage,
   createConversation,
   getMessage,
+  getMostRecentConversationId,
   getThreadSerialized,
   parsePayload,
   serializeMessage,
@@ -318,6 +319,19 @@ conversationsRoute.get('/:id/stream', async (c) => {
       (row) => ({ id: row.id, event: 'message', data: JSON.stringify(row) }),
     ),
   );
+});
+
+// GET /conversations/recent — the session user's most-recent conversation id
+// (or null), for cockpit auto-resume on reload. Owner-scoped via
+// getMostRecentConversationId's `created_by` predicate (M11, threat-model mit 1);
+// session-only via the route-wide requireSessionUser (invariant 4, mit 2). The
+// response is the CALLER's own id or null — never another user's, so null is not
+// an existence oracle (mit 3). Registered BEFORE GET /:id so the :id param does
+// not match the literal `recent` segment.
+conversationsRoute.get('/recent', async (c) => {
+  const user = getUser(c);
+  const id = await getMostRecentConversationId(db, user.id);
+  return jsonOk(c, { id });
 });
 
 // GET /conversations/:id  AND  GET /conversations/:id.md
