@@ -40,7 +40,14 @@ export interface ConversationThread {
 export const conversationsKeys = {
   all: ['conversations'] as const,
   detail: (id: string) => [...conversationsKeys.all, id] as const,
-  recent: () => [...conversationsKeys.all, 'recent'] as const,
+  // The cockpit auto-resume SEED id — a distinct concern from conversation
+  // DATA, so it lives under its OWN root key, NOT under `all`. This keeps it
+  // OUT of `useCreateConversation`'s `invalidateQueries({ queryKey: all })`
+  // prefix match: creating the first conversation must NOT refetch the seed and
+  // flip recentId mid-turn (which would remount CockpitChat and lose in-flight
+  // optimistic state). The seed is fetched once per session (staleTime:Infinity)
+  // and intentionally never invalidated.
+  recent: () => ['conversation-recent'] as const,
 };
 
 /**

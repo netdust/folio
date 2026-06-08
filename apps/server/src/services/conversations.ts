@@ -89,7 +89,11 @@ export async function getMostRecentConversationId(
 ): Promise<string | null> {
   const row = await db.query.conversations.findFirst({
     where: eq(conversations.createdBy, userId),
-    orderBy: desc(conversations.updatedAt),
+    // Secondary tiebreak so two same-millisecond `updatedAt` rows resolve
+    // deterministically (resume must not pick arbitrarily). If `createdAt` also
+    // ties, that's two conversations created AND updated in the same ms —
+    // acceptable residual.
+    orderBy: [desc(conversations.updatedAt), desc(conversations.createdAt)],
     columns: { id: true },
   });
   return row?.id ?? null;

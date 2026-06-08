@@ -326,8 +326,10 @@ conversationsRoute.get('/:id/stream', async (c) => {
 // getMostRecentConversationId's `created_by` predicate (M11, threat-model mit 1);
 // session-only via the route-wide requireSessionUser (invariant 4, mit 2). The
 // response is the CALLER's own id or null — never another user's, so null is not
-// an existence oracle (mit 3). Registered BEFORE GET /:id so the :id param does
-// not match the literal `recent` segment.
+// an existence oracle (mit 3). Hono's RegExpRouter matches the STATIC `/recent`
+// segment with priority over the `/:id` param route (static-segment precedence —
+// independent of registration order), so `:id` never captures the literal
+// `recent`. Kept physically before `/:id` anyway (conventional, harmless).
 conversationsRoute.get('/recent', async (c) => {
   const user = getUser(c);
   const id = await getMostRecentConversationId(db, user.id);
