@@ -2,7 +2,11 @@ import { coerceTokenCount } from './coerce-token-count.ts';
 import type { AIProvider, ProviderEvent } from './provider.ts';
 import { sanitizeProviderError } from './sanitize-error.ts';
 
-const DEFAULT_BASE = 'http://localhost:11434';
+// 127.0.0.1, NOT localhost: Ollama binds to IPv4 127.0.0.1, but `localhost` can
+// resolve to ::1 (IPv6) first, and Bun's fetch does not reliably fall back from
+// ::1 → 127.0.0.1 — a `localhost` default throws a statusless "Unable to connect"
+// that sanitizes to the opaque "Network error or unreachable host." Pin v4.
+const DEFAULT_BASE = 'http://127.0.0.1:11434';
 
 type OllamaToolCall = {
   function: { name: string; arguments: Record<string, unknown> };
@@ -17,6 +21,10 @@ type ParserState = {
   tokensIn: number;
   tokensOut: number;
   stopReason: 'stop' | 'tool_use' | 'max_tokens';
+  // Whether ANY tool call streamed this turn. Thinking models (qwen3) emit a
+  // tool_calls chunk but finish with done_reason: 'stop' (not 'tool_calls'),
+  // so the done_reason label alone can't decide tool_use — track it directly.
+  sawToolCall: boolean;
 };
 
 /**
@@ -38,6 +46,7 @@ function* handleOllamaChunk(
   if (msg?.content) yield { type: 'text', delta: msg.content };
   if (msg?.tool_calls) {
     for (const tc of msg.tool_calls) {
+      state.sawToolCall = true;
       yield {
         type: 'tool_call',
         id: crypto.randomUUID(),
@@ -75,6 +84,12 @@ function* handleOllamaChunk(
     const reason = chunk.done_reason as string | undefined;
     if (reason === 'length') state.stopReason = 'max_tokens';
     else if (reason === 'tool_calls') state.stopReason = 'tool_use';
+    // qwen3 + other thinking models stream a tool_calls chunk but finish with
+    // done_reason: 'stop'. If a tool call actually streamed, the turn IS a
+    // tool-use turn — the runner gates execution on reason==='tool_use', so
+    // without this the tool round is skipped and the run yields "(no output)".
+    // 'length' (truncation) wins: a tool call cut off mid-stream isn't usable.
+    else if (state.sawToolCall) state.stopReason = 'tool_use';
   }
 }
 
@@ -107,14 +122,37 @@ export const ollama: AIProvider = {
     const body = {
       model,
       stream: true,
+      // Disable "thinking" for reasoning models (qwen3, deepseek-r1, …). On a
+      // local GPU the <think> preamble dominates latency — qwen3:8b spent ~3.4s
+      // reasoning before a one-line reply to "hi" (4.2s total → 0.8s with this
+      // off), and it still emits tool calls correctly. The operator should ACT
+      // (call tools), not ruminate, so the reasoning trace is pure tax here.
+      // Ollama ignores this field for non-thinking models, so it's safe globally.
+      think: false,
       options: { num_predict: maxTokens },
       messages: [
         { role: 'system', content: system },
-        ...messages.map((m) =>
-          m.role === 'tool'
-            ? { role: 'tool', content: m.content, tool_call_id: m.tool_use_id }
-            : { role: m.role, content: m.content },
-        ),
+        ...messages.map((m) => {
+          if (m.role === 'tool') {
+            return { role: 'tool', content: m.content, tool_call_id: m.tool_use_id };
+          }
+          // An assistant turn that called tools must echo those tool_calls back, or
+          // the follow-up `tool` result messages have nothing to correlate to and
+          // Ollama drops the round (the OpenAI adapter already does this). Ollama
+          // takes `arguments` as an OBJECT (unlike OpenAI's stringified form).
+          if (m.role === 'assistant' && m.tool_calls?.length) {
+            return {
+              role: 'assistant',
+              content: m.content,
+              tool_calls: m.tool_calls.map((tc) => ({
+                id: tc.id,
+                type: 'function' as const,
+                function: { name: tc.name, arguments: tc.arguments },
+              })),
+            };
+          }
+          return { role: m.role, content: m.content };
+        }),
       ],
       tools: tools.length
         ? tools.map((t) => ({
@@ -146,7 +184,12 @@ export const ollama: AIProvider = {
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
-    const state: ParserState = { tokensIn: 0, tokensOut: 0, stopReason: 'stop' };
+    const state: ParserState = {
+      tokensIn: 0,
+      tokensOut: 0,
+      stopReason: 'stop',
+      sawToolCall: false,
+    };
 
     // Round 7 #8 — try/finally ensures the reader is cancelled + released
     // when the consumer breaks out of the for-await early (timeout, runner

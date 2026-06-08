@@ -86,6 +86,13 @@ export async function* streamOpenAICompatible({
   let tokensIn = 0;
   let tokensOut = 0;
   let stopReason: 'stop' | 'tool_use' | 'max_tokens' | 'refusal' | 'pause_turn' = 'stop';
+  // Whether ANY tool call streamed this turn. Thinking models served via the
+  // OpenAI-compatible API (qwen3 / deepseek-r1 over OpenRouter) stream tool_calls
+  // but finish with finish_reason: 'stop' (not 'tool_calls') — the same divergence
+  // the Ollama adapter handles. Without this, the runner (which gates execution on
+  // reason==='tool_use') skips the tool round and the run yields "(no output)",
+  // even though the tool_call events below were already emitted.
+  let sawToolCall = false;
   // OpenAI streams tool_calls with `id` ONLY on the first delta per call;
   // continuation deltas carry only `index` + arg fragments. Key by `index`
   // (always present) and track id/name as separate fields set on first sight.
@@ -106,6 +113,13 @@ export async function* streamOpenAICompatible({
         const delta = choices[0].delta as
           | {
               content?: string;
+              // OpenRouter (and some OpenAI-compatible proxies) stream reasoning
+              // tokens under `reasoning` / `reasoning_content`. A thinking model
+              // can put its entire visible turn there and leave `content` empty —
+              // without this the operator's message is blank. Surface it as text so
+              // a reasoning-only turn isn't a silent empty response.
+              reasoning?: string;
+              reasoning_content?: string;
               tool_calls?: Array<{
                 index: number;
                 id?: string;
@@ -118,6 +132,9 @@ export async function* streamOpenAICompatible({
             }
           | undefined;
         if (delta?.content) yield { type: 'text', delta: delta.content } as ProviderEvent;
+        else if (delta?.reasoning) yield { type: 'text', delta: delta.reasoning } as ProviderEvent;
+        else if (delta?.reasoning_content)
+          yield { type: 'text', delta: delta.reasoning_content } as ProviderEvent;
         if (delta?.tool_calls) {
           for (const tc of delta.tool_calls) {
             const entry =
@@ -126,12 +143,17 @@ export async function* streamOpenAICompatible({
             if (tc.id) entry.id = tc.id;
             if (tc.function?.name) entry.name = tc.function.name;
             entry.argsBuf += tc.function?.arguments ?? '';
+            sawToolCall = true;
           }
         }
         const finish = choices[0].finish_reason as string | undefined;
         if (finish === 'tool_calls') stopReason = 'tool_use';
         else if (finish === 'length') stopReason = 'max_tokens';
         else if (finish === 'content_filter') stopReason = 'refusal';
+        // Thinking-model fallback: a tool call streamed but the model finished with
+        // 'stop' (not 'tool_calls'). Treat it as a tool-use turn. AFTER the 'length'
+        // check so a truncated (unusable) tool call still reports max_tokens.
+        else if (finish === 'stop' && sawToolCall) stopReason = 'tool_use';
       }
       const usage = chunk.usage as
         | { prompt_tokens?: unknown; completion_tokens?: unknown }

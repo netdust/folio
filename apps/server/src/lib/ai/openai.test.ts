@@ -452,4 +452,199 @@ describe('openai provider', () => {
     expect(events).toContainEqual({ type: 'tokens', tokens_in: 2, tokens_out: 1 });
     expect(events.some((e) => (e as { type: string }).type === 'done')).toBe(true);
   });
+
+  // --- Thinking-model hardening: the SAME class of bug fixed in the Ollama
+  // adapter. OpenRouter serves qwen3 / deepseek-r1 over this OpenAI-compatible
+  // path; those models emit tool calls with finish_reason 'stop' and stream
+  // their visible turn under `reasoning`. ---
+
+  test("stream() reports tool_use when a tool_call streamed but finish_reason is 'stop'", async () => {
+    mockCreate.mockImplementationOnce((async (_opts: { stream?: boolean }) => {
+      return (async function* () {
+        // tool_call arrives across deltas (id first, then args)...
+        yield { choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_1', function: { name: 'list_workspaces', arguments: '' } }] } }] };
+        yield { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '{}' } }] } }] };
+        // ...but the model finishes with 'stop' (the thinking-model quirk), NOT 'tool_calls'.
+        yield {
+          choices: [{ delta: {}, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+        };
+      })();
+    }) as never);
+    const events: unknown[] = [];
+    for await (const ev of openai.stream({
+      system: 'sys',
+      messages: [{ role: 'user', content: 'list' }],
+      tools: [{ name: 'list_workspaces', description: 'List.', input_schema: { type: 'object', properties: {} } }],
+      maxTokens: 100,
+      apiKey: 'sk-test',
+      model: 'qwen/qwen3-8b',
+    })) {
+      events.push(ev);
+    }
+    expect(events).toContainEqual({ type: 'tool_call', id: 'call_1', name: 'list_workspaces', arguments: {} });
+    expect(events).toContainEqual({ type: 'done', reason: 'tool_use' });
+  });
+
+  test("stream() prefers max_tokens over tool_use when a tool call is truncated ('length')", async () => {
+    mockCreate.mockImplementationOnce((async (_opts: { stream?: boolean }) => {
+      return (async function* () {
+        yield { choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_1', function: { name: 'f', arguments: '{"a":' } }] } }] };
+        yield {
+          choices: [{ delta: {}, finish_reason: 'length' }],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        };
+      })();
+    }) as never);
+    const events: unknown[] = [];
+    for await (const ev of openai.stream({
+      system: 'sys',
+      messages: [{ role: 'user', content: 'x' }],
+      tools: [{ name: 'f', description: 'f', input_schema: { type: 'object', properties: {} } }],
+      maxTokens: 1,
+      apiKey: 'sk-test',
+      model: 'qwen/qwen3-8b',
+    })) {
+      events.push(ev);
+    }
+    expect(events).toContainEqual({ type: 'done', reason: 'max_tokens' });
+    expect(events).not.toContainEqual({ type: 'done', reason: 'tool_use' });
+  });
+
+  test('stream() surfaces reasoning tokens as text when content is empty (reasoning-only turn)', async () => {
+    mockCreate.mockImplementationOnce((async (_opts: { stream?: boolean }) => {
+      return (async function* () {
+        // A reasoning model streams its visible turn under `reasoning`, content empty.
+        yield { choices: [{ delta: { reasoning: 'The answer is ' } }] };
+        yield { choices: [{ delta: { reasoning: '42.' } }] };
+        yield {
+          choices: [{ delta: {}, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 3, completion_tokens: 4, total_tokens: 7 },
+        };
+      })();
+    }) as never);
+    const events: unknown[] = [];
+    for await (const ev of openai.stream({
+      system: 'sys',
+      messages: [{ role: 'user', content: 'q' }],
+      tools: [],
+      maxTokens: 100,
+      apiKey: 'sk-test',
+      model: 'deepseek/deepseek-r1',
+    })) {
+      events.push(ev);
+    }
+    // Without the reasoning fallback this turn would yield ZERO text events → blank reply.
+    expect(events).toContainEqual({ type: 'text', delta: 'The answer is ' });
+    expect(events).toContainEqual({ type: 'text', delta: '42.' });
+  });
+
+  test('stream() prefers content over reasoning when BOTH are present in one delta (no double-emit)', async () => {
+    // Defensive: a delta carrying both content and reasoning must emit ONLY the
+    // content (the visible answer) — not both, which would duplicate the turn's
+    // text. Guards the `else if` ordering of content → reasoning → reasoning_content.
+    mockCreate.mockImplementationOnce((async (_opts: { stream?: boolean }) => {
+      return (async function* () {
+        yield { choices: [{ delta: { content: 'real answer', reasoning: 'scratch work' } }] };
+        yield {
+          choices: [{ delta: {}, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        };
+      })();
+    }) as never);
+    const events: unknown[] = [];
+    for await (const ev of openai.stream({
+      system: 'sys',
+      messages: [{ role: 'user', content: 'q' }],
+      tools: [],
+      maxTokens: 100,
+      apiKey: 'sk-test',
+      model: 'deepseek/deepseek-r1',
+    })) {
+      events.push(ev);
+    }
+    const texts = events.filter((e) => (e as { type: string }).type === 'text');
+    expect(texts).toEqual([{ type: 'text', delta: 'real answer' }]);
+    expect(texts).not.toContainEqual({ type: 'text', delta: 'scratch work' });
+  });
+
+  test('stream() handles two CONCURRENT streams without state bleed (separate tool_use vs stop)', async () => {
+    // The streamer keeps per-call state (stopReason, sawToolCall, toolCallsByIndex).
+    // Two streams driven concurrently must not cross-contaminate: a tool turn and a
+    // tool-less turn running at once must each report their OWN done reason.
+    const toolGen = async function* () {
+      yield { choices: [{ delta: { tool_calls: [{ index: 0, id: 'c1', function: { name: 'f', arguments: '{}' } }] } }] };
+      yield { choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1 } };
+    };
+    const plainGen = async function* () {
+      yield { choices: [{ delta: { content: 'hi' } }] };
+      yield { choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1 } };
+    };
+    let call = 0;
+    mockCreate.mockImplementation((async (_opts: { stream?: boolean }) => {
+      call += 1;
+      return call === 1 ? toolGen() : plainGen();
+    }) as never);
+
+    const drain = async (model: string) => {
+      const evs: any[] = [];
+      for await (const ev of openai.stream({
+        system: 'sys', messages: [{ role: 'user', content: 'x' }],
+        tools: [{ name: 'f', description: 'f', input_schema: { type: 'object', properties: {} } }],
+        maxTokens: 100, apiKey: 'sk', model,
+      })) evs.push(ev);
+      return evs;
+    };
+
+    // Run both at once (interleaved by the event loop).
+    const [a, b] = await Promise.all([drain('qwen/qwen3-8b'), drain('gpt-4o-mini')]);
+    // The tool stream (first create call) → tool_use; the plain stream → stop.
+    expect(a).toContainEqual({ type: 'done', reason: 'tool_use' });
+    expect(a).toContainEqual({ type: 'tool_call', id: 'c1', name: 'f', arguments: {} });
+    expect(b).toContainEqual({ type: 'done', reason: 'stop' });
+    expect(b).not.toContainEqual({ type: 'done', reason: 'tool_use' });
+    expect(b.filter((e) => e.type === 'tool_call')).toHaveLength(0);
+    mockCreate.mockImplementation((async (opts: { stream?: boolean }) => {
+      if (opts.stream) return defaultStream();
+      return { id: 'cmpl_x' };
+    }) as never);
+  });
+
+  // --- Wire-mock-leak hardening: the request body (assistant tool_calls echo +
+  // tool mapping) was never asserted — only parsed responses were. ---
+
+  test('stream() echoes assistant tool_calls into the request so a follow-up tool result correlates', async () => {
+    mockCreate.mockClear();
+    const events: unknown[] = [];
+    for await (const ev of openai.stream({
+      system: 'sys',
+      messages: [
+        { role: 'user', content: 'list' },
+        { role: 'assistant', content: '', tool_calls: [{ id: 'call_1', name: 'list_workspaces', arguments: { q: 'x' } }] },
+        { role: 'tool', content: '{"ok":true}', tool_use_id: 'call_1' },
+      ],
+      tools: [{ name: 'list_workspaces', description: 'List.', input_schema: { type: 'object', properties: {} } }],
+      maxTokens: 100,
+      apiKey: 'sk-test',
+      model: 'gpt-4o-mini',
+    })) {
+      events.push(ev);
+    }
+    // Inspect what was SENT, not just what came back.
+    const sent = mockCreate.mock.calls[0]![0] as {
+      messages: Array<{ role: string; content: unknown; tool_calls?: any[]; tool_call_id?: string }>;
+      tools?: Array<{ function: { name: string; parameters: unknown } }>;
+    };
+    const assistant = sent.messages.find((m) => m.role === 'assistant' && m.tool_calls);
+    expect(assistant).toBeDefined();
+    expect(assistant!.tool_calls![0].id).toBe('call_1');
+    expect(assistant!.tool_calls![0].function.name).toBe('list_workspaces');
+    // OpenAI takes arguments as a JSON STRING (the inverse of Ollama's object).
+    expect(assistant!.tool_calls![0].function.arguments).toBe(JSON.stringify({ q: 'x' }));
+    // Tool result carries the correlation id.
+    const tool = sent.messages.find((m) => m.role === 'tool');
+    expect(tool!.tool_call_id).toBe('call_1');
+    // Tools map input_schema → function.parameters.
+    expect(sent.tools![0]!.function.name).toBe('list_workspaces');
+  });
 });
