@@ -1236,8 +1236,51 @@ describe('runAgent stream loop', () => {
       expect(handlerRan).toBe(false);
       const fm = await readRun(db, run.id);
       expect(fm.status).toBe('completed');
+      // ...AND the dropped-intent is surfaced in a comment, not silently lost.
+      const comments = await listKind(db, run.parentId, 'comment');
+      expect(comments.some((c) => /tool call was pending/.test(c.body ?? ''))).toBe(true);
     });
   }
+
+  // GAP-HUNT (test-effectiveness, shakeout) — the whitelist's FAIL-CLOSED property:
+  // an UNKNOWN done.reason (a finish label none of the adapters anticipated, or an
+  // off-spec proxy value) with collected tool calls must NOT run the tools. This is
+  // the whole point of a whitelist over a blacklist — a blacklist (`!== max_tokens`)
+  // would fail OPEN and execute. Without this test, a refactor back to a blacklist
+  // passes every other test while reopening the safety hole.
+  test('GAP — an UNKNOWN done.reason does NOT run a collected tool_call (fail-closed)', async () => {
+    const { db, run } = await scaffold({ tools: ['list_documents'] });
+    const { registerTool } = await import('./agent-tools.ts');
+    const okName = `__test_unknown_${nanoid(6)}`;
+    let handlerRan = false;
+    registerTool({
+      name: okName,
+      requiredScope: 'documents:read',
+      schema: z.object({}).strict(),
+      handler: async () => {
+        handlerRan = true;
+        return { ok: true };
+      },
+    });
+    registeredTools.push(okName);
+
+    const stub: AIProvider = {
+      async *stream() {
+        yield { type: 'tool_call', id: 'tc-1', name: okName, arguments: {} } as ProviderEvent;
+        // An off-spec / future finish label the whitelist does not list.
+        yield { type: 'done', reason: 'some_future_reason' as never } as ProviderEvent;
+      },
+      async testKey() {
+        return { ok: true as const };
+      },
+    };
+    providerTestHatch.overrideRegistry('anthropic', async () => stub);
+
+    await runAgent({ runId: run.id });
+
+    // Fail-closed: an unrecognized reason must NOT execute the tool.
+    expect(handlerRan).toBe(false);
+  });
 
   // D-9.2 (was FIX #7, part a) — a multi-tool round where BOTH calls are
   // recoverable (success + handler-throw) FEEDS BOTH results back and continues
