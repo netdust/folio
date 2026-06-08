@@ -463,3 +463,29 @@ Debugging the operator's `agent_missing`: I twice built fixes on UNVERIFIED assu
 - **Lesson 1:** when a live bug could be data-corruption OR code, RESEED to a clean state FIRST — it removes the variable in one move. The 57 duplicate operator rows were a total red herring; the bug reproduced cleanly on a fresh DB, proving it was code. I wasted effort theorizing about the corruption.
 - **Lesson 2:** before writing a fix that gates on a token/identity shape, CAPTURE the real shape (instrument the failure point, or read the mint code to ground truth) — do NOT infer it. The fix's discriminant must match production, not a plausible-looking test fixture.
 - **Lesson 3:** when a fix touches a value used for TWO things (here serviceActor's id = FK column AND event actor), check BOTH consumers before changing it. The naive fix (actor→real user) would have silently broken the agent-chain autonomy gate. The split (eventActor) preserved it.
+
+---
+
+## 2026-06-08 — Skipped the harness on a multi-step fix that crept up from a question
+
+A session that began as a casual question ("can we run Kimi locally?") evolved through
+wire-it-in → it's-broken → harden-it → commit, and I NEVER loaded
+`netdust-core:harnessed-development`. I reached for the single best-fit skill at each step
+(`systematic-debugging`, `test-effectiveness`) but never stepped back to see the whole arc had
+become non-trivial security-adjacent work the harness should have wrapped.
+
+**The concrete miss:** the diff touched provider adapters (untrusted streamed parsing), error
+sanitization (no-leak contract), and an IPv6/baseURL change (SSRF-adjacent). Those are the
+EXACT named triggers for CLAUDE.md's threat-modeling + architecture-invariants gates — which the
+harness fires automatically. I skipped both. Testing discipline was strong; the two SECURITY
+gates were the gap.
+
+- **Lesson 1:** re-evaluate harness need at each turn, not just at message #1. When an ad-hoc
+  thread accretes into multi-file work on a security boundary, STOP and load
+  `harnessed-development` — even mid-session, even if earlier steps were legitimately ad-hoc.
+- **Lesson 2:** the trigger isn't only the user saying "build/ship/do this properly." It's also
+  the SURFACE: any diff to auth/token/URL-allow-list/crypto/provider-parsing/error-sanitization
+  fires the threat-model gate on its own (CLAUDE.md §2). Check the surface, not just the verb.
+- **Lesson 3:** "I loaded a skill" ≠ "I ran the harness." Single skills cover single stages;
+  the harness sequences ALL gates so none gets silently skipped. Don't let good local discipline
+  mask a skipped global gate.

@@ -203,6 +203,18 @@ These are the rules the code MUST follow. `/code-review` should verify each one 
 
 > **Plans for features that touch user-controlled URLs, untrusted parsing, auth surfaces, or BYOK MUST include a `## Threat model` section before task breakdown. Without one, `/code-review` rounds independently re-discover the attack surface and don't converge. With one, reviews verify against a fixed spec and converge in one pass.**
 
+### Retroactive verification — commit `d4d9ce0` (thinking-model tool calls, 2026-06-08)
+
+The provider-adapter fix (`fix/thinking-model-tool-calls`) was implemented ad-hoc, then threat-modeled against this section (Class C, `harnessed-development`). It touches the BYOK/provider surface so the gate fires. Verdict against the named mitigations — **no new attack surface, no regression**:
+
+- **M1/M3/M12 (SSRF symmetry):** `DEFAULT_BASE` changed `localhost` → `127.0.0.1` (both loopback — does NOT widen the surface). It is reachable ONLY as the fallback when `keyRow.baseUrl` is null; every persisted baseUrl still passes `validatePublicUrl` + the `FOLIO_ALLOW_LOOPBACK_AI` gate at `POST /ai-keys`. The IPv6 fix is the *opposite* of an SSRF widening — it pins the literal v4 loopback. ✅ in place.
+- **M5 (error sanitization):** diff added ZERO new `throw`/`console`/`e.message` paths — only stream-parsing + request-body construction. The sanitizer (`sanitizeProviderError`) is untouched and still wraps every startup throw. ✅ unchanged.
+- **M6 (no silent stop-reason downgrade):** the new `tool_use` detection is a strict `else if` AFTER the explicit `'tool_calls'`/`'length'` checks — it can only *upgrade* a misreported `'stop'` to `tool_use`, never downgrade a known reason. Surfacing `delta.reasoning` as text closes a silent-empty case, the opposite of a downgrade. ✅ strengthens M6.
+- **M8 (JSON.parse wrapped):** no new unwrapped `JSON.parse` added. ✅ unchanged.
+- **New micro-surface — surfacing `delta.reasoning` as assistant text:** same trust level as `delta.content` (already surfaced). Prior assistant output is replayed via `buildUntrustedContext` inside the BEGIN/END **untrusted DATA** envelope (runner.ts:1646), never as trusted instructions → no prompt-injection vector. `think:false` is a pure request-body behavior flag, no auth/data/trust impact. ✅ no new attack.
+
+No mitigations missing; no deferrals affected. Gate satisfied retroactively. (Lesson on skipping the harness up front: `memory/lessons.md`, 2026-06-08.)
+
 ---
 
 ## Threat model — Sub-phase C extension (runner, services, poller, triggers)
