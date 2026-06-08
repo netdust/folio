@@ -1891,6 +1891,17 @@ async function wasCancelled(ctx: RunContext): Promise<boolean> {
  * comment — the partial work already streamed into the cancel comment above.
  */
 async function handleCancel(ctx: RunContext): Promise<void> {
+  // On the CONVERSATION (sink) path, both postAgentComment and failRun write to
+  // ctx.sink.text — calling both would double-post on the cockpit thread (the same
+  // mode as the dropped-call fix, code-review #4). failRun is the single surface
+  // there. NOTE: today wasCancelled() returns false for sink runs (mid-turn chat
+  // cancel is a v1 deferral), so this branch is latent — kept fail-safe for when
+  // chat-cancel lands. On the document path, both are wanted (a partial-work comment
+  // PLUS the failed/cancelled transition).
+  if (ctx.sink) {
+    await failRun(ctx, runErrorReasonSchema.enum.cancelled, 'Cancelled by user — partial work above.');
+    return;
+  }
   await postAgentComment(ctx, 'Cancelled by user — partial work above.', 'comment');
   await failRun(ctx, runErrorReasonSchema.enum.cancelled, 'Cancelled by user via comment.');
 }
