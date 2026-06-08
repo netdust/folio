@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **⚠️ AS-SHIPPED (2026-06-08) — the Item-A contract changed during review; this plan body below describes the SUPERSEDED value-swap approach.** What actually shipped: `onMoveView(pslug, tslug, viewId, neighborOrder, direction: 'up'|'down')` — the handler does ONE direction-aware reseat (`down → neighborOrder+1`, `up → neighborOrder−1`), not a two-PATCH value-swap and not the equal-order collision guard. `/code-review` found the value-swap's collision guard moved views the WRONG direction on "Move up" with tied orders, and was non-atomic; the single-PATCH reseat fixes both and is simpler. Item B shipped as planned. The task bodies below (Tasks 4–5, and the §1c/§1d "swap"/`useUpdateView` references) are kept as the historical record of the journey — read the AS-SHIPPED contract here as the source of truth for Item A.
+
 **Goal:** Ship two small, independent items from `tasks/retro-follow-ups.md` / `tasks/handoff-2026-06-09.md`: (A) a view-reorder UI in the rail (Move up / Move down), and (B) a `pending_ops` reaper that bounds the table's unbounded growth without ever touching a live confirmation.
 
 **Architecture:**
@@ -475,6 +477,27 @@ onMoveView: async (pslug, _tslug, a, b) => {
 ```
 
 The views PATCH route accepts `{ order: number }` (confirmed: `apps/server/src/routes/views.ts:99-123`, `baseSchema.partial()` with `order: z.number().int().optional()`). `viewsKeys`, `client`, `qc`, `toast`, `formatApiError` are all already imported + in scope in this file (used by the sibling handlers).
+
+**Collision guard (from Task-4 code review, Info):** a blind value-swap is a silent no-op if the two views share an `order` (rare — create assigns `max+10`, but a hand-edited `.md`/seed/import could collide). Guard it: if `a.order === b.order`, the swap can't reorder them, so give the moving view a strictly-different order. Replace the two-PATCH body with:
+
+```ts
+onMoveView: async (pslug, _tslug, a, b) => {
+  try {
+    if (a.order === b.order) {
+      // Degenerate: equal orders → a value-swap is a no-op. Nudge `a` past `b`
+      // so the move actually takes effect (rare; only from hand-edited/seeded data).
+      await client.patch(`/api/v1/w/${wslug}/p/${pslug}/views/${a.id}`, { order: b.order + 1 });
+    } else {
+      // swap orders: a takes b's order, b takes a's.
+      await client.patch(`/api/v1/w/${wslug}/p/${pslug}/views/${a.id}`, { order: b.order });
+      await client.patch(`/api/v1/w/${wslug}/p/${pslug}/views/${b.id}`, { order: a.order });
+    }
+    await qc.invalidateQueries({ queryKey: viewsKeys.list(wslug, pslug) });
+  } catch (err) {
+    toast.error(formatApiError(err));
+  }
+},
+```
 
 - [ ] **Step 3: Typecheck + full web suite**
 
