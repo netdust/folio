@@ -234,3 +234,61 @@ test('M-MCP-2 — a userless token gets a clean JSON-RPC error on tools/call, no
   expect(body.error!.code).toBe(-32603);
   expect(body.error!.message).toBe('internal error');
 });
+
+// M-MCP-3 — the JSON-RPC envelope is validated. body was cast `as JsonRpcRequest`
+// with no schema, so a non-object body (a batch array, a bare string/number) or a
+// wrong-typed id round-tripped into the response, breaking JSON-RPC 2.0 conformance.
+async function postRaw(
+  app: Awaited<ReturnType<typeof makeTestApp>>['app'],
+  token: string,
+  rawBody: string,
+): Promise<Response> {
+  return app.request('/mcp', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: rawBody,
+  });
+}
+
+test('M-MCP-3 — a non-object body (JSON array / batch) is rejected with -32600 invalid request', async () => {
+  const { app, seed } = await makeTestApp();
+  const token = await setupToken(seed.workspace.id, seed.user.id, ['documents:read']);
+  const res = await postRaw(app, token, JSON.stringify([{ jsonrpc: '2.0', id: 1, method: 'ping' }]));
+  expect(res.status).toBe(200);
+  const body = (await res.json()) as { error?: { code: number; message: string }; id?: unknown };
+  expect(body.error?.code).toBe(-32600);
+  expect(body.error?.message).toMatch(/invalid request/i);
+  // id is null (a non-object body has no usable id).
+  expect(body.id).toBeNull();
+});
+
+test('M-MCP-3 — a bare string body is rejected with -32600', async () => {
+  const { app, seed } = await makeTestApp();
+  const token = await setupToken(seed.workspace.id, seed.user.id, ['documents:read']);
+  const res = await postRaw(app, token, JSON.stringify('not an object'));
+  const body = (await res.json()) as { error?: { code: number } };
+  expect(body.error?.code).toBe(-32600);
+});
+
+test('M-MCP-3 — a wrong-typed id (object) is coerced to null in the response', async () => {
+  const { app, seed } = await makeTestApp();
+  const token = await setupToken(seed.workspace.id, seed.user.id, ['documents:read']);
+  // id is an object — invalid per JSON-RPC 2.0 (must be string|number|null).
+  const res = await postRaw(
+    app,
+    token,
+    JSON.stringify({ jsonrpc: '2.0', id: { evil: 'nested' }, method: 'ping' }),
+  );
+  const body = (await res.json()) as { id?: unknown; result?: unknown };
+  // ping still works; the bad id is coerced to null, NOT reflected verbatim.
+  expect(body.id).toBeNull();
+  expect(body.result).toBeDefined();
+});
+
+test('M-MCP-3 — a valid string id still round-trips unchanged', async () => {
+  const { app, seed } = await makeTestApp();
+  const token = await setupToken(seed.workspace.id, seed.user.id, ['documents:read']);
+  const res = await postRaw(app, token, JSON.stringify({ jsonrpc: '2.0', id: 'req-42', method: 'ping' }));
+  const body = (await res.json()) as { id?: unknown };
+  expect(body.id).toBe('req-42');
+});

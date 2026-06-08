@@ -33,7 +33,7 @@ import { attachToken, getToken, requireToken } from '../middleware/bearer.ts';
 
 // --- JSON-RPC types ---
 
-type JsonRpcId = number | string;
+type JsonRpcId = number | string | null;
 
 interface JsonRpcRequest {
   jsonrpc: '2.0';
@@ -168,9 +168,9 @@ const mcpRoute = new Hono<AuthContext>();
 mcpRoute.use('*', attachToken, requireToken);
 
 mcpRoute.post('/', async (c) => {
-  let body: JsonRpcRequest;
+  let parsed: unknown;
   try {
-    body = (await c.req.json()) as JsonRpcRequest;
+    parsed = await c.req.json();
   } catch {
     return c.json<JsonRpcResponse>(
       {
@@ -182,7 +182,24 @@ mcpRoute.post('/', async (c) => {
     );
   }
 
-  const id = body.id;
+  // M-MCP-3 — validate the envelope. body was previously cast `as JsonRpcRequest`
+  // with no check, so a non-object body (a JSON array / batch, a bare string or
+  // number) or a wrong-typed `id` (object/array/boolean) round-tripped into the
+  // response, breaking JSON-RPC 2.0 conformance and reflecting an arbitrary `id`.
+  // A non-object body cannot carry a usable id → reject with -32600, id null.
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    return c.json<JsonRpcResponse>({
+      jsonrpc: '2.0',
+      id: null,
+      error: { code: -32600, message: 'invalid request' },
+    });
+  }
+  const body = parsed as JsonRpcRequest;
+
+  // Coerce `id` to a JSON-RPC-valid type (string | number | null). Anything else
+  // (object, array, boolean) → null, never reflected verbatim.
+  const rawId = (body as { id?: unknown }).id;
+  const id: JsonRpcId = typeof rawId === 'string' || typeof rawId === 'number' ? rawId : null;
   const token = getToken(c);
   // M-MCP-2 — do NOT resolve the user up-front. getUser(c) THROWS when no user is
   // hydrated (a valid token with a null/dangling createdBy), and calling it before
