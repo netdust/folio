@@ -795,7 +795,7 @@ export function registerRealTools(): void {
       const p = await resolveProjectInWorkspace(ws, ctx.token, args);
       const slug = requireString(args, 'slug');
       const doc = await getDocument(p.id, slug);
-      if (!doc) throw new Error('document not found');
+      if (!doc) throw mcpInvalidParams('document not found', { reason: 'document_not_found' });
       if (doc.type === 'agent_run') {
         throw new Error(
           'agent_run documents must be read via the runs endpoints (Sub-phase D), not get_document',
@@ -830,7 +830,7 @@ export function registerRealTools(): void {
       const p = await resolveProjectInWorkspace(ws, ctx.token, args);
       const slug = requireString(args, 'slug');
       const doc = await getDocument(p.id, slug);
-      if (!doc) throw new Error('document not found');
+      if (!doc) throw mcpInvalidParams('document not found', { reason: 'document_not_found' });
       if (doc.type === 'agent_run') {
         throw new Error(
           'agent_run documents must be read via the runs endpoints (Sub-phase D), not get_document_markdown',
@@ -972,7 +972,7 @@ export function registerRealTools(): void {
       const p = await resolveProjectInWorkspace(ws, token, args);
       const slug = requireString(args, 'slug');
       const existing = await getDocument(p.id, slug);
-      if (!existing) throw new Error('document not found');
+      if (!existing) throw mcpInvalidParams('document not found', { reason: 'document_not_found' });
       if (existing.type === 'agent' || existing.type === 'trigger') {
         throw mcpInvalidParams(
           `${existing.type} documents cannot be mutated via MCP in Phase 2.5; use PATCH /api/v1/w/:wslug/documents/${slug}`,
@@ -1047,7 +1047,7 @@ export function registerRealTools(): void {
       const p = await resolveProjectInWorkspace(ws, token, args);
       const slug = requireString(args, 'slug');
       const existing = await getDocument(p.id, slug);
-      if (!existing) throw new Error('document not found');
+      if (!existing) throw mcpInvalidParams('document not found', { reason: 'document_not_found' });
       if (existing.type === 'agent' || existing.type === 'trigger') {
         throw mcpInvalidParams(
           `${existing.type} documents cannot be deleted via MCP in Phase 2.5; use DELETE /api/v1/w/:wslug/documents/${slug}`,
@@ -1264,7 +1264,11 @@ export function registerRealTools(): void {
       const parent = await db.query.documents.findFirst({
         where: and(eq(documents.projectId, project.id), eq(documents.slug, parentSlug)),
       });
-      if (!parent) throw new Error(`parent ${parentSlug} not found`);
+      if (!parent)
+        throw mcpInvalidParams(`parent "${parentSlug}" not found`, {
+          reason: 'parent_not_found',
+          parent_slug: parentSlug,
+        });
 
       const authorContext = await resolveAuthorContextForToken(token);
       const body = requireString(args, 'body');
@@ -1332,7 +1336,11 @@ export function registerRealTools(): void {
       const parent = await db.query.documents.findFirst({
         where: and(eq(documents.projectId, project.id), eq(documents.slug, parentSlug)),
       });
-      if (!parent) throw new Error(`parent ${parentSlug} not found`);
+      if (!parent)
+        throw mcpInvalidParams(`parent "${parentSlug}" not found`, {
+          reason: 'parent_not_found',
+          parent_slug: parentSlug,
+        });
 
       const kinds = parseCsvArg<string>(args, 'kind');
       const visibility = parseCsvArg<string>(args, 'visibility');

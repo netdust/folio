@@ -727,8 +727,15 @@ test('create_comment with a non-existent parent slug → error propagates', asyn
     parent_slug: 'does-not-exist',
     body: 'orphan',
   });
-  const body = (await res.json()) as { error: { code: number; message: string } };
+  const body = (await res.json()) as {
+    error: { code: number; message: string; data?: { reason?: string } };
+  };
   expect(body.error).toBeDefined();
+  // SHAPED validation error (mcpInvalidParams → -32602 with a reason), NOT the
+  // sanitized catch-all: a useful caller-facing message is preserved precisely
+  // because the throw is shaped. (M-MCP-1 sanitizes only UNshaped errors.)
+  expect(body.error.code).toBe(-32602);
+  expect(body.error.data?.reason).toBe('parent_not_found');
   expect(body.error.message).toMatch(/parent.*not found/);
 });
 

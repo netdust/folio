@@ -27,6 +27,7 @@
 
 import { Hono } from 'hono';
 import { executeTool, listToolDefs } from '../lib/agent-tools.ts';
+import { HTTPError } from '../lib/http.ts';
 import { type AuthContext, getUser } from '../middleware/auth.ts';
 import { attachToken, getToken, requireToken } from '../middleware/bearer.ts';
 
@@ -138,9 +139,27 @@ function mapToolErrorToJsonRpc(err: unknown, id: JsonRpcId): JsonRpcResponse {
     };
   }
 
-  // Everything else (service-layer HTTPError, plain handler errors) → internal
-  // error carrying the human-readable message (legacy behavior).
-  return { jsonrpc: '2.0', id, error: { code: -32603, message: msg } };
+  // M-MCP-1 — a service-layer HTTPError carries a DELIBERATE, author-controlled,
+  // agent-facing message (e.g. 'comment documents must be created via the comment
+  // tool'). Keep it, and surface its string `code` in `data.code` for programmatic
+  // branching. (The two INVALID_FILTER sites that wrapped a RAW inner e.message were
+  // fixed at the source — services no longer leak raw detail into an HTTPError.)
+  if (err instanceof HTTPError) {
+    return {
+      jsonrpc: '2.0',
+      id,
+      error: { code: -32603, message: err.message, data: { code: err.code } },
+    };
+  }
+
+  // Everything else — an UNEXPECTED raw Error / DB / crypto error — is sanitized.
+  // Returning its raw `.message` would leak SQL fragments, table/column names, file
+  // paths, or stack text. The HTTP transport collapses these to 'internal error'
+  // via registerErrorHandler.onError; the MCP transport had NO equivalent backstop.
+  // Fixed string out, real detail logged server-side only (mirrors
+  // sanitizeProviderError's never-echo-e.message contract).
+  console.error('[mcp] tool error (sanitized to internal error):', err);
+  return { jsonrpc: '2.0', id, error: { code: -32603, message: 'internal error' } };
 }
 
 // --- Route ---

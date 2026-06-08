@@ -104,3 +104,90 @@ test('Zod-rejected argument maps to -32602 with issue PATHS only, never the valu
   const raw = JSON.stringify(body);
   expect(raw).not.toContain(sentinel);
 });
+
+// M-MCP-1 policy — an UNEXPECTED raw Error (not an explicitly-shaped JSON-RPC
+// error and not an HTTPError) must NOT reflect its raw message to the client. The
+// HTTP transport collapses unknowns to 'internal error' via onError; the MCP
+// transport must do the same, or it leaks SQL/paths/stack text (sibling of the
+// provider sanitizeProviderError leak). HTTPError messages are KEPT — they are
+// deliberate, author-controlled, agent-facing validation text.
+test('M-MCP-1 — an UNEXPECTED raw Error returns the SANITIZED internal error, not the raw message', async () => {
+  const { app, seed } = await makeTestApp();
+  const { registerTool } = await import('../lib/agent-tools.ts');
+  const { z } = await import('zod');
+  const leakName = `__test_rawerror_leak_${nanoid(6)}`;
+  // Mimics an unexpected DB/crypto/runtime error whose .message embeds internal detail.
+  const SECRET = 'LEAK_internal_table_users_ssn_d0n0tl3ak';
+  registerTool({
+    name: leakName,
+    requiredScope: 'documents:read',
+    schema: z.object({}).strict(),
+    handler: async () => {
+      throw new Error(`SQLITE_ERROR: no such column: ${SECRET}`);
+    },
+  });
+
+  const token = await setupToken(seed.workspace.id, seed.user.id, ['documents:read']);
+  const res = await callTool(app, token, leakName, {});
+  const body = (await res.json()) as { error?: { code: number; message: string } };
+
+  expect(body.error).toBeDefined();
+  expect(body.error!.code).toBe(-32603);
+  // Sanitized: a fixed internal-error string, NOT the raw handler message.
+  expect(body.error!.message).toBe('internal error');
+  // The secret must not appear ANYWHERE in the response.
+  expect(JSON.stringify(body)).not.toContain(SECRET);
+});
+
+// M-MCP-1 policy — an HTTPError's message IS kept (deliberate, agent-facing), with
+// its string code surfaced in data.code for programmatic branching. This is what
+// lets useful validation feedback ('comment documents must be created via …')
+// survive while UNEXPECTED errors (the test above) are sanitized.
+test('M-MCP-1 — an HTTPError keeps its deliberate message + surfaces its code in data', async () => {
+  const { app, seed } = await makeTestApp();
+  const { registerTool } = await import('../lib/agent-tools.ts');
+  const { HTTPError } = await import('../lib/http.ts');
+  const { z } = await import('zod');
+  const name = `__test_httperror_keep_${nanoid(6)}`;
+  registerTool({
+    name,
+    requiredScope: 'documents:read',
+    schema: z.object({}).strict(),
+    handler: async () => {
+      throw new HTTPError('SOME_VALIDATION', 'this input is not allowed here', 422);
+    },
+  });
+
+  const token = await setupToken(seed.workspace.id, seed.user.id, ['documents:read']);
+  const res = await callTool(app, token, name, {});
+  const body = (await res.json()) as {
+    error?: { code: number; message: string; data?: { code?: string } };
+  };
+  expect(body.error!.code).toBe(-32603);
+  expect(body.error!.message).toBe('this input is not allowed here');
+  expect(body.error!.data?.code).toBe('SOME_VALIDATION');
+});
+
+test('M-MCP-1 — a plain Error-throwing tool also returns the sanitized internal error', async () => {
+  const { app, seed } = await makeTestApp();
+  const { registerTool } = await import('../lib/agent-tools.ts');
+  const { z } = await import('zod');
+  const leakName = `__test_rawerror_leak_${nanoid(6)}`;
+  const SECRET = 'LEAK_stack_frame_apps_server_src_secret_d0n0tl3ak';
+  registerTool({
+    name: leakName,
+    requiredScope: 'documents:read',
+    schema: z.object({}).strict(),
+    handler: async () => {
+      throw new Error(`unexpected: ${SECRET}`);
+    },
+  });
+
+  const token = await setupToken(seed.workspace.id, seed.user.id, ['documents:read']);
+  const res = await callTool(app, token, leakName, {});
+  const body = (await res.json()) as { error?: { code: number; message: string } };
+
+  expect(body.error!.code).toBe(-32603);
+  expect(body.error!.message).toBe('internal error');
+  expect(JSON.stringify(body)).not.toContain(SECRET);
+});
