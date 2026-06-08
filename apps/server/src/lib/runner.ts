@@ -1297,13 +1297,24 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
     // is decided HERE, the single done.reason consumer, NOT re-derived per adapter.
     // A thinking model (qwen3/deepseek-r1) emits a real tool_call but finishes with
     // reason:'stop' (not 'tool_use'); keying the round on reason==='tool_use' alone
-    // silently dropped those calls on the terminal path below. Gate on the calls
-    // we actually collected instead — done.reason is advisory for tool detection.
-    // EXCEPTION: 'max_tokens' (truncation) still excludes — a tool call cut off
-    // mid-stream is unusable and must NOT run. This made the adapters' per-provider
-    // sawToolCall relabel redundant (deleted), which also closed the divergence
-    // (#3) and the dropped-marker phantom-tool_use escalation (#4).
-    if (collectedToolCalls.length > 0 && doneReason !== 'max_tokens') {
+    // silently dropped those calls on the terminal path below. So we run the round
+    // whenever calls were collected — done.reason is advisory for tool DETECTION.
+    //
+    // But done.reason is AUTHORITATIVE for whether running is SAFE. This is a
+    // WHITELIST (fail-closed), not "anything but max_tokens" (gap-hunt fix):
+    //   - 'stop' / 'tool_use' → run the collected calls.
+    //   - 'max_tokens'        → truncation; the call may be cut off mid-stream and
+    //                           is unusable. Don't run; surface truncation below.
+    //   - 'refusal'           → the model declined; a tool_use co-emitted with a
+    //                           refusal must NOT execute (a refused action acting is
+    //                           a safety regression).
+    //   - 'pause_turn'        → server-tool pause; running client tools + looping is
+    //                           the wrong continuation protocol.
+    //   - any UNKNOWN reason  → fail closed (do not run).
+    // Deleting the per-adapter sawToolCall relabel (now redundant) also closed the
+    // ollama/openai divergence (#3) and the dropped-marker phantom escalation (#4).
+    const reasonAllowsToolRound = doneReason === 'stop' || doneReason === 'tool_use';
+    if (collectedToolCalls.length > 0 && reasonAllowsToolRound) {
       // D-9.2 — RECOVERABLE tool errors are FED BACK to the model instead of
       // terminating the run (mitigations 64-66). We accumulate the assistant
       // tool_calls message + per-call tool-result messages in LOCALS:
@@ -1571,6 +1582,40 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
     if (await wasCancelled(ctx)) {
       await handleCancel(ctx);
       return;
+    }
+
+    // GAP-HUNT fix — DROPPED-TOOL-CALL truncation. We reach the terminal path with
+    // collectedToolCalls.length > 0 only when the reason BLOCKED the tool round
+    // (max_tokens / refusal / pause_turn — the whitelist above excluded it). The
+    // model intended to call a tool and we did not run it; silently completing as
+    // success hides lost work (the truncated write_document case). Surface it:
+    //   - max_tokens → FAIL LOUDLY (budget_exceeded): a tool call cut off by the
+    //     token cap is lost work, mirroring the in-loop budget-cap path which also
+    //     posts a partial-work comment + failRun. NOT a clean success.
+    //   - refusal / pause_turn → clean completion is correct (the model chose not
+    //     to proceed / paused), but note the dropped intent in a comment so the
+    //     operator isn't misled by an empty result.
+    if (collectedToolCalls.length > 0) {
+      if (doneReason === 'max_tokens') {
+        await postAgentComment(
+          ctx,
+          'Response truncated at the token cap mid-tool-call — the intended tool call was NOT run. Raise max_tokens and retry.',
+          'comment',
+        );
+        await failRun(
+          ctx,
+          runErrorReasonSchema.enum.budget_exceeded,
+          'Stream truncated (max_tokens) with an unexecuted tool call.',
+        );
+        return;
+      }
+      // refusal / pause_turn: complete cleanly, but record that a tool call was
+      // dropped so an empty/odd result is explained rather than silently lost.
+      await postAgentComment(
+        ctx,
+        `Model finished with '${doneReason}' while a tool call was pending — the tool was not run.`,
+        'comment',
+      );
     }
 
     await postResultAndComplete(ctx, textBuf, doneReason);

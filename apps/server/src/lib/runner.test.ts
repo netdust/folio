@@ -1186,9 +1186,58 @@ describe('runAgent stream loop', () => {
 
     await runAgent({ runId: run.id });
 
-    // The truncated call must NOT have executed (terminal completion instead).
+    // The truncated call must NOT have executed...
     expect(handlerRan).toBe(false);
+    // ...AND the run must FAIL LOUDLY (lost work), not silently complete as success.
+    const fm = await readRun(db, run.id);
+    expect(fm.status).toBe('failed');
+    expect(fm.error_reason).toBe('budget_exceeded');
   });
+
+  // GAP-HUNT (post-review) — the tool-round gate must be a WHITELIST of finish
+  // reasons where running the collected calls is CORRECT (stop / tool_use), NOT a
+  // blacklist that excludes only max_tokens. A 'refusal' that carried a tool_call
+  // must NOT execute the tool (a refused action must not act — safety); a
+  // 'pause_turn' must not run client tools + loop (wrong continuation protocol).
+  for (const reason of ['refusal', 'pause_turn'] as const) {
+    test(`GAP — a collected tool_call with done.reason=${reason} does NOT run the tool`, async () => {
+      const { db, run } = await scaffold({ tools: ['list_documents'] });
+      const { registerTool } = await import('./agent-tools.ts');
+      const okName = `__test_${reason}_${nanoid(6)}`;
+      let handlerRan = false;
+      registerTool({
+        name: okName,
+        requiredScope: 'documents:read',
+        schema: z.object({}).strict(),
+        handler: async () => {
+          handlerRan = true;
+          return { ok: true };
+        },
+      });
+      registeredTools.push(okName);
+
+      const stub: AIProvider = {
+        async *stream() {
+          // A tool_use block co-emitted with a refusal/pause_turn finish — the
+          // adapter surfaces both; the runner must NOT execute on these reasons.
+          yield { type: 'tool_call', id: 'tc-1', name: okName, arguments: {} } as ProviderEvent;
+          yield { type: 'done', reason } as ProviderEvent;
+        },
+        async testKey() {
+          return { ok: true as const };
+        },
+      };
+      providerTestHatch.overrideRegistry('anthropic', async () => stub);
+
+      await runAgent({ runId: run.id });
+
+      // The tool must NOT have executed — refusal/pause_turn are clean completions,
+      // not tool turns.
+      expect(handlerRan).toBe(false);
+      const fm = await readRun(db, run.id);
+      expect(fm.status).toBe('completed');
+    });
+  }
 
   // D-9.2 (was FIX #7, part a) — a multi-tool round where BOTH calls are
   // recoverable (success + handler-throw) FEEDS BOTH results back and continues
