@@ -40,7 +40,38 @@ export interface ConversationThread {
 export const conversationsKeys = {
   all: ['conversations'] as const,
   detail: (id: string) => [...conversationsKeys.all, id] as const,
+  // The cockpit auto-resume SEED id — a distinct concern from conversation
+  // DATA, so it lives under its OWN root key, NOT under `all`. This keeps it
+  // OUT of `useCreateConversation`'s `invalidateQueries({ queryKey: all })`
+  // prefix match: creating the first conversation must NOT refetch the seed and
+  // flip recentId mid-turn (which would remount CockpitChat and lose in-flight
+  // optimistic state). The seed is fetched once per session (staleTime:Infinity)
+  // and intentionally never invalidated.
+  recent: () => ['conversation-recent'] as const,
 };
+
+/**
+ * The session user's most-recent conversation id (or null), for cockpit
+ * auto-resume on reload. One-shot fetch on mount; not live-tailed (the chosen
+ * conversation is then live via useConversation's SSE). `staleTime: Infinity`
+ * so a re-mount in the same session doesn't refetch — the cockpit only needs
+ * the seed id once. Returns `loaded` so the panel can hold mounting CockpitChat
+ * until the seed resolves (avoids a blank→thread flash).
+ */
+export function useRecentConversation(): { recentId: string | null; loaded: boolean } {
+  const query = useQuery({
+    queryKey: conversationsKeys.recent(),
+    queryFn: () => client.get<{ id: string | null }>('/api/v1/conversations/recent'),
+    staleTime: Infinity,
+    // A "what was my last conversation" seed has no value in retrying — a failed
+    // seed should collapse to the blank greeting immediately, not hold the
+    // placeholder through react-query's default 3× exponential backoff.
+    retry: false,
+  });
+  // `!isLoading` is a safe readiness signal ONLY while this query is always-enabled;
+  // an `enabled:` flag would leave isLoading stuck true and hang the panel placeholder.
+  return { recentId: query.data?.id ?? null, loaded: !query.isLoading };
+}
 
 // ---------------------------------------------------------------------------
 // Live-tail merge — seed-then-tail (mirrors useActivityFeed's shape).

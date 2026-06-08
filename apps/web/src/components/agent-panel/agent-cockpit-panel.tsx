@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react';
 import { X } from 'lucide-react';
 import { agentPanelBus, type AgentPanelState } from '../../lib/agent-panel-bus.ts';
+import { useRecentConversation } from '../../lib/api/conversations.ts';
 import { Icon } from '../ui/icon.tsx';
 import { CockpitChat } from './cockpit-chat.tsx';
 
@@ -18,6 +19,7 @@ import { CockpitChat } from './cockpit-chat.tsx';
  */
 export function AgentCockpitPanel() {
   const state: AgentPanelState = useSyncExternalStore(agentPanelBus.subscribe, agentPanelBus.get);
+  const { recentId, loaded } = useRecentConversation();
   if (!state.open) return null;
   return (
     <div className="flex w-[360px] shrink-0 flex-col rounded-md border border-border-light bg-content">
@@ -32,7 +34,15 @@ export function AgentCockpitPanel() {
           <Icon icon={X} size={16} />
         </button>
       </div>
-      <CockpitChat />
+      {/* Hold the chat body until the recent-id seed resolves so a user WITH a
+          conversation never flashes the empty greeting first. `key` forces a
+          fresh CockpitChat once the seed lands so its internal activeId useState
+          picks up the resumed id. */}
+      {loaded ? (
+        <CockpitChat key={recentId ?? 'new'} conversationId={recentId ?? undefined} />
+      ) : (
+        <div className="min-h-0 flex-1" aria-hidden="true" />
+      )}
     </div>
   );
 }
