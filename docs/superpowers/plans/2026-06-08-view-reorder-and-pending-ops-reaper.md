@@ -456,18 +456,25 @@ In `apps/web/src/routes/w.$wslug.tsx`, locate where `onDeleteView` / `onRenameVi
 
 - [ ] **Step 2: Implement the handler**
 
-`useUpdateView(wslug, pslug)` is project-scoped. The handler swaps the two views' `order` values (fire both mutations; react-query invalidates the views list). Add to the handlers object passed to `buildRailTree`:
+**PLAN CORRECTION (Step 2.5 ground-truth, 2026-06-08):** the original plan said "swap via `useUpdateView`". That is WRONG for this route. `w.$wslug.tsx` deliberately does NOT use the per-project `useUpdateView` hook for rail mutations (see the comment at lines 109-114): those hooks bind `pslug` at render time, but the rail callbacks receive `pslug` at call time. The established pattern — used by `onRenameTable` (line 241) and `onRenameView` (line 248) — is **raw `client.patch` + `qc.invalidateQueries`**. The reorder handler MUST mirror `onRenameView`, doing two PATCHes (one per swapped view) then one invalidate. Do NOT call `useUpdateView` (hook-rules violation) and do NOT invent an endpoint.
+
+Add `onMoveView` to the `handlers` useMemo object (next to `onDeleteView`, ~line 254), mirroring `onRenameView` exactly:
 
 ```ts
-onMoveView: (pslug, _tslug, a, b) => {
-  const update = updateViewFor(pslug); // however useUpdateView is obtained per-project in this route
-  // swap orders: a takes b's order, b takes a's
-  update.mutate({ id: a.id, patch: { order: b.order } });
-  update.mutate({ id: b.id, patch: { order: a.order } });
+onMoveView: async (pslug, _tslug, a, b) => {
+  try {
+    // swap orders: a takes b's order, b takes a's. Two PATCHes to the views
+    // endpoint, then one invalidate — same raw-client pattern as onRenameView.
+    await client.patch(`/api/v1/w/${wslug}/p/${pslug}/views/${a.id}`, { order: b.order });
+    await client.patch(`/api/v1/w/${wslug}/p/${pslug}/views/${b.id}`, { order: a.order });
+    await qc.invalidateQueries({ queryKey: viewsKeys.list(wslug, pslug) });
+  } catch (err) {
+    toast.error(formatApiError(err));
+  }
 },
 ```
 
-IMPLEMENTER (Step 2.5 ground-truth): `useUpdateView` is a hook — it can't be called inside a closure conditionally. Read how this route already instantiates per-project view mutations (it may iterate projects, or use a single hook with pslug passed to `mutate`). Match that exact pattern. If the route currently has NO per-project update-view hook wired, instantiate `useUpdateView(wslug, pslug)` the same way `onDeleteView` resolves its project. The `ViewPatch` type accepts `{ order?: number }` (confirmed: `apps/web/src/lib/api/views.ts:69`). Do NOT invent a new endpoint.
+The views PATCH route accepts `{ order: number }` (confirmed: `apps/server/src/routes/views.ts:99-123`, `baseSchema.partial()` with `order: z.number().int().optional()`). `viewsKeys`, `client`, `qc`, `toast`, `formatApiError` are all already imported + in scope in this file (used by the sibling handlers).
 
 - [ ] **Step 3: Typecheck + full web suite**
 
