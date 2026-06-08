@@ -58,6 +58,14 @@ export interface RailTreeHandlers {
   onRenameProject?: (pslug: string, next: string) => void;
   onDeleteProject?: (pslug: string, name: string) => void;
   onRenameTable?: (pslug: string, tslug: string, next: string) => void;
+  /** Swap two adjacent views' `order` (reorder in the rail). `a`/`b` are {id, order};
+   *  the handler persists both. */
+  onMoveView?: (
+    pslug: string,
+    tslug: string,
+    a: { id: string; order: number },
+    b: { id: string; order: number },
+  ) => void;
   onDeleteTable?: (pslug: string, tslug: string, name: string) => void;
   onRenameView?: (pslug: string, tslug: string, viewId: string, next: string) => void;
   onDeleteView?: (pslug: string, tslug: string, viewId: string, name: string) => void;
@@ -85,7 +93,7 @@ export function buildRailTree(input: RailTreeInput): NavItem[] {
         return Number(b.isDefault) - Number(a.isDefault);
       });
 
-      const viewNavItems: NavItem[] = sortedViews.map((view): NavItem => ({
+      const viewNavItems: NavItem[] = sortedViews.map((view, idx, arr): NavItem => ({
         id: `view:${table.id}:${view.id}`,
         label: view.name,
         lucideIcon: view.type === 'kanban' ? Columns3 : List,
@@ -94,7 +102,7 @@ export function buildRailTree(input: RailTreeInput): NavItem[] {
         onRename: handlers.onRenameView
           ? (next) => handlers.onRenameView!(project.slug, table.slug, view.id, next)
           : undefined,
-        menuItems: buildViewMenu(handlers, project.slug, table.slug, view),
+        menuItems: buildViewMenu(handlers, project.slug, table.slug, view, arr[idx - 1], arr[idx + 1]),
       }));
 
       return {
@@ -176,8 +184,29 @@ function buildTableMenu(h: RailTreeHandlers, pslug: string, table: RailTreeTable
   return items.length > 0 ? items : undefined;
 }
 
-function buildViewMenu(h: RailTreeHandlers, pslug: string, tslug: string, view: RailTreeView): RowMenuItem[] | undefined {
+function buildViewMenu(
+  h: RailTreeHandlers,
+  pslug: string,
+  tslug: string,
+  view: RailTreeView,
+  prev: RailTreeView | undefined,
+  next: RailTreeView | undefined,
+): RowMenuItem[] | undefined {
   const items: RowMenuItem[] = [];
+  if (h.onMoveView && prev) {
+    items.push({
+      label: 'Move up',
+      onSelect: () =>
+        h.onMoveView!(pslug, tslug, { id: view.id, order: view.order }, { id: prev.id, order: prev.order }),
+    });
+  }
+  if (h.onMoveView && next) {
+    items.push({
+      label: 'Move down',
+      onSelect: () =>
+        h.onMoveView!(pslug, tslug, { id: view.id, order: view.order }, { id: next.id, order: next.order }),
+    });
+  }
   if (h.onDeleteView) items.push({ label: 'Delete', destructive: true, onSelect: () => h.onDeleteView!(pslug, tslug, view.id, view.name) });
   return items.length > 0 ? items : undefined;
 }
