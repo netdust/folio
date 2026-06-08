@@ -56,7 +56,13 @@ export function useRecentConversation(): { recentId: string | null; loaded: bool
     queryKey: conversationsKeys.recent(),
     queryFn: () => client.get<{ id: string | null }>('/api/v1/conversations/recent'),
     staleTime: Infinity,
+    // A "what was my last conversation" seed has no value in retrying — a failed
+    // seed should collapse to the blank greeting immediately, not hold the
+    // placeholder through react-query's default 3× exponential backoff.
+    retry: false,
   });
+  // `!isLoading` is a safe readiness signal ONLY while this query is always-enabled;
+  // an `enabled:` flag would leave isLoading stuck true and hang the panel placeholder.
   return { recentId: query.data?.id ?? null, loaded: !query.isLoading };
 }
 
