@@ -209,3 +209,94 @@ describe('buildRailTree', () => {
     expect(tree[0].children![0].onClick).toBeUndefined();
   });
 });
+
+describe('view reorder menu', () => {
+  // Flatten the displayed (sorted) view NavItems for a single-table tree.
+  const viewNodesOf = (tree: ReturnType<typeof buildRailTree>) =>
+    tree[0].children![0].children!;
+  const menuLabels = (node: ReturnType<typeof buildRailTree>[number]) =>
+    (node.menuItems ?? []).map((m) => m.label);
+  const invokeMenu = (
+    node: ReturnType<typeof buildRailTree>[number],
+    label: string,
+  ) => {
+    const item = (node.menuItems ?? []).find((m) => m.label === label);
+    if (!item) throw new Error(`no menu item "${label}"`);
+    item.onSelect();
+  };
+
+  const threeViews = () => [
+    { id: 'v0', name: 'First',  type: 'list' as const, isDefault: false, order: 0 },
+    { id: 'v1', name: 'Middle', type: 'list' as const, isDefault: false, order: 10 },
+    { id: 'v2', name: 'Last',   type: 'list' as const, isDefault: false, order: 20 },
+  ];
+
+  const buildWith = (
+    views: ReturnType<typeof threeViews>,
+    handlers: RailTreeHandlers,
+  ) =>
+    buildRailTree({
+      projects: [{ slug: 'sales', name: 'Acme Sales' }],
+      tablesByProject: { sales: [{ id: 't1', slug: 'work-items', name: 'Work Items' }] },
+      viewsByTable: { t1: views },
+      currentRoute: { wslug: 'acme' },
+      handlers,
+    });
+
+  it('first view has Move down but no Move up', () => {
+    const handlers: RailTreeHandlers = { ...noopHandlers, onMoveView: vi.fn() };
+    const [first] = viewNodesOf(buildWith(threeViews(), handlers));
+    expect(menuLabels(first)).toContain('Move down');
+    expect(menuLabels(first)).not.toContain('Move up');
+  });
+
+  it('middle view has both Move up and Move down', () => {
+    const handlers: RailTreeHandlers = { ...noopHandlers, onMoveView: vi.fn() };
+    const middle = viewNodesOf(buildWith(threeViews(), handlers))[1];
+    expect(menuLabels(middle)).toContain('Move up');
+    expect(menuLabels(middle)).toContain('Move down');
+  });
+
+  it('last view has Move up but no Move down', () => {
+    const handlers: RailTreeHandlers = { ...noopHandlers, onMoveView: vi.fn() };
+    const last = viewNodesOf(buildWith(threeViews(), handlers))[2];
+    expect(menuLabels(last)).toContain('Move up');
+    expect(menuLabels(last)).not.toContain('Move down');
+  });
+
+  it("Move down on first view calls onMoveView with the next view's order and 'down'", () => {
+    const onMoveView = vi.fn();
+    const handlers: RailTreeHandlers = { ...noopHandlers, onMoveView };
+    const [first] = viewNodesOf(buildWith(threeViews(), handlers));
+    invokeMenu(first, 'Move down');
+    // moved view v0, neighbor = next view's order (10), direction 'down'.
+    expect(onMoveView).toHaveBeenCalledWith('sales', 'work-items', 'v0', 10, 'down');
+  });
+
+  it("Move up on last view calls onMoveView with the prev view's order and 'up'", () => {
+    const onMoveView = vi.fn();
+    const handlers: RailTreeHandlers = { ...noopHandlers, onMoveView };
+    const last = viewNodesOf(buildWith(threeViews(), handlers))[2];
+    invokeMenu(last, 'Move up');
+    // moved view v2, neighbor = prev view's order (10), direction 'up'.
+    expect(onMoveView).toHaveBeenCalledWith('sales', 'work-items', 'v2', 10, 'up');
+  });
+
+  it('single-view table has neither Move up nor Move down', () => {
+    const handlers: RailTreeHandlers = { ...noopHandlers, onMoveView: vi.fn() };
+    const single = [
+      { id: 'only', name: 'Only', type: 'list' as const, isDefault: true, order: 0 },
+    ];
+    const [node] = viewNodesOf(buildWith(single, handlers));
+    expect(menuLabels(node)).not.toContain('Move up');
+    expect(menuLabels(node)).not.toContain('Move down');
+  });
+
+  it('no Move items when onMoveView is absent, but Delete still appears', () => {
+    const handlers: RailTreeHandlers = { ...noopHandlers, onDeleteView: vi.fn() };
+    const middle = viewNodesOf(buildWith(threeViews(), handlers))[1];
+    expect(menuLabels(middle)).not.toContain('Move up');
+    expect(menuLabels(middle)).not.toContain('Move down');
+    expect(menuLabels(middle)).toContain('Delete');
+  });
+});

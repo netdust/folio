@@ -24,9 +24,10 @@
  * re-proposed, never silently executed with drifted params).
  */
 
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray, lt, or } from 'drizzle-orm';
 import type { DB } from '../db/client.ts';
 import { type PendingOp, pendingOps } from '../db/schema.ts';
+import { env } from '../env.ts';
 
 type DBOrTx = DB | Parameters<Parameters<DB['transaction']>[0]>[0];
 
@@ -182,6 +183,36 @@ export async function markExecuted(
     .update(pendingOps)
     .set({ status: 'executed', executedAt: new Date(), executedBy })
     .where(and(eq(pendingOps.id, id), eq(pendingOps.status, 'confirmed')));
+}
+
+export const PENDING_OPS_RETENTION_MS = env.FOLIO_PENDING_OPS_RETENTION_MS;
+
+/**
+ * Disk-hygiene reaper for `pending_ops`. Rows are status-flipped, never deleted by
+ * the gate (schema), so the table only grows. This deletes rows that can no longer
+ * be live, after a generous retention window that preserves the executed-op audit
+ * trail. SAFETY (invariant 12): NEVER deletes a `confirmed` row (recorded params
+ * about to be replayed) and NEVER a `pending` row whose TTL hasn't long expired (a
+ * confirm-card may be showing). Atomic single DELETE — no SELECT-then-DELETE TOCTOU.
+ *
+ * @param at injectable "now" for deterministic tests; defaults to Date.now().
+ * @returns number of rows reaped.
+ */
+export async function reapStalePendingOps(db: DBOrTx, at: number = Date.now()): Promise<number> {
+  const cutoff = new Date(at - PENDING_OPS_RETENTION_MS);
+  const reaped = await db
+    .delete(pendingOps)
+    .where(
+      or(
+        and(
+          inArray(pendingOps.status, ['executed', 'rejected', 'expired']),
+          lt(pendingOps.createdAt, cutoff),
+        ),
+        and(eq(pendingOps.status, 'pending'), lt(pendingOps.expiresAt, cutoff)),
+      ),
+    )
+    .returning({ id: pendingOps.id });
+  return reaped.length;
 }
 
 /** Mark a pending/confirmed op rejected (a "no"/cancel click). */

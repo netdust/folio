@@ -95,6 +95,14 @@ export const envSchema = z.object({
   // email must never take the server down. A malformed value simply matches no
   // user, and runBootTasks logs a clear warning and skips. Plain optional string.
   FOLIO_INSTANCE_OWNER: z.string().optional(),
+  // pending_ops reaper retention. A terminal (executed/rejected/expired) row, or a
+  // long-abandoned pending row past its TTL, is reapable only after this window —
+  // generous (7 days) so the executed-op audit trail survives a week before cleanup.
+  FOLIO_PENDING_OPS_RETENTION_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(7 * 24 * 60 * 60 * 1000),
 });
 
 export const env = envSchema.parse(process.env);
