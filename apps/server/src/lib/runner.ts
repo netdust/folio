@@ -69,6 +69,8 @@ import {
   renderUntrustedSkills,
 } from './skill-preamble.ts';
 import { makeConversationSink } from './chat-thread-sink.ts';
+import { conversationBus } from './conversation-bus.ts';
+import { appendMessage, serializeMessage } from '../services/conversations.ts';
 import {
   OPERATOR_MAX_TOKENS,
   takePendingConversationRun,
@@ -278,6 +280,9 @@ export async function runAgent(args: { runId: string }): Promise<void> {
   // provider label lazily once the run fm is known; before that, fall back to
   // a neutral label.
   let providerLabel = 'AI';
+  // Captured once context loads so the top-level catch can surface the failure
+  // into the conversation thread (failRunLastResort posts there when set).
+  let conversationId: string | undefined;
   try {
     const ctx = await loadContext(runId);
     if (ctx === null) {
@@ -286,6 +291,7 @@ export async function runAgent(args: { runId: string }): Promise<void> {
       return;
     }
     providerLabel = PROVIDER_LABELS[ctx.fm.provider as ProviderName] ?? 'Claude Code';
+    conversationId = ctx.conversationId ?? undefined;
 
     // Operator cockpit chat (Task 5) — release the conversation's single-active-turn
     // slot (M14 CAS) on EVERY terminal path of a conversation run. This finally
@@ -327,7 +333,7 @@ export async function runAgent(args: { runId: string }): Promise<void> {
     // Top-level containment. Any unhandled throw → fail the run with a
     // sanitized detail. If the last-resort transition itself races (run
     // already terminal), swallow + return. Never propagate to the poller.
-    await failRunLastResort(runId, providerLabel, err);
+    await failRunLastResort(runId, providerLabel, err, conversationId);
   }
 }
 
@@ -373,6 +379,9 @@ export async function runAgentResume(args: { runId: string }): Promise<void> {
   const { runId } = args;
 
   let providerLabel = 'AI';
+  // Captured once context loads so the top-level catch can surface the failure
+  // into the conversation thread (failRunLastResort posts there when set).
+  let conversationId: string | undefined;
   try {
     const ctx = await loadContext(runId);
     if (ctx === null) {
@@ -380,6 +389,7 @@ export async function runAgentResume(args: { runId: string }): Promise<void> {
       return;
     }
     providerLabel = PROVIDER_LABELS[ctx.fm.provider as ProviderName] ?? 'Claude Code';
+    conversationId = ctx.conversationId ?? undefined;
 
     // Locate the original run via resume_of. Missing pointer or non-existent
     // target → idempotency_violation (the resume contract is broken).
@@ -430,7 +440,7 @@ export async function runAgentResume(args: { runId: string }): Promise<void> {
       : await buildResumeMessages(ctx);
     await runLoop(ctx, messages);
   } catch (err) {
-    await failRunLastResort(runId, providerLabel, err);
+    await failRunLastResort(runId, providerLabel, err, conversationId);
   }
 }
 
@@ -1937,6 +1947,7 @@ async function failRunLastResort(
   runId: string,
   providerLabel: string,
   err: unknown,
+  conversationId?: string,
 ): Promise<void> {
   // Log the RAW error server-side (never surfaced to the user — mitigation 5
   // keeps the user-facing detail sanitized). Without this, a statusless throw
@@ -1945,6 +1956,35 @@ async function failRunLastResort(
   // and the actual cause is lost — a diagnostics black hole. The log is the only
   // place an operator can see WHY a run died.
   console.error(`[runner] last-resort failure for run ${runId}:`, err);
+
+  // Surface the failure into the CONVERSATION thread so the operator cockpit
+  // isn't a silent dead chat. A conversation run has NO `agent_run` document
+  // row, so the document transition below is a no-op for it — without this post
+  // a provider 402/401/5xx (or any throw) reached only stderr and the user saw
+  // nothing (invariant 9: the prior behavior was the named "swallows an error"
+  // anti-pattern for conversation runs). We write ONE `kind:'text'` operator
+  // message via the same appendMessage + conversationBus.publish channel the
+  // sink uses (invariant 8 — the ratified append-only live-tail; invariant 5 —
+  // appendMessage is the documented txWithEvents exception). The body is the
+  // SANITIZED error (same sanitizer as the document-run errorDetail) — never the
+  // raw err, so a key/host embedded in a provider message can't leak (T1/M1).
+  // BEST-EFFORT (M3): wrapped so a throw here never blocks the document
+  // transition below; the slot was already cleared by the caller's `finally`.
+  if (conversationId) {
+    try {
+      const row = await appendMessage(db, {
+        conversationId,
+        role: 'operator',
+        kind: 'text',
+        body: `⚠️ The operator couldn't complete this turn: ${sanitizeProviderError(err, providerLabel)}`,
+        runId,
+      });
+      conversationBus.publish(conversationId, serializeMessage(row));
+    } catch (surfaceErr) {
+      console.error(`[runner] failed to surface run ${runId} error into thread:`, surfaceErr);
+    }
+  }
+
   const runRow = await db.query.documents.findFirst({
     where: and(eq(documents.id, runId), eq(documents.type, 'agent_run')),
   });
