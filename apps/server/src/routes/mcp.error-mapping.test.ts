@@ -292,3 +292,36 @@ test('M-MCP-3 — a valid string id still round-trips unchanged', async () => {
   const body = (await res.json()) as { id?: unknown };
   expect(body.id).toBe('req-42');
 });
+
+// Coverage hardening (shakeout test-effectiveness) — the parse / dispatch guards
+// the auditor flagged as blind.
+test('malformed JSON body returns -32700 parse error', async () => {
+  const { app, seed } = await makeTestApp();
+  const token = await setupToken(seed.workspace.id, seed.user.id, ['documents:read']);
+  const res = await postRaw(app, token, '{not valid json');
+  expect(res.status).toBe(200);
+  const body = (await res.json()) as { error?: { code: number; message: string } };
+  expect(body.error?.code).toBe(-32700);
+  expect(body.error?.message).toMatch(/parse error/i);
+});
+
+test('an unknown top-level method returns -32601 method not supported', async () => {
+  const { app, seed } = await makeTestApp();
+  const token = await setupToken(seed.workspace.id, seed.user.id, ['documents:read']);
+  const res = await postRaw(app, token, JSON.stringify({ jsonrpc: '2.0', id: 9, method: 'frobnicate' }));
+  const body = (await res.json()) as { error?: { code: number; message: string } };
+  expect(body.error?.code).toBe(-32601);
+  expect(body.error?.message).toMatch(/method not supported/i);
+});
+
+test('tools/call with a missing tool name maps to -32601 (empty name → method not found)', async () => {
+  const { app, seed } = await makeTestApp();
+  const token = await setupToken(seed.workspace.id, seed.user.id, ['documents:read']);
+  const res = await postRaw(
+    app,
+    token,
+    JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { arguments: {} } }),
+  );
+  const body = (await res.json()) as { error?: { code: number } };
+  expect(body.error?.code).toBe(-32601);
+});
