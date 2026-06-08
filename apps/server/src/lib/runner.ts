@@ -1584,38 +1584,46 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
       return;
     }
 
-    // GAP-HUNT fix — DROPPED-TOOL-CALL truncation. We reach the terminal path with
-    // collectedToolCalls.length > 0 only when the reason BLOCKED the tool round
-    // (max_tokens / refusal / pause_turn — the whitelist above excluded it). The
-    // model intended to call a tool and we did not run it; silently completing as
-    // success hides lost work (the truncated write_document case). Surface it:
-    //   - max_tokens → FAIL LOUDLY (budget_exceeded): a tool call cut off by the
-    //     token cap is lost work, mirroring the in-loop budget-cap path which also
-    //     posts a partial-work comment + failRun. NOT a clean success.
-    //   - refusal / pause_turn → clean completion is correct (the model chose not
-    //     to proceed / paused), but note the dropped intent in a comment so the
-    //     operator isn't misled by an empty result.
+    // DROPPED-TOOL-CALL policy (code-review #1/#4/#5) — we reach the terminal path
+    // with collectedToolCalls.length > 0 only when the reason BLOCKED the tool round
+    // (the whitelist gate above ran them only on stop|tool_use). The model intended
+    // a tool call we did not run; completing silently hides lost work. ONE keyed
+    // policy decides fail-vs-note, default FAIL-CLOSED so an UNKNOWN reason is never
+    // laundered into a clean success:
+    //   - 'refusal' / 'pause_turn' → the model deliberately declined / paused; a
+    //     clean completion is correct. Note the dropped intent so an empty result
+    //     isn't mysterious. (ONE comment — no separate failRun, so no double-post.)
+    //   - 'max_tokens' OR any UNKNOWN reason → lost work on an unrecognized/truncated
+    //     signal. FAIL LOUDLY (failRun surfaces a single rich message; no separate
+    //     comment, so the conversation thread gets exactly one entry).
     if (collectedToolCalls.length > 0) {
-      if (doneReason === 'max_tokens') {
+      const cleanlyCompletes = doneReason === 'refusal' || doneReason === 'pause_turn';
+      if (cleanlyCompletes) {
         await postAgentComment(
           ctx,
-          'Response truncated at the token cap mid-tool-call — the intended tool call was NOT run. Raise max_tokens and retry.',
+          `Model finished with '${doneReason}' while a tool call was pending — the tool was not run.`,
           'comment',
         );
-        await failRun(
-          ctx,
-          runErrorReasonSchema.enum.budget_exceeded,
-          'Stream truncated (max_tokens) with an unexecuted tool call.',
-        );
+        // falls through to postResultAndComplete below (clean completion).
+      } else {
+        // max_tokens (truncation) or an unknown/off-spec reason — fail-closed. failRun
+        // is the SINGLE surface (it posts to the conversation sink itself), so we do
+        // NOT also postAgentComment — that would double-post on the cockpit thread.
+        // Reason is keyed: max_tokens is a budget truncation; an unrecognized signal
+        // is a hard provider fault (provider_error).
+        const [reason, detail] =
+          doneReason === 'max_tokens'
+            ? ([
+                runErrorReasonSchema.enum.budget_exceeded,
+                'Response truncated at the token cap with an unexecuted tool call — raise max_tokens and retry.',
+              ] as const)
+            : ([
+                runErrorReasonSchema.enum.provider_error,
+                `Stream finished with an unhandled reason ('${doneReason}') while a tool call was pending — the tool was not run.`,
+              ] as const);
+        await failRun(ctx, reason, detail);
         return;
       }
-      // refusal / pause_turn: complete cleanly, but record that a tool call was
-      // dropped so an empty/odd result is explained rather than silently lost.
-      await postAgentComment(
-        ctx,
-        `Model finished with '${doneReason}' while a tool call was pending — the tool was not run.`,
-        'comment',
-      );
     }
 
     await postResultAndComplete(ctx, textBuf, doneReason);
@@ -1979,7 +1987,10 @@ async function failRun(
   // failure as a turn text message so the human watching the thread sees it; the
   // `active_run_id` slot is cleared by the runAgent conversation finally.
   if (ctx.sink) {
-    await ctx.sink.text(`The operator could not finish this turn (${errorReason}).`);
+    // ONE thread message carries the human-readable detail (not just the reason
+    // code), so callers don't post a separate explanatory comment AND failRun —
+    // which would double-post on the cockpit thread (code-review #4).
+    await ctx.sink.text(`The operator could not finish this turn: ${errorDetail}`);
     return;
   }
   // transitionRun owns its own `txWithEvents` (UPDATE + event emit commit
@@ -2013,31 +2024,50 @@ async function failRunLastResort(
   // place an operator can see WHY a run died.
   console.error(`[runner] last-resort failure for run ${runId}:`, err);
 
+  // Resolve the conversation from the RUN BINDING, not just the caller-passed
+  // `conversationId` (code-review #3). The caller captures conversationId only
+  // AFTER loadContext returns; if loadContext itself throws (transient DB error,
+  // a malformed operator skill), the catch reaches here with conversationId
+  // undefined — and the slot-clearing `finally` never ran either, so the
+  // conversation wedges at 409 OPERATOR_BUSY until reboot-recovery. A conversation
+  // is bound to its in-flight run by `active_run_id = runId`; look it up so we
+  // surface the error AND clear the slot even on a pre-context throw.
+  let convId = conversationId;
+  if (!convId) {
+    const boundConv = await db.query.conversations.findFirst({
+      where: eq(conversations.activeRunId, runId),
+    });
+    convId = boundConv?.id;
+  }
+
   // Surface the failure into the CONVERSATION thread so the operator cockpit
   // isn't a silent dead chat. A conversation run has NO `agent_run` document
-  // row, so the document transition below is a no-op for it — without this post
-  // a provider 402/401/5xx (or any throw) reached only stderr and the user saw
-  // nothing (invariant 9: the prior behavior was the named "swallows an error"
-  // anti-pattern for conversation runs). We write ONE `kind:'text'` operator
-  // message via the same appendMessage + conversationBus.publish channel the
-  // sink uses (invariant 8 — the ratified append-only live-tail; invariant 5 —
-  // appendMessage is the documented txWithEvents exception). The body is the
-  // SANITIZED error (same sanitizer as the document-run errorDetail) — never the
-  // raw err, so a key/host embedded in a provider message can't leak (T1/M1).
-  // BEST-EFFORT (M3): wrapped so a throw here never blocks the document
-  // transition below; the slot was already cleared by the caller's `finally`.
-  if (conversationId) {
+  // row, so the document transition below is a no-op for it. ONE `kind:'text'`
+  // operator message via the same appendMessage + conversationBus.publish channel
+  // (invariant 8/5). Body is the SANITIZED error (T1/M1) — never the raw err.
+  // BEST-EFFORT (M3): wrapped so a throw here never blocks the slot-clear / doc
+  // transition below.
+  if (convId) {
     try {
       const row = await appendMessage(db, {
-        conversationId,
+        conversationId: convId,
         role: 'operator',
         kind: 'text',
         body: `⚠️ The operator couldn't complete this turn: ${sanitizeProviderError(err, providerLabel)}`,
         runId,
       });
-      conversationBus.publish(conversationId, serializeMessage(row));
+      conversationBus.publish(convId, serializeMessage(row));
     } catch (surfaceErr) {
       console.error(`[runner] failed to surface run ${runId} error into thread:`, surfaceErr);
+    }
+    // Clear the slot HERE too (compare-and-clear: only if it still points at this
+    // run). On the happy catch path the caller's finally already cleared it (this
+    // is a no-op); on a pre-context throw the finally never ran, so this is the
+    // only thing that un-wedges the conversation.
+    try {
+      await clearConversationSlot(convId, runId);
+    } catch (clearErr) {
+      console.error(`[runner] failed to clear slot for run ${runId}:`, clearErr);
     }
   }
 

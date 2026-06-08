@@ -158,4 +158,75 @@ describe('operator-run error surfacing', () => {
     const convRow = await db.query.conversations.findFirst({ where: eq(conversations.id, convId) });
     expect(convRow?.activeRunId).toBeNull();
   });
+
+  // code-review #3 — a PRE-CONTEXT throw (loadContext itself fails) must STILL
+  // surface the error + clear the slot. The caller captures conversationId only
+  // after loadContext returns, so failRunLastResort must resolve the conversation
+  // from the run binding (active_run_id = runId). Without that, a loadContext throw
+  // left the cockpit silently wedged at 409 until reboot.
+  test('a loadContext-stage throw still surfaces an error AND clears the slot (#3)', async () => {
+    const { db, seed } = await makeTestApp();
+    // A healthy stub — the failure we want is BEFORE the stream, at loadContext.
+    installHealthyProviderStub();
+    await seedInstanceSkills(db);
+    await db.insert(aiKeys).values({
+      id: nanoid(),
+      provider: 'anthropic',
+      label: 'default',
+      encryptedKey: encryptSecret('sk-test-fake-key'),
+    });
+    const conv = await createConversation(db, {
+      createdBy: seed.user.id,
+      operatorAgentId: '_operator',
+      title: 'Untitled',
+    });
+    const runId = nanoid();
+    await createConversationRun(db, { conversation: { id: conv.id, createdBy: seed.user.id }, runId });
+    await db.update(conversations).set({ activeRunId: runId }).where(eq(conversations.id, conv.id));
+
+    // Force loadContext to throw AFTER the slot is acquired: remove the operator's
+    // definitional skills so loadAgentDefinition throws MISSING_SKILL mid-load.
+    const { instanceSkills } = await import('../db/schema.ts');
+    await db.delete(instanceSkills);
+
+    await runAgent({ runId });
+
+    // The slot is cleared (NOT wedged) even though the throw was pre-context...
+    const convRow = await db.query.conversations.findFirst({ where: eq(conversations.id, conv.id) });
+    expect(convRow?.activeRunId).toBeNull();
+    // ...AND an error was surfaced into the thread (resolved via the run binding).
+    const rows = await db.query.messages.findMany({ where: eq(messages.conversationId, conv.id) });
+    const errorRows = rows.filter((r) => r.role === 'operator' && r.kind === 'text' && /couldn.t complete this turn/i.test(r.body ?? ''));
+    expect(errorRows.length).toBe(1);
+  });
+
+  // code-review #4 — a CONVERSATION run that hits max_tokens with a pending tool
+  // call must post EXACTLY ONE thread message. The old dropped-call path called
+  // postAgentComment (→ sink.text) AND failRun (→ sink.text), double-posting on the
+  // cockpit thread. Now failRun is the single surface.
+  test('a conversation max_tokens-truncated tool turn posts exactly ONE thread message (#4)', async () => {
+    const { db, seed } = await makeTestApp();
+    // A stub: stream a tool_call, then finish with max_tokens (truncation).
+    const stub: AIProvider = {
+      async *stream() {
+        yield { type: 'tool_call', id: 'tc-1', name: 'list_workspaces', arguments: {} } as const;
+        yield { type: 'done', reason: 'max_tokens' } as const;
+      },
+      async testKey() {
+        return { ok: true as const };
+      },
+    };
+    providerTestHatch.overrideRegistry('anthropic', async () => stub);
+
+    const { convId } = await driveConversationRun(db, seed.user.id);
+
+    const rows = await db.query.messages.findMany({
+      where: eq(messages.conversationId, convId),
+      orderBy: (m, { asc }) => [asc(m.seq)],
+    });
+    // EXACTLY ONE operator text message about the failure — not two.
+    const opText = rows.filter((r) => r.role === 'operator' && r.kind === 'text');
+    expect(opText.length).toBe(1);
+    expect(opText[0]!.body ?? '').toMatch(/could not finish this turn/i);
+  });
 });

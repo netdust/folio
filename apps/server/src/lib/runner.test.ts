@@ -1278,8 +1278,15 @@ describe('runAgent stream loop', () => {
 
     await runAgent({ runId: run.id });
 
-    // Fail-closed: an unrecognized reason must NOT execute the tool.
+    // Fail-closed: an unrecognized reason must NOT execute the tool...
     expect(handlerRan).toBe(false);
+    // ...AND must FAIL LOUDLY, not silently complete as success. An unknown finish
+    // label that dropped an intended tool call is lost work — completing cleanly
+    // (like refusal/pause_turn) would hide it. The whitelist's fail-closed promise
+    // must hold at RUNTIME, not only via the compile-time closed union.
+    const fm = await readRun(db, run.id);
+    expect(fm.status).toBe('failed');
+    expect(fm.error_reason).toBe('provider_error');
   });
 
   // D-9.2 (was FIX #7, part a) — a multi-tool round where BOTH calls are
