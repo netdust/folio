@@ -28,6 +28,10 @@ export interface NavItem {
   menuItems?: RowMenuItem[];
   /** Double-click the label to inline-edit. Called with the trimmed new name. */
   onRename?: (next: string) => void;
+  /** This node can be drag-reordered within its `sortableGroup`. */
+  draggable?: boolean;
+  /** The sortable group this node belongs to (the owning table id for views). */
+  sortableGroup?: string;
 }
 
 export interface RowMenuItem {
