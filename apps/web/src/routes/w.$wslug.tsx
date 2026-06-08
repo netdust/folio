@@ -252,6 +252,22 @@ function WorkspaceLayout() {
         } catch (err) { toast.error(formatApiError(err)); }
       },
       onDeleteView: (pslug, tslug, viewId, name) => setConfirmDelete({ kind: 'view', pslug, tslug, viewId, name }),
+      onMoveView: async (pslug, _tslug, a, b) => {
+        try {
+          if (a.order === b.order) {
+            // Degenerate: equal orders → a value-swap is a no-op. Nudge `a` past `b`
+            // so the move actually takes effect (rare; only from hand-edited/seeded data).
+            await client.patch(`/api/v1/w/${wslug}/p/${pslug}/views/${a.id}`, { order: b.order + 1 });
+          } else {
+            // swap orders: a takes b's order, b takes a's.
+            await client.patch(`/api/v1/w/${wslug}/p/${pslug}/views/${a.id}`, { order: b.order });
+            await client.patch(`/api/v1/w/${wslug}/p/${pslug}/views/${b.id}`, { order: a.order });
+          }
+          await qc.invalidateQueries({ queryKey: viewsKeys.list(wslug, pslug) });
+        } catch (err) {
+          toast.error(formatApiError(err));
+        }
+      },
     }),
     [navigate, wslug, qc, updateProject],
   );
