@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { EphemeralToken } from '../db/schema.ts';
 import { assertNotHumanPatForAgentLifecycle, mayManageAgentLifecycle } from './agent-guards.ts';
+import { roleToScopes } from './agent-schema.ts';
 import { mcpRejectHumanPat } from './mcp-errors.ts';
 
 const tok = (over: Partial<EphemeralToken>): EphemeralToken =>
@@ -68,5 +69,31 @@ describe('MCP and HTTP agent-lifecycle gates converge', () => {
 
   test('HTTP gate additionally allows the session (null) caller', () => {
     expect(httpRejects(null)).toBe(false);
+  });
+});
+
+// Mitigation 4 (spec threat model) — STRUCTURAL half. The D1 loosening admits
+// human PATs holding `agents:write`. The escalation worry is "an admin PAT mints
+// an agent WIDER than the admin." That is unreachable BY CONSTRUCTION: the gating
+// scope `agents:write` is granted by roleToScopes ONLY to owner/admin, who ALSO
+// always hold config:write + documents:delete. So any caller that can pass the
+// `agents:write` scope gate already holds the full document-scope set — there is
+// no scope an admin could grant a child that the admin lacks. A hand-crafted
+// `agents:write`-only PAT is un-mintable (mintToken's roleToScopes ceiling —
+// locked by tokens.test.ts:195,213). This test pins the structural fact the
+// whole argument rests on; the agent-bound-caller widening path is locked
+// separately by mcp.test.ts F2 (allow_list_widening_forbidden / tools-widening).
+describe('mitigation 4 — agents:write co-occurs with the full admin scope set', () => {
+  test('roleToScopes(member) never grants agents:write (member cannot reach agent creation)', () => {
+    expect(roleToScopes('member')).not.toContain('agents:write');
+  });
+  test('roleToScopes(owner/admin) granting agents:write ALSO grants config:write + documents:delete', () => {
+    for (const role of ['owner', 'admin'] as const) {
+      const scopes = roleToScopes(role);
+      expect(scopes).toContain('agents:write');
+      // The co-occurrence that makes "admin mints wider than self" impossible:
+      expect(scopes).toContain('config:write');
+      expect(scopes).toContain('documents:delete');
+    }
   });
 });

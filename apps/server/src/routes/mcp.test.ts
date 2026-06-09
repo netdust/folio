@@ -1,4 +1,5 @@
 import { test, expect } from 'bun:test';
+import { eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { makeTestApp } from '../test/harness.ts';
 import { db } from '../db/client.ts';
@@ -1521,6 +1522,48 @@ test('MCP update_agent ALLOWS an admin PAT (agents:write) (D1)', async () => {
   expect(body.error).toBeUndefined();
   const patched = JSON.parse(body.result!.content[0]!.text) as { title: string };
   expect(patched.title).toBe('Patched');
+});
+
+test('D1 mitigation 4: an admin-PAT-minted agent token is bounded by its tools, not widened', async () => {
+  // An admin PAT (agents:write + the full admin scope set) mints an agent whose
+  // bound token must carry ONLY the scopes implied by its declared `tools`
+  // (toolsToScopes) — NOT the admin's broader set, and never wider than the
+  // admin's own authority. This locks the "no escalation through the minted
+  // agent" half of mitigation 4 on the newly-opened human-PAT path. The
+  // structural "agents:write co-occurs with config:write" fact is locked in
+  // agent-guards.test.ts.
+  const { app, seed } = await makeTestApp();
+  const adminPat = await setupToken(seed.workspace.id, seed.user.id, [
+    'agents:write',
+    'config:write',
+    'documents:read',
+    'documents:write',
+    'documents:delete',
+  ]);
+  const res = await callTool(app, adminPat, 'create_agent', {
+    workspace_slug: 'acme',
+    title: 'Scoped Bot',
+    frontmatter: {
+      system_prompt: 'work',
+      provider: 'anthropic',
+      model: 'claude-sonnet-4-6',
+      // Read-only toolset → bound token must be documents:read ONLY.
+      tools: ['list_documents'],
+    },
+  });
+  const body = (await res.json()) as { result?: { content: { text: string }[] }; error?: unknown };
+  expect(body.error).toBeUndefined();
+  const agent = JSON.parse(body.result!.content[0]!.text) as { id: string };
+
+  // The bound token's scopes are exactly toolsToScopes(['list_documents']) =
+  // ['documents:read'] — it did NOT inherit the admin's config:write/delete/etc.
+  const tokenRow = await db.query.apiTokens.findFirst({
+    where: eq(apiTokens.agentId, agent.id),
+  });
+  expect(tokenRow).toBeDefined();
+  expect(tokenRow!.scopes.sort()).toEqual(['documents:read']);
+  expect(tokenRow!.scopes).not.toContain('config:write');
+  expect(tokenRow!.scopes).not.toContain('agents:write');
 });
 
 test('MCP delete_agent ALLOWS an admin PAT (agents:write) (D1)', async () => {
