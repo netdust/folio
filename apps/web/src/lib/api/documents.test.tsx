@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
   documentsKeys,
   sortByBoardPosition,
+  useDeleteDocument,
   useUpdateDocument,
   type Document,
   type DocumentListPage,
@@ -159,6 +160,76 @@ describe('useUpdateDocument', () => {
         k === JSON.stringify(['document-events', 'acme', 'web', 'fix-login']),
       ),
     ).toBe(true);
+  });
+});
+
+describe('useDeleteDocument table scoping', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('invalidates a TABLE-scoped list key (the deleted doc\'s table), not the project-wide prefix', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      new Response(null, { status: 204 }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    const invalidateSpy = vi.spyOn(qc, 'invalidateQueries');
+
+    // A delete in the 'bugs' table must refresh the 'bugs' list — not the
+    // default 'work-items' list. The legacy project-scoped prefix
+    // [...all, wslug, pslug, 'list'] no longer prefix-matches the table-scoped
+    // list key [...all, wslug, pslug, tslug, 'list', params], so the list never
+    // refetches after a delete in a non-default table.
+    const { result } = renderHook(() => useDeleteDocument('acme', 'web', 'bugs'), {
+      wrapper: wrapperOf(qc),
+    });
+
+    await result.current.mutateAsync('squash-me');
+
+    await waitFor(() => expect(invalidateSpy).toHaveBeenCalled());
+
+    const prefixes = invalidateSpy.mock.calls.map(([opts]) =>
+      (opts as { queryKey: readonly unknown[] }).queryKey,
+    );
+
+    // The invalidation prefix must be table-scoped: [...all, wslug, pslug, tslug, 'list'].
+    const bugsPrefix = JSON.stringify([...documentsKeys.all, 'acme', 'web', 'bugs', 'list']);
+    const workItemsPrefix = JSON.stringify([...documentsKeys.all, 'acme', 'web', 'work-items', 'list']);
+    const seen = prefixes.map((p) => JSON.stringify(p));
+
+    expect(seen).toContain(bugsPrefix);
+    // And it must NOT invalidate the wrong table's list, nor the legacy
+    // project-scoped prefix that omits tslug entirely.
+    expect(seen).not.toContain(workItemsPrefix);
+    expect(seen).not.toContain(JSON.stringify([...documentsKeys.all, 'acme', 'web', 'list']));
+  });
+
+  it('issues the DELETE against the TABLE-scoped document route', async () => {
+    const urls: string[] = [];
+    const fetchMock = vi.fn<typeof fetch>(async (url) => {
+      urls.push(String(url));
+      return new Response(null, { status: 204 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+
+    const { result } = renderHook(() => useDeleteDocument('acme', 'web', 'bugs'), {
+      wrapper: wrapperOf(qc),
+    });
+
+    await result.current.mutateAsync('squash-me');
+
+    // The URL must carry the /t/<tslug>/ segment, or the delete hits the
+    // default (work-items) table and either 404s or deletes the wrong row.
+    expect(urls.some((u) => u.includes('/p/web/t/bugs/documents/squash-me'))).toBe(true);
   });
 });
 

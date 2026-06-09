@@ -237,18 +237,18 @@ export function useUpdateDocument(
   });
 }
 
-export function useDeleteDocument(wslug: string, pslug: string) {
+export function useDeleteDocument(wslug: string, pslug: string, tslug: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (slug: string) =>
-      client.delete<void>(`/api/v1/w/${wslug}/p/${pslug}/documents/${slug}`),
+      client.delete<void>(`/api/v1/w/${wslug}/p/${pslug}/t/${tslug}/documents/${slug}`),
     onSuccess: () =>
-      qc.invalidateQueries({ queryKey: [...documentsKeys.all, wslug, pslug, 'list'] }),
+      qc.invalidateQueries({ queryKey: [...documentsKeys.all, wslug, pslug, tslug, 'list'] }),
   });
 }
 
-export function useDocumentMarkdown(wslug: string, pslug: string, slug: string) {
-  return client.getRaw(`/api/v1/w/${wslug}/p/${pslug}/documents/${slug}.md`);
+export function useDocumentMarkdown(wslug: string, pslug: string, tslug: string, slug: string) {
+  return client.getRaw(`/api/v1/w/${wslug}/p/${pslug}/t/${tslug}/documents/${slug}.md`);
 }
 
 // ---------------------------------------------------------------------------
