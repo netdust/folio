@@ -40,7 +40,10 @@ export function resolveViewNav(tslug: string, type: 'list' | 'kanban'): RailNavT
  *  paths yield the default table; anything else (e.g. /wiki) yields undefined so
  *  the rail doesn't falsely highlight a table. */
 export function activeTableFromPath(path: string): string | undefined {
-  const tMatch = path.match(/\/t\/([^/]+)/);
+  // Anchor the table segment AFTER `/p/<pslug>/` so a workspace or project
+  // literally slugged `t` (`/w/t/...`, `/w/acme/p/t/...`) can't be mis-captured
+  // as the table — the bare `/\/t\//` form matched the first `/t/` anywhere.
+  const tMatch = path.match(/\/p\/[^/]+\/t\/([^/]+)/);
   if (tMatch) return tMatch[1];
   if (/\/(work-items|board)(\/|$)/.test(path)) return DEFAULT_TABLE_SLUG;
   return undefined;

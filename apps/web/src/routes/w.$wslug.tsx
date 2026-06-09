@@ -165,6 +165,19 @@ function WorkspaceLayout() {
     return pairs;
   }, [projectList, tablesByProject]);
 
+  // PERF (P×T fan-out): this fires one GET /t/<tslug>/views per (project, table)
+  // pair UNCONDITIONALLY on the always-mounted sidebar — O(projects × tables)
+  // requests on every workspace mount. The real fix is expand-gating (skip the
+  // fetch for a COLLAPSED project) or a batched project-views endpoint. Gating
+  // here cleanly is non-trivial: the expand state lives in rail-tree.tsx's
+  // per-node `useExpanded` (key `folio:rail-expanded:project:<pslug>`), which
+  // DEFAULT-OPENS projects and only writes its key on mount — a non-reactive
+  // localStorage read at this parent fetch site would lag a fresh expand and
+  // risk re-introducing the "view vanished when collapsed" bug (rail-tree.tsx
+  // V3 note). Lifting that state to a shared store is a rail-tree refactor out
+  // of this fix's scope. TODO(perf): add a batched GET /p/<pslug>/views?tables=
+  // or lift project-expand state to gate these queries with `enabled`.
+  // staleTime (5m) already prevents refetch storms within a session.
   const viewQueries = useQueries({
     queries: tablePairs.map((pair) => ({
       queryKey: viewsKeys.list(wslug, pair.pslug, pair.tslug),
@@ -189,7 +202,11 @@ function WorkspaceLayout() {
   const newViewCurrentColumns = useMemo(() => {
     if (!newViewSheet) return undefined;
     const tables = tablesByProject[newViewSheet.pslug] ?? [];
-    const views = viewsByTable[tables[0]?.id ?? ''] ?? [];
+    // Seed from the table the sheet was OPENED on (newViewSheet.tslug), not
+    // tables[0] (the default/work-items table) — otherwise a view created from
+    // the `bugs` rail row inherits work-items' columns.
+    const activeTable = tables.find((t) => t.slug === newViewSheet.tslug) ?? tables[0];
+    const views = viewsByTable[activeTable?.id ?? ''] ?? [];
     const active =
       views.find((v) => v.id === activeViewId) ?? views.find((v) => v.isDefault) ?? views[0];
     if (!active) return undefined;

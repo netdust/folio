@@ -76,6 +76,22 @@ describe('activeTableFromPath — which table is the layout viewing', () => {
   it('a /t/<tslug>/board path → that table', () => {
     expect(activeTableFromPath('/w/acme/p/sales/t/bugs/board')).toBe('bugs');
   });
+
+  // The `/t/<tslug>` segment is anchored AFTER `/p/<pslug>/`. A workspace or
+  // project literally slugged `t` must NOT be mistaken for a table segment —
+  // the match would otherwise capture the wrong path segment and highlight a
+  // non-existent table (or hide the real default one).
+  it('a workspace slugged `t` → the default table (NOT `t`-as-table)', () => {
+    expect(activeTableFromPath('/w/t/p/sales/work-items')).toBe('work-items');
+  });
+
+  it('a project slugged `t` → the default table (NOT `t`-as-table)', () => {
+    expect(activeTableFromPath('/w/acme/p/t/work-items')).toBe('work-items');
+  });
+
+  it('a real /t/<tslug> under a project still resolves the table', () => {
+    expect(activeTableFromPath('/w/acme/p/sales/t/bugs')).toBe('bugs');
+  });
 });
 
 describe('activeTabFromPath — grid vs board tab', () => {

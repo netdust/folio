@@ -5,8 +5,8 @@ import { toast } from 'sonner';
 import { useProject } from '../lib/api/projects.ts';
 import { useDocuments, useCreateDocument } from '../lib/api/documents.ts';
 import { useLiveDocuments } from '../lib/api/use-live-documents.ts';
-import { DEFAULT_TABLE_SLUG, useCurrentTslug } from '../lib/default-table.ts';
-import { activeTabFromPath } from '../lib/rail-nav.ts';
+import { useCurrentTslug } from '../lib/default-table.ts';
+import { activeTabFromPath, resolveTableNav, resolveViewNav } from '../lib/rail-nav.ts';
 import { formatApiError } from '../lib/api/index.ts';
 import { MainFrame, FrameTab } from '../components/shell/main-frame.tsx';
 import { BoardControls } from '../components/kanban/board-controls.tsx';
@@ -47,18 +47,13 @@ function ProjectLayout() {
   // Table-route-aware: a /t/<tslug>/board path lights Board, a bare /t/<tslug>
   // (or /work-items) lights the grid. A plain `endsWith('/'+path)` would miss
   // both /t/<tslug> shapes and wrongly fall through to the work-items default.
-  const isDefaultTable = tslug === DEFAULT_TABLE_SLUG;
   const activeTab = activeTabFromPath(path) ?? 'work-items';
-  // The two table tabs route to the CURRENT table's grid + board. On the default
-  // table that's the legacy /work-items + /board routes (no :tslug); on any other
-  // table it's /t/<tslug> + /t/<tslug>/board.
-  const tableTabTo = (tab: 'work-items' | 'board') =>
-    isDefaultTable
-      ? (`/w/$wslug/p/$pslug/${tab}` as const)
-      : tab === 'board'
-        ? ('/w/$wslug/p/$pslug/t/$tslug/board' as const)
-        : ('/w/$wslug/p/$pslug/t/$tslug' as const);
-  const tableTabParams = isDefaultTable ? { wslug, pslug } : { wslug, pslug, tslug };
+  // The two table tabs route to the CURRENT table's grid + board via the single
+  // rail-nav resolver (the same source the rail + new-view sheet delegate to):
+  // grid → resolveTableNav, board → resolveViewNav(_, 'kanban'). Default table →
+  // legacy /work-items|/board (no :tslug); other tables → /t/$tslug(/board).
+  const tabNav = (tab: 'work-items' | 'board') =>
+    tab === 'board' ? resolveViewNav(tslug, 'kanban') : resolveTableNav(tslug);
 
   const workCount = workItems?.data.length ?? 0;
   const pageCount = pages?.data.length ?? 0;
@@ -92,13 +87,14 @@ function ProjectLayout() {
                 key={t.id}
                 active={activeTab === t.id}
                 icon={t.icon}
-                onClick={() =>
+                onClick={() => {
+                  const target = tabNav(t.path);
                   navigate({
-                    to: tableTabTo(t.path),
-                    params: tableTabParams,
+                    to: target.to,
+                    params: target.withTslug ? { wslug, pslug, tslug } : { wslug, pslug },
                     search: (s) => s,
-                  })
-                }
+                  });
+                }}
               >
                 {t.label}
               </FrameTab>
