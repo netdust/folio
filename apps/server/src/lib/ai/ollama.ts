@@ -9,7 +9,12 @@ import { sanitizeProviderError } from './sanitize-error.ts';
 const DEFAULT_BASE = 'http://127.0.0.1:11434';
 
 type OllamaToolCall = {
-  function: { name: string; arguments: Record<string, unknown> };
+  // `function` (and its `name`) are typed OPTIONAL because a non-native
+  // Ollama-compatible server (LM Studio, llama.cpp) can stream a malformed
+  // tool_call entry without them — the G4 guard exists precisely to catch that.
+  // Typing them required would make the guard read as dead code and invite a
+  // future refactor to drop it, re-introducing the mid-stream TypeError crash.
+  function?: { name?: string; arguments?: unknown };
 };
 
 type OllamaMessage = {

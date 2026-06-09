@@ -1667,10 +1667,14 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
 
 /**
  * G2 — warn loudly when a run completed UNMETERED (the provider never reported token
- * usage, so the budget cap could not apply). Fired on every terminal exit of the run
- * loop — clean completion AND round-cap exhaustion (the runaway denial-of-wallet
- * case). The MAX_TOOL_ROUNDS cap still bounds the loop; this is the observability
- * signal for the Phase 3 M8 residual.
+ * usage, so the budget cap could not apply). Fired on the two SUCCESS-class terminal
+ * exits: clean completion AND round-cap exhaustion (the runaway denial-of-wallet
+ * case). NOT fired on the error exits (FIX#2 truncated, FIX#3 zero-call tool_use,
+ * cancel, fatal-tool-error) — those already surface a loud provider_error/tool_error,
+ * so an extra unmetered warn would be redundant noise on an already-failed run. The
+ * budget-exceeded exit by definition saw usage, so the warn would no-op there anyway.
+ * The MAX_TOOL_ROUNDS cap still bounds the loop; this is the observability signal for
+ * the Phase 3 M8 residual.
  */
 function warnIfUnmetered(runId: string, providerLabel: string, sawUsage: boolean): void {
   if (sawUsage) return;
