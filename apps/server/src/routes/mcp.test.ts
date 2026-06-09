@@ -1426,28 +1426,28 @@ test('MCP get_agent_self with a human PAT returns -32602 no_agent_bound_to_token
 });
 
 // ---------------------------------------------------------------------------
-// Round 6 #1 — MCP agent-lifecycle tools reject human PATs.
+// D1 (headless-Folio Phase 1, 2026-06-09) — MCP agent-lifecycle tools now
+// ADMIT admin (agents:write) human PATs.
 //
 // `create_agent` / `update_agent` / `delete_agent` are auth-grant mutations
-// (they mint, modify, or revoke `agent_token` bearer credentials). A stolen
-// human PAT with `agents:write` could mint a new agent with arbitrary scopes,
-// escalating beyond the original PAT's scope set. Reject at dispatch with
-// MCP error -32000 (round 7 #12 — was -32601, but SDKs route -32601 through
-// the 'capability missing' handler and drop `data.reason`. -32000 preserves
-// it.) + reason `human_pat_rejected_on_agent_lifecycle`.
-//
-// HTTP-side agent CRUD (POST/PATCH/DELETE /documents with type=agent) is
-// intentionally NOT gated — that's the admin-facing surface. See threat-model
-// mitigation 11.
+// (they mint, modify, or revoke `agent_token` bearer credentials). The gate
+// moved from "all human PATs rejected" (round 6 #1) to "admin PAT allowed":
+// `agents:write` is the admin signal (roleToScopes never grants it to member),
+// so an admin PAT may now manage agents headlessly. A member PAT (no
+// agents:write) is still rejected — at the executeTool scope gate, which fires
+// before mcpRejectHumanPat (the lifecycle gate's -32000 / reason
+// `human_pat_rejected_on_agent_lifecycle` only bites a non-admin, non-agent
+// bearer that somehow holds agents:write, unreachable by construction here).
+// Both faces now delegate to mayManageAgentLifecycle; HTTP is gated too.
 // ---------------------------------------------------------------------------
 
-test('MCP create_agent rejects human-PAT caller (round 6 #1)', async () => {
+test('MCP create_agent ALLOWS an admin PAT (agents:write); rejects a member PAT (D1)', async () => {
   const { app, seed } = await makeTestApp();
-  const token = await setupToken(seed.workspace.id, seed.user.id, [
+  const adminPat = await setupToken(seed.workspace.id, seed.user.id, [
     'agents:write',
     'documents:read',
   ]);
-  const res = await callTool(app, token, 'create_agent', {
+  const res = await callTool(app, adminPat, 'create_agent', {
     workspace_slug: 'acme',
     title: 'Helper',
     frontmatter: {
@@ -1458,14 +1458,34 @@ test('MCP create_agent rejects human-PAT caller (round 6 #1)', async () => {
     },
   });
   const body = (await res.json()) as {
-    error?: { code: number; data?: { reason: string } };
+    result?: { content: { text: string }[] };
+    error?: { code: number };
   };
-  expect(body.error).toBeDefined();
-  expect(body.error!.code).toBe(-32000);
-  expect(body.error!.data?.reason).toBe('human_pat_rejected_on_agent_lifecycle');
+  expect(body.error).toBeUndefined();
+  const agent = JSON.parse(body.result!.content[0]!.text) as { slug: string };
+  expect(agent.slug).toBeTruthy();
+
+  // Member PAT (no agents:write) — rejected by the scope gate.
+  const memberPat = await setupToken(seed.workspace.id, seed.user.id, [
+    'documents:read',
+    'documents:write',
+  ]);
+  const denied = await callTool(app, memberPat, 'create_agent', {
+    workspace_slug: 'acme',
+    title: 'Blocked',
+    frontmatter: {
+      system_prompt: 'x',
+      provider: 'anthropic',
+      model: 'claude-sonnet-4-6',
+      tools: ['list_documents'],
+    },
+  });
+  const deniedBody = (await denied.json()) as { error?: { message: string } };
+  expect(deniedBody.error).toBeDefined();
+  expect(deniedBody.error!.message).toMatch(/agents:write/);
 });
 
-test('MCP update_agent rejects human-PAT caller (round 6 #1)', async () => {
+test('MCP update_agent ALLOWS an admin PAT (agents:write) (D1)', async () => {
   const { app, seed } = await makeTestApp();
   // Seed an agent via agent-bound bearer (the legitimate path).
   const { agentToken } = await setupAgentBoundToken(seed.workspace.id, seed.user.id, {
@@ -1484,25 +1504,26 @@ test('MCP update_agent rejects human-PAT caller (round 6 #1)', async () => {
     },
   });
 
-  // Then attempt the patch via human PAT — must be rejected.
-  const humanPat = await setupToken(seed.workspace.id, seed.user.id, [
+  // Patch via an admin human PAT — now allowed.
+  const adminPat = await setupToken(seed.workspace.id, seed.user.id, [
     'agents:write',
     'documents:read',
   ]);
-  const res = await callTool(app, humanPat, 'update_agent', {
+  const res = await callTool(app, adminPat, 'update_agent', {
     workspace_slug: 'acme',
     slug: 'existing',
     title: 'Patched',
   });
   const body = (await res.json()) as {
-    error?: { code: number; data?: { reason: string } };
+    result?: { content: { text: string }[] };
+    error?: { code: number };
   };
-  expect(body.error).toBeDefined();
-  expect(body.error!.code).toBe(-32000);
-  expect(body.error!.data?.reason).toBe('human_pat_rejected_on_agent_lifecycle');
+  expect(body.error).toBeUndefined();
+  const patched = JSON.parse(body.result!.content[0]!.text) as { title: string };
+  expect(patched.title).toBe('Patched');
 });
 
-test('MCP delete_agent rejects human-PAT caller (round 6 #1)', async () => {
+test('MCP delete_agent ALLOWS an admin PAT (agents:write) (D1)', async () => {
   const { app, seed } = await makeTestApp();
   // Seed an agent via agent-bound bearer.
   const { agentToken } = await setupAgentBoundToken(seed.workspace.id, seed.user.id, {
@@ -1521,20 +1542,20 @@ test('MCP delete_agent rejects human-PAT caller (round 6 #1)', async () => {
     },
   });
 
-  const humanPat = await setupToken(seed.workspace.id, seed.user.id, [
+  const adminPat = await setupToken(seed.workspace.id, seed.user.id, [
     'agents:write',
     'documents:read',
   ]);
-  const res = await callTool(app, humanPat, 'delete_agent', {
+  const res = await callTool(app, adminPat, 'delete_agent', {
     workspace_slug: 'acme',
     slug: 'existing',
   });
   const body = (await res.json()) as {
-    error?: { code: number; data?: { reason: string } };
+    result?: { content: { text: string }[] };
+    error?: { code: number };
   };
-  expect(body.error).toBeDefined();
-  expect(body.error!.code).toBe(-32000);
-  expect(body.error!.data?.reason).toBe('human_pat_rejected_on_agent_lifecycle');
+  expect(body.error).toBeUndefined();
+  expect(body.result!.content[0]!.text).toBeTruthy();
 });
 
 // ---------------------------------------------------------------------------

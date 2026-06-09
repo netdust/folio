@@ -701,70 +701,107 @@ describe('D-2: agent-lifecycle guards survive the migration (mitigation 57)', ()
     expect(e.data?.reason).toBe('cannot_delete_self');
   });
 
-  it('create_agent rejects a human PAT (no agent binding)', async () => {
+  // D1 (headless-Folio Phase 1, 2026-06-09): the agent-lifecycle gate moved
+  // from "all human PATs rejected" to "admin (agents:write) PATs allowed". An
+  // admin PAT may now mint/patch/delete agents; a member PAT (no agents:write)
+  // is still rejected with `human_pat_rejected_on_agent_lifecycle`.
+  it('create_agent ALLOWS an admin PAT (agents:write); REJECTS a member PAT', async () => {
     const { db, seed } = await makeTestApp();
-    const pat = await seedHumanPat(db, seed.workspace.id, seed.user.id, [
+    // Admin PAT (agents:write) — now allowed.
+    const adminPat = await seedHumanPat(db, seed.workspace.id, seed.user.id, [
       'agents:write',
       'documents:read',
     ]);
-    let thrown: unknown;
-    try {
-      await exec(pat, seed.user.id, 'create_agent', {
+    const out = (await exec(adminPat, seed.user.id, 'create_agent', {
+      workspace_slug: 'acme',
+      title: 'Spawned',
+      frontmatter: {
+        system_prompt: 'x',
+        model: 'm',
+        provider: 'anthropic',
+        tools: ['list_documents'],
+      },
+    })) as { content: { text: string }[] };
+    const agent = JSON.parse(out.content[0]!.text) as { slug: string };
+    expect(agent.slug).toBeTruthy();
+
+    // Member PAT (no agents:write) — still rejected. At the executeTool layer
+    // the `agents:write` requiredScope check fires BEFORE mcpRejectHumanPat, so
+    // a member is denied by the scope gate (agents:write IS the admin signal —
+    // a PAT lacking it can never reach the lifecycle gate).
+    const memberPat = await seedHumanPat(db, seed.workspace.id, seed.user.id, [
+      'documents:read',
+      'documents:write',
+    ]);
+    await expect(
+      exec(memberPat, seed.user.id, 'create_agent', {
         workspace_slug: 'acme',
-        title: 'Spawned',
+        title: 'Blocked',
         frontmatter: { system_prompt: 'x', model: 'm', provider: 'anthropic' },
-      });
-    } catch (err) {
-      thrown = err;
-    }
-    const e = thrown as Error & { code?: number; data?: { reason?: string } };
-    expect(e).toBeInstanceOf(Error);
-    expect(e.code).toBe(-32000);
-    expect(e.data?.reason).toBe('human_pat_rejected_on_agent_lifecycle');
+      }),
+    ).rejects.toThrow('forbidden: scope agents:write missing');
   });
 
-  it('update_agent rejects a human PAT (no agent binding)', async () => {
+  it('update_agent ALLOWS an admin PAT (agents:write)', async () => {
     const { db, seed } = await makeTestApp();
-    // Seed a target agent for the PAT to attempt to patch.
+    // Seed a target agent for the PAT to patch.
     const { agentSlug } = await seedAgent(db, seed.workspace.id, seed.user.id);
-    const pat = await seedHumanPat(db, seed.workspace.id, seed.user.id, [
+    const adminPat = await seedHumanPat(db, seed.workspace.id, seed.user.id, [
       'agents:write',
       'documents:read',
     ]);
-    let thrown: unknown;
-    try {
-      await exec(pat, seed.user.id, 'update_agent', {
+    const out = (await exec(adminPat, seed.user.id, 'update_agent', {
+      workspace_slug: 'acme',
+      slug: agentSlug,
+      title: 'Renamed',
+    })) as { content: { text: string }[] };
+    const patched = JSON.parse(out.content[0]!.text) as { title: string };
+    expect(patched.title).toBe('Renamed');
+  });
+
+  it('update_agent REJECTS a member PAT (no agents:write) via the scope gate', async () => {
+    const { db, seed } = await makeTestApp();
+    const { agentSlug } = await seedAgent(db, seed.workspace.id, seed.user.id);
+    const memberPat = await seedHumanPat(db, seed.workspace.id, seed.user.id, [
+      'documents:read',
+      'documents:write',
+    ]);
+    await expect(
+      exec(memberPat, seed.user.id, 'update_agent', {
         workspace_slug: 'acme',
         slug: agentSlug,
         title: 'Renamed',
-      });
-    } catch (err) {
-      thrown = err;
-    }
-    const e = thrown as Error & { code?: number; data?: { reason?: string } };
-    expect(e.code).toBe(-32000);
-    expect(e.data?.reason).toBe('human_pat_rejected_on_agent_lifecycle');
+      }),
+    ).rejects.toThrow('forbidden: scope agents:write missing');
   });
 
-  it('delete_agent rejects a human PAT (no agent binding)', async () => {
+  it('delete_agent ALLOWS an admin PAT (agents:write); REJECTS a member PAT', async () => {
     const { db, seed } = await makeTestApp();
-    const { agentSlug } = await seedAgent(db, seed.workspace.id, seed.user.id);
-    const pat = await seedHumanPat(db, seed.workspace.id, seed.user.id, [
+    // Admin PAT (agents:write) — now allowed.
+    const { agentSlug: adminTarget } = await seedAgent(db, seed.workspace.id, seed.user.id);
+    const adminPat = await seedHumanPat(db, seed.workspace.id, seed.user.id, [
       'agents:write',
       'documents:read',
     ]);
-    let thrown: unknown;
-    try {
-      await exec(pat, seed.user.id, 'delete_agent', {
+    const out = (await exec(adminPat, seed.user.id, 'delete_agent', {
+      workspace_slug: 'acme',
+      slug: adminTarget,
+    })) as { content: { text: string }[] };
+    expect(out.content[0]!.text).toBeTruthy();
+
+    // Member PAT (no agents:write) — still rejected by the scope gate (fires
+    // before mcpRejectHumanPat; agents:write IS the admin signal).
+    const { agentSlug: memberTarget } = await seedAgent(db, seed.workspace.id, seed.user.id);
+    const memberPat = await seedHumanPat(db, seed.workspace.id, seed.user.id, [
+      'documents:read',
+      'documents:write',
+    ]);
+    await expect(
+      exec(memberPat, seed.user.id, 'delete_agent', {
         workspace_slug: 'acme',
-        slug: agentSlug,
-      });
-    } catch (err) {
-      thrown = err;
-    }
-    const e = thrown as Error & { code?: number; data?: { reason?: string } };
-    expect(e.code).toBe(-32000);
-    expect(e.data?.reason).toBe('human_pat_rejected_on_agent_lifecycle');
+        slug: memberTarget,
+      }),
+    ).rejects.toThrow('forbidden: scope agents:write missing');
   });
 
   it('get_agent_self requires an agent-bound token (rejects human PAT)', async () => {

@@ -14,8 +14,8 @@
  */
 
 import type { EphemeralToken } from '../db/schema.ts';
+import { mayManageAgentLifecycle } from './agent-guards.ts';
 import { HTTPError } from './http.ts';
-import { isAgentBound } from './token-reach.ts';
 
 /**
  * MCP JSON-RPC "invalid params" error (-32602). Carries structured `data` so the
@@ -30,20 +30,22 @@ export function mcpInvalidParams(message: string, data: Record<string, unknown>)
 }
 
 /**
- * Auth-grant mutations on the agent surface MUST reject human PATs.
+ * MCP face of the agent-lifecycle gate. Agent CRUD via MCP (`create_agent` /
+ * `update_agent` / `delete_agent`) is an auth-grant mutation: it mints,
+ * modifies, or revokes an `agent_token` bearer credential.
  *
- * Agent CRUD via MCP (`create_agent` / `update_agent` / `delete_agent`) is an
- * auth-grant mutation: it mints, modifies, or revokes an `agent_token` bearer
- * credential. An agent-bound bearer (token.agentId set) calling these has a
- * legitimate use case — agent self-management / parent spawning a child. A
- * human PAT calling them has the SAME SHAPE as a stolen-credential escalation:
- * the attacker mints a new agent with arbitrary scopes and pivots through it.
+ * Delegates the allow/deny decision to `mayManageAgentLifecycle`
+ * (`agent-guards.ts`) — the single convergence point that BOTH this MCP face
+ * and the HTTP face (`assertNotHumanPatForAgentLifecycle`) route through, so
+ * the two transports can never drift apart.
  *
- * Symmetric carve-out: HTTP-side agent CRUD (`POST/PATCH/DELETE
- * /api/v1/w/:wslug/documents` with `type=agent`) is intentionally NOT gated
- * — that's the admin-facing surface where workspace admins manage agents.
- * MCP is the agent-facing surface; gating MCP closes the privilege-escalation
- * vector without breaking admin workflows.
+ * As of 2026-06-09 (headless-Folio Phase 1, D1) the gate ADMITS admin
+ * (`agents:write`) human PATs alongside session callers and agent-bound bearers
+ * (incl. the operator via its isOperator marker). The HTTP face is NOW gated
+ * too — the prior "HTTP-side agent CRUD is intentionally NOT gated" carve-out
+ * is gone; both faces share this one predicate. A member / stolen lower-scope
+ * PAT (no `agents:write`) is still rejected — the stolen-credential escalation
+ * shape this gate was built to close.
  *
  * Uses code -32000 (JSON-RPC "server-defined error"). The round-6 code -32601
  * was overloaded: SDK clients (including the Cursor MCP client) branch on
@@ -53,17 +55,13 @@ export function mcpInvalidParams(message: string, data: Record<string, unknown>)
  * `data.reason: 'human_pat_rejected_on_agent_lifecycle'` stays addressable.
  */
 export function mcpRejectHumanPat(token: EphemeralToken): void {
-  // isAgentBound (not token.agentId): the operator is agent-bound via its
-  // isOperator marker (agentId null under Shape B′), so it legitimately reaches
-  // the agent-lifecycle tools — token.agentId would mis-reject it as a human PAT.
-  if (!isAgentBound(token)) {
-    const err = new Error(
-      'agent-lifecycle tools require an agent-bound bearer; human PATs are rejected',
-    ) as Error & { code: number; data: Record<string, unknown> };
-    err.code = -32000;
-    err.data = { reason: 'human_pat_rejected_on_agent_lifecycle' };
-    throw err;
-  }
+  if (mayManageAgentLifecycle(token)) return;
+  const err = new Error(
+    'agent-lifecycle tools require session auth, an agent-bound bearer, or an admin (agents:write) token',
+  ) as Error & { code: number; data: Record<string, unknown> };
+  err.code = -32000;
+  err.data = { reason: 'human_pat_rejected_on_agent_lifecycle' };
+  throw err;
 }
 
 /**
