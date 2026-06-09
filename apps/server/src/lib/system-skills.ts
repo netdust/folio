@@ -177,6 +177,7 @@ slug). The collection path does NOT accept PATCH/DELETE.
 - **Multi-table projects are first-class — a project can own several tables** (e.g. a webdev project with \`work-items\`, \`roadmap\`, \`bugs\`, \`docs\`). To work with a NON-default table you MUST be explicit on EVERY call:
   - **Config** (fields/views/statuses for that table): insert \`/t/<tslug>/\` before the resource — \`…/p/<pslug>/t/<tslug>/statuses\`, \`…/t/<tslug>/views\`, etc.
   - **Documents** in that table: pass \`table_slug: "<tslug>"\` to \`create_document\` / \`list_documents\` (NOT a path segment — it's an argument). Without \`table_slug\` the write lands in \`work-items\`, NOT your new table — the single most common multi-table mistake.
+  - **\`update_document\` and \`delete_document\` take NO \`table_slug\`** — they resolve the doc by its \`slug\` (unique per project), so passing \`table_slug\` to them ERRORS \`invalid arguments\`. Just give \`workspace_slug\` + \`project_slug\` + \`slug\`; it finds the doc in whatever table it lives in. (\`table_slug\` is only for the CREATE target and the LIST filter.)
 - **Recipe — add a second table correctly (the order matters):**
 \`\`\`
 # 1. Create the table.
