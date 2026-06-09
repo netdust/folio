@@ -15,15 +15,16 @@ export interface View {
 }
 
 export const viewsKeys = {
-  list: (wslug: string, pslug: string) => ['views', wslug, pslug] as const,
+  list: (wslug: string, pslug: string, tslug: string) =>
+    ['views', wslug, pslug, tslug] as const,
 };
 
-export function useViews(wslug: string, pslug: string) {
+export function useViews(wslug: string, pslug: string, tslug: string) {
   return useQuery({
-    queryKey: viewsKeys.list(wslug, pslug),
-    queryFn: () => client.get<View[]>(`/api/v1/w/${wslug}/p/${pslug}/views`),
+    queryKey: viewsKeys.list(wslug, pslug, tslug),
+    queryFn: () => client.get<View[]>(`/api/v1/w/${wslug}/p/${pslug}/t/${tslug}/views`),
     staleTime: 5 * 60_000,
-    enabled: !!wslug && !!pslug,
+    enabled: !!wslug && !!pslug && !!tslug,
   });
 }
 
@@ -39,20 +40,20 @@ export interface ViewCreate {
   order?: number;
 }
 
-export function useCreateView(wslug: string, pslug: string) {
+export function useCreateView(wslug: string, pslug: string, tslug: string) {
   const qc = useQueryClient();
   return useMutation({
     // Server returns `{ data: { view: row } }`; the `data` envelope is stripped
     // by client.post but the inner `{ view: row }` is not — unwrap explicitly.
     mutationFn: async (payload: ViewCreate): Promise<View> => {
       const wrapped = await client.post<{ view: View }>(
-        `/api/v1/w/${wslug}/p/${pslug}/views`,
+        `/api/v1/w/${wslug}/p/${pslug}/t/${tslug}/views`,
         payload,
       );
       return wrapped.view;
     },
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: viewsKeys.list(wslug, pslug) });
+      qc.invalidateQueries({ queryKey: viewsKeys.list(wslug, pslug, tslug) });
     },
   });
 }
@@ -69,7 +70,7 @@ export interface ViewPatch {
   order?: number;
 }
 
-export function useUpdateView(wslug: string, pslug: string) {
+export function useUpdateView(wslug: string, pslug: string, tslug: string) {
   const qc = useQueryClient();
   return useMutation({
     // Server PATCH returns `{ data: { view: row } }`; client.patch strips the
@@ -77,22 +78,22 @@ export function useUpdateView(wslug: string, pslug: string) {
     // unwrap pattern in useCreateView and useUpdateField.
     mutationFn: async ({ id, patch }: { id: string; patch: ViewPatch }): Promise<View> => {
       const wrapped = await client.patch<{ view: View }>(
-        `/api/v1/w/${wslug}/p/${pslug}/views/${id}`,
+        `/api/v1/w/${wslug}/p/${pslug}/t/${tslug}/views/${id}`,
         patch,
       );
       return wrapped.view;
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: viewsKeys.list(wslug, pslug) }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: viewsKeys.list(wslug, pslug, tslug) }),
   });
 }
 
-export function useDeleteView(wslug: string, pslug: string) {
+export function useDeleteView(wslug: string, pslug: string, tslug: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (viewId: string) =>
-      client.delete(`/api/v1/w/${wslug}/p/${pslug}/views/${viewId}`),
+      client.delete(`/api/v1/w/${wslug}/p/${pslug}/t/${tslug}/views/${viewId}`),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: viewsKeys.list(wslug, pslug) });
+      qc.invalidateQueries({ queryKey: viewsKeys.list(wslug, pslug, tslug) });
     },
   });
 }
