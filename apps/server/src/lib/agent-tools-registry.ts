@@ -315,9 +315,19 @@ async function resolveTableForArgs(
     if (!t) throw mcpInvalidParams('table not found', { reason: 'table_not_found' });
     return t;
   }
+  // No table_slug: pin to the project's `work-items` table — matching the HTTP
+  // routes' default (scope.ts:120) and the folio skill's documented contract.
+  // (B1: a 2nd table also gets order:0 — tables.ts never increments — so an
+  // `ORDER BY order` rule was a non-deterministic tie that could resolve to the
+  // wrong, status-less table and diverge from HTTP.) Fall back to lowest-order
+  // (createdAt tiebreak for determinism) only if no work-items table exists.
+  const wi = await db.query.tables.findFirst({
+    where: and(eq(tablesTable.projectId, p.id), eq(tablesTable.slug, 'work-items')),
+  });
+  if (wi) return wi;
   const t = await db.query.tables.findFirst({
     where: eq(tablesTable.projectId, p.id),
-    orderBy: (col, { asc }) => [asc(col.order)],
+    orderBy: (col, { asc }) => [asc(col.order), asc(col.createdAt)],
   });
   if (!t) throw mcpInvalidParams('project has no tables', { reason: 'no_tables' });
   return t;

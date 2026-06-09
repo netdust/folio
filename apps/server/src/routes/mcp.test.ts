@@ -367,6 +367,60 @@ test('MCP tools/call list_statuses returns the seeded default statuses', async (
   expect(parsed.table.slug).toBeTruthy();
 });
 
+test('D2: default-table resolution pins to work-items when a 2nd table exists', async () => {
+  // B1 bug: resolveTableForArgs used `ORDER BY order ASC LIMIT 1`, but a 2nd table
+  // also gets order:0 (tables.ts never increments), so the no-table_slug case was a
+  // NON-DETERMINISTIC tie that could resolve to the wrong, status-less table —
+  // diverging from the HTTP routes, which pin to slug='work-items' (scope.ts:120).
+  // Live failure: create_document{status:'todo'} (no table_slug) → "status not in
+  // registry" because it routed to the empty 'bugs' table.
+  const { app, seed } = await makeTestApp();
+  // config:write to create a table via folio_api; documents:write to create a doc.
+  const admin = await setupToken(seed.workspace.id, seed.user.id, [
+    'config:write',
+    'documents:write',
+    'documents:read',
+  ]);
+
+  // Create a 2nd table on the seeded 'web' project. It gets order:0 too → ties.
+  const mkTable = await callTool(app, admin, 'folio_api', {
+    method: 'POST',
+    path: `/api/v1/w/${seed.workspace.slug}/p/web/tables`,
+    body: { name: 'Bugs' },
+  });
+  const mkBody = (await mkTable.json()) as { error?: unknown };
+  expect(mkBody.error).toBeUndefined();
+
+  // list_statuses with NO table_slug → must be the work-items statuses (incl.
+  // 'todo'), NOT the empty 'bugs' set.
+  const stRes = await callTool(app, admin, 'list_statuses', {
+    workspace_slug: seed.workspace.slug,
+    project_slug: 'web',
+  });
+  const stBody = (await stRes.json()) as { result: { content: { text: string }[] }; error?: unknown };
+  expect(stBody.error).toBeUndefined();
+  const stParsed = JSON.parse(stBody.result.content[0]!.text) as {
+    table: { slug: string };
+    statuses: { key: string }[];
+  };
+  expect(stParsed.table.slug).toBe('work-items');
+  expect(stParsed.statuses.map((s) => s.key)).toContain('todo');
+
+  // create_document {status:'todo'} with NO table_slug → succeeds (lands in
+  // work-items). Pre-fix this returned the INVALID_STATUS error.
+  const docRes = await callTool(app, admin, 'create_document', {
+    workspace_slug: seed.workspace.slug,
+    project_slug: 'web',
+    type: 'work_item',
+    title: 'X',
+    status: 'todo',
+  });
+  const docBody = (await docRes.json()) as { result?: { content: { text: string }[] }; error?: unknown };
+  expect(docBody.error).toBeUndefined();
+  const doc = JSON.parse(docBody.result!.content[0]!.text) as { status: string };
+  expect(doc.status).toBe('todo');
+});
+
 test('MCP tools/call run_view returns documents for the default view', async () => {
   const { app, seed } = await makeTestApp();
   const token = await setupToken(seed.workspace.id, seed.user.id, [

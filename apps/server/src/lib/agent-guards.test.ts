@@ -73,16 +73,27 @@ describe('MCP and HTTP agent-lifecycle gates converge', () => {
 });
 
 // Mitigation 4 (spec threat model) — STRUCTURAL half. The D1 loosening admits
-// human PATs holding `agents:write`. The escalation worry is "an admin PAT mints
-// an agent WIDER than the admin." That is unreachable BY CONSTRUCTION: the gating
-// scope `agents:write` is granted by roleToScopes ONLY to owner/admin, who ALSO
-// always hold config:write + documents:delete. So any caller that can pass the
-// `agents:write` scope gate already holds the full document-scope set — there is
-// no scope an admin could grant a child that the admin lacks. A hand-crafted
-// `agents:write`-only PAT is un-mintable (mintToken's roleToScopes ceiling —
-// locked by tokens.test.ts:195,213). This test pins the structural fact the
-// whole argument rests on; the agent-bound-caller widening path is locked
-// separately by mcp.test.ts F2 (allow_list_widening_forbidden / tools-widening).
+// human PATs holding `agents:write`. The escalation worry is "a NON-admin mints
+// an agent WIDER than itself." That is blocked at the ROLE level: `agents:write`
+// is granted by roleToScopes ONLY to owner/admin (a `member` PAT can never hold
+// it — mintToken's roleToScopes ceiling, locked by tokens.test.ts:195,213), and
+// owner/admin ALSO always hold config:write + documents:delete. So the principal
+// reaching agent creation is always an owner/admin who already holds the full
+// document-scope set — a minted agent can never exceed that role's authority.
+//
+// NOTE (security-review 2026-06-09): this does NOT mean an `agents:write` PAT
+// necessarily co-carries delete/config — an admin CAN deliberately mint a NARROW
+// PAT (e.g. ['agents:write','documents:write']) and the widening guards skip
+// human PATs (agent-guards.ts:93,177), so its minted agent's tools-derived token
+// can hold delete/config the narrow PAT omitted. That is the spec's ACCEPTED,
+// documented residual: the minting actor is a full owner/admin who gains nothing
+// past their own role authority, and the minted token stays revocable
+// (api_tokens.agent_id cascade — Task 1). Not a boundary crossing; bounded by
+// role + revocability, not by "narrow PATs are un-mintable".
+//
+// This test pins the role-level co-occurrence the argument rests on; the
+// agent-bound-caller widening path is locked separately by mcp.test.ts F2
+// (allow_list_widening_forbidden / tools-widening).
 describe('mitigation 4 — agents:write co-occurs with the full admin scope set', () => {
   test('roleToScopes(member) never grants agents:write (member cannot reach agent creation)', () => {
     expect(roleToScopes('member')).not.toContain('agents:write');
