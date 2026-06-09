@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { toast } from 'sonner';
 import { useIsInstanceAdmin, useLogout, useMe } from '../lib/api/auth.ts';
 import { useProjects, useUpdateProject, useDeleteProject, projectsKeys } from '../lib/api/projects.ts';
+import { documentsKeys } from '../lib/api/documents.ts';
 import { type Table, tablesKeys } from '../lib/api/tables.ts';
 import { type View, viewsKeys } from '../lib/api/views.ts';
 import { client } from '../lib/api/client.ts';
@@ -421,7 +422,9 @@ function WorkspaceLayout() {
         // notice without explicit invalidation, leaving ghost rows in the rail
         // and stale doc list responses.
         await qc.invalidateQueries({ queryKey: viewsKeys.list(wslug, confirmDelete.pslug, confirmDelete.tslug) });
-        await qc.invalidateQueries({ queryKey: ['documents', wslug, confirmDelete.pslug, confirmDelete.tslug, 'list'] });
+        await qc.invalidateQueries({
+          queryKey: documentsKeys.listPrefix(wslug, confirmDelete.pslug, confirmDelete.tslug),
+        });
         toast.success(`Deleted table "${confirmDelete.name}"`);
       } else if (confirmDelete.kind === 'view') {
         await client.delete(`/api/v1/w/${wslug}/p/${confirmDelete.pslug}/t/${confirmDelete.tslug}/views/${confirmDelete.viewId}`);
