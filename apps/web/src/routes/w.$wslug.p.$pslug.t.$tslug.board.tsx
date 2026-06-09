@@ -1,6 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router';
-import { z } from 'zod';
 import { KanbanView } from '../components/views/kanban-view.tsx';
+import { viewSearchSchema } from '../lib/table-search.ts';
 
 // Slug-collision precedence: a user table literally slugged `board` resolves
 // /t/board (this kanban route's SIBLING grid, via $tslug) and /t/board/board
@@ -8,10 +8,7 @@ import { KanbanView } from '../components/views/kanban-view.tsx';
 // `$tslug/board` as distinct route ids, so both still resolve correctly — the
 // literal `board` segment here always wins over `$tslug` for the deeper path.
 export const Route = createFileRoute('/w/$wslug/p/$pslug/t/$tslug/board')({
-  validateSearch: z.object({
-    doc: z.string().optional(),
-    view: z.string().min(1).optional(),
-  }),
+  validateSearch: viewSearchSchema,
   component: BoardRoute,
 });
 

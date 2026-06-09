@@ -1,13 +1,10 @@
 import { createFileRoute } from '@tanstack/react-router';
-import { z } from 'zod';
 import { KanbanView } from '../components/views/kanban-view.tsx';
 import { DEFAULT_TABLE_SLUG } from '../lib/default-table.ts';
+import { viewSearchSchema } from '../lib/table-search.ts';
 
 export const Route = createFileRoute('/w/$wslug/p/$pslug/board')({
-  validateSearch: z.object({
-    doc: z.string().optional(),
-    view: z.string().min(1).optional(),
-  }),
+  validateSearch: viewSearchSchema,
   component: BoardRoute,
 });
 
