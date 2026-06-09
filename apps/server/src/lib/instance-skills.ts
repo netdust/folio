@@ -12,7 +12,7 @@
  * (Task 15) flips the column.
  */
 
-import { eq, inArray } from 'drizzle-orm';
+import { eq, inArray, ne } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { type DB } from '../db/client.ts';
 import { instanceSkills, type InstanceSkill } from '../db/schema.ts';
@@ -43,9 +43,18 @@ function stripTrusted(fm: Record<string, unknown>): Record<string, unknown> {
 }
 
 /**
- * Idempotently seed the instance skills. `onConflictDoNothing` on the UNIQUE
- * `name` index makes re-seeding a no-op (and never resets a `trusted` flip an
- * admin made after the first seed).
+ * Idempotently seed the instance skills, and UPGRADE the stored body/frontmatter
+ * to the shipped version when they drift (a Folio upgrade ships an improved
+ * skill — existing instances must pick it up, not stay frozen on first-seed).
+ *
+ * The conflict UPDATE refreshes ONLY `body` + `frontmatter`; it DELIBERATELY
+ * never touches `trusted` — that column is the admin's runtime decision
+ * (`set_skill_trust`) and a re-seed must not reset it (invariant 11). So the
+ * `set` clause omits `trusted` entirely: an admin who un-blessed a skill keeps
+ * it un-blessed across upgrades, while still getting the new body.
+ *
+ * `setWhere` gates the write on the body actually differing, so an unchanged
+ * re-seed (the common boot case) is a true no-op — no needless write.
  */
 export async function seedInstanceSkills(db: DB): Promise<void> {
   for (const skill of SEEDED_INSTANCE_SKILLS) {
@@ -58,7 +67,14 @@ export async function seedInstanceSkills(db: DB): Promise<void> {
         frontmatter: skill.frontmatter,
         trusted: skill.trusted,
       })
-      .onConflictDoNothing({ target: instanceSkills.name });
+      .onConflictDoUpdate({
+        target: instanceSkills.name,
+        // NOTE: `trusted` is intentionally absent — never overwrite the admin's
+        // runtime trust decision on a re-seed (invariant 11).
+        set: { body: skill.body, frontmatter: skill.frontmatter },
+        // Only write when the body actually changed (no-op on an unchanged boot).
+        setWhere: ne(instanceSkills.body, skill.body),
+      });
   }
 }
 

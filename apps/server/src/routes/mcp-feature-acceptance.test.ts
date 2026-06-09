@@ -167,6 +167,10 @@ test('FA-F4: the folio skill body carries the corrected D3 recipes (kanban enum 
   expect(body).toMatch(/groupBy/);
   // D3.U4: the agent-create recipe is present.
   expect(body).toMatch(/create_agent/);
-  // D3.B2: the table-status footgun is documented.
-  expect(body).toMatch(/has NO statuses/);
+  // D3.B2: the table-status footgun is documented (folio_api tables have no
+  // statuses; the multi-table recipe spells it out).
+  expect(body).toMatch(/SEED ITS STATUSES|has NONE/);
+  // Headless cold-start + multi-table guidance (the dead-end fixes) are present.
+  expect(body).toMatch(/## 0\. Cold start/);
+  expect(body).toMatch(/Multi-table projects are first-class/);
 });
