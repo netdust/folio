@@ -10,6 +10,7 @@ import {
   CommandItem,
 } from './ui/command.tsx';
 import { useDocuments, useCreateDocument } from '../lib/api/documents.ts';
+import { DEFAULT_TABLE_SLUG } from '../lib/default-table.ts';
 import { useProjects } from '../lib/api/projects.ts';
 import { useWorkspaces } from '../lib/api/workspaces.ts';
 import { matches } from '../lib/command-registry.ts';
@@ -78,13 +79,20 @@ export function CommandPalette() {
   const { data: projects } = useProjects(ctx.workspaceSlug ?? '');
 
   const listParams = useMemo(() => ({ type: 'work_item' as const, limit: 100 }), []);
+  // The Cmd-K palette is mounted in __root.tsx and spans the WHOLE app — it has
+  // no single "current table" (it can render outside any /t/:tslug route), so
+  // useCurrentTslug would be unsafe here. Its search + create target the default
+  // work-items table (the palette's pre-multi-table behavior). Future: a
+  // table-aware palette could read useCurrentTslug when it knows it's under a
+  // table route, but for v1 the default is the honest, always-safe choice.
   const { data: docPage } = useDocuments(
     ctx.workspaceSlug ?? '',
     ctx.projectSlug ?? '',
+    DEFAULT_TABLE_SLUG,
     listParams,
   );
 
-  const create = useCreateDocument(ctx.workspaceSlug ?? '', ctx.projectSlug ?? '');
+  const create = useCreateDocument(ctx.workspaceSlug ?? '', ctx.projectSlug ?? '', DEFAULT_TABLE_SLUG);
 
   const close = () => setOpen(false);
 

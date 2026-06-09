@@ -58,7 +58,8 @@ function setup({ initialPath = '/w/acme/p/sales/work-items', onFetch }: SetupOpt
     if (u.endsWith(`/api/v1/w/${workspace.slug}/projects`)) return respond({ data: projects });
     if (u.endsWith(`/api/v1/w/${workspace.slug}/p/sales`)) return respond({ data: projects[0] });
     if (u.endsWith(`/api/v1/w/${workspace.slug}/p/sales/tables`)) return respond({ data: tables });
-    if (u.endsWith(`/api/v1/w/${workspace.slug}/p/sales/views`)) return respond({ data: views });
+    // Views are now fetched per (project, table): /p/sales/t/<tslug>/views.
+    if (/\/p\/sales\/t\/[^/]+\/views$/.test(u)) return respond({ data: views });
     if (u.endsWith(`/api/v1/w/${workspace.slug}/p/sales/statuses`)) return respond({ data: [] });
     if (u.endsWith(`/api/v1/w/${workspace.slug}/p/sales/fields`)) return respond({ data: [] });
     if (u.includes(`/api/v1/w/${workspace.slug}/p/sales/documents`)) {
@@ -183,6 +184,75 @@ describe('WorkspaceLayout — delete + nav side effects', () => {
       // doc must NOT be wiped just because the user changed views.
       expect(s.doc).toBe('lead-foo');
     });
+  });
+
+  it('new-view sheet captures columns from the table its "+" was clicked on, not work-items', async () => {
+    // 2-table project: the DEFAULT (work-items) and a non-default `bugs` table,
+    // each with a distinct default-view column set. Opening "+ new view" under
+    // `bugs` must seed the new view from BUGS' columns — not work-items' (the
+    // first/default table). The bug: newViewCurrentColumns read tables[0].
+    const twoTables = [
+      { id: 't1', slug: 'work-items', name: 'Work Items' },
+      { id: 't2', slug: 'bugs', name: 'Bugs' },
+    ];
+    const workItemsViews = [
+      { id: 'v-wi', slug: 'all', name: 'All', type: 'list', filters: {}, sort: [], groupBy: null, visibleFields: ['title', 'status'], columnOrder: ['title', 'status'], isDefault: true, order: 0 },
+    ];
+    const bugsViews = [
+      { id: 'v-bugs', slug: 'all', name: 'All', type: 'list', filters: {}, sort: [], groupBy: null, visibleFields: ['title', 'severity', 'repro'], columnOrder: ['title', 'severity', 'repro'], isDefault: true, order: 0 },
+    ];
+
+    let createdViewBody: Record<string, unknown> | undefined;
+    const { queryClient, router } = setup({
+      onFetch: (u, init) => {
+        if (init?.method === 'POST' && /\/p\/sales\/t\/bugs\/views$/.test(u)) {
+          createdViewBody = JSON.parse(String(init.body));
+        }
+      },
+    });
+
+    // Re-stub fetch with the 2-table fixture (setup's default is 1 table).
+    const fetchMock = vi.fn<typeof fetch>(async (url, init) => {
+      const u = String(url);
+      if (init?.method === 'POST' && /\/p\/sales\/t\/bugs\/views$/.test(u)) {
+        createdViewBody = JSON.parse(String(init.body));
+        return new Response(JSON.stringify({ data: { id: 'v-new', type: 'list' } }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      const respond = (body: unknown, status = 200) =>
+        new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+      if (u.endsWith('/api/v1/auth/me')) return respond({ data: { user: me } });
+      if (u.endsWith(`/api/v1/w/${workspace.slug}`)) return respond({ data: workspace });
+      if (u.endsWith('/api/v1/workspaces')) return respond({ data: [{ workspace, role: 'owner' }] });
+      if (u.endsWith(`/api/v1/w/${workspace.slug}/projects`)) return respond({ data: projects });
+      if (u.endsWith(`/api/v1/w/${workspace.slug}/p/sales/tables`)) return respond({ data: twoTables });
+      if (/\/p\/sales\/t\/work-items\/views$/.test(u)) return respond({ data: workItemsViews });
+      if (/\/p\/sales\/t\/bugs\/views$/.test(u)) return respond({ data: bugsViews });
+      if (/\/p\/sales\/t\/[^/]+\/fields$/.test(u)) return respond({ data: [] });
+      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    // Wait for the Bugs table row to render in the rail.
+    const bugsLabel = await screen.findByText('Bugs');
+    const bugsRow = bugsLabel.closest('li')!;
+    const plusBtn = bugsRow.querySelector('[data-testid="rail-tree-plus"]') as HTMLElement;
+    fireEvent.click(plusBtn);
+
+    // Sheet opens; name it and create.
+    const nameInput = await screen.findByLabelText('Name');
+    fireEvent.change(nameInput, { target: { value: 'My Bugs View' } });
+    fireEvent.click(screen.getByRole('button', { name: /Create view/i }));
+
+    await waitFor(() => expect(createdViewBody).toBeDefined());
+    // The captured columns must be BUGS' columns, never work-items'.
+    expect(createdViewBody!.visibleFields).toEqual(['title', 'severity', 'repro']);
+    expect(createdViewBody!.columnOrder).toEqual(['title', 'severity', 'repro']);
   });
 
   it('strips ?view=<id> from URL when the active view is deleted', async () => {

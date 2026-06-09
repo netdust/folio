@@ -4,6 +4,7 @@ import { toast } from 'sonner';
 import { useCreateView, type ViewCreate } from '../../lib/api/views.ts';
 import { useFields } from '../../lib/api/fields.ts';
 import { formatApiError } from '../../lib/api/index.ts';
+import { resolveViewNav } from '../../lib/rail-nav.ts';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetFooter } from '../ui/sheet.tsx';
 import { Button } from '../ui/button.tsx';
 
@@ -12,6 +13,10 @@ export interface NewViewSheetProps {
   onOpenChange: (open: boolean) => void;
   wslug: string;
   pslug: string;
+  // C3T9: the table the view is created on. The rail captures the real tslug
+  // when "+ new view" is clicked under a specific table; the sheet creates and
+  // routes on it (default table → legacy /work-items|/board, others → /t/$tslug).
+  tslug: string;
   // Required: the sheet copy ("Captures the current filters, sort, and
   // columns.") makes this a contract. If the caller has no filter context to
   // capture, pass `{}` explicitly rather than letting it default — that
@@ -31,15 +36,16 @@ export function NewViewSheet({
   onOpenChange,
   wslug,
   pslug,
+  tslug,
   currentSearch,
   currentColumns,
 }: NewViewSheetProps) {
   const navigate = useNavigate();
-  const create = useCreateView(wslug, pslug);
-  // The sheet is per-project on the work-items table; mirror how list-view /
-  // document-slideover call useFields with the literal 'work-items' tslug. The
-  // field keys populate the Kanban group-by options (same source as BoardToolbar).
-  const { data: fields } = useFields(wslug, pslug, 'work-items');
+  const create = useCreateView(wslug, pslug, tslug);
+  // Fields for the ACTIVE table populate the Kanban group-by options (same
+  // source as BoardToolbar), so they must come from the table the view is being
+  // created on — not a hardcoded work-items literal.
+  const { data: fields } = useFields(wslug, pslug, tslug);
   const [name, setName] = useState('');
   const [type, setType] = useState<'list' | 'kanban'>('list');
   // Group-by for kanban. 'status' is the default; selecting it stores null on
@@ -96,14 +102,13 @@ export function NewViewSheet({
       const view = await create.mutateAsync(buildPayload());
       onOpenChange(false);
       toast.success('View created');
-      // Mirror the rail's onViewClick: kanban views open on the board surface,
-      // list views on work-items.
+      // C3T9: route to the CAPTURED table via the single rail-nav resolver (the
+      // same source w.$wslug.tsx's onViewClick uses). Default table → legacy
+      // /work-items|/board (no param); other tables → /t/$tslug(/board).
+      const target = resolveViewNav(tslug, view.type);
       void navigate({
-        to:
-          view.type === 'kanban'
-            ? '/w/$wslug/p/$pslug/board'
-            : '/w/$wslug/p/$pslug/work-items',
-        params: { wslug, pslug },
+        to: target.to,
+        params: target.withTslug ? { wslug, pslug, tslug } : { wslug, pslug },
         search: { view: view.id },
       });
     } catch (err) {

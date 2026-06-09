@@ -77,6 +77,10 @@ function orderKeysForAgent(keys: string[]): string[] {
 interface Props {
   wslug: string;
   pslug: string;
+  // Threaded as a PROP from the slideover (which owns the single useCurrentTslug
+  // resolution for the subtree) — NOT resolved here, to avoid a prop-vs-hook
+  // split-brain within the slideover render tree.
+  tslug: string;
   type: DocumentType;
   status: string | null;
   statuses: Status[];
@@ -99,6 +103,7 @@ interface Props {
 export function FrontmatterForm({
   wslug,
   pslug,
+  tslug,
   type,
   status,
   statuses,
@@ -234,6 +239,7 @@ export function FrontmatterForm({
                 <RelationFieldWithCandidates
                   wslug={wslug}
                   pslug={pslug}
+                  tslug={tslug}
                   fieldKey={key}
                   value={value}
                   options={options ?? undefined}
@@ -296,6 +302,7 @@ export function FrontmatterForm({
 function RelationFieldWithCandidates({
   wslug,
   pslug,
+  tslug,
   fieldKey,
   value,
   options,
@@ -304,6 +311,7 @@ function RelationFieldWithCandidates({
 }: {
   wslug: string;
   pslug: string;
+  tslug: string;
   fieldKey: string;
   value: unknown;
   options?: string[];
@@ -312,8 +320,12 @@ function RelationFieldWithCandidates({
 }) {
   const target = options?.[0] ?? '';
   const isWiki = target === 'wiki';
-  const pagesQ = useDocuments(wslug, pslug, { type: 'page' }, { enabled: isWiki });
-  const itemsQ = useDocuments(wslug, pslug, { type: 'work_item' }, { enabled: !isWiki });
+  // pages ignore tslug server-side (project-scoped); work_item candidates are
+  // current-table-scoped — the accepted v1 relation limitation (no project-wide
+  // cross-table document endpoint exists). tslug comes as a prop from the
+  // slideover's single resolution (no split-brain).
+  const pagesQ = useDocuments(wslug, pslug, tslug, { type: 'page' }, { enabled: isWiki });
+  const itemsQ = useDocuments(wslug, pslug, tslug, { type: 'work_item' }, { enabled: !isWiki });
   const docs = (isWiki ? pagesQ.data?.data : itemsQ.data?.data) ?? [];
   const candidates: RelationCandidate[] = docs.map((d) => ({
     id: d.id,

@@ -18,9 +18,9 @@ interface Props {
 // persistence; KanbanView is a pure reader of the bus.
 export function BoardControls({ wslug, pslug, tslug }: Props) {
   const search = useSearch({ strict: false }) as Record<string, unknown>;
-  const { data: viewsData } = useViews(wslug, pslug);
+  const { data: viewsData } = useViews(wslug, pslug, tslug);
   const { data: fields } = useFields(wslug, pslug, tslug);
-  const updateView = useUpdateView(wslug, pslug);
+  const updateView = useUpdateView(wslug, pslug, tslug);
 
   const urlViewId = typeof search.view === 'string' ? search.view : undefined;
   const activeView = useMemo(() => {

@@ -66,8 +66,14 @@ function toSearch(params: DocumentListParams): string {
 
 export const documentsKeys = {
   all: ['documents'] as const,
-  list: (wslug: string, pslug: string, params: DocumentListParams = {}) =>
-    [...documentsKeys.all, wslug, pslug, 'list', params] as const,
+  // The list prefix (table-scoped) — in-table invalidations target THIS so they
+  // always prefix-match the read key, which appends `params`. Single-sources the
+  // prefix so the read key and its invalidations cannot drift apart (the bug
+  // Cluster 1 introduced when tslug was inserted ahead of the 'list' literal).
+  listPrefix: (wslug: string, pslug: string, tslug: string) =>
+    [...documentsKeys.all, wslug, pslug, tslug, 'list'] as const,
+  list: (wslug: string, pslug: string, tslug: string, params: DocumentListParams = {}) =>
+    [...documentsKeys.listPrefix(wslug, pslug, tslug), params] as const,
   detail: (wslug: string, pslug: string, slug: string) =>
     [...documentsKeys.all, wslug, pslug, 'detail', slug] as const,
 };
@@ -75,15 +81,18 @@ export const documentsKeys = {
 export function useDocuments(
   wslug: string,
   pslug: string,
+  tslug: string,
   params: DocumentListParams = {},
   options: { enabled?: boolean } = {},
 ) {
   return useQuery({
-    queryKey: documentsKeys.list(wslug, pslug, params),
+    queryKey: documentsKeys.list(wslug, pslug, tslug, params),
     queryFn: () =>
-      client.get<DocumentListPage>(`/api/v1/w/${wslug}/p/${pslug}/documents${toSearch(params)}`),
+      client.get<DocumentListPage>(
+        `/api/v1/w/${wslug}/p/${pslug}/t/${tslug}/documents${toSearch(params)}`,
+      ),
     staleTime: 30_000,
-    enabled: !!wslug && !!pslug && (options.enabled ?? true),
+    enabled: !!wslug && !!pslug && !!tslug && (options.enabled ?? true),
   });
 }
 
@@ -96,7 +105,7 @@ export function useDocument(wslug: string, pslug: string, slug: string | null) {
   });
 }
 
-export function useCreateDocument(wslug: string, pslug: string) {
+export function useCreateDocument(wslug: string, pslug: string, tslug: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (vars: {
@@ -105,9 +114,9 @@ export function useCreateDocument(wslug: string, pslug: string) {
       body?: string;
       frontmatter?: Record<string, unknown>;
       parentId?: string | null;
-    }) => client.post<Document>(`/api/v1/w/${wslug}/p/${pslug}/documents`, vars),
+    }) => client.post<Document>(`/api/v1/w/${wslug}/p/${pslug}/t/${tslug}/documents`, vars),
     onSuccess: () =>
-      qc.invalidateQueries({ queryKey: [...documentsKeys.all, wslug, pslug, 'list'] }),
+      qc.invalidateQueries({ queryKey: documentsKeys.listPrefix(wslug, pslug, tslug) }),
   });
 }
 
@@ -159,12 +168,17 @@ function mergeFrontmatter(
   return out;
 }
 
-export function useUpdateDocument(wslug: string, pslug: string, listParams: DocumentListParams = {}) {
+export function useUpdateDocument(
+  wslug: string,
+  pslug: string,
+  tslug: string,
+  listParams: DocumentListParams = {},
+) {
   const qc = useQueryClient();
-  const listKey = documentsKeys.list(wslug, pslug, listParams);
+  const listKey = documentsKeys.list(wslug, pslug, tslug, listParams);
   return useMutation({
     mutationFn: ({ slug, patch }: { slug: string; patch: DocumentPatch }) =>
-      client.patch<Document>(`/api/v1/w/${wslug}/p/${pslug}/documents/${slug}`, patch),
+      client.patch<Document>(`/api/v1/w/${wslug}/p/${pslug}/t/${tslug}/documents/${slug}`, patch),
     onMutate: async ({ slug, patch }) => {
       const detailKey = documentsKeys.detail(wslug, pslug, slug);
       await qc.cancelQueries({ queryKey: detailKey });
@@ -212,10 +226,10 @@ export function useUpdateDocument(wslug: string, pslug: string, listParams: Docu
     },
     onSettled: (data, _err, { slug }) => {
       qc.invalidateQueries({ queryKey: documentsKeys.detail(wslug, pslug, slug) });
-      // Invalidate every list query under this wslug/pslug — different
+      // Invalidate every list query under this wslug/pslug/tslug — different
       // surfaces (list view, kanban, wiki tree) use different list params,
       // and a title/status patch in one view should refresh them all.
-      qc.invalidateQueries({ queryKey: [...documentsKeys.all, wslug, pslug, 'list'] });
+      qc.invalidateQueries({ queryKey: documentsKeys.listPrefix(wslug, pslug, tslug) });
       // Server emits a `document.updated` event on every PATCH; refresh the
       // ActivityPanel's events list so the slideover stays live. A title
       // patch may regenerate the slug — in that case ActivityPanel under the
@@ -229,18 +243,18 @@ export function useUpdateDocument(wslug: string, pslug: string, listParams: Docu
   });
 }
 
-export function useDeleteDocument(wslug: string, pslug: string) {
+export function useDeleteDocument(wslug: string, pslug: string, tslug: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (slug: string) =>
-      client.delete<void>(`/api/v1/w/${wslug}/p/${pslug}/documents/${slug}`),
+      client.delete<void>(`/api/v1/w/${wslug}/p/${pslug}/t/${tslug}/documents/${slug}`),
     onSuccess: () =>
-      qc.invalidateQueries({ queryKey: [...documentsKeys.all, wslug, pslug, 'list'] }),
+      qc.invalidateQueries({ queryKey: documentsKeys.listPrefix(wslug, pslug, tslug) }),
   });
 }
 
-export function useDocumentMarkdown(wslug: string, pslug: string, slug: string) {
-  return client.getRaw(`/api/v1/w/${wslug}/p/${pslug}/documents/${slug}.md`);
+export function useDocumentMarkdown(wslug: string, pslug: string, tslug: string, slug: string) {
+  return client.getRaw(`/api/v1/w/${wslug}/p/${pslug}/t/${tslug}/documents/${slug}.md`);
 }
 
 // ---------------------------------------------------------------------------

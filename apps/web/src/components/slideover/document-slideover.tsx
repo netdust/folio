@@ -27,6 +27,7 @@ import {
 } from '../../lib/api/documents.ts';
 import { useStatuses } from '../../lib/api/statuses.ts';
 import { useFields } from '../../lib/api/fields.ts';
+import { useCurrentTslug } from '../../lib/default-table.ts';
 import { formatApiError } from '../../lib/api/index.ts';
 import { useWorkspace } from '../../lib/api/workspaces.ts';
 import { useProject } from '../../lib/api/projects.ts';
@@ -81,11 +82,17 @@ export function DocumentSlideover({ wslug, pslug }: Props) {
   const search = useSearch({ strict: false }) as { doc?: string };
   const open = !!search.doc;
   const slug = search.doc ?? null;
+  // THE single table source for the whole slideover subtree (avoid a prop-vs-hook
+  // split-brain): resolve once here and thread it as a prop down to the inner /
+  // body / frontmatter-form / title editor. The slideover is a route-context leaf
+  // keyed off the URL `?doc=`; useCurrentTslug returns the :tslug param under a
+  // /t/:tslug route, else DEFAULT_TABLE_SLUG (the project-base / work-items view).
+  const tslug = useCurrentTslug();
   const { data: doc, isLoading, error } = useDocument(wslug, pslug, slug);
   const [mode, setMode] = useState<EditorMode>('rich');
   const [moreOpen, setMoreOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const del = useDeleteDocument(wslug, pslug);
+  const del = useDeleteDocument(wslug, pslug, tslug);
 
   // Dirtiness + saving are OWNED by the keyed inner (it owns the draft) and
   // MIRRORED up here so the header Save button + close/switch guard can read
@@ -256,7 +263,7 @@ export function DocumentSlideover({ wslug, pslug }: Props) {
               // doc without closing the slideover (e.g., create A → Cmd-K → create
               // B). InlineEdit reads `defaultEditing` once at mount, so without
               // the key the second freshly-created "Untitled" wouldn't auto-edit.
-              <SlideoverTitleEditor key={doc.id} doc={doc} wslug={wslug} pslug={pslug} />
+              <SlideoverTitleEditor key={doc.id} doc={doc} wslug={wslug} pslug={pslug} tslug={tslug} />
             ) : (
               '—'
             )}
@@ -324,6 +331,7 @@ export function DocumentSlideover({ wslug, pslug }: Props) {
               doc={doc}
               wslug={wslug}
               pslug={pslug}
+              tslug={tslug}
               mode={mode}
               tab={tab}
               onDirtyChange={setDirty}
@@ -426,6 +434,7 @@ function DocumentSlideoverInner({
   doc,
   wslug,
   pslug,
+  tslug,
   mode,
   tab,
   onDirtyChange,
@@ -435,6 +444,7 @@ function DocumentSlideoverInner({
   doc: Document;
   wslug: string;
   pslug: string;
+  tslug: string;
   mode: EditorMode;
   tab: DocTabValue;
   onDirtyChange: (dirty: boolean) => void;
@@ -442,7 +452,7 @@ function DocumentSlideoverInner({
   actionsRef: React.MutableRefObject<InnerActions | null>;
 }) {
   const listParams = useUrlDerivedListParams(doc.type);
-  const update = useUpdateDocument(wslug, pslug, listParams);
+  const update = useUpdateDocument(wslug, pslug, tslug, listParams);
   const qc = useQueryClient();
   const { draft, setBody, setFrontmatter, isDirty, reset, diff } = useDocumentDraft(doc);
 
@@ -505,6 +515,7 @@ function DocumentSlideoverInner({
           doc={doc}
           wslug={wslug}
           pslug={pslug}
+          tslug={tslug}
           mode={mode}
           tab={tab}
           draft={draft}
@@ -517,11 +528,11 @@ function DocumentSlideoverInner({
   );
 }
 
-function SlideoverTitleEditor({ doc, wslug, pslug }: { doc: Document; wslug: string; pslug: string }) {
+function SlideoverTitleEditor({ doc, wslug, pslug, tslug }: { doc: Document; wslug: string; pslug: string; tslug: string }) {
   const navigate = useNavigate();
   const search = useSearch({ strict: false }) as Record<string, unknown>;
   const listParams = useUrlDerivedListParams(doc.type);
-  const update = useUpdateDocument(wslug, pslug, listParams);
+  const update = useUpdateDocument(wslug, pslug, tslug, listParams);
   const onCommit = async (next: string) => {
     try {
       const updated = await update.mutateAsync({ slug: doc.slug, patch: { title: next } });
@@ -549,6 +560,7 @@ function SlideoverBody({
   doc,
   wslug,
   pslug,
+  tslug,
   mode,
   tab,
   draft,
@@ -559,6 +571,7 @@ function SlideoverBody({
   doc: Document;
   wslug: string;
   pslug: string;
+  tslug: string;
   mode: EditorMode;
   tab: DocTabValue;
   draft: { body: string; frontmatter: Record<string, unknown> };
@@ -568,12 +581,14 @@ function SlideoverBody({
 }) {
   const navigate = useNavigate();
   const search = useSearch({ strict: false }) as Record<string, unknown>;
-  const { data: statuses } = useStatuses(wslug, pslug);
-  const { data: fields } = useFields(wslug, pslug, 'work-items');
+  const { data: statuses } = useStatuses(wslug, pslug, tslug);
+  const { data: fields } = useFields(wslug, pslug, tslug);
   const listParams = useUrlDerivedListParams(doc.type);
   // Documents list — same listParams as the inner's useUpdateDocument so React
   // Query dedupes the key. Feeds the body editor's slash-menu document links.
-  const { data: docPage } = useDocuments(wslug, pslug, listParams, { enabled: true });
+  // Current-table-scoped for work_items (the accepted v1 relation limitation —
+  // no project-wide cross-table document endpoint exists).
+  const { data: docPage } = useDocuments(wslug, pslug, tslug, listParams, { enabled: true });
   const { data: workspace } = useWorkspace(wslug);
   const { data: project } = useProject(wslug, pslug);
 
@@ -618,6 +633,7 @@ function SlideoverBody({
               <FrontmatterForm
                 wslug={wslug}
                 pslug={pslug}
+                tslug={tslug}
                 type={doc.type}
                 // Status reads from doc.status (server truth) — it commits
                 // IMMEDIATELY, it is NOT part of the buffered draft.

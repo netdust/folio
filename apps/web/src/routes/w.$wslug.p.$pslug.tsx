@@ -5,6 +5,8 @@ import { toast } from 'sonner';
 import { useProject } from '../lib/api/projects.ts';
 import { useDocuments, useCreateDocument } from '../lib/api/documents.ts';
 import { useLiveDocuments } from '../lib/api/use-live-documents.ts';
+import { useCurrentTslug } from '../lib/default-table.ts';
+import { activeTabFromPath, resolveTableNav, resolveViewNav } from '../lib/rail-nav.ts';
 import { formatApiError } from '../lib/api/index.ts';
 import { MainFrame, FrameTab } from '../components/shell/main-frame.tsx';
 import { BoardControls } from '../components/kanban/board-controls.tsx';
@@ -27,17 +29,31 @@ function ProjectLayout() {
   const navigate = useNavigate();
   const routerState = useRouterState();
   const search = useSearch({ strict: false }) as Record<string, unknown>;
+  // The layout wraps every table route (/work-items, /board, /t/:tslug,
+  // /t/:tslug/board), so the current table is resolved from the route, not
+  // hardcoded — the tab counts + BoardControls + create must target the table
+  // the user is actually viewing (invariant 16).
+  const tslug = useCurrentTslug();
   const { data: project, isLoading } = useProject(wslug, pslug);
-  const { data: workItems } = useDocuments(wslug, pslug, { type: 'work_item', limit: 200 });
-  const { data: pages } = useDocuments(wslug, pslug, { type: 'page', limit: 200 });
-  const create = useCreateDocument(wslug, pslug);
+  const { data: workItems } = useDocuments(wslug, pslug, tslug, { type: 'work_item', limit: 200 });
+  const { data: pages } = useDocuments(wslug, pslug, tslug, { type: 'page', limit: 200 });
+  const create = useCreateDocument(wslug, pslug, tslug);
   useLiveDocuments(wslug, pslug, project?.id);
 
   if (isLoading) return <div className="p-8 text-fg-3">Loading project…</div>;
   if (!project) return <div className="p-8 text-danger">Project not found.</div>;
 
   const path = routerState.location.pathname;
-  const activeTab = TABS.find((t) => path.endsWith(`/${t.path}`))?.id ?? 'work-items';
+  // Table-route-aware: a /t/<tslug>/board path lights Board, a bare /t/<tslug>
+  // (or /work-items) lights the grid. A plain `endsWith('/'+path)` would miss
+  // both /t/<tslug> shapes and wrongly fall through to the work-items default.
+  const activeTab = activeTabFromPath(path) ?? 'work-items';
+  // The two table tabs route to the CURRENT table's grid + board via the single
+  // rail-nav resolver (the same source the rail + new-view sheet delegate to):
+  // grid → resolveTableNav, board → resolveViewNav(_, 'kanban'). Default table →
+  // legacy /work-items|/board (no :tslug); other tables → /t/$tslug(/board).
+  const tabNav = (tab: 'work-items' | 'board') =>
+    tab === 'board' ? resolveViewNav(tslug, 'kanban') : resolveTableNav(tslug);
 
   const workCount = workItems?.data.length ?? 0;
   const pageCount = pages?.data.length ?? 0;
@@ -71,13 +87,14 @@ function ProjectLayout() {
                 key={t.id}
                 active={activeTab === t.id}
                 icon={t.icon}
-                onClick={() =>
+                onClick={() => {
+                  const target = tabNav(t.path);
                   navigate({
-                    to: `/w/$wslug/p/$pslug/${t.path}`,
-                    params: { wslug, pslug },
+                    to: target.to,
+                    params: target.withTslug ? { wslug, pslug, tslug } : { wslug, pslug },
                     search: (s) => s,
-                  })
-                }
+                  });
+                }}
               >
                 {t.label}
               </FrameTab>
@@ -85,7 +102,7 @@ function ProjectLayout() {
             {activeTab === 'board' ? (
               <>
                 <div className="mx-1 h-5 w-px self-center bg-border-light" aria-hidden />
-                <BoardControls wslug={wslug} pslug={pslug} tslug="work-items" />
+                <BoardControls wslug={wslug} pslug={pslug} tslug={tslug} />
               </>
             ) : null}
           </>

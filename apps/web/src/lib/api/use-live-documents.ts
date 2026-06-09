@@ -25,6 +25,11 @@ export function useLiveDocuments(
 ): void {
   const qc = useQueryClient();
   useEventStream(wslug, { project: projectId, kinds: [...DOCUMENT_KINDS] }, () => {
-    qc.invalidateQueries({ queryKey: [...documentsKeys.all, wslug, pslug, 'list'] });
+    // The SSE event does NOT carry the changed doc's table, so invalidate
+    // across ALL tables of the project: [...all, wslug, pslug] prefix-matches
+    // every table list key [...all, w, p, <tslug>, 'list', <params>]. (The old
+    // [...all, w, p, 'list'] prefix stopped matching once tslug was inserted at
+    // index 3, silently dropping every live refetch.)
+    qc.invalidateQueries({ queryKey: [...documentsKeys.all, wslug, pslug] });
   });
 }

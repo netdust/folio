@@ -47,8 +47,8 @@ interface Props {
 export function KanbanView({ wslug, pslug, tslug }: Props) {
   const navigate = useNavigate();
   const search = useSearch({ strict: false }) as Record<string, unknown>;
-  const { data: statuses } = useStatuses(wslug, pslug);
-  const { data: viewsData } = useViews(wslug, pslug);
+  const { data: statuses } = useStatuses(wslug, pslug, tslug);
+  const { data: viewsData } = useViews(wslug, pslug, tslug);
   const { data: fields } = useFields(wslug, pslug, tslug);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
   const [pendingSlugs, setPendingSlugs] = useState<Set<string>>(new Set());
@@ -104,10 +104,10 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
     [effectiveSort],
   );
 
-  const { data: page, isLoading, error } = useDocuments(wslug, pslug, listParams);
-  const update = useUpdateDocument(wslug, pslug, listParams);
-  const create = useCreateDocument(wslug, pslug);
-  const updateView = useUpdateView(wslug, pslug);
+  const { data: page, isLoading, error } = useDocuments(wslug, pslug, tslug, listParams);
+  const update = useUpdateDocument(wslug, pslug, tslug, listParams);
+  const create = useCreateDocument(wslug, pslug, tslug);
+  const updateView = useUpdateView(wslug, pslug, tslug);
 
   // Switch Sort→Manual the SAME way board-controls.tsx onSortChange does: set
   // the live bus override to null (manual) AND persist `sort: []` (empty array =

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useDocuments } from '../../lib/api/documents.ts';
+import { DEFAULT_TABLE_SLUG } from '../../lib/default-table.ts';
 import { cn } from '../ui/cn.ts';
 
 interface WikiLinkPickerProps {
@@ -17,8 +18,14 @@ export function WikiLinkPicker({
   onSelect,
   onClose,
 }: WikiLinkPickerProps) {
-  const pagesQ = useDocuments(workspaceSlug, projectSlug, { type: 'page' });
-  const itemsQ = useDocuments(workspaceSlug, projectSlug, { type: 'work_item' });
+  // [[wiki-link]] candidate resolution. The picker is rendered from the comment
+  // composer (comment-composer.tsx) — it has NO route :tslug context and no
+  // tslug prop, so it targets DEFAULT_TABLE_SLUG. pages ignore tslug server-side
+  // (project-scoped); the work_item set is current-table-scoped — the same
+  // accepted v1 cross-table-relation limitation as the slideover relation
+  // resolver (no project-wide cross-table document endpoint exists).
+  const pagesQ = useDocuments(workspaceSlug, projectSlug, DEFAULT_TABLE_SLUG, { type: 'page' });
+  const itemsQ = useDocuments(workspaceSlug, projectSlug, DEFAULT_TABLE_SLUG, { type: 'work_item' });
 
   const allDocs = useMemo(
     () => [...(pagesQ.data?.data ?? []), ...(itemsQ.data?.data ?? [])],
