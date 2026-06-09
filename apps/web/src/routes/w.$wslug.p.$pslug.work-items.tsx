@@ -1,6 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { z } from 'zod';
 import { TableView } from '../components/table/table-view.tsx';
+import { DEFAULT_TABLE_SLUG } from '../lib/default-table.ts';
 
 const stringOrArray = z.union([z.string(), z.array(z.string())]).optional();
 
@@ -26,5 +27,5 @@ export const Route = createFileRoute('/w/$wslug/p/$pslug/work-items')({
 
 function WorkItemsRoute() {
   const { wslug, pslug } = Route.useParams();
-  return <TableView wslug={wslug} pslug={pslug} tslug="work-items" />;
+  return <TableView wslug={wslug} pslug={pslug} tslug={DEFAULT_TABLE_SLUG} />;
 }
