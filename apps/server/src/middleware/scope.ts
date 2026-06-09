@@ -8,6 +8,7 @@ import { getUser } from './auth.ts';
 import { HTTPError } from '../lib/http.ts';
 import { isInstanceReach } from '../lib/token-reach.ts';
 import { canSeeProject, canSeeWorkspace, userRole } from '../lib/access.ts';
+import { DEFAULT_TABLE_SLUG } from '../lib/seed-project-defaults.ts';
 
 export type Role = 'owner' | 'admin' | 'member';
 
@@ -117,7 +118,7 @@ export const resolveProject: MiddlewareHandler<AuthContext & ScopeContext> = asy
   // only table deleted) simply has no table attached; routes that require one
   // will throw at getTable(c).
   const defaultTable = await db.query.tables.findFirst({
-    where: and(eq(tables.projectId, p.id), eq(tables.slug, 'work-items')),
+    where: and(eq(tables.projectId, p.id), eq(tables.slug, DEFAULT_TABLE_SLUG)),
   });
   if (defaultTable) c.set('table', defaultTable);
 

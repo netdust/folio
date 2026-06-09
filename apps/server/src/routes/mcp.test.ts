@@ -391,6 +391,17 @@ test('D2: default-table resolution pins to work-items when a 2nd table exists', 
   const mkBody = (await mkTable.json()) as { error?: unknown };
   expect(mkBody.error).toBeUndefined();
 
+  // Precondition lock: the B1 tie only exists because BOTH tables sit at order:0
+  // (tables.ts never increments order). Assert it explicitly — otherwise, if
+  // tables.ts is ever fixed to increment order, the tie vanishes and the
+  // order-fallback alone would resolve work-items, letting this test pass even
+  // with the slug-pin REVERTED (a false-green on regression).
+  const projectTables = await db.query.tables.findMany({
+    where: (t, { eq: eqOp }) => eqOp(t.projectId, seed.project.id),
+  });
+  expect(projectTables.length).toBe(2);
+  expect(projectTables.every((t) => t.order === 0)).toBe(true);
+
   // list_statuses with NO table_slug → must be the work-items statuses (incl.
   // 'todo'), NOT the empty 'bugs' set.
   const stRes = await callTool(app, admin, 'list_statuses', {

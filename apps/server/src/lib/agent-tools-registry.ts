@@ -96,6 +96,7 @@ import { serializeMarkdown } from './frontmatter.ts';
 import { HTTPError } from './http.ts';
 import { mcpInvalidParams, assertMcpAgentLifecycle, rethrowAgentGuardAsMcp } from './mcp-errors.ts';
 import { isReservedSlug } from './system-workspace.ts';
+import { DEFAULT_TABLE_SLUG } from './seed-project-defaults.ts';
 import { canManageWorkspace, canSeeProject, visibleProjectIds } from './access.ts';
 import { resolveAgentForRun } from './agent-resolver.ts';
 import { getInstanceSkill } from './instance-skills.ts';
@@ -315,14 +316,17 @@ async function resolveTableForArgs(
     if (!t) throw mcpInvalidParams('table not found', { reason: 'table_not_found' });
     return t;
   }
-  // No table_slug: pin to the project's `work-items` table — matching the HTTP
-  // routes' default (scope.ts:120) and the folio skill's documented contract.
-  // (B1: a 2nd table also gets order:0 — tables.ts never increments — so an
-  // `ORDER BY order` rule was a non-deterministic tie that could resolve to the
-  // wrong, status-less table and diverge from HTTP.) Fall back to lowest-order
-  // (createdAt tiebreak for determinism) only if no work-items table exists.
+  // No table_slug: pin to the project's default table — matching the HTTP
+  // routes' default (scope.ts, same DEFAULT_TABLE_SLUG) and the folio skill's
+  // documented contract. (B1: a 2nd table also gets order:0 — tables.ts never
+  // increments — so an `ORDER BY order` rule was a non-deterministic tie that
+  // could resolve to the wrong, status-less table and diverge from HTTP.) Fall
+  // back to lowest-order (createdAt tiebreak for determinism) only if no default
+  // table exists — this matches the OLD pre-D2 behavior for that edge (HTTP
+  // instead soft-fails to no-table; the residual no-default-table divergence is
+  // pre-existing and out of D2's scope).
   const wi = await db.query.tables.findFirst({
-    where: and(eq(tablesTable.projectId, p.id), eq(tablesTable.slug, 'work-items')),
+    where: and(eq(tablesTable.projectId, p.id), eq(tablesTable.slug, DEFAULT_TABLE_SLUG)),
   });
   if (wi) return wi;
   const t = await db.query.tables.findFirst({
