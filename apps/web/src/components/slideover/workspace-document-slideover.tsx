@@ -48,6 +48,7 @@ import {
 import { useLiveDocument } from '../../lib/use-live-document.ts';
 import { ExternalUpdateBanner } from './external-update-banner.tsx';
 import type { Document } from '../../lib/api/documents.ts';
+import { DEFAULT_TABLE_SLUG } from '../../lib/default-table.ts';
 import { formatApiError } from '../../lib/api/index.ts';
 import { InlineEdit } from '../inline/inline-edit.tsx';
 import { FrontmatterForm } from './frontmatter-form.tsx';
@@ -595,6 +596,11 @@ function SlideoverBody({
               // agents don't carry an `assignee` field so the AssigneePicker is
               // never rendered. Empty string is safe.
               pslug=""
+              // Workspace slideover hosts agents/triggers (no project, no table).
+              // Their relation candidate query is inert here (no docSlug-gated
+              // relation field), and agents/triggers are project-scoped server-side
+              // — so DEFAULT_TABLE_SLUG is the honest constant, same as pslug="".
+              tslug={DEFAULT_TABLE_SLUG}
               type={doc.type}
               status={null}
               statuses={[]}

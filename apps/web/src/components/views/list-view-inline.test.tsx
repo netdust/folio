@@ -24,7 +24,7 @@ function setup() {
     validateSearch: z.object({ doc: z.string().optional() }),
     component: () => {
       const { wslug, pslug } = work.useParams();
-      return <ListView wslug={wslug} pslug={pslug} />;
+      return <ListView wslug={wslug} pslug={pslug} tslug="work-items" />;
     },
   });
   const router = createRouter({

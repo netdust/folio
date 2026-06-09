@@ -4,6 +4,7 @@ import { DndContext, PointerSensor, useDraggable, useDroppable, useSensor, useSe
 import { ChevronDown, ChevronRight, FolderTree, Plus } from 'lucide-react';
 import { toast } from 'sonner';
 import { useDocuments, useCreateDocument, useUpdateDocument } from '../../lib/api/documents.ts';
+import { DEFAULT_TABLE_SLUG } from '../../lib/default-table.ts';
 import { formatApiError } from '../../lib/api/index.ts';
 import { copyDocumentAsMarkdown } from '../../lib/copy-as-md.ts';
 import { Icon } from '../ui/icon.tsx';
@@ -23,9 +24,14 @@ export function WikiTree({ wslug, pslug }: Props) {
     () => ({ type: 'page' as const, sort: 'title' as const, dir: 'asc' as const, limit: 200 }),
     [],
   );
-  const { data: page, isLoading, error } = useDocuments(wslug, pslug, listParams);
-  const create = useCreateDocument(wslug, pslug);
-  const update = useUpdateDocument(wslug, pslug, listParams);
+  // WikiTree renders type:'page' documents, which are PROJECT-scoped server-side
+  // (a page fetch enforces `tableId IS NULL` — see documents.ts: only
+  // type:'work_item' is constrained by the active table). tslug is required by
+  // the hook signature but ignored for pages, so DEFAULT_TABLE_SLUG is the
+  // honest constant — the wiki route carries no :tslug param.
+  const { data: page, isLoading, error } = useDocuments(wslug, pslug, DEFAULT_TABLE_SLUG, listParams);
+  const create = useCreateDocument(wslug, pslug, DEFAULT_TABLE_SLUG);
+  const update = useUpdateDocument(wslug, pslug, DEFAULT_TABLE_SLUG, listParams);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [pendingId, setPendingId] = useState<string | null>(null);
 

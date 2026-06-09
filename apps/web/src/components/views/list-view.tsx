@@ -25,9 +25,10 @@ import { ListSkeleton } from './list-skeleton.tsx';
 interface Props {
   wslug: string;
   pslug: string;
+  tslug: string;
 }
 
-export function ListView({ wslug, pslug }: Props) {
+export function ListView({ wslug, pslug, tslug }: Props) {
   const navigate = useNavigate();
   const search = useSearch({ strict: false }) as Record<string, unknown>;
   const clauses = useMemo(() => parseFilters(search), [search]);
@@ -46,11 +47,11 @@ export function ListView({ wslug, pslug }: Props) {
     }
     return base;     // server default = updated_at desc
   }, [clauses, sort]);
-  const { data: page, isLoading, error } = useDocuments(wslug, pslug, listParams);
-  const { data: statuses } = useStatuses(wslug, pslug);
-  const { data: fields } = useFields(wslug, pslug, 'work-items');
-  const update = useUpdateDocument(wslug, pslug, listParams);
-  const create = useCreateDocument(wslug, pslug);
+  const { data: page, isLoading, error } = useDocuments(wslug, pslug, tslug, listParams);
+  const { data: statuses } = useStatuses(wslug, pslug, tslug);
+  const { data: fields } = useFields(wslug, pslug, tslug);
+  const update = useUpdateDocument(wslug, pslug, tslug, listParams);
+  const create = useCreateDocument(wslug, pslug, tslug);
   const [pendingSlugs, setPendingSlugs] = useState<Set<string>>(new Set());
 
   const openDoc = (slug: string) => {
