@@ -58,7 +58,8 @@ function setup({ initialPath = '/w/acme/p/sales/work-items', onFetch }: SetupOpt
     if (u.endsWith(`/api/v1/w/${workspace.slug}/projects`)) return respond({ data: projects });
     if (u.endsWith(`/api/v1/w/${workspace.slug}/p/sales`)) return respond({ data: projects[0] });
     if (u.endsWith(`/api/v1/w/${workspace.slug}/p/sales/tables`)) return respond({ data: tables });
-    if (u.endsWith(`/api/v1/w/${workspace.slug}/p/sales/views`)) return respond({ data: views });
+    // Views are now fetched per (project, table): /p/sales/t/<tslug>/views.
+    if (/\/p\/sales\/t\/[^/]+\/views$/.test(u)) return respond({ data: views });
     if (u.endsWith(`/api/v1/w/${workspace.slug}/p/sales/statuses`)) return respond({ data: [] });
     if (u.endsWith(`/api/v1/w/${workspace.slug}/p/sales/fields`)) return respond({ data: [] });
     if (u.includes(`/api/v1/w/${workspace.slug}/p/sales/documents`)) {
