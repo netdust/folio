@@ -1171,6 +1171,50 @@ describe('runAgent stream loop', () => {
     expect(warnings.some((w) => /UNMETERED/.test(w))).toBe(false); // metered → no warn
   });
 
+  // G2 (shakeout reviewer SHOULD-FIX) — the UNMETERED warn must fire on the RUNAWAY
+  // exit too, not only clean completion. A run that loops to MAX_TOOL_ROUNDS with no
+  // usage (fanout_exceeded) is the EXACT denial-of-wallet case G2 targets; the warn
+  // was previously absent on that dangerous exit.
+  test('G2 — a runaway (fanout_exceeded) run with no usage also warns UNMETERED', async () => {
+    const { db, run } = await scaffold({ tools: ['list_documents'] });
+    const { registerTool } = await import('./agent-tools.ts');
+    const loopName = `__test_loop_${nanoid(6)}`;
+    registerTool({
+      name: loopName,
+      requiredScope: 'documents:read',
+      schema: z.object({}).strict(),
+      handler: async () => ({ ok: true }),
+    });
+    registeredTools.push(loopName);
+
+    const stub: AIProvider = {
+      // Always call the tool, never terminate → loops to MAX_TOOL_ROUNDS. NO usage.
+      async *stream() {
+        yield { type: 'tool_call', id: nanoid(6), name: loopName, arguments: {} } as ProviderEvent;
+        yield { type: 'done', reason: 'tool_use' } as ProviderEvent;
+      },
+      async testKey() {
+        return { ok: true as const };
+      },
+    };
+    providerTestHatch.overrideRegistry('anthropic', async () => stub);
+
+    const warnings: string[] = [];
+    const realWarn = console.warn;
+    console.warn = (...args: unknown[]) => {
+      warnings.push(args.map(String).join(' '));
+    };
+    try {
+      await runAgent({ runId: run.id });
+    } finally {
+      console.warn = realWarn;
+    }
+
+    const fm = await readRun(db, run.id);
+    expect(fm.error_reason).toBe('fanout_exceeded'); // hit the runaway exit
+    expect(warnings.some((w) => /UNMETERED/.test(w))).toBe(true); // ...AND warned
+  });
+
   // ALTITUDE FIX (code-review #2/#3/#4) — the runner runs the tool round whenever
   // tool calls were COLLECTED and the turn was not truncated, regardless of the
   // adapter's done.reason label. Thinking models (qwen3/deepseek-r1) emit a real

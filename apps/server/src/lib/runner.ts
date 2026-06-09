@@ -1643,27 +1643,39 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
       }
     }
 
-    // G2 — a run that completed without the provider ever reporting usage is
-    // UNMETERED: the budget cap never had anything to bound on. Warn loudly so the
-    // operator sees the denial-of-wallet residual (the MAX_TOOL_ROUNDS cap still
-    // bounded the loop). Skip the keyless local provider (ollama legitimately reports
-    // usage; an absent count there is a real signal too — keep the warn for all).
-    if (!sawUsage) {
-      console.warn(
-        `[runner] run ${runId} completed UNMETERED — the provider (${providerLabel}) reported no token usage; the budget cap could not apply (bounded only by MAX_TOOL_ROUNDS).`,
-      );
-    }
+    // G2 — surface an UNMETERED run (provider never reported usage → the budget cap
+    // had nothing to bound on). Fired on BOTH exits (here AND the round-cap exit
+    // below) — see warnIfUnmetered. The runaway-loop case the threat model targets
+    // exits via the round cap, so the warn MUST cover it (code-review SHOULD-FIX).
+    warnIfUnmetered(runId, providerLabel, sawUsage);
 
     await postResultAndComplete(ctx, textBuf, doneReason);
     return;
   }
 
   // Round cap exhausted — runaway tool loop. chain_guard family: use
-  // fanout_exceeded (closest enum member for "too many rounds").
+  // fanout_exceeded (closest enum member for "too many rounds"). G2 — this is the
+  // EXACT denial-of-wallet scenario; if it was also unmetered, the operator must see
+  // it (the warn was previously absent on this dangerous exit).
+  warnIfUnmetered(runId, providerLabel, sawUsage);
   await failRun(
     ctx,
     runErrorReasonSchema.enum.fanout_exceeded,
     `Exceeded ${MAX_TOOL_ROUNDS} tool rounds without terminating.`,
+  );
+}
+
+/**
+ * G2 — warn loudly when a run completed UNMETERED (the provider never reported token
+ * usage, so the budget cap could not apply). Fired on every terminal exit of the run
+ * loop — clean completion AND round-cap exhaustion (the runaway denial-of-wallet
+ * case). The MAX_TOOL_ROUNDS cap still bounds the loop; this is the observability
+ * signal for the Phase 3 M8 residual.
+ */
+function warnIfUnmetered(runId: string, providerLabel: string, sawUsage: boolean): void {
+  if (sawUsage) return;
+  console.warn(
+    `[runner] run ${runId} completed UNMETERED — the provider (${providerLabel}) reported no token usage; the budget cap could not apply (bounded only by MAX_TOOL_ROUNDS).`,
   );
 }
 
