@@ -1756,4 +1756,53 @@ describe('TableView table-scoped reads (C1T3 invariant-16 seam)', () => {
     expect(calls.some((u) => u.includes('/t/work-items/documents'))).toBe(true);
     expect(calls.some((u) => u.includes('/t/bugs/'))).toBe(false);
   });
+
+  // C3T10 — error-envelope contract on the table-scoped fetch path. A deep-link
+  // to a nonexistent/forbidden table 404s/403s the documents read; TableView must
+  // surface the error panel via the `error ?` branch, NOT a blank grid or crash.
+  // RED if the error branch is ever removed for the table-scoped path.
+  it('renders the error panel (not a crash) when the table-scoped documents fetch 404s', async () => {
+    // Like tableScopedFetch, but the documents GET fails (deleted/forbidden table).
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const u = typeof input === 'string' ? input : input.toString();
+        if (u.includes('/statuses') && !u.includes('/documents')) {
+          return new Response(JSON.stringify({ data: [statusRow] }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
+        if (u.includes('/fields')) {
+          return new Response(JSON.stringify({ data: [fieldRow] }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
+        if (u.includes('/views')) {
+          return new Response(JSON.stringify({ data: [viewRow] }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
+        if (u.includes('/documents')) {
+          return new Response(
+            JSON.stringify({ error: { code: 'TABLE_NOT_FOUND', message: 'table "bugs" not found' } }),
+            { status: 404, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+      }),
+    );
+
+    const { queryClient, router } = setupTslug('bugs');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    // The error panel renders; no white-screen, no thrown render.
+    await waitFor(() => expect(screen.getByText(/Failed to load documents/i)).toBeInTheDocument());
+  });
 });
