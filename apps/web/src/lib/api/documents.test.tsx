@@ -76,6 +76,31 @@ describe('Document type', () => {
   });
 });
 
+describe('documentsKeys table scoping', () => {
+  it('documentsKeys.list namespaces by tslug so two tables do not share a cache entry', () => {
+    const a = documentsKeys.list('w', 'p', 'work-items', { type: 'work_item' });
+    const b = documentsKeys.list('w', 'p', 'bugs', { type: 'work_item' });
+    expect(a).not.toEqual(b);
+    expect(a).toContain('work-items');
+    expect(b).toContain('bugs');
+  });
+
+  it('keys identical-param lists under different tables apart while keeping params as a distinct dimension', () => {
+    // tslug must be its OWN positional dimension, not conflated with params.
+    // Two tables with byte-identical params must not collide, AND the params
+    // object must still ride in the key (so different filters under one table
+    // stay separate). The legacy 3-arg factory (wslug, pslug, params) cannot
+    // satisfy both: passing tslug as the 3rd arg eats the params slot.
+    const wi = documentsKeys.list('w', 'p', 'work-items', { type: 'work_item', status: ['todo'] });
+    const bugs = documentsKeys.list('w', 'p', 'bugs', { type: 'work_item', status: ['todo'] });
+    expect(wi).not.toEqual(bugs);
+    // params survives as a real object entry in the key (last element).
+    expect(wi[wi.length - 1]).toEqual({ type: 'work_item', status: ['todo'] });
+    // the slug occupies a dedicated slot BEFORE the 'list' literal + params.
+    expect(wi).toEqual(['documents', 'w', 'p', 'work-items', 'list', { type: 'work_item', status: ['todo'] }]);
+  });
+});
+
 describe('useUpdateDocument', () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -112,7 +137,7 @@ describe('useUpdateDocument', () => {
     });
     const invalidateSpy = vi.spyOn(qc, 'invalidateQueries');
 
-    const { result } = renderHook(() => useUpdateDocument('acme', 'web'), {
+    const { result } = renderHook(() => useUpdateDocument('acme', 'web', 'work-items'), {
       wrapper: wrapperOf(qc),
     });
 
@@ -182,7 +207,7 @@ describe('useUpdateDocument optimistic re-sort', () => {
   it('re-sorts a board_position-sorted list immediately on a boardPosition patch', async () => {
     stubPatchFetch();
     const listParams = { type: 'work_item' as const, sort: 'board_position', dir: 'asc' as const };
-    const listKey = documentsKeys.list('acme', 'web', listParams);
+    const listKey = documentsKeys.list('acme', 'web', 'work-items', listParams);
     const qc = new QueryClient({
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
     });
@@ -192,7 +217,7 @@ describe('useUpdateDocument optimistic re-sort', () => {
       nextCursor: null,
     });
 
-    const { result } = renderHook(() => useUpdateDocument('acme', 'web', listParams), {
+    const { result } = renderHook(() => useUpdateDocument('acme', 'web', 'work-items', listParams), {
       wrapper: wrapperOf(qc),
     });
 
@@ -213,7 +238,7 @@ describe('useUpdateDocument optimistic re-sort', () => {
     // A field-sorted (updated_at) list — order is server-derived from a
     // different key, so a status patch must leave the array order untouched.
     const listParams = { type: 'work_item' as const, sort: 'updated_at', dir: 'desc' as const };
-    const listKey = documentsKeys.list('acme', 'web', listParams);
+    const listKey = documentsKeys.list('acme', 'web', 'work-items', listParams);
     const qc = new QueryClient({
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
     });
@@ -222,7 +247,7 @@ describe('useUpdateDocument optimistic re-sort', () => {
       nextCursor: null,
     });
 
-    const { result } = renderHook(() => useUpdateDocument('acme', 'web', listParams), {
+    const { result } = renderHook(() => useUpdateDocument('acme', 'web', 'work-items', listParams), {
       wrapper: wrapperOf(qc),
     });
 
@@ -242,7 +267,7 @@ describe('useUpdateDocument optimistic re-sort', () => {
     // Even on the manual-sort list, a patch that does not touch boardPosition
     // (e.g. a title edit) must not reorder — the existing order is correct.
     const listParams = { type: 'work_item' as const, sort: 'board_position', dir: 'asc' as const };
-    const listKey = documentsKeys.list('acme', 'web', listParams);
+    const listKey = documentsKeys.list('acme', 'web', 'work-items', listParams);
     const qc = new QueryClient({
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
     });
@@ -251,7 +276,7 @@ describe('useUpdateDocument optimistic re-sort', () => {
       nextCursor: null,
     });
 
-    const { result } = renderHook(() => useUpdateDocument('acme', 'web', listParams), {
+    const { result } = renderHook(() => useUpdateDocument('acme', 'web', 'work-items', listParams), {
       wrapper: wrapperOf(qc),
     });
 
