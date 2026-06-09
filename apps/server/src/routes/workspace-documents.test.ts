@@ -284,6 +284,65 @@ test('DELETE removes the agent + cascades the token', async () => {
   expect(remainingTokens).toHaveLength(0);
 });
 
+// Headless D1 mitigation 1 — VERIFY-FIRST that an agent-bound token is
+// listable on the per-workspace management surface AND revocable via the
+// agent's own DELETE. The existing 'DELETE removes the agent + cascades the
+// token' test proves only the DB-level cascade (queried by agentId). It does
+// NOT prove the token (a) is workspace-pinned, nor (b) surfaces on the
+// GET /api/v1/w/:wslug/tokens/:workspaceId list a revoker actually reads,
+// nor (c) disappears from that list once the agent is deleted. Those three
+// are the load-bearing properties of mitigation 1 (an operator can SEE and
+// REVOKE every agent's credential) — assert them through the real list route.
+test('agent token appears in the per-workspace token list and is removed when the agent is deleted', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const agent = await createAgent(app, seed.sessionCookie, 'Revocable Bot');
+
+  // (1) The created agent doc carries a bound token id in its frontmatter.
+  const agentRow = await db.query.documents.findFirst({
+    where: eq(documentsTable.id, agent.id),
+  });
+  const apiTokenId = (agentRow?.frontmatter as { api_token_id?: string }).api_token_id;
+  expect(apiTokenId).toBeString();
+
+  // (2) The token row is workspace-pinned (NOT an instance-reach null token).
+  const tokenRow = await db.query.apiTokens.findFirst({
+    where: eq(apiTokens.id, apiTokenId as string),
+  });
+  expect(tokenRow?.workspaceId).toBe(seed.workspace.id);
+  expect(tokenRow?.agentId).toBe(agent.id);
+
+  // (3) It surfaces in the per-workspace token list (session auth). This is
+  // the surface a human operator uses to audit/revoke agent credentials.
+  const listPath = `/api/v1/w/${seed.workspace.slug}/tokens/${seed.workspace.id}`;
+  const listRes = await app.request(listPath, {
+    headers: { Cookie: seed.sessionCookie },
+  });
+  expect(listRes.status).toBe(200);
+  const listBody = await listRes.json();
+  const listed = (listBody.data.tokens as Array<{ id: string }>).find(
+    (t) => t.id === apiTokenId,
+  );
+  expect(listed).toBeDefined();
+
+  // (4) Deleting the agent doc (session auth) cascades the token row away — so
+  //     it no longer appears on the list a revoker reads.
+  const del = await app.request(`${WS_PATH}/${agent.slug}`, {
+    method: 'DELETE',
+    headers: { Cookie: seed.sessionCookie },
+  });
+  expect(del.status).toBe(204);
+
+  const afterRes = await app.request(listPath, {
+    headers: { Cookie: seed.sessionCookie },
+  });
+  expect(afterRes.status).toBe(200);
+  const afterBody = await afterRes.json();
+  const stillListed = (afterBody.data.tokens as Array<{ id: string }>).find(
+    (t) => t.id === apiTokenId,
+  );
+  expect(stillListed).toBeUndefined();
+});
+
 test('two agents in the same workspace can share a base slug only after disambiguation', async () => {
   const { app, seed } = await makeTestApp();
   const first = await postWorkspaceDoc(app, seed.sessionCookie, {
