@@ -207,7 +207,11 @@ export async function* streamOpenAICompatible({
     }
     yield {
       type: 'tool_call',
-      id: tc.id,
+      // G3 — some OpenAI-compatible routes (vLLM / OpenRouter open-weight models)
+      // stream tool_call deltas WITHOUT an id. An empty id collides across parallel
+      // calls (wrong result→call mapping) and a follow-up `tool_call_id:''` echo can
+      // 400 upstream. Synthesize a unique id when absent, like the Ollama adapter.
+      id: tc.id || crypto.randomUUID(),
       name: tc.name,
       arguments: args,
     } as ProviderEvent;

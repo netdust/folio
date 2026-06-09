@@ -684,4 +684,39 @@ describe('openai provider', () => {
     expect(events.filter((e) => (e as { type: string }).type === 'text').length).toBeGreaterThan(0);
     expect(events.filter((e) => (e as { type: string }).type === 'done')).toHaveLength(0);
   });
+
+  // G3 — a route that streams tool_call deltas WITHOUT an id must not flush an empty
+  // id (collides across parallel calls / 400s on the echo). Two id-less parallel
+  // calls must each get a DISTINCT non-empty id.
+  test('stream() synthesizes distinct ids for id-less parallel tool_calls (G3)', async () => {
+    mockCreate.mockImplementationOnce((async (_opts: { stream?: boolean }) => {
+      return (async function* () {
+        // Two tool_calls (index 0 and 1), NEITHER carries an id.
+        yield { choices: [{ delta: { tool_calls: [{ index: 0, function: { name: 'a', arguments: '{}' } }] } }] };
+        yield { choices: [{ delta: { tool_calls: [{ index: 1, function: { name: 'b', arguments: '{}' } }] } }] };
+        yield { choices: [{ delta: {}, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 1, completion_tokens: 1 } };
+      })();
+    }) as never);
+
+    const events: any[] = [];
+    for await (const ev of openai.stream({
+      system: 'sys',
+      messages: [{ role: 'user', content: 'x' }],
+      tools: [
+        { name: 'a', description: 'a', input_schema: { type: 'object', properties: {} } },
+        { name: 'b', description: 'b', input_schema: { type: 'object', properties: {} } },
+      ],
+      maxTokens: 100,
+      apiKey: 'sk',
+      model: 'gpt-4o-mini',
+    })) {
+      events.push(ev);
+    }
+    const calls = events.filter((e) => e.type === 'tool_call');
+    expect(calls).toHaveLength(2);
+    // Both ids non-empty AND distinct.
+    expect(calls[0].id).toBeTruthy();
+    expect(calls[1].id).toBeTruthy();
+    expect(calls[0].id).not.toBe(calls[1].id);
+  });
 });
