@@ -833,4 +833,37 @@ describe('ollama provider', () => {
       expect(events).toContainEqual({ type: 'tokens', tokens_in: 42, tokens_out: 13 });
     });
   });
+
+  // G4 — a malformed tool_call entry (no `function` key — real across OpenAI-tool-
+  // emulating servers like LM Studio/llama.cpp) must NOT crash the generator. Guard
+  // the deref, skip + warn, and still yield tokens/done (degrade like anthropic/openai).
+  test("stream() skips a malformed tool_call with no function and still yields done (G4)", async () => {
+    global.fetch = mock(
+      async () =>
+        new Response(
+          jsonl([
+            // tool_calls entry with NO `function` key.
+            { message: { role: "assistant", content: "", tool_calls: [{ id: "x", type: "function" }] }, done: false },
+            { message: { content: "" }, done: true, done_reason: "stop", prompt_eval_count: 3, eval_count: 1 },
+          ]),
+          { status: 200 },
+        ),
+    ) as never;
+    const events: any[] = [];
+    // Must not throw.
+    for await (const ev of ollama.stream({
+      system: "sys",
+      messages: [{ role: "user", content: "x" }],
+      tools: [{ name: "f", description: "f", input_schema: { type: "object", properties: {} } }],
+      maxTokens: 100,
+      apiKey: "",
+      model: "llama3.1",
+      baseUrl: "http://localhost:11434",
+    })) {
+      events.push(ev);
+    }
+    // The malformed call was skipped (no tool_call event), but the stream completed.
+    expect(events.filter((e) => e.type === "tool_call")).toHaveLength(0);
+    expect(events).toContainEqual({ type: "done", reason: "stop" });
+  });
 });

@@ -48,6 +48,14 @@ function* handleOllamaChunk(
   if (msg?.content) yield { type: 'text', delta: msg.content };
   if (msg?.tool_calls) {
     for (const tc of msg.tool_calls) {
+      // G4 — guard the shape. A malformed entry with no `function` (real across
+      // OpenAI-tool-emulating servers — LM Studio, llama.cpp) would throw a
+      // TypeError on the deref, killing the generator before tokens/done. Skip +
+      // warn, degrading like the anthropic/openai adapters instead of crashing.
+      if (!tc.function || typeof tc.function.name !== 'string') {
+        console.warn('[ai/ollama] dropped a malformed tool_call (no function/name)');
+        continue;
+      }
       yield {
         type: 'tool_call',
         id: crypto.randomUUID(),
