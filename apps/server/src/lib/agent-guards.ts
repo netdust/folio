@@ -233,34 +233,53 @@ export function assertNotSelfDelete(
 }
 
 /**
- * Round 7 #19 — mirror round-6's MCP gate on the HTTP surface.
+ * THE single agent-lifecycle authorization decision (invariant 17). Agent
+ * CRUD mints/modifies/revokes an `agent_token` bearer credential. Allowed:
+ *   - session callers (no token) — UI admin.
+ *   - agent-bound bearers (incl. the operator via isOperator) — self-mgmt.
+ *   - human PATs holding `agents:write` — owner/admin only (roleToScopes never
+ *     grants agents:write to `member`), so the scope IS the admin signal.
+ * Rejected: any other human PAT (member / stolen lower-scope token).
  *
- * Agent CRUD on HTTP (`POST/PATCH/DELETE /api/v1/w/:wslug/documents` with
- * `type=agent`) is an auth-grant mutation: it mints, modifies, or revokes an
- * `agent_token` bearer credential. A stolen human PAT carrying `agents:write`
- * could mint a new agent with arbitrary scopes and pivot through it — the
- * exact privilege-escalation shape round 6 closed on MCP.
+ * 2026-06-09 (headless-Folio Phase 1, D1): this DELIBERATELY admits admin PATs,
+ * loosening the prior "all human PATs rejected" stance. Accepted residual: a
+ * stolen admin PAT can mint a pivot agent — but it already holds delete+config:write,
+ * and the minted token stays revocable (api_tokens.agent_id cascade). See the spec
+ * threat model + invariant 12's headless-confirm-gate exception.
  *
- * Legitimate callers:
- *   - Session callers (no token) — workspace admin managing agents via the UI.
- *   - Agent-bound bearers (`token.agentId` set) — agent self-management /
- *     parent spawning a child. Width-guards still apply.
+ * BOTH transport faces delegate here: `assertNotHumanPatForAgentLifecycle`
+ * (HTTP) and `assertMcpAgentLifecycle` (MCP, in `mcp-errors.ts`).
+ */
+export function mayManageAgentLifecycle(token: EphemeralToken | null): boolean {
+  if (!token) return true; // session-authenticated
+  if (isAgentBound(token)) return true; // agent-bound bearer (incl. operator)
+  return token.scopes.includes('agents:write'); // owner/admin human PAT
+}
+
+/**
+ * HTTP face of the agent-lifecycle gate. Agent CRUD on HTTP
+ * (`POST/PATCH/DELETE /api/v1/w/:wslug/documents` with `type=agent`) is an
+ * auth-grant mutation: it mints, modifies, or revokes an `agent_token` bearer
+ * credential. Delegates the allow/deny decision to `mayManageAgentLifecycle`
+ * so the HTTP and MCP faces can never drift apart.
  *
- * Rejected:
- *   - Human PATs (token present, `token.agentId === null`) — `agents:write`
- *     was the only gate before round 7; that gate is insufficient when the
- *     PAT itself is the credential being escalated against.
+ * As of 2026-06-09 (D1) this ADMITS admin (`agents:write`) human PATs — the
+ * prior "all human PATs rejected" stance is gone. Session callers and
+ * agent-bound bearers (incl. the operator) remain allowed; a member / stolen
+ * lower-scope PAT is still rejected.
  */
 export function assertNotHumanPatForAgentLifecycle(
   type: 'agent' | 'trigger',
   token: ApiToken | null,
 ): void {
   if (type !== 'agent') return;
-  if (!token) return; // session-authenticated
-  if (token.agentId) return; // agent-bound bearer
+  // No cast: ApiToken is assignable to EphemeralToken | null (EphemeralToken only
+  // ADDS an optional `isOperator`). Omitting the cast keeps the compiler able to
+  // catch a future divergence between the two token types at this boundary.
+  if (mayManageAgentLifecycle(token)) return;
   throw new HTTPError(
     'HUMAN_PAT_AGENT_LIFECYCLE_HTTP',
-    'agent lifecycle requires session auth or an agent-bound bearer; human PATs are rejected',
+    'agent lifecycle requires session auth, an agent-bound bearer, or an admin (agents:write) token',
     403,
   );
 }

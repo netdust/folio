@@ -18,7 +18,7 @@
  * Error shape (option (b) from the D-2 plan): agent-lifecycle guards in
  * `agent-guards.ts` throw `HTTPError`; the legacy MCP route translated those
  * to JSON-RPC `-32602` shapes via `mcpInvalidParams` + `rethrowAgentGuardAsMcp`
- * + `mcpRejectHumanPat`. Those translations are REPLICATED here, inside the
+ * + `assertMcpAgentLifecycle`. Those translations are REPLICATED here, inside the
  * migrated handlers, so the handler emits the exact same error shape the MCP
  * route emits today. D-3 then becomes a pure transport swap (catch the thrown
  * error, copy `.code`/`.data`/`.message` into the JSON-RPC envelope) with zero
@@ -94,8 +94,9 @@ import {
 } from './comment-schema.ts';
 import { serializeMarkdown } from './frontmatter.ts';
 import { HTTPError } from './http.ts';
-import { mcpInvalidParams, mcpRejectHumanPat, rethrowAgentGuardAsMcp } from './mcp-errors.ts';
+import { mcpInvalidParams, assertMcpAgentLifecycle, rethrowAgentGuardAsMcp } from './mcp-errors.ts';
 import { isReservedSlug } from './system-workspace.ts';
+import { DEFAULT_TABLE_SLUG } from './seed-project-defaults.ts';
 import { canManageWorkspace, canSeeProject, visibleProjectIds } from './access.ts';
 import { resolveAgentForRun } from './agent-resolver.ts';
 import { getInstanceSkill } from './instance-skills.ts';
@@ -315,9 +316,22 @@ async function resolveTableForArgs(
     if (!t) throw mcpInvalidParams('table not found', { reason: 'table_not_found' });
     return t;
   }
+  // No table_slug: pin to the project's default table — matching the HTTP
+  // routes' default (scope.ts, same DEFAULT_TABLE_SLUG) and the folio skill's
+  // documented contract. (B1: a 2nd table also gets order:0 — tables.ts never
+  // increments — so an `ORDER BY order` rule was a non-deterministic tie that
+  // could resolve to the wrong, status-less table and diverge from HTTP.) Fall
+  // back to lowest-order (createdAt tiebreak for determinism) only if no default
+  // table exists — this matches the OLD pre-D2 behavior for that edge (HTTP
+  // instead soft-fails to no-table; the residual no-default-table divergence is
+  // pre-existing and out of D2's scope).
+  const wi = await db.query.tables.findFirst({
+    where: and(eq(tablesTable.projectId, p.id), eq(tablesTable.slug, DEFAULT_TABLE_SLUG)),
+  });
+  if (wi) return wi;
   const t = await db.query.tables.findFirst({
     where: eq(tablesTable.projectId, p.id),
-    orderBy: (col, { asc }) => [asc(col.order)],
+    orderBy: (col, { asc }) => [asc(col.order), asc(col.createdAt)],
   });
   if (!t) throw mcpInvalidParams('project has no tables', { reason: 'no_tables' });
   return t;
@@ -1521,7 +1535,7 @@ export function registerRealTools(): void {
     handler: async (args, ctx) => {
       const { token } = ctx;
       // Round 6 #1: human PATs cannot mint agent bearers via MCP.
-      mcpRejectHumanPat(token);
+      assertMcpAgentLifecycle(token);
       const ws = await resolveWorkspaceForToken(token, args);
       const title = requireString(args, 'title');
       const body = optionalString(args, 'body') ?? '';
@@ -1584,7 +1598,7 @@ export function registerRealTools(): void {
     handler: async (args, ctx) => {
       const { token } = ctx;
       // Round 6 #1: human PATs cannot modify agent bearers via MCP.
-      mcpRejectHumanPat(token);
+      assertMcpAgentLifecycle(token);
       const ws = await resolveWorkspaceForToken(token, args);
       const slug = requireString(args, 'slug');
       const existing = await getWorkspaceDocument(ws.id, 'agent', slug);
@@ -1650,7 +1664,7 @@ export function registerRealTools(): void {
     handler: async (args, ctx) => {
       const { token } = ctx;
       // Round 6 #1: human PATs cannot revoke agent bearers via MCP.
-      mcpRejectHumanPat(token);
+      assertMcpAgentLifecycle(token);
       const ws = await resolveWorkspaceForToken(token, args);
       const slug = requireString(args, 'slug');
       const existing = await getWorkspaceDocument(ws.id, 'agent', slug);

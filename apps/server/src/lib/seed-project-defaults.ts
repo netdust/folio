@@ -2,6 +2,15 @@ import { nanoid } from 'nanoid';
 import { statuses, tables, views } from '../db/schema.ts';
 import type { DB } from '../db/client.ts';
 
+/**
+ * The slug of the table every project auto-seeds and that the no-`/t/<tslug>`
+ * default resolves to. THE single source of truth for "the default table" —
+ * both the HTTP scope middleware (`middleware/scope.ts`) and the MCP resolver
+ * (`agent-tools-registry.ts resolveTableForArgs`) import this so a rename can't
+ * silently diverge the two surfaces (the B1/D2 convergence point).
+ */
+export const DEFAULT_TABLE_SLUG = 'work-items';
+
 type DBOrTx = DB | Parameters<Parameters<DB['transaction']>[0]>[0];
 
 export async function seedProjectDefaults(
@@ -12,7 +21,7 @@ export async function seedProjectDefaults(
   await tx.insert(tables).values({
     id: tableId,
     projectId,
-    slug: 'work-items',
+    slug: DEFAULT_TABLE_SLUG,
     name: 'Work Items',
     icon: null,
     order: 0,

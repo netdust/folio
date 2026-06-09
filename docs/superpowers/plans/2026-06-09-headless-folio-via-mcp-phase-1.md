@@ -352,6 +352,36 @@ test('admin PAT cannot mint an agent wider than the caller', async () => {
 
 **Before finalizing:** read `assertAgentToolsWidening` / `assertAgentAllowListWidening` in `agent-guards.ts` to confirm the exact frontmatter shape that triggers a widening rejection (the `tools: ['folio_api']` example assumes folio_api maps to `config:write`, which the caller lacks — verify) and the rejection error shape, then tighten the assertion to `body.error.data.reason`.
 
+> **PLAN CORRECTION (2026-06-09, Step 2.5 ground-truth).** The sketch above is
+> DEFECTIVE — it does not match how mitigation 4 is actually enforced. Verified
+> facts:
+> - `assertAgentToolsWidening` / `assertAgentAllowListWidening` **skip human PATs
+>   entirely** (`if (!token || !isAgentBound(token)) return;`, agent-guards.ts:93,177).
+>   They bound an **agent-bound caller** only. For a human admin PAT they are no-ops,
+>   so a `setupToken(['agents:write'])`-without-`config:write` token minting
+>   `tools:['folio_api']` would **succeed** (no error) — the sketched
+>   `expect(body.error).toBeDefined()` would FAIL or force a spurious fix.
+> - The agent's bound-token scopes are `toolsToScopes(tools)` (services/documents.ts:717)
+>   with **no caller-intersection at create time**.
+> - The REAL ceiling for the D1-opened human-PAT path is **mint-time**:
+>   `roleToScopes` grants `agents:write` ONLY to owner/admin, who ALSO always hold
+>   `config:write`+`documents:delete` (agent-schema.ts:100-112). So any PAT that can
+>   pass the `agents:write` scope gate already holds every document scope — there is
+>   no realistic "wider than caller" case. A hand-crafted `agents:write`-only token is
+>   un-mintable: `mintToken`'s `roleToScopes` ceiling (token-reach.ts:122) rejects it.
+> - That mint ceiling is ALREADY locked by `tokens.test.ts:195,213`
+>   ("a member CANNOT mint config:write / agents:write — 403") and
+>   `instance-tokens.test.ts:270`.
+> - The agent-bound-caller widening path is ALREADY locked by `mcp.test.ts:1177,1218,1256`
+>   (`allow_list_widening_forbidden`) + the tools-widening guard.
+>
+> **Corrected Task 5:** add ONE regression test that locks the D1-relevant structural
+> fact — `roleToScopes('member')` never yields `agents:write` (so a member can never
+> reach agent creation), and an admin-minted agent's bound token carries only
+> `toolsToScopes(tools)` scopes (no escalation beyond admin's own set). This is the
+> honest mitigation-4 lock for the human-PAT path; the agent-bound path's widening
+> guards stay covered by the existing F2 tests above.
+
 - [ ] **Step 2: Run → PASS** (width-guards unchanged; this is a regression lock).
 
 Run: `cd apps/server && bun test src/routes/mcp.test.ts -t "wider than the caller"`

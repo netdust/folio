@@ -93,7 +93,7 @@ function mapToolErrorToJsonRpc(err: unknown, id: JsonRpcId): JsonRpcResponse {
   };
 
   // Errors already carrying a JSON-RPC code/data (mcpInvalidParams, lifted agent
-  // guards, mcpRejectHumanPat) pass through verbatim — D-2 made the handlers
+  // guards, assertMcpAgentLifecycle) pass through verbatim — D-2 made the handlers
   // emit the exact shape the MCP route promised, so this is a pure copy.
   if (typeof e.code === 'number') {
     return {

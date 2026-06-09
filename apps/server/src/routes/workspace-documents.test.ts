@@ -284,6 +284,65 @@ test('DELETE removes the agent + cascades the token', async () => {
   expect(remainingTokens).toHaveLength(0);
 });
 
+// Headless D1 mitigation 1 — VERIFY-FIRST that an agent-bound token is
+// listable on the per-workspace management surface AND revocable via the
+// agent's own DELETE. The existing 'DELETE removes the agent + cascades the
+// token' test proves only the DB-level cascade (queried by agentId). It does
+// NOT prove the token (a) is workspace-pinned, nor (b) surfaces on the
+// GET /api/v1/w/:wslug/tokens/:workspaceId list a revoker actually reads,
+// nor (c) disappears from that list once the agent is deleted. Those three
+// are the load-bearing properties of mitigation 1 (an operator can SEE and
+// REVOKE every agent's credential) — assert them through the real list route.
+test('agent token appears in the per-workspace token list and is removed when the agent is deleted', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const agent = await createAgent(app, seed.sessionCookie, 'Revocable Bot');
+
+  // (1) The created agent doc carries a bound token id in its frontmatter.
+  const agentRow = await db.query.documents.findFirst({
+    where: eq(documentsTable.id, agent.id),
+  });
+  const apiTokenId = (agentRow?.frontmatter as { api_token_id?: string }).api_token_id;
+  expect(apiTokenId).toBeString();
+
+  // (2) The token row is workspace-pinned (NOT an instance-reach null token).
+  const tokenRow = await db.query.apiTokens.findFirst({
+    where: eq(apiTokens.id, apiTokenId as string),
+  });
+  expect(tokenRow?.workspaceId).toBe(seed.workspace.id);
+  expect(tokenRow?.agentId).toBe(agent.id);
+
+  // (3) It surfaces in the per-workspace token list (session auth). This is
+  // the surface a human operator uses to audit/revoke agent credentials.
+  const listPath = `/api/v1/w/${seed.workspace.slug}/tokens/${seed.workspace.id}`;
+  const listRes = await app.request(listPath, {
+    headers: { Cookie: seed.sessionCookie },
+  });
+  expect(listRes.status).toBe(200);
+  const listBody = await listRes.json();
+  const listed = (listBody.data.tokens as Array<{ id: string }>).find(
+    (t) => t.id === apiTokenId,
+  );
+  expect(listed).toBeDefined();
+
+  // (4) Deleting the agent doc (session auth) cascades the token row away — so
+  //     it no longer appears on the list a revoker reads.
+  const del = await app.request(`${WS_PATH}/${agent.slug}`, {
+    method: 'DELETE',
+    headers: { Cookie: seed.sessionCookie },
+  });
+  expect(del.status).toBe(204);
+
+  const afterRes = await app.request(listPath, {
+    headers: { Cookie: seed.sessionCookie },
+  });
+  expect(afterRes.status).toBe(200);
+  const afterBody = await afterRes.json();
+  const stillListed = (afterBody.data.tokens as Array<{ id: string }>).find(
+    (t) => t.id === apiTokenId,
+  );
+  expect(stillListed).toBeUndefined();
+});
+
 test('two agents in the same workspace can share a base slug only after disambiguation', async () => {
   const { app, seed } = await makeTestApp();
   const first = await postWorkspaceDoc(app, seed.sessionCookie, {
@@ -610,13 +669,11 @@ test('F1: POST type=trigger still works with documents:write alone (agents:write
   expect(res.status).toBe(201);
 });
 
-test('F1 (round-7 #19 revision): PAT carrying agents:write is REJECTED for type=agent (was allowed pre-round-7)', async () => {
-  // Pre-round-7 this test asserted 201 — a human PAT with agents:write
-  // could mint an agent. Threat-model attack 18 identified that as a
-  // credential-escalation vector (stolen PAT mints arbitrary-scope agents).
-  // Round 7 #19 rejects human PATs uniformly on agent CRUD; agents:write
-  // alone is no longer sufficient. The test stays as a regression marker
-  // — flipping it back to 201 means the round 7 gate was undone.
+test('D1: PAT carrying agents:write (admin) is ALLOWED for type=agent (loosening from round-7)', async () => {
+  // Round 7 #19 rejected ALL human PATs on agent CRUD. D1 (headless-Folio
+  // Phase 1, 2026-06-09) loosens that: an admin PAT (agents:write — never
+  // granted to `member` by roleToScopes) may now mint agents headlessly.
+  // A member PAT (no agents:write) is STILL rejected (see the F1 test above).
   const { app, seed } = await makeTestApp();
   const pat = await mintPAT(seed.workspace.id, seed.user.id, [
     'documents:write', 'documents:read', 'agents:write',
@@ -631,8 +688,7 @@ test('F1 (round-7 #19 revision): PAT carrying agents:write is REJECTED for type=
       frontmatter: { system_prompt: 'x', model: 'm', provider: 'anthropic', tools: [] },
     }),
   });
-  expect(res.status).toBe(403);
-  expect((await res.json()).error.code).toBe('HUMAN_PAT_AGENT_LIFECYCLE_HTTP');
+  expect(res.status).toBe(201);
 });
 
 test('F1: PATCH type=agent rejects PAT with documents:write but no agents:write', async () => {
@@ -910,14 +966,14 @@ test('BUG-005: PATCH blocks an agent-bound caller from widening a target agent p
   expect((await res.json()).error.code).toBe('TOOLS_WIDENING_FORBIDDEN');
 });
 
-test('BUG-005 (round-7 #19 revision): human PATs no longer mint agents via HTTP at all', async () => {
-  // Pre-round-7 this test asserted that human PATs with agents:write could
-  // mint agents (and that the tools-widening guard correctly bypassed for
-  // them since it's an agent-bound-only check). Round 7 #19 closes the
-  // outer door: human PATs cannot create agents on HTTP at all. The
-  // tools-widening invariant for agent-bound bearers remains tested by the
-  // F1/G4 tests above; this one becomes a regression marker for the round-7
-  // outer gate.
+test('BUG-005 (D1 revision): an admin PAT (agents:write) mints agents via HTTP; tools-widening does NOT apply to human PATs', async () => {
+  // Pre-round-7 this asserted human PATs with agents:write could mint agents.
+  // Round 7 #19 closed that. D1 (headless-Folio Phase 1) re-opens it for ADMIN
+  // PATs only. The tools-widening guard is an agent-bound-only check — a human
+  // PAT has no agent allow-list to widen, so it may set any tools at mint time
+  // (the minted agent's authority is still ceiling-bounded at run time). The
+  // tools-widening invariant for agent-bound BEARERS stays tested by the F1/G4
+  // agent-bound tests above.
   const { app, seed } = await makeTestApp();
   const pat = await mintPAT(seed.workspace.id, seed.user.id, [
     'agents:write', 'documents:write', 'documents:read',
@@ -935,8 +991,7 @@ test('BUG-005 (round-7 #19 revision): human PATs no longer mint agents via HTTP 
       },
     }),
   });
-  expect(res.status).toBe(403);
-  expect((await res.json()).error.code).toBe('HUMAN_PAT_AGENT_LIFECYCLE_HTTP');
+  expect(res.status).toBe(201);
 });
 
 test('F1: DELETE blocks an agent-bound caller from deleting itself', async () => {
@@ -967,16 +1022,18 @@ test('F1: DELETE blocks an agent-bound caller from deleting itself', async () =>
 });
 
 // ---------------------------------------------------------------------------
-// Round 7 #19 — HTTP agent-lifecycle rejects human PATs.
+// HTTP agent-lifecycle gate (Round 7 #19 origin; D1 loosening 2026-06-09).
 //
-// Threat model attack 18 + mitigation 19. Round 6 #1 closed the same gap on
-// MCP; this round closes the HTTP twin. A stolen human PAT carrying
-// agents:write must NOT be able to mint, patch, or delete an agent_token
-// credential via the HTTP surface either. Agent-bound bearers (legitimate
-// self-management) and session callers (admin workflow) continue to work.
+// Round 7 #19 (threat-model attack 18 + mitigation 19) rejected ALL human PATs
+// on agent CRUD over HTTP, mirroring round 6 #1 on MCP. D1 (headless-Folio
+// Phase 1) loosens that to admit ADMIN (agents:write) PATs — the scope IS the
+// admin signal (roleToScopes never grants agents:write to `member`). A member
+// PAT (no agents:write) is STILL rejected (covered by the F1 tests above).
+// Agent-bound bearers (self-management) and session callers (admin workflow)
+// continue to work. Both faces now delegate to mayManageAgentLifecycle.
 // ---------------------------------------------------------------------------
 
-test('Round 7 #19: POST /documents type=agent rejects human PAT with 403', async () => {
+test('D1: POST /documents type=agent ALLOWS an admin PAT (agents:write) with 201', async () => {
   const { app, seed } = await makeTestApp();
   const pat = await mintPAT(seed.workspace.id, seed.user.id, [
     'documents:write', 'documents:read', 'agents:write',
@@ -987,12 +1044,11 @@ test('Round 7 #19: POST /documents type=agent rejects human PAT with 403', async
     headers: { Authorization: `Bearer ${pat}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
       type: 'agent',
-      title: 'PWN',
+      title: 'Admin-PAT-minted',
       frontmatter: { system_prompt: 'x', model: 'm', provider: 'anthropic', tools: [] },
     }),
   });
-  expect(res.status).toBe(403);
-  expect((await res.json()).error.code).toBe('HUMAN_PAT_AGENT_LIFECYCLE_HTTP');
+  expect(res.status).toBe(201);
 });
 
 test('Round 7 #19: POST /documents type=agent accepts session callers (admin workflow)', async () => {
@@ -1062,7 +1118,7 @@ test('Round 7 #19: POST /documents type=trigger still works for human PATs (carv
   expect(res.status).toBe(201);
 });
 
-test('Round 7 #19: PATCH agent rejects human PAT with 403', async () => {
+test('D1: PATCH agent ALLOWS an admin PAT (agents:write) with 200', async () => {
   const { app, seed } = await makeTestApp();
   const agent = await createAgent(app, seed.sessionCookie);
   const pat = await mintPAT(seed.workspace.id, seed.user.id, [
@@ -1074,11 +1130,11 @@ test('Round 7 #19: PATCH agent rejects human PAT with 403', async () => {
     headers: { Authorization: `Bearer ${pat}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ title: 'Renamed' }),
   });
-  expect(res.status).toBe(403);
-  expect((await res.json()).error.code).toBe('HUMAN_PAT_AGENT_LIFECYCLE_HTTP');
+  expect(res.status).toBe(200);
+  expect((await res.json()).data.title).toBe('Renamed');
 });
 
-test('Round 7 #19: DELETE agent rejects human PAT with 403', async () => {
+test('D1: DELETE agent ALLOWS an admin PAT (agents:write)', async () => {
   const { app, seed } = await makeTestApp();
   const agent = await createAgent(app, seed.sessionCookie);
   const pat = await mintPAT(seed.workspace.id, seed.user.id, [
@@ -1089,8 +1145,7 @@ test('Round 7 #19: DELETE agent rejects human PAT with 403', async () => {
     method: 'DELETE',
     headers: { Authorization: `Bearer ${pat}` },
   });
-  expect(res.status).toBe(403);
-  expect((await res.json()).error.code).toBe('HUMAN_PAT_AGENT_LIFECYCLE_HTTP');
+  expect(res.status).toBe(204);
 });
 
 // ---------------------------------------------------------------------------
