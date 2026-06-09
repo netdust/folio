@@ -95,6 +95,22 @@ export const anthropic: AIProvider = {
           const cb = ev.content_block as { id: string; name: string };
           const idx = ev.index as number;
           toolCallsByIndex[idx] = { id: cb.id, name: cb.name, jsonBuf: '' };
+        } else if (
+          t === 'content_block_start' &&
+          // G5 — Anthropic SERVER-side tool blocks (server_tool_use / mcp_tool_use,
+          // web_search/computer-use) are NOT client tool calls we can dispatch. We
+          // don't register them (no client tool_call event), but a block whose type
+          // ends in `_tool_use` arriving with stop_reason:'tool_use' otherwise leaves
+          // the runner's FIX#3 to fail with a GENERIC "no usable tool call" message.
+          // Warn with the specific block type so the failure is diagnosable rather
+          // than misleading. (Executing server tools is out of scope — see threat
+          // model G5 deferral.)
+          /_tool_use$/.test((ev.content_block as { type?: string } | undefined)?.type ?? '')
+        ) {
+          const blockType = (ev.content_block as { type: string }).type;
+          console.warn(
+            `[ai/anthropic] unsupported server-tool block '${blockType}' — not dispatched as a client tool call`,
+          );
         } else if (t === 'content_block_delta') {
           const delta = ev.delta as { type: string; text?: string; partial_json?: string };
           if (delta.type === 'text_delta' && delta.text) {

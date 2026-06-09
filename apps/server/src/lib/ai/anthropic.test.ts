@@ -379,4 +379,45 @@ describe('anthropic provider', () => {
     expect(events.filter((e) => (e as { type: string }).type === 'text').length).toBeGreaterThan(0);
     expect(events.filter((e) => (e as { type: string }).type === 'done')).toHaveLength(0);
   });
+
+  // G5 — a SERVER-side tool block (server_tool_use / mcp_tool_use) is not a client
+  // tool call. The adapter must NOT register a phantom tool_call for it, AND must
+  // WARN with the specific block type so a downstream FIX#3 failure is diagnosable
+  // (not the generic "no usable tool call").
+  test('stream() warns on an unsupported server_tool_use block and emits no phantom tool_call (G5)', async () => {
+    const warnings: string[] = [];
+    const realWarn = console.warn;
+    console.warn = (...args: unknown[]) => {
+      warnings.push(args.map(String).join(' '));
+    };
+    try {
+      mockStream.mockImplementationOnce((async function* () {
+        yield {
+          type: 'content_block_start',
+          index: 0,
+          content_block: { type: 'server_tool_use', id: 'srv_1', name: 'web_search' },
+        };
+        yield { type: 'message_delta', usage: { input_tokens: 5, output_tokens: 2 }, delta: { stop_reason: 'tool_use' } };
+        yield { type: 'message_stop' };
+      }) as never);
+
+      const events: unknown[] = [];
+      for await (const ev of anthropic.stream({
+        system: 'sys',
+        messages: [{ role: 'user', content: 'hi' }],
+        tools: [],
+        maxTokens: 100,
+        apiKey: 'sk-test',
+        model: 'claude-3',
+      })) {
+        events.push(ev);
+      }
+      // No phantom client tool_call for the server block.
+      expect(events.filter((e) => (e as { type: string }).type === 'tool_call')).toHaveLength(0);
+      // ...but a SPECIFIC warn naming the block type (the diagnosable outcome).
+      expect(warnings.some((w) => /server_tool_use/.test(w))).toBe(true);
+    } finally {
+      console.warn = realWarn;
+    }
+  });
 });
