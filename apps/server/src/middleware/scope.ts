@@ -47,6 +47,22 @@ export const resolveWorkspace: MiddlewareHandler<AuthContext & ScopeContext> = a
     // Instance token: owner-equivalent by capability, not per-workspace
     // membership. Skip the access check; role is owner for downstream
     // getRole() consumers (config gates etc.).
+    //
+    // SECURITY POSTURE — an instance-reach PAT is a ROOT CREDENTIAL by design
+    // (one instance = one team; workspaces are organizational folders, not a
+    // security boundary — see DECISIONS.md drop-workspace-tenancy). It reaches
+    // every workspace and its scopes are ceilinged once at mint time and frozen
+    // into the row; they are NOT re-derived against the creator's current role
+    // on later requests (token-reach.ts mintToken → requireScope reads
+    // token.scopes verbatim). Consequence: a PAT minted by an owner who is later
+    // demoted KEEPS its admin scopes until manually revoked. This is acceptable
+    // residual risk under the one-team model (the demoting actor is already an
+    // admin who can revoke in the same step), so the operational control is:
+    // treat instance PATs as root — give them a short TTL and rotate them; on a
+    // role-downgrade, revoke that user's instance tokens via /instance/tokens.
+    // If routine role-downgrade ever becomes a workflow, graduate this to a real
+    // fix (re-ceiling at request time, or revoke-on-demote off the existing
+    // user.role.changed event) — see tasks/followup-mcp-auth-model.md (A1/A2).
     c.set('role', 'owner');
   } else {
     // Post-tenancy: workspace visibility flows through the access convergence
