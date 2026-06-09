@@ -1138,6 +1138,39 @@ describe('runAgent stream loop', () => {
     expect(warnings.some((w) => /UNMETERED/.test(w))).toBe(true); // but the signal fires
   });
 
+  // G2 (false-positive guard, shakeout test-effectiveness) — a METERED run (the
+  // provider DID report non-zero usage) must NOT warn UNMETERED. Guards against the
+  // sawUsage flag being broken / the warn firing unconditionally.
+  test('G2 — a run that reports usage does NOT warn UNMETERED', async () => {
+    const { db, run } = await scaffold();
+    const stub: AIProvider = {
+      async *stream() {
+        yield { type: 'text', delta: 'an answer' } as ProviderEvent;
+        yield { type: 'tokens', tokens_in: 10, tokens_out: 5 } as ProviderEvent; // usage reported
+        yield { type: 'done', reason: 'stop' } as ProviderEvent;
+      },
+      async testKey() {
+        return { ok: true as const };
+      },
+    };
+    providerTestHatch.overrideRegistry('anthropic', async () => stub);
+
+    const warnings: string[] = [];
+    const realWarn = console.warn;
+    console.warn = (...args: unknown[]) => {
+      warnings.push(args.map(String).join(' '));
+    };
+    try {
+      await runAgent({ runId: run.id });
+    } finally {
+      console.warn = realWarn;
+    }
+
+    const fm = await readRun(db, run.id);
+    expect(fm.status).toBe('completed');
+    expect(warnings.some((w) => /UNMETERED/.test(w))).toBe(false); // metered → no warn
+  });
+
   // ALTITUDE FIX (code-review #2/#3/#4) — the runner runs the tool round whenever
   // tool calls were COLLECTED and the turn was not truncated, regardless of the
   // adapter's done.reason label. Thinking models (qwen3/deepseek-r1) emit a real
