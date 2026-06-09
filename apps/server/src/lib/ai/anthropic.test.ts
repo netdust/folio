@@ -16,10 +16,20 @@ const mockStream = mock(async function* () {
 });
 const mockModelsList = mock(async (): Promise<{ data: Array<{ id: string }> }> => ({ data: [] }));
 const anthropicCtorSpy = mock((opts: unknown) => opts);
+// Captures the ARGS passed to messages.stream(...) so tests can assert the request
+// body (the assistant tool_use echo + tool_result mapping), not just parsed events.
+// Without this the stream mock dropped its args → the request shape was wire-mock-blind.
+const streamArgSpy = mock((args: unknown) => args);
 
 mock.module('@anthropic-ai/sdk', () => ({
   default: class Anthropic {
-    messages = { create: mockCreate, stream: () => mockStream() };
+    messages = {
+      create: mockCreate,
+      stream: (args: unknown) => {
+        streamArgSpy(args);
+        return mockStream();
+      },
+    };
     models = { list: mockModelsList };
     constructor(opts: unknown) {
       anthropicCtorSpy(opts);
@@ -35,6 +45,7 @@ describe('anthropic provider', () => {
     mockStream.mockClear();
     mockModelsList.mockClear();
     anthropicCtorSpy.mockClear();
+    streamArgSpy.mockClear();
   });
 
   test('stream() yields text + tokens + done events from the Anthropic SDK stream', async () => {
@@ -419,5 +430,156 @@ describe('anthropic provider', () => {
     } finally {
       console.warn = realWarn;
     }
+  });
+
+  // ── Test-effectiveness hardening (followup-anthropic-provider-test-hardening) ──
+  // The adapter is behaviorally correct; these close green-but-blind paths so a
+  // future edit that breaks them goes RED.
+
+  // #1 (highest value, wire-mock leak) — the assistant tool_use REQUEST echo. A
+  // prior assistant turn with tool_calls must serialize to a `content` array of
+  // {type:'tool_use', id, name, input: tc.arguments}, and a role:'tool' message to
+  // {type:'tool_result', tool_use_id, content}. The stream mock dropped its args, so
+  // breaking the echo (drop it, map arguments→input wrong, emit `arguments` not
+  // `input`) left every test green. Assert the SENT request shape via streamArgSpy.
+  test('stream() echoes assistant tool_calls + tool results into the Anthropic request body (#1)', async () => {
+    const iter = anthropic.stream({
+      system: 'sys',
+      messages: [
+        { role: 'user', content: 'list' },
+        { role: 'assistant', content: '', tool_calls: [{ id: 'tu_1', name: 'list_workspaces', arguments: { q: 'x' } }] },
+        { role: 'tool', content: '{"ok":true}', tool_use_id: 'tu_1' },
+      ],
+      tools: [],
+      maxTokens: 100,
+      apiKey: 'sk-test',
+      model: 'claude-haiku-4-5',
+    });
+    for await (const _ of iter) {
+      /* drain */
+    }
+    const sent = streamArgSpy.mock.calls[0]![0] as {
+      messages: Array<{ role: string; content: unknown }>;
+    };
+    // The assistant turn → a content array carrying a tool_use block.
+    const assistant = sent.messages.find((m) => m.role === 'assistant');
+    const toolUse = (assistant!.content as Array<{ type: string; id?: string; name?: string; input?: unknown }>).find(
+      (b) => b.type === 'tool_use',
+    );
+    expect(toolUse).toBeDefined();
+    expect(toolUse!.id).toBe('tu_1');
+    expect(toolUse!.name).toBe('list_workspaces');
+    // Anthropic field is `input` (NOT `arguments`), carrying the object verbatim.
+    expect(toolUse!.input).toEqual({ q: 'x' });
+    // The tool result → a user message with a tool_result block carrying tool_use_id.
+    const toolMsg = sent.messages.find(
+      (m) => m.role === 'user' && Array.isArray(m.content) && (m.content as Array<{ type: string }>)[0]?.type === 'tool_result',
+    );
+    const toolResult = (toolMsg!.content as Array<{ type: string; tool_use_id?: string; content?: string }>)[0];
+    expect(toolResult!.tool_use_id).toBe('tu_1');
+    expect(toolResult!.content).toBe('{"ok":true}');
+  });
+
+  // #2 — thinking blocks must NOT leak into the visible text stream. The adapter
+  // emits text ONLY on delta.type==='text_delta', so thinking_delta/signature_delta
+  // are dropped — but nothing asserted it. (The 'pause_turn' test is mislabeled — it
+  // sends a plain text_delta named 'thinking...', not a real thinking block.)
+  test('stream() does NOT surface thinking_delta / signature_delta as text (#2)', async () => {
+    mockStream.mockImplementationOnce((async function* () {
+      yield { type: 'content_block_start', index: 0, content_block: { type: 'thinking' } };
+      // ADVERSARIAL: the thinking delta ALSO carries a `text` field. The TYPE check
+      // (`delta.type === 'text_delta'`) is the ONLY thing preventing this internal
+      // reasoning from leaking as visible text — a plain `if (delta.text)` would leak
+      // it. This is what makes the test bite the type guard, not just the text guard.
+      yield { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'reasoning', text: 'SECRET_reasoning_leak' } };
+      yield { type: 'content_block_delta', index: 0, delta: { type: 'signature_delta', signature: 'sig123', text: 'SECRET_sig_leak' } };
+      yield { type: 'content_block_stop', index: 0 };
+      // Then the real visible answer.
+      yield { type: 'content_block_start', index: 1, content_block: { type: 'text' } };
+      yield { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: 'the answer' } };
+      yield { type: 'content_block_stop', index: 1 };
+      yield { type: 'message_delta', usage: { input_tokens: 3, output_tokens: 2 }, delta: { stop_reason: 'end_turn' } };
+      yield { type: 'message_stop' };
+    }) as never);
+
+    const events: any[] = [];
+    for await (const ev of anthropic.stream({
+      system: 'sys',
+      messages: [{ role: 'user', content: 'q' }],
+      tools: [],
+      maxTokens: 100,
+      apiKey: 'sk-test',
+      model: 'claude-haiku-4-5',
+    })) {
+      events.push(ev);
+    }
+    const texts = events.filter((e) => e.type === 'text').map((e) => e.delta);
+    // ONLY the visible answer surfaces — the thinking/signature deltas (even with a
+    // `text` field) are dropped because they're not text_delta type.
+    expect(texts).toEqual(['the answer']);
+    expect(texts.join('')).not.toContain('SECRET_reasoning_leak');
+    expect(texts.join('')).not.toContain('SECRET_sig_leak');
+    // ...and the turn still completes (text/tokens/done all fire).
+    expect(events).toContainEqual({ type: 'tokens', tokens_in: 3, tokens_out: 2 });
+    expect(events.some((e) => e.type === 'done')).toBe(true);
+  });
+
+  // #3 — multiple PARALLEL tool_use blocks (Anthropic emits these by default). Each is
+  // keyed by its own ev.index and emitted at its own content_block_stop; assert two
+  // distinct tool_call events surface.
+  test('stream() surfaces two parallel tool_use blocks as two distinct tool_calls (#3)', async () => {
+    mockStream.mockImplementationOnce((async function* () {
+      yield { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'tu_a', name: 'a' } };
+      yield { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{}' } };
+      yield { type: 'content_block_stop', index: 0 };
+      yield { type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id: 'tu_b', name: 'b' } };
+      yield { type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '{"k":1}' } };
+      yield { type: 'content_block_stop', index: 1 };
+      yield { type: 'message_delta', usage: { input_tokens: 4, output_tokens: 3 }, delta: { stop_reason: 'tool_use' } };
+      yield { type: 'message_stop' };
+    }) as never);
+
+    const events: any[] = [];
+    for await (const ev of anthropic.stream({
+      system: 'sys',
+      messages: [{ role: 'user', content: 'do two things' }],
+      tools: [
+        { name: 'a', description: 'a', input_schema: { type: 'object', properties: {} } },
+        { name: 'b', description: 'b', input_schema: { type: 'object', properties: {} } },
+      ],
+      maxTokens: 100,
+      apiKey: 'sk-test',
+      model: 'claude-haiku-4-5',
+    })) {
+      events.push(ev);
+    }
+    const calls = events.filter((e) => e.type === 'tool_call');
+    expect(calls).toHaveLength(2);
+    expect(calls.map((c) => c.id)).toEqual(['tu_a', 'tu_b']);
+    expect(calls.map((c) => c.name)).toEqual(['a', 'b']);
+    expect(calls[1].arguments).toEqual({ k: 1 });
+  });
+
+  // #4 (minor) — stop_reason:'max_tokens' maps to done.reason:'max_tokens' (parity
+  // with the refusal/pause_turn tests).
+  test('stream() maps stop_reason=max_tokens to done.reason=max_tokens (#4)', async () => {
+    mockStream.mockImplementationOnce((async function* () {
+      yield { type: 'content_block_delta', delta: { type: 'text_delta', text: 'truncated' } };
+      yield { type: 'message_delta', delta: { stop_reason: 'max_tokens' }, usage: { input_tokens: 4, output_tokens: 100 } };
+      yield { type: 'message_stop' };
+    }) as never);
+
+    const events: unknown[] = [];
+    for await (const ev of anthropic.stream({
+      system: 'sys',
+      messages: [{ role: 'user', content: 'long' }],
+      tools: [],
+      maxTokens: 100,
+      apiKey: 'sk',
+      model: 'claude-haiku-4-5',
+    })) {
+      events.push(ev);
+    }
+    expect(events).toContainEqual({ type: 'done', reason: 'max_tokens' });
   });
 });

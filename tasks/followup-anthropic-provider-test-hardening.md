@@ -47,3 +47,22 @@ but a future edit could break them with the suite staying green. File: `apps/ser
 
 Each new test must be proven RED-on-revert (break the corresponding code path, confirm the
 test fails) per the test-effectiveness discipline — not just green-when-added.
+
+## RESOLVED — 2026-06-09 (branch `test/anthropic-provider-hardening`)
+
+All 4 tests authored + proven RED-on-revert. No production code changed (the adapter
+was already correct). Added a `streamArgSpy` to capture the request body (the wire-mock
+the existing mock dropped).
+
+- #1 assistant tool_use echo + tool_result mapping (request-body asserted) — RED when
+  `input: tc.arguments` is mis-mapped.
+- #2 thinking_delta/signature_delta NOT surfaced as text — RED when the type-gate is
+  dropped. **NOTE:** the first version of #2 was itself BLIND (it used a thinking_delta
+  with no `.text` field, so removing the type-check didn't leak). Fixed by giving the
+  thinking/signature deltas an adversarial `.text` field so the TYPE check is the only
+  guard — a good reminder that "green test" ≠ "biting test".
+- #3 two parallel tool_use blocks → two distinct tool_calls — RED when index-keying is
+  hardcoded to 0.
+- #4 stop_reason:max_tokens mapping — RED when the mapping line is removed.
+
+Full server suite: 1728 pass, tsc clean.
