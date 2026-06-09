@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
+import type { ProviderEvent } from './provider.ts';
 
 // NOTE: Bun's `mock.module(...)` is process-global and leaks across test files
 // within the same `bun test` run. The `@anthropic-ai/sdk` stub below covers
@@ -502,7 +503,7 @@ describe('anthropic provider', () => {
       yield { type: 'message_stop' };
     }) as never);
 
-    const events: any[] = [];
+    const events: ProviderEvent[] = [];
     for await (const ev of anthropic.stream({
       system: 'sys',
       messages: [{ role: 'user', content: 'q' }],
@@ -513,7 +514,9 @@ describe('anthropic provider', () => {
     })) {
       events.push(ev);
     }
-    const texts = events.filter((e) => e.type === 'text').map((e) => e.delta);
+    const texts = events
+      .filter((e): e is Extract<ProviderEvent, { type: 'text' }> => e.type === 'text')
+      .map((e) => e.delta);
     // ONLY the visible answer surfaces — the thinking/signature deltas (even with a
     // `text` field) are dropped because they're not text_delta type.
     expect(texts).toEqual(['the answer']);
@@ -530,7 +533,11 @@ describe('anthropic provider', () => {
   test('stream() surfaces two parallel tool_use blocks as two distinct tool_calls (#3)', async () => {
     mockStream.mockImplementationOnce((async function* () {
       yield { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'tu_a', name: 'a' } };
-      yield { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{}' } };
+      // NON-empty + DISTINCT from block 1 on purpose: an empty `{}` here would collide
+      // with the adapter's empty/parse-failure default `args = {}`, so a misrouting bug
+      // that emptied block 0 would be indistinguishable from a correct empty call. A
+      // distinct value makes calls[0].arguments bite cross-index buffer corruption.
+      yield { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"j":2}' } };
       yield { type: 'content_block_stop', index: 0 };
       yield { type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id: 'tu_b', name: 'b' } };
       yield { type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '{"k":1}' } };
@@ -539,7 +546,7 @@ describe('anthropic provider', () => {
       yield { type: 'message_stop' };
     }) as never);
 
-    const events: any[] = [];
+    const events: ProviderEvent[] = [];
     for await (const ev of anthropic.stream({
       system: 'sys',
       messages: [{ role: 'user', content: 'do two things' }],
@@ -553,11 +560,17 @@ describe('anthropic provider', () => {
     })) {
       events.push(ev);
     }
-    const calls = events.filter((e) => e.type === 'tool_call');
+    const calls = events.filter(
+      (e): e is Extract<ProviderEvent, { type: 'tool_call' }> => e.type === 'tool_call',
+    );
     expect(calls).toHaveLength(2);
     expect(calls.map((c) => c.id)).toEqual(['tu_a', 'tu_b']);
     expect(calls.map((c) => c.name)).toEqual(['a', 'b']);
-    expect(calls[1].arguments).toEqual({ k: 1 });
+    // Assert BOTH payloads — each block's input_json must land in its OWN per-index
+    // buffer. Asserting only calls[1] left a cross-index corruption of block 0 invisible.
+    // Map-then-compare (rather than calls[0]/[1] index access) keeps it bounds-safe
+    // under strict typing without a non-null assertion.
+    expect(calls.map((c) => c.arguments)).toEqual([{ j: 2 }, { k: 1 }]);
   });
 
   // #4 (minor) — stop_reason:'max_tokens' maps to done.reason:'max_tokens' (parity

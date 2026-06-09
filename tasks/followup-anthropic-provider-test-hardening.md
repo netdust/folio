@@ -66,3 +66,21 @@ the existing mock dropped).
 - #4 stop_reason:max_tokens mapping — RED when the mapping line is removed.
 
 Full server suite: 1728 pass, tsc clean.
+
+### Post-review fixes (`/code-review` high-effort, same branch)
+
+Two findings from the review pass were applied before merge:
+
+- **#3 coverage hole** — the test asserted only `calls[1].arguments`. Block 0's correct
+  value `{}` was indistinguishable from the adapter's empty/parse-failure default `{}`,
+  so an asymmetric per-index buffer-misrouting bug could stay GREEN. Fixed by giving
+  block 0 a distinct non-empty payload (`{"j":2}`) and asserting BOTH payloads
+  (`calls.map(c => c.arguments)` → `[{j:2},{k:1}]`). Proven RED-on-revert: misrouting
+  block 0's input_json to block 1's buffer now fails the test (was green before).
+- **no-any** — tests #2/#3 used `const events: any[]` (2 biome `noExplicitAny`
+  warnings, violates CLAUDE.md). Replaced with `ProviderEvent[]` + `Extract<…>` type
+  guards in the `.filter`. biome noExplicitAny: 2 → 0.
+
+Not changed (judged not worth churn): the file-wide `noNonNullAssertion` /
+`as never` lint debt (9 biome style warnings, pre-existing across the whole file's
+test style — not introduced by this branch).
