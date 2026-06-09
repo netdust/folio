@@ -18,7 +18,7 @@
  * Error shape (option (b) from the D-2 plan): agent-lifecycle guards in
  * `agent-guards.ts` throw `HTTPError`; the legacy MCP route translated those
  * to JSON-RPC `-32602` shapes via `mcpInvalidParams` + `rethrowAgentGuardAsMcp`
- * + `mcpRejectHumanPat`. Those translations are REPLICATED here, inside the
+ * + `assertMcpAgentLifecycle`. Those translations are REPLICATED here, inside the
  * migrated handlers, so the handler emits the exact same error shape the MCP
  * route emits today. D-3 then becomes a pure transport swap (catch the thrown
  * error, copy `.code`/`.data`/`.message` into the JSON-RPC envelope) with zero
@@ -94,7 +94,7 @@ import {
 } from './comment-schema.ts';
 import { serializeMarkdown } from './frontmatter.ts';
 import { HTTPError } from './http.ts';
-import { mcpInvalidParams, mcpRejectHumanPat, rethrowAgentGuardAsMcp } from './mcp-errors.ts';
+import { mcpInvalidParams, assertMcpAgentLifecycle, rethrowAgentGuardAsMcp } from './mcp-errors.ts';
 import { isReservedSlug } from './system-workspace.ts';
 import { canManageWorkspace, canSeeProject, visibleProjectIds } from './access.ts';
 import { resolveAgentForRun } from './agent-resolver.ts';
@@ -1521,7 +1521,7 @@ export function registerRealTools(): void {
     handler: async (args, ctx) => {
       const { token } = ctx;
       // Round 6 #1: human PATs cannot mint agent bearers via MCP.
-      mcpRejectHumanPat(token);
+      assertMcpAgentLifecycle(token);
       const ws = await resolveWorkspaceForToken(token, args);
       const title = requireString(args, 'title');
       const body = optionalString(args, 'body') ?? '';
@@ -1584,7 +1584,7 @@ export function registerRealTools(): void {
     handler: async (args, ctx) => {
       const { token } = ctx;
       // Round 6 #1: human PATs cannot modify agent bearers via MCP.
-      mcpRejectHumanPat(token);
+      assertMcpAgentLifecycle(token);
       const ws = await resolveWorkspaceForToken(token, args);
       const slug = requireString(args, 'slug');
       const existing = await getWorkspaceDocument(ws.id, 'agent', slug);
@@ -1650,7 +1650,7 @@ export function registerRealTools(): void {
     handler: async (args, ctx) => {
       const { token } = ctx;
       // Round 6 #1: human PATs cannot revoke agent bearers via MCP.
-      mcpRejectHumanPat(token);
+      assertMcpAgentLifecycle(token);
       const ws = await resolveWorkspaceForToken(token, args);
       const slug = requireString(args, 'slug');
       const existing = await getWorkspaceDocument(ws.id, 'agent', slug);

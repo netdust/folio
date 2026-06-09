@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import type { EphemeralToken } from '../db/schema.ts';
 import { assertNotHumanPatForAgentLifecycle, mayManageAgentLifecycle } from './agent-guards.ts';
 import { roleToScopes } from './agent-schema.ts';
-import { mcpRejectHumanPat } from './mcp-errors.ts';
+import { assertMcpAgentLifecycle } from './mcp-errors.ts';
 
 const tok = (over: Partial<EphemeralToken>): EphemeralToken =>
   ({ id: 't', workspaceId: 'w', createdBy: 'u', scopes: [], agentId: null, ...over }) as EphemeralToken;
@@ -25,7 +25,7 @@ describe('mayManageAgentLifecycle', () => {
   });
 });
 
-// Mitigation 3 (spec threat model): the MCP gate (mcpRejectHumanPat) and the
+// Mitigation 3 (spec threat model): the MCP gate (assertMcpAgentLifecycle) and the
 // HTTP gate (assertNotHumanPatForAgentLifecycle) MUST make the SAME
 // agent-lifecycle decision for every token shape — they delegate to the one
 // shared predicate, so they agree BY CONSTRUCTION. This test goes RED if a
@@ -34,7 +34,7 @@ describe('mayManageAgentLifecycle', () => {
 describe('MCP and HTTP agent-lifecycle gates converge', () => {
   function mcpRejects(t: EphemeralToken): boolean {
     try {
-      mcpRejectHumanPat(t);
+      assertMcpAgentLifecycle(t);
       return false;
     } catch {
       return true;
@@ -49,7 +49,7 @@ describe('MCP and HTTP agent-lifecycle gates converge', () => {
     }
   }
 
-  // NB: mcpRejectHumanPat takes a non-null EphemeralToken (the MCP transport
+  // NB: assertMcpAgentLifecycle takes a non-null EphemeralToken (the MCP transport
   // only calls it for bearer-authed requests; a sessionless caller is rejected
   // upstream at 401). The HTTP gate additionally handles the session (null)
   // case. The shared shapes below are the ones BOTH faces actually evaluate.

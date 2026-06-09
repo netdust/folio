@@ -726,7 +726,7 @@ describe('D-2: agent-lifecycle guards survive the migration (mitigation 57)', ()
     expect(agent.slug).toBeTruthy();
 
     // Member PAT (no agents:write) — still rejected. At the executeTool layer
-    // the `agents:write` requiredScope check fires BEFORE mcpRejectHumanPat, so
+    // the `agents:write` requiredScope check fires BEFORE assertMcpAgentLifecycle, so
     // a member is denied by the scope gate (agents:write IS the admin signal —
     // a PAT lacking it can never reach the lifecycle gate).
     const memberPat = await seedHumanPat(db, seed.workspace.id, seed.user.id, [
@@ -790,7 +790,7 @@ describe('D-2: agent-lifecycle guards survive the migration (mitigation 57)', ()
     expect(out.content[0]!.text).toBeTruthy();
 
     // Member PAT (no agents:write) — still rejected by the scope gate (fires
-    // before mcpRejectHumanPat; agents:write IS the admin signal).
+    // before assertMcpAgentLifecycle; agents:write IS the admin signal).
     const { agentSlug: memberTarget } = await seedAgent(db, seed.workspace.id, seed.user.id);
     const memberPat = await seedHumanPat(db, seed.workspace.id, seed.user.id, [
       'documents:read',

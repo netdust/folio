@@ -53,8 +53,15 @@ export function mcpInvalidParams(message: string, data: Record<string, unknown>)
  * -32000 is the protocol's catch-all for server-defined errors; SDKs preserve
  * `data` on this code, so the downstream
  * `data.reason: 'human_pat_rejected_on_agent_lifecycle'` stays addressable.
+ *
+ * NAME NOTE (2026-06-09, D1): renamed from `mcpRejectHumanPat` — it no longer
+ * rejects human PATs as a CLASS; it admits admin (`agents:write`) PATs and
+ * rejects only insufficiently-scoped bearers. The wire-level `data.reason`
+ * string is kept byte-for-byte (`human_pat_rejected_on_agent_lifecycle`) for
+ * MCP-client compatibility — clients branch on it, so it is a frozen contract
+ * even though the literal phrase now over-describes the rejected set.
  */
-export function mcpRejectHumanPat(token: EphemeralToken): void {
+export function assertMcpAgentLifecycle(token: EphemeralToken): void {
   if (mayManageAgentLifecycle(token)) return;
   const err = new Error(
     'agent-lifecycle tools require session auth, an agent-bound bearer, or an admin (agents:write) token',

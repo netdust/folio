@@ -19,29 +19,16 @@
  * first-user/bootstrap gate either).
  */
 import { expect, test } from 'bun:test';
-import { nanoid } from 'nanoid';
-import { apiTokens } from '../db/schema.ts';
-import { newApiToken } from '../lib/auth.ts';
 import { db } from '../db/client.ts';
-import { makeTestApp } from '../test/harness.ts';
+import { makeTestApp, mintInstancePat } from '../test/harness.ts';
 
-/** Mint an INSTANCE-reach admin PAT carrying the full owner/admin scope set. */
+/**
+ * Mint an INSTANCE-reach admin PAT (full owner/admin scope set) and return its
+ * plaintext bearer. Wraps the shared `mintInstancePat` harness helper so the
+ * instance-PAT seeding shape lives in one place.
+ */
 async function mintAdminPat(userId: string): Promise<string> {
-  const { token, hash } = newApiToken();
-  await db.insert(apiTokens).values({
-    id: nanoid(),
-    workspaceId: null, // instance reach
-    name: 'admin-pat',
-    tokenHash: hash,
-    scopes: [
-      'documents:read',
-      'documents:write',
-      'documents:delete',
-      'agents:write',
-      'config:write',
-    ],
-    createdBy: userId,
-  });
+  const { token } = await mintInstancePat(db, userId);
   return token;
 }
 

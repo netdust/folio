@@ -150,3 +150,38 @@ export async function makeTestApp(opts: HarnessOptions = {}): Promise<{
 export async function makeBareTestDb(): Promise<{ app: ServerApp; db: DB }> {
   return setupTestDb();
 }
+
+/**
+ * Mint an INSTANCE-reach PAT (workspace_id null) and return BOTH the plaintext
+ * bearer (for Authorization headers) and the row id (for revocation assertions).
+ * The ONE shared instance-PAT seeder for tests — several route test files have
+ * their own near-identical copies (seedInstanceToken etc.) that return only the
+ * id; new tests should call this instead so the scope vocabulary lives in one
+ * place. `scopes` defaults to the full owner/admin document-scope set (an "admin
+ * PAT").
+ */
+export async function mintInstancePat(
+  db: DB,
+  createdBy: string,
+  scopes: string[] = [
+    'documents:read',
+    'documents:write',
+    'documents:delete',
+    'agents:write',
+    'config:write',
+  ],
+): Promise<{ token: string; id: string }> {
+  const { newApiToken } = await import('../lib/auth.ts');
+  const { apiTokens } = await import('../db/schema.ts');
+  const { token, hash } = newApiToken();
+  const id = nanoid();
+  await db.insert(apiTokens).values({
+    id,
+    workspaceId: null, // instance reach
+    name: 'instance-pat',
+    tokenHash: hash,
+    scopes,
+    createdBy,
+  });
+  return { token, id };
+}

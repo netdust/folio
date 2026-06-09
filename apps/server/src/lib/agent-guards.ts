@@ -248,7 +248,7 @@ export function assertNotSelfDelete(
  * threat model + invariant 12's headless-confirm-gate exception.
  *
  * BOTH transport faces delegate here: `assertNotHumanPatForAgentLifecycle`
- * (HTTP) and `mcpRejectHumanPat` (MCP, in `mcp-errors.ts`).
+ * (HTTP) and `assertMcpAgentLifecycle` (MCP, in `mcp-errors.ts`).
  */
 export function mayManageAgentLifecycle(token: EphemeralToken | null): boolean {
   if (!token) return true; // session-authenticated
@@ -273,7 +273,10 @@ export function assertNotHumanPatForAgentLifecycle(
   token: ApiToken | null,
 ): void {
   if (type !== 'agent') return;
-  if (mayManageAgentLifecycle(token as EphemeralToken | null)) return;
+  // No cast: ApiToken is assignable to EphemeralToken | null (EphemeralToken only
+  // ADDS an optional `isOperator`). Omitting the cast keeps the compiler able to
+  // catch a future divergence between the two token types at this boundary.
+  if (mayManageAgentLifecycle(token)) return;
   throw new HTTPError(
     'HUMAN_PAT_AGENT_LIFECYCLE_HTTP',
     'agent lifecycle requires session auth, an agent-bound bearer, or an admin (agents:write) token',

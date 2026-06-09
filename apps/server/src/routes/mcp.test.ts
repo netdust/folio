@@ -1436,7 +1436,7 @@ test('MCP get_agent_self with a human PAT returns -32602 no_agent_bound_to_token
 // `agents:write` is the admin signal (roleToScopes never grants it to member),
 // so an admin PAT may now manage agents headlessly. A member PAT (no
 // agents:write) is still rejected — at the executeTool scope gate, which fires
-// before mcpRejectHumanPat (the lifecycle gate's -32000 / reason
+// before assertMcpAgentLifecycle (the lifecycle gate's -32000 / reason
 // `human_pat_rejected_on_agent_lifecycle` only bites a non-admin, non-agent
 // bearer that somehow holds agents:write, unreachable by construction here).
 // Both faces now delegate to mayManageAgentLifecycle; HTTP is gated too.
