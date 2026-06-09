@@ -39,11 +39,14 @@ describe('useDeleteProject', () => {
     // Projects list — must invalidate.
     expect(keys.some((k) => k === JSON.stringify(['projects', 'acme', 'list']))).toBe(true);
 
-    // Per-project caches that go stale when the project is gone.
+    // Per-project caches that go stale when the project is gone. Views +
+    // documents are TABLE-scoped now, so the cascade busts the project-wide
+    // PREFIX (no tslug, no 'list' literal) which prefix-matches every table's
+    // key — not the legacy project-scoped keys that no longer match.
     expect(keys.some((k) => k === JSON.stringify(['tables', 'acme', 'sales']))).toBe(true);
     expect(keys.some((k) => k === JSON.stringify(['views', 'acme', 'sales']))).toBe(true);
     expect(
-      keys.some((k) => k === JSON.stringify(['documents', 'acme', 'sales', 'list'])),
+      keys.some((k) => k === JSON.stringify(['documents', 'acme', 'sales'])),
     ).toBe(true);
   });
 });

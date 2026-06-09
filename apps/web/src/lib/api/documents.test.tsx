@@ -102,6 +102,48 @@ describe('documentsKeys table scoping', () => {
   });
 });
 
+describe('documentsKeys table-agnostic invalidation prefix', () => {
+  // A read key is [...all, w, p, tslug, 'list', params]. Sibling invalidation
+  // sites (SSE live-update, activity-log, project-delete cascade) do NOT know
+  // which table a changed document belongs to, so they must invalidate ACROSS
+  // ALL TABLES of the project. The only prefix that prefix-matches every
+  // table's list key is [...all, w, p] (drop BOTH 'list' AND tslug). TanStack
+  // invalidateQueries does prefix matching: a query key matches iff the
+  // invalidation key is a prefix of it.
+  function isPrefixOf(prefix: readonly unknown[], key: readonly unknown[]): boolean {
+    return prefix.length <= key.length && prefix.every((x, i) => x === key[i]);
+  }
+
+  it('the project-wide prefix [...all, w, p] prefix-matches EVERY table list key', () => {
+    const projectPrefix = [...documentsKeys.all, 'acme', 'web'];
+    const bugsKey = documentsKeys.list('acme', 'web', 'bugs', {});
+    const workItemsKey = documentsKeys.list('acme', 'web', 'work-items', {});
+
+    // A single project-wide invalidation must hit BOTH tables.
+    expect(isPrefixOf(projectPrefix, bugsKey)).toBe(true);
+    expect(isPrefixOf(projectPrefix, workItemsKey)).toBe(true);
+  });
+
+  it('exposes a listPrefix factory the list key derives from (so they cannot drift)', () => {
+    // listPrefix must be exactly the list key WITHOUT the trailing params.
+    const prefix = documentsKeys.listPrefix('acme', 'web', 'bugs');
+    const key = documentsKeys.list('acme', 'web', 'bugs', { type: 'work_item' });
+    expect(key.slice(0, prefix.length)).toEqual([...prefix]);
+    expect(prefix).toEqual([...documentsKeys.all, 'acme', 'web', 'bugs', 'list']);
+  });
+
+  it('the LEGACY project-scoped prefix [...all, w, p, "list"] does NOT match a table-scoped key (the regression)', () => {
+    // This is the bug Cluster 1 introduced: inserting tslug at index 3 pushed
+    // 'list' to index 4, so the old prefix's index-3 'list' !== tslug. If a
+    // sibling reverts to this stale prefix, the live list never refetches.
+    const stalePrefix = [...documentsKeys.all, 'acme', 'web', 'list'];
+    const bugsKey = documentsKeys.list('acme', 'web', 'bugs', {});
+    const workItemsKey = documentsKeys.list('acme', 'web', 'work-items', {});
+    expect(isPrefixOf(stalePrefix, bugsKey)).toBe(false);
+    expect(isPrefixOf(stalePrefix, workItemsKey)).toBe(false);
+  });
+});
+
 describe('useUpdateDocument', () => {
   afterEach(() => {
     vi.restoreAllMocks();

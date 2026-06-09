@@ -66,8 +66,14 @@ function toSearch(params: DocumentListParams): string {
 
 export const documentsKeys = {
   all: ['documents'] as const,
+  // The list prefix (table-scoped) — in-table invalidations target THIS so they
+  // always prefix-match the read key, which appends `params`. Single-sources the
+  // prefix so the read key and its invalidations cannot drift apart (the bug
+  // Cluster 1 introduced when tslug was inserted ahead of the 'list' literal).
+  listPrefix: (wslug: string, pslug: string, tslug: string) =>
+    [...documentsKeys.all, wslug, pslug, tslug, 'list'] as const,
   list: (wslug: string, pslug: string, tslug: string, params: DocumentListParams = {}) =>
-    [...documentsKeys.all, wslug, pslug, tslug, 'list', params] as const,
+    [...documentsKeys.listPrefix(wslug, pslug, tslug), params] as const,
   detail: (wslug: string, pslug: string, slug: string) =>
     [...documentsKeys.all, wslug, pslug, 'detail', slug] as const,
 };
@@ -110,7 +116,7 @@ export function useCreateDocument(wslug: string, pslug: string, tslug: string) {
       parentId?: string | null;
     }) => client.post<Document>(`/api/v1/w/${wslug}/p/${pslug}/t/${tslug}/documents`, vars),
     onSuccess: () =>
-      qc.invalidateQueries({ queryKey: [...documentsKeys.all, wslug, pslug, tslug, 'list'] }),
+      qc.invalidateQueries({ queryKey: documentsKeys.listPrefix(wslug, pslug, tslug) }),
   });
 }
 
@@ -223,7 +229,7 @@ export function useUpdateDocument(
       // Invalidate every list query under this wslug/pslug/tslug — different
       // surfaces (list view, kanban, wiki tree) use different list params,
       // and a title/status patch in one view should refresh them all.
-      qc.invalidateQueries({ queryKey: [...documentsKeys.all, wslug, pslug, tslug, 'list'] });
+      qc.invalidateQueries({ queryKey: documentsKeys.listPrefix(wslug, pslug, tslug) });
       // Server emits a `document.updated` event on every PATCH; refresh the
       // ActivityPanel's events list so the slideover stays live. A title
       // patch may regenerate the slug — in that case ActivityPanel under the
@@ -243,7 +249,7 @@ export function useDeleteDocument(wslug: string, pslug: string, tslug: string) {
     mutationFn: (slug: string) =>
       client.delete<void>(`/api/v1/w/${wslug}/p/${pslug}/t/${tslug}/documents/${slug}`),
     onSuccess: () =>
-      qc.invalidateQueries({ queryKey: [...documentsKeys.all, wslug, pslug, tslug, 'list'] }),
+      qc.invalidateQueries({ queryKey: documentsKeys.listPrefix(wslug, pslug, tslug) }),
   });
 }
 

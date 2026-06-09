@@ -53,11 +53,19 @@ describe('useLogActivity', () => {
       k === JSON.stringify(['document-events', 'acme', 'web', 'lead-foo']),
     )).toBe(true);
 
-    // Must invalidate the scoped documents list (so the doc surfaces in
-    // updated-at sort once the server bumps updatedAt).
+    // Must invalidate the project-wide documents prefix (so the doc surfaces in
+    // updated-at sort once the server bumps updatedAt). The activity log does
+    // NOT carry the doc's table, so it busts every table under the project via
+    // the table-agnostic prefix [documents, w, p]. The legacy [...,'list']
+    // prefix no longer prefix-matches the table-scoped read key (tslug at idx 3).
+    expect(keys.some((k) =>
+      k === JSON.stringify(['documents', 'acme', 'web']),
+    )).toBe(true);
+    // Regression guard: the stale project-scoped-with-'list' prefix must NOT be
+    // used — it stopped matching the table-scoped key after Cluster 1.
     expect(keys.some((k) =>
       k === JSON.stringify(['documents', 'acme', 'web', 'list']),
-    )).toBe(true);
+    )).toBe(false);
 
     // Must invalidate the doc's detail (so lastTouchedAt is fresh in the slideover).
     expect(keys.some((k) =>

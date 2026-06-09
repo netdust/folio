@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { client } from './client.ts';
+import { documentsKeys } from './documents.ts';
 import { tablesKeys } from './tables.ts';
-import { viewsKeys } from './views.ts';
 
 export interface Project {
   id: string;
@@ -74,8 +74,15 @@ export function useDeleteProject(wslug: string) {
       // tables/views for the deleted project until staleTime expires.
       qc.invalidateQueries({ queryKey: projectsKeys.list(wslug) });
       qc.invalidateQueries({ queryKey: tablesKeys.list(wslug, pslug) });
-      qc.invalidateQueries({ queryKey: viewsKeys.list(wslug, pslug) });
-      qc.invalidateQueries({ queryKey: ['documents', wslug, pslug, 'list'] });
+      // Views + documents are now TABLE-scoped (keys carry a tslug segment).
+      // A project delete must bust them across ALL of the project's tables, so
+      // target the project-wide prefix (drop the tslug + any 'list' literal):
+      //   views:     ['views', w, p]          ⊂ ['views', w, p, <tslug>]
+      //   documents: ['documents', w, p]      ⊂ [...all, w, p, <tslug>, 'list', <params>]
+      // The pre-Cluster-1 keys (viewsKeys.list 2-arg, documents [...,'list'])
+      // no longer match the table-scoped read keys.
+      qc.invalidateQueries({ queryKey: ['views', wslug, pslug] });
+      qc.invalidateQueries({ queryKey: [...documentsKeys.all, wslug, pslug] });
     },
   });
 }

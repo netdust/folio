@@ -16,7 +16,7 @@ vi.mock('@tanstack/react-query', async (orig) => {
 import { useLiveDocuments } from './use-live-documents.ts';
 
 describe('useLiveDocuments', () => {
-  it('subscribes with the project ID (not slug) + document kinds, and invalidates the slug-keyed list', () => {
+  it('subscribes with the project ID (not slug) + document kinds, and invalidates the project-wide document prefix', () => {
     calls.length = 0;
     invalidateSpy.mockClear();
     // The events route filters ?project= by document-row projectId, so the SSE
@@ -30,7 +30,12 @@ describe('useLiveDocuments', () => {
     // Regression guard: the filter must NOT be the slug.
     expect((calls[0]!.filters as { project: string }).project).not.toBe('web');
     calls[0]!.onEvent({ kind: 'document.updated' });
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['documents', 'acme', 'web', 'list'] });
+    // The SSE event does not carry the changed doc's table, so the live-update
+    // invalidates the table-agnostic project prefix [documents, w, p] — which
+    // prefix-matches every table's list key [documents, w, p, <tslug>, 'list',
+    // <params>]. The legacy [..., 'list'] prefix no longer matches (tslug sits
+    // at index 3 ahead of 'list' since Cluster 1) → live refetch silently lost.
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['documents', 'acme', 'web'] });
   });
 
   it('does not open a mis-scoped subscription before the project id resolves', () => {

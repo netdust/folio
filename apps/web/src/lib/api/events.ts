@@ -42,7 +42,11 @@ export function useLogActivity(wslug: string, pslug: string) {
       // every open tab.
       qc.invalidateQueries({ queryKey: documentEventsKeys.list(wslug, pslug, vars.slug) });
       qc.invalidateQueries({ queryKey: documentsKeys.detail(wslug, pslug, vars.slug) });
-      qc.invalidateQueries({ queryKey: [...documentsKeys.all, wslug, pslug, 'list'] });
+      // The activity log does not carry the doc's table, so bust every table's
+      // list under this project: [...all, wslug, pslug] prefix-matches all of
+      // them. The old [...all, w, p, 'list'] prefix no longer matches the
+      // table-scoped key (tslug now sits at index 3 ahead of 'list').
+      qc.invalidateQueries({ queryKey: [...documentsKeys.all, wslug, pslug] });
     },
   });
 }
