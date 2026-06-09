@@ -407,6 +407,8 @@ function BoardRoute() {
 
 ### Task 7: `w.$wslug.tsx` — stop discarding `_tslug` in the rail handlers
 
+> **CR-Cluster-2 ADDITION (verified):** `w.$wslug.p.$pslug.tsx` (the project LAYOUT route, NOT w.$wslug.tsx) also hardcodes the table: `activeTab` is computed by `path.endsWith('/work-items'|'/board'|'/wiki')` (line ~40) so a `/t/<tslug>` or `/t/<tslug>/board` deep-link matches NONE → falls back to `'work-items'`, AND `<BoardControls … tslug="work-items" />` is hardcoded (line ~88). Fix BOTH here: derive the active table from the path (or `useCurrentTslug()`), make the tab-strip tslug-aware (the work-items/board tabs should point at the current table), and pass the real tslug to BoardControls. Without this, a non-default board renders correct cards but the tab highlight + group-by/sort controls bind to work-items (invariant-16 adjacent — controls write to the wrong table's view).
+
 **Files:**
 - Modify: `apps/web/src/routes/w.$wslug.tsx` (`onTableClick` ~206, `onViewClick` ~212, `onNewView` ~231, `currentRoute.tslug` ~298)
 - Test: `apps/web/src/routes/w.$wslug.test.tsx`
@@ -452,6 +454,8 @@ const activeTslug = currentPath.match(/\/t\/([^/]+)/)?.[1];
 **Tier A** — this is the NAVIGATION-RESOLVES-THE-RIGHT-TABLE logic the brief flagged Tier A: a wrong branch sends a `bugs` click to `work-items`. RED-first on both branches (default→/work-items, non-default→/t/:tslug, both with correct params). **Unit test:** handler routes default vs non-default to the right `to`+`params`. **Deferral line:** `Risk this test does NOT cover: the live rail-click→render in the browser — deferred to /shakeout Flow 1 happy path.`
 
 ### Task 8: Sibling-site sweep — `useFields('work-items')` literals
+
+> **CR-Cluster-2 ADDITION (altitude):** AVOID a prop-vs-hook split-brain. Components that ALREADY receive `tslug` as a prop (TableView/KanbanView/BoardControls and anything they prop-drill to) must keep using the PROP — do NOT switch them to `useCurrentTslug()`. Use `useCurrentTslug()` ONLY in components that have NO tslug prop and are rendered under a table route (the sibling surfaces: list-view, document-slideover, new-view-sheet). Reason: a child reading the hook while its parent passes a prop can disagree if they're ever on different values (e.g. a slideover under /work-items reads the default while opened from a /t/bugs TableView). One source of truth per component subtree.
 
 **Files:**
 - Modify: `apps/web/src/components/views/list-view.tsx:51`, `apps/web/src/components/slideover/document-slideover.tsx:572`, `apps/web/src/components/views/new-view-sheet.tsx:42`
