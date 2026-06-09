@@ -9,7 +9,27 @@ not a drive-by. One of them is partly by-design under the one-team model.
 
 ## Findings
 
-### A1 — [HIGH] Stale token privilege: scopes ceilinged only at mint-time, never re-derived
+### A1 — [RE-SCOPED: LOW, with a trigger condition] Stale token privilege: scopes ceilinged only at mint-time, never re-derived
+
+> **Severity re-calibrated 2026-06-09 after a code+model ground-truth.** The MECHANISM
+> is real and confirmed (`requireScope` reads `t.scopes` verbatim; no request-time
+> re-derivation). But the HIGH label was miscalibrated for Folio's actual deployment
+> shape: one instance = one team (typically 1–3 humans, often a single owner); demotion
+> is a deliberate owner-only act (`instance-users.ts:97`, `assertNotLastOwner`) performed
+> by someone who can revoke the demoted user's tokens in the same step; and the exploit
+> requires a formerly-trusted insider — an actor class Folio's threat models mark OUT of
+> scope. So this is a **defense-in-depth / hygiene gap, not an active exploitable hole**.
+>
+> **Decision (2026-06-09): do NOT open a threat-modeled branch now.** The "re-architect
+> auth across all token transports" framing was disproportionate — the actual fix (if
+> ever needed) is a one-line intersection in the token-load path, not a re-architecture.
+>
+> **TRIGGER to graduate back to a real fix:** if routine role-downgrade ever becomes a
+> workflow (offboarding flows, or instances with several rotating admins), implement
+> option (a) re-ceiling at request time OR option (b) revoke-on-demote off the existing
+> `user.role.changed` event (`instance-users.ts:73`). Until then, the operational control
+> (short TTL + rotation + revoke-on-demote-by-hand) is sufficient and is now documented
+> at the code site (`middleware/scope.ts`, the instance-reach branch).
 - **Where:** `mintToken` (token-reach.ts ~122) enforces `scopes ⊆ roleToScopes(creator's role
   AT MINT TIME)`; the resulting scopes are frozen into `apiTokens.scopes`. Every later call
   (MCP and HTTP) takes `callerScopes = token.scopes` verbatim (mcp.ts ~222; bearer.ts
@@ -36,6 +56,10 @@ not a drive-by. One of them is partly by-design under the one-team model.
 - **Decision needed:** confirm instance PATs are intended to be instance-root (likely yes), and
   if so, document that they must be treated as root credentials (short TTL? mandatory rotation?).
   No code change unless the one-team model is revisited.
+- **RESOLVED 2026-06-09:** instance PATs ARE instance-root by design (one-team model confirmed).
+  Documented in-code at `middleware/scope.ts` (the `isInstanceReach` owner-equivalent branch):
+  treat as root credentials → short TTL + rotation; revoke on role-downgrade. No code-behavior
+  change — this is the "free part" (doc note) of the original ask; the A1 trigger covers the rest.
 
 ### A3 — [INFO, no action] Irreversible MCP ops have no confirm gate
 - The cockpit confirm gate keys on `conversationId` (undefined on MCP), so an MCP token with
