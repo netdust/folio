@@ -838,3 +838,17 @@ REMAINING (lower priority, logged in tasks/retro-follow-ups.md): confirm-gate pr
 [2026-06-09] — session ended (no significant changes captured)
 [2026-06-09] — session ended (no significant changes captured)
 [2026-06-09] — session ended (no significant changes captured)
+
+---
+### 2026-06-09 — tagged capture
+
+**Decisions**
+- **agent self-contained, core drops the trio.** netdust-agent keeps the full hook set (Stop/SessionStart/PreToolUse/SubagentStop); netdust-core drops Stop/SessionStart/PreToolUse.
+- **Fix both copies identically.** Both `session-stop.py` files get the watermark + continuation fixes; core's hooks.json drops the trio so it doesn't fire, but the file stays correct.
+
+---
+### 2026-06-09 — tagged capture
+
+**Decisions**
+- **agent self-contained, core drops the trio.** netdust-agent keeps the full hook set (Stop/SessionStart/PreToolUse/SubagentStop); netdust-core drops Stop/SessionStart/PreToolUse.
+- **Fix both copies identically.** Both `session-stop.py` files get the watermark + continuation fixes; core's hooks.json drops the trio so it doesn't fire, but the file stays correct.
