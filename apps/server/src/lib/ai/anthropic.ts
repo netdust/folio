@@ -63,6 +63,12 @@ export const anthropic: AIProvider = {
     let inTokens = 0;
     let outTokens = 0;
     let stopReason: 'stop' | 'tool_use' | 'max_tokens' | 'refusal' | 'pause_turn' = 'stop';
+    // G1 — whether the canonical terminal event (`message_stop`) was seen. Every
+    // complete Anthropic stream ends with it. The final `done` event is emitted
+    // only if so; a truncated stream (connection dropped before message_stop)
+    // yields no done event → the runner's FIX#2 fails the run loudly rather than
+    // recording a fake-success 'stop'.
+    let sawTerminal = false;
     const toolCallsByIndex: Record<number, { id: string; name: string; jsonBuf: string }> = {};
 
     // B round 5 #4 — sanitize stream-startup throws. Anthropic's SDK fires
@@ -121,9 +127,15 @@ export const anthropic: AIProvider = {
             }
             yield { type: 'tool_call', id: tc.id, name: tc.name, arguments: args } as ProviderEvent;
           }
+        } else if (t === 'message_stop') {
+          sawTerminal = true; // G1 — the canonical terminal event.
         } else if (t === 'message_delta') {
           const usage = ev.usage as { input_tokens?: unknown; output_tokens?: unknown } | undefined;
           const delta = ev.delta as { stop_reason?: string } | undefined;
+          // G1 — a stop_reason is ALSO a completion signal (it immediately precedes
+          // message_stop in the real protocol). Either terminal indicator counts, so
+          // a stream that delivered a real stop_reason is not treated as truncated.
+          if (delta?.stop_reason) sawTerminal = true;
           // Round 7 #9 — coerceTokenCount clamps negative / fractional /
           // non-numeric upstream values. Pre-round-7 the round-4 `!== undefined`
           // guard accepted any value as-is; a sloppy proxy emitting
@@ -153,7 +165,13 @@ export const anthropic: AIProvider = {
     }
 
     yield { type: 'tokens', tokens_in: inTokens, tokens_out: outTokens };
-    yield { type: 'done', reason: stopReason };
+    // G1 — emit `done` only if a real terminal signal arrived; a truncated stream
+    // yields none → the runner's FIX#2 fails the run instead of a fake-success.
+    if (sawTerminal) {
+      yield { type: 'done', reason: stopReason };
+    } else {
+      console.warn('[ai/anthropic] stream ended without a stop_reason — no done event (truncated)');
+    }
   },
 
   async testKey({ apiKey, baseUrl }) {

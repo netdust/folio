@@ -352,4 +352,31 @@ describe('anthropic provider', () => {
     expect(events).toContainEqual({ type: 'tokens', tokens_in: 2, tokens_out: 1 });
     expect(events.some((e) => (e as { type: string }).type === 'done')).toBe(true);
   });
+
+  // G1 — a TRUNCATED stream (connection dropped before message_stop AND before any
+  // message_delta carrying a stop_reason) must NOT emit a fake-success done. It
+  // emits NO done event → the runner's FIX#2 (doneReason===undefined) fails loudly.
+  test('stream() does NOT emit a done event when the stream is truncated (no terminal) (G1)', async () => {
+    mockStream.mockImplementationOnce((async function* () {
+      // Some text arrives, then the stream just ends — no message_delta(stop_reason),
+      // no message_stop (the proxy dropped the connection).
+      yield { type: 'content_block_start', index: 0, content_block: { type: 'text' } };
+      yield { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'partial' } };
+      // stream ends here — truncated
+    }) as never);
+
+    const events: unknown[] = [];
+    for await (const ev of anthropic.stream({
+      system: 'sys',
+      messages: [{ role: 'user', content: 'hi' }],
+      tools: [],
+      maxTokens: 100,
+      apiKey: 'sk-test',
+      model: 'claude-3',
+    })) {
+      events.push(ev);
+    }
+    expect(events.filter((e) => (e as { type: string }).type === 'text').length).toBeGreaterThan(0);
+    expect(events.filter((e) => (e as { type: string }).type === 'done')).toHaveLength(0);
+  });
 });

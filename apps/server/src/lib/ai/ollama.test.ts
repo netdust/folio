@@ -165,6 +165,41 @@ describe('ollama provider', () => {
     expect(events).toContainEqual({ type: 'done', reason: 'max_tokens' });
   });
 
+  // G1 — TRUNCATED stream (no terminal `done:true` chunk ever arrives — a proxy
+  // dropped the connection mid-stream). The adapter must NOT emit a fake-success
+  // `done:'stop'`; it must emit NO `done` event, so the runner's FIX#2
+  // (doneReason===undefined → provider_error) fires and the run fails loudly
+  // rather than recording a truncated generation as a clean completion.
+  test('stream() does NOT emit a done event when the stream ends with no terminal chunk (G1)', async () => {
+    const enc = new TextEncoder();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        // Text chunks arrive, then the stream just ENDS — no `done:true` chunk.
+        controller.enqueue(enc.encode(JSON.stringify({ message: { content: 'partial ' }, done: false }) + '\n'));
+        controller.enqueue(enc.encode(JSON.stringify({ message: { content: 'answer' }, done: false }) + '\n'));
+        controller.close(); // connection dropped before the terminal chunk
+      },
+    });
+    global.fetch = mock(async () => new Response(body, { status: 200 })) as never;
+
+    const events: any[] = [];
+    for await (const ev of ollama.stream({
+      system: 'sys',
+      messages: [{ role: 'user', content: 'hi' }],
+      tools: [],
+      maxTokens: 100,
+      apiKey: '',
+      model: 'llama3.1',
+      baseUrl: 'http://localhost:11434',
+    })) {
+      events.push(ev);
+    }
+    // The partial text surfaced...
+    expect(events.filter((e) => e.type === 'text').length).toBeGreaterThan(0);
+    // ...but NO done event — the runner's FIX#2 must see doneReason===undefined.
+    expect(events.filter((e) => e.type === 'done')).toHaveLength(0);
+  });
+
   // B round 4 fix #2 — stream() startup error throw must NOT echo the raw
   // response statusText (which proxies populate with internal hostnames + path
   // fragments) or the base URL. Mirror the testKey whitelist on the throw.

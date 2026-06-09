@@ -86,6 +86,13 @@ export async function* streamOpenAICompatible({
   let tokensIn = 0;
   let tokensOut = 0;
   let stopReason: 'stop' | 'tool_use' | 'max_tokens' | 'refusal' | 'pause_turn' = 'stop';
+  // G1 — whether a real terminal chunk (a choice carrying a finish_reason) was seen.
+  // The final `done` event is emitted only if so; a stream that ends mid-flight with
+  // no finish_reason (a proxy clean-EOF) yields no done event → the runner's FIX#2
+  // fails the run loudly instead of recording a fake-success 'stop'. (A network
+  // ABORT throws and is caught/re-thrown below — also fail-loud; this covers the
+  // clean-EOF-without-finish case the throw path misses.)
+  let sawTerminal = false;
   // OpenAI streams tool_calls with `id` ONLY on the first delta per call;
   // continuation deltas carry only `index` + arg fragments. Key by `index`
   // (always present) and track id/name as separate fields set on first sight.
@@ -136,6 +143,7 @@ export async function* streamOpenAICompatible({
           }
         }
         const finish = choices[0].finish_reason as string | undefined;
+        if (finish) sawTerminal = true; // G1 — a real completion signal arrived.
         if (finish === 'tool_calls') stopReason = 'tool_use';
         else if (finish === 'length') stopReason = 'max_tokens';
         else if (finish === 'content_filter') stopReason = 'refusal';
@@ -206,7 +214,13 @@ export async function* streamOpenAICompatible({
   }
 
   yield { type: 'tokens', tokens_in: tokensIn, tokens_out: tokensOut };
-  yield { type: 'done', reason: stopReason };
+  // G1 — emit `done` only if a real finish_reason was seen; a clean-EOF mid-stream
+  // yields none → the runner's FIX#2 fails the run instead of a fake-success.
+  if (sawTerminal) {
+    yield { type: 'done', reason: stopReason };
+  } else {
+    console.warn(`[ai/${providerName}] stream ended without a finish_reason — no done event (truncated)`);
+  }
 }
 
 export const openai: AIProvider = {

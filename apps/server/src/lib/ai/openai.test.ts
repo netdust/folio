@@ -657,4 +657,31 @@ describe('openai provider', () => {
     // Tools map input_schema → function.parameters.
     expect(sent.tools![0]!.function.name).toBe('list_workspaces');
   });
+
+  // G1 — a stream that ends mid-flight with NO finish_reason (a proxy clean-EOF)
+  // must NOT emit a fake-success done. It emits NO done event → the runner's FIX#2
+  // fails the run loudly.
+  test('stream() does NOT emit a done event when the stream ends with no finish_reason (G1)', async () => {
+    mockCreate.mockImplementationOnce((async (_opts: { stream?: boolean }) => {
+      return (async function* () {
+        // Text arrives, then the stream just ends — no chunk carries finish_reason.
+        yield { choices: [{ delta: { content: 'partial' } }] };
+        yield { choices: [{ delta: { content: ' answer' } }] };
+      })();
+    }) as never);
+
+    const events: unknown[] = [];
+    for await (const ev of openai.stream({
+      system: 'sys',
+      messages: [{ role: 'user', content: 'hi' }],
+      tools: [],
+      maxTokens: 100,
+      apiKey: 'sk-test',
+      model: 'gpt-4o-mini',
+    })) {
+      events.push(ev);
+    }
+    expect(events.filter((e) => (e as { type: string }).type === 'text').length).toBeGreaterThan(0);
+    expect(events.filter((e) => (e as { type: string }).type === 'done')).toHaveLength(0);
+  });
 });

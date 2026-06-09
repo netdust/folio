@@ -21,6 +21,12 @@ type ParserState = {
   tokensIn: number;
   tokensOut: number;
   stopReason: 'stop' | 'tool_use' | 'max_tokens';
+  // G1 — whether a REAL terminal chunk (`done:true`) was seen. The stream-end
+  // `done` event is emitted ONLY if this is true; otherwise the stream was
+  // truncated (proxy drop, dropped connection) and we emit NO done event, so the
+  // runner's FIX#2 (doneReason===undefined → provider_error) fails the run loudly
+  // instead of recording a truncated generation as a fake-success 'stop'.
+  sawTerminal: boolean;
 };
 
 /**
@@ -51,6 +57,7 @@ function* handleOllamaChunk(
     }
   }
   if (chunk.done) {
+    state.sawTerminal = true; // G1 — a real completion signal arrived.
     // Fix #15 — Number()||existing keeps the running total when the proxy
     // sends a non-numeric value (NaN coerces back to the previous total).
     //
@@ -177,7 +184,12 @@ export const ollama: AIProvider = {
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
-    const state: ParserState = { tokensIn: 0, tokensOut: 0, stopReason: 'stop' };
+    const state: ParserState = {
+      tokensIn: 0,
+      tokensOut: 0,
+      stopReason: 'stop',
+      sawTerminal: false,
+    };
 
     // Round 7 #8 — try/finally ensures the reader is cancelled + released
     // when the consumer breaks out of the for-await early (timeout, runner
@@ -246,7 +258,15 @@ export const ollama: AIProvider = {
     }
 
     yield { type: 'tokens', tokens_in: state.tokensIn, tokens_out: state.tokensOut };
-    yield { type: 'done', reason: state.stopReason };
+    // G1 — emit `done` ONLY if a real terminal chunk was seen. A truncated stream
+    // (no `done:true` ever) yields no done event → the runner's FIX#2 fails the run
+    // (provider_error) rather than recording a fake-success completion. Log so the
+    // operator has a grep target for the truncation.
+    if (state.sawTerminal) {
+      yield { type: 'done', reason: state.stopReason };
+    } else {
+      console.warn('[ai/ollama] stream ended without a terminal chunk — no done event (truncated)');
+    }
   },
 
   async testKey({ apiKey, model, baseUrl }) {
