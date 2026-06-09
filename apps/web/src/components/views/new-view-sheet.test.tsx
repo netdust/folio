@@ -15,9 +15,12 @@ import { NewViewSheet } from './new-view-sheet.tsx';
 interface SetupOpts {
   currentSearch?: Record<string, unknown>;
   currentColumns?: { visibleFields: string[] | null; columnOrder: string[] | null };
+  // C3T9: the table the sheet creates the view on. Defaults to the default
+  // table (work-items) so the pre-existing assertions keep their legacy routes.
+  tslug?: string;
 }
 
-function setup({ currentSearch, currentColumns }: SetupOpts = {}) {
+function setup({ currentSearch, currentColumns, tslug = 'work-items' }: SetupOpts = {}) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
@@ -31,6 +34,7 @@ function setup({ currentSearch, currentColumns }: SetupOpts = {}) {
         onOpenChange={() => {}}
         wslug="main"
         pslug="acme"
+        tslug={tslug}
         currentSearch={currentSearch ?? {}}
         currentColumns={currentColumns}
       />
@@ -46,8 +50,19 @@ function setup({ currentSearch, currentColumns }: SetupOpts = {}) {
     path: '/w/$wslug/p/$pslug/board',
     component: () => <div>navigated to board</div>,
   });
+  // C3T9: non-default tables route to the /t/$tslug family.
+  const tableGrid = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/w/$wslug/p/$pslug/t/$tslug',
+    component: () => <div>navigated to table grid</div>,
+  });
+  const tableBoard = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/w/$wslug/p/$pslug/t/$tslug/board',
+    component: () => <div>navigated to table board</div>,
+  });
   const router = createRouter({
-    routeTree: rootRoute.addChildren([home, workItems, board]),
+    routeTree: rootRoute.addChildren([home, workItems, board, tableGrid, tableBoard]),
     history: createMemoryHistory({ initialEntries: ['/'] }),
   });
   return { queryClient, router };
@@ -58,10 +73,11 @@ function setup({ currentSearch, currentColumns }: SetupOpts = {}) {
 // The shape locked by apps/server/src/routes/views.test.ts "POST returns
 // data.view.id as a unique non-empty string" must match here, or this
 // suite stops protecting the production code path.
-function mockFetch(viewId = 'v-new', createdType: 'list' | 'kanban' = 'list') {
+function mockFetch(viewId = 'v-new', createdType: 'list' | 'kanban' = 'list', tslug = 'work-items') {
   return vi.fn<typeof fetch>(async (url, init) => {
     const u = String(url);
-    if (u.endsWith('/api/v1/w/main/p/acme/views') && init?.method === 'POST') {
+    // C3T9: views are created on the table-scoped collection (/t/<tslug>/views).
+    if (u.endsWith(`/api/v1/w/main/p/acme/t/${tslug}/views`) && init?.method === 'POST') {
       return new Response(
         JSON.stringify({
           data: {
@@ -82,8 +98,8 @@ function mockFetch(viewId = 'v-new', createdType: 'list' | 'kanban' = 'list') {
         { status: 201, headers: { 'content-type': 'application/json' } },
       );
     }
-    // The sheet loads the project's fields to offer kanban group-by options.
-    if (u.includes('/t/work-items/fields')) {
+    // The sheet loads the active table's fields to offer kanban group-by options.
+    if (u.includes(`/t/${tslug}/fields`)) {
       return new Response(
         JSON.stringify({
           data: [
@@ -97,10 +113,13 @@ function mockFetch(viewId = 'v-new', createdType: 'list' | 'kanban' = 'list') {
   });
 }
 
-function findPostBody(fetchMock: ReturnType<typeof mockFetch>): unknown {
+function findPostBody(
+  fetchMock: ReturnType<typeof mockFetch>,
+  tslug = 'work-items',
+): unknown {
   const call = fetchMock.mock.calls.find(
     ([url, init]) =>
-      String(url).endsWith('/api/v1/w/main/p/acme/views') && init?.method === 'POST',
+      String(url).endsWith(`/api/v1/w/main/p/acme/t/${tslug}/views`) && init?.method === 'POST',
   );
   expect(call).toBeDefined();
   return JSON.parse(call![1]!.body as string) as unknown;
@@ -348,5 +367,61 @@ describe('NewViewSheet', () => {
     await waitFor(() => expect(screen.getByText('navigated to board')).toBeInTheDocument());
     expect(router.state.location.pathname).toBe('/w/main/p/acme/board');
     expect(router.state.location.search).toMatchObject({ view: 'v-kb3' });
+  });
+
+  // C3T9 (Tier A — create-target table). The sheet must create the view on the
+  // CAPTURED table, not hardcode work-items: a view created on the wrong table
+  // writes data to the wrong surface. With tslug="bugs" the POST must hit
+  // /t/bugs/views (not /t/work-items/views) AND the success nav must land on
+  // /t/bugs (the table's own grid), NOT /work-items.
+  it('creates the view on the captured table and routes to /t/<tslug> (list)', async () => {
+    const fetchMock = mockFetch('v-bug-1', 'list', 'bugs');
+    vi.stubGlobal('fetch', fetchMock);
+    const { queryClient, router } = setup({ tslug: 'bugs' });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await userEvent.type(await screen.findByLabelText(/Name/), 'Bug view');
+    await userEvent.click(screen.getByRole('button', { name: /Create view/i }));
+    await waitFor(() => expect(screen.getByText('navigated to table grid')).toBeInTheDocument());
+
+    // Create-target: POST went to the bugs table's views collection.
+    const bugsPost = fetchMock.mock.calls.find(
+      ([url, init]) =>
+        String(url).endsWith('/api/v1/w/main/p/acme/t/bugs/views') && init?.method === 'POST',
+    );
+    expect(bugsPost).toBeDefined();
+    // Adversarial: it must NOT have created on the default table.
+    const workItemsPost = fetchMock.mock.calls.find(
+      ([url, init]) =>
+        String(url).endsWith('/api/v1/w/main/p/acme/t/work-items/views') &&
+        init?.method === 'POST',
+    );
+    expect(workItemsPost).toBeUndefined();
+
+    // Nav-target: landed on the bugs grid, not /work-items.
+    expect(router.state.location.pathname).toBe('/w/main/p/acme/t/bugs');
+    expect(router.state.location.search).toMatchObject({ view: 'v-bug-1' });
+  });
+
+  // C3T9 (Tier A). A kanban view on a non-default table routes to /t/<tslug>/board.
+  it('routes a kanban view on a captured table to /t/<tslug>/board', async () => {
+    const fetchMock = mockFetch('v-bug-2', 'kanban', 'bugs');
+    vi.stubGlobal('fetch', fetchMock);
+    const { queryClient, router } = setup({ tslug: 'bugs' });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await userEvent.type(await screen.findByLabelText(/Name/), 'Bug board');
+    await userEvent.click(await screen.findByRole('radio', { name: /Kanban/i }));
+    await userEvent.click(screen.getByRole('button', { name: /Create view/i }));
+    await waitFor(() => expect(screen.getByText('navigated to table board')).toBeInTheDocument());
+
+    expect(router.state.location.pathname).toBe('/w/main/p/acme/t/bugs/board');
+    expect(router.state.location.search).toMatchObject({ view: 'v-bug-2' });
   });
 });

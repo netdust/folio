@@ -505,6 +505,7 @@ function WorkspaceLayout() {
           }}
           wslug={wslug}
           pslug={newViewSheet.pslug}
+          tslug={newViewSheet.tslug}
           currentSearch={currentSearch}
           currentColumns={newViewCurrentColumns}
         />
