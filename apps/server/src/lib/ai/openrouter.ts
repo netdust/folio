@@ -21,6 +21,12 @@ const OPENROUTER_BASE = 'https://openrouter.ai/api/v1';
  * 401 for unknown keys, 200 with the key's metadata for valid ones.
  */
 export const openrouter: AIProvider = {
+  // G6 — streamOpenAICompatible sends `max_tokens` (the OpenAI convention). Some
+  // OpenRouter upstreams (o1/o3-class routes) require `max_completion_tokens` and
+  // IGNORE `max_tokens`, so the per-request output cap is not enforced upstream on
+  // those routes. The run is still bounded by the G2 budget meter + MAX_TOOL_ROUNDS
+  // (and G2 warns loudly if such a route also omits usage → unmetered). A per-route
+  // token-param map is deferred (threat model G6 deferral — moving target, low value).
   stream: (opts) =>
     streamOpenAICompatible({ ...opts, baseUrl: OPENROUTER_BASE, providerName: 'OpenRouter' }),
   testKey: async ({ apiKey }) => {

@@ -90,3 +90,22 @@ Author a `## Threat model` for the seam first (untrusted provider stream parsing
 BYOK outbound). Each G-fix: one TDD cycle, RED-on-revert proven, then re-run the full
 AI/runner/conversation suite. Cross-adapter conformance is the theme — fix a class once
 across all four adapters where it applies (G1, G2 especially), not per-adapter.
+
+## RESOLVED — 2026-06-09 (branch `fix/provider-seam-hardening`)
+
+Threat model: `docs/superpowers/plans/2026-06-09-provider-seam-hardening.md`. All 6 fixed,
+each RED-on-revert proven, full server suite 1722 pass.
+
+- **G1** [HIGH] — `sawTerminal` across all 3 streaming adapters (ollama `done:true`;
+  anthropic `message_stop`/stop_reason; openai `finish_reason`). Truncated stream → no done
+  event → FIX#2 fails the run. (commit dc1c7ba)
+- **G2** [re-scoped MEDIUM] — GROUND-TRUTH CORRECTION: the gap-hunt called it "runaway loop",
+  but `MAX_TOOL_ROUNDS = 25` already BOUNDS the loop — it is NOT unbounded spend. The real
+  residual is OBSERVABILITY: a run can complete UNMETERED (provider omits usage → budget meter
+  reads 0 → cap never trips) with no operator signal. Fix = a loud runner warn at completion
+  when `sawUsage` is false. Token ESTIMATION deferred (threat model deferral). (commit with G6)
+- **G3** [MED] — synthesize `crypto.randomUUID()` for id-less OpenAI tool_calls. (commit e6a77e0)
+- **G4** [MED] — guard the Ollama `tc.function` deref; skip+warn, no crash. (commit eb7d38e)
+- **G5** [MED] — Anthropic warns on `*_tool_use` server-tool blocks (diagnosable FIX#3). (6030d95)
+- **G6** [LOW] — documented the max_tokens-vs-max_completion_tokens constraint in openrouter.ts;
+  per-route param map deferred (G2 backstop covers it). (commit with G2)

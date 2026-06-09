@@ -1104,6 +1104,40 @@ describe('runAgent stream loop', () => {
     expect(results.length).toBe(0);
   });
 
+  // G2 — a run that completes WITHOUT the provider ever reporting usage (no tokens
+  // event, or all-zero usage) is UNMETERED: the budget cap had nothing to bound on.
+  // It still completes (bounded by MAX_TOOL_ROUNDS), but a loud warn must fire so the
+  // operator sees the denial-of-wallet residual.
+  test('G2 — a run that reports no usage completes but warns UNMETERED', async () => {
+    const { db, run } = await scaffold();
+    const stub: AIProvider = {
+      async *stream() {
+        yield { type: 'text', delta: 'an answer with no usage reported' } as ProviderEvent;
+        // NO tokens event (the provider/proxy omitted usage).
+        yield { type: 'done', reason: 'stop' } as ProviderEvent;
+      },
+      async testKey() {
+        return { ok: true as const };
+      },
+    };
+    providerTestHatch.overrideRegistry('anthropic', async () => stub);
+
+    const warnings: string[] = [];
+    const realWarn = console.warn;
+    console.warn = (...args: unknown[]) => {
+      warnings.push(args.map(String).join(' '));
+    };
+    try {
+      await runAgent({ runId: run.id });
+    } finally {
+      console.warn = realWarn;
+    }
+
+    const fm = await readRun(db, run.id);
+    expect(fm.status).toBe('completed'); // still completes (round cap bounds the loop)
+    expect(warnings.some((w) => /UNMETERED/.test(w))).toBe(true); // but the signal fires
+  });
+
   // ALTITUDE FIX (code-review #2/#3/#4) — the runner runs the tool round whenever
   // tool calls were COLLECTED and the turn was not truncated, regardless of the
   // adapter's done.reason label. Thinking models (qwen3/deepseek-r1) emit a real

@@ -1222,6 +1222,15 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
   // Reset to 0 whenever a round makes progress; failRun(tool_error) when it
   // reaches MAX_CONSECUTIVE_TOOL_ERRORS.
   let consecutiveToolErrorRounds = 0;
+  // G2 — denial-of-wallet observability. The budget cap (fm.max_tokens) is enforced
+  // off the provider's `tokens` event. Some OpenAI-compatible routes (OpenRouter
+  // without honored stream_options.include_usage, certain proxies) never report
+  // usage → the budget meter reads 0 and the cap never trips. The loop is still
+  // BOUNDED by MAX_TOOL_ROUNDS, so this is not unbounded spend — but the run is
+  // UNMETERED, and an operator can't tell that from a genuinely-cheap run. Track
+  // whether any non-zero usage arrived; warn loudly at run end if none did (ties to
+  // the Phase 3 M8 denial-of-wallet residual — the run-budget IS the only cap).
+  let sawUsage = false;
   while (round < MAX_TOOL_ROUNDS) {
     round++;
 
@@ -1258,6 +1267,7 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
         // an agent_run row) cannot persist. Track the budget in-memory instead:
         // the conversation `active_run_id` slot, not an agent_run row, is the
         // durable liveness record. The budget cap still applies per turn.
+        if (ev.tokens_in > 0 || ev.tokens_out > 0) sawUsage = true; // G2 — usage reported.
         const { tokens_in: usedIn, tokens_out: usedOut } = ctx.sink
           ? trackConversationTokens(conversationTokens, ev.tokens_in, ev.tokens_out)
           : await incrementTokens(runId, { in: ev.tokens_in, out: ev.tokens_out });
@@ -1631,6 +1641,17 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
         await failRun(ctx, reason, detail);
         return;
       }
+    }
+
+    // G2 — a run that completed without the provider ever reporting usage is
+    // UNMETERED: the budget cap never had anything to bound on. Warn loudly so the
+    // operator sees the denial-of-wallet residual (the MAX_TOOL_ROUNDS cap still
+    // bounded the loop). Skip the keyless local provider (ollama legitimately reports
+    // usage; an absent count there is a real signal too — keep the warn for all).
+    if (!sawUsage) {
+      console.warn(
+        `[runner] run ${runId} completed UNMETERED — the provider (${providerLabel}) reported no token usage; the budget cap could not apply (bounded only by MAX_TOOL_ROUNDS).`,
+      );
     }
 
     await postResultAndComplete(ctx, textBuf, doneReason);
