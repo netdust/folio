@@ -1654,3 +1654,106 @@ describe('TableView', () => {
     });
   });
 });
+
+// C1T3 seam test: TableView must thread its `tslug` prop into the table-scoped
+// data hooks (useDocuments / useStatuses) so list + status reads hit
+// /w/<w>/p/<p>/t/<tslug>/... — NOT the old project-scoped /p/<p>/... path. This
+// is the invariant-16 board-persistence seam: the active table must drive the
+// reads (and, in KanbanView, the drag-PATCH). We assert through the un-mocked
+// fetch wire (the same fetch-capture harness the rest of this file uses) that a
+// non-default tslug reaches the documents AND statuses endpoints, plus a
+// negative case that a DIFFERENT tslug does NOT hit the first tslug's path.
+function setupTslug(tslug: string, initialEntry = '/w/acme/p/sales/work-items') {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  const rootRoute = createRootRoute({ component: () => <Outlet /> });
+  const work = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/w/$wslug/p/$pslug/work-items',
+    validateSearch: WorkItemsRoute.options.validateSearch,
+    component: () => {
+      const { wslug, pslug } = work.useParams();
+      return <TableView wslug={wslug} pslug={pslug} tslug={tslug} />;
+    },
+  });
+  const router = createRouter({
+    routeTree: rootRoute.addChildren([work]),
+    history: createMemoryHistory({ initialEntries: [initialEntry] }),
+  });
+  return { queryClient, router };
+}
+
+function tableScopedFetch(calls: string[]) {
+  return vi.fn<typeof fetch>(async (url, init) => {
+    const u = String(url);
+    calls.push(u);
+    const method = init?.method ?? 'GET';
+    if (u.includes('/statuses') && method === 'GET') {
+      return new Response(JSON.stringify({ data: [statusRow] }), {
+        status: 200, headers: { 'content-type': 'application/json' },
+      });
+    }
+    if (u.includes('/fields') && method === 'GET') {
+      return new Response(JSON.stringify({ data: [fieldRow] }), {
+        status: 200, headers: { 'content-type': 'application/json' },
+      });
+    }
+    if (u.includes('/views') && method === 'GET') {
+      return new Response(JSON.stringify({ data: [viewRow] }), {
+        status: 200, headers: { 'content-type': 'application/json' },
+      });
+    }
+    if (u.includes('/documents') && method === 'GET') {
+      return new Response(JSON.stringify({ data: { data: [docRow], nextCursor: null } }), {
+        status: 200, headers: { 'content-type': 'application/json' },
+      });
+    }
+    return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+  });
+}
+
+describe('TableView table-scoped reads (C1T3 invariant-16 seam)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('threads tslug into useDocuments + useStatuses so reads hit /t/bugs/...', async () => {
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', tableScopedFetch(calls));
+
+    const { queryClient, router } = setupTslug('bugs');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByText('First task')).toBeInTheDocument());
+
+    // Un-mocked-wire assertions: the active table 'bugs' drives both reads.
+    expect(calls.some((u) => u.includes('/t/bugs/documents'))).toBe(true);
+    expect(calls.some((u) => u.includes('/t/bugs/statuses'))).toBe(true);
+    // And it must NOT fall back to the project-scoped path.
+    expect(calls.some((u) => /\/p\/sales\/documents/.test(u))).toBe(false);
+    expect(calls.some((u) => /\/p\/sales\/statuses/.test(u))).toBe(false);
+  });
+
+  it('negative: a different tslug (work-items) never hits the bugs endpoints', async () => {
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', tableScopedFetch(calls));
+
+    const { queryClient, router } = setupTslug('work-items');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByText('First task')).toBeInTheDocument());
+
+    expect(calls.some((u) => u.includes('/t/work-items/documents'))).toBe(true);
+    expect(calls.some((u) => u.includes('/t/bugs/'))).toBe(false);
+  });
+});

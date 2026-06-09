@@ -80,8 +80,8 @@ export function TableView({ wslug, pslug, tslug }: Props) {
     return sort ? { ...base, sort: sort.key, dir: sort.dir } : base;
   }, [clauses, sort]);
 
-  const { data: page, isLoading, error } = useDocuments(wslug, pslug, listParams);
-  const { data: statuses } = useStatuses(wslug, pslug);
+  const { data: page, isLoading, error } = useDocuments(wslug, pslug, tslug, listParams);
+  const { data: statuses } = useStatuses(wslug, pslug, tslug);
   const { data: fields } = useFields(wslug, pslug, tslug);
   // Broad, unfiltered project coverage for resolving relation [[slug]] tokens
   // to titles in read-only table cells. The table's `page` query is filtered
@@ -92,13 +92,13 @@ export function TableView({ wslug, pslug, tslug }: Props) {
   // column — otherwise every table mount paid for two unbounded list queries
   // it never used.
   const hasRelationColumn = (fields ?? []).some((f) => f.type === 'relation');
-  const { data: relPages } = useDocuments(wslug, pslug, { type: 'page' }, { enabled: hasRelationColumn });
-  const { data: relItems } = useDocuments(wslug, pslug, { type: 'work_item' }, { enabled: hasRelationColumn });
-  const { data: viewsData } = useViews(wslug, pslug);
+  const { data: relPages } = useDocuments(wslug, pslug, tslug, { type: 'page' }, { enabled: hasRelationColumn });
+  const { data: relItems } = useDocuments(wslug, pslug, tslug, { type: 'work_item' }, { enabled: hasRelationColumn });
+  const { data: viewsData } = useViews(wslug, pslug, tslug);
   const { data: tablesData } = useTables(wslug, pslug);
-  const update = useUpdateDocument(wslug, pslug, listParams);
-  const create = useCreateDocument(wslug, pslug);
-  const updateView = useUpdateView(wslug, pslug);
+  const update = useUpdateDocument(wslug, pslug, tslug, listParams);
+  const create = useCreateDocument(wslug, pslug, tslug);
+  const updateView = useUpdateView(wslug, pslug, tslug);
   const createField = useCreateField(wslug, pslug, tslug);
   const updateField = useUpdateField(wslug, pslug, tslug);
   const deleteField = useDeleteField(wslug, pslug, tslug);
