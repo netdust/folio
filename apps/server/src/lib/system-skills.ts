@@ -102,6 +102,24 @@ export const FOLIO_SKILL_BODY = `# Folio skill — the API manual
 
 > **Governing principle:** The API is the source of truth; this skill documents it. When this skill and the routes disagree, the routes win — verify with \`folio_api_get\`.
 
+## 0. Cold start — if you are an external MCP client, read this first
+
+You reached this skill over the MCP endpoint. Here is the exact sequence to go from nothing to a built workspace WITHOUT dead ends.
+
+**1. You already have a token (you must — you authenticated to call this).** You CANNOT mint your own token over MCP: token mint is session-only (root-of-trust). \`folio_api POST /api/v1/instance/tokens\` returns \`{ refused: true, reason: "secret-class write..." }\` by design. If you ever lack a token, STOP and ask the human to create one in the app under **Settings → API tokens** and paste it to you. Same wall for creating user accounts, promoting roles, and WRITING an AI key — all session-only; never retry them over MCP.
+
+**2. Discover before you build — ONE call.** Call \`describe_workspace(workspace_slug)\` FIRST. It returns the whole shape — every project, its tables, and each table's statuses — in a single response. Do NOT fan out \`list_projects\` → \`list_statuses\` → … to learn the layout; \`describe_workspace\` already has it. If you don't know the workspace slug, call \`list_workspaces\` (takes no args) to find it from nothing.
+
+**3. Listing/reading AGENTS is special — they are WORKSPACE-scoped (\`projectId: null\`).** \`list_documents\` and \`get_document\` REQUIRE a \`project_slug\`, so they CANNOT see agents and will error \`invalid arguments [project_slug]\`. To list or read agents headless, use the raw read path:
+\`\`\`
+folio_api_get  /api/v1/w/<wslug>/documents?type=agent
+\`\`\`
+This returns the agent docs incl. their \`frontmatter\` (provider/model/tools/projects/api_token_id). Create/update/delete agents with the \`create_agent\` / \`update_agent\` / \`delete_agent\` tools (see §5) — those need an admin (\`agents:write\`) token.
+
+**4. AI provider config is NOT discoverable over MCP.** You cannot read which providers/keys exist — \`/api/v1/instance/ai-keys\` is session-only (returns 401 to any bearer). So: do NOT try to "list providers" first. Either the human tells you which provider+model to use, or you set a sensible one (\`anthropic\`, \`openai\`, \`openrouter\`, or \`ollama\`) on the agent and VERIFY by running it — a run that does NOT fail \`no_ai_key\` means the key resolved. See §5 "Add an AI provider".
+
+That's the cold start: **token (from a human) → \`describe_workspace\` → build → agents via the raw \`?type=agent\` path → AI verified by running.** The two hard walls (token mint, AI-key read/write) are session-only by design — name them to the human, don't retry them.
+
 ## 1. What you are
 
 You are a power user driving Folio's *general controls*, not a menu of fixed verbs. Folio is markdown-native: every work item and page is a \`.md\` document with YAML frontmatter, stored in SQLite. You shape projects, tables, fields, views, statuses, and documents by calling the real REST API through a small set of general tools. Reason freely; your permission is always scoped (see §6).
@@ -145,16 +163,34 @@ slug). The collection path does NOT accept PATCH/DELETE.
 | Resource | Collection (GET, POST) | Item (PATCH, DELETE) | Scope | dryRun |
 |----------|------------------------|----------------------|-------|--------|
 | projects | \`/api/v1/w/<wslug>/projects\` | \`/api/v1/w/<wslug>/p/<pslug>\` | GET=read · write=\`config:write\` | yes |
-| tables | \`/api/v1/w/<wslug>/p/<pslug>/tables\` | \`…/tables/<id>\` | GET=read · write=\`config:write\` | yes |
+| tables | \`/api/v1/w/<wslug>/p/<pslug>/tables\` | \`…/tables/<tslug>\` (by SLUG, not id) | GET=read · write=\`config:write\` | yes |
 | fields | \`/api/v1/w/<wslug>/p/<pslug>/fields\` | \`…/fields/<id>\` | GET=read · write=\`config:write\` | yes |
 | views | \`/api/v1/w/<wslug>/p/<pslug>/views\` | \`…/views/<id>\` | GET=read · write=\`config:write\` | yes |
 | statuses | \`/api/v1/w/<wslug>/p/<pslug>/statuses\` | \`…/statuses/<id>\` | GET=read · write=\`config:write\` | yes |
 | documents | (use the narrow tools) | (use the narrow tools) | \`documents:read\` / \`documents:write\` | n/a |
+| agents | \`folio_api_get /api/v1/w/<wslug>/documents?type=agent\` (read) · \`create_agent\` (create) | \`update_agent\` / \`delete_agent\` | \`agents:write\` (owner/admin) | n/a |
 
 - Config **reads** go through \`folio_api_get\`; config **writes** through \`folio_api\`.
+- **Agents are WORKSPACE-scoped, NOT project-scoped** (\`projectId: null\`). The narrow \`list_documents\`/\`get_document\` tools require a \`project_slug\`, so they CANNOT see agents — to read agents use \`folio_api_get /api/v1/w/<wslug>/documents?type=agent\`; to create/modify them use the \`create_agent\`/\`update_agent\`/\`delete_agent\` tools (§5). \`pages\` and \`work_item\`s ARE project-scoped and DO use the narrow tools.
 - **Deleting a PROJECT uses the bare project-item path** \`DELETE /api/v1/w/<wslug>/p/<pslug>\` — NOT \`…/projects/<slug>\` (that path 404s). PATCH a project at the same item path.
-- **The default table is \`work-items\`.** tables/fields/views/statuses paths target the project's \`work-items\` table unless you insert \`/t/<tslug>\` before the resource (e.g. \`…/p/<pslug>/t/<tslug>/statuses\`). A bare \`create_document\` (no \`table_slug\`) also lands in \`work-items\` whenever the project has one (the normal case — every project auto-seeds it). Create a second table only if you truly need one — a stray table means later writes (which default to \`work-items\`) and reads can disagree about which table they hit.
-- **A table you create via \`folio_api\` has NO statuses** (unlike a *project*, which auto-seeds backlog/todo/in_progress/done). After creating a 2nd table, seed its statuses (\`folio_api POST …/p/<pslug>/t/<tslug>/statuses {key,name,category}\`) BEFORE adding \`work_item\`s to it — otherwise they land status-less and can't appear on a board.
+- **The default table is \`work-items\`.** A path WITHOUT a \`/t/<tslug>\` segment targets the project's \`work-items\` table (e.g. \`…/p/<pslug>/statuses\` = work-items' statuses). A bare \`create_document\` (no \`table_slug\`) also lands in \`work-items\` whenever the project has one (every project auto-seeds it).
+- **Multi-table projects are first-class — a project can own several tables** (e.g. a webdev project with \`work-items\`, \`roadmap\`, \`bugs\`, \`docs\`). To work with a NON-default table you MUST be explicit on EVERY call:
+  - **Config** (fields/views/statuses for that table): insert \`/t/<tslug>/\` before the resource — \`…/p/<pslug>/t/<tslug>/statuses\`, \`…/t/<tslug>/views\`, etc.
+  - **Documents** in that table: pass \`table_slug: "<tslug>"\` to \`create_document\` / \`list_documents\` (NOT a path segment — it's an argument). Without \`table_slug\` the write lands in \`work-items\`, NOT your new table — the single most common multi-table mistake.
+- **Recipe — add a second table correctly (the order matters):**
+\`\`\`
+# 1. Create the table.
+folio_api  POST /api/v1/w/<wslug>/p/<pslug>/tables   { "name": "Bugs" }     # → slug "bugs"
+# 2. SEED ITS STATUSES — a folio_api-created table has NONE (unlike a project,
+#    which auto-seeds backlog/todo/in_progress/done). Work items added before
+#    this land status-less and can't appear on a board.
+folio_api  POST /api/v1/w/<wslug>/p/<pslug>/t/bugs/statuses  { "key":"open","name":"Open","category":"unstarted" }
+folio_api  POST …/t/bugs/statuses  { "key":"fixed","name":"Fixed","category":"completed" }
+# 3. (optional) a board view ON that table.
+folio_api  POST /api/v1/w/<wslug>/p/<pslug>/t/bugs/views  { "name":"Bug Board","type":"kanban","groupBy":"status" }
+# 4. Add work items WITH table_slug so they land in 'bugs', not work-items.
+create_document  { workspace_slug, project_slug, table_slug:"bugs", type:"work_item", title:"...", status:"open" }
+\`\`\`
 - **dryRun** on config writes: POST/PATCH pass \`"dryRun": true\` in the body; DELETE passes \`?dryRun=true\` in the query. You get back \`{ dry_run, would, resource }\` with ZERO writes.
 - Documents are read/written via the narrow tools, never \`folio_api\`.
 
