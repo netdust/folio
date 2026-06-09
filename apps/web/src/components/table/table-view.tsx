@@ -83,14 +83,28 @@ export function TableView({ wslug, pslug, tslug }: Props) {
   const { data: page, isLoading, error } = useDocuments(wslug, pslug, tslug, listParams);
   const { data: statuses } = useStatuses(wslug, pslug, tslug);
   const { data: fields } = useFields(wslug, pslug, tslug);
-  // Broad, unfiltered project coverage for resolving relation [[slug]] tokens
-  // to titles in read-only table cells. The table's `page` query is filtered
-  // (status/assignee) and work_item-only, so it can't be relied on to contain
-  // every link target — relations can point at pages too. Two extra queries
-  // (pages + all work_items) build a complete slug→title map. Finding 9.
+  // Resolve relation [[slug]] tokens to titles in read-only table cells. The
+  // table's main `page` query is filtered (status/assignee), so we run two
+  // extra unfiltered queries to build the slug→title map. Finding 9.
   // O5 (health audit): only fetch them when this table actually HAS a relation
   // column — otherwise every table mount paid for two unbounded list queries
   // it never used.
+  //
+  // SCOPE CAVEAT (CR Cluster-1 #4): `useDocuments` is table-scoped — it always
+  // hits /t/<tslug>/documents. The server constrains `type=work_item` to that
+  // table (services/documents.ts:254-257), so `relItems` only covers THIS
+  // table's work_items, NOT the whole project. `relPages` IS project-wide
+  // (pages are tableId=null, so the server returns every project page
+  // regardless of tslug — documents.ts:258-260). Consequence: a relation chip
+  // pointing at a work_item in ANOTHER table of the same project does not
+  // resolve here and renders as a struck-through chip. This is a PRE-EXISTING
+  // limitation, not a Cluster-1 regression: before this branch the resolver
+  // hit /p/<pslug>/documents, which `resolveProject` auto-scopes to the
+  // project's DEFAULT table (scope.ts:120-123) — so it only ever resolved the
+  // default table's work_items either way. No endpoint returns work_items
+  // across all tables (verified: REST, MCP agent-tools, folio-api all set
+  // activeTableId). Fixing cross-table relation chips needs a project-wide
+  // document index — tracked as a follow-up.
   const hasRelationColumn = (fields ?? []).some((f) => f.type === 'relation');
   const { data: relPages } = useDocuments(wslug, pslug, tslug, { type: 'page' }, { enabled: hasRelationColumn });
   const { data: relItems } = useDocuments(wslug, pslug, tslug, { type: 'work_item' }, { enabled: hasRelationColumn });
@@ -344,8 +358,10 @@ export function TableView({ wslug, pslug, tslug }: Props) {
 
   const docs = useMemo(() => page?.data ?? [], [page]);
 
-  // slug→{slug,title} resolver covering the project's pages + work_items, so
-  // relation cells render valid links as titled chips (not struck-through).
+  // slug→{slug,title} resolver covering the project's pages + THIS table's
+  // work_items (see the SCOPE CAVEAT on relItems above — cross-table work_item
+  // relations don't resolve), so relation cells render valid links as titled
+  // chips (not struck-through).
   const relationResolve = useMemo(() => {
     const map = new Map<string, { slug: string; title: string }>();
     for (const d of relPages?.data ?? []) map.set(d.slug, { slug: d.slug, title: d.title });
