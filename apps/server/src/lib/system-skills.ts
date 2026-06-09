@@ -153,7 +153,8 @@ slug). The collection path does NOT accept PATCH/DELETE.
 
 - Config **reads** go through \`folio_api_get\`; config **writes** through \`folio_api\`.
 - **Deleting a PROJECT uses the bare project-item path** \`DELETE /api/v1/w/<wslug>/p/<pslug>\` — NOT \`…/projects/<slug>\` (that path 404s). PATCH a project at the same item path.
-- **The default table is \`work-items\`.** tables/fields/views/statuses paths target the project's \`work-items\` table unless you insert \`/t/<tslug>\` before the resource (e.g. \`…/p/<pslug>/t/<tslug>/statuses\`). Create a second table only if you truly need one — a stray table means later writes (which default to \`work-items\`) and reads can disagree about which table they hit.
+- **The default table is \`work-items\`.** tables/fields/views/statuses paths target the project's \`work-items\` table unless you insert \`/t/<tslug>\` before the resource (e.g. \`…/p/<pslug>/t/<tslug>/statuses\`). A bare \`create_document\` (no \`table_slug\`) also lands in \`work-items\`. Create a second table only if you truly need one — a stray table means later writes (which default to \`work-items\`) and reads can disagree about which table they hit.
+- **A table you create via \`folio_api\` has NO statuses** (unlike a *project*, which auto-seeds backlog/todo/in_progress/done). After creating a 2nd table, seed its statuses (\`folio_api POST …/p/<pslug>/t/<tslug>/statuses {key,name,category}\`) BEFORE adding \`work_item\`s to it — otherwise they land status-less and can't appear on a board.
 - **dryRun** on config writes: POST/PATCH pass \`"dryRun": true\` in the body; DELETE passes \`?dryRun=true\` in the query. You get back \`{ dry_run, would, resource }\` with ZERO writes.
 - Documents are read/written via the narrow tools, never \`folio_api\`.
 
@@ -215,9 +216,11 @@ folio_api  POST /api/v1/w/<wslug>/p/marketing/fields
 folio_api  POST /api/v1/w/<wslug>/p/marketing/statuses
   { "key": "in_progress", "name": "In progress", "color": "blue", "category": "started" }
 
-# 5. A view over the table
+# 5. A view over the table. The \`type\` value is exactly \`"kanban"\` (NOT "board"
+#    — the natural word 400s with a Zod enum error and costs a round-trip).
+#    Grouping is \`groupBy\` (top-level), NOT \`config.group_by\`.
 folio_api  POST /api/v1/w/<wslug>/p/marketing/views
-  { "name": "Board", "type": "kanban" }
+  { "name": "Board", "type": "kanban", "groupBy": "status" }
 \`\`\`
 
 ### Author a view with a filter
@@ -235,7 +238,7 @@ Preview first if unsure — add \`"dryRun": true\` to the body and read back \`w
 
 ### Add an AI provider (BYOK — you GUIDE, the human enters the key)
 
-A provider's API key is a human-held secret. AI keys are **instance-level** (one store for the whole install, not per-workspace) and live behind a session-only, \`__system\`-admin-gated route (§6). You **cannot** write OR read it — \`/instance/ai-keys\` is unreachable by any agent token, correct by design, so a prompt-injected run can't add an attacker's key, point Folio at an attacker's host, or exfiltrate a stored key. Your job is to GUIDE the human and then VERIFY indirectly, not to touch the key. The recipe:
+A provider's API key is a human-held secret. AI keys are **instance-level** (one store for the whole install, not per-workspace) and live behind a session-only, instance-admin-gated route (§6). You **cannot** write OR read it — \`/instance/ai-keys\` is unreachable by any agent token, correct by design, so a prompt-injected run can't add an attacker's key, point Folio at an attacker's host, or exfiltrate a stored key. Your job is to GUIDE the human and then VERIFY indirectly, not to touch the key. The recipe:
 
 1. **Tell the human exactly what to do in the UI.** "Open **Settings → AI** (you must be an instance admin), choose the provider (\`anthropic\`, \`openai\`, \`openrouter\`, or \`ollama\`), paste your API key, give it a **label** (default \`default\`), and click **Save key**." If they don't have a key yet: "Create one in the provider's dashboard, then paste it here." Keys are shared across every workspace on this instance.
 2. **Ollama (local, keyless) is special.** It needs no API key, but it DOES need a base URL — \`http://localhost:11434\` for a local install. The UI rejects loopback base URLs unless the operator set \`FOLIO_ALLOW_LOOPBACK_AI=true\` in the server env; if Save fails on "loopback rejected," tell them to set that flag and restart. The model (e.g. \`qwen2.5-coder:7b\`) is NOT entered here — see step 4.
@@ -249,6 +252,16 @@ A provider's API key is a human-held secret. AI keys are **instance-level** (one
    Use \`update_document\` (or \`update_agent\`) on the agent to set these. \`ai_key_label\` defaults to \`default\` when omitted; set it only when the instance holds multiple keys per provider. The runner resolves the key by \`(provider, ai_key_label)\` — no workspace tie.
 
 So: **you guide the key entry, you verify by binding+running, and you wire \`provider\`+\`model\`+\`ai_key_label\` into the agent.** The only parts you can't do are type or read the secret — everything around it is yours.
+
+### Create an agent (as an admin operator)
+
+If you hold an admin (\`agents:write\`) token, you can create/update/delete agents headlessly:
+
+\`\`\`
+create_agent  { workspace_slug, title, frontmatter: { system_prompt, provider, model, tools } }
+\`\`\`
+
+The response returns the agent's \`agent_token\` ONCE — store it immediately, it is never shown again (it is the agent's bearer credential, derived from its \`tools\`). The agent is workspace-scoped; bind its provider/model/\`ai_key_label\` as in the AI-provider recipe above. (Agent CRUD requires \`agents:write\` = owner/admin; a member-scoped token is refused. The token-mint / account-create / role-promote / AI-key-WRITE class stays session-only — you can't reach it with any bearer.)
 
 ## 6. The risk-gate protocol
 
