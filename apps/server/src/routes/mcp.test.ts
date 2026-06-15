@@ -1,10 +1,27 @@
-import { test, expect } from 'bun:test';
+import { beforeEach, expect, test } from 'bun:test';
 import { eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { makeTestApp } from '../test/harness.ts';
 import { db } from '../db/client.ts';
 import { apiTokens } from '../db/schema.ts';
 import { newApiToken } from '../lib/auth.ts';
+
+// Defensive: the `tools/list ... toBe(33)` test below asserts the EXACT canonical
+// tool count, but the tool registry is process-global (globalThis.__folioToolRegistry)
+// and shared with every test file in the same Bun worker. A sibling file that
+// registers a throwaway tool and fails to tear it down would inflate the count
+// (worker placement is CPU-count-dependent, so this is green locally / red in CI).
+// mcp.error-mapping.test.ts now cleans up after itself, but we ALSO strip any
+// throwaway-prefixed tool here so this count assertion is immune to ANY future
+// leaker regardless of worker placement. `__echo` is already excluded by listToolDefs.
+beforeEach(() => {
+  const reg = (globalThis as unknown as { __folioToolRegistry?: Map<string, unknown> })
+    .__folioToolRegistry;
+  if (!reg) return;
+  for (const name of [...reg.keys()]) {
+    if (name.startsWith('__test_') || name.startsWith('__throwaway')) reg.delete(name);
+  }
+});
 
 async function setupToken(
   workspaceId: string,

@@ -11,12 +11,39 @@
  *                               NEVER the rejected value (mitigation 61).
  */
 
-import { expect, test } from 'bun:test';
+import { afterEach, beforeEach, expect, test } from 'bun:test';
 import { nanoid } from 'nanoid';
 import { db } from '../db/client.ts';
 import { apiTokens } from '../db/schema.ts';
 import { newApiToken } from '../lib/auth.ts';
 import { makeTestApp } from '../test/harness.ts';
+
+// Several tests below register THROWAWAY synthetic tools into the module-global
+// tool registry (globalThis.__folioToolRegistry) to exercise error-mapping.
+// The registry is process-global and SHARED with whatever other test files land
+// in the same Bun worker (worker count = CPU count, so the co-located set differs
+// between a 20-core dev box and a 2-core CI runner). Without teardown, these leaked
+// tools inflate the count that mcp.test.ts's `tools/list ... toBe(33)` asserts —
+// green locally, red in CI. Snapshot the registry keys before each test and
+// restore after, so this file leaks nothing regardless of worker placement.
+// (Same mock-module-leak lesson the sibling agent-tools.test.ts / confirm-gate.test.ts
+// already follow with a per-name afterEach delete.)
+// Resolve the registry LAZILY inside the hooks — it is populated as a module-load
+// side-effect of agent-tools.ts, which may run after this file's top-level eval.
+const getToolRegistry = (): Map<string, unknown> | undefined =>
+  (globalThis as unknown as { __folioToolRegistry?: Map<string, unknown> }).__folioToolRegistry;
+let registrySnapshot: string[] = [];
+beforeEach(() => {
+  registrySnapshot = [...(getToolRegistry()?.keys() ?? [])];
+});
+afterEach(() => {
+  const reg = getToolRegistry();
+  if (!reg) return;
+  const before = new Set(registrySnapshot);
+  for (const name of [...reg.keys()]) {
+    if (!before.has(name)) reg.delete(name);
+  }
+});
 
 async function setupToken(workspaceId: string, userId: string, scopes: string[]): Promise<string> {
   const { token, hash } = newApiToken();
