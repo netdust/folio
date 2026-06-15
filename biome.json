@@ -1,7 +1,18 @@
 {
   "$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true
+  },
   "files": {
-    "ignore": ["node_modules", "dist", "*.db"]
+    "ignore": [
+      "node_modules",
+      "dist",
+      "*.db",
+      "**/memory/.stop-hook-state.json",
+      "**/*.stop-hook-state.json"
+    ]
   },
   "formatter": {
     "enabled": true,
