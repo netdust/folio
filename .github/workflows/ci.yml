@@ -62,8 +62,18 @@ jobs:
 
       - name: Build single binary (build-proof)
         run: bun run build:binary
-        continue-on-error: true # TODO M1: remove once H1 (binary embedding) is fixed
 
-      - name: Docker build (build-proof, no smoke yet)
+      - name: Docker build (build-proof)
         run: docker build -t folio:ci .
-        continue-on-error: true # TODO M1: remove once H2 (Docker) is fixed
+
+      - name: Docker smoke-boot
+        run: |
+          docker run -d --name folio-smoke -p 3000:3000 \
+            -e FOLIO_MASTER_KEY=$(openssl rand -hex 32) \
+            -e FOLIO_ALLOW_BOOTSTRAP_REGISTRATION=true \
+            folio:ci
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:3000/healthz && break || sleep 2
+          done
+          curl -sf http://localhost:3000/healthz | grep -q '"ok":true'
+          docker rm -f folio-smoke
