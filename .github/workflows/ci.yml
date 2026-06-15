@@ -31,7 +31,12 @@ jobs:
           restore-keys: bun-${{ runner.os }}-
 
       - name: Install
-        run: bun install --frozen-lockfile
+        # --ignore-scripts mirrors the Dockerfile: @biomejs/biome's postinstall is
+        # untrusted-gated and under --frozen-lockfile can be counted as a failed
+        # install. biome's CLI ships as @biomejs/cli-<platform> optional-dep
+        # packages (same model as esbuild), so `bun run lint` works without the
+        # postinstall — keeps the host + image install contexts consistent.
+        run: bun install --frozen-lockfile --ignore-scripts
 
       - name: Server tests
         working-directory: apps/server
