@@ -64,6 +64,11 @@ export const magicLinks = sqliteTable(
     tokenHash: text('token_hash').notNull(), // sha256 of the token sent in email
     expiresAt: integer('expires_at', { mode: 'timestamp_ms' }).notNull(),
     usedAt: integer('used_at', { mode: 'timestamp_ms' }),
+    // M1 (audit H5): provenance — 'signin' (self-service, only authenticates an
+    // EXISTING user) vs 'invite' (admin-issued, may create a new member). No DB
+    // CHECK (consistent with magic_links' no-CHECK history); the .$type union
+    // enforces the two values at every write site at compile time.
+    kind: text('kind').$type<'signin' | 'invite'>().notNull().default('signin'),
     createdAt: integer('created_at', { mode: 'timestamp_ms' })
       .notNull()
       .default(sql`(unixepoch() * 1000)`),

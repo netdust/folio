@@ -143,6 +143,15 @@ auth.post(
   zValidator('json', z.object({ email: z.string().email() })),
   async (c) => {
     const { email } = c.req.valid('json');
+
+    // M1 (audit H5): self-service sign-in only authenticates an EXISTING user.
+    // For a stranger we mint nothing and send nothing — closing both the
+    // flooding vector (no row written) and email enumeration (the response is
+    // the same generic 200 whether or not the email has an account). New
+    // members arrive ONLY via an admin invite (kind:'invite').
+    const user = await db.query.users.findFirst({ where: eq(users.email, email) });
+    if (!user) return jsonOk(c, { ok: true });
+
     const token = newMagicToken();
     const expiresAt = new Date(Date.now() + 1000 * 60 * 15); // 15 min
     await db.insert(magicLinks).values({
@@ -150,6 +159,7 @@ auth.post(
       email,
       tokenHash: hashToken(token),
       expiresAt,
+      kind: 'signin',
     });
     await sendMagicLink(email, token);
     return jsonOk(c, { ok: true });
@@ -170,9 +180,17 @@ auth.get('/magic-link/consume', async (c) => {
     throw new HTTPError('INVALID_TOKEN', 'token expired', 400);
   }
 
-  // upsert user
+  // M1 (audit H5): account creation is gated by link provenance. An existing
+  // user always signs in. A NEW user is created ONLY from an admin-issued invite
+  // (kind:'invite'); a self-service sign-in link (kind!=='invite') for an unknown
+  // email mints no principal — we burn the link and redirect to the same generic
+  // outcome, so a stranger and a real user are indistinguishable (no enumeration).
   let user = await db.query.users.findFirst({ where: eq(users.email, link.email) });
   if (!user) {
+    if (link.kind !== 'invite') {
+      await db.update(magicLinks).set({ usedAt: new Date() }).where(eq(magicLinks.id, link.id));
+      return c.redirect('/');
+    }
     const id = nanoid();
     await db
       .insert(users)

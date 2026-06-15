@@ -1,0 +1,1 @@
+ALTER TABLE `magic_links` ADD `kind` text DEFAULT 'signin' NOT NULL;

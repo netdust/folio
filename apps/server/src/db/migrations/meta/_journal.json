@@ -246,6 +246,13 @@
       "when": 1780990000000,
       "tag": "0033_api_tokens_expires_at",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "6",
+      "when": 1780991000000,
+      "tag": "0034_magic_links_kind",
+      "breakpoints": true
     }
   ]
 }

@@ -1,10 +1,10 @@
 import { expect, test } from 'bun:test';
 import { eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
-import { aiKeys, users } from '../db/schema.ts';
+import { aiKeys, magicLinks, users } from '../db/schema.ts';
 import { env } from '../env.ts';
 import { userRole } from '../lib/access.ts';
-import { createSession } from '../lib/auth.ts';
+import { createSession, hashToken, newMagicToken } from '../lib/auth.ts';
 import { makeBareTestDb, makeTestApp } from '../test/harness.ts';
 
 test('first registration is rejected when bootstrap registration is off (M1)', async () => {
@@ -181,4 +181,105 @@ test('GET /auth/me: ai_configured reflects instance AI-key presence (readable by
 
   const after = await app.request('/api/v1/auth/me', { headers: { cookie: seed.sessionCookie } });
   expect((await after.json()).data.ai_configured).toBe(true);
+});
+
+// --- Magic-link account-creation gate (M1, audit H5) ---
+// Self-service sign-in (kind:'signin') only AUTHENTICATES an existing user; it
+// must NEVER mint a principal for a stranger. Only an admin-issued invite
+// (kind:'invite') may create a new member. The request path is silenced for
+// strangers (no row, no mail) so it can't be used to flood or enumerate.
+
+// Mint a magic_links row directly with a known plaintext token (consume reads by
+// token hash; the request path never exposes the plaintext token to the caller).
+async function seedMagicLink(
+  db: Awaited<ReturnType<typeof makeBareTestDb>>['db'],
+  email: string,
+  kind: 'signin' | 'invite',
+): Promise<string> {
+  const token = newMagicToken();
+  await db.insert(magicLinks).values({
+    id: nanoid(),
+    email,
+    tokenHash: hashToken(token),
+    expiresAt: new Date(Date.now() + 1000 * 60 * 15),
+    kind,
+  });
+  return token;
+}
+
+test('consume of a signin link for a NON-existent email creates no user and redirects (M1/H5)', async () => {
+  const { app, db } = await makeBareTestDb();
+  const token = await seedMagicLink(db, 'stranger@x.com', 'signin');
+
+  const res = await app.request(`/api/v1/auth/magic-link/consume?token=${token}`, {
+    redirect: 'manual',
+  });
+  // Same generic outcome as a real sign-in: a 302 redirect, no principal minted.
+  expect(res.status).toBe(302);
+  const created = await db.query.users.findFirst({ where: eq(users.email, 'stranger@x.com') });
+  expect(created).toBeUndefined();
+  // No session cookie issued (no principal).
+  expect(res.headers.get('set-cookie')).toBeNull();
+  // The single-use link is still burned.
+  const link = await db.query.magicLinks.findFirst({
+    where: eq(magicLinks.tokenHash, hashToken(token)),
+  });
+  expect(link?.usedAt).not.toBeNull();
+});
+
+test('consume of an INVITE link DOES create the user as member, redirects, sets session (M1/H5)', async () => {
+  const { app, db } = await makeBareTestDb();
+  const token = await seedMagicLink(db, 'invitee@x.com', 'invite');
+
+  const res = await app.request(`/api/v1/auth/magic-link/consume?token=${token}`, {
+    redirect: 'manual',
+  });
+  expect(res.status).toBe(302);
+  const created = await db.query.users.findFirst({ where: eq(users.email, 'invitee@x.com') });
+  expect(created).toBeDefined();
+  // A newly created member, never an admin/owner (instance role default).
+  expect(await userRole(db, created!.id)).toBe('member');
+  // Session cookie issued for the new principal.
+  expect(res.headers.get('set-cookie')).toContain('folio_session=');
+});
+
+test('existing user + signin link still signs in: 302 + session cookie (M1/H5)', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const token = await seedMagicLink(db, seed.user.email, 'signin');
+
+  const res = await app.request(`/api/v1/auth/magic-link/consume?token=${token}`, {
+    redirect: 'manual',
+  });
+  expect(res.status).toBe(302);
+  expect(res.headers.get('set-cookie')).toContain('folio_session=');
+});
+
+test('request for a NON-existent email is silenced: 200, no magic_links row persisted (M1/H5)', async () => {
+  const { app, db } = await makeBareTestDb();
+
+  const res = await app.request('/api/v1/auth/magic-link/request', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: 'stranger@x.com' }),
+  });
+  // Generic 200 — indistinguishable from a real user (no enumeration).
+  expect(res.status).toBe(200);
+  expect((await res.json()).data.ok).toBe(true);
+  // The durable signal: nothing was minted (no flooding, no link to consume).
+  const rows = await db.select().from(magicLinks).where(eq(magicLinks.email, 'stranger@x.com'));
+  expect(rows).toHaveLength(0);
+});
+
+test('request for an EXISTING user persists a signin link (M1/H5)', async () => {
+  const { app, db, seed } = await makeTestApp();
+
+  const res = await app.request('/api/v1/auth/magic-link/request', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: seed.user.email }),
+  });
+  expect(res.status).toBe(200);
+  const rows = await db.select().from(magicLinks).where(eq(magicLinks.email, seed.user.email));
+  expect(rows).toHaveLength(1);
+  expect(rows[0]!.kind).toBe('signin');
 });

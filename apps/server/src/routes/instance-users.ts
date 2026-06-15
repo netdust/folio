@@ -260,6 +260,7 @@ instanceUsersRoute.post(
       email,
       tokenHash: hashToken(token),
       expiresAt: new Date(Date.now() + 1000 * 60 * 15), // 15 min, matches sign-in
+      kind: 'invite', // M1 (audit H5): admin-issued — may create a new member on consume
     });
     await sendInvite(email, token, inviter.name ?? 'A teammate');
 
