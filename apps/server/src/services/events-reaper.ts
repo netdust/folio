@@ -26,7 +26,7 @@
  * @returns number of event rows reaped.
  */
 
-import { and, lt } from 'drizzle-orm';
+import { and, inArray, lt } from 'drizzle-orm';
 import type { DB } from '../db/client.ts';
 import { events } from '../db/schema.ts';
 import { env } from '../env.ts';
@@ -42,9 +42,15 @@ export async function reapStaleEvents(db: DBOrTx, at: number = Date.now()): Prom
   if (cursors.length === 0) return 0;
   const minCursor = Math.min(...cursors.map((c) => c.lastSeq));
 
-  // Atomic single DELETE: old AND strictly below the min cursor.
+  // CHUNKED DELETE: old AND strictly below the min cursor, in bounded batches.
   //
-  // SAFETY (TOCTOU): the cursor read above and this DELETE are NOT one transaction,
+  // A single unbounded DELETE would, on the FIRST run against a long-lived instance,
+  // delete every >retention event below the cursor in one statement — holding
+  // SQLite's single writer lock for the whole sweep and stalling every concurrent
+  // write (incl. emitEvent on every domain mutation). Batching caps each statement's
+  // lock hold; the loop exits when a batch reaps fewer than the chunk size.
+  //
+  // SAFETY (TOCTOU): the cursor read above and these DELETEs are NOT one transaction,
   // but that is provably safe ONLY because reactor cursors move FORWARD-ONLY (seeded
   // at MAX(seq), then advanced to strictly-higher seqs in event-dispatcher.ts; never
   // decremented or deleted). A concurrent reactor advance between read and DELETE can
@@ -52,9 +58,24 @@ export async function reapStaleEvents(db: DBOrTx, at: number = Date.now()): Prom
   // strictly more conservative, never dropping a live row. If a future feature EVER
   // lowers/resets a cursor, this no-transaction assumption breaks — wrap both in a
   // single tx then.
-  const reaped = await db
-    .delete(events)
-    .where(and(lt(events.createdAt, cutoff), lt(events.seq, minCursor)))
-    .returning({ id: events.id });
-  return reaped.length;
+  const CHUNK = 1000;
+  let total = 0;
+  for (;;) {
+    const batch = await db
+      .delete(events)
+      .where(
+        inArray(
+          events.id,
+          db
+            .select({ id: events.id })
+            .from(events)
+            .where(and(lt(events.createdAt, cutoff), lt(events.seq, minCursor)))
+            .limit(CHUNK),
+        ),
+      )
+      .returning({ id: events.id });
+    total += batch.length;
+    if (batch.length < CHUNK) break;
+  }
+  return total;
 }

@@ -156,4 +156,30 @@ describe('reapStaleEvents — cursor-floored retention (H7)', () => {
     const surviving = await db.select().from(events).orderBy(asc(events.seq));
     expect(surviving.map((r) => r.id)).toEqual(['just-inside']);
   });
+
+  test('reaps MORE than one chunk (multi-batch loop deletes the full backlog)', async () => {
+    // The DELETE is chunked (CHUNK=1000) to bound the writer-lock hold on a large
+    // first-run backlog. Seed >1 chunk of reapable rows + a few survivors above the
+    // cursor, and assert the loop reaps the entire eligible set across batches —
+    // a single-batch reaper would leave the overflow behind.
+    const db = makeDb();
+    await seedWorkspace(db);
+    const N = 1300; // > CHUNK
+    const reapable = Array.from({ length: N }, (_, i) => ({
+      id: `dead-${i}`,
+      seq: i + 1, // 1..1300, all below the cursor (5000)
+      ageDays: 100,
+    }));
+    await seedEvents(db, [
+      ...reapable,
+      { id: 'live-above', seq: 9000, ageDays: 100 }, // above cursor → survives
+    ]);
+    await seedCursor(db, 'r1', 5000);
+
+    const reaped = await reapStaleEvents(db, NOW);
+
+    expect(reaped).toBe(N); // every eligible row, across multiple batches
+    const surviving = await db.select().from(events);
+    expect(surviving.map((r) => r.id)).toEqual(['live-above']);
+  });
 });

@@ -55,12 +55,15 @@ void reapStalePendingOps(db)
 // events log disk hygiene (audit H7): the events table is append-only and only
 // grows. Reap rows past the retention window AND strictly below the minimum live
 // reactor cursor — so an event a reactor still needs (or an SSE replay) is never
-// dropped. Empty-cursor state is a no-op by design. Fire-and-log like above.
-void reapStaleEvents(db)
-  .then((n) => {
-    if (n > 0) console.log(`[folio] reaped ${n} stale event(s)`);
-  })
-  .catch((err) => console.error('[folio] events reap failed', err));
+// dropped. Empty-cursor state is a no-op by design. One helper for both the boot
+// fire and the interval below — no drift between the two call sites.
+const reapEvents = (): Promise<void> =>
+  reapStaleEvents(db)
+    .then((n) => {
+      if (n > 0) console.log(`[folio] reaped ${n} stale event(s)`);
+    })
+    .catch((err) => console.error('[folio] events reap failed', err));
+void reapEvents();
 
 console.log(`[folio] listening on http://localhost:${env.PORT}`);
 
@@ -84,14 +87,10 @@ if (env.NODE_ENV !== 'test') {
 }
 
 // events retention reaper interval (slow hygiene loop). Reuses the reconciler
-// cadence. Skipped in test mode (timer leaks).
+// cadence and the same reapEvents helper as the boot fire. Skipped in test mode.
 if (env.NODE_ENV !== 'test') {
   setInterval(() => {
-    reapStaleEvents(db)
-      .then((n) => {
-        if (n > 0) console.log(`[folio] reaped ${n} stale event(s)`);
-      })
-      .catch((err) => console.error('[folio] events reaper error', err));
+    void reapEvents();
   }, env.FOLIO_RECONCILER_INTERVAL_MS);
 }
 
