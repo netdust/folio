@@ -24,7 +24,44 @@ import { eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { authSessions, users } from '../db/schema.ts';
 import { makeBareTestDb } from '../test/harness.ts';
-import { hashPassword, readSession, verifyPassword } from './auth.ts';
+import { hashPassword, normalizeEmail, readSession, verifyPassword } from './auth.ts';
+
+describe('normalizeEmail (CR-A1)', () => {
+  test('trims surrounding whitespace and lowercases', () => {
+    // The canonical example from the finding: leading/trailing space + mixed case
+    // collapse to one key. This is the single normalization every auth boundary
+    // applies BEFORE lookup / insert / rate-limit-key, so case- and space-variants
+    // of one human resolve to one principal + one rate-limit bucket.
+    expect(normalizeEmail(' Victim@X.com ')).toBe('victim@x.com');
+  });
+
+  test('is idempotent and leaves an already-normal email unchanged', () => {
+    expect(normalizeEmail('alice@example.com')).toBe('alice@example.com');
+    expect(normalizeEmail(normalizeEmail(' Bob@Example.COM '))).toBe('bob@example.com');
+  });
+});
+
+describe('users.email case-insensitive unique index (CR-C1 / audit B1)', () => {
+  test('the DB floor REJECTS a case-colliding email even if app normalization is bypassed', async () => {
+    // Migration 0036 adds a COLLATE NOCASE unique index on users.email. The
+    // app-layer normalizeEmail tests cover the happy floor; THIS pins the DB floor
+    // itself — the "even if a future code path forgets to normalize" guarantee the
+    // migration comment claims. Insert two case-variant emails directly (bypassing
+    // the route's normalization); the second must violate the unique index.
+    const { db } = await makeBareTestDb();
+    await db.insert(users).values({ id: nanoid(), email: 'Victim@x.com', name: 'V' });
+    let threw: unknown;
+    try {
+      await db.insert(users).values({ id: nanoid(), email: 'victim@x.com', name: 'v' });
+    } catch (err) {
+      threw = err;
+    }
+    expect(String(threw)).toMatch(/UNIQUE/i);
+    // And only the first row exists — the case-variant was rejected, not merged.
+    const rows = await db.select().from(users);
+    expect(rows).toHaveLength(1);
+  });
+});
 
 describe('readSession expiry', () => {
   test('an expired session returns null, a future-dated session returns the user', async () => {

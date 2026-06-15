@@ -246,6 +246,27 @@
       "when": 1780990000000,
       "tag": "0033_api_tokens_expires_at",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "6",
+      "when": 1780991000000,
+      "tag": "0034_magic_links_kind",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "6",
+      "when": 1780992000000,
+      "tag": "0035_auth_rate_limits",
+      "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "6",
+      "when": 1780993000000,
+      "tag": "0036_users_email_nocase",
+      "breakpoints": true
     }
   ]
 }

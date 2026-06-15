@@ -1,9 +1,15 @@
 import { Hono } from 'hono';
+import { bodyLimit } from 'hono/body-limit';
 import { serveStatic } from 'hono/bun';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
+// Generated manifest (committed stub in dev; rewritten by scripts/build.ts at
+// compile time with `with { type: 'file' }` imports so --compile embeds the web
+// bundle). Static import keeps it in the embed graph. WEB_ASSETS is {} in dev,
+// where the on-disk serveStatic fallback runs instead.
+import { WEB_ASSETS } from '../../../scripts/build-manifest.ts';
 import { env } from './env.ts';
-import { registerErrorHandler } from './lib/http.ts';
+import { HTTPError, registerErrorHandler } from './lib/http.ts';
 import { type AuthContext, attachUser } from './middleware/auth.ts';
 import { attachToken, requireResource, requireUserOrToken } from './middleware/bearer.ts';
 import {
@@ -43,6 +49,20 @@ if (env.NODE_ENV !== 'production') {
 }
 app.use('*', logger());
 app.use('*', attachUser);
+
+// M1 (audit M10): global request-body cap. Rejects oversized payloads before any
+// route's Zod validation buffers them into memory. Throws HTTPError so the 413
+// rides the standard {error:{code,message}} envelope (invariant 9). Registered
+// AFTER attachUser and BEFORE the route mounts so every route inherits the cap.
+app.use(
+  '*',
+  bodyLimit({
+    maxSize: env.FOLIO_MAX_BODY_BYTES,
+    onError: () => {
+      throw new HTTPError('PAYLOAD_TOO_LARGE', 'request body too large', 413);
+    },
+  }),
+);
 
 // --- /api/v1 ---
 const v1 = new Hono<AuthContext & ScopeContext>();
@@ -131,6 +151,24 @@ app.route('/', healthRoute);
 
 // --- static SPA (prod) ---
 if (env.NODE_ENV === 'production') {
-  app.use('/*', serveStatic({ root: '../web/dist' }));
-  app.get('/*', serveStatic({ path: '../web/dist/index.html' }));
+  if (Bun.embeddedFiles.length > 0) {
+    // Compiled single binary: serve the web bundle from the assets embedded by
+    // `bun build --compile` (paths in WEB_ASSETS, the generated manifest). There
+    // is NO web/dist on disk next to the binary, so serveStatic would 404.
+    app.get('/*', async (c) => {
+      const p = new URL(c.req.url).pathname;
+      // SECURITY (keeps this STANDARD-tier): PURE object-key lookup into
+      // WEB_ASSETS — the caller-supplied pathname is NEVER resolved against the
+      // filesystem (no path.join, no Bun.file(dir + p)). An unknown path falls
+      // back to the SPA shell (index.html). No path traversal is possible: a
+      // value can only be an embedded path we generated at build time.
+      const assetPath = WEB_ASSETS[p] ?? WEB_ASSETS['/index.html'];
+      if (!assetPath) return c.notFound();
+      return new Response(Bun.file(assetPath));
+    });
+  } else {
+    // Dev / uncompiled production: the bundle is on disk at apps/web/dist.
+    app.use('/*', serveStatic({ root: '../web/dist' }));
+    app.get('/*', serveStatic({ path: '../web/dist/index.html' }));
+  }
 }

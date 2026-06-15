@@ -8,6 +8,7 @@ import { startRunnerPoller } from './lib/poller.ts';
 import { reconcileAllowLists } from './lib/reconciler.ts';
 import { runBootTasks } from './lib/system-workspace.ts';
 import { recoverInterruptedConversations } from './services/conversations.ts';
+import { reapStaleEvents } from './services/events-reaper.ts';
 import { reapStalePendingOps } from './services/pending-ops.ts';
 
 // Phase 3 A-0: apply any pending migrations at boot so dev environments never
@@ -51,6 +52,19 @@ void reapStalePendingOps(db)
   })
   .catch((err) => console.error('[folio] pending_ops reap failed', err));
 
+// events log disk hygiene (audit H7): the events table is append-only and only
+// grows. Reap rows past the retention window AND strictly below the minimum live
+// reactor cursor — so an event a reactor still needs (or an SSE replay) is never
+// dropped. Empty-cursor state is a no-op by design. One helper for both the boot
+// fire and the interval below — no drift between the two call sites.
+const reapEvents = (): Promise<void> =>
+  reapStaleEvents(db)
+    .then((n) => {
+      if (n > 0) console.log(`[folio] reaped ${n} stale event(s)`);
+    })
+    .catch((err) => console.error('[folio] events reap failed', err));
+void reapEvents();
+
 console.log(`[folio] listening on http://localhost:${env.PORT}`);
 
 // Phase 2.6 sub-phase E1: periodic allow-list reconciler. Scrubs orphan
@@ -69,6 +83,14 @@ if (env.NODE_ENV !== 'test') {
 if (env.NODE_ENV !== 'test') {
   setInterval(() => {
     reapStalePendingOps(db).catch((err) => console.error('[folio] pending_ops reaper error', err));
+  }, env.FOLIO_RECONCILER_INTERVAL_MS);
+}
+
+// events retention reaper interval (slow hygiene loop). Reuses the reconciler
+// cadence and the same reapEvents helper as the boot fire. Skipped in test mode.
+if (env.NODE_ENV !== 'test') {
+  setInterval(() => {
+    void reapEvents();
   }, env.FOLIO_RECONCILER_INTERVAL_MS);
 }
 

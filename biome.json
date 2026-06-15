@@ -11,7 +11,8 @@
       "dist",
       "*.db",
       "**/memory/.stop-hook-state.json",
-      "**/*.stop-hook-state.json"
+      "**/*.stop-hook-state.json",
+      "**/routeTree.gen.ts"
     ]
   },
   "formatter": {

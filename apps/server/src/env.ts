@@ -106,6 +106,36 @@ export const envSchema = z.object({
     .int()
     .positive()
     .default(7 * 24 * 60 * 60 * 1000),
+  // events retention reaper (audit H7). The events log is append-only and only
+  // grows; the reaper deletes rows BOTH past this window AND strictly below the
+  // minimum live reactor cursor (so an event a reactor still needs is never
+  // dropped and SSE replay is preserved). 90-day default. Floored at 1 day so a
+  // unit-confusion mis-set can never reap live events — mirrors the
+  // FOLIO_PENDING_OPS_RETENTION_MS floor rationale.
+  FOLIO_EVENTS_RETENTION_MS: z.coerce
+    .number()
+    .int()
+    .min(86_400_000)
+    .default(90 * 24 * 60 * 60 * 1000),
+  // M1 (audit H6) — auth rate-limit knobs (SA-1: validated here, never read inline
+  // as process.env). Fixed-window counters on /login + /magic-link/request close
+  // the brute-force / argon2 CPU-DoS / email-flooding levers. Window floored at
+  // 1000ms (a duration in MS; a 1..999 floor would accept a unit-confusion mis-set).
+  // The two ceilings floor at 1 so a mis-set value can't disable the cap.
+  FOLIO_RATE_LIMIT_WINDOW_MS: z.coerce
+    .number()
+    .int()
+    .min(1000)
+    .default(15 * 60_000),
+  FOLIO_RATE_LIMIT_LOGIN: z.coerce.number().int().min(1).default(5),
+  FOLIO_RATE_LIMIT_MAGIC_LINK: z.coerce.number().int().min(1).default(5),
+  // M1 (audit M10): global request-body cap in BYTES. Default 5 MB — generous for a
+  // markdown document, far below a memory-exhaustion payload. Floor 64 KB.
+  FOLIO_MAX_BODY_BYTES: z.coerce
+    .number()
+    .int()
+    .min(65_536)
+    .default(5 * 1024 * 1024),
 });
 
 export const env = envSchema.parse(process.env);

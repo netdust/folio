@@ -24,6 +24,11 @@ import {
 
 export const users = sqliteTable('users', {
   id: text('id').primaryKey(),
+  // CR-A1: case-insensitive uniqueness is enforced at the DB floor by
+  // `users_email_nocase_idx` (CREATE UNIQUE INDEX ... COLLATE NOCASE, migration
+  // 0036) — drizzle's index builder cannot express a per-column COLLATE, so the
+  // runtime constraint lives in the hand-authored migration, not this `.unique()`.
+  // The app normalizes every email at the auth boundaries via normalizeEmail().
   email: text('email').notNull().unique(),
   passwordHash: text('password_hash'), // nullable -> magic-link-only users
   name: text('name').notNull(),
@@ -64,6 +69,11 @@ export const magicLinks = sqliteTable(
     tokenHash: text('token_hash').notNull(), // sha256 of the token sent in email
     expiresAt: integer('expires_at', { mode: 'timestamp_ms' }).notNull(),
     usedAt: integer('used_at', { mode: 'timestamp_ms' }),
+    // M1 (audit H5): provenance — 'signin' (self-service, only authenticates an
+    // EXISTING user) vs 'invite' (admin-issued, may create a new member). No DB
+    // CHECK (consistent with magic_links' no-CHECK history); the .$type union
+    // enforces the two values at every write site at compile time.
+    kind: text('kind').$type<'signin' | 'invite'>().notNull().default('signin'),
     createdAt: integer('created_at', { mode: 'timestamp_ms' })
       .notNull()
       .default(sql`(unixepoch() * 1000)`),
@@ -534,6 +544,28 @@ export const reactorCursors = sqliteTable('reactor_cursors', {
 });
 
 /**
+ * Auth rate-limit counters (M1, audit H6). A SQLite-backed per-(scope, key)
+ * windowed counter — NO sidecar (architectural rule #2: no Redis). `scope` is the
+ * throttled surface ('login' | 'magic_link'); `key` is the dimension being limited
+ * ('ip:1.2.3.4' | 'email:a@b.c'). `windowStart` is the ms epoch at which the
+ * current fixed window opened; `count` is attempts within it. Composite PK is the
+ * upsert target: one row per (scope, key), reset by overwriting windowStart when a
+ * new window opens. Walled off from the event plane (like reactor_cursors): pure
+ * throttle bookkeeping, not a document, no events. NO foreign keys — `key` is a
+ * free-form string (IP/email), not a reference to any entity.
+ */
+export const authRateLimits = sqliteTable(
+  'auth_rate_limits',
+  {
+    scope: text('scope').notNull(),
+    key: text('key').notNull(),
+    count: integer('count').notNull().default(0),
+    windowStart: integer('window_start').notNull(),
+  },
+  (t) => ({ pk: primaryKey({ columns: [t.scope, t.key] }) }),
+);
+
+/**
  * Operator cockpit chat — `conversations`, `messages`, `pending_ops`.
  *
  * DELIBERATE EXCEPTION to invariants 5 + 10 (see ARCHITECTURE-INVARIANTS.md
@@ -648,6 +680,7 @@ export type AiKey = typeof aiKeys.$inferSelect;
 export type InstanceSkill = typeof instanceSkills.$inferSelect;
 export type Event = typeof events.$inferSelect;
 export type ReactorCursor = typeof reactorCursors.$inferSelect;
+export type AuthRateLimit = typeof authRateLimits.$inferSelect;
 export type Conversation = typeof conversations.$inferSelect;
 export type Message = typeof messages.$inferSelect;
 export type PendingOp = typeof pendingOps.$inferSelect;

@@ -32,6 +32,8 @@ The binary serves both the REST API and the compiled React SPA from a single por
 
 Folio expects to sit behind a reverse proxy (nginx, Caddy, Traefik). Set `PUBLIC_URL` to the externally-reachable HTTPS URL so magic-link emails and SSE keep-alives use the correct base.
 
+**Folio MUST run behind a reverse proxy that sets a trustworthy `X-Forwarded-For`** (Ploi/nginx and Caddy do this by default). The per-IP login rate-limiter keys on that header; on a no-proxy deploy every client collapses into the single `'unknown'` IP bucket, so the per-IP throttle protects all clients as one (the per-email throttle still works per account). This is acceptable degradation, not a failure — but a public-facing instance should always be proxied so per-IP throttling is real. (Security Low-1: the limiter trusts `X-Forwarded-For`; do not expose Folio directly to the internet.)
+
 ## Environment variables
 
 | Variable | Default | Description |

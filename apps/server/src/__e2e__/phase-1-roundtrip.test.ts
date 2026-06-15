@@ -193,17 +193,19 @@ test('Phase 1 normalization: magic-link routes live at the canonical paths', asy
   });
   expect(stale.status).toBe(404);
 
-  // New /magic-link/request issues a magic link
+  // New /magic-link/request issues a magic link for an EXISTING user. (M1/H5:
+  // self-service request only persists a link for a known user; a stranger gets
+  // the same generic 200 but no row. The harness seeds alice@test.local.)
   const req = await app.request('/api/v1/auth/magic-link/request', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email: 'new@test.local' }),
+    body: JSON.stringify({ email: 'alice@test.local' }),
   });
   expect(req.status).toBe(200);
   expect((await req.json()).data.ok).toBe(true);
 
-  // The request actually persisted a magic-link row.
-  const rows = await db.select().from(magicLinks).where(eq(magicLinks.email, 'new@test.local'));
+  // The request actually persisted a magic-link row (existing user).
+  const rows = await db.select().from(magicLinks).where(eq(magicLinks.email, 'alice@test.local'));
   expect(rows).toHaveLength(1);
 
   // /magic-link/consume accepts the token (handler issues a 302 to /)

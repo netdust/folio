@@ -4,6 +4,7 @@ import type { DB } from '../db/client.ts';
 import { users } from '../db/schema.ts';
 import type { Env } from '../env.ts';
 import { userRole } from './access.ts';
+import { normalizeEmail } from './auth.ts';
 import { HTTPError } from './http.ts';
 import { seedInstanceSkills } from './instance-skills.ts';
 
@@ -100,7 +101,12 @@ export async function grantOwner(db: DB, email: string): Promise<string> {
  *
  * No operator seed: the operator is a code singleton (lib/operator.ts).
  */
-export async function designateInstanceOwner(db: DB, email: string): Promise<void> {
+export async function designateInstanceOwner(db: DB, rawEmail: string): Promise<void> {
+  // CR-A1: canonicalize so an env-supplied or mixed-case owner email matches the
+  // normalized address users are stored under (the register caller already
+  // normalizes, but the FOLIO_INSTANCE_OWNER boot path does not — normalize here
+  // so neither caller can pass a raw value).
+  const email = normalizeEmail(rawEmail);
   const currentOwner = await db.query.users.findFirst({
     where: eq(users.role, 'owner'),
   });
@@ -135,8 +141,11 @@ export async function designateInstanceOwner(db: DB, email: string): Promise<voi
 export async function runBootTasks(db: DB, env: Pick<Env, 'FOLIO_INSTANCE_OWNER'>): Promise<void> {
   await seedInstanceSkills(db);
 
-  const ownerEmail = env.FOLIO_INSTANCE_OWNER;
-  if (!ownerEmail) return; // no owner configured → seed only
+  const rawOwnerEmail = env.FOLIO_INSTANCE_OWNER;
+  if (!rawOwnerEmail) return; // no owner configured → seed only
+  // CR-A1: match the normalized address users are stored under (designateInstanceOwner
+  // normalizes again, but the pre-check lookup below needs it too).
+  const ownerEmail = normalizeEmail(rawOwnerEmail);
 
   // Pre-check the user exists so a misconfigured email is a warning, not a
   // crash — and so we never swallow a genuine (non-not-found) designate error.

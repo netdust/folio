@@ -1,5 +1,5 @@
 import { zValidator } from '@hono/zod-validator';
-import { eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { deleteCookie, setCookie } from 'hono/cookie';
 import { nanoid } from 'nanoid';
@@ -14,16 +14,27 @@ import {
   hashPassword,
   hashToken,
   newMagicToken,
+  normalizeEmail,
   verifyPassword,
 } from '../lib/auth.ts';
+import { clientIp } from '../lib/client-ip.ts';
 import { sendMagicLink } from '../lib/email.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
+import { checkRateLimit } from '../lib/rate-limit.ts';
 import { designateInstanceOwner } from '../lib/system-workspace.ts';
 import { type AuthContext, getUser, requireUser } from '../middleware/auth.ts';
 
 const auth = new Hono<AuthContext>();
 
 const SESSION_COOKIE = 'folio_session';
+
+// M1 (audit H6) — timing-oracle close. The /login unknown-user branch runs a
+// dummy argon2 verify against THIS hash before throwing 401, so an unknown email
+// costs the same argon2 wall-clock as a wrong password for a real user. Computed
+// ONCE at module load (top-level await — valid ESM under Bun); the constant body
+// is irrelevant, only the verify cost matters. (M4.)
+const DUMMY_PASSWORD_HASH = await hashPassword('folio-dummy-verify-target');
+
 const cookieOpts = {
   httpOnly: true,
   secure: env.NODE_ENV === 'production',
@@ -44,7 +55,9 @@ auth.post(
     }),
   ),
   async (c) => {
-    const { email, password, name } = c.req.valid('json');
+    const { email: rawEmail, password, name } = c.req.valid('json');
+    // CR-A1: canonicalize before any lookup / insert / owner-designation.
+    const email = normalizeEmail(rawEmail);
 
     // M1 — close the registration race (A1): the FIRST user becomes the instance
     // owner, but only behind the bootstrap flag. Read the flag LIVE (the env
@@ -92,9 +105,32 @@ auth.post(
   '/login',
   zValidator('json', z.object({ email: z.string().email(), password: z.string() })),
   async (c) => {
-    const { email, password } = c.req.valid('json');
+    const { email: rawEmail, password } = c.req.valid('json');
+    // CR-A1: canonicalize before the rate-limit key AND the user lookup, so
+    // case-variants share one per-email bucket and resolve to one principal.
+    const email = normalizeEmail(rawEmail);
+
+    // M1 (audit H6) — throttle BEFORE any expensive work. Two independent
+    // counters: per-IP (blunts a single host hammering many emails) AND per-email
+    // (blunts a botnet hammering one account). Either tripping → 429. The IP comes
+    // from the single clientIp() source (SA-4). The throttle fails OPEN on a store
+    // error, so this can never brick login.
+    const [ipOk, emailOk] = await Promise.all([
+      checkRateLimit(db, 'login', `ip:${clientIp(c)}`),
+      checkRateLimit(db, 'login', `email:${email}`),
+    ]);
+    if (!ipOk || !emailOk) {
+      throw new HTTPError('RATE_LIMITED', 'too many attempts, try again later', 429);
+    }
+
     const user = await db.query.users.findFirst({ where: eq(users.email, email) });
     if (!user || !user.passwordHash) {
+      // M1 (audit H6) — close the user-enumeration timing oracle. An unknown email
+      // (or a passwordless user) must cost the SAME argon2 wall-clock as a wrong
+      // password, so we run a dummy verify and DISCARD the result before throwing.
+      // Without this, the missing user short-circuits the verify and the fast 401
+      // leaks "this email has no account". (M4.)
+      await verifyPassword(password, DUMMY_PASSWORD_HASH);
       throw new HTTPError('UNAUTHENTICATED', 'invalid credentials', 401);
     }
     const ok = await verifyPassword(password, user.passwordHash);
@@ -142,7 +178,26 @@ auth.post(
   '/magic-link/request',
   zValidator('json', z.object({ email: z.string().email() })),
   async (c) => {
-    const { email } = c.req.valid('json');
+    const { email: rawEmail } = c.req.valid('json');
+    // CR-A1: canonicalize before the user lookup, rate-limit key, and the row we mint.
+    const email = normalizeEmail(rawEmail);
+
+    // M1 (audit H5): self-service sign-in only authenticates an EXISTING user.
+    // For a stranger we mint nothing and send nothing — closing both the
+    // flooding vector (no row written) and email enumeration (the response is
+    // the same generic 200 whether or not the email has an account). New
+    // members arrive ONLY via an admin invite (kind:'invite').
+    const user = await db.query.users.findFirst({ where: eq(users.email, email) });
+    if (!user) return jsonOk(c, { ok: true });
+
+    // M1 (audit H6) — throttle a REAL user's link requests (a stranger already
+    // short-circuited above, so this only limits accounts that exist). On throttle
+    // we return the SAME generic 200 with no row minted — never reveal the limit
+    // to an enumerator, and don't let a flood mint links. (M2/M3.)
+    if (!(await checkRateLimit(db, 'magic_link', `email:${email}`))) {
+      return jsonOk(c, { ok: true });
+    }
+
     const token = newMagicToken();
     const expiresAt = new Date(Date.now() + 1000 * 60 * 15); // 15 min
     await db.insert(magicLinks).values({
@@ -150,6 +205,7 @@ auth.post(
       email,
       tokenHash: hashToken(token),
       expiresAt,
+      kind: 'signin',
     });
     await sendMagicLink(email, token);
     return jsonOk(c, { ok: true });
@@ -165,14 +221,35 @@ auth.get('/magic-link/consume', async (c) => {
     where: eq(magicLinks.tokenHash, tokenHash),
   });
   if (!link) throw new HTTPError('INVALID_TOKEN', 'invalid token', 400);
-  if (link.usedAt) throw new HTTPError('INVALID_TOKEN', 'token already used', 400);
   if (link.expiresAt.getTime() < Date.now()) {
     throw new HTTPError('INVALID_TOKEN', 'token expired', 400);
   }
 
-  // upsert user
+  // M1 (CR-C1): claim the link ATOMICALLY — a single UPDATE gated on `usedAt IS
+  // NULL`. Two concurrent consumes of the same token race here; SQLite serializes
+  // the writes so exactly ONE claims the row (claimed.length === 1) and proceeds,
+  // while the loser sees 0 rows and is rejected. This replaces the prior
+  // read-`if (link.usedAt)`-then-write-later pattern, under which two consumes
+  // could both pass the read-check and (for an invite) both mint a principal. The
+  // claim happens BEFORE user creation/session, so a lost race never creates a user.
+  const claimed = await db
+    .update(magicLinks)
+    .set({ usedAt: new Date() })
+    .where(and(eq(magicLinks.id, link.id), isNull(magicLinks.usedAt)))
+    .returning({ id: magicLinks.id });
+  if (claimed.length === 0) throw new HTTPError('INVALID_TOKEN', 'token already used', 400);
+
+  // M1 (audit H5): account creation is gated by link provenance. An existing
+  // user always signs in. A NEW user is created ONLY from an admin-issued invite
+  // (kind:'invite'); a self-service sign-in link (kind!=='invite') for an unknown
+  // email mints no principal — we redirect to the same generic outcome (the link
+  // is already claimed above), so a stranger and a real user are indistinguishable
+  // (no enumeration).
   let user = await db.query.users.findFirst({ where: eq(users.email, link.email) });
   if (!user) {
+    if (link.kind !== 'invite') {
+      return c.redirect('/');
+    }
     const id = nanoid();
     await db
       .insert(users)
@@ -180,8 +257,6 @@ auth.get('/magic-link/consume', async (c) => {
     user = await db.query.users.findFirst({ where: eq(users.id, id) });
   }
   if (!user) throw new HTTPError('INTERNAL', 'failed to create user', 500);
-
-  await db.update(magicLinks).set({ usedAt: new Date() }).where(eq(magicLinks.id, link.id));
 
   const session = await createSession(user.id);
   setCookie(c, SESSION_COOKIE, session.id, { ...cookieOpts, expires: session.expiresAt });
