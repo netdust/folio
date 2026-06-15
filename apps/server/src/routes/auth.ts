@@ -1,5 +1,5 @@
 import { zValidator } from '@hono/zod-validator';
-import { eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { deleteCookie, setCookie } from 'hono/cookie';
 import { nanoid } from 'nanoid';
@@ -221,20 +221,33 @@ auth.get('/magic-link/consume', async (c) => {
     where: eq(magicLinks.tokenHash, tokenHash),
   });
   if (!link) throw new HTTPError('INVALID_TOKEN', 'invalid token', 400);
-  if (link.usedAt) throw new HTTPError('INVALID_TOKEN', 'token already used', 400);
   if (link.expiresAt.getTime() < Date.now()) {
     throw new HTTPError('INVALID_TOKEN', 'token expired', 400);
   }
 
+  // M1 (CR-C1): claim the link ATOMICALLY — a single UPDATE gated on `usedAt IS
+  // NULL`. Two concurrent consumes of the same token race here; SQLite serializes
+  // the writes so exactly ONE claims the row (claimed.length === 1) and proceeds,
+  // while the loser sees 0 rows and is rejected. This replaces the prior
+  // read-`if (link.usedAt)`-then-write-later pattern, under which two consumes
+  // could both pass the read-check and (for an invite) both mint a principal. The
+  // claim happens BEFORE user creation/session, so a lost race never creates a user.
+  const claimed = await db
+    .update(magicLinks)
+    .set({ usedAt: new Date() })
+    .where(and(eq(magicLinks.id, link.id), isNull(magicLinks.usedAt)))
+    .returning({ id: magicLinks.id });
+  if (claimed.length === 0) throw new HTTPError('INVALID_TOKEN', 'token already used', 400);
+
   // M1 (audit H5): account creation is gated by link provenance. An existing
   // user always signs in. A NEW user is created ONLY from an admin-issued invite
   // (kind:'invite'); a self-service sign-in link (kind!=='invite') for an unknown
-  // email mints no principal — we burn the link and redirect to the same generic
-  // outcome, so a stranger and a real user are indistinguishable (no enumeration).
+  // email mints no principal — we redirect to the same generic outcome (the link
+  // is already claimed above), so a stranger and a real user are indistinguishable
+  // (no enumeration).
   let user = await db.query.users.findFirst({ where: eq(users.email, link.email) });
   if (!user) {
     if (link.kind !== 'invite') {
-      await db.update(magicLinks).set({ usedAt: new Date() }).where(eq(magicLinks.id, link.id));
       return c.redirect('/');
     }
     const id = nanoid();
@@ -244,8 +257,6 @@ auth.get('/magic-link/consume', async (c) => {
     user = await db.query.users.findFirst({ where: eq(users.id, id) });
   }
   if (!user) throw new HTTPError('INTERNAL', 'failed to create user', 500);
-
-  await db.update(magicLinks).set({ usedAt: new Date() }).where(eq(magicLinks.id, link.id));
 
   const session = await createSession(user.id);
   setCookie(c, SESSION_COOKIE, session.id, { ...cookieOpts, expires: session.expiresAt });

@@ -55,4 +55,19 @@ describe('checkRateLimit', () => {
     // A different scope for the SAME key is also a separate counter.
     expect(await checkRateLimit(db, 'magic_link', 'ip:1.1.1.1', at)).toBe(true);
   });
+
+  test('FAILS OPEN when the store errors (availability > throttle)', async () => {
+    // CR-C1 / audit A1: the throttle store is a safety net, not the auth boundary.
+    // If the counter write throws (disk full, locked db, schema drift), the request
+    // must be ALLOWED, not 500'd — bricking /login on a throttle-table fault is worse
+    // than missing one rate-limit tick. This pins that contract: a refactor that
+    // turned the catch into fail-CLOSED (return false / rethrow) would go RED here.
+    const throwingDb = {
+      insert() {
+        throw new Error('simulated store failure');
+      },
+    } as unknown as Parameters<typeof checkRateLimit>[0];
+
+    expect(await checkRateLimit(throwingDb, 'login', 'ip:9.9.9.9', 1_700_000_000_000)).toBe(true);
+  });
 });

@@ -41,6 +41,28 @@ describe('normalizeEmail (CR-A1)', () => {
   });
 });
 
+describe('users.email case-insensitive unique index (CR-C1 / audit B1)', () => {
+  test('the DB floor REJECTS a case-colliding email even if app normalization is bypassed', async () => {
+    // Migration 0036 adds a COLLATE NOCASE unique index on users.email. The
+    // app-layer normalizeEmail tests cover the happy floor; THIS pins the DB floor
+    // itself — the "even if a future code path forgets to normalize" guarantee the
+    // migration comment claims. Insert two case-variant emails directly (bypassing
+    // the route's normalization); the second must violate the unique index.
+    const { db } = await makeBareTestDb();
+    await db.insert(users).values({ id: nanoid(), email: 'Victim@x.com', name: 'V' });
+    let threw: unknown;
+    try {
+      await db.insert(users).values({ id: nanoid(), email: 'victim@x.com', name: 'v' });
+    } catch (err) {
+      threw = err;
+    }
+    expect(String(threw)).toMatch(/UNIQUE/i);
+    // And only the first row exists — the case-variant was rejected, not merged.
+    const rows = await db.select().from(users);
+    expect(rows).toHaveLength(1);
+  });
+});
+
 describe('readSession expiry', () => {
   test('an expired session returns null, a future-dated session returns the user', async () => {
     const { db } = await makeBareTestDb();

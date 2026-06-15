@@ -243,6 +243,73 @@ test('consume of an INVITE link DOES create the user as member, redirects, sets 
   expect(res.headers.get('set-cookie')).toContain('folio_session=');
 });
 
+// --- Single-use consume is ATOMIC (CR-C1, audit A2) ---
+// The consume handler claims the link with a single UPDATE gated on
+// `used_at IS NULL` BEFORE any user creation / session. Two consumes of the same
+// invite token can no longer both pass a read-check and both mint a principal —
+// SQLite serializes the writes, exactly ONE claims the row (rowsAffected===1) and
+// proceeds; the loser sees 0 rows and is rejected with 400. The load-bearing
+// guarantee: a claimed-link consume NEVER creates a user.
+
+test('a SECOND sequential consume of an invite token is rejected and mints no second user (CR-C1)', async () => {
+  // The structural contract (deterministic even under bun:sqlite single-process
+  // write serialization). First consume claims the link → 302 + creates exactly
+  // one user. Second consume of the SAME token sees used_at != NULL → claimed.length
+  // === 0 → 400, and crucially creates NO further user. RED before the CAS: the old
+  // read-check at line 224 (`if (link.usedAt) throw`) would catch the second consume
+  // here too — BUT the old code wrote used_at only AFTER creating the user, so the
+  // RED that bites is the concurrent double-mint below. This sequential case pins the
+  // single-use contract that must hold after the refactor.
+  const { app, db } = await makeBareTestDb();
+  const token = await seedMagicLink(db, 'invitee@x.com', 'invite');
+  const url = `/api/v1/auth/magic-link/consume?token=${token}`;
+
+  const first = await app.request(url, { redirect: 'manual' });
+  expect(first.status).toBe(302);
+  expect(first.headers.get('set-cookie')).toContain('folio_session=');
+
+  const second = await app.request(url, { redirect: 'manual' });
+  expect(second.status).toBe(400);
+  expect((await second.json()).error.code).toBe('INVALID_TOKEN');
+
+  // The durable guarantee: exactly ONE user for this email, never two.
+  const rows = await db.select().from(users).where(eq(users.email, 'invitee@x.com'));
+  expect(rows).toHaveLength(1);
+});
+
+test('TWO concurrent consumes of one invite token: exactly one 302+cookie, one 400, exactly one user (CR-C1)', async () => {
+  // The race the CAS closes (audit A2): two concurrent consumes of the SAME invite
+  // token. Before the fix both could pass the line-224 read-check (used_at still
+  // NULL for both reads) and both reach the INVITE branch that INSERTs a users row,
+  // minting TWO principals. After the CAS, the up-front atomic claim
+  // (UPDATE ... WHERE id=? AND used_at IS NULL) lets exactly one win
+  // (rowsAffected===1 → proceeds) and the loser gets 0 rows → 400, BEFORE any user
+  // is created — so a lost race never creates a user.
+  //
+  // Determinism note: bun:sqlite serializes writes single-process, so the OS may not
+  // actually let the race be lost without the fix; the INVARIANT we assert is
+  // outcome-shaped and holds deterministically either way — exactly one success,
+  // exactly one user. The sequential test above is the deterministic RED anchor.
+  const { app, db } = await makeBareTestDb();
+  const token = await seedMagicLink(db, 'racer@x.com', 'invite');
+  const url = `/api/v1/auth/magic-link/consume?token=${token}`;
+
+  const [a, b] = await Promise.all([
+    app.request(url, { redirect: 'manual' }),
+    app.request(url, { redirect: 'manual' }),
+  ]);
+  const statuses = [a.status, b.status].sort();
+  // Exactly one winner (302 + cookie) and one loser (400) — never two 302s.
+  expect(statuses).toEqual([302, 400]);
+  const winner = a.status === 302 ? a : b;
+  expect(winner.headers.get('set-cookie')).toContain('folio_session=');
+
+  // The load-bearing assertion: a concurrent double-consume of an invite mints
+  // exactly ONE principal — never two.
+  const rows = await db.select().from(users).where(eq(users.email, 'racer@x.com'));
+  expect(rows).toHaveLength(1);
+});
+
 test('existing user + signin link still signs in: 302 + session cookie (M1/H5)', async () => {
   const { app, db, seed } = await makeTestApp();
   const token = await seedMagicLink(db, seed.user.email, 'signin');
