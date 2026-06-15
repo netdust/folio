@@ -50,20 +50,49 @@ describe('crypto wrong-key failure', () => {
   });
 });
 
-describe('crypto key-length guard', () => {
-  test('a non-32-byte FOLIO_MASTER_KEY makes the module throw at load', async () => {
-    // The guard is a top-level throw at import, so exercise it by importing crypto.ts
-    // fresh in a child Bun process under a bad key. 'ab'×8 = 16 hex = 8 bytes ≠ 32.
+describe('crypto key-length guard (fail-closed on a bad master key)', () => {
+  // The fail-closed posture (ARCHITECTURE-INVARIANTS inv. 2/7) is: an invalid
+  // FOLIO_MASTER_KEY must STOP the app at load — never boot with a degraded key.
+  // Two guards enforce it in sequence: env.ts's Zod regex /^[0-9a-f]{64}$/ rejects
+  // a malformed key FIRST, and crypto.ts's `KEY.length !== 32` is defense-in-depth
+  // behind it. We assert the SPECIFIC failure cause (not a bare exit code), so a
+  // path typo or unrelated load error can't masquerade as the guard firing — the
+  // test-effectiveness blind spot a bare `catch(()=>exit(7))` had.
+  async function loadCryptoWithKey(badKey: string): Promise<{ code: number; stderr: string }> {
     const proc = Bun.spawn(
-      ['bun', '-e', "import('./src/lib/crypto.ts').then(()=>process.exit(0)).catch(()=>process.exit(7))"],
+      [
+        'bun',
+        '-e',
+        "import('./src/lib/crypto.ts').then(()=>process.exit(0)).catch((e)=>{console.error(String(e?.message ?? e));process.exit(7)})",
+      ],
       {
-        cwd: import.meta.dir.replace(/\/src\/lib$/, ''),
-        env: { ...process.env, FOLIO_MASTER_KEY: 'ab'.repeat(8) },
+        cwd: import.meta.dir.replace(/\/src\/lib$/, ''), // → apps/server
+        env: { ...process.env, FOLIO_MASTER_KEY: badKey },
         stderr: 'pipe',
         stdout: 'pipe',
       },
     );
-    expect(await proc.exited).toBe(7);
+    const code = await proc.exited;
+    const stderr = await new Response(proc.stderr).text();
+    return { code, stderr };
+  }
+
+  // Matches whichever key-validation guard fired — env.ts's "64 hex" Zod message
+  // or crypto.ts's "decode to exactly 32 bytes" — but NOT a module-not-found / path
+  // error, so the assertion is honest about WHAT failed closed.
+  const KEY_GUARD = /64 hex|32 bytes|FOLIO_MASTER_KEY/i;
+
+  test('a non-hex / short FOLIO_MASTER_KEY fails closed at load with a key-validation error', async () => {
+    const { code, stderr } = await loadCryptoWithKey('ab'.repeat(8)); // 16 hex = 8 bytes ≠ 32
+    expect(code).toBe(7);
+    expect(stderr).toMatch(KEY_GUARD); // the key guard, not a path/import error
+    expect(stderr).not.toMatch(/Cannot find module|Module not found|resolve/i);
+  });
+
+  test('an empty FOLIO_MASTER_KEY also fails closed with a key-validation error', async () => {
+    const { code, stderr } = await loadCryptoWithKey('');
+    expect(code).toBe(7);
+    expect(stderr).toMatch(KEY_GUARD);
   });
 });
 

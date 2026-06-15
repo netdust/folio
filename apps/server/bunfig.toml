@@ -1,0 +1,12 @@
+# Bun test config for @folio/server.
+#
+# `preload` runs BEFORE any test module is imported — including test files that
+# import env.ts / crypto.ts DIRECTLY (not via the test harness). env-setup.ts
+# forces the deterministic test FOLIO_MASTER_KEY so the suite is independent of
+# any ambient apps/server/.env a developer has locally. Without this preload,
+# Bun auto-loads .env first and crypto.ts derives the WRONG key at module load,
+# producing a false-RED on the ciphertext-format-stability fixture (H9 mirror:
+# the one test meant to catch a key-bricking refactor would cry wolf every local
+# run). See src/test/env-setup.ts and src/lib/crypto.test.ts.
+[test]
+preload = ["./src/test/env-setup.ts"]
