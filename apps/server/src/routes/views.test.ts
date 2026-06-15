@@ -117,7 +117,7 @@ test('DELETE /:id 204', async () => {
 
 test('POST /views accepts columnOrder and round-trips it', async () => {
   const { app, seed } = await makeTestApp();
-  const res = await app.request(`/api/v1/w/acme/p/web/views`, {
+  const res = await app.request('/api/v1/w/acme/p/web/views', {
     method: 'POST',
     headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -130,7 +130,7 @@ test('POST /views accepts columnOrder and round-trips it', async () => {
   expect(res.status).toBe(201);
   const created = await res.json();
   const id = (created.data?.view ?? created.data ?? created.view).id;
-  const get = await app.request(`/api/v1/w/acme/p/web/views`, {
+  const get = await app.request('/api/v1/w/acme/p/web/views', {
     headers: { Cookie: seed.sessionCookie },
   });
   const list = await get.json();
@@ -141,7 +141,7 @@ test('POST /views accepts columnOrder and round-trips it', async () => {
 test('PATCH /views/:id accepts columnOrder updates', async () => {
   const { app, seed } = await makeTestApp();
   const created = await (
-    await app.request(`/api/v1/w/acme/p/web/views`, {
+    await app.request('/api/v1/w/acme/p/web/views', {
       method: 'POST',
       headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: 'V', type: 'list' }),

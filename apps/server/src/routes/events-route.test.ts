@@ -512,7 +512,7 @@ test('S3: GET /w/:wslug/documents/<trigger-slug>/events 404s for narrowed agent'
   // so the route has a row to find by slug.
   const triggerSlug = 'builtin-on-mention';
   await db.insert(documents).values({
-    id: 'tr-' + nanoid(),
+    id: `tr-${nanoid()}`,
     workspaceId: seed.workspace.id,
     projectId: null,
     type: 'trigger',

@@ -81,7 +81,7 @@ function setup(): Database {
 
 function role(sqlite: Database, email: string): string {
   return (
-    sqlite.prepare(`SELECT role FROM users WHERE email = ?`).get(email) as {
+    sqlite.prepare('SELECT role FROM users WHERE email = ?').get(email) as {
       role: string;
     }
   ).role;

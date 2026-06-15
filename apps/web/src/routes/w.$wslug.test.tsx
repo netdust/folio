@@ -161,7 +161,6 @@ function setup({ initialPath = '/w/acme/p/sales/work-items', onFetch }: SetupOpt
 // The layout now mounts the provider-health + reactor-halt banners, whose
 // E-2b hooks open an EventSource. jsdom has none, so stub a no-op constructor.
 class NoopEventSource {
-  constructor(_url: string) {}
   addEventListener() {}
   removeEventListener() {}
   close() {}

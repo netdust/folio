@@ -203,9 +203,7 @@ export function FrontmatterForm({
                 <ProviderModelField
                   wslug={wslug}
                   provider={typeof value === 'string' ? value : 'anthropic'}
-                  model={
-                    typeof frontmatter['model'] === 'string' ? (frontmatter['model'] as string) : ''
-                  }
+                  model={typeof frontmatter.model === 'string' ? (frontmatter.model as string) : ''}
                   onChange={(next) =>
                     onFrontmatterCommit({ provider: next.provider, model: next.model })
                   }
@@ -427,7 +425,6 @@ function AddField({
       </PopoverTrigger>
       <PopoverContent align="start" className="w-[240px] p-2">
         <input
-          autoFocus
           placeholder="Field name"
           value={name}
           onChange={(e) => onChange(e.target.value)}

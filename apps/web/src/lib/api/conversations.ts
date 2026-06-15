@@ -228,6 +228,7 @@ export interface CreateConversationResult {
 
 export function useCreateConversation() {
   const qc = useQueryClient();
+  // biome-ignore lint/suspicious/noConfusingVoidType: `| void` is the TanStack idiom that makes the mutation variable OPTIONAL — callers do `mutateAsync()` with no args; `| undefined` would force an explicit argument (TS2554)
   return useMutation<CreateConversationResult, ApiError, { title?: string } | void>({
     mutationFn: (vars) =>
       client.post<CreateConversationResult>('/api/v1/conversations', vars ?? undefined),

@@ -793,7 +793,7 @@ describe('DocumentSlideover', () => {
             headers: { 'content-type': 'application/json' },
           });
         }
-        if (u.includes(`/documents/${slug}`) && !u.includes('/documents/' + slug + '/comments')) {
+        if (u.includes(`/documents/${slug}`) && !u.includes(`/documents/${slug}/comments`)) {
           if (method === 'PATCH' && opts.onPatch) {
             try {
               opts.onPatch(init?.body ? JSON.parse(String(init.body)) : null);

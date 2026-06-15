@@ -45,7 +45,6 @@ export function LogActivityButton({ wslug, pslug, slug }: Props) {
       </PopoverTrigger>
       <PopoverContent align="end" className="w-[280px] p-2.5">
         <textarea
-          autoFocus
           value={note}
           onChange={(e) => setNote(e.target.value)}
           placeholder="What happened? (e.g. Called, left voicemail)"

@@ -355,6 +355,7 @@ export function TriggerForm({ value, onChange, workspaceSlug, projectId }: Trigg
               </p>
             ) : null}
             {filterRows.map((row, idx) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: positional form rows — the row data model + updateFilterRow(idx) callbacks are index-addressed by design, so index IS the stable identity
               <div key={idx} className="flex items-center gap-2">
                 <input
                   type="text"

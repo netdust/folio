@@ -29,7 +29,6 @@ mock.module('openai', () => ({
       },
     };
     models = { list: mockModelsList };
-    constructor(_: unknown) {}
   },
 }));
 

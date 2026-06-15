@@ -71,14 +71,15 @@ export function ListView({ wslug, pslug, tslug }: Props) {
     const nextSearch: Record<string, unknown> = { ...search };
     // Clear all known filter keys before writing current state (so removing a filter actually removes the param)
     for (const k of ['status', 'priority', 'labels', 'assignee', 'updated_since']) {
+      // biome-ignore lint/performance/noDelete: must REMOVE the key so the URL param drops; `= undefined` keeps a stale param
       delete nextSearch[k];
     }
     for (const c of next) {
-      if (c.kind === 'status') nextSearch['status'] = c.values;
-      if (c.kind === 'priority') nextSearch['priority'] = c.value;
-      if (c.kind === 'labels') nextSearch['labels'] = c.values;
-      if (c.kind === 'assignee') nextSearch['assignee'] = c.value;
-      if (c.kind === 'updated_since') nextSearch['updated_since'] = c.value;
+      if (c.kind === 'status') nextSearch.status = c.values;
+      if (c.kind === 'priority') nextSearch.priority = c.value;
+      if (c.kind === 'labels') nextSearch.labels = c.values;
+      if (c.kind === 'assignee') nextSearch.assignee = c.value;
+      if (c.kind === 'updated_since') nextSearch.updated_since = c.value;
     }
     void navigate({ to: '.', search: nextSearch, replace: false });
   };
@@ -89,7 +90,9 @@ export function ListView({ wslug, pslug, tslug }: Props) {
       nextSearch.sort = next.key;
       nextSearch.dir = next.dir;
     } else {
+      // biome-ignore lint/performance/noDelete: must REMOVE the keys so the URL params drop; `= undefined` keeps a stale ?sort= key
       delete nextSearch.sort;
+      // biome-ignore lint/performance/noDelete: see above — drop the URL param, don't set it undefined
       delete nextSearch.dir;
     }
     void navigate({ to: '.', search: nextSearch, replace: false });

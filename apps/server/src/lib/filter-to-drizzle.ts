@@ -37,7 +37,7 @@ function columnFor(key: string) {
 }
 
 function fmExpr(key: string) {
-  return sql`json_extract(${documents.frontmatter}, ${'$.' + key})`;
+  return sql`json_extract(${documents.frontmatter}, ${`$.${key}`})`;
 }
 
 function cmpToSql(key: string, op: string, value: unknown): SQL {

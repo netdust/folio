@@ -35,8 +35,6 @@ export function urgencyClasses(u: DueUrgency): string {
       return 'text-danger';
     case 'soon':
       return 'text-warning';
-    case 'later':
-    case 'none':
     default:
       return '';
   }

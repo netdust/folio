@@ -329,6 +329,7 @@ export async function createRun(args: CreateRunArgs): Promise<CreateRunResult> {
  */
 export function redactRunForApi(row: Document): Document {
   const fm = { ...(row.frontmatter as Record<string, unknown>) };
+  // biome-ignore lint/performance/noDelete: redaction must REMOVE the key, not set it to undefined — `'system_prompt' in fm` must be false after redaction
   delete fm.system_prompt;
   return { ...row, frontmatter: fm };
 }
@@ -1528,7 +1529,7 @@ async function maybeEmitProviderHealthEdge(
     .set({
       providerHealth: sql`json_set(
         ${workspaces.providerHealth},
-        ${'$.' + args.provider},
+        ${`$.${args.provider}`},
         json(${JSON.stringify(next)})
       )`,
     })

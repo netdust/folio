@@ -24,9 +24,9 @@ test('the actual migrations directory contains zero drift', () => {
 
 test('scanFileForDrift catches a synthetic DROP INDEX against an allow-list name', () => {
   const synthetic =
-    `-- A fake auto-generated migration\n` +
-    `DROP INDEX documents_runs_pending_idx;\n` +
-    `CREATE INDEX something_else ON documents(id);\n`;
+    '-- A fake auto-generated migration\n' +
+    'DROP INDEX documents_runs_pending_idx;\n' +
+    'CREATE INDEX something_else ON documents(id);\n';
   const issues = scanFileForDrift('synthetic.sql', synthetic);
   expect(issues.length).toBe(1);
   expect(issues[0]!.indexName).toBe('documents_runs_pending_idx');
@@ -34,14 +34,14 @@ test('scanFileForDrift catches a synthetic DROP INDEX against an allow-list name
 });
 
 test('scanFileForDrift catches DROP INDEX IF EXISTS form too', () => {
-  const synthetic = `DROP INDEX IF EXISTS \`documents_runs_by_chain_idx\`;\n`;
+  const synthetic = 'DROP INDEX IF EXISTS `documents_runs_by_chain_idx`;\n';
   const issues = scanFileForDrift('synthetic.sql', synthetic);
   expect(issues.length).toBe(1);
   expect(issues[0]!.indexName).toBe('documents_runs_by_chain_idx');
 });
 
 test('scanFileForDrift ignores DROP INDEX against names NOT on the allow-list', () => {
-  const synthetic = `DROP INDEX some_unrelated_index;\n`;
+  const synthetic = 'DROP INDEX some_unrelated_index;\n';
   const issues = scanFileForDrift('synthetic.sql', synthetic);
   expect(issues.length).toBe(0);
 });

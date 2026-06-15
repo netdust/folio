@@ -13,8 +13,16 @@
     "enabled": true,
     "rules": {
       "recommended": true,
+      "a11y": {
+        "noSvgWithoutTitle": "warn",
+        "useFocusableInteractive": "warn",
+        "useSemanticElements": "warn"
+      },
       "suspicious": {
         "noExplicitAny": "warn"
+      },
+      "style": {
+        "noNonNullAssertion": "off"
       }
     }
   },

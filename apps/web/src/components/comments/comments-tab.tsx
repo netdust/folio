@@ -86,7 +86,6 @@ function InlineEditRow({ initialBody, onSave, onCancel, saving }: InlineEditRowP
         onChange={(e) => setBody(e.target.value)}
         rows={4}
         className="w-full resize-y rounded-md border border-border-light bg-transparent px-2.5 py-1.5 text-sm text-fg placeholder:text-fg-3 focus:outline-none focus:ring-1 focus:ring-primary"
-        autoFocus
       />
       <div className="flex items-center justify-end gap-2">
         <Button
@@ -374,7 +373,6 @@ export function CommentsTab({
       <div className="px-3 flex items-center">
         <button
           type="button"
-          role="button"
           aria-pressed={showInternal}
           onClick={toggleShowInternal}
           className="text-xs text-fg-3 hover:text-fg transition-colors rounded px-2 py-1 hover:bg-card"

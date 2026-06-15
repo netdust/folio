@@ -143,10 +143,7 @@ instanceAiKeysRoute.post(
     const paidResidualLive = provider !== 'ollama';
     if (paidResidualLive) {
       console.warn(
-        `[ai-keys] denial-of-wallet residual is now LIVE: a paid provider key ` +
-          `(${provider}/${label}) was added to the instance store. Per-key usage ` +
-          `CAPS are NOT built (metered residual — see spec). Any agent in any ` +
-          `workspace can now draw on this key.`,
+        `[ai-keys] denial-of-wallet residual is now LIVE: a paid provider key (${provider}/${label}) was added to the instance store. Per-key usage CAPS are NOT built (metered residual — see spec). Any agent in any workspace can now draw on this key.`,
       );
     }
 

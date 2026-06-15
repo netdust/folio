@@ -291,7 +291,7 @@ async function main(): Promise<void> {
     //    { provider, apiKey, label?, baseUrl? }. The registering user is the
     //    first user → instance owner, so the session cookie can write it.
     assert2xx(
-      await api('POST', `/api/v1/instance/ai-keys`, {
+      await api('POST', '/api/v1/instance/ai-keys', {
         provider: 'anthropic',
         apiKey: ANTHROPIC_KEY,
         label: 'default',
@@ -343,9 +343,8 @@ async function main(): Promise<void> {
       { frontmatter: { assignee: `agent:${agentSlug}` } },
     );
     assert2xx(patchRes, 'PATCH assign agent');
-    const patchedAssignee = (
-      data<{ frontmatter?: Record<string, unknown> }>(patchRes).frontmatter ?? {}
-    ).assignee;
+    const patchedAssignee = data<{ frontmatter?: Record<string, unknown> }>(patchRes).frontmatter
+      ?.assignee;
     console.log(`[B1] PATCH response assignee = ${truncate(patchedAssignee)}`);
     flushServerLines();
 

@@ -139,7 +139,6 @@ export function TableAddColumn({ onSubmit, tables = [] }: Props) {
             onChange={(e) => setKey(e.target.value)}
             placeholder="e.g. next_action"
             className="rounded-sm border border-border-light bg-content px-2 py-1 text-sm outline-none focus:border-border"
-            autoFocus
           />
 
           <label className="text-[11px] uppercase tracking-wide text-fg-3" htmlFor="add-col-label">

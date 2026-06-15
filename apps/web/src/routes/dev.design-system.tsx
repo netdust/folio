@@ -328,6 +328,7 @@ function Icon({ path }: { path: string }) {
         .split('M')
         .filter(Boolean)
         .map((p, i) => (
+          // biome-ignore lint/suspicious/noArrayIndexKey: dev-only page splitting a static SVG path string into non-reordering segments, index key is stable
           <path key={i} d={`M${p}`} />
         ))}
     </svg>

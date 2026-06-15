@@ -100,7 +100,7 @@ export async function assertAgentAllowListWidening(
   // For CREATE: absent projects triggers Zod's `.default(['*'])` downstream.
   // Treat as a widening request to wildcard.
   const nextProjects = hasProjectsKey
-    ? (nextFrontmatter as Record<string, unknown>)['projects']
+    ? (nextFrontmatter as Record<string, unknown>).projects
     : ['*'];
 
   // If a caller passes projects as something non-array (e.g. null, string),
@@ -178,7 +178,7 @@ export async function assertAgentToolsWidening(
   const hasToolsKey = nextFrontmatter !== undefined && 'tools' in nextFrontmatter;
   if (!hasToolsKey) return; // create: Zod rejects; patch: no-op
 
-  const nextTools = (nextFrontmatter as Record<string, unknown>)['tools'];
+  const nextTools = (nextFrontmatter as Record<string, unknown>).tools;
   if (!Array.isArray(nextTools)) return; // let Zod surface the type error
 
   const callingAgent = await resolveCallingAgent(token);

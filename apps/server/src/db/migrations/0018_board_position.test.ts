@@ -11,7 +11,7 @@ test('0018 adds board_position to documents', () => {
   sqlite.exec('PRAGMA foreign_keys = ON');
   const db = drizzle(sqlite);
   migrate(db, { migrationsFolder: MIGRATIONS_FOLDER });
-  const cols = (sqlite.query(`PRAGMA table_info(documents)`).all() as Array<{ name: string }>).map(
+  const cols = (sqlite.query('PRAGMA table_info(documents)').all() as Array<{ name: string }>).map(
     (c) => c.name,
   );
   expect(cols).toContain('board_position');

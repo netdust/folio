@@ -26,7 +26,7 @@ function seedAgent(
 }
 
 function readAgent(sqlite: Database, id: string): { body: string; frontmatter: string } {
-  return sqlite.prepare(`SELECT body, frontmatter FROM documents WHERE id = ?`).get(id) as {
+  return sqlite.prepare('SELECT body, frontmatter FROM documents WHERE id = ?').get(id) as {
     body: string;
     frontmatter: string;
   };

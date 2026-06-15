@@ -37,7 +37,7 @@ export default defineConfig({
   webServer: [
     {
       // API server with isolated DB
-      command: `bun run --hot src/index.ts`,
+      command: 'bun run --hot src/index.ts',
       cwd: '../server',
       env: {
         PORT: String(API_PORT),

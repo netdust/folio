@@ -38,7 +38,7 @@ test('F12: builtin-on-assignment $event.agent placeholder matches actual agent.t
 
   const builtin = BUILTIN_TRIGGER_DEFS.find((t) => t.slug === 'builtin-on-assignment');
   expect(builtin).toBeTruthy();
-  const placeholder = builtin!.frontmatter['agent'];
+  const placeholder = builtin!.frontmatter.agent;
   const key = placeholderKey(placeholder);
   expect(key).toBe('agent');
   // The key referenced by the placeholder MUST exist on the payload.
@@ -69,9 +69,9 @@ test('B2: seedBuiltinTriggers emits a document.created event per inserted row', 
   expect(rows.length).toBe(seededSlugs.length);
   for (const r of rows) {
     const payload = r.payload as Record<string, unknown>;
-    expect(seededSlugs).toContain(payload['slug'] as string);
-    expect(payload['type']).toBe('trigger');
-    expect(payload['builtin']).toBe(true);
+    expect(seededSlugs).toContain(payload.slug as string);
+    expect(payload.type).toBe('trigger');
+    expect(payload.builtin).toBe(true);
   }
 });
 
@@ -88,7 +88,7 @@ test('F12: builtin-on-mention $event.agent_slug placeholder matches actual comme
   const payload = row!.payload as Record<string, unknown>;
 
   const builtin = BUILTIN_TRIGGER_DEFS.find((t) => t.slug === 'builtin-on-mention');
-  const placeholder = builtin!.frontmatter['agent'];
+  const placeholder = builtin!.frontmatter.agent;
   const key = placeholderKey(placeholder);
   expect(key).toBe('agent_slug');
   expect(payload).toHaveProperty(key as string);

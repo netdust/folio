@@ -4014,7 +4014,7 @@ describe('transitionRun → maybeEmitProviderHealthEdge', () => {
       // Async handler that never resolves — proxy for a slow SSE writer.
       return new Promise(() => {
         /* never resolves */
-      }) as unknown as void;
+      }) as unknown as undefined;
     });
 
     const created = await createRun({

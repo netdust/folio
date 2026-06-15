@@ -18,6 +18,7 @@ export function SlashMenu({ ctx, query, rect, onClose }: Props) {
   const items = useMemo(() => filterSlash(slashRegistry, query), [query]);
   const [active, setActive] = useState(0);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: resets active item on query change only; setActive is a stable setter
   useEffect(() => setActive(0), [query]);
 
   const selectItem = (item: SlashItem) => {

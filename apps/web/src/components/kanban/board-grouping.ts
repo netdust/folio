@@ -33,7 +33,7 @@ export function buildColumns({ docs, groupBy, field, statuses }: Args): BoardCol
     return unset.docIds.length > 0 ? [...cols, unset] : cols;
   }
 
-  const valueOf = (d: DocumentSummary): string | null => {
+  const getGroupValue = (d: DocumentSummary): string | null => {
     const v = (d.frontmatter as Record<string, unknown>)[groupBy];
     if (v === null || v === undefined || v === '') return null;
     return String(v);
@@ -45,7 +45,7 @@ export function buildColumns({ docs, groupBy, field, statuses }: Args): BoardCol
   } else {
     const seen = new Set<string>();
     for (const d of docs) {
-      const v = valueOf(d);
+      const v = getGroupValue(d);
       if (v !== null) seen.add(v);
     }
     values = [...seen].sort((a, b) => a.localeCompare(b));
@@ -55,7 +55,7 @@ export function buildColumns({ docs, groupBy, field, statuses }: Args): BoardCol
   const byVal = new Map(cols.map((c) => [c.value, c]));
   const unset: BoardColumn = { value: null, label: 'Unset', docIds: [] };
   for (const d of docs) {
-    const v = valueOf(d);
+    const v = getGroupValue(d);
     const c = v !== null && byVal.has(v) ? byVal.get(v)! : unset;
     c.docIds.push(d.id);
   }

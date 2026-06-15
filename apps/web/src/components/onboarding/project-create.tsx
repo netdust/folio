@@ -72,7 +72,6 @@ export function ProjectCreate({ wslug, open, onOpenChange }: Props) {
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 required
-                autoFocus
               />
             </div>
             <div>

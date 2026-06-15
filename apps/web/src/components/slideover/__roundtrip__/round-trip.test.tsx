@@ -150,6 +150,7 @@ describe('Slideover round-trip', () => {
     vi.stubGlobal('fetch', fetchMock);
   });
 
+  // biome-ignore lint/suspicious/noDuplicateTestHooks: deliberate second beforeEach — fetch-mock setup (above) and fake-timer setup kept separate for readability; run order is preserved
   beforeEach(() => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
   });

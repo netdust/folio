@@ -35,7 +35,7 @@ afterEach(() => {
 /** Install a provider stub whose `stream` THROWS the given error on first pull. */
 function installThrowingProviderStub(err: Error): void {
   const stub: AIProvider = {
-    // eslint-disable-next-line require-yield
+    // biome-ignore lint/correctness/useYield: intentional no-yield generator fixture — stream throws on first pull to exercise the error-surface path
     async *stream() {
       throw err;
     },

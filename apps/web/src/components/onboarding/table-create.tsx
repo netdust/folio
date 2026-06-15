@@ -69,7 +69,6 @@ export function TableCreate({ wslug, pslug, open, onOpenChange }: Props) {
                 onChange={(e) => setName(e.target.value)}
                 maxLength={80}
                 required
-                autoFocus
               />
             </div>
             <div>

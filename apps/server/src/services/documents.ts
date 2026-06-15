@@ -45,7 +45,7 @@ export function stripReservedFrontmatter(fm: Record<string, unknown>): Record<st
 
 export function getAssignee(fm: unknown): string | null {
   if (typeof fm !== 'object' || fm === null) return null;
-  const v = (fm as Record<string, unknown>)['assignee'];
+  const v = (fm as Record<string, unknown>).assignee;
   return typeof v === 'string' ? v : null;
 }
 
@@ -607,11 +607,11 @@ export async function createDocument(args: CreateDocumentArgs): Promise<CreateDo
         where: and(eq(documents.workspaceId, ws.id), eq(documents.type, 'agent')),
       });
       const ownerAgent = allAgents.find(
-        (a) => (a.frontmatter as Record<string, unknown>)['api_token_id'] === token.id,
+        (a) => (a.frontmatter as Record<string, unknown>).api_token_id === token.id,
       );
       if (ownerAgent) {
         const ownerFm = ownerAgent.frontmatter as Record<string, unknown>;
-        const maxDepth = (ownerFm['max_delegation_depth'] as number | undefined) ?? 2;
+        const maxDepth = (ownerFm.max_delegation_depth as number | undefined) ?? 2;
         const lookup = {
           findAgentBySlug: async (slugIn: string) => {
             const r = await db.query.documents.findFirst({
@@ -624,8 +624,8 @@ export async function createDocument(args: CreateDocumentArgs): Promise<CreateDo
             if (!r) return null;
             const fm = r.frontmatter as Record<string, unknown>;
             return {
-              parent: (fm['parent_agent'] as string | null | undefined) ?? null,
-              max_delegation_depth: (fm['max_delegation_depth'] as number | undefined) ?? 2,
+              parent: (fm.parent_agent as string | null | undefined) ?? null,
+              max_delegation_depth: (fm.max_delegation_depth as number | undefined) ?? 2,
             };
           },
         };
@@ -678,7 +678,7 @@ export async function createDocument(args: CreateDocumentArgs): Promise<CreateDo
     });
     if (input.type === 'work_item' && p) {
       const assignee = getAssignee(input.frontmatter);
-      if (assignee && assignee.startsWith('agent:')) {
+      if (assignee?.startsWith('agent:')) {
         const agentSlug = assignee.slice('agent:'.length);
         // S2: enrich agent.task.assigned with agent_id. Slugs are mutable;
         // dispatchers consuming this event need an immutable handle so an
@@ -976,7 +976,7 @@ export async function updateDocument(args: UpdateDocumentArgs): Promise<Document
     if (existing.type === 'work_item' && p) {
       const prevAssignee = getAssignee(existing.frontmatter);
       const nextAssignee = getAssignee(updated.frontmatter);
-      if (nextAssignee && nextAssignee.startsWith('agent:') && prevAssignee !== nextAssignee) {
+      if (nextAssignee?.startsWith('agent:') && prevAssignee !== nextAssignee) {
         const agentSlug = nextAssignee.slice('agent:'.length);
         const agentRow = await tx.query.documents.findFirst({
           where: and(
@@ -1144,7 +1144,7 @@ export async function deleteDocument(args: DeleteDocumentArgs): Promise<void> {
     // is now redundant but harmless if any rows pre-date the cascade FK.
     await tx.delete(documents).where(eq(documents.id, existing.id));
     if (existing.type === 'agent') {
-      const apiTokenId = (existing.frontmatter as Record<string, unknown>)['api_token_id'];
+      const apiTokenId = (existing.frontmatter as Record<string, unknown>).api_token_id;
       if (typeof apiTokenId === 'string') {
         await tx.delete(apiTokens).where(eq(apiTokens.id, apiTokenId));
       }

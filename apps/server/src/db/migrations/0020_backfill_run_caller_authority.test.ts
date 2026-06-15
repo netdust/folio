@@ -51,7 +51,7 @@ function seedRun(sqlite: Database, id: string, frontmatter: Record<string, unkno
 }
 
 function readFrontmatter(sqlite: Database, id: string): Record<string, unknown> {
-  const row = sqlite.prepare(`SELECT frontmatter FROM documents WHERE id = ?`).get(id) as {
+  const row = sqlite.prepare('SELECT frontmatter FROM documents WHERE id = ?').get(id) as {
     frontmatter: string;
   };
   return JSON.parse(row.frontmatter) as Record<string, unknown>;

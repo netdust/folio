@@ -108,6 +108,7 @@ export function DocumentSlideover({ wslug, pslug }: Props) {
   // the header — NocoDB-style single row — AND so a tab switch doesn't remount
   // the draft-owning inner. Resets to Fields whenever a different doc opens.
   const [tab, setTab] = useState<DocTabValue>('fields');
+  // biome-ignore lint/correctness/useExhaustiveDependencies: intentionally resets to Fields ONLY when a different doc opens ([doc?.id]); setTab is a stable setter
   useEffect(() => {
     setTab('fields');
   }, [doc?.id]);
@@ -208,6 +209,7 @@ export function DocumentSlideover({ wslug, pslug }: Props) {
     }
     prevDocRef.current = incoming;
   }
+  // biome-ignore lint/correctness/useExhaustiveDependencies: dirty-doc switch guard — must run ONLY on [search.doc] change; navigate/guard/search read live, deliberately omitted to avoid breaking the unsaved-changes race guard
   useEffect(() => {
     const incoming = pendingSwitchRef.current;
     const dirtySlug = dirtySlugRef.current;

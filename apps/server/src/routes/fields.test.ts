@@ -83,7 +83,7 @@ test('DELETE drops the pin', async () => {
 
 test('POST /fields accepts type=currency with a single ISO-4217 option', async () => {
   const { app, seed } = await makeTestApp();
-  const res = await app.request(`/api/v1/w/acme/p/web/fields`, {
+  const res = await app.request('/api/v1/w/acme/p/web/fields', {
     method: 'POST',
     headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
     body: JSON.stringify({ key: 'amount', type: 'currency', options: ['EUR'] }),
@@ -97,7 +97,7 @@ test('POST /fields accepts type=currency with a single ISO-4217 option', async (
 
 test('POST /fields 422 on currency without options', async () => {
   const { app, seed } = await makeTestApp();
-  const res = await app.request(`/api/v1/w/acme/p/web/fields`, {
+  const res = await app.request('/api/v1/w/acme/p/web/fields', {
     method: 'POST',
     headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
     body: JSON.stringify({ key: 'amount', type: 'currency' }),
@@ -107,7 +107,7 @@ test('POST /fields 422 on currency without options', async () => {
 
 test('POST /fields 422 on currency with non-ISO code', async () => {
   const { app, seed } = await makeTestApp();
-  const res = await app.request(`/api/v1/w/acme/p/web/fields`, {
+  const res = await app.request('/api/v1/w/acme/p/web/fields', {
     method: 'POST',
     headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
     body: JSON.stringify({ key: 'amount', type: 'currency', options: ['euro'] }),

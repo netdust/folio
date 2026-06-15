@@ -270,15 +270,15 @@ export type FilterClauseUrl =
 
 export function parseFilters(search: Record<string, unknown>): FilterClauseUrl[] {
   const out: FilterClauseUrl[] = [];
-  const status = arr(search['status']);
+  const status = arr(search.status);
   if (status.length) out.push({ kind: 'status', values: status });
-  const priority = str(search['priority']);
+  const priority = str(search.priority);
   if (priority) out.push({ kind: 'priority', value: priority });
-  const labels = arr(search['labels']);
+  const labels = arr(search.labels);
   if (labels.length) out.push({ kind: 'labels', values: labels });
-  const assignee = str(search['assignee']);
+  const assignee = str(search.assignee);
   if (assignee) out.push({ kind: 'assignee', value: assignee });
-  const us = str(search['updated_since']);
+  const us = str(search.updated_since);
   if (us) out.push({ kind: 'updated_since', value: us });
   return out;
 }
@@ -301,12 +301,12 @@ export function applyFrontmatterClauses(
   let out = docs;
   for (const c of clauses) {
     if (c.kind === 'priority') {
-      out = out.filter((d) => d.frontmatter?.['priority'] === c.value);
+      out = out.filter((d) => d.frontmatter?.priority === c.value);
       // Labels: AND semantics — every selected value must be present. Today's UI is
       // single-select so AND ≡ OR; revisit when multi-label filtering ships.
     } else if (c.kind === 'labels') {
       out = out.filter((d) => {
-        const labels = d.frontmatter?.['labels'];
+        const labels = d.frontmatter?.labels;
         if (!Array.isArray(labels)) return false;
         return c.values.every((v) => (labels as unknown[]).includes(v));
       });

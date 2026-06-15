@@ -325,7 +325,7 @@ test('createDocument (workspace-scoped) mints + persists an agent token bound to
   });
   expect(agentTokenPlaintext).toBeString();
   expect(agentTokenPlaintext!.length).toBeGreaterThan(20);
-  const apiTokenId = (document.frontmatter as Record<string, unknown>)['api_token_id'];
+  const apiTokenId = (document.frontmatter as Record<string, unknown>).api_token_id;
   expect(typeof apiTokenId).toBe('string');
   const row = await db.query.apiTokens.findFirst({
     where: eq(apiTokens.id, apiTokenId as string),
@@ -358,7 +358,7 @@ test('deleteDocument (workspace-scoped) on agent revokes its api token via casca
       status: null,
     },
   });
-  const apiTokenId = (document.frontmatter as Record<string, unknown>)['api_token_id'] as string;
+  const apiTokenId = (document.frontmatter as Record<string, unknown>).api_token_id as string;
   const before = await db.query.apiTokens.findFirst({
     where: eq(apiTokens.id, apiTokenId),
   });

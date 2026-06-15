@@ -238,6 +238,7 @@ export function WorkspaceDocumentSlideover({ wslug }: Props) {
     }
     prevWdocRef.current = incoming;
   }
+  // biome-ignore lint/correctness/useExhaustiveDependencies: dirty-doc switch guard — must run ONLY on [search.wdoc] change; navigate/guard/search read live, deliberately omitted to avoid breaking the unsaved-changes race guard
   useEffect(() => {
     const incoming = pendingSwitchRef.current;
     const dirtySlug = dirtySlugRef.current;

@@ -28,7 +28,7 @@ eventsRoute.get('/', async (c) => {
   // allow-list gate with projectId='' and got a confusing 403 — while empty
   // ?parent= / ?run= were silently ignored.
   const projectParam = c.req.query('project');
-  const projectId = projectParam && projectParam.trim() ? projectParam.trim() : undefined;
+  const projectId = projectParam?.trim() ? projectParam.trim() : undefined;
   const kindsParam = c.req.query('kinds');
   // S20: cap to 64 to bound the per-event filter cost. KNOWN_EVENT_KINDS
   // currently lists ~20 values; 64 is a generous ceiling that still rejects
@@ -43,9 +43,9 @@ eventsRoute.get('/', async (c) => {
         .slice(0, KINDS_MAX) as EventKind[])
     : undefined;
   const parentParam = c.req.query('parent');
-  const parentId = parentParam && parentParam.trim() ? parentParam.trim() : undefined;
+  const parentId = parentParam?.trim() ? parentParam.trim() : undefined;
   const runParam = c.req.query('run');
-  const runId = runParam && runParam.trim() ? runParam.trim() : undefined;
+  const runId = runParam?.trim() ? runParam.trim() : undefined;
   // D-7: agent + table filters for the runs UI (E-3/E-4). `?agent=` matches
   // the agent SLUG via `payload.agent`; `?table=` matches the runs table id
   // via `payload.table_id`. Both keys are now stamped uniformly across every
@@ -53,9 +53,9 @@ eventsRoute.get('/', async (c) => {
   // ADDITIONAL filters, AND-combined with the F3 allow-list + subject
   // visibility security filters below — they narrow, never widen.
   const agentParam = c.req.query('agent');
-  const agentFilter = agentParam && agentParam.trim() ? agentParam.trim() : undefined;
+  const agentFilter = agentParam?.trim() ? agentParam.trim() : undefined;
   const tableParam = c.req.query('table');
-  const tableFilter = tableParam && tableParam.trim() ? tableParam.trim() : undefined;
+  const tableFilter = tableParam?.trim() ? tableParam.trim() : undefined;
   const lastEventId = c.req.header('Last-Event-Id');
 
   // F3 — agent allow-list enforcement. SSE mounts under wScope only (no

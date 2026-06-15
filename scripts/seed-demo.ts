@@ -68,9 +68,7 @@ async function register() {
       // FOLIO_INSTANCE_OWNER). The seed drives the public API, so it can't flip
       // the server's env — surface an actionable instruction instead of a raw 403.
       throw new Error(
-        `Registration is closed on a fresh instance. Start the API with ` +
-          `FOLIO_ALLOW_BOOTSTRAP_REGISTRATION=true (so the first user becomes the ` +
-          `instance owner), then re-run this seed. Original error: ${String(err)}`,
+        `Registration is closed on a fresh instance. Start the API with FOLIO_ALLOW_BOOTSTRAP_REGISTRATION=true (so the first user becomes the instance owner), then re-run this seed. Original error: ${String(err)}`,
       );
     } else {
       throw err;
@@ -532,7 +530,7 @@ async function main() {
   }
 
   console.log('\n✅ Seed complete.\n');
-  console.log(`   Visit:   http://localhost:5173/login`);
+  console.log('   Visit:   http://localhost:5173/login');
   console.log(`   Email:   ${EMAIL}`);
   console.log(`   Pass:    ${PASSWORD}`);
   console.log(`   Then:    /w/${WSLUG}/p/folio/work-items`);

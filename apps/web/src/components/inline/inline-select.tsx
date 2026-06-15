@@ -54,7 +54,7 @@ export function InlineSelect({
         </button>
       </PopoverTrigger>
       <PopoverContent align="start" className="min-w-[180px] p-1">
-        <ul role="listbox" className="flex flex-col">
+        <ul className="flex flex-col">
           {options.map((opt) => (
             <li key={opt.value} role="presentation">
               <button

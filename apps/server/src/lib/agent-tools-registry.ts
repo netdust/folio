@@ -628,7 +628,7 @@ export function registerRealTools(): void {
         const t = await resolveTableForArgs(p, args);
         activeTableId = t.id;
       }
-      const limit = typeof args['limit'] === 'number' ? (args['limit'] as number) : 50;
+      const limit = typeof args.limit === 'number' ? (args.limit as number) : 50;
       const cursor = optionalString(args, 'cursor');
       const result = await listDocuments({
         projectId: p.id,
@@ -683,7 +683,7 @@ export function registerRealTools(): void {
       const ws = await resolveWorkspaceForToken(token, args);
       const query = requireString(args, 'query');
       const typeArg = optionalString(args, 'type') as 'work_item' | 'page' | undefined;
-      const limit = typeof args['limit'] === 'number' ? (args['limit'] as number) : 25;
+      const limit = typeof args.limit === 'number' ? (args.limit as number) : 25;
 
       // Fetch workspace projects ONCE — reused for the workspace-wide allow-list
       // resolution AND the id→slug result mapping (one query, not two).
@@ -932,7 +932,7 @@ export function registerRealTools(): void {
       const p = await resolveProjectInWorkspace(ws, token, args);
       const title = requireString(args, 'title');
       const body = optionalString(args, 'body') ?? '';
-      const fmArg = args['frontmatter'];
+      const fmArg = args.frontmatter;
       const frontmatter: Record<string, unknown> =
         fmArg && typeof fmArg === 'object' && !Array.isArray(fmArg)
           ? (fmArg as Record<string, unknown>)
@@ -1021,12 +1021,12 @@ export function registerRealTools(): void {
       }
 
       const patch: Parameters<typeof updateDocument>[0]['patch'] = {};
-      if (typeof args['title'] === 'string') patch.title = args['title'] as string;
-      if (typeof args['body'] === 'string') patch.body = args['body'] as string;
-      if (typeof args['status'] === 'string' || args['status'] === null) {
-        patch.status = args['status'] as string | null;
+      if (typeof args.title === 'string') patch.title = args.title as string;
+      if (typeof args.body === 'string') patch.body = args.body as string;
+      if (typeof args.status === 'string' || args.status === null) {
+        patch.status = args.status as string | null;
       }
-      const fmArg = args['frontmatter'];
+      const fmArg = args.frontmatter;
       if (fmArg !== undefined) {
         if (!fmArg || typeof fmArg !== 'object' || Array.isArray(fmArg)) {
           throw mcpInvalidParams('frontmatter must be an object', {
@@ -1234,7 +1234,7 @@ export function registerRealTools(): void {
         });
       }
       if (!view) throw mcpInvalidParams('view not found', { reason: 'view_not_found' });
-      const limit = typeof args['limit'] === 'number' ? (args['limit'] as number) : 50;
+      const limit = typeof args.limit === 'number' ? (args.limit as number) : 50;
       const docs = await runView({
         view,
         projectId: p.id,
@@ -1547,7 +1547,7 @@ export function registerRealTools(): void {
       const ws = await resolveWorkspaceForToken(token, args);
       const title = requireString(args, 'title');
       const body = optionalString(args, 'body') ?? '';
-      const fmArg = args['frontmatter'];
+      const fmArg = args.frontmatter;
       if (!fmArg || typeof fmArg !== 'object' || Array.isArray(fmArg)) {
         throw mcpInvalidParams('frontmatter must be an object', {
           reason: 'invalid_frontmatter',
@@ -1618,9 +1618,9 @@ export function registerRealTools(): void {
       }
 
       const patch: Parameters<typeof updateDocument>[0]['patch'] = {};
-      if (typeof args['title'] === 'string') patch.title = args['title'] as string;
-      if (typeof args['body'] === 'string') patch.body = args['body'] as string;
-      const fmArg = args['frontmatter'];
+      if (typeof args.title === 'string') patch.title = args.title as string;
+      if (typeof args.body === 'string') patch.body = args.body as string;
+      const fmArg = args.frontmatter;
       if (fmArg !== undefined) {
         if (!fmArg || typeof fmArg !== 'object' || Array.isArray(fmArg)) {
           throw mcpInvalidParams('frontmatter must be an object', {
@@ -2166,8 +2166,7 @@ export function registerRealTools(): void {
         const doc = await getDocument(p.id, target.entityId);
         if (!doc) {
           throw mcpInvalidParams(
-            `link target not found: no ${target.entityType} "${target.entityId}" in ${target.wslug}/${target.pslug}. ` +
-              'Pass the document SLUG (not its id) as entityId, and the correct project slug as pslug.',
+            `link target not found: no ${target.entityType} "${target.entityId}" in ${target.wslug}/${target.pslug}. Pass the document SLUG (not its id) as entityId, and the correct project slug as pslug.`,
             { reason: 'link_target_not_found' },
           );
         }

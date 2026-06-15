@@ -44,6 +44,7 @@ export function WikiLinkPicker({
   const [selectedIndex, setSelectedIndex] = useState(0);
 
   // Reset selection when the filtered shape changes (e.g. query changes).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: resets selection on filtered-shape change only; setSelectedIndex is a stable setter
   useEffect(() => {
     setSelectedIndex(0);
   }, [filtered.length]);

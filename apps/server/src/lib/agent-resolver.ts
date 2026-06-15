@@ -49,9 +49,7 @@ export async function resolveAgentForRun(db: DB, slug: string): Promise<Document
   });
   if (matches.length > 1) {
     console.warn(
-      `[agent-resolver] agent slug "${slug}" is defined in more than one workspace; ` +
-        `resolving the first match (${matches[0]!.id}). Agent slugs are instance-global — ` +
-        `rename one to disambiguate.`,
+      `[agent-resolver] agent slug "${slug}" is defined in more than one workspace; resolving the first match (${matches[0]!.id}). Agent slugs are instance-global — rename one to disambiguate.`,
     );
   }
   return matches[0];

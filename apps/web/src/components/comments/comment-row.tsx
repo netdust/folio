@@ -88,11 +88,13 @@ function BodyRenderer({
     <p className="text-sm text-fg whitespace-pre-wrap break-words">
       {runs.map((run, i) => {
         if (run.type === 'text') {
+          // biome-ignore lint/suspicious/noArrayIndexKey: parsed segments of an immutable body string — non-reordering, no stable id, index key is correct
           return <span key={i}>{run.content}</span>;
         }
         if (run.type === 'mention') {
           return (
             <span
+              // biome-ignore lint/suspicious/noArrayIndexKey: parsed segments of an immutable body string — non-reordering, no stable id, index key is correct
               key={i}
               className={cn(
                 'inline-flex items-center rounded-sm px-1 py-0.5 text-[11px] font-mono',
@@ -107,6 +109,7 @@ function BodyRenderer({
         // wiki-link — styled chip, non-navigating in Phase 2.6
         return (
           <span
+            // biome-ignore lint/suspicious/noArrayIndexKey: parsed segments of an immutable body string — non-reordering, no stable id, index key is correct
             key={i}
             className="inline-flex items-center rounded-sm px-1 py-0.5 text-[11px] font-mono bg-card border border-border-light text-fg-2 cursor-default"
           >

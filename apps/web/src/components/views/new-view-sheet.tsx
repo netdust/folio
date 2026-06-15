@@ -135,7 +135,6 @@ export function NewViewSheet({
                 onChange={(e) => setName(e.target.value)}
                 maxLength={100}
                 required
-                autoFocus
               />
               <p className="mt-1.5 text-xs text-fg-3">
                 Captures the current filters, sort, and columns. Future changes auto-save.

@@ -545,6 +545,7 @@ describe('runAgent pre-flight checks', () => {
         });
       });
     }
+    // biome-ignore lint/performance/noDelete: must delete the env var to clear it — `process.env.X = undefined` coerces to the STRING "undefined", not an unset var
     delete process.env.FOLIO_PROVIDER_DEGRADE_THRESHOLD;
 
     await runAgent({ runId: run.id });

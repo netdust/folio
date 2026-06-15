@@ -172,8 +172,8 @@ export function TableView({ wslug, pslug, tslug }: Props) {
       }
       if (typeof raw === 'object') {
         const op = raw as Record<string, unknown>;
-        if ('$eq' in op && op['$eq'] !== undefined) nextSearch[key] = op['$eq'];
-        else if ('$in' in op && Array.isArray(op['$in'])) nextSearch[key] = op['$in'] as unknown[];
+        if ('$eq' in op && op.$eq !== undefined) nextSearch[key] = op.$eq;
+        else if ('$in' in op && Array.isArray(op.$in)) nextSearch[key] = op.$in as unknown[];
       }
     }
 
@@ -248,24 +248,24 @@ export function TableView({ wslug, pslug, tslug }: Props) {
     }
     for (const c of next) {
       if (c.kind === 'status') {
-        nextSearch['status'] = c.values;
-        flatFilters['status'] = c.values;
+        nextSearch.status = c.values;
+        flatFilters.status = c.values;
       }
       if (c.kind === 'priority') {
-        nextSearch['priority'] = c.value;
-        flatFilters['priority'] = c.value;
+        nextSearch.priority = c.value;
+        flatFilters.priority = c.value;
       }
       if (c.kind === 'labels') {
-        nextSearch['labels'] = c.values;
-        flatFilters['labels'] = c.values;
+        nextSearch.labels = c.values;
+        flatFilters.labels = c.values;
       }
       if (c.kind === 'assignee') {
-        nextSearch['assignee'] = c.value;
-        flatFilters['assignee'] = c.value;
+        nextSearch.assignee = c.value;
+        flatFilters.assignee = c.value;
       }
       if (c.kind === 'updated_since') {
-        nextSearch['updated_since'] = c.value;
-        flatFilters['updated_since'] = c.value;
+        nextSearch.updated_since = c.value;
+        flatFilters.updated_since = c.value;
       }
     }
     void navigate({ to: '.', search: nextSearch, replace: false });
@@ -286,7 +286,9 @@ export function TableView({ wslug, pslug, tslug }: Props) {
       nextSearch.sort = next.key;
       nextSearch.dir = next.dir;
     } else {
+      // biome-ignore lint/performance/noDelete: must REMOVE the keys from the router search object so the param drops from the URL — `= undefined` keeps a stale ?sort= key
       delete nextSearch.sort;
+      // biome-ignore lint/performance/noDelete: see above — drop the URL param, don't set it undefined
       delete nextSearch.dir;
     }
     void navigate({ to: '.', search: nextSearch, replace: false });

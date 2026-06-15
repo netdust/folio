@@ -381,7 +381,7 @@ documentsRoute.patch('/:slug', requireScope('documents:write'), async (c) => {
       if (existing.type === 'work_item') {
         const prevAssignee = getAssignee(existing.frontmatter);
         const nextAssignee = getAssignee(updated.frontmatter);
-        if (nextAssignee && nextAssignee.startsWith('agent:') && prevAssignee !== nextAssignee) {
+        if (nextAssignee?.startsWith('agent:') && prevAssignee !== nextAssignee) {
           const agentSlug = nextAssignee.slice('agent:'.length);
           // S2: include agent_id as the immutable handle. See
           // services/documents.ts for full rationale.

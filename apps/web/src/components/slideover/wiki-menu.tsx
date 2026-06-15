@@ -29,6 +29,7 @@ export function WikiMenu({ documents, query, rect, onSelect, onClose }: Props) {
   const items = useMemo(() => filterDocuments(documents, query), [documents, query]);
   const [active, setActive] = useState(0);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: resets active item on query change only; setActive is a stable setter
   useEffect(() => setActive(0), [query]);
 
   // Stable refs so the keydown handler attaches once.

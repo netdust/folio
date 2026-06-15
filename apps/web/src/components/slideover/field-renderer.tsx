@@ -255,7 +255,6 @@ function RelationField({
             className="w-auto border-none bg-transparent p-0 shadow-none"
           >
             <input
-              autoFocus
               placeholder="Search documents…"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
@@ -370,7 +369,6 @@ function DateInput({
     <input
       type="date"
       aria-label={ariaLabel}
-      autoFocus
       value={draft}
       onChange={(e) => setDraft(e.target.value)}
       onBlur={() => {
@@ -519,7 +517,6 @@ function UrlField({
     <input
       type="url"
       aria-label={ariaLabel}
-      autoFocus
       value={draft}
       onChange={(e) => setDraft(e.target.value)}
       onBlur={() => {
@@ -592,7 +589,6 @@ function CurrencyInput({
     <input
       type="number"
       aria-label={ariaLabel}
-      autoFocus
       value={draft}
       onChange={(e) => setDraft(e.target.value)}
       onBlur={() => {

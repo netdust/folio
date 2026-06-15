@@ -16,13 +16,13 @@ describe('runMigrationsOnBoot', () => {
 
       runMigrationsOnBoot(db);
 
-      const count1 = sqlite.prepare(`SELECT COUNT(*) as n FROM __drizzle_migrations`).get() as {
+      const count1 = sqlite.prepare('SELECT COUNT(*) as n FROM __drizzle_migrations').get() as {
         n: number;
       };
       expect(count1.n).toBeGreaterThan(0);
 
       runMigrationsOnBoot(db); // second call must not throw or re-run anything
-      const count2 = sqlite.prepare(`SELECT COUNT(*) as n FROM __drizzle_migrations`).get() as {
+      const count2 = sqlite.prepare('SELECT COUNT(*) as n FROM __drizzle_migrations').get() as {
         n: number;
       };
       expect(count2.n).toBe(count1.n);

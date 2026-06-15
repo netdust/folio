@@ -210,7 +210,7 @@ test('POST text/markdown with no title at all gets "Untitled"', async () => {
   const res = await app.request(path, {
     method: 'POST',
     headers: { Cookie: seed.sessionCookie, 'Content-Type': 'text/markdown' },
-    body: `body only`,
+    body: 'body only',
   });
   expect(res.status).toBe(201);
   expect((await res.json()).data.title).toBe('Untitled');
@@ -287,7 +287,7 @@ test('H6: PATCH text/markdown rejects type=comment (must use update_comment)', a
   const res = await app.request(`${path}/${comment.slug}`, {
     method: 'PATCH',
     headers: { Cookie: seed.sessionCookie, 'Content-Type': 'text/markdown' },
-    body: `# tampered\n\nrewritten body\n`,
+    body: '# tampered\n\nrewritten body\n',
   });
   expect(res.status).toBe(422);
   expect((await res.json()).error.code).toBe('COMMENT_REQUIRES_COMMENT_TOOL');

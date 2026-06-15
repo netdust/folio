@@ -1471,9 +1471,9 @@ describe('tool descriptions teach the new ergonomics', () => {
   it('tool descriptions teach the new ergonomics', () => {
     const defs = listToolDefs();
     const byName = Object.fromEntries(defs.map((d) => [d.name, d.description]));
-    expect(byName['list_documents']).toContain('list_comments');
-    expect(byName['update_document']).toContain('list_statuses');
-    expect(byName['find_documents']).toContain('do NOT page through');
+    expect(byName.list_documents).toContain('list_comments');
+    expect(byName.update_document).toContain('list_statuses');
+    expect(byName.find_documents).toContain('do NOT page through');
   });
 });
 

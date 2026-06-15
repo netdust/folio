@@ -81,7 +81,7 @@ function getTargetAgentId(db: Database, commentId: string): string | null {
 }
 
 function getFm(db: Database, commentId: string): Record<string, unknown> {
-  const row = db.query(`SELECT frontmatter FROM documents WHERE id = ?`).get(commentId) as {
+  const row = db.query('SELECT frontmatter FROM documents WHERE id = ?').get(commentId) as {
     frontmatter: string;
   };
   return JSON.parse(row.frontmatter);

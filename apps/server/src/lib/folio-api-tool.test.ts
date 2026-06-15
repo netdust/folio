@@ -509,7 +509,7 @@ describe('folio_api_get tool (P3-4/6)', () => {
       tok,
       'agent:op',
       'folio_api_get',
-      { path: `/api/v1/instance/ai-keys` },
+      { path: '/api/v1/instance/ai-keys' },
       undefined,
       { callerScopes: tok.scopes },
     )) as { status: number; body: unknown };

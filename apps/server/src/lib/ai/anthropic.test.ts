@@ -240,7 +240,7 @@ describe('anthropic provider', () => {
       ) as Error & { status: number };
       err.status = 401;
       throw err;
-      // eslint-disable-next-line no-unreachable
+      // biome-ignore lint/correctness/noUnreachable: deliberate dead yield — anchors this as a generator that throws before yielding; deleting it would instead trip useYield
       yield {};
     } as never);
 

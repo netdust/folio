@@ -14,7 +14,7 @@ function jsonl(lines: unknown[]): ReadableStream<Uint8Array> {
   const enc = new TextEncoder();
   return new ReadableStream<Uint8Array>({
     start(controller) {
-      for (const l of lines) controller.enqueue(enc.encode(JSON.stringify(l) + '\n'));
+      for (const l of lines) controller.enqueue(enc.encode(`${JSON.stringify(l)}\n`));
       controller.close();
     },
   });
@@ -130,7 +130,7 @@ describe('ollama provider', () => {
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
         controller.enqueue(
-          enc.encode(JSON.stringify({ message: { content: 'Hi' }, done: false }) + '\n'),
+          enc.encode(`${JSON.stringify({ message: { content: 'Hi' }, done: false })}\n`),
         );
         // No trailing newline on the final record.
         controller.enqueue(
@@ -176,10 +176,10 @@ describe('ollama provider', () => {
       start(controller) {
         // Text chunks arrive, then the stream just ENDS — no `done:true` chunk.
         controller.enqueue(
-          enc.encode(JSON.stringify({ message: { content: 'partial ' }, done: false }) + '\n'),
+          enc.encode(`${JSON.stringify({ message: { content: 'partial ' }, done: false })}\n`),
         );
         controller.enqueue(
-          enc.encode(JSON.stringify({ message: { content: 'answer' }, done: false }) + '\n'),
+          enc.encode(`${JSON.stringify({ message: { content: 'answer' }, done: false })}\n`),
         );
         controller.close(); // connection dropped before the terminal chunk
       },
@@ -355,18 +355,18 @@ describe('ollama provider', () => {
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
         controller.enqueue(
-          enc.encode(JSON.stringify({ message: { content: 'Hi' }, done: false }) + '\n'),
+          enc.encode(`${JSON.stringify({ message: { content: 'Hi' }, done: false })}\n`),
         );
         controller.enqueue(enc.encode('not-json-at-all\n'));
         controller.enqueue(
           enc.encode(
-            JSON.stringify({
+            `${JSON.stringify({
               message: { content: '' },
               done: true,
               done_reason: 'stop',
               prompt_eval_count: 4,
               eval_count: 1,
-            }) + '\n',
+            })}\n`,
           ),
         );
         controller.close();

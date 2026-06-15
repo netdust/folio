@@ -133,7 +133,7 @@ describe('0006_phase_2_5_workspace_agents migration', () => {
     setupBaseline(db, TARGET);
     applyMigration(db, TARGET);
 
-    const cols = db.query(`PRAGMA table_info(api_tokens)`).all() as { name: string }[];
+    const cols = db.query('PRAGMA table_info(api_tokens)').all() as { name: string }[];
     const names = cols.map((c) => c.name);
     expect(names).toContain('agent_id');
     expect(names).toContain('project_ids');

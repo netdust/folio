@@ -259,7 +259,7 @@ test('MCP tools/call update_document patches title + frontmatter', async () => {
     frontmatter: Record<string, unknown>;
   };
   expect(parsed.title).toBe('patched');
-  expect(parsed.frontmatter['priority']).toBe('high');
+  expect(parsed.frontmatter.priority).toBe('high');
 });
 
 test('MCP tools/call delete_document requires documents:delete and removes the doc', async () => {
@@ -1254,7 +1254,7 @@ test('MCP update_agent patches title + frontmatter', async () => {
     frontmatter: Record<string, unknown>;
   };
   expect(parsed.title).toBe('New Title');
-  expect(parsed.frontmatter['system_prompt']).toBe('two');
+  expect(parsed.frontmatter.system_prompt).toBe('two');
 });
 
 test("F2: MCP create_agent rejects allow-list widening beyond calling agent's own", async () => {

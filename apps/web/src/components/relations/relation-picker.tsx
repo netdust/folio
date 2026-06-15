@@ -33,6 +33,7 @@ export function RelationPicker({
   );
 
   const [selectedIndex, setSelectedIndex] = useState(0);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: resets selection on filtered-shape change only; setSelectedIndex is a stable setter
   useEffect(() => {
     setSelectedIndex(0);
   }, [filtered.length]);
