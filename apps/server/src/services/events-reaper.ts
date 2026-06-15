@@ -43,6 +43,15 @@ export async function reapStaleEvents(db: DBOrTx, at: number = Date.now()): Prom
   const minCursor = Math.min(...cursors.map((c) => c.lastSeq));
 
   // Atomic single DELETE: old AND strictly below the min cursor.
+  //
+  // SAFETY (TOCTOU): the cursor read above and this DELETE are NOT one transaction,
+  // but that is provably safe ONLY because reactor cursors move FORWARD-ONLY (seeded
+  // at MAX(seq), then advanced to strictly-higher seqs in event-dispatcher.ts; never
+  // decremented or deleted). A concurrent reactor advance between read and DELETE can
+  // only make this snapshot's minCursor STALER (lower) than reality → the DELETE is
+  // strictly more conservative, never dropping a live row. If a future feature EVER
+  // lowers/resets a cursor, this no-transaction assumption breaks — wrap both in a
+  // single tx then.
   const reaped = await db
     .delete(events)
     .where(and(lt(events.createdAt, cutoff), lt(events.seq, minCursor)))
