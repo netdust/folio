@@ -1,4 +1,20 @@
-## Next up — Sub-phase E (web UI) IN PROGRESS — see 2026-05-30 marker above. (Historical readiness handoff below predates the runs-surface redesign.)
+# 🎯 CURRENT (2026-06-15) — v1-hardening from docs/AUDIT-2026-06-10.md
+
+**Driving the audit to v1 via `netdust-agent:harnessed-development`, scope = EVERYTHING (M0→M3), as ~5 gated branches, one milestone per session, Stefan gates each merge.** Full plan-of-plans + locked decisions: auto-memory `project_v1-hardening-audit-2026-06-10`.
+
+**✅ M0 (safety net) + audit quick wins — MERGED to main 2026-06-15** (merge `a98982d`, pushed). Branch `harden/m0-safety-net` (kept, not deleted; 22 commits). What shipped:
+- Quick wins: logged 2 silent error-swallows (M7); onboarding docs fixed — dev PORT story + bootstrap vars + dead release link (C1); HTTPError + AES-256-GCM doc drift (M6); project `GET /runs` capped at `?limit` (M5); 2 `__system`-era shakeout scripts deleted (M8, kept seed-ollama-*/diagnose-* per Stefan); dead `SESSION_SECRET` removed + fail-loud root test script.
+- M0: **GitHub Actions CI** (`.github/workflows/ci.yml` — 3 suites + 3 typechecks + blocking Biome + binary/docker build-proofs, gate proven via plant-failure red→revert); **Tier-A crypto.ts + auth.ts tests** (H9); **lint 1219→0 errors**, Biome BLOCKING in pre-commit (`scripts/hooks/pre-commit-biome.sh`) + CI.
+- Suites now: **server 1761 / shared 70 / web 938, 0 fails**. CI green with lint blocking. Suite is SELF-CONTAINED (bunfig preload forces test FOLIO_MASTER_KEY — no env vars needed to run `bun test`).
+- Decisions made this session: `noNonNullAssertion`→`off` (deliberate `!` usage, ~1015×); a11y findings→`warn` (tracked follow-up, NOT mass-suppressed); `biome.json` now `vcs.useIgnoreFile` so lint ignores hook-state files. 2 CI-surfaced pre-existing bugs fixed (env `.env`-dependency; tool-registry worker-leak flake — see auto-memory `feedback_ci-surfaced-two-local-only-bugs`).
+
+**▶ NEXT SESSION — M1 (critical fixes).** Fires threat-model + invariants + feature-acceptance gates (auth/credentials/outbound-URL surface). Tasks per audit Phase-4 Milestone 1: **1.1** magic-link → invite-only (reuse `sendInvite`/`routes/instance-users.ts` — DECIDED); **1.2** rate-limit login + magic-link (SQLite-backed); **1.3** real single binary — embed `web/dist` + migration `.sql` via a real `scripts/build.ts` (Bun `--compile` + `Bun.embeddedFiles` — DECIDED); **1.4** fix Docker (lockfile/healthcheck/Bun-pin/migrations); **1.5** events reaper, 90-day retention env-overridable (DECIDED); **1.6** global body limit. All gated on M0's CI (now green). Start with `harnessed-development`.
+
+**Open follow-ups (non-blocking):** a11y backlog (32, at `warn`); refresh FOLIO-BRIEFING.md + PHASES.md crypto term (libsodium→AES-GCM — deferred from Q3); API.md AI-keys path `/.../settings/:workspaceId/ai-keys`→`/instance/ai-keys` (M3.1); the binary/docker CI build-proofs are `continue-on-error` until M1 removes the markers.
+
+---
+
+## (historical) Next up — Sub-phase E (web UI) — SUPERSEDED by the v1-hardening effort above
 
 > **🎯 READ FIRST (E session)**: `docs/superpowers/handoffs/2026-05-30-phase-3-sub-phase-E-readiness.md` — Sub-phase E readiness (web UI: runs table + link tiles + Cmd-K + provider/reactor-halt banners + body wiki-links). E is server-API-complete (D shipped every endpoint E consumes); E is almost all `apps/web`. Two cheap pre-steps: (1) `/integration` to advance the marker `9748a64`→`255c3e1` (D-9 shipped past it); (2) optional D + D-9 `/evaluate` retros. Then EXPAND the outline-only E-1..E-9 (writing-plans, Step 2.5 reconcile vs the D response shapes + existing Phase-1.5/1.6/2.6 web components + the SSE-client design decision). Skill order in the handoff. **The (historical) D readiness handoff is below; D is DONE.**
 
