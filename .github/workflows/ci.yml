@@ -57,8 +57,8 @@ jobs:
         working-directory: packages/shared
         run: bun x tsc --noEmit
 
-      - name: Lint (warn-only — flipped to blocking in M0 task 0.4)
-        run: bun run lint || true
+      - name: Lint (blocking)
+        run: bun run lint
 
       - name: Build single binary (build-proof)
         run: bun run build:binary
