@@ -539,6 +539,28 @@ export const reactorCursors = sqliteTable('reactor_cursors', {
 });
 
 /**
+ * Auth rate-limit counters (M1, audit H6). A SQLite-backed per-(scope, key)
+ * windowed counter — NO sidecar (architectural rule #2: no Redis). `scope` is the
+ * throttled surface ('login' | 'magic_link'); `key` is the dimension being limited
+ * ('ip:1.2.3.4' | 'email:a@b.c'). `windowStart` is the ms epoch at which the
+ * current fixed window opened; `count` is attempts within it. Composite PK is the
+ * upsert target: one row per (scope, key), reset by overwriting windowStart when a
+ * new window opens. Walled off from the event plane (like reactor_cursors): pure
+ * throttle bookkeeping, not a document, no events. NO foreign keys — `key` is a
+ * free-form string (IP/email), not a reference to any entity.
+ */
+export const authRateLimits = sqliteTable(
+  'auth_rate_limits',
+  {
+    scope: text('scope').notNull(),
+    key: text('key').notNull(),
+    count: integer('count').notNull().default(0),
+    windowStart: integer('window_start').notNull(),
+  },
+  (t) => ({ pk: primaryKey({ columns: [t.scope, t.key] }) }),
+);
+
+/**
  * Operator cockpit chat — `conversations`, `messages`, `pending_ops`.
  *
  * DELIBERATE EXCEPTION to invariants 5 + 10 (see ARCHITECTURE-INVARIANTS.md
@@ -653,6 +675,7 @@ export type AiKey = typeof aiKeys.$inferSelect;
 export type InstanceSkill = typeof instanceSkills.$inferSelect;
 export type Event = typeof events.$inferSelect;
 export type ReactorCursor = typeof reactorCursors.$inferSelect;
+export type AuthRateLimit = typeof authRateLimits.$inferSelect;
 export type Conversation = typeof conversations.$inferSelect;
 export type Message = typeof messages.$inferSelect;
 export type PendingOp = typeof pendingOps.$inferSelect;

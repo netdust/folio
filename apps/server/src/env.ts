@@ -106,6 +106,18 @@ export const envSchema = z.object({
     .int()
     .positive()
     .default(7 * 24 * 60 * 60 * 1000),
+  // M1 (audit H6) — auth rate-limit knobs (SA-1: validated here, never read inline
+  // as process.env). Fixed-window counters on /login + /magic-link/request close
+  // the brute-force / argon2 CPU-DoS / email-flooding levers. Window floored at
+  // 1000ms (a duration in MS; a 1..999 floor would accept a unit-confusion mis-set).
+  // The two ceilings floor at 1 so a mis-set value can't disable the cap.
+  FOLIO_RATE_LIMIT_WINDOW_MS: z.coerce
+    .number()
+    .int()
+    .min(1000)
+    .default(15 * 60_000),
+  FOLIO_RATE_LIMIT_LOGIN: z.coerce.number().int().min(1).default(5),
+  FOLIO_RATE_LIMIT_MAGIC_LINK: z.coerce.number().int().min(1).default(5),
 });
 
 export const env = envSchema.parse(process.env);

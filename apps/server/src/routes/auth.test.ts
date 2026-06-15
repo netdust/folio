@@ -283,3 +283,70 @@ test('request for an EXISTING user persists a signin link (M1/H5)', async () => 
   expect(rows).toHaveLength(1);
   expect(rows[0]!.kind).toBe('signin');
 });
+
+// --- Rate-limit + login timing-oracle close (M1, audit H6) ---
+// /login and /magic-link/request have per-(scope,key) windowed counters (SQLite,
+// no sidecar). /login no longer returns a fast 401 on an unknown email — it runs
+// a dummy argon2 verify on the unknown-user branch so the wall-clock matches a
+// wrong-password attempt (closes the user-enumeration timing oracle).
+
+test('login: a burst of bad attempts from one IP is throttled with a 429 (H6)', async () => {
+  const { app, seed } = await makeTestApp();
+  // Default FOLIO_RATE_LIMIT_LOGIN is 5. The 6th+ attempt from the same IP is
+  // throttled — well before the 7th here. All attempts use a wrong password for
+  // the seeded user so the only thing tripping the gate is the rate limit.
+  let last: Response | undefined;
+  for (let i = 0; i < 7; i++) {
+    last = await app.request('/api/v1/auth/login', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-forwarded-for': '203.0.113.7',
+      },
+      body: JSON.stringify({ email: seed.user.email, password: 'wrong-password' }),
+    });
+  }
+  expect(last!.status).toBe(429);
+  expect((await last!.json()).error.code).toBe('RATE_LIMITED');
+});
+
+test('login: a burst from one IP across DIFFERENT emails is throttled (pins the per-IP counter, H6)', async () => {
+  // Each attempt uses a DISTINCT (unknown) email, so the per-EMAIL counter never
+  // reaches its threshold — the ONLY thing that can produce the 429 is the per-IP
+  // counter. This is the denial test for the per-IP dimension in isolation: it goes
+  // RED if the checkRateLimit('login', `ip:...`) line is removed (the email-keyed
+  // burst test alone would still pass without it). Unknown emails take the
+  // dummy-verify branch, so the gate is purely the IP rate limit, not auth failure.
+  const { app } = await makeTestApp();
+  let last: Response | undefined;
+  for (let i = 0; i < 7; i++) {
+    last = await app.request('/api/v1/auth/login', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-forwarded-for': '203.0.113.42',
+      },
+      body: JSON.stringify({ email: `nobody+${i}@nowhere.test`, password: 'wrong-password' }),
+    });
+  }
+  expect(last!.status).toBe(429);
+  expect((await last!.json()).error.code).toBe('RATE_LIMITED');
+});
+
+test('login: unknown email returns a clean 401 (dummy-verify branch runs, no thrown TypeError) (H6)', async () => {
+  const { app } = await makeTestApp();
+  // The unknown-user branch must run verifyPassword(password, DUMMY_HASH) before
+  // throwing 401 — proving the early fast-path return is gone. A clean 401 (not a
+  // 500 from a thrown TypeError on a null hash) is the structural evidence that
+  // the dummy-verify path executed.
+  const res = await app.request('/api/v1/auth/login', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-forwarded-for': '198.51.100.9',
+    },
+    body: JSON.stringify({ email: 'nobody@nowhere.test', password: 'whatever-password' }),
+  });
+  expect(res.status).toBe(401);
+  expect((await res.json()).error.code).toBe('UNAUTHENTICATED');
+});

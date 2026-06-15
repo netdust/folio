@@ -16,14 +16,24 @@ import {
   newMagicToken,
   verifyPassword,
 } from '../lib/auth.ts';
+import { clientIp } from '../lib/client-ip.ts';
 import { sendMagicLink } from '../lib/email.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
+import { checkRateLimit } from '../lib/rate-limit.ts';
 import { designateInstanceOwner } from '../lib/system-workspace.ts';
 import { type AuthContext, getUser, requireUser } from '../middleware/auth.ts';
 
 const auth = new Hono<AuthContext>();
 
 const SESSION_COOKIE = 'folio_session';
+
+// M1 (audit H6) — timing-oracle close. The /login unknown-user branch runs a
+// dummy argon2 verify against THIS hash before throwing 401, so an unknown email
+// costs the same argon2 wall-clock as a wrong password for a real user. Computed
+// ONCE at module load (top-level await — valid ESM under Bun); the constant body
+// is irrelevant, only the verify cost matters. (M4.)
+const DUMMY_PASSWORD_HASH = await hashPassword('folio-dummy-verify-target');
+
 const cookieOpts = {
   httpOnly: true,
   secure: env.NODE_ENV === 'production',
@@ -93,8 +103,28 @@ auth.post(
   zValidator('json', z.object({ email: z.string().email(), password: z.string() })),
   async (c) => {
     const { email, password } = c.req.valid('json');
+
+    // M1 (audit H6) — throttle BEFORE any expensive work. Two independent
+    // counters: per-IP (blunts a single host hammering many emails) AND per-email
+    // (blunts a botnet hammering one account). Either tripping → 429. The IP comes
+    // from the single clientIp() source (SA-4). The throttle fails OPEN on a store
+    // error, so this can never brick login.
+    const [ipOk, emailOk] = await Promise.all([
+      checkRateLimit(db, 'login', `ip:${clientIp(c)}`),
+      checkRateLimit(db, 'login', `email:${email}`),
+    ]);
+    if (!ipOk || !emailOk) {
+      throw new HTTPError('RATE_LIMITED', 'too many attempts, try again later', 429);
+    }
+
     const user = await db.query.users.findFirst({ where: eq(users.email, email) });
     if (!user || !user.passwordHash) {
+      // M1 (audit H6) — close the user-enumeration timing oracle. An unknown email
+      // (or a passwordless user) must cost the SAME argon2 wall-clock as a wrong
+      // password, so we run a dummy verify and DISCARD the result before throwing.
+      // Without this, the missing user short-circuits the verify and the fast 401
+      // leaks "this email has no account". (M4.)
+      await verifyPassword(password, DUMMY_PASSWORD_HASH);
       throw new HTTPError('UNAUTHENTICATED', 'invalid credentials', 401);
     }
     const ok = await verifyPassword(password, user.passwordHash);
@@ -151,6 +181,14 @@ auth.post(
     // members arrive ONLY via an admin invite (kind:'invite').
     const user = await db.query.users.findFirst({ where: eq(users.email, email) });
     if (!user) return jsonOk(c, { ok: true });
+
+    // M1 (audit H6) — throttle a REAL user's link requests (a stranger already
+    // short-circuited above, so this only limits accounts that exist). On throttle
+    // we return the SAME generic 200 with no row minted — never reveal the limit
+    // to an enumerator, and don't let a flood mint links. (M2/M3.)
+    if (!(await checkRateLimit(db, 'magic_link', `email:${email}`))) {
+      return jsonOk(c, { ok: true });
+    }
 
     const token = newMagicToken();
     const expiresAt = new Date(Date.now() + 1000 * 60 * 15); // 15 min
