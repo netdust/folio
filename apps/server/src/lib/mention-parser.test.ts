@@ -122,7 +122,9 @@ describe('parseMentions', () => {
   it('matches has approved (position 2, perfect tense)', () => {
     const r = parseMentions({
       body: '@drafter has approved',
-      workspaceAgents: agents, workspaceMembers: members, currentProjectId: 'pr-a',
+      workspaceAgents: agents,
+      workspaceMembers: members,
+      currentProjectId: 'pr-a',
     });
     expect(r.approvalIntent?.kind).toBe('approval');
   });
@@ -130,7 +132,9 @@ describe('parseMentions', () => {
   it('matches got approved (position 2, colloquial passive)', () => {
     const r = parseMentions({
       body: '@drafter got approved',
-      workspaceAgents: agents, workspaceMembers: members, currentProjectId: 'pr-a',
+      workspaceAgents: agents,
+      workspaceMembers: members,
+      currentProjectId: 'pr-a',
     });
     expect(r.approvalIntent?.kind).toBe('approval');
   });
@@ -138,7 +142,9 @@ describe('parseMentions', () => {
   it('matches just approved (position 2, adverb)', () => {
     const r = parseMentions({
       body: '@drafter just approved the plan',
-      workspaceAgents: agents, workspaceMembers: members, currentProjectId: 'pr-a',
+      workspaceAgents: agents,
+      workspaceMembers: members,
+      currentProjectId: 'pr-a',
     });
     expect(r.approvalIntent?.kind).toBe('approval');
   });

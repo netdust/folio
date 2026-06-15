@@ -706,7 +706,9 @@ test('F11: agent author can edit own comment after its slug is renamed', async (
     status: null,
     body: '',
     frontmatter: {
-      system_prompt: 'x', model: 'm', provider: 'anthropic',
+      system_prompt: 'x',
+      model: 'm',
+      provider: 'anthropic',
       tools: ['create_document', 'create_comment', 'update_comment'],
       projects: ['*'],
     },

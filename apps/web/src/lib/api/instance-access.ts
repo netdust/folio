@@ -74,8 +74,7 @@ export function useGrantAccess() {
 export function useRevokeAccess() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (vars: AccessGrantVars) =>
-      client.deleteWithBody<{ ok: true }>(BASE, vars),
+    mutationFn: (vars: AccessGrantVars) => client.deleteWithBody<{ ok: true }>(BASE, vars),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: instanceAccessKeys.all });
       qc.invalidateQueries({ queryKey: instanceUsersKeys.all });

@@ -1,12 +1,12 @@
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
-import { Loader2, Mail, Lock } from 'lucide-react';
+import { Loader2, Lock, Mail } from 'lucide-react';
 import type { FormEvent } from 'react';
 import { useState } from 'react';
-import { ApiError } from '../lib/api/client.ts';
-import { useLogin, useMagicLinkRequest } from '../lib/api/auth.ts';
+import { SignupForm } from '../components/onboarding/signup-form.tsx';
 import { Icon } from '../components/ui/icon.tsx';
 import { Tabs } from '../components/ui/tabs.tsx';
-import { SignupForm } from '../components/onboarding/signup-form.tsx';
+import { useLogin, useMagicLinkRequest } from '../lib/api/auth.ts';
+import { ApiError } from '../lib/api/client.ts';
 
 type Mode = 'password' | 'magic' | 'signup';
 
@@ -32,15 +32,24 @@ function LoginPage() {
         />
       </div>
       <div className="mt-6">
-        {mode === 'password' ? <PasswordForm initialEmail={sharedEmail} onEmailChange={setSharedEmail} /> : null}
-        {mode === 'magic' ? <MagicForm initialEmail={sharedEmail} onEmailChange={setSharedEmail} /> : null}
-        {mode === 'signup' ? <SignupForm initialEmail={sharedEmail} onEmailChange={setSharedEmail} /> : null}
+        {mode === 'password' ? (
+          <PasswordForm initialEmail={sharedEmail} onEmailChange={setSharedEmail} />
+        ) : null}
+        {mode === 'magic' ? (
+          <MagicForm initialEmail={sharedEmail} onEmailChange={setSharedEmail} />
+        ) : null}
+        {mode === 'signup' ? (
+          <SignupForm initialEmail={sharedEmail} onEmailChange={setSharedEmail} />
+        ) : null}
       </div>
     </section>
   );
 }
 
-function PasswordForm({ initialEmail, onEmailChange }: { initialEmail: string; onEmailChange: (v: string) => void }) {
+function PasswordForm({
+  initialEmail,
+  onEmailChange,
+}: { initialEmail: string; onEmailChange: (v: string) => void }) {
   const navigate = useNavigate();
   const [email, setEmail] = useState(initialEmail);
   const [password, setPassword] = useState('');
@@ -51,8 +60,23 @@ function PasswordForm({ initialEmail, onEmailChange }: { initialEmail: string; o
   };
   return (
     <form className="space-y-4" onSubmit={onSubmit}>
-      <FieldWithIcon icon={Mail} label="Email" type="email" value={email} onChange={(v) => { setEmail(v); onEmailChange(v); }} />
-      <FieldWithIcon icon={Lock} label="Password" type="password" value={password} onChange={setPassword} />
+      <FieldWithIcon
+        icon={Mail}
+        label="Email"
+        type="email"
+        value={email}
+        onChange={(v) => {
+          setEmail(v);
+          onEmailChange(v);
+        }}
+      />
+      <FieldWithIcon
+        icon={Lock}
+        label="Password"
+        type="password"
+        value={password}
+        onChange={setPassword}
+      />
       <button
         type="submit"
         disabled={m.isPending || !email || !password}
@@ -70,7 +94,10 @@ function PasswordForm({ initialEmail, onEmailChange }: { initialEmail: string; o
   );
 }
 
-function MagicForm({ initialEmail, onEmailChange }: { initialEmail: string; onEmailChange: (v: string) => void }) {
+function MagicForm({
+  initialEmail,
+  onEmailChange,
+}: { initialEmail: string; onEmailChange: (v: string) => void }) {
   const [email, setEmail] = useState(initialEmail);
   const m = useMagicLinkRequest();
   const onSubmit = (e: FormEvent) => {
@@ -79,7 +106,16 @@ function MagicForm({ initialEmail, onEmailChange }: { initialEmail: string; onEm
   };
   return (
     <form className="space-y-4" onSubmit={onSubmit}>
-      <FieldWithIcon icon={Mail} label="Email" type="email" value={email} onChange={(v) => { setEmail(v); onEmailChange(v); }} />
+      <FieldWithIcon
+        icon={Mail}
+        label="Email"
+        type="email"
+        value={email}
+        onChange={(v) => {
+          setEmail(v);
+          onEmailChange(v);
+        }}
+      />
       <button
         type="submit"
         disabled={m.isPending || !email}

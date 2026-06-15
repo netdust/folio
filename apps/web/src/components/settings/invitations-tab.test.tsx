@@ -1,8 +1,8 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { InvitationsTab } from './invitations-tab.tsx';
 
 afterEach(() => {
@@ -27,9 +27,13 @@ function stubApi(calls: { url: string; method: string; body: unknown }[]) {
       if (url.includes('/instance/invites')) {
         calls.push({ url, method, body });
         data = { ok: true };
-      } else if (url.includes('/instance/users')) data = { users: [{ id: 'u1', email: 'a@x', name: 'Alice', role: 'member' }] };
+      } else if (url.includes('/instance/users'))
+        data = { users: [{ id: 'u1', email: 'a@x', name: 'Alice', role: 'member' }] };
       else if (url.includes('/instance/invite-targets'))
-        data = { workspaces: [{ id: 'w1', slug: 'acme', name: 'Acme' }], projects: [{ id: 'p1', slug: 'web', name: 'Web', workspaceId: 'w1' }] };
+        data = {
+          workspaces: [{ id: 'w1', slug: 'acme', name: 'Acme' }],
+          projects: [{ id: 'p1', slug: 'web', name: 'Web', workspaceId: 'w1' }],
+        };
       else if (url.includes('/instance/access')) {
         if (method === 'GET') data = { grants: [] };
         else {

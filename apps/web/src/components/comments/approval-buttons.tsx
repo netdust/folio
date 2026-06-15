@@ -1,9 +1,9 @@
 import { useState } from 'react';
 import type { Comment } from '../../lib/api/comments.ts';
-import type { Member } from '../../lib/api/members.ts';
 import { useCreateComment } from '../../lib/api/comments.ts';
-import { type AgentRef, authorAgentSlug, authorDisplayName } from '../../lib/author-ref.ts';
+import type { Member } from '../../lib/api/members.ts';
 import { useRun } from '../../lib/api/runs.ts';
+import { type AgentRef, authorAgentSlug, authorDisplayName } from '../../lib/author-ref.ts';
 import { RunStatusChip } from '../runs/run-status-chip.tsx';
 import { Button } from '../ui/button.tsx';
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
@@ -83,12 +83,10 @@ function findResolution(
     // findResolution's agentSlug is always slug-form (resolved from the
     // plan's author through the workspaceAgents list). Resolve target_agent
     // through the same helper so id-form and slug-form both match.
-    const targetAgent =
-      typeof fm.target_agent === 'string' ? fm.target_agent : null;
+    const targetAgent = typeof fm.target_agent === 'string' ? fm.target_agent : null;
     if (!targetAgent) return false;
     const targetAsSlug =
-      agents.find((a) => a.id === targetAgent || a.slug === targetAgent)?.slug ??
-      targetAgent;
+      agents.find((a) => a.id === targetAgent || a.slug === targetAgent)?.slug ?? targetAgent;
     if (targetAsSlug !== agentSlug) return false;
     // F9: soft-deleted approvals/rejections do not resolve the plan. The
     // server keeps the row visible in listComments by design (UI mutes it);
@@ -103,9 +101,7 @@ function findResolution(
   if (matches.length === 0) return null;
 
   // Pick the earliest
-  matches.sort(
-    (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
-  );
+  matches.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
   const earliest = matches[0] as Comment;
   const fm = earliest.frontmatter;
 
@@ -190,12 +186,7 @@ function RejectPopover({
             >
               Cancel
             </Button>
-            <Button
-              variant="danger"
-              size="sm"
-              loading={isPending}
-              onClick={handleReject}
-            >
+            <Button variant="danger" size="sm" loading={isPending} onClick={handleReject}>
               Reject
             </Button>
           </div>
@@ -238,12 +229,7 @@ function ApproveRejectButtons({
 
   return (
     <div className="flex items-center gap-2 mt-1">
-      <Button
-        variant="secondary"
-        size="sm"
-        loading={isPending}
-        onClick={handleApprove}
-      >
+      <Button variant="secondary" size="sm" loading={isPending} onClick={handleApprove}>
         ✓ Approve
       </Button>
       <RejectPopover

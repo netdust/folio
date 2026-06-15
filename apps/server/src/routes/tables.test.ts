@@ -1,7 +1,7 @@
-import { test, expect } from 'bun:test';
+import { expect, test } from 'bun:test';
 import { eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
-import { apiTokens, events, tables } from '../db/schema.ts';
+import { events, apiTokens, tables } from '../db/schema.ts';
 import { newApiToken } from '../lib/auth.ts';
 import { makeTestApp } from '../test/harness.ts';
 
@@ -145,7 +145,10 @@ test('DELETE /tables/:tslug 404 on unknown', async () => {
 
 // --- Phase 2 (operator): config:write guard + dryRun (P2-2/4/6/8) ---
 
-async function mintTokens(db: Awaited<ReturnType<typeof makeTestApp>>['db'], seed: Awaited<ReturnType<typeof makeTestApp>>['seed']) {
+async function mintTokens(
+  db: Awaited<ReturnType<typeof makeTestApp>>['db'],
+  seed: Awaited<ReturnType<typeof makeTestApp>>['seed'],
+) {
   const cw = newApiToken();
   await db.insert(apiTokens).values({
     id: nanoid(),
@@ -167,7 +170,10 @@ async function mintTokens(db: Awaited<ReturnType<typeof makeTestApp>>['db'], see
   return { configWriteToken: cw.token, docsWriteToken: dw.token };
 }
 
-async function tableCount(db: Awaited<ReturnType<typeof makeTestApp>>['db'], projectId: string): Promise<number> {
+async function tableCount(
+  db: Awaited<ReturnType<typeof makeTestApp>>['db'],
+  projectId: string,
+): Promise<number> {
   return (await db.select().from(tables).where(eq(tables.projectId, projectId))).length;
 }
 

@@ -228,7 +228,11 @@ describe('POST /api/v1/instance/tokens (mint an instance-reach token)', () => {
     const post = await app.request('/api/v1/instance/tokens', {
       method: 'POST',
       headers: { Cookie: seed.sessionCookie, 'content-type': 'application/json' },
-      body: JSON.stringify({ name: 'expiring-inst', scopes: ['documents:read'], expires_in_days: 7 }),
+      body: JSON.stringify({
+        name: 'expiring-inst',
+        scopes: ['documents:read'],
+        expires_in_days: 7,
+      }),
     });
     expect(post.status).toBe(201);
     const created = (await post.json()) as { data: { id: string } };

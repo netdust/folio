@@ -11,12 +11,39 @@
  *                               NEVER the rejected value (mitigation 61).
  */
 
-import { expect, test } from 'bun:test';
+import { afterEach, beforeEach, expect, test } from 'bun:test';
 import { nanoid } from 'nanoid';
 import { db } from '../db/client.ts';
 import { apiTokens } from '../db/schema.ts';
 import { newApiToken } from '../lib/auth.ts';
 import { makeTestApp } from '../test/harness.ts';
+
+// Several tests below register THROWAWAY synthetic tools into the module-global
+// tool registry (globalThis.__folioToolRegistry) to exercise error-mapping.
+// The registry is process-global and SHARED with whatever other test files land
+// in the same Bun worker (worker count = CPU count, so the co-located set differs
+// between a 20-core dev box and a 2-core CI runner). Without teardown, these leaked
+// tools inflate the count that mcp.test.ts's `tools/list ... toBe(33)` asserts —
+// green locally, red in CI. Snapshot the registry keys before each test and
+// restore after, so this file leaks nothing regardless of worker placement.
+// (Same mock-module-leak lesson the sibling agent-tools.test.ts / confirm-gate.test.ts
+// already follow with a per-name afterEach delete.)
+// Resolve the registry LAZILY inside the hooks — it is populated as a module-load
+// side-effect of agent-tools.ts, which may run after this file's top-level eval.
+const getToolRegistry = (): Map<string, unknown> | undefined =>
+  (globalThis as unknown as { __folioToolRegistry?: Map<string, unknown> }).__folioToolRegistry;
+let registrySnapshot: string[] = [];
+beforeEach(() => {
+  registrySnapshot = [...(getToolRegistry()?.keys() ?? [])];
+});
+afterEach(() => {
+  const reg = getToolRegistry();
+  if (!reg) return;
+  const before = new Set(registrySnapshot);
+  for (const name of [...reg.keys()]) {
+    if (!before.has(name)) reg.delete(name);
+  }
+});
 
 async function setupToken(workspaceId: string, userId: string, scopes: string[]): Promise<string> {
   const { token, hash } = newApiToken();
@@ -253,7 +280,11 @@ async function postRaw(
 test('M-MCP-3 — a non-object body (JSON array / batch) is rejected with -32600 invalid request', async () => {
   const { app, seed } = await makeTestApp();
   const token = await setupToken(seed.workspace.id, seed.user.id, ['documents:read']);
-  const res = await postRaw(app, token, JSON.stringify([{ jsonrpc: '2.0', id: 1, method: 'ping' }]));
+  const res = await postRaw(
+    app,
+    token,
+    JSON.stringify([{ jsonrpc: '2.0', id: 1, method: 'ping' }]),
+  );
   expect(res.status).toBe(200);
   const body = (await res.json()) as { error?: { code: number; message: string }; id?: unknown };
   expect(body.error?.code).toBe(-32600);
@@ -288,7 +319,11 @@ test('M-MCP-3 — a wrong-typed id (object) is coerced to null in the response',
 test('M-MCP-3 — a valid string id still round-trips unchanged', async () => {
   const { app, seed } = await makeTestApp();
   const token = await setupToken(seed.workspace.id, seed.user.id, ['documents:read']);
-  const res = await postRaw(app, token, JSON.stringify({ jsonrpc: '2.0', id: 'req-42', method: 'ping' }));
+  const res = await postRaw(
+    app,
+    token,
+    JSON.stringify({ jsonrpc: '2.0', id: 'req-42', method: 'ping' }),
+  );
   const body = (await res.json()) as { id?: unknown };
   expect(body.id).toBe('req-42');
 });
@@ -296,7 +331,11 @@ test('M-MCP-3 — a valid string id still round-trips unchanged', async () => {
 test('M-MCP-3 — a valid NUMBER id round-trips unchanged (not coerced to null)', async () => {
   const { app, seed } = await makeTestApp();
   const token = await setupToken(seed.workspace.id, seed.user.id, ['documents:read']);
-  const res = await postRaw(app, token, JSON.stringify({ jsonrpc: '2.0', id: 4242, method: 'ping' }));
+  const res = await postRaw(
+    app,
+    token,
+    JSON.stringify({ jsonrpc: '2.0', id: 4242, method: 'ping' }),
+  );
   const body = (await res.json()) as { id?: unknown };
   // The coercion is `string||number ? rawId : null`; a number must survive.
   expect(body.id).toBe(4242);
@@ -305,7 +344,11 @@ test('M-MCP-3 — a valid NUMBER id round-trips unchanged (not coerced to null)'
 test('M-MCP-3 — an explicit id:null is preserved (it is a valid JSON-RPC id)', async () => {
   const { app, seed } = await makeTestApp();
   const token = await setupToken(seed.workspace.id, seed.user.id, ['documents:read']);
-  const res = await postRaw(app, token, JSON.stringify({ jsonrpc: '2.0', id: null, method: 'ping' }));
+  const res = await postRaw(
+    app,
+    token,
+    JSON.stringify({ jsonrpc: '2.0', id: null, method: 'ping' }),
+  );
   const body = (await res.json()) as { id?: unknown; result?: unknown };
   // null is valid; the request still processes and echoes id:null (not a crash,
   // not coerced to 0/undefined).
@@ -328,7 +371,11 @@ test('malformed JSON body returns -32700 parse error', async () => {
 test('an unknown top-level method returns -32601 method not supported', async () => {
   const { app, seed } = await makeTestApp();
   const token = await setupToken(seed.workspace.id, seed.user.id, ['documents:read']);
-  const res = await postRaw(app, token, JSON.stringify({ jsonrpc: '2.0', id: 9, method: 'frobnicate' }));
+  const res = await postRaw(
+    app,
+    token,
+    JSON.stringify({ jsonrpc: '2.0', id: 9, method: 'frobnicate' }),
+  );
   const body = (await res.json()) as { error?: { code: number; message: string } };
   expect(body.error?.code).toBe(-32601);
   expect(body.error?.message).toMatch(/method not supported/i);
@@ -381,7 +428,10 @@ test('BUG-1 — a bad workspace slug returns an actionable message, not internal
 
 test('BUG-1 — a forbidden: authority message is KEPT (not sanitized), preserving fatal semantics', async () => {
   const { app, seed } = await makeTestApp();
-  const token = await setupToken(seed.workspace.id, seed.user.id, ['documents:read', 'documents:write']);
+  const token = await setupToken(seed.workspace.id, seed.user.id, [
+    'documents:read',
+    'documents:write',
+  ]);
   // ask_choice over MCP has no conversation sink → 'forbidden: ui tools require a
   // conversation context'. The mapper keeps `forbidden:` messages (runner uses the
   // prefix to classify FATAL; the message is a safe authority statement).

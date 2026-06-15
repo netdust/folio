@@ -50,10 +50,7 @@ export function useCreateToken(wslug: string, workspaceId: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (payload: TokenCreate) =>
-      client.post<ApiTokenCreateResponse>(
-        `/api/v1/w/${wslug}/tokens/${workspaceId}`,
-        payload,
-      ),
+      client.post<ApiTokenCreateResponse>(`/api/v1/w/${wslug}/tokens/${workspaceId}`, payload),
     onSuccess: () => qc.invalidateQueries({ queryKey: tokensKeys.list(wslug, workspaceId) }),
   });
 }
@@ -62,9 +59,7 @@ export function useDeleteToken(wslug: string, workspaceId: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (tokenId: string) =>
-      client.delete<{ ok: boolean }>(
-        `/api/v1/w/${wslug}/tokens/${workspaceId}/${tokenId}`,
-      ),
+      client.delete<{ ok: boolean }>(`/api/v1/w/${wslug}/tokens/${workspaceId}/${tokenId}`),
     onSuccess: () => qc.invalidateQueries({ queryKey: tokensKeys.list(wslug, workspaceId) }),
   });
 }

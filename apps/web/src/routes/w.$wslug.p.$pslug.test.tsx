@@ -1,20 +1,22 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
+  Outlet,
+  RouterProvider,
   createMemoryHistory,
   createRootRoute,
   createRoute,
   createRouter,
-  Outlet,
-  RouterProvider,
 } from '@tanstack/react-router';
+import { render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { Route as ProjectFileRoute } from './w.$wslug.p.$pslug.tsx';
 
 // ─── useLiveDocuments mount assertion ────────────────────────────────────────
 const liveSpy = vi.fn();
-vi.mock('@/lib/api/use-live-documents', () => ({ useLiveDocuments: (...a: unknown[]) => liveSpy(...a) }));
+vi.mock('@/lib/api/use-live-documents', () => ({
+  useLiveDocuments: (...a: unknown[]) => liveSpy(...a),
+}));
 
 // Capture the props BoardControls is mounted with — the seam under test is
 // "the active table reaches BoardControls as the tslug prop" (invariant 16:
@@ -88,7 +90,10 @@ function setupTableBoard(initialPath: string) {
   const fetchMock = vi.fn<typeof fetch>(async (url) => {
     const u = String(url);
     const respond = (body: unknown) =>
-      new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+      new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
     if (u.endsWith(`/api/v1/w/${workspace.slug}/p/sales`)) return respond({ data: project });
     if (u.includes('/documents')) return respond({ data: { data: [], nextCursor: null } });
     return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });

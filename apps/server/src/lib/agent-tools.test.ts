@@ -4,6 +4,7 @@ import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import type { DB } from '../db/client.ts';
 import {
+  events,
   type ApiToken,
   type Document,
   type EphemeralToken,
@@ -12,25 +13,24 @@ import {
   type Workspace,
   apiTokens,
   documents,
-  events,
   instanceSkills,
   projectAccess,
   projects,
   tables as tablesTable,
   users,
 } from '../db/schema.ts';
+import { tables as schemaTables, workspaces } from '../db/schema.ts';
 import { env } from '../env.ts';
-import { OPERATOR_AGENT_ID } from './operator.ts';
-import { seedProjectDefaults } from './seed-project-defaults.ts';
-import { makeTestApp } from '../test/harness.ts';
 import { createRun, ensureRunsTable, nextChainId } from '../services/agent-runs.ts';
 import { listComments } from '../services/comments.ts';
-import { type ToolDef, executeTool, listToolDefs, registerTool } from './agent-tools.ts';
-import { registerRealTools } from './agent-tools-registry.ts';
-import { SYSTEM_WORKSPACE_SLUG, isReservedSlug } from './system-workspace.ts';
-import { workspaces, tables as schemaTables } from '../db/schema.ts';
+import { makeTestApp } from '../test/harness.ts';
 import { intersectAgentProjects } from './agent-projects.ts';
+import { registerRealTools } from './agent-tools-registry.ts';
+import { type ToolDef, executeTool, listToolDefs, registerTool } from './agent-tools.ts';
 import { newApiToken } from './auth.ts';
+import { OPERATOR_AGENT_ID } from './operator.ts';
+import { seedProjectDefaults } from './seed-project-defaults.ts';
+import { SYSTEM_WORKSPACE_SLUG, isReservedSlug } from './system-workspace.ts';
 
 /**
  * Replicate the central caller-project clamp that `loadContext` (runner.ts)
@@ -1471,9 +1471,9 @@ describe('tool descriptions teach the new ergonomics', () => {
   it('tool descriptions teach the new ergonomics', () => {
     const defs = listToolDefs();
     const byName = Object.fromEntries(defs.map((d) => [d.name, d.description]));
-    expect(byName['list_documents']).toContain('list_comments');
-    expect(byName['update_document']).toContain('list_statuses');
-    expect(byName['find_documents']).toContain('do NOT page through');
+    expect(byName.list_documents).toContain('list_comments');
+    expect(byName.update_document).toContain('list_statuses');
+    expect(byName.find_documents).toContain('do NOT page through');
   });
 });
 
@@ -1554,12 +1554,10 @@ describe('find_documents: workspace-wide title lookup, allow-list enforced', () 
     });
 
     // Agent token allow-listed to ONLY the 'web' project (frontmatter.projects).
-    const { token: agentToken, agentSlug } = await seedAgent(
-      db,
-      seed.workspace.id,
-      seed.user.id,
-      { projects: [seed.project.id], scopes: ['documents:read'] },
-    );
+    const { token: agentToken, agentSlug } = await seedAgent(db, seed.workspace.id, seed.user.id, {
+      projects: [seed.project.id],
+      scopes: ['documents:read'],
+    });
 
     const res = (await exec(agentToken, `agent:${agentSlug}`, 'find_documents', {
       workspace_slug: 'acme',
@@ -1826,12 +1824,10 @@ describe('describe_workspace: one-call orientation, allow-list enforced', () => 
     await seedProjectDefaults(db, projectBId);
 
     // Agent token allow-listed to ONLY the 'web' project (frontmatter.projects).
-    const { token: agentToken, agentSlug } = await seedAgent(
-      db,
-      seed.workspace.id,
-      seed.user.id,
-      { projects: [seed.project.id], scopes: ['documents:read'] },
-    );
+    const { token: agentToken, agentSlug } = await seedAgent(db, seed.workspace.id, seed.user.id, {
+      projects: [seed.project.id],
+      scopes: ['documents:read'],
+    });
 
     const res = (await exec(agentToken, `agent:${agentSlug}`, 'describe_workspace', {
       workspace_slug: 'acme',
@@ -2014,11 +2010,7 @@ describe('B2: get_skill narrow __system read (T7)', () => {
 
 describe('B3: set_skill_trust (T8 separation of duties)', () => {
   /** Insert an instance skill with an explicit trusted typed-column value. */
-  async function seedSkill(
-    db: DB,
-    slug: string,
-    trusted: boolean,
-  ): Promise<{ skillId: string }> {
+  async function seedSkill(db: DB, slug: string, trusted: boolean): Promise<{ skillId: string }> {
     const skillId = nanoid();
     await db
       .insert(instanceSkills)
@@ -2038,7 +2030,9 @@ describe('B3: set_skill_trust (T8 separation of duties)', () => {
     })) as { content: { text: string }[] };
     const payload = JSON.parse(res.content[0]!.text) as { refused?: boolean };
     expect(payload.refused).toBe(true);
-    const skill = await db.query.instanceSkills.findFirst({ where: eq(instanceSkills.id, skillId) });
+    const skill = await db.query.instanceSkills.findFirst({
+      where: eq(instanceSkills.id, skillId),
+    });
     expect(skill!.trusted).toBe(false);
   });
 
@@ -2054,7 +2048,9 @@ describe('B3: set_skill_trust (T8 separation of duties)', () => {
     const payload = JSON.parse(res.content[0]!.text) as { ok?: boolean; refused?: boolean };
     expect(payload.ok).toBe(true);
     expect(payload.refused).toBeUndefined();
-    const skill = await db.query.instanceSkills.findFirst({ where: eq(instanceSkills.id, skillId) });
+    const skill = await db.query.instanceSkills.findFirst({
+      where: eq(instanceSkills.id, skillId),
+    });
     expect(skill!.trusted).toBe(true);
   });
 
@@ -2130,9 +2126,17 @@ describe('B1: MCP human-PAT project narrowing (no cross-project leak)', () => {
       where: (t, { eq: e, and: a }) => a(e(t.projectId, seed.project.id), e(t.slug, 'work-items')),
     }))!;
     await db.insert(documents).values({
-      id: nanoid(), workspaceId: seed.workspace.id, projectId: seed.project.id,
-      tableId: webTable.id, type: 'work_item', slug: 'secret-web-item', title: 'SECRET WEB ITEM',
-      status: 'todo', body: '', frontmatter: {}, createdBy: seed.user.id,
+      id: nanoid(),
+      workspaceId: seed.workspace.id,
+      projectId: seed.project.id,
+      tableId: webTable.id,
+      type: 'work_item',
+      slug: 'secret-web-item',
+      title: 'SECRET WEB ITEM',
+      status: 'todo',
+      body: '',
+      frontmatter: {},
+      createdBy: seed.user.id,
     });
     const { token } = await seedInvitee(db, seed);
     const out = (await exec(token, 'invitee', 'find_documents', {
@@ -2192,11 +2196,16 @@ describe('B1: MCP human-PAT project narrowing (no cross-project leak)', () => {
 
   it('operator token resolves a project (get_document), NOT agent_missing', async () => {
     const { seed } = await makeTestApp();
-    const err = await exec(operatorToken(seed, ['documents:read']), 'agent:_operator', 'get_document', {
-      workspace_slug: 'acme',
-      project_slug: 'web',
-      slug: 'does-not-exist',
-    }).then(
+    const err = await exec(
+      operatorToken(seed, ['documents:read']),
+      'agent:_operator',
+      'get_document',
+      {
+        workspace_slug: 'acme',
+        project_slug: 'web',
+        slug: 'does-not-exist',
+      },
+    ).then(
       () => null,
       (e) => e as Error & { data?: { reason?: string } },
     );
@@ -2527,4 +2536,4 @@ describe('B1: MCP human-PAT project narrowing (no cross-project leak)', () => {
     const rows = await db.query.documents.findMany({ where: eq(documents.type, 'agent_run') });
     expect(rows.length).toBe(1);
   });
-})
+});

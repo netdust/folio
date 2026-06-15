@@ -1,15 +1,15 @@
-import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
-import { act, render, screen, waitFor, fireEvent } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
+  Outlet,
+  RouterProvider,
   createMemoryHistory,
   createRootRoute,
   createRoute,
   createRouter,
-  Outlet,
-  RouterProvider,
 } from '@tanstack/react-router';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 
 // Capture the onEvent the live-document hook registers with useEventStream so
@@ -71,8 +71,7 @@ function mockWorkspaceDoc(
 ) {
   const title = options.title ?? 'Triage Agent';
   const body = options.body ?? '# Instructions\n\nDo the triage.';
-  const frontmatter =
-    options.frontmatter ?? { description: 'Sorts inbound issues' };
+  const frontmatter = options.frontmatter ?? { description: 'Sorts inbound issues' };
   // The Runs tab mounts useRunsLiveSync, which opens an EventSource. jsdom has
   // no EventSource — stub a no-op so the Runs tab doesn't crash the slideover.
   vi.stubGlobal(
@@ -184,9 +183,9 @@ describe('WorkspaceDocumentSlideover', () => {
     // workspace-document fetch was issued for the work-item slug.
     expect(screen.queryByText('Triage Agent')).not.toBeInTheDocument();
     expect(screen.queryByText('Failed to load')).not.toBeInTheDocument();
-    expect(
-      fetchSpy.mock.calls.some(([url]) => String(url).includes('/documents/lead-foo')),
-    ).toBe(false);
+    expect(fetchSpy.mock.calls.some(([url]) => String(url).includes('/documents/lead-foo'))).toBe(
+      false,
+    );
   });
 
   it('opens and fetches when ?wdoc= is set', async () => {
@@ -521,7 +520,10 @@ describe('WorkspaceDocumentSlideover', () => {
 
     // It must land on Activity — NOT be stomped back to Fields.
     await waitFor(() => {
-      expect(screen.getByRole('tab', { name: 'Activity' })).toHaveAttribute('aria-selected', 'true');
+      expect(screen.getByRole('tab', { name: 'Activity' })).toHaveAttribute(
+        'aria-selected',
+        'true',
+      );
     });
     expect(screen.getByRole('tab', { name: 'Fields' })).toHaveAttribute('aria-selected', 'false');
     // ?tab= was cleared by the click.
@@ -841,9 +843,7 @@ describe('WorkspaceDocumentSlideover', () => {
     fireEvent(window, new MouseEvent('pointerup'));
 
     // 480 + (1000 - 900) = 580 — persisted on pointerup.
-    await waitFor(() =>
-      expect(localStorage.getItem('folio:width:agent-config')).toBe('580'),
-    );
+    await waitFor(() => expect(localStorage.getItem('folio:width:agent-config')).toBe('580'));
   });
 
   // ---------------------------------------------------------------------
@@ -867,12 +867,14 @@ describe('WorkspaceDocumentSlideover', () => {
         const u = String(url);
         if (u.endsWith('/events')) {
           return new Response(JSON.stringify({ data: [] }), {
-            status: 200, headers: { 'content-type': 'application/json' },
+            status: 200,
+            headers: { 'content-type': 'application/json' },
           });
         }
         if (u.includes('/w/main/documents?')) {
           return new Response(JSON.stringify({ data: [] }), {
-            status: 200, headers: { 'content-type': 'application/json' },
+            status: 200,
+            headers: { 'content-type': 'application/json' },
           });
         }
         if (u.includes('/w/main/documents/triage')) {
@@ -880,10 +882,16 @@ describe('WorkspaceDocumentSlideover', () => {
           return new Response(
             JSON.stringify({
               data: {
-                id: 'd1', slug: 'triage', type: 'agent', title: 'Triage Agent',
-                status: null, parentId: null, frontmatter: { description: 'x' },
+                id: 'd1',
+                slug: 'triage',
+                type: 'agent',
+                title: 'Triage Agent',
+                status: null,
+                parentId: null,
+                frontmatter: { description: 'x' },
                 body: '# Instructions\n\nDo the triage.',
-                createdAt: '2026-01-01', updatedAt: '2026-01-02',
+                createdAt: '2026-01-01',
+                updatedAt: '2026-01-02',
               },
             }),
             { status: 200, headers: { 'content-type': 'application/json' } },
@@ -903,7 +911,11 @@ describe('WorkspaceDocumentSlideover', () => {
     const before = docFetches;
     expect(liveCalls.length).toBeGreaterThan(0);
 
-    act(() => liveCalls.at(-1)!.onEvent({ kind: 'document.updated', documentId: 'd1', actor: 'agent:helper' }));
+    act(() =>
+      liveCalls
+        .at(-1)!
+        .onEvent({ kind: 'document.updated', documentId: 'd1', actor: 'agent:helper' }),
+    );
 
     expect(screen.queryByText(/updated by/i)).not.toBeInTheDocument();
     await waitFor(() => expect(docFetches).toBeGreaterThan(before));
@@ -928,7 +940,11 @@ describe('WorkspaceDocumentSlideover', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled());
     expect(liveCalls.length).toBeGreaterThan(0);
 
-    act(() => liveCalls.at(-1)!.onEvent({ kind: 'document.updated', documentId: 'd1', actor: 'agent:helper' }));
+    act(() =>
+      liveCalls
+        .at(-1)!
+        .onEvent({ kind: 'document.updated', documentId: 'd1', actor: 'agent:helper' }),
+    );
 
     // Banner appears, and the unsaved edit is NOT stomped: the editor still
     // shows the typed text AND the buffer stays dirty (Save still enabled).

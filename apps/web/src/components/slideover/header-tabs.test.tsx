@@ -1,8 +1,8 @@
-import { describe, test, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { FileText, MessageCircle, History } from 'lucide-react';
-import { HeaderTabs, type HeaderTabItem } from './header-tabs.tsx';
+import { FileText, History, MessageCircle } from 'lucide-react';
+import { describe, expect, test, vi } from 'vitest';
+import { type HeaderTabItem, HeaderTabs } from './header-tabs.tsx';
 
 type T = 'fields' | 'comments' | 'activity';
 

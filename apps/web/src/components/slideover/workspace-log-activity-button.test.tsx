@@ -1,7 +1,7 @@
-import { afterEach, describe, it, expect, vi } from 'vitest';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WorkspaceLogActivityButton } from './workspace-log-activity-button.tsx';
 
 function wrap(qc: QueryClient, ui: React.ReactElement) {
@@ -23,10 +23,10 @@ describe('WorkspaceLogActivityButton', () => {
   it('submits a workspace-scoped POST (no /p/ in URL) and closes the popover', async () => {
     const fetchMock = vi.fn<typeof fetch>(async (url, init) => {
       if (init?.method === 'POST') {
-        return new Response(
-          JSON.stringify({ data: { lastTouchedAt: new Date().toISOString() } }),
-          { status: 201, headers: { 'content-type': 'application/json' } },
-        );
+        return new Response(JSON.stringify({ data: { lastTouchedAt: new Date().toISOString() } }), {
+          status: 201,
+          headers: { 'content-type': 'application/json' },
+        });
       }
       return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
     });
@@ -54,10 +54,10 @@ describe('WorkspaceLogActivityButton', () => {
   it('Cmd+Enter submits while the popover is open', async () => {
     const fetchMock = vi.fn<typeof fetch>(async (_url, init) => {
       if (init?.method === 'POST') {
-        return new Response(
-          JSON.stringify({ data: { lastTouchedAt: new Date().toISOString() } }),
-          { status: 201, headers: { 'content-type': 'application/json' } },
-        );
+        return new Response(JSON.stringify({ data: { lastTouchedAt: new Date().toISOString() } }), {
+          status: 201,
+          headers: { 'content-type': 'application/json' },
+        });
       }
       return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
     });

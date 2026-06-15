@@ -1,5 +1,5 @@
-import { useMemo } from 'react';
 import { nextFires, validateCronShape } from '@folio/shared';
+import { useMemo } from 'react';
 import { cn } from '../ui/cn.ts';
 
 export interface CronInputProps {
@@ -11,10 +11,7 @@ export interface CronInputProps {
   className?: string;
 }
 
-type Validation =
-  | { state: 'empty' }
-  | { state: 'valid' }
-  | { state: 'invalid'; reason?: string };
+type Validation = { state: 'empty' } | { state: 'valid' } | { state: 'invalid'; reason?: string };
 
 /**
  * Controlled cron-expression input with live validation and a 3-fire preview.
@@ -63,11 +60,7 @@ export function CronInput({
           aria-invalid={validation.state === 'invalid'}
         />
         {validation.state === 'valid' && (
-          <span
-            data-testid="cron-valid"
-            className="text-success text-sm"
-            aria-label="valid cron"
-          >
+          <span data-testid="cron-valid" className="text-success text-sm" aria-label="valid cron">
             ✓
           </span>
         )}

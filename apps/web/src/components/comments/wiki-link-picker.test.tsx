@@ -1,7 +1,7 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { fireEvent, render, screen } from '@testing-library/react';
 import type { ReactNode } from 'react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WikiLinkPicker } from './wiki-link-picker.tsx';
 
 afterEach(() => {
@@ -23,13 +23,10 @@ function makeQC() {
 // The test stub must return the raw server shape so the client can unwrap it.
 function makeDocsResponse(docs: ReturnType<typeof makeDoc>[]) {
   return () =>
-    new Response(
-      JSON.stringify({ data: { data: docs, nextCursor: null } }),
-      {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      },
-    );
+    new Response(JSON.stringify({ data: { data: docs, nextCursor: null } }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
 }
 
 type DocType = 'page' | 'work_item';
@@ -60,10 +57,10 @@ function stubFetch(
       if (url.includes('type=page')) return pagesResponse();
       if (url.includes('type=work_item')) return workItemsResponse();
       // Fallback — empty list
-      return new Response(
-        JSON.stringify({ data: { data: [], nextCursor: null } }),
-        { status: 200, headers: { 'content-type': 'application/json' } },
-      );
+      return new Response(JSON.stringify({ data: { data: [], nextCursor: null } }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
     }),
   );
 }

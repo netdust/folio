@@ -1,23 +1,29 @@
-import { Editor, rootCtx, defaultValueCtx, editorViewCtx, editorViewOptionsCtx } from '@milkdown/core';
-import { Milkdown, MilkdownProvider, useEditor, useInstance } from '@milkdown/react';
-import { commonmark } from '@milkdown/preset-commonmark';
-import { gfm } from '@milkdown/preset-gfm';
+import {
+  Editor,
+  defaultValueCtx,
+  editorViewCtx,
+  editorViewOptionsCtx,
+  rootCtx,
+} from '@milkdown/core';
+import { clipboard } from '@milkdown/plugin-clipboard';
 import { history } from '@milkdown/plugin-history';
 import { listener, listenerCtx } from '@milkdown/plugin-listener';
-import { clipboard } from '@milkdown/plugin-clipboard';
+import { commonmark } from '@milkdown/preset-commonmark';
+import { gfm } from '@milkdown/preset-gfm';
+import { Milkdown, MilkdownProvider, useEditor, useInstance } from '@milkdown/react';
 import { insert, replaceRange } from '@milkdown/utils';
 import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import { debounce } from '../../lib/debounce.ts';
-import { SlashMenu } from './slash-menu.tsx';
-import { WikiMenu } from './wiki-menu.tsx';
-import { BodyToolbar } from './body-toolbar.tsx';
-import { matchWikiTrigger, replaceWikiToken } from '../../lib/wiki-trigger.ts';
-import { captureSlashTokenRange, replaceCapturedRange } from '../../lib/slash-capture.ts';
 import { type CompletionAction, completeAi } from '../../lib/api/ai-complete.ts';
 import { ApiError } from '../../lib/api/client.ts';
 import type { DocumentSummary } from '../../lib/api/documents.ts';
+import { debounce } from '../../lib/debounce.ts';
+import { captureSlashTokenRange, replaceCapturedRange } from '../../lib/slash-capture.ts';
 import type { SlashContext } from '../../lib/slash-registry.ts';
+import { matchWikiTrigger, replaceWikiToken } from '../../lib/wiki-trigger.ts';
+import { BodyToolbar } from './body-toolbar.tsx';
+import { SlashMenu } from './slash-menu.tsx';
+import { WikiMenu } from './wiki-menu.tsx';
 
 interface Props {
   value: string;
@@ -67,10 +73,18 @@ function MilkdownEditor({
   const debouncedOnChange = useRef(debounce((md: string) => onChangeRef.current(md), 400)).current;
   useEffect(() => () => debouncedOnChange.cancel(), [debouncedOnChange]);
 
-  const [slash, setSlash] = useState<SlashState>({ open: false, query: '', rect: { top: 0, left: 0 } });
+  const [slash, setSlash] = useState<SlashState>({
+    open: false,
+    query: '',
+    rect: { top: 0, left: 0 },
+  });
   // `[[` wiki-link trigger — independent of the `/` slash trigger (different
   // chars, mutually exclusive in practice). Mirrors the slash machinery.
-  const [wiki, setWiki] = useState<SlashState>({ open: false, query: '', rect: { top: 0, left: 0 } });
+  const [wiki, setWiki] = useState<SlashState>({
+    open: false,
+    query: '',
+    rect: { top: 0, left: 0 },
+  });
 
   // The live Editor instance — resolved inside MilkdownProvider exactly as
   // BodyToolbar does. Used by the AI slash path to PARSE the result through the
@@ -125,7 +139,11 @@ function MilkdownEditor({
         const m = beforeText.match(/(?:^|\s)\/([\w-]*)$/);
         if (m) {
           const rect = range.getBoundingClientRect();
-          setSlash({ open: true, query: m[1] ?? '', rect: { top: rect.bottom + 4, left: rect.left } });
+          setSlash({
+            open: true,
+            query: m[1] ?? '',
+            rect: { top: rect.bottom + 4, left: rect.left },
+          });
         } else {
           setSlash((s) => (s.open ? { ...s, open: false } : s));
         }
@@ -133,7 +151,11 @@ function MilkdownEditor({
         const wikiQuery = matchWikiTrigger(beforeText);
         if (wikiQuery !== null) {
           const rect = range.getBoundingClientRect();
-          setWiki({ open: true, query: wikiQuery, rect: { top: rect.bottom + 4, left: rect.left } });
+          setWiki({
+            open: true,
+            query: wikiQuery,
+            rect: { top: rect.bottom + 4, left: rect.left },
+          });
         } else {
           setWiki((w) => (w.open ? { ...w, open: false } : w));
         }
@@ -204,8 +226,12 @@ function MilkdownEditor({
   const aiInFlightRef = useRef(false);
 
   const slashCtx: SlashContext = {
-    get documents() { return documentsRef.current; },
-    get aiConfigured() { return aiConfiguredRef.current; },
+    get documents() {
+      return documentsRef.current;
+    },
+    get aiConfigured() {
+      return aiConfiguredRef.current;
+    },
     insert: (text: string) => {
       const dom = getProseDOM();
       if (!dom) return;
@@ -265,12 +291,23 @@ function MilkdownEditor({
       // text (the root-cause fix). Returns false when the captured range no
       // longer fits the (edited) document — e.g. the user deleted the block.
       const placeResult = (markdown: string): boolean =>
-        replaceCapturedRange(editor, getEditorView(editor), captured, markdown, parseInsertOverRange);
+        replaceCapturedRange(
+          editor,
+          getEditorView(editor),
+          captured,
+          markdown,
+          parseInsertOverRange,
+        );
 
       // Capture the body BEFORE the slash token is mutated. `/draft` works from
       // the title even when the body is empty; the others transform the body.
       const content = valueRef.current;
-      const verb = action === 'decompose' ? 'Decomposing' : action === 'summarize' ? 'Summarizing' : 'Drafting';
+      const verb =
+        action === 'decompose'
+          ? 'Decomposing'
+          : action === 'summarize'
+            ? 'Summarizing'
+            : 'Drafting';
       const dismiss = toast.loading(`${verb}…`);
       aiInFlightRef.current = true;
       try {
@@ -291,10 +328,7 @@ function MilkdownEditor({
         // with a stray `/draft`, consistent with the success path.
         placeResult('');
         const code =
-          err instanceof ApiError &&
-          err.body &&
-          typeof err.body === 'object' &&
-          'error' in err.body
+          err instanceof ApiError && err.body && typeof err.body === 'object' && 'error' in err.body
             ? (err.body as { error?: { code?: string } }).error?.code
             : undefined;
         if (code === 'AI_REFUSED') toast.warning('The AI declined to complete this request.');

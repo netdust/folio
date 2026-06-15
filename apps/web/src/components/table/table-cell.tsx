@@ -1,15 +1,15 @@
 import { ArrowUpRight } from 'lucide-react';
-import { InlineEdit } from '../inline/inline-edit.tsx';
-import { InlineSelect } from '../inline/inline-select.tsx';
-import { Icon } from '../ui/icon.tsx';
-import { Pill } from '../ui/pill.tsx';
-import { cn } from '../ui/cn.ts';
-import { FieldRenderer } from '../slideover/field-renderer.tsx';
-import type { Column } from './columns.ts';
 import type { DocumentSummary } from '../../lib/api/documents.ts';
 import type { Status } from '../../lib/api/statuses.ts';
-import { relativeTime } from '../../lib/relative-time.ts';
 import { dueUrgency, urgencyClasses } from '../../lib/due-urgency.ts';
+import { relativeTime } from '../../lib/relative-time.ts';
+import { InlineEdit } from '../inline/inline-edit.tsx';
+import { InlineSelect } from '../inline/inline-select.tsx';
+import { FieldRenderer } from '../slideover/field-renderer.tsx';
+import { cn } from '../ui/cn.ts';
+import { Icon } from '../ui/icon.tsx';
+import { Pill } from '../ui/pill.tsx';
+import type { Column } from './columns.ts';
 
 interface Props {
   column: Column;
@@ -43,7 +43,9 @@ export function TableCell({
   const content = renderContent();
   if (!isSticky) return content;
   return (
-    <div className="sticky left-0 z-[1] flex items-center border-r border-border-light bg-content pl-[22px] pr-3 group-hover/row:bg-card">{content}</div>
+    <div className="sticky left-0 z-[1] flex items-center border-r border-border-light bg-content pl-[22px] pr-3 group-hover/row:bg-card">
+      {content}
+    </div>
   );
 
   function renderContent() {
@@ -72,7 +74,7 @@ export function TableCell({
         );
       }
       if (column.key === 'status') {
-        const current = doc.status ? statuses.find((s) => s.key === doc.status) ?? null : null;
+        const current = doc.status ? (statuses.find((s) => s.key === doc.status) ?? null) : null;
         return (
           <InlineSelect
             value={doc.status}
@@ -91,7 +93,9 @@ export function TableCell({
         );
       }
       if (column.key === 'updated_at') {
-        return <span className="font-mono text-[11px] text-fg-3">{relativeTime(doc.updatedAt)}</span>;
+        return (
+          <span className="font-mono text-[11px] text-fg-3">{relativeTime(doc.updatedAt)}</span>
+        );
       }
       return null;
     }

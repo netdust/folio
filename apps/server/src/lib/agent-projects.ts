@@ -58,10 +58,7 @@ export function resolveAgentProjects(agent: Pick<Document, 'frontmatter'>): stri
  * Returns the effective list (still wildcard-aware: `.includes('*')` means
  * full access).
  */
-export function intersectAgentProjects(
-  agentList: string[],
-  tokenList: string[] | null,
-): string[] {
+export function intersectAgentProjects(agentList: string[], tokenList: string[] | null): string[] {
   if (tokenList === null) return agentList;
   if (agentList.includes('*')) return tokenList;
   return agentList.filter((id) => tokenList.includes(id));

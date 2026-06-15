@@ -5,19 +5,23 @@ import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import { db } from '../db/client.ts';
 import { fields } from '../db/schema.ts';
-import { jsonOk, HTTPError } from '../lib/http.ts';
+import { dryRunResult, isDryRun, isDryRunDelete } from '../lib/dry-run.ts';
 import { emitEvent, txWithEvents } from '../lib/events.ts';
 import { FIELD_TYPES, type FieldType, validateTypeChange } from '../lib/field-type-change.ts';
-import { dryRunResult, isDryRun, isDryRunDelete } from '../lib/dry-run.ts';
-import { listFields } from '../services/fields.ts';
+import { HTTPError, jsonOk } from '../lib/http.ts';
 import { type AuthContext, getUser } from '../middleware/auth.ts';
 import { requireScope } from '../middleware/bearer.ts';
-import { getProject, getTable, getWorkspace, type ScopeContext } from '../middleware/scope.ts';
+import { type ScopeContext, getProject, getTable, getWorkspace } from '../middleware/scope.ts';
+import { listFields } from '../services/fields.ts';
 
 const fieldsRoute = new Hono<AuthContext & ScopeContext>();
 
 const baseSchema = z.object({
-  key: z.string().min(1).max(64).regex(/^[a-z][a-z0-9_]*$/),
+  key: z
+    .string()
+    .min(1)
+    .max(64)
+    .regex(/^[a-z][a-z0-9_]*$/),
   type: z.enum(FIELD_TYPES),
   label: z.string().max(80).optional(),
   options: z.array(z.string()).nullable().optional(),
@@ -34,7 +38,11 @@ function validateOptions(type: string, options: string[] | undefined): void {
   }
   if (type === 'currency') {
     if (!options || options.length !== 1 || !/^[A-Z]{3}$/.test(options[0] ?? '')) {
-      throw new HTTPError('INVALID_BODY', `field type "currency" requires options to be a single ISO-4217 code (e.g. ["EUR"])`, 422);
+      throw new HTTPError(
+        'INVALID_BODY',
+        `field type "currency" requires options to be a single ISO-4217 code (e.g. ["EUR"])`,
+        422,
+      );
     }
     return;
   }
@@ -49,10 +57,18 @@ function validateOptions(type: string, options: string[] | undefined): void {
     const [target, cardinality] = options;
     const targetOk = target === 'wiki' || /^table:[\w-]+$/.test(target ?? '');
     if (!targetOk) {
-      throw new HTTPError('INVALID_BODY', `relation target must be "wiki" or "table:<id>", got "${target}"`, 422);
+      throw new HTTPError(
+        'INVALID_BODY',
+        `relation target must be "wiki" or "table:<id>", got "${target}"`,
+        422,
+      );
     }
     if (cardinality !== 'single' && cardinality !== 'multi') {
-      throw new HTTPError('INVALID_BODY', `relation cardinality must be "single" or "multi", got "${cardinality}"`, 422);
+      throw new HTTPError(
+        'INVALID_BODY',
+        `relation cardinality must be "single" or "multi", got "${cardinality}"`,
+        422,
+      );
     }
     return;
   }
@@ -98,7 +114,10 @@ fieldsRoute.post('/', requireScope('config:write'), zValidator('json', baseSchem
   await txWithEvents(db, async (tx) => {
     await tx.insert(fields).values(row);
     await emitEvent(tx, {
-      workspaceId: ws.id, projectId: p.id, kind: 'field.created', actor: user.id,
+      workspaceId: ws.id,
+      projectId: p.id,
+      kind: 'field.created',
+      actor: user.id,
       payload: { id, key: input.key, type: input.type },
     });
   });
@@ -163,7 +182,13 @@ fieldsRoute.patch(
     validateOptions(finalType, finalOptions ?? undefined);
 
     // Persist the (possibly mutated) options.
-    const updatePatch: { type?: FieldType; key?: string; label?: string; options?: string[] | null; order?: number } = { ...patchFields };
+    const updatePatch: {
+      type?: FieldType;
+      key?: string;
+      label?: string;
+      options?: string[] | null;
+      order?: number;
+    } = { ...patchFields };
     if (
       patch.type === 'currency' &&
       row.type !== 'currency' &&
@@ -182,7 +207,10 @@ fieldsRoute.patch(
     await txWithEvents(db, async (tx) => {
       await tx.update(fields).set(updatePatch).where(eq(fields.id, id));
       await emitEvent(tx, {
-        workspaceId: ws.id, projectId: p.id, kind: 'field.updated', actor: user.id,
+        workspaceId: ws.id,
+        projectId: p.id,
+        kind: 'field.updated',
+        actor: user.id,
         payload: { id, changes: Object.keys(updatePatch) },
       });
     });
@@ -206,7 +234,10 @@ fieldsRoute.delete('/:id', requireScope('config:write'), async (c) => {
   await txWithEvents(db, async (tx) => {
     await tx.delete(fields).where(eq(fields.id, id));
     await emitEvent(tx, {
-      workspaceId: ws.id, projectId: p.id, kind: 'field.deleted', actor: user.id,
+      workspaceId: ws.id,
+      projectId: p.id,
+      kind: 'field.deleted',
+      actor: user.id,
       payload: { id, key: row.key },
     });
   });

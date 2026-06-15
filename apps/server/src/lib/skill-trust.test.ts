@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { eq } from 'drizzle-orm';
-import { makeBareTestDb } from '../test/harness.ts';
 import { instanceSkills } from '../db/schema.ts';
+import { makeBareTestDb } from '../test/harness.ts';
 import { getInstanceSkill, seedInstanceSkills } from './instance-skills.ts';
 import { canBlessSkill, setSkillTrust } from './skill-trust.ts';
 

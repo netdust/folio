@@ -1,11 +1,25 @@
-import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { describe, expect, it, vi } from 'vitest';
 import { FilterBar } from './filter-bar.tsx';
 
 const STATUSES = [
-  { id: 's1', key: 'todo', name: 'Todo', color: '#6EAFFF', category: 'unstarted' as const, order: 1 },
-  { id: 's2', key: 'doing', name: 'In progress', color: '#F0A442', category: 'started' as const, order: 2 },
+  {
+    id: 's1',
+    key: 'todo',
+    name: 'Todo',
+    color: '#6EAFFF',
+    category: 'unstarted' as const,
+    order: 1,
+  },
+  {
+    id: 's2',
+    key: 'doing',
+    name: 'In progress',
+    color: '#F0A442',
+    category: 'started' as const,
+    order: 2,
+  },
 ];
 
 describe('FilterBar', () => {
@@ -27,7 +41,10 @@ describe('FilterBar', () => {
     const onChange = vi.fn();
     render(
       <FilterBar
-        clauses={[{ kind: 'status', values: ['todo'] }, { kind: 'priority', value: 'high' }]}
+        clauses={[
+          { kind: 'status', values: ['todo'] },
+          { kind: 'priority', value: 'high' },
+        ]}
         statuses={STATUSES}
         pinnedFields={[
           {

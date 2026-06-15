@@ -32,13 +32,13 @@ import {
   workspaceAccess,
   workspaces,
 } from '../db/schema.ts';
-import { createSession } from '../lib/auth.ts';
 import { env } from '../env.ts';
 import { toolsToScopes } from '../lib/agent-schema.ts';
+import { createSession } from '../lib/auth.ts';
 import { newApiToken } from '../lib/auth.ts';
 import { eventBus } from '../lib/event-bus.ts';
 import { seedProjectDefaults } from '../lib/seed-project-defaults.ts';
-import { createRun, ensureRunsTable, nextChainId } from '../services/agent-runs.ts';
+import { createRun, ensureRunsTable, listRuns, nextChainId } from '../services/agent-runs.ts';
 import { listComments } from '../services/comments.ts';
 import { makeTestApp } from '../test/harness.ts';
 
@@ -555,14 +555,8 @@ test('m58: GET/cancel/retry a run id from ANOTHER workspace → 404 (workspace b
     .values({ id: otherProjectId, workspaceId: otherWsId, slug: 'other-web', name: 'Other Web' });
   await seedProjectDefaults(db, otherProjectId);
 
-  const [otherWorkspace] = await db
-    .select()
-    .from(workspaces)
-    .where(eq(workspaces.id, otherWsId));
-  const [otherProject] = await db
-    .select()
-    .from(projects)
-    .where(eq(projects.id, otherProjectId));
+  const [otherWorkspace] = await db.select().from(workspaces).where(eq(workspaces.id, otherWsId));
+  const [otherProject] = await db.select().from(projects).where(eq(projects.id, otherProjectId));
 
   const otherTable = await getWorkItemsTable(db, otherProjectId);
   const otherParent = await seedWorkItem(db, otherWorkspace!, otherProject!, otherTable, seed.user);
@@ -670,6 +664,48 @@ test('GET list → 422 INVALID_QUERY on unknown status enum value', async () => 
   expect((await res.json()).error.code).toBe('INVALID_QUERY');
 });
 
+test('M5: project-scoped GET /runs caps rows at ?limit', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const table = await getWorkItemsTable(db, seed.project.id);
+  const { agent } = await seedAgent(db, seed.workspace, seed.user, 'helper');
+  // Three runs under the `web` project (each createRun binds its own parent).
+  const parent1 = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+  const parent2 = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+  const parent3 = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+  await seedRun(db, seed.workspace, seed.project, agent, seed.user, parent1);
+  await seedRun(db, seed.workspace, seed.project, agent, seed.user, parent2);
+  await seedRun(db, seed.workspace, seed.project, agent, seed.user, parent3);
+
+  const res = await app.request('/api/v1/w/acme/p/web/runs?limit=2', {
+    headers: { Cookie: seed.sessionCookie },
+  });
+  expect(res.status).toBe(200);
+  const { data } = await res.json();
+  expect(data.length).toBe(2);
+});
+
+// Proves the DEFAULT cap actually bites at the service contract the route
+// relies on: `limit: undefined` is unbounded (returns all 3) while a numeric
+// limit caps. A regression flipping the route's `: 50` default to `: undefined`
+// would re-open the unbounded fetch — this pins that the bound is load-bearing
+// without seeding >50 rows.
+test('M5: listRuns limit caps rows; undefined stays unbounded', async () => {
+  const { db, seed } = await makeTestApp();
+  const table = await getWorkItemsTable(db, seed.project.id);
+  const { agent } = await seedAgent(db, seed.workspace, seed.user, 'helper');
+  const parent1 = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+  const parent2 = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+  const parent3 = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+  await seedRun(db, seed.workspace, seed.project, agent, seed.user, parent1);
+  await seedRun(db, seed.workspace, seed.project, agent, seed.user, parent2);
+  await seedRun(db, seed.workspace, seed.project, agent, seed.user, parent3);
+
+  const unbounded = await listRuns({ projectId: seed.project.id, limit: undefined });
+  const capped = await listRuns({ projectId: seed.project.id, limit: 2 });
+  expect(unbounded.length).toBe(3);
+  expect(capped.length).toBe(2);
+});
+
 // ----- GET workspace-scoped list (wScope) -----
 
 test('GET workspace-scoped list returns runs newest-first', async () => {
@@ -763,10 +799,7 @@ test('GET workspace-scoped list → 422 INVALID_QUERY on unknown status enum val
 //
 // Seeds a SECOND project 'ops' in acme + a run in each; the invitee is granted
 // ONLY 'web'. Uses one shared setup helper for the three assertions below.
-async function seedTwoProjectRuns(
-  db: DB,
-  seed: Awaited<ReturnType<typeof makeTestApp>>['seed'],
-) {
+async function seedTwoProjectRuns(db: DB, seed: Awaited<ReturnType<typeof makeTestApp>>['seed']) {
   // 'web' = seed.project (the invitee's granted project). Run #1 there.
   const webTable = await getWorkItemsTable(db, seed.project.id);
   const webParent = await seedWorkItem(db, seed.workspace, seed.project, webTable, seed.user);
@@ -775,7 +808,9 @@ async function seedTwoProjectRuns(
 
   // 'ops' = a second project in the SAME workspace. Run #2 there.
   const opsId = nanoid();
-  await db.insert(projects).values({ id: opsId, workspaceId: seed.workspace.id, slug: 'ops', name: 'Ops' });
+  await db
+    .insert(projects)
+    .values({ id: opsId, workspaceId: seed.workspace.id, slug: 'ops', name: 'Ops' });
   await seedProjectDefaults(db, opsId);
   const [opsProject] = await db.select().from(projects).where(eq(projects.id, opsId));
   const opsTable = await getWorkItemsTable(db, opsId);
@@ -792,7 +827,10 @@ test('CR-9: project-only invitee ws-scoped runs list excludes sibling-project ru
   // Project-only invitee: project_access to 'web' ONLY, no workspace_access.
   const inviteeId = nanoid();
   await db.insert(users).values({
-    id: inviteeId, email: 'runinvitee@test.local', name: 'Run Invitee', role: 'member',
+    id: inviteeId,
+    email: 'runinvitee@test.local',
+    name: 'Run Invitee',
+    role: 'member',
   });
   await db.insert(projectAccess).values({ userId: inviteeId, projectId: seed.project.id });
   const session = await createSession(inviteeId);
@@ -813,7 +851,10 @@ test('CR-9: project-only invitee CANNOT load a sibling-project run by id (404)',
 
   const inviteeId = nanoid();
   await db.insert(users).values({
-    id: inviteeId, email: 'runinvitee2@test.local', name: 'Run Invitee 2', role: 'member',
+    id: inviteeId,
+    email: 'runinvitee2@test.local',
+    name: 'Run Invitee 2',
+    role: 'member',
   });
   await db.insert(projectAccess).values({ userId: inviteeId, projectId: seed.project.id });
   const session = await createSession(inviteeId);
@@ -823,7 +864,9 @@ test('CR-9: project-only invitee CANNOT load a sibling-project run by id (404)',
   const ok = await app.request(`/api/v1/w/acme/runs/${webRun.id}`, { headers: { Cookie: cookie } });
   expect(ok.status).toBe(200);
   // The sibling project's run by id → 404 (not confirmed to exist).
-  const leaked = await app.request(`/api/v1/w/acme/runs/${opsRun.id}`, { headers: { Cookie: cookie } });
+  const leaked = await app.request(`/api/v1/w/acme/runs/${opsRun.id}`, {
+    headers: { Cookie: cookie },
+  });
   expect(leaked.status).toBe(404);
 });
 
@@ -834,7 +877,10 @@ test('CR-9: a workspace_access grant holder STILL sees all project runs (no over
   // Whole-ws principal: member WITH a workspace_access grant (not owner).
   const wsMemberId = nanoid();
   await db.insert(users).values({
-    id: wsMemberId, email: 'wsrunmember@test.local', name: 'WS Run Member', role: 'member',
+    id: wsMemberId,
+    email: 'wsrunmember@test.local',
+    name: 'WS Run Member',
+    role: 'member',
   });
   await db.insert(workspaceAccess).values({ userId: wsMemberId, workspaceId: seed.workspace.id });
   const session = await createSession(wsMemberId);

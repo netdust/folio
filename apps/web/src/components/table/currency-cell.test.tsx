@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
 import { FieldRenderer } from '../slideover/field-renderer.tsx';
 
 describe('FieldRenderer currency', () => {
@@ -11,7 +11,7 @@ describe('FieldRenderer currency', () => {
         value={1250}
         options={['EUR']}
         onCommit={() => {}}
-      />
+      />,
     );
     // Locale-dependent formatting — assert the digits and symbol both present.
     const node = screen.getByText(/1[\.,]250/);
@@ -21,7 +21,13 @@ describe('FieldRenderer currency', () => {
 
   it('renders empty when value is null', () => {
     const { container } = render(
-      <FieldRenderer fieldKey="amount" type="currency" value={null} options={['EUR']} onCommit={() => {}} />
+      <FieldRenderer
+        fieldKey="amount"
+        type="currency"
+        value={null}
+        options={['EUR']}
+        onCommit={() => {}}
+      />,
     );
     // Display-mode element exists but contains no digit.
     expect(container.textContent ?? '').not.toMatch(/\d/);
@@ -30,9 +36,15 @@ describe('FieldRenderer currency', () => {
   it('commits a parsed number when the user types and blurs', () => {
     const onCommit = vi.fn();
     render(
-      <FieldRenderer fieldKey="amount" type="currency" value={100} options={['EUR']} onCommit={onCommit} />
+      <FieldRenderer
+        fieldKey="amount"
+        type="currency"
+        value={100}
+        options={['EUR']}
+        onCommit={onCommit}
+      />,
     );
-    fireEvent.click(screen.getByText(/€/));   // enter edit mode
+    fireEvent.click(screen.getByText(/€/)); // enter edit mode
     const input = screen.getByRole('spinbutton', { name: 'amount' });
     fireEvent.change(input, { target: { value: '350' } });
     fireEvent.blur(input);
@@ -42,7 +54,13 @@ describe('FieldRenderer currency', () => {
   it('does not commit on blur when the value is unchanged', () => {
     const onCommit = vi.fn();
     render(
-      <FieldRenderer fieldKey="amount" type="currency" value={100} options={['EUR']} onCommit={onCommit} />
+      <FieldRenderer
+        fieldKey="amount"
+        type="currency"
+        value={100}
+        options={['EUR']}
+        onCommit={onCommit}
+      />,
     );
     fireEvent.click(screen.getByText(/€/));
     const input = screen.getByRole('spinbutton', { name: 'amount' });

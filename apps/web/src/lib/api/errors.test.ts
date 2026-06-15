@@ -1,10 +1,12 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { ApiError } from './client.ts';
-import { formatApiError, apiErrorCode } from './errors.ts';
+import { apiErrorCode, formatApiError } from './errors.ts';
 
 describe('formatApiError', () => {
   it('uses message from API error envelope', () => {
-    const err = new ApiError(409, { error: { code: 'SLUG_TAKEN', message: 'Slug already exists' } });
+    const err = new ApiError(409, {
+      error: { code: 'SLUG_TAKEN', message: 'Slug already exists' },
+    });
     expect(formatApiError(err)).toBe('Slug already exists');
   });
 

@@ -1,8 +1,8 @@
-import { describe, expect, it, vi, afterEach } from 'vitest';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AssigneePicker } from './assignee-picker.tsx';
 
 afterEach(() => {
@@ -71,7 +71,14 @@ const projectsResponse = () =>
   new Response(
     JSON.stringify({
       data: [
-        { id: 'pid-web', workspaceId: 'w1', slug: 'web', name: 'Web', icon: null, description: null },
+        {
+          id: 'pid-web',
+          workspaceId: 'w1',
+          slug: 'web',
+          name: 'Web',
+          icon: null,
+          description: null,
+        },
       ],
     }),
     { status: 200, headers: { 'content-type': 'application/json' } },
@@ -82,13 +89,12 @@ describe('AssigneePicker', () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     stubFetch({
       '/documents?type=agent': agentsResponse, // workspace-scoped agents list
-      '/projects': projectsResponse,            // useProjects lookup for pslug → id
+      '/projects': projectsResponse, // useProjects lookup for pslug → id
       '/members': memberResponse,
     });
-    render(
-      <AssigneePicker wslug="acme" pslug="web" value="" onChange={() => {}} />,
-      { wrapper: wrap(qc) },
-    );
+    render(<AssigneePicker wslug="acme" pslug="web" value="" onChange={() => {}} />, {
+      wrapper: wrap(qc),
+    });
     await userEvent.click(screen.getByRole('button', { name: /unassigned/i }));
 
     expect(await screen.findByText(/members/i)).toBeInTheDocument();
@@ -102,14 +108,13 @@ describe('AssigneePicker', () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     stubFetch({
       '/documents?type=agent': agentsResponse, // workspace-scoped agents list
-      '/projects': projectsResponse,            // useProjects lookup for pslug → id
+      '/projects': projectsResponse, // useProjects lookup for pslug → id
       '/members': memberResponse,
     });
     const onChange = vi.fn();
-    render(
-      <AssigneePicker wslug="acme" pslug="web" value="" onChange={onChange} />,
-      { wrapper: wrap(qc) },
-    );
+    render(<AssigneePicker wslug="acme" pslug="web" value="" onChange={onChange} />, {
+      wrapper: wrap(qc),
+    });
     await userEvent.click(screen.getByRole('button', { name: /unassigned/i }));
     await userEvent.click(await screen.findByRole('button', { name: /Alice alice@test/i }));
     expect(onChange).toHaveBeenCalledWith('alice@test');
@@ -119,14 +124,13 @@ describe('AssigneePicker', () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     stubFetch({
       '/documents?type=agent': agentsResponse, // workspace-scoped agents list
-      '/projects': projectsResponse,            // useProjects lookup for pslug → id
+      '/projects': projectsResponse, // useProjects lookup for pslug → id
       '/members': memberResponse,
     });
     const onChange = vi.fn();
-    render(
-      <AssigneePicker wslug="acme" pslug="web" value="" onChange={onChange} />,
-      { wrapper: wrap(qc) },
-    );
+    render(<AssigneePicker wslug="acme" pslug="web" value="" onChange={onChange} />, {
+      wrapper: wrap(qc),
+    });
     await userEvent.click(screen.getByRole('button', { name: /unassigned/i }));
     await userEvent.click(await screen.findByRole('button', { name: /Triage Bot/i }));
     expect(onChange).toHaveBeenCalledWith('agent:triage-bot');
@@ -136,16 +140,11 @@ describe('AssigneePicker', () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     stubFetch({
       '/documents?type=agent': agentsResponse, // workspace-scoped agents list
-      '/projects': projectsResponse,            // useProjects lookup for pslug → id
+      '/projects': projectsResponse, // useProjects lookup for pslug → id
       '/members': memberResponse,
     });
     render(
-      <AssigneePicker
-        wslug="acme"
-        pslug="web"
-        value="agent:triage-bot"
-        onChange={() => {}}
-      />,
+      <AssigneePicker wslug="acme" pslug="web" value="agent:triage-bot" onChange={() => {}} />,
       { wrapper: wrap(qc) },
     );
     // Wait for agents to load so the label resolves to the friendly name.
@@ -158,19 +157,13 @@ describe('AssigneePicker', () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     stubFetch({
       '/documents?type=agent': agentsResponse, // workspace-scoped agents list
-      '/projects': projectsResponse,            // useProjects lookup for pslug → id
+      '/projects': projectsResponse, // useProjects lookup for pslug → id
       '/members': memberResponse,
     });
     const onChange = vi.fn();
-    render(
-      <AssigneePicker
-        wslug="acme"
-        pslug="web"
-        value="alice@test"
-        onChange={onChange}
-      />,
-      { wrapper: wrap(qc) },
-    );
+    render(<AssigneePicker wslug="acme" pslug="web" value="alice@test" onChange={onChange} />, {
+      wrapper: wrap(qc),
+    });
     await userEvent.click(screen.getByRole('button', { name: /alice/i }));
     await userEvent.click(await screen.findByRole('button', { name: /clear assignee|unassign/i }));
     expect(onChange).toHaveBeenCalledWith('');

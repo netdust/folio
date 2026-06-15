@@ -235,9 +235,19 @@ export const fields = sqliteTable(
     key: text('key').notNull(), // frontmatter key name
     type: text('type', {
       enum: [
-        'string', 'text', 'number', 'boolean', 'date', 'datetime',
-        'select', 'multi_select', 'user_ref', 'url', 'document_ref',
-        'currency', 'relation',
+        'string',
+        'text',
+        'number',
+        'boolean',
+        'date',
+        'datetime',
+        'select',
+        'multi_select',
+        'user_ref',
+        'url',
+        'document_ref',
+        'currency',
+        'relation',
       ],
     }).notNull(),
     label: text('label'),
@@ -398,7 +408,7 @@ export const aiKeys = sqliteTable(
       enum: ['anthropic', 'openai', 'openrouter', 'ollama'],
     }).notNull(),
     label: text('label').notNull().default('default'),
-    encryptedKey: text('encrypted_key').notNull(), // libsodium-style ciphertext
+    encryptedKey: text('encrypted_key').notNull(), // AES-256-GCM ciphertext: base64(iv[12] || ct+tag) — see lib/crypto.ts
     baseUrl: text('base_url'), // for ollama / custom endpoints
     createdAt: integer('created_at', { mode: 'timestamp_ms' })
       .notNull()

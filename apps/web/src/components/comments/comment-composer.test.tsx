@@ -1,7 +1,7 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CommentComposer, resetEditorContent } from './comment-composer.tsx';
 
 afterEach(() => {
@@ -27,11 +27,12 @@ function makeQC() {
 function stubFetchEmpty() {
   vi.stubGlobal(
     'fetch',
-    vi.fn(async () =>
-      new Response(JSON.stringify({ data: [] }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      }),
+    vi.fn(
+      async () =>
+        new Response(JSON.stringify({ data: [] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
     ),
   );
 }
@@ -157,9 +158,7 @@ describe('CommentComposer', () => {
     const { onSubmit } = renderComposer();
     fireEvent.click(screen.getByTestId('comment-composer-submit'));
     await waitFor(() => expect(onSubmit).toHaveBeenCalledWith('via click'));
-    await waitFor(() =>
-      expect(localStorage.getItem('folio:comment-draft:task-42')).toBeNull(),
-    );
+    await waitFor(() => expect(localStorage.getItem('folio:comment-draft:task-42')).toBeNull());
   });
 
   it('keeps body intact if onSubmit rejects (no draft clear on failure)', async () => {

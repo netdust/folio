@@ -18,7 +18,13 @@ export function RunRow({ run, docTitle, onClick }: RunRowProps) {
       role={onClick ? 'button' : undefined}
       tabIndex={onClick ? 0 : undefined}
       onClick={onClick}
-      onKeyDown={onClick ? (e) => { if (e.key === 'Enter') onClick(); } : undefined}
+      onKeyDown={
+        onClick
+          ? (e) => {
+              if (e.key === 'Enter') onClick();
+            }
+          : undefined
+      }
       className={`border-b border-border-light px-3 py-2.5 text-sm ${onClick ? 'cursor-pointer hover:bg-card' : ''}`}
     >
       <div className="flex items-center gap-1.5">

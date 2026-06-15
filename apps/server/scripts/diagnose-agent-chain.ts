@@ -1,3 +1,8 @@
+// NOTE (M0 / 2026-06-15): this real-key headless agent-chain tracer PREDATES the
+// drop-workspace-tenancy refactor (2026-06). It may reference torn-down concepts
+// (`__system`, per-workspace membership) and need porting to the single-team model
+// before it runs clean. Kept deliberately — sibling of diagnose-http-chain.ts, the
+// real-key end-to-end proof harnesses.
 /**
  * Phase 3 — F-4 DIAGNOSTIC (headless agent-chain boundary tracer).
  *
@@ -85,10 +90,7 @@ function loadAnthropicKey(): string {
 const ANTHROPIC_KEY = loadAnthropicKey();
 
 // --- Fixed test master key (same value playwright.config.ts uses). 64 hex. ---
-process.env.FOLIO_MASTER_KEY =
-  '0000000000000000000000000000000000000000000000000000000000000001';
-// SESSION_SECRET must be >= 32 chars for env.ts to parse (auth import side-effect).
-process.env.SESSION_SECRET ??= 'diag-session-secret-diag-session-secret-xx';
+process.env.FOLIO_MASTER_KEY = '0000000000000000000000000000000000000000000000000000000000000001';
 // Isolated DB file (deleted below for a clean run). We open it ourselves and
 // install it as the test DB override, so DATABASE_URL is informational here.
 process.env.DATABASE_URL = `file:${DB_FILE}`;
@@ -174,11 +176,15 @@ async function main(): Promise<void> {
     });
 
     workspaceId = nanoid();
-    await db.insert(schema.workspaces).values({ id: workspaceId, slug: 'diag-ws', name: 'Diag WS' });
+    await db
+      .insert(schema.workspaces)
+      .values({ id: workspaceId, slug: 'diag-ws', name: 'Diag WS' });
     await db.insert(schema.memberships).values({ workspaceId, userId, role: 'owner' });
 
     projectId = nanoid();
-    await db.insert(schema.projects).values({ id: projectId, workspaceId, slug: 'diag-proj', name: 'Diag Proj' });
+    await db
+      .insert(schema.projects)
+      .values({ id: projectId, workspaceId, slug: 'diag-proj', name: 'Diag Proj' });
     await seedProjectDefaults(db, projectId);
 
     // BYOK key: store the REAL Anthropic key, encrypted exactly the way the
@@ -242,7 +248,8 @@ async function main(): Promise<void> {
     const workItemsTable = await db.query.tables.findFirst({
       where: and(eq(tables.projectId, projectId), eq(tables.slug, 'work-items')),
     });
-    if (!workItemsTable) throw new Error('setup: work-items table missing after seedProjectDefaults');
+    if (!workItemsTable)
+      throw new Error('setup: work-items table missing after seedProjectDefaults');
     workItemId = nanoid();
     await db.insert(documents).values({
       id: workItemId,
@@ -258,7 +265,9 @@ async function main(): Promise<void> {
       createdBy: userId,
       updatedBy: userId,
     });
-    console.log(`[setup] workspace=${workspaceId} project=${projectId} agent=${AGENT_SLUG} work_item=${workItemId}`);
+    console.log(
+      `[setup] workspace=${workspaceId} project=${projectId} agent=${AGENT_SLUG} work_item=${workItemId}`,
+    );
   } catch (err) {
     console.error('[SETUP] FAILED — cannot run the chain:', err);
     process.exit(1);
@@ -273,11 +282,15 @@ async function main(): Promise<void> {
   // Shared B1 — assign via the REAL updateDocument (the UI's PATCH path that
   // must emit agent.task.assigned). Used by both modes.
   const assignWorkItemToAgent = async (): Promise<void> => {
-    const [ws] = await db.select().from(schema.workspaces).where(eq(schema.workspaces.id, workspaceId));
+    const [ws] = await db
+      .select()
+      .from(schema.workspaces)
+      .where(eq(schema.workspaces.id, workspaceId));
     const [proj] = await db.select().from(schema.projects).where(eq(schema.projects.id, projectId));
     const [actorUser] = await db.select().from(schema.users).where(eq(schema.users.id, userId));
     const existing = await db.query.documents.findFirst({ where: eq(documents.id, workItemId) });
-    if (!ws || !proj || !actorUser || !existing) throw new Error('B1: setup rows missing for updateDocument');
+    if (!ws || !proj || !actorUser || !existing)
+      throw new Error('B1: setup rows missing for updateDocument');
     await updateDocument({
       workspace: ws,
       project: proj,
@@ -337,7 +350,9 @@ async function main(): Promise<void> {
         .select()
         .from(events)
         .where(and(eq(events.documentId, workItemId), eq(events.kind, 'agent.task.assigned')));
-      console.log(`[B2] agent.task.assigned emitted = ${evRows.length} payload=${truncate(evRows[0]?.payload)}`);
+      console.log(
+        `[B2] agent.task.assigned emitted = ${evRows.length} payload=${truncate(evRows[0]?.payload)}`,
+      );
       if (evRows.length === 0) markBreak('B2');
 
       // STEP 5 — poll up to ~90s (the e2e timeout). Every 2s re-query the run
@@ -393,7 +408,9 @@ async function main(): Promise<void> {
         where: and(eq(documents.type, 'agent_run'), eq(documents.parentId, workItemId)),
       });
       const fm = (finalRun?.frontmatter ?? {}) as Record<string, unknown>;
-      console.log(`[B3] planning/run row = ${finalRun ? 1 : 0} status=${truncate(finalRun?.status)}`);
+      console.log(
+        `[B3] planning/run row = ${finalRun ? 1 : 0} status=${truncate(finalRun?.status)}`,
+      );
       console.log(
         `[B4] run status = ${finalRun?.status} error_reason=${truncate(fm.error_reason)} error_detail=${truncate(fm.error_detail)}`,
       );
@@ -451,11 +468,15 @@ async function main(): Promise<void> {
   // BOUNDARY 1 — assign via the REAL updateDocument (the UI's PATCH path).
   // -------------------------------------------------------------------------
   try {
-    const [ws] = await db.select().from(schema.workspaces).where(eq(schema.workspaces.id, workspaceId));
+    const [ws] = await db
+      .select()
+      .from(schema.workspaces)
+      .where(eq(schema.workspaces.id, workspaceId));
     const [proj] = await db.select().from(schema.projects).where(eq(schema.projects.id, projectId));
     const [actorUser] = await db.select().from(schema.users).where(eq(schema.users.id, userId));
     const existing = await db.query.documents.findFirst({ where: eq(documents.id, workItemId) });
-    if (!ws || !proj || !actorUser || !existing) throw new Error('B1: setup rows missing for updateDocument');
+    if (!ws || !proj || !actorUser || !existing)
+      throw new Error('B1: setup rows missing for updateDocument');
 
     await updateDocument({
       workspace: ws,
@@ -516,7 +537,9 @@ async function main(): Promise<void> {
     for (const kind of diagKinds) {
       const k = await db.select().from(events).where(eq(events.kind, kind));
       if (k.length > 0) {
-        console.log(`[B3] diagnostic event ${kind} = ${k.length} payload=${truncate(k[0]?.payload)}`);
+        console.log(
+          `[B3] diagnostic event ${kind} = ${k.length} payload=${truncate(k[0]?.payload)}`,
+        );
       }
     }
     if (runRows.length === 0) markBreak('B3');
@@ -549,7 +572,9 @@ async function main(): Promise<void> {
       await new Promise((r) => setTimeout(r, 250));
     }
     if (inFlight.count > 0) {
-      console.log(`[B4] WARNING: runAgent still in-flight after ${MAX_WAIT_MS}ms (count=${inFlight.count})`);
+      console.log(
+        `[B4] WARNING: runAgent still in-flight after ${MAX_WAIT_MS}ms (count=${inFlight.count})`,
+      );
     }
 
     const runRow = await db.query.documents.findFirst({
@@ -601,7 +626,9 @@ async function main(): Promise<void> {
   if (firstBreak) {
     console.log(`VERDICT: BREAK AT ${firstBreak}: ${VERDICT_DESC[firstBreak]}`);
   } else {
-    console.log('VERDICT: CHAIN INTACT — assign → event → run → completed → result comment all fired. No break.');
+    console.log(
+      'VERDICT: CHAIN INTACT — assign → event → run → completed → result comment all fired. No break.',
+    );
   }
 
   sqlite.close();

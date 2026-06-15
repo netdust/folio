@@ -1,8 +1,8 @@
-import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { renderHook, act, waitFor } from '@testing-library/react';
-import React from 'react';
-import { useRuns, useCancelRun, useRunsLiveSync, runsKeys } from './runs.ts';
+import { act, renderHook, waitFor } from '@testing-library/react';
+import type React from 'react';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { runsKeys, useCancelRun, useRuns, useRunsLiveSync } from './runs.ts';
 
 class MockEventSource {
   static instances: MockEventSource[] = [];
@@ -22,14 +22,19 @@ class MockEventSource {
     this.listeners.set(type, arr);
   }
   removeEventListener(type: string, fn: (e: MessageEvent) => void) {
-    this.listeners.set(type, (this.listeners.get(type) ?? []).filter((f) => f !== fn));
+    this.listeners.set(
+      type,
+      (this.listeners.get(type) ?? []).filter((f) => f !== fn),
+    );
   }
   emit(type: string, data: string) {
     const ev = { data } as MessageEvent;
     for (const fn of this.listeners.get(type) ?? []) fn(ev);
     if (type === 'message') this.onmessage?.(ev);
   }
-  close() { this.closed = true; }
+  close() {
+    this.closed = true;
+  }
 }
 
 function wrapperOf(qc: QueryClient) {
@@ -39,44 +44,71 @@ function wrapperOf(qc: QueryClient) {
 }
 
 beforeEach(() => {
-  vi.stubGlobal('fetch', vi.fn<typeof fetch>(async (url, init) => {
-    const u = String(url);
-    if (init?.method === 'POST' && u.endsWith('/runs')) {
-      return new Response(JSON.stringify({ data: { run_id: 'r1', status: 'planning' } }),
-        { status: 201, headers: { 'content-type': 'application/json' } });
-    }
-    if (init?.method === 'POST' && u.includes('/cancel')) {
-      return new Response(JSON.stringify({ data: { run_id: 'r1', status: 'failed' } }),
-        { status: 200, headers: { 'content-type': 'application/json' } });
-    }
-    // Real server wraps via jsonOk → { data: [...] }; client.get unwraps the single `data` key to the array.
-    return new Response(JSON.stringify({ data: [{ id: 'r1', slug: 'run-1', type: 'agent_run', status: 'running', frontmatter: {} }] }),
-      { status: 200, headers: { 'content-type': 'application/json' } });
-  }));
+  vi.stubGlobal(
+    'fetch',
+    vi.fn<typeof fetch>(async (url, init) => {
+      const u = String(url);
+      if (init?.method === 'POST' && u.endsWith('/runs')) {
+        return new Response(JSON.stringify({ data: { run_id: 'r1', status: 'planning' } }), {
+          status: 201,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (init?.method === 'POST' && u.includes('/cancel')) {
+        return new Response(JSON.stringify({ data: { run_id: 'r1', status: 'failed' } }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      // Real server wraps via jsonOk → { data: [...] }; client.get unwraps the single `data` key to the array.
+      return new Response(
+        JSON.stringify({
+          data: [
+            { id: 'r1', slug: 'run-1', type: 'agent_run', status: 'running', frontmatter: {} },
+          ],
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    }),
+  );
 });
 afterEach(() => vi.unstubAllGlobals());
 
 describe('runs hooks', () => {
   test('useRuns fetches the project-scoped list and unwraps to an array', async () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    const { result } = renderHook(() => useRuns('acme', 'web', { status: 'running' }), { wrapper: wrapperOf(qc) });
+    const { result } = renderHook(() => useRuns('acme', 'web', { status: 'running' }), {
+      wrapper: wrapperOf(qc),
+    });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(Array.isArray(result.current.data)).toBe(true);
     expect(result.current.data![0].id).toBe('r1');
-    const call = (fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.find((c) => String(c[0]).includes('/runs'));
+    const call = (fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.find((c) =>
+      String(c[0]).includes('/runs'),
+    );
     expect(String(call![0])).toBe('/api/v1/w/acme/p/web/runs?status=running');
   });
 
   test('useCancelRun POSTs to the cancel path', async () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const { result } = renderHook(() => useCancelRun('acme'), { wrapper: wrapperOf(qc) });
-    await act(async () => { await result.current.mutateAsync({ runId: 'r1' }); });
-    const call = (fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.find((c) => String(c[0]).includes('/cancel'));
+    await act(async () => {
+      await result.current.mutateAsync({ runId: 'r1' });
+    });
+    const call = (fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.find((c) =>
+      String(c[0]).includes('/cancel'),
+    );
     expect(String(call![0])).toBe('/api/v1/w/acme/runs/r1/cancel');
   });
 
   test('runsKeys.list is project-scoped + filter-keyed', () => {
-    expect(runsKeys.list('acme', 'web', { status: 'running' })).toEqual(['runs', 'acme', 'web', 'list', { status: 'running' }]);
+    expect(runsKeys.list('acme', 'web', { status: 'running' })).toEqual([
+      'runs',
+      'acme',
+      'web',
+      'list',
+      { status: 'running' },
+    ]);
   });
 });
 
@@ -107,7 +139,9 @@ describe('useRunsLiveSync', () => {
     expect(es.url).toContain('agent=bot');
 
     invalidate.mockClear();
-    act(() => es.emit('agent.run.completed', JSON.stringify({ id: 'e1', kind: 'agent.run.completed' })));
+    act(() =>
+      es.emit('agent.run.completed', JSON.stringify({ id: 'e1', kind: 'agent.run.completed' })),
+    );
     expect(invalidate).toHaveBeenCalledWith({ queryKey: runsKeys.all });
   });
 });

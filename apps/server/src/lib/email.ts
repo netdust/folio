@@ -10,10 +10,7 @@ function getTransporter(): nodemailer.Transporter | null {
     host: env.SMTP_HOST,
     port: env.SMTP_PORT,
     secure: env.SMTP_PORT === 465,
-    auth:
-      env.SMTP_USER && env.SMTP_PASS
-        ? { user: env.SMTP_USER, pass: env.SMTP_PASS }
-        : undefined,
+    auth: env.SMTP_USER && env.SMTP_PASS ? { user: env.SMTP_USER, pass: env.SMTP_PASS } : undefined,
   });
   return transporter;
 }
@@ -24,7 +21,12 @@ function magicLinkUrl(token: string): string {
 
 // Shared send (or dev-console fallback when no SMTP is configured). Returns
 // nothing — in dev the link is logged so it can be copy-pasted.
-async function deliver(email: string, subject: string, text: string, devLabel: string): Promise<void> {
+async function deliver(
+  email: string,
+  subject: string,
+  text: string,
+  devLabel: string,
+): Promise<void> {
   const t = getTransporter();
   if (!t) {
     console.log(`\n[folio] ${devLabel} for ${email}:\n  ${magicLinkUrl(extractToken(text))}\n`);

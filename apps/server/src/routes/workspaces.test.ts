@@ -1,13 +1,10 @@
 import { expect, test } from 'bun:test';
+import { describe } from 'bun:test';
 import { and, eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { apiTokens, documents, users, workspaceAccess, workspaces } from '../db/schema.ts';
 import { createSession, newApiToken } from '../lib/auth.ts';
-import {
-  SYSTEM_WORKSPACE_SLUG,
-  findSystemOwnerId,
-} from '../lib/system-workspace.ts';
-import { describe } from 'bun:test';
+import { SYSTEM_WORKSPACE_SLUG, findSystemOwnerId } from '../lib/system-workspace.ts';
 import { listWorkspaces } from '../services/workspaces.ts';
 import { makeTestApp } from '../test/harness.ts';
 import { assertSlugAllowed } from './workspaces.ts';
@@ -74,10 +71,16 @@ test('POST /api/v1/workspaces auto-seeds 4 builtin triggers', async () => {
   // Enabled defaults per spec §6f (updated Phase 3 / Task A-3: runner-bound
   // builtins now start enabled because the runner exists).
   const byslug = Object.fromEntries(triggers.map((t) => [t.slug, t]));
-  expect((byslug['builtin-on-assignment']!.frontmatter as Record<string, unknown>).enabled).toBe(true);
+  expect((byslug['builtin-on-assignment']!.frontmatter as Record<string, unknown>).enabled).toBe(
+    true,
+  );
   expect((byslug['builtin-on-mention']!.frontmatter as Record<string, unknown>).enabled).toBe(true);
-  expect((byslug['builtin-on-approval']!.frontmatter as Record<string, unknown>).enabled).toBe(true);
-  expect((byslug['builtin-on-rejection']!.frontmatter as Record<string, unknown>).enabled).toBe(true);
+  expect((byslug['builtin-on-approval']!.frontmatter as Record<string, unknown>).enabled).toBe(
+    true,
+  );
+  expect((byslug['builtin-on-rejection']!.frontmatter as Record<string, unknown>).enabled).toBe(
+    true,
+  );
 
   // projectId is null (workspace-scoped).
   for (const t of triggers) {
@@ -296,9 +299,13 @@ test('Round 7 #22: GET /members returns empty list for project-narrowed agent-bo
     method: 'POST',
     headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      type: 'agent', title: 'Narrowed Agent',
+      type: 'agent',
+      title: 'Narrowed Agent',
       frontmatter: {
-        system_prompt: 'x', model: 'm', provider: 'anthropic', tools: [],
+        system_prompt: 'x',
+        model: 'm',
+        provider: 'anthropic',
+        tools: [],
         projects: [seed.project.id],
       },
     }),
@@ -333,9 +340,13 @@ test('Round 7 #22: GET /members returns full list for wildcard-allow-list agent-
     method: 'POST',
     headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      type: 'agent', title: 'Wildcard Agent',
+      type: 'agent',
+      title: 'Wildcard Agent',
       frontmatter: {
-        system_prompt: 'x', model: 'm', provider: 'anthropic', tools: [],
+        system_prompt: 'x',
+        model: 'm',
+        provider: 'anthropic',
+        tools: [],
         projects: ['*'],
       },
     }),
@@ -561,10 +572,7 @@ test('A10: an instance bearer with workspace:admin creates a workspace (201)', a
   // membership row). The grant is created against the token's createdBy (the
   // human admin hydrated by attachToken) — A7. Owner-ness is users.role.
   const grant = await db.query.workspaceAccess.findFirst({
-    where: and(
-      eq(workspaceAccess.workspaceId, wsId),
-      eq(workspaceAccess.userId, seed.user.id),
-    ),
+    where: and(eq(workspaceAccess.workspaceId, wsId), eq(workspaceAccess.userId, seed.user.id)),
   });
   expect(grant).toBeDefined();
 });
@@ -688,10 +696,7 @@ describe('CR#2: operator/instance-bearer workspace create', () => {
     // fallback fired. Post-tenancy: the creator gets a workspace_access grant
     // (not an owner membership row); owner-ness is users.role.
     const grant = await db.query.workspaceAccess.findFirst({
-      where: and(
-        eq(workspaceAccess.workspaceId, wsId),
-        eq(workspaceAccess.userId, seed.user.id),
-      ),
+      where: and(eq(workspaceAccess.workspaceId, wsId), eq(workspaceAccess.userId, seed.user.id)),
     });
     expect(grant).toBeDefined();
     // systemOwnerId === seed.user.id (asserted above); compare to the definite

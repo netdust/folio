@@ -1,10 +1,10 @@
+import { ErrorCode } from '@folio/shared';
 import { useNavigate } from '@tanstack/react-router';
-import { Loader2, Mail, Lock, User } from 'lucide-react';
+import { Loader2, Lock, Mail, User } from 'lucide-react';
 import type { FormEvent } from 'react';
 import { useState } from 'react';
-import { ErrorCode } from '@folio/shared';
-import { ApiError, apiErrorCode, formatApiError } from '../../lib/api/index.ts';
 import { useRegister } from '../../lib/api/auth.ts';
+import { ApiError, apiErrorCode, formatApiError } from '../../lib/api/index.ts';
 import { Icon } from '../ui/icon.tsx';
 
 interface Props {
@@ -21,10 +21,7 @@ export function SignupForm({ initialEmail, onEmailChange }: Props) {
 
   const onSubmit = (e: FormEvent) => {
     e.preventDefault();
-    m.mutate(
-      { name, email, password },
-      { onSuccess: () => navigate({ to: '/' }) },
-    );
+    m.mutate({ name, email, password }, { onSuccess: () => navigate({ to: '/' }) });
   };
 
   const onEmail = (v: string) => {
@@ -44,7 +41,13 @@ export function SignupForm({ initialEmail, onEmailChange }: Props) {
     <form className="space-y-4" onSubmit={onSubmit}>
       <FieldWithIcon icon={User} label="Name" type="text" value={name} onChange={setName} />
       <FieldWithIcon icon={Mail} label="Email" type="email" value={email} onChange={onEmail} />
-      <FieldWithIcon icon={Lock} label="Password" type="password" value={password} onChange={setPassword} />
+      <FieldWithIcon
+        icon={Lock}
+        label="Password"
+        type="password"
+        value={password}
+        onChange={setPassword}
+      />
       <button
         type="submit"
         disabled={m.isPending || !name || !email || password.length < 8}

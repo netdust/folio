@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  activeTableFromPath,
   activeTabFromPath,
+  activeTableFromPath,
   resolveTableNav,
   resolveViewNav,
 } from './rail-nav.ts';

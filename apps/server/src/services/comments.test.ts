@@ -9,36 +9,36 @@
  * per test.
  */
 
-import { test, expect } from 'bun:test';
+import { expect, test } from 'bun:test';
 import { and, eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
-import { makeTestApp } from '../test/harness.ts';
 import {
+  events,
+  type Document,
+  type Project,
+  type TableEntity,
+  type User,
+  type Workspace,
   apiTokens,
   documents,
-  events,
   tables,
   users,
   workspaceAccess,
   workspaces,
-  type Document,
-  type User,
-  type Workspace,
-  type Project,
-  type TableEntity,
 } from '../db/schema.ts';
-import { SYSTEM_WORKSPACE_SLUG } from '../lib/system-workspace.ts';
-import { newApiToken } from '../lib/auth.ts';
 import { toolsToScopes } from '../lib/agent-schema.ts';
+import { newApiToken } from '../lib/auth.ts';
+import { HTTPError } from '../lib/http.ts';
+import { SYSTEM_WORKSPACE_SLUG } from '../lib/system-workspace.ts';
+import { makeTestApp } from '../test/harness.ts';
 import {
+  type AuthorContext,
   createComment,
-  updateComment,
   deleteComment,
   getComment,
   listComments,
-  type AuthorContext,
+  updateComment,
 } from './comments.ts';
-import { HTTPError } from '../lib/http.ts';
 
 type TestDB = Awaited<ReturnType<typeof makeTestApp>>['db'];
 
@@ -665,9 +665,7 @@ test('updateComment fires comment.mentioned only for newly resolved agents', asy
   // 1 original + 1 new (reviewer only — drafter was already mentioned).
   expect(after.length).toBe(2);
   // The NEW event should be for reviewer.
-  const sortedByTime = [...after].sort(
-    (a, b) => a.createdAt.getTime() - b.createdAt.getTime(),
-  );
+  const sortedByTime = [...after].sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
   const newest = sortedByTime[sortedByTime.length - 1]!;
   expect((newest.payload as Record<string, unknown>).agent_slug).toBe('reviewer');
 });

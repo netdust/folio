@@ -5,9 +5,11 @@
  * with a narrowed allow-list → confirm the assignee picker honors the
  * allow-list across two projects.
  */
-import { test, expect, signUpFresh, createWorkspace, createProject } from './fixtures.ts';
+import { createProject, createWorkspace, expect, signUpFresh, test } from './fixtures.ts';
 
-test('workspace agents flow: create narrowed agent, assignee picker filters by project', async ({ page }) => {
+test('workspace agents flow: create narrowed agent, assignee picker filters by project', async ({
+  page,
+}) => {
   await signUpFresh(page);
   await createWorkspace(page, 'Phase 2.5 WS', 'p25');
   // Two projects so we can prove the filter actually narrows.

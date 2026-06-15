@@ -14,7 +14,9 @@ export function Tabs<T extends string>({ value, onChange, items }: TabsProps<T>)
           key={item.value}
           type="button"
           aria-pressed={value === item.value}
-          onClick={() => { if (value !== item.value) onChange(item.value); }}
+          onClick={() => {
+            if (value !== item.value) onChange(item.value);
+          }}
           className={cn(
             'rounded-sm px-2 py-1',
             value === item.value ? 'bg-primary text-primary-fg' : 'text-fg-2 hover:bg-card',

@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { cn } from '../ui/cn.ts';
 import {
-  filterSlash,
-  slashRegistry,
   type SlashContext,
   type SlashItem,
+  filterSlash,
+  slashRegistry,
 } from '../../lib/slash-registry.ts';
+import { cn } from '../ui/cn.ts';
 
 interface Props {
   ctx: SlashContext;
@@ -18,6 +18,7 @@ export function SlashMenu({ ctx, query, rect, onClose }: Props) {
   const items = useMemo(() => filterSlash(slashRegistry, query), [query]);
   const [active, setActive] = useState(0);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: resets active item on query change only; setActive is a stable setter
   useEffect(() => setActive(0), [query]);
 
   const selectItem = (item: SlashItem) => {

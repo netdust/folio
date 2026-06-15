@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import { toast } from 'sonner';
-import type { AiProvider } from '../../lib/api/settings.ts';
+import { useTestKey } from '../../lib/api/ai-test-key.ts';
+import { formatApiError } from '../../lib/api/index.ts';
 import {
   useDeleteInstanceAiKey,
   useInstanceAiKeys,
@@ -8,8 +9,7 @@ import {
   useSetOperatorModel,
   useUpsertInstanceAiKey,
 } from '../../lib/api/instance-ai-keys.ts';
-import { useTestKey } from '../../lib/api/ai-test-key.ts';
-import { formatApiError } from '../../lib/api/index.ts';
+import type { AiProvider } from '../../lib/api/settings.ts';
 import { Button } from '../ui/button.tsx';
 
 interface Props {
@@ -212,10 +212,9 @@ export function AiTab({ wslug }: Props) {
       <section>
         <h2 className="text-sm font-medium">AI Provider (instance-wide)</h2>
         <p className="mt-0.5 text-xs text-fg-2">
-          Configure a provider key so agents across the whole instance can talk to
-          an LLM. Keys are encrypted at rest and shared by every workspace —
-          bring-your-own-key, Folio never holds a default. Each agent selects a key
-          by its <code>ai_key_label</code> in frontmatter.
+          Configure a provider key so agents across the whole instance can talk to an LLM. Keys are
+          encrypted at rest and shared by every workspace — bring-your-own-key, Folio never holds a
+          default. Each agent selects a key by its <code>ai_key_label</code> in frontmatter.
         </p>
 
         <div className="mt-4 grid max-w-md gap-3">
@@ -228,7 +227,9 @@ export function AiTab({ wslug }: Props) {
               className={inputClass}
             >
               {PROVIDERS.map((p) => (
-                <option key={p} value={p}>{p}</option>
+                <option key={p} value={p}>
+                  {p}
+                </option>
               ))}
             </select>
           </label>
@@ -259,8 +260,8 @@ export function AiTab({ wslug }: Props) {
               className={inputClass}
             />
             <span className="mt-1 block text-xs text-fg-3">
-              Agents reference a key by this label. Use <code>default</code> unless
-              you keep more than one key per LLM service.
+              Agents reference a key by this label. Use <code>default</code> unless you keep more
+              than one key per LLM service.
             </span>
           </label>
 
@@ -294,8 +295,8 @@ export function AiTab({ wslug }: Props) {
                 className={inputClass}
               />
               <span className="mt-1 block text-xs text-fg-3">
-                Must be reachable from the Folio server, not your browser.
-                Loopback addresses (localhost, 127.0.0.1, private ranges) are rejected.
+                Must be reachable from the Folio server, not your browser. Loopback addresses
+                (localhost, 127.0.0.1, private ranges) are rejected.
               </span>
             </label>
           ) : null}
@@ -306,11 +307,7 @@ export function AiTab({ wslug }: Props) {
                 workspace in scope, so it hides; the key still saves + validates on
                 a real run. */}
             {wslug ? (
-              <Button
-                variant="secondary"
-                onClick={onTest}
-                disabled={!apiKey || testKey.isPending}
-              >
+              <Button variant="secondary" onClick={onTest} disabled={!apiKey || testKey.isPending}>
                 {testKey.isPending ? 'Testing…' : 'Test'}
               </Button>
             ) : null}
@@ -358,10 +355,7 @@ export function AiTab({ wslug }: Props) {
               operatorModelByProvider[p] ??
               (isOperatorProvider && om?.model ? om.model : KNOWN_MODELS[p][0]);
             return (
-              <li
-                key={p}
-                className="flex flex-col items-stretch bg-content px-3 py-2 text-sm"
-              >
+              <li key={p} className="flex flex-col items-stretch bg-content px-3 py-2 text-sm">
                 <div className="flex items-center justify-between">
                   <span>
                     <span className="font-medium">{p}</span>

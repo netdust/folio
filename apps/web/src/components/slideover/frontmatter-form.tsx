@@ -1,23 +1,23 @@
-import { useState } from 'react';
-import { Plus } from 'lucide-react';
 import { inferFieldType } from '@folio/shared';
-import type { Status } from '../../lib/api/statuses.ts';
-import type { Field, FieldType } from '../../lib/api/fields.ts';
+import { Plus } from 'lucide-react';
+import { useState } from 'react';
+import { useBacklinks } from '../../lib/api/backlinks.ts';
 import type { DocumentType } from '../../lib/api/documents.ts';
 import { useDocuments } from '../../lib/api/documents.ts';
-import { useBacklinks } from '../../lib/api/backlinks.ts';
+import type { Field, FieldType } from '../../lib/api/fields.ts';
 import { useProjects } from '../../lib/api/projects.ts';
-import { InlineSelect } from '../inline/inline-select.tsx';
-import { FieldRenderer } from './field-renderer.tsx';
-import { BacklinksPanel } from './backlinks-panel.tsx';
-import type { RelationCandidate } from '../relations/relation-picker.tsx';
+import type { Status } from '../../lib/api/statuses.ts';
 import { AssigneePicker } from '../assignee/assignee-picker.tsx';
-import { TriggerAgentField } from '../triggers/trigger-agent-field.tsx';
+import { InlineSelect } from '../inline/inline-select.tsx';
 import { ProjectsField } from '../inline/projects-field.tsx';
-import { ToolsField } from '../inline/tools-field.tsx';
 import { ProviderModelField } from '../inline/provider-model-field.tsx';
+import { ToolsField } from '../inline/tools-field.tsx';
+import type { RelationCandidate } from '../relations/relation-picker.tsx';
+import { TriggerAgentField } from '../triggers/trigger-agent-field.tsx';
 import { Icon } from '../ui/icon.tsx';
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
+import { BacklinksPanel } from './backlinks-panel.tsx';
+import { FieldRenderer } from './field-renderer.tsx';
 
 // Phase 2.5: agents have a canonical field order + per-field help text so the
 // slideover reads top-down (purpose → which LLM → what it can do → where it
@@ -43,15 +43,18 @@ const AGENT_FIELDS: AgentFieldMeta[] = [
   },
   {
     key: 'tools',
-    description: 'MCP tools this agent can call. Read tools list/get; write tools create/update; delete removes documents.',
+    description:
+      'MCP tools this agent can call. Read tools list/get; write tools create/update; delete removes documents.',
   },
   {
     key: 'projects',
-    description: 'Projects this agent can act on. "Select all" = every workspace project, current and future.',
+    description:
+      'Projects this agent can act on. "Select all" = every workspace project, current and future.',
   },
   {
     key: 'max_delegation_depth',
-    description: 'How many levels of agent-to-agent assignment this agent can trigger. 0 = cannot delegate.',
+    description:
+      'How many levels of agent-to-agent assignment this agent can trigger. 0 = cannot delegate.',
   },
   {
     key: 'max_tokens_per_run',
@@ -59,7 +62,8 @@ const AGENT_FIELDS: AgentFieldMeta[] = [
   },
   {
     key: 'requires_approval',
-    description: 'When true, the agent\'s writes wait for a human "## Approved" line in the work item body.',
+    description:
+      'When true, the agent\'s writes wait for a human "## Approved" line in the work item body.',
   },
 ];
 
@@ -199,11 +203,7 @@ export function FrontmatterForm({
                 <ProviderModelField
                   wslug={wslug}
                   provider={typeof value === 'string' ? value : 'anthropic'}
-                  model={
-                    typeof frontmatter['model'] === 'string'
-                      ? (frontmatter['model'] as string)
-                      : ''
-                  }
+                  model={typeof frontmatter.model === 'string' ? (frontmatter.model as string) : ''}
                   onChange={(next) =>
                     onFrontmatterCommit({ provider: next.provider, model: next.model })
                   }
@@ -425,7 +425,6 @@ function AddField({
       </PopoverTrigger>
       <PopoverContent align="start" className="w-[240px] p-2">
         <input
-          autoFocus
           placeholder="Field name"
           value={name}
           onChange={(e) => onChange(e.target.value)}
@@ -459,11 +458,5 @@ function ProjectsFieldWithProjects({
   onChange: (next: string[]) => void;
 }) {
   const projectsQ = useProjects(wslug);
-  return (
-    <ProjectsField
-      value={value}
-      projects={projectsQ.data ?? []}
-      onChange={onChange}
-    />
-  );
+  return <ProjectsField value={value} projects={projectsQ.data ?? []} onChange={onChange} />;
 }

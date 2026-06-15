@@ -1,6 +1,6 @@
 import { nanoid } from 'nanoid';
 import type { DB } from '../db/client.ts';
-import { apiTokens, type ApiToken, type EphemeralToken } from '../db/schema.ts';
+import { type ApiToken, type EphemeralToken, apiTokens } from '../db/schema.ts';
 import type { Role } from './access.ts';
 import { roleToScopes } from './agent-schema.ts';
 import { newApiToken } from './auth.ts';
@@ -22,9 +22,7 @@ export function isInstanceReach(token: Pick<ApiToken, 'workspaceId'>): boolean {
  * is NOT an operator token — it hydrates a real user and never takes the
  * operator fallback path.
  */
-export function isOperatorToken(
-  token: Pick<ApiToken, 'workspaceId' | 'createdBy'>,
-): boolean {
+export function isOperatorToken(token: Pick<ApiToken, 'workspaceId' | 'createdBy'>): boolean {
   return token.workspaceId === null && token.createdBy === null;
 }
 
@@ -41,15 +39,11 @@ export function isOperatorToken(
  * — the operator's createdBy is the CALLER (non-null), so isOperatorToken is false
  * for it. The two are unrelated.
  */
-export function isAgentBound(
-  token: Pick<EphemeralToken, 'agentId' | 'isOperator'>,
-): boolean {
+export function isAgentBound(token: Pick<EphemeralToken, 'agentId' | 'isOperator'>): boolean {
   return token.agentId !== null || token.isOperator === true;
 }
 
-export type EffectiveReach =
-  | { ok: true; workspaceId: string | null }
-  | { ok: false };
+export type EffectiveReach = { ok: true; workspaceId: string | null } | { ok: false };
 
 /**
  * The per-run workspace floor: tokenReach ∩ callerReach.

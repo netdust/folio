@@ -1,18 +1,18 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
+  Outlet,
+  RouterProvider,
   createMemoryHistory,
   createRootRoute,
   createRoute,
   createRouter,
-  Outlet,
-  RouterProvider,
 } from '@tanstack/react-router';
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
-import { BoardControls } from './board-controls.tsx';
 import { boardControlsBus } from '../../lib/board-controls-bus.ts';
+import { BoardControls } from './board-controls.tsx';
 
 function setup() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -62,13 +62,24 @@ function stubFetch() {
         return new Response(
           JSON.stringify({
             data: [
-              { id: 'f1', key: 'priority', type: 'select', label: 'Priority', options: ['Low', 'High'], required: false, order: 1 },
+              {
+                id: 'f1',
+                key: 'priority',
+                type: 'select',
+                label: 'Priority',
+                options: ['Low', 'High'],
+                required: false,
+                order: 1,
+              },
             ],
           }),
           { status: 200, headers: { 'content-type': 'application/json' } },
         );
       }
-      return new Response('{"data":[]}', { status: 200, headers: { 'content-type': 'application/json' } });
+      return new Response('{"data":[]}', {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
     }
   });
   vi.stubGlobal('fetch', fn);
@@ -79,7 +90,8 @@ function stubFetch() {
 function findViewPatch(fetchMock: ReturnType<typeof vi.fn>, viewId = 'v1') {
   return fetchMock.mock.calls.find(
     ([url, init]) =>
-      String(url).includes(`/views/${viewId}`) && (init as RequestInit | undefined)?.method === 'PATCH',
+      String(url).includes(`/views/${viewId}`) &&
+      (init as RequestInit | undefined)?.method === 'PATCH',
   ) as [string, RequestInit] | undefined;
 }
 
@@ -94,7 +106,11 @@ describe('BoardControls', () => {
   it('renders the Group-by + Sort buttons', async () => {
     stubFetch();
     const { queryClient, router } = setup();
-    render(<QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider>);
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
     expect(await screen.findByText('Group:')).toBeInTheDocument();
     expect(screen.getByText('Sort:')).toBeInTheDocument();
   });
@@ -102,7 +118,11 @@ describe('BoardControls', () => {
   it('selecting a group-by field writes the override to the bus', async () => {
     stubFetch();
     const { queryClient, router } = setup();
-    render(<QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider>);
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
     // Wait for the toolbar (and the view) to resolve.
     await screen.findByText('Group:');
     // Open the Group popover, click the Priority field.
@@ -118,7 +138,11 @@ describe('BoardControls', () => {
   it('persists a group-by change to the default view even without ?view= (PATCH fires)', async () => {
     const fetchMock = stubFetch();
     const { queryClient, router } = setup();
-    render(<QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider>);
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
     await screen.findByText('Group:');
     // No ?view= in the URL — the default board.
     expect(router.state.location.search).toEqual({});
@@ -138,7 +162,11 @@ describe('BoardControls', () => {
   it('persists a sort change to the default view even without ?view=', async () => {
     const fetchMock = stubFetch();
     const { queryClient, router } = setup();
-    render(<QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider>);
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
     await screen.findByText('Sort:');
     expect(router.state.location.search).toEqual({});
     await userEvent.click(screen.getByText('Sort:'));
@@ -146,7 +174,9 @@ describe('BoardControls', () => {
     await waitFor(() => {
       const patch = findViewPatch(fetchMock);
       expect(patch).toBeDefined();
-      expect(JSON.parse(patch![1].body as string)).toEqual({ sort: [{ key: 'title', dir: 'asc' }] });
+      expect(JSON.parse(patch![1].body as string)).toEqual({
+        sort: [{ key: 'title', dir: 'asc' }],
+      });
     });
   });
 });

@@ -1,5 +1,5 @@
-import { describe, expect, test, beforeEach, afterEach } from 'vitest';
-import { getResolvedTheme, setTheme, type Theme } from './theme.ts';
+import { afterEach, beforeEach, describe, expect, test } from 'vitest';
+import { type Theme, getResolvedTheme, setTheme } from './theme.ts';
 
 const STORAGE_KEY = 'folio:theme';
 
@@ -12,37 +12,49 @@ beforeEach(() => {
   const store = new Map<string, string>();
   globalThis.localStorage = {
     getItem: (k: string) => store.get(k) ?? null,
-    setItem: (k: string, v: string) => { store.set(k, v); },
-    removeItem: (k: string) => { store.delete(k); },
+    setItem: (k: string, v: string) => {
+      store.set(k, v);
+    },
+    removeItem: (k: string) => {
+      store.delete(k);
+    },
     clear: () => store.clear(),
     key: () => null,
     length: 0,
   } as Storage;
-  globalThis.matchMedia = (q: string) => ({
-    matches: q.includes('dark'),
-    media: q,
-    addEventListener: () => {},
-    removeEventListener: () => {},
-    addListener: () => {},
-    removeListener: () => {},
-    dispatchEvent: () => false,
-    onchange: null,
-  }) as MediaQueryList;
+  globalThis.matchMedia = (q: string) =>
+    ({
+      matches: q.includes('dark'),
+      media: q,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+      onchange: null,
+    }) as MediaQueryList;
   // minimal documentElement
   globalThis.document = {
     documentElement: { classList: new Set<string>() } as unknown as HTMLElement,
   } as unknown as Document;
   // patch classList.add/remove/contains
-  const cls = (globalThis.document.documentElement.classList as unknown as Set<string>);
+  const cls = globalThis.document.documentElement.classList as unknown as Set<string>;
   const setAdd = Set.prototype.add.bind(cls);
   const setDelete = Set.prototype.delete.bind(cls);
   const setHas = Set.prototype.has.bind(cls);
-  (globalThis.document.documentElement.classList as unknown as { add: (s: string) => void }).add =
-    (s: string) => { setAdd(s); };
-  (globalThis.document.documentElement.classList as unknown as { remove: (s: string) => void }).remove =
-    (s: string) => { setDelete(s); };
-  (globalThis.document.documentElement.classList as unknown as { contains: (s: string) => boolean }).contains =
-    (s: string) => setHas(s);
+  (globalThis.document.documentElement.classList as unknown as { add: (s: string) => void }).add = (
+    s: string,
+  ) => {
+    setAdd(s);
+  };
+  (
+    globalThis.document.documentElement.classList as unknown as { remove: (s: string) => void }
+  ).remove = (s: string) => {
+    setDelete(s);
+  };
+  (
+    globalThis.document.documentElement.classList as unknown as { contains: (s: string) => boolean }
+  ).contains = (s: string) => setHas(s);
 });
 
 afterEach(() => {

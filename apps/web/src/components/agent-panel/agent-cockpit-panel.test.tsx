@@ -1,5 +1,5 @@
-import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
-import { render, screen, act, fireEvent } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // The panel renders CockpitChat, which uses the conversations API. Mock it so
 // the panel test doesn't need a real EventSource / server.
@@ -14,8 +14,8 @@ vi.mock('../../lib/api/conversations.ts', async (importOriginal) => {
   };
 });
 
-import { AgentCockpitPanel } from './agent-cockpit-panel.tsx';
 import { agentPanelBus } from '../../lib/agent-panel-bus.ts';
+import { AgentCockpitPanel } from './agent-cockpit-panel.tsx';
 
 describe('AgentCockpitPanel', () => {
   beforeEach(() => {

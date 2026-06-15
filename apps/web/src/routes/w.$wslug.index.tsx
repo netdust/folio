@@ -1,7 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { useState } from 'react';
-import { ProjectPicker } from '../components/project-picker.tsx';
 import { ProjectCreate } from '../components/onboarding/project-create.tsx';
+import { ProjectPicker } from '../components/project-picker.tsx';
 
 export const Route = createFileRoute('/w/$wslug/')({
   component: WorkspaceIndex,

@@ -1,5 +1,5 @@
-import { test as base, expect, shot } from './fixtures.ts';
 import type { BrowserContext, Page } from '@playwright/test';
+import { test as base, expect, shot } from './fixtures.ts';
 
 /**
  * End-to-end smoke of the instance Settings screen and the per-workspace API

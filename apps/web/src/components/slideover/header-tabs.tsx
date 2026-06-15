@@ -1,6 +1,6 @@
-import { type LucideIcon } from 'lucide-react';
-import { Icon } from '../ui/icon.tsx';
+import type { LucideIcon } from 'lucide-react';
 import { cn } from '../ui/cn.ts';
+import { Icon } from '../ui/icon.tsx';
 
 export interface HeaderTabItem<T extends string> {
   value: T;

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useEventStream, type StreamedEvent } from './api/event-stream.ts';
+import { type StreamedEvent, useEventStream } from './api/event-stream.ts';
 
 export interface ExternalUpdate {
   kind: 'updated' | 'deleted';

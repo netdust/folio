@@ -1,8 +1,8 @@
-import { describe, expect, it, vi, afterEach } from 'vitest';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { TokensTab } from './tokens-tab.tsx';
 
 afterEach(() => {
@@ -192,9 +192,7 @@ describe('TokensTab', () => {
     expect(calls).not.toContain('DELETE');
     // No secret revealed; the rotate dialog closed (not stuck open).
     expect(screen.queryByText(/folio_pat/)).toBeNull();
-    await waitFor(() =>
-      expect(screen.queryByText(/rotate "CI"\?/i)).toBeNull(),
-    );
+    await waitFor(() => expect(screen.queryByText(/rotate "CI"\?/i)).toBeNull());
   });
 
   it('Rotate carries the original expiry forward as expires_in_days', async () => {
@@ -212,7 +210,12 @@ describe('TokensTab', () => {
           postBody = JSON.parse((init?.body as string) ?? '{}');
           return new Response(
             JSON.stringify({
-              data: { id: 'tok_new', name: 'CI', token: 'folio_pat_rotated', scopes: ['documents:read'] },
+              data: {
+                id: 'tok_new',
+                name: 'CI',
+                token: 'folio_pat_rotated',
+                scopes: ['documents:read'],
+              },
             }),
             { status: 201, headers: { 'content-type': 'application/json' } },
           );
@@ -263,7 +266,12 @@ describe('TokensTab', () => {
           postBody = JSON.parse((init?.body as string) ?? '{}');
           return new Response(
             JSON.stringify({
-              data: { id: 'tok_new', name: 'CI', token: 'folio_pat_rotated', scopes: ['documents:read'] },
+              data: {
+                id: 'tok_new',
+                name: 'CI',
+                token: 'folio_pat_rotated',
+                scopes: ['documents:read'],
+              },
             }),
             { status: 201, headers: { 'content-type': 'application/json' } },
           );
@@ -301,7 +309,10 @@ describe('TokensTab', () => {
 
   it('shows an empty state with a Create button when there are no tokens', async () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    vi.stubGlobal('fetch', vi.fn(async () => mockListResponse([])));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => mockListResponse([])),
+    );
     render(<TokensTab wslug="acme" workspaceId="ws-1" />, { wrapper: wrap(qc) });
     expect(await screen.findByText(/no api tokens/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /create token/i })).toBeInTheDocument();

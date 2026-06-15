@@ -49,8 +49,18 @@ export function ProjectsField({ value, projects, onChange }: Props) {
   }
 
   const trigger = (() => {
-    if (isWildcard) return [<Chip key="all" muted>All projects</Chip>];
-    if (value.length === 0) return [<Chip key="empty" muted>No projects</Chip>];
+    if (isWildcard)
+      return [
+        <Chip key="all" muted>
+          All projects
+        </Chip>,
+      ];
+    if (value.length === 0)
+      return [
+        <Chip key="empty" muted>
+          No projects
+        </Chip>,
+      ];
     return value.map((id) => {
       const proj = projects.find((p) => p.id === id);
       return (
@@ -100,4 +110,3 @@ export function ProjectsField({ value, projects, onChange }: Props) {
     </Popover>
   );
 }
-

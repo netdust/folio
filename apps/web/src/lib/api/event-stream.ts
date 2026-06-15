@@ -57,6 +57,7 @@ export function useEventStream(
   const query = buildQuery(filters);
   const kindsKey = (filters.kinds ?? []).join(',');
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: deps [wslug, query, kindsKey] encode every connection-affecting field; onEvent is read via onEventRef so a new callback identity does NOT tear down the SSE connection
   useEffect(() => {
     if (!wslug) return;
     const es = new EventSource(`/api/v1/w/${wslug}/events${query}`, { withCredentials: true });

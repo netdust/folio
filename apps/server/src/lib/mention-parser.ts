@@ -53,9 +53,17 @@ const KEYWORD_RE = /^(approved|rejected)[.,!;]?$/i;
  * intentionally excluded to minimise false positives.
  */
 const POS1_ADJACENCY_ALLOW = new Set([
-  'is', 'was', 'are', 'were', 'been', 'be',
-  'has', 'have', 'had',
-  'got', 'gets',
+  'is',
+  'was',
+  'are',
+  'were',
+  'been',
+  'be',
+  'has',
+  'have',
+  'had',
+  'got',
+  'gets',
   'just',
 ]);
 

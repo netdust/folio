@@ -1,5 +1,5 @@
-import { test, expect } from 'bun:test';
-import { runSseLoop, type SseFrame } from './sse-loop.ts';
+import { expect, test } from 'bun:test';
+import { type SseFrame, runSseLoop } from './sse-loop.ts';
 
 // A minimal fake of hono's SSEStreamingApi covering what runSseLoop touches.
 function makeFakeStream() {

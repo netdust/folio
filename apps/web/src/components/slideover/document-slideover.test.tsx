@@ -1,15 +1,15 @@
-import { describe, it, expect, afterEach, vi } from 'vitest';
-import { act, render, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
+  Outlet,
+  RouterProvider,
   createMemoryHistory,
   createRootRoute,
   createRoute,
   createRouter,
-  Outlet,
-  RouterProvider,
 } from '@tanstack/react-router';
+import { act, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 
 // Capture the onEvent the live-document hook registers with useEventStream so
@@ -61,7 +61,8 @@ function mockDoc(slug: string, type: 'work_item' | 'page' = 'work_item') {
       // leak into the backlinks query (server returns a row array here).
       if (String(url).includes('/backlinks')) {
         return new Response(JSON.stringify({ data: [] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (String(url).includes(`/documents/${slug}`)) {
@@ -85,12 +86,14 @@ function mockDoc(slug: string, type: 'work_item' | 'page' = 'work_item') {
       }
       if (String(url).includes('/statuses')) {
         return new Response(JSON.stringify({ data: [] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (String(url).includes('/fields')) {
         return new Response(JSON.stringify({ data: [] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
@@ -363,7 +366,8 @@ describe('DocumentSlideover', () => {
         u.includes('/documents')
       ) {
         return new Response(JSON.stringify({ data: [] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
@@ -400,11 +404,7 @@ describe('DocumentSlideover', () => {
   // Header tabs (NocoDB-style icon toggles in the single header row)
   // ---------------------------------------------------------------------
 
-  function mockDocWithComments(
-    slug: string,
-    type: 'work_item' | 'page',
-    commentCount: number,
-  ) {
+  function mockDocWithComments(slug: string, type: 'work_item' | 'page', commentCount: number) {
     vi.stubGlobal(
       'fetch',
       vi.fn<typeof fetch>(async (url) => {
@@ -419,12 +419,18 @@ describe('DocumentSlideover', () => {
             projectId: 'proj-1',
             workspaceId: 'ws-1',
             body: `comment ${i}`,
-            frontmatter: { author: 'user:u-1', kind: 'comment', visibility: 'normal', mentions: [] },
+            frontmatter: {
+              author: 'user:u-1',
+              kind: 'comment',
+              visibility: 'normal',
+              mentions: [],
+            },
             createdAt: '2026-05-26T10:00:00.000Z',
             updatedAt: '2026-05-26T10:00:00.000Z',
           }));
           return new Response(JSON.stringify({ data: comments }), {
-            status: 200, headers: { 'content-type': 'application/json' },
+            status: 200,
+            headers: { 'content-type': 'application/json' },
           });
         }
         if (u.endsWith(`/documents/${slug}`) || u.includes(`/documents/${slug}?`)) {
@@ -448,23 +454,41 @@ describe('DocumentSlideover', () => {
         }
         if (u.includes('/members')) {
           return new Response(JSON.stringify({ data: { members: [] } }), {
-            status: 200, headers: { 'content-type': 'application/json' },
+            status: 200,
+            headers: { 'content-type': 'application/json' },
           });
         }
         if (u.includes('/auth/me')) {
-          return new Response(JSON.stringify({ data: { user: { id: 'u-1', email: 'a@b', name: 'A' } } }), {
-            status: 200, headers: { 'content-type': 'application/json' },
-          });
+          return new Response(
+            JSON.stringify({ data: { user: { id: 'u-1', email: 'a@b', name: 'A' } } }),
+            {
+              status: 200,
+              headers: { 'content-type': 'application/json' },
+            },
+          );
         }
         if (u.includes('/statuses') || u.includes('/fields') || u.includes('/settings/ai-keys')) {
           return new Response(JSON.stringify({ data: [] }), {
-            status: 200, headers: { 'content-type': 'application/json' },
+            status: 200,
+            headers: { 'content-type': 'application/json' },
           });
         }
         if (u.match(/\/w\/[^/]+\/p\/[^/?]+($|\?)/)) {
           // useProject endpoint
           return new Response(
-            JSON.stringify({ data: { id: 'proj-1', workspaceId: 'ws-1', slug: 'web', name: 'Web', icon: null, description: null, archivedAt: null, createdAt: '', updatedAt: '' } }),
+            JSON.stringify({
+              data: {
+                id: 'proj-1',
+                workspaceId: 'ws-1',
+                slug: 'web',
+                name: 'Web',
+                icon: null,
+                description: null,
+                archivedAt: null,
+                createdAt: '',
+                updatedAt: '',
+              },
+            }),
             { status: 200, headers: { 'content-type': 'application/json' } },
           );
         }
@@ -480,12 +504,14 @@ describe('DocumentSlideover', () => {
         // FLAT { data: [] } shape useWorkspaceDocuments expects.
         if (u.match(/\/w\/[^/]+\/documents(\?|$)/)) {
           return new Response(JSON.stringify({ data: [] }), {
-            status: 200, headers: { 'content-type': 'application/json' },
+            status: 200,
+            headers: { 'content-type': 'application/json' },
           });
         }
         if (u.includes('/documents')) {
           return new Response(JSON.stringify({ data: { data: [], nextCursor: null } }), {
-            status: 200, headers: { 'content-type': 'application/json' },
+            status: 200,
+            headers: { 'content-type': 'application/json' },
           });
         }
         return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
@@ -627,29 +653,65 @@ describe('DocumentSlideover', () => {
           );
         }
         if (u.includes('/comments')) {
-          return new Response(JSON.stringify({ data: [] }), { status: 200, headers: { 'content-type': 'application/json' } });
+          return new Response(JSON.stringify({ data: [] }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          });
         }
         if (u.includes('/auth/me')) {
-          return new Response(JSON.stringify({ data: { user: { id: 'u-1', email: 'a@b', name: 'A' } } }), {
-            status: 200, headers: { 'content-type': 'application/json' },
-          });
+          return new Response(
+            JSON.stringify({ data: { user: { id: 'u-1', email: 'a@b', name: 'A' } } }),
+            {
+              status: 200,
+              headers: { 'content-type': 'application/json' },
+            },
+          );
         }
-        if (u.includes('/statuses') || u.includes('/fields') || u.includes('/settings/ai-keys') || u.includes('/members')) {
-          return new Response(JSON.stringify({ data: [] }), { status: 200, headers: { 'content-type': 'application/json' } });
+        if (
+          u.includes('/statuses') ||
+          u.includes('/fields') ||
+          u.includes('/settings/ai-keys') ||
+          u.includes('/members')
+        ) {
+          return new Response(JSON.stringify({ data: [] }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          });
         }
         if (u.match(/\/w\/[^/]+\/p\/[^/?]+($|\?)/)) {
-          return new Response(JSON.stringify({ data: { id: 'proj-1', workspaceId: 'ws-1', slug: 'web', name: 'Web', icon: null, description: null, archivedAt: null, createdAt: '', updatedAt: '' } }), {
-            status: 200, headers: { 'content-type': 'application/json' },
-          });
+          return new Response(
+            JSON.stringify({
+              data: {
+                id: 'proj-1',
+                workspaceId: 'ws-1',
+                slug: 'web',
+                name: 'Web',
+                icon: null,
+                description: null,
+                archivedAt: null,
+                createdAt: '',
+                updatedAt: '',
+              },
+            }),
+            {
+              status: 200,
+              headers: { 'content-type': 'application/json' },
+            },
+          );
         }
         if (u.match(/\/w\/[^/?]+($|\?)/)) {
-          return new Response(JSON.stringify({ data: { id: 'ws-1', slug: 'main', name: 'Main' } }), {
-            status: 200, headers: { 'content-type': 'application/json' },
-          });
+          return new Response(
+            JSON.stringify({ data: { id: 'ws-1', slug: 'main', name: 'Main' } }),
+            {
+              status: 200,
+              headers: { 'content-type': 'application/json' },
+            },
+          );
         }
         if (u.includes('/documents')) {
           return new Response(JSON.stringify({ data: { data: [], nextCursor: null } }), {
-            status: 200, headers: { 'content-type': 'application/json' },
+            status: 200,
+            headers: { 'content-type': 'application/json' },
           });
         }
         return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
@@ -667,7 +729,10 @@ describe('DocumentSlideover', () => {
     // Switch to Activity.
     await userEvent.click(screen.getByRole('tab', { name: 'Activity' }));
     await waitFor(() => {
-      expect(screen.getByRole('tab', { name: 'Activity' })).toHaveAttribute('aria-selected', 'true');
+      expect(screen.getByRole('tab', { name: 'Activity' })).toHaveAttribute(
+        'aria-selected',
+        'true',
+      );
     });
 
     // Navigate to a different doc without closing the sheet.
@@ -724,10 +789,11 @@ describe('DocumentSlideover', () => {
         const method = (init?.method ?? 'GET').toUpperCase();
         if (u.includes('/backlinks')) {
           return new Response(JSON.stringify({ data: [] }), {
-            status: 200, headers: { 'content-type': 'application/json' },
+            status: 200,
+            headers: { 'content-type': 'application/json' },
           });
         }
-        if (u.includes(`/documents/${slug}`) && !u.includes('/documents/' + slug + '/comments')) {
+        if (u.includes(`/documents/${slug}`) && !u.includes(`/documents/${slug}/comments`)) {
           if (method === 'PATCH' && opts.onPatch) {
             try {
               opts.onPatch(init?.body ? JSON.parse(String(init.body)) : null);
@@ -768,12 +834,14 @@ describe('DocumentSlideover', () => {
         }
         if (u.includes('/fields') || u.includes('/settings/ai-keys') || u.includes('/workspaces')) {
           return new Response(JSON.stringify({ data: [] }), {
-            status: 200, headers: { 'content-type': 'application/json' },
+            status: 200,
+            headers: { 'content-type': 'application/json' },
           });
         }
         if (u.includes('/documents')) {
           return new Response(JSON.stringify({ data: { data: [], nextCursor: null } }), {
-            status: 200, headers: { 'content-type': 'application/json' },
+            status: 200,
+            headers: { 'content-type': 'application/json' },
           });
         }
         return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
@@ -851,9 +919,9 @@ describe('DocumentSlideover', () => {
     expect(await screen.findByText(/Unsaved changes/i)).toBeInTheDocument();
 
     // The dialog's primary Save button persists then proceeds (closes).
-    const dialogSave = screen.getAllByRole('button', { name: /^Save$/ }).find(
-      (b) => b.getAttribute('aria-label') !== 'Save',
-    );
+    const dialogSave = screen
+      .getAllByRole('button', { name: /^Save$/ })
+      .find((b) => b.getAttribute('aria-label') !== 'Save');
     expect(dialogSave).toBeDefined();
     await userEvent.click(dialogSave!);
     await waitFor(() => expect(patches.length).toBeGreaterThan(0));
@@ -871,7 +939,8 @@ describe('DocumentSlideover', () => {
         const u = String(url);
         if (u.includes('/backlinks')) {
           return new Response(JSON.stringify({ data: [] }), {
-            status: 200, headers: { 'content-type': 'application/json' },
+            status: 200,
+            headers: { 'content-type': 'application/json' },
           });
         }
         const m = u.match(/\/documents\/(fix-login|other-doc)(\?|$)/);
@@ -897,12 +966,14 @@ describe('DocumentSlideover', () => {
         }
         if (u.includes('/statuses') || u.includes('/fields') || u.includes('/settings/ai-keys')) {
           return new Response(JSON.stringify({ data: [] }), {
-            status: 200, headers: { 'content-type': 'application/json' },
+            status: 200,
+            headers: { 'content-type': 'application/json' },
           });
         }
         if (u.includes('/documents')) {
           return new Response(JSON.stringify({ data: { data: [], nextCursor: null } }), {
-            status: 200, headers: { 'content-type': 'application/json' },
+            status: 200,
+            headers: { 'content-type': 'application/json' },
           });
         }
         return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
@@ -965,16 +1036,22 @@ describe('DocumentSlideover', () => {
           { status: 200, headers: { 'content-type': 'application/json' } },
         );
       }
-      if (u.includes('/statuses') || u.includes('/fields') || u.includes('/settings/ai-keys') || u.includes('/workspaces')) {
+      if (
+        u.includes('/statuses') ||
+        u.includes('/fields') ||
+        u.includes('/settings/ai-keys') ||
+        u.includes('/workspaces')
+      ) {
         return new Response(JSON.stringify({ data: [] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.includes('/documents')) {
-        return new Response(
-          JSON.stringify({ data: { data: [], nextCursor: null } }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        );
+        return new Response(JSON.stringify({ data: { data: [], nextCursor: null } }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
       }
       return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
     });
@@ -1014,7 +1091,8 @@ describe('DocumentSlideover', () => {
         const u = String(url);
         if (u.includes('/backlinks')) {
           return new Response(JSON.stringify({ data: [] }), {
-            status: 200, headers: { 'content-type': 'application/json' },
+            status: 200,
+            headers: { 'content-type': 'application/json' },
           });
         }
         if (u.includes('/documents/fix-login') && !u.includes('/comments')) {
@@ -1022,9 +1100,16 @@ describe('DocumentSlideover', () => {
           return new Response(
             JSON.stringify({
               data: {
-                id: 'd1', slug: 'fix-login', type: 'work_item', title: 'Fix login bug',
-                status: 'todo', parentId: null, frontmatter: {}, body: '# Steps\n\n1. Reproduce',
-                createdAt: '2026-01-01', updatedAt: '2026-01-02',
+                id: 'd1',
+                slug: 'fix-login',
+                type: 'work_item',
+                title: 'Fix login bug',
+                status: 'todo',
+                parentId: null,
+                frontmatter: {},
+                body: '# Steps\n\n1. Reproduce',
+                createdAt: '2026-01-01',
+                updatedAt: '2026-01-02',
               },
             }),
             { status: 200, headers: { 'content-type': 'application/json' } },
@@ -1032,12 +1117,14 @@ describe('DocumentSlideover', () => {
         }
         if (u.includes('/statuses') || u.includes('/fields') || u.includes('/settings/ai-keys')) {
           return new Response(JSON.stringify({ data: [] }), {
-            status: 200, headers: { 'content-type': 'application/json' },
+            status: 200,
+            headers: { 'content-type': 'application/json' },
           });
         }
         if (u.includes('/documents')) {
           return new Response(JSON.stringify({ data: { data: [], nextCursor: null } }), {
-            status: 200, headers: { 'content-type': 'application/json' },
+            status: 200,
+            headers: { 'content-type': 'application/json' },
           });
         }
         return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
@@ -1055,7 +1142,11 @@ describe('DocumentSlideover', () => {
     expect(liveCalls.length).toBeGreaterThan(0);
 
     // Fire an external update for the open doc while the draft is clean.
-    act(() => liveCalls.at(-1)!.onEvent({ kind: 'document.updated', documentId: 'd1', actor: 'agent:helper' }));
+    act(() =>
+      liveCalls
+        .at(-1)!
+        .onEvent({ kind: 'document.updated', documentId: 'd1', actor: 'agent:helper' }),
+    );
 
     // No banner — the clean draft path refetches instead.
     expect(screen.queryByText(/updated by/i)).not.toBeInTheDocument();
@@ -1081,7 +1172,11 @@ describe('DocumentSlideover', () => {
     expect(liveCalls.length).toBeGreaterThan(0);
 
     // External update arrives while dirty.
-    act(() => liveCalls.at(-1)!.onEvent({ kind: 'document.updated', documentId: 'd1', actor: 'agent:helper' }));
+    act(() =>
+      liveCalls
+        .at(-1)!
+        .onEvent({ kind: 'document.updated', documentId: 'd1', actor: 'agent:helper' }),
+    );
 
     // Banner appears…
     expect(await screen.findByText(/updated by/i)).toBeInTheDocument();

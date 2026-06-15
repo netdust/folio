@@ -1,5 +1,5 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { OperatorModelSetting } from '@folio/shared';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { client } from './client.ts';
 import type { AiProvider } from './settings.ts';
 

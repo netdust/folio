@@ -2,11 +2,11 @@ import { describe, expect, test } from 'bun:test';
 import { eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { db } from '../db/client.ts';
-import { apiTokens, type ApiToken, workspaces } from '../db/schema.ts';
+import { type ApiToken, apiTokens, workspaces } from '../db/schema.ts';
 import { makeTestApp } from '../test/harness.ts';
 import { roleToScopes } from './agent-schema.ts';
-import { executeTool } from './agent-tools.ts';
 import { registerRealTools } from './agent-tools-registry.ts';
+import { executeTool } from './agent-tools.ts';
 import {
   dispatchAsCaller,
   isSecretWrite,
@@ -66,18 +66,18 @@ describe('validateApiPath (P3-5)', () => {
 describe('pathToScope + isSecretWrite (A6 scope gate, T5/T6)', () => {
   test('pathToScope maps the write surfaces', () => {
     expect(pathToScope('PATCH', '/api/v1/w/acme/settings/x/ai-keys')).toBe('SECRET');
-    expect(pathToScope('POST',  '/api/v1/w/acme/tokens')).toBe('SECRET');
+    expect(pathToScope('POST', '/api/v1/w/acme/tokens')).toBe('SECRET');
     expect(pathToScope('PATCH', '/api/v1/w/acme')).toBe('workspace:admin');
-    expect(pathToScope('DELETE','/api/v1/w/acme')).toBe('workspace:admin');
-    expect(pathToScope('POST',  '/api/v1/w/acme/members')).toBe('members:write');
+    expect(pathToScope('DELETE', '/api/v1/w/acme')).toBe('workspace:admin');
+    expect(pathToScope('POST', '/api/v1/w/acme/members')).toBe('members:write');
     expect(pathToScope('PATCH', '/api/v1/w/acme/settings/x')).toBe('settings:write');
-    expect(pathToScope('POST',  '/api/v1/w/acme/p/x/tables')).toBe('config:write');
-    expect(pathToScope('DELETE','/api/v1/w/acme/p/x/views/v1')).toBe('config:write');
-    expect(pathToScope('POST',  '/api/v1/w/acme/projects')).toBe('config:write');
+    expect(pathToScope('POST', '/api/v1/w/acme/p/x/tables')).toBe('config:write');
+    expect(pathToScope('DELETE', '/api/v1/w/acme/p/x/views/v1')).toBe('config:write');
+    expect(pathToScope('POST', '/api/v1/w/acme/projects')).toBe('config:write');
     expect(pathToScope('PATCH', '/api/v1/w/acme/p/x')).toBe('config:write');
-    expect(pathToScope('POST',  '/api/v1/w/acme/p/x/documents')).toBe('documents:write');
-    expect(pathToScope('POST',  '/api/v1/w/acme/p/x/comments')).toBe('documents:write');
-    expect(pathToScope('GET',   '/api/v1/w/acme/p/x/tables')).toBe(null); // reads not gated here
+    expect(pathToScope('POST', '/api/v1/w/acme/p/x/documents')).toBe('documents:write');
+    expect(pathToScope('POST', '/api/v1/w/acme/p/x/comments')).toBe('documents:write');
+    expect(pathToScope('GET', '/api/v1/w/acme/p/x/tables')).toBe(null); // reads not gated here
   });
   test('an UNMAPPED write path returns UNMAPPED (default-deny signal, T5)', () => {
     expect(pathToScope('POST', '/api/v1/w/acme/p/x/some-future-route')).toBe('UNMAPPED');
@@ -106,7 +106,17 @@ describe('pathToScope + isSecretWrite (A6 scope gate, T5/T6)', () => {
   // (slug 'tokens') → PATCH .../documents/tokens must classify documents:write,
   // never SECRET. Same for 'members','settings','tables','ai-keys', etc.
   describe('CR#1 — document slug never collides with a route keyword', () => {
-    const slugs = ['tokens', 'ai-keys', 'members', 'settings', 'tables', 'fields', 'views', 'statuses', 'projects'];
+    const slugs = [
+      'tokens',
+      'ai-keys',
+      'members',
+      'settings',
+      'tables',
+      'fields',
+      'views',
+      'statuses',
+      'projects',
+    ];
     for (const slug of slugs) {
       test(`document slug '${slug}' → documents:write, not SECRET/config (project-level)`, () => {
         const path = `/api/v1/w/acme/p/proj/documents/${slug}`;
@@ -417,10 +427,7 @@ describe('sweepOrphanedFolioApiTokens (P3-3 backstop)', () => {
       createdBy: seed.user.id,
     });
     await sweepOrphanedFolioApiTokens(testDb);
-    const remaining = await testDb
-      .select()
-      .from(apiTokens)
-      .where(eq(apiTokens.id, 'pat1'));
+    const remaining = await testDb.select().from(apiTokens).where(eq(apiTokens.id, 'pat1'));
     expect(remaining.length).toBe(1);
   });
 });
@@ -502,7 +509,7 @@ describe('folio_api_get tool (P3-4/6)', () => {
       tok,
       'agent:op',
       'folio_api_get',
-      { path: `/api/v1/instance/ai-keys` },
+      { path: '/api/v1/instance/ai-keys' },
       undefined,
       { callerScopes: tok.scopes },
     )) as { status: number; body: unknown };

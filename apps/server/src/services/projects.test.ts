@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { nanoid } from 'nanoid';
-import { makeBareTestDb } from '../test/harness.ts';
 import * as schema from '../db/schema.ts';
+import { makeBareTestDb } from '../test/harness.ts';
 import { listProjects } from './projects.ts';
 
 async function mkUser(db: any, email: string, role: 'owner' | 'admin' | 'member') {

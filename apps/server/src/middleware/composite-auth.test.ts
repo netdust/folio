@@ -1,10 +1,10 @@
-import { test, expect } from 'bun:test';
+import { expect, test } from 'bun:test';
 import { eq } from 'drizzle-orm';
+import { nanoid } from 'nanoid';
 import { db } from '../db/client.ts';
 import { apiTokens } from '../db/schema.ts';
 import { newApiToken } from '../lib/auth.ts';
 import { makeTestApp } from '../test/harness.ts';
-import { nanoid } from 'nanoid';
 
 test('documents GET works with a session cookie (existing behavior)', async () => {
   const { app, seed } = await makeTestApp();
@@ -18,8 +18,12 @@ test('documents GET works with a Bearer token that has documents:read', async ()
   const { app, seed } = await makeTestApp();
   const { token, hash } = newApiToken();
   await db.insert(apiTokens).values({
-    id: nanoid(), workspaceId: seed.workspace.id, name: 'test', tokenHash: hash,
-    scopes: ['documents:read'], createdBy: seed.user.id,
+    id: nanoid(),
+    workspaceId: seed.workspace.id,
+    name: 'test',
+    tokenHash: hash,
+    scopes: ['documents:read'],
+    createdBy: seed.user.id,
   });
   const res = await app.request('/api/v1/w/acme/p/web/documents', {
     headers: { Authorization: `Bearer ${token}` },
@@ -31,8 +35,12 @@ test('documents POST requires documents:write scope', async () => {
   const { app, seed } = await makeTestApp();
   const { token, hash } = newApiToken();
   await db.insert(apiTokens).values({
-    id: nanoid(), workspaceId: seed.workspace.id, name: 'test', tokenHash: hash,
-    scopes: ['documents:read'], createdBy: seed.user.id,
+    id: nanoid(),
+    workspaceId: seed.workspace.id,
+    name: 'test',
+    tokenHash: hash,
+    scopes: ['documents:read'],
+    createdBy: seed.user.id,
   });
   const res = await app.request('/api/v1/w/acme/p/web/documents', {
     method: 'POST',
@@ -46,8 +54,12 @@ test('documents POST works with documents:write scope', async () => {
   const { app, seed } = await makeTestApp();
   const { token, hash } = newApiToken();
   await db.insert(apiTokens).values({
-    id: nanoid(), workspaceId: seed.workspace.id, name: 'test', tokenHash: hash,
-    scopes: ['documents:write'], createdBy: seed.user.id,
+    id: nanoid(),
+    workspaceId: seed.workspace.id,
+    name: 'test',
+    tokenHash: hash,
+    scopes: ['documents:write'],
+    createdBy: seed.user.id,
   });
   const res = await app.request('/api/v1/w/acme/p/web/documents', {
     method: 'POST',
@@ -72,8 +84,12 @@ test('a revoked token immediately blocks subsequent requests', async () => {
   const { token, hash } = newApiToken();
   const id = nanoid();
   await db.insert(apiTokens).values({
-    id, workspaceId: seed.workspace.id, name: 'test', tokenHash: hash,
-    scopes: ['documents:read'], createdBy: seed.user.id,
+    id,
+    workspaceId: seed.workspace.id,
+    name: 'test',
+    tokenHash: hash,
+    scopes: ['documents:read'],
+    createdBy: seed.user.id,
   });
   const ok = await app.request('/api/v1/w/acme/p/web/documents', {
     headers: { Authorization: `Bearer ${token}` },

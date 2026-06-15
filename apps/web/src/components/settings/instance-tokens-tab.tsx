@@ -1,23 +1,18 @@
 import { useState } from 'react';
 import { toast } from 'sonner';
+import { formatApiError } from '../../lib/api/index.ts';
 import {
   type ApiToken,
   useCreateInstanceToken,
   useDeleteInstanceToken,
   useInstanceTokens,
 } from '../../lib/api/tokens.ts';
-import { formatApiError } from '../../lib/api/index.ts';
 import { Button } from '../ui/button.tsx';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogTitle,
-} from '../ui/dialog.tsx';
-import { TokenCreateDialog, type ScopePreset } from './token-create-dialog.tsx';
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from '../ui/dialog.tsx';
 import { RevealSecretDialog } from './reveal-secret-dialog.tsx';
+import { type ScopePreset, TokenCreateDialog } from './token-create-dialog.tsx';
+import { expiresLabel, lastUsedLabel } from './token-meta.ts';
 import { useTokenRotate } from './use-token-rotate.ts';
-import { lastUsedLabel, expiresLabel } from './token-meta.ts';
 
 // Scopes an instance token can carry — the per-workspace set plus the admin
 // scopes that only make sense instance-wide (workspace:admin lets the holder
@@ -92,8 +87,8 @@ export function InstanceTokensTab() {
         <div>
           <h2 className="text-sm font-medium">Instance API tokens</h2>
           <p className="mt-0.5 text-xs text-fg-2">
-            Cross-workspace tokens for operator/admin automation — create workspaces,
-            change settings, manage agents across the whole instance.
+            Cross-workspace tokens for operator/admin automation — create workspaces, change
+            settings, manage agents across the whole instance.
           </p>
         </div>
         {tokens.length > 0 ? (
@@ -162,8 +157,8 @@ export function InstanceTokensTab() {
         <DialogContent>
           <DialogTitle>Revoke &quot;{pendingRevoke?.name}&quot;?</DialogTitle>
           <DialogDescription>
-            Any client using this token will immediately lose access across every
-            workspace. This cannot be undone.
+            Any client using this token will immediately lose access across every workspace. This
+            cannot be undone.
           </DialogDescription>
           <div className="mt-6 flex justify-end gap-2">
             <Button variant="ghost" onClick={() => setPendingRevoke(null)}>
@@ -185,10 +180,9 @@ export function InstanceTokensTab() {
         <DialogContent>
           <DialogTitle>Rotate &quot;{pendingRotate?.name}&quot;?</DialogTitle>
           <DialogDescription>
-            This issues a new secret with the same name and scopes across every
-            workspace, then revokes the current one. Anything using the old token
-            loses access immediately. If the old token had an expiry, the new one
-            keeps a comparable window.
+            This issues a new secret with the same name and scopes across every workspace, then
+            revokes the current one. Anything using the old token loses access immediately. If the
+            old token had an expiry, the new one keeps a comparable window.
           </DialogDescription>
           <div className="mt-6 flex justify-end gap-2">
             <Button variant="ghost" onClick={() => setPendingRotate(null)}>

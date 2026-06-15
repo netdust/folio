@@ -1,7 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Folder } from 'lucide-react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { RailTree } from './rail-tree.tsx';
 
 describe('RailTree', () => {
@@ -153,9 +153,7 @@ describe('RailTree', () => {
       />,
     );
 
-    const leaf = screen
-      .getAllByTestId('rail-tree-item')
-      .find((el) => el.textContent === 'Leaf');
+    const leaf = screen.getAllByTestId('rail-tree-item').find((el) => el.textContent === 'Leaf');
     expect(leaf).toBeDefined();
     await userEvent.click(leaf!);
     expect(onLeafClick).toHaveBeenCalledTimes(1);

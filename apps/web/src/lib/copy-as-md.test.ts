@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
-import { fetchDocumentMarkdown, copyDocumentAsMarkdown } from './copy-as-md.ts';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { copyDocumentAsMarkdown, fetchDocumentMarkdown } from './copy-as-md.ts';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -10,11 +10,12 @@ describe('fetchDocumentMarkdown', () => {
     const body = '---\ntitle: Hello\n---\n\nBody text.\n';
     vi.stubGlobal(
       'fetch',
-      vi.fn<typeof fetch>(async () =>
-        new Response(body, {
-          status: 200,
-          headers: { 'Content-Type': 'text/markdown; charset=utf-8' },
-        }),
+      vi.fn<typeof fetch>(
+        async () =>
+          new Response(body, {
+            status: 200,
+            headers: { 'Content-Type': 'text/markdown; charset=utf-8' },
+          }),
       ),
     );
 
@@ -32,11 +33,12 @@ describe('copyDocumentAsMarkdown', () => {
     const body = '---\ntitle: Hello\n---\n\nBody text.\n';
     vi.stubGlobal(
       'fetch',
-      vi.fn<typeof fetch>(async () =>
-        new Response(body, {
-          status: 200,
-          headers: { 'Content-Type': 'text/markdown; charset=utf-8' },
-        }),
+      vi.fn<typeof fetch>(
+        async () =>
+          new Response(body, {
+            status: 200,
+            headers: { 'Content-Type': 'text/markdown; charset=utf-8' },
+          }),
       ),
     );
 

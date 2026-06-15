@@ -16,17 +16,17 @@
 
 import { afterEach, describe, expect, test } from 'bun:test';
 import { eq } from 'drizzle-orm';
-import { aiKeys, conversations, messages } from '../db/schema.ts';
 import { nanoid } from 'nanoid';
+import { aiKeys, conversations, messages } from '../db/schema.ts';
+import { createConversationRun } from '../services/conversation-runs.ts';
+import { createConversation } from '../services/conversations.ts';
+import { makeTestApp } from '../test/harness.ts';
 import type { AIProvider } from './ai/provider.ts';
 import { __INTERNAL_TEST_ONLY__ as providerTestHatch } from './ai/provider.ts';
 import { conversationBus } from './conversation-bus.ts';
 import { encryptSecret } from './crypto.ts';
 import { seedInstanceSkills } from './instance-skills.ts';
 import { runAgent } from './runner.ts';
-import { createConversation } from '../services/conversations.ts';
-import { createConversationRun } from '../services/conversation-runs.ts';
-import { makeTestApp } from '../test/harness.ts';
 
 afterEach(() => {
   providerTestHatch.reset();
@@ -35,7 +35,7 @@ afterEach(() => {
 /** Install a provider stub whose `stream` THROWS the given error on first pull. */
 function installThrowingProviderStub(err: Error): void {
   const stub: AIProvider = {
-    // eslint-disable-next-line require-yield
+    // biome-ignore lint/correctness/useYield: intentional no-yield generator fixture — stream throws on first pull to exercise the error-surface path
     async *stream() {
       throw err;
     },
@@ -138,7 +138,9 @@ describe('operator-run error surfacing', () => {
     }
 
     // A3/M3: slot cleared despite the surface throw.
-    const convRow = await db.query.conversations.findFirst({ where: eq(conversations.id, convId!) });
+    const convRow = await db.query.conversations.findFirst({
+      where: eq(conversations.id, convId!),
+    });
     expect(convRow?.activeRunId).toBeNull();
   });
 
@@ -151,7 +153,10 @@ describe('operator-run error surfacing', () => {
 
     const rows = await db.query.messages.findMany({ where: eq(messages.conversationId, convId) });
     const erroredText = rows.filter(
-      (r) => r.role === 'operator' && r.kind === 'text' && /couldn.t complete this turn/i.test(r.body ?? ''),
+      (r) =>
+        r.role === 'operator' &&
+        r.kind === 'text' &&
+        /couldn.t complete this turn/i.test(r.body ?? ''),
     );
     expect(erroredText.length).toBe(0);
     // The slot is released on the clean path too.
@@ -181,7 +186,10 @@ describe('operator-run error surfacing', () => {
       title: 'Untitled',
     });
     const runId = nanoid();
-    await createConversationRun(db, { conversation: { id: conv.id, createdBy: seed.user.id }, runId });
+    await createConversationRun(db, {
+      conversation: { id: conv.id, createdBy: seed.user.id },
+      runId,
+    });
     await db.update(conversations).set({ activeRunId: runId }).where(eq(conversations.id, conv.id));
 
     // Force loadContext to throw AFTER the slot is acquired: remove the operator's
@@ -192,11 +200,18 @@ describe('operator-run error surfacing', () => {
     await runAgent({ runId });
 
     // The slot is cleared (NOT wedged) even though the throw was pre-context...
-    const convRow = await db.query.conversations.findFirst({ where: eq(conversations.id, conv.id) });
+    const convRow = await db.query.conversations.findFirst({
+      where: eq(conversations.id, conv.id),
+    });
     expect(convRow?.activeRunId).toBeNull();
     // ...AND an error was surfaced into the thread (resolved via the run binding).
     const rows = await db.query.messages.findMany({ where: eq(messages.conversationId, conv.id) });
-    const errorRows = rows.filter((r) => r.role === 'operator' && r.kind === 'text' && /couldn.t complete this turn/i.test(r.body ?? ''));
+    const errorRows = rows.filter(
+      (r) =>
+        r.role === 'operator' &&
+        r.kind === 'text' &&
+        /couldn.t complete this turn/i.test(r.body ?? ''),
+    );
     expect(errorRows.length).toBe(1);
   });
 

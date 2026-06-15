@@ -1,14 +1,14 @@
-import type { Context, MiddlewareHandler } from 'hono';
 import { and, eq } from 'drizzle-orm';
+import type { Context, MiddlewareHandler } from 'hono';
 import { db } from '../db/client.ts';
 import { projects, tables, workspaces } from '../db/schema.ts';
 import type { Project, TableEntity, Workspace } from '../db/schema.ts';
+import { canSeeProject, canSeeWorkspace, userRole } from '../lib/access.ts';
+import { HTTPError } from '../lib/http.ts';
+import { DEFAULT_TABLE_SLUG } from '../lib/seed-project-defaults.ts';
+import { isInstanceReach } from '../lib/token-reach.ts';
 import type { AuthContext } from './auth.ts';
 import { getUser } from './auth.ts';
-import { HTTPError } from '../lib/http.ts';
-import { isInstanceReach } from '../lib/token-reach.ts';
-import { canSeeProject, canSeeWorkspace, userRole } from '../lib/access.ts';
-import { DEFAULT_TABLE_SLUG } from '../lib/seed-project-defaults.ts';
 
 export type Role = 'owner' | 'admin' | 'member';
 

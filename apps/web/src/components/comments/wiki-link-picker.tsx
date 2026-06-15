@@ -25,7 +25,9 @@ export function WikiLinkPicker({
   // accepted v1 cross-table-relation limitation as the slideover relation
   // resolver (no project-wide cross-table document endpoint exists).
   const pagesQ = useDocuments(workspaceSlug, projectSlug, DEFAULT_TABLE_SLUG, { type: 'page' });
-  const itemsQ = useDocuments(workspaceSlug, projectSlug, DEFAULT_TABLE_SLUG, { type: 'work_item' });
+  const itemsQ = useDocuments(workspaceSlug, projectSlug, DEFAULT_TABLE_SLUG, {
+    type: 'work_item',
+  });
 
   const allDocs = useMemo(
     () => [...(pagesQ.data?.data ?? []), ...(itemsQ.data?.data ?? [])],
@@ -42,6 +44,7 @@ export function WikiLinkPicker({
   const [selectedIndex, setSelectedIndex] = useState(0);
 
   // Reset selection when the filtered shape changes (e.g. query changes).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: resets selection on filtered-shape change only; setSelectedIndex is a stable setter
   useEffect(() => {
     setSelectedIndex(0);
   }, [filtered.length]);

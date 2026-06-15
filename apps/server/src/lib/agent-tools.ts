@@ -17,11 +17,7 @@ import { z } from 'zod';
 import { db } from '../db/client.ts';
 import type { DB } from '../db/client.ts';
 import type { ApiToken, EphemeralToken } from '../db/schema.ts';
-import {
-  getConfirmedPendingOp,
-  markExecuted,
-  recordPendingOp,
-} from '../services/pending-ops.ts';
+import { getConfirmedPendingOp, markExecuted, recordPendingOp } from '../services/pending-ops.ts';
 import type { ConversationSink } from './chat-thread-sink.ts';
 
 // Drizzle transaction handles share the query API with DB; one shape works for

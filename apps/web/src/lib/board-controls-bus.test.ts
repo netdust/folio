@@ -1,4 +1,4 @@
-import { describe, expect, test, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, test } from 'vitest';
 import { boardControlsBus } from './board-controls-bus.ts';
 
 beforeEach(() => boardControlsBus.reset());
@@ -9,7 +9,9 @@ describe('boardControlsBus', () => {
   });
   test('setGroupBy stores an override and notifies subscribers', () => {
     let notified = false;
-    const off = boardControlsBus.subscribe(() => { notified = true; });
+    const off = boardControlsBus.subscribe(() => {
+      notified = true;
+    });
     boardControlsBus.setGroupBy('v1', 'assignee');
     expect(boardControlsBus.get('v1')).toEqual({ groupBy: 'assignee' });
     expect(notified).toBe(true);

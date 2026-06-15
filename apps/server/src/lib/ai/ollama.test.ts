@@ -14,7 +14,7 @@ function jsonl(lines: unknown[]): ReadableStream<Uint8Array> {
   const enc = new TextEncoder();
   return new ReadableStream<Uint8Array>({
     start(controller) {
-      for (const l of lines) controller.enqueue(enc.encode(JSON.stringify(l) + '\n'));
+      for (const l of lines) controller.enqueue(enc.encode(`${JSON.stringify(l)}\n`));
       controller.close();
     },
   });
@@ -130,7 +130,7 @@ describe('ollama provider', () => {
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
         controller.enqueue(
-          enc.encode(JSON.stringify({ message: { content: 'Hi' }, done: false }) + '\n'),
+          enc.encode(`${JSON.stringify({ message: { content: 'Hi' }, done: false })}\n`),
         );
         // No trailing newline on the final record.
         controller.enqueue(
@@ -175,8 +175,12 @@ describe('ollama provider', () => {
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
         // Text chunks arrive, then the stream just ENDS — no `done:true` chunk.
-        controller.enqueue(enc.encode(JSON.stringify({ message: { content: 'partial ' }, done: false }) + '\n'));
-        controller.enqueue(enc.encode(JSON.stringify({ message: { content: 'answer' }, done: false }) + '\n'));
+        controller.enqueue(
+          enc.encode(`${JSON.stringify({ message: { content: 'partial ' }, done: false })}\n`),
+        );
+        controller.enqueue(
+          enc.encode(`${JSON.stringify({ message: { content: 'answer' }, done: false })}\n`),
+        );
         controller.close(); // connection dropped before the terminal chunk
       },
     });
@@ -351,18 +355,18 @@ describe('ollama provider', () => {
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
         controller.enqueue(
-          enc.encode(JSON.stringify({ message: { content: 'Hi' }, done: false }) + '\n'),
+          enc.encode(`${JSON.stringify({ message: { content: 'Hi' }, done: false })}\n`),
         );
         controller.enqueue(enc.encode('not-json-at-all\n'));
         controller.enqueue(
           enc.encode(
-            JSON.stringify({
+            `${JSON.stringify({
               message: { content: '' },
               done: true,
               done_reason: 'stop',
               prompt_eval_count: 4,
               eval_count: 1,
-            }) + '\n',
+            })}\n`,
           ),
         );
         controller.close();
@@ -427,7 +431,11 @@ describe('ollama provider', () => {
       system: 'sys',
       messages: [{ role: 'user', content: 'list workspaces' }],
       tools: [
-        { name: 'list_workspaces', description: 'List workspaces.', input_schema: { type: 'object', properties: {} } },
+        {
+          name: 'list_workspaces',
+          description: 'List workspaces.',
+          input_schema: { type: 'object', properties: {} },
+        },
       ],
       maxTokens: 100,
       apiKey: '',
@@ -489,11 +497,19 @@ describe('ollama provider', () => {
       messages: [
         { role: 'user', content: 'list' },
         // The assistant turn that called a tool (what the runner replays each round).
-        { role: 'assistant', content: '', tool_calls: [{ id: 'call_1', name: 'list_workspaces', arguments: { q: 'x' } }] },
+        {
+          role: 'assistant',
+          content: '',
+          tool_calls: [{ id: 'call_1', name: 'list_workspaces', arguments: { q: 'x' } }],
+        },
         { role: 'tool', content: '{"ok":true}', tool_use_id: 'call_1' },
       ],
       tools: [
-        { name: 'list_workspaces', description: 'List.', input_schema: { type: 'object', properties: {} } },
+        {
+          name: 'list_workspaces',
+          description: 'List.',
+          input_schema: { type: 'object', properties: {} },
+        },
       ],
       maxTokens: 100,
       apiKey: '',
@@ -540,7 +556,11 @@ describe('ollama provider', () => {
         new Response(
           jsonl([
             {
-              message: { role: 'assistant', content: '', tool_calls: [{ function: { name: 'list_workspaces', arguments: {} } }] },
+              message: {
+                role: 'assistant',
+                content: '',
+                tool_calls: [{ function: { name: 'list_workspaces', arguments: {} } }],
+              },
               done: false,
             },
             { message: { content: '' }, done: true, done_reason: 'length' },
@@ -552,7 +572,13 @@ describe('ollama provider', () => {
     for await (const ev of ollama.stream({
       system: 'sys',
       messages: [{ role: 'user', content: 'x' }],
-      tools: [{ name: 'list_workspaces', description: 'List.', input_schema: { type: 'object', properties: {} } }],
+      tools: [
+        {
+          name: 'list_workspaces',
+          description: 'List.',
+          input_schema: { type: 'object', properties: {} },
+        },
+      ],
       maxTokens: 1,
       apiKey: '',
       model: 'qwen3:8b',
@@ -571,18 +597,34 @@ describe('ollama provider', () => {
     const toolStream = () =>
       new Response(
         jsonl([
-          { message: { role: 'assistant', content: '', tool_calls: [{ function: { name: 'list_workspaces', arguments: {} } }] }, done: false },
+          {
+            message: {
+              role: 'assistant',
+              content: '',
+              tool_calls: [{ function: { name: 'list_workspaces', arguments: {} } }],
+            },
+            done: false,
+          },
           { message: { content: '' }, done: true, done_reason: 'stop' },
         ]),
         { status: 200 },
       );
     const plainStream = () =>
-      new Response(jsonl([{ message: { content: 'just text' }, done: true, done_reason: 'stop' }]), { status: 200 });
+      new Response(
+        jsonl([{ message: { content: 'just text' }, done: true, done_reason: 'stop' }]),
+        { status: 200 },
+      );
 
     const baseArgs = {
       system: 'sys',
       messages: [{ role: 'user' as const, content: 'x' }],
-      tools: [{ name: 'list_workspaces', description: 'List.', input_schema: { type: 'object', properties: {} } }],
+      tools: [
+        {
+          name: 'list_workspaces',
+          description: 'List.',
+          input_schema: { type: 'object', properties: {} },
+        },
+      ],
       maxTokens: 100,
       apiKey: '',
       model: 'qwen3:8b',
@@ -630,8 +672,16 @@ describe('ollama provider', () => {
       system: 'sys',
       messages: [{ role: 'user', content: 'x' }],
       tools: [
-        { name: 'list_workspaces', description: 'List.', input_schema: { type: 'object', properties: {} } },
-        { name: 'list_projects', description: 'List.', input_schema: { type: 'object', properties: {} } },
+        {
+          name: 'list_workspaces',
+          description: 'List.',
+          input_schema: { type: 'object', properties: {} },
+        },
+        {
+          name: 'list_projects',
+          description: 'List.',
+          input_schema: { type: 'object', properties: {} },
+        },
       ],
       maxTokens: 100,
       apiKey: '',
@@ -653,7 +703,14 @@ describe('ollama provider', () => {
       async () =>
         new Response(
           jsonl([
-            { message: { role: 'assistant', content: '', tool_calls: [{ function: { name: 'f', arguments: {} } }] }, done: false },
+            {
+              message: {
+                role: 'assistant',
+                content: '',
+                tool_calls: [{ function: { name: 'f', arguments: {} } }],
+              },
+              done: false,
+            },
             { message: { content: '' }, done: true, done_reason: 'tool_calls' },
           ]),
           { status: 200 },
@@ -680,7 +737,10 @@ describe('ollama provider', () => {
     let sentBody: any;
     global.fetch = mock(async (_url: string, init: any) => {
       sentBody = JSON.parse(init.body as string);
-      return new Response(jsonl([{ message: { content: 'ok' }, done: true, done_reason: 'stop' }]), { status: 200 });
+      return new Response(
+        jsonl([{ message: { content: 'ok' }, done: true, done_reason: 'stop' }]),
+        { status: 200 },
+      );
     }) as never;
     for await (const _ of ollama.stream({
       system: 'sys',
@@ -698,8 +758,16 @@ describe('ollama provider', () => {
         { role: 'tool', content: '{"b":2}', tool_use_id: 'c2' },
       ],
       tools: [
-        { name: 'list_workspaces', description: 'List.', input_schema: { type: 'object', properties: {} } },
-        { name: 'list_projects', description: 'List.', input_schema: { type: 'object', properties: {} } },
+        {
+          name: 'list_workspaces',
+          description: 'List.',
+          input_schema: { type: 'object', properties: {} },
+        },
+        {
+          name: 'list_projects',
+          description: 'List.',
+          input_schema: { type: 'object', properties: {} },
+        },
       ],
       maxTokens: 100,
       apiKey: '',
@@ -711,9 +779,14 @@ describe('ollama provider', () => {
     const assistant = sentBody.messages.find((m: any) => m.role === 'assistant' && m.tool_calls);
     expect(assistant.tool_calls).toHaveLength(2);
     expect(assistant.tool_calls.map((t: any) => t.id)).toEqual(['c1', 'c2']);
-    expect(assistant.tool_calls.map((t: any) => t.function.name)).toEqual(['list_workspaces', 'list_projects']);
+    expect(assistant.tool_calls.map((t: any) => t.function.name)).toEqual([
+      'list_workspaces',
+      'list_projects',
+    ]);
     // Both tool results carry their correlation ids.
-    const toolIds = sentBody.messages.filter((m: any) => m.role === 'tool').map((m: any) => m.tool_call_id);
+    const toolIds = sentBody.messages
+      .filter((m: any) => m.role === 'tool')
+      .map((m: any) => m.tool_call_id);
     expect(toolIds).toEqual(['c1', 'c2']);
   });
 
@@ -724,12 +797,22 @@ describe('ollama provider', () => {
     const toolBody = () =>
       new Response(
         jsonl([
-          { message: { role: 'assistant', content: '', tool_calls: [{ function: { name: 'f', arguments: {} } }] }, done: false },
+          {
+            message: {
+              role: 'assistant',
+              content: '',
+              tool_calls: [{ function: { name: 'f', arguments: {} } }],
+            },
+            done: false,
+          },
           { message: { content: '' }, done: true, done_reason: 'stop' },
         ]),
         { status: 200 },
       );
-    const plainBody = () => new Response(jsonl([{ message: { content: 'hi' }, done: true, done_reason: 'stop' }]), { status: 200 });
+    const plainBody = () =>
+      new Response(jsonl([{ message: { content: 'hi' }, done: true, done_reason: 'stop' }]), {
+        status: 200,
+      });
 
     let n = 0;
     global.fetch = mock(async () => {
@@ -740,10 +823,15 @@ describe('ollama provider', () => {
     const drain = async () => {
       const evs: any[] = [];
       for await (const ev of ollama.stream({
-        system: 'sys', messages: [{ role: 'user', content: 'x' }],
+        system: 'sys',
+        messages: [{ role: 'user', content: 'x' }],
         tools: [{ name: 'f', description: 'f', input_schema: { type: 'object', properties: {} } }],
-        maxTokens: 100, apiKey: '', model: 'qwen3:8b', baseUrl: 'http://localhost:11434',
-      })) evs.push(ev);
+        maxTokens: 100,
+        apiKey: '',
+        model: 'qwen3:8b',
+        baseUrl: 'http://localhost:11434',
+      }))
+        evs.push(ev);
       return evs;
     };
     const [a, b] = await Promise.all([drain(), drain()]);
@@ -837,14 +925,27 @@ describe('ollama provider', () => {
   // G4 — a malformed tool_call entry (no `function` key — real across OpenAI-tool-
   // emulating servers like LM Studio/llama.cpp) must NOT crash the generator. Guard
   // the deref, skip + warn, and still yield tokens/done (degrade like anthropic/openai).
-  test("stream() skips a malformed tool_call with no function and still yields done (G4)", async () => {
+  test('stream() skips a malformed tool_call with no function and still yields done (G4)', async () => {
     global.fetch = mock(
       async () =>
         new Response(
           jsonl([
             // tool_calls entry with NO `function` key.
-            { message: { role: "assistant", content: "", tool_calls: [{ id: "x", type: "function" }] }, done: false },
-            { message: { content: "" }, done: true, done_reason: "stop", prompt_eval_count: 3, eval_count: 1 },
+            {
+              message: {
+                role: 'assistant',
+                content: '',
+                tool_calls: [{ id: 'x', type: 'function' }],
+              },
+              done: false,
+            },
+            {
+              message: { content: '' },
+              done: true,
+              done_reason: 'stop',
+              prompt_eval_count: 3,
+              eval_count: 1,
+            },
           ]),
           { status: 200 },
         ),
@@ -852,18 +953,18 @@ describe('ollama provider', () => {
     const events: any[] = [];
     // Must not throw.
     for await (const ev of ollama.stream({
-      system: "sys",
-      messages: [{ role: "user", content: "x" }],
-      tools: [{ name: "f", description: "f", input_schema: { type: "object", properties: {} } }],
+      system: 'sys',
+      messages: [{ role: 'user', content: 'x' }],
+      tools: [{ name: 'f', description: 'f', input_schema: { type: 'object', properties: {} } }],
       maxTokens: 100,
-      apiKey: "",
-      model: "llama3.1",
-      baseUrl: "http://localhost:11434",
+      apiKey: '',
+      model: 'llama3.1',
+      baseUrl: 'http://localhost:11434',
     })) {
       events.push(ev);
     }
     // The malformed call was skipped (no tool_call event), but the stream completed.
-    expect(events.filter((e) => e.type === "tool_call")).toHaveLength(0);
-    expect(events).toContainEqual({ type: "done", reason: "stop" });
+    expect(events.filter((e) => e.type === 'tool_call')).toHaveLength(0);
+    expect(events).toContainEqual({ type: 'done', reason: 'stop' });
   });
 });

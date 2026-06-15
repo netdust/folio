@@ -1,8 +1,8 @@
-import { useState } from 'react';
 import { ChevronDown, ChevronRight, FileText, Plus } from 'lucide-react';
-import { Icon } from '../ui/icon.tsx';
+import { useState } from 'react';
 import { bodyExcerpt } from '../../lib/excerpt.ts';
 import type { TreeNode } from '../../lib/wiki-tree.ts';
+import { Icon } from '../ui/icon.tsx';
 
 interface Props {
   node: TreeNode;

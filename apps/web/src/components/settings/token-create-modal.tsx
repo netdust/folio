@@ -1,5 +1,5 @@
 import { useCreateToken } from '../../lib/api/tokens.ts';
-import { TokenCreateDialog, type ScopePreset } from './token-create-dialog.tsx';
+import { type ScopePreset, TokenCreateDialog } from './token-create-dialog.tsx';
 
 const ALL_SCOPES = [
   'documents:read',

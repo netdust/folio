@@ -274,10 +274,7 @@ describe('tokens.ts access gate: managing a workspace needs canSeeWorkspace (:wo
 
   test('GET /tokens/:workspaceId → 403 when the caller cannot see :workspaceId', async () => {
     const { app, db, seed } = await makeTestApp();
-    const { cookie, unseenWorkspaceId } = await seedMemberAndUnseenWorkspace(
-      db,
-      seed.workspace.id,
-    );
+    const { cookie, unseenWorkspaceId } = await seedMemberAndUnseenWorkspace(db, seed.workspace.id);
     const res = await app.request(tokensPath(seed.workspace.slug, unseenWorkspaceId), {
       headers: { Cookie: cookie },
     });
@@ -287,10 +284,7 @@ describe('tokens.ts access gate: managing a workspace needs canSeeWorkspace (:wo
 
   test('POST /tokens/:workspaceId → 403 when the caller cannot see :workspaceId (nothing minted)', async () => {
     const { app, db, seed } = await makeTestApp();
-    const { cookie, unseenWorkspaceId } = await seedMemberAndUnseenWorkspace(
-      db,
-      seed.workspace.id,
-    );
+    const { cookie, unseenWorkspaceId } = await seedMemberAndUnseenWorkspace(db, seed.workspace.id);
     const res = await app.request(tokensPath(seed.workspace.slug, unseenWorkspaceId), {
       method: 'POST',
       headers: { Cookie: cookie, 'Content-Type': 'application/json' },
@@ -306,10 +300,7 @@ describe('tokens.ts access gate: managing a workspace needs canSeeWorkspace (:wo
 
   test('DELETE /tokens/:workspaceId/:tokenId → 403 when the caller cannot see :workspaceId (peer survives)', async () => {
     const { app, db, seed } = await makeTestApp();
-    const { cookie, unseenWorkspaceId } = await seedMemberAndUnseenWorkspace(
-      db,
-      seed.workspace.id,
-    );
+    const { cookie, unseenWorkspaceId } = await seedMemberAndUnseenWorkspace(db, seed.workspace.id);
     // A peer token pinned to the unseen workspace.
     const peerId = nanoid();
     await db.insert(apiTokens).values({

@@ -1,7 +1,7 @@
-import { describe, it, expect, beforeEach } from 'vitest';
-import { renderHook, act, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { ReactNode } from 'react';
+import { act, renderHook, waitFor } from '@testing-library/react';
+import type { ReactNode } from 'react';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { ApiError } from './client.ts';
 import { useOptimisticPatch } from './optimistic.ts';
 
@@ -11,7 +11,10 @@ function wrap(qc: QueryClient) {
   );
 }
 
-interface Doc { slug: string; title: string; }
+interface Doc {
+  slug: string;
+  title: string;
+}
 type PatchVars = { slug: string; patch: Partial<Doc> };
 
 describe('useOptimisticPatch', () => {
@@ -22,7 +25,10 @@ describe('useOptimisticPatch', () => {
   beforeEach(() => {
     qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     qc.setQueryData(detail('a'), { slug: 'a', title: 'old' });
-    qc.setQueryData(list, [{ slug: 'a', title: 'old' }, { slug: 'b', title: 'b' }]);
+    qc.setQueryData(list, [
+      { slug: 'a', title: 'old' },
+      { slug: 'b', title: 'b' },
+    ]);
   });
 
   it('applies optimistic patch on mutate; rolls back on error', async () => {
@@ -42,7 +48,9 @@ describe('useOptimisticPatch', () => {
     );
 
     await act(async () => {
-      try { await result.current.mutateAsync({ slug: 'a', patch: { title: 'new' } }); } catch {}
+      try {
+        await result.current.mutateAsync({ slug: 'a', patch: { title: 'new' } });
+      } catch {}
     });
 
     expect(qc.getQueryData(detail('a'))).toEqual({ slug: 'a', title: 'old' });

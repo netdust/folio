@@ -15,8 +15,7 @@ export interface View {
 }
 
 export const viewsKeys = {
-  list: (wslug: string, pslug: string, tslug: string) =>
-    ['views', wslug, pslug, tslug] as const,
+  list: (wslug: string, pslug: string, tslug: string) => ['views', wslug, pslug, tslug] as const,
 };
 
 export function useViews(wslug: string, pslug: string, tslug: string) {

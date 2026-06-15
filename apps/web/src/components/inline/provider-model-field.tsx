@@ -1,7 +1,7 @@
 import { useState } from 'react';
+import { useInstanceAiKeys } from '../../lib/api/instance-ai-keys.ts';
 import type { AiProvider } from '../../lib/api/settings.ts';
 import { useWorkspace } from '../../lib/api/workspaces.ts';
-import { useInstanceAiKeys } from '../../lib/api/instance-ai-keys.ts';
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
 
 interface Props {
@@ -78,7 +78,8 @@ export function ProviderModelField({ wslug, provider, model, onChange }: Props) 
   const currentProviderInfo = providers.find((p) => p.id === provider) ?? providers[0]!;
   const providerLabel = currentProviderInfo.label;
   const isCurrentClaudeCode = currentProviderInfo.id === 'claude-code';
-  const currentHasKey = isCurrentClaudeCode || configuredProviders.has(currentProviderInfo.id as AiProvider);
+  const currentHasKey =
+    isCurrentClaudeCode || configuredProviders.has(currentProviderInfo.id as AiProvider);
 
   return (
     <div className="flex flex-wrap items-center gap-1.5">
@@ -114,9 +115,7 @@ export function ProviderModelField({ wslug, provider, model, onChange }: Props) 
                   setProviderOpen(false);
                   // Reset model when switching provider unless the current model
                   // is in the new provider's list — preserves valid pairings.
-                  const nextModel = p.models.includes(model)
-                    ? model
-                    : p.models[0] ?? '';
+                  const nextModel = p.models.includes(model) ? model : (p.models[0] ?? '');
                   onChange({ provider: p.id, model: nextModel });
                 }}
                 className={`flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-card ${

@@ -1,5 +1,5 @@
-import type { Context, MiddlewareHandler } from 'hono';
 import { eq } from 'drizzle-orm';
+import type { Context, MiddlewareHandler } from 'hono';
 import { db } from '../db/client.ts';
 import { apiTokens, documents, users } from '../db/schema.ts';
 import type { ApiToken } from '../db/schema.ts';
@@ -51,15 +51,9 @@ export const attachToken: MiddlewareHandler<AuthContext> = async (c, next) => {
     const lastUsed = row.lastUsedAt;
     if (lastUsed == null || Date.now() - lastUsed.getTime() > 60_000) {
       Promise.resolve(
-        db
-          .update(apiTokens)
-          .set({ lastUsedAt: new Date() })
-          .where(eq(apiTokens.id, row.id)),
+        db.update(apiTokens).set({ lastUsedAt: new Date() }).where(eq(apiTokens.id, row.id)),
       ).catch((err: unknown) => {
-        console.warn(
-          '[bearer] lastUsedAt bump failed:',
-          err instanceof Error ? err.message : err,
-        );
+        console.warn('[bearer] lastUsedAt bump failed:', err instanceof Error ? err.message : err);
       });
     }
 
@@ -115,8 +109,7 @@ export function requireScope(scope: string): MiddlewareHandler<AuthContext> {
     // matched strictly, so a legacy scope never leaks into an unrelated grant.
     const holds =
       t.scopes.includes(scope) ||
-      (scope === 'config:write' &&
-        CONFIG_WRITE_LEGACY_ALIASES.some((a) => t.scopes.includes(a)));
+      (scope === 'config:write' && CONFIG_WRITE_LEGACY_ALIASES.some((a) => t.scopes.includes(a)));
     if (!holds) {
       throw new HTTPError('FORBIDDEN_SCOPE', `token missing required scope: ${scope}`, 403);
     }

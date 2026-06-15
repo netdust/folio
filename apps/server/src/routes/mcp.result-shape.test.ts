@@ -39,7 +39,11 @@ test('toMcpToolResult passes an already-shaped {content:[...]} result through ve
 });
 
 test('toMcpToolResult serializes a refuse-with-plan envelope as text (not a protocol error)', () => {
-  const refusal = { refused: true, reason: 'secret-class write', plan: { method: 'POST', path: '/x' } };
+  const refusal = {
+    refused: true,
+    reason: 'secret-class write',
+    plan: { method: 'POST', path: '/x' },
+  };
   const out = toMcpToolResult(refusal);
   expect(JSON.parse(out.content[0]!.text)).toEqual(refusal);
 });
@@ -68,7 +72,10 @@ test('folio_api_get over the live MCP route returns a non-empty content array (r
       jsonrpc: '2.0',
       id: 1,
       method: 'tools/call',
-      params: { name: 'folio_api_get', arguments: { path: `/api/v1/w/${seed.workspace.slug}/projects` } },
+      params: {
+        name: 'folio_api_get',
+        arguments: { path: `/api/v1/w/${seed.workspace.slug}/projects` },
+      },
     }),
   });
 

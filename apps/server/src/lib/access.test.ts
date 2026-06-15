@@ -1,14 +1,14 @@
 import { describe, expect, test } from 'bun:test';
-import { nanoid } from 'nanoid';
 import { eq } from 'drizzle-orm';
-import { makeBareTestDb } from '../test/harness.ts';
+import { nanoid } from 'nanoid';
 import * as schema from '../db/schema.ts';
+import { makeBareTestDb } from '../test/harness.ts';
 import {
-  canSeeWorkspace,
   canSeeProject,
-  userRole,
-  hasWorkspaceAccess,
+  canSeeWorkspace,
   hasProjectAccess,
+  hasWorkspaceAccess,
+  userRole,
   visibleProjectIds,
 } from './access.ts';
 
@@ -50,9 +50,9 @@ describe('access rules (the visibility convergence point)', () => {
     expect(await canSeeProject(db, wsUser, p2)).toBe(true);
 
     // project-only: traverses the ws (canSeeWorkspace true) but sees ONLY p1
-    expect(await canSeeWorkspace(db, projUser, wsA)).toBe(true);   // traverse clause
+    expect(await canSeeWorkspace(db, projUser, wsA)).toBe(true); // traverse clause
     expect(await canSeeProject(db, projUser, p1)).toBe(true);
-    expect(await canSeeProject(db, projUser, p2)).toBe(false);     // NOT the other project
+    expect(await canSeeProject(db, projUser, p2)).toBe(false); // NOT the other project
 
     // stranger (member, no grants): sees nothing
     expect(await canSeeWorkspace(db, stranger, wsA)).toBe(false);
@@ -87,7 +87,7 @@ describe('visibleProjectIds (CR-10 — the batched visible-set convergence helpe
   // all rows, agent-runs → null reach), so the whole-ws decision stays with the
   // caller via canManageWorkspace. This helper answers only "which projects in
   // this ws does this user have a direct grant to".
-  test('returns exactly the user\'s directly-granted project ids in the workspace', async () => {
+  test("returns exactly the user's directly-granted project ids in the workspace", async () => {
     const { db } = await makeBareTestDb();
     const projUser = await mkUser(db, 'p@t', 'member');
     const stranger = await mkUser(db, 's@t', 'member');
@@ -124,7 +124,9 @@ describe('visibleProjectIds (CR-10 — the batched visible-set convergence helpe
     const granted: string[] = [];
     for (let i = 0; i < 4; i++) {
       const id = nanoid();
-      await db.insert(schema.projects).values({ id, workspaceId: wsA, slug: `p${i}`, name: `P${i}` });
+      await db
+        .insert(schema.projects)
+        .values({ id, workspaceId: wsA, slug: `p${i}`, name: `P${i}` });
       // grant 2 of the 4 (the odd indices)
       if (i % 2 === 1) {
         await db.insert(schema.projectAccess).values({ userId: u, projectId: id });

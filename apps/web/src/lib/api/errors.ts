@@ -1,5 +1,5 @@
-import { ApiError } from './client.ts';
 import type { ErrorCodeType } from '@folio/shared';
+import { ApiError } from './client.ts';
 
 interface ErrorEnvelope {
   error: { code: string; message: string };

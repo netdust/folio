@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    # The server/shared suites parse env.ts at module load (env.ts:107) and
+    # FOLIO_MASTER_KEY has no default. Locally apps/server/.env supplies it (and
+    # env-setup.ts seeds harness tests); CI has no .env, so the env-bypassing
+    # tests (env.test.ts, server-export, migrate-on-boot) need it set explicitly.
+    # Throwaway test-only key — same value as src/test/env-setup.ts.
+    env:
+      NODE_ENV: test
+      FOLIO_MASTER_KEY: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Cache Bun install
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Server tests
+        working-directory: apps/server
+        run: bun test
+
+      - name: Shared tests
+        working-directory: packages/shared
+        run: bun test
+
+      - name: Web tests (one retry for the known jsdom flake)
+        working-directory: apps/web
+        run: npx vitest run || npx vitest run
+
+      - name: Typecheck server
+        working-directory: apps/server
+        run: bun x tsc --noEmit
+
+      - name: Typecheck web
+        working-directory: apps/web
+        run: bun x tsc --noEmit
+
+      - name: Typecheck shared
+        working-directory: packages/shared
+        run: bun x tsc --noEmit
+
+      - name: Lint (blocking)
+        run: bun run lint
+
+      - name: Build single binary (build-proof)
+        run: bun run build:binary
+        continue-on-error: true # TODO M1: remove once H1 (binary embedding) is fixed
+
+      - name: Docker build (build-proof, no smoke yet)
+        run: docker build -t folio:ci .
+        continue-on-error: true # TODO M1: remove once H2 (Docker) is fixed

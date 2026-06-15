@@ -1,8 +1,8 @@
-import { useState } from 'react';
 import { Plus } from 'lucide-react';
-import { Icon } from '../ui/icon.tsx';
+import { useState } from 'react';
 import { InlineEdit } from '../inline/inline-edit.tsx';
-import { gridTemplate, type Column } from './columns.ts';
+import { Icon } from '../ui/icon.tsx';
+import { type Column, gridTemplate } from './columns.ts';
 
 interface Props {
   columns: Column[];
@@ -30,7 +30,10 @@ export function TableAddRow({ columns, isPending, onCreate }: Props) {
         className="grid flex-1 items-center gap-3"
         style={{ gridTemplateColumns: gridTemplate(columns) }}
       >
-        <div key="title-add" className="sticky left-0 z-[1] flex items-center border-r border-border-light bg-content pl-[22px] pr-3 group-hover/row:bg-card">
+        <div
+          key="title-add"
+          className="sticky left-0 z-[1] flex items-center border-r border-border-light bg-content pl-[22px] pr-3 group-hover/row:bg-card"
+        >
           <div className="flex min-w-0 items-center gap-2">
             <Icon icon={Plus} size={14} />
             {editing ? (

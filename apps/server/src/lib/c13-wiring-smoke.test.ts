@@ -50,12 +50,12 @@ import type { TestSeed } from '../test/harness.ts';
 import { toolsToScopes } from './agent-schema.ts';
 import { newApiToken } from './auth.ts';
 import { seedBuiltinTriggers } from './builtin-triggers.ts';
-import { emitEvent } from './events.ts';
 import { eventBus } from './event-bus.ts';
 import type { BusEvent } from './event-bus.ts';
-import { runDispatcherOnce, type Reactor } from './event-dispatcher.ts';
+import { type Reactor, runDispatcherOnce } from './event-dispatcher.ts';
+import { emitEvent } from './events.ts';
+import { type PollerDeps, runPollerOnce } from './poller.ts';
 import { REACTORS } from './reactors.ts';
-import { runPollerOnce, type PollerDeps } from './poller.ts';
 
 type TestDB = Awaited<ReturnType<typeof makeTestApp>>['db'];
 
@@ -268,7 +268,13 @@ test('SMOKE 2: autonomy gate — agent-originated assignment is suppressed; huma
     //  - HUMAN-originated (actor = the seeded user) → fires one run (the gate
     //    must not over-block human-initiated work — the V1-allowed path).
     (env as { FOLIO_AGENT_CHAINS_ENABLED: boolean }).FOLIO_AGENT_CHAINS_ENABLED = false;
-    await emitAssignment(db, seed, agentParent, agent, /* actor = agent */ `agent:${peerAgent.slug}`);
+    await emitAssignment(
+      db,
+      seed,
+      agentParent,
+      agent,
+      /* actor = agent */ `agent:${peerAgent.slug}`,
+    );
     await emitAssignment(db, seed, humanParent, agent, /* actor = human */ seed.user.id);
     await runDispatcherOnce(db, REACTORS);
 

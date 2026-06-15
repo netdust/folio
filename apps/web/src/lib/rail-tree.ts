@@ -1,10 +1,4 @@
-import {
-  FolderOpen,
-  Table2,
-  List,
-  Columns3,
-  FileText,
-} from 'lucide-react';
+import { Columns3, FileText, FolderOpen, List, Table2 } from 'lucide-react';
 import type { NavItem, RowMenuItem } from '../components/shell/rail.tsx';
 
 export interface RailTreeProject {
@@ -45,12 +39,7 @@ export interface RailTreeHandlers {
   // List views land on /work-items; kanban views land on /board. The rail
   // signals which via `view.type` so the workspace route can navigate
   // accordingly without re-deriving the type at click time.
-  onViewClick: (
-    pslug: string,
-    tslug: string,
-    viewId: string,
-    type: 'list' | 'kanban',
-  ) => void;
+  onViewClick: (pslug: string, tslug: string, viewId: string, type: 'list' | 'kanban') => void;
   onWikiClick?: (pslug: string) => void;
   onNewProject?: () => void;
   onNewTable?: (pslug: string) => void;
@@ -99,19 +88,28 @@ export function buildRailTree(input: RailTreeInput): NavItem[] {
         return Number(b.isDefault) - Number(a.isDefault);
       });
 
-      const viewNavItems: NavItem[] = sortedViews.map((view, idx, arr): NavItem => ({
-        id: `view:${table.id}:${view.id}`,
-        label: view.name,
-        lucideIcon: view.type === 'kanban' ? Columns3 : List,
-        active: currentRoute.viewId === view.id && currentRoute.pslug === project.slug,
-        onClick: () => handlers.onViewClick(project.slug, table.slug, view.id, view.type),
-        onRename: handlers.onRenameView
-          ? (next) => handlers.onRenameView!(project.slug, table.slug, view.id, next)
-          : undefined,
-        draggable: handlers.onReorderViews ? true : undefined,
-        sortableGroup: handlers.onReorderViews ? table.id : undefined,
-        menuItems: buildViewMenu(handlers, project.slug, table.slug, view, arr[idx - 1], arr[idx + 1]),
-      }));
+      const viewNavItems: NavItem[] = sortedViews.map(
+        (view, idx, arr): NavItem => ({
+          id: `view:${table.id}:${view.id}`,
+          label: view.name,
+          lucideIcon: view.type === 'kanban' ? Columns3 : List,
+          active: currentRoute.viewId === view.id && currentRoute.pslug === project.slug,
+          onClick: () => handlers.onViewClick(project.slug, table.slug, view.id, view.type),
+          onRename: handlers.onRenameView
+            ? (next) => handlers.onRenameView!(project.slug, table.slug, view.id, next)
+            : undefined,
+          draggable: handlers.onReorderViews ? true : undefined,
+          sortableGroup: handlers.onReorderViews ? table.id : undefined,
+          menuItems: buildViewMenu(
+            handlers,
+            project.slug,
+            table.slug,
+            view,
+            arr[idx - 1],
+            arr[idx + 1],
+          ),
+        }),
+      );
 
       return {
         id: `table:${project.slug}:${table.slug}`,
@@ -143,10 +141,7 @@ export function buildRailTree(input: RailTreeInput): NavItem[] {
     // Phase 2.5: rail = content only (workspaces, projects, tables, views, wiki).
     // Agents + triggers are workspace-level infrastructure, surfaced from the
     // workspace popover (apps/web/src/components/shell/workspace-switcher.tsx).
-    const projectChildren = [
-      ...tableNavItems,
-      ...(wikiLeaf ? [wikiLeaf] : []),
-    ];
+    const projectChildren = [...tableNavItems, ...(wikiLeaf ? [wikiLeaf] : [])];
 
     // The project row is the "active tip" only when the user is on the
     // project but no specific child (view, wiki) owns the highlight.
@@ -154,21 +149,16 @@ export function buildRailTree(input: RailTreeInput): NavItem[] {
     // the single-row "where am I" signal.
     const projectMatches = currentRoute.pslug === project.slug;
     const childOwnsActive =
-      projectMatches &&
-      (currentRoute.viewId !== undefined || currentRoute.isWiki === true);
+      projectMatches && (currentRoute.viewId !== undefined || currentRoute.isWiki === true);
 
     return {
       id: `project:${project.slug}`,
       label: project.name,
       lucideIcon: FolderOpen,
       active: projectMatches && !childOwnsActive,
-      onClick: handlers.onProjectClick
-        ? () => handlers.onProjectClick!(project.slug)
-        : undefined,
+      onClick: handlers.onProjectClick ? () => handlers.onProjectClick!(project.slug) : undefined,
       children: projectChildren,
-      onPlus: handlers.onNewTable
-        ? () => handlers.onNewTable!(project.slug)
-        : undefined,
+      onPlus: handlers.onNewTable ? () => handlers.onNewTable!(project.slug) : undefined,
       plusLabel: 'New table',
       onRename: handlers.onRenameProject
         ? (next) => handlers.onRenameProject!(project.slug, next)
@@ -180,15 +170,32 @@ export function buildRailTree(input: RailTreeInput): NavItem[] {
 
 // Menus only carry actions the parent can't infer. Rename is added implicitly
 // by RailTreeNode when onRename is set (it triggers the inline edit mode).
-function buildProjectMenu(h: RailTreeHandlers, project: RailTreeProject): RowMenuItem[] | undefined {
+function buildProjectMenu(
+  h: RailTreeHandlers,
+  project: RailTreeProject,
+): RowMenuItem[] | undefined {
   const items: RowMenuItem[] = [];
-  if (h.onDeleteProject) items.push({ label: 'Delete', destructive: true, onSelect: () => h.onDeleteProject!(project.slug, project.name) });
+  if (h.onDeleteProject)
+    items.push({
+      label: 'Delete',
+      destructive: true,
+      onSelect: () => h.onDeleteProject!(project.slug, project.name),
+    });
   return items.length > 0 ? items : undefined;
 }
 
-function buildTableMenu(h: RailTreeHandlers, pslug: string, table: RailTreeTable): RowMenuItem[] | undefined {
+function buildTableMenu(
+  h: RailTreeHandlers,
+  pslug: string,
+  table: RailTreeTable,
+): RowMenuItem[] | undefined {
   const items: RowMenuItem[] = [];
-  if (h.onDeleteTable) items.push({ label: 'Delete', destructive: true, onSelect: () => h.onDeleteTable!(pslug, table.slug, table.name) });
+  if (h.onDeleteTable)
+    items.push({
+      label: 'Delete',
+      destructive: true,
+      onSelect: () => h.onDeleteTable!(pslug, table.slug, table.name),
+    });
   return items.length > 0 ? items : undefined;
 }
 
@@ -213,6 +220,11 @@ function buildViewMenu(
       onSelect: () => h.onMoveView!(pslug, tslug, view.id, next.order, 'down'),
     });
   }
-  if (h.onDeleteView) items.push({ label: 'Delete', destructive: true, onSelect: () => h.onDeleteView!(pslug, tslug, view.id, view.name) });
+  if (h.onDeleteView)
+    items.push({
+      label: 'Delete',
+      destructive: true,
+      onSelect: () => h.onDeleteView!(pslug, tslug, view.id, view.name),
+    });
   return items.length > 0 ? items : undefined;
 }

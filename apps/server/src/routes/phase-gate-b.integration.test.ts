@@ -31,11 +31,11 @@ import {
   workspaces,
 } from '../db/schema.ts';
 import type { ApiToken, Document, User } from '../db/schema.ts';
-import { seedInstanceSkills } from '../lib/instance-skills.ts';
+import { registerRealTools } from '../lib/agent-tools-registry.ts';
+import { executeTool } from '../lib/agent-tools.ts';
 import { newApiToken } from '../lib/auth.ts';
 import { encryptSecret } from '../lib/crypto.ts';
-import { executeTool } from '../lib/agent-tools.ts';
-import { registerRealTools } from '../lib/agent-tools-registry.ts';
+import { seedInstanceSkills } from '../lib/instance-skills.ts';
 import { loadContext } from '../lib/runner.ts';
 import { makeTestApp } from '../test/harness.ts';
 
@@ -384,15 +384,9 @@ describe('S2: trust separation of duties end-to-end (B3 + B1)', () => {
     expect(before.trusted).toBe(false);
 
     // --- A worker run that loads `evil` BEFORE any bless. Worker home = B. ---
-    await seedAgent(
-      db,
-      bWorkspaceId,
-      seed.user.id,
-      'worker',
-      ['evil'],
-      bWorkspaceId,
-      ['documents:read'],
-    );
+    await seedAgent(db, bWorkspaceId, seed.user.id, 'worker', ['evil'], bWorkspaceId, [
+      'documents:read',
+    ]);
     const run = await seedRunForAgent(db, {
       workspaceId: bWorkspaceId,
       projectId: bProjectId,
@@ -569,15 +563,9 @@ describe('Acceptance: skills load happy + error paths', () => {
     const bProjectId = seed.project.id;
     await seedAiKey(db, bWorkspaceId);
 
-    await seedAgent(
-      db,
-      bWorkspaceId,
-      seed.user.id,
-      'worker',
-      ['does-not-exist'],
-      bWorkspaceId,
-      ['documents:read'],
-    );
+    await seedAgent(db, bWorkspaceId, seed.user.id, 'worker', ['does-not-exist'], bWorkspaceId, [
+      'documents:read',
+    ]);
     const run = await seedRunForAgent(db, {
       workspaceId: bWorkspaceId,
       projectId: bProjectId,

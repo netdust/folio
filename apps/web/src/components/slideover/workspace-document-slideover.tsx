@@ -1,3 +1,16 @@
+import { useQueryClient } from '@tanstack/react-query';
+import { useNavigate, useSearch } from '@tanstack/react-router';
+import {
+  Bot,
+  Check,
+  Code,
+  FileText,
+  History,
+  MoreHorizontal,
+  Pencil,
+  Trash2,
+  X,
+} from 'lucide-react';
 /**
  * Phase 2.5: slideover for workspace-scoped documents (agents + triggers).
  *
@@ -25,42 +38,39 @@
  * the unsaved-changes dialog through those imperative handles.
  */
 import { useEffect, useRef, useState } from 'react';
-import { useNavigate, useSearch } from '@tanstack/react-router';
 import { toast } from 'sonner';
-import { Bot, Check, Code, FileText, History, MoreHorizontal, Pencil, Trash2, X } from 'lucide-react';
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from '../ui/sheet.tsx';
-import { IconButton } from '../ui/icon-button.tsx';
-import { Button } from '../ui/button.tsx';
-import { Icon } from '../ui/icon.tsx';
-import { Skeleton } from '../ui/skeleton.tsx';
-import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
-import { HeaderTabs, type HeaderTabItem } from './header-tabs.tsx';
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from '../ui/dialog.tsx';
-import { ResizeHandle } from '../ui/resize-handle.tsx';
-import { useResizableWidth } from '../../lib/use-resizable-width.ts';
-import { useQueryClient } from '@tanstack/react-query';
+import type { Document } from '../../lib/api/documents.ts';
+import { formatApiError } from '../../lib/api/index.ts';
 import {
-  useWorkspaceDocument,
-  useUpdateWorkspaceDocument,
   useDeleteWorkspaceDocument,
+  useUpdateWorkspaceDocument,
+  useWorkspaceDocument,
   workspaceDocumentsKeys,
 } from '../../lib/api/workspace-documents.ts';
-import { useLiveDocument } from '../../lib/use-live-document.ts';
-import { ExternalUpdateBanner } from './external-update-banner.tsx';
-import type { Document } from '../../lib/api/documents.ts';
 import { DEFAULT_TABLE_SLUG } from '../../lib/default-table.ts';
-import { formatApiError } from '../../lib/api/index.ts';
+import { useDocumentDraft } from '../../lib/use-document-draft.ts';
+import { useLiveDocument } from '../../lib/use-live-document.ts';
+import { useResizableWidth } from '../../lib/use-resizable-width.ts';
 import { InlineEdit } from '../inline/inline-edit.tsx';
-import { FrontmatterForm } from './frontmatter-form.tsx';
+import { RunsHistorySection } from '../runs/runs-history-section.tsx';
+import { TriggerForm } from '../triggers/trigger-form.tsx';
+import { Button } from '../ui/button.tsx';
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from '../ui/dialog.tsx';
+import { IconButton } from '../ui/icon-button.tsx';
+import { Icon } from '../ui/icon.tsx';
+import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
+import { ResizeHandle } from '../ui/resize-handle.tsx';
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from '../ui/sheet.tsx';
+import { Skeleton } from '../ui/skeleton.tsx';
 import { BodyEditor } from './body-editor.tsx';
-import { type EditorMode } from './mode-toggle.tsx';
+import { ExternalUpdateBanner } from './external-update-banner.tsx';
+import { FrontmatterForm } from './frontmatter-form.tsx';
+import { type HeaderTabItem, HeaderTabs } from './header-tabs.tsx';
+import type { EditorMode } from './mode-toggle.tsx';
 import { RawMdEditor } from './raw-md-editor.tsx';
+import { SaveButton } from './save-button.tsx';
 import { WorkspaceActivityPanel } from './workspace-activity-panel.tsx';
 import { WorkspaceLogActivityButton } from './workspace-log-activity-button.tsx';
-import { TriggerForm } from '../triggers/trigger-form.tsx';
-import { RunsHistorySection } from '../runs/runs-history-section.tsx';
-import { useDocumentDraft } from '../../lib/use-document-draft.ts';
-import { SaveButton } from './save-button.tsx';
 
 type WorkspaceDocTabValue = 'fields' | 'activity' | 'runs';
 
@@ -228,6 +238,7 @@ export function WorkspaceDocumentSlideover({ wslug }: Props) {
     }
     prevWdocRef.current = incoming;
   }
+  // biome-ignore lint/correctness/useExhaustiveDependencies: dirty-doc switch guard — must run ONLY on [search.wdoc] change; navigate/guard/search read live, deliberately omitted to avoid breaking the unsaved-changes race guard
   useEffect(() => {
     const incoming = pendingSwitchRef.current;
     const dirtySlug = dirtySlugRef.current;
@@ -271,7 +282,12 @@ export function WorkspaceDocumentSlideover({ wslug }: Props) {
   const innerKey = doc ? `${doc.id}:${doc.updatedAt}` : null;
 
   return (
-    <Sheet open={open} onOpenChange={(o) => { if (!o) close(); }}>
+    <Sheet
+      open={open}
+      onOpenChange={(o) => {
+        if (!o) close();
+      }}
+    >
       <SheetContent width={width} className="h-screen">
         <ResizeHandle onDragStart={onDragStart} />
         <SheetHeader>
@@ -296,7 +312,11 @@ export function WorkspaceDocumentSlideover({ wslug }: Props) {
                 <div aria-hidden className="mx-0.5 h-4 w-px bg-border-light" />
                 {/* Save reads the buffered draft (owned by the inner) — render it
                     off the mirrored dirty flag; the click delegates to the inner. */}
-                <SaveButton dirty={dirty} saving={saving} onSave={() => void actionsRef.current?.save()} />
+                <SaveButton
+                  dirty={dirty}
+                  saving={saving}
+                  onSave={() => void actionsRef.current?.save()}
+                />
                 <Popover open={moreOpen} onOpenChange={setMoreOpen}>
                   <PopoverTrigger asChild>
                     <button
@@ -326,7 +346,9 @@ export function WorkspaceDocumentSlideover({ wslug }: Props) {
                           >
                             <Icon icon={Pencil} size={14} />
                             Edit (rich)
-                            {mode === 'rich' ? <Icon icon={Check} size={14} className="ml-auto" /> : null}
+                            {mode === 'rich' ? (
+                              <Icon icon={Check} size={14} className="ml-auto" />
+                            ) : null}
                           </button>
                           <button
                             type="button"
@@ -340,7 +362,9 @@ export function WorkspaceDocumentSlideover({ wslug }: Props) {
                           >
                             <Icon icon={Code} size={14} />
                             Raw markdown
-                            {mode === 'raw' ? <Icon icon={Check} size={14} className="ml-auto" /> : null}
+                            {mode === 'raw' ? (
+                              <Icon icon={Check} size={14} className="ml-auto" />
+                            ) : null}
                           </button>
                           <div aria-hidden className="my-1 h-px bg-border-light" />
                         </>
@@ -384,7 +408,9 @@ export function WorkspaceDocumentSlideover({ wslug }: Props) {
       </SheetContent>
       <Dialog
         open={confirmDelete}
-        onOpenChange={(o) => { if (!del.isPending) setConfirmDelete(o); }}
+        onOpenChange={(o) => {
+          if (!del.isPending) setConfirmDelete(o);
+        }}
       >
         <DialogContent>
           <DialogTitle>Delete this document?</DialogTitle>
@@ -392,7 +418,11 @@ export function WorkspaceDocumentSlideover({ wslug }: Props) {
             {doc ? <>Delete &ldquo;{doc.title}&rdquo;? This cannot be undone.</> : null}
           </DialogDescription>
           <div className="mt-5 flex items-center justify-end gap-2">
-            <Button variant="secondary" onClick={() => setConfirmDelete(false)} disabled={del.isPending}>
+            <Button
+              variant="secondary"
+              onClick={() => setConfirmDelete(false)}
+              disabled={del.isPending}
+            >
               Cancel
             </Button>
             <Button variant="danger" onClick={() => void onDelete()} disabled={del.isPending}>
@@ -401,7 +431,12 @@ export function WorkspaceDocumentSlideover({ wslug }: Props) {
           </div>
         </DialogContent>
       </Dialog>
-      <Dialog open={prompting} onOpenChange={(o) => { if (!o) cancelPrompt(); }}>
+      <Dialog
+        open={prompting}
+        onOpenChange={(o) => {
+          if (!o) cancelPrompt();
+        }}
+      >
         <DialogContent>
           <DialogTitle>Unsaved changes</DialogTitle>
           <DialogDescription>
@@ -410,7 +445,10 @@ export function WorkspaceDocumentSlideover({ wslug }: Props) {
           <div className="mt-5 flex items-center justify-end gap-2">
             <Button
               variant="secondary"
-              onClick={() => { actionsRef.current?.discard(); proceed(); }}
+              onClick={() => {
+                actionsRef.current?.discard();
+                proceed();
+              }}
             >
               Discard
             </Button>
@@ -420,7 +458,10 @@ export function WorkspaceDocumentSlideover({ wslug }: Props) {
             <Button
               variant="primary"
               disabled={saving}
-              onClick={async () => { await actionsRef.current?.save(); proceed(); }}
+              onClick={async () => {
+                await actionsRef.current?.save();
+                proceed();
+              }}
             >
               {saving ? 'Saving…' : 'Save'}
             </Button>
@@ -469,7 +510,8 @@ function WorkspaceSlideoverInner({
     wslug,
     docId: doc.id,
     isDirty,
-    onRefetch: () => qc.invalidateQueries({ queryKey: workspaceDocumentsKeys.detail(wslug, doc.slug) }),
+    onRefetch: () =>
+      qc.invalidateQueries({ queryKey: workspaceDocumentsKeys.detail(wslug, doc.slug) }),
   });
 
   const onSave = async () => {
@@ -581,7 +623,13 @@ function SlideoverBody({
           data-testid="workspace-slideover-tab-content"
           className="folio-scroll min-h-0 flex-1 overflow-y-auto pt-3"
         >
-          <TriggerFieldsTabPane doc={doc} wslug={wslug} draft={draft} setBody={setBody} setFrontmatter={setFrontmatter} />
+          <TriggerFieldsTabPane
+            doc={doc}
+            wslug={wslug}
+            draft={draft}
+            setBody={setBody}
+            setFrontmatter={setFrontmatter}
+          />
         </div>
       ) : null}
       {tab === 'fields' && doc.type !== 'trigger' ? (

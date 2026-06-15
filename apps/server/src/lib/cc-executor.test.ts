@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { runClaudeCode, type SpawnFn, type CcOutcome } from './cc-executor.ts';
+import { type CcOutcome, type SpawnFn, runClaudeCode } from './cc-executor.ts';
 
 function fakeSpawn(opts: { stdout: string; exitCode: number; stderr?: string }): SpawnFn {
   return () => ({
@@ -13,7 +13,13 @@ function fakeSpawn(opts: { stdout: string; exitCode: number; stderr?: string }):
 describe('runClaudeCode', () => {
   test('clean exit returns completed + transcript + final result', async () => {
     const outcome: CcOutcome = await runClaudeCode(
-      { systemPrompt: 'do the thing', model: undefined, mcpToken: 'tok_123', mcpUrl: undefined, cwd: '/tmp' },
+      {
+        systemPrompt: 'do the thing',
+        model: undefined,
+        mcpToken: 'tok_123',
+        mcpUrl: undefined,
+        cwd: '/tmp',
+      },
       { spawn: fakeSpawn({ stdout: 'line1\nFINAL RESULT', exitCode: 0 }) },
     );
     expect(outcome.status).toBe('completed');
@@ -43,10 +49,21 @@ describe('runClaudeCode', () => {
     let capturedArgs: string[] = [];
     const spy: SpawnFn = (args) => {
       capturedArgs = args.argv;
-      return { stdoutText: async () => 'ok', stderrText: async () => '', exited: Promise.resolve(0), kill: () => {} };
+      return {
+        stdoutText: async () => 'ok',
+        stderrText: async () => '',
+        exited: Promise.resolve(0),
+        kill: () => {},
+      };
     };
     await runClaudeCode(
-      { systemPrompt: 'x', model: 'claude-opus-4-8', mcpToken: 't', mcpUrl: undefined, cwd: '/tmp' },
+      {
+        systemPrompt: 'x',
+        model: 'claude-opus-4-8',
+        mcpToken: 't',
+        mcpUrl: undefined,
+        cwd: '/tmp',
+      },
       { spawn: spy },
     );
     expect(capturedArgs).toContain('--model');
@@ -57,7 +74,12 @@ describe('runClaudeCode', () => {
     let capturedArgs: string[] = [];
     const spy: SpawnFn = (args) => {
       capturedArgs = args.argv;
-      return { stdoutText: async () => 'ok', stderrText: async () => '', exited: Promise.resolve(0), kill: () => {} };
+      return {
+        stdoutText: async () => 'ok',
+        stderrText: async () => '',
+        exited: Promise.resolve(0),
+        kill: () => {},
+      };
     };
     await runClaudeCode(
       { systemPrompt: 'x', model: undefined, mcpToken: 't', mcpUrl: undefined, cwd: '/tmp' },
@@ -70,7 +92,12 @@ describe('runClaudeCode', () => {
     let capturedEnv: Record<string, string> = {};
     const spy: SpawnFn = (args) => {
       capturedEnv = args.env;
-      return { stdoutText: async () => 'ok', stderrText: async () => '', exited: Promise.resolve(0), kill: () => {} };
+      return {
+        stdoutText: async () => 'ok',
+        stderrText: async () => '',
+        exited: Promise.resolve(0),
+        kill: () => {},
+      };
     };
     await runClaudeCode(
       { systemPrompt: 'x', model: undefined, mcpToken: 'tok_abc', mcpUrl: undefined, cwd: '/tmp' },
@@ -83,10 +110,21 @@ describe('runClaudeCode', () => {
     let argv: string[] = [];
     const spy: SpawnFn = (a) => {
       argv = a.argv;
-      return { stdoutText: async () => 'ok', stderrText: async () => '', exited: Promise.resolve(0), kill: () => {} };
+      return {
+        stdoutText: async () => 'ok',
+        stderrText: async () => '',
+        exited: Promise.resolve(0),
+        kill: () => {},
+      };
     };
     await runClaudeCode(
-      { systemPrompt: 'x', model: undefined, mcpToken: 'tok_x', mcpUrl: 'http://h/mcp', cwd: '/tmp' },
+      {
+        systemPrompt: 'x',
+        model: undefined,
+        mcpToken: 'tok_x',
+        mcpUrl: 'http://h/mcp',
+        cwd: '/tmp',
+      },
       { spawn: spy },
     );
     expect(argv).toContain('--mcp-config');
@@ -101,7 +139,12 @@ describe('runClaudeCode', () => {
     let argv: string[] = [];
     const spy: SpawnFn = (a) => {
       argv = a.argv;
-      return { stdoutText: async () => 'ok', stderrText: async () => '', exited: Promise.resolve(0), kill: () => {} };
+      return {
+        stdoutText: async () => 'ok',
+        stderrText: async () => '',
+        exited: Promise.resolve(0),
+        kill: () => {},
+      };
     };
     await runClaudeCode(
       { systemPrompt: 'x', model: undefined, mcpToken: '', mcpUrl: undefined, cwd: '/tmp' },

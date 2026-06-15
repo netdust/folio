@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'bun:test';
 import { nanoid } from 'nanoid';
-import { makeBareTestDb } from '../test/harness.ts';
 import * as schema from '../db/schema.ts';
 import { SYSTEM_WORKSPACE_SLUG } from '../lib/system-workspace.ts';
+import { makeBareTestDb } from '../test/harness.ts';
 import { listWorkspaces } from './workspaces.ts';
 
 async function mkUser(db: any, email: string, role: 'owner' | 'admin' | 'member') {

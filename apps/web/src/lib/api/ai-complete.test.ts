@@ -1,16 +1,17 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ApiError } from './client.ts';
 import { completeAi } from './ai-complete.ts';
+import { ApiError } from './client.ts';
 
 describe('completeAi client', () => {
   afterEach(() => vi.restoreAllMocks());
 
   it('POSTs the current body to /w/:wslug/ai/complete and returns the unwrapped { text }', async () => {
-    const fetchMock = vi.fn(async () =>
-      new Response(JSON.stringify({ data: { text: '# Drafted body' } }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      }),
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ data: { text: '# Drafted body' } }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
     );
     global.fetch = fetchMock as unknown as typeof fetch;
 
@@ -34,11 +35,12 @@ describe('completeAi client', () => {
   });
 
   it('omits title/instruction when not provided', async () => {
-    const fetchMock = vi.fn(async () =>
-      new Response(JSON.stringify({ data: { text: 'x' } }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      }),
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ data: { text: 'x' } }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
     );
     global.fetch = fetchMock as unknown as typeof fetch;
 
@@ -49,11 +51,12 @@ describe('completeAi client', () => {
   });
 
   it('propagates a server error as ApiError (caller surfaces the toast)', async () => {
-    global.fetch = vi.fn(async () =>
-      new Response(JSON.stringify({ error: { code: 'AI_NOT_CONFIGURED', message: 'no key' } }), {
-        status: 409,
-        headers: { 'content-type': 'application/json' },
-      }),
+    global.fetch = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ error: { code: 'AI_NOT_CONFIGURED', message: 'no key' } }), {
+          status: 409,
+          headers: { 'content-type': 'application/json' },
+        }),
     ) as unknown as typeof fetch;
 
     await expect(completeAi('acme', { action: 'draft', content: 'x' })).rejects.toBeInstanceOf(

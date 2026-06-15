@@ -1,10 +1,10 @@
 import { MoreHorizontal } from 'lucide-react';
 import { useState } from 'react';
+import { Button } from '../ui/button.tsx';
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from '../ui/dialog.tsx';
 import { IconButton } from '../ui/icon-button.tsx';
 import { Icon } from '../ui/icon.tsx';
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from '../ui/dialog.tsx';
-import { Button } from '../ui/button.tsx';
 
 interface Props {
   columnKey: string;
@@ -112,18 +112,10 @@ export function ColumnMenu({
               : ''}
           </DialogDescription>
           <div className="mt-5 flex items-center justify-end gap-2">
-            <Button
-              variant="secondary"
-              onClick={() => setConfirmOpen(false)}
-              disabled={deleting}
-            >
+            <Button variant="secondary" onClick={() => setConfirmOpen(false)} disabled={deleting}>
               Cancel
             </Button>
-            <Button
-              variant="danger"
-              onClick={() => void handleConfirmDelete()}
-              disabled={deleting}
-            >
+            <Button variant="danger" onClick={() => void handleConfirmDelete()} disabled={deleting}>
               {deleting ? 'Deleting…' : 'Delete'}
             </Button>
           </div>

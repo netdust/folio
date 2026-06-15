@@ -1,13 +1,8 @@
-import { renderHook } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { renderHook } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import {
-  fieldsKeys,
-  useCreateField,
-  useDeleteField,
-  useUpdateField,
-} from './fields.ts';
+import { fieldsKeys, useCreateField, useDeleteField, useUpdateField } from './fields.ts';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -39,17 +34,41 @@ describe('useCreateField', () => {
       vi.fn(async (input: RequestInfo, init?: RequestInit) => {
         calls.push({ url: String(input), body: init?.body ? JSON.parse(String(init.body)) : null });
         return new Response(
-          JSON.stringify({ data: { field: { id: 'f1', key: 'priority', type: 'select', label: 'Priority', options: ['low', 'high'], required: false, order: 0 } } }),
+          JSON.stringify({
+            data: {
+              field: {
+                id: 'f1',
+                key: 'priority',
+                type: 'select',
+                label: 'Priority',
+                options: ['low', 'high'],
+                required: false,
+                order: 0,
+              },
+            },
+          }),
           { status: 201, headers: { 'content-type': 'application/json' } },
         );
       }),
     );
 
-    const { result } = renderHook(() => useCreateField('acme', 'sales', 'work-items'), { wrapper: wrap(qc) });
-    const created = await result.current.mutateAsync({ key: 'priority', type: 'select', label: 'Priority', options: ['low', 'high'] });
+    const { result } = renderHook(() => useCreateField('acme', 'sales', 'work-items'), {
+      wrapper: wrap(qc),
+    });
+    const created = await result.current.mutateAsync({
+      key: 'priority',
+      type: 'select',
+      label: 'Priority',
+      options: ['low', 'high'],
+    });
 
     expect(calls[0].url).toContain('/api/v1/w/acme/p/sales/t/work-items/fields');
-    expect(calls[0].body).toEqual({ key: 'priority', type: 'select', label: 'Priority', options: ['low', 'high'] });
+    expect(calls[0].body).toEqual({
+      key: 'priority',
+      type: 'select',
+      label: 'Priority',
+      options: ['low', 'high'],
+    });
     expect(created.id).toBe('f1');
   });
 });
@@ -63,14 +82,31 @@ describe('useUpdateField', () => {
       vi.fn(async (input: RequestInfo, init?: RequestInit) => {
         calls.push({ url: String(input), method: init?.method ?? 'GET' });
         return new Response(
-          JSON.stringify({ data: { field: { id: 'f1', key: 'priority', type: 'select', label: 'Priority renamed', options: ['low', 'high'], required: false, order: 0 } } }),
+          JSON.stringify({
+            data: {
+              field: {
+                id: 'f1',
+                key: 'priority',
+                type: 'select',
+                label: 'Priority renamed',
+                options: ['low', 'high'],
+                required: false,
+                order: 0,
+              },
+            },
+          }),
           { status: 200, headers: { 'content-type': 'application/json' } },
         );
       }),
     );
 
-    const { result } = renderHook(() => useUpdateField('acme', 'sales', 'work-items'), { wrapper: wrap(qc) });
-    const updated = await result.current.mutateAsync({ id: 'f1', patch: { label: 'Priority renamed' } });
+    const { result } = renderHook(() => useUpdateField('acme', 'sales', 'work-items'), {
+      wrapper: wrap(qc),
+    });
+    const updated = await result.current.mutateAsync({
+      id: 'f1',
+      patch: { label: 'Priority renamed' },
+    });
 
     expect(calls[0].url).toContain('/api/v1/w/acme/p/sales/t/work-items/fields/f1');
     expect(calls[0].method).toBe('PATCH');
@@ -91,7 +127,9 @@ describe('useDeleteField', () => {
       }),
     );
 
-    const { result } = renderHook(() => useDeleteField('acme', 'sales', 'work-items'), { wrapper: wrap(qc) });
+    const { result } = renderHook(() => useDeleteField('acme', 'sales', 'work-items'), {
+      wrapper: wrap(qc),
+    });
     await result.current.mutateAsync('f1');
 
     expect(calls[0].url).toContain('/api/v1/w/acme/p/sales/t/work-items/fields/f1');

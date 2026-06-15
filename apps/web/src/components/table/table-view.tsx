@@ -1,46 +1,36 @@
 import { useNavigate, useSearch } from '@tanstack/react-router';
-import { useMemo, useState, useCallback, useEffect, useRef } from 'react';
 import { Inbox } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import {
-  useDocuments,
-  useCreateDocument,
-  useUpdateDocument,
-  parseFilters,
-  clausesToListParams,
-  applyFrontmatterClauses,
   type DocumentPatch,
   type FilterClauseUrl,
+  applyFrontmatterClauses,
+  clausesToListParams,
+  parseFilters,
+  useCreateDocument,
+  useDocuments,
+  useUpdateDocument,
 } from '../../lib/api/documents.ts';
-import { useStatuses } from '../../lib/api/statuses.ts';
-import {
-  useFields,
-  useCreateField,
-  useUpdateField,
-  useDeleteField,
-} from '../../lib/api/fields.ts';
-import { useViews, useUpdateView } from '../../lib/api/views.ts';
-import { useTables } from '../../lib/api/tables.ts';
+import { useCreateField, useDeleteField, useFields, useUpdateField } from '../../lib/api/fields.ts';
+import type { FieldType } from '../../lib/api/fields.ts';
 import { formatApiError } from '../../lib/api/index.ts';
-import { Icon } from '../ui/icon.tsx';
+import { useStatuses } from '../../lib/api/statuses.ts';
+import { useTables } from '../../lib/api/tables.ts';
+import { useUpdateView, useViews } from '../../lib/api/views.ts';
 import { FilterBar } from '../filter/filter-bar.tsx';
+import { Icon } from '../ui/icon.tsx';
 import { EmptyState } from '../views/empty-state.tsx';
 import { ListSkeleton } from '../views/list-skeleton.tsx';
-import { TableHeader, type SortState } from './table-header.tsx';
-import { ColumnPicker } from './column-picker.tsx';
-import { TableRow } from './table-row.tsx';
-import { TableAddRow } from './table-add-row.tsx';
-import { TableAddColumn, type AddColumnPayload } from './table-add-column.tsx';
 import { ColumnMenu } from './column-menu.tsx';
-import { ColumnTypeChange } from './column-type-change.tsx';
+import { ColumnPicker } from './column-picker.tsx';
 import { columnSuggestions } from './column-suggestions.ts';
-import type { FieldType } from '../../lib/api/fields.ts';
-import {
-  mergeColumns,
-  applyColumnOrder,
-  effectiveVisibleKeys,
-  type Column,
-} from './columns.ts';
+import { ColumnTypeChange } from './column-type-change.tsx';
+import { type Column, applyColumnOrder, effectiveVisibleKeys, mergeColumns } from './columns.ts';
+import { type AddColumnPayload, TableAddColumn } from './table-add-column.tsx';
+import { TableAddRow } from './table-add-row.tsx';
+import { type SortState, TableHeader } from './table-header.tsx';
+import { TableRow } from './table-row.tsx';
 
 interface Props {
   wslug: string;
@@ -106,8 +96,20 @@ export function TableView({ wslug, pslug, tslug }: Props) {
   // activeTableId). Fixing cross-table relation chips needs a project-wide
   // document index — tracked as a follow-up.
   const hasRelationColumn = (fields ?? []).some((f) => f.type === 'relation');
-  const { data: relPages } = useDocuments(wslug, pslug, tslug, { type: 'page' }, { enabled: hasRelationColumn });
-  const { data: relItems } = useDocuments(wslug, pslug, tslug, { type: 'work_item' }, { enabled: hasRelationColumn });
+  const { data: relPages } = useDocuments(
+    wslug,
+    pslug,
+    tslug,
+    { type: 'page' },
+    { enabled: hasRelationColumn },
+  );
+  const { data: relItems } = useDocuments(
+    wslug,
+    pslug,
+    tslug,
+    { type: 'work_item' },
+    { enabled: hasRelationColumn },
+  );
   const { data: viewsData } = useViews(wslug, pslug, tslug);
   const { data: tablesData } = useTables(wslug, pslug);
   const update = useUpdateDocument(wslug, pslug, tslug, listParams);
@@ -170,8 +172,8 @@ export function TableView({ wslug, pslug, tslug }: Props) {
       }
       if (typeof raw === 'object') {
         const op = raw as Record<string, unknown>;
-        if ('$eq' in op && op['$eq'] !== undefined) nextSearch[key] = op['$eq'];
-        else if ('$in' in op && Array.isArray(op['$in'])) nextSearch[key] = op['$in'] as unknown[];
+        if ('$eq' in op && op.$eq !== undefined) nextSearch[key] = op.$eq;
+        else if ('$in' in op && Array.isArray(op.$in)) nextSearch[key] = op.$in as unknown[];
       }
     }
 
@@ -229,7 +231,7 @@ export function TableView({ wslug, pslug, tslug }: Props) {
     void navigate({ to: '.', search: { ...search, doc: slug }, replace: false });
   };
 
-  const onCreate = async (title: string = 'Untitled') => {
+  const onCreate = async (title = 'Untitled') => {
     try {
       const created = await create.mutateAsync({ type: 'work_item', title });
       void navigate({ to: '.', search: { ...search, doc: created.slug }, replace: false });
@@ -245,11 +247,26 @@ export function TableView({ wslug, pslug, tslug }: Props) {
       delete nextSearch[k];
     }
     for (const c of next) {
-      if (c.kind === 'status') { nextSearch['status'] = c.values; flatFilters['status'] = c.values; }
-      if (c.kind === 'priority') { nextSearch['priority'] = c.value; flatFilters['priority'] = c.value; }
-      if (c.kind === 'labels') { nextSearch['labels'] = c.values; flatFilters['labels'] = c.values; }
-      if (c.kind === 'assignee') { nextSearch['assignee'] = c.value; flatFilters['assignee'] = c.value; }
-      if (c.kind === 'updated_since') { nextSearch['updated_since'] = c.value; flatFilters['updated_since'] = c.value; }
+      if (c.kind === 'status') {
+        nextSearch.status = c.values;
+        flatFilters.status = c.values;
+      }
+      if (c.kind === 'priority') {
+        nextSearch.priority = c.value;
+        flatFilters.priority = c.value;
+      }
+      if (c.kind === 'labels') {
+        nextSearch.labels = c.values;
+        flatFilters.labels = c.values;
+      }
+      if (c.kind === 'assignee') {
+        nextSearch.assignee = c.value;
+        flatFilters.assignee = c.value;
+      }
+      if (c.kind === 'updated_since') {
+        nextSearch.updated_since = c.value;
+        flatFilters.updated_since = c.value;
+      }
     }
     void navigate({ to: '.', search: nextSearch, replace: false });
     // Only autosave when the user has explicitly opened this view (?view=<id>).
@@ -269,7 +286,9 @@ export function TableView({ wslug, pslug, tslug }: Props) {
       nextSearch.sort = next.key;
       nextSearch.dir = next.dir;
     } else {
+      // biome-ignore lint/performance/noDelete: must REMOVE the keys from the router search object so the param drops from the URL — `= undefined` keeps a stale ?sort= key
       delete nextSearch.sort;
+      // biome-ignore lint/performance/noDelete: see above — drop the URL param, don't set it undefined
       delete nextSearch.dir;
     }
     void navigate({ to: '.', search: nextSearch, replace: false });
@@ -330,7 +349,10 @@ export function TableView({ wslug, pslug, tslug }: Props) {
           created.key,
         ];
         try {
-          await updateView.mutateAsync({ id: activeView.id, patch: { visibleFields: nextVisible } });
+          await updateView.mutateAsync({
+            id: activeView.id,
+            patch: { visibleFields: nextVisible },
+          });
         } catch (err) {
           toast.error(formatApiError(err));
         }
@@ -534,27 +556,29 @@ export function TableView({ wslug, pslug, tslug }: Props) {
           </div>
         </div>
       </div>
-      {changingTypeKey ? (() => {
-        const field = (fields ?? []).find((f) => f.key === changingTypeKey);
-        if (!field) return null;
-        return (
-          <ColumnTypeChange
-            currentType={field.type}
-            currentOptions={field.options}
-            open={!!changingTypeKey}
-            onClose={() => setChangingTypeKey(null)}
-            onSubmit={async ({ type, options }) => {
-              // Translate the dialog's payload into a server PATCH:
-              //   options === undefined → omit options key
-              //   options === null      → send options: null (server drops to null)
-              //   options is string[]   → send options: [...iso]
-              const patch: { type: FieldType; options?: string[] | null } = { type };
-              if (options !== undefined) patch.options = options;
-              await updateField.mutateAsync({ id: field.id, patch });
-            }}
-          />
-        );
-      })() : null}
+      {changingTypeKey
+        ? (() => {
+            const field = (fields ?? []).find((f) => f.key === changingTypeKey);
+            if (!field) return null;
+            return (
+              <ColumnTypeChange
+                currentType={field.type}
+                currentOptions={field.options}
+                open={!!changingTypeKey}
+                onClose={() => setChangingTypeKey(null)}
+                onSubmit={async ({ type, options }) => {
+                  // Translate the dialog's payload into a server PATCH:
+                  //   options === undefined → omit options key
+                  //   options === null      → send options: null (server drops to null)
+                  //   options is string[]   → send options: [...iso]
+                  const patch: { type: FieldType; options?: string[] | null } = { type };
+                  if (options !== undefined) patch.options = options;
+                  await updateField.mutateAsync({ id: field.id, patch });
+                }}
+              />
+            );
+          })()
+        : null}
     </div>
   );
 }

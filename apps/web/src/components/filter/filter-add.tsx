@@ -1,9 +1,9 @@
 import { useState } from 'react';
-import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
-import { ChipAdd } from '../ui/chip.tsx';
-import type { Status } from '../../lib/api/statuses.ts';
-import type { Field } from '../../lib/api/fields.ts';
 import type { FilterClauseUrl } from '../../lib/api/documents.ts';
+import type { Field } from '../../lib/api/fields.ts';
+import type { Status } from '../../lib/api/statuses.ts';
+import { ChipAdd } from '../ui/chip.tsx';
+import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
 
 interface Props {
   statuses: Status[];
@@ -24,7 +24,8 @@ export function FilterAdd({ statuses, pinnedFields, existing, onAdd }: Props) {
   };
 
   const offerStatus = !usedKinds.has('status') && statuses.length > 0;
-  const offerPriority = !usedKinds.has('priority') && pinnedFields.some((f) => f.key === 'priority');
+  const offerPriority =
+    !usedKinds.has('priority') && pinnedFields.some((f) => f.key === 'priority');
   const offerLabels = !usedKinds.has('labels') && pinnedFields.some((f) => f.key === 'labels');
   const offerAssignee = !usedKinds.has('assignee');
   const offerUpdated = !usedKinds.has('updated_since');
@@ -59,7 +60,11 @@ export function FilterAdd({ statuses, pinnedFields, existing, onAdd }: Props) {
               <Pick label="Assignee" hint="is" onClick={() => setPickedKey('assignee')} />
             ) : null}
             {offerUpdated ? (
-              <Pick label="Updated since" hint="date" onClick={() => setPickedKey('updated_since')} />
+              <Pick
+                label="Updated since"
+                hint="date"
+                onClick={() => setPickedKey('updated_since')}
+              />
             ) : null}
             {!offerStatus && !offerPriority && !offerLabels && !offerAssignee && !offerUpdated ? (
               <li className="px-2 py-1.5 text-xs text-fg-3">All filters in use.</li>
@@ -180,7 +185,6 @@ function FreeInput({
         onChange={(e) => setV(e.target.value)}
         placeholder={placeholder}
         className="block w-full rounded-sm border border-border-light bg-shell px-2 py-1 text-sm text-fg input-focus"
-        autoFocus
       />
     </form>
   );

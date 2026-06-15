@@ -24,3 +24,4 @@ test-results/
 
 # Local API key file (BYOK testing — never commit)
 key
+memory/.stop-hook-state.json

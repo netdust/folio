@@ -1,5 +1,5 @@
-import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
-import { renderHook, act } from '@testing-library/react';
+import { act, renderHook } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { useActivityFeed } from './activity-feed.ts';
 import * as runsApi from './runs.ts';
 
@@ -43,7 +43,12 @@ describe('useActivityFeed', () => {
     act(() =>
       es.emit(
         'agent.run.running',
-        JSON.stringify({ id: 'e1', kind: 'agent.run.running', documentId: 'run-1', payload: { agent: 'bot', to: 'running', fired_by: 'assignment' } }),
+        JSON.stringify({
+          id: 'e1',
+          kind: 'agent.run.running',
+          documentId: 'run-1',
+          payload: { agent: 'bot', to: 'running', fired_by: 'assignment' },
+        }),
       ),
     );
     expect(result.current.items).toHaveLength(1);
@@ -53,7 +58,12 @@ describe('useActivityFeed', () => {
     act(() =>
       es.emit(
         'agent.run.completed',
-        JSON.stringify({ id: 'e2', kind: 'agent.run.completed', documentId: 'run-1', payload: { agent: 'bot', to: 'completed' } }),
+        JSON.stringify({
+          id: 'e2',
+          kind: 'agent.run.completed',
+          documentId: 'run-1',
+          payload: { agent: 'bot', to: 'completed' },
+        }),
       ),
     );
     expect(result.current.items).toHaveLength(1);
@@ -62,7 +72,12 @@ describe('useActivityFeed', () => {
     act(() =>
       es.emit(
         'agent.run.started',
-        JSON.stringify({ id: 'e3', kind: 'agent.run.started', documentId: 'run-2', payload: { agent: 'seo', fired_by: 'cron' } }),
+        JSON.stringify({
+          id: 'e3',
+          kind: 'agent.run.started',
+          documentId: 'run-2',
+          payload: { agent: 'seo', fired_by: 'cron' },
+        }),
       ),
     );
     expect(result.current.items).toHaveLength(2);
@@ -75,7 +90,12 @@ describe('useActivityFeed', () => {
     act(() =>
       es.emit(
         'agent.run.started',
-        JSON.stringify({ id: 'e1', kind: 'agent.run.started', documentId: 'run-1', payload: { agent: 'bot', fired_by: 'trigger' } }),
+        JSON.stringify({
+          id: 'e1',
+          kind: 'agent.run.started',
+          documentId: 'run-1',
+          payload: { agent: 'bot', fired_by: 'trigger' },
+        }),
       ),
     );
     expect(result.current.items).toHaveLength(1);
@@ -84,7 +104,12 @@ describe('useActivityFeed', () => {
     act(() =>
       es.emit(
         'agent.run.running',
-        JSON.stringify({ id: 'e2', kind: 'agent.run.running', documentId: 'run-1', payload: { agent: 'bot', to: 'running' } }),
+        JSON.stringify({
+          id: 'e2',
+          kind: 'agent.run.running',
+          documentId: 'run-1',
+          payload: { agent: 'bot', to: 'running' },
+        }),
       ),
     );
     expect(result.current.items).toHaveLength(1);
@@ -139,7 +164,12 @@ describe('useActivityFeed', () => {
     act(() =>
       es.emit(
         'agent.run.completed',
-        JSON.stringify({ id: 'e1', kind: 'agent.run.completed', documentId: 'run-1', payload: { agent: 'bot', to: 'completed' } }),
+        JSON.stringify({
+          id: 'e1',
+          kind: 'agent.run.completed',
+          documentId: 'run-1',
+          payload: { agent: 'bot', to: 'completed' },
+        }),
       ),
     );
     // still one row, live status wins
@@ -151,7 +181,10 @@ describe('useActivityFeed', () => {
     const { result } = renderHook(() => useActivityFeed('acme'));
     const es = MockEventSource.instances[0]!;
     act(() =>
-      es.emit('agent.run.running', JSON.stringify({ id: 'e1', kind: 'agent.run.running', payload: { agent: 'bot' } })),
+      es.emit(
+        'agent.run.running',
+        JSON.stringify({ id: 'e1', kind: 'agent.run.running', payload: { agent: 'bot' } }),
+      ),
     );
     expect(result.current.items).toHaveLength(0);
   });

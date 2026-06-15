@@ -1,16 +1,16 @@
-import { describe, it, expect, afterEach, vi, beforeEach } from 'vitest';
-import { act, render, screen, waitFor } from '@testing-library/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { closestCorners, MeasuringStrategy } from '@dnd-kit/core';
+import { MeasuringStrategy, closestCorners } from '@dnd-kit/core';
 import type { DndContextProps, DragEndEvent, DragStartEvent } from '@dnd-kit/core';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
+  Outlet,
+  RouterProvider,
   createMemoryHistory,
   createRootRoute,
   createRoute,
   createRouter,
-  Outlet,
-  RouterProvider,
 } from '@tanstack/react-router';
+import { act, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 
 // Capture the DndContext props the view wires up so we can drive
@@ -71,46 +71,63 @@ describe('KanbanView DnD', () => {
   });
 
   it('renders board wrapped in DndContext without crashing', async () => {
-    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async (url) => {
-      const u = String(url);
-      if (u.includes('/statuses')) {
-        return new Response(
-          JSON.stringify({
-            data: [
-              { id: 's1', key: 'todo', name: 'Todo', color: '#6EAFFF', category: 'unstarted', order: 1 },
-            ],
-          }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        );
-      }
-      if (u.includes('/documents')) {
-        return new Response(
-          JSON.stringify({
-            data: {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>(async (url) => {
+        const u = String(url);
+        if (u.includes('/statuses')) {
+          return new Response(
+            JSON.stringify({
               data: [
                 {
-                  id: 'd1',
-                  slug: 'alpha',
-                  type: 'work_item',
-                  title: 'Alpha Task',
-                  status: 'todo',
-                  parentId: null,
-                  frontmatter: {},
-                  createdAt: '',
-                  updatedAt: new Date().toISOString(),
+                  id: 's1',
+                  key: 'todo',
+                  name: 'Todo',
+                  color: '#6EAFFF',
+                  category: 'unstarted',
+                  order: 1,
                 },
               ],
-              nextCursor: null,
-            },
-          }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        );
-      }
-      return new Response('{"data":[]}', { status: 200, headers: { 'content-type': 'application/json' } });
-    }));
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        if (u.includes('/documents')) {
+          return new Response(
+            JSON.stringify({
+              data: {
+                data: [
+                  {
+                    id: 'd1',
+                    slug: 'alpha',
+                    type: 'work_item',
+                    title: 'Alpha Task',
+                    status: 'todo',
+                    parentId: null,
+                    frontmatter: {},
+                    createdAt: '',
+                    updatedAt: new Date().toISOString(),
+                  },
+                ],
+                nextCursor: null,
+              },
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        return new Response('{"data":[]}', {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }),
+    );
 
     const { queryClient, router } = setup();
-    render(<QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider>);
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
     await waitFor(() => expect(screen.getByText('Alpha Task')).toBeInTheDocument());
     // DndContext is transparent — the card still renders and is accessible.
     expect(screen.getByText('Todo')).toBeInTheDocument();
@@ -121,36 +138,92 @@ describe('KanbanView DnD', () => {
   // This is the un-mocked-fetch seam proving the listParams un-park is wired.
   it('manual mode (null sort) queries documents by board_position', async () => {
     const documentsUrls: string[] = [];
-    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async (url) => {
-      const u = String(url);
-      if (u.includes('/statuses')) {
-        return new Response(
-          JSON.stringify({ data: [{ id: 's1', key: 'todo', name: 'Todo', color: '#6EAFFF', category: 'unstarted', order: 1 }] }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        );
-      }
-      if (u.includes('/views')) {
-        // Default view with NO sort → null effectiveSort → manual mode.
-        return new Response(
-          JSON.stringify({ data: [{ id: 'v1', name: 'Board', type: 'kanban', filters: {}, sort: null, groupBy: null, visibleFields: null, columnOrder: null, isDefault: true, order: 1 }] }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        );
-      }
-      if (u.includes('/documents')) {
-        documentsUrls.push(u);
-        return new Response(
-          JSON.stringify({ data: { data: [{ id: 'd1', slug: 'a', type: 'work_item', title: 'Alpha Task', status: 'todo', parentId: null, boardPosition: 'm', frontmatter: {}, createdAt: '', updatedAt: new Date().toISOString() }], nextCursor: null } }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        );
-      }
-      return new Response('{"data":[]}', { status: 200, headers: { 'content-type': 'application/json' } });
-    }));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>(async (url) => {
+        const u = String(url);
+        if (u.includes('/statuses')) {
+          return new Response(
+            JSON.stringify({
+              data: [
+                {
+                  id: 's1',
+                  key: 'todo',
+                  name: 'Todo',
+                  color: '#6EAFFF',
+                  category: 'unstarted',
+                  order: 1,
+                },
+              ],
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        if (u.includes('/views')) {
+          // Default view with NO sort → null effectiveSort → manual mode.
+          return new Response(
+            JSON.stringify({
+              data: [
+                {
+                  id: 'v1',
+                  name: 'Board',
+                  type: 'kanban',
+                  filters: {},
+                  sort: null,
+                  groupBy: null,
+                  visibleFields: null,
+                  columnOrder: null,
+                  isDefault: true,
+                  order: 1,
+                },
+              ],
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        if (u.includes('/documents')) {
+          documentsUrls.push(u);
+          return new Response(
+            JSON.stringify({
+              data: {
+                data: [
+                  {
+                    id: 'd1',
+                    slug: 'a',
+                    type: 'work_item',
+                    title: 'Alpha Task',
+                    status: 'todo',
+                    parentId: null,
+                    boardPosition: 'm',
+                    frontmatter: {},
+                    createdAt: '',
+                    updatedAt: new Date().toISOString(),
+                  },
+                ],
+                nextCursor: null,
+              },
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        return new Response('{"data":[]}', {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }),
+    );
 
     const { queryClient, router } = setup();
-    render(<QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider>);
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
     await waitFor(() => expect(screen.getByText('Alpha Task')).toBeInTheDocument());
     // The board queried board_position, not the old parked updated_at default.
-    await waitFor(() => expect(documentsUrls.some((u) => u.includes('sort=board_position'))).toBe(true));
+    await waitFor(() =>
+      expect(documentsUrls.some((u) => u.includes('sort=board_position'))).toBe(true),
+    );
     expect(documentsUrls.some((u) => u.includes('sort=updated_at'))).toBe(false);
   });
 
@@ -158,32 +231,86 @@ describe('KanbanView DnD', () => {
   // is manual-only. Negative case for the un-park.
   it('a field sort still queries by that field (board_position is manual-only)', async () => {
     const documentsUrls: string[] = [];
-    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async (url) => {
-      const u = String(url);
-      if (u.includes('/statuses')) {
-        return new Response(
-          JSON.stringify({ data: [{ id: 's1', key: 'todo', name: 'Todo', color: '#6EAFFF', category: 'unstarted', order: 1 }] }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        );
-      }
-      if (u.includes('/views')) {
-        return new Response(
-          JSON.stringify({ data: [{ id: 'v1', name: 'Board', type: 'kanban', filters: {}, sort: [{ key: 'title', dir: 'asc' }], groupBy: null, visibleFields: null, columnOrder: null, isDefault: true, order: 1 }] }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        );
-      }
-      if (u.includes('/documents')) {
-        documentsUrls.push(u);
-        return new Response(
-          JSON.stringify({ data: { data: [{ id: 'd1', slug: 'a', type: 'work_item', title: 'Alpha Task', status: 'todo', parentId: null, boardPosition: null, frontmatter: {}, createdAt: '', updatedAt: new Date().toISOString() }], nextCursor: null } }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        );
-      }
-      return new Response('{"data":[]}', { status: 200, headers: { 'content-type': 'application/json' } });
-    }));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>(async (url) => {
+        const u = String(url);
+        if (u.includes('/statuses')) {
+          return new Response(
+            JSON.stringify({
+              data: [
+                {
+                  id: 's1',
+                  key: 'todo',
+                  name: 'Todo',
+                  color: '#6EAFFF',
+                  category: 'unstarted',
+                  order: 1,
+                },
+              ],
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        if (u.includes('/views')) {
+          return new Response(
+            JSON.stringify({
+              data: [
+                {
+                  id: 'v1',
+                  name: 'Board',
+                  type: 'kanban',
+                  filters: {},
+                  sort: [{ key: 'title', dir: 'asc' }],
+                  groupBy: null,
+                  visibleFields: null,
+                  columnOrder: null,
+                  isDefault: true,
+                  order: 1,
+                },
+              ],
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        if (u.includes('/documents')) {
+          documentsUrls.push(u);
+          return new Response(
+            JSON.stringify({
+              data: {
+                data: [
+                  {
+                    id: 'd1',
+                    slug: 'a',
+                    type: 'work_item',
+                    title: 'Alpha Task',
+                    status: 'todo',
+                    parentId: null,
+                    boardPosition: null,
+                    frontmatter: {},
+                    createdAt: '',
+                    updatedAt: new Date().toISOString(),
+                  },
+                ],
+                nextCursor: null,
+              },
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        return new Response('{"data":[]}', {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }),
+    );
 
     const { queryClient, router } = setup();
-    render(<QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider>);
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
     await waitFor(() => expect(screen.getByText('Alpha Task')).toBeInTheDocument());
     // Once the field-sorted view resolves, the EFFECTIVE (latest) query sorts by
     // that field — not board_position. (A board_position fetch may occur on the
@@ -209,46 +336,100 @@ describe('KanbanView DnD', () => {
   // Returns the recorded PATCH bodies keyed by the slug in the URL.
   function setupTwoCardBoard() {
     const patches: Array<{ slug: string; body: unknown }> = [];
-    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async (url, init) => {
-      const u = String(url);
-      const method = (init?.method ?? 'GET').toUpperCase();
-      if (method === 'PATCH' && u.includes('/documents/')) {
-        const slug = u.split('/documents/')[1]?.split(/[?#]/)[0] ?? '';
-        patches.push({ slug, body: init?.body ? JSON.parse(String(init.body)) : null });
-        return new Response(JSON.stringify({ data: { slug } }), {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>(async (url, init) => {
+        const u = String(url);
+        const method = (init?.method ?? 'GET').toUpperCase();
+        if (method === 'PATCH' && u.includes('/documents/')) {
+          const slug = u.split('/documents/')[1]?.split(/[?#]/)[0] ?? '';
+          patches.push({ slug, body: init?.body ? JSON.parse(String(init.body)) : null });
+          return new Response(JSON.stringify({ data: { slug } }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
+        if (u.includes('/statuses')) {
+          return new Response(
+            JSON.stringify({
+              data: [
+                {
+                  id: 's1',
+                  key: 'todo',
+                  name: 'Todo',
+                  color: '#6EAFFF',
+                  category: 'unstarted',
+                  order: 1,
+                },
+              ],
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        if (u.includes('/views')) {
+          // No sort → manual mode → reorderEnabled, cards sortable.
+          return new Response(
+            JSON.stringify({
+              data: [
+                {
+                  id: 'v1',
+                  name: 'Board',
+                  type: 'kanban',
+                  filters: {},
+                  sort: null,
+                  groupBy: null,
+                  visibleFields: null,
+                  columnOrder: null,
+                  isDefault: true,
+                  order: 1,
+                },
+              ],
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        if (u.includes('/documents')) {
+          return new Response(
+            JSON.stringify({
+              data: {
+                data: [
+                  {
+                    id: 'd1',
+                    slug: 'alpha',
+                    type: 'work_item',
+                    title: 'Alpha Task',
+                    status: 'todo',
+                    parentId: null,
+                    boardPosition: 'a',
+                    frontmatter: {},
+                    createdAt: '',
+                    updatedAt: new Date().toISOString(),
+                  },
+                  {
+                    id: 'd2',
+                    slug: 'bravo',
+                    type: 'work_item',
+                    title: 'Bravo Task',
+                    status: 'todo',
+                    parentId: null,
+                    boardPosition: 'c',
+                    frontmatter: {},
+                    createdAt: '',
+                    updatedAt: new Date().toISOString(),
+                  },
+                ],
+                nextCursor: null,
+              },
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        return new Response('{"data":[]}', {
           status: 200,
           headers: { 'content-type': 'application/json' },
         });
-      }
-      if (u.includes('/statuses')) {
-        return new Response(
-          JSON.stringify({ data: [{ id: 's1', key: 'todo', name: 'Todo', color: '#6EAFFF', category: 'unstarted', order: 1 }] }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        );
-      }
-      if (u.includes('/views')) {
-        // No sort → manual mode → reorderEnabled, cards sortable.
-        return new Response(
-          JSON.stringify({ data: [{ id: 'v1', name: 'Board', type: 'kanban', filters: {}, sort: null, groupBy: null, visibleFields: null, columnOrder: null, isDefault: true, order: 1 }] }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        );
-      }
-      if (u.includes('/documents')) {
-        return new Response(
-          JSON.stringify({
-            data: {
-              data: [
-                { id: 'd1', slug: 'alpha', type: 'work_item', title: 'Alpha Task', status: 'todo', parentId: null, boardPosition: 'a', frontmatter: {}, createdAt: '', updatedAt: new Date().toISOString() },
-                { id: 'd2', slug: 'bravo', type: 'work_item', title: 'Bravo Task', status: 'todo', parentId: null, boardPosition: 'c', frontmatter: {}, createdAt: '', updatedAt: new Date().toISOString() },
-              ],
-              nextCursor: null,
-            },
-          }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        );
-      }
-      return new Response('{"data":[]}', { status: 200, headers: { 'content-type': 'application/json' } });
-    }));
+      }),
+    );
     return { patches };
   }
 
@@ -258,7 +439,11 @@ describe('KanbanView DnD', () => {
   it('wires a collisionDetection algorithm on the DndContext (closestCorners)', async () => {
     setupTwoCardBoard();
     const { queryClient, router } = setup();
-    render(<QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider>);
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
     await waitFor(() => expect(screen.getByText('Alpha Task')).toBeInTheDocument());
     // Must be closestCorners specifically — the algorithm that reports the
     // over-CARD (not the column) on a within-column drop. The default
@@ -273,7 +458,11 @@ describe('KanbanView DnD', () => {
   it('onDragEnd with a card over.id (same column) persists a boardPosition patch', async () => {
     const { patches } = setupTwoCardBoard();
     const { queryClient, router } = setup();
-    render(<QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider>);
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
     await waitFor(() => expect(screen.getByText('Alpha Task')).toBeInTheDocument());
     await waitFor(() => expect(captured.props?.onDragEnd).toBeTypeOf('function'));
 
@@ -298,7 +487,11 @@ describe('KanbanView DnD', () => {
   it('onDragEnd with a same-group column over.id does NOT persist', async () => {
     const { patches } = setupTwoCardBoard();
     const { queryClient, router } = setup();
-    render(<QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider>);
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
     await waitFor(() => expect(screen.getByText('Alpha Task')).toBeInTheDocument());
     await waitFor(() => expect(captured.props?.onDragEnd).toBeTypeOf('function'));
 
@@ -325,7 +518,11 @@ describe('KanbanView DnD', () => {
   it('configures Always droppable measuring so a just-moved card re-measures', async () => {
     setupTwoCardBoard();
     const { queryClient, router } = setup();
-    render(<QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider>);
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
     await waitFor(() => expect(screen.getByText('Alpha Task')).toBeInTheDocument());
     expect(captured.props?.measuring?.droppable?.strategy).toBe(MeasuringStrategy.Always);
   });
@@ -346,61 +543,119 @@ describe('KanbanView DnD', () => {
   function setupSortedTwoCardBoard() {
     const viewPatches: Array<{ id: string; body: unknown }> = [];
     const docPatches: Array<{ slug: string; body: unknown }> = [];
-    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async (url, init) => {
-      const u = String(url);
-      const method = (init?.method ?? 'GET').toUpperCase();
-      if (method === 'PATCH' && u.includes('/views/')) {
-        const id = u.split('/views/')[1]?.split(/[?#]/)[0] ?? '';
-        viewPatches.push({ id, body: init?.body ? JSON.parse(String(init.body)) : null });
-        return new Response(JSON.stringify({ data: { view: { id } } }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        });
-      }
-      if (method === 'PATCH' && u.includes('/documents/')) {
-        const slug = u.split('/documents/')[1]?.split(/[?#]/)[0] ?? '';
-        docPatches.push({ slug, body: init?.body ? JSON.parse(String(init.body)) : null });
-        return new Response(JSON.stringify({ data: { slug } }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        });
-      }
-      if (u.includes('/statuses')) {
-        return new Response(
-          JSON.stringify({ data: [{ id: 's1', key: 'todo', name: 'Todo', color: '#6EAFFF', category: 'unstarted', order: 1 }] }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        );
-      }
-      if (u.includes('/views')) {
-        // A NON-null sort → sorted mode → reorderEnabled is false.
-        return new Response(
-          JSON.stringify({ data: [{ id: 'v1', name: 'Board', type: 'kanban', filters: {}, sort: [{ key: 'title', dir: 'asc' }], groupBy: null, visibleFields: null, columnOrder: null, isDefault: true, order: 1 }] }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        );
-      }
-      if (u.includes('/documents')) {
-        return new Response(
-          JSON.stringify({
-            data: {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>(async (url, init) => {
+        const u = String(url);
+        const method = (init?.method ?? 'GET').toUpperCase();
+        if (method === 'PATCH' && u.includes('/views/')) {
+          const id = u.split('/views/')[1]?.split(/[?#]/)[0] ?? '';
+          viewPatches.push({ id, body: init?.body ? JSON.parse(String(init.body)) : null });
+          return new Response(JSON.stringify({ data: { view: { id } } }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
+        if (method === 'PATCH' && u.includes('/documents/')) {
+          const slug = u.split('/documents/')[1]?.split(/[?#]/)[0] ?? '';
+          docPatches.push({ slug, body: init?.body ? JSON.parse(String(init.body)) : null });
+          return new Response(JSON.stringify({ data: { slug } }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
+        if (u.includes('/statuses')) {
+          return new Response(
+            JSON.stringify({
               data: [
-                { id: 'd1', slug: 'alpha', type: 'work_item', title: 'Alpha Task', status: 'todo', parentId: null, boardPosition: 'a', frontmatter: {}, createdAt: '', updatedAt: new Date().toISOString() },
-                { id: 'd2', slug: 'bravo', type: 'work_item', title: 'Bravo Task', status: 'todo', parentId: null, boardPosition: 'c', frontmatter: {}, createdAt: '', updatedAt: new Date().toISOString() },
+                {
+                  id: 's1',
+                  key: 'todo',
+                  name: 'Todo',
+                  color: '#6EAFFF',
+                  category: 'unstarted',
+                  order: 1,
+                },
               ],
-              nextCursor: null,
-            },
-          }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        );
-      }
-      return new Response('{"data":[]}', { status: 200, headers: { 'content-type': 'application/json' } });
-    }));
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        if (u.includes('/views')) {
+          // A NON-null sort → sorted mode → reorderEnabled is false.
+          return new Response(
+            JSON.stringify({
+              data: [
+                {
+                  id: 'v1',
+                  name: 'Board',
+                  type: 'kanban',
+                  filters: {},
+                  sort: [{ key: 'title', dir: 'asc' }],
+                  groupBy: null,
+                  visibleFields: null,
+                  columnOrder: null,
+                  isDefault: true,
+                  order: 1,
+                },
+              ],
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        if (u.includes('/documents')) {
+          return new Response(
+            JSON.stringify({
+              data: {
+                data: [
+                  {
+                    id: 'd1',
+                    slug: 'alpha',
+                    type: 'work_item',
+                    title: 'Alpha Task',
+                    status: 'todo',
+                    parentId: null,
+                    boardPosition: 'a',
+                    frontmatter: {},
+                    createdAt: '',
+                    updatedAt: new Date().toISOString(),
+                  },
+                  {
+                    id: 'd2',
+                    slug: 'bravo',
+                    type: 'work_item',
+                    title: 'Bravo Task',
+                    status: 'todo',
+                    parentId: null,
+                    boardPosition: 'c',
+                    frontmatter: {},
+                    createdAt: '',
+                    updatedAt: new Date().toISOString(),
+                  },
+                ],
+                nextCursor: null,
+              },
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        return new Response('{"data":[]}', {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }),
+    );
     return { viewPatches, docPatches };
   }
 
   it('sorted-mode same-column card drop auto-switches to Manual (persists sort:[]) AND writes a boardPosition patch', async () => {
     const { viewPatches, docPatches } = setupSortedTwoCardBoard();
     const { queryClient, router } = setup();
-    render(<QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider>);
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
     await waitFor(() => expect(screen.getByText('Alpha Task')).toBeInTheDocument());
     await waitFor(() => expect(captured.props?.onDragEnd).toBeTypeOf('function'));
 
@@ -433,7 +688,11 @@ describe('KanbanView DnD', () => {
   it('renders the dragged card in a DragOverlay clone after drag start', async () => {
     setupTwoCardBoard();
     const { queryClient, router } = setup();
-    render(<QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider>);
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
     await waitFor(() => expect(screen.getByText('Bravo Task')).toBeInTheDocument());
     await waitFor(() => expect(captured.props?.onDragStart).toBeTypeOf('function'));
 

@@ -1,5 +1,9 @@
-import { describe, test, expect } from 'bun:test';
-import { triggerFrontmatterSchema, validateCronShape, KNOWN_EVENT_KINDS } from './trigger-schema.ts';
+import { describe, expect, test } from 'bun:test';
+import {
+  KNOWN_EVENT_KINDS,
+  triggerFrontmatterSchema,
+  validateCronShape,
+} from './trigger-schema.ts';
 
 describe('validateCronShape', () => {
   test('accepts 5-field cron expressions', () => {
@@ -78,18 +82,26 @@ describe('triggerFrontmatterSchema', () => {
 
   test('rejects last_fired_at and last_status when set by the client', () => {
     const a = triggerFrontmatterSchema.safeParse({
-      agent: 'x', schedule: '* * * * *', on_event: null, last_fired_at: '2026-05-25',
+      agent: 'x',
+      schedule: '* * * * *',
+      on_event: null,
+      last_fired_at: '2026-05-25',
     });
     expect(a.success).toBe(false);
     const b = triggerFrontmatterSchema.safeParse({
-      agent: 'x', schedule: '* * * * *', on_event: null, last_status: 'ok',
+      agent: 'x',
+      schedule: '* * * * *',
+      on_event: null,
+      last_status: 'ok',
     });
     expect(b.success).toBe(false);
   });
 
   test('applies enabled default true', () => {
     const r = triggerFrontmatterSchema.safeParse({
-      agent: 'x', schedule: '* * * * *', on_event: null,
+      agent: 'x',
+      schedule: '* * * * *',
+      on_event: null,
     });
     expect(r.success).toBe(true);
     if (r.success) expect(r.data.enabled).toBe(true);
@@ -201,7 +213,12 @@ describe('KNOWN_EVENT_KINDS', () => {
   });
 
   test('triggerFrontmatterSchema accepts the new comment and agent kinds as on_event', () => {
-    for (const kind of ['comment.created', 'comment.mentioned', 'comment.deleted', 'agent.allow_list.reconciled'] as const) {
+    for (const kind of [
+      'comment.created',
+      'comment.mentioned',
+      'comment.deleted',
+      'agent.allow_list.reconciled',
+    ] as const) {
       const r = triggerFrontmatterSchema.safeParse({
         agent: 'x',
         schedule: null,

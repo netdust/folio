@@ -85,7 +85,5 @@ export const slashRegistry: SlashItem[] = [
 export function filterSlash(items: SlashItem[], query: string): SlashItem[] {
   const q = query.trim().toLowerCase();
   if (!q) return items;
-  return items.filter(
-    (it) => it.label.toLowerCase().includes(q) || it.id.includes(q),
-  );
+  return items.filter((it) => it.label.toLowerCase().includes(q) || it.id.includes(q));
 }

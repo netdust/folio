@@ -30,7 +30,7 @@ A markdown-native, agent-friendly alternative to Plane / Linear / Notion task to
 | MD body editor | Milkdown (real MD round-trip) |
 | Raw MD editor | CodeMirror 6 with markdown mode |
 | Drag-drop | dnd-kit |
-| Encryption | libsodium |
+| Encryption | AES-256-GCM (@noble/ciphers) |
 | Tests | Bun test (unit), Playwright (e2e, phase 4+) |
 | Lint/format | Biome |
 | Auth | Hand-rolled session auth (no NextAuth, no Auth0) |
@@ -42,7 +42,7 @@ A markdown-native, agent-friendly alternative to Plane / Linear / Notion task to
 2. **No sidecar services.** No Redis, no separate worker, no Postgres-required. Use SQLite for queues if needed (cron table + interval polling is fine).
 3. **Frontmatter is the schema.** Only `title`, `status`, and `body` are columns on `documents`. Everything else (`priority`, `assignee`, `due_date`, `labels`, anything custom) lives in `documents.frontmatter` (JSON column). The UI infers field types from values; users can pin types explicitly per-project via the `fields` table.
 4. **Every write emits an event.** Insert into `events` table + push to an SSE channel on the same transaction. Agents subscribe to this. Never bypass.
-5. **BYOK only.** The server never holds a default AI key. If a workspace has no key configured, AI features hide gracefully. Keys are libsodium-encrypted at rest with a server master secret from `FOLIO_MASTER_KEY` env var.
+5. **BYOK only.** The server never holds a default AI key. If a workspace has no key configured, AI features hide gracefully. Keys are AES-256-GCM-encrypted at rest (via @noble/ciphers) with a server master secret from `FOLIO_MASTER_KEY` env var.
 6. **Self-hostable means installable in one command.** `docker run -v ./data:/data -p 3000:3000 folio:latest` or `./folio` from the binary. No external services required for a basic install.
 
 ## UX Commitments (Acceptance Criteria, Not Suggestions)
@@ -65,9 +65,10 @@ folio/
 │   └── shared/                 # Types shared between server + web
 ├── docker/
 │   └── Dockerfile
-├── scripts/
-│   ├── build.ts                # bun compile single binary
-│   └── deploy-ploi.sh
+├── scripts/                    # check-invariants.ts, seed-demo.ts, backfill-builtin-triggers.ts, hooks/
+│                               # (NOTE: the single-binary build is currently inline in the root
+│                               #  package.json `build:binary` script; M1 will add a real scripts/build.ts
+│                               #  that embeds web/dist + migrations into the binary)
 ├── docs/
 │   ├── FOLIO-BRIEFING.md       # Full PRD + architecture
 │   ├── PHASES.md               # Phase-by-phase task list
@@ -84,7 +85,7 @@ folio/
 - **Naming.** Files `kebab-case.ts`. Types/components `PascalCase`. Functions/vars `camelCase`. DB columns `snake_case`. Frontmatter keys `snake_case`.
 - **IDs.** UUIDv7 (time-ordered) via `crypto.randomUUID()` or a uuid7 lib. Stored as `text` in SQLite.
 - **Slugs.** Human-friendly identifiers for URLs. Generated from title, deduped per project.
-- **Errors.** Throw `HTTPException` from Hono. Server returns `{ error: { code, message } }`. Client surfaces via toasts.
+- **Errors.** Throw `HTTPError` (from `apps/server/src/lib/http.ts`). Server returns `{ error: { code, message } }` via the single `registerErrorHandler`. Client surfaces via toasts.
 - **Validation.** Zod schemas at API boundaries. Shared in `packages/shared`.
 - **Imports.** Absolute via `@/` aliases inside each app. No deep relative paths.
 - **Commit messages.** `phase-N: <what>` for phase work. `fix:` / `chore:` / `docs:` otherwise. Atomic commits per task.

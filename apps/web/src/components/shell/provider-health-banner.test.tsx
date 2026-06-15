@@ -1,5 +1,5 @@
-import { describe, test, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import { beforeEach, describe, expect, test, vi } from 'vitest';
 
 // Stub the router so the banner's Link renders as a plain anchor without a
 // RouterProvider. We capture the navigation target via the Link's `to`/`search`

@@ -1,5 +1,5 @@
-import { test, expect } from '@playwright/test';
-import { signUpFresh, createWorkspace, createProject, createWorkItem } from './fixtures.ts';
+import { expect, test } from '@playwright/test';
+import { createProject, createWorkItem, createWorkspace, signUpFresh } from './fixtures.ts';
 
 /**
  * Feature-acceptance for the hardening pass (spec/hardening-pass) — drives the
@@ -40,24 +40,30 @@ test('token: create with an expiry → persists with a non-null expiresAt', asyn
 
   // Per-workspace API tokens live on the automation page's API tab (?tab=api).
   await page.goto(`/w/${wslug}/agents?tab=api`);
-  await page.getByRole('button', { name: /\+ Create token/i }).first().click();
+  await page
+    .getByRole('button', { name: /\+ Create token/i })
+    .first()
+    .click();
 
   const dialog = page.getByRole('dialog');
   await dialog.locator('input[type="text"]').first().fill('CI token');
   // Expiry: the number input with the "never expire" placeholder.
   await dialog.locator('input[type="number"]').fill('30');
   // Pick a scope preset so the form is submittable (Create is disabled w/o scopes).
-  await dialog.getByRole('button', { name: /Read-only/i }).first().click();
+  await dialog
+    .getByRole('button', { name: /Read-only/i })
+    .first()
+    .click();
   await dialog.getByRole('button', { name: /^Create/i }).click();
 
   // Wire truth: the token persisted WITH an expiry.
   await expect(async () => {
     const listRes = await page.request.get(`/api/v1/w/${wslug}/tokens/${wsId}`);
     // jsonOk wraps as { data: { tokens: [...] } }.
-    const tokens = (((await listRes.json()).data?.tokens ?? []) as Array<{
+    const tokens = ((await listRes.json()).data?.tokens ?? []) as Array<{
       name: string;
       expiresAt: string | null;
-    }>);
+    }>;
     const ci = tokens.find((t) => t.name === 'CI token');
     expect(ci, 'CI token should exist').toBeDefined();
     expect(ci!.expiresAt, 'created token should carry an expiry').not.toBeNull();
@@ -69,7 +75,10 @@ test('token: a decimal expiry is rejected client-side (no opaque 400)', async ({
   const { wslug } = freshSlugs();
   await createWorkspace(page, `HP ${seq}`, wslug);
   await page.goto(`/w/${wslug}/agents?tab=api`);
-  await page.getByRole('button', { name: /\+ Create token/i }).first().click();
+  await page
+    .getByRole('button', { name: /\+ Create token/i })
+    .first()
+    .click();
 
   const dialog = page.getByRole('dialog');
   await dialog.locator('input[type="text"]').first().fill('Decimal token');
@@ -95,7 +104,10 @@ test('view: create a Kanban view from the New-view sheet → lands on the board'
   await page.goto(`/w/${wslug}/p/${pslug}/work-items`);
 
   // The rail exposes a "New view" + control on the table row.
-  await page.getByRole('button', { name: /New view/i }).first().click();
+  await page
+    .getByRole('button', { name: /New view/i })
+    .first()
+    .click();
 
   const sheet = page.getByRole('dialog');
   await expect(sheet.getByText(/New view/i).first()).toBeVisible();
@@ -180,10 +192,9 @@ test('slash /draft: AI result renders as a real H1 + list, not literal markdown'
   });
 
   // Seed an EMPTY work item so the editor starts blank, then open it.
-  const create = await page.request.post(
-    `/api/v1/w/${wslug}/p/${pslug}/documents`,
-    { data: { type: 'work_item', title: 'Draft me', body: '' } },
-  );
+  const create = await page.request.post(`/api/v1/w/${wslug}/p/${pslug}/documents`, {
+    data: { type: 'work_item', title: 'Draft me', body: '' },
+  });
   expect(create.ok(), `seed ${create.status()}: ${await create.text()}`).toBe(true);
   const slug = (await create.json()).data.slug as string;
 
@@ -220,9 +231,7 @@ test('slash /draft: AI result renders as a real H1 + list, not literal markdown'
 // If this proves flaky in headless (genuinely possible — dnd-kit + headless is
 // hard), it is annotated and the gesture stays human-verified; the wired persist
 // path is already proven by the kanban-view-dnd.test.tsx onDragEnd seam test.
-test('board: manual within-column drag-reorder persists a new board_position', async ({
-  page,
-}) => {
+test('board: manual within-column drag-reorder persists a new board_position', async ({ page }) => {
   await signUpFresh(page);
   const wslug = `dnd-ws-${Date.now()}`;
   const pslug = 'dnd-p';
@@ -304,7 +313,13 @@ test('board: manual within-column drag-reorder persists a new board_position', a
     await page.evaluate(
       ({ cx, cy }) => {
         document.dispatchEvent(
-          new PointerEvent('pointermove', { bubbles: true, cancelable: true, pointerId: 1, clientX: cx, clientY: cy }),
+          new PointerEvent('pointermove', {
+            bubbles: true,
+            cancelable: true,
+            pointerId: 1,
+            clientX: cx,
+            clientY: cy,
+          }),
         );
       },
       { cx, cy },
@@ -322,7 +337,13 @@ test('board: manual within-column drag-reorder persists a new board_position', a
   await page.evaluate(
     ({ dx, dy }) => {
       document.dispatchEvent(
-        new PointerEvent('pointerup', { bubbles: true, cancelable: true, pointerId: 1, clientX: dx, clientY: dy }),
+        new PointerEvent('pointerup', {
+          bubbles: true,
+          cancelable: true,
+          pointerId: 1,
+          clientX: dx,
+          clientY: dy,
+        }),
       );
     },
     { dx, dy },
@@ -331,7 +352,10 @@ test('board: manual within-column drag-reorder persists a new board_position', a
 
   // BUG 1 proof: the DragOverlay clone was present mid-drag (2 instances of the
   // dragged card's title) — it portals above the columns, no longer clipped.
-  expect(midDragOverlayCount, 'DragOverlay clone should render the dragged card mid-drag').toBeGreaterThanOrEqual(2);
+  expect(
+    midDragOverlayCount,
+    'DragOverlay clone should render the dragged card mid-drag',
+  ).toBeGreaterThanOrEqual(2);
 
   // OPTIMISTIC-ORDER proof (the snap-back fix, 2026-06-07): immediately after
   // drop — BEFORE the onSettled refetch lands (~400ms) — the ON-SCREEN card
@@ -433,7 +457,13 @@ test('board: a sorted-mode within-column drag auto-switches Sort to Manual and r
     await page.evaluate(
       ({ cx, cy }) => {
         document.dispatchEvent(
-          new PointerEvent('pointermove', { bubbles: true, cancelable: true, pointerId: 1, clientX: cx, clientY: cy }),
+          new PointerEvent('pointermove', {
+            bubbles: true,
+            cancelable: true,
+            pointerId: 1,
+            clientX: cx,
+            clientY: cy,
+          }),
         );
       },
       { cx, cy },
@@ -443,7 +473,13 @@ test('board: a sorted-mode within-column drag auto-switches Sort to Manual and r
   await page.evaluate(
     ({ dx, dy }) => {
       document.dispatchEvent(
-        new PointerEvent('pointerup', { bubbles: true, cancelable: true, pointerId: 1, clientX: dx, clientY: dy }),
+        new PointerEvent('pointerup', {
+          bubbles: true,
+          cancelable: true,
+          pointerId: 1,
+          clientX: dx,
+          clientY: dy,
+        }),
       );
     },
     { dx, dy },
@@ -457,7 +493,9 @@ test('board: a sorted-mode within-column drag auto-switches Sort to Manual and r
 
   // (b) the auto-switch was PERSISTED (a view PATCH fired) AND the reorder was
   // applied (a board_position document PATCH fired).
-  expect(viewPatches.length, 'auto-switch should persist sort:[] via a view PATCH').toBeGreaterThan(0);
+  expect(viewPatches.length, 'auto-switch should persist sort:[] via a view PATCH').toBeGreaterThan(
+    0,
+  );
   expect(docPatches.length, 'reorder should PATCH board_position').toBeGreaterThan(0);
 
   // (c) the persisted order flipped — the dragged (formerly second) card lands first.

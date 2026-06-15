@@ -82,7 +82,7 @@ Source: `apps/server/src/routes/tokens.ts`. Plaintext returned exactly once on c
 
 ## Settings — AI keys (`/api/v1/w/:wslug/settings/:workspaceId/ai-keys`)
 
-Source: `apps/server/src/routes/settings.ts`. BYOK store — keys are libsodium-encrypted at rest with the server master secret (`FOLIO_MASTER_KEY`).
+Source: `apps/server/src/routes/settings.ts`. BYOK store — keys are AES-256-GCM-encrypted at rest (via @noble/ciphers) with the server master secret (`FOLIO_MASTER_KEY`).
 
 | Method | Path | Auth | Body | Returns |
 |---|---|---|---|---|

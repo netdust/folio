@@ -1,14 +1,14 @@
-import { afterEach, describe, it, expect, vi } from 'vitest';
-import { renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { renderHook, waitFor } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  type Document,
+  type DocumentListPage,
+  type DocumentSummary,
   documentsKeys,
   sortByBoardPosition,
   useDeleteDocument,
   useUpdateDocument,
-  type Document,
-  type DocumentListPage,
-  type DocumentSummary,
 } from './documents.ts';
 
 function wrapperOf(qc: QueryClient) {
@@ -98,7 +98,14 @@ describe('documentsKeys table scoping', () => {
     // params survives as a real object entry in the key (last element).
     expect(wi[wi.length - 1]).toEqual({ type: 'work_item', status: ['todo'] });
     // the slug occupies a dedicated slot BEFORE the 'list' literal + params.
-    expect(wi).toEqual(['documents', 'w', 'p', 'work-items', 'list', { type: 'work_item', status: ['todo'] }]);
+    expect(wi).toEqual([
+      'documents',
+      'w',
+      'p',
+      'work-items',
+      'list',
+      { type: 'work_item', status: ['todo'] },
+    ]);
   });
 });
 
@@ -198,9 +205,7 @@ describe('useUpdateDocument', () => {
     // ActivityPanel reads from document-events. A PATCH writes a
     // document.updated event server-side; the open panel must refresh.
     expect(
-      keys.some((k) =>
-        k === JSON.stringify(['document-events', 'acme', 'web', 'fix-login']),
-      ),
+      keys.some((k) => k === JSON.stringify(['document-events', 'acme', 'web', 'fix-login'])),
     ).toBe(true);
   });
 });
@@ -211,10 +216,8 @@ describe('useDeleteDocument table scoping', () => {
     vi.unstubAllGlobals();
   });
 
-  it('invalidates a TABLE-scoped list key (the deleted doc\'s table), not the project-wide prefix', async () => {
-    const fetchMock = vi.fn<typeof fetch>(async () =>
-      new Response(null, { status: 204 }),
-    );
+  it("invalidates a TABLE-scoped list key (the deleted doc's table), not the project-wide prefix", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(null, { status: 204 }));
     vi.stubGlobal('fetch', fetchMock);
 
     const qc = new QueryClient({
@@ -235,13 +238,19 @@ describe('useDeleteDocument table scoping', () => {
 
     await waitFor(() => expect(invalidateSpy).toHaveBeenCalled());
 
-    const prefixes = invalidateSpy.mock.calls.map(([opts]) =>
-      (opts as { queryKey: readonly unknown[] }).queryKey,
+    const prefixes = invalidateSpy.mock.calls.map(
+      ([opts]) => (opts as { queryKey: readonly unknown[] }).queryKey,
     );
 
     // The invalidation prefix must be table-scoped: [...all, wslug, pslug, tslug, 'list'].
     const bugsPrefix = JSON.stringify([...documentsKeys.all, 'acme', 'web', 'bugs', 'list']);
-    const workItemsPrefix = JSON.stringify([...documentsKeys.all, 'acme', 'web', 'work-items', 'list']);
+    const workItemsPrefix = JSON.stringify([
+      ...documentsKeys.all,
+      'acme',
+      'web',
+      'work-items',
+      'list',
+    ]);
     const seen = prefixes.map((p) => JSON.stringify(p));
 
     expect(seen).toContain(bugsPrefix);
@@ -311,8 +320,12 @@ describe('useUpdateDocument optimistic re-sort', () => {
   });
 
   function stubPatchFetch() {
-    const fetchMock = vi.fn<typeof fetch>(async () =>
-      new Response('{"data":{}}', { status: 200, headers: { 'content-type': 'application/json' } }),
+    const fetchMock = vi.fn<typeof fetch>(
+      async () =>
+        new Response('{"data":{}}', {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
     );
     vi.stubGlobal('fetch', fetchMock);
   }
@@ -326,13 +339,19 @@ describe('useUpdateDocument optimistic re-sort', () => {
     });
     // Seed: card-b (rank 'm') after card-a (rank 'a').
     qc.setQueryData<DocumentListPage>(listKey, {
-      data: [doc({ id: 'a', slug: 'card-a', boardPosition: 'a' }), doc({ id: 'b', slug: 'card-b', boardPosition: 'm' })],
+      data: [
+        doc({ id: 'a', slug: 'card-a', boardPosition: 'a' }),
+        doc({ id: 'b', slug: 'card-b', boardPosition: 'm' }),
+      ],
       nextCursor: null,
     });
 
-    const { result } = renderHook(() => useUpdateDocument('acme', 'web', 'work-items', listParams), {
-      wrapper: wrapperOf(qc),
-    });
+    const { result } = renderHook(
+      () => useUpdateDocument('acme', 'web', 'work-items', listParams),
+      {
+        wrapper: wrapperOf(qc),
+      },
+    );
 
     // Move card-b BEFORE card-a (new rank sorts first).
     void result.current.mutate({ slug: 'card-b', patch: { boardPosition: '0' } });
@@ -356,13 +375,19 @@ describe('useUpdateDocument optimistic re-sort', () => {
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
     });
     qc.setQueryData<DocumentListPage>(listKey, {
-      data: [doc({ id: 'a', slug: 'card-a', boardPosition: 'z' }), doc({ id: 'b', slug: 'card-b', boardPosition: 'a' })],
+      data: [
+        doc({ id: 'a', slug: 'card-a', boardPosition: 'z' }),
+        doc({ id: 'b', slug: 'card-b', boardPosition: 'a' }),
+      ],
       nextCursor: null,
     });
 
-    const { result } = renderHook(() => useUpdateDocument('acme', 'web', 'work-items', listParams), {
-      wrapper: wrapperOf(qc),
-    });
+    const { result } = renderHook(
+      () => useUpdateDocument('acme', 'web', 'work-items', listParams),
+      {
+        wrapper: wrapperOf(qc),
+      },
+    );
 
     void result.current.mutate({ slug: 'card-a', patch: { status: 'done' } });
 
@@ -385,13 +410,19 @@ describe('useUpdateDocument optimistic re-sort', () => {
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
     });
     qc.setQueryData<DocumentListPage>(listKey, {
-      data: [doc({ id: 'a', slug: 'card-a', boardPosition: 'z' }), doc({ id: 'b', slug: 'card-b', boardPosition: 'a' })],
+      data: [
+        doc({ id: 'a', slug: 'card-a', boardPosition: 'z' }),
+        doc({ id: 'b', slug: 'card-b', boardPosition: 'a' }),
+      ],
       nextCursor: null,
     });
 
-    const { result } = renderHook(() => useUpdateDocument('acme', 'web', 'work-items', listParams), {
-      wrapper: wrapperOf(qc),
-    });
+    const { result } = renderHook(
+      () => useUpdateDocument('acme', 'web', 'work-items', listParams),
+      {
+        wrapper: wrapperOf(qc),
+      },
+    );
 
     void result.current.mutate({ slug: 'card-a', patch: { title: 'Renamed' } });
 

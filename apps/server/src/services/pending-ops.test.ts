@@ -1,9 +1,9 @@
-import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { drizzle } from 'drizzle-orm/bun-sqlite';
-import { migrate } from 'drizzle-orm/bun-sqlite/migrator';
+import { describe, expect, test } from 'bun:test';
 import { resolve } from 'node:path';
 import { eq } from 'drizzle-orm';
+import { drizzle } from 'drizzle-orm/bun-sqlite';
+import { migrate } from 'drizzle-orm/bun-sqlite/migrator';
 import * as schema from '../db/schema.ts';
 import { type PendingOp, pendingOps } from '../db/schema.ts';
 import { PENDING_OPS_RETENTION_MS, reapStalePendingOps } from './pending-ops.ts';
@@ -24,10 +24,7 @@ type SeedRow = {
   expiresAt: number;
 };
 
-async function seed(
-  db: ReturnType<typeof makeDb>,
-  rows: SeedRow[],
-): Promise<void> {
+async function seed(db: ReturnType<typeof makeDb>, rows: SeedRow[]): Promise<void> {
   for (const r of rows) {
     await db.insert(pendingOps).values({
       id: r.id,
@@ -86,7 +83,12 @@ describe('reapStalePendingOps', () => {
     const ancient = now - RETENTION * 10;
 
     await seed(db, [
-      { id: 'confirmed-ancient', status: 'confirmed', createdAt: ancient, expiresAt: ancient + 1000 },
+      {
+        id: 'confirmed-ancient',
+        status: 'confirmed',
+        createdAt: ancient,
+        expiresAt: ancient + 1000,
+      },
     ]);
 
     const reaped = await reapStalePendingOps(db, now);

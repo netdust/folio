@@ -5,13 +5,13 @@ import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import { db } from '../db/client.ts';
 import { documents, statuses } from '../db/schema.ts';
-import { jsonOk, HTTPError } from '../lib/http.ts';
 import { dryRunResult, isDryRun, isDryRunDelete } from '../lib/dry-run.ts';
 import { emitEvent, txWithEvents } from '../lib/events.ts';
-import { listStatuses } from '../services/statuses.ts';
+import { HTTPError, jsonOk } from '../lib/http.ts';
 import { type AuthContext, getUser } from '../middleware/auth.ts';
 import { requireScope } from '../middleware/bearer.ts';
-import { getProject, getTable, getWorkspace, type ScopeContext } from '../middleware/scope.ts';
+import { type ScopeContext, getProject, getTable, getWorkspace } from '../middleware/scope.ts';
+import { listStatuses } from '../services/statuses.ts';
 
 const statusesRoute = new Hono<AuthContext & ScopeContext>();
 
@@ -28,7 +28,11 @@ statusesRoute.post(
   zValidator(
     'json',
     z.object({
-      key: z.string().min(1).max(64).regex(/^[a-z0-9_-]+$/),
+      key: z
+        .string()
+        .min(1)
+        .max(64)
+        .regex(/^[a-z0-9_-]+$/),
       name: z.string().min(1).max(80),
       color: z.string().max(16).optional(),
       category: z.enum(CATEGORIES).optional(),
@@ -64,7 +68,10 @@ statusesRoute.post(
     await txWithEvents(db, async (tx) => {
       await tx.insert(statuses).values(row);
       await emitEvent(tx, {
-        workspaceId: ws.id, projectId: p.id, kind: 'status.created', actor: user.id,
+        workspaceId: ws.id,
+        projectId: p.id,
+        kind: 'status.created',
+        actor: user.id,
         payload: { id, key: input.key },
       });
     });
@@ -78,7 +85,12 @@ statusesRoute.patch(
   zValidator(
     'json',
     z.object({
-      key: z.string().min(1).max(64).regex(/^[a-z0-9_-]+$/).optional(),
+      key: z
+        .string()
+        .min(1)
+        .max(64)
+        .regex(/^[a-z0-9_-]+$/)
+        .optional(),
       name: z.string().min(1).max(80).optional(),
       color: z.string().max(16).optional(),
       category: z.enum(CATEGORIES).optional(),
@@ -104,13 +116,17 @@ statusesRoute.patch(
 
     await txWithEvents(db, async (tx) => {
       if (patchFields.key && patchFields.key !== row.key) {
-        await tx.update(documents)
+        await tx
+          .update(documents)
           .set({ status: patchFields.key })
           .where(and(eq(documents.tableId, t.id), eq(documents.status, row.key)));
       }
       await tx.update(statuses).set(patchFields).where(eq(statuses.id, id));
       await emitEvent(tx, {
-        workspaceId: ws.id, projectId: p.id, kind: 'status.updated', actor: user.id,
+        workspaceId: ws.id,
+        projectId: p.id,
+        kind: 'status.updated',
+        actor: user.id,
         payload: { id, changes: Object.keys(patchFields) },
       });
     });
@@ -135,7 +151,11 @@ statusesRoute.delete('/:id', requireScope('config:write'), async (c) => {
     .from(documents)
     .where(and(eq(documents.tableId, t.id), eq(documents.status, row.key)));
   if ((usage?.n ?? 0) > 0) {
-    throw new HTTPError('STATUS_IN_USE', `status "${row.key}" is used by ${usage!.n} document(s)`, 409);
+    throw new HTTPError(
+      'STATUS_IN_USE',
+      `status "${row.key}" is used by ${usage!.n} document(s)`,
+      409,
+    );
   }
 
   if (isDryRunDelete(c)) {
@@ -145,7 +165,10 @@ statusesRoute.delete('/:id', requireScope('config:write'), async (c) => {
   await txWithEvents(db, async (tx) => {
     await tx.delete(statuses).where(eq(statuses.id, id));
     await emitEvent(tx, {
-      workspaceId: ws.id, projectId: p.id, kind: 'status.deleted', actor: user.id,
+      workspaceId: ws.id,
+      projectId: p.id,
+      kind: 'status.deleted',
+      actor: user.id,
       payload: { id, key: row.key },
     });
   });

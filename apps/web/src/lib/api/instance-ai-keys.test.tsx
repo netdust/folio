@@ -1,7 +1,7 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { renderHook, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   useDeleteInstanceAiKey,
   useInstanceAiKeys,
@@ -35,8 +35,20 @@ describe('useInstanceAiKeys', () => {
         return new Response(
           JSON.stringify({
             data: {
-              keys: [{ id: 'k1', provider: 'anthropic', label: 'default', baseUrl: null, createdAt: '2026-01-01T00:00:00Z' }],
-              operator_model: { provider: 'anthropic', model: 'claude-sonnet-4-6', aiKeyLabel: 'default' },
+              keys: [
+                {
+                  id: 'k1',
+                  provider: 'anthropic',
+                  label: 'default',
+                  baseUrl: null,
+                  createdAt: '2026-01-01T00:00:00Z',
+                },
+              ],
+              operator_model: {
+                provider: 'anthropic',
+                model: 'claude-sonnet-4-6',
+                aiKeyLabel: 'default',
+              },
             },
           }),
           { status: 200, headers: { 'content-type': 'application/json' } },
@@ -68,32 +80,38 @@ describe('useOperatorModel', () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () =>
-        new Response(
-          JSON.stringify({
-            data: {
-              keys: [],
-              operator_model: { provider: 'ollama', model: 'llama3.1:8b', aiKeyLabel: 'local' },
-            },
-          }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        ),
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              data: {
+                keys: [],
+                operator_model: { provider: 'ollama', model: 'llama3.1:8b', aiKeyLabel: 'local' },
+              },
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          ),
       ),
     );
     const { result } = renderHook(() => useOperatorModel(), { wrapper: wrap(qc) });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(result.current.data).toEqual({ provider: 'ollama', model: 'llama3.1:8b', aiKeyLabel: 'local' });
+    expect(result.current.data).toEqual({
+      provider: 'ollama',
+      model: 'llama3.1:8b',
+      aiKeyLabel: 'local',
+    });
   });
 
   it('is null when no operator model is set', async () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () =>
-        new Response(JSON.stringify({ data: { keys: [], operator_model: null } }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        }),
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ data: { keys: [], operator_model: null } }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          }),
       ),
     );
     const { result } = renderHook(() => useOperatorModel(), { wrapper: wrap(qc) });
@@ -116,17 +134,28 @@ describe('useSetOperatorModel', () => {
         });
         return new Response(
           JSON.stringify({
-            data: { ok: true, operator_model: { provider: 'ollama', model: 'llama3.1:8b', aiKeyLabel: 'local' } },
+            data: {
+              ok: true,
+              operator_model: { provider: 'ollama', model: 'llama3.1:8b', aiKeyLabel: 'local' },
+            },
           }),
           { status: 200, headers: { 'content-type': 'application/json' } },
         );
       }),
     );
     const { result } = renderHook(() => useSetOperatorModel(), { wrapper: wrap(qc) });
-    await result.current.mutateAsync({ provider: 'ollama', model: 'llama3.1:8b', aiKeyLabel: 'local' });
+    await result.current.mutateAsync({
+      provider: 'ollama',
+      model: 'llama3.1:8b',
+      aiKeyLabel: 'local',
+    });
     expect(calls[0]!.url).toContain('/api/v1/instance/ai-keys/operator-model');
     expect(calls[0]!.method).toBe('PUT');
-    expect(calls[0]!.body).toEqual({ provider: 'ollama', model: 'llama3.1:8b', aiKeyLabel: 'local' });
+    expect(calls[0]!.body).toEqual({
+      provider: 'ollama',
+      model: 'llama3.1:8b',
+      aiKeyLabel: 'local',
+    });
   });
 });
 

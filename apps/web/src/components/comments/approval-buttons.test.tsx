@@ -1,11 +1,11 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
-import { ApprovalButtons } from './approval-buttons.tsx';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Comment } from '../../lib/api/comments.ts';
 import type { Member } from '../../lib/api/members.ts';
 import { runsKeys } from '../../lib/api/runs.ts';
+import { ApprovalButtons } from './approval-buttons.tsx';
 
 // ---------------------------------------------------------------------------
 // Time anchor — plan was created 5 minutes before NOW
@@ -142,19 +142,17 @@ function stubFetchSuccess() {
 function stubFetchError() {
   vi.stubGlobal(
     'fetch',
-    vi.fn(async () =>
-      new Response(
-        JSON.stringify({ error: { code: 'SERVER_ERROR', message: 'fail' } }),
-        { status: 500, headers: { 'content-type': 'application/json' } },
-      ),
+    vi.fn(
+      async () =>
+        new Response(JSON.stringify({ error: { code: 'SERVER_ERROR', message: 'fail' } }), {
+          status: 500,
+          headers: { 'content-type': 'application/json' },
+        }),
     ),
   );
 }
 
-function renderButtons(
-  props: Partial<Parameters<typeof ApprovalButtons>[0]> = {},
-  qc = makeQC(),
-) {
+function renderButtons(props: Partial<Parameters<typeof ApprovalButtons>[0]> = {}, qc = makeQC()) {
   return render(
     <ApprovalButtons
       planComment={planComment}

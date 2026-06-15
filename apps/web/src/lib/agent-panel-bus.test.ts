@@ -1,4 +1,4 @@
-import { describe, test, expect, vi, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, test, vi } from 'vitest';
 
 // Each test re-imports the module fresh so the default-open-from-storage logic
 // is re-evaluated against the mocked localStorage state.

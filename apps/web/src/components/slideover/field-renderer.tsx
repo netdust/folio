@@ -1,13 +1,13 @@
-import { useState } from 'react';
 import { Plus } from 'lucide-react';
+import { useState } from 'react';
 import type { FieldType } from '../../lib/api/fields.ts';
 import { InlineEdit } from '../inline/inline-edit.tsx';
 import { InlineSelect } from '../inline/inline-select.tsx';
-import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
-import { Icon } from '../ui/icon.tsx';
-import { cn } from '../ui/cn.ts';
 import { RelationCell } from '../relations/relation-cell.tsx';
-import { RelationPicker, type RelationCandidate } from '../relations/relation-picker.tsx';
+import { type RelationCandidate, RelationPicker } from '../relations/relation-picker.tsx';
+import { cn } from '../ui/cn.ts';
+import { Icon } from '../ui/icon.tsx';
+import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
 
 const RELATION_TOKEN_RE = /^\[\[([\w-]+)\]\]$/;
 
@@ -182,9 +182,7 @@ function RelationField({
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const tokens = toRelationTokens(value);
-  const alreadyLinkedSlugs = tokens
-    .map(tokenSlug)
-    .filter((s): s is string => s !== null);
+  const alreadyLinkedSlugs = tokens.map(tokenSlug).filter((s): s is string => s !== null);
 
   const addLink = (slug: string) => {
     const token = `[[${slug}]]`;
@@ -252,9 +250,11 @@ function RelationField({
               <Icon icon={Plus} size={14} />
             </button>
           </PopoverTrigger>
-          <PopoverContent align="start" className="w-auto border-none bg-transparent p-0 shadow-none">
+          <PopoverContent
+            align="start"
+            className="w-auto border-none bg-transparent p-0 shadow-none"
+          >
             <input
-              autoFocus
               placeholder="Search documents…"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
@@ -369,7 +369,6 @@ function DateInput({
     <input
       type="date"
       aria-label={ariaLabel}
-      autoFocus
       value={draft}
       onChange={(e) => setDraft(e.target.value)}
       onBlur={() => {
@@ -518,7 +517,6 @@ function UrlField({
     <input
       type="url"
       aria-label={ariaLabel}
-      autoFocus
       value={draft}
       onChange={(e) => setDraft(e.target.value)}
       onBlur={() => {
@@ -544,7 +542,11 @@ const formatterCache = new Map<string, Intl.NumberFormat>();
 function getCurrencyFormatter(currency: string): Intl.NumberFormat {
   const cached = formatterCache.get(currency);
   if (cached) return cached;
-  const f = new Intl.NumberFormat(undefined, { style: 'currency', currency, maximumFractionDigits: 0 });
+  const f = new Intl.NumberFormat(undefined, {
+    style: 'currency',
+    currency,
+    maximumFractionDigits: 0,
+  });
   formatterCache.set(currency, f);
   return f;
 }
@@ -571,7 +573,9 @@ function CurrencyInput({
         role="button"
         tabIndex={0}
         onClick={() => setEditing(true)}
-        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setEditing(true); }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') setEditing(true);
+        }}
         className={cn(
           'inline-block w-full cursor-text rounded-sm px-1 py-0.5 text-right font-mono hover:bg-card',
           isPending && 'opacity-60',
@@ -585,7 +589,6 @@ function CurrencyInput({
     <input
       type="number"
       aria-label={ariaLabel}
-      autoFocus
       value={draft}
       onChange={(e) => setDraft(e.target.value)}
       onBlur={() => {
@@ -595,7 +598,10 @@ function CurrencyInput({
       }}
       onKeyDown={(e) => {
         if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
-        if (e.key === 'Escape') { setDraft(value == null ? '' : String(value)); setEditing(false); }
+        if (e.key === 'Escape') {
+          setDraft(value == null ? '' : String(value));
+          setEditing(false);
+        }
       }}
       className={cn(
         'block w-32 rounded-sm border border-border-light bg-shell px-2 py-1 text-right text-sm font-mono text-fg input-focus',

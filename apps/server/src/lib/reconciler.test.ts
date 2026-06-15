@@ -1,11 +1,11 @@
-import { test, expect } from 'bun:test';
-import { eq, and } from 'drizzle-orm';
+import { expect, test } from 'bun:test';
+import { and, eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
-import { makeTestApp } from '../test/harness.ts';
-import { documents, projects, events, apiTokens } from '../db/schema.ts';
 import { db } from '../db/client.ts';
-import { reconcileAllowLists } from './reconciler.ts';
+import { events, apiTokens, documents, projects } from '../db/schema.ts';
+import { makeTestApp } from '../test/harness.ts';
 import { newApiToken } from './auth.ts';
+import { reconcileAllowLists } from './reconciler.ts';
 
 async function seedAgent(workspaceId: string, slug: string, projectsList: string[]) {
   const id = nanoid();
@@ -98,7 +98,12 @@ test('reconcileAllowLists no-ops when nothing to scrub', async () => {
   const evtRows = await db
     .select()
     .from(events)
-    .where(and(eq(events.workspaceId, seed.workspace.id), eq(events.kind, 'agent.allow_list.reconciled')));
+    .where(
+      and(
+        eq(events.workspaceId, seed.workspace.id),
+        eq(events.kind, 'agent.allow_list.reconciled'),
+      ),
+    );
   expect(evtRows).toHaveLength(0);
 });
 

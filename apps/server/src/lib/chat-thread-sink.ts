@@ -46,7 +46,13 @@ export function makeConversationSink(
 ): ConversationSink {
   return {
     async text(body: string): Promise<void> {
-      const row = await appendMessage(db, { conversationId, role: 'operator', kind: 'text', body, runId });
+      const row = await appendMessage(db, {
+        conversationId,
+        role: 'operator',
+        kind: 'text',
+        body,
+        runId,
+      });
       conversationBus.publish(conversationId, serializeMessage(row));
     },
     async toolStep(step: { tool: string; summary: string; status: 'ok' | 'error' }): Promise<void> {

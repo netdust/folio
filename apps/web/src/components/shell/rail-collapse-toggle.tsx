@@ -1,5 +1,5 @@
-import { useRailCollapsed } from './rail.tsx';
 import { Button } from '../ui/button.tsx';
+import { useRailCollapsed } from './rail.tsx';
 
 export function RailCollapseToggle() {
   const [collapsed, setCollapsed] = useRailCollapsed();

@@ -63,7 +63,7 @@ export async function* streamOpenAICompatible({
   // The SDK constructor parses baseURL and can throw synchronously on a
   // malformed value; that throw propagated raw pre-round-7.
   let c: OpenAI;
-  let stream;
+  let stream: Awaited<ReturnType<typeof c.chat.completions.create>>;
   try {
     c = client(apiKey, baseUrl);
     stream = await c.chat.completions.create({
@@ -136,6 +136,7 @@ export async function* streamOpenAICompatible({
           for (const tc of delta.tool_calls) {
             const entry =
               toolCallsByIndex[tc.index] ??
+              // biome-ignore lint/suspicious/noAssignInExpressions: deliberate get-or-create — lazily init the tool-call entry for this index on first sight
               (toolCallsByIndex[tc.index] = { id: '', name: '', argsBuf: '' });
             if (tc.id) entry.id = tc.id;
             if (tc.function?.name) entry.name = tc.function.name;
@@ -183,9 +184,7 @@ export async function* streamOpenAICompatible({
     // `name: ''` and either no-op'd or threw 'unknown tool: '. Drop with
     // a warn so operators have a grep target.
     if (!tc.name) {
-      console.warn(
-        '[ai/openai] dropped tool_call with empty name (truncated marker delta)',
-      );
+      console.warn('[ai/openai] dropped tool_call with empty name (truncated marker delta)');
       continue;
     }
     let args: Record<string, unknown> = {};
@@ -223,7 +222,9 @@ export async function* streamOpenAICompatible({
   if (sawTerminal) {
     yield { type: 'done', reason: stopReason };
   } else {
-    console.warn(`[ai/${providerName}] stream ended without a finish_reason — no done event (truncated)`);
+    console.warn(
+      `[ai/${providerName}] stream ended without a finish_reason — no done event (truncated)`,
+    );
   }
 }
 

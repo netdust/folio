@@ -1,18 +1,18 @@
+import { FilterCompileError, filterCompile } from '@folio/shared';
 import { zValidator } from '@hono/zod-validator';
 import { and, eq, max } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
-import { filterCompile, FilterCompileError } from '@folio/shared';
 import { db } from '../db/client.ts';
 import { views } from '../db/schema.ts';
-import { jsonOk, HTTPError } from '../lib/http.ts';
-import { emitEvent, txWithEvents } from '../lib/events.ts';
 import { dryRunResult, isDryRun, isDryRunDelete } from '../lib/dry-run.ts';
-import { listViews } from '../services/views.ts';
+import { emitEvent, txWithEvents } from '../lib/events.ts';
+import { HTTPError, jsonOk } from '../lib/http.ts';
 import { type AuthContext, getUser } from '../middleware/auth.ts';
 import { requireScope } from '../middleware/bearer.ts';
-import { getProject, getTable, getWorkspace, type ScopeContext } from '../middleware/scope.ts';
+import { type ScopeContext, getProject, getTable, getWorkspace } from '../middleware/scope.ts';
+import { listViews } from '../services/views.ts';
 
 const viewsRoute = new Hono<AuthContext & ScopeContext>();
 
@@ -89,39 +89,50 @@ viewsRoute.post('/', requireScope('config:write'), zValidator('json', baseSchema
   await txWithEvents(db, async (tx) => {
     await tx.insert(views).values(row);
     await emitEvent(tx, {
-      workspaceId: ws.id, projectId: p.id, kind: 'view.created', actor: user.id,
+      workspaceId: ws.id,
+      projectId: p.id,
+      kind: 'view.created',
+      actor: user.id,
       payload: { id, name: input.name },
     });
   });
   return jsonOk(c, { view: row }, 201);
 });
 
-viewsRoute.patch('/:id', requireScope('config:write'), zValidator('json', baseSchema.partial()), async (c) => {
-  const user = getUser(c);
-  const p = getProject(c);
-  const t = getTable(c);
-  const ws = getWorkspace(c);
-  const id = c.req.param('id');
-  const row = await db.query.views.findFirst({
-    where: and(eq(views.tableId, t.id), eq(views.id, id)),
-  });
-  if (!row) throw new HTTPError('VIEW_NOT_FOUND', `view "${id}" not found`, 404);
-  const patch = c.req.valid('json');
-  if (patch.filters !== undefined) validateFilters(patch.filters);
-  const { dryRun: _dryRun, ...patchFields } = patch;
-  if (isDryRun(patch)) {
-    return jsonOk(c, dryRunResult('update', { view: { ...row, ...patchFields } }));
-  }
-
-  await txWithEvents(db, async (tx) => {
-    await tx.update(views).set(patchFields).where(eq(views.id, id));
-    await emitEvent(tx, {
-      workspaceId: ws.id, projectId: p.id, kind: 'view.updated', actor: user.id,
-      payload: { id, changes: Object.keys(patchFields) },
+viewsRoute.patch(
+  '/:id',
+  requireScope('config:write'),
+  zValidator('json', baseSchema.partial()),
+  async (c) => {
+    const user = getUser(c);
+    const p = getProject(c);
+    const t = getTable(c);
+    const ws = getWorkspace(c);
+    const id = c.req.param('id');
+    const row = await db.query.views.findFirst({
+      where: and(eq(views.tableId, t.id), eq(views.id, id)),
     });
-  });
-  return jsonOk(c, { view: { ...row, ...patchFields } });
-});
+    if (!row) throw new HTTPError('VIEW_NOT_FOUND', `view "${id}" not found`, 404);
+    const patch = c.req.valid('json');
+    if (patch.filters !== undefined) validateFilters(patch.filters);
+    const { dryRun: _dryRun, ...patchFields } = patch;
+    if (isDryRun(patch)) {
+      return jsonOk(c, dryRunResult('update', { view: { ...row, ...patchFields } }));
+    }
+
+    await txWithEvents(db, async (tx) => {
+      await tx.update(views).set(patchFields).where(eq(views.id, id));
+      await emitEvent(tx, {
+        workspaceId: ws.id,
+        projectId: p.id,
+        kind: 'view.updated',
+        actor: user.id,
+        payload: { id, changes: Object.keys(patchFields) },
+      });
+    });
+    return jsonOk(c, { view: { ...row, ...patchFields } });
+  },
+);
 
 viewsRoute.delete('/:id', requireScope('config:write'), async (c) => {
   const user = getUser(c);
@@ -139,7 +150,10 @@ viewsRoute.delete('/:id', requireScope('config:write'), async (c) => {
   await txWithEvents(db, async (tx) => {
     await tx.delete(views).where(eq(views.id, id));
     await emitEvent(tx, {
-      workspaceId: ws.id, projectId: p.id, kind: 'view.deleted', actor: user.id,
+      workspaceId: ws.id,
+      projectId: p.id,
+      kind: 'view.deleted',
+      actor: user.id,
       payload: { id, name: row.name },
     });
   });

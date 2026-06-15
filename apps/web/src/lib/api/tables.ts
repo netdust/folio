@@ -60,8 +60,7 @@ export function useUpdateTable(wslug: string, pslug: string) {
 export function useDeleteTable(wslug: string, pslug: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (tslug: string) =>
-      client.delete(`/api/v1/w/${wslug}/p/${pslug}/tables/${tslug}`),
+    mutationFn: (tslug: string) => client.delete(`/api/v1/w/${wslug}/p/${pslug}/tables/${tslug}`),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: tablesKeys.list(wslug, pslug) });
     },

@@ -14,11 +14,7 @@
  */
 
 import type { Document } from '../db/schema.ts';
-import {
-  FOLIO_SKILL_SLUG,
-  OPERATOR_PROMPT,
-  OPERATOR_TOOLS,
-} from './system-skills.ts';
+import { FOLIO_SKILL_SLUG, OPERATOR_PROMPT, OPERATOR_TOOLS } from './system-skills.ts';
 
 /**
  * The operator's reserved slug. `_`-prefixed so `isReservedSlug` (which blocks

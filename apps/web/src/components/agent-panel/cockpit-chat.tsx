@@ -1,16 +1,16 @@
-import { useMemo, useState } from 'react';
 import { MessagesSquare } from 'lucide-react';
+import { useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import {
+  type ConversationMessage,
   useConversation,
   useCreateConversation,
   usePostMessage,
-  type ConversationMessage,
 } from '../../lib/api/conversations.ts';
 import { formatApiError } from '../../lib/api/index.ts';
 import { EmptyState } from '../views/empty-state.tsx';
-import { MessageList } from './message-list.tsx';
 import { ChatComposer } from './chat-composer.tsx';
+import { MessageList } from './message-list.tsx';
 
 /**
  * The cockpit chat body (T11): the operator conversation surface rendered inside

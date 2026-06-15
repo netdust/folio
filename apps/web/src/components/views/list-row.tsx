@@ -1,14 +1,14 @@
 import { ArrowUpRight } from 'lucide-react';
 import { toast } from 'sonner';
+import type { DocumentPatch, DocumentSummary } from '../../lib/api/documents.ts';
+import { formatApiError } from '../../lib/api/index.ts';
+import type { Status } from '../../lib/api/statuses.ts';
+import { copyDocumentAsMarkdown } from '../../lib/copy-as-md.ts';
+import { relativeTime } from '../../lib/relative-time.ts';
 import { InlineEdit } from '../inline/inline-edit.tsx';
 import { InlineSelect } from '../inline/inline-select.tsx';
 import { Icon } from '../ui/icon.tsx';
 import { Pill } from '../ui/pill.tsx';
-import type { DocumentSummary, DocumentPatch } from '../../lib/api/documents.ts';
-import type { Status } from '../../lib/api/statuses.ts';
-import { formatApiError } from '../../lib/api/index.ts';
-import { copyDocumentAsMarkdown } from '../../lib/copy-as-md.ts';
-import { relativeTime } from '../../lib/relative-time.ts';
 import { RowContextMenu } from './row-context-menu.tsx';
 
 interface Props {
@@ -17,7 +17,10 @@ interface Props {
   wslug: string;
   pslug: string;
   onOpen: (slug: string) => void;
-  onUpdate: (vars: { slug: string; patch: Pick<DocumentPatch, 'title' | 'status'> }) => Promise<unknown>;
+  onUpdate: (vars: {
+    slug: string;
+    patch: Pick<DocumentPatch, 'title' | 'status'>;
+  }) => Promise<unknown>;
   pendingSlugs: Set<string>;
 }
 

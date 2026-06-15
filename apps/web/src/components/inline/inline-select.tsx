@@ -1,6 +1,6 @@
-import { useState, type ReactNode } from 'react';
-import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
+import { type ReactNode, useState } from 'react';
 import { cn } from '../ui/cn.ts';
+import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
 
 export interface SelectOption {
   value: string;
@@ -45,14 +45,16 @@ export function InlineSelect({
           {renderDisplay ? (
             renderDisplay(current)
           ) : current ? (
-            <span style={current.color ? { color: current.color } : undefined}>{current.label}</span>
+            <span style={current.color ? { color: current.color } : undefined}>
+              {current.label}
+            </span>
           ) : (
             <span className="text-fg-3">{placeholder ?? 'select…'}</span>
           )}
         </button>
       </PopoverTrigger>
       <PopoverContent align="start" className="min-w-[180px] p-1">
-        <ul role="listbox" className="flex flex-col">
+        <ul className="flex flex-col">
           {options.map((opt) => (
             <li key={opt.value} role="presentation">
               <button

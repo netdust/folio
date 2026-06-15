@@ -14,10 +14,10 @@
  * allocator is correct within that model.
  */
 
-import { and, desc, eq, max } from 'drizzle-orm';
 import { parseMessagePayload } from '@folio/shared';
+import { and, desc, eq, max } from 'drizzle-orm';
 import type { DB } from '../db/client.ts';
-import { conversations, messages, type Message } from '../db/schema.ts';
+import { type Message, conversations, messages } from '../db/schema.ts';
 
 export async function createConversation(
   db: DB,
@@ -83,10 +83,7 @@ export async function appendMessage(
  * existing `conversations_user_idx (created_by, updated_at)` index. Used by
  * `GET /conversations/recent` for cockpit auto-resume.
  */
-export async function getMostRecentConversationId(
-  db: DB,
-  userId: string,
-): Promise<string | null> {
+export async function getMostRecentConversationId(db: DB, userId: string): Promise<string | null> {
   const row = await db.query.conversations.findFirst({
     where: eq(conversations.createdBy, userId),
     // Secondary tiebreak so two same-millisecond `updatedAt` rows resolve
@@ -155,16 +152,15 @@ export async function getMessage(
  * the updated payload. Owner-scoping is the caller's responsibility (the route
  * loads the message via the owned conversation first).
  */
-export async function setMessageChosen(
-  db: DB,
-  messageId: string,
-  chosen: string,
-): Promise<void> {
+export async function setMessageChosen(db: DB, messageId: string, chosen: string): Promise<void> {
   const row = await db.query.messages.findFirst({ where: eq(messages.id, messageId) });
   if (!row) return;
   const payload = parsePayload<Record<string, unknown>>(row.payload);
   payload.chosen = chosen;
-  await db.update(messages).set({ payload: JSON.stringify(payload) }).where(eq(messages.id, messageId));
+  await db
+    .update(messages)
+    .set({ payload: JSON.stringify(payload) })
+    .where(eq(messages.id, messageId));
 }
 
 /**
@@ -184,10 +180,7 @@ export function parsePayload<T extends Record<string, unknown>>(payload: string 
   return parseMessagePayload<T>(payload);
 }
 
-export async function serializeThreadMarkdown(
-  db: DB,
-  conversationId: string,
-): Promise<string> {
+export async function serializeThreadMarkdown(db: DB, conversationId: string): Promise<string> {
   const rows = await getThread(db, conversationId);
   const lines: string[] = [];
   for (const m of rows) {
@@ -266,7 +259,10 @@ export async function recoverInterruptedConversations(db: DB): Promise<number> {
           ? `The previous turn was interrupted. Completed: ${completed}.`
           : 'The previous turn was interrupted before any tools ran.';
       await appendMessage(db, { conversationId: conv.id, role: 'operator', kind: 'text', body });
-      await db.update(conversations).set({ activeRunId: null }).where(eq(conversations.id, conv.id));
+      await db
+        .update(conversations)
+        .set({ activeRunId: null })
+        .where(eq(conversations.id, conv.id));
       recovered += 1;
     } catch (err) {
       // The summary failed — still UNWEDGE the conversation (the composer must not
@@ -276,7 +272,15 @@ export async function recoverInterruptedConversations(db: DB): Promise<number> {
         .update(conversations)
         .set({ activeRunId: null })
         .where(eq(conversations.id, conv.id))
-        .catch(() => {});
+        .catch((clearErr) => {
+          // The unwedge UPDATE itself failed — the conversation stays wedged.
+          // We can't halt (this branch IS the recovery); surface it loudly so
+          // a persistently-wedged conversation is diagnosable instead of silent.
+          console.error(
+            `[recovery] conversation ${conv.id} unwedge UPDATE failed; conversation may remain locked`,
+            clearErr,
+          );
+        });
     }
   }
   return recovered;

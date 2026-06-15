@@ -1,4 +1,4 @@
-import { test, expect, signUpFresh, createWorkspace } from './fixtures.ts';
+import { createWorkspace, expect, signUpFresh, test } from './fixtures.ts';
 
 test('cockpit auto-resumes the most-recent conversation on reload', async ({ page }) => {
   await signUpFresh(page);

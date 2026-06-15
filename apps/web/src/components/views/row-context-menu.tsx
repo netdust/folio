@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { type ReactNode, useEffect, useRef, useState } from 'react';
 
 export interface MenuItem {
   label: string;
@@ -27,6 +27,7 @@ export function RowContextMenu({ items, children }: Props) {
   const close = () => setPosition(null);
 
   // Close on Escape
+  // biome-ignore lint/correctness/useExhaustiveDependencies: gated on [position]; `close` is a stable setState wrapper, intentionally omitted
   useEffect(() => {
     if (!position) return;
     const handler = (e: KeyboardEvent) => {
@@ -37,6 +38,7 @@ export function RowContextMenu({ items, children }: Props) {
   }, [position]);
 
   // Close on click-outside
+  // biome-ignore lint/correctness/useExhaustiveDependencies: gated on [position]; `close` (stable setter wrapper) + `menuRef` (ref) are intentionally omitted
   useEffect(() => {
     if (!position) return;
     const handler = (e: MouseEvent) => {

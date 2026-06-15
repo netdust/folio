@@ -1,7 +1,7 @@
-import { describe, expect, it, vi, afterEach } from 'vitest';
-import { renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { renderHook, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { useIsInstanceAdmin, useIsInstanceOwner } from './auth.ts';
 
 afterEach(() => {
@@ -19,10 +19,13 @@ function stubMe(payload: Record<string, unknown>) {
     'fetch',
     vi.fn(
       async () =>
-        new Response(JSON.stringify({ data: { user: { id: 'u', email: 'e', name: 'n' }, ...payload } }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        }),
+        new Response(
+          JSON.stringify({ data: { user: { id: 'u', email: 'e', name: 'n' }, ...payload } }),
+          {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          },
+        ),
     ),
   );
 }
@@ -37,7 +40,10 @@ describe('useIsInstanceAdmin', () => {
 
   it('reads false from a partial/absent cache', () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => {})));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => new Promise<Response>(() => {})),
+    );
     const { result } = renderHook(() => useIsInstanceAdmin(), { wrapper: wrap(qc) });
     expect(result.current).toBe(false);
   });

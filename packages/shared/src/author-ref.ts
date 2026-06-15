@@ -73,10 +73,7 @@ export function authorDisplayName(
  * doesn't exist in the provided list (callers MUST handle null — no
  * phantom-slug fallback).
  */
-export function authorAgentSlug(
-  author: string,
-  agents: readonly AgentRef[],
-): string | null {
+export function authorAgentSlug(author: string, agents: readonly AgentRef[]): string | null {
   const ref = parseAuthorRef(author);
   if (!ref || ref.kind !== 'agent') return null;
   const a = agents.find((a) => a.id === ref.value || a.slug === ref.value);
@@ -106,9 +103,7 @@ export function authorMatchesCurrent(
  * Caller MUST provide agentId for agents — slugs are mutable.
  */
 export function authorString(
-  ctx:
-    | { type: 'user'; userId: string }
-    | { type: 'agent'; agentId: string },
+  ctx: { type: 'user'; userId: string } | { type: 'agent'; agentId: string },
 ): string {
   if (ctx.type === 'user') return `user:${ctx.userId}`;
   return `agent:${ctx.agentId}`;

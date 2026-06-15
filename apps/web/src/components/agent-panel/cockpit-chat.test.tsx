@@ -1,13 +1,15 @@
-import { describe, test, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { beforeEach, describe, expect, test, vi } from 'vitest';
 
 // Mock the conversations API so the cockpit body is testable without a real
 // EventSource / server. We capture create + post calls and drive thread state.
 const createMutate = vi.fn();
 const postMutate = vi.fn();
 let conversationState: {
-  thread: { id: string; title: string; activeRunId: string | null; messages: unknown[] } | undefined;
+  thread:
+    | { id: string; title: string; activeRunId: string | null; messages: unknown[] }
+    | undefined;
   messages: { id: string; kind: string; role: string; body: string; seq: number }[];
   isLoading: boolean;
 } = { thread: undefined, messages: [], isLoading: false };
@@ -69,7 +71,10 @@ describe('CockpitChat', () => {
     // Hold the create open so the second Enter lands while the first is in flight.
     let resolveCreate: (v: { id: string }) => void = () => {};
     createMutate.mockImplementation(
-      () => new Promise<{ id: string }>((r) => { resolveCreate = r; }),
+      () =>
+        new Promise<{ id: string }>((r) => {
+          resolveCreate = r;
+        }),
     );
     render(<CockpitChat />);
     const box = screen.getByRole('textbox');

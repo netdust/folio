@@ -1,12 +1,8 @@
 import { describe, expect, test } from 'bun:test';
 // Populate env before importing system-workspace.ts (which reads env at eval).
 import '../test/env-setup.ts';
+import { OPERATOR_SLUG, getOperatorDefinition, isOperator } from './operator.ts';
 import { isReservedSlug } from './system-workspace.ts';
-import {
-  OPERATOR_SLUG,
-  getOperatorDefinition,
-  isOperator,
-} from './operator.ts';
 
 describe('operator runtime singleton (Task 16)', () => {
   test('OPERATOR_SLUG is reserved (unspawnable by users)', () => {

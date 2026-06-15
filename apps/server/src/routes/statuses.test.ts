@@ -1,13 +1,17 @@
-import { test, expect } from 'bun:test';
+import { expect, test } from 'bun:test';
 import { eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
-import { makeTestApp } from '../test/harness.ts';
-import { apiTokens, documents, events, statuses } from '../db/schema.ts';
+import { events, apiTokens, documents, statuses } from '../db/schema.ts';
 import { newApiToken } from '../lib/auth.ts';
+import { makeTestApp } from '../test/harness.ts';
 
 const base = '/api/v1/w/acme/p/web/statuses';
 
-async function createStatus(app: Awaited<ReturnType<typeof makeTestApp>>['app'], cookie: string, body: object) {
+async function createStatus(
+  app: Awaited<ReturnType<typeof makeTestApp>>['app'],
+  cookie: string,
+  body: object,
+) {
   return app.request('/api/v1/w/acme/p/web/statuses', {
     method: 'POST',
     headers: { Cookie: cookie, 'Content-Type': 'application/json' },
@@ -41,7 +45,10 @@ test('POST / creates a status', async () => {
   const { app, db, seed } = await makeTestApp();
   await db.delete(statuses); // start clean so 'todo' is free
   const res = await createStatus(app, seed.sessionCookie, {
-    key: 'todo', name: 'Todo', category: 'unstarted', order: 10,
+    key: 'todo',
+    name: 'Todo',
+    category: 'unstarted',
+    order: 10,
   });
   expect(res.status).toBe(201);
   expect((await res.json()).data.status.key).toBe('todo');
@@ -60,10 +67,18 @@ test('PATCH /:id renames key + cascades to documents in the table', async () => 
   const { app, db, seed } = await makeTestApp();
   await db.delete(statuses);
   const create = await createStatus(app, seed.sessionCookie, { key: 'todo', name: 'Todo' });
-  const { data: { status } } = await create.json();
+  const {
+    data: { status },
+  } = await create.json();
   await db.insert(documents).values({
-    id: nanoid(), projectId: seed.project.id, workspaceId: seed.workspace.id, tableId: status.tableId, type: 'work_item',
-    slug: 'a', title: 'A', status: 'todo',
+    id: nanoid(),
+    projectId: seed.project.id,
+    workspaceId: seed.workspace.id,
+    tableId: status.tableId,
+    type: 'work_item',
+    slug: 'a',
+    title: 'A',
+    status: 'todo',
   });
   const res = await app.request(`/api/v1/w/acme/p/web/statuses/${status.id}`, {
     method: 'PATCH',
@@ -79,13 +94,22 @@ test('DELETE /:id 409 when status in use', async () => {
   const { app, db, seed } = await makeTestApp();
   await db.delete(statuses);
   const create = await createStatus(app, seed.sessionCookie, { key: 'todo', name: 'Todo' });
-  const { data: { status } } = await create.json();
+  const {
+    data: { status },
+  } = await create.json();
   await db.insert(documents).values({
-    id: nanoid(), projectId: seed.project.id, workspaceId: seed.workspace.id, tableId: status.tableId, type: 'work_item',
-    slug: 'a', title: 'A', status: 'todo',
+    id: nanoid(),
+    projectId: seed.project.id,
+    workspaceId: seed.workspace.id,
+    tableId: status.tableId,
+    type: 'work_item',
+    slug: 'a',
+    title: 'A',
+    status: 'todo',
   });
   const res = await app.request(`/api/v1/w/acme/p/web/statuses/${status.id}`, {
-    method: 'DELETE', headers: { Cookie: seed.sessionCookie },
+    method: 'DELETE',
+    headers: { Cookie: seed.sessionCookie },
   });
   expect(res.status).toBe(409);
   expect((await res.json()).error.code).toBe('STATUS_IN_USE');
@@ -95,16 +119,22 @@ test('DELETE /:id 204 when unused', async () => {
   const { app, db, seed } = await makeTestApp();
   await db.delete(statuses);
   const create = await createStatus(app, seed.sessionCookie, { key: 'todo', name: 'Todo' });
-  const { data: { status } } = await create.json();
+  const {
+    data: { status },
+  } = await create.json();
   const res = await app.request(`/api/v1/w/acme/p/web/statuses/${status.id}`, {
-    method: 'DELETE', headers: { Cookie: seed.sessionCookie },
+    method: 'DELETE',
+    headers: { Cookie: seed.sessionCookie },
   });
   expect(res.status).toBe(204);
 });
 
 // --- Phase 2 (operator): config:write guard + dryRun (P2-2/4/6/8) ---
 
-async function mintTokens(db: Awaited<ReturnType<typeof makeTestApp>>['db'], seed: Awaited<ReturnType<typeof makeTestApp>>['seed']) {
+async function mintTokens(
+  db: Awaited<ReturnType<typeof makeTestApp>>['db'],
+  seed: Awaited<ReturnType<typeof makeTestApp>>['seed'],
+) {
   const cw = newApiToken();
   await db.insert(apiTokens).values({
     id: nanoid(),
@@ -126,7 +156,10 @@ async function mintTokens(db: Awaited<ReturnType<typeof makeTestApp>>['db'], see
   return { configWriteToken: cw.token, docsWriteToken: dw.token };
 }
 
-async function statusCount(db: Awaited<ReturnType<typeof makeTestApp>>['db'], projectId: string): Promise<number> {
+async function statusCount(
+  db: Awaited<ReturnType<typeof makeTestApp>>['db'],
+  projectId: string,
+): Promise<number> {
   return (await db.select().from(statuses).where(eq(statuses.projectId, projectId))).length;
 }
 
@@ -286,8 +319,14 @@ test('DELETE /statuses: dryRun delete of an in-use status still 409s', async () 
   ).json();
   const status = created.data.status as { id: string; tableId: string };
   await db.insert(documents).values({
-    id: nanoid(), projectId: seed.project.id, workspaceId: seed.workspace.id,
-    tableId: status.tableId, type: 'work_item', slug: 'uses-it', title: 'Uses It', status: 'in_use',
+    id: nanoid(),
+    projectId: seed.project.id,
+    workspaceId: seed.workspace.id,
+    tableId: status.tableId,
+    type: 'work_item',
+    slug: 'uses-it',
+    title: 'Uses It',
+    status: 'in_use',
   });
   const res = await app.request(`${base}/${status.id}?dryRun=true`, {
     method: 'DELETE',

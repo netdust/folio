@@ -1,12 +1,12 @@
-import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import { describe, expect, test } from 'bun:test';
+import { resolve } from 'node:path';
 import { drizzle } from 'drizzle-orm/bun-sqlite';
 import { migrate } from 'drizzle-orm/bun-sqlite/migrator';
-import { resolve } from 'node:path';
 import * as schema from '../db/schema.ts';
 import { appendMessage, createConversation, getThread } from '../services/conversations.ts';
-import { buildConversationMessages, CONVERSATION_HISTORY_WINDOW } from './chat-thread-source.ts';
 import { makeConversationSink } from './chat-thread-sink.ts';
+import { CONVERSATION_HISTORY_WINDOW, buildConversationMessages } from './chat-thread-source.ts';
 
 function makeDb() {
   const sqlite = new Database(':memory:');
@@ -43,9 +43,9 @@ describe('chat adapter', () => {
     });
     const msgs = await buildConversationMessages(db, c.id, []);
     // a user turn is replayed as a provider `user` message
-    expect(msgs.some((m) => m.role === 'user' && String(m.content).includes('set up a project'))).toBe(
-      true,
-    );
+    expect(
+      msgs.some((m) => m.role === 'user' && String(m.content).includes('set up a project')),
+    ).toBe(true);
     // the chosen option appears so the operator sees the user's pick on resume
     expect(msgs.some((m) => String(m.content).includes('leads'))).toBe(true);
   });
@@ -144,7 +144,11 @@ describe('chat adapter', () => {
       title: 'Untitled',
     });
     const sink = makeConversationSink(db, c.id, 'run-1');
-    await sink.toolStep({ tool: 'update_document', summary: 'document not found', status: 'error' });
+    await sink.toolStep({
+      tool: 'update_document',
+      summary: 'document not found',
+      status: 'error',
+    });
     const thread = await getThread(db, c.id);
     const row = thread.at(-1);
     expect(row?.kind).toBe('tool_step');

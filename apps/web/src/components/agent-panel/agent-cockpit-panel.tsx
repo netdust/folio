@@ -1,6 +1,6 @@
-import { useSyncExternalStore } from 'react';
 import { X } from 'lucide-react';
-import { agentPanelBus, type AgentPanelState } from '../../lib/agent-panel-bus.ts';
+import { useSyncExternalStore } from 'react';
+import { type AgentPanelState, agentPanelBus } from '../../lib/agent-panel-bus.ts';
 import { useRecentConversation } from '../../lib/api/conversations.ts';
 import { Icon } from '../ui/icon.tsx';
 import { CockpitChat } from './cockpit-chat.tsx';

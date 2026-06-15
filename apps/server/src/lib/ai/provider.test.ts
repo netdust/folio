@@ -72,8 +72,7 @@ describe('loadProvider rejection handling', () => {
   test('clears loading[name] on rejection so subsequent calls do not see the cached failure', async () => {
     // Save original state. We override the 'ollama' registry entry to drive
     // the rejection-cleanup path through real code, then restore.
-    const originalLoader = (): Promise<AIProvider> =>
-      import('./ollama.ts').then((m) => m.ollama);
+    const originalLoader = (): Promise<AIProvider> => import('./ollama.ts').then((m) => m.ollama);
     __INTERNAL_TEST_ONLY__.reset();
 
     // First call: import fails.
@@ -82,7 +81,9 @@ describe('loadProvider rejection handling', () => {
       failures += 1;
       throw new Error('simulated import failure');
     });
-    await expect(__INTERNAL_TEST_ONLY__.loadProvider('ollama')).rejects.toThrow('simulated import failure');
+    await expect(__INTERNAL_TEST_ONLY__.loadProvider('ollama')).rejects.toThrow(
+      'simulated import failure',
+    );
 
     // After the rejection settles, the loading table must be empty — otherwise
     // every subsequent caller would await the same poisoned rejection forever.

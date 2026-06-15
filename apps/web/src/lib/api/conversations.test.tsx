@@ -1,15 +1,15 @@
-import { describe, expect, it, test, vi, beforeEach, afterEach } from 'vitest';
-import { renderHook, waitFor, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
+import { afterEach, beforeEach, describe, expect, it, test, vi } from 'vitest';
 import {
+  type ConversationMessage,
   conversationsKeys,
   mergeMessages,
-  useConversation,
-  usePostMessage,
   useButtonClick,
+  useConversation,
   useCreateConversation,
-  type ConversationMessage,
+  usePostMessage,
 } from './conversations.ts';
 
 /**
@@ -112,18 +112,31 @@ describe('useConversation', () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () =>
-        new Response(
-          JSON.stringify({
-            data: {
-              id: 'c1',
-              title: 'Untitled',
-              activeRunId: null,
-              messages: [{ id: 'm1', conversationId: 'c1', seq: 1, role: 'user', kind: 'text', body: 'hi', payload: null, runId: null, createdAt: 1 }],
-            },
-          }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        ),
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              data: {
+                id: 'c1',
+                title: 'Untitled',
+                activeRunId: null,
+                messages: [
+                  {
+                    id: 'm1',
+                    conversationId: 'c1',
+                    seq: 1,
+                    role: 'user',
+                    kind: 'text',
+                    body: 'hi',
+                    payload: null,
+                    runId: null,
+                    createdAt: 1,
+                  },
+                ],
+              },
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          ),
       ),
     );
 
@@ -136,7 +149,17 @@ describe('useConversation', () => {
     act(() =>
       es.emit(
         'message',
-        JSON.stringify({ id: 'm2', conversationId: 'c1', seq: 2, role: 'operator', kind: 'text', body: 'done', payload: null, runId: 'r1', createdAt: 2 }),
+        JSON.stringify({
+          id: 'm2',
+          conversationId: 'c1',
+          seq: 2,
+          role: 'operator',
+          kind: 'text',
+          body: 'done',
+          payload: null,
+          runId: 'r1',
+          createdAt: 2,
+        }),
       ),
     );
     expect(result.current.messages).toHaveLength(2);

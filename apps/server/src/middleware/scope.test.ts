@@ -1,19 +1,19 @@
-import { test, expect } from 'bun:test';
+import { expect, test } from 'bun:test';
 import { Hono } from 'hono';
-import { makeTestApp } from '../test/harness.ts';
-import { registerErrorHandler } from '../lib/http.ts';
-import { requireUser, attachUser, type AuthContext } from './auth.ts';
-import { attachToken } from './bearer.ts';
 import { newApiToken } from '../lib/auth.ts';
+import { registerErrorHandler } from '../lib/http.ts';
+import { makeTestApp } from '../test/harness.ts';
+import { type AuthContext, attachUser, requireUser } from './auth.ts';
+import { attachToken } from './bearer.ts';
 import {
-  resolveWorkspace,
-  resolveProject,
-  resolveTable,
-  getWorkspace,
+  type ScopeContext,
   getProject,
   getRole,
   getTable,
-  type ScopeContext,
+  getWorkspace,
+  resolveProject,
+  resolveTable,
+  resolveWorkspace,
 } from './scope.ts';
 
 test('resolveWorkspace 404 on unknown slug', async () => {
@@ -215,9 +215,20 @@ test('resolveTable attaches table to context when slug exists in project', async
   const { seed } = await makeTestApp({ seedProjectDefaults: true });
   const app = new Hono<AuthContext & ScopeContext>();
   registerErrorHandler(app);
-  app.use('/:wslug/p/:pslug/t/:tslug/*', attachUser, requireUser, resolveWorkspace, resolveProject, resolveTable);
-  app.get('/:wslug/p/:pslug/t/:tslug', (c) => c.json({ tableName: getTable(c).name, tableSlug: getTable(c).slug }));
-  const res = await app.request('/acme/p/web/t/work-items', { headers: { Cookie: seed.sessionCookie } });
+  app.use(
+    '/:wslug/p/:pslug/t/:tslug/*',
+    attachUser,
+    requireUser,
+    resolveWorkspace,
+    resolveProject,
+    resolveTable,
+  );
+  app.get('/:wslug/p/:pslug/t/:tslug', (c) =>
+    c.json({ tableName: getTable(c).name, tableSlug: getTable(c).slug }),
+  );
+  const res = await app.request('/acme/p/web/t/work-items', {
+    headers: { Cookie: seed.sessionCookie },
+  });
   expect(res.status).toBe(200);
   expect(await res.json()).toEqual({ tableName: 'Work Items', tableSlug: 'work-items' });
 });
@@ -226,7 +237,14 @@ test('resolveTable 404 on unknown slug', async () => {
   const { seed } = await makeTestApp();
   const app = new Hono<AuthContext & ScopeContext>();
   registerErrorHandler(app);
-  app.use('/:wslug/p/:pslug/t/:tslug/*', attachUser, requireUser, resolveWorkspace, resolveProject, resolveTable);
+  app.use(
+    '/:wslug/p/:pslug/t/:tslug/*',
+    attachUser,
+    requireUser,
+    resolveWorkspace,
+    resolveProject,
+    resolveTable,
+  );
   app.get('/:wslug/p/:pslug/t/:tslug', (c) => c.json({ ok: true }));
   const res = await app.request('/acme/p/web/t/nope', { headers: { Cookie: seed.sessionCookie } });
   expect(res.status).toBe(404);

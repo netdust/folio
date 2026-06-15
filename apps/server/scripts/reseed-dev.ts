@@ -10,14 +10,14 @@
  * the ciphertext verbatim — valid because FOLIO_MASTER_KEY is unchanged.
  */
 import { Database } from 'bun:sqlite';
+import { existsSync, renameSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/bun-sqlite';
 import { migrate } from 'drizzle-orm/bun-sqlite/migrator';
-import { eq } from 'drizzle-orm';
-import { resolve } from 'node:path';
-import { existsSync, renameSync } from 'node:fs';
 import { nanoid } from 'nanoid';
 import * as schema from '../src/db/schema.ts';
-import { hashPassword, createSession } from '../src/lib/auth.ts';
+import { createSession, hashPassword } from '../src/lib/auth.ts';
 import { seedProjectDefaults } from '../src/lib/seed-project-defaults.ts';
 
 const DB_PATH = resolve(import.meta.dir, '../folio.db');
@@ -40,7 +40,7 @@ async function main() {
   // 2. Move the current folio.db aside (WAL too) so we migrate a fresh file.
   for (const suffix of ['', '-wal', '-shm']) {
     const p = DB_PATH + suffix;
-    if (existsSync(p)) renameSync(p, p + '.reseed-old-' + Date.now());
+    if (existsSync(p)) renameSync(p, `${p}.reseed-old-${Date.now()}`);
   }
 
   // 3. Fresh DB + migrate.
@@ -117,7 +117,7 @@ async function main() {
   console.log('\n=== RESEED COMPLETE ===');
   console.log('user:', userId, '(owner) stefan@netdust.be / password123');
   console.log('workspace: qa  project: demo  5 work items (task 1 = In Progress, rest Todo)');
-  console.log('SESSION_COOKIE folio_session=' + session.id);
+  console.log(`SESSION_COOKIE folio_session=${session.id}`);
   sqlite.close();
 }
 

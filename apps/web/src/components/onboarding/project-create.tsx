@@ -1,11 +1,11 @@
+import { ErrorCode, slugify } from '@folio/shared';
 import { useNavigate } from '@tanstack/react-router';
 import { useEffect, useState } from 'react';
-import { slugify, ErrorCode } from '@folio/shared';
-import { useCreateProject } from '../../lib/api/projects.ts';
-import { ApiError, apiErrorCode, formatApiError } from '../../lib/api/index.ts';
-import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetFooter } from '../ui/sheet.tsx';
-import { Button } from '../ui/button.tsx';
 import { toast } from 'sonner';
+import { ApiError, apiErrorCode, formatApiError } from '../../lib/api/index.ts';
+import { useCreateProject } from '../../lib/api/projects.ts';
+import { Button } from '../ui/button.tsx';
+import { Sheet, SheetContent, SheetFooter, SheetHeader, SheetTitle } from '../ui/sheet.tsx';
 
 interface Props {
   wslug: string;
@@ -72,7 +72,6 @@ export function ProjectCreate({ wslug, open, onOpenChange }: Props) {
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 required
-                autoFocus
               />
             </div>
             <div>

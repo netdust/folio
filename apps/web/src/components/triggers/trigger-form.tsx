@@ -1,8 +1,8 @@
-import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { KNOWN_EVENT_KINDS } from '@folio/shared';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useWorkspaceAgents } from '../../lib/api/workspace-documents.ts';
-import { CronInput } from './cron-input.tsx';
 import { cn } from '../ui/cn.ts';
+import { CronInput } from './cron-input.tsx';
 
 /**
  * Phase 2.6 sub-phase D6.
@@ -104,8 +104,7 @@ export function TriggerForm({ value, onChange, workspaceSlug, projectId }: Trigg
     );
   }, [agentRaw, agentIsCustomFrontmatter]);
 
-  const showAgentCustomInput =
-    agentSelectLocal === EVENT_OPTION_VALUE || agentIsCustomFrontmatter;
+  const showAgentCustomInput = agentSelectLocal === EVENT_OPTION_VALUE || agentIsCustomFrontmatter;
 
   // Local draft for the custom-agent text input so per-keystroke typing
   // composes correctly even when the parent's onChange is a pure spy in
@@ -124,12 +123,14 @@ export function TriggerForm({ value, onChange, workspaceSlug, projectId }: Trigg
   // Payload textarea: keep a local draft so transient invalid JSON doesn't
   // wipe the last known good payload. On parse-failure we set aria-invalid
   // and don't propagate payload through onChange.
-  const initialPayloadText = useMemo(() => {
-    const p = asRecord(fm.payload);
-    return p ? JSON.stringify(p, null, 2) : fm.payload == null ? '' : '';
-  }, // Only seed on mount + when payload identity changes from outside.
+  const initialPayloadText = useMemo(
+    () => {
+      const p = asRecord(fm.payload);
+      return p ? JSON.stringify(p, null, 2) : fm.payload == null ? '' : '';
+    }, // Only seed on mount + when payload identity changes from outside.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [fm.payload]);
+    [fm.payload],
+  );
 
   const [payloadText, setPayloadText] = useState(initialPayloadText);
   const [payloadValid, setPayloadValid] = useState(true);
@@ -146,8 +147,8 @@ export function TriggerForm({ value, onChange, workspaceSlug, projectId }: Trigg
 
   // event_filter rows — local state mirrors fm.event_filter; parent commits
   // happen via emitFrontmatter whenever rows change.
-  const [filterRows, setFilterRows] = useState<FilterRow[]>(
-    () => filterToRows(asRecord(fm.event_filter)),
+  const [filterRows, setFilterRows] = useState<FilterRow[]>(() =>
+    filterToRows(asRecord(fm.event_filter)),
   );
 
   const scheduleId = useId();
@@ -177,7 +178,9 @@ export function TriggerForm({ value, onChange, workspaceSlug, projectId }: Trigg
       emitFrontmatter({
         schedule: null,
         on_event:
-          typeof fm.on_event === 'string' && fm.on_event !== '' ? fm.on_event : KNOWN_EVENT_KINDS[0],
+          typeof fm.on_event === 'string' && fm.on_event !== ''
+            ? fm.on_event
+            : KNOWN_EVENT_KINDS[0],
       });
     }
   }
@@ -347,10 +350,12 @@ export function TriggerForm({ value, onChange, workspaceSlug, projectId }: Trigg
             <div className="font-mono text-[11px] text-fg-3">event filters</div>
             {filterRows.length === 0 ? (
               <p className="text-xs text-fg-3">
-                No filters — trigger fires on every <code className="font-mono">{asString(fm.on_event) || 'event'}</code>.
+                No filters — trigger fires on every{' '}
+                <code className="font-mono">{asString(fm.on_event) || 'event'}</code>.
               </p>
             ) : null}
             {filterRows.map((row, idx) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: positional form rows — the row data model + updateFilterRow(idx) callbacks are index-addressed by design, so index IS the stable identity
               <div key={idx} className="flex items-center gap-2">
                 <input
                   type="text"

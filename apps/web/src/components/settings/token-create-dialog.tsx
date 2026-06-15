@@ -1,14 +1,9 @@
-import { useState } from 'react';
 import { Check, Copy } from 'lucide-react';
+import { useState } from 'react';
 import { toast } from 'sonner';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogTitle,
-} from '../ui/dialog.tsx';
-import { Button } from '../ui/button.tsx';
 import { formatApiError } from '../../lib/api/index.ts';
+import { Button } from '../ui/button.tsx';
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from '../ui/dialog.tsx';
 
 export interface ScopePreset {
   label: string;
@@ -74,8 +69,7 @@ export function TokenCreateDialog({
   const expiryInvalid =
     expiryParsed !== null && (!Number.isInteger(expiryParsed) || expiryParsed <= 0);
 
-  const canSubmit =
-    name.trim().length > 0 && scopes.size > 0 && !isPending && !expiryInvalid;
+  const canSubmit = name.trim().length > 0 && scopes.size > 0 && !isPending && !expiryInvalid;
 
   function reset() {
     setName('');
@@ -194,9 +188,7 @@ export function TokenCreateDialog({
               </fieldset>
 
               <label className="block">
-                <span className="block text-xs font-medium text-fg-2">
-                  Expires in (days)
-                </span>
+                <span className="block text-xs font-medium text-fg-2">Expires in (days)</span>
                 <input
                   type="number"
                   min={1}
@@ -231,8 +223,8 @@ export function TokenCreateDialog({
           <>
             <DialogTitle>Token created</DialogTitle>
             <DialogDescription>
-              This is the only time you&apos;ll see this token. Copy it now and store it
-              somewhere safe.
+              This is the only time you&apos;ll see this token. Copy it now and store it somewhere
+              safe.
             </DialogDescription>
 
             <div className="mt-4 rounded-md border border-border-light bg-shell p-2">

@@ -1,8 +1,8 @@
-import { describe, expect, it, vi, afterEach } from 'vitest';
-import { renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { renderHook, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
-import { useMembers, membersKeys } from './members.ts';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { membersKeys, useMembers } from './members.ts';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -31,9 +31,7 @@ describe('useMembers', () => {
         return new Response(
           JSON.stringify({
             data: {
-              members: [
-                { id: 'u1', email: 'alice@test', name: 'Alice', role: 'owner' },
-              ],
+              members: [{ id: 'u1', email: 'alice@test', name: 'Alice', role: 'owner' }],
             },
           }),
           { status: 200, headers: { 'content-type': 'application/json' } },

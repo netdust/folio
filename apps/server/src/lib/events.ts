@@ -1,9 +1,9 @@
+import type { EventKind } from '@folio/shared';
 import { inArray, sql } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
-import type { EventKind } from '@folio/shared';
-import { events } from '../db/schema.ts';
 import type { DB } from '../db/client.ts';
-import { eventBus, type BusEvent } from './event-bus.ts';
+import { events } from '../db/schema.ts';
+import { type BusEvent, eventBus } from './event-bus.ts';
 
 // Phase 2.6 sub-phase D: EventKind moved to @folio/shared so the web UI can
 // import it (TriggerForm needs the same union). Re-exported here for source
@@ -193,7 +193,11 @@ export async function txWithEvents<T>(
           // throwing listener can't be allowed to suppress the original
           // `throw err` below.
           for (const listener of scrubListeners) {
-            try { listener(failure); } catch { /* listener swallowed */ }
+            try {
+              listener(failure);
+            } catch {
+              /* listener swallowed */
+            }
           }
         }
       }

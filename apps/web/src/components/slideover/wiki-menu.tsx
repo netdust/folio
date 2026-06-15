@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { cn } from '../ui/cn.ts';
 import type { DocumentSummary } from '../../lib/api/documents.ts';
+import { cn } from '../ui/cn.ts';
 
 interface Props {
   /** In-cache documents to pick from. No fetch — driven by the editor's prop. */
@@ -29,6 +29,7 @@ export function WikiMenu({ documents, query, rect, onSelect, onClose }: Props) {
   const items = useMemo(() => filterDocuments(documents, query), [documents, query]);
   const [active, setActive] = useState(0);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: resets active item on query change only; setActive is a stable setter
   useEffect(() => setActive(0), [query]);
 
   // Stable refs so the keydown handler attaches once.

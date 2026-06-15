@@ -1,27 +1,22 @@
+import { slugify } from '@folio/shared';
 import { zValidator } from '@hono/zod-validator';
 import { and, eq, inArray } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
-import { slugify } from '@folio/shared';
 import { db } from '../db/client.ts';
 import { documents, projects } from '../db/schema.ts';
-import { emitEvent, txWithEvents } from '../lib/events.ts';
-import { dryRunResult, isDryRun, isDryRunDelete } from '../lib/dry-run.ts';
-import { HTTPError, jsonOk } from '../lib/http.ts';
-import { requireScope } from '../middleware/bearer.ts';
 import { canSeeProject } from '../lib/access.ts';
 import { resolveAgentProjects } from '../lib/agent-projects.ts';
+import { dryRunResult, isDryRun, isDryRunDelete } from '../lib/dry-run.ts';
+import { emitEvent, txWithEvents } from '../lib/events.ts';
+import { HTTPError, jsonOk } from '../lib/http.ts';
 import { seedProjectDefaults } from '../lib/seed-project-defaults.ts';
 import { slugUniqueInProjects } from '../lib/slug-unique.ts';
-import { listProjects } from '../services/projects.ts';
 import { type AuthContext, getUser } from '../middleware/auth.ts';
-import {
-  type ScopeContext,
-  getProject,
-  getRole,
-  getWorkspace,
-} from '../middleware/scope.ts';
+import { requireScope } from '../middleware/bearer.ts';
+import { type ScopeContext, getProject, getRole, getWorkspace } from '../middleware/scope.ts';
+import { listProjects } from '../services/projects.ts';
 
 const projectsRoute = new Hono<AuthContext & ScopeContext>();
 
@@ -72,7 +67,10 @@ projectsRoute.post(
     }
 
     if (isDryRun(c.req.valid('json'))) {
-      return jsonOk(c, dryRunResult('create', { id, workspaceId: ws.id, slug, name, icon: icon ?? null }));
+      return jsonOk(
+        c,
+        dryRunResult('create', { id, workspaceId: ws.id, slug, name, icon: icon ?? null }),
+      );
     }
 
     await txWithEvents(db, async (tx) => {
@@ -119,7 +117,10 @@ projectItemRoute.patch(
       return jsonOk(c, dryRunResult('update', { ...p, ...patchFields, updatedAt: now }));
     }
     await txWithEvents(db, async (tx) => {
-      await tx.update(projects).set({ ...patchFields, updatedAt: now }).where(eq(projects.id, p.id));
+      await tx
+        .update(projects)
+        .set({ ...patchFields, updatedAt: now })
+        .where(eq(projects.id, p.id));
       await emitEvent(tx, {
         workspaceId: ws.id,
         projectId: p.id,
@@ -156,10 +157,7 @@ projectItemRoute.delete('/', requireScope('config:write'), async (c) => {
   // and every frontmatter scrub commit, or (b) neither does — no half-state.
   await txWithEvents(db, async (tx) => {
     const wsAgents = await tx.query.documents.findMany({
-      where: and(
-        eq(documents.workspaceId, ws.id),
-        inArray(documents.type, ['agent', 'trigger']),
-      ),
+      where: and(eq(documents.workspaceId, ws.id), inArray(documents.type, ['agent', 'trigger'])),
     });
     // BUG-018 — route through resolveAgentProjects for vocabulary
     // consistency with bearer / SSE / mention-parser. Behavior is the same:

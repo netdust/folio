@@ -1,9 +1,9 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
+  type SlashEditor,
+  type SlashTokenView,
   captureSlashTokenRange,
   replaceCapturedRange,
-  type SlashTokenView,
-  type SlashEditor,
 } from './slash-capture.ts';
 
 /**

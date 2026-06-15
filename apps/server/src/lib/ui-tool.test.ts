@@ -4,7 +4,12 @@ import { choiceCardSchema, linkPanelSchema } from './ui-tool.ts';
 describe('ui tool schemas', () => {
   test('link_panel accepts a document/work_item target WITH a pslug', () => {
     const r = linkPanelSchema.safeParse({
-      target: { entityType: 'work_item', entityId: 'untitled-4', wslug: 'netdust', pslug: 'client-website' },
+      target: {
+        entityType: 'work_item',
+        entityId: 'untitled-4',
+        wslug: 'netdust',
+        pslug: 'client-website',
+      },
       title: 'Untitled 4',
     });
     expect(r.success).toBe(true);

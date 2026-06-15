@@ -6,14 +6,15 @@
  * cover the service contract that Task 12b's MCP server will rely on.
  */
 
-import { test, expect } from 'bun:test';
+import { expect, test } from 'bun:test';
 import { and, desc, eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
-import { makeTestApp } from '../test/harness.ts';
-import { seedProjectDefaults } from '../lib/seed-project-defaults.ts';
-import { apiTokens, documents, events, projects, tables } from '../db/schema.ts';
+import { events, apiTokens, documents, projects, tables } from '../db/schema.ts';
 import type { Document } from '../db/schema.ts';
+import { eventBus } from '../lib/event-bus.ts';
 import { HTTPError } from '../lib/http.ts';
+import { seedProjectDefaults } from '../lib/seed-project-defaults.ts';
+import { makeTestApp } from '../test/harness.ts';
 import {
   createDocument,
   deleteDocument,
@@ -22,7 +23,6 @@ import {
   listDocuments,
   updateDocument,
 } from './documents.ts';
-import { eventBus } from '../lib/event-bus.ts';
 
 async function getWorkItemsTable(
   db: Awaited<ReturnType<typeof makeTestApp>>['db'],
@@ -137,10 +137,7 @@ test('updateDocument with an agent eventActor emits an agent-actored event (auto
   });
 
   const latest = await db.query.events.findFirst({
-    where: and(
-      eq(events.documentId, document.id),
-      eq(events.kind, 'document.updated'),
-    ),
+    where: and(eq(events.documentId, document.id), eq(events.kind, 'document.updated')),
     orderBy: [desc(events.seq)],
   });
   expect(latest).toBeTruthy();
@@ -175,10 +172,7 @@ test('createDocument with an agent eventActor emits an agent-actored event (auto
   });
 
   const latest = await db.query.events.findFirst({
-    where: and(
-      eq(events.documentId, document.id),
-      eq(events.kind, 'document.created'),
-    ),
+    where: and(eq(events.documentId, document.id), eq(events.kind, 'document.created')),
     orderBy: [desc(events.seq)],
   });
   expect(latest).toBeTruthy();
@@ -218,10 +212,7 @@ test('deleteDocument with an agent eventActor emits an agent-actored event (auto
   });
 
   const latest = await db.query.events.findFirst({
-    where: and(
-      eq(events.documentId, document.id),
-      eq(events.kind, 'document.deleted'),
-    ),
+    where: and(eq(events.documentId, document.id), eq(events.kind, 'document.deleted')),
     orderBy: [desc(events.seq)],
   });
   expect(latest).toBeTruthy();
@@ -233,24 +224,37 @@ test('retitling an UNTITLED placeholder DOES re-slug (first real name wins, once
   const { db, seed } = await makeTestApp();
   const table = await getWorkItemsTable(db, seed.project.id);
   const { document } = await createDocument({
-    workspace: seed.workspace, project: seed.project, table, actor: seed.user, eventActor: seed.user.id, token: null,
+    workspace: seed.workspace,
+    project: seed.project,
+    table,
+    actor: seed.user,
+    eventActor: seed.user.id,
+    token: null,
     input: { type: 'work_item', title: 'Untitled', body: '', frontmatter: {}, status: null },
   });
   expect(document.slug).toBe('untitled');
 
   // First real title: placeholder slug adopts it.
   const named = await updateDocument({
-    workspace: seed.workspace, project: seed.project, fallbackTable: table, actor: seed.user,
+    workspace: seed.workspace,
+    project: seed.project,
+    fallbackTable: table,
+    actor: seed.user,
     eventActor: seed.user.id,
-    existing: document, patch: { title: 'Onboard new client' },
+    existing: document,
+    patch: { title: 'Onboard new client' },
   });
   expect(named.slug).toBe('onboard-new-client');
 
   // Second rename: now it's a real slug → immutable, does NOT change again.
   const renamed = await updateDocument({
-    workspace: seed.workspace, project: seed.project, fallbackTable: table, actor: seed.user,
+    workspace: seed.workspace,
+    project: seed.project,
+    fallbackTable: table,
+    actor: seed.user,
     eventActor: seed.user.id,
-    existing: named, patch: { title: 'Onboard the new client properly' },
+    existing: named,
+    patch: { title: 'Onboard the new client properly' },
   });
   expect(renamed.slug).toBe('onboard-new-client');
 });
@@ -260,19 +264,33 @@ test('retitling an untitled-N collision placeholder also re-slugs', async () => 
   const table = await getWorkItemsTable(db, seed.project.id);
   // First Untitled → 'untitled'; second → 'untitled-2' (collision form is still a placeholder).
   await createDocument({
-    workspace: seed.workspace, project: seed.project, table, actor: seed.user, eventActor: seed.user.id, token: null,
+    workspace: seed.workspace,
+    project: seed.project,
+    table,
+    actor: seed.user,
+    eventActor: seed.user.id,
+    token: null,
     input: { type: 'work_item', title: 'Untitled', body: '', frontmatter: {}, status: null },
   });
   const { document: second } = await createDocument({
-    workspace: seed.workspace, project: seed.project, table, actor: seed.user, eventActor: seed.user.id, token: null,
+    workspace: seed.workspace,
+    project: seed.project,
+    table,
+    actor: seed.user,
+    eventActor: seed.user.id,
+    token: null,
     input: { type: 'work_item', title: 'Untitled', body: '', frontmatter: {}, status: null },
   });
   expect(second.slug).toBe('untitled-2');
 
   const named = await updateDocument({
-    workspace: seed.workspace, project: seed.project, fallbackTable: table, actor: seed.user,
+    workspace: seed.workspace,
+    project: seed.project,
+    fallbackTable: table,
+    actor: seed.user,
     eventActor: seed.user.id,
-    existing: second, patch: { title: 'Real Title' },
+    existing: second,
+    patch: { title: 'Real Title' },
   });
   expect(named.slug).toBe('real-title');
 });
@@ -307,7 +325,7 @@ test('createDocument (workspace-scoped) mints + persists an agent token bound to
   });
   expect(agentTokenPlaintext).toBeString();
   expect(agentTokenPlaintext!.length).toBeGreaterThan(20);
-  const apiTokenId = (document.frontmatter as Record<string, unknown>)['api_token_id'];
+  const apiTokenId = (document.frontmatter as Record<string, unknown>).api_token_id;
   expect(typeof apiTokenId).toBe('string');
   const row = await db.query.apiTokens.findFirst({
     where: eq(apiTokens.id, apiTokenId as string),
@@ -340,9 +358,7 @@ test('deleteDocument (workspace-scoped) on agent revokes its api token via casca
       status: null,
     },
   });
-  const apiTokenId = (document.frontmatter as Record<string, unknown>)[
-    'api_token_id'
-  ] as string;
+  const apiTokenId = (document.frontmatter as Record<string, unknown>).api_token_id as string;
   const before = await db.query.apiTokens.findFirst({
     where: eq(apiTokens.id, apiTokenId),
   });
@@ -498,9 +514,9 @@ test('updateDocument allows full patch on non-builtin trigger', async () => {
     existing: trig,
     patch: { frontmatter: { event_filter: { kind: 'foo' } } },
   });
-  expect(
-    (updated.frontmatter as Record<string, unknown>).event_filter,
-  ).toMatchObject({ kind: 'foo' });
+  expect((updated.frontmatter as Record<string, unknown>).event_filter).toMatchObject({
+    kind: 'foo',
+  });
 });
 
 // BUG-016 — trigger PATCH validates the PATCH PAYLOAD against the partial
@@ -703,7 +719,12 @@ test('F8: deleteDocument(work_item) cascades to remove its comment children', as
       status: null,
       body: `comment body ${i}`,
       parentId: parent.document.id,
-      frontmatter: { author: `user:${seed.user.id}`, kind: 'comment', visibility: 'normal', mentions: [] },
+      frontmatter: {
+        author: `user:${seed.user.id}`,
+        kind: 'comment',
+        visibility: 'normal',
+        mentions: [],
+      },
       createdBy: seed.user.id,
       updatedBy: seed.user.id,
     });
@@ -750,40 +771,75 @@ test('H8: deleteDocument(page) cascades GRANDCHILDREN recursively (3 levels deep
 
   // Build A → B → C
   const a = await createDocument({
-    workspace: seed.workspace, project: seed.project, table, actor: seed.user, eventActor: seed.user.id, token: null,
+    workspace: seed.workspace,
+    project: seed.project,
+    table,
+    actor: seed.user,
+    eventActor: seed.user.id,
+    token: null,
     isTableScopedUrl: false,
     input: { type: 'page', title: 'A', body: '', frontmatter: {}, status: null },
   });
   const bId = nanoid();
   await db.insert(documents).values({
     id: bId,
-    workspaceId: seed.workspace.id, projectId: seed.project.id, tableId: null,
-    type: 'page', slug: `b-${bId}`, title: 'B', status: null, body: '',
-    parentId: a.document.id, frontmatter: {},
-    createdBy: seed.user.id, updatedBy: seed.user.id,
+    workspaceId: seed.workspace.id,
+    projectId: seed.project.id,
+    tableId: null,
+    type: 'page',
+    slug: `b-${bId}`,
+    title: 'B',
+    status: null,
+    body: '',
+    parentId: a.document.id,
+    frontmatter: {},
+    createdBy: seed.user.id,
+    updatedBy: seed.user.id,
   });
   const cId = nanoid();
   await db.insert(documents).values({
     id: cId,
-    workspaceId: seed.workspace.id, projectId: seed.project.id, tableId: null,
-    type: 'page', slug: `c-${cId}`, title: 'C', status: null, body: '',
-    parentId: bId, frontmatter: {},
-    createdBy: seed.user.id, updatedBy: seed.user.id,
+    workspaceId: seed.workspace.id,
+    projectId: seed.project.id,
+    tableId: null,
+    type: 'page',
+    slug: `c-${cId}`,
+    title: 'C',
+    status: null,
+    body: '',
+    parentId: bId,
+    frontmatter: {},
+    createdBy: seed.user.id,
+    updatedBy: seed.user.id,
   });
   // Also add a comment grandchild of B (mixed types).
   const cmtId = nanoid();
   await db.insert(documents).values({
     id: cmtId,
-    workspaceId: seed.workspace.id, projectId: seed.project.id, tableId: null,
-    type: 'comment', slug: `cmt-${cmtId}`, title: '', status: null, body: 'on B',
+    workspaceId: seed.workspace.id,
+    projectId: seed.project.id,
+    tableId: null,
+    type: 'comment',
+    slug: `cmt-${cmtId}`,
+    title: '',
+    status: null,
+    body: 'on B',
     parentId: bId,
-    frontmatter: { author: `user:${seed.user.id}`, kind: 'comment', visibility: 'normal', mentions: [] },
-    createdBy: seed.user.id, updatedBy: seed.user.id,
+    frontmatter: {
+      author: `user:${seed.user.id}`,
+      kind: 'comment',
+      visibility: 'normal',
+      mentions: [],
+    },
+    createdBy: seed.user.id,
+    updatedBy: seed.user.id,
   });
 
   // Delete A. Recursive cascade should remove B, C, and the comment.
   await deleteDocument({
-    workspace: seed.workspace, project: seed.project, actor: seed.user,
+    workspace: seed.workspace,
+    project: seed.project,
+    actor: seed.user,
     eventActor: seed.user.id,
     existing: a.document,
   });
@@ -800,7 +856,12 @@ test('G8: deleteDocument(page) cascades nested page children too', async () => {
 
   // Parent page.
   const parent = await createDocument({
-    workspace: seed.workspace, project: seed.project, table, actor: seed.user, eventActor: seed.user.id, token: null,
+    workspace: seed.workspace,
+    project: seed.project,
+    table,
+    actor: seed.user,
+    eventActor: seed.user.id,
+    token: null,
     isTableScopedUrl: false,
     input: { type: 'page', title: 'Parent Page', body: '', frontmatter: {}, status: null },
   });
@@ -824,13 +885,17 @@ test('G8: deleteDocument(page) cascades nested page children too', async () => {
   });
 
   await deleteDocument({
-    workspace: seed.workspace, project: seed.project, actor: seed.user,
+    workspace: seed.workspace,
+    project: seed.project,
+    actor: seed.user,
     eventActor: seed.user.id,
     existing: parent.document,
   });
 
   // Both parent and child gone.
-  const parentGone = await db.query.documents.findFirst({ where: eq(documents.id, parent.document.id) });
+  const parentGone = await db.query.documents.findFirst({
+    where: eq(documents.id, parent.document.id),
+  });
   expect(parentGone).toBeUndefined();
   const childGone = await db.query.documents.findFirst({ where: eq(documents.id, childId) });
   expect(childGone).toBeUndefined();
@@ -852,7 +917,12 @@ test('BUG-010: cascade emits per-descendant events (comment.deleted + document.d
   const otherAuthor = 'user:u-other';
 
   const parent = await createDocument({
-    workspace: seed.workspace, project: seed.project, table, actor: seed.user, eventActor: seed.user.id, token: null,
+    workspace: seed.workspace,
+    project: seed.project,
+    table,
+    actor: seed.user,
+    eventActor: seed.user.id,
+    token: null,
     isTableScopedUrl: false,
     input: { type: 'work_item', title: 'Parent', body: '', frontmatter: {}, status: null },
   });
@@ -861,37 +931,76 @@ test('BUG-010: cascade emits per-descendant events (comment.deleted + document.d
   const cmt1Id = nanoid();
   await db.insert(documents).values({
     id: cmt1Id,
-    workspaceId: seed.workspace.id, projectId: seed.project.id, tableId: null,
-    type: 'comment', slug: `c1-${cmt1Id}`, title: '', status: null, body: 'first',
+    workspaceId: seed.workspace.id,
+    projectId: seed.project.id,
+    tableId: null,
+    type: 'comment',
+    slug: `c1-${cmt1Id}`,
+    title: '',
+    status: null,
+    body: 'first',
     parentId: parent.document.id,
-    frontmatter: { author: `user:${seed.user.id}`, kind: 'comment', visibility: 'normal', mentions: [] },
-    createdBy: seed.user.id, updatedBy: seed.user.id,
+    frontmatter: {
+      author: `user:${seed.user.id}`,
+      kind: 'comment',
+      visibility: 'normal',
+      mentions: [],
+    },
+    createdBy: seed.user.id,
+    updatedBy: seed.user.id,
   });
   const cmt2Id = nanoid();
   await db.insert(documents).values({
     id: cmt2Id,
-    workspaceId: seed.workspace.id, projectId: seed.project.id, tableId: null,
-    type: 'comment', slug: `c2-${cmt2Id}`, title: '', status: null, body: 'second',
+    workspaceId: seed.workspace.id,
+    projectId: seed.project.id,
+    tableId: null,
+    type: 'comment',
+    slug: `c2-${cmt2Id}`,
+    title: '',
+    status: null,
+    body: 'second',
     parentId: parent.document.id,
     frontmatter: { author: otherAuthor, kind: 'comment', visibility: 'normal', mentions: [] },
-    createdBy: seed.user.id, updatedBy: seed.user.id,
+    createdBy: seed.user.id,
+    updatedBy: seed.user.id,
   });
   const nestedPageId = nanoid();
   await db.insert(documents).values({
     id: nestedPageId,
-    workspaceId: seed.workspace.id, projectId: seed.project.id, tableId: null,
-    type: 'page', slug: `p-${nestedPageId}`, title: 'Nested', status: null, body: '',
-    parentId: parent.document.id, frontmatter: {},
-    createdBy: seed.user.id, updatedBy: seed.user.id,
+    workspaceId: seed.workspace.id,
+    projectId: seed.project.id,
+    tableId: null,
+    type: 'page',
+    slug: `p-${nestedPageId}`,
+    title: 'Nested',
+    status: null,
+    body: '',
+    parentId: parent.document.id,
+    frontmatter: {},
+    createdBy: seed.user.id,
+    updatedBy: seed.user.id,
   });
   const nestedCmtId = nanoid();
   await db.insert(documents).values({
     id: nestedCmtId,
-    workspaceId: seed.workspace.id, projectId: seed.project.id, tableId: null,
-    type: 'comment', slug: `nc-${nestedCmtId}`, title: '', status: null, body: 'nested cmt',
+    workspaceId: seed.workspace.id,
+    projectId: seed.project.id,
+    tableId: null,
+    type: 'comment',
+    slug: `nc-${nestedCmtId}`,
+    title: '',
+    status: null,
+    body: 'nested cmt',
     parentId: nestedPageId,
-    frontmatter: { author: `user:${seed.user.id}`, kind: 'comment', visibility: 'normal', mentions: [] },
-    createdBy: seed.user.id, updatedBy: seed.user.id,
+    frontmatter: {
+      author: `user:${seed.user.id}`,
+      kind: 'comment',
+      visibility: 'normal',
+      mentions: [],
+    },
+    createdBy: seed.user.id,
+    updatedBy: seed.user.id,
   });
 
   // Subscribe to the bus and capture every event in the workspace.
@@ -902,7 +1011,9 @@ test('BUG-010: cascade emits per-descendant events (comment.deleted + document.d
   });
 
   await deleteDocument({
-    workspace: seed.workspace, project: seed.project, actor: seed.user,
+    workspace: seed.workspace,
+    project: seed.project,
+    actor: seed.user,
     eventActor: seed.user.id,
     existing: parent.document,
   });
@@ -939,12 +1050,22 @@ test('F8: deleting a non-parent doc does not collateral-delete unrelated comment
 
   // Two unrelated parents, each with its own comment.
   const parentA = await createDocument({
-    workspace: seed.workspace, project: seed.project, table, actor: seed.user, eventActor: seed.user.id, token: null,
+    workspace: seed.workspace,
+    project: seed.project,
+    table,
+    actor: seed.user,
+    eventActor: seed.user.id,
+    token: null,
     isTableScopedUrl: false,
     input: { type: 'work_item', title: 'A', body: '', frontmatter: {}, status: null },
   });
   const parentB = await createDocument({
-    workspace: seed.workspace, project: seed.project, table, actor: seed.user, eventActor: seed.user.id, token: null,
+    workspace: seed.workspace,
+    project: seed.project,
+    table,
+    actor: seed.user,
+    eventActor: seed.user.id,
+    token: null,
     isTableScopedUrl: false,
     input: { type: 'work_item', title: 'B', body: '', frontmatter: {}, status: null },
   });
@@ -960,14 +1081,21 @@ test('F8: deleting a non-parent doc does not collateral-delete unrelated comment
     status: null,
     body: 'belongs to B',
     parentId: parentB.document.id,
-    frontmatter: { author: `user:${seed.user.id}`, kind: 'comment', visibility: 'normal', mentions: [] },
+    frontmatter: {
+      author: `user:${seed.user.id}`,
+      kind: 'comment',
+      visibility: 'normal',
+      mentions: [],
+    },
     createdBy: seed.user.id,
     updatedBy: seed.user.id,
   });
 
   // Delete A. B's comment must survive.
   await deleteDocument({
-    workspace: seed.workspace, project: seed.project, actor: seed.user,
+    workspace: seed.workspace,
+    project: seed.project,
+    actor: seed.user,
     eventActor: seed.user.id,
     existing: parentA.document,
   });
@@ -981,17 +1109,29 @@ test('F8: deleting a non-parent doc does not collateral-delete unrelated comment
 test("PATCH agent with model: '' clears the key (does not persist empty string)", async () => {
   const { seed } = await makeTestApp();
   const { document } = await createDocument({
-    workspace: seed.workspace, project: null, table: null, actor: seed.user, eventActor: seed.user.id, token: null,
+    workspace: seed.workspace,
+    project: null,
+    table: null,
+    actor: seed.user,
+    eventActor: seed.user.id,
+    token: null,
     input: {
-      type: 'agent', title: 'EmptyModel', body: '', status: null,
+      type: 'agent',
+      title: 'EmptyModel',
+      body: '',
+      status: null,
       frontmatter: {
-        model: 'claude-sonnet-4-6', provider: 'anthropic',
+        model: 'claude-sonnet-4-6',
+        provider: 'anthropic',
         tools: ['list_documents'],
       },
     },
   });
   const updated = await updateDocument({
-    workspace: seed.workspace, project: null, fallbackTable: null, actor: seed.user,
+    workspace: seed.workspace,
+    project: null,
+    fallbackTable: null,
+    actor: seed.user,
     eventActor: seed.user.id,
     existing: document,
     // Switch to the modelless claude-code provider AND clear the model together,
@@ -1010,18 +1150,30 @@ test("PATCH agent with model: '' clears the key (does not persist empty string)"
 test('FIX#1: PATCH clearing model on an API-provider agent rejects with INVALID_PATCH', async () => {
   const { seed } = await makeTestApp();
   const { document } = await createDocument({
-    workspace: seed.workspace, project: null, table: null, actor: seed.user, eventActor: seed.user.id, token: null,
+    workspace: seed.workspace,
+    project: null,
+    table: null,
+    actor: seed.user,
+    eventActor: seed.user.id,
+    token: null,
     input: {
-      type: 'agent', title: 'ApiAgent', body: '', status: null,
+      type: 'agent',
+      title: 'ApiAgent',
+      body: '',
+      status: null,
       frontmatter: {
-        model: 'claude-sonnet-4-6', provider: 'anthropic',
+        model: 'claude-sonnet-4-6',
+        provider: 'anthropic',
         tools: ['list_documents'],
       },
     },
   });
   await expect(
     updateDocument({
-      workspace: seed.workspace, project: null, fallbackTable: null, actor: seed.user,
+      workspace: seed.workspace,
+      project: null,
+      fallbackTable: null,
+      actor: seed.user,
       eventActor: seed.user.id,
       existing: document,
       patch: { frontmatter: { model: null } },
@@ -1032,9 +1184,17 @@ test('FIX#1: PATCH clearing model on an API-provider agent rejects with INVALID_
 test('FIX#1: PATCH clearing model on a claude-code agent succeeds (no model required)', async () => {
   const { seed } = await makeTestApp();
   const { document } = await createDocument({
-    workspace: seed.workspace, project: null, table: null, actor: seed.user, eventActor: seed.user.id, token: null,
+    workspace: seed.workspace,
+    project: null,
+    table: null,
+    actor: seed.user,
+    eventActor: seed.user.id,
+    token: null,
     input: {
-      type: 'agent', title: 'CcAgent', body: '', status: null,
+      type: 'agent',
+      title: 'CcAgent',
+      body: '',
+      status: null,
       frontmatter: {
         provider: 'claude-code',
         tools: ['list_documents'],
@@ -1042,7 +1202,10 @@ test('FIX#1: PATCH clearing model on a claude-code agent succeeds (no model requ
     },
   });
   const updated = await updateDocument({
-    workspace: seed.workspace, project: null, fallbackTable: null, actor: seed.user,
+    workspace: seed.workspace,
+    project: null,
+    fallbackTable: null,
+    actor: seed.user,
     eventActor: seed.user.id,
     existing: document,
     patch: { frontmatter: { model: null } },
@@ -1080,7 +1243,10 @@ test('FIX#3: a placeholder-SHAPED slug with a real (non-seed) title does NOT re-
   }))! as Document;
 
   const updated = await updateDocument({
-    workspace: seed.workspace, project: seed.project, fallbackTable: table, actor: seed.user,
+    workspace: seed.workspace,
+    project: seed.project,
+    fallbackTable: table,
+    actor: seed.user,
     eventActor: seed.user.id,
     existing,
     patch: { title: 'Whatever' },

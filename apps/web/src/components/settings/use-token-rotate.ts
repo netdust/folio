@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { toast } from 'sonner';
-import type { ApiToken } from '../../lib/api/tokens.ts';
 import { formatApiError } from '../../lib/api/index.ts';
+import type { ApiToken } from '../../lib/api/tokens.ts';
 
 /** The mint mutation a tab passes in — returns the once-only plaintext token. */
 interface CreateMutation {

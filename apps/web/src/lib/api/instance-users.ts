@@ -61,10 +61,9 @@ export function useSetUserRole() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (vars: { userId: string; role: 'owner' | 'admin' | 'member' }) =>
-      client.patch<{ id: string; role: string }>(
-        `/api/v1/instance/users/${vars.userId}/role`,
-        { role: vars.role },
-      ),
+      client.patch<{ id: string; role: string }>(`/api/v1/instance/users/${vars.userId}/role`, {
+        role: vars.role,
+      }),
     onSuccess: () => qc.invalidateQueries({ queryKey: instanceUsersKeys.all }),
   });
 }

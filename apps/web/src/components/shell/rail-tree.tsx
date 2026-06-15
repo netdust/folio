@@ -1,17 +1,17 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import { ChevronRight, MoreHorizontal, Plus } from 'lucide-react';
 import {
   DndContext,
+  type DragEndEvent,
   PointerSensor,
   closestCenter,
   useSensor,
   useSensors,
-  type DragEndEvent,
 } from '@dnd-kit/core';
 import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { Icon } from '../ui/icon.tsx';
+import { ChevronRight, MoreHorizontal, Plus } from 'lucide-react';
+import { type KeyboardEvent, useEffect, useRef, useState } from 'react';
 import { cn } from '../ui/cn.ts';
+import { Icon } from '../ui/icon.tsx';
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
 import type { NavItem, RowMenuItem } from './rail.tsx';
 
@@ -67,7 +67,10 @@ export function RailTree({
   return list;
 }
 
-function RailDndRoot({ children, onReorder }: { children: React.ReactNode; onReorder?: ReorderFn }) {
+function RailDndRoot({
+  children,
+  onReorder,
+}: { children: React.ReactNode; onReorder?: ReorderFn }) {
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
   const onDragEnd = (e: DragEndEvent) => {
     const active = String(e.active.id);
@@ -82,7 +85,11 @@ function RailDndRoot({ children, onReorder }: { children: React.ReactNode; onReo
   );
 }
 
-function RailTreeNode({ item, depth, onReorder }: { item: NavItem; depth: number; onReorder?: ReorderFn }) {
+function RailTreeNode({
+  item,
+  depth,
+  onReorder,
+}: { item: NavItem; depth: number; onReorder?: ReorderFn }) {
   const hasChildren = !!item.children && item.children.length > 0;
   // V3 (views UX shake-out): default-open projects (depth 0) AND table nodes, so a
   // table's saved VIEWS are visible by default. Previously only depth-0 auto-opened,
@@ -141,20 +148,18 @@ function RailTreeNode({ item, depth, onReorder }: { item: NavItem; depth: number
             className="grid h-4 w-4 shrink-0 place-items-center rounded text-fg-3 hover:text-fg-2"
           >
             {item.lucideIcon ? (
-              <Icon
-                icon={item.lucideIcon}
-                size={14}
-                className="text-fg-3 group-hover/row:hidden"
-              />
+              <Icon icon={item.lucideIcon} size={14} className="text-fg-3 group-hover/row:hidden" />
             ) : item.icon ? (
-              <span className="inline-grid h-[14px] w-[14px] place-items-center text-fg-3 group-hover/row:hidden">{item.icon}</span>
+              <span className="inline-grid h-[14px] w-[14px] place-items-center text-fg-3 group-hover/row:hidden">
+                {item.icon}
+              </span>
             ) : null}
             <Icon
               icon={ChevronRight}
               size={14}
               className={cn(
                 'transition-transform duration-fast',
-                (item.lucideIcon || item.icon) ? 'hidden group-hover/row:inline-block' : '',
+                item.lucideIcon || item.icon ? 'hidden group-hover/row:inline-block' : '',
                 expanded ? 'rotate-90' : '',
               )}
             />
@@ -162,13 +167,22 @@ function RailTreeNode({ item, depth, onReorder }: { item: NavItem; depth: number
         ) : item.lucideIcon ? (
           <Icon icon={item.lucideIcon} size={14} className="text-fg-3 shrink-0" />
         ) : item.icon ? (
-          <span className="inline-grid h-[14px] w-[14px] place-items-center text-fg-3 shrink-0">{item.icon}</span>
+          <span className="inline-grid h-[14px] w-[14px] place-items-center text-fg-3 shrink-0">
+            {item.icon}
+          </span>
         ) : (
           <span className="inline-block h-4 w-4 shrink-0" />
         )}
 
         {renaming && item.onRename ? (
-          <RenameInput initial={item.label} onCommit={(next) => { item.onRename!(next); setRenaming(false); }} onCancel={() => setRenaming(false)} />
+          <RenameInput
+            initial={item.label}
+            onCommit={(next) => {
+              item.onRename!(next);
+              setRenaming(false);
+            }}
+            onCancel={() => setRenaming(false)}
+          />
         ) : (
           <button
             type="button"
@@ -200,7 +214,10 @@ function RailTreeNode({ item, depth, onReorder }: { item: NavItem; depth: number
                   aria-label={item.plusLabel ?? 'Create'}
                   title={item.plusLabel ?? 'Create'}
                   data-testid="rail-tree-plus"
-                  onClick={(e) => { e.stopPropagation(); item.onPlus!(); }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    item.onPlus!();
+                  }}
                   className="grid h-4 w-4 place-items-center rounded text-fg-2 hover:bg-card hover:text-fg"
                 >
                   <Icon icon={Plus} size={14} />
@@ -211,12 +228,18 @@ function RailTreeNode({ item, depth, onReorder }: { item: NavItem; depth: number
         })()}
       </div>
 
-      {hasChildren && expanded ? <RailTree items={item.children ?? []} depth={depth + 1} onReorder={onReorder} /> : null}
+      {hasChildren && expanded ? (
+        <RailTree items={item.children ?? []} depth={depth + 1} onReorder={onReorder} />
+      ) : null}
     </li>
   );
 }
 
-function RenameInput({ initial, onCommit, onCancel }: { initial: string; onCommit: (v: string) => void; onCancel: () => void }) {
+function RenameInput({
+  initial,
+  onCommit,
+  onCancel,
+}: { initial: string; onCommit: (v: string) => void; onCancel: () => void }) {
   const [value, setValue] = useState(initial);
   const ref = useRef<HTMLInputElement>(null);
 
@@ -235,8 +258,14 @@ function RenameInput({ initial, onCommit, onCancel }: { initial: string; onCommi
   };
 
   const onKey = (e: KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') { e.preventDefault(); commit(); }
-    if (e.key === 'Escape') { e.preventDefault(); onCancel(); }
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      commit();
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      onCancel();
+    }
   };
 
   return (
@@ -274,7 +303,10 @@ function RowMenu({ items }: { items: RowMenuItem[] }) {
               key={it.label}
               type="button"
               role="menuitem"
-              onClick={() => { setOpen(false); it.onSelect(); }}
+              onClick={() => {
+                setOpen(false);
+                it.onSelect();
+              }}
               className={cn(
                 'px-3 py-1.5 text-left text-sm transition-colors duration-fast hover:bg-card',
                 it.destructive ? 'text-danger' : 'text-fg-2',

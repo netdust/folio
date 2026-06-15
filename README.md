@@ -25,7 +25,6 @@ bun install
 # 2. Configure
 cp .env.example .env
 # Generate secrets:
-openssl rand -hex 32   # → paste into SESSION_SECRET
 openssl rand -hex 32   # → paste into FOLIO_MASTER_KEY
 
 # 3. Initialise the database
@@ -34,9 +33,9 @@ bun run db:generate
 bun run db:migrate
 cd ../..
 
-# 4. Run dev
-bun run --filter @folio/server dev   # API on :3000
-bun run --filter @folio/web dev      # UI on :5173
+# 4. Run dev (two processes; the web dev server proxies /api to the server)
+bun run --filter @folio/server dev   # API on :3001
+bun run --filter @folio/web dev      # UI on :5173 (proxies /api → :3001)
 ```
 
 Visit **http://localhost:5173** and register. With no SMTP configured, magic links print to the server console — copy-paste them.
@@ -107,7 +106,7 @@ folio/
 │   └── shared/      Cross-cutting types (frontmatter field-type inference).
 ├── docs/            FOLIO-BRIEFING.md, PHASES.md — full planning docs.
 ├── CLAUDE.md        Operating manual for Claude Code sessions.
-├── Dockerfile       Multi-stage → ~50MB single-binary image.
+├── Dockerfile       Multi-stage → single-binary image.
 └── docker-compose.yml
 ```
 

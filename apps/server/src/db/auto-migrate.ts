@@ -1,5 +1,5 @@
-import { migrate } from 'drizzle-orm/bun-sqlite/migrator';
 import path from 'node:path';
+import { migrate } from 'drizzle-orm/bun-sqlite/migrator';
 import type { DB } from './client.ts';
 
 // Why: dev DBs routinely fall behind on migrations when pulling a branch.

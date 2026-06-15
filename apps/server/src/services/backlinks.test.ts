@@ -7,12 +7,12 @@
  * top-level relation string OR as an element of a multi-relation array.
  */
 
-import { test, expect } from 'bun:test';
+import { expect, test } from 'bun:test';
 import { and, eq } from 'drizzle-orm';
-import { makeTestApp } from '../test/harness.ts';
 import { tables } from '../db/schema.ts';
-import { createDocument } from './documents.ts';
+import { makeTestApp } from '../test/harness.ts';
 import { findBacklinks } from './backlinks.ts';
+import { createDocument } from './documents.ts';
 
 async function getWorkItemsTable(
   db: Awaited<ReturnType<typeof makeTestApp>>['db'],

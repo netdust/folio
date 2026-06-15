@@ -4,7 +4,9 @@ import { expect, test, vi } from 'vitest';
 
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => vi.fn() }));
 vi.mock('./workspace-agents-tab.tsx', () => ({ WorkspaceAgentsTab: () => <div>AGENTS TAB</div> }));
-vi.mock('./workspace-triggers-page.tsx', () => ({ WorkspaceTriggersPage: () => <div>TRIGGERS TAB</div> }));
+vi.mock('./workspace-triggers-page.tsx', () => ({
+  WorkspaceTriggersPage: () => <div>TRIGGERS TAB</div>,
+}));
 vi.mock('../settings/tokens-tab.tsx', () => ({ TokensTab: () => <div>API TAB</div> }));
 vi.mock('../../lib/api/workspaces.ts', () => ({
   useWorkspace: () => ({ data: { id: 'ws-1', slug: 'netdust', name: 'Netdust' } }),

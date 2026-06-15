@@ -23,8 +23,8 @@
 import { and, eq, inArray } from 'drizzle-orm';
 import type { DB } from '../db/client.ts';
 import { documents, projects } from '../db/schema.ts';
-import { emitEvent, txWithEvents } from './events.ts';
 import { resolveAgentProjects } from './agent-projects.ts';
+import { emitEvent, txWithEvents } from './events.ts';
 
 export interface ReconcileOptions {
   onEvent?: (event: {
@@ -47,10 +47,7 @@ export async function reconcileAllowLists(
 ): Promise<ReconcileResult> {
   const actor = opts.actor ?? 'system:reconciler';
 
-  const agents = await db
-    .select()
-    .from(documents)
-    .where(eq(documents.type, 'agent'));
+  const agents = await db.select().from(documents).where(eq(documents.type, 'agent'));
 
   let agentsTouched = 0;
   let totalRemoved = 0;

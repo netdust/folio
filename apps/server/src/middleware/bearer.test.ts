@@ -1,14 +1,14 @@
-import { test, expect } from 'bun:test';
-import { Hono } from 'hono';
+import { expect, test } from 'bun:test';
 import { eq } from 'drizzle-orm';
+import { Hono } from 'hono';
+import { nanoid } from 'nanoid';
 import { db } from '../db/client.ts';
 import { apiTokens } from '../db/schema.ts';
 import { newApiToken } from '../lib/auth.ts';
-import { attachToken, requireToken, requireScope, getToken } from './bearer.ts';
-import type { AuthContext } from './auth.ts';
 import { registerErrorHandler } from '../lib/http.ts';
 import { makeTestApp } from '../test/harness.ts';
-import { nanoid } from 'nanoid';
+import type { AuthContext } from './auth.ts';
+import { attachToken, getToken, requireScope, requireToken } from './bearer.ts';
 
 function build() {
   const app = new Hono<AuthContext>();
@@ -40,8 +40,12 @@ test('attachToken loads the token row when a valid Bearer header is provided', a
   const { token, hash } = newApiToken();
   const id = nanoid();
   await db.insert(apiTokens).values({
-    id, workspaceId: seed.workspace.id, name: 'test', tokenHash: hash,
-    scopes: ['documents:read'], createdBy: seed.user.id,
+    id,
+    workspaceId: seed.workspace.id,
+    name: 'test',
+    tokenHash: hash,
+    scopes: ['documents:read'],
+    createdBy: seed.user.id,
   });
   const app = build();
   const res = await app.request('/protected', { headers: { Authorization: `Bearer ${token}` } });
@@ -57,7 +61,9 @@ test('requireToken returns 401 when no Bearer header is provided', async () => {
 
 test('requireToken returns 401 when the Bearer token does not match any row', async () => {
   const app = build();
-  const res = await app.request('/protected', { headers: { Authorization: 'Bearer folio_pat_doesnotexist' } });
+  const res = await app.request('/protected', {
+    headers: { Authorization: 'Bearer folio_pat_doesnotexist' },
+  });
   expect(res.status).toBe(401);
 });
 
@@ -65,8 +71,12 @@ test('requireScope returns 403 when the token lacks the required scope', async (
   const { seed } = await makeTestApp();
   const { token, hash } = newApiToken();
   await db.insert(apiTokens).values({
-    id: nanoid(), workspaceId: seed.workspace.id, name: 'test', tokenHash: hash,
-    scopes: ['documents:read'], createdBy: seed.user.id,
+    id: nanoid(),
+    workspaceId: seed.workspace.id,
+    name: 'test',
+    tokenHash: hash,
+    scopes: ['documents:read'],
+    createdBy: seed.user.id,
   });
   const app = build();
   const res = await app.request('/scoped', { headers: { Authorization: `Bearer ${token}` } });
@@ -79,8 +89,12 @@ test('requireScope passes when the token has the required scope', async () => {
   const { seed } = await makeTestApp();
   const { token, hash } = newApiToken();
   await db.insert(apiTokens).values({
-    id: nanoid(), workspaceId: seed.workspace.id, name: 'test', tokenHash: hash,
-    scopes: ['documents:write'], createdBy: seed.user.id,
+    id: nanoid(),
+    workspaceId: seed.workspace.id,
+    name: 'test',
+    tokenHash: hash,
+    scopes: ['documents:write'],
+    createdBy: seed.user.id,
   });
   const app = build();
   const res = await app.request('/scoped', { headers: { Authorization: `Bearer ${token}` } });
@@ -97,8 +111,12 @@ test('requireScope(config:write) passes a token holding a legacy granular scope'
   const { seed } = await makeTestApp();
   const { token, hash } = newApiToken();
   await db.insert(apiTokens).values({
-    id: nanoid(), workspaceId: seed.workspace.id, name: 'legacy', tokenHash: hash,
-    scopes: ['fields:write'], createdBy: seed.user.id,
+    id: nanoid(),
+    workspaceId: seed.workspace.id,
+    name: 'legacy',
+    tokenHash: hash,
+    scopes: ['fields:write'],
+    createdBy: seed.user.id,
   });
   const app = build();
   const res = await app.request('/config', { headers: { Authorization: `Bearer ${token}` } });
@@ -109,8 +127,12 @@ test('requireScope(config:write) passes a token holding config:write directly', 
   const { seed } = await makeTestApp();
   const { token, hash } = newApiToken();
   await db.insert(apiTokens).values({
-    id: nanoid(), workspaceId: seed.workspace.id, name: 'modern', tokenHash: hash,
-    scopes: ['config:write'], createdBy: seed.user.id,
+    id: nanoid(),
+    workspaceId: seed.workspace.id,
+    name: 'modern',
+    tokenHash: hash,
+    scopes: ['config:write'],
+    createdBy: seed.user.id,
   });
   const app = build();
   const res = await app.request('/config', { headers: { Authorization: `Bearer ${token}` } });
@@ -121,8 +143,12 @@ test('requireScope(config:write) rejects a token with only documents:read', asyn
   const { seed } = await makeTestApp();
   const { token, hash } = newApiToken();
   await db.insert(apiTokens).values({
-    id: nanoid(), workspaceId: seed.workspace.id, name: 'reader', tokenHash: hash,
-    scopes: ['documents:read'], createdBy: seed.user.id,
+    id: nanoid(),
+    workspaceId: seed.workspace.id,
+    name: 'reader',
+    tokenHash: hash,
+    scopes: ['documents:read'],
+    createdBy: seed.user.id,
   });
   const app = build();
   const res = await app.request('/config', { headers: { Authorization: `Bearer ${token}` } });
@@ -134,8 +160,12 @@ test('the config:write alias does NOT leak to other scopes (fields:write !=> doc
   const { seed } = await makeTestApp();
   const { token, hash } = newApiToken();
   await db.insert(apiTokens).values({
-    id: nanoid(), workspaceId: seed.workspace.id, name: 'legacy', tokenHash: hash,
-    scopes: ['fields:write'], createdBy: seed.user.id,
+    id: nanoid(),
+    workspaceId: seed.workspace.id,
+    name: 'legacy',
+    tokenHash: hash,
+    scopes: ['fields:write'],
+    createdBy: seed.user.id,
   });
   const app = build();
   const res = await app.request('/delete', { headers: { Authorization: `Bearer ${token}` } });
@@ -151,8 +181,12 @@ test('an expired token (expiresAt in the past) is rejected with 401', async () =
   const { seed } = await makeTestApp();
   const { token, hash } = newApiToken();
   await db.insert(apiTokens).values({
-    id: nanoid(), workspaceId: seed.workspace.id, name: 'expired', tokenHash: hash,
-    scopes: ['documents:read'], createdBy: seed.user.id,
+    id: nanoid(),
+    workspaceId: seed.workspace.id,
+    name: 'expired',
+    tokenHash: hash,
+    scopes: ['documents:read'],
+    createdBy: seed.user.id,
     expiresAt: new Date(Date.now() - 60_000), // expired one minute ago
   });
   const app = build();
@@ -164,8 +198,12 @@ test('an expired token and an unknown token return the SAME status (no oracle)',
   const { seed } = await makeTestApp();
   const { token, hash } = newApiToken();
   await db.insert(apiTokens).values({
-    id: nanoid(), workspaceId: seed.workspace.id, name: 'expired', tokenHash: hash,
-    scopes: ['documents:read'], createdBy: seed.user.id,
+    id: nanoid(),
+    workspaceId: seed.workspace.id,
+    name: 'expired',
+    tokenHash: hash,
+    scopes: ['documents:read'],
+    createdBy: seed.user.id,
     expiresAt: new Date(Date.now() - 1000),
   });
   const app = build();
@@ -185,8 +223,12 @@ test('a token with expiresAt in the FUTURE still authorizes (no over-blocking)',
   const { token, hash } = newApiToken();
   const id = nanoid();
   await db.insert(apiTokens).values({
-    id, workspaceId: seed.workspace.id, name: 'future', tokenHash: hash,
-    scopes: ['documents:read'], createdBy: seed.user.id,
+    id,
+    workspaceId: seed.workspace.id,
+    name: 'future',
+    tokenHash: hash,
+    scopes: ['documents:read'],
+    createdBy: seed.user.id,
     expiresAt: new Date(Date.now() + 60 * 60_000), // expires in an hour
   });
   const app = build();
@@ -212,8 +254,12 @@ test('last_used_at is NOT re-written within the 60s window', async () => {
   const id = nanoid();
   const recent = new Date(Date.now() - 5_000); // used 5s ago — inside the window
   await db.insert(apiTokens).values({
-    id, workspaceId: seed.workspace.id, name: 'recent', tokenHash: hash,
-    scopes: ['documents:read'], createdBy: seed.user.id,
+    id,
+    workspaceId: seed.workspace.id,
+    name: 'recent',
+    tokenHash: hash,
+    scopes: ['documents:read'],
+    createdBy: seed.user.id,
     lastUsedAt: recent,
   });
   const app = build();
@@ -229,8 +275,12 @@ test('last_used_at IS updated when it is null (or older than 60s)', async () => 
   const { token, hash } = newApiToken();
   const id = nanoid();
   await db.insert(apiTokens).values({
-    id, workspaceId: seed.workspace.id, name: 'nullused', tokenHash: hash,
-    scopes: ['documents:read'], createdBy: seed.user.id,
+    id,
+    workspaceId: seed.workspace.id,
+    name: 'nullused',
+    tokenHash: hash,
+    scopes: ['documents:read'],
+    createdBy: seed.user.id,
     lastUsedAt: null,
   });
   const before = Date.now();
@@ -257,8 +307,12 @@ test('expiry gate cannot touch the operator: isOperator never survives a DB roun
   const { hash } = newApiToken();
   const id = nanoid();
   await db.insert(apiTokens).values({
-    id, workspaceId: seed.workspace.id, name: 'op-shaped', tokenHash: hash,
-    scopes: ['documents:read'], createdBy: seed.user.id,
+    id,
+    workspaceId: seed.workspace.id,
+    name: 'op-shaped',
+    tokenHash: hash,
+    scopes: ['documents:read'],
+    createdBy: seed.user.id,
     isOperator: true, // not a column — silently dropped by the persistence layer
   } as never);
   const reloaded = await db.query.apiTokens.findFirst({ where: eq(apiTokens.id, id) });

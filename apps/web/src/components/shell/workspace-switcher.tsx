@@ -1,8 +1,8 @@
-import type { ReactNode } from 'react';
 import { Bot, Play } from 'lucide-react';
-import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
-import { Icon } from '../ui/icon.tsx';
+import type { ReactNode } from 'react';
 import { cn } from '../ui/cn.ts';
+import { Icon } from '../ui/icon.tsx';
+import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
 
 interface Workspace {
   id: string;

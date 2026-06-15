@@ -32,7 +32,9 @@ function seed(db: Database): void {
   db.run(`INSERT INTO workspaces (id, slug, name) VALUES ('w1', 'ws', 'WS')`);
   db.run(`INSERT INTO memberships (workspace_id, user_id, role) VALUES ('w1', 'u1', 'owner')`);
   db.run(`INSERT INTO projects (id, workspace_id, slug, name) VALUES ('p1', 'w1', 'proj', 'Proj')`);
-  db.run(`INSERT INTO tables (id, project_id, slug, name, "order") VALUES ('t1', 'p1', 'work', 'Work', 0)`);
+  db.run(
+    `INSERT INTO tables (id, project_id, slug, name, "order") VALUES ('t1', 'p1', 'work', 'Work', 0)`,
+  );
   db.run(
     `INSERT INTO documents (id, workspace_id, project_id, table_id, type, slug, title, body, frontmatter, created_by, updated_by, parent_id)
      VALUES ('parent', 'w1', 'p1', 't1', 'work_item', 'p', 'Parent', '', '{}', 'u1', 'u1', NULL)`,
@@ -79,9 +81,9 @@ function getTargetAgentId(db: Database, commentId: string): string | null {
 }
 
 function getFm(db: Database, commentId: string): Record<string, unknown> {
-  const row = db
-    .query(`SELECT frontmatter FROM documents WHERE id = ?`)
-    .get(commentId) as { frontmatter: string };
+  const row = db.query('SELECT frontmatter FROM documents WHERE id = ?').get(commentId) as {
+    frontmatter: string;
+  };
   return JSON.parse(row.frontmatter);
 }
 

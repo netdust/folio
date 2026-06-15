@@ -118,12 +118,12 @@ describe('anthropic provider', () => {
   });
 
   test('stream() records the final usage.input_tokens=0 over a prior non-zero value', async () => {
-    mockStream.mockImplementationOnce((async function* () {
+    mockStream.mockImplementationOnce(async function* () {
       yield { type: 'message_delta', usage: { input_tokens: 12, output_tokens: 0 } };
       // Later delta corrects to 0 (e.g. cache-hit recomputation).
       yield { type: 'message_delta', usage: { input_tokens: 0, output_tokens: 0 } };
       yield { type: 'message_stop' };
-    }) as never);
+    } as never);
 
     const events: unknown[] = [];
     for await (const ev of anthropic.stream({
@@ -140,16 +140,27 @@ describe('anthropic provider', () => {
   });
 
   test('stream() maps stop_reason=refusal to done.reason=refusal', async () => {
-    mockStream.mockImplementationOnce((async function* () {
-      yield { type: 'content_block_delta', delta: { type: 'text_delta', text: 'I cannot help with that' } };
-      yield { type: 'message_delta', delta: { stop_reason: 'refusal' }, usage: { input_tokens: 4, output_tokens: 6 } };
+    mockStream.mockImplementationOnce(async function* () {
+      yield {
+        type: 'content_block_delta',
+        delta: { type: 'text_delta', text: 'I cannot help with that' },
+      };
+      yield {
+        type: 'message_delta',
+        delta: { stop_reason: 'refusal' },
+        usage: { input_tokens: 4, output_tokens: 6 },
+      };
       yield { type: 'message_stop' };
-    }) as never);
+    } as never);
 
     const events: unknown[] = [];
     for await (const ev of anthropic.stream({
-      system: 'sys', messages: [{ role: 'user', content: 'do bad thing' }],
-      tools: [], maxTokens: 100, apiKey: 'sk', model: 'claude-haiku-4-5',
+      system: 'sys',
+      messages: [{ role: 'user', content: 'do bad thing' }],
+      tools: [],
+      maxTokens: 100,
+      apiKey: 'sk',
+      model: 'claude-haiku-4-5',
     })) {
       events.push(ev);
     }
@@ -157,16 +168,24 @@ describe('anthropic provider', () => {
   });
 
   test('stream() maps stop_reason=pause_turn to done.reason=pause_turn', async () => {
-    mockStream.mockImplementationOnce((async function* () {
+    mockStream.mockImplementationOnce(async function* () {
       yield { type: 'content_block_delta', delta: { type: 'text_delta', text: 'thinking...' } };
-      yield { type: 'message_delta', delta: { stop_reason: 'pause_turn' }, usage: { input_tokens: 4, output_tokens: 3 } };
+      yield {
+        type: 'message_delta',
+        delta: { stop_reason: 'pause_turn' },
+        usage: { input_tokens: 4, output_tokens: 3 },
+      };
       yield { type: 'message_stop' };
-    }) as never);
+    } as never);
 
     const events: unknown[] = [];
     for await (const ev of anthropic.stream({
-      system: 'sys', messages: [{ role: 'user', content: 'long task' }],
-      tools: [], maxTokens: 100, apiKey: 'sk', model: 'claude-opus-4-7',
+      system: 'sys',
+      messages: [{ role: 'user', content: 'long task' }],
+      tools: [],
+      maxTokens: 100,
+      apiKey: 'sk',
+      model: 'claude-opus-4-7',
     })) {
       events.push(ev);
     }
@@ -215,13 +234,15 @@ describe('anthropic provider', () => {
   // which embeds the upstream URL and partial key. The for-await is now
   // try/catch'd; the throw rewrites to the same testKey whitelist.
   test('stream() sanitizes a 401 thrown during async iteration (mitigation 5)', async () => {
-    mockStream.mockImplementationOnce((async function* () {
-      const err = new Error('Incorrect API key provided: sk-real-0123456789. See https://docs.anthropic.com.') as Error & { status: number };
+    mockStream.mockImplementationOnce(async function* () {
+      const err = new Error(
+        'Incorrect API key provided: sk-real-0123456789. See https://docs.anthropic.com.',
+      ) as Error & { status: number };
       err.status = 401;
       throw err;
-      // eslint-disable-next-line no-unreachable
+      // biome-ignore lint/correctness/noUnreachable: deliberate dead yield — anchors this as a generator that throws before yielding; deleting it would instead trip useYield
       yield {};
-    }) as never);
+    } as never);
 
     let thrown: unknown;
     try {
@@ -252,14 +273,14 @@ describe('anthropic provider', () => {
   // the `!== undefined` guard accepted any value as-is; a sloppy proxy
   // emitting input_tokens=-1 propagated into the agent_run REAL column.
   test('stream() coerces negative input_tokens to 0 (round 7 #9)', async () => {
-    mockStream.mockImplementationOnce((async function* () {
+    mockStream.mockImplementationOnce(async function* () {
       yield {
         type: 'message_delta',
         usage: { input_tokens: -1, output_tokens: 5 },
         delta: { stop_reason: 'end_turn' },
       };
       yield { type: 'message_stop' };
-    }) as never);
+    } as never);
 
     const events: unknown[] = [];
     for await (const ev of anthropic.stream({
@@ -323,7 +344,7 @@ describe('anthropic provider', () => {
   });
 
   test('stream() yields done event even when tool_use input_json fails to JSON.parse', async () => {
-    mockStream.mockImplementationOnce((async function* () {
+    mockStream.mockImplementationOnce(async function* () {
       yield {
         type: 'content_block_start',
         index: 0,
@@ -340,7 +361,7 @@ describe('anthropic provider', () => {
         usage: { input_tokens: 2, output_tokens: 1 },
         delta: { stop_reason: 'tool_use' },
       };
-    }) as never);
+    } as never);
 
     const events: unknown[] = [];
     for await (const ev of anthropic.stream({
@@ -369,13 +390,17 @@ describe('anthropic provider', () => {
   // message_delta carrying a stop_reason) must NOT emit a fake-success done. It
   // emits NO done event → the runner's FIX#2 (doneReason===undefined) fails loudly.
   test('stream() does NOT emit a done event when the stream is truncated (no terminal) (G1)', async () => {
-    mockStream.mockImplementationOnce((async function* () {
+    mockStream.mockImplementationOnce(async function* () {
       // Some text arrives, then the stream just ends — no message_delta(stop_reason),
       // no message_stop (the proxy dropped the connection).
       yield { type: 'content_block_start', index: 0, content_block: { type: 'text' } };
-      yield { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'partial' } };
+      yield {
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'text_delta', text: 'partial' },
+      };
       // stream ends here — truncated
-    }) as never);
+    } as never);
 
     const events: unknown[] = [];
     for await (const ev of anthropic.stream({
@@ -403,15 +428,19 @@ describe('anthropic provider', () => {
       warnings.push(args.map(String).join(' '));
     };
     try {
-      mockStream.mockImplementationOnce((async function* () {
+      mockStream.mockImplementationOnce(async function* () {
         yield {
           type: 'content_block_start',
           index: 0,
           content_block: { type: 'server_tool_use', id: 'srv_1', name: 'web_search' },
         };
-        yield { type: 'message_delta', usage: { input_tokens: 5, output_tokens: 2 }, delta: { stop_reason: 'tool_use' } };
+        yield {
+          type: 'message_delta',
+          usage: { input_tokens: 5, output_tokens: 2 },
+          delta: { stop_reason: 'tool_use' },
+        };
         yield { type: 'message_stop' };
-      }) as never);
+      } as never);
 
       const events: unknown[] = [];
       for await (const ev of anthropic.stream({
@@ -448,7 +477,11 @@ describe('anthropic provider', () => {
       system: 'sys',
       messages: [
         { role: 'user', content: 'list' },
-        { role: 'assistant', content: '', tool_calls: [{ id: 'tu_1', name: 'list_workspaces', arguments: { q: 'x' } }] },
+        {
+          role: 'assistant',
+          content: '',
+          tool_calls: [{ id: 'tu_1', name: 'list_workspaces', arguments: { q: 'x' } }],
+        },
         { role: 'tool', content: '{"ok":true}', tool_use_id: 'tu_1' },
       ],
       tools: [],
@@ -464,9 +497,9 @@ describe('anthropic provider', () => {
     };
     // The assistant turn → a content array carrying a tool_use block.
     const assistant = sent.messages.find((m) => m.role === 'assistant');
-    const toolUse = (assistant!.content as Array<{ type: string; id?: string; name?: string; input?: unknown }>).find(
-      (b) => b.type === 'tool_use',
-    );
+    const toolUse = (
+      assistant!.content as Array<{ type: string; id?: string; name?: string; input?: unknown }>
+    ).find((b) => b.type === 'tool_use');
     expect(toolUse).toBeDefined();
     expect(toolUse!.id).toBe('tu_1');
     expect(toolUse!.name).toBe('list_workspaces');
@@ -474,9 +507,14 @@ describe('anthropic provider', () => {
     expect(toolUse!.input).toEqual({ q: 'x' });
     // The tool result → a user message with a tool_result block carrying tool_use_id.
     const toolMsg = sent.messages.find(
-      (m) => m.role === 'user' && Array.isArray(m.content) && (m.content as Array<{ type: string }>)[0]?.type === 'tool_result',
+      (m) =>
+        m.role === 'user' &&
+        Array.isArray(m.content) &&
+        (m.content as Array<{ type: string }>)[0]?.type === 'tool_result',
     );
-    const toolResult = (toolMsg!.content as Array<{ type: string; tool_use_id?: string; content?: string }>)[0];
+    const toolResult = (
+      toolMsg!.content as Array<{ type: string; tool_use_id?: string; content?: string }>
+    )[0];
     expect(toolResult!.tool_use_id).toBe('tu_1');
     expect(toolResult!.content).toBe('{"ok":true}');
   });
@@ -486,22 +524,38 @@ describe('anthropic provider', () => {
   // are dropped — but nothing asserted it. (The 'pause_turn' test is mislabeled — it
   // sends a plain text_delta named 'thinking...', not a real thinking block.)
   test('stream() does NOT surface thinking_delta / signature_delta as text (#2)', async () => {
-    mockStream.mockImplementationOnce((async function* () {
+    mockStream.mockImplementationOnce(async function* () {
       yield { type: 'content_block_start', index: 0, content_block: { type: 'thinking' } };
       // ADVERSARIAL: the thinking delta ALSO carries a `text` field. The TYPE check
       // (`delta.type === 'text_delta'`) is the ONLY thing preventing this internal
       // reasoning from leaking as visible text — a plain `if (delta.text)` would leak
       // it. This is what makes the test bite the type guard, not just the text guard.
-      yield { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'reasoning', text: 'SECRET_reasoning_leak' } };
-      yield { type: 'content_block_delta', index: 0, delta: { type: 'signature_delta', signature: 'sig123', text: 'SECRET_sig_leak' } };
+      yield {
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'thinking_delta', thinking: 'reasoning', text: 'SECRET_reasoning_leak' },
+      };
+      yield {
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'signature_delta', signature: 'sig123', text: 'SECRET_sig_leak' },
+      };
       yield { type: 'content_block_stop', index: 0 };
       // Then the real visible answer.
       yield { type: 'content_block_start', index: 1, content_block: { type: 'text' } };
-      yield { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: 'the answer' } };
+      yield {
+        type: 'content_block_delta',
+        index: 1,
+        delta: { type: 'text_delta', text: 'the answer' },
+      };
       yield { type: 'content_block_stop', index: 1 };
-      yield { type: 'message_delta', usage: { input_tokens: 3, output_tokens: 2 }, delta: { stop_reason: 'end_turn' } };
+      yield {
+        type: 'message_delta',
+        usage: { input_tokens: 3, output_tokens: 2 },
+        delta: { stop_reason: 'end_turn' },
+      };
       yield { type: 'message_stop' };
-    }) as never);
+    } as never);
 
     const events: ProviderEvent[] = [];
     for await (const ev of anthropic.stream({
@@ -531,20 +585,40 @@ describe('anthropic provider', () => {
   // keyed by its own ev.index and emitted at its own content_block_stop; assert two
   // distinct tool_call events surface.
   test('stream() surfaces two parallel tool_use blocks as two distinct tool_calls (#3)', async () => {
-    mockStream.mockImplementationOnce((async function* () {
-      yield { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'tu_a', name: 'a' } };
+    mockStream.mockImplementationOnce(async function* () {
+      yield {
+        type: 'content_block_start',
+        index: 0,
+        content_block: { type: 'tool_use', id: 'tu_a', name: 'a' },
+      };
       // NON-empty + DISTINCT from block 1 on purpose: an empty `{}` here would collide
       // with the adapter's empty/parse-failure default `args = {}`, so a misrouting bug
       // that emptied block 0 would be indistinguishable from a correct empty call. A
       // distinct value makes calls[0].arguments bite cross-index buffer corruption.
-      yield { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"j":2}' } };
+      yield {
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'input_json_delta', partial_json: '{"j":2}' },
+      };
       yield { type: 'content_block_stop', index: 0 };
-      yield { type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id: 'tu_b', name: 'b' } };
-      yield { type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '{"k":1}' } };
+      yield {
+        type: 'content_block_start',
+        index: 1,
+        content_block: { type: 'tool_use', id: 'tu_b', name: 'b' },
+      };
+      yield {
+        type: 'content_block_delta',
+        index: 1,
+        delta: { type: 'input_json_delta', partial_json: '{"k":1}' },
+      };
       yield { type: 'content_block_stop', index: 1 };
-      yield { type: 'message_delta', usage: { input_tokens: 4, output_tokens: 3 }, delta: { stop_reason: 'tool_use' } };
+      yield {
+        type: 'message_delta',
+        usage: { input_tokens: 4, output_tokens: 3 },
+        delta: { stop_reason: 'tool_use' },
+      };
       yield { type: 'message_stop' };
-    }) as never);
+    } as never);
 
     const events: ProviderEvent[] = [];
     for await (const ev of anthropic.stream({
@@ -576,11 +650,15 @@ describe('anthropic provider', () => {
   // #4 (minor) — stop_reason:'max_tokens' maps to done.reason:'max_tokens' (parity
   // with the refusal/pause_turn tests).
   test('stream() maps stop_reason=max_tokens to done.reason=max_tokens (#4)', async () => {
-    mockStream.mockImplementationOnce((async function* () {
+    mockStream.mockImplementationOnce(async function* () {
       yield { type: 'content_block_delta', delta: { type: 'text_delta', text: 'truncated' } };
-      yield { type: 'message_delta', delta: { stop_reason: 'max_tokens' }, usage: { input_tokens: 4, output_tokens: 100 } };
+      yield {
+        type: 'message_delta',
+        delta: { stop_reason: 'max_tokens' },
+        usage: { input_tokens: 4, output_tokens: 100 },
+      };
       yield { type: 'message_stop' };
-    }) as never);
+    } as never);
 
     const events: unknown[] = [];
     for await (const ev of anthropic.stream({

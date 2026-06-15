@@ -1,7 +1,7 @@
 import { eq } from 'drizzle-orm';
+import type { DB } from '../db/client.ts';
 import type { ApiToken, User } from '../db/schema.ts';
 import { instanceSkills } from '../db/schema.ts';
-import type { DB } from '../db/client.ts';
 
 /**
  * Skill-blessing separation of duties (T8). Authoring a skill is open; flipping
@@ -51,8 +51,5 @@ export async function setSkillTrust(db: DB, args: SetSkillTrustArgs): Promise<vo
   });
   if (!skill) throw new Error('skill not found');
 
-  await db
-    .update(instanceSkills)
-    .set({ trusted })
-    .where(eq(instanceSkills.id, skill.id));
+  await db.update(instanceSkills).set({ trusted }).where(eq(instanceSkills.id, skill.id));
 }

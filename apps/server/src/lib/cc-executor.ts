@@ -61,9 +61,10 @@ export async function runClaudeCode(
 
   // Compose the single `-p` prompt: standing identity, then the task + context
   // for this run (if any). `claude -p` takes one prompt string, so we flatten.
-  const prompt = input.taskContext && input.taskContext.trim().length > 0
-    ? `${input.systemPrompt}\n\n---\n\n${input.taskContext}`
-    : input.systemPrompt;
+  const prompt =
+    input.taskContext && input.taskContext.trim().length > 0
+      ? `${input.systemPrompt}\n\n---\n\n${input.taskContext}`
+      : input.systemPrompt;
   const argv = ['claude', '-p', prompt];
   if (input.model) argv.push('--model', input.model);
 

@@ -26,7 +26,6 @@
 import { and, eq, sql } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { type DB, db } from '../db/client.ts';
-import { env } from '../env.ts';
 import {
   type ApiToken,
   type Document,
@@ -40,6 +39,7 @@ import {
   projects as projectsTable,
   workspaces,
 } from '../db/schema.ts';
+import { env } from '../env.ts';
 import {
   type ProviderName,
   checkChainGuards,
@@ -50,39 +50,39 @@ import {
   setRunBody,
   transitionRun,
 } from '../services/agent-runs.ts';
-import { runClaudeCode, type SpawnFn } from './cc-executor.ts';
-import { intersectAgentProjects } from './agent-projects.ts';
-import { getInstanceSkillsByNames } from './instance-skills.ts';
 import { type AuthorContext, createComment, listComments } from '../services/comments.ts';
+import { OPERATOR_MAX_TOKENS, takePendingConversationRun } from '../services/conversation-runs.ts';
+import { appendMessage, serializeMessage } from '../services/conversations.ts';
+import {
+  type OperatorModelSetting,
+  getOperatorModelSetting,
+} from '../services/instance-settings.ts';
+import { intersectAgentProjects } from './agent-projects.ts';
+import { resolveAgentForRun } from './agent-resolver.ts';
 import {
   type AgentRunFrontmatter,
   type RunDoneReason,
   runErrorReasonSchema,
 } from './agent-run-schema.ts';
 import { executeTool, isAwaitingConfirmation, listToolDefs } from './agent-tools.ts';
+import { type Message, type ToolDef, getProvider } from './ai/provider.ts';
+import { sanitizeProviderError } from './ai/sanitize-error.ts';
+import { newApiToken } from './auth.ts';
+import { type SpawnFn, runClaudeCode } from './cc-executor.ts';
 import type { ConversationSink } from './chat-thread-sink.ts';
+import { makeConversationSink } from './chat-thread-sink.ts';
 import { buildConversationMessages } from './chat-thread-source.ts';
+import { conversationBus } from './conversation-bus.ts';
+import { decryptSecret } from './crypto.ts';
+import { HTTPError } from './http.ts';
+import { getInstanceSkillsByNames } from './instance-skills.ts';
+import { getOperatorDefinition, getOperatorDocument } from './operator.ts';
 import {
   TRUSTED_SKILLS_LABEL,
   UNTRUSTED_SKILLS_LABEL,
   renderTrustedSkills,
   renderUntrustedSkills,
 } from './skill-preamble.ts';
-import { makeConversationSink } from './chat-thread-sink.ts';
-import { conversationBus } from './conversation-bus.ts';
-import { appendMessage, serializeMessage } from '../services/conversations.ts';
-import {
-  OPERATOR_MAX_TOKENS,
-  takePendingConversationRun,
-} from '../services/conversation-runs.ts';
-import { getOperatorDefinition, getOperatorDocument } from './operator.ts';
-import { getOperatorModelSetting, type OperatorModelSetting } from '../services/instance-settings.ts';
-import { type Message, type ToolDef, getProvider } from './ai/provider.ts';
-import { sanitizeProviderError } from './ai/sanitize-error.ts';
-import { newApiToken } from './auth.ts';
-import { decryptSecret } from './crypto.ts';
-import { HTTPError } from './http.ts';
-import { resolveAgentForRun } from './agent-resolver.ts';
 import { effectiveReach } from './token-reach.ts';
 
 /**
@@ -455,9 +455,10 @@ export async function runAgentResume(args: { runId: string }): Promise<void> {
  * The raw decrypt error is swallowed (NEVER surfaced — it can embed key bytes,
  * threat-model mitigation 5); the distinction is carried by the flag, not the msg.
  */
-export function resolveKeyMaterial(
-  keyRow: { encryptedKey: string } | null | undefined,
-): { apiKey: string; decryptFailed: boolean } {
+export function resolveKeyMaterial(keyRow: { encryptedKey: string } | null | undefined): {
+  apiKey: string;
+  decryptFailed: boolean;
+} {
   if (!keyRow) return { apiKey: '', decryptFailed: false };
   try {
     return { apiKey: decryptSecret(keyRow.encryptedKey), decryptFailed: false };
@@ -595,10 +596,7 @@ export async function loadContext(runId: string): Promise<RunContext | null> {
   // key row; the (provider,label) query simply returns undefined for it.
   const aiKeyLabel = (fm.ai_key_label as string | undefined) ?? 'default';
   const keyRow = await db.query.aiKeys.findFirst({
-    where: and(
-      eq(aiKeys.provider, fm.provider as ProviderName),
-      eq(aiKeys.label, aiKeyLabel),
-    ),
+    where: and(eq(aiKeys.provider, fm.provider as ProviderName), eq(aiKeys.label, aiKeyLabel)),
   });
   const decrypted = resolveKeyMaterial(keyRow);
   const apiKey = decrypted.apiKey;
@@ -792,7 +790,8 @@ async function loadAgentDefinition(
   const skills: Array<{ slug: string; body: string; trusted: boolean }> = [];
   for (const slug of slugs) {
     const skill = byName.get(slug);
-    if (!skill) throw new HTTPError('MISSING_SKILL', `skill "${slug}" not found in instance skills`, 500);
+    if (!skill)
+      throw new HTTPError('MISSING_SKILL', `skill "${slug}" not found in instance skills`, 500);
     // Trust channel (invariant 11): `trusted` is the TYPED COLUMN — a skill routes
     // into the trusted instruction/reference channel only when the column is true.
     // Any other state routes it as untrusted DATA. Import/edit can't forge it.
@@ -1746,9 +1745,7 @@ async function ccExecute(ctx: RunContext): Promise<void> {
     // B1 — fold UNBLESSED skills into the cc untrusted DATA envelope (NEVER the
     // trusted ccSystemPrompt below). Prepended so it rides inside the same
     // BEGIN/END markers as document/comment content.
-    ...(ccUntrustedSkills !== null
-      ? [`[untrusted unblessed skill]\n${ccUntrustedSkills}`]
-      : []),
+    ...(ccUntrustedSkills !== null ? [`[untrusted unblessed skill]\n${ccUntrustedSkills}`] : []),
     ...(await buildUntrustedContext(ctx)).map(
       (m) =>
         `${m.role === 'assistant' ? '[prior assistant output]' : '[document / user input]'}\n${m.content}`,
@@ -1943,7 +1940,11 @@ async function handleCancel(ctx: RunContext): Promise<void> {
   // chat-cancel lands. On the document path, both are wanted (a partial-work comment
   // PLUS the failed/cancelled transition).
   if (ctx.sink) {
-    await failRun(ctx, runErrorReasonSchema.enum.cancelled, 'Cancelled by user — partial work above.');
+    await failRun(
+      ctx,
+      runErrorReasonSchema.enum.cancelled,
+      'Cancelled by user — partial work above.',
+    );
     return;
   }
   await postAgentComment(ctx, 'Cancelled by user — partial work above.', 'comment');

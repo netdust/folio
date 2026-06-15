@@ -17,36 +17,32 @@
 import { describe, expect, test } from 'bun:test';
 import { eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
-import { makeTestApp } from '../test/harness.ts';
 import {
   aiKeys,
   conversations,
-  messages,
   instanceSkills,
+  messages,
   projectAccess,
   projects,
   users,
   workspaceAccess,
   workspaces,
 } from '../db/schema.ts';
-import { encryptSecret } from '../lib/crypto.ts';
-import { setOperatorModelSetting } from './instance-settings.ts';
+import type { EphemeralToken } from '../db/schema.ts';
 import { roleToScopes, toolsToScopes } from '../lib/agent-schema.ts';
-import { type EphemeralToken } from '../db/schema.ts';
-import { isAgentBound } from '../lib/token-reach.ts';
+import { encryptSecret } from '../lib/crypto.ts';
 import { OPERATOR_AGENT_ID } from '../lib/operator.ts';
-import {
-  FOLIO_SKILL_BODY,
-  FOLIO_SKILL_SLUG,
-  OPERATOR_TOOLS,
-} from '../lib/system-skills.ts';
 import { loadContext, runAgent } from '../lib/runner.ts';
+import { FOLIO_SKILL_BODY, FOLIO_SKILL_SLUG, OPERATOR_TOOLS } from '../lib/system-skills.ts';
+import { isAgentBound } from '../lib/token-reach.ts';
+import { makeTestApp } from '../test/harness.ts';
 import {
   __dropPendingConversationRunForTest,
   createConversationRun,
   takePendingConversationRun,
 } from './conversation-runs.ts';
 import { createConversation } from './conversations.ts';
+import { setOperatorModelSetting } from './instance-settings.ts';
 
 const OPERATOR_SCOPES = toolsToScopes(OPERATOR_TOOLS);
 
@@ -543,7 +539,9 @@ describe('conversation run — slot released on every terminal path (M14 wedge f
     // The preflight blocked: the thread carries the "No AI key" message and NO
     // operator turn streamed (a dangling ollama did NOT reach the provider).
     const msgs = await db.query.messages.findMany({ where: eq(messages.conversationId, conv.id) });
-    const blocked = msgs.some((m) => m.role === 'operator' && m.body.includes('No AI key is configured'));
+    const blocked = msgs.some(
+      (m) => m.role === 'operator' && m.body.includes('No AI key is configured'),
+    );
     expect(blocked).toBe(true);
     // Slot released (not wedged), same M14 invariant.
     const row = await db.query.conversations.findFirst({ where: eq(conversations.id, conv.id) });
@@ -551,7 +549,10 @@ describe('conversation run — slot released on every terminal path (M14 wedge f
   });
 });
 
-async function seedUser(db: Awaited<ReturnType<typeof makeTestApp>>['db'], role: 'member' | 'admin'): Promise<string> {
+async function seedUser(
+  db: Awaited<ReturnType<typeof makeTestApp>>['db'],
+  role: 'member' | 'admin',
+): Promise<string> {
   const id = nanoid();
   await db.insert(users).values({
     id,

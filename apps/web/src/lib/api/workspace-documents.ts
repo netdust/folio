@@ -6,7 +6,7 @@
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { client } from './client.ts';
-import type { Document, DocumentSummary, DocumentPatch } from './documents.ts';
+import type { Document, DocumentPatch, DocumentSummary } from './documents.ts';
 import type { DocumentEvent } from './events.ts';
 
 export interface WorkspaceDocumentsListParams {
@@ -37,8 +37,7 @@ export function useWorkspaceDocuments(
   return useQuery({
     queryKey: workspaceDocumentsKeys.list(wslug, params),
     // client.get auto-unwraps single-key { data } envelopes — payload is the array.
-    queryFn: () =>
-      client.get<DocumentSummary[]>(`/api/v1/w/${wslug}/documents${toSearch(params)}`),
+    queryFn: () => client.get<DocumentSummary[]>(`/api/v1/w/${wslug}/documents${toSearch(params)}`),
     staleTime: 30_000,
     enabled: !!wslug && (options.enabled ?? true),
     // keepPrevious avoids a skeleton flash in the assignee picker when the
@@ -110,8 +109,7 @@ export function useUpdateWorkspaceDocument(wslug: string) {
 export function useDeleteWorkspaceDocument(wslug: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (slug: string) =>
-      client.delete<void>(`/api/v1/w/${wslug}/documents/${slug}`),
+    mutationFn: (slug: string) => client.delete<void>(`/api/v1/w/${wslug}/documents/${slug}`),
     onSuccess: () =>
       qc.invalidateQueries({ queryKey: [...workspaceDocumentsKeys.all, wslug, 'list'] }),
   });
@@ -127,15 +125,13 @@ export function useDeleteWorkspaceDocument(wslug: string) {
 // ---------------------------------------------------------------------------
 
 export const workspaceDocumentEventsKeys = {
-  list: (wslug: string, slug: string) =>
-    ['workspace-document-events', wslug, slug] as const,
+  list: (wslug: string, slug: string) => ['workspace-document-events', wslug, slug] as const,
 };
 
 export function useWorkspaceDocumentEvents(wslug: string, slug: string | undefined) {
   return useQuery({
     queryKey: workspaceDocumentEventsKeys.list(wslug, slug ?? ''),
-    queryFn: () =>
-      client.get<DocumentEvent[]>(`/api/v1/w/${wslug}/documents/${slug}/events`),
+    queryFn: () => client.get<DocumentEvent[]>(`/api/v1/w/${wslug}/documents/${slug}/events`),
     enabled: !!wslug && !!slug,
     staleTime: 30_000,
   });
@@ -145,10 +141,9 @@ export function useWorkspaceLogActivity(wslug: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ slug, note }: { slug: string; note: string }) =>
-      client.post<{ lastTouchedAt: string }>(
-        `/api/v1/w/${wslug}/documents/${slug}/activity`,
-        { note },
-      ),
+      client.post<{ lastTouchedAt: string }>(`/api/v1/w/${wslug}/documents/${slug}/activity`, {
+        note,
+      }),
     onSuccess: (_data, vars) => {
       // Scope to workspace — no pslug in any key. A broad
       // ['workspace-documents'] invalidation would also bust every other

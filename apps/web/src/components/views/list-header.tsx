@@ -1,9 +1,12 @@
 export type SortKey = 'title' | 'status' | 'updated_at' | 'priority';
 export type SortDir = 'asc' | 'desc';
-export interface SortState { key: SortKey; dir: SortDir; }
+export interface SortState {
+  key: SortKey;
+  dir: SortDir;
+}
 
 interface Props {
-  sort: SortState | null;        // null = default (updated_at desc)
+  sort: SortState | null; // null = default (updated_at desc)
   onSort: (next: SortState | null) => void;
 }
 

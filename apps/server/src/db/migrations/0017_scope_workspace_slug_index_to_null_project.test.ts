@@ -1,8 +1,8 @@
-import { describe, expect, test } from 'bun:test';
 import Database from 'bun:sqlite';
+import { describe, expect, test } from 'bun:test';
+import path from 'node:path';
 import { drizzle } from 'drizzle-orm/bun-sqlite';
 import { migrate } from 'drizzle-orm/bun-sqlite/migrator';
-import path from 'node:path';
 
 const MIGRATIONS_FOLDER = path.resolve(import.meta.dir);
 
@@ -28,9 +28,7 @@ function freshDb() {
     );
   }
   // A user for created_by/updated_by FKs.
-  sqlite.run(
-    `INSERT INTO users (id, email, name, created_at) VALUES ('u1','a@b','A',0)`,
-  );
+  sqlite.run(`INSERT INTO users (id, email, name, created_at) VALUES ('u1','a@b','A',0)`);
   return sqlite;
 }
 

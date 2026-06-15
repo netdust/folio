@@ -1,4 +1,4 @@
-import { test, expect } from 'bun:test';
+import { expect, test } from 'bun:test';
 import { makeTestApp } from './harness.ts';
 
 test('makeTestApp returns a working app + seeded data', async () => {

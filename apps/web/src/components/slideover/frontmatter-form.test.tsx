@@ -1,7 +1,7 @@
-import { describe, it, expect, vi } from 'vitest';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { describe, expect, it, vi } from 'vitest';
 import { FrontmatterForm } from './frontmatter-form.tsx';
 
 describe('FrontmatterForm', () => {
@@ -11,8 +11,22 @@ describe('FrontmatterForm', () => {
         type="work_item"
         status="todo"
         statuses={[
-          { id: 's1', key: 'todo', name: 'Todo', color: '#6EAFFF', category: 'unstarted', order: 1 },
-          { id: 's2', key: 'doing', name: 'In progress', color: '#F0A442', category: 'started', order: 2 },
+          {
+            id: 's1',
+            key: 'todo',
+            name: 'Todo',
+            color: '#6EAFFF',
+            category: 'unstarted',
+            order: 1,
+          },
+          {
+            id: 's2',
+            key: 'doing',
+            name: 'In progress',
+            color: '#F0A442',
+            category: 'started',
+            order: 2,
+          },
         ]}
         frontmatter={{
           priority: 'high',
@@ -93,28 +107,37 @@ describe('FrontmatterForm', () => {
     // The curated description that accompanied the removed AGENT_FIELDS entry
     // must not render — that text was the only thing marking system_prompt as
     // the prompt surface.
-    expect(
-      screen.queryByText(/Instructions the agent receives on every run/i),
-    ).toBeNull();
+    expect(screen.queryByText(/Instructions the agent receives on every run/i)).toBeNull();
     // sanity: the form did render its curated fields.
     expect(screen.getByText('max_tokens_per_run')).toBeInTheDocument();
   });
 
-  it('renders a TriggerAgentField for a trigger\'s agent key, committing the bare slug', async () => {
+  it("renders a TriggerAgentField for a trigger's agent key, committing the bare slug", async () => {
     const stub = () =>
       new Response(
         JSON.stringify({
           data: [
             {
-              id: 'op', slug: 'operator', type: 'agent', title: 'Operator',
-              status: null, parentId: null, library: true, frontmatter: { projects: ['*'] },
-              createdAt: '', updatedAt: '', lastTouchedAt: null,
+              id: 'op',
+              slug: 'operator',
+              type: 'agent',
+              title: 'Operator',
+              status: null,
+              parentId: null,
+              library: true,
+              frontmatter: { projects: ['*'] },
+              createdAt: '',
+              updatedAt: '',
+              lastTouchedAt: null,
             },
           ],
         }),
         { status: 200, headers: { 'content-type': 'application/json' } },
       );
-    vi.stubGlobal('fetch', vi.fn(async () => stub()));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => stub()),
+    );
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const onCommit = vi.fn();
     render(
@@ -148,7 +171,15 @@ describe('FrontmatterForm', () => {
         statuses={[]}
         frontmatter={{ category: 'one' }} // would infer string
         pinnedFields={[
-          { id: 'f1', key: 'category', type: 'select', label: 'Category', options: ['one', 'two', 'three'], required: false, order: 0 },
+          {
+            id: 'f1',
+            key: 'category',
+            type: 'select',
+            label: 'Category',
+            options: ['one', 'two', 'three'],
+            required: false,
+            order: 0,
+          },
         ]}
         onStatusCommit={() => {}}
         onFrontmatterCommit={() => {}}

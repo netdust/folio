@@ -1,8 +1,8 @@
-import { describe, expect, test } from 'bun:test';
 import Database from 'bun:sqlite';
+import { describe, expect, test } from 'bun:test';
+import path from 'node:path';
 import { drizzle } from 'drizzle-orm/bun-sqlite';
 import { migrate } from 'drizzle-orm/bun-sqlite/migrator';
-import path from 'node:path';
 
 const MIGRATIONS_FOLDER = path.resolve(import.meta.dir);
 

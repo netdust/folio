@@ -1,6 +1,6 @@
-import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
-import { renderHook, act } from '@testing-library/react';
-import { useEventStream, type StreamedEvent } from './event-stream.ts';
+import { act, renderHook } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { type StreamedEvent, useEventStream } from './event-stream.ts';
 
 class MockEventSource {
   static instances: MockEventSource[] = [];
@@ -20,14 +20,19 @@ class MockEventSource {
     this.listeners.set(type, arr);
   }
   removeEventListener(type: string, fn: (e: MessageEvent) => void) {
-    this.listeners.set(type, (this.listeners.get(type) ?? []).filter((f) => f !== fn));
+    this.listeners.set(
+      type,
+      (this.listeners.get(type) ?? []).filter((f) => f !== fn),
+    );
   }
   emit(type: string, data: string) {
     const ev = { data } as MessageEvent;
     for (const fn of this.listeners.get(type) ?? []) fn(ev);
     if (type === 'message') this.onmessage?.(ev);
   }
-  close() { this.closed = true; }
+  close() {
+    this.closed = true;
+  }
 }
 
 beforeEach(() => {
@@ -38,7 +43,9 @@ afterEach(() => vi.unstubAllGlobals());
 
 describe('useEventStream', () => {
   test('opens an EventSource to the workspace events path with cookie credentials + filters', () => {
-    renderHook(() => useEventStream('acme', { agent: 'reply-bot', kinds: ['agent.run.running'] }, vi.fn()));
+    renderHook(() =>
+      useEventStream('acme', { agent: 'reply-bot', kinds: ['agent.run.running'] }, vi.fn()),
+    );
     expect(MockEventSource.instances).toHaveLength(1);
     const es = MockEventSource.instances[0]!;
     expect(es.url).toBe('/api/v1/w/acme/events?agent=reply-bot&kinds=agent.run.running');
@@ -49,15 +56,24 @@ describe('useEventStream', () => {
     const onEvent = vi.fn<(e: StreamedEvent) => void>();
     renderHook(() => useEventStream('acme', { kinds: ['agent.run.running'] }, onEvent));
     const es = MockEventSource.instances[0]!;
-    act(() => es.emit('agent.run.running', JSON.stringify({ id: 'e1', kind: 'agent.run.running', payload: { agent: 'reply-bot' } })));
-    expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({ id: 'e1', kind: 'agent.run.running' }));
+    act(() =>
+      es.emit(
+        'agent.run.running',
+        JSON.stringify({ id: 'e1', kind: 'agent.run.running', payload: { agent: 'reply-bot' } }),
+      ),
+    );
+    expect(onEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'e1', kind: 'agent.run.running' }),
+    );
   });
 
   test('does NOT deliver a named event whose kind was not requested', () => {
     const onEvent = vi.fn<(e: StreamedEvent) => void>();
     renderHook(() => useEventStream('acme', { kinds: ['agent.run.completed'] }, onEvent));
     const es = MockEventSource.instances[0]!;
-    act(() => es.emit('agent.run.running', JSON.stringify({ id: 'e2', kind: 'agent.run.running' })));
+    act(() =>
+      es.emit('agent.run.running', JSON.stringify({ id: 'e2', kind: 'agent.run.running' })),
+    );
     expect(onEvent).not.toHaveBeenCalled();
   });
 
@@ -70,7 +86,9 @@ describe('useEventStream', () => {
   });
 
   test('closes the EventSource on unmount', () => {
-    const { unmount } = renderHook(() => useEventStream('acme', { kinds: ['agent.run.running'] }, vi.fn()));
+    const { unmount } = renderHook(() =>
+      useEventStream('acme', { kinds: ['agent.run.running'] }, vi.fn()),
+    );
     const es = MockEventSource.instances[0]!;
     unmount();
     expect(es.closed).toBe(true);
@@ -82,10 +100,9 @@ describe('useEventStream', () => {
   });
 
   test('re-subscribes (tears down old, opens new) when the kinds filter changes', () => {
-    const { rerender } = renderHook(
-      ({ kinds }) => useEventStream('acme', { kinds }, vi.fn()),
-      { initialProps: { kinds: ['agent.run.running'] } },
-    );
+    const { rerender } = renderHook(({ kinds }) => useEventStream('acme', { kinds }, vi.fn()), {
+      initialProps: { kinds: ['agent.run.running'] },
+    });
     expect(MockEventSource.instances).toHaveLength(1);
     const first = MockEventSource.instances[0]!;
 

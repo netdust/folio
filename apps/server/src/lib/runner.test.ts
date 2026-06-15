@@ -13,6 +13,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import {
+  events,
   type Document,
   type Project,
   type TableEntity,
@@ -21,14 +22,16 @@ import {
   aiKeys,
   apiTokens,
   documents,
-  events,
   instanceSkills,
   projects,
   tables,
 } from '../db/schema.ts';
+import { conversations, messages, pendingOps, workspaces } from '../db/schema.ts';
+import { env } from '../env.ts';
 import { claimNextPlanningRun } from '../services/agent-runs.ts';
 import { createComment } from '../services/comments.ts';
-import { env } from '../env.ts';
+import { createConversationRun } from '../services/conversation-runs.ts';
+import { createConversation } from '../services/conversations.ts';
 import { makeTestApp } from '../test/harness.ts';
 import type { AgentRunFrontmatter } from './agent-run-schema.ts';
 import { toolsToScopes } from './agent-schema.ts';
@@ -37,13 +40,18 @@ import { __INTERNAL_TEST_ONLY__ as providerTestHatch } from './ai/provider.ts';
 import { newApiToken } from './auth.ts';
 import { decryptSecret, encryptSecret } from './crypto.ts';
 import { HTTPError } from './http.ts';
-import { mcpInvalidParams } from './mcp-errors.ts';
-import { __setCcSpawnForTest, buildToolDefs, loadContext, rejectRun, resolveOperatorRunModel, runAgent, runAgentResume } from './runner.ts';
 import { seedInstanceSkills } from './instance-skills.ts';
+import { mcpInvalidParams } from './mcp-errors.ts';
+import {
+  __setCcSpawnForTest,
+  buildToolDefs,
+  loadContext,
+  rejectRun,
+  resolveOperatorRunModel,
+  runAgent,
+  runAgentResume,
+} from './runner.ts';
 import { effectiveReach } from './token-reach.ts';
-import { conversations, messages, pendingOps, workspaces } from '../db/schema.ts';
-import { createConversation } from '../services/conversations.ts';
-import { createConversationRun } from '../services/conversation-runs.ts';
 
 type TestDB = Awaited<ReturnType<typeof makeTestApp>>['db'];
 
@@ -537,6 +545,7 @@ describe('runAgent pre-flight checks', () => {
         });
       });
     }
+    // biome-ignore lint/performance/noDelete: must delete the env var to clear it — `process.env.X = undefined` coerces to the STRING "undefined", not an unset var
     delete process.env.FOLIO_PROVIDER_DEGRADE_THRESHOLD;
 
     await runAgent({ runId: run.id });
@@ -594,7 +603,12 @@ describe('runAgent pre-flight checks', () => {
     // the provider stream — even with FOLIO_CLAUDE_CODE_ENABLED toggled either way.
     const { db, run } = await scaffold(); // default provider = anthropic, with key
     const control: StubControl = {
-      rounds: [[{ type: 'text', delta: 'done.' }, { type: 'done', reason: 'stop' }]],
+      rounds: [
+        [
+          { type: 'text', delta: 'done.' },
+          { type: 'done', reason: 'stop' },
+        ],
+      ],
       called: 0,
     };
     installProviderStub(control);
@@ -2371,7 +2385,12 @@ describe('runAgent claude-code branch', () => {
     let spawned = false;
     __setCcSpawnForTest(() => {
       spawned = true;
-      return { stdoutText: async () => '', stderrText: async () => '', exited: Promise.resolve(0), kill: () => {} };
+      return {
+        stdoutText: async () => '',
+        stderrText: async () => '',
+        exited: Promise.resolve(0),
+        kill: () => {},
+      };
     });
     try {
       const { db, workspace, project, user, agent, parent } = await scaffold({
@@ -2874,7 +2893,9 @@ describe('Phase B — loadAgentDefinition (definitional skill load)', () => {
     const { executeTool } = await import('./agent-tools.ts');
     for (const name of ['loadAgentDefinition', 'load_agent_definition', 'read_skill']) {
       await expect(
-        executeTool(ctx!.token, ctx!.actor, name, {}, undefined, { callerScopes: ctx!.callerScopes }),
+        executeTool(ctx!.token, ctx!.actor, name, {}, undefined, {
+          callerScopes: ctx!.callerScopes,
+        }),
       ).rejects.toThrow(/method not found/);
     }
     expect(db).toBeTruthy();
@@ -3044,7 +3065,10 @@ describe('resolveOperatorRunModel — configured operator model over the default
 
   test('a setting → its provider/model/aiKeyLabel verbatim', () => {
     expect(
-      resolveOperatorRunModel({ provider: 'ollama', model: 'llama3.1:8b', aiKeyLabel: 'local' }, def),
+      resolveOperatorRunModel(
+        { provider: 'ollama', model: 'llama3.1:8b', aiKeyLabel: 'local' },
+        def,
+      ),
     ).toEqual({ provider: 'ollama', model: 'llama3.1:8b', aiKeyLabel: 'local' });
   });
 });

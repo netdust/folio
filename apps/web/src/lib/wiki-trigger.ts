@@ -53,6 +53,6 @@ export function replaceWikiToken(
   if (text.slice(caretOffset, caretOffset + 2) === ']]') {
     end = caretOffset + 2;
   }
-  const newText = text.slice(0, start) + `[[${slug}]]` + text.slice(end);
+  const newText = `${text.slice(0, start)}[[${slug}]]${text.slice(end)}`;
   return { start, end, newText };
 }

@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from 'vitest';
-import { buildRailTree, type RailTreeHandlers } from './rail-tree.ts';
+import { describe, expect, it, vi } from 'vitest';
+import { type RailTreeHandlers, buildRailTree } from './rail-tree.ts';
 
 const noopHandlers: RailTreeHandlers = {
   onViewClick: () => {},
@@ -22,7 +22,9 @@ describe('buildRailTree', () => {
     const tree = buildRailTree({
       projects: [{ slug: 'sales', name: 'Acme Sales' }],
       tablesByProject: { sales: [{ id: 't1', slug: 'work-items', name: 'Work Items' }] },
-      viewsByTable: { t1: [{ id: 'v1', name: 'All work items', type: 'list', isDefault: true, order: 0 }] },
+      viewsByTable: {
+        t1: [{ id: 'v1', name: 'All work items', type: 'list', isDefault: true, order: 0 }],
+      },
       currentRoute: { wslug: 'acme' },
       handlers: noopHandlers,
     });
@@ -40,8 +42,8 @@ describe('buildRailTree', () => {
       tablesByProject: { sales: [{ id: 't1', slug: 'work-items', name: 'Work Items' }] },
       viewsByTable: {
         t1: [
-          { id: 'late',   name: 'Late',   type: 'list', isDefault: false, order: 20 },
-          { id: 'early',  name: 'Early',  type: 'list', isDefault: false, order: 0 },
+          { id: 'late', name: 'Late', type: 'list', isDefault: false, order: 20 },
+          { id: 'early', name: 'Early', type: 'list', isDefault: false, order: 0 },
           { id: 'middle', name: 'Middle', type: 'list', isDefault: false, order: 10 },
         ],
       },
@@ -58,8 +60,8 @@ describe('buildRailTree', () => {
       tablesByProject: { sales: [{ id: 't1', slug: 'work-items', name: 'Work Items' }] },
       viewsByTable: {
         t1: [
-          { id: 'a', name: 'Custom',  type: 'list', isDefault: false, order: 0 },
-          { id: 'b', name: 'Default', type: 'list', isDefault: true,  order: 0 },
+          { id: 'a', name: 'Custom', type: 'list', isDefault: false, order: 0 },
+          { id: 'b', name: 'Default', type: 'list', isDefault: true, order: 0 },
         ],
       },
       currentRoute: { wslug: 'acme' },
@@ -76,9 +78,9 @@ describe('buildRailTree', () => {
       tablesByProject: { sales: [{ id: 't1', slug: 'work-items', name: 'Work Items' }] },
       viewsByTable: {
         t1: [
-          { id: 'v1', name: 'List A',  type: 'list',   isDefault: false, order: 0 },
-          { id: 'v2', name: 'Board',   type: 'kanban', isDefault: false, order: 10 },
-          { id: 'v3', name: 'List B',  type: 'list',   isDefault: false, order: 20 },
+          { id: 'v1', name: 'List A', type: 'list', isDefault: false, order: 0 },
+          { id: 'v2', name: 'Board', type: 'kanban', isDefault: false, order: 10 },
+          { id: 'v3', name: 'List B', type: 'list', isDefault: false, order: 20 },
         ],
       },
       currentRoute: { wslug: 'acme' },
@@ -99,7 +101,7 @@ describe('buildRailTree', () => {
       tablesByProject: { sales: [{ id: 't1', slug: 'work-items', name: 'Work Items' }] },
       viewsByTable: {
         t1: [
-          { id: 'v1', name: 'Match',     type: 'list', isDefault: false, order: 0 },
+          { id: 'v1', name: 'Match', type: 'list', isDefault: false, order: 0 },
           { id: 'v2', name: 'Not match', type: 'list', isDefault: false, order: 10 },
         ],
       },
@@ -212,29 +214,22 @@ describe('buildRailTree', () => {
 
 describe('view reorder menu', () => {
   // Flatten the displayed (sorted) view NavItems for a single-table tree.
-  const viewNodesOf = (tree: ReturnType<typeof buildRailTree>) =>
-    tree[0].children![0].children!;
+  const viewNodesOf = (tree: ReturnType<typeof buildRailTree>) => tree[0].children![0].children!;
   const menuLabels = (node: ReturnType<typeof buildRailTree>[number]) =>
     (node.menuItems ?? []).map((m) => m.label);
-  const invokeMenu = (
-    node: ReturnType<typeof buildRailTree>[number],
-    label: string,
-  ) => {
+  const invokeMenu = (node: ReturnType<typeof buildRailTree>[number], label: string) => {
     const item = (node.menuItems ?? []).find((m) => m.label === label);
     if (!item) throw new Error(`no menu item "${label}"`);
     item.onSelect();
   };
 
   const threeViews = () => [
-    { id: 'v0', name: 'First',  type: 'list' as const, isDefault: false, order: 0 },
+    { id: 'v0', name: 'First', type: 'list' as const, isDefault: false, order: 0 },
     { id: 'v1', name: 'Middle', type: 'list' as const, isDefault: false, order: 10 },
-    { id: 'v2', name: 'Last',   type: 'list' as const, isDefault: false, order: 20 },
+    { id: 'v2', name: 'Last', type: 'list' as const, isDefault: false, order: 20 },
   ];
 
-  const buildWith = (
-    views: ReturnType<typeof threeViews>,
-    handlers: RailTreeHandlers,
-  ) =>
+  const buildWith = (views: ReturnType<typeof threeViews>, handlers: RailTreeHandlers) =>
     buildRailTree({
       projects: [{ slug: 'sales', name: 'Acme Sales' }],
       tablesByProject: { sales: [{ id: 't1', slug: 'work-items', name: 'Work Items' }] },
@@ -284,9 +279,7 @@ describe('view reorder menu', () => {
 
   it('single-view table has neither Move up nor Move down', () => {
     const handlers: RailTreeHandlers = { ...noopHandlers, onMoveView: vi.fn() };
-    const single = [
-      { id: 'only', name: 'Only', type: 'list' as const, isDefault: true, order: 0 },
-    ];
+    const single = [{ id: 'only', name: 'Only', type: 'list' as const, isDefault: true, order: 0 }];
     const [node] = viewNodesOf(buildWith(single, handlers));
     expect(menuLabels(node)).not.toContain('Move up');
     expect(menuLabels(node)).not.toContain('Move down');
@@ -302,11 +295,10 @@ describe('view reorder menu', () => {
 });
 
 describe('view drag fields', () => {
-  const viewNodesOf = (tree: ReturnType<typeof buildRailTree>) =>
-    tree[0].children![0].children!;
+  const viewNodesOf = (tree: ReturnType<typeof buildRailTree>) => tree[0].children![0].children!;
 
   const twoViews = () => [
-    { id: 'v0', name: 'First',  type: 'list' as const, isDefault: false, order: 0 },
+    { id: 'v0', name: 'First', type: 'list' as const, isDefault: false, order: 0 },
     { id: 'v1', name: 'Second', type: 'list' as const, isDefault: false, order: 10 },
   ];
 

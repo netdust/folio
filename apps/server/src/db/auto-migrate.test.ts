@@ -1,5 +1,5 @@
-import { describe, expect, test } from 'bun:test';
 import Database from 'bun:sqlite';
+import { describe, expect, test } from 'bun:test';
 import { drizzle } from 'drizzle-orm/bun-sqlite';
 import { runMigrationsOnBoot } from './auto-migrate.ts';
 import * as schema from './schema.ts';
@@ -16,15 +16,15 @@ describe('runMigrationsOnBoot', () => {
 
       runMigrationsOnBoot(db);
 
-      const count1 = sqlite
-        .prepare(`SELECT COUNT(*) as n FROM __drizzle_migrations`)
-        .get() as { n: number };
+      const count1 = sqlite.prepare('SELECT COUNT(*) as n FROM __drizzle_migrations').get() as {
+        n: number;
+      };
       expect(count1.n).toBeGreaterThan(0);
 
       runMigrationsOnBoot(db); // second call must not throw or re-run anything
-      const count2 = sqlite
-        .prepare(`SELECT COUNT(*) as n FROM __drizzle_migrations`)
-        .get() as { n: number };
+      const count2 = sqlite.prepare('SELECT COUNT(*) as n FROM __drizzle_migrations').get() as {
+        n: number;
+      };
       expect(count2.n).toBe(count1.n);
     } finally {
       process.env.NODE_ENV = originalEnv;

@@ -1,27 +1,32 @@
-import { useNavigate, useSearch } from '@tanstack/react-router';
-import { useMemo, useState, useSyncExternalStore } from 'react';
 import {
   DndContext,
+  type DragEndEvent,
   DragOverlay,
+  type DragStartEvent,
   MeasuringStrategy,
   PointerSensor,
   closestCorners,
   useSensor,
   useSensors,
-  type DragEndEvent,
-  type DragStartEvent,
 } from '@dnd-kit/core';
+import { useNavigate, useSearch } from '@tanstack/react-router';
+import { useMemo, useState, useSyncExternalStore } from 'react';
 import { toast } from 'sonner';
-import { useCreateDocument, useDocuments, useUpdateDocument, type DocumentSummary } from '../../lib/api/documents.ts';
-import { useStatuses } from '../../lib/api/statuses.ts';
-import { useViews, useUpdateView } from '../../lib/api/views.ts';
+import {
+  type DocumentSummary,
+  useCreateDocument,
+  useDocuments,
+  useUpdateDocument,
+} from '../../lib/api/documents.ts';
 import { useFields } from '../../lib/api/fields.ts';
 import { formatApiError } from '../../lib/api/index.ts';
-import { KanbanColumn } from '../kanban/kanban-column.tsx';
-import { KanbanCard } from '../kanban/kanban-card.tsx';
-import { boardControlsBus, type BoardSort } from '../../lib/board-controls-bus.ts';
+import { useStatuses } from '../../lib/api/statuses.ts';
+import { useUpdateView, useViews } from '../../lib/api/views.ts';
+import { type BoardSort, boardControlsBus } from '../../lib/board-controls-bus.ts';
+import { coerceGroupValue, dropSlotPosition, resolveDrop } from '../kanban/board-drag.ts';
 import { buildColumns } from '../kanban/board-grouping.ts';
-import { resolveDrop, coerceGroupValue, dropSlotPosition } from '../kanban/board-drag.ts';
+import { KanbanCard } from '../kanban/kanban-card.tsx';
+import { KanbanColumn } from '../kanban/kanban-column.tsx';
 import { EmptyState } from './empty-state.tsx';
 import { KanbanSkeleton } from './kanban-skeleton.tsx';
 
@@ -71,9 +76,8 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
   // Selecting Manual / a group-by applies IMMEDIATELY without `?view=`; the
   // override wins over the view's stored value. The bus returns the same
   // Map-stored reference until mutated, so getSnapshot is stable (no loop).
-  const override = useSyncExternalStore(
-    boardControlsBus.subscribe,
-    () => (activeView ? boardControlsBus.get(activeView.id) : undefined),
+  const override = useSyncExternalStore(boardControlsBus.subscribe, () =>
+    activeView ? boardControlsBus.get(activeView.id) : undefined,
   );
 
   // Derive the board's in-column sort. The bus override wins INCLUDING `null`
@@ -95,12 +99,17 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
   const listParams = useMemo(
     () =>
       effectiveSort
-        ? { type: 'work_item' as const, sort: effectiveSort.key, dir: effectiveSort.dir, limit: 200 }
-        // Manual mode (null sort): query by board_position ascending. The server
-        // coalesces a null board_position to a high sentinel, so unranked cards
-        // (never dragged) sort LAST — deterministic and stable. The first drag
-        // assigns a rank via rankBetween, lifting the card out of the unranked tail.
-        : { type: 'work_item' as const, sort: 'board_position', dir: 'asc' as const, limit: 200 },
+        ? {
+            type: 'work_item' as const,
+            sort: effectiveSort.key,
+            dir: effectiveSort.dir,
+            limit: 200,
+          }
+        : // Manual mode (null sort): query by board_position ascending. The server
+          // coalesces a null board_position to a high sentinel, so unranked cards
+          // (never dragged) sort LAST — deterministic and stable. The first drag
+          // assigns a rank via rankBetween, lifting the card out of the unranked tail.
+          { type: 'work_item' as const, sort: 'board_position', dir: 'asc' as const, limit: 200 },
     [effectiveSort],
   );
 
@@ -124,10 +133,17 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
   };
 
   const groupBy = (override?.groupBy ?? activeView?.groupBy ?? 'status') || 'status';
-  const groupField = groupBy === 'status' ? null : (fields ?? []).find((f) => f.key === groupBy) ?? null;
+  const groupField =
+    groupBy === 'status' ? null : ((fields ?? []).find((f) => f.key === groupBy) ?? null);
 
   const columns = useMemo(
-    () => buildColumns({ docs: page?.data ?? [], groupBy, field: groupField, statuses: statuses ?? [] }),
+    () =>
+      buildColumns({
+        docs: page?.data ?? [],
+        groupBy,
+        field: groupField,
+        statuses: statuses ?? [],
+      }),
     [page, groupBy, groupField, statuses],
   );
 
@@ -185,8 +201,17 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
 
   // Computes the board_position for dropping the active card into `col` at the
   // slot occupied by `overDocId` (drop-before). `null` overDocId appends.
-  const slotPosition = (col: { docIds: string[] }, activeId: string, overDocId: string | null): string =>
-    dropSlotPosition(col.docIds, (id) => docsById.get(id)?.boardPosition ?? null, activeId, overDocId);
+  const slotPosition = (
+    col: { docIds: string[] },
+    activeId: string,
+    overDocId: string | null,
+  ): string =>
+    dropSlotPosition(
+      col.docIds,
+      (id) => docsById.get(id)?.boardPosition ?? null,
+      activeId,
+      overDocId,
+    );
 
   const onDragStart = (event: DragStartEvent) => {
     setActiveId(String(event.active.id));
@@ -224,7 +249,8 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
 
     const action = resolveDrop({ reorderEnabled, overIsColumn, activeGroupValue, destColumnValue });
     if (action.kind === 'none') return;
-    if ((action.kind === 'reorder' || action.kind === 'auto-manual-reorder') && activeId === overId) return;
+    if ((action.kind === 'reorder' || action.kind === 'auto-manual-reorder') && activeId === overId)
+      return;
 
     let patch: Record<string, unknown>;
     if (action.kind === 'reorder') {
@@ -243,7 +269,10 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
     } else {
       // regroup-reorder: land the card where dropped in the destination column.
       const overDocId = overIsColumn ? null : overId;
-      patch = { ...groupingPatch(destColumnValue), boardPosition: slotPosition(destCol, activeId, overDocId) };
+      patch = {
+        ...groupingPatch(destColumnValue),
+        boardPosition: slotPosition(destCol, activeId, overDocId),
+      };
     }
 
     setPendingSlugs((p) => new Set(p).add(slug));
@@ -271,7 +300,7 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
     );
   }
 
-  const activeDoc = activeId ? docsById.get(activeId) ?? null : null;
+  const activeDoc = activeId ? (docsById.get(activeId) ?? null) : null;
 
   return (
     <DndContext
@@ -298,36 +327,36 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
         {/* MainFrame's children container already supplies px-[22px] py-2; don't double it up. */}
         <div className="flex min-h-0 flex-1 items-stretch gap-3 overflow-x-auto">
           {columns.map((col) => (
-          <KanbanColumn
-            key={col.value ?? '__unset__'}
-            value={col.value}
-            label={col.label}
-            color={col.color}
-            count={col.docIds.length}
-            onAdd={col.value === null ? undefined : () => onCreateInColumn(col.value)}
-            isAddPending={create.isPending}
-            docIds={col.docIds}
-            // Always wrap in a SortableContext so a card-over-card drop reports
-            // the over-CARD even in sorted mode (lets onDragEnd resolve the slot
-            // for the auto-switch-to-Manual reorder). The PERSIST gate is
-            // reorderEnabled, handled in onDragEnd — not here.
-            sortable
-          >
-            {col.docIds.map((id) => {
-              const doc = docsById.get(id);
-              if (!doc) return null;
-              return (
-                <KanbanCard
-                  key={doc.id}
-                  doc={doc}
-                  onOpen={openDoc}
-                  isPending={pendingSlugs.has(doc.slug)}
-                  // Always sortable (both modes) so over.id is a card on a
-                  // card-over-card drop — see KanbanColumn `sortable` note.
-                  sortable
-                />
-              );
-            })}
+            <KanbanColumn
+              key={col.value ?? '__unset__'}
+              value={col.value}
+              label={col.label}
+              color={col.color}
+              count={col.docIds.length}
+              onAdd={col.value === null ? undefined : () => onCreateInColumn(col.value)}
+              isAddPending={create.isPending}
+              docIds={col.docIds}
+              // Always wrap in a SortableContext so a card-over-card drop reports
+              // the over-CARD even in sorted mode (lets onDragEnd resolve the slot
+              // for the auto-switch-to-Manual reorder). The PERSIST gate is
+              // reorderEnabled, handled in onDragEnd — not here.
+              sortable
+            >
+              {col.docIds.map((id) => {
+                const doc = docsById.get(id);
+                if (!doc) return null;
+                return (
+                  <KanbanCard
+                    key={doc.id}
+                    doc={doc}
+                    onOpen={openDoc}
+                    isPending={pendingSlugs.has(doc.slug)}
+                    // Always sortable (both modes) so over.id is a card on a
+                    // card-over-card drop — see KanbanColumn `sortable` note.
+                    sortable
+                  />
+                );
+              })}
             </KanbanColumn>
           ))}
         </div>

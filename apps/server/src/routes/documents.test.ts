@@ -1,12 +1,16 @@
-import { test, expect } from 'bun:test';
-import { makeTestApp } from '../test/harness.ts';
+import { expect, test } from 'bun:test';
 import { eq, sql } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { documents, tables } from '../db/schema.ts';
+import { makeTestApp } from '../test/harness.ts';
 
 const path = '/api/v1/w/acme/p/web/documents';
 
-async function createStatus(app: Awaited<ReturnType<typeof makeTestApp>>['app'], cookie: string, key: string) {
+async function createStatus(
+  app: Awaited<ReturnType<typeof makeTestApp>>['app'],
+  cookie: string,
+  key: string,
+) {
   return app.request('/api/v1/w/acme/p/web/statuses', {
     method: 'POST',
     headers: { Cookie: cookie, 'Content-Type': 'application/json' },
@@ -51,7 +55,8 @@ test('POST 422 INVALID_STATUS when status not in registry', async () => {
     method: 'POST',
     headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      type: 'work_item', title: 'X',
+      type: 'work_item',
+      title: 'X',
       frontmatter: { status: 'nope' },
     }),
   });
@@ -96,7 +101,8 @@ test('PATCH JSON merges frontmatter', async () => {
     method: 'POST',
     headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      type: 'work_item', title: 'M',
+      type: 'work_item',
+      title: 'M',
       frontmatter: { priority: 'high', tag: 'a' },
     }),
   });
@@ -140,7 +146,8 @@ test('DELETE returns 204', async () => {
     body: JSON.stringify({ type: 'work_item', title: 'Del' }),
   });
   const res = await app.request(`${path}/del`, {
-    method: 'DELETE', headers: { Cookie: seed.sessionCookie },
+    method: 'DELETE',
+    headers: { Cookie: seed.sessionCookie },
   });
   expect(res.status).toBe(204);
 });
@@ -203,7 +210,7 @@ test('POST text/markdown with no title at all gets "Untitled"', async () => {
   const res = await app.request(path, {
     method: 'POST',
     headers: { Cookie: seed.sessionCookie, 'Content-Type': 'text/markdown' },
-    body: `body only`,
+    body: 'body only',
   });
   expect(res.status).toBe(201);
   expect((await res.json()).data.title).toBe('Untitled');
@@ -215,7 +222,9 @@ test('PATCH text/markdown replaces whole document', async () => {
     method: 'POST',
     headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      type: 'work_item', title: 'Original', frontmatter: { keep: 'me' },
+      type: 'work_item',
+      title: 'Original',
+      frontmatter: { keep: 'me' },
     }),
   });
   const res = await app.request(`${path}/original`, {
@@ -278,7 +287,7 @@ test('H6: PATCH text/markdown rejects type=comment (must use update_comment)', a
   const res = await app.request(`${path}/${comment.slug}`, {
     method: 'PATCH',
     headers: { Cookie: seed.sessionCookie, 'Content-Type': 'text/markdown' },
-    body: `# tampered\n\nrewritten body\n`,
+    body: '# tampered\n\nrewritten body\n',
   });
   expect(res.status).toBe(422);
   expect((await res.json()).error.code).toBe('COMMENT_REQUIRES_COMMENT_TOOL');
@@ -408,7 +417,11 @@ test('GET filters by ?status= (single value)', async () => {
   await app.request(path, {
     method: 'POST',
     headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ type: 'work_item', title: 'BacklogDoc', frontmatter: { status: 'backlog' } }),
+    body: JSON.stringify({
+      type: 'work_item',
+      title: 'BacklogDoc',
+      frontmatter: { status: 'backlog' },
+    }),
   });
   const res = await app.request(`${path}?status=todo`, { headers: { Cookie: seed.sessionCookie } });
   const body = await res.json();
@@ -418,14 +431,20 @@ test('GET filters by ?status= (single value)', async () => {
 
 test('GET filters by ?status= (multiple values via repeat)', async () => {
   const { app, seed } = await makeTestApp({ seedProjectDefaults: true });
-  for (const [t, s] of [['T', 'todo'], ['B', 'backlog'], ['D', 'done']] as const) {
+  for (const [t, s] of [
+    ['T', 'todo'],
+    ['B', 'backlog'],
+    ['D', 'done'],
+  ] as const) {
     await app.request(path, {
       method: 'POST',
       headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
       body: JSON.stringify({ type: 'work_item', title: t, frontmatter: { status: s } }),
     });
   }
-  const res = await app.request(`${path}?status=todo&status=done`, { headers: { Cookie: seed.sessionCookie } });
+  const res = await app.request(`${path}?status=todo&status=done`, {
+    headers: { Cookie: seed.sessionCookie },
+  });
   const body = await res.json();
   expect(body.data).toHaveLength(2);
   const titles = body.data.map((d: { title: string }) => d.title).sort();
@@ -441,7 +460,9 @@ test('GET filters by ?updated_since=', async () => {
   });
   // Future timestamp filters everything out
   const future = new Date(Date.now() + 60_000).toISOString();
-  const res = await app.request(`${path}?updated_since=${future}`, { headers: { Cookie: seed.sessionCookie } });
+  const res = await app.request(`${path}?updated_since=${future}`, {
+    headers: { Cookie: seed.sessionCookie },
+  });
   expect((await res.json()).data).toHaveLength(0);
 });
 
@@ -494,7 +515,8 @@ test('GET /documents/:slug.md returns raw markdown with frontmatter', async () =
     method: 'POST',
     headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      type: 'work_item', title: 'Round Trip',
+      type: 'work_item',
+      title: 'Round Trip',
       frontmatter: { priority: 'high', tag: 'a' },
     }),
   });
@@ -554,7 +576,9 @@ test('POST /:slug/activity bumps last_touched_at and emits activity.logged', asy
   const afterDoc = (await after.json()).data;
   expect(afterDoc.lastTouchedAt).not.toBeNull();
 
-  const events = await app.request(`${path}/lead-foo/events`, { headers: { Cookie: seed.sessionCookie } });
+  const events = await app.request(`${path}/lead-foo/events`, {
+    headers: { Cookie: seed.sessionCookie },
+  });
   const list = (await events.json()).data;
   const activityEvents = list.filter((e: { kind: string }) => e.kind === 'activity.logged');
   expect(activityEvents).toHaveLength(1);
@@ -701,7 +725,9 @@ test('GET /?stale_for=Nd filters by last_touched_at', async () => {
   });
   // Stale-for filter with 7 days — Fresh has lastTouchedAt=now (NOT stale),
   // Stale has lastTouchedAt=null (stale by convention).
-  const res = await app.request(`${path}?type=work_item&stale_for=7d`, { headers: { Cookie: seed.sessionCookie } });
+  const res = await app.request(`${path}?type=work_item&stale_for=7d`, {
+    headers: { Cookie: seed.sessionCookie },
+  });
   const titles = (await res.json()).data.map((d: { title: string }) => d.title);
   expect(titles).toContain('Stale');
   expect(titles).not.toContain('Fresh');
@@ -789,7 +815,10 @@ test('POST agent on a table-scoped URL is rejected', async () => {
       type: 'agent',
       title: 'No table allowed',
       frontmatter: {
-        system_prompt: 'x', model: 'x', provider: 'anthropic', tools: [],
+        system_prompt: 'x',
+        model: 'x',
+        provider: 'anthropic',
+        tools: [],
       },
     }),
   });
@@ -799,9 +828,12 @@ test('POST agent on a table-scoped URL is rejected', async () => {
 test('workspace agent create auto-mints a bearer token', async () => {
   const { app, seed } = await makeTestApp();
   const { status, data } = await createAgentAtWorkspace(app, seed.sessionCookie, {
-    type: 'agent', title: 'Bot',
+    type: 'agent',
+    title: 'Bot',
     frontmatter: {
-      system_prompt: 'x', model: 'x', provider: 'anthropic',
+      system_prompt: 'x',
+      model: 'x',
+      provider: 'anthropic',
       tools: ['create_document', 'list_documents'],
     },
   });
@@ -814,8 +846,14 @@ test('workspace agent create auto-mints a bearer token', async () => {
 test('workspace agent delete revokes the linked token via cascade FK', async () => {
   const { app, seed } = await makeTestApp();
   const { data } = await createAgentAtWorkspace(app, seed.sessionCookie, {
-    type: 'agent', title: 'Bot',
-    frontmatter: { system_prompt: 'x', model: 'x', provider: 'anthropic', tools: ['list_documents'] },
+    type: 'agent',
+    title: 'Bot',
+    frontmatter: {
+      system_prompt: 'x',
+      model: 'x',
+      provider: 'anthropic',
+      tools: ['list_documents'],
+    },
   });
   const slug = data.slug as string;
   const agentToken = (data as { agent_token: string }).agent_token;
@@ -843,7 +881,8 @@ test('workspace agent delete revokes the linked token via cascade FK', async () 
 test('agent.created event emitted on workspace agent create', async () => {
   const { app, seed } = await makeTestApp();
   await createAgentAtWorkspace(app, seed.sessionCookie, {
-    type: 'agent', title: 'Bot',
+    type: 'agent',
+    title: 'Bot',
     frontmatter: { system_prompt: 'x', model: 'x', provider: 'anthropic', tools: [] },
   });
   const { db } = await import('../db/client.ts');
@@ -859,15 +898,22 @@ test('work item POST with assignee=agent:slug emits agent.task.assigned', async 
   const { app, seed } = await makeTestApp();
   // First create the agent so the slug exists.
   await createAgentAtWorkspace(app, seed.sessionCookie, {
-    type: 'agent', title: 'Bot',
-    frontmatter: { system_prompt: 'x', model: 'x', provider: 'anthropic', tools: ['list_documents'] },
+    type: 'agent',
+    title: 'Bot',
+    frontmatter: {
+      system_prompt: 'x',
+      model: 'x',
+      provider: 'anthropic',
+      tools: ['list_documents'],
+    },
   });
 
   await app.request('/api/v1/w/acme/p/web/documents', {
     method: 'POST',
     headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      type: 'work_item', title: 'Triage me',
+      type: 'work_item',
+      title: 'Triage me',
       frontmatter: { assignee: 'agent:bot' },
     }),
   });
@@ -882,7 +928,8 @@ test('work item POST with assignee=agent:slug emits agent.task.assigned', async 
 test('work item PATCH that adds assignee=agent:slug emits agent.task.assigned', async () => {
   const { app, seed } = await makeTestApp();
   await createAgentAtWorkspace(app, seed.sessionCookie, {
-    type: 'agent', title: 'Bot',
+    type: 'agent',
+    title: 'Bot',
     frontmatter: { system_prompt: 'x', model: 'x', provider: 'anthropic', tools: [] },
   });
   const create = await app.request('/api/v1/w/acme/p/web/documents', {
@@ -890,7 +937,9 @@ test('work item PATCH that adds assignee=agent:slug emits agent.task.assigned', 
     headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
     body: JSON.stringify({ type: 'work_item', title: 'No assignee yet' }),
   });
-  const { data: { slug } } = await create.json();
+  const {
+    data: { slug },
+  } = await create.json();
 
   await app.request(`/api/v1/w/acme/p/web/documents/${slug}`, {
     method: 'PATCH',
@@ -908,18 +957,22 @@ test('work item PATCH that adds assignee=agent:slug emits agent.task.assigned', 
 test('PATCH that keeps the same agent assignee does NOT re-emit', async () => {
   const { app, seed } = await makeTestApp();
   await createAgentAtWorkspace(app, seed.sessionCookie, {
-    type: 'agent', title: 'Bot',
+    type: 'agent',
+    title: 'Bot',
     frontmatter: { system_prompt: 'x', model: 'x', provider: 'anthropic', tools: [] },
   });
   const create = await app.request('/api/v1/w/acme/p/web/documents', {
     method: 'POST',
     headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      type: 'work_item', title: 'Triage',
+      type: 'work_item',
+      title: 'Triage',
       frontmatter: { assignee: 'agent:bot' },
     }),
   });
-  const { data: { slug } } = await create.json();
+  const {
+    data: { slug },
+  } = await create.json();
 
   // PATCH that doesn't change the assignee — emits nothing.
   await app.request(`/api/v1/w/acme/p/web/documents/${slug}`, {
@@ -932,17 +985,21 @@ test('PATCH that keeps the same agent assignee does NOT re-emit', async () => {
   const { events } = await import('../db/schema.ts');
   const { eq } = await import('drizzle-orm');
   const rows = await db.query.events.findMany({ where: eq(events.kind, 'agent.task.assigned') });
-  expect(rows.length).toBe(1);  // still just the create
+  expect(rows.length).toBe(1); // still just the create
 });
 
 test('an agent token cannot delegate past its max_delegation_depth', async () => {
   const { app, seed } = await makeTestApp();
   // Workspace-scoped agent with max_delegation_depth: 0 (cannot delegate at all).
   const { data } = await createAgentAtWorkspace(app, seed.sessionCookie, {
-    type: 'agent', title: 'Bot',
+    type: 'agent',
+    title: 'Bot',
     frontmatter: {
-      system_prompt: 'x', model: 'x', provider: 'anthropic',
-      tools: ['create_document'], max_delegation_depth: 0,
+      system_prompt: 'x',
+      model: 'x',
+      provider: 'anthropic',
+      tools: ['create_document'],
+      max_delegation_depth: 0,
     },
   });
   const agentToken = (data as { agent_token: string }).agent_token;
@@ -952,7 +1009,8 @@ test('an agent token cannot delegate past its max_delegation_depth', async () =>
     method: 'POST',
     headers: { Authorization: `Bearer ${agentToken}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      type: 'work_item', title: 'I am trying to assign',
+      type: 'work_item',
+      title: 'I am trying to assign',
       frontmatter: { assignee: 'agent:bot' },
     }),
   });
@@ -980,9 +1038,12 @@ test('agent bearer narrowed to other projects is denied at project scope (FORBID
   // is explicitly NOT in the allow-list. Use the read-only `list_documents`
   // tool so we exercise the GET path.
   const { data: agent } = await createAgentAtWorkspace(app, seed.sessionCookie, {
-    type: 'agent', title: 'Other Only',
+    type: 'agent',
+    title: 'Other Only',
     frontmatter: {
-      system_prompt: 'x', model: 'm', provider: 'anthropic',
+      system_prompt: 'x',
+      model: 'm',
+      provider: 'anthropic',
       tools: ['list_documents'],
       projects: [otherProjectId],
     },
@@ -1007,9 +1068,12 @@ test('agent bearer narrowed to other projects is denied at project scope (FORBID
   // Wildcard agent must continue to pass on any project — sanity check that
   // the gate doesn't fire when intersect() returns ['*'].
   const { data: wildAgent } = await createAgentAtWorkspace(app, seed.sessionCookie, {
-    type: 'agent', title: 'Wild',
+    type: 'agent',
+    title: 'Wild',
     frontmatter: {
-      system_prompt: 'x', model: 'm', provider: 'anthropic',
+      system_prompt: 'x',
+      model: 'm',
+      provider: 'anthropic',
       tools: ['list_documents'],
       // projects defaults to ['*']
     },
@@ -1202,8 +1266,7 @@ test('F9: POST JSON with type: agent_run returns 422 (defense-in-depth)', async 
   // this. Both signal the same intent: agent_run is not creatable via
   // the generic documents endpoint.
   expect(
-    body.error.code === 'AGENT_RUN_REQUIRES_RUNNER_PATH' ||
-    body.error.code === 'INVALID_BODY',
+    body.error.code === 'AGENT_RUN_REQUIRES_RUNNER_PATH' || body.error.code === 'INVALID_BODY',
   ).toBe(true);
 });
 

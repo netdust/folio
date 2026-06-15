@@ -1,9 +1,9 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
-import { CommentRow } from './comment-row.tsx';
-import { commentToMarkdown } from './copy-as-md.ts';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Comment } from '../../lib/api/comments.ts';
 import type { Member } from '../../lib/api/members.ts';
+import { CommentRow } from './comment-row.tsx';
+import { commentToMarkdown } from './copy-as-md.ts';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -61,13 +61,7 @@ afterEach(() => {
 
 describe('CommentRow', () => {
   it('renders author as 👤 <member-name> for user author', () => {
-    render(
-      <CommentRow
-        comment={baseComment}
-        currentUserId="u-1"
-        workspaceMembers={members}
-      />,
-    );
+    render(<CommentRow comment={baseComment} currentUserId="u-1" workspaceMembers={members} />);
     expect(screen.getByText(/Stefan V/)).toBeInTheDocument();
     expect(screen.getByText(/👤/)).toBeInTheDocument();
   });
@@ -77,13 +71,7 @@ describe('CommentRow', () => {
       ...baseComment,
       frontmatter: { ...baseComment.frontmatter, author: 'agent:drafter' },
     };
-    render(
-      <CommentRow
-        comment={agentComment}
-        currentUserId="u-1"
-        workspaceMembers={members}
-      />,
-    );
+    render(<CommentRow comment={agentComment} currentUserId="u-1" workspaceMembers={members} />);
     expect(screen.getByText(/🤖/)).toBeInTheDocument();
     expect(screen.getByText(/drafter/)).toBeInTheDocument();
   });
@@ -134,26 +122,14 @@ describe('CommentRow', () => {
   });
 
   it('renders relative timestamp with absolute ISO in title attribute', () => {
-    render(
-      <CommentRow
-        comment={baseComment}
-        currentUserId="u-1"
-        workspaceMembers={members}
-      />,
-    );
+    render(<CommentRow comment={baseComment} currentUserId="u-1" workspaceMembers={members} />);
     const timeEl = screen.getByTitle(NOW);
     expect(timeEl).toBeInTheDocument();
     expect(timeEl.textContent).toBe('just now');
   });
 
   it('hides kind chip for kind=comment', () => {
-    render(
-      <CommentRow
-        comment={baseComment}
-        currentUserId="u-1"
-        workspaceMembers={members}
-      />,
-    );
+    render(<CommentRow comment={baseComment} currentUserId="u-1" workspaceMembers={members} />);
     // There should be no chip with text "comment"
     expect(screen.queryByText('comment')).not.toBeInTheDocument();
   });
@@ -163,13 +139,7 @@ describe('CommentRow', () => {
       ...baseComment,
       frontmatter: { ...baseComment.frontmatter, kind: 'plan' },
     };
-    render(
-      <CommentRow
-        comment={planComment}
-        currentUserId="u-1"
-        workspaceMembers={members}
-      />,
-    );
+    render(<CommentRow comment={planComment} currentUserId="u-1" workspaceMembers={members} />);
     expect(screen.getByText('plan')).toBeInTheDocument();
   });
 
@@ -179,13 +149,7 @@ describe('CommentRow', () => {
       ...baseComment,
       frontmatter: { ...baseComment.frontmatter, kind: 'error' },
     };
-    render(
-      <CommentRow
-        comment={errorComment}
-        currentUserId="u-1"
-        workspaceMembers={members}
-      />,
-    );
+    render(<CommentRow comment={errorComment} currentUserId="u-1" workspaceMembers={members} />);
     expect(screen.getByText('error')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /retry/i })).not.toBeInTheDocument();
   });
@@ -225,13 +189,7 @@ describe('CommentRow', () => {
         run_id: 'run-abc12345',
       },
     };
-    render(
-      <CommentRow
-        comment={agentComment}
-        currentUserId="u-1"
-        workspaceMembers={members}
-      />,
-    );
+    render(<CommentRow comment={agentComment} currentUserId="u-1" workspaceMembers={members} />);
     expect(screen.getByText(/run-id:/)).toBeInTheDocument();
     // Short form — first 8 chars of "run-abc12345"
     expect(screen.getByText(/run-abc1/)).toBeInTheDocument();
@@ -246,13 +204,7 @@ describe('CommentRow', () => {
         run_id: 'run-abc12345',
       },
     };
-    render(
-      <CommentRow
-        comment={userComment}
-        currentUserId="u-1"
-        workspaceMembers={members}
-      />,
-    );
+    render(<CommentRow comment={userComment} currentUserId="u-1" workspaceMembers={members} />);
     expect(screen.queryByText(/run-id:/)).not.toBeInTheDocument();
   });
 
@@ -265,13 +217,7 @@ describe('CommentRow', () => {
         mentions: [{ target: 'drafter', resolved: true }],
       },
     };
-    render(
-      <CommentRow
-        comment={mentionComment}
-        currentUserId="u-1"
-        workspaceMembers={members}
-      />,
-    );
+    render(<CommentRow comment={mentionComment} currentUserId="u-1" workspaceMembers={members} />);
     // @drafter should render as a chip
     expect(screen.getByText('@drafter')).toBeInTheDocument();
     // surrounding text
@@ -284,13 +230,7 @@ describe('CommentRow', () => {
       ...baseComment,
       body: 'See [[my-doc]] for details',
     };
-    render(
-      <CommentRow
-        comment={wikiComment}
-        currentUserId="u-1"
-        workspaceMembers={members}
-      />,
-    );
+    render(<CommentRow comment={wikiComment} currentUserId="u-1" workspaceMembers={members} />);
     expect(screen.getByText('my-doc')).toBeInTheDocument();
     expect(screen.getByText(/See/)).toBeInTheDocument();
     expect(screen.getByText(/for details/)).toBeInTheDocument();
@@ -308,13 +248,7 @@ describe('CommentRow', () => {
         mentions: [{ target: 'agent:old-agent', resolved: false }],
       },
     };
-    render(
-      <CommentRow
-        comment={staleComment}
-        currentUserId="u-1"
-        workspaceMembers={members}
-      />,
-    );
+    render(<CommentRow comment={staleComment} currentUserId="u-1" workspaceMembers={members} />);
     const mentionEl = screen.getByText('@old-agent');
     expect(mentionEl).toHaveClass('line-through');
   });
@@ -328,13 +262,7 @@ describe('CommentRow', () => {
         mentions: [{ target: 'user:ghost', resolved: false }],
       },
     };
-    render(
-      <CommentRow
-        comment={staleComment}
-        currentUserId="u-1"
-        workspaceMembers={members}
-      />,
-    );
+    render(<CommentRow comment={staleComment} currentUserId="u-1" workspaceMembers={members} />);
     const mentionEl = screen.getByText('@ghost');
     expect(mentionEl).toHaveClass('line-through');
   });
@@ -360,7 +288,7 @@ describe('CommentRow', () => {
     render(
       <CommentRow
         comment={baseComment}
-        currentUserId="u-2"       // different user
+        currentUserId="u-2" // different user
         workspaceMembers={members}
         onEdit={vi.fn()}
         onDelete={vi.fn()}
@@ -379,13 +307,7 @@ describe('CommentRow', () => {
         deleted_at: NOW,
       },
     };
-    render(
-      <CommentRow
-        comment={deletedComment}
-        currentUserId="u-1"
-        workspaceMembers={members}
-      />,
-    );
+    render(<CommentRow comment={deletedComment} currentUserId="u-1" workspaceMembers={members} />);
     // Muted deleted line should mention "deleted"
     expect(screen.getByText(/deleted/)).toBeInTheDocument();
     // No body
@@ -396,13 +318,7 @@ describe('CommentRow', () => {
   });
 
   it('clicking Copy-as-MD writes commentToMarkdown to clipboard', async () => {
-    render(
-      <CommentRow
-        comment={baseComment}
-        currentUserId="u-1"
-        workspaceMembers={members}
-      />,
-    );
+    render(<CommentRow comment={baseComment} currentUserId="u-1" workspaceMembers={members} />);
     const copyBtn = screen.getByRole('button', { name: /copy as md/i });
     fireEvent.click(copyBtn);
     // Wait a tick for the async clipboard call
@@ -460,7 +376,7 @@ describe('commentToMarkdown', () => {
 
   it('omits optional fields when not set', () => {
     const md = commentToMarkdown(baseComment);
-    expect(md).not.toContain('visibility:');   // 'normal' is omitted
+    expect(md).not.toContain('visibility:'); // 'normal' is omitted
     expect(md).not.toContain('edited_at:');
     expect(md).not.toContain('target_agent:');
     expect(md).not.toContain('run_id:');

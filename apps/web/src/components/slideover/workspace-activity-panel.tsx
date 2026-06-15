@@ -1,12 +1,10 @@
-import { useState } from 'react';
 import { ChevronRight, History } from 'lucide-react';
-import {
-  useWorkspaceDocumentEvents,
-} from '../../lib/api/workspace-documents.ts';
+import { useState } from 'react';
 import type { DocumentEvent } from '../../lib/api/events.ts';
-import { Icon } from '../ui/icon.tsx';
-import { cn } from '../ui/cn.ts';
+import { useWorkspaceDocumentEvents } from '../../lib/api/workspace-documents.ts';
 import { relativeTime } from '../../lib/relative-time.ts';
+import { cn } from '../ui/cn.ts';
+import { Icon } from '../ui/icon.tsx';
 
 /**
  * Phase 2.6 C10: workspace-scoped sibling of ActivityPanel.
@@ -80,7 +78,11 @@ function ActivityRow({ event }: { event: DocumentEvent }) {
         <span className={cn('font-medium', isManual ? 'text-fg' : 'text-fg-3')}>
           {labelForKind(event.kind)}
         </span>
-        {note ? <span className="flex-1 truncate text-fg-2">{note}</span> : <span className="flex-1" />}
+        {note ? (
+          <span className="flex-1 truncate text-fg-2">{note}</span>
+        ) : (
+          <span className="flex-1" />
+        )}
         <time className="text-fg-3 shrink-0">{relativeTime(event.createdAt)}</time>
       </button>
       {open ? (
@@ -94,12 +96,19 @@ function ActivityRow({ event }: { event: DocumentEvent }) {
 
 function labelForKind(kind: string): string {
   switch (kind) {
-    case 'activity.logged': return 'Logged';
-    case 'document.created': return 'Created';
-    case 'document.updated': return 'Updated';
-    case 'document.deleted': return 'Deleted';
-    case 'status.updated': return 'Status changed';
-    case 'agent.created': return 'Agent created';
-    default: return kind;
+    case 'activity.logged':
+      return 'Logged';
+    case 'document.created':
+      return 'Created';
+    case 'document.updated':
+      return 'Updated';
+    case 'document.deleted':
+      return 'Deleted';
+    case 'status.updated':
+      return 'Status changed';
+    case 'agent.created':
+      return 'Agent created';
+    default:
+      return kind;
   }
 }

@@ -1,9 +1,9 @@
 import { Plus } from 'lucide-react';
 import { useState } from 'react';
+import type { FieldType } from '../../lib/api/fields.ts';
 import { IconButton } from '../ui/icon-button.tsx';
 import { Icon } from '../ui/icon.tsx';
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
-import type { FieldType } from '../../lib/api/fields.ts';
 
 const FIELD_TYPES: { value: FieldType; label: string }[] = [
   { value: 'string', label: 'Text (single line)' },
@@ -130,10 +130,7 @@ export function TableAddColumn({ onSubmit, tables = [] }: Props) {
       </PopoverTrigger>
       <PopoverContent align="end" className="w-[280px] p-3">
         <form className="flex flex-col gap-2" onSubmit={handleSubmit}>
-          <label
-            className="text-[11px] uppercase tracking-wide text-fg-3"
-            htmlFor="add-col-key"
-          >
+          <label className="text-[11px] uppercase tracking-wide text-fg-3" htmlFor="add-col-key">
             Key
           </label>
           <input
@@ -142,13 +139,9 @@ export function TableAddColumn({ onSubmit, tables = [] }: Props) {
             onChange={(e) => setKey(e.target.value)}
             placeholder="e.g. next_action"
             className="rounded-sm border border-border-light bg-content px-2 py-1 text-sm outline-none focus:border-border"
-            autoFocus
           />
 
-          <label
-            className="text-[11px] uppercase tracking-wide text-fg-3"
-            htmlFor="add-col-label"
-          >
+          <label className="text-[11px] uppercase tracking-wide text-fg-3" htmlFor="add-col-label">
             Label
           </label>
           <input
@@ -159,10 +152,7 @@ export function TableAddColumn({ onSubmit, tables = [] }: Props) {
             className="rounded-sm border border-border-light bg-content px-2 py-1 text-sm outline-none focus:border-border"
           />
 
-          <label
-            className="text-[11px] uppercase tracking-wide text-fg-3"
-            htmlFor="add-col-type"
-          >
+          <label className="text-[11px] uppercase tracking-wide text-fg-3" htmlFor="add-col-type">
             Type
           </label>
           <select
@@ -257,7 +247,11 @@ export function TableAddColumn({ onSubmit, tables = [] }: Props) {
             </>
           ) : null}
 
-          {error ? <p role="alert" className="text-xs text-danger">{error}</p> : null}
+          {error ? (
+            <p role="alert" className="text-xs text-danger">
+              {error}
+            </p>
+          ) : null}
 
           <div className="mt-1 flex justify-end gap-2">
             <button

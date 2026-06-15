@@ -1,21 +1,32 @@
+import {
+  DndContext,
+  type DragEndEvent,
+  PointerSensor,
+  useDraggable,
+  useDroppable,
+  useSensor,
+  useSensors,
+} from '@dnd-kit/core';
 import { useNavigate, useSearch } from '@tanstack/react-router';
-import { useMemo, useState } from 'react';
-import { DndContext, PointerSensor, useDraggable, useDroppable, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
 import { ChevronDown, ChevronRight, FolderTree, Plus } from 'lucide-react';
+import { useMemo, useState } from 'react';
 import { toast } from 'sonner';
-import { useDocuments, useCreateDocument, useUpdateDocument } from '../../lib/api/documents.ts';
-import { DEFAULT_TABLE_SLUG } from '../../lib/default-table.ts';
+import { useCreateDocument, useDocuments, useUpdateDocument } from '../../lib/api/documents.ts';
 import { formatApiError } from '../../lib/api/index.ts';
 import { copyDocumentAsMarkdown } from '../../lib/copy-as-md.ts';
+import { DEFAULT_TABLE_SLUG } from '../../lib/default-table.ts';
+import { type TreeNode, buildTree, descendantIds } from '../../lib/wiki-tree.ts';
+import { cn } from '../ui/cn.ts';
 import { Icon } from '../ui/icon.tsx';
 import { EmptyState } from './empty-state.tsx';
 import { RowContextMenu } from './row-context-menu.tsx';
-import { WikiSkeleton } from './wiki-skeleton.tsx';
-import { buildTree, descendantIds, type TreeNode } from '../../lib/wiki-tree.ts';
 import { WikiCard } from './wiki-card.tsx';
-import { cn } from '../ui/cn.ts';
+import { WikiSkeleton } from './wiki-skeleton.tsx';
 
-interface Props { wslug: string; pslug: string; }
+interface Props {
+  wslug: string;
+  pslug: string;
+}
 
 export function WikiTree({ wslug, pslug }: Props) {
   const navigate = useNavigate();
@@ -29,7 +40,11 @@ export function WikiTree({ wslug, pslug }: Props) {
   // type:'work_item' is constrained by the active table). tslug is required by
   // the hook signature but ignored for pages, so DEFAULT_TABLE_SLUG is the
   // honest constant — the wiki route carries no :tslug param.
-  const { data: page, isLoading, error } = useDocuments(wslug, pslug, DEFAULT_TABLE_SLUG, listParams);
+  const {
+    data: page,
+    isLoading,
+    error,
+  } = useDocuments(wslug, pslug, DEFAULT_TABLE_SLUG, listParams);
   const create = useCreateDocument(wslug, pslug, DEFAULT_TABLE_SLUG);
   const update = useUpdateDocument(wslug, pslug, DEFAULT_TABLE_SLUG, listParams);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -78,7 +93,9 @@ export function WikiTree({ wslug, pslug }: Props) {
       return;
     }
 
-    const dragDoc = (active.data.current as { doc?: { slug: string; parentId: string | null } } | undefined)?.doc;
+    const dragDoc = (
+      active.data.current as { doc?: { slug: string; parentId: string | null } } | undefined
+    )?.doc;
     if (!dragDoc) return;
 
     // No-op if already parented there
@@ -132,11 +149,14 @@ export function WikiTree({ wslug, pslug }: Props) {
                       node={c}
                       depth={0}
                       expanded={expanded}
-                      onToggle={(id) => setExpanded((p) => {
-                        const s = new Set(p);
-                        if (s.has(id)) s.delete(id); else s.add(id);
-                        return s;
-                      })}
+                      onToggle={(id) =>
+                        setExpanded((p) => {
+                          const s = new Set(p);
+                          if (s.has(id)) s.delete(id);
+                          else s.add(id);
+                          return s;
+                        })
+                      }
                       onOpen={openDoc}
                       onAddChild={onAddChild}
                       pendingId={pendingId}
@@ -166,7 +186,17 @@ interface RowProps {
   pslug: string;
 }
 
-export function TreeRow({ node, depth, expanded, onToggle, onOpen, onAddChild, pendingId, wslug, pslug }: RowProps) {
+export function TreeRow({
+  node,
+  depth,
+  expanded,
+  onToggle,
+  onOpen,
+  onAddChild,
+  pendingId,
+  wslug,
+  pslug,
+}: RowProps) {
   const isExpanded = expanded.has(node.doc.id);
   const hasChildren = node.children.length > 0;
   const isPending = pendingId === node.doc.id;
@@ -209,7 +239,13 @@ export function TreeRow({ node, depth, expanded, onToggle, onOpen, onAddChild, p
         >
           <button
             type="button"
-            aria-label={hasChildren ? (isExpanded ? `Collapse ${node.doc.title}` : `Expand ${node.doc.title}`) : undefined}
+            aria-label={
+              hasChildren
+                ? isExpanded
+                  ? `Collapse ${node.doc.title}`
+                  : `Expand ${node.doc.title}`
+                : undefined
+            }
             onClick={() => hasChildren && onToggle(node.doc.id)}
             onPointerDown={(e) => e.stopPropagation()}
             className={`inline-grid h-6 w-6 place-items-center text-fg-3 ${hasChildren ? 'cursor-pointer hover:text-fg' : 'cursor-default opacity-0'}`}
@@ -230,7 +266,10 @@ export function TreeRow({ node, depth, expanded, onToggle, onOpen, onAddChild, p
             aria-label={`Add child page under ${node.doc.title}`}
             title="Add child page"
             data-testid={`wiki-add-child-${node.doc.slug}`}
-            onClick={(e) => { e.stopPropagation(); onAddChild(node.doc.id); }}
+            onClick={(e) => {
+              e.stopPropagation();
+              onAddChild(node.doc.id);
+            }}
             onPointerDown={(e) => e.stopPropagation()}
             className="grid h-6 w-6 place-items-center rounded text-fg-3 opacity-0 transition-opacity duration-fast hover:bg-card hover:text-fg group-hover/row:opacity-100"
           >

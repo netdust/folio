@@ -1,20 +1,22 @@
-import { describe, it, expect, afterEach, test, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
+  Outlet,
+  RouterProvider,
   createMemoryHistory,
   createRootRoute,
   createRoute,
   createRouter,
-  Outlet,
-  RouterProvider,
 } from '@tanstack/react-router';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { afterEach, describe, expect, it, test, vi } from 'vitest';
 import { z } from 'zod';
 import { WikiTree } from './wiki-tree.tsx';
 
 function setup() {
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
   const rootRoute = createRootRoute({ component: () => <Outlet /> });
   const wiki = createRoute({
     getParentRoute: () => rootRoute,
@@ -32,14 +34,22 @@ function setup() {
   return { queryClient, router };
 }
 
-function pagesResponse(items: Array<{ id: string; slug: string; title: string; parentId?: string | null }>) {
+function pagesResponse(
+  items: Array<{ id: string; slug: string; title: string; parentId?: string | null }>,
+) {
   return new Response(
     JSON.stringify({
       data: {
         data: items.map((i) => ({
-          id: i.id, slug: i.slug, type: 'page', title: i.title,
-          status: null, parentId: i.parentId ?? null,
-          frontmatter: {}, createdAt: '', updatedAt: '',
+          id: i.id,
+          slug: i.slug,
+          type: 'page',
+          title: i.title,
+          status: null,
+          parentId: i.parentId ?? null,
+          frontmatter: {},
+          createdAt: '',
+          updatedAt: '',
         })),
         nextCursor: null,
       },
@@ -49,16 +59,29 @@ function pagesResponse(items: Array<{ id: string; slug: string; title: string; p
 }
 
 function cardPagesResponse(
-  items: Array<{ id: string; slug: string; title: string; parentId?: string | null; body?: string }>,
+  items: Array<{
+    id: string;
+    slug: string;
+    title: string;
+    parentId?: string | null;
+    body?: string;
+  }>,
 ) {
   return new Response(
     JSON.stringify({
       data: {
         data: items.map((i) => ({
-          id: i.id, slug: i.slug, type: 'page', title: i.title,
-          status: null, parentId: i.parentId ?? null,
-          frontmatter: {}, body: i.body ?? '',
-          createdAt: '', updatedAt: '', lastTouchedAt: null,
+          id: i.id,
+          slug: i.slug,
+          type: 'page',
+          title: i.title,
+          status: null,
+          parentId: i.parentId ?? null,
+          frontmatter: {},
+          body: i.body ?? '',
+          createdAt: '',
+          updatedAt: '',
+          lastTouchedAt: null,
         })),
         nextCursor: null,
       },
@@ -74,13 +97,22 @@ describe('WikiTree', () => {
   });
 
   it('renders nested pages and toggles children visibility', async () => {
-    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () => pagesResponse([
-      { id: 'a', slug: 'a', title: 'Parent' },
-      { id: 'b', slug: 'b', title: 'Child', parentId: 'a' },
-    ])));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>(async () =>
+        pagesResponse([
+          { id: 'a', slug: 'a', title: 'Parent' },
+          { id: 'b', slug: 'b', title: 'Child', parentId: 'a' },
+        ]),
+      ),
+    );
 
     const { queryClient, router } = setup();
-    render(<QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider>);
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
     await waitFor(() => expect(screen.getByText('Parent')).toBeInTheDocument());
     expect(screen.queryByText('Child')).not.toBeInTheDocument();
 
@@ -92,12 +124,17 @@ describe('WikiTree', () => {
   });
 
   it('clicking a node sets ?doc=', async () => {
-    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () => pagesResponse([
-      { id: 'a', slug: 'a', title: 'Parent' },
-    ])));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>(async () => pagesResponse([{ id: 'a', slug: 'a', title: 'Parent' }])),
+    );
 
     const { queryClient, router } = setup();
-    render(<QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider>);
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
     await userEvent.click(await screen.findByText('Parent'));
     await waitFor(() => expect(router.state.location.search).toEqual({ doc: 'a' }));
   });
@@ -108,31 +145,46 @@ describe('WikiTree', () => {
     // hover `+`, and its job is to wire up the parent/child relationship
     // at create time.
     const createCalls: Array<Record<string, unknown>> = [];
-    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async (url, init) => {
-      const u = String(url);
-      const method = init?.method ?? 'GET';
-      if (u.includes('/documents') && method === 'POST') {
-        const body = init?.body instanceof ReadableStream
-          ? await new Response(init.body).text()
-          : String(init?.body ?? '{}');
-        const parsed = JSON.parse(body);
-        createCalls.push(parsed);
-        return new Response(
-          JSON.stringify({
-            data: {
-              id: 'child-new', slug: 'child-new', type: 'page',
-              title: 'Untitled', status: null, parentId: parsed.parentId ?? null,
-              frontmatter: {}, body: '', createdAt: '', updatedAt: '',
-            },
-          }),
-          { status: 201, headers: { 'content-type': 'application/json' } },
-        );
-      }
-      return pagesResponse([{ id: 'a', slug: 'a', title: 'Parent' }]);
-    }));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>(async (url, init) => {
+        const u = String(url);
+        const method = init?.method ?? 'GET';
+        if (u.includes('/documents') && method === 'POST') {
+          const body =
+            init?.body instanceof ReadableStream
+              ? await new Response(init.body).text()
+              : String(init?.body ?? '{}');
+          const parsed = JSON.parse(body);
+          createCalls.push(parsed);
+          return new Response(
+            JSON.stringify({
+              data: {
+                id: 'child-new',
+                slug: 'child-new',
+                type: 'page',
+                title: 'Untitled',
+                status: null,
+                parentId: parsed.parentId ?? null,
+                frontmatter: {},
+                body: '',
+                createdAt: '',
+                updatedAt: '',
+              },
+            }),
+            { status: 201, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        return pagesResponse([{ id: 'a', slug: 'a', title: 'Parent' }]);
+      }),
+    );
 
     const { queryClient, router } = setup();
-    render(<QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider>);
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
     await waitFor(() => expect(screen.getByText('Parent')).toBeInTheDocument());
 
     // Root pages render as cards; the card's add-child button carries an
@@ -146,36 +198,69 @@ describe('WikiTree', () => {
   });
 
   it('empty state offers New page', async () => {
-    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async (url, init) => {
-      const u = String(url);
-      const method = init?.method ?? 'GET';
-      if (u.includes('/documents') && method === 'POST') {
-        return new Response(
-          JSON.stringify({
-            data: { id: 'new', slug: 'untitled', type: 'page', title: 'Untitled', status: null, parentId: null, frontmatter: {}, body: '', createdAt: '', updatedAt: '' },
-          }),
-          { status: 201, headers: { 'content-type': 'application/json' } },
-        );
-      }
-      return pagesResponse([]);
-    }));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>(async (url, init) => {
+        const u = String(url);
+        const method = init?.method ?? 'GET';
+        if (u.includes('/documents') && method === 'POST') {
+          return new Response(
+            JSON.stringify({
+              data: {
+                id: 'new',
+                slug: 'untitled',
+                type: 'page',
+                title: 'Untitled',
+                status: null,
+                parentId: null,
+                frontmatter: {},
+                body: '',
+                createdAt: '',
+                updatedAt: '',
+              },
+            }),
+            { status: 201, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        return pagesResponse([]);
+      }),
+    );
 
     const { queryClient, router } = setup();
-    render(<QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider>);
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
     await waitFor(() => expect(screen.getByText('No pages yet')).toBeInTheDocument());
     await userEvent.click(screen.getByRole('button', { name: 'Create your first page' }));
     await waitFor(() => expect(router.state.location.search).toEqual({ doc: 'untitled' }));
   });
 
   test('wiki overview renders root pages as cards with excerpt and child count', async () => {
-    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () => cardPagesResponse([
-      { id: 'r1', slug: 'guide', title: 'Guide', parentId: null, body: '# Guide\n\nHow to start.' },
-      { id: 'r2', slug: 'faq', title: 'FAQ', parentId: null, body: 'Questions.' },
-      { id: 'c1', slug: 'step-1', title: 'Step 1', parentId: 'r1', body: '' },
-    ])));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>(async () =>
+        cardPagesResponse([
+          {
+            id: 'r1',
+            slug: 'guide',
+            title: 'Guide',
+            parentId: null,
+            body: '# Guide\n\nHow to start.',
+          },
+          { id: 'r2', slug: 'faq', title: 'FAQ', parentId: null, body: 'Questions.' },
+          { id: 'c1', slug: 'step-1', title: 'Step 1', parentId: 'r1', body: '' },
+        ]),
+      ),
+    );
 
     const { queryClient, router } = setup();
-    render(<QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider>);
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
 
     expect(await screen.findByText('Guide')).toBeInTheDocument();
     expect(screen.getByText('How to start.')).toBeInTheDocument();
@@ -184,14 +269,29 @@ describe('WikiTree', () => {
   });
 
   test('expanding a card reveals its child subtree', async () => {
-    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () => cardPagesResponse([
-      { id: 'r1', slug: 'guide', title: 'Guide', parentId: null, body: '# Guide\n\nHow to start.' },
-      { id: 'r2', slug: 'faq', title: 'FAQ', parentId: null, body: 'Questions.' },
-      { id: 'c1', slug: 'step-1', title: 'Step 1', parentId: 'r1', body: '' },
-    ])));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>(async () =>
+        cardPagesResponse([
+          {
+            id: 'r1',
+            slug: 'guide',
+            title: 'Guide',
+            parentId: null,
+            body: '# Guide\n\nHow to start.',
+          },
+          { id: 'r2', slug: 'faq', title: 'FAQ', parentId: null, body: 'Questions.' },
+          { id: 'c1', slug: 'step-1', title: 'Step 1', parentId: 'r1', body: '' },
+        ]),
+      ),
+    );
 
     const { queryClient, router } = setup();
-    render(<QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider>);
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
 
     const card = (await screen.findByText('Guide')).closest('[data-testid^="wiki-card-"]')!;
     fireEvent.click(within(card as HTMLElement).getByRole('button', { name: /expand guide/i }));

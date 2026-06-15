@@ -1,7 +1,7 @@
-import { afterEach, describe, it, expect, vi } from 'vitest';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WorkspaceActivityPanel } from './workspace-activity-panel.tsx';
 
 function wrap(qc: QueryClient, ui: React.ReactElement) {
@@ -31,11 +31,12 @@ describe('WorkspaceActivityPanel', () => {
   });
 
   it('hits /w/:wslug/documents/:slug/events (workspace-scoped — no /p/)', async () => {
-    const fetchMock = vi.fn<typeof fetch>(async () =>
-      new Response(JSON.stringify({ data: [] }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      }),
+    const fetchMock = vi.fn<typeof fetch>(
+      async () =>
+        new Response(JSON.stringify({ data: [] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
     );
     vi.stubGlobal('fetch', fetchMock);
 
@@ -59,8 +60,20 @@ describe('WorkspaceActivityPanel', () => {
 
   it('renders event rows with a count badge when events exist', async () => {
     mockEvents([
-      { id: 'e1', kind: 'activity.logged', actor: 'u', payload: { note: 'cron ran' }, createdAt: new Date().toISOString() },
-      { id: 'e2', kind: 'document.created', actor: 'u', payload: null, createdAt: new Date().toISOString() },
+      {
+        id: 'e1',
+        kind: 'activity.logged',
+        actor: 'u',
+        payload: { note: 'cron ran' },
+        createdAt: new Date().toISOString(),
+      },
+      {
+        id: 'e2',
+        kind: 'document.created',
+        actor: 'u',
+        payload: null,
+        createdAt: new Date().toISOString(),
+      },
     ]);
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(wrap(qc, <WorkspaceActivityPanel wslug="acme" slug="triage" />));
@@ -72,7 +85,13 @@ describe('WorkspaceActivityPanel', () => {
 
   it('clicking an event row toggles the raw JSON drawer', async () => {
     mockEvents([
-      { id: 'e1', kind: 'activity.logged', actor: 'u', payload: { note: 'hello' }, createdAt: new Date().toISOString() },
+      {
+        id: 'e1',
+        kind: 'activity.logged',
+        actor: 'u',
+        payload: { note: 'hello' },
+        createdAt: new Date().toISOString(),
+      },
     ]);
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(wrap(qc, <WorkspaceActivityPanel wslug="acme" slug="triage" />));
@@ -88,7 +107,13 @@ describe('WorkspaceActivityPanel', () => {
 
   it('clicking the Activity header collapses the body', async () => {
     mockEvents([
-      { id: 'e1', kind: 'activity.logged', actor: 'u', payload: { note: 'x' }, createdAt: new Date().toISOString() },
+      {
+        id: 'e1',
+        kind: 'activity.logged',
+        actor: 'u',
+        payload: { note: 'x' },
+        createdAt: new Date().toISOString(),
+      },
     ]);
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(wrap(qc, <WorkspaceActivityPanel wslug="acme" slug="triage" />));

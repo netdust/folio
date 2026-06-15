@@ -64,10 +64,7 @@ export interface VisibilityArgs {
  *   allow-list passes them only when the agent owns the project, and this
  *   predicate then confirms the agent is the assignee.
  */
-export function isAgentEventVisible(
-  ctx: AgentEventContext,
-  args: VisibilityArgs,
-): boolean {
+export function isAgentEventVisible(ctx: AgentEventContext, args: VisibilityArgs): boolean {
   // Non-agent token: no narrowing applied here.
   if (!ctx.agentId) return true;
 

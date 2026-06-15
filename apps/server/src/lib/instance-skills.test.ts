@@ -1,9 +1,9 @@
-import { eq } from 'drizzle-orm';
 import { describe, expect, test } from 'bun:test';
-import { makeBareTestDb } from '../test/harness.ts';
+import { eq } from 'drizzle-orm';
 import * as schema from '../db/schema.ts';
-import { FOLIO_SKILL_BODY, FOLIO_SKILL_SLUG } from './system-skills.ts';
+import { makeBareTestDb } from '../test/harness.ts';
 import { getInstanceSkill, seedInstanceSkills } from './instance-skills.ts';
+import { FOLIO_SKILL_BODY, FOLIO_SKILL_SLUG } from './system-skills.ts';
 
 describe('instance-skills seeder/loader', () => {
   test('seedInstanceSkills idempotently seeds the folio skill', async () => {

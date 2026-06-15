@@ -1,3 +1,4 @@
+import { documentCreateSchema, documentPatchSchema } from '@folio/shared';
 /**
  * Workspace-scoped document routes for agents and triggers (Phase 2.5).
  *
@@ -7,10 +8,8 @@
  */
 import { desc, eq } from 'drizzle-orm';
 import { Hono } from 'hono';
-import { documentCreateSchema, documentPatchSchema } from '@folio/shared';
 import { db } from '../db/client.ts';
-import { documents, events } from '../db/schema.ts';
-import { emitEvent, txWithEvents } from '../lib/events.ts';
+import { events, documents } from '../db/schema.ts';
 // S8: shared with the project-scoped activity endpoint via lib/activity-limits.
 import { ACTIVITY_NOTE_MAX } from '../lib/activity-limits.ts';
 import {
@@ -20,18 +19,19 @@ import {
   assertNotHumanPatForAgentLifecycle,
   assertNotSelfDelete,
 } from '../lib/agent-guards.ts';
+import { emitEvent, txWithEvents } from '../lib/events.ts';
+import { HTTPError, jsonOk } from '../lib/http.ts';
 import { type AuthContext, getUser } from '../middleware/auth.ts';
 import { requireScope } from '../middleware/bearer.ts';
-import { getWorkspace, type ScopeContext } from '../middleware/scope.ts';
-import { HTTPError, jsonOk } from '../lib/http.ts';
+import { type ScopeContext, getWorkspace } from '../middleware/scope.ts';
 import {
+  type DocumentType,
   createDocument,
   deleteDocument,
   getWorkspaceDocument,
   listWorkspaceDocuments,
   stripReservedFrontmatter,
   updateDocument,
-  type DocumentType,
 } from '../services/documents.ts';
 
 export const workspaceDocumentsRoute = new Hono<AuthContext & ScopeContext>();
@@ -245,8 +245,11 @@ workspaceDocumentsRoute.post('/:slug/activity', requireScope('documents:write'),
   const slug = c.req.param('slug');
 
   let body: { note?: unknown };
-  try { body = (await c.req.json()) as { note?: unknown }; }
-  catch { throw new HTTPError('INVALID_BODY', 'JSON body required', 400); }
+  try {
+    body = (await c.req.json()) as { note?: unknown };
+  } catch {
+    throw new HTTPError('INVALID_BODY', 'JSON body required', 400);
+  }
 
   const note = typeof body.note === 'string' ? body.note.trim() : '';
   if (!note) throw new HTTPError('INVALID_NOTE', 'note is required', 422);
@@ -281,7 +284,7 @@ workspaceDocumentsRoute.post('/:slug/activity', requireScope('documents:write'),
       .where(eq(documents.id, existing.id));
     await emitEvent(tx, {
       workspaceId: ws.id,
-      projectId: null,        // agents are workspace-scoped, no project
+      projectId: null, // agents are workspace-scoped, no project
       documentId: existing.id,
       kind: 'activity.logged',
       actor: user.id,

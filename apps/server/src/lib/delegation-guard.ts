@@ -1,5 +1,7 @@
 export interface AgentLookup {
-  findAgentBySlug(slug: string): Promise<{ parent: string | null; max_delegation_depth: number } | null>;
+  findAgentBySlug(
+    slug: string,
+  ): Promise<{ parent: string | null; max_delegation_depth: number } | null>;
 }
 
 const MAX_WALK = 10;
@@ -14,7 +16,8 @@ export async function walkParentChain(slug: string, lookup: AgentLookup): Promis
     if (visited.has(current)) throw new Error('agent delegation cycle detected');
     visited.add(current);
     if (depth > MAX_WALK) throw new Error('agent delegation chain too deep');
-    const row: { parent: string | null; max_delegation_depth: number } | null = await lookup.findAgentBySlug(current);
+    const row: { parent: string | null; max_delegation_depth: number } | null =
+      await lookup.findAgentBySlug(current);
     if (!row) return depth;
     current = row.parent;
     if (current) depth++;

@@ -7,12 +7,7 @@ import { apiTokens } from '../db/schema.ts';
 import { canSeeWorkspace, userRole } from '../lib/access.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
 import { mintToken, serializeApiToken } from '../lib/token-reach.ts';
-import {
-  type AuthContext,
-  getUser,
-  requireSessionUser,
-  requireUser,
-} from '../middleware/auth.ts';
+import { type AuthContext, getUser, requireSessionUser, requireUser } from '../middleware/auth.ts';
 
 const tokensRoute = new Hono<AuthContext>();
 tokensRoute.use('*', requireUser);

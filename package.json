@@ -12,7 +12,7 @@
     "db:generate": "bun run --filter @folio/server db:generate",
     "db:migrate": "bun run --filter @folio/server db:migrate",
     "db:studio": "bun run --filter @folio/server db:studio",
-    "test": "bun test",
+    "test": "echo 'Run tests per-app: (cd apps/server && bun test), (cd packages/shared && bun test), (cd apps/web && npx vitest run). Root bun test triggers a cwd module-init cascade — see CLAUDE.md.' && exit 1",
     "check:invariants": "bun run scripts/check-invariants.ts",
     "lint": "biome check .",
     "format": "biome format --write ."

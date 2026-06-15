@@ -44,11 +44,11 @@ import {
 import { resolveAgentProjects } from './agent-projects.ts';
 import { resolveAgentForRun } from './agent-resolver.ts';
 import type { AgentRunFrontmatter } from './agent-run-schema.ts';
+import { emitChainSuppressed } from './autonomy-gate.ts';
 import type { BusEvent } from './event-bus.ts';
 import type { Reactor } from './event-dispatcher.ts';
-import { emitChainSuppressed } from './autonomy-gate.ts';
-import { rejectRun } from './runner.ts';
 import { HTTPError } from './http.ts';
+import { rejectRun } from './runner.ts';
 
 /**
  * Create a FRESH trigger-fired run, skipping (not throwing) when the agent has
@@ -68,9 +68,7 @@ import { HTTPError } from './http.ts';
  * time empty-body guard exists (a deliberate decision — see
  * tasks/retro-follow-ups.md); this reactor-side skip is the load-bearing fix.
  */
-async function createRunSkippingEmptyPrompt(
-  args: Parameters<typeof createRun>[0],
-): Promise<void> {
+async function createRunSkippingEmptyPrompt(args: Parameters<typeof createRun>[0]): Promise<void> {
   try {
     await createRun(args);
   } catch (err) {

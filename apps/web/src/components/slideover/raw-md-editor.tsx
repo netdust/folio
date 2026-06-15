@@ -1,7 +1,7 @@
-import { EditorState } from '@codemirror/state';
-import { EditorView, keymap } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import { markdown } from '@codemirror/lang-markdown';
+import { EditorState } from '@codemirror/state';
+import { EditorView, keymap } from '@codemirror/view';
 import { useEffect, useRef } from 'react';
 import { debounce } from '../../lib/debounce.ts';
 
@@ -22,6 +22,7 @@ export function RawMdEditor({ value, onChange, readOnly }: Props) {
 
   const debouncedOnChange = useRef(debounce((md: string) => onChangeRef.current(md), 400)).current;
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: value/onChange are read via refs so the CodeMirror editor is created ONCE — adding them would destroy editor state on every keystroke
   useEffect(() => {
     if (!hostRef.current) return;
 

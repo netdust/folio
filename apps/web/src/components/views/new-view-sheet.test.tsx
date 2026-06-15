@@ -1,15 +1,15 @@
-import { describe, it, expect, afterEach, vi } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
+  Outlet,
+  RouterProvider,
   createMemoryHistory,
   createRootRoute,
   createRoute,
   createRouter,
-  Outlet,
-  RouterProvider,
 } from '@tanstack/react-router';
+import { render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { NewViewSheet } from './new-view-sheet.tsx';
 
 interface SetupOpts {
@@ -73,7 +73,11 @@ function setup({ currentSearch, currentColumns, tslug = 'work-items' }: SetupOpt
 // The shape locked by apps/server/src/routes/views.test.ts "POST returns
 // data.view.id as a unique non-empty string" must match here, or this
 // suite stops protecting the production code path.
-function mockFetch(viewId = 'v-new', createdType: 'list' | 'kanban' = 'list', tslug = 'work-items') {
+function mockFetch(
+  viewId = 'v-new',
+  createdType: 'list' | 'kanban' = 'list',
+  tslug = 'work-items',
+) {
   return vi.fn<typeof fetch>(async (url, init) => {
     const u = String(url);
     // C3T9: views are created on the table-scoped collection (/t/<tslug>/views).
@@ -103,7 +107,15 @@ function mockFetch(viewId = 'v-new', createdType: 'list' | 'kanban' = 'list', ts
       return new Response(
         JSON.stringify({
           data: [
-            { id: 'f1', key: 'priority', type: 'select', label: 'Priority', options: ['Low', 'High'], required: false, order: 1 },
+            {
+              id: 'f1',
+              key: 'priority',
+              type: 'select',
+              label: 'Priority',
+              options: ['Low', 'High'],
+              required: false,
+              order: 1,
+            },
           ],
         }),
         { status: 200, headers: { 'content-type': 'application/json' } },
@@ -113,10 +125,7 @@ function mockFetch(viewId = 'v-new', createdType: 'list' | 'kanban' = 'list', ts
   });
 }
 
-function findPostBody(
-  fetchMock: ReturnType<typeof mockFetch>,
-  tslug = 'work-items',
-): unknown {
+function findPostBody(fetchMock: ReturnType<typeof mockFetch>, tslug = 'work-items'): unknown {
   const call = fetchMock.mock.calls.find(
     ([url, init]) =>
       String(url).endsWith(`/api/v1/w/main/p/acme/t/${tslug}/views`) && init?.method === 'POST',
@@ -323,8 +332,24 @@ describe('NewViewSheet', () => {
         return new Response(
           JSON.stringify({
             data: [
-              { id: 'f1', key: 'priority', type: 'select', label: 'Priority', options: ['Low', 'High'], required: false, order: 1 },
-              { id: 'f2', key: 'labels', type: 'multi_select', label: 'Labels', options: ['bug', 'feat'], required: false, order: 2 },
+              {
+                id: 'f1',
+                key: 'priority',
+                type: 'select',
+                label: 'Priority',
+                options: ['Low', 'High'],
+                required: false,
+                order: 1,
+              },
+              {
+                id: 'f2',
+                key: 'labels',
+                type: 'multi_select',
+                label: 'Labels',
+                options: ['bug', 'feat'],
+                required: false,
+                order: 2,
+              },
             ],
           }),
           { status: 200, headers: { 'content-type': 'application/json' } },
@@ -396,8 +421,7 @@ describe('NewViewSheet', () => {
     // Adversarial: it must NOT have created on the default table.
     const workItemsPost = fetchMock.mock.calls.find(
       ([url, init]) =>
-        String(url).endsWith('/api/v1/w/main/p/acme/t/work-items/views') &&
-        init?.method === 'POST',
+        String(url).endsWith('/api/v1/w/main/p/acme/t/work-items/views') && init?.method === 'POST',
     );
     expect(workItemsPost).toBeUndefined();
 

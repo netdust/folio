@@ -1,7 +1,7 @@
 import { useNavigate } from '@tanstack/react-router';
-import { useActivityFeed, type ActivityItem } from '../../lib/api/activity-feed.ts';
-import { RunStatusChip } from '../runs/run-status-chip.tsx';
+import { type ActivityItem, useActivityFeed } from '../../lib/api/activity-feed.ts';
 import { relativeTime } from '../../lib/relative-time.ts';
+import { RunStatusChip } from '../runs/run-status-chip.tsx';
 
 interface Props {
   wslug: string;

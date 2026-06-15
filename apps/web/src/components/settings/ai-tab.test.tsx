@@ -1,16 +1,16 @@
-import { beforeEach, describe, expect, test, vi } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { AiTab } from './ai-tab.tsx';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { beforeEach, describe, expect, test, vi } from 'vitest';
 import {
-  useInstanceAiKeys,
-  useUpsertInstanceAiKey,
   useDeleteInstanceAiKey,
+  useInstanceAiKeys,
   useOperatorModel,
   useSetOperatorModel,
+  useUpsertInstanceAiKey,
 } from '../../lib/api/instance-ai-keys.ts';
+import { AiTab } from './ai-tab.tsx';
 
-const mockTestMutate = vi.fn(async () => ({ ok: true } as const));
+const mockTestMutate = vi.fn(async () => ({ ok: true }) as const);
 vi.mock('../../lib/api/ai-test-key.ts', () => ({
   useTestKey: () => ({ mutateAsync: mockTestMutate, isPending: false }),
 }));
@@ -41,7 +41,12 @@ describe('AiTab', () => {
     mockTestMutate.mockClear();
     vi.mocked(useInstanceAiKeys).mockReturnValue({ data: [], isLoading: false } as never);
     vi.mocked(useUpsertInstanceAiKey).mockReturnValue({
-      mutateAsync: vi.fn(async () => ({ id: 'k', provider: 'anthropic', label: 'default', paid_residual_live: false })),
+      mutateAsync: vi.fn(async () => ({
+        id: 'k',
+        provider: 'anthropic',
+        label: 'default',
+        paid_residual_live: false,
+      })),
       isPending: false,
     } as never);
     vi.mocked(useDeleteInstanceAiKey).mockReturnValue({
@@ -220,7 +225,10 @@ describe('AiTab', () => {
   test('onSave suppresses success + shows truthful info-toast when provider switches mid-flight', async () => {
     let resolveSave: (v: { ok: true }) => void = () => {};
     const upsertSpy = vi.fn(
-      () => new Promise<{ ok: true }>((res) => { resolveSave = res; }),
+      () =>
+        new Promise<{ ok: true }>((res) => {
+          resolveSave = res;
+        }),
     );
     vi.mocked(useUpsertInstanceAiKey).mockReturnValue({
       mutateAsync: upsertSpy,
@@ -257,7 +265,10 @@ describe('AiTab', () => {
   test('onTest suppresses chip + shows truthful info-toast when provider switches mid-flight', async () => {
     let resolveTest: (v: { ok: true }) => void = () => {};
     mockTestMutate.mockImplementationOnce(
-      () => new Promise<{ ok: true }>((res) => { resolveTest = res; }),
+      () =>
+        new Promise<{ ok: true }>((res) => {
+          resolveTest = res;
+        }),
     );
     const { toast } = await import('sonner');
     vi.mocked(toast.info).mockClear();
@@ -345,11 +356,18 @@ describe('AiTab', () => {
     test('clicking "Use for operator" sends {provider, model, aiKeyLabel}', async () => {
       seedAnthropicDefaultKey();
       const setMutate = vi.fn(async () => ({ ok: true }));
-      vi.mocked(useSetOperatorModel).mockReturnValue({ mutateAsync: setMutate, isPending: false } as never);
+      vi.mocked(useSetOperatorModel).mockReturnValue({
+        mutateAsync: setMutate,
+        isPending: false,
+      } as never);
       renderTab();
       fireEvent.click(screen.getByRole('button', { name: /use for operator/i }));
       await waitFor(() => expect(setMutate).toHaveBeenCalledTimes(1));
-      const arg = setMutate.mock.calls[0]![0] as { provider: string; model: string; aiKeyLabel: string };
+      const arg = setMutate.mock.calls[0]![0] as {
+        provider: string;
+        model: string;
+        aiKeyLabel: string;
+      };
       expect(arg.provider).toBe('anthropic');
       expect(arg.aiKeyLabel).toBe('default');
       expect(typeof arg.model).toBe('string');
@@ -389,7 +407,13 @@ describe('AiTab', () => {
       // Operator points at an ollama key under a non-default label.
       vi.mocked(useInstanceAiKeys).mockReturnValue({
         data: [
-          { id: 'k1', provider: 'ollama', label: 'local', baseUrl: 'https://o.example', createdAt: '2026-01-01T00:00:00Z' },
+          {
+            id: 'k1',
+            provider: 'ollama',
+            label: 'local',
+            baseUrl: 'https://o.example',
+            createdAt: '2026-01-01T00:00:00Z',
+          },
         ],
         isLoading: false,
       } as never);

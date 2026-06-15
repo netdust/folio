@@ -13,15 +13,10 @@ import { HTTPError, jsonOk } from '../lib/http.ts';
 import { slugUniqueInWorkspaces } from '../lib/slug-unique.ts';
 import { findSystemOwnerId, isReservedSlug } from '../lib/system-workspace.ts';
 import { isInstanceReach, isOperatorToken } from '../lib/token-reach.ts';
-import { listWorkspaces } from '../services/workspaces.ts';
-import {
-  type AuthContext,
-  getUser,
-  requireSessionUser,
-  requireUser,
-} from '../middleware/auth.ts';
-import { type ScopeContext, getRole, getWorkspace } from '../middleware/scope.ts';
+import { type AuthContext, getUser, requireSessionUser, requireUser } from '../middleware/auth.ts';
 import { attachToken } from '../middleware/bearer.ts';
+import { type ScopeContext, getRole, getWorkspace } from '../middleware/scope.ts';
+import { listWorkspaces } from '../services/workspaces.ts';
 
 /** Throw if a slug is reserved (underscore-prefixed). Defense-in-depth beyond
  *  the create zod regex (threat model M2/M3). Exported for unit test. */
@@ -262,8 +257,7 @@ workspaceItemRoute.get('/members', async (c) => {
     const agent = await db.query.documents.findFirst({
       where: eq(documents.id, token.agentId),
     });
-    const projects =
-      (agent?.frontmatter as { projects?: unknown } | undefined)?.projects;
+    const projects = (agent?.frontmatter as { projects?: unknown } | undefined)?.projects;
     const projectList = Array.isArray(projects)
       ? (projects.filter((p) => typeof p === 'string') as string[])
       : [];

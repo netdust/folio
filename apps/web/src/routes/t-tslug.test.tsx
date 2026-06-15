@@ -1,14 +1,14 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
+  Outlet,
+  RouterProvider,
   createMemoryHistory,
   createRootRoute,
   createRoute,
   createRouter,
-  Outlet,
-  RouterProvider,
 } from '@tanstack/react-router';
+import { render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 
 // Capture the props TableView / KanbanView are mounted with — the seam under
@@ -30,9 +30,9 @@ vi.mock('../components/views/kanban-view.tsx', () => ({
   },
 }));
 
+import { Route as TableBoardRoute } from './w.$wslug.p.$pslug.t.$tslug.board.tsx';
 // Imported AFTER the mocks so the route's `import { TableView }` resolves to the stub.
 import { Route as TableTableRoute } from './w.$wslug.p.$pslug.t.$tslug.tsx';
-import { Route as TableBoardRoute } from './w.$wslug.p.$pslug.t.$tslug.board.tsx';
 
 function setupRouter(initialPath: string) {
   const queryClient = new QueryClient({
@@ -91,9 +91,7 @@ describe('/t/$tslug grid route', () => {
     // Negative/adversarial: the route must carry the REAL param, never a hardcoded
     // default. A regression that hardcoded tslug="bugs" would pass the happy test
     // above; this asserts the param is the source of truth.
-    expect(tableSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ tslug: 'work-items' }),
-    );
+    expect(tableSpy).toHaveBeenCalledWith(expect.objectContaining({ tslug: 'work-items' }));
   });
 });
 

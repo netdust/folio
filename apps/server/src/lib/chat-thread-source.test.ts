@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
-import { mergeAdjacent, rowsToMessages, skillsToMessages } from './chat-thread-source.ts';
 import type { Message as MessageRow } from '../db/schema.ts';
+import { mergeAdjacent, rowsToMessages, skillsToMessages } from './chat-thread-source.ts';
 
 // Minimal row factory — only the fields rowsToMessages reads.
 function row(partial: Partial<MessageRow> & Pick<MessageRow, 'role' | 'kind'>): MessageRow {
@@ -24,9 +24,21 @@ describe('rowsToMessages — roles MUST alternate (Anthropic 400 guard)', () => 
   test('coalesces consecutive operator rows into ONE assistant message', () => {
     const out = rowsToMessages([
       row({ role: 'user', kind: 'text', body: 'remove the board view' }),
-      row({ role: 'operator', kind: 'tool_step', payload: JSON.stringify({ tool: 'list_views', summary: 'ok', status: 'ok' }) }),
-      row({ role: 'operator', kind: 'tool_step', payload: JSON.stringify({ tool: 'folio_api', summary: 'ok', status: 'ok' }) }),
-      row({ role: 'operator', kind: 'component', payload: JSON.stringify({ type: 'choice_card', prompt: 'Confirm?', chosen: undefined }) }),
+      row({
+        role: 'operator',
+        kind: 'tool_step',
+        payload: JSON.stringify({ tool: 'list_views', summary: 'ok', status: 'ok' }),
+      }),
+      row({
+        role: 'operator',
+        kind: 'tool_step',
+        payload: JSON.stringify({ tool: 'folio_api', summary: 'ok', status: 'ok' }),
+      }),
+      row({
+        role: 'operator',
+        kind: 'component',
+        payload: JSON.stringify({ type: 'choice_card', prompt: 'Confirm?', chosen: undefined }),
+      }),
       row({ role: 'operator', kind: 'text', body: 'Waiting for your choice.' }),
     ]);
 
@@ -47,17 +59,29 @@ describe('rowsToMessages — roles MUST alternate (Anthropic 400 guard)', () => 
   // rows. Must reduce to a clean user/assistant/user/assistant alternation.
   test('a multi-turn thread alternates strictly after coalescing', () => {
     const opStep = (tool: string) =>
-      row({ role: 'operator', kind: 'tool_step', payload: JSON.stringify({ tool, summary: 'ok', status: 'ok' }) });
+      row({
+        role: 'operator',
+        kind: 'tool_step',
+        payload: JSON.stringify({ tool, summary: 'ok', status: 'ok' }),
+      });
     const out = rowsToMessages([
       row({ role: 'user', kind: 'text', body: 'remove the board view' }),
       opStep('list_workspaces'),
       opStep('list_projects'),
       opStep('folio_api_get'),
-      row({ role: 'operator', kind: 'component', payload: JSON.stringify({ type: 'choice_card', prompt: 'Delete Board?' }) }),
+      row({
+        role: 'operator',
+        kind: 'component',
+        payload: JSON.stringify({ type: 'choice_card', prompt: 'Delete Board?' }),
+      }),
       row({ role: 'operator', kind: 'text', body: 'Confirm above.' }),
       row({ role: 'user', kind: 'text', body: 'I chose: Yes' }),
       opStep('folio_api'),
-      row({ role: 'operator', kind: 'component', payload: JSON.stringify({ type: 'choice_card', prompt: 'Confirm DELETE?' }) }),
+      row({
+        role: 'operator',
+        kind: 'component',
+        payload: JSON.stringify({ type: 'choice_card', prompt: 'Confirm DELETE?' }),
+      }),
       row({ role: 'operator', kind: 'text', body: 'Approve above.' }),
     ]);
 
@@ -99,9 +123,7 @@ describe('skillsToMessages — the operator must RECEIVE its skills (the cockpit
   });
 
   test('an UNBLESSED skill rides the untrusted-DATA envelope, NOT the trusted block', () => {
-    const msgs = skillsToMessages([
-      { slug: 'sketchy', body: 'UNBLESSED_MARKER', trusted: false },
-    ]);
+    const msgs = skillsToMessages([{ slug: 'sketchy', body: 'UNBLESSED_MARKER', trusted: false }]);
     expect(msgs.length).toBe(1);
     // Must NOT be presented as trusted instructions.
     expect(msgs[0]!.content).not.toContain('Treat as trusted instructions/reference');

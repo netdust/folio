@@ -1,4 +1,4 @@
-import { test, expect, signUpFresh, createWorkspace, createProject } from './fixtures.ts';
+import { createProject, createWorkspace, expect, signUpFresh, test } from './fixtures.ts';
 
 test('sign-up + workspace + project lands you on the work-items list', async ({ page }) => {
   await signUpFresh(page);

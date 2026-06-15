@@ -1,5 +1,5 @@
-import { describe, test, expect, beforeEach, vi, afterEach } from 'vitest';
-import { renderHook, act } from '@testing-library/react';
+import { act, renderHook } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { useResizableWidth } from './use-resizable-width.ts';
 
 beforeEach(() => localStorage.clear());
@@ -11,23 +11,32 @@ afterEach(() => vi.restoreAllMocks());
 
 describe('useResizableWidth', () => {
   test('returns the default width when nothing is stored', () => {
-    const { result } = renderHook(() => useResizableWidth('k', { default: 480, min: 360, max: 900 }));
+    const { result } = renderHook(() =>
+      useResizableWidth('k', { default: 480, min: 360, max: 900 }),
+    );
     expect(result.current.width).toBe(480);
   });
 
   test('restores a persisted width from localStorage (clamped to min/max)', () => {
     localStorage.setItem('folio:width:k', '5000'); // above max
-    const { result } = renderHook(() => useResizableWidth('k', { default: 480, min: 360, max: 900 }));
+    const { result } = renderHook(() =>
+      useResizableWidth('k', { default: 480, min: 360, max: 900 }),
+    );
     expect(result.current.width).toBe(900);
   });
 
   test('a left-drag widens the panel and clamps + persists', () => {
-    const { result } = renderHook(() => useResizableWidth('k', { default: 480, min: 360, max: 900 }));
+    const { result } = renderHook(() =>
+      useResizableWidth('k', { default: 480, min: 360, max: 900 }),
+    );
     // onDragStart receives a pointerdown at clientX=1000; the handle is on the
     // slideover's LEFT edge, so moving the pointer LEFT (smaller clientX)
     // widens it. Simulate a move to clientX=900 → +100px → 580.
     act(() => {
-      result.current.onDragStart({ clientX: 1000, preventDefault() {}, } as unknown as React.PointerEvent);
+      result.current.onDragStart({
+        clientX: 1000,
+        preventDefault() {},
+      } as unknown as React.PointerEvent);
       window.dispatchEvent(new MouseEvent('pointermove', { clientX: 900 } as MouseEventInit));
       window.dispatchEvent(new MouseEvent('pointerup', {} as MouseEventInit));
     });
@@ -36,9 +45,14 @@ describe('useResizableWidth', () => {
   });
 
   test('clamps to max on a large drag', () => {
-    const { result } = renderHook(() => useResizableWidth('k', { default: 480, min: 360, max: 900 }));
+    const { result } = renderHook(() =>
+      useResizableWidth('k', { default: 480, min: 360, max: 900 }),
+    );
     act(() => {
-      result.current.onDragStart({ clientX: 1000, preventDefault() {} } as unknown as React.PointerEvent);
+      result.current.onDragStart({
+        clientX: 1000,
+        preventDefault() {},
+      } as unknown as React.PointerEvent);
       window.dispatchEvent(new MouseEvent('pointermove', { clientX: 0 } as MouseEventInit)); // +1000 → clamp 900
       window.dispatchEvent(new MouseEvent('pointerup', {} as MouseEventInit));
     });
@@ -46,9 +60,14 @@ describe('useResizableWidth', () => {
   });
 
   test('a right-drag past min clamps to min', () => {
-    const { result } = renderHook(() => useResizableWidth('k', { default: 480, min: 360, max: 900 }));
+    const { result } = renderHook(() =>
+      useResizableWidth('k', { default: 480, min: 360, max: 900 }),
+    );
     act(() => {
-      result.current.onDragStart({ clientX: 1000, preventDefault() {} } as unknown as React.PointerEvent);
+      result.current.onDragStart({
+        clientX: 1000,
+        preventDefault() {},
+      } as unknown as React.PointerEvent);
       // Dragging RIGHT (larger clientX) NARROWS it: 480 + (1000 - 2000) = -520 → clamp 360.
       window.dispatchEvent(new MouseEvent('pointermove', { clientX: 2000 } as MouseEventInit));
       window.dispatchEvent(new MouseEvent('pointerup', {} as MouseEventInit));
@@ -58,9 +77,14 @@ describe('useResizableWidth', () => {
   });
 
   test('a move after pointerup is ignored', () => {
-    const { result } = renderHook(() => useResizableWidth('k', { default: 480, min: 360, max: 900 }));
+    const { result } = renderHook(() =>
+      useResizableWidth('k', { default: 480, min: 360, max: 900 }),
+    );
     act(() => {
-      result.current.onDragStart({ clientX: 1000, preventDefault() {} } as unknown as React.PointerEvent);
+      result.current.onDragStart({
+        clientX: 1000,
+        preventDefault() {},
+      } as unknown as React.PointerEvent);
       window.dispatchEvent(new MouseEvent('pointermove', { clientX: 900 } as MouseEventInit)); // → 580
       window.dispatchEvent(new MouseEvent('pointerup', {} as MouseEventInit));
       // Listeners should be gone; this move must NOT change the width.
@@ -70,12 +94,20 @@ describe('useResizableWidth', () => {
   });
 
   test('a second drag start does not double-apply moves', () => {
-    const { result } = renderHook(() => useResizableWidth('k', { default: 480, min: 360, max: 900 }));
+    const { result } = renderHook(() =>
+      useResizableWidth('k', { default: 480, min: 360, max: 900 }),
+    );
     act(() => {
       // First drag start, no pointerup — gesture interrupted.
-      result.current.onDragStart({ clientX: 1000, preventDefault() {} } as unknown as React.PointerEvent);
+      result.current.onDragStart({
+        clientX: 1000,
+        preventDefault() {},
+      } as unknown as React.PointerEvent);
       // Second drag start tears down the first pair before binding a new one.
-      result.current.onDragStart({ clientX: 1000, preventDefault() {} } as unknown as React.PointerEvent);
+      result.current.onDragStart({
+        clientX: 1000,
+        preventDefault() {},
+      } as unknown as React.PointerEvent);
       // A single move must apply ONCE (+100 → 580), not twice (+200 → 680).
       window.dispatchEvent(new MouseEvent('pointermove', { clientX: 900 } as MouseEventInit));
       window.dispatchEvent(new MouseEvent('pointerup', {} as MouseEventInit));
@@ -84,9 +116,14 @@ describe('useResizableWidth', () => {
   });
 
   test('pointercancel persists and unbinds like pointerup', () => {
-    const { result } = renderHook(() => useResizableWidth('k', { default: 480, min: 360, max: 900 }));
+    const { result } = renderHook(() =>
+      useResizableWidth('k', { default: 480, min: 360, max: 900 }),
+    );
     act(() => {
-      result.current.onDragStart({ clientX: 1000, preventDefault() {} } as unknown as React.PointerEvent);
+      result.current.onDragStart({
+        clientX: 1000,
+        preventDefault() {},
+      } as unknown as React.PointerEvent);
       window.dispatchEvent(new MouseEvent('pointermove', { clientX: 900 } as MouseEventInit)); // → 580
       window.dispatchEvent(new Event('pointercancel')); // persists + unbinds
       // Listeners should be gone; this move must NOT change the width.

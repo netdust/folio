@@ -32,10 +32,10 @@ import { describe, expect, test } from 'bun:test';
 import { and, eq, isNull } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { apiTokens, documents, projects, tables, workspaces } from '../db/schema.ts';
-import { newApiToken } from '../lib/auth.ts';
-import { executeTool } from '../lib/agent-tools.ts';
-import { registerRealTools } from '../lib/agent-tools-registry.ts';
 import type { ApiToken } from '../db/schema.ts';
+import { registerRealTools } from '../lib/agent-tools-registry.ts';
+import { executeTool } from '../lib/agent-tools.ts';
+import { newApiToken } from '../lib/auth.ts';
 import { seedProjectDefaults } from '../lib/seed-project-defaults.ts';
 import { makeTestApp } from '../test/harness.ts';
 

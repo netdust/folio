@@ -1,15 +1,15 @@
-import { describe, it, expect, afterEach, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
+  Outlet,
+  RouterProvider,
   createMemoryHistory,
   createRootRoute,
   createRoute,
   createRouter,
-  Outlet,
-  RouterProvider,
 } from '@tanstack/react-router';
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { ListView } from './list-view.tsx';
 
@@ -60,17 +60,24 @@ function mockResponse(url: string) {
     return new Response(
       JSON.stringify({
         data: [
-          { id: 's1', key: 'todo', name: 'Todo', color: '#6EAFFF', category: 'unstarted', order: 1 },
+          {
+            id: 's1',
+            key: 'todo',
+            name: 'Todo',
+            color: '#6EAFFF',
+            category: 'unstarted',
+            order: 1,
+          },
         ],
       }),
       { status: 200, headers: { 'content-type': 'application/json' } },
     );
   }
   if (url.includes('/fields')) {
-    return new Response(
-      JSON.stringify({ data: [] }),
-      { status: 200, headers: { 'content-type': 'application/json' } },
-    );
+    return new Response(JSON.stringify({ data: [] }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
   }
   return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
 }

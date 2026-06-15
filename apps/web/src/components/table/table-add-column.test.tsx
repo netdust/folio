@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
 import { TableAddColumn } from './table-add-column.tsx';
 
 describe('TableAddColumn', () => {
@@ -89,7 +89,11 @@ describe('TableAddColumn', () => {
 
     await waitFor(() => {
       expect(onSubmit).toHaveBeenCalledWith(
-        expect.objectContaining({ key: 'owner', type: 'relation', options: ['table:tbl_1', 'single'] }),
+        expect.objectContaining({
+          key: 'owner',
+          type: 'relation',
+          options: ['table:tbl_1', 'single'],
+        }),
       );
     });
   });

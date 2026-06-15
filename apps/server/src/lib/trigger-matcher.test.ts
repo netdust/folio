@@ -27,8 +27,8 @@ import {
   apiTokens,
   documents,
   projects as schemaProjects,
-  tables,
   workspaces as schemaWorkspaces,
+  tables,
 } from '../db/schema.ts';
 import { env } from '../env.ts';
 import { makeTestApp } from '../test/harness.ts';
@@ -272,9 +272,7 @@ function commentCreatedEvent(args: {
       author: args.actor,
       kind: args.kind,
       // `null` → omit the literal target_agent (isolate the id-handle path).
-      ...(args.targetAgent === null
-        ? {}
-        : { target_agent: args.targetAgent ?? args.agentSlug }),
+      ...(args.targetAgent === null ? {} : { target_agent: args.targetAgent ?? args.agentSlug }),
       ...(args.targetAgentId ? { target_agent_id: args.targetAgentId } : {}),
     },
     createdAt: Date.now(),
@@ -1027,7 +1025,7 @@ test('resolveTargetAgentSlug resolves a target_agent_id pointing at an agent in 
 // resolveAgentForRun finds nothing, fall back to the normalized bare slug
 // verbatim so the EXISTING in-workspace pending run stays actionable.
 
-test('reject_run resolves via the run\'s FROZEN agent_slug even after the agent doc is DELETED (review-fix #3)', async () => {
+test("reject_run resolves via the run's FROZEN agent_slug even after the agent doc is DELETED (review-fix #3)", async () => {
   // RED before the fix: resolveAgentForRun returns undefined for the deleted
   // agent → resolveTargetAgentSlug returns undefined → handleInternalAction
   // skips → the awaiting_approval run is stranded (never rejected).
@@ -1139,7 +1137,9 @@ test('an agent respects its allow-list fire-gate — excluded project means no r
   await seedTriggers(db, seed.workspace.id, seed.user.id);
   // An agent whose allow-list names a DIFFERENT project (not this event's
   // project) → the allow-list gate applies → no run.
-  const agent = await seedAgent(db, seed.workspace, seed.user, 'helper', ['a-different-project-id']);
+  const agent = await seedAgent(db, seed.workspace, seed.user, 'helper', [
+    'a-different-project-id',
+  ]);
   const wiTable = await getWorkItemsTable(db, seed.project.id);
   const wi = await seedWorkItem(db, seed.workspace, seed.project, wiTable, seed.user);
 

@@ -1,9 +1,9 @@
-import { test, expect } from 'bun:test';
+import { expect, test } from 'bun:test';
 import { eq } from 'drizzle-orm';
-import { makeTestApp } from '../test/harness.ts';
 import { events } from '../db/schema.ts';
+import { makeTestApp } from '../test/harness.ts';
+import { type BusEvent, eventBus } from './event-bus.ts';
 import { emitEvent, txWithEvents } from './events.ts';
-import { eventBus, type BusEvent } from './event-bus.ts';
 
 test('emitEvent inserts row with correct fields', async () => {
   const { db, seed } = await makeTestApp();
@@ -100,7 +100,12 @@ function spyPublish(): { events: BusEvent[]; restore: () => void } {
     captured.push(e);
     return orig(e);
   };
-  return { events: captured, restore: () => { eventBus.publish = orig; } };
+  return {
+    events: captured,
+    restore: () => {
+      eventBus.publish = orig;
+    },
+  };
 }
 
 test('F6: txWithEvents publishes only AFTER the tx commits', async () => {
@@ -186,10 +191,7 @@ test('H10: rollback-scrub chunks at 500 ids per DELETE (safe vs SQLite variable-
     // No publishes leaked.
     expect(spy.events).toHaveLength(0);
     // No orphan rows.
-    const rows = await db
-      .select()
-      .from(events)
-      .where(eq(events.workspaceId, seed.workspace.id));
+    const rows = await db.select().from(events).where(eq(events.workspaceId, seed.workspace.id));
     expect(rows).toHaveLength(0);
   } finally {
     spy.restore();

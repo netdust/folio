@@ -1,5 +1,5 @@
-import { describe, expect, test } from 'bun:test';
 import Database from 'bun:sqlite';
+import { describe, expect, test } from 'bun:test';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -37,11 +37,15 @@ describe('0006_phase_2_5_workspace_agents migration', () => {
     const db = new Database(':memory:');
     setupBaseline(db, TARGET);
     seedWorkspaceAndProject(db);
-    db.run(`INSERT INTO documents (id, project_id, type, slug, title) VALUES ('d1', 'p1', 'work_item', 'wi-1', 'WI 1')`);
+    db.run(
+      `INSERT INTO documents (id, project_id, type, slug, title) VALUES ('d1', 'p1', 'work_item', 'wi-1', 'WI 1')`,
+    );
 
     applyMigration(db, TARGET);
 
-    const row = db.query(`SELECT workspace_id, project_id, type FROM documents WHERE id = 'd1'`).get() as {
+    const row = db
+      .query(`SELECT workspace_id, project_id, type FROM documents WHERE id = 'd1'`)
+      .get() as {
       workspace_id: string;
       project_id: string;
       type: string;
@@ -55,15 +59,25 @@ describe('0006_phase_2_5_workspace_agents migration', () => {
     const db = new Database(':memory:');
     setupBaseline(db, TARGET);
     seedWorkspaceAndProject(db);
-    db.run(`INSERT INTO documents (id, project_id, type, slug, title) VALUES ('a1', 'p1', 'agent', 'old-agent', 'Old')`);
-    db.run(`INSERT INTO api_tokens (id, workspace_id, name, token_hash) VALUES ('t1', 'w1', 'agent:old-agent', 'hash1')`);
-    db.run(`INSERT INTO api_tokens (id, workspace_id, name, token_hash) VALUES ('t2', 'w1', 'human-pat', 'hash2')`);
+    db.run(
+      `INSERT INTO documents (id, project_id, type, slug, title) VALUES ('a1', 'p1', 'agent', 'old-agent', 'Old')`,
+    );
+    db.run(
+      `INSERT INTO api_tokens (id, workspace_id, name, token_hash) VALUES ('t1', 'w1', 'agent:old-agent', 'hash1')`,
+    );
+    db.run(
+      `INSERT INTO api_tokens (id, workspace_id, name, token_hash) VALUES ('t2', 'w1', 'human-pat', 'hash2')`,
+    );
 
     applyMigration(db, TARGET);
 
     expect(db.query(`SELECT COUNT(*) as n FROM documents WHERE id = 'a1'`).get()).toEqual({ n: 0 });
-    expect(db.query(`SELECT COUNT(*) as n FROM api_tokens WHERE id = 't1'`).get()).toEqual({ n: 0 });
-    expect(db.query(`SELECT COUNT(*) as n FROM api_tokens WHERE id = 't2'`).get()).toEqual({ n: 1 });
+    expect(db.query(`SELECT COUNT(*) as n FROM api_tokens WHERE id = 't1'`).get()).toEqual({
+      n: 0,
+    });
+    expect(db.query(`SELECT COUNT(*) as n FROM api_tokens WHERE id = 't2'`).get()).toEqual({
+      n: 1,
+    });
   });
 
   test('CHECK constraint rejects agent inserted with non-NULL project_id', () => {
@@ -104,7 +118,9 @@ describe('0006_phase_2_5_workspace_agents migration', () => {
       `INSERT INTO documents (id, workspace_id, type, slug, title, frontmatter)
        VALUES ('good', 'w1', 'agent', 'good', 'Good', '{"projects":["*"]}')`,
     );
-    const row = db.query(`SELECT project_id, workspace_id FROM documents WHERE id = 'good'`).get() as {
+    const row = db
+      .query(`SELECT project_id, workspace_id FROM documents WHERE id = 'good'`)
+      .get() as {
       project_id: string | null;
       workspace_id: string;
     };
@@ -117,7 +133,7 @@ describe('0006_phase_2_5_workspace_agents migration', () => {
     setupBaseline(db, TARGET);
     applyMigration(db, TARGET);
 
-    const cols = db.query(`PRAGMA table_info(api_tokens)`).all() as { name: string }[];
+    const cols = db.query('PRAGMA table_info(api_tokens)').all() as { name: string }[];
     const names = cols.map((c) => c.name);
     expect(names).toContain('agent_id');
     expect(names).toContain('project_ids');
@@ -138,9 +154,13 @@ describe('0006_phase_2_5_workspace_agents migration', () => {
       `INSERT INTO api_tokens (id, workspace_id, name, token_hash, agent_id)
        VALUES ('t1', 'w1', 'agent:a1', 'hash', 'a1')`,
     );
-    expect(db.query(`SELECT COUNT(*) as n FROM api_tokens WHERE id = 't1'`).get()).toEqual({ n: 1 });
+    expect(db.query(`SELECT COUNT(*) as n FROM api_tokens WHERE id = 't1'`).get()).toEqual({
+      n: 1,
+    });
 
     db.run(`DELETE FROM documents WHERE id = 'a1'`);
-    expect(db.query(`SELECT COUNT(*) as n FROM api_tokens WHERE id = 't1'`).get()).toEqual({ n: 0 });
+    expect(db.query(`SELECT COUNT(*) as n FROM api_tokens WHERE id = 't1'`).get()).toEqual({
+      n: 0,
+    });
   });
 });

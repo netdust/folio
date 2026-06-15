@@ -13,8 +13,8 @@
  * the risk and is gated separately (T7).
  */
 
-import { z } from 'zod';
 import { ENTITY_TYPES } from '@folio/shared';
+import { z } from 'zod';
 
 /**
  * Extensible-but-CLOSED entity reference (NOT a free-form route — a model-
@@ -54,9 +54,7 @@ export const linkPanelSchema = z
 export const choiceCardSchema = z
   .object({
     prompt: z.string().min(1),
-    options: z
-      .array(z.object({ id: z.string().min(1), label: z.string().min(1) }).strict())
-      .min(2),
+    options: z.array(z.object({ id: z.string().min(1), label: z.string().min(1) }).strict()).min(2),
   })
   .strict();
 

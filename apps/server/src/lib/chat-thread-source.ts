@@ -17,12 +17,12 @@
  * run loop), not in the source. The source only replays the trusted thread.
  */
 
-import { type Message as MessageRow } from '../db/schema.ts';
 import type { DB } from '../db/client.ts';
-import { type Message } from './ai/provider.ts';
+import type { Message as MessageRow } from '../db/schema.ts';
 // parsePayload is shared with the markdown serializer (one guard, one degrade
 // policy — deduped per Cluster-2 /code-review).
 import { getThread, parsePayload } from '../services/conversations.ts';
+import type { Message } from './ai/provider.ts';
 import {
   type AgentSkill,
   TRUSTED_SKILLS_LABEL,

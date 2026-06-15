@@ -25,7 +25,8 @@ export function ReactorHaltBanner({ wslug }: Props) {
         <strong>Automation paused.</strong> The reaction plane halted after a fault
         {errorClass ? (
           <>
-            {' '}(<code className="font-mono">{errorClass}</code>)
+            {' '}
+            (<code className="font-mono">{errorClass}</code>)
           </>
         ) : null}
         . Agent triggers are not running until it recovers.

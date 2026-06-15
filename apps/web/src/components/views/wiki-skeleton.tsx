@@ -14,6 +14,7 @@ export function WikiSkeleton() {
     <ul className="flex flex-col" aria-busy>
       {rows.map((r, i) => (
         <li
+          // biome-ignore lint/suspicious/noArrayIndexKey: static non-reordering skeleton placeholder list, index key is stable
           key={i}
           className="grid grid-cols-[24px_1fr] items-center gap-1 py-1 pr-2"
           style={{ paddingLeft: `${r.depth * 16}px` }}

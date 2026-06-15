@@ -3,8 +3,8 @@ import { eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import * as schema from '../db/schema.ts';
 import { apiTokens } from '../db/schema.ts';
-import { createSession } from '../lib/auth.ts';
 import { roleToScopes } from '../lib/agent-schema.ts';
+import { createSession } from '../lib/auth.ts';
 import { makeTestApp } from '../test/harness.ts';
 
 /**
@@ -73,7 +73,10 @@ describe('§8.1 token-reach boundary: a member-minted token cannot exceed the me
     const res = await app.request(tokensPath(seed.workspace.slug, seed.workspace.id), {
       method: 'POST',
       headers: { Cookie: memberCookie, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: 'within-ceiling', scopes: ['documents:read', 'documents:write'] }),
+      body: JSON.stringify({
+        name: 'within-ceiling',
+        scopes: ['documents:read', 'documents:write'],
+      }),
     });
     expect(res.status).toBe(201);
     const body = await res.json();
@@ -100,24 +103,27 @@ describe('§8.1 token-reach boundary: a member-minted token cannot exceed the me
 
   // Every owner-only scope the ceiling withholds from a member, asserted as a
   // set so adding a future owner-only scope without gating it fails here.
-  test.each(['agents:write', 'documents:delete', 'settings:write', 'members:write', 'workspace:admin'])(
-    'a member CANNOT mint a token carrying %s (403 FORBIDDEN_SCOPE)',
-    async (scope) => {
-      const { app, db, seed } = await makeTestApp();
-      const memberCookie = await seedUserWithRole(db, seed.workspace.id, 'member');
-      const res = await app.request(tokensPath(seed.workspace.slug, seed.workspace.id), {
-        method: 'POST',
-        headers: { Cookie: memberCookie, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: 'escalate', scopes: [scope] }),
-      });
-      expect(res.status).toBe(403);
-      expect((await res.json()).error.code).toBe('FORBIDDEN_SCOPE');
-      const rows = await db.query.apiTokens.findMany({
-        where: eq(apiTokens.workspaceId, seed.workspace.id),
-      });
-      expect(rows.length).toBe(0);
-    },
-  );
+  test.each([
+    'agents:write',
+    'documents:delete',
+    'settings:write',
+    'members:write',
+    'workspace:admin',
+  ])('a member CANNOT mint a token carrying %s (403 FORBIDDEN_SCOPE)', async (scope) => {
+    const { app, db, seed } = await makeTestApp();
+    const memberCookie = await seedUserWithRole(db, seed.workspace.id, 'member');
+    const res = await app.request(tokensPath(seed.workspace.slug, seed.workspace.id), {
+      method: 'POST',
+      headers: { Cookie: memberCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'escalate', scopes: [scope] }),
+    });
+    expect(res.status).toBe(403);
+    expect((await res.json()).error.code).toBe('FORBIDDEN_SCOPE');
+    const rows = await db.query.apiTokens.findMany({
+      where: eq(apiTokens.workspaceId, seed.workspace.id),
+    });
+    expect(rows.length).toBe(0);
+  });
 
   // Role-sensitivity: the same config:write request an owner makes succeeds —
   // proving the gate clamps to the CALLER'S role, not a blanket member-style deny.

@@ -1,8 +1,8 @@
-import { test, expect } from 'bun:test';
-import { nanoid } from 'nanoid';
+import { expect, test } from 'bun:test';
 import { filterCompile } from '@folio/shared';
-import { makeTestApp } from '../test/harness.ts';
+import { nanoid } from 'nanoid';
 import { documents } from '../db/schema.ts';
+import { makeTestApp } from '../test/harness.ts';
 import { compileFilterToWhere } from './filter-to-drizzle.ts';
 
 async function seedDocs(
@@ -11,8 +11,20 @@ async function seedDocs(
   workspaceId: string,
 ) {
   for (const d of [
-    { type: 'work_item' as const, slug: 'a', title: 'A', status: 'todo', frontmatter: { priority: 'high' } },
-    { type: 'work_item' as const, slug: 'b', title: 'B', status: 'done', frontmatter: { priority: 'low' } },
+    {
+      type: 'work_item' as const,
+      slug: 'a',
+      title: 'A',
+      status: 'todo',
+      frontmatter: { priority: 'high' },
+    },
+    {
+      type: 'work_item' as const,
+      slug: 'b',
+      title: 'B',
+      status: 'done',
+      frontmatter: { priority: 'low' },
+    },
     { type: 'page' as const, slug: 'c', title: 'C', status: null, frontmatter: {} },
   ]) {
     await db.insert(documents).values({ id: nanoid(), projectId, workspaceId, ...d });
@@ -38,7 +50,10 @@ test('frontmatter $eq via json_extract', async () => {
 test('$in on column', async () => {
   const { db, seed } = await makeTestApp();
   await seedDocs(db, seed.project.id, seed.workspace.id);
-  const where = compileFilterToWhere(filterCompile({ status: { $in: ['todo', 'done'] } }), documents);
+  const where = compileFilterToWhere(
+    filterCompile({ status: { $in: ['todo', 'done'] } }),
+    documents,
+  );
   const rows = await db.select().from(documents).where(where);
   expect(rows.map((r) => r.slug).sort()).toEqual(['a', 'b']);
 });

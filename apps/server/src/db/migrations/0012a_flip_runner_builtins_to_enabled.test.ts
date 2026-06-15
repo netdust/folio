@@ -1,9 +1,9 @@
-import { describe, expect, test } from 'bun:test';
 import Database from 'bun:sqlite';
-import { drizzle } from 'drizzle-orm/bun-sqlite';
-import { migrate } from 'drizzle-orm/bun-sqlite/migrator';
+import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import { drizzle } from 'drizzle-orm/bun-sqlite';
+import { migrate } from 'drizzle-orm/bun-sqlite/migrator';
 
 const MIGRATIONS_FOLDER = path.resolve(import.meta.dir);
 
@@ -31,12 +31,7 @@ describe('migration 0012a — flip runner builtins to enabled', () => {
         `INSERT INTO documents
          (id, workspace_id, type, slug, title, frontmatter, created_at, updated_at)
          VALUES (?, 'w1','trigger', ?, ?, ?, 0, 0)`,
-        [
-          `id-${slug}`,
-          slug,
-          slug,
-          JSON.stringify({ builtin: true, enabled: false }),
-        ],
+        [`id-${slug}`, slug, slug, JSON.stringify({ builtin: true, enabled: false })],
       );
     }
 
@@ -46,9 +41,7 @@ describe('migration 0012a — flip runner builtins to enabled', () => {
     sqlite.exec(readFlipSql());
 
     const rows = sqlite
-      .prepare(
-        `SELECT slug, frontmatter FROM documents WHERE workspace_id='w1' AND type='trigger'`,
-      )
+      .prepare(`SELECT slug, frontmatter FROM documents WHERE workspace_id='w1' AND type='trigger'`)
       .all() as Array<{ slug: string; frontmatter: string }>;
 
     expect(rows.length).toBe(2);
@@ -84,12 +77,12 @@ describe('migration 0012a — flip runner builtins to enabled', () => {
 
     sqlite.exec(readFlipSql());
 
-    const x = sqlite
-      .prepare(`SELECT frontmatter FROM documents WHERE id='id-x'`)
-      .get() as { frontmatter: string };
-    const y = sqlite
-      .prepare(`SELECT frontmatter FROM documents WHERE id='id-y'`)
-      .get() as { frontmatter: string };
+    const x = sqlite.prepare(`SELECT frontmatter FROM documents WHERE id='id-x'`).get() as {
+      frontmatter: string;
+    };
+    const y = sqlite.prepare(`SELECT frontmatter FROM documents WHERE id='id-y'`).get() as {
+      frontmatter: string;
+    };
 
     expect((JSON.parse(x.frontmatter) as { enabled: boolean }).enabled).toBe(true);
     expect((JSON.parse(y.frontmatter) as { enabled: boolean }).enabled).toBe(false);

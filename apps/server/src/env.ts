@@ -5,7 +5,6 @@ export const envSchema = z.object({
   PORT: z.coerce.number().default(3000),
   PUBLIC_URL: z.string().url().default('http://localhost:3000'),
   DATABASE_URL: z.string().default('file:./folio.db'),
-  SESSION_SECRET: z.string().min(32, 'SESSION_SECRET must be at least 32 chars'),
   FOLIO_MASTER_KEY: z
     .string()
     .regex(/^[0-9a-f]{64}$/i, 'FOLIO_MASTER_KEY must be 64 hex chars (32 bytes)'),
@@ -45,7 +44,11 @@ export const envSchema = z.object({
   // "60s") that trips chain_duration_exceeded almost immediately. 1s is the
   // smallest meaningful cap. (Mirrors how the interval/stale knobs floor at a
   // meaningful unit rather than 1.)
-  FOLIO_MAX_CHAIN_DURATION_MS: z.coerce.number().int().min(1000).default(30 * 60_000),
+  FOLIO_MAX_CHAIN_DURATION_MS: z.coerce
+    .number()
+    .int()
+    .min(1000)
+    .default(30 * 60_000),
   FOLIO_MAX_CHAIN_TOKENS: z.coerce.number().int().min(1).default(200_000),
   // V1 autonomy gate (Task C-11). When OFF (the default), the trigger-matcher
   // refuses to fan out agent-ORIGINATED chains: an agent's own @mention/comment

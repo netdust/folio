@@ -1,12 +1,12 @@
-import { useEffect, useState, type FormEvent } from 'react';
 import { useNavigate } from '@tanstack/react-router';
+import { type FormEvent, useEffect, useState } from 'react';
 import { toast } from 'sonner';
-import { useCreateView, type ViewCreate } from '../../lib/api/views.ts';
 import { useFields } from '../../lib/api/fields.ts';
 import { formatApiError } from '../../lib/api/index.ts';
+import { type ViewCreate, useCreateView } from '../../lib/api/views.ts';
 import { resolveViewNav } from '../../lib/rail-nav.ts';
-import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetFooter } from '../ui/sheet.tsx';
 import { Button } from '../ui/button.tsx';
+import { Sheet, SheetContent, SheetFooter, SheetHeader, SheetTitle } from '../ui/sheet.tsx';
 
 export interface NewViewSheetProps {
   open: boolean;
@@ -135,7 +135,6 @@ export function NewViewSheet({
                 onChange={(e) => setName(e.target.value)}
                 maxLength={100}
                 required
-                autoFocus
               />
               <p className="mt-1.5 text-xs text-fg-3">
                 Captures the current filters, sort, and columns. Future changes auto-save.

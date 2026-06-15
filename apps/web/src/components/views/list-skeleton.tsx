@@ -5,6 +5,7 @@ export function ListSkeleton({ rows = 6 }: { rows?: number }) {
     <div role="list" className="flex flex-col" aria-busy>
       {Array.from({ length: rows }, (_, i) => (
         <div
+          // biome-ignore lint/suspicious/noArrayIndexKey: static non-reordering skeleton placeholder list, index key is stable
           key={i}
           className="grid w-full grid-cols-[1fr_auto_auto] items-center gap-3 border-b border-border-light px-4 py-2"
         >

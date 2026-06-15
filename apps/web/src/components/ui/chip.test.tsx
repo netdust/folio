@@ -1,6 +1,6 @@
-import { describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { describe, expect, it, vi } from 'vitest';
 import { Chip } from './chip.tsx';
 
 describe('Chip primitive', () => {
@@ -27,7 +27,7 @@ describe('Chip primitive', () => {
     // Use word-boundary class checks so a future drift (border-border vs
     // border-border-light, rounded-md vs rounded-full) doesn't silently pass.
     expect(classes).toContain('border-border-light'); // BUG-012: lighter than border-border
-    expect(classes).toContain('rounded-md');          // BUG-012: not rounded-full
+    expect(classes).toContain('rounded-md'); // BUG-012: not rounded-full
     // Must NOT carry a primary tint at rest — that's the BUG-008/011 regression
     // we explicitly do not want.
     expect(chip.className).not.toContain('bg-primary/10');
