@@ -135,4 +135,25 @@ describe('reapStaleEvents — cursor-floored retention (H7)', () => {
     expect(surviving.map((r) => r.seq)).toEqual([9, 12]);
     expect(surviving.map((r) => r.id)).toEqual(['old-live', 'fresh']);
   });
+
+  // Pins the RETENTION cutoff itself (not just "age matters"). Both events are
+  // below the cursor, so only the retention window decides: one just past the
+  // window is reaped, one just inside survives. Catches a mis-wired knob (e.g.
+  // reading the wrong env var) that the cursor-floor tests alone would not.
+  test('reaps just PAST the retention window, spares just INSIDE it', async () => {
+    const db = makeDb();
+    await seedWorkspace(db);
+    const retentionDays = RETENTION / DAYS;
+    await seedEvents(db, [
+      { id: 'just-past', seq: 1, ageDays: retentionDays + 1 }, // older than retention → reaped
+      { id: 'just-inside', seq: 2, ageDays: retentionDays - 1 }, // within retention → survives
+    ]);
+    await seedCursor(db, 'r1', 10); // both seqs are below the cursor — only age decides
+
+    const reaped = await reapStaleEvents(db, NOW);
+
+    expect(reaped).toBe(1);
+    const surviving = await db.select().from(events).orderBy(asc(events.seq));
+    expect(surviving.map((r) => r.id)).toEqual(['just-inside']);
+  });
 });
