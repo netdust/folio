@@ -25,13 +25,18 @@ export interface DocumentSummary {
   // ISO timestamp; null until activity is first logged. Phase 1.7 column —
   // surfaces in /stale_for filters and the planned "stale dashboard" bucket.
   lastTouchedAt: string | null;
-  // The list endpoint already returns `body` over the wire (server selects
-  // rows un-projected); the type historically under-declared it. Widening
-  // here makes node.doc.body available for card excerpts.
-  body: string;
+  // The list endpoint OMITS `body` by default (M4 body-less projection — the
+  // table/board hot path). It is present ONLY when the caller passes
+  // `include: 'body'` (the wiki view does, for card excerpts). Optional because
+  // most list reads will not carry it; consumers must guard (`body ?? ''`).
+  body?: string;
 }
 
-export type Document = DocumentSummary;
+// A full single-document fetch (GET …/documents/:slug) + create/update results
+// ALWAYS carry the body. `DocumentSummary.body` is optional (list rows are
+// body-less unless include=body), so a detail-shaped Document narrows it to
+// required — the slideovers + draft hook depend on body being present.
+export type Document = DocumentSummary & { body: string };
 
 export interface DocumentListPage {
   data: DocumentSummary[];
@@ -48,6 +53,9 @@ export interface DocumentListParams {
   dir?: 'asc' | 'desc';
   limit?: number;
   cursor?: string;
+  // Opt the body column back in (server maps to ?include=body). Only the wiki
+  // view sets this; table/board leave it unset so the hot path stays body-less.
+  include?: 'body';
 }
 
 function toSearch(params: DocumentListParams): string {
@@ -60,6 +68,7 @@ function toSearch(params: DocumentListParams): string {
   if (params.dir) sp.set('dir', params.dir);
   if (params.limit) sp.set('limit', String(params.limit));
   if (params.cursor) sp.set('cursor', params.cursor);
+  if (params.include) sp.set('include', params.include);
   const s = sp.toString();
   return s ? `?${s}` : '';
 }

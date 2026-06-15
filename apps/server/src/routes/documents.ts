@@ -200,6 +200,10 @@ documentsRoute.get('/', async (c) => {
     staleFor: c.req.query('stale_for') ?? undefined,
     sort: c.req.query('sort') ?? undefined,
     dir: c.req.query('dir') ?? undefined,
+    // CR-A: `?include=body` opts the body column back into the projection. The
+    // wiki view passes it (it renders body excerpts); table/board never do, so
+    // the hot path stays body-less by default.
+    includeBody: c.req.query('include') === 'body',
   });
 
   return c.json({ data: result.data, nextCursor: result.nextCursor });

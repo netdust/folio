@@ -171,13 +171,23 @@ export interface ListDocumentsOptions {
   staleFor?: string;
   sort?: string;
   dir?: string;
+  /**
+   * Opt the `body` column back into the projection. DEFAULT false — list rows
+   * stay body-less (the table/board hot path, M4). The wiki view sets this
+   * (it loads few docs and renders body excerpts via bodyExcerpt). The route
+   * maps `?include=body` to this flag. When true the returned rows carry a
+   * non-null `body`; when false the key is absent.
+   */
+  includeBody?: boolean;
 }
 
 export async function listDocuments(
   opts: ListDocumentsOptions,
-  // M4: list rows are body-less by projection (see the explicit select below);
-  // the return type drops `body` to make that contract type-visible to callers.
-): Promise<{ data: Omit<Document, 'body'>[]; nextCursor: string | null }> {
+  // M4: list rows are body-less by DEFAULT projection (see the explicit select
+  // below); the return type drops `body` to make that contract type-visible to
+  // callers. CR-A: `includeBody` opts it back in for the wiki path, so the
+  // element type is the UNION — body-bearing when opted in, body-less by default.
+): Promise<{ data: (Document | Omit<Document, 'body'>)[]; nextCursor: string | null }> {
   const limit = Math.min(200, opts.limit ?? 50);
 
   const whereClauses = [eq(documents.projectId, opts.projectId)];
@@ -342,32 +352,35 @@ export async function listDocuments(
   }
 
   const dirFn = sortDir === 'asc' ? asc : desc;
-  // M4 (audit 2.2): explicit projection that OMITS `body`. The list/table/board
-  // views never render the markdown body (the detail / `.md` route serves it),
-  // so selecting it re-shipped a full body per row on every list — an agent
-  // write-burst of large docs amplified the payload. Every other documents
-  // column IS selected (the cursor + response readers depend on them); only
-  // `body` is dropped. Keep this list in sync with the schema if a column is
+  // M4 (audit 2.2): explicit projection that OMITS `body` BY DEFAULT. The
+  // list/table/board views never render the markdown body (the detail / `.md`
+  // route serves it), so selecting it re-shipped a full body per row on every
+  // list — an agent write-burst of large docs amplified the payload. Every other
+  // documents column IS selected (the cursor + response readers depend on them);
+  // only `body` is dropped. Keep this list in sync with the schema if a column is
   // added — a new non-body column must be added here or it won't list.
+  // CR-A: the wiki view passes includeBody=true (it loads few docs and renders
+  // body excerpts) → re-add the body column for that path only.
+  const baseProjection = {
+    id: documents.id,
+    projectId: documents.projectId,
+    workspaceId: documents.workspaceId,
+    tableId: documents.tableId,
+    type: documents.type,
+    slug: documents.slug,
+    title: documents.title,
+    status: documents.status,
+    boardPosition: documents.boardPosition,
+    frontmatter: documents.frontmatter,
+    parentId: documents.parentId,
+    createdBy: documents.createdBy,
+    updatedBy: documents.updatedBy,
+    createdAt: documents.createdAt,
+    updatedAt: documents.updatedAt,
+    lastTouchedAt: documents.lastTouchedAt,
+  };
   const rows = await db
-    .select({
-      id: documents.id,
-      projectId: documents.projectId,
-      workspaceId: documents.workspaceId,
-      tableId: documents.tableId,
-      type: documents.type,
-      slug: documents.slug,
-      title: documents.title,
-      status: documents.status,
-      boardPosition: documents.boardPosition,
-      frontmatter: documents.frontmatter,
-      parentId: documents.parentId,
-      createdBy: documents.createdBy,
-      updatedBy: documents.updatedBy,
-      createdAt: documents.createdAt,
-      updatedAt: documents.updatedAt,
-      lastTouchedAt: documents.lastTouchedAt,
-    })
+    .select(opts.includeBody ? { ...baseProjection, body: documents.body } : baseProjection)
     .from(documents)
     .where(and(...whereClauses))
     .orderBy(dirFn(orderExpr), dirFn(documents.id))

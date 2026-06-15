@@ -69,6 +69,21 @@ describe('useLiveDocuments', () => {
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['documents', 'acme', 'web'] });
   });
 
+  it('clears the in-flight debounce on unmount (late timer never invalidates)', () => {
+    // S-1: fire one event to ARM the 250ms timer, then unmount BEFORE the
+    // window elapses. The cleanup must clearTimeout so the trailing invalidate
+    // never fires against a torn-down query client.
+    const { unmount } = renderHook(() => useLiveDocuments('acme', 'web', 'proj-id-123'));
+    calls[0]!.onEvent({ kind: 'document.updated' });
+    // Timer armed but not yet elapsed.
+    expect(invalidateSpy).not.toHaveBeenCalled();
+
+    unmount();
+    vi.advanceTimersByTime(250);
+    // The cleanup cleared the timer → no invalidation after unmount.
+    expect(invalidateSpy).not.toHaveBeenCalled();
+  });
+
   it('does not open a mis-scoped subscription before the project id resolves', () => {
     // projectId undefined (project query still loading) → no filter with an
     // empty/slug project; the hook should pass project: undefined so buildQuery

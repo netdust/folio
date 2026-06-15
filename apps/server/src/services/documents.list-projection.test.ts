@@ -65,3 +65,32 @@ test('list projection omits body but keeps non-body fields', async () => {
     expect(row.frontmatter).toEqual({ priority: 'high' });
   }
 });
+
+test('includeBody:true opts the body column back in (wiki excerpt path)', async () => {
+  // CR-A regression fix: the wiki view feeds list rows into bodyExcerpt(), so it
+  // explicitly opts into bodies via ?include=body. The default stays body-less
+  // (table/board hot path); this opt-in must carry the body through.
+  const { projectId, tableId } = await seedOneWorkItem();
+
+  const { data } = await listDocuments({
+    projectId,
+    activeTableId: tableId,
+    type: 'work_item',
+    includeBody: true,
+  });
+
+  expect(data.length).toBeGreaterThanOrEqual(1);
+  const seeded = data.find((r) => r.slug === 'heavy');
+  if (!seeded) throw new Error('seeded row missing from list');
+  // body present and non-empty when opted in.
+  expect((seeded as Record<string, unknown>).body).toBe(BIG_BODY);
+
+  // And the default call (no includeBody) still omits it — the two paths diverge.
+  const { data: lean } = await listDocuments({
+    projectId,
+    activeTableId: tableId,
+    type: 'work_item',
+  });
+  const leanRow = lean.find((r) => r.slug === 'heavy');
+  expect((leanRow as Record<string, unknown>).body).toBeUndefined();
+});
