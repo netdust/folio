@@ -106,6 +106,17 @@ export const envSchema = z.object({
     .int()
     .positive()
     .default(7 * 24 * 60 * 60 * 1000),
+  // events retention reaper (audit H7). The events log is append-only and only
+  // grows; the reaper deletes rows BOTH past this window AND strictly below the
+  // minimum live reactor cursor (so an event a reactor still needs is never
+  // dropped and SSE replay is preserved). 90-day default. Floored at 1 day so a
+  // unit-confusion mis-set can never reap live events — mirrors the
+  // FOLIO_PENDING_OPS_RETENTION_MS floor rationale.
+  FOLIO_EVENTS_RETENTION_MS: z.coerce
+    .number()
+    .int()
+    .min(86_400_000)
+    .default(90 * 24 * 60 * 60 * 1000),
   // M1 (audit H6) — auth rate-limit knobs (SA-1: validated here, never read inline
   // as process.env). Fixed-window counters on /login + /magic-link/request close
   // the brute-force / argon2 CPU-DoS / email-flooding levers. Window floored at
