@@ -69,8 +69,10 @@ class EventBus {
       }
       try {
         sub.handler(e);
-      } catch {
-        // Swallow per-subscriber errors so one bad handler can't take down the bus.
+      } catch (handlerErr) {
+        // Swallow per-subscriber errors so one bad handler can't take down the
+        // bus — but log so a silently-throwing subscriber is diagnosable.
+        console.error(`[event-bus] subscriber threw for kind=${e.kind}; continuing`, handlerErr);
       }
     }
   }

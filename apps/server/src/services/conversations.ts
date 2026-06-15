@@ -276,7 +276,15 @@ export async function recoverInterruptedConversations(db: DB): Promise<number> {
         .update(conversations)
         .set({ activeRunId: null })
         .where(eq(conversations.id, conv.id))
-        .catch(() => {});
+        .catch((clearErr) => {
+          // The unwedge UPDATE itself failed — the conversation stays wedged.
+          // We can't halt (this branch IS the recovery); surface it loudly so
+          // a persistently-wedged conversation is diagnosable instead of silent.
+          console.error(
+            `[recovery] conversation ${conv.id} unwedge UPDATE failed; conversation may remain locked`,
+            clearErr,
+          );
+        });
     }
   }
   return recovered;
