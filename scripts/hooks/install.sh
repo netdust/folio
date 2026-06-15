@@ -13,6 +13,7 @@ set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 "$ROOT/scripts/hooks/pre-commit-migration-journal.sh"
 "$ROOT/scripts/hooks/pre-commit-invariants.sh"
+"$ROOT/scripts/hooks/pre-commit-build-manifest.sh"
 "$ROOT/scripts/hooks/pre-commit-biome.sh"
 EOF
 chmod +x "$HOOK_DST"

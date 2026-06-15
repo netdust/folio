@@ -23,6 +23,7 @@ export function runMigrationsOnBoot(db: DB): void {
   // file (repo lesson: drizzle-migration-journal). Bun.embeddedFiles is [] when
   // NOT compiled, so length > 0 is a sound "am I a compiled binary?" discriminator.
   if (Bun.embeddedFiles.length > 0) {
+    // Not cleaned up — one tmp dir per process boot (boot runs once), negligible.
     const tmpDir = mkdtempSync(path.join(os.tmpdir(), 'folio-migrations-'));
     mkdirSync(path.join(tmpDir, 'meta'), { recursive: true });
     // The journal drives which <tag>.sql files drizzle reads; write it first.
