@@ -1,9 +1,9 @@
+import { slugify } from '@folio/shared';
 import { zValidator } from '@hono/zod-validator';
 import { and, eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
-import { slugify } from '@folio/shared';
 import { db } from '../db/client.ts';
 import { tables } from '../db/schema.ts';
 import { dryRunResult, isDryRun, isDryRunDelete } from '../lib/dry-run.ts';
@@ -93,43 +93,48 @@ tablesRoute.post('/', requireScope('config:write'), zValidator('json', baseSchem
   return jsonOk(c, row, 201);
 });
 
-tablesRoute.patch('/:tslug', requireScope('config:write'), zValidator('json', patchSchema), async (c) => {
-  const user = getUser(c);
-  const p = getProject(c);
-  const ws = getWorkspace(c);
-  const tslug = c.req.param('tslug');
-  const row = await db.query.tables.findFirst({
-    where: and(eq(tables.projectId, p.id), eq(tables.slug, tslug)),
-  });
-  if (!row) throw new HTTPError('TABLE_NOT_FOUND', `table "${tslug}" not found`, 404);
-
-  const patch = c.req.valid('json');
-
-  // Only persist columns we actually allow patching. `slug` is intentionally
-  // excluded — see patchSchema above.
-  const updates: Partial<typeof tables.$inferInsert> = {};
-  if (patch.name !== undefined) updates.name = patch.name;
-  if (patch.icon !== undefined) updates.icon = patch.icon;
-  if (patch.order !== undefined) updates.order = patch.order;
-
-  if (isDryRun(patch)) {
-    return jsonOk(c, dryRunResult('update', { ...row, ...updates }));
-  }
-
-  await txWithEvents(db, async (tx) => {
-    if (Object.keys(updates).length > 0) {
-      await tx.update(tables).set(updates).where(eq(tables.id, row.id));
-    }
-    await emitEvent(tx, {
-      workspaceId: ws.id,
-      projectId: p.id,
-      kind: 'table.updated',
-      actor: user.id,
-      payload: { id: row.id, changes: Object.keys(updates) },
+tablesRoute.patch(
+  '/:tslug',
+  requireScope('config:write'),
+  zValidator('json', patchSchema),
+  async (c) => {
+    const user = getUser(c);
+    const p = getProject(c);
+    const ws = getWorkspace(c);
+    const tslug = c.req.param('tslug');
+    const row = await db.query.tables.findFirst({
+      where: and(eq(tables.projectId, p.id), eq(tables.slug, tslug)),
     });
-  });
-  return jsonOk(c, { ...row, ...updates });
-});
+    if (!row) throw new HTTPError('TABLE_NOT_FOUND', `table "${tslug}" not found`, 404);
+
+    const patch = c.req.valid('json');
+
+    // Only persist columns we actually allow patching. `slug` is intentionally
+    // excluded — see patchSchema above.
+    const updates: Partial<typeof tables.$inferInsert> = {};
+    if (patch.name !== undefined) updates.name = patch.name;
+    if (patch.icon !== undefined) updates.icon = patch.icon;
+    if (patch.order !== undefined) updates.order = patch.order;
+
+    if (isDryRun(patch)) {
+      return jsonOk(c, dryRunResult('update', { ...row, ...updates }));
+    }
+
+    await txWithEvents(db, async (tx) => {
+      if (Object.keys(updates).length > 0) {
+        await tx.update(tables).set(updates).where(eq(tables.id, row.id));
+      }
+      await emitEvent(tx, {
+        workspaceId: ws.id,
+        projectId: p.id,
+        kind: 'table.updated',
+        actor: user.id,
+        payload: { id: row.id, changes: Object.keys(updates) },
+      });
+    });
+    return jsonOk(c, { ...row, ...updates });
+  },
+);
 
 tablesRoute.delete('/:tslug', requireScope('config:write'), async (c) => {
   const user = getUser(c);

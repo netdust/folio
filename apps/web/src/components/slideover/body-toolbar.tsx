@@ -1,16 +1,16 @@
+import {
+  createCodeBlockCommand,
+  turnIntoTextCommand,
+  wrapInBlockquoteCommand,
+  wrapInBulletListCommand,
+  wrapInHeadingCommand,
+  wrapInOrderedListCommand,
+} from '@milkdown/preset-commonmark';
+import { insertTableCommand } from '@milkdown/preset-gfm';
 import { useInstance } from '@milkdown/react';
 import { callCommand } from '@milkdown/utils';
 import {
-  turnIntoTextCommand,
-  wrapInHeadingCommand,
-  wrapInBulletListCommand,
-  wrapInOrderedListCommand,
-  wrapInBlockquoteCommand,
-  createCodeBlockCommand,
-} from '@milkdown/preset-commonmark';
-import { insertTableCommand } from '@milkdown/preset-gfm';
-import { useState } from 'react';
-import {
+  Code2,
   Heading1,
   Heading2,
   Heading3,
@@ -18,12 +18,12 @@ import {
   ListOrdered,
   Pilcrow,
   Quote,
-  Code2,
   Table as TableIcon,
 } from 'lucide-react';
+import { useState } from 'react';
+import { cn } from '../ui/cn.ts';
 import { Icon } from '../ui/icon.tsx';
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
-import { cn } from '../ui/cn.ts';
 
 /**
  * Formatting toolbar for the body editor. Renders inside MilkdownProvider so
@@ -68,7 +68,10 @@ export function BodyToolbar() {
       <ToolbarButton label="Code block" onClick={() => call(createCodeBlockCommand)}>
         <Icon icon={Code2} size={16} />
       </ToolbarButton>
-      <ToolbarButton label="Insert table" onClick={() => call(insertTableCommand, { row: 3, col: 3 })}>
+      <ToolbarButton
+        label="Insert table"
+        onClick={() => call(insertTableCommand, { row: 3, col: 3 })}
+      >
         <Icon icon={TableIcon} size={16} />
       </ToolbarButton>
     </div>
@@ -123,16 +126,40 @@ function TextStylePopover({
       </PopoverTrigger>
       <PopoverContent align="start" className="min-w-[160px] py-1">
         <div role="menu" className="flex flex-col">
-          <TextStyleItem onSelect={() => { setOpen(false); onParagraph(); }} icon={Pilcrow}>
+          <TextStyleItem
+            onSelect={() => {
+              setOpen(false);
+              onParagraph();
+            }}
+            icon={Pilcrow}
+          >
             Paragraph
           </TextStyleItem>
-          <TextStyleItem onSelect={() => { setOpen(false); onHeading(1); }} icon={Heading1}>
+          <TextStyleItem
+            onSelect={() => {
+              setOpen(false);
+              onHeading(1);
+            }}
+            icon={Heading1}
+          >
             Heading 1
           </TextStyleItem>
-          <TextStyleItem onSelect={() => { setOpen(false); onHeading(2); }} icon={Heading2}>
+          <TextStyleItem
+            onSelect={() => {
+              setOpen(false);
+              onHeading(2);
+            }}
+            icon={Heading2}
+          >
             Heading 2
           </TextStyleItem>
-          <TextStyleItem onSelect={() => { setOpen(false); onHeading(3); }} icon={Heading3}>
+          <TextStyleItem
+            onSelect={() => {
+              setOpen(false);
+              onHeading(3);
+            }}
+            icon={Heading3}
+          >
             Heading 3
           </TextStyleItem>
         </div>

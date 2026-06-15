@@ -8,15 +8,18 @@
  * needs the post-create baseline.
  */
 
-import { describe, it, expect } from 'bun:test';
+import { describe, expect, it } from 'bun:test';
+import { and, eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
-import { eq, and } from 'drizzle-orm';
-import { documents, events } from '../apps/server/src/db/schema.ts';
+import type { DB } from '../apps/server/src/db/client.ts';
+import { events, documents } from '../apps/server/src/db/schema.ts';
+import {
+  BUILTIN_TRIGGER_DEFS,
+  seedBuiltinTriggers,
+} from '../apps/server/src/lib/builtin-triggers.ts';
+import { eventBus } from '../apps/server/src/lib/event-bus.ts';
 import { makeTestApp } from '../apps/server/src/test/harness.ts';
 import { backfillBuiltinTriggers } from './backfill-builtin-triggers.ts';
-import { BUILTIN_TRIGGER_DEFS, seedBuiltinTriggers } from '../apps/server/src/lib/builtin-triggers.ts';
-import { eventBus } from '../apps/server/src/lib/event-bus.ts';
-import type { DB } from '../apps/server/src/db/client.ts';
 
 describe('backfillBuiltinTriggers', () => {
   it('no-ops when a workspace already has all 4 builtins', async () => {
@@ -76,7 +79,8 @@ describe('backfillBuiltinTriggers', () => {
       slug: 'builtin-on-assignment',
       title: 'Run agent on assignment',
       body: '',
-      frontmatter: BUILTIN_TRIGGER_DEFS.find((d) => d.slug === 'builtin-on-assignment')!.frontmatter,
+      frontmatter: BUILTIN_TRIGGER_DEFS.find((d) => d.slug === 'builtin-on-assignment')!
+        .frontmatter,
     });
 
     const result = await backfillBuiltinTriggers(db);

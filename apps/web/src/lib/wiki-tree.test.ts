@@ -1,11 +1,18 @@
-import { describe, it, expect } from 'vitest';
-import { buildTree, descendantIds } from './wiki-tree.ts';
+import { describe, expect, it } from 'vitest';
 import type { DocumentSummary } from './api/documents.ts';
+import { buildTree, descendantIds } from './wiki-tree.ts';
 
 function page(id: string, title: string, parentId: string | null = null): DocumentSummary {
   return {
-    id, slug: id, type: 'page', title, status: null, parentId,
-    frontmatter: {}, createdAt: '', updatedAt: '',
+    id,
+    slug: id,
+    type: 'page',
+    title,
+    status: null,
+    parentId,
+    frontmatter: {},
+    createdAt: '',
+    updatedAt: '',
   };
 }
 
@@ -23,10 +30,7 @@ describe('buildTree', () => {
   });
 
   it('promotes orphans (parentId references a missing or deleted page) to roots', () => {
-    const tree = buildTree([
-      page('1', 'Lonely', 'deleted-parent'),
-      page('2', 'Root'),
-    ]);
+    const tree = buildTree([page('1', 'Lonely', 'deleted-parent'), page('2', 'Root')]);
     expect(tree.map((n) => n.doc.title)).toEqual(['Lonely', 'Root']);
   });
 

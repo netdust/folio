@@ -1,10 +1,10 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { z } from 'zod';
-import { useIsInstanceAdmin } from '../lib/api/auth.ts';
 import { AiTab } from '../components/settings/ai-tab.tsx';
-import { RolesTab } from '../components/settings/roles-tab.tsx';
-import { InvitationsTab } from '../components/settings/invitations-tab.tsx';
 import { InstanceTokensTab } from '../components/settings/instance-tokens-tab.tsx';
+import { InvitationsTab } from '../components/settings/invitations-tab.tsx';
+import { RolesTab } from '../components/settings/roles-tab.tsx';
+import { useIsInstanceAdmin } from '../lib/api/auth.ts';
 
 const settingsSearchSchema = z.object({
   // Deep-link target. The provider-health banner's "Check key →" lands here.
@@ -21,7 +21,11 @@ export const Route = createFileRoute('/settings')({
   component: InstanceSettingsBody,
 });
 
-export function SettingsSection({ title, desc, children }: {
+export function SettingsSection({
+  title,
+  desc,
+  children,
+}: {
   title: string;
   desc: string;
   children: React.ReactNode;
@@ -85,8 +89,8 @@ export function InstanceSettingsBody() {
         </>
       ) : (
         <p className="text-sm text-fg-3">
-          You don't have access to any instance-level settings. Workspace settings
-          live under each workspace.
+          You don't have access to any instance-level settings. Workspace settings live under each
+          workspace.
         </p>
       )}
     </div>

@@ -1,9 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { FolderOpen, Search, Home, Table2 } from 'lucide-react';
+import { FolderOpen, Home, Search, Table2 } from 'lucide-react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { openCommandPalette, subscribeOpenEvent } from '../../lib/command-palette-bus.ts';
 import { Rail } from './rail.tsx';
-import { subscribeOpenEvent, openCommandPalette } from '../../lib/command-palette-bus.ts';
 
 describe('Rail', () => {
   afterEach(() => vi.restoreAllMocks());
@@ -34,14 +34,21 @@ describe('Rail', () => {
       <Rail
         brand={{ mark: 'F', label: 'Folio' }}
         workspace={{ mark: 'B', name: 'BAVI' }}
-        primary={[{
-          id: 'project:sales',
-          label: 'Sales',
-          lucideIcon: FolderOpen,
-          children: [
-            { id: 'table:work-items', label: 'Work Items', lucideIcon: Table2, onClick: onChildClick },
-          ],
-        }]}
+        primary={[
+          {
+            id: 'project:sales',
+            label: 'Sales',
+            lucideIcon: FolderOpen,
+            children: [
+              {
+                id: 'table:work-items',
+                label: 'Work Items',
+                lucideIcon: Table2,
+                onClick: onChildClick,
+              },
+            ],
+          },
+        ]}
         user={{ name: 'Stefan' }}
       />,
     );
@@ -65,7 +72,15 @@ describe('Rail', () => {
           brand={{ mark: 'F', label: 'Folio' }}
           workspace={{ mark: 'B', name: 'BAVI' }}
           primary={[]}
-          tools={[{ id: 'search', label: 'Search', lucideIcon: Search, kbd: '⌘K', onClick: openCommandPalette }]}
+          tools={[
+            {
+              id: 'search',
+              label: 'Search',
+              lucideIcon: Search,
+              kbd: '⌘K',
+              onClick: openCommandPalette,
+            },
+          ]}
           user={{ name: 'Stefan' }}
         />,
       );

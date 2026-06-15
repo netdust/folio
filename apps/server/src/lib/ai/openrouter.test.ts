@@ -46,7 +46,8 @@ describe('openrouter provider', () => {
   test('testKey() hits /api/v1/key (auth-required), not /models (public)', async () => {
     const calls: string[] = [];
     global.fetch = mock(async (input: string | URL | Request) => {
-      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+      const url =
+        typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
       calls.push(url);
       return new Response('{"data":{"label":"my-key"}}', { status: 200 });
     }) as never;
@@ -68,7 +69,10 @@ describe('openrouter provider', () => {
 
   test('testKey() returns ok on 200 from /key', async () => {
     global.fetch = mock(async () => new Response('{"data":{}}', { status: 200 })) as never;
-    const r = await openrouter.testKey({ apiKey: 'sk-or-test', model: 'anthropic/claude-haiku-4-5' });
+    const r = await openrouter.testKey({
+      apiKey: 'sk-or-test',
+      model: 'anthropic/claude-haiku-4-5',
+    });
     expect(r.ok).toBe(true);
   });
 
@@ -86,7 +90,9 @@ describe('openrouter provider', () => {
   // sanitized messages (mitigation 5 + cosmetic correctness for operators).
   test('stream() sanitizes a 401 thrown by chat.completions.create and names OpenRouter', async () => {
     mockCreate.mockImplementationOnce((async () => {
-      const err = new Error('Incorrect API key: sk-or-real-XYZ at openrouter.internal.example.com') as Error & { status: number };
+      const err = new Error(
+        'Incorrect API key: sk-or-real-XYZ at openrouter.internal.example.com',
+      ) as Error & { status: number };
       err.status = 401;
       throw err;
     }) as never);

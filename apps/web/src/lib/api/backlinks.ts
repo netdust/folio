@@ -10,17 +10,14 @@ export interface BacklinkRow {
 }
 
 export const backlinksKeys = {
-  list: (wslug: string, pslug: string, slug: string) =>
-    ['backlinks', wslug, pslug, slug] as const,
+  list: (wslug: string, pslug: string, slug: string) => ['backlinks', wslug, pslug, slug] as const,
 };
 
 export function useBacklinks(wslug: string, pslug: string, slug: string) {
   return useQuery({
     queryKey: backlinksKeys.list(wslug, pslug, slug),
     queryFn: () =>
-      client.get<BacklinkRow[]>(
-        `/api/v1/w/${wslug}/p/${pslug}/documents/${slug}/backlinks`,
-      ),
+      client.get<BacklinkRow[]>(`/api/v1/w/${wslug}/p/${pslug}/documents/${slug}/backlinks`),
     staleTime: 30_000,
     enabled: !!wslug && !!pslug && !!slug,
   });

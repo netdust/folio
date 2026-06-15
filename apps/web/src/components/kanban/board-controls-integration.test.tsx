@@ -1,18 +1,18 @@
-import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
+  Outlet,
+  RouterProvider,
   createMemoryHistory,
   createRootRoute,
   createRoute,
   createRouter,
-  Outlet,
-  RouterProvider,
 } from '@tanstack/react-router';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { z } from 'zod';
-import { BoardControls } from './board-controls.tsx';
-import { KanbanView } from '../views/kanban-view.tsx';
 import { boardControlsBus } from '../../lib/board-controls-bus.ts';
+import { KanbanView } from '../views/kanban-view.tsx';
+import { BoardControls } from './board-controls.tsx';
 
 // BF5 (2026-05-31): the shared-view-id contract depends on BoardControls
 // (tab-row WRITER) and KanbanView (board-body READER) resolving the SAME
@@ -82,7 +82,16 @@ describe('BoardControls + KanbanView integration', () => {
         if (u.includes('/statuses')) {
           return new Response(
             JSON.stringify({
-              data: [{ id: 's1', key: 'todo', name: 'Todo', color: '#6EAFFF', category: 'unstarted', order: 1 }],
+              data: [
+                {
+                  id: 's1',
+                  key: 'todo',
+                  name: 'Todo',
+                  color: '#6EAFFF',
+                  category: 'unstarted',
+                  order: 1,
+                },
+              ],
             }),
             { status: 200, headers: { 'content-type': 'application/json' } },
           );
@@ -114,7 +123,15 @@ describe('BoardControls + KanbanView integration', () => {
           return new Response(
             JSON.stringify({
               data: [
-                { id: 'f1', key: 'priority', type: 'select', label: 'Priority', options: ['Low', 'High'], required: false, order: 1 },
+                {
+                  id: 'f1',
+                  key: 'priority',
+                  type: 'select',
+                  label: 'Priority',
+                  options: ['Low', 'High'],
+                  required: false,
+                  order: 1,
+                },
               ],
             }),
             { status: 200, headers: { 'content-type': 'application/json' } },
@@ -131,7 +148,15 @@ describe('BoardControls + KanbanView integration', () => {
             JSON.stringify({
               data: {
                 data: [
-                  { ...card, type: 'work_item', status: 'todo', parentId: null, frontmatter: {}, createdAt: '', updatedAt: new Date().toISOString() },
+                  {
+                    ...card,
+                    type: 'work_item',
+                    status: 'todo',
+                    parentId: null,
+                    frontmatter: {},
+                    createdAt: '',
+                    updatedAt: new Date().toISOString(),
+                  },
                 ],
                 nextCursor: null,
               },
@@ -139,7 +164,10 @@ describe('BoardControls + KanbanView integration', () => {
             { status: 200, headers: { 'content-type': 'application/json' } },
           );
         }
-        return new Response('{"data":[]}', { status: 200, headers: { 'content-type': 'application/json' } });
+        return new Response('{"data":[]}', {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
       }),
     );
 

@@ -48,22 +48,14 @@
  * its own original snapshot via the persisted thread; a NEW turn re-derives.)
  */
 
-import { nanoid } from 'nanoid';
 import { eq } from 'drizzle-orm';
-import { type DB } from '../db/client.ts';
-import { type EphemeralToken } from '../db/schema.ts';
-import {
-  callerProjectsFor,
-  intersectAgentProjects,
-} from '../lib/agent-projects.ts';
+import { nanoid } from 'nanoid';
+import type { DB } from '../db/client.ts';
+import type { EphemeralToken } from '../db/schema.ts';
+import { projectIdsVisibleInWorkspace, userRole, visibleWorkspaceIds } from '../lib/access.ts';
+import { callerProjectsFor, intersectAgentProjects } from '../lib/agent-projects.ts';
 import { roleToScopes, toolsToScopes } from '../lib/agent-schema.ts';
-import {
-  projectIdsVisibleInWorkspace,
-  userRole,
-  visibleWorkspaceIds,
-} from '../lib/access.ts';
 import { OPERATOR_TOOLS } from '../lib/system-skills.ts';
-
 
 /**
  * Per-turn token budget for the operator (cumulative input + output across the
@@ -104,9 +96,7 @@ export interface PendingConversationRun {
 const pending = new Map<string, PendingConversationRun>();
 
 /** loadContext's conversation branch reads this (and consumes it) by run id. */
-export function takePendingConversationRun(
-  runId: string,
-): PendingConversationRun | undefined {
+export function takePendingConversationRun(runId: string): PendingConversationRun | undefined {
   const entry = pending.get(runId);
   if (entry) pending.delete(runId);
   return entry;

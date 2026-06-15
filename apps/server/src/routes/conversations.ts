@@ -27,13 +27,14 @@ import { z } from 'zod';
 import { db } from '../db/client.ts';
 import { conversations } from '../db/schema.ts';
 import { conversationBus } from '../lib/conversation-bus.ts';
-import { runSseLoop } from '../lib/sse-loop.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
-import { runAgent as realRunAgent } from '../lib/runner.ts';
-import { type AuthContext, getUser, requireSessionUser } from '../middleware/auth.ts';
 import { OPERATOR_SLUG } from '../lib/operator.ts';
+import { runAgent as realRunAgent } from '../lib/runner.ts';
+import { runSseLoop } from '../lib/sse-loop.ts';
+import { type AuthContext, getUser, requireSessionUser } from '../middleware/auth.ts';
 import { createConversationRun } from '../services/conversation-runs.ts';
 import {
+  type SerializedMessage,
   appendMessage,
   createConversation,
   getMessage,
@@ -43,7 +44,6 @@ import {
   serializeMessage,
   serializeThreadMarkdown,
   setMessageChosen,
-  type SerializedMessage,
 } from '../services/conversations.ts';
 import { confirmPendingOp, rejectPendingOp } from '../services/pending-ops.ts';
 
@@ -120,7 +120,11 @@ async function startTurn(
     .where(and(eq(conversations.id, conv.id), isNull(conversations.activeRunId)))
     .run() as unknown as { changes: number };
   if (res.changes !== 1) {
-    throw new HTTPError('OPERATOR_BUSY', 'The operator is already working on this conversation.', 409);
+    throw new HTTPError(
+      'OPERATOR_BUSY',
+      'The operator is already working on this conversation.',
+      409,
+    );
   }
 
   // Between acquire and kick, any failure must RELEASE the slot or the

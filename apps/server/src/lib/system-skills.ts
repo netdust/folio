@@ -15,7 +15,7 @@
  * (act-then-report, link-after-write, choice-card for forks + confirm).
  */
 
-import { V1_MCP_TOOLS } from '@folio/shared';
+import type { V1_MCP_TOOLS } from '@folio/shared';
 
 /**
  * The skill's slug. `get_document` resolves the skill by this slug; the operator
@@ -31,8 +31,7 @@ export const FOLIO_SKILL_SLUG = 'folio';
  */
 export const FOLIO_SKILL_FRONTMATTER = {
   trusted: true,
-  description:
-    'Folio API manual — drive projects, tables, fields, views, statuses, providers.',
+  description: 'Folio API manual — drive projects, tables, fields, views, statuses, providers.',
   when_to_use:
     'Before shaping a workspace or adding a provider; whenever you need the resource→route→scope map or the risk-gate protocol.',
 } as const;

@@ -9,7 +9,7 @@
  *    table via the resolveProject auto-attach.
  */
 
-import { test, expect } from 'bun:test';
+import { expect, test } from 'bun:test';
 import { makeTestApp } from '../test/harness.ts';
 
 const wpBase = '/api/v1/w/acme/p/web';
@@ -52,7 +52,9 @@ test('statuses on different tables are isolated', async () => {
 
   // Work Items should still have its 4 seeded statuses, none keyed 'open'.
   const wi = await (
-    await app.request(`${wpBase}/t/work-items/statuses`, { headers: { Cookie: seed.sessionCookie } })
+    await app.request(`${wpBase}/t/work-items/statuses`, {
+      headers: { Cookie: seed.sessionCookie },
+    })
   ).json();
   expect(wi.data).toHaveLength(4);
   expect(wi.data.find((s: { key: string }) => s.key === 'open')).toBeUndefined();
@@ -126,11 +128,17 @@ test('POST /t/:tslug/fields scopes the field to that table', async () => {
   const t2 = await (
     await jsonReq(app, seed.sessionCookie, 'POST', `${wpBase}/tables`, { name: 'Bugs' })
   ).json();
-  const post = await jsonReq(app, seed.sessionCookie, 'POST', `${wpBase}/t/${t2.data.slug}/fields`, {
-    key: 'severity',
-    type: 'select',
-    options: ['low', 'med', 'high'],
-  });
+  const post = await jsonReq(
+    app,
+    seed.sessionCookie,
+    'POST',
+    `${wpBase}/t/${t2.data.slug}/fields`,
+    {
+      key: 'severity',
+      type: 'select',
+      options: ['low', 'med', 'high'],
+    },
+  );
   expect(post.status).toBe(201);
 
   const defaultList = await (

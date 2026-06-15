@@ -11,13 +11,7 @@ interface RightPanelProps {
   children: ReactNode;
 }
 
-export function RightPanel({
-  open,
-  activeTab,
-  onTabChange,
-  showAiTab,
-  children,
-}: RightPanelProps) {
+export function RightPanel({ open, activeTab, onTabChange, showAiTab, children }: RightPanelProps) {
   if (!open) return null;
   return (
     <aside className="flex w-[320px] flex-col overflow-hidden rounded-xl bg-content shadow-surface">

@@ -1,6 +1,6 @@
-import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { describe, expect, it, vi } from 'vitest';
 import { FieldRenderer } from './field-renderer.tsx';
 
 describe('FieldRenderer', () => {
@@ -77,12 +77,7 @@ describe('FieldRenderer', () => {
   it('renders url as a link in display mode and editable input on click', async () => {
     const onCommit = vi.fn();
     render(
-      <FieldRenderer
-        fieldKey="docs"
-        type="url"
-        value="https://example.com"
-        onCommit={onCommit}
-      />,
+      <FieldRenderer fieldKey="docs" type="url" value="https://example.com" onCommit={onCommit} />,
     );
     expect(screen.getByRole('link', { name: 'https://example.com' })).toBeInTheDocument();
   });

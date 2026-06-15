@@ -1,9 +1,9 @@
+import { ENTITY_TYPES, type EntityType } from '@folio/shared';
 import { useNavigate } from '@tanstack/react-router';
 import { Bot, FileText, ListChecks, Zap } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import { ENTITY_TYPES, type EntityType } from '@folio/shared';
 import type { ConversationMessage } from '../../lib/api/conversations.ts';
-import { entityRoute, type EntityTarget } from './entity-route.ts';
+import { type EntityTarget, entityRoute } from './entity-route.ts';
 import { parseMessagePayload } from './payload.ts';
 
 interface LinkPanelPayload {
@@ -68,10 +68,10 @@ export function MessageLinkPanel({ message }: { message: ConversationMessage }) 
     >
       <Icon className="size-4 shrink-0 mt-0.5 text-fg-3" aria-hidden="true" />
       <span className="min-w-0">
-        <span className="block truncate text-sm font-medium text-fg">{p.title ?? target.entityId}</span>
-        {p.subtitle ? (
-          <span className="block truncate text-xs text-fg-3">{p.subtitle}</span>
-        ) : null}
+        <span className="block truncate text-sm font-medium text-fg">
+          {p.title ?? target.entityId}
+        </span>
+        {p.subtitle ? <span className="block truncate text-xs text-fg-3">{p.subtitle}</span> : null}
       </span>
     </button>
   );

@@ -1,8 +1,8 @@
-import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import { describe, expect, test } from 'bun:test';
+import { resolve } from 'node:path';
 import { drizzle } from 'drizzle-orm/bun-sqlite';
 import { migrate } from 'drizzle-orm/bun-sqlite/migrator';
-import { resolve } from 'node:path';
 import * as schema from '../schema.ts';
 
 describe('migration: instance_skills', () => {

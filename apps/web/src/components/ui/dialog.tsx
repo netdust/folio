@@ -46,7 +46,10 @@ export function DialogTitle({ children, className }: { children: ReactNode; clas
   );
 }
 
-export function DialogDescription({ children, className }: { children: ReactNode; className?: string }) {
+export function DialogDescription({
+  children,
+  className,
+}: { children: ReactNode; className?: string }) {
   return (
     <DialogPrimitive.Description className={cn('mt-2 text-sm text-fg-2', className)}>
       {children}

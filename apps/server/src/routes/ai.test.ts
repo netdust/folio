@@ -1,9 +1,9 @@
 import { afterAll, beforeAll, describe, expect, mock, test } from 'bun:test';
 import { nanoid } from 'nanoid';
 import { aiKeys, apiTokens } from '../db/schema.ts';
-import { encryptSecret } from '../lib/crypto.ts';
 import { env } from '../env.ts';
 import { newApiToken } from '../lib/auth.ts';
+import { encryptSecret } from '../lib/crypto.ts';
 
 // Mock at the provider-factory boundary so the route sees a stubbed testKey /
 // stream without touching any real SDK. Bun hoists mock.module before the
@@ -23,9 +23,7 @@ const mockTestKey = mock(
 // a specific behavior (sentinel echo, error) set the override for one call.
 type StreamOpts = { apiKey: string; model: string; system: string; messages: unknown };
 type StreamEvent = { type: 'text'; delta: string } | { type: 'done'; reason: string };
-let streamOverride:
-  | ((opts: StreamOpts) => AsyncIterable<StreamEvent>)
-  | undefined;
+let streamOverride: ((opts: StreamOpts) => AsyncIterable<StreamEvent>) | undefined;
 async function* defaultStream(_opts: StreamOpts): AsyncIterable<StreamEvent> {
   yield { type: 'text', delta: 'Hello ' };
   yield { type: 'text', delta: 'world.' };
@@ -442,7 +440,10 @@ describe('POST /api/v1/w/:wslug/ai/complete', () => {
     streamOverride = undefined;
   });
 
-  async function seedAnthropicKey(db: Awaited<ReturnType<typeof makeTestApp>>['db'], secret: string) {
+  async function seedAnthropicKey(
+    db: Awaited<ReturnType<typeof makeTestApp>>['db'],
+    secret: string,
+  ) {
     await db.insert(aiKeys).values({
       id: nanoid(),
       provider: 'anthropic',

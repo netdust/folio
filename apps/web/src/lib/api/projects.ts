@@ -66,8 +66,7 @@ export function useUpdateProject(wslug: string) {
 export function useDeleteProject(wslug: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (pslug: string) =>
-      client.delete(`/api/v1/w/${wslug}/p/${pslug}`),
+    mutationFn: (pslug: string) => client.delete(`/api/v1/w/${wslug}/p/${pslug}`),
     onSuccess: (_data, pslug) => {
       // Cascade-invalidate everything that was scoped to this project.
       // Without this, useQueries in the workspace layout keeps serving stale

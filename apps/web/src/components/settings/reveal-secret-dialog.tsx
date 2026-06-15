@@ -1,13 +1,8 @@
-import { useState } from 'react';
 import { Check, Copy } from 'lucide-react';
+import { useState } from 'react';
 import { toast } from 'sonner';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogTitle,
-} from '../ui/dialog.tsx';
 import { Button } from '../ui/button.tsx';
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from '../ui/dialog.tsx';
 
 interface Props {
   /** The once-only plaintext secret to reveal; `null` keeps the dialog closed. */
@@ -53,8 +48,7 @@ export function RevealSecretDialog({ secret, onClose, title = 'Token rotated' }:
       <DialogContent>
         <DialogTitle>{title}</DialogTitle>
         <DialogDescription>
-          This is the only time you&apos;ll see this token. Copy it now and store it
-          somewhere safe.
+          This is the only time you&apos;ll see this token. Copy it now and store it somewhere safe.
         </DialogDescription>
         <div className="mt-4 rounded-md border border-border-light bg-shell p-2">
           <code className="block break-all font-mono text-xs text-fg">{secret}</code>

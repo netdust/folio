@@ -11,10 +11,10 @@ interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 const variantClasses: Record<Variant, string> = {
-  primary:   'bg-primary text-primary-fg hover:opacity-90',
+  primary: 'bg-primary text-primary-fg hover:opacity-90',
   secondary: 'bg-card text-fg hover:brightness-95',
-  ghost:     'text-fg-2 hover:bg-card hover:text-fg',
-  danger:    'bg-danger text-fg-on-primary hover:opacity-90',
+  ghost: 'text-fg-2 hover:bg-card hover:text-fg',
+  danger: 'bg-danger text-fg-on-primary hover:opacity-90',
 };
 
 const sizeClasses: Record<Size, string> = {
@@ -54,7 +54,12 @@ function Spinner() {
   return (
     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" className="animate-spin">
       <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" opacity="0.25" />
-      <path d="M22 12a10 10 0 0 1-10 10" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+      <path
+        d="M22 12a10 10 0 0 1-10 10"
+        stroke="currentColor"
+        strokeWidth="3"
+        strokeLinecap="round"
+      />
     </svg>
   );
 }

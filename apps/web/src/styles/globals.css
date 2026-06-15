@@ -1,6 +1,6 @@
-@import './fonts.css';
-@import './tokens.css';
-@import './editor.css';
+@import "./fonts.css";
+@import "./tokens.css";
+@import "./editor.css";
 
 @tailwind base;
 @tailwind components;
@@ -39,7 +39,9 @@
     line-height: 1.5;
   }
 
-  code, .mono, [data-slug] {
+  code,
+  .mono,
+  [data-slug] {
     font-family: var(--font-mono);
   }
 }

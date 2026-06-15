@@ -15,11 +15,11 @@
  * leak cross-workspace counts, violating mitigation 60.
  */
 
-import { Hono } from 'hono';
 import { sql } from 'drizzle-orm';
+import { Hono } from 'hono';
 import { db } from '../db/client.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
-import { type AuthContext } from '../middleware/auth.ts';
+import type { AuthContext } from '../middleware/auth.ts';
 import { type ScopeContext, getRole, getWorkspace } from '../middleware/scope.ts';
 
 export const adminRunnerStatsRoute = new Hono<AuthContext & ScopeContext>();
@@ -66,11 +66,7 @@ adminRunnerStatsRoute.get('/', async (c) => {
   // events.created_at is INTEGER ms epoch — bind a number, not a Date.
   // Date.UTC(y, m, d) gives ms at UTC midnight for today's date.
   const now = new Date();
-  const utcMidnightMs = Date.UTC(
-    now.getUTCFullYear(),
-    now.getUTCMonth(),
-    now.getUTCDate(),
-  );
+  const utcMidnightMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
   const recoveredRows = await db.all<{ count: number }>(sql`
     SELECT COUNT(*) AS count FROM events
      WHERE kind = 'agent.run.failed'

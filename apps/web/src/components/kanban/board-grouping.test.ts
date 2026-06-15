@@ -1,9 +1,25 @@
 import { describe, expect, test } from 'vitest';
-import { buildColumns, type BoardColumn } from './board-grouping.ts';
 import type { DocumentSummary } from '../../lib/api/documents.ts';
+import { type BoardColumn, buildColumns } from './board-grouping.ts';
 
-const doc = (id: string, fm: Record<string, unknown>, status: string | null = null): DocumentSummary =>
-  ({ id, slug: id, type: 'work_item', title: id, status, parentId: null, frontmatter: fm, createdAt: '', updatedAt: '', lastTouchedAt: null, body: '', boardPosition: null });
+const doc = (
+  id: string,
+  fm: Record<string, unknown>,
+  status: string | null = null,
+): DocumentSummary => ({
+  id,
+  slug: id,
+  type: 'work_item',
+  title: id,
+  status,
+  parentId: null,
+  frontmatter: fm,
+  createdAt: '',
+  updatedAt: '',
+  lastTouchedAt: null,
+  body: '',
+  boardPosition: null,
+});
 
 describe('buildColumns', () => {
   test('group by status uses statuses + a parking lot only when non-empty', () => {
@@ -22,7 +38,12 @@ describe('buildColumns', () => {
     const cols = buildColumns({
       docs: [doc('a', { priority: 'High' }), doc('b', {})],
       groupBy: 'priority',
-      field: { key: 'priority', type: 'select', label: 'Priority', options: ['Low', 'High'] } as never,
+      field: {
+        key: 'priority',
+        type: 'select',
+        label: 'Priority',
+        options: ['Low', 'High'],
+      } as never,
       statuses: [],
     });
     expect(cols.map((c: BoardColumn) => c.value)).toEqual(['Low', 'High', null]);

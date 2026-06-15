@@ -1,15 +1,15 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
+  Outlet,
+  RouterProvider,
   createMemoryHistory,
   createRootRoute,
   createRoute,
   createRouter,
-  Outlet,
-  RouterProvider,
 } from '@tanstack/react-router';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { WorkspaceLayout } from './w.$wslug.tsx';
 
@@ -20,8 +20,32 @@ const workspace = { id: 'w1', slug: 'acme', name: 'Acme' };
 const projects = [{ id: 'p1', slug: 'sales', name: 'Sales' }];
 const tables = [{ id: 't1', slug: 'work-items', name: 'Work Items' }];
 const views = [
-  { id: 'v-default', slug: 'all', name: 'All', type: 'list', filters: {}, sort: [], groupBy: null, visibleFields: [], columnOrder: null, isDefault: true, order: 0 },
-  { id: 'v-triage', slug: 'triage', name: 'Triage', type: 'list', filters: { status: 'In Progress' }, sort: [], groupBy: null, visibleFields: [], columnOrder: null, isDefault: false, order: 10 },
+  {
+    id: 'v-default',
+    slug: 'all',
+    name: 'All',
+    type: 'list',
+    filters: {},
+    sort: [],
+    groupBy: null,
+    visibleFields: [],
+    columnOrder: null,
+    isDefault: true,
+    order: 0,
+  },
+  {
+    id: 'v-triage',
+    slug: 'triage',
+    name: 'Triage',
+    type: 'list',
+    filters: { status: 'In Progress' },
+    sort: [],
+    groupBy: null,
+    visibleFields: [],
+    columnOrder: null,
+    isDefault: false,
+    order: 10,
+  },
 ];
 
 interface SetupOpts {
@@ -196,10 +220,34 @@ describe('WorkspaceLayout — delete + nav side effects', () => {
       { id: 't2', slug: 'bugs', name: 'Bugs' },
     ];
     const workItemsViews = [
-      { id: 'v-wi', slug: 'all', name: 'All', type: 'list', filters: {}, sort: [], groupBy: null, visibleFields: ['title', 'status'], columnOrder: ['title', 'status'], isDefault: true, order: 0 },
+      {
+        id: 'v-wi',
+        slug: 'all',
+        name: 'All',
+        type: 'list',
+        filters: {},
+        sort: [],
+        groupBy: null,
+        visibleFields: ['title', 'status'],
+        columnOrder: ['title', 'status'],
+        isDefault: true,
+        order: 0,
+      },
     ];
     const bugsViews = [
-      { id: 'v-bugs', slug: 'all', name: 'All', type: 'list', filters: {}, sort: [], groupBy: null, visibleFields: ['title', 'severity', 'repro'], columnOrder: ['title', 'severity', 'repro'], isDefault: true, order: 0 },
+      {
+        id: 'v-bugs',
+        slug: 'all',
+        name: 'All',
+        type: 'list',
+        filters: {},
+        sort: [],
+        groupBy: null,
+        visibleFields: ['title', 'severity', 'repro'],
+        columnOrder: ['title', 'severity', 'repro'],
+        isDefault: true,
+        order: 0,
+      },
     ];
 
     let createdViewBody: Record<string, unknown> | undefined;
@@ -216,15 +264,23 @@ describe('WorkspaceLayout — delete + nav side effects', () => {
       const u = String(url);
       if (init?.method === 'POST' && /\/p\/sales\/t\/bugs\/views$/.test(u)) {
         createdViewBody = JSON.parse(String(init.body));
-        return new Response(JSON.stringify({ data: { id: 'v-new', type: 'list' } }), { status: 200, headers: { 'content-type': 'application/json' } });
+        return new Response(JSON.stringify({ data: { id: 'v-new', type: 'list' } }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
       }
       const respond = (body: unknown, status = 200) =>
-        new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+        new Response(JSON.stringify(body), {
+          status,
+          headers: { 'content-type': 'application/json' },
+        });
       if (u.endsWith('/api/v1/auth/me')) return respond({ data: { user: me } });
       if (u.endsWith(`/api/v1/w/${workspace.slug}`)) return respond({ data: workspace });
-      if (u.endsWith('/api/v1/workspaces')) return respond({ data: [{ workspace, role: 'owner' }] });
+      if (u.endsWith('/api/v1/workspaces'))
+        return respond({ data: [{ workspace, role: 'owner' }] });
       if (u.endsWith(`/api/v1/w/${workspace.slug}/projects`)) return respond({ data: projects });
-      if (u.endsWith(`/api/v1/w/${workspace.slug}/p/sales/tables`)) return respond({ data: twoTables });
+      if (u.endsWith(`/api/v1/w/${workspace.slug}/p/sales/tables`))
+        return respond({ data: twoTables });
       if (/\/p\/sales\/t\/work-items\/views$/.test(u)) return respond({ data: workItemsViews });
       if (/\/p\/sales\/t\/bugs\/views$/.test(u)) return respond({ data: bugsViews });
       if (/\/p\/sales\/t\/[^/]+\/fields$/.test(u)) return respond({ data: [] });

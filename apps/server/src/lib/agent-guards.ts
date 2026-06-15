@@ -92,8 +92,7 @@ export async function assertAgentAllowListWidening(
   // reach resolveCallingAgent to be granted its ['*'] (else it fail-closes to []).
   if (!token || !isAgentBound(token)) return;
 
-  const hasProjectsKey =
-    nextFrontmatter !== undefined && 'projects' in nextFrontmatter;
+  const hasProjectsKey = nextFrontmatter !== undefined && 'projects' in nextFrontmatter;
 
   // For PATCH: absent projects means no change. Skip.
   if (!hasProjectsKey && op === 'patch') return;
@@ -176,16 +175,14 @@ export async function assertAgentToolsWidening(
   // to be granted its full tool set, not skipped (Shape B′ — agentId null).
   if (!token || !isAgentBound(token)) return;
 
-  const hasToolsKey =
-    nextFrontmatter !== undefined && 'tools' in nextFrontmatter;
+  const hasToolsKey = nextFrontmatter !== undefined && 'tools' in nextFrontmatter;
   if (!hasToolsKey) return; // create: Zod rejects; patch: no-op
 
   const nextTools = (nextFrontmatter as Record<string, unknown>)['tools'];
   if (!Array.isArray(nextTools)) return; // let Zod surface the type error
 
   const callingAgent = await resolveCallingAgent(token);
-  const callingToolsRaw = (callingAgent?.frontmatter as { tools?: unknown } | undefined)
-    ?.tools;
+  const callingToolsRaw = (callingAgent?.frontmatter as { tools?: unknown } | undefined)?.tools;
 
   if (callingToolsRaw !== undefined && !Array.isArray(callingToolsRaw)) {
     throw new HTTPError(
@@ -218,17 +215,10 @@ export async function assertAgentToolsWidening(
  * Reject self-delete from an agent-bound token. No-op for human PATs and
  * session auth.
  */
-export function assertNotSelfDelete(
-  token: ApiToken | null,
-  targetDocumentId: string,
-): void {
+export function assertNotSelfDelete(token: ApiToken | null, targetDocumentId: string): void {
   if (!token || !token.agentId) return;
   if (token.agentId === targetDocumentId) {
-    throw new HTTPError(
-      'CANNOT_DELETE_SELF',
-      'agent cannot delete itself',
-      403,
-    );
+    throw new HTTPError('CANNOT_DELETE_SELF', 'agent cannot delete itself', 403);
   }
 }
 

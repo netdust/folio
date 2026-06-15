@@ -1,8 +1,8 @@
-import { test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import { expect, test } from 'bun:test';
+import { resolve } from 'node:path';
 import { drizzle } from 'drizzle-orm/bun-sqlite';
 import { migrate } from 'drizzle-orm/bun-sqlite/migrator';
-import { resolve } from 'node:path';
 import * as schema from '../db/schema.ts';
 import { instanceSettings } from '../db/schema.ts';
 import { getOperatorModelSetting, setOperatorModelSetting } from './instance-settings.ts';
@@ -32,7 +32,11 @@ test('round-trips the operator model setting (unset → null → set → read)',
 test('setOperatorModelSetting upserts (second set overwrites)', async () => {
   const db = makeDb();
   await setOperatorModelSetting(db, { provider: 'ollama', model: 'a', aiKeyLabel: 'default' });
-  await setOperatorModelSetting(db, { provider: 'anthropic', model: 'claude-sonnet-4-6', aiKeyLabel: 'default' });
+  await setOperatorModelSetting(db, {
+    provider: 'anthropic',
+    model: 'claude-sonnet-4-6',
+    aiKeyLabel: 'default',
+  });
   expect(await getOperatorModelSetting(db)).toEqual({
     provider: 'anthropic',
     model: 'claude-sonnet-4-6',
@@ -53,7 +57,10 @@ test('a malformed value row degrades to null (mitigation 7 — tolerant read)', 
 test('an unknown provider in the row degrades to null (closed-enum guard, mitigation 6)', async () => {
   const db = makeDb();
   db.insert(instanceSettings)
-    .values({ key: 'operator_model', value: { provider: 'evilcorp', model: 'x', aiKeyLabel: 'default' } })
+    .values({
+      key: 'operator_model',
+      value: { provider: 'evilcorp', model: 'x', aiKeyLabel: 'default' },
+    })
     .run();
   expect(await getOperatorModelSetting(db)).toBeNull();
 });

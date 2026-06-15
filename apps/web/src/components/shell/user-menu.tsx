@@ -1,7 +1,7 @@
-import type { ReactNode } from 'react';
 import { Settings } from 'lucide-react';
-import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
+import type { ReactNode } from 'react';
 import { Icon } from '../ui/icon.tsx';
+import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
 
 interface UserMenuProps {
   trigger: ReactNode;

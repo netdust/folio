@@ -13,11 +13,7 @@ interface ExternalUpdateBannerProps {
  * styling, and a11y stay in one place. The reload ACTION differs per slideover
  * (different query-key family), so it is injected via `onReload`.
  */
-export function ExternalUpdateBanner({
-  update,
-  onReload,
-  onDismiss,
-}: ExternalUpdateBannerProps) {
+export function ExternalUpdateBanner({ update, onReload, onDismiss }: ExternalUpdateBannerProps) {
   return (
     <div
       role="status"

@@ -69,7 +69,13 @@ export const runDoneReasonSchema = z.enum([
 ]);
 export type RunDoneReason = z.infer<typeof runDoneReasonSchema>;
 
-export const providerSchema = z.enum(['anthropic', 'openai', 'openrouter', 'ollama', 'claude-code']);
+export const providerSchema = z.enum([
+  'anthropic',
+  'openai',
+  'openrouter',
+  'ollama',
+  'claude-code',
+]);
 export type Provider = z.infer<typeof providerSchema>;
 
 export const agentRunFrontmatterSchema = z

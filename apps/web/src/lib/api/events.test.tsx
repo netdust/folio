@@ -1,6 +1,6 @@
-import { afterEach, describe, it, expect, vi } from 'vitest';
-import { renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { renderHook, waitFor } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { useLogActivity } from './events.ts';
 
 function wrapperOf(qc: QueryClient) {
@@ -18,10 +18,10 @@ describe('useLogActivity', () => {
   it('invalidates only scoped document keys (not the broad ["documents"] prefix)', async () => {
     const fetchMock = vi.fn<typeof fetch>(async (url, init) => {
       if (String(url).endsWith('/activity') && init?.method === 'POST') {
-        return new Response(
-          JSON.stringify({ data: { lastTouchedAt: new Date().toISOString() } }),
-          { status: 201, headers: { 'content-type': 'application/json' } },
-        );
+        return new Response(JSON.stringify({ data: { lastTouchedAt: new Date().toISOString() } }), {
+          status: 201,
+          headers: { 'content-type': 'application/json' },
+        });
       }
       return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
     });
@@ -49,27 +49,25 @@ describe('useLogActivity', () => {
     expect(keys.some((k) => k === JSON.stringify(['documents']))).toBe(false);
 
     // Must invalidate the events list for this doc.
-    expect(keys.some((k) =>
-      k === JSON.stringify(['document-events', 'acme', 'web', 'lead-foo']),
-    )).toBe(true);
+    expect(
+      keys.some((k) => k === JSON.stringify(['document-events', 'acme', 'web', 'lead-foo'])),
+    ).toBe(true);
 
     // Must invalidate the project-wide documents prefix (so the doc surfaces in
     // updated-at sort once the server bumps updatedAt). The activity log does
     // NOT carry the doc's table, so it busts every table under the project via
     // the table-agnostic prefix [documents, w, p]. The legacy [...,'list']
     // prefix no longer prefix-matches the table-scoped read key (tslug at idx 3).
-    expect(keys.some((k) =>
-      k === JSON.stringify(['documents', 'acme', 'web']),
-    )).toBe(true);
+    expect(keys.some((k) => k === JSON.stringify(['documents', 'acme', 'web']))).toBe(true);
     // Regression guard: the stale project-scoped-with-'list' prefix must NOT be
     // used — it stopped matching the table-scoped key after Cluster 1.
-    expect(keys.some((k) =>
-      k === JSON.stringify(['documents', 'acme', 'web', 'list']),
-    )).toBe(false);
+    expect(keys.some((k) => k === JSON.stringify(['documents', 'acme', 'web', 'list']))).toBe(
+      false,
+    );
 
     // Must invalidate the doc's detail (so lastTouchedAt is fresh in the slideover).
-    expect(keys.some((k) =>
-      k === JSON.stringify(['documents', 'acme', 'web', 'detail', 'lead-foo']),
-    )).toBe(true);
+    expect(
+      keys.some((k) => k === JSON.stringify(['documents', 'acme', 'web', 'detail', 'lead-foo'])),
+    ).toBe(true);
   });
 });

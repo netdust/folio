@@ -1,3 +1,4 @@
+import { describe, expect, test } from 'bun:test';
 // Tier-A security-guard tests for lib/crypto.ts (AES-256-GCM, @noble/ciphers).
 // Closes audit H9: a framing refactor must not silently pass while bricking every
 // customer's stored AI key. Cites ARCHITECTURE-INVARIANTS.md inv. 2 & 7 (fail-closed
@@ -7,7 +8,6 @@
 // generated under that exact key (see the generation command in the task).
 import { gcm } from '@noble/ciphers/aes';
 import { randomBytes } from '@noble/ciphers/webcrypto';
-import { describe, expect, test } from 'bun:test';
 import { decryptSecret, encryptSecret } from './crypto.ts';
 
 describe('crypto round-trip', () => {

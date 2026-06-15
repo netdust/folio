@@ -1,17 +1,17 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
+  Outlet,
+  RouterProvider,
   createMemoryHistory,
   createRootRouteWithContext,
   createRoute,
   createRouter,
-  Outlet,
   redirect,
-  RouterProvider,
 } from '@tanstack/react-router';
+import { render, screen, waitFor } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { type SessionUser, authKeys } from '../lib/api/auth.ts';
 import { ApiError, client as api } from '../lib/api/client.ts';
-import { authKeys, type SessionUser } from '../lib/api/auth.ts';
 
 interface Ctx {
   queryClient: QueryClient;
@@ -78,11 +78,12 @@ describe('root auth gate', () => {
   it('redirects to /login when /me returns 401', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () =>
-        new Response(
-          JSON.stringify({ error: { code: 'UNAUTHORIZED', message: 'no session' } }),
-          { status: 401, headers: { 'content-type': 'application/json' } },
-        ),
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ error: { code: 'UNAUTHORIZED', message: 'no session' } }), {
+            status: 401,
+            headers: { 'content-type': 'application/json' },
+          }),
       ),
     );
 
@@ -101,11 +102,12 @@ describe('root auth gate', () => {
   it('renders the home outlet when /me returns 200', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () =>
-        new Response(
-          JSON.stringify({ data: { user: { id: 'u1', email: 'a@b.c', name: 'A' } } }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        ),
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({ data: { user: { id: 'u1', email: 'a@b.c', name: 'A' } } }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          ),
       ),
     );
 

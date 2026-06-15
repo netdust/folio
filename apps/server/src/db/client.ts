@@ -48,7 +48,9 @@ export const db = new Proxy({} as DrizzleDb, {
   get(_t, prop) {
     const target = resolve() as unknown as Record<PropertyKey, unknown>;
     const value = target[prop];
-    return typeof value === 'function' ? (value as (...a: unknown[]) => unknown).bind(target) : value;
+    return typeof value === 'function'
+      ? (value as (...a: unknown[]) => unknown).bind(target)
+      : value;
   },
 }) as DrizzleDb;
 

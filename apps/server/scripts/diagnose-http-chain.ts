@@ -147,11 +147,7 @@ interface ApiResult {
   body: unknown;
 }
 
-async function api(
-  method: string,
-  path: string,
-  body?: unknown,
-): Promise<ApiResult> {
+async function api(method: string, path: string, body?: unknown): Promise<ApiResult> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (sessionCookie) headers.cookie = sessionCookie;
   const res = await fetch(`${BASE}${path}`, {
@@ -208,8 +204,7 @@ async function bootServer(): Promise<{ proc: ReturnType<typeof Bun.spawn> }> {
       ...process.env,
       PORT: String(PORT),
       DATABASE_URL: `file:${DB_FILE}`,
-      FOLIO_MASTER_KEY:
-        '0000000000000000000000000000000000000000000000000000000000000001',
+      FOLIO_MASTER_KEY: '0000000000000000000000000000000000000000000000000000000000000001',
       NODE_ENV: 'development',
     },
     stdout: 'pipe',
@@ -332,7 +327,8 @@ async function main(): Promise<void> {
     assert2xx(wiRes, 'create work_item');
     const wiSlug = data<{ slug: string }>(wiRes).slug;
     const wiId = data<{ id: string }>(wiRes).id;
-    if (!wiSlug || !wiId) throw new Error(`work_item create returned no slug/id: ${truncate(wiRes.body)}`);
+    if (!wiSlug || !wiId)
+      throw new Error(`work_item create returned no slug/id: ${truncate(wiRes.body)}`);
 
     console.log(
       `[setup] workspace=${workspaceId} inbox=${inboxId} agent=${agentSlug} work_item=${wiSlug} (id=${wiId})`,
@@ -347,8 +343,9 @@ async function main(): Promise<void> {
       { frontmatter: { assignee: `agent:${agentSlug}` } },
     );
     assert2xx(patchRes, 'PATCH assign agent');
-    const patchedAssignee = (data<{ frontmatter?: Record<string, unknown> }>(patchRes).frontmatter ?? {})
-      .assignee;
+    const patchedAssignee = (
+      data<{ frontmatter?: Record<string, unknown> }>(patchRes).frontmatter ?? {}
+    ).assignee;
     console.log(`[B1] PATCH response assignee = ${truncate(patchedAssignee)}`);
     flushServerLines();
 

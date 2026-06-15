@@ -1,5 +1,5 @@
-import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { drizzle } from 'drizzle-orm/bun-sqlite';
@@ -33,9 +33,7 @@ describe('Phase 4 contract migrations — __system teardown + drop memberships',
       .all();
     expect(membershipsTbl.length).toBe(0);
 
-    const systemWs = sqlite
-      .query(`SELECT id FROM workspaces WHERE slug='__system'`)
-      .all();
+    const systemWs = sqlite.query(`SELECT id FROM workspaces WHERE slug='__system'`).all();
     expect(systemWs.length).toBe(0);
   });
 
@@ -63,11 +61,21 @@ describe('Phase 4 contract migrations — __system teardown + drop memberships',
     sqlite.exec(`INSERT INTO users (id, email, name) VALUES ('u1', 'a@x.com', 'A')`);
     sqlite.exec(`INSERT INTO workspaces (id, slug, name) VALUES ('sys', '__system', 'System')`);
     sqlite.exec(`INSERT INTO workspaces (id, slug, name) VALUES ('cust', 'acme', 'Acme')`);
-    sqlite.exec(`INSERT INTO projects (id, workspace_id, slug, name) VALUES ('sp', 'sys', 'skills', 'Skills')`);
-    sqlite.exec(`INSERT INTO projects (id, workspace_id, slug, name) VALUES ('cp', 'cust', 'web', 'Web')`);
-    sqlite.exec(`INSERT INTO documents (id, workspace_id, project_id, type, slug, title, body) VALUES ('sd', 'sys', 'sp', 'page', 'folio', 'folio', 'x')`);
-    sqlite.exec(`INSERT INTO documents (id, workspace_id, project_id, type, slug, title, body) VALUES ('cd', 'cust', 'cp', 'work_item', 'task', 'Task', 'y')`);
-    sqlite.exec(`INSERT INTO memberships (workspace_id, user_id, role) VALUES ('sys', 'u1', 'owner')`);
+    sqlite.exec(
+      `INSERT INTO projects (id, workspace_id, slug, name) VALUES ('sp', 'sys', 'skills', 'Skills')`,
+    );
+    sqlite.exec(
+      `INSERT INTO projects (id, workspace_id, slug, name) VALUES ('cp', 'cust', 'web', 'Web')`,
+    );
+    sqlite.exec(
+      `INSERT INTO documents (id, workspace_id, project_id, type, slug, title, body) VALUES ('sd', 'sys', 'sp', 'page', 'folio', 'folio', 'x')`,
+    );
+    sqlite.exec(
+      `INSERT INTO documents (id, workspace_id, project_id, type, slug, title, body) VALUES ('cd', 'cust', 'cp', 'work_item', 'task', 'Task', 'y')`,
+    );
+    sqlite.exec(
+      `INSERT INTO memberships (workspace_id, user_id, role) VALUES ('sys', 'u1', 'owner')`,
+    );
 
     // Run ONLY the 0027 teardown SQL (split on the breakpoint, like migrate()).
     applyMigration(sqlite, '0028_drop_system_workspace.sql');

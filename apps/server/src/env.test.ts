@@ -17,9 +17,13 @@ describe('FOLIO_CLAUDE_CODE_ENABLED', () => {
     expect(envSchema.parse({ ...base }).FOLIO_CLAUDE_CODE_ENABLED).toBe(false);
   });
   test("'false' string yields false", () => {
-    expect(envSchema.parse({ ...base, FOLIO_CLAUDE_CODE_ENABLED: 'false' }).FOLIO_CLAUDE_CODE_ENABLED).toBe(false);
+    expect(
+      envSchema.parse({ ...base, FOLIO_CLAUDE_CODE_ENABLED: 'false' }).FOLIO_CLAUDE_CODE_ENABLED,
+    ).toBe(false);
   });
   test("'true' string yields true", () => {
-    expect(envSchema.parse({ ...base, FOLIO_CLAUDE_CODE_ENABLED: 'true' }).FOLIO_CLAUDE_CODE_ENABLED).toBe(true);
+    expect(
+      envSchema.parse({ ...base, FOLIO_CLAUDE_CODE_ENABLED: 'true' }).FOLIO_CLAUDE_CODE_ENABLED,
+    ).toBe(true);
   });
 });

@@ -1,4 +1,4 @@
-import { test, expect } from 'bun:test';
+import { expect, test } from 'bun:test';
 import { ENTITY_TYPES, parseMessagePayload } from './conversation-payload.ts';
 
 // ENTITY_TYPES — the single closed enum both sides import.

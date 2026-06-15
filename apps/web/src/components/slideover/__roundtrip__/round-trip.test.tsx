@@ -1,15 +1,15 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
+  Outlet,
+  RouterProvider,
   createMemoryHistory,
   createRootRoute,
   createRoute,
   createRouter,
-  Outlet,
-  RouterProvider,
 } from '@tanstack/react-router';
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { DocumentSlideover } from '../document-slideover.tsx';
 
@@ -139,10 +139,10 @@ describe('Slideover round-trip', () => {
       }
 
       if (u.includes('/statuses') || u.includes('/fields')) {
-        return new Response(
-          JSON.stringify({ data: [] }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        );
+        return new Response(JSON.stringify({ data: [] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
       }
 
       return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
@@ -217,7 +217,9 @@ describe('Slideover round-trip', () => {
     // drive CodeMirror's input pipeline, so this branch may not execute in CI.)
     if (patches.length > 0) {
       const lastBody = String(patches[patches.length - 1]?.body ?? '');
-      expect(lastBody).toContain('---\nthis: looks like frontmatter\nbut: is inside a code fence\n---');
+      expect(lastBody).toContain(
+        '---\nthis: looks like frontmatter\nbut: is inside a code fence\n---',
+      );
       expect(lastBody).toContain('| Artist | Status | Notes |');
       expect(lastBody).toMatch(/appended\.\s*$/);
     }

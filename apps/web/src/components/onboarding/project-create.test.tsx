@@ -1,15 +1,15 @@
-import { describe, it, expect, afterEach, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
+  Outlet,
+  RouterProvider,
   createMemoryHistory,
   createRootRoute,
   createRoute,
   createRouter,
-  Outlet,
-  RouterProvider,
 } from '@tanstack/react-router';
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ProjectCreate } from './project-create.tsx';
 
 function setup() {
@@ -91,11 +91,12 @@ describe('ProjectCreate', () => {
   it('surfaces SLUG_CONFLICT as an inline field error, not a toast', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () =>
-        new Response(
-          JSON.stringify({ error: { code: 'SLUG_CONFLICT', message: 'Slug already in use' } }),
-          { status: 409, headers: { 'content-type': 'application/json' } },
-        ),
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({ error: { code: 'SLUG_CONFLICT', message: 'Slug already in use' } }),
+            { status: 409, headers: { 'content-type': 'application/json' } },
+          ),
       ),
     );
 

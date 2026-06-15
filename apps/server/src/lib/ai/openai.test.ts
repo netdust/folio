@@ -179,8 +179,12 @@ describe('openai provider', () => {
 
     const events: unknown[] = [];
     for await (const ev of openai.stream({
-      system: 'sys', messages: [{ role: 'user', content: 'do bad thing' }],
-      tools: [], maxTokens: 100, apiKey: 'sk', model: 'gpt-4o-mini',
+      system: 'sys',
+      messages: [{ role: 'user', content: 'do bad thing' }],
+      tools: [],
+      maxTokens: 100,
+      apiKey: 'sk',
+      model: 'gpt-4o-mini',
     })) {
       events.push(ev);
     }
@@ -202,9 +206,7 @@ describe('openai provider', () => {
           choices: [
             {
               delta: {
-                tool_calls: [
-                  { index: 0, id: 'call_a', function: { name: 'f', arguments: '{}' } },
-                ],
+                tool_calls: [{ index: 0, id: 'call_a', function: { name: 'f', arguments: '{}' } }],
               },
             },
           ],
@@ -278,7 +280,9 @@ describe('openai provider', () => {
   // is now try/catch'd; the throw rewrites to the same testKey whitelist.
   test('stream() sanitizes a 401 thrown by chat.completions.create (mitigation 5)', async () => {
     mockCreate.mockImplementationOnce((async () => {
-      const err = new Error('Incorrect API key provided: sk-real-0123456789. See https://platform.openai.com/account/api-keys.') as Error & { status: number };
+      const err = new Error(
+        'Incorrect API key provided: sk-real-0123456789. See https://platform.openai.com/account/api-keys.',
+      ) as Error & { status: number };
       err.status = 401;
       throw err;
     }) as never);
@@ -462,8 +466,20 @@ describe('openai provider', () => {
     mockCreate.mockImplementationOnce((async (_opts: { stream?: boolean }) => {
       return (async function* () {
         // tool_call arrives across deltas (id first, then args)...
-        yield { choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_1', function: { name: 'list_workspaces', arguments: '' } }] } }] };
-        yield { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '{}' } }] } }] };
+        yield {
+          choices: [
+            {
+              delta: {
+                tool_calls: [
+                  { index: 0, id: 'call_1', function: { name: 'list_workspaces', arguments: '' } },
+                ],
+              },
+            },
+          ],
+        };
+        yield {
+          choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '{}' } }] } }],
+        };
         // ...but the model finishes with 'stop' (the thinking-model quirk), NOT 'tool_calls'.
         yield {
           choices: [{ delta: {}, finish_reason: 'stop' }],
@@ -475,7 +491,13 @@ describe('openai provider', () => {
     for await (const ev of openai.stream({
       system: 'sys',
       messages: [{ role: 'user', content: 'list' }],
-      tools: [{ name: 'list_workspaces', description: 'List.', input_schema: { type: 'object', properties: {} } }],
+      tools: [
+        {
+          name: 'list_workspaces',
+          description: 'List.',
+          input_schema: { type: 'object', properties: {} },
+        },
+      ],
       maxTokens: 100,
       apiKey: 'sk-test',
       model: 'qwen/qwen3-8b',
@@ -484,14 +506,29 @@ describe('openai provider', () => {
     }
     // The call surfaces (what the runner gates the round on); done.reason is the
     // HONEST 'stop' the model reported — the adapter no longer relabels it.
-    expect(events).toContainEqual({ type: 'tool_call', id: 'call_1', name: 'list_workspaces', arguments: {} });
+    expect(events).toContainEqual({
+      type: 'tool_call',
+      id: 'call_1',
+      name: 'list_workspaces',
+      arguments: {},
+    });
     expect(events).toContainEqual({ type: 'done', reason: 'stop' });
   });
 
   test("stream() prefers max_tokens over tool_use when a tool call is truncated ('length')", async () => {
     mockCreate.mockImplementationOnce((async (_opts: { stream?: boolean }) => {
       return (async function* () {
-        yield { choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_1', function: { name: 'f', arguments: '{"a":' } }] } }] };
+        yield {
+          choices: [
+            {
+              delta: {
+                tool_calls: [
+                  { index: 0, id: 'call_1', function: { name: 'f', arguments: '{"a":' } },
+                ],
+              },
+            },
+          ],
+        };
         yield {
           choices: [{ delta: {}, finish_reason: 'length' }],
           usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
@@ -584,12 +621,26 @@ describe('openai provider', () => {
     // the plain turn surfaces none, both report the honest 'stop' (the runner decides
     // the tool round from the collected calls, not from the done.reason label).
     const toolGen = async function* () {
-      yield { choices: [{ delta: { tool_calls: [{ index: 0, id: 'c1', function: { name: 'f', arguments: '{}' } }] } }] };
-      yield { choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1 } };
+      yield {
+        choices: [
+          {
+            delta: {
+              tool_calls: [{ index: 0, id: 'c1', function: { name: 'f', arguments: '{}' } }],
+            },
+          },
+        ],
+      };
+      yield {
+        choices: [{ delta: {}, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 1, completion_tokens: 1 },
+      };
     };
     const plainGen = async function* () {
       yield { choices: [{ delta: { content: 'hi' } }] };
-      yield { choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1 } };
+      yield {
+        choices: [{ delta: {}, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 1, completion_tokens: 1 },
+      };
     };
     let call = 0;
     mockCreate.mockImplementation((async (_opts: { stream?: boolean }) => {
@@ -600,10 +651,14 @@ describe('openai provider', () => {
     const drain = async (model: string) => {
       const evs: any[] = [];
       for await (const ev of openai.stream({
-        system: 'sys', messages: [{ role: 'user', content: 'x' }],
+        system: 'sys',
+        messages: [{ role: 'user', content: 'x' }],
         tools: [{ name: 'f', description: 'f', input_schema: { type: 'object', properties: {} } }],
-        maxTokens: 100, apiKey: 'sk', model,
-      })) evs.push(ev);
+        maxTokens: 100,
+        apiKey: 'sk',
+        model,
+      }))
+        evs.push(ev);
       return evs;
     };
 
@@ -630,10 +685,20 @@ describe('openai provider', () => {
       system: 'sys',
       messages: [
         { role: 'user', content: 'list' },
-        { role: 'assistant', content: '', tool_calls: [{ id: 'call_1', name: 'list_workspaces', arguments: { q: 'x' } }] },
+        {
+          role: 'assistant',
+          content: '',
+          tool_calls: [{ id: 'call_1', name: 'list_workspaces', arguments: { q: 'x' } }],
+        },
         { role: 'tool', content: '{"ok":true}', tool_use_id: 'call_1' },
       ],
-      tools: [{ name: 'list_workspaces', description: 'List.', input_schema: { type: 'object', properties: {} } }],
+      tools: [
+        {
+          name: 'list_workspaces',
+          description: 'List.',
+          input_schema: { type: 'object', properties: {} },
+        },
+      ],
       maxTokens: 100,
       apiKey: 'sk-test',
       model: 'gpt-4o-mini',
@@ -642,7 +707,12 @@ describe('openai provider', () => {
     }
     // Inspect what was SENT, not just what came back.
     const sent = mockCreate.mock.calls[0]![0] as {
-      messages: Array<{ role: string; content: unknown; tool_calls?: any[]; tool_call_id?: string }>;
+      messages: Array<{
+        role: string;
+        content: unknown;
+        tool_calls?: any[];
+        tool_call_id?: string;
+      }>;
       tools?: Array<{ function: { name: string; parameters: unknown } }>;
     };
     const assistant = sent.messages.find((m) => m.role === 'assistant' && m.tool_calls);
@@ -692,9 +762,20 @@ describe('openai provider', () => {
     mockCreate.mockImplementationOnce((async (_opts: { stream?: boolean }) => {
       return (async function* () {
         // Two tool_calls (index 0 and 1), NEITHER carries an id.
-        yield { choices: [{ delta: { tool_calls: [{ index: 0, function: { name: 'a', arguments: '{}' } }] } }] };
-        yield { choices: [{ delta: { tool_calls: [{ index: 1, function: { name: 'b', arguments: '{}' } }] } }] };
-        yield { choices: [{ delta: {}, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 1, completion_tokens: 1 } };
+        yield {
+          choices: [
+            { delta: { tool_calls: [{ index: 0, function: { name: 'a', arguments: '{}' } }] } },
+          ],
+        };
+        yield {
+          choices: [
+            { delta: { tool_calls: [{ index: 1, function: { name: 'b', arguments: '{}' } }] } },
+          ],
+        };
+        yield {
+          choices: [{ delta: {}, finish_reason: 'tool_calls' }],
+          usage: { prompt_tokens: 1, completion_tokens: 1 },
+        };
       })();
     }) as never);
 

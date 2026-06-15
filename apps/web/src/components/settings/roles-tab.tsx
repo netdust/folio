@@ -1,20 +1,15 @@
 import { useState } from 'react';
 import { toast } from 'sonner';
+import { useIsInstanceOwner, useMe } from '../../lib/api/auth.ts';
+import { formatApiError } from '../../lib/api/index.ts';
 import {
+  type InstanceUser,
   useDeleteUser,
   useInstanceUsers,
   useSetUserRole,
-  type InstanceUser,
 } from '../../lib/api/instance-users.ts';
-import { useIsInstanceOwner, useMe } from '../../lib/api/auth.ts';
-import { formatApiError } from '../../lib/api/index.ts';
 import { Button } from '../ui/button.tsx';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogTitle,
-} from '../ui/dialog.tsx';
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from '../ui/dialog.tsx';
 
 const ROLES = ['owner', 'admin', 'member'] as const;
 
@@ -117,9 +112,8 @@ export function RolesTab() {
         <DialogContent>
           <DialogTitle>Remove {pendingRemove?.email}?</DialogTitle>
           <DialogDescription>
-            This permanently deletes the account and revokes their sessions, API
-            tokens, and workspace/project access. Documents they authored are kept.
-            This cannot be undone.
+            This permanently deletes the account and revokes their sessions, API tokens, and
+            workspace/project access. Documents they authored are kept. This cannot be undone.
           </DialogDescription>
           <div className="mt-6 flex justify-end gap-2">
             <Button variant="ghost" onClick={() => setPendingRemove(null)}>

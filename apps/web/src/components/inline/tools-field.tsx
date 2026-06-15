@@ -1,5 +1,5 @@
-import { useState } from 'react';
 import { MCP_TOOL_GROUPS, type McpTool } from '@folio/shared';
+import { useState } from 'react';
 import { Chip } from '../ui/chip.tsx';
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
 
@@ -42,8 +42,17 @@ export function ToolsField({ value, onChange }: Props) {
   }
 
   const trigger = (() => {
-    if (value.length === 0) return [<Chip key="empty" muted mono>No tools</Chip>];
-    return value.map((t) => <Chip key={t} mono>{t}</Chip>);
+    if (value.length === 0)
+      return [
+        <Chip key="empty" muted mono>
+          No tools
+        </Chip>,
+      ];
+    return value.map((t) => (
+      <Chip key={t} mono>
+        {t}
+      </Chip>
+    ));
   })();
 
   return (
@@ -83,4 +92,3 @@ export function ToolsField({ value, onChange }: Props) {
     </Popover>
   );
 }
-

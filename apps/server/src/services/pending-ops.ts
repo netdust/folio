@@ -174,11 +174,7 @@ export async function confirmPendingOp(
  * confirmed by whom, when" record for the support path. Idempotent-safe: only a
  * row still 'confirmed' is advanced.
  */
-export async function markExecuted(
-  db: DBOrTx,
-  id: string,
-  executedBy: string,
-): Promise<void> {
+export async function markExecuted(db: DBOrTx, id: string, executedBy: string): Promise<void> {
   await db
     .update(pendingOps)
     .set({ status: 'executed', executedAt: new Date(), executedBy })

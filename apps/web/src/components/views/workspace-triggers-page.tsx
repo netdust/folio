@@ -1,5 +1,5 @@
-import { Plus, Loader2 } from 'lucide-react';
 import { useNavigate } from '@tanstack/react-router';
+import { Loader2, Plus } from 'lucide-react';
 import { toast } from 'sonner';
 import { formatApiError } from '../../lib/api/index.ts';
 import {
@@ -65,7 +65,12 @@ export function WorkspaceTriggersPage({ wslug }: Props) {
   const triggers = triggersQ.data ?? [];
 
   const createButton = (
-    <Button variant="primary" onClick={onCreate} disabled={create.isPending} className="whitespace-nowrap">
+    <Button
+      variant="primary"
+      onClick={onCreate}
+      disabled={create.isPending}
+      className="whitespace-nowrap"
+    >
       <Icon
         icon={create.isPending ? Loader2 : Plus}
         size={14}
@@ -108,7 +113,10 @@ export function WorkspaceTriggersPage({ wslug }: Props) {
                     void navigate({
                       to: '/w/$wslug/agents',
                       params: { wslug },
-                      search: (prev) => ({ ...(prev as Record<string, unknown>), wdoc: trigger.slug }),
+                      search: (prev) => ({
+                        ...(prev as Record<string, unknown>),
+                        wdoc: trigger.slug,
+                      }),
                     })
                   }
                   className="block w-full px-3 py-2.5 text-left hover:bg-card"

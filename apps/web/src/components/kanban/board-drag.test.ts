@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { resolveDrop, coerceGroupValue, dropSlotPosition } from './board-drag.ts';
+import { coerceGroupValue, dropSlotPosition, resolveDrop } from './board-drag.ts';
 
 describe('coerceGroupValue', () => {
   test('null stays null', () => {
@@ -30,33 +30,63 @@ describe('resolveDrop', () => {
     // intent the sort can't express. The view flips to Manual and applies the
     // board_position reorder (ISSUE 1 fix). Previously this returned {none}.
     expect(
-      resolveDrop({ reorderEnabled: false, overIsColumn: false, activeGroupValue: 'a', destColumnValue: 'a' }).kind,
+      resolveDrop({
+        reorderEnabled: false,
+        overIsColumn: false,
+        activeGroupValue: 'a',
+        destColumnValue: 'a',
+      }).kind,
     ).toBe('auto-manual-reorder');
   });
   test('sorted mode, drop on a card in a DIFFERENT column → regroup (no reorder)', () => {
     // Cross-column card drop in sorted mode is a plain status/group change; the
     // destination order stays sort-derived, so no board_position is written.
     expect(
-      resolveDrop({ reorderEnabled: false, overIsColumn: false, activeGroupValue: 'a', destColumnValue: 'b' }).kind,
+      resolveDrop({
+        reorderEnabled: false,
+        overIsColumn: false,
+        activeGroupValue: 'a',
+        destColumnValue: 'b',
+      }).kind,
     ).toBe('regroup');
   });
   test('manual mode, same column card drop → reorder only', () => {
     expect(
-      resolveDrop({ reorderEnabled: true, overIsColumn: false, activeGroupValue: 'a', destColumnValue: 'a' }).kind,
+      resolveDrop({
+        reorderEnabled: true,
+        overIsColumn: false,
+        activeGroupValue: 'a',
+        destColumnValue: 'a',
+      }).kind,
     ).toBe('reorder');
   });
   test('manual mode, different column card drop → regroup + reorder', () => {
-    const r = resolveDrop({ reorderEnabled: true, overIsColumn: false, activeGroupValue: 'a', destColumnValue: 'b' });
+    const r = resolveDrop({
+      reorderEnabled: true,
+      overIsColumn: false,
+      activeGroupValue: 'a',
+      destColumnValue: 'b',
+    });
     expect(r.kind).toBe('regroup-reorder');
   });
   test('column whitespace drop, different group → regroup only', () => {
     expect(
-      resolveDrop({ reorderEnabled: true, overIsColumn: true, activeGroupValue: 'a', destColumnValue: 'b' }).kind,
+      resolveDrop({
+        reorderEnabled: true,
+        overIsColumn: true,
+        activeGroupValue: 'a',
+        destColumnValue: 'b',
+      }).kind,
     ).toBe('regroup');
   });
   test('column whitespace drop, same group → no-op', () => {
     expect(
-      resolveDrop({ reorderEnabled: false, overIsColumn: true, activeGroupValue: 'a', destColumnValue: 'a' }).kind,
+      resolveDrop({
+        reorderEnabled: false,
+        overIsColumn: true,
+        activeGroupValue: 'a',
+        destColumnValue: 'a',
+      }).kind,
     ).toBe('none');
   });
 });

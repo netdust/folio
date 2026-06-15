@@ -178,7 +178,10 @@ import { createSession } from '../lib/auth.ts';
 async function seedSecondProject(seedWorkspaceId: string): Promise<string> {
   const id = nanoid();
   await db.insert(projects).values({
-    id, workspaceId: seedWorkspaceId, slug: 'projb', name: 'Project B',
+    id,
+    workspaceId: seedWorkspaceId,
+    slug: 'projb',
+    name: 'Project B',
   });
   return id;
 }
@@ -822,7 +825,10 @@ test('fix#2: project-only invitee does NOT receive sibling-project events via /e
   // Second project 'ops' in acme — the invitee is NOT granted this one.
   const opsId = nanoid();
   await testDb.insert(projects).values({
-    id: opsId, workspaceId: seed.workspace.id, slug: 'ops', name: 'Ops',
+    id: opsId,
+    workspaceId: seed.workspace.id,
+    slug: 'ops',
+    name: 'Ops',
   });
 
   // A project-only invitee: instance role 'member', a project_access grant to
@@ -830,7 +836,10 @@ test('fix#2: project-only invitee does NOT receive sibling-project events via /e
   // user reaches the workspace solely via the traverse clause.
   const inviteeId = nanoid();
   await testDb.insert(users).values({
-    id: inviteeId, email: 'invitee@test.local', name: 'Invitee', role: 'member',
+    id: inviteeId,
+    email: 'invitee@test.local',
+    name: 'Invitee',
+    role: 'member',
   });
   await testDb.insert(projectAccess).values({ userId: inviteeId, projectId: seed.project.id });
 
@@ -907,13 +916,19 @@ test('CR-7: project-only invitee with a human PAT does NOT receive sibling-proje
   // Sibling project 'ops' the invitee is NOT granted.
   const opsId = nanoid();
   await testDb.insert(projects).values({
-    id: opsId, workspaceId: seed.workspace.id, slug: 'ops', name: 'Ops',
+    id: opsId,
+    workspaceId: seed.workspace.id,
+    slug: 'ops',
+    name: 'Ops',
   });
 
   // Project-only invitee: member, project_access to 'web' ONLY, no workspace_access.
   const inviteeId = nanoid();
   await testDb.insert(users).values({
-    id: inviteeId, email: 'patinvitee@test.local', name: 'PAT Invitee', role: 'member',
+    id: inviteeId,
+    email: 'patinvitee@test.local',
+    name: 'PAT Invitee',
+    role: 'member',
   });
   await testDb.insert(projectAccess).values({ userId: inviteeId, projectId: seed.project.id });
 
@@ -934,19 +949,37 @@ test('CR-7: project-only invitee with a human PAT does NOT receive sibling-proje
   const { events } = await import('../db/schema.ts');
   await testDb.insert(events).values([
     {
-      id: 'cr7-anchor', workspaceId: seed.workspace.id, projectId: null, documentId: null,
-      kind: 'workspace.created', actor: seed.user.id, payload: {},
-      createdAt: new Date(Date.now() - 90_000), seq: 8200,
+      id: 'cr7-anchor',
+      workspaceId: seed.workspace.id,
+      projectId: null,
+      documentId: null,
+      kind: 'workspace.created',
+      actor: seed.user.id,
+      payload: {},
+      createdAt: new Date(Date.now() - 90_000),
+      seq: 8200,
     },
     {
-      id: 'cr7-WEB-event', workspaceId: seed.workspace.id, projectId: seed.project.id, documentId: null,
-      kind: 'document.created', actor: seed.user.id, payload: { marker: 'WEB' },
-      createdAt: new Date(Date.now() - 60_000), seq: 8201,
+      id: 'cr7-WEB-event',
+      workspaceId: seed.workspace.id,
+      projectId: seed.project.id,
+      documentId: null,
+      kind: 'document.created',
+      actor: seed.user.id,
+      payload: { marker: 'WEB' },
+      createdAt: new Date(Date.now() - 60_000),
+      seq: 8201,
     },
     {
-      id: 'cr7-OPS-event', workspaceId: seed.workspace.id, projectId: opsId, documentId: null,
-      kind: 'document.created', actor: seed.user.id, payload: { marker: 'OPS' },
-      createdAt: new Date(Date.now() - 30_000), seq: 8202,
+      id: 'cr7-OPS-event',
+      workspaceId: seed.workspace.id,
+      projectId: opsId,
+      documentId: null,
+      kind: 'document.created',
+      actor: seed.user.id,
+      payload: { marker: 'OPS' },
+      createdAt: new Date(Date.now() - 30_000),
+      seq: 8202,
     },
   ]);
 
@@ -977,42 +1010,70 @@ test('CR-8/CR-11: project-only invitee does NOT receive workspace-level rows (gr
   // Project-only invitee: project_access to 'web' ONLY, no workspace_access.
   const inviteeId = nanoid();
   await testDb.insert(users).values({
-    id: inviteeId, email: 'wlinvitee@test.local', name: 'WL Invitee', role: 'member',
+    id: inviteeId,
+    email: 'wlinvitee@test.local',
+    name: 'WL Invitee',
+    role: 'member',
   });
   await testDb.insert(projectAccess).values({ userId: inviteeId, projectId: seed.project.id });
 
   // A third user the grant/role events are ABOUT (not the invitee).
   const thirdId = nanoid();
   await testDb.insert(users).values({
-    id: thirdId, email: 'third@test.local', name: 'Third', role: 'member',
+    id: thirdId,
+    email: 'third@test.local',
+    name: 'Third',
+    role: 'member',
   });
 
   const { events } = await import('../db/schema.ts');
   await testDb.insert(events).values([
     {
-      id: 'cr8-anchor', workspaceId: seed.workspace.id, projectId: null, documentId: null,
-      kind: 'workspace.created', actor: seed.user.id, payload: {},
-      createdAt: new Date(Date.now() - 90_000), seq: 8300,
+      id: 'cr8-anchor',
+      workspaceId: seed.workspace.id,
+      projectId: null,
+      documentId: null,
+      kind: 'workspace.created',
+      actor: seed.user.id,
+      payload: {},
+      createdAt: new Date(Date.now() - 90_000),
+      seq: 8300,
     },
     // Positive control: a project-scoped event in the GRANTED project — must arrive.
     {
-      id: 'cr8-WEB-event', workspaceId: seed.workspace.id, projectId: seed.project.id, documentId: null,
-      kind: 'document.created', actor: seed.user.id, payload: { marker: 'WEB' },
-      createdAt: new Date(Date.now() - 70_000), seq: 8301,
+      id: 'cr8-WEB-event',
+      workspaceId: seed.workspace.id,
+      projectId: seed.project.id,
+      documentId: null,
+      kind: 'document.created',
+      actor: seed.user.id,
+      payload: { marker: 'WEB' },
+      createdAt: new Date(Date.now() - 70_000),
+      seq: 8301,
     },
     // Workspace-level grant roster — about the THIRD user. MUST NOT leak.
     {
-      id: 'cr8-grant-event', workspaceId: seed.workspace.id, projectId: null, documentId: null,
-      kind: 'access.granted', actor: seed.user.id,
+      id: 'cr8-grant-event',
+      workspaceId: seed.workspace.id,
+      projectId: null,
+      documentId: null,
+      kind: 'access.granted',
+      actor: seed.user.id,
       payload: { userId: thirdId, workspaceId: seed.workspace.id },
-      createdAt: new Date(Date.now() - 60_000), seq: 8302,
+      createdAt: new Date(Date.now() - 60_000),
+      seq: 8302,
     },
     // Workspace-level role change — about the THIRD user. MUST NOT leak (CR-11).
     {
-      id: 'cr8-role-event', workspaceId: seed.workspace.id, projectId: null, documentId: null,
-      kind: 'user.role.changed', actor: seed.user.id,
+      id: 'cr8-role-event',
+      workspaceId: seed.workspace.id,
+      projectId: null,
+      documentId: null,
+      kind: 'user.role.changed',
+      actor: seed.user.id,
       payload: { userId: thirdId, role: 'admin', previousRole: 'member' },
-      createdAt: new Date(Date.now() - 30_000), seq: 8303,
+      createdAt: new Date(Date.now() - 30_000),
+      seq: 8303,
     },
   ]);
 
@@ -1039,23 +1100,39 @@ test('CR-8: a workspace_access grant holder STILL receives workspace-level rows 
   // A whole-ws principal: instance member WITH a workspace_access grant (not owner).
   const wsMemberId = nanoid();
   await testDb.insert(users).values({
-    id: wsMemberId, email: 'wsmember@test.local', name: 'WS Member', role: 'member',
+    id: wsMemberId,
+    email: 'wsmember@test.local',
+    name: 'WS Member',
+    role: 'member',
   });
   const { workspaceAccess } = await import('../db/schema.ts');
-  await testDb.insert(workspaceAccess).values({ userId: wsMemberId, workspaceId: seed.workspace.id });
+  await testDb
+    .insert(workspaceAccess)
+    .values({ userId: wsMemberId, workspaceId: seed.workspace.id });
 
   const { events } = await import('../db/schema.ts');
   await testDb.insert(events).values([
     {
-      id: 'cr8w-anchor', workspaceId: seed.workspace.id, projectId: null, documentId: null,
-      kind: 'workspace.created', actor: seed.user.id, payload: {},
-      createdAt: new Date(Date.now() - 90_000), seq: 8400,
+      id: 'cr8w-anchor',
+      workspaceId: seed.workspace.id,
+      projectId: null,
+      documentId: null,
+      kind: 'workspace.created',
+      actor: seed.user.id,
+      payload: {},
+      createdAt: new Date(Date.now() - 90_000),
+      seq: 8400,
     },
     {
-      id: 'cr8w-grant-event', workspaceId: seed.workspace.id, projectId: null, documentId: null,
-      kind: 'access.granted', actor: seed.user.id,
+      id: 'cr8w-grant-event',
+      workspaceId: seed.workspace.id,
+      projectId: null,
+      documentId: null,
+      kind: 'access.granted',
+      actor: seed.user.id,
       payload: { userId: wsMemberId, workspaceId: seed.workspace.id },
-      createdAt: new Date(Date.now() - 30_000), seq: 8401,
+      createdAt: new Date(Date.now() - 30_000),
+      seq: 8401,
     },
   ]);
 
@@ -1077,7 +1154,10 @@ test('fix#2: workspace owner still receives ALL project events via /events repla
   // the whole workspace, so userVisibleProjects must stay unrestricted (null).
   const opsId = nanoid();
   await testDb.insert(projects).values({
-    id: opsId, workspaceId: seed.workspace.id, slug: 'ops', name: 'Ops',
+    id: opsId,
+    workspaceId: seed.workspace.id,
+    slug: 'ops',
+    name: 'Ops',
   });
 
   const { events } = await import('../db/schema.ts');
@@ -1234,8 +1314,18 @@ test('D-7: ?agent=<slug> returns only events whose payload.agent matches (replay
     name: 'd7-agent-filter',
   });
   await seedRunEvents(seed.workspace.id, seed.project.id, seed.user.id, [
-    { id: 'evt-alpha-started', agent: 'alpha-bot', table_id: 'tbl-runs', kind: 'agent.run.started' },
-    { id: 'evt-alpha-running', agent: 'alpha-bot', table_id: 'tbl-runs', kind: 'agent.run.running' },
+    {
+      id: 'evt-alpha-started',
+      agent: 'alpha-bot',
+      table_id: 'tbl-runs',
+      kind: 'agent.run.started',
+    },
+    {
+      id: 'evt-alpha-running',
+      agent: 'alpha-bot',
+      table_id: 'tbl-runs',
+      kind: 'agent.run.running',
+    },
     { id: 'evt-beta-started', agent: 'beta-bot', table_id: 'tbl-runs', kind: 'agent.run.started' },
   ]);
 

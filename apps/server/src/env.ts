@@ -44,7 +44,11 @@ export const envSchema = z.object({
   // "60s") that trips chain_duration_exceeded almost immediately. 1s is the
   // smallest meaningful cap. (Mirrors how the interval/stale knobs floor at a
   // meaningful unit rather than 1.)
-  FOLIO_MAX_CHAIN_DURATION_MS: z.coerce.number().int().min(1000).default(30 * 60_000),
+  FOLIO_MAX_CHAIN_DURATION_MS: z.coerce
+    .number()
+    .int()
+    .min(1000)
+    .default(30 * 60_000),
   FOLIO_MAX_CHAIN_TOKENS: z.coerce.number().int().min(1).default(200_000),
   // V1 autonomy gate (Task C-11). When OFF (the default), the trigger-matcher
   // refuses to fan out agent-ORIGINATED chains: an agent's own @mention/comment

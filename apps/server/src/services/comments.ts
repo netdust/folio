@@ -28,27 +28,19 @@ import type { DB } from '../db/client.ts';
 
 // Drizzle tx and DB share the same query API.
 type DBOrTx = DB | Parameters<Parameters<DB['transaction']>[0]>[0];
+import { authorString as sharedAuthorString } from '@folio/shared';
+import { documents, users, workspaceAccess } from '../db/schema.ts';
+import type { Document, Project, Workspace } from '../db/schema.ts';
+import { resolveAgentProjects } from '../lib/agent-projects.ts';
 import {
-  documents,
-  users,
-  workspaceAccess,
-} from '../db/schema.ts';
-import type {
-  Document,
-  Project,
-  Workspace,
-} from '../db/schema.ts';
-import { HTTPError } from '../lib/http.ts';
-import { emitEvent, txWithEvents } from '../lib/events.ts';
-import {
-  commentFrontmatterSchema,
   type CommentKind,
   type CommentVisibility,
   type ResolvedMention,
+  commentFrontmatterSchema,
 } from '../lib/comment-schema.ts';
+import { emitEvent, txWithEvents } from '../lib/events.ts';
+import { HTTPError } from '../lib/http.ts';
 import { parseMentions } from '../lib/mention-parser.ts';
-import { authorString as sharedAuthorString } from '@folio/shared';
-import { resolveAgentProjects } from '../lib/agent-projects.ts';
 
 const MAX_BODY_BYTES = 64 * 1024;
 
@@ -494,8 +486,7 @@ export async function updateComment(input: UpdateCommentInput): Promise<Document
   let newlyMentionedAgents: { id: string; slug: string }[] = [];
 
   // Members are pre-fetched outside the tx — not a TOCTOU concern.
-  const workspaceMembersOuter =
-    input.body !== undefined ? await loadWorkspaceMembers(ws.id) : null;
+  const workspaceMembersOuter = input.body !== undefined ? await loadWorkspaceMembers(ws.id) : null;
   if (input.body !== undefined) {
     validateBody(input.body);
     nextBody = input.body;
@@ -505,7 +496,7 @@ export async function updateComment(input: UpdateCommentInput): Promise<Document
     nextVisibility = input.visibility;
   }
 
-// S14: see createComment for the txWithEvents-return-value rationale.
+  // S14: see createComment for the txWithEvents-return-value rationale.
   const updatedRow = await txWithEvents(db, async (tx) => {
     // H9: mention parsing must happen inside the tx so an agent deleted
     // between resolution and insert can't leave a phantom-resolved
@@ -534,11 +525,12 @@ export async function updateComment(input: UpdateCommentInput): Promise<Document
           .map((m) => m.target),
       );
       newlyMentionedAgents = parsed.mentions
-        .filter((m): m is ResolvedMention & { resolvedId: string } =>
-          m.resolved &&
-          m.resolvedType === 'agent' &&
-          !!m.resolvedId &&
-          !oldAgentTargets.has(m.target),
+        .filter(
+          (m): m is ResolvedMention & { resolvedId: string } =>
+            m.resolved &&
+            m.resolvedType === 'agent' &&
+            !!m.resolvedId &&
+            !oldAgentTargets.has(m.target),
         )
         .map((m) => ({
           id: m.resolvedId,
@@ -555,7 +547,11 @@ export async function updateComment(input: UpdateCommentInput): Promise<Document
       kind: kindFromExisting,
       visibility: nextVisibility,
       mentions: nextMentions,
-      ...(editedAt !== undefined ? { edited_at: editedAt } : existingFm.edited_at !== undefined ? { edited_at: existingFm.edited_at } : {}),
+      ...(editedAt !== undefined
+        ? { edited_at: editedAt }
+        : existingFm.edited_at !== undefined
+          ? { edited_at: existingFm.edited_at }
+          : {}),
       ...(targetAgent !== undefined ? { target_agent: targetAgent } : {}),
       ...(targetAgentId !== undefined ? { target_agent_id: targetAgentId } : {}),
       ...(existingFm.run_id !== undefined ? { run_id: existingFm.run_id } : {}),
@@ -672,10 +668,7 @@ export async function deleteComment(input: DeleteCommentInput): Promise<Document
  * workspaces are vanishingly unlikely, but the workspace scope keeps the lookup
  * tight to the caller's workspace anyway.
  */
-export async function getComment(
-  workspaceId: string,
-  slug: string,
-): Promise<Document | null> {
+export async function getComment(workspaceId: string, slug: string): Promise<Document | null> {
   const row = await db.query.documents.findFirst({
     where: and(
       eq(documents.workspaceId, workspaceId),
@@ -717,17 +710,12 @@ export async function listComments(input: ListCommentsInput): Promise<Document[]
   const { parentId, kind, since } = input;
   const visibility = input.visibility ?? DEFAULT_VISIBILITY;
 
-  const whereClauses = [
-    eq(documents.parentId, parentId),
-    eq(documents.type, 'comment'),
-  ];
+  const whereClauses = [eq(documents.parentId, parentId), eq(documents.type, 'comment')];
 
   if (kind !== undefined) {
     const kinds = Array.isArray(kind) ? kind : [kind];
     if (kinds.length === 1) {
-      whereClauses.push(
-        sql`json_extract(${documents.frontmatter}, '$.kind') = ${kinds[0]}`,
-      );
+      whereClauses.push(sql`json_extract(${documents.frontmatter}, '$.kind') = ${kinds[0]}`);
     } else if (kinds.length > 1) {
       // SQLite IN over a json_extract — drizzle's `inArray` doesn't bind a SQL
       // expression on the left side, so build it via raw sql.
@@ -735,9 +723,7 @@ export async function listComments(input: ListCommentsInput): Promise<Document[]
         kinds.map((k) => sql`${k}`),
         sql`, `,
       );
-      whereClauses.push(
-        sql`json_extract(${documents.frontmatter}, '$.kind') IN (${placeholders})`,
-      );
+      whereClauses.push(sql`json_extract(${documents.frontmatter}, '$.kind') IN (${placeholders})`);
     }
   }
 
@@ -748,11 +734,7 @@ export async function listComments(input: ListCommentsInput): Promise<Document[]
       // applied), so polling consumers got the FULL list and treated it as
       // "new since X" — re-processing every historical row. Surface clearly
       // so the caller can fix the input.
-      throw new HTTPError(
-        'INVALID_QUERY',
-        `invalid since timestamp: ${since}`,
-        422,
-      );
+      throw new HTTPError('INVALID_QUERY', `invalid since timestamp: ${since}`, 422);
     }
     whereClauses.push(gt(documents.createdAt, ts));
   }
@@ -771,9 +753,7 @@ export async function listComments(input: ListCommentsInput): Promise<Document[]
            OR json_extract(${documents.frontmatter}, '$.visibility') IS NULL)`,
     );
   } else if (includesInternal) {
-    whereClauses.push(
-      sql`json_extract(${documents.frontmatter}, '$.visibility') = 'internal'`,
-    );
+    whereClauses.push(sql`json_extract(${documents.frontmatter}, '$.visibility') = 'internal'`);
   } else {
     // Caller explicitly passed []; return nothing.
     return [];

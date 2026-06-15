@@ -1,22 +1,22 @@
 import { useNavigate, useRouterState } from '@tanstack/react-router';
 import { useEffect, useMemo, useState } from 'react';
-import { Dialog, DialogContent } from './ui/dialog.tsx';
-import {
-  Command,
-  CommandInput,
-  CommandList,
-  CommandEmpty,
-  CommandGroup,
-  CommandItem,
-} from './ui/command.tsx';
-import { useDocuments, useCreateDocument } from '../lib/api/documents.ts';
-import { DEFAULT_TABLE_SLUG } from '../lib/default-table.ts';
+import { agentPanelBus } from '../lib/agent-panel-bus.ts';
+import { useCreateDocument, useDocuments } from '../lib/api/documents.ts';
 import { useProjects } from '../lib/api/projects.ts';
 import { useWorkspaces } from '../lib/api/workspaces.ts';
-import { matches } from '../lib/command-registry.ts';
-import { getResolvedTheme, setTheme } from '../lib/theme.ts';
 import { subscribeOpenEvent } from '../lib/command-palette-bus.ts';
-import { agentPanelBus } from '../lib/agent-panel-bus.ts';
+import { matches } from '../lib/command-registry.ts';
+import { DEFAULT_TABLE_SLUG } from '../lib/default-table.ts';
+import { getResolvedTheme, setTheme } from '../lib/theme.ts';
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from './ui/command.tsx';
+import { Dialog, DialogContent } from './ui/dialog.tsx';
 
 function getKeyMod(): 'metaKey' | 'ctrlKey' {
   if (typeof navigator === 'undefined') return 'ctrlKey';
@@ -92,7 +92,11 @@ export function CommandPalette() {
     listParams,
   );
 
-  const create = useCreateDocument(ctx.workspaceSlug ?? '', ctx.projectSlug ?? '', DEFAULT_TABLE_SLUG);
+  const create = useCreateDocument(
+    ctx.workspaceSlug ?? '',
+    ctx.projectSlug ?? '',
+    DEFAULT_TABLE_SLUG,
+  );
 
   const close = () => setOpen(false);
 
@@ -104,9 +108,7 @@ export function CommandPalette() {
     });
     close();
     void navigate({
-      to: type === 'work_item'
-        ? '/w/$wslug/p/$pslug/work-items'
-        : '/w/$wslug/p/$pslug/wiki',
+      to: type === 'work_item' ? '/w/$wslug/p/$pslug/work-items' : '/w/$wslug/p/$pslug/wiki',
       params: { wslug: ctx.workspaceSlug, pslug: ctx.projectSlug },
       search: { doc: doc.slug },
     });
@@ -116,23 +118,27 @@ export function CommandPalette() {
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogContent className="max-w-[560px] p-0">
         <Command shouldFilter={false}>
-          <CommandInput
-            value={query}
-            onValueChange={setQuery}
-            placeholder="Type a command…"
-          />
+          <CommandInput value={query} onValueChange={setQuery} placeholder="Type a command…" />
           <CommandList>
             <CommandEmpty>No matches.</CommandEmpty>
 
             {ctx.workspaceSlug && ctx.projectSlug ? (
               <CommandGroup heading="Create">
                 {matches({ label: 'New work item' }, query) ? (
-                  <CommandItem onSelect={() => { void onCreate('work_item'); }}>
+                  <CommandItem
+                    onSelect={() => {
+                      void onCreate('work_item');
+                    }}
+                  >
                     New work item
                   </CommandItem>
                 ) : null}
                 {matches({ label: 'New page' }, query) ? (
-                  <CommandItem onSelect={() => { void onCreate('page'); }}>
+                  <CommandItem
+                    onSelect={() => {
+                      void onCreate('page');
+                    }}
+                  >
                     New page
                   </CommandItem>
                 ) : null}

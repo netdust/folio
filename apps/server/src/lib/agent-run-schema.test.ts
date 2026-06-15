@@ -1,11 +1,11 @@
 import { describe, expect, test } from 'bun:test';
 import {
-  agentRunFrontmatterSchema,
-  runDoneReasonSchema,
-  runStatusSchema,
-  runErrorReasonSchema,
-  isValidTransition,
   TERMINAL_STATUSES,
+  agentRunFrontmatterSchema,
+  isValidTransition,
+  runDoneReasonSchema,
+  runErrorReasonSchema,
+  runStatusSchema,
 } from './agent-run-schema.ts';
 
 describe('runStatusSchema', () => {
@@ -29,10 +29,18 @@ describe('runStatusSchema', () => {
 describe('runErrorReasonSchema', () => {
   test('accepts every documented reason', () => {
     for (const r of [
-      'budget_exceeded', 'depth_exceeded', 'no_ai_key', 'provider_error',
-      'cancelled', 'rejected', 'idempotency_violation',
-      'rate_limited', 'fanout_exceeded', 'chain_duration_exceeded',
-      'chain_tokens_exceeded', 'worker_crash',
+      'budget_exceeded',
+      'depth_exceeded',
+      'no_ai_key',
+      'provider_error',
+      'cancelled',
+      'rejected',
+      'idempotency_violation',
+      'rate_limited',
+      'fanout_exceeded',
+      'chain_duration_exceeded',
+      'chain_tokens_exceeded',
+      'worker_crash',
     ]) {
       expect(() => runErrorReasonSchema.parse(r)).not.toThrow();
     }
@@ -72,7 +80,9 @@ describe('agentRunFrontmatterSchema', () => {
     expect(() => agentRunFrontmatterSchema.parse(valid)).not.toThrow();
   });
   test('rejects assignee not in agent:<slug> form', () => {
-    expect(() => agentRunFrontmatterSchema.parse({ ...valid, assignee: 'reply-drafter' })).toThrow();
+    expect(() =>
+      agentRunFrontmatterSchema.parse({ ...valid, assignee: 'reply-drafter' }),
+    ).toThrow();
   });
   test('rejects unknown provider', () => {
     expect(() => agentRunFrontmatterSchema.parse({ ...valid, provider: 'gemini' })).toThrow();
@@ -155,9 +165,7 @@ describe('agentRunFrontmatterSchema', () => {
   // plan) on the no-human-in-the-loop path. The `.strict()` schema must accept
   // the optional key.
   test('accepts unattended:true (C3 fired-path marker)', () => {
-    expect(() =>
-      agentRunFrontmatterSchema.parse({ ...valid, unattended: true }),
-    ).not.toThrow();
+    expect(() => agentRunFrontmatterSchema.parse({ ...valid, unattended: true })).not.toThrow();
   });
 
   test('unattended is optional (attended runs omit it)', () => {

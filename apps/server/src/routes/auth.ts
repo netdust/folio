@@ -8,7 +8,6 @@ import { db } from '../db/client.ts';
 import { magicLinks, users } from '../db/schema.ts';
 import { env } from '../env.ts';
 import { userRole } from '../lib/access.ts';
-import { designateInstanceOwner } from '../lib/system-workspace.ts';
 import {
   createSession,
   deleteSession,
@@ -19,6 +18,7 @@ import {
 } from '../lib/auth.ts';
 import { sendMagicLink } from '../lib/email.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
+import { designateInstanceOwner } from '../lib/system-workspace.ts';
 import { type AuthContext, getUser, requireUser } from '../middleware/auth.ts';
 
 const auth = new Hono<AuthContext>();
@@ -90,10 +90,7 @@ auth.post(
 
 auth.post(
   '/login',
-  zValidator(
-    'json',
-    z.object({ email: z.string().email(), password: z.string() }),
-  ),
+  zValidator('json', z.object({ email: z.string().email(), password: z.string() })),
   async (c) => {
     const { email, password } = c.req.valid('json');
     const user = await db.query.users.findFirst({ where: eq(users.email, email) });
@@ -177,15 +174,14 @@ auth.get('/magic-link/consume', async (c) => {
   let user = await db.query.users.findFirst({ where: eq(users.email, link.email) });
   if (!user) {
     const id = nanoid();
-    await db.insert(users).values({ id, email: link.email, name: link.email.split('@')[0] ?? 'New User' });
+    await db
+      .insert(users)
+      .values({ id, email: link.email, name: link.email.split('@')[0] ?? 'New User' });
     user = await db.query.users.findFirst({ where: eq(users.id, id) });
   }
   if (!user) throw new HTTPError('INTERNAL', 'failed to create user', 500);
 
-  await db
-    .update(magicLinks)
-    .set({ usedAt: new Date() })
-    .where(eq(magicLinks.id, link.id));
+  await db.update(magicLinks).set({ usedAt: new Date() }).where(eq(magicLinks.id, link.id));
 
   const session = await createSession(user.id);
   setCookie(c, SESSION_COOKIE, session.id, { ...cookieOpts, expires: session.expiresAt });

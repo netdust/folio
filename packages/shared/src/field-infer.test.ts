@@ -1,15 +1,21 @@
-import { test, expect } from 'bun:test';
+import { expect, test } from 'bun:test';
 import { inferFieldType } from './field-infer.ts';
 
-test('boolean true', () => { expect(inferFieldType(true)).toBe('boolean'); });
-test('boolean false', () => { expect(inferFieldType(false)).toBe('boolean'); });
+test('boolean true', () => {
+  expect(inferFieldType(true)).toBe('boolean');
+});
+test('boolean false', () => {
+  expect(inferFieldType(false)).toBe('boolean');
+});
 
 test('datetime ISO', () => {
   expect(inferFieldType('2026-05-11T14:30:00Z')).toBe('datetime');
   expect(inferFieldType('2026-05-11T14:30:00+02:00')).toBe('datetime');
 });
 
-test('date ISO', () => { expect(inferFieldType('2026-05-11')).toBe('date'); });
+test('date ISO', () => {
+  expect(inferFieldType('2026-05-11')).toBe('date');
+});
 
 test('number', () => {
   expect(inferFieldType(42)).toBe('number');

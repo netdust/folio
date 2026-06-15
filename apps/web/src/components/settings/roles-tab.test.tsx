@@ -1,9 +1,9 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
-import { RolesTab } from './roles-tab.tsx';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as auth from '../../lib/api/auth.ts';
+import { RolesTab } from './roles-tab.tsx';
 
 afterEach(() => {
   vi.restoreAllMocks();

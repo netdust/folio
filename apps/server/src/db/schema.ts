@@ -235,9 +235,19 @@ export const fields = sqliteTable(
     key: text('key').notNull(), // frontmatter key name
     type: text('type', {
       enum: [
-        'string', 'text', 'number', 'boolean', 'date', 'datetime',
-        'select', 'multi_select', 'user_ref', 'url', 'document_ref',
-        'currency', 'relation',
+        'string',
+        'text',
+        'number',
+        'boolean',
+        'date',
+        'datetime',
+        'select',
+        'multi_select',
+        'user_ref',
+        'url',
+        'document_ref',
+        'currency',
+        'relation',
       ],
     }).notNull(),
     label: text('label'),

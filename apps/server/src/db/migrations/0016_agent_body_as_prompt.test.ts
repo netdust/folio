@@ -1,17 +1,14 @@
-import { describe, expect, test } from 'bun:test';
 import Database from 'bun:sqlite';
-import { drizzle } from 'drizzle-orm/bun-sqlite';
-import { migrate } from 'drizzle-orm/bun-sqlite/migrator';
+import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import { drizzle } from 'drizzle-orm/bun-sqlite';
+import { migrate } from 'drizzle-orm/bun-sqlite/migrator';
 
 const MIGRATIONS_FOLDER = path.resolve(import.meta.dir);
 
 function readMigrationSql(): string {
-  return readFileSync(
-    path.join(MIGRATIONS_FOLDER, '0016_agent_body_as_prompt.sql'),
-    'utf8',
-  );
+  return readFileSync(path.join(MIGRATIONS_FOLDER, '0016_agent_body_as_prompt.sql'), 'utf8');
 }
 
 function seedAgent(
@@ -28,13 +25,11 @@ function seedAgent(
   );
 }
 
-function readAgent(
-  sqlite: Database,
-  id: string,
-): { body: string; frontmatter: string } {
-  return sqlite
-    .prepare(`SELECT body, frontmatter FROM documents WHERE id = ?`)
-    .get(id) as { body: string; frontmatter: string };
+function readAgent(sqlite: Database, id: string): { body: string; frontmatter: string } {
+  return sqlite.prepare(`SELECT body, frontmatter FROM documents WHERE id = ?`).get(id) as {
+    body: string;
+    frontmatter: string;
+  };
 }
 
 describe('migration 0016 — agent system_prompt -> body', () => {
@@ -102,7 +97,9 @@ describe('migration 0016 — agent system_prompt -> body', () => {
     const present = readAgent(sqlite, 'agent-present');
     expect(empty.body).toBe('You are A.');
     expect(present.body).toBe('EXISTING BODY');
-    expect((JSON.parse(empty.frontmatter) as Record<string, unknown>).system_prompt).toBeUndefined();
+    expect(
+      (JSON.parse(empty.frontmatter) as Record<string, unknown>).system_prompt,
+    ).toBeUndefined();
     expect(
       (JSON.parse(present.frontmatter) as Record<string, unknown>).system_prompt,
     ).toBeUndefined();

@@ -1,6 +1,6 @@
-import { describe, test, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { beforeEach, describe, expect, test, vi } from 'vitest';
 
 // --- Router mock: capture navigate calls (link_panel) -----------------------
 const navigateMock = vi.fn();
@@ -23,11 +23,11 @@ vi.mock('../../lib/api/conversations.ts', async (importOriginal) => {
 });
 
 import type { ConversationMessage } from '../../lib/api/conversations.ts';
+import { entityRoute } from './entity-route.ts';
+import { MessageChoiceCard } from './message-choice-card.tsx';
+import { MessageLinkPanel } from './message-link-panel.tsx';
 import { MessageText } from './message-text.tsx';
 import { MessageToolStep } from './message-tool-step.tsx';
-import { MessageLinkPanel } from './message-link-panel.tsx';
-import { MessageChoiceCard } from './message-choice-card.tsx';
-import { entityRoute } from './entity-route.ts';
 
 function msg(overrides: Partial<ConversationMessage>): ConversationMessage {
   return {
@@ -55,7 +55,9 @@ beforeEach(() => {
 // ---------------------------------------------------------------------------
 describe('MessageText', () => {
   test('renders user and operator text', () => {
-    const { rerender } = render(<MessageText message={msg({ role: 'user', kind: 'text', body: 'hello' })} />);
+    const { rerender } = render(
+      <MessageText message={msg({ role: 'user', kind: 'text', body: 'hello' })} />,
+    );
     expect(screen.getByText('hello')).toBeInTheDocument();
     rerender(<MessageText message={msg({ role: 'operator', kind: 'text', body: 'done' })} />);
     expect(screen.getByText('done')).toBeInTheDocument();
@@ -71,7 +73,11 @@ describe('MessageToolStep', () => {
       <MessageToolStep
         message={msg({
           kind: 'tool_step',
-          payload: JSON.stringify({ tool: 'create_document', summary: 'Created Acme', status: 'ok' }),
+          payload: JSON.stringify({
+            tool: 'create_document',
+            summary: 'Created Acme',
+            status: 'ok',
+          }),
         })}
       />,
     );
@@ -102,7 +108,12 @@ describe('entityRoute', () => {
   test('document/work_item route to the project slideover via ?doc=', () => {
     for (const entityType of ['document', 'work_item'] as const) {
       expect(
-        entityRoute({ entityType, entityId: 'untitled-4', wslug: 'netdust', pslug: 'client-website' }),
+        entityRoute({
+          entityType,
+          entityId: 'untitled-4',
+          wslug: 'netdust',
+          pslug: 'client-website',
+        }),
       ).toEqual({
         to: '/w/$wslug/p/$pslug/work-items',
         params: { wslug: 'netdust', pslug: 'client-website' },
@@ -136,7 +147,12 @@ describe('MessageLinkPanel', () => {
           kind: 'component',
           payload: JSON.stringify({
             type: 'link_panel',
-            target: { entityType: 'work_item', entityId: 'onboard-acme', wslug: 'acme', pslug: 'web' },
+            target: {
+              entityType: 'work_item',
+              entityId: 'onboard-acme',
+              wslug: 'acme',
+              pslug: 'web',
+            },
             title: 'Onboard Acme',
           }),
         })}
@@ -148,7 +164,12 @@ describe('MessageLinkPanel', () => {
     // panel component is unaffected; only the router destination changes).
     expect(navigateMock).toHaveBeenCalledTimes(1);
     expect(navigateMock).toHaveBeenCalledWith(
-      entityRoute({ entityType: 'work_item', entityId: 'onboard-acme', wslug: 'acme', pslug: 'web' }),
+      entityRoute({
+        entityType: 'work_item',
+        entityId: 'onboard-acme',
+        wslug: 'acme',
+        pslug: 'web',
+      }),
     );
   });
 
@@ -278,12 +299,7 @@ describe('MessageChoiceCard', () => {
       payload: JSON.stringify({
         type: 'choice_card',
         prompt: 'Pick',
-        options: [
-          { id: 'ok', label: 'Good' },
-          null,
-          { id: 'noLabel' },
-          'nonsense',
-        ],
+        options: [{ id: 'ok', label: 'Good' }, null, { id: 'noLabel' }, 'nonsense'],
       }),
     });
     render(<MessageChoiceCard message={bad} conversationId="c1" />);

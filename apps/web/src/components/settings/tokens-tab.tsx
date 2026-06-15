@@ -1,23 +1,13 @@
 import { useState } from 'react';
 import { toast } from 'sonner';
-import {
-  type ApiToken,
-  useCreateToken,
-  useDeleteToken,
-  useTokens,
-} from '../../lib/api/tokens.ts';
 import { formatApiError } from '../../lib/api/index.ts';
+import { type ApiToken, useCreateToken, useDeleteToken, useTokens } from '../../lib/api/tokens.ts';
 import { Button } from '../ui/button.tsx';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogTitle,
-} from '../ui/dialog.tsx';
-import { TokenCreateModal } from './token-create-modal.tsx';
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from '../ui/dialog.tsx';
 import { RevealSecretDialog } from './reveal-secret-dialog.tsx';
+import { TokenCreateModal } from './token-create-modal.tsx';
+import { expiresLabel, lastUsedLabel } from './token-meta.ts';
 import { useTokenRotate } from './use-token-rotate.ts';
-import { lastUsedLabel, expiresLabel } from './token-meta.ts';
 
 interface Props {
   wslug: string;
@@ -58,8 +48,8 @@ export function TokensTab({ wslug, workspaceId }: Props) {
         <div>
           <h2 className="text-sm font-medium">API tokens</h2>
           <p className="mt-0.5 text-xs text-fg-2">
-            Tokens authenticate agents, MCP clients, and external integrations against
-            this workspace.
+            Tokens authenticate agents, MCP clients, and external integrations against this
+            workspace.
           </p>
         </div>
         {tokens.length > 0 ? (
@@ -82,18 +72,12 @@ export function TokensTab({ wslug, workspaceId }: Props) {
       ) : (
         <ul className="divide-y divide-border-light rounded-md border border-border-light bg-shell">
           {tokens.map((t) => (
-            <li
-              key={t.id}
-              className="flex items-center justify-between gap-4 px-3 py-2.5"
-            >
+            <li key={t.id} className="flex items-center justify-between gap-4 px-3 py-2.5">
               <div className="min-w-0 flex-1">
                 <div className="truncate text-sm font-medium">{t.name}</div>
                 <div className="mt-0.5 flex flex-wrap gap-1 text-[10px] font-mono text-fg-3">
                   {t.scopes.map((s) => (
-                    <span
-                      key={s}
-                      className="rounded-sm bg-card px-1.5 py-0.5"
-                    >
+                    <span key={s} className="rounded-sm bg-card px-1.5 py-0.5">
                       {s}
                     </span>
                   ))}
@@ -103,18 +87,10 @@ export function TokensTab({ wslug, workspaceId }: Props) {
                 <div>{expiresLabel(t.expiresAt)}</div>
                 <div>{lastUsedLabel(t.lastUsedAt)}</div>
               </div>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setPendingRotate(t)}
-              >
+              <Button variant="ghost" size="sm" onClick={() => setPendingRotate(t)}>
                 Rotate
               </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setPendingRevoke(t)}
-              >
+              <Button variant="ghost" size="sm" onClick={() => setPendingRevoke(t)}>
                 Revoke
               </Button>
             </li>
@@ -138,18 +114,14 @@ export function TokensTab({ wslug, workspaceId }: Props) {
         <DialogContent>
           <DialogTitle>Revoke &quot;{pendingRevoke?.name}&quot;?</DialogTitle>
           <DialogDescription>
-            Any agent or client using this token will immediately lose access. This
-            cannot be undone.
+            Any agent or client using this token will immediately lose access. This cannot be
+            undone.
           </DialogDescription>
           <div className="mt-6 flex justify-end gap-2">
             <Button variant="ghost" onClick={() => setPendingRevoke(null)}>
               Cancel
             </Button>
-            <Button
-              variant="danger"
-              onClick={confirmRevoke}
-              loading={deleteToken.isPending}
-            >
+            <Button variant="danger" onClick={confirmRevoke} loading={deleteToken.isPending}>
               Revoke
             </Button>
           </div>
@@ -165,9 +137,9 @@ export function TokensTab({ wslug, workspaceId }: Props) {
         <DialogContent>
           <DialogTitle>Rotate &quot;{pendingRotate?.name}&quot;?</DialogTitle>
           <DialogDescription>
-            This issues a new secret with the same name and scopes, then revokes
-            the current one. Anything using the old token loses access immediately.
-            If the old token had an expiry, the new one keeps a comparable window.
+            This issues a new secret with the same name and scopes, then revokes the current one.
+            Anything using the old token loses access immediately. If the old token had an expiry,
+            the new one keeps a comparable window.
           </DialogDescription>
           <div className="mt-6 flex justify-end gap-2">
             <Button variant="ghost" onClick={() => setPendingRotate(null)}>

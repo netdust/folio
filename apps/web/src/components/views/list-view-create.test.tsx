@@ -1,20 +1,22 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
+  Outlet,
+  RouterProvider,
   createMemoryHistory,
   createRootRoute,
   createRoute,
   createRouter,
-  Outlet,
-  RouterProvider,
 } from '@tanstack/react-router';
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { ListView } from './list-view.tsx';
 
 function setup() {
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
   const rootRoute = createRootRoute({ component: () => <Outlet /> });
   const work = createRoute({
     getParentRoute: () => rootRoute,
@@ -42,20 +44,38 @@ describe('ListView New work item action', () => {
       if (u.includes('/documents') && method === 'POST') {
         return new Response(
           JSON.stringify({
-            data: { id: 'new', slug: 'untitled-1', type: 'work_item', title: 'Untitled', status: null, parentId: null, frontmatter: {}, body: '', createdAt: '', updatedAt: '' },
+            data: {
+              id: 'new',
+              slug: 'untitled-1',
+              type: 'work_item',
+              title: 'Untitled',
+              status: null,
+              parentId: null,
+              frontmatter: {},
+              body: '',
+              createdAt: '',
+              updatedAt: '',
+            },
           }),
           { status: 201, headers: { 'content-type': 'application/json' } },
         );
       }
       if (u.includes('/statuses')) {
-        return new Response(JSON.stringify({ data: [] }), { status: 200, headers: { 'content-type': 'application/json' } });
+        return new Response(JSON.stringify({ data: [] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
       }
       if (u.includes('/fields')) {
-        return new Response(JSON.stringify({ data: [] }), { status: 200, headers: { 'content-type': 'application/json' } });
+        return new Response(JSON.stringify({ data: [] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
       }
       if (u.includes('/documents') && method === 'GET') {
         return new Response(JSON.stringify({ data: { data: [], nextCursor: null } }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
@@ -70,12 +90,20 @@ describe('ListView New work item action', () => {
 
   it('clicking "New work item" fires POST and opens the slideover for the created doc', async () => {
     const { queryClient, router } = setup();
-    render(<QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider>);
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
 
-    await userEvent.click(await screen.findByRole('button', { name: /Create your first work item/i }));
+    await userEvent.click(
+      await screen.findByRole('button', { name: /Create your first work item/i }),
+    );
 
     await waitFor(() => {
-      const post = fetchMock.mock.calls.find(([url, init]) => String(url).includes('/documents') && init?.method === 'POST');
+      const post = fetchMock.mock.calls.find(
+        ([url, init]) => String(url).includes('/documents') && init?.method === 'POST',
+      );
       expect(post).toBeDefined();
       const body = JSON.parse(String(post![1]!.body));
       expect(body.type).toBe('work_item');

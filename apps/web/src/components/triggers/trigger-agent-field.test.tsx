@@ -1,8 +1,8 @@
-import { describe, expect, it, vi, afterEach } from 'vitest';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { TriggerAgentField } from './trigger-agent-field.tsx';
 
 afterEach(() => {
@@ -37,14 +37,28 @@ const mixedAgents = () =>
     JSON.stringify({
       data: [
         {
-          id: 'd1', slug: 'ops', type: 'agent', title: 'Ops Bot',
-          status: null, parentId: null, frontmatter: { projects: ['*'] },
-          createdAt: '', updatedAt: '', lastTouchedAt: null,
+          id: 'd1',
+          slug: 'ops',
+          type: 'agent',
+          title: 'Ops Bot',
+          status: null,
+          parentId: null,
+          frontmatter: { projects: ['*'] },
+          createdAt: '',
+          updatedAt: '',
+          lastTouchedAt: null,
         },
         {
-          id: 'op', slug: 'operator', type: 'agent', title: 'Operator',
-          status: null, parentId: null, frontmatter: { projects: ['*'] },
-          createdAt: '', updatedAt: '', lastTouchedAt: null,
+          id: 'op',
+          slug: 'operator',
+          type: 'agent',
+          title: 'Operator',
+          status: null,
+          parentId: null,
+          frontmatter: { projects: ['*'] },
+          createdAt: '',
+          updatedAt: '',
+          lastTouchedAt: null,
         },
       ],
     }),

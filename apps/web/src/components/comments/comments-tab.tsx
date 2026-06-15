@@ -1,30 +1,25 @@
-import { useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import type { Member } from '../../lib/api/members.ts';
+import { useMemo, useState } from 'react';
+import { toast } from 'sonner';
 import {
+  type CommentVisibility,
+  commentsKeys,
   useComments,
   useCreateComment,
-  useUpdateComment,
   useDeleteComment,
-  commentsKeys,
-  type CommentVisibility,
+  useUpdateComment,
 } from '../../lib/api/comments.ts';
-import { useWorkspaceAgents } from '../../lib/api/workspace-documents.ts';
-import { useRetryRun } from '../../lib/api/runs.ts';
 import { useEventStream } from '../../lib/api/event-stream.ts';
 import { formatApiError } from '../../lib/api/index.ts';
-import { toast } from 'sonner';
+import type { Member } from '../../lib/api/members.ts';
+import { useRetryRun } from '../../lib/api/runs.ts';
+import { useWorkspaceAgents } from '../../lib/api/workspace-documents.ts';
 import type { AgentRef } from '../../lib/author-ref.ts';
 import { Button } from '../ui/button.tsx';
-import {
-  Dialog,
-  DialogContent,
-  DialogTitle,
-  DialogDescription,
-} from '../ui/dialog.tsx';
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from '../ui/dialog.tsx';
+import { ApprovalButtons } from './approval-buttons.tsx';
 import { CommentComposer } from './comment-composer.tsx';
 import { CommentRow } from './comment-row.tsx';
-import { ApprovalButtons } from './approval-buttons.tsx';
 
 // ---------------------------------------------------------------------------
 // Props
@@ -32,9 +27,9 @@ import { ApprovalButtons } from './approval-buttons.tsx';
 
 export interface CommentsTabProps {
   workspaceSlug: string;
-  workspaceId: string;        // for the localStorage key on the visibility toggle
+  workspaceId: string; // for the localStorage key on the visibility toggle
   projectSlug: string;
-  projectId: string;          // passed to the composer
+  projectId: string; // passed to the composer
   parentSlug: string;
   parentId: string;
   currentUserId: string | null;
@@ -47,8 +42,7 @@ export interface CommentsTabProps {
 // LocalStorage helpers
 // ---------------------------------------------------------------------------
 
-const LS_KEY = (workspaceId: string) =>
-  `folio:comments-show-internal:${workspaceId}`;
+const LS_KEY = (workspaceId: string) => `folio:comments-show-internal:${workspaceId}`;
 
 function readShowInternal(workspaceId: string): boolean {
   try {
@@ -134,11 +128,17 @@ interface DeleteConfirmDialogProps {
 
 function DeleteConfirmDialog({ open, onConfirm, onCancel, deleting }: DeleteConfirmDialogProps) {
   return (
-    <Dialog open={open} onOpenChange={(v) => { if (!v) onCancel(); }}>
+    <Dialog
+      open={open}
+      onOpenChange={(v) => {
+        if (!v) onCancel();
+      }}
+    >
       <DialogContent>
         <DialogTitle>Delete comment</DialogTitle>
         <DialogDescription>
-          This comment will be soft-deleted and replaced with a deletion notice. This cannot be undone.
+          This comment will be soft-deleted and replaced with a deletion notice. This cannot be
+          undone.
         </DialogDescription>
         <div className="mt-4 flex items-center justify-end gap-2">
           <Button
@@ -184,13 +184,9 @@ export function CommentsTab({
   onCollapse,
 }: CommentsTabProps) {
   // ---------- Visibility toggle ----------------------------------------
-  const [showInternal, setShowInternal] = useState<boolean>(() =>
-    readShowInternal(workspaceId),
-  );
+  const [showInternal, setShowInternal] = useState<boolean>(() => readShowInternal(workspaceId));
 
-  const visibility: CommentVisibility[] = showInternal
-    ? ['normal', 'internal']
-    : ['normal'];
+  const visibility: CommentVisibility[] = showInternal ? ['normal', 'internal'] : ['normal'];
 
   function toggleShowInternal() {
     const next = !showInternal;
@@ -199,12 +195,9 @@ export function CommentsTab({
   }
 
   // ---------- Comments query -------------------------------------------
-  const { data: comments = [], refetch } = useComments(
-    workspaceSlug,
-    projectSlug,
-    parentSlug,
-    { visibility },
-  );
+  const { data: comments = [], refetch } = useComments(workspaceSlug, projectSlug, parentSlug, {
+    visibility,
+  });
 
   // H18: only fetch the workspace agent list when the thread actually has
   // agent-authored content OR a plan that needs the list to resolve its
@@ -212,9 +205,10 @@ export function CommentsTab({
   // extra round trip entirely. The hook still mounts every render — React
   // Query handles the enabled toggle and re-fires when it flips true.
   const needsAgentList = useMemo(
-    () => comments.some(
-      (c) => c.frontmatter.author.startsWith('agent:') || c.frontmatter.kind === 'plan',
-    ),
+    () =>
+      comments.some(
+        (c) => c.frontmatter.author.startsWith('agent:') || c.frontmatter.kind === 'plan',
+      ),
     [comments],
   );
   const agentsQuery = useWorkspaceAgents(workspaceSlug, { enabled: needsAgentList });
@@ -443,12 +437,7 @@ export function CommentsTab({
       {/* Load more — v1 stub (inert until cursor pagination ships in Phase 7) */}
       {showLoadMore && (
         <div className="px-3 pb-2">
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={() => void refetch()}
-          >
+          <Button type="button" variant="ghost" size="sm" onClick={() => void refetch()}>
             Load more
           </Button>
         </div>

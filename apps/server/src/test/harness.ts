@@ -22,7 +22,7 @@ import { eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/bun-sqlite';
 import { migrate } from 'drizzle-orm/bun-sqlite/migrator';
 import { nanoid } from 'nanoid';
-import { __resetDbForTests, type DB } from '../db/client.ts';
+import { type DB, __resetDbForTests } from '../db/client.ts';
 import * as schema from '../db/schema.ts';
 import { createSession, hashPassword } from '../lib/auth.ts';
 import { seedProjectDefaults } from '../lib/seed-project-defaults.ts';

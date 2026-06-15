@@ -1,6 +1,9 @@
 import { Skeleton } from '../ui/skeleton.tsx';
 
-export function KanbanSkeleton({ columns = 3, cardsPerColumn = 2 }: { columns?: number; cardsPerColumn?: number }) {
+export function KanbanSkeleton({
+  columns = 3,
+  cardsPerColumn = 2,
+}: { columns?: number; cardsPerColumn?: number }) {
   return (
     <div className="flex h-full gap-3 overflow-x-auto px-[22px] py-2" aria-busy>
       {Array.from({ length: columns }, (_, c) => (

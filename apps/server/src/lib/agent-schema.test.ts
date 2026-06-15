@@ -1,5 +1,10 @@
-import { describe, test, expect } from 'bun:test';
-import { agentFrontmatterSchema, roleToScopes, toolsToScopes, V1_MCP_TOOLS } from './agent-schema.ts';
+import { describe, expect, test } from 'bun:test';
+import {
+  V1_MCP_TOOLS,
+  agentFrontmatterSchema,
+  roleToScopes,
+  toolsToScopes,
+} from './agent-schema.ts';
 
 describe('agentFrontmatterSchema', () => {
   test('accepts a complete valid agent frontmatter', () => {
@@ -58,42 +63,64 @@ describe('agentFrontmatterSchema', () => {
 
   test('rejects max_delegation_depth > 5', () => {
     const r = agentFrontmatterSchema.safeParse({
-      system_prompt: 'x', model: 'x', provider: 'anthropic', tools: [], max_delegation_depth: 6,
+      system_prompt: 'x',
+      model: 'x',
+      provider: 'anthropic',
+      tools: [],
+      max_delegation_depth: 6,
     });
     expect(r.success).toBe(false);
   });
 
   test('rejects max_tokens_per_run > 100000', () => {
     const r = agentFrontmatterSchema.safeParse({
-      system_prompt: 'x', model: 'x', provider: 'anthropic', tools: [], max_tokens_per_run: 100001,
+      system_prompt: 'x',
+      model: 'x',
+      provider: 'anthropic',
+      tools: [],
+      max_tokens_per_run: 100001,
     });
     expect(r.success).toBe(false);
   });
 
   test('rejects unknown provider', () => {
     const r = agentFrontmatterSchema.safeParse({
-      system_prompt: 'x', model: 'x', provider: 'magic', tools: [],
+      system_prompt: 'x',
+      model: 'x',
+      provider: 'magic',
+      tools: [],
     });
     expect(r.success).toBe(false);
   });
 
   test('rejects tools not in the v1 MCP set', () => {
     const r = agentFrontmatterSchema.safeParse({
-      system_prompt: 'x', model: 'x', provider: 'anthropic', tools: ['list_documents', 'invent_thing'],
+      system_prompt: 'x',
+      model: 'x',
+      provider: 'anthropic',
+      tools: ['list_documents', 'invent_thing'],
     });
     expect(r.success).toBe(false);
   });
 
   test('rejects api_token_id when set by the client on input', () => {
     const r = agentFrontmatterSchema.safeParse({
-      system_prompt: 'x', model: 'x', provider: 'anthropic', tools: [], api_token_id: 'tok_x',
+      system_prompt: 'x',
+      model: 'x',
+      provider: 'anthropic',
+      tools: [],
+      api_token_id: 'tok_x',
     });
     expect(r.success).toBe(false);
   });
 
   test('rejects parent_agent when set by the client on input', () => {
     const r = agentFrontmatterSchema.safeParse({
-      system_prompt: 'x', model: 'x', provider: 'anthropic', tools: [], parent_agent: 'agent-foo',
+      system_prompt: 'x',
+      model: 'x',
+      provider: 'anthropic',
+      tools: [],
+      parent_agent: 'agent-foo',
     });
     expect(r.success).toBe(false);
   });
@@ -164,7 +191,12 @@ describe('toolsToScopes', () => {
   });
 
   test('scopes are deduped', () => {
-    const out = toolsToScopes(['list_documents', 'get_document', 'create_document', 'update_document']);
+    const out = toolsToScopes([
+      'list_documents',
+      'get_document',
+      'create_document',
+      'update_document',
+    ]);
     const reads = out.filter((s) => s === 'documents:read');
     expect(reads.length).toBe(1);
   });
@@ -189,24 +221,42 @@ describe('toolsToScopes', () => {
 
 describe('claude-code agent frontmatter', () => {
   test('accepts provider=claude-code with NO model', () => {
-    const parsed = agentFrontmatterSchema.parse({ provider: 'claude-code', tools: [], projects: ['*'] });
+    const parsed = agentFrontmatterSchema.parse({
+      provider: 'claude-code',
+      tools: [],
+      projects: ['*'],
+    });
     expect(parsed.provider).toBe('claude-code');
     expect(parsed.model).toBeUndefined();
   });
   test('still requires model for an API provider', () => {
-    expect(() => agentFrontmatterSchema.parse({ provider: 'anthropic', tools: [], projects: ['*'] })).toThrow();
+    expect(() =>
+      agentFrontmatterSchema.parse({ provider: 'anthropic', tools: [], projects: ['*'] }),
+    ).toThrow();
   });
   test('accepts provider=claude-code with EMPTY-STRING model (UI clears model to "")', () => {
     // The agent form commits `model: ''` when switching to the modelless
     // Claude Code provider (provider-model-field.tsx). Empty string means
     // "no model" — it must coerce to undefined, not trip z.string().min(1).
-    const parsed = agentFrontmatterSchema.parse({ provider: 'claude-code', model: '', tools: [], projects: ['*'] });
+    const parsed = agentFrontmatterSchema.parse({
+      provider: 'claude-code',
+      model: '',
+      tools: [],
+      projects: ['*'],
+    });
     expect(parsed.provider).toBe('claude-code');
     expect(parsed.model).toBeUndefined();
   });
   test('empty-string model still rejected for an API provider', () => {
     // '' coerces to undefined → superRefine still requires a model for API providers.
-    expect(() => agentFrontmatterSchema.parse({ provider: 'anthropic', model: '', tools: [], projects: ['*'] })).toThrow();
+    expect(() =>
+      agentFrontmatterSchema.parse({
+        provider: 'anthropic',
+        model: '',
+        tools: [],
+        projects: ['*'],
+      }),
+    ).toThrow();
   });
   test('PATCH path (.innerType().partial()) still parses a partial agent frontmatter', () => {
     // proves the documents.ts:806 consumer fix works after the schema became ZodEffects
@@ -264,21 +314,33 @@ describe('admin scopes (A5)', () => {
 describe('V1_MCP_TOOLS', () => {
   test('contains the v1 tools including agent-lifecycle tools', () => {
     expect(V1_MCP_TOOLS).toEqual([
-      'list_workspaces', 'list_projects', 'list_documents',
-      'get_document', 'get_document_markdown',
-      'create_document', 'update_document', 'delete_document',
-      'list_statuses', 'list_fields', 'list_views',
+      'list_workspaces',
+      'list_projects',
+      'list_documents',
+      'get_document',
+      'get_document_markdown',
+      'create_document',
+      'update_document',
+      'delete_document',
+      'list_statuses',
+      'list_fields',
+      'list_views',
       'run_view',
       // Phase 2.6 sub-phase D — agent lifecycle tools.
-      'create_agent', 'update_agent', 'delete_agent', 'get_agent_self',
+      'create_agent',
+      'update_agent',
+      'delete_agent',
+      'get_agent_self',
       // Phase-op-3 — operator REST bridge (folio_api_get reads, folio_api writes).
-      'folio_api_get', 'folio_api',
+      'folio_api_get',
+      'folio_api',
       // Piece B — narrow __system skills-page read (T7).
       'get_skill',
       // Piece B (T8) — bless/unbless a __system skill (set its trusted flag).
       'set_skill_trust',
       // Operator cockpit chat (Task 3) — the `ui` tool surface.
-      'show_link_panel', 'ask_choice',
+      'show_link_panel',
+      'ask_choice',
       // search_documents deferred to v1.1
     ] as const);
   });

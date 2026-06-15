@@ -1,13 +1,18 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { expect, test, vi, beforeEach } from 'vitest';
+import { beforeEach, expect, test, vi } from 'vitest';
 
 const navigateMock = vi.fn();
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => navigateMock }));
 
 const agentsData = [
-  { id: '1', slug: 'writer', title: 'Writer', frontmatter: { provider: 'anthropic', model: 'claude-haiku-4-5', projects: ['*'] } },
+  {
+    id: '1',
+    slug: 'writer',
+    title: 'Writer',
+    frontmatter: { provider: 'anthropic', model: 'claude-haiku-4-5', projects: ['*'] },
+  },
 ];
 vi.mock('../../lib/api/workspace-documents.ts', () => ({
   useWorkspaceAgents: () => ({ data: agentsData, isLoading: false }),

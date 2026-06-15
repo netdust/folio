@@ -1,10 +1,10 @@
-import { useEffect, useState } from 'react';
-import type { ReactNode } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import { ChevronsUpDown, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import type { ReactNode } from 'react';
+import { cn } from '../ui/cn.ts';
 import { Icon } from '../ui/icon.tsx';
 import { Kbd } from '../ui/kbd.tsx';
-import { cn } from '../ui/cn.ts';
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
 import { RailTree } from './rail-tree.tsx';
 
@@ -76,9 +76,29 @@ export function useRailCollapsed(): [boolean, (v: boolean) => void] {
 
 export function Rail({ brand, workspace, primary, tools, account, user, onReorder }: RailProps) {
   const [collapsed, setCollapsed] = useRailCollapsed();
-  return collapsed
-    ? <RailCollapsed brand={brand} workspace={workspace} primary={primary} tools={tools} account={account} user={user} onReorder={onReorder} onToggle={() => setCollapsed(false)} />
-    : <RailExpanded brand={brand} workspace={workspace} primary={primary} tools={tools} account={account} user={user} onReorder={onReorder} onToggle={() => setCollapsed(true)} />;
+  return collapsed ? (
+    <RailCollapsed
+      brand={brand}
+      workspace={workspace}
+      primary={primary}
+      tools={tools}
+      account={account}
+      user={user}
+      onReorder={onReorder}
+      onToggle={() => setCollapsed(false)}
+    />
+  ) : (
+    <RailExpanded
+      brand={brand}
+      workspace={workspace}
+      primary={primary}
+      tools={tools}
+      account={account}
+      user={user}
+      onReorder={onReorder}
+      onToggle={() => setCollapsed(true)}
+    />
+  );
 }
 
 function WorkspaceButton({ workspace }: { workspace: WorkspaceConfig }) {
@@ -98,7 +118,16 @@ function WorkspaceButton({ workspace }: { workspace: WorkspaceConfig }) {
   return workspace.switcher ? <>{workspace.switcher(trigger)}</> : trigger;
 }
 
-function RailExpanded({ brand, workspace, primary, tools, account, user, onReorder, onToggle }: RailProps & { onToggle: () => void }) {
+function RailExpanded({
+  brand,
+  workspace,
+  primary,
+  tools,
+  account,
+  user,
+  onReorder,
+  onToggle,
+}: RailProps & { onToggle: () => void }) {
   return (
     <aside className="flex w-[200px] flex-col rounded-xl bg-content shadow-surface px-3 py-3.5">
       <div className="px-2 mb-3 text-[11px] font-medium tracking-wide text-fg-3 uppercase">
@@ -136,7 +165,15 @@ function RailExpanded({ brand, workspace, primary, tools, account, user, onReord
   );
 }
 
-function RailCollapsed({ brand, workspace, primary, tools, account, user, onToggle }: RailProps & { onToggle: () => void }) {
+function RailCollapsed({
+  brand,
+  workspace,
+  primary,
+  tools,
+  account,
+  user,
+  onToggle,
+}: RailProps & { onToggle: () => void }) {
   return (
     <aside className="flex w-16 flex-col items-center rounded-xl bg-content shadow-surface py-3.5">
       <span className="text-[9px] font-medium tracking-wide text-fg-3 uppercase" aria-hidden>
@@ -282,7 +319,15 @@ function CollapsedNavButton({ item }: { item: NavItem }) {
   );
 }
 
-function NavList({ items, expanded, onReorder }: { items: NavItem[]; expanded: boolean; onReorder?: (group: string, activeId: string, overId: string) => void }) {
+function NavList({
+  items,
+  expanded,
+  onReorder,
+}: {
+  items: NavItem[];
+  expanded: boolean;
+  onReorder?: (group: string, activeId: string, overId: string) => void;
+}) {
   if (!expanded) {
     return (
       <div className="flex w-full flex-col items-center gap-0.5">
@@ -305,12 +350,14 @@ function NavList({ items, expanded, onReorder }: { items: NavItem[]; expanded: b
             onClick={item.onClick}
             className={cn(
               'flex items-center gap-2.5 rounded-md px-2 py-1.5 text-sm transition-colors duration-fast',
-              item.active
-                ? 'bg-nav-active text-fg'
-                : 'text-fg-3 hover:bg-card hover:text-fg-2',
+              item.active ? 'bg-nav-active text-fg' : 'text-fg-3 hover:bg-card hover:text-fg-2',
             )}
           >
-            {item.lucideIcon ? <Icon icon={item.lucideIcon} size={16} /> : <span className="inline-grid h-[18px] w-[18px] place-items-center">{item.icon}</span>}
+            {item.lucideIcon ? (
+              <Icon icon={item.lucideIcon} size={16} />
+            ) : (
+              <span className="inline-grid h-[18px] w-[18px] place-items-center">{item.icon}</span>
+            )}
             <span className="flex-1 text-left truncate">{item.label}</span>
             {item.kbd ? <Kbd>{item.kbd}</Kbd> : null}
           </button>
@@ -327,5 +374,13 @@ function Divider({ tiny = false }: { tiny?: boolean }) {
 }
 
 function initials(name: string): string {
-  return name.trim().split(/\s+/).slice(0, 2).map((p) => p[0] ?? '').join('').toUpperCase() || '?';
+  return (
+    name
+      .trim()
+      .split(/\s+/)
+      .slice(0, 2)
+      .map((p) => p[0] ?? '')
+      .join('')
+      .toUpperCase() || '?'
+  );
 }

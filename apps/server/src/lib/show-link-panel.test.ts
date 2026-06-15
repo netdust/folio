@@ -13,12 +13,12 @@
  */
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { nanoid } from 'nanoid';
-import { documents, type ApiToken } from '../db/schema.ts';
-import { makeTestApp } from '../test/harness.ts';
 import type { DB } from '../db/client.ts';
+import { type ApiToken, documents } from '../db/schema.ts';
+import type { Project, Workspace } from '../db/schema.ts';
+import { makeTestApp } from '../test/harness.ts';
 import { executeTool } from './agent-tools.ts';
 import type { ConversationSink } from './chat-thread-sink.ts';
-import type { Workspace, Project } from '../db/schema.ts';
 
 let db: DB;
 let ws: Workspace;
@@ -85,7 +85,12 @@ describe('show_link_panel server-derive', () => {
       'user-1',
       'show_link_panel',
       {
-        target: { entityType: 'work_item', entityId: 'onboard-acme', wslug: ws.slug, pslug: project.slug },
+        target: {
+          entityType: 'work_item',
+          entityId: 'onboard-acme',
+          wslug: ws.slug,
+          pslug: project.slug,
+        },
         title: 'Onboard Acme',
       },
       undefined,
@@ -106,7 +111,12 @@ describe('show_link_panel server-derive', () => {
         'user-1',
         'show_link_panel',
         {
-          target: { entityType: 'work_item', entityId: crypto.randomUUID(), wslug: ws.slug, pslug: project.slug },
+          target: {
+            entityType: 'work_item',
+            entityId: crypto.randomUUID(),
+            wslug: ws.slug,
+            pslug: project.slug,
+          },
           title: 'Onboard Acme',
         },
         undefined,
@@ -125,7 +135,12 @@ describe('show_link_panel server-derive', () => {
         'user-1',
         'show_link_panel',
         {
-          target: { entityType: 'work_item', entityId: 'onboard-acme', wslug: ws.slug, pslug: 'no-such-project' },
+          target: {
+            entityType: 'work_item',
+            entityId: 'onboard-acme',
+            wslug: ws.slug,
+            pslug: 'no-such-project',
+          },
           title: 'Onboard Acme',
         },
         undefined,

@@ -1,11 +1,11 @@
 import { toast } from 'sonner';
-import { TableCell } from './table-cell.tsx';
-import { RowContextMenu } from '../views/row-context-menu.tsx';
-import { gridTemplate, type Column } from './columns.ts';
-import { copyDocumentAsMarkdown } from '../../lib/copy-as-md.ts';
+import type { DocumentPatch, DocumentSummary } from '../../lib/api/documents.ts';
 import { formatApiError } from '../../lib/api/index.ts';
-import type { DocumentSummary, DocumentPatch } from '../../lib/api/documents.ts';
 import type { Status } from '../../lib/api/statuses.ts';
+import { copyDocumentAsMarkdown } from '../../lib/copy-as-md.ts';
+import { RowContextMenu } from '../views/row-context-menu.tsx';
+import { type Column, gridTemplate } from './columns.ts';
+import { TableCell } from './table-cell.tsx';
 
 interface Props {
   doc: DocumentSummary;

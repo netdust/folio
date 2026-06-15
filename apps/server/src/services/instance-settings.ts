@@ -11,8 +11,8 @@
  * also validates (M6) so the write and read paths agree.
  */
 
+import { type OperatorModelSetting, operatorModelSettingSchema } from '@folio/shared';
 import { eq } from 'drizzle-orm';
-import { operatorModelSettingSchema, type OperatorModelSetting } from '@folio/shared';
 import type { DB } from '../db/client.ts';
 import { instanceSettings } from '../db/schema.ts';
 

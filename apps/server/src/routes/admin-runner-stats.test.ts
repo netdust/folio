@@ -11,25 +11,25 @@
  *    NOT bleed into the first workspace's stats
  */
 
-import { test, expect, describe } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import { eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
-import { makeTestApp } from '../test/harness.ts';
 import {
-  documents,
   events,
+  type Project,
+  type TableEntity,
+  type Workspace,
+  documents,
   projects,
   tables,
   users,
   workspaceAccess,
   workspaces,
-  type Project,
-  type TableEntity,
-  type Workspace,
 } from '../db/schema.ts';
 import { apiTokens } from '../db/schema.ts';
-import { createSession, hashPassword, newApiToken } from '../lib/auth.ts';
 import type { RunStatus } from '../lib/agent-run-schema.ts';
+import { createSession, hashPassword, newApiToken } from '../lib/auth.ts';
+import { makeTestApp } from '../test/harness.ts';
 
 type TestDB = Awaited<ReturnType<typeof makeTestApp>>['db'];
 
@@ -147,7 +147,9 @@ async function seedSecondWorkspace(
   const wsId = nanoid();
   await db.insert(workspaces).values({ id: wsId, slug: `other-${nanoid(6)}`, name: 'Other' });
   const projId = nanoid();
-  await db.insert(projects).values({ id: projId, workspaceId: wsId, slug: 'other-web', name: 'OW' });
+  await db
+    .insert(projects)
+    .values({ id: projId, workspaceId: wsId, slug: 'other-web', name: 'OW' });
   const workspace = (await db.query.workspaces.findFirst({ where: eq(workspaces.id, wsId) }))!;
   const project = (await db.query.projects.findFirst({ where: eq(projects.id, projId) }))!;
   const runsTable = await seedRunsTable(db, projId);
@@ -332,7 +334,13 @@ describe('GET /admin/runner-stats', () => {
 
     // Second workspace: pile on extra runs + events that MUST NOT be counted.
     const other = await seedSecondWorkspace(db);
-    const otherParent = await seedParent(db, other.workspace, other.project, other.runsTable, other.userId);
+    const otherParent = await seedParent(
+      db,
+      other.workspace,
+      other.project,
+      other.runsTable,
+      other.userId,
+    );
     for (let i = 0; i < 5; i++) {
       await seedRun(db, {
         workspace: other.workspace,

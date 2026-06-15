@@ -1,8 +1,8 @@
-import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { renderHook, act, waitFor } from '@testing-library/react';
-import React from 'react';
-import { useProviderHealth, useReactorHealth, providerHealthKeys } from './provider-health.ts';
+import { act, renderHook, waitFor } from '@testing-library/react';
+import type React from 'react';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { providerHealthKeys, useProviderHealth, useReactorHealth } from './provider-health.ts';
 
 // MockEventSource: lets a test emit reactor events. Copy the pattern from event-stream.test.tsx.
 class MockEventSource {
@@ -21,7 +21,10 @@ class MockEventSource {
     this.listeners.set(t, a);
   }
   removeEventListener(t: string, fn: (e: MessageEvent) => void) {
-    this.listeners.set(t, (this.listeners.get(t) ?? []).filter((f) => f !== fn));
+    this.listeners.set(
+      t,
+      (this.listeners.get(t) ?? []).filter((f) => f !== fn),
+    );
   }
   emit(t: string, data: string) {
     const ev = { data } as MessageEvent;
@@ -41,18 +44,19 @@ beforeEach(() => {
   vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource);
   vi.stubGlobal(
     'fetch',
-    vi.fn<typeof fetch>(async () =>
-      new Response(
-        JSON.stringify({
-          data: {
-            anthropic: { status: 'degraded', consecutiveFailures: 3 },
-            openai: { status: 'healthy', consecutiveFailures: 0 },
-            openrouter: { status: 'healthy', consecutiveFailures: 0 },
-            ollama: { status: 'healthy', consecutiveFailures: 0 },
-          },
-        }),
-        { status: 200, headers: { 'content-type': 'application/json' } },
-      ),
+    vi.fn<typeof fetch>(
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: {
+              anthropic: { status: 'degraded', consecutiveFailures: 3 },
+              openai: { status: 'healthy', consecutiveFailures: 0 },
+              openrouter: { status: 'healthy', consecutiveFailures: 0 },
+              ollama: { status: 'healthy', consecutiveFailures: 0 },
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        ),
     ),
   );
 });

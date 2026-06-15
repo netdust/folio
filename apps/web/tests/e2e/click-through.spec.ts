@@ -17,7 +17,7 @@
  *    second workspace via user menu".
  */
 
-import { test, expect, type Page } from '@playwright/test';
+import { type Page, expect, test } from '@playwright/test';
 
 let seq = 0;
 function freshEmail() {
@@ -76,7 +76,9 @@ test('sign up → create workspace → create project → land on work-items', a
   await expect(page.getByRole('button', { name: 'Wiki', exact: true })).toBeVisible();
 });
 
-test('kanban + per-column create + inline title edit persists (regression: no UntitledX corruption)', async ({ page }) => {
+test('kanban + per-column create + inline title edit persists (regression: no UntitledX corruption)', async ({
+  page,
+}) => {
   await signUpThroughUI(page, 'Kanban User');
   await page.getByRole('button', { name: 'Create workspace', exact: true }).click();
   await createWorkspaceViaSheet(page, `Kanban WS ${Date.now()}`);
@@ -96,7 +98,9 @@ test('kanban + per-column create + inline title edit persists (regression: no Un
   await page.keyboard.press('Escape');
 
   // Card on board reads exactly "Real card title", NOT "UntitledReal card title".
-  const card = page.locator('[role="button"][aria-roledescription="draggable"]').filter({ hasText: 'Real card title' });
+  const card = page
+    .locator('[role="button"][aria-roledescription="draggable"]')
+    .filter({ hasText: 'Real card title' });
   await expect(card).toBeVisible();
   await expect(card).not.toContainText('Untitled');
 });
@@ -124,7 +128,9 @@ test('create second workspace via user menu from inside a workspace', async ({ p
   await expect(page).toHaveURL(/\/w\/second-ws-/);
 });
 
-test('list rows have unique accessible names per doc (regression: a11y duplicates)', async ({ page }) => {
+test('list rows have unique accessible names per doc (regression: a11y duplicates)', async ({
+  page,
+}) => {
   await signUpThroughUI(page, 'A11y User');
   await page.getByRole('button', { name: 'Create workspace', exact: true }).click();
   await createWorkspaceViaSheet(page, `A11y WS ${Date.now()}`);
@@ -204,10 +210,9 @@ test('slideover: task list checkbox renders for [ ] and [x] items', async ({ pag
   // Seed a doc with task items via API (the API roundtrips clean MD reliably;
   // we're testing the render here, not the editor's input behavior).
   const md = '- [ ] unchecked task\n- [x] checked task\n';
-  const create = await page.request.post(
-    `/api/v1/w/${wslug}/p/${pslug}/documents`,
-    { data: { type: 'work_item', title: 'Has tasks', body: md } },
-  );
+  const create = await page.request.post(`/api/v1/w/${wslug}/p/${pslug}/documents`, {
+    data: { type: 'work_item', title: 'Has tasks', body: md },
+  });
   expect(create.ok(), `seed ${create.status()}: ${await create.text()}`).toBe(true);
   const created = await create.json();
   const slug = created.data.slug;
@@ -257,14 +262,12 @@ test('filter: status chip actually narrows the list (regression)', async ({ page
   if (!m) throw new Error(`Unexpected URL: ${page.url()}`);
   const [, wslug, pslug] = m;
   // Status flows in via frontmatter.status (it's promoted to a column server-side).
-  await page.request.post(
-    `/api/v1/w/${wslug}/p/${pslug}/documents`,
-    { data: { type: 'work_item', title: 'A todo doc', frontmatter: { status: 'todo' } } },
-  );
-  await page.request.post(
-    `/api/v1/w/${wslug}/p/${pslug}/documents`,
-    { data: { type: 'work_item', title: 'A backlog doc', frontmatter: { status: 'backlog' } } },
-  );
+  await page.request.post(`/api/v1/w/${wslug}/p/${pslug}/documents`, {
+    data: { type: 'work_item', title: 'A todo doc', frontmatter: { status: 'todo' } },
+  });
+  await page.request.post(`/api/v1/w/${wslug}/p/${pslug}/documents`, {
+    data: { type: 'work_item', title: 'A backlog doc', frontmatter: { status: 'backlog' } },
+  });
 
   // Without filter, both rows visible.
   await page.reload();
@@ -279,7 +282,9 @@ test('filter: status chip actually narrows the list (regression)', async ({ page
   await expect(page.getByText('A backlog doc')).toHaveCount(0);
 });
 
-test('table: sticky first column has a 1px right border in header AND data rows (regression)', async ({ page }) => {
+test('table: sticky first column has a 1px right border in header AND data rows (regression)', async ({
+  page,
+}) => {
   // Bug found in shake-out of phase-1.7/crm-polish (2026-05-25): the data row's
   // sticky cell (a <div>) rendered the `border-r border-border-light` utility as
   // 1px, but the header's sticky cell (a <button>) rendered 0px. Root cause:
@@ -324,7 +329,9 @@ test('table: sticky first column has a 1px right border in header AND data rows 
   expect(rowBorder, 'sticky data cell must have a 1px right border').toBe('1px');
 });
 
-test('wiki: new page + title edit shows in tree without a reload (regression)', async ({ page }) => {
+test('wiki: new page + title edit shows in tree without a reload (regression)', async ({
+  page,
+}) => {
   await signUpThroughUI(page, 'Wiki User');
   await page.getByRole('button', { name: 'Create workspace', exact: true }).click();
   await createWorkspaceViaSheet(page, `Wiki WS ${Date.now()}`);
@@ -347,7 +354,5 @@ test('wiki: new page + title edit shows in tree without a reload (regression)', 
   // The wiki tree row's outer <li> is also exposed as role="button" by
   // dnd-kit's draggable attributes, alongside the inner label button — scope
   // by tagName so we hit only the label.
-  await expect(
-    page.locator('button', { hasText: 'Hello Wiki' }).first(),
-  ).toBeVisible();
+  await expect(page.locator('button', { hasText: 'Hello Wiki' }).first()).toBeVisible();
 });

@@ -1,4 +1,4 @@
-import { test, expect } from 'bun:test';
+import { expect, test } from 'bun:test';
 import { makeTestApp } from '../test/harness.ts';
 
 const path = '/api/v1/w/acme/p/web/documents';

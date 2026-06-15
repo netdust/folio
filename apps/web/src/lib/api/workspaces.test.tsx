@@ -1,7 +1,7 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { renderHook, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useWorkspaces, workspacesKeys } from './workspaces.ts';
 
 function wrap(qc: QueryClient) {
@@ -15,24 +15,25 @@ describe('useWorkspaces', () => {
 
   beforeEach(() => {
     qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    global.fetch = vi.fn(async () =>
-      new Response(
-        JSON.stringify({
-          data: [
-            {
-              workspace: {
-                id: 'w1',
-                slug: 'main',
-                name: 'Main',
-                createdAt: '2026-01-01',
-                updatedAt: '2026-01-01',
+    global.fetch = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: [
+              {
+                workspace: {
+                  id: 'w1',
+                  slug: 'main',
+                  name: 'Main',
+                  createdAt: '2026-01-01',
+                  updatedAt: '2026-01-01',
+                },
+                role: 'owner',
               },
-              role: 'owner',
-            },
-          ],
-        }),
-        { status: 200, headers: { 'content-type': 'application/json' } },
-      ),
+            ],
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        ),
     ) as unknown as typeof fetch;
   });
 

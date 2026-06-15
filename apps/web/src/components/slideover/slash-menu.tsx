@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { cn } from '../ui/cn.ts';
 import {
-  filterSlash,
-  slashRegistry,
   type SlashContext,
   type SlashItem,
+  filterSlash,
+  slashRegistry,
 } from '../../lib/slash-registry.ts';
+import { cn } from '../ui/cn.ts';
 
 interface Props {
   ctx: SlashContext;

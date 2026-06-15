@@ -1,8 +1,8 @@
-import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import { describe, expect, test } from 'bun:test';
+import { resolve } from 'node:path';
 import { drizzle } from 'drizzle-orm/bun-sqlite';
 import { migrate } from 'drizzle-orm/bun-sqlite/migrator';
-import { resolve } from 'node:path';
 import * as schema from '../db/schema.ts';
 import { messages } from '../db/schema.ts';
 import {
@@ -27,7 +27,12 @@ describe('conversation service', () => {
       operatorAgentId: 'op1',
       title: 'Untitled',
     });
-    await appendMessage(db, { conversationId: c.id, role: 'user', kind: 'text', body: 'set up a project' });
+    await appendMessage(db, {
+      conversationId: c.id,
+      role: 'user',
+      kind: 'text',
+      body: 'set up a project',
+    });
     await appendMessage(db, { conversationId: c.id, role: 'operator', kind: 'text', body: 'done' });
     const thread = await getThread(db, c.id);
     expect(thread.map((m) => m.seq)).toEqual([1, 2]);
@@ -135,7 +140,12 @@ describe('conversation service', () => {
         payload: 'this is not json{', // malformed
       })
       .run();
-    await appendMessage(db, { conversationId: c.id, role: 'operator', kind: 'text', body: 'after' });
+    await appendMessage(db, {
+      conversationId: c.id,
+      role: 'operator',
+      kind: 'text',
+      body: 'after',
+    });
     // Must not throw, and the surrounding good rows still render.
     const md = await serializeThreadMarkdown(db, c.id);
     expect(md).toContain('before');
@@ -166,7 +176,12 @@ describe('conversation service', () => {
         payload: 'null', // valid JSON, but not an object
       })
       .run();
-    await appendMessage(db, { conversationId: c.id, role: 'operator', kind: 'text', body: 'after' });
+    await appendMessage(db, {
+      conversationId: c.id,
+      role: 'operator',
+      kind: 'text',
+      body: 'after',
+    });
     const md = await serializeThreadMarkdown(db, c.id);
     expect(md).toContain('before');
     expect(md).toContain('after');

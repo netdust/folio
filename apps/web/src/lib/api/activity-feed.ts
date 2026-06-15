@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from 'react';
-import { useEventStream, type StreamedEvent } from './event-stream.ts';
+import { type StreamedEvent, useEventStream } from './event-stream.ts';
 import { useWorkspaceRuns } from './runs.ts';
 
 export interface ActivityItem {

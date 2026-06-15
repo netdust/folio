@@ -1,18 +1,18 @@
+import { and, eq, gt } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { streamSSE } from 'hono/streaming';
-import { and, eq, gt } from 'drizzle-orm';
 import { db } from '../db/client.ts';
-import { documents, events } from '../db/schema.ts';
-import type { AuthContext } from '../middleware/auth.ts';
-import { requireUserOrToken } from '../middleware/bearer.ts';
+import { events, documents } from '../db/schema.ts';
 import { canManageWorkspace, visibleProjectIds } from '../lib/access.ts';
+import { type AgentEventContext, isAgentEventVisible } from '../lib/agent-event-visibility.ts';
 import { intersectAgentProjects, resolveAgentProjects } from '../lib/agent-projects.ts';
-import { getWorkspace, type ScopeContext } from '../middleware/scope.ts';
-import { eventBus, type BusEvent } from '../lib/event-bus.ts';
-import { runSseLoop } from '../lib/sse-loop.ts';
+import { type BusEvent, eventBus } from '../lib/event-bus.ts';
 import type { EventKind } from '../lib/events.ts';
 import { HTTPError } from '../lib/http.ts';
-import { isAgentEventVisible, type AgentEventContext } from '../lib/agent-event-visibility.ts';
+import { runSseLoop } from '../lib/sse-loop.ts';
+import type { AuthContext } from '../middleware/auth.ts';
+import { requireUserOrToken } from '../middleware/bearer.ts';
+import { type ScopeContext, getWorkspace } from '../middleware/scope.ts';
 
 const eventsRoute = new Hono<AuthContext & ScopeContext>();
 
@@ -81,11 +81,7 @@ eventsRoute.get('/', async (c) => {
       agentAllowList = effective;
       // Explicit ?project= must be in the allow-list — fail closed.
       if (projectId !== undefined && !effective.includes(projectId)) {
-        throw new HTTPError(
-          'FORBIDDEN_RESOURCE',
-          'agent not allow-listed for that project',
-          403,
-        );
+        throw new HTTPError('FORBIDDEN_RESOURCE', 'agent not allow-listed for that project', 403);
       }
     }
   }
@@ -171,10 +167,7 @@ eventsRoute.get('/', async (c) => {
 
         outer: while (delivered < MAX_DELIVERED) {
           const rows = await db.query.events.findMany({
-            where: and(
-              eq(events.workspaceId, ws.id),
-              gt(events.seq, cursorSeq),
-            ),
+            where: and(eq(events.workspaceId, ws.id), gt(events.seq, cursorSeq)),
             orderBy: (e, { asc }) => [asc(e.seq)],
             limit: PAGE_SIZE,
           });
@@ -187,12 +180,20 @@ eventsRoute.get('/', async (c) => {
             // replay delivers the same set of events the live stream would.
             if (projectId && row.projectId !== null && row.projectId !== projectId) continue;
             // F3: agent allow-list narrows project-scoped rows.
-            if (agentAllowList && row.projectId !== null && !agentAllowList.includes(row.projectId)) {
+            if (
+              agentAllowList &&
+              row.projectId !== null &&
+              !agentAllowList.includes(row.projectId)
+            ) {
               continue;
             }
             // fix #2: per-user visibility narrows PROJECT-SCOPED rows for a
             // human who can't see the whole workspace (traverse-only invitee).
-            if (userVisibleProjects && row.projectId !== null && !userVisibleProjects.has(row.projectId)) {
+            if (
+              userVisibleProjects &&
+              row.projectId !== null &&
+              !userVisibleProjects.has(row.projectId)
+            ) {
               continue;
             }
             // CR-8: that same narrowed human is denied WORKSPACE-LEVEL rows
@@ -243,9 +244,7 @@ eventsRoute.get('/', async (c) => {
                 kind: row.kind,
                 actor: row.actor,
                 payload: row.payload,
-                createdAt: row.createdAt instanceof Date
-                  ? row.createdAt.getTime()
-                  : row.createdAt,
+                createdAt: row.createdAt instanceof Date ? row.createdAt.getTime() : row.createdAt,
               }),
             });
             delivered += 1;
@@ -275,50 +274,50 @@ eventsRoute.get('/', async (c) => {
             runId,
           },
           (e) => {
-        // F3: drop project-scoped events outside the agent's allow-list.
-        if (
-          agentAllowList &&
-          e.projectId != null &&
-          !agentAllowList.includes(e.projectId)
-        ) {
-          return;
-        }
-        // fix #2: per-user visibility — drop PROJECT-SCOPED events for a human
-        // who can't see the whole workspace (traverse-only invitee). Mirrors
-        // the replay-loop check above so live + replay narrow identically.
-        if (userVisibleProjects && e.projectId != null && !userVisibleProjects.has(e.projectId)) {
-          return;
-        }
-        // CR-8: that same narrowed human is denied WORKSPACE-LEVEL events
-        // (projectId null/undefined). Mirrors the replay-loop check.
-        if (humanNarrowed && e.projectId == null) return;
-        // H1/H2: subject-based visibility (see replay loop above).
-        if (
-          !isAgentEventVisible(agentEventCtx, {
-            kind: e.kind,
-            projectId: e.projectId ?? null,
-            documentId: e.documentId ?? null,
-            payload: e.payload,
-          })
-        ) {
-          return;
-        }
-        // D-7: `?agent=` / `?table=` payload-key filters. The bus SubFilter
-        // only knows kinds/projectId/parentId/runId, so these are applied in
-        // the subscriber callback (same place as the F3 + visibility filters
-        // above) rather than extending the bus. AND-combined with everything
-        // above — they only narrow.
-        if (agentFilter !== undefined) {
-          const a = (e.payload as Record<string, unknown> | undefined)?.agent;
-          if (a !== agentFilter) return;
-        }
-        if (tableFilter !== undefined) {
-          const t = (e.payload as Record<string, unknown> | undefined)?.table_id;
-          if (t !== tableFilter) return;
-        }
-        onRow(e);
-      },
-    ),
+            // F3: drop project-scoped events outside the agent's allow-list.
+            if (agentAllowList && e.projectId != null && !agentAllowList.includes(e.projectId)) {
+              return;
+            }
+            // fix #2: per-user visibility — drop PROJECT-SCOPED events for a human
+            // who can't see the whole workspace (traverse-only invitee). Mirrors
+            // the replay-loop check above so live + replay narrow identically.
+            if (
+              userVisibleProjects &&
+              e.projectId != null &&
+              !userVisibleProjects.has(e.projectId)
+            ) {
+              return;
+            }
+            // CR-8: that same narrowed human is denied WORKSPACE-LEVEL events
+            // (projectId null/undefined). Mirrors the replay-loop check.
+            if (humanNarrowed && e.projectId == null) return;
+            // H1/H2: subject-based visibility (see replay loop above).
+            if (
+              !isAgentEventVisible(agentEventCtx, {
+                kind: e.kind,
+                projectId: e.projectId ?? null,
+                documentId: e.documentId ?? null,
+                payload: e.payload,
+              })
+            ) {
+              return;
+            }
+            // D-7: `?agent=` / `?table=` payload-key filters. The bus SubFilter
+            // only knows kinds/projectId/parentId/runId, so these are applied in
+            // the subscriber callback (same place as the F3 + visibility filters
+            // above) rather than extending the bus. AND-combined with everything
+            // above — they only narrow.
+            if (agentFilter !== undefined) {
+              const a = (e.payload as Record<string, unknown> | undefined)?.agent;
+              if (a !== agentFilter) return;
+            }
+            if (tableFilter !== undefined) {
+              const t = (e.payload as Record<string, unknown> | undefined)?.table_id;
+              if (t !== tableFilter) return;
+            }
+            onRow(e);
+          },
+        ),
       // Per-event frame: the events channel names each frame by the event kind
       // (the conversation channel uses a fixed `message` — that's the only shape
       // difference between the two routes).

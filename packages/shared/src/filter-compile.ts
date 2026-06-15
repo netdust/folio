@@ -16,7 +16,15 @@ export class FilterCompileError extends Error {
 }
 
 const OPERATORS = new Set<Operator>([
-  '$eq', '$ne', '$in', '$nin', '$gt', '$gte', '$lt', '$lte', '$exists',
+  '$eq',
+  '$ne',
+  '$in',
+  '$nin',
+  '$gt',
+  '$gte',
+  '$lt',
+  '$lte',
+  '$exists',
 ]);
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {

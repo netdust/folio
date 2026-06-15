@@ -1,7 +1,7 @@
-import { describe, expect, it, vi, afterEach } from 'vitest';
-import { renderHook } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { renderHook } from '@testing-library/react';
 import type { ReactNode } from 'react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { statusesKeys } from './statuses.ts';
 import { useUpdateView, viewsKeys } from './views.ts';
 
@@ -16,7 +16,9 @@ function wrap(qc: QueryClient) {
 }
 
 it('statusesKeys + viewsKeys namespace by tslug (two tables get distinct cache entries)', () => {
-  expect(statusesKeys.list('w', 'p', 'work-items')).not.toEqual(statusesKeys.list('w', 'p', 'bugs'));
+  expect(statusesKeys.list('w', 'p', 'work-items')).not.toEqual(
+    statusesKeys.list('w', 'p', 'bugs'),
+  );
   expect(viewsKeys.list('w', 'p', 'work-items')).not.toEqual(viewsKeys.list('w', 'p', 'bugs'));
   // tslug must be a distinct positional dimension, not absorbed:
   expect(statusesKeys.list('w', 'p', 'bugs')).toContain('bugs');
@@ -26,12 +28,31 @@ it('statusesKeys + viewsKeys namespace by tslug (two tables get distinct cache e
 describe('useUpdateView', () => {
   it('PATCHes /views/:id and returns the unwrapped View', async () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(
-      JSON.stringify({
-        data: { view: { id: 'v1', name: 'Renamed', type: 'list', filters: {}, sort: [], groupBy: null, visibleFields: ['title'], columnOrder: null, isDefault: true, order: 0 } },
-      }),
-      { status: 200, headers: { 'content-type': 'application/json' } },
-    )));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              data: {
+                view: {
+                  id: 'v1',
+                  name: 'Renamed',
+                  type: 'list',
+                  filters: {},
+                  sort: [],
+                  groupBy: null,
+                  visibleFields: ['title'],
+                  columnOrder: null,
+                  isDefault: true,
+                  order: 0,
+                },
+              },
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          ),
+      ),
+    );
 
     const { result } = renderHook(() => useUpdateView('acme', 'sales', 'work-items'), {
       wrapper: wrap(qc),

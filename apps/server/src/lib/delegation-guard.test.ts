@@ -1,7 +1,9 @@
-import { test, expect } from 'bun:test';
-import { walkParentChain, type AgentLookup } from './delegation-guard.ts';
+import { expect, test } from 'bun:test';
+import { type AgentLookup, walkParentChain } from './delegation-guard.ts';
 
-const make = (lookups: Record<string, { parent: string | null; max_delegation_depth: number }>): AgentLookup => ({
+const make = (
+  lookups: Record<string, { parent: string | null; max_delegation_depth: number }>,
+): AgentLookup => ({
   findAgentBySlug: async (slug) => lookups[slug] ?? null,
 });
 
@@ -27,10 +29,13 @@ test('walkParentChain detects cycles and throws', async () => {
 });
 
 test('walkParentChain caps depth at 10 and throws if exceeded', async () => {
-  const lookup = make(Object.fromEntries(
-    Array.from({ length: 12 }, (_, i) => [
-      `a${i}`, { parent: i > 0 ? `a${i - 1}` : null, max_delegation_depth: 5 },
-    ]),
-  ));
+  const lookup = make(
+    Object.fromEntries(
+      Array.from({ length: 12 }, (_, i) => [
+        `a${i}`,
+        { parent: i > 0 ? `a${i - 1}` : null, max_delegation_depth: 5 },
+      ]),
+    ),
+  );
   await expect(walkParentChain('a11', lookup)).rejects.toThrow(/too deep/i);
 });

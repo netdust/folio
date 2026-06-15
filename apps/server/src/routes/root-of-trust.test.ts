@@ -39,7 +39,11 @@ test('an admin PAT is rejected on all session-only root-of-trust routes (invaria
 
   const probes: Array<{ method: string; path: string; body?: unknown }> = [
     // Mint an instance token.
-    { method: 'POST', path: '/api/v1/instance/tokens', body: { name: 'x', scopes: ['documents:read'] } },
+    {
+      method: 'POST',
+      path: '/api/v1/instance/tokens',
+      body: { name: 'x', scopes: ['documents:read'] },
+    },
     // Mint a per-workspace token.
     {
       method: 'POST',
@@ -55,7 +59,11 @@ test('an admin PAT is rejected on all session-only root-of-trust routes (invaria
       body: { provider: 'anthropic', apiKey: 'sk-test-xxxxxxxx', label: 'default' },
     },
     // Promote an instance role (owner-only, session-only).
-    { method: 'PATCH', path: `/api/v1/instance/users/${seed.user.id}/role`, body: { role: 'owner' } },
+    {
+      method: 'PATCH',
+      path: `/api/v1/instance/users/${seed.user.id}/role`,
+      body: { role: 'owner' },
+    },
   ];
 
   for (const { method, path, body } of probes) {

@@ -1,10 +1,10 @@
 import { beforeEach, expect, test } from 'bun:test';
 import { eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
-import { makeTestApp } from '../test/harness.ts';
 import { db } from '../db/client.ts';
 import { apiTokens } from '../db/schema.ts';
 import { newApiToken } from '../lib/auth.ts';
+import { makeTestApp } from '../test/harness.ts';
 
 // Defensive: the `tools/list ... toBe(33)` test below asserts the EXACT canonical
 // tool count, but the tool registry is process-global (globalThis.__folioToolRegistry)
@@ -23,11 +23,7 @@ beforeEach(() => {
   }
 });
 
-async function setupToken(
-  workspaceId: string,
-  userId: string,
-  scopes: string[],
-): Promise<string> {
+async function setupToken(workspaceId: string, userId: string, scopes: string[]): Promise<string> {
   const { token, hash } = newApiToken();
   await db.insert(apiTokens).values({
     id: nanoid(),
@@ -85,7 +81,11 @@ test('MCP initialize returns an instructions pointer mentioning get_skill (B5)',
       jsonrpc: '2.0',
       id: 1,
       method: 'initialize',
-      params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'test', version: '1' } },
+      params: {
+        protocolVersion: '2024-11-05',
+        capabilities: {},
+        clientInfo: { name: 'test', version: '1' },
+      },
     }),
   });
   expect(res.status).toBe(200);
@@ -425,7 +425,10 @@ test('D2: default-table resolution pins to work-items when a 2nd table exists', 
     workspace_slug: seed.workspace.slug,
     project_slug: 'web',
   });
-  const stBody = (await stRes.json()) as { result: { content: { text: string }[] }; error?: unknown };
+  const stBody = (await stRes.json()) as {
+    result: { content: { text: string }[] };
+    error?: unknown;
+  };
   expect(stBody.error).toBeUndefined();
   const stParsed = JSON.parse(stBody.result.content[0]!.text) as {
     table: { slug: string };
@@ -443,7 +446,10 @@ test('D2: default-table resolution pins to work-items when a 2nd table exists', 
     title: 'X',
     status: 'todo',
   });
-  const docBody = (await docRes.json()) as { result?: { content: { text: string }[] }; error?: unknown };
+  const docBody = (await docRes.json()) as {
+    result?: { content: { text: string }[] };
+    error?: unknown;
+  };
   expect(docBody.error).toBeUndefined();
   const doc = JSON.parse(docBody.result!.content[0]!.text) as { status: string };
   expect(doc.status).toBe('todo');
@@ -542,7 +548,7 @@ test('list_projects filters by agent allow-list (explicit ids)', async () => {
     projects: { slug: string }[];
   };
   const slugs = parsed.projects.map((p) => p.slug);
-  expect(slugs).toContain('web');     // project A
+  expect(slugs).toContain('web'); // project A
   expect(slugs).not.toContain('inbox'); // project B not in allow-list
 });
 
@@ -670,11 +676,9 @@ async function createWorkItem(
 
 test('create_comment via agent token resolves author=agent:<id> and emits comment.created', async () => {
   const { app, seed } = await makeTestApp();
-  const { agentToken, agentId } = await setupAgentBoundToken(
-    seed.workspace.id,
-    seed.user.id,
-    { projects: ['*'] },
-  );
+  const { agentToken, agentId } = await setupAgentBoundToken(seed.workspace.id, seed.user.id, {
+    projects: ['*'],
+  });
   // Use the human session to create the parent — agents can create too, but
   // this isolates the parent-creation from the comment-creation.
   const human = await setupToken(seed.workspace.id, seed.user.id, [
@@ -1022,16 +1026,14 @@ test('update_comment changes visibility from normal to internal', async () => {
 
 test('update_comment by a non-author agent → -32602 comment_author_only', async () => {
   const { app, seed } = await makeTestApp();
-  const { agentToken: authorToken } = await setupAgentBoundToken(
-    seed.workspace.id,
-    seed.user.id,
-    { projects: ['*'], agentSlug: 'author-bot' },
-  );
-  const { agentToken: otherToken } = await setupAgentBoundToken(
-    seed.workspace.id,
-    seed.user.id,
-    { projects: ['*'], agentSlug: 'other-bot' },
-  );
+  const { agentToken: authorToken } = await setupAgentBoundToken(seed.workspace.id, seed.user.id, {
+    projects: ['*'],
+    agentSlug: 'author-bot',
+  });
+  const { agentToken: otherToken } = await setupAgentBoundToken(seed.workspace.id, seed.user.id, {
+    projects: ['*'],
+    agentSlug: 'other-bot',
+  });
   const human = await setupToken(seed.workspace.id, seed.user.id, [
     'documents:write',
     'documents:read',
@@ -1110,16 +1112,14 @@ test('delete_comment by the author soft-deletes the row', async () => {
 
 test('delete_comment by a non-author agent → -32602 comment_author_only', async () => {
   const { app, seed } = await makeTestApp();
-  const { agentToken: authorToken } = await setupAgentBoundToken(
-    seed.workspace.id,
-    seed.user.id,
-    { projects: ['*'], agentSlug: 'd-author' },
-  );
-  const { agentToken: otherToken } = await setupAgentBoundToken(
-    seed.workspace.id,
-    seed.user.id,
-    { projects: ['*'], agentSlug: 'd-other' },
-  );
+  const { agentToken: authorToken } = await setupAgentBoundToken(seed.workspace.id, seed.user.id, {
+    projects: ['*'],
+    agentSlug: 'd-author',
+  });
+  const { agentToken: otherToken } = await setupAgentBoundToken(seed.workspace.id, seed.user.id, {
+    projects: ['*'],
+    agentSlug: 'd-other',
+  });
   const human = await setupToken(seed.workspace.id, seed.user.id, [
     'documents:write',
     'documents:read',
@@ -1257,7 +1257,7 @@ test('MCP update_agent patches title + frontmatter', async () => {
   expect(parsed.frontmatter['system_prompt']).toBe('two');
 });
 
-test('F2: MCP create_agent rejects allow-list widening beyond calling agent\'s own', async () => {
+test("F2: MCP create_agent rejects allow-list widening beyond calling agent's own", async () => {
   const { app, db: testDb, seed } = await makeTestApp();
   const projectBId = nanoid();
   await testDb.insert(projectsTbl).values({
@@ -1268,15 +1268,11 @@ test('F2: MCP create_agent rejects allow-list widening beyond calling agent\'s o
   });
 
   // Calling agent has only seed.project.id.
-  const { agentToken: callerToken } = await setupAgentBoundToken(
-    seed.workspace.id,
-    seed.user.id,
-    {
-      projects: [seed.project.id],
-      scopes: ['agents:write', 'documents:read'],
-      agentSlug: 'caller-create',
-    },
-  );
+  const { agentToken: callerToken } = await setupAgentBoundToken(seed.workspace.id, seed.user.id, {
+    projects: [seed.project.id],
+    scopes: ['agents:write', 'documents:read'],
+    agentSlug: 'caller-create',
+  });
 
   // Try to mint a CHILD agent with projects=['*'] (wider than caller's list).
   const res = await callTool(app, callerToken, 'create_agent', {
@@ -1308,15 +1304,11 @@ test('F2: MCP create_agent rejects widening to specific outside-list project ids
     name: 'Inbox',
   });
 
-  const { agentToken: callerToken } = await setupAgentBoundToken(
-    seed.workspace.id,
-    seed.user.id,
-    {
-      projects: [seed.project.id],
-      scopes: ['agents:write', 'documents:read'],
-      agentSlug: 'caller-create-2',
-    },
-  );
+  const { agentToken: callerToken } = await setupAgentBoundToken(seed.workspace.id, seed.user.id, {
+    projects: [seed.project.id],
+    scopes: ['agents:write', 'documents:read'],
+    agentSlug: 'caller-create-2',
+  });
 
   // projectBId is not in caller's allow-list — must reject.
   const res = await callTool(app, callerToken, 'create_agent', {
@@ -1336,7 +1328,7 @@ test('F2: MCP create_agent rejects widening to specific outside-list project ids
   expect(body.error?.data?.reason).toBe('allow_list_widening_forbidden');
 });
 
-test('MCP update_agent rejects allow-list widening beyond calling agent\'s own', async () => {
+test("MCP update_agent rejects allow-list widening beyond calling agent's own", async () => {
   const { app, db: testDb, seed } = await makeTestApp();
   // Add a second project the calling agent does NOT have access to.
   const projectBId = nanoid();
@@ -1348,23 +1340,18 @@ test('MCP update_agent rejects allow-list widening beyond calling agent\'s own',
   });
 
   // Calling agent has [seed.project.id] only.
-  const { agentToken: callerToken } = await setupAgentBoundToken(
-    seed.workspace.id,
-    seed.user.id,
-    {
-      projects: [seed.project.id],
-      scopes: ['agents:write', 'documents:read'],
-      agentSlug: 'caller',
-    },
-  );
+  const { agentToken: callerToken } = await setupAgentBoundToken(seed.workspace.id, seed.user.id, {
+    projects: [seed.project.id],
+    scopes: ['agents:write', 'documents:read'],
+    agentSlug: 'caller',
+  });
 
   // Seed a target agent at workspace scope (uses helper that inserts directly
   // so we don't need agents:write on the human path).
-  const { agentSlug: targetSlug } = await setupAgentBoundToken(
-    seed.workspace.id,
-    seed.user.id,
-    { projects: [seed.project.id], agentSlug: 'target' },
-  );
+  const { agentSlug: targetSlug } = await setupAgentBoundToken(seed.workspace.id, seed.user.id, {
+    projects: [seed.project.id],
+    agentSlug: 'target',
+  });
 
   // Try to widen the target's projects to include projectBId — caller can't do this.
   const res = await callTool(app, callerToken, 'update_agent', {
@@ -1383,20 +1370,15 @@ test('MCP update_agent rejects allow-list widening beyond calling agent\'s own',
 test('MCP update_agent allows non-widening patches from an agent-bound token', async () => {
   const { app, seed } = await makeTestApp();
   // Caller and target both have [seed.project.id]; renaming target stays within.
-  const { agentToken: callerToken } = await setupAgentBoundToken(
-    seed.workspace.id,
-    seed.user.id,
-    {
-      projects: [seed.project.id],
-      scopes: ['agents:write', 'documents:read'],
-      agentSlug: 'caller-narrow',
-    },
-  );
-  const { agentSlug: targetSlug } = await setupAgentBoundToken(
-    seed.workspace.id,
-    seed.user.id,
-    { projects: [seed.project.id], agentSlug: 'target-narrow' },
-  );
+  const { agentToken: callerToken } = await setupAgentBoundToken(seed.workspace.id, seed.user.id, {
+    projects: [seed.project.id],
+    scopes: ['agents:write', 'documents:read'],
+    agentSlug: 'caller-narrow',
+  });
+  const { agentSlug: targetSlug } = await setupAgentBoundToken(seed.workspace.id, seed.user.id, {
+    projects: [seed.project.id],
+    agentSlug: 'target-narrow',
+  });
 
   const res = await callTool(app, callerToken, 'update_agent', {
     workspace_slug: 'acme',
@@ -1447,15 +1429,11 @@ test('MCP delete_agent removes the agent (agent-bound parent token)', async () =
 
 test('MCP delete_agent rejects self-delete from an agent-bound token', async () => {
   const { app, seed } = await makeTestApp();
-  const { agentToken, agentSlug } = await setupAgentBoundToken(
-    seed.workspace.id,
-    seed.user.id,
-    {
-      projects: ['*'],
-      scopes: ['agents:write', 'documents:read'],
-      agentSlug: 'self-target',
-    },
-  );
+  const { agentToken, agentSlug } = await setupAgentBoundToken(seed.workspace.id, seed.user.id, {
+    projects: ['*'],
+    scopes: ['agents:write', 'documents:read'],
+    agentSlug: 'self-target',
+  });
 
   const res = await callTool(app, agentToken, 'delete_agent', {
     workspace_slug: 'acme',
@@ -1471,15 +1449,11 @@ test('MCP delete_agent rejects self-delete from an agent-bound token', async () 
 
 test('MCP get_agent_self returns the calling agent document', async () => {
   const { app, seed } = await makeTestApp();
-  const { agentToken, agentSlug } = await setupAgentBoundToken(
-    seed.workspace.id,
-    seed.user.id,
-    {
-      projects: ['*'],
-      scopes: ['documents:read'],
-      agentSlug: 'self-reader',
-    },
-  );
+  const { agentToken, agentSlug } = await setupAgentBoundToken(seed.workspace.id, seed.user.id, {
+    projects: ['*'],
+    scopes: ['documents:read'],
+    agentSlug: 'self-reader',
+  });
 
   const res = await callTool(app, agentToken, 'get_agent_self', {});
   expect(res.status).toBe(200);

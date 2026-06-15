@@ -304,7 +304,9 @@ describe('DELETE /api/v1/instance/ai-keys/:keyId', () => {
     const { app, db } = await makeTestApp();
     const memberCookie = await seedMemberSession(db); // genuine non-admin
     const id = nanoid();
-    await db.insert(aiKeys).values({ id, provider: 'anthropic', label: 'default', encryptedKey: encryptSecret('') });
+    await db
+      .insert(aiKeys)
+      .values({ id, provider: 'anthropic', label: 'default', encryptedKey: encryptSecret('') });
     const res = await app.request(`${PATH}/${id}`, {
       method: 'DELETE',
       headers: { Cookie: memberCookie },
@@ -315,7 +317,9 @@ describe('DELETE /api/v1/instance/ai-keys/:keyId', () => {
   test('a bearer cannot reach the DELETE route (session-only)', async () => {
     const { app, db, seed } = await makeTestApp();
     const id = nanoid();
-    await db.insert(aiKeys).values({ id, provider: 'anthropic', label: 'default', encryptedKey: encryptSecret('') });
+    await db
+      .insert(aiKeys)
+      .values({ id, provider: 'anthropic', label: 'default', encryptedKey: encryptSecret('') });
     const { token, hash } = newApiToken();
     await db.insert(apiTokens).values({
       id: nanoid(),
@@ -342,7 +346,11 @@ describe('POST /api/v1/instance/ai-keys — apiKey optional for ollama (M5)', ()
       method: 'POST',
       headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
       // loopback baseUrl needs the env flag; use a public host to isolate the apiKey rule.
-      body: JSON.stringify({ provider: 'ollama', label: 'local', baseUrl: 'https://ollama.example.com' }),
+      body: JSON.stringify({
+        provider: 'ollama',
+        label: 'local',
+        baseUrl: 'https://ollama.example.com',
+      }),
     });
     expect(res.status).toBe(201);
   });
@@ -379,7 +387,11 @@ describe('PUT /api/v1/instance/ai-keys/operator-model', () => {
     expect(res.status).toBe(200);
     const get = await app.request(PATH, { headers: { Cookie: seed.sessionCookie } });
     const body = (await get.json()) as { data: { operator_model: unknown } };
-    expect(body.data.operator_model).toEqual({ provider: 'ollama', model: 'llama3.1:8b', aiKeyLabel: 'default' });
+    expect(body.data.operator_model).toEqual({
+      provider: 'ollama',
+      model: 'llama3.1:8b',
+      aiKeyLabel: 'default',
+    });
   });
 
   test('setting an operator model with NO matching key is rejected (422, #4)', async () => {

@@ -1,15 +1,15 @@
-import { describe, expect, it, test, vi, afterEach } from 'vitest';
-import { renderHook, waitFor, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
+import { afterEach, describe, expect, it, test, vi } from 'vitest';
 import {
+  type Comment,
+  type CommentKind,
   commentsKeys,
   useComments,
   useCreateComment,
-  useUpdateComment,
   useDeleteComment,
-  type Comment,
-  type CommentKind,
+  useUpdateComment,
 } from './comments.ts';
 
 afterEach(() => {
@@ -47,11 +47,12 @@ function makeComment(overrides: Partial<Comment> = {}): Comment {
 function stubFetch(data: unknown, status = 200) {
   vi.stubGlobal(
     'fetch',
-    vi.fn(async () =>
-      new Response(JSON.stringify({ data }), {
-        status,
-        headers: { 'content-type': 'application/json' },
-      }),
+    vi.fn(
+      async () =>
+        new Response(JSON.stringify({ data }), {
+          status,
+          headers: { 'content-type': 'application/json' },
+        }),
     ),
   );
 }
@@ -90,10 +91,9 @@ describe('useComments', () => {
       }),
     );
 
-    const { result } = renderHook(
-      () => useComments('acme', 'my-proj', 'issue-42'),
-      { wrapper: wrap(qc) },
-    );
+    const { result } = renderHook(() => useComments('acme', 'my-proj', 'issue-42'), {
+      wrapper: wrap(qc),
+    });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
     expect(calls[0]).toContain('/api/v1/w/acme/p/my-proj/documents/issue-42/comments');
@@ -144,10 +144,9 @@ describe('useComments', () => {
       }),
     );
 
-    const { result } = renderHook(
-      () => useComments('acme', 'proj', 'doc-1', { kind: 'plan' }),
-      { wrapper: wrap(qc) },
-    );
+    const { result } = renderHook(() => useComments('acme', 'proj', 'doc-1', { kind: 'plan' }), {
+      wrapper: wrap(qc),
+    });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(calls[0]).toContain('kind=plan');
   });
@@ -236,10 +235,9 @@ describe('useCreateComment', () => {
       }),
     );
 
-    const { result } = renderHook(
-      () => useCreateComment('acme', 'proj', 'parent-1'),
-      { wrapper: wrap(qc) },
-    );
+    const { result } = renderHook(() => useCreateComment('acme', 'proj', 'parent-1'), {
+      wrapper: wrap(qc),
+    });
 
     // Check optimistic prepend happens before server responds by reading cache in onMutate
     await act(async () => {
@@ -279,10 +277,9 @@ describe('useCreateComment', () => {
       ),
     );
 
-    const { result } = renderHook(
-      () => useCreateComment('acme', 'web', 'parent-1'),
-      { wrapper: wrap(qc) },
-    );
+    const { result } = renderHook(() => useCreateComment('acme', 'web', 'parent-1'), {
+      wrapper: wrap(qc),
+    });
 
     act(() => {
       result.current.mutate({ body: 'new comment' });
@@ -292,8 +289,8 @@ describe('useCreateComment', () => {
     await waitFor(() => {
       const cached = qc.getQueryData<Comment[]>(listKey);
       expect(cached?.length).toBe(2);
-      expect(cached?.[0]?.body).toBe('new comment');  // optimistic at the head
-      expect(cached?.[1]?.body).toBe('existing');     // existing pushed down
+      expect(cached?.[0]?.body).toBe('new comment'); // optimistic at the head
+      expect(cached?.[1]?.body).toBe('existing'); // existing pushed down
     });
 
     // Resolve the fetch to clean up
@@ -318,13 +315,17 @@ describe('useCreateComment', () => {
     // Fetch that NEVER resolves — we want to inspect the optimistic state.
     vi.stubGlobal(
       'fetch',
-      vi.fn(() => new Promise<Response>(() => { /* never resolves */ })),
+      vi.fn(
+        () =>
+          new Promise<Response>(() => {
+            /* never resolves */
+          }),
+      ),
     );
 
-    const { result } = renderHook(
-      () => useCreateComment('acme', 'web', 'parent-1'),
-      { wrapper: wrap(qc) },
-    );
+    const { result } = renderHook(() => useCreateComment('acme', 'web', 'parent-1'), {
+      wrapper: wrap(qc),
+    });
 
     // Fire two mutations in the same tick — without a microtask gap they
     // would (pre-fix) compute the same Date.now() and produce duplicate ids.
@@ -376,10 +377,7 @@ describe('useUpdateComment', () => {
       }),
     );
 
-    const { result } = renderHook(
-      () => useUpdateComment('acme', 'proj'),
-      { wrapper: wrap(qc) },
-    );
+    const { result } = renderHook(() => useUpdateComment('acme', 'proj'), { wrapper: wrap(qc) });
 
     await act(async () => {
       result.current.mutate({ slug: 'cmt-1', body: 'Updated' });
@@ -416,10 +414,7 @@ describe('useDeleteComment', () => {
       }),
     );
 
-    const { result } = renderHook(
-      () => useDeleteComment('acme', 'proj'),
-      { wrapper: wrap(qc) },
-    );
+    const { result } = renderHook(() => useDeleteComment('acme', 'proj'), { wrapper: wrap(qc) });
 
     await act(async () => {
       result.current.mutate({ slug: 'cmt-del' });

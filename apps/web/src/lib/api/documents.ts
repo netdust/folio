@@ -294,13 +294,16 @@ export function clausesToListParams(clauses: FilterClauseUrl[]): DocumentListPar
 }
 
 /** Frontmatter-side post-filter; applied to the fetched page client-side until the server exposes a generic frontmatter query (Phase 4). */
-export function applyFrontmatterClauses(docs: DocumentSummary[], clauses: FilterClauseUrl[]): DocumentSummary[] {
+export function applyFrontmatterClauses(
+  docs: DocumentSummary[],
+  clauses: FilterClauseUrl[],
+): DocumentSummary[] {
   let out = docs;
   for (const c of clauses) {
     if (c.kind === 'priority') {
       out = out.filter((d) => d.frontmatter?.['priority'] === c.value);
-    // Labels: AND semantics — every selected value must be present. Today's UI is
-    // single-select so AND ≡ OR; revisit when multi-label filtering ships.
+      // Labels: AND semantics — every selected value must be present. Today's UI is
+      // single-select so AND ≡ OR; revisit when multi-label filtering ships.
     } else if (c.kind === 'labels') {
       out = out.filter((d) => {
         const labels = d.frontmatter?.['labels'];

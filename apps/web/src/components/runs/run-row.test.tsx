@@ -1,11 +1,18 @@
-import { describe, test, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { describe, expect, test, vi } from 'vitest';
 import { RunRow } from './run-row.tsx';
 
 const run = {
-  id: 'r1', slug: 'run-1', type: 'agent_run' as const, title: 'run', status: 'running',
+  id: 'r1',
+  slug: 'run-1',
+  type: 'agent_run' as const,
+  title: 'run',
+  status: 'running',
   frontmatter: { agent_slug: 'reply-bot', fired_by: 'assignment', error_reason: null },
-  createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), parentId: 'p1', lastTouchedAt: null,
+  createdAt: new Date().toISOString(),
+  updatedAt: new Date().toISOString(),
+  parentId: 'p1',
+  lastTouchedAt: null,
 };
 
 describe('RunRow', () => {

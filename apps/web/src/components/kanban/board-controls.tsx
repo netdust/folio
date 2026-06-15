@@ -1,11 +1,11 @@
-import { useMemo, useSyncExternalStore } from 'react';
 import { useSearch } from '@tanstack/react-router';
+import { useMemo, useSyncExternalStore } from 'react';
 import { toast } from 'sonner';
-import { useViews, useUpdateView } from '../../lib/api/views.ts';
 import { useFields } from '../../lib/api/fields.ts';
 import { formatApiError } from '../../lib/api/index.ts';
+import { useUpdateView, useViews } from '../../lib/api/views.ts';
+import { type BoardSort, boardControlsBus } from '../../lib/board-controls-bus.ts';
 import { BoardToolbar } from './board-toolbar.tsx';
-import { boardControlsBus, type BoardSort } from '../../lib/board-controls-bus.ts';
 
 interface Props {
   wslug: string;

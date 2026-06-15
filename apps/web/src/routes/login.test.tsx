@@ -1,15 +1,15 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
+  Outlet,
+  RouterProvider,
   createMemoryHistory,
   createRootRoute,
   createRoute,
   createRouter,
-  Outlet,
-  RouterProvider,
 } from '@tanstack/react-router';
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Route as LoginRoute } from './login.tsx';
 
 function setup() {
@@ -54,7 +54,11 @@ describe('LoginPage (password mode)', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const { queryClient, router } = setup();
-    render(<QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider>);
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
 
     await userEvent.type(await screen.findByLabelText(/Email/i), 'a@b.c');
     await userEvent.type(screen.getByLabelText(/Password/i), 'pw{Enter}');
@@ -72,7 +76,8 @@ describe('LoginPage (password mode)', () => {
       const u = String(url);
       if (u.endsWith('/api/v1/auth/magic-link/request') && init?.method === 'POST') {
         return new Response(JSON.stringify({ data: { ok: true } }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
@@ -80,14 +85,19 @@ describe('LoginPage (password mode)', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const { queryClient, router } = setup();
-    render(<QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider>);
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
 
     await userEvent.click(await screen.findByRole('button', { name: /Magic link/i }));
     await userEvent.type(screen.getByLabelText(/Email/i), 'a@b.c{Enter}');
 
     await waitFor(() => {
       const call = fetchMock.mock.calls.find(
-        ([url, init]) => String(url).endsWith('/api/v1/auth/magic-link/request') && init?.method === 'POST',
+        ([url, init]) =>
+          String(url).endsWith('/api/v1/auth/magic-link/request') && init?.method === 'POST',
       );
       expect(call).toBeDefined();
       const body = JSON.parse(String(call![1]!.body));
@@ -109,7 +119,11 @@ describe('LoginPage (password mode)', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const { queryClient, router } = setup();
-    render(<QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider>);
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
 
     await userEvent.click(await screen.findByRole('button', { name: /Sign up/i }));
     await userEvent.type(screen.getByLabelText(/Name/i), 'New');
@@ -129,12 +143,20 @@ describe('LoginPage (password mode)', () => {
   });
 
   it('switching modes preserves typed email', async () => {
-    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () =>
-      new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } }),
-    ));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>(
+        async () =>
+          new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } }),
+      ),
+    );
 
     const { queryClient, router } = setup();
-    render(<QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider>);
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
 
     const emailInput = await screen.findByLabelText(/Email/i);
     await userEvent.type(emailInput, 'persist@me.io');

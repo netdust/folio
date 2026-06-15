@@ -1,11 +1,7 @@
 import { useState } from 'react';
 import type { Comment, ResolvedMention } from '../../lib/api/comments.ts';
 import type { Member } from '../../lib/api/members.ts';
-import {
-  type AgentRef,
-  authorDisplayName,
-  authorMatchesCurrent,
-} from '../../lib/author-ref.ts';
+import { type AgentRef, authorDisplayName, authorMatchesCurrent } from '../../lib/author-ref.ts';
 import { relativeTime } from '../../lib/relative-time.ts';
 import { Chip } from '../ui/chip.tsx';
 import { cn } from '../ui/cn.ts';
@@ -53,9 +49,7 @@ function parseBody(body: string, mentions: ResolvedMention[]): BodyRun[] {
     const colon = target.indexOf(':');
     return colon === -1 ? target : target.slice(colon + 1);
   };
-  const staleSet = new Set(
-    mentions.filter((m) => !m.resolved).map((m) => stripPrefix(m.target)),
-  );
+  const staleSet = new Set(mentions.filter((m) => !m.resolved).map((m) => stripPrefix(m.target)));
 
   const runs: BodyRun[] = [];
   // Match either [[slug]] or @slug (word-char + hyphens)
@@ -173,9 +167,7 @@ function KindChip({ kind }: { kind: Comment['frontmatter']['kind'] }) {
   if (kind === 'error') {
     return (
       // TODO: use tone="danger" variant once Chip design-system pass ships it.
-      <Chip className="bg-destructive/10 text-destructive border-destructive/20">
-        error
-      </Chip>
+      <Chip className="bg-destructive/10 text-destructive border-destructive/20">error</Chip>
     );
   }
   return <Chip muted>{kind}</Chip>;
@@ -195,10 +187,9 @@ function resolveIsAuthor(
   // detect "is this me?" we need the current agent's id too — look it up by
   // slug in the workspace agent list. Pre-F11 rows that survived migration
   // 0008 in legacy slug form still match via the helper's id-OR-slug check.
-  const currentAgent =
-    currentAgentSlug
-      ? agents.find((a) => a.slug === currentAgentSlug) ?? null
-      : null;
+  const currentAgent = currentAgentSlug
+    ? (agents.find((a) => a.slug === currentAgentSlug) ?? null)
+    : null;
   return authorMatchesCurrent(comment.frontmatter.author, currentUserId, currentAgent);
 }
 
@@ -252,11 +243,7 @@ export function CommentRow({
         <AuthorDisplay author={fm.author} members={workspaceMembers} agents={agents} />
 
         {/* Timestamp */}
-        <time
-          dateTime={createdAt}
-          title={createdAt}
-          className="text-xs text-fg-3 shrink-0"
-        >
+        <time dateTime={createdAt} title={createdAt} className="text-xs text-fg-3 shrink-0">
           {relativeTime(createdAt)}
         </time>
 
@@ -265,15 +252,11 @@ export function CommentRow({
 
         {/* Run-id badge — agent-written only */}
         {showRunId && (
-          <span className="text-[11px] font-mono text-fg-3">
-            run-id: {fm.run_id!.slice(0, 8)}
-          </span>
+          <span className="text-[11px] font-mono text-fg-3">run-id: {fm.run_id!.slice(0, 8)}</span>
         )}
 
         {/* Edited indicator */}
-        {fm.edited_at && (
-          <span className="text-[11px] text-fg-3">(edited)</span>
-        )}
+        {fm.edited_at && <span className="text-[11px] text-fg-3">(edited)</span>}
 
         {/* Hover-revealed affordances */}
         <div className="ml-auto flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-fast">
@@ -330,9 +313,7 @@ export function CommentRow({
       <BodyRenderer body={body} mentions={fm.mentions} />
 
       {/* Copy error toast (best-effort) */}
-      {copyError && (
-        <p className="mt-1 text-[11px] text-destructive">{copyError}</p>
-      )}
+      {copyError && <p className="mt-1 text-[11px] text-destructive">{copyError}</p>}
     </div>
   );
 }

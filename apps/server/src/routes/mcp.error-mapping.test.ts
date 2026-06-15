@@ -280,7 +280,11 @@ async function postRaw(
 test('M-MCP-3 — a non-object body (JSON array / batch) is rejected with -32600 invalid request', async () => {
   const { app, seed } = await makeTestApp();
   const token = await setupToken(seed.workspace.id, seed.user.id, ['documents:read']);
-  const res = await postRaw(app, token, JSON.stringify([{ jsonrpc: '2.0', id: 1, method: 'ping' }]));
+  const res = await postRaw(
+    app,
+    token,
+    JSON.stringify([{ jsonrpc: '2.0', id: 1, method: 'ping' }]),
+  );
   expect(res.status).toBe(200);
   const body = (await res.json()) as { error?: { code: number; message: string }; id?: unknown };
   expect(body.error?.code).toBe(-32600);
@@ -315,7 +319,11 @@ test('M-MCP-3 — a wrong-typed id (object) is coerced to null in the response',
 test('M-MCP-3 — a valid string id still round-trips unchanged', async () => {
   const { app, seed } = await makeTestApp();
   const token = await setupToken(seed.workspace.id, seed.user.id, ['documents:read']);
-  const res = await postRaw(app, token, JSON.stringify({ jsonrpc: '2.0', id: 'req-42', method: 'ping' }));
+  const res = await postRaw(
+    app,
+    token,
+    JSON.stringify({ jsonrpc: '2.0', id: 'req-42', method: 'ping' }),
+  );
   const body = (await res.json()) as { id?: unknown };
   expect(body.id).toBe('req-42');
 });
@@ -323,7 +331,11 @@ test('M-MCP-3 — a valid string id still round-trips unchanged', async () => {
 test('M-MCP-3 — a valid NUMBER id round-trips unchanged (not coerced to null)', async () => {
   const { app, seed } = await makeTestApp();
   const token = await setupToken(seed.workspace.id, seed.user.id, ['documents:read']);
-  const res = await postRaw(app, token, JSON.stringify({ jsonrpc: '2.0', id: 4242, method: 'ping' }));
+  const res = await postRaw(
+    app,
+    token,
+    JSON.stringify({ jsonrpc: '2.0', id: 4242, method: 'ping' }),
+  );
   const body = (await res.json()) as { id?: unknown };
   // The coercion is `string||number ? rawId : null`; a number must survive.
   expect(body.id).toBe(4242);
@@ -332,7 +344,11 @@ test('M-MCP-3 — a valid NUMBER id round-trips unchanged (not coerced to null)'
 test('M-MCP-3 — an explicit id:null is preserved (it is a valid JSON-RPC id)', async () => {
   const { app, seed } = await makeTestApp();
   const token = await setupToken(seed.workspace.id, seed.user.id, ['documents:read']);
-  const res = await postRaw(app, token, JSON.stringify({ jsonrpc: '2.0', id: null, method: 'ping' }));
+  const res = await postRaw(
+    app,
+    token,
+    JSON.stringify({ jsonrpc: '2.0', id: null, method: 'ping' }),
+  );
   const body = (await res.json()) as { id?: unknown; result?: unknown };
   // null is valid; the request still processes and echoes id:null (not a crash,
   // not coerced to 0/undefined).
@@ -355,7 +371,11 @@ test('malformed JSON body returns -32700 parse error', async () => {
 test('an unknown top-level method returns -32601 method not supported', async () => {
   const { app, seed } = await makeTestApp();
   const token = await setupToken(seed.workspace.id, seed.user.id, ['documents:read']);
-  const res = await postRaw(app, token, JSON.stringify({ jsonrpc: '2.0', id: 9, method: 'frobnicate' }));
+  const res = await postRaw(
+    app,
+    token,
+    JSON.stringify({ jsonrpc: '2.0', id: 9, method: 'frobnicate' }),
+  );
   const body = (await res.json()) as { error?: { code: number; message: string } };
   expect(body.error?.code).toBe(-32601);
   expect(body.error?.message).toMatch(/method not supported/i);
@@ -408,7 +428,10 @@ test('BUG-1 — a bad workspace slug returns an actionable message, not internal
 
 test('BUG-1 — a forbidden: authority message is KEPT (not sanitized), preserving fatal semantics', async () => {
   const { app, seed } = await makeTestApp();
-  const token = await setupToken(seed.workspace.id, seed.user.id, ['documents:read', 'documents:write']);
+  const token = await setupToken(seed.workspace.id, seed.user.id, [
+    'documents:read',
+    'documents:write',
+  ]);
   // ask_choice over MCP has no conversation sink → 'forbidden: ui tools require a
   // conversation context'. The mapper keeps `forbidden:` messages (runner uses the
   // prefix to classify FATAL; the message is a safe authority statement).

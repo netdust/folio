@@ -1,38 +1,39 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
+  Outlet,
+  RouterProvider,
   createMemoryHistory,
   createRootRoute,
   createRoute,
   createRouter,
-  Outlet,
-  RouterProvider,
   useParams,
 } from '@tanstack/react-router';
-import { WorkspacePicker } from './workspace-picker.tsx';
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { setLastWorkspaceSlug } from '../lib/last-workspace.ts';
+import { WorkspacePicker } from './workspace-picker.tsx';
 
 function mockWorkspaces(items: { id: string; slug: string; name: string }[]) {
   vi.stubGlobal(
     'fetch',
-    vi.fn(async () =>
-      new Response(
-        JSON.stringify({
-          data: items.map((i) => ({
-            workspace: {
-              id: i.id,
-              slug: i.slug,
-              name: i.name,
-              createdAt: '2026-01-01T00:00:00.000Z',
-              updatedAt: '2026-01-01T00:00:00.000Z',
-            },
-            role: 'owner',
-          })),
-        }),
-        { status: 200, headers: { 'content-type': 'application/json' } },
-      ),
+    vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: items.map((i) => ({
+              workspace: {
+                id: i.id,
+                slug: i.slug,
+                name: i.name,
+                createdAt: '2026-01-01T00:00:00.000Z',
+                updatedAt: '2026-01-01T00:00:00.000Z',
+              },
+              role: 'owner',
+            })),
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        ),
     ),
   );
 }
@@ -103,9 +104,7 @@ describe('WorkspacePicker', () => {
       </QueryClientProvider>,
     );
 
-    await waitFor(() =>
-      expect(screen.getByText('workspace page: acme')).toBeInTheDocument(),
-    );
+    await waitFor(() => expect(screen.getByText('workspace page: acme')).toBeInTheDocument());
   });
 
   it('redirects to the FIRST workspace when nothing was last opened', async () => {
@@ -121,9 +120,7 @@ describe('WorkspacePicker', () => {
       </QueryClientProvider>,
     );
 
-    await waitFor(() =>
-      expect(screen.getByText('workspace page: acme')).toBeInTheDocument(),
-    );
+    await waitFor(() => expect(screen.getByText('workspace page: acme')).toBeInTheDocument());
     // The all-workspaces grid is gone — no "Your workspaces" heading.
     expect(screen.queryByText(/your workspaces/i)).not.toBeInTheDocument();
   });
@@ -142,9 +139,7 @@ describe('WorkspacePicker', () => {
       </QueryClientProvider>,
     );
 
-    await waitFor(() =>
-      expect(screen.getByText('workspace page: beta')).toBeInTheDocument(),
-    );
+    await waitFor(() => expect(screen.getByText('workspace page: beta')).toBeInTheDocument());
   });
 
   it('falls back to the first workspace when the remembered one is gone', async () => {
@@ -161,8 +156,6 @@ describe('WorkspacePicker', () => {
       </QueryClientProvider>,
     );
 
-    await waitFor(() =>
-      expect(screen.getByText('workspace page: acme')).toBeInTheDocument(),
-    );
+    await waitFor(() => expect(screen.getByText('workspace page: acme')).toBeInTheDocument());
   });
 });

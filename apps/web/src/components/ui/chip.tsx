@@ -1,9 +1,9 @@
 import {
-  forwardRef,
   type ButtonHTMLAttributes,
   type HTMLAttributes,
   type ReactNode,
   type Ref,
+  forwardRef,
 } from 'react';
 import { cn } from './cn.ts';
 
@@ -30,7 +30,8 @@ type SharedChipProps = {
   mono?: boolean;
 };
 
-type StaticChipProps = SharedChipProps & Omit<HTMLAttributes<HTMLSpanElement>, keyof SharedChipProps>;
+type StaticChipProps = SharedChipProps &
+  Omit<HTMLAttributes<HTMLSpanElement>, keyof SharedChipProps>;
 type InteractiveChipProps = SharedChipProps &
   Omit<ButtonHTMLAttributes<HTMLButtonElement>, keyof SharedChipProps> & {
     onClick: ButtonHTMLAttributes<HTMLButtonElement>['onClick'];
@@ -53,7 +54,9 @@ function chipClasses(opts: { muted?: boolean; mono?: boolean; interactive: boole
     // Interactive default gets a primary hover tint to telegraph the action.
     // Interactive muted gets a subtle hover but no tint — staying out of the
     // way is the variant's whole point.
-    opts.interactive && !opts.muted && 'hover:border-primary/30 hover:bg-primary/10 hover:text-primary',
+    opts.interactive &&
+      !opts.muted &&
+      'hover:border-primary/30 hover:bg-primary/10 hover:text-primary',
     opts.interactive && opts.muted && 'hover:text-fg-2',
   );
 }
@@ -62,37 +65,36 @@ function chipClasses(opts: { muted?: boolean; mono?: boolean; interactive: boole
 // existing FilterChipValue + ChipAdd patterns established this requirement;
 // staying consistent means consumers don't have to think about which chip
 // supports Radix and which doesn't.
-export const Chip = forwardRef<HTMLButtonElement | HTMLSpanElement, ChipProps>(function Chip(
-  props,
-  ref,
-) {
-  const { children, muted, mono, ...rest } = props as ChipProps & { onClick?: unknown };
-  // Discriminate by presence of onClick — interactive chips render as
-  // <button>, static chips as <span>. Same dispatch the old ProjectChip used.
-  if (typeof (rest as { onClick?: unknown }).onClick === 'function') {
-    const interactive = rest as ButtonHTMLAttributes<HTMLButtonElement>;
+export const Chip = forwardRef<HTMLButtonElement | HTMLSpanElement, ChipProps>(
+  function Chip(props, ref) {
+    const { children, muted, mono, ...rest } = props as ChipProps & { onClick?: unknown };
+    // Discriminate by presence of onClick — interactive chips render as
+    // <button>, static chips as <span>. Same dispatch the old ProjectChip used.
+    if (typeof (rest as { onClick?: unknown }).onClick === 'function') {
+      const interactive = rest as ButtonHTMLAttributes<HTMLButtonElement>;
+      return (
+        <button
+          ref={ref as Ref<HTMLButtonElement>}
+          type="button"
+          {...interactive}
+          className={cn(chipClasses({ muted, mono, interactive: true }), interactive.className)}
+        >
+          {children}
+        </button>
+      );
+    }
+    const staticRest = rest as HTMLAttributes<HTMLSpanElement>;
     return (
-      <button
-        ref={ref as Ref<HTMLButtonElement>}
-        type="button"
-        {...interactive}
-        className={cn(chipClasses({ muted, mono, interactive: true }), interactive.className)}
+      <span
+        ref={ref as Ref<HTMLSpanElement>}
+        {...staticRest}
+        className={cn(chipClasses({ muted, mono, interactive: false }), staticRest.className)}
       >
         {children}
-      </button>
+      </span>
     );
-  }
-  const staticRest = rest as HTMLAttributes<HTMLSpanElement>;
-  return (
-    <span
-      ref={ref as Ref<HTMLSpanElement>}
-      {...staticRest}
-      className={cn(chipClasses({ muted, mono, interactive: false }), staticRest.className)}
-    >
-      {children}
-    </span>
-  );
-});
+  },
+);
 
 // =============================================================================
 // Filter-bar chips (pre-existing, not migrated). These have specialized

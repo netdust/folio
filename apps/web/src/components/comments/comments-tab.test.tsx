@@ -1,11 +1,11 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
-import { CommentsTab } from './comments-tab.tsx';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Comment } from '../../lib/api/comments.ts';
+import type { EventStreamFilters, StreamedEvent } from '../../lib/api/event-stream.ts';
 import type { Member } from '../../lib/api/members.ts';
-import type { StreamedEvent, EventStreamFilters } from '../../lib/api/event-stream.ts';
+import { CommentsTab } from './comments-tab.tsx';
 
 // ---------------------------------------------------------------------------
 // Module-level mock for useEventStream.
@@ -15,10 +15,7 @@ import type { StreamedEvent, EventStreamFilters } from '../../lib/api/event-stre
 // means all existing tests continue to pass unchanged).
 // ---------------------------------------------------------------------------
 
-const mockUseEventStream = vi.fn<
-  [string, EventStreamFilters, (e: StreamedEvent) => void],
-  void
->();
+const mockUseEventStream = vi.fn<[string, EventStreamFilters, (e: StreamedEvent) => void], void>();
 
 vi.mock('../../lib/api/event-stream.ts', () => ({
   useEventStream: (
@@ -35,7 +32,9 @@ vi.mock('../../lib/api/event-stream.ts', () => ({
 // isPending:true branch (the double-fire guard) without faking the rest.
 // ---------------------------------------------------------------------------
 const runsMock = vi.hoisted(() => ({
-  useRetryRunOverride: null as null | (() => { mutate: ReturnType<typeof vi.fn>; isPending: boolean }),
+  useRetryRunOverride: null as
+    | null
+    | (() => { mutate: ReturnType<typeof vi.fn>; isPending: boolean }),
 }));
 
 vi.mock('../../lib/api/runs.ts', async (importOriginal) => {
@@ -140,30 +139,24 @@ function stubFetchList(comments: Comment[]) {
             { status: 200, headers: { 'content-type': 'application/json' } },
           );
         }
-        return new Response(
-          JSON.stringify({ data: comments }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        );
+        return new Response(JSON.stringify({ data: comments }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
       }
       // POST / PATCH / DELETE — return a stub comment
       const body = init?.body ? JSON.parse(init.body as string) : {};
       const stubComment = makeComment({ body: body.body ?? 'updated' });
-      return new Response(
-        JSON.stringify({ data: stubComment }),
-        { status: 200, headers: { 'content-type': 'application/json' } },
-      );
+      return new Response(JSON.stringify({ data: stubComment }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
     }),
   );
 }
 
-function renderTab(
-  props: Partial<typeof defaultProps> = {},
-  qc = makeQC(),
-) {
-  return render(
-    <CommentsTab {...defaultProps} {...props} />,
-    { wrapper: wrap(qc) },
-  );
+function renderTab(props: Partial<typeof defaultProps> = {}, qc = makeQC()) {
+  return render(<CommentsTab {...defaultProps} {...props} />, { wrapper: wrap(qc) });
 }
 
 // ---------------------------------------------------------------------------
@@ -209,8 +202,18 @@ describe('CommentsTab', () => {
   });
 
   it('shows newest-first ordering', async () => {
-    const newer = makeComment({ id: 'c-2', slug: 'c-newer', body: 'Newer comment', createdAt: NOW });
-    const older = makeComment({ id: 'c-1', slug: 'c-older', body: 'Older comment', createdAt: OLDER });
+    const newer = makeComment({
+      id: 'c-2',
+      slug: 'c-newer',
+      body: 'Newer comment',
+      createdAt: NOW,
+    });
+    const older = makeComment({
+      id: 'c-1',
+      slug: 'c-older',
+      body: 'Older comment',
+      createdAt: OLDER,
+    });
     // Server returns oldest first; component must sort newest-first
     stubFetchList([older, newer]);
     renderTab();
@@ -274,8 +277,8 @@ describe('CommentsTab', () => {
     await waitFor(() => {
       const fetchMock = vi.mocked(fetch);
       const calls = fetchMock.mock.calls;
-      const hasInternalFetch = calls.some(([url]) =>
-        typeof url === 'string' && url.includes('internal'),
+      const hasInternalFetch = calls.some(
+        ([url]) => typeof url === 'string' && url.includes('internal'),
       );
       expect(hasInternalFetch).toBe(true);
     });
@@ -324,8 +327,8 @@ describe('CommentsTab', () => {
 
     await waitFor(() => {
       const fetchMock = vi.mocked(fetch);
-      const patchCall = fetchMock.mock.calls.find(([_url, init]) =>
-        (init as RequestInit)?.method?.toUpperCase() === 'PATCH',
+      const patchCall = fetchMock.mock.calls.find(
+        ([_url, init]) => (init as RequestInit)?.method?.toUpperCase() === 'PATCH',
       );
       expect(patchCall).toBeDefined();
       const body = JSON.parse((patchCall![1] as RequestInit).body as string);
@@ -348,8 +351,8 @@ describe('CommentsTab', () => {
     expect(screen.queryByTestId('inline-edit-textarea')).not.toBeInTheDocument();
     // No PATCH issued
     const fetchMock = vi.mocked(fetch);
-    const patchCalls = fetchMock.mock.calls.filter(([_url, init]) =>
-      (init as RequestInit)?.method?.toUpperCase() === 'PATCH',
+    const patchCalls = fetchMock.mock.calls.filter(
+      ([_url, init]) => (init as RequestInit)?.method?.toUpperCase() === 'PATCH',
     );
     expect(patchCalls).toHaveLength(0);
   });
@@ -383,8 +386,8 @@ describe('CommentsTab', () => {
 
     await waitFor(() => {
       const fetchMock = vi.mocked(fetch);
-      const deleteCall = fetchMock.mock.calls.find(([_url, init]) =>
-        (init as RequestInit)?.method?.toUpperCase() === 'DELETE',
+      const deleteCall = fetchMock.mock.calls.find(
+        ([_url, init]) => (init as RequestInit)?.method?.toUpperCase() === 'DELETE',
       );
       expect(deleteCall).toBeDefined();
     });
@@ -500,15 +503,15 @@ describe('CommentsTab', () => {
           const method = init?.method?.toUpperCase() ?? 'GET';
           if (method === 'GET') {
             if (url.includes('?type=agent') || url.includes('&type=agent')) {
-              return new Response(
-                JSON.stringify({ data: [] }),
-                { status: 200, headers: { 'content-type': 'application/json' } },
-              );
+              return new Response(JSON.stringify({ data: [] }), {
+                status: 200,
+                headers: { 'content-type': 'application/json' },
+              });
             }
-            return new Response(
-              JSON.stringify({ data: comments }),
-              { status: 200, headers: { 'content-type': 'application/json' } },
-            );
+            return new Response(JSON.stringify({ data: comments }), {
+              status: 200,
+              headers: { 'content-type': 'application/json' },
+            });
           }
           // PATCH/DELETE: return a 422 to trigger the mutation's error branch.
           if (method === 'PATCH' || method === 'DELETE') {
@@ -541,9 +544,9 @@ describe('CommentsTab', () => {
       await waitFor(() => {
         expect(screen.getByTestId('inline-edit-textarea')).toBeInTheDocument();
       });
-      expect(
-        (screen.getByTestId('inline-edit-textarea') as HTMLTextAreaElement).value,
-      ).toBe('My long correction');
+      expect((screen.getByTestId('inline-edit-textarea') as HTMLTextAreaElement).value).toBe(
+        'My long correction',
+      );
     });
 
     it('confirming delete keeps the dialog open when DELETE fails', async () => {
@@ -580,8 +583,8 @@ describe('CommentsTab', () => {
 
     // No DELETE call
     const fetchMock = vi.mocked(fetch);
-    const deleteCalls = fetchMock.mock.calls.filter(([_url, init]) =>
-      (init as RequestInit)?.method?.toUpperCase() === 'DELETE',
+    const deleteCalls = fetchMock.mock.calls.filter(
+      ([_url, init]) => (init as RequestInit)?.method?.toUpperCase() === 'DELETE',
     );
     expect(deleteCalls).toHaveLength(0);
   });

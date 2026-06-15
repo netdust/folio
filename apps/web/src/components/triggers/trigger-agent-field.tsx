@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
-import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
 import { useWorkspaceAgents } from '../../lib/api/workspace-documents.ts';
+import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
 
 interface Props {
   wslug: string;
@@ -50,9 +50,7 @@ export function TriggerAgentField({ wslug, value, onChange }: Props) {
         ) : null}
 
         <div className="mt-1">
-          <div className="px-2 py-1 text-[10px] uppercase tracking-wide text-fg-3">
-            Agents
-          </div>
+          <div className="px-2 py-1 text-[10px] uppercase tracking-wide text-fg-3">Agents</div>
           {agentList.length === 0 ? (
             <div className="px-2 py-1 text-xs text-fg-3">No agents yet</div>
           ) : (

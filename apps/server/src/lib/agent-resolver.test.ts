@@ -1,10 +1,10 @@
 import { describe, expect, test } from 'bun:test';
 import { nanoid } from 'nanoid';
-import { makeTestApp } from '../test/harness.ts';
 import { documents, workspaces } from '../db/schema.ts';
+import { makeTestApp } from '../test/harness.ts';
+import { intersectAgentProjects, resolveAgentProjects } from './agent-projects.ts';
 import { resolveAgentForRun } from './agent-resolver.ts';
 import { OPERATOR_SLUG } from './operator.ts';
-import { resolveAgentProjects, intersectAgentProjects } from './agent-projects.ts';
 
 /**
  * §8.1 agent-run-authority — the mandatory regression test for the resolver

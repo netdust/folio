@@ -1,7 +1,7 @@
-import { describe, expect, it, vi } from 'vitest';
-import { useState } from 'react';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { useState } from 'react';
+import { describe, expect, it, vi } from 'vitest';
 import { ToolsField } from './tools-field.tsx';
 
 /**
@@ -34,12 +34,7 @@ describe('ToolsField', () => {
   });
 
   it('renders one chip per selected tool', () => {
-    render(
-      <ToolsField
-        value={['list_documents', 'create_document']}
-        onChange={() => {}}
-      />,
-    );
+    render(<ToolsField value={['list_documents', 'create_document']} onChange={() => {}} />);
     expect(screen.getByText('list_documents')).toBeInTheDocument();
     expect(screen.getByText('create_document')).toBeInTheDocument();
   });

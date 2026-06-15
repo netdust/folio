@@ -1,7 +1,7 @@
-import { EditorState } from '@codemirror/state';
-import { EditorView, keymap } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import { markdown } from '@codemirror/lang-markdown';
+import { EditorState } from '@codemirror/state';
+import { EditorView, keymap } from '@codemirror/view';
 import { useEffect, useRef } from 'react';
 import { debounce } from '../../lib/debounce.ts';
 

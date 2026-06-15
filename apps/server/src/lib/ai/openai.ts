@@ -183,9 +183,7 @@ export async function* streamOpenAICompatible({
     // `name: ''` and either no-op'd or threw 'unknown tool: '. Drop with
     // a warn so operators have a grep target.
     if (!tc.name) {
-      console.warn(
-        '[ai/openai] dropped tool_call with empty name (truncated marker delta)',
-      );
+      console.warn('[ai/openai] dropped tool_call with empty name (truncated marker delta)');
       continue;
     }
     let args: Record<string, unknown> = {};
@@ -223,7 +221,9 @@ export async function* streamOpenAICompatible({
   if (sawTerminal) {
     yield { type: 'done', reason: stopReason };
   } else {
-    console.warn(`[ai/${providerName}] stream ended without a finish_reason — no done event (truncated)`);
+    console.warn(
+      `[ai/${providerName}] stream ended without a finish_reason — no done event (truncated)`,
+    );
   }
 }
 

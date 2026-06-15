@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { cn } from '../ui/cn.ts';
 import type { DocumentSummary } from '../../lib/api/documents.ts';
+import { cn } from '../ui/cn.ts';
 
 interface Props {
   /** In-cache documents to pick from. No fetch — driven by the editor's prop. */

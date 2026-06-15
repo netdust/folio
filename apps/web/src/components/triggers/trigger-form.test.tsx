@@ -1,9 +1,9 @@
-import { describe, it, expect, vi } from 'vitest';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
+import { describe, expect, it, vi } from 'vitest';
 import { TriggerForm } from './trigger-form.tsx';
 
 function newQc() {
@@ -81,7 +81,11 @@ describe('TriggerForm', () => {
     const onChange = vi.fn();
     render(
       <TriggerForm
-        value={{ title: 't', body: '', frontmatter: { schedule: '0 * * * *', agent: null, enabled: true } }}
+        value={{
+          title: 't',
+          body: '',
+          frontmatter: { schedule: '0 * * * *', agent: null, enabled: true },
+        }}
         onChange={onChange}
         workspaceSlug="acme"
       />,
@@ -105,7 +109,11 @@ describe('TriggerForm', () => {
     const onChange = vi.fn();
     render(
       <TriggerForm
-        value={{ title: 't', body: '', frontmatter: { schedule: '0 * * * *', agent: 'drafter', enabled: true, payload: null } }}
+        value={{
+          title: 't',
+          body: '',
+          frontmatter: { schedule: '0 * * * *', agent: 'drafter', enabled: true, payload: null },
+        }}
         onChange={onChange}
         workspaceSlug="acme"
       />,
@@ -140,7 +148,11 @@ describe('TriggerForm', () => {
     const onChange = vi.fn();
     render(
       <TriggerForm
-        value={{ title: 't', body: '', frontmatter: { schedule: '0 * * * *', agent: 'drafter', enabled: true } }}
+        value={{
+          title: 't',
+          body: '',
+          frontmatter: { schedule: '0 * * * *', agent: 'drafter', enabled: true },
+        }}
         onChange={onChange}
         workspaceSlug="acme"
       />,

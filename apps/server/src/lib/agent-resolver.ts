@@ -21,7 +21,7 @@
 
 import { and, eq } from 'drizzle-orm';
 import type { DB } from '../db/client.ts';
-import { documents, type Document } from '../db/schema.ts';
+import { type Document, documents } from '../db/schema.ts';
 import { getOperatorDocument, isOperator } from './operator.ts';
 
 /**
@@ -33,10 +33,7 @@ import { getOperatorDocument, isOperator } from './operator.ts';
  * `createRun` (its run path is cockpit-gated); the resolver returns its identity
  * so trigger/mention resolution + anti-impersonation hold.
  */
-export async function resolveAgentForRun(
-  db: DB,
-  slug: string,
-): Promise<Document | undefined> {
+export async function resolveAgentForRun(db: DB, slug: string): Promise<Document | undefined> {
   if (isOperator(slug)) return getOperatorDocument();
   // Agent slugs are now effectively INSTANCE-GLOBAL: the DB only enforces slug
   // uniqueness PER workspace (the partial index on workspace_id+type+slug), so

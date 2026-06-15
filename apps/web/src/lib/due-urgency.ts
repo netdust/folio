@@ -31,10 +31,13 @@ export function dueUrgency(value: unknown, now: Date = new Date()): DueUrgency {
 
 export function urgencyClasses(u: DueUrgency): string {
   switch (u) {
-    case 'overdue': return 'text-danger';
-    case 'soon': return 'text-warning';
+    case 'overdue':
+      return 'text-danger';
+    case 'soon':
+      return 'text-warning';
     case 'later':
     case 'none':
-    default: return '';
+    default:
+      return '';
   }
 }

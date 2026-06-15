@@ -16,12 +16,7 @@ export function jsonOk<T>(c: Context, data: T, status: ContentfulStatusCode = 20
   return c.json({ data }, status);
 }
 
-export function jsonError(
-  c: Context,
-  code: string,
-  message: string,
-  status: ContentfulStatusCode,
-) {
+export function jsonError(c: Context, code: string, message: string, status: ContentfulStatusCode) {
   return c.json({ error: { code, message } }, status);
 }
 

@@ -16,9 +16,7 @@ export function useMembers(wslug: string) {
   return useQuery({
     queryKey: membersKeys.list(wslug),
     queryFn: async () => {
-      const wrapped = await client.get<{ members: Member[] }>(
-        `/api/v1/w/${wslug}/members`,
-      );
+      const wrapped = await client.get<{ members: Member[] }>(`/api/v1/w/${wslug}/members`);
       return wrapped.members;
     },
     staleTime: 60_000,

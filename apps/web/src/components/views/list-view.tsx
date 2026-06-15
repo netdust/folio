@@ -1,25 +1,25 @@
 import { useNavigate, useSearch } from '@tanstack/react-router';
-import { useMemo, useState } from 'react';
 import { Inbox } from 'lucide-react';
+import { useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import {
-  useDocuments,
-  useCreateDocument,
-  useUpdateDocument,
-  parseFilters,
-  clausesToListParams,
-  applyFrontmatterClauses,
   type DocumentPatch,
   type FilterClauseUrl,
+  applyFrontmatterClauses,
+  clausesToListParams,
+  parseFilters,
+  useCreateDocument,
+  useDocuments,
+  useUpdateDocument,
 } from '../../lib/api/documents.ts';
-import { useStatuses } from '../../lib/api/statuses.ts';
 import { useFields } from '../../lib/api/fields.ts';
 import { formatApiError } from '../../lib/api/index.ts';
-import { Icon } from '../ui/icon.tsx';
+import { useStatuses } from '../../lib/api/statuses.ts';
 import { FilterBar } from '../filter/filter-bar.tsx';
+import { Icon } from '../ui/icon.tsx';
 import { EmptyState } from './empty-state.tsx';
-import { ListRow } from './list-row.tsx';
 import { ListHeader, type SortState } from './list-header.tsx';
+import { ListRow } from './list-row.tsx';
 import { ListSkeleton } from './list-skeleton.tsx';
 
 interface Props {
@@ -45,7 +45,7 @@ export function ListView({ wslug, pslug, tslug }: Props) {
     if (sort) {
       return { ...base, sort: sort.key, dir: sort.dir };
     }
-    return base;     // server default = updated_at desc
+    return base; // server default = updated_at desc
   }, [clauses, sort]);
   const { data: page, isLoading, error } = useDocuments(wslug, pslug, tslug, listParams);
   const { data: statuses } = useStatuses(wslug, pslug, tslug);
@@ -95,7 +95,10 @@ export function ListView({ wslug, pslug, tslug }: Props) {
     void navigate({ to: '.', search: nextSearch, replace: false });
   };
 
-  const onUpdate = async (vars: { slug: string; patch: Pick<DocumentPatch, 'title' | 'status'> }) => {
+  const onUpdate = async (vars: {
+    slug: string;
+    patch: Pick<DocumentPatch, 'title' | 'status'>;
+  }) => {
     setPendingSlugs((prev) => new Set(prev).add(vars.slug));
     try {
       await update.mutateAsync(vars);
@@ -135,7 +138,11 @@ export function ListView({ wslug, pslug, tslug }: Props) {
               ? 'Try removing a filter chip above.'
               : 'Create your first work item to get started.'
           }
-          action={clauses.length === 0 ? { label: 'Create your first work item', onClick: onCreate } : undefined}
+          action={
+            clauses.length === 0
+              ? { label: 'Create your first work item', onClick: onCreate }
+              : undefined
+          }
         />
       ) : null}
       <div role="list" className="flex flex-col">

@@ -24,7 +24,7 @@ describe('rankBetween', () => {
     expect(a < b && b < c).toBe(true);
   });
   test('repeated midpoint insertions just above lo stay strictly ordered', () => {
-    let lo = rankBetween(null, null);
+    const lo = rankBetween(null, null);
     let hi = rankBetween(lo, null);
     for (let i = 0; i < 30; i++) {
       const mid = rankBetween(lo, hi);
@@ -34,7 +34,7 @@ describe('rankBetween', () => {
   });
   test('repeated midpoint insertions just below hi stay strictly ordered', () => {
     let lo = rankBetween(null, null);
-    let hi = rankBetween(lo, null);
+    const hi = rankBetween(lo, null);
     for (let i = 0; i < 30; i++) {
       const mid = rankBetween(lo, hi);
       expect(lo < mid && mid < hi).toBe(true);
@@ -81,7 +81,11 @@ describe('rankBetween', () => {
     // simulate building 5 ranks at the end, then inserting between each pair
     const keys: string[] = [];
     let prev: string | null = null;
-    for (let i = 0; i < 5; i++) { const k = rankBetween(prev, null); keys.push(k); prev = k; }
+    for (let i = 0; i < 5; i++) {
+      const k = rankBetween(prev, null);
+      keys.push(k);
+      prev = k;
+    }
     for (let i = 0; i < keys.length - 1; i++) {
       const mid = rankBetween(keys[i]!, keys[i + 1]!);
       expect(keys[i]! < mid && mid < keys[i + 1]!).toBe(true);

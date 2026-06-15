@@ -10,14 +10,14 @@
  * the ciphertext verbatim — valid because FOLIO_MASTER_KEY is unchanged.
  */
 import { Database } from 'bun:sqlite';
+import { existsSync, renameSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/bun-sqlite';
 import { migrate } from 'drizzle-orm/bun-sqlite/migrator';
-import { eq } from 'drizzle-orm';
-import { resolve } from 'node:path';
-import { existsSync, renameSync } from 'node:fs';
 import { nanoid } from 'nanoid';
 import * as schema from '../src/db/schema.ts';
-import { hashPassword, createSession } from '../src/lib/auth.ts';
+import { createSession, hashPassword } from '../src/lib/auth.ts';
 import { seedProjectDefaults } from '../src/lib/seed-project-defaults.ts';
 
 const DB_PATH = resolve(import.meta.dir, '../folio.db');

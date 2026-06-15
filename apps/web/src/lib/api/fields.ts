@@ -27,15 +27,13 @@ export interface Field {
 }
 
 export const fieldsKeys = {
-  list: (wslug: string, pslug: string, tslug: string) =>
-    ['fields', wslug, pslug, tslug] as const,
+  list: (wslug: string, pslug: string, tslug: string) => ['fields', wslug, pslug, tslug] as const,
 };
 
 export function useFields(wslug: string, pslug: string, tslug: string) {
   return useQuery({
     queryKey: fieldsKeys.list(wslug, pslug, tslug),
-    queryFn: () =>
-      client.get<Field[]>(`/api/v1/w/${wslug}/p/${pslug}/t/${tslug}/fields`),
+    queryFn: () => client.get<Field[]>(`/api/v1/w/${wslug}/p/${pslug}/t/${tslug}/fields`),
     staleTime: 5 * 60_000,
     enabled: !!wslug && !!pslug && !!tslug,
   });

@@ -88,10 +88,7 @@ function isLoopbackHost(host: string): boolean {
   );
 }
 
-export function validatePublicUrl(
-  input: string,
-  opts?: UrlValidationOpts,
-): UrlValidationResult {
+export function validatePublicUrl(input: string, opts?: UrlValidationOpts): UrlValidationResult {
   let parsed: URL;
   try {
     parsed = new URL(input);

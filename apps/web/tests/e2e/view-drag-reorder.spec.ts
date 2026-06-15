@@ -1,5 +1,5 @@
-import { test, expect, type Page, type Locator } from '@playwright/test';
-import { signUpFresh, createWorkspace, createProject } from './fixtures.ts';
+import { type Locator, type Page, expect, test } from '@playwright/test';
+import { createProject, createWorkspace, signUpFresh } from './fixtures.ts';
 
 /**
  * Feature-acceptance for view DRAG-reorder (plan 2026-06-08-view-drag-reorder).
@@ -21,7 +21,10 @@ function freshSlugs() {
 }
 
 async function createListView(page: Page, name: string) {
-  await page.getByRole('button', { name: /New view/i }).first().click();
+  await page
+    .getByRole('button', { name: /New view/i })
+    .first()
+    .click();
   const sheet = page.getByRole('dialog');
   await expect(sheet.getByText(/New view/i).first()).toBeVisible();
   await sheet.locator('#view-name').fill(name);
@@ -75,7 +78,13 @@ async function dragRowOnto(page: Page, src: Locator, dst: Locator) {
     await page.evaluate(
       ({ cx, cy }) => {
         document.dispatchEvent(
-          new PointerEvent('pointermove', { bubbles: true, cancelable: true, pointerId: 1, clientX: cx, clientY: cy }),
+          new PointerEvent('pointermove', {
+            bubbles: true,
+            cancelable: true,
+            pointerId: 1,
+            clientX: cx,
+            clientY: cy,
+          }),
         );
       },
       { cx, cy },
@@ -85,7 +94,13 @@ async function dragRowOnto(page: Page, src: Locator, dst: Locator) {
   await page.evaluate(
     ({ dx, dy }) => {
       document.dispatchEvent(
-        new PointerEvent('pointerup', { bubbles: true, cancelable: true, pointerId: 1, clientX: dx, clientY: dy }),
+        new PointerEvent('pointerup', {
+          bubbles: true,
+          cancelable: true,
+          pointerId: 1,
+          clientX: dx,
+          clientY: dy,
+        }),
       );
     },
     { dx, dy },

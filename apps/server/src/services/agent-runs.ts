@@ -19,42 +19,42 @@
 
 import { and, desc, eq, gte, inArray, ne, sql } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
-import { db, type DB } from '../db/client.ts';
+import { type DB, db } from '../db/client.ts';
 import {
-  documents,
-  statuses,
-  tables,
-  views,
-  workspaces,
   type Document,
   type Project,
   type TableEntity,
   type User,
   type Workspace,
+  documents,
+  statuses,
+  tables,
+  views,
+  workspaces,
 } from '../db/schema.ts';
-import { roleToScopes } from '../lib/agent-schema.ts';
-import { callerProjectsFor } from '../lib/agent-projects.ts';
 import { canSeeWorkspace, projectIdsVisibleInWorkspace, userRole } from '../lib/access.ts';
+import { callerProjectsFor } from '../lib/agent-projects.ts';
+import { roleToScopes } from '../lib/agent-schema.ts';
 
 // Drizzle tx and DB share the same query API. Mirrored verbatim from
 // `services/comments.ts` so read helpers can be called from inside a tx.
 type DBOrTx = DB | Parameters<Parameters<DB['transaction']>[0]>[0];
-import { HTTPError } from '../lib/http.ts';
-import { isOperator } from '../lib/operator.ts';
-import { emitEvent, txWithEvents, type EventKind } from '../lib/events.ts';
 import {
+  type AgentRunFrontmatter,
+  type RunDoneReason,
+  type RunErrorReason,
+  type RunStatus,
+  TERMINAL_STATUSES,
   agentRunFrontmatterSchema,
   isValidTransition,
   providerSchema,
   runErrorReasonSchema,
   runStatusSchema,
-  TERMINAL_STATUSES,
-  type AgentRunFrontmatter,
-  type RunDoneReason,
-  type RunErrorReason,
-  type RunStatus,
 } from '../lib/agent-run-schema.ts';
 import { sanitizeProviderError } from '../lib/ai/sanitize-error.ts';
+import { type EventKind, emitEvent, txWithEvents } from '../lib/events.ts';
+import { HTTPError } from '../lib/http.ts';
+import { isOperator } from '../lib/operator.ts';
 
 // ----- createRun -----
 
@@ -105,9 +105,7 @@ function generateRunSlug(agentSlug: string, isoTimestamp: string): string {
   return `${agentSlug}-${isoStripped}-${nanoid(8)}`;
 }
 
-export async function createRun(
-  args: CreateRunArgs,
-): Promise<CreateRunResult> {
+export async function createRun(args: CreateRunArgs): Promise<CreateRunResult> {
   const { workspace, project, runsTable, agent, actor, input } = args;
 
   // The operator is a code singleton with no token row (its run path is gated to
@@ -220,9 +218,7 @@ export async function createRun(
     // convergence helper (same logic the operator conversation-run ceiling uses,
     // so they can't drift, Cluster-6 architecture review).
     const memberProjectIds =
-      callerRole === 'owner'
-        ? []
-        : await projectIdsVisibleInWorkspace(db, actor.id, workspace.id);
+      callerRole === 'owner' ? [] : await projectIdsVisibleInWorkspace(db, actor.id, workspace.id);
     callerProjectIds = callerProjectsFor({ role: callerRole, projectIds: memberProjectIds });
   }
 
@@ -375,19 +371,12 @@ export interface TransitionRunArgs {
  *    HTTPError) on illegal moves. Callers in the approval-race (mitigation
  *    43) catch this and no-op.
  */
-export async function transitionRun(
-  runId: string,
-  args: TransitionRunArgs,
-): Promise<Document> {
+export async function transitionRun(runId: string, args: TransitionRunArgs): Promise<Document> {
   const row = await db.query.documents.findFirst({
     where: and(eq(documents.id, runId), eq(documents.type, 'agent_run')),
   });
   if (!row) {
-    throw new HTTPError(
-      'AGENT_RUN_NOT_FOUND',
-      `agent_run ${runId} not found`,
-      404,
-    );
+    throw new HTTPError('AGENT_RUN_NOT_FOUND', `agent_run ${runId} not found`, 404);
   }
 
   const fm = row.frontmatter as AgentRunFrontmatter;
@@ -408,23 +397,20 @@ export async function transitionRun(
   // Closed-enum validation. Throws ZodError on unknown values (mitigation 39 —
   // no raw string literals at any caller, since the value comes back through
   // this parser before persistence).
-  const errorReason = args.errorReason
-    ? runErrorReasonSchema.parse(args.errorReason)
-    : undefined;
+  const errorReason = args.errorReason ? runErrorReasonSchema.parse(args.errorReason) : undefined;
 
   // Mitigation 28 — sanitizeProviderError is whitelist-based: it ignores the
   // input err's string body and returns a fixed message based on `.status`.
   // Passing a free-form string yields "Network error or unreachable host." —
   // attacker-supplied apiKey/baseUrl fragments cannot survive into the
   // persisted error_detail. Provider name comes from the run row's snapshot.
-  const errorDetail = args.errorDetail !== undefined
-    ? sanitizeProviderError(args.errorDetail, fm.provider)
-    : undefined;
+  const errorDetail =
+    args.errorDetail !== undefined
+      ? sanitizeProviderError(args.errorDetail, fm.provider)
+      : undefined;
 
   const isTerminal = (TERMINAL_STATUSES as readonly RunStatus[]).includes(to);
-  const completedAt = isTerminal
-    ? (args.completedAt ?? new Date().toISOString())
-    : null;
+  const completedAt = isTerminal ? (args.completedAt ?? new Date().toISOString()) : null;
 
   // Mitigation 40 — ONE UPDATE that flips status (column + frontmatter
   // lockstep), sets completed_at, clears worker_started_at on terminal, and
@@ -473,9 +459,7 @@ export async function transitionRun(
   // fragment below leaves the key absent for rows that never had it and
   // preserves the existing value for rows that do, while keeping the
   // completed-path write atomic with the status flip in the single UPDATE.
-  const doneReasonPair = args.doneReason
-    ? sql`, '$.done_reason', ${args.doneReason}`
-    : sql``;
+  const doneReasonPair = args.doneReason ? sql`, '$.done_reason', ${args.doneReason}` : sql``;
 
   const nowIsoForRunning = new Date().toISOString();
   const workerStartedAtArg = isTerminal
@@ -642,11 +626,7 @@ export async function incrementTokens(
     where: and(eq(documents.id, runId), eq(documents.type, 'agent_run')),
   });
   if (!row) {
-    throw new HTTPError(
-      'AGENT_RUN_NOT_FOUND',
-      `agent_run ${runId} not found`,
-      404,
-    );
+    throw new HTTPError('AGENT_RUN_NOT_FOUND', `agent_run ${runId} not found`, 404);
   }
   const fm = row.frontmatter as Record<string, unknown>;
   const tokensIn = typeof fm.tokens_in === 'number' ? fm.tokens_in : 0;
@@ -805,10 +785,7 @@ export interface ListRunsFilter {
   limit?: number;
 }
 
-export async function listRuns(
-  filter: ListRunsFilter,
-  tx: DBOrTx = db,
-): Promise<Document[]> {
+export async function listRuns(filter: ListRunsFilter, tx: DBOrTx = db): Promise<Document[]> {
   // Mitigation 24 short-circuit — never issue `WHERE IN ()`.
   if (
     filter.callerAgentProjectsAllowList !== undefined &&
@@ -854,11 +831,7 @@ export async function listRuns(
     // comments.ts) — surface clearly so the caller fixes the input.
     const ts = new Date(filter.since);
     if (Number.isNaN(ts.getTime())) {
-      throw new HTTPError(
-        'INVALID_QUERY',
-        `invalid since timestamp: ${filter.since}`,
-        422,
-      );
+      throw new HTTPError('INVALID_QUERY', `invalid since timestamp: ${filter.since}`, 422);
     }
     whereClauses.push(gte(documents.createdAt, ts));
   }
@@ -966,9 +939,7 @@ export async function claimNextPlanningRun(tx: DBOrTx): Promise<Document | null>
  *
  * Returns the ids of the recovered runs (empty array when none).
  */
-export async function recoverOrphanRuns(
-  args: { staleThresholdMs: number },
-): Promise<string[]> {
+export async function recoverOrphanRuns(args: { staleThresholdMs: number }): Promise<string[]> {
   // Threshold is an ISO string for lexicographic compare against
   // `worker_started_at` (also stored as ISO inside frontmatter JSON);
   // `nowMs` is the ms-epoch we bind into the INTEGER `updated_at` column.
@@ -1503,10 +1474,7 @@ export async function getProviderHealth(
   });
   const persisted = ws?.providerHealth ?? {};
   return Object.fromEntries(
-    ALL_PROVIDERS.map((p) => [
-      p,
-      persisted[p] ?? { status: 'healthy', consecutive_failures: 0 },
-    ]),
+    ALL_PROVIDERS.map((p) => [p, persisted[p] ?? { status: 'healthy', consecutive_failures: 0 }]),
   ) as Record<ProviderName, ProviderHealthState>;
 }
 
@@ -1555,7 +1523,8 @@ async function maybeEmitProviderHealthEdge(
   // "threshold+ consecutive failures") rather than a live counter
   // beyond threshold. Documenting here to lock the interpretation.
   if (current.status === next.status) return;
-  await tx.update(workspaces)
+  await tx
+    .update(workspaces)
     .set({
       providerHealth: sql`json_set(
         ${workspaces.providerHealth},
@@ -1565,9 +1534,8 @@ async function maybeEmitProviderHealthEdge(
     })
     .where(eq(workspaces.id, args.workspaceId));
 
-  const kind: EventKind = next.status === 'degraded'
-    ? 'workspace.provider.degraded'
-    : 'workspace.provider.recovered';
+  const kind: EventKind =
+    next.status === 'degraded' ? 'workspace.provider.degraded' : 'workspace.provider.recovered';
 
   // F4 fix (post-C.1 review) — workspace.provider.* events are
   // WORKSPACE-WIDE per event-bus.ts BUG-021: they MUST emit with
@@ -1600,12 +1568,30 @@ async function maybeEmitProviderHealthEdge(
  * machine treats both as terminal "did not complete normally").
  */
 const RUNS_TABLE_STATUSES = [
-  { key: 'planning',          name: 'Planning',          category: 'unstarted' as const, color: '#94a3b8', order: 0  },
-  { key: 'awaiting_approval', name: 'Awaiting approval', category: 'unstarted' as const, color: '#f59e0b', order: 10 },
-  { key: 'running',           name: 'Running',           category: 'started'   as const, color: '#3b82f6', order: 20 },
-  { key: 'completed',         name: 'Completed',         category: 'completed' as const, color: '#10b981', order: 30 },
-  { key: 'failed',            name: 'Failed',            category: 'cancelled' as const, color: '#ef4444', order: 40 },
-  { key: 'rejected',          name: 'Rejected',          category: 'cancelled' as const, color: '#6b7280', order: 50 },
+  { key: 'planning', name: 'Planning', category: 'unstarted' as const, color: '#94a3b8', order: 0 },
+  {
+    key: 'awaiting_approval',
+    name: 'Awaiting approval',
+    category: 'unstarted' as const,
+    color: '#f59e0b',
+    order: 10,
+  },
+  { key: 'running', name: 'Running', category: 'started' as const, color: '#3b82f6', order: 20 },
+  {
+    key: 'completed',
+    name: 'Completed',
+    category: 'completed' as const,
+    color: '#10b981',
+    order: 30,
+  },
+  { key: 'failed', name: 'Failed', category: 'cancelled' as const, color: '#ef4444', order: 40 },
+  {
+    key: 'rejected',
+    name: 'Rejected',
+    category: 'cancelled' as const,
+    color: '#6b7280',
+    order: 50,
+  },
 ];
 
 /**
@@ -1625,7 +1611,15 @@ const RUNS_TABLE_VIEWS: Array<{
     name: 'All runs',
     filters: { type: { $eq: 'agent_run' } },
     sort: [{ key: 'created_at', dir: 'desc' }],
-    visibleFields: ['title', 'status', 'agent_slug', 'provider', 'tokens_in', 'tokens_out', 'completed_at'],
+    visibleFields: [
+      'title',
+      'status',
+      'agent_slug',
+      'provider',
+      'tokens_in',
+      'tokens_out',
+      'completed_at',
+    ],
     isDefault: true,
     order: 0,
   },

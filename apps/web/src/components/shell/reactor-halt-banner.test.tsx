@@ -1,5 +1,5 @@
-import { describe, test, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import { beforeEach, describe, expect, test, vi } from 'vitest';
 
 // Stub the E-2b hook — these tests verify banner rendering, not SSE plumbing.
 const useReactorHealthMock = vi.fn();

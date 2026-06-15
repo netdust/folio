@@ -76,10 +76,7 @@ export interface SlashEditor {
  * being flattened into the host paragraph the `/draft` token lived in. The
  * returned value is a `(ctx) => void` macro handed straight to `editor.action`.
  */
-export type ParseInsertFactory = (
-  markdown: string,
-  range: { from: number; to: number },
-) => unknown;
+export type ParseInsertFactory = (markdown: string, range: { from: number; to: number }) => unknown;
 
 /**
  * Snapshot the slash-token's ProseMirror position range at the current

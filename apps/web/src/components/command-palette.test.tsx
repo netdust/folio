@@ -1,15 +1,15 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
+  Outlet,
+  RouterProvider,
   createMemoryHistory,
   createRootRoute,
   createRoute,
   createRouter,
-  Outlet,
-  RouterProvider,
 } from '@tanstack/react-router';
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { CommandPalette } from './command-palette.tsx';
 
 // cmdk uses ResizeObserver and scrollIntoView internally; jsdom doesn't implement them.
@@ -146,9 +146,7 @@ describe('CommandPalette', () => {
     await screen.findByText('work items page');
     // jsdom's navigator.platform is empty → getKeyMod() returns 'ctrlKey'
     await userEvent.keyboard('{Control>}k{/Control}');
-    await waitFor(() =>
-      expect(screen.getByPlaceholderText('Type a command…')).toBeInTheDocument(),
-    );
+    await waitFor(() => expect(screen.getByPlaceholderText('Type a command…')).toBeInTheDocument());
     expect(screen.getByText('Toggle theme')).toBeInTheDocument();
   });
 
@@ -181,8 +179,6 @@ describe('CommandPalette', () => {
     // jsdom's navigator.platform is empty → getKeyMod() returns 'ctrlKey'
     await userEvent.keyboard('{Control>}k{/Control}');
     await userEvent.click(await screen.findByText('Fix login bug'));
-    await waitFor(() =>
-      expect(router.state.location.search).toEqual({ doc: 'fix' }),
-    );
+    await waitFor(() => expect(router.state.location.search).toEqual({ doc: 'fix' }));
   });
 });

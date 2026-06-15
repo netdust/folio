@@ -50,7 +50,9 @@ export function ProjectPicker({ wslug, onCreate }: Props) {
           <div className="max-w-md text-center">
             <h2 className="text-xl font-semibold text-fg">No projects yet</h2>
             <p className="mt-2 text-fg-3">Create your first project to get started.</p>
-            <Button className="mt-6" onClick={onCreate}>Create project</Button>
+            <Button className="mt-6" onClick={onCreate}>
+              Create project
+            </Button>
           </div>
         </div>
       </MainFrame>
@@ -63,7 +65,11 @@ export function ProjectPicker({ wslug, onCreate }: Props) {
     <MainFrame
       title={title}
       subMeta={subMeta}
-      actions={<Button variant="secondary" onClick={onCreate}>New project</Button>}
+      actions={
+        <Button variant="secondary" onClick={onCreate}>
+          New project
+        </Button>
+      }
     >
       <ul className="mx-auto mt-2 grid max-w-3xl grid-cols-1 gap-3 sm:grid-cols-2">
         {projects.map((p) => (

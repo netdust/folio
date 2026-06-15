@@ -9,14 +9,14 @@ import { providerSchema } from '../lib/agent-run-schema.ts';
 import { buildCompletionPrompt } from '../lib/ai-complete.ts';
 import { getProvider } from '../lib/ai/provider.ts';
 import { sanitizeProviderError } from '../lib/ai/sanitize-error.ts';
-import type { ProviderName } from '../services/agent-runs.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
 import { getOperatorDefinition } from '../lib/operator.ts';
 import { resolveKeyMaterial, resolveOperatorRunModel } from '../lib/runner.ts';
 import { validatePublicUrl } from '../lib/url-allow-list.ts';
-import { getOperatorModelSetting } from '../services/instance-settings.ts';
 import { type AuthContext, requireSessionUser } from '../middleware/auth.ts';
 import type { ScopeContext } from '../middleware/scope.ts';
+import type { ProviderName } from '../services/agent-runs.ts';
+import { getOperatorModelSetting } from '../services/instance-settings.ts';
 
 const aiRoute = new Hono<AuthContext & ScopeContext>();
 
@@ -73,11 +73,7 @@ aiRoute.post('/test-key', zValidator('json', TestKeyBody), async (c) => {
   // baseUrl is supplied, which would bypass validatePublicUrl entirely and
   // let a session caller probe the server's loopback Ollama.
   if (provider === 'ollama' && base_url === undefined) {
-    throw new HTTPError(
-      'INVALID_BODY',
-      'base_url is required for the ollama provider',
-      422,
-    );
+    throw new HTTPError('INVALID_BODY', 'base_url is required for the ollama provider', 422);
   }
 
   if (base_url !== undefined) {

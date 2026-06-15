@@ -10,13 +10,13 @@
 import { beforeEach, describe, expect, it } from 'bun:test';
 import { eq } from 'drizzle-orm';
 import { conversations } from '../db/schema.ts';
-import { makeBareTestDb } from '../test/harness.ts';
 import {
   appendMessage,
   createConversation,
   getThread,
   recoverInterruptedConversations,
 } from '../services/conversations.ts';
+import { makeBareTestDb } from '../test/harness.ts';
 
 let db: Awaited<ReturnType<typeof makeBareTestDb>>['db'];
 
@@ -43,7 +43,10 @@ describe('recoverInterruptedConversations (M12)', () => {
       runId: 'run-crash',
     });
     // The slot survives the crash (no completion ever cleared it).
-    await db.update(conversations).set({ activeRunId: 'run-crash' }).where(eq(conversations.id, c.id));
+    await db
+      .update(conversations)
+      .set({ activeRunId: 'run-crash' })
+      .where(eq(conversations.id, c.id));
 
     const recovered = await recoverInterruptedConversations(db);
     expect(recovered).toBe(1);
@@ -64,7 +67,10 @@ describe('recoverInterruptedConversations (M12)', () => {
 
   it('summarizes "before any tools ran" when the crashed turn did nothing', async () => {
     const c = await createConversation(db, { createdBy: 'u1', operatorAgentId: 'op1', title: 'X' });
-    await db.update(conversations).set({ activeRunId: 'run-empty' }).where(eq(conversations.id, c.id));
+    await db
+      .update(conversations)
+      .set({ activeRunId: 'run-empty' })
+      .where(eq(conversations.id, c.id));
 
     await recoverInterruptedConversations(db);
     const thread = await getThread(db, c.id);

@@ -1,9 +1,9 @@
-import { test, expect } from 'bun:test';
+import { expect, test } from 'bun:test';
 import { eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
-import { makeTestApp } from '../test/harness.ts';
-import { apiTokens, events, views } from '../db/schema.ts';
+import { events, apiTokens, views } from '../db/schema.ts';
 import { newApiToken } from '../lib/auth.ts';
+import { makeTestApp } from '../test/harness.ts';
 
 const path = '/api/v1/w/acme/p/web/views';
 
@@ -31,7 +31,8 @@ test('POST creates a list view with filters', async () => {
     method: 'POST',
     headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      name: 'Mine', type: 'list',
+      name: 'Mine',
+      type: 'list',
       filters: { assignee: 'alice@test.local' },
     }),
   });
@@ -69,7 +70,8 @@ test('POST 422 INVALID_FILTER on bad operator', async () => {
     method: 'POST',
     headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      name: 'Bad', type: 'list',
+      name: 'Bad',
+      type: 'list',
       filters: { x: { $bogus: 1 } },
     }),
   });
@@ -84,7 +86,9 @@ test('PATCH /:id renames', async () => {
     headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
     body: JSON.stringify({ name: 'X', type: 'list' }),
   });
-  const { data: { view } } = await create.json();
+  const {
+    data: { view },
+  } = await create.json();
   const res = await app.request(`${path}/${view.id}`, {
     method: 'PATCH',
     headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
@@ -101,9 +105,12 @@ test('DELETE /:id 204', async () => {
     headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
     body: JSON.stringify({ name: 'Z', type: 'list' }),
   });
-  const { data: { view } } = await create.json();
+  const {
+    data: { view },
+  } = await create.json();
   const res = await app.request(`${path}/${view.id}`, {
-    method: 'DELETE', headers: { Cookie: seed.sessionCookie },
+    method: 'DELETE',
+    headers: { Cookie: seed.sessionCookie },
   });
   expect(res.status).toBe(204);
 });
@@ -123,7 +130,9 @@ test('POST /views accepts columnOrder and round-trips it', async () => {
   expect(res.status).toBe(201);
   const created = await res.json();
   const id = (created.data?.view ?? created.data ?? created.view).id;
-  const get = await app.request(`/api/v1/w/acme/p/web/views`, { headers: { Cookie: seed.sessionCookie } });
+  const get = await app.request(`/api/v1/w/acme/p/web/views`, {
+    headers: { Cookie: seed.sessionCookie },
+  });
   const list = await get.json();
   const row = list.data.find((v: { id: string }) => v.id === id);
   expect(row.columnOrder).toEqual(['title', 'amount', 'status']);
@@ -131,11 +140,13 @@ test('POST /views accepts columnOrder and round-trips it', async () => {
 
 test('PATCH /views/:id accepts columnOrder updates', async () => {
   const { app, seed } = await makeTestApp();
-  const created = await (await app.request(`/api/v1/w/acme/p/web/views`, {
-    method: 'POST',
-    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: 'V', type: 'list' }),
-  })).json();
+  const created = await (
+    await app.request(`/api/v1/w/acme/p/web/views`, {
+      method: 'POST',
+      headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'V', type: 'list' }),
+    })
+  ).json();
   const id = (created.data?.view ?? created.data ?? created.view).id;
   const res = await app.request(`/api/v1/w/acme/p/web/views/${id}`, {
     method: 'PATCH',

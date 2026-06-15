@@ -11,53 +11,30 @@
  * still calls `validateStatus` etc. directly.
  */
 
+import { FilterCompileError, filterCompile, slugify } from '@folio/shared';
 import { and, asc, desc, eq, gt, gte, inArray, isNull, lt, ne, or, sql } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
-import {
-  slugify,
-  filterCompile,
-  FilterCompileError,
-} from '@folio/shared';
 import { db } from '../db/client.ts';
-import {
-  apiTokens,
-  documents,
-  fields,
-  statuses,
-} from '../db/schema.ts';
-import type {
-  ApiToken,
-  Document,
-  Project,
-  TableEntity,
-  User,
-  Workspace,
-} from '../db/schema.ts';
-import { HTTPError } from '../lib/http.ts';
-import { emitEvent, txWithEvents } from '../lib/events.ts';
-import { agentFrontmatterSchema, toolsToScopes } from '../lib/agent-schema.ts';
-import { triggerFrontmatterSchema } from '../lib/trigger-schema.ts';
+import { apiTokens, documents, fields, statuses } from '../db/schema.ts';
+import type { ApiToken, Document, Project, TableEntity, User, Workspace } from '../db/schema.ts';
 import { resolveAgentProjects } from '../lib/agent-projects.ts';
+import { agentFrontmatterSchema, toolsToScopes } from '../lib/agent-schema.ts';
 import { newApiToken } from '../lib/auth.ts';
 import { walkParentChain } from '../lib/delegation-guard.ts';
+import { emitEvent, txWithEvents } from '../lib/events.ts';
 import { compileFilterToWhere } from '../lib/filter-to-drizzle.ts';
+import { HTTPError } from '../lib/http.ts';
 import { slugUniqueInDocuments, slugUniqueInWorkspaceDocuments } from '../lib/slug-unique.ts';
+import { triggerFrontmatterSchema } from '../lib/trigger-schema.ts';
 
 // ----- shared types & helpers (kept service-private; routes don't import) -----
 
 export type DocumentType = 'work_item' | 'page' | 'agent' | 'trigger' | 'agent_run';
 
-const RESERVED_FRONTMATTER_KEYS = [
-  'type',
-  'title',
-  'status',
-  'last_touched_at',
-] as const;
+const RESERVED_FRONTMATTER_KEYS = ['type', 'title', 'status', 'last_touched_at'] as const;
 
-export function stripReservedFrontmatter(
-  fm: Record<string, unknown>,
-): Record<string, unknown> {
+export function stripReservedFrontmatter(fm: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(fm)) {
     if ((RESERVED_FRONTMATTER_KEYS as readonly string[]).includes(k)) continue;
@@ -81,11 +58,7 @@ async function validateStatusForTable(
     where: and(eq(statuses.tableId, tableId), eq(statuses.key, status)),
   });
   if (!row) {
-    throw new HTTPError(
-      'INVALID_STATUS',
-      `status "${status}" not in registry`,
-      422,
-    );
+    throw new HTTPError('INVALID_STATUS', `status "${status}" not in registry`, 422);
   }
 }
 
@@ -111,8 +84,7 @@ function sortExpr(key: SortKey): SQL {
   // board_position is NULLABLE text (manual kanban rank; null = unranked). Same
   // sentinel discipline as status: coalesce in ORDER BY + keyset predicate +
   // cursor so NULLs sort LAST in asc and never drop across a page boundary.
-  if (key === 'board_position')
-    return sql`coalesce(${documents.boardPosition}, ${NULL_SENTINEL})`;
+  if (key === 'board_position') return sql`coalesce(${documents.boardPosition}, ${NULL_SENTINEL})`;
   // SQLiteColumn is an SQLWrapper; the comparison/order helpers accept it, but
   // the union with SQL confuses overload resolution. Normalize to SQL.
   return sql`${SORT_COLUMNS[key]}`;
@@ -141,12 +113,15 @@ function fieldSortExpr(key: string, type: string): SQL {
 
 function resolveSort(sort?: string, dir?: string): { key: SortKey; dir: SortDir } {
   const key = (sort && sort in SORT_COLUMNS ? sort : 'updated_at') as SortKey;
-  const d: SortDir = dir === 'asc' ? 'asc' : dir === 'desc' ? 'desc' : key === 'updated_at' ? 'desc' : 'asc';
+  const d: SortDir =
+    dir === 'asc' ? 'asc' : dir === 'desc' ? 'desc' : key === 'updated_at' ? 'desc' : 'asc';
   return { key, dir: d };
 }
 
 function encodeCursor(sortKey: string, sortValue: string, id: string): string {
-  return Buffer.from(`${sortKey}:${Buffer.from(sortValue).toString('base64')}:${id}`).toString('base64');
+  return Buffer.from(`${sortKey}:${Buffer.from(sortValue).toString('base64')}:${id}`).toString(
+    'base64',
+  );
 }
 
 // sortKey may be a built-in (title/status/updated_at) OR a validated field key
@@ -226,12 +201,7 @@ export async function listDocuments(
     );
   }
   // `agent_run` is intentionally absent: it is rejected above, never listed.
-  const KNOWN_TYPES: ReadonlySet<DocumentType> = new Set([
-    'work_item',
-    'page',
-    'agent',
-    'trigger',
-  ]);
+  const KNOWN_TYPES: ReadonlySet<DocumentType> = new Set(['work_item', 'page', 'agent', 'trigger']);
   if (opts.type && KNOWN_TYPES.has(opts.type as DocumentType)) {
     whereClauses.push(eq(documents.type, opts.type as DocumentType));
   } else {
@@ -267,9 +237,7 @@ export async function listDocuments(
   }
 
   if (opts.assignee) {
-    whereClauses.push(
-      sql`json_extract(${documents.frontmatter}, '$.assignee') = ${opts.assignee}`,
-    );
+    whereClauses.push(sql`json_extract(${documents.frontmatter}, '$.assignee') = ${opts.assignee}`);
   }
 
   const titlePattern = likeContainsPattern(opts.titleQuery);
@@ -286,7 +254,7 @@ export async function listDocuments(
 
   if (opts.staleFor) {
     const m = opts.staleFor.match(/^(\d+)d$/);
-    const days = m ? Number(m[1]) : NaN;
+    const days = m ? Number(m[1]) : Number.NaN;
     if (!m || !Number.isFinite(days) || days < 1) {
       throw new HTTPError(
         'INVALID_STALE_FOR',
@@ -295,10 +263,7 @@ export async function listDocuments(
       );
     }
     const cutoff = new Date(Date.now() - days * 86_400_000);
-    const staleClause = or(
-      isNull(documents.lastTouchedAt),
-      lt(documents.lastTouchedAt, cutoff),
-    );
+    const staleClause = or(isNull(documents.lastTouchedAt), lt(documents.lastTouchedAt, cutoff));
     if (staleClause) whereClauses.push(staleClause);
   }
 
@@ -369,10 +334,7 @@ export async function listDocuments(
           ? sql`cast(${cursor.sortValue} as real)`
           : cursor.sortValue;
       whereClauses.push(
-        or(
-          cmpGt(col, cmpVal),
-          and(eq(col, cmpVal), cmpGt(documents.id, cursor.id)),
-        ) as never,
+        or(cmpGt(col, cmpVal), and(eq(col, cmpVal), cmpGt(documents.id, cursor.id))) as never,
       );
     }
   }
@@ -426,9 +388,7 @@ export interface FindDocumentsOptions {
  * Callers (find_documents) resolve the allow-list first; this function never
  * widens it. agent_run + comment are always excluded.
  */
-export async function findDocumentsInProjects(
-  opts: FindDocumentsOptions,
-): Promise<Document[]> {
+export async function findDocumentsInProjects(opts: FindDocumentsOptions): Promise<Document[]> {
   if (opts.projectIds.length === 0) return [];
   const limit = Math.min(200, opts.limit ?? 25);
   const pattern = likeContainsPattern(opts.titleQuery);
@@ -447,10 +407,7 @@ export async function findDocumentsInProjects(
   return rows;
 }
 
-export async function getDocument(
-  projectId: string,
-  slug: string,
-): Promise<Document | null> {
+export async function getDocument(projectId: string, slug: string): Promise<Document | null> {
   const row = await db.query.documents.findFirst({
     where: and(eq(documents.projectId, projectId), eq(documents.slug, slug)),
   });
@@ -510,9 +467,7 @@ export interface CreateDocumentResult {
   agentTokenPlaintext?: string;
 }
 
-export async function createDocument(
-  args: CreateDocumentArgs,
-): Promise<CreateDocumentResult> {
+export async function createDocument(args: CreateDocumentArgs): Promise<CreateDocumentResult> {
   const { workspace: ws, project: p, actor: user, token } = args;
   const eventActor = args.eventActor;
   const input: CreateDocumentInput = {
@@ -535,7 +490,7 @@ export async function createDocument(
   if ((input.type as string) === 'comment') {
     throw new HTTPError(
       'COMMENT_REQUIRES_COMMENT_TOOL',
-      "comment documents must be created via POST /comments (or MCP create_comment), not the generic document endpoint",
+      'comment documents must be created via POST /comments (or MCP create_comment), not the generic document endpoint',
       422,
     );
   }
@@ -584,14 +539,11 @@ export async function createDocument(
         422,
       );
     }
-    const schema =
-      input.type === 'agent' ? agentFrontmatterSchema : triggerFrontmatterSchema;
+    const schema = input.type === 'agent' ? agentFrontmatterSchema : triggerFrontmatterSchema;
     const r = schema.safeParse(input.frontmatter ?? {});
     if (!r.success) {
       const code =
-        input.type === 'agent'
-          ? 'INVALID_AGENT_FRONTMATTER'
-          : 'INVALID_TRIGGER_FRONTMATTER';
+        input.type === 'agent' ? 'INVALID_AGENT_FRONTMATTER' : 'INVALID_TRIGGER_FRONTMATTER';
       throw new HTTPError(code, r.error.message, 422);
     }
     input.frontmatter = r.data as Record<string, unknown>;
@@ -601,11 +553,7 @@ export async function createDocument(
   let tableId: string | null = null;
   if (input.type === 'work_item') {
     if (!args.table) {
-      throw new HTTPError(
-        'TABLE_NOT_FOUND',
-        'work_item requires a table',
-        404,
-      );
+      throw new HTTPError('TABLE_NOT_FOUND', 'work_item requires a table', 404);
     }
     tableId = args.table.id;
     await validateStatusForTable(tableId, input.status);
@@ -656,20 +604,14 @@ export async function createDocument(
     const childAssignee = getAssignee(input.frontmatter);
     if (childAssignee?.startsWith('agent:')) {
       const allAgents = await db.query.documents.findMany({
-        where: and(
-          eq(documents.workspaceId, ws.id),
-          eq(documents.type, 'agent'),
-        ),
+        where: and(eq(documents.workspaceId, ws.id), eq(documents.type, 'agent')),
       });
       const ownerAgent = allAgents.find(
-        (a) =>
-          (a.frontmatter as Record<string, unknown>)['api_token_id'] ===
-          token.id,
+        (a) => (a.frontmatter as Record<string, unknown>)['api_token_id'] === token.id,
       );
       if (ownerAgent) {
         const ownerFm = ownerAgent.frontmatter as Record<string, unknown>;
-        const maxDepth =
-          (ownerFm['max_delegation_depth'] as number | undefined) ?? 2;
+        const maxDepth = (ownerFm['max_delegation_depth'] as number | undefined) ?? 2;
         const lookup = {
           findAgentBySlug: async (slugIn: string) => {
             const r = await db.query.documents.findFirst({
@@ -683,8 +625,7 @@ export async function createDocument(
             const fm = r.frontmatter as Record<string, unknown>;
             return {
               parent: (fm['parent_agent'] as string | null | undefined) ?? null,
-              max_delegation_depth:
-                (fm['max_delegation_depth'] as number | undefined) ?? 2,
+              max_delegation_depth: (fm['max_delegation_depth'] as number | undefined) ?? 2,
             };
           },
         };
@@ -841,9 +782,7 @@ export async function maybeReslugPlaceholder(
   return slugUniqueInDocuments(db, projectId, baseSlug);
 }
 
-export async function updateDocument(
-  args: UpdateDocumentArgs,
-): Promise<Document> {
+export async function updateDocument(args: UpdateDocumentArgs): Promise<Document> {
   const { workspace: ws, project: p, actor: user, existing, patch } = args;
   const eventActor = args.eventActor;
 
@@ -856,7 +795,7 @@ export async function updateDocument(
   if (existing.type === 'comment') {
     throw new HTTPError(
       'COMMENT_REQUIRES_COMMENT_TOOL',
-      "comment documents must be updated via PATCH /comments/:slug (or MCP update_comment), not the generic document endpoint",
+      'comment documents must be updated via PATCH /comments/:slug (or MCP update_comment), not the generic document endpoint',
       422,
     );
   }
@@ -928,9 +867,7 @@ export async function updateDocument(
     const r = schema.safeParse(patch.frontmatter);
     if (!r.success) {
       const code =
-        existing.type === 'agent'
-          ? 'INVALID_AGENT_FRONTMATTER'
-          : 'INVALID_TRIGGER_FRONTMATTER';
+        existing.type === 'agent' ? 'INVALID_AGENT_FRONTMATTER' : 'INVALID_TRIGGER_FRONTMATTER';
       throw new HTTPError(code, r.error.message, 422);
     }
   }
@@ -995,11 +932,7 @@ export async function updateDocument(
       provider !== 'claude-code' &&
       (model === undefined || model === null || model === '')
     ) {
-      throw new HTTPError(
-        'INVALID_PATCH',
-        'model is required for API providers',
-        422,
-      );
+      throw new HTTPError('INVALID_PATCH', 'model is required for API providers', 422);
     }
   }
 
@@ -1037,20 +970,13 @@ export async function updateDocument(
       kind: 'document.updated',
       actor: eventActor,
       payload: {
-        changes: [
-          ...Object.keys(patch),
-          ...(nextSlug ? ['slug'] : []),
-        ],
+        changes: [...Object.keys(patch), ...(nextSlug ? ['slug'] : [])],
       },
     });
     if (existing.type === 'work_item' && p) {
       const prevAssignee = getAssignee(existing.frontmatter);
       const nextAssignee = getAssignee(updated.frontmatter);
-      if (
-        nextAssignee &&
-        nextAssignee.startsWith('agent:') &&
-        prevAssignee !== nextAssignee
-      ) {
+      if (nextAssignee && nextAssignee.startsWith('agent:') && prevAssignee !== nextAssignee) {
         const agentSlug = nextAssignee.slice('agent:'.length);
         const agentRow = await tx.query.documents.findFirst({
           where: and(
@@ -1112,7 +1038,7 @@ export async function deleteDocument(args: DeleteDocumentArgs): Promise<void> {
   if (existing.type === 'comment') {
     throw new HTTPError(
       'COMMENT_REQUIRES_COMMENT_TOOL',
-      "comment documents must be deleted via DELETE /comments/:slug (or MCP delete_comment), not the generic document endpoint",
+      'comment documents must be deleted via DELETE /comments/:slug (or MCP delete_comment), not the generic document endpoint',
       422,
     );
   }
@@ -1136,11 +1062,7 @@ export async function deleteDocument(args: DeleteDocumentArgs): Promise<void> {
     existing.type === 'trigger' &&
     (existing.frontmatter as Record<string, unknown>).builtin === true
   ) {
-    throw new HTTPError(
-      'BUILTIN_TRIGGER_LOCKED',
-      'builtin triggers cannot be deleted',
-      422,
-    );
+    throw new HTTPError('BUILTIN_TRIGGER_LOCKED', 'builtin triggers cannot be deleted', 422);
   }
 
   await txWithEvents(db, async (tx) => {
@@ -1222,9 +1144,7 @@ export async function deleteDocument(args: DeleteDocumentArgs): Promise<void> {
     // is now redundant but harmless if any rows pre-date the cascade FK.
     await tx.delete(documents).where(eq(documents.id, existing.id));
     if (existing.type === 'agent') {
-      const apiTokenId = (existing.frontmatter as Record<string, unknown>)[
-        'api_token_id'
-      ];
+      const apiTokenId = (existing.frontmatter as Record<string, unknown>)['api_token_id'];
       if (typeof apiTokenId === 'string') {
         await tx.delete(apiTokens).where(eq(apiTokens.id, apiTokenId));
       }
@@ -1278,10 +1198,7 @@ export async function listWorkspaceDocuments(opts: {
   projectFilter?: string | null;
 }): Promise<Document[]> {
   const rows = await db.query.documents.findMany({
-    where: and(
-      eq(documents.workspaceId, opts.workspaceId),
-      eq(documents.type, opts.type),
-    ),
+    where: and(eq(documents.workspaceId, opts.workspaceId), eq(documents.type, opts.type)),
   });
 
   // Single-team model: there is no `__system` library workspace to union in —
@@ -1300,4 +1217,3 @@ export async function listWorkspaceDocuments(opts: {
     return projs.includes('*') || projs.includes(target);
   });
 }
-

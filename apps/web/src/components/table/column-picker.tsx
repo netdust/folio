@@ -1,18 +1,22 @@
+import { Plus, Settings2 } from 'lucide-react';
 import { useState } from 'react';
-import { Settings2, Plus } from 'lucide-react';
-import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
+import type { FieldType } from '../../lib/api/fields.ts';
 import { IconButton } from '../ui/icon-button.tsx';
 import { Icon } from '../ui/icon.tsx';
-import type { Column } from './columns.ts';
+import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
 import type { ColumnSuggestion } from './column-suggestions.ts';
-import type { FieldType } from '../../lib/api/fields.ts';
+import type { Column } from './columns.ts';
 
 interface Props {
   columns: Column[];
   visibleKeys: string[];
   onChange: (nextVisible: string[]) => void;
   suggestions?: ColumnSuggestion[];
-  onPinSuggestion?: (payload: { key: string; type: FieldType; label: string }) => Promise<void> | void;
+  onPinSuggestion?: (payload: {
+    key: string;
+    type: FieldType;
+    label: string;
+  }) => Promise<void> | void;
 }
 
 // Tiny local duplicate of `titleize` to avoid a shared util for one other

@@ -1,18 +1,18 @@
+import { operatorModelSettingSchema } from '@folio/shared';
 import { zValidator } from '@hono/zod-validator';
 import { and, eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
-import { operatorModelSettingSchema } from '@folio/shared';
 import { db } from '../db/client.ts';
 import { aiKeys } from '../db/schema.ts';
 import { env } from '../env.ts';
 import { encryptSecret } from '../lib/crypto.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
 import { requireInstanceAdmin } from '../lib/system-workspace.ts';
-import { getOperatorModelSetting, setOperatorModelSetting } from '../services/instance-settings.ts';
 import { validatePublicUrl } from '../lib/url-allow-list.ts';
 import { type AuthContext, getUser, requireSessionUser } from '../middleware/auth.ts';
+import { getOperatorModelSetting, setOperatorModelSetting } from '../services/instance-settings.ts';
 
 /**
  * Instance AI-key administration — `/api/v1/instance/ai-keys`.
@@ -52,23 +52,27 @@ instanceAiKeysRoute.get('/', async (c) => {
 // (provider, ai_key_label) MUST name an existing key (review #4): saving a
 // selection that resolves to no key would only surface at chat time, far from
 // the action.
-instanceAiKeysRoute.put('/operator-model', zValidator('json', operatorModelSettingSchema), async (c) => {
-  await requireInstanceAdmin(db, getUser(c).id);
-  const v = c.req.valid('json');
-  // Referential check: the selection must point at a configured key (#4).
-  const keyRow = await db.query.aiKeys.findFirst({
-    where: and(eq(aiKeys.provider, v.provider), eq(aiKeys.label, v.aiKeyLabel)),
-  });
-  if (!keyRow) {
-    throw new HTTPError(
-      'INVALID_BODY',
-      `no AI key configured for ${v.provider}/${v.aiKeyLabel} — add it in Settings → AI first`,
-      422,
-    );
-  }
-  await setOperatorModelSetting(db, v);
-  return jsonOk(c, { ok: true, operator_model: v });
-});
+instanceAiKeysRoute.put(
+  '/operator-model',
+  zValidator('json', operatorModelSettingSchema),
+  async (c) => {
+    await requireInstanceAdmin(db, getUser(c).id);
+    const v = c.req.valid('json');
+    // Referential check: the selection must point at a configured key (#4).
+    const keyRow = await db.query.aiKeys.findFirst({
+      where: and(eq(aiKeys.provider, v.provider), eq(aiKeys.label, v.aiKeyLabel)),
+    });
+    if (!keyRow) {
+      throw new HTTPError(
+        'INVALID_BODY',
+        `no AI key configured for ${v.provider}/${v.aiKeyLabel} — add it in Settings → AI first`,
+        422,
+      );
+    }
+    await setOperatorModelSetting(db, v);
+    return jsonOk(c, { ok: true, operator_model: v });
+  },
+);
 
 instanceAiKeysRoute.post(
   '/',
@@ -92,10 +96,13 @@ instanceAiKeysRoute.post(
       })
       // apiKey is REQUIRED + NON-BLANK for every PAID provider (M5, #9) — only
       // ollama is keyless. Trim so a whitespace-only key can't masquerade as set.
-      .refine((b) => b.provider === 'ollama' || (b.apiKey !== undefined && b.apiKey.trim().length > 0), {
-        message: 'apiKey is required for this provider',
-        path: ['apiKey'],
-      }),
+      .refine(
+        (b) => b.provider === 'ollama' || (b.apiKey !== undefined && b.apiKey.trim().length > 0),
+        {
+          message: 'apiKey is required for this provider',
+          path: ['apiKey'],
+        },
+      ),
   ),
   async (c) => {
     await requireInstanceAdmin(db, getUser(c).id);

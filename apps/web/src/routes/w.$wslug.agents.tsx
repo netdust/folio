@@ -1,6 +1,9 @@
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import { z } from 'zod';
-import { WorkspaceAutomationPage, type AutomationTab } from '../components/views/workspace-automation-page.tsx';
+import {
+  type AutomationTab,
+  WorkspaceAutomationPage,
+} from '../components/views/workspace-automation-page.tsx';
 
 // `tab` is SHARED across this layout: it selects the automation PAGE tab
 // (agents|triggers|api|activity) AND, when a config slideover is open via ?wdoc=,

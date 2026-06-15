@@ -1,39 +1,50 @@
-import { createFileRoute, Outlet, useNavigate, useParams, useRouterState } from '@tanstack/react-router';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQueries, useQueryClient } from '@tanstack/react-query';
+import {
+  Outlet,
+  createFileRoute,
+  useNavigate,
+  useParams,
+  useRouterState,
+} from '@tanstack/react-router';
 import { Search } from 'lucide-react';
-import { z } from 'zod';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import { useIsInstanceAdmin, useLogout, useMe } from '../lib/api/auth.ts';
-import { useProjects, useUpdateProject, useDeleteProject, projectsKeys } from '../lib/api/projects.ts';
-import { documentsKeys } from '../lib/api/documents.ts';
-import { type Table, tablesKeys } from '../lib/api/tables.ts';
-import { type View, viewsKeys } from '../lib/api/views.ts';
-import { client } from '../lib/api/client.ts';
-import { useWorkspace, useWorkspaces } from '../lib/api/workspaces.ts';
-import { formatApiError } from '../lib/api/index.ts';
-import { Shell } from '../components/shell/shell.tsx';
-import { Rail, type NavItem } from '../components/shell/rail.tsx';
-import { Dialog, DialogContent, DialogTitle, DialogDescription } from '../components/ui/dialog.tsx';
-import { Button } from '../components/ui/button.tsx';
-import { WorkspaceSwitcher } from '../components/shell/workspace-switcher.tsx';
-import { UserMenu } from '../components/shell/user-menu.tsx';
-import { WorkspaceCreate } from '../components/onboarding/workspace-create.tsx';
+import { z } from 'zod';
+import { AgentCockpitPanel } from '../components/agent-panel/agent-cockpit-panel.tsx';
 import { ProjectCreate } from '../components/onboarding/project-create.tsx';
 import { TableCreate } from '../components/onboarding/table-create.tsx';
-import { NewViewSheet } from '../components/views/new-view-sheet.tsx';
-import { openCommandPalette } from '../lib/command-palette-bus.ts';
+import { WorkspaceCreate } from '../components/onboarding/workspace-create.tsx';
 import { ProviderHealthBanner } from '../components/shell/provider-health-banner.tsx';
+import { type NavItem, Rail } from '../components/shell/rail.tsx';
 import { ReactorHaltBanner } from '../components/shell/reactor-halt-banner.tsx';
-import { modKeyHint } from '../lib/platform.ts';
-import { buildRailTree, type RailTreeHandlers } from '../lib/rail-tree.ts';
-import { DEFAULT_TABLE_SLUG } from '../lib/default-table.ts';
-import { activeTableFromPath, resolveTableNav, resolveViewNav } from '../lib/rail-nav.ts';
-import { reorderViewIds, spacedOrders } from '../lib/view-reorder.ts';
-import { setLastWorkspaceSlug } from '../lib/last-workspace.ts';
-import { agentPanelBus } from '../lib/agent-panel-bus.ts';
-import { AgentCockpitPanel } from '../components/agent-panel/agent-cockpit-panel.tsx';
+import { Shell } from '../components/shell/shell.tsx';
+import { UserMenu } from '../components/shell/user-menu.tsx';
+import { WorkspaceSwitcher } from '../components/shell/workspace-switcher.tsx';
 import { WorkspaceDocumentSlideover } from '../components/slideover/workspace-document-slideover.tsx';
+import { Button } from '../components/ui/button.tsx';
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from '../components/ui/dialog.tsx';
+import { NewViewSheet } from '../components/views/new-view-sheet.tsx';
+import { agentPanelBus } from '../lib/agent-panel-bus.ts';
+import { useIsInstanceAdmin, useLogout, useMe } from '../lib/api/auth.ts';
+import { client } from '../lib/api/client.ts';
+import { documentsKeys } from '../lib/api/documents.ts';
+import { formatApiError } from '../lib/api/index.ts';
+import {
+  projectsKeys,
+  useDeleteProject,
+  useProjects,
+  useUpdateProject,
+} from '../lib/api/projects.ts';
+import { type Table, tablesKeys } from '../lib/api/tables.ts';
+import { type View, viewsKeys } from '../lib/api/views.ts';
+import { useWorkspace, useWorkspaces } from '../lib/api/workspaces.ts';
+import { openCommandPalette } from '../lib/command-palette-bus.ts';
+import { DEFAULT_TABLE_SLUG } from '../lib/default-table.ts';
+import { setLastWorkspaceSlug } from '../lib/last-workspace.ts';
+import { modKeyHint } from '../lib/platform.ts';
+import { activeTableFromPath, resolveTableNav, resolveViewNav } from '../lib/rail-nav.ts';
+import { type RailTreeHandlers, buildRailTree } from '../lib/rail-tree.ts';
+import { reorderViewIds, spacedOrders } from '../lib/view-reorder.ts';
 
 export const Route = createFileRoute('/w/$wslug')({
   // The agent cockpit panel + config slideover live at the layout, so `?wdoc=`
@@ -182,8 +193,7 @@ function WorkspaceLayout() {
   const viewQueries = useQueries({
     queries: tablePairs.map((pair) => ({
       queryKey: viewsKeys.list(wslug, pair.pslug, pair.tslug),
-      queryFn: () =>
-        client.get<View[]>(`/api/v1/w/${wslug}/p/${pair.pslug}/t/${pair.tslug}/views`),
+      queryFn: () => client.get<View[]>(`/api/v1/w/${wslug}/p/${pair.pslug}/t/${pair.tslug}/views`),
       staleTime: 5 * 60_000,
     })),
   });
@@ -265,23 +275,33 @@ function WorkspaceLayout() {
       onRenameProject: async (pslug, next) => {
         try {
           await updateProject.mutateAsync({ pslug, patch: { name: next } });
-        } catch (err) { toast.error(formatApiError(err)); }
+        } catch (err) {
+          toast.error(formatApiError(err));
+        }
       },
       onDeleteProject: (pslug, name) => setConfirmDelete({ kind: 'project', pslug, name }),
       onRenameTable: async (pslug, tslug, next) => {
         try {
           await client.patch(`/api/v1/w/${wslug}/p/${pslug}/tables/${tslug}`, { name: next });
           await qc.invalidateQueries({ queryKey: tablesKeys.list(wslug, pslug) });
-        } catch (err) { toast.error(formatApiError(err)); }
+        } catch (err) {
+          toast.error(formatApiError(err));
+        }
       },
-      onDeleteTable: (pslug, tslug, name) => setConfirmDelete({ kind: 'table', pslug, tslug, name }),
+      onDeleteTable: (pslug, tslug, name) =>
+        setConfirmDelete({ kind: 'table', pslug, tslug, name }),
       onRenameView: async (pslug, tslug, viewId, next) => {
         try {
-          await client.patch(`/api/v1/w/${wslug}/p/${pslug}/t/${tslug}/views/${viewId}`, { name: next });
+          await client.patch(`/api/v1/w/${wslug}/p/${pslug}/t/${tslug}/views/${viewId}`, {
+            name: next,
+          });
           await qc.invalidateQueries({ queryKey: viewsKeys.list(wslug, pslug, tslug) });
-        } catch (err) { toast.error(formatApiError(err)); }
+        } catch (err) {
+          toast.error(formatApiError(err));
+        }
       },
-      onDeleteView: (pslug, tslug, viewId, name) => setConfirmDelete({ kind: 'view', pslug, tslug, viewId, name }),
+      onDeleteView: (pslug, tslug, viewId, name) =>
+        setConfirmDelete({ kind: 'view', pslug, tslug, viewId, name }),
       onMoveView: async (pslug, tslug, viewId, neighborOrder, direction) => {
         try {
           // Single direction-aware reseat: move the view to just past its neighbor
@@ -290,7 +310,9 @@ function WorkspaceLayout() {
           // on ties. The rail sorts by `order`, so ±1 always lands the view on the
           // right side of the neighbor.
           const target = direction === 'down' ? neighborOrder + 1 : neighborOrder - 1;
-          await client.patch(`/api/v1/w/${wslug}/p/${pslug}/t/${tslug}/views/${viewId}`, { order: target });
+          await client.patch(`/api/v1/w/${wslug}/p/${pslug}/t/${tslug}/views/${viewId}`, {
+            order: target,
+          });
           await qc.invalidateQueries({ queryKey: viewsKeys.list(wslug, pslug, tslug) });
         } catch (err) {
           toast.error(formatApiError(err));
@@ -306,7 +328,9 @@ function WorkspaceLayout() {
           // which DOES have the live ordering.
           await Promise.all(
             spacedOrders(orderedViewIds).map((n) =>
-              client.patch(`/api/v1/w/${wslug}/p/${pslug}/t/${tslug}/views/${n.id}`, { order: n.order }),
+              client.patch(`/api/v1/w/${wslug}/p/${pslug}/t/${tslug}/views/${n.id}`, {
+                order: n.order,
+              }),
             ),
           );
           await qc.invalidateQueries({ queryKey: viewsKeys.list(wslug, pslug, tslug) });
@@ -333,7 +357,17 @@ function WorkspaceLayout() {
         },
         handlers,
       }),
-    [projectList, tablesByProject, viewsByTable, wslug, activePslug, activeTslug, activeViewId, currentPath, handlers],
+    [
+      projectList,
+      tablesByProject,
+      viewsByTable,
+      wslug,
+      activePslug,
+      activeTslug,
+      activeViewId,
+      currentPath,
+      handlers,
+    ],
   );
 
   // Reverse lookup: a rail sortable group is a TABLE ID (see rail-tree.ts
@@ -342,7 +376,8 @@ function WorkspaceLayout() {
   const tableIndex = useMemo(() => {
     const idx = new Map<string, { pslug: string; tslug: string }>();
     for (const p of projectList) {
-      for (const t of tablesByProject[p.slug] ?? []) idx.set(t.id, { pslug: p.slug, tslug: t.slug });
+      for (const t of tablesByProject[p.slug] ?? [])
+        idx.set(t.id, { pslug: p.slug, tslug: t.slug });
     }
     return idx;
   }, [projectList, tablesByProject]);
@@ -359,7 +394,9 @@ function WorkspaceLayout() {
       // first on ties) so reorderViewIds computes against the same baseline the user
       // dragged within — the raw API order can differ.
       const currentIds = [...(viewsByTable[group] ?? [])]
-        .sort((a, b) => (a.order !== b.order ? a.order - b.order : Number(b.isDefault) - Number(a.isDefault)))
+        .sort((a, b) =>
+          a.order !== b.order ? a.order - b.order : Number(b.isDefault) - Number(a.isDefault),
+        )
         .map((v) => v.id);
       const newIds = reorderViewIds(currentIds, toViewId(activeId), toViewId(overId));
       if (newIds === currentIds) return; // reorderViewIds returns same ref on no-op
@@ -416,19 +453,27 @@ function WorkspaceLayout() {
           void navigate({ to: '/w/$wslug', params: { wslug } });
         }
       } else if (confirmDelete.kind === 'table') {
-        await client.delete(`/api/v1/w/${wslug}/p/${confirmDelete.pslug}/tables/${confirmDelete.tslug}`);
+        await client.delete(
+          `/api/v1/w/${wslug}/p/${confirmDelete.pslug}/tables/${confirmDelete.tslug}`,
+        );
         await qc.invalidateQueries({ queryKey: tablesKeys.list(wslug, confirmDelete.pslug) });
         // Views and documents cascade-delete in the DB; the FE caches won't
         // notice without explicit invalidation, leaving ghost rows in the rail
         // and stale doc list responses.
-        await qc.invalidateQueries({ queryKey: viewsKeys.list(wslug, confirmDelete.pslug, confirmDelete.tslug) });
+        await qc.invalidateQueries({
+          queryKey: viewsKeys.list(wslug, confirmDelete.pslug, confirmDelete.tslug),
+        });
         await qc.invalidateQueries({
           queryKey: documentsKeys.listPrefix(wslug, confirmDelete.pslug, confirmDelete.tslug),
         });
         toast.success(`Deleted table "${confirmDelete.name}"`);
       } else if (confirmDelete.kind === 'view') {
-        await client.delete(`/api/v1/w/${wslug}/p/${confirmDelete.pslug}/t/${confirmDelete.tslug}/views/${confirmDelete.viewId}`);
-        await qc.invalidateQueries({ queryKey: viewsKeys.list(wslug, confirmDelete.pslug, confirmDelete.tslug) });
+        await client.delete(
+          `/api/v1/w/${wslug}/p/${confirmDelete.pslug}/t/${confirmDelete.tslug}/views/${confirmDelete.viewId}`,
+        );
+        await qc.invalidateQueries({
+          queryKey: viewsKeys.list(wslug, confirmDelete.pslug, confirmDelete.tslug),
+        });
         toast.success(`Deleted view "${confirmDelete.name}"`);
         // If the user was viewing the now-deleted view, drop the dead
         // ?view=<id> param so the table falls back cleanly to its default.
@@ -460,9 +505,7 @@ function WorkspaceLayout() {
                   onSelectWorkspace={onSelectWorkspace}
                   onCreateWorkspace={onCreateWorkspace}
                   onCreateProject={() => setCreatingProject(true)}
-                  onOpenAgents={() =>
-                    void navigate({ to: '/w/$wslug/agents', params: { wslug } })
-                  }
+                  onOpenAgents={() => void navigate({ to: '/w/$wslug/agents', params: { wslug } })}
                   onWorkWithAgent={() => agentPanelBus.toggle()}
                 />
               ),
@@ -514,7 +557,9 @@ function WorkspaceLayout() {
           wslug={wslug}
           pslug={creatingTable.pslug}
           open={creatingTable !== null}
-          onOpenChange={(open) => { if (!open) setCreatingTable(null); }}
+          onOpenChange={(open) => {
+            if (!open) setCreatingTable(null);
+          }}
         />
       )}
       {newViewSheet && (
@@ -530,17 +575,24 @@ function WorkspaceLayout() {
           currentColumns={newViewCurrentColumns}
         />
       )}
-      <Dialog open={!!confirmDelete} onOpenChange={(open) => { if (!open) setConfirmDelete(null); }}>
+      <Dialog
+        open={!!confirmDelete}
+        onOpenChange={(open) => {
+          if (!open) setConfirmDelete(null);
+        }}
+      >
         <DialogContent>
           {confirmDelete && (
             <>
-              <DialogTitle>Delete {confirmDelete.kind} "{confirmDelete.name}"?</DialogTitle>
+              <DialogTitle>
+                Delete {confirmDelete.kind} "{confirmDelete.name}"?
+              </DialogTitle>
               <DialogDescription>
                 {confirmDelete.kind === 'project'
                   ? 'All tables, views, and documents in this project will be permanently removed.'
                   : confirmDelete.kind === 'table'
-                  ? 'All views and documents in this table will be permanently removed.'
-                  : 'This view will be removed. Documents are not affected.'}
+                    ? 'All views and documents in this table will be permanently removed.'
+                    : 'This view will be removed. Documents are not affected.'}
               </DialogDescription>
               <div className="mt-6 flex justify-end gap-2">
                 <Button type="button" variant="secondary" onClick={() => setConfirmDelete(null)}>

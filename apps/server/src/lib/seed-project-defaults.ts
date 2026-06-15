@@ -1,6 +1,6 @@
 import { nanoid } from 'nanoid';
-import { statuses, tables, views } from '../db/schema.ts';
 import type { DB } from '../db/client.ts';
+import { statuses, tables, views } from '../db/schema.ts';
 
 /**
  * The slug of the table every project auto-seeds and that the no-`/t/<tslug>`
@@ -28,10 +28,16 @@ export async function seedProjectDefaults(
   });
 
   const statusRows = [
-    { key: 'backlog',     name: 'Backlog',     category: 'backlog'   as const, color: '#94a3b8', order: 0  },
-    { key: 'todo',        name: 'Todo',        category: 'unstarted' as const, color: '#3b82f6', order: 10 },
-    { key: 'in_progress', name: 'In Progress', category: 'started'   as const, color: '#f59e0b', order: 20 },
-    { key: 'done',        name: 'Done',        category: 'completed' as const, color: '#10b981', order: 30 },
+    { key: 'backlog', name: 'Backlog', category: 'backlog' as const, color: '#94a3b8', order: 0 },
+    { key: 'todo', name: 'Todo', category: 'unstarted' as const, color: '#3b82f6', order: 10 },
+    {
+      key: 'in_progress',
+      name: 'In Progress',
+      category: 'started' as const,
+      color: '#f59e0b',
+      order: 20,
+    },
+    { key: 'done', name: 'Done', category: 'completed' as const, color: '#10b981', order: 30 },
   ];
   for (const s of statusRows) {
     await tx.insert(statuses).values({ id: nanoid(), projectId, tableId, ...s });

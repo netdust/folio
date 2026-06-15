@@ -5,9 +5,7 @@ import { BacklinksPanel } from './backlinks-panel.tsx';
 test('renders linking docs; empty state when none', () => {
   const { rerender } = render(
     <BacklinksPanel
-      backlinks={[
-        { id: '1', slug: 'bug-a', title: 'Bug A', type: 'work_item', tableId: 't1' },
-      ]}
+      backlinks={[{ id: '1', slug: 'bug-a', title: 'Bug A', type: 'work_item', tableId: 't1' }]}
       onOpen={() => {}}
     />,
   );

@@ -38,7 +38,7 @@
  * The intended assertions (kept here as a runnable skeleton for whoever adds
  * the hook) live below behind the skip.
  */
-import { test, expect, signUpFresh, createWorkspace, createProject } from './fixtures.ts';
+import { createProject, createWorkspace, expect, signUpFresh, test } from './fixtures.ts';
 
 test.skip(true, 'needs a server-side provider stub hook — see F-3 note at the top of this file');
 

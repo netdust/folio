@@ -11,7 +11,7 @@ vi.mock('./api/event-stream.ts', () => ({
 
 import { useLiveDocument } from './use-live-document.ts';
 
-describe('useLiveDocument (notify-don\'t-stomp)', () => {
+describe("useLiveDocument (notify-don't-stomp)", () => {
   it('subscribes to document.updated + document.deleted', () => {
     calls.length = 0;
     renderHook(() =>

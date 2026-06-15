@@ -1,8 +1,8 @@
-import { test, expect } from 'bun:test';
-import { nanoid } from 'nanoid';
-import { makeTestApp } from '../test/harness.ts';
-import { projects, events } from '../db/schema.ts';
+import { expect, test } from 'bun:test';
 import { eq } from 'drizzle-orm';
+import { nanoid } from 'nanoid';
+import { events, projects } from '../db/schema.ts';
+import { makeTestApp } from '../test/harness.ts';
 
 const WS_PATH = '/api/v1/w/acme/documents';
 
@@ -126,14 +126,18 @@ test('POST agent with wildcard mixed in explicit list is 422', async () => {
 test('GET ?type=agent returns workspace agents', async () => {
   const { app, seed } = await makeTestApp();
   await postWorkspaceDoc(app, seed.sessionCookie, {
-    type: 'agent', title: 'A',
+    type: 'agent',
+    title: 'A',
     frontmatter: { system_prompt: 'x', model: 'm', provider: 'anthropic', tools: [] },
   });
   await postWorkspaceDoc(app, seed.sessionCookie, {
-    type: 'agent', title: 'B',
+    type: 'agent',
+    title: 'B',
     frontmatter: { system_prompt: 'x', model: 'm', provider: 'anthropic', tools: [] },
   });
-  const res = await app.request(`${WS_PATH}?type=agent`, { headers: { Cookie: seed.sessionCookie } });
+  const res = await app.request(`${WS_PATH}?type=agent`, {
+    headers: { Cookie: seed.sessionCookie },
+  });
   const body = await res.json();
   expect(body.data).toHaveLength(2);
 });
@@ -204,16 +208,24 @@ test('GET ?type=agent&project=:pid filters by allow-list membership', async () =
 
   // Two agents: one project-A-only, one wildcard.
   await postWorkspaceDoc(app, seed.sessionCookie, {
-    type: 'agent', title: 'A-only',
+    type: 'agent',
+    title: 'A-only',
     frontmatter: {
-      system_prompt: 'x', model: 'm', provider: 'anthropic', tools: [],
+      system_prompt: 'x',
+      model: 'm',
+      provider: 'anthropic',
+      tools: [],
       projects: [seed.project.id],
     },
   });
   await postWorkspaceDoc(app, seed.sessionCookie, {
-    type: 'agent', title: 'Wildcard',
+    type: 'agent',
+    title: 'Wildcard',
     frontmatter: {
-      system_prompt: 'x', model: 'm', provider: 'anthropic', tools: [],
+      system_prompt: 'x',
+      model: 'm',
+      provider: 'anthropic',
+      tools: [],
       projects: ['*'],
     },
   });
@@ -238,9 +250,13 @@ test('PATCH updates agent frontmatter.projects', async () => {
   });
 
   const createRes = await postWorkspaceDoc(app, seed.sessionCookie, {
-    type: 'agent', title: 'A',
+    type: 'agent',
+    title: 'A',
     frontmatter: {
-      system_prompt: 'x', model: 'm', provider: 'anthropic', tools: [],
+      system_prompt: 'x',
+      model: 'm',
+      provider: 'anthropic',
+      tools: [],
       projects: [seed.project.id],
     },
   });
@@ -263,7 +279,8 @@ test('PATCH updates agent frontmatter.projects', async () => {
 test('DELETE removes the agent + cascades the token', async () => {
   const { app, db, seed } = await makeTestApp();
   const create = await postWorkspaceDoc(app, seed.sessionCookie, {
-    type: 'agent', title: 'Goner',
+    type: 'agent',
+    title: 'Goner',
     frontmatter: { system_prompt: 'x', model: 'm', provider: 'anthropic', tools: [] },
   });
   const created = (await create.json()).data;
@@ -319,9 +336,7 @@ test('agent token appears in the per-workspace token list and is removed when th
   });
   expect(listRes.status).toBe(200);
   const listBody = await listRes.json();
-  const listed = (listBody.data.tokens as Array<{ id: string }>).find(
-    (t) => t.id === apiTokenId,
-  );
+  const listed = (listBody.data.tokens as Array<{ id: string }>).find((t) => t.id === apiTokenId);
   expect(listed).toBeDefined();
 
   // (4) Deleting the agent doc (session auth) cascades the token row away — so
@@ -346,11 +361,13 @@ test('agent token appears in the per-workspace token list and is removed when th
 test('two agents in the same workspace can share a base slug only after disambiguation', async () => {
   const { app, seed } = await makeTestApp();
   const first = await postWorkspaceDoc(app, seed.sessionCookie, {
-    type: 'agent', title: 'Bot',
+    type: 'agent',
+    title: 'Bot',
     frontmatter: { system_prompt: 'x', model: 'm', provider: 'anthropic', tools: [] },
   });
   const second = await postWorkspaceDoc(app, seed.sessionCookie, {
-    type: 'agent', title: 'Bot',
+    type: 'agent',
+    title: 'Bot',
     frontmatter: { system_prompt: 'x', model: 'm', provider: 'anthropic', tools: [] },
   });
   expect((await first.json()).data.slug).toBe('bot');
@@ -565,9 +582,9 @@ test('GET /:slug/events — newest-first ordering', async () => {
   });
   expect(res.status).toBe(200);
   const body = await res.json();
-  const activityRows = body.data.filter(
-    (e: { kind: string }) => e.kind === 'activity.logged',
-  ) as { payload: { note: string } }[];
+  const activityRows = body.data.filter((e: { kind: string }) => e.kind === 'activity.logged') as {
+    payload: { note: string };
+  }[];
   expect(activityRows).toHaveLength(2);
   // Newest first → second-note comes before first-note.
   expect(activityRows[0]?.payload.note).toBe('second-note');
@@ -613,9 +630,9 @@ test('GET /:slug/events — 422 INVALID_LIMIT when limit is non-integer', async 
 // guards that mcp.ts already enforces.
 // ---------------------------------------------------------------------------
 
-import { newApiToken } from '../lib/auth.ts';
-import { apiTokens, documents as documentsTable } from '../db/schema.ts';
 import { db as realDb } from '../db/client.ts';
+import { apiTokens, documents as documentsTable } from '../db/schema.ts';
+import { newApiToken } from '../lib/auth.ts';
 
 async function mintPAT(workspaceId: string, userId: string, scopes: string[]): Promise<string> {
   const { token, hash } = newApiToken();
@@ -676,7 +693,9 @@ test('D1: PAT carrying agents:write (admin) is ALLOWED for type=agent (loosening
   // A member PAT (no agents:write) is STILL rejected (see the F1 test above).
   const { app, seed } = await makeTestApp();
   const pat = await mintPAT(seed.workspace.id, seed.user.id, [
-    'documents:write', 'documents:read', 'agents:write',
+    'documents:write',
+    'documents:read',
+    'agents:write',
   ]);
 
   const res = await app.request(WS_PATH, {
@@ -712,7 +731,10 @@ test('F1: DELETE type=agent rejects PAT with documents:delete but no agents:writ
   // Round 7 #19 — human-PAT rejection fires before scope check.
   const { app, seed } = await makeTestApp();
   const agent = await createAgent(app, seed.sessionCookie);
-  const pat = await mintPAT(seed.workspace.id, seed.user.id, ['documents:delete', 'documents:read']);
+  const pat = await mintPAT(seed.workspace.id, seed.user.id, [
+    'documents:delete',
+    'documents:read',
+  ]);
 
   const res = await app.request(`${WS_PATH}/${agent.slug}`, {
     method: 'DELETE',
@@ -726,9 +748,13 @@ test('G4: POST blocks an agent-bound caller from minting a child by OMITTING the
   const { app, seed } = await makeTestApp();
   // Calling agent restricted to seed.project.id.
   const parentRes = await postWorkspaceDoc(app, seed.sessionCookie, {
-    type: 'agent', title: 'Parent',
+    type: 'agent',
+    title: 'Parent',
     frontmatter: {
-      system_prompt: 'x', model: 'm', provider: 'anthropic', tools: ['create_agent'],
+      system_prompt: 'x',
+      model: 'm',
+      provider: 'anthropic',
+      tools: ['create_agent'],
       projects: [seed.project.id],
     },
   });
@@ -763,9 +789,13 @@ test('F1: POST blocks an agent-bound caller from minting a child with wider proj
   const { app, seed } = await makeTestApp();
   // Create the calling agent with a narrow allow-list. Seeded project id is `seed.project.id`.
   const parentRes = await postWorkspaceDoc(app, seed.sessionCookie, {
-    type: 'agent', title: 'Parent',
+    type: 'agent',
+    title: 'Parent',
     frontmatter: {
-      system_prompt: 'x', model: 'm', provider: 'anthropic', tools: ['create_agent'],
+      system_prompt: 'x',
+      model: 'm',
+      provider: 'anthropic',
+      tools: ['create_agent'],
       projects: [seed.project.id],
     },
   });
@@ -791,7 +821,10 @@ test('F1: POST blocks an agent-bound caller from minting a child with wider proj
       type: 'agent',
       title: 'Wider Child',
       frontmatter: {
-        system_prompt: 'x', model: 'm', provider: 'anthropic', tools: [],
+        system_prompt: 'x',
+        model: 'm',
+        provider: 'anthropic',
+        tools: [],
         projects: ['*'],
       },
     }),
@@ -803,17 +836,25 @@ test('F1: POST blocks an agent-bound caller from minting a child with wider proj
 test('F1: PATCH blocks an agent-bound caller from widening a target agent past its own list', async () => {
   const { app, seed } = await makeTestApp();
   const parentRes = await postWorkspaceDoc(app, seed.sessionCookie, {
-    type: 'agent', title: 'Parent',
+    type: 'agent',
+    title: 'Parent',
     frontmatter: {
-      system_prompt: 'x', model: 'm', provider: 'anthropic', tools: ['update_agent'],
+      system_prompt: 'x',
+      model: 'm',
+      provider: 'anthropic',
+      tools: ['update_agent'],
       projects: [seed.project.id],
     },
   });
   const parent = (await parentRes.json()).data as { id: string };
   const targetRes = await postWorkspaceDoc(app, seed.sessionCookie, {
-    type: 'agent', title: 'Target',
+    type: 'agent',
+    title: 'Target',
     frontmatter: {
-      system_prompt: 'x', model: 'm', provider: 'anthropic', tools: [],
+      system_prompt: 'x',
+      model: 'm',
+      provider: 'anthropic',
+      tools: [],
       projects: [seed.project.id],
     },
   });
@@ -851,9 +892,12 @@ test('BUG-005: POST blocks an agent-bound caller from minting a child with wider
   const { app, seed } = await makeTestApp();
   // Caller has only read-only tools.
   const parentRes = await postWorkspaceDoc(app, seed.sessionCookie, {
-    type: 'agent', title: 'Read-only Parent',
+    type: 'agent',
+    title: 'Read-only Parent',
     frontmatter: {
-      system_prompt: 'x', model: 'm', provider: 'anthropic',
+      system_prompt: 'x',
+      model: 'm',
+      provider: 'anthropic',
       tools: ['create_agent', 'list_documents'],
       projects: ['*'],
     },
@@ -878,7 +922,9 @@ test('BUG-005: POST blocks an agent-bound caller from minting a child with wider
       type: 'agent',
       title: 'Escalating Child',
       frontmatter: {
-        system_prompt: 'x', model: 'm', provider: 'anthropic',
+        system_prompt: 'x',
+        model: 'm',
+        provider: 'anthropic',
         tools: ['delete_document', 'create_agent'],
         projects: ['*'],
       },
@@ -891,9 +937,12 @@ test('BUG-005: POST blocks an agent-bound caller from minting a child with wider
 test('BUG-005: POST allows a child whose tools are a subset of the calling agent', async () => {
   const { app, seed } = await makeTestApp();
   const parentRes = await postWorkspaceDoc(app, seed.sessionCookie, {
-    type: 'agent', title: 'Parent',
+    type: 'agent',
+    title: 'Parent',
     frontmatter: {
-      system_prompt: 'x', model: 'm', provider: 'anthropic',
+      system_prompt: 'x',
+      model: 'm',
+      provider: 'anthropic',
       tools: ['create_agent', 'list_documents', 'get_document'],
       projects: ['*'],
     },
@@ -917,7 +966,9 @@ test('BUG-005: POST allows a child whose tools are a subset of the calling agent
       type: 'agent',
       title: 'Subset Child',
       frontmatter: {
-        system_prompt: 'x', model: 'm', provider: 'anthropic',
+        system_prompt: 'x',
+        model: 'm',
+        provider: 'anthropic',
         tools: ['list_documents'],
         projects: ['*'],
       },
@@ -929,18 +980,24 @@ test('BUG-005: POST allows a child whose tools are a subset of the calling agent
 test('BUG-005: PATCH blocks an agent-bound caller from widening a target agent past its own tools', async () => {
   const { app, seed } = await makeTestApp();
   const parentRes = await postWorkspaceDoc(app, seed.sessionCookie, {
-    type: 'agent', title: 'Parent',
+    type: 'agent',
+    title: 'Parent',
     frontmatter: {
-      system_prompt: 'x', model: 'm', provider: 'anthropic',
+      system_prompt: 'x',
+      model: 'm',
+      provider: 'anthropic',
       tools: ['update_agent', 'list_documents'],
       projects: ['*'],
     },
   });
   const parent = (await parentRes.json()).data as { id: string };
   const targetRes = await postWorkspaceDoc(app, seed.sessionCookie, {
-    type: 'agent', title: 'Target',
+    type: 'agent',
+    title: 'Target',
     frontmatter: {
-      system_prompt: 'x', model: 'm', provider: 'anthropic',
+      system_prompt: 'x',
+      model: 'm',
+      provider: 'anthropic',
       tools: ['list_documents'],
       projects: ['*'],
     },
@@ -976,7 +1033,9 @@ test('BUG-005 (D1 revision): an admin PAT (agents:write) mints agents via HTTP; 
   // agent-bound tests above.
   const { app, seed } = await makeTestApp();
   const pat = await mintPAT(seed.workspace.id, seed.user.id, [
-    'agents:write', 'documents:write', 'documents:read',
+    'agents:write',
+    'documents:write',
+    'documents:read',
   ]);
   const res = await app.request(WS_PATH, {
     method: 'POST',
@@ -985,7 +1044,9 @@ test('BUG-005 (D1 revision): an admin PAT (agents:write) mints agents via HTTP; 
       type: 'agent',
       title: 'Human-minted',
       frontmatter: {
-        system_prompt: 'x', model: 'm', provider: 'anthropic',
+        system_prompt: 'x',
+        model: 'm',
+        provider: 'anthropic',
         tools: ['delete_document', 'create_agent'],
         projects: ['*'],
       },
@@ -997,7 +1058,8 @@ test('BUG-005 (D1 revision): an admin PAT (agents:write) mints agents via HTTP; 
 test('F1: DELETE blocks an agent-bound caller from deleting itself', async () => {
   const { app, seed } = await makeTestApp();
   const selfRes = await postWorkspaceDoc(app, seed.sessionCookie, {
-    type: 'agent', title: 'Self',
+    type: 'agent',
+    title: 'Self',
     frontmatter: { system_prompt: 'x', model: 'm', provider: 'anthropic', tools: ['delete_agent'] },
   });
   const self = (await selfRes.json()).data as { id: string; slug: string };
@@ -1036,7 +1098,9 @@ test('F1: DELETE blocks an agent-bound caller from deleting itself', async () =>
 test('D1: POST /documents type=agent ALLOWS an admin PAT (agents:write) with 201', async () => {
   const { app, seed } = await makeTestApp();
   const pat = await mintPAT(seed.workspace.id, seed.user.id, [
-    'documents:write', 'documents:read', 'agents:write',
+    'documents:write',
+    'documents:read',
+    'agents:write',
   ]);
 
   const res = await app.request(WS_PATH, {
@@ -1065,10 +1129,14 @@ test('Round 7 #19: POST /documents type=agent accepts agent-bound bearers (self-
   const { app, seed } = await makeTestApp();
   // Mint a parent agent via session so we have something to bind a token to.
   const parentRes = await postWorkspaceDoc(app, seed.sessionCookie, {
-    type: 'agent', title: 'Parent',
+    type: 'agent',
+    title: 'Parent',
     frontmatter: {
-      system_prompt: 'p', model: 'm', provider: 'anthropic',
-      tools: ['create_agent'], projects: ['*'],
+      system_prompt: 'p',
+      model: 'm',
+      provider: 'anthropic',
+      tools: ['create_agent'],
+      projects: ['*'],
     },
   });
   expect(parentRes.status).toBe(201);
@@ -1092,8 +1160,11 @@ test('Round 7 #19: POST /documents type=agent accepts agent-bound bearers (self-
       type: 'agent',
       title: 'Child',
       frontmatter: {
-        system_prompt: 'c', model: 'm', provider: 'anthropic',
-        tools: [], projects: ['*'],
+        system_prompt: 'c',
+        model: 'm',
+        provider: 'anthropic',
+        tools: [],
+        projects: ['*'],
       },
     }),
   });
@@ -1102,9 +1173,7 @@ test('Round 7 #19: POST /documents type=agent accepts agent-bound bearers (self-
 
 test('Round 7 #19: POST /documents type=trigger still works for human PATs (carve-out is type=agent only)', async () => {
   const { app, seed } = await makeTestApp();
-  const pat = await mintPAT(seed.workspace.id, seed.user.id, [
-    'documents:write', 'documents:read',
-  ]);
+  const pat = await mintPAT(seed.workspace.id, seed.user.id, ['documents:write', 'documents:read']);
 
   const res = await app.request(WS_PATH, {
     method: 'POST',
@@ -1122,7 +1191,9 @@ test('D1: PATCH agent ALLOWS an admin PAT (agents:write) with 200', async () => 
   const { app, seed } = await makeTestApp();
   const agent = await createAgent(app, seed.sessionCookie);
   const pat = await mintPAT(seed.workspace.id, seed.user.id, [
-    'documents:write', 'documents:read', 'agents:write',
+    'documents:write',
+    'documents:read',
+    'agents:write',
   ]);
 
   const res = await app.request(`${WS_PATH}/${agent.slug}`, {
@@ -1138,7 +1209,9 @@ test('D1: DELETE agent ALLOWS an admin PAT (agents:write)', async () => {
   const { app, seed } = await makeTestApp();
   const agent = await createAgent(app, seed.sessionCookie);
   const pat = await mintPAT(seed.workspace.id, seed.user.id, [
-    'documents:delete', 'documents:read', 'agents:write',
+    'documents:delete',
+    'documents:read',
+    'agents:write',
   ]);
 
   const res = await app.request(`${WS_PATH}/${agent.slug}`, {
@@ -1180,17 +1253,20 @@ test('I1: GET ?type=agent with an agent-bound token returns ONLY its own agent (
   const { app, seed } = await makeTestApp();
   // Two distinct agents + a trigger, all created via the session (human) path.
   const aRes = await postWorkspaceDoc(app, seed.sessionCookie, {
-    type: 'agent', title: 'Agent A',
+    type: 'agent',
+    title: 'Agent A',
     frontmatter: { system_prompt: 'A-secret-prompt', model: 'm', provider: 'anthropic', tools: [] },
   });
   const agentA = (await aRes.json()).data as { id: string; slug: string };
   const bRes = await postWorkspaceDoc(app, seed.sessionCookie, {
-    type: 'agent', title: 'Agent B',
+    type: 'agent',
+    title: 'Agent B',
     frontmatter: { system_prompt: 'B-secret-prompt', model: 'm', provider: 'anthropic', tools: [] },
   });
   const agentB = (await bRes.json()).data as { id: string; slug: string };
   await postWorkspaceDoc(app, seed.sessionCookie, {
-    type: 'trigger', title: 'WH Trigger',
+    type: 'trigger',
+    title: 'WH Trigger',
     frontmatter: { agent: agentA.slug, schedule: '* * * * *', on_event: null },
   });
 
@@ -1220,17 +1296,20 @@ test('I1: GET ?type=agent with an agent-bound token returns ONLY its own agent (
 test('I1: GET /:slug with an agent-bound token — 404 for a sibling agent, 200 for self, 404 for a trigger', async () => {
   const { app, seed } = await makeTestApp();
   const aRes = await postWorkspaceDoc(app, seed.sessionCookie, {
-    type: 'agent', title: 'Agent A',
+    type: 'agent',
+    title: 'Agent A',
     frontmatter: { system_prompt: 'A-secret-prompt', model: 'm', provider: 'anthropic', tools: [] },
   });
   const agentA = (await aRes.json()).data as { id: string; slug: string };
   const bRes = await postWorkspaceDoc(app, seed.sessionCookie, {
-    type: 'agent', title: 'Agent B',
+    type: 'agent',
+    title: 'Agent B',
     frontmatter: { system_prompt: 'B-secret-prompt', model: 'm', provider: 'anthropic', tools: [] },
   });
   const agentB = (await bRes.json()).data as { id: string; slug: string };
   const trigRes = await postWorkspaceDoc(app, seed.sessionCookie, {
-    type: 'trigger', title: 'WH Trigger',
+    type: 'trigger',
+    title: 'WH Trigger',
     frontmatter: { agent: agentA.slug, schedule: '* * * * *', on_event: null },
   });
   const trigger = (await trigRes.json()).data as { slug: string };
@@ -1262,20 +1341,27 @@ test('I1: GET /:slug with an agent-bound token — 404 for a sibling agent, 200 
 test('I1 regression: a SESSION (human) request to the list still returns ALL agents + the trigger', async () => {
   const { app, seed } = await makeTestApp();
   await postWorkspaceDoc(app, seed.sessionCookie, {
-    type: 'agent', title: 'Agent A',
+    type: 'agent',
+    title: 'Agent A',
     frontmatter: { system_prompt: 'x', model: 'm', provider: 'anthropic', tools: [] },
   });
   await postWorkspaceDoc(app, seed.sessionCookie, {
-    type: 'agent', title: 'Agent B',
+    type: 'agent',
+    title: 'Agent B',
     frontmatter: { system_prompt: 'x', model: 'm', provider: 'anthropic', tools: [] },
   });
   await postWorkspaceDoc(app, seed.sessionCookie, {
-    type: 'trigger', title: 'WH Trigger',
+    type: 'trigger',
+    title: 'WH Trigger',
     frontmatter: { agent: 'agent-a', schedule: '* * * * *', on_event: null },
   });
 
-  const agentsRes = await app.request(`${WS_PATH}?type=agent`, { headers: { Cookie: seed.sessionCookie } });
+  const agentsRes = await app.request(`${WS_PATH}?type=agent`, {
+    headers: { Cookie: seed.sessionCookie },
+  });
   expect((await agentsRes.json()).data).toHaveLength(2);
-  const trigRes = await app.request(`${WS_PATH}?type=trigger`, { headers: { Cookie: seed.sessionCookie } });
+  const trigRes = await app.request(`${WS_PATH}?type=trigger`, {
+    headers: { Cookie: seed.sessionCookie },
+  });
   expect((await trigRes.json()).data).toHaveLength(1);
 });

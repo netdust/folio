@@ -1,6 +1,6 @@
-import { test, expect } from 'bun:test';
+import { expect, test } from 'bun:test';
 import { Hono } from 'hono';
-import { jsonOk, jsonError, HTTPError, registerErrorHandler } from './http.ts';
+import { HTTPError, jsonError, jsonOk, registerErrorHandler } from './http.ts';
 
 test('jsonOk wraps in { data }', async () => {
   const app = new Hono();
@@ -21,7 +21,9 @@ test('jsonError wraps in { error: { code, message } }', async () => {
 test('HTTPError thrown inside handler is rendered by registered error handler', async () => {
   const app = new Hono();
   registerErrorHandler(app);
-  app.get('/x', () => { throw new HTTPError('SLUG_CONFLICT', 'taken', 409); });
+  app.get('/x', () => {
+    throw new HTTPError('SLUG_CONFLICT', 'taken', 409);
+  });
   const res = await app.request('/x');
   expect(res.status).toBe(409);
   expect(await res.json()).toEqual({ error: { code: 'SLUG_CONFLICT', message: 'taken' } });

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { toast } from 'sonner';
+import { formatApiError } from '../../lib/api/index.ts';
 import {
   type AccessGrantVars,
   useGrantAccess,
@@ -8,10 +9,9 @@ import {
 } from '../../lib/api/instance-access.ts';
 import {
   useInstanceUsers,
-  useInviteTargets,
   useInviteByEmail,
+  useInviteTargets,
 } from '../../lib/api/instance-users.ts';
-import { formatApiError } from '../../lib/api/index.ts';
 import { Button } from '../ui/button.tsx';
 
 /**
@@ -118,8 +118,8 @@ export function InvitationsTab() {
           </Button>
         </div>
         <p className="mt-1 text-[11px] text-fg-3">
-          We email a sign-in link. They join as a member; grant workspace/project
-          access below once they appear.
+          We email a sign-in link. They join as a member; grant workspace/project access below once
+          they appear.
         </p>
       </div>
 
@@ -185,10 +185,7 @@ export function InvitationsTab() {
                   <span className="text-fg">{g.userEmail}</span>
                   <span className="text-fg-3">
                     {' '}
-                    →{' '}
-                    {g.kind === 'workspace'
-                      ? g.workspaceName
-                      : `${g.projectName} (project)`}
+                    → {g.kind === 'workspace' ? g.workspaceName : `${g.projectName} (project)`}
                   </span>
                 </div>
                 <button

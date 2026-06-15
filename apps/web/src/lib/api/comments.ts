@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { client, type ApiError } from './client.ts';
+import { type ApiError, client } from './client.ts';
 
 // ---------------------------------------------------------------------------
 // Types — defined locally; TODO: move CommentKind/CommentVisibility/ResolvedMention
@@ -170,7 +170,9 @@ export function useCreateComment(wslug: string, pslug: string, parentSlug: strin
       return { snapshots };
     },
     onError: (_err, _vars, ctx) => {
-      const context = ctx as { snapshots?: [readonly unknown[], Comment[] | undefined][] } | undefined;
+      const context = ctx as
+        | { snapshots?: [readonly unknown[], Comment[] | undefined][] }
+        | undefined;
       for (const [key, data] of context?.snapshots ?? []) {
         qc.setQueryData(key as readonly unknown[], data);
       }
@@ -217,7 +219,9 @@ export function useUpdateComment(wslug: string, pslug: string) {
       return { snapshots };
     },
     onError: (_err, _vars, ctx) => {
-      const context = ctx as { snapshots?: [readonly unknown[], Comment[] | undefined][] } | undefined;
+      const context = ctx as
+        | { snapshots?: [readonly unknown[], Comment[] | undefined][] }
+        | undefined;
       for (const [key, data] of context?.snapshots ?? []) {
         qc.setQueryData(key as readonly unknown[], data);
       }
@@ -259,7 +263,9 @@ export function useDeleteComment(wslug: string, pslug: string) {
       return { snapshots };
     },
     onError: (_err, _vars, ctx) => {
-      const context = ctx as { snapshots?: [readonly unknown[], Comment[] | undefined][] } | undefined;
+      const context = ctx as
+        | { snapshots?: [readonly unknown[], Comment[] | undefined][] }
+        | undefined;
       for (const [key, data] of context?.snapshots ?? []) {
         qc.setQueryData(key as readonly unknown[], data);
       }

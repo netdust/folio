@@ -1,18 +1,24 @@
-import { createFileRoute, Outlet, useNavigate, useRouterState, useSearch } from '@tanstack/react-router';
-import { z } from 'zod';
-import { Plus, Loader2, List, Columns3 } from 'lucide-react';
+import {
+  Outlet,
+  createFileRoute,
+  useNavigate,
+  useRouterState,
+  useSearch,
+} from '@tanstack/react-router';
+import { Columns3, List, Loader2, Plus } from 'lucide-react';
 import { toast } from 'sonner';
-import { useProject } from '../lib/api/projects.ts';
-import { useDocuments, useCreateDocument } from '../lib/api/documents.ts';
-import { useLiveDocuments } from '../lib/api/use-live-documents.ts';
-import { useCurrentTslug } from '../lib/default-table.ts';
-import { activeTabFromPath, resolveTableNav, resolveViewNav } from '../lib/rail-nav.ts';
-import { formatApiError } from '../lib/api/index.ts';
-import { MainFrame, FrameTab } from '../components/shell/main-frame.tsx';
+import { z } from 'zod';
 import { BoardControls } from '../components/kanban/board-controls.tsx';
+import { FrameTab, MainFrame } from '../components/shell/main-frame.tsx';
 import { DocumentSlideover } from '../components/slideover/document-slideover.tsx';
 import { Button } from '../components/ui/button.tsx';
 import { Icon } from '../components/ui/icon.tsx';
+import { useCreateDocument, useDocuments } from '../lib/api/documents.ts';
+import { formatApiError } from '../lib/api/index.ts';
+import { useProject } from '../lib/api/projects.ts';
+import { useLiveDocuments } from '../lib/api/use-live-documents.ts';
+import { useCurrentTslug } from '../lib/default-table.ts';
+import { activeTabFromPath, resolveTableNav, resolveViewNav } from '../lib/rail-nav.ts';
 
 export const Route = createFileRoute('/w/$wslug/p/$pslug')({
   validateSearch: z.object({ doc: z.string().optional() }),
@@ -68,8 +74,17 @@ function ProjectLayout() {
   };
 
   const actions = (
-    <Button variant="primary" onClick={onCreate} disabled={create.isPending} className="whitespace-nowrap">
-      <Icon icon={create.isPending ? Loader2 : Plus} size={14} className={create.isPending ? 'animate-spin' : ''} />
+    <Button
+      variant="primary"
+      onClick={onCreate}
+      disabled={create.isPending}
+      className="whitespace-nowrap"
+    >
+      <Icon
+        icon={create.isPending ? Loader2 : Plus}
+        size={14}
+        className={create.isPending ? 'animate-spin' : ''}
+      />
       New work item
     </Button>
   );

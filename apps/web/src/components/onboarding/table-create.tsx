@@ -1,10 +1,10 @@
-import { useEffect, useState, type FormEvent } from 'react';
-import { slugify, ErrorCode } from '@folio/shared';
-import { useCreateTable } from '../../lib/api/tables.ts';
-import { ApiError, apiErrorCode, formatApiError } from '../../lib/api/index.ts';
-import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetFooter } from '../ui/sheet.tsx';
-import { Button } from '../ui/button.tsx';
+import { ErrorCode, slugify } from '@folio/shared';
+import { type FormEvent, useEffect, useState } from 'react';
 import { toast } from 'sonner';
+import { ApiError, apiErrorCode, formatApiError } from '../../lib/api/index.ts';
+import { useCreateTable } from '../../lib/api/tables.ts';
+import { Button } from '../ui/button.tsx';
+import { Sheet, SheetContent, SheetFooter, SheetHeader, SheetTitle } from '../ui/sheet.tsx';
 
 interface Props {
   wslug: string;

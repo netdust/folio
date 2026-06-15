@@ -1,14 +1,14 @@
-import { describe, it, expect, afterEach, vi } from 'vitest';
-import { act, render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
+  Outlet,
+  RouterProvider,
   createMemoryHistory,
   createRootRoute,
   createRoute,
   createRouter,
-  Outlet,
-  RouterProvider,
 } from '@tanstack/react-router';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { TableView, sameSearchValue } from './table-view.tsx';
 
@@ -50,12 +50,22 @@ const docRow = {
 };
 
 const statusRow = {
-  id: 's1', key: 'todo', name: 'Todo', color: '#3b82f6', category: 'unstarted' as const, order: 0,
+  id: 's1',
+  key: 'todo',
+  name: 'Todo',
+  color: '#3b82f6',
+  category: 'unstarted' as const,
+  order: 0,
 };
 
 const fieldRow = {
-  id: 'f1', key: 'amount', type: 'currency', label: 'Amount', options: ['EUR'],
-  required: false, order: 0,
+  id: 'f1',
+  key: 'amount',
+  type: 'currency',
+  label: 'Amount',
+  options: ['EUR'],
+  required: false,
+  order: 0,
 };
 
 const viewRow = {
@@ -112,22 +122,26 @@ describe('TableView', () => {
       const method = init?.method ?? 'GET';
       if (u.includes('/statuses') && method === 'GET') {
         return new Response(JSON.stringify({ data: [statusRow] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.includes('/fields') && method === 'GET') {
         return new Response(JSON.stringify({ data: [fieldRow] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.includes('/views') && method === 'GET') {
         return new Response(JSON.stringify({ data: [viewRow] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.includes('/documents') && method === 'GET') {
         return new Response(JSON.stringify({ data: { data: [docRow], nextCursor: null } }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
@@ -151,28 +165,28 @@ describe('TableView', () => {
       const u = String(url);
       const method = init?.method ?? 'GET';
       if (u.includes('/statuses') && method === 'GET') {
-        return new Response(
-          JSON.stringify({ data: [statusRow] }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        );
+        return new Response(JSON.stringify({ data: [statusRow] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
       }
       if (u.includes('/fields') && method === 'GET') {
-        return new Response(
-          JSON.stringify({ data: [fieldRow] }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        );
+        return new Response(JSON.stringify({ data: [fieldRow] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
       }
       if (u.includes('/views') && method === 'GET') {
-        return new Response(
-          JSON.stringify({ data: [viewRow] }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        );
+        return new Response(JSON.stringify({ data: [viewRow] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
       }
       if (u.includes('/documents') && method === 'GET') {
-        return new Response(
-          JSON.stringify({ data: { data: [docRow], nextCursor: null } }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        );
+        return new Response(JSON.stringify({ data: { data: [docRow], nextCursor: null } }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
       }
       return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
     });
@@ -199,7 +213,9 @@ describe('TableView', () => {
 
     // Currency cell shows the formatted value with €. Use a tolerant matcher because
     // Intl.NumberFormat output depends on the test env's default locale.
-    const currencyCell = screen.getByText((content) => /€/.test(content) && /1[\.,]250/.test(content));
+    const currencyCell = screen.getByText(
+      (content) => /€/.test(content) && /1[\.,]250/.test(content),
+    );
     expect(currencyCell).toBeInTheDocument();
   });
 
@@ -211,8 +227,14 @@ describe('TableView', () => {
     const v = WorkItemsRoute.options.validateSearch as unknown;
     const parsed =
       typeof v === 'function'
-        ? (v as (input: unknown) => Record<string, unknown>)({ sort: 'next_action_due', dir: 'asc' })
-        : ((v as { parse: (input: unknown) => Record<string, unknown> }).parse({ sort: 'next_action_due', dir: 'asc' }));
+        ? (v as (input: unknown) => Record<string, unknown>)({
+            sort: 'next_action_due',
+            dir: 'asc',
+          })
+        : (v as { parse: (input: unknown) => Record<string, unknown> }).parse({
+            sort: 'next_action_due',
+            dir: 'asc',
+          });
     expect(parsed.sort).toBe('next_action_due');
     expect(parsed.dir).toBe('asc');
   });
@@ -234,22 +256,26 @@ describe('TableView', () => {
       const method = init?.method ?? 'GET';
       if (u.includes('/statuses') && method === 'GET') {
         return new Response(JSON.stringify({ data: [statusRow] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.includes('/fields') && method === 'GET') {
         return new Response(JSON.stringify({ data: [fieldRow] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.includes('/views') && method === 'GET') {
         return new Response(JSON.stringify({ data: [customSortView] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.includes('/documents') && method === 'GET') {
         return new Response(JSON.stringify({ data: { data: [docRow], nextCursor: null } }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
@@ -286,31 +312,33 @@ describe('TableView', () => {
       const method = init?.method ?? 'GET';
       if (u.includes('/statuses') && method === 'GET') {
         return new Response(JSON.stringify({ data: [statusRow] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.includes('/fields') && method === 'GET') {
         return new Response(JSON.stringify({ data: [fieldRow] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.includes('/views') && method === 'GET') {
         return new Response(JSON.stringify({ data: [triageView] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.includes('/documents') && method === 'GET') {
         return new Response(JSON.stringify({ data: { data: [docRow], nextCursor: null } }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    const { queryClient, router } = setup(
-      '/w/acme/p/web/work-items?view=v-triage&status=todo',
-    );
+    const { queryClient, router } = setup('/w/acme/p/web/work-items?view=v-triage&status=todo');
     render(
       <QueryClientProvider client={queryClient}>
         <RouterProvider router={router} />
@@ -350,22 +378,26 @@ describe('TableView', () => {
       const method = init?.method ?? 'GET';
       if (u.includes('/statuses') && method === 'GET') {
         return new Response(JSON.stringify({ data: [statusRow] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.includes('/fields') && method === 'GET') {
         return new Response(JSON.stringify({ data: [fieldRow] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.includes('/views') && method === 'GET') {
         return new Response(JSON.stringify({ data: [defaultView, triageView] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.includes('/documents') && method === 'GET') {
         return new Response(JSON.stringify({ data: { data: [docRow], nextCursor: null } }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
@@ -408,17 +440,20 @@ describe('TableView', () => {
       const method = init?.method ?? 'GET';
       if (u.includes('/statuses') && method === 'GET') {
         return new Response(JSON.stringify({ data: [statusRow] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.includes('/fields') && method === 'GET') {
         return new Response(JSON.stringify({ data: [fieldRow] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.includes('/views') && method === 'GET') {
         return new Response(JSON.stringify({ data: [defaultView] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.match(/\/views\/v-default/) && method === 'PATCH') {
@@ -427,12 +462,14 @@ describe('TableView', () => {
           : Promise.resolve(String(init?.body ?? '{}')));
         updateViewCalls.push({ id: 'v-default', patch: JSON.parse(body) });
         return new Response(JSON.stringify(defaultView), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.includes('/documents') && method === 'GET') {
         return new Response(JSON.stringify({ data: { data: [docRow], nextCursor: null } }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
@@ -478,17 +515,20 @@ describe('TableView', () => {
       const method = init?.method ?? 'GET';
       if (u.includes('/statuses') && method === 'GET') {
         return new Response(JSON.stringify({ data: [statusRow] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.includes('/fields') && method === 'GET') {
         return new Response(JSON.stringify({ data: [fieldRow] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.includes('/views') && method === 'GET') {
         return new Response(JSON.stringify({ data: [defaultView] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.match(/\/views\/v-default/) && method === 'PATCH') {
@@ -497,12 +537,14 @@ describe('TableView', () => {
           : Promise.resolve(String(init?.body ?? '{}')));
         updateViewCalls.push({ id: 'v-default', patch: JSON.parse(body) });
         return new Response(JSON.stringify(defaultView), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.includes('/documents') && method === 'GET') {
         return new Response(JSON.stringify({ data: { data: [docRow], nextCursor: null } }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
@@ -534,22 +576,26 @@ describe('TableView', () => {
       const method = init?.method ?? 'GET';
       if (u.includes('/statuses') && method === 'GET') {
         return new Response(JSON.stringify({ data: [statusRow] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.includes('/fields') && method === 'GET') {
         return new Response(JSON.stringify({ data: [fieldRow] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.includes('/views') && method === 'GET') {
         return new Response(JSON.stringify({ data: [viewRow] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.includes('/documents') && method === 'GET') {
         return new Response(JSON.stringify({ data: { data: [docRow], nextCursor: null } }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
@@ -574,23 +620,27 @@ describe('TableView', () => {
       const method = init?.method ?? 'GET';
       if (u.includes('/statuses') && method === 'GET') {
         return new Response(JSON.stringify({ data: [statusRow] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.includes('/fields') && method === 'GET') {
         return new Response(JSON.stringify({ data: [fieldRow] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.includes('/views') && method === 'GET') {
         return new Response(JSON.stringify({ data: [viewRow] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.endsWith('/documents') && method === 'POST') {
-        const body = init?.body instanceof ReadableStream
-          ? await new Response(init.body).text()
-          : String(init?.body ?? '{}');
+        const body =
+          init?.body instanceof ReadableStream
+            ? await new Response(init.body).text()
+            : String(init?.body ?? '{}');
         const parsed = JSON.parse(body);
         createCalls.push(parsed);
         return new Response(
@@ -600,7 +650,8 @@ describe('TableView', () => {
       }
       if (u.includes('/documents') && method === 'GET') {
         return new Response(JSON.stringify({ data: { data: [docRow], nextCursor: null } }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
@@ -618,7 +669,9 @@ describe('TableView', () => {
 
     // Click the add-row's static "Add work item" affordance to start editing.
     const trigger = screen.getByRole('button', { name: /Add work item/ });
-    await act(async () => { fireEvent.click(trigger); });
+    await act(async () => {
+      fireEvent.click(trigger);
+    });
 
     // The InlineEdit input is now mounted with aria-label "New work item title".
     const input = await screen.findByRole('textbox', { name: /New work item title/ });
@@ -645,29 +698,34 @@ describe('TableView', () => {
       const method = init?.method ?? 'GET';
       if (u.includes('/statuses') && method === 'GET') {
         return new Response(JSON.stringify({ data: [statusRow] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.includes('/fields') && method === 'GET') {
         return new Response(JSON.stringify({ data: [fieldRow] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.includes('/views') && method === 'GET') {
         return new Response(JSON.stringify({ data: [viewRow] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.endsWith('/documents') && method === 'POST') {
-        const body = init?.body instanceof ReadableStream
-          ? await new Response(init.body).text()
-          : String(init?.body ?? '{}');
+        const body =
+          init?.body instanceof ReadableStream
+            ? await new Response(init.body).text()
+            : String(init?.body ?? '{}');
         createCalls.push(JSON.parse(body));
         return new Response(JSON.stringify(docRow), { status: 201 });
       }
       if (u.includes('/documents') && method === 'GET') {
         return new Response(JSON.stringify({ data: { data: [docRow], nextCursor: null } }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
@@ -684,7 +742,9 @@ describe('TableView', () => {
     await waitFor(() => expect(screen.getByText('First task')).toBeInTheDocument());
 
     const trigger = screen.getByRole('button', { name: /Add work item/ });
-    await act(async () => { fireEvent.click(trigger); });
+    await act(async () => {
+      fireEvent.click(trigger);
+    });
     const input = await screen.findByRole('textbox', { name: /New work item title/ });
     await act(async () => {
       fireEvent.blur(input);
@@ -706,22 +766,26 @@ describe('TableView', () => {
       const method = init?.method ?? 'GET';
       if (u.includes('/statuses') && method === 'GET') {
         return new Response(JSON.stringify({ data: [statusRow] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.includes('/fields') && method === 'GET') {
         return new Response(JSON.stringify({ data: [fieldRow] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.includes('/views') && method === 'GET') {
         return new Response(JSON.stringify({ data: [viewRow] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.includes('/documents') && method === 'GET') {
         return new Response(JSON.stringify({ data: { data: [docRow], nextCursor: null } }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
@@ -755,22 +819,26 @@ describe('TableView', () => {
       const method = init?.method ?? 'GET';
       if (u.includes('/statuses') && method === 'GET') {
         return new Response(JSON.stringify({ data: [statusRow] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.includes('/fields') && method === 'GET') {
         return new Response(JSON.stringify({ data: [fieldRow] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.includes('/views') && method === 'GET') {
         return new Response(JSON.stringify({ data: [viewRow] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.includes('/documents') && method === 'GET') {
         return new Response(JSON.stringify({ data: { data: [docRow], nextCursor: null } }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
@@ -812,17 +880,20 @@ describe('TableView', () => {
       const method = init?.method ?? 'GET';
       if (u.includes('/statuses') && method === 'GET') {
         return new Response(JSON.stringify({ data: [statusRow] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.includes('/fields') && method === 'GET') {
         return new Response(JSON.stringify({ data: [fieldRow] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.includes('/views') && method === 'GET') {
         return new Response(JSON.stringify({ data: [mockView] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.includes('/views/v1') && method === 'PATCH') {
@@ -831,12 +902,14 @@ describe('TableView', () => {
           : Promise.resolve(String(init?.body ?? '{}')));
         updateViewCalls.push({ id: 'v1', patch: JSON.parse(body) });
         return new Response(JSON.stringify(mockView), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.includes('/documents') && method === 'GET') {
         return new Response(JSON.stringify({ data: { data: [docRow], nextCursor: null } }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
@@ -872,12 +945,15 @@ describe('TableView', () => {
 
     // Assert: updateView mutation was called with sort array
     await waitFor(() => {
-      expect(updateViewCalls.some((call) =>
-        Array.isArray(call.patch.sort) &&
-        call.patch.sort.length === 1 &&
-        call.patch.sort[0].key === 'title' &&
-        call.patch.sort[0].dir === 'asc'
-      )).toBe(true);
+      expect(
+        updateViewCalls.some(
+          (call) =>
+            Array.isArray(call.patch.sort) &&
+            call.patch.sort.length === 1 &&
+            call.patch.sort[0].key === 'title' &&
+            call.patch.sort[0].dir === 'asc',
+        ),
+      ).toBe(true);
     });
   });
 
@@ -892,32 +968,37 @@ describe('TableView', () => {
       const method = init?.method ?? 'GET';
       if (u.includes('/statuses') && method === 'GET') {
         return new Response(JSON.stringify({ data: [statusRow] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.includes('/fields') && method === 'GET') {
         return new Response(JSON.stringify({ data: [fieldRow] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.match(/\/fields\/f1$/) && method === 'PATCH') {
-        const body = init?.body instanceof ReadableStream
-          ? await new Response(init.body).text()
-          : String(init?.body ?? '{}');
+        const body =
+          init?.body instanceof ReadableStream
+            ? await new Response(init.body).text()
+            : String(init?.body ?? '{}');
         patchCalls.push({ id: 'f1', body: JSON.parse(body) });
-        return new Response(
-          JSON.stringify({ data: { field: { ...fieldRow, label: 'Total' } } }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        );
+        return new Response(JSON.stringify({ data: { field: { ...fieldRow, label: 'Total' } } }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
       }
       if (u.includes('/views') && method === 'GET') {
         return new Response(JSON.stringify({ data: [viewRow] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.includes('/documents') && method === 'GET') {
         return new Response(JSON.stringify({ data: { data: [docRow], nextCursor: null } }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
@@ -936,9 +1017,13 @@ describe('TableView', () => {
     // The pinned Amount column owns a ⋯ trigger (built-ins like Title don't).
     // Open the menu, click Rename, then commit a new label.
     const menuButtons = screen.getAllByRole('button', { name: /column actions/i });
-    await act(async () => { fireEvent.click(menuButtons[0]); });
+    await act(async () => {
+      fireEvent.click(menuButtons[0]);
+    });
     const renameItem = await screen.findByRole('menuitem', { name: /^rename$/i });
-    await act(async () => { fireEvent.click(renameItem); });
+    await act(async () => {
+      fireEvent.click(renameItem);
+    });
 
     const input = await screen.findByRole('textbox', { name: /rename column amount/i });
     await act(async () => {
@@ -962,31 +1047,37 @@ describe('TableView', () => {
       const method = init?.method ?? 'GET';
       if (u.includes('/statuses') && method === 'GET') {
         return new Response(JSON.stringify({ data: [statusRow] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.includes('/fields') && method === 'GET') {
         return new Response(JSON.stringify({ data: [fieldRow] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.includes('/views') && method === 'GET') {
         return new Response(JSON.stringify({ data: [viewRow] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.match(/\/views\/v1$/) && method === 'PATCH') {
-        const body = init?.body instanceof ReadableStream
-          ? await new Response(init.body).text()
-          : String(init?.body ?? '{}');
+        const body =
+          init?.body instanceof ReadableStream
+            ? await new Response(init.body).text()
+            : String(init?.body ?? '{}');
         viewPatchCalls.push({ id: 'v1', body: JSON.parse(body) });
         return new Response(JSON.stringify(viewRow), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.includes('/documents') && method === 'GET') {
         return new Response(JSON.stringify({ data: { data: [docRow], nextCursor: null } }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
@@ -1003,9 +1094,13 @@ describe('TableView', () => {
     await waitFor(() => expect(screen.getByText('First task')).toBeInTheDocument());
 
     const menuButtons = screen.getAllByRole('button', { name: /column actions/i });
-    await act(async () => { fireEvent.click(menuButtons[0]); });
+    await act(async () => {
+      fireEvent.click(menuButtons[0]);
+    });
     const hideItem = await screen.findByRole('menuitem', { name: /hide column/i });
-    await act(async () => { fireEvent.click(hideItem); });
+    await act(async () => {
+      fireEvent.click(hideItem);
+    });
 
     await waitFor(() => expect(viewPatchCalls.length).toBeGreaterThan(0));
     const last = viewPatchCalls[viewPatchCalls.length - 1];
@@ -1024,12 +1119,14 @@ describe('TableView', () => {
       const method = init?.method ?? 'GET';
       if (u.includes('/statuses') && method === 'GET') {
         return new Response(JSON.stringify({ data: [statusRow] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.includes('/fields') && method === 'GET') {
         return new Response(JSON.stringify({ data: [fieldRow] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.match(/\/fields\/f1$/) && method === 'DELETE') {
@@ -1038,12 +1135,14 @@ describe('TableView', () => {
       }
       if (u.includes('/views') && method === 'GET') {
         return new Response(JSON.stringify({ data: [viewRow] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.includes('/documents') && method === 'GET') {
         return new Response(JSON.stringify({ data: { data: [docRow], nextCursor: null } }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
@@ -1060,16 +1159,22 @@ describe('TableView', () => {
     await waitFor(() => expect(screen.getByText('First task')).toBeInTheDocument());
 
     const menuButtons = screen.getAllByRole('button', { name: /column actions/i });
-    await act(async () => { fireEvent.click(menuButtons[0]); });
+    await act(async () => {
+      fireEvent.click(menuButtons[0]);
+    });
     const deleteItem = await screen.findByRole('menuitem', { name: /delete column/i });
-    await act(async () => { fireEvent.click(deleteItem); });
+    await act(async () => {
+      fireEvent.click(deleteItem);
+    });
 
     // Confirm dialog opens — no DELETE has fired yet.
     expect(await screen.findByText(/delete column .amount./i)).toBeInTheDocument();
     expect(deleteCalls).toEqual([]);
 
     const confirm = screen.getByRole('button', { name: /^delete$/i });
-    await act(async () => { fireEvent.click(confirm); });
+    await act(async () => {
+      fireEvent.click(confirm);
+    });
 
     await waitFor(() => expect(deleteCalls.length).toBe(1));
     expect(deleteCalls[0]).toContain('/fields/f1');
@@ -1088,23 +1193,27 @@ describe('TableView', () => {
 
       if (u.includes('/statuses') && method === 'GET') {
         return new Response(JSON.stringify({ data: [statusRow] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.includes('/views') && method === 'GET') {
         return new Response(JSON.stringify({ data: [viewRow] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.match(/\/views\/v1/) && method === 'PATCH') {
         return new Response(JSON.stringify(viewRow), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.includes('/fields') && method === 'POST') {
-        const body = init?.body instanceof ReadableStream
-          ? await new Response(init.body).text()
-          : String(init?.body ?? '{}');
+        const body =
+          init?.body instanceof ReadableStream
+            ? await new Response(init.body).text()
+            : String(init?.body ?? '{}');
         const parsed = JSON.parse(body);
         created.push({ url: u, body: parsed });
         createPosted = true;
@@ -1147,10 +1256,10 @@ describe('TableView', () => {
         );
       }
       if (u.includes('/documents') && method === 'GET') {
-        return new Response(
-          JSON.stringify({ data: { data: [docRow], nextCursor: null } }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        );
+        return new Response(JSON.stringify({ data: { data: [docRow], nextCursor: null } }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
       }
       return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
     });
@@ -1166,14 +1275,18 @@ describe('TableView', () => {
     await waitFor(() => expect(screen.getByText('First task')).toBeInTheDocument());
 
     const addBtn = await screen.findByRole('button', { name: /add column/i });
-    await act(async () => { fireEvent.click(addBtn); });
+    await act(async () => {
+      fireEvent.click(addBtn);
+    });
 
     const keyInput = await screen.findByLabelText(/^key$/i);
     await act(async () => {
       fireEvent.change(keyInput, { target: { value: 'owner' } });
     });
     const createBtn = screen.getByRole('button', { name: /^create$/i });
-    await act(async () => { fireEvent.click(createBtn); });
+    await act(async () => {
+      fireEvent.click(createBtn);
+    });
 
     await waitFor(() => {
       expect(created.length).toBe(1);
@@ -1202,24 +1315,27 @@ describe('TableView', () => {
       const method = init?.method ?? 'GET';
       if (u.includes('/statuses') && method === 'GET') {
         return new Response(JSON.stringify({ data: [statusRow] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.includes('/views') && method === 'GET') {
         return new Response(JSON.stringify({ data: [viewRow] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.includes('/fields') && method === 'GET') {
         return new Response(JSON.stringify({ data: [] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.includes('/documents') && method === 'GET') {
-        return new Response(
-          JSON.stringify({ data: { data: [docWithExtras], nextCursor: null } }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        );
+        return new Response(JSON.stringify({ data: { data: [docWithExtras], nextCursor: null } }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
       }
       return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
     });
@@ -1235,7 +1351,9 @@ describe('TableView', () => {
     await waitFor(() => expect(screen.getByText('Second task')).toBeInTheDocument());
 
     const columnsBtn = await screen.findByRole('button', { name: /columns/i });
-    await act(async () => { fireEvent.click(columnsBtn); });
+    await act(async () => {
+      fireEvent.click(columnsBtn);
+    });
 
     expect(await screen.findByText(/suggested from your data/i)).toBeInTheDocument();
     expect(screen.getByText('owner')).toBeInTheDocument();
@@ -1265,18 +1383,21 @@ describe('TableView', () => {
       const method = init?.method ?? 'GET';
       if (u.includes('/statuses') && method === 'GET') {
         return new Response(JSON.stringify({ data: [statusRow] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.includes('/views') && method === 'GET') {
         return new Response(JSON.stringify({ data: [viewRow] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.includes('/fields') && method === 'POST') {
-        const body = init?.body instanceof ReadableStream
-          ? await new Response(init.body).text()
-          : String(init?.body ?? '{}');
+        const body =
+          init?.body instanceof ReadableStream
+            ? await new Response(init.body).text()
+            : String(init?.body ?? '{}');
         const parsed = JSON.parse(body);
         created.push({ url: u, body: parsed });
         pinned = true;
@@ -1301,17 +1422,27 @@ describe('TableView', () => {
         return new Response(
           JSON.stringify({
             data: pinned
-              ? [{ id: 'fnew', key: 'owner', type: 'string', label: 'Owner', options: null, required: false, order: 0 }]
+              ? [
+                  {
+                    id: 'fnew',
+                    key: 'owner',
+                    type: 'string',
+                    label: 'Owner',
+                    options: null,
+                    required: false,
+                    order: 0,
+                  },
+                ]
               : [],
           }),
           { status: 200, headers: { 'content-type': 'application/json' } },
         );
       }
       if (u.includes('/documents') && method === 'GET') {
-        return new Response(
-          JSON.stringify({ data: { data: [docWithExtras], nextCursor: null } }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        );
+        return new Response(JSON.stringify({ data: { data: [docWithExtras], nextCursor: null } }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
       }
       return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
     });
@@ -1327,10 +1458,14 @@ describe('TableView', () => {
     await waitFor(() => expect(screen.getByText('Third task')).toBeInTheDocument());
 
     const columnsBtn = await screen.findByRole('button', { name: /columns/i });
-    await act(async () => { fireEvent.click(columnsBtn); });
+    await act(async () => {
+      fireEvent.click(columnsBtn);
+    });
 
     const pinBtn = await screen.findByRole('button', { name: /pin owner/i });
-    await act(async () => { fireEvent.click(pinBtn); });
+    await act(async () => {
+      fireEvent.click(pinBtn);
+    });
 
     await waitFor(() => {
       expect(created.length).toBe(1);
@@ -1347,12 +1482,22 @@ describe('TableView', () => {
     // which per the dialog's compatibility matrix is a valid transition and
     // should send `options: null` to drop the ISO code.
     const numberField = {
-      id: 'f1', key: 'amount', type: 'number' as const, label: 'Amount',
-      options: null, required: false, order: 0,
+      id: 'f1',
+      key: 'amount',
+      type: 'number' as const,
+      label: 'Amount',
+      options: null,
+      required: false,
+      order: 0,
     };
     const currencyField = {
-      id: 'f1', key: 'amount', type: 'currency' as const, label: 'Amount',
-      options: ['EUR'], required: false, order: 0,
+      id: 'f1',
+      key: 'amount',
+      type: 'currency' as const,
+      label: 'Amount',
+      options: ['EUR'],
+      required: false,
+      order: 0,
     };
     // Start in 'number' so the dialog's compatibility matrix offers
     // 'currency' as a target. The flow we exercise is number → currency,
@@ -1364,32 +1509,37 @@ describe('TableView', () => {
       const method = init?.method ?? 'GET';
       if (u.includes('/statuses') && method === 'GET') {
         return new Response(JSON.stringify({ data: [statusRow] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.includes('/fields') && method === 'GET') {
         return new Response(JSON.stringify({ data: [numberField] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.match(/\/fields\/f1$/) && method === 'PATCH') {
-        const body = init?.body instanceof ReadableStream
-          ? await new Response(init.body).text()
-          : String(init?.body ?? '{}');
+        const body =
+          init?.body instanceof ReadableStream
+            ? await new Response(init.body).text()
+            : String(init?.body ?? '{}');
         patchCalls.push({ id: 'f1', body: JSON.parse(body) });
-        return new Response(
-          JSON.stringify({ data: { field: currencyField } }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        );
+        return new Response(JSON.stringify({ data: { field: currencyField } }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
       }
       if (u.includes('/views') && method === 'GET') {
         return new Response(JSON.stringify({ data: [viewRow] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.includes('/documents') && method === 'GET') {
         return new Response(JSON.stringify({ data: { data: [docRow], nextCursor: null } }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
@@ -1407,20 +1557,28 @@ describe('TableView', () => {
 
     // Open the ⋯ menu on the pinned Amount column, click Change type.
     const menuButtons = screen.getAllByRole('button', { name: /column actions/i });
-    await act(async () => { fireEvent.click(menuButtons[0]); });
+    await act(async () => {
+      fireEvent.click(menuButtons[0]);
+    });
     const changeTypeItem = await screen.findByRole('menuitem', { name: /change type/i });
-    await act(async () => { fireEvent.click(changeTypeItem); });
+    await act(async () => {
+      fireEvent.click(changeTypeItem);
+    });
 
     // Dialog renders the type select. Pick 'currency'.
     const typeSelect = await screen.findByLabelText(/new type/i);
-    await act(async () => { fireEvent.change(typeSelect, { target: { value: 'currency' } }); });
+    await act(async () => {
+      fireEvent.change(typeSelect, { target: { value: 'currency' } });
+    });
 
     // ISO input appears for number → currency. Default 'EUR' is fine.
     const isoInput = await screen.findByLabelText(/iso code/i);
     expect((isoInput as HTMLInputElement).value).toBe('EUR');
 
     const applyBtn = screen.getByRole('button', { name: /^apply$/i });
-    await act(async () => { fireEvent.click(applyBtn); });
+    await act(async () => {
+      fireEvent.click(applyBtn);
+    });
 
     await waitFor(() => expect(patchCalls.length).toBe(1));
     expect(patchCalls[0].id).toBe('f1');
@@ -1433,12 +1591,22 @@ describe('TableView', () => {
     // drops the ISO code. Before the Zod fix on the server, this round-trip was
     // rejected with HTTP 400 ("Expected array, received null").
     const currencyField = {
-      id: 'f1', key: 'amount', type: 'currency' as const, label: 'Amount',
-      options: ['EUR'], required: false, order: 0,
+      id: 'f1',
+      key: 'amount',
+      type: 'currency' as const,
+      label: 'Amount',
+      options: ['EUR'],
+      required: false,
+      order: 0,
     };
     const numberField = {
-      id: 'f1', key: 'amount', type: 'number' as const, label: 'Amount',
-      options: null, required: false, order: 0,
+      id: 'f1',
+      key: 'amount',
+      type: 'number' as const,
+      label: 'Amount',
+      options: null,
+      required: false,
+      order: 0,
     };
     const patchCalls: { id: string; body: Record<string, unknown> }[] = [];
 
@@ -1447,32 +1615,37 @@ describe('TableView', () => {
       const method = init?.method ?? 'GET';
       if (u.includes('/statuses') && method === 'GET') {
         return new Response(JSON.stringify({ data: [statusRow] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.includes('/fields') && method === 'GET') {
         return new Response(JSON.stringify({ data: [currencyField] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.match(/\/fields\/f1$/) && method === 'PATCH') {
-        const body = init?.body instanceof ReadableStream
-          ? await new Response(init.body).text()
-          : String(init?.body ?? '{}');
+        const body =
+          init?.body instanceof ReadableStream
+            ? await new Response(init.body).text()
+            : String(init?.body ?? '{}');
         patchCalls.push({ id: 'f1', body: JSON.parse(body) });
-        return new Response(
-          JSON.stringify({ data: { field: numberField } }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        );
+        return new Response(JSON.stringify({ data: { field: numberField } }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
       }
       if (u.includes('/views') && method === 'GET') {
         return new Response(JSON.stringify({ data: [viewRow] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.includes('/documents') && method === 'GET') {
         return new Response(JSON.stringify({ data: { data: [docRow], nextCursor: null } }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
@@ -1490,16 +1663,24 @@ describe('TableView', () => {
 
     // Open the ⋯ menu on the pinned Amount column, click Change type.
     const menuButtons = screen.getAllByRole('button', { name: /column actions/i });
-    await act(async () => { fireEvent.click(menuButtons[0]); });
+    await act(async () => {
+      fireEvent.click(menuButtons[0]);
+    });
     const changeTypeItem = await screen.findByRole('menuitem', { name: /change type/i });
-    await act(async () => { fireEvent.click(changeTypeItem); });
+    await act(async () => {
+      fireEvent.click(changeTypeItem);
+    });
 
     // Dialog renders the type select. Pick 'number'.
     const typeSelect = await screen.findByLabelText(/new type/i);
-    await act(async () => { fireEvent.change(typeSelect, { target: { value: 'number' } }); });
+    await act(async () => {
+      fireEvent.change(typeSelect, { target: { value: 'number' } });
+    });
 
     const applyBtn = screen.getByRole('button', { name: /^apply$/i });
-    await act(async () => { fireEvent.click(applyBtn); });
+    await act(async () => {
+      fireEvent.click(applyBtn);
+    });
 
     await waitFor(() => expect(patchCalls.length).toBe(1));
     expect(patchCalls[0].id).toBe('f1');
@@ -1516,22 +1697,26 @@ describe('TableView', () => {
       const method = init?.method ?? 'GET';
       if (u.includes('/statuses') && method === 'GET') {
         return new Response(JSON.stringify({ data: [statusRow] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.includes('/fields') && method === 'GET') {
         return new Response(JSON.stringify({ data: [fieldRow] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.includes('/views') && method === 'GET') {
         return new Response(JSON.stringify({ data: [viewRow] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.includes('/documents') && method === 'GET') {
         return new Response(JSON.stringify({ data: { data: [docRow], nextCursor: null } }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
@@ -1588,17 +1773,20 @@ describe('TableView', () => {
       const method = init?.method ?? 'GET';
       if (u.includes('/statuses') && method === 'GET') {
         return new Response(JSON.stringify({ data: [statusRow] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.includes('/fields') && method === 'GET') {
         return new Response(JSON.stringify({ data: [fieldRow] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.includes('/views') && method === 'GET') {
         return new Response(JSON.stringify({ data: [mockView] }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.includes('/views/v1') && method === 'PATCH') {
@@ -1607,12 +1795,14 @@ describe('TableView', () => {
           : Promise.resolve(String(init?.body ?? '{}')));
         updateViewCalls.push({ id: 'v1', patch: JSON.parse(body) });
         return new Response(JSON.stringify(mockView), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       if (u.includes('/documents') && method === 'GET') {
         return new Response(JSON.stringify({ data: { data: [docRow], nextCursor: null } }), {
-          status: 200, headers: { 'content-type': 'application/json' },
+          status: 200,
+          headers: { 'content-type': 'application/json' },
         });
       }
       return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
@@ -1645,12 +1835,15 @@ describe('TableView', () => {
     });
 
     await waitFor(() => {
-      expect(updateViewCalls.some((call) =>
-        Array.isArray(call.patch.sort) &&
-        call.patch.sort.length === 1 &&
-        call.patch.sort[0].key === 'amount' &&
-        call.patch.sort[0].dir === 'asc'
-      )).toBe(true);
+      expect(
+        updateViewCalls.some(
+          (call) =>
+            Array.isArray(call.patch.sort) &&
+            call.patch.sort.length === 1 &&
+            call.patch.sort[0].key === 'amount' &&
+            call.patch.sort[0].dir === 'asc',
+        ),
+      ).toBe(true);
     });
   });
 });
@@ -1691,22 +1884,26 @@ function tableScopedFetch(calls: string[]) {
     const method = init?.method ?? 'GET';
     if (u.includes('/statuses') && method === 'GET') {
       return new Response(JSON.stringify({ data: [statusRow] }), {
-        status: 200, headers: { 'content-type': 'application/json' },
+        status: 200,
+        headers: { 'content-type': 'application/json' },
       });
     }
     if (u.includes('/fields') && method === 'GET') {
       return new Response(JSON.stringify({ data: [fieldRow] }), {
-        status: 200, headers: { 'content-type': 'application/json' },
+        status: 200,
+        headers: { 'content-type': 'application/json' },
       });
     }
     if (u.includes('/views') && method === 'GET') {
       return new Response(JSON.stringify({ data: [viewRow] }), {
-        status: 200, headers: { 'content-type': 'application/json' },
+        status: 200,
+        headers: { 'content-type': 'application/json' },
       });
     }
     if (u.includes('/documents') && method === 'GET') {
       return new Response(JSON.stringify({ data: { data: [docRow], nextCursor: null } }), {
-        status: 200, headers: { 'content-type': 'application/json' },
+        status: 200,
+        headers: { 'content-type': 'application/json' },
       });
     }
     return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
@@ -1787,7 +1984,9 @@ describe('TableView table-scoped reads (C1T3 invariant-16 seam)', () => {
         }
         if (u.includes('/documents')) {
           return new Response(
-            JSON.stringify({ error: { code: 'TABLE_NOT_FOUND', message: 'table "bugs" not found' } }),
+            JSON.stringify({
+              error: { code: 'TABLE_NOT_FOUND', message: 'table "bugs" not found' },
+            }),
             { status: 404, headers: { 'content-type': 'application/json' } },
           );
         }

@@ -11,7 +11,10 @@ export function Command({ className, ...props }: ComponentProps<typeof CommandPr
   );
 }
 
-export function CommandInput({ className, ...props }: ComponentProps<typeof CommandPrimitive.Input>) {
+export function CommandInput({
+  className,
+  ...props
+}: ComponentProps<typeof CommandPrimitive.Input>) {
   return (
     <CommandPrimitive.Input
       className={cn(

@@ -1,54 +1,57 @@
-import { useEffect, useState, useMemo, useRef } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useSearch } from '@tanstack/react-router';
-import { toast } from 'sonner';
-import { Clipboard, FileText, History, MessageCircle, MoreHorizontal, Trash2, X } from 'lucide-react';
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from '../ui/sheet.tsx';
-import { IconButton } from '../ui/icon-button.tsx';
-import { Button } from '../ui/button.tsx';
-import { Icon } from '../ui/icon.tsx';
-import { Skeleton } from '../ui/skeleton.tsx';
-import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
-import { HeaderTabs, type HeaderTabItem } from './header-tabs.tsx';
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogTitle,
-} from '../ui/dialog.tsx';
+  Clipboard,
+  FileText,
+  History,
+  MessageCircle,
+  MoreHorizontal,
+  Trash2,
+  X,
+} from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { toast } from 'sonner';
+import { useMe } from '../../lib/api/auth.ts';
+import { useComments } from '../../lib/api/comments.ts';
 import {
   type Document,
   type DocumentListParams,
   clausesToListParams,
   parseFilters,
+  useDeleteDocument,
   useDocument,
   useDocuments,
   useUpdateDocument,
-  useDeleteDocument,
 } from '../../lib/api/documents.ts';
-import { useStatuses } from '../../lib/api/statuses.ts';
+import { documentsKeys } from '../../lib/api/documents.ts';
 import { useFields } from '../../lib/api/fields.ts';
-import { useCurrentTslug } from '../../lib/default-table.ts';
 import { formatApiError } from '../../lib/api/index.ts';
-import { useWorkspace } from '../../lib/api/workspaces.ts';
-import { useProject } from '../../lib/api/projects.ts';
-import { useComments } from '../../lib/api/comments.ts';
 import { useMembers } from '../../lib/api/members.ts';
-import { useMe } from '../../lib/api/auth.ts';
+import { useProject } from '../../lib/api/projects.ts';
+import { useStatuses } from '../../lib/api/statuses.ts';
+import { useWorkspace } from '../../lib/api/workspaces.ts';
 import { copyDocumentAsMarkdown } from '../../lib/copy-as-md.ts';
-import { InlineEdit } from '../inline/inline-edit.tsx';
-import { FrontmatterForm } from './frontmatter-form.tsx';
-import { BodyEditor } from './body-editor.tsx';
-import { ModeToggle, type EditorMode } from './mode-toggle.tsx';
-import { RawMdEditor } from './raw-md-editor.tsx';
-import { LogActivityButton } from './log-activity-button.tsx';
-import { ActivityPanel } from './activity-panel.tsx';
-import { CommentsTab } from '../comments/comments-tab.tsx';
+import { useCurrentTslug } from '../../lib/default-table.ts';
 import { useDocumentDraft } from '../../lib/use-document-draft.ts';
 import { useLiveDocument } from '../../lib/use-live-document.ts';
+import { CommentsTab } from '../comments/comments-tab.tsx';
+import { InlineEdit } from '../inline/inline-edit.tsx';
+import { Button } from '../ui/button.tsx';
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from '../ui/dialog.tsx';
+import { IconButton } from '../ui/icon-button.tsx';
+import { Icon } from '../ui/icon.tsx';
+import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from '../ui/sheet.tsx';
+import { Skeleton } from '../ui/skeleton.tsx';
+import { ActivityPanel } from './activity-panel.tsx';
+import { BodyEditor } from './body-editor.tsx';
 import { ExternalUpdateBanner } from './external-update-banner.tsx';
+import { FrontmatterForm } from './frontmatter-form.tsx';
+import { type HeaderTabItem, HeaderTabs } from './header-tabs.tsx';
+import { LogActivityButton } from './log-activity-button.tsx';
+import { type EditorMode, ModeToggle } from './mode-toggle.tsx';
+import { RawMdEditor } from './raw-md-editor.tsx';
 import { SaveButton } from './save-button.tsx';
-import { useQueryClient } from '@tanstack/react-query';
-import { documentsKeys } from '../../lib/api/documents.ts';
 
 type DocTabValue = 'fields' | 'comments' | 'activity';
 
@@ -263,7 +266,13 @@ export function DocumentSlideover({ wslug, pslug }: Props) {
               // doc without closing the slideover (e.g., create A → Cmd-K → create
               // B). InlineEdit reads `defaultEditing` once at mount, so without
               // the key the second freshly-created "Untitled" wouldn't auto-edit.
-              <SlideoverTitleEditor key={doc.id} doc={doc} wslug={wslug} pslug={pslug} tslug={tslug} />
+              <SlideoverTitleEditor
+                key={doc.id}
+                doc={doc}
+                wslug={wslug}
+                pslug={pslug}
+                tslug={tslug}
+              />
             ) : (
               '—'
             )}
@@ -288,7 +297,11 @@ export function DocumentSlideover({ wslug, pslug }: Props) {
                 <div aria-hidden className="mx-0.5 h-4 w-px bg-border-light" />
                 {/* Save reads the buffered draft (owned by the inner) — render it
                     off the mirrored dirty flag; the click delegates to the inner. */}
-                <SaveButton dirty={dirty} saving={saving} onSave={() => void actionsRef.current?.save()} />
+                <SaveButton
+                  dirty={dirty}
+                  saving={saving}
+                  onSave={() => void actionsRef.current?.save()}
+                />
                 <Popover open={moreOpen} onOpenChange={setMoreOpen}>
                   <PopoverTrigger asChild>
                     <button
@@ -360,24 +373,31 @@ export function DocumentSlideover({ wslug, pslug }: Props) {
             >
               Cancel
             </Button>
-            <Button
-              variant="danger"
-              onClick={() => void onDelete()}
-              disabled={del.isPending}
-            >
+            <Button variant="danger" onClick={() => void onDelete()} disabled={del.isPending}>
               {del.isPending ? 'Deleting…' : 'Delete'}
             </Button>
           </div>
         </DialogContent>
       </Dialog>
-      <Dialog open={prompting} onOpenChange={(o) => { if (!o) cancelPrompt(); }}>
+      <Dialog
+        open={prompting}
+        onOpenChange={(o) => {
+          if (!o) cancelPrompt();
+        }}
+      >
         <DialogContent>
           <DialogTitle>Unsaved changes</DialogTitle>
           <DialogDescription>
             {doc ? <>You have unsaved edits to &ldquo;{doc.title}&rdquo;.</> : null}
           </DialogDescription>
           <div className="mt-5 flex items-center justify-end gap-2">
-            <Button variant="secondary" onClick={() => { actionsRef.current?.discard(); proceed(); }}>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                actionsRef.current?.discard();
+                proceed();
+              }}
+            >
               Discard
             </Button>
             <Button variant="secondary" onClick={() => cancelPrompt()}>
@@ -386,7 +406,10 @@ export function DocumentSlideover({ wslug, pslug }: Props) {
             <Button
               variant="primary"
               disabled={saving}
-              onClick={async () => { await actionsRef.current?.save(); proceed(); }}
+              onClick={async () => {
+                await actionsRef.current?.save();
+                proceed();
+              }}
             >
               {saving ? 'Saving…' : 'Save'}
             </Button>
@@ -463,7 +486,8 @@ function DocumentSlideoverInner({
     wslug,
     docId: doc.id,
     isDirty,
-    onRefetch: () => qc.invalidateQueries({ queryKey: documentsKeys.detail(wslug, pslug, doc.slug) }),
+    onRefetch: () =>
+      qc.invalidateQueries({ queryKey: documentsKeys.detail(wslug, pslug, doc.slug) }),
   });
 
   const onSave = async () => {
@@ -528,7 +552,12 @@ function DocumentSlideoverInner({
   );
 }
 
-function SlideoverTitleEditor({ doc, wslug, pslug, tslug }: { doc: Document; wslug: string; pslug: string; tslug: string }) {
+function SlideoverTitleEditor({
+  doc,
+  wslug,
+  pslug,
+  tslug,
+}: { doc: Document; wslug: string; pslug: string; tslug: string }) {
   const navigate = useNavigate();
   const search = useSearch({ strict: false }) as Record<string, unknown>;
   const listParams = useUrlDerivedListParams(doc.type);
@@ -646,9 +675,7 @@ function SlideoverBody({
                 onFrontmatterCommit={(p) => setFrontmatter(p)}
                 pendingKeys={new Set()}
                 docSlug={doc.slug}
-                onOpenBacklink={(s) =>
-                  void navigate({ to: '.', search: { ...search, doc: s } })
-                }
+                onOpenBacklink={(s) => void navigate({ to: '.', search: { ...search, doc: s } })}
               />
             )}
           </div>
@@ -670,7 +697,7 @@ function SlideoverBody({
                 wslug={wslug}
                 title={doc.title}
                 showToolbar={isPage}
-          />
+              />
             ) : (
               <RawMdEditor
                 key={`raw-${doc.slug}`}

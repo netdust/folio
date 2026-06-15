@@ -21,8 +21,8 @@ import { and, eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import type { DB } from '../apps/server/src/db/client.ts';
 import { documents, workspaces } from '../apps/server/src/db/schema.ts';
-import { emitEvent, txWithEvents } from '../apps/server/src/lib/events.ts';
 import { BUILTIN_TRIGGER_DEFS } from '../apps/server/src/lib/builtin-triggers.ts';
+import { emitEvent, txWithEvents } from '../apps/server/src/lib/events.ts';
 
 export interface BackfillResult {
   workspacesTouched: number;

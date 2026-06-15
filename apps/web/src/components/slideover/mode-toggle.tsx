@@ -1,6 +1,6 @@
-import { Kbd } from '../ui/kbd.tsx';
-import { cn } from '../ui/cn.ts';
 import { altKeyHint } from '../../lib/platform.ts';
+import { cn } from '../ui/cn.ts';
+import { Kbd } from '../ui/kbd.tsx';
 
 export type EditorMode = 'rich' | 'raw';
 
@@ -15,7 +15,9 @@ export function ModeToggle({ mode, onChange }: Props) {
       <button
         type="button"
         aria-pressed={mode === 'rich'}
-        onClick={() => { if (mode !== 'rich') onChange('rich'); }}
+        onClick={() => {
+          if (mode !== 'rich') onChange('rich');
+        }}
         className={cn(
           'rounded-sm px-2 py-1',
           mode === 'rich' ? 'bg-primary text-primary-fg' : 'text-fg-2 hover:bg-card',
@@ -26,7 +28,9 @@ export function ModeToggle({ mode, onChange }: Props) {
       <button
         type="button"
         aria-pressed={mode === 'raw'}
-        onClick={() => { if (mode !== 'raw') onChange('raw'); }}
+        onClick={() => {
+          if (mode !== 'raw') onChange('raw');
+        }}
         className={cn(
           'rounded-sm px-2 py-1',
           mode === 'raw' ? 'bg-primary text-primary-fg' : 'text-fg-2 hover:bg-card',

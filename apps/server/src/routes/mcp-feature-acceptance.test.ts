@@ -45,16 +45,28 @@ async function call(
   token: string,
   name: string,
   args: Record<string, unknown>,
-): Promise<{ result?: { content: { text: string }[] }; error?: { code: number; data?: { reason?: string }; message: string } }> {
+): Promise<{
+  result?: { content: { text: string }[] };
+  error?: { code: number; data?: { reason?: string }; message: string };
+}> {
   const res = await app.request('/mcp', {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }),
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name, arguments: args },
+    }),
   });
-  return res.json() as Promise<{ result?: { content: { text: string }[] }; error?: { code: number; data?: { reason?: string }; message: string } }>;
+  return res.json() as Promise<{
+    result?: { content: { text: string }[] };
+    error?: { code: number; data?: { reason?: string }; message: string };
+  }>;
 }
 
-const text = (r: { result?: { content: { text: string }[] } }) => JSON.parse(r.result!.content[0]!.text);
+const text = (r: { result?: { content: { text: string }[] } }) =>
+  JSON.parse(r.result!.content[0]!.text);
 
 // ── F1 (D2/B1): bare create_document in a multi-table project lands in work-items ──
 test('FA-F1: multi-table project — bare create_document{status:todo} succeeds (D2/B1)', async () => {
@@ -106,7 +118,12 @@ test('FA-F2: admin PAT creates → inspects → updates → deletes an agent ove
   const created = await call(app, admin, 'create_agent', {
     workspace_slug: seed.workspace.slug,
     title: 'Ops Bot',
-    frontmatter: { system_prompt: 'do ops', provider: 'anthropic', model: 'claude-sonnet-4-6', tools: ['list_documents'] },
+    frontmatter: {
+      system_prompt: 'do ops',
+      provider: 'anthropic',
+      model: 'claude-sonnet-4-6',
+      tools: ['list_documents'],
+    },
   });
   expect(created.error).toBeUndefined();
   const agent = text(created);
@@ -143,11 +160,19 @@ test('FA-F2: admin PAT creates → inspects → updates → deletes an agent ove
 // ── F3 (D1 denial edge): a member PAT is rejected on agent creation ──
 test('FA-F3: member PAT is rejected on agent creation over MCP (D1 denied-actor edge)', async () => {
   const { app, seed } = await makeTestApp();
-  const member = await mintPat(seed.workspace.id, seed.user.id, ['documents:read', 'documents:write']);
+  const member = await mintPat(seed.workspace.id, seed.user.id, [
+    'documents:read',
+    'documents:write',
+  ]);
   const denied = await call(app, member, 'create_agent', {
     workspace_slug: seed.workspace.slug,
     title: 'Should Not Exist',
-    frontmatter: { system_prompt: 'x', provider: 'anthropic', model: 'claude-sonnet-4-6', tools: [] },
+    frontmatter: {
+      system_prompt: 'x',
+      provider: 'anthropic',
+      model: 'claude-sonnet-4-6',
+      tools: [],
+    },
   });
   expect(denied.error).toBeDefined();
   expect(denied.error!.message).toMatch(/agents:write/); // rejected at the scope gate

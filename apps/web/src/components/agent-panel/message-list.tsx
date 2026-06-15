@@ -1,8 +1,8 @@
 import type { ConversationMessage } from '../../lib/api/conversations.ts';
+import { MessageChoiceCard } from './message-choice-card.tsx';
+import { MessageLinkPanel } from './message-link-panel.tsx';
 import { MessageText } from './message-text.tsx';
 import { MessageToolStep } from './message-tool-step.tsx';
-import { MessageLinkPanel } from './message-link-panel.tsx';
-import { MessageChoiceCard } from './message-choice-card.tsx';
 import { parseMessagePayload } from './payload.ts';
 
 /**

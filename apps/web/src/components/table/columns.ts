@@ -23,8 +23,8 @@ export interface Column {
 }
 
 const BUILTIN_COLUMNS: Column[] = [
-  { key: 'title',      label: 'Title',   source: 'builtin' },
-  { key: 'status',     label: 'Status',  source: 'builtin' },
+  { key: 'title', label: 'Title', source: 'builtin' },
+  { key: 'status', label: 'Status', source: 'builtin' },
   { key: 'updated_at', label: 'Updated', source: 'builtin' },
 ];
 

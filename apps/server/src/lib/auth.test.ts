@@ -23,8 +23,8 @@ import { describe, expect, test } from 'bun:test';
 import { eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { authSessions, users } from '../db/schema.ts';
-import { hashPassword, readSession, verifyPassword } from './auth.ts';
 import { makeBareTestDb } from '../test/harness.ts';
+import { hashPassword, readSession, verifyPassword } from './auth.ts';
 
 describe('readSession expiry', () => {
   test('an expired session returns null, a future-dated session returns the user', async () => {

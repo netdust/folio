@@ -19,7 +19,9 @@ export function EmptyState({ title, description, action, icon }: Props) {
       <h3 className="text-base font-medium text-fg">{title}</h3>
       {description ? <p className="mt-1 max-w-md text-sm text-fg-3">{description}</p> : null}
       {action ? (
-        <Button className="mt-4" onClick={action.onClick}>{action.label}</Button>
+        <Button className="mt-4" onClick={action.onClick}>
+          {action.label}
+        </Button>
       ) : null}
     </div>
   );

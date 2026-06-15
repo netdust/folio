@@ -10,8 +10,8 @@
  *     forcing a network failure in Playwright is flaky.
  */
 
-import { test, expect, signUpFresh, createWorkspace, createProject } from './fixtures.ts';
 import type { Page } from '@playwright/test';
+import { createProject, createWorkspace, expect, signUpFresh, test } from './fixtures.ts';
 
 // Use a per-test counter to avoid slug collisions in the shared e2e DB.
 let testSeq = 0;
@@ -37,9 +37,7 @@ async function seedWorkItem(
   pslug: string,
   data: { title: string; body?: string; status?: string; frontmatter?: Record<string, unknown> },
 ): Promise<string> {
-  const fm = data.status
-    ? { ...(data.frontmatter ?? {}), status: data.status }
-    : data.frontmatter;
+  const fm = data.status ? { ...(data.frontmatter ?? {}), status: data.status } : data.frontmatter;
   const res = await page.request.post(`/api/v1/w/${wslug}/p/${pslug}/documents`, {
     data: {
       type: 'work_item',
@@ -61,7 +59,10 @@ test('scenario 1 — onboarding: workspace create lands you in the workspace', a
   await page.getByRole('textbox', { name: 'Name', exact: true }).fill(wsName);
   // Submit button inside the sheet is now just "Create" (was "Create workspace"
   // before — collided with the empty-state CTA's name).
-  await page.locator('[role="dialog"]').getByRole('button', { name: 'Create', exact: true }).click();
+  await page
+    .locator('[role="dialog"]')
+    .getByRole('button', { name: 'Create', exact: true })
+    .click();
   await expect(page).toHaveURL(/\/w\/spring-/);
 });
 
@@ -72,7 +73,10 @@ test('scenario 2 — onboarding: project create lands on work-items list', async
   await page.goto(`/w/${wslug}`);
   await page.getByRole('button', { name: /Create project/i }).click();
   await page.getByRole('textbox', { name: 'Name', exact: true }).fill('Gallery Ops');
-  await page.locator('[role="dialog"]').getByRole('button', { name: 'Create', exact: true }).click();
+  await page
+    .locator('[role="dialog"]')
+    .getByRole('button', { name: 'Create', exact: true })
+    .click();
   await expect(page).toHaveURL(new RegExp(`/w/${wslug}/p/gallery-ops/work-items`));
 });
 
@@ -107,7 +111,9 @@ test('scenario 4 — list view: inline status edit persists', async ({ page }) =
   // Each list row is grid-laid out: title cell, status (InlineSelect), updated.
   // The InlineSelect trigger is the only button whose accessible name is the
   // current status label ("Backlog") on that row.
-  const row = page.getByRole('listitem').filter({ has: page.getByRole('button', { name: 'Edit title: Status doc' }) });
+  const row = page
+    .getByRole('listitem')
+    .filter({ has: page.getByRole('button', { name: 'Edit title: Status doc' }) });
   await row.getByRole('button', { name: 'Backlog' }).click();
 
   // Popover opens with options as role=option.
@@ -132,7 +138,9 @@ test('scenario 5 — slideover opens via row icon and closes on Escape', async (
   await page.getByRole('button', { name: 'Open Open me' }).click();
 
   // Slideover (Sheet) is role=dialog. Doc opens via ?doc= query string.
-  const sheet = page.locator('[role="dialog"]').filter({ has: page.getByRole('button', { name: 'Close document' }) });
+  const sheet = page
+    .locator('[role="dialog"]')
+    .filter({ has: page.getByRole('button', { name: 'Close document' }) });
   await expect(sheet).toBeVisible();
   // Match `doc=open-me` anywhere in the query string — the URL may carry
   // additional params (sort, dir, view) preserved by hydration.
@@ -154,7 +162,9 @@ test('scenario 6 — slideover renders frontmatter form and body editor', async 
 
   await page.goto(`/w/${wslug}/p/${pslug}/work-items?doc=${slug}`);
 
-  const sheet = page.locator('[role="dialog"]').filter({ has: page.getByRole('button', { name: 'Close document' }) });
+  const sheet = page
+    .locator('[role="dialog"]')
+    .filter({ has: page.getByRole('button', { name: 'Close document' }) });
   await expect(sheet).toBeVisible();
 
   // Slug breadcrumb proves the body header rendered.
@@ -287,9 +297,7 @@ test('scenario 10 — wiki: create a page from empty state', async ({ page }) =>
   // The wiki tree row's outer <li> picks up role="button" via dnd-kit's
   // draggable attributes, so it collides with the inner label button on
   // strict-mode lookups. Match by tagName + .first() instead.
-  await expect(
-    page.locator('button', { hasText: 'My first wiki page' }).first(),
-  ).toBeVisible();
+  await expect(page.locator('button', { hasText: 'My first wiki page' }).first()).toBeVisible();
 
   // Confirm persisted via API.
   const list = await page.request.get(`/api/v1/w/${wslug}/p/${pslug}/documents?type=page`);
@@ -310,7 +318,9 @@ test('scenario 11 — copy-as-MD via right-click', async ({ page, context }) => 
 
   await page.goto(`/w/${wslug}/p/${pslug}/work-items`);
   // Right-click the row. RowContextMenu wraps each row's content.
-  const row = page.getByRole('listitem').filter({ has: page.getByRole('button', { name: 'Edit title: Copy me' }) });
+  const row = page
+    .getByRole('listitem')
+    .filter({ has: page.getByRole('button', { name: 'Edit title: Copy me' }) });
   await row.click({ button: 'right' });
 
   // Menu opens as role=menu with role=menuitem children.

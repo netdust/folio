@@ -22,7 +22,7 @@
  * apps/server/src/routes/settings.ts + lib/crypto.ts: keys are per-workspace
  * encrypted rows, never an env default — the BYOK rule.)
  */
-import { test, expect, signUpFresh, createWorkspace, createProject } from './fixtures.ts';
+import { createProject, createWorkspace, expect, signUpFresh, test } from './fixtures.ts';
 
 const ANTHROPIC_KEY = process.env.FOLIO_TEST_ANTHROPIC_KEY;
 
@@ -135,9 +135,9 @@ test('configure Anthropic key in UI, assign agent, run posts a kind=result comme
   // Reply Drafter. Use an EXACT name so it matches only the trigger, never the
   // popover option (whose name includes the "agent:<slug>" line). (Without
   // this, a silently-missed assignment only surfaced 90s later as "0 comments".)
-  await expect(
-    dialog.getByRole('button', { name: 'Reply Drafter', exact: true }),
-  ).toBeVisible({ timeout: 10_000 });
+  await expect(dialog.getByRole('button', { name: 'Reply Drafter', exact: true })).toBeVisible({
+    timeout: 10_000,
+  });
 
   // --- 5. Open the Comments tab and wait for the kind=result comment ---
   // KindChip renders `kind` verbatim for non-comment/non-error kinds, so a

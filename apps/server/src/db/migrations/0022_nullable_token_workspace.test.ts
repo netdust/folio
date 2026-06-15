@@ -1,8 +1,8 @@
-import { describe, expect, test } from 'bun:test';
 import Database from 'bun:sqlite';
+import { describe, expect, test } from 'bun:test';
+import path from 'node:path';
 import { drizzle } from 'drizzle-orm/bun-sqlite';
 import { migrate } from 'drizzle-orm/bun-sqlite/migrator';
-import path from 'node:path';
 
 const MIGRATIONS_FOLDER = path.resolve(import.meta.dir);
 
@@ -18,9 +18,9 @@ describe('migration 0022 — api_tokens.workspace_id nullable (instance reach)',
     const sqlite = setup();
     sqlite.exec(`INSERT INTO api_tokens (id, workspace_id, name, token_hash, scopes, created_by)
                  VALUES ('t-inst', NULL, 'instance', 'hash-x', '[]', NULL)`);
-    const row = sqlite
-      .query("SELECT workspace_id FROM api_tokens WHERE id='t-inst'")
-      .get() as { workspace_id: string | null };
+    const row = sqlite.query("SELECT workspace_id FROM api_tokens WHERE id='t-inst'").get() as {
+      workspace_id: string | null;
+    };
     expect(row.workspace_id).toBeNull();
   });
 
@@ -30,9 +30,9 @@ describe('migration 0022 — api_tokens.workspace_id nullable (instance reach)',
                  VALUES ('w1','w1','W1',0,0)`);
     sqlite.exec(`INSERT INTO api_tokens (id, workspace_id, name, token_hash, scopes, created_by)
                  VALUES ('t-w1', 'w1', 'pinned', 'hash-y', '[]', NULL)`);
-    const row = sqlite
-      .query("SELECT workspace_id FROM api_tokens WHERE id='t-w1'")
-      .get() as { workspace_id: string | null };
+    const row = sqlite.query("SELECT workspace_id FROM api_tokens WHERE id='t-w1'").get() as {
+      workspace_id: string | null;
+    };
     expect(row.workspace_id).toBe('w1');
   });
 });

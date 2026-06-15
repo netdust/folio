@@ -1,6 +1,6 @@
-import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { describe, expect, it, vi } from 'vitest';
 import { WorkspaceSwitcher } from './workspace-switcher.tsx';
 
 const baseProps = {
@@ -32,18 +32,12 @@ describe('WorkspaceSwitcher — Agents entry + create footer', () => {
     fireEvent.click(screen.getByText('open'));
     // "Agents & Triggers" is the only entry naming triggers; there is no bare
     // "Triggers" button (the duplicate route surface was removed).
-    expect(
-      screen.queryByRole('button', { name: /^triggers$/i }),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^triggers$/i })).not.toBeInTheDocument();
   });
 
   it('has NO Workspace settings entry — it lives in the user menu', () => {
     render(
-      <WorkspaceSwitcher
-        {...baseProps}
-        onCreateProject={vi.fn()}
-        onCreateWorkspace={vi.fn()}
-      />,
+      <WorkspaceSwitcher {...baseProps} onCreateProject={vi.fn()} onCreateWorkspace={vi.fn()} />,
     );
     fireEvent.click(screen.getByText('open'));
     expect(screen.queryByText('Workspace settings')).not.toBeInTheDocument();
@@ -65,11 +59,7 @@ describe('WorkspaceSwitcher — Agents entry + create footer', () => {
       .filter((text) =>
         ['Agents & Triggers', '+ New project', '+ Create workspace'].includes(text),
       );
-    expect(labels).toEqual([
-      'Agents & Triggers',
-      '+ New project',
-      '+ Create workspace',
-    ]);
+    expect(labels).toEqual(['Agents & Triggers', '+ New project', '+ Create workspace']);
   });
 
   it('routes management to the page and interaction to the panel', async () => {

@@ -1,9 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { columnSuggestions, type ColumnSuggestion } from './column-suggestions.ts';
 import type { Field } from '../../lib/api/fields.ts';
+import { type ColumnSuggestion, columnSuggestions } from './column-suggestions.ts';
 
 const f = (key: string, type: Field['type'] = 'string'): Field => ({
-  id: key, key, type, label: null, options: null, required: false, order: 0,
+  id: key,
+  key,
+  type,
+  label: null,
+  options: null,
+  required: false,
+  order: 0,
 });
 
 const doc = (frontmatter: Record<string, unknown>) => ({

@@ -1,13 +1,13 @@
 import { describe, expect, test } from 'bun:test';
 import { Hono } from 'hono';
 import { nanoid } from 'nanoid';
-import { makeTestApp } from '../test/harness.ts';
 import { apiTokens, documents, projects as projectsTbl } from '../db/schema.ts';
-import { attachToken, intersect, requireResource, requireScope } from './bearer.ts';
-import { resolveProject, resolveWorkspace } from './scope.ts';
-import { attachUser } from './auth.ts';
 import { newApiToken } from '../lib/auth.ts';
 import { registerErrorHandler } from '../lib/http.ts';
+import { makeTestApp } from '../test/harness.ts';
+import { attachUser } from './auth.ts';
+import { attachToken, intersect, requireResource, requireScope } from './bearer.ts';
+import { resolveProject, resolveWorkspace } from './scope.ts';
 
 describe('intersect(agentList, tokenList)', () => {
   test('(["*"], null) → ["*"] — wildcard inheritance', () => {
@@ -118,37 +118,37 @@ function makeAppWithGuards() {
 
 describe('requireResource middleware', () => {
   test('denies bearer when project not in agent allow-list', async () => {
-    const { projectB, agentTokenPlaintext, seed } =
-      await setupAgentScenario({ agentProjects: ['A'] });
+    const { projectB, agentTokenPlaintext, seed } = await setupAgentScenario({
+      agentProjects: ['A'],
+    });
     const app = makeAppWithGuards();
-    const res = await app.request(
-      `/api/v1/w/${seed.workspace.slug}/p/${projectB.slug}/documents`,
-      { headers: { Authorization: `Bearer ${agentTokenPlaintext}` } },
-    );
+    const res = await app.request(`/api/v1/w/${seed.workspace.slug}/p/${projectB.slug}/documents`, {
+      headers: { Authorization: `Bearer ${agentTokenPlaintext}` },
+    });
     expect(res.status).toBe(403);
     const body = (await res.json()) as { error: { code: string } };
     expect(body.error.code).toBe('FORBIDDEN_RESOURCE');
   });
 
   test('allows bearer when project in agent allow-list', async () => {
-    const { projectA, agentTokenPlaintext, seed } =
-      await setupAgentScenario({ agentProjects: ['A'] });
+    const { projectA, agentTokenPlaintext, seed } = await setupAgentScenario({
+      agentProjects: ['A'],
+    });
     const app = makeAppWithGuards();
-    const res = await app.request(
-      `/api/v1/w/${seed.workspace.slug}/p/${projectA.slug}/documents`,
-      { headers: { Authorization: `Bearer ${agentTokenPlaintext}` } },
-    );
+    const res = await app.request(`/api/v1/w/${seed.workspace.slug}/p/${projectA.slug}/documents`, {
+      headers: { Authorization: `Bearer ${agentTokenPlaintext}` },
+    });
     expect(res.status).toBe(200);
   });
 
   test('allows bearer with wildcard agent on any project', async () => {
-    const { projectB, agentTokenPlaintext, seed } =
-      await setupAgentScenario({ agentProjects: ['*'] });
+    const { projectB, agentTokenPlaintext, seed } = await setupAgentScenario({
+      agentProjects: ['*'],
+    });
     const app = makeAppWithGuards();
-    const res = await app.request(
-      `/api/v1/w/${seed.workspace.slug}/p/${projectB.slug}/documents`,
-      { headers: { Authorization: `Bearer ${agentTokenPlaintext}` } },
-    );
+    const res = await app.request(`/api/v1/w/${seed.workspace.slug}/p/${projectB.slug}/documents`, {
+      headers: { Authorization: `Bearer ${agentTokenPlaintext}` },
+    });
     expect(res.status).toBe(200);
   });
 
@@ -158,20 +158,18 @@ describe('requireResource middleware', () => {
       tokenProjectIds: [], // narrowed to nothing
     });
     const app = makeAppWithGuards();
-    const res = await app.request(
-      `/api/v1/w/${seed.workspace.slug}/p/${projectB.slug}/documents`,
-      { headers: { Authorization: `Bearer ${agentTokenPlaintext}` } },
-    );
+    const res = await app.request(`/api/v1/w/${seed.workspace.slug}/p/${projectB.slug}/documents`, {
+      headers: { Authorization: `Bearer ${agentTokenPlaintext}` },
+    });
     expect(res.status).toBe(403);
   });
 
   test('bypasses for session-authenticated requests', async () => {
     const { projectB, seed } = await setupAgentScenario({ agentProjects: ['A'] });
     const app = makeAppWithGuards();
-    const res = await app.request(
-      `/api/v1/w/${seed.workspace.slug}/p/${projectB.slug}/documents`,
-      { headers: { Cookie: seed.sessionCookie } },
-    );
+    const res = await app.request(`/api/v1/w/${seed.workspace.slug}/p/${projectB.slug}/documents`, {
+      headers: { Cookie: seed.sessionCookie },
+    });
     expect(res.status).toBe(200);
   });
 });

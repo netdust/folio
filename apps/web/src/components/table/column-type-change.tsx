@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { FieldType } from '../../lib/api/fields.ts';
-import { Dialog, DialogContent, DialogTitle, DialogDescription } from '../ui/dialog.tsx';
 import { Button } from '../ui/button.tsx';
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from '../ui/dialog.tsx';
 
 const ISO_RE = /^[A-Z]{3}$/;
 
@@ -57,14 +57,22 @@ export function ColumnTypeChange({ currentType, currentOptions, open, onClose, o
   }
 
   return (
-    <Dialog open={open} onOpenChange={(v) => { if (!v && !submitting) onClose(); }}>
+    <Dialog
+      open={open}
+      onOpenChange={(v) => {
+        if (!v && !submitting) onClose();
+      }}
+    >
       <DialogContent>
         <DialogTitle>Change column type</DialogTitle>
         <DialogDescription>
-          Current: <code>{currentType}</code>. Pick a compatible new type. Values that don't fit the new type remain in raw frontmatter but the cell renderer changes.
+          Current: <code>{currentType}</code>. Pick a compatible new type. Values that don't fit the
+          new type remain in raw frontmatter but the cell renderer changes.
         </DialogDescription>
         <div className="mt-3 flex flex-col gap-2">
-          <label className="text-[11px] uppercase tracking-wide text-fg-3" htmlFor="ctc-type">New type</label>
+          <label className="text-[11px] uppercase tracking-wide text-fg-3" htmlFor="ctc-type">
+            New type
+          </label>
           <select
             id="ctc-type"
             value={target}
@@ -72,13 +80,17 @@ export function ColumnTypeChange({ currentType, currentOptions, open, onClose, o
             className="rounded-sm border border-border-light bg-content px-2 py-1 text-sm outline-none focus:border-border"
           >
             {targets.map((t) => (
-              <option key={t} value={t}>{t}</option>
+              <option key={t} value={t}>
+                {t}
+              </option>
             ))}
           </select>
 
           {target === 'currency' && currentType !== 'currency' ? (
             <>
-              <label className="text-[11px] uppercase tracking-wide text-fg-3" htmlFor="ctc-iso">ISO code</label>
+              <label className="text-[11px] uppercase tracking-wide text-fg-3" htmlFor="ctc-iso">
+                ISO code
+              </label>
               <input
                 id="ctc-iso"
                 value={iso}
@@ -90,11 +102,21 @@ export function ColumnTypeChange({ currentType, currentOptions, open, onClose, o
             </>
           ) : null}
 
-          {error ? <p role="alert" className="text-xs text-danger">{error}</p> : null}
+          {error ? (
+            <p role="alert" className="text-xs text-danger">
+              {error}
+            </p>
+          ) : null}
         </div>
         <div className="mt-5 flex justify-end gap-2">
-          <Button variant="secondary" onClick={onClose} disabled={submitting}>Cancel</Button>
-          <Button variant="primary" onClick={() => void handleApply()} disabled={submitting || target === currentType}>
+          <Button variant="secondary" onClick={onClose} disabled={submitting}>
+            Cancel
+          </Button>
+          <Button
+            variant="primary"
+            onClick={() => void handleApply()}
+            disabled={submitting || target === currentType}
+          >
             Apply
           </Button>
         </div>

@@ -1,5 +1,5 @@
-import { test, expect } from 'bun:test';
-import { filterCompile, FilterCompileError, type FilterAST } from './filter-compile.ts';
+import { expect, test } from 'bun:test';
+import { type FilterAST, FilterCompileError, filterCompile } from './filter-compile.ts';
 
 // filterCompile ALWAYS returns the top-level `and` node (see filter-compile.ts).
 // Narrow the FilterAST union to that variant so tests can read `.clauses`
@@ -20,7 +20,10 @@ test('scalar shorthand becomes $eq', () => {
 test('$in operator', () => {
   const ast = filterCompile({ status: { $in: ['todo', 'done'] } });
   expect(asAnd(ast).clauses[0]).toEqual({
-    kind: 'cmp', key: 'status', op: '$in', value: ['todo', 'done'],
+    kind: 'cmp',
+    key: 'status',
+    op: '$in',
+    value: ['todo', 'done'],
   });
 });
 
@@ -32,7 +35,10 @@ test('multiple keys are AND-combined', () => {
 test('$exists boolean', () => {
   const ast = filterCompile({ priority: { $exists: true } });
   expect(asAnd(ast).clauses[0]).toEqual({
-    kind: 'cmp', key: 'priority', op: '$exists', value: true,
+    kind: 'cmp',
+    key: 'priority',
+    op: '$exists',
+    value: true,
   });
 });
 

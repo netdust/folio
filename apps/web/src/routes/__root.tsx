@@ -1,10 +1,15 @@
 import type { QueryClient } from '@tanstack/react-query';
-import { Outlet, createRootRouteWithContext, redirect, useRouterState } from '@tanstack/react-router';
+import {
+  Outlet,
+  createRootRouteWithContext,
+  redirect,
+  useRouterState,
+} from '@tanstack/react-router';
 import { TanStackRouterDevtools } from '@tanstack/router-devtools';
-import { Toaster } from '../components/ui/toast.tsx';
 import { CommandPalette } from '../components/command-palette.tsx';
+import { Toaster } from '../components/ui/toast.tsx';
+import { type MeResponse, authKeys } from '../lib/api/auth.ts';
 import { ApiError, client } from '../lib/api/client.ts';
-import { authKeys, type MeResponse } from '../lib/api/auth.ts';
 
 interface RouterContext {
   queryClient: QueryClient;

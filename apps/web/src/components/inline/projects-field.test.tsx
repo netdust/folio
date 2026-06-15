@@ -1,6 +1,6 @@
-import { describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { describe, expect, it, vi } from 'vitest';
 import { ProjectsField } from './projects-field.tsx';
 
 const projects = [
@@ -25,7 +25,11 @@ describe('ProjectsField', () => {
 
   it('renders a muted "·removed" chip for orphan ids', () => {
     render(
-      <ProjectsField value={['deadbeef-id-no-longer-exists']} projects={projects} onChange={() => {}} />,
+      <ProjectsField
+        value={['deadbeef-id-no-longer-exists']}
+        projects={projects}
+        onChange={() => {}}
+      />,
     );
     expect(screen.getByText(/·removed/)).toBeInTheDocument();
   });

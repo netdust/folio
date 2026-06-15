@@ -4,8 +4,8 @@ import type { DB } from '../db/client.ts';
 import { users } from '../db/schema.ts';
 import type { Env } from '../env.ts';
 import { userRole } from './access.ts';
-import { seedInstanceSkills } from './instance-skills.ts';
 import { HTTPError } from './http.ts';
+import { seedInstanceSkills } from './instance-skills.ts';
 
 /** Reserved (underscore-prefixed) workspace slugs cannot be user-created. The
  *  workspace create/rename regex `^[a-z0-9-]+$` already blocks underscores;
@@ -36,17 +36,10 @@ export type InstanceAdminRole = 'owner' | 'admin';
  * Post-tenancy: the source of the role is `users.role` via `userRole`, NOT a
  * `__system` membership. One instance = one team; roles live on the user.
  */
-export async function requireInstanceAdmin(
-  db: DB,
-  userId: string,
-): Promise<InstanceAdminRole> {
+export async function requireInstanceAdmin(db: DB, userId: string): Promise<InstanceAdminRole> {
   const role = await userRole(db, userId);
   if (role !== 'owner' && role !== 'admin') {
-    throw new HTTPError(
-      'FORBIDDEN',
-      'instance administration requires owner or admin',
-      403,
-    );
+    throw new HTTPError('FORBIDDEN', 'instance administration requires owner or admin', 403);
   }
   return role;
 }
@@ -59,11 +52,7 @@ export async function requireInstanceAdmin(
 export async function requireInstanceOwner(db: DB, userId: string): Promise<'owner'> {
   const role = await userRole(db, userId);
   if (role !== 'owner') {
-    throw new HTTPError(
-      'FORBIDDEN',
-      'this action requires the instance owner',
-      403,
-    );
+    throw new HTTPError('FORBIDDEN', 'this action requires the instance owner', 403);
   }
   return 'owner';
 }
@@ -92,11 +81,7 @@ export async function findSystemOwnerId(db: DB): Promise<string | undefined> {
 export async function grantOwner(db: DB, email: string): Promise<string> {
   const user = await db.query.users.findFirst({ where: eq(users.email, email) });
   if (!user) {
-    throw new HTTPError(
-      'INSTANCE_OWNER_NOT_FOUND',
-      `no user with email ${email}`,
-      404,
-    );
+    throw new HTTPError('INSTANCE_OWNER_NOT_FOUND', `no user with email ${email}`, 404);
   }
   if (user.role !== 'owner') {
     await db.update(users).set({ role: 'owner' }).where(eq(users.id, user.id));
@@ -147,10 +132,7 @@ export async function designateInstanceOwner(db: DB, email: string): Promise<voi
  * the real work (no test self-skip); `index.ts` gates the call to non-test so
  * importing the module in tests does not trigger a real boot.
  */
-export async function runBootTasks(
-  db: DB,
-  env: Pick<Env, 'FOLIO_INSTANCE_OWNER'>,
-): Promise<void> {
+export async function runBootTasks(db: DB, env: Pick<Env, 'FOLIO_INSTANCE_OWNER'>): Promise<void> {
   await seedInstanceSkills(db);
 
   const ownerEmail = env.FOLIO_INSTANCE_OWNER;

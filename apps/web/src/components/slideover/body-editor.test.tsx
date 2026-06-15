@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
 import { BodyEditor } from './body-editor.tsx';
 
 describe('BodyEditor', () => {
@@ -30,9 +30,7 @@ describe('BodyEditor', () => {
     // live ProseMirror selection to invoke — deferred to the Playwright/Chrome
     // shake-out (jsdom can't drive the contenteditable selection movement).
     const onChange = vi.fn();
-    render(
-      <BodyEditor value="hi" onChange={onChange} aiConfigured wslug="acme" title="Doc" />,
-    );
+    render(<BodyEditor value="hi" onChange={onChange} aiConfigured wslug="acme" title="Doc" />);
     expect(onChange).not.toHaveBeenCalled();
   });
 });

@@ -1,6 +1,6 @@
-import { afterEach, describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
 import { DndContext } from '@dnd-kit/core';
+import { render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DocumentSummary } from '../../lib/api/documents.ts';
 import { KanbanCard } from './kanban-card.tsx';
 import { KanbanColumn } from './kanban-column.tsx';

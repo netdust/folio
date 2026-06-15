@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from 'vitest';
-import { slashRegistry, filterSlash, type SlashContext } from './slash-registry.ts';
+import { describe, expect, it, vi } from 'vitest';
+import { type SlashContext, filterSlash, slashRegistry } from './slash-registry.ts';
 
 function ctxFor(overrides: Partial<SlashContext> = {}): SlashContext {
   return {

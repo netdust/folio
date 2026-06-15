@@ -303,9 +303,7 @@ describe('GET /api/v1/instance/invite-targets — enumeration (owner+admin)', ()
     const { app, db, seed } = await makeTestApp();
     // A reserved-slug workspace + a project in it (the exclude is by slug prefix).
     const sysId = nanoid();
-    await db
-      .insert(schema.workspaces)
-      .values({ id: sysId, slug: '__system', name: 'Reserved' });
+    await db.insert(schema.workspaces).values({ id: sysId, slug: '__system', name: 'Reserved' });
     await db
       .insert(schema.projects)
       .values({ id: nanoid(), workspaceId: sysId, slug: 'skills', name: 'Skills' });
@@ -519,8 +517,12 @@ describe('DELETE /api/v1/instance/users/:id (owner-only hard delete)', () => {
     const proj = await seedProject(db, ws);
     await db.insert(schema.workspaceAccess).values({ userId: victimId, workspaceId: ws });
     await db.insert(schema.apiTokens).values({
-      id: nanoid(), workspaceId: ws, name: 'victim-tok',
-      tokenHash: newApiToken().hash, scopes: ['documents:read'], createdBy: victimId,
+      id: nanoid(),
+      workspaceId: ws,
+      name: 'victim-tok',
+      tokenHash: newApiToken().hash,
+      scopes: ['documents:read'],
+      createdBy: victimId,
     });
     const docId = await seedDocument(db, ws, proj, victimId);
 
@@ -531,13 +533,17 @@ describe('DELETE /api/v1/instance/users/:id (owner-only hard delete)', () => {
     expect(res.status).toBe(200);
 
     // User gone.
-    expect(await db.query.users.findFirst({ where: eq(schema.users.id, victimId) })).toBeUndefined();
+    expect(
+      await db.query.users.findFirst({ where: eq(schema.users.id, victimId) }),
+    ).toBeUndefined();
     // Sessions + grants cascaded.
     expect(
       await db.query.authSessions.findFirst({ where: eq(schema.authSessions.userId, victimId) }),
     ).toBeUndefined();
     expect(
-      await db.query.workspaceAccess.findFirst({ where: eq(schema.workspaceAccess.userId, victimId) }),
+      await db.query.workspaceAccess.findFirst({
+        where: eq(schema.workspaceAccess.userId, victimId),
+      }),
     ).toBeUndefined();
     // Tokens they minted are revoked (no orphan live credential).
     expect(
@@ -555,7 +561,8 @@ describe('DELETE /api/v1/instance/users/:id (owner-only hard delete)', () => {
     const { cookie } = await seedRoleSession(db, 'admin');
     const victim = await seedUser(db, 'member');
     const res = await app.request(`/api/v1/instance/users/${victim}`, {
-      method: 'DELETE', headers: { Cookie: cookie },
+      method: 'DELETE',
+      headers: { Cookie: cookie },
     });
     expect(res.status).toBe(403);
     expect(await db.query.users.findFirst({ where: eq(schema.users.id, victim) })).toBeDefined();
@@ -564,10 +571,13 @@ describe('DELETE /api/v1/instance/users/:id (owner-only hard delete)', () => {
   test('cannot delete YOURSELF (409 CANNOT_SELF_DELETE)', async () => {
     const { app, db, seed } = await makeTestApp();
     const res = await app.request(`/api/v1/instance/users/${seed.user.id}`, {
-      method: 'DELETE', headers: { Cookie: seed.sessionCookie },
+      method: 'DELETE',
+      headers: { Cookie: seed.sessionCookie },
     });
     expect(res.status).toBe(409);
-    expect(await db.query.users.findFirst({ where: eq(schema.users.id, seed.user.id) })).toBeDefined();
+    expect(
+      await db.query.users.findFirst({ where: eq(schema.users.id, seed.user.id) }),
+    ).toBeDefined();
   });
 
   test('a second owner CAN be deleted (2→1 allowed); the last owner cannot (self-delete 409)', async () => {
@@ -602,7 +612,8 @@ describe('DELETE /api/v1/instance/users/:id (owner-only hard delete)', () => {
     const token = await seedInstanceToken(db, seed.user.id);
     const victim = await seedUser(db, 'member');
     const res = await app.request(`/api/v1/instance/users/${victim}`, {
-      method: 'DELETE', headers: { Authorization: `Bearer ${token}` },
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` },
     });
     expect([401, 403]).toContain(res.status);
     expect(await db.query.users.findFirst({ where: eq(schema.users.id, victim) })).toBeDefined();
@@ -611,7 +622,8 @@ describe('DELETE /api/v1/instance/users/:id (owner-only hard delete)', () => {
   test('deleting a non-existent user → 404', async () => {
     const { app, db, seed } = await makeTestApp();
     const res = await app.request('/api/v1/instance/users/nonexistent-id', {
-      method: 'DELETE', headers: { Cookie: seed.sessionCookie },
+      method: 'DELETE',
+      headers: { Cookie: seed.sessionCookie },
     });
     expect(res.status).toBe(404);
   });

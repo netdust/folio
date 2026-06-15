@@ -35,7 +35,9 @@ function seed(db: Database): void {
   db.run(`INSERT INTO workspaces (id, slug, name) VALUES ('w1', 'ws', 'WS')`);
   db.run(`INSERT INTO memberships (workspace_id, user_id, role) VALUES ('w1', 'u1', 'owner')`);
   db.run(`INSERT INTO projects (id, workspace_id, slug, name) VALUES ('p1', 'w1', 'proj', 'Proj')`);
-  db.run(`INSERT INTO tables (id, project_id, slug, name, "order") VALUES ('t1', 'p1', 'work', 'Work', 0)`);
+  db.run(
+    `INSERT INTO tables (id, project_id, slug, name, "order") VALUES ('t1', 'p1', 'work', 'Work', 0)`,
+  );
   // Parent work_item the comments hang off of.
   db.run(
     `INSERT INTO documents (id, workspace_id, project_id, table_id, type, slug, title, body, frontmatter, created_by, updated_by, parent_id)
@@ -53,7 +55,13 @@ function insertAgent(db: Database, id: string, slug: string, createdAt?: number)
   );
 }
 
-function insertComment(db: Database, id: string, slug: string, author: string, createdAt?: number): void {
+function insertComment(
+  db: Database,
+  id: string,
+  slug: string,
+  author: string,
+  createdAt?: number,
+): void {
   const fm = JSON.stringify({
     author,
     kind: 'comment',

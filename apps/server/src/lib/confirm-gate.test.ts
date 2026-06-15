@@ -14,15 +14,15 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
-import { conversations, pendingOps, type ApiToken } from '../db/schema.ts';
-import { makeBareTestDb } from '../test/harness.ts';
-import { type ToolDef, executeTool, isAwaitingConfirmation, registerTool } from './agent-tools.ts';
-import type { ConversationSink } from './chat-thread-sink.ts';
+import { type ApiToken, conversations, pendingOps } from '../db/schema.ts';
 import {
   confirmPendingOp,
   getConfirmedPendingOp,
   recordPendingOp,
 } from '../services/pending-ops.ts';
+import { makeBareTestDb } from '../test/harness.ts';
+import { type ToolDef, executeTool, isAwaitingConfirmation, registerTool } from './agent-tools.ts';
+import type { ConversationSink } from './chat-thread-sink.ts';
 
 let db: Awaited<ReturnType<typeof makeBareTestDb>>['db'];
 
@@ -155,16 +155,27 @@ describe('irreversible-op confirm gate (executeTool)', () => {
     await confirmPendingOp(db, pending.id, 'user-1');
 
     // Turn-2 re-read tries to delete a DIFFERENT slug. The recorded params win.
-    await executeTool(makeToken(['documents:delete']), 'user-1', '__danger', { slug: 'acme' }, undefined, {
-      callerScopes: ['documents:delete'],
-      conversationId: convId,
-    });
+    await executeTool(
+      makeToken(['documents:delete']),
+      'user-1',
+      '__danger',
+      { slug: 'acme' },
+      undefined,
+      {
+        callerScopes: ['documents:delete'],
+        conversationId: convId,
+      },
+    );
 
     expect(applied.count).toBe(1);
     // The handler ran the RECORDED slug ('acme'), not any drifted re-read.
     expect((applied.lastArgs as { slug: string }).slug).toBe('acme');
     // Audit: the row is now 'executed'.
-    const row = await db.select().from(pendingOps).where(eq(pendingOps.id, pending.id)).then((r) => r[0]!);
+    const row = await db
+      .select()
+      .from(pendingOps)
+      .where(eq(pendingOps.id, pending.id))
+      .then((r) => r[0]!);
     expect(row.status).toBe('executed');
     expect(row.executedBy).toBe('user-1');
     expect(row.executedAt).not.toBeNull();
@@ -187,12 +198,19 @@ describe('irreversible-op confirm gate (executeTool)', () => {
 
     // Turn 1: the operator (agent actor) proposes a HIGH op. Gate records + refuses.
     await expect(
-      executeTool(makeToken(['documents:delete']), AGENT_ACTOR, '__danger', { slug: 'acme' }, undefined, {
-        callerScopes: ['documents:delete'],
-        conversationId: convId,
-        conversationSink: sink,
-        confirmerId: HUMAN, // ← the human owner, threaded by the runner as transitionActor
-      }),
+      executeTool(
+        makeToken(['documents:delete']),
+        AGENT_ACTOR,
+        '__danger',
+        { slug: 'acme' },
+        undefined,
+        {
+          callerScopes: ['documents:delete'],
+          conversationId: convId,
+          conversationSink: sink,
+          confirmerId: HUMAN, // ← the human owner, threaded by the runner as transitionActor
+        },
+      ),
     ).rejects.toThrow(/requires confirmation/);
 
     // The recorded pending_op's caller_id MUST be the HUMAN, not the agent actor.
@@ -205,11 +223,18 @@ describe('irreversible-op confirm gate (executeTool)', () => {
     await confirmPendingOp(db, pendingId, HUMAN);
 
     // Turn 2: the operator re-invokes; the gate finds the confirmed row + executes.
-    await executeTool(makeToken(['documents:delete']), AGENT_ACTOR, '__danger', { slug: 'acme' }, undefined, {
-      callerScopes: ['documents:delete'],
-      conversationId: convId,
-      confirmerId: HUMAN,
-    });
+    await executeTool(
+      makeToken(['documents:delete']),
+      AGENT_ACTOR,
+      '__danger',
+      { slug: 'acme' },
+      undefined,
+      {
+        callerScopes: ['documents:delete'],
+        conversationId: convId,
+        confirmerId: HUMAN,
+      },
+    );
     expect(applied.count).toBe(1); // the destructive op finally applied — gate is confirmable
   });
 
@@ -228,11 +253,18 @@ describe('irreversible-op confirm gate (executeTool)', () => {
     // The operator calls with a DIFFERENT slug — no confirmed row matches those
     // params → the gate re-proposes (refuses), it does NOT execute slug 'evil'.
     await expect(
-      executeTool(makeToken(['documents:delete']), 'user-1', '__danger', { slug: 'evil' }, undefined, {
-        callerScopes: ['documents:delete'],
-        conversationId: convId,
-        confirmerId: 'user-1',
-      }),
+      executeTool(
+        makeToken(['documents:delete']),
+        'user-1',
+        '__danger',
+        { slug: 'evil' },
+        undefined,
+        {
+          callerScopes: ['documents:delete'],
+          conversationId: convId,
+          confirmerId: 'user-1',
+        },
+      ),
     ).rejects.toThrow(/requires confirmation/);
     expect(applied.count).toBe(0);
   });
@@ -262,9 +294,15 @@ describe('irreversible-op confirm gate (executeTool)', () => {
       params: { slug: 'acme' },
       target: 'acme',
     });
-    await expect(confirmPendingOp(db, pending.id, 'user-2')).rejects.toThrow('PENDING_OP_NOT_FOUND');
+    await expect(confirmPendingOp(db, pending.id, 'user-2')).rejects.toThrow(
+      'PENDING_OP_NOT_FOUND',
+    );
     // The row is untouched (still pending) — a foreign confirm cannot flip it.
-    const row = await db.select().from(pendingOps).where(eq(pendingOps.id, pending.id)).then((r) => r[0]!);
+    const row = await db
+      .select()
+      .from(pendingOps)
+      .where(eq(pendingOps.id, pending.id))
+      .then((r) => r[0]!);
     expect(row.status).toBe('pending');
   });
 
@@ -286,7 +324,11 @@ describe('irreversible-op confirm gate (executeTool)', () => {
       executedBy: null,
     });
     await expect(confirmPendingOp(db, id, 'user-1')).rejects.toThrow('PENDING_OP_EXPIRED');
-    const row = await db.select().from(pendingOps).where(eq(pendingOps.id, id)).then((r) => r[0]!);
+    const row = await db
+      .select()
+      .from(pendingOps)
+      .where(eq(pendingOps.id, id))
+      .then((r) => r[0]!);
     expect(row.status).toBe('expired');
   });
 

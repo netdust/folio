@@ -1,5 +1,5 @@
+import { FilterCompileError, filterCompile } from '@folio/shared';
 import { and, desc, eq, isNull } from 'drizzle-orm';
-import { filterCompile, FilterCompileError } from '@folio/shared';
 import { db } from '../db/client.ts';
 import { documents, views } from '../db/schema.ts';
 import type { Document, View } from '../db/schema.ts';
@@ -64,4 +64,3 @@ export async function runView(opts: {
     .orderBy(desc(documents.updatedAt), desc(documents.id))
     .limit(limit);
 }
-

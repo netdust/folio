@@ -1,21 +1,27 @@
 import { createFileRoute, notFound } from '@tanstack/react-router';
-import { Button } from '../components/ui/button.tsx';
-import { IconButton } from '../components/ui/icon-button.tsx';
-import { Pill } from '../components/ui/pill.tsx';
-import { Badge, labelTone } from '../components/ui/badge.tsx';
-import { Chip, ChipAdd, FilterChipValue } from '../components/ui/chip.tsx';
-import { Avatar } from '../components/ui/avatar.tsx';
-import { Kbd } from '../components/ui/kbd.tsx';
-import { ThemeToggle } from '../components/ui/theme-toggle.tsx';
-import { Dialog, DialogTrigger, DialogContent, DialogTitle, DialogDescription } from '../components/ui/dialog.tsx';
-import { Sheet, SheetTrigger, SheetContent } from '../components/ui/sheet.tsx';
-import { toast } from '../components/ui/toast.tsx';
-import { Shell } from '../components/shell/shell.tsx';
-import { Rail } from '../components/shell/rail.tsx';
-import { MainFrame, FrameTab } from '../components/shell/main-frame.tsx';
-import { RightPanel } from '../components/shell/right-panel.tsx';
-import { RailCollapseToggle } from '../components/shell/rail-collapse-toggle.tsx';
 import { useState } from 'react';
+import { FrameTab, MainFrame } from '../components/shell/main-frame.tsx';
+import { RailCollapseToggle } from '../components/shell/rail-collapse-toggle.tsx';
+import { Rail } from '../components/shell/rail.tsx';
+import { RightPanel } from '../components/shell/right-panel.tsx';
+import { Shell } from '../components/shell/shell.tsx';
+import { Avatar } from '../components/ui/avatar.tsx';
+import { Badge, labelTone } from '../components/ui/badge.tsx';
+import { Button } from '../components/ui/button.tsx';
+import { Chip, ChipAdd, FilterChipValue } from '../components/ui/chip.tsx';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+  DialogTrigger,
+} from '../components/ui/dialog.tsx';
+import { IconButton } from '../components/ui/icon-button.tsx';
+import { Kbd } from '../components/ui/kbd.tsx';
+import { Pill } from '../components/ui/pill.tsx';
+import { Sheet, SheetContent, SheetTrigger } from '../components/ui/sheet.tsx';
+import { ThemeToggle } from '../components/ui/theme-toggle.tsx';
+import { toast } from '../components/ui/toast.tsx';
 
 export const Route = createFileRoute('/dev/design-system')({
   beforeLoad: () => {
@@ -52,10 +58,18 @@ function DesignSystem() {
 
       <Section title="Icon buttons">
         <Row>
-          <IconButton size="sm" label="Edit"><Icon path="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /></IconButton>
-          <IconButton size="md" label="Close"><Icon path="M18 6L6 18M6 6l12 12" /></IconButton>
-          <IconButton size="lg" label="Search"><Icon path="M21 21l-4.35-4.35M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16z" /></IconButton>
-          <IconButton size="md" label="Active" active><Icon path="M5 13l4 4L19 7" /></IconButton>
+          <IconButton size="sm" label="Edit">
+            <Icon path="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+          </IconButton>
+          <IconButton size="md" label="Close">
+            <Icon path="M18 6L6 18M6 6l12 12" />
+          </IconButton>
+          <IconButton size="lg" label="Search">
+            <Icon path="M21 21l-4.35-4.35M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16z" />
+          </IconButton>
+          <IconButton size="md" label="Active" active>
+            <Icon path="M5 13l4 4L19 7" />
+          </IconButton>
         </Row>
       </Section>
 
@@ -77,7 +91,9 @@ function DesignSystem() {
         </Row>
         <Row>
           {['curation', 'deadline', 'research', 'logistics', 'press'].map((l) => (
-            <Badge key={l} variant="label" tone={labelTone(l)}>{l}</Badge>
+            <Badge key={l} variant="label" tone={labelTone(l)}>
+              {l}
+            </Badge>
           ))}
         </Row>
       </Section>
@@ -88,7 +104,9 @@ function DesignSystem() {
           <Chip muted>removed</Chip>
           <Chip onClick={() => {}}>clickable</Chip>
           <Chip mono>list_documents</Chip>
-          <Chip muted mono>deadbeef·removed</Chip>
+          <Chip muted mono>
+            deadbeef·removed
+          </Chip>
         </Row>
         <Row>
           <FilterChipValue filterKey="status" value="is not Done" />
@@ -116,16 +134,27 @@ function DesignSystem() {
 
       <Section title="Toast">
         <Row>
-          <Button variant="secondary" onClick={() => toast.success('Saved.')}>Success</Button>
-          <Button variant="secondary" onClick={() => toast.error('Failed to update — rolled back.')}>Error</Button>
-          <Button variant="secondary" onClick={() => toast('Copied as Markdown.')}>Plain</Button>
+          <Button variant="secondary" onClick={() => toast.success('Saved.')}>
+            Success
+          </Button>
+          <Button
+            variant="secondary"
+            onClick={() => toast.error('Failed to update — rolled back.')}
+          >
+            Error
+          </Button>
+          <Button variant="secondary" onClick={() => toast('Copied as Markdown.')}>
+            Plain
+          </Button>
         </Row>
       </Section>
 
       <Section title="Dialog">
         <Row>
           <Dialog>
-            <DialogTrigger asChild><Button>Open dialog</Button></DialogTrigger>
+            <DialogTrigger asChild>
+              <Button>Open dialog</Button>
+            </DialogTrigger>
             <DialogContent>
               <DialogTitle>Confirm delete</DialogTitle>
               <DialogDescription>This action cannot be undone.</DialogDescription>
@@ -141,11 +170,15 @@ function DesignSystem() {
       <Section title="Sheet (800px slideover)">
         <Row>
           <Sheet>
-            <SheetTrigger asChild><Button>Open sheet</Button></SheetTrigger>
+            <SheetTrigger asChild>
+              <Button>Open sheet</Button>
+            </SheetTrigger>
             <SheetContent>
               <div className="p-6">
                 <h2 className="text-xl font-medium tracking-tight">Document slideover preview</h2>
-                <p className="mt-2 text-sm text-fg-2">800px wide. Closes on Esc or click-outside.</p>
+                <p className="mt-2 text-sm text-fg-2">
+                  800px wide. Closes on Esc or click-outside.
+                </p>
               </div>
             </SheetContent>
           </Sheet>
@@ -168,18 +201,42 @@ function ShellPreview() {
         rail={
           <Rail
             brand={{ mark: 'F', label: 'Folio' }}
-            workspace={{ mark: 'G', name: 'Galerie Sint-Jan', onSwitch: () => toast('Switch workspace clicked.') }}
+            workspace={{
+              mark: 'G',
+              name: 'Galerie Sint-Jan',
+              onSwitch: () => toast('Switch workspace clicked.'),
+            }}
             primary={[
-              { id: 'home',  label: 'Home',       icon: navIcon('M3 12l9-9 9 9M5 10v10h14V10') },
-              { id: 'work',  label: 'Work items', icon: navIcon('M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01'), active: true },
-              { id: 'board', label: 'Board',      icon: navIcon('M3 3h18v18H3zM9 3v18M15 3v18') },
-              { id: 'wiki',  label: 'Wiki',       icon: navIcon('M4 19.5A2.5 2.5 0 0 1 6.5 17H20M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z') },
+              { id: 'home', label: 'Home', icon: navIcon('M3 12l9-9 9 9M5 10v10h14V10') },
+              {
+                id: 'work',
+                label: 'Work items',
+                icon: navIcon('M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01'),
+                active: true,
+              },
+              { id: 'board', label: 'Board', icon: navIcon('M3 3h18v18H3zM9 3v18M15 3v18') },
+              {
+                id: 'wiki',
+                label: 'Wiki',
+                icon: navIcon(
+                  'M4 19.5A2.5 2.5 0 0 1 6.5 17H20M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z',
+                ),
+              },
             ]}
             tools={[
-              { id: 'search', label: 'Search', kbd: '⌘K', icon: navIcon('M21 21l-4.35-4.35M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16z') },
+              {
+                id: 'search',
+                label: 'Search',
+                kbd: '⌘K',
+                icon: navIcon('M21 21l-4.35-4.35M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16z'),
+              },
             ]}
             account={[
-              { id: 'settings', label: 'Settings', icon: navIcon('M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z') },
+              {
+                id: 'settings',
+                label: 'Settings',
+                icon: navIcon('M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z'),
+              },
             ]}
             user={{ name: 'Stefan Vermaercke' }}
           />
@@ -193,7 +250,9 @@ function ShellPreview() {
                 <Button variant="secondary" size="md" onClick={() => setPanelOpen((v) => !v)}>
                   {panelOpen ? 'Hide panel' : 'Show panel'}
                 </Button>
-                <Button variant="primary" size="md">+ New</Button>
+                <Button variant="primary" size="md">
+                  + New
+                </Button>
                 <RailCollapseToggle />
               </>
             }
@@ -215,17 +274,23 @@ function ShellPreview() {
           >
             <div className="space-y-2 py-2 text-sm">
               <p className="text-fg-2">List view content lands in Plan C (Phase 1 frontend).</p>
-              <p className="text-fg-3 text-xs">For now, primitives render here so designers can review them in context.</p>
+              <p className="text-fg-3 text-xs">
+                For now, primitives render here so designers can review them in context.
+              </p>
             </div>
           </MainFrame>
         }
         panel={
           <RightPanel open={panelOpen} activeTab="context" onTabChange={() => {}} showAiTab={false}>
             <div className="space-y-3 text-sm">
-              <div className="text-[15px] font-medium">Confirm artists for Spring '26 group show</div>
+              <div className="text-[15px] font-medium">
+                Confirm artists for Spring '26 group show
+              </div>
               <div className="font-mono text-[10px] text-fg-3">work_item · spring-26-artists</div>
               <Pill category="started" label="In progress" />
-              <p className="text-fg-2">Right panel content lands in Plan C. For now it shows the locked tab chrome.</p>
+              <p className="text-fg-2">
+                Right panel content lands in Plan C. For now it shows the locked tab chrome.
+              </p>
             </div>
           </RightPanel>
         }
@@ -259,9 +324,12 @@ function Icon({ path }: { path: string }) {
       strokeLinecap="round"
       strokeLinejoin="round"
     >
-      {path.split('M').filter(Boolean).map((p, i) => (
-        <path key={i} d={`M${p}`} />
-      ))}
+      {path
+        .split('M')
+        .filter(Boolean)
+        .map((p, i) => (
+          <path key={i} d={`M${p}`} />
+        ))}
     </svg>
   );
 }

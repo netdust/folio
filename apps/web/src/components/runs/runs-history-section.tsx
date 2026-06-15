@@ -27,9 +27,7 @@ export function RunsHistorySection({ wslug, agentSlug, projects }: RunsHistorySe
   const isWildcard = projects.includes('*');
   const targetSlugs = isWildcard
     ? Array.from(new Set(projectList.map((p) => p.slug)))
-    : Array.from(
-        new Set(projects.map((id) => slugById.get(id)).filter((s): s is string => !!s)),
-      );
+    : Array.from(new Set(projects.map((id) => slugById.get(id)).filter((s): s is string => !!s)));
   const filter = { agent: agentSlug };
 
   useRunsLiveSync(wslug, { agent: agentSlug });
@@ -37,7 +35,9 @@ export function RunsHistorySection({ wslug, agentSlug, projects }: RunsHistorySe
     queries: targetSlugs.map((slug) => ({
       queryKey: runsKeys.list(wslug, slug, filter),
       queryFn: () =>
-        client.get<AgentRunDoc[]>(`/api/v1/w/${wslug}/p/${slug}/runs?agent=${encodeURIComponent(agentSlug)}`),
+        client.get<AgentRunDoc[]>(
+          `/api/v1/w/${wslug}/p/${slug}/runs?agent=${encodeURIComponent(agentSlug)}`,
+        ),
       staleTime: 30_000,
       enabled: !!wslug && !!slug,
     })),
@@ -45,7 +45,9 @@ export function RunsHistorySection({ wslug, agentSlug, projects }: RunsHistorySe
 
   // A genuinely unscoped agent — no wildcard AND no concrete project IDs.
   if (!isWildcard && projects.length === 0) {
-    return <div className="text-fg-3 text-sm py-8 text-center">No project scoped to this agent yet.</div>;
+    return (
+      <div className="text-fg-3 text-sm py-8 text-center">No project scoped to this agent yet.</div>
+    );
   }
   if (targetSlugs.length === 0) {
     // Nothing to query yet. Distinguish:

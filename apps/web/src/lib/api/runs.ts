@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { client, type ApiError } from './client.ts';
+import { type ApiError, client } from './client.ts';
 import type { DocumentSummary } from './documents.ts';
 import { useEventStream } from './event-stream.ts';
 

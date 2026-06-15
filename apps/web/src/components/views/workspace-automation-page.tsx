@@ -1,9 +1,9 @@
+import { useWorkspace } from '../../lib/api/workspaces.ts';
+import { TokensTab } from '../settings/tokens-tab.tsx';
+import { Tabs } from '../ui/tabs.tsx';
+import { WorkspaceActivityTab } from './workspace-activity-tab.tsx';
 import { WorkspaceAgentsTab } from './workspace-agents-tab.tsx';
 import { WorkspaceTriggersPage } from './workspace-triggers-page.tsx';
-import { WorkspaceActivityTab } from './workspace-activity-tab.tsx';
-import { TokensTab } from '../settings/tokens-tab.tsx';
-import { useWorkspace } from '../../lib/api/workspaces.ts';
-import { Tabs } from '../ui/tabs.tsx';
 
 export type AutomationTab = 'agents' | 'triggers' | 'api' | 'activity';
 
@@ -37,8 +37,8 @@ export function WorkspaceAutomationPage({ wslug, tab, onTabChange }: Props) {
       <header className="mb-6">
         <h1 className="text-lg font-medium tracking-tight">Agents &amp; Triggers</h1>
         <p className="mt-0.5 text-xs text-fg-2">
-          Workspace-scoped agents, the cron/event triggers that fire them, and the
-          API tokens that authenticate agents &amp; integrations against this workspace.
+          Workspace-scoped agents, the cron/event triggers that fire them, and the API tokens that
+          authenticate agents &amp; integrations against this workspace.
         </p>
       </header>
 

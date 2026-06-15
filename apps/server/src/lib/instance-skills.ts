@@ -14,13 +14,9 @@
 
 import { eq, inArray, ne } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
-import { type DB } from '../db/client.ts';
-import { instanceSkills, type InstanceSkill } from '../db/schema.ts';
-import {
-  FOLIO_SKILL_BODY,
-  FOLIO_SKILL_FRONTMATTER,
-  FOLIO_SKILL_SLUG,
-} from './system-skills.ts';
+import type { DB } from '../db/client.ts';
+import { type InstanceSkill, instanceSkills } from '../db/schema.ts';
+import { FOLIO_SKILL_BODY, FOLIO_SKILL_FRONTMATTER, FOLIO_SKILL_SLUG } from './system-skills.ts';
 
 /**
  * The set of instance skills seeded on boot. Each entry's `trusted` becomes the
@@ -79,10 +75,7 @@ export async function seedInstanceSkills(db: DB): Promise<void> {
 }
 
 /** Resolve a single instance skill by its unique name. */
-export async function getInstanceSkill(
-  db: DB,
-  name: string,
-): Promise<InstanceSkill | undefined> {
+export async function getInstanceSkill(db: DB, name: string): Promise<InstanceSkill | undefined> {
   return db.query.instanceSkills.findFirst({
     where: eq(instanceSkills.name, name),
   });

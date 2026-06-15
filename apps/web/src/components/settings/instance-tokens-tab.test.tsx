@@ -1,8 +1,8 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { InstanceTokensTab } from './instance-tokens-tab.tsx';
 
 afterEach(() => vi.unstubAllGlobals());
@@ -23,11 +23,12 @@ function listResponse(tokens: unknown[]) {
 describe('InstanceTokensTab', () => {
   it('shows the empty state when there are no instance tokens', async () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    vi.stubGlobal('fetch', vi.fn(async () => listResponse([])));
-    render(<InstanceTokensTab />, { wrapper: wrap(qc) });
-    await waitFor(() =>
-      expect(screen.getByText(/no instance tokens yet/i)).toBeInTheDocument(),
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => listResponse([])),
     );
+    render(<InstanceTokensTab />, { wrapper: wrap(qc) });
+    await waitFor(() => expect(screen.getByText(/no instance tokens yet/i)).toBeInTheDocument());
   });
 
   it('lists instance tokens with name + scopes', async () => {
@@ -57,7 +58,12 @@ describe('InstanceTokensTab', () => {
       if (init?.method === 'POST') {
         return new Response(
           JSON.stringify({
-            data: { id: 'tok_new', name: 'ci', token: 'folio_pat_secret', scopes: ['documents:read'] },
+            data: {
+              id: 'tok_new',
+              name: 'ci',
+              token: 'folio_pat_secret',
+              scopes: ['documents:read'],
+            },
           }),
           { status: 201, headers: { 'content-type': 'application/json' } },
         );

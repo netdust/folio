@@ -6,11 +6,11 @@
  * These call the service directly (no HTTP), mirroring documents.test.ts.
  */
 
-import { test, expect } from 'bun:test';
+import { expect, test } from 'bun:test';
 import { and, eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
-import { makeTestApp } from '../test/harness.ts';
 import { documents, fields, tables } from '../db/schema.ts';
+import { makeTestApp } from '../test/harness.ts';
 import { listDocuments } from './documents.ts';
 
 async function getWorkItemsTable(
@@ -43,11 +43,11 @@ async function seedFive(): Promise<Seeded> {
   const { db, seed } = await makeTestApp();
   const table = await getWorkItemsTable(db, seed.project.id);
   const rows = [
-    { title: 'Apple',  status: 'todo',        updatedAt: T + 10 },
+    { title: 'Apple', status: 'todo', updatedAt: T + 10 },
     { title: 'Cherry', status: 'in_progress', updatedAt: T + 40 },
-    { title: 'Banana', status: 'done',        updatedAt: T + 20 },
-    { title: 'Date',   status: 'backlog',     updatedAt: T + 50 },
-    { title: 'Elder',  status: 'todo',        updatedAt: T + 30 },
+    { title: 'Banana', status: 'done', updatedAt: T + 20 },
+    { title: 'Date', status: 'backlog', updatedAt: T + 50 },
+    { title: 'Elder', status: 'todo', updatedAt: T + 30 },
   ];
   for (const r of rows) {
     await db.insert(documents).values({
@@ -122,13 +122,7 @@ test('sort by status asc', async () => {
   });
   // Ascending stored-string order of backlog/done/in_progress/todo/todo.
   // The two 'todo' rows (Apple, Elder) come last, ordered by id secondary.
-  expect(data.map((r) => r.status)).toEqual([
-    'backlog',
-    'done',
-    'in_progress',
-    'todo',
-    'todo',
-  ]);
+  expect(data.map((r) => r.status)).toEqual(['backlog', 'done', 'in_progress', 'todo', 'todo']);
 });
 
 test('invalid sort key falls back to updated_at desc', async () => {
@@ -316,9 +310,7 @@ test('sort by priority asc orders numerically (1,2,10 not 1,10,2)', async () => 
     sort: 'priority',
     dir: 'asc',
   });
-  expect(
-    data.map((d) => (d.frontmatter as Record<string, unknown>).priority),
-  ).toEqual([1, 2, 10]);
+  expect(data.map((d) => (d.frontmatter as Record<string, unknown>).priority)).toEqual([1, 2, 10]);
 });
 
 test('sort by due_date asc orders chronologically', async () => {
@@ -334,9 +326,11 @@ test('sort by due_date asc orders chronologically', async () => {
     sort: 'due_date',
     dir: 'asc',
   });
-  expect(
-    data.map((d) => (d.frontmatter as Record<string, unknown>).due_date),
-  ).toEqual(['2026-01-02', '2026-03-15', '2026-11-01']);
+  expect(data.map((d) => (d.frontmatter as Record<string, unknown>).due_date)).toEqual([
+    '2026-01-02',
+    '2026-03-15',
+    '2026-11-01',
+  ]);
 });
 
 test('sort by priority with missing values keeps them last (asc) and drops none across a page boundary', async () => {
@@ -364,7 +358,12 @@ test('sort by priority with missing values keeps them last (asc) and drops none 
   const all = [...p1.data, ...p2.data, ...p3.data];
   expect(new Set(all.map((d) => d.id)).size).toBe(5);
   // The two missing-priority rows must land last under asc.
-  expect(all.slice(-2).map((d) => d.title).sort()).toEqual(['c', 'd']);
+  expect(
+    all
+      .slice(-2)
+      .map((d) => d.title)
+      .sort(),
+  ).toEqual(['c', 'd']);
 });
 
 test('sort by priority pages numerically across a boundary without drops (cast guard)', async () => {
@@ -524,10 +523,7 @@ async function seedBoardPositions(): Promise<Seeded & { ids: Record<string, stri
       updatedAt: new Date(t),
     });
     if (r.pos !== null) {
-      await db
-        .update(documents)
-        .set({ boardPosition: r.pos })
-        .where(eq(documents.id, id));
+      await db.update(documents).set({ boardPosition: r.pos }).where(eq(documents.id, id));
     }
   }
   return {

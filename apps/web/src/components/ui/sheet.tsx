@@ -42,7 +42,12 @@ export function SheetContent({ children, className, width = 800 }: SheetContentP
 
 export function SheetHeader({ children, className }: { children: ReactNode; className?: string }) {
   return (
-    <div className={cn('flex items-center justify-between border-b border-border-light px-6 py-4', className)}>
+    <div
+      className={cn(
+        'flex items-center justify-between border-b border-border-light px-6 py-4',
+        className,
+      )}
+    >
       {children}
     </div>
   );
@@ -58,7 +63,12 @@ export function SheetTitle({ children, className }: { children: ReactNode; class
 
 export function SheetFooter({ children, className }: { children: ReactNode; className?: string }) {
   return (
-    <div className={cn('mt-auto flex items-center justify-end gap-2 border-t border-border-light px-6 py-4', className)}>
+    <div
+      className={cn(
+        'mt-auto flex items-center justify-end gap-2 border-t border-border-light px-6 py-4',
+        className,
+      )}
+    >
       {children}
     </div>
   );

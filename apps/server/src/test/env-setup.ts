@@ -12,5 +12,4 @@
  */
 
 process.env.NODE_ENV ??= 'test';
-process.env.FOLIO_MASTER_KEY =
-  '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+process.env.FOLIO_MASTER_KEY = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';

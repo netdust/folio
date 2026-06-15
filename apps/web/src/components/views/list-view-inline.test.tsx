@@ -1,15 +1,15 @@
-import { describe, it, expect, afterEach, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
+  Outlet,
+  RouterProvider,
   createMemoryHistory,
   createRootRoute,
   createRoute,
   createRouter,
-  Outlet,
-  RouterProvider,
 } from '@tanstack/react-router';
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { ListView } from './list-view.tsx';
 
@@ -60,29 +60,36 @@ describe('ListView inline-edit', () => {
         return new Response(
           JSON.stringify({
             data: [
-              { id: 's1', key: 'todo', name: 'Todo', color: '#6EAFFF', category: 'unstarted', order: 1 },
+              {
+                id: 's1',
+                key: 'todo',
+                name: 'Todo',
+                color: '#6EAFFF',
+                category: 'unstarted',
+                order: 1,
+              },
             ],
           }),
           { status: 200, headers: { 'content-type': 'application/json' } },
         );
       }
       if (u.includes('/fields')) {
-        return new Response(
-          JSON.stringify({ data: [] }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        );
+        return new Response(JSON.stringify({ data: [] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
       }
       if (u.includes('/documents') && method === 'GET') {
-        return new Response(
-          JSON.stringify({ data: { data: [docRow], nextCursor: null } }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        );
+        return new Response(JSON.stringify({ data: { data: [docRow], nextCursor: null } }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
       }
       if (u.includes('/documents/fix-login') && method === 'PATCH') {
-        return new Response(
-          JSON.stringify({ data: { ...docRow, title: 'Fix login (revised)' } }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        );
+        return new Response(JSON.stringify({ data: { ...docRow, title: 'Fix login (revised)' } }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
       }
       return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
     });
@@ -101,8 +108,7 @@ describe('ListView inline-edit', () => {
 
     await waitFor(() => {
       const patches = fetchMock.mock.calls.filter(
-        ([url, init]) =>
-          String(url).includes('/documents/fix-login') && init?.method === 'PATCH',
+        ([url, init]) => String(url).includes('/documents/fix-login') && init?.method === 'PATCH',
       );
       expect(patches).toHaveLength(1);
       const body = JSON.parse(String(patches[0]?.[1]?.body));
@@ -119,24 +125,31 @@ describe('ListView inline-edit', () => {
         return new Response(
           JSON.stringify({
             data: [
-              { id: 's1', key: 'todo', name: 'Todo', color: '#6EAFFF', category: 'unstarted', order: 1 },
+              {
+                id: 's1',
+                key: 'todo',
+                name: 'Todo',
+                color: '#6EAFFF',
+                category: 'unstarted',
+                order: 1,
+              },
             ],
           }),
           { status: 200, headers: { 'content-type': 'application/json' } },
         );
       }
       if (u.includes('/fields')) {
-        return new Response(
-          JSON.stringify({ data: [] }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        );
+        return new Response(JSON.stringify({ data: [] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
       }
       if (u.includes('/documents') && method === 'GET') {
         getCalls += 1;
-        return new Response(
-          JSON.stringify({ data: { data: [docRow], nextCursor: null } }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        );
+        return new Response(JSON.stringify({ data: { data: [docRow], nextCursor: null } }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
       }
       if (u.includes('/documents/fix-login') && method === 'PATCH') {
         return new Response(

@@ -26,9 +26,7 @@ export function SaveButton({ dirty, saving, onSave }: SaveButtonProps) {
       disabled={disabled}
       className={
         'grid h-6 w-6 place-items-center rounded transition-colors duration-fast ' +
-        (disabled
-          ? 'cursor-default text-fg-3'
-          : 'text-fg hover:bg-card hover:text-fg')
+        (disabled ? 'cursor-default text-fg-3' : 'text-fg hover:bg-card hover:text-fg')
       }
     >
       <Icon icon={saving ? Loader2 : Save} size={16} className={saving ? 'animate-spin' : ''} />

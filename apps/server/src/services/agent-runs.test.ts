@@ -5,54 +5,54 @@
  * SQLite via the standard test harness.
  */
 
-import { test, expect, describe } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import { and, eq, sql } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
-import { makeTestApp } from '../test/harness.ts';
 import {
+  events,
+  type Document,
+  type Project,
+  type TableEntity,
+  type User,
+  type Workspace,
   apiTokens,
   documents,
-  events,
   projectAccess,
   projects as schemaProjects,
   tables,
   users,
   workspaceAccess,
   workspaces,
-  type Document,
-  type Project,
-  type TableEntity,
-  type User,
-  type Workspace,
 } from '../db/schema.ts';
-import { seedProjectDefaults } from '../lib/seed-project-defaults.ts';
+import { statuses, views } from '../db/schema.ts';
 import { resolveAgentForRun } from '../lib/agent-resolver.ts';
-import { OPERATOR_SLUG } from '../lib/operator.ts';
-import { newApiToken } from '../lib/auth.ts';
-import { toolsToScopes } from '../lib/agent-schema.ts';
 import type { AgentRunFrontmatter } from '../lib/agent-run-schema.ts';
-import { HTTPError } from '../lib/http.ts';
+import { agentRunFrontmatterSchema } from '../lib/agent-run-schema.ts';
+import { toolsToScopes } from '../lib/agent-schema.ts';
 import { sanitizeProviderError } from '../lib/ai/sanitize-error.ts';
+import { newApiToken } from '../lib/auth.ts';
+import { HTTPError } from '../lib/http.ts';
+import { OPERATOR_SLUG } from '../lib/operator.ts';
+import { seedProjectDefaults } from '../lib/seed-project-defaults.ts';
+import { makeTestApp } from '../test/harness.ts';
 import {
-  createRun,
-  transitionRun,
-  incrementTokens,
-  setRunBody,
-  getActiveRun,
-  getPendingApprovalRun,
-  listRuns,
-  claimNextPlanningRun,
-  recoverOrphanRuns,
-  countPendingPlanning,
-  checkRunRateLimits,
   checkChainGuards,
   checkProviderHealth,
-  getProviderHealth,
+  checkRunRateLimits,
+  claimNextPlanningRun,
+  countPendingPlanning,
+  createRun,
   ensureRunsTable,
+  getActiveRun,
+  getPendingApprovalRun,
+  getProviderHealth,
+  incrementTokens,
+  listRuns,
   nextChainId,
+  recoverOrphanRuns,
+  setRunBody,
+  transitionRun,
 } from './agent-runs.ts';
-import { statuses, views } from '../db/schema.ts';
-import { agentRunFrontmatterSchema } from '../lib/agent-run-schema.ts';
 
 type TestDB = Awaited<ReturnType<typeof makeTestApp>>['db'];
 
@@ -437,18 +437,16 @@ describe('createRun', () => {
     });
 
     const fm = result.document.frontmatter as AgentRunFrontmatter;
-    expect([...fm.caller_scopes].sort()).toEqual(
-      [
-        'agents:write',
-        'config:write',
-        'documents:delete',
-        'documents:read',
-        'documents:write',
-        'members:write',
-        'settings:write',
-        'workspace:admin',
-      ],
-    );
+    expect([...fm.caller_scopes].sort()).toEqual([
+      'agents:write',
+      'config:write',
+      'documents:delete',
+      'documents:read',
+      'documents:write',
+      'members:write',
+      'settings:write',
+      'workspace:admin',
+    ]);
     // owner → null (no project narrowing).
     expect(fm.caller_project_ids).toBe(null);
   });
@@ -696,7 +694,10 @@ describe('createRun', () => {
         triggerId: null,
         // CreateRunInput has no caller_* fields; cast through unknown to prove
         // even a smuggled payload can't influence the derived snapshot.
-        ...({ caller_scopes: ['documents:delete', 'agents:write'], caller_project_ids: ['*'] } as unknown as Record<string, never>),
+        ...({
+          caller_scopes: ['documents:delete', 'agents:write'],
+          caller_project_ids: ['*'],
+        } as unknown as Record<string, never>),
       },
     });
 
@@ -726,7 +727,10 @@ describe('createRun', () => {
         triggerId: null,
         // CreateRunInput has no agent_home_workspace_id field; cast through
         // unknown to prove even a smuggled payload can't influence the stamp.
-        ...({ agent_home_workspace_id: 'attacker-supplied-ws' } as unknown as Record<string, never>),
+        ...({ agent_home_workspace_id: 'attacker-supplied-ws' } as unknown as Record<
+          string,
+          never
+        >),
       },
     });
 
@@ -993,7 +997,15 @@ describe('transitionRun', () => {
     const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
     const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
     const runsTable = await seedRunsTable(db, seed.project.id);
-    const run = await seedRunningRun(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user);
+    const run = await seedRunningRun(
+      db,
+      seed.workspace,
+      seed.project,
+      runsTable,
+      agent,
+      parent,
+      seed.user,
+    );
 
     // Pre-condition: worker_started_at is set.
     expect((run.frontmatter as AgentRunFrontmatter).worker_started_at).toBeTruthy();
@@ -1017,7 +1029,15 @@ describe('transitionRun', () => {
     const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
     const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
     const runsTable = await seedRunsTable(db, seed.project.id);
-    const run = await seedRunningRun(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user);
+    const run = await seedRunningRun(
+      db,
+      seed.workspace,
+      seed.project,
+      runsTable,
+      agent,
+      parent,
+      seed.user,
+    );
 
     await expect(
       transitionRun(run.id, {
@@ -1034,7 +1054,15 @@ describe('transitionRun', () => {
     const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
     const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
     const runsTable = await seedRunsTable(db, seed.project.id);
-    const run = await seedRunningRun(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user);
+    const run = await seedRunningRun(
+      db,
+      seed.workspace,
+      seed.project,
+      runsTable,
+      agent,
+      parent,
+      seed.user,
+    );
 
     const hostileDetail = 'apiKey:sk-abc123 baseUrl:https://attacker.example';
     await transitionRun(run.id, {
@@ -1064,9 +1092,21 @@ describe('transitionRun', () => {
     const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
     const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
     const runsTable = await seedRunsTable(db, seed.project.id);
-    const run = await seedRunningRun(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user);
+    const run = await seedRunningRun(
+      db,
+      seed.workspace,
+      seed.project,
+      runsTable,
+      agent,
+      parent,
+      seed.user,
+    );
 
-    await transitionRun(run.id, { newStatus: 'failed', actor: seed.user.id, errorReason: 'worker_crash' });
+    await transitionRun(run.id, {
+      newStatus: 'failed',
+      actor: seed.user.id,
+      errorReason: 'worker_crash',
+    });
 
     const after = await db.query.documents.findFirst({ where: eq(documents.id, run.id) });
     expect(after!.status).toBe('failed');
@@ -1109,7 +1149,9 @@ describe('transitionRun', () => {
       errorReason: 'worker_crash',
     });
 
-    const after = await db.query.documents.findFirst({ where: eq(documents.id, created.document.id) });
+    const after = await db.query.documents.findFirst({
+      where: eq(documents.id, created.document.id),
+    });
     const fm = after!.frontmatter as Record<string, unknown>;
 
     // The key must be ABSENT — not present-with-null. `'in'` distinguishes
@@ -1135,15 +1177,29 @@ describe('transitionRun', () => {
     const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
     const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
     const runsTable = await seedRunsTable(db, seed.project.id);
-    const run = await seedRunningRun(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user);
+    const run = await seedRunningRun(
+      db,
+      seed.workspace,
+      seed.project,
+      runsTable,
+      agent,
+      parent,
+      seed.user,
+    );
 
-    await transitionRun(run.id, { newStatus: 'completed', actor: seed.user.id, doneReason: 'refusal' });
+    await transitionRun(run.id, {
+      newStatus: 'completed',
+      actor: seed.user.id,
+      doneReason: 'refusal',
+    });
 
     const after = await db.query.documents.findFirst({ where: eq(documents.id, run.id) });
     const fm = after!.frontmatter as AgentRunFrontmatter;
     expect(fm.status).toBe('completed');
     expect(fm.done_reason).toBe('refusal');
-    expect(agentRunFrontmatterSchema.shape.done_reason.safeParse(fm.done_reason).success).toBe(true);
+    expect(agentRunFrontmatterSchema.shape.done_reason.safeParse(fm.done_reason).success).toBe(
+      true,
+    );
   });
 
   test('writes the supplied actor to documents.updatedBy and the emitted event', async () => {
@@ -1152,7 +1208,15 @@ describe('transitionRun', () => {
     const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
     const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
     const runsTable = await seedRunsTable(db, seed.project.id);
-    const run = await seedRunningRun(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user);
+    const run = await seedRunningRun(
+      db,
+      seed.workspace,
+      seed.project,
+      runsTable,
+      agent,
+      parent,
+      seed.user,
+    );
 
     // A distinct actor (e.g. approver, admin force-fail) advances the run —
     // must be recorded on the row AND the event, not the row's prior updatedBy.
@@ -1190,7 +1254,15 @@ describe('transitionRun', () => {
     const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
     const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
     const runsTable = await seedRunsTable(db, seed.project.id);
-    const run = await seedRunningRun(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user);
+    const run = await seedRunningRun(
+      db,
+      seed.workspace,
+      seed.project,
+      runsTable,
+      agent,
+      parent,
+      seed.user,
+    );
 
     // A stringified-JSON SDK error — sanitizeProviderError does NOT JSON.parse;
     // it sees a string with no `.status` property → constant output.
@@ -1277,7 +1349,14 @@ describe('transitionRun', () => {
     for (let i = 0; i < 50; i++) {
       // Fresh awaiting_approval row each iteration.
       const run = await seedRunAt(
-        db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'awaiting_approval',
+        db,
+        seed.workspace,
+        seed.project,
+        runsTable,
+        agent,
+        parent,
+        seed.user,
+        'awaiting_approval',
       );
 
       const results = await Promise.allSettled([
@@ -1304,8 +1383,7 @@ describe('transitionRun', () => {
       // F1-inner-throw test below pins the specific RUN_TRANSITION_RACED
       // code on the inner path.
       expect(
-        loserErr.code === 'RUN_TRANSITION_RACED' ||
-        loserErr.code === 'INVALID_RUN_TRANSITION',
+        loserErr.code === 'RUN_TRANSITION_RACED' || loserErr.code === 'INVALID_RUN_TRANSITION',
       ).toBe(true);
 
       // Exactly one agent.run.running event for this row.
@@ -1335,7 +1413,14 @@ describe('transitionRun', () => {
     const runsTable = await seedRunsTable(db, seed.project.id);
 
     const run = await seedRunAt(
-      db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'awaiting_approval',
+      db,
+      seed.workspace,
+      seed.project,
+      runsTable,
+      agent,
+      parent,
+      seed.user,
+      'awaiting_approval',
     );
 
     // Force lockstep violation: column = 'running' but
@@ -1353,9 +1438,7 @@ describe('transitionRun', () => {
     // sync — but ONLY within a single tx. A concurrent winner that
     // commits between our findFirst (reading from JSON) and our
     // UPDATE (predicating on column) produces exactly this skew.
-    await db.update(documents)
-      .set({ status: 'running' })
-      .where(eq(documents.id, run.id));
+    await db.update(documents).set({ status: 'running' }).where(eq(documents.id, run.id));
 
     let caught: HTTPError | undefined;
     try {
@@ -1370,7 +1453,11 @@ describe('transitionRun', () => {
     // failed WHERE predicate evaluated against), not the frontmatter
     // snapshot. Aids triage of race vs ABI violation in Sub-phase D
     // approval handlers.
-    const err = caught as HTTPError & { from: string; to: string; observedFrom: string | undefined };
+    const err = caught as HTTPError & {
+      from: string;
+      to: string;
+      observedFrom: string | undefined;
+    };
     expect(err.from).toBe('awaiting_approval');
     expect(err.to).toBe('running');
     expect(err.observedFrom).toBe('running');
@@ -1391,7 +1478,14 @@ describe('transitionRun', () => {
 
     const originalClaimIso = new Date(Date.now() - 60_000).toISOString();
     const run = await seedRunAt(
-      db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'awaiting_approval',
+      db,
+      seed.workspace,
+      seed.project,
+      runsTable,
+      agent,
+      parent,
+      seed.user,
+      'awaiting_approval',
       { workerStartedAt: originalClaimIso },
     );
     await transitionRun(run.id, { newStatus: 'running', actor: seed.user.id });
@@ -1411,7 +1505,15 @@ describe('incrementTokens', () => {
     const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
     const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
     const runsTable = await seedRunsTable(db, seed.project.id);
-    const run = await seedRunningRun(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user);
+    const run = await seedRunningRun(
+      db,
+      seed.workspace,
+      seed.project,
+      runsTable,
+      agent,
+      parent,
+      seed.user,
+    );
 
     const first = await incrementTokens(run.id, { in: 10, out: 5 });
     expect(first).toEqual({ tokens_in: 10, tokens_out: 5 });
@@ -1430,7 +1532,15 @@ describe('incrementTokens', () => {
     const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
     const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
     const runsTable = await seedRunsTable(db, seed.project.id);
-    const run = await seedRunningRun(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user);
+    const run = await seedRunningRun(
+      db,
+      seed.workspace,
+      seed.project,
+      runsTable,
+      agent,
+      parent,
+      seed.user,
+    );
 
     await incrementTokens(run.id, { in: 7, out: 3 });
     const after = await incrementTokens(run.id, { in: 0, out: 0 });
@@ -1553,9 +1663,7 @@ async function seedRunAt(
     ...(overrides.workerStartedAt !== undefined
       ? { worker_started_at: overrides.workerStartedAt }
       : {}),
-    ...(overrides.completedAt !== undefined
-      ? { completed_at: overrides.completedAt }
-      : {}),
+    ...(overrides.completedAt !== undefined ? { completed_at: overrides.completedAt } : {}),
   };
   await db.insert(documents).values({
     id,
@@ -1586,11 +1694,28 @@ describe('getActiveRun', () => {
     const runsTable = await seedRunsTable(db, seed.project.id);
 
     // Older planning row, newer running row → running wins (most recent).
-    await seedRunAt(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'planning', {
-      createdAt: new Date(Date.now() - 60_000),
-    });
+    await seedRunAt(
+      db,
+      seed.workspace,
+      seed.project,
+      runsTable,
+      agent,
+      parent,
+      seed.user,
+      'planning',
+      {
+        createdAt: new Date(Date.now() - 60_000),
+      },
+    );
     const newer = await seedRunAt(
-      db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'running',
+      db,
+      seed.workspace,
+      seed.project,
+      runsTable,
+      agent,
+      parent,
+      seed.user,
+      'running',
       { createdAt: new Date() },
     );
 
@@ -1607,8 +1732,26 @@ describe('getActiveRun', () => {
     const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
     const runsTable = await seedRunsTable(db, seed.project.id);
 
-    await seedRunAt(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'completed');
-    await seedRunAt(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'failed');
+    await seedRunAt(
+      db,
+      seed.workspace,
+      seed.project,
+      runsTable,
+      agent,
+      parent,
+      seed.user,
+      'completed',
+    );
+    await seedRunAt(
+      db,
+      seed.workspace,
+      seed.project,
+      runsTable,
+      agent,
+      parent,
+      seed.user,
+      'failed',
+    );
 
     const active = await getActiveRun({ parentId: parent.id, agentSlug: agent.slug });
     expect(active).toBeNull();
@@ -1624,7 +1767,16 @@ describe('getActiveRun', () => {
 
     // An unrelated agent has a running row on the same parent — must not match
     // when we query for `helper`.
-    await seedRunAt(db, seed.workspace, seed.project, runsTable, other, parent, seed.user, 'running');
+    await seedRunAt(
+      db,
+      seed.workspace,
+      seed.project,
+      runsTable,
+      other,
+      parent,
+      seed.user,
+      'running',
+    );
 
     const active = await getActiveRun({ parentId: parent.id, agentSlug: helper.slug });
     expect(active).toBeNull();
@@ -1640,7 +1792,16 @@ describe('getActiveRun', () => {
     const parentB = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
     const runsTable = await seedRunsTable(db, seed.project.id);
 
-    await seedRunAt(db, seed.workspace, seed.project, runsTable, agent, parentA, seed.user, 'running');
+    await seedRunAt(
+      db,
+      seed.workspace,
+      seed.project,
+      runsTable,
+      agent,
+      parentA,
+      seed.user,
+      'running',
+    );
 
     const active = await getActiveRun({ parentId: parentB.id, agentSlug: agent.slug });
     expect(active).toBeNull();
@@ -1655,11 +1816,36 @@ describe('getPendingApprovalRun', () => {
     const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
     const runsTable = await seedRunsTable(db, seed.project.id);
 
-    await seedRunAt(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'planning');
-    const pending = await seedRunAt(
-      db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'awaiting_approval',
+    await seedRunAt(
+      db,
+      seed.workspace,
+      seed.project,
+      runsTable,
+      agent,
+      parent,
+      seed.user,
+      'planning',
     );
-    await seedRunAt(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'running');
+    const pending = await seedRunAt(
+      db,
+      seed.workspace,
+      seed.project,
+      runsTable,
+      agent,
+      parent,
+      seed.user,
+      'awaiting_approval',
+    );
+    await seedRunAt(
+      db,
+      seed.workspace,
+      seed.project,
+      runsTable,
+      agent,
+      parent,
+      seed.user,
+      'running',
+    );
 
     const found = await getPendingApprovalRun({ parentId: parent.id, agentSlug: agent.slug });
     expect(found).not.toBeNull();
@@ -1674,7 +1860,16 @@ describe('getPendingApprovalRun', () => {
     const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
     const runsTable = await seedRunsTable(db, seed.project.id);
 
-    await seedRunAt(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'running');
+    await seedRunAt(
+      db,
+      seed.workspace,
+      seed.project,
+      runsTable,
+      agent,
+      parent,
+      seed.user,
+      'running',
+    );
 
     const found = await getPendingApprovalRun({ parentId: parent.id, agentSlug: agent.slug });
     expect(found).toBeNull();
@@ -1689,9 +1884,36 @@ describe('listRuns', () => {
     const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
     const runsTable = await seedRunsTable(db, seed.project.id);
 
-    const p1 = await seedRunAt(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'planning');
-    const p2 = await seedRunAt(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'planning');
-    await seedRunAt(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'running');
+    const p1 = await seedRunAt(
+      db,
+      seed.workspace,
+      seed.project,
+      runsTable,
+      agent,
+      parent,
+      seed.user,
+      'planning',
+    );
+    const p2 = await seedRunAt(
+      db,
+      seed.workspace,
+      seed.project,
+      runsTable,
+      agent,
+      parent,
+      seed.user,
+      'planning',
+    );
+    await seedRunAt(
+      db,
+      seed.workspace,
+      seed.project,
+      runsTable,
+      agent,
+      parent,
+      seed.user,
+      'running',
+    );
 
     const rows = await listRuns({ workspaceId: seed.workspace.id, status: 'planning' });
     const ids = rows.map((r) => r.id).sort();
@@ -1706,9 +1928,39 @@ describe('listRuns', () => {
     const runsTable = await seedRunsTable(db, seed.project.id);
 
     const base = Date.now();
-    const oldest = await seedRunAt(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'running', { createdAt: new Date(base - 20_000) });
-    const middle = await seedRunAt(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'running', { createdAt: new Date(base - 10_000) });
-    const newest = await seedRunAt(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'running', { createdAt: new Date(base) });
+    const oldest = await seedRunAt(
+      db,
+      seed.workspace,
+      seed.project,
+      runsTable,
+      agent,
+      parent,
+      seed.user,
+      'running',
+      { createdAt: new Date(base - 20_000) },
+    );
+    const middle = await seedRunAt(
+      db,
+      seed.workspace,
+      seed.project,
+      runsTable,
+      agent,
+      parent,
+      seed.user,
+      'running',
+      { createdAt: new Date(base - 10_000) },
+    );
+    const newest = await seedRunAt(
+      db,
+      seed.workspace,
+      seed.project,
+      runsTable,
+      agent,
+      parent,
+      seed.user,
+      'running',
+      { createdAt: new Date(base) },
+    );
 
     const rows = await listRuns({ workspaceId: seed.workspace.id, limit: 2 });
     expect(rows.length).toBe(2);
@@ -1726,14 +1978,37 @@ describe('listRuns', () => {
 
     const chainId = crypto.randomUUID();
     const inChain1 = await seedRunAt(
-      db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'running',
+      db,
+      seed.workspace,
+      seed.project,
+      runsTable,
+      agent,
+      parent,
+      seed.user,
+      'running',
       { chainId },
     );
     const inChain2 = await seedRunAt(
-      db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'completed',
+      db,
+      seed.workspace,
+      seed.project,
+      runsTable,
+      agent,
+      parent,
+      seed.user,
+      'completed',
       { chainId },
     );
-    await seedRunAt(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'running');
+    await seedRunAt(
+      db,
+      seed.workspace,
+      seed.project,
+      runsTable,
+      agent,
+      parent,
+      seed.user,
+      'running',
+    );
 
     const rows = await listRuns({ projectId: seed.project.id, chainId });
     const ids = rows.map((r) => r.id).sort();
@@ -1750,9 +2025,26 @@ describe('listRuns', () => {
     const oldStamp = new Date(Date.now() - 120_000);
     const newStamp = new Date();
 
-    await seedRunAt(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'running', { createdAt: oldStamp });
+    await seedRunAt(
+      db,
+      seed.workspace,
+      seed.project,
+      runsTable,
+      agent,
+      parent,
+      seed.user,
+      'running',
+      { createdAt: oldStamp },
+    );
     const recent = await seedRunAt(
-      db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'running',
+      db,
+      seed.workspace,
+      seed.project,
+      runsTable,
+      agent,
+      parent,
+      seed.user,
+      'running',
       { createdAt: newStamp },
     );
 
@@ -1773,7 +2065,16 @@ describe('listRuns', () => {
     const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
     const runsTable = await seedRunsTable(db, seed.project.id);
 
-    await seedRunAt(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'running');
+    await seedRunAt(
+      db,
+      seed.workspace,
+      seed.project,
+      runsTable,
+      agent,
+      parent,
+      seed.user,
+      'running',
+    );
 
     let caught: unknown;
     try {
@@ -1812,8 +2113,26 @@ describe('listRuns', () => {
     const parent2 = await seedWorkItem(db, seed.workspace, project2, table2, seed.user);
     const runsTable2 = await seedRunsTable(db, project2.id);
 
-    const inP1 = await seedRunAt(db, seed.workspace, seed.project, runsTable1, agent, parent1, seed.user, 'running');
-    const inP2 = await seedRunAt(db, seed.workspace, project2, runsTable2, agent, parent2, seed.user, 'planning');
+    const inP1 = await seedRunAt(
+      db,
+      seed.workspace,
+      seed.project,
+      runsTable1,
+      agent,
+      parent1,
+      seed.user,
+      'running',
+    );
+    const inP2 = await seedRunAt(
+      db,
+      seed.workspace,
+      project2,
+      runsTable2,
+      agent,
+      parent2,
+      seed.user,
+      'planning',
+    );
 
     const rows = await listRuns({
       workspaceId: seed.workspace.id,
@@ -1847,7 +2166,16 @@ describe('listRuns', () => {
     const parent2 = await seedWorkItem(db, seed.workspace, project2, table2, seed.user);
     const runsTable2 = await seedRunsTable(db, project2.id);
 
-    const inP1 = await seedRunAt(db, seed.workspace, seed.project, runsTable1, agent, parent1, seed.user, 'running');
+    const inP1 = await seedRunAt(
+      db,
+      seed.workspace,
+      seed.project,
+      runsTable1,
+      agent,
+      parent1,
+      seed.user,
+      'running',
+    );
     await seedRunAt(db, seed.workspace, project2, runsTable2, agent, parent2, seed.user, 'running');
 
     const rows = await listRuns({
@@ -1867,7 +2195,16 @@ describe('listRuns', () => {
     const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
     const runsTable = await seedRunsTable(db, seed.project.id);
 
-    await seedRunAt(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'running');
+    await seedRunAt(
+      db,
+      seed.workspace,
+      seed.project,
+      runsTable,
+      agent,
+      parent,
+      seed.user,
+      'running',
+    );
 
     const rows = await listRuns({
       workspaceId: seed.workspace.id,
@@ -1895,7 +2232,16 @@ describe('listRuns', () => {
     const agent = await seedAgent(db, seed.workspace, seed.user, 'helper');
     const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
     const runsTable = await seedRunsTable(db, seed.project.id);
-    await seedRunAt(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'running');
+    await seedRunAt(
+      db,
+      seed.workspace,
+      seed.project,
+      runsTable,
+      agent,
+      parent,
+      seed.user,
+      'running',
+    );
 
     // Mirror getActiveRun's where clause shape in raw SQL so we EXPLAIN the
     // exact form Drizzle generates.
@@ -1953,8 +2299,26 @@ describe('claimNextPlanningRun', () => {
     const runsTable = await seedRunsTable(db, seed.project.id);
 
     // Seed running + completed rows — neither claimable.
-    await seedRunAt(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'running');
-    await seedRunAt(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'completed');
+    await seedRunAt(
+      db,
+      seed.workspace,
+      seed.project,
+      runsTable,
+      agent,
+      parent,
+      seed.user,
+      'running',
+    );
+    await seedRunAt(
+      db,
+      seed.workspace,
+      seed.project,
+      runsTable,
+      agent,
+      parent,
+      seed.user,
+      'completed',
+    );
 
     const claimed = await db.transaction(async (tx) => claimNextPlanningRun(tx));
     expect(claimed).toBeNull();
@@ -1968,11 +2332,25 @@ describe('claimNextPlanningRun', () => {
     const runsTable = await seedRunsTable(db, seed.project.id);
 
     const older = await seedRunAt(
-      db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'planning',
+      db,
+      seed.workspace,
+      seed.project,
+      runsTable,
+      agent,
+      parent,
+      seed.user,
+      'planning',
       { createdAt: new Date(Date.now() - 60_000) },
     );
     await seedRunAt(
-      db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'planning',
+      db,
+      seed.workspace,
+      seed.project,
+      runsTable,
+      agent,
+      parent,
+      seed.user,
+      'planning',
       { createdAt: new Date() },
     );
 
@@ -2005,7 +2383,14 @@ describe('claimNextPlanningRun', () => {
 
     for (let i = 0; i < 100; i++) {
       await seedRunAt(
-        db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'planning',
+        db,
+        seed.workspace,
+        seed.project,
+        runsTable,
+        agent,
+        parent,
+        seed.user,
+        'planning',
       );
 
       const [a, b] = await Promise.all([
@@ -2065,14 +2450,22 @@ describe('updated_at is an INTEGER ms-epoch across raw-SQL + Drizzle write paths
     // row we seed below. Drizzle's .update writes via the integer path,
     // so updated_at after this is a number.
     const drizzlePastMs = Date.now() - 10_000;
-    await db.update(documents)
+    await db
+      .update(documents)
       .set({ updatedAt: new Date(drizzlePastMs), status: 'completed' })
       .where(eq(documents.id, drizzleRun.document.id));
 
     // Seed a SECOND, fresh planning row for the claim. seedRunAt insert
     // also goes through Drizzle (writes updated_at as integer).
     const claimable = await seedRunAt(
-      db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'planning',
+      db,
+      seed.workspace,
+      seed.project,
+      runsTable,
+      agent,
+      parent,
+      seed.user,
+      'planning',
     );
 
     const beforeClaim = Date.now();
@@ -2096,7 +2489,7 @@ describe('updated_at is an INTEGER ms-epoch across raw-SQL + Drizzle write paths
     // Claimed (raw-SQL) row was updated AFTER the Drizzle-completed row.
     expect(rows[0]!.id).toBe(drizzleRun.document.id);
     expect(rows[1]!.id).toBe(claimable.id);
-    expect((rows[1]!.updated_at as number)).toBeGreaterThanOrEqual(beforeClaim);
+    expect(rows[1]!.updated_at as number).toBeGreaterThanOrEqual(beforeClaim);
   });
 });
 
@@ -2114,7 +2507,14 @@ describe('recoverOrphanRuns', () => {
     const runsTable = await seedRunsTable(db, seed.project.id);
 
     const stale = await seedRunAt(
-      db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'running',
+      db,
+      seed.workspace,
+      seed.project,
+      runsTable,
+      agent,
+      parent,
+      seed.user,
+      'running',
       { workerStartedAt: new Date(Date.now() - 10 * 60_000).toISOString() },
     );
 
@@ -2148,7 +2548,14 @@ describe('recoverOrphanRuns', () => {
     const runsTable = await seedRunsTable(db, seed.project.id);
 
     const fresh = await seedRunAt(
-      db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'running',
+      db,
+      seed.workspace,
+      seed.project,
+      runsTable,
+      agent,
+      parent,
+      seed.user,
+      'running',
       { workerStartedAt: new Date(Date.now() - 10_000).toISOString() }, // 10s ago
     );
 
@@ -2173,7 +2580,14 @@ describe('recoverOrphanRuns', () => {
     // Seed a row that LOOKS orphaned (stale worker_started_at) but has
     // already transitioned to completed (status mismatch).
     const completed = await seedRunAt(
-      db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'completed',
+      db,
+      seed.workspace,
+      seed.project,
+      runsTable,
+      agent,
+      parent,
+      seed.user,
+      'completed',
       { workerStartedAt: new Date(Date.now() - 10 * 60_000).toISOString() },
     );
 
@@ -2203,13 +2617,23 @@ describe('recoverOrphanRuns', () => {
     // provider outage tipped the edge, but the underlying events are
     // not in the recent window. Combined with no events in the SQL
     // filter's window, checkProviderHealth returns next.healthy.
-    await db.update(workspaces).set({
-      providerHealth: { anthropic: { status: 'degraded', consecutive_failures: 3 } },
-    }).where(eq(workspaces.id, seed.workspace.id));
+    await db
+      .update(workspaces)
+      .set({
+        providerHealth: { anthropic: { status: 'degraded', consecutive_failures: 3 } },
+      })
+      .where(eq(workspaces.id, seed.workspace.id));
 
     // Seed a single stale running row (worker_started_at older than threshold).
     await seedRunAt(
-      db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'running',
+      db,
+      seed.workspace,
+      seed.project,
+      runsTable,
+      agent,
+      parent,
+      seed.user,
+      'running',
       { workerStartedAt: new Date(Date.now() - 10 * 60_000).toISOString() },
     );
 
@@ -2243,13 +2667,23 @@ describe('recoverOrphanRuns', () => {
     const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
     const runsTable = await seedRunsTable(db, seed.project.id);
 
-    await db.update(workspaces).set({
-      providerHealth: { anthropic: { status: 'degraded', consecutive_failures: 3 } },
-    }).where(eq(workspaces.id, seed.workspace.id));
+    await db
+      .update(workspaces)
+      .set({
+        providerHealth: { anthropic: { status: 'degraded', consecutive_failures: 3 } },
+      })
+      .where(eq(workspaces.id, seed.workspace.id));
 
     for (let i = 0; i < 3; i++) {
       await seedRunAt(
-        db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'running',
+        db,
+        seed.workspace,
+        seed.project,
+        runsTable,
+        agent,
+        parent,
+        seed.user,
+        'running',
         { workerStartedAt: new Date(Date.now() - 10 * 60_000).toISOString() },
       );
     }
@@ -2274,10 +2708,46 @@ describe('countPendingPlanning', () => {
     const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
     const runsTable = await seedRunsTable(db, seed.project.id);
 
-    await seedRunAt(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'planning');
-    await seedRunAt(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'planning');
-    await seedRunAt(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'running');
-    await seedRunAt(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'completed');
+    await seedRunAt(
+      db,
+      seed.workspace,
+      seed.project,
+      runsTable,
+      agent,
+      parent,
+      seed.user,
+      'planning',
+    );
+    await seedRunAt(
+      db,
+      seed.workspace,
+      seed.project,
+      runsTable,
+      agent,
+      parent,
+      seed.user,
+      'planning',
+    );
+    await seedRunAt(
+      db,
+      seed.workspace,
+      seed.project,
+      runsTable,
+      agent,
+      parent,
+      seed.user,
+      'running',
+    );
+    await seedRunAt(
+      db,
+      seed.workspace,
+      seed.project,
+      runsTable,
+      agent,
+      parent,
+      seed.user,
+      'completed',
+    );
 
     const count = await db.transaction(async (tx) => countPendingPlanning(tx));
     expect(count).toBe(2);
@@ -2290,7 +2760,16 @@ describe('countPendingPlanning', () => {
     const parent = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
     const runsTable = await seedRunsTable(db, seed.project.id);
 
-    await seedRunAt(db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'running');
+    await seedRunAt(
+      db,
+      seed.workspace,
+      seed.project,
+      runsTable,
+      agent,
+      parent,
+      seed.user,
+      'running',
+    );
 
     const count = await db.transaction(async (tx) => countPendingPlanning(tx));
     expect(count).toBe(0);
@@ -2500,7 +2979,14 @@ describe('checkChainGuards', () => {
     // 3 rows, total 600 tokens, 10s wall time — comfortably under defaults.
     for (let i = 0; i < 3; i++) {
       await seedRunAt(
-        db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'completed',
+        db,
+        seed.workspace,
+        seed.project,
+        runsTable,
+        agent,
+        parent,
+        seed.user,
+        'completed',
         {
           chainId,
           tokensIn: 100,
@@ -2530,7 +3016,14 @@ describe('checkChainGuards', () => {
 
     for (let i = 0; i < 6; i++) {
       await seedRunAt(
-        db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'completed',
+        db,
+        seed.workspace,
+        seed.project,
+        runsTable,
+        agent,
+        parent,
+        seed.user,
+        'completed',
         { chainId },
       );
     }
@@ -2554,15 +3047,29 @@ describe('checkChainGuards', () => {
     const runsTable = await seedRunsTable(db, seed.project.id);
     const chainId = crypto.randomUUID();
 
-    const startedAt = new Date(Date.now() - 60 * 60_000).toISOString();   // 1h ago
-    const completedAt = new Date(Date.now() - 10_000).toISOString();      // ~now
+    const startedAt = new Date(Date.now() - 60 * 60_000).toISOString(); // 1h ago
+    const completedAt = new Date(Date.now() - 10_000).toISOString(); // ~now
 
     await seedRunAt(
-      db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'completed',
+      db,
+      seed.workspace,
+      seed.project,
+      runsTable,
+      agent,
+      parent,
+      seed.user,
+      'completed',
       { chainId, startedAt, completedAt },
     );
     await seedRunAt(
-      db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'completed',
+      db,
+      seed.workspace,
+      seed.project,
+      runsTable,
+      agent,
+      parent,
+      seed.user,
+      'completed',
       { chainId, startedAt, completedAt },
     );
 
@@ -2588,7 +3095,14 @@ describe('checkChainGuards', () => {
     // 3 rows × 2000 tokens = 6000; cap=5000.
     for (let i = 0; i < 3; i++) {
       await seedRunAt(
-        db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'completed',
+        db,
+        seed.workspace,
+        seed.project,
+        runsTable,
+        agent,
+        parent,
+        seed.user,
+        'completed',
         { chainId, tokensIn: 1000, tokensOut: 1000 },
       );
     }
@@ -2617,7 +3131,14 @@ describe('checkChainGuards', () => {
     const completedAt = new Date().toISOString();
     for (let i = 0; i < 6; i++) {
       await seedRunAt(
-        db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'completed',
+        db,
+        seed.workspace,
+        seed.project,
+        runsTable,
+        agent,
+        parent,
+        seed.user,
+        'completed',
         { chainId, tokensIn: 5000, tokensOut: 5000, startedAt, completedAt },
       );
     }
@@ -2644,14 +3165,28 @@ describe('checkChainGuards', () => {
     // 100 rows in otherChain — should not affect myChain's fanout count.
     for (let i = 0; i < 100; i++) {
       await seedRunAt(
-        db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'completed',
+        db,
+        seed.workspace,
+        seed.project,
+        runsTable,
+        agent,
+        parent,
+        seed.user,
+        'completed',
         { chainId: otherChain },
       );
     }
     // 3 rows in myChain — well under cap.
     for (let i = 0; i < 3; i++) {
       await seedRunAt(
-        db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'completed',
+        db,
+        seed.workspace,
+        seed.project,
+        runsTable,
+        agent,
+        parent,
+        seed.user,
+        'completed',
         { chainId: myChain },
       );
     }
@@ -2860,8 +3395,12 @@ describe('checkProviderHealth', () => {
 
     for (let i = 0; i < 3; i++) {
       await seedTerminalRunEvent(db, {
-        workspace: seed.workspace, project: seed.project, runsTable,
-        agent, parent, user: seed.user,
+        workspace: seed.workspace,
+        project: seed.project,
+        runsTable,
+        agent,
+        parent,
+        user: seed.user,
         provider: 'anthropic',
         kind: 'agent.run.failed',
         errorReason: 'provider_error',
@@ -2890,32 +3429,48 @@ describe('checkProviderHealth', () => {
     // Order (newest last): fail, fail, cancelled, fail
     // After excluding cancelled, the last 3 are: fail, fail, fail → degraded.
     await seedTerminalRunEvent(db, {
-      workspace: seed.workspace, project: seed.project, runsTable,
-      agent, parent, user: seed.user,
+      workspace: seed.workspace,
+      project: seed.project,
+      runsTable,
+      agent,
+      parent,
+      user: seed.user,
       provider: 'anthropic',
       kind: 'agent.run.failed',
       errorReason: 'provider_error',
       seq: 7_100_001,
     });
     await seedTerminalRunEvent(db, {
-      workspace: seed.workspace, project: seed.project, runsTable,
-      agent, parent, user: seed.user,
+      workspace: seed.workspace,
+      project: seed.project,
+      runsTable,
+      agent,
+      parent,
+      user: seed.user,
       provider: 'anthropic',
       kind: 'agent.run.failed',
       errorReason: 'provider_error',
       seq: 7_100_002,
     });
     await seedTerminalRunEvent(db, {
-      workspace: seed.workspace, project: seed.project, runsTable,
-      agent, parent, user: seed.user,
+      workspace: seed.workspace,
+      project: seed.project,
+      runsTable,
+      agent,
+      parent,
+      user: seed.user,
       provider: 'anthropic',
       kind: 'agent.run.failed',
       errorReason: 'cancelled',
       seq: 7_100_003,
     });
     await seedTerminalRunEvent(db, {
-      workspace: seed.workspace, project: seed.project, runsTable,
-      agent, parent, user: seed.user,
+      workspace: seed.workspace,
+      project: seed.project,
+      runsTable,
+      agent,
+      parent,
+      user: seed.user,
       provider: 'anthropic',
       kind: 'agent.run.failed',
       errorReason: 'provider_error',
@@ -2951,8 +3506,12 @@ describe('checkProviderHealth', () => {
     // provider_errors → degraded.
     for (let i = 0; i < 3; i++) {
       await seedTerminalRunEvent(db, {
-        workspace: seed.workspace, project: seed.project, runsTable,
-        agent, parent, user: seed.user,
+        workspace: seed.workspace,
+        project: seed.project,
+        runsTable,
+        agent,
+        parent,
+        user: seed.user,
         provider: 'anthropic',
         kind: 'agent.run.failed',
         errorReason: 'provider_error',
@@ -2960,8 +3519,12 @@ describe('checkProviderHealth', () => {
       });
     }
     await seedTerminalRunEvent(db, {
-      workspace: seed.workspace, project: seed.project, runsTable,
-      agent, parent, user: seed.user,
+      workspace: seed.workspace,
+      project: seed.project,
+      runsTable,
+      agent,
+      parent,
+      user: seed.user,
       provider: 'anthropic',
       kind: 'agent.run.failed',
       errorReason: 'worker_crash',
@@ -2989,8 +3552,12 @@ describe('checkProviderHealth', () => {
     // 5 budget_exceeded failures — none are provider signals.
     for (let i = 0; i < 5; i++) {
       await seedTerminalRunEvent(db, {
-        workspace: seed.workspace, project: seed.project, runsTable,
-        agent, parent, user: seed.user,
+        workspace: seed.workspace,
+        project: seed.project,
+        runsTable,
+        agent,
+        parent,
+        user: seed.user,
         provider: 'anthropic',
         kind: 'agent.run.failed',
         errorReason: 'budget_exceeded',
@@ -3025,8 +3592,12 @@ describe('checkProviderHealth', () => {
     // 3 tool_error failures (≥ threshold) — none are provider signals.
     for (let i = 0; i < 3; i++) {
       await seedTerminalRunEvent(db, {
-        workspace: seed.workspace, project: seed.project, runsTable,
-        agent, parent, user: seed.user,
+        workspace: seed.workspace,
+        project: seed.project,
+        runsTable,
+        agent,
+        parent,
+        user: seed.user,
         provider: 'anthropic',
         kind: 'agent.run.failed',
         errorReason: 'tool_error',
@@ -3056,8 +3627,12 @@ describe('checkProviderHealth', () => {
     // Order (newest last): fail, fail, fail, completed
     for (let i = 0; i < 3; i++) {
       await seedTerminalRunEvent(db, {
-        workspace: seed.workspace, project: seed.project, runsTable,
-        agent, parent, user: seed.user,
+        workspace: seed.workspace,
+        project: seed.project,
+        runsTable,
+        agent,
+        parent,
+        user: seed.user,
         provider: 'anthropic',
         kind: 'agent.run.failed',
         errorReason: 'provider_error',
@@ -3065,8 +3640,12 @@ describe('checkProviderHealth', () => {
       });
     }
     await seedTerminalRunEvent(db, {
-      workspace: seed.workspace, project: seed.project, runsTable,
-      agent, parent, user: seed.user,
+      workspace: seed.workspace,
+      project: seed.project,
+      runsTable,
+      agent,
+      parent,
+      user: seed.user,
       provider: 'anthropic',
       kind: 'agent.run.completed',
       seq: 7_200_004,
@@ -3095,8 +3674,12 @@ describe('checkProviderHealth', () => {
     const staleMs = Date.now() - 30 * 24 * 60 * 60 * 1000;
     for (let i = 0; i < 3; i++) {
       await seedTerminalRunEvent(db, {
-        workspace: seed.workspace, project: seed.project, runsTable,
-        agent, parent, user: seed.user,
+        workspace: seed.workspace,
+        project: seed.project,
+        runsTable,
+        agent,
+        parent,
+        user: seed.user,
         provider: 'anthropic',
         kind: 'agent.run.failed',
         errorReason: 'provider_error',
@@ -3136,9 +3719,9 @@ describe('getProviderHealth', () => {
     const result = await getProviderHealth({ workspaceId: seed.workspace.id });
     expect(result).toEqual({
       anthropic: { status: 'healthy', consecutive_failures: 0 },
-      openai:    { status: 'healthy', consecutive_failures: 0 },
-      openrouter:{ status: 'healthy', consecutive_failures: 0 },
-      ollama:    { status: 'healthy', consecutive_failures: 0 },
+      openai: { status: 'healthy', consecutive_failures: 0 },
+      openrouter: { status: 'healthy', consecutive_failures: 0 },
+      ollama: { status: 'healthy', consecutive_failures: 0 },
     });
   });
 
@@ -3146,11 +3729,14 @@ describe('getProviderHealth', () => {
     const { db, seed } = await makeTestApp();
 
     // Persist anthropic at degraded; openai stays at the default.
-    await db.update(workspaces).set({
-      providerHealth: {
-        anthropic: { status: 'degraded', consecutive_failures: 5 },
-      },
-    }).where(eq(workspaces.id, seed.workspace.id));
+    await db
+      .update(workspaces)
+      .set({
+        providerHealth: {
+          anthropic: { status: 'degraded', consecutive_failures: 5 },
+        },
+      })
+      .where(eq(workspaces.id, seed.workspace.id));
 
     const result = await getProviderHealth({ workspaceId: seed.workspace.id });
     expect(result.anthropic).toEqual({ status: 'degraded', consecutive_failures: 5 });
@@ -3171,8 +3757,12 @@ describe('transitionRun → maybeEmitProviderHealthEdge', () => {
     // Pre-seed 2 prior provider_error failures (just under threshold=3).
     for (let i = 0; i < 2; i++) {
       await seedTerminalRunEvent(db, {
-        workspace: seed.workspace, project: seed.project, runsTable,
-        agent, parent, user: seed.user,
+        workspace: seed.workspace,
+        project: seed.project,
+        runsTable,
+        agent,
+        parent,
+        user: seed.user,
         provider: 'anthropic',
         kind: 'agent.run.failed',
         errorReason: 'provider_error',
@@ -3227,17 +3817,24 @@ describe('transitionRun → maybeEmitProviderHealthEdge', () => {
     // Pre-seed 3 failures + persisted degraded state.
     for (let i = 0; i < 3; i++) {
       await seedTerminalRunEvent(db, {
-        workspace: seed.workspace, project: seed.project, runsTable,
-        agent, parent, user: seed.user,
+        workspace: seed.workspace,
+        project: seed.project,
+        runsTable,
+        agent,
+        parent,
+        user: seed.user,
         provider: 'anthropic',
         kind: 'agent.run.failed',
         errorReason: 'provider_error',
         seq: 8_100_001 + i,
       });
     }
-    await db.update(workspaces).set({
-      providerHealth: { anthropic: { status: 'degraded', consecutive_failures: 3 } },
-    }).where(eq(workspaces.id, seed.workspace.id));
+    await db
+      .update(workspaces)
+      .set({
+        providerHealth: { anthropic: { status: 'degraded', consecutive_failures: 3 } },
+      })
+      .where(eq(workspaces.id, seed.workspace.id));
 
     // 4th failure — still degraded, no new edge to emit.
     const created = await createRun({
@@ -3287,17 +3884,24 @@ describe('transitionRun → maybeEmitProviderHealthEdge', () => {
     // Pre-seed degraded persisted state + 3 prior failures.
     for (let i = 0; i < 3; i++) {
       await seedTerminalRunEvent(db, {
-        workspace: seed.workspace, project: seed.project, runsTable,
-        agent, parent, user: seed.user,
+        workspace: seed.workspace,
+        project: seed.project,
+        runsTable,
+        agent,
+        parent,
+        user: seed.user,
         provider: 'anthropic',
         kind: 'agent.run.failed',
         errorReason: 'provider_error',
         seq: 8_200_001 + i,
       });
     }
-    await db.update(workspaces).set({
-      providerHealth: { anthropic: { status: 'degraded', consecutive_failures: 3 } },
-    }).where(eq(workspaces.id, seed.workspace.id));
+    await db
+      .update(workspaces)
+      .set({
+        providerHealth: { anthropic: { status: 'degraded', consecutive_failures: 3 } },
+      })
+      .where(eq(workspaces.id, seed.workspace.id));
 
     // A successful completion — degraded → healthy.
     const created = await createRun({
@@ -3342,8 +3946,12 @@ describe('transitionRun → maybeEmitProviderHealthEdge', () => {
     // 2 prior failures on anthropic (the run's recorded provider).
     for (let i = 0; i < 2; i++) {
       await seedTerminalRunEvent(db, {
-        workspace: seed.workspace, project: seed.project, runsTable,
-        agent, parent, user: seed.user,
+        workspace: seed.workspace,
+        project: seed.project,
+        runsTable,
+        agent,
+        parent,
+        user: seed.user,
         provider: 'anthropic',
         kind: 'agent.run.failed',
         errorReason: 'provider_error',
@@ -3368,9 +3976,12 @@ describe('transitionRun → maybeEmitProviderHealthEdge', () => {
 
     // Now FLIP the agent's frontmatter.provider to openai mid-window — as
     // if an operator edited it. The run's recorded provider stays anthropic.
-    await db.update(documents).set({
-      frontmatter: sql`json_set(${documents.frontmatter}, '$.provider', 'openai')`,
-    }).where(eq(documents.id, agent.id));
+    await db
+      .update(documents)
+      .set({
+        frontmatter: sql`json_set(${documents.frontmatter}, '$.provider', 'openai')`,
+      })
+      .where(eq(documents.id, agent.id));
 
     await transitionRun(created.document.id, { newStatus: 'running', actor: seed.user.id });
     await transitionRun(created.document.id, {
@@ -3401,7 +4012,9 @@ describe('transitionRun → maybeEmitProviderHealthEdge', () => {
     const { eventBus } = await import('../lib/event-bus.ts');
     const unsubscribe = eventBus.subscribe(seed.workspace.id, undefined, () => {
       // Async handler that never resolves — proxy for a slow SSE writer.
-      return new Promise(() => { /* never resolves */ }) as unknown as void;
+      return new Promise(() => {
+        /* never resolves */
+      }) as unknown as void;
     });
 
     const created = await createRun({
@@ -3655,7 +4268,14 @@ describe('worker_started_at Z-suffix DB constraint (migration 0014)', () => {
     const runsTable = await seedRunsTable(db, seed.project.id);
 
     const created = await seedRunAt(
-      db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'running',
+      db,
+      seed.workspace,
+      seed.project,
+      runsTable,
+      agent,
+      parent,
+      seed.user,
+      'running',
       { workerStartedAt: new Date().toISOString() },
     );
     expect(created.id).toBeTruthy();
@@ -3670,7 +4290,14 @@ describe('worker_started_at Z-suffix DB constraint (migration 0014)', () => {
 
     // seedRunAt default has no worker_started_at — must pass.
     const created = await seedRunAt(
-      db, seed.workspace, seed.project, runsTable, agent, parent, seed.user, 'planning',
+      db,
+      seed.workspace,
+      seed.project,
+      runsTable,
+      agent,
+      parent,
+      seed.user,
+      'planning',
     );
     expect(created.id).toBeTruthy();
   });
@@ -3700,7 +4327,9 @@ describe('nextChainId', () => {
     // Mitigation 29 — chain_id MUST be a valid UUID, no exceptions. A
     // mangled `chain:not-a-uuid:...` MUST NOT propagate; mint fresh instead.
     const result = nextChainId({ firedBy: 'chain:not-a-uuid:agent.task.assigned' });
-    expect(result).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+    expect(result).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+    );
   });
 
   test('result always satisfies agentRunFrontmatterSchema.chain_id (z.string().uuid())', () => {
@@ -3740,13 +4369,19 @@ describe('setRunBody', () => {
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, wsId) });
 
     const userId = nanoid();
-    await db.insert(users).values({ id: userId, email: `u-${nanoid(6)}@test.dev`, passwordHash: 'x', name: 'Tester' });
+    await db
+      .insert(users)
+      .values({ id: userId, email: `u-${nanoid(6)}@test.dev`, passwordHash: 'x', name: 'Tester' });
     const user = await db.query.users.findFirst({ where: eq(users.id, userId) });
 
     const projectId = nanoid();
-    await db.insert(schemaProjects).values({ id: projectId, workspaceId: wsId, name: 'test-proj', slug: `p-${nanoid(6)}` });
+    await db
+      .insert(schemaProjects)
+      .values({ id: projectId, workspaceId: wsId, name: 'test-proj', slug: `p-${nanoid(6)}` });
     await seedProjectDefaults(db, projectId);
-    const project = await db.query.projects.findFirst({ where: (p, { eq }) => eq(p.id, projectId) });
+    const project = await db.query.projects.findFirst({
+      where: (p, { eq }) => eq(p.id, projectId),
+    });
 
     const runsTable = await seedRunsTable(db, projectId);
     const agent = await seedAgent(db, ws!, user!, `agent-${nanoid(6)}`);
@@ -3768,13 +4403,19 @@ describe('setRunBody', () => {
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, wsId) });
 
     const userId = nanoid();
-    await db.insert(users).values({ id: userId, email: `u-${nanoid(6)}@test.dev`, passwordHash: 'x', name: 'Tester' });
+    await db
+      .insert(users)
+      .values({ id: userId, email: `u-${nanoid(6)}@test.dev`, passwordHash: 'x', name: 'Tester' });
     const user = await db.query.users.findFirst({ where: eq(users.id, userId) });
 
     const projectId = nanoid();
-    await db.insert(schemaProjects).values({ id: projectId, workspaceId: wsId, name: 'test-proj', slug: `p-${nanoid(6)}` });
+    await db
+      .insert(schemaProjects)
+      .values({ id: projectId, workspaceId: wsId, name: 'test-proj', slug: `p-${nanoid(6)}` });
     await seedProjectDefaults(db, projectId);
-    const project = await db.query.projects.findFirst({ where: (p, { eq }) => eq(p.id, projectId) });
+    const project = await db.query.projects.findFirst({
+      where: (p, { eq }) => eq(p.id, projectId),
+    });
 
     const runsTable = await seedRunsTable(db, projectId);
     const agent = await seedAgent(db, ws!, user!, `agent-${nanoid(6)}`);

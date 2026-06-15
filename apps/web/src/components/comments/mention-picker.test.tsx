@@ -1,7 +1,7 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MentionPicker } from './mention-picker.tsx';
 
 afterEach(() => {
@@ -74,10 +74,7 @@ function makeMembersResponse(members: { id: string; email: string; name: string;
     });
 }
 
-const defaultAgents = [
-  makeAgent('drafter', 'Reply Drafter'),
-  makeAgent('helper', 'Thread Helper'),
-];
+const defaultAgents = [makeAgent('drafter', 'Reply Drafter'), makeAgent('helper', 'Thread Helper')];
 
 const defaultMembers = [
   { id: 'u1', email: 'jan@example.com', name: 'Jan Doe', role: 'member' },

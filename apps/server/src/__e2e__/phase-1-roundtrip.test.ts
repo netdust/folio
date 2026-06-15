@@ -1,8 +1,8 @@
-import { test, expect } from 'bun:test';
+import { expect, test } from 'bun:test';
 import { eq } from 'drizzle-orm';
-import { makeTestApp } from '../test/harness.ts';
 import { events, magicLinks } from '../db/schema.ts';
 import { hashToken } from '../lib/auth.ts';
+import { makeTestApp } from '../test/harness.ts';
 
 test('Phase 1 happy path: workspace → project → MD document → patch → :slug.md round-trip', async () => {
   const { app, db, seed } = await makeTestApp();
@@ -20,7 +20,10 @@ test('Phase 1 happy path: workspace → project → MD document → patch → :s
   // Verify 4 default statuses + 2 default views were seeded.
   const projData = (await proj.json()).data;
   const { statuses, views } = await import('../db/schema.ts');
-  const seededStatuses = await db.select().from(statuses).where(eq(statuses.projectId, projData.id));
+  const seededStatuses = await db
+    .select()
+    .from(statuses)
+    .where(eq(statuses.projectId, projData.id));
   const seededViews = await db.select().from(views).where(eq(views.projectId, projData.id));
   expect(seededStatuses).toHaveLength(4);
   expect(seededViews).toHaveLength(2);

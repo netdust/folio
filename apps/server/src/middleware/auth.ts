@@ -1,7 +1,7 @@
 import type { Context, MiddlewareHandler } from 'hono';
 import { getCookie } from 'hono/cookie';
+import type { ApiToken, User } from '../db/schema.ts';
 import { readSession } from '../lib/auth.ts';
-import type { User, ApiToken } from '../db/schema.ts';
 import { HTTPError } from '../lib/http.ts';
 
 export interface AuthContext {

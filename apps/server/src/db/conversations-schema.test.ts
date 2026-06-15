@@ -1,9 +1,9 @@
-import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { drizzle } from 'drizzle-orm/bun-sqlite';
-import { migrate } from 'drizzle-orm/bun-sqlite/migrator';
+import { describe, expect, test } from 'bun:test';
 import { resolve } from 'node:path';
 import { eq } from 'drizzle-orm';
+import { drizzle } from 'drizzle-orm/bun-sqlite';
+import { migrate } from 'drizzle-orm/bun-sqlite/migrator';
 import * as schema from './schema.ts';
 import { conversations, messages, pendingOps } from './schema.ts';
 

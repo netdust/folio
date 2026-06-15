@@ -1,8 +1,8 @@
-import { useEffect } from 'react';
 import { useNavigate } from '@tanstack/react-router';
-import { Button } from './ui/button.tsx';
+import { useEffect } from 'react';
 import { useWorkspaces } from '../lib/api/workspaces.ts';
 import { getLastWorkspaceSlug } from '../lib/last-workspace.ts';
+import { Button } from './ui/button.tsx';
 
 interface WorkspacePickerProps {
   onCreate: () => void;
@@ -37,9 +37,7 @@ export function WorkspacePicker({ onCreate }: WorkspacePickerProps) {
     return (
       <div className="flex flex-col items-center py-16 text-center">
         <h1 className="text-2xl font-semibold text-fg">Welcome to Folio</h1>
-        <p className="mt-2 text-fg-3">
-          Create your first workspace to start managing work.
-        </p>
+        <p className="mt-2 text-fg-3">Create your first workspace to start managing work.</p>
         <Button className="mt-6" variant="primary" size="lg" onClick={onCreate}>
           Create workspace
         </Button>

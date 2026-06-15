@@ -18,7 +18,7 @@
  * deploy that drops it.
  */
 
-import { readdirSync, readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 
 /**
@@ -48,10 +48,7 @@ export interface DriftIssue {
  * Scan a single .sql file for DROP INDEX statements targeting any of
  * the always-keep names. Returns one issue per match.
  */
-export function scanFileForDrift(
-  filePath: string,
-  fileContents: string,
-): DriftIssue[] {
+export function scanFileForDrift(filePath: string, fileContents: string): DriftIssue[] {
   const issues: DriftIssue[] = [];
   const lines = fileContents.split('\n');
   const dropRe = /^\s*DROP\s+INDEX\s+(?:IF\s+EXISTS\s+)?`?([a-zA-Z0-9_]+)`?/i;

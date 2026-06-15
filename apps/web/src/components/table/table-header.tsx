@@ -1,19 +1,27 @@
-import { DndContext, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
-import { useSortable, SortableContext, horizontalListSortingStrategy, arrayMove } from '@dnd-kit/sortable';
+import { DndContext, type DragEndEvent, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
+import {
+  SortableContext,
+  arrayMove,
+  horizontalListSortingStrategy,
+  useSortable,
+} from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import type { ReactNode } from 'react';
-import { gridTemplate, type Column } from './columns.ts';
 import { InlineEdit } from '../inline/inline-edit.tsx';
+import { type Column, gridTemplate } from './columns.ts';
 
 // SortKey is `string` because saved views can persist a sort by any column
 // key (built-in or custom field). Every column header is clickable to sort;
 // custom field sorts are validated server-side.
 export type SortKey = string;
 export type SortDir = 'asc' | 'desc';
-export interface SortState { key: SortKey; dir: SortDir; }
+export interface SortState {
+  key: SortKey;
+  dir: SortDir;
+}
 
 interface Props {
-  columns: Column[];         // visible columns, already ordered
+  columns: Column[]; // visible columns, already ordered
   sort: SortState | null;
   onSort: (next: SortState | null) => void;
   onReorder: (nextOrder: string[]) => void;
@@ -53,10 +61,7 @@ export function TableHeader({
     <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-border-light bg-content py-1.5">
       <DndContext sensors={sensors} onDragEnd={onDragEnd}>
         <SortableContext items={ids} strategy={horizontalListSortingStrategy}>
-          <div
-            className="grid flex-1 gap-3"
-            style={{ gridTemplateColumns: gridTemplate(columns) }}
-          >
+          <div className="grid flex-1 gap-3" style={{ gridTemplateColumns: gridTemplate(columns) }}>
             {columns.map((c, i) => (
               <SortableHeaderCell
                 key={c.key}
@@ -144,7 +149,11 @@ function SortableHeaderCell({
           {...attributes}
           {...listeners}
           onClick={onClick}
-          title={sortable ? `Sort by ${column.label} (drag to reorder)` : `Drag to reorder ${column.label}`}
+          title={
+            sortable
+              ? `Sort by ${column.label} (drag to reorder)`
+              : `Drag to reorder ${column.label}`
+          }
           className="flex flex-1 cursor-grab items-center gap-1 text-left text-[11px] uppercase tracking-wide text-fg-3 hover:text-fg-2 active:cursor-grabbing"
         >
           {column.label}

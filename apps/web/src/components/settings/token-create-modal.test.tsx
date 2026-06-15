@@ -1,8 +1,8 @@
-import { describe, expect, it, vi, afterEach } from 'vitest';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { TokenCreateModal } from './token-create-modal.tsx';
 
 afterEach(() => {
@@ -32,10 +32,9 @@ const DEAD_GRANULAR_SCOPES = ['fields:write', 'views:write', 'tables:write', 'st
 describe('TokenCreateModal', () => {
   it('renders a checkbox for every v1 scope', () => {
     const qc = new QueryClient();
-    render(
-      <TokenCreateModal wslug="acme" workspaceId="ws-1" open onOpenChange={() => {}} />,
-      { wrapper: wrap(qc) },
-    );
+    render(<TokenCreateModal wslug="acme" workspaceId="ws-1" open onOpenChange={() => {}} />, {
+      wrapper: wrap(qc),
+    });
     for (const scope of SCOPES) {
       expect(screen.getByLabelText(scope)).toBeInTheDocument();
     }
@@ -43,10 +42,9 @@ describe('TokenCreateModal', () => {
 
   it('does NOT offer the dead granular config scopes', () => {
     const qc = new QueryClient();
-    render(
-      <TokenCreateModal wslug="acme" workspaceId="ws-1" open onOpenChange={() => {}} />,
-      { wrapper: wrap(qc) },
-    );
+    render(<TokenCreateModal wslug="acme" workspaceId="ws-1" open onOpenChange={() => {}} />, {
+      wrapper: wrap(qc),
+    });
     for (const scope of DEAD_GRANULAR_SCOPES) {
       expect(screen.queryByLabelText(scope)).toBeNull();
     }
@@ -55,10 +53,9 @@ describe('TokenCreateModal', () => {
   it('disables Create until name is non-empty AND at least one scope is checked', async () => {
     const qc = new QueryClient();
     const user = userEvent.setup();
-    render(
-      <TokenCreateModal wslug="acme" workspaceId="ws-1" open onOpenChange={() => {}} />,
-      { wrapper: wrap(qc) },
-    );
+    render(<TokenCreateModal wslug="acme" workspaceId="ws-1" open onOpenChange={() => {}} />, {
+      wrapper: wrap(qc),
+    });
     const button = screen.getByRole('button', { name: /create/i });
     expect(button).toBeDisabled();
     await user.type(screen.getByLabelText(/^name$/i), 'CI');
@@ -69,10 +66,9 @@ describe('TokenCreateModal', () => {
 
   it('exposes Read-only / Read + write / Full access preset buttons', () => {
     const qc = new QueryClient();
-    render(
-      <TokenCreateModal wslug="acme" workspaceId="ws-1" open onOpenChange={() => {}} />,
-      { wrapper: wrap(qc) },
-    );
+    render(<TokenCreateModal wslug="acme" workspaceId="ws-1" open onOpenChange={() => {}} />, {
+      wrapper: wrap(qc),
+    });
     expect(screen.getByRole('button', { name: /read-only/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /read \+ write/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /full access/i })).toBeInTheDocument();
@@ -81,10 +77,9 @@ describe('TokenCreateModal', () => {
   it('clicking "Read + write" checks documents:read/write + config:write (no delete, no agents:write)', async () => {
     const qc = new QueryClient();
     const user = userEvent.setup();
-    render(
-      <TokenCreateModal wslug="acme" workspaceId="ws-1" open onOpenChange={() => {}} />,
-      { wrapper: wrap(qc) },
-    );
+    render(<TokenCreateModal wslug="acme" workspaceId="ws-1" open onOpenChange={() => {}} />, {
+      wrapper: wrap(qc),
+    });
     await user.click(screen.getByRole('button', { name: /read \+ write/i }));
     expect((screen.getByLabelText('documents:read') as HTMLInputElement).checked).toBe(true);
     expect((screen.getByLabelText('documents:write') as HTMLInputElement).checked).toBe(true);
@@ -102,10 +97,9 @@ describe('TokenCreateModal', () => {
   it('"Read-only" preset does NOT include agents:write', async () => {
     const qc = new QueryClient();
     const user = userEvent.setup();
-    render(
-      <TokenCreateModal wslug="acme" workspaceId="ws-1" open onOpenChange={() => {}} />,
-      { wrapper: wrap(qc) },
-    );
+    render(<TokenCreateModal wslug="acme" workspaceId="ws-1" open onOpenChange={() => {}} />, {
+      wrapper: wrap(qc),
+    });
     await user.click(screen.getByRole('button', { name: /^read-only$/i }));
     expect((screen.getByLabelText('agents:write') as HTMLInputElement).checked).toBe(false);
   });
@@ -113,10 +107,9 @@ describe('TokenCreateModal', () => {
   it('"Full access" preset does NOT include agents:write (BUG-007)', async () => {
     const qc = new QueryClient();
     const user = userEvent.setup();
-    render(
-      <TokenCreateModal wslug="acme" workspaceId="ws-1" open onOpenChange={() => {}} />,
-      { wrapper: wrap(qc) },
-    );
+    render(<TokenCreateModal wslug="acme" workspaceId="ws-1" open onOpenChange={() => {}} />, {
+      wrapper: wrap(qc),
+    });
     await user.click(screen.getByRole('button', { name: /full access/i }));
     expect((screen.getByLabelText('agents:write') as HTMLInputElement).checked).toBe(false);
   });
@@ -124,10 +117,9 @@ describe('TokenCreateModal', () => {
   it('clicking "Full access" checks every scope except agents:write', async () => {
     const qc = new QueryClient();
     const user = userEvent.setup();
-    render(
-      <TokenCreateModal wslug="acme" workspaceId="ws-1" open onOpenChange={() => {}} />,
-      { wrapper: wrap(qc) },
-    );
+    render(<TokenCreateModal wslug="acme" workspaceId="ws-1" open onOpenChange={() => {}} />, {
+      wrapper: wrap(qc),
+    });
     await user.click(screen.getByRole('button', { name: /full access/i }));
     for (const scope of SCOPES) {
       const expected = scope !== 'agents:write';
@@ -155,10 +147,9 @@ describe('TokenCreateModal', () => {
       ),
     );
     const user = userEvent.setup();
-    render(
-      <TokenCreateModal wslug="acme" workspaceId="ws-1" open onOpenChange={() => {}} />,
-      { wrapper: wrap(qc) },
-    );
+    render(<TokenCreateModal wslug="acme" workspaceId="ws-1" open onOpenChange={() => {}} />, {
+      wrapper: wrap(qc),
+    });
     await user.type(screen.getByLabelText(/^name$/i), 'CI');
     await user.click(screen.getByLabelText('documents:read'));
     await user.click(screen.getByRole('button', { name: /create/i }));
@@ -176,24 +167,26 @@ describe('TokenCreateModal', () => {
   // when every scope is selected.
   it('renders "Full access" preset with a destructive accent (data-tone="danger")', () => {
     const qc = new QueryClient();
-    render(
-      <TokenCreateModal wslug="acme" workspaceId="ws-1" open onOpenChange={() => {}} />,
-      { wrapper: wrap(qc) },
-    );
+    render(<TokenCreateModal wslug="acme" workspaceId="ws-1" open onOpenChange={() => {}} />, {
+      wrapper: wrap(qc),
+    });
     const fullAccess = screen.getByRole('button', { name: /full access/i });
     expect(fullAccess.getAttribute('data-tone')).toBe('danger');
     // Other presets are not danger-toned.
-    expect(screen.getByRole('button', { name: /^read-only$/i }).getAttribute('data-tone')).not.toBe('danger');
-    expect(screen.getByRole('button', { name: /read \+ write/i }).getAttribute('data-tone')).not.toBe('danger');
+    expect(screen.getByRole('button', { name: /^read-only$/i }).getAttribute('data-tone')).not.toBe(
+      'danger',
+    );
+    expect(
+      screen.getByRole('button', { name: /read \+ write/i }).getAttribute('data-tone'),
+    ).not.toBe('danger');
   });
 
   it('shows a warning alert only when EVERY scope (including manually-ticked agents:write) is selected', async () => {
     const qc = new QueryClient();
     const user = userEvent.setup();
-    render(
-      <TokenCreateModal wslug="acme" workspaceId="ws-1" open onOpenChange={() => {}} />,
-      { wrapper: wrap(qc) },
-    );
+    render(<TokenCreateModal wslug="acme" workspaceId="ws-1" open onOpenChange={() => {}} />, {
+      wrapper: wrap(qc),
+    });
     // No warning before any preset is clicked.
     expect(screen.queryByRole('alert')).toBeNull();
     // Full access alone is not enough — BUG-007 drops agents:write from
@@ -214,10 +207,9 @@ describe('TokenCreateModal', () => {
   it('hides the warning when any scope is unchecked from the full set', async () => {
     const qc = new QueryClient();
     const user = userEvent.setup();
-    render(
-      <TokenCreateModal wslug="acme" workspaceId="ws-1" open onOpenChange={() => {}} />,
-      { wrapper: wrap(qc) },
-    );
+    render(<TokenCreateModal wslug="acme" workspaceId="ws-1" open onOpenChange={() => {}} />, {
+      wrapper: wrap(qc),
+    });
     await user.click(screen.getByRole('button', { name: /full access/i }));
     await user.click(screen.getByLabelText('agents:write'));
     await user.click(screen.getByLabelText('settings:write'));
@@ -259,10 +251,9 @@ describe('per-workspace reach + admin scopes', () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const fetchMock = stubCreateFetch();
     const user = userEvent.setup();
-    render(
-      <TokenCreateModal wslug="acme" workspaceId="ws-1" open onOpenChange={() => {}} />,
-      { wrapper: wrap(qc) },
-    );
+    render(<TokenCreateModal wslug="acme" workspaceId="ws-1" open onOpenChange={() => {}} />, {
+      wrapper: wrap(qc),
+    });
     // No reach UI at all.
     expect(screen.queryByText(/whole instance/i)).toBeNull();
     expect(screen.queryByLabelText(/whole instance/i)).toBeNull();
@@ -281,10 +272,9 @@ describe('per-workspace reach + admin scopes', () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const fetchMock = stubCreateFetch();
     const user = userEvent.setup();
-    render(
-      <TokenCreateModal wslug="acme" workspaceId="ws-1" open onOpenChange={() => {}} />,
-      { wrapper: wrap(qc) },
-    );
+    render(<TokenCreateModal wslug="acme" workspaceId="ws-1" open onOpenChange={() => {}} />, {
+      wrapper: wrap(qc),
+    });
     await user.type(screen.getByLabelText(/^name$/i), 'CI');
     await user.click(screen.getByLabelText('documents:read'));
     await user.type(screen.getByLabelText(/expires in/i), '30');
@@ -302,10 +292,9 @@ describe('per-workspace reach + admin scopes', () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const fetchMock = stubCreateFetch();
     const user = userEvent.setup();
-    render(
-      <TokenCreateModal wslug="acme" workspaceId="ws-1" open onOpenChange={() => {}} />,
-      { wrapper: wrap(qc) },
-    );
+    render(<TokenCreateModal wslug="acme" workspaceId="ws-1" open onOpenChange={() => {}} />, {
+      wrapper: wrap(qc),
+    });
     await user.type(screen.getByLabelText(/^name$/i), 'CI');
     await user.click(screen.getByLabelText('documents:read'));
     await user.type(screen.getByLabelText(/expires in/i), '3.5');
@@ -325,10 +314,9 @@ describe('per-workspace reach + admin scopes', () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const fetchMock = stubCreateFetch();
     const user = userEvent.setup();
-    render(
-      <TokenCreateModal wslug="acme" workspaceId="ws-1" open onOpenChange={() => {}} />,
-      { wrapper: wrap(qc) },
-    );
+    render(<TokenCreateModal wslug="acme" workspaceId="ws-1" open onOpenChange={() => {}} />, {
+      wrapper: wrap(qc),
+    });
     await user.type(screen.getByLabelText(/^name$/i), 'CI');
     await user.click(screen.getByLabelText('documents:read'));
     await user.type(screen.getByLabelText(/expires in/i), '7');
@@ -346,10 +334,9 @@ describe('per-workspace reach + admin scopes', () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const fetchMock = stubCreateFetch();
     const user = userEvent.setup();
-    render(
-      <TokenCreateModal wslug="acme" workspaceId="ws-1" open onOpenChange={() => {}} />,
-      { wrapper: wrap(qc) },
-    );
+    render(<TokenCreateModal wslug="acme" workspaceId="ws-1" open onOpenChange={() => {}} />, {
+      wrapper: wrap(qc),
+    });
     await user.type(screen.getByLabelText(/^name$/i), 'CI');
     await user.click(screen.getByLabelText('documents:read'));
     await user.click(screen.getByRole('button', { name: /^create$/i }));
@@ -361,10 +348,9 @@ describe('per-workspace reach + admin scopes', () => {
 
   it('the three admin scopes are offered as checkboxes', () => {
     const qc = new QueryClient();
-    render(
-      <TokenCreateModal wslug="acme" workspaceId="ws-1" open onOpenChange={() => {}} />,
-      { wrapper: wrap(qc) },
-    );
+    render(<TokenCreateModal wslug="acme" workspaceId="ws-1" open onOpenChange={() => {}} />, {
+      wrapper: wrap(qc),
+    });
     for (const scope of ADMIN_SCOPES) {
       expect(screen.getByLabelText(scope)).toBeInTheDocument();
     }
@@ -373,10 +359,9 @@ describe('per-workspace reach + admin scopes', () => {
   it('no preset bundles an admin scope', async () => {
     const qc = new QueryClient();
     const user = userEvent.setup();
-    render(
-      <TokenCreateModal wslug="acme" workspaceId="ws-1" open onOpenChange={() => {}} />,
-      { wrapper: wrap(qc) },
-    );
+    render(<TokenCreateModal wslug="acme" workspaceId="ws-1" open onOpenChange={() => {}} />, {
+      wrapper: wrap(qc),
+    });
     for (const presetName of [/^read-only$/i, /read \+ write/i, /full access/i]) {
       await user.click(screen.getByRole('button', { name: presetName }));
       for (const scope of ADMIN_SCOPES) {

@@ -256,7 +256,9 @@ mcpRoute.post('/', async (c) => {
     // error, NOT a raw 500.
     const actorUser = c.get('user');
     if (!actorUser) {
-      console.error(`[mcp] tools/call with a token that has no resolvable user (token ${token.id})`);
+      console.error(
+        `[mcp] tools/call with a token that has no resolvable user (token ${token.id})`,
+      );
       return c.json<JsonRpcResponse>({
         jsonrpc: '2.0',
         id,

@@ -13,15 +13,11 @@ import { eq, like } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import { db } from '../db/client.ts';
-import { apiTokens, type ApiToken } from '../db/schema.ts';
+import { type ApiToken, apiTokens } from '../db/schema.ts';
+import { getConfirmedPendingOp, markExecuted, recordPendingOp } from '../services/pending-ops.ts';
 import { ADMIN_SCOPES } from './agent-schema.ts'; // CR#3: derive the C3 config floor
-import { AwaitingConfirmationError, registerTool, type ToolContext } from './agent-tools.ts';
+import { AwaitingConfirmationError, type ToolContext, registerTool } from './agent-tools.ts';
 import { newApiToken } from './auth.ts';
-import {
-  getConfirmedPendingOp,
-  markExecuted,
-  recordPendingOp,
-} from '../services/pending-ops.ts';
 
 /**
  * Validate the `path` arg of folio_api/folio_api_get (mitigation P3-5).
@@ -93,10 +89,7 @@ export function pathHint(path: string): string {
     return `No route matched. A project ITEM is "/w/<wslug>/p/<pslug>" (bare, NOT "/projects/<slug>"); the projects COLLECTION is "/w/<wslug>/projects". ${SHAPE}`;
   }
   // Missing the /p/ segment for a project-scoped resource (tables/fields/views/statuses).
-  if (
-    /\/(tables|fields|views|statuses)(\/|$)/.test(path) &&
-    !/\/p\/[^/]+\//.test(path)
-  ) {
+  if (/\/(tables|fields|views|statuses)(\/|$)/.test(path) && !/\/p\/[^/]+\//.test(path)) {
     return `No route matched. tables/fields/views/statuses are PROJECT-scoped — the path needs "…/w/<wslug>/p/<pslug>/<resource>". ${SHAPE}`;
   }
   return `No route matched — the path shape is wrong. ${SHAPE}`;
@@ -169,7 +162,9 @@ export function pathToScope(method: string, path: string): ScopeTarget {
   if (/^\/api\/v1\/w\/[^/]+$/.test(path)) return 'workspace:admin'; // rename/delete workspace
   if (/^\/api\/v1\/w\/[^/]+\/members?(\/|$)/.test(path)) return 'members:write';
   if (/^\/api\/v1\/w\/[^/]+\/settings(\/|$)/.test(path)) return 'settings:write';
-  if (/^\/api\/v1\/w\/[^/]+\/p\/[^/]+(?:\/t\/[^/]+)?\/(tables|fields|views|statuses)(\/|$)/.test(path))
+  if (
+    /^\/api\/v1\/w\/[^/]+\/p\/[^/]+(?:\/t\/[^/]+)?\/(tables|fields|views|statuses)(\/|$)/.test(path)
+  )
     return 'config:write';
   if (/^\/api\/v1\/w\/[^/]+\/projects(\/[^/]+)?$/.test(path)) return 'config:write';
   if (/^\/api\/v1\/w\/[^/]+\/p\/[^/]+$/.test(path)) return 'config:write'; // bare project item
@@ -379,11 +374,7 @@ export function registerFolioApiTools(): void {
       // the FULL request {method, path, body} so confirming executes the RECORDED
       // request, not a turn-2 re-read (M6). Document-write paths (documents:write)
       // are NOT config-class → not gated here (act-then-report majority).
-      if (
-        ctx.conversationId &&
-        scopeTarget !== null &&
-        CONFIG_CLASS_SCOPES.has(scopeTarget)
-      ) {
+      if (ctx.conversationId && scopeTarget !== null && CONFIG_CLASS_SCOPES.has(scopeTarget)) {
         const gateParams = { method: args.method, path: args.path, body };
         const confirmed = await getConfirmedPendingOp(ctx.tx ?? db, {
           conversationId: ctx.conversationId,
@@ -433,7 +424,12 @@ export function registerFolioApiTools(): void {
           path: string;
           body: unknown;
         };
-        const cres = await dispatchAsCaller(ctx.token, recorded.method, recorded.path, recorded.body);
+        const cres = await dispatchAsCaller(
+          ctx.token,
+          recorded.method,
+          recorded.path,
+          recorded.body,
+        );
         const cjson = await cres.json().catch(() => null);
         await markExecuted(ctx.tx ?? db, confirmed.id, ctx.actor);
         if (cres.status === 404 && cjson === null) {

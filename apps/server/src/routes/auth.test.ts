@@ -1,5 +1,5 @@
-import { eq } from 'drizzle-orm';
 import { expect, test } from 'bun:test';
+import { eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { aiKeys, users } from '../db/schema.ts';
 import { env } from '../env.ts';

@@ -10,15 +10,15 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { nanoid } from 'nanoid';
 import { eq } from 'drizzle-orm';
-import { makeTestApp } from '../test/harness.ts';
+import { nanoid } from 'nanoid';
 import * as schema from '../db/schema.ts';
 import { createSession } from '../lib/auth.ts';
 import { FOLIO_SKILL_BODY, FOLIO_SKILL_SLUG } from '../lib/system-skills.ts';
-import { __setRunAgentForTest } from './conversations.ts';
 import { appendMessage } from '../services/conversations.ts';
 import { recordPendingOp } from '../services/pending-ops.ts';
+import { makeTestApp } from '../test/harness.ts';
+import { __setRunAgentForTest } from './conversations.ts';
 
 let runAgentCalls: string[] = [];
 
@@ -173,7 +173,14 @@ describe('POST .../messages/:messageId/click — choice-card button (M7/M8)', ()
       conversationId: convId,
       role: 'operator',
       kind: 'component',
-      payload: { type: 'choice_card', prompt: 'Which?', options: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }] },
+      payload: {
+        type: 'choice_card',
+        prompt: 'Which?',
+        options: [
+          { id: 'a', label: 'A' },
+          { id: 'b', label: 'B' },
+        ],
+      },
     });
     const res = await app.request(`/api/v1/conversations/${convId}/messages/${card.id}/click`, {
       method: 'POST',
@@ -201,7 +208,10 @@ describe('POST .../messages/:messageId/click — choice-card button (M7/M8)', ()
       payload: {
         type: 'choice_card',
         prompt: 'Confirm delete_document?',
-        options: [{ id: pending.id, label: 'Yes, do it' }, { id: 'cancel', label: 'Cancel' }],
+        options: [
+          { id: pending.id, label: 'Yes, do it' },
+          { id: 'cancel', label: 'Cancel' },
+        ],
         pending_op: pending.id,
       },
     });
@@ -239,7 +249,10 @@ describe('POST .../messages/:messageId/click — choice-card button (M7/M8)', ()
       payload: {
         type: 'choice_card',
         prompt: 'Confirm?',
-        options: [{ id: pending.id, label: 'Yes' }, { id: 'cancel', label: 'Cancel' }],
+        options: [
+          { id: pending.id, label: 'Yes' },
+          { id: 'cancel', label: 'Cancel' },
+        ],
         pending_op: pending.id,
       },
     });
@@ -275,7 +288,10 @@ describe('POST .../messages/:messageId/click — choice-card button (M7/M8)', ()
       payload: {
         type: 'choice_card',
         prompt: 'Confirm?',
-        options: [{ id: pending.id, label: 'Yes' }, { id: 'cancel', label: 'Cancel' }],
+        options: [
+          { id: pending.id, label: 'Yes' },
+          { id: 'cancel', label: 'Cancel' },
+        ],
         pending_op: pending.id,
       },
     });
@@ -301,7 +317,14 @@ describe('POST .../messages/:messageId/click — choice-card button (M7/M8)', ()
       conversationId: convId,
       role: 'operator',
       kind: 'component',
-      payload: { type: 'choice_card', prompt: 'Which?', options: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }] },
+      payload: {
+        type: 'choice_card',
+        prompt: 'Which?',
+        options: [
+          { id: 'a', label: 'A' },
+          { id: 'b', label: 'B' },
+        ],
+      },
     });
     const first = await app.request(`/api/v1/conversations/${convId}/messages/${card.id}/click`, {
       method: 'POST',

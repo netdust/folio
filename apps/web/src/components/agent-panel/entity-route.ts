@@ -1,5 +1,5 @@
-import type { NavigateOptions } from '@tanstack/react-router';
 import type { EntityType } from '@folio/shared';
+import type { NavigateOptions } from '@tanstack/react-router';
 
 export type { EntityType };
 

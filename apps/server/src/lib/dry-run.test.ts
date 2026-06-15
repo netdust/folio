@@ -3,7 +3,9 @@ import type { Context } from 'hono';
 import { dryRunResult, isDryRun, isDryRunDelete } from './dry-run.ts';
 
 function ctxWithQuery(value: string | undefined): Context {
-  return { req: { query: (k: string) => (k === 'dryRun' ? value : undefined) } } as unknown as Context;
+  return {
+    req: { query: (k: string) => (k === 'dryRun' ? value : undefined) },
+  } as unknown as Context;
 }
 
 describe('dryRunResult', () => {

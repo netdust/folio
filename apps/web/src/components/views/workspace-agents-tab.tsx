@@ -1,5 +1,5 @@
-import { Loader2, Plus } from 'lucide-react';
 import { useNavigate } from '@tanstack/react-router';
+import { Loader2, Plus } from 'lucide-react';
 import { toast } from 'sonner';
 import { formatApiError } from '../../lib/api/index.ts';
 import {
@@ -49,8 +49,17 @@ export function WorkspaceAgentsTab({ wslug }: Props) {
   };
 
   const createButton = (
-    <Button variant="primary" onClick={onCreate} disabled={create.isPending} className="whitespace-nowrap">
-      <Icon icon={create.isPending ? Loader2 : Plus} size={14} className={create.isPending ? 'animate-spin' : ''} />
+    <Button
+      variant="primary"
+      onClick={onCreate}
+      disabled={create.isPending}
+      className="whitespace-nowrap"
+    >
+      <Icon
+        icon={create.isPending ? Loader2 : Plus}
+        size={14}
+        className={create.isPending ? 'animate-spin' : ''}
+      />
       New agent
     </Button>
   );
@@ -72,7 +81,11 @@ export function WorkspaceAgentsTab({ wslug }: Props) {
       <div className="flex justify-end">{createButton}</div>
       <ul className="divide-y divide-border-light rounded-md border border-border-light bg-shell">
         {agents.map((agent) => {
-          const fm = agent.frontmatter as { provider?: string; model?: string; projects?: string[] };
+          const fm = agent.frontmatter as {
+            provider?: string;
+            model?: string;
+            projects?: string[];
+          };
           const providerModel = [fm.provider, fm.model].filter(Boolean).join('·');
           const projects = Array.isArray(fm.projects) ? fm.projects : ['*'];
           const projectLabel = projects.includes('*')
@@ -80,7 +93,11 @@ export function WorkspaceAgentsTab({ wslug }: Props) {
             : `${projects.length} project${projects.length === 1 ? '' : 's'}`;
           return (
             <li key={agent.id} className="px-3 py-2.5">
-              <button type="button" onClick={() => openAgent(agent.slug)} className="w-full min-w-0 text-left">
+              <button
+                type="button"
+                onClick={() => openAgent(agent.slug)}
+                className="w-full min-w-0 text-left"
+              >
                 <div className="flex items-center justify-between gap-3">
                   <div className="text-sm font-medium">{agent.title}</div>
                   <div className="flex shrink-0 items-center gap-1.5">

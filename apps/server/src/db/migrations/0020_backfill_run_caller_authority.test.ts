@@ -1,10 +1,10 @@
-import { describe, expect, test } from 'bun:test';
 import Database from 'bun:sqlite';
-import { drizzle } from 'drizzle-orm/bun-sqlite';
-import { migrate } from 'drizzle-orm/bun-sqlite/migrator';
+import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { agentRunFrontmatterSchema } from '@/lib/agent-run-schema';
+import { drizzle } from 'drizzle-orm/bun-sqlite';
+import { migrate } from 'drizzle-orm/bun-sqlite/migrator';
 
 const MIGRATIONS_FOLDER = path.resolve(import.meta.dir);
 
@@ -37,11 +37,7 @@ function legacyRunFrontmatter(): Record<string, unknown> {
   };
 }
 
-function seedRun(
-  sqlite: Database,
-  id: string,
-  frontmatter: Record<string, unknown>,
-): void {
+function seedRun(sqlite: Database, id: string, frontmatter: Record<string, unknown>): void {
   // agent_run rows have a CHECK requiring workspace_id + project_id + table_id
   // + parent_id (migration 0012). Satisfy it with the fixtures setup() seeds.
   sqlite.run(
@@ -55,9 +51,9 @@ function seedRun(
 }
 
 function readFrontmatter(sqlite: Database, id: string): Record<string, unknown> {
-  const row = sqlite
-    .prepare(`SELECT frontmatter FROM documents WHERE id = ?`)
-    .get(id) as { frontmatter: string };
+  const row = sqlite.prepare(`SELECT frontmatter FROM documents WHERE id = ?`).get(id) as {
+    frontmatter: string;
+  };
   return JSON.parse(row.frontmatter) as Record<string, unknown>;
 }
 

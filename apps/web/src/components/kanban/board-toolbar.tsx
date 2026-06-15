@@ -1,9 +1,9 @@
-import { useState } from 'react';
 import { ChevronDown } from 'lucide-react';
-import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
-import { Icon } from '../ui/icon.tsx';
+import { useState } from 'react';
 import type { Field } from '../../lib/api/fields.ts';
 import type { BoardSort } from '../../lib/board-controls-bus.ts';
+import { Icon } from '../ui/icon.tsx';
+import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
 
 // Canonical home is board-controls-bus; re-export so existing importers
 // (kanban-view) keep working without churn.
@@ -35,7 +35,7 @@ function sortLabel(sort: BoardSort | null, fields: Field[]): string {
   if (!sort) return 'Manual';
   const field = fields.find((f) => f.key === sort.key);
   const builtin = BUILTIN_SORTS.find((b) => b.key === sort.key);
-  const label = field ? fieldLabel(field) : builtin?.label ?? sort.key;
+  const label = field ? fieldLabel(field) : (builtin?.label ?? sort.key);
   return `${label} ${sort.dir === 'desc' ? '↓' : '↑'}`;
 }
 
@@ -89,7 +89,12 @@ export function BoardToolbar({ groupBy, sort, fields, onGroupByChange, onSortCha
           </button>
         </PopoverTrigger>
         <PopoverContent align="start" className="w-[200px] p-1">
-          <button type="button" role="menuitem" className={itemClass} onClick={() => pickGroupBy('status')}>
+          <button
+            type="button"
+            role="menuitem"
+            className={itemClass}
+            onClick={() => pickGroupBy('status')}
+          >
             Status
           </button>
           {groupableFields.map((f) => (

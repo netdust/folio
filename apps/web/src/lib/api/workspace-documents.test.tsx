@@ -1,10 +1,7 @@
-import { afterEach, describe, it, expect, vi } from 'vitest';
-import { renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import {
-  useWorkspaceDocumentEvents,
-  useWorkspaceLogActivity,
-} from './workspace-documents.ts';
+import { renderHook, waitFor } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { useWorkspaceDocumentEvents, useWorkspaceLogActivity } from './workspace-documents.ts';
 
 function wrapperOf(qc: QueryClient) {
   return ({ children }: { children: React.ReactNode }) => (
@@ -25,7 +22,13 @@ describe('useWorkspaceDocumentEvents', () => {
         return new Response(
           JSON.stringify({
             data: [
-              { id: 'e1', kind: 'activity.logged', actor: 'u1', payload: { note: 'hi' }, createdAt: '2026-01-01' },
+              {
+                id: 'e1',
+                kind: 'activity.logged',
+                actor: 'u1',
+                payload: { note: 'hi' },
+                createdAt: '2026-01-01',
+              },
             ],
           }),
           { status: 200, headers: { 'content-type': 'application/json' } },
@@ -74,10 +77,10 @@ describe('useWorkspaceLogActivity', () => {
   it('POSTs to /api/v1/w/:wslug/documents/:slug/activity (no pslug) and invalidates scoped keys', async () => {
     const fetchMock = vi.fn<typeof fetch>(async (url, init) => {
       if (String(url).endsWith('/activity') && init?.method === 'POST') {
-        return new Response(
-          JSON.stringify({ data: { lastTouchedAt: new Date().toISOString() } }),
-          { status: 201, headers: { 'content-type': 'application/json' } },
-        );
+        return new Response(JSON.stringify({ data: { lastTouchedAt: new Date().toISOString() } }), {
+          status: 201,
+          headers: { 'content-type': 'application/json' },
+        });
       }
       return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
     });
@@ -96,9 +99,7 @@ describe('useWorkspaceLogActivity', () => {
     await waitFor(() => expect(invalidateSpy).toHaveBeenCalled());
 
     // URL must NOT include /p/ (workspace-scoped, not project-scoped).
-    const postCalls = fetchMock.mock.calls.filter(
-      ([_url, init]) => init?.method === 'POST',
-    );
+    const postCalls = fetchMock.mock.calls.filter(([_url, init]) => init?.method === 'POST');
     expect(postCalls).toHaveLength(1);
     expect(String(postCalls[0][0])).toMatch(/\/w\/acme\/documents\/triage\/activity$/);
     expect(String(postCalls[0][0])).not.toMatch(/\/p\//);
@@ -109,17 +110,17 @@ describe('useWorkspaceLogActivity', () => {
 
     // Must invalidate the workspace events list — distinct key prefix from
     // project-scoped ['document-events'].
-    expect(keys.some((k) =>
-      k === JSON.stringify(['workspace-document-events', 'acme', 'triage']),
-    )).toBe(true);
+    expect(
+      keys.some((k) => k === JSON.stringify(['workspace-document-events', 'acme', 'triage'])),
+    ).toBe(true);
 
     // Must invalidate the workspace doc detail and list, both no pslug.
-    expect(keys.some((k) =>
-      k === JSON.stringify(['workspace-documents', 'acme', 'detail', 'triage']),
-    )).toBe(true);
-    expect(keys.some((k) =>
-      k === JSON.stringify(['workspace-documents', 'acme', 'list']),
-    )).toBe(true);
+    expect(
+      keys.some((k) => k === JSON.stringify(['workspace-documents', 'acme', 'detail', 'triage'])),
+    ).toBe(true);
+    expect(keys.some((k) => k === JSON.stringify(['workspace-documents', 'acme', 'list']))).toBe(
+      true,
+    );
 
     // Broad ['workspace-documents'] prefix must NOT be invalidated alone — would
     // nuke every workspace's caches across open tabs.

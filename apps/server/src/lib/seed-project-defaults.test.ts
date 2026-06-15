@@ -1,15 +1,18 @@
-import { test, expect } from 'bun:test';
-import { nanoid } from 'nanoid';
+import { expect, test } from 'bun:test';
 import { eq } from 'drizzle-orm';
+import { nanoid } from 'nanoid';
+import { projects, statuses, tables, views } from '../db/schema.ts';
 import { makeTestApp } from '../test/harness.ts';
-import { statuses, views, projects, tables } from '../db/schema.ts';
 import { seedProjectDefaults } from './seed-project-defaults.ts';
 
 test('seedProjectDefaults inserts 1 table, 4 statuses, and 2 views all linked to the table', async () => {
   const { db, seed } = await makeTestApp();
   const newProjectId = nanoid();
   await db.insert(projects).values({
-    id: newProjectId, workspaceId: seed.workspace.id, slug: 'fresh', name: 'Fresh',
+    id: newProjectId,
+    workspaceId: seed.workspace.id,
+    slug: 'fresh',
+    name: 'Fresh',
   });
   await db.transaction(async (tx) => {
     await seedProjectDefaults(tx, newProjectId);
@@ -34,7 +37,10 @@ test('seedProjectDefaults returns the default tableId', async () => {
   const { db, seed } = await makeTestApp();
   const newProjectId = nanoid();
   await db.insert(projects).values({
-    id: newProjectId, workspaceId: seed.workspace.id, slug: 'returns', name: 'Returns',
+    id: newProjectId,
+    workspaceId: seed.workspace.id,
+    slug: 'returns',
+    name: 'Returns',
   });
   const result = await db.transaction(async (tx) => {
     return seedProjectDefaults(tx, newProjectId);

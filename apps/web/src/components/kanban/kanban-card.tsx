@@ -1,13 +1,13 @@
-import { useDraggable, type DraggableAttributes } from '@dnd-kit/core';
+import { type DraggableAttributes, useDraggable } from '@dnd-kit/core';
 import type { SyntheticListenerMap } from '@dnd-kit/core/dist/hooks/utilities';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { Flag, Calendar } from 'lucide-react';
+import { Calendar, Flag } from 'lucide-react';
 import type { CSSProperties } from 'react';
+import type { DocumentSummary } from '../../lib/api/documents.ts';
+import { Avatar } from '../ui/avatar.tsx';
 import { cn } from '../ui/cn.ts';
 import { Icon } from '../ui/icon.tsx';
-import { Avatar } from '../ui/avatar.tsx';
-import type { DocumentSummary } from '../../lib/api/documents.ts';
 
 interface Props {
   doc: DocumentSummary;
@@ -23,13 +23,7 @@ interface Props {
   overlay?: boolean;
 }
 
-const LABEL_HUES = [
-  'bg-info',
-  'bg-warning',
-  'bg-success',
-  'bg-danger',
-  'bg-primary',
-] as const;
+const LABEL_HUES = ['bg-info', 'bg-warning', 'bg-success', 'bg-danger', 'bg-primary'] as const;
 
 function labelHue(label: string): string {
   let h = 0;
@@ -47,7 +41,17 @@ interface DndBindings {
   isDragging: boolean;
 }
 
-function CardBody({ doc, onOpen, isPending, dnd }: { doc: DocumentSummary; onOpen: (slug: string) => void; isPending?: boolean; dnd: DndBindings }) {
+function CardBody({
+  doc,
+  onOpen,
+  isPending,
+  dnd,
+}: {
+  doc: DocumentSummary;
+  onOpen: (slug: string) => void;
+  isPending?: boolean;
+  dnd: DndBindings;
+}) {
   const { setNodeRef, attributes, listeners, style, isDragging } = dnd;
 
   const priority = typeof doc.frontmatter?.priority === 'string' ? doc.frontmatter.priority : null;
@@ -137,7 +141,14 @@ function DraggableCard({ doc, onOpen, isPending }: Omit<Props, 'sortable' | 'ove
   // it escapes the column's overflow clip), so the in-place node hides while
   // dragging — otherwise two cards would show. No transform/zIndex needed here.
   const style: CSSProperties | undefined = isDragging ? { opacity: 0 } : undefined;
-  return <CardBody doc={doc} onOpen={onOpen} isPending={isPending} dnd={{ setNodeRef, attributes, listeners, style, isDragging }} />;
+  return (
+    <CardBody
+      doc={doc}
+      onOpen={onOpen}
+      isPending={isPending}
+      dnd={{ setNodeRef, attributes, listeners, style, isDragging }}
+    />
+  );
 }
 
 function SortableCard({ doc, onOpen, isPending }: Omit<Props, 'sortable' | 'overlay'>) {
@@ -160,7 +171,14 @@ function SortableCard({ doc, onOpen, isPending }: Omit<Props, 'sortable' | 'over
   const style: CSSProperties = isDragging
     ? { opacity: 0, transition: 'none', transform: undefined }
     : { transform: CSS.Transform.toString(transform), transition };
-  return <CardBody doc={doc} onOpen={onOpen} isPending={isPending} dnd={{ setNodeRef, attributes, listeners, style, isDragging }} />;
+  return (
+    <CardBody
+      doc={doc}
+      onOpen={onOpen}
+      isPending={isPending}
+      dnd={{ setNodeRef, attributes, listeners, style, isDragging }}
+    />
+  );
 }
 
 // Presentational clone for <DragOverlay> — no dnd hook, not interactive. It just
@@ -171,7 +189,13 @@ function OverlayCard({ doc, isPending }: Pick<Props, 'doc' | 'isPending'>) {
       doc={doc}
       onOpen={() => {}}
       isPending={isPending}
-      dnd={{ setNodeRef: () => {}, attributes: {} as DraggableAttributes, listeners: undefined, style: undefined, isDragging: true }}
+      dnd={{
+        setNodeRef: () => {},
+        attributes: {} as DraggableAttributes,
+        listeners: undefined,
+        style: undefined,
+        isDragging: true,
+      }}
     />
   );
 }

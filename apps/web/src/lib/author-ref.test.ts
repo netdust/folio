@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
   authorAgentSlug,
   authorDisplayName,
@@ -62,7 +62,9 @@ describe('authorAgentSlug', () => {
   });
   it('H13: long slugs (>30 chars) resolve normally when the agent is in the list', () => {
     const longSlugAgent = { id: 'long-id', slug: 'foo-bar-baz-aaa-bbb-ccc-ddd-eee-fff-ggg' };
-    expect(authorAgentSlug(`agent:${longSlugAgent.slug}`, [longSlugAgent])).toBe(longSlugAgent.slug);
+    expect(authorAgentSlug(`agent:${longSlugAgent.slug}`, [longSlugAgent])).toBe(
+      longSlugAgent.slug,
+    );
     expect(authorAgentSlug('agent:long-id', [longSlugAgent])).toBe(longSlugAgent.slug);
   });
   it('H13: digit-leading slugs resolve normally when the agent is in the list', () => {

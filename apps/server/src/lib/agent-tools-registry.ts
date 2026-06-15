@@ -30,7 +30,6 @@
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../db/client.ts';
-import { env } from '../env.ts';
 import {
   type ApiToken,
   type Document,
@@ -46,11 +45,7 @@ import {
   views as viewsTable,
   workspaces,
 } from '../db/schema.ts';
-import { emitChainSuppressed } from './autonomy-gate.ts';
-import { isAgentBound, isInstanceReach } from './token-reach.ts';
-import { getOperatorDocument } from './operator.ts';
-import type { AgentRunFrontmatter, RunStatus } from './agent-run-schema.ts';
-import { runStatusSchema } from './agent-run-schema.ts';
+import { env } from '../env.ts';
 import { createRunForParent, loadRunScopedByToken } from '../routes/runs.ts';
 import {
   type ListRunsFilter,
@@ -81,27 +76,32 @@ import {
 import { listFields } from '../services/fields.ts';
 import { listStatuses } from '../services/statuses.ts';
 import { listViews, runView } from '../services/views.ts';
+import { canManageWorkspace, canSeeProject, visibleProjectIds } from './access.ts';
 import { assertAgentAllowListWidening, assertAgentToolsWidening } from './agent-guards.ts';
 import { intersectAgentProjects, resolveAgentProjects } from './agent-projects.ts';
+import { resolveAgentForRun } from './agent-resolver.ts';
+import type { AgentRunFrontmatter, RunStatus } from './agent-run-schema.ts';
+import { runStatusSchema } from './agent-run-schema.ts';
 import { registerTool } from './agent-tools.ts';
 import type { ToolContext } from './agent-tools.ts';
-import { registerFolioApiTools } from './folio-api-tool.ts';
+import { emitChainSuppressed } from './autonomy-gate.ts';
 import {
   type CommentKind,
   type CommentVisibility,
   commentKindSchema,
   commentVisibilitySchema,
 } from './comment-schema.ts';
+import { registerFolioApiTools } from './folio-api-tool.ts';
 import { serializeMarkdown } from './frontmatter.ts';
 import { HTTPError } from './http.ts';
-import { mcpInvalidParams, assertMcpAgentLifecycle, rethrowAgentGuardAsMcp } from './mcp-errors.ts';
-import { isReservedSlug } from './system-workspace.ts';
-import { DEFAULT_TABLE_SLUG } from './seed-project-defaults.ts';
-import { canManageWorkspace, canSeeProject, visibleProjectIds } from './access.ts';
-import { resolveAgentForRun } from './agent-resolver.ts';
 import { getInstanceSkill } from './instance-skills.ts';
+import { assertMcpAgentLifecycle, mcpInvalidParams, rethrowAgentGuardAsMcp } from './mcp-errors.ts';
+import { getOperatorDocument } from './operator.ts';
+import { DEFAULT_TABLE_SLUG } from './seed-project-defaults.ts';
 import { setSkillTrust } from './skill-trust.ts';
-import { choiceCardSchema, ENTITY_TYPES, linkPanelSchema } from './ui-tool.ts';
+import { isReservedSlug } from './system-workspace.ts';
+import { isAgentBound, isInstanceReach } from './token-reach.ts';
+import { ENTITY_TYPES, choiceCardSchema, linkPanelSchema } from './ui-tool.ts';
 
 // ---------------------------------------------------------------------------
 // Result envelopes — verbatim from routes/mcp.ts.
@@ -164,7 +164,8 @@ async function resolveWorkspaceForToken(
   const ws = await db.query.workspaces.findFirst({
     where: eq(workspaces.slug, slug),
   });
-  if (!ws) throw mcpInvalidParams('workspace not accessible', { reason: 'workspace_not_accessible' });
+  if (!ws)
+    throw mcpInvalidParams('workspace not accessible', { reason: 'workspace_not_accessible' });
   // Instance-reach token (workspaceId null) reaches any existing workspace; a
   // pinned token must match its own. NOTE: during an agent RUN the token passed
   // here is the NARROWED run token (effective reach, Task A8), so this also
@@ -186,10 +187,7 @@ async function resolveWorkspaceForToken(
  * cross-project leak on the MCP layer (the per-user narrowing the HTTP routes
  * got but the tools did not).
  */
-async function humanPatProjectCeiling(
-  ws: Workspace,
-  token: ApiToken,
-): Promise<Set<string> | null> {
+async function humanPatProjectCeiling(ws: Workspace, token: ApiToken): Promise<Set<string> | null> {
   if (isAgentBound(token)) return null; // agent-bound (incl. operator): agent allow-list governs, not this
   if (!token.createdBy) return null; // system-origin: no human narrowing
   if (await canManageWorkspace(db, token.createdBy, ws.id)) return null; // whole-ws human
@@ -575,7 +573,10 @@ export function registerRealTools(): void {
       // (NOT the prior silent ['*'] degrade, which would have shown a ghost-token
       // EVERY project).
       const agent = await resolveAgentDocForToken(token);
-      const effective = intersectAgentProjects(resolveAgentProjects(agent), token.projectIds ?? null);
+      const effective = intersectAgentProjects(
+        resolveAgentProjects(agent),
+        token.projectIds ?? null,
+      );
       const filtered = effective.includes('*') ? all : all.filter((p) => effective.includes(p.id));
       return textResult({
         projects: filtered.map((p) => ({ id: p.id, slug: p.slug, name: p.name })),
@@ -697,14 +698,19 @@ export function registerRealTools(): void {
         // Human PAT: a project-only invitee sees only their granted projects.
         const ceiling = await humanPatProjectCeiling(ws, token);
         projectIds =
-          ceiling === null ? all.map((p) => p.id) : all.filter((p) => ceiling.has(p.id)).map((p) => p.id);
+          ceiling === null
+            ? all.map((p) => p.id)
+            : all.filter((p) => ceiling.has(p.id)).map((p) => p.id);
       } else {
         // Convergence point (resolveAgentDocForToken): operator → code singleton;
         // a real-but-missing agent throws agent_missing (NOT the prior silent
         // ['*'] degrade, which would have searched a ghost-token across EVERY
         // project).
         const agent = await resolveAgentDocForToken(token);
-        const effective = intersectAgentProjects(resolveAgentProjects(agent), token.projectIds ?? null);
+        const effective = intersectAgentProjects(
+          resolveAgentProjects(agent),
+          token.projectIds ?? null,
+        );
         projectIds = effective.includes('*')
           ? all.map((p) => p.id)
           : all.filter((p) => effective.includes(p.id)).map((p) => p.id);
@@ -1023,7 +1029,9 @@ export function registerRealTools(): void {
       const fmArg = args['frontmatter'];
       if (fmArg !== undefined) {
         if (!fmArg || typeof fmArg !== 'object' || Array.isArray(fmArg)) {
-          throw mcpInvalidParams('frontmatter must be an object', { reason: 'invalid_frontmatter' });
+          throw mcpInvalidParams('frontmatter must be an object', {
+            reason: 'invalid_frontmatter',
+          });
         }
         patch.frontmatter = fmArg as Record<string, unknown>;
       }
@@ -2210,7 +2218,10 @@ export function registerRealTools(): void {
       });
       // The runner enforces the stop STRUCTURALLY (a successful ask_choice ends
       // the turn cleanly regardless of this text) — see runner.ts askedChoice.
-      return textResult({ ok: true, note: 'choice card shown; this turn ends — the user will pick' });
+      return textResult({
+        ok: true,
+        note: 'choice card shown; this turn ends — the user will pick',
+      });
     },
   });
 

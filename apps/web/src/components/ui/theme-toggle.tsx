@@ -1,11 +1,16 @@
 import { useEffect, useState } from 'react';
-import { getStoredTheme, setTheme as applyTheme, type Theme } from '../../lib/theme.ts';
+import { type Theme, setTheme as applyTheme, getStoredTheme } from '../../lib/theme.ts';
 import { cn } from './cn.ts';
 
 export function ThemeToggle() {
   const [theme, setLocal] = useState<Theme>('system');
-  useEffect(() => { setLocal(getStoredTheme()); }, []);
-  const choose = (t: Theme) => { setLocal(t); applyTheme(t); };
+  useEffect(() => {
+    setLocal(getStoredTheme());
+  }, []);
+  const choose = (t: Theme) => {
+    setLocal(t);
+    applyTheme(t);
+  };
 
   return (
     <div className="inline-flex items-center gap-0 rounded p-0.5 bg-card">

@@ -1,11 +1,11 @@
-import { useState } from 'react';
 import { Activity } from 'lucide-react';
+import { useState } from 'react';
 import { toast } from 'sonner';
-import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
-import { Button } from '../ui/button.tsx';
-import { Icon } from '../ui/icon.tsx';
 import { useLogActivity } from '../../lib/api/events.ts';
 import { formatApiError } from '../../lib/api/index.ts';
+import { Button } from '../ui/button.tsx';
+import { Icon } from '../ui/icon.tsx';
+import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
 
 interface Props {
   wslug: string;
@@ -52,7 +52,10 @@ export function LogActivityButton({ wslug, pslug, slug }: Props) {
           rows={3}
           className="block w-full rounded-md border border-border-light bg-shell px-2 py-1.5 text-sm text-fg input-focus resize-none"
           onKeyDown={(e) => {
-            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void submit(); }
+            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+              e.preventDefault();
+              void submit();
+            }
           }}
         />
         <div className="mt-2 flex items-center justify-between">

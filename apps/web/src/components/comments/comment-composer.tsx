@@ -1,10 +1,10 @@
-import { Editor, rootCtx, defaultValueCtx, editorViewOptionsCtx } from '@milkdown/core';
-import { Milkdown, MilkdownProvider, useEditor } from '@milkdown/react';
-import { commonmark } from '@milkdown/preset-commonmark';
-import { gfm } from '@milkdown/preset-gfm';
+import { Editor, defaultValueCtx, editorViewOptionsCtx, rootCtx } from '@milkdown/core';
+import { clipboard } from '@milkdown/plugin-clipboard';
 import { history } from '@milkdown/plugin-history';
 import { listener, listenerCtx } from '@milkdown/plugin-listener';
-import { clipboard } from '@milkdown/plugin-clipboard';
+import { commonmark } from '@milkdown/preset-commonmark';
+import { gfm } from '@milkdown/preset-gfm';
+import { Milkdown, MilkdownProvider, useEditor } from '@milkdown/react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { debounce } from '../../lib/debounce.ts';
 import { Button } from '../ui/button.tsx';
@@ -188,9 +188,7 @@ export function CommentComposer({
   bodyRef.current = body;
 
   // Debounced draft writer. Cancel on unmount.
-  const debouncedSave = useRef(
-    debounce((next: string) => writeDraft(parentId, next), 300),
-  ).current;
+  const debouncedSave = useRef(debounce((next: string) => writeDraft(parentId, next), 300)).current;
   useEffect(() => () => debouncedSave.cancel(), [debouncedSave]);
 
   const handleChange = useCallback(
@@ -383,7 +381,10 @@ export function CommentComposer({
       onKeyDown={onComposerKeyDown}
       className="flex flex-col gap-2"
     >
-      <div ref={wrapperRef} className="folio-milkdown folio-milkdown--compact rounded-md border border-border-light bg-content">
+      <div
+        ref={wrapperRef}
+        className="folio-milkdown folio-milkdown--compact rounded-md border border-border-light bg-content"
+      >
         <MilkdownProvider>
           <MilkdownCommentEditor
             initialValue={initialDraft}
@@ -415,7 +416,10 @@ export function CommentComposer({
           loading={submitting}
           data-testid="comment-composer-submit"
         >
-          Comment <span className="ml-1 opacity-70" aria-hidden="true">⌘↵</span>
+          Comment{' '}
+          <span className="ml-1 opacity-70" aria-hidden="true">
+            ⌘↵
+          </span>
         </Button>
       </div>
 

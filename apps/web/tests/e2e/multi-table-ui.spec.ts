@@ -1,11 +1,4 @@
-import {
-  createProject,
-  createWorkspace,
-  expect,
-  shot,
-  signUpFresh,
-  test,
-} from './fixtures.ts';
+import { createProject, createWorkspace, expect, shot, signUpFresh, test } from './fixtures.ts';
 
 /**
  * FEATURE-ACCEPTANCE — multi-table UI (the `## Acceptance flows` matrix of
@@ -30,7 +23,12 @@ function uniqueWs(): { slug: string; name: string } {
   return { slug: `mt-${id}`, name: `MultiTable ${id}` };
 }
 
-async function api(page: import('@playwright/test').Page, method: 'post', path: string, data: unknown) {
+async function api(
+  page: import('@playwright/test').Page,
+  method: 'post',
+  path: string,
+  data: unknown,
+) {
   const res = await page.request.post(path, { data });
   expect(res.ok(), `${method.toUpperCase()} ${path} → ${res.status()}`).toBe(true);
   return res;

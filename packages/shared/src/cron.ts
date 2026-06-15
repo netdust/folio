@@ -55,7 +55,10 @@ export function validateCronShape(expr: string): CronShapeResult {
     for (const m of months) {
       const maxDay = MAX_DAY_IN_MONTH[m] ?? 31;
       for (const d of days) {
-        if (d <= maxDay) { anyReachable = true; break; }
+        if (d <= maxDay) {
+          anyReachable = true;
+          break;
+        }
       }
       if (anyReachable) break;
     }
@@ -74,8 +77,18 @@ export function validateCronShape(expr: string): CronShapeResult {
 // `0 0 29 2 *` is still considered reachable; the actual leap-year search is
 // up to nextFires.
 const MAX_DAY_IN_MONTH: Record<number, number> = {
-  1: 31, 2: 29, 3: 31, 4: 30, 5: 31, 6: 30,
-  7: 31, 8: 31, 9: 30, 10: 31, 11: 30, 12: 31,
+  1: 31,
+  2: 29,
+  3: 31,
+  4: 30,
+  5: 31,
+  6: 30,
+  7: 31,
+  8: 31,
+  9: 30,
+  10: 31,
+  11: 30,
+  12: 31,
 };
 
 interface FieldDomain {
@@ -83,7 +96,13 @@ interface FieldDomain {
   max: number;
 }
 
-const DOMAINS: { minute: FieldDomain; hour: FieldDomain; dom: FieldDomain; month: FieldDomain; dow: FieldDomain } = {
+const DOMAINS: {
+  minute: FieldDomain;
+  hour: FieldDomain;
+  dom: FieldDomain;
+  month: FieldDomain;
+  dow: FieldDomain;
+} = {
   minute: { min: 0, max: 59 },
   hour: { min: 0, max: 23 },
   dom: { min: 1, max: 31 },
@@ -170,7 +189,13 @@ export function nextFires(cron: string, n: number, now: Date = new Date()): stri
 
   const parts = cron.trim().split(/\s+/);
   // validateCronShape guaranteed exactly 5 parts above.
-  const [minuteField, hourField, domField, monthField, dowField] = parts as [string, string, string, string, string];
+  const [minuteField, hourField, domField, monthField, dowField] = parts as [
+    string,
+    string,
+    string,
+    string,
+    string,
+  ];
   const minuteSet = parseField(minuteField, DOMAINS.minute);
   const hourSet = parseField(hourField, DOMAINS.hour);
   const domSet = parseField(domField, DOMAINS.dom);

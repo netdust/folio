@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { dueUrgency } from './due-urgency.ts';
 
 describe('dueUrgency', () => {
@@ -36,7 +36,7 @@ describe('dueUrgency', () => {
     const now = new Date(2026, 4, 25, 12, 0, 0); // May 25 noon local
 
     expect(dueUrgency('2026-05-25', now)).toBe('overdue'); // today
-    expect(dueUrgency('2026-05-26', now)).toBe('soon');    // tomorrow
+    expect(dueUrgency('2026-05-26', now)).toBe('soon'); // tomorrow
     expect(dueUrgency('2026-05-24', now)).toBe('overdue'); // yesterday
   });
 });

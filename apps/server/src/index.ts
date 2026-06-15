@@ -4,11 +4,11 @@ import { db } from './db/client.ts';
 import { env } from './env.ts';
 import { startEventDispatcher } from './lib/event-dispatcher.ts';
 import { sweepOrphanedFolioApiTokens } from './lib/folio-api-tool.ts';
-import { recoverInterruptedConversations } from './services/conversations.ts';
 import { startRunnerPoller } from './lib/poller.ts';
 import { reconcileAllowLists } from './lib/reconciler.ts';
-import { reapStalePendingOps } from './services/pending-ops.ts';
 import { runBootTasks } from './lib/system-workspace.ts';
+import { recoverInterruptedConversations } from './services/conversations.ts';
+import { reapStalePendingOps } from './services/pending-ops.ts';
 
 // Phase 3 A-0: apply any pending migrations at boot so dev environments never
 // serve traffic against a stale schema. No-op in NODE_ENV=test.
@@ -21,9 +21,7 @@ runMigrationsOnBoot(db);
 // index.ts in tests does NOT trigger a real bootstrap; runBootTasks itself is
 // invoked directly against a test db by its unit tests.
 if (env.NODE_ENV !== 'test') {
-  void runBootTasks(db, env).catch((err) =>
-    console.error('[folio] boot tasks failed', err),
-  );
+  void runBootTasks(db, env).catch((err) => console.error('[folio] boot tasks failed', err));
 }
 
 // Backstop for dispatchAsCaller's minted tokens: clear any left live by a
@@ -59,13 +57,9 @@ console.log(`[folio] listening on http://localhost:${env.PORT}`);
 // project ids from agent allow-lists. Skipped in test mode to avoid timer
 // leaks across test runs.
 if (env.NODE_ENV !== 'test') {
-  console.log(
-    `[folio] reconciler enabled (interval: ${env.FOLIO_RECONCILER_INTERVAL_MS}ms)`,
-  );
+  console.log(`[folio] reconciler enabled (interval: ${env.FOLIO_RECONCILER_INTERVAL_MS}ms)`);
   setInterval(() => {
-    reconcileAllowLists(db).catch((err) =>
-      console.error('[folio] reconciler error', err),
-    );
+    reconcileAllowLists(db).catch((err) => console.error('[folio] reconciler error', err));
   }, env.FOLIO_RECONCILER_INTERVAL_MS);
 } else {
   console.log('[folio] reconciler disabled (test mode)');
@@ -74,9 +68,7 @@ if (env.NODE_ENV !== 'test') {
 // pending_ops reaper interval (slow hygiene loop). Skipped in test mode (timer leaks).
 if (env.NODE_ENV !== 'test') {
   setInterval(() => {
-    reapStalePendingOps(db).catch((err) =>
-      console.error('[folio] pending_ops reaper error', err),
-    );
+    reapStalePendingOps(db).catch((err) => console.error('[folio] pending_ops reaper error', err));
   }, env.FOLIO_RECONCILER_INTERVAL_MS);
 }
 
@@ -84,9 +76,7 @@ if (env.NODE_ENV !== 'test') {
 // table by seq and fans out to registered reactors via per-reactor cursors.
 // Skipped in test mode to avoid timer leaks across test runs.
 if (env.NODE_ENV !== 'test') {
-  console.log(
-    `[folio] event dispatcher enabled (interval: ${env.FOLIO_DISPATCHER_INTERVAL_MS}ms)`,
-  );
+  console.log(`[folio] event dispatcher enabled (interval: ${env.FOLIO_DISPATCHER_INTERVAL_MS}ms)`);
   startEventDispatcher(db);
 }
 

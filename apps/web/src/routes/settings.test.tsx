@@ -1,16 +1,16 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
+  Outlet,
+  RouterProvider,
   createMemoryHistory,
   createRootRoute,
   createRoute,
   createRouter,
-  Outlet,
-  RouterProvider,
 } from '@tanstack/react-router';
-import { Route as InstanceSettingsRoute } from './settings.tsx';
+import { render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as auth from '../lib/api/auth.ts';
+import { Route as InstanceSettingsRoute } from './settings.tsx';
 
 const InstanceSettingsPage = InstanceSettingsRoute.options.component!;
 
@@ -27,7 +27,9 @@ function renderPage(qc: QueryClient) {
     vi.fn(
       async () =>
         new Response(
-          JSON.stringify({ data: { keys: [], users: [], workspaces: [], projects: [], grants: [] } }),
+          JSON.stringify({
+            data: { keys: [], users: [], workspaces: [], projects: [], grants: [] },
+          }),
           { status: 200, headers: { 'content-type': 'application/json' } },
         ),
     ),

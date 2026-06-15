@@ -1,6 +1,6 @@
-import { useMemo, useRef, useState, useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { client, type ApiError } from './client.ts';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { type ApiError, client } from './client.ts';
 
 // ---------------------------------------------------------------------------
 // Wire types — mirror apps/server/src/db/schema.ts (Message) + the
@@ -62,7 +62,7 @@ export function useRecentConversation(): { recentId: string | null; loaded: bool
   const query = useQuery({
     queryKey: conversationsKeys.recent(),
     queryFn: () => client.get<{ id: string | null }>('/api/v1/conversations/recent'),
-    staleTime: Infinity,
+    staleTime: Number.POSITIVE_INFINITY,
     // A "what was my last conversation" seed has no value in retrying — a failed
     // seed should collapse to the blank greeting immediately, not hold the
     // placeholder through react-query's default 3× exponential backoff.
@@ -213,10 +213,7 @@ export function useConversation(id: string | undefined): {
 
   // Seed is authoritative for any id it carries (post-refetch it reflects the
   // latest server state); live supplies only rows the seed hasn't caught up to.
-  const messages = useMemo(
-    () => mergeMessages(seedMessages ?? [], live),
-    [seedMessages, live],
-  );
+  const messages = useMemo(() => mergeMessages(seedMessages ?? [], live), [seedMessages, live]);
 
   return { thread: query.data, messages, isLoading: query.isLoading };
 }
@@ -275,10 +272,9 @@ export function useButtonClick(id: string) {
   const qc = useQueryClient();
   return useMutation<ButtonClickResult, ApiError, { messageId: string; optionId: string }>({
     mutationFn: ({ messageId, optionId }) =>
-      client.post<ButtonClickResult>(
-        `/api/v1/conversations/${id}/messages/${messageId}/click`,
-        { optionId },
-      ),
+      client.post<ButtonClickResult>(`/api/v1/conversations/${id}/messages/${messageId}/click`, {
+        optionId,
+      }),
     onSettled: () => {
       qc.invalidateQueries({ queryKey: conversationsKeys.detail(id) });
     },

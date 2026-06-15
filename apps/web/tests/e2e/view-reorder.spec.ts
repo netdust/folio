@@ -1,5 +1,5 @@
-import { test, expect, type Page } from '@playwright/test';
-import { signUpFresh, createWorkspace, createProject } from './fixtures.ts';
+import { type Page, expect, test } from '@playwright/test';
+import { createProject, createWorkspace, signUpFresh } from './fixtures.ts';
 
 /**
  * Feature-acceptance for view-reorder (Item A, plan 2026-06-08-view-reorder-and-
@@ -22,7 +22,10 @@ function freshSlugs() {
 
 /** Create a List view named `name` via the New-view sheet. Lands on /work-items. */
 async function createListView(page: Page, name: string) {
-  await page.getByRole('button', { name: /New view/i }).first().click();
+  await page
+    .getByRole('button', { name: /New view/i })
+    .first()
+    .click();
   const sheet = page.getByRole('dialog');
   await expect(sheet.getByText(/New view/i).first()).toBeVisible();
   await sheet.locator('#view-name').fill(name);

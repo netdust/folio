@@ -37,13 +37,18 @@ describe('isOperatorToken (system-origin operator: instance reach + createdBy nu
 describe('isAgentBound (the single agent-path-vs-human-path discriminator)', () => {
   test('operator ephemeral token (isOperator:true, agentId null, createdBy=caller) is agent-bound', () => {
     expect(
-      isAgentBound({ agentId: null, isOperator: true, workspaceId: null, createdBy: 'caller-1' } as any),
+      isAgentBound({
+        agentId: null,
+        isOperator: true,
+        workspaceId: null,
+        createdBy: 'caller-1',
+      } as any),
     ).toBe(true);
   });
   test('human instance PAT (agentId null, NO isOperator, createdBy set) is NOT agent-bound', () => {
-    expect(
-      isAgentBound({ agentId: null, workspaceId: null, createdBy: 'user-123' } as any),
-    ).toBe(false);
+    expect(isAgentBound({ agentId: null, workspaceId: null, createdBy: 'user-123' } as any)).toBe(
+      false,
+    );
   });
   test('human workspace PAT (agentId null, ws set, createdBy set) is NOT agent-bound', () => {
     expect(isAgentBound({ agentId: null, workspaceId: 'ws-1', createdBy: 'user-1' } as any)).toBe(
@@ -51,9 +56,9 @@ describe('isAgentBound (the single agent-path-vs-human-path discriminator)', () 
     );
   });
   test('workspace agent token (agentId UUID) is agent-bound', () => {
-    expect(isAgentBound({ agentId: 'doc-uuid', workspaceId: 'ws-1', createdBy: 'user-1' } as any)).toBe(
-      true,
-    );
+    expect(
+      isAgentBound({ agentId: 'doc-uuid', workspaceId: 'ws-1', createdBy: 'user-1' } as any),
+    ).toBe(true);
   });
 });
 

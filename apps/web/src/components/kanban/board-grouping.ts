@@ -18,7 +18,12 @@ interface Args {
 
 export function buildColumns({ docs, groupBy, field, statuses }: Args): BoardColumn[] {
   if (groupBy === 'status') {
-    const cols: BoardColumn[] = statuses.map((s) => ({ value: s.key, label: s.name, color: s.color, docIds: [] }));
+    const cols: BoardColumn[] = statuses.map((s) => ({
+      value: s.key,
+      label: s.name,
+      color: s.color,
+      docIds: [],
+    }));
     const byKey = new Map(cols.map((c) => [c.value, c]));
     const unset: BoardColumn = { value: null, label: 'No status', docIds: [] };
     for (const d of docs) {

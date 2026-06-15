@@ -1,6 +1,6 @@
 import { and, eq, like } from 'drizzle-orm';
-import { documents, projects, tables, workspaces } from '../db/schema.ts';
 import type { DB } from '../db/client.ts';
+import { documents, projects, tables, workspaces } from '../db/schema.ts';
 
 type DBOrTx = DB | Parameters<Parameters<DB['transaction']>[0]>[0];
 
@@ -40,11 +40,13 @@ export async function slugUniqueInWorkspaceDocuments(
   const rows = await tx
     .select({ slug: documents.slug })
     .from(documents)
-    .where(and(
-      eq(documents.workspaceId, workspaceId),
-      eq(documents.type, type),
-      like(documents.slug, `${base}%`),
-    ));
+    .where(
+      and(
+        eq(documents.workspaceId, workspaceId),
+        eq(documents.type, type),
+        like(documents.slug, `${base}%`),
+      ),
+    );
   return pickFree(new Set(rows.map((r) => r.slug)), base);
 }
 
@@ -60,10 +62,7 @@ export async function slugUniqueInProjects(
   return pickFree(new Set(rows.map((r) => r.slug)), base);
 }
 
-export async function slugUniqueInWorkspaces(
-  tx: DBOrTx,
-  base: string,
-): Promise<string> {
+export async function slugUniqueInWorkspaces(tx: DBOrTx, base: string): Promise<string> {
   const rows = await tx
     .select({ slug: workspaces.slug })
     .from(workspaces)

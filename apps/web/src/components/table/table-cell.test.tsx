@@ -1,8 +1,8 @@
-import { describe, it, expect } from 'vitest';
 import { render } from '@testing-library/react';
-import { TableCell } from './table-cell.tsx';
-import type { Column } from './columns.ts';
+import { describe, expect, it } from 'vitest';
 import type { DocumentSummary } from '../../lib/api/documents.ts';
+import type { Column } from './columns.ts';
+import { TableCell } from './table-cell.tsx';
 
 function makeDoc(frontmatter: Record<string, unknown>): DocumentSummary {
   return {
@@ -145,9 +145,7 @@ describe('TableCell urgency', () => {
         onTitleCommit={noop}
         onStatusCommit={noop}
         onFieldCommit={noop}
-        resolveRelation={(slug) =>
-          slug === 'people-ada' ? { slug, title: 'Ada' } : null
-        }
+        resolveRelation={(slug) => (slug === 'people-ada' ? { slug, title: 'Ada' } : null)}
       />,
     );
 

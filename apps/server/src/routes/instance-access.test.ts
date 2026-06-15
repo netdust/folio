@@ -65,9 +65,7 @@ async function seedWorkspace(db: DB): Promise<string> {
 /** Seed a fresh project in a workspace. Returns its id. */
 async function seedProject(db: DB, workspaceId: string): Promise<string> {
   const id = nanoid();
-  await db
-    .insert(schema.projects)
-    .values({ id, workspaceId, slug: `proj-${id}`, name: 'Proj' });
+  await db.insert(schema.projects).values({ id, workspaceId, slug: `proj-${id}`, name: 'Proj' });
   return id;
 }
 
@@ -103,10 +101,7 @@ async function projAccessCount(db: DB, userId: string, projectId: string) {
     .select()
     .from(schema.projectAccess)
     .where(
-      and(
-        eq(schema.projectAccess.userId, userId),
-        eq(schema.projectAccess.projectId, projectId),
-      ),
+      and(eq(schema.projectAccess.userId, userId), eq(schema.projectAccess.projectId, projectId)),
     );
   return rows.length;
 }

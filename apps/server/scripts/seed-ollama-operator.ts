@@ -58,7 +58,9 @@ async function main() {
 
   console.log('Seeded:');
   console.log(`  ai_keys: ${PROVIDER}/${LABEL}  base_url=${keyRow.baseUrl}  id=${keyRow.id}`);
-  console.log(`  operator_model: { provider: '${PROVIDER}', model: '${MODEL}', aiKeyLabel: '${LABEL}' }`);
+  console.log(
+    `  operator_model: { provider: '${PROVIDER}', model: '${MODEL}', aiKeyLabel: '${LABEL}' }`,
+  );
 }
 
 main().then(

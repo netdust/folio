@@ -1,11 +1,11 @@
+import { ErrorCode, slugify } from '@folio/shared';
 import { useNavigate } from '@tanstack/react-router';
 import { useEffect, useState } from 'react';
-import { slugify, ErrorCode } from '@folio/shared';
-import { useCreateWorkspace } from '../../lib/api/workspaces.ts';
-import { ApiError, apiErrorCode, formatApiError } from '../../lib/api/index.ts';
-import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetFooter } from '../ui/sheet.tsx';
-import { Button } from '../ui/button.tsx';
 import { toast } from 'sonner';
+import { ApiError, apiErrorCode, formatApiError } from '../../lib/api/index.ts';
+import { useCreateWorkspace } from '../../lib/api/workspaces.ts';
+import { Button } from '../ui/button.tsx';
+import { Sheet, SheetContent, SheetFooter, SheetHeader, SheetTitle } from '../ui/sheet.tsx';
 
 interface Props {
   open: boolean;

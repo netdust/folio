@@ -1,6 +1,6 @@
-import { test, expect } from 'bun:test';
-import { makeTestApp } from '../test/harness.ts';
+import { expect, test } from 'bun:test';
 import { createSession, newApiToken } from '../lib/auth.ts';
+import { makeTestApp } from '../test/harness.ts';
 
 test('GET /w/:wslug/projects lists projects in workspace', async () => {
   const { app, seed } = await makeTestApp();
@@ -242,7 +242,9 @@ test('CR-2/3: DELETE project — a non-grantee (stranger member) cannot delete (
   });
   const session = await createSession(strangerId);
 
-  const agent = await createAgentWithProjects(app, seed.sessionCookie, 'Specific', [seed.project.id]);
+  const agent = await createAgentWithProjects(app, seed.sessionCookie, 'Specific', [
+    seed.project.id,
+  ]);
 
   const res = await app.request(`/api/v1/w/acme/p/${seed.project.slug}`, {
     method: 'DELETE',

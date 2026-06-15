@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { conversationBus } from './conversation-bus.ts';
 import type { SerializedMessage } from '../services/conversations.ts';
+import { conversationBus } from './conversation-bus.ts';
 
 // The bus carries the WIRE shape (createdAt as a unix-ms NUMBER, what the SSE
 // route stringifies) — NOT the DB Message (createdAt: Date). Fixture mirrors the

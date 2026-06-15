@@ -23,7 +23,17 @@ interface Props {
   children: ReactNode;
 }
 
-export function KanbanColumn({ value, label, color, count, onAdd, isAddPending, docIds, sortable, children }: Props) {
+export function KanbanColumn({
+  value,
+  label,
+  color,
+  count,
+  onAdd,
+  isAddPending,
+  docIds,
+  sortable,
+  children,
+}: Props) {
   const colId = `col-${value ?? '__unset__'}`;
   const { setNodeRef, isOver } = useDroppable({ id: colId, data: { columnValue: value } });
   return (
@@ -37,7 +47,9 @@ export function KanbanColumn({ value, label, color, count, onAdd, isAddPending, 
         ) : (
           <span className="h-2 w-2 rounded-full" aria-hidden />
         )}
-        <span className={cn('text-sm font-medium', value === null ? 'text-fg-3' : 'text-fg')}>{label}</span>
+        <span className={cn('text-sm font-medium', value === null ? 'text-fg-3' : 'text-fg')}>
+          {label}
+        </span>
         <span className="font-mono text-[11px] text-fg-3">{count}</span>
         {onAdd ? (
           <button

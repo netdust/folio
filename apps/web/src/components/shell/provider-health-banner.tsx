@@ -1,6 +1,6 @@
 import { useNavigate } from '@tanstack/react-router';
 import { AlertTriangle } from 'lucide-react';
-import { useProviderHealth, type ProviderHealth } from '../../lib/api/provider-health.ts';
+import { type ProviderHealth, useProviderHealth } from '../../lib/api/provider-health.ts';
 import { Button } from '../ui/button.tsx';
 
 interface Props {
@@ -17,7 +17,9 @@ export function ProviderHealthBanner({ wslug }: Props) {
   const { data } = useProviderHealth(wslug);
   if (!data) return null;
 
-  const degraded = (Object.entries(data) as [keyof ProviderHealth, ProviderHealth[keyof ProviderHealth]][])
+  const degraded = (
+    Object.entries(data) as [keyof ProviderHealth, ProviderHealth[keyof ProviderHealth]][]
+  )
     .filter(([, v]) => v.status === 'degraded')
     .map(([name]) => name);
 

@@ -5,7 +5,14 @@ import { roleToScopes } from './agent-schema.ts';
 import { assertMcpAgentLifecycle } from './mcp-errors.ts';
 
 const tok = (over: Partial<EphemeralToken>): EphemeralToken =>
-  ({ id: 't', workspaceId: 'w', createdBy: 'u', scopes: [], agentId: null, ...over }) as EphemeralToken;
+  ({
+    id: 't',
+    workspaceId: 'w',
+    createdBy: 'u',
+    scopes: [],
+    agentId: null,
+    ...over,
+  }) as EphemeralToken;
 
 describe('mayManageAgentLifecycle', () => {
   test('session (no token) → allowed', () => {
@@ -18,10 +25,14 @@ describe('mayManageAgentLifecycle', () => {
     expect(mayManageAgentLifecycle(tok({ agentId: null, isOperator: true }))).toBe(true);
   });
   test('human PAT WITH agents:write (owner/admin) → allowed', () => {
-    expect(mayManageAgentLifecycle(tok({ scopes: ['documents:write', 'agents:write'] }))).toBe(true);
+    expect(mayManageAgentLifecycle(tok({ scopes: ['documents:write', 'agents:write'] }))).toBe(
+      true,
+    );
   });
   test('human PAT WITHOUT agents:write (member/stolen) → rejected', () => {
-    expect(mayManageAgentLifecycle(tok({ scopes: ['documents:read', 'documents:write'] }))).toBe(false);
+    expect(mayManageAgentLifecycle(tok({ scopes: ['documents:read', 'documents:write'] }))).toBe(
+      false,
+    );
   });
 });
 

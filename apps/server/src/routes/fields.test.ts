@@ -1,7 +1,7 @@
-import { test, expect } from 'bun:test';
+import { expect, test } from 'bun:test';
 import { eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
-import { apiTokens, events, fields } from '../db/schema.ts';
+import { events, apiTokens, fields } from '../db/schema.ts';
 import { newApiToken } from '../lib/auth.ts';
 import { makeTestApp } from '../test/harness.ts';
 
@@ -52,7 +52,9 @@ test('PATCH type change preserves row', async () => {
     headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
     body: JSON.stringify({ key: 'priority', type: 'string' }),
   });
-  const { data: { field } } = await create.json();
+  const {
+    data: { field },
+  } = await create.json();
   const patch = await app.request(`${path}/${field.id}`, {
     method: 'PATCH',
     headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
@@ -69,9 +71,12 @@ test('DELETE drops the pin', async () => {
     headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
     body: JSON.stringify({ key: 'priority', type: 'string' }),
   });
-  const { data: { field } } = await create.json();
+  const {
+    data: { field },
+  } = await create.json();
   const res = await app.request(`${path}/${field.id}`, {
-    method: 'DELETE', headers: { Cookie: seed.sessionCookie },
+    method: 'DELETE',
+    headers: { Cookie: seed.sessionCookie },
   });
   expect(res.status).toBe(204);
 });
@@ -172,7 +177,9 @@ test('PATCH allows compatible string→text', async () => {
     headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
     body: JSON.stringify({ key: 'note', type: 'string' }),
   });
-  const { data: { field } } = await create.json();
+  const {
+    data: { field },
+  } = await create.json();
   const patch = await app.request(`${path}/${field.id}`, {
     method: 'PATCH',
     headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
@@ -189,7 +196,9 @@ test('PATCH rejects incompatible number→select with 422 INVALID_TYPE_CHANGE', 
     headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
     body: JSON.stringify({ key: 'qty', type: 'number' }),
   });
-  const { data: { field } } = await create.json();
+  const {
+    data: { field },
+  } = await create.json();
   const patch = await app.request(`${path}/${field.id}`, {
     method: 'PATCH',
     headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
@@ -208,7 +217,9 @@ test('PATCH any→text always allowed (date→text)', async () => {
     headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
     body: JSON.stringify({ key: 'due', type: 'date' }),
   });
-  const { data: { field } } = await create.json();
+  const {
+    data: { field },
+  } = await create.json();
   const patch = await app.request(`${path}/${field.id}`, {
     method: 'PATCH',
     headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
@@ -225,7 +236,9 @@ test('PATCH number→currency auto-injects [EUR] when no options supplied', asyn
     headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
     body: JSON.stringify({ key: 'amount', type: 'number' }),
   });
-  const { data: { field } } = await create.json();
+  const {
+    data: { field },
+  } = await create.json();
   const patch = await app.request(`${path}/${field.id}`, {
     method: 'PATCH',
     headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
@@ -244,7 +257,9 @@ test('PATCH currency→number clears options when client sends options: null', a
     headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
     body: JSON.stringify({ key: 'amount', type: 'currency', options: ['EUR'] }),
   });
-  const { data: { field } } = await create.json();
+  const {
+    data: { field },
+  } = await create.json();
 
   const patch = await app.request(`${path}/${field.id}`, {
     method: 'PATCH',
@@ -259,7 +274,10 @@ test('PATCH currency→number clears options when client sends options: null', a
 
 // --- Phase 2 (operator): config:write guard + dryRun (P2-2/4/6/8) ---
 
-async function mintTokens(db: Awaited<ReturnType<typeof makeTestApp>>['db'], seed: Awaited<ReturnType<typeof makeTestApp>>['seed']) {
+async function mintTokens(
+  db: Awaited<ReturnType<typeof makeTestApp>>['db'],
+  seed: Awaited<ReturnType<typeof makeTestApp>>['seed'],
+) {
   const cw = newApiToken();
   await db.insert(apiTokens).values({
     id: nanoid(),
@@ -281,7 +299,10 @@ async function mintTokens(db: Awaited<ReturnType<typeof makeTestApp>>['db'], see
   return { configWriteToken: cw.token, docsWriteToken: dw.token };
 }
 
-async function fieldCount(db: Awaited<ReturnType<typeof makeTestApp>>['db'], projectId: string): Promise<number> {
+async function fieldCount(
+  db: Awaited<ReturnType<typeof makeTestApp>>['db'],
+  projectId: string,
+): Promise<number> {
   return (await db.select().from(fields).where(eq(fields.projectId, projectId))).length;
 }
 
