@@ -787,6 +787,17 @@ export interface UpdateDocumentArgs {
   eventActor: string;
   existing: Document;
   patch: DocumentPatch;
+  /**
+   * Frontmatter resolution strategy. `'merge'` (default) merges `patch.frontmatter`
+   * onto the existing frontmatter key-by-key (the JSON-PATCH semantics). `'replace'`
+   * overwrites the frontmatter WHOLESALE with `patch.frontmatter` (the markdown-PATCH
+   * semantics: the MD editor sends the full intended frontmatter, so any key absent
+   * from the patch is dropped). Reserved keys are stripped in BOTH modes.
+   *
+   * This unifies the two former update paths onto one emission site (invariants 5/15):
+   * the markdown route parses the MD then delegates here with `mode:'replace'`.
+   */
+  mode?: 'merge' | 'replace';
 }
 
 // A doc carries the create-time placeholder slug if it is exactly `untitled`
@@ -824,6 +835,7 @@ export async function maybeReslugPlaceholder(
 export async function updateDocument(args: UpdateDocumentArgs): Promise<Document> {
   const { workspace: ws, project: p, actor: user, existing, patch } = args;
   const eventActor = args.eventActor;
+  const mode = args.mode ?? 'merge';
 
   // G5 — comments must be mutated through update_comment (services/comments.ts),
   // which enforces author-only, kind-immutable, edited_at, and soft-delete
@@ -913,9 +925,13 @@ export async function updateDocument(args: UpdateDocumentArgs): Promise<Document
 
   const mergedFrontmatter = (() => {
     if (patch.frontmatter === undefined) return existing.frontmatter;
-    const merged: Record<string, unknown> = {
-      ...(existing.frontmatter as Record<string, unknown>),
-    };
+    // 'merge' (JSON-PATCH): start from the existing frontmatter and apply the
+    // patch key-by-key. 'replace' (markdown-PATCH): start from EMPTY so any key
+    // absent from the patch is dropped (wholesale overwrite). Both then run the
+    // reserved-key strip + empty-clear loop below, so a 'replace' can never write
+    // a RESERVED_FRONTMATTER_KEY.
+    const merged: Record<string, unknown> =
+      mode === 'replace' ? {} : { ...(existing.frontmatter as Record<string, unknown>) };
     const patchFm = patch.frontmatter;
     for (const [k, v] of Object.entries(patchFm)) {
       if ((RESERVED_FRONTMATTER_KEYS as readonly string[]).includes(k)) continue;
