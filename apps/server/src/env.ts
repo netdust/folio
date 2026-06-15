@@ -129,6 +129,13 @@ export const envSchema = z.object({
     .default(15 * 60_000),
   FOLIO_RATE_LIMIT_LOGIN: z.coerce.number().int().min(1).default(5),
   FOLIO_RATE_LIMIT_MAGIC_LINK: z.coerce.number().int().min(1).default(5),
+  // M1 (audit M10): global request-body cap in BYTES. Default 5 MB — generous for a
+  // markdown document, far below a memory-exhaustion payload. Floor 64 KB.
+  FOLIO_MAX_BODY_BYTES: z.coerce
+    .number()
+    .int()
+    .min(65_536)
+    .default(5 * 1024 * 1024),
 });
 
 export const env = envSchema.parse(process.env);

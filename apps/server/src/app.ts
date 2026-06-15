@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { bodyLimit } from 'hono/body-limit';
 import { serveStatic } from 'hono/bun';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
@@ -8,7 +9,7 @@ import { logger } from 'hono/logger';
 // where the on-disk serveStatic fallback runs instead.
 import { WEB_ASSETS } from '../../../scripts/build-manifest.ts';
 import { env } from './env.ts';
-import { registerErrorHandler } from './lib/http.ts';
+import { HTTPError, registerErrorHandler } from './lib/http.ts';
 import { type AuthContext, attachUser } from './middleware/auth.ts';
 import { attachToken, requireResource, requireUserOrToken } from './middleware/bearer.ts';
 import {
@@ -48,6 +49,20 @@ if (env.NODE_ENV !== 'production') {
 }
 app.use('*', logger());
 app.use('*', attachUser);
+
+// M1 (audit M10): global request-body cap. Rejects oversized payloads before any
+// route's Zod validation buffers them into memory. Throws HTTPError so the 413
+// rides the standard {error:{code,message}} envelope (invariant 9). Registered
+// AFTER attachUser and BEFORE the route mounts so every route inherits the cap.
+app.use(
+  '*',
+  bodyLimit({
+    maxSize: env.FOLIO_MAX_BODY_BYTES,
+    onError: () => {
+      throw new HTTPError('PAYLOAD_TOO_LARGE', 'request body too large', 413);
+    },
+  }),
+);
 
 // --- /api/v1 ---
 const v1 = new Hono<AuthContext & ScopeContext>();
