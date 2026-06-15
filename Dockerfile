@@ -21,8 +21,11 @@ COPY packages/shared/package.json packages/shared/package.json
 # keeps the lockfile HARD frozen (H2) — no `|| bun install` fallback, no unpin.
 RUN bun install --frozen-lockfile --ignore-scripts
 
-# build:binary runs the full web build (filter '*') + manifest generation + the
-# embedding compile, so it needs the full source tree.
+# build:binary runs the web build (@folio/web) + manifest generation + the
+# embedding compile, so it needs the full source tree. .dockerignore keeps the
+# host's DIRTY scripts/build-manifest.ts (absolute host paths from the CI
+# build-proof step) OUT of this context — the manifest is regenerated in-container
+# by build:binary with in-container paths (CR-B1).
 COPY . .
 RUN bun run build:binary
 

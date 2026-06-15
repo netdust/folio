@@ -1,0 +1,36 @@
+# Keep the docker build context immune to a DIRTY host working tree (CR-B1).
+#
+# The CI "Build single binary (build-proof)" step runs `bun run build:binary`
+# BEFORE the docker build. That overwrites scripts/build-manifest.ts with a
+# POPULATED manifest whose `with { type: 'file' }` imports are ABSOLUTE HOST paths
+# (e.g. /home/runner/work/folio/folio/apps/web/dist/assets/index-*.js). With a
+# plain `COPY . .` and no .dockerignore, that dirty manifest gets copied into the
+# container, where those host paths do not exist → `bun build --compile` fails to
+# resolve them → docker build exit 1.
+#
+# Excluding scripts/build-manifest.ts here guarantees the container NEVER ingests
+# the host's populated copy. scripts/build.ts regenerates the manifest fresh
+# inside the container (with in-container paths) before the --compile step reads
+# it, so nothing imports it before it is written. (scripts/build.ts now builds
+# ONLY @folio/web, not all workspaces, so the server bundle — the only thing that
+# imports the manifest — is never built before the manifest exists.)
+scripts/build-manifest.ts
+
+# Build artifacts — regenerated inside the container; never ship the host's.
+node_modules
+**/node_modules
+dist
+**/dist
+apps/web/dist
+apps/server/dist
+
+# VCS + local state that must not enter the build context.
+.git
+.gitignore
+
+# Local databases and secrets — never copy into an image.
+*.db
+*.db-*
+folio*.db
+.env
+.env.*

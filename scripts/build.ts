@@ -19,9 +19,16 @@ const webDist = path.join(repoRoot, 'apps/web/dist');
 const migrationsDir = path.join(repoRoot, 'apps/server/src/db/migrations');
 const manifestPath = path.join(repoRoot, 'scripts/build-manifest.ts');
 
-// 1. Build web + every workspace via the existing root `build` script.
-console.log('[build] building workspaces (web + others)…');
-await $`bun run build`.cwd(repoRoot);
+// 1. Build ONLY the web bundle (apps/web/dist). We must NOT run the root
+// `bun run --filter '*' build`: that also runs @folio/server's standalone build
+// (`bun build src/index.ts`), whose import graph reaches scripts/build-manifest.ts
+// — and we have not generated the manifest yet. On a clean checkout (the docker
+// build context, where .dockerignore excludes the host's manifest entirely) that
+// premature import fails to resolve the not-yet-written manifest → build exit 1
+// (CR-B1). The server bundle is redundant here anyway: step 3 compiles the server
+// itself via `bun build … --compile`, AFTER the manifest exists.
+console.log('[build] building web bundle (apps/web/dist)…');
+await $`bun run --filter @folio/web build`.cwd(repoRoot);
 
 // 2a. Walk apps/web/dist recursively; key each asset by its request pathname.
 function walk(dir: string, out: string[]): void {
