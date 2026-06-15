@@ -8,6 +8,14 @@ on:
 jobs:
   ci:
     runs-on: ubuntu-latest
+    # The server/shared suites parse env.ts at module load (env.ts:107) and
+    # FOLIO_MASTER_KEY has no default. Locally apps/server/.env supplies it (and
+    # env-setup.ts seeds harness tests); CI has no .env, so the env-bypassing
+    # tests (env.test.ts, server-export, migrate-on-boot) need it set explicitly.
+    # Throwaway test-only key — same value as src/test/env-setup.ts.
+    env:
+      NODE_ENV: test
+      FOLIO_MASTER_KEY: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
     steps:
       - uses: actions/checkout@v4
 
