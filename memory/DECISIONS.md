@@ -19,7 +19,7 @@ For the originating PRD: `docs/FOLIO-BRIEFING.md`. For phase-level commitments: 
 - **MD body editor:** Milkdown (real round-trip).
 - **Raw MD editor:** CodeMirror 6.
 - **Drag-drop:** dnd-kit.
-- **Encryption:** libsodium for AI-key storage.
+- **Encryption:** AES-256-GCM via @noble/ciphers for AI-key storage (the early "libsodium" decision was superseded in implementation; see lib/crypto.ts).
 - **Tests:** Vitest + RTL (web), Bun test (server), Playwright in Phase 4+.
 - **Lint/format:** Biome.
 - **Auth:** Hand-rolled session + magic-link. No NextAuth, no Auth0, no SSO/OIDC in v1.
@@ -79,7 +79,7 @@ For the originating PRD: `docs/FOLIO-BRIEFING.md`. For phase-level commitments: 
 - **No default exports** except for routers and React route components.
 - **Files** `kebab-case.ts`. **Types/components** `PascalCase`. **Functions/vars** `camelCase`. **DB columns** `snake_case`. **Frontmatter keys** `snake_case`.
 - **IDs** UUIDv7 stored as text.
-- **Errors** thrown as Hono `HTTPException`; server returns `{ error: { code, message } }`; client surfaces via toasts.
+- **Errors** thrown as `HTTPError` (lib/http.ts); server returns `{ error: { code, message } }`; client surfaces via toasts.
 - **Validation** via Zod schemas at API boundaries, shared in `packages/shared/`.
 - **Imports** use `@/` aliases per app; no deep relative paths.
 - **Commits** `phase-N: <what>` for phase work; `fix:` / `chore:` / `docs:` otherwise. Atomic per task.

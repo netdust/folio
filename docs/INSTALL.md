@@ -41,7 +41,7 @@ Folio expects to sit behind a reverse proxy (nginx, Caddy, Traefik). Set `PUBLIC
 | `PUBLIC_URL` | `http://localhost:3000` | Externally reachable base URL. Used in magic-link emails and CORS. Must be a valid URL. |
 | `DATABASE_URL` | `file:./folio.db` | SQLite connection string. For a persistent install, point this at a directory that survives restarts (e.g. `file:/data/folio.db`). |
 | `SESSION_SECRET` | *(required)* | At least 32 characters. Signs session cookies. Rotate with a server restart — all active sessions are invalidated. |
-| `FOLIO_MASTER_KEY` | *(required)* | Exactly 64 hex characters (32 bytes). Encrypts BYOK AI keys at rest via libsodium. Changing this invalidates all stored keys. |
+| `FOLIO_MASTER_KEY` | *(required)* | Exactly 64 hex characters (32 bytes). Encrypts BYOK AI keys at rest via AES-256-GCM (@noble/ciphers). Changing this invalidates all stored keys. |
 | `FOLIO_ALLOW_BOOTSTRAP_REGISTRATION` | `false` | Set to `true` for the **first boot only** to allow the first-ever user to self-register as the instance owner. Turn it back off (or leave unset) once the owner exists. Alternatively set `FOLIO_INSTANCE_OWNER`. |
 | `FOLIO_INSTANCE_OWNER` | *(optional)* | Email of the instance owner. On boot, the user with this email is promoted to owner (idempotent). Use this instead of `FOLIO_ALLOW_BOOTSTRAP_REGISTRATION` when you know the owner's email in advance. |
 | `SMTP_HOST` | *(optional)* | SMTP relay hostname. Magic-link emails are only sent when this is set; otherwise the link is printed to the server console (dev mode). |
