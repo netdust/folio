@@ -38,7 +38,7 @@ import { toolsToScopes } from '../lib/agent-schema.ts';
 import { newApiToken } from '../lib/auth.ts';
 import { eventBus } from '../lib/event-bus.ts';
 import { seedProjectDefaults } from '../lib/seed-project-defaults.ts';
-import { createRun, ensureRunsTable, nextChainId } from '../services/agent-runs.ts';
+import { createRun, ensureRunsTable, listRuns, nextChainId } from '../services/agent-runs.ts';
 import { listComments } from '../services/comments.ts';
 import { makeTestApp } from '../test/harness.ts';
 
@@ -668,6 +668,48 @@ test('GET list → 422 INVALID_QUERY on unknown status enum value', async () => 
   });
   expect(res.status).toBe(422);
   expect((await res.json()).error.code).toBe('INVALID_QUERY');
+});
+
+test('M5: project-scoped GET /runs caps rows at ?limit', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const table = await getWorkItemsTable(db, seed.project.id);
+  const { agent } = await seedAgent(db, seed.workspace, seed.user, 'helper');
+  // Three runs under the `web` project (each createRun binds its own parent).
+  const parent1 = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+  const parent2 = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+  const parent3 = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+  await seedRun(db, seed.workspace, seed.project, agent, seed.user, parent1);
+  await seedRun(db, seed.workspace, seed.project, agent, seed.user, parent2);
+  await seedRun(db, seed.workspace, seed.project, agent, seed.user, parent3);
+
+  const res = await app.request('/api/v1/w/acme/p/web/runs?limit=2', {
+    headers: { Cookie: seed.sessionCookie },
+  });
+  expect(res.status).toBe(200);
+  const { data } = await res.json();
+  expect(data.length).toBe(2);
+});
+
+// Proves the DEFAULT cap actually bites at the service contract the route
+// relies on: `limit: undefined` is unbounded (returns all 3) while a numeric
+// limit caps. A regression flipping the route's `: 50` default to `: undefined`
+// would re-open the unbounded fetch — this pins that the bound is load-bearing
+// without seeding >50 rows.
+test('M5: listRuns limit caps rows; undefined stays unbounded', async () => {
+  const { db, seed } = await makeTestApp();
+  const table = await getWorkItemsTable(db, seed.project.id);
+  const { agent } = await seedAgent(db, seed.workspace, seed.user, 'helper');
+  const parent1 = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+  const parent2 = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+  const parent3 = await seedWorkItem(db, seed.workspace, seed.project, table, seed.user);
+  await seedRun(db, seed.workspace, seed.project, agent, seed.user, parent1);
+  await seedRun(db, seed.workspace, seed.project, agent, seed.user, parent2);
+  await seedRun(db, seed.workspace, seed.project, agent, seed.user, parent3);
+
+  const unbounded = await listRuns({ projectId: seed.project.id, limit: undefined });
+  const capped = await listRuns({ projectId: seed.project.id, limit: 2 });
+  expect(unbounded.length).toBe(3);
+  expect(capped.length).toBe(2);
 });
 
 // ----- GET workspace-scoped list (wScope) -----

@@ -277,12 +277,18 @@ runsListRoute.get('/', requireScope('documents:read'), async (c) => {
     status = parsed.data;
   }
 
+  const limitRaw = c.req.query('limit');
+  const limit = limitRaw ? Math.min(100, Math.max(1, Number(limitRaw) || 50)) : 50;
+
   const rows = await listRuns({
     projectId: project.id,
     status,
     agentSlug: agent || undefined,
     since: since || undefined,
     callerAgentProjectsAllowList: allowList ?? undefined,
+    // Cap at the SQL layer — parity with the workspace route (was unbounded,
+    // while agent_run docs accumulate forever; audit M5).
+    limit,
   });
   return jsonOk(c, rows.map(redactRunForApi));
 });
