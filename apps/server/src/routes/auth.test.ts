@@ -4,7 +4,7 @@ import { nanoid } from 'nanoid';
 import { aiKeys, magicLinks, users } from '../db/schema.ts';
 import { env } from '../env.ts';
 import { userRole } from '../lib/access.ts';
-import { createSession, hashToken, newMagicToken } from '../lib/auth.ts';
+import { createSession, hashToken, newMagicToken, normalizeEmail } from '../lib/auth.ts';
 import { makeBareTestDb, makeTestApp } from '../test/harness.ts';
 
 test('first registration is rejected when bootstrap registration is off (M1)', async () => {
@@ -349,4 +349,101 @@ test('login: unknown email returns a clean 401 (dummy-verify branch runs, no thr
   });
   expect(res.status).toBe(401);
   expect((await res.json()).error.code).toBe('UNAUTHENTICATED');
+});
+
+// --- Email normalization at the auth boundaries (CR-A1, security Medium-1) ---
+// users.email had NO normalization: `Victim@x.com`, `victim@x.com`, and a
+// trailing-space variant were DISTINCT lookup keys, distinct rate-limit buckets,
+// and could become distinct rows. Every boundary that accepts an email now
+// normalizes (trim + lowercase) BEFORE lookup / insert / rate-limit-key, and a
+// case-insensitive unique index (migration 0036) enforces it at the DB floor.
+
+test('register with mixed-case email then login with lowercase succeeds (one principal) (CR-A1)', async () => {
+  // makeTestApp seeds a user, so this registrant is NOT the first user — the
+  // bootstrap gate does not apply. Register `Alice@Example.com`, then prove the
+  // SAME human can log in with `alice@example.com`. RED before the fix: the login
+  // lookup is case-sensitive eq(users.email, ...) → unknown-user branch → 401.
+  const { app } = await makeTestApp();
+  const reg = await app.request('/api/v1/auth/register', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-forwarded-for': '203.0.113.50' },
+    body: JSON.stringify({
+      email: 'Alice@Example.com',
+      password: 'password123',
+      name: 'Alice',
+    }),
+  });
+  expect(reg.status).toBe(200);
+  // The stored email is normalized.
+  expect((await reg.json()).data.user.email).toBe('alice@example.com');
+
+  const login = await app.request('/api/v1/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-forwarded-for': '203.0.113.51' },
+    body: JSON.stringify({ email: 'alice@example.com', password: 'password123' }),
+  });
+  expect(login.status).toBe(200);
+  expect((await login.json()).data.user.email).toBe('alice@example.com');
+});
+
+test('login rate-limit case-evasion is closed: case-variants share ONE per-email bucket (CR-A1)', async () => {
+  // The finding's rate-limit-evasion vector: without normalization, `victim@x.com`
+  // and `VICTIM@X.COM` are DISTINCT email-keyed counters, so an attacker case-cycles
+  // to multiply the per-email login ceiling. We force the email DIMENSION to be the
+  // only thing that can trip the 429 by using a DISTINCT IP per request (so the
+  // per-IP bucket — default limit 5 — never reaches its own threshold). Alternating
+  // the case across the burst, the per-email bucket (also default 5) must still trip.
+  // RED before the fix: each case variant gets its own bucket, neither reaches 5,
+  // and with a fresh IP each time NOTHING trips → final status 401, not 429.
+  const { app } = await makeTestApp();
+  const seeded = 'alice@test.local'; // the harness-seeded user
+  let last: Response | undefined;
+  for (let i = 0; i < 7; i++) {
+    const email = i % 2 === 0 ? seeded.toUpperCase() : seeded;
+    last = await app.request('/api/v1/auth/login', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-forwarded-for': `198.51.100.${100 + i}`, // distinct IP each request
+      },
+      body: JSON.stringify({ email, password: 'wrong-password' }),
+    });
+  }
+  expect(last!.status).toBe(429);
+  expect((await last!.json()).error.code).toBe('RATE_LIMITED');
+});
+
+test('invite consume stores the email lowercased (CR-A1)', async () => {
+  // Invite `Bob@Example.com`; the consume path creates the user from link.email.
+  // Normalizing at the invite boundary means the stored user email is lowercased.
+  // RED before the fix: link.email keeps `Bob@Example.com`, so the created user
+  // row stores the mixed-case form.
+  const { app, db, seed } = await makeTestApp();
+  const inviteRes = await app.request('/api/v1/instance/invites', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', cookie: seed.sessionCookie },
+    body: JSON.stringify({ email: 'Bob@Example.com' }),
+  });
+  expect(inviteRes.status).toBe(200);
+
+  // The minted magic_links row carries the normalized email.
+  const link = await db.query.magicLinks.findFirst({
+    where: eq(magicLinks.email, 'bob@example.com'),
+  });
+  expect(link).toBeDefined();
+  expect(link!.kind).toBe('invite');
+
+  // We can't read the plaintext token from the response (server-hashed), so seed a
+  // known-token invite at the normalized email and consume it to assert the stored
+  // user email. (The invite endpoint already proved it normalizes before insert.)
+  const token = await seedMagicLink(db, normalizeEmail('Bob@Example.com'), 'invite');
+  const consume = await app.request(`/api/v1/auth/magic-link/consume?token=${token}`, {
+    redirect: 'manual',
+  });
+  expect(consume.status).toBe(302);
+  const created = await db.query.users.findFirst({
+    where: eq(users.email, 'bob@example.com'),
+  });
+  expect(created).toBeDefined();
+  expect(created!.email).toBe('bob@example.com');
 });

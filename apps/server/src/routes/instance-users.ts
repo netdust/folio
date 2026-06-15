@@ -5,7 +5,7 @@ import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import { db } from '../db/client.ts';
 import { magicLinks, projects, users, workspaces } from '../db/schema.ts';
-import { hashToken, newMagicToken } from '../lib/auth.ts';
+import { hashToken, newMagicToken, normalizeEmail } from '../lib/auth.ts';
 import { sendInvite } from '../lib/email.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
 import {
@@ -252,7 +252,10 @@ instanceUsersRoute.post(
   async (c) => {
     const inviter = getUser(c);
     await requireInstanceAdmin(db, inviter.id);
-    const { email } = c.req.valid('json');
+    const { email: rawEmail } = c.req.valid('json');
+    // CR-A1: canonicalize so the minted invite row — and the user the consume path
+    // creates from link.email — is stored at the normalized address.
+    const email = normalizeEmail(rawEmail);
 
     const token = newMagicToken();
     await db.insert(magicLinks).values({

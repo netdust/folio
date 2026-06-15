@@ -24,6 +24,11 @@ import {
 
 export const users = sqliteTable('users', {
   id: text('id').primaryKey(),
+  // CR-A1: case-insensitive uniqueness is enforced at the DB floor by
+  // `users_email_nocase_idx` (CREATE UNIQUE INDEX ... COLLATE NOCASE, migration
+  // 0036) — drizzle's index builder cannot express a per-column COLLATE, so the
+  // runtime constraint lives in the hand-authored migration, not this `.unique()`.
+  // The app normalizes every email at the auth boundaries via normalizeEmail().
   email: text('email').notNull().unique(),
   passwordHash: text('password_hash'), // nullable -> magic-link-only users
   name: text('name').notNull(),

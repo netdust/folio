@@ -11,6 +11,24 @@ import { authSessions, users } from '../db/schema.ts';
 
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 30; // 30 days
 
+/**
+ * Canonicalize an email at every auth boundary (CR-A1, security Medium-1).
+ *
+ * `users.email` has no per-row case folding, so `Victim@x.com`, `victim@x.com`,
+ * and a trailing-space variant would otherwise be DISTINCT lookup keys, DISTINCT
+ * rate-limit buckets, and could become DISTINCT user rows for one human. Every
+ * boundary that accepts an email (register / login / magic-link request / invite)
+ * calls this BEFORE the value is used for lookup, insert, or a rate-limit key.
+ * A case-insensitive unique index (migration 0036) backs it at the DB floor.
+ *
+ * trim() drops the trailing-space evasion; toLowerCase() folds case. We do NOT
+ * touch the local part beyond case (no plus-address stripping) — that would
+ * change identity semantics; this only canonicalizes what the finding names.
+ */
+export function normalizeEmail(raw: string): string {
+  return raw.trim().toLowerCase();
+}
+
 export async function hashPassword(plain: string): Promise<string> {
   return Bun.password.hash(plain, { algorithm: 'argon2id' });
 }

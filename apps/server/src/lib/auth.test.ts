@@ -24,7 +24,22 @@ import { eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { authSessions, users } from '../db/schema.ts';
 import { makeBareTestDb } from '../test/harness.ts';
-import { hashPassword, readSession, verifyPassword } from './auth.ts';
+import { hashPassword, normalizeEmail, readSession, verifyPassword } from './auth.ts';
+
+describe('normalizeEmail (CR-A1)', () => {
+  test('trims surrounding whitespace and lowercases', () => {
+    // The canonical example from the finding: leading/trailing space + mixed case
+    // collapse to one key. This is the single normalization every auth boundary
+    // applies BEFORE lookup / insert / rate-limit-key, so case- and space-variants
+    // of one human resolve to one principal + one rate-limit bucket.
+    expect(normalizeEmail(' Victim@X.com ')).toBe('victim@x.com');
+  });
+
+  test('is idempotent and leaves an already-normal email unchanged', () => {
+    expect(normalizeEmail('alice@example.com')).toBe('alice@example.com');
+    expect(normalizeEmail(normalizeEmail(' Bob@Example.COM '))).toBe('bob@example.com');
+  });
+});
 
 describe('readSession expiry', () => {
   test('an expired session returns null, a future-dated session returns the user', async () => {

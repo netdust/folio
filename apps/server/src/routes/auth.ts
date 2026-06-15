@@ -14,6 +14,7 @@ import {
   hashPassword,
   hashToken,
   newMagicToken,
+  normalizeEmail,
   verifyPassword,
 } from '../lib/auth.ts';
 import { clientIp } from '../lib/client-ip.ts';
@@ -54,7 +55,9 @@ auth.post(
     }),
   ),
   async (c) => {
-    const { email, password, name } = c.req.valid('json');
+    const { email: rawEmail, password, name } = c.req.valid('json');
+    // CR-A1: canonicalize before any lookup / insert / owner-designation.
+    const email = normalizeEmail(rawEmail);
 
     // M1 — close the registration race (A1): the FIRST user becomes the instance
     // owner, but only behind the bootstrap flag. Read the flag LIVE (the env
@@ -102,7 +105,10 @@ auth.post(
   '/login',
   zValidator('json', z.object({ email: z.string().email(), password: z.string() })),
   async (c) => {
-    const { email, password } = c.req.valid('json');
+    const { email: rawEmail, password } = c.req.valid('json');
+    // CR-A1: canonicalize before the rate-limit key AND the user lookup, so
+    // case-variants share one per-email bucket and resolve to one principal.
+    const email = normalizeEmail(rawEmail);
 
     // M1 (audit H6) — throttle BEFORE any expensive work. Two independent
     // counters: per-IP (blunts a single host hammering many emails) AND per-email
@@ -172,7 +178,9 @@ auth.post(
   '/magic-link/request',
   zValidator('json', z.object({ email: z.string().email() })),
   async (c) => {
-    const { email } = c.req.valid('json');
+    const { email: rawEmail } = c.req.valid('json');
+    // CR-A1: canonicalize before the user lookup, rate-limit key, and the row we mint.
+    const email = normalizeEmail(rawEmail);
 
     // M1 (audit H5): self-service sign-in only authenticates an EXISTING user.
     // For a stranger we mint nothing and send nothing — closing both the

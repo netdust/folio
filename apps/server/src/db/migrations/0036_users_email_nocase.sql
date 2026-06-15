@@ -1,0 +1,25 @@
+-- Case-insensitive uniqueness on users.email (CR-A1, security Medium-1).
+--
+-- The application now normalizes every email at the auth boundaries
+-- (register / login / magic-link request / invite) via normalizeEmail()
+-- before lookup, insert, or rate-limit key. This index is the DB FLOOR that
+-- enforces the same invariant even if a future code path forgets to normalize:
+-- two rows whose emails differ only by case can no longer coexist.
+--
+-- Additive — a `CREATE UNIQUE INDEX ... COLLATE NOCASE` needs NO table rebuild
+-- (the existing `email text NOT NULL UNIQUE` column constraint stays; this adds a
+-- stricter case-folded uniqueness on top). Verified drizzle's migrate() applies a
+-- raw index migration like any other statement.
+--
+-- Hand-authored (matching the 0034/0035 precedent): `bun run db:generate` would
+-- diff the whole schema against the lagging on-disk snapshot and emit destructive
+-- noise. The matching meta/_journal.json entry (idx 37) is added alongside —
+-- drizzle's migrate() silently SKIPS un-journaled files.
+--
+-- SAFETY: this is safe ONLY if no existing rows already collide case-insensitively.
+-- On a fresh/dev instance (and the test harness, which owns fresh DBs) that holds.
+-- A PRODUCTION upgrade against a DB that already has e.g. `Victim@x.com` AND
+-- `victim@x.com` would fail here and require a dedupe/merge step FIRST (out of
+-- scope for this fix — noted for whoever ships the migration to a live instance).
+
+CREATE UNIQUE INDEX `users_email_nocase_idx` ON `users` (`email` COLLATE NOCASE);
