@@ -106,4 +106,22 @@ describe('EventStreamProvider mux', () => {
     });
     expect(cb).toHaveBeenCalledTimes(1);
   });
+
+  it('forwards null-project (workspace-level) frames to a project-filtered consumer', () => {
+    // BUG-021 exemption: the server intentionally delivers workspace-level
+    // frames (projectId=null) to a ?project=-scoped consumer (events.ts:181 +
+    // event-bus.ts:55-60). matchesFilter must mirror that, not drop them.
+    const cb = vi.fn();
+    render(
+      <EventStreamProvider wslug="ws1">
+        <Consumer filters={{ project: 'proj-A', kinds: ['document.updated'] }} onEvent={cb} />
+      </EventStreamProvider>,
+    );
+    const es = FakeES.instances.find((e) => !e.closed);
+    if (!es) throw new Error('no live EventSource');
+    act(() => {
+      es.emit('document.updated', { id: 'e4', kind: 'document.updated', projectId: null });
+    });
+    expect(cb).toHaveBeenCalledTimes(1);
+  });
 });

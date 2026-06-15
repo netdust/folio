@@ -39,7 +39,17 @@ function matchesFilter(event: StreamedEvent, filters: EventStreamFilters): boole
   if (filters.kinds && filters.kinds.length > 0 && !filters.kinds.includes(event.kind)) {
     return false;
   }
-  if (filters.project !== undefined && event.projectId !== filters.project) return false;
+  // BUG-021 exemption: workspace-level frames (projectId=null) transcend project
+  // scope — the server intentionally delivers them to a ?project= consumer
+  // (events.ts:181 + event-bus.ts:55-60). Mirror that: only DROP a frame whose
+  // projectId is non-null AND mismatches. matchesFilter's contract is "mirror
+  // the server"; omitting the null guard dropped every null-project frame.
+  if (
+    filters.project !== undefined &&
+    event.projectId !== null &&
+    event.projectId !== filters.project
+  )
+    return false;
   const payload = event.payload as Record<string, unknown> | null | undefined;
   if (filters.parent !== undefined && payload?.parent_id !== filters.parent) return false;
   if (filters.run !== undefined && payload?.run_id !== filters.run) return false;
