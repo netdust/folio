@@ -46,11 +46,12 @@ import {
   workspaces,
 } from '../db/schema.ts';
 import { env } from '../env.ts';
-import { createRunForParent, loadRunScopedByToken } from '../routes/runs.ts';
 import {
   type ListRunsFilter,
+  createRunForParent,
   getActiveRun,
   listRuns,
+  loadRunScopedByToken,
   redactRunForApi,
   transitionRun,
 } from '../services/agent-runs.ts';
@@ -78,6 +79,7 @@ import { listStatuses } from '../services/statuses.ts';
 import { listViews, runView } from '../services/views.ts';
 import { canManageWorkspace, canSeeProject, visibleProjectIds } from './access.ts';
 import { assertAgentAllowListWidening, assertAgentToolsWidening } from './agent-guards.ts';
+import { resolveAgentDocForToken } from './agent-identity.ts';
 import { intersectAgentProjects, resolveAgentProjects } from './agent-projects.ts';
 import { resolveAgentForRun } from './agent-resolver.ts';
 import type { AgentRunFrontmatter, RunStatus } from './agent-run-schema.ts';
@@ -96,7 +98,6 @@ import { serializeMarkdown } from './frontmatter.ts';
 import { HTTPError } from './http.ts';
 import { getInstanceSkill } from './instance-skills.ts';
 import { assertMcpAgentLifecycle, mcpInvalidParams, rethrowAgentGuardAsMcp } from './mcp-errors.ts';
-import { getOperatorDocument } from './operator.ts';
 import { DEFAULT_TABLE_SLUG } from './seed-project-defaults.ts';
 import { setSkillTrust } from './skill-trust.ts';
 import { isReservedSlug } from './system-workspace.ts';
@@ -194,38 +195,11 @@ async function humanPatProjectCeiling(ws: Workspace, token: ApiToken): Promise<S
   return visibleProjectIds(db, token.createdBy, ws.id); // project-only invitee
 }
 
-/**
- * Resolve the agent `Document` an agent-bound token points at — the ONE place
- * `token.agentId → agent doc` is decided (the convergence point three call sites
- * — project-resolve, comment-author, describe_workspace — previously open-coded).
- *
- * The OPERATOR is a code singleton (invariant 13): its ephemeral conversation
- * token (createConversationRun) carries the explicit, NON-persistable
- * `isOperator: true` marker and `agentId = null` (Shape B′ — no FK sentinel).
- * Resolve it from getOperatorDocument() rather than a DB lookup that always
- * misses. The discriminant is the marker — un-forgeable because it is NOT a
- * `documents`/`api_tokens` column (set only server-side at mint, never read from
- * a persisted row), NOT the createdBy-based isOperatorToken (the operator's
- * createdBy is the CALLER, non-null), and NOT an agentId FK sentinel. For any
- * other token, a null agentId means "not agent-bound" (a human PAT — callers
- * gate it out upstream); a non-null agentId whose row is missing STILL throws
- * `agent_missing` (the real guard, intact).
- */
-async function resolveAgentDocForToken(token: EphemeralToken): Promise<Document> {
-  if (token.isOperator) return getOperatorDocument();
-  if (!token.agentId) {
-    throw mcpInvalidParams('token is not agent-bound', { reason: 'not_agent_bound' });
-  }
-  const agent = await db.query.documents.findFirst({
-    where: and(eq(documents.id, token.agentId), eq(documents.type, 'agent')),
-  });
-  if (!agent) {
-    throw mcpInvalidParams('agent for this token no longer exists', {
-      reason: 'agent_missing',
-    });
-  }
-  return agent;
-}
+// `resolveAgentDocForToken` (the ONE place `token.agentId → agent doc` is
+// decided — invariant 13) is now imported from the `agent-identity.ts` leaf.
+// It used to be forked here AND in agent-guards.ts because the registry imports
+// the guards' widening asserts (a cycle blocked importing the resolver back from
+// here). The leaf breaks that cycle; both call-sites import the one copy.
 
 async function resolveProjectInWorkspace(
   ws: Workspace,

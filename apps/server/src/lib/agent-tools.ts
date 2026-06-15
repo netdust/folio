@@ -285,6 +285,7 @@ export function registerTool<TArgs, TOut>(def: ToolDef<TArgs, TOut>): void {
  * which keeps `tools/list` output stable across calls.
  */
 export function listToolDefs(): ToolListEntry[] {
+  initToolRegistry(); // lazy, idempotent — ensures the real tools are registered
   const out: ToolListEntry[] = [];
   for (const def of registry.values()) {
     if (def.name === '__echo') continue;
@@ -329,6 +330,7 @@ export async function executeTool(
     confirmerId?: string;
   },
 ): Promise<unknown> {
+  initToolRegistry(); // lazy, idempotent — ensures the real tools are registered
   const def = registry.get(name);
   if (!def) throw new Error(`method not found: ${name}`);
 
@@ -508,15 +510,28 @@ export async function executeTool(
   });
 }
 
-// D-2: register the 20 production tools into the module-global registry. The
-// registrations live in a sibling file so this file stays pure dispatch
-// infrastructure. `registerRealTools()` is a FUNCTION (not a side-effect
-// import) so the circular edge resolves: the registry module imports
-// `registerTool` from here, and we only invoke its registrations AFTER this
-// module's `const registry` (and `registerTool`) are fully initialized —
-// calling at the textual bottom guarantees that. D-3 makes routes/mcp.ts a
-// thin transport over `executeTool` + `listToolDefs` and deletes its own
-// inline `TOOLS` array.
+// Register the 20 production tools into the module-global registry. The
+// registrations live in a sibling file (`agent-tools-registry.ts`) so this file
+// stays pure dispatch infrastructure. `registerRealTools()` is a FUNCTION (not a
+// side-effect import) so the circular edge resolves: the registry module imports
+// `registerTool` from here, and the registrations only run when we INVOKE it.
+//
+// M2 Task 5 (de-position-dependence + cycle-safety): the registration is now
+// invoked LAZILY-ON-FIRST-USE via `ensureToolsRegistered()` (called at the top of
+// `executeTool` + `listToolDefs`), NOT as a textual-bottom side-effect of this
+// module's evaluation. The prior bottom-of-file `registerRealTools()` self-call
+// ran DURING this module's own evaluation; because agent-tools ↔ registry form an
+// import cycle (the registry imports `registerTool` from here), reordering any
+// import on either side could make that self-call fire while the registry module
+// was still mid-evaluation — `registered` (a `let` in the registry) would then be
+// in its TDZ and throw `Cannot access 'registered' before initialization`.
+// Deferring to first USE guarantees BOTH modules are fully evaluated before any
+// registration runs. `initToolRegistry()` remains the explicit, idempotent entry
+// point for boot/tests; `registerRealTools()` is itself idempotent so repeat
+// calls are no-ops. listToolDefs() returns the full set on its first call.
 import { registerRealTools } from './agent-tools-registry.ts';
 
-registerRealTools();
+/** Explicit, idempotent tool-registry init. The canonical named entry point. */
+export function initToolRegistry(): void {
+  registerRealTools();
+}

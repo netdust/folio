@@ -14,36 +14,10 @@
  * one implementation — historically the MCP path had them and the HTTP path
  * did not, which let any `documents:write` token mint / widen / delete agents.
  */
-import { and, eq } from 'drizzle-orm';
-import { db } from '../db/client.ts';
-import { type ApiToken, type Document, type EphemeralToken, documents } from '../db/schema.ts';
+import type { ApiToken, EphemeralToken } from '../db/schema.ts';
+import { resolveCallingAgentDoc } from './agent-identity.ts';
 import { HTTPError } from './http.ts';
-import { getOperatorDocument } from './operator.ts';
 import { isAgentBound } from './token-reach.ts';
-
-/**
- * Resolve the CALLING agent's doc for the widening guards (invariant 13). The
- * operator is a code singleton: its ephemeral token carries the explicit,
- * NON-persistable `isOperator: true` marker and `agentId = null` (Shape B′ — no
- * FK sentinel). A raw findFirst on a null/absent agentId returns undefined → the
- * guards' fail-closed fallback ([] allow-list / [] tools) would mis-deny the
- * operator from granting ANY project/tool to a child agent — even though its real
- * definition is projects:['*'] + full tools. Resolve via the marker to the
- * code-singleton doc; a real-but-missing agent (non-null agentId, no row) still
- * returns undefined (the guards keep their fail-closed handling for that case).
- * The discriminant is the un-forgeable marker — NOT an agentId FK sentinel, NOT
- * the createdBy-based isOperatorToken (the operator's createdBy is the caller,
- * non-null). (architecture shake-out: extends the resolveAgentDocForToken
- * convergence — implemented locally because agent-tools-registry.ts imports THIS
- * file, so importing its helper back would cycle.)
- */
-async function resolveCallingAgent(token: EphemeralToken): Promise<Document | undefined> {
-  if (token.isOperator) return getOperatorDocument();
-  if (!token.agentId) return undefined; // not agent-bound — guards fail-closed on undefined
-  return db.query.documents.findFirst({
-    where: and(eq(documents.id, token.agentId), eq(documents.type, 'agent')),
-  });
-}
 
 /**
  * Reject if the token cannot write to the target type. Routes already check
@@ -89,7 +63,7 @@ export async function assertAgentAllowListWidening(
 ): Promise<void> {
   // isAgentBound (not token.agentId) so the operator — agent-bound via its
   // isOperator marker, agentId null under Shape B′ — is NOT skipped here; it must
-  // reach resolveCallingAgent to be granted its ['*'] (else it fail-closes to []).
+  // reach resolveCallingAgentDoc to be granted its ['*'] (else it fail-closes to []).
   if (!token || !isAgentBound(token)) return;
 
   const hasProjectsKey = nextFrontmatter !== undefined && 'projects' in nextFrontmatter;
@@ -108,7 +82,7 @@ export async function assertAgentAllowListWidening(
   // surface the validation error.
   if (!Array.isArray(nextProjects)) return;
 
-  const callingAgent = await resolveCallingAgent(token);
+  const callingAgent = await resolveCallingAgentDoc(token);
   const callingProjectsRaw = (callingAgent?.frontmatter as { projects?: unknown } | undefined)
     ?.projects;
 
@@ -171,7 +145,7 @@ export async function assertAgentToolsWidening(
   nextFrontmatter: Record<string, unknown> | undefined,
   op: 'create' | 'patch',
 ): Promise<void> {
-  // isAgentBound (not token.agentId): the operator must reach resolveCallingAgent
+  // isAgentBound (not token.agentId): the operator must reach resolveCallingAgentDoc
   // to be granted its full tool set, not skipped (Shape B′ — agentId null).
   if (!token || !isAgentBound(token)) return;
 
@@ -181,7 +155,7 @@ export async function assertAgentToolsWidening(
   const nextTools = (nextFrontmatter as Record<string, unknown>).tools;
   if (!Array.isArray(nextTools)) return; // let Zod surface the type error
 
-  const callingAgent = await resolveCallingAgent(token);
+  const callingAgent = await resolveCallingAgentDoc(token);
   const callingToolsRaw = (callingAgent?.frontmatter as { tools?: unknown } | undefined)?.tools;
 
   if (callingToolsRaw !== undefined && !Array.isArray(callingToolsRaw)) {
