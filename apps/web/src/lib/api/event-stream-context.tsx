@@ -109,7 +109,11 @@ export function EventStreamProvider({
   // Deps [wslug, unionKey] encode every connection-affecting field. Subscribers
   // are read LIVE via subscribersRef inside the listener, so a new subscriber set
   // does NOT tear down the socket — only a kinds-union change (bumped via
-  // forceReconnect → new unionKey) re-opens it.
+  // forceReconnect → new unionKey) re-opens it. A frame arriving in the
+  // teardown→reopen gap of a union widen is lost — but this is no worse than the
+  // pre-mux per-hook model (each mount opened/closed its own socket too), and the
+  // next debounced invalidate-and-refetch re-syncs (invariant 8: SSE teaches WHEN
+  // to refetch; the GET is the source of truth).
   useEffect(() => {
     if (!wslug) return;
     const kinds = unionKey ? unionKey.split(',') : [];
