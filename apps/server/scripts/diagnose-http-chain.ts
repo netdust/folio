@@ -200,9 +200,7 @@ async function bootServer(): Promise<{ proc: ReturnType<typeof Bun.spawn> }> {
     if (existsSync(f)) rmSync(f);
   }
 
-  // Same command + env shape as playwright.config.ts's API webServer. We add
-  // SESSION_SECRET explicitly (the e2e relies on apps/server/.env supplying it;
-  // we set it here so the script is self-contained regardless of .env). PORT
+  // Same command + env shape as playwright.config.ts's API webServer. PORT
   // and DATABASE_URL are the only intentional divergences from the e2e config.
   const proc = Bun.spawn(['bun', 'run', '--hot', 'src/index.ts'], {
     cwd: SERVER_ROOT,
@@ -212,7 +210,6 @@ async function bootServer(): Promise<{ proc: ReturnType<typeof Bun.spawn> }> {
       DATABASE_URL: `file:${DB_FILE}`,
       FOLIO_MASTER_KEY:
         '0000000000000000000000000000000000000000000000000000000000000001',
-      SESSION_SECRET: 'diag-http-session-secret-diag-http-session-x', // 44 chars
       NODE_ENV: 'development',
     },
     stdout: 'pipe',

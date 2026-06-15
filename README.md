@@ -25,7 +25,6 @@ bun install
 # 2. Configure
 cp .env.example .env
 # Generate secrets:
-openssl rand -hex 32   # → paste into SESSION_SECRET
 openssl rand -hex 32   # → paste into FOLIO_MASTER_KEY
 
 # 3. Initialise the database

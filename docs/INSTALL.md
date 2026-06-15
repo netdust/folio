@@ -23,7 +23,6 @@ docker run -d \
   -v ./data:/data \
   -p 3000:3000 \
   -e FOLIO_MASTER_KEY=<64-hex-chars> \
-  -e SESSION_SECRET=<min-32-chars> \
   folio:latest
 ```
 
@@ -40,7 +39,6 @@ Folio expects to sit behind a reverse proxy (nginx, Caddy, Traefik). Set `PUBLIC
 | `PORT` | `3000` | TCP port the server listens on. |
 | `PUBLIC_URL` | `http://localhost:3000` | Externally reachable base URL. Used in magic-link emails and CORS. Must be a valid URL. |
 | `DATABASE_URL` | `file:./folio.db` | SQLite connection string. For a persistent install, point this at a directory that survives restarts (e.g. `file:/data/folio.db`). |
-| `SESSION_SECRET` | *(required)* | At least 32 characters. Signs session cookies. Rotate with a server restart — all active sessions are invalidated. |
 | `FOLIO_MASTER_KEY` | *(required)* | Exactly 64 hex characters (32 bytes). Encrypts BYOK AI keys at rest via AES-256-GCM (@noble/ciphers). Changing this invalidates all stored keys. |
 | `FOLIO_ALLOW_BOOTSTRAP_REGISTRATION` | `false` | Set to `true` for the **first boot only** to allow the first-ever user to self-register as the instance owner. Turn it back off (or leave unset) once the owner exists. Alternatively set `FOLIO_INSTANCE_OWNER`. |
 | `FOLIO_INSTANCE_OWNER` | *(optional)* | Email of the instance owner. On boot, the user with this email is promoted to owner (idempotent). Use this instead of `FOLIO_ALLOW_BOOTSTRAP_REGISTRATION` when you know the owner's email in advance. |

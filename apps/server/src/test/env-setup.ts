@@ -5,6 +5,5 @@
  */
 
 process.env.NODE_ENV ??= 'test';
-process.env.SESSION_SECRET ??= 'test-session-secret-test-session-secret-xx';
 process.env.FOLIO_MASTER_KEY ??=
   '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';

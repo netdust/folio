@@ -92,8 +92,6 @@ const ANTHROPIC_KEY = loadAnthropicKey();
 // --- Fixed test master key (same value playwright.config.ts uses). 64 hex. ---
 process.env.FOLIO_MASTER_KEY =
   '0000000000000000000000000000000000000000000000000000000000000001';
-// SESSION_SECRET must be >= 32 chars for env.ts to parse (auth import side-effect).
-process.env.SESSION_SECRET ??= 'diag-session-secret-diag-session-secret-xx';
 // Isolated DB file (deleted below for a clean run). We open it ourselves and
 // install it as the test DB override, so DATABASE_URL is informational here.
 process.env.DATABASE_URL = `file:${DB_FILE}`;
