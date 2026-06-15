@@ -1,3 +1,8 @@
+// NOTE (M0 / 2026-06-15): this real-key HTTP-chain proof harness PREDATES the
+// drop-workspace-tenancy refactor (2026-06). It may reference torn-down concepts
+// (`__system`, per-workspace membership) and need porting to the single-team model
+// before it runs clean. Kept deliberately — it is the real-key end-to-end proof
+// harness (memory: project_phase-3-shipped, open-question #4).
 /**
  * Phase 3 — F-4 DIAGNOSTIC (HTTP-PATH agent-chain boundary tracer).
  *

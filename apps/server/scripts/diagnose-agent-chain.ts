@@ -1,3 +1,8 @@
+// NOTE (M0 / 2026-06-15): this real-key headless agent-chain tracer PREDATES the
+// drop-workspace-tenancy refactor (2026-06). It may reference torn-down concepts
+// (`__system`, per-workspace membership) and need porting to the single-team model
+// before it runs clean. Kept deliberately — sibling of diagnose-http-chain.ts, the
+// real-key end-to-end proof harnesses.
 /**
  * Phase 3 — F-4 DIAGNOSTIC (headless agent-chain boundary tracer).
  *
