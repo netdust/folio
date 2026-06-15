@@ -124,4 +124,86 @@ describe('EventStreamProvider mux', () => {
     });
     expect(cb).toHaveBeenCalledTimes(1);
   });
+  it('demuxes run/agent/table frames to ONLY the matching consumer (no cross-consumer leak)', () => {
+    // matchesFilter mirrors the server's per-clause AND-narrowing for run_id /
+    // agent / table_id too (event-stream-context.tsx:54-57). A frame whose
+    // payload key mismatches the consumer's filter must be DROPPED, not fanned
+    // out — a leak here would surface another run's / agent's / table's events in
+    // the wrong cockpit pane. Each clause gets a hit + a miss.
+    const runCb = vi.fn();
+    const agentCb = vi.fn();
+    const tableCb = vi.fn();
+    render(
+      <EventStreamProvider wslug="ws1">
+        <Consumer filters={{ run: 'run-A', kinds: ['agent.run.running'] }} onEvent={runCb} />
+        <Consumer
+          filters={{ agent: 'reply-bot', kinds: ['agent.run.running'] }}
+          onEvent={agentCb}
+        />
+        <Consumer filters={{ table: 'tbl-A', kinds: ['agent.run.running'] }} onEvent={tableCb} />
+      </EventStreamProvider>,
+    );
+    const es = FakeES.instances.find((e) => !e.closed);
+    if (!es) throw new Error('no live EventSource');
+
+    // A frame matching run-A + reply-bot + tbl-A reaches all three.
+    act(() => {
+      es.emit('agent.run.running', {
+        id: 'e1',
+        kind: 'agent.run.running',
+        payload: { run_id: 'run-A', agent: 'reply-bot', table_id: 'tbl-A' },
+      });
+    });
+    expect(runCb).toHaveBeenCalledTimes(1);
+    expect(agentCb).toHaveBeenCalledTimes(1);
+    expect(tableCb).toHaveBeenCalledTimes(1);
+
+    // A frame for a DIFFERENT run/agent/table reaches NONE of them — each clause
+    // narrows independently, so no consumer sees a frame outside its scope.
+    act(() => {
+      es.emit('agent.run.running', {
+        id: 'e2',
+        kind: 'agent.run.running',
+        payload: { run_id: 'run-B', agent: 'other-bot', table_id: 'tbl-B' },
+      });
+    });
+    expect(runCb).toHaveBeenCalledTimes(1);
+    expect(agentCb).toHaveBeenCalledTimes(1);
+    expect(tableCb).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-opens the socket against the WIDENED union when a new-kind subscriber mounts', () => {
+    // The provider opens ONE socket against the UNION of every subscriber's
+    // kinds; when a subscriber declaring a NEW kind mounts, recomputeUnion must
+    // change → forceReconnect bumps unionKey → the [wslug, unionKey] effect
+    // re-opens the socket carrying the widened kinds. Without the reconnect the
+    // new consumer's kind never reaches the wire and it silently receives nothing.
+    function Toggle({ withSecond }: { withSecond: boolean }) {
+      return (
+        <EventStreamProvider wslug="ws1">
+          <Consumer filters={{ kinds: ['document.updated'] }} onEvent={() => {}} />
+          {withSecond ? (
+            <Consumer filters={{ kinds: ['comment.created'] }} onEvent={() => {}} />
+          ) : null}
+        </EventStreamProvider>
+      );
+    }
+    const { rerender } = render(<Toggle withSecond={false} />);
+    // Only one kind on the wire initially.
+    let live = FakeES.instances.filter((es) => !es.closed);
+    expect(live).toHaveLength(1);
+    expect(live[0]!.url).toContain('document.updated');
+    expect(live[0]!.url).not.toContain('comment.created');
+    const firstSocket = live[0]!;
+
+    // Mount the second subscriber → the union gains comment.created.
+    act(() => rerender(<Toggle withSecond={true} />));
+
+    // The original socket was torn down and ONE new socket carries the widened union.
+    expect(firstSocket.closed).toBe(true);
+    live = FakeES.instances.filter((es) => !es.closed);
+    expect(live).toHaveLength(1);
+    expect(live[0]!.url).toContain('document.updated');
+    expect(live[0]!.url).toContain('comment.created');
+  });
 });
