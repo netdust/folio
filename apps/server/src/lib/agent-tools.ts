@@ -517,7 +517,7 @@ export async function executeTool(
 // `registerTool` from here, and the registrations only run when we INVOKE it.
 //
 // M2 Task 5 (de-position-dependence + cycle-safety): the registration is now
-// invoked LAZILY-ON-FIRST-USE via `ensureToolsRegistered()` (called at the top of
+// invoked LAZILY-ON-FIRST-USE via `initToolRegistry()` (called at the top of
 // `executeTool` + `listToolDefs`), NOT as a textual-bottom side-effect of this
 // module's evaluation. The prior bottom-of-file `registerRealTools()` self-call
 // ran DURING this module's own evaluation; because agent-tools ↔ registry form an
