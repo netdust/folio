@@ -1,16 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useSearch } from '@tanstack/react-router';
-import {
-  Bot,
-  Check,
-  Code,
-  FileText,
-  History,
-  MoreHorizontal,
-  Pencil,
-  Trash2,
-  X,
-} from 'lucide-react';
+import { Bot, Check, Code, FileText, History, MoreHorizontal, Pencil, Trash2 } from 'lucide-react';
 /**
  * Phase 2.5: slideover for workspace-scoped documents (agents + triggers).
  *
@@ -54,14 +44,9 @@ import { useResizableWidth } from '../../lib/use-resizable-width.ts';
 import { InlineEdit } from '../inline/inline-edit.tsx';
 import { RunsHistorySection } from '../runs/runs-history-section.tsx';
 import { TriggerForm } from '../triggers/trigger-form.tsx';
-import { Button } from '../ui/button.tsx';
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from '../ui/dialog.tsx';
-import { IconButton } from '../ui/icon-button.tsx';
 import { Icon } from '../ui/icon.tsx';
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
 import { ResizeHandle } from '../ui/resize-handle.tsx';
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from '../ui/sheet.tsx';
-import { Skeleton } from '../ui/skeleton.tsx';
 import { BodyEditor } from './body-editor.tsx';
 import { ExternalUpdateBanner } from './external-update-banner.tsx';
 import { FrontmatterForm } from './frontmatter-form.tsx';
@@ -69,17 +54,14 @@ import { type HeaderTabItem, HeaderTabs } from './header-tabs.tsx';
 import type { EditorMode } from './mode-toggle.tsx';
 import { RawMdEditor } from './raw-md-editor.tsx';
 import { SaveButton } from './save-button.tsx';
+import { SlideoverShell } from './slideover-shell.tsx';
+import { type InnerActions, useSlideoverLifecycle } from './use-slideover-lifecycle.ts';
 import { WorkspaceActivityPanel } from './workspace-activity-panel.tsx';
 import { WorkspaceLogActivityButton } from './workspace-log-activity-button.tsx';
 
 type WorkspaceDocTabValue = 'fields' | 'activity' | 'runs';
 
 const WORKSPACE_DOC_TABS: readonly WorkspaceDocTabValue[] = ['fields', 'activity', 'runs'];
-
-interface InnerActions {
-  save: () => Promise<void>;
-  discard: () => void;
-}
 
 // The `?tab=` param is SHARED across this layout (settings: tokens|ai, the
 // automation page: agents|triggers, this slideover: fields|activity|runs — see
@@ -102,21 +84,26 @@ interface Props {
 export function WorkspaceDocumentSlideover({ wslug }: Props) {
   const navigate = useNavigate();
   const search = useSearch({ strict: false }) as { wdoc?: string; tab?: WorkspaceDocTabValue };
-  const open = !!search.wdoc;
   const slug = search.wdoc ?? null;
   const { data: doc, isLoading, error } = useWorkspaceDocument(wslug, slug);
+  const {
+    open,
+    dirty,
+    setDirty,
+    saving,
+    setSaving,
+    actionsRef,
+    innerKey,
+    prompting,
+    proceed,
+    cancelPrompt,
+    close,
+  } = useSlideoverLifecycle({ doc, paramKey: 'wdoc' });
+
   const [mode, setMode] = useState<EditorMode>('rich');
   const [moreOpen, setMoreOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const del = useDeleteWorkspaceDocument(wslug);
-
-  // Dirtiness is OWNED by the keyed inner (which owns the draft) and MIRRORED up
-  // here so the parent's header Save button + close/switch guard can read it.
-  // The inner reports via onDirtyChange; imperative save/discard come back via
-  // the actions ref so the unsaved-changes dialog can drive them.
-  const [dirty, setDirty] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const actionsRef = useRef<InnerActions | null>(null);
 
   const { width, onDragStart } = useResizableWidth('agent-config', {
     default: 480,
@@ -180,89 +167,6 @@ export function WorkspaceDocumentSlideover({ wslug }: Props) {
     return () => window.removeEventListener('keydown', onKey);
   }, [open]);
 
-  // ----- close + doc-switch guard ------------------------------------------
-  // Because the inner remounts on a doc switch (clearing its own isDirty before
-  // any effect could observe it), we LATCH the slug whose buffer was dirty so the
-  // switch still routes through the prompt. The latch is set whenever the inner
-  // reports dirty, released when it reports clean for the loaded doc.
-  const dirtySlugRef = useRef<string | null>(null);
-  if (doc?.slug && dirty) dirtySlugRef.current = doc.slug;
-  else if (doc?.slug && doc.slug === dirtySlugRef.current && !dirty) dirtySlugRef.current = null;
-
-  // Local guard (replaces useUnsavedGuard): if dirty, defer the action and prompt.
-  const [prompting, setPrompting] = useState(false);
-  const queuedRef = useRef<(() => void) | null>(null);
-  const guard = (action: () => void) => {
-    if (!dirty && dirtySlugRef.current === null) {
-      action();
-      return;
-    }
-    queuedRef.current = action;
-    setPrompting(true);
-  };
-  const proceed = () => {
-    const action = queuedRef.current;
-    queuedRef.current = null;
-    setPrompting(false);
-    action?.();
-  };
-  const cancelPrompt = () => {
-    queuedRef.current = null;
-    setPrompting(false);
-  };
-
-  const doClose = () => {
-    const { wdoc: _wdoc, ...next } = search;
-    void navigate({ to: '.', search: next });
-  };
-  const close = () => guard(doClose);
-
-  // Guard doc-SWITCH (not just close): if the URL wdoc flips to a DIFFERENT slug
-  // while the buffer is dirty, intercept — revert the URL to the latched (still
-  // dirty) doc and prompt. The guard's queued action re-applies the intended
-  // switch once the buffer is resolved (Save remounts the inner clean, Discard
-  // resets it).
-  //
-  // Detection runs DURING render (not in a [search.wdoc] effect): switching wdoc
-  // unloads the old doc and remounts the inner clean, so by the time an effect
-  // fires both `dirty` AND the loaded slug have already moved on. Comparing the
-  // committed wdoc to the previous one during render catches the flip while
-  // dirtySlugRef still names the dirty doc.
-  const prevWdocRef = useRef<string | undefined>(search.wdoc);
-  const pendingSwitchRef = useRef<string | null>(null);
-  if (prevWdocRef.current !== search.wdoc) {
-    const incoming = search.wdoc;
-    const dirtySlug = dirtySlugRef.current;
-    if (incoming && dirtySlug && incoming !== dirtySlug) {
-      pendingSwitchRef.current = incoming;
-    }
-    prevWdocRef.current = incoming;
-  }
-  // biome-ignore lint/correctness/useExhaustiveDependencies: dirty-doc switch guard — must run ONLY on [search.wdoc] change; navigate/guard/search read live, deliberately omitted to avoid breaking the unsaved-changes race guard
-  useEffect(() => {
-    const incoming = pendingSwitchRef.current;
-    const dirtySlug = dirtySlugRef.current;
-    pendingSwitchRef.current = null;
-    if (!incoming || !dirtySlug || incoming === dirtySlug) return;
-    // Revert URL to the dirty doc and queue the intended switch behind the guard.
-    void navigate({ to: '.', search: { ...search, wdoc: dirtySlug } });
-    guard(() => navigate({ to: '.', search: { ...search, wdoc: incoming } }));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search.wdoc]);
-
-  // Cmd/Ctrl-S saves the buffered draft when dirty (delegates to the inner).
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && (e.key === 's' || e.key === 'S')) {
-        e.preventDefault();
-        if (dirty && !saving) void actionsRef.current?.save();
-      }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [open, dirty, saving]);
-
   const onDelete = async () => {
     if (!doc) return;
     try {
@@ -275,200 +179,128 @@ export function WorkspaceDocumentSlideover({ wslug }: Props) {
     }
   };
 
-  // Shared key — the crux of the refetch-stomp fix: a doc switch OR a post-save
-  // updatedAt bump remounts the inner → a fresh useDocumentDraft seed from the
-  // loaded doc. No in-place re-seed, no oscillation. The inner is null until a
-  // REAL doc loads, so it never sees the loading placeholder.
-  const innerKey = doc ? `${doc.id}:${doc.updatedAt}` : null;
-
   return (
-    <Sheet
+    <SlideoverShell
+      doc={doc}
+      isLoading={isLoading}
+      error={error}
       open={open}
-      onOpenChange={(o) => {
-        if (!o) close();
-      }}
-    >
-      <SheetContent width={width} className="h-screen">
-        <ResizeHandle onDragStart={onDragStart} />
-        <SheetHeader>
-          <SheetTitle>
-            {isLoading ? (
-              <Skeleton width={200} height={20} />
-            ) : error ? (
-              'Failed to load'
-            ) : doc ? (
-              // key={doc.id} forces remount when the user opens a different doc
-              // without closing the slideover (e.g., create A → create B). Without
-              // the key InlineEdit's `defaultEditing` only fires once.
-              <SlideoverTitleEditor key={doc.id} doc={doc} wslug={wslug} />
-            ) : (
-              '—'
-            )}
-          </SheetTitle>
-          <div data-testid="workspace-slideover-toolbar" className="flex items-center gap-1.5">
-            {doc ? (
-              <>
-                <HeaderTabs value={tab} items={tabItems} onChange={selectTab} />
-                <div aria-hidden className="mx-0.5 h-4 w-px bg-border-light" />
-                {/* Save reads the buffered draft (owned by the inner) — render it
-                    off the mirrored dirty flag; the click delegates to the inner. */}
-                <SaveButton
-                  dirty={dirty}
-                  saving={saving}
-                  onSave={() => void actionsRef.current?.save()}
-                />
-                <Popover open={moreOpen} onOpenChange={setMoreOpen}>
-                  <PopoverTrigger asChild>
-                    <button
-                      type="button"
-                      aria-label="More actions"
-                      className="grid h-6 w-6 place-items-center rounded text-fg-2 hover:bg-card hover:text-fg"
-                    >
-                      <Icon icon={MoreHorizontal} size={16} />
-                    </button>
-                  </PopoverTrigger>
-                  <PopoverContent align="end" className="min-w-[180px] py-1">
-                    <div role="menu" className="flex flex-col">
-                      {/* Rich/Raw editor switch lives here (not the header) to
-                          keep the narrow panel header uncramped. Only relevant
-                          where the body editor renders: agents on Fields. */}
-                      {tab === 'fields' && doc.type === 'agent' ? (
-                        <>
-                          <button
-                            type="button"
-                            role="menuitemradio"
-                            aria-checked={mode === 'rich'}
-                            onClick={() => {
-                              setMode('rich');
-                              setMoreOpen(false);
-                            }}
-                            className="inline-flex items-center gap-2 px-3 py-1.5 text-left text-sm text-fg-2 transition-colors duration-fast hover:bg-card hover:text-fg"
-                          >
-                            <Icon icon={Pencil} size={14} />
-                            Edit (rich)
-                            {mode === 'rich' ? (
-                              <Icon icon={Check} size={14} className="ml-auto" />
-                            ) : null}
-                          </button>
-                          <button
-                            type="button"
-                            role="menuitemradio"
-                            aria-checked={mode === 'raw'}
-                            onClick={() => {
-                              setMode('raw');
-                              setMoreOpen(false);
-                            }}
-                            className="inline-flex items-center gap-2 px-3 py-1.5 text-left text-sm text-fg-2 transition-colors duration-fast hover:bg-card hover:text-fg"
-                          >
-                            <Icon icon={Code} size={14} />
-                            Raw markdown
-                            {mode === 'raw' ? (
-                              <Icon icon={Check} size={14} className="ml-auto" />
-                            ) : null}
-                          </button>
-                          <div aria-hidden className="my-1 h-px bg-border-light" />
-                        </>
-                      ) : null}
+      width={width}
+      resizeHandle={<ResizeHandle onDragStart={onDragStart} />}
+      toolbarTestId="workspace-slideover-toolbar"
+      close={close}
+      saving={saving}
+      prompting={prompting}
+      proceed={proceed}
+      cancelPrompt={cancelPrompt}
+      actionsRef={actionsRef}
+      confirmDelete={confirmDelete}
+      setConfirmDelete={setConfirmDelete}
+      deletePending={del.isPending}
+      onDelete={() => void onDelete()}
+      title={
+        // key={doc.id} forces remount when the user opens a different doc
+        // without closing the slideover (e.g., create A → create B). Without
+        // the key InlineEdit's `defaultEditing` only fires once.
+        doc ? <SlideoverTitleEditor key={doc.id} doc={doc} wslug={wslug} /> : null
+      }
+      toolbar={
+        doc ? (
+          <>
+            <HeaderTabs value={tab} items={tabItems} onChange={selectTab} />
+            <div aria-hidden className="mx-0.5 h-4 w-px bg-border-light" />
+            {/* Save reads the buffered draft (owned by the inner) — render it
+                off the mirrored dirty flag; the click delegates to the inner. */}
+            <SaveButton
+              dirty={dirty}
+              saving={saving}
+              onSave={() => void actionsRef.current?.save()}
+            />
+            <Popover open={moreOpen} onOpenChange={setMoreOpen}>
+              <PopoverTrigger asChild>
+                <button
+                  type="button"
+                  aria-label="More actions"
+                  className="grid h-6 w-6 place-items-center rounded text-fg-2 hover:bg-card hover:text-fg"
+                >
+                  <Icon icon={MoreHorizontal} size={16} />
+                </button>
+              </PopoverTrigger>
+              <PopoverContent align="end" className="min-w-[180px] py-1">
+                <div role="menu" className="flex flex-col">
+                  {/* Rich/Raw editor switch lives here (not the header) to
+                      keep the narrow panel header uncramped. Only relevant
+                      where the body editor renders: agents on Fields. */}
+                  {tab === 'fields' && doc.type === 'agent' ? (
+                    <>
                       <button
                         type="button"
-                        role="menuitem"
+                        role="menuitemradio"
+                        aria-checked={mode === 'rich'}
                         onClick={() => {
+                          setMode('rich');
                           setMoreOpen(false);
-                          setConfirmDelete(true);
                         }}
-                        className="inline-flex items-center gap-2 px-3 py-1.5 text-left text-sm text-danger transition-colors duration-fast hover:bg-card"
+                        className="inline-flex items-center gap-2 px-3 py-1.5 text-left text-sm text-fg-2 transition-colors duration-fast hover:bg-card hover:text-fg"
                       >
-                        <Icon icon={Trash2} size={14} />
-                        Delete
+                        <Icon icon={Pencil} size={14} />
+                        Edit (rich)
+                        {mode === 'rich' ? (
+                          <Icon icon={Check} size={14} className="ml-auto" />
+                        ) : null}
                       </button>
-                    </div>
-                  </PopoverContent>
-                </Popover>
-              </>
-            ) : null}
-            <IconButton label="Close document" onClick={close}>
-              <Icon icon={X} size={16} />
-            </IconButton>
-          </div>
-        </SheetHeader>
-        <div className="flex-1 min-h-0 overflow-hidden px-6 py-4">
-          {slug && doc && innerKey ? (
-            <WorkspaceSlideoverInner
-              key={innerKey}
-              doc={doc}
-              wslug={wslug}
-              mode={mode}
-              tab={tab}
-              onDirtyChange={setDirty}
-              onSavingChange={setSaving}
-              actionsRef={actionsRef}
-            />
-          ) : null}
-        </div>
-      </SheetContent>
-      <Dialog
-        open={confirmDelete}
-        onOpenChange={(o) => {
-          if (!del.isPending) setConfirmDelete(o);
-        }}
-      >
-        <DialogContent>
-          <DialogTitle>Delete this document?</DialogTitle>
-          <DialogDescription>
-            {doc ? <>Delete &ldquo;{doc.title}&rdquo;? This cannot be undone.</> : null}
-          </DialogDescription>
-          <div className="mt-5 flex items-center justify-end gap-2">
-            <Button
-              variant="secondary"
-              onClick={() => setConfirmDelete(false)}
-              disabled={del.isPending}
-            >
-              Cancel
-            </Button>
-            <Button variant="danger" onClick={() => void onDelete()} disabled={del.isPending}>
-              {del.isPending ? 'Deleting…' : 'Delete'}
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
-      <Dialog
-        open={prompting}
-        onOpenChange={(o) => {
-          if (!o) cancelPrompt();
-        }}
-      >
-        <DialogContent>
-          <DialogTitle>Unsaved changes</DialogTitle>
-          <DialogDescription>
-            {doc ? <>You have unsaved edits to &ldquo;{doc.title}&rdquo;.</> : null}
-          </DialogDescription>
-          <div className="mt-5 flex items-center justify-end gap-2">
-            <Button
-              variant="secondary"
-              onClick={() => {
-                actionsRef.current?.discard();
-                proceed();
-              }}
-            >
-              Discard
-            </Button>
-            <Button variant="secondary" onClick={() => cancelPrompt()}>
-              Cancel
-            </Button>
-            <Button
-              variant="primary"
-              disabled={saving}
-              onClick={async () => {
-                await actionsRef.current?.save();
-                proceed();
-              }}
-            >
-              {saving ? 'Saving…' : 'Save'}
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
-    </Sheet>
+                      <button
+                        type="button"
+                        role="menuitemradio"
+                        aria-checked={mode === 'raw'}
+                        onClick={() => {
+                          setMode('raw');
+                          setMoreOpen(false);
+                        }}
+                        className="inline-flex items-center gap-2 px-3 py-1.5 text-left text-sm text-fg-2 transition-colors duration-fast hover:bg-card hover:text-fg"
+                      >
+                        <Icon icon={Code} size={14} />
+                        Raw markdown
+                        {mode === 'raw' ? (
+                          <Icon icon={Check} size={14} className="ml-auto" />
+                        ) : null}
+                      </button>
+                      <div aria-hidden className="my-1 h-px bg-border-light" />
+                    </>
+                  ) : null}
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setMoreOpen(false);
+                      setConfirmDelete(true);
+                    }}
+                    className="inline-flex items-center gap-2 px-3 py-1.5 text-left text-sm text-danger transition-colors duration-fast hover:bg-card"
+                  >
+                    <Icon icon={Trash2} size={14} />
+                    Delete
+                  </button>
+                </div>
+              </PopoverContent>
+            </Popover>
+          </>
+        ) : null
+      }
+      inner={
+        slug && doc && innerKey ? (
+          <WorkspaceSlideoverInner
+            key={innerKey}
+            doc={doc}
+            wslug={wslug}
+            mode={mode}
+            tab={tab}
+            onDirtyChange={setDirty}
+            onSavingChange={setSaving}
+            actionsRef={actionsRef}
+          />
+        ) : null
+      }
+    />
   );
 }
 
