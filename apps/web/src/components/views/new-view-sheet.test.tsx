@@ -163,7 +163,19 @@ describe('NewViewSheet', () => {
     await waitFor(() => expect(screen.getByText('navigated to table grid')).toBeInTheDocument());
 
     const body = findPostBody(fetchMock);
-    expect(body).toEqual({ name: 'X', type: 'list', filters: {}, sort: [] });
+    // L.4: a list view now carries its default grouped-list config in `settings`
+    // (group-by status, one `count` aggregate, title primary row).
+    expect(body).toEqual({
+      name: 'X',
+      type: 'list',
+      filters: {},
+      sort: [],
+      settings: {
+        groupBy: 'status',
+        aggregates: [{ op: 'count' }],
+        rowLayout: { primary: 'title', fields: [] },
+      },
+    });
   });
 
   it('always captures current URL filters and sort in the payload', async () => {
@@ -190,6 +202,12 @@ describe('NewViewSheet', () => {
       type: 'list',
       filters: { status: 'In Progress' },
       sort: [{ key: 'title', dir: 'desc' }],
+      // L.4: list views carry the default grouped-list config in `settings`.
+      settings: {
+        groupBy: 'status',
+        aggregates: [{ op: 'count' }],
+        rowLayout: { primary: 'title', fields: [] },
+      },
     });
   });
 
@@ -470,6 +488,59 @@ describe('NewViewSheet', () => {
 
     expect(router.state.location.pathname).toBe('/w/main/p/acme/t/bugs');
     expect(router.state.location.search).toMatchObject({ view: 'v-bug-2' });
+  });
+
+  // L.4 (Tier-A slice): a List view carries its assembled GroupedListSettings in
+  // payload.settings. Configuring two aggregates writes BOTH into
+  // settings.aggregates (the create-payload shape that the renderer reads back).
+  // This drives the real buildPayload → POST body through the un-mocked sheet
+  // state (GroupedListConfig threaded into the sheet), the seam that L.4 wires.
+  it('writes the grouped-list settings (two aggregates) into a list payload.settings', async () => {
+    const fetchMock = mockFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    const { queryClient, router } = setup();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await userEvent.type(await screen.findByLabelText(/Name/), 'Grouped');
+    // type defaults to List → the GroupedListConfig block is shown.
+    // Configure aggregate 1 → avg over `priority`.
+    await userEvent.selectOptions(await screen.findByLabelText(/Aggregation 1/i), 'avg');
+    await userEvent.selectOptions(screen.getByLabelText(/Aggregate field 1/i), 'priority');
+    // Add aggregate 2 → count.
+    await userEvent.click(screen.getByRole('button', { name: /Add aggregate/i }));
+    await userEvent.selectOptions(await screen.findByLabelText(/Aggregation 2/i), 'count');
+
+    await userEvent.click(screen.getByRole('button', { name: /Create view/i }));
+    await waitFor(() => expect(screen.getByText('navigated to table grid')).toBeInTheDocument());
+
+    const body = findPostBody(fetchMock) as Record<string, unknown>;
+    expect(body.type).toBe('list');
+    const settings = body.settings as { aggregates?: unknown[] } | undefined;
+    expect(settings?.aggregates).toHaveLength(2);
+    expect(settings?.aggregates?.[0]).toMatchObject({ op: 'avg', field: 'priority' });
+    expect(settings?.aggregates?.[1]).toMatchObject({ op: 'count' });
+  });
+
+  // Adversarial sibling: a kanban view must NOT carry grouped-list settings (the
+  // list-only block stays off for non-list types).
+  it('omits payload.settings for a kanban view', async () => {
+    const fetchMock = mockFetch('v-kb-s', 'kanban');
+    vi.stubGlobal('fetch', fetchMock);
+    const { queryClient, router } = setup();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await userEvent.type(await screen.findByLabelText(/Name/), 'KB');
+    await userEvent.click(await screen.findByRole('button', { name: /Kanban/i }));
+    await userEvent.click(screen.getByRole('button', { name: /Create view/i }));
+    await waitFor(() => expect(screen.getByText('navigated to table grid')).toBeInTheDocument());
+    const body = findPostBody(fetchMock) as Record<string, unknown>;
+    expect(body).not.toHaveProperty('settings');
   });
 
   // Spec-coverage guard (Tier B): the 5-type enumeration is a spec contract.

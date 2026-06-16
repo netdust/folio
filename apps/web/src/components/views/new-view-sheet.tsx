@@ -1,3 +1,4 @@
+import type { GroupedListSettings } from '@folio/shared';
 import { useNavigate } from '@tanstack/react-router';
 import { Calendar, Columns3, GanttChart, Image, List, type LucideIcon } from 'lucide-react';
 import { type FormEvent, useEffect, useState } from 'react';
@@ -10,6 +11,7 @@ import { Button } from '../ui/button.tsx';
 import { cn } from '../ui/cn.ts';
 import { Icon } from '../ui/icon.tsx';
 import { Sheet, SheetContent, SheetFooter, SheetHeader, SheetTitle } from '../ui/sheet.tsx';
+import { GroupedListConfig, defaultGroupedListSettings } from './grouped-list-config.tsx';
 
 export interface NewViewSheetProps {
   open: boolean;
@@ -69,12 +71,18 @@ export function NewViewSheet({
   // Group-by for kanban. 'status' is the default; selecting it stores null on
   // the view per the "defaults to status" convention (see board-controls).
   const [groupBy, setGroupBy] = useState('status');
+  // L.4: the grouped-list config for a `list` view. Defaults to group-by status
+  // + a single `count` aggregate; written into payload.settings on create.
+  const [listSettings, setListSettings] = useState<GroupedListSettings>(
+    defaultGroupedListSettings(),
+  );
 
   useEffect(() => {
     if (!open) {
       setName('');
       setType('list');
       setGroupBy('status');
+      setListSettings(defaultGroupedListSettings());
     }
   }, [open]);
 
@@ -104,6 +112,13 @@ export function NewViewSheet({
     // a field key is stored verbatim. A list view omits groupBy entirely.
     if (type === 'kanban') {
       payload.groupBy = groupBy === 'status' ? null : groupBy;
+    }
+    // L.4: a list view carries its grouped-list config in `settings`. Only write
+    // it for list — every other type defaults `settings` to `{}` server-side.
+    // Spread into a plain record: `settings` is the permissive JSON column
+    // (`Record<string, unknown>`), and a typed interface has no index signature.
+    if (type === 'list') {
+      payload.settings = { ...listSettings };
     }
     // V2: capture the current columns so the new view starts as a copy of what the
     // user is looking at (the sheet copy's promise). Only include keys that have a
@@ -185,6 +200,16 @@ export function NewViewSheet({
                 })}
               </div>
             </fieldset>
+
+            {type === 'list' && (
+              <GroupedListConfig
+                wslug={wslug}
+                pslug={pslug}
+                tslug={tslug}
+                value={listSettings}
+                onChange={setListSettings}
+              />
+            )}
 
             {type === 'kanban' && (
               <div>
