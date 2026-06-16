@@ -26,14 +26,15 @@ Order: A → E → D → B → C. Each cluster = a `── REVIEW GATE ──`. 
 - [x] ── REVIEW GATE A ── LIGHT: 0 Critical, 1 Important folded, CLOSED
 
 ### Cluster E — Test gaps + Playwright IOUs + flake + dispatcher (STANDARD)
-- [ ] E1 — email.ts URL round-trip test (Tier A)
-- [ ] E2 — autonomy-gate.ts direct test (Tier A)
-- [ ] E3 — per-tool denial matrix test (Tier A, highest-value)
-- [ ] E4 — resolve 8 it.skip Playwright IOUs (write or delete)
+- [x] E1 — email.ts URL round-trip test (Tier A) — 41e074c
+- [x] E2 — autonomy-gate.ts suppression-record test (Tier A) — 15f0741 [plan drift: file is the emitter not a predicate]
+- [x] E3 — per-tool denial matrix (Tier A) — fc24af9 — 33/33 tools deny, NO un-gated tool, coverage-guard
+- [ ] E4 — DELETE 8 skip-IOUs + deferred-e2e backlog doc (owner decision) — dispatched
 - [ ] E5 — replace 7 raw setTimeout sleeps with deterministic waits
 - [ ] E6 — silence Milkdown teardown flake (comments-tab.test.tsx)
-- [ ] E7 — dispatcher cursor batch-advance (Tier A)
+- [x] E7 — dispatcher cursor batch-advance (Tier A) — 592bf39 — 4→1 write/drain, contract preserved
 - [ ] ── REVIEW GATE E ── (STANDARD + invariant-auditor on E3/E7)
+- NOTE: 3-parallel-implementer race scrambled E1/E2/E3 SHAs (recovered clean); web batch now SERIAL
 
 ### Cluster D — Typing cleanup (STANDARD)
 - [ ] D1 — discriminated RunContext (reuse RunSink.isConversation) kills `as unknown as Workspace`
