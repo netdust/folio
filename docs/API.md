@@ -222,11 +222,14 @@ Source: `apps/server/src/routes/views.ts`
 | Method | Path | Scope | Returns |
 |---|---|---|---|
 | GET | `/views` | session OR token | `[{ id, name, type, filters, sort, ... }]` |
+| GET | `/views?tables=slugA,slugB` | session OR token | `{ [tableId]: [{ id, name, type, ... }] }` (batched, grouped by table) |
 | POST | `/views` | `views:write` | `{ view: ... }` |
 | PATCH | `/views/:id` | `views:write` | `{ view: ... }` |
 | DELETE | `/views/:id` | `views:write` | 204 |
 
 `type` is `list | kanban`. `filters` is a Mongo-ish JSON AST (compiled by `packages/shared/src/filter-compile.ts`).
+
+**Batched form (`?tables=`).** The project-scoped `GET /views?tables=slugA,slugB` returns views for multiple tables in one request, grouped by `tableId` (`{ [tableId]: View[] }`) — the UI rail uses this to avoid one request per (project, table) pair. The requested table slugs are **intersected with the project's own tables**: a slug that doesn't belong to this project is silently dropped (its views never appear), so the batched read can never expose another project's views. An empty/absent `tables` value returns `{}`. Without the `tables` param the endpoint keeps its legacy per-table array shape (above).
 
 ## Documents — project-scoped (`/p/:pslug/documents`, `/p/:pslug/t/:tslug/documents`)
 

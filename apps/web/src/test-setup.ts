@@ -48,7 +48,13 @@ function milkdownTeardownGuard(err: unknown): void {
 // minimal listener surface used here rather than widening the app's type deps.
 declare const process: {
   on(event: string, listener: (err: unknown) => void): void;
+  off(event: string, listener: (err: unknown) => void): void;
 };
+// Idempotent registration: vitest evaluates this setup module per test file in a
+// long-lived worker, so a bare `process.on` would stack a duplicate guard per
+// file. off-then-on keeps exactly one listener regardless of how many files load.
+process.off('uncaughtException', milkdownTeardownGuard);
+process.off('unhandledRejection', milkdownTeardownGuard);
 process.on('uncaughtException', milkdownTeardownGuard);
 process.on('unhandledRejection', milkdownTeardownGuard);
 
