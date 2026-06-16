@@ -114,3 +114,13 @@ virtualization · a11y (32) · reapStalePendingOps chunking · auth_rate_limits 
 - [ ] Perf I-2: parallelize the distribution sub-query loop — DEPRIORITIZED (bun:sqlite is synchronous; won't help until async pool).
 - [ ] Perf I-3: fold the ungrouped scalar bucket into the main GROUP BY (removes one full scan on the common path).
 - [ ] Perf S-2: constrain the distribution sub-query to the kept top-N groups (IN(...) on keptRows) instead of materializing all group×value pairs.
+
+### Cluster 2b (grouped-list renderer + config UI) — DONE, at STANDARD REVIEW GATE (Stefan sign-off)
+- [x] L.3 GroupedListView + 4 sub-components; page-2 guard (header=endpoint full-set, not loaded rows) (`8f8f11d3`)
+- [x] L.4 grouped-list config UI: group-by + aggregate builder (AGGREGATIONS whitelist sibling-site) + row-layout → settings (`95ff6417`)
+- [x] L.5 wire list → GroupedListView in viewRouter (`851063bb`)
+- [x] STANDARD review panel: generalist (neither escalation trigger fired; spec-key parity + page-2 guard correct; 3 Important) + simplicity (lean, 2 wins). NO security-sentinel (no 1a surface).
+- [x] LIVE browser feature-acceptance (seeded 128 docs in va-proj): grouped list renders; "done 82 items / status=done:100" header = FULL-set while pager "1–50 van 128"; Load more → "1–100 van 128" reaches todo/in_progress groups. Page-2 guard proven end-to-end.
+- [x] DEBUG (systematic): a stale `bun --hot` dev server 500'd live — root-caused to dev-env NOT code (direct call + green tests + fresh-server 200). Restarted server. Memory: feedback_stale-bun-hot-dev-server-500.
+- [x] review fixes (`32fe7755`): I-3 useInfiniteDocuments + Load more · I-1 surface summary.error · I-2 filter incomplete specs · S-1 dedupe defaults · S-2 hoist aggregateKey
+- FINAL: web 995 / server 1909 / shared 80, 0 fail · tsc clean. Seeded test data cleaned from dev DB.
