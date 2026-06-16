@@ -154,9 +154,14 @@ test('batches cursor persistence to ONE write per drain (not one per event)', as
     },
   };
 
-  await runDispatcherOnce(db, [r]);
-
-  (db as unknown as { update: typeof db.update }).update = realUpdate; // restore
+  // finally-restore: db is shared across tests via makeTestApp(), so a throw
+  // inside the drain must never leave the counting wrapper on the shared handle
+  // (it would corrupt sibling tests' write counts). Mirrors E2's unsub-in-finally.
+  try {
+    await runDispatcherOnce(db, [r]);
+  } finally {
+    (db as unknown as { update: typeof db.update }).update = realUpdate; // restore
+  }
 
   expect(seen).toEqual([1, 2, 3, 4]); // all four delivered
   expect(cursorWrites).toBe(1); // ONE persist for the whole drain, not 4
