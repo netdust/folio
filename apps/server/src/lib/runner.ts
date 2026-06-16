@@ -317,7 +317,8 @@ export async function runAgent(args: { runId: string }): Promise<void> {
       // preflight (depth/rate/idempotency, all querying agent_run rows +
       // getActiveRun({parentId})) does not apply. Run the minimal conversation
       // preflight (key presence) instead.
-      if (ctx.sink ? await conversationPreflight(ctx) : await preflight(ctx)) return;
+      if (ctx.runSink.isConversation ? await conversationPreflight(ctx) : await preflight(ctx))
+        return;
 
       // --- stream consumption (outer round-loop). buildInitialMessages is
       // called HERE (not inside runLoop) so runLoop is reusable by
@@ -325,11 +326,11 @@ export async function runAgent(args: { runId: string }): Promise<void> {
       if (ctx.fm.provider === 'claude-code') {
         await ccExecute(ctx);
       } else {
-        // A conversation-backed run (ctx.sink set by loadContext, Task 5) replays
-        // the TRUSTED conversation thread as its message source; a document-thread
-        // run keeps buildInitialMessages (parent body + comments, fenced as
-        // untrusted). claude-code stays hard-disabled, so this branch is API-only.
-        const messages = ctx.sink
+        // A conversation-backed run replays the TRUSTED conversation thread as its
+        // message source; a document-thread run keeps buildInitialMessages (parent
+        // body + comments, fenced as untrusted). claude-code stays hard-disabled,
+        // so this branch is API-only.
+        const messages = ctx.runSink.isConversation
           ? await buildConversationMessages(db, requireConversationId(ctx), ctx.agentSkills)
           : await buildInitialMessages(ctx);
         await runLoop(ctx, messages);
@@ -440,10 +441,10 @@ export async function runAgentResume(args: { runId: string }): Promise<void> {
     }
 
     // Build the resume message history, then delegate to the SHARED loop.
-    // A conversation-backed resume (ctx.sink set, Task 5) replays the thread as
-    // its source — the persisted messages already include the prior turns, so a
-    // resume re-reads the same trusted history a fresh turn does.
-    const messages = ctx.sink
+    // A conversation-backed resume replays the thread as its source — the
+    // persisted messages already include the prior turns, so a resume re-reads
+    // the same trusted history a fresh turn does.
+    const messages = ctx.runSink.isConversation
       ? await buildConversationMessages(db, requireConversationId(ctx), ctx.agentSkills)
       : await buildResumeMessages(ctx);
     await runLoop(ctx, messages);
@@ -997,19 +998,25 @@ async function conversationPreflight(ctx: RunContext): Promise<boolean> {
   // apiKey==='' is EXPECTED) — only a key-REQUIRING provider with no apiKey blocks.
   // A key ROW exists but its ciphertext couldn't be decrypted (wrong
   // FOLIO_MASTER_KEY) — honest, actionable message, distinct from "no key".
+  // conversationPreflight runs ONLY on conversation runs, so `isConversation` is
+  // always true here; the guard is kept byte-faithfully. `post(body, 'comment')`
+  // on the conversation impl writes one `text` message row — identical to the old
+  // `ctx.sink.text(body)`.
   if (ctx.keyDecryptFailed) {
-    if (ctx.sink) {
-      await ctx.sink.text(
+    if (ctx.runSink.isConversation) {
+      await ctx.runSink.post(
         'The stored AI key could not be decrypted (the server encryption key may have changed). Ask an instance admin to re-enter it in Settings → AI.',
+        'comment',
       );
     }
     return true;
   }
   const requiresKey = ctx.fm.provider !== 'ollama';
   if (ctx.keyRowMissing || (requiresKey && !ctx.apiKey)) {
-    if (ctx.sink) {
-      await ctx.sink.text(
+    if (ctx.runSink.isConversation) {
+      await ctx.runSink.post(
         'No AI key is configured for this provider. Ask an instance admin to add one in Settings → AI, then try again.',
+        'comment',
       );
     }
     return true;
@@ -1903,25 +1910,19 @@ async function postResultAndComplete(
   textBuf: string,
   doneReason: RunDoneReason | undefined,
 ): Promise<void> {
-  const runId = ctx.run.id;
-
-  // Final answer as a kind=result comment on the parent, linking the run.
+  // Final answer as a kind=result comment (doc) / one text message (conv) — the
+  // text post is the CALLER's job; `complete()` is the lifecycle transition half.
   const finalText = textBuf.trim().length > 0 ? textBuf : '(no output)';
   await postAgentComment(ctx, finalText, 'result');
 
-  // Operator cockpit chat (Task 5) — a conversation run has NO `agent_run` row,
-  // so `transitionRun` (which throws AGENT_RUN_NOT_FOUND on a missing row) does
-  // not apply. The result text already streamed to the thread via the sink above;
-  // the conversation's `active_run_id` slot is the liveness record, cleared by the
-  // runAgent conversation finally.
-  if (ctx.sink) return;
-
-  // transitionRun owns its own txWithEvents; done_reason rides inside it.
-  await transitionRun(runId, {
-    newStatus: 'completed',
-    actor: ctx.transitionActor,
-    doneReason,
-  });
+  // Lifecycle transition: doc → transitionRun(completed) with done_reason folded
+  // in ATOMICALLY (FIX #4 — transitionRun owns its own txWithEvents; the
+  // done_reason write, status flip, and agent.run.completed event commit
+  // together); conv → NO-OP (no `agent_run` row — transitionRun would throw
+  // AGENT_RUN_NOT_FOUND; the result text already streamed to the thread above, and
+  // the `active_run_id` slot, cleared by the runAgent conversation finally, is the
+  // liveness record). Both branches live in RunSink.complete.
+  await ctx.runSink.complete(doneReason);
 }
 
 // ---------------------------------------------------------------------------
