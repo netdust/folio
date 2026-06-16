@@ -3298,3 +3298,83 @@ describe('confirm gate — clean pause for approval (operator cockpit)', () => {
     expect(row?.activeRunId).toBeNull();
   });
 });
+
+// Operator cockpit chat — a PLAIN normal completion (no tool, no card, no gate)
+// drives the conversation run through the terminal path the two pause drives above
+// never reach: finishTerminal → postResultAndComplete → ctx.runSink.post('result')
+// then ctx.runSink.complete('stop'). For a conversation run, complete() is a NO-OP
+// (there is no agent_run row to transition; the active_run_id slot is liveness).
+//
+// This nets that no-op contract at the RUNNER level. Its only other guard is the
+// unit test `run-sink.test.ts` ("ConversationRunSink.complete is a no-op"); the
+// ask_choice + confirm-gate drives both terminate via the clean-pause branch, so
+// NEITHER reaches complete(). If complete() regressed to a transition it would
+// throw AGENT_RUN_NOT_FOUND → the top-level catch's failRunLastResort would append
+// a SECOND operator text message ("⚠️ The operator couldn't complete this turn …"),
+// reddening assertions (a) and (c) below. (Verified RED-first by temporarily making
+// ConversationRunSink.complete call transitionRun — a second text row appeared.)
+describe('normal completion — conversation no-op complete() drive (operator cockpit)', () => {
+  test('a plain text+stop turn posts ONE result message, releases the slot, surfaces NO failure', async () => {
+    const { db, seed } = await makeTestApp();
+    await seedInstanceSkills(db);
+    await db.insert(aiKeys).values({
+      id: nanoid(),
+      provider: 'anthropic',
+      label: 'default',
+      encryptedKey: encryptSecret('sk-test-fake-key'),
+    });
+
+    const conv = await createConversation(db, {
+      createdBy: seed.user.id,
+      operatorAgentId: '_operator',
+      title: 'Untitled',
+    });
+    const runId = nanoid();
+    await createConversationRun(db, {
+      conversation: { id: conv.id, createdBy: seed.user.id },
+      runId,
+    });
+    await db.update(conversations).set({ activeRunId: runId }).where(eq(conversations.id, conv.id));
+
+    // ONE round: a text delta then done:'stop' — NO tool_call, NO choice card, NO
+    // confirm gate. This is the only conversation drive that flows all the way to
+    // postResultAndComplete → complete('stop') (the no-op path).
+    const control: StubControl = {
+      rounds: [
+        [
+          { type: 'text', delta: 'Done — your project is set up.' },
+          { type: 'done', reason: 'stop' },
+        ],
+      ],
+      called: 0,
+    };
+    installProviderStub(control);
+
+    await runAgent({ runId });
+
+    // The single round was pulled exactly once (no tool loop).
+    expect(control.called).toBe(1);
+
+    const msgs = await db.query.messages.findMany({
+      where: eq(messages.conversationId, conv.id),
+    });
+
+    // (a) EXACTLY ONE kind=text operator message — the assistant's final answer
+    //     posted via ctx.runSink.post('result'). A regressed complete() would add a
+    //     SECOND text row (the last-resort failure), so this count BITES.
+    const operatorTexts = msgs.filter((m) => m.role === 'operator' && m.kind === 'text');
+    expect(operatorTexts.length).toBe(1);
+    expect(operatorTexts[0]!.body).toContain('your project is set up');
+
+    // (c) NO last-resort / "could not finish" / provider_error failure leaked into
+    //     the thread — proving complete() did NOT try to transition and throw.
+    const operatorText = operatorTexts.map((m) => m.body).join('\n');
+    expect(operatorText).not.toMatch(/could(n.?t| not) (finish|complete)|provider_error/i);
+
+    // (b) The conversation slot was released (clean terminal path).
+    const row = await db.query.conversations.findFirst({
+      where: eq(conversations.id, conv.id),
+    });
+    expect(row?.activeRunId).toBeNull();
+  });
+});
