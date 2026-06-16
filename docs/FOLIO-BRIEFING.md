@@ -565,7 +565,7 @@ Concrete implementations live in `apps/server/src/lib/ai/`:
 
 ### Key Storage
 
-`workspaces.ai_key_encrypted` is AES-256-GCM (@noble/ciphers) of the raw key, with the IV prepended (12-byte IV + ciphertext-and-tag). The master key comes from `FOLIO_MASTER_KEY` env (32-byte base64). On read, decrypt; on write, encrypt fresh. Never log decrypted keys. Never return the key over the API — only `aiProvider`, `aiModel`, and a `keyConfigured: boolean` flag.
+`workspaces.ai_key_encrypted` is AES-256-GCM (@noble/ciphers) of the raw key, with the IV prepended (12-byte IV + ciphertext-and-tag). The master key comes from `FOLIO_MASTER_KEY` env (64 hex chars / 32 bytes — `openssl rand -hex 32`). On read, decrypt; on write, encrypt fresh. Never log decrypted keys. Never return the key over the API — only `aiProvider`, `aiModel`, and a `keyConfigured: boolean` flag.
 
 ### Slash Commands (v1)
 
@@ -736,7 +736,7 @@ bun build apps/server/src/index.ts --compile --target=bun-linux-x64 --outfile=di
 The binary embeds the React bundle and the SQLite driver. ~50–80 MB. Run with:
 
 ```bash
-FOLIO_MASTER_KEY=<base64-32-bytes> \
+FOLIO_MASTER_KEY=<64-hex-chars> \
 FOLIO_DB_PATH=/var/lib/folio/folio.db \
 FOLIO_PORT=3000 \
 ./folio
@@ -773,7 +773,7 @@ ENTRYPOINT ["folio"]
 
 | Var | Required | Purpose |
 |-----|----------|---------|
-| `FOLIO_MASTER_KEY` | yes | base64 32-byte key for AI-key encryption at rest |
+| `FOLIO_MASTER_KEY` | yes | 64 hex chars (32 bytes) for AI-key encryption at rest — `openssl rand -hex 32` |
 | `FOLIO_DB_PATH` | no (default `./folio.db`) | SQLite file path |
 | `FOLIO_PORT` | no (default `3000`) | HTTP port |
 | `FOLIO_BASE_URL` | yes (for magic links) | Public URL of the instance |
