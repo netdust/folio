@@ -84,18 +84,6 @@ function ProjectLayout() {
 
   const actions = (
     <>
-      {/* G4: the visible re-open affordance for the operator panel. Previously
-          reachable only via Cmd-K + the workspace dropdown; this is the always-on
-          toolbar toggle. */}
-      <Button
-        variant="ghost"
-        onClick={() => agentPanelBus.toggle()}
-        aria-label="Toggle operator panel"
-        title="Toggle operator panel"
-        className="whitespace-nowrap"
-      >
-        <Icon icon={PanelRight} size={14} />
-      </Button>
       <Button
         variant="primary"
         onClick={onCreate}
@@ -108,6 +96,18 @@ function ProjectLayout() {
           className={create.isPending ? 'animate-spin' : ''}
         />
         New work item
+      </Button>
+      {/* G4: the visible re-open affordance for the operator panel. Previously
+          reachable only via Cmd-K + the workspace dropdown; this is the always-on
+          toolbar toggle. Placed to the RIGHT of the primary action (Stefan, 2026-06-16). */}
+      <Button
+        variant="ghost"
+        onClick={() => agentPanelBus.toggle()}
+        aria-label="Toggle operator panel"
+        title="Toggle operator panel"
+        className="whitespace-nowrap"
+      >
+        <Icon icon={PanelRight} size={14} />
       </Button>
     </>
   );
