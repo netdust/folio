@@ -225,39 +225,10 @@ describe('CommentComposer', () => {
     act(() => resolveSubmit?.());
   });
 
-  // --- Tests deferred to Playwright (C11) ---
-  // The following behaviors require the Milkdown ProseMirror DOM, which jsdom
-  // cannot render with block-level structure. Exercised via Playwright in C11.
-
-  it.skip('TODO C11 Playwright: typing `@` opens MentionPicker positioned at caret', () => {
-    // Requires real ProseMirror input events + range.getBoundingClientRect.
-  });
-
-  it.skip('TODO C11 Playwright: typing `[[` opens WikiLinkPicker positioned at caret', () => {
-    // Requires real ProseMirror input events.
-  });
-
-  it.skip('TODO C11 Playwright: selecting an agent replaces `@drafter` with `@drafter `', () => {
-    // Requires real editor content + cursor positioning.
-  });
-
-  it.skip('TODO C11 Playwright: selecting a wiki target replaces `[[task` with `[[task-slug]] `', () => {
-    // Requires real editor content.
-  });
-
-  it.skip('TODO C11 Playwright: debounced draft save fires 300ms after editor change', () => {
-    // Requires real Milkdown markdownUpdated event to fire on input.
-  });
-
-  it.skip('TODO C11 Playwright: focus returns to editor on picker close (after onSelect)', () => {
-    // jsdom does not propagate focus between elements via setTimeout/element.focus()
-    // reliably enough to test. Verifying focus-return requires real browser focus
-    // handling — defer to C11 Playwright spec.
-  });
-
-  it.skip('TODO C11 Playwright: focus returns to editor on picker close (after onClose via Escape)', () => {
-    // Same reason — defer to Playwright.
-  });
+  // Editor-DOM behaviors (mention/wiki-link trigger, debounced draft save,
+  // focus-return on picker close) require the Milkdown ProseMirror DOM, which
+  // jsdom cannot render with block-level structure. They are manually QA'd and
+  // tracked in docs/deferred-e2e-backlog.md.
 
   // BUG-014 — the prior shape escaped only `<` in resetTo via innerHTML
   // assignment. Other HTML entities (`&amp;`, `&#62;`, `&lt;`, named, numeric)
