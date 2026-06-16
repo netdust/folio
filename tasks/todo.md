@@ -44,8 +44,8 @@ Order: A → E → D → B → C. Each cluster = a `── REVIEW GATE ──`. 
 - [x] ── REVIEW GATE D ── CLOSED. invariant-auditor: no bypass (union STRENGTHENS inv-19). generalist (verified, not just read): 0 Crit/0 Imp, 2 doc Sugg → both folded (ad4a899). No 1a → no escalation.
 
 ### Cluster B — Client pagination (STANDARD + browser)
-- [ ] B1 — FORK RESOLVED (ground-truth): wire existing server ?filter= + consume nextCursor + delete client post-filter — DISPATCHED. Labels-array semantics: implementer to verify compiler $in vs contains; priority MUST go server-side.
-- [ ] ── REVIEW GATE B ── (STANDARD + feature-acceptance browser pass: page-2-match boundary in REAL browser)
+- [x] B1 — wire server ?filter= (priority) + useInfiniteDocuments(nextCursor) + delete client post-filter — 6e586d9. LABELS = path 2b (kept client-side, backlog #9: compiler has no array-contains; priority server-side). web 946→959.
+- [~] ── REVIEW GATE B ── STANDARD generalist DISPATCHED. Feature-acceptance BROWSER pass (page-2-match + empty/last-page/load-more-error) CONSOLIDATED into the Stage-3 /shakeout drive (one dev-stack boot for B+C, not two cold-starts). jsdom proves the logic; shakeout proves the flow.
 
 ### Cluster C — Rail-fetch batching (STANDARD + browser)
 - [ ] C1 — batch O(P×T) views fan-out + useRailHandlers (FORK: batched endpoint vs expand-gate — report at gate)
