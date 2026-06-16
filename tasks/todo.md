@@ -45,11 +45,11 @@ Order: A → E → D → B → C. Each cluster = a `── REVIEW GATE ──`. 
 
 ### Cluster B — Client pagination (STANDARD + browser)
 - [x] B1 — wire server ?filter= (priority) + useInfiniteDocuments(nextCursor) + delete client post-filter — 6e586d9. LABELS = path 2b (kept client-side, backlog #9: compiler has no array-contains; priority server-side). web 946→959.
-- [~] ── REVIEW GATE B ── STANDARD generalist DISPATCHED. Feature-acceptance BROWSER pass (page-2-match + empty/last-page/load-more-error) CONSOLIDATED into the Stage-3 /shakeout drive (one dev-stack boot for B+C, not two cold-starts). jsdom proves the logic; shakeout proves the flow.
+- [x] ── REVIEW GATE B ── CLOSED. generalist: 0 Crit/0 Imp, 3 Sugg → #1 folded (b990222), #2/#3 skipped. Labels deferral verified unavoidable; page-2 fix real; no invariant bypass/attack surface. No 1a → no escalation. Browser-acceptance → consolidated Stage-3 /shakeout (B+C, one boot).
 
 ### Cluster C — Rail-fetch batching (STANDARD + browser)
-- [ ] C1 — batch O(P×T) views fan-out + useRailHandlers (FORK: batched endpoint vs expand-gate — report at gate)
-- [ ] ── REVIEW GATE C ── (STANDARD + feature-acceptance browser pass)
+- [ ] C1 — FORK RESOLVED (ground-truth): batched GET /p/:pslug/views?tables= (pScope access) + rewire P×T→P + useRailHandlers — DISPATCHED. Cross-project-table denial guard; rail-tree UNCHANGED; V3 collapse→expand must not regress.
+- [ ] ── REVIEW GATE C ── (STANDARD + invariant-auditor on new endpoint inv-4a access; browser-acceptance → consolidated Stage-3 /shakeout)
 
 ### Stage 3 — spec-close
 - [ ] /integration full branch
