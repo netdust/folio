@@ -329,6 +329,54 @@ test('table: sticky first column has a 1px right border in header AND data rows 
   expect(rowBorder, 'sticky data cell must have a 1px right border').toBe('1px');
 });
 
+test('rail: + new view on a table → sheet → Create → view appears in rail (M3 unverified edge)', async ({
+  page,
+}) => {
+  // Closes the one M3 acceptance edge the chrome-ws CLI drive could NOT reach:
+  // the click → fill → Create TRIGGER for an in-app saved view. The batched
+  // /p/<pslug>/views endpoint + the rail-render of an existing view were both
+  // proven in the M3 shakeout; only the create trigger went undriven (a
+  // chrome-ws CLI-fallback limitation). This drives it end-to-end through the
+  // REAL DOM — real hover, real click on the rail "+", a real form fill, a real
+  // Create click — and asserts the freshly-created view renders in the rail
+  // under its table without any API shortcut.
+  await signUpThroughUI(page, 'NewView User');
+  await page.getByRole('button', { name: 'Create workspace', exact: true }).click();
+  await createWorkspaceViaSheet(page, `NewView WS ${Date.now()}`);
+  await createProjectViaSheet(page, `NewView Proj ${Date.now()}`);
+
+  // Land on the default table (Work Items). Its rail node is `table:`-prefixed
+  // → default-open (rail-tree.tsx), so its views render as children.
+  await expect(page).toHaveURL(/\/w\/[^/]+\/p\/[^/]+\/work-items/);
+
+  // The rail's "Work Items" table row. The "+ new view" affordance
+  // (data-testid="rail-tree-plus", aria-label "New view") is hover-revealed
+  // (opacity-0 group-hover/row:opacity-100), so hover the row first to make it
+  // interactable, then click it through the real DOM.
+  const tableRow = page
+    .getByTestId('rail-tree-item')
+    .filter({ hasText: 'Work Items' })
+    .first()
+    .locator('xpath=ancestor::div[1]');
+  await tableRow.hover();
+  await tableRow.getByRole('button', { name: 'New view', exact: true }).click();
+
+  // The New-view sheet opens (role="dialog" titled "New view"). Fill the name
+  // and click Create.
+  const sheet = page.getByRole('dialog', { name: 'New view' });
+  await sheet.waitFor({ state: 'visible' });
+  await page.locator('#view-name').fill('E2E Created View');
+  await sheet.getByRole('button', { name: /Create view/i }).click();
+  await sheet.waitFor({ state: 'hidden' });
+
+  // The freshly-created view renders in the rail under the Work Items table.
+  // This is the previously-undriven half: a CLICK-CREATED view appearing in the
+  // rail-render, not an API-seeded one. Scope to the rail item label button.
+  await expect(
+    page.getByTestId('rail-tree-item').filter({ hasText: 'E2E Created View' }),
+  ).toBeVisible();
+});
+
 test('wiki: new page + title edit shows in tree without a reload (regression)', async ({
   page,
 }) => {

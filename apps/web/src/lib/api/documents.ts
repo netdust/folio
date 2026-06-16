@@ -338,14 +338,13 @@ export function parseFilters(search: Record<string, unknown>): FilterClauseUrl[]
 
 /**
  * Build the server `?filter=<JSON>` payload from the frontmatter clauses that
- * the filter compiler CAN express. Today that is `priority` only:
- *   priority → { priority: { $eq: <value> } }  (json_extract '$.priority' = ?)
+ * the filter compiler CAN express. Today that is `priority` and `labels`:
+ *   priority → { priority: { $eq: <value> } }      (json_extract '$.priority' = ?)
+ *   labels   → { labels: { $contains: [<value>…] } } (json_each '$.labels' membership, AND-ed)
  *
- * `labels` is deliberately EXCLUDED — the compiler's operator set
- * ($eq/$ne/$in/$nin/$gt/$gte/$lt/$lte/$exists) has no array-contains, and
- * json_extract('$.labels') returns the array as JSON text, so any server-side
- * operator would silently produce WRONG results. Labels stays a client-side
- * post-filter (see applyFrontmatterClauses) — tracked in the deferred backlog.
+ * `labels` moved server-side in backlog #9: the compiler now has a `$contains`
+ * array-membership operator (SQLite json_each EXISTS subquery, bound params), so
+ * labels filter correctly ACROSS PAGES instead of as a current-page post-filter.
  *
  * Returns undefined when no server-expressible frontmatter clause is present,
  * so callers can omit `?filter=` entirely.
@@ -359,6 +358,9 @@ export function clausesToFilterJson(
     // so the last priority clause wins. If multi-value priority filtering ever
     // ships, switch this to `{ priority: { $in: [...] } }`.
     if (c.kind === 'priority') filter.priority = { $eq: c.value };
+    // labels → $contains AND-membership (every selected label must be present),
+    // matching the prior client-side AND-of-contains semantics.
+    if (c.kind === 'labels') filter.labels = { $contains: c.values };
   }
   return Object.keys(filter).length > 0 ? filter : undefined;
 }
@@ -377,35 +379,21 @@ export function clausesToListParams(clauses: FilterClauseUrl[]): DocumentListPar
 
 /**
  * Client-side post-filter for the frontmatter clauses the SERVER cannot express.
- * Post-M3 this is `labels` ONLY: priority moved server-side (clausesToFilterJson)
- * so it filters correctly across pages. Keeping priority here would double-filter
- * and could drop valid server-returned rows, so it is intentionally NOT handled.
  *
- * DEFERRED: labels-array-contains is not expressible with the current filter
- * compiler operator set, so it remains a current-page post-filter and is
- * THEREFORE STILL WRONG ACROSS PAGES for labels specifically. Fixing it needs a
- * compiler array-contains operator (SQLite json_each EXISTS subquery). See
- * docs/deferred-e2e-backlog.md.
+ * Post-backlog-#9 this is a NO-OP: every frontmatter clause the FilterBar emits
+ * now filters server-side — priority via `$eq`, labels via `$contains`
+ * (clausesToFilterJson) — so they filter correctly ACROSS PAGES. Re-filtering
+ * either here would double-filter and could drop valid server-returned rows that
+ * land on a later page, so nothing is post-filtered. The function is retained as
+ * the seam for any future clause the compiler genuinely cannot express.
  */
 export function applyFrontmatterClauses(
   docs: DocumentSummary[],
-  clauses: FilterClauseUrl[],
+  _clauses: FilterClauseUrl[],
 ): DocumentSummary[] {
-  let out = docs;
-  for (const c of clauses) {
-    if (c.kind === 'labels') {
-      // Labels: AND semantics — every selected value must be present. Today's UI is
-      // single-select so AND ≡ OR; revisit when multi-label filtering ships.
-      out = out.filter((d) => {
-        const labels = d.frontmatter?.labels;
-        if (!Array.isArray(labels)) return false;
-        return c.values.every((v) => (labels as unknown[]).includes(v));
-      });
-    }
-    // 'priority' is now sent to the server (clausesToFilterJson); 'status' /
-    // 'assignee' / 'updated_since' use dedicated server params — nothing to do.
-  }
-  return out;
+  // 'priority' and 'labels' are sent to the server (clausesToFilterJson);
+  // 'status' / 'assignee' / 'updated_since' use dedicated server params.
+  return docs;
 }
 
 function str(v: unknown): string | undefined {

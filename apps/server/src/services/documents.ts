@@ -279,11 +279,15 @@ export async function listDocuments(
     if (staleClause) whereClauses.push(staleClause);
   }
 
+  let filterApplied = false;
   if (opts.filter !== undefined && opts.filter !== null) {
     try {
       const ast = filterCompile(opts.filter as Parameters<typeof filterCompile>[0]);
       const where = compileFilterToWhere(ast, documents);
-      if (where) whereClauses.push(where);
+      if (where) {
+        whereClauses.push(where);
+        filterApplied = true;
+      }
     } catch (e) {
       if (e instanceof FilterCompileError) {
         throw new HTTPError('INVALID_FILTER', e.message, 422);
@@ -379,12 +383,27 @@ export async function listDocuments(
     updatedAt: documents.updatedAt,
     lastTouchedAt: documents.lastTouchedAt,
   };
-  const rows = await db
+  const listQuery = db
     .select(opts.includeBody ? { ...baseProjection, body: documents.body } : baseProjection)
     .from(documents)
     .where(and(...whereClauses))
     .orderBy(dirFn(orderExpr), dirFn(documents.id))
     .limit(limit + 1);
+  let rows: Awaited<typeof listQuery>;
+  try {
+    rows = await listQuery;
+  } catch (e) {
+    // Defense-in-depth (HIGH-1 / LOW-1): the compiled filter WHERE runs HERE,
+    // downstream of the filter compile try/catch. The json_type guard already
+    // prevents the known scalar-string crash, but an unforeseen filter-derived
+    // SQL error must surface as a 422 INVALID_FILTER — never let a user-supplied
+    // filter 500 the whole list. Only re-map when a filter clause was applied;
+    // any other DB error is a genuine server fault and must propagate.
+    if (filterApplied) {
+      throw new HTTPError('INVALID_FILTER', 'filter could not be evaluated', 422);
+    }
+    throw e;
+  }
 
   const hasMore = rows.length > limit;
   const page = hasMore ? rows.slice(0, limit) : rows;
