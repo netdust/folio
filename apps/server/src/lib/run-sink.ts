@@ -30,8 +30,13 @@ import { incrementTokens, transitionRun } from '../services/agent-runs.ts';
 import { createComment, listComments } from '../services/comments.ts';
 import type { AgentRunFrontmatter, RunDoneReason } from './agent-run-schema.ts';
 import { runErrorReasonSchema } from './agent-run-schema.ts';
-import { type ConversationSink, makeConversationSink } from './chat-thread-sink.ts';
+import { type ConversationSink, type ToolStep, makeConversationSink } from './chat-thread-sink.ts';
 import type { RunContext } from './runner.ts';
+
+// Re-export so callers can name the param shape from `run-sink.ts` directly.
+// The canonical definition lives in `chat-thread-sink.ts` (the leaf module) to
+// avoid a runtime import cycle.
+export type { ToolStep };
 
 /**
  * The runner's per-turn output + lifecycle abstraction. Each method maps to one
@@ -50,7 +55,7 @@ export interface RunSink {
    * Emit one executed tool-call summary. doc → NO-OP (the document path never
    * emits a tool_step today); conv → one `tool_step` message row.
    */
-  toolStep(step: { tool: string; summary: string; status: 'ok' | 'error' }): Promise<void>;
+  toolStep(step: ToolStep): Promise<void>;
   /**
    * Track this round's token usage and return the post-increment running totals
    * (used directly by the budget-cap check — FIX #10). doc → persists via
@@ -108,7 +113,12 @@ export interface RunSink {
  * (`!ctx.sink`) branch in `runner.ts`.
  */
 export function makeDocumentRunSink(ctx: RunContext): RunSink {
-  return {
+  // Built into a named `self` (not returned anonymously) so intra-object calls —
+  // `cancel` → `self.post`/`self.fail` — bind to the object directly, NOT via
+  // `this`. A destructure (`const { cancel } = sink`) or method-reference pass
+  // would lose a `this` binding and throw on the security-load-bearing cancel
+  // path; `self` removes that hazard while preserving exact call shapes.
+  const self: RunSink = {
     // postAgentComment, no-sink branch (runner.ts:1885-1893).
     async post(body: string, kind: 'result' | 'comment'): Promise<void> {
       await createComment({
@@ -122,11 +132,7 @@ export function makeDocumentRunSink(ctx: RunContext): RunSink {
       });
     },
     // The document path never emits a tool_step today (the 3 emits are sink-only).
-    async toolStep(_step: {
-      tool: string;
-      summary: string;
-      status: 'ok' | 'error';
-    }): Promise<void> {
+    async toolStep(_step: ToolStep): Promise<void> {
       // NO-OP — see interface doc.
     },
     // The non-sink token branch (runner.ts:1270-1272). FIX #10: incrementTokens
@@ -176,12 +182,13 @@ export function makeDocumentRunSink(ctx: RunContext): RunSink {
     // handleCancel, no-sink branch (runner.ts:1950-1951): partial-work comment
     // PLUS the failed/cancelled transition.
     async cancel(): Promise<void> {
-      await this.post('Cancelled by user — partial work above.', 'comment');
-      await this.fail(runErrorReasonSchema.enum.cancelled, 'Cancelled by user via comment.');
+      await self.post('Cancelled by user — partial work above.', 'comment');
+      await self.fail(runErrorReasonSchema.enum.cancelled, 'Cancelled by user via comment.');
     },
     isConversation: false,
     conversationSink: undefined,
   };
+  return self;
 }
 
 /**
@@ -209,17 +216,17 @@ export function makeConversationRunSink(ctx: RunContext): RunSink {
   // call). Mirrors today's `conversationTokens` closure in runAgent.
   const acc = { in: 0, out: 0 };
 
-  return {
+  // Built into a named `self` (not returned anonymously) so `cancel` → `self.fail`
+  // binds to the object directly, NOT via `this` — a destructure or
+  // method-reference pass on the security-load-bearing cancel path can't lose a
+  // `this` binding and throw. Exact call shapes are unchanged.
+  const self: RunSink = {
     // postAgentComment, sink branch (runner.ts:1882).
     async post(body: string, _kind: 'result' | 'comment'): Promise<void> {
       await sink.text(body);
     },
     // The 3 sink-only tool_step emits (runner.ts:1412/1461/1489).
-    async toolStep(step: {
-      tool: string;
-      summary: string;
-      status: 'ok' | 'error';
-    }): Promise<void> {
+    async toolStep(step: ToolStep): Promise<void> {
       await sink.toolStep(step);
     },
     // The sink token branch (runner.ts:1271) → trackConversationTokens
@@ -253,7 +260,7 @@ export function makeConversationRunSink(ctx: RunContext): RunSink {
     // handleCancel, sink branch (runner.ts:1942-1948): fail() ONLY (one text
     // message) — posting a comment AND failing would double-post on the thread.
     async cancel(): Promise<void> {
-      await this.fail(
+      await self.fail(
         runErrorReasonSchema.enum.cancelled,
         'Cancelled by user — partial work above.',
       );
@@ -261,4 +268,5 @@ export function makeConversationRunSink(ctx: RunContext): RunSink {
     isConversation: true,
     conversationSink: sink,
   };
+  return self;
 }
