@@ -40,6 +40,12 @@ function setup({ currentSearch, currentColumns, tslug = 'work-items' }: SetupOpt
       />
     ),
   });
+  // Phase 6 (Task 1.4/1.5): view-create ALWAYS lands on the unified /t/$tslug
+  // route now — `resolveViewNav` is type-agnostic, so the legacy /work-items and
+  // /board target routes below are only reachable via redirect, never directly
+  // from a create. They stay registered so the router resolves cleanly, but no
+  // create assertion lands on them anymore (the kanban-ness lives on the saved
+  // view, resolved by ViewRouter, not the URL).
   const workItems = createRoute({
     getParentRoute: () => rootRoute,
     path: '/w/$wslug/p/$pslug/work-items',
@@ -50,7 +56,7 @@ function setup({ currentSearch, currentColumns, tslug = 'work-items' }: SetupOpt
     path: '/w/$wslug/p/$pslug/board',
     component: () => <div>navigated to board</div>,
   });
-  // C3T9: non-default tables route to the /t/$tslug family.
+  // Phase 6: the unified table route — every view-create now lands here.
   const tableGrid = createRoute({
     getParentRoute: () => rootRoute,
     path: '/w/$wslug/p/$pslug/t/$tslug',
@@ -154,7 +160,7 @@ describe('NewViewSheet', () => {
     await userEvent.type(await screen.findByLabelText(/Name/), 'X');
     await userEvent.click(screen.getByRole('button', { name: /Create view/i }));
 
-    await waitFor(() => expect(screen.getByText('navigated to work-items')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('navigated to table grid')).toBeInTheDocument());
 
     const body = findPostBody(fetchMock);
     expect(body).toEqual({ name: 'X', type: 'list', filters: {}, sort: [] });
@@ -176,7 +182,7 @@ describe('NewViewSheet', () => {
     await userEvent.type(await screen.findByLabelText(/Name/), 'My view');
     await userEvent.click(screen.getByRole('button', { name: /Create view/i }));
 
-    await waitFor(() => expect(screen.getByText('navigated to work-items')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('navigated to table grid')).toBeInTheDocument());
 
     const body = findPostBody(fetchMock);
     expect(body).toEqual({
@@ -209,7 +215,7 @@ describe('NewViewSheet', () => {
 
     await userEvent.type(await screen.findByLabelText(/Name/), 'Cols');
     await userEvent.click(screen.getByRole('button', { name: /Create view/i }));
-    await waitFor(() => expect(screen.getByText('navigated to work-items')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('navigated to table grid')).toBeInTheDocument());
 
     const body = findPostBody(fetchMock) as Record<string, unknown>;
     expect(body.visibleFields).toEqual(['title', 'status', 'assignee']);
@@ -227,13 +233,16 @@ describe('NewViewSheet', () => {
     );
     await userEvent.type(await screen.findByLabelText(/Name/), 'X');
     await userEvent.click(screen.getByRole('button', { name: /Create view/i }));
-    await waitFor(() => expect(screen.getByText('navigated to work-items')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('navigated to table grid')).toBeInTheDocument());
     const body = findPostBody(fetchMock) as Record<string, unknown>;
     expect(body).not.toHaveProperty('visibleFields');
     expect(body).not.toHaveProperty('columnOrder');
   });
 
-  it('navigates to /work-items with ?view=<id> on mutation success', async () => {
+  // Phase 6 (Task 1.4/1.5): a list view on the default table now lands on the
+  // unified /t/$tslug route (no more /work-items for view-create) — the legacy
+  // path is redirect-only.
+  it('navigates to the unified /t/$tslug route with ?view=<id> on mutation success', async () => {
     const fetchMock = mockFetch('v-new-7');
     vi.stubGlobal('fetch', fetchMock);
 
@@ -247,9 +256,9 @@ describe('NewViewSheet', () => {
     await userEvent.type(await screen.findByLabelText(/Name/), 'X');
     await userEvent.click(screen.getByRole('button', { name: /Create view/i }));
 
-    await waitFor(() => expect(screen.getByText('navigated to work-items')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('navigated to table grid')).toBeInTheDocument());
 
-    expect(router.state.location.pathname).toBe('/w/main/p/acme/work-items');
+    expect(router.state.location.pathname).toBe('/w/main/p/acme/t/work-items');
     expect(router.state.location.search).toMatchObject({ view: 'v-new-7' });
   });
 
@@ -266,7 +275,7 @@ describe('NewViewSheet', () => {
     );
     await userEvent.type(await screen.findByLabelText(/Name/), 'X');
     await userEvent.click(screen.getByRole('button', { name: /Create view/i }));
-    await waitFor(() => expect(screen.getByText('navigated to work-items')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('navigated to table grid')).toBeInTheDocument());
     const body = findPostBody(fetchMock) as Record<string, unknown>;
     expect(body.type).toBe('list');
     expect(body).not.toHaveProperty('groupBy');
@@ -289,7 +298,7 @@ describe('NewViewSheet', () => {
     const groupBy = await screen.findByLabelText(/Group by/i);
     await userEvent.selectOptions(groupBy, 'priority');
     await userEvent.click(screen.getByRole('button', { name: /Create view/i }));
-    await waitFor(() => expect(screen.getByText('navigated to board')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('navigated to table grid')).toBeInTheDocument());
     const body = findPostBody(fetchMock) as Record<string, unknown>;
     expect(body.type).toBe('kanban');
     expect(body.groupBy).toBe('priority');
@@ -309,7 +318,7 @@ describe('NewViewSheet', () => {
     await userEvent.type(await screen.findByLabelText(/Name/), 'Status board');
     await userEvent.click(await screen.findByRole('radio', { name: /Kanban/i }));
     await userEvent.click(screen.getByRole('button', { name: /Create view/i }));
-    await waitFor(() => expect(screen.getByText('navigated to board')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('navigated to table grid')).toBeInTheDocument());
     const body = findPostBody(fetchMock) as Record<string, unknown>;
     expect(body.type).toBe('kanban');
     expect(body.groupBy).toBeNull();
@@ -376,8 +385,11 @@ describe('NewViewSheet', () => {
     expect(within(groupBy).queryByRole('option', { name: 'Labels' })).toBeNull();
   });
 
-  // 4a: a kanban view navigates to /board, not /work-items.
-  it('navigates to /board after creating a kanban view', async () => {
+  // Phase 6 (Task 1.4/1.5): a kanban view no longer routes to /board. ALL
+  // view-creates land on the unified /t/$tslug route — the kanban-ness is now a
+  // property of the saved view, resolved by <ViewRouter>, not encoded in the
+  // URL. (This is the Option-B routing change; /board is redirect-only.)
+  it('navigates to the unified /t/$tslug route after creating a kanban view', async () => {
     const fetchMock = mockFetch('v-kb3', 'kanban');
     vi.stubGlobal('fetch', fetchMock);
     const { queryClient, router } = setup();
@@ -389,8 +401,8 @@ describe('NewViewSheet', () => {
     await userEvent.type(await screen.findByLabelText(/Name/), 'KB');
     await userEvent.click(await screen.findByRole('radio', { name: /Kanban/i }));
     await userEvent.click(screen.getByRole('button', { name: /Create view/i }));
-    await waitFor(() => expect(screen.getByText('navigated to board')).toBeInTheDocument());
-    expect(router.state.location.pathname).toBe('/w/main/p/acme/board');
+    await waitFor(() => expect(screen.getByText('navigated to table grid')).toBeInTheDocument());
+    expect(router.state.location.pathname).toBe('/w/main/p/acme/t/work-items');
     expect(router.state.location.search).toMatchObject({ view: 'v-kb3' });
   });
 
@@ -430,8 +442,12 @@ describe('NewViewSheet', () => {
     expect(router.state.location.search).toMatchObject({ view: 'v-bug-1' });
   });
 
-  // C3T9 (Tier A). A kanban view on a non-default table routes to /t/<tslug>/board.
-  it('routes a kanban view on a captured table to /t/<tslug>/board', async () => {
+  // Phase 6 (Tier A — create-target table, unified route). A kanban view on a
+  // non-default table still creates on the CAPTURED table (the wrong-table
+  // adversarial case stays meaningful), but now routes to the unified /t/<tslug>
+  // grid — the kanban-ness is on the saved view (resolved by ViewRouter), not
+  // the URL. (Option B; /t/<tslug>/board is redirect-only.)
+  it('routes a kanban view on a captured table to the unified /t/<tslug>', async () => {
     const fetchMock = mockFetch('v-bug-2', 'kanban', 'bugs');
     vi.stubGlobal('fetch', fetchMock);
     const { queryClient, router } = setup({ tslug: 'bugs' });
@@ -443,9 +459,38 @@ describe('NewViewSheet', () => {
     await userEvent.type(await screen.findByLabelText(/Name/), 'Bug board');
     await userEvent.click(await screen.findByRole('radio', { name: /Kanban/i }));
     await userEvent.click(screen.getByRole('button', { name: /Create view/i }));
-    await waitFor(() => expect(screen.getByText('navigated to table board')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('navigated to table grid')).toBeInTheDocument());
 
-    expect(router.state.location.pathname).toBe('/w/main/p/acme/t/bugs/board');
+    // Adversarial: it must NOT have created on the default table.
+    const workItemsPost = fetchMock.mock.calls.find(
+      ([url, init]) =>
+        String(url).endsWith('/api/v1/w/main/p/acme/t/work-items/views') && init?.method === 'POST',
+    );
+    expect(workItemsPost).toBeUndefined();
+
+    expect(router.state.location.pathname).toBe('/w/main/p/acme/t/bugs');
     expect(router.state.location.search).toMatchObject({ view: 'v-bug-2' });
+  });
+
+  // Spec-coverage guard (Tier B): the 5-type enumeration is a spec contract.
+  // `table` is intentionally absent (seed-created default, not user-picked). A
+  // regression that drops calendar/timeline/gallery from the picker would
+  // silently re-narrow the sheet to the old List/Kanban-only choice.
+  it('offers all five view types', async () => {
+    const fetchMock = mockFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    const { queryClient, router } = setup();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    // The sheet mounts async (Radix portal) — wait for it like the other tests.
+    await screen.findByLabelText(/Name/);
+    for (const t of ['List', 'Kanban', 'Calendar', 'Timeline', 'Gallery']) {
+      expect(screen.getByLabelText(t)).toBeInTheDocument();
+    }
+    // `table` is NOT user-creatable here.
+    expect(screen.queryByLabelText('Table')).toBeNull();
   });
 });

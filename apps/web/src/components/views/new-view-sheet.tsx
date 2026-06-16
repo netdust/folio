@@ -31,6 +31,21 @@ export interface NewViewSheetProps {
 
 const FILTER_KEYS = ['status', 'priority', 'assignee', 'labels', 'updated_since'] as const;
 
+// Phase 6: the user-creatable view types. `table` is intentionally absent — it's
+// the seed-created spreadsheet default for a table, not something a user picks
+// here. The view's TYPE is decided by <ViewRouter> from the saved view; this
+// sheet only records which one to create. calendar/timeline/gallery defer their
+// date-field / cover-field selects to the view's own toolbar (clusters 4/5/6) —
+// the view defaults `settings` to `{}` and the field is picked there later.
+const VIEW_TYPES = [
+  { value: 'list', label: 'List' },
+  { value: 'kanban', label: 'Kanban' },
+  { value: 'calendar', label: 'Calendar' },
+  { value: 'timeline', label: 'Timeline' },
+  { value: 'gallery', label: 'Gallery' },
+] as const;
+type NewViewType = (typeof VIEW_TYPES)[number]['value'];
+
 export function NewViewSheet({
   open,
   onOpenChange,
@@ -47,7 +62,7 @@ export function NewViewSheet({
   // created on — not a hardcoded work-items literal.
   const { data: fields } = useFields(wslug, pslug, tslug);
   const [name, setName] = useState('');
-  const [type, setType] = useState<'list' | 'kanban'>('list');
+  const [type, setType] = useState<NewViewType>('list');
   // Group-by for kanban. 'status' is the default; selecting it stores null on
   // the view per the "defaults to status" convention (see board-controls).
   const [groupBy, setGroupBy] = useState('status');
@@ -143,27 +158,19 @@ export function NewViewSheet({
 
             <fieldset>
               <legend className="block text-sm font-medium text-fg">Type</legend>
-              <div className="mt-1 flex gap-4">
-                <label className="flex items-center gap-2 text-sm text-fg-1">
-                  <input
-                    type="radio"
-                    name="view-type"
-                    value="list"
-                    checked={type === 'list'}
-                    onChange={() => setType('list')}
-                  />
-                  List
-                </label>
-                <label className="flex items-center gap-2 text-sm text-fg-1">
-                  <input
-                    type="radio"
-                    name="view-type"
-                    value="kanban"
-                    checked={type === 'kanban'}
-                    onChange={() => setType('kanban')}
-                  />
-                  Kanban
-                </label>
+              <div className="mt-1 flex flex-wrap gap-4">
+                {VIEW_TYPES.map((t) => (
+                  <label key={t.value} className="flex items-center gap-2 text-sm text-fg-1">
+                    <input
+                      type="radio"
+                      name="view-type"
+                      value={t.value}
+                      checked={type === t.value}
+                      onChange={() => setType(t.value)}
+                    />
+                    {t.label}
+                  </label>
+                ))}
               </div>
             </fieldset>
 
