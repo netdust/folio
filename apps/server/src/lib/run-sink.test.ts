@@ -33,7 +33,7 @@ import { createConversation } from '../services/conversations.ts';
 import { makeTestApp } from '../test/harness.ts';
 import type { AgentRunFrontmatter } from './agent-run-schema.ts';
 import { makeConversationRunSink, makeDocumentRunSink } from './run-sink.ts';
-import type { RunContext } from './runner.ts';
+import type { DocumentRunContext, RunContext } from './runner.ts';
 
 type TestDB = Awaited<ReturnType<typeof makeTestApp>>['db'];
 
@@ -133,8 +133,9 @@ function docCtx(args: {
   run: Document;
   user: User;
   fm: AgentRunFrontmatter;
-}): RunContext {
+}): DocumentRunContext {
   return {
+    kind: 'document',
     run: args.run,
     fm: args.fm,
     parent: args.parent,
@@ -143,7 +144,7 @@ function docCtx(args: {
     actor: 'agent:helper',
     transitionActor: args.user.id,
     authorContext: { type: 'user', userId: args.user.id },
-  } as unknown as RunContext;
+  } as unknown as DocumentRunContext;
 }
 
 /**
@@ -153,6 +154,7 @@ function docCtx(args: {
  */
 function convCtx(args: { run: Document; conversationId: string }): RunContext {
   return {
+    kind: 'conversation',
     run: args.run,
     conversationId: args.conversationId,
   } as unknown as RunContext;

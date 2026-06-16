@@ -31,7 +31,7 @@ import { createComment, listComments } from '../services/comments.ts';
 import type { AgentRunFrontmatter, RunDoneReason } from './agent-run-schema.ts';
 import { runErrorReasonSchema } from './agent-run-schema.ts';
 import { type ConversationSink, type ToolStep, makeConversationSink } from './chat-thread-sink.ts';
-import type { RunContext } from './runner.ts';
+import type { DocumentRunContext, RunContext } from './runner.ts';
 
 // Re-export so callers can name the param shape from `run-sink.ts` directly.
 // The canonical definition lives in `chat-thread-sink.ts` (the leaf module) to
@@ -111,8 +111,15 @@ export interface RunSink {
 /**
  * Document-thread implementation: each method reproduces today's NON-sink
  * (`!ctx.sink`) branch in `runner.ts`.
+ *
+ * The param is narrowed to `DocumentRunContext` (the `kind: 'document'` variant)
+ * — that is what makes `ctx.workspace`/`ctx.project` below type-check, and it
+ * documents the invariant in the type: this factory is ONLY ever called from the
+ * document loader (M3 audit 3.3). The conversation loader calls
+ * `makeConversationRunSink`, which reads neither field. This is a type-only
+ * narrowing — no runtime change.
  */
-export function makeDocumentRunSink(ctx: RunContext): RunSink {
+export function makeDocumentRunSink(ctx: DocumentRunContext): RunSink {
   // Built into a named `self` (not returned anonymously) so intra-object calls —
   // `cancel` → `self.post`/`self.fail` — bind to the object directly, NOT via
   // `this`. A destructure (`const { cancel } = sink`) or method-reference pass
