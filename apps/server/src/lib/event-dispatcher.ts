@@ -148,6 +148,18 @@ export async function runDispatcherOnce(db: DB, reactors: readonly Reactor[]): P
       orderBy: asc(events.seq),
       limit: env.FOLIO_DISPATCHER_BATCH,
     });
+    // Batch-advance (audit 3.8): track the cursor in memory across the whole
+    // drain and persist it ONCE, instead of one UPDATE per event (write
+    // amplification on a ~40-event mount tick). The persisted value is
+    // IDENTICAL to the per-event version — the cursor still advances only on a
+    // successful react() (or a seen-and-skipped kind), and a throwing react()
+    // still leaves the cursor at the last-successfully-reacted seq. The single
+    // write happens AFTER the loop drains normally, OR right BEFORE the halt
+    // `break` so a poison event still durably records progress up to it. We
+    // only write when the cursor actually moved (cursor !== startCursor) to
+    // avoid a pointless UPDATE on an empty / fully-non-matching drain.
+    const startCursor = cursor;
+    let haltedBreak = false;
     for (const row of rows) {
       const ev: BusEvent & { seq: number } = {
         id: row.id,
@@ -161,14 +173,12 @@ export async function runDispatcherOnce(db: DB, reactors: readonly Reactor[]): P
         seq: row.seq,
       };
       if (!r.kinds.includes(row.kind)) {
-        cursor = row.seq;
-        await persistCursor(db, r.id, cursor); // seen-and-skipped; advance past it
+        cursor = row.seq; // seen-and-skipped; advance past it (in memory)
         continue;
       }
       try {
         await r.react(ev);
-        cursor = row.seq;
-        await persistCursor(db, r.id, cursor); // cursor-after: advance only on success
+        cursor = row.seq; // cursor-after: advance only on success (in memory)
         if (halted.has(r.id)) {
           halted.delete(r.id);
           emitReactorHealth('reactor.recovered', { reactor_id: r.id });
@@ -189,9 +199,19 @@ export async function runDispatcherOnce(db: DB, reactors: readonly Reactor[]): P
             error_summary: err instanceof Error ? err.name : 'unknown',
           });
         }
+        // Persist progress up to the last successfully-reacted/skipped seq
+        // BEFORE halting, so a halt still durably records partial progress —
+        // the cursor stays at the last good seq (NEVER ahead of the poison
+        // event), and the poison event retries next tick (at-least-once).
+        if (cursor !== startCursor) await persistCursor(db, r.id, cursor);
+        haltedBreak = true;
         break; // halt this reactor's drain this tick; cursor unchanged → retry next tick
       }
     }
+    // Drained normally (or kind-skipped the whole batch): one durable write for
+    // the final cursor. Skipped when the loop halted via `break` (that path
+    // already persisted) or when nothing advanced — never double-writes.
+    if (!haltedBreak && cursor !== startCursor) await persistCursor(db, r.id, cursor);
   }
 }
 

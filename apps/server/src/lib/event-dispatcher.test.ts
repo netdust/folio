@@ -119,6 +119,55 @@ test('advances cursor only on success (at-least-once); a throwing react halts an
   expect(await cursorSeq(db, 'test-r')).toBe(1);
 });
 
+test('batches cursor persistence to ONE write per drain (not one per event)', async () => {
+  // Audit 3.8 (E7): a workspace-mount drain of N events used to fire N
+  // persistCursor UPDATEs per reactor per tick (write amplification). The
+  // batch-advance design collapses that to ONE durable write per drain while
+  // leaving the persisted cursor value IDENTICAL to the per-event version.
+  // RED against the old per-event code: this asserts 1 write, old code does N.
+  const { db, seed } = await makeTestApp();
+  await db
+    .insert(reactorCursors)
+    .values({ reactorId: 'batch-r', lastSeq: 0, updatedAt: new Date() });
+  await seedEvent(db, seed, 1, 'document.created');
+  await seedEvent(db, seed, 2, 'document.created');
+  await seedEvent(db, seed, 3, 'document.created');
+  await seedEvent(db, seed, 4, 'document.created');
+
+  // Count UPDATEs that target reactor_cursors (the persistCursor write), by
+  // wrapping db.update — delegating to the real implementation so the cursor
+  // still actually advances. The lazy-seed INSERT path is untouched (we
+  // pre-seeded the cursor), so every counted call is a persist.
+  let cursorWrites = 0;
+  const realUpdate = db.update.bind(db);
+  (db as unknown as { update: typeof db.update }).update = ((table: unknown) => {
+    if (table === reactorCursors) cursorWrites++;
+    return realUpdate(table as Parameters<typeof db.update>[0]);
+  }) as typeof db.update;
+
+  const seen: number[] = [];
+  const r: Reactor = {
+    id: 'batch-r',
+    kinds: ['document.created'],
+    react: async (e) => {
+      seen.push(e.seq);
+    },
+  };
+
+  // finally-restore: db is shared across tests via makeTestApp(), so a throw
+  // inside the drain must never leave the counting wrapper on the shared handle
+  // (it would corrupt sibling tests' write counts). Mirrors E2's unsub-in-finally.
+  try {
+    await runDispatcherOnce(db, [r]);
+  } finally {
+    (db as unknown as { update: typeof db.update }).update = realUpdate; // restore
+  }
+
+  expect(seen).toEqual([1, 2, 3, 4]); // all four delivered
+  expect(cursorWrites).toBe(1); // ONE persist for the whole drain, not 4
+  expect(await cursorSeq(db, 'batch-r')).toBe(4); // final cursor identical to per-event
+});
+
 test('kind-filter advances the cursor past non-matching events (no infinite lag)', async () => {
   const { db, seed } = await makeTestApp();
   await db

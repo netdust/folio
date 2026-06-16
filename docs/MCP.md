@@ -31,7 +31,7 @@ curl -s -X POST -H "Authorization: Bearer $TOK" -H "Content-Type: application/js
 | Method | Behavior |
 |---|---|
 | `initialize` | Returns `serverInfo` (`name: "folio"`, `version: "0.1.0"`) and `protocolVersion: "2024-11-05"`. |
-| `tools/list` | Returns the 20 v1 tools (12 document + 4 comment + 4 agent-lifecycle) as `{ name, description, inputSchema }`. |
+| `tools/list` | Returns the full registry — **33 tools** (6 introspection + 8 document + 4 comment + 4 agent-lifecycle + 5 run + 2 ui + 2 skills/config + 2 API-bridge) as `{ name, description, inputSchema }`. Unfiltered by scope (mitigation 62); scope is enforced at call time. |
 | `tools/call` | Invokes a tool with `{ name, arguments }`. Returns `{ content: [{ type: 'text', text: <json or markdown> }] }`. |
 | `ping` | Returns `{}`. |
 
@@ -76,25 +76,41 @@ Each tool requires one of the resource scopes the bearer token must carry. The m
 
 When you create an **agent** document via the REST API or MCP, the auto-minted token derives its scopes from the agent's `tools[]` whitelist via `toolsToScopes()` in `apps/server/src/lib/agent-schema.ts`. Manually-issued tokens declare their scopes directly. Granting `agents:write` lets the holder spawn or mutate other agents in the workspace — treat it with the same caution as `documents:delete`.
 
-## The v1 tools
+## The tools
 
-All 20 tools live in `apps/server/src/routes/mcp.ts` (12 document tools + 4 comment tools + 4 agent-lifecycle tools). The handler bodies delegate to the service layer (`apps/server/src/services/*`) — REST routes and MCP share the same service functions, so behavior is identical between the two surfaces.
+All 33 tools are registered in `apps/server/src/lib/agent-tools-registry.ts` (the API-bridge pair is registered from `apps/server/src/lib/folio-api-tool.ts` via `registerFolioApiTools()`). The handler bodies delegate to the service layer (`apps/server/src/services/*`) — REST routes and MCP share the same service functions, so behavior is identical between the two surfaces. `tools/list` advertises the **full registry, unfiltered by scope** (mitigation 62); scope is enforced at call time by `executeTool`.
 
-Source-of-truth list (`V1_MCP_TOOLS` in `apps/server/src/lib/agent-schema.ts`):
+The 33 tools, by group:
 
 ```
-list_workspaces           get_document              list_statuses
-list_projects             get_document_markdown     list_fields
-list_documents            create_document           list_views
-                          update_document           run_view
-                          delete_document
+# Introspection (6)
+list_workspaces   list_projects   describe_workspace
+list_statuses     list_fields     list_views
 
-# Comments (Phase 2.6)
-create_comment   list_comments   update_comment   delete_comment
+# Document (8)
+list_documents    find_documents          create_document   delete_document
+get_document      get_document_markdown   update_document   run_view
 
-# Agent lifecycle (Phase 2.6 sub-phase D)
-create_agent     update_agent    delete_agent     get_agent_self
+# Comments (Phase 2.6) (4)
+create_comment    list_comments   update_comment   delete_comment
+
+# Agent lifecycle (Phase 2.6 sub-phase D) (4)
+create_agent      update_agent    delete_agent     get_agent_self
+
+# Run management (Phase 3 sub-phase D) (5)
+list_runs   get_run   run_agent   cancel_run   retry_run
+
+# UI / chat-only (operator cockpit) (2)
+show_link_panel   ask_choice
+
+# Skills / config (2)
+get_skill   set_skill_trust
+
+# API bridge (operator REST bridge) (2)
+folio_api_get   folio_api
 ```
+
+> The agent **frontmatter allow-list** (`V1_MCP_TOOLS` in `packages/shared/src/mcp-tools.ts`, re-exported via `apps/server/src/lib/agent-schema.ts`) is a **22-tool subset** of the 33-tool registry. The 11 registry tools NOT assignable to an agent's `tools[]` whitelist are: the 5 run tools (`list_runs`, `get_run`, `run_agent`, `cancel_run`, `retry_run`), the 4 comment tools (`create_comment`, `list_comments`, `update_comment`, `delete_comment`), and the 2 introspection helpers (`find_documents`, `describe_workspace`). They are reachable on the wire (`tools/list` + `tools/call`) but are not granted via the agent schema. Always read the registry for what `tools/list` returns; read `V1_MCP_TOOLS` for what an agent can be granted.
 
 `search_documents` is deferred to v1.1 (requires sqlite-fts5).
 

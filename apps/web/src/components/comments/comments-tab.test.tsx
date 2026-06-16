@@ -7,6 +7,14 @@ import type { EventStreamFilters, StreamedEvent } from '../../lib/api/event-stre
 import type { Member } from '../../lib/api/members.ts';
 import { CommentsTab } from './comments-tab.tsx';
 
+// NOTE (M3 / E6): CommentsTab renders a Milkdown editor whose `@milkdown/ctx`
+// Timing primitive schedules an internal setTimeout that calls the bare global
+// `removeEventListener` after this file's jsdom env is torn down — flipping the
+// process exit code with ZERO test failures (~40% of full-suite runs). The
+// narrowly-scoped guard that swallows ONLY that exact teardown ReferenceError
+// lives in `src/test-setup.ts` (worker-lifetime scope) because the late timer
+// fires beyond this file's afterAll window. See that file for the full rationale.
+
 // ---------------------------------------------------------------------------
 // Module-level mock for useEventStream.
 // vi.mock is hoisted to the top of the file regardless of where it appears in

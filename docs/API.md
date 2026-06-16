@@ -80,17 +80,36 @@ Source: `apps/server/src/routes/tokens.ts`. Plaintext returned exactly once on c
 | POST | `/.../tokens/:workspaceId` | session, member | `{ name, scopes: string[] }` | `{ id, name, token, scopes }` (201, **token is the plaintext**) |
 | DELETE | `/.../tokens/:workspaceId/:tokenId` | session, member | — | `{ ok: true }` |
 
-## Settings — AI keys (`/api/v1/w/:wslug/settings/:workspaceId/ai-keys`)
+## Instance AI keys (`/api/v1/instance/ai-keys`)
 
-Source: `apps/server/src/routes/settings.ts`. BYOK store — keys are AES-256-GCM-encrypted at rest (via @noble/ciphers) with the server master secret (`FOLIO_MASTER_KEY`).
+Source: `apps/server/src/routes/instance-ai-keys.ts`. BYOK store — keys are AES-256-GCM-encrypted at rest (via `@noble/ciphers`) with the server master secret (`FOLIO_MASTER_KEY`).
+
+**AI keys are INSTANCE-level, not per-workspace.** One store per instance; a key is identified by `(provider, label)` and the runner resolves an agent's key by `(provider, ai_key_label)` with no workspace tie. This route is mounted on `/api/v1` (NOT under `/w/:wslug`), so:
+
+- **Session-only.** `requireSessionUser` is the operative gate; a Bearer/PAT/agent token can never reach the secret store (`attachToken` does not run on this mount).
+- **Instance owner/admin only.** Every handler calls `requireInstanceAdmin` — a session user who is not an instance owner/admin is rejected.
+- The encrypted secret (`encryptedKey`) is NEVER returned on any response.
 
 | Method | Path | Auth | Body | Returns |
 |---|---|---|---|---|
-| GET | `/.../ai-keys` | session, member | — | `{ keys: [...] }` (no plaintext) |
-| POST | `/.../ai-keys` | session, member | `{ provider, apiKey, label?, baseUrl? }` | `{ ok: true }` |
-| DELETE | `/.../ai-keys/:keyId` | session, member | — | `{ ok: true }` |
+| GET | `/instance/ai-keys` | session, instance owner/admin | — | `{ keys: [...], operator_model }` — each key is metadata only (`id`, `provider`, `label`, `baseUrl`); `encryptedKey` stripped. `operator_model` is the current operator provider+model selection (or null). |
+| POST | `/instance/ai-keys` | session, instance owner/admin | `{ provider, apiKey?, label?, baseUrl? }` | `{ id, provider, label, paid_residual_live }` (201) |
+| PUT | `/instance/ai-keys/operator-model` | session, instance owner/admin | `{ provider, aiKeyLabel, model }` (`operatorModelSettingSchema`) | `{ ok: true, operator_model }` |
+| DELETE | `/instance/ai-keys/:keyId` | session, instance owner/admin | — | `{ ok: true }` (404 `NOT_FOUND` if the key id does not exist) |
 
 `provider` is one of `anthropic | openai | openrouter | ollama`.
+
+**POST body rules (enforced by Zod + handler):**
+
+- `label` defaults to `"default"`.
+- `apiKey` is **required and non-blank** for every paid provider (`anthropic`, `openai`, `openrouter`); `ollama` is keyless. Violation → `422`.
+- `baseUrl` is **only** allowed for `ollama`. Supplying it for any other provider → `422` (prevents pinning an attacker-controlled host the runner would send the key to).
+- `ollama` **requires** an explicit `baseUrl` → `422` if omitted.
+- Any `baseUrl` is run through the SSRF allow-list (`validatePublicUrl`). Loopback is rejected by default; it is permitted ONLY for `ollama` AND ONLY when the server sets `FOLIO_ALLOW_LOOPBACK_AI=true`. A loopback rejection → `422` (with a hint about the env opt-in).
+- On a `(provider, label)` conflict the row is **updated in place** (the `id` in the response is the existing row's id, not a new one).
+- `paid_residual_live` is `true` when a paid-provider key was stored — a denial-of-wallet flag (per-key usage caps are not built; any agent in any workspace can draw on a shared instance key).
+
+**PUT `/operator-model`** selects which already-configured `(provider, aiKeyLabel)` the operator runs on. The selection must point at an existing AI key — if no key matches, the request is rejected `422 INVALID_BODY`.
 
 ## Runner backend: claude-code (Phase 3.x)
 
@@ -203,11 +222,14 @@ Source: `apps/server/src/routes/views.ts`
 | Method | Path | Scope | Returns |
 |---|---|---|---|
 | GET | `/views` | session OR token | `[{ id, name, type, filters, sort, ... }]` |
+| GET | `/views?tables=slugA,slugB` | session OR token | `{ [tableId]: [{ id, name, type, ... }] }` (batched, grouped by table) |
 | POST | `/views` | `views:write` | `{ view: ... }` |
 | PATCH | `/views/:id` | `views:write` | `{ view: ... }` |
 | DELETE | `/views/:id` | `views:write` | 204 |
 
 `type` is `list | kanban`. `filters` is a Mongo-ish JSON AST (compiled by `packages/shared/src/filter-compile.ts`).
+
+**Batched form (`?tables=`).** The project-scoped `GET /views?tables=slugA,slugB` returns views for multiple tables in one request, grouped by `tableId` (`{ [tableId]: View[] }`) — the UI rail uses this to avoid one request per (project, table) pair. The requested table slugs are **intersected with the project's own tables**: a slug that doesn't belong to this project is silently dropped (its views never appear), so the batched read can never expose another project's views. An empty/absent `tables` value returns `{}`. Without the `tables` param the endpoint keeps its legacy per-table array shape (above).
 
 ## Documents — project-scoped (`/p/:pslug/documents`, `/p/:pslug/t/:tslug/documents`)
 
@@ -342,6 +364,85 @@ workspace.created workspace.updated
 activity.logged
 agent.created     agent.deleted     agent.task.assigned
 ```
+
+## Agent runs (`/api/v1/w/:wslug/runs`, `/api/v1/w/:wslug/p/:pslug/runs`)
+
+Source: `apps/server/src/routes/runs.ts` + `apps/server/src/services/agent-runs.ts`. An agent run is a planning row; the runner poller (not these routes) executes it. `runAgent` is never called from here — even `retry` only creates a fresh `planning` row. Every response is redacted (`redactRunForApi` strips `system_prompt`).
+
+The verbs split across two scope mounts:
+
+| Method | Path | Scope | Body | Returns |
+|---|---|---|---|---|
+| GET | `/p/:pslug/runs` | `documents:read` | — | `[run, ...]` — **project-scoped** recent-runs list. |
+| GET | `/w/:wslug/runs` | `documents:read` | — | `[run, ...]` — **workspace-scoped** recent-runs list (cross-project history for the Agent Activity feed). |
+| GET | `/w/:wslug/runs/:runId` | `documents:read` | — | single run, re-scoped by id (404 if not in caller's allow-list). |
+| POST | `/w/:wslug/runs` | `agents:write` | `{ agent_slug, parent_slug, input? }` | `{ run_id, status: "planning" }` (201) |
+| POST | `/w/:wslug/runs/:runId/cancel` | `agents:write` | — | `{ run_id, status }` (transitions `planning`/`awaiting_approval` → `failed`; posts a `kind=rejection` cancel comment for a `running` run; terminal runs are a no-op). |
+| POST | `/w/:wslug/runs/:runId/retry` | `agents:write` | — | `{ run_id, status: "planning" }` (201) — spawns a fresh planning run from the original's parent + agent. |
+| GET | `/w/:wslug/provider-health` | `documents:read` | — | `{ <provider>: { status, consecutiveFailures }, ... }` (mounted at `/provider-health`, not under `/runs`). |
+
+### List query params (both GET list routes)
+
+| Param | Example | Meaning |
+|---|---|---|
+| `status` | `?status=running` | Filter by `RunStatus`. An unknown value → `422 INVALID_QUERY` (validated against the enum, no silent no-match). |
+| `agent` | `?agent=triage-bot` | Filter by agent slug. |
+| `since` | ISO8601 | Runs created since the timestamp. |
+| `limit` | `?limit=50` | **Capped (M0).** Clamped to `1..100`; defaults to `50` when omitted or unparseable. The cap is applied at the SQL layer — the list is never unbounded (`agent_run` docs accumulate forever). |
+
+### Allow-list narrowing
+
+Both list routes and the id-addressed loads narrow by the caller's effective project allow-list (mitigation 58): an agent-bound token by `agent ∩ token.project_ids`; a project-only human by their direct grants. Owner / `workspace_access` holders / wildcard (`['*']`) agents are unrestricted. An out-of-allow-list run id returns `404` (not `403` — existence is not disclosed). A POST/retry by an agent-bound token is gated by `FOLIO_AGENT_CHAINS_ENABLED` (agent-originated chain hop → `403 AGENT_CHAINS_DISABLED` when off).
+
+### Errors specific to this surface
+
+| Code | Status | When |
+|---|---|---|
+| `INVALID_QUERY` | 422 | Unknown `?status=` value. |
+| `INVALID_BODY` | 422 | POST without `agent_slug` + `parent_slug`, or unparseable JSON. |
+| `PARENT_NOT_FOUND` | 404 | `parent_slug` does not resolve in the workspace (or has no project for an `input` comment). |
+| `AGENT_NOT_FOUND` | 404 | `agent_slug` does not resolve instance-wide. |
+| `RUN_ALREADY_ACTIVE` | 409 | A run is already active for that parent + agent (idempotency, m56). |
+| `AGENT_CHAINS_DISABLED` | 403 | Agent-bound bearer create/retry while `FOLIO_AGENT_CHAINS_ENABLED` is off. |
+
+## Conversations — operator cockpit (`/api/v1/conversations`)
+
+Source: `apps/server/src/routes/conversations.ts` + `apps/server/src/services/conversations.ts`. The operator cockpit chat. Mounted on `/api/v1` (NOT under `/w/:wslug`) — conversations are instance-level, not workspace-scoped.
+
+- **Session-only** (invariant 4): a Bearer/PAT does NOT drive the cockpit. `attachToken` does not run on this mount; `requireSessionUser` is the operative gate.
+- **Owner-scoped** (M11): every read/write filters `conversations.created_by === session user`. A foreign user gets `404 CONVERSATION_NOT_FOUND` (not 403 — existence is not disclosed).
+- **Single-active-turn CAS** (M14): a turn starts only by atomically acquiring the conversation's run slot. A double-send loser is rejected `409 OPERATOR_BUSY` — never queued, never run.
+
+| Method | Path | Auth | Body | Returns |
+|---|---|---|---|---|
+| POST | `/conversations` | session | `{ title? }` (≤200 chars; default `"Untitled"`) | `{ id }` (201) |
+| GET | `/conversations/recent` | session | — | `{ id }` — caller's most-recent conversation id, or `null` (cockpit auto-resume). |
+| GET | `/conversations/:id` | session, owner | — | `{ id, title, activeRunId, messages: [...] }` — full thread (seeds the cockpit; the SSE is live-only). |
+| GET | `/conversations/:id.md` | session, owner | — | `text/markdown` serialized thread. |
+| GET | `/conversations/:id/stream` | session, owner | — | SSE live-tail (`event: message`, one frame per appended row). Owner-gated before subscription; rides `conversationBus` (no `events` rows, no replay / `Last-Event-Id`). |
+| POST | `/conversations/:id/messages` | session, owner | `{ text }` (1–10000 chars) | `{ runId }` — appends the user message, acquires the M14 slot, kicks the runner. `409 OPERATOR_BUSY` if a turn is already active. |
+| POST | `/conversations/:id/messages/:messageId/click` | session, owner | `{ optionId }` | a `choice_card` button click — see below. |
+
+### Choice-card click (`POST /:id/messages/:messageId/click`)
+
+The click sends the chosen option **id** (never label text — the label is operator-authored and must not re-enter as trusted input, M8). The id is validated against the card's recorded `options[].id` set, then one of three branches runs:
+
+- **Confirmation card, "yes"** (`optionId` equals the card's `pending_op` id) → `confirmPendingOp` (single-use, caller-bound, M7), then start a turn so the operator re-issues the now-confirmed action → `{ confirmed: true, runId }`.
+- **Confirmation card, "no"/`cancel`** → reject the backing pending op; no turn → `{ confirmed: false }`.
+- **Ordinary card** → start a new turn reflecting the choice (re-fires the caller floor + M14 CAS) → `{ runId }`. A `cancel` on an ordinary card just locks the card → `{ confirmed: false }`.
+
+### Errors specific to this surface
+
+| Code | Status | When |
+|---|---|---|
+| `CONVERSATION_NOT_FOUND` | 404 | The id does not resolve to a conversation the session user owns. |
+| `OPERATOR_BUSY` | 409 | A turn is already active on the conversation (M14 CAS loser). |
+| `COMPONENT_NOT_FOUND` | 404 | `messageId` is not a component message on the conversation. |
+| `NOT_A_CHOICE_CARD` | 400 | The targeted message is not a `choice_card`. |
+| `ALREADY_CHOSEN` | 409 | The card has already been answered (single-use). |
+| `OPTION_NOT_IN_SET` | 400 | `optionId` is not in the card's presented option set. |
+| `PENDING_OP_EXPIRED` | 410 | A confirmation can no longer be applied (expired). |
+| `PENDING_OP_NOT_CONFIRMABLE` | 409 | A confirmation can no longer be applied (replay / foreign-user). |
 
 ## Health (`/healthz`)
 

@@ -160,7 +160,16 @@ export function __setCcSpawnForTest(fn: SpawnFn | undefined): void {
 // Loaded context
 // ---------------------------------------------------------------------------
 
-export interface RunContext {
+/**
+ * The fields shared by BOTH run kinds. `workspace`/`project` are NOT here — they
+ * exist ONLY on the `document` variant of the discriminated union below, so the
+ * type system proves the conversation path never reads them (M3 audit 3.3 — this
+ * replaces the old `{…} as unknown as Workspace` fabrications on the conversation
+ * loader). The discriminant is the literal `kind` field, set at construction in
+ * each loader; it can NOT be `runSink.isConversation` because `runSink` is
+ * assigned AFTER the ctx exists (the sink factory takes the ctx).
+ */
+export interface RunContextBase {
   run: Document;
   fm: AgentRunFrontmatter;
   /** Guaranteed non-null: loadContext returns null when run.parentId is absent. */
@@ -177,8 +186,6 @@ export interface RunContext {
    * untrusted parent/comment content. Empty array when the agent declares none.
    */
   agentSkills: Array<{ slug: string; body: string; trusted: boolean }>;
-  workspace: Workspace;
-  project: Project;
   /**
    * Typed as `EphemeralToken` (not `ApiToken`) so the operator's `isOperator`
    * marker is TYPE-VISIBLE on this seam — a future refactor that spreads/
@@ -253,6 +260,29 @@ export interface RunContext {
    */
   keyDecryptFailed?: boolean;
 }
+
+/**
+ * Document-thread run context: a real `agent_run` doc with a parent, fetched from
+ * a real `workspace`/`project`. `workspace`/`project` live ONLY here — the
+ * conversation variant has neither, so a conversation-path read is a compile
+ * error, not a fabricated sentinel (M3 audit 3.3).
+ */
+export type DocumentRunContext = RunContextBase & {
+  kind: 'document';
+  workspace: Workspace;
+  project: Project;
+};
+
+/**
+ * Conversation-backed run context (operator cockpit): NO workspace/project — the
+ * conversation path never dereferences them (verified: the only reads are in
+ * `makeDocumentRunSink`, document-path-only). The discriminant is `kind`.
+ */
+export type ConversationRunContext = RunContextBase & {
+  kind: 'conversation';
+};
+
+export type RunContext = DocumentRunContext | ConversationRunContext;
 
 /**
  * Cluster-2 /code-review fix: a conversation-backed run MUST carry a
@@ -606,7 +636,8 @@ export async function loadContext(runId: string): Promise<RunContext | null> {
 
   // Assemble the ctx first so the document RunSink factory can read it, then
   // attach `runSink` (M2 — pure addition; nothing reads it until Cluster C).
-  const ctx: RunContext = {
+  const ctx: DocumentRunContext = {
+    kind: 'document',
     run,
     fm,
     parentId,
@@ -697,14 +728,15 @@ async function loadConversationContext(
     caller_project_ids: convPending.token.projectIds ?? null,
   } as unknown as AgentRunFrontmatter;
 
-  // Synthetic non-null sentinels for the RunContext shape (never dereferenced on
+  // Synthetic non-null sentinel for the RunContext shape (never dereferenced on
   // the sink path — see the helper header). `run.id` is the conversation run id
   // so any incidental id-keyed write (guarded no-op for conversation runs) is at
-  // least self-consistent.
+  // least self-consistent. NO workspace/project sentinels: the conversation
+  // variant of RunContext has neither field (M3 audit 3.3) — the type system now
+  // proves the conversation path never reads them, so the old
+  // `{…} as unknown as Workspace`/`Project` fabrications are gone.
   const run = { ...agent, id: runId, type: 'agent_run' } as Document;
   const parent = agent;
-  const workspace = { id: '', slug: '', name: '' } as unknown as Workspace;
-  const project = { id: '', workspaceId: '', slug: '', name: '' } as unknown as Project;
 
   // AI key resolution — same (provider, label) instance-credential path as a
   // document run (B6 reversal). The key MUST be resolved against the SAME
@@ -741,7 +773,8 @@ async function loadConversationContext(
   // ConversationRunSink composes its OWN makeConversationSink internally, so no
   // separate `sink:` is built here — that legacy field (and its dangling second
   // sink instance) is gone post-Cluster-C.
-  const ctx: RunContext = {
+  const ctx: ConversationRunContext = {
+    kind: 'conversation',
     run,
     fm,
     // `parentId` is non-null on the type; a conversation run has no parent, so
@@ -754,8 +787,6 @@ async function loadConversationContext(
     // The operator's definitional skills are loaded the same way a document run
     // loads them — by frontmatter.skills against instance_skills.
     agentSkills: (await loadAgentDefinition(db, agent)).skills,
-    workspace,
-    project,
     token: convPending.token,
     actor: `agent:${def.slug}`,
     // FK-valid actor for any incidental provenance write — the conversation owner.

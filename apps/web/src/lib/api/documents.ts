@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { client } from './client.ts';
 
 // R1 fix (post-review-of-review) — kept lockstep with the server's
@@ -56,6 +56,13 @@ export interface DocumentListParams {
   // Opt the body column back in (server maps to ?include=body). Only the wiki
   // view sets this; table/board leave it unset so the hot path stays body-less.
   include?: 'body';
+  // Generic frontmatter filter, serialized to the server's `?filter=<JSON>`
+  // param (routes/documents.ts → lib/filter-to-drizzle.ts). Used for arbitrary
+  // frontmatter keys (e.g. priority) that have no dedicated query param. Status,
+  // assignee, updated_since keep their own params above. NOTE: labels is NOT
+  // expressible here — the compiler has no array-contains operator — so it stays
+  // a client-side post-filter (see applyFrontmatterClauses + the deferred note).
+  filter?: Record<string, unknown>;
 }
 
 function toSearch(params: DocumentListParams): string {
@@ -69,6 +76,9 @@ function toSearch(params: DocumentListParams): string {
   if (params.limit) sp.set('limit', String(params.limit));
   if (params.cursor) sp.set('cursor', params.cursor);
   if (params.include) sp.set('include', params.include);
+  if (params.filter && Object.keys(params.filter).length > 0) {
+    sp.set('filter', JSON.stringify(params.filter));
+  }
   const s = sp.toString();
   return s ? `?${s}` : '';
 }
@@ -100,6 +110,40 @@ export function useDocuments(
       client.get<DocumentListPage>(
         `/api/v1/w/${wslug}/p/${pslug}/t/${tslug}/documents${toSearch(params)}`,
       ),
+    staleTime: 30_000,
+    enabled: !!wslug && !!pslug && !!tslug && (options.enabled ?? true),
+  });
+}
+
+/**
+ * Paginated table read — consumes the server's keyset `nextCursor` so the table
+ * shows ALL matching rows across pages, not just the first page. Before M3 the
+ * table used the single-page `useDocuments` and post-filtered the current page
+ * client-side, so a match on page 2 was invisible. This hook + server-side
+ * frontmatter filtering (params.filter) fix that.
+ *
+ * The `params` (incl. `filter`) is part of the query key, so a filter change is
+ * a NEW infinite query that resets pagination from the first page.
+ */
+export function useInfiniteDocuments(
+  wslug: string,
+  pslug: string,
+  tslug: string,
+  params: DocumentListParams = {},
+  options: { enabled?: boolean } = {},
+) {
+  return useInfiniteQuery({
+    queryKey: documentsKeys.list(wslug, pslug, tslug, params),
+    queryFn: ({ pageParam }) =>
+      client.get<DocumentListPage>(
+        `/api/v1/w/${wslug}/p/${pslug}/t/${tslug}/documents${toSearch(
+          pageParam ? { ...params, cursor: pageParam } : params,
+        )}`,
+      ),
+    initialPageParam: undefined as string | undefined,
+    // null nextCursor → no further pages. `undefined` tells react-query there is
+    // no next page, so hasNextPage is false and fetchNextPage is a no-op.
+    getNextPageParam: (last) => last.nextCursor ?? undefined,
     staleTime: 30_000,
     enabled: !!wslug && !!pslug && !!tslug && (options.enabled ?? true),
   });
@@ -292,6 +336,33 @@ export function parseFilters(search: Record<string, unknown>): FilterClauseUrl[]
   return out;
 }
 
+/**
+ * Build the server `?filter=<JSON>` payload from the frontmatter clauses that
+ * the filter compiler CAN express. Today that is `priority` only:
+ *   priority → { priority: { $eq: <value> } }  (json_extract '$.priority' = ?)
+ *
+ * `labels` is deliberately EXCLUDED — the compiler's operator set
+ * ($eq/$ne/$in/$nin/$gt/$gte/$lt/$lte/$exists) has no array-contains, and
+ * json_extract('$.labels') returns the array as JSON text, so any server-side
+ * operator would silently produce WRONG results. Labels stays a client-side
+ * post-filter (see applyFrontmatterClauses) — tracked in the deferred backlog.
+ *
+ * Returns undefined when no server-expressible frontmatter clause is present,
+ * so callers can omit `?filter=` entirely.
+ */
+export function clausesToFilterJson(
+  clauses: FilterClauseUrl[],
+): Record<string, unknown> | undefined {
+  const filter: Record<string, unknown> = {};
+  for (const c of clauses) {
+    // Single-clause-per-kind assumption: the FilterBar is single-select per kind,
+    // so the last priority clause wins. If multi-value priority filtering ever
+    // ships, switch this to `{ priority: { $in: [...] } }`.
+    if (c.kind === 'priority') filter.priority = { $eq: c.value };
+  }
+  return Object.keys(filter).length > 0 ? filter : undefined;
+}
+
 export function clausesToListParams(clauses: FilterClauseUrl[]): DocumentListParams {
   const p: DocumentListParams = { type: 'work_item', sort: 'updated_at', dir: 'desc' };
   for (const c of clauses) {
@@ -299,28 +370,40 @@ export function clausesToListParams(clauses: FilterClauseUrl[]): DocumentListPar
     if (c.kind === 'updated_since') p.updatedSince = c.value;
     if (c.kind === 'assignee') p.assignee = c.value;
   }
+  const filter = clausesToFilterJson(clauses);
+  if (filter) p.filter = filter;
   return p;
 }
 
-/** Frontmatter-side post-filter; applied to the fetched page client-side until the server exposes a generic frontmatter query (Phase 4). */
+/**
+ * Client-side post-filter for the frontmatter clauses the SERVER cannot express.
+ * Post-M3 this is `labels` ONLY: priority moved server-side (clausesToFilterJson)
+ * so it filters correctly across pages. Keeping priority here would double-filter
+ * and could drop valid server-returned rows, so it is intentionally NOT handled.
+ *
+ * DEFERRED: labels-array-contains is not expressible with the current filter
+ * compiler operator set, so it remains a current-page post-filter and is
+ * THEREFORE STILL WRONG ACROSS PAGES for labels specifically. Fixing it needs a
+ * compiler array-contains operator (SQLite json_each EXISTS subquery). See
+ * docs/deferred-e2e-backlog.md.
+ */
 export function applyFrontmatterClauses(
   docs: DocumentSummary[],
   clauses: FilterClauseUrl[],
 ): DocumentSummary[] {
   let out = docs;
   for (const c of clauses) {
-    if (c.kind === 'priority') {
-      out = out.filter((d) => d.frontmatter?.priority === c.value);
+    if (c.kind === 'labels') {
       // Labels: AND semantics — every selected value must be present. Today's UI is
       // single-select so AND ≡ OR; revisit when multi-label filtering ships.
-    } else if (c.kind === 'labels') {
       out = out.filter((d) => {
         const labels = d.frontmatter?.labels;
         if (!Array.isArray(labels)) return false;
         return c.values.every((v) => (labels as unknown[]).includes(v));
       });
     }
-    // 'assignee' is sent to server; nothing to do client-side.
+    // 'priority' is now sent to the server (clausesToFilterJson); 'status' /
+    // 'assignee' / 'updated_since' use dedicated server params — nothing to do.
   }
   return out;
 }

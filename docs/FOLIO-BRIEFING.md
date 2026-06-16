@@ -70,7 +70,7 @@ Stefan is not running a competing SaaS. The moat is the bundled service work and
 | MD body editor | **Milkdown** | Real markdown round-trip via remark/mdast. Tiptap is HTML-first and loses MD on round-trip — wrong primitive for an MD-source-of-truth product. |
 | Raw MD editor | **CodeMirror 6** | Industry-standard, tiny, syntax highlighting + folding + extensions. Used for the "raw MD" toggle mode. |
 | Drag-drop | **dnd-kit** | Accessible, performant, modern. Required for the kanban view. |
-| Encryption | **libsodium** (sodium-native for Bun) | For AI key encryption at rest. Authenticated encryption, audited, simple API. |
+| Encryption | **AES-256-GCM** (@noble/ciphers, pure JS for Bun) | For AI key encryption at rest. Authenticated encryption, no native deps, simple API. |
 | Auth | **Hand-rolled session auth** | Sessions table + cookie + bcrypt/argon2 for passwords + signed magic-link tokens. NextAuth/Auth0 add complexity and external surface. ~300 lines of code. |
 | Tests | **Bun test + Playwright** | Bun's test runner is fast and zero-config; Playwright for end-to-end UX commitments (Cmd-K, slideovers, optimistic UI). |
 | Lint/format | **Biome** | One tool replaces eslint + prettier. 10x faster, less config. |
@@ -184,7 +184,7 @@ export const workspaces = sqliteTable('workspaces', {
   slug: text('slug').notNull().unique(),
   name: text('name').notNull(),
   aiProvider: text('ai_provider'),            // 'anthropic'|'openai'|'openrouter'|'ollama'
-  aiKeyEncrypted: text('ai_key_encrypted'),   // libsodium-secretbox of the API key
+  aiKeyEncrypted: text('ai_key_encrypted'),   // AES-256-GCM (@noble/ciphers) of the API key
   aiModel: text('ai_model'),                  // e.g. 'claude-sonnet-4'
   aiBaseUrl: text('ai_base_url'),             // for Ollama / OpenRouter
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
@@ -565,7 +565,7 @@ Concrete implementations live in `apps/server/src/lib/ai/`:
 
 ### Key Storage
 
-`workspaces.ai_key_encrypted` is libsodium-secretbox of the raw key, with the nonce prepended (24-byte nonce + ciphertext). The master key comes from `FOLIO_MASTER_KEY` env (32-byte base64). On read, decrypt; on write, encrypt fresh. Never log decrypted keys. Never return the key over the API — only `aiProvider`, `aiModel`, and a `keyConfigured: boolean` flag.
+`workspaces.ai_key_encrypted` is AES-256-GCM (@noble/ciphers) of the raw key, with the IV prepended (12-byte IV + ciphertext-and-tag). The master key comes from `FOLIO_MASTER_KEY` env (64 hex chars / 32 bytes — `openssl rand -hex 32`). On read, decrypt; on write, encrypt fresh. Never log decrypted keys. Never return the key over the API — only `aiProvider`, `aiModel`, and a `keyConfigured: boolean` flag.
 
 ### Slash Commands (v1)
 
@@ -736,7 +736,7 @@ bun build apps/server/src/index.ts --compile --target=bun-linux-x64 --outfile=di
 The binary embeds the React bundle and the SQLite driver. ~50–80 MB. Run with:
 
 ```bash
-FOLIO_MASTER_KEY=<base64-32-bytes> \
+FOLIO_MASTER_KEY=<64-hex-chars> \
 FOLIO_DB_PATH=/var/lib/folio/folio.db \
 FOLIO_PORT=3000 \
 ./folio
@@ -773,7 +773,7 @@ ENTRYPOINT ["folio"]
 
 | Var | Required | Purpose |
 |-----|----------|---------|
-| `FOLIO_MASTER_KEY` | yes | base64 32-byte key for AI-key encryption at rest |
+| `FOLIO_MASTER_KEY` | yes | 64 hex chars (32 bytes) for AI-key encryption at rest — `openssl rand -hex 32` |
 | `FOLIO_DB_PATH` | no (default `./folio.db`) | SQLite file path |
 | `FOLIO_PORT` | no (default `3000`) | HTTP port |
 | `FOLIO_BASE_URL` | yes (for magic links) | Public URL of the instance |
@@ -815,7 +815,7 @@ folio/
 │   │   │   │   └── workspace-scope.ts
 │   │   │   ├── lib/
 │   │   │   │   ├── auth.ts             # password hash, session create/destroy
-│   │   │   │   ├── crypto.ts           # libsodium wrappers
+│   │   │   │   ├── crypto.ts           # AES-256-GCM (@noble/ciphers) wrappers
 │   │   │   │   ├── slug.ts
 │   │   │   │   ├── md.ts               # frontmatter parse/serialize (gray-matter)
 │   │   │   │   ├── field-infer.ts      # type inference from value

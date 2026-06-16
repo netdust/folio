@@ -10,6 +10,7 @@ import {
   parseFilters,
   useCreateDocument,
   useDocuments,
+  useInfiniteDocuments,
   useUpdateDocument,
 } from '../../lib/api/documents.ts';
 import { useCreateField, useDeleteField, useFields, useUpdateField } from '../../lib/api/fields.ts';
@@ -70,7 +71,31 @@ export function TableView({ wslug, pslug, tslug }: Props) {
     return sort ? { ...base, sort: sort.key, dir: sort.dir } : base;
   }, [clauses, sort]);
 
-  const { data: page, isLoading, error } = useDocuments(wslug, pslug, tslug, listParams);
+  const {
+    data: infinite,
+    isLoading,
+    error,
+    hasNextPage,
+    fetchNextPage,
+    isFetchingNextPage,
+  } = useInfiniteDocuments(wslug, pslug, tslug, listParams);
+  // Same-tick double-click guard: `isFetchingNextPage` only flips on the NEXT
+  // render, so two synchronous clicks would both call fetchNextPage before the
+  // button disables. This ref is set synchronously on the first click and
+  // cleared when the fetch settles, so the second click is a no-op — no
+  // duplicate page fetch, no skipped cursor.
+  const loadingMoreRef = useRef(false);
+  const onLoadMore = useCallback(() => {
+    if (loadingMoreRef.current || isFetchingNextPage || !hasNextPage) return;
+    loadingMoreRef.current = true;
+    void fetchNextPage().finally(() => {
+      loadingMoreRef.current = false;
+    });
+  }, [fetchNextPage, isFetchingNextPage, hasNextPage]);
+  // Flatten all loaded pages into one row list. `pageData` replaces the old
+  // single-page `page.data` everywhere below, so column synthesis / suggestions
+  // / affected-doc counts see every loaded row, not just the first page.
+  const pageData = useMemo(() => (infinite?.pages ?? []).flatMap((pg) => pg.data), [infinite]);
   const { data: statuses } = useStatuses(wslug, pslug, tslug);
   const { data: fields } = useFields(wslug, pslug, tslug);
   // Resolve relation [[slug]] tokens to titles in read-only table cells. The
@@ -211,8 +236,8 @@ export function TableView({ wslug, pslug, tslug }: Props) {
     // Pass the loaded docs so mergeColumns can synthesize columns for visible
     // frontmatter keys that aren't pinned Fields — else effectiveVisibleKeys
     // drops them and a column-toggle silently destroys them (views-UX round 2).
-    () => mergeColumns(fields ?? [], activeView, page?.data ?? []),
-    [fields, activeView, page?.data],
+    () => mergeColumns(fields ?? [], activeView, pageData),
+    [fields, activeView, pageData],
   );
   const orderedColumns: Column[] = useMemo(
     () => applyColumnOrder(allColumns, activeView?.columnOrder ?? null),
@@ -374,11 +399,11 @@ export function TableView({ wslug, pslug, tslug }: Props) {
   );
 
   const filteredDocs = useMemo(
-    () => applyFrontmatterClauses(page?.data ?? [], clauses),
-    [page, clauses],
+    () => applyFrontmatterClauses(pageData, clauses),
+    [pageData, clauses],
   );
 
-  const docs = useMemo(() => page?.data ?? [], [page]);
+  const docs = pageData;
 
   // slug→{slug,title} resolver covering the project's pages + THIS table's
   // work_items (see the SCOPE CAVEAT on relItems above — cross-table work_item
@@ -554,6 +579,23 @@ export function TableView({ wslug, pslug, tslug }: Props) {
               />
             ) : null}
           </div>
+          {/* Load more: present only when the server reported another page
+              (nextCursor non-null → hasNextPage). Last page → button absent, no
+              further fetch. Disabled while a page is in flight so a double-click
+              cannot fire two fetches (react-query also dedupes the same key). */}
+          {!isLoading && !error && hasNextPage ? (
+            <div className="flex justify-center py-3">
+              <button
+                type="button"
+                data-testid="load-more"
+                disabled={isFetchingNextPage}
+                onClick={onLoadMore}
+                className="rounded-md border border-border px-3 py-1.5 text-sm text-muted-foreground hover:bg-muted disabled:opacity-50"
+              >
+                {isFetchingNextPage ? 'Loading…' : 'Load more'}
+              </button>
+            </div>
+          ) : null}
         </div>
       </div>
       {changingTypeKey

@@ -82,8 +82,9 @@ function setup({ initialPath = '/w/acme/p/sales/work-items', onFetch }: SetupOpt
     if (u.endsWith(`/api/v1/w/${workspace.slug}/projects`)) return respond({ data: projects });
     if (u.endsWith(`/api/v1/w/${workspace.slug}/p/sales`)) return respond({ data: projects[0] });
     if (u.endsWith(`/api/v1/w/${workspace.slug}/p/sales/tables`)) return respond({ data: tables });
-    // Views are now fetched per (project, table): /p/sales/t/<tslug>/views.
-    if (/\/p\/sales\/t\/[^/]+\/views$/.test(u)) return respond({ data: views });
+    // Views are now BATCHED per project: GET /p/sales/views?tables=<slugs> →
+    // grouped by tableId (M3 audit 3.5). The single seed table is t1/work-items.
+    if (/\/p\/sales\/views\?tables=/.test(u)) return respond({ data: { t1: views } });
     if (u.endsWith(`/api/v1/w/${workspace.slug}/p/sales/statuses`)) return respond({ data: [] });
     if (u.endsWith(`/api/v1/w/${workspace.slug}/p/sales/fields`)) return respond({ data: [] });
     if (u.includes(`/api/v1/w/${workspace.slug}/p/sales/documents`)) {
@@ -280,8 +281,9 @@ describe('WorkspaceLayout — delete + nav side effects', () => {
       if (u.endsWith(`/api/v1/w/${workspace.slug}/projects`)) return respond({ data: projects });
       if (u.endsWith(`/api/v1/w/${workspace.slug}/p/sales/tables`))
         return respond({ data: twoTables });
-      if (/\/p\/sales\/t\/work-items\/views$/.test(u)) return respond({ data: workItemsViews });
-      if (/\/p\/sales\/t\/bugs\/views$/.test(u)) return respond({ data: bugsViews });
+      // Batched per-project views, grouped by tableId: t1=work-items, t2=bugs.
+      if (/\/p\/sales\/views\?tables=/.test(u))
+        return respond({ data: { t1: workItemsViews, t2: bugsViews } });
       if (/\/p\/sales\/t\/[^/]+\/fields$/.test(u)) return respond({ data: [] });
       return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
     });

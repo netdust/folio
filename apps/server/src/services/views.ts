@@ -1,5 +1,5 @@
 import { FilterCompileError, filterCompile } from '@folio/shared';
-import { and, desc, eq, isNull } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull } from 'drizzle-orm';
 import { db } from '../db/client.ts';
 import { documents, views } from '../db/schema.ts';
 import type { Document, View } from '../db/schema.ts';
@@ -14,6 +14,33 @@ export async function listViews(tableId: string): Promise<View[]> {
     where: eq(views.tableId, tableId),
     orderBy: (t, { asc }) => [asc(t.order)],
   });
+}
+
+/**
+ * Batched read: views for MANY tables in ONE query, grouped by tableId.
+ *
+ * Powers the rail's batched project-views endpoint (M3 audit 3.5) — it collapses
+ * the per-(project,table) views fan-out the sidebar used to fire into one query
+ * per project. Ordered by tableId then `order` so each group is rail-sorted. The
+ * caller MUST pre-scope `tableIds` to a single project (the route resolves slugs
+ * against the project's own tables) — this service does no access check of its
+ * own. Returns an empty object for an empty input (no `WHERE … IN ()`).
+ */
+export async function listViewsForTables(tableIds: string[]): Promise<Record<string, View[]>> {
+  if (tableIds.length === 0) return {};
+  const rows = await db
+    .select()
+    .from(views)
+    .where(inArray(views.tableId, tableIds))
+    .orderBy(asc(views.tableId), asc(views.order));
+  const grouped: Record<string, View[]> = {};
+  for (const id of tableIds) grouped[id] = [];
+  for (const row of rows) {
+    // Every row's tableId is one of `tableIds` (the IN-clause filter), so the
+    // bucket is always pre-seeded above — push straight into it.
+    grouped[row.tableId]?.push(row);
+  }
+  return grouped;
 }
 
 /**
