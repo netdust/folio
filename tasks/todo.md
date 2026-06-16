@@ -101,3 +101,16 @@ virtualization · a11y (32) · reapStalePendingOps chunking · auth_rate_limits 
 - [ ] **Cluster 4/5/6:** when a renderer first READS `views.settings` (settings.dateField etc.), add read-time value-shape validation + a payload-size bound on settings (today it's stored-only, freeform `z.record(z.unknown())`). [security-sentinel deferral]
 - [ ] **Later/cosmetic:** share `iconForViewType` so rail-tree row icons match the 5-way tab icons (rail currently 2-way kanban?Columns3:List). [reviewer S2]
 - [ ] **If "one table view per table" ever becomes an invariant:** add a server guard (table-view-creation is client-only-excluded today). [reviewer S3]
+
+### Cluster 2a (group-summary endpoint) — DONE, at FULL REVIEW GATE (Stefan sign-off)
+- [x] L.1 group-summary validator + service + endpoint, 8 threat-model mitigations as code (`63d7d441`)
+- [x] L.2 grouped-list settings types + useGroupSummary hook (`372dc444`)
+- [x] integration gate: route-level un-mocked-wire acceptance tests, 8 cases (`191d1b71`)
+- [x] FULL review panel: security-sentinel (8/8 mitigations IN-PLACE, 0 crit/imp) + generalist (found I-1) + performance-oracle (safe at v1, 0 crit)
+- [x] review fixes (`abfc1554`): FIX-1 ungrouped distribution no longer empty (+RED test) · MAX_DISTRIBUTION_SPECS=3 cap · index comment
+- FINAL: server 1909 / shared 80, 0 fail · tsc clean · group-summary tests 40 pass ×3 deterministic
+
+### Cluster 2a — deferred perf items (NOT v1 blockers; only matter at ~10k+ docs/project)
+- [ ] Perf I-2: parallelize the distribution sub-query loop — DEPRIORITIZED (bun:sqlite is synchronous; won't help until async pool).
+- [ ] Perf I-3: fold the ungrouped scalar bucket into the main GROUP BY (removes one full scan on the common path).
+- [ ] Perf S-2: constrain the distribution sub-query to the kept top-N groups (IN(...) on keptRows) instead of materializing all group×value pairs.
