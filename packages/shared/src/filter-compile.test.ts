@@ -90,6 +90,26 @@ test('throws on $contains over the array-length cap', () => {
   expect(() => filterCompile({ labels: { $contains: tooMany } })).toThrow(FilterCompileError);
 });
 
+test('LOW-1: throws FilterCompileError on $contains over a built-in column', () => {
+  expect(() => filterCompile({ status: { $contains: 'todo' } })).toThrow(FilterCompileError);
+});
+
+test('HIGH-2: throws when the filter has more than the clause cap of keys', () => {
+  const input: Record<string, unknown> = {};
+  for (let i = 0; i < 51; i++) input[`k${i}`] = 'v';
+  expect(() => filterCompile(input as never)).toThrow(FilterCompileError);
+});
+
+test('clause count at the cap (50) is accepted', () => {
+  const input: Record<string, unknown> = {};
+  for (let i = 0; i < 50; i++) input[`k${i}`] = 'v';
+  expect(() => filterCompile(input as never)).not.toThrow();
+});
+
+test('empty-array: throws on $contains with an empty array (would silently select all)', () => {
+  expect(() => filterCompile({ labels: { $contains: [] } })).toThrow(FilterCompileError);
+});
+
 test('throws on unknown operator', () => {
   expect(() => filterCompile({ x: { $bogus: 1 } as never })).toThrow(FilterCompileError);
 });

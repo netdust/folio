@@ -71,9 +71,21 @@ function cmpToSql(key: string, op: string, value: unknown): SQL {
       // Normalize to an array (single value or list); AND each membership test.
       // Every value flows through Drizzle as a BOUND param (${v}) — never
       // interpolated — mirroring backlinks.ts's json_each EXISTS pattern.
+      //
+      // HIGH-1 guard: frontmatter is schemaless/freely-writable, so the targeted
+      // key may hold a SCALAR (e.g. labels:"bug" instead of ["bug"]). The
+      // TWO-ARG forms json_each(doc, path) / json_type(doc, path) parse the
+      // parent document at the path WITHOUT round-tripping the extracted value
+      // through a second JSON parse — so a scalar string reports type 'text'
+      // (no "malformed JSON" crash). The json_type(...)='array' guard then
+      // yields NO match for non-array values instead of aborting the whole
+      // list query as an uncaught 500. (Verified against bun:sqlite — the
+      // single-arg json_each(json_extract(...)) form crashes on a scalar.)
+      const path = `$.${key}`;
       const values = Array.isArray(value) ? (value as unknown[]) : [value];
       const parts = values.map(
-        (v) => sql`EXISTS (SELECT 1 FROM json_each(${fmExpr(key)}) WHERE value = ${v})` as SQL,
+        (v) =>
+          sql`EXISTS (SELECT 1 FROM json_each(${documents.frontmatter}, ${path}) WHERE json_type(${documents.frontmatter}, ${path}) = 'array' AND value = ${v})` as SQL,
       );
       return and(...parts) as SQL;
     }

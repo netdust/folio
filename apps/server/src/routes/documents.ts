@@ -170,6 +170,13 @@ documentsRoute.get('/', async (c) => {
 
   let filter: unknown = undefined;
   if (filterRaw) {
+    // HIGH-2: cap the raw filter length BEFORE parsing. CONTAINS_MAX_VALUES +
+    // MAX_FILTER_CLAUSES bound the compiled fan-out, but a pathological payload
+    // should be rejected cheaply at the wire rather than parsed + compiled into
+    // a slow 200.
+    if (filterRaw.length > 8192) {
+      throw new HTTPError('INVALID_FILTER', 'filter is too large (max 8192 bytes)', 422);
+    }
     try {
       filter = JSON.parse(filterRaw);
     } catch {

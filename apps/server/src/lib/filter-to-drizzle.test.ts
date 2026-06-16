@@ -107,8 +107,40 @@ test('$contains treats a SQL-injection payload as a literal label value (zero ro
 });
 
 test('$contains on a built-in column throws (columns are not arrays)', () => {
-  const ast = filterCompile({ status: { $contains: 'todo' } });
-  expect(() => compileFilterToWhere(ast, documents)).toThrow();
+  // LOW-1: the primary rejection is now in filterCompile (one validation layer);
+  // filterCompile throws before an AST is produced.
+  expect(() => filterCompile({ status: { $contains: 'todo' } })).toThrow();
+  // Defense-in-depth: even if a hand-built AST bypasses filterCompile, the
+  // compiler still refuses $contains on a built-in column.
+  const handBuilt = {
+    kind: 'cmp' as const,
+    key: 'status',
+    op: '$contains' as const,
+    value: 'todo',
+  };
+  expect(() => compileFilterToWhere(handBuilt, documents)).toThrow();
+});
+
+test('HIGH-1: a scalar-string frontmatter value does NOT crash json_each — excluded, not 500', async () => {
+  const { db, seed } = await makeTestApp();
+  await seedDocs(db, seed.project.id, seed.workspace.id);
+  // A malformed row: `labels` is a SCALAR STRING, not an array. Frontmatter is
+  // schemaless/freely-writable, so one such row must not break the whole listing.
+  await db.insert(documents).values({
+    id: nanoid(),
+    projectId: seed.project.id,
+    workspaceId: seed.workspace.id,
+    type: 'work_item',
+    slug: 'scalar',
+    title: 'Scalar',
+    status: 'todo',
+    frontmatter: { labels: 'bug' },
+  });
+  const where = compileFilterToWhere(filterCompile({ labels: { $contains: 'bug' } }), documents);
+  // Must NOT throw "malformed JSON"; the scalar-string row is excluded, only the
+  // genuine-array rows (a, b) match.
+  const rows = await db.select().from(documents).where(where);
+  expect(rows.map((r) => r.slug).sort()).toEqual(['a', 'b']);
 });
 
 test('empty AST returns no-op (selects all)', async () => {

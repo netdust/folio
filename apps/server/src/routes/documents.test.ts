@@ -324,6 +324,28 @@ test('GET filters by type', async () => {
   expect((await res.json()).data).toHaveLength(1);
 });
 
+test('HIGH-2: an oversized ?filter= string is rejected 422 before JSON.parse', async () => {
+  const { app, seed } = await makeTestApp();
+  // 9 KB filter string — over the 8192 length cap. Must 422, not attempt to parse
+  // + compile a 50k-subquery DoS payload into a slow 200.
+  const big = `{"x":"${'a'.repeat(9000)}"}`;
+  const res = await app.request(`${path}?filter=${encodeURIComponent(big)}`, {
+    headers: { Cookie: seed.sessionCookie },
+  });
+  expect(res.status).toBe(422);
+  expect((await res.json()).error.code).toBe('INVALID_FILTER');
+});
+
+test('LOW-1: $contains on a built-in column returns 422, not 500', async () => {
+  const { app, seed } = await makeTestApp();
+  const filter = encodeURIComponent(JSON.stringify({ status: { $contains: 'todo' } }));
+  const res = await app.request(`${path}?filter=${filter}`, {
+    headers: { Cookie: seed.sessionCookie },
+  });
+  expect(res.status).toBe(422);
+  expect((await res.json()).error.code).toBe('INVALID_FILTER');
+});
+
 test('project-level GET ?type=agent returns 400 UNSUPPORTED_TYPE_FILTER', async () => {
   const { app, seed } = await makeTestApp();
   const res = await app.request(`${path}?type=agent`, { headers: { Cookie: seed.sessionCookie } });
