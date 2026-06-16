@@ -1691,8 +1691,11 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
       // Confirm gate paused for approval (see awaitingConfirmation in
       // executeToolRound) → END THE TURN CLEANLY: the card + pending_op are persisted,
       // so release the slot; the user's approval starts a FRESH turn. NOT a failure —
-      // preserve any assistant preamble (textBuf). Cancel check first.
-      if (ctx.sink && awaitingConfirmation) {
+      // preserve any assistant preamble (textBuf). Cancel check first. Conversation
+      // runs ONLY (the confirm gate needs a conversationId; on a document run
+      // awaitingConfirmation is never set, so `isConversation` is the discriminator —
+      // C-3a's negative bite-proof pins this). inv-12 catch chain above untouched.
+      if (ctx.runSink.isConversation && awaitingConfirmation) {
         if (await wasCancelled(ctx)) {
           await handleCancel(ctx);
           return;
@@ -1723,8 +1726,10 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
       // TURN-TERMINATING `ask_choice` (see askedChoice in executeToolRound) → a CLEAN
       // turn boundary on a conversation run: complete the turn like a normal stop,
       // preserving any assistant preamble (textBuf). Structural enforcement, runner
-      // ends the turn regardless of the model. Guarded on `ctx.sink`. Cancel first.
-      if (ctx.sink && askedChoice) {
+      // ends the turn regardless of the model. Guarded on `ctx.runSink.isConversation`
+      // (on a document run ask_choice throws `forbidden:` fatal, so askedChoice is
+      // never set — C-3a's negative bite-proof pins this). Cancel first.
+      if (ctx.runSink.isConversation && askedChoice) {
         if (await wasCancelled(ctx)) {
           await handleCancel(ctx);
           return;
