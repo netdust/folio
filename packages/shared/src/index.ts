@@ -55,6 +55,14 @@ export {
   type FilterInput,
   type Operator,
 } from './filter-compile.ts';
+export {
+  AGGREGATIONS,
+  type Aggregation,
+  type AggregateSpec,
+  type DistributionBucket,
+  type GroupSummaryRow,
+  type GroupSummaryResponse,
+} from './group-summary.ts';
 export { nextFires, validateCronShape, type CronShapeResult } from './cron.ts';
 export { type EventKind, KNOWN_EVENT_KINDS } from './events.ts';
 export {

@@ -20,6 +20,7 @@ import {
   stripReservedFrontmatter,
   updateDocument,
 } from '../services/documents.ts';
+import { groupSummary } from '../services/group-summary.ts';
 
 const documentsRoute = new Hono<AuthContext & ScopeContext>();
 
@@ -212,6 +213,65 @@ documentsRoute.get('/', async (c) => {
   });
 
   return c.json({ data: result.data, nextCursor: result.nextCursor });
+});
+
+// Group-summary: a validated, project-scoped, cost-bounded aggregate over the
+// FULL filtered document set (NOT a page). The parsing→SQL trust boundary (the
+// M3 `$contains` class) — see the plan's `## Threat model — group-summary
+// endpoint`. Registered here BEFORE the `/:slugMd`/`/:slug` catch-alls so the
+// literal `group-summary` segment wins over the slug param.
+documentsRoute.get('/group-summary', async (c) => {
+  const p = getProject(c);
+  const type = c.req.query('type') ?? 'work_item';
+  const groupBy = c.req.query('groupBy');
+  const aggregatesRaw = c.req.query('aggregates');
+  const filterRaw = c.req.query('filter');
+
+  if (!groupBy) {
+    throw new HTTPError('INVALID_GROUP_BY', 'INVALID_GROUP_BY: groupBy is required', 422);
+  }
+
+  // Parse the aggregates JSON (a 422 here, never a 500).
+  let aggregates: unknown = [];
+  if (aggregatesRaw !== undefined) {
+    try {
+      aggregates = JSON.parse(aggregatesRaw);
+    } catch {
+      throw new HTTPError(
+        'INVALID_AGGREGATE',
+        'INVALID_AGGREGATE: aggregates must be valid JSON',
+        422,
+      );
+    }
+  }
+
+  // 8192-byte raw-filter cap BEFORE JSON.parse (mitigation 5 — copied verbatim
+  // from the GET / handler).
+  let filter: unknown = undefined;
+  if (filterRaw) {
+    if (Buffer.byteLength(filterRaw, 'utf8') > 8192) {
+      throw new HTTPError('INVALID_FILTER', 'filter is too large (max 8192 bytes)', 422);
+    }
+    try {
+      filter = JSON.parse(filterRaw);
+    } catch {
+      throw new HTTPError('INVALID_FILTER', 'filter must be valid JSON', 422);
+    }
+  }
+
+  // The route owns table-scoping: a table-scoped URL constrains work_items to
+  // that table (mirrors GET /).
+  const activeTableId = type === 'work_item' && c.req.param('tslug') ? getTable(c).id : null;
+
+  const result = await groupSummary({
+    projectId: p.id, // mitigation 6 — the resolved, access-checked project (the ceiling)
+    activeTableId,
+    groupBy,
+    aggregates: aggregates as Parameters<typeof groupSummary>[0]['aggregates'],
+    filter,
+    type,
+  });
+  return jsonOk(c, result);
 });
 
 documentsRoute.get('/:slugMd{[^/]+\\.md}', async (c) => {
