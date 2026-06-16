@@ -65,7 +65,7 @@ import {
   runErrorReasonSchema,
 } from './agent-run-schema.ts';
 import { executeTool, isAwaitingConfirmation, listToolDefs } from './agent-tools.ts';
-import { type Message, type ToolDef, getProvider } from './ai/provider.ts';
+import { type Message, type ProviderEvent, type ToolDef, getProvider } from './ai/provider.ts';
 import { sanitizeProviderError } from './ai/sanitize-error.ts';
 import { newApiToken } from './auth.ts';
 import { type SpawnFn, runClaudeCode } from './cc-executor.ts';
@@ -1228,6 +1228,89 @@ export function buildToolDefs(agentFm: Record<string, unknown>): ToolDef[] {
 // The outer round-loop
 // ---------------------------------------------------------------------------
 
+/**
+ * B-1 (M2 RunSink) — per-round stream consumption, extracted VERBATIM from
+ * runLoop. Accumulates this round's `textBuf`, token usage (incl. the budget cap
+ * + the conversation-sink partial-comment branch + failRun), `collectedToolCalls`,
+ * and `doneReason`, with the budget/cancel/sink branches kept INLINE. Returns the
+ * accumulated values plus the `terminated` flag the caller checks: when true, a
+ * budget/cancel path already failed the run and runLoop must `return`. `sawUsage`
+ * is threaded in/out so the G2 unmetered accumulator stays sticky across rounds.
+ */
+async function consumeStream(
+  ctx: RunContext,
+  stream: AsyncIterable<ProviderEvent>,
+  conversationTokens: { in: number; out: number },
+  runId: string,
+  fm: AgentRunFrontmatter,
+  sawUsageIn: boolean,
+): Promise<{
+  terminated: boolean;
+  collectedToolCalls: Array<{ id: string; name: string; arguments: unknown }>;
+  textBuf: string;
+  doneReason: RunDoneReason | undefined;
+  sawUsage: boolean;
+}> {
+  const collectedToolCalls: Array<{ id: string; name: string; arguments: unknown }> = [];
+  let textBuf = '';
+  let doneReason: RunDoneReason | undefined;
+  let terminated = false; // a budget/cancel/tool-error path already failed the run
+  // sawUsage is threaded in (sticky across rounds) but reassigned locally below;
+  // a local copy avoids reassigning the parameter (noParameterAssign).
+  let sawUsage = sawUsageIn;
+
+  for await (const ev of stream) {
+    if (ev.type === 'text') {
+      textBuf += ev.delta;
+    } else if (ev.type === 'tokens') {
+      // FIX #10 — incrementTokens returns the post-increment totals atomically;
+      // use them directly instead of a redundant read-back SELECT.
+      // Operator cockpit chat (Task 5) — a conversation run has NO `agent_run`
+      // document, so `incrementTokens` (an UPDATE-then-read-or-throw keyed on
+      // an agent_run row) cannot persist. Track the budget in-memory instead:
+      // the conversation `active_run_id` slot, not an agent_run row, is the
+      // durable liveness record. The budget cap still applies per turn.
+      if (ev.tokens_in > 0 || ev.tokens_out > 0) sawUsage = true; // G2 — usage reported.
+      const { tokens_in: usedIn, tokens_out: usedOut } = ctx.sink
+        ? trackConversationTokens(conversationTokens, ev.tokens_in, ev.tokens_out)
+        : await incrementTokens(runId, { in: ev.tokens_in, out: ev.tokens_out });
+      if (usedIn + usedOut > fm.max_tokens) {
+        // On the CONVERSATION (sink) path, postAgentComment + failRun both write
+        // sink.text — calling both double-posts on the cockpit thread (same mode
+        // as the dropped-call fix, code-review #4). failRun is the single surface
+        // there; fold the partial-work note into its message. On the document
+        // path, both are wanted (a partial-work comment PLUS the failed transition).
+        if (!ctx.sink) {
+          await postAgentComment(
+            ctx,
+            `Budget cap exceeded after ${usedIn + usedOut} tokens — partial work above.`,
+            'comment',
+          );
+        }
+        await failRun(
+          ctx,
+          runErrorReasonSchema.enum.budget_exceeded,
+          `Token budget ${fm.max_tokens} exceeded (${usedIn + usedOut} used) — partial work above.`,
+        );
+        terminated = true;
+        break;
+      }
+    } else if (ev.type === 'tool_call') {
+      // Cancel-via-comment check (mitigation 44) BEFORE executing the tool.
+      if (await wasCancelled(ctx)) {
+        await handleCancel(ctx);
+        terminated = true;
+        break;
+      }
+      collectedToolCalls.push({ id: ev.id, name: ev.name, arguments: ev.arguments });
+    } else if (ev.type === 'done') {
+      doneReason = ev.reason;
+    }
+  }
+
+  return { terminated, collectedToolCalls, textBuf, doneReason, sawUsage };
+}
+
 async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
   const { run, fm } = ctx;
   const runId = run.id;
@@ -1256,11 +1339,6 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
   while (round < MAX_TOOL_ROUNDS) {
     round++;
 
-    const collectedToolCalls: Array<{ id: string; name: string; arguments: unknown }> = [];
-    let textBuf = '';
-    let doneReason: RunDoneReason | undefined;
-    let terminated = false; // a budget/cancel/tool-error path already failed the run
-
     const provider = getProvider(fm.provider);
     const stream = provider.stream({
       // B10a: bring the API-provider path to injection-fence PARITY with the cc
@@ -1278,54 +1356,17 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
       baseUrl: ctx.baseUrl,
     });
 
-    for await (const ev of stream) {
-      if (ev.type === 'text') {
-        textBuf += ev.delta;
-      } else if (ev.type === 'tokens') {
-        // FIX #10 — incrementTokens returns the post-increment totals atomically;
-        // use them directly instead of a redundant read-back SELECT.
-        // Operator cockpit chat (Task 5) — a conversation run has NO `agent_run`
-        // document, so `incrementTokens` (an UPDATE-then-read-or-throw keyed on
-        // an agent_run row) cannot persist. Track the budget in-memory instead:
-        // the conversation `active_run_id` slot, not an agent_run row, is the
-        // durable liveness record. The budget cap still applies per turn.
-        if (ev.tokens_in > 0 || ev.tokens_out > 0) sawUsage = true; // G2 — usage reported.
-        const { tokens_in: usedIn, tokens_out: usedOut } = ctx.sink
-          ? trackConversationTokens(conversationTokens, ev.tokens_in, ev.tokens_out)
-          : await incrementTokens(runId, { in: ev.tokens_in, out: ev.tokens_out });
-        if (usedIn + usedOut > fm.max_tokens) {
-          // On the CONVERSATION (sink) path, postAgentComment + failRun both write
-          // sink.text — calling both double-posts on the cockpit thread (same mode
-          // as the dropped-call fix, code-review #4). failRun is the single surface
-          // there; fold the partial-work note into its message. On the document
-          // path, both are wanted (a partial-work comment PLUS the failed transition).
-          if (!ctx.sink) {
-            await postAgentComment(
-              ctx,
-              `Budget cap exceeded after ${usedIn + usedOut} tokens — partial work above.`,
-              'comment',
-            );
-          }
-          await failRun(
-            ctx,
-            runErrorReasonSchema.enum.budget_exceeded,
-            `Token budget ${fm.max_tokens} exceeded (${usedIn + usedOut} used) — partial work above.`,
-          );
-          terminated = true;
-          break;
-        }
-      } else if (ev.type === 'tool_call') {
-        // Cancel-via-comment check (mitigation 44) BEFORE executing the tool.
-        if (await wasCancelled(ctx)) {
-          await handleCancel(ctx);
-          terminated = true;
-          break;
-        }
-        collectedToolCalls.push({ id: ev.id, name: ev.name, arguments: ev.arguments });
-      } else if (ev.type === 'done') {
-        doneReason = ev.reason;
-      }
-    }
+    // B-1 (M2 RunSink) — consume the stream into this round's accumulators. The
+    // budget/cancel/sink branches live INLINE inside consumeStream; a budget/cancel
+    // termination there returns terminated=true and runLoop returns.
+    const {
+      terminated,
+      collectedToolCalls,
+      textBuf,
+      doneReason,
+      sawUsage: sawUsageAfter,
+    } = await consumeStream(ctx, stream, conversationTokens, runId, fm, sawUsage);
+    sawUsage = sawUsageAfter;
 
     if (terminated) return;
 
