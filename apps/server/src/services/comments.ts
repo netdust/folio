@@ -150,6 +150,12 @@ export interface ListCommentsInput {
  * widened to their post-read `Document` shape. This narrows the trust gap from
  * "anything → Document" (the old `as unknown as`) to "a checked insert row →
  * Document", in one auditable place.
+ *
+ * NOTE (create path): `boardPosition`/`lastTouchedAt` are DB-defaulted and are
+ * physically ABSENT (not null) on the freshly-inserted row this maps, even
+ * though `Document` types them as present-nullable. This matches the existing
+ * POST 201 wire contract (which omits them; GET re-reads and returns them).
+ * Consumers must not assume `in`-presence of these two keys on a create result.
  */
 function rowToDocument(row: typeof documents.$inferInsert): Document {
   return row as Document;
@@ -640,6 +646,10 @@ export async function deleteComment(input: DeleteCommentInput): Promise<Document
   // imports (deleted_at='') don't trigger a phantom re-delete + duplicate
   // comment.deleted event.
   if (typeof existingFm.deleted_at === 'string' && existingFm.deleted_at.length > 0) {
+    // `existing`/`updated` here are already `$inferSelect`-shaped (built from a
+    // real read row), so they take a single-step `as Document` directly rather
+    // than going through `rowToDocument` (which widens an INSERT row). Don't
+    // force-fit these through the insert-shaped mapper — different source shape.
     return existing as Document;
   }
 
