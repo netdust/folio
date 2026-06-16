@@ -29,6 +29,15 @@ export const MAX_GROUPS = 200;
 /** Distinct buckets per group in a `distribution` aggregate; the rest fold to "other" (mitigation 8). */
 export const MAX_DISTRIBUTION_BUCKETS = 50;
 
+/**
+ * Dedicated cap on the number of `distribution` ops in one request (mitigation 8b).
+ * Distribution specs are the most cost-asymmetric input — each runs a 2-D
+ * `GROUP BY g,v` over the full set with NO SQL-level row cap (the per-group
+ * 50-bucket cap is applied in JS AFTER materialization). They must NOT share the
+ * looser MAX_AGGREGATES budget, so this is a separate, tighter ceiling.
+ */
+export const MAX_DISTRIBUTION_SPECS = 3;
+
 /** The canonical frontmatter/built-in field-key shape (documents.ts line ~99). */
 const FIELD_KEY_RE = /^[a-zA-Z0-9_]+$/;
 
@@ -154,6 +163,16 @@ export function validateGroupSummaryRequest(
     }
 
     aggregates.push({ op, ...(field ? { field } : {}), ...(value !== undefined ? { value } : {}) });
+  }
+
+  // --- distribution-spec cap (mitigation 8b) — tighter than MAX_AGGREGATES ---
+  const distributionCount = aggregates.filter((a) => a.op === 'distribution').length;
+  if (distributionCount > MAX_DISTRIBUTION_SPECS) {
+    throw new HTTPError(
+      'INVALID_AGGREGATE',
+      `INVALID_AGGREGATE: at most ${MAX_DISTRIBUTION_SPECS} distribution aggregates (got ${distributionCount})`,
+      422,
+    );
   }
 
   return { groupBy: input.groupBy, aggregates };

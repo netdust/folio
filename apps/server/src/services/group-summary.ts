@@ -216,6 +216,9 @@ export async function groupSummary(args: GroupSummaryArgs): Promise<GroupSummary
   //    rows). Only NON-null/empty groups; the ungrouped bucket is a separate
   //    query. Top-N cap +1 to detect truncation (mitigation 4).
   const selectList = sql.join([sql`${groupExpr} AS g`, ...selectFrags], sql`, `);
+  // Perf: relies on `documents_project_type_idx ON (project_id, type)` (schema.ts)
+  // to narrow the scan to this project+type slice BEFORE the unindexed
+  // `json_extract` groupExpr. Keep that index if a future db:generate touches it.
   const groupRows = await db.all<Record<string, unknown>>(sql`
     SELECT ${selectList}
       FROM ${documents}
@@ -233,10 +236,15 @@ export async function groupSummary(args: GroupSummaryArgs): Promise<GroupSummary
   const distByGroup = new Map<string, Map<string, DistributionBucket[]>>();
   for (const spec of distributionSpecs) {
     const ve = fieldExpr(spec.field!);
+    // NB: no `${groupExpr} IS NOT NULL AND <> ''` exclusion here — the ungrouped
+    // (null/empty groupBy) rows MUST be included so they fold under the literal
+    // 'null' group key (`String(r.g) === 'null'`), which the ungrouped assembly
+    // (buildRow with `g: null`) then resolves. Excluding them silently emptied
+    // the ungrouped bucket's distribution.
     const distRows = await db.all<{ g: string | null; v: string | null; c: number }>(sql`
       SELECT ${groupExpr} AS g, ${ve} AS v, COUNT(*) AS c
         FROM ${documents}
-       WHERE ${where} AND ${groupExpr} IS NOT NULL AND ${groupExpr} <> ''
+       WHERE ${where}
        GROUP BY g, v
        ORDER BY g, c DESC
     `);
@@ -289,13 +297,10 @@ export async function groupSummary(args: GroupSummaryArgs): Promise<GroupSummary
   const ungroupedRaw = ungroupedRows[0];
   let ungrouped: GroupSummaryRow | null = null;
   if (ungroupedRaw && Number(ungroupedRaw.g_count ?? 0) > 0) {
-    const row = buildRow({ ...ungroupedRaw, g: null });
-    // Distribution buckets for the ungrouped set use the literal 'null' group key.
-    for (const spec of distributionSpecs) {
-      const key = specKey(spec);
-      row.aggregates[key] = distByGroup.get(key)?.get('null') ?? [];
-    }
-    ungrouped = row;
+    // buildRow with `g: null` resolves the ungrouped distribution via the literal
+    // 'null' group key (`String(null) === 'null'`), which the dist sub-query now
+    // populates — no separate re-loop needed.
+    ungrouped = buildRow({ ...ungroupedRaw, g: null });
   }
 
   return { groups, ungrouped, truncated };

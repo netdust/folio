@@ -293,6 +293,42 @@ test('documents missing the groupBy field land in the ungrouped bucket', async (
   expect(ungrouped!.value).toBeNull();
 });
 
+test('the ungrouped bucket carries a populated distribution (not [])', async () => {
+  const { db, seed } = await makeTestApp();
+  const table = await getWorkItemsTable(db, seed.project.id);
+  await registerField(db, seed.project.id, table.id, 'phase', 'string');
+  await registerField(db, seed.project.id, table.id, 'tag', 'string');
+  // 4 docs WITH a phase (grouped), 6 WITHOUT a phase (ungrouped). The ungrouped
+  // docs carry distinct `tag` values: 3×'red', 2×'green', 1×'blue'.
+  const ungroupedTags = ['red', 'red', 'red', 'green', 'green', 'blue'];
+  await seedWorkItems(db, seed.project.id, seed.workspace.id, table.id, 10, (i) => {
+    if (i < 4) return { status: 'open', fm: { phase: 'design', tag: 'shared' } };
+    return { status: 'open', fm: { tag: ungroupedTags[i - 4]! } };
+  });
+  const { groups, ungrouped } = await groupSummary({
+    projectId: seed.project.id,
+    activeTableId: table.id,
+    groupBy: 'phase',
+    aggregates: [{ op: 'count' }, { op: 'distribution', field: 'tag' }],
+  });
+  // The grouped 'design' distribution is still correct (no regression).
+  const design = groups.find((g) => g.value === 'design')!;
+  const designDist = design.aggregates['distribution:tag'] as DistributionBucket[];
+  expect(designDist).toHaveLength(1);
+  expect(designDist[0]).toEqual({ value: 'shared', count: 4 });
+  // The ungrouped bucket's distribution must be POPULATED (the bug rendered []).
+  expect(ungrouped).not.toBeNull();
+  expect(ungrouped!.count).toBe(6);
+  const ungDist = ungrouped!.aggregates['distribution:tag'] as DistributionBucket[];
+  expect(Array.isArray(ungDist)).toBe(true);
+  expect(ungDist.length).toBeGreaterThan(0);
+  const byValue = new Map(ungDist.map((b) => [b.value, b.count]));
+  expect(byValue.get('red')).toBe(3);
+  expect(byValue.get('green')).toBe(2);
+  expect(byValue.get('blue')).toBe(1);
+  expect(ungDist.reduce((s, b) => s + b.count, 0)).toBe(6);
+});
+
 // ---------- group cap / truncation (mitigation 4) ----------
 
 test('caps the returned groups at MAX_GROUPS and flags truncated', async () => {

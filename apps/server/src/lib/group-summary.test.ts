@@ -15,6 +15,7 @@ import { expect, test } from 'bun:test';
 import {
   MAX_AGGREGATES,
   MAX_DISTRIBUTION_BUCKETS,
+  MAX_DISTRIBUTION_SPECS,
   MAX_GROUPS,
   validateGroupSummaryRequest,
 } from './group-summary.ts';
@@ -119,4 +120,23 @@ test('caps are sane defaults (mitigations 3/4/8)', () => {
   expect(MAX_AGGREGATES).toBe(10);
   expect(MAX_GROUPS).toBe(200);
   expect(MAX_DISTRIBUTION_BUCKETS).toBe(50);
+  expect(MAX_DISTRIBUTION_SPECS).toBe(3);
+});
+
+test('rejects more than MAX_DISTRIBUTION_SPECS distribution aggregates (422 INVALID_AGGREGATE)', () => {
+  const aggregates = Array.from({ length: MAX_DISTRIBUTION_SPECS + 1 }, (_, i) => ({
+    op: 'distribution' as const,
+    field: `f${i}`,
+  }));
+  expect(() => validateGroupSummaryRequest({ groupBy: 'status', aggregates })).toThrow(
+    /INVALID_AGGREGATE/,
+  );
+});
+
+test('accepts exactly MAX_DISTRIBUTION_SPECS distribution aggregates', () => {
+  const aggregates = Array.from({ length: MAX_DISTRIBUTION_SPECS }, (_, i) => ({
+    op: 'distribution' as const,
+    field: `f${i}`,
+  }));
+  expect(() => validateGroupSummaryRequest({ groupBy: 'status', aggregates })).not.toThrow();
 });
