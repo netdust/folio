@@ -46,7 +46,6 @@ import {
   checkProviderHealth,
   checkRunRateLimits,
   getActiveRun,
-  incrementTokens,
   setRunBody,
   transitionRun,
 } from '../services/agent-runs.ts';
@@ -1018,21 +1017,6 @@ async function conversationPreflight(ctx: RunContext): Promise<boolean> {
   return false;
 }
 
-/**
- * Operator cockpit chat (Task 5) — accumulate per-turn token usage in memory for
- * a conversation run (no `agent_run` row to persist into). Returns the running
- * post-increment totals so the budget cap check is identical to the document path.
- */
-function trackConversationTokens(
-  acc: { in: number; out: number },
-  addIn: number,
-  addOut: number,
-): { tokens_in: number; tokens_out: number } {
-  acc.in += addIn;
-  acc.out += addOut;
-  return { tokens_in: acc.in, tokens_out: acc.out };
-}
-
 // ---------------------------------------------------------------------------
 // Message-history construction (mitigation 25 — literal text only)
 // ---------------------------------------------------------------------------
@@ -1229,10 +1213,10 @@ export function buildToolDefs(agentFm: Record<string, unknown>): ToolDef[] {
 // ---------------------------------------------------------------------------
 
 /**
- * B-1 (M2 RunSink) — per-round stream consumption, extracted VERBATIM from
- * runLoop. Accumulates this round's `textBuf`, token usage (incl. the budget cap
- * + the conversation-sink partial-comment branch + failRun), `collectedToolCalls`,
- * and `doneReason`, with the budget/cancel/sink branches kept INLINE. Returns the
+ * B-1 (M2 RunSink) — per-round stream consumption. Accumulates this round's
+ * `textBuf`, token usage (via `ctx.runSink.trackTokens`, incl. the budget cap +
+ * the document-path partial-comment branch + failRun), `collectedToolCalls`, and
+ * `doneReason`, with the budget/cancel branches kept INLINE. Returns the
  * accumulated values plus the `terminated` flag the caller checks: when true, a
  * budget/cancel path already failed the run and runLoop must `return`. `sawUsage`
  * is threaded in/out so the G2 unmetered accumulator stays sticky across rounds.
@@ -1240,8 +1224,6 @@ export function buildToolDefs(agentFm: Record<string, unknown>): ToolDef[] {
 async function consumeStream(
   ctx: RunContext,
   stream: AsyncIterable<ProviderEvent>,
-  conversationTokens: { in: number; out: number },
-  runId: string,
   fm: AgentRunFrontmatter,
   sawUsageIn: boolean,
 ): Promise<{
@@ -1263,26 +1245,27 @@ async function consumeStream(
     if (ev.type === 'text') {
       textBuf += ev.delta;
     } else if (ev.type === 'tokens') {
-      // FIX #10 — incrementTokens returns the post-increment totals atomically;
-      // use them directly instead of a redundant read-back SELECT.
-      // Operator cockpit chat (Task 5) — a conversation run has NO `agent_run`
-      // document, so `incrementTokens` (an UPDATE-then-read-or-throw keyed on
-      // an agent_run row) cannot persist. Track the budget in-memory instead:
-      // the conversation `active_run_id` slot, not an agent_run row, is the
-      // durable liveness record. The budget cap still applies per turn.
+      // FIX #10 — trackTokens returns the post-increment totals atomically; use
+      // them directly instead of a redundant read-back SELECT. The doc impl
+      // persists via incrementTokens (an UPDATE-then-read on the agent_run row);
+      // the conversation impl accumulates in-memory (no agent_run row — the
+      // `active_run_id` slot is the durable liveness record). The budget cap
+      // applies identically per turn on both.
       if (ev.tokens_in > 0 || ev.tokens_out > 0) sawUsage = true; // G2 — usage reported.
-      const { tokens_in: usedIn, tokens_out: usedOut } = ctx.sink
-        ? trackConversationTokens(conversationTokens, ev.tokens_in, ev.tokens_out)
-        : await incrementTokens(runId, { in: ev.tokens_in, out: ev.tokens_out });
+      const { tokensIn: usedIn, tokensOut: usedOut } = await ctx.runSink.trackTokens(
+        ev.tokens_in,
+        ev.tokens_out,
+      );
       if (usedIn + usedOut > fm.max_tokens) {
-        // On the CONVERSATION (sink) path, postAgentComment + failRun both write
-        // sink.text — calling both double-posts on the cockpit thread (same mode
-        // as the dropped-call fix, code-review #4). failRun is the single surface
-        // there; fold the partial-work note into its message. On the document
-        // path, both are wanted (a partial-work comment PLUS the failed transition).
-        if (!ctx.sink) {
-          await postAgentComment(
-            ctx,
+        // On the CONVERSATION path, post() + fail() both write sink.text — calling
+        // both double-posts on the cockpit thread (same mode as the dropped-call
+        // fix, code-review #4). fail() is the single surface there; fold the
+        // partial-work note into its message. On the document path, both are wanted
+        // (a partial-work comment PLUS the failed transition): the document
+        // RunSink.fail() only transitions, so the partial comment is posted HERE,
+        // guarded on the document path.
+        if (!ctx.runSink.isConversation) {
+          await ctx.runSink.post(
             `Budget cap exceeded after ${usedIn + usedOut} tokens — partial work above.`,
             'comment',
           );
@@ -1384,7 +1367,7 @@ async function executeToolRound(
         // (Task 7) can scope a pending_ops row. Undefined on document-thread
         // runs → no behavior change to the existing path.
         conversationId: ctx.conversationId,
-        conversationSink: ctx.sink,
+        conversationSink: ctx.runSink.conversationSink,
         // Cluster-4 BLOCKER fix: the confirm gate records pending_ops.caller_id
         // with the HUMAN owner (transitionActor = conversation.created_by), the
         // value the confirm route confirms with — NOT ctx.actor (agent:_operator).
@@ -1406,8 +1389,8 @@ async function executeToolRound(
       // The `ui` tools already emit their own `component` row via the sink;
       // a tool_step for them too is harmless context but redundant, so skip
       // the chat-only ui tools here.
-      if (ctx.sink && tc.name !== 'show_link_panel' && tc.name !== 'ask_choice') {
-        await ctx.sink.toolStep({
+      if (ctx.runSink.isConversation && tc.name !== 'show_link_panel' && tc.name !== 'ask_choice') {
+        await ctx.runSink.toolStep({
           tool: tc.name,
           summary: summarizeToolResult(tc.name, result),
           status: 'ok',
@@ -1455,8 +1438,12 @@ async function executeToolRound(
         // conversation thread (and T8's interrupted-turn summary) reflect that
         // a tool was attempted and failed — not only successes. "The steps ARE
         // the report" (spec). ui tools emit their own component row, so skip them.
-        if (ctx.sink && tc.name !== 'show_link_panel' && tc.name !== 'ask_choice') {
-          await ctx.sink.toolStep({
+        if (
+          ctx.runSink.isConversation &&
+          tc.name !== 'show_link_panel' &&
+          tc.name !== 'ask_choice'
+        ) {
+          await ctx.runSink.toolStep({
             tool: tc.name,
             summary: `rejected arguments: ${paths}`,
             status: 'error',
@@ -1483,8 +1470,8 @@ async function executeToolRound(
         content: `Tool '${tc.name}' failed: ${safeToolErrorMessage(err, providerLabel)}. Adjust and retry.`,
       });
       // Cluster-2 /code-review fix: record the failed tool_step (see above).
-      if (ctx.sink && tc.name !== 'show_link_panel' && tc.name !== 'ask_choice') {
-        await ctx.sink.toolStep({
+      if (ctx.runSink.isConversation && tc.name !== 'show_link_panel' && tc.name !== 'ask_choice') {
+        await ctx.runSink.toolStep({
           tool: tc.name,
           summary: safeToolErrorMessage(err, providerLabel),
           status: 'error',
@@ -1625,9 +1612,9 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
 
   const tools = buildToolDefs(ctx.agentFm);
 
-  // Operator cockpit chat (Task 5) — in-memory token accumulator for a conversation
-  // run (no agent_run row to persist into). Unused on document runs.
-  const conversationTokens = { in: 0, out: 0 };
+  // The per-conversation token accumulator now lives INSIDE ConversationRunSink
+  // (created once per factory call, accumulates across rounds — mitigation 3).
+  // runLoop no longer threads it; consumeStream calls ctx.runSink.trackTokens.
 
   let round = 0;
   // Mitigation 64 — consecutive all-error rounds; counter logic in the round below.
@@ -1662,7 +1649,7 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
       textBuf,
       doneReason,
       sawUsage: sawUsageAfter,
-    } = await consumeStream(ctx, stream, conversationTokens, runId, fm, sawUsage);
+    } = await consumeStream(ctx, stream, fm, sawUsage);
     sawUsage = sawUsageAfter;
 
     if (terminated) return;
@@ -1982,19 +1969,10 @@ async function postAgentComment(
   body: string,
   kind: 'result' | 'comment',
 ): Promise<void> {
-  if (ctx.sink) {
-    await ctx.sink.text(body);
-    return;
-  }
-  await createComment({
-    workspace: ctx.workspace,
-    project: ctx.project,
-    parent: ctx.parent,
-    authorContext: ctx.authorContext,
-    actor: ctx.actor,
-    body,
-    kind,
-  });
+  // Both branches now live in the polymorphic RunSink.post: doc → createComment on
+  // the parent (kind-aware); conv → one `text` message row. This helper is a thin
+  // alias kept for its many call sites + the run-linkage doc note above.
+  await ctx.runSink.post(body, kind);
 }
 
 /**
@@ -2007,26 +1985,12 @@ async function postAgentComment(
  * post-start rejection on the parent as the cancel trigger.
  */
 async function wasCancelled(ctx: RunContext): Promise<boolean> {
-  // Operator cockpit chat (Task 4) — a conversation-backed run has NO
-  // `ctx.parent` (cancel-via-rejection-comment is a document-thread mechanism).
-  // Mid-turn cancel for chat is a deliberate v1 deferral (threat model
-  // "Out of scope: mid-turn cancellation"); a conversation run is never
-  // cancelled this way, so report false instead of dereferencing a null parent.
-  if (ctx.sink) return false;
-  // FIX #1 — INCLUSIVE boundary (createdAt >= started_at). listComments' `since`
-  // filter is strict `>` (gt), which drops a rejection stamped in the SAME
-  // millisecond as started_at — a real mid-run cancel that races the run's own
-  // start timestamp. A rejection BEFORE started_at belongs to a prior run/plan
-  // (handled by rejectRun's awaiting_approval→rejected path); a rejection
-  // AT-OR-AFTER start is a valid mid-run cancel. So we fetch all rejections on
-  // the parent and apply the inclusive comparison ourselves rather than relying
-  // on listComments' exclusive `since`.
-  const rejections = await listComments({
-    parentId: ctx.parent.id,
-    kind: 'rejection',
-  });
-  const startedMs = new Date(ctx.fm.started_at).getTime();
-  return rejections.some((c) => new Date(c.createdAt).getTime() >= startedMs);
+  // Both branches now live in the polymorphic RunSink.wasCancelled: doc → the
+  // INCLUSIVE (>= started_at) post-start rejection scan (FIX #1, mitigation 9,
+  // security-load-bearing); conv → false (mid-turn chat cancel is a v1 deferral —
+  // threat model "Out of scope: mid-turn cancellation"). This helper is a thin
+  // alias kept for its call sites in consumeStream + finishTerminal.
+  return ctx.runSink.wasCancelled();
 }
 
 /**
@@ -2036,23 +2000,15 @@ async function wasCancelled(ctx: RunContext): Promise<boolean> {
  * comment — the partial work already streamed into the cancel comment above.
  */
 async function handleCancel(ctx: RunContext): Promise<void> {
-  // On the CONVERSATION (sink) path, both postAgentComment and failRun write to
-  // ctx.sink.text — calling both would double-post on the cockpit thread (the same
-  // mode as the dropped-call fix, code-review #4). failRun is the single surface
-  // there. NOTE: today wasCancelled() returns false for sink runs (mid-turn chat
-  // cancel is a v1 deferral), so this branch is latent — kept fail-safe for when
-  // chat-cancel lands. On the document path, both are wanted (a partial-work comment
-  // PLUS the failed/cancelled transition).
-  if (ctx.sink) {
-    await failRun(
-      ctx,
-      runErrorReasonSchema.enum.cancelled,
-      'Cancelled by user — partial work above.',
-    );
-    return;
-  }
-  await postAgentComment(ctx, 'Cancelled by user — partial work above.', 'comment');
-  await failRun(ctx, runErrorReasonSchema.enum.cancelled, 'Cancelled by user via comment.');
+  // Both branches now live in the polymorphic RunSink.cancel: doc → a partial-work
+  // `comment` PLUS the failed/cancelled transition; conv → fail() ONLY (one `text`
+  // message — posting a comment AND failing would double-post on the cockpit
+  // thread, the same mode as the dropped-call fix, code-review #4). NOTE: today
+  // wasCancelled() returns false for conversation runs (mid-turn chat cancel is a
+  // v1 deferral), so the conversation branch is latent — kept fail-safe for when
+  // chat-cancel lands. This helper is a thin alias kept for its call sites in
+  // consumeStream + finishTerminal.
+  await ctx.runSink.cancel();
 }
 
 function isInvalidArgs(
@@ -2142,26 +2098,14 @@ async function failRun(
   errorReason: NonNullable<AgentRunFrontmatter['error_reason']>,
   errorDetail: string,
 ): Promise<void> {
-  // Operator cockpit chat (Task 5) — a conversation run has no `agent_run` row to
-  // transition (transitionRun would throw AGENT_RUN_NOT_FOUND). Surface the
-  // failure as a turn text message so the human watching the thread sees it; the
-  // `active_run_id` slot is cleared by the runAgent conversation finally.
-  if (ctx.sink) {
-    // ONE thread message carries the human-readable detail (not just the reason
-    // code), so callers don't post a separate explanatory comment AND failRun —
-    // which would double-post on the cockpit thread (code-review #4).
-    await ctx.sink.text(`The operator could not finish this turn: ${errorDetail}`);
-    return;
-  }
-  // transitionRun owns its own `txWithEvents` (UPDATE + event emit commit
-  // atomically). Call it directly — no outer wrapper (which would nest an
-  // empty db.transaction whose fn never emits).
-  await transitionRun(ctx.run.id, {
-    newStatus: 'failed',
-    actor: ctx.transitionActor,
-    errorReason,
-    errorDetail,
-  });
+  // Both branches now live in the polymorphic RunSink.fail: doc → transitionRun
+  // (failed) with the reason + detail (transitionRun owns its own txWithEvents —
+  // UPDATE + event emit commit atomically); conv → ONE `text` thread message
+  // carrying the human-readable detail (a conversation run has no `agent_run` row
+  // to transition — transitionRun would throw AGENT_RUN_NOT_FOUND). The single
+  // failure surface there is what structurally prevents the double-post bug
+  // (code-review #4). This helper is a thin alias kept for its many call sites.
+  await ctx.runSink.fail(errorReason, errorDetail);
 }
 
 /**
