@@ -55,9 +55,11 @@ Order: A → E → D → B → C. Each cluster = a `── REVIEW GATE ──`. 
 - [x] /integration full branch — server 1852 / web 959 / shared 70, 0 fail; all 3 tsc clean; check:invariants 20/0/0
 - [x] test-effectiveness audit over M3 diff — DONE: all paths covered or accepted-blind (labels #9); 0 tests authored (no genuine blind spot). Manifest captured.
 - [x] feature-acceptance BROWSER drive — DONE, both flows PASS in real Chrome. B: page-2-match found (the fix), empty/last-page/no-dupe all green. C: V3 collapse→expand view survives + 1-batched-req-per-project confirmed via API log. No defects in M3 fixes. not-reachable: 2 edges/flow (concurrent SSE, mid-flow 500 — need fault injection); unverified-no-browser: in-app new-view-create CLICK trigger (chrome-ws fallback limitation, NOT app bug — wire+rail-render halves proven). FOLLOW-UP: Playwright spec for the create-trigger edge.
-- [~] /shakeout STANDARD panel — DISPATCHED (whole-branch generalist + invariant-auditor on full main..HEAD diff). routeTree.gen.ts regen-noise reverted. 22 clean M3 commits.
-- [ ] finish-branch — DO NOT MERGE (Stefan gates)
-- [ ] compound (CODE-MAP + skill-audit, report-only)
+- [x] /shakeout STANDARD panel — CLOSED. invariant-auditor: 0 bypass, no new invariant (20/0/0). generalist: 1 Important (API.md missing C's ?tables= = A-before-C cross-cluster drift) → fixed (150ff28); +1 Sugg folded (test-setup listener dedup); 2 self-flagged notes. No 1a → STANDARD held.
+- [x] finish-branch — branch ready, presenting options to Stefan (DO NOT MERGE — his gate)
+- [x] compound — report-only: M3 memory written; CODE-MAP.md authoring DEFERRED (doesn't exist, own task); optional inv-4a note recorded as follow-up
+
+## FINAL: server 1852 / web 959 / shared 70, 0 fail · 3 tsc clean · lint 0-err · check:invariants 20/0/0 · both browser acceptance flows PASS
 
 ### Stage 3 — spec-close
 - [ ] /integration full branch
