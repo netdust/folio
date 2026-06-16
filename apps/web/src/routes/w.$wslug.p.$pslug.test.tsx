@@ -194,7 +194,7 @@ describe('ProjectLayout — table-aware BoardControls (invariant 16)', () => {
   });
 });
 
-describe('ProjectLayout — saved-view switcher', () => {
+describe('ProjectLayout — header has no view switcher (rail owns saved views)', () => {
   beforeEach(() => {
     localStorage.clear();
     mockViews = [
@@ -208,40 +208,21 @@ describe('ProjectLayout — saved-view switcher', () => {
     vi.unstubAllGlobals();
   });
 
-  it('renders a switcher tab per saved view, with icons, and no Wiki tab', async () => {
+  it('does NOT render a header tab per saved view (the rail is the sole saved-views surface)', async () => {
     const { queryClient, router } = setup();
     render(
       <QueryClientProvider client={queryClient}>
         <RouterProvider router={router} />
       </QueryClientProvider>,
     );
-
-    // One tab per SAVED VIEW name (not the fixed Work-items/Board pair).
-    expect(await screen.findByRole('tab', { name: /All work items/ })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: /Board/ })).toBeInTheDocument();
-    expect(screen.queryByRole('tab', { name: /wiki/i })).toBeNull();
-    expect(screen.getByRole('tab', { name: /All work items/ }).querySelector('svg')).toBeTruthy();
-    expect(screen.getByRole('tab', { name: /Board/ }).querySelector('svg')).toBeTruthy();
 
     // Sanity: the project actually loaded (avoids passing on a "not found" screen).
     await waitFor(() => expect(screen.getByText('Sales')).toBeInTheDocument());
-  });
 
-  it('marks the active view as the selected tab', async () => {
-    mockActiveView = mockViews[1]; // "Board" is active
-    const { queryClient, router } = setup();
-    render(
-      <QueryClientProvider client={queryClient}>
-        <RouterProvider router={router} />
-      </QueryClientProvider>,
-    );
-
-    const boardTab = await screen.findByRole('tab', { name: /Board/ });
-    expect(boardTab).toHaveAttribute('aria-selected', 'true');
-    expect(screen.getByRole('tab', { name: /All work items/ })).toHaveAttribute(
-      'aria-selected',
-      'false',
-    );
+    // The header MUST NOT duplicate the rail's saved-view list — even though
+    // mockViews has named views, no header tab renders for them (Stefan, 2026-06-16).
+    expect(screen.queryByRole('tab', { name: /All work items/ })).toBeNull();
+    expect(screen.queryByRole('tab', { name: /Board/ })).toBeNull();
   });
 
   it('shows a visible operator-panel toggle in the toolbar (G4)', async () => {

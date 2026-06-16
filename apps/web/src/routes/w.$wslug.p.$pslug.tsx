@@ -1,20 +1,9 @@
-import type { ViewType } from '@folio/shared';
 import { Outlet, createFileRoute, useNavigate, useSearch } from '@tanstack/react-router';
-import {
-  Calendar,
-  Columns3,
-  GanttChart,
-  List,
-  Loader2,
-  type LucideIcon,
-  PanelRight,
-  Plus,
-  Table2,
-} from 'lucide-react';
+import { Loader2, PanelRight, Plus } from 'lucide-react';
 import { toast } from 'sonner';
 import { z } from 'zod';
 import { BoardControls } from '../components/kanban/board-controls.tsx';
-import { FrameTab, MainFrame } from '../components/shell/main-frame.tsx';
+import { MainFrame } from '../components/shell/main-frame.tsx';
 import { DocumentSlideover } from '../components/slideover/document-slideover.tsx';
 import { Button } from '../components/ui/button.tsx';
 import { Icon } from '../components/ui/icon.tsx';
@@ -31,24 +20,6 @@ export const Route = createFileRoute('/w/$wslug/p/$pslug')({
   component: ProjectLayout,
 });
 
-// THE view-type → tab icon map. A view click no longer routes by URL shape; the
-// switcher renders one tab per SAVED VIEW and the icon is keyed off the view's
-// type. Gallery falls back to a generic image-ish glyph (none in the v1 set).
-const iconForViewType = (type: ViewType): LucideIcon => {
-  switch (type) {
-    case 'table':
-      return Table2;
-    case 'kanban':
-      return Columns3;
-    case 'calendar':
-      return Calendar;
-    case 'timeline':
-      return GanttChart;
-    default:
-      return List; // list + gallery
-  }
-};
-
 function ProjectLayout() {
   const { wslug, pslug } = Route.useParams();
   const navigate = useNavigate();
@@ -63,9 +34,9 @@ function ProjectLayout() {
   const { data: pages } = useDocuments(wslug, pslug, tslug, { type: 'page', limit: 200 });
   const create = useCreateDocument(wslug, pslug, tslug);
   useLiveDocuments(wslug, pslug, project?.id);
-  // The tabs are now one-per-SAVED-VIEW; the active tab + the kanban BoardControls
-  // gate are both keyed off the ACTIVE VIEW's type (invariant 18), not a URL shape.
-  const { view: activeView, views } = useActiveView(wslug, pslug, tslug);
+  // The kanban BoardControls gate is keyed off the ACTIVE VIEW's type (invariant 18),
+  // not a URL shape. Saved-view SWITCHING lives in the rail, not the header.
+  const { view: activeView } = useActiveView(wslug, pslug, tslug);
 
   if (isLoading) return <div className="p-8 text-fg-3">Loading project…</div>;
   if (!project) return <div className="p-8 text-danger">Project not found.</div>;
@@ -119,30 +90,13 @@ function ProjectLayout() {
         subMeta={`/${wslug}/p/${project.slug} · ${workCount} ${workCount === 1 ? 'work item' : 'work items'} · ${pageCount} ${pageCount === 1 ? 'page' : 'pages'}`}
         actions={actions}
         tabs={
-          <>
-            {views.map((v) => (
-              <FrameTab
-                key={v.id}
-                active={activeView?.id === v.id}
-                icon={iconForViewType(v.type)}
-                onClick={() =>
-                  navigate({
-                    to: '/w/$wslug/p/$pslug/t/$tslug',
-                    params: { wslug, pslug, tslug },
-                    search: (s) => ({ ...s, view: v.id }),
-                  })
-                }
-              >
-                {v.name}
-              </FrameTab>
-            ))}
-            {activeView?.type === 'kanban' ? (
-              <>
-                <div className="mx-1 h-5 w-px self-center bg-border-light" aria-hidden />
-                <BoardControls wslug={wslug} pslug={pslug} tslug={tslug} />
-              </>
-            ) : null}
-          </>
+          // Saved-view switching lives in the RAIL (the single saved-views surface);
+          // a header tab-per-view just duplicated it (Stefan, 2026-06-16). The header
+          // only carries the ACTIVE view's controls — today that's BoardControls when
+          // the active view is a kanban (invariant 18 active-view gate, not a switcher).
+          activeView?.type === 'kanban' ? (
+            <BoardControls wslug={wslug} pslug={pslug} tslug={tslug} />
+          ) : null
         }
       >
         <Outlet />
