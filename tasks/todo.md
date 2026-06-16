@@ -189,3 +189,7 @@ Each group below has:
 - BUG-004 (web bundle size) — defer to Phase 7.
 - 23 SHOULD-FIX + 24 NICE-TO-HAVE from Phase 2.6 reviewer backlog — untouched.
 - Pre-existing TS errors in `apps/server/src/index.ts` and `packages/shared/src/{filter-compile,slug}.test.ts` — sweep before next merge.
+
+## M2 RunSink — carry-forward (added 2026-06-16 during Cluster A review)
+- [ ] **Cluster C close:** add a new invariant to ARCHITECTURE-INVARIANTS.md — "run output + lifecycle is decided by the run's `RunSink` (isConversation/methods), never an inline `if (ctx.sink)` mode-branch." Converges on `lib/run-sink.ts` + the `ctx.runSink` field. Land it WHEN C-4 deletes the legacy `sink?` field and the runner reads `ctx.runSink` exclusively (invariant-auditor, Cluster A review). Fold into the `compounding` spec-close step.
+- [ ] **Cluster C rewire:** update/drop the `runner.ts:NNNN` anchor comments in run-sink.ts when the inline branches they cite are deleted (quality reviewer #5).
