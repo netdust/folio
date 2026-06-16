@@ -54,8 +54,8 @@ Order: A → E → D → B → C. Each cluster = a `── REVIEW GATE ──`. 
 ## Stage 3 — spec-close (ALL 5 CLUSTERS CLOSED)
 - [x] /integration full branch — server 1852 / web 959 / shared 70, 0 fail; all 3 tsc clean; check:invariants 20/0/0
 - [x] test-effectiveness audit over M3 diff — DONE: all paths covered or accepted-blind (labels #9); 0 tests authored (no genuine blind spot). Manifest captured.
-- [ ] feature-acceptance BROWSER drive (B page-2-match + C V3 collapse→expand, one dev-stack boot) — DISPATCHED (shakeout-qa)
-- [ ] /shakeout STANDARD panel
+- [x] feature-acceptance BROWSER drive — DONE, both flows PASS in real Chrome. B: page-2-match found (the fix), empty/last-page/no-dupe all green. C: V3 collapse→expand view survives + 1-batched-req-per-project confirmed via API log. No defects in M3 fixes. not-reachable: 2 edges/flow (concurrent SSE, mid-flow 500 — need fault injection); unverified-no-browser: in-app new-view-create CLICK trigger (chrome-ws fallback limitation, NOT app bug — wire+rail-render halves proven). FOLLOW-UP: Playwright spec for the create-trigger edge.
+- [ ] /shakeout STANDARD panel — NEXT
 - [ ] finish-branch — DO NOT MERGE (Stefan gates)
 - [ ] compound (CODE-MAP + skill-audit, report-only)
 
