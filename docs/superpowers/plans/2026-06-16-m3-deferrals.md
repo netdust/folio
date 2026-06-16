@@ -20,6 +20,15 @@
 
 **Deferral:** full-table-scan cost of frontmatter filtering is pre-existing (priority `$eq` has it too); not addressed here. Indexing frontmatter keys is a separate perf task.
 
+### Threat-model gaps the security-review CAUGHT (recorded for next time)
+
+The original threat model above guarded the **query value** but missed three classes — the review found 2 Highs + a Low. For any future parsing→SQL operator, check these explicitly:
+1. **Stored value type, not just the query value (HIGH-1).** `json_each` over a frontmatter key that holds a *scalar* (string) instead of an array raises SQLite "malformed JSON" → uncaught 500 at query EXECUTION (downstream of the compile try/catch). Because frontmatter is schemaless+freely-writable, ONE malformed row poisons a whole filtered listing. Fix: two-arg `json_each(col, path)` + `json_type(col, path)='array'` guard (the naive `json_each(json_extract(...))` form double-parses and STILL crashes — verify the engine, don't assume). Always guard the json source type.
+2. **Aggregate cost, not per-clause (HIGH-2).** A per-array cap is meaningless if top-level keys are unbounded (500 keys × 100 values = 50k subqueries). Cap total clause count (`MAX_FILTER_CLAUSES=50`) AND raw payload length at the route (8192 bytes, before `JSON.parse`).
+3. **Validation-vs-use gap (LOW-1).** The shared validator had no column-awareness, so `$contains` on a built-in column passed validation then threw a generic `Error` in the SQL compiler → 500. Either reject in the validator OR map filter-execution SQLite errors to 422 (we did both). A crafted empty `$contains:[]` also slipped validation → silent select-all (now rejected).
+
+**Net:** "I threat-modeled the value" ≠ "the operator is safe." Stored-data shape, aggregate cost, and the validator↔compiler contract are separate surfaces.
+
 ---
 
 ## Task 1 — `$contains` operator + labels server-side (Tier A, RED-first)

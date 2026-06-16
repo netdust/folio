@@ -174,7 +174,7 @@ documentsRoute.get('/', async (c) => {
     // MAX_FILTER_CLAUSES bound the compiled fan-out, but a pathological payload
     // should be rejected cheaply at the wire rather than parsed + compiled into
     // a slow 200.
-    if (filterRaw.length > 8192) {
+    if (Buffer.byteLength(filterRaw, 'utf8') > 8192) {
       throw new HTTPError('INVALID_FILTER', 'filter is too large (max 8192 bytes)', 422);
     }
     try {
