@@ -2021,3 +2021,181 @@ describe('TableView table-scoped reads (C1T3 invariant-16 seam)', () => {
     await waitFor(() => expect(screen.getByText(/Failed to load documents/i)).toBeInTheDocument());
   });
 });
+
+// ───────────────────────────────────────────────────────────────────────────
+// M3: pagination (consume nextCursor) + server-side frontmatter filter.
+// Tier A — these assert correctness contracts the user sees: a match on page 2
+// IS shown (the bug being fixed), the priority filter goes to the server (not a
+// client post-filter of page 1), pagination stops at the last page, and a
+// double load-more does not double-fetch.
+// ───────────────────────────────────────────────────────────────────────────
+describe('TableView — pagination + server-side filter (M3)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  const docOnPage = (id: string, title: string, frontmatter: Record<string, unknown> = {}) => ({
+    id,
+    slug: id,
+    type: 'work_item' as const,
+    title,
+    status: 'todo' as string | null,
+    parentId: null,
+    frontmatter,
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+  });
+
+  // Base fetch mock that always answers statuses/fields/views, and routes
+  // /documents GET to the supplied handler (which receives the parsed URL).
+  function makeFetch(documentsHandler: (u: URL) => unknown, documentUrls: string[]) {
+    return vi.fn<typeof fetch>(async (url, init) => {
+      const u = String(url);
+      const method = init?.method ?? 'GET';
+      const json = (body: unknown) =>
+        new Response(JSON.stringify(body), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      if (u.includes('/statuses') && method === 'GET') return json({ data: [statusRow] });
+      if (u.includes('/fields') && method === 'GET') return json({ data: [] });
+      if (u.includes('/views') && method === 'GET') return json({ data: [viewRow] });
+      if (u.includes('/tables') && method === 'GET') return json({ data: [] });
+      if (u.includes('/documents') && method === 'GET') {
+        documentUrls.push(u);
+        return json({ data: documentsHandler(new URL(u, 'http://test.local')) });
+      }
+      return json({});
+    });
+  }
+
+  it('shows a match that only appears on page 2 (the regression being fixed)', async () => {
+    const documentUrls: string[] = [];
+    const fetchMock = makeFetch((u) => {
+      const cursor = u.searchParams.get('cursor');
+      if (!cursor) {
+        return { data: [docOnPage('p1', 'Page one task')], nextCursor: 'cursor-2' };
+      }
+      return { data: [docOnPage('p2', 'Page two MATCH')], nextCursor: null };
+    }, documentUrls);
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { queryClient, router } = setup('/w/acme/p/web/work-items');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByText('Page one task')).toBeInTheDocument());
+    // Page-2 row is NOT present yet — it lives behind the cursor.
+    expect(screen.queryByText('Page two MATCH')).toBeNull();
+
+    const loadMore = await screen.findByTestId('load-more');
+    fireEvent.click(loadMore);
+
+    // After loading page 2, BOTH pages' rows are visible. Pre-M3 the table
+    // truncated at page 1, so this row would never render.
+    await waitFor(() => expect(screen.getByText('Page two MATCH')).toBeInTheDocument());
+    expect(screen.getByText('Page one task')).toBeInTheDocument();
+  });
+
+  it('sends priority as a server-side ?filter= param (un-mocked builder seam)', async () => {
+    const documentUrls: string[] = [];
+    const fetchMock = makeFetch(
+      () => ({ data: [docOnPage('p1', 'High task', { priority: 'high' })], nextCursor: null }),
+      documentUrls,
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { queryClient, router } = setup('/w/acme/p/web/work-items?priority=high');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByText('High task')).toBeInTheDocument());
+
+    // The REAL clausesToListParams → toSearch builder produced this URL; no mock
+    // intercepts the filter JSON. This proves priority crosses the wire to the
+    // server, not a client post-filter of the current page.
+    await waitFor(() => {
+      const filtered = documentUrls.find((u) => u.includes('filter='));
+      expect(filtered).toBeDefined();
+      const parsed = JSON.parse(
+        new URL(filtered as string, 'http://test.local').searchParams.get('filter') as string,
+      );
+      expect(parsed).toEqual({ priority: { $eq: 'high' } });
+    });
+  });
+
+  it('does NOT request a next page when nextCursor is null (last page)', async () => {
+    const documentUrls: string[] = [];
+    const fetchMock = makeFetch(
+      () => ({ data: [docOnPage('only', 'Only task')], nextCursor: null }),
+      documentUrls,
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { queryClient, router } = setup('/w/acme/p/web/work-items');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByText('Only task')).toBeInTheDocument());
+
+    // No Load more button when the first page already exhausted the cursor.
+    expect(screen.queryByTestId('load-more')).toBeNull();
+    // Exactly one documents fetch (the relPages/relItems extra queries are
+    // disabled — no relation column — so the only /documents GET is page 1).
+    expect(documentUrls.length).toBe(1);
+  });
+
+  it('empty result → empty state, no Load more', async () => {
+    const documentUrls: string[] = [];
+    const fetchMock = makeFetch(() => ({ data: [], nextCursor: null }), documentUrls);
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { queryClient, router } = setup('/w/acme/p/web/work-items');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByText(/No work items yet/i)).toBeInTheDocument());
+    expect(screen.queryByTestId('load-more')).toBeNull();
+  });
+
+  it('double-clicking Load more does not double-fetch the same next page', async () => {
+    const documentUrls: string[] = [];
+    let page2Calls = 0;
+    const fetchMock = makeFetch((u) => {
+      const cursor = u.searchParams.get('cursor');
+      if (!cursor) return { data: [docOnPage('p1', 'Page one')], nextCursor: 'cursor-2' };
+      page2Calls += 1;
+      return { data: [docOnPage('p2', 'Page two')], nextCursor: null };
+    }, documentUrls);
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { queryClient, router } = setup('/w/acme/p/web/work-items');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    const loadMore = await screen.findByTestId('load-more');
+    // Two synchronous clicks: the button disables on isFetchingNextPage and
+    // react-query dedupes the in-flight key, so page 2 is fetched once.
+    fireEvent.click(loadMore);
+    fireEvent.click(loadMore);
+
+    await waitFor(() => expect(screen.getByText('Page two')).toBeInTheDocument());
+    expect(page2Calls).toBe(1);
+  });
+});

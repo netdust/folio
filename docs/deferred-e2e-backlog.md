@@ -56,3 +56,19 @@ save is the debounced `markdownUpdated` handler; focus-return is the picker
    with the `value` markdown and ProseMirror parses it into blocks).
    Why deferred: jsdom renders `# Hello\n\nworld` as a single `<h1>` containing
    the full string — block-level parsing requires a layout engine.
+
+## Frontmatter filter — labels array-contains (M3, audit 3.6/M5)
+
+9. **Filtering by `labels` across paginated pages is still client-page-local.**
+   M3 wired `priority` (and the existing status/assignee/updated_since) into the
+   server `?filter=` param so they filter ALL pages correctly. `labels` could
+   NOT be wired server-side: the filter compiler's operator set
+   (`$eq $ne $in $nin $gt $gte $lt $lte $exists` — `packages/shared/filter-compile.ts`)
+   has no array-contains. `json_extract(frontmatter,'$.labels')` returns the
+   labels array as JSON text, so `$in`/`$eq` would compare against the whole
+   serialized array — silently WRONG, not just absent. So `labels` stays a
+   client-side post-filter (`applyFrontmatterClauses`) and therefore only filters
+   the currently-loaded pages — a label match on a not-yet-loaded page is missed.
+   Fix needs a compiler array-contains operator backed by a SQLite
+   `EXISTS (SELECT 1 FROM json_each(frontmatter,'$.labels') WHERE value = ?)`
+   subquery in `filter-to-drizzle.ts`. Priority went server-side; labels deferred.
