@@ -68,8 +68,6 @@ import { type Message, type ProviderEvent, type ToolDef, getProvider } from './a
 import { sanitizeProviderError } from './ai/sanitize-error.ts';
 import { newApiToken } from './auth.ts';
 import { type SpawnFn, runClaudeCode } from './cc-executor.ts';
-import type { ConversationSink } from './chat-thread-sink.ts';
-import { makeConversationSink } from './chat-thread-sink.ts';
 import { buildConversationMessages } from './chat-thread-source.ts';
 import { conversationBus } from './conversation-bus.ts';
 import { decryptSecret } from './crypto.ts';
@@ -222,20 +220,14 @@ export interface RunContext {
    */
   unattended?: boolean;
   /**
-   * Operator cockpit chat (Task 4) — the conversation-thread output sink. Set
-   * by `loadContext` ONLY on a conversation-backed run (Task 5 stamps
-   * `conversation_id` on the run fm + populates this); absent on every
-   * document-thread / headless run. When present, the runner routes output
-   * through it (`postAgentComment` → `ctx.sink.text`) and threads it into
-   * `executeTool` so the `ui` tools can emit `component` rows. A conversation
-   * run has NO `ctx.parent`; the parent-coupled helpers guard on `ctx.sink`.
-   */
-  sink?: ConversationSink;
-  /**
-   * Always-set run-output polymorphism (M2 RunSink). The document/conversation
-   * `if (sink)` mode-branches migrate to `runSink.isConversation`/methods in
-   * Cluster C, which then deletes the legacy `sink?` field. Until then nothing
-   * reads this.
+   * Always-set run-output polymorphism (M2 RunSink). The single output/lifecycle/
+   * cancel/token abstraction the runner routes through: a DocumentRunSink on
+   * document/headless runs, a ConversationRunSink on conversation-backed runs
+   * (the operator cockpit). The legacy `sink?` mode-branch field is GONE — every
+   * former conversation/document mode-branch now reads `ctx.runSink.isConversation` or calls a
+   * polymorphic method (Cluster C). The composed ConversationSink (for the `ui`
+   * tools' `component` rows) is reached via `ctx.runSink.conversationSink`
+   * (undefined on document runs).
    */
   runSink: RunSink;
   /**
@@ -263,15 +255,15 @@ export interface RunContext {
 }
 
 /**
- * Cluster-2 /code-review fix: a conversation-backed run (ctx.sink set) MUST carry
- * a conversationId — they are stamped together by loadContext (Task 5). Fail LOUD
+ * Cluster-2 /code-review fix: a conversation-backed run MUST carry a
+ * conversationId — they are stamped together by loadContext (Task 5). Fail LOUD
  * on the invariant violation instead of `?? ''`, which would silently run
  * buildConversationMessages against an empty thread (operator "forgets" everything,
  * surfaced only as an opaque downstream provider error).
  */
 function requireConversationId(ctx: RunContext): string {
   if (!ctx.conversationId) {
-    throw new Error('conversation run is missing conversationId (sink set without id)');
+    throw new Error('conversation run is missing conversationId');
   }
   return ctx.conversationId;
 }
@@ -652,13 +644,14 @@ export async function loadContext(runId: string): Promise<RunContext | null> {
  * lookups. A conversation run is walled off from the `agent_run`/documents space
  * (invariant 10), so:
  *   - `run` / `parent` / `workspace` / `project` are SYNTHETIC sentinels. They
- *     are never read on the conversation path: `postAgentComment` + `wasCancelled`
- *     short-circuit on `ctx.sink`, the runner skips `preflight` (a document-row
- *     check) for conversation runs, and the run-document lifecycle helpers
- *     (`transitionRun` / `incrementTokens` / `setRunBody`) are likewise guarded
- *     on `ctx.sink` (they no-op — the conversation `active_run_id` slot, not an
- *     `agent_run` status, tracks liveness). The sentinels exist only to satisfy
- *     the non-null `RunContext` shape without widening the type for one branch.
+ *     are never read on the conversation path: the ConversationRunSink's
+ *     post/wasCancelled methods don't touch the parent, the runner skips
+ *     `preflight` (a document-row check) for conversation runs (it branches on
+ *     `ctx.runSink.isConversation`), and the run-document lifecycle methods
+ *     (complete/fail) no-op or post one message on the conversation impl — the
+ *     conversation `active_run_id` slot, not an `agent_run` status, tracks
+ *     liveness. The sentinels exist only to satisfy the non-null `RunContext`
+ *     shape without widening the type for one branch.
  *   - `token` is the EPHEMERAL operator token from the registry (operator ∩
  *     caller). `callerScopes` equals `token.scopes` so the `executeTool`
  *     double-membership check holds (M1/M2).
@@ -744,9 +737,10 @@ async function loadConversationContext(
   const keyRowMissing = !keyRow;
 
   // Assemble the ctx first so the conversation RunSink factory can read it
-  // (it needs `run.id` + `conversationId`), then attach `runSink` (M2 — pure
-  // addition; nothing reads it until Cluster C). The legacy `sink` /
-  // `conversationId` keys stay exactly as before.
+  // (it needs `run.id` + `conversationId`), then attach `runSink` (M2). The
+  // ConversationRunSink composes its OWN makeConversationSink internally, so no
+  // separate `sink:` is built here — that legacy field (and its dangling second
+  // sink instance) is gone post-Cluster-C.
   const ctx: RunContext = {
     run,
     fm,
@@ -772,7 +766,6 @@ async function loadConversationContext(
     callerScopes: convPending.callerScopes,
     // A human is present in the cockpit — never the unattended floor.
     unattended: false,
-    sink: makeConversationSink(db, convPending.conversationId, runId),
     conversationId: convPending.conversationId,
     keyRowMissing,
     keyDecryptFailed,
@@ -1000,8 +993,7 @@ async function conversationPreflight(ctx: RunContext): Promise<boolean> {
   // FOLIO_MASTER_KEY) — honest, actionable message, distinct from "no key".
   // conversationPreflight runs ONLY on conversation runs, so `isConversation` is
   // always true here; the guard is kept byte-faithfully. `post(body, 'comment')`
-  // on the conversation impl writes one `text` message row — identical to the old
-  // `ctx.sink.text(body)`.
+  // on the conversation impl writes one `text` message row.
   if (ctx.keyDecryptFailed) {
     if (ctx.runSink.isConversation) {
       await ctx.runSink.post(
@@ -1348,14 +1340,15 @@ async function executeToolRound(
   // CLEANLY (status `completed`) so the run releases its slot and waits; the
   // user's button click then starts a FRESH turn (startTurn). Set ONLY on the
   // success branch below (never on a recoverable/fatal error), and acted on
-  // only when `ctx.sink` is set (a conversation run) — on document/MCP/
+  // only on a conversation run (`ctx.runSink.isConversation`) — on document/MCP/
   // headless runs the handler throws `forbidden:` (fatal) and never reaches
   // success, so this stays false there.
   let askedChoice = false;
   // Operator cockpit chat — the irreversible-op confirm gate emitted a
   // confirmation card and threw AwaitingConfirmationError. Like askedChoice,
   // this is a CLEAN turn boundary (await the user's approval), NOT a failure.
-  // Set in the catch below; acted on after the loop, guarded on `ctx.sink`.
+  // Set in the catch below; acted on after the loop, guarded on
+  // `ctx.runSink.isConversation`.
   let awaitingConfirmation = false;
 
   for (const tc of collectedToolCalls) {
@@ -1619,17 +1612,13 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
 
   const tools = buildToolDefs(ctx.agentFm);
 
-  // The per-conversation token accumulator now lives INSIDE ConversationRunSink
-  // (created once per factory call, accumulates across rounds — mitigation 3).
-  // runLoop no longer threads it; consumeStream calls ctx.runSink.trackTokens.
-
   let round = 0;
   // Mitigation 64 — consecutive all-error rounds; counter logic in the round below.
   let consecutiveToolErrorRounds = 0;
   // G2 — denial-of-wallet observability. Some provider routes never report usage →
   // the budget meter reads 0 and the cap never trips (still BOUNDED by
-  // MAX_TOOL_ROUNDS, but UNMETERED). Track whether any usage arrived; warn at run end
-  // if none did (see warnIfUnmetered). Threaded through consumeStream, sticky.
+  // MAX_TOOL_ROUNDS, but UNMETERED). Warn at run end if none arrived
+  // (warnIfUnmetered). Threaded through consumeStream, sticky.
   let sawUsage = false;
   while (round < MAX_TOOL_ROUNDS) {
     round++;
@@ -1692,9 +1681,8 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
       // executeToolRound) → END THE TURN CLEANLY: the card + pending_op are persisted,
       // so release the slot; the user's approval starts a FRESH turn. NOT a failure —
       // preserve any assistant preamble (textBuf). Cancel check first. Conversation
-      // runs ONLY (the confirm gate needs a conversationId; on a document run
-      // awaitingConfirmation is never set, so `isConversation` is the discriminator —
-      // C-3a's negative bite-proof pins this). inv-12 catch chain above untouched.
+      // runs ONLY — on a doc run awaitingConfirmation is never set; `isConversation`
+      // is the discriminator (C-3a pins it). inv-12 catch chain above untouched.
       if (ctx.runSink.isConversation && awaitingConfirmation) {
         if (await wasCancelled(ctx)) {
           await handleCancel(ctx);
@@ -1726,9 +1714,9 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
       // TURN-TERMINATING `ask_choice` (see askedChoice in executeToolRound) → a CLEAN
       // turn boundary on a conversation run: complete the turn like a normal stop,
       // preserving any assistant preamble (textBuf). Structural enforcement, runner
-      // ends the turn regardless of the model. Guarded on `ctx.runSink.isConversation`
-      // (on a document run ask_choice throws `forbidden:` fatal, so askedChoice is
-      // never set — C-3a's negative bite-proof pins this). Cancel first.
+      // ends the turn regardless of the model. Guarded on
+      // `ctx.runSink.isConversation` (on a doc run ask_choice throws fatal, so
+      // askedChoice is never set — C-3a pins it). Cancel first.
       if (ctx.runSink.isConversation && askedChoice) {
         if (await wasCancelled(ctx)) {
           await handleCancel(ctx);
@@ -1962,10 +1950,11 @@ function summarizeToolResult(tool: string, result: unknown): string {
 }
 
 /**
- * Post a turn's output. Generalized over the two output sinks (Task 4):
- *   - conversation thread (ctx.sink set) → write a `text` message row. A
- *     conversation run has NO `ctx.parent`, so it MUST NOT call createComment.
- *   - document thread (no sink) → the existing `createComment` on the parent.
+ * Post a turn's output. Generalized over the two output sinks (Task 4) via
+ * `ctx.runSink.post`:
+ *   - conversation thread → write a `text` message row. A conversation run has NO
+ *     `ctx.parent`, so it MUST NOT call createComment.
+ *   - document thread → the existing `createComment` on the parent.
  *
  * `kind` is meaningful only for the document thread (comment vs result); the
  * conversation thread has a single `text` message kind.

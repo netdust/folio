@@ -2703,9 +2703,9 @@ describe('loadContext: M2 runSink wiring (document path)', () => {
     expect(ctx!.runSink.isConversation).toBe(false);
     // The document sink composes no ConversationSink.
     expect(ctx!.runSink.conversationSink).toBeUndefined();
-    // The legacy discriminator (`sink?`) stays absent on a document run —
-    // this task must not have started populating it.
-    expect(ctx!.sink).toBeUndefined();
+    // The legacy `sink?` field is GONE (deleted in C-4) — `runSink` is the single
+    // discriminator. Its absence is now enforced at the type level (a `ctx.sink`
+    // reference would not compile), so no runtime assertion is needed/possible.
   });
 });
 

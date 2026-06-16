@@ -296,7 +296,7 @@ describe('createConversationRun — the live operator token mint (Shape B′)', 
 });
 
 describe('createConversationRun → loadContext — end-to-end wiring (seam)', () => {
-  test('a conversation run is loadable: RunContext has sink, conversationId, ephemeral token, NO parent', async () => {
+  test('a conversation run is loadable: RunContext has the conversation runSink, conversationId, ephemeral token, NO parent', async () => {
     const { db, seed } = await setup();
     const conv = await createConversation(db, {
       createdBy: seed.user.id,
@@ -311,11 +311,11 @@ describe('createConversationRun → loadContext — end-to-end wiring (seam)', (
 
     const ctx = await loadContext(runId);
     expect(ctx).not.toBeNull();
-    // Sink + conversationId wired (the conversation output path).
-    expect(ctx!.sink).toBeDefined();
     expect(ctx!.conversationId).toBe(conv.id);
-    // M2 RunSink (Cluster A, A-3) — the conversation loader sets the always-present
-    // `runSink` to the CONVERSATION impl, and exposes the composed ConversationSink.
+    // M2 RunSink (Cluster C complete) — the conversation loader sets the
+    // always-present `runSink` to the CONVERSATION impl. The legacy `sink?` field
+    // is GONE: the conversation output path is now the runSink, and the composed
+    // ConversationSink (for the ui tools) is reached via `runSink.conversationSink`.
     expect(ctx!.runSink).toBeDefined();
     expect(ctx!.runSink.isConversation).toBe(true);
     expect(ctx!.runSink.conversationSink).toBeDefined();
