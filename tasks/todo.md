@@ -33,7 +33,7 @@ Order: A → E → D → B → C. Each cluster = a `── REVIEW GATE ──`. 
 - [x] E5 — replace 7 raw setTimeout sleeps with deterministic waits — c52838c (3× determinism each file)
 - [x] E6 — Milkdown teardown flake: worker-lifetime targeted filter in test-setup.ts — d04711a (12 clean runs)
 - [x] E7 — dispatcher cursor batch-advance (Tier A) — 592bf39 — 4→1 write/drain, contract preserved
-- [ ] ── REVIEW GATE E ── STANDARD: invariant-auditor (E3/E7) + generalist reviewer — DISPATCHED
+- [x] ── REVIEW GATE E ── CLOSED. invariant-auditor: no bypass (inv 2/5). generalist (full E): 0 Crit/0 Imp, 2 Sugg → #1 fixed (1f8a3b8 finally-restore), #2 skipped (doc). No 1a → no escalation.
 - NOTE: 3-parallel-implementer race scrambled E1/E2/E3 SHAs (recovered clean); web batch ran SERIAL — no further races
 
 ### Cluster D — Typing cleanup (STANDARD)
