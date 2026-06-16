@@ -1,5 +1,11 @@
+import type { GroupedListSettings } from '@folio/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { client } from './client.ts';
+
+// The grouped-list view's per-view config (stored in `View.settings`). Re-exported
+// from `@folio/shared` so view UI/renderer code imports the config type from the
+// same module as the other view API types, without mirroring the declaration.
+export type { GroupedListSettings };
 
 export interface View {
   id: string;

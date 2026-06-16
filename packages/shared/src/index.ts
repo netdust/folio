@@ -62,6 +62,7 @@ export {
   type DistributionBucket,
   type GroupSummaryRow,
   type GroupSummaryResponse,
+  type GroupedListSettings,
 } from './group-summary.ts';
 export { nextFires, validateCronShape, type CronShapeResult } from './cron.ts';
 export { type EventKind, KNOWN_EVENT_KINDS } from './events.ts';

@@ -60,3 +60,19 @@ export interface GroupSummaryResponse {
   /** true when the distinct group count hit MAX_GROUPS (mitigation 4). */
   truncated: boolean;
 }
+
+/**
+ * Per-view config for a `grouped-list` view (Phase 6 Cluster 2). Stored in
+ * `views.settings` (the permissive `z.record(z.unknown())` JSON column), read by
+ * the 2b renderer. `groupBy` is the frontmatter field rows are grouped on;
+ * `aggregates` are the per-group summary stats (the engine caps at 10);
+ * `rowLayout` composes each row from the document's fields.
+ */
+export interface GroupedListSettings {
+  /** The group field key (a frontmatter key or a column like `status`). */
+  groupBy: string;
+  /** The per-group summary stats shown in each group header (max 10). */
+  aggregates: AggregateSpec[];
+  /** Composed-row config: the primary line, an optional subtitle, and extra fields. */
+  rowLayout: { primary: string; subtitle?: string; fields: string[] };
+}
