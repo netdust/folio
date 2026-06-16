@@ -46,7 +46,6 @@ import {
   checkProviderHealth,
   checkRunRateLimits,
   getActiveRun,
-  incrementTokens,
   setRunBody,
   transitionRun,
 } from '../services/agent-runs.ts';
@@ -65,18 +64,18 @@ import {
   runErrorReasonSchema,
 } from './agent-run-schema.ts';
 import { executeTool, isAwaitingConfirmation, listToolDefs } from './agent-tools.ts';
-import { type Message, type ToolDef, getProvider } from './ai/provider.ts';
+import { type Message, type ProviderEvent, type ToolDef, getProvider } from './ai/provider.ts';
 import { sanitizeProviderError } from './ai/sanitize-error.ts';
 import { newApiToken } from './auth.ts';
 import { type SpawnFn, runClaudeCode } from './cc-executor.ts';
-import type { ConversationSink } from './chat-thread-sink.ts';
-import { makeConversationSink } from './chat-thread-sink.ts';
 import { buildConversationMessages } from './chat-thread-source.ts';
 import { conversationBus } from './conversation-bus.ts';
 import { decryptSecret } from './crypto.ts';
 import { HTTPError } from './http.ts';
 import { getInstanceSkillsByNames } from './instance-skills.ts';
 import { getOperatorDefinition, getOperatorDocument } from './operator.ts';
+import type { RunSink } from './run-sink.ts';
+import { makeConversationRunSink, makeDocumentRunSink } from './run-sink.ts';
 import {
   TRUSTED_SKILLS_LABEL,
   UNTRUSTED_SKILLS_LABEL,
@@ -221,15 +220,16 @@ export interface RunContext {
    */
   unattended?: boolean;
   /**
-   * Operator cockpit chat (Task 4) — the conversation-thread output sink. Set
-   * by `loadContext` ONLY on a conversation-backed run (Task 5 stamps
-   * `conversation_id` on the run fm + populates this); absent on every
-   * document-thread / headless run. When present, the runner routes output
-   * through it (`postAgentComment` → `ctx.sink.text`) and threads it into
-   * `executeTool` so the `ui` tools can emit `component` rows. A conversation
-   * run has NO `ctx.parent`; the parent-coupled helpers guard on `ctx.sink`.
+   * Always-set run-output polymorphism (M2 RunSink). The single output/lifecycle/
+   * cancel/token abstraction the runner routes through: a DocumentRunSink on
+   * document/headless runs, a ConversationRunSink on conversation-backed runs
+   * (the operator cockpit). The legacy `sink?` mode-branch field is GONE — every
+   * former conversation/document mode-branch now reads `ctx.runSink.isConversation` or calls a
+   * polymorphic method (Cluster C). The composed ConversationSink (for the `ui`
+   * tools' `component` rows) is reached via `ctx.runSink.conversationSink`
+   * (undefined on document runs).
    */
-  sink?: ConversationSink;
+  runSink: RunSink;
   /**
    * Operator cockpit chat (Task 4) — the active conversation id, threaded into
    * `executeTool` so the irreversible-op confirm gate (Task 7) can scope a
@@ -255,15 +255,15 @@ export interface RunContext {
 }
 
 /**
- * Cluster-2 /code-review fix: a conversation-backed run (ctx.sink set) MUST carry
- * a conversationId — they are stamped together by loadContext (Task 5). Fail LOUD
+ * Cluster-2 /code-review fix: a conversation-backed run MUST carry a
+ * conversationId — they are stamped together by loadContext (Task 5). Fail LOUD
  * on the invariant violation instead of `?? ''`, which would silently run
  * buildConversationMessages against an empty thread (operator "forgets" everything,
  * surfaced only as an opaque downstream provider error).
  */
 function requireConversationId(ctx: RunContext): string {
   if (!ctx.conversationId) {
-    throw new Error('conversation run is missing conversationId (sink set without id)');
+    throw new Error('conversation run is missing conversationId');
   }
   return ctx.conversationId;
 }
@@ -309,7 +309,8 @@ export async function runAgent(args: { runId: string }): Promise<void> {
       // preflight (depth/rate/idempotency, all querying agent_run rows +
       // getActiveRun({parentId})) does not apply. Run the minimal conversation
       // preflight (key presence) instead.
-      if (ctx.sink ? await conversationPreflight(ctx) : await preflight(ctx)) return;
+      if (ctx.runSink.isConversation ? await conversationPreflight(ctx) : await preflight(ctx))
+        return;
 
       // --- stream consumption (outer round-loop). buildInitialMessages is
       // called HERE (not inside runLoop) so runLoop is reusable by
@@ -317,11 +318,11 @@ export async function runAgent(args: { runId: string }): Promise<void> {
       if (ctx.fm.provider === 'claude-code') {
         await ccExecute(ctx);
       } else {
-        // A conversation-backed run (ctx.sink set by loadContext, Task 5) replays
-        // the TRUSTED conversation thread as its message source; a document-thread
-        // run keeps buildInitialMessages (parent body + comments, fenced as
-        // untrusted). claude-code stays hard-disabled, so this branch is API-only.
-        const messages = ctx.sink
+        // A conversation-backed run replays the TRUSTED conversation thread as its
+        // message source; a document-thread run keeps buildInitialMessages (parent
+        // body + comments, fenced as untrusted). claude-code stays hard-disabled,
+        // so this branch is API-only.
+        const messages = ctx.runSink.isConversation
           ? await buildConversationMessages(db, requireConversationId(ctx), ctx.agentSkills)
           : await buildInitialMessages(ctx);
         await runLoop(ctx, messages);
@@ -432,10 +433,10 @@ export async function runAgentResume(args: { runId: string }): Promise<void> {
     }
 
     // Build the resume message history, then delegate to the SHARED loop.
-    // A conversation-backed resume (ctx.sink set, Task 5) replays the thread as
-    // its source — the persisted messages already include the prior turns, so a
-    // resume re-reads the same trusted history a fresh turn does.
-    const messages = ctx.sink
+    // A conversation-backed resume replays the thread as its source — the
+    // persisted messages already include the prior turns, so a resume re-reads
+    // the same trusted history a fresh turn does.
+    const messages = ctx.runSink.isConversation
       ? await buildConversationMessages(db, requireConversationId(ctx), ctx.agentSkills)
       : await buildResumeMessages(ctx);
     await runLoop(ctx, messages);
@@ -603,7 +604,9 @@ export async function loadContext(runId: string): Promise<RunContext | null> {
   const keyDecryptFailed = decrypted.decryptFailed;
   const baseUrl = keyRow?.baseUrl ?? undefined;
 
-  return {
+  // Assemble the ctx first so the document RunSink factory can read it, then
+  // attach `runSink` (M2 — pure addition; nothing reads it until Cluster C).
+  const ctx: RunContext = {
     run,
     fm,
     parentId,
@@ -628,7 +631,11 @@ export async function loadContext(runId: string): Promise<RunContext | null> {
     // Phase C C3 — fired-path marker, read from the run fm. Default false
     // (attended) for runs created before C3 or launched by a human.
     unattended: fm.unattended === true,
+    // Set immediately below — the factory needs the assembled ctx.
+    runSink: undefined as unknown as RunSink,
   };
+  ctx.runSink = makeDocumentRunSink(ctx);
+  return ctx;
 }
 
 /**
@@ -637,13 +644,14 @@ export async function loadContext(runId: string): Promise<RunContext | null> {
  * lookups. A conversation run is walled off from the `agent_run`/documents space
  * (invariant 10), so:
  *   - `run` / `parent` / `workspace` / `project` are SYNTHETIC sentinels. They
- *     are never read on the conversation path: `postAgentComment` + `wasCancelled`
- *     short-circuit on `ctx.sink`, the runner skips `preflight` (a document-row
- *     check) for conversation runs, and the run-document lifecycle helpers
- *     (`transitionRun` / `incrementTokens` / `setRunBody`) are likewise guarded
- *     on `ctx.sink` (they no-op — the conversation `active_run_id` slot, not an
- *     `agent_run` status, tracks liveness). The sentinels exist only to satisfy
- *     the non-null `RunContext` shape without widening the type for one branch.
+ *     are never read on the conversation path: the ConversationRunSink's
+ *     post/wasCancelled methods don't touch the parent, the runner skips
+ *     `preflight` (a document-row check) for conversation runs (it branches on
+ *     `ctx.runSink.isConversation`), and the run-document lifecycle methods
+ *     (complete/fail) no-op or post one message on the conversation impl — the
+ *     conversation `active_run_id` slot, not an `agent_run` status, tracks
+ *     liveness. The sentinels exist only to satisfy the non-null `RunContext`
+ *     shape without widening the type for one branch.
  *   - `token` is the EPHEMERAL operator token from the registry (operator ∩
  *     caller). `callerScopes` equals `token.scopes` so the `executeTool`
  *     double-membership check holds (M1/M2).
@@ -728,7 +736,12 @@ async function loadConversationContext(
   const baseUrl = keyRow?.baseUrl ?? undefined;
   const keyRowMissing = !keyRow;
 
-  return {
+  // Assemble the ctx first so the conversation RunSink factory can read it
+  // (it needs `run.id` + `conversationId`), then attach `runSink` (M2). The
+  // ConversationRunSink composes its OWN makeConversationSink internally, so no
+  // separate `sink:` is built here — that legacy field (and its dangling second
+  // sink instance) is gone post-Cluster-C.
+  const ctx: RunContext = {
     run,
     fm,
     // `parentId` is non-null on the type; a conversation run has no parent, so
@@ -753,11 +766,14 @@ async function loadConversationContext(
     callerScopes: convPending.callerScopes,
     // A human is present in the cockpit — never the unattended floor.
     unattended: false,
-    sink: makeConversationSink(db, convPending.conversationId, runId),
     conversationId: convPending.conversationId,
     keyRowMissing,
     keyDecryptFailed,
+    // Set immediately below — the factory needs the assembled ctx.
+    runSink: undefined as unknown as RunSink,
   };
+  ctx.runSink = makeConversationRunSink(ctx);
+  return ctx;
 }
 
 /**
@@ -975,39 +991,29 @@ async function conversationPreflight(ctx: RunContext): Promise<boolean> {
   // apiKey==='' is EXPECTED) — only a key-REQUIRING provider with no apiKey blocks.
   // A key ROW exists but its ciphertext couldn't be decrypted (wrong
   // FOLIO_MASTER_KEY) — honest, actionable message, distinct from "no key".
+  // conversationPreflight runs ONLY on conversation runs, so `isConversation` is
+  // always true here; the guard is kept byte-faithfully. `post(body, 'comment')`
+  // on the conversation impl writes one `text` message row.
   if (ctx.keyDecryptFailed) {
-    if (ctx.sink) {
-      await ctx.sink.text(
+    if (ctx.runSink.isConversation) {
+      await ctx.runSink.post(
         'The stored AI key could not be decrypted (the server encryption key may have changed). Ask an instance admin to re-enter it in Settings → AI.',
+        'comment',
       );
     }
     return true;
   }
   const requiresKey = ctx.fm.provider !== 'ollama';
   if (ctx.keyRowMissing || (requiresKey && !ctx.apiKey)) {
-    if (ctx.sink) {
-      await ctx.sink.text(
+    if (ctx.runSink.isConversation) {
+      await ctx.runSink.post(
         'No AI key is configured for this provider. Ask an instance admin to add one in Settings → AI, then try again.',
+        'comment',
       );
     }
     return true;
   }
   return false;
-}
-
-/**
- * Operator cockpit chat (Task 5) — accumulate per-turn token usage in memory for
- * a conversation run (no `agent_run` row to persist into). Returns the running
- * post-increment totals so the budget cap check is identical to the document path.
- */
-function trackConversationTokens(
-  acc: { in: number; out: number },
-  addIn: number,
-  addOut: number,
-): { tokens_in: number; tokens_out: number } {
-  acc.in += addIn;
-  acc.out += addOut;
-  return { tokens_in: acc.in, tokens_out: acc.out };
 }
 
 // ---------------------------------------------------------------------------
@@ -1205,6 +1211,400 @@ export function buildToolDefs(agentFm: Record<string, unknown>): ToolDef[] {
 // The outer round-loop
 // ---------------------------------------------------------------------------
 
+/**
+ * B-1 (M2 RunSink) — per-round stream consumption. Accumulates this round's
+ * `textBuf`, token usage (via `ctx.runSink.trackTokens`, incl. the budget cap +
+ * the document-path partial-comment branch + failRun), `collectedToolCalls`, and
+ * `doneReason`, with the budget/cancel branches kept INLINE. Returns the
+ * accumulated values plus the `terminated` flag the caller checks: when true, a
+ * budget/cancel path already failed the run and runLoop must `return`. `sawUsage`
+ * is threaded in/out so the G2 unmetered accumulator stays sticky across rounds.
+ */
+async function consumeStream(
+  ctx: RunContext,
+  stream: AsyncIterable<ProviderEvent>,
+  fm: AgentRunFrontmatter,
+  sawUsageIn: boolean,
+): Promise<{
+  terminated: boolean;
+  collectedToolCalls: Array<{ id: string; name: string; arguments: unknown }>;
+  textBuf: string;
+  doneReason: RunDoneReason | undefined;
+  sawUsage: boolean;
+}> {
+  const collectedToolCalls: Array<{ id: string; name: string; arguments: unknown }> = [];
+  let textBuf = '';
+  let doneReason: RunDoneReason | undefined;
+  let terminated = false; // a budget/cancel/tool-error path already failed the run
+  // sawUsage is threaded in (sticky across rounds) but reassigned locally below;
+  // a local copy avoids reassigning the parameter (noParameterAssign).
+  let sawUsage = sawUsageIn;
+
+  for await (const ev of stream) {
+    if (ev.type === 'text') {
+      textBuf += ev.delta;
+    } else if (ev.type === 'tokens') {
+      // FIX #10 — trackTokens returns the post-increment totals atomically; use
+      // them directly instead of a redundant read-back SELECT. The doc impl
+      // persists via incrementTokens (an UPDATE-then-read on the agent_run row);
+      // the conversation impl accumulates in-memory (no agent_run row — the
+      // `active_run_id` slot is the durable liveness record). The budget cap
+      // applies identically per turn on both.
+      if (ev.tokens_in > 0 || ev.tokens_out > 0) sawUsage = true; // G2 — usage reported.
+      const { tokensIn: usedIn, tokensOut: usedOut } = await ctx.runSink.trackTokens(
+        ev.tokens_in,
+        ev.tokens_out,
+      );
+      if (usedIn + usedOut > fm.max_tokens) {
+        // On the CONVERSATION path, post() + fail() both write sink.text — calling
+        // both double-posts on the cockpit thread (same mode as the dropped-call
+        // fix, code-review #4). fail() is the single surface there; fold the
+        // partial-work note into its message. On the document path, both are wanted
+        // (a partial-work comment PLUS the failed transition): the document
+        // RunSink.fail() only transitions, so the partial comment is posted HERE,
+        // guarded on the document path.
+        if (!ctx.runSink.isConversation) {
+          await ctx.runSink.post(
+            `Budget cap exceeded after ${usedIn + usedOut} tokens — partial work above.`,
+            'comment',
+          );
+        }
+        await failRun(
+          ctx,
+          runErrorReasonSchema.enum.budget_exceeded,
+          `Token budget ${fm.max_tokens} exceeded (${usedIn + usedOut} used) — partial work above.`,
+        );
+        terminated = true;
+        break;
+      }
+    } else if (ev.type === 'tool_call') {
+      // Cancel-via-comment check (mitigation 44) BEFORE executing the tool.
+      if (await wasCancelled(ctx)) {
+        await handleCancel(ctx);
+        terminated = true;
+        break;
+      }
+      collectedToolCalls.push({ id: ev.id, name: ev.name, arguments: ev.arguments });
+    } else if (ev.type === 'done') {
+      doneReason = ev.reason;
+    }
+  }
+
+  return { terminated, collectedToolCalls, textBuf, doneReason, sawUsage };
+}
+
+/**
+ * B-2 (M2 RunSink) — per-round tool execution, extracted VERBATIM from runLoop.
+ * Carries the `executeTool` call and the FULL catch chain, MOVED byte-for-byte
+ * with the catch order LITERALLY preserved:
+ *   isAwaitingConfirmation → isFatalToolError → isInvalidArgs → recoverable.
+ * That ordering is invariant 12 — a reorder turns a confirmation clean-pause into
+ * a provider_error. DO NOT rewrite the try/catch.
+ *
+ * Returns the per-round outcome flags runLoop reads after: `fatalReturned`
+ * (failRun already fired — runLoop returns), `awaitingConfirmation`/`askedChoice`
+ * (clean turn-end — runLoop completes the turn), `roundHadSuccess`/
+ * `roundHadRecoverableError` (the consecutive-error counter), plus `assistantMsg`
+ * + `toolResultMsgs` runLoop commits to `messages` after a non-fatal round. This
+ * helper does NOT push to `messages` — that commit stays in runLoop.
+ */
+async function executeToolRound(
+  ctx: RunContext,
+  collectedToolCalls: Array<{ id: string; name: string; arguments: unknown }>,
+  textBuf: string,
+  providerLabel: string,
+): Promise<{
+  fatalReturned: boolean;
+  awaitingConfirmation: boolean;
+  askedChoice: boolean;
+  roundHadSuccess: boolean;
+  roundHadRecoverableError: boolean;
+  assistantMsg: Message;
+  toolResultMsgs: Message[];
+}> {
+  const assistantMsg: Message = {
+    role: 'assistant',
+    content: textBuf,
+    tool_calls: collectedToolCalls.map((tc) => ({
+      id: tc.id,
+      name: tc.name,
+      arguments: tc.arguments,
+    })),
+  };
+  const toolResultMsgs: Message[] = [];
+  let roundHadSuccess = false;
+  let roundHadRecoverableError = false;
+  let fatalReturned = false;
+  // Operator cockpit chat — `ask_choice` is a TURN-TERMINATING tool. When the
+  // operator successfully emits a choice card this round, the turn must END
+  // CLEANLY (status `completed`) so the run releases its slot and waits; the
+  // user's button click then starts a FRESH turn (startTurn). Set ONLY on the
+  // success branch below (never on a recoverable/fatal error), and acted on
+  // only on a conversation run (`ctx.runSink.isConversation`) — on document/MCP/
+  // headless runs the handler throws `forbidden:` (fatal) and never reaches
+  // success, so this stays false there.
+  let askedChoice = false;
+  // Operator cockpit chat — the irreversible-op confirm gate emitted a
+  // confirmation card and threw AwaitingConfirmationError. Like askedChoice,
+  // this is a CLEAN turn boundary (await the user's approval), NOT a failure.
+  // Set in the catch below; acted on after the loop, guarded on
+  // `ctx.runSink.isConversation`.
+  let awaitingConfirmation = false;
+
+  for (const tc of collectedToolCalls) {
+    try {
+      // tx=undefined — each tool gets its own short-lived tx (mitigation 35).
+      // Phase 1 delegation (D1, D8): pass the caller snapshot so executeTool
+      // enforces agent ∩ caller. runAgentResume reuses this same runLoop with
+      // a ctx whose snapshot was inherited from the original run (D6).
+      const result = await executeTool(ctx.token, ctx.actor, tc.name, tc.arguments, undefined, {
+        callerScopes: ctx.callerScopes,
+        // Phase C C3 — the fired-path marker. Lets the folio_api write
+        // handler floor MEDIUM config writes on an unattended run.
+        unattended: ctx.unattended,
+        // Operator cockpit chat (Task 4) — thread the conversation sink + id
+        // so the `ui` tools can emit `component` rows and the confirm gate
+        // (Task 7) can scope a pending_ops row. Undefined on document-thread
+        // runs → no behavior change to the existing path.
+        conversationId: ctx.conversationId,
+        conversationSink: ctx.runSink.conversationSink,
+        // Cluster-4 BLOCKER fix: the confirm gate records pending_ops.caller_id
+        // with the HUMAN owner (transitionActor = conversation.created_by), the
+        // value the confirm route confirms with — NOT ctx.actor (agent:_operator).
+        confirmerId: ctx.transitionActor,
+      });
+      const resultString = typeof result === 'string' ? result : JSON.stringify(result);
+      // Fence the result as untrusted DATA (spec VERIFY #4): a read tool's
+      // output can carry externally-authored content with injected instructions.
+      toolResultMsgs.push({
+        role: 'tool',
+        tool_use_id: tc.id,
+        content: fenceToolResult(resultString),
+      });
+      roundHadSuccess = true;
+      // A successful `ask_choice` ends the turn cleanly (see askedChoice decl).
+      if (tc.name === 'ask_choice') askedChoice = true;
+      // Operator cockpit chat (Task 4) — on a conversation run, record a
+      // `tool_step` row so the thread shows what the operator did this turn.
+      // The `ui` tools already emit their own `component` row via the sink;
+      // a tool_step for them too is harmless context but redundant, so skip
+      // the chat-only ui tools here.
+      if (ctx.runSink.isConversation && tc.name !== 'show_link_panel' && tc.name !== 'ask_choice') {
+        await ctx.runSink.toolStep({
+          tool: tc.name,
+          summary: summarizeToolResult(tc.name, result),
+          status: 'ok',
+        });
+      }
+    } catch (err) {
+      if (isAwaitingConfirmation(err)) {
+        // CLEAN PAUSE — the confirm gate emitted its card + recorded the
+        // pending_op, and is waiting for the user's approval. This is NOT a
+        // failure (do NOT failRun → no "provider_error"): end the turn cleanly
+        // like askedChoice. Only reachable on a conversation run (the gate's
+        // card path needs a sink). Stop the round; the post-loop branch
+        // completes the turn and releases the slot. The user's "Yes, do it"
+        // click starts a fresh turn that re-runs the recorded op.
+        awaitingConfirmation = true;
+        break;
+      }
+      if (isFatalToolError(err)) {
+        // FATAL — scope-denied / unknown tool. Abort the whole round
+        // immediately; do NOT commit a half-round or feed back (decision 5,
+        // mitigation 66). One fatal call terminates the run even if siblings
+        // were recoverable.
+        await failRun(
+          ctx,
+          runErrorReasonSchema.enum.provider_error,
+          sanitizeProviderError(err, providerLabel),
+        );
+        fatalReturned = true;
+        break;
+      }
+      if (isInvalidArgs(err)) {
+        // RECOVERABLE — bad args. Feed back the invalid PATHS only, never
+        // values (mitigation 65). err.issues are already paths-only from
+        // C-7: map each i.path to a dotted string; never JSON.stringify
+        // anything that could carry a value.
+        const paths = err.issues
+          .map((i) => (Array.isArray(i.path) ? i.path.join('.') : String(i.path)))
+          .join(', ');
+        toolResultMsgs.push({
+          role: 'tool',
+          tool_use_id: tc.id,
+          content: `Tool '${tc.name}' rejected the arguments. Invalid fields: ${paths}. Fix and retry.`,
+        });
+        // Cluster-2 /code-review fix: record a FAILED tool_step too, so the
+        // conversation thread (and T8's interrupted-turn summary) reflect that
+        // a tool was attempted and failed — not only successes. "The steps ARE
+        // the report" (spec). ui tools emit their own component row, so skip them.
+        if (
+          ctx.runSink.isConversation &&
+          tc.name !== 'show_link_panel' &&
+          tc.name !== 'ask_choice'
+        ) {
+          await ctx.runSink.toolStep({
+            tool: tc.name,
+            summary: `rejected arguments: ${paths}`,
+            status: 'error',
+          });
+        }
+        roundHadRecoverableError = true;
+        continue;
+      }
+      // RECOVERABLE — handler-execution throw (DOCUMENT_NOT_FOUND,
+      // SLUG_CONFLICT, a tool's own thrown error, …). Feed back the SAFE
+      // machine code/reason (HTTPError.code or mcpInvalidParams reason) so
+      // the model can self-correct, falling back to the status-sanitized
+      // phrase for unknown throws (mitigation 65 — never a raw SDK string /
+      // key / baseUrl / arg value / message body).
+      // Log the RAW error server-side (never surfaced — mitigation 5): the
+      // user/model only get the sanitized phrase, so without this a tool that
+      // throws a statusless error shows the opaque "Network error or
+      // unreachable host." with the real cause lost (the same diagnostics
+      // black hole as failRunLastResort — this is the recoverable-path twin).
+      console.error(`[runner] tool '${tc.name}' threw (recoverable):`, err);
+      toolResultMsgs.push({
+        role: 'tool',
+        tool_use_id: tc.id,
+        content: `Tool '${tc.name}' failed: ${safeToolErrorMessage(err, providerLabel)}. Adjust and retry.`,
+      });
+      // Cluster-2 /code-review fix: record the failed tool_step (see above).
+      if (ctx.runSink.isConversation && tc.name !== 'show_link_panel' && tc.name !== 'ask_choice') {
+        await ctx.runSink.toolStep({
+          tool: tc.name,
+          summary: safeToolErrorMessage(err, providerLabel),
+          status: 'error',
+        });
+      }
+      roundHadRecoverableError = true;
+    }
+  }
+
+  return {
+    fatalReturned,
+    awaitingConfirmation,
+    askedChoice,
+    roundHadSuccess,
+    roundHadRecoverableError,
+    assistantMsg,
+    toolResultMsgs,
+  };
+}
+
+/**
+ * B-3 (M2 RunSink) — terminal policy AFTER the tool loop, extracted VERBATIM from
+ * runLoop. Reached on a round that did NOT run a tool batch: the FIX #3 zero-call
+ * tool_use fail, the FIX #2 no-`done` fail, the terminal `wasCancelled` check, the
+ * dropped-tool-call fail-closed policy (`collectedToolCalls.length > 0`),
+ * `warnIfUnmetered`, and the clean `postResultAndComplete`. Every branch here ends
+ * the run, so the helper is `Promise<void>` and runLoop `return`s right after — the
+ * inner `return`s become early-outs. The conversation-sink clean-pause turn-ends
+ * stay in runLoop's tool-round block (they read the executeToolRound flags there).
+ */
+async function finishTerminal(
+  ctx: RunContext,
+  doneReason: RunDoneReason | undefined,
+  collectedToolCalls: Array<{ id: string; name: string; arguments: unknown }>,
+  textBuf: string,
+  sawUsage: boolean,
+  runId: string,
+  providerLabel: string,
+): Promise<void> {
+  // FIX #3 — done_reason='tool_use' with ZERO usable tool_calls. The model
+  // signalled it wants a tool but produced no call the provider could surface
+  // (e.g. a malformed tool_call the provider dropped). Completing cleanly
+  // would mask a failed generation as success. Fail loudly; no result comment.
+  if (doneReason === 'tool_use' && collectedToolCalls.length === 0) {
+    await failRun(
+      ctx,
+      runErrorReasonSchema.enum.provider_error,
+      'Provider signalled tool_use but produced no usable tool call.',
+    );
+    return;
+  }
+
+  // FIX #2 — the stream ended without ever yielding a `done` event (doneReason
+  // still undefined and not terminated). Treat a stream that stops without a
+  // completion signal as a truncated/failed generation, NOT a clean complete
+  // with partial text. Fail loudly; no result comment.
+  if (doneReason === undefined) {
+    await failRun(
+      ctx,
+      runErrorReasonSchema.enum.provider_error,
+      'Provider stream ended without a completion signal.',
+    );
+    return;
+  }
+
+  // Terminal (stop / max_tokens / refusal / pause_turn, or no tool_calls).
+  // refusal + pause_turn are CLEAN completions (mitigation 20) → completed.
+  //
+  // Pure-text runs (text + done, no tool_call) never hit the tool_call
+  // cancel check above, so a user's "stop" would be silently ignored. Check
+  // wasCancelled once on the terminal path (mitigation 44): one extra
+  // comment-thread read on the final round, which is acceptable.
+  //
+  // FIX #5 — this terminal check intentionally applies to BOTH fresh and
+  // resume runs (runLoop is shared). A post-start rejection landing during a
+  // resume is a deliberate mid-resume stop, so it cancels an otherwise-
+  // completing approved resume. Intended, not a bug — pinned by a test.
+  if (await wasCancelled(ctx)) {
+    await handleCancel(ctx);
+    return;
+  }
+
+  // DROPPED-TOOL-CALL policy (code-review #1/#4/#5) — we reach the terminal path
+  // with collectedToolCalls.length > 0 only when the reason BLOCKED the tool round
+  // (the whitelist gate above ran them only on stop|tool_use). The model intended
+  // a tool call we did not run; completing silently hides lost work. ONE keyed
+  // policy decides fail-vs-note, default FAIL-CLOSED so an UNKNOWN reason is never
+  // laundered into a clean success:
+  //   - 'refusal' / 'pause_turn' → the model deliberately declined / paused; a
+  //     clean completion is correct. Note the dropped intent so an empty result
+  //     isn't mysterious. (ONE comment — no separate failRun, so no double-post.)
+  //   - 'max_tokens' OR any UNKNOWN reason → lost work on an unrecognized/truncated
+  //     signal. FAIL LOUDLY (failRun surfaces a single rich message; no separate
+  //     comment, so the conversation thread gets exactly one entry).
+  if (collectedToolCalls.length > 0) {
+    const cleanlyCompletes = doneReason === 'refusal' || doneReason === 'pause_turn';
+    if (cleanlyCompletes) {
+      await postAgentComment(
+        ctx,
+        `Model finished with '${doneReason}' while a tool call was pending — the tool was not run.`,
+        'comment',
+      );
+      // falls through to postResultAndComplete below (clean completion).
+    } else {
+      // max_tokens (truncation) or an unknown/off-spec reason — fail-closed. failRun
+      // is the SINGLE surface (it posts to the conversation sink itself), so we do
+      // NOT also postAgentComment — that would double-post on the cockpit thread.
+      // Reason is keyed: max_tokens is a budget truncation; an unrecognized signal
+      // is a hard provider fault (provider_error).
+      const [reason, detail] =
+        doneReason === 'max_tokens'
+          ? ([
+              runErrorReasonSchema.enum.budget_exceeded,
+              'Response truncated at the token cap with an unexecuted tool call — raise max_tokens and retry.',
+            ] as const)
+          : ([
+              runErrorReasonSchema.enum.provider_error,
+              `Stream finished with an unhandled reason ('${doneReason}') while a tool call was pending — the tool was not run.`,
+            ] as const);
+      await failRun(ctx, reason, detail);
+      return;
+    }
+  }
+
+  // G2 — surface an UNMETERED run (provider never reported usage → the budget cap
+  // had nothing to bound on). Fired on BOTH exits (here AND the round-cap exit
+  // below) — see warnIfUnmetered. The runaway-loop case the threat model targets
+  // exits via the round cap, so the warn MUST cover it (code-review SHOULD-FIX).
+  warnIfUnmetered(runId, providerLabel, sawUsage);
+
+  await postResultAndComplete(ctx, textBuf, doneReason);
+}
+
 async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
   const { run, fm } = ctx;
   const runId = run.id;
@@ -1212,40 +1612,21 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
 
   const tools = buildToolDefs(ctx.agentFm);
 
-  // Operator cockpit chat (Task 5) — in-memory token accumulator for a
-  // conversation run (no agent_run row to persist into). Unused on document runs.
-  const conversationTokens = { in: 0, out: 0 };
-
   let round = 0;
-  // Mitigation 64 — consecutive all-error rounds (no successful tool result).
-  // Reset to 0 whenever a round makes progress; failRun(tool_error) when it
-  // reaches MAX_CONSECUTIVE_TOOL_ERRORS.
+  // Mitigation 64 — consecutive all-error rounds; counter logic in the round below.
   let consecutiveToolErrorRounds = 0;
-  // G2 — denial-of-wallet observability. The budget cap (fm.max_tokens) is enforced
-  // off the provider's `tokens` event. Some OpenAI-compatible routes (OpenRouter
-  // without honored stream_options.include_usage, certain proxies) never report
-  // usage → the budget meter reads 0 and the cap never trips. The loop is still
-  // BOUNDED by MAX_TOOL_ROUNDS, so this is not unbounded spend — but the run is
-  // UNMETERED, and an operator can't tell that from a genuinely-cheap run. Track
-  // whether any non-zero usage arrived; warn loudly at run end if none did (ties to
-  // the Phase 3 M8 denial-of-wallet residual — the run-budget IS the only cap).
+  // G2 — denial-of-wallet observability. Some provider routes never report usage →
+  // the budget meter reads 0 and the cap never trips (still BOUNDED by
+  // MAX_TOOL_ROUNDS, but UNMETERED). Warn at run end if none arrived
+  // (warnIfUnmetered). Threaded through consumeStream, sticky.
   let sawUsage = false;
   while (round < MAX_TOOL_ROUNDS) {
     round++;
 
-    const collectedToolCalls: Array<{ id: string; name: string; arguments: unknown }> = [];
-    let textBuf = '';
-    let doneReason: RunDoneReason | undefined;
-    let terminated = false; // a budget/cancel/tool-error path already failed the run
-
     const provider = getProvider(fm.provider);
     const stream = provider.stream({
-      // B10a: bring the API-provider path to injection-fence PARITY with the cc
-      // path (see ccExecute's BEGIN/END DATA envelope). The cc path wraps
-      // untrusted content in a BEGIN/END DATA envelope under one `-p` string; the
-      // API path uses per-message roles PLUS this explicit system-channel
-      // directive so role separation isn't the only defense. ADDED in Phase B —
-      // the API path was NOT previously fenced (bare role separation only).
+      // B10a — injection-fence parity with the cc path: per-message roles PLUS the
+      // UNTRUSTED_DATA_DIRECTIVE so role separation isn't the only defense (see it).
       system: ctx.fm.system_prompt + UNTRUSTED_DATA_DIRECTIVE,
       messages,
       tools,
@@ -1255,256 +1636,54 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
       baseUrl: ctx.baseUrl,
     });
 
-    for await (const ev of stream) {
-      if (ev.type === 'text') {
-        textBuf += ev.delta;
-      } else if (ev.type === 'tokens') {
-        // FIX #10 — incrementTokens returns the post-increment totals atomically;
-        // use them directly instead of a redundant read-back SELECT.
-        // Operator cockpit chat (Task 5) — a conversation run has NO `agent_run`
-        // document, so `incrementTokens` (an UPDATE-then-read-or-throw keyed on
-        // an agent_run row) cannot persist. Track the budget in-memory instead:
-        // the conversation `active_run_id` slot, not an agent_run row, is the
-        // durable liveness record. The budget cap still applies per turn.
-        if (ev.tokens_in > 0 || ev.tokens_out > 0) sawUsage = true; // G2 — usage reported.
-        const { tokens_in: usedIn, tokens_out: usedOut } = ctx.sink
-          ? trackConversationTokens(conversationTokens, ev.tokens_in, ev.tokens_out)
-          : await incrementTokens(runId, { in: ev.tokens_in, out: ev.tokens_out });
-        if (usedIn + usedOut > fm.max_tokens) {
-          // On the CONVERSATION (sink) path, postAgentComment + failRun both write
-          // sink.text — calling both double-posts on the cockpit thread (same mode
-          // as the dropped-call fix, code-review #4). failRun is the single surface
-          // there; fold the partial-work note into its message. On the document
-          // path, both are wanted (a partial-work comment PLUS the failed transition).
-          if (!ctx.sink) {
-            await postAgentComment(
-              ctx,
-              `Budget cap exceeded after ${usedIn + usedOut} tokens — partial work above.`,
-              'comment',
-            );
-          }
-          await failRun(
-            ctx,
-            runErrorReasonSchema.enum.budget_exceeded,
-            `Token budget ${fm.max_tokens} exceeded (${usedIn + usedOut} used) — partial work above.`,
-          );
-          terminated = true;
-          break;
-        }
-      } else if (ev.type === 'tool_call') {
-        // Cancel-via-comment check (mitigation 44) BEFORE executing the tool.
-        if (await wasCancelled(ctx)) {
-          await handleCancel(ctx);
-          terminated = true;
-          break;
-        }
-        collectedToolCalls.push({ id: ev.id, name: ev.name, arguments: ev.arguments });
-      } else if (ev.type === 'done') {
-        doneReason = ev.reason;
-      }
-    }
+    // Consume the stream into this round's accumulators (consumeStream holds the
+    // budget/cancel/sink branches inline). A budget/cancel termination there returns
+    // terminated=true → runLoop returns.
+    const {
+      terminated,
+      collectedToolCalls,
+      textBuf,
+      doneReason,
+      sawUsage: sawUsageAfter,
+    } = await consumeStream(ctx, stream, fm, sawUsage);
+    sawUsage = sawUsageAfter;
 
     if (terminated) return;
 
-    // Tool round — execute collected calls, append the round-trip messages,
-    // loop again.
-    //
     // CONVERGENCE POINT (code-review #2/#3/#4) — "tool calls streamed ⟹ run them"
     // is decided HERE, the single done.reason consumer, NOT re-derived per adapter.
-    // A thinking model (qwen3/deepseek-r1) emits a real tool_call but finishes with
-    // reason:'stop' (not 'tool_use'); keying the round on reason==='tool_use' alone
-    // silently dropped those calls on the terminal path below. So we run the round
-    // whenever calls were collected — done.reason is advisory for tool DETECTION.
-    //
-    // But done.reason is AUTHORITATIVE for whether running is SAFE. This is a
-    // WHITELIST (fail-closed), not "anything but max_tokens" (gap-hunt fix):
-    //   - 'stop' / 'tool_use' → run the collected calls.
-    //   - 'max_tokens'        → truncation; the call may be cut off mid-stream and
-    //                           is unusable. Don't run; surface truncation below.
-    //   - 'refusal'           → the model declined; a tool_use co-emitted with a
-    //                           refusal must NOT execute (a refused action acting is
-    //                           a safety regression).
-    //   - 'pause_turn'        → server-tool pause; running client tools + looping is
-    //                           the wrong continuation protocol.
-    //   - any UNKNOWN reason  → fail closed (do not run).
-    // Deleting the per-adapter sawToolCall relabel (now redundant) also closed the
-    // ollama/openai divergence (#3) and the dropped-marker phantom escalation (#4).
+    // done.reason is advisory for tool DETECTION (a thinking model emits a real
+    // tool_call but finishes 'stop', not 'tool_use' — so we run whenever calls were
+    // collected), but AUTHORITATIVE for whether running is SAFE: a fail-closed
+    // WHITELIST of 'stop'/'tool_use'. max_tokens (truncated/unusable call), refusal
+    // (a refused action must not act), pause_turn (wrong continuation protocol), and
+    // any UNKNOWN reason all fall through to finishTerminal's dropped-call policy.
     const reasonAllowsToolRound = doneReason === 'stop' || doneReason === 'tool_use';
     if (collectedToolCalls.length > 0 && reasonAllowsToolRound) {
-      // D-9.2 — RECOVERABLE tool errors are FED BACK to the model instead of
-      // terminating the run (mitigations 64-66). We accumulate the assistant
-      // tool_calls message + per-call tool-result messages in LOCALS:
-      //   - success            → result string (roundHadSuccess = true)
-      //   - recoverable error  → sanitized error message (roundHadRecoverableError)
-      //   - FATAL error        → abort the WHOLE round: failRun + return, no
-      //                          half-round committed, no feed-back (decision 5).
-      // After the loop (no fatal), commit assistantMsg + ALL tool-result
-      // messages atomically, then apply the consecutive-error counter, then
-      // continue. A prior call in this batch may have already committed its own
-      // tx (mitigation 35 — acceptable; each tool gets its own tx).
-      const assistantMsg: Message = {
-        role: 'assistant',
-        content: textBuf,
-        tool_calls: collectedToolCalls.map((tc) => ({
-          id: tc.id,
-          name: tc.name,
-          arguments: tc.arguments,
-        })),
-      };
-      const toolResultMsgs: Message[] = [];
-      let roundHadSuccess = false;
-      let roundHadRecoverableError = false;
-      let fatalReturned = false;
-      // Operator cockpit chat — `ask_choice` is a TURN-TERMINATING tool. When the
-      // operator successfully emits a choice card this round, the turn must END
-      // CLEANLY (status `completed`) so the run releases its slot and waits; the
-      // user's button click then starts a FRESH turn (startTurn). Set ONLY on the
-      // success branch below (never on a recoverable/fatal error), and acted on
-      // only when `ctx.sink` is set (a conversation run) — on document/MCP/
-      // headless runs the handler throws `forbidden:` (fatal) and never reaches
-      // success, so this stays false there.
-      let askedChoice = false;
-      // Operator cockpit chat — the irreversible-op confirm gate emitted a
-      // confirmation card and threw AwaitingConfirmationError. Like askedChoice,
-      // this is a CLEAN turn boundary (await the user's approval), NOT a failure.
-      // Set in the catch below; acted on after the loop, guarded on `ctx.sink`.
-      let awaitingConfirmation = false;
-
-      for (const tc of collectedToolCalls) {
-        try {
-          // tx=undefined — each tool gets its own short-lived tx (mitigation 35).
-          // Phase 1 delegation (D1, D8): pass the caller snapshot so executeTool
-          // enforces agent ∩ caller. runAgentResume reuses this same runLoop with
-          // a ctx whose snapshot was inherited from the original run (D6).
-          const result = await executeTool(ctx.token, ctx.actor, tc.name, tc.arguments, undefined, {
-            callerScopes: ctx.callerScopes,
-            // Phase C C3 — the fired-path marker. Lets the folio_api write
-            // handler floor MEDIUM config writes on an unattended run.
-            unattended: ctx.unattended,
-            // Operator cockpit chat (Task 4) — thread the conversation sink + id
-            // so the `ui` tools can emit `component` rows and the confirm gate
-            // (Task 7) can scope a pending_ops row. Undefined on document-thread
-            // runs → no behavior change to the existing path.
-            conversationId: ctx.conversationId,
-            conversationSink: ctx.sink,
-            // Cluster-4 BLOCKER fix: the confirm gate records pending_ops.caller_id
-            // with the HUMAN owner (transitionActor = conversation.created_by), the
-            // value the confirm route confirms with — NOT ctx.actor (agent:_operator).
-            confirmerId: ctx.transitionActor,
-          });
-          const resultString = typeof result === 'string' ? result : JSON.stringify(result);
-          // Fence the result as untrusted DATA (spec VERIFY #4): a read tool's
-          // output can carry externally-authored content with injected instructions.
-          toolResultMsgs.push({
-            role: 'tool',
-            tool_use_id: tc.id,
-            content: fenceToolResult(resultString),
-          });
-          roundHadSuccess = true;
-          // A successful `ask_choice` ends the turn cleanly (see askedChoice decl).
-          if (tc.name === 'ask_choice') askedChoice = true;
-          // Operator cockpit chat (Task 4) — on a conversation run, record a
-          // `tool_step` row so the thread shows what the operator did this turn.
-          // The `ui` tools already emit their own `component` row via the sink;
-          // a tool_step for them too is harmless context but redundant, so skip
-          // the chat-only ui tools here.
-          if (ctx.sink && tc.name !== 'show_link_panel' && tc.name !== 'ask_choice') {
-            await ctx.sink.toolStep({
-              tool: tc.name,
-              summary: summarizeToolResult(tc.name, result),
-              status: 'ok',
-            });
-          }
-        } catch (err) {
-          if (isAwaitingConfirmation(err)) {
-            // CLEAN PAUSE — the confirm gate emitted its card + recorded the
-            // pending_op, and is waiting for the user's approval. This is NOT a
-            // failure (do NOT failRun → no "provider_error"): end the turn cleanly
-            // like askedChoice. Only reachable on a conversation run (the gate's
-            // card path needs a sink). Stop the round; the post-loop branch
-            // completes the turn and releases the slot. The user's "Yes, do it"
-            // click starts a fresh turn that re-runs the recorded op.
-            awaitingConfirmation = true;
-            break;
-          }
-          if (isFatalToolError(err)) {
-            // FATAL — scope-denied / unknown tool. Abort the whole round
-            // immediately; do NOT commit a half-round or feed back (decision 5,
-            // mitigation 66). One fatal call terminates the run even if siblings
-            // were recoverable.
-            await failRun(
-              ctx,
-              runErrorReasonSchema.enum.provider_error,
-              sanitizeProviderError(err, providerLabel),
-            );
-            fatalReturned = true;
-            break;
-          }
-          if (isInvalidArgs(err)) {
-            // RECOVERABLE — bad args. Feed back the invalid PATHS only, never
-            // values (mitigation 65). err.issues are already paths-only from
-            // C-7: map each i.path to a dotted string; never JSON.stringify
-            // anything that could carry a value.
-            const paths = err.issues
-              .map((i) => (Array.isArray(i.path) ? i.path.join('.') : String(i.path)))
-              .join(', ');
-            toolResultMsgs.push({
-              role: 'tool',
-              tool_use_id: tc.id,
-              content: `Tool '${tc.name}' rejected the arguments. Invalid fields: ${paths}. Fix and retry.`,
-            });
-            // Cluster-2 /code-review fix: record a FAILED tool_step too, so the
-            // conversation thread (and T8's interrupted-turn summary) reflect that
-            // a tool was attempted and failed — not only successes. "The steps ARE
-            // the report" (spec). ui tools emit their own component row, so skip them.
-            if (ctx.sink && tc.name !== 'show_link_panel' && tc.name !== 'ask_choice') {
-              await ctx.sink.toolStep({
-                tool: tc.name,
-                summary: `rejected arguments: ${paths}`,
-                status: 'error',
-              });
-            }
-            roundHadRecoverableError = true;
-            continue;
-          }
-          // RECOVERABLE — handler-execution throw (DOCUMENT_NOT_FOUND,
-          // SLUG_CONFLICT, a tool's own thrown error, …). Feed back the SAFE
-          // machine code/reason (HTTPError.code or mcpInvalidParams reason) so
-          // the model can self-correct, falling back to the status-sanitized
-          // phrase for unknown throws (mitigation 65 — never a raw SDK string /
-          // key / baseUrl / arg value / message body).
-          // Log the RAW error server-side (never surfaced — mitigation 5): the
-          // user/model only get the sanitized phrase, so without this a tool that
-          // throws a statusless error shows the opaque "Network error or
-          // unreachable host." with the real cause lost (the same diagnostics
-          // black hole as failRunLastResort — this is the recoverable-path twin).
-          console.error(`[runner] tool '${tc.name}' threw (recoverable):`, err);
-          toolResultMsgs.push({
-            role: 'tool',
-            tool_use_id: tc.id,
-            content: `Tool '${tc.name}' failed: ${safeToolErrorMessage(err, providerLabel)}. Adjust and retry.`,
-          });
-          // Cluster-2 /code-review fix: record the failed tool_step (see above).
-          if (ctx.sink && tc.name !== 'show_link_panel' && tc.name !== 'ask_choice') {
-            await ctx.sink.toolStep({
-              tool: tc.name,
-              summary: safeToolErrorMessage(err, providerLabel),
-              status: 'error',
-            });
-          }
-          roundHadRecoverableError = true;
-        }
-      }
+      // D-9.2 — execute the collected calls. executeToolRound feeds RECOVERABLE
+      // errors back to the model (mitigations 64-66) and aborts the round on a FATAL
+      // error (decision 5), holding the full catch chain (invariant 12) byte-for-byte
+      // INSIDE it. It returns the round-outcome flags + the messages to commit; it
+      // does NOT push to `messages` — runLoop commits them below on a non-fatal round.
+      const {
+        fatalReturned,
+        awaitingConfirmation,
+        askedChoice,
+        roundHadSuccess,
+        roundHadRecoverableError,
+        assistantMsg,
+        toolResultMsgs,
+      } = await executeToolRound(ctx, collectedToolCalls, textBuf, providerLabel);
 
       if (fatalReturned) return;
 
-      // Operator cockpit chat — the confirm gate paused for approval. END THE TURN
-      // CLEANLY (status `completed`), same as a turn-terminating ask_choice: the
-      // card + pending_op are already persisted, so the run releases its slot and
-      // the user's "Yes, do it" click starts a FRESH turn that re-runs the recorded
-      // op. NOT a failure — do not failRun. Preserve any assistant preamble
-      // (textBuf) as the operator's message. Cancel check first, mirroring below.
-      if (ctx.sink && awaitingConfirmation) {
+      // Confirm gate paused for approval (see awaitingConfirmation in
+      // executeToolRound) → END THE TURN CLEANLY: the card + pending_op are persisted,
+      // so release the slot; the user's approval starts a FRESH turn. NOT a failure —
+      // preserve any assistant preamble (textBuf). Cancel check first. Conversation
+      // runs ONLY — on a doc run awaitingConfirmation is never set; `isConversation`
+      // is the discriminator (C-3a pins it). inv-12 catch chain above untouched.
+      if (ctx.runSink.isConversation && awaitingConfirmation) {
         if (await wasCancelled(ctx)) {
           await handleCancel(ctx);
           return;
@@ -1513,13 +1692,11 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
         return;
       }
 
-      // Commit the balanced round-trip atomically (success + recoverable-error
-      // results together).
+      // Commit the balanced round-trip atomically (success + recoverable results).
       messages.push(assistantMsg, ...toolResultMsgs);
 
-      // Consecutive-error counter (mitigation 64). A round with ≥1 success is
-      // progress → reset. A round that was ALL recoverable errors (zero
-      // successes) → increment; at the sub-cap, fail with `tool_error`.
+      // Consecutive-error counter (mitigation 64): ≥1 success this round resets it;
+      // an all-recoverable-error round increments and fails at the sub-cap.
       if (roundHadSuccess) {
         consecutiveToolErrorRounds = 0;
       } else if (roundHadRecoverableError) {
@@ -1534,18 +1711,13 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
         }
       }
 
-      // Operator cockpit chat — TURN-TERMINATING `ask_choice`. A successful choice
-      // card on a conversation run is a CLEAN turn boundary, not an error: stop
-      // looping and complete the turn the same way a normal stop does, preserving
-      // any assistant preamble (textBuf) as the operator's message. The run flips
-      // to `completed`, the slot releases, and the user's button click starts a
-      // FRESH turn. Structural enforcement — the runner ends the turn regardless
-      // of what the model would have done next (no reliance on the prompt). Guard
-      // on `ctx.sink` so only conversation runs are affected; askedChoice can only
-      // be true on a successful handler call, which on non-conversation runs throws
-      // `forbidden:` (fatal) and never sets it. Cancel check first, mirroring the
-      // terminal path below.
-      if (ctx.sink && askedChoice) {
+      // TURN-TERMINATING `ask_choice` (see askedChoice in executeToolRound) → a CLEAN
+      // turn boundary on a conversation run: complete the turn like a normal stop,
+      // preserving any assistant preamble (textBuf). Structural enforcement, runner
+      // ends the turn regardless of the model. Guarded on
+      // `ctx.runSink.isConversation` (on a doc run ask_choice throws fatal, so
+      // askedChoice is never set — C-3a pins it). Cancel first.
+      if (ctx.runSink.isConversation && askedChoice) {
         if (await wasCancelled(ctx)) {
           await handleCancel(ctx);
           return;
@@ -1557,105 +1729,24 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
       continue; // next round
     }
 
-    // FIX #3 — done_reason='tool_use' with ZERO usable tool_calls. The model
-    // signalled it wants a tool but produced no call the provider could surface
-    // (e.g. a malformed tool_call the provider dropped). Completing cleanly
-    // would mask a failed generation as success. Fail loudly; no result comment.
-    if (doneReason === 'tool_use' && collectedToolCalls.length === 0) {
-      await failRun(
-        ctx,
-        runErrorReasonSchema.enum.provider_error,
-        'Provider signalled tool_use but produced no usable tool call.',
-      );
-      return;
-    }
-
-    // FIX #2 — the stream ended without ever yielding a `done` event (doneReason
-    // still undefined and not terminated). Treat a stream that stops without a
-    // completion signal as a truncated/failed generation, NOT a clean complete
-    // with partial text. Fail loudly; no result comment.
-    if (doneReason === undefined) {
-      await failRun(
-        ctx,
-        runErrorReasonSchema.enum.provider_error,
-        'Provider stream ended without a completion signal.',
-      );
-      return;
-    }
-
-    // Terminal (stop / max_tokens / refusal / pause_turn, or no tool_calls).
-    // refusal + pause_turn are CLEAN completions (mitigation 20) → completed.
-    //
-    // Pure-text runs (text + done, no tool_call) never hit the tool_call
-    // cancel check above, so a user's "stop" would be silently ignored. Check
-    // wasCancelled once on the terminal path (mitigation 44): one extra
-    // comment-thread read on the final round, which is acceptable.
-    //
-    // FIX #5 — this terminal check intentionally applies to BOTH fresh and
-    // resume runs (runLoop is shared). A post-start rejection landing during a
-    // resume is a deliberate mid-resume stop, so it cancels an otherwise-
-    // completing approved resume. Intended, not a bug — pinned by a test.
-    if (await wasCancelled(ctx)) {
-      await handleCancel(ctx);
-      return;
-    }
-
-    // DROPPED-TOOL-CALL policy (code-review #1/#4/#5) — we reach the terminal path
-    // with collectedToolCalls.length > 0 only when the reason BLOCKED the tool round
-    // (the whitelist gate above ran them only on stop|tool_use). The model intended
-    // a tool call we did not run; completing silently hides lost work. ONE keyed
-    // policy decides fail-vs-note, default FAIL-CLOSED so an UNKNOWN reason is never
-    // laundered into a clean success:
-    //   - 'refusal' / 'pause_turn' → the model deliberately declined / paused; a
-    //     clean completion is correct. Note the dropped intent so an empty result
-    //     isn't mysterious. (ONE comment — no separate failRun, so no double-post.)
-    //   - 'max_tokens' OR any UNKNOWN reason → lost work on an unrecognized/truncated
-    //     signal. FAIL LOUDLY (failRun surfaces a single rich message; no separate
-    //     comment, so the conversation thread gets exactly one entry).
-    if (collectedToolCalls.length > 0) {
-      const cleanlyCompletes = doneReason === 'refusal' || doneReason === 'pause_turn';
-      if (cleanlyCompletes) {
-        await postAgentComment(
-          ctx,
-          `Model finished with '${doneReason}' while a tool call was pending — the tool was not run.`,
-          'comment',
-        );
-        // falls through to postResultAndComplete below (clean completion).
-      } else {
-        // max_tokens (truncation) or an unknown/off-spec reason — fail-closed. failRun
-        // is the SINGLE surface (it posts to the conversation sink itself), so we do
-        // NOT also postAgentComment — that would double-post on the cockpit thread.
-        // Reason is keyed: max_tokens is a budget truncation; an unrecognized signal
-        // is a hard provider fault (provider_error).
-        const [reason, detail] =
-          doneReason === 'max_tokens'
-            ? ([
-                runErrorReasonSchema.enum.budget_exceeded,
-                'Response truncated at the token cap with an unexecuted tool call — raise max_tokens and retry.',
-              ] as const)
-            : ([
-                runErrorReasonSchema.enum.provider_error,
-                `Stream finished with an unhandled reason ('${doneReason}') while a tool call was pending — the tool was not run.`,
-              ] as const);
-        await failRun(ctx, reason, detail);
-        return;
-      }
-    }
-
-    // G2 — surface an UNMETERED run (provider never reported usage → the budget cap
-    // had nothing to bound on). Fired on BOTH exits (here AND the round-cap exit
-    // below) — see warnIfUnmetered. The runaway-loop case the threat model targets
-    // exits via the round cap, so the warn MUST cover it (code-review SHOULD-FIX).
-    warnIfUnmetered(runId, providerLabel, sawUsage);
-
-    await postResultAndComplete(ctx, textBuf, doneReason);
+    // No tool batch ran this round → hand off to the terminal policy (FIX #3 /
+    // FIX #2 / wasCancelled / dropped-tool-call / warnIfUnmetered / complete). Every
+    // branch there ends the run, so runLoop returns right after.
+    await finishTerminal(
+      ctx,
+      doneReason,
+      collectedToolCalls,
+      textBuf,
+      sawUsage,
+      runId,
+      providerLabel,
+    );
     return;
   }
 
-  // Round cap exhausted — runaway tool loop. chain_guard family: use
-  // fanout_exceeded (closest enum member for "too many rounds"). G2 — this is the
-  // EXACT denial-of-wallet scenario; if it was also unmetered, the operator must see
-  // it (the warn was previously absent on this dangerous exit).
+  // Round cap exhausted — runaway tool loop. fanout_exceeded (closest enum member
+  // for "too many rounds"). G2 — the EXACT denial-of-wallet scenario, so warn if it
+  // was also unmetered before failing.
   warnIfUnmetered(runId, providerLabel, sawUsage);
   await failRun(
     ctx,
@@ -1812,25 +1903,19 @@ async function postResultAndComplete(
   textBuf: string,
   doneReason: RunDoneReason | undefined,
 ): Promise<void> {
-  const runId = ctx.run.id;
-
-  // Final answer as a kind=result comment on the parent, linking the run.
+  // Final answer as a kind=result comment (doc) / one text message (conv) — the
+  // text post is the CALLER's job; `complete()` is the lifecycle transition half.
   const finalText = textBuf.trim().length > 0 ? textBuf : '(no output)';
   await postAgentComment(ctx, finalText, 'result');
 
-  // Operator cockpit chat (Task 5) — a conversation run has NO `agent_run` row,
-  // so `transitionRun` (which throws AGENT_RUN_NOT_FOUND on a missing row) does
-  // not apply. The result text already streamed to the thread via the sink above;
-  // the conversation's `active_run_id` slot is the liveness record, cleared by the
-  // runAgent conversation finally.
-  if (ctx.sink) return;
-
-  // transitionRun owns its own txWithEvents; done_reason rides inside it.
-  await transitionRun(runId, {
-    newStatus: 'completed',
-    actor: ctx.transitionActor,
-    doneReason,
-  });
+  // Lifecycle transition: doc → transitionRun(completed) with done_reason folded
+  // in ATOMICALLY (FIX #4 — transitionRun owns its own txWithEvents; the
+  // done_reason write, status flip, and agent.run.completed event commit
+  // together); conv → NO-OP (no `agent_run` row — transitionRun would throw
+  // AGENT_RUN_NOT_FOUND; the result text already streamed to the thread above, and
+  // the `active_run_id` slot, cleared by the runAgent conversation finally, is the
+  // liveness record). Both branches live in RunSink.complete.
+  await ctx.runSink.complete(doneReason);
 }
 
 // ---------------------------------------------------------------------------
@@ -1865,10 +1950,11 @@ function summarizeToolResult(tool: string, result: unknown): string {
 }
 
 /**
- * Post a turn's output. Generalized over the two output sinks (Task 4):
- *   - conversation thread (ctx.sink set) → write a `text` message row. A
- *     conversation run has NO `ctx.parent`, so it MUST NOT call createComment.
- *   - document thread (no sink) → the existing `createComment` on the parent.
+ * Post a turn's output. Generalized over the two output sinks (Task 4) via
+ * `ctx.runSink.post`:
+ *   - conversation thread → write a `text` message row. A conversation run has NO
+ *     `ctx.parent`, so it MUST NOT call createComment.
+ *   - document thread → the existing `createComment` on the parent.
  *
  * `kind` is meaningful only for the document thread (comment vs result); the
  * conversation thread has a single `text` message kind.
@@ -1878,19 +1964,10 @@ async function postAgentComment(
   body: string,
   kind: 'result' | 'comment',
 ): Promise<void> {
-  if (ctx.sink) {
-    await ctx.sink.text(body);
-    return;
-  }
-  await createComment({
-    workspace: ctx.workspace,
-    project: ctx.project,
-    parent: ctx.parent,
-    authorContext: ctx.authorContext,
-    actor: ctx.actor,
-    body,
-    kind,
-  });
+  // Both branches now live in the polymorphic RunSink.post: doc → createComment on
+  // the parent (kind-aware); conv → one `text` message row. This helper is a thin
+  // alias kept for its many call sites + the run-linkage doc note above.
+  await ctx.runSink.post(body, kind);
 }
 
 /**
@@ -1903,26 +1980,12 @@ async function postAgentComment(
  * post-start rejection on the parent as the cancel trigger.
  */
 async function wasCancelled(ctx: RunContext): Promise<boolean> {
-  // Operator cockpit chat (Task 4) — a conversation-backed run has NO
-  // `ctx.parent` (cancel-via-rejection-comment is a document-thread mechanism).
-  // Mid-turn cancel for chat is a deliberate v1 deferral (threat model
-  // "Out of scope: mid-turn cancellation"); a conversation run is never
-  // cancelled this way, so report false instead of dereferencing a null parent.
-  if (ctx.sink) return false;
-  // FIX #1 — INCLUSIVE boundary (createdAt >= started_at). listComments' `since`
-  // filter is strict `>` (gt), which drops a rejection stamped in the SAME
-  // millisecond as started_at — a real mid-run cancel that races the run's own
-  // start timestamp. A rejection BEFORE started_at belongs to a prior run/plan
-  // (handled by rejectRun's awaiting_approval→rejected path); a rejection
-  // AT-OR-AFTER start is a valid mid-run cancel. So we fetch all rejections on
-  // the parent and apply the inclusive comparison ourselves rather than relying
-  // on listComments' exclusive `since`.
-  const rejections = await listComments({
-    parentId: ctx.parent.id,
-    kind: 'rejection',
-  });
-  const startedMs = new Date(ctx.fm.started_at).getTime();
-  return rejections.some((c) => new Date(c.createdAt).getTime() >= startedMs);
+  // Both branches now live in the polymorphic RunSink.wasCancelled: doc → the
+  // INCLUSIVE (>= started_at) post-start rejection scan (FIX #1, mitigation 9,
+  // security-load-bearing); conv → false (mid-turn chat cancel is a v1 deferral —
+  // threat model "Out of scope: mid-turn cancellation"). This helper is a thin
+  // alias kept for its call sites in consumeStream + finishTerminal.
+  return ctx.runSink.wasCancelled();
 }
 
 /**
@@ -1932,23 +1995,15 @@ async function wasCancelled(ctx: RunContext): Promise<boolean> {
  * comment — the partial work already streamed into the cancel comment above.
  */
 async function handleCancel(ctx: RunContext): Promise<void> {
-  // On the CONVERSATION (sink) path, both postAgentComment and failRun write to
-  // ctx.sink.text — calling both would double-post on the cockpit thread (the same
-  // mode as the dropped-call fix, code-review #4). failRun is the single surface
-  // there. NOTE: today wasCancelled() returns false for sink runs (mid-turn chat
-  // cancel is a v1 deferral), so this branch is latent — kept fail-safe for when
-  // chat-cancel lands. On the document path, both are wanted (a partial-work comment
-  // PLUS the failed/cancelled transition).
-  if (ctx.sink) {
-    await failRun(
-      ctx,
-      runErrorReasonSchema.enum.cancelled,
-      'Cancelled by user — partial work above.',
-    );
-    return;
-  }
-  await postAgentComment(ctx, 'Cancelled by user — partial work above.', 'comment');
-  await failRun(ctx, runErrorReasonSchema.enum.cancelled, 'Cancelled by user via comment.');
+  // Both branches now live in the polymorphic RunSink.cancel: doc → a partial-work
+  // `comment` PLUS the failed/cancelled transition; conv → fail() ONLY (one `text`
+  // message — posting a comment AND failing would double-post on the cockpit
+  // thread, the same mode as the dropped-call fix, code-review #4). NOTE: today
+  // wasCancelled() returns false for conversation runs (mid-turn chat cancel is a
+  // v1 deferral), so the conversation branch is latent — kept fail-safe for when
+  // chat-cancel lands. This helper is a thin alias kept for its call sites in
+  // consumeStream + finishTerminal.
+  await ctx.runSink.cancel();
 }
 
 function isInvalidArgs(
@@ -2038,26 +2093,14 @@ async function failRun(
   errorReason: NonNullable<AgentRunFrontmatter['error_reason']>,
   errorDetail: string,
 ): Promise<void> {
-  // Operator cockpit chat (Task 5) — a conversation run has no `agent_run` row to
-  // transition (transitionRun would throw AGENT_RUN_NOT_FOUND). Surface the
-  // failure as a turn text message so the human watching the thread sees it; the
-  // `active_run_id` slot is cleared by the runAgent conversation finally.
-  if (ctx.sink) {
-    // ONE thread message carries the human-readable detail (not just the reason
-    // code), so callers don't post a separate explanatory comment AND failRun —
-    // which would double-post on the cockpit thread (code-review #4).
-    await ctx.sink.text(`The operator could not finish this turn: ${errorDetail}`);
-    return;
-  }
-  // transitionRun owns its own `txWithEvents` (UPDATE + event emit commit
-  // atomically). Call it directly — no outer wrapper (which would nest an
-  // empty db.transaction whose fn never emits).
-  await transitionRun(ctx.run.id, {
-    newStatus: 'failed',
-    actor: ctx.transitionActor,
-    errorReason,
-    errorDetail,
-  });
+  // Both branches now live in the polymorphic RunSink.fail: doc → transitionRun
+  // (failed) with the reason + detail (transitionRun owns its own txWithEvents —
+  // UPDATE + event emit commit atomically); conv → ONE `text` thread message
+  // carrying the human-readable detail (a conversation run has no `agent_run` row
+  // to transition — transitionRun would throw AGENT_RUN_NOT_FOUND). The single
+  // failure surface there is what structurally prevents the double-post bug
+  // (code-review #4). This helper is a thin alias kept for its many call sites.
+  await ctx.runSink.fail(errorReason, errorDetail);
 }
 
 /**

@@ -18,6 +18,13 @@ import { appendMessage, serializeMessage } from '../services/conversations.ts';
 import { conversationBus } from './conversation-bus.ts';
 
 /**
+ * One executed tool-call summary — the shape every `toolStep` accepts. Defined
+ * here (the leaf module) so `run-sink.ts` can import it `type`-only without a
+ * runtime cycle (run-sink already value-imports this file).
+ */
+export type ToolStep = { tool: string; summary: string; status: 'ok' | 'error' };
+
+/**
  * The conversation-thread output abstraction. Each method appends one message
  * row of the matching `kind` to the conversation, stamped with the run id.
  */
@@ -25,7 +32,7 @@ export interface ConversationSink {
   /** Append a `text` message (a turn's prose output). */
   text(body: string): Promise<void>;
   /** Append a `tool_step` message summarizing one executed tool call. */
-  toolStep(step: { tool: string; summary: string; status: 'ok' | 'error' }): Promise<void>;
+  toolStep(step: ToolStep): Promise<void>;
   /** Append a `component` message (a `link_panel` / `choice_card` payload). */
   component(payload: Record<string, unknown>): Promise<void>;
 }
