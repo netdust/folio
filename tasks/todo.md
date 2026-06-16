@@ -37,8 +37,9 @@ Order: A → E → D → B → C. Each cluster = a `── REVIEW GATE ──`. 
 - NOTE: 3-parallel-implementer race scrambled E1/E2/E3 SHAs (recovered clean); web batch ran SERIAL — no further races
 
 ### Cluster D — Typing cleanup (STANDARD)
-- [ ] D1 — discriminated RunContext (reuse RunSink.isConversation) kills `as unknown as Workspace`
-- [ ] D2 — typed rowToDocument mapper for comments (5 cast sites)
+- [ ] D1 — discriminated RunContext kills `as unknown as Workspace/Project` — DISPATCHED
+      STEP-2.5 CORRECTION: can't key union on runSink.isConversation (runSink is `undefined as unknown as RunSink` at construction, assigned after — circular ctx↔sink). Use a `kind:'document'|'conversation'` literal set at construction. Ground-truth: workspace/project read at EXACTLY 2 sites (run-sink.ts:125-126, document path only); conversation path never reads them → union is safe.
+- [ ] D2 — typed rowToDocument mapper for comments (5 cast sites: 392/451/565/595/637) — serial after D1
 - [ ] ── REVIEW GATE D ── (STANDARD + invariant-auditor)
 
 ### Cluster B — Client pagination (STANDARD + browser)
