@@ -29,12 +29,12 @@ Order: A → E → D → B → C. Each cluster = a `── REVIEW GATE ──`. 
 - [x] E1 — email.ts URL round-trip test (Tier A) — 41e074c
 - [x] E2 — autonomy-gate.ts suppression-record test (Tier A) — 15f0741 [plan drift: file is the emitter not a predicate]
 - [x] E3 — per-tool denial matrix (Tier A) — fc24af9 — 33/33 tools deny, NO un-gated tool, coverage-guard
-- [ ] E4 — DELETE 8 skip-IOUs + deferred-e2e backlog doc (owner decision) — dispatched
-- [ ] E5 — replace 7 raw setTimeout sleeps with deterministic waits
-- [ ] E6 — silence Milkdown teardown flake (comments-tab.test.tsx)
+- [x] E4 — DELETE 8 skip-IOUs + deferred-e2e backlog doc — fe4f39f
+- [x] E5 — replace 7 raw setTimeout sleeps with deterministic waits — c52838c (3× determinism each file)
+- [x] E6 — Milkdown teardown flake: worker-lifetime targeted filter in test-setup.ts — d04711a (12 clean runs)
 - [x] E7 — dispatcher cursor batch-advance (Tier A) — 592bf39 — 4→1 write/drain, contract preserved
-- [ ] ── REVIEW GATE E ── (STANDARD + invariant-auditor on E3/E7)
-- NOTE: 3-parallel-implementer race scrambled E1/E2/E3 SHAs (recovered clean); web batch now SERIAL
+- [ ] ── REVIEW GATE E ── STANDARD: invariant-auditor (E3/E7) + generalist reviewer — DISPATCHED
+- NOTE: 3-parallel-implementer race scrambled E1/E2/E3 SHAs (recovered clean); web batch ran SERIAL — no further races
 
 ### Cluster D — Typing cleanup (STANDARD)
 - [ ] D1 — discriminated RunContext (reuse RunSink.isConversation) kills `as unknown as Workspace`
