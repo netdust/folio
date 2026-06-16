@@ -1,11 +1,16 @@
+import type { ViewType } from '@folio/shared';
+import { Outlet, createFileRoute, useNavigate, useSearch } from '@tanstack/react-router';
 import {
-  Outlet,
-  createFileRoute,
-  useNavigate,
-  useRouterState,
-  useSearch,
-} from '@tanstack/react-router';
-import { Columns3, List, Loader2, Plus } from 'lucide-react';
+  Calendar,
+  Columns3,
+  GanttChart,
+  List,
+  Loader2,
+  type LucideIcon,
+  PanelRight,
+  Plus,
+  Table2,
+} from 'lucide-react';
 import { toast } from 'sonner';
 import { z } from 'zod';
 import { BoardControls } from '../components/kanban/board-controls.tsx';
@@ -13,27 +18,40 @@ import { FrameTab, MainFrame } from '../components/shell/main-frame.tsx';
 import { DocumentSlideover } from '../components/slideover/document-slideover.tsx';
 import { Button } from '../components/ui/button.tsx';
 import { Icon } from '../components/ui/icon.tsx';
+import { agentPanelBus } from '../lib/agent-panel-bus.ts';
 import { useCreateDocument, useDocuments } from '../lib/api/documents.ts';
 import { formatApiError } from '../lib/api/index.ts';
 import { useProject } from '../lib/api/projects.ts';
+import { useActiveView } from '../lib/api/use-active-view.ts';
 import { useLiveDocuments } from '../lib/api/use-live-documents.ts';
 import { useCurrentTslug } from '../lib/default-table.ts';
-import { activeTabFromPath, resolveTableNav, resolveViewNav } from '../lib/rail-nav.ts';
 
 export const Route = createFileRoute('/w/$wslug/p/$pslug')({
   validateSearch: z.object({ doc: z.string().optional() }),
   component: ProjectLayout,
 });
 
-const TABS = [
-  { id: 'work-items', label: 'Work items', path: 'work-items' as const, icon: List },
-  { id: 'board', label: 'Board', path: 'board' as const, icon: Columns3 },
-];
+// THE view-type → tab icon map. A view click no longer routes by URL shape; the
+// switcher renders one tab per SAVED VIEW and the icon is keyed off the view's
+// type. Gallery falls back to a generic image-ish glyph (none in the v1 set).
+const iconForViewType = (type: ViewType): LucideIcon => {
+  switch (type) {
+    case 'table':
+      return Table2;
+    case 'kanban':
+      return Columns3;
+    case 'calendar':
+      return Calendar;
+    case 'timeline':
+      return GanttChart;
+    default:
+      return List; // list + gallery
+  }
+};
 
 function ProjectLayout() {
   const { wslug, pslug } = Route.useParams();
   const navigate = useNavigate();
-  const routerState = useRouterState();
   const search = useSearch({ strict: false }) as Record<string, unknown>;
   // The layout wraps every table route (/work-items, /board, /t/:tslug,
   // /t/:tslug/board), so the current table is resolved from the route, not
@@ -45,21 +63,12 @@ function ProjectLayout() {
   const { data: pages } = useDocuments(wslug, pslug, tslug, { type: 'page', limit: 200 });
   const create = useCreateDocument(wslug, pslug, tslug);
   useLiveDocuments(wslug, pslug, project?.id);
+  // The tabs are now one-per-SAVED-VIEW; the active tab + the kanban BoardControls
+  // gate are both keyed off the ACTIVE VIEW's type (invariant 18), not a URL shape.
+  const { view: activeView, views } = useActiveView(wslug, pslug, tslug);
 
   if (isLoading) return <div className="p-8 text-fg-3">Loading project…</div>;
   if (!project) return <div className="p-8 text-danger">Project not found.</div>;
-
-  const path = routerState.location.pathname;
-  // Table-route-aware: a /t/<tslug>/board path lights Board, a bare /t/<tslug>
-  // (or /work-items) lights the grid. A plain `endsWith('/'+path)` would miss
-  // both /t/<tslug> shapes and wrongly fall through to the work-items default.
-  const activeTab = activeTabFromPath(path) ?? 'work-items';
-  // The two table tabs route to the CURRENT table's grid + board via the single
-  // rail-nav resolver (the same source the rail + new-view sheet delegate to):
-  // grid → resolveTableNav, board → resolveViewNav(_, 'kanban'). Default table →
-  // legacy /work-items|/board (no :tslug); other tables → /t/$tslug(/board).
-  const tabNav = (tab: 'work-items' | 'board') =>
-    tab === 'board' ? resolveViewNav(tslug, 'kanban') : resolveTableNav(tslug);
 
   const workCount = workItems?.data.length ?? 0;
   const pageCount = pages?.data.length ?? 0;
@@ -74,19 +83,33 @@ function ProjectLayout() {
   };
 
   const actions = (
-    <Button
-      variant="primary"
-      onClick={onCreate}
-      disabled={create.isPending}
-      className="whitespace-nowrap"
-    >
-      <Icon
-        icon={create.isPending ? Loader2 : Plus}
-        size={14}
-        className={create.isPending ? 'animate-spin' : ''}
-      />
-      New work item
-    </Button>
+    <>
+      {/* G4: the visible re-open affordance for the operator panel. Previously
+          reachable only via Cmd-K + the workspace dropdown; this is the always-on
+          toolbar toggle. */}
+      <Button
+        variant="ghost"
+        onClick={() => agentPanelBus.toggle()}
+        aria-label="Toggle operator panel"
+        title="Toggle operator panel"
+        className="whitespace-nowrap"
+      >
+        <Icon icon={PanelRight} size={14} />
+      </Button>
+      <Button
+        variant="primary"
+        onClick={onCreate}
+        disabled={create.isPending}
+        className="whitespace-nowrap"
+      >
+        <Icon
+          icon={create.isPending ? Loader2 : Plus}
+          size={14}
+          className={create.isPending ? 'animate-spin' : ''}
+        />
+        New work item
+      </Button>
+    </>
   );
 
   return (
@@ -97,24 +120,23 @@ function ProjectLayout() {
         actions={actions}
         tabs={
           <>
-            {TABS.map((t) => (
+            {views.map((v) => (
               <FrameTab
-                key={t.id}
-                active={activeTab === t.id}
-                icon={t.icon}
-                onClick={() => {
-                  const target = tabNav(t.path);
+                key={v.id}
+                active={activeView?.id === v.id}
+                icon={iconForViewType(v.type)}
+                onClick={() =>
                   navigate({
-                    to: target.to,
-                    params: target.withTslug ? { wslug, pslug, tslug } : { wslug, pslug },
-                    search: (s) => s,
-                  });
-                }}
+                    to: '/w/$wslug/p/$pslug/t/$tslug',
+                    params: { wslug, pslug, tslug },
+                    search: (s) => ({ ...s, view: v.id }),
+                  })
+                }
               >
-                {t.label}
+                {v.name}
               </FrameTab>
             ))}
-            {activeTab === 'board' ? (
+            {activeView?.type === 'kanban' ? (
               <>
                 <div className="mx-1 h-5 w-px self-center bg-border-light" aria-hidden />
                 <BoardControls wslug={wslug} pslug={pslug} tslug={tslug} />

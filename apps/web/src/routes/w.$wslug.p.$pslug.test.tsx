@@ -29,6 +29,29 @@ vi.mock('../components/kanban/board-controls.tsx', () => ({
   },
 }));
 
+// ─── Saved-view switcher: control the view list + active view ────────────────
+// The project layout now drives its tabs off the saved views (useViews) and the
+// active-view resolver (useActiveView), not a fixed Work-items/Board pair. Mock
+// both so the switcher renders deterministically and the kanban gate is driven
+// by the ACTIVE VIEW's type (invariant 16/18), not a board path.
+interface MockView {
+  id: string;
+  name: string;
+  type: 'table' | 'list' | 'kanban' | 'calendar' | 'timeline' | 'gallery';
+  isDefault: boolean;
+}
+let mockViews: MockView[] = [
+  { id: 'v1', name: 'All work items', type: 'list', isDefault: true },
+  { id: 'v2', name: 'Board', type: 'kanban', isDefault: false },
+];
+let mockActiveView: MockView | undefined = mockViews[0];
+vi.mock('../lib/api/views.ts', () => ({
+  useViews: () => ({ data: mockViews }),
+}));
+vi.mock('../lib/api/use-active-view.ts', () => ({
+  useActiveView: () => ({ view: mockActiveView, views: mockViews, isLoading: false }),
+}));
+
 // Shared mock fixtures —————————————————————————————————————————
 
 const workspace = { id: 'w1', slug: 'acme', name: 'Acme' };
@@ -123,13 +146,21 @@ describe('ProjectLayout — table-aware BoardControls (invariant 16)', () => {
   beforeEach(() => {
     localStorage.clear();
     boardControlsSpy.mockClear();
+    mockViews = [
+      { id: 'v1', name: 'All work items', type: 'list', isDefault: true },
+      { id: 'v2', name: 'Board', type: 'kanban', isDefault: false },
+    ];
+    mockActiveView = mockViews[0];
   });
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
 
-  it('on /t/bugs/board, BoardControls receives the real tslug (not hardcoded work-items)', async () => {
+  it('when the active view is kanban, BoardControls receives the real tslug (not hardcoded work-items)', async () => {
+    // Active view is the kanban one → BoardControls gate opens (invariant 18:
+    // the gate is the ACTIVE VIEW's type, not a board path).
+    mockActiveView = mockViews[1];
     const { queryClient, router } = setupTableBoard('/w/acme/p/sales/t/bugs/board');
     render(
       <QueryClientProvider client={queryClient}>
@@ -137,7 +168,6 @@ describe('ProjectLayout — table-aware BoardControls (invariant 16)', () => {
       </QueryClientProvider>,
     );
 
-    // The Board tab is active on a /t/<tslug>/board path → BoardControls mounts.
     await waitFor(() => expect(screen.getByTestId('board-controls')).toBeInTheDocument());
     // Regression guard: a hardcoded tslug="work-items" would render "controls
     // work-items" here and the click would write group-by/sort to the WRONG table.
@@ -146,18 +176,39 @@ describe('ProjectLayout — table-aware BoardControls (invariant 16)', () => {
       expect.objectContaining({ wslug: 'acme', pslug: 'sales', tslug: 'bugs' }),
     );
   });
+
+  it('does NOT render BoardControls when the active view is not kanban (denial path)', async () => {
+    // Active view is a list → the kanban gate stays closed even on a /board URL.
+    mockActiveView = mockViews[0];
+    const { queryClient, router } = setupTableBoard('/w/acme/p/sales/t/bugs/board');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    // The layout must have rendered (table-board leaf reachable) before asserting absence.
+    await waitFor(() => expect(screen.getByTestId('table-board')).toBeInTheDocument());
+    expect(screen.queryByTestId('board-controls')).toBeNull();
+    expect(boardControlsSpy).not.toHaveBeenCalled();
+  });
 });
 
-describe('ProjectLayout — tab bar', () => {
+describe('ProjectLayout — saved-view switcher', () => {
   beforeEach(() => {
     localStorage.clear();
+    mockViews = [
+      { id: 'v1', name: 'All work items', type: 'list', isDefault: true },
+      { id: 'v2', name: 'Board', type: 'kanban', isDefault: false },
+    ];
+    mockActiveView = mockViews[0];
   });
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
 
-  it('project tab bar shows Work items and Board with icons, and no Wiki tab', async () => {
+  it('renders a switcher tab per saved view, with icons, and no Wiki tab', async () => {
     const { queryClient, router } = setup();
     render(
       <QueryClientProvider client={queryClient}>
@@ -165,14 +216,44 @@ describe('ProjectLayout — tab bar', () => {
       </QueryClientProvider>,
     );
 
-    expect(await screen.findByRole('tab', { name: /work items/i })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: /board/i })).toBeInTheDocument();
+    // One tab per SAVED VIEW name (not the fixed Work-items/Board pair).
+    expect(await screen.findByRole('tab', { name: /All work items/ })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /Board/ })).toBeInTheDocument();
     expect(screen.queryByRole('tab', { name: /wiki/i })).toBeNull();
-    expect(screen.getByRole('tab', { name: /work items/i }).querySelector('svg')).toBeTruthy();
-    expect(screen.getByRole('tab', { name: /board/i }).querySelector('svg')).toBeTruthy();
+    expect(screen.getByRole('tab', { name: /All work items/ }).querySelector('svg')).toBeTruthy();
+    expect(screen.getByRole('tab', { name: /Board/ }).querySelector('svg')).toBeTruthy();
 
     // Sanity: the project actually loaded (avoids passing on a "not found" screen).
     await waitFor(() => expect(screen.getByText('Sales')).toBeInTheDocument());
+  });
+
+  it('marks the active view as the selected tab', async () => {
+    mockActiveView = mockViews[1]; // "Board" is active
+    const { queryClient, router } = setup();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    const boardTab = await screen.findByRole('tab', { name: /Board/ });
+    expect(boardTab).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tab', { name: /All work items/ })).toHaveAttribute(
+      'aria-selected',
+      'false',
+    );
+  });
+
+  it('shows a visible operator-panel toggle in the toolbar (G4)', async () => {
+    const { queryClient, router } = setup();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByText('Sales')).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: /operator|assistant|panel/i })).toBeInTheDocument();
   });
 });
 
@@ -180,6 +261,11 @@ describe('ProjectLayout — live document updates', () => {
   beforeEach(() => {
     localStorage.clear();
     liveSpy.mockClear();
+    mockViews = [
+      { id: 'v1', name: 'All work items', type: 'list', isDefault: true },
+      { id: 'v2', name: 'Board', type: 'kanban', isDefault: false },
+    ];
+    mockActiveView = mockViews[0];
   });
   afterEach(() => {
     vi.restoreAllMocks();
