@@ -17,12 +17,13 @@ Baseline suites: server **1828** / web **946** / shared 70, 0 fail.
 Order: A → E → D → B → C. Each cluster = a `── REVIEW GATE ──`. Tiers: A=LIGHT, E/D/B/C=STANDARD (FULL held for one-way escalation).
 
 ### Cluster A — Docs accuracy (LIGHT)
-- [ ] A1 — API.md AI-keys path + term + conversations/runs surfaces
-- [ ] A2 — MCP.md tool count 20→31
-- [ ] A3 — crypto-term drift libsodium→AES-256-GCM (PHASES.md, FOLIO-BRIEFING.md)
-- [ ] A4 — PHASES.md layering-inconsistency note (NOT a renumber)
-- [ ] A5 — (OPTIONAL, default SKIP) check-invariants doc-path extension
-- [ ] ── REVIEW GATE A ── (LIGHT)
+- [x] A1 — API.md AI-keys path + term + conversations/runs surfaces (4896e0f)
+- [x] A2 — MCP.md tool count 20→33 (0f26cec) [my brief said 31; real=33, +2 API-bridge]
+- [x] A3 — crypto-term drift libsodium→AES-256-GCM (8bff533)
+- [x] A4 — PHASES.md layering-inconsistency note (4080992, addition-only)
+- [x] A5 — SKIPPED per scope decision
+- [x] A-fold — FOLIO-BRIEFING master-key base64→64hex (e73d5bf, review-surfaced)
+- [x] ── REVIEW GATE A ── LIGHT: 0 Critical, 1 Important folded, CLOSED
 
 ### Cluster E — Test gaps + Playwright IOUs + flake + dispatcher (STANDARD)
 - [ ] E1 — email.ts URL round-trip test (Tier A)
