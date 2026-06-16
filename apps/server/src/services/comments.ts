@@ -132,6 +132,29 @@ export interface ListCommentsInput {
 // Helpers
 // -----------------------------------------------------------------------------
 
+/**
+ * D2 (audit 3.3) — single typed seam between a locally-built documents row and
+ * the `Document` domain type, replacing the two per-call-site `as unknown as
+ * Document` double-casts (which defeated ALL type checking on the row shape).
+ *
+ * The parameter is the Drizzle INSERT shape (`documents.$inferInsert`), which is
+ * what both call sites genuinely build: `boardPosition` / `lastTouchedAt` are
+ * optional on insert (the DB defaults them to null) and are deliberately omitted
+ * from the in-flight object the service returns — so this mapper is
+ * BEHAVIOR-PRESERVING: it returns the same reference, byte-identical to what the
+ * cast produced, never fabricating or transforming a field.
+ *
+ * The internal `as` is a SINGLE-step assertion (no `unknown`): TypeScript still
+ * checks every supplied field against `documents.$inferInsert`, so a real type
+ * mismatch in the row literal is caught — only the two DB-defaulted columns are
+ * widened to their post-read `Document` shape. This narrows the trust gap from
+ * "anything → Document" (the old `as unknown as`) to "a checked insert row →
+ * Document", in one auditable place.
+ */
+function rowToDocument(row: typeof documents.$inferInsert): Document {
+  return row as Document;
+}
+
 function bodyByteLength(s: string): number {
   return Buffer.byteLength(s, 'utf8');
 }
@@ -389,13 +412,13 @@ export async function createComment(input: CreateCommentInput): Promise<Document
       title,
       status: null,
       body,
-      frontmatter: frontmatter as unknown as Record<string, unknown>,
+      frontmatter: frontmatter as Record<string, unknown>,
       parentId: parent.id,
       createdBy: authorContext.type === 'user' ? authorContext.userId : null,
       updatedBy: authorContext.type === 'user' ? authorContext.userId : null,
       createdAt,
       updatedAt: createdAt,
-    };
+    } satisfies typeof documents.$inferInsert;
     await tx.insert(documents).values(inserted);
 
     // comment.created — always.
@@ -448,7 +471,7 @@ export async function createComment(input: CreateCommentInput): Promise<Document
     return inserted;
   });
 
-  return row as unknown as Document;
+  return rowToDocument(row);
 }
 
 // -----------------------------------------------------------------------------
@@ -562,7 +585,7 @@ export async function updateComment(input: UpdateCommentInput): Promise<Document
     const next = {
       ...existing,
       body: nextBody,
-      frontmatter: mergedFrontmatter as unknown as Record<string, unknown>,
+      frontmatter: mergedFrontmatter as Record<string, unknown>,
       updatedBy: authorContext.type === 'user' ? authorContext.userId : existing.updatedBy,
       updatedAt: new Date(),
     };
@@ -592,7 +615,7 @@ export async function updateComment(input: UpdateCommentInput): Promise<Document
     return next;
   });
 
-  return updatedRow as unknown as Document;
+  return rowToDocument(updatedRow);
 }
 
 // -----------------------------------------------------------------------------
@@ -634,7 +657,7 @@ export async function deleteComment(input: DeleteCommentInput): Promise<Document
   const updated = {
     ...existing,
     body: '',
-    frontmatter: mergedFrontmatter as unknown as Record<string, unknown>,
+    frontmatter: mergedFrontmatter as Record<string, unknown>,
     updatedBy: authorContext.type === 'user' ? authorContext.userId : existing.updatedBy,
     updatedAt: new Date(),
   };
