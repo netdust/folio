@@ -1311,6 +1311,200 @@ async function consumeStream(
   return { terminated, collectedToolCalls, textBuf, doneReason, sawUsage };
 }
 
+/**
+ * B-2 (M2 RunSink) — per-round tool execution, extracted VERBATIM from runLoop.
+ * Carries the `executeTool` call and the FULL catch chain, MOVED byte-for-byte
+ * with the catch order LITERALLY preserved:
+ *   isAwaitingConfirmation → isFatalToolError → isInvalidArgs → recoverable.
+ * That ordering is invariant 12 — a reorder turns a confirmation clean-pause into
+ * a provider_error. DO NOT rewrite the try/catch.
+ *
+ * Returns the per-round outcome flags runLoop reads after: `fatalReturned`
+ * (failRun already fired — runLoop returns), `awaitingConfirmation`/`askedChoice`
+ * (clean turn-end — runLoop completes the turn), `roundHadSuccess`/
+ * `roundHadRecoverableError` (the consecutive-error counter), plus `assistantMsg`
+ * + `toolResultMsgs` runLoop commits to `messages` after a non-fatal round. This
+ * helper does NOT push to `messages` — that commit stays in runLoop.
+ */
+async function executeToolRound(
+  ctx: RunContext,
+  collectedToolCalls: Array<{ id: string; name: string; arguments: unknown }>,
+  textBuf: string,
+  providerLabel: string,
+): Promise<{
+  fatalReturned: boolean;
+  awaitingConfirmation: boolean;
+  askedChoice: boolean;
+  roundHadSuccess: boolean;
+  roundHadRecoverableError: boolean;
+  assistantMsg: Message;
+  toolResultMsgs: Message[];
+}> {
+  const assistantMsg: Message = {
+    role: 'assistant',
+    content: textBuf,
+    tool_calls: collectedToolCalls.map((tc) => ({
+      id: tc.id,
+      name: tc.name,
+      arguments: tc.arguments,
+    })),
+  };
+  const toolResultMsgs: Message[] = [];
+  let roundHadSuccess = false;
+  let roundHadRecoverableError = false;
+  let fatalReturned = false;
+  // Operator cockpit chat — `ask_choice` is a TURN-TERMINATING tool. When the
+  // operator successfully emits a choice card this round, the turn must END
+  // CLEANLY (status `completed`) so the run releases its slot and waits; the
+  // user's button click then starts a FRESH turn (startTurn). Set ONLY on the
+  // success branch below (never on a recoverable/fatal error), and acted on
+  // only when `ctx.sink` is set (a conversation run) — on document/MCP/
+  // headless runs the handler throws `forbidden:` (fatal) and never reaches
+  // success, so this stays false there.
+  let askedChoice = false;
+  // Operator cockpit chat — the irreversible-op confirm gate emitted a
+  // confirmation card and threw AwaitingConfirmationError. Like askedChoice,
+  // this is a CLEAN turn boundary (await the user's approval), NOT a failure.
+  // Set in the catch below; acted on after the loop, guarded on `ctx.sink`.
+  let awaitingConfirmation = false;
+
+  for (const tc of collectedToolCalls) {
+    try {
+      // tx=undefined — each tool gets its own short-lived tx (mitigation 35).
+      // Phase 1 delegation (D1, D8): pass the caller snapshot so executeTool
+      // enforces agent ∩ caller. runAgentResume reuses this same runLoop with
+      // a ctx whose snapshot was inherited from the original run (D6).
+      const result = await executeTool(ctx.token, ctx.actor, tc.name, tc.arguments, undefined, {
+        callerScopes: ctx.callerScopes,
+        // Phase C C3 — the fired-path marker. Lets the folio_api write
+        // handler floor MEDIUM config writes on an unattended run.
+        unattended: ctx.unattended,
+        // Operator cockpit chat (Task 4) — thread the conversation sink + id
+        // so the `ui` tools can emit `component` rows and the confirm gate
+        // (Task 7) can scope a pending_ops row. Undefined on document-thread
+        // runs → no behavior change to the existing path.
+        conversationId: ctx.conversationId,
+        conversationSink: ctx.sink,
+        // Cluster-4 BLOCKER fix: the confirm gate records pending_ops.caller_id
+        // with the HUMAN owner (transitionActor = conversation.created_by), the
+        // value the confirm route confirms with — NOT ctx.actor (agent:_operator).
+        confirmerId: ctx.transitionActor,
+      });
+      const resultString = typeof result === 'string' ? result : JSON.stringify(result);
+      // Fence the result as untrusted DATA (spec VERIFY #4): a read tool's
+      // output can carry externally-authored content with injected instructions.
+      toolResultMsgs.push({
+        role: 'tool',
+        tool_use_id: tc.id,
+        content: fenceToolResult(resultString),
+      });
+      roundHadSuccess = true;
+      // A successful `ask_choice` ends the turn cleanly (see askedChoice decl).
+      if (tc.name === 'ask_choice') askedChoice = true;
+      // Operator cockpit chat (Task 4) — on a conversation run, record a
+      // `tool_step` row so the thread shows what the operator did this turn.
+      // The `ui` tools already emit their own `component` row via the sink;
+      // a tool_step for them too is harmless context but redundant, so skip
+      // the chat-only ui tools here.
+      if (ctx.sink && tc.name !== 'show_link_panel' && tc.name !== 'ask_choice') {
+        await ctx.sink.toolStep({
+          tool: tc.name,
+          summary: summarizeToolResult(tc.name, result),
+          status: 'ok',
+        });
+      }
+    } catch (err) {
+      if (isAwaitingConfirmation(err)) {
+        // CLEAN PAUSE — the confirm gate emitted its card + recorded the
+        // pending_op, and is waiting for the user's approval. This is NOT a
+        // failure (do NOT failRun → no "provider_error"): end the turn cleanly
+        // like askedChoice. Only reachable on a conversation run (the gate's
+        // card path needs a sink). Stop the round; the post-loop branch
+        // completes the turn and releases the slot. The user's "Yes, do it"
+        // click starts a fresh turn that re-runs the recorded op.
+        awaitingConfirmation = true;
+        break;
+      }
+      if (isFatalToolError(err)) {
+        // FATAL — scope-denied / unknown tool. Abort the whole round
+        // immediately; do NOT commit a half-round or feed back (decision 5,
+        // mitigation 66). One fatal call terminates the run even if siblings
+        // were recoverable.
+        await failRun(
+          ctx,
+          runErrorReasonSchema.enum.provider_error,
+          sanitizeProviderError(err, providerLabel),
+        );
+        fatalReturned = true;
+        break;
+      }
+      if (isInvalidArgs(err)) {
+        // RECOVERABLE — bad args. Feed back the invalid PATHS only, never
+        // values (mitigation 65). err.issues are already paths-only from
+        // C-7: map each i.path to a dotted string; never JSON.stringify
+        // anything that could carry a value.
+        const paths = err.issues
+          .map((i) => (Array.isArray(i.path) ? i.path.join('.') : String(i.path)))
+          .join(', ');
+        toolResultMsgs.push({
+          role: 'tool',
+          tool_use_id: tc.id,
+          content: `Tool '${tc.name}' rejected the arguments. Invalid fields: ${paths}. Fix and retry.`,
+        });
+        // Cluster-2 /code-review fix: record a FAILED tool_step too, so the
+        // conversation thread (and T8's interrupted-turn summary) reflect that
+        // a tool was attempted and failed — not only successes. "The steps ARE
+        // the report" (spec). ui tools emit their own component row, so skip them.
+        if (ctx.sink && tc.name !== 'show_link_panel' && tc.name !== 'ask_choice') {
+          await ctx.sink.toolStep({
+            tool: tc.name,
+            summary: `rejected arguments: ${paths}`,
+            status: 'error',
+          });
+        }
+        roundHadRecoverableError = true;
+        continue;
+      }
+      // RECOVERABLE — handler-execution throw (DOCUMENT_NOT_FOUND,
+      // SLUG_CONFLICT, a tool's own thrown error, …). Feed back the SAFE
+      // machine code/reason (HTTPError.code or mcpInvalidParams reason) so
+      // the model can self-correct, falling back to the status-sanitized
+      // phrase for unknown throws (mitigation 65 — never a raw SDK string /
+      // key / baseUrl / arg value / message body).
+      // Log the RAW error server-side (never surfaced — mitigation 5): the
+      // user/model only get the sanitized phrase, so without this a tool that
+      // throws a statusless error shows the opaque "Network error or
+      // unreachable host." with the real cause lost (the same diagnostics
+      // black hole as failRunLastResort — this is the recoverable-path twin).
+      console.error(`[runner] tool '${tc.name}' threw (recoverable):`, err);
+      toolResultMsgs.push({
+        role: 'tool',
+        tool_use_id: tc.id,
+        content: `Tool '${tc.name}' failed: ${safeToolErrorMessage(err, providerLabel)}. Adjust and retry.`,
+      });
+      // Cluster-2 /code-review fix: record the failed tool_step (see above).
+      if (ctx.sink && tc.name !== 'show_link_panel' && tc.name !== 'ask_choice') {
+        await ctx.sink.toolStep({
+          tool: tc.name,
+          summary: safeToolErrorMessage(err, providerLabel),
+          status: 'error',
+        });
+      }
+      roundHadRecoverableError = true;
+    }
+  }
+
+  return {
+    fatalReturned,
+    awaitingConfirmation,
+    askedChoice,
+    roundHadSuccess,
+    roundHadRecoverableError,
+    assistantMsg,
+    toolResultMsgs,
+  };
+}
+
 async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
   const { run, fm } = ctx;
   const runId = run.id;
@@ -1406,159 +1600,20 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
       // messages atomically, then apply the consecutive-error counter, then
       // continue. A prior call in this batch may have already committed its own
       // tx (mitigation 35 — acceptable; each tool gets its own tx).
-      const assistantMsg: Message = {
-        role: 'assistant',
-        content: textBuf,
-        tool_calls: collectedToolCalls.map((tc) => ({
-          id: tc.id,
-          name: tc.name,
-          arguments: tc.arguments,
-        })),
-      };
-      const toolResultMsgs: Message[] = [];
-      let roundHadSuccess = false;
-      let roundHadRecoverableError = false;
-      let fatalReturned = false;
-      // Operator cockpit chat — `ask_choice` is a TURN-TERMINATING tool. When the
-      // operator successfully emits a choice card this round, the turn must END
-      // CLEANLY (status `completed`) so the run releases its slot and waits; the
-      // user's button click then starts a FRESH turn (startTurn). Set ONLY on the
-      // success branch below (never on a recoverable/fatal error), and acted on
-      // only when `ctx.sink` is set (a conversation run) — on document/MCP/
-      // headless runs the handler throws `forbidden:` (fatal) and never reaches
-      // success, so this stays false there.
-      let askedChoice = false;
-      // Operator cockpit chat — the irreversible-op confirm gate emitted a
-      // confirmation card and threw AwaitingConfirmationError. Like askedChoice,
-      // this is a CLEAN turn boundary (await the user's approval), NOT a failure.
-      // Set in the catch below; acted on after the loop, guarded on `ctx.sink`.
-      let awaitingConfirmation = false;
-
-      for (const tc of collectedToolCalls) {
-        try {
-          // tx=undefined — each tool gets its own short-lived tx (mitigation 35).
-          // Phase 1 delegation (D1, D8): pass the caller snapshot so executeTool
-          // enforces agent ∩ caller. runAgentResume reuses this same runLoop with
-          // a ctx whose snapshot was inherited from the original run (D6).
-          const result = await executeTool(ctx.token, ctx.actor, tc.name, tc.arguments, undefined, {
-            callerScopes: ctx.callerScopes,
-            // Phase C C3 — the fired-path marker. Lets the folio_api write
-            // handler floor MEDIUM config writes on an unattended run.
-            unattended: ctx.unattended,
-            // Operator cockpit chat (Task 4) — thread the conversation sink + id
-            // so the `ui` tools can emit `component` rows and the confirm gate
-            // (Task 7) can scope a pending_ops row. Undefined on document-thread
-            // runs → no behavior change to the existing path.
-            conversationId: ctx.conversationId,
-            conversationSink: ctx.sink,
-            // Cluster-4 BLOCKER fix: the confirm gate records pending_ops.caller_id
-            // with the HUMAN owner (transitionActor = conversation.created_by), the
-            // value the confirm route confirms with — NOT ctx.actor (agent:_operator).
-            confirmerId: ctx.transitionActor,
-          });
-          const resultString = typeof result === 'string' ? result : JSON.stringify(result);
-          // Fence the result as untrusted DATA (spec VERIFY #4): a read tool's
-          // output can carry externally-authored content with injected instructions.
-          toolResultMsgs.push({
-            role: 'tool',
-            tool_use_id: tc.id,
-            content: fenceToolResult(resultString),
-          });
-          roundHadSuccess = true;
-          // A successful `ask_choice` ends the turn cleanly (see askedChoice decl).
-          if (tc.name === 'ask_choice') askedChoice = true;
-          // Operator cockpit chat (Task 4) — on a conversation run, record a
-          // `tool_step` row so the thread shows what the operator did this turn.
-          // The `ui` tools already emit their own `component` row via the sink;
-          // a tool_step for them too is harmless context but redundant, so skip
-          // the chat-only ui tools here.
-          if (ctx.sink && tc.name !== 'show_link_panel' && tc.name !== 'ask_choice') {
-            await ctx.sink.toolStep({
-              tool: tc.name,
-              summary: summarizeToolResult(tc.name, result),
-              status: 'ok',
-            });
-          }
-        } catch (err) {
-          if (isAwaitingConfirmation(err)) {
-            // CLEAN PAUSE — the confirm gate emitted its card + recorded the
-            // pending_op, and is waiting for the user's approval. This is NOT a
-            // failure (do NOT failRun → no "provider_error"): end the turn cleanly
-            // like askedChoice. Only reachable on a conversation run (the gate's
-            // card path needs a sink). Stop the round; the post-loop branch
-            // completes the turn and releases the slot. The user's "Yes, do it"
-            // click starts a fresh turn that re-runs the recorded op.
-            awaitingConfirmation = true;
-            break;
-          }
-          if (isFatalToolError(err)) {
-            // FATAL — scope-denied / unknown tool. Abort the whole round
-            // immediately; do NOT commit a half-round or feed back (decision 5,
-            // mitigation 66). One fatal call terminates the run even if siblings
-            // were recoverable.
-            await failRun(
-              ctx,
-              runErrorReasonSchema.enum.provider_error,
-              sanitizeProviderError(err, providerLabel),
-            );
-            fatalReturned = true;
-            break;
-          }
-          if (isInvalidArgs(err)) {
-            // RECOVERABLE — bad args. Feed back the invalid PATHS only, never
-            // values (mitigation 65). err.issues are already paths-only from
-            // C-7: map each i.path to a dotted string; never JSON.stringify
-            // anything that could carry a value.
-            const paths = err.issues
-              .map((i) => (Array.isArray(i.path) ? i.path.join('.') : String(i.path)))
-              .join(', ');
-            toolResultMsgs.push({
-              role: 'tool',
-              tool_use_id: tc.id,
-              content: `Tool '${tc.name}' rejected the arguments. Invalid fields: ${paths}. Fix and retry.`,
-            });
-            // Cluster-2 /code-review fix: record a FAILED tool_step too, so the
-            // conversation thread (and T8's interrupted-turn summary) reflect that
-            // a tool was attempted and failed — not only successes. "The steps ARE
-            // the report" (spec). ui tools emit their own component row, so skip them.
-            if (ctx.sink && tc.name !== 'show_link_panel' && tc.name !== 'ask_choice') {
-              await ctx.sink.toolStep({
-                tool: tc.name,
-                summary: `rejected arguments: ${paths}`,
-                status: 'error',
-              });
-            }
-            roundHadRecoverableError = true;
-            continue;
-          }
-          // RECOVERABLE — handler-execution throw (DOCUMENT_NOT_FOUND,
-          // SLUG_CONFLICT, a tool's own thrown error, …). Feed back the SAFE
-          // machine code/reason (HTTPError.code or mcpInvalidParams reason) so
-          // the model can self-correct, falling back to the status-sanitized
-          // phrase for unknown throws (mitigation 65 — never a raw SDK string /
-          // key / baseUrl / arg value / message body).
-          // Log the RAW error server-side (never surfaced — mitigation 5): the
-          // user/model only get the sanitized phrase, so without this a tool that
-          // throws a statusless error shows the opaque "Network error or
-          // unreachable host." with the real cause lost (the same diagnostics
-          // black hole as failRunLastResort — this is the recoverable-path twin).
-          console.error(`[runner] tool '${tc.name}' threw (recoverable):`, err);
-          toolResultMsgs.push({
-            role: 'tool',
-            tool_use_id: tc.id,
-            content: `Tool '${tc.name}' failed: ${safeToolErrorMessage(err, providerLabel)}. Adjust and retry.`,
-          });
-          // Cluster-2 /code-review fix: record the failed tool_step (see above).
-          if (ctx.sink && tc.name !== 'show_link_panel' && tc.name !== 'ask_choice') {
-            await ctx.sink.toolStep({
-              tool: tc.name,
-              summary: safeToolErrorMessage(err, providerLabel),
-              status: 'error',
-            });
-          }
-          roundHadRecoverableError = true;
-        }
-      }
+      // B-2 (M2 RunSink) — execute the collected calls. The full catch chain
+      // (isAwaitingConfirmation → isFatalToolError → isInvalidArgs → recoverable,
+      // invariant 12) lives INSIDE executeToolRound, moved byte-for-byte. It does
+      // NOT push to `messages`; runLoop commits assistantMsg + toolResultMsgs below
+      // on a non-fatal round.
+      const {
+        fatalReturned,
+        awaitingConfirmation,
+        askedChoice,
+        roundHadSuccess,
+        roundHadRecoverableError,
+        assistantMsg,
+        toolResultMsgs,
+      } = await executeToolRound(ctx, collectedToolCalls, textBuf, providerLabel);
 
       if (fatalReturned) return;
 
