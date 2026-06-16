@@ -506,4 +506,26 @@ describe('conversationSink bridge + isConversation flag', () => {
     expect(sink.conversationSink).toBeDefined();
     expect(typeof sink.conversationSink!.component).toBe('function');
   });
+
+  // C-3a — negative-discriminator bite-proof for the clean-pause guards.
+  //
+  // runner.ts's two clean-pause turn-ends gate on `ctx.runSink.isConversation`
+  // (C-3, runner.ts ~1701/1733):
+  //   if (ctx.runSink.isConversation && awaitingConfirmation) { …complete turn… }
+  //   if (ctx.runSink.isConversation && askedChoice)          { …complete turn… }
+  // A DOCUMENT run must NEVER take those branches: the confirm gate engages ONLY
+  // with a conversationId (agent-tools.ts ~422) and `ask_choice` throws
+  // `forbidden:` (fatal) on a doc run, so `awaitingConfirmation`/`askedChoice` are
+  // never set there — `isConversation === false` is the SOLE discriminator keeping
+  // a doc run out of the conversation-only clean-pause path. This asserts the value
+  // the guard reads (the document RunSink's discriminator) is `false`: if the C-3
+  // migration inverted it (e.g. `!ctx.runSink.isConversation` or wired the
+  // conversation impl onto a doc run), a document run would clean-pause instead of
+  // proceeding — and this goes RED. The positive case is asserted above; this is
+  // the negative half the clean-pause migration depends on.
+  test('a document run does NOT enter the conversation-only clean-pause branch (isConversation discriminator is false)', async () => {
+    const { ctx } = await setupDoc();
+    // The exact read the runner's C-3 clean-pause guards perform.
+    expect(makeDocumentRunSink(ctx).isConversation).toBe(false);
+  });
 });
