@@ -293,7 +293,7 @@ describe('NewViewSheet', () => {
     );
     await userEvent.type(await screen.findByLabelText(/Name/), 'Board view');
     // Pick the Kanban type.
-    await userEvent.click(await screen.findByRole('radio', { name: /Kanban/i }));
+    await userEvent.click(await screen.findByRole('button', { name: /Kanban/i }));
     // The group-by selector appears; pick the Priority field (default is Status → null).
     const groupBy = await screen.findByLabelText(/Group by/i);
     await userEvent.selectOptions(groupBy, 'priority');
@@ -316,7 +316,7 @@ describe('NewViewSheet', () => {
       </QueryClientProvider>,
     );
     await userEvent.type(await screen.findByLabelText(/Name/), 'Status board');
-    await userEvent.click(await screen.findByRole('radio', { name: /Kanban/i }));
+    await userEvent.click(await screen.findByRole('button', { name: /Kanban/i }));
     await userEvent.click(screen.getByRole('button', { name: /Create view/i }));
     await waitFor(() => expect(screen.getByText('navigated to table grid')).toBeInTheDocument());
     const body = findPostBody(fetchMock) as Record<string, unknown>;
@@ -376,7 +376,7 @@ describe('NewViewSheet', () => {
     );
 
     await userEvent.type(await screen.findByLabelText(/Name/), 'Grouped board');
-    await userEvent.click(await screen.findByRole('radio', { name: /Kanban/i }));
+    await userEvent.click(await screen.findByRole('button', { name: /Kanban/i }));
     const groupBy = await screen.findByLabelText(/Group by/i);
 
     // The non-multi_select field IS offered as a group-by option…
@@ -399,7 +399,7 @@ describe('NewViewSheet', () => {
       </QueryClientProvider>,
     );
     await userEvent.type(await screen.findByLabelText(/Name/), 'KB');
-    await userEvent.click(await screen.findByRole('radio', { name: /Kanban/i }));
+    await userEvent.click(await screen.findByRole('button', { name: /Kanban/i }));
     await userEvent.click(screen.getByRole('button', { name: /Create view/i }));
     await waitFor(() => expect(screen.getByText('navigated to table grid')).toBeInTheDocument());
     expect(router.state.location.pathname).toBe('/w/main/p/acme/t/work-items');
@@ -457,7 +457,7 @@ describe('NewViewSheet', () => {
       </QueryClientProvider>,
     );
     await userEvent.type(await screen.findByLabelText(/Name/), 'Bug board');
-    await userEvent.click(await screen.findByRole('radio', { name: /Kanban/i }));
+    await userEvent.click(await screen.findByRole('button', { name: /Kanban/i }));
     await userEvent.click(screen.getByRole('button', { name: /Create view/i }));
     await waitFor(() => expect(screen.getByText('navigated to table grid')).toBeInTheDocument());
 

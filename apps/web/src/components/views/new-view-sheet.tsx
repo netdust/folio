@@ -1,4 +1,5 @@
 import { useNavigate } from '@tanstack/react-router';
+import { Calendar, Columns3, GanttChart, Image, List, type LucideIcon } from 'lucide-react';
 import { type FormEvent, useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { useFields } from '../../lib/api/fields.ts';
@@ -6,6 +7,8 @@ import { formatApiError } from '../../lib/api/index.ts';
 import { type ViewCreate, useCreateView } from '../../lib/api/views.ts';
 import { resolveViewNav } from '../../lib/rail-nav.ts';
 import { Button } from '../ui/button.tsx';
+import { cn } from '../ui/cn.ts';
+import { Icon } from '../ui/icon.tsx';
 import { Sheet, SheetContent, SheetFooter, SheetHeader, SheetTitle } from '../ui/sheet.tsx';
 
 export interface NewViewSheetProps {
@@ -38,12 +41,12 @@ const FILTER_KEYS = ['status', 'priority', 'assignee', 'labels', 'updated_since'
 // date-field / cover-field selects to the view's own toolbar (clusters 4/5/6) —
 // the view defaults `settings` to `{}` and the field is picked there later.
 const VIEW_TYPES = [
-  { value: 'list', label: 'List' },
-  { value: 'kanban', label: 'Kanban' },
-  { value: 'calendar', label: 'Calendar' },
-  { value: 'timeline', label: 'Timeline' },
-  { value: 'gallery', label: 'Gallery' },
-] as const;
+  { value: 'list', label: 'List', icon: List },
+  { value: 'kanban', label: 'Kanban', icon: Columns3 },
+  { value: 'calendar', label: 'Calendar', icon: Calendar },
+  { value: 'timeline', label: 'Timeline', icon: GanttChart },
+  { value: 'gallery', label: 'Gallery', icon: Image },
+] as const satisfies ReadonlyArray<{ value: string; label: string; icon: LucideIcon }>;
 type NewViewType = (typeof VIEW_TYPES)[number]['value'];
 
 export function NewViewSheet({
@@ -158,19 +161,28 @@ export function NewViewSheet({
 
             <fieldset>
               <legend className="block text-sm font-medium text-fg">Type</legend>
-              <div className="mt-1 flex flex-wrap gap-4">
-                {VIEW_TYPES.map((t) => (
-                  <label key={t.value} className="flex items-center gap-2 text-sm text-fg-1">
-                    <input
-                      type="radio"
-                      name="view-type"
-                      value={t.value}
-                      checked={type === t.value}
-                      onChange={() => setType(t.value)}
-                    />
-                    {t.label}
-                  </label>
-                ))}
+              <div className="mt-2 grid grid-cols-3 gap-2">
+                {VIEW_TYPES.map((t) => {
+                  const selected = type === t.value;
+                  return (
+                    <button
+                      key={t.value}
+                      type="button"
+                      aria-label={t.label}
+                      aria-pressed={selected}
+                      onClick={() => setType(t.value)}
+                      className={cn(
+                        'flex flex-col items-center gap-1.5 rounded-md border px-2 py-3 text-xs transition-colors duration-fast',
+                        selected
+                          ? 'border-primary bg-primary text-primary-fg'
+                          : 'border-border-light bg-shell text-fg-1 hover:bg-card hover:text-fg',
+                      )}
+                    >
+                      <Icon icon={t.icon} size={20} />
+                      {t.label}
+                    </button>
+                  );
+                })}
               </div>
             </fieldset>
 
