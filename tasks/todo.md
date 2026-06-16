@@ -76,3 +76,27 @@ Order: A → E → D → B → C. Each cluster = a `── REVIEW GATE ──`. 
 
 ### Deferred (NOT this branch)
 virtualization · a11y (32) · reapStalePendingOps chunking · auth_rate_limits reaper · CI bun-pin · /mcp 413→JSON-RPC · full server-side frontmatter filter (if B1 picks affordance)
+
+---
+
+## Phase 6 (Views) — branch `phase-6/views`
+
+### Cluster 1 (renderAs foundation) — DONE, at FULL REVIEW GATE (Stefan sign-off)
+- [x] 1.0 views.settings JSON column (`1e0b9e85`)
+- [x] 1.0b backfill list→table + seed default=table (`a2e86dea`)
+- [x] 1.1 widen view-type enum, all 4 sites — closes type:'table' 422 (`778309ab`)
+- [x] 1.2 ViewRouter + useActiveView (renderer convergence, inv 18) (`0a0b71a2`)
+- [x] 1.3 unified /t/$tslug renders ViewRouter; legacy URLs redirect, no 404 (`19f196ec`)
+- [x] 1.5 resolveViewNav/resolveTableNav → always unified route (`c1d18b25`)
+- [x] 1.4 new-view sheet offers 5 user-creatable types (`f77b220b`)
+- [x] 1.6 project tabs → saved-view switcher + G4 operator toggle (`c3da9a23`)
+- [x] 1.7 invariant 18 updated; check:invariants 0/0/0 (`3527ff2e`)
+- [x] FULL review panel (reviewer + invariant-auditor + security-sentinel) — 0 Critical, 0 Important
+- [x] S1 review fix: removed dead activeTabFromPath (`1e443378`)
+- FINAL: server 1869 / web 967 / shared 80, 0 fail · 3 tsc clean · check:invariants 20/0/0
+
+### Deferred review items (carry into later clusters)
+- [ ] **Cluster 2b:** route table-view.tsx / kanban-view.tsx / board-controls.tsx through `useActiveView` (they open-code its `urlViewId→isDefault→list[0]` logic — pre-existing 4-copy convergence-debt; mind the `?? null` vs `undefined` boundary). [invariant-auditor concern]
+- [ ] **Cluster 4/5/6:** when a renderer first READS `views.settings` (settings.dateField etc.), add read-time value-shape validation + a payload-size bound on settings (today it's stored-only, freeform `z.record(z.unknown())`). [security-sentinel deferral]
+- [ ] **Later/cosmetic:** share `iconForViewType` so rail-tree row icons match the 5-way tab icons (rail currently 2-way kanban?Columns3:List). [reviewer S2]
+- [ ] **If "one table view per table" ever becomes an invariant:** add a server guard (table-view-creation is client-only-excluded today). [reviewer S3]
