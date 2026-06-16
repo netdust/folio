@@ -105,11 +105,21 @@ describe('AiTab', () => {
     // Switch provider before the mutation resolves.
     fireEvent.change(screen.getByLabelText(/provider/i), { target: { value: 'openai' } });
 
+    const { toast } = await import('sonner');
+    vi.mocked(toast.info).mockClear();
+
     // Now resolve the original (Anthropic) mutation.
     resolveTest({ ok: true });
 
-    // Give react-query a tick to flush; assert nothing paints.
-    await new Promise((r) => setTimeout(r, 10));
+    // The stale-seq guard runs in the mutation's resolve microtask and fires a
+    // truthful info-toast naming the click-time provider. Awaiting that call is
+    // the deterministic proof the resolve was processed — then assert the stale
+    // OK did NOT paint the success chip.
+    await waitFor(() =>
+      expect(toast.info).toHaveBeenCalledWith(
+        expect.stringMatching(/test completed.*previous provider.*anthropic/i),
+      ),
+    );
     expect(screen.queryByText(/key validated/i)).not.toBeInTheDocument();
   });
 
@@ -247,13 +257,17 @@ describe('AiTab', () => {
     fireEvent.change(screen.getByLabelText(/provider/i), { target: { value: 'openai' } });
 
     resolveSave({ ok: true });
-    await new Promise((r) => setTimeout(r, 10));
+
+    // The stale-seq guard fires the truthful info-toast in the resolve
+    // microtask; awaiting that call deterministically proves the save resolved
+    // and was processed (replaces a fixed-timer race).
+    await waitFor(() =>
+      expect(toast.info).toHaveBeenCalledWith(
+        expect.stringMatching(/save completed.*previous provider.*anthropic/i),
+      ),
+    );
 
     expect(toast.success).not.toHaveBeenCalled();
-    // Truthful surfacing — the write completed for the click-time provider.
-    expect(toast.info).toHaveBeenCalledWith(
-      expect.stringMatching(/save completed.*previous provider.*anthropic/i),
-    );
   });
 
   // Round 7 #13 — onTest mirrors the round-4 #5 onSave pattern. The useTestKey
@@ -282,14 +296,17 @@ describe('AiTab', () => {
     fireEvent.change(screen.getByLabelText(/provider/i), { target: { value: 'openai' } });
 
     resolveTest({ ok: true });
-    await new Promise((r) => setTimeout(r, 10));
+
+    // Awaiting the truthful info-toast deterministically proves the stale test
+    // result resolved and hit the seq guard (replaces a fixed-timer race).
+    await waitFor(() =>
+      expect(toast.info).toHaveBeenCalledWith(
+        expect.stringMatching(/test completed.*previous provider.*anthropic/i),
+      ),
+    );
 
     // The stale OK must NOT paint as the success chip.
     expect(screen.queryByText(/key validated/i)).not.toBeInTheDocument();
-    // Truthful surfacing — the test executed for the click-time provider.
-    expect(toast.info).toHaveBeenCalledWith(
-      expect.stringMatching(/test completed.*previous provider.*anthropic/i),
-    );
   });
 
   // B round 4 fix #8 — placeholder must NOT be the value validatePublicUrl

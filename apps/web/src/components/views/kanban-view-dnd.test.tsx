@@ -495,16 +495,30 @@ describe('KanbanView DnD', () => {
     await waitFor(() => expect(screen.getByText('Alpha Task')).toBeInTheDocument());
     await waitFor(() => expect(captured.props?.onDragEnd).toBeTypeOf('function'));
 
-    const event = {
+    const noopEvent = {
       active: { id: 'd2', data: { current: { slug: 'bravo', currentStatus: 'todo' } } },
       over: { id: 'col-todo' },
     } as unknown as DragEndEvent;
     await act(async () => {
-      await captured.props?.onDragEnd?.(event);
+      await captured.props?.onDragEnd?.(noopEvent);
     });
-    // Let any (incorrect) mutation flush.
-    await new Promise((r) => setTimeout(r, 20));
-    expect(patches.length).toBe(0);
+
+    // "Assert nothing happened" deterministically: drive a KNOWN-GOOD reorder
+    // (card-over-card, which DOES persist) through the same wire and wait for
+    // its patch to land. Because both events run on the same handler+mutation
+    // path, once the good patch has flushed any patch the no-op would have
+    // produced has had its full chance to flush too. The only patch present is
+    // the good one → the same-group whitespace drop was a true no-op.
+    const goodEvent = {
+      active: { id: 'd2', data: { current: { slug: 'bravo', currentStatus: 'todo' } } },
+      over: { id: 'd1' },
+    } as unknown as DragEndEvent;
+    await act(async () => {
+      await captured.props?.onDragEnd?.(goodEvent);
+    });
+    await waitFor(() => expect(patches.length).toBe(1));
+    expect(patches[0]?.slug).toBe('bravo');
+    expect(patches[0]?.body).toMatchObject({ boardPosition: expect.any(String) });
   });
 
   // Stale-measurement fix (2026-06-08): after a cross-column move, the just-moved

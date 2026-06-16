@@ -492,8 +492,14 @@ describe('TableView', () => {
       fireEvent.click(removeBtn);
     });
 
-    // Give any pending react-query mutations a chance to fire (none should).
-    await new Promise((r) => setTimeout(r, 50));
+    // onClauseChange always navigates (dropping the status param) BEFORE the
+    // guarded autosave decision. Awaiting the router reflecting that navigation
+    // is the deterministic post-condition that the whole handler — including the
+    // (suppressed) autosave branch — has run; then assert no PATCH fired.
+    await waitFor(() => expect(router.state.location.search).not.toHaveProperty('status'));
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: /Remove status filter/i })).toBeNull(),
+    );
 
     // No ?view= → activeView is the default view by fallback. User removing
     // a chip is an ad-hoc filter change; it must NOT mutate the default view.
@@ -565,7 +571,10 @@ describe('TableView', () => {
       fireEvent.click(titleHeader);
     });
 
-    await new Promise((r) => setTimeout(r, 50));
+    // onSortChange navigates (setting ?sort=title) BEFORE the guarded autosave.
+    // Awaiting the router reflecting that sort param is the deterministic proof
+    // the handler ran through the autosave branch; then assert no PATCH fired.
+    await waitFor(() => expect(router.state.location.search).toMatchObject({ sort: 'title' }));
 
     expect(updateViewCalls).toEqual([]);
   });
@@ -750,7 +759,14 @@ describe('TableView', () => {
       fireEvent.blur(input);
     });
 
-    await new Promise((r) => setTimeout(r, 30));
+    // Blur with an empty title runs InlineEdit's commit → setEditing(false),
+    // which removes the textbox; because the draft equals the empty value, the
+    // onCreate callback is never reached. Awaiting the textbox's removal is the
+    // deterministic post-condition that the blur handler fully ran; then assert
+    // no document POST fired.
+    await waitFor(() =>
+      expect(screen.queryByRole('textbox', { name: /New work item title/ })).toBeNull(),
+    );
     expect(createCalls).toEqual([]);
   });
 
