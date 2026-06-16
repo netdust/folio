@@ -355,6 +355,9 @@ export function clausesToFilterJson(
 ): Record<string, unknown> | undefined {
   const filter: Record<string, unknown> = {};
   for (const c of clauses) {
+    // Single-clause-per-kind assumption: the FilterBar is single-select per kind,
+    // so the last priority clause wins. If multi-value priority filtering ever
+    // ships, switch this to `{ priority: { $in: [...] } }`.
     if (c.kind === 'priority') filter.priority = { $eq: c.value };
   }
   return Object.keys(filter).length > 0 ? filter : undefined;
