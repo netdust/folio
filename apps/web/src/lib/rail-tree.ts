@@ -1,3 +1,4 @@
+import type { ViewType } from '@folio/shared';
 import { Columns3, FileText, FolderOpen, List, Table2 } from 'lucide-react';
 import type { NavItem, RowMenuItem } from '../components/shell/rail.tsx';
 
@@ -17,7 +18,7 @@ export interface RailTreeTable {
 export interface RailTreeView {
   id: string;
   name: string;
-  type: 'list' | 'kanban';
+  type: ViewType;
   isDefault: boolean;
   order: number;
 }
@@ -39,7 +40,7 @@ export interface RailTreeHandlers {
   // List views land on /work-items; kanban views land on /board. The rail
   // signals which via `view.type` so the workspace route can navigate
   // accordingly without re-deriving the type at click time.
-  onViewClick: (pslug: string, tslug: string, viewId: string, type: 'list' | 'kanban') => void;
+  onViewClick: (pslug: string, tslug: string, viewId: string, type: ViewType) => void;
   onWikiClick?: (pslug: string) => void;
   onNewProject?: () => void;
   onNewTable?: (pslug: string) => void;

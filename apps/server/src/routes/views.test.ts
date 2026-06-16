@@ -73,6 +73,36 @@ test('POST without an explicit order assigns a UNIQUE order (max+10), not 0', as
   expect(new Set(orders).size).toBe(orders.length);
 });
 
+test('POST accepts every widened view type (table/calendar/timeline/gallery)', async () => {
+  // Phase 6: the seed + 0038 backfill WRITE type:'table' rows, but the API
+  // boundary only accepted 'list'|'kanban' — so any create/patch carrying one of
+  // the new types was rejected 422. Widening the enum closes that validation-vs-use
+  // gap. 'table' is the renamed spreadsheet view the seed/backfill now write.
+  const { app, seed } = await makeTestApp();
+  for (const type of ['table', 'calendar', 'timeline', 'gallery']) {
+    const res = await app.request(path, {
+      method: 'POST',
+      headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: `View ${type}`, type }),
+    });
+    expect(res.status).toBe(201);
+  }
+});
+
+test('POST 400 still REJECTS an unknown view type after the widen', async () => {
+  // The denial path: widening the enum must NOT make it permissive — an unknown
+  // type is still rejected. The zValidator Zod boundary returns 400 on an enum
+  // mismatch (cf. documents.test.ts UNSUPPORTED_TYPE_FILTER), distinct from the
+  // 422 that the downstream filter-validation HTTPError uses.
+  const { app, seed } = await makeTestApp();
+  const res = await app.request(path, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Bogus', type: 'bogus' }),
+  });
+  expect(res.status).toBe(400);
+});
+
 test('POST 422 INVALID_FILTER on bad operator', async () => {
   const { app, seed } = await makeTestApp();
   const res = await app.request(path, {

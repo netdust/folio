@@ -18,7 +18,7 @@ const viewsRoute = new Hono<AuthContext & ScopeContext>();
 
 const baseSchema = z.object({
   name: z.string().min(1).max(80),
-  type: z.enum(['list', 'kanban']),
+  type: z.enum(['table', 'list', 'kanban', 'calendar', 'timeline', 'gallery']),
   filters: z.record(z.unknown()).optional(),
   sort: z.array(z.object({ key: z.string(), dir: z.enum(['asc', 'desc']) })).optional(),
   groupBy: z.string().nullable().optional(),

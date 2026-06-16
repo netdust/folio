@@ -1,3 +1,4 @@
+import type { ViewType } from '@folio/shared';
 import { DEFAULT_TABLE_SLUG } from './default-table.ts';
 
 /** A rail-nav destination: the TanStack route id, and whether the navigate call
@@ -22,7 +23,7 @@ export function resolveTableNav(tslug: string): RailNavTarget {
 /** Where a VIEW-row click lands, by the table it belongs to and the view type.
  *  Default table: list → /work-items, kanban → /board (legacy routes, no param).
  *  Non-default table: list → /t/$tslug, kanban → /t/$tslug/board (with param). */
-export function resolveViewNav(tslug: string, type: 'list' | 'kanban'): RailNavTarget {
+export function resolveViewNav(tslug: string, type: ViewType): RailNavTarget {
   if (tslug === DEFAULT_TABLE_SLUG) {
     return {
       to: type === 'kanban' ? '/w/$wslug/p/$pslug/board' : '/w/$wslug/p/$pslug/work-items',

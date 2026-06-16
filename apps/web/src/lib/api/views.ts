@@ -4,7 +4,7 @@ import { client } from './client.ts';
 export interface View {
   id: string;
   name: string;
-  type: 'list' | 'kanban';
+  type: 'table' | 'list' | 'kanban' | 'calendar' | 'timeline' | 'gallery';
   filters: unknown;
   sort: unknown;
   groupBy: string | null;
@@ -59,7 +59,7 @@ export function useViews(wslug: string, pslug: string, tslug: string) {
 
 export interface ViewCreate {
   name: string;
-  type: 'list' | 'kanban';
+  type: 'table' | 'list' | 'kanban' | 'calendar' | 'timeline' | 'gallery';
   filters?: unknown;
   sort?: unknown;
   visibleFields?: string[];
@@ -94,7 +94,7 @@ export function useCreateView(wslug: string, pslug: string, tslug: string) {
 
 export interface ViewPatch {
   name?: string;
-  type?: 'list' | 'kanban';
+  type?: 'table' | 'list' | 'kanban' | 'calendar' | 'timeline' | 'gallery';
   filters?: unknown;
   sort?: unknown;
   groupBy?: string | null;
