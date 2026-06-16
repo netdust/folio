@@ -28,6 +28,7 @@ import { agentPanelBus } from '../lib/agent-panel-bus.ts';
 import { useIsInstanceAdmin, useLogout, useMe } from '../lib/api/auth.ts';
 import { client } from '../lib/api/client.ts';
 import { documentsKeys } from '../lib/api/documents.ts';
+import { EventStreamProvider } from '../lib/api/event-stream-context.tsx';
 import { formatApiError } from '../lib/api/index.ts';
 import {
   projectsKeys,
@@ -490,7 +491,7 @@ function WorkspaceLayout() {
   };
 
   return (
-    <>
+    <EventStreamProvider wslug={wslug}>
       <Shell
         rail={
           <Rail
@@ -607,6 +608,6 @@ function WorkspaceLayout() {
         </DialogContent>
       </Dialog>
       <WorkspaceDocumentSlideover wslug={wslug} />
-    </>
+    </EventStreamProvider>
   );
 }

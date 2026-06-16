@@ -171,11 +171,23 @@ export interface ListDocumentsOptions {
   staleFor?: string;
   sort?: string;
   dir?: string;
+  /**
+   * Opt the `body` column back into the projection. DEFAULT false — list rows
+   * stay body-less (the table/board hot path, M4). The wiki view sets this
+   * (it loads few docs and renders body excerpts via bodyExcerpt). The route
+   * maps `?include=body` to this flag. When true the returned rows carry a
+   * non-null `body`; when false the key is absent.
+   */
+  includeBody?: boolean;
 }
 
 export async function listDocuments(
   opts: ListDocumentsOptions,
-): Promise<{ data: Document[]; nextCursor: string | null }> {
+  // M4: list rows are body-less by DEFAULT projection (see the explicit select
+  // below); the return type drops `body` to make that contract type-visible to
+  // callers. CR-A: `includeBody` opts it back in for the wiki path, so the
+  // element type is the UNION — body-bearing when opted in, body-less by default.
+): Promise<{ data: (Document | Omit<Document, 'body'>)[]; nextCursor: string | null }> {
   const limit = Math.min(200, opts.limit ?? 50);
 
   const whereClauses = [eq(documents.projectId, opts.projectId)];
@@ -340,8 +352,35 @@ export async function listDocuments(
   }
 
   const dirFn = sortDir === 'asc' ? asc : desc;
+  // M4 (audit 2.2): explicit projection that OMITS `body` BY DEFAULT. The
+  // list/table/board views never render the markdown body (the detail / `.md`
+  // route serves it), so selecting it re-shipped a full body per row on every
+  // list — an agent write-burst of large docs amplified the payload. Every other
+  // documents column IS selected (the cursor + response readers depend on them);
+  // only `body` is dropped. Keep this list in sync with the schema if a column is
+  // added — a new non-body column must be added here or it won't list.
+  // CR-A: the wiki view passes includeBody=true (it loads few docs and renders
+  // body excerpts) → re-add the body column for that path only.
+  const baseProjection = {
+    id: documents.id,
+    projectId: documents.projectId,
+    workspaceId: documents.workspaceId,
+    tableId: documents.tableId,
+    type: documents.type,
+    slug: documents.slug,
+    title: documents.title,
+    status: documents.status,
+    boardPosition: documents.boardPosition,
+    frontmatter: documents.frontmatter,
+    parentId: documents.parentId,
+    createdBy: documents.createdBy,
+    updatedBy: documents.updatedBy,
+    createdAt: documents.createdAt,
+    updatedAt: documents.updatedAt,
+    lastTouchedAt: documents.lastTouchedAt,
+  };
   const rows = await db
-    .select()
+    .select(opts.includeBody ? { ...baseProjection, body: documents.body } : baseProjection)
     .from(documents)
     .where(and(...whereClauses))
     .orderBy(dirFn(orderExpr), dirFn(documents.id))
@@ -748,6 +787,17 @@ export interface UpdateDocumentArgs {
   eventActor: string;
   existing: Document;
   patch: DocumentPatch;
+  /**
+   * Frontmatter resolution strategy. `'merge'` (default) merges `patch.frontmatter`
+   * onto the existing frontmatter key-by-key (the JSON-PATCH semantics). `'replace'`
+   * overwrites the frontmatter WHOLESALE with `patch.frontmatter` (the markdown-PATCH
+   * semantics: the MD editor sends the full intended frontmatter, so any key absent
+   * from the patch is dropped). Reserved keys are stripped in BOTH modes.
+   *
+   * This unifies the two former update paths onto one emission site (invariants 5/15):
+   * the markdown route parses the MD then delegates here with `mode:'replace'`.
+   */
+  mode?: 'merge' | 'replace';
 }
 
 // A doc carries the create-time placeholder slug if it is exactly `untitled`
@@ -785,6 +835,7 @@ export async function maybeReslugPlaceholder(
 export async function updateDocument(args: UpdateDocumentArgs): Promise<Document> {
   const { workspace: ws, project: p, actor: user, existing, patch } = args;
   const eventActor = args.eventActor;
+  const mode = args.mode ?? 'merge';
 
   // G5 — comments must be mutated through update_comment (services/comments.ts),
   // which enforces author-only, kind-immutable, edited_at, and soft-delete
@@ -874,9 +925,13 @@ export async function updateDocument(args: UpdateDocumentArgs): Promise<Document
 
   const mergedFrontmatter = (() => {
     if (patch.frontmatter === undefined) return existing.frontmatter;
-    const merged: Record<string, unknown> = {
-      ...(existing.frontmatter as Record<string, unknown>),
-    };
+    // 'merge' (JSON-PATCH): start from the existing frontmatter and apply the
+    // patch key-by-key. 'replace' (markdown-PATCH): start from EMPTY so any key
+    // absent from the patch is dropped (wholesale overwrite). Both then run the
+    // reserved-key strip + empty-clear loop below, so a 'replace' can never write
+    // a RESERVED_FRONTMATTER_KEY.
+    const merged: Record<string, unknown> =
+      mode === 'replace' ? {} : { ...(existing.frontmatter as Record<string, unknown>) };
     const patchFm = patch.frontmatter;
     for (const [k, v] of Object.entries(patchFm)) {
       if ((RESERVED_FRONTMATTER_KEYS as readonly string[]).includes(k)) continue;

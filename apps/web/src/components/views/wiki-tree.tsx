@@ -32,7 +32,15 @@ export function WikiTree({ wslug, pslug }: Props) {
   const navigate = useNavigate();
   const search = useSearch({ strict: false }) as Record<string, unknown>;
   const listParams = useMemo(
-    () => ({ type: 'page' as const, sort: 'title' as const, dir: 'asc' as const, limit: 200 }),
+    // include:'body' — the wiki cards render body excerpts (bodyExcerpt), so
+    // this view opts back into the body the default list projection omits.
+    () => ({
+      type: 'page' as const,
+      sort: 'title' as const,
+      dir: 'asc' as const,
+      limit: 200,
+      include: 'body' as const,
+    }),
     [],
   );
   // WikiTree renders type:'page' documents, which are PROJECT-scoped server-side

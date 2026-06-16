@@ -15,10 +15,8 @@ import {
   type DocumentType,
   createDocument,
   deleteDocument,
-  getAssignee,
   getDocument,
   listDocuments,
-  maybeReslugPlaceholder,
   stripReservedFrontmatter,
   updateDocument,
 } from '../services/documents.ts';
@@ -200,6 +198,10 @@ documentsRoute.get('/', async (c) => {
     staleFor: c.req.query('stale_for') ?? undefined,
     sort: c.req.query('sort') ?? undefined,
     dir: c.req.query('dir') ?? undefined,
+    // CR-A: `?include=body` opts the body column back into the projection. The
+    // wiki view passes it (it renders body excerpts); table/board never do, so
+    // the hot path stays body-less by default.
+    includeBody: c.req.query('include') === 'body',
   });
 
   return c.json({ data: result.data, nextCursor: result.nextCursor });
@@ -347,61 +349,29 @@ documentsRoute.patch('/:slug', requireScope('documents:write'), async (c) => {
         }
       }
     }
-    // Slugs are immutable once a doc has a real name (so [[slug]] links stay
-    // valid — no rename cascade). The ONE exception, shared with the JSON path:
-    // a doc still on its create-time `untitled` / `untitled-N` placeholder slug
-    // adopts its first real title. See services/documents.ts::maybeReslugPlaceholder.
-    const nextSlug =
-      parsed.title !== existing.title
-        ? await maybeReslugPlaceholder(p.id, existing.slug, existing.title, parsed.title)
-        : null;
-    const mdFrontmatter = parsed.frontmatter;
-    const updated = {
-      ...existing,
-      title: parsed.title,
-      ...(nextSlug ? { slug: nextSlug } : {}),
-      body: parsed.body,
-      frontmatter: mdFrontmatter,
-      status: parsed.status,
-      updatedBy: user.id,
-      updatedAt: new Date(),
-    };
-    await txWithEvents(db, async (tx) => {
-      await tx.update(documents).set(updated).where(eq(documents.id, existing.id));
-      await emitEvent(tx, {
-        workspaceId: ws.id,
-        projectId: p.id,
-        documentId: existing.id,
-        kind: 'document.updated',
-        actor: user.id,
-        payload: {
-          changes: ['title', 'body', 'frontmatter', 'status', ...(nextSlug ? ['slug'] : [])],
-        },
-      });
-      if (existing.type === 'work_item') {
-        const prevAssignee = getAssignee(existing.frontmatter);
-        const nextAssignee = getAssignee(updated.frontmatter);
-        if (nextAssignee?.startsWith('agent:') && prevAssignee !== nextAssignee) {
-          const agentSlug = nextAssignee.slice('agent:'.length);
-          // S2: include agent_id as the immutable handle. See
-          // services/documents.ts for full rationale.
-          const agentRow = await tx.query.documents.findFirst({
-            where: and(
-              eq(documents.workspaceId, ws.id),
-              eq(documents.type, 'agent'),
-              eq(documents.slug, agentSlug),
-            ),
-          });
-          await emitEvent(tx, {
-            workspaceId: ws.id,
-            projectId: p.id,
-            documentId: existing.id,
-            kind: 'agent.task.assigned',
-            actor: user.id,
-            payload: { slug: updated.slug, agent: agentSlug, agent_id: agentRow?.id ?? null },
-          });
-        }
-      }
+    // Delegate to the single document-update path (M3 / invariants 5+15). The
+    // markdown editor sends the FULL intended frontmatter, so this is a wholesale
+    // overwrite → mode:'replace'. The service owns the emission of
+    // document.updated + agent.task.assigned (one site, not two), the reslug of a
+    // still-placeholder slug on title change (maybeReslugPlaceholder — the SINGLE
+    // place that policy lives), and the reserved-key strip. eventActor=user.id
+    // preserves the human-actored event for a human MD edit. The pre-parse
+    // request-shape guards above (type rejections, status-registry check) stay in
+    // the route.
+    const updated = await updateDocument({
+      workspace: ws,
+      project: p,
+      fallbackTable,
+      actor: user,
+      eventActor: user.id,
+      existing,
+      patch: {
+        title: parsed.title,
+        body: parsed.body,
+        status: parsed.status,
+        frontmatter: parsed.frontmatter,
+      },
+      mode: 'replace',
     });
     return jsonOk(c, updated);
   }

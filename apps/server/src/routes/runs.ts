@@ -41,14 +41,20 @@ import { requireScope } from '../middleware/bearer.ts';
 import { type ScopeContext, getProject, getWorkspace } from '../middleware/scope.ts';
 import {
   createRun,
+  createRunForParent,
   ensureRunsTable,
   getActiveRun,
   getProviderHealth,
   listRuns,
+  loadRunScopedByToken,
   nextChainId,
   redactRunForApi,
   transitionRun,
 } from '../services/agent-runs.ts';
+
+// Re-export the two run helpers that moved to the service (M2 Task 5 de-cycle)
+// so any consumer still importing them from this route path keeps working.
+export { createRunForParent, loadRunScopedByToken };
 import { createComment } from '../services/comments.ts';
 import type { AuthorContext } from '../services/comments.ts';
 
@@ -126,40 +132,6 @@ async function resolveCallerProjectAllowList(
 }
 
 /**
- * Context-free core of the run re-scope (mitigation 58). Loads an agent_run by
- * id and gates it against a caller's `workspaceId` + project `allowList`. Throws
- * 404 AGENT_RUN_NOT_FOUND on any mismatch — never 403, so cross-tenant existence
- * is not confirmed.
- *
- * D-4 seam — BOTH the HTTP route (via `loadRunScoped`, which derives
- * `{workspaceId, allowList}` from the Hono Context) and the MCP run tools (which
- * derive the same from the bearer token) call this ONE implementation. `null`
- * allowList means no project narrowing (session / human PAT / wildcard agent).
- */
-export async function loadRunScopedByToken(
-  runId: string,
-  scope: { workspaceId: string; allowList: string[] | null },
-): Promise<Document> {
-  const run = await db.query.documents.findFirst({ where: eq(documents.id, runId) });
-  const notFound = () => new HTTPError('AGENT_RUN_NOT_FOUND', `agent_run ${runId} not found`, 404);
-  if (!run || run.type !== 'agent_run' || run.workspaceId !== scope.workspaceId) throw notFound();
-  if (
-    scope.allowList !== null &&
-    (run.projectId === null || !scope.allowList.includes(run.projectId))
-  ) {
-    throw notFound();
-  }
-  // Redact at the loader so EVERY consumer (the HTTP wrapper `loadRunScoped`
-  // AND the MCP run tools get_run / cancel_run / retry_run) inherits
-  // system_prompt redaction. retry_run reads only `agent_slug` off the loaded
-  // row and re-resolves the agent doc fresh; cancel_run reads only id/status/
-  // parentId/projectId/agent_slug — neither depends on the raw system_prompt,
-  // so redacting here is safe. The runner's own claim path does NOT go through
-  // this loader (it reads ctx.fm.system_prompt off a separately-claimed row).
-  return redactRunForApi(run);
-}
-
-/**
  * Load an agent_run by id and re-scope it (mitigation 58). Derives the
  * `{workspaceId, allowList}` from the Hono Context, then delegates to the
  * context-free `loadRunScopedByToken` so the HTTP route and the MCP tools share
@@ -195,61 +167,12 @@ async function getProjectRow(projectId: string): Promise<Project> {
   return row;
 }
 
-/**
- * Shared create tail used by both the POST-create verb and the retry verb (and
- * the seam D-4's `run_agent` / `retry_run` MCP tools will reuse). It performs
- * ONLY the resolve + idempotency + createRun steps both verbs share:
- *
- *   getActiveRun idempotency (m56 / m63) → resolve project row → ensureRunsTable
- *   (own tx) → createRun.
- *
- * It deliberately does NOT include the autonomy gate (m54), the allow-list
- * check (m55), or the input-comment (m59): those are create-verb-specific and
- * ordering-sensitive, so they stay inline at each call site. The caller is
- * responsible for resolving `agent`, `parent`, and `actorUser` first.
- */
-export async function createRunForParent(args: {
-  workspace: Workspace;
-  parent: Document;
-  agent: Document;
-  actorUser: User;
-  firedBy: string;
-}): Promise<Document> {
-  const { workspace, parent, agent, actorUser, firedBy } = args;
-
-  // Idempotency (m56 on create, m63 on retry). Retry does NOT pass an
-  // excludeRunId — see the retry call site for why.
-  const active = await getActiveRun({ parentId: parent.id, agentSlug: agent.slug });
-  if (active) {
-    throw new HTTPError('RUN_ALREADY_ACTIVE', 'a run is already active for this parent', 409);
-  }
-
-  if (parent.projectId === null) {
-    // Runs are project-scoped (DB CHECK mandates table_id); a parent without
-    // a project can't host one.
-    throw new HTTPError('PARENT_NOT_FOUND', 'parent has no project', 404);
-  }
-  const project = await getProjectRow(parent.projectId);
-
-  // Lazy-seed the runs table (own tx), then create the run.
-  const runsTable = await db.transaction(async (tx) =>
-    ensureRunsTable(tx, { workspaceId: workspace.id, projectId: project.id }),
-  );
-  const { document } = await createRun({
-    workspace,
-    project,
-    runsTable,
-    agent,
-    actor: actorUser,
-    input: {
-      parentDocumentId: parent.id,
-      firedBy,
-      chainId: nextChainId({ firedBy }),
-      triggerId: null,
-    },
-  });
-  return document;
-}
+// `createRunForParent` + `loadRunScopedByToken` moved to `services/agent-runs.ts`
+// (M2 Task 5 de-cycle) so the lib `agent-tools-registry.ts` can import them from
+// a service rather than from this route file — that lib→routes import was the
+// only one in the codebase and it forced a cycle. Both are re-exported below for
+// the existing external importer (the registry) and imported into this route's
+// own handlers. Behavior is unchanged (verbatim move).
 
 // -----------------------------------------------------------------------------
 // List router — mounted under pScope (project-scoped).

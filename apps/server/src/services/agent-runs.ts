@@ -27,6 +27,7 @@ import {
   type User,
   type Workspace,
   documents,
+  projects,
   statuses,
   tables,
   views,
@@ -1833,4 +1834,112 @@ export function nextChainId(args: { firedBy: string }): string {
     // than propagate an invalid id (defense for mitigation 29).
   }
   return crypto.randomUUID();
+}
+
+// ----- shared create-tail + run re-scope (moved here from routes/runs.ts) -----
+//
+// M2 Task 5 (de-cycle): these two helpers used to live in `routes/runs.ts`, but
+// `agent-tools-registry.ts` (a lib module) imported them from there — the only
+// lib→routes edge in the codebase. They are service-layer logic (resolve +
+// idempotency + createRun; load + re-scope), not HTTP transport, so they belong
+// in this service. The route now imports them from here, and the registry imports
+// them from here too — killing the lib→routes import. Moved VERBATIM (the
+// allow-list re-scope + system_prompt redaction in `loadRunScopedByToken` are
+// preserved unchanged — this is a cycle break, NOT an authorization change).
+
+/** Resolve a project row by id (404s if gone). */
+async function getProjectRow(projectId: string): Promise<Project> {
+  const row = await db.query.projects.findFirst({ where: eq(projects.id, projectId) });
+  if (!row) throw new HTTPError('PARENT_NOT_FOUND', 'project missing', 404);
+  return row;
+}
+
+/**
+ * Shared create tail used by both the POST-create verb and the retry verb (and
+ * the seam D-4's `run_agent` / `retry_run` MCP tools reuse). It performs ONLY
+ * the resolve + idempotency + createRun steps both verbs share:
+ *
+ *   getActiveRun idempotency (m56 / m63) → resolve project row → ensureRunsTable
+ *   (own tx) → createRun.
+ *
+ * It deliberately does NOT include the autonomy gate (m54), the allow-list
+ * check (m55), or the input-comment (m59): those are create-verb-specific and
+ * ordering-sensitive, so they stay inline at each call site. The caller is
+ * responsible for resolving `agent`, `parent`, and `actorUser` first.
+ */
+export async function createRunForParent(args: {
+  workspace: Workspace;
+  parent: Document;
+  agent: Document;
+  actorUser: User;
+  firedBy: string;
+}): Promise<Document> {
+  const { workspace, parent, agent, actorUser, firedBy } = args;
+
+  // Idempotency (m56 on create, m63 on retry). Retry does NOT pass an
+  // excludeRunId — see the retry call site for why.
+  const active = await getActiveRun({ parentId: parent.id, agentSlug: agent.slug });
+  if (active) {
+    throw new HTTPError('RUN_ALREADY_ACTIVE', 'a run is already active for this parent', 409);
+  }
+
+  if (parent.projectId === null) {
+    // Runs are project-scoped (DB CHECK mandates table_id); a parent without
+    // a project can't host one.
+    throw new HTTPError('PARENT_NOT_FOUND', 'parent has no project', 404);
+  }
+  const project = await getProjectRow(parent.projectId);
+
+  // Lazy-seed the runs table (own tx), then create the run.
+  const runsTable = await db.transaction(async (tx) =>
+    ensureRunsTable(tx, { workspaceId: workspace.id, projectId: project.id }),
+  );
+  const { document } = await createRun({
+    workspace,
+    project,
+    runsTable,
+    agent,
+    actor: actorUser,
+    input: {
+      parentDocumentId: parent.id,
+      firedBy,
+      chainId: nextChainId({ firedBy }),
+      triggerId: null,
+    },
+  });
+  return document;
+}
+
+/**
+ * Context-free core of the run re-scope (mitigation 58). Loads an agent_run by
+ * id and gates it against a caller's `workspaceId` + project `allowList`. Throws
+ * 404 AGENT_RUN_NOT_FOUND on any mismatch — never 403, so cross-tenant existence
+ * is not confirmed.
+ *
+ * D-4 seam — BOTH the HTTP route (via `loadRunScoped`, which derives
+ * `{workspaceId, allowList}` from the Hono Context) and the MCP run tools (which
+ * derive the same from the bearer token) call this ONE implementation. `null`
+ * allowList means no project narrowing (session / human PAT / wildcard agent).
+ */
+export async function loadRunScopedByToken(
+  runId: string,
+  scope: { workspaceId: string; allowList: string[] | null },
+): Promise<Document> {
+  const run = await db.query.documents.findFirst({ where: eq(documents.id, runId) });
+  const notFound = () => new HTTPError('AGENT_RUN_NOT_FOUND', `agent_run ${runId} not found`, 404);
+  if (!run || run.type !== 'agent_run' || run.workspaceId !== scope.workspaceId) throw notFound();
+  if (
+    scope.allowList !== null &&
+    (run.projectId === null || !scope.allowList.includes(run.projectId))
+  ) {
+    throw notFound();
+  }
+  // Redact at the loader so EVERY consumer (the HTTP wrapper `loadRunScoped`
+  // AND the MCP run tools get_run / cancel_run / retry_run) inherits
+  // system_prompt redaction. retry_run reads only `agent_slug` off the loaded
+  // row and re-resolves the agent doc fresh; cancel_run reads only id/status/
+  // parentId/projectId/agent_slug — neither depends on the raw system_prompt,
+  // so redacting here is safe. The runner's own claim path does NOT go through
+  // this loader (it reads ctx.fm.system_prompt off a separately-claimed row).
+  return redactRunForApi(run);
 }

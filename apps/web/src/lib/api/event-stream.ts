@@ -1,4 +1,5 @@
-import { useEffect, useRef } from 'react';
+import { useContext, useEffect, useRef } from 'react';
+import { EventStreamContext } from './event-stream-context.tsx';
 
 export interface StreamedEvent {
   id: string;
@@ -33,18 +34,26 @@ function buildQuery(filters: EventStreamFilters): string {
 }
 
 /**
- * Open one EventSource to the workspace event stream and call `onEvent` for
- * each non-ping message. SSE TEACHES react-query WHEN data changed — consumers
- * pass an onEvent that calls queryClient.invalidateQueries(...). This hook owns
- * NO state and is NOT a source of truth.
+ * Subscribe to the workspace event stream and call `onEvent` for each frame
+ * matching `filters`. SSE TEACHES react-query WHEN data changed — consumers pass
+ * an onEvent that calls queryClient.invalidateQueries(...). This hook owns NO
+ * state and is NOT a source of truth.
  *
- * The server names each SSE frame after its kind (`event: <kind>`), so the
- * browser routes frames to addEventListener(kind), NOT 'message'. CONTRACT:
- * every consumer MUST pass an explicit `kinds` array — there is no unfiltered
- * firehose by design. We attach one listener per kind (+ a harmless 'message'
- * fallback for any unnamed frame). Reconnect is native EventSource behavior;
- * the server supports Last-Event-Id replay, so no hand-rolled backoff. Auth is
+ * CONTRACT: every consumer MUST pass an explicit `kinds` array — there is no
+ * unfiltered firehose by design. Reconnect (when the kinds union changes) and
+ * Last-Event-Id replay are handled by the provider / native EventSource; auth is
  * the same-origin session cookie (withCredentials).
+ *
+ * TOPOLOGY (audit H8 — SSE mux): when an `EventStreamProvider` is mounted above
+ * (the normal workspace case), this hook does NOT open a socket. It registers
+ * `{ filters, onEventRef }` with the provider, which opens ONE EventSource per
+ * workspace against the UNION of every consumer's kinds and demuxes each frame
+ * back to the matching subscribers. This collapses the 5-7 sockets a project
+ * view + slideover used to open into one, dodging the 6-per-origin cap.
+ *
+ * FALLBACK (strictly additive): when NO provider is mounted (an isolated test,
+ * a stray mount), the context is `null` and this hook opens + filters its own
+ * EventSource exactly as it did before the mux — so no consumer can break.
  */
 export function useEventStream(
   wslug: string,
@@ -54,12 +63,26 @@ export function useEventStream(
   const onEventRef = useRef(onEvent);
   onEventRef.current = onEvent;
 
+  const registry = useContext(EventStreamContext);
+
   const query = buildQuery(filters);
   const kindsKey = (filters.kinds ?? []).join(',');
 
+  // PROVIDER PATH: register a subscriber; the provider owns the socket + demux.
+  // Re-register only when a connection-affecting field changes (filters identity
+  // is captured in [wslug, query, kindsKey]); onEvent is read via onEventRef so a
+  // new callback identity does NOT churn the registration.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: deps [wslug, query, kindsKey] encode every registration-affecting field; `filters`/`onEvent`/`registry` are read live to avoid churning the subscription on a new identity
+  useEffect(() => {
+    if (!wslug || !registry) return;
+    const unsubscribe = registry.subscribe({ filters, onEventRef });
+    return unsubscribe;
+  }, [wslug, query, kindsKey, registry]);
+
+  // FALLBACK PATH: no provider above → open + filter our own socket, as before.
   // biome-ignore lint/correctness/useExhaustiveDependencies: deps [wslug, query, kindsKey] encode every connection-affecting field; onEvent is read via onEventRef so a new callback identity does NOT tear down the SSE connection
   useEffect(() => {
-    if (!wslug) return;
+    if (!wslug || registry) return;
     const es = new EventSource(`/api/v1/w/${wslug}/events${query}`, { withCredentials: true });
 
     const handle = (e: MessageEvent) => {
@@ -80,7 +103,5 @@ export function useEventStream(
       for (const k of kinds) es.removeEventListener(k, handle);
       es.close();
     };
-    // `query` + `kindsKey` encode every connection-affecting field.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [wslug, query, kindsKey]);
+  }, [wslug, query, kindsKey, registry]);
 }
