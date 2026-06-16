@@ -6,15 +6,20 @@ import {
   resolveViewNav,
 } from './rail-nav.ts';
 
-// Tier A: a wrong branch here sends a click on the `bugs` table to the
-// work-items table (cross-table mis-navigation). The default ('work-items')
-// must resolve to the legacy `/work-items` + `/board` routes (no :tslug param);
-// any other tslug must resolve to the `/t/$tslug` family WITH params.tslug.
+// Tier A: a wrong branch here sends a click on the `bugs` table to the wrong
+// table/route (cross-table mis-navigation). Phase 6 Option-B behavior change:
+// the view TYPE lives on the saved view (resolved by <ViewRouter>), NOT the URL,
+// so EVERY table-click and view-click lands on the unified `/t/$tslug` route
+// WITH params.tslug. The default table no longer special-cases to legacy
+// `/work-items` + `/board`; those are redirect-only (Task 1.3).
 describe('resolveTableNav — table-click destination', () => {
-  it('default table → /work-items with NO tslug param', () => {
+  // Phase 6: default table now routes through the unified `/t/$tslug` too
+  // (the `/work-items` redirect handles old bookmarks). A table click and a
+  // view click on the same table must land the SAME place.
+  it('default table → unified /t/$tslug WITH a tslug param', () => {
     expect(resolveTableNav('work-items')).toEqual({
-      to: '/w/$wslug/p/$pslug/work-items',
-      withTslug: false,
+      to: '/w/$wslug/p/$pslug/t/$tslug',
+      withTslug: true,
     });
   });
 
@@ -26,31 +31,37 @@ describe('resolveTableNav — table-click destination', () => {
   });
 });
 
-describe('resolveViewNav — view-click destination by (tslug, type)', () => {
-  it('default table + list → /work-items, no tslug param', () => {
-    expect(resolveViewNav('work-items', 'list')).toEqual({
-      to: '/w/$wslug/p/$pslug/work-items',
-      withTslug: false,
-    });
-  });
-
-  it('default table + kanban → /board, no tslug param', () => {
-    expect(resolveViewNav('work-items', 'kanban')).toEqual({
-      to: '/w/$wslug/p/$pslug/board',
-      withTslug: false,
-    });
-  });
-
-  it('non-default table + list → /t/$tslug WITH tslug param', () => {
-    expect(resolveViewNav('bugs', 'list')).toEqual({
+describe('resolveViewNav — view-click destination is the unified route for every type', () => {
+  // Phase 6 Option-B: the default table is no longer special-cased — a view
+  // click on it lands on the unified `/t/$tslug`, NOT legacy `/work-items`.
+  it('default table + calendar → unified /t/$tslug WITH tslug param', () => {
+    expect(resolveViewNav('work-items', 'calendar')).toEqual({
       to: '/w/$wslug/p/$pslug/t/$tslug',
       withTslug: true,
     });
   });
 
-  it('non-default table + kanban → /t/$tslug/board WITH tslug param', () => {
+  // Phase 6 Option-B: kanban no longer routes to `/board`; <ViewRouter> picks
+  // the renderer from the saved view's type.
+  it('non-default table + kanban → unified /t/$tslug WITH tslug param', () => {
     expect(resolveViewNav('bugs', 'kanban')).toEqual({
-      to: '/w/$wslug/p/$pslug/t/$tslug/board',
+      to: '/w/$wslug/p/$pslug/t/$tslug',
+      withTslug: true,
+    });
+  });
+
+  // Behavioral-change denial assertion: the OLD default-table + kanban → /board
+  // branch is GONE. This pair must resolve to the unified route, NOT /board.
+  it('default table + kanban → unified /t/$tslug (the old default+kanban→/board branch is GONE)', () => {
+    expect(resolveViewNav('work-items', 'kanban')).toEqual({
+      to: '/w/$wslug/p/$pslug/t/$tslug',
+      withTslug: true,
+    });
+  });
+
+  it('non-default table + list → unified /t/$tslug WITH tslug param', () => {
+    expect(resolveViewNav('bugs', 'list')).toEqual({
+      to: '/w/$wslug/p/$pslug/t/$tslug',
       withTslug: true,
     });
   });
