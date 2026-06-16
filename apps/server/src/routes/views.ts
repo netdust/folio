@@ -54,6 +54,12 @@ viewsRoute.get('/', async (c) => {
   // that belongs to another project resolves to nothing here, so its views can
   // never leak through this endpoint — the query is intersected with the
   // project's own tables, not the caller's raw input.
+  //
+  // Dual-mount note: viewsRoute is mounted under BOTH pScope and tScope, so
+  // `?tables=` is technically reachable on a table-scoped URL (/t/:tslug/views),
+  // where it ignores :tslug and serves the project-scoped batch. Harmless (same
+  // project ceiling + same cross-project guard) and no client calls it that way;
+  // the rail only ever hits the project mount.
   const tablesParam = c.req.query('tables');
   if (tablesParam !== undefined) {
     const p = getProject(c);

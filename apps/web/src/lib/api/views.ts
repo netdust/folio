@@ -115,6 +115,10 @@ export function useUpdateView(wslug: string, pslug: string, tslug: string) {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: viewsKeys.list(wslug, pslug, tslug) });
+      // Accepted cost: filter/sort/groupBy autosave also flows through here and
+      // triggers a rail batch refetch even though those fields don't change what
+      // the rail renders (only name/order/existence do). Correctness-safe and
+      // bounded by staleTime; not worth a "rail-visible field changed" guard.
       qc.invalidateQueries({ queryKey: viewsKeys.batchPrefix(wslug, pslug) });
     },
   });
