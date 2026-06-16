@@ -1,4 +1,5 @@
 import { AGGREGATIONS, type AggregateSpec, type GroupedListSettings } from '@folio/shared';
+import { useState } from 'react';
 import { useFields } from '../../lib/api/fields.ts';
 import { Button } from '../ui/button.tsx';
 
@@ -39,45 +40,79 @@ const inputClass = selectClass;
  * SIBLING-SITE of the server's `AGGREGATIONS` set (the engine rejects any op
  * outside it). Never hardcode a divergent list here.
  */
+/**
+ * FIX I-2: a non-`count` op leaves `field` empty (and `pct_matching` leaves
+ * `value` empty) until the user picks one. Those incomplete specs make the
+ * server's group-summary endpoint 422. Filter them out of the EMITTED settings
+ * so a view is never created/saved with a broken aggregate. The incomplete row
+ * still renders in the UI (driven by the controlled `value`) so the user can
+ * finish it — only the emitted `onChange` value is pruned.
+ */
+function isCompleteSpec(spec: AggregateSpec): boolean {
+  if (spec.op === 'count') return true;
+  if (!spec.field) return false;
+  if (spec.op === 'pct_matching') return !!spec.value;
+  return true;
+}
+
 export function GroupedListConfig({ wslug, pslug, tslug, value, onChange }: Props) {
   const { data: fields } = useFields(wslug, pslug, tslug);
   const allFields = fields ?? [];
   // Mirror the kanban group-by exclusion: a multi_select field can't be grouped on.
   const groupableFields = allFields.filter((f) => f.type !== 'multi_select');
 
+  // FIX I-2: the aggregate rows are edited against an INTERNAL draft (the full,
+  // possibly-incomplete list) so an in-progress row (avg with no field yet)
+  // stays visible while the user finishes it. The EMITTED `onChange` value is
+  // pruned to complete specs only, so the consumer's create/save payload never
+  // carries a spec the server would 422. The draft seeds from `value.aggregates`
+  // once; thereafter local edits drive the UI.
+  const [draftAggregates, setDraftAggregates] = useState<AggregateSpec[]>(value.aggregates);
+
+  // Commit a new draft aggregate list: update the visible draft AND emit the
+  // pruned settings upward (groupBy/rowLayout taken from the controlled `value`).
+  function commitAggregates(nextAggregates: AggregateSpec[]) {
+    setDraftAggregates(nextAggregates);
+    onChange({ ...value, aggregates: nextAggregates.filter(isCompleteSpec) });
+  }
+
+  // Non-aggregate edits emit using the current pruned draft so they never
+  // resurrect an incomplete spec into the payload.
+  function emitWithDraft(next: Omit<GroupedListSettings, 'aggregates'>) {
+    onChange({ ...next, aggregates: draftAggregates.filter(isCompleteSpec) });
+  }
+
   function patchAggregate(index: number, patch: Partial<AggregateSpec>) {
-    const next = value.aggregates.map((a, i) => (i === index ? { ...a, ...patch } : a));
-    onChange({ ...value, aggregates: next });
+    commitAggregates(draftAggregates.map((a, i) => (i === index ? { ...a, ...patch } : a)));
   }
 
   function setOp(index: number, op: AggregateSpec['op']) {
     // `count` carries neither field nor value; `pct_matching` keeps both; the
     // rest keep `field` and drop `value`. Normalise on op-change so the assembled
     // spec never carries a stale field/value the new op doesn't use.
-    const current = value.aggregates[index];
+    const current = draftAggregates[index];
     const nextSpec: AggregateSpec =
       op === 'count'
         ? { op }
         : op === 'pct_matching'
           ? { op, field: current?.field, value: current?.value ?? '' }
           : { op, field: current?.field };
-    const next = value.aggregates.map((a, i) => (i === index ? nextSpec : a));
-    onChange({ ...value, aggregates: next });
+    commitAggregates(draftAggregates.map((a, i) => (i === index ? nextSpec : a)));
   }
 
   function addAggregate() {
-    onChange({ ...value, aggregates: [...value.aggregates, { op: 'count' }] });
+    commitAggregates([...draftAggregates, { op: 'count' }]);
   }
 
   function removeAggregate(index: number) {
-    onChange({ ...value, aggregates: value.aggregates.filter((_, i) => i !== index) });
+    commitAggregates(draftAggregates.filter((_, i) => i !== index));
   }
 
   function toggleBodyField(key: string, checked: boolean) {
     const fieldsList = checked
       ? [...value.rowLayout.fields, key]
       : value.rowLayout.fields.filter((k) => k !== key);
-    onChange({ ...value, rowLayout: { ...value.rowLayout, fields: fieldsList } });
+    emitWithDraft({ ...value, rowLayout: { ...value.rowLayout, fields: fieldsList } });
   }
 
   return (
@@ -91,7 +126,7 @@ export function GroupedListConfig({ wslug, pslug, tslug, value, onChange }: Prop
           id="gl-group-by"
           className={selectClass}
           value={value.groupBy}
-          onChange={(e) => onChange({ ...value, groupBy: e.target.value })}
+          onChange={(e) => emitWithDraft({ ...value, groupBy: e.target.value })}
         >
           <option value="status">Status</option>
           {groupableFields.map((f) => (
@@ -106,7 +141,7 @@ export function GroupedListConfig({ wslug, pslug, tslug, value, onChange }: Prop
       <div>
         <span className="block text-sm font-medium text-fg">Aggregates</span>
         <div className="mt-2 space-y-2">
-          {value.aggregates.map((agg, i) => {
+          {draftAggregates.map((agg, i) => {
             const n = i + 1;
             return (
               <div
@@ -199,7 +234,10 @@ export function GroupedListConfig({ wslug, pslug, tslug, value, onChange }: Prop
               className={selectClass}
               value={value.rowLayout.primary}
               onChange={(e) =>
-                onChange({ ...value, rowLayout: { ...value.rowLayout, primary: e.target.value } })
+                emitWithDraft({
+                  ...value,
+                  rowLayout: { ...value.rowLayout, primary: e.target.value },
+                })
               }
             >
               <option value="title">Title</option>
@@ -222,7 +260,7 @@ export function GroupedListConfig({ wslug, pslug, tslug, value, onChange }: Prop
               onChange={(e) => {
                 const v = e.target.value;
                 const { subtitle: _drop, ...rest } = value.rowLayout;
-                onChange({
+                emitWithDraft({
                   ...value,
                   rowLayout: v ? { ...rest, subtitle: v } : rest,
                 });

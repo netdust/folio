@@ -143,4 +143,67 @@ describe('GroupedListConfig', () => {
     expect(latest!.aggregates[0]).toMatchObject({ op: 'avg', field: 'estimate' });
     expect(latest!.aggregates[1]).toMatchObject({ op: 'sum', field: 'estimate' });
   });
+
+  // FIX I-2: an incomplete aggregate spec (non-count op with no field) must be
+  // FILTERED OUT of the emitted settings so the server is never sent a spec it
+  // 422s. The incomplete row still shows in the UI; it just doesn't ship.
+  it('excludes a non-count aggregate with no field from the emitted settings', async () => {
+    let latest: GroupedListSettings | undefined;
+    render(
+      <Harness
+        onValue={(v) => {
+          latest = v;
+        }}
+      />,
+    );
+
+    // Switch the (only) row to `avg` but DON'T pick a field → incomplete spec.
+    await userEvent.selectOptions(screen.getByLabelText(/Aggregation 1/i), 'avg');
+
+    expect(latest).toBeDefined();
+    // The incomplete avg (no field) is dropped — emitted aggregates carry none of it.
+    expect(latest!.aggregates.some((a) => a.op === 'avg')).toBe(false);
+    // It still renders in the UI so the user can finish it.
+    expect(screen.getByLabelText(/Aggregate field 1/i)).toBeInTheDocument();
+  });
+
+  it('excludes a pct_matching aggregate with an empty value from the emitted settings', async () => {
+    let latest: GroupedListSettings | undefined;
+    render(
+      <Harness
+        onValue={(v) => {
+          latest = v;
+        }}
+      />,
+    );
+
+    // pct_matching with a field but NO value → still incomplete, must be dropped.
+    await userEvent.selectOptions(screen.getByLabelText(/Aggregation 1/i), 'pct_matching');
+    await userEvent.selectOptions(screen.getByLabelText(/Aggregate field 1/i), 'estimate');
+
+    expect(latest).toBeDefined();
+    expect(latest!.aggregates.some((a) => a.op === 'pct_matching')).toBe(false);
+    // The match-value input is shown so the user can complete it.
+    expect(screen.getByLabelText(/Match value 1/i)).toBeInTheDocument();
+  });
+
+  it('includes a complete pct_matching aggregate (field + value) in the emitted settings', async () => {
+    let latest: GroupedListSettings | undefined;
+    render(
+      <Harness
+        onValue={(v) => {
+          latest = v;
+        }}
+      />,
+    );
+
+    await userEvent.selectOptions(screen.getByLabelText(/Aggregation 1/i), 'pct_matching');
+    await userEvent.selectOptions(screen.getByLabelText(/Aggregate field 1/i), 'estimate');
+    await userEvent.type(screen.getByLabelText(/Match value 1/i), '5');
+
+    expect(latest).toBeDefined();
+    expect(latest!.aggregates).toContainEqual(
+      expect.objectContaining({ op: 'pct_matching', field: 'estimate', value: '5' }),
+    );
+  });
 });

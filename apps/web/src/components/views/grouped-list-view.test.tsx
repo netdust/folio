@@ -26,7 +26,7 @@ vi.mock('../../lib/api/group-summary.ts', async (orig) => {
 });
 vi.mock('../../lib/api/documents.ts', async (orig) => {
   const actual = await orig<typeof import('../../lib/api/documents.ts')>();
-  return { ...actual, useDocuments: vi.fn() };
+  return { ...actual, useInfiniteDocuments: vi.fn() };
 });
 vi.mock('../../lib/api/use-active-view.ts', async (orig) => {
   const actual = await orig<typeof import('../../lib/api/use-active-view.ts')>();
@@ -38,7 +38,7 @@ vi.mock('../../lib/api/fields.ts', async (orig) => {
 });
 
 const mockGroupSummary = vi.mocked(groupSummaryApi.useGroupSummary);
-const mockDocuments = vi.mocked(documentsApi.useDocuments);
+const mockDocuments = vi.mocked(documentsApi.useInfiniteDocuments);
 const mockActiveView = vi.mocked(useActiveViewApi.useActiveView);
 const mockFields = vi.mocked(fieldsApi.useFields);
 
@@ -72,9 +72,57 @@ function doc(partial: Partial<DocRow> & { id: string; slug: string; title: strin
 function summaryResult(data: unknown, over: Record<string, unknown> = {}): any {
   return { data, isLoading: false, error: null, ...over };
 }
+
+/**
+ * useInfiniteDocuments stand-in. The renderer reads `data.pages.flatMap(p =>
+ * p.data)` for the rows, plus `hasNextPage`/`fetchNextPage`/`isFetchingNextPage`
+ * for the "Load more" control. Pass one or more page-data arrays; each becomes a
+ * `{ data, nextCursor }` page. `hasNextPage` defaults to false (single page).
+ */
+// biome-ignore lint/suspicious/noExplicitAny: test stub for a react-infinite-query result shape
+function infiniteResult(pages: DocRow[][], over: Record<string, unknown> = {}): any {
+  return {
+    data: {
+      pages: pages.map((rows, i) => ({
+        data: rows,
+        nextCursor: i < pages.length - 1 ? `cursor-${i}` : null,
+      })),
+    },
+    isLoading: false,
+    error: null,
+    hasNextPage: false,
+    fetchNextPage: vi.fn(),
+    isFetchingNextPage: false,
+    ...over,
+  };
+}
+
+// Plain query-result stand-in for the FIELDS hook (reads `.data` directly).
 // biome-ignore lint/suspicious/noExplicitAny: test stub for a react-query result shape
-function docsResult(data: unknown, over: Record<string, unknown> = {}): any {
+function fieldsResult(data: unknown, over: Record<string, unknown> = {}): any {
   return { data, isLoading: false, error: null, ...over };
+}
+
+// Back-compat shim for the existing single-page tests: wrap one page's `data`
+// array (the old `{ data: [...], nextCursor }` shape) into the infinite result.
+// biome-ignore lint/suspicious/noExplicitAny: test stub for a react-infinite-query result shape
+function docsResult(data: unknown, over: Record<string, unknown> = {}): any {
+  if (data === undefined) {
+    return {
+      data: undefined,
+      isLoading: false,
+      error: null,
+      hasNextPage: false,
+      fetchNextPage: vi.fn(),
+      isFetchingNextPage: false,
+      ...over,
+    };
+  }
+  const page = data as { data: DocRow[]; nextCursor?: string | null };
+  return infiniteResult([page.data], {
+    hasNextPage: page.nextCursor != null,
+    ...over,
+  });
 }
 
 function activeViewWith(settings: Record<string, unknown> | undefined) {
@@ -137,7 +185,7 @@ afterEach(() => {
 describe('GroupedListView', () => {
   it('renders one group section per summary group with its value, item count, and a configured aggregate', async () => {
     mockActiveView.mockReturnValue(activeViewWith(DEFAULT_SETTINGS));
-    mockFields.mockReturnValue(docsResult([]));
+    mockFields.mockReturnValue(fieldsResult([]));
     mockGroupSummary.mockReturnValue(
       summaryResult({
         groups: [
@@ -168,7 +216,7 @@ describe('GroupedListView', () => {
 
   it('THE page-2 guard: header total comes from the summary endpoint, NOT a client count of loaded rows', async () => {
     mockActiveView.mockReturnValue(activeViewWith(DEFAULT_SETTINGS));
-    mockFields.mockReturnValue(docsResult([]));
+    mockFields.mockReturnValue(fieldsResult([]));
     // The endpoint says this group has 148 docs (the FULL set)...
     mockGroupSummary.mockReturnValue(
       summaryResult({
@@ -203,7 +251,7 @@ describe('GroupedListView', () => {
         rowLayout: { primary: 'title', fields: [] },
       }),
     );
-    mockFields.mockReturnValue(docsResult([]));
+    mockFields.mockReturnValue(fieldsResult([]));
     mockGroupSummary.mockReturnValue(
       summaryResult({
         groups: [
@@ -246,7 +294,7 @@ describe('GroupedListView', () => {
       }),
     );
     mockFields.mockReturnValue(
-      docsResult([
+      fieldsResult([
         {
           id: 'f1',
           key: 'priority',
@@ -299,7 +347,7 @@ describe('GroupedListView', () => {
 
   it('renders the no-group bucket LAST when ungrouped is non-null', async () => {
     mockActiveView.mockReturnValue(activeViewWith(DEFAULT_SETTINGS));
-    mockFields.mockReturnValue(docsResult([]));
+    mockFields.mockReturnValue(fieldsResult([]));
     mockGroupSummary.mockReturnValue(
       summaryResult({
         groups: [{ value: 'todo', count: 1, aggregates: { count: 1 } }],
@@ -331,7 +379,7 @@ describe('GroupedListView', () => {
 
   it('shows EmptyState when there are 0 documents', async () => {
     mockActiveView.mockReturnValue(activeViewWith(DEFAULT_SETTINGS));
-    mockFields.mockReturnValue(docsResult([]));
+    mockFields.mockReturnValue(fieldsResult([]));
     mockGroupSummary.mockReturnValue(
       summaryResult({ groups: [], ungrouped: null, truncated: false }),
     );
@@ -346,7 +394,7 @@ describe('GroupedListView', () => {
 
   it('clicking a row navigates with ?doc=<slug>', async () => {
     mockActiveView.mockReturnValue(activeViewWith(DEFAULT_SETTINGS));
-    mockFields.mockReturnValue(docsResult([]));
+    mockFields.mockReturnValue(fieldsResult([]));
     mockGroupSummary.mockReturnValue(
       summaryResult({
         groups: [{ value: 'todo', count: 1, aggregates: { count: 1 } }],
@@ -368,7 +416,7 @@ describe('GroupedListView', () => {
 
   it('shows a "+N more groups" affordance when truncated', async () => {
     mockActiveView.mockReturnValue(activeViewWith(DEFAULT_SETTINGS));
-    mockFields.mockReturnValue(docsResult([]));
+    mockFields.mockReturnValue(fieldsResult([]));
     mockGroupSummary.mockReturnValue(
       summaryResult({
         groups: [{ value: 'todo', count: 1, aggregates: { count: 1 } }],
@@ -390,7 +438,7 @@ describe('GroupedListView', () => {
 
   it('renders a skeleton while loading', async () => {
     mockActiveView.mockReturnValue(activeViewWith(DEFAULT_SETTINGS));
-    mockFields.mockReturnValue(docsResult([]));
+    mockFields.mockReturnValue(fieldsResult([]));
     mockGroupSummary.mockReturnValue(summaryResult(undefined, { isLoading: true }));
     mockDocuments.mockReturnValue(docsResult(undefined, { isLoading: true }));
 
@@ -401,7 +449,7 @@ describe('GroupedListView', () => {
 
   it('pager total = sum of all group counts + ungrouped count (the full set, not the page)', async () => {
     mockActiveView.mockReturnValue(activeViewWith(DEFAULT_SETTINGS));
-    mockFields.mockReturnValue(docsResult([]));
+    mockFields.mockReturnValue(fieldsResult([]));
     mockGroupSummary.mockReturnValue(
       summaryResult({
         groups: [
@@ -425,5 +473,88 @@ describe('GroupedListView', () => {
 
     // 100 + 147 + 0 = 247 — from the summary, never the 10 loaded rows.
     expect(await screen.findByTestId('grouped-list-pager')).toHaveTextContent('247');
+  });
+
+  // FIX I-3: rows past page 1 must be reachable via infinite pagination.
+  it('renders rows from EVERY loaded page (not just page 1) and shows a "Load more" button when hasNextPage', async () => {
+    mockActiveView.mockReturnValue(activeViewWith(DEFAULT_SETTINGS));
+    mockFields.mockReturnValue(fieldsResult([]));
+    mockGroupSummary.mockReturnValue(
+      summaryResult({
+        groups: [
+          { value: 'todo', count: 1, aggregates: { count: 1 } },
+          { value: 'done', count: 1, aggregates: { count: 1 } },
+        ],
+        ungrouped: null,
+        truncated: false,
+      }),
+    );
+    const fetchNextPage = vi.fn();
+    // Two loaded pages: page-1 has a 'todo' row, page-2 has a 'done' row. With the
+    // OLD single-page useDocuments, the page-2 row would never render.
+    mockDocuments.mockReturnValue(
+      infiniteResult(
+        [
+          [doc({ id: 'd1', slug: 'page1', title: 'Page-1 Row', status: 'todo' })],
+          [doc({ id: 'd2', slug: 'page2', title: 'Page-2 Row', status: 'done' })],
+        ],
+        { hasNextPage: true, fetchNextPage },
+      ),
+    );
+
+    renderView();
+
+    // BOTH pages' rows render — the page-2 row is reachable.
+    expect(await screen.findByTestId('grouped-row-page1')).toBeInTheDocument();
+    expect(screen.getByTestId('grouped-row-page2')).toBeInTheDocument();
+
+    // The "Load more" button is present and clicking it fetches the next page.
+    const loadMore = screen.getByTestId('grouped-list-load-more');
+    await userEvent.click(loadMore);
+    expect(fetchNextPage).toHaveBeenCalledTimes(1);
+  });
+
+  it('hides the "Load more" button when there is no next page', async () => {
+    mockActiveView.mockReturnValue(activeViewWith(DEFAULT_SETTINGS));
+    mockFields.mockReturnValue(fieldsResult([]));
+    mockGroupSummary.mockReturnValue(
+      summaryResult({
+        groups: [{ value: 'todo', count: 1, aggregates: { count: 1 } }],
+        ungrouped: null,
+        truncated: false,
+      }),
+    );
+    mockDocuments.mockReturnValue(
+      infiniteResult([[doc({ id: 'd1', slug: 'a', title: 'Card A', status: 'todo' })]], {
+        hasNextPage: false,
+      }),
+    );
+
+    renderView();
+
+    await screen.findByTestId('grouped-row-a');
+    expect(screen.queryByTestId('grouped-list-load-more')).toBeNull();
+  });
+
+  // FIX I-1: a failing group-summary must surface an error, NOT a silent empty view.
+  it('surfaces an error affordance when the group-summary query fails (not a silent empty state)', async () => {
+    mockActiveView.mockReturnValue(activeViewWith(DEFAULT_SETTINGS));
+    mockFields.mockReturnValue(fieldsResult([]));
+    // The summary call failed → no group data. With the OLD code this rendered an
+    // empty "0 van 0" view with NO error affordance.
+    mockGroupSummary.mockReturnValue(
+      summaryResult(undefined, { error: new Error('boom'), isError: true }),
+    );
+    // Rows DID load — they should still render alongside the summary-error banner.
+    mockDocuments.mockReturnValue(
+      infiniteResult([[doc({ id: 'd1', slug: 'a', title: 'Card A', status: 'todo' })]]),
+    );
+
+    renderView();
+
+    // The error affordance is shown (NOT a silent empty state).
+    expect(await screen.findByText(/groepssamenvatting niet laden/i)).toBeInTheDocument();
+    // And it is NOT the EmptyState.
+    expect(screen.queryByText('No work items')).toBeNull();
   });
 });

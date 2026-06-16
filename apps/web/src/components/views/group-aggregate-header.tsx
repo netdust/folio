@@ -70,23 +70,21 @@ export function GroupAggregateHeader({ label, groupKey, row, aggregates }: Props
         <span className="text-sm font-medium text-fg">{label}</span>
         <span className="text-xs text-fg-3">{row.count} items</span>
         {scalars.map((spec) => {
-          const val = row.aggregates[aggregateKey(spec)];
+          const k = aggregateKey(spec);
+          const val = row.aggregates[k];
           if (isDistribution(val) || val === undefined) return null;
           return (
-            <span
-              key={aggregateKey(spec)}
-              className="text-xs text-fg-3"
-              data-aggregate={aggregateKey(spec)}
-            >
+            <span key={k} className="text-xs text-fg-3" data-aggregate={k}>
               {aggregateLabel(spec)}: {formatScalar(val)}
             </span>
           );
         })}
       </div>
       {distributions.map((spec) => {
-        const val = row.aggregates[aggregateKey(spec)];
+        const k = aggregateKey(spec);
+        const val = row.aggregates[k];
         if (!isDistribution(val)) return null;
-        return <DistributionBar key={aggregateKey(spec)} buckets={val} />;
+        return <DistributionBar key={k} buckets={val} />;
       })}
     </div>
   );
