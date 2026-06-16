@@ -47,7 +47,7 @@ export async function seedProjectDefaults(
     projectId,
     tableId,
     name: 'All work items',
-    type: 'list',
+    type: 'table',
     filters: { type: { $eq: 'work_item' } },
     sort: [{ key: 'updated_at', dir: 'desc' }],
     visibleFields: ['title', 'status', 'priority', 'assignee', 'due_date', 'updated_at'],

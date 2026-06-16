@@ -274,6 +274,13 @@
       "when": 1780994000000,
       "tag": "0037_views_settings",
       "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "6",
+      "when": 1780995000000,
+      "tag": "0038_backfill_list_to_table",
+      "breakpoints": true
     }
   ]
 }

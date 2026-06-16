@@ -360,7 +360,7 @@ export const views = sqliteTable('views', {
     .notNull()
     .references(() => tables.id, { onDelete: 'cascade' }),
   name: text('name').notNull(),
-  type: text('type', { enum: ['list', 'kanban'] }).notNull(),
+  type: text('type', { enum: ['list', 'kanban', 'table'] }).notNull(),
   filters: text('filters', { mode: 'json' }).$type<unknown>().notNull().default({}),
   sort: text('sort', { mode: 'json' }).$type<unknown>().notNull().default([]),
   groupBy: text('group_by'), // field key for kanban grouping; defaults to status

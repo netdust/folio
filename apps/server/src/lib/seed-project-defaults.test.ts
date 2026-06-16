@@ -33,6 +33,30 @@ test('seedProjectDefaults inserts 1 table, 4 statuses, and 2 views all linked to
   expect(v.every((r) => r.tableId === defaultTableId)).toBe(true);
 });
 
+test('seedProjectDefaults seeds the default view as type:table and the Board view as type:kanban', async () => {
+  const { db, seed } = await makeTestApp();
+  const newProjectId = nanoid();
+  await db.insert(projects).values({
+    id: newProjectId,
+    workspaceId: seed.workspace.id,
+    slug: 'view-types',
+    name: 'View Types',
+  });
+  await db.transaction(async (tx) => {
+    await seedProjectDefaults(tx, newProjectId);
+  });
+
+  const v = await db.select().from(views).where(eq(views.projectId, newProjectId));
+  const defaultView = v.find((r) => r.isDefault)!;
+  // Phase 6: `list` now means the grouped-list renderer; the seeded default that
+  // renders the spreadsheet is `table`, NOT `list`.
+  expect(defaultView.name).toBe('All work items');
+  expect(defaultView.type).toBe('table');
+
+  const board = v.find((r) => r.name === 'Board')!;
+  expect(board.type).toBe('kanban');
+});
+
 test('seedProjectDefaults returns the default tableId', async () => {
   const { db, seed } = await makeTestApp();
   const newProjectId = nanoid();
