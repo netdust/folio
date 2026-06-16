@@ -77,6 +77,8 @@ import { decryptSecret } from './crypto.ts';
 import { HTTPError } from './http.ts';
 import { getInstanceSkillsByNames } from './instance-skills.ts';
 import { getOperatorDefinition, getOperatorDocument } from './operator.ts';
+import type { RunSink } from './run-sink.ts';
+import { makeConversationRunSink, makeDocumentRunSink } from './run-sink.ts';
 import {
   TRUSTED_SKILLS_LABEL,
   UNTRUSTED_SKILLS_LABEL,
@@ -230,6 +232,13 @@ export interface RunContext {
    * run has NO `ctx.parent`; the parent-coupled helpers guard on `ctx.sink`.
    */
   sink?: ConversationSink;
+  /**
+   * Always-set run-output polymorphism (M2 RunSink). The document/conversation
+   * `if (sink)` mode-branches migrate to `runSink.isConversation`/methods in
+   * Cluster C, which then deletes the legacy `sink?` field. Until then nothing
+   * reads this.
+   */
+  runSink: RunSink;
   /**
    * Operator cockpit chat (Task 4) — the active conversation id, threaded into
    * `executeTool` so the irreversible-op confirm gate (Task 7) can scope a
@@ -603,7 +612,9 @@ export async function loadContext(runId: string): Promise<RunContext | null> {
   const keyDecryptFailed = decrypted.decryptFailed;
   const baseUrl = keyRow?.baseUrl ?? undefined;
 
-  return {
+  // Assemble the ctx first so the document RunSink factory can read it, then
+  // attach `runSink` (M2 — pure addition; nothing reads it until Cluster C).
+  const ctx: RunContext = {
     run,
     fm,
     parentId,
@@ -628,7 +639,11 @@ export async function loadContext(runId: string): Promise<RunContext | null> {
     // Phase C C3 — fired-path marker, read from the run fm. Default false
     // (attended) for runs created before C3 or launched by a human.
     unattended: fm.unattended === true,
+    // Set immediately below — the factory needs the assembled ctx.
+    runSink: undefined as unknown as RunSink,
   };
+  ctx.runSink = makeDocumentRunSink(ctx);
+  return ctx;
 }
 
 /**
@@ -728,7 +743,11 @@ async function loadConversationContext(
   const baseUrl = keyRow?.baseUrl ?? undefined;
   const keyRowMissing = !keyRow;
 
-  return {
+  // Assemble the ctx first so the conversation RunSink factory can read it
+  // (it needs `run.id` + `conversationId`), then attach `runSink` (M2 — pure
+  // addition; nothing reads it until Cluster C). The legacy `sink` /
+  // `conversationId` keys stay exactly as before.
+  const ctx: RunContext = {
     run,
     fm,
     // `parentId` is non-null on the type; a conversation run has no parent, so
@@ -757,7 +776,11 @@ async function loadConversationContext(
     conversationId: convPending.conversationId,
     keyRowMissing,
     keyDecryptFailed,
+    // Set immediately below — the factory needs the assembled ctx.
+    runSink: undefined as unknown as RunSink,
   };
+  ctx.runSink = makeConversationRunSink(ctx);
+  return ctx;
 }
 
 /**

@@ -2684,6 +2684,32 @@ describe('loadContext: by-slug agent resolution', () => {
 });
 
 // ==========================================================================
+// M2 RunSink (Cluster A, A-3) — the document loader sets an always-present
+// `runSink` whose impl is the DOCUMENT one. Seam: drive the real, un-mocked
+// loadContext document path and assert the wired impl (isConversation === false).
+// The conversation-loader counterpart lives in conversation-runs.test.ts (the
+// only file that can reach the conversation branch through loadContext).
+// ==========================================================================
+
+describe('loadContext: M2 runSink wiring (document path)', () => {
+  test('a document run gets the document RunSink (isConversation === false)', async () => {
+    const { run } = await scaffold();
+
+    const ctx = await loadContext(run.id);
+    expect(ctx).not.toBeNull();
+    // Always-set (the field is required on the type, but prove it at runtime).
+    expect(ctx!.runSink).toBeDefined();
+    // Document impl — NOT the conversation one.
+    expect(ctx!.runSink.isConversation).toBe(false);
+    // The document sink composes no ConversationSink.
+    expect(ctx!.runSink.conversationSink).toBeUndefined();
+    // The legacy discriminator (`sink?`) stays absent on a document run —
+    // this task must not have started populating it.
+    expect(ctx!.sink).toBeUndefined();
+  });
+});
+
+// ==========================================================================
 // Phase B Task 4 — definitional skill load (B3/B4/B9) + API-path injection
 // fence (B10a). loadAgentDefinition is module-private; we exercise it through
 // loadContext (which calls it) and through the observable run messages.

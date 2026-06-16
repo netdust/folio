@@ -314,6 +314,11 @@ describe('createConversationRun → loadContext — end-to-end wiring (seam)', (
     // Sink + conversationId wired (the conversation output path).
     expect(ctx!.sink).toBeDefined();
     expect(ctx!.conversationId).toBe(conv.id);
+    // M2 RunSink (Cluster A, A-3) — the conversation loader sets the always-present
+    // `runSink` to the CONVERSATION impl, and exposes the composed ConversationSink.
+    expect(ctx!.runSink).toBeDefined();
+    expect(ctx!.runSink.isConversation).toBe(true);
+    expect(ctx!.runSink.conversationSink).toBeDefined();
     // Ephemeral operator token — never persisted. Shape B′: agentId is null (no
     // FK sentinel) and the un-forgeable isOperator marker identifies the operator.
     expect(ctx!.token.agentId).toBeNull();
