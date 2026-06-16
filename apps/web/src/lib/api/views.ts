@@ -16,7 +16,34 @@ export interface View {
 
 export const viewsKeys = {
   list: (wslug: string, pslug: string, tslug: string) => ['views', wslug, pslug, tslug] as const,
+  // Batched project-views key (M3 audit 3.5): one query per PROJECT covering all
+  // its tables, keyed by the sorted table slugs so it re-fetches when the table
+  // set changes. Distinct namespace ('views-batch') so it never collides with the
+  // per-table `list` keys the rest of the app invalidates.
+  batch: (wslug: string, pslug: string, tslugs: string[]) =>
+    ['views-batch', wslug, pslug, [...tslugs].sort().join(',')] as const,
+  // Prefix for invalidating ALL of a project's batched views regardless of the
+  // table-slug suffix — used after a view rename/delete/reorder so the rail's
+  // batched query (keyed by the full table-slug set) refetches. A per-table
+  // `viewsKeys.list` invalidation does NOT reach the batch query.
+  batchPrefix: (wslug: string, pslug: string) => ['views-batch', wslug, pslug] as const,
 };
+
+/**
+ * Batched fetch: all views for the given tables of ONE project, grouped by
+ * tableId. Collapses the rail's per-(project,table) fan-out into one request per
+ * project (server: GET /p/:pslug/views?tables=slugA,slugB). The server intersects
+ * the requested slugs with the project's own tables, so the result is keyed by
+ * the project's table ids only.
+ */
+export function fetchProjectViews(
+  wslug: string,
+  pslug: string,
+  tslugs: string[],
+): Promise<Record<string, View[]>> {
+  const qs = encodeURIComponent(tslugs.join(','));
+  return client.get<Record<string, View[]>>(`/api/v1/w/${wslug}/p/${pslug}/views?tables=${qs}`);
+}
 
 export function useViews(wslug: string, pslug: string, tslug: string) {
   return useQuery({
@@ -53,6 +80,10 @@ export function useCreateView(wslug: string, pslug: string, tslug: string) {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: viewsKeys.list(wslug, pslug, tslug) });
+      // The rail reads the batched per-project views query — invalidate its
+      // prefix so a newly-created view appears in the rail (a per-table `list`
+      // invalidation does not reach the batch key).
+      qc.invalidateQueries({ queryKey: viewsKeys.batchPrefix(wslug, pslug) });
     },
   });
 }
@@ -82,7 +113,10 @@ export function useUpdateView(wslug: string, pslug: string, tslug: string) {
       );
       return wrapped.view;
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: viewsKeys.list(wslug, pslug, tslug) }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: viewsKeys.list(wslug, pslug, tslug) });
+      qc.invalidateQueries({ queryKey: viewsKeys.batchPrefix(wslug, pslug) });
+    },
   });
 }
 
@@ -93,6 +127,7 @@ export function useDeleteView(wslug: string, pslug: string, tslug: string) {
       client.delete(`/api/v1/w/${wslug}/p/${pslug}/t/${tslug}/views/${viewId}`),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: viewsKeys.list(wslug, pslug, tslug) });
+      qc.invalidateQueries({ queryKey: viewsKeys.batchPrefix(wslug, pslug) });
     },
   });
 }

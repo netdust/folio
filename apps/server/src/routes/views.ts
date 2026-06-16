@@ -1,18 +1,18 @@
 import { FilterCompileError, filterCompile } from '@folio/shared';
 import { zValidator } from '@hono/zod-validator';
-import { and, eq, max } from 'drizzle-orm';
+import { and, eq, inArray, max } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import { db } from '../db/client.ts';
-import { views } from '../db/schema.ts';
+import { tables, views } from '../db/schema.ts';
 import { dryRunResult, isDryRun, isDryRunDelete } from '../lib/dry-run.ts';
 import { emitEvent, txWithEvents } from '../lib/events.ts';
 import { HTTPError, jsonOk } from '../lib/http.ts';
 import { type AuthContext, getUser } from '../middleware/auth.ts';
 import { requireScope } from '../middleware/bearer.ts';
 import { type ScopeContext, getProject, getTable, getWorkspace } from '../middleware/scope.ts';
-import { listViews } from '../services/views.ts';
+import { listViews, listViewsForTables } from '../services/views.ts';
 
 const viewsRoute = new Hono<AuthContext & ScopeContext>();
 
@@ -42,6 +42,34 @@ function validateFilters(input: unknown): void {
 }
 
 viewsRoute.get('/', async (c) => {
+  // BATCHED form (M3 audit 3.5): `?tables=slugA,slugB` collapses the rail's
+  // per-(project,table) views fan-out into ONE project-scoped request that
+  // returns views GROUPED BY tableId. Access is already enforced upstream — this
+  // route is mounted under pScope (resolveProject + requireResource), the SAME
+  // visibility convergence point (lib/access.ts, invariant 4a) as the legacy
+  // list — so a caller who can't see the project is 404'd before we run.
+  //
+  // Cross-project guard: the requested table SLUGS are resolved ONLY against
+  // THIS project's tables (eq(tables.projectId, p.id) + inArray(slug)). A slug
+  // that belongs to another project resolves to nothing here, so its views can
+  // never leak through this endpoint — the query is intersected with the
+  // project's own tables, not the caller's raw input.
+  const tablesParam = c.req.query('tables');
+  if (tablesParam !== undefined) {
+    const p = getProject(c);
+    const slugs = tablesParam
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+    if (slugs.length === 0) return jsonOk(c, {});
+    const owned = await db
+      .select({ id: tables.id })
+      .from(tables)
+      .where(and(eq(tables.projectId, p.id), inArray(tables.slug, slugs)));
+    const tableIds = owned.map((row) => row.id);
+    return jsonOk(c, await listViewsForTables(tableIds));
+  }
+
   const t = getTable(c);
   return jsonOk(c, await listViews(t.id));
 });

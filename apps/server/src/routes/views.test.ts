@@ -1,8 +1,17 @@
 import { expect, test } from 'bun:test';
 import { eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
-import { events, apiTokens, views } from '../db/schema.ts';
-import { newApiToken } from '../lib/auth.ts';
+import {
+  events,
+  apiTokens,
+  projectAccess,
+  projects,
+  tables,
+  users,
+  views,
+  workspaceAccess,
+} from '../db/schema.ts';
+import { createSession, hashPassword, newApiToken } from '../lib/auth.ts';
 import { makeTestApp } from '../test/harness.ts';
 
 const path = '/api/v1/w/acme/p/web/views';
@@ -337,4 +346,182 @@ test('POST /views: dryRun resource matches the live created view (minus id)', as
   const { id: _liveId, order: _liveOrder, ...liveRow } = live.data.view;
   const { id: _dryId, order: _dryOrder, ...dryRow } = dry.data.resource.view;
   expect(dryRow).toEqual(liveRow);
+});
+
+// --- C1 (M3): batched project-views endpoint (collapses the rail P×T fan-out) ---
+
+const batchPath = '/api/v1/w/acme/p/web/views';
+
+/** Add a second table to the seed project and return its id + slug. */
+async function addTable(
+  db: Awaited<ReturnType<typeof makeTestApp>>['db'],
+  projectId: string,
+  slug: string,
+): Promise<{ id: string; slug: string }> {
+  const id = nanoid();
+  await db.insert(tables).values({ id, projectId, slug, name: slug });
+  return { id, slug };
+}
+
+/** Insert a view directly so we can assert grouping without going through POST. */
+async function addView(
+  db: Awaited<ReturnType<typeof makeTestApp>>['db'],
+  projectId: string,
+  tableId: string,
+  name: string,
+  order = 0,
+): Promise<string> {
+  const id = nanoid();
+  await db.insert(views).values({
+    id,
+    projectId,
+    tableId,
+    name,
+    type: 'list',
+    filters: {},
+    sort: [],
+    groupBy: null,
+    visibleFields: [],
+    columnOrder: null,
+    order,
+    isDefault: false,
+  });
+  return id;
+}
+
+test('GET /views?tables= returns views grouped by tableId for the requested tables', async () => {
+  const { app, db, seed } = await makeTestApp();
+  // Seed table is "work-items" (2 default views). Add a second table with a view.
+  const wi = await db.query.tables.findFirst({
+    where: eq(tables.projectId, seed.project.id),
+  });
+  const bugs = await addTable(db, seed.project.id, 'bugs');
+  await addView(db, seed.project.id, bugs.id, 'Bug board', 0);
+
+  const res = await app.request(`${batchPath}?tables=work-items,bugs`, {
+    headers: { Cookie: seed.sessionCookie },
+  });
+  expect(res.status).toBe(200);
+  const grouped = (await res.json()).data as Record<string, { name: string }[]>;
+  // work-items keyed by its id, with the 2 seeded views; bugs keyed by its id.
+  expect((grouped[wi!.id] ?? []).map((v) => v.name).sort()).toEqual(['All work items', 'Board']);
+  expect((grouped[bugs.id] ?? []).map((v) => v.name)).toEqual(['Bug board']);
+});
+
+test('GET /views?tables= scopes to ONE query-shaped grouped object (only requested tables present)', async () => {
+  const { app, db, seed } = await makeTestApp();
+  const wi = await db.query.tables.findFirst({ where: eq(tables.projectId, seed.project.id) });
+  const bugs = await addTable(db, seed.project.id, 'bugs');
+  await addView(db, seed.project.id, bugs.id, 'Bug board');
+
+  // Only request work-items — bugs must NOT appear in the response.
+  const res = await app.request(`${batchPath}?tables=work-items`, {
+    headers: { Cookie: seed.sessionCookie },
+  });
+  expect(res.status).toBe(200);
+  const grouped = (await res.json()).data as Record<string, unknown>;
+  expect(Object.keys(grouped)).toEqual([wi!.id]);
+  expect(grouped[bugs.id]).toBeUndefined();
+});
+
+test('GET /views?tables= (empty value) returns an empty object', async () => {
+  // The batched form keys off the PRESENCE of `?tables=`. An empty value (a
+  // 0-table project, or a project the rail fetches before tables load) yields a
+  // grouped {} — NOT the legacy default-table array (that's the no-param path,
+  // which the existing GET / tests still cover).
+  const { app, seed } = await makeTestApp();
+  const res = await app.request(`${batchPath}?tables=`, {
+    headers: { Cookie: seed.sessionCookie },
+  });
+  expect(res.status).toBe(200);
+  expect((await res.json()).data).toEqual({});
+});
+
+test('GET /views?tables= DENIES a cross-project table (not returned)', async () => {
+  // A table slug from ANOTHER project must not leak its views through THIS
+  // project's batch endpoint, even if the slug exists elsewhere.
+  const { app, db, seed } = await makeTestApp();
+  // Second project with a table that shares the slug "shared".
+  const otherProjId = nanoid();
+  await db.insert(projects).values({
+    id: otherProjId,
+    workspaceId: seed.workspace.id,
+    slug: 'other',
+    name: 'Other',
+  });
+  const otherTable = await addTable(db, otherProjId, 'shared');
+  await addView(db, otherProjId, otherTable.id, 'Secret view');
+
+  // Request the foreign table's slug against THIS project's endpoint.
+  const res = await app.request(`${batchPath}?tables=shared`, {
+    headers: { Cookie: seed.sessionCookie },
+  });
+  expect(res.status).toBe(200);
+  const grouped = (await res.json()).data as Record<string, unknown>;
+  // The foreign table id must NOT be a key, and the foreign view must not leak.
+  expect(grouped[otherTable.id]).toBeUndefined();
+  expect(Object.keys(grouped)).toEqual([]);
+});
+
+test('GET /views?tables= DENIES a caller with no access to the project (404 via pScope chain)', async () => {
+  // The endpoint inherits resolveProject's per-project visibility check. A member
+  // with NO project_access grant on a second project is 404'd (existence not leaked).
+  const { app, db, seed } = await makeTestApp();
+  // Second project the member is NOT granted.
+  const projId = nanoid();
+  await db.insert(projects).values({
+    id: projId,
+    workspaceId: seed.workspace.id,
+    slug: 'walled',
+    name: 'Walled',
+  });
+  const t = await addTable(db, projId, 'work-items');
+  await addView(db, projId, t.id, 'Hidden');
+
+  // A TRAVERSE-only member: a project_access grant on the seed `web` project (so
+  // resolveWorkspace passes via the traverse clause) but NO workspace_access and
+  // NO grant on `walled` — so canSeeProject(walled) is false → resolveProject
+  // 404s. (A ws-grant member would SEE walled via canSeeProject's ws clause, so
+  // the denial must come from a project-only invitee.)
+  const memberId = nanoid();
+  await db.insert(users).values({
+    id: memberId,
+    email: `${memberId}@test.local`,
+    name: 'Mallory',
+    passwordHash: await hashPassword('password123'),
+  });
+  await db.insert(projectAccess).values({ userId: memberId, projectId: seed.project.id });
+  const session = await createSession(memberId);
+  const memberCookie = `folio_session=${session.id}`;
+
+  const res = await app.request('/api/v1/w/acme/p/walled/views?tables=work-items', {
+    headers: { Cookie: memberCookie },
+  });
+  expect(res.status).toBe(404);
+  expect((await res.json()).error.code).toBe('PROJECT_NOT_FOUND');
+});
+
+test('GET /views?tables= ALLOWS a member WITH a project_access grant', async () => {
+  // Positive companion to the denial: a member granted project_access sees the
+  // project's views through the batch endpoint.
+  const { app, db, seed } = await makeTestApp();
+  const wi = await db.query.tables.findFirst({ where: eq(tables.projectId, seed.project.id) });
+  const memberId = nanoid();
+  await db.insert(users).values({
+    id: memberId,
+    email: `${memberId}@test.local`,
+    name: 'Grace',
+    passwordHash: await hashPassword('password123'),
+  });
+  await db.insert(workspaceAccess).values({ userId: memberId, workspaceId: seed.workspace.id });
+  await db.insert(projectAccess).values({ userId: memberId, projectId: seed.project.id });
+  const session = await createSession(memberId);
+  const memberCookie = `folio_session=${session.id}`;
+
+  const res = await app.request(`${batchPath}?tables=work-items`, {
+    headers: { Cookie: memberCookie },
+  });
+  expect(res.status).toBe(200);
+  const grouped = (await res.json()).data as Record<string, { name: string }[]>;
+  expect((grouped[wi!.id] ?? []).map((v) => v.name).sort()).toEqual(['All work items', 'Board']);
 });

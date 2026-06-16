@@ -18,6 +18,7 @@ import { ProviderHealthBanner } from '../components/shell/provider-health-banner
 import { type NavItem, Rail } from '../components/shell/rail.tsx';
 import { ReactorHaltBanner } from '../components/shell/reactor-halt-banner.tsx';
 import { Shell } from '../components/shell/shell.tsx';
+import { useRailHandlers } from '../components/shell/use-rail-handlers.ts';
 import { UserMenu } from '../components/shell/user-menu.tsx';
 import { WorkspaceSwitcher } from '../components/shell/workspace-switcher.tsx';
 import { WorkspaceDocumentSlideover } from '../components/slideover/workspace-document-slideover.tsx';
@@ -37,15 +38,15 @@ import {
   useUpdateProject,
 } from '../lib/api/projects.ts';
 import { type Table, tablesKeys } from '../lib/api/tables.ts';
-import { type View, viewsKeys } from '../lib/api/views.ts';
+import { type View, fetchProjectViews, viewsKeys } from '../lib/api/views.ts';
 import { useWorkspace, useWorkspaces } from '../lib/api/workspaces.ts';
 import { openCommandPalette } from '../lib/command-palette-bus.ts';
 import { DEFAULT_TABLE_SLUG } from '../lib/default-table.ts';
 import { setLastWorkspaceSlug } from '../lib/last-workspace.ts';
 import { modKeyHint } from '../lib/platform.ts';
-import { activeTableFromPath, resolveTableNav, resolveViewNav } from '../lib/rail-nav.ts';
-import { type RailTreeHandlers, buildRailTree } from '../lib/rail-tree.ts';
-import { reorderViewIds, spacedOrders } from '../lib/view-reorder.ts';
+import { activeTableFromPath } from '../lib/rail-nav.ts';
+import { buildRailTree } from '../lib/rail-tree.ts';
+import { reorderViewIds } from '../lib/view-reorder.ts';
 
 export const Route = createFileRoute('/w/$wslug')({
   // The agent cockpit panel + config slideover live at the layout, so `?wdoc=`
@@ -161,51 +162,55 @@ function WorkspaceLayout() {
     return map;
   }, [projectList, tableQueries]);
 
-  // Views are fetched per (project, table) pair, not per project: the
-  // project-scoped GET /p/<pslug>/views fallback resolves to the DEFAULT
-  // work-items table only (server scope.getTable → default), so it can't supply
-  // a non-default table's views. The rail keys `viewsByTable` BY TABLE ID, so we
-  // hit the table-scoped /p/<pslug>/t/<tslug>/views endpoint once per table and
-  // reassemble. The flattened pair list is stable in length per render of
-  // `tablesByProject`, which keeps `useQueries` legal.
-  const tablePairs = useMemo(() => {
-    const pairs: { pslug: string; tableId: string; tslug: string }[] = [];
+  // PERF (M3 audit 3.5): views are batched ONE QUERY PER PROJECT, not per
+  // (project, table) pair. The old fan-out fired O(projects × tables) requests on
+  // the always-mounted sidebar; the batched GET /p/<pslug>/views?tables=slugA,slugB
+  // endpoint returns every table's views for a project in one request, grouped by
+  // tableId. The rail still consumes `viewsByTable` keyed BY TABLE ID — identical
+  // shape — so nothing downstream changes. staleTime (5m) prevents refetch storms.
+  //
+  // Why batched, not expand-gating: the project-expand state lives in
+  // rail-tree.tsx's per-node `useExpanded` (default-OPEN, written on mount only),
+  // unreadable reactively at this parent fetch site without a state-lift refactor,
+  // and gating risks re-introducing the V3 "view vanished when collapsed" bug. The
+  // batched endpoint is purely additive and touches no expand logic.
+  //
+  // `useQueries` over PROJECTS is stable in length per render of `projectList`. A
+  // project with 0 tables sends `?tables=` (empty) → the server returns {} with no
+  // table fetch. Per-project DEGRADATION: each project is its own query, so one
+  // project's failed batch leaves only that project's views empty — the rest of
+  // the rail is unaffected.
+  const projectTslugs = useMemo(() => {
+    const map: Record<string, string[]> = {};
     for (const p of projectList) {
-      for (const t of tablesByProject[p.slug] ?? []) {
-        pairs.push({ pslug: p.slug, tableId: t.id, tslug: t.slug });
-      }
+      map[p.slug] = (tablesByProject[p.slug] ?? []).map((t) => t.slug);
     }
-    return pairs;
+    return map;
   }, [projectList, tablesByProject]);
 
-  // PERF (P×T fan-out): this fires one GET /t/<tslug>/views per (project, table)
-  // pair UNCONDITIONALLY on the always-mounted sidebar — O(projects × tables)
-  // requests on every workspace mount. The real fix is expand-gating (skip the
-  // fetch for a COLLAPSED project) or a batched project-views endpoint. Gating
-  // here cleanly is non-trivial: the expand state lives in rail-tree.tsx's
-  // per-node `useExpanded` (key `folio:rail-expanded:project:<pslug>`), which
-  // DEFAULT-OPENS projects and only writes its key on mount — a non-reactive
-  // localStorage read at this parent fetch site would lag a fresh expand and
-  // risk re-introducing the "view vanished when collapsed" bug (rail-tree.tsx
-  // V3 note). Lifting that state to a shared store is a rail-tree refactor out
-  // of this fix's scope. TODO(perf): add a batched GET /p/<pslug>/views?tables=
-  // or lift project-expand state to gate these queries with `enabled`.
-  // staleTime (5m) already prevents refetch storms within a session.
   const viewQueries = useQueries({
-    queries: tablePairs.map((pair) => ({
-      queryKey: viewsKeys.list(wslug, pair.pslug, pair.tslug),
-      queryFn: () => client.get<View[]>(`/api/v1/w/${wslug}/p/${pair.pslug}/t/${pair.tslug}/views`),
-      staleTime: 5 * 60_000,
-    })),
+    queries: projectList.map((p) => {
+      const tslugs = projectTslugs[p.slug] ?? [];
+      return {
+        queryKey: viewsKeys.batch(wslug, p.slug, tslugs),
+        queryFn: () => fetchProjectViews(wslug, p.slug, tslugs),
+        staleTime: 5 * 60_000,
+      };
+    }),
   });
 
   const viewsByTable = useMemo(() => {
     const map: Record<string, View[]> = {};
-    tablePairs.forEach((pair, i) => {
-      map[pair.tableId] = viewQueries[i]?.data ?? [];
+    projectList.forEach((p, i) => {
+      // Each project's batch is `{ [tableId]: View[] }`; merge into the flat
+      // tableId-keyed lookup the rail expects. A pending/failed project query
+      // (data === undefined) simply contributes nothing — that project's tables
+      // resolve to [] via the `?? []` reads downstream.
+      const grouped = viewQueries[i]?.data;
+      if (grouped) Object.assign(map, grouped);
     });
     return map;
-  }, [tablePairs, viewQueries]);
+  }, [projectList, viewQueries]);
 
   // V2 (views UX shake-out): the columns the user is CURRENTLY looking at, so the
   // New-view sheet captures them. The active view (by `?view=`, else the table's
@@ -230,118 +235,17 @@ function WorkspaceLayout() {
   // legacy /work-items|/board paths → the default table; else undefined.
   const activeTslug = activeTableFromPath(currentPath);
 
-  const handlers = useMemo<RailTreeHandlers>(
-    () => ({
-      onProjectClick: (pslug: string) => {
-        void navigate({
-          to: '/w/$wslug/p/$pslug/work-items',
-          params: { wslug, pslug },
-        });
-      },
-      // Clicking a table in the rail lands on its grid. The DEFAULT table uses
-      // the legacy /work-items route (no :tslug); every other table routes to
-      // its own /t/$tslug grid. resolveTableNav owns that branch.
-      onTableClick: (pslug: string, tslug: string) => {
-        const target = resolveTableNav(tslug);
-        void navigate({
-          to: target.to,
-          params: target.withTslug ? { wslug, pslug, tslug } : { wslug, pslug },
-        });
-      },
-      onViewClick: (pslug: string, tslug: string, viewId: string, type: 'list' | 'kanban') => {
-        // Default table → /work-items|/board; non-default → /t/$tslug(/board).
-        const target = resolveViewNav(tslug, type);
-        // Preserve ?doc= (open slideover) but drop the previous view's filter
-        // and sort params — TableView's hydration treats URL params as winners
-        // over view.filters, so carrying ?status= across a view switch would
-        // silently mask the new view's stored filters.
-        const prev = searchRef.current;
-        const next: Record<string, unknown> = { view: viewId };
-        if (typeof prev.doc === 'string') next.doc = prev.doc;
-        void navigate({
-          to: target.to,
-          params: target.withTslug ? { wslug, pslug, tslug } : { wslug, pslug },
-          search: next,
-        });
-      },
-      onWikiClick: (pslug: string) => {
-        void navigate({ to: '/w/$wslug/p/$pslug/wiki', params: { wslug, pslug } });
-      },
-      // Phase 2.5: agents + triggers moved to workspace popover; no project-level handlers here.
-      onNewView: (pslug: string, tslug: string) => {
-        setNewViewSheet({ pslug, tslug });
-      },
-      onNewProject: () => setCreatingProject(true),
-      onNewTable: (pslug: string) => setCreatingTable({ pslug }),
-      onRenameProject: async (pslug, next) => {
-        try {
-          await updateProject.mutateAsync({ pslug, patch: { name: next } });
-        } catch (err) {
-          toast.error(formatApiError(err));
-        }
-      },
-      onDeleteProject: (pslug, name) => setConfirmDelete({ kind: 'project', pslug, name }),
-      onRenameTable: async (pslug, tslug, next) => {
-        try {
-          await client.patch(`/api/v1/w/${wslug}/p/${pslug}/tables/${tslug}`, { name: next });
-          await qc.invalidateQueries({ queryKey: tablesKeys.list(wslug, pslug) });
-        } catch (err) {
-          toast.error(formatApiError(err));
-        }
-      },
-      onDeleteTable: (pslug, tslug, name) =>
-        setConfirmDelete({ kind: 'table', pslug, tslug, name }),
-      onRenameView: async (pslug, tslug, viewId, next) => {
-        try {
-          await client.patch(`/api/v1/w/${wslug}/p/${pslug}/t/${tslug}/views/${viewId}`, {
-            name: next,
-          });
-          await qc.invalidateQueries({ queryKey: viewsKeys.list(wslug, pslug, tslug) });
-        } catch (err) {
-          toast.error(formatApiError(err));
-        }
-      },
-      onDeleteView: (pslug, tslug, viewId, name) =>
-        setConfirmDelete({ kind: 'view', pslug, tslug, viewId, name }),
-      onMoveView: async (pslug, tslug, viewId, neighborOrder, direction) => {
-        try {
-          // Single direction-aware reseat: move the view to just past its neighbor
-          // (down → neighbor+1, up → neighbor-1). One write, atomic, and correct
-          // even when the two share an `order` — unlike a value-swap, which no-ops
-          // on ties. The rail sorts by `order`, so ±1 always lands the view on the
-          // right side of the neighbor.
-          const target = direction === 'down' ? neighborOrder + 1 : neighborOrder - 1;
-          await client.patch(`/api/v1/w/${wslug}/p/${pslug}/t/${tslug}/views/${viewId}`, {
-            order: target,
-          });
-          await qc.invalidateQueries({ queryKey: viewsKeys.list(wslug, pslug, tslug) });
-        } catch (err) {
-          toast.error(formatApiError(err));
-        }
-      },
-      onReorderViews: async (pslug, tslug, orderedViewIds) => {
-        try {
-          // Reassign gap-spaced (0,10,20,…) orders by the new position and PATCH
-          // every view. Re-setting a view to the order it already has is a harmless
-          // no-op write, so we don't need the current orders here — which keeps this
-          // handler (and the whole rail tree) free of a viewsByTable dependency.
-          // The new ordered ids come from the `onReorder` callback near <Rail>,
-          // which DOES have the live ordering.
-          await Promise.all(
-            spacedOrders(orderedViewIds).map((n) =>
-              client.patch(`/api/v1/w/${wslug}/p/${pslug}/t/${tslug}/views/${n.id}`, {
-                order: n.order,
-              }),
-            ),
-          );
-          await qc.invalidateQueries({ queryKey: viewsKeys.list(wslug, pslug, tslug) });
-        } catch (err) {
-          toast.error(formatApiError(err));
-        }
-      },
-    }),
-    [navigate, wslug, qc, updateProject],
-  );
+  const handlers = useRailHandlers({
+    navigate,
+    wslug,
+    qc,
+    updateProject,
+    searchRef,
+    setNewViewSheet,
+    setCreatingProject,
+    setCreatingTable,
+    setConfirmDelete,
+  });
 
   const primary: NavItem[] = useMemo(
     () =>
@@ -464,6 +368,12 @@ function WorkspaceLayout() {
         await qc.invalidateQueries({
           queryKey: viewsKeys.list(wslug, confirmDelete.pslug, confirmDelete.tslug),
         });
+        // The rail reads the batched per-project views query (keyed by the full
+        // table-slug set, which just changed) — invalidate by project prefix so
+        // it refetches and the deleted table's views vanish from the rail.
+        await qc.invalidateQueries({
+          queryKey: viewsKeys.batchPrefix(wslug, confirmDelete.pslug),
+        });
         await qc.invalidateQueries({
           queryKey: documentsKeys.listPrefix(wslug, confirmDelete.pslug, confirmDelete.tslug),
         });
@@ -474,6 +384,10 @@ function WorkspaceLayout() {
         );
         await qc.invalidateQueries({
           queryKey: viewsKeys.list(wslug, confirmDelete.pslug, confirmDelete.tslug),
+        });
+        // Refresh the rail's batched per-project views (see table-delete branch).
+        await qc.invalidateQueries({
+          queryKey: viewsKeys.batchPrefix(wslug, confirmDelete.pslug),
         });
         toast.success(`Deleted view "${confirmDelete.name}"`);
         // If the user was viewing the now-deleted view, drop the dead
