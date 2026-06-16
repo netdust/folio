@@ -97,6 +97,7 @@ virtualization · a11y (32) · reapStalePendingOps chunking · auth_rate_limits 
 
 ### Deferred review items (carry into later clusters)
 - [ ] **Cluster 2b:** route table-view.tsx / kanban-view.tsx / board-controls.tsx through `useActiveView` (they open-code its `urlViewId→isDefault→list[0]` logic — pre-existing 4-copy convergence-debt; mind the `?? null` vs `undefined` boundary). [invariant-auditor concern]
+- [ ] **Cluster 2b:** add the GROUP-BY picker (+ aggregate specs + row layout) to the new-view sheet for `list` views — group-by is the list type's defining feature (like kanban's). Deliberately NOT added in Cluster 1 (Stefan, 2026-06-16): wire it together with the grouped-list renderer that reads it, not a half-wired control ahead of the renderer. The kanban group-by control in `new-view-sheet.tsx` is the pattern to extend to `list`.
 - [ ] **Cluster 4/5/6:** when a renderer first READS `views.settings` (settings.dateField etc.), add read-time value-shape validation + a payload-size bound on settings (today it's stored-only, freeform `z.record(z.unknown())`). [security-sentinel deferral]
 - [ ] **Later/cosmetic:** share `iconForViewType` so rail-tree row icons match the 5-way tab icons (rail currently 2-way kanban?Columns3:List). [reviewer S2]
 - [ ] **If "one table view per table" ever becomes an invariant:** add a server guard (table-view-creation is client-only-excluded today). [reviewer S3]
