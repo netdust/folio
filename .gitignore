@@ -24,4 +24,11 @@ test-results/
 
 # Local API key file (BYOK testing — never commit)
 key
-memory/.stop-hook-state.json
+
+# Auto-memory Stop-hook scratch. ONLY the root memory/ is curated and tracked.
+# When the hook's cwd lands inside an app (the Bun cwd-reset quirk seen in sessions),
+# it mis-scaffolds per-app memory dirs; ignore those so they never leak into a branch
+# or a merge to main (as happened in the M2 RunSink merge, b543e5d).
+**/.stop-hook-state.json
+apps/*/memory/
+packages/*/memory/
