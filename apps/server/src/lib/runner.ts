@@ -1625,35 +1625,25 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
 
   const tools = buildToolDefs(ctx.agentFm);
 
-  // Operator cockpit chat (Task 5) — in-memory token accumulator for a
-  // conversation run (no agent_run row to persist into). Unused on document runs.
+  // Operator cockpit chat (Task 5) — in-memory token accumulator for a conversation
+  // run (no agent_run row to persist into). Unused on document runs.
   const conversationTokens = { in: 0, out: 0 };
 
   let round = 0;
-  // Mitigation 64 — consecutive all-error rounds (no successful tool result).
-  // Reset to 0 whenever a round makes progress; failRun(tool_error) when it
-  // reaches MAX_CONSECUTIVE_TOOL_ERRORS.
+  // Mitigation 64 — consecutive all-error rounds; counter logic in the round below.
   let consecutiveToolErrorRounds = 0;
-  // G2 — denial-of-wallet observability. The budget cap (fm.max_tokens) is enforced
-  // off the provider's `tokens` event. Some OpenAI-compatible routes (OpenRouter
-  // without honored stream_options.include_usage, certain proxies) never report
-  // usage → the budget meter reads 0 and the cap never trips. The loop is still
-  // BOUNDED by MAX_TOOL_ROUNDS, so this is not unbounded spend — but the run is
-  // UNMETERED, and an operator can't tell that from a genuinely-cheap run. Track
-  // whether any non-zero usage arrived; warn loudly at run end if none did (ties to
-  // the Phase 3 M8 denial-of-wallet residual — the run-budget IS the only cap).
+  // G2 — denial-of-wallet observability. Some provider routes never report usage →
+  // the budget meter reads 0 and the cap never trips (still BOUNDED by
+  // MAX_TOOL_ROUNDS, but UNMETERED). Track whether any usage arrived; warn at run end
+  // if none did (see warnIfUnmetered). Threaded through consumeStream, sticky.
   let sawUsage = false;
   while (round < MAX_TOOL_ROUNDS) {
     round++;
 
     const provider = getProvider(fm.provider);
     const stream = provider.stream({
-      // B10a: bring the API-provider path to injection-fence PARITY with the cc
-      // path (see ccExecute's BEGIN/END DATA envelope). The cc path wraps
-      // untrusted content in a BEGIN/END DATA envelope under one `-p` string; the
-      // API path uses per-message roles PLUS this explicit system-channel
-      // directive so role separation isn't the only defense. ADDED in Phase B —
-      // the API path was NOT previously fenced (bare role separation only).
+      // B10a — injection-fence parity with the cc path: per-message roles PLUS the
+      // UNTRUSTED_DATA_DIRECTIVE so role separation isn't the only defense (see it).
       system: ctx.fm.system_prompt + UNTRUSTED_DATA_DIRECTIVE,
       messages,
       tools,
@@ -1663,9 +1653,9 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
       baseUrl: ctx.baseUrl,
     });
 
-    // B-1 (M2 RunSink) — consume the stream into this round's accumulators. The
-    // budget/cancel/sink branches live INLINE inside consumeStream; a budget/cancel
-    // termination there returns terminated=true and runLoop returns.
+    // Consume the stream into this round's accumulators (consumeStream holds the
+    // budget/cancel/sink branches inline). A budget/cancel termination there returns
+    // terminated=true → runLoop returns.
     const {
       terminated,
       collectedToolCalls,
@@ -1677,47 +1667,21 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
 
     if (terminated) return;
 
-    // Tool round — execute collected calls, append the round-trip messages,
-    // loop again.
-    //
     // CONVERGENCE POINT (code-review #2/#3/#4) — "tool calls streamed ⟹ run them"
     // is decided HERE, the single done.reason consumer, NOT re-derived per adapter.
-    // A thinking model (qwen3/deepseek-r1) emits a real tool_call but finishes with
-    // reason:'stop' (not 'tool_use'); keying the round on reason==='tool_use' alone
-    // silently dropped those calls on the terminal path below. So we run the round
-    // whenever calls were collected — done.reason is advisory for tool DETECTION.
-    //
-    // But done.reason is AUTHORITATIVE for whether running is SAFE. This is a
-    // WHITELIST (fail-closed), not "anything but max_tokens" (gap-hunt fix):
-    //   - 'stop' / 'tool_use' → run the collected calls.
-    //   - 'max_tokens'        → truncation; the call may be cut off mid-stream and
-    //                           is unusable. Don't run; surface truncation below.
-    //   - 'refusal'           → the model declined; a tool_use co-emitted with a
-    //                           refusal must NOT execute (a refused action acting is
-    //                           a safety regression).
-    //   - 'pause_turn'        → server-tool pause; running client tools + looping is
-    //                           the wrong continuation protocol.
-    //   - any UNKNOWN reason  → fail closed (do not run).
-    // Deleting the per-adapter sawToolCall relabel (now redundant) also closed the
-    // ollama/openai divergence (#3) and the dropped-marker phantom escalation (#4).
+    // done.reason is advisory for tool DETECTION (a thinking model emits a real
+    // tool_call but finishes 'stop', not 'tool_use' — so we run whenever calls were
+    // collected), but AUTHORITATIVE for whether running is SAFE: a fail-closed
+    // WHITELIST of 'stop'/'tool_use'. max_tokens (truncated/unusable call), refusal
+    // (a refused action must not act), pause_turn (wrong continuation protocol), and
+    // any UNKNOWN reason all fall through to finishTerminal's dropped-call policy.
     const reasonAllowsToolRound = doneReason === 'stop' || doneReason === 'tool_use';
     if (collectedToolCalls.length > 0 && reasonAllowsToolRound) {
-      // D-9.2 — RECOVERABLE tool errors are FED BACK to the model instead of
-      // terminating the run (mitigations 64-66). We accumulate the assistant
-      // tool_calls message + per-call tool-result messages in LOCALS:
-      //   - success            → result string (roundHadSuccess = true)
-      //   - recoverable error  → sanitized error message (roundHadRecoverableError)
-      //   - FATAL error        → abort the WHOLE round: failRun + return, no
-      //                          half-round committed, no feed-back (decision 5).
-      // After the loop (no fatal), commit assistantMsg + ALL tool-result
-      // messages atomically, then apply the consecutive-error counter, then
-      // continue. A prior call in this batch may have already committed its own
-      // tx (mitigation 35 — acceptable; each tool gets its own tx).
-      // B-2 (M2 RunSink) — execute the collected calls. The full catch chain
-      // (isAwaitingConfirmation → isFatalToolError → isInvalidArgs → recoverable,
-      // invariant 12) lives INSIDE executeToolRound, moved byte-for-byte. It does
-      // NOT push to `messages`; runLoop commits assistantMsg + toolResultMsgs below
-      // on a non-fatal round.
+      // D-9.2 — execute the collected calls. executeToolRound feeds RECOVERABLE
+      // errors back to the model (mitigations 64-66) and aborts the round on a FATAL
+      // error (decision 5), holding the full catch chain (invariant 12) byte-for-byte
+      // INSIDE it. It returns the round-outcome flags + the messages to commit; it
+      // does NOT push to `messages` — runLoop commits them below on a non-fatal round.
       const {
         fatalReturned,
         awaitingConfirmation,
@@ -1730,12 +1694,10 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
 
       if (fatalReturned) return;
 
-      // Operator cockpit chat — the confirm gate paused for approval. END THE TURN
-      // CLEANLY (status `completed`), same as a turn-terminating ask_choice: the
-      // card + pending_op are already persisted, so the run releases its slot and
-      // the user's "Yes, do it" click starts a FRESH turn that re-runs the recorded
-      // op. NOT a failure — do not failRun. Preserve any assistant preamble
-      // (textBuf) as the operator's message. Cancel check first, mirroring below.
+      // Confirm gate paused for approval (see awaitingConfirmation in
+      // executeToolRound) → END THE TURN CLEANLY: the card + pending_op are persisted,
+      // so release the slot; the user's approval starts a FRESH turn. NOT a failure —
+      // preserve any assistant preamble (textBuf). Cancel check first.
       if (ctx.sink && awaitingConfirmation) {
         if (await wasCancelled(ctx)) {
           await handleCancel(ctx);
@@ -1745,13 +1707,11 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
         return;
       }
 
-      // Commit the balanced round-trip atomically (success + recoverable-error
-      // results together).
+      // Commit the balanced round-trip atomically (success + recoverable results).
       messages.push(assistantMsg, ...toolResultMsgs);
 
-      // Consecutive-error counter (mitigation 64). A round with ≥1 success is
-      // progress → reset. A round that was ALL recoverable errors (zero
-      // successes) → increment; at the sub-cap, fail with `tool_error`.
+      // Consecutive-error counter (mitigation 64): ≥1 success this round resets it;
+      // an all-recoverable-error round increments and fails at the sub-cap.
       if (roundHadSuccess) {
         consecutiveToolErrorRounds = 0;
       } else if (roundHadRecoverableError) {
@@ -1766,17 +1726,10 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
         }
       }
 
-      // Operator cockpit chat — TURN-TERMINATING `ask_choice`. A successful choice
-      // card on a conversation run is a CLEAN turn boundary, not an error: stop
-      // looping and complete the turn the same way a normal stop does, preserving
-      // any assistant preamble (textBuf) as the operator's message. The run flips
-      // to `completed`, the slot releases, and the user's button click starts a
-      // FRESH turn. Structural enforcement — the runner ends the turn regardless
-      // of what the model would have done next (no reliance on the prompt). Guard
-      // on `ctx.sink` so only conversation runs are affected; askedChoice can only
-      // be true on a successful handler call, which on non-conversation runs throws
-      // `forbidden:` (fatal) and never sets it. Cancel check first, mirroring the
-      // terminal path below.
+      // TURN-TERMINATING `ask_choice` (see askedChoice in executeToolRound) → a CLEAN
+      // turn boundary on a conversation run: complete the turn like a normal stop,
+      // preserving any assistant preamble (textBuf). Structural enforcement, runner
+      // ends the turn regardless of the model. Guarded on `ctx.sink`. Cancel first.
       if (ctx.sink && askedChoice) {
         if (await wasCancelled(ctx)) {
           await handleCancel(ctx);
@@ -1789,10 +1742,9 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
       continue; // next round
     }
 
-    // B-3 (M2 RunSink) — no tool batch ran this round: hand off to the terminal
-    // policy (FIX #3 / FIX #2 / wasCancelled / dropped-tool-call / warnIfUnmetered
-    // / postResultAndComplete). Every branch in there ends the run, so runLoop
-    // returns right after.
+    // No tool batch ran this round → hand off to the terminal policy (FIX #3 /
+    // FIX #2 / wasCancelled / dropped-tool-call / warnIfUnmetered / complete). Every
+    // branch there ends the run, so runLoop returns right after.
     await finishTerminal(
       ctx,
       doneReason,
@@ -1805,10 +1757,9 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
     return;
   }
 
-  // Round cap exhausted — runaway tool loop. chain_guard family: use
-  // fanout_exceeded (closest enum member for "too many rounds"). G2 — this is the
-  // EXACT denial-of-wallet scenario; if it was also unmetered, the operator must see
-  // it (the warn was previously absent on this dangerous exit).
+  // Round cap exhausted — runaway tool loop. fanout_exceeded (closest enum member
+  // for "too many rounds"). G2 — the EXACT denial-of-wallet scenario, so warn if it
+  // was also unmetered before failing.
   warnIfUnmetered(runId, providerLabel, sawUsage);
   await failRun(
     ctx,
