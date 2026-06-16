@@ -53,8 +53,8 @@ Order: A → E → D → B → C. Each cluster = a `── REVIEW GATE ──`. 
 
 ## Stage 3 — spec-close (ALL 5 CLUSTERS CLOSED)
 - [x] /integration full branch — server 1852 / web 959 / shared 70, 0 fail; all 3 tsc clean; check:invariants 20/0/0
-- [ ] test-effectiveness audit over M3 diff — IN PROGRESS
-- [ ] feature-acceptance BROWSER drive (B page-2-match + C V3 collapse→expand, one dev-stack boot)
+- [x] test-effectiveness audit over M3 diff — DONE: all paths covered or accepted-blind (labels #9); 0 tests authored (no genuine blind spot). Manifest captured.
+- [ ] feature-acceptance BROWSER drive (B page-2-match + C V3 collapse→expand, one dev-stack boot) — DISPATCHED (shakeout-qa)
 - [ ] /shakeout STANDARD panel
 - [ ] finish-branch — DO NOT MERGE (Stefan gates)
 - [ ] compound (CODE-MAP + skill-audit, report-only)
