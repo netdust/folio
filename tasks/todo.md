@@ -48,8 +48,16 @@ Order: A → E → D → B → C. Each cluster = a `── REVIEW GATE ──`. 
 - [x] ── REVIEW GATE B ── CLOSED. generalist: 0 Crit/0 Imp, 3 Sugg → #1 folded (b990222), #2/#3 skipped. Labels deferral verified unavoidable; page-2 fix real; no invariant bypass/attack surface. No 1a → no escalation. Browser-acceptance → consolidated Stage-3 /shakeout (B+C, one boot).
 
 ### Cluster C — Rail-fetch batching (STANDARD + browser)
-- [ ] C1 — FORK RESOLVED (ground-truth): batched GET /p/:pslug/views?tables= (pScope access) + rewire P×T→P + useRailHandlers — DISPATCHED. Cross-project-table denial guard; rail-tree UNCHANGED; V3 collapse→expand must not regress.
-- [ ] ── REVIEW GATE C ── (STANDARD + invariant-auditor on new endpoint inv-4a access; browser-acceptance → consolidated Stage-3 /shakeout)
+- [x] C1 — batched GET /views?tables= (pScope, cross-project guard) + rewire P×T→P + useRailHandlers — 160a181. rail-tree UNCHANGED; stale-rail batchPrefix sweep complete. server 1845→1851.
+- [x] ── REVIEW GATE C ── CLOSED. invariant-auditor: no bypass (4a guard airtight, check:invariants clean). generalist: 0 Crit/0 Imp, 3 Sugg → #1/#2 folded (cc36666), #3 design-agreement. No 1a → no escalation.
+
+## Stage 3 — spec-close (ALL 5 CLUSTERS CLOSED)
+- [x] /integration full branch — server 1852 / web 959 / shared 70, 0 fail; all 3 tsc clean; check:invariants 20/0/0
+- [ ] test-effectiveness audit over M3 diff — IN PROGRESS
+- [ ] feature-acceptance BROWSER drive (B page-2-match + C V3 collapse→expand, one dev-stack boot)
+- [ ] /shakeout STANDARD panel
+- [ ] finish-branch — DO NOT MERGE (Stefan gates)
+- [ ] compound (CODE-MAP + skill-audit, report-only)
 
 ### Stage 3 — spec-close
 - [ ] /integration full branch
