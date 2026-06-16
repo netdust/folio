@@ -41,11 +41,11 @@ Order: A → E → D → B → C. Each cluster = a `── REVIEW GATE ──`. 
       STEP-2.5 CORRECTION: can't key union on runSink.isConversation (runSink is `undefined as unknown as RunSink` at construction, assigned after — circular ctx↔sink). Use a `kind:'document'|'conversation'` literal set at construction. Ground-truth: workspace/project read at EXACTLY 2 sites (run-sink.ts:125-126, document path only); conversation path never reads them → union is safe.
 - [x] D1 — discriminated RunContext kills as-unknown-as Workspace/Project — 8da5398 (type-only narrowing, 0 assertions changed)
 - [x] D2 — typed rowToDocument mapper for comments — cb966d3 (5 casts gone, byte-identical wire, 61 tests identical)
-- [ ] ── REVIEW GATE D ── STANDARD: invariant-auditor + generalist — DISPATCHED
+- [x] ── REVIEW GATE D ── CLOSED. invariant-auditor: no bypass (union STRENGTHENS inv-19). generalist (verified, not just read): 0 Crit/0 Imp, 2 doc Sugg → both folded (ad4a899). No 1a → no escalation.
 
 ### Cluster B — Client pagination (STANDARD + browser)
-- [ ] B1 — consume nextCursor + fix page-local filter wrongness (FORK: server-side vs page-local affordance — report at gate)
-- [ ] ── REVIEW GATE B ── (STANDARD + feature-acceptance browser pass)
+- [ ] B1 — FORK RESOLVED (ground-truth): wire existing server ?filter= + consume nextCursor + delete client post-filter — DISPATCHED. Labels-array semantics: implementer to verify compiler $in vs contains; priority MUST go server-side.
+- [ ] ── REVIEW GATE B ── (STANDARD + feature-acceptance browser pass: page-2-match boundary in REAL browser)
 
 ### Cluster C — Rail-fetch batching (STANDARD + browser)
 - [ ] C1 — batch O(P×T) views fan-out + useRailHandlers (FORK: batched endpoint vs expand-gate — report at gate)
