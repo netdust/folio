@@ -198,6 +198,76 @@ test('POST returns data.view.id as a unique non-empty string', async () => {
   expect(bId).not.toBe(aId);
 });
 
+// --- Phase 6 (views): per-view `settings` JSON column round-trip ---
+
+test('POST /views persists `settings` and round-trips it via create AND list', async () => {
+  // Contract: the new views.settings JSON column accepts a per-view config blob,
+  // returns it on the create response, AND surfaces it on the list read. An
+  // unknown key inside settings must survive intact (no schema strip) — the
+  // column is freeform JSON, like filters.
+  const { app, seed } = await makeTestApp();
+  const res = await app.request(path, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name: 'Calendar',
+      type: 'list',
+      settings: { dateField: 'due_date', unknownKey: { nested: 42 } },
+    }),
+  });
+  expect(res.status).toBe(201);
+  const created = await res.json();
+  // Round-trips on the create response.
+  expect(created.data.view.settings).toEqual({
+    dateField: 'due_date',
+    unknownKey: { nested: 42 },
+  });
+  const id = created.data.view.id as string;
+
+  // Round-trips on the list read (real read path, not the echoed insert row).
+  const get = await app.request(path, { headers: { Cookie: seed.sessionCookie } });
+  const list = await get.json();
+  const row = list.data.find((v: { id: string }) => v.id === id);
+  expect(row.settings).toEqual({ dateField: 'due_date', unknownKey: { nested: 42 } });
+});
+
+test('POST /views defaults `settings` to {} when omitted', async () => {
+  // Boundary: a view created without settings reads back as {} (NOT NULL default),
+  // never null/undefined — so consumers can index it unconditionally.
+  const { app, seed } = await makeTestApp();
+  const res = await app.request(path, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Plain', type: 'list' }),
+  });
+  expect(res.status).toBe(201);
+  const id = (await res.json()).data.view.id as string;
+  const get = await app.request(path, { headers: { Cookie: seed.sessionCookie } });
+  const row = (await get.json()).data.find((v: { id: string }) => v.id === id);
+  expect(row.settings).toEqual({});
+});
+
+test('PATCH /views/:id updates `settings`', async () => {
+  const { app, seed } = await makeTestApp();
+  const created = await (
+    await app.request(path, {
+      method: 'POST',
+      headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'S', type: 'list' }),
+    })
+  ).json();
+  const id = created.data.view.id as string;
+  const res = await app.request(`${path}/${id}`, {
+    method: 'PATCH',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ settings: { dateField: 'created_at' } }),
+  });
+  expect(res.status).toBe(200);
+  const get = await app.request(path, { headers: { Cookie: seed.sessionCookie } });
+  const row = (await get.json()).data.find((v: { id: string }) => v.id === id);
+  expect(row.settings).toEqual({ dateField: 'created_at' });
+});
+
 // --- Phase 2 (operator): config:write guard + dryRun (P2-2/3/4/6/8) ---
 
 async function mintTokens(

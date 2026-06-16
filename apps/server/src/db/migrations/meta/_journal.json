@@ -267,6 +267,13 @@
       "when": 1780993000000,
       "tag": "0036_users_email_nocase",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "6",
+      "when": 1780994000000,
+      "tag": "0037_views_settings",
+      "breakpoints": true
     }
   ]
 }

@@ -10,6 +10,9 @@ export interface View {
   groupBy: string | null;
   visibleFields: string[] | null;
   columnOrder: string[] | null;
+  // Per-view typed config (e.g. { dateField } for a calendar view). NOT NULL
+  // default {} on the column, so always an object on read — never null.
+  settings: Record<string, unknown>;
   isDefault: boolean;
   order: number;
 }
@@ -62,6 +65,7 @@ export interface ViewCreate {
   visibleFields?: string[];
   columnOrder?: string[] | null;
   groupBy?: string | null;
+  settings?: Record<string, unknown> | null;
   isDefault?: boolean;
   order?: number;
 }
@@ -96,6 +100,7 @@ export interface ViewPatch {
   groupBy?: string | null;
   visibleFields?: string[];
   columnOrder?: string[] | null;
+  settings?: Record<string, unknown> | null;
   isDefault?: boolean;
   order?: number;
 }

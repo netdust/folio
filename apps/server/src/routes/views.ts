@@ -24,6 +24,7 @@ const baseSchema = z.object({
   groupBy: z.string().nullable().optional(),
   visibleFields: z.array(z.string()).optional(),
   columnOrder: z.array(z.string()).nullable().optional(),
+  settings: z.record(z.unknown()).optional(),
   order: z.number().int().optional(),
   isDefault: z.boolean().optional(),
   dryRun: z.boolean().optional(),
@@ -114,6 +115,7 @@ viewsRoute.post('/', requireScope('config:write'), zValidator('json', baseSchema
     groupBy: input.groupBy ?? null,
     visibleFields: input.visibleFields ?? [],
     columnOrder: input.columnOrder ?? null,
+    settings: input.settings ?? {},
     order: resolvedOrder,
     isDefault: input.isDefault ?? false,
   };
