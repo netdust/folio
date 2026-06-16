@@ -1,4 +1,17 @@
-export type Operator = '$eq' | '$ne' | '$in' | '$nin' | '$gt' | '$gte' | '$lt' | '$lte' | '$exists';
+export type Operator =
+  | '$eq'
+  | '$ne'
+  | '$in'
+  | '$nin'
+  | '$gt'
+  | '$gte'
+  | '$lt'
+  | '$lte'
+  | '$exists'
+  | '$contains';
+
+/** Max number of values in a `$contains` array — bounds the EXISTS subquery fan-out (DoS guard). */
+const CONTAINS_MAX_VALUES = 100;
 
 export type JsonValue = string | number | boolean | null | JsonValue[] | { [k: string]: JsonValue };
 
@@ -25,6 +38,7 @@ const OPERATORS = new Set<Operator>([
   '$lt',
   '$lte',
   '$exists',
+  '$contains',
 ]);
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
@@ -52,6 +66,19 @@ export function filterCompile(input: FilterInput): FilterAST {
       }
       if (op === '$exists' && typeof value !== 'boolean') {
         throw new FilterCompileError(`$exists requires a boolean for key "${key}"`);
+      }
+      if (op === '$contains') {
+        const values = Array.isArray(value) ? value : [value];
+        if (values.length > CONTAINS_MAX_VALUES) {
+          throw new FilterCompileError(
+            `$contains accepts at most ${CONTAINS_MAX_VALUES} values for key "${key}"`,
+          );
+        }
+        if (!values.every((v) => typeof v === 'string')) {
+          throw new FilterCompileError(
+            `$contains requires a string or an array of strings for key "${key}"`,
+          );
+        }
       }
       clauses.push({ kind: 'cmp', key, op, value: value as JsonValue });
     }

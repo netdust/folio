@@ -49,6 +49,47 @@ test('comparators $gt $gte $lt $lte $ne', () => {
   }
 });
 
+test('$contains operator with a single string value', () => {
+  const ast = filterCompile({ labels: { $contains: 'bug' } });
+  expect(asAnd(ast).clauses[0]).toEqual({
+    kind: 'cmp',
+    key: 'labels',
+    op: '$contains',
+    value: 'bug',
+  });
+});
+
+test('$contains operator with a string array value', () => {
+  const ast = filterCompile({ labels: { $contains: ['bug', 'urgent'] } });
+  expect(asAnd(ast).clauses[0]).toEqual({
+    kind: 'cmp',
+    key: 'labels',
+    op: '$contains',
+    value: ['bug', 'urgent'],
+  });
+});
+
+test('throws on $contains with a non-string scalar value', () => {
+  expect(() => filterCompile({ labels: { $contains: 5 as never } })).toThrow(FilterCompileError);
+});
+
+test('throws on $contains with an object value', () => {
+  expect(() => filterCompile({ labels: { $contains: { evil: 1 } as never } })).toThrow(
+    FilterCompileError,
+  );
+});
+
+test('throws on $contains with a non-string-array value', () => {
+  expect(() => filterCompile({ labels: { $contains: ['ok', 5] as never } })).toThrow(
+    FilterCompileError,
+  );
+});
+
+test('throws on $contains over the array-length cap', () => {
+  const tooMany = Array.from({ length: 101 }, (_, i) => `l${i}`);
+  expect(() => filterCompile({ labels: { $contains: tooMany } })).toThrow(FilterCompileError);
+});
+
 test('throws on unknown operator', () => {
   expect(() => filterCompile({ x: { $bogus: 1 } as never })).toThrow(FilterCompileError);
 });

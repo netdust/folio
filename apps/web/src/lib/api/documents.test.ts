@@ -24,21 +24,23 @@ describe('clausesToFilterJson', () => {
     expect(clausesToFilterJson(clauses)).toBeUndefined();
   });
 
-  it('does NOT put labels in the server filter (no array-contains operator)', () => {
-    // Labels stays a client-side post-filter — the compiler has no
-    // array-contains operator, so a server-side $in/$eq would be WRONG, not
-    // just absent. The honest contract: labels are excluded from the JSON.
+  it('maps a labels clause to a server-side $contains frontmatter filter', () => {
+    // Contract change (backlog #9): labels now go server-side via the compiler's
+    // $contains array-membership operator, so they filter correctly across pages.
     const clauses: FilterClauseUrl[] = [{ kind: 'labels', values: ['bug', 'urgent'] }];
-    expect(clausesToFilterJson(clauses)).toBeUndefined();
+    expect(clausesToFilterJson(clauses)).toEqual({ labels: { $contains: ['bug', 'urgent'] } });
   });
 
-  it('combines a priority clause with non-server clauses, emitting only priority', () => {
+  it('combines priority + labels clauses into one server filter', () => {
     const clauses: FilterClauseUrl[] = [
       { kind: 'status', values: ['todo'] },
       { kind: 'priority', value: 'low' },
       { kind: 'labels', values: ['x'] },
     ];
-    expect(clausesToFilterJson(clauses)).toEqual({ priority: { $eq: 'low' } });
+    expect(clausesToFilterJson(clauses)).toEqual({
+      priority: { $eq: 'low' },
+      labels: { $contains: ['x'] },
+    });
   });
 });
 
@@ -54,7 +56,7 @@ describe('clausesToListParams wires priority into the filter JSON', () => {
   });
 });
 
-describe('applyFrontmatterClauses (labels-only client post-filter after path 2b)', () => {
+describe('applyFrontmatterClauses (no-op after labels moved server-side, backlog #9)', () => {
   const mk = (id: string, labels?: unknown, priority?: unknown) => ({
     id,
     slug: id,
@@ -72,10 +74,15 @@ describe('applyFrontmatterClauses (labels-only client post-filter after path 2b)
     lastTouchedAt: null,
   });
 
-  it('filters by labels with AND (contains-all) semantics', () => {
+  it('does NOT post-filter labels anymore (labels are server-side now)', () => {
+    // Regression guard for backlog #9: labels must NOT be re-filtered client-side,
+    // or it would double-filter and drop valid server rows that land on later pages
+    // (the page-2 bug this task fixes — sibling of the priority page-2 fix). A doc
+    // that matched the server filter must survive even when the client list is a
+    // single page that does not itself contain every selected label.
     const docs = [mk('a', ['bug', 'urgent']), mk('b', ['bug']), mk('c', [])];
     const out = applyFrontmatterClauses(docs, [{ kind: 'labels', values: ['bug', 'urgent'] }]);
-    expect(out.map((d) => d.id)).toEqual(['a']);
+    expect(out.map((d) => d.id)).toEqual(['a', 'b', 'c']);
   });
 
   it('does NOT post-filter priority anymore (priority is server-side now)', () => {
@@ -84,5 +91,12 @@ describe('applyFrontmatterClauses (labels-only client post-filter after path 2b)
     const docs = [mk('a', undefined, 'high'), mk('b', undefined, 'low')];
     const out = applyFrontmatterClauses(docs, [{ kind: 'priority', value: 'high' }]);
     expect(out.map((d) => d.id)).toEqual(['a', 'b']);
+  });
+});
+
+describe('clausesToListParams carries the labels filter (page-2 correctness)', () => {
+  it('carries the labels $contains filter through listParams.filter', () => {
+    const params = clausesToListParams([{ kind: 'labels', values: ['bug'] }]);
+    expect(params.filter).toEqual({ labels: { $contains: ['bug'] } });
   });
 });

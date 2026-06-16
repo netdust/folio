@@ -62,6 +62,21 @@ function cmpToSql(key: string, op: string, value: unknown): SQL {
       return notInArray(lhs as never, value as never[]);
     case '$exists':
       return (value as boolean) ? isNotNull(lhs as never) : isNull(lhs as never);
+    case '$contains': {
+      // Array-membership over a frontmatter JSON array (e.g. $.labels). Built-in
+      // columns are scalars, not arrays, so $contains is meaningless on them.
+      if (isColumn) {
+        throw new Error(`$contains is not supported on built-in column "${key}"`);
+      }
+      // Normalize to an array (single value or list); AND each membership test.
+      // Every value flows through Drizzle as a BOUND param (${v}) — never
+      // interpolated — mirroring backlinks.ts's json_each EXISTS pattern.
+      const values = Array.isArray(value) ? (value as unknown[]) : [value];
+      const parts = values.map(
+        (v) => sql`EXISTS (SELECT 1 FROM json_each(${fmExpr(key)}) WHERE value = ${v})` as SQL,
+      );
+      return and(...parts) as SQL;
+    }
     default:
       throw new Error(`unhandled operator ${op}`);
   }
