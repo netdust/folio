@@ -14,6 +14,9 @@ vi.mock('../table/table-view.tsx', () => ({
 vi.mock('./kanban-view.tsx', () => ({
   KanbanView: () => <div data-testid="kanban-view-marker" />,
 }));
+vi.mock('./grouped-list-view.tsx', () => ({
+  GroupedListView: () => <div data-testid="grouped-list-view-marker" />,
+}));
 
 const mockUseActiveView = useActiveView as unknown as Mock;
 
@@ -42,10 +45,10 @@ describe('ViewRouter', () => {
     expect(screen.getByTestId('kanban-view-marker')).toBeInTheDocument();
   });
 
-  it('routes type:list → the unsupported placeholder (grouped-list lands later)', () => {
+  it('routes type:list → GroupedListView (cluster 2b)', () => {
     setView('list');
     render(<ViewRouter wslug="w" pslug="p" tslug="work-items" />);
-    expect(screen.getByTestId('unsupported-list')).toBeInTheDocument();
+    expect(screen.getByTestId('grouped-list-view-marker')).toBeInTheDocument();
   });
 
   // Denial / graceful-degradation path: a type with no dedicated renderer must
