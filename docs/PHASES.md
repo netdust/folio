@@ -35,7 +35,7 @@ For full context on any decision: `@docs/FOLIO-BRIEFING.md`. For the operating m
 ### Auth
 
 - [x] `lib/auth.ts`: password hashing (`Bun.password`), session token generation
-- [x] `lib/crypto.ts`: libsodium secretbox wrappers for AI key storage
+- [x] `lib/crypto.ts`: AES-256-GCM (@noble/ciphers) wrappers for AI key storage
 - [x] `middleware/session.ts`: reads cookie, attaches user + memberships — *implemented as `middleware/auth.ts` with `attachUser` + `requireUser`. Same concept, different filename.*
 - [ ] `middleware/bearer.ts`: reads `Authorization: Bearer`, attaches token + scopes — *Phase 2 work per the Phase 1 spec.*
 - [x] `routes/auth.ts`: register, login, logout, me
@@ -465,7 +465,7 @@ This must land BEFORE Phase 2 (Agents). Agents will write new frontmatter keys; 
 
 - [x] `routes/tokens.ts` — create / list / revoke. Workspace-scoped. Plaintext token returned once on create; only the row metadata (id, name, scopes, createdBy, createdAt, lastUsedAt) is returned on list.
 - [x] `apiTokens` schema with `tokenHash` (SHA-256) and `scopes JSON` columns.
-- [x] `aiKeys` schema (libsodium-encrypted BYOK store) + `routes/settings.ts`.
+- [x] `aiKeys` schema (AES-256-GCM (@noble/ciphers)-encrypted BYOK store) + `routes/settings.ts`.
 - [x] `events` table + `lib/events.ts` `emitEvent(tx, args)`. All write routes (documents, fields, views, tables, projects, workspaces) call it.
 - [x] `EventKind` union covers all document/status/field/view/table/project/workspace + `activity.logged`.
 
@@ -1114,7 +1114,7 @@ Spec: `docs/superpowers/specs/2026-05-31-claude-code-runner-backend-design.md`. 
 - [ ] `sync_targets` table: `(workspace_id, source_table_id, adapter='statamic', base_url, collection_handle, token_encrypted, publish_on_status, mapping JSON, active)`
 - [ ] `sync_log` append-only table for visibility + future retry — `(sync_target_id, document_id, remote_id, operation, status, error)`
 - [ ] Migration `0006_phase_5_sync_targets.sql`
-- [ ] Token libsodium-encrypted at rest (reuse the BYOK crypto helpers)
+- [ ] Token AES-256-GCM (@noble/ciphers)-encrypted at rest (reuse the BYOK crypto helpers)
 
 ### Adapter interface + Statamic implementation
 
