@@ -1505,6 +1505,119 @@ async function executeToolRound(
   };
 }
 
+/**
+ * B-3 (M2 RunSink) — terminal policy AFTER the tool loop, extracted VERBATIM from
+ * runLoop. Reached on a round that did NOT run a tool batch: the FIX #3 zero-call
+ * tool_use fail, the FIX #2 no-`done` fail, the terminal `wasCancelled` check, the
+ * dropped-tool-call fail-closed policy (`collectedToolCalls.length > 0`),
+ * `warnIfUnmetered`, and the clean `postResultAndComplete`. Every branch here ends
+ * the run, so the helper is `Promise<void>` and runLoop `return`s right after — the
+ * inner `return`s become early-outs. The conversation-sink clean-pause turn-ends
+ * stay in runLoop's tool-round block (they read the executeToolRound flags there).
+ */
+async function finishTerminal(
+  ctx: RunContext,
+  doneReason: RunDoneReason | undefined,
+  collectedToolCalls: Array<{ id: string; name: string; arguments: unknown }>,
+  textBuf: string,
+  sawUsage: boolean,
+  runId: string,
+  providerLabel: string,
+): Promise<void> {
+  // FIX #3 — done_reason='tool_use' with ZERO usable tool_calls. The model
+  // signalled it wants a tool but produced no call the provider could surface
+  // (e.g. a malformed tool_call the provider dropped). Completing cleanly
+  // would mask a failed generation as success. Fail loudly; no result comment.
+  if (doneReason === 'tool_use' && collectedToolCalls.length === 0) {
+    await failRun(
+      ctx,
+      runErrorReasonSchema.enum.provider_error,
+      'Provider signalled tool_use but produced no usable tool call.',
+    );
+    return;
+  }
+
+  // FIX #2 — the stream ended without ever yielding a `done` event (doneReason
+  // still undefined and not terminated). Treat a stream that stops without a
+  // completion signal as a truncated/failed generation, NOT a clean complete
+  // with partial text. Fail loudly; no result comment.
+  if (doneReason === undefined) {
+    await failRun(
+      ctx,
+      runErrorReasonSchema.enum.provider_error,
+      'Provider stream ended without a completion signal.',
+    );
+    return;
+  }
+
+  // Terminal (stop / max_tokens / refusal / pause_turn, or no tool_calls).
+  // refusal + pause_turn are CLEAN completions (mitigation 20) → completed.
+  //
+  // Pure-text runs (text + done, no tool_call) never hit the tool_call
+  // cancel check above, so a user's "stop" would be silently ignored. Check
+  // wasCancelled once on the terminal path (mitigation 44): one extra
+  // comment-thread read on the final round, which is acceptable.
+  //
+  // FIX #5 — this terminal check intentionally applies to BOTH fresh and
+  // resume runs (runLoop is shared). A post-start rejection landing during a
+  // resume is a deliberate mid-resume stop, so it cancels an otherwise-
+  // completing approved resume. Intended, not a bug — pinned by a test.
+  if (await wasCancelled(ctx)) {
+    await handleCancel(ctx);
+    return;
+  }
+
+  // DROPPED-TOOL-CALL policy (code-review #1/#4/#5) — we reach the terminal path
+  // with collectedToolCalls.length > 0 only when the reason BLOCKED the tool round
+  // (the whitelist gate above ran them only on stop|tool_use). The model intended
+  // a tool call we did not run; completing silently hides lost work. ONE keyed
+  // policy decides fail-vs-note, default FAIL-CLOSED so an UNKNOWN reason is never
+  // laundered into a clean success:
+  //   - 'refusal' / 'pause_turn' → the model deliberately declined / paused; a
+  //     clean completion is correct. Note the dropped intent so an empty result
+  //     isn't mysterious. (ONE comment — no separate failRun, so no double-post.)
+  //   - 'max_tokens' OR any UNKNOWN reason → lost work on an unrecognized/truncated
+  //     signal. FAIL LOUDLY (failRun surfaces a single rich message; no separate
+  //     comment, so the conversation thread gets exactly one entry).
+  if (collectedToolCalls.length > 0) {
+    const cleanlyCompletes = doneReason === 'refusal' || doneReason === 'pause_turn';
+    if (cleanlyCompletes) {
+      await postAgentComment(
+        ctx,
+        `Model finished with '${doneReason}' while a tool call was pending — the tool was not run.`,
+        'comment',
+      );
+      // falls through to postResultAndComplete below (clean completion).
+    } else {
+      // max_tokens (truncation) or an unknown/off-spec reason — fail-closed. failRun
+      // is the SINGLE surface (it posts to the conversation sink itself), so we do
+      // NOT also postAgentComment — that would double-post on the cockpit thread.
+      // Reason is keyed: max_tokens is a budget truncation; an unrecognized signal
+      // is a hard provider fault (provider_error).
+      const [reason, detail] =
+        doneReason === 'max_tokens'
+          ? ([
+              runErrorReasonSchema.enum.budget_exceeded,
+              'Response truncated at the token cap with an unexecuted tool call — raise max_tokens and retry.',
+            ] as const)
+          : ([
+              runErrorReasonSchema.enum.provider_error,
+              `Stream finished with an unhandled reason ('${doneReason}') while a tool call was pending — the tool was not run.`,
+            ] as const);
+      await failRun(ctx, reason, detail);
+      return;
+    }
+  }
+
+  // G2 — surface an UNMETERED run (provider never reported usage → the budget cap
+  // had nothing to bound on). Fired on BOTH exits (here AND the round-cap exit
+  // below) — see warnIfUnmetered. The runaway-loop case the threat model targets
+  // exits via the round cap, so the warn MUST cover it (code-review SHOULD-FIX).
+  warnIfUnmetered(runId, providerLabel, sawUsage);
+
+  await postResultAndComplete(ctx, textBuf, doneReason);
+}
+
 async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
   const { run, fm } = ctx;
   const runId = run.id;
@@ -1676,98 +1789,19 @@ async function runLoop(ctx: RunContext, messages: Message[]): Promise<void> {
       continue; // next round
     }
 
-    // FIX #3 — done_reason='tool_use' with ZERO usable tool_calls. The model
-    // signalled it wants a tool but produced no call the provider could surface
-    // (e.g. a malformed tool_call the provider dropped). Completing cleanly
-    // would mask a failed generation as success. Fail loudly; no result comment.
-    if (doneReason === 'tool_use' && collectedToolCalls.length === 0) {
-      await failRun(
-        ctx,
-        runErrorReasonSchema.enum.provider_error,
-        'Provider signalled tool_use but produced no usable tool call.',
-      );
-      return;
-    }
-
-    // FIX #2 — the stream ended without ever yielding a `done` event (doneReason
-    // still undefined and not terminated). Treat a stream that stops without a
-    // completion signal as a truncated/failed generation, NOT a clean complete
-    // with partial text. Fail loudly; no result comment.
-    if (doneReason === undefined) {
-      await failRun(
-        ctx,
-        runErrorReasonSchema.enum.provider_error,
-        'Provider stream ended without a completion signal.',
-      );
-      return;
-    }
-
-    // Terminal (stop / max_tokens / refusal / pause_turn, or no tool_calls).
-    // refusal + pause_turn are CLEAN completions (mitigation 20) → completed.
-    //
-    // Pure-text runs (text + done, no tool_call) never hit the tool_call
-    // cancel check above, so a user's "stop" would be silently ignored. Check
-    // wasCancelled once on the terminal path (mitigation 44): one extra
-    // comment-thread read on the final round, which is acceptable.
-    //
-    // FIX #5 — this terminal check intentionally applies to BOTH fresh and
-    // resume runs (runLoop is shared). A post-start rejection landing during a
-    // resume is a deliberate mid-resume stop, so it cancels an otherwise-
-    // completing approved resume. Intended, not a bug — pinned by a test.
-    if (await wasCancelled(ctx)) {
-      await handleCancel(ctx);
-      return;
-    }
-
-    // DROPPED-TOOL-CALL policy (code-review #1/#4/#5) — we reach the terminal path
-    // with collectedToolCalls.length > 0 only when the reason BLOCKED the tool round
-    // (the whitelist gate above ran them only on stop|tool_use). The model intended
-    // a tool call we did not run; completing silently hides lost work. ONE keyed
-    // policy decides fail-vs-note, default FAIL-CLOSED so an UNKNOWN reason is never
-    // laundered into a clean success:
-    //   - 'refusal' / 'pause_turn' → the model deliberately declined / paused; a
-    //     clean completion is correct. Note the dropped intent so an empty result
-    //     isn't mysterious. (ONE comment — no separate failRun, so no double-post.)
-    //   - 'max_tokens' OR any UNKNOWN reason → lost work on an unrecognized/truncated
-    //     signal. FAIL LOUDLY (failRun surfaces a single rich message; no separate
-    //     comment, so the conversation thread gets exactly one entry).
-    if (collectedToolCalls.length > 0) {
-      const cleanlyCompletes = doneReason === 'refusal' || doneReason === 'pause_turn';
-      if (cleanlyCompletes) {
-        await postAgentComment(
-          ctx,
-          `Model finished with '${doneReason}' while a tool call was pending — the tool was not run.`,
-          'comment',
-        );
-        // falls through to postResultAndComplete below (clean completion).
-      } else {
-        // max_tokens (truncation) or an unknown/off-spec reason — fail-closed. failRun
-        // is the SINGLE surface (it posts to the conversation sink itself), so we do
-        // NOT also postAgentComment — that would double-post on the cockpit thread.
-        // Reason is keyed: max_tokens is a budget truncation; an unrecognized signal
-        // is a hard provider fault (provider_error).
-        const [reason, detail] =
-          doneReason === 'max_tokens'
-            ? ([
-                runErrorReasonSchema.enum.budget_exceeded,
-                'Response truncated at the token cap with an unexecuted tool call — raise max_tokens and retry.',
-              ] as const)
-            : ([
-                runErrorReasonSchema.enum.provider_error,
-                `Stream finished with an unhandled reason ('${doneReason}') while a tool call was pending — the tool was not run.`,
-              ] as const);
-        await failRun(ctx, reason, detail);
-        return;
-      }
-    }
-
-    // G2 — surface an UNMETERED run (provider never reported usage → the budget cap
-    // had nothing to bound on). Fired on BOTH exits (here AND the round-cap exit
-    // below) — see warnIfUnmetered. The runaway-loop case the threat model targets
-    // exits via the round cap, so the warn MUST cover it (code-review SHOULD-FIX).
-    warnIfUnmetered(runId, providerLabel, sawUsage);
-
-    await postResultAndComplete(ctx, textBuf, doneReason);
+    // B-3 (M2 RunSink) — no tool batch ran this round: hand off to the terminal
+    // policy (FIX #3 / FIX #2 / wasCancelled / dropped-tool-call / warnIfUnmetered
+    // / postResultAndComplete). Every branch in there ends the run, so runLoop
+    // returns right after.
+    await finishTerminal(
+      ctx,
+      doneReason,
+      collectedToolCalls,
+      textBuf,
+      sawUsage,
+      runId,
+      providerLabel,
+    );
     return;
   }
 
