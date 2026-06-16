@@ -43,13 +43,3 @@ export function activeTableFromPath(path: string): string | undefined {
   if (/\/(work-items|board)(\/|$)/.test(path)) return DEFAULT_TABLE_SLUG;
   return undefined;
 }
-
-/** Which project tab (grid 'work-items' vs 'board') is active for a path —
- *  table-route-aware. A /t/<tslug>/board path lights the Board tab; a bare
- *  /t/<tslug> (or /work-items) path lights the grid tab. Returns undefined for
- *  non-table paths (e.g. /wiki) so the caller can decide the default. */
-export function activeTabFromPath(path: string): 'work-items' | 'board' | undefined {
-  if (path.endsWith('/board')) return 'board';
-  if (/\/t\/[^/]+\/?$/.test(path) || /\/work-items\/?$/.test(path)) return 'work-items';
-  return undefined;
-}

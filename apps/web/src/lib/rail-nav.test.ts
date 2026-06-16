@@ -1,10 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  activeTabFromPath,
-  activeTableFromPath,
-  resolveTableNav,
-  resolveViewNav,
-} from './rail-nav.ts';
+import { activeTableFromPath, resolveTableNav, resolveViewNav } from './rail-nav.ts';
 
 // Tier A: a wrong branch here sends a click on the `bugs` table to the wrong
 // table/route (cross-table mis-navigation). Phase 6 Option-B behavior change:
@@ -102,20 +97,5 @@ describe('activeTableFromPath — which table is the layout viewing', () => {
 
   it('a real /t/<tslug> under a project still resolves the table', () => {
     expect(activeTableFromPath('/w/acme/p/sales/t/bugs')).toBe('bugs');
-  });
-});
-
-describe('activeTabFromPath — grid vs board tab', () => {
-  it('/work-items → grid tab', () => {
-    expect(activeTabFromPath('/w/acme/p/sales/work-items')).toBe('work-items');
-  });
-  it('/board → board tab', () => {
-    expect(activeTabFromPath('/w/acme/p/sales/board')).toBe('board');
-  });
-  it('/t/bugs → grid tab (not a fallthrough to work-items default)', () => {
-    expect(activeTabFromPath('/w/acme/p/sales/t/bugs')).toBe('work-items');
-  });
-  it('/t/bugs/board → board tab', () => {
-    expect(activeTabFromPath('/w/acme/p/sales/t/bugs/board')).toBe('board');
   });
 });
