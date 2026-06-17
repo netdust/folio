@@ -1,6 +1,11 @@
-# 🎯 CURRENT (2026-06-17 PM) — Phase 6 (Views), branch `phase-6/views` (UNMERGED, tip `4b47f999`, 84 commits ahead of main)
+# 🎯 CURRENT (2026-06-18) — Phase 6 (Views) — VIEW WORK COMPLETE, branch `phase-6/views` (UNMERGED, tip `2cdaa49f`, ~100 commits ahead of main)
 
-**NOT merged — Stefan gates it + still owes a browser-eyeball pass + more work queued.** Kept branch as-is via finish-branch. Suites ALL green: web **1108** / server **1915** / shared **82**, tsc + root lint clean.
+**Stefan called the view work DONE 2026-06-18.** NOT merged — Stefan gates the merge + still owes a full browser-eyeball pass on the non-kanban UI. Suites ALL green: web **1137** / server **1916** / shared **82**, tsc + root lint clean.
+
+### Final view fixes (2026-06-18, after kanban):
+- **Double padding** (`83efd2ef`): calendar/timeline + 3 skeletons re-applied `px-[22px] py-2` on top of MainFrame's container → mis-aligned with header. Stripped (kanban/wiki-tree already correct).
+- **Control scale** (`31791d73`): calendar/timeline used native selects + bordered buttons at text-sm; restyled to the board/list compact borderless pill scale (text-xs), kept native selects.
+- **Table view creatable + default protected** (`2cdaa49f`): new-view sheet now offers `table` (was seed-only); server 409s on deleting an `isDefault` view (VIEW_PROTECTED) + rail hides Delete on it. ⚠️ RESIDUAL: Stefan's own project still has its default table-view deleted — the guard only prevents FUTURE deletes; if that project looks wedged, may need a one-off re-mark-default recovery (flagged, not done).
 
 ### This session (2026-06-17) — field UX-quality pass + assignee picker, all on top of the earlier Chunk A/B work
 - **Blocking bug fixed (`b1069bbf`):** every inline field/status edit silently no-op'd — `useUpdateDocument` onMutate did `prevList.data.map` but the table uses `useInfiniteDocuments` ({pages} shape) → threw → mutation aborted. Now shape-detects + patches all pages. See auto-mem `feedback_folio-can-edit-bug-infinite-cache`.
