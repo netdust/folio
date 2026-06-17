@@ -170,3 +170,13 @@ virtualization · a11y (32) · reapStalePendingOps chunking · auth_rate_limits 
 - [x] review fixes (`02f3a894`): I1 summary-error affordance restored (card renderer's Dutch copy from git) + test · I2 truncation note + orphan-row fold to ungrouped · S1 boolean group-value normalize (1/0) · drop dead showLabelAndCount prop. +8 tests.
 - FINAL: web 1070 / server 1915 / shared 82, 0 fail · tsc clean.
 - NOTE FOR STEFAN: structure correct; group-header AGGREGATE STYLING is compact (status=done:0) vs screenshot's prominent labeled cols (% AFGEROND 60% · GEM 96% · bar). Visual polish — decide tighten now vs Chunk B.
+
+### Chunk B — ONE unified ViewControls (board model) — DONE, at REVIEW GATE (Stefan sign-off)
+- [x] B.1 deleted dead pre-Phase-6 list-view.tsx + 3 tests (`333af2a8`)
+- [x] B.2 ListControls + shared AggregateBuilder (`6ff7a651`)
+- [x] B.6 unified ViewControls — shared FilterBar + switch(view.type) settings slot, mounted once for every view; per-view SAVED filter+settings; extracted hydration hook (`88be2bb2`). [Re-architected from per-view-controls after Stefan: "use the board's system."]
+- [x] STANDARD panel: generalist (0 Crit, nothing doubled/dropped, hydration extraction line-for-line faithful) + invariant-auditor (inv 16 CONVERGES — all 5 config writes→view, date→document; inv 18 untouched; check:invariants 0/0/0) + simplicity (Low, NOT a god-component, cleanly delegated).
+- [x] BROWSER PASS: list view = Group-by + Aggregates + Filter (board-style toolbar); changing group-by → PATCH /views/<id> settings.groupBy (the "can't change after create" FIX, live-verified); calendar view = Filter + Date-field + Today. Same FilterBar everywhere, per-view settings.
+- [x] review fixes: I2 single-owner hydration (removed TableView's redundant call) (`fac227fa`) · S2 dead sameSearchValue → one source · S3 settingString dedup · I1 (Stefan) persist filter on default views too — consistent w/ settings (`7c07b108`)
+- FINAL: web 1088 / server 1915 / shared 82, 0 fail · tsc clean · check:invariants 20/0/0.
+- DEFERRED → /shakeout: live view-switch hydration across all 5 view types (un-mocked-seam, jsdom can't prove the route mount); timeline fallbackField control (S1).
