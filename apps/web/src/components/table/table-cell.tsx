@@ -126,10 +126,13 @@ export function TableCell({
       />
     );
     if (!urgencyClass) return rendered;
-    // A normal block wrapper — color cascades into the date pill below it.
-    // Previously this was `display: contents` to avoid an extra box, but
-    // that element is stripped from the accessibility tree in Safari <17
-    // and breaks grid layout if FieldRenderer ever returns a fragment.
-    return <span className={cn('block', urgencyClass)}>{rendered}</span>;
+    // Urgency color wrapper (date cells only). Must be `flex items-center` — a
+    // plain `block` span collapsed to its content's baseline, so the date text
+    // sat above the row midline once the cell gained `flex items-center` (every
+    // other field returns `rendered` bare and centers directly). Centering this
+    // wrapper too puts the date on the same midline as its siblings.
+    // (`display: contents` is avoided — stripped from the a11y tree in Safari
+    // <17 and breaks grid layout if FieldRenderer returns a fragment.)
+    return <span className={cn('flex items-center', urgencyClass)}>{rendered}</span>;
   }
 }

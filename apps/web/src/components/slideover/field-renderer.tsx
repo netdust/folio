@@ -375,7 +375,10 @@ function DateInput({
         onKeyDown={(e) => {
           if (e.key === 'Enter' || e.key === ' ') setEditing(true);
         }}
-        className="inline-block cursor-text focus:outline-none"
+        // `flex items-center` (not inline-block) so the date display centers on
+        // the row midline like every other field — an inline-block span aligned
+        // to its text baseline and sat high once cells became flex items-center.
+        className="flex items-center cursor-text focus:outline-none"
       >
         <EditableShell mode="display" isPending={isPending}>
           {value || <span className="text-fg-3"> </span>}
