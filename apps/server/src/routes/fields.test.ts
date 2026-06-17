@@ -24,6 +24,28 @@ test('POST creates a select field with options', async () => {
   expect(res.status).toBe(201);
 });
 
+test('POST creates an image field (round-trips type=image)', async () => {
+  const { app, seed } = await makeTestApp();
+  const res = await app.request(path, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ key: 'cover', type: 'image' }),
+  });
+  expect(res.status).toBe(201);
+  const body = await res.json();
+  expect(body.data.field.type).toBe('image');
+});
+
+test('POST 400 on an unknown field type', async () => {
+  const { app, seed } = await makeTestApp();
+  const res = await app.request(path, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ key: 'bogus_field', type: 'bogus' }),
+  });
+  expect(res.status).toBe(400);
+});
+
 test('POST 422 when select has no options', async () => {
   const { app, seed } = await makeTestApp();
   const res = await app.request(path, {

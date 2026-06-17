@@ -281,6 +281,13 @@
       "when": 1780995000000,
       "tag": "0038_backfill_list_to_table",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "6",
+      "when": 1780996000000,
+      "tag": "0039_image_field_type",
+      "breakpoints": true
     }
   ]
 }

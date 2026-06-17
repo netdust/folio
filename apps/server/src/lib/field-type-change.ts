@@ -12,6 +12,7 @@ export const FIELD_TYPES = [
   'document_ref',
   'currency',
   'relation',
+  'image',
 ] as const;
 
 export type FieldType = (typeof FIELD_TYPES)[number];

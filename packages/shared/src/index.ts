@@ -25,7 +25,8 @@ export type FieldType =
   | 'url'
   | 'document_ref'
   | 'currency'
-  | 'relation';
+  | 'relation'
+  | 'image';
 
 export interface DocumentSummary {
   id: string;

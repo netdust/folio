@@ -258,6 +258,7 @@ export const fields = sqliteTable(
         'document_ref',
         'currency',
         'relation',
+        'image',
       ],
     }).notNull(),
     label: text('label'),

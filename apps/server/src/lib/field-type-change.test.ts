@@ -47,6 +47,15 @@ describe('validateTypeChange', () => {
     expect(FIELD_TYPES).toContain('relation');
   });
 
+  it('image is a known field type', () => {
+    expect(FIELD_TYPES).toContain('image');
+  });
+
+  it('image → text is always safe; image → number is blocked', () => {
+    expect(validateTypeChange('image', 'text')).toEqual({ ok: true });
+    expect(validateTypeChange('image', 'number').ok).toBe(false);
+  });
+
   it('relation → text is always safe; relation → number is blocked', () => {
     expect(validateTypeChange('relation', 'text')).toEqual({ ok: true });
     expect(validateTypeChange('relation', 'number').ok).toBe(false);
