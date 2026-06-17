@@ -54,18 +54,35 @@ interface Props {
 // live DOM frame-sampling 2026-06-08: the 180ms fade was the duplicate-card
 // window.)
 
-// Quarantines the dnd-kit-6.3.1 event shape: there is NO pointer-Y on the drag
-// event, so the dragged-card center comes from `active.rect.current.translated`
-// (the live moved rect), compared against the over-card midpoint (`over.rect`).
-// Falls back to 'bottom' when rects are absent (jsdom synthetic drags, or the
-// drag-just-started frame) so callers never crash. Shared by onDragEnd + onDragOver.
+// Quarantines the dnd-kit-6.3.1 event shape. The robust drop-side signal is the
+// live POINTER Y vs the over-card midpoint (the Atlassian/rbd rule) — NOT the
+// dragged card's own rect. Within a column, verticalListSortingStrategy shifts
+// the siblings to make room, so the dragged card's translated center sits ~on
+// the over-card midpoint and the edge resolves to the card's OWN slot → the drop
+// is a no-op (the "lifts, drags, snaps back" regression). dnd-kit gives no
+// pointer field, but the pointer Y is reconstructable: activatorEvent (the
+// pointerdown clientY) + delta.y (cumulative movement). Falls back to the
+// dragged-rect center, then 'bottom', when neither is available (synthetic/jsdom
+// drags) so callers never crash. Shared by onDragEnd + onDragOver.
 function dropEdgeFromEvent(event: DragMoveEvent | DragEndEvent): CardEdge {
   const overRect = event.over?.rect;
-  // Fully optional-chained: synthetic/just-started drags lack the rect path.
+  if (!overRect) return 'bottom';
+  const pointerY = pointerYFromEvent(event);
+  if (pointerY !== null) return getClosestEdge(pointerY, overRect);
+  // Fallback: dragged-card center (less reliable within a column — see above).
   const activeRect = event.active?.rect?.current?.translated;
-  if (!overRect || !activeRect) return 'bottom';
-  const activeCenterY = activeRect.top + activeRect.height / 2;
-  return getClosestEdge(activeCenterY, overRect);
+  if (!activeRect) return 'bottom';
+  return getClosestEdge(activeRect.top + activeRect.height / 2, overRect);
+}
+
+// Live pointer Y = the pointerdown clientY (activatorEvent) + cumulative drag
+// delta. Returns null when the activator has no clientY (keyboard drag, or a
+// synthetic test event) so the caller can fall back.
+function pointerYFromEvent(event: DragMoveEvent | DragEndEvent): number | null {
+  const activator = event.activatorEvent as { clientY?: number } | null | undefined;
+  const startY = activator?.clientY;
+  if (typeof startY !== 'number') return null;
+  return startY + (event.delta?.y ?? 0);
 }
 
 export function KanbanView({ wslug, pslug, tslug }: Props) {
