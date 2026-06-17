@@ -1,6 +1,8 @@
 import {
   DndContext,
   type DragEndEvent,
+  type DragMoveEvent,
+  type DragOverEvent,
   DragOverlay,
   type DragStartEvent,
   MeasuringStrategy,
@@ -27,6 +29,7 @@ import { useUpdateView, useViews } from '../../lib/api/views.ts';
 import { type BoardSort, boardControlsBus } from '../../lib/board-controls-bus.ts';
 import { coerceGroupValue, dropSlotPosition, resolveDrop } from '../kanban/board-drag.ts';
 import { buildColumns } from '../kanban/board-grouping.ts';
+import { type CardEdge, getClosestEdge } from '../kanban/closest-edge.ts';
 import { KanbanCard } from '../kanban/kanban-card.tsx';
 import { KanbanColumn } from '../kanban/kanban-column.tsx';
 import { EmptyState } from './empty-state.tsx';
@@ -50,6 +53,22 @@ interface Props {
 // optimistically-placed card remains — no duplicate, no flicker. (Verified via
 // live DOM frame-sampling 2026-06-08: the 180ms fade was the duplicate-card
 // window.)
+
+// Quarantines the dnd-kit-6.3.1 event shape: there is NO pointer-Y on the drag
+// event, so the dragged-card center comes from `active.rect.current.translated`
+// (the live moved rect), compared against the over-card midpoint (`over.rect`).
+// Falls back to 'bottom' when rects are absent (jsdom synthetic drags, or the
+// drag-just-started frame) so callers never crash. Shared by onDragEnd + onDragOver.
+function dropEdgeFromEvent(event: DragMoveEvent | DragEndEvent): CardEdge {
+  const overRect = event.over?.rect;
+  // Optional-chain the WHOLE rect path: synthetic drags in tests (and the
+  // drag-just-started frame) have no `active.rect.current` at all — reading
+  // `.current` directly throws. Missing rects → 'bottom' fallback.
+  const activeRect = event.active?.rect?.current?.translated;
+  if (!overRect || !activeRect) return 'bottom';
+  const activeCenterY = activeRect.top + activeRect.height / 2;
+  return getClosestEdge(activeCenterY, overRect);
+}
 
 export function KanbanView({ wslug, pslug, tslug }: Props) {
   const navigate = useNavigate();
@@ -215,17 +234,21 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
       : { frontmatter: { [groupBy]: coerceGroupValue(colValue, groupField?.type) } };
 
   // Computes the board_position for dropping the active card into `col` at the
-  // slot occupied by `overDocId` (drop-before). `null` overDocId appends.
+  // slot occupied by `overDocId`. The `closestEdge` (dragged-card center vs the
+  // over-card midpoint) decides before/after — the "lands second" fix. `null`
+  // overDocId appends (edge irrelevant).
   const slotPosition = (
     col: { docIds: string[] },
     activeId: string,
     overDocId: string | null,
+    closestEdge: CardEdge,
   ): string =>
     dropSlotPosition(
       col.docIds,
       (id) => docsById.get(id)?.boardPosition ?? null,
       activeId,
       overDocId,
+      closestEdge,
     );
 
   const onDragStart = (event: DragStartEvent) => {
@@ -267,9 +290,11 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
     if ((action.kind === 'reorder' || action.kind === 'auto-manual-reorder') && activeId === overId)
       return;
 
+    // Drop side from the dragged-card center vs the over-card midpoint.
+    const dropEdge = dropEdgeFromEvent(event);
     let patch: Record<string, unknown>;
     if (action.kind === 'reorder') {
-      patch = { boardPosition: slotPosition(destCol, activeId, overId) };
+      patch = { boardPosition: slotPosition(destCol, activeId, overId, dropEdge) };
     } else if (action.kind === 'auto-manual-reorder') {
       // Sorted mode + same-column card drop = hand-reorder intent. Flip the view
       // to Manual (live bus + persisted `sort: []`) so board_position becomes the
@@ -278,7 +303,7 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
       // board re-queries by board_position; the toolbar Sort label reads the same
       // bus override, so it updates to "Manual" automatically.
       persistManualSort();
-      patch = { boardPosition: slotPosition(destCol, activeId, overId) };
+      patch = { boardPosition: slotPosition(destCol, activeId, overId, dropEdge) };
     } else if (action.kind === 'regroup') {
       patch = groupingPatch(destColumnValue);
     } else {
@@ -286,7 +311,7 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
       const overDocId = overIsColumn ? null : overId;
       patch = {
         ...groupingPatch(destColumnValue),
-        boardPosition: slotPosition(destCol, activeId, overDocId),
+        boardPosition: slotPosition(destCol, activeId, overDocId, dropEdge),
       };
     }
 
