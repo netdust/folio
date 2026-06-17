@@ -67,7 +67,10 @@ export function InlineEdit({
           ref={inputRef}
           type="text"
           aria-label={ariaLabel}
-          className={cn('w-full bg-transparent text-fg outline-none', inputClassName)}
+          className={cn(
+            'w-full bg-transparent text-fg outline-none focus-visible:shadow-none',
+            inputClassName,
+          )}
           value={draft}
           placeholder={value || placeholder}
           onChange={(e) => setDraft(e.target.value)}

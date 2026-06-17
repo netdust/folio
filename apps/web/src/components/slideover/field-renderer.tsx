@@ -312,7 +312,7 @@ function TextArea({
           if (draft !== value) onCommit(draft);
         }}
         rows={3}
-        className="block w-full bg-transparent px-1 py-1.5 text-fg outline-none"
+        className="block w-full bg-transparent px-1 py-1.5 text-fg outline-none focus-visible:shadow-none"
       />
     </EditableShell>
   );
@@ -390,7 +390,7 @@ function NumberInput({
             setEditing(false);
           }
         }}
-        className="w-full bg-transparent text-fg outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+        className="w-full bg-transparent text-fg outline-none focus-visible:shadow-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
       />
     </EditableShell>
   );
@@ -456,7 +456,7 @@ function DateInput({
             setEditing(false);
           }
         }}
-        className="w-full bg-transparent text-fg outline-none"
+        className="w-full bg-transparent text-fg outline-none focus-visible:shadow-none"
       />
     </EditableShell>
   );
@@ -606,7 +606,7 @@ function UrlField({
             setEditing(false);
           }
         }}
-        className="w-full bg-transparent text-fg outline-none"
+        className="w-full bg-transparent text-fg outline-none focus-visible:shadow-none"
       />
     </EditableShell>
   );
@@ -766,7 +766,7 @@ function CurrencyInput({
             setEditing(false);
           }
         }}
-        className="w-full bg-transparent text-right font-mono text-fg outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+        className="w-full bg-transparent text-right font-mono text-fg outline-none focus-visible:shadow-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
       />
     </EditableShell>
   );
