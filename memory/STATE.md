@@ -8,9 +8,13 @@
 - **Assignee picker in table (`d8acc86d`..`5c814f57`):** `key==='assignee'` cell now renders the AssigneePicker (was plain text) + a type-to-filter search box (`lib/assignee-filter.ts`); trigger restyled to the borderless field look. Plan: `docs/superpowers/plans/2026-06-17-assignee-picker-in-table.md`. Field-shell plan: `2026-06-17-field-shell-ux-pass.md`.
 - **Pre-merge review (`4b47f999`):** both reviewers (efficiency + correctness) = clean, no Critical/Important. Folded findings: SHELL_INPUT/NO_SPINNER constants + DisplayBox (killed field-layer dup), boxMetrics hoisted, ImageField carve-out comment. (Full-suite caught a dropped aria-label mid-cleanup → DisplayBox forwards ariaLabel.)
 
+### Also shipped 2026-06-17 PM (after the field/assignee work)
+- **New view inherits source view's VISIBLE columns** (`92f4447b`/`b1ca2f1d`/`799f34b6`): was defaulting to 3 builtins because the main view's saved `visibleFields` is null. Fix = cross-tree module store `current-columns-store.ts` (rail↔TableView are render SIBLINGS, no lift possible) — TableView publishes `visibleColumns` keys, `resolveNewViewColumns` (RED-first) reads snapshot-preferred/raw-view-fallback, wired in `w.$wslug.tsx`.
+- **Table full-width** (`b1ca2f1d`/`b11ff685`): `w-max`→`w-max min-w-full` on the scroll wrapper. gridTemplate UNTOUCHED (Bug E intact), locked by a strengthened no-flexible-track contract test. Suite now **1117**.
+
 ### ⏳ STILL TO DO before merge
-- **Stefan's browser-eyeball pass** (jsdom can't verify): B1 long-title truncation, B2 mixed-field vertical centering, B3 no font-grow on edit, B4 date picker fits column, B5 reduced-motion wins on popover; + assignee flows (assign member/agent, clear, type-to-filter, slideover still works).
-- **Deferred view items, NOT started:** table full-width, kanban DnD smoothness, calendar width/selected-date.
+- **Stefan's browser-eyeball pass** (jsdom can't verify): B1 long-title truncation, B2 mixed-field vertical centering, B3 no font-grow on edit, B4 date picker fits column, B5 reduced-motion wins on popover; assignee flows; + NEW: create-view-inherits-columns (main + bugs table), table fills width / wide table h-scroll borders intact.
+- **Deferred view items, NOT started:** kanban DnD smoothness, calendar width/selected-date. (table full-width = DONE above.)
 - Earlier-held: Cluster 6 (gallery + G3) — still HELD. Then whole-branch Stage-3 shake-out + actual merge (Stefan-gated).
 - Non-blocking dup follow-up still open: shared `GroupByPopover` (ListControls↔BoardToolbar).
 
