@@ -157,14 +157,17 @@ describe('ViewControls', () => {
       expect(screen.getByText('Sort:')).toBeInTheDocument();
     });
 
-    it('list → exposes group-by + aggregate controls', () => {
+    it('list → exposes group-by + aggregate controls (Popover pills, mirroring the board)', () => {
       activeView = makeView({
         type: 'list',
         settings: { groupBy: 'status', aggregates: [{ op: 'count' }] },
       });
       renderControls();
-      expect(screen.getByLabelText(/Group by/i)).toBeInTheDocument();
-      expect(screen.getByLabelText(/Aggregation 1/i)).toBeInTheDocument();
+      // ListControls now mounts the board's compact Popover-pill toolbar:
+      // a "Group:" pill and an "Aggregates:" pill (the AggregateBuilder lives
+      // inside the latter's popover, one click away).
+      expect(screen.getByRole('button', { name: /group/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /aggregates/i })).toBeInTheDocument();
     });
 
     it('table → renders NO extra settings slot (filter only)', () => {

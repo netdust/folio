@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Field } from '../../lib/api/fields.ts';
@@ -84,27 +84,41 @@ function renderControls() {
   return render(<ListControls wslug="main" pslug="acme" tslug="work-items" />);
 }
 
+// Open the group-by pill popover and return the menu container. The pill mirrors
+// the board's "Group:" trigger; its items are role="menuitem" buttons.
+function openGroupMenu() {
+  fireEvent.click(screen.getByRole('button', { name: /group/i }));
+}
+
+// Open the aggregates pill popover (which now hosts the AggregateBuilder).
+function openAggregates() {
+  fireEvent.click(screen.getByRole('button', { name: /aggregates/i }));
+}
+
 describe('ListControls', () => {
   beforeEach(() => {
     mutateSpy.mockClear();
     updateDocumentMutateSpy.mockClear();
   });
 
-  it('renders a group-by select reflecting settings.groupBy (multi_select excluded)', () => {
+  it('renders a group-by pill reflecting settings.groupBy; menu lists Status + groupable fields (multi_select excluded)', () => {
     renderControls();
-    const groupBy = screen.getByLabelText(/Group by/i) as HTMLSelectElement;
-    // Reflects the saved value.
-    expect(groupBy.value).toBe('status');
-    expect(within(groupBy).getByRole('option', { name: 'Status' })).toBeInTheDocument();
-    expect(within(groupBy).getByRole('option', { name: 'Priority' })).toBeInTheDocument();
-    expect(within(groupBy).getByRole('option', { name: 'Estimate' })).toBeInTheDocument();
+    // The pill shows the current group-by label (Status) like the board does.
+    const trigger = screen.getByRole('button', { name: /group/i });
+    expect(within(trigger).getByText('Status')).toBeInTheDocument();
+
+    openGroupMenu();
+    expect(screen.getByRole('menuitem', { name: 'Status' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Priority' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Estimate' })).toBeInTheDocument();
     // multi_select is NOT groupable.
-    expect(within(groupBy).queryByRole('option', { name: 'Labels' })).toBeNull();
+    expect(screen.queryByRole('menuitem', { name: 'Labels' })).toBeNull();
   });
 
-  it('persists a group-by change to the ACTIVE VIEW via useUpdateView (Tier-A slice: writes the view)', async () => {
+  it('persists a group-by change to the ACTIVE VIEW via useUpdateView (Tier-A slice: writes the view)', () => {
     renderControls();
-    await userEvent.selectOptions(screen.getByLabelText(/Group by/i), 'priority');
+    openGroupMenu();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Priority' }));
 
     expect(mutateSpy).toHaveBeenCalled();
     const [arg] = mutateSpy.mock.calls.at(-1) ?? [];
@@ -116,8 +130,9 @@ describe('ListControls', () => {
     expect(updateDocumentMutateSpy).not.toHaveBeenCalled();
   });
 
-  it('aggregate op select lists EXACTLY the AGGREGATIONS whitelist (sibling-site guard)', () => {
+  it('aggregate op select (inside the Aggregates popover) lists EXACTLY the AGGREGATIONS whitelist (sibling-site guard)', () => {
     renderControls();
+    openAggregates();
     const opSelect = screen.getByLabelText(/Aggregation 1/i);
     for (const op of ['count', 'pct_matching', 'avg', 'sum', 'distribution']) {
       expect(within(opSelect).getByRole('option', { name: op })).toBeInTheDocument();
@@ -127,6 +142,7 @@ describe('ListControls', () => {
 
   it('persists an added aggregate to settings.aggregates via useUpdateView', async () => {
     renderControls();
+    openAggregates();
     await userEvent.click(screen.getByRole('button', { name: /Add aggregate/i }));
 
     expect(mutateSpy).toHaveBeenCalled();
@@ -139,6 +155,7 @@ describe('ListControls', () => {
 
   it('does NOT persist an incomplete aggregate (avg with no field) — I-2 pruning preserved', async () => {
     renderControls();
+    openAggregates();
     // Switch the only row to avg without picking a field → incomplete.
     await userEvent.selectOptions(screen.getByLabelText(/Aggregation 1/i), 'avg');
 
