@@ -50,8 +50,11 @@ export function TableRow({
         role="listitem"
         className="group/row flex min-h-[35px] w-full items-center gap-2 border-b border-border-light py-1 hover:bg-card"
       >
+        {/* No `gap` — columns sit flush so each cell's `border-l` (in TableCell)
+            is a true full-height column separator at the column boundary, aligned
+            with the header. The cell's own `px-3` provides the internal spacing. */}
         <div
-          className="grid flex-1 items-center gap-3"
+          className="grid flex-1 items-center"
           style={{ gridTemplateColumns: gridTemplate(columns) }}
         >
           {columns.map((c, i) => (

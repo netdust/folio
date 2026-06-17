@@ -41,7 +41,16 @@ export function TableCell({
   resolveRelation,
 }: Props) {
   const content = renderContent();
-  if (!isSticky) return content;
+  // Every cell vertically centers its content with `flex items-center` so all
+  // field types align on the same midline regardless of their intrinsic box
+  // height (the native date input is taller than a text span, which otherwise
+  // made the date sit higher than its row siblings). `min-w-0` lets truncating
+  // children shrink. `border-l` draws the inter-column separator (the sticky
+  // first column owns its own `border-r` instead).
+  if (!isSticky)
+    return (
+      <div className="flex min-w-0 items-center border-l border-border-light px-3">{content}</div>
+    );
   return (
     <div className="sticky left-0 z-[1] flex items-center border-r border-border-light bg-content pl-[22px] pr-3 group-hover/row:bg-card">
       {content}
