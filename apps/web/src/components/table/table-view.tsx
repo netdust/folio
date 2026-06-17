@@ -27,6 +27,7 @@ import { Icon } from '../ui/icon.tsx';
 import { EmptyState } from '../views/empty-state.tsx';
 import { GroupHeaderRow } from '../views/group-header-row.tsx';
 import { defaultGroupedListSettings } from '../views/grouped-list-config.tsx';
+import { ListControls } from '../views/list-controls.tsx';
 import { ListSkeleton } from '../views/list-skeleton.tsx';
 import { ColumnMenu } from './column-menu.tsx';
 import { ColumnPicker } from './column-picker.tsx';
@@ -611,6 +612,11 @@ export function TableView({ wslug, pslug, tslug }: Props) {
           pinnedFields={fields ?? []}
           onChange={onClauseChange}
         />
+        {/* B.2: the grouped `list` view exposes live group-by + aggregate
+            editors that PATCH the active view's settings on change — the fix
+            for "once a view is created I can't change the settings anymore".
+            Only a `list` view groups, so the controls only mount when grouping. */}
+        {grouping && <ListControls wslug={wslug} pslug={pslug} tslug={tslug} />}
       </div>
       <div
         data-testid="table-scroll"

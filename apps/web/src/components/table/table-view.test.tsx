@@ -2484,3 +2484,64 @@ describe('TableView grouped (list view)', () => {
     expect(screen.queryByTestId('groups-truncated')).toBeNull();
   });
 });
+
+// B.2 seam: ListControls (the live group-by + aggregate editor) mounts in the
+// TableView toolbar ONLY for a grouped `list` view. This crosses the REAL,
+// un-mocked component chain (router → TableView → ListControls → useActiveView)
+// — no mock of the ListControls boundary — so a mis-pathed mount or a wrong
+// `grouping` guard would fail it.
+describe('TableView ListControls wiring (B.2)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  const json = (body: unknown) =>
+    new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+
+  function makeFetch(view: typeof viewRow & { type: string }) {
+    return vi.fn<typeof fetch>(async (url, init) => {
+      const u = String(url);
+      const method = init?.method ?? 'GET';
+      if (u.includes('/statuses') && method === 'GET') return json({ data: [statusRow] });
+      if (u.includes('/fields') && method === 'GET') return json({ data: [fieldRow] });
+      if (u.includes('/views') && method === 'GET') return json({ data: [view] });
+      if (u.includes('/group-summary') && method === 'GET')
+        return json({ data: { groups: [], ungrouped: null, truncated: false } });
+      if (u.includes('/documents') && method === 'GET')
+        return json({ data: { data: [docRow], nextCursor: null } });
+      return json({});
+    });
+  }
+
+  it('mounts the live group-by control for a `list` view (un-mocked chain)', async () => {
+    vi.stubGlobal('fetch', makeFetch({ ...viewRow, type: 'list' }));
+    const { queryClient, router } = setup();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByText('First task')).toBeInTheDocument());
+    // The ListControls "Group by" picker is live (the B.2 settings editor).
+    expect(await screen.findByLabelText(/Group by/i)).toBeInTheDocument();
+  });
+
+  it('does NOT mount ListControls for a `table` view (negative case)', async () => {
+    vi.stubGlobal('fetch', makeFetch({ ...viewRow, type: 'table' }));
+    const { queryClient, router } = setup();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByText('First task')).toBeInTheDocument());
+    // A flat table view never groups, so the settings editor is absent.
+    expect(screen.queryByLabelText(/Group by/i)).toBeNull();
+  });
+});
