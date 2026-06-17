@@ -36,11 +36,6 @@ function isoOf(utcMs: number): string {
   return new Date(utcMs).toISOString().slice(0, 10);
 }
 
-/** UTC day-of-month for a UTC epoch-ms value. */
-function dayOf(utcMs: number): number {
-  return new Date(utcMs).getUTCDate();
-}
-
 /**
  * 42-cell (6 weeks x 7 days) grid spanning the given month, with leading days
  * from the prior month and trailing days from the next, so the month always
@@ -67,34 +62,14 @@ export function buildMonthGrid(year: number, month: number): DayCell[] {
 }
 
 /**
- * The 7-day Monday-start week containing the given date. `month` is 1-based.
- * Cells in the queried month are inMonth:true; days that spill into an adjacent
- * month are inMonth:false.
- */
-export function buildWeekGrid(year: number, month: number, day: number): DayCell[] {
-  const targetMs = Date.UTC(year, month - 1, day);
-  const startMs = targetMs - mondayIndex(targetMs) * DAY_MS;
-
-  const cells: DayCell[] = [];
-  for (let i = 0; i < 7; i++) {
-    const ms = startMs + i * DAY_MS;
-    const d = new Date(ms);
-    cells.push({
-      iso: isoOf(ms),
-      day: d.getUTCDate(),
-      inMonth: d.getUTCMonth() === month - 1 && d.getUTCFullYear() === year,
-    });
-  }
-  return cells;
-}
-
-/**
  * Normalize a frontmatter value into a bucket key ('YYYY-MM-DD') or null.
  * A datetime (`2026-06-10T14:30:00Z`) is sliced to its date prefix. A value
  * that is non-string, empty, or matches neither the date nor datetime shape is
- * unscheduled (returns null).
+ * unscheduled (returns null). Exported so the calendar view can answer "which
+ * day does this doc sit on / is it scheduled" in O(1) off the doc's own
+ * frontmatter, instead of scanning the bucketed `byDay` map.
  */
-function bucketKey(value: unknown): string | null {
+export function bucketKey(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   if (DATE_RE.test(value)) return value;
   if (DATETIME_RE.test(value)) return value.slice(0, 10);

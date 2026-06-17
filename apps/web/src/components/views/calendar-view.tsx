@@ -17,7 +17,7 @@ import { formatApiError } from '../../lib/api/index.ts';
 import { useActiveView } from '../../lib/api/use-active-view.ts';
 import { type DueUrgency, dueUrgency } from '../../lib/due-urgency.ts';
 import { cn } from '../ui/cn.ts';
-import { buildMonthGrid, placeDocuments } from './calendar-grid.ts';
+import { bucketKey, buildMonthGrid, placeDocuments } from './calendar-grid.ts';
 import { CalendarSkeleton } from './calendar-skeleton.tsx';
 import { EmptyState } from './empty-state.tsx';
 
@@ -187,11 +187,10 @@ export function CalendarView({ wslug, pslug, tslug, initialMonth }: Props) {
     const targetIso = String(over.id);
     const doc = docsBySlug.get(slug);
     // No-op when the chip is dropped on the day it already sits on (its bucketed
-    // date equals the target). An unscheduled chip has no bucket → currentKey is
-    // undefined, so any cell drop is a real change.
-    const currentKey = doc
-      ? Object.keys(byDay).find((iso) => byDay[iso]?.some((d) => d.slug === slug))
-      : undefined;
+    // date equals the target). bucketKey reads the doc's OWN date field in O(1) —
+    // the same derivation placeDocuments used to bucket it; an unscheduled chip
+    // has no bucket (null), so any cell drop is a real change.
+    const currentKey = doc ? bucketKey(doc.frontmatter[dateField]) : null;
     if (currentKey === targetIso) return;
     try {
       await update.mutateAsync({ slug, patch: { frontmatter: { [dateField]: targetIso } } });
@@ -225,8 +224,10 @@ export function CalendarView({ wslug, pslug, tslug, initialMonth }: Props) {
   const trayChipClass =
     'truncate rounded-sm border border-border-light bg-shell px-1.5 py-0.5 text-left text-xs text-fg-2 hover:bg-card';
   const activeDoc = activeSlug ? (docsBySlug.get(activeSlug) ?? null) : null;
+  // Scheduled iff the doc has a valid bucket key — the same O(1) predicate
+  // placeDocuments uses to decide byDay vs unscheduled (no byDay scan).
   const activeIsScheduled = activeDoc
-    ? Object.values(byDay).some((list) => list.some((d) => d.slug === activeSlug))
+    ? bucketKey(activeDoc.frontmatter[dateField]) !== null
     : false;
 
   return (

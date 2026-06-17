@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildMonthGrid, buildWeekGrid, placeDocuments } from './calendar-grid.ts';
+import { buildMonthGrid, placeDocuments } from './calendar-grid.ts';
 
 describe('buildMonthGrid', () => {
   it('returns a 42-cell (6x7) grid for June 2026', () => {
@@ -66,26 +66,6 @@ describe('buildMonthGrid', () => {
     const grid = buildMonthGrid(2026, 6);
     const first = grid.find((c) => c.inMonth && c.day === 1);
     expect(first?.iso).toBe('2026-06-01');
-  });
-});
-
-describe('buildWeekGrid', () => {
-  it('returns the 7-day Monday-start week containing the given date', () => {
-    // 2026-06-10 is a Wednesday → week is Mon 2026-06-08 .. Sun 2026-06-14.
-    const week = buildWeekGrid(2026, 6, 10);
-    expect(week).toHaveLength(7);
-    expect(week[0]).toEqual({ iso: '2026-06-08', day: 8, inMonth: true });
-    expect(week[6]).toEqual({ iso: '2026-06-14', day: 14, inMonth: true });
-    // the queried date sits at index 2 (Wednesday).
-    expect(week[2].iso).toBe('2026-06-10');
-  });
-
-  it('spans a month boundary, marking the queried-month days inMonth', () => {
-    // 2026-07-01 is a Wednesday → week Mon 2026-06-29 .. Sun 2026-07-05.
-    const week = buildWeekGrid(2026, 7, 1);
-    expect(week).toHaveLength(7);
-    expect(week[0]).toEqual({ iso: '2026-06-29', day: 29, inMonth: false });
-    expect(week[2]).toEqual({ iso: '2026-07-01', day: 1, inMonth: true });
   });
 });
 
