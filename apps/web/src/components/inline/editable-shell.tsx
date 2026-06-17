@@ -8,6 +8,26 @@ import { cn } from '../ui/cn.ts';
  */
 export type FieldSize = 'sm';
 
+// Box metrics — resolved ONLY from `size`, applied identically in both modes.
+// Module-scope constant (not rebuilt per render; there are many shells per table).
+const BOX_METRICS: Record<FieldSize, string> = {
+  sm: 'text-sm px-1 py-0.5 rounded-sm',
+};
+
+/**
+ * The classes a child <input>/<textarea> rendered INSIDE an EditableShell needs:
+ * fill the shell's box, transparent (the shell owns bg), no native outline, and
+ * suppress the global `*:focus-visible` box-shadow ring (which `outline-none`
+ * does NOT cover). The shell owns the box; the child only fills it. Shared so the
+ * load-bearing string can't drift across the ~5 inputs that use it.
+ */
+export const SHELL_INPUT = 'w-full bg-transparent text-fg outline-none focus-visible:shadow-none';
+
+/** Hides the native number-spinner stepper (webkit) so number/currency read as
+ *  plain text, not a stepper control. Appended to SHELL_INPUT on those inputs. */
+export const NO_SPINNER =
+  '[appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none';
+
 interface EditableShellProps {
   /** Whether the field is displaying its value or being edited. NEVER affects box metrics. */
   mode: 'display' | 'edit';
@@ -39,16 +59,11 @@ export function EditableShell({
   className,
   children,
 }: EditableShellProps) {
-  // Box metrics — resolved ONLY from `size`, applied identically in both modes.
-  const boxMetrics: Record<FieldSize, string> = {
-    sm: 'text-sm px-1 py-0.5 rounded-sm',
-  };
-
   return (
     <span
       data-state={mode}
       className={cn(
-        boxMetrics[size],
+        BOX_METRICS[size],
         // Center content vertically at the ROOT so every field — incl. the date,
         // whose native control is taller — sits on one midline regardless of the
         // wrapper chain above it. Applied in BOTH modes so box-equivalence holds.
@@ -75,6 +90,61 @@ export function EditableShell({
       )}
     >
       {children}
+    </span>
+  );
+}
+
+interface DisplayBoxProps {
+  /** Enter edit mode (click or Enter/Space). */
+  onEdit: () => void;
+  align?: 'left' | 'right';
+  isPending?: boolean;
+  /** Accessible name for the interactive display affordance (role=button). */
+  ariaLabel?: string;
+  /** Extra classes for the inner shell (e.g. `font-mono` for currency). */
+  className?: string;
+  children: ReactNode;
+}
+
+/**
+ * The click-to-edit DISPLAY affordance shared by the field-renderer fields that
+ * have a display state (Date/Number/Currency): an interactive, keyboard-
+ * accessible wrapper around an `EditableShell mode="display"`. Centralizes the
+ * `role`/`tabIndex`/`onClick`/`onKeyDown` a11y wiring so it can't rot per-field
+ * (one site forgetting `onKeyDown` = a keyboard-inaccessible field). The shell
+ * fills its parent (`w-full`) and the wrapper centers it on the row midline.
+ *
+ * NOTE: InlineEdit's display branch deliberately does NOT use this — its wrapper
+ * is `block min-w-0` + shell `w-full truncate` for title ellipsis, a load-bearing
+ * layout difference from this `flex items-center` centering wrapper.
+ */
+export function DisplayBox({
+  onEdit,
+  align,
+  isPending,
+  ariaLabel,
+  className,
+  children,
+}: DisplayBoxProps) {
+  return (
+    <span
+      role="button"
+      tabIndex={0}
+      aria-label={ariaLabel}
+      onClick={onEdit}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') onEdit();
+      }}
+      className="flex w-full cursor-text items-center focus:outline-none"
+    >
+      <EditableShell
+        mode="display"
+        align={align}
+        isPending={isPending}
+        className={cn('w-full', className)}
+      >
+        {children}
+      </EditableShell>
     </span>
   );
 }

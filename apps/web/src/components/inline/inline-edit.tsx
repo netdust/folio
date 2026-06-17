@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { cn } from '../ui/cn.ts';
-import { EditableShell } from './editable-shell.tsx';
+import { EditableShell, SHELL_INPUT } from './editable-shell.tsx';
 
 interface Props {
   value: string;
@@ -67,10 +67,7 @@ export function InlineEdit({
           ref={inputRef}
           type="text"
           aria-label={ariaLabel}
-          className={cn(
-            'w-full bg-transparent text-fg outline-none focus-visible:shadow-none',
-            inputClassName,
-          )}
+          className={cn(SHELL_INPUT, inputClassName)}
           value={draft}
           placeholder={value || placeholder}
           onChange={(e) => setDraft(e.target.value)}

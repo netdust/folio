@@ -3,7 +3,7 @@ import { useMembers } from '../../lib/api/members.ts';
 import { useProjects } from '../../lib/api/projects.ts';
 import { useWorkspaceAgents } from '../../lib/api/workspace-documents.ts';
 import { filterAgents, filterMembers } from '../../lib/assignee-filter.ts';
-import { cn } from '../ui/cn.ts';
+import { EditableShell } from '../inline/editable-shell.tsx';
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
 
 interface Props {
@@ -45,18 +45,15 @@ export function AssigneePicker({ wslug, pslug, value, onChange }: Props) {
   return (
     <Popover>
       <PopoverTrigger asChild>
-        {/* Match the borderless EditableShell field look (text-sm px-1 py-0.5
-            rounded-sm, hover-bg lift, no border/fixed-height) so the assignee
-            cell sits like every other field. Unassigned reads muted (text-fg-3)
-            like other empty field placeholders. */}
-        <button
-          type="button"
-          className={cn(
-            'inline-flex items-center rounded-sm px-1 py-0.5 text-sm transition-colors duration-150 ease-out hover:bg-card focus-visible:shadow-none',
-            value ? 'text-fg' : 'text-fg-3',
-          )}
-        >
-          {label}
+        {/* Render through EditableShell (the field convergence point) so the
+            trigger box/hover/focus tracks the shared field look automatically
+            instead of hand-copying its class tokens. The <button> stays the
+            focusable Radix `asChild` target; the shell is its child. Unassigned
+            reads muted (text-fg-3) like other empty field placeholders. */}
+        <button type="button" className="focus:outline-none">
+          <EditableShell mode="display" className={value ? 'text-fg' : 'text-fg-3'}>
+            {label}
+          </EditableShell>
         </button>
       </PopoverTrigger>
       <PopoverContent className="w-[260px]" align="start">

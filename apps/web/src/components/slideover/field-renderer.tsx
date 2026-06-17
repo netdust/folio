@@ -1,7 +1,7 @@
 import { Plus } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import type { FieldType } from '../../lib/api/fields.ts';
-import { EditableShell } from '../inline/editable-shell.tsx';
+import { DisplayBox, EditableShell, NO_SPINNER, SHELL_INPUT } from '../inline/editable-shell.tsx';
 import { InlineEdit } from '../inline/inline-edit.tsx';
 import { InlineSelect } from '../inline/inline-select.tsx';
 import { RelationCell } from '../relations/relation-cell.tsx';
@@ -345,31 +345,20 @@ function NumberInput({
   // arrows. Click/Enter enters edit.
   if (!editing) {
     return (
-      <span
-        role="button"
-        tabIndex={0}
-        aria-label={ariaLabel}
-        onClick={() => {
+      <DisplayBox
+        ariaLabel={ariaLabel}
+        isPending={isPending}
+        onEdit={() => {
           setDraft(String(value));
           setEditing(true);
         }}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' || e.key === ' ') {
-            setDraft(String(value));
-            setEditing(true);
-          }
-        }}
-        className="flex w-full items-center cursor-text focus:outline-none"
       >
-        <EditableShell mode="display" isPending={isPending} className="w-full">
-          {value}
-        </EditableShell>
-      </span>
+        {value}
+      </DisplayBox>
     );
   }
   // EDIT: the shell owns box metrics + the faint lift; the input fills it and
-  // HIDES the native spinner arrows (`[appearance:textfield]` + the webkit
-  // pseudo-elements) so it reads as plain text, not a stepper control.
+  // HIDES the native spinner arrows (NO_SPINNER) so it reads as plain text.
   return (
     <EditableShell mode="edit" isPending={isPending} className="w-full">
       <input
@@ -390,7 +379,7 @@ function NumberInput({
             setEditing(false);
           }
         }}
-        className="w-full bg-transparent text-fg outline-none focus-visible:shadow-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+        className={cn(SHELL_INPUT, NO_SPINNER)}
       />
     </EditableShell>
   );
@@ -410,27 +399,10 @@ function DateInput({
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
   if (!editing) {
-    // DISPLAY span migrated to the shell (Task 4). The interactive wrapper keeps
-    // the enter-edit handlers + aria-label; the shell owns box metrics + hover/
-    // pending treatment. The EDIT input below is left verbatim for Task 7 (width).
     return (
-      <span
-        role="button"
-        tabIndex={0}
-        aria-label={ariaLabel}
-        onClick={() => setEditing(true)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' || e.key === ' ') setEditing(true);
-        }}
-        // `flex items-center` (not inline-block) so the date display centers on
-        // the row midline like every other field — an inline-block span aligned
-        // to its text baseline and sat high once cells became flex items-center.
-        className="flex w-full items-center cursor-text focus:outline-none"
-      >
-        <EditableShell mode="display" isPending={isPending} className="w-full">
-          {value || <span className="text-fg-3"> </span>}
-        </EditableShell>
-      </span>
+      <DisplayBox ariaLabel={ariaLabel} isPending={isPending} onEdit={() => setEditing(true)}>
+        {value || <span className="text-fg-3"> </span>}
+      </DisplayBox>
     );
   }
   // EDIT input migrated to the shell (Task 7). The hard `w-44` (176px) overflowed
@@ -456,7 +428,7 @@ function DateInput({
             setEditing(false);
           }
         }}
-        className="w-full bg-transparent text-fg outline-none focus-visible:shadow-none"
+        className={SHELL_INPUT}
       />
     </EditableShell>
   );
@@ -606,7 +578,7 @@ function UrlField({
             setEditing(false);
           }
         }}
-        className="w-full bg-transparent text-fg outline-none focus-visible:shadow-none"
+        className={SHELL_INPUT}
       />
     </EditableShell>
   );
@@ -626,6 +598,10 @@ function isSafeImageUrl(u: string): boolean {
   }
 }
 
+// DELIBERATE shell carve-out (like TextArea's multi-line case): an image field
+// is a thumbnail + URL input, not a single-line text box, so it keeps its own
+// box styling and the `isSafeImageUrl` scheme guard rather than rendering
+// through EditableShell. Not a sibling-audit miss.
 function ImageField({
   value,
   onCommit,
@@ -727,24 +703,15 @@ function CurrencyInput({
     // hover/pending; the inner element keeps only `font-mono`. The interactive
     // wrapper holds the enter-edit handlers.
     return (
-      <span
-        role="button"
-        tabIndex={0}
-        onClick={() => setEditing(true)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' || e.key === ' ') setEditing(true);
-        }}
-        className="flex w-full items-center cursor-text focus:outline-none"
+      <DisplayBox
+        ariaLabel={ariaLabel}
+        align="right"
+        isPending={isPending}
+        className="font-mono"
+        onEdit={() => setEditing(true)}
       >
-        <EditableShell
-          mode="display"
-          align="right"
-          isPending={isPending}
-          className="w-full font-mono"
-        >
-          {value == null ? ' ' : formatter.format(value)}
-        </EditableShell>
-      </span>
+        {value == null ? ' ' : formatter.format(value)}
+      </DisplayBox>
     );
   }
   return (
@@ -766,7 +733,7 @@ function CurrencyInput({
             setEditing(false);
           }
         }}
-        className="w-full bg-transparent text-right font-mono text-fg outline-none focus-visible:shadow-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+        className={cn(SHELL_INPUT, 'text-right font-mono', NO_SPINNER)}
       />
     </EditableShell>
   );

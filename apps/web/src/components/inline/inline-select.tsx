@@ -36,11 +36,7 @@ export function InlineSelect({
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <button type="button" className="cursor-pointer">
-          <EditableShell
-            mode="display"
-            isPending={isPending}
-            className={cn('inline-flex items-center', className)}
-          >
+          <EditableShell mode="display" isPending={isPending} className={className}>
             {renderDisplay ? (
               renderDisplay(current)
             ) : current ? (
