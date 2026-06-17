@@ -1,5 +1,10 @@
 import { describe, expect, test } from 'vitest';
-import { coerceGroupValue, dropSlotPosition, resolveDrop } from './board-drag.ts';
+import {
+  coerceGroupValue,
+  dropSlotPosition,
+  reorderSlotPosition,
+  resolveDrop,
+} from './board-drag.ts';
 
 describe('coerceGroupValue', () => {
   test('null stays null', () => {
@@ -97,6 +102,44 @@ describe('resolveDrop', () => {
 // moving up (drop-before) and BELOW it when moving down (drop-after). Without
 // the drop-after on a downward move, a down-by-one drop lands in the card's own
 // slot and "never moves" (only worked when moving 2+ positions).
+// reorderSlotPosition mirrors dnd-kit's OWN sortable order (arrayMove on the
+// column id array) so the committed slot == the slot dnd-kit was SHOWING via the
+// gap — no midpoint over-travel threshold. Used for SAME-column reorder.
+describe('reorderSlotPosition (dnd-kit order)', () => {
+  const positions: Record<string, string | null> = { x: 'a', y: 'c', z: 'e' };
+  const posOf = (id: string) => positions[id] ?? null;
+
+  test('drag x DOWN onto y → lands between y and z (the order arrayMove yields)', () => {
+    // items x,y,z; move x to y's index → y,x,z → x is between y(c) and z(e).
+    const pos = reorderSlotPosition(['x', 'y', 'z'], posOf, 'x', 'y');
+    expect('c' < pos && pos < 'e').toBe(true);
+  });
+
+  test('drag x DOWN onto the LAST card z → appends after z', () => {
+    // move x to z's index → y,z,x → x after z(e).
+    const pos = reorderSlotPosition(['x', 'y', 'z'], posOf, 'x', 'z');
+    expect(pos > 'e').toBe(true);
+  });
+
+  test('drag z UP onto x → lands before x (rank < a)', () => {
+    // move z to x's index → z,x,y → z before x(a).
+    const pos = reorderSlotPosition(['x', 'y', 'z'], posOf, 'z', 'x');
+    expect(pos < 'a').toBe(true);
+  });
+
+  test('drag z UP onto y → lands between x and y', () => {
+    // move z to y's index → x,z,y → z between x(a) and y(c).
+    const pos = reorderSlotPosition(['x', 'y', 'z'], posOf, 'z', 'y');
+    expect('a' < pos && pos < 'c').toBe(true);
+  });
+
+  test('drop on own slot (over === active) is a stable no-op rank', () => {
+    // move x onto x → unchanged order x,y,z → x stays between (start) and y(c).
+    const pos = reorderSlotPosition(['x', 'y', 'z'], posOf, 'x', 'x');
+    expect(pos < 'c').toBe(true);
+  });
+});
+
 // dropSlotPosition is now EDGE-AWARE: the caller passes the closest edge
 // ('top' | 'bottom') computed from the dragged-card center vs the over-card
 // midpoint (getClosestEdge), instead of the old array-index `movingDown`

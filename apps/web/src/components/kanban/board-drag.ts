@@ -1,3 +1,4 @@
+import { rankBetween } from '@folio/shared';
 import { computeReorderPosition } from './board-reorder.ts';
 import type { CardEdge } from './closest-edge.ts';
 
@@ -50,11 +51,47 @@ export function resolveDrop(ctx: DropCtx): DropAction {
 }
 
 /**
+ * SAME-column reorder. Mirrors dnd-kit's OWN sortable order: move the active id
+ * to the over id's index (arrayMove) and rank the dropped card BETWEEN its
+ * resulting neighbors. This makes the committed slot == the slot dnd-kit was
+ * already SHOWING via the live gap — so "the gap opened" is enough; there is no
+ * midpoint over-travel threshold to cross (the bug: cards only reordered if you
+ * dragged well PAST the neighbor). For CROSS-column drops (no shared item array)
+ * use `dropSlotPosition` with the pointer edge instead.
+ *
+ * `columnDocIds` is the column's FULL display order (active still in it).
+ */
+export function reorderSlotPosition(
+  columnDocIds: string[],
+  positionOf: (id: string) => string | null,
+  activeId: string,
+  overId: string,
+): string {
+  const from = columnDocIds.indexOf(activeId);
+  const to = columnDocIds.indexOf(overId);
+  if (from === -1 || to === -1) {
+    // Defensive: fall back to appending if either id is missing from the column.
+    const positions = columnDocIds.filter((id) => id !== activeId).map((id) => positionOf(id));
+    return computeReorderPosition(positions, positions.length);
+  }
+  // arrayMove (inlined, pure): the resolved order dnd-kit renders.
+  const moved = [...columnDocIds];
+  moved.splice(to, 0, moved.splice(from, 1)[0] as string);
+  // Rank the dropped card between its neighbors in the MOVED order.
+  const landedIdx = moved.indexOf(activeId);
+  const lo = landedIdx > 0 ? (positionOf(moved[landedIdx - 1] as string) ?? null) : null;
+  const hi =
+    landedIdx < moved.length - 1 ? (positionOf(moved[landedIdx + 1] as string) ?? null) : null;
+  return rankBetween(lo, hi);
+}
+
+/**
  * Compute the board_position for dropping the active card into a column whose
  * current cards (active card already removed) have positions `orderedPositions`,
  * at the slot occupied by `overDocId` (drop-before). A `null` overDocId appends.
  * Pure mirror of KanbanView.dropSlotPosition so the reorder ranking is testable
- * without simulating a dnd-kit pointer drag.
+ * without simulating a dnd-kit pointer drag. Used for CROSS-column drops (the
+ * edge decides before/after the over-card).
  */
 export function dropSlotPosition(
   orderedDocIds: string[],

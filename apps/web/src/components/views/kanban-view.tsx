@@ -27,7 +27,12 @@ import { formatApiError } from '../../lib/api/index.ts';
 import { useStatuses } from '../../lib/api/statuses.ts';
 import { useUpdateView, useViews } from '../../lib/api/views.ts';
 import { type BoardSort, boardControlsBus } from '../../lib/board-controls-bus.ts';
-import { coerceGroupValue, dropSlotPosition, resolveDrop } from '../kanban/board-drag.ts';
+import {
+  coerceGroupValue,
+  dropSlotPosition,
+  reorderSlotPosition,
+  resolveDrop,
+} from '../kanban/board-drag.ts';
 import { buildColumns } from '../kanban/board-grouping.ts';
 import { type CardEdge, getClosestEdge } from '../kanban/closest-edge.ts';
 import { KanbanCard } from '../kanban/kanban-card.tsx';
@@ -274,6 +279,17 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
       closestEdge,
     );
 
+  // SAME-column reorder: mirror dnd-kit's own sortable order (arrayMove) so the
+  // committed slot == the one dnd-kit was showing via the gap — no midpoint
+  // over-travel. Uses the FULL column order (active still in it).
+  const reorderPosition = (col: { docIds: string[] }, activeId: string, overId: string): string =>
+    reorderSlotPosition(
+      col.docIds,
+      (id) => docsById.get(id)?.boardPosition ?? null,
+      activeId,
+      overId,
+    );
+
   const onDragStart = (event: DragStartEvent) => {
     setActiveId(String(event.active.id));
   };
@@ -332,11 +348,12 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
     if ((action.kind === 'reorder' || action.kind === 'auto-manual-reorder') && activeId === overId)
       return;
 
-    // Drop side from the dragged-card center vs the over-card midpoint.
+    // Cross-column drop side from the pointer vs the over-card midpoint.
     const dropEdge = dropEdgeFromEvent(event);
     let patch: Record<string, unknown>;
     if (action.kind === 'reorder') {
-      patch = { boardPosition: slotPosition(destCol, activeId, overId, dropEdge) };
+      // SAME-column: trust dnd-kit's own sortable order (no midpoint over-travel).
+      patch = { boardPosition: reorderPosition(destCol, activeId, overId) };
     } else if (action.kind === 'auto-manual-reorder') {
       // Sorted mode + same-column card drop = hand-reorder intent. Flip the view
       // to Manual (live bus + persisted `sort: []`) so board_position becomes the
@@ -345,7 +362,8 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
       // board re-queries by board_position; the toolbar Sort label reads the same
       // bus override, so it updates to "Manual" automatically.
       persistManualSort();
-      patch = { boardPosition: slotPosition(destCol, activeId, overId, dropEdge) };
+      // Same-column reorder (just promoted from sorted mode) — dnd-kit order.
+      patch = { boardPosition: reorderPosition(destCol, activeId, overId) };
     } else if (action.kind === 'regroup') {
       patch = groupingPatch(destColumnValue);
     } else {
