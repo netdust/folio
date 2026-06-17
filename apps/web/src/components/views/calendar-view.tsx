@@ -1,6 +1,19 @@
+import {
+  DndContext,
+  type DragEndEvent,
+  DragOverlay,
+  type DragStartEvent,
+  PointerSensor,
+  useDraggable,
+  useDroppable,
+  useSensor,
+  useSensors,
+} from '@dnd-kit/core';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { useMemo, useState } from 'react';
-import { useDocuments } from '../../lib/api/documents.ts';
+import { toast } from 'sonner';
+import { type DocumentSummary, useDocuments, useUpdateDocument } from '../../lib/api/documents.ts';
+import { formatApiError } from '../../lib/api/index.ts';
 import { useActiveView } from '../../lib/api/use-active-view.ts';
 import { type DueUrgency, dueUrgency } from '../../lib/due-urgency.ts';
 import { cn } from '../ui/cn.ts';
@@ -53,6 +66,62 @@ function currentMonth(): { year: number; month: number } {
   return { year: now.getFullYear(), month: now.getMonth() + 1 };
 }
 
+/** A draggable doc chip. id = doc.slug so onDragEnd's active.id resolves the doc. */
+function DocChip({
+  doc,
+  className,
+  onOpen,
+}: {
+  doc: DocumentSummary;
+  className: string;
+  onOpen: (slug: string) => void;
+}) {
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id: doc.slug });
+  return (
+    <button
+      ref={setNodeRef}
+      type="button"
+      // Open on click; drag is gated behind PointerSensor's 5px activation
+      // distance so a plain click never starts a drag.
+      onClick={() => onOpen(doc.slug)}
+      title={doc.title}
+      className={cn(className, isDragging && 'opacity-40')}
+      {...listeners}
+      {...attributes}
+    >
+      {doc.title}
+    </button>
+  );
+}
+
+/** A droppable day cell. id = the cell's ISO date so over.id IS the target day. */
+function DayCellDropzone({
+  iso,
+  inMonth,
+  children,
+}: {
+  iso: string;
+  inMonth: boolean;
+  children: React.ReactNode;
+}) {
+  const { setNodeRef, isOver } = useDroppable({ id: iso });
+  return (
+    <div
+      ref={setNodeRef}
+      data-testid="calendar-day-cell"
+      className={cn(
+        'min-h-[72px] bg-shell p-1',
+        !inMonth && 'bg-card/50 text-fg-3',
+        isOver && 'ring-1 ring-inset ring-primary',
+      )}
+    >
+      <div data-testid={`calendar-cell-${iso}`} className="flex h-full flex-col gap-1">
+        {children}
+      </div>
+    </div>
+  );
+}
+
 export function CalendarView({ wslug, pslug, tslug, initialMonth }: Props) {
   const navigate = useNavigate();
   const search = useSearch({ strict: false }) as Record<string, unknown>;
@@ -77,8 +146,58 @@ export function CalendarView({ wslug, pslug, tslug, initialMonth }: Props) {
   const grid = useMemo(() => buildMonthGrid(cursor.year, cursor.month), [cursor]);
   const { byDay, unscheduled } = useMemo(() => placeDocuments(docs, dateField), [docs, dateField]);
 
+  const docsBySlug = useMemo(() => {
+    const m = new Map<string, DocumentSummary>();
+    for (const d of docs) m.set(d.slug, d);
+    return m;
+  }, [docs]);
+
+  const update = useUpdateDocument(wslug, pslug, tslug, { type: 'work_item', limit: 200 });
+
+  // 5px activation distance so a plain click on a chip opens the slideover and
+  // never starts a drag. Mirrors the kanban board's sensor config.
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
+
+  // The slug currently dragged — drives the DragOverlay clone (portals above the
+  // grid so the chip isn't clipped by the cell's overflow). Set on start, cleared
+  // on end/cancel.
+  const [activeSlug, setActiveSlug] = useState<string | null>(null);
+
   const openDoc = (slug: string) => {
     void navigate({ to: '.', search: { ...search, doc: slug }, replace: false });
+  };
+
+  const onDragStart = (event: DragStartEvent) => {
+    setActiveSlug(String(event.active.id));
+  };
+
+  const onDragCancel = () => setActiveSlug(null);
+
+  // INVARIANT 16: the dragged date is a DOCUMENT attribute, so the drop writes
+  // frontmatter[dateField] on the DOCUMENT — never the view. over.id is the
+  // target cell's ISO date (DayCellDropzone id = cell.iso); a cell carries its
+  // REAL iso even for trailing next-month cells, so a cross-month drop lands the
+  // right date. The patch sends ONLY the changed dateField key — the server
+  // merge-patches frontmatter (useUpdateDocument.mergeFrontmatter mirrors it).
+  const onDragEnd = async (event: DragEndEvent) => {
+    setActiveSlug(null);
+    const { active, over } = event;
+    if (!over) return;
+    const slug = String(active.id);
+    const targetIso = String(over.id);
+    const doc = docsBySlug.get(slug);
+    // No-op when the chip is dropped on the day it already sits on (its bucketed
+    // date equals the target). An unscheduled chip has no bucket → currentKey is
+    // undefined, so any cell drop is a real change.
+    const currentKey = doc
+      ? Object.keys(byDay).find((iso) => byDay[iso]?.some((d) => d.slug === slug))
+      : undefined;
+    if (currentKey === targetIso) return;
+    try {
+      await update.mutateAsync({ slug, patch: { frontmatter: { [dateField]: targetIso } } });
+    } catch (err) {
+      toast.error(formatApiError(err));
+    }
   };
 
   const goPrev = () =>
@@ -97,111 +216,120 @@ export function CalendarView({ wslug, pslug, tslug, initialMonth }: Props) {
   const monthLabel = `${MONTH_NAMES[cursor.month - 1]} ${cursor.year}`;
   const isEmpty = docs.length === 0;
 
+  // Shared chip styling so a day-cell chip and its DragOverlay clone match.
+  const dayChipClass = (doc: DocumentSummary) =>
+    cn(
+      'truncate rounded-sm border bg-shell px-1.5 py-0.5 text-left text-xs hover:bg-card',
+      chipAccent(dueUrgency(doc.frontmatter[dateField])),
+    );
+  const trayChipClass =
+    'truncate rounded-sm border border-border-light bg-shell px-1.5 py-0.5 text-left text-xs text-fg-2 hover:bg-card';
+  const activeDoc = activeSlug ? (docsBySlug.get(activeSlug) ?? null) : null;
+  const activeIsScheduled = activeDoc
+    ? Object.values(byDay).some((list) => list.some((d) => d.slug === activeSlug))
+    : false;
+
   return (
-    <div className="flex h-full min-h-0 flex-col px-[22px] py-2">
-      {/* Month-nav header */}
-      <div className="mb-3 flex items-center gap-2">
-        <h2 data-testid="calendar-month-label" className="text-base font-medium text-fg">
-          {monthLabel}
-        </h2>
-        <div className="ml-auto flex items-center gap-1">
-          <button
-            type="button"
-            aria-label="Previous month"
-            onClick={goPrev}
-            className="rounded-md border border-border-light px-2 py-1 text-sm text-fg-2 hover:bg-card"
-          >
-            ‹
-          </button>
-          <button
-            type="button"
-            onClick={goToday}
-            className="rounded-md border border-border-light px-2 py-1 text-sm text-fg-2 hover:bg-card"
-          >
-            Today
-          </button>
-          <button
-            type="button"
-            aria-label="Next month"
-            onClick={goNext}
-            className="rounded-md border border-border-light px-2 py-1 text-sm text-fg-2 hover:bg-card"
-          >
-            ›
-          </button>
-        </div>
-      </div>
-
-      {/* Weekday header row */}
-      <div className="grid grid-cols-7 gap-px text-xs font-medium text-fg-3">
-        {WEEKDAYS.map((d) => (
-          <div key={d} className="px-2 py-1">
-            {d}
-          </div>
-        ))}
-      </div>
-
-      {isEmpty ? (
-        <div data-testid="calendar-empty" className="border-b border-border-light">
-          <EmptyState
-            title="No work items"
-            description="This table has no work items yet. Create one to see it on the calendar."
-          />
-        </div>
-      ) : null}
-      <div className="grid flex-1 grid-cols-7 gap-px overflow-auto rounded-md bg-border-light">
-        {grid.map((cell) => {
-          const dayDocs = byDay[cell.iso] ?? [];
-          return (
-            <div
-              key={cell.iso}
-              data-testid="calendar-day-cell"
-              className={cn('min-h-[72px] bg-shell p-1', !cell.inMonth && 'bg-card/50 text-fg-3')}
+    <DndContext
+      sensors={sensors}
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+      onDragCancel={onDragCancel}
+    >
+      <div className="flex h-full min-h-0 flex-col px-[22px] py-2">
+        {/* Month-nav header */}
+        <div className="mb-3 flex items-center gap-2">
+          <h2 data-testid="calendar-month-label" className="text-base font-medium text-fg">
+            {monthLabel}
+          </h2>
+          <div className="ml-auto flex items-center gap-1">
+            <button
+              type="button"
+              aria-label="Previous month"
+              onClick={goPrev}
+              className="rounded-md border border-border-light px-2 py-1 text-sm text-fg-2 hover:bg-card"
             >
-              <div data-testid={`calendar-cell-${cell.iso}`} className="flex h-full flex-col gap-1">
+              ‹
+            </button>
+            <button
+              type="button"
+              onClick={goToday}
+              className="rounded-md border border-border-light px-2 py-1 text-sm text-fg-2 hover:bg-card"
+            >
+              Today
+            </button>
+            <button
+              type="button"
+              aria-label="Next month"
+              onClick={goNext}
+              className="rounded-md border border-border-light px-2 py-1 text-sm text-fg-2 hover:bg-card"
+            >
+              ›
+            </button>
+          </div>
+        </div>
+
+        {/* Weekday header row */}
+        <div className="grid grid-cols-7 gap-px text-xs font-medium text-fg-3">
+          {WEEKDAYS.map((d) => (
+            <div key={d} className="px-2 py-1">
+              {d}
+            </div>
+          ))}
+        </div>
+
+        {isEmpty ? (
+          <div data-testid="calendar-empty" className="border-b border-border-light">
+            <EmptyState
+              title="No work items"
+              description="This table has no work items yet. Create one to see it on the calendar."
+            />
+          </div>
+        ) : null}
+        <div className="grid flex-1 grid-cols-7 gap-px overflow-auto rounded-md bg-border-light">
+          {grid.map((cell) => {
+            const dayDocs = byDay[cell.iso] ?? [];
+            return (
+              <DayCellDropzone key={cell.iso} iso={cell.iso} inMonth={cell.inMonth}>
                 <div className={cn('text-xs', cell.inMonth ? 'text-fg-2' : 'text-fg-3')}>
                   {cell.day}
                 </div>
                 {dayDocs.map((doc) => (
-                  <button
+                  <DocChip
                     key={doc.slug}
-                    type="button"
-                    onClick={() => openDoc(doc.slug)}
-                    title={doc.title}
-                    className={cn(
-                      'truncate rounded-sm border bg-shell px-1.5 py-0.5 text-left text-xs hover:bg-card',
-                      chipAccent(dueUrgency(doc.frontmatter[dateField])),
-                    )}
-                  >
-                    {doc.title}
-                  </button>
+                    doc={doc}
+                    className={dayChipClass(doc)}
+                    onOpen={openDoc}
+                  />
                 ))}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Unscheduled tray — only when non-empty */}
-      {unscheduled.length > 0 ? (
-        <div data-testid="calendar-unscheduled" className="mt-3 shrink-0">
-          <div className="mb-1 text-xs font-medium text-fg-3">
-            Unscheduled ({unscheduled.length})
-          </div>
-          <div className="flex flex-wrap gap-1">
-            {unscheduled.map((doc) => (
-              <button
-                key={doc.slug}
-                type="button"
-                onClick={() => openDoc(doc.slug)}
-                title={doc.title}
-                className="truncate rounded-sm border border-border-light bg-shell px-1.5 py-0.5 text-left text-xs text-fg-2 hover:bg-card"
-              >
-                {doc.title}
-              </button>
-            ))}
-          </div>
+              </DayCellDropzone>
+            );
+          })}
         </div>
-      ) : null}
-    </div>
+
+        {/* Unscheduled tray — only when non-empty */}
+        {unscheduled.length > 0 ? (
+          <div data-testid="calendar-unscheduled" className="mt-3 shrink-0">
+            <div className="mb-1 text-xs font-medium text-fg-3">
+              Unscheduled ({unscheduled.length})
+            </div>
+            <div className="flex flex-wrap gap-1">
+              {unscheduled.map((doc) => (
+                <DocChip key={doc.slug} doc={doc} className={trayChipClass} onOpen={openDoc} />
+              ))}
+            </div>
+          </div>
+        ) : null}
+      </div>
+      {/* The dragged chip's clone. DragOverlay portals to the body so it escapes
+          the cell's overflow clip and paints on top of the grid. */}
+      <DragOverlay>
+        {activeDoc ? (
+          <div className={activeIsScheduled ? dayChipClass(activeDoc) : trayChipClass}>
+            {activeDoc.title}
+          </div>
+        ) : null}
+      </DragOverlay>
+    </DndContext>
   );
 }
