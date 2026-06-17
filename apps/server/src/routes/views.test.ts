@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import {
   events,
@@ -412,6 +412,30 @@ test('DELETE /views: dryRun delete does not mutate an existing view', async () =
   expect(data.would).toBe('delete');
   expect(await viewCount(db, seed.project.id)).toBe(beforeViews);
   expect(await eventCount(db)).toBe(beforeEvents);
+});
+
+test('DELETE /views: the DEFAULT view cannot be deleted (the main table view is protected)', async () => {
+  // Deleting the seed default view left the table with no default → no way to get
+  // back to the plain table (Stefan, 2026-06-18). The default view is protected.
+  const { app, db, seed } = await makeTestApp();
+  const { configWriteToken } = await mintTokens(db, seed);
+  const table = await db.query.tables.findFirst({
+    where: and(eq(tables.projectId, seed.project.id), eq(tables.slug, 'work-items')),
+  });
+  if (!table) throw new Error('test setup: seed work-items table missing');
+  const def = await db.query.views.findFirst({
+    where: and(eq(views.tableId, table.id), eq(views.isDefault, true)),
+  });
+  if (!def) throw new Error('test setup: seed default view missing');
+  const before = await viewCount(db, seed.project.id);
+
+  const res = await app.request(`${path}/${def.id}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${configWriteToken}` },
+  });
+  expect(res.status).toBe(409);
+  // The default view is still there — nothing deleted.
+  expect(await viewCount(db, seed.project.id)).toBe(before);
 });
 
 test('POST /views: dryRun resource matches the live created view (minus id)', async () => {

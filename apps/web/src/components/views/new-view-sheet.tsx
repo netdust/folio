@@ -1,6 +1,6 @@
 import type { GroupedListSettings } from '@folio/shared';
 import { useNavigate } from '@tanstack/react-router';
-import { Calendar, Columns3, GanttChart, Image, List, type LucideIcon } from 'lucide-react';
+import { Calendar, Columns3, GanttChart, Image, List, type LucideIcon, Table } from 'lucide-react';
 import { type FormEvent, useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { useFields } from '../../lib/api/fields.ts';
@@ -36,13 +36,16 @@ export interface NewViewSheetProps {
 
 const FILTER_KEYS = ['status', 'priority', 'assignee', 'labels', 'updated_since'] as const;
 
-// Phase 6: the user-creatable view types. `table` is intentionally absent — it's
-// the seed-created spreadsheet default for a table, not something a user picks
-// here. The view's TYPE is decided by <ViewRouter> from the saved view; this
-// sheet only records which one to create. calendar/timeline/gallery defer their
-// date-field / cover-field selects to the view's own toolbar (clusters 4/5/6) —
-// the view defaults `settings` to `{}` and the field is picked there later.
+// Phase 6: the user-creatable view types. `table` leads — it's the plain flat
+// spreadsheet (the same renderer the seed default uses). It was originally
+// omitted on the assumption it was seed-only, but deleting the default
+// table-view left no way to make another flat table (Stefan, 2026-06-18), so it
+// IS user-creatable here. The view's TYPE is decided by <ViewRouter> from the
+// saved view; this sheet only records which one to create. `table` needs no
+// extra payload (buildPayload only special-cases kanban/list); calendar/timeline/
+// gallery defer their date-field / cover-field selects to the view's own toolbar.
 const VIEW_TYPES = [
+  { value: 'table', label: 'Table', icon: Table },
   { value: 'list', label: 'List', icon: List },
   { value: 'kanban', label: 'Kanban', icon: Columns3 },
   { value: 'calendar', label: 'Calendar', icon: Calendar },

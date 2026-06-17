@@ -180,6 +180,12 @@ viewsRoute.delete('/:id', requireScope('config:write'), async (c) => {
     where: and(eq(views.tableId, t.id), eq(views.id, id)),
   });
   if (!row) throw new HTTPError('VIEW_NOT_FOUND', `view "${id}" not found`, 404);
+  // The default view is the table's main view (the plain spreadsheet a user
+  // always returns to). Deleting it left the table with no default + no way back
+  // (Stefan, 2026-06-18) — so it is protected. Other views delete freely.
+  if (row.isDefault) {
+    throw new HTTPError('VIEW_PROTECTED', 'the default view cannot be deleted', 409);
+  }
   if (isDryRunDelete(c)) {
     return jsonOk(c, dryRunResult('delete', { id: row.id, name: row.name }));
   }

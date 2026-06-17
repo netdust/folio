@@ -221,7 +221,10 @@ function buildViewMenu(
       onSelect: () => h.onMoveView!(pslug, tslug, view.id, next.order, 'down'),
     });
   }
-  if (h.onDeleteView)
+  // The default view is the table's main view — protected (server returns 409 on
+  // a delete). Don't offer Delete on it, so the menu matches the server rule and
+  // the user never hits a dead "Delete" → error toast.
+  if (h.onDeleteView && !view.isDefault)
     items.push({
       label: 'Delete',
       destructive: true,

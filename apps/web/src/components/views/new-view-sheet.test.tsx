@@ -547,7 +547,7 @@ describe('NewViewSheet', () => {
   // `table` is intentionally absent (seed-created default, not user-picked). A
   // regression that drops calendar/timeline/gallery from the picker would
   // silently re-narrow the sheet to the old List/Kanban-only choice.
-  it('offers all five view types', async () => {
+  it('offers all six view types, including Table', async () => {
     const fetchMock = mockFetch();
     vi.stubGlobal('fetch', fetchMock);
     const { queryClient, router } = setup();
@@ -558,10 +558,10 @@ describe('NewViewSheet', () => {
     );
     // The sheet mounts async (Radix portal) — wait for it like the other tests.
     await screen.findByLabelText(/Name/);
-    for (const t of ['List', 'Kanban', 'Calendar', 'Timeline', 'Gallery']) {
+    // Table IS user-creatable now — deleting the default table-view left no other
+    // way to make a plain flat table (Stefan, 2026-06-18).
+    for (const t of ['Table', 'List', 'Kanban', 'Calendar', 'Timeline', 'Gallery']) {
       expect(screen.getByLabelText(t)).toBeInTheDocument();
     }
-    // `table` is NOT user-creatable here.
-    expect(screen.queryByLabelText('Table')).toBeNull();
   });
 });
