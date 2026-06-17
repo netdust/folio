@@ -65,31 +65,37 @@
 
 ---
 
-# CHUNK B — Filter + per-view controls on every view (STANDARD)
+# CHUNK B — ONE unified ViewControls (filter + per-type settings) for every view (STANDARD)
 
-> Every view gets a filter + an INLINE TOOLBAR of per-view settings that EDIT THE ACTIVE VIEW LIVE (persist via useUpdateView). The gap Stefan flagged: list/table show a filter but you can't change group-by/sort/aggregates after create; calendar/timeline have no filter + no settings.
+> **ARCHITECTURE (Stefan, 2026-06-17): "use the same system as the board — board had everything, settings + filter."** Build ONE `ViewControls` component (the board's `BoardControls` model GENERALIZED), mounted ONCE in the project header for EVERY view type. SAME component / SAME look / SAME source for the filter on all views; the SETTINGS + FILTER VALUES are PER-VIEW (saved on the active view, loaded on view-switch).
 
-**KEY GROUND-TRUTH (controller, 2026-06-17): the filter UI ALREADY EXISTS.** `apps/web/src/components/filter/filter-bar.tsx` — `FilterBar({ clauses, statuses, pinnedFields, onChange })` — is used by TableView (line 608) with `clauses = parseFilters(search)` + `onChange = onClauseChange` (writes `?filter=` via the URL search). So B.1 is **REUSE FilterBar on the other views, NOT build a new one.** The wiring helpers (`parseFilters`, `clausesToListParams`, `FilterClauseUrl`) live in `lib/api/documents.ts`. **Also dead-code: `apps/web/src/components/views/list-view.tsx` is the orphaned pre-Phase-6 list route (no non-test importer; router routes `list`→TableView now) — DELETE it + its 2 tests as cleanup.**
+**Decisions (Stefan, 2026-06-17):**
+- (D-B1) ONE `ViewControls` — shared `FilterBar` (same component+look everywhere) + a `switch(view.type)` settings slot. Mounted once in `w.$wslug.p.$pslug.tsx`'s `tabs` slot, REPLACING the kanban-only `BoardControls` conditional, for ALL view types.
+- (D-B2) FilterBar on ALL views (calendar + timeline included).
+- (D-B3) **Filter is PER-VIEW and SAVED on the view** (`view.filters` via `useUpdateView`), exactly like the board persists group-by/sort. Switch saved views → that view's own filter + settings load. NOT URL-transient.
 
-**Decisions (Stefan, 2026-06-17):** (D-B1) controls live in an INLINE TOOLBAR above each view (like BoardControls), always visible, editing the active view live. (D-B2) the SAME FilterBar appears on ALL views (calendar + timeline included).
+**KEY GROUND-TRUTH (controller, 2026-06-17) — most of this is ALREADY HALF-BUILT:**
+- `FilterBar({ clauses, statuses, pinnedFields, onChange })` (`components/filter/filter-bar.tsx`) EXISTS, used by TableView. Speaks `FilterClauseUrl[]`.
+- TableView ALREADY **hydrates the URL filter FROM `activeView.filters` once per view** (`table-view.tsx:209-251`, the `hydratedViewId` ref + the FILTER_KEYS merge, URL-wins precedence) — its own comment says "*until they explicitly save filters back to the view (Task 8)*". So loading a view's saved filter already works for table/list; **the UNBUILT piece is the save-back ("Task 8")** — FilterBar's `onChange` writes only the URL today, not `view.filters`.
+- `BoardControls` (`components/kanban/board-controls.tsx`) is the live-edit pattern: resolves activeView, renders settings pickers, persists to the view via `useUpdateView`.
+- `view.filters` is the saved per-view filter (populated at create by the new-view sheet); `view.settings`/`groupBy`/`sort` are the per-view settings.
+- B.2 (committed `6ff7a651`) built `ListControls` + a shared `AggregateBuilder` — these become the `list` settings slot inside ViewControls (reused, not wasted).
+- DEAD CODE deleted in B.1 (`333af2a8`): the old `list-view.tsx` + 3 tests.
 
-### Task B.1: reuse `FilterBar` on calendar + timeline + kanban (Tier B wiring + filter→data Tier-A slice)
-**Files:** `calendar-view.tsx`, `timeline-view.tsx`, the kanban toolbar (`w.$wslug.p.$pslug.tsx` BoardControls area or kanban-view), + tests. (Table + list already have FilterBar via TableView.)
-- Render the EXISTING `<FilterBar clauses={parseFilters(search)} statuses={statuses} pinnedFields={fields} onChange={onClauseChange} />` in each view's toolbar (mirror TableView's wiring exactly — `parseFilters`/`clausesToListParams` from `documents.ts`).
-- **Tier-A slice:** the filter clauses feed the view's `useDocuments`/`useInfiniteDocuments` (via `clausesToListParams`) AND (for the grouped list) `useGroupSummary`, so filtering narrows that view's items consistently. Assert: a filter clause → the view's doc query carries the `?filter=`; for list, the group-summary query carries the SAME filter.
-- **Step 2.5 (controller, at dispatch):** confirm FilterBar's props + the `parseFilters`/`clausesToListParams` signatures + how `statuses`/`fields` are fetched in each target view (calendar/timeline already call useDocuments; they need useStatuses/useFields for the FilterBar props — verify or add).
-
-### Task B.2: per-view INLINE settings controls — EDIT the active view live (Tier B shells + Tier-A persistence slices)
-> The gap Stefan flagged: "once a view is created I can't change the settings." So these controls EDIT THE ACTIVE VIEW (persist via `useUpdateView` on change), not just create-time. Inline toolbar, like BoardControls. Mirror `apps/web/src/components/kanban/board-controls.tsx` (it already does exactly this: reads `activeView`, renders group-by/sort selects, persists to the view via `useUpdateView`).
-**Files:** Create the per-view controls (e.g. `list-controls.tsx`, `calendar-controls.tsx`, `timeline-controls.tsx`); each renders FilterBar (B.1) + its view-specific setting pickers, editing the active view. Wire into each renderer's toolbar.
-- **list** (grouped TableView) → a group-by `<select>` + an aggregate editor (reuse `GroupedListConfig`'s group-by + aggregate-builder UI, but as an EDIT affordance bound to the active view's `settings`, persisting on change via `useUpdateView` — the same `settings.{groupBy,aggregates}` the new-view sheet writes at create). This is THE fix for "can't change list settings after create."
-- **calendar** → a date-field `<select>` editing `settings.dateField`, persist via useUpdateView.
-- **timeline** → the zoom toggle (ALREADY in TimelineView via useUpdateView — keep) + start/end date-field pickers editing `settings.{startField,endField}`.
-- **calendar** → ViewFilterBar + date-field picker (persists `settings.dateField` via useUpdateView).
-- **timeline** → ViewFilterBar + the zoom toggle (already exists in TimelineView — move/keep) + start/end date-field pickers (persist `settings.{startField,endField}`).
-- **kanban** → BoardControls EXISTS; just add `<ViewFilterBar>` to it.
-- **Tier-A slice per control:** the settings write targets the VIEW (`useUpdateView`, `settings`/`sort`/`groupBy`), NEVER the document (invariant 16). Assert each control's persist hits `/views/:id`, not `/documents/`.
-- Each renderer renders its controls in a toolbar above the content. (Decide: the toolbar lives in each renderer, OR ViewRouter renders a controls slot — per D2 "per-view controls", each renderer owns its controls; the shared ViewFilterBar is the common piece they all include.)
+### Task B.6: `ViewControls` — the unified toolbar (filter + per-type settings + save-back)
+**Files:** Create `apps/web/src/components/views/view-controls.tsx` + test. Modify `w.$wslug.p.$pslug.tsx` (mount it for every view, replacing the kanban-only `BoardControls` line). Move the hydrate-from-view filter logic to a shared hook so ALL views (not just TableView) load their saved filter. Re-home `ListControls`/`BoardControls`/zoom as the per-type settings slots.
+- **Shared FilterBar** (same component+look): `ViewControls` resolves `activeView`, renders `<FilterBar clauses={...} statuses={useStatuses} pinnedFields={useFields} onChange={onFilterChange} />`. `onFilterChange` does BOTH: writes the URL search (live render) AND persists the clauses to `view.filters` via `useUpdateView` (the "Task 8" save-back — so the filter is per-view-saved). Reuse the FILTER_KEYS clause↔filters mapping that the hydration block already uses (clauses → the `{status,priority,...}` shape stored in `view.filters`).
+- **Hydrate-on-switch for ALL views:** extract TableView's `hydratedViewId`/`activeView.filters`→URL effect into a shared `useViewFilterHydration(activeView)` hook; ViewControls (or the route) runs it so switching to ANY view loads that view's saved filter. (TableView keeps working; calendar/timeline/kanban gain it.)
+- **Per-type settings slot** — `switch(activeView.type)`:
+  - `kanban` → the existing `BoardControls` content (group-by + sort via BoardToolbar) — re-home it as the kanban slot.
+  - `list` → the B.2 `ListControls` content (group-by + AggregateBuilder) — re-home as the list slot.
+  - `table` → no extra settings (columns/sort already in TableHeader) — filter only.
+  - `calendar` → a date-field `<select>` → `useUpdateView` `settings.dateField`.
+  - `timeline` → zoom toggle (move from TimelineView) + start/end date-field selects → `settings.{zoom,startField,endField}`.
+- **Mount:** in `w.$wslug.p.$pslug.tsx`, replace `activeView?.type === 'kanban' ? <BoardControls/> : null` with `activeView ? <ViewControls wslug pslug tslug/> : null` — one mount, every view.
+- **Each renderer drops its own filter/zoom toolbar bits** (timeline's zoom moves into ViewControls; calendar/kanban/list don't add their own — ViewControls owns the toolbar). The renderers just read the active filter (from the URL, hydrated) + settings and render.
+- **Tier-A slices (invariant 16):** (1) a FILTER change persists to `view.filters` via `useUpdateView` (PATCH `/views/:id`), NEVER a document; (2) each SETTINGS change persists to the VIEW (`settings`/`groupBy`/`sort`), NEVER a document; (3) the filter clauses feed the active view's `useDocuments`/`useInfiniteDocuments`/`useGroupSummary` so the view's items narrow.
+- **Step 2.5 (controller, at dispatch):** the hydration block is `table-view.tsx:209-251`; extract it carefully (URL-wins precedence, the `$eq`/`$in` AST handling, the FILTER_KEYS set) so the save-back is its inverse. Confirm FilterBar's `onChange(next: FilterClauseUrl[])` shape + the clause→search serialization (find it near TableView's `onClauseChange`).
 
 ### Task B.3: wire the filter through every renderer's data hooks
 **Files:** the 5 renderers.
