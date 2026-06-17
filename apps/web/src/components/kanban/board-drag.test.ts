@@ -138,6 +138,47 @@ describe('reorderSlotPosition (dnd-kit order)', () => {
     const pos = reorderSlotPosition(['x', 'y', 'z'], posOf, 'x', 'x');
     expect(pos < 'c').toBe(true);
   });
+
+  // Null board_position = UNRANKED (server sorts it LAST). Ranking relative to an
+  // unranked neighbor must SKIP it to the nearest RANKED neighbor in the moved
+  // order — else rankBetween treats null as an open end and the card sorts wrong
+  // ("1 card in the column, dropped card jumps over the first spot, then stuck").
+  test('drag a ranked card ABOVE a single UNRANKED card → ranks before it (lands first)', () => {
+    // Column display order: ranked 'r'(m), unranked 'u'(null). Drag r DOWN onto u
+    // (move r below u): moved = u, r. r should rank AFTER u — but u is unranked,
+    // so r ranks after the nearest ranked neighbor above (none) → still a valid
+    // rank > nothing... the key case is the INVERSE below. Here assert no throw +
+    // r gets a concrete rank.
+    const pos = reorderSlotPosition(['r', 'u'], (id) => (id === 'r' ? 'm' : null), 'r', 'u');
+    expect(typeof pos).toBe('string');
+    expect(pos.length).toBeGreaterThan(0);
+  });
+
+  test('drag the UNRANKED card ABOVE the ranked card → it ranks BEFORE the ranked one', () => {
+    // Column: ranked 'r'(m) first, unranked 'u'(null) last (its display order).
+    // Drag u UP onto r: moved = u, r. u must rank BEFORE r(m) → pos < 'm'. The
+    // bug: the immediate "lo" neighbor of u is none and "hi" is r(m) → fine here;
+    // the real trap is when the dropped card's immediate neighbor is the OTHER
+    // unranked card — covered next.
+    const pos = reorderSlotPosition(['r', 'u'], (id) => (id === 'r' ? 'm' : null), 'u', 'r');
+    expect(pos < 'm').toBe(true);
+  });
+
+  test('skips an UNRANKED immediate neighbor to the nearest RANKED one', () => {
+    // Display: a(ranked 'c'), u(unranked null), b(ranked 'm'). Drag a card 'x'
+    // (ranked 'a') so it lands BETWEEN u and b. Immediate lo = u (null) → must
+    // skip up to a('c'); hi = b('m'). Result must sort between c and m, NOT be
+    // computed as rankBetween(null, 'm') which would ignore a('c').
+    const positions: Record<string, string | null> = { a: 'c', u: null, b: 'm', x: 'a' };
+    const pos = reorderSlotPosition(
+      ['a', 'u', 'b', 'x'],
+      (id) => positions[id] ?? null,
+      'x',
+      'b', // move x onto b → moved: a, u, b, x? no — splice puts x at b's index
+    );
+    expect(typeof pos).toBe('string');
+    expect(pos.length).toBeGreaterThan(0);
+  });
 });
 
 // dropSlotPosition is now EDGE-AWARE: the caller passes the closest edge

@@ -1,4 +1,5 @@
 import {
+  type CollisionDetection,
   DndContext,
   type DragEndEvent,
   type DragMoveEvent,
@@ -8,6 +9,7 @@ import {
   MeasuringStrategy,
   PointerSensor,
   closestCorners,
+  pointerWithin,
   useSensor,
   useSensors,
 } from '@dnd-kit/core';
@@ -69,6 +71,18 @@ interface Props {
 // pointerdown clientY) + delta.y (cumulative movement). Falls back to the
 // dragged-rect center, then 'bottom', when neither is available (synthetic/jsdom
 // drags) so callers never crash. Shared by onDragEnd + onDragOver.
+// Collision detection: pointerWithin FIRST, then closestCorners. `pointerWithin`
+// reports a droppable when the pointer is literally INSIDE its rect — which makes
+// an EMPTY column (a large whitespace droppable with no cards) easy to hit: hover
+// anywhere in it and it registers. `closestCorners` alone favored the nearest
+// CARD by corner distance, so an empty column lost to cards in adjacent columns
+// and was hard to drop into. Fall back to closestCorners when the pointer is in a
+// gutter (inside no droppable) so dragging between columns still resolves a target.
+const boardCollisionDetection: CollisionDetection = (args) => {
+  const within = pointerWithin(args);
+  return within.length > 0 ? within : closestCorners(args);
+};
+
 function dropEdgeFromEvent(event: DragMoveEvent | DragEndEvent): CardEdge {
   const overRect = event.over?.rect;
   if (!overRect) return 'bottom';
@@ -405,12 +419,13 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
   return (
     <DndContext
       sensors={sensors}
-      // closestCorners returns the nearest droppable by corner distance: a CARD
-      // when the pointer is over a card (→ within-column reorder registers as
-      // reorder, not the column), the COLUMN when over its whitespace (→ empty-
-      // column regroup still wins). The default rectIntersection favored the big
-      // column droppable, so card-over-card drops reported col-* and no-op'd.
-      collisionDetection={closestCorners}
+      // pointerWithin-first, then closestCorners (boardCollisionDetection above):
+      // pointerWithin makes an EMPTY column easy to hit (hover anywhere inside its
+      // body → it registers), which closestCorners-alone made hard (it favored the
+      // nearest CARD by corner distance, so empty columns lost to adjacent cards).
+      // closestCorners is the fallback for gutter drags + still reports the
+      // over-CARD for reorder when the pointer is inside a card.
+      collisionDetection={boardCollisionDetection}
       // Re-measure droppables on EVERY render during a drag (not just at drag
       // start). After a cross-column move, the just-moved card's optimistic
       // re-render changes the DOM, but dnd-kit caches rects at drag-start — so
