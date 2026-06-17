@@ -1,12 +1,18 @@
-# 🎯 CURRENT (2026-06-17) — Phase 6 (Views), branch `phase-6/views` (UNMERGED)
+# 🎯 CURRENT (2026-06-17 PM) — Phase 6 (Views), branch `phase-6/views` (UNMERGED, tip `4b47f999`, 84 commits ahead of main)
 
-**Stopped for the day mid-Phase-6.** Full live state in auto-memory `project_views-rework-list-is-grouped-table`. Resume there.
+**NOT merged — Stefan gates it + still owes a browser-eyeball pass + more work queued.** Kept branch as-is via finish-branch. Suites ALL green: web **1108** / server **1915** / shared **82**, tsc + root lint clean.
 
-- **Done + GATED this session, awaiting Stefan sign-off:** Chunk A (list = group-aware TableView, card renderer deleted) + Chunk B (ONE unified `ViewControls` = shared FilterBar + per-type settings slot, mounted once in `w.$wslug.p.$pslug.tsx`; filter+settings persist per-view via `useUpdateView`, inv-16 clean). B.7 restyled `list-controls.tsx` to the board's Popover-pill look.
-- **Gate caught + FIXED a CRITICAL (C1, commit `d11c6576`):** shared filter only narrowed table/list — kanban/calendar/timeline ignored it (B.3 never implemented; green suite missed it). Now wired (`parseFilters`/`clausesToListParams`) into all 3, RED-first seam tests, kanban merge preserves `board_position`. Browser-verified live.
-- **Reviews:** invariant-auditor CLEAN, generalist (C1 fixed + I1/I2 folded), simplicity LOW. Web **1094** / tsc clean. Tip `53427c04`.
-- **DEFERRED follow-up (not blocking):** extract shared `GroupByPopover` (~50-line dup ListControls↔BoardToolbar).
-- **NEXT (pending sign-off):** Cluster 6 (gallery + G3) — still HELD; then Stage-3 shake-out over whole branch + finish-branch.
+### This session (2026-06-17) — field UX-quality pass + assignee picker, all on top of the earlier Chunk A/B work
+- **Blocking bug fixed (`b1069bbf`):** every inline field/status edit silently no-op'd — `useUpdateDocument` onMutate did `prevList.data.map` but the table uses `useInfiniteDocuments` ({pages} shape) → threw → mutation aborted. Now shape-detects + patches all pages. See auto-mem `feedback_folio-can-edit-bug-infinite-cache`.
+- **Field-shell pass (`022bb4f4`..`969715c1`):** new `EditableShell` = single styling convergence point; every inline field (InlineEdit/InlineSelect/Date/Number/Currency/Url/Text + chips) renders through it. Fixed: font-grow-on-edit, dropdown font mismatch, date overflow, subtle focus (faint bg no ring), status Pill→text-sm, full-height column separators + vertical centering, number/currency display-state + spinner-arrows removed, date midline centering. Refined popover motion (scale+fade, reduced-motion respected).
+- **Assignee picker in table (`d8acc86d`..`5c814f57`):** `key==='assignee'` cell now renders the AssigneePicker (was plain text) + a type-to-filter search box (`lib/assignee-filter.ts`); trigger restyled to the borderless field look. Plan: `docs/superpowers/plans/2026-06-17-assignee-picker-in-table.md`. Field-shell plan: `2026-06-17-field-shell-ux-pass.md`.
+- **Pre-merge review (`4b47f999`):** both reviewers (efficiency + correctness) = clean, no Critical/Important. Folded findings: SHELL_INPUT/NO_SPINNER constants + DisplayBox (killed field-layer dup), boxMetrics hoisted, ImageField carve-out comment. (Full-suite caught a dropped aria-label mid-cleanup → DisplayBox forwards ariaLabel.)
+
+### ⏳ STILL TO DO before merge
+- **Stefan's browser-eyeball pass** (jsdom can't verify): B1 long-title truncation, B2 mixed-field vertical centering, B3 no font-grow on edit, B4 date picker fits column, B5 reduced-motion wins on popover; + assignee flows (assign member/agent, clear, type-to-filter, slideover still works).
+- **Deferred view items, NOT started:** table full-width, kanban DnD smoothness, calendar width/selected-date.
+- Earlier-held: Cluster 6 (gallery + G3) — still HELD. Then whole-branch Stage-3 shake-out + actual merge (Stefan-gated).
+- Non-blocking dup follow-up still open: shared `GroupByPopover` (ListControls↔BoardToolbar).
 
 ---
 
