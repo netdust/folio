@@ -36,13 +36,18 @@
 - **Tier-A slice:** the count + aggregates come from the `useGroupSummary` row (full-set), NOT a client count of loaded rows (the page-2 guard, preserved from Cluster 2b). Assert header shows the endpoint count even when fewer rows are loaded.
 - Tier B for the rest (presentational). Test: renders label + count + an aggregate + the distribution bar; collapse toggle fires `onToggle`.
 
-### Task A.2: rebuild `GroupedListView` as a grouped table (Tier B shell)
-**Files:** Rewrite `apps/web/src/components/views/grouped-list-view.tsx`; update its test. Keep `group-aggregate-header.tsx`/`distribution-bar.tsx` (reused by A.1). DELETE `grouped-list-row.tsx` (the card row — replaced by `TableRow`).
-- Reuse TableView's column derivation: import `mergeColumns`/`effectiveVisibleKeys`/`Column` from `'../table/columns.ts'`, `TableHeader` from `'../table/table-header.tsx'`, `TableRow` from `'../table/table-row.tsx'`. Build `visibleColumns` the same way TableView does (Stage-2.5: read TableView lines ~420-460 for the exact derivation + the deps TableRow needs: `statuses`, `resolveRelation`, `onOpen`, `onUpdate`).
-- Render: ONE `TableHeader` (the column headers) at the top, then for each `useGroupSummary` group → a `<GroupHeaderRow>` (A.1) + that group's loaded `TableRow`s (the rows whose `groupBy` value matches — client-side PLACEMENT only, like Cluster 2b). The `ungrouped` bucket last. Collapse/expand per group (local state).
-- Rows come from `useInfiniteDocuments` (full pagination, kept from Cluster 2b) + "Load more". Headers from `useGroupSummary` (full-set). The SAME filter feeds both.
-- EmptyState / skeleton / summary-error affordance (kept from Cluster 2b's fixes).
-- **Test:** renders TableHeader + a group-header row per group + TableRows under each + the no-group bucket + the page-2 header-total guard (header count = endpoint, not loaded rows) + EmptyState. Mock the hooks like the current test.
+### Task A.2: make TableView GROUP-AWARE; route `list` → grouped TableView (Tier B + Tier-A slice)
+**ARCHITECTURE REVISION (Stefan, 2026-06-17):** rather than rebuild a parallel `GroupedListView` (which would DUPLICATE TableView's ~150 lines of inline-edit / relations / create / column-menu / onUpdate wiring), make **TableView itself group-aware**. One renderer; inline-edit + relations + column-menu work in the grouped view for free; zero duplication.
+
+**Files:** Modify `apps/web/src/components/table/table-view.tsx`; modify `apps/web/src/components/views/view-router.tsx` (route `list` → TableView with grouping); DELETE `apps/web/src/components/views/grouped-list-view.tsx` + `grouped-list-row.tsx` (the card renderer) + their tests; keep `group-aggregate-header.tsx`/`distribution-bar.tsx` (reused by A.1's GroupHeaderRow); update `view-router.test.tsx`.
+
+- **Grouping trigger:** TableView reads `activeView` (line 152). When `activeView.type === 'list'` AND a groupBy is configured (`settings.groupBy`, default `'status'`), grouping is ON; `type === 'table'` → flat (today's behavior, unchanged).
+- **Grouped render:** replace the `filteredDocs.map(TableRow)` block (line ~560) — when grouping, partition `filteredDocs` by each row's `groupBy` value (client-side PLACEMENT only), and render: for each group (ordered by the `useGroupSummary` group order) a `<GroupHeaderRow>` (A.1) carrying the group's count + aggregates FROM `useGroupSummary` (full-set — the page-2 guard), then that group's `TableRow`s; the `ungrouped` bucket last; collapse/expand per group (local `Set<string>` state). When NOT grouping, the existing flat map is unchanged.
+- **The aggregates:** `useGroupSummary(wslug, pslug, tslug, { groupBy, aggregates, filter })` — read `aggregates` from `settings.aggregates` (default `[{op:'count'}]`); pass the SAME `listParams.filter` so headers + rows stay consistent. Only call it when grouping is on (`enabled`).
+- `TableHeader` stays at the top (one set of column headers for the whole grouped table). `TableAddRow` + "Load more" stay (Load more already exists in TableView).
+- **Tier-A slice (the page-2 guard, preserved):** with N loaded rows in a group but a `useGroupSummary` count of M (M>N), the GroupHeaderRow shows M (endpoint full-set), never N. Assert it.
+- **Test (table-view.test.tsx):** the EXISTING flat-table tests stay green (grouping OFF for `type:'table'`). Add: a `type:'list'` active view with a groupBy → renders GroupHeaderRows + grouped TableRows + the page-2 guard + collapse. The existing grouped-list-view.test.tsx is deleted (its renderer is gone); its meaningful assertions (page-2 guard, no-group bucket, summary-error) migrate into the table-view grouped tests.
+- **Router:** `viewRendererFor.list` = `(p) => <TableView {...p} />` (TableView decides grouping from the active view's type). Remove the `GroupedListView` import. The `view-router.test.tsx` `list → ...` assertion updates to expect the TableView marker (or a grouped-table marker).
 
 ### Task A.3: row-layout config cleanup
 **Files:** `apps/web/src/components/views/grouped-list-config.tsx` (the new-view config).
