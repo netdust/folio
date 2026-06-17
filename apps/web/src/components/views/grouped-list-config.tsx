@@ -33,8 +33,11 @@ const inputClass = selectClass;
 
 /**
  * The `list`-type config block for the new-view sheet (and an edit-view
- * affordance). Driven by `useFields`: a group-by picker, an aggregate builder,
- * and a row-layout picker, assembled into a `GroupedListSettings`.
+ * affordance). Driven by `useFields`: a group-by picker and an aggregate
+ * builder, assembled into a `GroupedListSettings`. A `list` view renders as a
+ * grouped TABLE (it uses the table's COLUMNS), so there is no card row-layout
+ * picker — `defaultGroupedListSettings()` keeps a minimal `rowLayout` only for
+ * back-compat with the (required) shared type and existing saved views.
  *
  * The aggregation `<select>` maps over the shared `AGGREGATIONS` whitelist — a
  * SIBLING-SITE of the server's `AGGREGATIONS` set (the engine rejects any op
@@ -106,13 +109,6 @@ export function GroupedListConfig({ wslug, pslug, tslug, value, onChange }: Prop
 
   function removeAggregate(index: number) {
     commitAggregates(draftAggregates.filter((_, i) => i !== index));
-  }
-
-  function toggleBodyField(key: string, checked: boolean) {
-    const fieldsList = checked
-      ? [...value.rowLayout.fields, key]
-      : value.rowLayout.fields.filter((k) => k !== key);
-    emitWithDraft({ ...value, rowLayout: { ...value.rowLayout, fields: fieldsList } });
   }
 
   return (
@@ -220,82 +216,6 @@ export function GroupedListConfig({ wslug, pslug, tslug, value, onChange }: Prop
           Add aggregate
         </Button>
       </div>
-
-      {/* Row-layout picker */}
-      <fieldset>
-        <legend className="block text-sm font-medium text-fg">Row layout</legend>
-        <div className="mt-2 space-y-3">
-          <div>
-            <label htmlFor="gl-primary" className="block text-xs text-fg-3">
-              Primary
-            </label>
-            <select
-              id="gl-primary"
-              className={selectClass}
-              value={value.rowLayout.primary}
-              onChange={(e) =>
-                emitWithDraft({
-                  ...value,
-                  rowLayout: { ...value.rowLayout, primary: e.target.value },
-                })
-              }
-            >
-              <option value="title">Title</option>
-              {allFields.map((f) => (
-                <option key={f.key} value={f.key}>
-                  {f.label ?? f.key}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <label htmlFor="gl-subtitle" className="block text-xs text-fg-3">
-              Subtitle
-            </label>
-            <select
-              id="gl-subtitle"
-              className={selectClass}
-              value={value.rowLayout.subtitle ?? ''}
-              onChange={(e) => {
-                const v = e.target.value;
-                const { subtitle: _drop, ...rest } = value.rowLayout;
-                emitWithDraft({
-                  ...value,
-                  rowLayout: v ? { ...rest, subtitle: v } : rest,
-                });
-              }}
-            >
-              <option value="">None</option>
-              {allFields.map((f) => (
-                <option key={f.key} value={f.key}>
-                  {f.label ?? f.key}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <span className="block text-xs text-fg-3">Body fields</span>
-            <div className="mt-1.5 space-y-1.5">
-              {allFields.map((f) => {
-                const label = f.label ?? f.key;
-                return (
-                  <label key={f.key} className="flex items-center gap-2 text-sm text-fg-1">
-                    <input
-                      type="checkbox"
-                      aria-label={label}
-                      checked={value.rowLayout.fields.includes(f.key)}
-                      onChange={(e) => toggleBodyField(f.key, e.target.checked)}
-                    />
-                    {label}
-                  </label>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-      </fieldset>
     </div>
   );
 }

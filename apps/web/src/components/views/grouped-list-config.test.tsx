@@ -109,13 +109,18 @@ describe('GroupedListConfig', () => {
     expect(await screen.findByLabelText(/Match value 1/i)).toBeInTheDocument();
   });
 
-  it('renders the row-layout picker (primary select + a field multi-select)', () => {
+  // A.3: the `list` view is now a grouped TABLE (it renders the table's COLUMNS,
+  // not a card rowLayout). The row-layout picker (primary/subtitle/body-fields)
+  // is therefore meaningless and has been removed — the config keeps only
+  // group-by + the aggregate builder. Assert the picker is GONE.
+  it('does NOT render the row-layout picker (grouped table uses columns, not a card layout)', () => {
     render(<Harness />);
-    expect(screen.getByLabelText(/Primary/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/Subtitle/i)).toBeInTheDocument();
-    // The body-fields multi-select: a checkbox per project field.
-    expect(screen.getByRole('checkbox', { name: 'Priority' })).toBeInTheDocument();
-    expect(screen.getByRole('checkbox', { name: 'Estimate' })).toBeInTheDocument();
+    expect(screen.queryByLabelText(/Primary/i)).toBeNull();
+    expect(screen.queryByLabelText(/Subtitle/i)).toBeNull();
+    expect(screen.queryByText(/Row layout/i)).toBeNull();
+    // No body-field checkboxes either.
+    expect(screen.queryByRole('checkbox', { name: 'Priority' })).toBeNull();
+    expect(screen.queryByRole('checkbox', { name: 'Estimate' })).toBeNull();
   });
 
   // Tier-A slice: two aggregates → BOTH land in the assembled settings.aggregates.
