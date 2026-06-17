@@ -82,6 +82,84 @@ describe('FieldRenderer', () => {
     expect(screen.getByRole('link', { name: 'https://example.com' })).toBeInTheDocument();
   });
 
+  describe('image field', () => {
+    it('renders an <img> preview for a valid https URL', () => {
+      const onCommit = vi.fn();
+      render(
+        <FieldRenderer fieldKey="cover" type="image" value="https://x/i.png" onCommit={onCommit} />,
+      );
+      expect(screen.getByRole('img')).toHaveAttribute('src', 'https://x/i.png');
+    });
+
+    it('does NOT commit a javascript: URL typed into the editor (scheme guard)', async () => {
+      const onCommit = vi.fn();
+      render(<FieldRenderer fieldKey="cover" type="image" value="" onCommit={onCommit} />);
+      // Empty value renders the "(no image)" affordance — click it to edit.
+      await userEvent.click(screen.getByText('(no image)'));
+      const input = screen.getByRole('textbox');
+      await userEvent.type(input, 'javascript:alert(1)');
+      await userEvent.tab();
+      expect(onCommit).not.toHaveBeenCalledWith('javascript:alert(1)');
+    });
+
+    it('does NOT commit a data: URL typed into the editor (scheme guard)', async () => {
+      const onCommit = vi.fn();
+      render(<FieldRenderer fieldKey="cover" type="image" value="" onCommit={onCommit} />);
+      await userEvent.click(screen.getByText('(no image)'));
+      const input = screen.getByRole('textbox');
+      await userEvent.type(input, 'data:text/html,<script>alert(1)</script>');
+      await userEvent.tab();
+      expect(onCommit).not.toHaveBeenCalledWith('data:text/html,<script>alert(1)</script>');
+    });
+
+    it('does NOT render an <img> for an unsafe stored value', () => {
+      const onCommit = vi.fn();
+      render(
+        <FieldRenderer
+          fieldKey="cover"
+          type="image"
+          value="javascript:alert(1)"
+          onCommit={onCommit}
+        />,
+      );
+      expect(screen.queryByRole('img')).toBeNull();
+    });
+
+    it('renders the "(no image)" affordance for an empty value', () => {
+      const onCommit = vi.fn();
+      render(<FieldRenderer fieldKey="cover" type="image" value="" onCommit={onCommit} />);
+      expect(screen.queryByRole('img')).toBeNull();
+      expect(screen.getByText('(no image)')).toBeInTheDocument();
+    });
+
+    it('commits a valid https image URL typed into the editor', async () => {
+      const onCommit = vi.fn();
+      render(<FieldRenderer fieldKey="cover" type="image" value="" onCommit={onCommit} />);
+      await userEvent.click(screen.getByText('(no image)'));
+      const input = screen.getByRole('textbox');
+      await userEvent.type(input, 'https://cdn/photo.jpg');
+      await userEvent.tab();
+      expect(onCommit).toHaveBeenCalledWith('https://cdn/photo.jpg');
+    });
+
+    it('allows clearing the field (empty commit is permitted)', async () => {
+      const onCommit = vi.fn();
+      render(
+        <FieldRenderer
+          fieldKey="cover"
+          type="image"
+          value="https://cdn/photo.jpg"
+          onCommit={onCommit}
+        />,
+      );
+      await userEvent.click(screen.getByRole('img'));
+      const input = screen.getByRole('textbox');
+      await userEvent.clear(input);
+      await userEvent.tab();
+      expect(onCommit).toHaveBeenCalledWith('');
+    });
+  });
+
   it('renders relation as read-only chips when no candidates are provided (table path)', () => {
     const onCommit = vi.fn();
     render(

@@ -115,6 +115,12 @@ export function FieldRenderer({
         <UrlField value={url} onCommit={onCommit} isPending={isPending} ariaLabel={fieldKey} />
       );
     }
+    case 'image': {
+      const url = String(value ?? '');
+      return (
+        <ImageField value={url} onCommit={onCommit} isPending={isPending} ariaLabel={fieldKey} />
+      );
+    }
     case 'currency': {
       const code = (options?.[0] ?? 'EUR') as string;
       return (
@@ -522,6 +528,87 @@ function UrlField({
       onBlur={() => {
         setEditing(false);
         if (draft !== value) onCommit(draft);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+        if (e.key === 'Escape') {
+          setDraft(value);
+          setEditing(false);
+        }
+      }}
+      className={cn(
+        'block w-full rounded-sm border border-border-light bg-shell px-2 py-1 text-sm text-fg input-focus',
+        isPending && 'opacity-60',
+      )}
+    />
+  );
+}
+
+// Scheme guard — the single security mitigation for the image field.
+// Rejects javascript:, data:, and any non-http(s) scheme so an attacker-supplied
+// frontmatter value can never become an <img src> or be committed back. Empty is
+// allowed (it clears the field).
+function isSafeImageUrl(u: string): boolean {
+  if (!u) return true;
+  try {
+    const p = new URL(u);
+    return p.protocol === 'http:' || p.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+function ImageField({
+  value,
+  onCommit,
+  isPending,
+  ariaLabel,
+}: {
+  value: string;
+  onCommit: (v: string) => void;
+  isPending?: boolean;
+  ariaLabel: string;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+  if (!editing) {
+    return (
+      <button
+        type="button"
+        aria-label={ariaLabel}
+        onClick={() => setEditing(true)}
+        className={cn(
+          'inline-flex items-center rounded-md hover:bg-card',
+          isPending && 'opacity-60',
+        )}
+      >
+        {value && isSafeImageUrl(value) ? (
+          <img
+            src={value}
+            alt={ariaLabel}
+            loading="lazy"
+            referrerPolicy="no-referrer"
+            className="h-16 w-16 rounded-md object-cover"
+          />
+        ) : (
+          <span className="text-fg-3">{value || '(no image)'}</span>
+        )}
+      </button>
+    );
+  }
+  return (
+    <input
+      type="url"
+      aria-label={ariaLabel}
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={() => {
+        setEditing(false);
+        if (draft !== value) {
+          // Reject an unsafe scheme: revert the draft, never commit it.
+          if (isSafeImageUrl(draft)) onCommit(draft);
+          else setDraft(value);
+        }
       }}
       onKeyDown={(e) => {
         if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
