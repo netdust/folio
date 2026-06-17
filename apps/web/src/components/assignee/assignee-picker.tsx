@@ -3,6 +3,7 @@ import { useMembers } from '../../lib/api/members.ts';
 import { useProjects } from '../../lib/api/projects.ts';
 import { useWorkspaceAgents } from '../../lib/api/workspace-documents.ts';
 import { filterAgents, filterMembers } from '../../lib/assignee-filter.ts';
+import { cn } from '../ui/cn.ts';
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
 
 interface Props {
@@ -44,9 +45,16 @@ export function AssigneePicker({ wslug, pslug, value, onChange }: Props) {
   return (
     <Popover>
       <PopoverTrigger asChild>
+        {/* Match the borderless EditableShell field look (text-sm px-1 py-0.5
+            rounded-sm, hover-bg lift, no border/fixed-height) so the assignee
+            cell sits like every other field. Unassigned reads muted (text-fg-3)
+            like other empty field placeholders. */}
         <button
           type="button"
-          className="inline-flex h-7 items-center rounded-md border border-border-light bg-content px-2 text-sm text-fg hover:bg-card"
+          className={cn(
+            'inline-flex items-center rounded-sm px-1 py-0.5 text-sm transition-colors duration-150 ease-out hover:bg-card focus-visible:shadow-none',
+            value ? 'text-fg' : 'text-fg-3',
+          )}
         >
           {label}
         </button>
