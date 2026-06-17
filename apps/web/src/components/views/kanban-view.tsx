@@ -14,6 +14,8 @@ import { useMemo, useState, useSyncExternalStore } from 'react';
 import { toast } from 'sonner';
 import {
   type DocumentSummary,
+  clausesToListParams,
+  parseFilters,
   useCreateDocument,
   useDocuments,
   useUpdateDocument,
@@ -96,10 +98,17 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
     return { key: k, dir: d === 'desc' ? 'desc' : 'asc' };
   }, [activeView, override]);
 
+  // The shared FilterBar PATCHes the URL search; parse it so the board narrows
+  // by the active filter. The clause params MERGE into the sort-based params —
+  // spread FIRST, then the board's own type/sort/dir/limit override (sort/dir
+  // are the board's concern, not the filter's, so they must win).
+  const clauses = useMemo(() => parseFilters(search), [search]);
+
   const listParams = useMemo(
     () =>
       effectiveSort
         ? {
+            ...clausesToListParams(clauses),
             type: 'work_item' as const,
             sort: effectiveSort.key,
             dir: effectiveSort.dir,
@@ -109,8 +118,14 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
           // coalesces a null board_position to a high sentinel, so unranked cards
           // (never dragged) sort LAST — deterministic and stable. The first drag
           // assigns a rank via rankBetween, lifting the card out of the unranked tail.
-          { type: 'work_item' as const, sort: 'board_position', dir: 'asc' as const, limit: 200 },
-    [effectiveSort],
+          {
+            ...clausesToListParams(clauses),
+            type: 'work_item' as const,
+            sort: 'board_position',
+            dir: 'asc' as const,
+            limit: 200,
+          },
+    [effectiveSort, clauses],
   );
 
   const { data: page, isLoading, error } = useDocuments(wslug, pslug, tslug, listParams);

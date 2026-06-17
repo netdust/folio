@@ -118,13 +118,17 @@ function stubFetch(
   return calls;
 }
 
-function setup(viewSettings?: Record<string, unknown>) {
+function setup(viewSettings?: Record<string, unknown>, initialEntry = '/w/main/p/web/timeline') {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const rootRoute = createRootRoute({ component: () => <Outlet /> });
   const tl = createRoute({
     getParentRoute: () => rootRoute,
     path: '/w/$wslug/p/$pslug/timeline',
-    validateSearch: z.object({ doc: z.string().optional(), view: z.string().optional() }),
+    validateSearch: z.object({
+      doc: z.string().optional(),
+      view: z.string().optional(),
+      status: z.union([z.string(), z.array(z.string())]).optional(),
+    }),
     component: () => {
       const { wslug, pslug } = tl.useParams();
       return (
@@ -141,13 +145,13 @@ function setup(viewSettings?: Record<string, unknown>) {
   });
   const router = createRouter({
     routeTree: rootRoute.addChildren([tl]),
-    history: createMemoryHistory({ initialEntries: ['/w/main/p/web/timeline'] }),
+    history: createMemoryHistory({ initialEntries: [initialEntry] }),
   });
   return { queryClient, router };
 }
 
-function renderView(viewSettings?: Record<string, unknown>) {
-  const { queryClient, router } = setup(viewSettings);
+function renderView(viewSettings?: Record<string, unknown>, initialEntry?: string) {
+  const { queryClient, router } = setup(viewSettings, initialEntry);
   render(
     <QueryClientProvider client={queryClient}>
       <RouterProvider router={router} />
@@ -229,5 +233,33 @@ describe('TimelineView', () => {
     stubFetch([], { documentsError: true, viewSettings: { zoom: 'week' } });
     renderView();
     await waitFor(() => expect(screen.getByText(/failed to load/i)).toBeInTheDocument());
+  });
+
+  // C1 (filter-on-every-view): a status filter in the URL must reach the
+  // documents fetch — the timeline's data hook previously hard-coded
+  // { type:'work_item', limit:200 } and ignored the shared FilterBar's URL state.
+  it('a status filter in the URL narrows the documents fetch (status reaches the wire)', async () => {
+    const calls = stubFetch(
+      [{ slug: 'a', title: 'Task A', frontmatter: { due_date: '2026-06-10' } }],
+      { viewSettings: { zoom: 'week' } },
+    );
+    renderView(undefined, '/w/main/p/web/timeline?status=done');
+    await waitFor(() => expect(calls.some((c) => c.url.includes('/documents'))).toBe(true));
+    expect(calls.some((c) => c.url.includes('/documents') && c.url.includes('status=done'))).toBe(
+      true,
+    );
+  });
+
+  // Negative case: NO filter in the URL → no status param leaks onto the wire.
+  it('no filter in the URL leaves status off the documents fetch', async () => {
+    const calls = stubFetch(
+      [{ slug: 'a', title: 'Task A', frontmatter: { due_date: '2026-06-10' } }],
+      { viewSettings: { zoom: 'week' } },
+    );
+    renderView();
+    await waitFor(() => expect(calls.some((c) => c.url.includes('/documents'))).toBe(true));
+    expect(
+      calls.filter((c) => c.url.includes('/documents')).every((c) => !c.url.includes('status=')),
+    ).toBe(true);
   });
 });

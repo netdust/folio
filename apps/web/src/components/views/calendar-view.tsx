@@ -12,7 +12,13 @@ import {
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { useMemo, useState } from 'react';
 import { toast } from 'sonner';
-import { type DocumentSummary, useDocuments, useUpdateDocument } from '../../lib/api/documents.ts';
+import {
+  type DocumentSummary,
+  clausesToListParams,
+  parseFilters,
+  useDocuments,
+  useUpdateDocument,
+} from '../../lib/api/documents.ts';
 import { formatApiError } from '../../lib/api/index.ts';
 import { useActiveView } from '../../lib/api/use-active-view.ts';
 import { type DueUrgency, dueUrgency } from '../../lib/due-urgency.ts';
@@ -20,6 +26,7 @@ import { cn } from '../ui/cn.ts';
 import { bucketKey, buildMonthGrid, placeDocuments } from './calendar-grid.ts';
 import { CalendarSkeleton } from './calendar-skeleton.tsx';
 import { EmptyState } from './empty-state.tsx';
+import { settingString } from './view-settings.ts';
 
 interface Props {
   wslug: string;
@@ -127,20 +134,26 @@ export function CalendarView({ wslug, pslug, tslug, initialMonth }: Props) {
   const search = useSearch({ strict: false }) as Record<string, unknown>;
   const { view } = useActiveView(wslug, pslug, tslug);
 
-  // Per-view placement field (default 'due_date' when unset). settings is
-  // Record<string, unknown> — narrow before trusting it as a key.
-  const dateField =
-    typeof view?.settings?.dateField === 'string' ? view.settings.dateField : 'due_date';
+  // Per-view placement field (default 'due_date' when unset). settingString
+  // narrows + rejects the empty string (an inline `typeof === 'string'` check
+  // would let `''` through and orphan every doc into the unscheduled tray).
+  const dateField = settingString(view?.settings?.dateField, 'due_date');
+
+  // The shared FilterBar PATCHes the URL search; parse it into the documents
+  // query so the calendar narrows by the active filter (status/priority/labels/
+  // assignee/updated_since), mirroring TableView. limit:200 + type are pinned
+  // for the calendar's month-at-a-glance read; the filter clauses merge in.
+  const clauses = useMemo(() => parseFilters(search), [search]);
+  const listParams = useMemo(
+    () => ({ ...clausesToListParams(clauses), type: 'work_item' as const, limit: 200 }),
+    [clauses],
+  );
 
   const [cursor, setCursor] = useState<{ year: number; month: number }>(
     () => initialMonth ?? currentMonth(),
   );
 
-  const {
-    data: page,
-    isLoading,
-    error,
-  } = useDocuments(wslug, pslug, tslug, { type: 'work_item', limit: 200 });
+  const { data: page, isLoading, error } = useDocuments(wslug, pslug, tslug, listParams);
 
   const docs = useMemo(() => page?.data ?? [], [page]);
   const grid = useMemo(() => buildMonthGrid(cursor.year, cursor.month), [cursor]);
@@ -152,7 +165,10 @@ export function CalendarView({ wslug, pslug, tslug, initialMonth }: Props) {
     return m;
   }, [docs]);
 
-  const update = useUpdateDocument(wslug, pslug, tslug, { type: 'work_item', limit: 200 });
+  // SAME listParams key as the read so the date-drag's optimistic update
+  // invalidates the FILTERED query — otherwise a drag would write into the
+  // unfiltered cache and the filtered view would not reflect it.
+  const update = useUpdateDocument(wslug, pslug, tslug, listParams);
 
   // 5px activation distance so a plain click on a chip opens the slideover and
   // never starts a drag. Mirrors the kanban board's sensor config.

@@ -12,7 +12,13 @@ import {
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { useMemo, useState } from 'react';
 import { toast } from 'sonner';
-import { type DocumentSummary, useDocuments, useUpdateDocument } from '../../lib/api/documents.ts';
+import {
+  type DocumentSummary,
+  clausesToListParams,
+  parseFilters,
+  useDocuments,
+  useUpdateDocument,
+} from '../../lib/api/documents.ts';
 import { formatApiError } from '../../lib/api/index.ts';
 import { useActiveView } from '../../lib/api/use-active-view.ts';
 import { type DueUrgency, dueUrgency } from '../../lib/due-urgency.ts';
@@ -178,11 +184,16 @@ export function TimelineView({ wslug, pslug, tslug, initialRange }: Props) {
   const endField = settingString(view?.settings?.endField, fallbackField);
   const zoom = settingZoom(view?.settings?.zoom);
 
-  const {
-    data: page,
-    isLoading,
-    error,
-  } = useDocuments(wslug, pslug, tslug, { type: 'work_item', limit: 200 });
+  // The shared FilterBar PATCHes the URL search; parse it into the documents
+  // query so the timeline narrows by the active filter, mirroring TableView.
+  // limit:200 + type are pinned for the timeline read; the filter clauses merge.
+  const clauses = useMemo(() => parseFilters(search), [search]);
+  const listParams = useMemo(
+    () => ({ ...clausesToListParams(clauses), type: 'work_item' as const, limit: 200 }),
+    [clauses],
+  );
+
+  const { data: page, isLoading, error } = useDocuments(wslug, pslug, tslug, listParams);
 
   const docs = useMemo(() => page?.data ?? [], [page]);
 
@@ -209,7 +220,9 @@ export function TimelineView({ wslug, pslug, tslug, initialRange }: Props) {
     return m;
   }, [docs]);
 
-  const updateDoc = useUpdateDocument(wslug, pslug, tslug, { type: 'work_item', limit: 200 });
+  // SAME listParams key as the read so the date-drag's optimistic update
+  // invalidates the FILTERED query (matches the calendar/table pattern).
+  const updateDoc = useUpdateDocument(wslug, pslug, tslug, listParams);
 
   // 5px activation distance so a plain click on a bar opens the slideover and
   // never starts a drag. Mirrors the calendar/kanban sensor config.

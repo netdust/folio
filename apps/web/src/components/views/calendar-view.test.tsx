@@ -42,12 +42,14 @@ function docsResponse(
 function stubFetch(
   rows: Array<{ slug: string; title: string; frontmatter?: Record<string, unknown> }>,
   opts: { documentsError?: boolean } = {},
-) {
+): { documentsUrls: string[] } {
+  const documentsUrls: string[] = [];
   vi.stubGlobal(
     'fetch',
     vi.fn<typeof fetch>(async (url) => {
       const u = String(url);
       if (u.includes('/documents')) {
+        documentsUrls.push(u);
         if (opts.documentsError) {
           return new Response(JSON.stringify({ error: { code: 'boom', message: 'boom' } }), {
             status: 500,
@@ -63,15 +65,19 @@ function stubFetch(
       });
     }),
   );
+  return { documentsUrls };
 }
 
-function setup() {
+function setup(initialEntry = '/w/main/p/web/calendar') {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const rootRoute = createRootRoute({ component: () => <Outlet /> });
   const cal = createRoute({
     getParentRoute: () => rootRoute,
     path: '/w/$wslug/p/$pslug/calendar',
-    validateSearch: z.object({ doc: z.string().optional() }),
+    validateSearch: z.object({
+      doc: z.string().optional(),
+      status: z.union([z.string(), z.array(z.string())]).optional(),
+    }),
     component: () => {
       const { wslug, pslug } = cal.useParams();
       return (
@@ -87,13 +93,13 @@ function setup() {
   });
   const router = createRouter({
     routeTree: rootRoute.addChildren([cal]),
-    history: createMemoryHistory({ initialEntries: ['/w/main/p/web/calendar'] }),
+    history: createMemoryHistory({ initialEntries: [initialEntry] }),
   });
   return { queryClient, router };
 }
 
-function renderView() {
-  const { queryClient, router } = setup();
+function renderView(initialEntry?: string) {
+  const { queryClient, router } = setup(initialEntry);
   render(
     <QueryClientProvider client={queryClient}>
       <RouterProvider router={router} />
@@ -156,5 +162,28 @@ describe('CalendarView', () => {
     stubFetch([], { documentsError: true });
     renderView();
     await waitFor(() => expect(screen.getByText(/failed to load/i)).toBeInTheDocument());
+  });
+
+  // C1 (filter-on-every-view): a status filter in the URL must reach the
+  // documents fetch — the shared FilterBar PATCHes the URL search, and the
+  // calendar's data hook must narrow by it (it previously hard-coded
+  // { type:'work_item', limit:200 } and ignored the filter entirely).
+  it('a status filter in the URL narrows the documents fetch (status reaches the wire)', async () => {
+    const { documentsUrls } = stubFetch([
+      { slug: 'a', title: 'Dated Task', frontmatter: { due_date: '2026-06-10' } },
+    ]);
+    renderView('/w/main/p/web/calendar?status=done');
+    await waitFor(() => expect(documentsUrls.length).toBeGreaterThan(0));
+    expect(documentsUrls.some((u) => u.includes('status=done'))).toBe(true);
+  });
+
+  // Negative case: NO filter in the URL → no status param leaks onto the wire.
+  it('no filter in the URL leaves status off the documents fetch', async () => {
+    const { documentsUrls } = stubFetch([
+      { slug: 'a', title: 'Dated Task', frontmatter: { due_date: '2026-06-10' } },
+    ]);
+    renderView();
+    await waitFor(() => expect(documentsUrls.length).toBeGreaterThan(0));
+    expect(documentsUrls.every((u) => !u.includes('status='))).toBe(true);
   });
 });
