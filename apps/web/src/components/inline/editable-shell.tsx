@@ -49,6 +49,13 @@ export function EditableShell({
       data-state={mode}
       className={cn(
         boxMetrics[size],
+        // Center content vertically at the ROOT so every field — incl. the date,
+        // whose native control is taller — sits on one midline regardless of the
+        // wrapper chain above it. Applied in BOTH modes so box-equivalence holds.
+        // `inline-flex` keeps the shell shrink-to-content like a plain inline
+        // span; consumers needing full width pass `w-full` (not `block`).
+        'inline-flex items-center',
+        align === 'right' && 'justify-end',
         // Smooth hover-bg (locked refined-motion decision) — transition-colors
         // does NOT change box metrics.
         'transition-colors duration-150 ease-out',

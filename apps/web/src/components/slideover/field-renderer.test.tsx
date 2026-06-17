@@ -17,6 +17,9 @@ describe('FieldRenderer', () => {
   it('renders a number input for number type and commits a number, not a string', async () => {
     const onCommit = vi.fn();
     render(<FieldRenderer fieldKey="estimate" type="number" value={3} onCommit={onCommit} />);
+    // Number now has a display state (parity with other fields): click the shown
+    // value to enter edit, then the spinbutton input appears.
+    await userEvent.click(screen.getByText('3'));
     const input = screen.getByRole('spinbutton');
     await userEvent.clear(input);
     await userEvent.type(input, '5');

@@ -62,7 +62,7 @@ export function InlineEdit({
     // keeps ONLY the fill-the-box + transparent classes so it inherits the
     // shell's identical font/padding (no layout shift entering edit, Bug 2).
     return (
-      <EditableShell mode="edit" isPending={isPending} className={cn('block w-full', className)}>
+      <EditableShell mode="edit" isPending={isPending} className={cn('w-full', className)}>
         <input
           ref={inputRef}
           type="text"
@@ -113,7 +113,7 @@ export function InlineEdit({
       }}
       className="block min-w-0 cursor-text focus:outline-none"
     >
-      <EditableShell mode="display" isPending={isPending} className={cn('block', className)}>
+      <EditableShell mode="display" isPending={isPending} className={cn('w-full', className)}>
         {value || <span className="text-fg-3">{placeholder ?? '…'}</span>}
       </EditableShell>
     </span>

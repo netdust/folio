@@ -1,5 +1,5 @@
 import { Plus } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { FieldType } from '../../lib/api/fields.ts';
 import { EditableShell } from '../inline/editable-shell.tsx';
 import { InlineEdit } from '../inline/inline-edit.tsx';
@@ -329,21 +329,68 @@ function NumberInput({
   ariaLabel: string;
   isPending?: boolean;
 }) {
+  const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(String(value));
-  // NumberInput has no display span — it is always an input. The shell owns box
-  // metrics + focus/pending treatment; the input keeps only fill-the-box classes.
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  // Focus + select on entering edit (the ref/effect pattern InlineEdit uses —
+  // avoids the autoFocus attribute, which biome flags for a11y).
+  useEffect(() => {
+    if (editing && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, [editing]);
+  // DISPLAY state (parity with every other field): plain text until clicked, so
+  // the number field is NOT a permanently-lifted bordered box with native spinner
+  // arrows. Click/Enter enters edit.
+  if (!editing) {
+    return (
+      <span
+        role="button"
+        tabIndex={0}
+        aria-label={ariaLabel}
+        onClick={() => {
+          setDraft(String(value));
+          setEditing(true);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            setDraft(String(value));
+            setEditing(true);
+          }
+        }}
+        className="flex w-full items-center cursor-text focus:outline-none"
+      >
+        <EditableShell mode="display" isPending={isPending} className="w-full">
+          {value}
+        </EditableShell>
+      </span>
+    );
+  }
+  // EDIT: the shell owns box metrics + the faint lift; the input fills it and
+  // HIDES the native spinner arrows (`[appearance:textfield]` + the webkit
+  // pseudo-elements) so it reads as plain text, not a stepper control.
   return (
-    <EditableShell mode="edit" isPending={isPending} className="block w-full">
+    <EditableShell mode="edit" isPending={isPending} className="w-full">
       <input
+        ref={inputRef}
         type="number"
         aria-label={ariaLabel}
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
         onBlur={() => {
+          setEditing(false);
           const n = Number(draft);
           if (Number.isFinite(n) && n !== value) onCommit(n);
         }}
-        className="w-full bg-transparent text-fg outline-none"
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+          if (e.key === 'Escape') {
+            setDraft(String(value));
+            setEditing(false);
+          }
+        }}
+        className="w-full bg-transparent text-fg outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
       />
     </EditableShell>
   );
@@ -378,9 +425,9 @@ function DateInput({
         // `flex items-center` (not inline-block) so the date display centers on
         // the row midline like every other field — an inline-block span aligned
         // to its text baseline and sat high once cells became flex items-center.
-        className="flex items-center cursor-text focus:outline-none"
+        className="flex w-full items-center cursor-text focus:outline-none"
       >
-        <EditableShell mode="display" isPending={isPending}>
+        <EditableShell mode="display" isPending={isPending} className="w-full">
           {value || <span className="text-fg-3"> </span>}
         </EditableShell>
       </span>
@@ -392,7 +439,7 @@ function DateInput({
   // pending treatment, matching NumberInput. All commit/Enter/Escape/blur
   // handlers are preserved verbatim.
   return (
-    <EditableShell mode="edit" isPending={isPending} className="block w-full">
+    <EditableShell mode="edit" isPending={isPending} className="w-full">
       <input
         type="date"
         aria-label={ariaLabel}
@@ -524,7 +571,7 @@ function UrlField({
     // plain-click-edits behavior. The shell's hover:bg-card layers under the
     // link's hover:underline — both are intentional.
     return (
-      <EditableShell mode="display" isPending={isPending} className="block w-full">
+      <EditableShell mode="display" isPending={isPending} className="w-full">
         <a
           href={value}
           target="_blank"
@@ -542,7 +589,7 @@ function UrlField({
     );
   }
   return (
-    <EditableShell mode="edit" isPending={isPending} className="block w-full">
+    <EditableShell mode="edit" isPending={isPending} className="w-full">
       <input
         type="url"
         aria-label={ariaLabel}
@@ -687,13 +734,13 @@ function CurrencyInput({
         onKeyDown={(e) => {
           if (e.key === 'Enter' || e.key === ' ') setEditing(true);
         }}
-        className="block w-full cursor-text focus:outline-none"
+        className="flex w-full items-center cursor-text focus:outline-none"
       >
         <EditableShell
           mode="display"
           align="right"
           isPending={isPending}
-          className="block w-full font-mono"
+          className="w-full font-mono"
         >
           {value == null ? ' ' : formatter.format(value)}
         </EditableShell>
@@ -701,12 +748,7 @@ function CurrencyInput({
     );
   }
   return (
-    <EditableShell
-      mode="edit"
-      align="right"
-      isPending={isPending}
-      className="block w-full font-mono"
-    >
+    <EditableShell mode="edit" align="right" isPending={isPending} className="w-full font-mono">
       <input
         type="number"
         aria-label={ariaLabel}
@@ -724,7 +766,7 @@ function CurrencyInput({
             setEditing(false);
           }
         }}
-        className="w-full bg-transparent text-right font-mono text-fg outline-none"
+        className="w-full bg-transparent text-right font-mono text-fg outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
       />
     </EditableShell>
   );
