@@ -159,3 +159,14 @@ virtualization · a11y (32) · reapStalePendingOps chunking · auth_rate_limits 
 - [ ] Generalist #2 (medium): the single-date dateField precedence (fallback→start→end) is duplicated in placeOnTimeline AND the drag onDragEnd — latent-divergence smell. A shared resolveSingleDateField(frontmatter, fields) helper would converge the rule. Not a current bug (both consistent); do if the precedence ever changes.
 - [ ] Generalist #3: todayCol could reuse columnIndexFor (exported) for the same containment logic as bar placement. Consistency nit.
 - [ ] VERIFICATION GAP (both reviewers): the real pointer-drag is never driven (jsdom synthesizes onDragEnd) — drive ONE real timeline drag through Playwright/Chrome at /shakeout before merge. Same gap as calendar + kanban.
+
+## Views REWORK (2026-06-17, Stefan screenshot-grounded) — Chunk A DONE, at REVIEW GATE
+### Chunk A — list = grouped TableView (the screenshot shape)
+- [x] A.1 GroupHeaderRow — section header (label + collapse + inline aggregates), reuses GroupAggregateHeader (`8e58c761`)
+- [x] A.2 make TableView GROUP-AWARE (Stefan-approved architecture: not a parallel renderer — zero duplication, inline-edit/relations/column-menu work in grouped view free); list→TableView; DELETE card renderer 4 files (`0696ebf4`)
+- [x] A.3 drop rowLayout picker from list config (grouped table uses columns) (`efa85ddd`)
+- [x] BROWSER feature-acceptance PASS: live grouped table (aligned TITLE/STATUS/PRIORITY cols + STATUS·todo·16 items group headers + done group status=done:100 + collapse 53→37 + page-2 guard). Matches screenshot STRUCTURE.
+- [x] STANDARD panel: generalist (0 Crit, 2 Imp = dropped regressions; flat-table SAFE, page-2 CORRECT, inv 18 OK) + simplicity (Low, well-factored).
+- [x] review fixes (`02f3a894`): I1 summary-error affordance restored (card renderer's Dutch copy from git) + test · I2 truncation note + orphan-row fold to ungrouped · S1 boolean group-value normalize (1/0) · drop dead showLabelAndCount prop. +8 tests.
+- FINAL: web 1070 / server 1915 / shared 82, 0 fail · tsc clean.
+- NOTE FOR STEFAN: structure correct; group-header AGGREGATE STYLING is compact (status=done:0) vs screenshot's prominent labeled cols (% AFGEROND 60% · GEM 96% · bar). Visual polish — decide tighten now vs Chunk B.
