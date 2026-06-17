@@ -86,6 +86,48 @@ describe('KanbanCard', () => {
     );
     expect(screen.getByRole('button', { name: /Card A/ })).toBeTruthy();
   });
+
+  // Drop-line presence (Bug 2). jsdom has no layout, so this only proves the
+  // line ELEMENT renders for the right edge and is absent without — it does NOT
+  // verify positioning/no-reflow (that's the browser pass). It bites if someone
+  // deletes the line element or wires indicatorEdge wrong.
+  it('renders the drop-line on the top edge when indicatorEdge="top"', () => {
+    render(
+      <DndContext>
+        <KanbanCard doc={sampleDoc()} onOpen={() => {}} sortable indicatorEdge="top" />
+      </DndContext>,
+    );
+    const line = screen.getByTestId('drop-line');
+    expect(line.className).toContain('-top-[5px]');
+  });
+
+  it('renders the drop-line on the bottom edge when indicatorEdge="bottom"', () => {
+    render(
+      <DndContext>
+        <KanbanCard doc={sampleDoc()} onOpen={() => {}} sortable indicatorEdge="bottom" />
+      </DndContext>,
+    );
+    expect(screen.getByTestId('drop-line').className).toContain('-bottom-[5px]');
+  });
+
+  it('renders NO drop-line when indicatorEdge is null', () => {
+    render(
+      <DndContext>
+        <KanbanCard doc={sampleDoc()} onOpen={() => {}} sortable indicatorEdge={null} />
+      </DndContext>,
+    );
+    expect(screen.queryByTestId('drop-line')).toBeNull();
+  });
+
+  it('never renders a drop-line on the overlay clone', () => {
+    render(
+      <DndContext>
+        {/* overlay path ignores indicatorEdge by construction */}
+        <KanbanCard doc={sampleDoc()} onOpen={() => {}} overlay indicatorEdge="top" />
+      </DndContext>,
+    );
+    expect(screen.queryByTestId('drop-line')).toBeNull();
+  });
 });
 
 // Bug 1 (2026-06-07): after a within-column drop the dragged card visibly slid

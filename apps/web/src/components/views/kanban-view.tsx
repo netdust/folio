@@ -82,6 +82,14 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
   // portals above everything so the dragged card isn't clipped by a column's
   // overflow). Set on drag start, cleared on end/cancel.
   const [activeId, setActiveId] = useState<string | null>(null);
+  // Live drop-indicator: which card the dragged card is over, and on which edge
+  // the insertion LINE should render. STATE ONLY — we never move cards between
+  // column arrays during the drag (the "line school", not the move-items school:
+  // no re-render storms / oscillation, and the line's (prev,next) pair is exactly
+  // what rankBetween needs at drop). Cleared on drag end + cancel.
+  const [dropIndicator, setDropIndicator] = useState<{ overId: string; edge: CardEdge } | null>(
+    null,
+  );
 
   const urlViewId = typeof search.view === 'string' ? search.view : undefined;
   const activeView = useMemo(() => {
@@ -255,12 +263,26 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
     setActiveId(String(event.active.id));
   };
 
+  // Live insertion feedback. Sets indicator STATE only — NEVER mutates a column
+  // array. Over a card → a line on the nearest edge; over a column droppable
+  // (empty/whitespace) → no line (the column's own isOver highlight handles it).
+  const onDragOver = (event: DragOverEvent) => {
+    const { over } = event;
+    if (!over || String(over.id).startsWith('col-')) {
+      setDropIndicator(null);
+      return;
+    }
+    setDropIndicator({ overId: String(over.id), edge: dropEdgeFromEvent(event) });
+  };
+
   const onDragCancel = () => {
     setActiveId(null);
+    setDropIndicator(null);
   };
 
   const onDragEnd = async (event: DragEndEvent) => {
     setActiveId(null);
+    setDropIndicator(null);
     const { active, over } = event;
     if (!over) return;
     const overId = String(over.id);
@@ -360,6 +382,7 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
       // so the moved card is immediately reorderable.
       measuring={{ droppable: { strategy: MeasuringStrategy.Always } }}
       onDragStart={onDragStart}
+      onDragOver={onDragOver}
       onDragEnd={onDragEnd}
       onDragCancel={onDragCancel}
     >
@@ -387,10 +410,20 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
                 if (!doc) return null;
                 return (
                   <KanbanCard
-                    key={doc.id}
+                    // Key includes the column value so a CROSS-COLUMN move
+                    // REMOUNTS the card. dnd-kit caches the draggable rect by
+                    // element identity (useInitialRect, memoized on the node);
+                    // reusing the element across columns kept the OLD-column rect
+                    // → "the just-moved card can't be repositioned until I drag
+                    // another card first" (Bug 3). Remounting busts that cache.
+                    // (MeasuringStrategy.Always covers DROPPABLES only, not this.)
+                    key={`${doc.id}:${col.value ?? '__unset__'}`}
                     doc={doc}
                     onOpen={openDoc}
                     isPending={pendingSlugs.has(doc.slug)}
+                    // The drop-line edge for THIS card (null unless the dragged
+                    // card is hovering it). Resolved here so the card stays dumb.
+                    indicatorEdge={dropIndicator?.overId === doc.id ? dropIndicator.edge : null}
                     // Always sortable (both modes) so over.id is a card on a
                     // card-over-card drop — see KanbanColumn `sortable` note.
                     sortable

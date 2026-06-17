@@ -8,6 +8,7 @@ import type { DocumentSummary } from '../../lib/api/documents.ts';
 import { Avatar } from '../ui/avatar.tsx';
 import { cn } from '../ui/cn.ts';
 import { Icon } from '../ui/icon.tsx';
+import type { CardEdge } from './closest-edge.ts';
 
 interface Props {
   doc: DocumentSummary;
@@ -21,6 +22,10 @@ interface Props {
   // (used inside <DragOverlay>). The overlay portals to the body so it escapes
   // the column's `overflow-y-auto` clip and paints above the sibling columns.
   overlay?: boolean;
+  // The live drop-line edge: when the dragged card is hovering THIS card, render
+  // a 2px insertion line on its top ('top') or bottom ('bottom') edge. null = no
+  // line. Never set on the overlay clone.
+  indicatorEdge?: CardEdge | null;
 }
 
 const LABEL_HUES = ['bg-info', 'bg-warning', 'bg-success', 'bg-danger', 'bg-primary'] as const;
@@ -45,11 +50,13 @@ function CardBody({
   doc,
   onOpen,
   isPending,
+  indicatorEdge,
   dnd,
 }: {
   doc: DocumentSummary;
   onOpen: (slug: string) => void;
   isPending?: boolean;
+  indicatorEdge?: CardEdge | null;
   dnd: DndBindings;
 }) {
   const { setNodeRef, attributes, listeners, style, isDragging } = dnd;
@@ -81,6 +88,8 @@ function CardBody({
         if (e.key === 'Enter') onOpen(doc.slug);
       }}
       className={cn(
+        // `relative` anchors the absolutely-positioned drop-line below.
+        'relative',
         // Base bg lifted from `bg-shell` to `bg-content` so the card stands
         // out from the kanban column's tinted body. Hover adds a clear bg +
         // border step so the hover state is visible against the elevated
@@ -91,6 +100,20 @@ function CardBody({
         'hover:border-fg-3 hover:bg-card',
       )}
     >
+      {/* Live insertion line (Bug 2). Absolutely positioned → ZERO layout height
+          → no sibling reflow → no oscillation (the reason the line school beats
+          move-items). Sits in the gap above/below the card per the closest edge.
+          pointer-events-none so it never intercepts the drop. */}
+      {indicatorEdge ? (
+        <div
+          data-testid="drop-line"
+          aria-hidden
+          className={cn(
+            'pointer-events-none absolute inset-x-1 h-[2px] rounded-full bg-primary',
+            indicatorEdge === 'top' ? '-top-[5px]' : '-bottom-[5px]',
+          )}
+        />
+      ) : null}
       <div className="font-medium">{doc.title}</div>
       {labels.length > 0 ? (
         <div className="mt-1.5 flex items-center gap-1">
@@ -132,7 +155,12 @@ function CardBody({
   );
 }
 
-function DraggableCard({ doc, onOpen, isPending }: Omit<Props, 'sortable' | 'overlay'>) {
+function DraggableCard({
+  doc,
+  onOpen,
+  isPending,
+  indicatorEdge,
+}: Omit<Props, 'sortable' | 'overlay'>) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: doc.id,
     data: { slug: doc.slug, currentStatus: doc.status },
@@ -146,12 +174,18 @@ function DraggableCard({ doc, onOpen, isPending }: Omit<Props, 'sortable' | 'ove
       doc={doc}
       onOpen={onOpen}
       isPending={isPending}
+      indicatorEdge={indicatorEdge}
       dnd={{ setNodeRef, attributes, listeners, style, isDragging }}
     />
   );
 }
 
-function SortableCard({ doc, onOpen, isPending }: Omit<Props, 'sortable' | 'overlay'>) {
+function SortableCard({
+  doc,
+  onOpen,
+  isPending,
+  indicatorEdge,
+}: Omit<Props, 'sortable' | 'overlay'>) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: doc.id,
     data: { slug: doc.slug, currentStatus: doc.status },
@@ -176,6 +210,7 @@ function SortableCard({ doc, onOpen, isPending }: Omit<Props, 'sortable' | 'over
       doc={doc}
       onOpen={onOpen}
       isPending={isPending}
+      indicatorEdge={indicatorEdge}
       dnd={{ setNodeRef, attributes, listeners, style, isDragging }}
     />
   );
@@ -200,11 +235,12 @@ function OverlayCard({ doc, isPending }: Pick<Props, 'doc' | 'isPending'>) {
   );
 }
 
-export function KanbanCard({ doc, onOpen, isPending, sortable, overlay }: Props) {
+export function KanbanCard({ doc, onOpen, isPending, sortable, overlay, indicatorEdge }: Props) {
+  // The overlay clone NEVER shows a line (it's the floating drag preview).
   if (overlay) return <OverlayCard doc={doc} isPending={isPending} />;
   return sortable ? (
-    <SortableCard doc={doc} onOpen={onOpen} isPending={isPending} />
+    <SortableCard doc={doc} onOpen={onOpen} isPending={isPending} indicatorEdge={indicatorEdge} />
   ) : (
-    <DraggableCard doc={doc} onOpen={onOpen} isPending={isPending} />
+    <DraggableCard doc={doc} onOpen={onOpen} isPending={isPending} indicatorEdge={indicatorEdge} />
   );
 }
