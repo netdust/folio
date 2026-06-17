@@ -383,28 +383,32 @@ function DateInput({
       </span>
     );
   }
+  // EDIT input migrated to the shell (Task 7). The hard `w-44` (176px) overflowed
+  // the date column (140px → now 160px) and clipped the native picker; the input
+  // now fills its container (`w-full`) and the shell owns box metrics + focus/
+  // pending treatment, matching NumberInput. All commit/Enter/Escape/blur
+  // handlers are preserved verbatim.
   return (
-    <input
-      type="date"
-      aria-label={ariaLabel}
-      value={draft}
-      onChange={(e) => setDraft(e.target.value)}
-      onBlur={() => {
-        setEditing(false);
-        if (draft !== value && draft) onCommit(draft);
-      }}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
-        if (e.key === 'Escape') {
-          setDraft(value);
+    <EditableShell mode="edit" isPending={isPending} className="block w-full">
+      <input
+        type="date"
+        aria-label={ariaLabel}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={() => {
           setEditing(false);
-        }
-      }}
-      className={cn(
-        'block w-44 rounded-sm border border-transparent bg-card px-1 py-0.5 text-fg input-focus',
-        isPending && 'opacity-60',
-      )}
-    />
+          if (draft !== value && draft) onCommit(draft);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+          if (e.key === 'Escape') {
+            setDraft(value);
+            setEditing(false);
+          }
+        }}
+        className="w-full bg-transparent text-fg outline-none"
+      />
+    </EditableShell>
   );
 }
 

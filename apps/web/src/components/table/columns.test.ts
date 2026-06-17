@@ -4,6 +4,7 @@ import type { View } from '../../lib/api/views.ts';
 import {
   type Column,
   applyColumnOrder,
+  columnWidth,
   effectiveVisibleKeys,
   gridTemplate,
   mergeColumns,
@@ -293,5 +294,15 @@ describe('gridTemplate', () => {
 
   it('returns empty string when given no columns', () => {
     expect(gridTemplate([])).toBe('');
+  });
+});
+
+// Native date inputs need ~150px+ for the dd/mm/yyyy + spinner/calendar glyph.
+const MIN_DATE_EDIT_WIDTH = 150;
+
+describe('date column width fits the date edit control', () => {
+  it('a date field column is at least the date edit control min-width', () => {
+    const col: Column = { key: 'due', label: 'Due', source: 'field', fieldType: 'date' };
+    expect(columnWidth(col)).toBeGreaterThanOrEqual(MIN_DATE_EDIT_WIDTH);
   });
 });
