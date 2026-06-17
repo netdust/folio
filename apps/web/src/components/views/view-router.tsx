@@ -5,6 +5,7 @@ import { TableView } from '../table/table-view.tsx';
 import { CalendarView } from './calendar-view.tsx';
 import { GroupedListView } from './grouped-list-view.tsx';
 import { KanbanView } from './kanban-view.tsx';
+import { TimelineView } from './timeline-view.tsx';
 
 interface RendererProps {
   wslug: string;
@@ -26,7 +27,7 @@ const viewRendererFor: Record<ViewType, (p: RendererProps) => ReactElement> = {
   list: (p) => <GroupedListView {...p} />, // cluster 2b (grouped list)
   kanban: (p) => <KanbanView {...p} />,
   calendar: (p) => <CalendarView {...p} />, // cluster 4
-  timeline: (p) => <UnsupportedView type="timeline" {...p} />, // cluster 5
+  timeline: (p) => <TimelineView {...p} />, // cluster 5
   gallery: (p) => <UnsupportedView type="gallery" {...p} />, // cluster 6
 };
 

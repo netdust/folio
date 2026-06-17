@@ -20,6 +20,9 @@ vi.mock('./grouped-list-view.tsx', () => ({
 vi.mock('./calendar-view.tsx', () => ({
   CalendarView: () => <div data-testid="calendar-view-marker" />,
 }));
+vi.mock('./timeline-view.tsx', () => ({
+  TimelineView: () => <div data-testid="timeline-view-marker" />,
+}));
 
 const mockUseActiveView = useActiveView as unknown as Mock;
 
@@ -58,6 +61,12 @@ describe('ViewRouter', () => {
     setView('list');
     render(<ViewRouter wslug="w" pslug="p" tslug="work-items" />);
     expect(screen.getByTestId('grouped-list-view-marker')).toBeInTheDocument();
+  });
+
+  it('routes type:timeline → TimelineView (cluster 5)', () => {
+    setView('timeline');
+    render(<ViewRouter wslug="w" pslug="p" tslug="work-items" />);
+    expect(screen.getByTestId('timeline-view-marker')).toBeInTheDocument();
   });
 
   // Denial / graceful-degradation path: a type with no dedicated renderer must
